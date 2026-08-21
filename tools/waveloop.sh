@@ -22,11 +22,12 @@ while [ ! -f "$STOP" ]; do
     echo "$(date +%H:%M:%S) wave $WAVE" >> waveloop.log
     T0=$(date +%s)
     mkdir -p runs-archive
-    ./iterate2.sh "$WAVE" >> "runs-archive/iter-$WAVE-launch.log" 2>&1
+    WAVE_STATUS=0
+    ./iterate2.sh "$WAVE" >> "runs-archive/iter-$WAVE-launch.log" 2>&1 || WAVE_STATUS=$?
     T1=$(date +%s)
-    if [ $(( T1 - T0 )) -lt 120 ]; then
+    if [ "$WAVE_STATUS" -ne 0 ] || [ $(( T1 - T0 )) -lt 120 ]; then
         FAILS=$(( ${FAILS:-0} + 1 ))
-        echo "$(date +%H:%M:%S) wave $WAVE FAILED in $(( T1 - T0 ))s (streak $FAILS)" >> waveloop.log
+        echo "$(date +%H:%M:%S) wave $WAVE FAILED status=$WAVE_STATUS in $(( T1 - T0 ))s (streak $FAILS)" >> waveloop.log
         if [ "$FAILS" -ge 5 ]; then
             echo "$(date +%H:%M:%S) five straight failures -- stopping" >> waveloop.log
             break

@@ -93,6 +93,46 @@ class WaveloopProcessScopeTest(unittest.TestCase):
                     foreign.terminate()
                 foreign.wait(timeout=5)
 
+    def test_slow_nonzero_wave_is_still_a_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            runner = work / "waveloop.sh"
+            runner.write_bytes((ROOT / "tools/waveloop.sh").read_bytes())
+            runner.chmod(0o755)
+            (work / "iterate2.sh").write_text(
+                "#!/bin/sh\ntouch waveloop-stop\nexit 7\n", encoding="utf-8")
+            (work / "iterate2.sh").chmod(0o755)
+            (work / "deploy.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (work / "deploy.sh").chmod(0o755)
+
+            shim_dir = work / "shim"
+            shim_dir.mkdir()
+            (shim_dir / "pgrep").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            (shim_dir / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (shim_dir / "date").write_text(
+                "#!/bin/sh\n"
+                "if [ \"${1:-}\" != +%s ]; then echo 00:00:00; exit 0; fi\n"
+                "state=${DATE_STATE:?}\n"
+                "if [ ! -e \"$state\" ]; then echo 100; : > \"$state\"; else echo 300; fi\n",
+                encoding="utf-8",
+            )
+            for command in ("pgrep", "sleep", "date"):
+                (shim_dir / command).chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["DATE_STATE"] = str(work / "date-state")
+            environment["PATH"] = f"{shim_dir}:{environment['PATH']}"
+            result = subprocess.run(
+                [str(runner), "9001"], cwd=work, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=5,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            log = (work / "waveloop.log").read_text(encoding="utf-8")
+            self.assertIn("wave 9001 FAILED status=7 in 200s", log)
+            self.assertNotIn("wave 9002", log)
+
 
 if __name__ == "__main__":
     unittest.main()

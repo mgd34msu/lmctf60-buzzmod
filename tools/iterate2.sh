@@ -84,6 +84,12 @@ MAP_OFFSETS=(0 2 4 6 8 10 12 14 16 18)
 MAPS=()
 for map_slot in 0 1 2 3 4 5 6 7 8 9; do
     MAPS[$map_slot]=${MAP_POOL[$(( (WAVE_NUMBER + MAP_OFFSETS[map_slot]) % 20 ))]}
+    for artifact in rune snag; do
+        if [[ ! -s "$GAMEDIR_ROOT/$GAME/maps/${MAPS[$map_slot]}.$artifact" ]]; then
+            echo "missing ${MAPS[$map_slot]}.$artifact; refusing empty fleet" >&2
+            exit 2
+        fi
+    done
 done
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
@@ -341,12 +347,15 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
 done
 if ((!POV_ENABLED)); then
     wait
+    WAVE_STATUS=0
     echo "=== WAVE $NAME (free layout) ==="
     for i in 0 1 2 3 4 5 6 7 8 9; do
         echo "---- ${LABELS[$i]} ${MAPS[$i]} fill=${FILLS[$i]} ${SECS[$i]}s ----"
-        "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
+        if ! "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"; then
+            WAVE_STATUS=1
+        fi
     done
-    exit $?
+    exit "$WAVE_STATUS"
 fi
 POV_STATUS=0
 for i in 0 1 2 3 4 5 6 7 8 9; do
@@ -360,6 +369,9 @@ done
 echo "=== WAVE $NAME (free layout) ==="
 for i in 0 1 2 3 4 5 6 7 8 9; do
     echo "---- ${LABELS[$i]} ${MAPS[$i]} fill=${FILLS[$i]} ${SECS[$i]}s ----"
-    /bin/bash --noprofile --norc "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
+    if ! /bin/bash --noprofile --norc "$SCRIPT_DIR/gamestat.sh" \
+        "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"; then
+        POV_STATUS=1
+    fi
 done
 exit "$POV_STATUS"

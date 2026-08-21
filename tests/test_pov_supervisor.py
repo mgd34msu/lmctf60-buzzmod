@@ -334,6 +334,12 @@ class SupervisorTest(unittest.TestCase):
         script.write_text(source)
         script.chmod(0o700)
         shutil.copy2(REPO / "tools/topmaps.txt", tools / "topmaps.txt")
+        maps = self.game / "maps"
+        maps.mkdir()
+        for line in (tools / "topmaps.txt").read_text().splitlines():
+            if line and not line.startswith("#"):
+                (maps / f"{line}.rune").write_bytes(b"rune")
+                (maps / f"{line}.snag").write_bytes(b"snag")
         shutil.copy2(self.supervisor, tools / "pov-supervisor")
         (tools / "gamestat.sh").write_text("#!/bin/bash\nexit 0\n")
         (tools / "gamestat.sh").chmod(0o700)

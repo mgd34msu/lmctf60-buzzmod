@@ -46,8 +46,14 @@ class IterateSelectionTest(unittest.TestCase):
         self.bin.mkdir()
         self.game_root = self.root / "games"
         (self.game_root / "testgame").mkdir(parents=True)
+        maps = self.game_root / "testgame" / "maps"
+        maps.mkdir()
         shutil.copy2(REPO / "tools/iterate2.sh", self.tools / "iterate2.sh")
         shutil.copy2(REPO / "tools/topmaps.txt", self.tools / "topmaps.txt")
+        for line in (self.tools / "topmaps.txt").read_text().splitlines():
+            if line and not line.startswith("#"):
+                (maps / f"{line}.rune").write_bytes(b"rune")
+                (maps / f"{line}.snag").write_bytes(b"snag")
         source = self.root / "multicall.c"
         source.write_text(MULTICALL)
         multicall = self.bin / "multicall"
@@ -77,7 +83,7 @@ class IterateSelectionTest(unittest.TestCase):
         for value in (None, "", "0", "poisoned"):
             with self.subTest(value=value):
                 result, trace = self.run_off(value)
-                self.assertEqual(result.returncode, 7, result.stderr)
+                self.assertEqual(result.returncode, 1, result.stderr)
                 normalized = sorted(line.replace(str(self.root), "$ROOT") for line in trace)
                 if frozen is None:
                     frozen = normalized
@@ -99,6 +105,13 @@ class IterateSelectionTest(unittest.TestCase):
         self.assertNotIn("pov-wave.sh", source)
         self.assertNotIn("pov-record.sh", source)
 
+    def test_missing_route_artifact_refuses_to_launch_empty_fleet(self):
+        (self.game_root / "testgame" / "maps" / "lmctf09.snag").unlink()
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("refusing empty fleet", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
     def test_human_demo_top20_rotates_on_distinct_server_offsets(self):
         pool = [line for line in (self.tools / "topmaps.txt").read_text().splitlines()
                 if line and not line.startswith("#")]
@@ -107,7 +120,7 @@ class IterateSelectionTest(unittest.TestCase):
         schedules = []
         for wave in range(20):
             result, trace = self.run_off(None, str(wave))
-            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual(result.returncode, 1, result.stderr)
             by_slot = {}
             for line in trace:
                 if not line.startswith("fake-q2 "):
