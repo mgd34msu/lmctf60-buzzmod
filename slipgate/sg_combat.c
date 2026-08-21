@@ -378,7 +378,6 @@ typedef struct
 	/* tap variance (sg_tapvar): the beat between a slow weapon coming
 	 * ready and the next deliberate trigger press */
 	float		tap_until;
-	qboolean	tap_pending;    /* legacy of the weaponstate cut; unused */
 	int			tap_ammo;       /* last seen ammo count for the held gun */
 
 	/* fire discipline (sg_firedisc): the bot's OWN heading stability --
