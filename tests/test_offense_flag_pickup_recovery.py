@@ -292,8 +292,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         move = source("slipgate/sg_move.c")
         weave = between(move, "if (duel && !hold_post",
                         "float dose = sg_cv.breather->value;")
-        jink = between(move,
-                       "if (role == SG_ROLE_CARRY && cmd->forwardmove != 0",
+        jink = between(move, "if (role == SG_ROLE_CARRY && cmd->forwardmove != 0",
                        "if (SG_TimerPending(bot->beat_until)")
         for section in (weave, jink):
             self.assertIn("SG_WeaveSideAt(", section)
@@ -303,6 +302,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("SG_CarrierJinkThreat(", jink)
         self.assertIn("en9->heard_only", jink)
         self.assertIn("VectorLength(threat_delta)", jink)
+        self.assertIn("SG_CarrierJinkApplyIfClear(e, side, cmd);", jink)
 
         air = between(move, "float dose = sg_cv.airstrafe->value",
                       "/* A proved graph ride")

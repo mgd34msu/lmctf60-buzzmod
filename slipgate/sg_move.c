@@ -4729,16 +4729,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				sg_feeler_probe_t feeler;
 				float score, clearance;
 
-				float reach = 96.0f;
-
-				/* Scale lookahead with speed to preserve wall-warning time. */
-				if (sg_cv.fandense->value >= 2)
-				{
-					float fsp = sqrtf(e->velocity[0] * e->velocity[0] +
-					                  e->velocity[1] * e->velocity[1]);
-					reach = 96.0f + (fsp > 274.0f ? (fsp - 274.0f) * 0.5f : 0.0f);
-					if (reach > 220.0f) reach = 220.0f;
-				}
+				float reach = SG_MoveFeelerReach(e);
 				feeler = SG_FeelerProbe(e, team, base_yaw + fan[k], reach,
 				    k == 0);
 				if (feeler.teammate_blocked)
@@ -8089,14 +8080,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							        SG_AgeUnder(en9->seen_time, 3.0f),
 							        VectorLength(threat_delta)))
 								continue;
-							short js = (short)SG_WeaveSideAt(
-							    bot->instance_token,
+							int side = SG_WeaveSideAt(bot->instance_token,
 							    e->client->ctf.ctfid, level.time);
 
-							cmd->sidemove = (short)(cmd->sidemove / 2
-							               + js * (cmd->forwardmove > 0
-							                       ? cmd->forwardmove
-							                       : -cmd->forwardmove) / 2);
+							SG_CarrierJinkApplyIfClear(e, side, cmd);
 							break;
 						}
 					}

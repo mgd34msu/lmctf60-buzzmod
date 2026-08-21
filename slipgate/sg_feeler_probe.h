@@ -12,5 +12,8 @@ typedef struct
 
 sg_feeler_probe_t SG_FeelerProbe(edict_t *e, int team, float yaw,
 	float reach, qboolean allow_teammate_redirect);
+float SG_MoveFeelerReach(const edict_t *e);
+qboolean SG_CarrierJinkApplyIfClear(edict_t *e, int weave_sign,
+	usercmd_t *cmd);
 
 #endif

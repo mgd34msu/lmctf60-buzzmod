@@ -2,6 +2,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_crowd_pass.h"
+#include "slipgate/sg_cvars.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_feeler_probe.h"
 #include "slipgate/sg_hooks.h"
@@ -15,6 +16,8 @@ int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 	int current_seed);
 
 sg_host_t sg_host;
+sg_cvars_t sg_cv;
+static cvar_t fandense_cvar;
 static qboolean block_terminal_trace;
 static qboolean terminal_trace_startsolid;
 static qboolean terminal_trace_allsolid;
@@ -23,6 +26,10 @@ static int crowd_trace_calls;
 static edict_t *crowd_trace_hits[2];
 static float crowd_trace_fractions[2];
 static vec3_t crowd_trace_ends[2];
+static const vec_t *last_trace_mins;
+static const vec_t *last_trace_maxs;
+static edict_t *last_trace_passent;
+static int last_trace_mask;
 static edict_t *own_flag;
 static qboolean own_flag_available;
 static qboolean own_flag_home;
@@ -57,10 +64,10 @@ static trace_t TerminalTrace(const vec3_t start, const vec3_t mins,
 	trace_t trace;
 
 	(void)start;
-	(void)mins;
-	(void)maxs;
-	(void)passent;
-	(void)contentmask;
+	last_trace_mins = mins;
+	last_trace_maxs = maxs;
+	last_trace_passent = passent;
+	last_trace_mask = contentmask;
 	memset(&trace, 0, sizeof(trace));
 	if (crowd_trace_mode)
 	{
@@ -180,6 +187,66 @@ int main(void)
 	rune.seeds = seeds;
 	rune.linked_seed = linked;
 	sg_host.trace = TerminalTrace;
+	sg_cv.fandense = &fandense_cvar;
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.forwardmove = 400;
+	crowd_trace_mode = 1;
+	crowd_trace_hits[0] = NULL;
+	crowd_trace_fractions[0] = 1.0f;
+	crowd_trace_calls = 0;
+	CHECK(SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(cmd.sidemove == 200 && crowd_trace_calls == 1);
+	CHECK(crowd_trace_ends[0][0] > 0.0f && crowd_trace_ends[0][1] < 0.0f);
+	CHECK(fabsf(crowd_trace_ends[0][0] +
+	    2.0f * crowd_trace_ends[0][1]) < 0.001f);
+	CHECK(fabsf(sqrtf(crowd_trace_ends[0][0] * crowd_trace_ends[0][0] +
+	    crowd_trace_ends[0][1] * crowd_trace_ends[0][1]) - 96.0f) < 0.001f);
+	CHECK(fabsf(crowd_trace_ends[0][2] - 8.0f) < 0.001f);
+	CHECK(last_trace_mins == ent.mins && last_trace_maxs == ent.maxs);
+	CHECK(last_trace_passent == &ent && last_trace_mask == MASK_PLAYERSOLID);
+	cmd.sidemove = 80;
+	crowd_trace_calls = 0;
+	CHECK(SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(cmd.sidemove == 240 && crowd_trace_calls == 1);
+	fandense_cvar.value = 2.0f;
+	ent.velocity[0] = 600.0f;
+	cmd.sidemove = 0;
+	crowd_trace_calls = 0;
+	CHECK(SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(fabsf(sqrtf(crowd_trace_ends[0][0] * crowd_trace_ends[0][0] +
+	    crowd_trace_ends[0][1] * crowd_trace_ends[0][1]) - 220.0f) < 0.001f);
+	fandense_cvar.value = 0.0f;
+	ent.velocity[0] = 0.0f;
+	cmd.angles[YAW] = ANGLE2SHORT(60.0f);
+	cmd.angles[PITCH] = ANGLE2SHORT(30.0f);
+	client.ps.pmove.delta_angles[YAW] = ANGLE2SHORT(30.0f);
+	cmd.sidemove = 0;
+	crowd_trace_calls = 0;
+	CHECK(SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(crowd_trace_ends[0][0] > 0.0f && crowd_trace_ends[0][1] > 0.0f);
+	CHECK(fabsf(crowd_trace_ends[0][1] / crowd_trace_ends[0][0] -
+	    2.0f * cosf(10.0f * (float)M_PI / 180.0f)) < 0.001f);
+	memset(cmd.angles, 0, sizeof(cmd.angles));
+	memset(client.ps.pmove.delta_angles, 0,
+	    sizeof(client.ps.pmove.delta_angles));
+	crowd_trace_fractions[0] = 0.5f;
+	crowd_trace_calls = 0;
+	cmd.sidemove = 80;
+	CHECK(!SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(cmd.sidemove == 80 && crowd_trace_calls == 1);
+	crowd_trace_fractions[0] = NAN;
+	crowd_trace_calls = 0;
+	CHECK(!SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(cmd.sidemove == 80 && crowd_trace_calls == 1);
+	crowd_trace_mode = 0;
+	terminal_trace_startsolid = true;
+	CHECK(!SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(cmd.sidemove == 80);
+	terminal_trace_startsolid = false;
+	terminal_trace_allsolid = true;
+	CHECK(!SG_CarrierJinkApplyIfClear(&ent, 1, &cmd));
+	CHECK(cmd.sidemove == 80);
+	terminal_trace_allsolid = false;
 	seeds[0].origin[0] = 0.0f;
 	seeds[1].origin[0] = 100.0f;
 	seeds[2].origin[0] = 200.0f;
