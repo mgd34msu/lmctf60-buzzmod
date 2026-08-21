@@ -352,11 +352,7 @@ typedef struct
 {
 	int			enemy;			/* edict index of held target, 0 = none */
 	unsigned long	enemy_ctfid;	/* exact target life occupying that slot */
-	float		since;			/* level.time the target was acquired */
-	float		acquired_at;	/* same instant, read by the reaction gate --
-	                             * kept separate from `since` because `since` is
-	                             * the settle clock and the two would otherwise
-	                             * be one number doing two jobs */
+	float		acquired_at;	/* level.time the target was acquired */
 
 	vec3_t		err;			/* aim error direction, unit length */
 	float		err_next;		/* when to resample the tremor */
@@ -2045,7 +2041,7 @@ static float Combat_TexShape(sg_combat_state_t *st, vec3_t dir)
 	if (st->tex_over <= 0.0f || st->tex_win <= 0.0f)
 		return 0.0f;
 
-	x = (level.time - st->since) / st->tex_win;
+	x = (level.time - st->acquired_at) / st->tex_win;
 	if (x < 0.0f || x >= 1.0f)
 		return 0.0f;		/* settled; the ramp has it from here */
 
@@ -2066,12 +2062,8 @@ static void Combat_TexWander(sg_combat_state_t *st, vec3_t dir)
 	vec3_t	kick;
 	float	dt, w, len;
 
-	/*
-	 * A new target restarts the settle clock, and st->since is rewritten
-	 * when it does -- so a wander stamp older than it means "this direction
-	 * belongs to the last target" without a second flag to keep in sync.
-	 */
-	if (st->tex_wander < st->since)
+	/* A newer acquisition stamp invalidates the prior target's wander. */
+	if (st->tex_wander < st->acquired_at)
 	{
 		Combat_SampleError(st, dir);
 		st->tex_wander = level.time;
@@ -2147,7 +2139,7 @@ static void Combat_ConstrainAim(edict_t *enemy, int weapon, vec3_t origin,
 		start = SG_AIM_PROJECTILE_START;
 		residual = SG_AIM_PROJECTILE_RESIDUAL;
 	}
-	fraction = (level.time - st->since) / SG_AIM_ENVELOPE_SETTLE;
+	fraction = (level.time - st->acquired_at) / SG_AIM_ENVELOPE_SETTLE;
 	if (fraction < 0.0f)
 		fraction = 0.0f;
 	if (fraction > 1.0f)
@@ -3747,8 +3739,7 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 	{
 		st->enemy = (int)(enemy - g_edicts);
 		st->enemy_ctfid = enemy->client->ctf.ctfid;
-		st->since = level.time;
-		st->acquired_at = level.time;	/* the reaction clock starts here */
+		st->acquired_at = level.time;
 		st->err_next = 0.0f;
 		st->win_end = 0.0f;
 		st->win_fire = false;
@@ -4097,7 +4088,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		if (textured)
 			span = Combat_TexSpan(span, residual, st->tex_over);
 
-		held = level.time - st->since;
+		held = level.time - st->acquired_at;
 		frac = (held >= settle) ? 0.0f : (1.0f - held / settle);
 		mag = (float)tan((residual + span * frac) * M_PI / 180.0);
 
@@ -4420,7 +4411,7 @@ int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
 	if (VectorNormalize(aim) <= 0.0001f)
 		return 0;
 	VectorCopy(lead, lead_copy);
-	st.since = 0.0f;
+	st.acquired_at = 0.0f;
 	level.time = elapsed;
 	result = Combat_FinalizeMuzzleAim(&self, &enemy, weapon, lead_copy, &st,
 	                                 aim, &cmd, muzzle_out, dir_out,
