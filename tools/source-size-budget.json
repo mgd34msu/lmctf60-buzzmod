@@ -65,7 +65,7 @@
   "oversized_files": {
     "GNUmakefile": 2691,
     "Makefile": 2930,
-    "slipgate/sg_arach.c": 3693,
+    "slipgate/sg_arach.c": 3689,
     "slipgate/sg_caco.c": 2117,
     "slipgate/sg_chat.c": 3812,
     "slipgate/sg_combat.c": 4431,

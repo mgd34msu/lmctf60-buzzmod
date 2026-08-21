@@ -3405,10 +3405,6 @@ void SG_BotThink(sg_bot_t *bot)
 	if (role != SG_ROLE_CARRY)
 		duel = SG_CombatDuel(e, duel_org, &duel_want, &duel_expo);
 
-	/* descend the surface: my seed vs every seed one proven link away.
-	 * PickLink reads the think context; these locals are migrating into
-	 * it stage by stage, so the context is loaded from them here and the
-	 * results read back below until every stage speaks context natively. */
 	tc.precision = precision;
 	tc.duel = duel;
 	VectorCopy(duel_org, tc.duel_org);
