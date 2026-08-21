@@ -187,6 +187,21 @@ static void TestContinuousContraries(void)
 	}
 }
 
+static void TestDiscoveredGenerationControl(void)
+{
+	sg_compound_hook_oracle_request_t request = LoaderRequest();
+	sg_compound_hook_oracle_response_t response;
+
+	request.expected_control = false;
+	request.loader_replay = false;
+	SG_CompoundHookOracleRunScenario(&request, &response);
+	CHECK(response.reason == RLR_OK);
+	CHECK(response.proof.control[ROLL] > 0.0f);
+	CHECK(response.proof.touch_ms == 50);
+	CHECK(response.proof.total_cost_ms == 900);
+	CHECK(response.member_restored && response.globals_restored);
+}
+
 static void TestSweepResetAndWorldOnlyPropagation(void)
 {
 	sg_compound_hook_oracle_request_t request = LoaderRequest();
@@ -226,6 +241,7 @@ int SG_CompoundHookOracleFixtureRun(void)
 	TestExpectedControlAndStablePopulation();
 	TestExpectedControlFailures();
 	TestContinuousContraries();
+	TestDiscoveredGenerationControl();
 	TestSweepResetAndWorldOnlyPropagation();
 	return failures;
 }

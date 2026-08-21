@@ -27,6 +27,7 @@ void SG_CompoundHookOracleRunScenario(
 		return;
 	}
 	scenario.hook_suffix = true;
+	scenario.hook_discover_control = !request->expected_control;
 	scenario.hook_muzzle_blocked = request->muzzle_blocked;
 	scenario.hook_shot_sky = request->shot_sky;
 	scenario.hook_shot_nonworld = request->shot_nonworld;

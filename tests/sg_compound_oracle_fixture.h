@@ -47,6 +47,7 @@ typedef struct fixture_config_s
 	qboolean suffix_hazard;
 	qboolean drop_suffix;
 	qboolean hook_suffix;
+	qboolean hook_discover_control;
 	qboolean hook_muzzle_blocked;
 	qboolean hook_shot_sky;
 	qboolean hook_shot_nonworld;

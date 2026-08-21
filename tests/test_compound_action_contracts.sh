@@ -21,3 +21,5 @@ common='-std=c11 -Wall -Wextra -Werror -Wpedantic'
 	"$root/slipgate/sg_compound.c" \
 	"$root/slipgate/sg_action.c" -lm -o "$build/publication"
 "$build/publication"
+
+python3 -B "$root/tests/test_compound_hook_generator_integration.py"

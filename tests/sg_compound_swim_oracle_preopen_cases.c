@@ -25,13 +25,6 @@ static void TestTouchSubsteps(void)
 		result = SG_OracleCompoundSwimPreopen(&phantom, &resolved,
 			mechanism, destination, true, 0.0f, &proof, NULL, true,
 			false);
-		if (result != RLR_OK)
-			fprintf(stderr, "touch %d result %d calls %d approach %d zero %d suffix %d links %d\n",
-			        touch, result, fixture_observation.pmove_calls,
-			        fixture_observation.approach_commands,
-			        fixture_observation.zero_commands,
-			        fixture_observation.suffix_commands,
-			        fixture_observation.link_calls);
 		CHECK(result == RLR_OK);
 		CHECK(proof.touch_ms == touch * 25);
 		CHECK(proof.touch_frame_end_ms == 100);
@@ -313,11 +306,6 @@ static void RunContactDiscovery(float source_x, int touch_substep,
 	memset(&fixture_observation, 0, sizeof(fixture_observation));
 	result = SG_OracleCompoundSwimDiscoverContact(&prepared, &resolved, hint,
 	      anchor, NULL, true, false);
-	if (result != RLR_OK)
-		fprintf(stderr, "discovery source %.1f touch %d result %d calls %d approach %d hint %.3f\n",
-		        source_x, touch_substep, result,
-		        fixture_observation.pmove_calls,
-		        fixture_observation.approach_commands, hint[0]);
 	CHECK(result == RLR_OK);
 	CHECK(anchor[0] == config.mechanism_x);
 	CHECK(anchor[1] == 0.0f && !signbit(anchor[1]));

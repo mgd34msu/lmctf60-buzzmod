@@ -4784,6 +4784,292 @@ static void Link_CompoundDrops(void)
 	#undef COMPOUND_DROP_FAN
 }
 
+typedef struct compound_hook_plan_context_s
+{
+	const sg_compound_action_gen_candidate_t *candidates;
+	const sg_compound_action_gen_proof_t *proofs;
+	size_t count;
+} compound_hook_plan_context_t;
+
+static rune_reject_reason_t Compound_HookPlanProve(void *opaque, int action,
+	const sg_compound_action_gen_candidate_t *candidate,
+	sg_compound_action_gen_proof_t *proof);
+
+static void Link_CompoundHooks(void)
+{
+	#define COMPOUND_HOOK_PRODUCTION 0
+	#define COMPOUND_WORLD_MAX 64
+	#define COMPOUND_SOURCE_FAN 24
+	#define COMPOUND_HOOK_FAN 24
+	sg_compound_world_candidate_t mechanisms[COMPOUND_WORLD_MAX];
+	int mechanism_count = 0;
+	int base_link_count = gen_num_links;
+	int oracle_trials = 0;
+	int oracle_proofs = 0;
+	int planner_emitted = 0;
+	int planner_proofs = 0;
+	int contact_failures[128] = { 0 };
+	int proof_failures[128] = { 0 };
+	door_topology_t topology = { NULL, NULL };
+	sg_compound_action_gen_seed_t *planner_seeds = NULL;
+	qboolean have_topology;
+	int mi;
+	rune_reject_reason_t enumerate_reason;
+
+	enumerate_reason = SG_CompoundWorldEnumeratePreopen(mechanisms,
+	    COMPOUND_WORLD_MAX, &mechanism_count);
+	if (enumerate_reason != RLR_OK)
+	{
+		sg_host.dprint("rune: door-hook compound discovery reason=%d\n",
+		               (int)enumerate_reason);
+		return;
+	}
+	have_topology = Door_TopologyBuild(&topology);
+	if (have_topology)
+	{
+		int seed;
+
+		planner_seeds = sg_host.level_alloc(sizeof(*planner_seeds) *
+		    (size_t)gen_num_seeds);
+		if (!planner_seeds)
+			have_topology = false;
+		else
+			for (seed = 0; seed < gen_num_seeds; seed++)
+			{
+				planner_seeds[seed].component = topology.component[seed];
+				planner_seeds[seed].objective_mask =
+				    topology.objective_mask[seed];
+				planner_seeds[seed].water =
+				    (gen_seeds[seed].flags & RSF_WATER) != 0;
+				planner_seeds[seed].has_incoming = Gen_SeedHasIncoming(seed);
+				planner_seeds[seed].has_outgoing = Gen_SeedHasOutgoing(seed);
+			}
+	}
+	for (mi = 0; mi < mechanism_count; mi++)
+	{
+		sg_compound_world_candidate_t *mechanism = &mechanisms[mi];
+		int hi;
+
+		for (hi = 0; hi < mechanism->hint_count; hi++)
+		{
+			int sources[COMPOUND_SOURCE_FAN];
+			float source_scores[COMPOUND_SOURCE_FAN];
+			int source, si;
+
+			for (si = 0; si < COMPOUND_SOURCE_FAN; si++)
+			{
+				sources[si] = -1;
+				source_scores[si] = 1.0e30f;
+			}
+			for (source = 0; source < gen_num_seeds; source++)
+			{
+				vec3_t delta;
+				float horizontal2, score;
+
+				if (!(gen_seeds[source].flags & RSF_WATER) ||
+				    gen_source_waterlevel[source] < 2 ||
+				    !(gen_source_watertype[source] & CONTENTS_WATER) ||
+				    (gen_source_watertype[source] &
+				     (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+				    !Gen_SeedHasIncoming(source) ||
+				    !SG_CompoundWorldOutsideSweep(&mechanism->resolved,
+				        gen_seeds[source].origin))
+					continue;
+				VectorSubtract(mechanism->hints[hi],
+				    gen_seeds[source].origin, delta);
+				horizontal2 = delta[0] * delta[0] + delta[1] * delta[1];
+				if (horizontal2 > 768.0f * 768.0f ||
+				    fabsf(delta[2]) > 256.0f)
+					continue;
+				score = horizontal2 + delta[2] * delta[2];
+				Door_CandidateInsert(source, score, sources, source_scores,
+				    COMPOUND_SOURCE_FAN);
+			}
+			for (si = 0; si < COMPOUND_SOURCE_FAN && sources[si] >= 0; si++)
+			{
+				sg_compound_swim_source_t prepared;
+				int destinations[COMPOUND_HOOK_FAN];
+				float destination_scores[COMPOUND_HOOK_FAN];
+				vec3_t contact;
+				int li, di;
+				rune_reject_reason_t reason;
+
+				source = sources[si];
+				memset(&prepared, 0, sizeof(prepared));
+				reason = SG_OracleCompoundSwimPrepareSource(
+				    gen_seeds[source].origin, &mechanism->resolved, 0.0f,
+				    &prepared, NULL, true, false);
+				if (reason != RLR_OK)
+				{
+					if ((int)reason >= 0 && (int)reason < 128)
+						contact_failures[(int)reason]++;
+					continue;
+				}
+				reason = SG_OracleCompoundSwimDiscoverContact(&prepared,
+				    &mechanism->resolved, mechanism->hints[hi], contact, NULL,
+				    true, false);
+				if (reason != RLR_OK)
+				{
+					if ((int)reason >= 0 && (int)reason < 128)
+						contact_failures[(int)reason]++;
+					continue;
+				}
+				for (di = 0; di < COMPOUND_HOOK_FAN; di++)
+				{
+					destinations[di] = -1;
+					destination_scores[di] = 1.0e30f;
+				}
+				for (li = 0; li < base_link_count; li++)
+				{
+					const rune_link_t *suffix = &gen_links[li];
+					vec3_t delta;
+					float score;
+
+					if (suffix->action != RL_HOOK || suffix->to < 0 ||
+					    suffix->to >= gen_num_seeds || suffix->to == source ||
+					    !Gen_SeedHasOutgoing(suffix->to) ||
+					    !SG_ActionEndpointAllowed(RL_DOOR_HOOK, true,
+					        (gen_seeds[suffix->to].flags & RSF_WATER) != 0) ||
+					    !SG_CompoundWorldOutsideSweep(&mechanism->resolved,
+					        gen_seeds[suffix->to].origin))
+						continue;
+					VectorSubtract(gen_seeds[suffix->to].origin, contact,
+					               delta);
+					score = DotProduct(delta, delta);
+					if (!isfinite(score))
+						continue;
+					Door_CandidateInsert(suffix->to, score, destinations,
+					    destination_scores, COMPOUND_HOOK_FAN);
+				}
+				if (have_topology && destinations[0] >= 0)
+				{
+					sg_compound_action_gen_candidate_t candidates[
+					    COMPOUND_HOOK_FAN];
+					sg_compound_action_gen_proof_t proofs[COMPOUND_HOOK_FAN];
+					rune_link_t output[4];
+					sg_compound_action_gen_request_t request;
+					sg_compound_action_gen_result_t result;
+					compound_hook_plan_context_t context;
+					int successful = 0;
+
+					for (di = 0; di < COMPOUND_HOOK_FAN &&
+					     destinations[di] >= 0; di++)
+					{
+						sg_compound_hook_proof_t exact;
+						sg_phantom_t phantom = prepared.phantom;
+
+						oracle_trials++;
+						memset(&exact, 0, sizeof(exact));
+						reason = SG_OracleCompoundHookPreopen(&phantom,
+						    &mechanism->resolved, contact,
+						    gen_seeds[destinations[di]].origin, NULL,
+						    prepared.old_frame_z, &exact, NULL, true,
+						    false);
+						if (reason != RLR_OK)
+						{
+							if ((int)reason >= 0 && (int)reason < 128)
+								proof_failures[(int)reason]++;
+							continue;
+						}
+						oracle_proofs++;
+						memset(&candidates[successful], 0,
+						    sizeof(candidates[successful]));
+						candidates[successful].source = source;
+						candidates[successful].destination =
+						    destinations[di];
+						candidates[successful].trigger_key =
+						    mechanism->resolved.trigger_key;
+						candidates[successful].mover_key =
+						    mechanism->resolved.mover_key;
+						VectorCopy(contact,
+						    candidates[successful].mechanism_anchor);
+						candidates[successful].local_rank =
+						    (uint32_t)successful;
+						candidates[successful].mode = RLCM_PREOPEN;
+						memset(&proofs[successful], 0,
+						    sizeof(proofs[successful]));
+						VectorCopy(exact.control,
+						    proofs[successful].suffix_anchor);
+						proofs[successful].touch_ms = exact.touch_ms;
+						proofs[successful].touch_frame_end_ms =
+						    exact.touch_frame_end_ms;
+						proofs[successful].mover_top_ms =
+						    exact.mover_top_ms;
+						proofs[successful].suffix_start_ms =
+						    exact.suffix_start_ms;
+						proofs[successful].total_cost_ms =
+						    exact.total_cost_ms;
+						proofs[successful].arrival_ms = exact.arrival_ms;
+						proofs[successful].sweep_clear_ms =
+						    exact.sweep_clear_ms;
+						proofs[successful].heading_slack =
+						    SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER;
+						proofs[successful].exit_speed = exact.exit_speed;
+						successful++;
+					}
+					if (!successful)
+						continue;
+					memset(&context, 0, sizeof(context));
+					context.candidates = candidates;
+					context.proofs = proofs;
+					context.count = (size_t)successful;
+					memset(&request, 0, sizeof(request));
+					request.action = RL_DOOR_HOOK;
+					request.seeds = planner_seeds;
+					request.seed_count = (size_t)gen_num_seeds;
+					request.candidates = candidates;
+					request.candidate_count = (size_t)successful;
+					request.output = output;
+					request.output_capacity = 4;
+					request.prove = Compound_HookPlanProve;
+					request.context = &context;
+					request.production_enabled =
+					    COMPOUND_HOOK_PRODUCTION;
+					result = SG_CompoundActionGenPlan(&request);
+					planner_proofs += (int)result.proof_calls;
+					if (result.status == SG_COMPOUND_ACTION_GEN_OK)
+						planner_emitted += (int)result.emitted;
+				}
+			}
+		}
+	}
+	sg_host.dprint("rune: door-hook compound mechanisms=%d trials=%d "
+	               "proofs=%d planner_proofs=%d emitted=%d\n",
+	               mechanism_count, oracle_trials, oracle_proofs,
+	               planner_proofs, planner_emitted);
+	for (mi = 0; mi < 128; mi++)
+		if (contact_failures[mi] || proof_failures[mi])
+			sg_host.dprint("rune: door-hook compound reject reason=%d "
+			               "contact=%d proof=%d\n", mi,
+			               contact_failures[mi], proof_failures[mi]);
+	if (planner_seeds)
+		sg_host.level_free(planner_seeds);
+	Door_TopologyFree(&topology);
+	#undef COMPOUND_HOOK_PRODUCTION
+	#undef COMPOUND_WORLD_MAX
+	#undef COMPOUND_SOURCE_FAN
+	#undef COMPOUND_HOOK_FAN
+}
+
+static rune_reject_reason_t Compound_HookPlanProve(void *opaque, int action,
+	const sg_compound_action_gen_candidate_t *candidate,
+	sg_compound_action_gen_proof_t *proof)
+{
+	compound_hook_plan_context_t *context = opaque;
+	const sg_compound_action_gen_candidate_t *stored;
+
+	if (!context || !candidate || !proof || action != RL_DOOR_HOOK ||
+	    !context->candidates || !context->proofs ||
+	    candidate->local_rank >= context->count)
+		return RLR_BAD_CONTROL_POLICY;
+	stored = &context->candidates[candidate->local_rank];
+	if (stored->source != candidate->source ||
+	    stored->destination != candidate->destination)
+		return RLR_BAD_CONTROL_POLICY;
+	*proof = context->proofs[candidate->local_rank];
+	return RLR_OK;
+}
+
 #undef DOOR_WAIT_MAX
 
 
@@ -6033,6 +6319,7 @@ qboolean Rune_Generate(const char *mapname)
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("compound-links");
 	Link_CompoundDrops();
+	Link_CompoundHooks();
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("rocket-jumps");
 	door_status = Doors_Open(&doors);

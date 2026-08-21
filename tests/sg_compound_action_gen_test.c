@@ -212,7 +212,17 @@ static void TestDisabledAndFailuresAreAtomic(void)
 	request.production_enabled = 0;
 	result = SG_CompoundActionGenPlan(&request);
 	CHECK(result.status == SG_COMPOUND_ACTION_GEN_DISABLED);
+	CHECK(result.proof_calls == 0 && result.emitted == 0);
 	CHECK(context.calls == 0 && memcmp(&output, &before, sizeof(output)) == 0);
+
+	request.action = RL_DOOR_HOOK;
+	seeds[0].water = 1;
+	result = SG_CompoundActionGenPlan(&request);
+	CHECK(result.status == SG_COMPOUND_ACTION_GEN_DISABLED);
+	CHECK(result.proof_calls == 0 && result.emitted == 0);
+	CHECK(context.calls == 0 && memcmp(&output, &before, sizeof(output)) == 0);
+	request.action = RL_DOOR_DROP;
+	seeds[0].water = 0;
 
 	request.production_enabled = 1;
 	context.bad_timing = 1;

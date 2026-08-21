@@ -34,6 +34,21 @@ trace_t HostTrace(const vec3_t start, const vec3_t mins,
 		return trace;
 	}
 	if (fixture_config.hook_suffix && fixture_observation.top_staged &&
+	    fixture_config.hook_discover_control && !mins &&
+	    mask == MASK_PLAYERSOLID)
+	{
+		vec3_t delta;
+
+		VectorSubtract(end, start, delta);
+		if (VectorLength(delta) > 500.0f)
+		{
+			trace.fraction = 0.5f;
+			VectorCopy(start, trace.endpos);
+			trace.endpos[2] = 26.0f;
+			return trace;
+		}
+	}
+	if (fixture_config.hook_suffix && fixture_observation.top_staged &&
 	    !mins && mask == MASK_SHOT)
 	{
 		vec3_t delta;
