@@ -136,6 +136,9 @@ static qboolean HookShadow(const sg_hook_replay_state_t *state,
 
 	if (!state || !pose || !observation || !command)
 		return false;
+	if (state->phase == SG_HOOK_REPLAY_WAIT_ATTACH)
+		return SG_HookReplayFixedViewCommand(pose, state->spec.view_angles,
+		                                     command);
 	copy = *state;
 	return SG_HookReplayPreStep(&copy, pose, observation, command) ==
 	       SG_REPLAY_RUNNING;
@@ -208,6 +211,20 @@ static void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 	host->hook_shadow = HookShadow;
 	pose->waterlevel = 2;
 	pose->watertype = CONTENTS_WATER;
+}
+
+static void SetupLateAttach(fixture_t *fixture,
+	sg_compound_hook_live_host_t *host, sg_replay_pose_t *pose,
+	sg_replay_observation_t *observation)
+{
+	Setup(fixture, host, pose, observation);
+	fixture->snapshot.binding.link.anchor[ROLL] = 160.0f;
+	fixture->snapshot.binding.arrival_ms = 400;
+	fixture->snapshot.binding.sweep_clear_ms = 300;
+	fixture->snapshot.binding.total_cost_ms = 700;
+	fixture->snapshot.binding.link.cost_ms = 700;
+	fixture->snapshot.binding.link.sweep_clear_ms = 300;
+	fixture->snapshot.hook_proof.flight_ms = 200;
 }
 
 static void TestBeginOwnsOneOuterTransaction(void)
@@ -304,7 +321,9 @@ static sg_compound_hook_live_bolt_t DriveToLinked(fixture_t *fixture,
 	                                   observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state->outer.phase == SG_COMPOUND_SUFFIX_LEASED);
-	CHECK(state->hook.phase == SG_HOOK_REPLAY_WAIT_ATTACH);
+	CHECK(state->hook.phase ==
+	      (fixture->snapshot.hook_proof.flight_ms > SG_REPLAY_FRAME_MS ?
+	       SG_HOOK_REPLAY_FLIGHT : SG_HOOK_REPLAY_WAIT_ATTACH));
 	result = SG_CompoundHookLiveLinked(state, host, &bolt, 3, pose,
 	                                   observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -518,6 +537,126 @@ static void TestReleaseNeedsBodyAndBoltClear(void)
 	CHECK(state.guard_owned && state.outer.phase == SG_COMPOUND_RECOVER);
 }
 
+static void TestLateAttachWaitsOneWholeFrame(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_bolt_t bolt;
+	sg_hook_replay_state_t parked;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+	int hold_calls, step;
+
+	SetupLateAttach(&fixture, &host, &pose, &observation);
+	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_ATTACH);
+	parked = state.hook;
+	hold_calls = fixture.hold_calls;
+	for (step = 0; step < 4; step++)
+	{
+		result = Step(&state, &host, &pose, &observation, &command);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+		CHECK(command.msec == SG_REPLAY_STEP_MS);
+		CHECK(command.angles[PITCH] == (short)ANGLE2SHORT(
+		      fixture.snapshot.hook_proof.view_angles[PITCH]));
+		CHECK(command.angles[YAW] == (short)ANGLE2SHORT(
+		      fixture.snapshot.hook_proof.view_angles[YAW]));
+		CHECK(command.angles[ROLL] == 0);
+		CHECK(command.forwardmove == 0 && command.sidemove == 0 &&
+		      command.upmove == 0 && command.buttons == 0);
+	}
+	CHECK(memcmp(&parked, &state.hook, sizeof(parked)) == 0);
+	CHECK(state.transaction_elapsed_ms -
+	      state.snapshot.binding.mover_top_ms -
+	      state.hook.progress.elapsed_ms == SG_REPLAY_FRAME_MS);
+	CHECK(state.transaction_elapsed_ms == 500);
+	CHECK(fixture.hold_calls == hold_calls + 1);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.hook.phase == SG_HOOK_REPLAY_ATTACH_FRAME);
+	observation.hook_rope_valid = true;
+	observation.hook_rope_length = 200;
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_PULL);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 3; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	observation.hook_rope_length = 100;
+	result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.sweep_clear);
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
+	                                           &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	pose.grounded = true;
+	pose.waterlevel = 0;
+	pose.watertype = 0;
+	observation.contact_clear = true;
+	for (step = 0; step < 3; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	pose.origin[0] = 96.0f;
+	pose.pms.origin[0] = 96 * 8;
+	result = SG_CompoundHookLiveBoundary(&state, &host, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_COMPLETE);
+	CHECK(state.transaction_elapsed_ms == 800);
+	CHECK(!state.guard_owned && fixture.release_calls == 1);
+}
+
+static void TestMissingAttachTimesOutIntoRetainedRecovery(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+	int allowed_wait, step;
+
+	SetupLateAttach(&fixture, &host, &pose, &observation);
+	(void)DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_ATTACH);
+	allowed_wait = SG_REPLAY_HOOK_FLIGHT_MAX_MS - state.hook.flight_body_ms;
+	for (step = 0; step < allowed_wait / SG_REPLAY_STEP_MS; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.transaction_elapsed_ms -
+	      state.snapshot.binding.mover_top_ms -
+	      state.hook.progress.elapsed_ms == allowed_wait);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(!result.command_ready);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY);
+	CHECK(result.replay_reason == SG_REPLAY_REASON_HOOK_ATTACH_TIMING);
+	CHECK(state.guard_owned && state.local_owned);
+	CHECK(state.outer.phase == SG_COMPOUND_RECOVER);
+	CHECK(fixture.release_calls == 0);
+	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
+	                                    0.0f);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
+	CHECK(!state.guard_owned && fixture.release_calls == 1);
+}
+
 int main(void)
 {
 	TestBeginOwnsOneOuterTransaction();
@@ -525,6 +664,8 @@ int main(void)
 	TestWrongGenerationRetainsLeaseForRecovery();
 	TestDeathOrphansExactBolt();
 	TestReleaseNeedsBodyAndBoltClear();
+	TestLateAttachWaitsOneWholeFrame();
+	TestMissingAttachTimesOutIntoRetainedRecovery();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_hook_live_test: %d failure(s)\n",
