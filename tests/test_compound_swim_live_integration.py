@@ -21,17 +21,17 @@ CONTRACT = (
 ).read_text(encoding="utf-8")
 
 
-def test_only_door_swim_is_admitted() -> None:
+def test_door_drop_and_swim_are_admitted() -> None:
     registry = json.loads(
         (ROOT / "slipgate" / "rune_actions.json").read_text(encoding="utf-8")
     )
     actions = {row["id"]: row for row in registry["contract"]["actions"]}
     assert set(actions) >= {9, 10, 11}
-    assert actions[9]["runtime_supported"] == 0
+    assert actions[9]["runtime_supported"] == 1
     assert actions[10]["runtime_supported"] == 1
     assert actions[11]["runtime_supported"] == 0
 
-    assert "X(RL_DOOR_DROP, 9, 0," in CONTRACT
+    assert "X(RL_DOOR_DROP, 9, 1," in CONTRACT
     assert "X(RL_DOOR_SWIM, 10, 1," in CONTRACT
     assert "X(RL_DOOR_HOOK, 11, 0," in CONTRACT
 
@@ -85,7 +85,7 @@ def test_production_registration_and_callsite() -> None:
 
 
 if __name__ == "__main__":
-    test_only_door_swim_is_admitted()
+    test_door_drop_and_swim_are_admitted()
     test_controller_owns_one_literal_action_without_handoff()
     test_state_has_no_unguarded_reset_api()
     test_production_registration_and_callsite()

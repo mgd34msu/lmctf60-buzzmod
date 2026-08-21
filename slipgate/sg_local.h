@@ -223,6 +223,21 @@ rune_reject_reason_t SG_OracleCompoundDropPreopen(
 	const vec3_t mechanism_anchor, const vec3_t destination,
 	const vec3_t lip, byte heading, qboolean destination_water,
 	sg_compound_drop_proof_t *proof, qboolean loader_replay);
+/* Re-prove the DROP suffix from the exact live TOP checkpoint.  The member
+ * remains at authenticated TOP for the complete observation-only rollout. */
+rune_reject_reason_t SG_OracleCompoundDropContinue(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t destination, const vec3_t lip, byte heading,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_drop_proof_t *proof, edict_t *passent);
+/* Re-prove a bounded DROP recovery from an exact live TOP checkpoint inside
+ * the member sweep.  A caller already outside is safe to release and is
+ * deliberately rejected here. */
+rune_reject_reason_t SG_OracleCompoundDropRecover(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t destination, const vec3_t lip, byte heading,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_drop_proof_t *proof, edict_t *passent);
 /* Re-prove a bounded SWIM from the exact state the live client's next Pmove
  * would consume.  The caller owns rune/physics authority and must renew the
  * TOP lease before calling; this observation-only oracle never touches the
@@ -715,6 +730,8 @@ qboolean	SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator);
 void		SG_ButtonExecutionEntityFreed(edict_t *entity);
 qboolean	SG_HandleMechanismTargets(edict_t *source,
 								      edict_t *activator);
+void		SG_CompoundDropGameTagDelayedTarget(edict_t *source,
+							      edict_t *activator, edict_t *delayed);
 qboolean	SG_AuthorizeLiftTouch(edict_t *source, edict_t *platform,
 								  edict_t *activator);
 qboolean	SG_AuthorizeLiftUse(edict_t *platform, edict_t *activator);

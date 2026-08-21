@@ -1,4 +1,4 @@
-/* Bounded topology planner for dormant D_DROP and D_HOOK links. */
+/* Bounded topology planner for compound door links. */
 #ifndef SG_COMPOUND_ACTION_GEN_H
 #define SG_COMPOUND_ACTION_GEN_H
 

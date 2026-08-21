@@ -4188,7 +4188,8 @@ static void Link_Doors(door_topology_t *topology)
 						               candidate->lip[0], candidate->lip[1],
 						               candidate->lip[2],
 						               (unsigned int)candidate->heading,
-						               trial.end.origin[0], trial.end.origin[1],
+							               trial.end.origin[0],
+							               trial.end.origin[1],
 						               trial.end.origin[2]);
 					}
 				}
@@ -4209,11 +4210,13 @@ static void Link_Doors(door_topology_t *topology)
 					        drop_lip, &drop_heading, &drop_ms, &drop_exit))
 					{
 						gen_door_drop_proofs++;
-						sg_host.dprint("rune: door-drop probe trigger=%d wait=%d "
-						               "mode=%d dest=%d suffix=%d "
-						               "lip=(%.3f %.3f %.3f) heading=%u exit=%u\n",
-						               di, wi, mode_index, dest, (int)drop_ms,
-						               drop_lip[0], drop_lip[1], drop_lip[2],
+						sg_host.dprint("rune: door-drop probe "
+						               "trigger=%d wait=%d mode=%d dest=%d "
+						               "suffix=%d lip=(%.3f %.3f %.3f) "
+						               "heading=%u exit=%u\n",
+						               di, wi, mode_index, dest,
+						               (int)drop_ms, drop_lip[0],
+						               drop_lip[1], drop_lip[2],
 						               (unsigned int)drop_heading,
 						               (unsigned int)drop_exit);
 					}
@@ -4657,7 +4660,8 @@ static void Link_CompoundDrops(void)
 					    !SG_CompoundWorldOutsideSweep(&mechanism->resolved,
 					        gen_seeds[suffix->to].origin))
 						continue;
-					VectorSubtract(gen_seeds[suffix->to].origin, contact, delta);
+					VectorSubtract(gen_seeds[suffix->to].origin,
+					    contact, delta);
 					horizontal2 = delta[0] * delta[0] + delta[1] * delta[1];
 					if (delta[2] >= -48.0f || delta[2] < -2048.0f ||
 					    horizontal2 >
@@ -4694,7 +4698,8 @@ static void Link_CompoundDrops(void)
 						    mechanism->resolved.mover_key;
 						VectorCopy(contact,
 						    candidates[candidate_count].mechanism_anchor);
-						candidates[candidate_count].local_rank = (uint32_t)di;
+						candidates[candidate_count].local_rank =
+						    (uint32_t)di;
 						candidates[candidate_count].mode = RLCM_PREOPEN;
 						candidate_count++;
 					}

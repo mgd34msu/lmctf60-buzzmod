@@ -229,8 +229,8 @@ void G_UseTargets (edict_t *ent, edict_t *activator)
 {
 	edict_t		*t;
 
-	/* A guarded bot may execute only the exact target fanout copied into its
-	 * authenticated mechanism plan.  Validate before delay allocation,
+	/* A guarded bot may execute only the exact fanout admitted by its
+	 * authenticated mechanism authority. Validate before delay allocation,
 	 * messages, killtargets, or the first callback. */
 	if (SG_HandleMechanismTargets(ent, activator))
 		return;
@@ -256,6 +256,7 @@ void G_UseTargets (edict_t *ent, edict_t *activator)
 		t->message = ent->message;
 		t->target = ent->target;
 		t->killtarget = ent->killtarget;
+		SG_CompoundDropGameTagDelayedTarget(ent, activator, t);
 		return;
 	}
 	

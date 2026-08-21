@@ -874,9 +874,6 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientSpawned(edict_t *client)
 	game_guard.protected_subject[key] = bot ? 1U : 0U;
 	if (!bot || !bot->compound_guard.attached)
 		return SG_COMPOUND_GUARD_OK;
-	/* The action controller relinquishes command ownership before the generic
-	 * guard transfers the durable claim to its process-owned orphan record. */
-	SG_CompoundDropGameOrphan(bot);
 	respawn_result = SG_CompoundGuardBotRespawn(&bot->compound_guard, key);
 	if (respawn_result != SG_COMPOUND_GUARD_OK)
 		GameQuarantineBot(bot);
@@ -973,6 +970,29 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	    SG_COMPOUND_GUARD_RUN_TERMINAL)
 		claimed = true;
 	bolt_key = GameResolveHook(client);
+	if (bot->compound_drop_live.guard_owned)
+	{
+		result = SG_CompoundDropGameOrphan(bot, bolt_key);
+		if (result != SG_COMPOUND_GUARD_OK)
+		{
+			GameQuarantineBot(bot);
+			return result;
+		}
+		memset(&record, 0, sizeof(record));
+		if (SG_CompoundGuardValidate(&bot->compound_guard, &record) !=
+		        SG_COMPOUND_GUARD_OK)
+		{
+			GameQuarantineBot(bot);
+			return SG_COMPOUND_GUARD_HOST_ERROR;
+		}
+		already_orphan = record.law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
+		                 record.state == SG_MOVER_LEASE_ORPHAN;
+		if (!already_orphan)
+		{
+			GameQuarantineBot(bot);
+			return SG_COMPOUND_GUARD_HOST_ERROR;
+		}
+	}
 	if (already_orphan)
 		result = SG_COMPOUND_GUARD_OK;
 	else

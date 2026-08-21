@@ -17,10 +17,46 @@ typedef struct fixture_s
 	int orphan_calls;
 	int segment_calls;
 	int deny_segments;
+	int recovery_proof_calls;
+	qboolean deny_recovery_proof;
+	sg_compound_drop_live_host_result_t outside_result;
 } fixture_t;
 
 static int failures;
 static qboolean corrupt_shadow;
+
+vec_t VectorLength(vec3_t value)
+{
+	return sqrtf(value[0] * value[0] + value[1] * value[1] +
+	             value[2] * value[2]);
+}
+
+qboolean SG_DeclaredCommand(const vec3_t origin, const vec3_t target,
+	const pmove_state_t *pms, usercmd_t *command)
+{
+	vec3_t delta;
+	float horizontal, yaw;
+	byte msec;
+
+	if (!origin || !target || !pms || !command)
+		return false;
+	VectorSubtract(target, origin, delta);
+	delta[2] = 0.0f;
+	horizontal = VectorLength(delta);
+	if (!isfinite(horizontal))
+		return false;
+	yaw = horizontal > 0.01f ?
+	      atan2f(delta[1], delta[0]) * 180.0f / (float)M_PI : 0.0f;
+	msec = command->msec;
+	memset(command, 0, sizeof(*command));
+	command->msec = msec;
+	command->angles[PITCH] = -pms->delta_angles[PITCH];
+	command->angles[YAW] = ANGLE2SHORT(yaw) - pms->delta_angles[YAW];
+	command->angles[ROLL] = -pms->delta_angles[ROLL];
+	if (horizontal > 4.0f)
+		command->forwardmove = horizontal < 32.0f ? 200 : 400;
+	return true;
+}
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -98,9 +134,10 @@ static sg_compound_drop_live_host_result_t Outside(void *context,
 	const sg_compound_drop_live_snapshot_t *snapshot,
 	const sg_replay_pose_t *pose)
 {
-	(void)context;
-	return snapshot && pose ? SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED :
-	                         SG_COMPOUND_DROP_LIVE_HOST_ERROR;
+	fixture_t *fixture = (fixture_t *)context;
+
+	return fixture && snapshot && pose ? fixture->outside_result :
+	                                    SG_COMPOUND_DROP_LIVE_HOST_ERROR;
 }
 
 static sg_compound_drop_live_host_result_t GroundSupport(void *context,
@@ -137,9 +174,14 @@ static sg_compound_drop_live_host_result_t Prove(void *context,
 {
 	fixture_t *fixture = (fixture_t *)context;
 
-	(void)recovery;
 	if (!fixture || !snapshot || !pose || !proof)
 		return SG_COMPOUND_DROP_LIVE_HOST_ERROR;
+	if (recovery)
+	{
+		fixture->recovery_proof_calls++;
+		if (fixture->deny_recovery_proof)
+			return SG_COMPOUND_DROP_LIVE_HOST_DENIED;
+	}
 	*proof = fixture->proof;
 	return SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED;
 }
@@ -156,11 +198,11 @@ static sg_compound_drop_live_host_result_t Release(void *context,
 }
 
 static sg_compound_drop_live_host_result_t Orphan(void *context,
-	const sg_compound_drop_live_snapshot_t *snapshot)
+	const sg_compound_drop_live_snapshot_t *snapshot, int bolt_key)
 {
 	fixture_t *fixture = (fixture_t *)context;
 
-	if (!fixture || !snapshot)
+	if (!fixture || !snapshot || bolt_key < 0)
 		return SG_COMPOUND_DROP_LIVE_HOST_ERROR;
 	fixture->orphan_calls++;
 	return SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED;
@@ -271,6 +313,7 @@ static void FixtureInit(fixture_t *fixture)
 	fixture->proof.arrival_ms = 200;
 	fixture->proof.sweep_clear_ms = 100;
 	fixture->proof.exit_speed = 12;
+	fixture->outside_result = SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED;
 	fixture->host.context = fixture;
 	fixture->host.bind = Bind;
 	fixture->host.source_checkpoint = SourceCheckpoint;
@@ -438,6 +481,90 @@ static void TestActionAdmissionAndPublicationDrift(void)
 	CHECK(state.guard_owned && fixture.release_calls == 0);
 }
 
+static void TestLongApproachHonorsPublishedTouchBoundary(void)
+{
+	fixture_t fixture;
+	sg_compound_drop_live_state_t state =
+		SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER;
+	sg_replay_pose_t pose = Pose(0.0f, 64.0f, true, 0.0f, 0.0f);
+	sg_replay_observation_t observation = Observation(false);
+	sg_compound_drop_live_result_t result = { 0 };
+	int frame, step;
+
+	FixtureInit(&fixture);
+	fixture.published.binding.touch_ms = 1000;
+	fixture.published.binding.touch_frame_end_ms = 1000;
+	fixture.published.binding.total_cost_ms = 1400;
+	fixture.published.binding.link.cost_ms = 1400;
+	CHECK(SG_CompoundDropLiveBegin(&state, &fixture.host, 3, &pose).outcome ==
+	      SG_COMPOUND_DROP_LIVE_RUNNING);
+	for (frame = 1; frame <= 9; frame++)
+	{
+		for (step = 1; step <= 4; step++)
+			result = ConsumeCommand(&state, &fixture, &pose, &pose,
+			                        &observation, step == 4);
+		CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RUNNING);
+		CHECK(state.outer.phase == SG_COMPOUND_APPROACH);
+		CHECK(state.transaction_elapsed_ms == frame * SG_REPLAY_FRAME_MS);
+	}
+	for (step = 1; step <= 4; step++)
+		result = ConsumeCommand(&state, &fixture, &pose, &pose,
+		                        &observation, step == 4);
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_TOUCH);
+	CHECK(state.transaction_elapsed_ms == 1000);
+}
+
+static void TestOpeningRefusesRepeatedTriggerWithoutAborting(void)
+{
+	fixture_t fixture;
+	sg_compound_drop_live_state_t state =
+		SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER;
+	sg_replay_pose_t pose = Pose(64.0f, 64.0f, true, 0.0f, 0.0f);
+	sg_compound_drop_live_result_t result;
+	usercmd_t command;
+
+	FixtureInit(&fixture);
+	EnterOpening(&state, &fixture);
+	result = SG_CompoundDropLivePreStep(&state, &fixture.host, &pose,
+	                                    &command);
+	CHECK(result.command_ready);
+	result = SG_CompoundDropLiveAuthorizeTouch(&state, &fixture.host, 21,
+	    &pose, 18);
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_WAIT);
+	CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_NONE);
+	CHECK(state.guard_owned && state.outer.phase == SG_COMPOUND_OPENING);
+	CHECK(state.command_pending && state.transaction_elapsed_ms == 100);
+}
+
+static void TestSuffixRefusesRepeatedTriggerWithoutAborting(void)
+{
+	fixture_t fixture;
+	sg_compound_drop_live_state_t state =
+		SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER;
+	sg_replay_pose_t pose = Pose(64.0f, 64.0f, true, 0.0f, 0.0f);
+	sg_compound_drop_live_result_t result;
+	usercmd_t command;
+
+	FixtureInit(&fixture);
+	EnterSuffix(&state, &fixture);
+	result = SG_CompoundDropLivePreStep(&state, &fixture.host, &pose,
+	                                    &command);
+	CHECK(result.command_ready);
+	result = SG_CompoundDropLiveAuthorizeTouch(&state, &fixture.host, 21,
+	    &pose, 19);
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_WAIT);
+	CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_NONE);
+	CHECK(state.guard_owned &&
+	      state.outer.phase == SG_COMPOUND_SUFFIX_LEASED);
+	CHECK(state.command_pending && state.drop_active &&
+	      state.replay_kind == SG_COMPOUND_DROP_LIVE_REPLAY_SUFFIX);
+	result = SG_CompoundDropLiveAuthorizeTouch(&state, &fixture.host, 20,
+	    &pose, 19);
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_TOUCH);
+}
+
 static void TestDeathTransfersLeaseToOrphan(void)
 {
 	fixture_t fixture;
@@ -449,11 +576,23 @@ static void TestDeathTransfersLeaseToOrphan(void)
 	FixtureInit(&fixture);
 	CHECK(SG_CompoundDropLiveBegin(&state, &fixture.host, 3, &source).outcome ==
 	      SG_COMPOUND_DROP_LIVE_RUNNING);
-	result = SG_CompoundDropLiveOrphan(&state, &fixture.host);
+	state.recovering = true;
+	state.sweep_clear = true;
+	state.arrived = true;
+	state.failure = SG_COMPOUND_DROP_LIVE_FAILURE_REPLAY;
+	state.replay_reason = SG_REPLAY_REASON_CONTAMINATED;
+	state.last_sweep_contact_ms = 100;
+	result = SG_CompoundDropLiveOrphan(&state, &fixture.host, 0);
 	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED);
 	CHECK(fixture.orphan_calls == 1 && fixture.release_calls == 0);
 	CHECK(!state.guard_owned && !state.command_pending &&
 	      state.outer.phase == SG_COMPOUND_NONE);
+	CHECK(!state.recovering && !state.sweep_clear && !state.arrived &&
+	      state.failure == SG_COMPOUND_DROP_LIVE_FAILURE_NONE &&
+	      state.replay_reason == SG_REPLAY_REASON_NONE &&
+	      state.last_sweep_contact_ms == 0);
+	CHECK(SG_CompoundDropLiveBegin(&state, &fixture.host, 3, &source).outcome ==
+	      SG_COMPOUND_DROP_LIVE_RUNNING);
 }
 
 static void TestDropDifferentialRetainsGuard(void)
@@ -476,12 +615,141 @@ static void TestDropDifferentialRetainsGuard(void)
 	CHECK(state.guard_owned && fixture.release_calls == 0);
 }
 
+static void TestInsideSweepFailureRecoversAndReleases(void)
+{
+	fixture_t fixture;
+	sg_compound_drop_live_state_t state =
+		SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER;
+	sg_replay_pose_t before, after;
+	sg_replay_observation_t observation;
+	sg_compound_drop_live_result_t result = { 0 };
+	usercmd_t command;
+	int step;
+
+	FixtureInit(&fixture);
+	EnterSuffix(&state, &fixture);
+	before = Pose(64.0f, 64.0f, true, 0.0f, 0.0f);
+	corrupt_shadow = true;
+	result = SG_CompoundDropLivePreStep(&state, &fixture.host, &before,
+	                                    &command);
+	corrupt_shadow = false;
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+	CHECK(state.guard_owned && state.outer.phase == SG_COMPOUND_RECOVER);
+	fixture.outside_result = SG_COMPOUND_DROP_LIVE_HOST_DENIED;
+	result = SG_CompoundDropLiveRecover(&state, &fixture.host, &before, 0.0f);
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_NONE);
+	CHECK(fixture.recovery_proof_calls == 1);
+	CHECK(state.replay_kind == SG_COMPOUND_DROP_LIVE_REPLAY_RECOVERY);
+	fixture.outside_result = SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED;
+	fixture.deny_segments = 1;
+	for (step = 1; step <= 8; step++)
+	{
+		qboolean terminal = step == 8;
+
+		after = Pose(64.0f + step * 8.0f,
+		             terminal ? 0.0f : 64.0f - step * 7.0f,
+		             terminal, terminal ? 48.0f : 64.0f,
+		             terminal ? 0.0f : -96.0f);
+		observation = Observation(terminal);
+		result = ConsumeCommand(&state, &fixture, &before, &after,
+		                        &observation, step % 4 == 0);
+		before = after;
+	}
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED);
+	CHECK(!state.guard_owned && !state.drop_active && state.drop_link == -1);
+	CHECK(fixture.release_calls == 1 && fixture.orphan_calls == 0);
+	CHECK(!state.recovering && !state.sweep_clear && !state.arrived &&
+	      state.failure == SG_COMPOUND_DROP_LIVE_FAILURE_NONE &&
+	      state.replay_reason == SG_REPLAY_REASON_NONE &&
+	      state.last_sweep_contact_ms == 0);
+	before = Pose(0.0f, 64.0f, true, 0.0f, 0.0f);
+	CHECK(SG_CompoundDropLiveBegin(&state, &fixture.host, 3, &before).outcome ==
+	      SG_COMPOUND_DROP_LIVE_RUNNING);
+}
+
+static void TestDeniedInsideSweepRecoveryRetainsGuard(void)
+{
+	fixture_t fixture;
+	sg_compound_drop_live_state_t state =
+		SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER;
+	sg_replay_pose_t pose = Pose(64.0f, 64.0f, true, 0.0f, 0.0f);
+	sg_compound_drop_live_result_t result;
+	usercmd_t command;
+
+	FixtureInit(&fixture);
+	EnterSuffix(&state, &fixture);
+	corrupt_shadow = true;
+	result = SG_CompoundDropLivePreStep(&state, &fixture.host, &pose,
+	                                    &command);
+	corrupt_shadow = false;
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+	fixture.outside_result = SG_COMPOUND_DROP_LIVE_HOST_DENIED;
+	fixture.deny_recovery_proof = true;
+	result = SG_CompoundDropLiveRecover(&state, &fixture.host, &pose, 0.0f);
+	CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_REPROOF);
+	CHECK(!result.command_ready);
+	CHECK(fixture.recovery_proof_calls == 1);
+	CHECK(state.guard_owned && fixture.release_calls == 0);
+}
+
+static void TestConsumedSubstepFailuresBeginRecovery(void)
+{
+	int failure_step;
+
+	for (failure_step = 1; failure_step <= 3; failure_step++)
+	{
+		fixture_t fixture;
+		sg_compound_drop_live_state_t state =
+			SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER;
+		sg_replay_pose_t pose = Pose(64.0f, 64.0f, true, 0.0f, 0.0f);
+		sg_replay_observation_t observation;
+		sg_compound_drop_live_result_t result = { 0 };
+		usercmd_t command;
+		int step;
+
+		FixtureInit(&fixture);
+		EnterSuffix(&state, &fixture);
+		for (step = 1; step <= failure_step; step++)
+		{
+			observation = Observation(false);
+			if (step == failure_step)
+				observation.contaminated = true;
+			result = SG_CompoundDropLivePreStep(&state, &fixture.host,
+			                                    &pose, &command);
+			CHECK(result.command_ready);
+			result = SG_CompoundDropLivePostStep(&state, &fixture.host,
+			                                     &pose, &observation);
+		}
+		CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+		CHECK(state.transaction_elapsed_ms ==
+		      300 + failure_step * SG_REPLAY_STEP_MS);
+		CHECK(!state.command_pending && state.guard_owned);
+		fixture.outside_result = SG_COMPOUND_DROP_LIVE_HOST_DENIED;
+		result = SG_CompoundDropLiveRecover(&state, &fixture.host, &pose,
+		                                    0.0f);
+		CHECK(result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING);
+		CHECK(result.failure == SG_COMPOUND_DROP_LIVE_FAILURE_NONE);
+		CHECK(state.replay_kind == SG_COMPOUND_DROP_LIVE_REPLAY_RECOVERY);
+		result = SG_CompoundDropLivePreStep(&state, &fixture.host, &pose,
+		                                    &command);
+		CHECK(result.command_ready);
+	}
+}
+
 int main(void)
 {
 	TestExactTransaction();
 	TestActionAdmissionAndPublicationDrift();
+	TestLongApproachHonorsPublishedTouchBoundary();
+	TestOpeningRefusesRepeatedTriggerWithoutAborting();
+	TestSuffixRefusesRepeatedTriggerWithoutAborting();
 	TestDeathTransfersLeaseToOrphan();
 	TestDropDifferentialRetainsGuard();
+	TestInsideSweepFailureRecoversAndReleases();
+	TestDeniedInsideSweepRecoveryRetainsGuard();
+	TestConsumedSubstepFailuresBeginRecovery();
 	if (failures)
 	{
 		fprintf(stderr, "compound_drop_live_test: %d failure(s)\n", failures);

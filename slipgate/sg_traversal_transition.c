@@ -194,7 +194,7 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 		return;
 	action = rune->links[bot->commit_link].action;
 	if ((action != RL_HOOK && action != RL_JUMP && action != RL_DROP &&
-	     action != RL_ROCKETJUMP) ||
+	     action != RL_ROCKETJUMP && action != RL_DOOR_DROP) ||
 	    SG_TraversalControllerPhysical(bot, action))
 		return;
 	SG_StagedTraversalCancel(bot, action);

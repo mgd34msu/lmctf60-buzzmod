@@ -69,8 +69,11 @@ typedef sg_compound_drop_live_host_result_t
 typedef sg_compound_drop_live_host_result_t
 	(*sg_compound_drop_live_proof_fn)(void *context,
 		const sg_compound_drop_live_snapshot_t *snapshot,
-		const sg_replay_pose_t *pose, qboolean recovery,
+		 const sg_replay_pose_t *pose, qboolean recovery,
 		 sg_compound_drop_live_proof_t *proof_out);
+typedef sg_compound_drop_live_host_result_t
+	(*sg_compound_drop_live_orphan_fn)(void *context,
+		const sg_compound_drop_live_snapshot_t *snapshot, int bolt_key);
 typedef qboolean (*sg_compound_drop_live_command_fn)(
 	const sg_drop_replay_state_t *state, const sg_replay_pose_t *pose,
 	usercmd_t *command);
@@ -91,7 +94,7 @@ typedef struct sg_compound_drop_live_host_s
 	sg_compound_drop_live_segment_fn sweep_segment_clear;
 	sg_compound_drop_live_proof_fn prove_suffix;
 	sg_compound_drop_live_snapshot_fn release;
-	sg_compound_drop_live_snapshot_fn orphan;
+	sg_compound_drop_live_orphan_fn orphan;
 	sg_compound_drop_live_command_fn drop_shadow;
 } sg_compound_drop_live_host_t;
 
@@ -175,9 +178,8 @@ typedef struct sg_compound_drop_live_state_s
 	qboolean arrived;
 } sg_compound_drop_live_state_t;
 
-/* Initialization only.  Once Begin acquires the guard, this state must not be
- * overwritten or reinitialized; ownership ends exclusively through the
- * controller's proved release transition. */
+/* Initialization only.  Do not overwrite or reinitialize this state while
+ * guard_owned; local ownership ends by proved release or lifecycle orphan. */
 #define SG_COMPOUND_DROP_LIVE_STATE_INITIALIZER { 0 }
 
 const char *SG_CompoundDropLiveFailureName(
@@ -220,7 +222,7 @@ sg_compound_drop_live_result_t SG_CompoundDropLiveRecover(
  * mover lease. */
 sg_compound_drop_live_result_t SG_CompoundDropLiveOrphan(
 	sg_compound_drop_live_state_t *state,
-	const sg_compound_drop_live_host_t *host);
+	const sg_compound_drop_live_host_t *host, int bolt_key);
 
 qboolean SG_CompoundDropLiveOwns(
 	const sg_compound_drop_live_state_t *state, uint32_t link_index,

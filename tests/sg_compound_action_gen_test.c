@@ -1,4 +1,4 @@
-/* Focused generation contract for dormant D_DROP and D_HOOK links. */
+/* Focused generation contract for compound door links. */
 #include <stdio.h>
 #include <math.h>
 #include <string.h>

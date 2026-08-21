@@ -87,8 +87,8 @@ typedef struct sg_bot_s
 	 * containing process-storage slot is erased. */
 	sg_compound_guard_bot_t compound_guard;
 	sg_compound_swim_live_state_t compound_swim;
-	/* Authenticated PREOPEN D_DROP transaction.  This state outlives route
-	 * selection and is cleared only by proved release or death orphaning. */
+	/* Authenticated PREOPEN D_DROP transaction.  While guard_owned, local
+	 * ownership ends only by proved release or lifecycle transfer/orphan. */
 	sg_compound_drop_live_state_t compound_drop_live;
 	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */

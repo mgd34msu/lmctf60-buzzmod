@@ -1,7 +1,7 @@
-/* Game boundary for the authenticated PREOPEN RL_DOOR_DROP controller. */
 #include "../g_local.h"
 
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 
 #include "sg_compound_drop_game.h"
@@ -10,7 +10,9 @@
 #include "sg_hooks.h"
 #include "sg_local.h"
 #include "sg_bot.h"
+#include "sg_rune_mechanism_catalog.h"
 #include "sg_util.h"
+void Think_Delay(edict_t *entity);
 
 typedef struct compound_drop_game_current_s
 {
@@ -19,6 +21,34 @@ typedef struct compound_drop_game_current_s
 	const sg_compound_world_preopen_t *mechanism;
 	edict_t *member;
 } compound_drop_game_current_t;
+qboolean SG_CompoundDropGameIdleAdmission(const sg_bot_t *bot)
+{
+	const edict_t *entity;
+
+	if (!bot || !bot->active || !(entity = bot->ent) || !entity->inuse ||
+	    !entity->client || entity->deadflag != DEAD_NO || entity->health <= 0)
+		return false;
+	if (bot->compound_drop_live.guard_owned ||
+	    bot->compound_drop_live.outer.phase != SG_COMPOUND_NONE ||
+	    bot->compound_drop_live.replay_kind !=
+	        SG_COMPOUND_DROP_LIVE_REPLAY_NONE ||
+	    bot->compound_drop_live.drop_active ||
+	    bot->compound_drop_live.command_pending ||
+	    bot->compound_drop_live.zero_command_pending ||
+	    bot->compound_drop_live.aborted_command_pending ||
+	    bot->compound_drop_live.recovering ||
+	    bot->hook_phase != 0 || bot->hook_replay_active ||
+	    bot->rj_phase != 0 || bot->nade_phase != 0 ||
+	    bot->jump_started || bot->drop_started || bot->drop_replay_active ||
+	    bot->swim_replay_active || bot->swim_validated ||
+	    bot->declared_started || bot->declared_touched ||
+	    bot->declared_triggered || bot->declared_activated ||
+	    bot->declared_door_retreat || bot->declared_guard_paused ||
+	    entity->client->hookstate != 0 ||
+	    entity->client->hook != NULL)
+		return false;
+	return true;
+}
 
 static int CompoundDropGameCurrent(sg_bot_t *bot,
 	const sg_compound_drop_live_snapshot_t *snapshot,
@@ -251,23 +281,43 @@ static sg_compound_drop_live_host_result_t CompoundDropGameProve(
 	const sg_replay_pose_t *pose, qboolean recovery,
 	sg_compound_drop_live_proof_t *proof_out)
 {
+	sg_bot_t *bot = (sg_bot_t *)context;
 	compound_drop_game_current_t current;
 	sg_compound_drop_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t *entity;
 	qboolean destination_water;
+	int axis;
 
 	if (proof_out)
 		memset(proof_out, 0, sizeof(*proof_out));
-	if (!pose || !proof_out || recovery ||
-	    !CompoundDropGameCurrent((sg_bot_t *)context, snapshot, &current))
+	if (!pose || !proof_out ||
+	    !CompoundDropGameCurrent(bot, snapshot, &current) ||
+	    !(entity = bot->ent) || !entity->client)
 		return SG_COMPOUND_DROP_LIVE_HOST_DENIED;
 	destination_water =
 	    (snapshot->binding.destination_seed.flags & RSF_WATER) != 0;
+	memset(&phantom, 0, sizeof(phantom));
+	phantom.pms = entity->client->ps.pmove;
+	phantom.old_pms = entity->client->old_pmove;
+	for (axis = 0; axis < 3; axis++)
+	{
+		phantom.origin[axis] = entity->s.origin[axis];
+		phantom.velocity[axis] = entity->velocity[axis];
+		phantom.mins[axis] = entity->mins[axis];
+		phantom.maxs[axis] = entity->maxs[axis];
+	}
+	phantom.groundentity = entity->groundentity != NULL;
+	phantom.groundentity_entity = entity->groundentity;
+	phantom.watertype = entity->watertype;
+	phantom.waterlevel = entity->waterlevel;
 	memset(&proof, 0, sizeof(proof));
-	if (SG_OracleCompoundDropPreopen(snapshot->binding.source_seed.origin,
-	        current.mechanism, snapshot->binding.link.mechanism_anchor,
-	        snapshot->binding.destination_seed.origin,
+	if ((recovery ? SG_OracleCompoundDropRecover :
+	                SG_OracleCompoundDropContinue)(&phantom,
+	        current.mechanism, snapshot->binding.destination_seed.origin,
 	        snapshot->binding.link.anchor, snapshot->binding.link.heading,
-	        destination_water, &proof, true) != RLR_OK)
+	        destination_water, entity->client->oldvelocity[2], &proof,
+	        entity) != RLR_OK)
 		return SG_COMPOUND_DROP_LIVE_HOST_DENIED;
 	proof_out->arrival_ms = proof.arrival_ms;
 	proof_out->sweep_clear_ms = proof.sweep_clear_ms;
@@ -275,7 +325,7 @@ static sg_compound_drop_live_host_result_t CompoundDropGameProve(
 	if (sg_cv.debug && sg_cv.debug->value > 0.0f && sg_host.dprint)
 		sg_host.dprint("slipgate: ddrop suffix-proved bot=%d link=%u "
 		               "arrival_ms=%d clear_ms=%d origin=(%.3f %.3f %.3f)\n",
-		               (int)((sg_bot_t *)context - sg_bots),
+		               (int)(bot - sg_bots),
 		               snapshot->binding.link_index, proof.arrival_ms,
 		               proof.sweep_clear_ms, pose->origin[0], pose->origin[1],
 		               pose->origin[2]);
@@ -301,14 +351,15 @@ static sg_compound_drop_live_host_result_t CompoundDropGameRelease(
 }
 
 static sg_compound_drop_live_host_result_t CompoundDropGameOrphanHost(
-	void *context, const sg_compound_drop_live_snapshot_t *snapshot)
+	void *context, const sg_compound_drop_live_snapshot_t *snapshot,
+	int bolt_key)
 {
 	sg_bot_t *bot = (sg_bot_t *)context;
 	compound_drop_game_current_t current;
 
 	if (!CompoundDropGameCurrent(bot, snapshot, &current))
 		return SG_COMPOUND_DROP_LIVE_HOST_ERROR;
-	return SG_CompoundGuardOrphan(&bot->compound_guard, 0) ==
+	return SG_CompoundGuardOrphan(&bot->compound_guard, bolt_key) ==
 	       SG_COMPOUND_GUARD_OK ? SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED :
 	                              SG_COMPOUND_DROP_LIVE_HOST_DENIED;
 }
@@ -410,6 +461,29 @@ void SG_CompoundDropGameDebugResult(sg_bot_t *bot, const char *stage,
 	               pose->velocity[0], pose->velocity[1], pose->velocity[2]);
 }
 
+sg_compound_drop_live_result_t SG_CompoundDropGameRecoverOwnedFailure(
+	sg_bot_t *bot, const sg_compound_drop_live_host_t *host,
+	const sg_replay_pose_t *pose, usercmd_t *same_slot_command)
+{
+	sg_compound_drop_live_result_t result;
+
+	memset(&result, 0, sizeof(result));
+	result.outcome = SG_COMPOUND_DROP_LIVE_REJECTED;
+	result.failure = SG_COMPOUND_DROP_LIVE_FAILURE_ARGUMENT;
+	result.replay_reason = SG_REPLAY_REASON_INVALID_ARGUMENT;
+	if (!bot || !bot->ent || !bot->ent->client || !host || !pose)
+		return result;
+	result = SG_CompoundDropLiveRecover(&bot->compound_drop_live, host, pose,
+	                                    bot->ent->client->oldvelocity[2]);
+	if (result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED ||
+	    result.outcome != SG_COMPOUND_DROP_LIVE_RECOVERING ||
+	    bot->compound_drop_live.replay_kind !=
+	        SG_COMPOUND_DROP_LIVE_REPLAY_RECOVERY || !same_slot_command)
+		return result;
+	return SG_CompoundDropLivePreStep(&bot->compound_drop_live, host, pose,
+	                                  same_slot_command);
+}
+
 int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 {
 	rune_t *rune = SG_Rune();
@@ -435,11 +509,7 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 	{
 		sg_compound_guard_result_t guard_result;
 
-		if (!sg_bots[slot].active || !sg_bots[slot].ent ||
-		    !sg_bots[slot].ent->inuse || !sg_bots[slot].ent->client ||
-		    sg_bots[slot].ent->deadflag != DEAD_NO ||
-		    sg_bots[slot].ent->health <= 0 ||
-		    sg_bots[slot].compound_drop_live.guard_owned)
+		if (!SG_CompoundDropGameIdleAdmission(&sg_bots[slot]))
 			continue;
 		guard_result = SG_CompoundGuardValidate(
 		    &sg_bots[slot].compound_guard, NULL);
@@ -453,6 +523,11 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 	if (!bot || !gi.unlinkentity || !sg_host.linkentity)
 		return false;
 	entity = bot->ent;
+	{
+		sg_bot_t bot_before = *bot;
+		edict_t entity_before = *entity;
+		gclient_t client_before = *entity->client;
+
 	gi.unlinkentity(entity);
 	entity->client->ps.pmove = binding->source.pms;
 	entity->client->old_pmove = binding->source.old_pms;
@@ -492,14 +567,28 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 	sg_host.linkentity(entity);
 	if (!SG_CompoundDropGameHost(bot, &host) ||
 	    !SG_CompoundDropGamePose(entity, &pose))
+	{
+		gi.unlinkentity(entity);
+		*entity->client = client_before;
+		*entity = entity_before;
+		*bot = bot_before;
+		sg_host.linkentity(entity);
 		return false;
+	}
 	result = SG_CompoundDropLiveBegin(&bot->compound_drop_live, &host,
 	    (uint32_t)link_index, &pose);
 	if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING ||
 	    !bot->compound_drop_live.guard_owned)
 	{
-		bot->commit_link = -1;
-		bot->sticky_link = -1;
+		/* Acquire is Begin's final fallible operation.  A non-running result
+		 * therefore owns no lease and the staged pose can be rolled back. */
+		if (bot->compound_drop_live.guard_owned)
+			return false;
+		gi.unlinkentity(entity);
+		*entity->client = client_before;
+		*entity = entity_before;
+		*bot = bot_before;
+		sg_host.linkentity(entity);
 		return false;
 	}
 	if (sg_host.dprint)
@@ -510,6 +599,7 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 		               binding->destination_seed.origin[0],
 		               binding->destination_seed.origin[1],
 		               binding->destination_seed.origin[2]);
+	}
 	return true;
 }
 
@@ -626,19 +716,85 @@ int SG_CompoundDropGameAuthorizeActivation(sg_bot_t *bot, edict_t *source,
 	return result.outcome == SG_COMPOUND_DROP_LIVE_RUNNING;
 }
 
-int SG_CompoundDropGameOwnsTargetDispatch(const sg_bot_t *bot,
+static int CompoundDropGameTargetSourceCurrent(const sg_bot_t *bot,
 	const edict_t *source)
 {
+	compound_drop_game_current_t current;
+
 	return bot && source && bot->compound_drop_live.guard_owned &&
-	       source->s.number == bot->compound_drop_live.snapshot.trigger_key;
+	       CompoundDropGameCurrent((sg_bot_t *)bot,
+	           &bot->compound_drop_live.snapshot, &current) &&
+	       SG_CompoundWorldTargetSourceCurrent(current.mechanism, source);
 }
 
-void SG_CompoundDropGameOrphan(sg_bot_t *bot)
+int SG_CompoundDropGameAuthorizeTargetDispatch(sg_bot_t *bot,
+	edict_t *source)
+{
+	edict_t *parent;
+	uint32_t key, generation;
+
+	if (!bot || !bot->active || !bot->ent || !bot->ent->inuse ||
+	    !bot->ent->client || !source ||
+	    !bot->compound_drop_live.guard_owned)
+		return 0;
+	if (!source->classname || strcmp(source->classname, "DelayedUse") != 0)
+		return CompoundDropGameTargetSourceCurrent(bot, source);
+	if (!source->inuse || source->think != Think_Delay ||
+	    source->activator != bot->ent ||
+	    !(source->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR) ||
+	    source->sg_delayed_source_key == 0U ||
+	    source->sg_delayed_source_generation == 0U || !g_edicts ||
+	    source->sg_delayed_source_key >= (uint32_t)globals.num_edicts)
+		return 0;
+	parent = &g_edicts[source->sg_delayed_source_key];
+	if (!SG_MechCatalogEntityGeneration(parent, &key, &generation) ||
+	    key != source->sg_delayed_source_key ||
+	    generation != source->sg_delayed_source_generation ||
+	    source->target != parent->target ||
+	    source->message != parent->message ||
+	    source->killtarget != parent->killtarget ||
+	    !CompoundDropGameTargetSourceCurrent(bot, parent))
+		return 0;
+	/* Think_Delay is single-shot.  Consume its authority before the stock
+	 * target callbacks so a reentrant or repeated call cannot fan out twice. */
+	source->sg_delayed_source_key = 0U;
+	source->sg_delayed_source_generation = 0U;
+	return 1;
+}
+void SG_CompoundDropGameTagDelayedTarget(edict_t *source,
+	edict_t *activator, edict_t *delayed)
+{
+	uint32_t key, generation;
+	int slot;
+
+	if (!source || !isfinite(source->delay) || source->delay <= 0.0f ||
+	    !activator || !delayed || !delayed->inuse ||
+	    delayed->activator != activator || delayed->think != Think_Delay ||
+	    !delayed->classname || strcmp(delayed->classname, "DelayedUse") != 0 ||
+	    !(delayed->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR) ||
+	    !SG_MechCatalogEntityGeneration(source, &key, &generation))
+		return;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+		if (sg_bots[slot].active && sg_bots[slot].ent == activator &&
+		    CompoundDropGameTargetSourceCurrent(&sg_bots[slot], source))
+		{
+			delayed->sg_delayed_source_key = key;
+			delayed->sg_delayed_source_generation = generation;
+			return;
+		}
+}
+
+sg_compound_guard_result_t SG_CompoundDropGameOrphan(sg_bot_t *bot,
+	int bolt_key)
 {
 	sg_compound_drop_live_host_t host;
+	sg_compound_drop_live_result_t result;
 
 	if (!bot || !bot->compound_drop_live.guard_owned ||
 	    !SG_CompoundDropGameHost(bot, &host))
-		return;
-	(void)SG_CompoundDropLiveOrphan(&bot->compound_drop_live, &host);
+		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	result = SG_CompoundDropLiveOrphan(&bot->compound_drop_live, &host,
+	                                  bolt_key);
+	return result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED ?
+	       SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_HOST_ERROR;
 }

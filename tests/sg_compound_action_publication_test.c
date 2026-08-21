@@ -1,4 +1,4 @@
-/* Publication-to-suffix plans for dormant D_DROP and D_HOOK. */
+/* Publication-to-suffix plans for compound door links. */
 #include <math.h>
 #include <stdio.h>
 #include <string.h>

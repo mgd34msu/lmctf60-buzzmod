@@ -4596,7 +4596,7 @@ static qboolean SG_OracleDropHarmfulLiquid(const sg_phantom_t *ph)
 
 static void SG_OracleDropObservation(const sg_phantom_t *ph,
 	const vec3_t destination, qboolean destination_water,
-	const sg_drop_replay_state_t *state,
+	const sg_drop_replay_state_t *state, edict_t *passent,
 	sg_replay_observation_t *observation)
 {
 	vec3_t delta;
@@ -4627,7 +4627,7 @@ static void SG_OracleDropObservation(const sg_phantom_t *ph,
 	     (ph->groundentity || ph->waterlevel >= 2)))
 	{
 		observation->contact_clear = SG_OracleReplayContactClear(
-			ph->origin, destination, NULL);
+			ph->origin, destination, passent);
 		observation->drop_arrival_contact_clear =
 			observation->contact_clear;
 		if (observation->contact_clear)
@@ -4640,13 +4640,21 @@ static void SG_OracleDropObservation(const sg_phantom_t *ph,
 	    delta[2] > -SG_RUNE_PROOF_DROP_RECOVERY_Z &&
 	    delta[2] < SG_RUNE_PROOF_DROP_RECOVERY_Z)
 		observation->drop_recovery_contact_clear =
-			SG_OracleReplayContactClear(ph->origin, destination, NULL);
+			SG_OracleReplayContactClear(ph->origin, destination, passent);
 }
+
+typedef enum sg_oracle_compound_suffix_start_e
+{
+	SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE = 0,
+	SG_ORACLE_COMPOUND_SUFFIX_INSIDE
+} sg_oracle_compound_suffix_start_t;
 
 static rune_reject_reason_t SG_OracleCompoundDropSuffix(
 	sg_phantom_t *ph, const sg_compound_world_preopen_t *resolved,
 	edict_t *member, const vec3_t destination, const vec3_t lip,
-	byte heading, qboolean destination_water,
+	byte heading, qboolean destination_water, float old_frame_z,
+	edict_t *passent, sg_oracle_compound_suffix_start_t start,
+	qboolean require_live_top,
 	sg_compound_drop_proof_t *proof)
 {
 	sg_oracle_drop_cursor_t cursor;
@@ -4664,11 +4672,12 @@ static rune_reject_reason_t SG_OracleCompoundDropSuffix(
 	spec.expected_arrival_ms = SG_REPLAY_TIME_DISCOVER;
 	SG_OracleReplayPose(ph, &cursor.pose);
 	SG_OracleDropObservation(ph, destination, destination_water,
-	    &cursor.state, &cursor.observation);
+	    &cursor.state, passent, &cursor.observation);
 	status = SG_DropReplayBegin(&cursor.state, &spec, &cursor.pose,
-	    &cursor.observation, 0.0f);
+	    &cursor.observation, old_frame_z);
 	outside_before = SG_CompoundWorldOutsideSweep(resolved, ph->origin);
-	if (!outside_before)
+	if ((start == SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE && !outside_before) ||
+	    (start == SG_ORACLE_COMPOUND_SUFFIX_INSIDE && outside_before))
 		return RLR_SUFFIX_REPLAY_FAILED;
 	while (status == SG_REPLAY_RUNNING)
 	{
@@ -4678,18 +4687,22 @@ static rune_reject_reason_t SG_OracleCompoundDropSuffix(
 		qboolean crossed, outside;
 
 		if (!SG_CompoundWorldResolvedMember(resolved, &current) ||
-		    current != member)
+		    current != member ||
+		    (require_live_top && !SG_CompoundWorldAtTopFor(resolved, 0)))
 			return RLR_MECHANISM_UNRESOLVED;
 		status = SG_DropReplayPreStep(&cursor.state, &cursor.pose, &command);
 		if (status != SG_REPLAY_RUNNING)
 			break;
 		VectorCopy(ph->origin, before);
 		SG_OracleRun(ph, &command, 1);
-		if (!SG_OracleCompoundPhantomClean(ph))
+		if (!SG_CompoundWorldResolvedMember(resolved, &current) ||
+		    current != member ||
+		    (require_live_top && !SG_CompoundWorldAtTopFor(resolved, 0)) ||
+		    !SG_OracleCompoundPhantomClean(ph))
 			return RLR_SUFFIX_REPLAY_FAILED;
 		SG_OracleReplayPose(ph, &cursor.pose);
 		SG_OracleDropObservation(ph, destination, destination_water,
-		    &cursor.state, &cursor.observation);
+		    &cursor.state, passent, &cursor.observation);
 		status = SG_DropReplayPostStep(&cursor.state, &cursor.pose,
 		    &cursor.observation);
 		crossed = SG_CompoundWorldCrossesSweep(resolved, before, ph->origin);
@@ -4864,7 +4877,8 @@ rune_reject_reason_t SG_OracleCompoundDropPreopen(
 	candidate.heading = heading;
 	SG_OracleCompoundDropCaptureSuffix(&ph, old_frame_z, &candidate);
 	reason = SG_OracleCompoundDropSuffix(&ph, resolved, member, destination,
-	    lip, heading, destination_water, &candidate);
+	    lip, heading, destination_water, old_frame_z, NULL,
+	    SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE, false, &candidate);
 	if (reason != RLR_OK)
 		goto done;
 	if (candidate.touch_frame_end_ms >
@@ -4887,12 +4901,6 @@ done:
 		SG_OracleCompoundScopeRestore(&scope);
 	return reason;
 }
-
-typedef enum sg_oracle_compound_suffix_start_e
-{
-	SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE = 0,
-	SG_ORACLE_COMPOUND_SUFFIX_INSIDE
-} sg_oracle_compound_suffix_start_t;
 
 static qboolean SG_OracleCompoundLivePhantomValid(const sg_phantom_t *ph,
 	edict_t *passent, float old_frame_z)
@@ -4943,6 +4951,83 @@ static qboolean SG_OracleCompoundLivePhantomValid(const sg_phantom_t *ph,
 		    ph->velocity[axis] != ph->pms.velocity[axis] * 0.125f)
 			return false;
 	return true;
+}
+
+static rune_reject_reason_t SG_OracleCompoundDropLiveSuffix(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t destination, const vec3_t lip, byte heading,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_drop_proof_t *proof, edict_t *passent,
+	sg_oracle_compound_suffix_start_t start)
+{
+	sg_oracle_compound_scope_t scope;
+	sg_compound_drop_proof_t candidate;
+	edict_t *member = NULL;
+	rune_reject_reason_t reason = RLR_BAD_CONTROL_POLICY;
+	qboolean scope_entered = false;
+
+	if (!proof)
+		return RLR_BAD_CONTROL_POLICY;
+	memset(proof, 0, sizeof(*proof));
+	memset(&candidate, 0, sizeof(candidate));
+	if (!ph || !resolved || !destination || !lip ||
+	    !SG_OracleFinite3(destination) || !SG_OracleFinite3(lip) ||
+	    (destination_water != false && destination_water != true) ||
+	    !sg_host.pmove || !sg_host.trace || !sg_host.pointcontents ||
+	    !sg_host.box_edicts || sg_oracle_active_phantom ||
+	    !SG_OracleCompoundLivePhantomValid(ph, passent, old_frame_z))
+		return RLR_BAD_CONTROL_POLICY;
+	if (!resolved->trigger ||
+	    !SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    !SG_CompoundWorldAtTopFor(resolved, 0))
+		return RLR_MECHANISM_UNRESOLVED;
+	if ((start == SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE &&
+	     !SG_CompoundWorldOutsideSweep(resolved, ph->origin)) ||
+	    (start == SG_ORACLE_COMPOUND_SUFFIX_INSIDE &&
+	     SG_CompoundWorldOutsideSweep(resolved, ph->origin)))
+		return RLR_SUFFIX_REPLAY_FAILED;
+
+	SG_OracleCompoundScopeEnter(&scope, resolved->trigger, member, passent,
+	                            true, false);
+	scope_entered = true;
+	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph) ||
+	    !SG_OracleCompoundPhantomClean(ph))
+	{
+		reason = RLR_SUFFIX_REPLAY_FAILED;
+		goto done;
+	}
+	reason = SG_OracleCompoundDropSuffix(ph, resolved, member, destination,
+	    lip, heading, destination_water, old_frame_z, passent, start, true,
+	    &candidate);
+	if (reason == RLR_OK)
+		*proof = candidate;
+
+done:
+	if (scope_entered)
+		SG_OracleCompoundScopeRestore(&scope);
+	return reason;
+}
+
+rune_reject_reason_t SG_OracleCompoundDropRecover(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t destination, const vec3_t lip, byte heading,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_drop_proof_t *proof, edict_t *passent)
+{
+	return SG_OracleCompoundDropLiveSuffix(ph, resolved, destination, lip,
+	    heading, destination_water, old_frame_z, proof, passent,
+	    SG_ORACLE_COMPOUND_SUFFIX_INSIDE);
+}
+
+rune_reject_reason_t SG_OracleCompoundDropContinue(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t destination, const vec3_t lip, byte heading,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_drop_proof_t *proof, edict_t *passent)
+{
+	return SG_OracleCompoundDropLiveSuffix(ph, resolved, destination, lip,
+	    heading, destination_water, old_frame_z, proof, passent,
+	    SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE);
 }
 
 static rune_reject_reason_t SG_OracleCompoundSwimSuffix(

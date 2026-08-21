@@ -1,3 +1,4 @@
+/* sg_compound_gen.h -- pure bounded planner for contracted compound links. */
 #ifndef SG_COMPOUND_GEN_H
 #define SG_COMPOUND_GEN_H
 

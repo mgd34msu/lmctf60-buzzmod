@@ -42,7 +42,8 @@ static int CompoundWorldSoundOnlyTargets(edict_t *source, int depth)
 	/* G_UseTargets branches on pointer presence, not string contents.  An
 	 * empty-but-present killtarget can still match and delete entities whose
 	 * targetname is empty, so only a genuinely absent pointer is safe. */
-	if (!source || depth > 4 || source->killtarget ||
+	if (!source || depth > 4 || !isfinite(source->delay) ||
+	    source->delay < 0.0f || source->message || source->killtarget ||
 	    !CompoundWorldStringPresent(source->target))
 		return 0;
 	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
@@ -61,6 +62,30 @@ static int CompoundWorldSoundOnlyTargets(edict_t *source, int depth)
 		return 0;
 	}
 	return found;
+}
+
+static int CompoundWorldSoundOnlyRelayReachable(edict_t *source,
+	const edict_t *candidate, int depth)
+{
+	edict_t *target = NULL;
+
+	if (!source || !candidate || depth > 4 || !source->target)
+		return 0;
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        source->target)) != NULL)
+	{
+		if (!target->inuse || !target->classname)
+			return 0;
+		if (Q_stricmp(target->classname, "trigger_relay") != 0 ||
+		    target->use != trigger_relay_use)
+			continue;
+		if (target == candidate)
+			return 1;
+		if (CompoundWorldSoundOnlyRelayReachable(target, candidate,
+		        depth + 1))
+			return 1;
+	}
+	return 0;
 }
 
 static int CompoundWorldOrdinaryEffectsSafe(edict_t *door)
@@ -1032,6 +1057,22 @@ int SG_CompoundWorldResolvedMember(
 		return 0;
 	*member_out = member;
 	return 1;
+}
+
+int SG_CompoundWorldTargetSourceCurrent(
+	const sg_compound_world_preopen_t *resolved, const edict_t *source)
+{
+	edict_t *member;
+
+	if (!source || !SG_CompoundWorldResolvedMember(resolved, &member))
+		return 0;
+	if (source == member)
+		return 1;
+	if (!source->inuse || !source->classname ||
+	    Q_stricmp(source->classname, "trigger_relay") != 0 ||
+	    source->use != trigger_relay_use)
+		return 0;
+	return CompoundWorldSoundOnlyRelayReachable(member, source, 1);
 }
 
 static int CompoundWorldSweepBounds(

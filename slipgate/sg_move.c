@@ -2399,7 +2399,7 @@ qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
 
 	if (!bot)
 		return false;
-	if (SG_CompoundDropGameOwnsTargetDispatch(bot, source))
+	if (SG_CompoundDropGameAuthorizeTargetDispatch(bot, source))
 		return false;
 	if (!DoorStep_DeclaredBinding(bot, &binding))
 		return DoorStep_DeclaredClaimHeld(bot) ||
@@ -6986,6 +6986,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		sg_compound_drop_live_result_t result;
 		sg_replay_pose_t pose;
 
+		if (!SG_CompoundDropGameIdleAdmission(bot))
+		{
+			bot->commit_link = -1;
+			bot->commit_until = 0.0f;
+			bot->sticky_link = -1;
+			bot->latch_until = 0.0f;
+			return;
+		}
 		if (!SG_CompoundDropGameHost(bot, &host) ||
 		    !SG_CompoundDropGamePose(e, &pose))
 		{
@@ -9015,8 +9023,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					DoorStep_RetainFailedAuthority(bot, bestlink);
 					return;
 				}
-				bot->as_landing_command = as_ok && as_chain &&
-				    !proved_control && !door_hold;
 				/* The safety trace was made along aimed_fire_yaw/pitch.  Slew and
 				 * every later command owner may move the submitted view, so the
 				 * trigger is re-authorized at the final boundary on exact command
@@ -9059,10 +9065,30 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					    &pose);
 					if (!result.command_ready)
 					{
-						SG_DeclaredDoorTerminalDeath(bot);
-						return;
+						if (result.outcome ==
+						    SG_COMPOUND_DROP_LIVE_RECOVERING)
+						{
+							result =
+							    SG_CompoundDropGameRecoverOwnedFailure(
+							        bot, &host, &pose, cmd);
+							SG_CompoundDropGameDebugResult(bot,
+							    "recover-prestep", &result, &pose);
+							if (result.outcome ==
+							    SG_COMPOUND_DROP_LIVE_SAFE_STOPPED)
+							{
+								bot->commit_link = -1;
+								return;
+							}
+						}
+						if (!result.command_ready)
+						{
+							SG_DeclaredDoorTerminalDeath(bot);
+							return;
+						}
 					}
 				}
+				bot->as_landing_command = as_ok && as_chain &&
+				    !proved_control && !door_hold;
 				ClientThink(e, cmd);
 				if (direct_door_prediction)
 				{
@@ -9131,6 +9157,27 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    &bot->compound_drop_live, &host, &pose, &observation);
 				SG_CompoundDropGameDebugResult(bot, "poststep", &result,
 				    &pose);
+				if (result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING)
+				{
+					result = SG_CompoundDropGameRecoverOwnedFailure(
+					    bot, &host, &pose, NULL);
+					SG_CompoundDropGameDebugResult(bot, "recover-poststep",
+					    &result, &pose);
+					if (result.outcome ==
+					    SG_COMPOUND_DROP_LIVE_SAFE_STOPPED)
+					{
+						bot->commit_link = -1;
+						return;
+					}
+					if (result.outcome !=
+					        SG_COMPOUND_DROP_LIVE_RECOVERING ||
+					    bot->compound_drop_live.replay_kind !=
+					        SG_COMPOUND_DROP_LIVE_REPLAY_RECOVERY)
+					{
+						SG_DeclaredDoorTerminalDeath(bot);
+						return;
+					}
+				}
 				if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING &&
 				    result.outcome != SG_COMPOUND_DROP_LIVE_RECOVERING)
 				{

@@ -1,4 +1,4 @@
-/* Loader-replayed suffix plans for dormant D_DROP and D_HOOK. */
+/* Loader-replayed suffix plans for compound door links. */
 #ifndef SG_COMPOUND_ACTION_PUBLICATION_H
 #define SG_COMPOUND_ACTION_PUBLICATION_H
 

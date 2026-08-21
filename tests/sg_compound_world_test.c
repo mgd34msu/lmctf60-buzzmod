@@ -20,6 +20,8 @@ static int use_calls;
 static int relay_calls;
 static int down_calls;
 
+static void FixtureUseTargets(edict_t *source, edict_t *activator);
+
 static int CallbackCalls(void)
 {
 	return touch_calls + speaker_calls + blocked_calls + use_calls +
@@ -81,8 +83,9 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator)
 {
-	(void)self; (void)other; (void)activator;
+	(void)other;
 	relay_calls++;
+	FixtureUseTargets(self, activator);
 }
 
 static void DummyTouch(edict_t *self, edict_t *other, cplane_t *plane,
@@ -116,6 +119,18 @@ edict_t *G_Find(edict_t *from, int fieldofs, char *match)
 			return candidate;
 	}
 	return NULL;
+}
+
+static void FixtureUseTargets(edict_t *source, edict_t *activator)
+{
+	edict_t *target = NULL;
+
+	if (!source || !source->target)
+		return;
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        source->target)) != NULL)
+		if (target != source && target->use)
+			target->use(target, source, activator);
 }
 
 static int failures;
@@ -339,8 +354,70 @@ static void TestZeroDelayRetainsSoundOnlyPolicy(void)
 	ents[4].targetname = "relay-sound";
 	ents[4].use = Use_Target_Speaker;
 	CHECK(SG_CompoundWorldDoorEffectsSafe(&ents[1]));
+	ents[3].delay = 0.1f;
+	CHECK(SG_CompoundWorldDoorEffectsSafe(&ents[1]));
+	ents[3].delay = 0.0f;
 	ents[3].killtarget = empty;
 	CHECK(!SG_CompoundWorldDoorEffectsSafe(&ents[1]));
+}
+
+static void TestAuthenticatedTargetSources(void)
+{
+	edict_t ents[8];
+	sg_compound_world_preopen_t resolved;
+
+	World(ents);
+	globals.num_edicts = 4;
+	ents[1].target = "door-sound";
+	ents[3].inuse = true;
+	ents[3].classname = "target_speaker";
+	ents[3].targetname = "door-sound";
+	ents[3].use = Use_Target_Speaker;
+	CHECK(Resolve(&resolved) == RLR_OK);
+	CHECK(SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[1]));
+	CHECK(!SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[2]));
+	CHECK(!SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[3]));
+	CHECK(CallbackCalls() == 0);
+	FixtureUseTargets(&ents[1], &ents[0]);
+	CHECK(speaker_calls == 1 && relay_calls == 0);
+
+	World(ents);
+	globals.num_edicts = 6;
+	ents[1].target = "door-relay";
+	ents[3].inuse = true;
+	ents[3].classname = "trigger_relay";
+	ents[3].targetname = "door-relay";
+	ents[3].target = "relay-sound";
+	ents[3].use = trigger_relay_use;
+	ents[4].inuse = true;
+	ents[4].classname = "target_speaker";
+	ents[4].targetname = "relay-sound";
+	ents[4].use = Use_Target_Speaker;
+	ents[5].inuse = true;
+	ents[5].classname = "trigger_relay";
+	ents[5].targetname = "foreign";
+	ents[5].target = "relay-sound";
+	ents[5].use = trigger_relay_use;
+	CHECK(Resolve(&resolved) == RLR_OK);
+	CHECK(SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[1]));
+	CHECK(SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[3]));
+	CHECK(SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[3]));
+	CHECK(!SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[4]));
+	CHECK(!SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[5]));
+	CHECK(CallbackCalls() == 0);
+	FixtureUseTargets(&ents[1], &ents[0]);
+	CHECK(relay_calls == 1 && speaker_calls == 1);
+
+	ResetCallbackCalls();
+	ents[3].delay = 0.1f;
+	CHECK(SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[1]));
+	CHECK(SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[3]));
+	CHECK(CallbackCalls() == 0);
+	ents[3].delay = 0.0f;
+	ents[3].target = "missing";
+	CHECK(!SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[1]));
+	CHECK(!SG_CompoundWorldTargetSourceCurrent(&resolved, &ents[3]));
+	CHECK(CallbackCalls() == 0);
 }
 
 static void TestExplicitResolutionReasons(void)
@@ -1106,6 +1183,7 @@ int main(void)
 	TestCanonicalAndDelayOnly();
 	TestDelayWithAnythingRejects();
 	TestZeroDelayRetainsSoundOnlyPolicy();
+	TestAuthenticatedTargetSources();
 	TestExplicitResolutionReasons();
 	TestUnsafeDoorClasses();
 	TestMoverSetAmbiguity();

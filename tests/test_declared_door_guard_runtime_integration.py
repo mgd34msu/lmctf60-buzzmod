@@ -131,7 +131,7 @@ def test_commit_retirement_requires_positive_clear() -> None:
     assert "bestlink = bot->commit_link;" in terminal
 
 
-def test_door_swim_controller_and_contract_are_enabled_together() -> None:
+def test_door_drop_and_swim_controllers_are_enabled_together() -> None:
     owned_runtime = "\n".join(
         source(path)
         for path in (
@@ -144,10 +144,13 @@ def test_door_swim_controller_and_contract_are_enabled_together() -> None:
     )
     assert "SG_CompoundGuardAcquireCompoundPreopen" in owned_runtime
     registry = source("slipgate/rune_actions.json")
-    for action in ("RL_DOOR_DROP", "RL_DOOR_HOOK"):
+    for action in ("RL_DOOR_DROP", "RL_DOOR_SWIM"):
         row = registry[registry.index(f'"symbol": "{action}"') :]
         row = row[: row.index("}")]
-        assert '"runtime_supported": 0' in row
+        assert '"runtime_supported": 1' in row
+    row = registry[registry.index('"symbol": "RL_DOOR_HOOK"') :]
+    row = row[: row.index("}")]
+    assert '"runtime_supported": 0' in row
     row = registry[registry.index('"symbol": "RL_DOOR_SWIM"') :]
     row = row[: row.index("}")]
     assert '"runtime_supported": 1' in row
@@ -161,5 +164,5 @@ if __name__ == "__main__":
     test_hold_and_clientthink_have_exact_authorization()
     test_started_frame_authorizes_before_body_canonicalization()
     test_commit_retirement_requires_positive_clear()
-    test_door_swim_controller_and_contract_are_enabled_together()
+    test_door_drop_and_swim_controllers_are_enabled_together()
     print("declared_door_guard_runtime_integration: ok")

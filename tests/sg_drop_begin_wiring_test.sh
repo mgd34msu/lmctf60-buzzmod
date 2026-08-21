@@ -27,6 +27,25 @@ in_emit && /if \(tc->think_over\)/ {
 	next
 }
 
+in_emit && /if \(!SG_CompoundDropGameIdleAdmission\(bot\)\)/ {
+	compound_idle_guards++
+	in_compound_idle_guard = 1
+	next
+}
+
+in_compound_idle_guard {
+	if (/SG_CompoundDropLiveBegin|ClientThink/)
+		reject("D_DROP idle-admission rejection reaches Begin or ClientThink")
+	if (/bot->commit_link = -1;/)
+		compound_commit_clear++
+	if (/bot->sticky_link = -1;/)
+		compound_sticky_clear++
+	if (/return;/) {
+		compound_idle_returns++
+		in_compound_idle_guard = 0
+	}
+}
+
 in_guard {
 	if (/ClientThink|Drop_LiveZeroFrame|SG_DropLiveZeroCommand/)
 		reject("Begin-rejection guard submits a host command")
@@ -47,6 +66,9 @@ END {
 		reject("Think_Emit must directly return on that disposition")
 	if (zero_frame_symbols != 0)
 		reject("obsolete zero-ClientThink Begin path remains")
+	if (compound_idle_guards != 1 || compound_idle_returns != 1 ||
+	    compound_commit_clear != 1 || compound_sticky_clear != 1)
+		reject("D_DROP idle rejection must retire its candidate and return")
 	if (failed)
 		exit 1
 	print "sg_drop_begin_wiring_test: ok"

@@ -26,6 +26,10 @@ static int body_will_key;
 static int body_did_key;
 static int orphan_bolt_key;
 static int orphan_calls;
+static int action_orphan_calls;
+static int action_orphan_bolt_key;
+static sg_compound_guard_result_t action_orphan_result =
+    SG_COMPOUND_GUARD_OK;
 static int disconnected_calls;
 static int swim_retired_calls;
 static int quarantine_calls;
@@ -340,6 +344,26 @@ sg_compound_guard_result_t SG_CompoundGuardOrphan(
 	orphan_bolt_key = bolt_key;
 	return bolt_key < 0 ? SG_COMPOUND_GUARD_INVALID_ARGUMENT
 	                    : SG_COMPOUND_GUARD_OK;
+}
+
+sg_compound_guard_result_t SG_CompoundDropGameOrphan(sg_bot_t *bot,
+	int bolt_key)
+{
+	sg_compound_guard_result_t result;
+
+	action_orphan_calls++;
+	action_orphan_bolt_key = bolt_key;
+	if (action_orphan_result != SG_COMPOUND_GUARD_OK)
+		return action_orphan_result;
+	result = SG_CompoundGuardOrphan(&bot->compound_guard, bolt_key);
+	if (result == SG_COMPOUND_GUARD_OK)
+	{
+		bot->compound_drop_live.guard_owned = false;
+		validate_result = SG_COMPOUND_GUARD_OK;
+		validate_record.law = SG_MOVER_LAW_COMPOUND_PREOPEN;
+		validate_record.state = SG_MOVER_LEASE_ORPHAN;
+	}
+	return result;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardValidate(
@@ -1141,6 +1165,78 @@ static void TestDisconnectAndExhaustion(void)
 	      SG_COMPOUND_GUARD_EXHAUSTED);
 }
 
+static void TestCompoundDropDeathOwnsSingleOrphanEdge(void)
+{
+	sg_compound_guard_host_t host = captured_host;
+	int action_before, orphan_before, quarantine_before, respawn_before;
+
+	SG_CompoundGuardGameStorageWillFree();
+	ResetWorld();
+	captured_host = host;
+	CHECK(SG_CompoundGuardGameLevelReset() == SG_COMPOUND_GUARD_OK);
+	LiveEntity(1, "player");
+	entities[1].client = &clients[0];
+	entities[1].solid = SOLID_BBOX;
+	entities[1].health = 25;
+	CHECK(SG_CompoundGuardGameClientSpawned(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardGameBotAttach(&sg_bots[0].compound_guard, 0,
+	      &entities[1]) == SG_COMPOUND_GUARD_OK);
+	sg_bots[0].active = true;
+	sg_bots[0].ent = &entities[1];
+	sg_bots[0].compound_drop_live.guard_owned = true;
+	LiveEntity(11, "noclass");
+	entities[11].owner = &entities[1];
+	entities[11].movetype = MOVETYPE_FLYMISSILE;
+	entities[11].solid = SOLID_BBOX;
+	entities[11].touch = hook_touch;
+	entities[11].die = hook_die;
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11]) ==
+	      SG_COMPOUND_GUARD_OK);
+	entities[1].client->hook = &entities[11];
+	entities[1].client->hookstate = 1;
+	validate_result = SG_COMPOUND_GUARD_OK;
+	validate_record.law = SG_MOVER_LAW_COMPOUND_PREOPEN;
+	validate_record.state = SG_MOVER_LEASE_ACTIVE;
+	action_orphan_result = SG_COMPOUND_GUARD_OK;
+	action_before = action_orphan_calls;
+	orphan_before = orphan_calls;
+	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(action_orphan_calls == action_before + 1 &&
+	      action_orphan_bolt_key == 11);
+	CHECK(orphan_calls == orphan_before + 1 && orphan_bolt_key == 11);
+	CHECK(!sg_bots[0].compound_drop_live.guard_owned);
+	CHECK(validate_record.law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
+	      validate_record.state == SG_MOVER_LEASE_ORPHAN);
+	CHECK(entities[1].health == -100);
+
+	respawn_before = bot_respawn_calls;
+	CHECK(SG_CompoundGuardGameClientSpawned(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(bot_respawn_calls == respawn_before + 1);
+	CHECK(action_orphan_calls == action_before + 1 &&
+	      orphan_calls == orphan_before + 1);
+	entities[1].health = 25;
+	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(action_orphan_calls == action_before + 1 &&
+	      orphan_calls == orphan_before + 1);
+
+	sg_bots[0].compound_drop_live.guard_owned = true;
+	validate_record.state = SG_MOVER_LEASE_ACTIVE;
+	entities[1].health = 25;
+	action_orphan_result = SG_COMPOUND_GUARD_HOST_ERROR;
+	quarantine_before = quarantine_calls;
+	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
+	      SG_COMPOUND_GUARD_HOST_ERROR);
+	CHECK(action_orphan_calls == action_before + 2);
+	CHECK(orphan_calls == orphan_before + 1);
+	CHECK(sg_bots[0].compound_drop_live.guard_owned);
+	CHECK(quarantine_calls == quarantine_before + 1);
+	action_orphan_result = SG_COMPOUND_GUARD_OK;
+}
+
 int main(void)
 {
 	ResetWorld();
@@ -1156,6 +1252,7 @@ int main(void)
 	TestIdentityABAAndBounds();
 	TestPusherFenceBasics();
 	TestBodyAndHookIncarnations();
+	TestCompoundDropDeathOwnsSingleOrphanEdge();
 	TestDisconnectAndExhaustion();
 	if (failures)
 	{

@@ -101,6 +101,10 @@ def test_death_body_respawn_and_disconnect_order() -> None:
     assert use_targets.index("SG_OwnsBot(activator)") < use_targets.index(
         "t->spawnflags |= SG_DELAYED_USE_BOT_ACTIVATOR;"
     )
+    tag = use_targets.index("SG_CompoundDropGameTagDelayedTarget")
+    assert use_targets.index("t->message = ent->message;") < tag
+    assert use_targets.index("t->target = ent->target;") < tag
+    assert use_targets.index("t->killtarget = ent->killtarget;") < tag
 
 
 def test_frame_level_hook_and_free_order() -> None:

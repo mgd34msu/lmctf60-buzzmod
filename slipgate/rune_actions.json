@@ -139,7 +139,7 @@
         },
         {
           "action": 9,
-		  "admitted": 1,
+          "admitted": 1,
           "plan_required": 0,
           "link_policy_action": 9,
           "plans": []
@@ -610,7 +610,7 @@
       {
         "id": 9,
         "symbol": "RL_DOOR_DROP",
-		"runtime_supported": 1,
+        "runtime_supported": 1,
         "default_provenance": 4,
         "provenance_mask": 16,
         "mode_mask": 6,

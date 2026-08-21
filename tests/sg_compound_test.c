@@ -96,7 +96,8 @@ static void TestOwnershipAndDispatch(void)
 
 		CHECK(SG_CompoundRuntimeReady(action) == expected);
 	}
-	CHECK(!SG_CompoundRuntimeReady(RL_DOOR_DROP));
+	CHECK(SG_CompoundRuntimeReady(RL_DOOR_DROP));
+	CHECK(SG_CompoundRuntimeReady(RL_DOOR_SWIM));
 	CHECK(!SG_CompoundRuntimeReady(RL_DOOR_HOOK));
 	CHECK(!SG_CompoundRuntimeReady(RL_DOOR));
 	CHECK(SG_CompoundSuffixAction(RL_DOOR_DROP) == RL_DROP);

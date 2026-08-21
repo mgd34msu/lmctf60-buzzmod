@@ -97,6 +97,11 @@ int SG_CompoundWorldResolvedMember(
 	const sg_compound_world_preopen_t *resolved,
 	struct edict_s **member_out);
 
+/* Exact G_UseTargets sources admitted by the current sound-only door closure. */
+int SG_CompoundWorldTargetSourceCurrent(
+	const sg_compound_world_preopen_t *resolved,
+	const struct edict_s *source);
+
 /* Compound-only observation against the exact resolved translating member.
  * These helpers deliberately do not inherit ordinary declared-door policy.
  * Every call revalidates the live pointer/key and copied static identity. */

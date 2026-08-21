@@ -3,6 +3,7 @@
 #include "slipgate/sg_crc32.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_compound_guard.h"
 #include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_hooks.h"
@@ -102,6 +103,8 @@ static int open_speaker_uses[CHAIN_COUNT];
 static int close_speaker_uses[CHAIN_COUNT];
 static char callback_order[CHAIN_COUNT][8];
 static size_t callback_order_count[CHAIN_COUNT];
+static int compound_drop_probe_calls;
+static int compound_drop_delayed_tags;
 
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
@@ -132,6 +135,40 @@ static size_t callback_order_count[CHAIN_COUNT];
 	{ \
 		(void)self; (void)other; \
 	}
+
+int SG_CompoundDropGameAuthorizeTouch(sg_bot_t *bot, edict_t *source,
+	edict_t *activator, int frame_serial)
+{
+	(void)source; (void)activator; (void)frame_serial;
+	compound_drop_probe_calls++;
+	CHECK(!bot || !bot->compound_drop_live.guard_owned);
+	return -1;
+}
+
+int SG_CompoundDropGameAuthorizeActivation(sg_bot_t *bot, edict_t *source,
+	edict_t *door_master, edict_t *activator, int frame_serial)
+{
+	(void)source; (void)door_master; (void)activator; (void)frame_serial;
+	compound_drop_probe_calls++;
+	CHECK(!bot || !bot->compound_drop_live.guard_owned);
+	return -1;
+}
+
+int SG_CompoundDropGameAuthorizeTargetDispatch(sg_bot_t *bot,
+	edict_t *source)
+{
+	(void)source;
+	compound_drop_probe_calls++;
+	CHECK(!bot || !bot->compound_drop_live.guard_owned);
+	return 0;
+}
+
+void SG_CompoundDropGameTagDelayedTarget(edict_t *source,
+	edict_t *activator, edict_t *delayed)
+{
+	(void)source; (void)activator; (void)delayed;
+	compound_drop_delayed_tags++;
+}
 
 TOUCH_CALLBACK(Touch_DoorTrigger)
 TOUCH_CALLBACK(button_touch)
@@ -1926,6 +1963,8 @@ int main(void)
 	TestDirectApproachLifecycle(&fixture);
 	TestDirectApproachMultiMaster(&fixture);
 	TestDirectApproachShallowTicket(&fixture);
+	CHECK(compound_drop_probe_calls > 0);
+	CHECK(compound_drop_delayed_tags == 0);
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism execution test(s) failed\n", failures);

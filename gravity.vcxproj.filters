@@ -347,6 +347,15 @@
     <ClCompile Include="slipgate\sg_compound_action_publication.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_drop_live.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_drop_live_finish.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_drop_game.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_rune_door_scope.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -686,6 +695,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_compound_publication.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_drop_live.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_drop_live_internal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_drop_game.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_door_scope.h">
