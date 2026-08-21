@@ -4,12 +4,27 @@ import hashlib
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "tools"))
+
+import runeio  # noqa: E402
+import snagrepair  # noqa: E402
+from tests.test_rune_artifact import _build_rune, _fix_header_crc  # noqa: E402
+
+
+def rune_for_map(map_name):
+    encoded = bytearray(_build_rune())
+    encoded[64:128] = map_name.encode("ascii") + b"\0" * (64 - len(map_name))
+    _fix_header_crc(encoded)
+    return bytes(encoded)
 
 MULTICALL = r'''
 #define _GNU_SOURCE
@@ -55,8 +70,15 @@ class IterateSelectionTest(unittest.TestCase):
         shutil.copy2(REPO / "tools/topmaps.txt", self.tools / "topmaps.txt")
         for line in (self.tools / "topmaps.txt").read_text().splitlines():
             if line and not line.startswith("#"):
-                (maps / f"{line}.rune").write_bytes(b"rune")
-                (maps / f"{line}.snag").write_bytes(b"snag")
+                rune_payload = rune_for_map(line)
+                rune_path = maps / f"{line}.rune"
+                rune_path.write_bytes(rune_payload)
+                rune = runeio.decode_rune(rune_payload)
+                rune_sha256 = hashlib.sha256(rune_payload).hexdigest()
+                (maps / f"{line}.snag").write_text(
+                    snagrepair.render(line, rune, [], "e" * 64, rune_sha256),
+                    encoding="ascii",
+                )
         source = self.root / "multicall.c"
         source.write_text(MULTICALL)
         multicall = self.bin / "multicall"
@@ -113,6 +135,50 @@ class IterateSelectionTest(unittest.TestCase):
         result, trace = self.run_off(None, "0")
         self.assertEqual(result.returncode, 2)
         self.assertIn("refusing empty fleet", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
+    def test_stale_rune_action_contract_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.rune"
+        encoded = bytearray(path.read_bytes())
+        struct.pack_into("<I", encoded, 32, 1)
+        _fix_header_crc(encoded)
+        path.write_bytes(encoded)
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("artifact preflight failed", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
+    def test_wrong_snag_rune_sha_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.snag"
+        payload = path.read_text(encoding="ascii")
+        payload = re.sub(r"(?m)^rune_sha256 [0-9a-f]{64}$",
+                         "rune_sha256 " + "0" * 64, payload)
+        path.write_text(payload, encoding="ascii")
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("artifact preflight failed", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
+    def test_missing_snag_binding_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.snag"
+        lines = path.read_text(encoding="ascii").splitlines()
+        path.write_text("\n".join(
+            line for line in lines if not line.startswith("rune_payload_crc ")
+        ) + "\n", encoding="ascii")
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("artifact preflight failed", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
+    def test_malformed_snag_binding_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.snag"
+        payload = path.read_text(encoding="ascii").replace(
+            "rune_num_links 2", "rune_num_links nope"
+        )
+        path.write_text(payload, encoding="ascii")
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("artifact preflight failed", result.stderr)
         self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
 
     def test_wave_manifest_binds_full_module_hash_and_lane_schedule(self):
