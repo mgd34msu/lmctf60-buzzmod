@@ -138,10 +138,6 @@ static sg_relay_t caco_relay[2][2];     /* [SG_RELAY_*][index] */
 /* how often a stale carrier belief takes one step down their route home */
 #define SG_ADVECT_PERIOD	1.0f
 
-/*
- * Can this bot see that entity? The same test the game itself makes for
- * sight: line from eyes to target center unobstructed by the world.
- */
 static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 {
 	vec3_t eye, mid;
