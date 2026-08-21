@@ -57,6 +57,11 @@ sg_compound_guard_result_t SG_CompoundGuardGameHookLinked(
 sg_compound_guard_observation_t SG_CompoundGuardGameHookObserve(
 	struct edict_s *client, const sg_mover_subject_t *subject,
 	struct edict_s **current_out);
+/* YES means an empty census with hookstate zero.  One authenticated current
+ * hook is NO; pointer drift, duplicate shapes, or generation mismatch is
+ * ERROR. */
+sg_compound_guard_observation_t SG_CompoundGuardGameHookAbsent(
+	struct edict_s *client);
 void SG_CompoundGuardGameEntityFreed(struct edict_s *entity);
 sg_compound_guard_result_t SG_CompoundGuardGameBoltEvicted(
 	struct edict_s *client, struct edict_s *bolt);

@@ -975,6 +975,12 @@ static void TestHookSubjectObservation(void)
 	edict_t *current = (edict_t *)(uintptr_t)1U;
 	sg_mover_subject_t first, second, wrong;
 
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_YES);
+	entities[1].client->hookstate = 1;
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[1].client->hookstate = 0;
 	LiveHook(11, &entities[1]);
 	memset(&first, 0xa5, sizeof(first));
 	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11],
@@ -988,6 +994,16 @@ static void TestHookSubjectObservation(void)
 	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
 	      SG_COMPOUND_GUARD_YES);
 	CHECK(current == &entities[11]);
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_NO);
+	entities[1].client->hookstate = 0;
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_NO);
+	entities[1].client->hookstate = 1;
+	entities[1].client->hook = NULL;
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[1].client->hook = &entities[11];
 
 	wrong = first;
 	wrong.generation++;
@@ -1011,6 +1027,8 @@ static void TestHookSubjectObservation(void)
 	entities[11].touch = NULL;
 	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
 	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
 	entities[11].touch = hook_touch;
 	entities[11].owner = &entities[2];
 	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
@@ -1019,6 +1037,8 @@ static void TestHookSubjectObservation(void)
 	LiveHook(12, &entities[1]);
 	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
 	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
 	memset(&entities[12], 0, sizeof(entities[12]));
 
 	entities[11].inuse = false;
@@ -1026,8 +1046,18 @@ static void TestHookSubjectObservation(void)
 	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
 	      SG_COMPOUND_GUARD_NO);
 	CHECK(current == NULL);
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[1].client->hook = NULL;
+	entities[1].client->hookstate = 0;
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_YES);
 
 	LiveHook(11, &entities[1]);
+	entities[1].client->hook = &entities[11];
+	entities[1].client->hookstate = 1;
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
 	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11],
 	      &second) == SG_COMPOUND_GUARD_OK);
 	CHECK(second.edict_key == first.edict_key &&
@@ -1038,11 +1068,15 @@ static void TestHookSubjectObservation(void)
 	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &second, &current) ==
 	      SG_COMPOUND_GUARD_YES);
 	CHECK(current == &entities[11]);
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_NO);
 
 	entities[11].inuse = false;
 	SG_CompoundGuardGameEntityFreed(&entities[11]);
 	entities[1].client->hook = NULL;
 	entities[1].client->hookstate = 0;
+	CHECK(SG_CompoundGuardGameHookAbsent(&entities[1]) ==
+	      SG_COMPOUND_GUARD_YES);
 }
 
 static void TestPusherFenceBasics(void)

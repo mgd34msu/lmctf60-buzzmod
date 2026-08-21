@@ -947,6 +947,26 @@ sg_compound_guard_observation_t SG_CompoundGuardGameHookObserve(
 	return SG_COMPOUND_GUARD_YES;
 }
 
+sg_compound_guard_observation_t SG_CompoundGuardGameHookAbsent(
+	edict_t *client)
+{
+	uint64_t client_generation;
+	int client_key;
+	int hook_key;
+
+	if (!game_guard.initialized || game_guard.initialization_failed ||
+	    game_guard.generation_exhausted || !GameWorldValid() ||
+	    !GameEdictKey(client, &client_key) ||
+	    !GameClientShape(client, client_key) ||
+	    GameIdentity(&game_guard, client_key, &client_generation) !=
+	        SG_COMPOUND_GUARD_YES)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	hook_key = GameResolveHook(client);
+	if (hook_key < 0)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	return hook_key == 0 ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+}
+
 static int GameClientBlocksAnyClaim(edict_t *client, int client_key)
 {
 	sg_mover_lease_record_t record;
