@@ -594,7 +594,7 @@ extern  int     snd_fry;
 
 extern	int	meansOfDeath;
 
-#define q_offsetof(t, m)    ((size_t)&((t *)0)->m)
+#define q_offsetof(t, m)    offsetof(t, m)
 
 extern	edict_t* g_edicts;
 
