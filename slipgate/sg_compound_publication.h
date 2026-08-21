@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "sg_compound_world.h"
+#include "sg_replay.h"
 #include "sg_rune.h"
 
 #define SG_COMPOUND_PUBLICATION_INDEX_NONE UINT32_MAX
@@ -28,6 +29,11 @@ typedef struct sg_compound_publication_angle_bias_s
 	short axis[3];
 } sg_compound_publication_angle_bias_t;
 
+typedef struct sg_compound_hook_publication_proof_s
+{
+	sg_hook_replay_spec_t spec;
+} sg_compound_hook_publication_proof_t;
+
 typedef struct sg_compound_publication_binding_s
 {
 	uint32_t link_index;
@@ -45,6 +51,7 @@ typedef struct sg_compound_publication_binding_s
 	int arrival_ms;
 	int sweep_clear_ms;
 	int total_cost_ms;
+	sg_compound_hook_publication_proof_t hook_proof;
 } sg_compound_publication_binding_t;
 
 typedef enum sg_compound_publication_status_e

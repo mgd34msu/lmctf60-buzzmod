@@ -192,6 +192,7 @@ qboolean SG_HookControlDecode(const vec3_t origin, float viewheight, int hand,
 	if (!isfinite(control[PITCH]) || !isfinite(control[YAW]) ||
 	    !isfinite(control[ROLL]) ||
 	    control[PITCH] < -89.0f || control[PITCH] > 89.0f ||
+	    control[YAW] < -180.0f || control[YAW] >= 180.0f ||
 	    control[PITCH] != SHORT2ANGLE((short)ANGLE2SHORT(control[PITCH])) ||
 	    control[YAW] != SHORT2ANGLE((short)ANGLE2SHORT(control[YAW])))
 		return false;

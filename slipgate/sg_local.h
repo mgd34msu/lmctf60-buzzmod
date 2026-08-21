@@ -141,6 +141,36 @@ typedef struct sg_compound_drop_proof_s
 	byte	exit_speed;
 } sg_compound_drop_proof_t;
 
+typedef struct sg_compound_hook_proof_s
+{
+	pmove_state_t source_pms;
+	pmove_state_t source_old_pms;
+	vec3_t source_origin;
+	vec3_t source_velocity;
+	qboolean source_groundentity;
+	int source_watertype;
+	int source_waterlevel;
+	float source_old_frame_z;
+	pmove_state_t suffix_pms;
+	pmove_state_t suffix_old_pms;
+	vec3_t suffix_origin;
+	vec3_t suffix_velocity;
+	qboolean suffix_groundentity;
+	int suffix_watertype;
+	int suffix_waterlevel;
+	float suffix_old_frame_z;
+	int touch_ms;
+	int touch_frame_end_ms;
+	int mover_top_ms;
+	int suffix_start_ms;
+	int arrival_ms;
+	int sweep_clear_ms;
+	int total_cost_ms;
+	byte exit_speed;
+	vec3_t control;
+	sg_hook_replay_spec_t hook_spec;
+} sg_compound_hook_proof_t;
+
 /* Canonical source state owned by the compound oracle.  Keep the complete
  * phantom, and in particular pms and old_pms as distinct values: snapinitial
  * is part of the next real Pmove even when a freshly prepared offline source
@@ -223,6 +253,12 @@ rune_reject_reason_t SG_OracleCompoundDropPreopen(
 	const vec3_t mechanism_anchor, const vec3_t destination,
 	const vec3_t lip, byte heading, qboolean destination_water,
 	sg_compound_drop_proof_t *proof, qboolean loader_replay);
+rune_reject_reason_t SG_OracleCompoundHookPreopen(
+	sg_phantom_t *ph, const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	const vec3_t expected_control, float old_frame_z,
+	sg_compound_hook_proof_t *proof, edict_t *passent, qboolean world_only,
+	qboolean loader_replay);
 /* Re-prove the DROP suffix from the exact live TOP checkpoint.  The member
  * remains at authenticated TOP for the complete observation-only rollout. */
 rune_reject_reason_t SG_OracleCompoundDropContinue(sg_phantom_t *ph,

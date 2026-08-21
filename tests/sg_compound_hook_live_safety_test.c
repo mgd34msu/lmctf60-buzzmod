@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -83,6 +84,33 @@ static void TestCheckpointAndFirstBoltAuthority(void)
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_LINK);
 	CHECK(!state.bolt_linked);
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	DriveToTop(&fixture, &host, &state, &pose, &observation);
+	result = SG_CompoundHookLiveLinked(&state, &host, &bolt,
+	                                   state.touch_frame_serial + 1, &pose,
+	                                   &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_LINK);
+	CHECK(!state.bolt_linked);
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	DriveToTop(&fixture, &host, &state, &pose, &observation);
+	result = SG_CompoundHookLiveLinked(&state, &host, &bolt,
+	                                   state.touch_frame_serial + 3, &pose,
+	                                   &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_LINK);
+	CHECK(!state.bolt_linked);
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	DriveToTop(&fixture, &host, &state, &pose, &observation);
+	state.touch_frame_serial = INT_MAX - 1;
+	result = SG_CompoundHookLiveLinked(&state, &host, &bolt, INT_MAX,
+	                                   &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_LINK);
+	CHECK(!state.bolt_linked);
 }
 
 static void PadRetainedFailureToBoundary(
@@ -150,6 +178,113 @@ static void TestIssuedCommandFailurePadsBeforeRecovery(void)
 	result = SG_CompoundHookLivePostStep(&state, &host, &pose, &observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(state.transaction_elapsed_ms == 325);
+}
+
+static void TestTouchRequiresAnchorAndSuppressesOwnedRepeat(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_state_t before;
+	sg_compound_hook_live_state_t wrong;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+
+	Setup(&fixture, &host, &pose, &observation);
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	SetTouchPose(&fixture, &pose);
+	pose.origin[0] += 0.125f;
+	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(state.outer.phase == SG_COMPOUND_RECOVER);
+
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	SetTouchPose(&fixture, &pose);
+	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLiveActivate(&state, &host, 11, 12, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	before = state;
+	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_WAIT);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	wrong = state;
+	result = SG_CompoundHookLiveTouch(&wrong, &host, 99, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	wrong = state;
+	wrong.command_approved = false;
+	result = SG_CompoundHookLiveTouch(&wrong, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	wrong = state;
+	wrong.control = SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX;
+	result = SG_CompoundHookLiveTouch(&wrong, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+}
+
+static void TestTouchAtFrameEndActivates(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+	int step;
+
+	Setup(&fixture, &host, &pose, &observation);
+	fixture.snapshot.binding.touch_ms = 100;
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose,
+	                                  &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 3; step++)
+	{
+		result = Step(&state, &host, &pose, &observation, NULL);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	}
+	CHECK(state.transaction_elapsed_ms == 75);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(result.command_ready);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	SetTouchPose(&fixture, &pose);
+	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.command_pending && state.command_replay_consumed);
+	result = SG_CompoundHookLiveActivate(&state, &host, 11, 12, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLiveBoundary(&state, &host, &pose,
+	                                     &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.transaction_elapsed_ms == 100);
+	CHECK(state.outer.phase == SG_COMPOUND_OPENING);
 }
 
 static void TestRejectedApprovalDiscardsUnconsumedCommand(void)
@@ -327,6 +462,7 @@ static void TestOpeningSafetyObservation(void)
 		CHECK(result.command_ready);
 		result = SG_CompoundHookLiveApproveCommand(&state, &command);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+		SetTouchPose(&fixture, &pose);
 		result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
 		                                  &observation, 1);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -371,6 +507,7 @@ static void TestOpeningAndWaitAttachUseFrameEntryFallSpeed(void)
 	result = SG_CompoundHookLiveApproveCommand(&state, &command);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	pose.velocity[2] = -175.0f;
+	SetTouchPose(&fixture, &pose);
 	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
 	                                  &observation, 1);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -436,7 +573,7 @@ static void TestAttachedRequiresOuterBoundary(void)
 			result = SG_CompoundHookLiveApproveCommand(&state, &command);
 			CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 		}
-		result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4,
+		result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5,
 		                                     &pose);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 		CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE);
@@ -480,7 +617,7 @@ static void TestAttachedRequiresOuterBoundary(void)
 			result = Step(&state, &host, &pose, &observation, NULL);
 		CHECK(state.transaction_elapsed_ms == 400);
 		CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_ATTACH);
-		result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4,
+		result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5,
 		                                     &pose);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	}
@@ -503,6 +640,12 @@ static void TestHookEventFrameOrder(void)
 	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
 	wrong_state = state;
 	result = SG_CompoundHookLiveAttached(&wrong_state, &host, &bolt, 3,
+	                                     &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE);
+	CHECK(result.replay_reason == SG_REPLAY_REASON_HOOK_EVENT_ORDER);
+	wrong_state = state;
+	result = SG_CompoundHookLiveAttached(&wrong_state, &host, &bolt, 5,
 	                                     &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE);
@@ -538,14 +681,70 @@ static void TestHookEventFrameOrder(void)
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 }
 
+static void TestMultiFramePullEventOrder(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_state_t wrong_state;
+	sg_compound_hook_live_bolt_t bolt;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	int step;
+
+	Setup(&fixture, &host, &pose, &observation);
+	fixture.snapshot.binding.arrival_ms = 400;
+	fixture.snapshot.binding.total_cost_ms = 700;
+	fixture.snapshot.binding.link.cost_ms = 700;
+	fixture.snapshot.binding.hook_proof.spec.expected_release_ms = 200;
+	fixture.snapshot.binding.hook_proof.spec.expected_pull_ms = 200;
+	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	observation.hook_rope_valid = true;
+	observation.hook_rope_length = 200;
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_PULL);
+	wrong_state = state;
+	result = SG_CompoundHookLivePullApplied(&wrong_state, &host, &bolt, 6,
+	                                        &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.replay_reason == SG_REPLAY_REASON_HOOK_EVENT_ORDER);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 3; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	observation.hook_rope_length = 100;
+	result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	wrong_state = state;
+	result = SG_CompoundHookLiveReleaseApplied(&wrong_state, &host, &bolt,
+	                                           5, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.replay_reason == SG_REPLAY_REASON_HOOK_EVENT_ORDER);
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
+	                                           &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+}
+
 void RunCompoundHookSafetyTests(void)
 {
 	TestCheckpointAndFirstBoltAuthority();
 	TestIssuedCommandFailurePadsBeforeRecovery();
+	TestTouchRequiresAnchorAndSuppressesOwnedRepeat();
+	TestTouchAtFrameEndActivates();
 	TestRejectedApprovalDiscardsUnconsumedCommand();
 	TestWaitAttachSafetyObservation();
 	TestOpeningSafetyObservation();
 	TestOpeningAndWaitAttachUseFrameEntryFallSpeed();
 	TestAttachedRequiresOuterBoundary();
 	TestHookEventFrameOrder();
+	TestMultiFramePullEventOrder();
 }

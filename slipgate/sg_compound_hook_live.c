@@ -1,5 +1,4 @@
-#include "slipgate/sg_compound_action_publication.h"
-#include "slipgate/sg_compound_hook_live.h"
+#include "slipgate/sg_compound_hook_live_internal.h"
 
 #include <limits.h>
 #include <string.h>
@@ -25,44 +24,7 @@ qboolean CompoundHookLiveHostValid(const sg_compound_hook_live_host_t *host)
 	       host->release && host->orphan && host->abort_bolt &&
 	       host->source_checkpoint &&
 	       host->suffix_checkpoint && host->event_authorize &&
-	       host->hook_shadow;
-}
-qboolean CompoundHookLiveBoltValid(const sg_compound_hook_live_bolt_t *bolt)
-{
-	return bolt && bolt->key > 0 && bolt->generation != 0U;
-}
-qboolean CompoundHookLiveBoltEqual(const sg_compound_hook_live_bolt_t *first,
-	const sg_compound_hook_live_bolt_t *second)
-{
-	return first && second && first->key == second->key &&
-	       first->generation == second->generation;
-}
-static qboolean SnapshotValid(
-	const sg_compound_hook_live_snapshot_t *snapshot, uint32_t link_index,
-	sg_hook_replay_spec_t *hook_spec)
-{
-	const sg_compound_publication_binding_t *binding;
-	sg_compound_hook_publication_proof_t proof;
-	if (!snapshot || !hook_spec || link_index > (uint32_t)INT_MAX ||
-	    snapshot->trigger_key <= 0 || snapshot->mover_key <= 0)
-		return false;
-	binding = &snapshot->binding;
-	if (binding->link_index != link_index ||
-	    binding->mechanism_index == SG_COMPOUND_PUBLICATION_INDEX_NONE ||
-	    binding->link.action != RL_DOOR_HOOK ||
-	    binding->link.mode != RLCM_PREOPEN ||
-	    binding->touch_ms < SG_REPLAY_STEP_MS ||
-	    binding->touch_ms >= binding->touch_frame_end_ms ||
-	    binding->touch_ms % SG_REPLAY_STEP_MS != 0 ||
-	    binding->touch_frame_end_ms % SG_REPLAY_FRAME_MS != 0 ||
-	    binding->total_cost_ms <= 0 ||
-	    binding->total_cost_ms > RUNE_MAX_COST_MS ||
-	    binding->mover_top_ms != binding->touch_frame_end_ms +
-	                              binding->suffix_start_ms)
-		return false;
-	memset(&proof, 0, sizeof(proof));
-	proof.spec = snapshot->hook_proof;
-	return SG_CompoundHookPublicationPlan(binding, &proof, hook_spec);
+	       host->sweep_segment && host->hook_shadow;
 }
 sg_compound_hook_live_host_result_t CompoundHookLiveCurrent(
 	const sg_compound_hook_live_state_t *state,
@@ -98,6 +60,54 @@ sg_compound_hook_live_result_t CompoundHookLiveActive(
 	              SG_COMPOUND_HOOK_LIVE_FAILURE_NONE,
 	              SG_REPLAY_REASON_NONE, command_ready);
 }
+
+static qboolean CompoundHookLiveSweepBool(qboolean value)
+{
+	return value == false || value == true;
+}
+
+qboolean CompoundHookLiveObserveSweep(
+	sg_compound_hook_live_state_t *state,
+	const sg_compound_hook_live_host_t *host,
+	const sg_replay_pose_t *pose, int next_ms)
+{
+	sg_compound_hook_live_sweep_t sweep;
+	qboolean safe;
+
+	if (!state || !host || !pose || !state->command_origin_valid ||
+	    next_ms != state->transaction_elapsed_ms + SG_REPLAY_STEP_MS)
+		return false;
+	memset(&sweep, 0, sizeof(sweep));
+	if (host->sweep_segment(host->context, &state->snapshot,
+	        state->command_origin, pose->origin, &sweep) !=
+	        SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED ||
+	    !CompoundHookLiveSweepBool(sweep.start_outside) ||
+	    !CompoundHookLiveSweepBool(sweep.end_outside) ||
+	    !CompoundHookLiveSweepBool(sweep.crossed))
+		return false;
+	safe = sweep.start_outside && sweep.end_outside && !sweep.crossed;
+	state->command_segment_checked = true;
+	if (!safe)
+	{
+		qboolean suffix_egress =
+			state->control == SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX &&
+			(state->outer.phase == SG_COMPOUND_SUFFIX_LEASED ||
+			 state->outer.phase == SG_COMPOUND_SUFFIX_CLEAR) &&
+			!state->sweep_clear;
+		qboolean recovery_egress = state->recovering &&
+			!state->sweep_clear;
+
+		state->sweep_outside_since_ms = -1;
+		state->segment_clear_ready = false;
+		state->recovery_sweep_dirty = true;
+		return suffix_egress || recovery_egress;
+	}
+	if (state->sweep_outside_since_ms < 0)
+		state->sweep_outside_since_ms = state->transaction_elapsed_ms;
+	if (next_ms - state->sweep_outside_since_ms >= SG_REPLAY_FRAME_MS)
+		state->segment_clear_ready = true;
+	return true;
+}
 sg_compound_hook_live_result_t CompoundHookLiveOwnedFailure(
 	sg_compound_hook_live_state_t *state,
 	sg_compound_hook_live_failure_t failure, sg_replay_reason_t reason)
@@ -130,44 +140,6 @@ sg_compound_hook_live_result_t CompoundHookLiveOwnedFailure(
 	state->arrived = false;
 	return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_RECOVERING, failure, reason, false);
 }
-qboolean CompoundHookLiveBeginSwim(sg_compound_hook_live_state_t *state,
-	const sg_replay_pose_t *pose,
-	const sg_replay_observation_t *observation, const vec3_t destination,
-	qboolean destination_water, float old_frame_z,
-	sg_compound_hook_live_control_t control)
-{
-	sg_swim_replay_spec_t spec;
-	if (!state || !pose || !observation || !destination)
-		return false;
-	memset(&spec, 0, sizeof(spec));
-	VectorCopy(destination, spec.destination);
-	spec.destination_water = destination_water;
-	spec.expected_arrival_ms = SG_REPLAY_TIME_DISCOVER;
-	if (SG_SwimReplayBegin(&state->swim, &spec, pose, observation,
-	                       old_frame_z) != SG_REPLAY_RUNNING)
-		return false;
-	state->swim_active = true;
-	state->swim_link = (int)state->snapshot.binding.link_index;
-	state->control = control;
-	return true;
-}
-qboolean CompoundHookLiveDuplicate(const sg_compound_hook_live_state_t *state,
-	sg_compound_hook_live_event_t event,
-	const sg_compound_hook_live_bolt_t *bolt, int frame_serial)
-{
-	return state && state->guard_owned && state->local_owned &&
-	       state->control == SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX &&
-	       state->hook_active && state->bolt_linked &&
-	       event == state->last_event &&
-	       frame_serial == state->last_event_frame_serial &&
-	       CompoundHookLiveBoltEqual(&state->bolt, bolt);
-}
-void CompoundHookLiveRemember(sg_compound_hook_live_state_t *state,
-	sg_compound_hook_live_event_t event, int frame_serial)
-{
-	state->last_event = event;
-	state->last_event_frame_serial = frame_serial;
-}
 qboolean CompoundHookLiveClear(const sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host)
 {
@@ -178,7 +150,8 @@ qboolean CompoundHookLiveClear(const sg_compound_hook_live_state_t *state,
 	sg_compound_hook_live_host_result_t hook =
 		host->bolt_clear(host->context, &state->snapshot, bolt);
 
-	return body == SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED &&
+	return (!state->recovery_sweep_dirty || state->segment_clear_ready) &&
+	       body == SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED &&
 	       hook == SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED;
 }
 void CompoundHookLiveClearLocal(sg_compound_hook_live_state_t *state)
@@ -201,6 +174,11 @@ void CompoundHookLiveClearLocal(sg_compound_hook_live_state_t *state)
 	state->recovering = false;
 	state->sweep_clear = false;
 	state->arrived = false;
+	state->command_origin_valid = false;
+	state->command_segment_checked = false;
+	state->segment_clear_ready = false;
+	state->recovery_sweep_dirty = false;
+	state->sweep_outside_since_ms = 0;
 	state->bolt_linked = false;
 	state->bolt_abort_applied = false;
 	state->hook_released = false;
@@ -234,64 +212,6 @@ sg_compound_hook_live_result_t CompoundHookLiveFinishRelease(
 	                          SG_COMPOUND_HOOK_LIVE_COMPLETE,
 	              SG_COMPOUND_HOOK_LIVE_FAILURE_NONE,
 	              SG_REPLAY_REASON_NONE, false);
-}
-
-sg_compound_hook_live_result_t SG_CompoundHookLiveBegin(
-	sg_compound_hook_live_state_t *state,
-	const sg_compound_hook_live_host_t *host, uint32_t link_index,
-	const sg_replay_pose_t *pose,
-	const sg_replay_observation_t *observation)
-{
-	sg_compound_hook_live_state_t candidate =
-		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
-	sg_compound_hook_live_host_result_t bound;
-	if (!state || !pose || !observation || !CompoundHookLiveHostValid(host) ||
-	    state->guard_owned || state->outer.phase != SG_COMPOUND_NONE)
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
-		    SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	bound = host->bind(host->context, link_index, &candidate.snapshot);
-	if (bound != SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveResult(bound == SG_COMPOUND_HOOK_LIVE_HOST_DENIED ?
-		              SG_COMPOUND_HOOK_LIVE_WAIT :
-		              SG_COMPOUND_HOOK_LIVE_REJECTED,
-		              SG_COMPOUND_HOOK_LIVE_FAILURE_BINDING,
-		              SG_REPLAY_REASON_NONE, false);
-	if (!SnapshotValid(&candidate.snapshot, link_index,
-	                   &candidate.hook_spec))
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_PLAN,
-		    SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	candidate.swim_link = -1;
-	candidate.hook_link = -1;
-	candidate.opening_safety.status = SG_REPLAY_RUNNING;
-	SG_HookLiveCommandGuardClear(&candidate.hook_command_guard);
-	if (!SG_CompoundBegin(&candidate.outer, (int)link_index,
-	                      candidate.snapshot.mover_key, RL_DOOR_HOOK,
-	                      RLCM_PREOPEN) ||
-	    !SG_CompoundAdvance(&candidate.outer, SG_COMPOUND_EVENT_APPROACH) ||
-	    !CompoundHookLiveBeginSwim(&candidate, pose, observation,
-	        candidate.snapshot.binding.link.mechanism_anchor, true,
-	        candidate.snapshot.binding.source.old_frame_z,
-	        SG_COMPOUND_HOOK_LIVE_CONTROL_APPROACH))
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
-		    candidate.swim.progress.reason, false);
-	if (host->source_checkpoint(host->context, &candidate.snapshot,
-	                            pose, observation) !=
-	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_SOURCE_CHECKPOINT,
-		    SG_REPLAY_REASON_INVALID_STATE, false);
-	if (host->acquire(host->context, &candidate.snapshot) !=
-	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_WAIT,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_ACQUIRE, SG_REPLAY_REASON_NONE,
-		    false);
-	candidate.guard_owned = true;
-	candidate.local_owned = true;
-	*state = candidate;
-	return CompoundHookLiveActive(state, false);
 }
 
 sg_compound_hook_live_result_t SG_CompoundHookLivePreStep(
@@ -370,11 +290,88 @@ sg_compound_hook_live_result_t SG_CompoundHookLivePreStep(
 		                    SG_REPLAY_REASON_INVALID_STATE);
 	}
 	state->expected_command = *command;
+	VectorCopy(pose->origin, state->command_origin);
+	state->command_origin_valid = true;
+	state->command_segment_checked = false;
 	state->command_pending = true;
 	state->command_approved = false;
 	state->command_replay_consumed = false;
 	return CompoundHookLiveActive(state, true);
 }
+
+static qboolean CommandEqual(const usercmd_t *first,
+	const usercmd_t *second)
+{
+	int axis;
+
+	if (!first || !second || first->msec != second->msec ||
+	    first->buttons != second->buttons ||
+	    first->forwardmove != second->forwardmove ||
+	    first->sidemove != second->sidemove ||
+	    first->upmove != second->upmove || first->impulse != second->impulse ||
+	    first->lightlevel != second->lightlevel)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (first->angles[axis] != second->angles[axis])
+			return false;
+	return true;
+}
+
+static void DiscardUnconsumedCommand(sg_compound_hook_live_state_t *state)
+{
+	memset(&state->expected_command, 0, sizeof(state->expected_command));
+	state->command_pending = false;
+	state->command_approved = false;
+	state->command_replay_consumed = false;
+	state->aborted_command_pending = false;
+	SG_HookLiveCommandGuardClear(&state->hook_command_guard);
+}
+
+sg_compound_hook_live_result_t SG_CompoundHookLiveApproveCommand(
+	sg_compound_hook_live_state_t *state, const usercmd_t *command)
+{
+	sg_hook_live_result_t hook_result;
+
+	if (!state || !state->guard_owned || !state->local_owned ||
+	    !state->command_pending || state->command_approved)
+		return state && state->guard_owned ?
+		       CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE,
+		                    SG_REPLAY_REASON_INVALID_STATE) :
+		       CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
+		           SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
+		           SG_REPLAY_REASON_INVALID_ARGUMENT, false);
+	if (!command)
+	{
+		DiscardUnconsumedCommand(state);
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
+		    SG_REPLAY_REASON_INVALID_CONTROL);
+	}
+	if (state->control == SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX)
+	{
+		hook_result = SG_HookLiveValidateStoredFinalCommand(&state->hook,
+		    &state->hook_active, &state->hook_link,
+		    (int)state->snapshot.binding.link_index, true,
+		    &state->hook_command_guard, command);
+		if (hook_result.outcome != SG_HOOK_LIVE_RUNNING)
+		{
+			DiscardUnconsumedCommand(state);
+			return CompoundHookLiveOwnedFailure(state,
+			    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
+			    hook_result.replay_reason);
+		}
+	}
+	else if (!CommandEqual(&state->expected_command, command))
+	{
+		DiscardUnconsumedCommand(state);
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
+		    SG_REPLAY_REASON_INVALID_CONTROL);
+	}
+	state->command_approved = true;
+	return CompoundHookLiveActive(state, false);
+}
+
 
 static sg_compound_hook_live_result_t SweepBoundary(
 	sg_compound_hook_live_state_t *state,
@@ -386,9 +383,20 @@ static sg_compound_hook_live_result_t SweepBoundary(
 		host->body_clear(host->context, &state->snapshot,
 		                 state->bolt_linked ? &state->bolt : NULL) ==
 		SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED;
-	if (!state->sweep_clear && elapsed >= state->snapshot.binding.sweep_clear_ms)
+	if (!state->sweep_clear && state->segment_clear_ready &&
+	    elapsed < state->snapshot.binding.sweep_clear_ms)
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP,
+		    SG_REPLAY_REASON_TIMING_MISMATCH);
+	if (!state->sweep_clear &&
+	    elapsed > state->snapshot.binding.sweep_clear_ms)
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP,
+		    SG_REPLAY_REASON_TIMING_MISMATCH);
+	if (!state->sweep_clear &&
+	    elapsed == state->snapshot.binding.sweep_clear_ms)
 	{
-		if (!body_clear)
+		if (!body_clear || !state->segment_clear_ready)
 			return CompoundHookLiveOwnedFailure(state,
 			    SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP,
 			    SG_REPLAY_REASON_INVALID_STATE);
@@ -439,6 +447,7 @@ static sg_compound_hook_live_result_t ConsumeStep(
 	qboolean waiting_attach;
 	qboolean replay_consumed;
 	qboolean aborted;
+	qboolean sweep_ok;
 	if (!state || !pose || !observation || !state->guard_owned ||
 	    !state->local_owned || !CompoundHookLiveHostValid(host))
 		return state && state->guard_owned ?
@@ -461,6 +470,8 @@ static sg_compound_hook_live_result_t ConsumeStep(
 	    CompoundHookLiveAuthorized(state, host) != SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
 		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_AUTHORITY,
 		                    SG_REPLAY_REASON_INVALID_STATE);
+	sweep_ok = state->command_segment_checked ||
+	           CompoundHookLiveObserveSweep(state, host, pose, next_ms);
 	control = state->control;
 	replay_consumed = state->command_replay_consumed;
 	waiting_attach = control == SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX &&
@@ -492,9 +503,15 @@ static sg_compound_hook_live_result_t ConsumeStep(
 	state->command_approved = false;
 	state->command_replay_consumed = false;
 	state->aborted_command_pending = false;
+	state->command_origin_valid = false;
+	state->command_segment_checked = false;
 	state->transaction_elapsed_ms = next_ms;
 	if (boundary)
 		state->last_boundary_ms = next_ms;
+	if (!sweep_ok)
+		return CompoundHookLiveOwnedFailure(state,
+		    SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP,
+		    SG_REPLAY_REASON_INVALID_STATE);
 	if (aborted)
 	{
 		state->swim_active = false;
@@ -609,132 +626,4 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveBoundary(
 	const sg_replay_observation_t *observation)
 {
 	return ConsumeStep(state, host, pose, observation, true);
-}
-
-sg_compound_hook_live_result_t SG_CompoundHookLiveTouch(
-	sg_compound_hook_live_state_t *state,
-	const sg_compound_hook_live_host_t *host, int trigger_key,
-	const sg_replay_pose_t *pose,
-	const sg_replay_observation_t *observation, int frame_serial)
-{
-	sg_replay_status_t status;
-	if (!state || !state->guard_owned || !state->local_owned ||
-	    !pose || !observation || !CompoundHookLiveHostValid(host))
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
-		    SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	if (CompoundHookLiveAuthorized(state, host) != SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_AUTHORITY,
-		                    SG_REPLAY_REASON_INVALID_STATE);
-	if (state->outer.phase != SG_COMPOUND_APPROACH ||
-	    state->control != SG_COMPOUND_HOOK_LIVE_CONTROL_APPROACH ||
-	    !state->command_pending || !state->command_approved ||
-	    state->command_replay_consumed ||
-	    trigger_key != state->snapshot.trigger_key ||
-	    frame_serial <= 0 ||
-	    state->transaction_elapsed_ms > INT_MAX - SG_REPLAY_STEP_MS ||
-	    state->transaction_elapsed_ms + SG_REPLAY_STEP_MS !=
-	        state->snapshot.binding.touch_ms)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_TOUCH,
-		                    SG_REPLAY_REASON_TIMING_MISMATCH);
-	status = SG_SwimReplayPostStep(&state->swim, pose, observation);
-	if (status != SG_REPLAY_RUNNING && status != SG_REPLAY_ARRIVED)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_TOUCH,
-		                    state->swim.progress.reason);
-	state->command_replay_consumed = true;
-	if (!SG_CompoundAdvance(&state->outer, SG_COMPOUND_EVENT_TOUCH))
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_TOUCH,
-		                    SG_REPLAY_REASON_INVALID_STATE);
-	state->touch_frame_serial = frame_serial;
-	return CompoundHookLiveActive(state, false);
-}
-sg_compound_hook_live_result_t SG_CompoundHookLiveActivate(
-	sg_compound_hook_live_state_t *state,
-	const sg_compound_hook_live_host_t *host, int trigger_key,
-	int mover_key, int frame_serial)
-{
-	if (!state || !state->guard_owned || !state->local_owned ||
-	    !CompoundHookLiveHostValid(host))
-		return CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
-		    SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	if (CompoundHookLiveAuthorized(state, host) != SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_AUTHORITY,
-		                    SG_REPLAY_REASON_INVALID_STATE);
-	if (state->outer.phase != SG_COMPOUND_TOUCHED ||
-	    trigger_key != state->snapshot.trigger_key ||
-	    mover_key != state->snapshot.mover_key ||
-	    frame_serial != state->touch_frame_serial ||
-	    !SG_CompoundAdvance(&state->outer, SG_COMPOUND_EVENT_ACTIVATE))
-		return CompoundHookLiveOwnedFailure(state,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_ACTIVATION,
-		    SG_REPLAY_REASON_INVALID_STATE);
-	state->swim_active = false;
-	state->swim_link = -1;
-	memset(&state->opening_safety, 0, sizeof(state->opening_safety));
-	state->opening_safety.status = SG_REPLAY_RUNNING;
-	state->opening_safety.old_frame_z = state->swim.progress.old_frame_z;
-	state->control = SG_COMPOUND_HOOK_LIVE_CONTROL_OPENING;
-	return CompoundHookLiveActive(state, false);
-}
-
-sg_compound_hook_live_result_t SG_CompoundHookLiveLinked(
-	sg_compound_hook_live_state_t *state,
-	const sg_compound_hook_live_host_t *host,
-	const sg_compound_hook_live_bolt_t *bolt, int frame_serial,
-	const sg_replay_pose_t *pose,
-	const sg_replay_observation_t *observation)
-{
-	sg_hook_live_result_t hook_result;
-	if (!state || !pose || !observation || !state->guard_owned ||
-	    !state->local_owned || !CompoundHookLiveHostValid(host) ||
-	    !CompoundHookLiveBoltValid(bolt))
-		return state && state->guard_owned ?
-		       CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_LINK,
-		                    SG_REPLAY_REASON_INVALID_ARGUMENT) :
-		       CompoundHookLiveResult(SG_COMPOUND_HOOK_LIVE_REJECTED,
-		           SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
-		           SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	if (CompoundHookLiveAuthorized(state, host) != SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_LINK,
-		                    SG_REPLAY_REASON_INVALID_STATE);
-	if (host->event_authorize(host->context, &state->snapshot,
-	                          SG_COMPOUND_HOOK_LIVE_EVENT_LINKED, bolt) !=
-	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveOwnedFailure(state,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY,
-		    SG_REPLAY_REASON_INVALID_STATE);
-	if (CompoundHookLiveDuplicate(state, SG_COMPOUND_HOOK_LIVE_EVENT_LINKED,
-	              bolt, frame_serial))
-		return CompoundHookLiveActive(state, false);
-	if (state->bolt_linked || state->outer.phase != SG_COMPOUND_TOP ||
-	    frame_serial <= state->touch_frame_serial || state->command_pending)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_LINK,
-		                    SG_REPLAY_REASON_INVALID_STATE);
-	if (host->hold_open(host->context, &state->snapshot,
-	                    SG_COMPOUND_HOLD_LEASE_MS) !=
-	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_HOLD,
-		                    SG_REPLAY_REASON_INVALID_STATE);
-	if (host->suffix_checkpoint(host->context, &state->snapshot,
-	                            pose, observation) !=
-	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
-		return CompoundHookLiveOwnedFailure(state,
-		    SG_COMPOUND_HOOK_LIVE_FAILURE_SUFFIX_CHECKPOINT,
-		    SG_REPLAY_REASON_INVALID_STATE);
-	hook_result = SG_HookLiveBegin(&state->hook, &state->hook_active,
-	    &state->hook_link, (int)state->snapshot.binding.link_index, true,
-	    &state->hook_spec, pose, observation,
-	    state->snapshot.binding.suffix.old_frame_z,
-	    &state->hook_command_guard);
-	if (hook_result.outcome != SG_HOOK_LIVE_RUNNING ||
-	    !SG_CompoundAdvance(&state->outer,
-	                        SG_COMPOUND_EVENT_SUFFIX_BEGIN))
-		return CompoundHookLiveOwnedFailure(state, SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY,
-		                    hook_result.replay_reason);
-	state->bolt = *bolt;
-	state->bolt_linked = true;
-	state->control = SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX;
-	CompoundHookLiveRemember(state, SG_COMPOUND_HOOK_LIVE_EVENT_LINKED, frame_serial);
-	return CompoundHookLiveActive(state, false);
 }

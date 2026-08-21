@@ -1,0 +1,566 @@
+#include "sg_compound_oracle_fixture.h"
+
+static void TestDeclaredActivatorRejectsCaseFoldedKilltargets(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *source;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 1);
+	CHECK(members[0] == door);
+
+	source = &fixture_edicts[GUARD_SOURCE_KEY];
+	source->inuse = true;
+	source->classname = "trigger_relay";
+	trigger->targetname = "GateTrigger";
+	source->killtarget = "gatetrigger";
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	source = &fixture_edicts[GUARD_SOURCE_KEY];
+	source->inuse = true;
+	source->classname = "trigger_relay";
+	door->targetname = "GateDoor";
+	source->killtarget = "gatedoor";
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredActivatorAcceptsMasterThenSlaveFanout(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *trigger;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	master->team = "paired-gate";
+	member->team = "paired-gate";
+	master->teamchain = member;
+	member->teammaster = master;
+	member->flags |= FL_TEAMSLAVE;
+	master->targetname = "SharedGate";
+	member->targetname = "sharedgate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "SHAREDGATE";
+
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 2);
+	CHECK(members[0] == master);
+	CHECK(members[1] == member);
+
+	/* A slave-only target remains unrepresentable: direct door_use on it is a
+	 * no-op and cannot establish controller authority for the team. */
+	master->targetname = "other";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredActivatorDelayedSoundTerminal(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *relay;
+	edict_t *relay2;
+	edict_t *speaker;
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "TimedGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "TimedGate";
+	relay = &fixture_edicts[GUARD_SOURCE_KEY];
+	relay->inuse = true;
+	relay->classname = "trigger_relay";
+	relay->use = trigger_relay_use;
+	relay->targetname = "TimedGate";
+	relay->target = "TimedGateClose";
+	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "TimedGateClose";
+
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 1000);
+
+	/* lmctf58 schedules only the close sound through this relay.  The plan
+	 * authenticates the inbound ordinal but consumes the positive-delay relay
+	 * before DelayedUse allocation, so the physical door remains representable. */
+	relay->delay = 311.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 1000);
+
+	relay->delay = 0.0f;
+	relay->target = "TimedGateRelay";
+	relay2 = speaker;
+	relay2->classname = "trigger_relay";
+	relay2->use = trigger_relay_use;
+	relay2->targetname = "TimedGateRelay";
+	relay2->target = "TimedGateCloseNested";
+	relay2->delay = 0.0f;
+	speaker = &fixture_edicts[FIXTURE_EDICTS - 1];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "TimedGateCloseNested";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	relay2->delay = 0.001f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 1000);
+	relay2->delay = 0.0f;
+	relay2->killtarget = "TimedGate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay2->killtarget = NULL;
+	relay2->target = "TimedGateRelay";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay2->target = "TimedGateCloseNested";
+	speaker->use = door_use;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	speaker->use = Use_Target_Speaker;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+
+	trigger->wait = 30.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == RUNE_MAX_COST_MS);
+	trigger->wait = nextafterf(30.0f, INFINITY);
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == RUNE_MAX_COST_MS);
+	trigger->wait = 312.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 312000);
+	trigger->wait = 312.0004f;
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) == 312000);
+
+	/* Exact lmctf58 controller waits contribute only the true post-close rearm
+	 * gap; a long open hold is not charged as execution time. */
+	trigger->wait = 312.0f;
+	door->moveinfo.distance = 90.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 15.0f;
+	door->moveinfo.wait = 300.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == 14900);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == 0);
+	trigger->wait = 63.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 100.0f;
+	door->moveinfo.wait = 60.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == 5500);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == 800);
+	trigger->wait = 304.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 56.0f;
+	door->moveinfo.wait = 300.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == 6500);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == 384);
+	trigger->wait = nextafterf((float)INT_MAX / 1000.0f, 0.0f);
+	CHECK(SG_DeclaredDoorTriggerWaitMs(trigger) > INT_MAX - 1000);
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == -1);
+	trigger->wait = 312.0f;
+	door->moveinfo.wait = FLT_MAX;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == -1);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == -1);
+	door->moveinfo.wait = 300.0f;
+	door->moveinfo.distance = FLT_MAX;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 1.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, 1000, 500, 500) == -1);
+	CHECK(SG_RuneTestDoorCooldownGapMs(trigger) == -1);
+	door->moveinfo.distance = 90.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 56.0f;
+	CHECK(SG_DeclaredDoorContractCost(trigger, INT_MAX, 1, INT_MAX) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "DoorTimedGate";
+	door->target = "DoorTimedRelay";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "DoorTimedGate";
+	relay = &fixture_edicts[GUARD_SOURCE_KEY];
+	relay->inuse = true;
+	relay->classname = "trigger_relay";
+	relay->use = trigger_relay_use;
+	relay->targetname = "DoorTimedRelay";
+	relay->target = "DoorTimedClose";
+	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "DoorTimedClose";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	relay->delay = 61.0f;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	relay->killtarget = "DoorTimedGate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+}
+
+static void TestDeclaredActivatorRejectsTeamAuthorityDrift(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *trigger;
+	edict_t *foreign;
+
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	foreign = GuardDoor(GUARD_EXTRA_KEY);
+	master->team = "paired-gate";
+	member->team = "paired-gate";
+	master->teamchain = member;
+	member->teammaster = master;
+	member->flags |= FL_TEAMSLAVE;
+	master->targetname = "SharedGate";
+	member->targetname = "sharedgate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "SHAREDGATE";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+
+	member->flags &= ~FL_TEAMSLAVE;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->flags |= FL_TEAMSLAVE;
+	master->teammaster = foreign;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	master->teammaster = master;
+	member->teammaster = foreign;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->teammaster = master;
+	member->team = "other-team";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->team = "paired-gate";
+	member->teamchain = master;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	member->teamchain = NULL;
+	master->teamchain = NULL;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+
+	/* The synthesized trigger calls door_use(owner), not owner->teammaster.
+	 * Only the exact canonical captain may own it. */
+	master->teamchain = member;
+	Trigger(trigger, master, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	member->flags &= ~FL_TEAMSLAVE;
+	trigger->owner = member;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+
+	/* A coherent-looking singleton is not canonical when an earlier live edict
+	 * has the same team: G_FindTeams would make the earlier edict captain. */
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	master->team = "same-team";
+	member->team = "same-team";
+	member->targetname = "LaterGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "latergate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	member = GuardDoor(GUARD_MEMBER_KEY);
+	foreign = GuardDoor(GUARD_EXTRA_KEY);
+	master->team = "ordered-team";
+	member->team = "ordered-team";
+	foreign->team = "ordered-team";
+	master->teamchain = foreign;
+	foreign->teamchain = member;
+	foreign->teammaster = master;
+	member->teammaster = master;
+	foreign->flags |= FL_TEAMSLAVE;
+	member->flags |= FL_TEAMSLAVE;
+	master->targetname = "OrderedGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "orderedgate";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+}
+
+static void TestDeclaredActivatorRejectsMalformedWorldBounds(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->targetname = "bounded-trigger";
+	globals.num_edicts = MAX_EDICTS;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->targetname = "bounded-trigger";
+	globals.max_edicts = FIXTURE_EDICTS - 1;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->targetname = "bounded-trigger";
+	game.maxentities = MAX_EDICTS + 1;
+	globals.max_edicts = game.maxentities;
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
+}
+
+static void TestDeclaredDoorHoldMembersIsAtomic(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *members[2];
+	float master_before;
+	float member_before;
+
+	GuardDoorPair(&master, &member);
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	member->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+
+	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	master->moveinfo.endfunc = door_hit_top;
+	member->moveinfo.endfunc = door_hit_top;
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_TOP);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_TOP);
+	CHECK(SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == level.time + 0.5f);
+	CHECK(member->nextthink == level.time + 0.5f);
+}
+
+static void TestDeclaredDoorHoldMembersRequiresClosedTeam(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *extra;
+	edict_t *members[2];
+	float master_before;
+	float member_before;
+
+	GuardDoorPair(&master, &member);
+	members[0] = master;
+	master_before = master->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 1, 500));
+	CHECK(master->nextthink == master_before);
+
+	GuardDoorPair(&master, &member);
+	extra = GuardDoor(GUARD_EXTRA_KEY);
+	member->teamchain = extra;
+	extra->teammaster = master;
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+
+	GuardDoorPair(&master, &member);
+	member->teamchain = master;
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+}
+
+static void TestDeclaredDoorHoldMembersRejectsForeignPointers(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *members[2];
+	edict_t *foreign = fixture_edicts + FIXTURE_EDICTS;
+	float master_before;
+	float member_before;
+
+	GuardDoorPair(&master, &member);
+	members[0] = foreign;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 1, 500));
+
+	GuardDoorPair(&master, &member);
+	master->teammaster = foreign;
+	members[0] = master;
+	members[1] = member;
+	master_before = master->nextthink;
+	member_before = member->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 2, 500));
+	CHECK(master->nextthink == master_before);
+	CHECK(member->nextthink == member_before);
+
+	GuardDoorPair(&master, &member);
+	master->teamchain = foreign;
+	members[0] = master;
+	master_before = master->nextthink;
+	CHECK(!SG_DeclaredDoorHoldMembers(members, 1, 500));
+	CHECK(master->nextthink == master_before);
+}
+
+static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
+{
+	edict_t *master;
+	edict_t *member;
+	edict_t *members[2];
+
+	GuardDoorPair(&master, &member);
+	members[0] = master;
+	members[1] = member;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+
+	master->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	VectorCopy(master->moveinfo.end_origin, master->s.origin);
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+
+	VectorCopy(master->moveinfo.start_origin, master->s.origin);
+	HostLinkEntity(master);
+	member->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	master->nextthink = 0.0f;
+	member->nextthink = 0.0f;
+	/* An untouched door has no movement completion callback yet. */
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+
+	/* SV_Push independently rounds every linear delta to one eighth.  Stock
+	 * completion evidence remains authoritative even when a diagonal door's
+	 * final linked pose is not bit-equal to its unquantized endpoint. */
+	Set3(master->s.origin, 0.125f, 0.125f, 0.0f);
+	master->moveinfo.endfunc = door_hit_bottom;
+	member->moveinfo.endfunc = door_hit_bottom;
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_BOTTOM);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_BOTTOM);
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+	master->s.origin[0] += 100000.0f;
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	Set3(master->s.origin, 0.125f, 0.125f, 0.0f);
+	HostLinkEntity(master);
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_BOTTOM);
+	master->moveinfo.endfunc = door_hit_top;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	master->moveinfo.endfunc = door_hit_bottom;
+
+	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	member->moveinfo.wait = -1.0f;
+	VectorCopy(member->moveinfo.end_origin, member->s.origin);
+	VectorCopy(member->moveinfo.end_angles, member->s.angles);
+	member->moveinfo.endfunc = door_hit_top;
+	HostLinkEntity(member);
+	PublishDoorCompletion(member, SG_MOVER_COMPLETION_TOP);
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 2));
+	member->nextthink = level.time + 1.0f;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+	member->nextthink = 0.0f;
+	member->velocity[0] = 1.0f;
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 2));
+
+	/* AngleMove_Final divides and the pusher multiplies by 0.1f.  The stock
+	 * terminal can therefore land just beyond the nominal endpoint. */
+	ResetGuardFixture();
+	master = GuardDoor(GUARD_MASTER_KEY);
+	members[0] = master;
+	master->classname = "func_door_rotating";
+	master->teamchain = NULL;
+	master->teammaster = master;
+	Set3(master->moveinfo.start_angles, 0.0f, -167.3114776611328f, 0.0f);
+	Set3(master->moveinfo.end_angles, 0.0f, 5.26661491394043f, 0.0f);
+	Set3(master->s.angles, 0.0f, 5.266632080078125f, 0.0f);
+	master->moveinfo.distance = 172.57809448242188f;
+	master->moveinfo.state = SG_PLAT_STATE_TOP;
+	master->moveinfo.wait = -1.0f;
+	master->nextthink = 0.0f;
+	master->moveinfo.endfunc = door_hit_top;
+	VectorClear(master->velocity);
+	VectorClear(master->avelocity);
+	HostLinkEntity(master);
+	PublishDoorCompletion(master, SG_MOVER_COMPLETION_TOP);
+	CHECK(SG_DeclaredDoorMembersTerminal(members, 1));
+	CHECK(SG_DeclaredDoorHoldMembers(members, 1, 500));
+	master->s.angles[1] = master->moveinfo.end_angles[1] + 0.01f;
+	HostLinkEntity(master);
+	CHECK(!SG_DeclaredDoorMembersTerminal(members, 1));
+}
+
+
+int SG_CompoundDeclaredOracleCasesRun(void)
+{
+	int before = failures;
+
+	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
+	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
+	TestDeclaredActivatorDelayedSoundTerminal();
+	TestDeclaredActivatorRejectsTeamAuthorityDrift();
+	TestDeclaredActivatorRejectsMalformedWorldBounds();
+	TestDeclaredDoorHoldMembersIsAtomic();
+	TestDeclaredDoorHoldMembersRequiresClosedTeam();
+	TestDeclaredDoorHoldMembersRejectsForeignPointers();
+	TestDeclaredDoorMembersTerminalRequiresPhysicalPose();
+	return failures - before;
+}

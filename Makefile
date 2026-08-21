@@ -134,22 +134,30 @@ COMPOUND_GEN_TEST_ALL_ARTIFACTS := \
 	.sg_compound_gen_game_under_test.make.o \
 	.sg_compound_gen_game_under_test.make.d
 COMPOUND_PUBLICATION_TEST_BIN := sg_compound_publication_test.make
+COMPOUND_PUBLICATION_CASE_STEMS := compound_publication_fixture \
+	compound_publication_core_cases compound_hook_publication_cases
+COMPOUND_PUBLICATION_CASE_MAKE_OBJS := \
+	$(addprefix .sg_,$(addsuffix .make.o,$(COMPOUND_PUBLICATION_CASE_STEMS)))
 COMPOUND_PUBLICATION_TEST_OBJS := .sg_compound_publication_test.make.o \
-	.sg_compound_publication_under_test.make.o
+	$(COMPOUND_PUBLICATION_CASE_MAKE_OBJS) \
+	.sg_compound_publication_under_test.make.o \
+	.sg_compound_publication_build_under_test.make.o \
+	.sg_compound_action_publication_for_publication_test.make.o
 COMPOUND_PUBLICATION_TEST_DEPS := $(COMPOUND_PUBLICATION_TEST_OBJS:.o=.d)
 COMPOUND_PUBLICATION_INTEGRATION_TEST := \
 	tests/test_compound_publication_integration.py
 COMPOUND_ACTION_INTEGRATION_TEST := tests/test_compound_action_contracts.sh
 MECHANISM_PUBLICATION_INTEGRATION_TEST := \
 	tests/test_mechanism_publication_integration.py
+COMPOUND_PUBLICATION_ARTIFACT_STEMS := compound_publication_test \
+	$(COMPOUND_PUBLICATION_CASE_STEMS) compound_publication_under_test \
+	compound_publication_build_under_test \
+	compound_action_publication_for_publication_test
 COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS := \
 	sg_compound_publication_test.gnu sg_compound_publication_test.make \
-	.sg_compound_publication_test.gnu.o \
-	.sg_compound_publication_test.gnu.d \
-	.sg_compound_publication_under_test.gnu.o \
-	.sg_compound_publication_under_test.gnu.d \
-	$(COMPOUND_PUBLICATION_TEST_OBJS) \
-	$(COMPOUND_PUBLICATION_TEST_DEPS)
+	$(foreach flavor,gnu make,$(foreach stem, \
+		$(COMPOUND_PUBLICATION_ARTIFACT_STEMS), \
+		.sg_$(stem).$(flavor).o .sg_$(stem).$(flavor).d))
 IDENTITY_TEST_BIN := sg_identity_test.make
 IDENTITY_TEST_OBJS := .sg_identity_test.make.o .sg_identity_under_test.make.o \
 	.sg_crc32_under_test.make.o
@@ -688,36 +696,69 @@ MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS := \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.d \
 	$(MOVER_SUBJECT_SWEEP_TEST_OBJS) \
 	$(MOVER_SUBJECT_SWEEP_TEST_DEPS)
+COMPOUND_ORACLE_FIXTURE_STEMS := compound_oracle_fake_game \
+	compound_oracle_fake_host compound_oracle_fixture \
+	compound_swim_oracle_preopen_cases \
+	compound_swim_oracle_recovery_cases compound_declared_oracle_cases \
+	compound_hook_oracle_scenario
+COMPOUND_ORACLE_FIXTURE_MAKE_OBJS := \
+	$(addprefix .sg_,$(addsuffix .make.o,$(COMPOUND_ORACLE_FIXTURE_STEMS)))
+COMPOUND_ORACLE_ARTIFACT_STEMS := compound_swim_oracle_test \
+	compound_hook_oracle_test compound_hook_oracle_fixture \
+	$(COMPOUND_ORACLE_FIXTURE_STEMS) \
+	compound_swim_oracle_oracle_under_test \
+	compound_swim_oracle_rune_timing_under_test \
+	compound_swim_oracle_replay_under_test \
+	compound_swim_oracle_compound_under_test \
+	compound_swim_oracle_world_under_test \
+	compound_swim_oracle_q_shared_under_test \
+	mover_subject_sweep_util_under_test
+COMPOUND_ORACLE_ALL_ARTIFACTS := \
+	sg_compound_swim_oracle_test.gnu sg_compound_swim_oracle_test.make \
+	sg_compound_hook_oracle_test.gnu sg_compound_hook_oracle_test.make \
+	$(foreach flavor,gnu make,$(foreach stem, \
+		$(COMPOUND_ORACLE_ARTIFACT_STEMS), \
+		.sg_$(stem).$(flavor).o .sg_$(stem).$(flavor).d))
 COMPOUND_SWIM_ORACLE_TEST_BIN := sg_compound_swim_oracle_test.make
 COMPOUND_SWIM_ORACLE_TEST_OBJS := \
 	.sg_compound_swim_oracle_test.make.o \
+	.sg_compound_oracle_fake_game.make.o \
+	.sg_compound_oracle_fake_host.make.o \
+	.sg_compound_oracle_fixture.make.o \
+	.sg_compound_swim_oracle_preopen_cases.make.o \
+	.sg_compound_swim_oracle_recovery_cases.make.o \
+	.sg_compound_declared_oracle_cases.make.o \
 	.sg_compound_swim_oracle_oracle_under_test.make.o \
 	.sg_compound_swim_oracle_rune_timing_under_test.make.o \
 	.sg_compound_swim_oracle_replay_under_test.make.o \
 	.sg_compound_swim_oracle_compound_under_test.make.o \
 	.sg_compound_swim_oracle_world_under_test.make.o \
 	.sg_rocketjump_live_under_test.make.o \
-	.sg_compound_swim_oracle_q_shared_under_test.make.o
+	.sg_compound_swim_oracle_q_shared_under_test.make.o \
+	.sg_mover_subject_sweep_util_under_test.make.o
 COMPOUND_SWIM_ORACLE_TEST_DEPS := \
 	$(COMPOUND_SWIM_ORACLE_TEST_OBJS:.o=.d)
 COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS := \
-	sg_compound_swim_oracle_test.gnu sg_compound_swim_oracle_test.make \
-	.sg_compound_swim_oracle_test.gnu.o \
-	.sg_compound_swim_oracle_test.gnu.d \
-	.sg_compound_swim_oracle_oracle_under_test.gnu.o \
-	.sg_compound_swim_oracle_oracle_under_test.gnu.d \
-	.sg_compound_swim_oracle_rune_timing_under_test.gnu.o \
-	.sg_compound_swim_oracle_rune_timing_under_test.gnu.d \
-	.sg_compound_swim_oracle_replay_under_test.gnu.o \
-	.sg_compound_swim_oracle_replay_under_test.gnu.d \
-	.sg_compound_swim_oracle_compound_under_test.gnu.o \
-	.sg_compound_swim_oracle_compound_under_test.gnu.d \
-	.sg_compound_swim_oracle_world_under_test.gnu.o \
-	.sg_compound_swim_oracle_world_under_test.gnu.d \
-	.sg_compound_swim_oracle_q_shared_under_test.gnu.o \
-	.sg_compound_swim_oracle_q_shared_under_test.gnu.d \
-	$(COMPOUND_SWIM_ORACLE_TEST_OBJS) \
-	$(COMPOUND_SWIM_ORACLE_TEST_DEPS)
+	$(COMPOUND_ORACLE_ALL_ARTIFACTS)
+COMPOUND_HOOK_ORACLE_TEST_BIN := sg_compound_hook_oracle_test.make
+COMPOUND_HOOK_ORACLE_TEST_OBJS := \
+	.sg_compound_hook_oracle_test.make.o \
+	.sg_compound_hook_oracle_fixture.make.o \
+	.sg_compound_hook_oracle_scenario.make.o \
+	.sg_compound_oracle_fake_game.make.o \
+	.sg_compound_oracle_fake_host.make.o \
+	.sg_compound_oracle_fixture.make.o \
+	.sg_compound_swim_oracle_oracle_under_test.make.o \
+	.sg_compound_swim_oracle_rune_timing_under_test.make.o \
+	.sg_compound_swim_oracle_replay_under_test.make.o \
+	.sg_compound_swim_oracle_compound_under_test.make.o \
+	.sg_compound_swim_oracle_world_under_test.make.o \
+	.sg_compound_swim_oracle_q_shared_under_test.make.o \
+	.sg_mover_subject_sweep_util_under_test.make.o
+COMPOUND_HOOK_ORACLE_TEST_DEPS := \
+	$(COMPOUND_HOOK_ORACLE_TEST_OBJS:.o=.d)
+COMPOUND_HOOK_ORACLE_TEST_ALL_ARTIFACTS := \
+	$(COMPOUND_ORACLE_ALL_ARTIFACTS)
 RUNE_DOOR_SCOPE_TEST_BIN := sg_rune_door_scope_test.make
 RUNE_DOOR_SCOPE_TEST_OBJS := .sg_rune_door_scope_test.make.o \
 	.sg_rune_door_scope_under_test.make.o
@@ -1024,6 +1065,7 @@ OBJS := \
 	slipgate/sg_compound_gen_game.o \
 	slipgate/sg_compound_action_gen.o \
 	slipgate/sg_compound_publication.o \
+	slipgate/sg_compound_publication_build.o \
 	slipgate/sg_compound_action_publication.o \
 	slipgate/sg_compound_drop_live.o \
 	slipgate/sg_compound_drop_live_finish.o \
@@ -1137,7 +1179,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test maplist-rotation-test \
-	compound-swim-oracle-test rune-door-scope-test \
+	compound-swim-oracle-test compound-hook-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
 
 FORCE:
@@ -1213,8 +1255,16 @@ slipgate/sg_compound_action_gen.o: slipgate/sg_compound_action_gen.c \
 		slipgate/sg_compound_action_gen.h slipgate/sg_compound.h \
 		slipgate/sg_action.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_compound_publication.o: slipgate/sg_compound_publication.c \
-		slipgate/sg_compound_publication.h slipgate/sg_compound_world.h \
+		slipgate/sg_compound_publication.h \
+		slipgate/sg_compound_publication_internal.h \
+		slipgate/sg_compound_world.h \
 		slipgate/sg_local.h slipgate/sg_rune.h g_local.h
+slipgate/sg_compound_publication_build.o: \
+		slipgate/sg_compound_publication_build.c \
+		slipgate/sg_compound_publication.h \
+		slipgate/sg_compound_publication_internal.h \
+		slipgate/sg_compound_world.h slipgate/sg_local.h slipgate/sg_util.h \
+		slipgate/sg_rune.h g_local.h
 slipgate/sg_compound_action_publication.o: \
 		slipgate/sg_compound_action_publication.c \
 		slipgate/sg_compound_action_publication.h \
@@ -1287,6 +1337,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(ROTATOR_SWEEP_TEST_DEPS)
 -include $(MOVER_SUBJECT_SWEEP_TEST_DEPS)
 -include $(COMPOUND_SWIM_ORACLE_TEST_DEPS)
+-include $(COMPOUND_HOOK_ORACLE_TEST_DEPS)
 -include $(RUNE_DOOR_SCOPE_TEST_DEPS)
 -include $(ENTFILE_TEST_DEPS)
 
@@ -1554,6 +1605,11 @@ $(COMPOUND_SWIM_ORACLE_TEST_BIN): $(COMPOUND_SWIM_ORACLE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ \
 		$(COMPOUND_SWIM_ORACLE_TEST_OBJS) $(LIBS)
+
+$(COMPOUND_HOOK_ORACLE_TEST_BIN): $(COMPOUND_HOOK_ORACLE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -Wl,--gc-sections -o $@ \
+		$(COMPOUND_HOOK_ORACLE_TEST_OBJS) $(LIBS)
 
 $(RUNE_DOOR_SCOPE_TEST_BIN): $(RUNE_DOOR_SCOPE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -1829,15 +1885,41 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_compound_publication_test.make.o: \
 		tests/sg_compound_publication_test.c \
-		slipgate/sg_compound_publication.h $(REVISION_HEADER)
+		tests/sg_compound_publication_fixture.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+$(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
+		tests/sg_compound_publication_fixture.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -Itests -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_compound_publication_under_test.make.o: \
 		slipgate/sg_compound_publication.c \
-		slipgate/sg_compound_publication.h $(REVISION_HEADER)
+		slipgate/sg_compound_publication.h \
+		slipgate/sg_compound_publication_internal.h slipgate/sg_util.h \
+		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_publication_build_under_test.make.o: \
+		slipgate/sg_compound_publication_build.c \
+		slipgate/sg_compound_publication.h \
+		slipgate/sg_compound_publication_internal.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_action_publication_for_publication_test.make.o: \
+		slipgate/sg_compound_action_publication.c \
+		slipgate/sg_compound_action_publication.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -Wno-strict-prototypes -I. -MMD -MP \
@@ -2606,7 +2688,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_compound_hook_live_under_test.make.o: \
 		slipgate/sg_compound_hook_live.c \
-		slipgate/sg_compound_hook_live.h $(REVISION_HEADER)
+		slipgate/sg_compound_hook_live.h \
+		slipgate/sg_compound_hook_live_internal.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
@@ -2752,6 +2835,32 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -Wno-strict-prototypes \
 		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_oracle_test.make.o: \
+		tests/sg_compound_hook_oracle_test.c \
+		tests/sg_compound_hook_oracle_fixture.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections \
+		-Itests -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_oracle_fixture.make.o: \
+		tests/sg_compound_hook_oracle_fixture.c \
+		tests/sg_compound_hook_oracle_fixture.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections \
+		-Itests -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+$(COMPOUND_ORACLE_FIXTURE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
+		tests/sg_compound_oracle_fixture.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes \
+		-ffunction-sections -fdata-sections -Itests -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_compound_swim_oracle_oracle_under_test.make.o: \
@@ -3408,6 +3517,10 @@ compound-swim-oracle-test: $(COMPOUND_SWIM_ORACLE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
 
+compound-hook-oracle-test: $(COMPOUND_HOOK_ORACLE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_HOOK_ORACLE_TEST_BIN)
+
 rune-door-scope-test: $(RUNE_DOOR_SCOPE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(RUNE_DOOR_SCOPE_TEST_BIN)
@@ -3446,6 +3559,7 @@ clean:
 		$(COMPOUND_DROP_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_HOOK_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_HOOK_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 		$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \
 		$(BUTTON_GAME_TEST_ALL_ARTIFACTS) \

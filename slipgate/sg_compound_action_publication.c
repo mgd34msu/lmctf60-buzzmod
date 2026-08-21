@@ -1,4 +1,5 @@
 /* Loader-replayed suffix plans for compound door links. */
+#include "../g_local.h"
 #include "sg_compound_action_publication.h"
 
 #include <math.h>
@@ -10,6 +11,12 @@ static qboolean ActionPublicationFinite3(const float value[3])
 {
 	return value && isfinite(value[0]) && isfinite(value[1]) &&
 	       isfinite(value[2]);
+}
+
+static qboolean ActionPublicationControlAngleValid(float angle)
+{
+	return isfinite(angle) && angle >= -180.0f && angle < 180.0f &&
+	       SHORT2ANGLE((short)ANGLE2SHORT(angle)) == angle;
 }
 
 static qboolean ActionPublicationTimingValid(
@@ -84,10 +91,8 @@ static qboolean ActionPublicationHookSpecValid(
 	    spec->view_angles[PITCH] < -89.0f ||
 	    spec->view_angles[PITCH] > 89.0f ||
 	    spec->view_angles[ROLL] != 0.0f ||
-	    SHORT2ANGLE((short)ANGLE2SHORT(spec->view_angles[PITCH])) !=
-	        spec->view_angles[PITCH] ||
-	    SHORT2ANGLE((short)ANGLE2SHORT(spec->view_angles[YAW])) !=
-	        spec->view_angles[YAW] ||
+	    !ActionPublicationControlAngleValid(spec->view_angles[PITCH]) ||
+	    !ActionPublicationControlAngleValid(spec->view_angles[YAW]) ||
 	    spec->flight_ms < SG_REPLAY_FRAME_MS ||
 	    spec->flight_ms > SG_REPLAY_HOOK_FLIGHT_MAX_MS ||
 	    spec->flight_ms % SG_REPLAY_FRAME_MS != 0 ||
@@ -100,7 +105,7 @@ static qboolean ActionPublicationHookSpecValid(
 	    spec->expected_pull_ms > SG_REPLAY_HOOK_PULL_LIMIT_MS ||
 	    spec->expected_pull_ms % SG_REPLAY_FRAME_MS != 0 ||
 	    spec->expected_release_ms > spec->expected_pull_ms ||
-	    spec->expected_settle_arrival_ms <= 0 ||
+	    spec->expected_settle_arrival_ms < 0 ||
 	    spec->expected_settle_arrival_ms % SG_REPLAY_STEP_MS != 0 ||
 	    spec->expected_settle_ms <= 0 ||
 	    spec->expected_settle_ms % SG_REPLAY_FRAME_MS != 0 ||
@@ -138,17 +143,18 @@ qboolean SG_CompoundDropPublicationPlan(
 
 qboolean SG_CompoundHookPublicationPlan(
 	const sg_compound_publication_binding_t *binding,
-	const sg_compound_hook_publication_proof_t *proof,
 	sg_hook_replay_spec_t *spec_out)
 {
+	const sg_compound_hook_publication_proof_t *proof;
 	long long suffix_ms;
 	int flight_ms;
 
 	if (spec_out)
 		memset(spec_out, 0, sizeof(*spec_out));
-	if (!spec_out || !binding || !proof ||
+	if (!spec_out || !binding ||
 	    !ActionPublicationLinkValid(binding, RL_DOOR_HOOK))
 		return false;
+	proof = &binding->hook_proof;
 	flight_ms = (int)ceilf(binding->link.anchor[ROLL] /
 	                         SG_RUNE_PROOF_HOOK_FRAME_DISTANCE) *
 	            SG_REPLAY_FRAME_MS;

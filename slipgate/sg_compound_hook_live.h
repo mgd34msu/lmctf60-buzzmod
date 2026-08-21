@@ -23,7 +23,6 @@ typedef struct sg_compound_hook_live_bolt_s
 typedef struct sg_compound_hook_live_snapshot_s
 {
 	sg_compound_publication_binding_t binding;
-	sg_hook_replay_spec_t hook_proof;
 	int trigger_key;
 	int mover_key;
 } sg_compound_hook_live_snapshot_t;
@@ -68,6 +67,17 @@ typedef sg_compound_hook_live_host_result_t
 		const sg_compound_hook_live_snapshot_t *snapshot,
 		sg_compound_hook_live_event_t event,
 		const sg_compound_hook_live_bolt_t *bolt);
+typedef struct sg_compound_hook_live_sweep_s
+{
+	qboolean start_outside;
+	qboolean end_outside;
+	qboolean crossed;
+} sg_compound_hook_live_sweep_t;
+typedef sg_compound_hook_live_host_result_t
+	(*sg_compound_hook_live_sweep_fn)(void *context,
+		const sg_compound_hook_live_snapshot_t *snapshot,
+		const vec3_t start, const vec3_t end,
+		sg_compound_hook_live_sweep_t *sweep_out);
 
 typedef struct sg_compound_hook_live_host_s
 {
@@ -84,6 +94,7 @@ typedef struct sg_compound_hook_live_host_s
 	sg_compound_hook_live_checkpoint_fn source_checkpoint;
 	sg_compound_hook_live_checkpoint_fn suffix_checkpoint;
 	sg_compound_hook_live_event_auth_fn event_authorize;
+	sg_compound_hook_live_sweep_fn sweep_segment;
 	sg_hook_live_command_fn hook_shadow;
 } sg_compound_hook_live_host_t;
 
@@ -153,12 +164,15 @@ typedef struct sg_compound_hook_live_state_s
 	sg_compound_hook_live_failure_t failure;
 	sg_replay_reason_t replay_reason;
 	usercmd_t expected_command;
+	vec3_t command_origin;
 	int transaction_elapsed_ms;
 	int last_boundary_ms;
 	int touch_frame_serial;
+	int pull_frame_serial;
 	int last_event_frame_serial;
 	int swim_link;
 	int hook_link;
+	int sweep_outside_since_ms;
 	sg_compound_hook_live_event_t last_event;
 	qboolean guard_owned;
 	qboolean local_owned;
@@ -174,6 +188,10 @@ typedef struct sg_compound_hook_live_state_s
 	qboolean recovering;
 	qboolean sweep_clear;
 	qboolean arrived;
+	qboolean command_origin_valid;
+	qboolean command_segment_checked;
+	qboolean segment_clear_ready;
+	qboolean recovery_sweep_dirty;
 } sg_compound_hook_live_state_t;
 
 #define SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER { 0 }

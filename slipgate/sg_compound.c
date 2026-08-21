@@ -44,7 +44,7 @@ static int CompoundHookAngleCanonical(float angle)
 {
 	short encoded;
 
-	if (!isfinite(angle))
+	if (!isfinite(angle) || angle < -180.0f || angle >= 180.0f)
 		return 0;
 	encoded = ANGLE2SHORT(angle);
 	return SHORT2ANGLE(encoded) == angle;

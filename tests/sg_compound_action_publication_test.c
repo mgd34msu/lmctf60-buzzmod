@@ -1,8 +1,10 @@
 /* Publication-to-suffix plans for compound door links. */
 #include <math.h>
+#include <float.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "../q_shared.h"
 #include "../slipgate/sg_compound_action_publication.h"
 
 static int failures;
@@ -101,14 +103,13 @@ static void HookProof(sg_compound_hook_publication_proof_t *proof)
 	proof->spec.settle_limit_ms = RUNE_HOOK_WATER_SETTLE_MS;
 	proof->spec.expected_release_ms = 200;
 	proof->spec.expected_pull_ms = 200;
-	proof->spec.expected_settle_arrival_ms = 100;
+	proof->spec.expected_settle_arrival_ms = 0;
 	proof->spec.expected_settle_ms = 100;
 }
 
 static void TestHookPlan(void)
 {
 	sg_compound_publication_binding_t binding;
-	sg_compound_hook_publication_proof_t proof;
 	sg_hook_replay_spec_t spec;
 	sg_hook_replay_state_t state;
 	sg_replay_pose_t pose;
@@ -125,46 +126,59 @@ static void TestHookPlan(void)
 	binding.link.anchor[YAW] = SHORT2ANGLE(ANGLE2SHORT(90.0f));
 	binding.link.anchor[ROLL] = 200.0f;
 	binding.link.heading_slack = SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER;
-	HookProof(&proof);
+	HookProof(&binding.hook_proof);
 	memset(&spec, 0xa5, sizeof(spec));
-	CHECK(SG_CompoundHookPublicationPlan(&binding, &proof, &spec));
-	CHECK(memcmp(&spec, &proof.spec, sizeof(spec)) == 0);
+	CHECK(SG_CompoundHookPublicationPlan(&binding, &spec));
+	CHECK(memcmp(&spec, &binding.hook_proof.spec, sizeof(spec)) == 0);
 	ReplayInputs(&pose, &observation);
 	pose.grounded = false;
 	pose.watertype = CONTENTS_WATER;
 	pose.waterlevel = 2;
 	CHECK(SG_HookReplayBegin(&state, &spec, &pose, &observation, 0.0f) ==
 	      SG_REPLAY_RUNNING);
+	binding.hook_proof.spec.expected_settle_arrival_ms = -1;
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
+	binding.hook_proof.spec.expected_settle_arrival_ms = 0;
+	binding.hook_proof.spec.view_angles[YAW] = FLT_MAX;
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
+	binding.hook_proof.spec.view_angles[YAW] =
+		SHORT2ANGLE(ANGLE2SHORT(90.0f));
+	binding.link.anchor[YAW] = FLT_MAX;
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
+	binding.link.anchor[YAW] = SHORT2ANGLE(ANGLE2SHORT(90.0f));
+	binding.link.anchor[PITCH] = FLT_MAX;
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
+	binding.link.anchor[PITCH] =
+		SHORT2ANGLE((short)ANGLE2SHORT(-15.0f));
 
 	binding.arrival_ms = 500;
 	binding.total_cost_ms = binding.touch_frame_end_ms +
 	                        binding.suffix_start_ms + binding.arrival_ms;
 	binding.link.cost_ms = (short)binding.total_cost_ms;
-	CHECK(!SG_CompoundHookPublicationPlan(&binding, &proof, &spec));
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
 	binding.arrival_ms = 600;
 	binding.total_cost_ms = binding.touch_frame_end_ms +
 	                        binding.suffix_start_ms + binding.arrival_ms;
 	binding.link.cost_ms = (short)binding.total_cost_ms;
 
-	proof.spec.view_angles[YAW] = 0.0f;
+	binding.hook_proof.spec.view_angles[YAW] = 0.0f;
 	memset(&spec, 0x5a, sizeof(spec));
-	CHECK(!SG_CompoundHookPublicationPlan(&binding, &proof, &spec));
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
 	CHECK(spec.flight_ms == 0);
 	binding.link.anchor[ROLL] = NAN;
-	CHECK(!SG_CompoundHookPublicationPlan(&binding, &proof, &spec));
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
 }
 
 static void TestWrongActionOrSerializedPlanRejected(void)
 {
 	sg_compound_publication_binding_t binding;
-	sg_compound_hook_publication_proof_t proof;
 	sg_hook_replay_spec_t hook_spec;
 	sg_drop_replay_spec_t drop_spec;
 
 	CommonBinding(&binding, RL_DOOR_SWIM, RLCM_PREOPEN);
-	HookProof(&proof);
+	HookProof(&binding.hook_proof);
 	CHECK(!SG_CompoundDropPublicationPlan(&binding, &drop_spec));
-	CHECK(!SG_CompoundHookPublicationPlan(&binding, &proof, &hook_spec));
+	CHECK(!SG_CompoundHookPublicationPlan(&binding, &hook_spec));
 
 	CommonBinding(&binding, RL_DOOR_DROP, RLCM_PREOPEN);
 	binding.link.mechanism_plan = 0;

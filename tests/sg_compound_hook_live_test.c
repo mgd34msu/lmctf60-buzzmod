@@ -125,6 +125,7 @@ static void TestWrongGenerationRetainsLeaseForRecovery(void)
 	sg_compound_hook_live_result_t result;
 	sg_replay_pose_t pose;
 	sg_replay_observation_t observation;
+	int step;
 
 	Setup(&fixture, &host, &pose, &observation);
 	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
@@ -146,6 +147,22 @@ static void TestWrongGenerationRetainsLeaseForRecovery(void)
 	CHECK(fixture.body_clear_calls > 0 && fixture.bolt_clear_calls > 0);
 	fixture.body_clear = 1;
 	fixture.bolt_clear = 1;
+	fixture.sweep_inside_call = fixture.sweep_calls + 1;
+	for (step = 0; step < 4; step++)
+	{
+		result = Step(&state, &host, &pose, &observation, NULL);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	}
+	CHECK(!state.segment_clear_ready);
+	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
+	                                    0.0f);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	for (step = 0; step < 4; step++)
+	{
+		result = Step(&state, &host, &pose, &observation, NULL);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	}
+	CHECK(state.segment_clear_ready);
 	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
 	                                    0.0f);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED);
@@ -153,6 +170,153 @@ static void TestWrongGenerationRetainsLeaseForRecovery(void)
 	CHECK(fixture.abort_calls == 1);
 	CHECK(!state.recovering && !state.bolt_linked &&
 	      !state.bolt_abort_applied);
+}
+
+static void TestSweepSegmentsCoverTouchAndPostClear(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_bolt_t bolt;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+	int step;
+
+	Setup(&fixture, &host, &pose, &observation);
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose,
+	                                  &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.command_ready);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	SetTouchPose(&fixture, &pose);
+	fixture.sweep_cross_call = 1;
+	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+	                                  &observation, 1);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP);
+	CHECK(fixture.sweep_calls == 1 && state.command_pending);
+
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	observation.hook_rope_valid = true;
+	observation.hook_rope_length = 200;
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4,
+	                                        &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 3; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	observation.hook_rope_length = 100;
+	result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.sweep_clear && state.segment_clear_ready);
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 5,
+	                                           &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	fixture.sweep_cross_call = fixture.sweep_calls + 1;
+	result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP);
+	CHECK(state.guard_owned && state.recovery_sweep_dirty);
+}
+
+static void TestSweepBoundaryMatchesPublishedFirstClear(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_bolt_t bolt;
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	int step;
+
+	Setup(&fixture, &host, &pose, &observation);
+	fixture.snapshot.binding.sweep_clear_ms = 200;
+	fixture.snapshot.binding.link.sweep_clear_ms = 200;
+	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	CHECK(!state.segment_clear_ready);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	observation.hook_rope_valid = true;
+	observation.hook_rope_length = 200;
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP);
+	CHECK(result.replay_reason == SG_REPLAY_REASON_TIMING_MISMATCH);
+
+	Setup(&fixture, &host, &pose, &observation);
+	memset(&state, 0, sizeof(state));
+	fixture.snapshot.binding.sweep_clear_ms = 200;
+	fixture.snapshot.binding.link.sweep_clear_ms = 200;
+	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
+	fixture.sweep_cross_call = fixture.sweep_calls + 1;
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	observation.hook_rope_valid = true;
+	observation.hook_rope_length = 200;
+	for (step = 0; step < 4; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(!state.sweep_clear && !state.segment_clear_ready);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4,
+	                                        &pose);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 3; step++)
+		result = Step(&state, &host, &pose, &observation, NULL);
+	observation.hook_rope_length = 100;
+	result = Step(&state, &host, &pose, &observation, NULL);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.sweep_clear && state.segment_clear_ready);
+}
+
+static void TestSweepHostFailuresFailClosed(void)
+{
+	int scenario;
+
+	for (scenario = 0; scenario < 2; scenario++)
+	{
+		fixture_t fixture;
+		sg_compound_hook_live_host_t host;
+		sg_compound_hook_live_state_t state =
+			SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+		sg_compound_hook_live_result_t result;
+		sg_replay_pose_t pose;
+		sg_replay_observation_t observation;
+		usercmd_t command;
+
+		Setup(&fixture, &host, &pose, &observation);
+		if (scenario == 0)
+			fixture.sweep_invalid_call = 1;
+		else
+			fixture.sweep_error_call = 1;
+		result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose,
+		                                  &observation);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+		result = SG_CompoundHookLivePreStep(&state, &host, &pose,
+		                                    &observation, &command);
+		CHECK(result.command_ready);
+		result = SG_CompoundHookLiveApproveCommand(&state, &command);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+		SetTouchPose(&fixture, &pose);
+		result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+		                                  &observation, 1);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+		CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP);
+	}
 }
 
 static void TestDeathOrphansExactBolt(void)
@@ -293,9 +457,9 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 		CHECK(command.msec == SG_REPLAY_STEP_MS);
 		CHECK(command.angles[PITCH] == (short)ANGLE2SHORT(
-		      fixture.snapshot.hook_proof.view_angles[PITCH]));
+		      fixture.snapshot.binding.hook_proof.spec.view_angles[PITCH]));
 		CHECK(command.angles[YAW] == (short)ANGLE2SHORT(
-		      fixture.snapshot.hook_proof.view_angles[YAW]));
+		      fixture.snapshot.binding.hook_proof.spec.view_angles[YAW]));
 		CHECK(command.angles[ROLL] == 0);
 		CHECK(command.forwardmove == 0 && command.sidemove == 0 &&
 		      command.upmove == 0 && command.buttons == 0);
@@ -306,7 +470,7 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 	      state.hook.progress.elapsed_ms == SG_REPLAY_FRAME_MS);
 	CHECK(state.transaction_elapsed_ms == 500);
 	CHECK(fixture.hold_calls == hold_calls + 1);
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 6, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.hook.phase == SG_HOOK_REPLAY_ATTACH_FRAME);
 	observation.hook_rope_valid = true;
@@ -315,7 +479,7 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 		result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_PULL);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5, &pose);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 6, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	for (step = 0; step < 3; step++)
 		result = Step(&state, &host, &pose, &observation, NULL);
@@ -323,7 +487,7 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 	result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.sweep_clear);
-	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 7,
 	                                           &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
@@ -442,6 +606,9 @@ int main(void)
 	TestBeginOwnsOneOuterTransaction();
 	TestNominalHookLifecycle();
 	TestWrongGenerationRetainsLeaseForRecovery();
+	TestSweepSegmentsCoverTouchAndPostClear();
+	TestSweepBoundaryMatchesPublishedFirstClear();
+	TestSweepHostFailuresFailClosed();
 	TestDeathOrphansExactBolt();
 	TestPrelinkDeathOrphansPendingBodyAndMover();
 	TestReleaseNeedsBodyAndBoltClear();

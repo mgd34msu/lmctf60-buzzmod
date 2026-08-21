@@ -82,6 +82,35 @@ static sg_compound_hook_live_host_result_t BoltClear(void *context,
 	       SG_COMPOUND_HOOK_LIVE_HOST_DENIED;
 }
 
+static sg_compound_hook_live_host_result_t SweepSegment(void *context,
+	const sg_compound_hook_live_snapshot_t *snapshot,
+	const vec3_t start, const vec3_t end,
+	sg_compound_hook_live_sweep_t *sweep_out)
+{
+	fixture_t *fixture = (fixture_t *)context;
+
+	if (!fixture || !start || !end || !sweep_out ||
+	    AcceptSnapshot(context, snapshot) !=
+	        SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED)
+		return SG_COMPOUND_HOOK_LIVE_HOST_ERROR;
+	fixture->sweep_calls++;
+	if (fixture->sweep_error_call == fixture->sweep_calls)
+		return SG_COMPOUND_HOOK_LIVE_HOST_ERROR;
+	memset(sweep_out, 0, sizeof(*sweep_out));
+	sweep_out->start_outside = true;
+	sweep_out->end_outside = true;
+	if (fixture->sweep_cross_call == fixture->sweep_calls)
+		sweep_out->crossed = true;
+	if (fixture->sweep_inside_call == fixture->sweep_calls)
+	{
+		sweep_out->start_outside = false;
+		sweep_out->crossed = true;
+	}
+	if (fixture->sweep_invalid_call == fixture->sweep_calls)
+		sweep_out->crossed = 2;
+	return SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED;
+}
+
 static sg_compound_hook_live_host_result_t Release(void *context,
 	const sg_compound_hook_live_snapshot_t *snapshot)
 {
@@ -216,7 +245,7 @@ void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 	memset(pose, 0, sizeof(*pose));
 	memset(observation, 0, sizeof(*observation));
 	binding = &fixture->snapshot.binding;
-	hook = &fixture->snapshot.hook_proof;
+	hook = &fixture->snapshot.binding.hook_proof.spec;
 	binding->link_index = 7;
 	binding->mechanism_index = 3;
 	binding->link.from = 0;
@@ -240,10 +269,10 @@ void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 	binding->mover_top_ms = 300;
 	binding->suffix_start_ms = 200;
 	binding->arrival_ms = 300;
-	binding->sweep_clear_ms = 200;
+	binding->sweep_clear_ms = 100;
 	binding->total_cost_ms = 600;
 	binding->link.cost_ms = 600;
-	binding->link.sweep_clear_ms = 200;
+	binding->link.sweep_clear_ms = 100;
 	binding->source.old_frame_z = 0.0f;
 	hook->bite[0] = 160.0f;
 	hook->bite[2] = 64.0f;
@@ -276,6 +305,7 @@ void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 	host->source_checkpoint = SourceCheckpoint;
 	host->suffix_checkpoint = SuffixCheckpoint;
 	host->event_authorize = EventAuthorize;
+	host->sweep_segment = SweepSegment;
 	host->hook_shadow = HookShadow;
 	pose->waterlevel = 2;
 	pose->watertype = CONTENTS_WATER;
@@ -284,9 +314,25 @@ void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 	binding->source.waterlevel = pose->waterlevel;
 	binding->source.watertype = pose->watertype;
 	binding->suffix.pms = pose->pms;
+	binding->suffix.pms.origin[0] = (short)(
+		binding->link.mechanism_anchor[0] *
+		SG_RUNE_PROOF_DOOR_ANCHOR_SCALE);
 	binding->suffix.grounded = pose->grounded;
 	binding->suffix.waterlevel = pose->waterlevel;
 	binding->suffix.watertype = pose->watertype;
+}
+
+void SetTouchPose(const fixture_t *fixture, sg_replay_pose_t *pose)
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		pose->origin[axis] =
+			fixture->snapshot.binding.link.mechanism_anchor[axis];
+		pose->pms.origin[axis] = (short)(pose->origin[axis] *
+			SG_RUNE_PROOF_DOOR_ANCHOR_SCALE);
+	}
 }
 
 void SetupLateAttach(fixture_t *fixture,
@@ -296,11 +342,11 @@ void SetupLateAttach(fixture_t *fixture,
 	Setup(fixture, host, pose, observation);
 	fixture->snapshot.binding.link.anchor[ROLL] = 160.0f;
 	fixture->snapshot.binding.arrival_ms = 400;
-	fixture->snapshot.binding.sweep_clear_ms = 300;
+	fixture->snapshot.binding.sweep_clear_ms = 100;
 	fixture->snapshot.binding.total_cost_ms = 700;
 	fixture->snapshot.binding.link.cost_ms = 700;
-	fixture->snapshot.binding.link.sweep_clear_ms = 300;
-	fixture->snapshot.hook_proof.flight_ms = 200;
+	fixture->snapshot.binding.link.sweep_clear_ms = 100;
+	fixture->snapshot.binding.hook_proof.spec.flight_ms = 200;
 }
 
 sg_compound_hook_live_result_t Step(
@@ -337,6 +383,7 @@ void DriveToTop(fixture_t *fixture,
 {
 	sg_compound_hook_live_result_t result;
 	usercmd_t final_aim;
+	int step;
 
 	result = SG_CompoundHookLiveBegin(state, host, 7, pose, observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -346,6 +393,7 @@ void DriveToTop(fixture_t *fixture,
 	CHECK(result.command_ready);
 	result = SG_CompoundHookLiveApproveCommand(state, &final_aim);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	SetTouchPose(fixture, pose);
 	result = SG_CompoundHookLiveTouch(state, host, 11, pose, observation, 1);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state->command_pending && state->command_replay_consumed);
@@ -355,17 +403,22 @@ void DriveToTop(fixture_t *fixture,
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state->transaction_elapsed_ms == 25);
 	CHECK(!state->command_pending && !state->command_replay_consumed);
-	while (state->transaction_elapsed_ms < 275)
+	for (step = 0; step < 10 && state->transaction_elapsed_ms < 275; step++)
 	{
 		result = Step(state, host, pose, observation, NULL);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+		if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
+			break;
 	}
+	CHECK(state->transaction_elapsed_ms == 275);
+	if (state->transaction_elapsed_ms != 275)
+		return;
 	result = Step(state, host, pose, observation, &final_aim);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(final_aim.angles[PITCH] == (short)
-	      ANGLE2SHORT(fixture->snapshot.hook_proof.view_angles[PITCH]));
+	      ANGLE2SHORT(fixture->snapshot.binding.hook_proof.spec.view_angles[PITCH]));
 	CHECK(final_aim.angles[YAW] == (short)
-	      ANGLE2SHORT(fixture->snapshot.hook_proof.view_angles[YAW]));
+	      ANGLE2SHORT(fixture->snapshot.binding.hook_proof.spec.view_angles[YAW]));
 	CHECK(final_aim.angles[ROLL] == 0 && final_aim.msec == 25);
 	CHECK(state->outer.phase == SG_COMPOUND_TOP);
 }
@@ -386,7 +439,8 @@ sg_compound_hook_live_bolt_t DriveToLinked(fixture_t *fixture,
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state->outer.phase == SG_COMPOUND_SUFFIX_LEASED);
 	CHECK(state->hook.phase ==
-	      (fixture->snapshot.hook_proof.flight_ms > SG_REPLAY_FRAME_MS ?
+	      (fixture->snapshot.binding.hook_proof.spec.flight_ms >
+	       SG_REPLAY_FRAME_MS ?
 	       SG_HOOK_REPLAY_FLIGHT : SG_HOOK_REPLAY_WAIT_ATTACH));
 	result = SG_CompoundHookLiveLinked(state, host, &bolt, 3, pose,
 	                                   observation);

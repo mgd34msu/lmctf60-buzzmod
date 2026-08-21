@@ -1201,14 +1201,13 @@ int SG_CompoundWorldCrossesSweep(
 	return 1;
 }
 
-static int CompoundWorldTopPhysicalMember(edict_t *member)
+static int CompoundWorldTopMemberShape(edict_t *member)
 {
 	int axis;
 
 	return member && CompoundWorldDoorStaticSafe(member, &axis) &&
 	       member->solid == SOLID_BSP &&
 	       member->moveinfo.state == SG_PLAT_STATE_TOP &&
-	       SG_MoverCompletionMatches(member, SG_MOVER_COMPLETION_TOP) &&
 	       CompoundWorldFinite3(member->s.origin) &&
 	       member->s.origin[(axis + 1) % 3] ==
 	           member->moveinfo.end_origin[(axis + 1) % 3] &&
@@ -1219,6 +1218,12 @@ static int CompoundWorldTopPhysicalMember(edict_t *member)
 	       member->moveinfo.endfunc == door_hit_top &&
 	       member->think == door_go_down && isfinite(member->nextthink) &&
 	       isfinite(level.time) && member->nextthink > level.time;
+}
+
+static int CompoundWorldTopPhysicalMember(edict_t *member)
+{
+	return CompoundWorldTopMemberShape(member) &&
+	       SG_MoverCompletionMatches(member, SG_MOVER_COMPLETION_TOP);
 }
 
 static int CompoundWorldTopMember(
@@ -1246,6 +1251,22 @@ int SG_CompoundWorldAtTopFor(
 	/* SV_RunThink executes an entity whose nextthink is at most the current
 	 * frame time plus 1 ms.  Include that exact engine tolerance after the
 	 * safety frame; equality is not proof that TOP survives the boundary. */
+	until = level.time + (float)window_ms * 0.001f + FRAMETIME;
+	until += 0.001f;
+	return isfinite(until) && member->nextthink > until;
+}
+
+int SG_CompoundWorldStagedAtTopFor(
+	const sg_compound_world_preopen_t *resolved, int window_ms)
+{
+	edict_t *member;
+	float until;
+
+	if (window_ms < 0 || window_ms > RUNE_MAX_COST_MS ||
+	    window_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0 ||
+	    !SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    !CompoundWorldTopMemberShape(member))
+		return 0;
 	until = level.time + (float)window_ms * 0.001f + FRAMETIME;
 	until += 0.001f;
 	return isfinite(until) && member->nextthink > until;

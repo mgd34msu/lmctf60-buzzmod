@@ -95,10 +95,12 @@ class ButtonGameIntegrationTests(unittest.TestCase):
         stable = function_body("slipgate/sg_oracle.c",
                                "SG_OracleStablePopulationTrace")
         self.assertIn("MASK_PLAYERSOLID", stable)
-        self.assertIn("SG_OraclePopulationTransientBBox", stable)
-        self.assertIn("SOLID_NOT", stable)
-        self.assertIn("sg_oracle_population_trace_active", stable)
         self.assertNotIn("~CONTENTS_MONSTER", stable)
+        stable_mask = function_body("slipgate/sg_oracle.c",
+                                    "SG_OracleStablePopulationTraceMask")
+        self.assertIn("SG_OraclePopulationTransientBBox", stable_mask)
+        self.assertIn("SOLID_NOT", stable_mask)
+        self.assertIn("sg_oracle_population_trace_active", stable_mask)
         phantom = function_body("slipgate/sg_oracle.c", "SG_PhantomTrace")
         self.assertIn("SG_OracleStablePopulationTrace", phantom)
         self.assertIn("sg_oracle_contaminated = true", phantom)

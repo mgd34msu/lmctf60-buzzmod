@@ -27,6 +27,11 @@ typedef struct fixture_s
 	int bolt_clear;
 	int body_clear_calls;
 	int bolt_clear_calls;
+	int sweep_calls;
+	int sweep_cross_call;
+	int sweep_inside_call;
+	int sweep_invalid_call;
+	int sweep_error_call;
 	int source_checkpoint;
 	int suffix_checkpoint;
 	int event_authorized;
@@ -42,6 +47,7 @@ void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 void SetupLateAttach(fixture_t *fixture,
 	sg_compound_hook_live_host_t *host, sg_replay_pose_t *pose,
 	sg_replay_observation_t *observation);
+void SetTouchPose(const fixture_t *fixture, sg_replay_pose_t *pose);
 sg_compound_hook_live_result_t Step(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host,

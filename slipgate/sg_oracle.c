@@ -1249,9 +1249,10 @@ static qboolean SG_OraclePopulationTraceResultValid(const trace_t *trace,
 	return SG_ImmutableSupport(trace->ent) ? true : false;
 }
 
-qboolean SG_OracleStablePopulationTrace(const vec3_t start,
+static qboolean SG_OracleStablePopulationTraceMask(const vec3_t start,
 	const vec3_t mins, const vec3_t maxs, const vec3_t end,
-	edict_t *passent, qboolean population_independent, trace_t *trace_out)
+	edict_t *passent, int mask, qboolean population_independent,
+	trace_t *trace_out)
 {
 	sg_oracle_population_snapshot_t snapshots[MAX_EDICTS];
 	edict_t *saved_base;
@@ -1269,19 +1270,19 @@ qboolean SG_OracleStablePopulationTrace(const vec3_t start,
 
 	if (trace_out)
 		memset(trace_out, 0, sizeof(*trace_out));
-	if (!start || !mins || !maxs || !end || !trace_out || !sg_host.trace)
+	if (!start || !end || !trace_out || !sg_host.trace ||
+	    ((!mins) != (!maxs)))
 		return false;
 	for (axis = 0; axis < 3; axis++)
-		if (!isfinite(start[axis]) || !isfinite(mins[axis]) ||
-		    !isfinite(maxs[axis]) || !isfinite(end[axis]) ||
-		    mins[axis] > maxs[axis])
+		if (!isfinite(start[axis]) || !isfinite(end[axis]) ||
+		    (mins && (!isfinite(mins[axis]) || !isfinite(maxs[axis]) ||
+		              mins[axis] > maxs[axis])))
 			return false;
 	if (sg_oracle_population_trace_active)
 		return false;
 	if (!population_independent)
 	{
-		*trace_out = sg_host.trace(start, mins, maxs, end, passent,
-		    MASK_PLAYERSOLID);
+		*trace_out = sg_host.trace(start, mins, maxs, end, passent, mask);
 		return SG_OraclePopulationTraceResultValid(trace_out, passent,
 		    false);
 	}
@@ -1327,8 +1328,7 @@ qboolean SG_OracleStablePopulationTrace(const vec3_t start,
 	sg_oracle_population_trace_active = true;
 	for (index = 0; index < snapshot_count; index++)
 		snapshots[index].entity->solid = SOLID_NOT;
-	*trace_out = sg_host.trace(start, mins, maxs, end, passent,
-	    MASK_PLAYERSOLID);
+	*trace_out = sg_host.trace(start, mins, maxs, end, passent, mask);
 	/* Restore first, then inspect or return the native result.  The engine
 	 * trace has no game callbacks, but the identity checks make this boundary
 	 * fail closed under a malformed host or an adversarial test double. */
@@ -1356,6 +1356,18 @@ qboolean SG_OracleStablePopulationTrace(const vec3_t start,
 		integrity = false;
 	return integrity &&
 	       SG_OraclePopulationTraceResultValid(trace_out, passent, true);
+}
+
+qboolean SG_OracleStablePopulationTrace(const vec3_t start,
+	const vec3_t mins, const vec3_t maxs, const vec3_t end,
+	edict_t *passent, qboolean population_independent, trace_t *trace_out)
+{
+	if (!mins || !maxs)
+		return false;
+	return SG_OracleStablePopulationTraceMask(start, mins, maxs, end,
+	                                         passent, MASK_PLAYERSOLID,
+	                                         population_independent,
+	                                         trace_out);
 }
 
 static qboolean SG_OracleDoorArmed(const sg_phantom_t *ph, edict_t *door)
@@ -3765,7 +3777,8 @@ static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph)
 	vec3_t mins, maxs;
 	int i, num;
 
-	if (!sg_oracle_world_only || !sg_host.box_edicts)
+	if (!sg_host.box_edicts ||
+	    (!sg_oracle_world_only && !sg_oracle_compound_trigger))
 		return false;
 	/* linkentity expands absmin/absmax by one unit before BoxEdicts sees a
 	 * live client. Match that conservative trigger-contact fringe. */
@@ -3783,7 +3796,11 @@ static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph)
 		if (sg_oracle_compound_trigger)
 		{
 			if (hit != sg_oracle_compound_trigger)
-				return true;
+			{
+				if (sg_oracle_world_only)
+					return true;
+				continue;
+			}
 			sg_oracle_compound_touched = true;
 			continue;
 		}
@@ -3997,7 +4014,9 @@ static qboolean SG_OracleReplayContactClear(const vec3_t origin,
 	VectorCopy(destination, to);
 	from[2] += 16.0f;
 	to[2] += 16.0f;
-	tr = sg_host.trace(from, NULL, NULL, to, passent, MASK_PLAYERSOLID);
+	if (!SG_OracleStablePopulationTraceMask(from, NULL, NULL, to, passent,
+	        MASK_PLAYERSOLID, sg_oracle_loader_replay, &tr))
+		return false;
 	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
 }
 
@@ -4181,6 +4200,13 @@ typedef struct sg_oracle_member_snapshot_s
 	vec3_t absmin;
 	vec3_t absmax;
 	vec3_t size;
+	vec3_t velocity;
+	vec3_t avelocity;
+	void (*endfunc)(edict_t *);
+	void (*think)(edict_t *);
+	float nextthink;
+	int state;
+	int number;
 	solid_t solid;
 	int linkcount;
 } sg_oracle_member_snapshot_t;
@@ -4263,6 +4289,13 @@ static void SG_OracleMemberSnapshot(edict_t *member,
 	VectorCopy(member->absmin, snapshot->absmin);
 	VectorCopy(member->absmax, snapshot->absmax);
 	VectorCopy(member->size, snapshot->size);
+	VectorCopy(member->velocity, snapshot->velocity);
+	VectorCopy(member->avelocity, snapshot->avelocity);
+	snapshot->endfunc = member->moveinfo.endfunc;
+	snapshot->think = member->think;
+	snapshot->nextthink = member->nextthink;
+	snapshot->state = member->moveinfo.state;
+	snapshot->number = member->s.number;
 	snapshot->solid = member->solid;
 	snapshot->linkcount = member->linkcount;
 }
@@ -4272,6 +4305,13 @@ static void SG_OracleMemberRestore(edict_t *member,
 {
 	VectorCopy(snapshot->origin, member->s.origin);
 	VectorCopy(snapshot->old_origin, member->s.old_origin);
+	VectorCopy(snapshot->velocity, member->velocity);
+	VectorCopy(snapshot->avelocity, member->avelocity);
+	member->moveinfo.endfunc = snapshot->endfunc;
+	member->think = snapshot->think;
+	member->nextthink = snapshot->nextthink;
+	member->moveinfo.state = snapshot->state;
+	member->s.number = snapshot->number;
 	member->solid = snapshot->solid;
 	sg_host.linkentity(member);
 	/* The host increments linkcount and may round its cached bounds.  Restore
@@ -4312,6 +4352,22 @@ static qboolean SG_OracleCompoundStageMember(edict_t *member,
 	member->solid = SOLID_BSP;
 	sg_host.linkentity(member);
 	return true;
+}
+
+static qboolean SG_OracleCompoundStageMemberTop(edict_t *member,
+	const sg_compound_world_preopen_t *resolved)
+{
+	if (!member || !resolved || !isfinite(level.time) ||
+	    !isfinite(resolved->wait) || resolved->wait <= 0.0f)
+		return false;
+	VectorClear(member->velocity);
+	VectorClear(member->avelocity);
+	member->moveinfo.state = SG_PLAT_STATE_TOP;
+	member->moveinfo.endfunc = door_hit_top;
+	member->think = door_go_down;
+	member->nextthink = level.time + resolved->wait;
+	return isfinite(member->nextthink) &&
+	       SG_CompoundWorldStagedAtTopFor(resolved, 0);
 }
 
 static qboolean SG_OracleCompoundPhantomClean(const sg_phantom_t *ph)
@@ -6887,14 +6943,16 @@ static void SG_OracleHookObservation(const sg_phantom_t *ph,
 			view_angles, hand, pull_velocity);
 }
 
-/* Shared graph-hook witness. The caller supplies a fully initialized
- * fixed-point phantom. One production pull owns each 100 ms interval; four
- * literal 25 ms zero commands consume it, then release hands off to the same
- * direct-yaw settlement controller runtime executes. */
-qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
+typedef qboolean (*sg_oracle_hook_monitor_fn)(void *context,
+	const sg_phantom_t *ph, const vec3_t before, const vec3_t after,
+	int elapsed_ms);
+
+static qboolean SG_OracleHookTraverseMonitored(sg_phantom_t *ph,
+	const vec3_t bite,
 	const vec3_t destination, const vec3_t view_angles, int hand,
 	int flight_ms, int settle_limit_ms, float old_frame_z,
-	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only)
+	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only,
+	sg_oracle_hook_monitor_fn monitor, void *monitor_context)
 {
 	sg_hook_replay_spec_t spec;
 	sg_hook_replay_state_t state;
@@ -6923,6 +6981,8 @@ qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
 	sg_oracle_contaminated = false;
 	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph))
 		goto done;
+	if (monitor && !monitor(monitor_context, ph, ph->origin, ph->origin, 0))
+		goto done;
 	memset(&spec, 0, sizeof(spec));
 	VectorCopy(bite, spec.bite);
 	VectorCopy(destination, spec.destination);
@@ -6944,6 +7004,9 @@ qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
 
 		if (state.phase == SG_HOOK_REPLAY_WAIT_ATTACH)
 		{
+			if (monitor && !monitor(monitor_context, ph, ph->origin,
+			                        ph->origin, state.progress.elapsed_ms))
+				goto done;
 			status = SG_HookReplayAttached(&state, &pose);
 			if (status == SG_REPLAY_RUNNING)
 			{
@@ -6956,8 +7019,14 @@ qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
 		}
 		if (state.phase == SG_HOOK_REPLAY_WAIT_PULL)
 		{
+			if (monitor && !monitor(monitor_context, ph, ph->origin,
+			                        ph->origin, state.progress.elapsed_ms))
+				goto done;
 			SG_OracleHookStep(ph, bite, view_angles, hand);
 			SG_OracleReplayPose(ph, &pose);
+			if (monitor && !monitor(monitor_context, ph, ph->origin,
+			                        ph->origin, state.progress.elapsed_ms))
+				goto done;
 			status = SG_HookReplayPullApplied(&state, &pose);
 			continue;
 		}
@@ -6971,7 +7040,19 @@ qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
 		status = SG_HookReplayPreStep(&state, &pose, &observation, &cmd);
 		if (status != SG_REPLAY_RUNNING)
 			break;
-		SG_OracleRun(ph, &cmd, 1);
+		{
+			vec3_t before;
+
+			VectorCopy(ph->origin, before);
+			if (monitor && !monitor(monitor_context, ph, before, before,
+			                        state.progress.elapsed_ms))
+				goto done;
+			SG_OracleRun(ph, &cmd, 1);
+			if (monitor && !monitor(monitor_context, ph, before, ph->origin,
+			                        state.progress.elapsed_ms +
+			                            SG_REPLAY_STEP_MS))
+				goto done;
+		}
 		SG_OracleReplayPose(ph, &pose);
 		check_contact = state.phase == SG_HOOK_REPLAY_SETTLE &&
 			(!state.arrived_in_frame ||
@@ -7040,6 +7121,432 @@ done:
 	sg_oracle_world_only = previous_world_only;
 	sg_oracle_contaminated = previous_contaminated;
 	return result;
+}
+
+qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
+	const vec3_t destination, const vec3_t view_angles, int hand,
+	int flight_ms, int settle_limit_ms, float old_frame_z,
+	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only)
+{
+	return SG_OracleHookTraverseMonitored(ph, bite, destination,
+	    view_angles, hand, flight_ms, settle_limit_ms, old_frame_z, proof,
+	    passent, world_only, NULL, NULL);
+}
+
+typedef struct sg_oracle_compound_hook_monitor_s
+{
+	const sg_compound_world_preopen_t *resolved;
+	edict_t *member;
+	int outside_since_ms;
+	int sweep_clear_ms;
+	int failure_reason;
+} sg_oracle_compound_hook_monitor_t;
+
+static qboolean SG_OracleCompoundHookMonitor(void *opaque,
+	const sg_phantom_t *ph, const vec3_t before, const vec3_t after,
+	int elapsed_ms)
+{
+	sg_oracle_compound_hook_monitor_t *monitor = opaque;
+	edict_t *current = NULL;
+	qboolean crossed;
+	qboolean outside_before;
+	qboolean outside_after;
+
+	if (!monitor || !ph || elapsed_ms < 0 ||
+	    !SG_CompoundWorldResolvedMember(monitor->resolved, &current) ||
+	    current != monitor->member ||
+	    !SG_CompoundWorldStagedAtTopFor(monitor->resolved, 0))
+	{
+		if (monitor)
+			monitor->failure_reason = RLR_MECHANISM_UNRESOLVED;
+		return false;
+	}
+	if (!SG_OracleCompoundPhantomClean(ph))
+	{
+		monitor->failure_reason = RLR_SUFFIX_REPLAY_FAILED;
+		return false;
+	}
+	crossed = SG_CompoundWorldCrossesSweep(monitor->resolved, before, after);
+	outside_before = SG_CompoundWorldOutsideSweep(monitor->resolved, before);
+	outside_after = SG_CompoundWorldOutsideSweep(monitor->resolved, after);
+	if (monitor->sweep_clear_ms)
+	{
+		if (crossed || !outside_before || !outside_after)
+		{
+			monitor->failure_reason = RLR_CLEAR_MISMATCH;
+			return false;
+		}
+		return true;
+	}
+	if (crossed || !outside_before || !outside_after)
+		monitor->outside_since_ms = -1;
+	else if (monitor->outside_since_ms < 0)
+		monitor->outside_since_ms = elapsed_ms;
+	if (elapsed_ms >= SG_REPLAY_FRAME_MS &&
+	    elapsed_ms % SG_REPLAY_FRAME_MS == 0 &&
+	    monitor->outside_since_ms >= 0 &&
+	    elapsed_ms - monitor->outside_since_ms >= SG_REPLAY_FRAME_MS)
+		monitor->sweep_clear_ms = elapsed_ms;
+	return true;
+}
+
+static qboolean SG_OracleCompoundHookBoltOutside(
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t muzzle, const vec3_t bite)
+{
+	vec3_t delta, direction, before, after;
+	float distance, travelled;
+
+	VectorSubtract(bite, muzzle, delta);
+	distance = VectorLength(delta);
+	if (distance < 1.0f ||
+	    !SG_CompoundWorldOutsideSweep(resolved, muzzle))
+		return false;
+	VectorScale(delta, 1.0f / distance, direction);
+	VectorCopy(muzzle, before);
+	for (travelled = RUNE_HOOK_FRAME_DISTANCE; ;
+	     travelled += RUNE_HOOK_FRAME_DISTANCE)
+	{
+		float at = travelled < distance ? travelled : distance;
+
+		after[0] = muzzle[0] + at * direction[0];
+		after[1] = muzzle[1] + at * direction[1];
+		after[2] = muzzle[2] + at * direction[2];
+		if (!SG_OracleCompoundOutsideSegment(resolved, before, after))
+			return false;
+		if (travelled >= distance)
+			break;
+		VectorCopy(after, before);
+	}
+	return true;
+}
+
+static void SG_OracleCompoundHookCaptureSource(const sg_phantom_t *ph,
+	float old_frame_z, sg_compound_hook_proof_t *proof)
+{
+	proof->source_pms = ph->pms;
+	proof->source_old_pms = ph->old_pms;
+	VectorCopy(ph->origin, proof->source_origin);
+	VectorCopy(ph->velocity, proof->source_velocity);
+	proof->source_groundentity = ph->groundentity;
+	proof->source_watertype = ph->watertype;
+	proof->source_waterlevel = ph->waterlevel;
+	proof->source_old_frame_z = old_frame_z;
+}
+
+static void SG_OracleCompoundHookCaptureSuffix(const sg_phantom_t *ph,
+	float old_frame_z, sg_compound_hook_proof_t *proof)
+{
+	proof->suffix_pms = ph->pms;
+	proof->suffix_old_pms = ph->old_pms;
+	VectorCopy(ph->origin, proof->suffix_origin);
+	VectorCopy(ph->velocity, proof->suffix_velocity);
+	proof->suffix_groundentity = ph->groundentity;
+	proof->suffix_watertype = ph->watertype;
+	proof->suffix_waterlevel = ph->waterlevel;
+	proof->suffix_old_frame_z = old_frame_z;
+}
+
+static qboolean SG_OracleCompoundHookControl(const sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved, const vec3_t control,
+	edict_t *passent, vec3_t view_angles, vec3_t muzzle, vec3_t bite)
+{
+	vec3_t forward, right, shot_end, miss;
+	trace_t muzzle_trace, shot_trace;
+	float shot_length;
+
+	if (!SG_HookControlDecode(ph->origin, 22.0f, RIGHT_HANDED, control,
+	                         view_angles, muzzle, bite))
+		return false;
+	AngleVectors(view_angles, forward, right, NULL);
+	if (!SG_OracleStablePopulationTraceMask(ph->origin, NULL, NULL, muzzle,
+	        passent, MASK_SHOT, sg_oracle_loader_replay, &muzzle_trace))
+		return false;
+	if (muzzle_trace.startsolid || muzzle_trace.fraction < 1.0f)
+		return false;
+	VectorNormalize(forward);
+	shot_length = control[ROLL] + 96.0f;
+	if (shot_length > RUNE_HOOK_MAX_RAY)
+		shot_length = RUNE_HOOK_MAX_RAY;
+	VectorMA(muzzle, shot_length, forward, shot_end);
+	if (!SG_OracleStablePopulationTraceMask(muzzle, NULL, NULL, shot_end,
+	        passent, MASK_SHOT, sg_oracle_loader_replay, &shot_trace))
+		return false;
+	VectorSubtract(shot_trace.endpos, bite, miss);
+	if (shot_trace.startsolid || shot_trace.fraction >= 1.0f ||
+	    shot_trace.ent != g_edicts ||
+	    (shot_trace.surface && (shot_trace.surface->flags & SURF_SKY)) ||
+	    VectorLength(miss) > 0.25f ||
+	    CTF_HookPullVelocity(muzzle, bite, miss) < 150 ||
+	    !SG_OracleHookFlightClear(muzzle, bite) ||
+	    !SG_OracleCompoundHookBoltOutside(resolved, muzzle, bite))
+		return false;
+	return true;
+}
+
+static qboolean SG_OracleCompoundHookDiscoverControl(
+	const sg_phantom_t *ph, const vec3_t destination, int candidate_index,
+	vec3_t control)
+{
+	static const float backs[4] = { 0.0f, 0.35f, 0.6f, 0.85f };
+	vec3_t up, ceiling, aim, view, forward, right, muzzle, shot_end, delta;
+	trace_t trace;
+	float distance;
+
+	if (candidate_index < 0 || candidate_index >= 4)
+		return false;
+	VectorCopy(destination, up);
+	up[0] += (ph->origin[0] - up[0]) * backs[candidate_index];
+	up[1] += (ph->origin[1] - up[1]) * backs[candidate_index];
+	if (backs[candidate_index] > 0.0f &&
+	    ph->origin[2] < destination[2])
+		up[2] = destination[2];
+	up[2] += 24.0f;
+	VectorCopy(up, ceiling);
+	ceiling[2] += 512.0f;
+	trace = sg_host.trace(up, NULL, NULL, ceiling, NULL, MASK_PLAYERSOLID);
+	if (trace.startsolid || trace.fraction >= 1.0f ||
+	    (trace.surface && (trace.surface->flags & SURF_SKY)))
+		return false;
+	VectorCopy(trace.endpos, aim);
+	aim[2] -= 4.0f;
+	if (!SG_HookAimAngles(ph->origin, 22.0f, aim, view))
+		return false;
+	AngleVectors(view, forward, right, NULL);
+	CTF_HookMuzzle(ph->origin, 22.0f, RIGHT_HANDED, forward, right, muzzle);
+	VectorNormalize(forward);
+	VectorMA(muzzle, RUNE_HOOK_MAX_RAY, forward, shot_end);
+	trace = sg_host.trace(muzzle, NULL, NULL, shot_end, NULL, MASK_SHOT);
+	if (trace.startsolid || trace.fraction >= 1.0f || trace.ent != g_edicts ||
+	    (trace.surface && (trace.surface->flags & SURF_SKY)))
+		return false;
+	VectorSubtract(trace.endpos, muzzle, delta);
+	distance = DotProduct(delta, forward);
+	if (distance < 1.0f || distance > RUNE_HOOK_MAX_RAY)
+		return false;
+	control[PITCH] = view[PITCH];
+	control[YAW] = view[YAW];
+	control[ROLL] = distance;
+	return true;
+}
+
+static rune_reject_reason_t SG_OracleCompoundHookSuffix(
+	sg_phantom_t *ph, const sg_compound_world_preopen_t *resolved,
+	edict_t *member, const vec3_t destination,
+	const vec3_t expected_control, float old_frame_z,
+	sg_compound_hook_proof_t *proof, edict_t *passent,
+	qboolean world_only)
+{
+	sg_oracle_compound_hook_monitor_t monitor;
+	sg_hook_proof_t hook;
+	sg_phantom_t suffix_start;
+	vec3_t control, view_angles, muzzle, bite;
+	int first_candidate, candidate_count, candidate_index;
+
+	suffix_start = *ph;
+	first_candidate = expected_control ? -1 : 0;
+	candidate_count = expected_control ? 1 : 4;
+	for (candidate_index = 0; candidate_index < candidate_count;
+	     candidate_index++)
+	{
+		*ph = suffix_start;
+		memset(&hook, 0, sizeof(hook));
+		if (expected_control)
+			VectorCopy(expected_control, control);
+		else if (!SG_OracleCompoundHookDiscoverControl(ph, destination,
+		             first_candidate + candidate_index, control))
+			continue;
+		if (!SG_OracleCompoundHookControl(ph, resolved, control, passent,
+		                                  view_angles, muzzle, bite))
+			continue;
+		memset(&monitor, 0, sizeof(monitor));
+		monitor.resolved = resolved;
+		monitor.member = member;
+		monitor.outside_since_ms = 0;
+		if (!SG_OracleHookTraverseMonitored(ph, bite, destination,
+		        view_angles, RIGHT_HANDED,
+		        (int)ceilf(control[ROLL] / RUNE_HOOK_FRAME_DISTANCE) *
+		            SG_REPLAY_FRAME_MS,
+		        RUNE_HOOK_WATER_SETTLE_MS, old_frame_z, &hook, passent,
+		        world_only, SG_OracleCompoundHookMonitor, &monitor))
+			continue;
+		if (!monitor.sweep_clear_ms ||
+		    monitor.failure_reason != RLR_OK)
+			continue;
+		VectorCopy(control, proof->control);
+		VectorCopy(bite, proof->hook_spec.bite);
+		VectorCopy(destination, proof->hook_spec.destination);
+		VectorCopy(view_angles, proof->hook_spec.view_angles);
+		proof->hook_spec.flight_ms =
+			(int)ceilf(control[ROLL] / RUNE_HOOK_FRAME_DISTANCE) *
+			SG_REPLAY_FRAME_MS;
+		proof->hook_spec.settle_limit_ms = RUNE_HOOK_WATER_SETTLE_MS;
+		proof->hook_spec.expected_release_ms = hook.release_ms;
+		proof->hook_spec.expected_pull_ms = hook.pull_ms;
+		proof->hook_spec.expected_settle_arrival_ms = hook.settle_arrival_ms;
+		proof->hook_spec.expected_settle_ms = hook.settle_ms;
+		proof->arrival_ms = proof->hook_spec.flight_ms + hook.pull_ms +
+		                    hook.settle_ms;
+		proof->sweep_clear_ms = monitor.sweep_clear_ms;
+		proof->exit_speed = hook.exit_speed;
+		return RLR_OK;
+	}
+	*ph = suffix_start;
+	return RLR_SUFFIX_REPLAY_FAILED;
+}
+
+rune_reject_reason_t SG_OracleCompoundHookPreopen(
+	sg_phantom_t *ph, const sg_compound_world_preopen_t *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	const vec3_t expected_control, float old_frame_z,
+	sg_compound_hook_proof_t *proof, edict_t *passent,
+	qboolean world_only, qboolean loader_replay)
+{
+	sg_oracle_compound_scope_t scope;
+	sg_oracle_member_snapshot_t member_snapshot;
+	sg_compound_translate_t translate;
+	sg_compound_translate_step_t mover_step;
+	sg_oracle_swim_cursor_t cursor;
+	sg_compound_hook_proof_t candidate;
+	sg_replay_status_t status;
+	rune_reject_reason_t reason = RLR_BAD_CONTROL_POLICY;
+	edict_t *member = NULL;
+	qboolean scope_entered = false;
+	qboolean member_staged = false;
+	int remainder_commands;
+
+	if (!proof)
+		return RLR_BAD_CONTROL_POLICY;
+	memset(proof, 0, sizeof(*proof));
+	memset(&candidate, 0, sizeof(candidate));
+	if (!ph || !resolved || !mechanism_anchor || !destination ||
+	    !SG_OracleCompoundFixedVector(mechanism_anchor) ||
+	    !SG_OracleCompoundFixedVector(destination) ||
+	    (expected_control && !SG_OracleFinite3(expected_control)) ||
+	    (loader_replay && !expected_control) ||
+	    !isfinite(old_frame_z) ||
+	    (world_only != false && world_only != true) ||
+	    (loader_replay != false && loader_replay != true) ||
+	    !sg_host.pmove || !sg_host.trace || !sg_host.pointcontents ||
+	    !sg_host.box_edicts || !sg_host.linkentity ||
+	    sg_oracle_active_phantom)
+		return RLR_BAD_CONTROL_POLICY;
+	if (!SG_CompoundWorldResolvedMember(resolved, &member) ||
+	    !resolved->trigger ||
+	    !SG_OracleCompoundMemberAtBottom(member, resolved))
+		return RLR_MECHANISM_UNRESOLVED;
+
+	SG_OracleMemberSnapshot(member, &member_snapshot);
+	SG_OracleCompoundScopeEnter(&scope, resolved->trigger, member, passent,
+	                            world_only, loader_replay);
+	scope_entered = true;
+	if (!SG_CompoundWorldOutsideSweep(resolved, ph->origin) ||
+	    SG_OracleTriggerOverlap(ph) || sg_oracle_compound_touched ||
+	    SG_OracleSolidOverlap(ph) || !SG_OracleCompoundPhantomClean(ph))
+	{
+		reason = RLR_APPROACH_REPLAY_FAILED;
+		goto done;
+	}
+	SG_OracleCompoundHookCaptureSource(ph, old_frame_z, &candidate);
+	status = SG_OracleSwimCursorBegin(&cursor, ph, mechanism_anchor, true,
+	                                  old_frame_z, passent, true);
+	while (status == SG_REPLAY_RUNNING)
+	{
+		vec3_t before;
+
+		VectorCopy(ph->origin, before);
+		status = SG_OracleSwimCursorStep(&cursor, ph);
+		if (!SG_OracleCompoundOutsideSegment(resolved, before, ph->origin))
+		{
+			reason = RLR_APPROACH_REPLAY_FAILED;
+			goto done;
+		}
+		if (sg_oracle_compound_touched)
+			break;
+	}
+	if (!sg_oracle_compound_touched || status == SG_REPLAY_FAILED ||
+	    !SG_OracleCompoundPhantomClean(ph) ||
+	    !SG_OracleCompoundAnchorMatches(ph, mechanism_anchor))
+	{
+		reason = RLR_APPROACH_REPLAY_FAILED;
+		goto done;
+	}
+	candidate.touch_ms = cursor.state.progress.elapsed_ms;
+	if (candidate.touch_ms <= 0 ||
+	    candidate.touch_ms % SG_REPLAY_STEP_MS != 0)
+	{
+		reason = RLR_APPROACH_REPLAY_FAILED;
+		goto done;
+	}
+	old_frame_z = cursor.state.progress.old_frame_z;
+	remainder_commands =
+		((SG_REPLAY_FRAME_MS - candidate.touch_ms % SG_REPLAY_FRAME_MS) %
+		 SG_REPLAY_FRAME_MS) / SG_REPLAY_STEP_MS;
+	candidate.touch_frame_end_ms = candidate.touch_ms +
+	                               remainder_commands * SG_REPLAY_STEP_MS;
+	if (remainder_commands > 0 &&
+	    !SG_OracleCompoundZeroFrame(ph, resolved, remainder_commands,
+	                                &old_frame_z))
+	{
+		reason = RLR_APPROACH_REPLAY_FAILED;
+		goto done;
+	}
+	if (!SG_CompoundTranslateBegin(&translate, resolved->bottom_origin,
+	                               resolved->top_origin, resolved->speed))
+	{
+		reason = RLR_RIDE_REPLAY_FAILED;
+		goto done;
+	}
+	for (;;)
+	{
+		if (!SG_CompoundTranslateFrame(&translate, &mover_step) ||
+		    mover_step.elapsed_ms > RUNE_MAX_COST_MS ||
+		    !SG_OracleCompoundStageMember(member, resolved, &mover_step))
+		{
+			reason = RLR_RIDE_REPLAY_FAILED;
+			goto done;
+		}
+		member_staged = true;
+		if (mover_step.at_top)
+			break;
+		if (!SG_OracleCompoundZeroFrame(ph, resolved, 4, &old_frame_z))
+		{
+			reason = RLR_RIDE_REPLAY_FAILED;
+			goto done;
+		}
+	}
+	candidate.mover_top_ms = mover_step.elapsed_ms;
+	candidate.suffix_start_ms = mover_step.elapsed_ms - SG_REPLAY_FRAME_MS;
+	if (!SG_OracleCompoundStageMemberTop(member, resolved))
+	{
+		reason = RLR_MECHANISM_UNRESOLVED;
+		goto done;
+	}
+	SG_OracleCompoundHookCaptureSuffix(ph, old_frame_z, &candidate);
+	reason = SG_OracleCompoundHookSuffix(ph, resolved, member, destination,
+	    expected_control, old_frame_z, &candidate, passent, world_only);
+	if (reason != RLR_OK)
+		goto done;
+	if (candidate.touch_frame_end_ms >
+	        RUNE_MAX_COST_MS - candidate.suffix_start_ms ||
+	    candidate.arrival_ms > RUNE_MAX_COST_MS -
+	        candidate.touch_frame_end_ms - candidate.suffix_start_ms)
+	{
+		reason = RLR_COST_MISMATCH;
+		goto done;
+	}
+	candidate.total_cost_ms = candidate.touch_frame_end_ms +
+	                          candidate.suffix_start_ms +
+	                          candidate.arrival_ms;
+	*proof = candidate;
+	reason = RLR_OK;
+
+done:
+	if (member_staged)
+		SG_OracleMemberRestore(member, &member_snapshot);
+	if (scope_entered)
+		SG_OracleCompoundScopeRestore(&scope);
+	return reason;
 }
 
 

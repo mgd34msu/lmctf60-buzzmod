@@ -64,16 +64,16 @@ def test_compound_admission_order_and_inert_runtime_metadata() -> None:
     publication = (
         ROOT / "slipgate/sg_compound_publication.c"
     ).read_text(encoding="utf-8")
-    build = publication[publication.index(
-        "sg_compound_publication_result_t SG_CompoundPublicationBuild"
-    ):]
+    build = (
+        ROOT / "slipgate/sg_compound_publication_build.c"
+    ).read_text(encoding="utf-8")
     enumerate = build.index("SG_CompoundWorldEnumeratePreopen(")
     resolve = build.index("SG_CompoundWorldResolvePreopen(")
     prepare = build.index("SG_OracleCompoundSwimPrepareSource(")
     discover = build.index("SG_OracleCompoundSwimDiscoverContact(")
     replay = build.index("SG_OracleCompoundSwimPreopen(")
     assert enumerate < resolve < prepare < discover < replay
-    assert "SG_CompoundWorldHoldOpen" not in publication
+    assert "SG_CompoundWorldHoldOpen" not in publication + build
 
     actions = (
         ROOT / "slipgate/sg_action_contract.generated.h"

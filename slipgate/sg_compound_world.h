@@ -112,6 +112,8 @@ int SG_CompoundWorldCrossesSweep(
 	const float to[3]);
 int SG_CompoundWorldAtTopFor(
 	const sg_compound_world_preopen_t *resolved, int window_ms);
+int SG_CompoundWorldStagedAtTopFor(
+	const sg_compound_world_preopen_t *resolved, int window_ms);
 
 /* Runtime-only.  This invokes no entity callback and can only extend an
  * already scheduled canonical TOP close by the shared compound lease. */
