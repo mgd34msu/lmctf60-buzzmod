@@ -52,7 +52,7 @@
     "tools/iterate2.sh": 3,
     "tools/outcomecard.py": 10,
     "tools/pov-spawn-linux.c": 21,
-    "tools/pov-supervisor.c": 84,
+    "tools/pov-supervisor.c": 82,
     "tools/routesheet.py": 1,
     "tools/rune_corpus_controller.py": 55,
     "tools/runegen.sh": 2,

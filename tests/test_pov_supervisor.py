@@ -58,9 +58,14 @@ int main(int ac,char**av){
       printf("command=%s",line);FLUSH();
       if(!strncmp(line,"serverrecord ",13)){
         const char*server=strrchr(line,'-');
-        if(server&&strlen(server)>=4){snprintf(spectator,sizeof(spectator),"pov_%.3s",server+1);printf("%s entered the game\n",spectator);FLUSH();}
+        if(server&&strlen(server)>=4){
+          snprintf(spectator,sizeof(spectator),"pov_%.3s",server+1);
+          printf("%s entered the game\n",spectator);FLUSH();
+        }
       }
-      else if(*spectator&&!strncmp(line,"sv povrecord ",13)&&!strncmp(line+13,spectator,strlen(spectator))&&line[13+strlen(spectator)]==' '){puts("directive accepted");FLUSH();}
+      else if(*spectator&&!strncmp(line,"sv povrecord ",13)&&
+              !strncmp(line+13,spectator,strlen(spectator))&&
+              line[13+strlen(spectator)]==' '){puts("directive accepted");FLUSH();}
       else if(!strcmp(line,"quit\n")){
 #ifdef BAD_EXIT
         return 9;

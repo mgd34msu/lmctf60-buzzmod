@@ -69,6 +69,7 @@ struct run {
     off_t config_evidence_size;
     char self_hash[65], iterate_hash[65], waveloop_hash[65];
     char lane_name[256], demo_rel[PATH_MAXIMUM], record_line[PATH_MAXIMUM + 32];
+    char entered_line[64];
     char failure[512];
     struct lines server_lines, client_lines;
     struct timespec authority_started, pov_started;
@@ -116,6 +117,19 @@ static int safe_atom(const char *s, size_t maximum) {
     return strcmp(s, ".") && strcmp(s, "..");
 }
 
+static int server_name_valid(const char *server) {
+    unsigned lane;
+    if (!server || strlen(server) != 3 || server[0] != 's' ||
+        server[1] < '0' || server[1] > '9' || server[2] < '0' || server[2] > '9') return 0;
+    lane = (unsigned)(server[1] - '0') * 10U + (unsigned)(server[2] - '0');
+    return lane >= 1 && lane <= 10;
+}
+
+static int spectator_matches_server(const char *spectator, const char *server) {
+    return spectator && strlen(spectator) == 7 && !memcmp(spectator, "pov_", 4) &&
+           !strcmp(spectator + 4, server);
+}
+
 static int parse_uint(const char *s, unsigned *out, unsigned low, unsigned high) {
     char *end; unsigned long v;
     if (!s || !*s) return -1;
@@ -161,8 +175,9 @@ static int parse_options(int argc, char **argv, struct options *o) {
     if(!o->q2||!o->client||!o->root||!o->game||!o->config||!o->normal_log||
        !o->lane_root||!o->wave||!o->server||!o->map||!o->spectator||!o->target||
        !o->supervisor_fd_text||!o->iterate_fd_text||!o->port||!o->duration||!o->parent_pid||!o->parent_start)return-1;
-    if(strcmp(o->server,"s03")||!safe_atom(o->game,63)||!safe_atom(o->wave,63)||!safe_atom(o->map,63)||
-       !safe_atom(o->spectator,31)||strncmp(o->target,"[SG]",4)||!safe_atom(o->target+4,31))return-1;
+    if(!server_name_valid(o->server)||!spectator_matches_server(o->spectator,o->server)||
+       !safe_atom(o->game,63)||!safe_atom(o->wave,63)||!safe_atom(o->map,63)||
+       strncmp(o->target,"[SG]",4)||!safe_atom(o->target+4,31))return-1;
     return 0;
 }
 
@@ -225,7 +240,7 @@ static int make_lane(const struct options *o, struct run *r) {
     for(int attempt=0;attempt<16;attempt++){
         if(getrandom(random,sizeof(random),0)!=(ssize_t)sizeof(random)){close(root);return-1;}
         for(size_t i=0;i<sizeof(random);i++){hex[2*i]=digits[random[i]>>4];hex[2*i+1]=digits[random[i]&15];}hex[32]=0;
-        if(snprintf(r->lane_name,sizeof(r->lane_name),"pov-%s-s03.%s",o->wave,hex)>=(int)sizeof(r->lane_name)){close(root);return-1;}
+        if(snprintf(r->lane_name,sizeof(r->lane_name),"pov-%s-%s.%s",o->wave,o->server,hex)>=(int)sizeof(r->lane_name)){close(root);return-1;}
         r->lane_fd=mkdir_private(root,r->lane_name);
         if(r->lane_fd>=0)break;
         if(errno!=EEXIST){close(root);return-1;}
@@ -268,11 +283,11 @@ static int demo_nonzero(struct run *r) {
 
 static void accept_line(struct run *r, int server, const char *line) {
     if(server) {
-        if(!strcmp(line,"pov_s03 entered the game"))r->server_entered=1;
+        if(!strcmp(line,r->entered_line))r->server_entered=1;
         if((!strcmp(line,"Changing map")&&r->server_entered)||!strcmp(line,"Server shutdown"))set_failure(r,"server transition before completion");
     } else {
         if(!strcmp(line,"Serverdata packet received."))r->client_packet=1;
-        else if(!strcmp(line,"Server active.")||!strcmp(line,"pov_s03 entered the game"))r->client_active=1;
+        else if(!strcmp(line,"Server active.")||!strcmp(line,r->entered_line))r->client_active=1;
         else if(!strcmp(line,r->record_line)&&r->start_latched)r->record_confirmed=1;
         else if(!strcmp(line,"Server disconnected")||!strcmp(line,"Changing map")||!strcmp(line,"Not recording a demo."))set_failure(r,"client rejected or transitioned");
     }
@@ -415,7 +430,7 @@ static int publish(struct run*r,const struct options*o) {
     if(fsync(r->events)<0||hash_named(r->lane_fd,r->demo_rel,demo,1)<0||hash_named(r->lane_fd,"server.log",server,0)<0||hash_named(r->lane_fd,"client.log",client,0)<0||hash_named(r->lane_fd,"events.log",events_hash,0)<0||pov_hash_fd(r->normal_log,normal)<0)return-1;
     fd=create_file(r->lane_fd,"manifest.tmp");if(fd<0)return-1;
     n=snprintf(manifest,sizeof(manifest),
-      "status=published\nwave=%s\nserver=s03\nport=%u\nstate=PUBLISHED\n"
+      "status=published\nwave=%s\nserver=%s\nport=%u\nstate=PUBLISHED\n"
       "supervisor_sha256=%s\nq2_sha256=%s\nclient_sha256=%s\nconfig_sha256=%s\n"
       "config_evidence=%s\nconfig_evidence_size=%lld\nconfig_evidence_sha256=%s\n"
       "iterate2_sha256=%s\nwaveloop_sha256=%s\ndemo_sha256=%s\nserver_log_sha256=%s\n"
@@ -425,7 +440,7 @@ static int publish(struct run*r,const struct options*o) {
       "q2_dev=%llu\nq2_ino=%llu\nq2_size=%lld\nclient_dev=%llu\nclient_ino=%llu\nclient_size=%lld\n"
       "config_dev=%llu\nconfig_ino=%llu\nconfig_size=%lld\n"
       "q2_pid=%ld\nq2_start_ticks=%llu\nclient_pid=%ld\nclient_start_ticks=%llu\n",
-      o->wave,o->port,r->self_hash,r->q2_image.sha256,r->client_image.sha256,r->config_image.sha256,
+      o->wave,o->server,o->port,r->self_hash,r->q2_image.sha256,r->client_image.sha256,r->config_image.sha256,
       CONFIG_EVIDENCE,(long long)r->config_image.size,r->config_image.sha256,
       r->iterate_hash,r->waveloop_hash[0]?r->waveloop_hash:"not-provided",demo,server,client,events_hash,normal,
       (unsigned long long)self_stat.st_dev,(unsigned long long)self_stat.st_ino,(long long)self_stat.st_size,
@@ -451,6 +466,7 @@ static int run_supervisor(const struct options*o,struct run*r) {
     int rootfd=-1,nullfd=-1,qin[2]={-1,-1},q2_master=-1,q2_slave=-1,client_master=-1,client_slave=-1;
     sigset_t mask;unsigned long long current_parent_start=0;pid_t current_parent;
     r->state=PREFLIGHT;
+    (void)snprintf(r->entered_line,sizeof(r->entered_line),"%s entered the game",o->spectator);
     current_parent=getppid();
     if(current_parent!=o->parent_pid||pov_read_start_ticks(current_parent,&current_parent_start)<0||current_parent_start!=o->parent_start){set_failure(r,"parent generation mismatch: expected %ld/%llu, actual %ld/%llu",(long)o->parent_pid,o->parent_start,(long)current_parent,current_parent_start);goto done;}
     if((r->self_fd=open_self(r->self_hash))<0||validate_pinned_self(r,o->supervisor_fd_text)<0||hash_inherited_regular(o->iterate_fd_text,r->iterate_hash)<0){set_failure(r,"supervisor or iterate image invalid");goto done;}
@@ -470,7 +486,7 @@ static int run_supervisor(const struct options*o,struct run*r) {
     int qi=0;q2argv[qi++]=q2a0;q2argv[qi++]=(char*)"+set";q2argv[qi++]=(char*)"game";q2argv[qi++]=(char*)o->game;q2argv[qi++]=(char*)"+set";q2argv[qi++]=(char*)"dedicated";q2argv[qi++]=(char*)"1";q2argv[qi++]=(char*)"+set";q2argv[qi++]=(char*)"port";q2argv[qi++]=port;q2argv[qi++]=(char*)"+set";q2argv[qi++]=(char*)"net_port";q2argv[qi++]=port;q2argv[qi++]=(char*)"+set";q2argv[qi++]=(char*)"maxclients";q2argv[qi++]=(char*)"16";q2argv[qi]=NULL;
     struct pov_stdio sm={qin[0],q2_slave,q2_slave,rootfd};if(pov_spawn_image(&r->q2_image,q2argv,envp,&sm,&r->q2,why,sizeof(why))<0){set_failure(r,"q2 spawn: %s",why);goto done;}r->q2_started=1;close(qin[0]);qin[0]=-1;close(q2_slave);q2_slave=-1;r->q2_write=qin[1];qin[1]=-1;r->server_read=q2_master;q2_master=-1;if(fcntl(r->server_read,F_SETFL,fcntl(r->server_read,F_GETFL)|O_NONBLOCK)<0||pov_validate_child(&r->q2,&r->q2_image,q2argv,why,sizeof(why))<0){set_failure(r,"q2 identity: %s",why);goto done;}
     if(sigaddset(&mask,SIGPIPE)<0||sigprocmask(SIG_BLOCK,&mask,NULL)<0){set_failure(r,"SIGPIPE block failed");goto done;}
-    char command[128];if(send_pinned_config(r)<0||snprintf(command,sizeof(command),"map %s",o->map)>=(int)sizeof(command)||send_command(r,command)<0){set_failure(r,"config or map failed");goto done;}snprintf(command,sizeof(command),"serverrecord wave%s-s03",o->wave);if(send_command(r,command)<0||event(r,"serverrecord")<0){set_failure(r,"serverrecord failed");goto done;}r->state=SERVER_RECORDING;
+    char command[128];if(send_pinned_config(r)<0||snprintf(command,sizeof(command),"map %s",o->map)>=(int)sizeof(command)||send_command(r,command)<0){set_failure(r,"config or map failed");goto done;}snprintf(command,sizeof(command),"serverrecord wave%s-%s",o->wave,o->server);if(send_command(r,command)<0||event(r,"serverrecord")<0){set_failure(r,"serverrecord failed");goto done;}r->state=SERVER_RECORDING;
     char connect[64];snprintf(connect,sizeof(connect),"127.0.0.1:%u",o->port);int ci=0;clientargv[ci++]=clienta0;clientargv[ci++]=(char*)"+set";clientargv[ci++]=(char*)"basedir";clientargv[ci++]=(char*)o->root;clientargv[ci++]=(char*)"+set";clientargv[ci++]=(char*)"game";clientargv[ci++]=(char*)o->game;clientargv[ci++]=(char*)"+set";clientargv[ci++]=(char*)"name";clientargv[ci++]=(char*)o->spectator;clientargv[ci++]=(char*)"+set";clientargv[ci++]=(char*)"spectator";clientargv[ci++]=(char*)"1";clientargv[ci++]=(char*)"+set";clientargv[ci++]=(char*)"recording_format";clientargv[ci++]=(char*)"dm2";clientargv[ci++]=(char*)"+connect";clientargv[ci++]=connect;clientargv[ci]=NULL;
     struct pov_stdio cm={nullfd,client_slave,client_slave,r->lane_fd};if(pov_spawn_image(&r->client_image,clientargv,envp,&cm,&r->client,why,sizeof(why))<0){set_failure(r,"client spawn: %s",why);goto done;}r->client_started=1;close(client_slave);client_slave=-1;r->client_read=client_master;client_master=-1;if(fcntl(r->client_read,F_SETFL,fcntl(r->client_read,F_GETFL)|O_NONBLOCK)<0||pov_validate_child(&r->client,&r->client_image,clientargv,why,sizeof(why))<0){set_failure(r,"client identity: %s",why);goto done;}event(r,"client_launch");clock_gettime(CLOCK_MONOTONIC,&r->authority_started);
     long long deadline=mono_ns()+(long long)o->ready_timeout*1000000000LL;int stagger_stage=0;
