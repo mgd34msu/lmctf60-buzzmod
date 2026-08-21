@@ -1,4 +1,3 @@
-/* sg_hook_live.c -- see sg_hook_live.h for the live/replay boundary. */
 #include "q_shared.h"
 #include "slipgate/sg_hook_live.h"
 
@@ -310,6 +309,27 @@ sg_hook_live_result_t SG_HookLiveWaitAttachStep(
 	                      SG_REPLAY_REASON_NONE);
 }
 
+sg_hook_live_result_t SG_HookLiveWaitAttachPostStep(
+	sg_hook_replay_state_t *replay, qboolean *active, int *replay_link,
+	int action_link, qboolean identity_current,
+	const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, qboolean boundary)
+{
+	sg_hook_live_result_t owner = HookLiveValidateOwner(replay, active,
+	    replay_link, action_link, identity_current);
+	sg_replay_status_t status;
+
+	if (owner.outcome != SG_HOOK_LIVE_RUNNING)
+		return owner;
+	status = SG_HookReplayWaitAttachPostStep(replay, pose, observation,
+	                                         boundary);
+	if (status == SG_REPLAY_RUNNING)
+		return HookLiveResult(SG_HOOK_LIVE_RUNNING,
+		    SG_HOOK_LIVE_FAILURE_NONE, SG_REPLAY_REASON_NONE);
+	return HookLiveReducerFailure(replay, active, replay_link,
+	                              SG_HOOK_LIVE_FAILURE_POSTSTEP);
+}
+
 sg_hook_live_result_t SG_HookLiveValidateFinalCommand(
 	sg_hook_replay_state_t *replay, qboolean *active, int *replay_link,
 	int action_link, qboolean identity_current, const usercmd_t *expected,
@@ -344,7 +364,7 @@ sg_hook_live_result_t SG_HookLiveValidateStoredFinalCommand(
 	}
 	result = SG_HookLiveValidateFinalCommand(replay, active, replay_link,
 	    action_link, identity_current, &guard->expected, command);
-	/* Every ClientThink requires a new approval, including after a fallback. */
+	/* The stored final-command approval is single-use. */
 	SG_HookLiveCommandGuardClear(guard);
 	return result;
 }

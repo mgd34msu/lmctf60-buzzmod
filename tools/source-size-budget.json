@@ -63,8 +63,8 @@
     "tools/waveloop.sh": 1
   },
   "oversized_files": {
-    "GNUmakefile": 2897,
-    "Makefile": 3163,
+    "GNUmakefile": 3008,
+    "Makefile": 3288,
     "slipgate/sg_arach.c": 3689,
     "slipgate/sg_caco.c": 2117,
     "slipgate/sg_chat.c": 3812,
@@ -81,7 +81,7 @@
     "slipgate/sg_move.c": 9888,
     "slipgate/sg_net.c": 905,
     "slipgate/sg_oracle.c": 7176,
-    "slipgate/sg_replay.c": 1140,
+    "slipgate/sg_replay.c": 1187,
     "slipgate/sg_rune.c": 6262,
     "slipgate/sg_rune_codec.c": 2736,
     "slipgate/sg_rune_mechanism_catalog.c": 1609,

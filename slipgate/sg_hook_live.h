@@ -92,6 +92,11 @@ sg_hook_live_result_t SG_HookLiveWaitAttachStep(
 	const sg_replay_observation_t *observation,
 	sg_hook_live_command_fn legacy_command, usercmd_t *command,
 	sg_hook_live_command_guard_t *guard);
+sg_hook_live_result_t SG_HookLiveWaitAttachPostStep(
+	sg_hook_replay_state_t *replay, qboolean *active, int *replay_link,
+	int action_link, qboolean identity_current,
+	const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, qboolean boundary);
 
 sg_hook_live_result_t SG_HookLiveValidateFinalCommand(
 	sg_hook_replay_state_t *replay, qboolean *active, int *replay_link,

@@ -28,6 +28,15 @@ typedef struct sg_compound_hook_live_snapshot_s
 	int mover_key;
 } sg_compound_hook_live_snapshot_t;
 
+typedef enum sg_compound_hook_live_event_e
+{
+	SG_COMPOUND_HOOK_LIVE_EVENT_NONE = 0,
+	SG_COMPOUND_HOOK_LIVE_EVENT_LINKED,
+	SG_COMPOUND_HOOK_LIVE_EVENT_ATTACHED,
+	SG_COMPOUND_HOOK_LIVE_EVENT_PULL,
+	SG_COMPOUND_HOOK_LIVE_EVENT_RELEASE
+} sg_compound_hook_live_event_t;
+
 typedef sg_compound_hook_live_host_result_t
 	(*sg_compound_hook_live_bind_fn)(void *context, uint32_t link_index,
 		sg_compound_hook_live_snapshot_t *snapshot_out);
@@ -45,6 +54,20 @@ typedef sg_compound_hook_live_host_result_t
 	(*sg_compound_hook_live_orphan_fn)(void *context,
 		const sg_compound_hook_live_snapshot_t *snapshot,
 		const sg_compound_hook_live_bolt_t *bolt);
+typedef sg_compound_hook_live_host_result_t
+	(*sg_compound_hook_live_abort_bolt_fn)(void *context,
+		const sg_compound_hook_live_snapshot_t *snapshot,
+		const sg_compound_hook_live_bolt_t *bolt);
+typedef sg_compound_hook_live_host_result_t
+	(*sg_compound_hook_live_checkpoint_fn)(void *context,
+		const sg_compound_hook_live_snapshot_t *snapshot,
+		const sg_replay_pose_t *pose,
+		const sg_replay_observation_t *observation);
+typedef sg_compound_hook_live_host_result_t
+	(*sg_compound_hook_live_event_auth_fn)(void *context,
+		const sg_compound_hook_live_snapshot_t *snapshot,
+		sg_compound_hook_live_event_t event,
+		const sg_compound_hook_live_bolt_t *bolt);
 
 typedef struct sg_compound_hook_live_host_s
 {
@@ -57,6 +80,10 @@ typedef struct sg_compound_hook_live_host_s
 	sg_compound_hook_live_clear_fn bolt_clear;
 	sg_compound_hook_live_snapshot_fn release;
 	sg_compound_hook_live_orphan_fn orphan;
+	sg_compound_hook_live_abort_bolt_fn abort_bolt;
+	sg_compound_hook_live_checkpoint_fn source_checkpoint;
+	sg_compound_hook_live_checkpoint_fn suffix_checkpoint;
+	sg_compound_hook_live_event_auth_fn event_authorize;
 	sg_hook_live_command_fn hook_shadow;
 } sg_compound_hook_live_host_t;
 
@@ -77,6 +104,8 @@ typedef enum sg_compound_hook_live_failure_e
 	SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT,
 	SG_COMPOUND_HOOK_LIVE_FAILURE_BINDING,
 	SG_COMPOUND_HOOK_LIVE_FAILURE_PLAN,
+	SG_COMPOUND_HOOK_LIVE_FAILURE_SOURCE_CHECKPOINT,
+	SG_COMPOUND_HOOK_LIVE_FAILURE_SUFFIX_CHECKPOINT,
 	SG_COMPOUND_HOOK_LIVE_FAILURE_ACQUIRE,
 	SG_COMPOUND_HOOK_LIVE_FAILURE_AUTHORITY,
 	SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE,
@@ -98,17 +127,9 @@ typedef enum sg_compound_hook_live_control_e
 	SG_COMPOUND_HOOK_LIVE_CONTROL_APPROACH,
 	SG_COMPOUND_HOOK_LIVE_CONTROL_OPENING,
 	SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX,
-	SG_COMPOUND_HOOK_LIVE_CONTROL_RECOVERY
+	SG_COMPOUND_HOOK_LIVE_CONTROL_RECOVERY,
+	SG_COMPOUND_HOOK_LIVE_CONTROL_PADDING
 } sg_compound_hook_live_control_t;
-
-typedef enum sg_compound_hook_live_event_e
-{
-	SG_COMPOUND_HOOK_LIVE_EVENT_NONE = 0,
-	SG_COMPOUND_HOOK_LIVE_EVENT_LINKED,
-	SG_COMPOUND_HOOK_LIVE_EVENT_ATTACHED,
-	SG_COMPOUND_HOOK_LIVE_EVENT_PULL,
-	SG_COMPOUND_HOOK_LIVE_EVENT_RELEASE
-} sg_compound_hook_live_event_t;
 
 typedef struct sg_compound_hook_live_result_s
 {
@@ -123,6 +144,7 @@ typedef struct sg_compound_hook_live_state_s
 	sg_compound_state_t outer;
 	sg_swim_replay_state_t swim;
 	sg_hook_replay_state_t hook;
+	sg_replay_progress_t opening_safety;
 	sg_hook_live_command_guard_t hook_command_guard;
 	sg_compound_hook_live_snapshot_t snapshot;
 	sg_hook_replay_spec_t hook_spec;
@@ -143,9 +165,12 @@ typedef struct sg_compound_hook_live_state_s
 	qboolean swim_active;
 	qboolean hook_active;
 	qboolean bolt_linked;
+	qboolean bolt_abort_applied;
 	qboolean hook_released;
 	qboolean command_pending;
 	qboolean command_approved;
+	qboolean command_replay_consumed;
+	qboolean aborted_command_pending;
 	qboolean recovering;
 	qboolean sweep_clear;
 	qboolean arrived;
@@ -178,7 +203,8 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveBoundary(
 sg_compound_hook_live_result_t SG_CompoundHookLiveTouch(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host, int trigger_key,
-	int frame_serial);
+	const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, int frame_serial);
 sg_compound_hook_live_result_t SG_CompoundHookLiveActivate(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host, int trigger_key,

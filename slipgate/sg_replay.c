@@ -1,4 +1,3 @@
-/* sg_replay.c -- see sg_replay.h for the ownership boundary. */
 #include "q_shared.h"
 #include "slipgate/sg_replay.h"
 
@@ -232,6 +231,35 @@ static qboolean ReplayObservationValid(const sg_replay_observation_t *observatio
 	       ReplayBoolValid(observation->hook_rope_valid) &&
 	       (!observation->hook_rope_valid ||
 	        observation->hook_rope_length >= 0);
+}
+
+sg_replay_status_t SG_ReplayFrameSafetyPostStep(
+	sg_replay_progress_t *progress, const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, qboolean boundary)
+{
+	if (!progress || !pose || !ReplayObservationValid(observation) ||
+	    !ReplayBoolValid(boundary))
+		return progress ? ReplayFail(progress,
+		                          SG_REPLAY_REASON_INVALID_ARGUMENT) :
+		               SG_REPLAY_FAILED;
+	if (progress->status != SG_REPLAY_RUNNING)
+		return progress->status;
+	if (!ReplayPoseValid(pose))
+		return ReplayFail(progress, SG_REPLAY_REASON_NONFINITE_POSE);
+	if (observation->contaminated)
+		return ReplayFail(progress, SG_REPLAY_REASON_CONTAMINATED);
+	if (observation->door_passed)
+		return ReplayFail(progress, SG_REPLAY_REASON_DOOR_PASSED);
+	if (ReplayHarmfulLiquid(pose))
+		return ReplayFail(progress, SG_REPLAY_REASON_HAZARDOUS_LIQUID);
+	if (!boundary)
+		return progress->status;
+	if (SG_ReplayFallDelta(progress->old_frame_z, pose->velocity[2],
+	                       pose->grounded, pose->waterlevel) >
+	    SG_RUNE_PROOF_DAMAGING_FALL_DELTA)
+		return ReplayFail(progress, SG_REPLAY_REASON_DAMAGING_FALL);
+	progress->old_frame_z = pose->velocity[2];
+	return progress->status;
 }
 
 /* DROP owns no wait phase: a door transition after one of its commands is an
@@ -936,7 +964,7 @@ sg_replay_status_t SG_HookReplayPreStep(sg_hook_replay_state_t *state,
 				                  SG_REPLAY_REASON_TIMING_MISMATCH);
 		}
 		if (state->arrived_in_frame)
-			ReplayCommandClear(command); /* literal zero-fill, including angles */
+			ReplayCommandClear(command);
 		else
 		{
 			if ((state->spec.expected_settle_arrival_ms !=
@@ -976,6 +1004,25 @@ static sg_replay_status_t ReplayHookBoundaryHazard(
 	if (check_fall)
 		state->progress.old_frame_z = pose->velocity[2];
 	return state->progress.status;
+}
+
+sg_replay_status_t SG_HookReplayWaitAttachPostStep(
+	sg_hook_replay_state_t *state, const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, qboolean boundary)
+{
+	if (!state || !pose || !ReplayObservationValid(observation) ||
+	    !ReplayBoolValid(boundary))
+		return state ? ReplayFail(&state->progress,
+		                          SG_REPLAY_REASON_INVALID_ARGUMENT) :
+		               SG_REPLAY_FAILED;
+	if (state->progress.status != SG_REPLAY_RUNNING)
+		return state->progress.status;
+	if (state->phase != SG_HOOK_REPLAY_WAIT_ATTACH ||
+	    state->progress.step_pending)
+		return ReplayFail(&state->progress,
+		                  SG_REPLAY_REASON_INVALID_STATE);
+	return SG_ReplayFrameSafetyPostStep(&state->progress, pose, observation,
+	                                    boundary);
 }
 
 sg_replay_status_t SG_HookReplayPostStep(sg_hook_replay_state_t *state,

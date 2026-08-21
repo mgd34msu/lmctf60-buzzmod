@@ -107,9 +107,7 @@ typedef struct sg_replay_progress_s
 	byte exit_speed;
 	float old_frame_z;
 	qboolean step_pending;
-	/* SWIM/HOOK preserve their exact trajectory after a door transition and
-	 * reject only an otherwise successful terminal. DROP rejects post-command
-	 * door passage immediately and does not use this latch. */
+	/* SWIM and HOOK check this latch at their successful terminal. */
 	qboolean door_passed_latched;
 } sg_replay_progress_t;
 
@@ -202,6 +200,9 @@ qboolean SG_DropReplayPlanarYawCommand(float dx, float dy,
 	short delta_yaw, short *command_yaw);
 float SG_ReplayFallDelta(float old_velocity_z, float velocity_z,
 	qboolean grounded, int waterlevel);
+sg_replay_status_t SG_ReplayFrameSafetyPostStep(
+	sg_replay_progress_t *progress, const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, qboolean boundary);
 
 qboolean SG_DropReplayArrived(const sg_drop_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
@@ -257,5 +258,8 @@ sg_replay_status_t SG_HookReplayPreStep(sg_hook_replay_state_t *state,
 sg_replay_status_t SG_HookReplayPostStep(sg_hook_replay_state_t *state,
 	const sg_replay_pose_t *pose,
 	const sg_replay_observation_t *observation);
+sg_replay_status_t SG_HookReplayWaitAttachPostStep(
+	sg_hook_replay_state_t *state, const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation, qboolean boundary);
 
 #endif /* SG_REPLAY_H */

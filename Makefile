@@ -565,6 +565,40 @@ COMPOUND_DROP_TEST_ALL_ARTIFACTS := \
 	.sg_compound_drop_transition_test.$(flavor).d \
 	.sg_compound_drop_transition_under_test.$(flavor).o \
 	.sg_compound_drop_transition_under_test.$(flavor).d)
+COMPOUND_HOOK_LIVE_TEST_BIN := sg_compound_hook_live_test.make
+COMPOUND_HOOK_LIVE_TEST_OBJS := .sg_compound_hook_live_test.make.o \
+	.sg_compound_hook_live_fixture.make.o \
+	.sg_compound_hook_live_safety_test.make.o \
+	.sg_compound_hook_live_under_test.make.o \
+	.sg_compound_hook_live_finish_under_test.make.o \
+	.sg_compound_hook_live_compound_under_test.make.o \
+	.sg_compound_hook_live_action_under_test.make.o \
+	.sg_compound_hook_live_replay_under_test.make.o \
+	.sg_compound_hook_live_hook_under_test.make.o \
+	.sg_compound_hook_live_publication_under_test.make.o
+COMPOUND_HOOK_LIVE_TEST_DEPS := $(COMPOUND_HOOK_LIVE_TEST_OBJS:.o=.d)
+COMPOUND_HOOK_TEST_ALL_ARTIFACTS := \
+	$(foreach flavor,gnu make,sg_compound_hook_live_test.$(flavor) \
+	.sg_compound_hook_live_test.$(flavor).o \
+	.sg_compound_hook_live_test.$(flavor).d \
+	.sg_compound_hook_live_fixture.$(flavor).o \
+	.sg_compound_hook_live_fixture.$(flavor).d \
+	.sg_compound_hook_live_safety_test.$(flavor).o \
+	.sg_compound_hook_live_safety_test.$(flavor).d \
+	.sg_compound_hook_live_under_test.$(flavor).o \
+	.sg_compound_hook_live_under_test.$(flavor).d \
+	.sg_compound_hook_live_finish_under_test.$(flavor).o \
+	.sg_compound_hook_live_finish_under_test.$(flavor).d \
+	.sg_compound_hook_live_compound_under_test.$(flavor).o \
+	.sg_compound_hook_live_compound_under_test.$(flavor).d \
+	.sg_compound_hook_live_action_under_test.$(flavor).o \
+	.sg_compound_hook_live_action_under_test.$(flavor).d \
+	.sg_compound_hook_live_replay_under_test.$(flavor).o \
+	.sg_compound_hook_live_replay_under_test.$(flavor).d \
+	.sg_compound_hook_live_hook_under_test.$(flavor).o \
+	.sg_compound_hook_live_hook_under_test.$(flavor).d \
+	.sg_compound_hook_live_publication_under_test.$(flavor).o \
+	.sg_compound_hook_live_publication_under_test.$(flavor).d)
 HOOK_LIVE_TEST_BIN := sg_hook_live_test.make
 HOOK_LIVE_TEST_OBJS := .sg_hook_live_test.make.o \
 	.sg_hook_live_under_test.make.o .sg_hook_live_replay_under_test.make.o
@@ -994,6 +1028,8 @@ OBJS := \
 	slipgate/sg_compound_drop_live.o \
 	slipgate/sg_compound_drop_live_finish.o \
 	slipgate/sg_compound_drop_game.o \
+	slipgate/sg_compound_hook_live.o \
+	slipgate/sg_compound_hook_live_finish.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
 	sg_swim_live.o \
@@ -1099,7 +1135,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	drop-live-test swim-live-test compound-swim-live-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
-	compound-drop-transition-test rotator-sweep-test \
+	compound-drop-transition-test compound-hook-live-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test maplist-rotation-test \
 	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
@@ -1245,6 +1281,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(COMPOUND_DROP_GAME_TEST_DEPS)
 -include $(COMPOUND_DROP_FANOUT_TEST_DEPS)
 -include $(COMPOUND_DROP_TRANSITION_TEST_DEPS)
+-include $(COMPOUND_HOOK_LIVE_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(HOOK_DISCIPLINE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
@@ -1490,6 +1527,11 @@ $(COMPOUND_DROP_TRANSITION_TEST_BIN): $(COMPOUND_DROP_TRANSITION_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ \
 		$(COMPOUND_DROP_TRANSITION_TEST_OBJS) $(LIBS)
+
+$(COMPOUND_HOOK_LIVE_TEST_BIN): $(COMPOUND_HOOK_LIVE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -Wl,--gc-sections -o $@ \
+		$(COMPOUND_HOOK_LIVE_TEST_OBJS) $(LIBS)
 
 $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -2538,6 +2580,82 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
 		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_hook_live_test.make.o: tests/sg_compound_hook_live_test.c \
+		tests/sg_compound_hook_live_fixture.h \
+		slipgate/sg_compound_hook_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_fixture.make.o: \
+		tests/sg_compound_hook_live_fixture.c \
+		tests/sg_compound_hook_live_fixture.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_safety_test.make.o: \
+		tests/sg_compound_hook_live_safety_test.c \
+		tests/sg_compound_hook_live_fixture.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_under_test.make.o: \
+		slipgate/sg_compound_hook_live.c \
+		slipgate/sg_compound_hook_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_finish_under_test.make.o: \
+		slipgate/sg_compound_hook_live_finish.c \
+		slipgate/sg_compound_hook_live_internal.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_compound_under_test.make.o: slipgate/sg_compound.c \
+		slipgate/sg_compound.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_action_under_test.make.o: slipgate/sg_action.c \
+		slipgate/sg_action.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_replay_under_test.make.o: slipgate/sg_replay.c \
+		slipgate/sg_replay.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_hook_under_test.make.o: slipgate/sg_hook_live.c \
+		slipgate/sg_hook_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_live_publication_under_test.make.o: \
+		slipgate/sg_compound_action_publication.c \
+		slipgate/sg_compound_action_publication.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_hook_live_test.make.o: tests/sg_hook_live_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -2863,6 +2981,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_DROP_LIVE_TEST_BIN) $(COMPOUND_DROP_GAME_TEST_BIN) \
 		$(COMPOUND_DROP_FANOUT_TEST_BIN) \
 		$(COMPOUND_DROP_TRANSITION_TEST_BIN) \
+		$(COMPOUND_HOOK_LIVE_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
 		$(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
@@ -2966,6 +3085,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_DROP_GAME_TEST_BIN)
 	$(Q)./$(COMPOUND_DROP_FANOUT_TEST_BIN)
 	$(Q)./$(COMPOUND_DROP_TRANSITION_TEST_BIN)
+	$(Q)./$(COMPOUND_HOOK_LIVE_TEST_BIN)
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
 	$(Q)./$(HOOK_DISCIPLINE_TEST_BIN)
 	$(Q)python3 $(HOOK_INTEGRATION_TEST)
@@ -3260,6 +3380,10 @@ compound-drop-transition-test: $(COMPOUND_DROP_TRANSITION_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_DROP_TRANSITION_TEST_BIN)
 
+compound-hook-live-test: $(COMPOUND_HOOK_LIVE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_HOOK_LIVE_TEST_BIN)
+
 hook-live-test: $(HOOK_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
@@ -3320,6 +3444,7 @@ clean:
 		$(COMPOUND_SWIM_GAME_TEST_ALL_ARTIFACTS) \
 		$(ROCKETJUMP_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_DROP_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_HOOK_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 		$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \
