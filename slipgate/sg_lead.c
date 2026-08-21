@@ -12,6 +12,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_lead_random.h"
 #include "slipgate/sg_pickup_target.h"
+#include "slipgate/sg_traversal_transition.h"
 
 /* Leave early for a known powerup respawn only when doing so does not abandon
  * a carrier, a threatened flag, or a fight. A per-team lease limits each pad
@@ -26,22 +27,39 @@ static qboolean Lead_On(void)
 	return (sg_cv.itemlead->value > 0.0f) ? true : false;
 }
 
-static void Lead_RetireRoute(sg_bot_t *bot)
+static void Lead_RetireSupersededRun(sg_bot_t *bot)
 {
 	rune_t *r = SG_Rune();
+	int action;
 
 	if (!bot)
 		return;
-	/* A strategy transition may discard an ordinary road.  Serialized action
-	 * controllers keep their authority until their own terminal boundary. */
-	if (r && r->links && bot->commit_link >= 0 &&
-	    bot->commit_link < r->hdr.num_links &&
-	    r->links[bot->commit_link].action == RL_RUN)
-	{
-		bot->commit_link = -1;
-		bot->commit_until = 0.0f;
-	}
 	bot->tac_seed = -1;
+	bot->tac_time = 0.0f;
+	bot->sticky_link = -1;
+	bot->latch_until = 0.0f;
+	bot->rail_link = -1;
+	bot->rail_stage = 0;
+	bot->rail_until = 0.0f;
+	if (!r || !r->links || bot->commit_link < 0 ||
+	    bot->commit_link >= r->hdr.num_links)
+	{
+		if (bot->commit_link < 0)
+		{
+			bot->commit_route_goal = (sg_field_key_t){ 0 };
+			bot->commit_retirement_pending = false;
+		}
+		return;
+	}
+	action = r->links[bot->commit_link].action;
+	if (action != RL_RUN)
+		return;
+	if (SG_TraversalControllerPhysical(bot, action))
+	{
+		bot->commit_retirement_pending = true;
+		return;
+	}
+	SG_StagedTraversalCancel(bot, action);
 }
 
 void Lead_Abort(sg_bot_t *bot, const char *why)
@@ -83,7 +101,7 @@ void Lead_Abort(sg_bot_t *bot, const char *why)
 	 * waypoint's own contract is that a strategy change retires it -- without
 	 * this the bot descends the previous goal's flood for up to ten seconds
 	 * after changing its mind */
-	Lead_RetireRoute(bot);
+	Lead_RetireSupersededRun(bot);
 }
 
 void Lead_NoteItemTaken(edict_t *taker, edict_t *item)
@@ -295,7 +313,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 						bot->lead_inferred_until = hard_until;
 				}
 				bot->lead_seen_up_at = b->seen_up_time;
-				Lead_RetireRoute(bot);
+				Lead_RetireSupersededRun(bot);
 			}
 			else if (b->seen_up_time > bot->lead_seen_up_at)
 			{
@@ -442,6 +460,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 	 * commitment receipt and diagnostic. */
 	travel = (float)lead_field[bot->seed] / 1000.0f;
 
+	Lead_RetireSupersededRun(bot);
 	bot->lead_ent = b->ent;
 	SG_Mark(&bot->lead_since);   /* the total-wait clock starts here */
 	bot->lead_slot = best;
@@ -452,8 +471,6 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 	bot->lead_inferred_until = 0.0f;
 	b->claimed_by = cl;
 	SG_TimerArm(&b->claimed_until, SG_LEAD_LEASE);
-	bot->tac_seed = -1;                 /* a new strategy retires the tactic */
-
 	if (sg_cv.debug->value)
 		sg_host.dprint("ITEMLEAD %s -> %s: T %.1f (in %.1fs) lead %.1fs "
 		           "travel %.1fs\n",

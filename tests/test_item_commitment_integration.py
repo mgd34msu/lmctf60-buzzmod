@@ -129,17 +129,6 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertLess(escort, carry)
         self.assertLess(carry, flag)
 
-    def test_only_plain_run_authority_is_retired(self):
-        source = self.text("slipgate/sg_lead.c")
-        start = source.index("static void Lead_RetireRoute")
-        end = source.index("void Lead_Abort", start)
-        body = source[start:end]
-        self.assertIn("r->links[bot->commit_link].action == RL_RUN", body)
-        self.assertIn("bot->commit_link = -1;", body)
-        self.assertNotIn("RL_TELE", body)
-        self.assertNotIn("RL_DOOR", body)
-        self.assertNotIn("RL_LIFT", body)
-
     def test_item_planner_uses_the_game_pickup_admission_law(self):
         items = self.text("g_items.c")
         admission = items[items.index(

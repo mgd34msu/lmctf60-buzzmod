@@ -21,6 +21,8 @@ static int failures;
 static edict_t entities[5];
 static gclient_t clients[2];
 static rune_seed_t seeds[3];
+static rune_link_t links[1];
+static int route_field[3];
 static rune_t test_rune;
 static cvar_t itemlead_cvar;
 static cvar_t debug_cvar;
@@ -30,6 +32,13 @@ static qboolean hurt;
 static qboolean accept_powerup = true;
 static qboolean accept_health = true;
 static qboolean block_pickup_trace;
+static int lead_field_cost = 100;
+static int transition_physical_action = -1;
+static const sg_bot_t *transition_physical_bot;
+static int transition_seen_action = -1;
+static int transition_cancel_calls;
+static sg_bot_t *transition_cancel_bot;
+static int transition_cancel_action = -1;
 
 game_locals_t game;
 level_locals_t level;
@@ -104,7 +113,7 @@ void Field_Flood(rune_t *r, int *dist, const int *sources,
 	{
 		dist[sources[0]] = 0;
 		if (sources[0] == 1)
-			dist[0] = 100;
+			dist[0] = lead_field_cost;
 	}
 }
 
@@ -193,6 +202,20 @@ float SG_TimerRemaining(float stamp)
 	return stamp - level.time;
 }
 
+qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
+{
+	transition_physical_bot = bot;
+	transition_seen_action = action;
+	return action == transition_physical_action;
+}
+
+void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
+{
+	transition_cancel_calls++;
+	transition_cancel_bot = bot;
+	transition_cancel_action = action;
+}
+
 void SG_Mark(float *stamp)
 {
 	*stamp = level.time;
@@ -237,11 +260,24 @@ static sg_bot_t *ResetLead(int state, float seen_watermark)
 	return bot;
 }
 
+static void ArmRunRoute(sg_bot_t *bot)
+{
+	bot->commit_link = 0;
+	bot->commit_until = 13.0f;
+	bot->commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	bot->sticky_link = 0;
+	bot->latch_until = 13.0f;
+	bot->rail_link = 0;
+	bot->rail_stage = 1;
+	bot->rail_until = 13.0f;
+}
+
 static void ResetWorld(void)
 {
 	memset(entities, 0, sizeof(entities));
 	memset(clients, 0, sizeof(clients));
 	memset(&test_rune, 0, sizeof(test_rune));
+	memset(links, 0, sizeof(links));
 	memset(&itemlead_cvar, 0, sizeof(itemlead_cvar));
 	memset(&debug_cvar, 0, sizeof(debug_cvar));
 	memset(&sg_cv, 0, sizeof(sg_cv));
@@ -259,6 +295,8 @@ static void ResetWorld(void)
 	VectorSet(entities[3].s.origin, 64.0f, 96.0f, 24.0f);
 	test_rune.hdr.num_seeds = 3;
 	test_rune.seeds = seeds;
+	test_rune.hdr.num_links = 1;
+	test_rune.links = links;
 	itemlead_cvar.value = 1.0f;
 	sg_cv.itemlead = &itemlead_cvar;
 	sg_cv.debug = &debug_cvar;
@@ -270,6 +308,98 @@ static void ResetWorld(void)
 	accept_powerup = true;
 	accept_health = true;
 	block_pickup_trace = false;
+	lead_field_cost = 100;
+	transition_physical_action = -1;
+	transition_physical_bot = NULL;
+	transition_seen_action = -1;
+	transition_cancel_calls = 0;
+	transition_cancel_bot = NULL;
+	transition_cancel_action = -1;
+}
+
+static sg_bot_t *PrepareNewErrand(int action)
+{
+	sg_belief_item_t *belief;
+	sg_bot_t *bot;
+
+	ResetWorld();
+	level.time = 10.0f;
+	memset(sg_bots, 0, sizeof(sg_bots));
+	memset(sg_caco_items, 0, sizeof(sg_caco_items));
+	memset(&sg_caco_team_belief, 0, sizeof(sg_caco_team_belief));
+	sg_caco_team_belief.carrier[0].client = -1;
+	sg_caco_team_belief.carrier[1].client = -1;
+	bot = &sg_bots[0];
+	bot->active = true;
+	bot->ent = &entities[1];
+	bot->seed = 0;
+	bot->tac_seed = 7;
+	bot->tac_time = 4.0f;
+	bot->lead_slot = -1;
+	ArmRunRoute(bot);
+	links[0].action = action;
+	lead_field_cost = 500;
+	sg_caco_num_items = 1;
+	belief = &sg_caco_items[0][0];
+	belief->ent = 3;
+	belief->cls = SG_BI_POWERUP;
+	belief->seed = 1;
+	belief->believed_respawn_time = 16.0f;
+	VectorCopy(entities[3].s.origin, belief->org);
+	return bot;
+}
+
+static void TestNewErrandRetiresSupersededRun(void)
+{
+	const int *field;
+	sg_bot_t *bot;
+
+	bot = PrepareNewErrand(RL_RUN);
+	field = Lead_Field(bot, SG_ROLE_ATTACK, false, -1);
+	CHECK(field != NULL && field[bot->seed] == 500);
+	CHECK(bot->lead_ent == 3);
+	CHECK(transition_cancel_calls == 1 && transition_cancel_bot == bot &&
+	    transition_cancel_action == RL_RUN);
+	CHECK(bot->sticky_link == -1 && bot->latch_until == 0.0f &&
+	    bot->rail_link == -1 && bot->rail_stage == 0 &&
+	    bot->rail_until == 0.0f);
+	CHECK(bot->tac_seed == -1 && bot->tac_time == 0.0f);
+	bot = PrepareNewErrand(RL_RUN);
+	transition_physical_action = RL_RUN;
+	bot->hook_phase = 2;
+	bot->speedhook = true;
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);
+	CHECK(transition_cancel_calls == 0 && transition_physical_bot == bot &&
+	    transition_seen_action == RL_RUN);
+	CHECK(bot->commit_link == 0 && bot->commit_until == 13.0f &&
+	    bot->commit_route_goal.field == route_field);
+	CHECK(bot->commit_retirement_pending && bot->sticky_link == -1 &&
+	    bot->rail_link == -1);
+
+	bot = PrepareNewErrand(RL_HOOK);
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) != NULL);
+	CHECK(transition_cancel_calls == 0 && bot->commit_link == 0 &&
+	    bot->commit_route_goal.field == route_field);
+	CHECK(bot->sticky_link == -1 && bot->rail_link == -1 &&
+	    !bot->commit_retirement_pending);
+
+	bot = PrepareNewErrand(RL_RUN);
+	sg_caco_items[0][0].believed_respawn_time = 100.0f;
+	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
+	CHECK(bot->lead_ent == 0 && bot->commit_link == 0 &&
+	    bot->commit_until == 13.0f && bot->sticky_link == 0 &&
+	    bot->rail_link == 0 && bot->tac_seed == 7);
+}
+
+static void TestAbortClearsDanglingRouteReceipt(void)
+{
+	sg_bot_t *bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+
+	bot->commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	bot->commit_retirement_pending = true;
+	Lead_Abort(bot, "test");
+	CHECK(bot->commit_route_goal.field == NULL &&
+	    !bot->commit_retirement_pending);
 }
 
 static void TestClockSpawnContinuesToPhysicalPickup(void)
@@ -280,6 +410,9 @@ static void TestClockSpawnContinuesToPhysicalPickup(void)
 
 	level.time = 10.0f;
 	bot = ResetLead(SG_LEAD_WAITING, 5.0f);
+	links[0].action = RL_RUN;
+	transition_cancel_calls = 0;
+	ArmRunRoute(bot);
 	belief = &sg_caco_items[0][0];
 	belief->believed_up = true;
 	belief->seen_up_time = 5.0f;
@@ -290,7 +423,8 @@ static void TestClockSpawnContinuesToPhysicalPickup(void)
 	CHECK(bot->lead_state == SG_LEAD_SPAWNED);
 	CHECK(fabsf(bot->lead_inferred_until - 12.0f) < 0.001f);
 	CHECK(bot->tac_seed == -1);
-
+	CHECK(transition_cancel_calls == 1 && transition_cancel_bot == bot &&
+	    transition_cancel_action == RL_RUN);
 	level.time = 12.1f;
 	CHECK(Lead_Field(bot, SG_ROLE_ATTACK, false, -1) == NULL);
 	CHECK(bot->lead_ent == 0);
@@ -338,11 +472,16 @@ static void TestExactPickupOwnershipEndsCommitment(void)
 
 	level.time = 10.0f;
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
+	links[0].action = RL_RUN;
+	transition_cancel_calls = 0;
+	ArmRunRoute(bot);
 	belief = &sg_caco_items[0][0];
 	Lead_NoteItemTaken(&entities[1], &entities[3]);
 	CHECK(bot->lead_ent == 0);
 	CHECK(belief->claimed_by == -1);
 	CHECK(belief->claimed_until == 0.0f);
+	CHECK(transition_cancel_calls == 1 && transition_cancel_bot == bot &&
+	    transition_cancel_action == RL_RUN);
 
 	bot = ResetLead(SG_LEAD_SPAWNED, 6.0f);
 	Lead_NoteItemTaken(&entities[2], &entities[3]);
@@ -643,6 +782,8 @@ int main(void)
 	TestStrongerInterruptsStillWin();
 	TestPowerupCapacityEndsTheErrand();
 	TestUnreachableEarlyPadDoesNotSuppressReachablePad();
+	TestNewErrandRetiresSupersededRun();
+	TestAbortClearsDanglingRouteReceipt();
 	if (failures)
 	{
 		fprintf(stderr, "%d sg_item_commitment tests failed\n", failures);
