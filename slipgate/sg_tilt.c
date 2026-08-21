@@ -90,7 +90,8 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	ci = (int)(e->client - game.clients);
 	if (ci >= 0 && ci < SG_DMG_CLIENTS)
 		for (k = 0; k < SG_DMG_RING; k++)
-			if (sg_caco_damage[ci][k].attacker >= 0 &&
+			if (sg_caco_damage[ci][k].landed &&
+			    sg_caco_damage[ci][k].attacker >= 0 &&
 			    sg_caco_damage[ci][k].time > best)
 			{
 				best = sg_caco_damage[ci][k].time;

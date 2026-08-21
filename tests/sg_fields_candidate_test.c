@@ -17,10 +17,7 @@
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
 void Fields_TestFloodFlat(rune_t *r, int *dist,
 	const int *sources, const int *source_cost, int num_sources);
-qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
-	int client, int maxclients, int seed);
-void Caco_EnemyPlace(rune_t *r, int team_index, int client, int seed,
-	qboolean seen, qboolean runed);
+int SG_CacoLifecycleTest(void);
 int Rally_CoverSeed(const rune_t *r, int from);
 
 /* Field_Flood's focused production section needs only these host-owned
@@ -532,48 +529,6 @@ static void CheckLocalFieldSeedAdmission(void)
 	CHECK(SG_LocalSeedScore(&rune, NULL, 1, 1.0f, 0.0f, 0.0f) >= 0.0f);
 }
 
-static void CheckEnemyObservationRetirement(void)
-{
-	rune_t rune;
-	rune_seed_t seeds[2];
-	int i;
-
-	memset(&rune, 0, sizeof(rune));
-	memset(seeds, 0, sizeof(seeds));
-	rune.hdr.num_seeds = 2;
-	rune.seeds = seeds;
-	game.maxclients = 16;
-	for (i = 0; i < 2; i++)
-		for (int slot = 0; slot < SG_MAX_ENEMY_TRACK; slot++)
-		{
-			sg_caco_enemies[i][slot].client = -1;
-			sg_caco_enemies[i][slot].seed = -1;
-		}
-
-	level.time = 10.0f;
-	Caco_EnemyPlace(&rune, 0, 7, 1, true, true);
-	CHECK(sg_caco_enemies[0][0].client == 7);
-	CHECK(sg_caco_enemies[0][0].seed == 1);
-	CHECK(sg_caco_enemies[0][0].runed);
-	CHECK(sg_caco_enemies[0][0].seen_time == 10.0f);
-
-	/* The same visible client leaving local topology disproves the old seed;
-	 * it must not remain fresh route authority. */
-	level.time = 11.0f;
-	Caco_EnemyPlace(&rune, 0, 7, -1, true, false);
-	CHECK(sg_caco_enemies[0][0].client == -1);
-	CHECK(sg_caco_enemies[0][0].seed == -1);
-	CHECK(sg_caco_enemies[0][0].seen_time == 0.0f);
-	CHECK(!sg_caco_enemies[0][0].runed);
-
-	/* Malformed team/client inputs cannot clear or create another row. */
-	Caco_EnemyPlace(&rune, 1, 3, 0, false, false);
-	CHECK(sg_caco_enemies[1][0].client == 3);
-	Caco_EnemyPlace(&rune, 2, 3, -1, true, false);
-	Caco_EnemyPlace(&rune, 1, 16, -1, true, false);
-	CHECK(sg_caco_enemies[1][0].client == 3);
-}
-
 static void CheckCarrierProjectionPricesWholeEdge(void)
 {
 	rune_t rune;
@@ -765,26 +720,12 @@ int main(void)
 	plane[4] = 9;
 	CHECK(Fields_DefensiveRoot(&rune, plane) == 4);
 
-	/* A visible client outside the proved local graph has no route position.
-	 * Reject it at the shared CACO writer boundary instead of exposing -1 (or
-	 * an out-of-range seed) to default carrier-cover indexing. */
-	CHECK(Caco_EnemyObservationValid(&rune, 0, 0, 16, 0));
-	CHECK(Caco_EnemyObservationValid(&rune, 1, 15, 16, 4));
-	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 16, -1));
-	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 16, 5));
-	CHECK(!Caco_EnemyObservationValid(&rune, -1, 0, 16, 0));
-	CHECK(!Caco_EnemyObservationValid(&rune, 2, 0, 16, 0));
-	CHECK(!Caco_EnemyObservationValid(&rune, 0, -1, 16, 0));
-	CHECK(!Caco_EnemyObservationValid(&rune, 0, 16, 16, 0));
-	CHECK(!Caco_EnemyObservationValid(&rune, 0, 0, 0, 0));
-	CHECK(!Caco_EnemyObservationValid(NULL, 0, 0, 16, 0));
-
 	CheckHookFieldAdmission();
 	CheckInterceptAdmission();
 	CheckRallyCoverAdmission();
 	CheckCarrierTrailFollowsTheScoringRoute();
 	CheckLocalFieldSeedAdmission();
-	CheckEnemyObservationRetirement();
+	failures += SG_CacoLifecycleTest();
 	CheckCarrierProjectionPricesWholeEdge();
 	CheckCarrierScreenUsesTravelTime();
 	CheckObjectiveFieldRootTracksMovingGoals();

@@ -2140,31 +2140,6 @@ static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
 
 
 
-/*
- * Has anything landed on this body since `since`? The damage ring
- * (sg_caco.c, four entries per client) already books every hit T_Damage
- * delivers, seen shooter or not, so the spawn beat needs no sense of its
- * own: the question "did the world just object" is exactly the one the ring
- * was built to answer, and it answers it for splash and falls and the rail
- * from a room away alike.
- */
-qboolean Beat_HurtSince(edict_t *e, float since)
-{
-	int ci, k;
-
-	if (!e || !e->client)
-		return false;
-	ci = (int)(e->client - game.clients);
-	if (ci < 0 || ci >= SG_DMG_CLIENTS)
-		return false;
-	for (k = 0; k < SG_DMG_RING; k++)
-		if (sg_caco_damage[ci][k].attacker >= 0 &&
-		    sg_caco_damage[ci][k].time > since)
-			return true;
-	return false;
-}
-
-
 /* Body actions do not outlive a death. Preserve learned map facts, danger,
  * persona, tilt, and dead-door lessons. */
 static void Bot_ResetLifeActions(sg_bot_t *bot)

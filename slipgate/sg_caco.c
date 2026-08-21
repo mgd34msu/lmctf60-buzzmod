@@ -1671,6 +1671,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 			slot = &ring[i];
 
 	slot->attacker = ac;
+	slot->landed = true;
 	slot->mod = mod;
 	slot->damage = damage;
 	slot->time = level.time;
@@ -1752,7 +1753,7 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
 	ring = sg_caco_damage[ci];
 	for (i = 0; i < SG_DMG_RING; i++)
 	{
-		if (ring[i].attacker < 0 || !ring[i].unseen)
+		if (!ring[i].landed || ring[i].attacker < 0 || !ring[i].unseen)
 			continue;
 		if (level.time - ring[i].time > window)
 			continue;
@@ -1766,22 +1767,49 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from)
 	return true;
 }
 
+qboolean SG_HurtSince(edict_t *self, float since)
+{
+	int ci, i;
+
+	if (!self || !self->client)
+		return false;
+	ci = (int)(self->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return false;
+	for (i = 0; i < SG_DMG_RING; i++)
+		if (sg_caco_damage[ci][i].landed &&
+		    sg_caco_damage[ci][i].time > since)
+			return true;
+	return false;
+}
+
 /* Every client-indexed sensor fact describes one concrete body generation.
  * Client slots survive deaths, team changes, disconnects and fake-client
  * reuse; keeping these rows across any of those boundaries turns a corpse or
  * a new teammate into an enemy for several seconds. */
 void Caco_ResetClient(edict_t *client)
 {
-	int ci, k, t, s;
+	int ci, k, t, s, victim;
 
 	if (!client)
 		return;
 	ci = (int)(client - g_edicts) - 1;
 	if (ci < 0 || ci >= SG_DMG_CLIENTS)
 		return;
-	memset(sg_caco_damage[ci], 0, sizeof(sg_caco_damage[ci]));
-	for (k = 0; k < SG_DMG_RING; k++)
-		sg_caco_damage[ci][k].attacker = -1;
+	for (victim = 0; victim < SG_DMG_CLIENTS; victim++)
+		for (k = 0; k < SG_DMG_RING; k++)
+			if (victim == ci)
+			{
+				memset(&sg_caco_damage[victim][k], 0,
+				       sizeof(sg_caco_damage[victim][k]));
+				sg_caco_damage[victim][k].attacker = -1;
+			}
+			else if (sg_caco_damage[victim][k].attacker == ci)
+			{
+				sg_caco_damage[victim][k].attacker = -1;
+				sg_caco_damage[victim][k].unseen = false;
+				VectorClear(sg_caco_damage[victim][k].from);
+			}
 	for (t = 0; t < 2; t++)
 	{
 		for (k = 0; k < SG_CALL_TOPICS; k++)
@@ -2052,8 +2080,7 @@ void Caco_Reset(void)
 	{
 		int c, k;
 
-		/* a zeroed entry names client 0, who is a real player; -1 is the
-		 * only thing that means "nothing landed here" */
+		/* A zeroed attacker names client 0, so empty entries use -1. */
 		for (c = 0; c < SG_DMG_CLIENTS; c++)
 			for (k = 0; k < SG_DMG_RING; k++)
 				sg_caco_damage[c][k].attacker = -1;

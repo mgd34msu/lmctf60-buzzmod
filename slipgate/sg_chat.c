@@ -1169,22 +1169,6 @@ static qboolean Chat_EnemySeenNear(int team, vec3_t org)
 
 
 
-static qboolean Chat_HurtSince(edict_t *e, float since)
-{
-	int ci, k;
-
-	if (!e || !e->client)
-		return false;
-	ci = (int)(e->client - game.clients);
-	if (ci < 0 || ci >= SG_DMG_CLIENTS)
-		return false;
-	for (k = 0; k < SG_DMG_RING; k++)
-		if (sg_caco_damage[ci][k].attacker >= 0 &&
-		    sg_caco_damage[ci][k].time > since)
-			return true;
-	return false;
-}
-
 /* when the newest hit of at least `dmg` landed, 0.0 for none since `since` */
 static float Chat_BigHitSince(edict_t *e, int dmg, float since)
 {
@@ -1200,7 +1184,7 @@ static float Chat_BigHitSince(edict_t *e, int dmg, float since)
 	{
 		sg_damage_hit_t *h = &sg_caco_damage[ci][k];
 
-		if (h->attacker < 0 || h->damage < dmg)
+		if (!h->landed || h->damage < dmg)
 			continue;
 		if (h->time <= since || h->time <= best)
 			continue;
@@ -1225,7 +1209,7 @@ static qboolean Chat_Busy(edict_t *e)
 		return true;
 	if (e->pain_debounce_time > level.time)
 		return true;
-	if (Chat_HurtSince(e, level.time - SG_CHAT_REPLY_CALM))
+	if (SG_HurtSince(e, level.time - SG_CHAT_REPLY_CALM))
 		return true;
 	return Chat_EnemySeenNear(e->client->ctf.teamnum, e->s.origin);
 }
@@ -2883,7 +2867,7 @@ static void Chat_Hurt(void)
 		if (level.time < cb->next_hurt)
 			continue;
 		if (e->pain_debounce_time > level.time ||
-		    Chat_HurtSince(e, level.time - SG_CHAT_HURT_CALM) ||
+		    SG_HurtSince(e, level.time - SG_CHAT_HURT_CALM) ||
 		    Chat_EnemySeenNear(e->client->ctf.teamnum, e->s.origin))
 			continue;                   /* still in it */
 		if (Chat_RandomUnit(e) >= SG_CHAT_HURT_ODDS * Chat_Chatty(i))

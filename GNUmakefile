@@ -401,6 +401,7 @@ DANGER_TEST_OBJS = .sg_danger_test.gnu.o .sg_danger_under_test.gnu.o \
 DANGER_TEST_DEPS = $(DANGER_TEST_OBJS:.o=.d)
 FIELDS_CANDIDATE_TEST_BIN = sg_fields_candidate_test.gnu
 FIELDS_CANDIDATE_TEST_OBJS = .sg_fields_candidate_test.gnu.o \
+	.sg_caco_lifecycle_test.gnu.o \
 	.sg_fields_candidate_under_test.gnu.o \
 	.sg_caco_projection_under_test.gnu.o \
 	.sg_goal_projection_under_test.gnu.o \
@@ -799,10 +800,12 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_danger_under_test.make.o .sg_danger_under_test.make.d \
 	sg_fields_candidate_test.gnu sg_fields_candidate_test.make \
 	.sg_fields_candidate_test.gnu.o .sg_fields_candidate_test.gnu.d \
+	.sg_caco_lifecycle_test.gnu.o .sg_caco_lifecycle_test.gnu.d \
 	.sg_fields_candidate_under_test.gnu.o .sg_fields_candidate_under_test.gnu.d \
 	.sg_caco_projection_under_test.gnu.o .sg_caco_projection_under_test.gnu.d \
 	.sg_goal_projection_under_test.gnu.o .sg_goal_projection_under_test.gnu.d \
 	.sg_fields_candidate_test.make.o .sg_fields_candidate_test.make.d \
+	.sg_caco_lifecycle_test.make.o .sg_caco_lifecycle_test.make.d \
 	.sg_fields_candidate_under_test.make.o .sg_fields_candidate_under_test.make.d \
 	.sg_caco_projection_under_test.make.o .sg_caco_projection_under_test.make.d \
 	.sg_goal_projection_under_test.make.o .sg_goal_projection_under_test.make.d \
@@ -1693,6 +1696,13 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 .sg_caco_projection_under_test.gnu.o: slipgate/sg_caco.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -DSG_CACO_TEST -ffunction-sections \
+		-fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_caco_lifecycle_test.gnu.o: tests/sg_caco_lifecycle_test.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
 		-fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 

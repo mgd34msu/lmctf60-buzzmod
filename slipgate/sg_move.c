@@ -7631,7 +7631,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			/* bot->engaged_last is this same value by here -- it was
 			 * assigned from `engaged` a few lines up, so the live read
 			 * is the one worth making */
-			if (engaged || Beat_HurtSince(e, bot->beat_from))
+			if (engaged || SG_HurtSince(e, bot->beat_from))
 				bot->beat_until = 0.0f;
 			else
 			{

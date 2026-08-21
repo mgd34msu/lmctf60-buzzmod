@@ -243,7 +243,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 		Lead_Abort(bot, "engaged");
 		return NULL;
 	}
-	if (Beat_HurtSince(e, level.time - 3.0f))
+	if (SG_HurtSince(e, level.time - 3.0f))
 	{
 		Lead_Abort(bot, "taking fire");
 		return NULL;

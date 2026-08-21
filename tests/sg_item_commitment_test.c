@@ -118,7 +118,7 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	return combat;
 }
 
-qboolean Beat_HurtSince(edict_t *ent, float since)
+qboolean SG_HurtSince(edict_t *ent, float since)
 {
 	(void)ent;
 	(void)since;

@@ -417,7 +417,8 @@ void Caco_ResetClient(edict_t *client);
 
 typedef struct
 {
-	int			attacker;       /* client number, -1 empty */
+	qboolean	landed;
+	int			attacker;       /* actionable client; -1 empty or retired */
 	int			mod;            /* means of death, MOD_FRIENDLY_FIRE masked off */
 	int			damage;
 	vec3_t		from;           /* unit vector: the victim's eye toward
@@ -441,7 +442,7 @@ qboolean SG_RecentUnseenHit(edict_t *self, float window, vec3_t out_from);
 /* has anything landed on this body since `since`? Reads the same damage
  * ring: the spawn beat and the early-return errand both need "did the
  * world just object" and neither needs a sense of its own. */
-qboolean Beat_HurtSince(edict_t *e, float since);
+qboolean SG_HurtSince(edict_t *e, float since);
 
 
 #define SG_RAIL_RELOAD	1.6f
