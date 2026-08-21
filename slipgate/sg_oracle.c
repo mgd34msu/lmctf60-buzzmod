@@ -13,6 +13,7 @@
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_rocketjump_live.h"
+#include "slipgate/sg_rocketjump_impact.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_door_approach.h"
@@ -6521,10 +6522,8 @@ qboolean SG_OracleRocketJumpAim(vec3_t origin, short pitch, short yaw,
 
 	VectorMA(start, 8192.0f, forward, end);
 	tr = sg_host.trace(start, NULL, NULL, end, NULL, MASK_SHOT);
-	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f)
+	if (!SG_RocketJumpWorldImpact(&tr))
 		return false;
-	if (tr.surface && (tr.surface->flags & SURF_SKY))
-		return false;               /* g_weapon.c:635-637: no explosion */
 
 	VectorCopy(tr.endpos, boom_out);
 	VectorSubtract(boom_out, start, d);

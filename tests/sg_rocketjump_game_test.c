@@ -32,6 +32,7 @@ static rune_seed_t seeds[2];
 static rune_link_t links[1];
 static uint32_t generations[TEST_EDICTS];
 static cvar_t debug_cvar;
+static edict_t *trace_hit;
 static int callback_enabled;
 static int callback_sent;
 static int failures;
@@ -63,7 +64,7 @@ static trace_t TestTrace(const vec3_t start, const vec3_t mins,
 	trace.fraction = 0.25f;
 	VectorCopy(start, trace.endpos);
 	trace.endpos[2] -= 24.0f;
-	trace.ent = &edicts[0];
+	trace.ent = trace_hit;
 	return trace;
 }
 
@@ -176,6 +177,7 @@ static void ResetFixture(void)
 	globals.edicts = edicts;
 	globals.edict_size = sizeof(edict_t);
 	globals.num_edicts = TEST_EDICTS;
+	globals.max_edicts = TEST_EDICTS;
 	game.maxentities = TEST_EDICTS;
 	edicts[0].inuse = true;
 	edicts[0].s.number = 0;
@@ -228,6 +230,7 @@ static void ResetFixture(void)
 	sg_cv.debug = &debug_cvar;
 	sg_host.dprint = NoPrint;
 	sg_host.trace = TestTrace;
+	trace_hit = &edicts[0];
 	gi.unlinkentity = LinkEntity;
 	gi.linkentity = LinkEntity;
 	gi.modelindex = ModelIndex;
@@ -252,6 +255,26 @@ static void TestFireCallbackOwnsFlight(void)
 	callback_enabled = 1;
 	CHECK(SG_RocketJumpGameEmit(&sg_bots[0], TEST_LINK));
 	CHECK(sg_bots[0].rocketjump.phase == SG_ROCKETJUMP_FLIGHT);
+}
+
+static void TestFiredRequiresStaticWorldImpact(void)
+{
+	ResetFixture();
+	edicts[FOREIGN_EDICT].inuse = true;
+	edicts[FOREIGN_EDICT].s.number = FOREIGN_EDICT;
+	edicts[FOREIGN_EDICT].solid = SOLID_BSP;
+	edicts[FOREIGN_EDICT].movetype = MOVETYPE_PUSH;
+	trace_hit = &edicts[FOREIGN_EDICT];
+	CHECK(SG_RocketJumpGameEmit(&sg_bots[0], TEST_LINK));
+	CHECK(sg_bots[0].rocketjump.phase == SG_ROCKETJUMP_ARMED);
+	callback_enabled = 1;
+	CHECK(SG_RocketJumpGameEmit(&sg_bots[0], TEST_LINK));
+	CHECK(sg_bots[0].rocketjump.phase == SG_ROCKETJUMP_ARMED);
+	CHECK(sg_bots[0].rocketjump.projectile.key == 0U);
+
+	ResetFixture();
+	trace_hit = &edicts[0];
+	BeginFlight();
 }
 
 static void TestForeignAndRecycledProjectiles(void)
@@ -377,6 +400,7 @@ static void TestAuthenticatedStaging(void)
 int main(void)
 {
 	TestFireCallbackOwnsFlight();
+	TestFiredRequiresStaticWorldImpact();
 	TestForeignAndRecycledProjectiles();
 	TestCompletionResetsAdapter();
 	TestCommandFailureResetsAdapter();

@@ -63,8 +63,8 @@
     "tools/waveloop.sh": 1
   },
   "oversized_files": {
-    "GNUmakefile": 2874,
-    "Makefile": 3144,
+    "GNUmakefile": 2875,
+    "Makefile": 3145,
     "slipgate/sg_arach.c": 3689,
     "slipgate/sg_caco.c": 2117,
     "slipgate/sg_chat.c": 3812,
@@ -80,7 +80,7 @@
     "slipgate/sg_local.h": 825,
     "slipgate/sg_move.c": 9632,
     "slipgate/sg_net.c": 905,
-    "slipgate/sg_oracle.c": 6677,
+    "slipgate/sg_oracle.c": 6676,
     "slipgate/sg_replay.c": 1150,
     "slipgate/sg_rune.c": 5631,
     "slipgate/sg_rune_codec.c": 2759,
@@ -90,7 +90,7 @@
     "tests/sg_compound_guard_game_test.c": 1168,
     "tests/sg_compound_guard_test.c": 1060,
     "tests/sg_compound_swim_live_test.c": 1416,
-    "tests/sg_compound_swim_oracle_test.c": 2282,
+    "tests/sg_compound_swim_oracle_test.c": 2308,
     "tests/sg_compound_world_test.c": 1131,
     "tests/sg_declared_door_guard_test.c": 1070,
     "tests/sg_drop_live_test.c": 946,

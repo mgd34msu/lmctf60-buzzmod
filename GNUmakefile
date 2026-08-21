@@ -719,6 +719,7 @@ COMPOUND_SWIM_ORACLE_TEST_OBJS = \
 	.sg_compound_swim_oracle_replay_under_test.gnu.o \
 	.sg_compound_swim_oracle_compound_under_test.gnu.o \
 	.sg_compound_swim_oracle_world_under_test.gnu.o \
+	.sg_rocketjump_live_under_test.gnu.o \
 	.sg_compound_swim_oracle_q_shared_under_test.gnu.o
 COMPOUND_SWIM_ORACLE_TEST_DEPS = \
 	$(COMPOUND_SWIM_ORACLE_TEST_OBJS:.o=.d)

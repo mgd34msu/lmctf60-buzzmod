@@ -96,6 +96,7 @@ static gclient_t fixture_clients[1];
 static cvar_t fixture_gravity;
 static fixture_config_t fixture_config;
 static fixture_observation_t fixture_observation;
+static edict_t *fixture_rocketjump_hit;
 static int failures;
 
 #define CHECK(expression) do { \
@@ -293,6 +294,13 @@ static trace_t HostTrace(const vec3_t start, const vec3_t mins,
 	fixture_observation.trace_calls++;
 	trace.fraction = 1.0f;
 	trace.ent = &fixture_edicts[0];
+	if (fixture_rocketjump_hit)
+	{
+		trace.fraction = 0.25f;
+		trace.ent = fixture_rocketjump_hit;
+		Set3(trace.endpos, end[0], end[1], end[2]);
+		return trace;
+	}
 	if (!mins && !fixture_observation.top_staged)
 		fixture_observation.pretop_contact_traces++;
 	/* Exercise exact-member trace admission for every Pmove command.  Chest
@@ -642,6 +650,7 @@ static void ResetFixture(const fixture_config_t *config)
 	memset(fixture_clients, 0, sizeof(fixture_clients));
 	memset(&fixture_gravity, 0, sizeof(fixture_gravity));
 	memset(&fixture_observation, 0, sizeof(fixture_observation));
+	fixture_rocketjump_hit = NULL;
 	memset(&globals, 0, sizeof(globals));
 	memset(&game, 0, sizeof(game));
 	memset(&level, 0, sizeof(level));
@@ -680,6 +689,22 @@ static void ResetFixture(const fixture_config_t *config)
 	sg_host.box_edicts = HostBoxEdicts;
 	sg_host.pmove = HostPmove;
 	sg_host.linkentity = HostLinkEntity;
+}
+
+static void TestRocketJumpAimRequiresStaticWorldImpact(void)
+{
+	fixture_config_t config =
+	    DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	vec3_t origin = { 0.0f, 0.0f, 0.0f };
+	vec3_t boom;
+	float flight_ms;
+
+	ResetFixture(&config);
+	fixture_rocketjump_hit = &fixture_edicts[4];
+	CHECK(!SG_OracleRocketJumpAim(origin, 16384, 0, boom, &flight_ms));
+	fixture_rocketjump_hit = &fixture_edicts[0];
+	CHECK(SG_OracleRocketJumpAim(origin, 16384, 0, boom, &flight_ms));
+	CHECK(flight_ms > 0.0f);
 }
 
 static void ResetGuardFixture(void)
@@ -2243,6 +2268,7 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 
 int main(void)
 {
+	TestRocketJumpAimRequiresStaticWorldImpact();
 	TestTouchSubsteps();
 	TestLivePlanCapturesContactAndRestoresMember();
 	TestFailureTable();

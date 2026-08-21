@@ -5,6 +5,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rocketjump_game.h"
+#include "slipgate/sg_rocketjump_impact.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_util.h"
 
@@ -462,8 +463,7 @@ void SG_RocketJumpGameFired(edict_t *owner, edict_t *projectile)
 	VectorMA(projectile->s.origin, 8192.0f, direction, end);
 	trace = sg_host.trace(projectile->s.origin, NULL, NULL, end, owner,
 	                     MASK_SHOT);
-	if (trace.startsolid || trace.allsolid || trace.fraction >= 1.0f ||
-	    (trace.surface && (trace.surface->flags & SURF_SKY)))
+	if (!SG_RocketJumpWorldImpact(&trace))
 		return;
 	RocketJumpVectorQ8Truncated(trace.endpos, expected_q8);
 	if (!SG_RocketJumpLiveFired(&bot->rocketjump, key, expected_q8))
@@ -508,8 +508,10 @@ void SG_RocketJumpGameImpactBegin(edict_t *projectile, edict_t *other,
 		    expected[1], expected[2]);
 	RocketJumpVectorQ8Truncated(bot->ent->velocity, velocity_q8);
 	(void)SG_RocketJumpLiveImpactBegin(&bot->rocketjump, key,
-	    other == g_edicts, surface && (surface->flags & SURF_SKY),
-	    other == g_edicts && RocketJumpExpectedImpact(bot, projectile),
+	    SG_RocketJumpStaticWorldAuthenticated(other),
+	    surface && (surface->flags & SURF_SKY),
+	    SG_RocketJumpStaticWorldAuthenticated(other) &&
+	        RocketJumpExpectedImpact(bot, projectile),
 	    bot->ent->health, velocity_q8);
 }
 
