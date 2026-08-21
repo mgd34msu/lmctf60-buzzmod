@@ -178,20 +178,6 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 }
 
 /*
- * Players name places by what sits there. Dropped items are skipped: "by the
- * shotgun" is no use when the shotgun belonged to a corpse and is about to
- * vanish. Same idea, and the same fallback, as bl_know.c's Know_Where.
- */
-static void Caco_Where(vec3_t origin, char *buf, int size)
-{
-	/* one namer for every mouth: the curated landmark table in sg_chat.c.
-	 * This function's own nearest-anything scan named positions by health
-	 * boxes ("by the Health", 25 times a game) and once by the carried
-	 * flag itself ("enemy has our flag, by the Enemy Flag"). */
-	SG_ChatLocName(origin, buf, size);
-}
-
-/*
  * Queue a callout. Only our own bots speak -- a human teammate's client is
  * theirs to type with, and belief learned from human eyes goes in silently.
  */
@@ -222,7 +208,7 @@ static void Caco_Queue(edict_t *speaker, int team, int topic,
 		    caco_callout_random[team_index][topic]);
 	}
 
-	Caco_Where(origin, place, sizeof(place));
+	SG_ChatLocName(origin, place, sizeof(place));
 	Com_sprintf(c->line, sizeof(c->line), "%s %s", what, place);
 	c->speaker = (int)(speaker - g_edicts - 1);
 	c->speaker_ctfid = speaker->client->ctf.ctfid;

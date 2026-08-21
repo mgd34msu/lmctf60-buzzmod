@@ -965,9 +965,7 @@ static void Chat_Flush(void)
 
 /*
  * The landmark table. Powerups, both armours, mega, and the five weapons a
- * player calls a position by. Dropped copies are skipped for the reason
- * Caco_Where skips them: "by the shotgun" is no use when the shotgun
- * belonged to a corpse and is about to vanish.
+ * player calls a position by. Dropped copies vanish too soon to name a place.
  */
 static const struct { const char *cls; const char *name; } chat_lm_class[] = {
 	{ "item_quad",              "the quad" },
