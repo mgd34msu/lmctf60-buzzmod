@@ -382,9 +382,12 @@
     <ClCompile Include="slipgate\sg_button_live.c" />
     <ClCompile Include="slipgate\sg_compound_guard.c" />
     <ClCompile Include="slipgate\sg_compound_guard_game.c" />
+    <ClCompile Include="slipgate\sg_compound_swim_live.c" />
+    <ClCompile Include="slipgate\sg_compound_swim_game.c" />
     <ClCompile Include="slipgate\sg_declared_door_guard.c" />
     <ClCompile Include="slipgate\sg_compound_world.c" />
     <ClCompile Include="slipgate\sg_compound_gen.c" />
+    <ClCompile Include="slipgate\sg_compound_gen_game.c" />
     <ClCompile Include="slipgate\sg_compound_publication.c" />
     <ClCompile Include="slipgate\sg_rune_door_scope.c" />
     <ClCompile Include="slipgate\sg_drop_live.c" />
@@ -502,9 +505,12 @@
     <ClInclude Include="slipgate\sg_button_live.h" />
     <ClInclude Include="slipgate\sg_compound_guard.h" />
     <ClInclude Include="slipgate\sg_compound_guard_game.h" />
+    <ClInclude Include="slipgate\sg_compound_swim_live.h" />
+    <ClInclude Include="slipgate\sg_compound_swim_game.h" />
     <ClInclude Include="slipgate\sg_declared_door_guard.h" />
     <ClInclude Include="slipgate\sg_compound_world.h" />
     <ClInclude Include="slipgate\sg_compound_gen.h" />
+    <ClInclude Include="slipgate\sg_compound_gen_game.h" />
     <ClInclude Include="slipgate\sg_compound_publication.h" />
     <ClInclude Include="slipgate\sg_rune_door_scope.h" />
     <ClInclude Include="slipgate\sg_drop_live.h" />

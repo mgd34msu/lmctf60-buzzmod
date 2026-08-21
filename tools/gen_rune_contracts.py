@@ -156,7 +156,7 @@ _PINNED_PROOF_LAW = {
 }
 _PINNED_RUNTIME_SUPPORT = {
     0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 0,
-    8: 1, 9: 0, 10: 0, 11: 0, 12: 1,
+    8: 1, 9: 0, 10: 1, 11: 0, 12: 1,
 }
 _FROZEN_BASE_ACTION_COUNT = 12
 _PINNED_MECHANISM_CONTROLLERS = {
@@ -179,7 +179,7 @@ _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
     7: (0, 0, 7, ()),
     8: (1, 1, 8, ((1, 1), (2, 1))),
     9: (0, 0, 9, ()),
-    10: (0, 0, 10, ()),
+    10: (1, 0, 10, ()),
     11: (0, 0, 11, ()),
     12: (1, 1, 12, ((3, 2),)),
 }

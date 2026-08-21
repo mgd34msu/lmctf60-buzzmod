@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../q_shared.h"
 #include "../slipgate/sg_compound_gen.h"
 
 static int failures;
@@ -137,6 +138,7 @@ static int LinkCanonical(const rune_link_t *link, int from, int to)
 	       link->provenance == RL_CONTRACTED &&
 	       link->min_speed == 0 && link->heading == 0 &&
 	       link->heading_slack == 0 &&
+	       link->mechanism_plan == RUNE_NO_MECHANISM_PLAN &&
 	       memcmp(link->anchor, zero, sizeof(zero)) == 0 &&
 	       link->mechanism_anchor[0] == 10.0f &&
 	       link->mechanism_anchor[1] == 20.0f &&
@@ -205,7 +207,7 @@ static void TestTopologyAndProofFallback(void)
 	CHECK(output[2].cost_ms == 1000 && output[2].exit_speed == 14);
 }
 
-static void TestNoImprovementAndNoProof(void)
+static void TestLocalShortcutAndNoProof(void)
 {
 	sg_compound_gen_seed_t seeds[2];
 	sg_compound_gen_candidate_t candidate;
@@ -222,8 +224,10 @@ static void TestNoImprovementAndNoProof(void)
 	context.invalid_destination = -1;
 	request = Request(seeds, 2, &candidate, 1, &output, 1, &context);
 	result = SG_CompoundGenPlan(&request);
-	CHECK(result.status == SG_COMPOUND_GEN_NO_IMPROVEMENT);
-	CHECK(result.proof_calls == 0 && context.calls == 0);
+	CHECK(result.status == SG_COMPOUND_GEN_OK);
+	CHECK(result.proof_calls == 1 && context.calls == 1);
+	CHECK(result.selected == 1 && result.emitted == 1);
+	CHECK(LinkCanonical(&output, 0, 1));
 
 	seeds[1].component = 1;
 	context.reject_destination = 1;
@@ -357,7 +361,7 @@ int main(void)
 {
 	TestDisabledIsInert();
 	TestTopologyAndProofFallback();
-	TestNoImprovementAndNoProof();
+	TestLocalShortcutAndNoProof();
 	TestMalformedAndAtomicFailures();
 	TestDeterminismAndCompetingMechanisms();
 	TestCandidateBudget();

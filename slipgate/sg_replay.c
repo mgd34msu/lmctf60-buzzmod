@@ -179,19 +179,28 @@ static qboolean ReplayHookPlanarCommand(const sg_replay_pose_t *pose,
 	return true;
 }
 
-static qboolean ReplaySwimCommand(const sg_replay_pose_t *pose,
-	const vec3_t destination, usercmd_t *command)
+qboolean SG_SwimReplayCommand(const sg_replay_pose_t *pose,
+	const vec3_t target, sg_swim_replay_control_t control,
+	usercmd_t *command)
 {
 	float dx, dy, dz, horizontal, yaw, pitch;
 
-	if (!ReplayPoseValid(pose) || !ReplayFiniteVec(destination) || !command)
+	if (!ReplayPoseValid(pose) || !ReplayFiniteVec(target) || !command ||
+	    (control != SG_SWIM_REPLAY_HOLD &&
+	     control != SG_SWIM_REPLAY_EGRESS))
 		return false;
-	dx = destination[0] - pose->origin[0];
-	dy = destination[1] - pose->origin[1];
-	dz = destination[2] - pose->origin[2];
+	dx = target[0] - pose->origin[0];
+	dy = target[1] - pose->origin[1];
+	dz = target[2] - pose->origin[2];
+	if (dx == 0.0f && dy == 0.0f && dz == 0.0f)
+	{
+		if (control != SG_SWIM_REPLAY_HOLD)
+			return false;
+		ReplayCommandClear(command);
+		return true;
+	}
 	horizontal = sqrtf(dx * dx + dy * dy);
-	if (!isfinite(horizontal) || !isfinite(dz) ||
-	    (horizontal < 0.01f && fabsf(dz) < 0.01f))
+	if (!isfinite(horizontal) || !isfinite(dz))
 		return false;
 	yaw = atan2f(dy, dx) * 180.0f / (float)M_PI;
 	pitch = -atan2f(dz, horizontal) * 180.0f / (float)M_PI;
@@ -639,7 +648,8 @@ sg_replay_status_t SG_SwimReplayPreStep(sg_swim_replay_state_t *state,
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_INVALID_STATE);
 	if (state->progress.elapsed_ms >= SG_REPLAY_SWIM_LIMIT_MS)
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_ACTION_TIMEOUT);
-	if (!ReplaySwimCommand(pose, state->spec.destination, command))
+	if (!SG_SwimReplayCommand(pose, state->spec.destination,
+	                         SG_SWIM_REPLAY_EGRESS, command))
 		return ReplayFail(&state->progress,
 		                  SG_REPLAY_REASON_INVALID_CONTROL);
 	state->progress.step_pending = true;

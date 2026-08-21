@@ -4,6 +4,7 @@
 
 #include "sg_rune.h"
 #include "sg_door_approach.h"
+#include "sg_replay.h"
 
 #define SG_MAX_SEEDS	32768
 #define SG_FIELD_INF	0x3fffffff
@@ -77,7 +78,7 @@ typedef struct sg_swim_proof_s
 	byte	exit_speed;
 } sg_swim_proof_t;
 
-/* Dormant PREOPEN D_SWIM witness.  Touch and its containing frame end are
+/* PREOPEN D_SWIM witness.  Touch and its containing frame end are
  * source-relative; TOP is mover-schedule-relative; arrival and sweep clearance
  * are suffix-relative.  The final TOP mover pass and first suffix frame are
  * the same 100 ms, so total cost uses suffix_start_ms rather than mover_top_ms. */
@@ -168,8 +169,18 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	const struct sg_compound_world_preopen_s *resolved,
 	const vec3_t mechanism_anchor, const vec3_t destination,
 	qboolean destination_water, float old_frame_z,
-	sg_compound_swim_proof_t *proof, edict_t *passent,
+	sg_compound_swim_proof_t *proof, sg_replay_reason_t *replay_reason,
+	edict_t *passent,
 	qboolean world_only, qboolean loader_replay);
+/* The caller must hold the matching compound-preopen guard.  This replay
+ * stages and restores the guarded member synchronously; no game callback or
+ * entity frame may run between its snapshot and restoration. */
+rune_reject_reason_t SG_OracleCompoundSwimPlanLive(sg_phantom_t *ph,
+	const struct sg_compound_world_preopen_s *resolved,
+	const vec3_t canonical_hint, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_proof_t *proof, vec3_t contact_anchor,
+	edict_t *passent);
 /* Re-prove a bounded SWIM from the exact state the live client's next Pmove
  * would consume.  The caller owns rune/physics authority and must renew the
  * TOP lease before calling; this observation-only oracle never touches the

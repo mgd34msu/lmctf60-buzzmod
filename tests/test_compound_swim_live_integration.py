@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the executable D_SWIM slice as isolated and runtime-dormant."""
+"""Pin the executable D_SWIM runtime slice and keep sibling actions disabled."""
 
 import json
 from pathlib import Path
@@ -21,17 +21,18 @@ CONTRACT = (
 ).read_text(encoding="utf-8")
 
 
-def test_all_compound_metadata_stays_dormant() -> None:
+def test_only_door_swim_is_admitted() -> None:
     registry = json.loads(
         (ROOT / "slipgate" / "rune_actions.json").read_text(encoding="utf-8")
     )
     actions = {row["id"]: row for row in registry["contract"]["actions"]}
     assert set(actions) >= {9, 10, 11}
-    for action_id in (9, 10, 11):
-        assert actions[action_id]["runtime_supported"] == 0
+    assert actions[9]["runtime_supported"] == 0
+    assert actions[10]["runtime_supported"] == 1
+    assert actions[11]["runtime_supported"] == 0
 
     assert "X(RL_DOOR_DROP, 9, 0," in CONTRACT
-    assert "X(RL_DOOR_SWIM, 10, 0," in CONTRACT
+    assert "X(RL_DOOR_SWIM, 10, 1," in CONTRACT
     assert "X(RL_DOOR_HOOK, 11, 0," in CONTRACT
 
 
@@ -53,16 +54,14 @@ def test_controller_owns_one_literal_action_without_handoff() -> None:
     assert "sweep_segment_clear" in LIVE_HEADER
 
 
-def test_state_has_initializer_only_ownership_contract() -> None:
+def test_state_has_no_unguarded_reset_api() -> None:
     joined = LIVE_HEADER + LIVE_SOURCE + LIVE_TEST
     assert "SG_CompoundSwimLiveReset" not in joined
     assert "#define SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER { 0 }" in LIVE_HEADER
-    assert "Initialization only." in LIVE_HEADER
-    assert "must not be\n * overwritten or reinitialized" in LIVE_HEADER
     assert "SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER" in LIVE_TEST
 
 
-def test_no_production_registration_or_callsite() -> None:
+def test_production_registration_and_callsite() -> None:
     for make_name in ("GNUmakefile", "Makefile"):
         make_text = (ROOT / make_name).read_text(encoding="utf-8")
         if make_name == "GNUmakefile":
@@ -74,28 +73,20 @@ def test_no_production_registration_or_callsite() -> None:
                 make_text.index("OBJS :=") :
                 make_text.index("ifdef CONFIG_VARIABLE_SERVER_FPS")
             ]
-        assert "sg_compound_swim_live.o" not in production_objects
+        assert "sg_compound_swim_live.o" in production_objects
+        assert "sg_compound_swim_game.o" in production_objects
         assert "compound-swim-live-test" in make_text
-
-    project = (ROOT / "gravity.vcxproj").read_text(encoding="utf-8")
-    assert "sg_compound_swim_live" not in project
-    production_paths = (
-        "sg_move.c",
-        "sg_descend.c",
-        "sg_arach.c",
-        "sg_bot.h",
-        "sg_client.c",
-        "sg_compound_guard_game.c",
-    )
-    for name in production_paths:
-        text = (ROOT / "slipgate" / name).read_text(encoding="utf-8")
-        assert "SG_CompoundSwimLive" not in text
-        assert "sg_compound_swim_live.h" not in text
+    bot = (ROOT / "slipgate" / "sg_bot.h").read_text(encoding="utf-8")
+    move = (ROOT / "slipgate" / "sg_move.c").read_text(encoding="utf-8")
+    arach = (ROOT / "slipgate" / "sg_arach.c").read_text(encoding="utf-8")
+    assert "sg_compound_swim_live_state_t compound_swim" in bot
+    assert "SG_CompoundSwimGameEmit" in move
+    assert "SG_CompoundSwimGameOwns" in arach
 
 
 if __name__ == "__main__":
-    test_all_compound_metadata_stays_dormant()
+    test_only_door_swim_is_admitted()
     test_controller_owns_one_literal_action_without_handoff()
-    test_state_has_initializer_only_ownership_contract()
-    test_no_production_registration_or_callsite()
+    test_state_has_no_unguarded_reset_api()
+    test_production_registration_and_callsite()
     print("test_compound_swim_live_integration: ok")

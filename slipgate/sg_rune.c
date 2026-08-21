@@ -12,6 +12,7 @@
 #include "slipgate/sg_rune_mechanism_plan.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_rune_door_scope.h"
+#include "slipgate/sg_compound_gen_game.h"
 #include "slipgate/sg_util.h"
 
 #include <stdio.h>
@@ -3293,11 +3294,9 @@ static qboolean Door_LinkInsert(int from, int to, short cost_ms,
  * frozen view of that topology so a wait point does not collapse every source
  * onto one locally cheap, same-component egress while discarding an already
  * proved route into a flag component. */
-typedef struct
-{
-	int *component;
-	byte *objective_mask;
-} door_topology_t;
+typedef sg_compound_gen_game_topology_t door_topology_t;
+#define Door_TopologyFree(topology) \
+	SG_CompoundGenGameTopologyFree((topology), sg_host.level_free)
 
 typedef struct graph_objective_diag_s
 {
@@ -3317,18 +3316,6 @@ typedef struct graph_objective_diag_s
 
 static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out,
 	graph_objective_diag_t *diag);
-
-static void Door_TopologyFree(door_topology_t *topology)
-{
-	if (!topology)
-		return;
-	if (topology->component)
-		sg_host.level_free(topology->component);
-	if (topology->objective_mask)
-		sg_host.level_free(topology->objective_mask);
-	topology->component = NULL;
-	topology->objective_mask = NULL;
-}
 
 static qboolean Door_TopologyBuild(door_topology_t *topology)
 {
@@ -3752,14 +3739,13 @@ static int Button_WaitPoints(edict_t *button, vec3_t *points,
  * rest, waits at that safe point, then runs this same direct controller while
  * the real team is STATE_TOP. The destination must be dry, graph-connected,
  * and outside the complete sweep so ordinary navigation can safely resume. */
-static void Link_Doors(void)
+static void Link_Doors(door_topology_t *topology)
 {
-	door_topology_t topology = { NULL, NULL };
 	qboolean have_topology;
 	int di;
 	int wait_points = 0, approach_trials = 0, egress_trials = 0;
 
-	have_topology = Door_TopologyBuild(&topology);
+	have_topology = Door_TopologyBuild(topology);
 	if (!have_topology)
 		sg_host.dprint("rune: door topology snapshot unavailable; "
 		               "using nearest-only egress selection\n");
@@ -4057,7 +4043,7 @@ static void Link_Doors(void)
 				picked[picked_count++] = best_slot[mode_index];
 				if (have_topology)
 				{
-					int missing = 3 & ~topology.objective_mask[source];
+					int missing = 3 & ~topology->objective_mask[source];
 					int bit;
 
 					for (bit = 1; bit <= 2; bit <<= 1)
@@ -4069,7 +4055,7 @@ static void Link_Doors(void)
 							continue;
 						for (pi = 0; pi < DOOR_DEST_FAN; pi++)
 							if (egress_proved[mode_index][pi] &&
-							    (topology.objective_mask[dests[pi]] & bit) &&
+								    (topology->objective_mask[dests[pi]] & bit) &&
 							    egress_scores[mode_index][pi] < choice_score)
 							{
 								choice = pi;
@@ -4089,8 +4075,8 @@ static void Link_Doors(void)
 					 * cross-component mechanism. This is what preserves a base-to-main
 					 * half whose source already reaches its own flag. */
 					for (pi = 0; pi < picked_count; pi++)
-						if (topology.component[dests[picked[pi]]] !=
-						    topology.component[source])
+						if (topology->component[dests[picked[pi]]] !=
+						    topology->component[source])
 							break;
 					if (pi == picked_count)
 					{
@@ -4099,8 +4085,8 @@ static void Link_Doors(void)
 
 						for (pi = 0; pi < DOOR_DEST_FAN; pi++)
 							if (egress_proved[mode_index][pi] &&
-							    topology.component[dests[pi]] !=
-							        topology.component[source] &&
+							    topology->component[dests[pi]] !=
+							        topology->component[source] &&
 							    egress_scores[mode_index][pi] < choice_score)
 							{
 								choice = pi;
@@ -4146,7 +4132,6 @@ static void Link_Doors(void)
 			#undef DOOR_SUPPORT_MODES
 		}
 	}
-	Door_TopologyFree(&topology);
 	if (gen_door_links || gen_button_door_links || wait_points)
 		sg_host.dprint("rune: %d declared door links, %d button-door links "
 		               "(%d wait points, "
@@ -4525,7 +4510,7 @@ static void Prove_RocketJumps(void)
 #endif
 }
 
-static void Prove_BaseLinks(void)
+static void Prove_BaseLinks(door_topology_t *topology)
 {
 	int i, j;
 
@@ -4699,7 +4684,7 @@ static void Prove_BaseLinks(void)
 
 		Link_Plats();           /* func_plat: bottom seed -> top seed */
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
-		Link_Doors();           /* repeatable trigger: wait, open, full egress */
+		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
 		Link_Declare_Tail(declared_mark);
 	}
 
@@ -5160,6 +5145,7 @@ qboolean Rune_Generate(const char *mapname)
 	char game_directory[MAX_OSPATH];
 	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
 	sg_rune_door_scope_t doors;
+	door_topology_t compound_topology = { NULL, NULL };
 	sg_rune_door_scope_status_t door_status;
 	int door_count = 0;
 	int directory_written;
@@ -5356,7 +5342,7 @@ qboolean Rune_Generate(const char *mapname)
 	Rune_TelemetryPhaseEnd();
 	sg_host.dprint("rune: %d seeds; proving links...\n", gen_num_seeds);
 	Rune_TelemetryPhaseStart("base-links");
-	Prove_BaseLinks();
+	Prove_BaseLinks(&compound_topology);
 	door_status = Doors_Restore(&doors);
 	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
 	{
@@ -5367,9 +5353,15 @@ qboolean Rune_Generate(const char *mapname)
 		goto cleanup;
 	}
 	Rune_TelemetryPhaseEnd();
-	/* Compound proof seam: the base graph is complete and every real door is
-	 * once again linked SOLID_BSP. A later Link_Compounds pass belongs here,
-	 * before the logically-last rocket-jump pass and objective pruning. */
+	Rune_TelemetryPhaseStart("compound-swim");
+	if (!SG_CompoundGenGameGenerate(gen_seeds, (size_t)gen_num_seeds,
+	    gen_links, &gen_num_links, LINK_MAX, &compound_topology,
+	    sg_host.level_alloc, sg_host.level_free))
+	{
+		sg_host.dprint("rune: FAILED: compound-swim generation\n");
+		goto cleanup;
+	}
+	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("rocket-jumps");
 	door_status = Doors_Open(&doors);
 	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
@@ -5573,6 +5565,7 @@ qboolean Rune_Generate(const char *mapname)
 
 cleanup:
 	Rune_TelemetryPhaseEnd();
+	Door_TopologyFree(&compound_topology);
 	if (SG_RuneDoorScopeActive(&doors))
 	{
 		door_status = Doors_Restore(&doors);

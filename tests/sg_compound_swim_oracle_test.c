@@ -1,4 +1,3 @@
-/* Focused host fixture for dormant PREOPEN D_SWIM oracle replay. */
 #include <math.h>
 #include <float.h>
 #include <limits.h>
@@ -66,6 +65,7 @@ typedef struct fixture_observation_s
 	int approach_commands;
 	int zero_commands;
 	int ride_zero_commands;
+	int hold_commands;
 	int suffix_commands;
 	int trace_calls;
 	int link_calls;
@@ -75,6 +75,7 @@ typedef struct fixture_observation_s
 	qboolean first_snapinitial;
 	int later_snapinitial;
 	qboolean first_top_seen;
+	qboolean top_pose_mismatch;
 	usercmd_t first_top_command;
 	int callback_calls;
 	int last_pmove_mask;
@@ -480,15 +481,26 @@ static void HostPmove(pmove_t *pmove)
 		{
 			fixture_observation.first_top_seen = true;
 			fixture_observation.first_top_command = pmove->cmd;
+			fixture_observation.top_pose_mismatch =
+			    fixture_config.opening_drift &&
+			    pmove->s.origin[0] !=
+			        (short)(fixture_config.mechanism_x * 8.0f);
 		}
 		fixture_observation.suffix_commands++;
-		x = SuffixX();
+		x = fixture_observation.top_pose_mismatch ?
+		    pmove->s.origin[0] / 8 : SuffixX();
 		pmove->s.velocity[0] = 64;
 		if (fixture_config.suffix_hazard)
 		{
 			pmove->watertype = CONTENTS_LAVA;
 			pmove->waterlevel = 2;
 		}
+	}
+	else if (fixture_observation.stage_started &&
+	         !CommandZero(&pmove->cmd))
+	{
+		fixture_observation.hold_commands++;
+		x = (int)fixture_config.mechanism_x;
 	}
 	else if (!CommandZero(&pmove->cmd))
 	{
@@ -518,7 +530,7 @@ static void HostPmove(pmove_t *pmove)
 			fixture_observation.ride_zero_commands++;
 			if (fixture_observation.ride_zero_commands == 1 &&
 			    fixture_config.opening_drift)
-				x = 80;
+				x = 200;
 			if (fixture_observation.ride_zero_commands == 4 &&
 			    fixture_config.hazard_ride)
 			{
@@ -870,7 +882,7 @@ static void TestTouchSubsteps(void)
 		member_before = fixture_edicts[1];
 		InitPhantom(&phantom, false);
 		result = SG_OracleCompoundSwimPreopen(&phantom, &resolved,
-			mechanism, destination, true, 0.0f, &proof, NULL, true,
+			mechanism, destination, true, 0.0f, &proof, NULL, NULL, true,
 			false);
 		if (result != RLR_OK)
 			fprintf(stderr, "touch %d result %d calls %d approach %d zero %d suffix %d links %d\n",
@@ -920,6 +932,33 @@ static void TestTouchSubsteps(void)
 	}
 }
 
+static void TestLivePlanCapturesContactAndRestoresMember(void)
+{
+	const vec3_t hint = { 160.0f, 0.0f, 0.0f };
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_proof_t proof;
+	sg_phantom_t phantom;
+	edict_t member_before;
+	vec3_t contact;
+	rune_reject_reason_t result;
+
+	ResetFixture(&config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	member_before = fixture_edicts[1];
+	InitPhantom(&phantom, false);
+	result = SG_OracleCompoundSwimPlanLive(&phantom, &resolved, hint,
+	      destination, true, 0.0f, &proof, contact, NULL);
+	CHECK(result == RLR_OK);
+	CHECK(contact[0] == 160.0f && contact[1] == 0.0f &&
+	      contact[2] == 0.0f);
+	CHECK(proof.touch_ms == 50 && proof.total_cost_ms == 800);
+	CHECK(MemberRestored(&fixture_edicts[1], &member_before));
+	CHECK(fixture_observation.callback_calls == 0);
+	CheckStaticContextRestored();
+}
+
 static void RunFailure(const fixture_config_t *config,
 	rune_reject_reason_t expected, const vec3_t destination,
 	qboolean damaging_fall)
@@ -939,7 +978,7 @@ static void RunFailure(const fixture_config_t *config,
 	InitPhantom(&phantom, damaging_fall);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
 		destination, true, damaging_fall ? -1000.0f : 0.0f,
-		&proof, NULL, true, false) == expected);
+		&proof, NULL, NULL, true, false) == expected);
 	CHECK(memcmp(&proof, zero, sizeof(proof)) == 0);
 	CHECK(MemberRestored(&fixture_edicts[1], &member_before));
 	CHECK(fixture_observation.callback_calls == 0);
@@ -975,8 +1014,6 @@ static void TestFailureTable(void)
 		DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
 	fixture_config_t crossing_approach =
 		DefaultConfig(1, FIXTURE_SUFFIX_SUCCESS);
-	fixture_config_t opening_drift =
-		DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
 
 	trigger_contamination.contaminate_trigger = true;
 	fanout.contaminate_solid = true;
@@ -985,7 +1022,6 @@ static void TestFailureTable(void)
 	wrong_contact.wrong_contact = true;
 	inside_approach.source_x = 0.0f;
 	crossing_approach.source_x = -80.0f;
-	opening_drift.opening_drift = true;
 
 	RunFailure(&no_sweep, RLR_SUFFIX_REPLAY_FAILED, destination, false);
 	RunFailure(&reentry, RLR_CLEAR_MISMATCH, destination, false);
@@ -1006,8 +1042,31 @@ static void TestFailureTable(void)
 	           destination, false);
 	RunFailure(&crossing_approach, RLR_APPROACH_REPLAY_FAILED,
 	           destination, false);
-	RunFailure(&opening_drift, RLR_RIDE_REPLAY_FAILED,
-	           destination, false);
+}
+
+static void TestOpeningHoldRestoresSuffixPose(void)
+{
+	const vec3_t mechanism = { 160.0f, 0.0f, 0.0f };
+	const vec3_t destination = { -80.0f, 0.0f, 0.0f };
+	fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
+	sg_compound_world_preopen_t resolved;
+	sg_compound_swim_proof_t proof;
+	sg_phantom_t phantom;
+	rune_reject_reason_t result;
+
+	config.opening_drift = true;
+	ResetFixture(&config);
+	CHECK(Resolve(&resolved) == RLR_OK);
+	InitPhantom(&phantom, false);
+	result = SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
+	    destination, true, 0.0f, &proof, NULL, NULL, true, false);
+	CHECK(result == RLR_OK);
+	CHECK(fixture_observation.ride_zero_commands > 0);
+	CHECK(fixture_observation.hold_commands > 0);
+	CHECK(fixture_observation.ride_zero_commands +
+	      fixture_observation.hold_commands == 16);
+	CHECK(!fixture_observation.top_pose_mismatch);
+	CHECK(proof.arrival_ms == 300 && proof.sweep_clear_ms == 200);
 }
 
 static void TestPreopenSweepChordBoundaries(void)
@@ -1028,7 +1087,7 @@ static void TestPreopenSweepChordBoundaries(void)
 	member_before = fixture_edicts[1];
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
-	      destination, true, 0.0f, &proof, NULL, true, false) == RLR_OK);
+	      destination, true, 0.0f, &proof, NULL, NULL, true, false) == RLR_OK);
 	CHECK(proof.sweep_clear_ms == 100);
 	CHECK(proof.arrival_ms == 100);
 	CHECK(proof.total_cost_ms == 600);
@@ -1053,7 +1112,7 @@ static void TestResolvedIdentityFailsClosed(void)
 	resolved.mover_key = 4;
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
-		destination, true, 0.0f, &proof, NULL, true, false) ==
+		destination, true, 0.0f, &proof, NULL, NULL, true, false) ==
 	      RLR_MECHANISM_UNRESOLVED);
 	CHECK(fixture_observation.pmove_calls == 0);
 	CHECK(fixture_observation.link_calls == 0);
@@ -1084,7 +1143,7 @@ static void TestApproachArrivalSuppressedUntilTouch(void)
 		CHECK(Resolve(&resolved) == RLR_OK);
 		InitPhantom(&phantom, false);
 		CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved,
-			mechanism, destination, true, 0.0f, &proof, NULL, true,
+			mechanism, destination, true, 0.0f, &proof, NULL, NULL, true,
 			false) == RLR_OK);
 		CHECK(proof.touch_ms == expected_touch[index]);
 		CHECK(proof.touch_frame_end_ms == (index == 0 ? 200 : 100));
@@ -1251,7 +1310,7 @@ static void TestLoaderReplayNativeMask(void)
 	CHECK(Resolve(&resolved) == RLR_OK);
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
-		destination, true, 0.0f, &proof, NULL, true, true) == RLR_OK);
+		destination, true, 0.0f, &proof, NULL, NULL, true, true) == RLR_OK);
 	/* Loader replay masks transient clients by temporarily publishing
 	 * SOLID_NOT, then runs the ordinary native full-mask trace. */
 	CHECK(fixture_observation.normal_pmove_masks > 0);
@@ -2185,7 +2244,9 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 int main(void)
 {
 	TestTouchSubsteps();
+	TestLivePlanCapturesContactAndRestoresMember();
 	TestFailureTable();
+	TestOpeningHoldRestoresSuffixPose();
 	TestPreopenSweepChordBoundaries();
 	TestResolvedIdentityFailsClosed();
 	TestApproachArrivalSuppressedUntilTouch();

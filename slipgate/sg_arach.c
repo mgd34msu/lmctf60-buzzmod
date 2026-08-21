@@ -30,6 +30,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_compound_publication.h"
+#include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_danger_lease.h"
 #include "slipgate/sg_danger_policy.h"
 #include "slipgate/sg_sidecar_loader.h"
@@ -2889,6 +2890,13 @@ void SG_BotThink(sg_bot_t *bot)
 	memset(&tc, 0, sizeof(tc));
 	tc.cmd.msec = 100;
 	VectorClear(duel_org);
+	if (SG_CompoundSwimGameOwns(bot))
+	{
+		if (!e->deadflag)
+			(void)SG_CompoundSwimGameEmit(bot,
+			    (int)bot->compound_swim.snapshot.binding.link_index);
+		return;
+	}
 
 	rune_compatible = SG_RunePhysicsCompatible(sg_rune);
 	declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);

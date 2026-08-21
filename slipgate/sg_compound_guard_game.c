@@ -11,6 +11,7 @@
 #include "sg_bot.h"
 #include "sg_compound_world.h"
 #include "sg_compound_guard_game.h"
+#include "sg_compound_swim_game.h"
 
 typedef struct sg_compound_guard_game_identity_s
 {
@@ -983,6 +984,7 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	 * makes this client SOLID_NOT before a scheduled door can close onto it. */
 	if (claimed && client->health > -100)
 		client->health = -100;
+	SG_CompoundSwimGameClientRetired(client);
 	return result;
 }
 
@@ -1042,6 +1044,7 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnected(
 	game_guard.protected_subject[key] = 0U;
 	if (result != SG_COMPOUND_GUARD_OK)
 		GameQuarantineBot(bot);
+	SG_CompoundSwimGameClientRetired(client);
 	return result;
 }
 

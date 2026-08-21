@@ -353,8 +353,30 @@ static void TestDropTerminalFailuresAndCaps(void)
 	sg_drop_replay_state_t state;
 	sg_replay_pose_t pose = TestPose(0.0f, 0.0f, 0.0f);
 	sg_replay_observation_t observation = TestObservation();
-	usercmd_t command;
+	usercmd_t command, egress, hold, zero;
+	vec3_t target;
 	int step;
+
+	VectorClear(target);
+	memset(&zero, 0, sizeof(zero));
+	zero.msec = SG_REPLAY_STEP_MS;
+	memset(&hold, 0x5a, sizeof(hold));
+	CHECK(SG_SwimReplayCommand(&pose, target, SG_SWIM_REPLAY_HOLD,
+	                           &hold));
+	CHECK(memcmp(&hold, &zero, sizeof(hold)) == 0);
+	memset(&egress, 0x5a, sizeof(egress));
+	command = egress;
+	CHECK(!SG_SwimReplayCommand(&pose, target, SG_SWIM_REPLAY_EGRESS,
+	                            &egress));
+	CHECK(memcmp(&egress, &command, sizeof(egress)) == 0);
+	pose.origin[0] = 1.0f;
+	CHECK(SG_SwimReplayCommand(&pose, target, SG_SWIM_REPLAY_HOLD,
+	                           &hold));
+	CHECK(SG_SwimReplayCommand(&pose, target, SG_SWIM_REPLAY_EGRESS,
+	                           &egress));
+	CHECK(memcmp(&hold, &egress, sizeof(hold)) == 0 &&
+	      hold.forwardmove == 400);
+	pose.origin[0] = 0.0f;
 
 	/* Arrival exists only on the 100 ms production boundary. */
 	VectorClear(spec.lip);

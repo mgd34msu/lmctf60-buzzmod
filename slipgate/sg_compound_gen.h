@@ -1,11 +1,9 @@
-/* sg_compound_gen.h -- pure bounded planner for dormant compound links. */
 #ifndef SG_COMPOUND_GEN_H
 #define SG_COMPOUND_GEN_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../q_shared.h"
 #include "sg_rune.h"
 
 /* The caller owns mechanism discovery and supplies only replay-exact
@@ -76,9 +74,6 @@ typedef struct sg_compound_gen_request_s
 	size_t output_capacity;
 	sg_compound_gen_prove_fn prove;
 	void *context;
-	/* This must remain false in production until the outer action has a live
-	 * executor.  A false capability returns before validating or calling any
-	 * injected proof boundary. */
 	int production_enabled;
 } sg_compound_gen_request_t;
 

@@ -1,4 +1,3 @@
-/* Direct fixture for atomic dormant D_SWIM publication bindings. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -254,12 +253,13 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *phantom,
 	const sg_compound_world_preopen_t *resolved,
 	const vec3_t mechanism_anchor, const vec3_t destination,
 	qboolean destination_water, float old_frame_z,
-	sg_compound_swim_proof_t *proof, edict_t *passent,
+	sg_compound_swim_proof_t *proof, sg_replay_reason_t *replay_reason,
+	edict_t *passent,
 	qboolean world_only, qboolean loader_replay)
 {
 	int axis;
 
-	(void)resolved; (void)mechanism_anchor; (void)passent;
+	(void)resolved; (void)mechanism_anchor; (void)replay_reason; (void)passent;
 	fixture.replay_calls++;
 	if (fixture.fail_replay || !phantom || !destination || !proof ||
 	    !destination_water || old_frame_z != 0.0f ||

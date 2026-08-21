@@ -78,7 +78,7 @@ def test_compound_admission_order_and_inert_runtime_metadata() -> None:
     actions = (
         ROOT / "slipgate/sg_action_contract.generated.h"
     ).read_text(encoding="utf-8")
-    assert "X(RL_DOOR_SWIM, 10, 0," in actions
+    assert "X(RL_DOOR_SWIM, 10, 1," in actions
 
 
 if __name__ == "__main__":

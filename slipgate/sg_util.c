@@ -4,6 +4,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune.h"
 
 int SG_TeamIdx(int team)
@@ -209,36 +210,21 @@ qboolean SG_HookControlDecode(const vec3_t origin, float viewheight, int hand,
 qboolean SG_SwimCommand(const vec3_t origin, const vec3_t destination,
 	const pmove_state_t *pms, usercmd_t *cmd)
 {
-	vec3_t direction;
-	float horizontal, yaw, pitch;
+	sg_replay_pose_t pose;
 	byte msec;
 
-	if (!pms || !cmd)
+	if (!origin || !destination || !pms || !cmd)
 		return false;
 	msec = cmd->msec;
 	memset(cmd, 0, sizeof(*cmd));
 	cmd->msec = msec;
 	if (msec != SG_SWIM_STEP_MSEC)
 		return false;
-
-	VectorSubtract(destination, origin, direction);
-	horizontal = sqrtf(direction[0] * direction[0] +
-	                   direction[1] * direction[1]);
-	if (!isfinite(horizontal) || !isfinite(direction[2]) ||
-	    (horizontal < 0.01f && fabsf(direction[2]) < 0.01f))
-		return false;
-	yaw = atan2f(direction[1], direction[0]) * 180.0f / (float)M_PI;
-	pitch = -atan2f(direction[2], horizontal) * 180.0f / (float)M_PI;
-	if (pitch > 85.0f)
-		pitch = 85.0f;
-	if (pitch < -85.0f)
-		pitch = -85.0f;
-
-	cmd->angles[YAW] = ANGLE2SHORT(yaw) - pms->delta_angles[YAW];
-	cmd->angles[PITCH] = ANGLE2SHORT(pitch) - pms->delta_angles[PITCH];
-	cmd->angles[ROLL] = -pms->delta_angles[ROLL];
-	cmd->forwardmove = 400;
-	return true;
+	memset(&pose, 0, sizeof(pose));
+	pose.pms = *pms;
+	VectorCopy(origin, pose.origin);
+	return SG_SwimReplayCommand(&pose, destination,
+	                            SG_SWIM_REPLAY_EGRESS, cmd);
 }
 
 qboolean SG_SwimArrived(const vec3_t origin, const vec3_t destination,

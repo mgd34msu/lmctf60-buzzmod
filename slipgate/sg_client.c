@@ -15,6 +15,7 @@
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_compound_guard_game.h"
+#include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_weights.h"    /* sg_role_names -- the roster print */
 #include "slipgate/sg_goal.h"
@@ -62,6 +63,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	if (slot >= 0 && slot < SG_MAXBOTS)
 		SG_StrikeSlotReset(slot);
 	(void)SG_CompoundGuardGameBotSlotReset(&bot->compound_guard);
+	SG_CompoundSwimGameReset(bot);
 	SG_ButtonExecutionActionReset(bot);
 	/* Spell out the grenade identity retirement before raw storage reuse:
 	 * a recycled bot slot must never inherit a client-life binding. */

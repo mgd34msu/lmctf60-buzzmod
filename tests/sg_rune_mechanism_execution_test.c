@@ -4,6 +4,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_compound_guard.h"
+#include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_rune_binding.h"
@@ -398,6 +399,29 @@ sg_compound_guard_result_t SG_CompoundGuardValidate(
 	if (record_out)
 		memset(record_out, 0, sizeof(*record_out));
 	return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+}
+
+int SG_CompoundSwimGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return false;
+}
+
+int SG_CompoundSwimGameAuthorizeTouch(edict_t *trigger,
+	edict_t *activator)
+{
+	(void)trigger;
+	(void)activator;
+	return true;
+}
+
+int SG_CompoundSwimGameAuthorizeActivation(edict_t *trigger,
+	edict_t *mover, edict_t *activator)
+{
+	(void)trigger;
+	(void)mover;
+	(void)activator;
+	return true;
 }
 
 void SG_CompoundGuardGameEntityFreed(edict_t *entity)

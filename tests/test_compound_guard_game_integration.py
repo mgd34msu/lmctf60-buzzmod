@@ -21,6 +21,8 @@ def test_bot_slot_reset_and_attach_order() -> None:
     client = source("slipgate/sg_client.c")
     reset = between(client, "static void BotSlot_Reset", "static const char *sg_names")
     assert reset.index("SG_CompoundGuardGameBotSlotReset") < reset.index(
+        "SG_CompoundSwimGameReset"
+    ) < reset.index(
         "memset(bot, 0, sizeof(*bot))"
     )
     add = between(client, "qboolean SG_AddBotTeam", "int SG_RemoveBots")
@@ -68,6 +70,24 @@ def test_death_body_respawn_and_disconnect_order() -> None:
         "ent->solid = SOLID_NOT;"
     ) < disconnect.index("ent->inuse = false;") < retired
     assert "SG_CompoundGuardGameBoltEvicted" not in disconnect
+
+    adapter = source("slipgate/sg_compound_guard_game.c")
+    die_adapter = between(
+        adapter,
+        "sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie",
+        "void SG_CompoundGuardGameEntityFreed",
+    )
+    disconnected_adapter = between(
+        adapter,
+        "sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnected",
+        "#ifdef SG_COMPOUND_GUARD_GAME_TEST",
+    )
+    assert die_adapter.index("SG_CompoundGuardOrphan") < die_adapter.index(
+        "SG_CompoundSwimGameClientRetired"
+    )
+    assert disconnected_adapter.index("SG_CompoundGuardBotDisconnected") < (
+        disconnected_adapter.index("SG_CompoundSwimGameClientRetired")
+    )
 
     utils = source("g_utils.c")
     delayed = between(

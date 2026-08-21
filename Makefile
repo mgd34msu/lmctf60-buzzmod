@@ -115,12 +115,24 @@ COMPOUND_GEN_TEST_BIN := sg_compound_gen_test.make
 COMPOUND_GEN_TEST_OBJS := .sg_compound_gen_test.make.o \
 	.sg_compound_gen_under_test.make.o
 COMPOUND_GEN_TEST_DEPS := $(COMPOUND_GEN_TEST_OBJS:.o=.d)
+COMPOUND_GEN_GAME_TEST_BIN := sg_compound_gen_game_test.make
+COMPOUND_GEN_GAME_TEST_OBJS := .sg_compound_gen_game_test.make.o \
+	.sg_compound_gen_game_under_test.make.o \
+	.sg_compound_gen_under_test.make.o
+COMPOUND_GEN_GAME_TEST_DEPS := $(COMPOUND_GEN_GAME_TEST_OBJS:.o=.d)
 COMPOUND_GEN_TEST_ALL_ARTIFACTS := \
 	sg_compound_gen_test sg_compound_gen_test.gnu sg_compound_gen_test.make \
+	sg_compound_gen_game_test.gnu sg_compound_gen_game_test.make \
 	.sg_compound_gen_test.gnu.o .sg_compound_gen_test.gnu.d \
 	.sg_compound_gen_under_test.gnu.o .sg_compound_gen_under_test.gnu.d \
 	.sg_compound_gen_test.make.o .sg_compound_gen_test.make.d \
-	.sg_compound_gen_under_test.make.o .sg_compound_gen_under_test.make.d
+	.sg_compound_gen_under_test.make.o .sg_compound_gen_under_test.make.d \
+	.sg_compound_gen_game_test.gnu.o .sg_compound_gen_game_test.gnu.d \
+	.sg_compound_gen_game_under_test.gnu.o \
+	.sg_compound_gen_game_under_test.gnu.d \
+	.sg_compound_gen_game_test.make.o .sg_compound_gen_game_test.make.d \
+	.sg_compound_gen_game_under_test.make.o \
+	.sg_compound_gen_game_under_test.make.d
 COMPOUND_PUBLICATION_TEST_BIN := sg_compound_publication_test.make
 COMPOUND_PUBLICATION_TEST_OBJS := .sg_compound_publication_test.make.o \
 	.sg_compound_publication_under_test.make.o
@@ -472,6 +484,12 @@ COMPOUND_SWIM_LIVE_TEST_OBJS := .sg_compound_swim_live_test.make.o \
 COMPOUND_SWIM_LIVE_TEST_DEPS := $(COMPOUND_SWIM_LIVE_TEST_OBJS:.o=.d)
 COMPOUND_SWIM_LIVE_INTEGRATION_TEST := \
 	tests/test_compound_swim_live_integration.py
+COMPOUND_SWIM_GAME_TEST_BIN := sg_compound_swim_game_test.make
+COMPOUND_SWIM_GAME_TEST_OBJS := .sg_compound_swim_game_test.make.o \
+	.sg_compound_swim_game_under_test.make.o $(filter-out \
+	.sg_compound_swim_live_test.make.o,$(COMPOUND_SWIM_LIVE_TEST_OBJS))
+COMPOUND_SWIM_GAME_TEST_DEPS := $(COMPOUND_SWIM_GAME_TEST_OBJS:.o=.d)
+COMPOUND_SWIM_GAME_INTEGRATION_TEST := tests/test_compound_swim_game_integration.py
 COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS := \
 	sg_compound_swim_live_test.gnu sg_compound_swim_live_test.make \
 	.sg_compound_swim_live_test.gnu.o \
@@ -486,6 +504,12 @@ COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS := \
 	.sg_compound_swim_live_replay_under_test.gnu.d \
 	$(COMPOUND_SWIM_LIVE_TEST_OBJS) \
 	$(COMPOUND_SWIM_LIVE_TEST_DEPS)
+COMPOUND_SWIM_GAME_TEST_ALL_ARTIFACTS := \
+	sg_compound_swim_game_test.gnu sg_compound_swim_game_test.make \
+	$(COMPOUND_SWIM_GAME_TEST_OBJS) $(COMPOUND_SWIM_GAME_TEST_DEPS) \
+	.sg_compound_swim_game_test.gnu.o .sg_compound_swim_game_test.gnu.d \
+	.sg_compound_swim_game_under_test.gnu.o \
+	.sg_compound_swim_game_under_test.gnu.d
 HOOK_LIVE_TEST_BIN := sg_hook_live_test.make
 HOOK_LIVE_TEST_OBJS := .sg_hook_live_test.make.o \
 	.sg_hook_live_under_test.make.o .sg_hook_live_replay_under_test.make.o
@@ -881,9 +905,12 @@ OBJS := \
 	slipgate/sg_button_live.o \
 	slipgate/sg_compound_guard.o \
 	slipgate/sg_compound_guard_game.o \
+	slipgate/sg_compound_swim_live.o \
+	slipgate/sg_compound_swim_game.o \
 	slipgate/sg_declared_door_guard.o \
 	slipgate/sg_compound_world.o \
 	slipgate/sg_compound_gen.o \
+	slipgate/sg_compound_gen_game.o \
 	slipgate/sg_compound_publication.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
@@ -982,7 +1009,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	run-handoff-test \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
 	replay-test hook-discipline-test \
-	drop-live-test swim-live-test compound-swim-live-test rotator-sweep-test \
+	drop-live-test swim-live-test compound-swim-live-test \
+	compound-swim-game-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test maplist-rotation-test \
 	compound-swim-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
@@ -1031,6 +1059,9 @@ slipgate/sg_compound_guard_game.o: slipgate/sg_compound_guard_game.c \
 		slipgate/sg_compound_guard_game.h slipgate/sg_compound_guard.h \
 		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
 		g_local.h
+slipgate/sg_compound_gen_game.o: slipgate/sg_compound_gen_game.c \
+		slipgate/sg_compound_gen_game.h slipgate/sg_compound_gen.h \
+		slipgate/sg_compound_world.h slipgate/sg_local.h g_local.h
 slipgate/sg_declared_door_guard.o: slipgate/sg_declared_door_guard.c \
 		slipgate/sg_declared_door_guard.h slipgate/sg_compound_guard.h \
 		slipgate/sg_mover_lease.h slipgate/sg_bot.h slipgate/sg_local.h \
@@ -1075,6 +1106,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(DECLARED_DOOR_GUARD_TEST_DEPS)
 -include $(COMPOUND_WORLD_TEST_DEPS)
 -include $(COMPOUND_GEN_TEST_DEPS)
+-include $(COMPOUND_GEN_GAME_TEST_DEPS)
 -include $(COMPOUND_PUBLICATION_TEST_DEPS)
 -include $(IDENTITY_TEST_DEPS)
 -include $(RUNE_CODEC_TEST_DEPS)
@@ -1284,6 +1316,10 @@ $(COMPOUND_GEN_TEST_BIN): $(COMPOUND_GEN_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(COMPOUND_GEN_TEST_OBJS) $(LIBS)
 
+$(COMPOUND_GEN_GAME_TEST_BIN): $(COMPOUND_GEN_GAME_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(COMPOUND_GEN_GAME_TEST_OBJS) $(LIBS)
+
 $(COMPOUND_PUBLICATION_TEST_BIN): $(COMPOUND_PUBLICATION_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(COMPOUND_PUBLICATION_TEST_OBJS) $(LIBS)
@@ -1317,6 +1353,10 @@ $(SWIM_LIVE_TEST_BIN): $(SWIM_LIVE_TEST_OBJS)
 $(COMPOUND_SWIM_LIVE_TEST_BIN): $(COMPOUND_SWIM_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(COMPOUND_SWIM_LIVE_TEST_OBJS) $(LIBS)
+
+$(COMPOUND_SWIM_GAME_TEST_BIN): $(COMPOUND_SWIM_GAME_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(COMPOUND_SWIM_GAME_TEST_OBJS) $(LIBS)
 
 $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -1530,6 +1570,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_compound_gen_under_test.make.o: slipgate/sg_compound_gen.c \
 		slipgate/sg_compound_gen.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_gen_game_test.make.o: tests/sg_compound_gen_game_test.c \
+		slipgate/sg_compound_gen_game.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_gen_game_under_test.make.o: slipgate/sg_compound_gen_game.c \
+		slipgate/sg_compound_gen_game.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -2184,6 +2238,22 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_swim_game_test.make.o: \
+		tests/sg_compound_swim_game_test.c \
+		slipgate/sg_compound_swim_game.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_swim_game_under_test.make.o: \
+		slipgate/sg_compound_swim_game.c \
+		slipgate/sg_compound_swim_game.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_hook_live_test.make.o: tests/sg_hook_live_test.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -2501,6 +2571,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST) \
+		$(COMPOUND_SWIM_GAME_TEST_BIN) \
+		$(COMPOUND_SWIM_GAME_INTEGRATION_TEST) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
 		$(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
@@ -2594,6 +2666,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(SWIM_LIVE_TEST_BIN)
 	$(Q)./$(COMPOUND_SWIM_LIVE_TEST_BIN)
 	$(Q)python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
+	$(Q)./$(COMPOUND_SWIM_GAME_TEST_BIN)
+	$(Q)python3 $(COMPOUND_SWIM_GAME_INTEGRATION_TEST)
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
 	$(Q)./$(HOOK_DISCIPLINE_TEST_BIN)
 	$(Q)python3 $(HOOK_INTEGRATION_TEST)
@@ -2707,9 +2781,10 @@ compound-world-test: $(COMPOUND_WORLD_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_WORLD_TEST_BIN)
 
-compound-gen-test: $(COMPOUND_GEN_TEST_BIN)
+compound-gen-test: $(COMPOUND_GEN_TEST_BIN) $(COMPOUND_GEN_GAME_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_GEN_TEST_BIN)
+	$(Q)./$(COMPOUND_GEN_GAME_TEST_BIN)
 
 compound-publication-test: $(COMPOUND_PUBLICATION_TEST_BIN) \
 		$(COMPOUND_PUBLICATION_INTEGRATION_TEST) \
@@ -2863,6 +2938,12 @@ compound-swim-live-test: $(COMPOUND_SWIM_LIVE_TEST_BIN) \
 	$(Q)./$(COMPOUND_SWIM_LIVE_TEST_BIN)
 	$(Q)python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
 
+compound-swim-game-test: $(COMPOUND_SWIM_GAME_TEST_BIN) \
+		$(COMPOUND_SWIM_GAME_INTEGRATION_TEST)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_SWIM_GAME_TEST_BIN)
+	$(Q)python3 $(COMPOUND_SWIM_GAME_INTEGRATION_TEST)
+
 hook-live-test: $(HOOK_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
@@ -2920,6 +3001,7 @@ clean:
 		$(RUNE_BINDING_TEST_ALL_ARTIFACTS) \
 		$(RUNE_ACCEPT_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_SWIM_GAME_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 		$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \

@@ -34,6 +34,12 @@ typedef enum sg_replay_status_e
 	SG_REPLAY_FAILED
 } sg_replay_status_t;
 
+typedef enum sg_swim_replay_control_e
+{
+	SG_SWIM_REPLAY_HOLD = 0,
+	SG_SWIM_REPLAY_EGRESS
+} sg_swim_replay_control_t;
+
 typedef enum sg_replay_reason_e
 {
 	SG_REPLAY_REASON_NONE = 0,
@@ -203,6 +209,9 @@ qboolean SG_DropReplayRecoveryReady(const sg_drop_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
 qboolean SG_SwimReplayArrived(const sg_swim_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
+qboolean SG_SwimReplayCommand(const sg_replay_pose_t *pose,
+	const vec3_t target, sg_swim_replay_control_t control,
+	usercmd_t *command);
 qboolean SG_HookReplaySettled(const sg_hook_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
 qboolean SG_HookReplayReleaseReady(const sg_hook_replay_spec_t *spec,

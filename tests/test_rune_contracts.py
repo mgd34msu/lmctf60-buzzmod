@@ -57,6 +57,34 @@ class RuneContractTests(unittest.TestCase):
             for plan in requirement["plans"]:
                 self.assertEqual({"controller"}, set(plan))
 
+    def test_descriptor_membership_matches_action_admission(self):
+        contract = self.document["contract"]
+        sections = {}
+        for field in contract["action_range"]["descriptor"].split(";"):
+            if "=" in field:
+                name, values = field.split("=", 1)
+                sections[name] = values
+
+        def ids(name):
+            values = sections[name]
+            return {int(value.rsplit(":", 1)[1]) for value in values.split(",")}
+
+        supported = {
+            action["id"] for action in contract["actions"] if action["runtime_supported"]
+        }
+        requirements = contract["mechanism_contract"]["action_requirements"]
+        admitted = {entry["action"] for entry in requirements if entry["admitted"]}
+        planless = {
+            entry["action"]
+            for entry in requirements
+            if entry["admitted"] and not entry["plan_required"]
+        }
+        action_ids = {action["id"] for action in contract["actions"]}
+        self.assertEqual(supported, admitted)
+        self.assertEqual(supported, ids("runtime"))
+        self.assertEqual(action_ids - supported, ids("disabled"))
+        self.assertEqual(planless, ids("planless"))
+
     def test_pinned_contract_and_mechanism_digests(self):
         action_crc, action_sha = GENERATOR.rune_action_contract_digests(self.document)
         mechanism_crc, mechanism_sha = GENERATOR.mechanism_contract_digests(

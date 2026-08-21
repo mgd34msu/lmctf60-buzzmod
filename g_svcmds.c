@@ -1,6 +1,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"          /* CTF_TEAM_RED/BLUE for `sv sg add red|blue` */
 #include "slipgate/sg_local.h"  /* the SLIPGATE admin surface behind `sv sg` */
+#include "slipgate/sg_compound_swim_game.h"
 #include "ctf_file_io.h"
 
 void SpawnLoadout_ListItems(void);
@@ -339,10 +340,20 @@ static void SVCmd_SG_f (void)
 			SG_WeightsReload();
 		SG_WeightsPrint();
 	}
+	else if (Q_stricmp(sub, "compoundswim") == 0)
+	{
+		char *end = NULL;
+		long link = strtol(arg, &end, 10);
+
+		if (!*arg || !end || *end || link < 0 || link > INT_MAX ||
+		    !SG_CompoundSwimGameStageAuthenticatedProbe((int)link))
+			gi.cprintf(NULL, PRINT_HIGH,
+			    "slipgate: authenticated compound swim probe refused\n");
+	}
 	else
 		gi.cprintf(NULL, PRINT_HIGH,
 		           "usage: sv sg <add [red|blue] | list | remove [name|slot] "
-		           "| kick worst | weights [reload]>\n");
+		           "| kick worst | weights [reload] | compoundswim <link>>\n");
 }
 
 static void SVCmd_POVRecord_f(void)

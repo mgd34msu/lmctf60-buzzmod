@@ -406,6 +406,9 @@ static void TestPublicationAndQueries(void)
 	CHECK(strcmp((const char *)SG_RuneArtifactLoaderStringAt(&loader, 13U),
 		"func_button") == 0);
 	CHECK(memcmp(loader.header.map_name, "active-test", 12U) == 0);
+	CHECK(SG_ActionRuntimeSupported(RL_DOOR_SWIM));
+	CHECK(SG_ActionMechanismAdmitted(RL_DOOR_SWIM));
+	CHECK(!SG_ActionMechanismPlanRequired(RL_DOOR_SWIM));
 }
 
 static void TestRollbackCapacityAndAlias(void)

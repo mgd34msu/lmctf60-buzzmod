@@ -1,12 +1,3 @@
-/*
- * sg_compound_swim_live.h -- dormant live law for PREOPEN RL_DOOR_SWIM.
- *
- * This controller is deliberately not registered with production dispatch.
- * It owns only copied publication data and pure reducer state; an eventual
- * engine adapter must provide every world mutation and observation through
- * the callbacks below.  Once acquire succeeds there is no ordinary-action
- * handoff: failure enters retained-lease recovery until release succeeds.
- */
 #ifndef SG_COMPOUND_SWIM_LIVE_H
 #define SG_COMPOUND_SWIM_LIVE_H
 
@@ -40,17 +31,80 @@ typedef struct sg_compound_swim_live_proof_s
 	byte exit_speed;
 } sg_compound_swim_live_proof_t;
 
+typedef struct sg_compound_swim_live_start_s
+{
+	sg_replay_pose_t pose;
+	pmove_state_t old_pms;
+	float old_frame_z;
+} sg_compound_swim_live_start_t;
+
+typedef struct sg_compound_swim_live_plan_s
+{
+	vec3_t mechanism_anchor;
+	sg_compound_publication_checkpoint_t suffix;
+	int touch_ms;
+	int touch_frame_end_ms;
+	int mover_top_ms;
+	int suffix_start_ms;
+	int arrival_ms;
+	int sweep_clear_ms;
+	int total_cost_ms;
+	byte exit_speed;
+} sg_compound_swim_live_plan_t;
+
+typedef enum sg_compound_swim_live_failure_e
+{
+	SG_COMPOUND_SWIM_LIVE_FAILURE_NONE = 0,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_ARGUMENT,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_BINDING,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_ACQUIRE,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_AUTHORITY,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_CADENCE,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_ACTIVATION,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_TOP,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_HOLD,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_SUFFIX_CHECKPOINT,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_REPROOF,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_SWEEP,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_TIMING,
+	SG_COMPOUND_SWIM_LIVE_FAILURE_RELEASE
+} sg_compound_swim_live_failure_t;
+
+typedef enum sg_compound_swim_live_event_e
+{
+	SG_COMPOUND_SWIM_LIVE_EVENT_BEGIN = 0,
+	SG_COMPOUND_SWIM_LIVE_EVENT_TOUCH,
+	SG_COMPOUND_SWIM_LIVE_EVENT_ACTIVATION,
+	SG_COMPOUND_SWIM_LIVE_EVENT_TOP,
+	SG_COMPOUND_SWIM_LIVE_EVENT_SWEEP_CLEAR,
+	SG_COMPOUND_SWIM_LIVE_EVENT_ARRIVAL,
+	SG_COMPOUND_SWIM_LIVE_EVENT_FAILURE,
+	SG_COMPOUND_SWIM_LIVE_EVENT_RECOVERY,
+	SG_COMPOUND_SWIM_LIVE_EVENT_COMPLETE
+} sg_compound_swim_live_event_t;
+
+struct sg_compound_swim_live_state_s;
+typedef void (*sg_compound_swim_live_transition_fn)(void *context,
+	const struct sg_compound_swim_live_state_s *state,
+	sg_compound_swim_live_event_t event,
+	sg_compound_swim_live_failure_t failure,
+	sg_replay_reason_t replay_reason);
+
 typedef sg_compound_swim_live_host_result_t
 	(*sg_compound_swim_live_bind_fn)(void *context, uint32_t link_index,
 		sg_compound_swim_live_snapshot_t *snapshot_out);
 typedef sg_compound_swim_live_host_result_t
-	(*sg_compound_swim_live_source_checkpoint_fn)(void *context,
+	(*sg_compound_swim_live_prepare_fn)(void *context,
 		const sg_compound_swim_live_snapshot_t *snapshot,
-		sg_compound_publication_angle_bias_t *bias_out);
+		const sg_compound_swim_live_start_t *start,
+		sg_compound_swim_live_plan_t *plan_out);
 typedef sg_compound_swim_live_host_result_t
 	(*sg_compound_swim_live_suffix_checkpoint_fn)(void *context,
 		const sg_compound_swim_live_snapshot_t *snapshot,
-		const sg_compound_publication_angle_bias_t *bias);
+		const sg_compound_swim_live_plan_t *plan);
 typedef sg_compound_swim_live_host_result_t
 	(*sg_compound_swim_live_snapshot_fn)(void *context,
 		const sg_compound_swim_live_snapshot_t *snapshot);
@@ -77,7 +131,7 @@ typedef struct sg_compound_swim_live_host_s
 {
 	void *context;
 	sg_compound_swim_live_bind_fn bind;
-	sg_compound_swim_live_source_checkpoint_fn source_checkpoint;
+	sg_compound_swim_live_prepare_fn prepare;
 	sg_compound_swim_live_suffix_checkpoint_fn suffix_checkpoint;
 	sg_compound_swim_live_snapshot_fn acquire;
 	sg_compound_swim_live_snapshot_fn authorize;
@@ -87,6 +141,7 @@ typedef struct sg_compound_swim_live_host_s
 	sg_compound_swim_live_segment_fn sweep_segment_clear;
 	sg_compound_swim_live_proof_fn prove_suffix;
 	sg_compound_swim_live_snapshot_fn release;
+	sg_compound_swim_live_transition_fn transition;
 } sg_compound_swim_live_host_t;
 
 typedef enum sg_compound_swim_live_outcome_e
@@ -99,28 +154,6 @@ typedef enum sg_compound_swim_live_outcome_e
 	SG_COMPOUND_SWIM_LIVE_COMPLETE,
 	SG_COMPOUND_SWIM_LIVE_REJECTED
 } sg_compound_swim_live_outcome_t;
-
-typedef enum sg_compound_swim_live_failure_e
-{
-	SG_COMPOUND_SWIM_LIVE_FAILURE_NONE = 0,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_ARGUMENT,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_BINDING,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_SOURCE_CHECKPOINT,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_ACQUIRE,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_AUTHORITY,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_CADENCE,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_ACTIVATION,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_TOP,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_HOLD,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_SUFFIX_CHECKPOINT,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_REPROOF,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_SWEEP,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_TIMING,
-	SG_COMPOUND_SWIM_LIVE_FAILURE_RELEASE
-} sg_compound_swim_live_failure_t;
 
 typedef struct sg_compound_swim_live_result_s
 {
@@ -143,7 +176,7 @@ typedef struct sg_compound_swim_live_state_s
 	sg_compound_state_t outer;
 	sg_swim_replay_state_t replay;
 	sg_compound_swim_live_snapshot_t snapshot;
-	sg_compound_publication_angle_bias_t angle_bias;
+	sg_compound_swim_live_plan_t plan;
 	sg_compound_swim_live_proof_t proof;
 	sg_compound_swim_live_replay_t replay_kind;
 	sg_compound_swim_live_failure_t failure;
@@ -157,7 +190,7 @@ typedef struct sg_compound_swim_live_state_s
 	int last_sweep_contact_ms;
 	qboolean guard_owned;
 	qboolean command_pending;
-	qboolean zero_command_pending;
+	qboolean direct_command_pending;
 	qboolean aborted_command_pending;
 	qboolean command_segment_checked;
 	qboolean recovering;
@@ -165,18 +198,19 @@ typedef struct sg_compound_swim_live_state_s
 	qboolean arrived;
 } sg_compound_swim_live_state_t;
 
-/* Initialization only.  Once Begin acquires the guard, this state must not be
- * overwritten or reinitialized; ownership ends exclusively through the
- * controller's proved release transition. */
+/* Initialization only.  Guard-owned state ends through release or a confirmed
+ * external orphan transition. */
 #define SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER { 0 }
 
 const char *SG_CompoundSwimLiveFailureName(
 	sg_compound_swim_live_failure_t failure);
+const char *SG_CompoundSwimLiveEventName(
+	sg_compound_swim_live_event_t event);
 
 sg_compound_swim_live_result_t SG_CompoundSwimLiveBegin(
 	sg_compound_swim_live_state_t *state,
 	const sg_compound_swim_live_host_t *host, uint32_t link_index,
-	const sg_replay_pose_t *pose);
+	const sg_compound_swim_live_start_t *start);
 sg_compound_swim_live_result_t SG_CompoundSwimLivePreStep(
 	sg_compound_swim_live_state_t *state,
 	const sg_compound_swim_live_host_t *host,
@@ -205,6 +239,9 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveRecover(
 	sg_compound_swim_live_state_t *state,
 	const sg_compound_swim_live_host_t *host,
 	const sg_replay_pose_t *pose, float old_frame_z);
+sg_compound_swim_live_result_t SG_CompoundSwimLiveOrphaned(
+	sg_compound_swim_live_state_t *state, uint32_t link_index,
+	int mover_key);
 
 qboolean SG_CompoundSwimLiveOwns(
 	const sg_compound_swim_live_state_t *state, uint32_t link_index,

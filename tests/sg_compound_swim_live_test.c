@@ -1,4 +1,3 @@
-/* Focused host fixture for the dormant PREOPEN D_SWIM live controller. */
 #include "q_shared.h"
 
 #include <limits.h>
@@ -11,7 +10,7 @@
 enum fixture_event_e
 {
 	FIXTURE_BIND = 1,
-	FIXTURE_SOURCE,
+	FIXTURE_PLAN,
 	FIXTURE_ACQUIRE,
 	FIXTURE_AUTHORIZE,
 	FIXTURE_TOP,
@@ -26,10 +25,13 @@ enum fixture_event_e
 typedef struct fixture_s
 {
 	sg_compound_swim_live_snapshot_t published;
+	sg_compound_swim_live_plan_t planned;
+	sg_compound_swim_live_start_t expected_start;
 	sg_compound_swim_live_host_t host;
 	sg_compound_swim_live_proof_t normal_proof;
 	sg_compound_swim_live_proof_t recovery_proof;
 	sg_compound_swim_live_host_result_t bind_result;
+	sg_compound_swim_live_host_result_t prepare_result;
 	sg_compound_swim_live_host_result_t acquire_result;
 	sg_compound_swim_live_host_result_t authorize_result;
 	sg_compound_swim_live_host_result_t top_result;
@@ -47,12 +49,19 @@ typedef struct fixture_s
 	vec3_t last_outside_origin;
 	int events[512];
 	int event_count;
+	sg_compound_swim_live_event_t lifecycle[16];
+	sg_compound_swim_live_failure_t lifecycle_failure[16];
+	sg_replay_reason_t lifecycle_replay[16];
+	uint32_t lifecycle_link[16];
+	int lifecycle_count;
 	int acquire_calls;
 	int authorize_calls;
 	int hold_calls;
 	int release_calls;
 	int proof_calls;
 	int recovery_proof_calls;
+	int plan_calls;
+	qboolean expected_start_valid;
 } fixture_t;
 
 static int failures;
@@ -72,6 +81,25 @@ static void FixtureEvent(fixture_t *fixture, int event)
 		fixture->events[fixture->event_count++] = event;
 }
 
+static void FixtureLifecycle(void *context,
+	const sg_compound_swim_live_state_t *state,
+	sg_compound_swim_live_event_t event,
+	sg_compound_swim_live_failure_t failure,
+	sg_replay_reason_t replay_reason)
+{
+	fixture_t *fixture = context;
+	int index = fixture->lifecycle_count;
+
+	CHECK(state != NULL);
+	if (!state || index >= 16)
+		return;
+	fixture->lifecycle[index] = event;
+	fixture->lifecycle_failure[index] = failure;
+	fixture->lifecycle_replay[index] = replay_reason;
+	fixture->lifecycle_link[index] = state->snapshot.binding.link_index;
+	fixture->lifecycle_count++;
+}
+
 static sg_compound_swim_live_host_result_t FixtureBind(void *context,
 	uint32_t link_index, sg_compound_swim_live_snapshot_t *snapshot_out)
 {
@@ -86,34 +114,37 @@ static sg_compound_swim_live_host_result_t FixtureBind(void *context,
 	return SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
 }
 
-static sg_compound_swim_live_host_result_t FixtureSource(void *context,
+static sg_compound_swim_live_host_result_t FixturePlan(void *context,
 	const sg_compound_swim_live_snapshot_t *snapshot,
-	sg_compound_publication_angle_bias_t *bias_out)
+	const sg_compound_swim_live_start_t *start,
+	sg_compound_swim_live_plan_t *plan_out)
 {
 	fixture_t *fixture = (fixture_t *)context;
 
-	FixtureEvent(fixture, FIXTURE_SOURCE);
-	CHECK(snapshot != NULL && bias_out != NULL);
-	if (!snapshot || !bias_out)
+	FixtureEvent(fixture, FIXTURE_PLAN);
+	CHECK(snapshot != NULL && start != NULL && plan_out != NULL);
+	if (!snapshot || !start || !plan_out)
 		return SG_COMPOUND_SWIM_LIVE_HOST_ERROR;
-	memset(bias_out, 0, sizeof(*bias_out));
-	bias_out->axis[0] = 7;
-	bias_out->axis[1] = -8;
-	bias_out->axis[2] = 9;
-	return SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
+	fixture->plan_calls++;
+	if (fixture->expected_start_valid)
+		CHECK(memcmp(start, &fixture->expected_start,
+		             sizeof(*start)) == 0);
+	if (fixture->prepare_result != SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
+		return fixture->prepare_result;
+	*plan_out = fixture->planned;
+	return fixture->prepare_result;
 }
 
 static sg_compound_swim_live_host_result_t FixtureSuffix(void *context,
 	const sg_compound_swim_live_snapshot_t *snapshot,
-	const sg_compound_publication_angle_bias_t *bias)
+	const sg_compound_swim_live_plan_t *plan)
 {
 	fixture_t *fixture = (fixture_t *)context;
 
 	FixtureEvent(fixture, FIXTURE_SUFFIX);
-	CHECK(snapshot != NULL && bias != NULL);
-	CHECK(bias && bias->axis[0] == 7 && bias->axis[1] == -8 &&
-	      bias->axis[2] == 9);
-	return snapshot && bias ? SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED :
+	CHECK(snapshot != NULL && plan != NULL);
+	CHECK(plan && memcmp(plan, &fixture->planned, sizeof(*plan)) == 0);
+	return snapshot && plan ? SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED :
 	                          SG_COMPOUND_SWIM_LIVE_HOST_ERROR;
 }
 
@@ -233,6 +264,7 @@ static void FixtureInit(fixture_t *fixture)
 
 	memset(fixture, 0, sizeof(*fixture));
 	fixture->bind_result = SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
+	fixture->prepare_result = SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
 	fixture->acquire_result = SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
 	fixture->authorize_result = SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
 	fixture->top_result = SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED;
@@ -262,6 +294,16 @@ static void FixtureInit(fixture_t *fixture)
 	binding->arrival_ms = 300;
 	binding->sweep_clear_ms = 200;
 	binding->total_cost_ms = 800;
+	VectorCopy(link->mechanism_anchor, fixture->planned.mechanism_anchor);
+	fixture->planned.suffix = binding->suffix;
+	fixture->planned.touch_ms = binding->touch_ms;
+	fixture->planned.touch_frame_end_ms = binding->touch_frame_end_ms;
+	fixture->planned.mover_top_ms = binding->mover_top_ms;
+	fixture->planned.suffix_start_ms = binding->suffix_start_ms;
+	fixture->planned.arrival_ms = binding->arrival_ms;
+	fixture->planned.sweep_clear_ms = binding->sweep_clear_ms;
+	fixture->planned.total_cost_ms = binding->total_cost_ms;
+	fixture->planned.exit_speed = link->exit_speed;
 	fixture->published.trigger_key = 21;
 	fixture->published.mover_key = 22;
 	fixture->normal_proof.arrival_ms = 300;
@@ -272,7 +314,7 @@ static void FixtureInit(fixture_t *fixture)
 	fixture->recovery_proof.exit_speed = 12;
 	fixture->host.context = fixture;
 	fixture->host.bind = FixtureBind;
-	fixture->host.source_checkpoint = FixtureSource;
+	fixture->host.prepare = FixturePlan;
 	fixture->host.suffix_checkpoint = FixtureSuffix;
 	fixture->host.acquire = FixtureAcquire;
 	fixture->host.authorize = FixtureAuthorize;
@@ -282,6 +324,7 @@ static void FixtureInit(fixture_t *fixture)
 	fixture->host.sweep_segment_clear = FixtureSegment;
 	fixture->host.prove_suffix = FixtureProof;
 	fixture->host.release = FixtureRelease;
+	fixture->host.transition = FixtureLifecycle;
 }
 
 static sg_replay_pose_t FixturePose(float x, qboolean water, float speed)
@@ -297,6 +340,30 @@ static sg_replay_pose_t FixturePose(float x, qboolean water, float speed)
 	pose.watertype = water ? CONTENTS_WATER : 0;
 	pose.waterlevel = water ? 3 : 0;
 	return pose;
+}
+
+static sg_compound_swim_live_start_t FixtureStart(
+	const sg_replay_pose_t *pose)
+{
+	sg_compound_swim_live_start_t start;
+
+	memset(&start, 0, sizeof(start));
+	start.pose = *pose;
+	start.old_pms = pose->pms;
+	start.old_pms.origin[0] += 8;
+	start.old_pms.delta_angles[YAW] = 1234;
+	start.old_frame_z = -17.0f;
+	return start;
+}
+
+static sg_compound_swim_live_result_t FixtureBegin(
+	sg_compound_swim_live_state_t *state, fixture_t *fixture,
+	uint32_t link_index, const sg_replay_pose_t *pose)
+{
+	fixture->expected_start = FixtureStart(pose);
+	fixture->expected_start_valid = true;
+	return SG_CompoundSwimLiveBegin(state, &fixture->host, link_index,
+	                                &fixture->expected_start);
 }
 
 static sg_replay_observation_t FixtureObservation(qboolean contact_clear)
@@ -339,7 +406,7 @@ static void FixtureEnterOpening(sg_compound_swim_live_state_t *state,
 	sg_compound_swim_live_result_t result;
 	usercmd_t command;
 
-	result = SG_CompoundSwimLiveBegin(state, &fixture->host, 3, source);
+	result = FixtureBegin(state, fixture, 3, source);
 	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
 	result = SG_CompoundSwimLivePreStep(state, &fixture->host, source,
 	                                    &command);
@@ -387,7 +454,7 @@ static void FixtureEnterRecoveryReplay(
 	usercmd_t command;
 	int step;
 
-	result = SG_CompoundSwimLiveBegin(state, &fixture->host, 3, source);
+	result = FixtureBegin(state, fixture, 3, source);
 	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
 	result = SG_CompoundSwimLivePreStep(state, &fixture->host, source,
 	                                    &command);
@@ -453,14 +520,14 @@ static void TestExactDoorSwimTransaction(void)
 	mechanism = FixturePose(80.0f, true, 0.0f);
 	blocked = FixtureObservation(false);
 	clear = FixtureObservation(true);
-	result = SG_CompoundSwimLiveBegin(&state, &fixture.host, 3, &source);
+	result = FixtureBegin(&state, &fixture, 3, &source);
 	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
 	CHECK(state.outer.phase == SG_COMPOUND_APPROACH);
 	CHECK(fixture.acquire_calls == 1 && fixture.authorize_calls == 0);
 	CHECK(FixtureFirstEvent(&fixture, FIXTURE_BIND) <
-	      FixtureFirstEvent(&fixture, FIXTURE_SOURCE));
-	CHECK(FixtureFirstEvent(&fixture, FIXTURE_SOURCE) <
 	      FixtureFirstEvent(&fixture, FIXTURE_ACQUIRE));
+	CHECK(FixtureFirstEvent(&fixture, FIXTURE_ACQUIRE) <
+	      FixtureFirstEvent(&fixture, FIXTURE_PLAN));
 
 	result = SG_CompoundSwimLivePreStep(&state, &fixture.host, &source,
 	                                    &command);
@@ -525,6 +592,21 @@ static void TestExactDoorSwimTransaction(void)
 	      FixtureFirstEvent(&fixture, FIXTURE_AUTHORIZE));
 	CHECK(FixtureFirstEvent(&fixture, FIXTURE_HOLD) <
 	      FixtureFirstEvent(&fixture, FIXTURE_RELEASE));
+	CHECK(fixture.lifecycle_count == 7);
+	CHECK(fixture.lifecycle[0] == SG_COMPOUND_SWIM_LIVE_EVENT_BEGIN);
+	CHECK(fixture.lifecycle[1] == SG_COMPOUND_SWIM_LIVE_EVENT_TOUCH);
+	CHECK(fixture.lifecycle[2] == SG_COMPOUND_SWIM_LIVE_EVENT_ACTIVATION);
+	CHECK(fixture.lifecycle[3] == SG_COMPOUND_SWIM_LIVE_EVENT_TOP);
+	CHECK(fixture.lifecycle[4] == SG_COMPOUND_SWIM_LIVE_EVENT_SWEEP_CLEAR);
+	CHECK(fixture.lifecycle[5] == SG_COMPOUND_SWIM_LIVE_EVENT_ARRIVAL);
+	CHECK(fixture.lifecycle[6] == SG_COMPOUND_SWIM_LIVE_EVENT_COMPLETE);
+	for (step = 0; step < fixture.lifecycle_count; step++)
+	{
+		CHECK(fixture.lifecycle_link[step] == 3U);
+		CHECK(fixture.lifecycle_failure[step] ==
+		      SG_COMPOUND_SWIM_LIVE_FAILURE_NONE);
+		CHECK(fixture.lifecycle_replay[step] == SG_REPLAY_REASON_NONE);
+	}
 }
 
 static void TestDoorSwimIsTheOnlyFixtureAdmission(void)
@@ -542,8 +624,7 @@ static void TestDoorSwimIsTheOnlyFixtureAdmission(void)
 		FixtureInit(&fixture);
 		fixture.published.binding.link.action = (byte)action;
 		source = FixturePose(0.0f, true, 0.0f);
-		result = SG_CompoundSwimLiveBegin(&state, &fixture.host, 3,
-		                                  &source);
+		result = FixtureBegin(&state, &fixture, 3, &source);
 		if (action == RL_DOOR_SWIM)
 		{
 			CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
@@ -566,8 +647,7 @@ static void TestDoorSwimIsTheOnlyFixtureAdmission(void)
 		FixtureInit(&fixture);
 		fixture.acquire_result = SG_COMPOUND_SWIM_LIVE_HOST_DENIED;
 		source = FixturePose(0.0f, true, 0.0f);
-		result = SG_CompoundSwimLiveBegin(&state, &fixture.host, 3,
-		                                  &source);
+		result = FixtureBegin(&state, &fixture, 3, &source);
 		CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_WAIT);
 		CHECK(!state.guard_owned && state.outer.phase == SG_COMPOUND_NONE);
 	}
@@ -585,7 +665,7 @@ static void TestMutationBoundariesFailClosed(void)
 
 	FixtureInit(&fixture);
 	source = FixturePose(0.0f, true, 0.0f);
-	CHECK(SG_CompoundSwimLiveBegin(&state, &fixture.host, 3, &source).outcome ==
+	CHECK(FixtureBegin(&state, &fixture, 3, &source).outcome ==
 	      SG_COMPOUND_SWIM_LIVE_RUNNING);
 	original = fixture.published;
 	fixture.published.binding.total_cost_ms += 100;
@@ -613,6 +693,12 @@ static void TestMutationBoundariesFailClosed(void)
 	result = SG_CompoundSwimLiveRecover(&state, &fixture.host, &source, 0.0f);
 	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_SAFE_STOPPED);
 	CHECK(fixture.release_calls == 1 && !state.guard_owned);
+	CHECK(fixture.lifecycle_count == 3);
+	CHECK(fixture.lifecycle[0] == SG_COMPOUND_SWIM_LIVE_EVENT_BEGIN);
+	CHECK(fixture.lifecycle[1] == SG_COMPOUND_SWIM_LIVE_EVENT_RECOVERY);
+	CHECK(fixture.lifecycle[2] == SG_COMPOUND_SWIM_LIVE_EVENT_COMPLETE);
+	CHECK(fixture.lifecycle_failure[2] ==
+	      SG_COMPOUND_SWIM_LIVE_FAILURE_AUTHORITY);
 }
 
 static void TestRecoveryRetainsMover(void)
@@ -639,7 +725,7 @@ static void TestRecoveryRetainsMover(void)
 	mechanism = FixturePose(80.0f, true, 0.0f);
 	blocked = FixtureObservation(false);
 	clear = FixtureObservation(true);
-	CHECK(SG_CompoundSwimLiveBegin(&state, &fixture.host, 3, &source).outcome ==
+	CHECK(FixtureBegin(&state, &fixture, 3, &source).outcome ==
 	      SG_COMPOUND_SWIM_LIVE_RUNNING);
 	CHECK(SG_CompoundSwimLivePreStep(&state, &fixture.host, &source,
 	                                 &command).command_ready);
@@ -793,7 +879,7 @@ static void TestInitializerStartsUnowned(void)
 
 	CHECK(state.outer.phase == SG_COMPOUND_NONE);
 	CHECK(!state.guard_owned && !state.command_pending);
-	CHECK(!state.zero_command_pending && !state.aborted_command_pending);
+	CHECK(!state.direct_command_pending && !state.aborted_command_pending);
 	CHECK(!SG_CompoundSwimLiveOwns(&state, 3, 22));
 }
 
@@ -823,8 +909,7 @@ static void TestTouchEndingSweepPrecedesMutation(void)
 		fixture.segment_count = 1;
 		source = FixturePose(0.0f, true, 0.0f);
 		mechanism = FixturePose(80.0f, true, 0.0f);
-		CHECK(SG_CompoundSwimLiveBegin(&state, &fixture.host, 3,
-		                               &source).outcome ==
+		CHECK(FixtureBegin(&state, &fixture, 3, &source).outcome ==
 		      SG_COMPOUND_SWIM_LIVE_RUNNING);
 		CHECK(SG_CompoundSwimLivePreStep(&state, &fixture.host, &source,
 		                                    &command).command_ready);
@@ -854,6 +939,37 @@ static void TestTouchEndingSweepPrecedesMutation(void)
 	}
 }
 
+static void TestRepeatedAuthenticatedTouchIsIdempotent(void)
+{
+	fixture_t fixture;
+	sg_compound_swim_live_state_t state =
+		SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER;
+	sg_compound_swim_live_result_t result;
+	sg_replay_pose_t source, mechanism, overlap;
+	sg_replay_observation_t blocked;
+	int lifecycle_count;
+
+	FixtureInit(&fixture);
+	source = FixturePose(0.0f, true, 0.0f);
+	mechanism = FixturePose(80.0f, true, 0.0f);
+	overlap = FixturePose(81.25f, true, 0.0f);
+	blocked = FixtureObservation(false);
+	FixtureEnterOpening(&state, &fixture, &source, &mechanism, &blocked);
+	lifecycle_count = fixture.lifecycle_count;
+	result = SG_CompoundSwimLiveAuthorizeTouch(&state, &fixture.host, 21,
+	                                           &overlap, 18);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
+	CHECK(result.failure == SG_COMPOUND_SWIM_LIVE_FAILURE_NONE);
+	CHECK(state.outer.phase == SG_COMPOUND_OPENING && state.guard_owned);
+	CHECK(fixture.lifecycle_count == lifecycle_count);
+
+	result = SG_CompoundSwimLiveAuthorizeTouch(&state, &fixture.host, 23,
+	                                           &overlap, 18);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH);
+	CHECK(state.outer.phase == SG_COMPOUND_RECOVER && state.guard_owned);
+}
+
 static void TestMalformedSegmentResultFailsClosed(void)
 {
 	fixture_t fixture;
@@ -868,7 +984,7 @@ static void TestMalformedSegmentResultFailsClosed(void)
 	fixture.segment_count = 1;
 	source = FixturePose(0.0f, true, 0.0f);
 	mechanism = FixturePose(80.0f, true, 0.0f);
-	CHECK(SG_CompoundSwimLiveBegin(&state, &fixture.host, 3, &source).outcome ==
+	CHECK(FixtureBegin(&state, &fixture, 3, &source).outcome ==
 	      SG_COMPOUND_SWIM_LIVE_RUNNING);
 	CHECK(SG_CompoundSwimLivePreStep(&state, &fixture.host, &source,
 	                                &command).command_ready);
@@ -914,6 +1030,43 @@ static void TestOpeningZeroSegmentDenied(void)
 	CHECK(fixture.segment_calls == 2 && fixture.segment_at == 2);
 	CHECK(state.outer.phase == SG_COMPOUND_RECOVER && state.guard_owned);
 	CHECK(!state.command_pending && fixture.release_calls == 0);
+}
+
+static void TestOpeningHoldUsesSwimReplayCommand(void)
+{
+	fixture_t fixture;
+	sg_compound_swim_live_state_t state =
+		SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER;
+	sg_compound_swim_live_result_t result;
+	sg_replay_pose_t source, mechanism, drifted;
+	sg_replay_observation_t blocked;
+	usercmd_t command, expected, zero;
+
+	FixtureInit(&fixture);
+	source = FixturePose(0.0f, true, 0.0f);
+	mechanism = FixturePose(80.0f, true, 0.0f);
+	drifted = FixturePose(81.0f, true, 0.0f);
+	blocked = FixtureObservation(false);
+	FixtureEnterOpening(&state, &fixture, &source, &mechanism, &blocked);
+	memset(&zero, 0, sizeof(zero));
+	zero.msec = SG_REPLAY_STEP_MS;
+	result = SG_CompoundSwimLivePreStep(&state, &fixture.host, &mechanism,
+	                                    &command);
+	CHECK(result.command_ready && state.direct_command_pending);
+	CHECK(memcmp(&command, &zero, sizeof(command)) == 0);
+	result = SG_CompoundSwimLivePostStep(&state, &fixture.host, &mechanism,
+	                                     &blocked);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
+	result = SG_CompoundSwimLivePreStep(&state, &fixture.host, &drifted,
+	                                    &command);
+	CHECK(result.command_ready && state.direct_command_pending);
+	CHECK(SG_SwimReplayCommand(&drifted, fixture.planned.mechanism_anchor,
+	                           SG_SWIM_REPLAY_EGRESS, &expected));
+	CHECK(memcmp(&command, &expected, sizeof(command)) == 0 &&
+	      command.forwardmove == 400);
+	result = SG_CompoundSwimLivePostStep(&state, &fixture.host, &mechanism,
+	                                     &blocked);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
 }
 
 static void CheckOpeningZeroObservationFailure(qboolean invalid_pose,
@@ -1148,6 +1301,90 @@ static void TestElapsedOverflowFailsOwned(void)
 	CHECK(fixture.release_calls == 0);
 }
 
+static void TestDynamicPlanIsPreparedAfterOwnership(void)
+{
+	fixture_t fixture;
+	sg_compound_swim_live_state_t state =
+		SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER;
+	sg_compound_swim_live_state_t before;
+	sg_compound_swim_live_result_t result;
+	sg_replay_pose_t source;
+
+	FixtureInit(&fixture);
+	VectorSet(fixture.planned.mechanism_anchor, 88.0f, 4.0f, -2.0f);
+	fixture.planned.touch_ms = 50;
+	fixture.planned.touch_frame_end_ms = 100;
+	fixture.planned.mover_top_ms = 600;
+	fixture.planned.suffix_start_ms = 500;
+	fixture.planned.arrival_ms = 300;
+	fixture.planned.sweep_clear_ms = 200;
+	fixture.planned.total_cost_ms = 900;
+	fixture.planned.exit_speed = 17;
+	fixture.planned.suffix.old_frame_z = -33.0f;
+	source = FixturePose(12.0f, true, 48.0f);
+	result = FixtureBegin(&state, &fixture, 3, &source);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RUNNING);
+	CHECK(fixture.plan_calls == 1 && fixture.acquire_calls == 1);
+	CHECK(FixtureFirstEvent(&fixture, FIXTURE_ACQUIRE) <
+	      FixtureFirstEvent(&fixture, FIXTURE_PLAN));
+	CHECK(memcmp(&state.plan, &fixture.planned,
+	             sizeof(state.plan)) == 0);
+	CHECK(state.plan.touch_ms != fixture.published.binding.touch_ms);
+	CHECK(state.plan.total_cost_ms !=
+	      fixture.published.binding.total_cost_ms);
+
+	memset(&state, 0, sizeof(state));
+	before = state;
+	fixture.event_count = 0;
+	fixture.acquire_calls = 0;
+	fixture.plan_calls = 0;
+	fixture.release_calls = 0;
+	fixture.prepare_result = SG_COMPOUND_SWIM_LIVE_HOST_DENIED;
+	result = FixtureBegin(&state, &fixture, 3, &source);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_WAIT);
+	CHECK(result.failure == SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN);
+	CHECK(fixture.plan_calls == 1 && fixture.acquire_calls == 1);
+	CHECK(fixture.release_calls == 1);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+
+	fixture.event_count = 0;
+	fixture.acquire_calls = 0;
+	fixture.plan_calls = 0;
+	fixture.release_calls = 0;
+	fixture.release_result = SG_COMPOUND_SWIM_LIVE_HOST_DENIED;
+	result = FixtureBegin(&state, &fixture, 3, &source);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN);
+	CHECK(fixture.acquire_calls == 1 && fixture.plan_calls == 1);
+	CHECK(fixture.release_calls == 1);
+	CHECK(state.guard_owned && state.outer.phase == SG_COMPOUND_RECOVER);
+}
+
+static void TestExternalOrphanClearsPendingCommand(void)
+{
+	fixture_t fixture;
+	sg_compound_swim_live_state_t state =
+		SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER;
+	sg_compound_swim_live_result_t result;
+	sg_replay_pose_t source;
+	usercmd_t command;
+
+	FixtureInit(&fixture);
+	source = FixturePose(0.0f, true, 0.0f);
+	CHECK(FixtureBegin(&state, &fixture, 3, &source).outcome ==
+	      SG_COMPOUND_SWIM_LIVE_RUNNING);
+	CHECK(SG_CompoundSwimLivePreStep(&state, &fixture.host, &source,
+	                                &command).command_ready);
+	CHECK(state.command_pending && state.guard_owned);
+	result = SG_CompoundSwimLiveOrphaned(&state, 4, 22);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_REJECTED);
+	CHECK(state.command_pending && state.guard_owned);
+	result = SG_CompoundSwimLiveOrphaned(&state, 3, 22);
+	CHECK(result.outcome == SG_COMPOUND_SWIM_LIVE_SAFE_STOPPED);
+	CHECK(memcmp(&state, &(sg_compound_swim_live_state_t)
+	      SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER, sizeof(state)) == 0);
+}
+
 int main(void)
 {
 	TestInitializerStartsUnowned();
@@ -1157,13 +1394,17 @@ int main(void)
 	TestRecoveryRetainsMover();
 	TestReleaseRetryRequiresCurrentOutsideSweep();
 	TestTouchEndingSweepPrecedesMutation();
+	TestRepeatedAuthenticatedTouchIsIdempotent();
 	TestMalformedSegmentResultFailsClosed();
 	TestOpeningZeroSegmentDenied();
+	TestOpeningHoldUsesSwimReplayCommand();
 	TestOpeningZeroObservationFailuresRetainOwnership();
 	TestZeroBoundaryConsumesPostPusherState();
 	TestSuffixAuthorityFailureStillConsumesSegment();
 	TestRecoveryAuthorityFailureStillConsumesSegment();
 	TestElapsedOverflowFailsOwned();
+	TestDynamicPlanIsPreparedAfterOwnership();
+	TestExternalOrphanClearsPendingCommand();
 	if (failures)
 	{
 		fprintf(stderr, "compound_swim_live_test: %d failure(s)\n",

@@ -14,6 +14,7 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_button_live.h"
+#include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
@@ -2054,6 +2055,8 @@ qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 	bot = DoorStep_EventBot(activator);
 	if (!bot)
 		return true;
+	if (SG_CompoundSwimGameOwns(bot))
+		return SG_CompoundSwimGameAuthorizeTouch(source, activator);
 	command_scoped = DoorStep_ApproachCommandScoped(bot);
 	if (!DoorStep_DeclaredBinding(bot, &binding) ||
 	    binding.entry_entity != source)
@@ -2507,6 +2510,9 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	bot = DoorStep_EventBot(activator);
 	if (!bot)
 		return true;
+	if (SG_CompoundSwimGameOwns(bot))
+		return SG_CompoundSwimGameAuthorizeActivation(source, door_master,
+		    activator);
 	command_scoped = DoorStep_ApproachCommandScoped(bot);
 	if (!DoorStep_DeclaredBinding(bot, &binding) ||
 	    binding.entry_entity != source)
@@ -6899,6 +6905,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean open_ahead = tc->open_ahead;
 	qboolean run_link = tc->run_link;
 	int door_hold = tc->door_hold;
+
+	if (SG_CompoundSwimGameEmit(bot, bestlink))
+		return;
 	bot->beat_until = SG_SpawnBeatDeadline(bot->beat_until,
 	    tc->touch_terminal);
 	{

@@ -66,8 +66,8 @@ static const sg_rune_mechanism_binding_t *sg_oracle_bound_door;
 static int sg_oracle_declared_action;
 static qboolean sg_oracle_declared_touched;
 /* Compound PREOPEN owns one exact trigger and one exact translating leaf.
- * Keep this narrower than ordinary RL_DOOR set equivalence: the dormant proof
- * must not silently fan out to another activator or team member. */
+ * Keep this narrower than ordinary RL_DOOR set equivalence so proof cannot
+ * fan out to another activator or team member. */
 static edict_t *sg_oracle_compound_trigger;
 static edict_t *sg_oracle_compound_member;
 static qboolean sg_oracle_compound_touched;
@@ -4324,23 +4324,25 @@ static qboolean SG_OracleCompoundOutsideSegment(
 	       !SG_CompoundWorldCrossesSweep(resolved, from, to);
 }
 
-/* Execute the literal zero commands left in one production frame, then apply
- * the same end-frame liquid/fall law as the SWIM reducer. */
-static qboolean SG_OracleCompoundZeroFrame(sg_phantom_t *ph,
-	const sg_compound_world_preopen_t *resolved, int commands,
-	float *old_frame_z)
+static qboolean SG_OracleCompoundHoldFrame(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved, const vec3_t anchor,
+	int commands, float *old_frame_z)
 {
+	sg_replay_pose_t pose;
 	usercmd_t command;
 	vec3_t before;
 	int index;
 
-	if (!ph || !resolved || !old_frame_z || commands <= 0 || commands > 4)
+	if (!ph || !resolved || !anchor || !old_frame_z ||
+	    commands <= 0 || commands > 4)
 		return false;
 	for (index = 0; index < commands; index++)
 	{
 		VectorCopy(ph->origin, before);
-		memset(&command, 0, sizeof(command));
-		command.msec = SG_REPLAY_STEP_MS;
+		SG_OracleReplayPose(ph, &pose);
+		if (!SG_SwimReplayCommand(&pose, anchor, SG_SWIM_REPLAY_HOLD,
+		                          &command))
+			return false;
 		SG_OracleRun(ph, &command, 1);
 		if (!SG_OracleCompoundPhantomClean(ph) ||
 		    !SG_OracleCompoundOutsideSegment(resolved, before, ph->origin))
@@ -4474,7 +4476,8 @@ static rune_reject_reason_t SG_OracleCompoundSwimSuffix(
 	edict_t *member, const vec3_t destination, qboolean destination_water,
 	float old_frame_z, edict_t *passent,
 	sg_oracle_compound_suffix_start_t start,
-	qboolean require_live_top, sg_compound_swim_recovery_proof_t *proof)
+	qboolean require_live_top, sg_compound_swim_recovery_proof_t *proof,
+	sg_replay_reason_t *replay_reason)
 {
 	sg_oracle_swim_cursor_t cursor;
 	sg_compound_swim_recovery_proof_t candidate;
@@ -4485,6 +4488,8 @@ static rune_reject_reason_t SG_OracleCompoundSwimSuffix(
 	if (!proof)
 		return RLR_BAD_CONTROL_POLICY;
 	memset(proof, 0, sizeof(*proof));
+	if (replay_reason)
+		*replay_reason = SG_REPLAY_REASON_NONE;
 	memset(&candidate, 0, sizeof(candidate));
 	outside_before = SG_CompoundWorldOutsideSweep(resolved, ph->origin);
 	if ((start == SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE && !outside_before) ||
@@ -4531,7 +4536,11 @@ static rune_reject_reason_t SG_OracleCompoundSwimSuffix(
 		outside_before = outside;
 	}
 	if (status != SG_REPLAY_ARRIVED)
+	{
+		if (replay_reason)
+			*replay_reason = cursor.state.progress.reason;
 		return RLR_SUFFIX_REPLAY_FAILED;
+	}
 	if (!candidate.sweep_clear_ms ||
 	    candidate.sweep_clear_ms > cursor.state.progress.arrival_ms)
 		return RLR_CLEAR_MISMATCH;
@@ -4716,16 +4725,18 @@ rune_reject_reason_t SG_OracleCompoundSwimDiscoverContact(
 	return RLR_OK;
 }
 
-/* Dormant joint witness for PREOPEN D_SWIM.  It observes the resolved trigger,
- * stages (but never activates) the one physical member, and starts the suffix
- * from the same phantom only after TOP is linked.  No runtime action dispatch
- * or hold-open callback is reachable from this proof. */
-rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
+/* Joint witness for PREOPEN D_SWIM.  It observes the resolved trigger, stages
+ * but never activates the one physical member, and starts the suffix from the
+ * same phantom only after TOP is linked. */
+static rune_reject_reason_t SG_OracleCompoundSwimPreopenMode(
+	sg_phantom_t *ph,
 	const sg_compound_world_preopen_t *resolved,
 	const vec3_t mechanism_anchor, const vec3_t destination,
 	qboolean destination_water, float old_frame_z,
 	sg_compound_swim_proof_t *proof, edict_t *passent,
-	qboolean world_only, qboolean loader_replay)
+	qboolean world_only, qboolean loader_replay,
+	qboolean capture_contact, vec3_t contact_anchor,
+	sg_replay_reason_t *replay_reason)
 {
 	sg_oracle_compound_scope_t scope;
 	sg_oracle_member_snapshot_t member_snapshot;
@@ -4734,6 +4745,7 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	sg_oracle_swim_cursor_t cursor;
 	sg_compound_swim_proof_t candidate;
 	sg_compound_swim_recovery_proof_t suffix;
+	vec3_t captured_contact;
 	sg_replay_status_t status;
 	rune_reject_reason_t reason = RLR_BAD_CONTROL_POLICY;
 	edict_t *member = NULL;
@@ -4741,16 +4753,22 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	qboolean member_staged = false;
 	int remainder_commands;
 
-	if (!proof)
+	if (!proof || (capture_contact && !contact_anchor))
 		return RLR_BAD_CONTROL_POLICY;
 	memset(proof, 0, sizeof(*proof));
+	if (replay_reason)
+		*replay_reason = SG_REPLAY_REASON_NONE;
+	if (contact_anchor)
+		VectorClear(contact_anchor);
 	memset(&candidate, 0, sizeof(candidate));
+	VectorClear(captured_contact);
 	if (!ph || !resolved || !mechanism_anchor || !destination ||
 	    !SG_OracleFinite3(mechanism_anchor) ||
 	    !SG_OracleFinite3(destination) || !isfinite(old_frame_z) ||
 	    (destination_water != false && destination_water != true) ||
 	    (world_only != false && world_only != true) ||
 	    (loader_replay != false && loader_replay != true) ||
+	    (capture_contact != false && capture_contact != true) ||
 	    !sg_host.pmove || !sg_host.trace || !sg_host.pointcontents ||
 	    !sg_host.box_edicts || !sg_host.linkentity ||
 	    sg_oracle_active_phantom)
@@ -4789,10 +4807,20 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	}
 	if (!sg_oracle_compound_touched || status == SG_REPLAY_FAILED ||
 	    !SG_OracleCompoundPhantomClean(ph) ||
-	    !SG_OracleCompoundAnchorMatches(ph, mechanism_anchor))
+	    (!capture_contact &&
+	     !SG_OracleCompoundAnchorMatches(ph, mechanism_anchor)))
 	{
 		reason = RLR_APPROACH_REPLAY_FAILED;
 		goto done;
+	}
+	if (capture_contact)
+	{
+		VectorCopy(ph->origin, captured_contact);
+		if (!SG_OracleCompoundFixedVector(captured_contact))
+		{
+			reason = RLR_APPROACH_REPLAY_FAILED;
+			goto done;
+		}
 	}
 	candidate.touch_ms = cursor.state.progress.elapsed_ms;
 	if (candidate.touch_ms <= 0 ||
@@ -4814,8 +4842,8 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 		goto done;
 	}
 	if (remainder_commands > 0 &&
-	    !SG_OracleCompoundZeroFrame(ph, resolved, remainder_commands,
-	                                &old_frame_z))
+	    !SG_OracleCompoundHoldFrame(ph, resolved, mechanism_anchor,
+	                                remainder_commands, &old_frame_z))
 	{
 		reason = RLR_APPROACH_REPLAY_FAILED;
 		goto done;
@@ -4838,7 +4866,8 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 		member_staged = true;
 		if (mover_step.at_top)
 			break;
-		if (!SG_OracleCompoundZeroFrame(ph, resolved, 4, &old_frame_z))
+		if (!SG_OracleCompoundHoldFrame(ph, resolved, mechanism_anchor, 4,
+		                                &old_frame_z))
 		{
 			reason = RLR_RIDE_REPLAY_FAILED;
 			goto done;
@@ -4854,7 +4883,7 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	SG_OracleCompoundCaptureSuffix(ph, old_frame_z, &candidate);
 	reason = SG_OracleCompoundSwimSuffix(ph, resolved, member, destination,
 		destination_water, old_frame_z, passent,
-		SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE, false, &suffix);
+		SG_ORACLE_COMPOUND_SUFFIX_OUTSIDE, false, &suffix, replay_reason);
 	if (reason != RLR_OK)
 		goto done;
 	candidate.arrival_ms = suffix.arrival_ms;
@@ -4871,6 +4900,8 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
 	candidate.total_cost_ms = candidate.touch_frame_end_ms +
 		candidate.suffix_start_ms + candidate.arrival_ms;
 	candidate.exit_speed = suffix.exit_speed;
+	if (capture_contact)
+		VectorCopy(captured_contact, contact_anchor);
 	*proof = candidate;
 	reason = RLR_OK;
 
@@ -4880,6 +4911,31 @@ done:
 	if (scope_entered)
 		SG_OracleCompoundScopeRestore(&scope);
 	return reason;
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_proof_t *proof, sg_replay_reason_t *replay_reason,
+	edict_t *passent,
+	qboolean world_only, qboolean loader_replay)
+{
+	return SG_OracleCompoundSwimPreopenMode(ph, resolved, mechanism_anchor,
+		destination, destination_water, old_frame_z, proof, passent,
+		world_only, loader_replay, false, NULL, replay_reason);
+}
+
+rune_reject_reason_t SG_OracleCompoundSwimPlanLive(sg_phantom_t *ph,
+	const sg_compound_world_preopen_t *resolved,
+	const vec3_t canonical_hint, const vec3_t destination,
+	qboolean destination_water, float old_frame_z,
+	sg_compound_swim_proof_t *proof, vec3_t contact_anchor,
+	edict_t *passent)
+{
+	return SG_OracleCompoundSwimPreopenMode(ph, resolved, canonical_hint,
+		destination, destination_water, old_frame_z, proof, passent,
+		true, false, true, contact_anchor, NULL);
 }
 
 static rune_reject_reason_t SG_OracleCompoundSwimLiveSuffix(sg_phantom_t *ph,
@@ -4925,7 +4981,7 @@ static rune_reject_reason_t SG_OracleCompoundSwimLiveSuffix(sg_phantom_t *ph,
 	}
 	reason = SG_OracleCompoundSwimSuffix(ph, resolved, member, destination,
 		destination_water, old_frame_z, passent,
-		start, true, &candidate);
+		start, true, &candidate, NULL);
 	if (reason == RLR_OK)
 		*proof = candidate;
 

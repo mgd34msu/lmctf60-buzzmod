@@ -676,7 +676,7 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 			&phantom, &resolved, link->mechanism_anchor,
 			rune->seeds[link->to].origin,
 			(rune->seeds[link->to].flags & RSF_WATER) != 0,
-			source.old_frame_z, &proof, NULL, true, true);
+			source.old_frame_z, &proof, NULL, NULL, true, true);
 		if (reason != RLR_OK)
 		{
 			result.status = SG_COMPOUND_PUBLICATION_REPLAY;

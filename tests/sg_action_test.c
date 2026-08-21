@@ -5,7 +5,7 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xe1731b32U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x5be12e46U,
 	"RUNE action contract drift");
 _Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xdd8de50fU,
 	"RUNE mechanism contract drift");
@@ -80,7 +80,7 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 	  RLAP_DROP_LIP, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP,
 		  RLCP_DROP, RLMP_DOOR_WORLD_FIXED_1_8, RL_DROP, RLFB_INHERIT, 0,
 	  "RL_DOOR_DROP", "DOOR_DROP", "D_DROP", "#d4a600" },
-	{ 0, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_FROM_WATER,
+	{ 1, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_FROM_WATER,
 	  RLAP_ZERO, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_SWIM,
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_SWIM, RLFB_INHERIT, 0,
 	  "RL_DOOR_SWIM", "DOOR_SWIM", "D_SWIM", "#5a9cff" },
@@ -98,12 +98,10 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 
 static void TestActions(void)
 {
-	/* Entries 0..8 are the literal pre-registry consumer behavior. Entries
-	 * 9..11 pin dormant compound metadata without granting runtime support. */
 	static const int runtime_owns_control[SG_ACTION_COUNT] =
-		{ 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1 };
+		{ 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1 };
 	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1 };
+		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1 };
 	static const int uses_hook_policy[SG_ACTION_COUNT] =
 		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
 	static const int field_bias_at_rope_1000[SG_ACTION_COUNT] =

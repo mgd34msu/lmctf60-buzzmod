@@ -27,6 +27,7 @@ static int body_did_key;
 static int orphan_bolt_key;
 static int orphan_calls;
 static int disconnected_calls;
+static int swim_retired_calls;
 static int quarantine_calls;
 static int bot_attach_calls;
 static int bot_respawn_calls;
@@ -74,6 +75,13 @@ static sg_mover_lease_record_t validate_record;
 static sg_compound_guard_run_t run_state = SG_COMPOUND_GUARD_RUN_READY;
 static int global_record_present;
 static sg_mover_lease_record_t global_record;
+
+void SG_CompoundSwimGameClientRetired(edict_t *client)
+{
+	if (client != &entities[1])
+		failures++;
+	swim_retired_calls++;
+}
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -401,6 +409,7 @@ static void ResetWorld(void)
 	memset(&validate_record, 0, sizeof(validate_record));
 	memset(&global_record, 0, sizeof(global_record));
 	global_record_present = 0;
+	swim_retired_calls = 0;
 	hold_member_calls = 0;
 	hold_member_ok = 1;
 	terminal_member_calls = 0;
@@ -816,6 +825,7 @@ static void TestBodyAndHookIncarnations(void)
 	CHECK(SG_CompoundGuardGamePlayerDie(&entities[1]) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(orphan_calls == 1 && orphan_bolt_key == 11);
+	CHECK(swim_retired_calls == 1);
 	CHECK(entities[1].health == -100);
 	/* A later life can still carry the parked owner while its earlier corpse is
 	 * an ORPHAN.  Re-entering the death hook must not attempt ORPHAN->ORPHAN or
@@ -1089,6 +1099,7 @@ static void TestPusherFenceBasics(void)
 static void TestDisconnectAndExhaustion(void)
 {
 	int bot_resets_before, completion_resets_before, level_resets_before;
+	int swim_retired_before = swim_retired_calls;
 	int slot;
 	uint64_t generation = 0U;
 
@@ -1097,6 +1108,7 @@ static void TestDisconnectAndExhaustion(void)
 	CHECK(SG_CompoundGuardGameClientDisconnected(&entities[1]) ==
 	      SG_COMPOUND_GUARD_OK);
 	CHECK(disconnected_calls == 1);
+	CHECK(swim_retired_calls == swim_retired_before + 1);
 	CHECK(captured_host.identity(captured_host.context, 1, &generation) ==
 	      SG_COMPOUND_GUARD_NO);
 

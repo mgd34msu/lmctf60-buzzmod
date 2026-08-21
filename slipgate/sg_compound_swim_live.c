@@ -24,10 +24,21 @@ static sg_compound_swim_live_result_t CompoundSwimLiveResult(
 static qboolean CompoundSwimLiveHostValid(
 	const sg_compound_swim_live_host_t *host)
 {
-	return host && host->bind && host->source_checkpoint &&
+	return host && host->bind && host->prepare &&
 	       host->suffix_checkpoint && host->acquire && host->authorize &&
 	       host->at_top && host->hold_open && host->outside_sweep &&
-	       host->sweep_segment_clear && host->prove_suffix && host->release;
+	       host->sweep_segment_clear && host->prove_suffix && host->release &&
+	       host->transition;
+}
+
+static void CompoundSwimLiveTransition(
+	const sg_compound_swim_live_state_t *state,
+	const sg_compound_swim_live_host_t *host,
+	sg_compound_swim_live_event_t event,
+	sg_compound_swim_live_failure_t failure,
+	sg_replay_reason_t replay_reason)
+{
+	host->transition(host->context, state, event, failure, replay_reason);
 }
 
 static qboolean CompoundSwimLiveFinite3(const float value[3])
@@ -94,12 +105,11 @@ static qboolean CompoundSwimLiveLattice3(const float value[3])
 	return true;
 }
 
-static qboolean CompoundSwimLivePlanValid(
+static qboolean CompoundSwimLiveBindingValid(
 	const sg_compound_swim_live_snapshot_t *snapshot, uint32_t link_index)
 {
 	const sg_compound_publication_binding_t *binding;
 	const rune_link_t *link;
-	long long touch_frame_end, total;
 
 	if (!snapshot)
 		return false;
@@ -118,39 +128,58 @@ static qboolean CompoundSwimLivePlanValid(
 	    !CompoundSwimLiveFinite3(binding->destination_seed.origin) ||
 	    (binding->source_seed.flags & RSF_WATER) == 0 ||
 	    (binding->source_seed.flags & ~RSF_WATER) != 0 ||
-	    (binding->destination_seed.flags & ~(RSF_WATER)) != 0 ||
-	    binding->touch_ms <= 0 ||
-	    binding->touch_ms > RUNE_MAX_COST_MS ||
-	    binding->touch_ms % SG_REPLAY_STEP_MS != 0 ||
-	    binding->touch_frame_end_ms <= 0 ||
-	    binding->touch_frame_end_ms > RUNE_MAX_COST_MS ||
-	    binding->touch_frame_end_ms % SG_REPLAY_FRAME_MS != 0 ||
-	    binding->mover_top_ms < 2 * SG_REPLAY_FRAME_MS ||
-	    binding->mover_top_ms > RUNE_MAX_COST_MS ||
-	    binding->mover_top_ms % SG_REPLAY_FRAME_MS != 0 ||
-	    binding->suffix_start_ms < SG_REPLAY_FRAME_MS ||
-	    binding->suffix_start_ms !=
-		binding->mover_top_ms - SG_REPLAY_FRAME_MS ||
-	    binding->arrival_ms <= 0 ||
-	    binding->arrival_ms >= SG_REPLAY_SWIM_LIMIT_MS ||
-	    binding->arrival_ms % SG_REPLAY_FRAME_MS != 0 ||
-	    binding->sweep_clear_ms <= 0 ||
-	    binding->sweep_clear_ms > binding->arrival_ms ||
-	    binding->sweep_clear_ms % SG_REPLAY_FRAME_MS != 0 ||
-	    binding->total_cost_ms < RUNE_MIN_COST_MS ||
-	    binding->total_cost_ms > RUNE_MAX_COST_MS ||
-	    binding->total_cost_ms % SG_REPLAY_FRAME_MS != 0)
+	    (binding->destination_seed.flags & ~(RSF_WATER)) != 0)
 		return false;
-	touch_frame_end = ((long long)binding->touch_ms +
+	return true;
+}
+
+static qboolean CompoundSwimLivePlanValid(
+	const sg_compound_swim_live_plan_t *plan)
+{
+	long long touch_frame_end, total;
+
+	if (!plan || !CompoundSwimLiveLattice3(plan->mechanism_anchor) ||
+	    plan->touch_ms <= 0 || plan->touch_ms > RUNE_MAX_COST_MS ||
+	    plan->touch_ms % SG_REPLAY_STEP_MS != 0 ||
+	    plan->touch_frame_end_ms <= 0 ||
+	    plan->touch_frame_end_ms > RUNE_MAX_COST_MS ||
+	    plan->touch_frame_end_ms % SG_REPLAY_FRAME_MS != 0 ||
+	    plan->mover_top_ms < 2 * SG_REPLAY_FRAME_MS ||
+	    plan->mover_top_ms > RUNE_MAX_COST_MS ||
+	    plan->mover_top_ms % SG_REPLAY_FRAME_MS != 0 ||
+	    plan->suffix_start_ms < SG_REPLAY_FRAME_MS ||
+	    plan->suffix_start_ms !=
+		plan->mover_top_ms - SG_REPLAY_FRAME_MS ||
+	    plan->arrival_ms <= 0 ||
+	    plan->arrival_ms >= SG_REPLAY_SWIM_LIMIT_MS ||
+	    plan->arrival_ms % SG_REPLAY_FRAME_MS != 0 ||
+	    plan->sweep_clear_ms <= 0 ||
+	    plan->sweep_clear_ms > plan->arrival_ms ||
+	    plan->sweep_clear_ms % SG_REPLAY_FRAME_MS != 0 ||
+	    plan->total_cost_ms < RUNE_MIN_COST_MS ||
+	    plan->total_cost_ms > RUNE_MAX_COST_MS ||
+	    plan->total_cost_ms % SG_REPLAY_FRAME_MS != 0)
+		return false;
+	touch_frame_end = ((long long)plan->touch_ms +
 	                   SG_REPLAY_FRAME_MS - 1LL) /
 	                  SG_REPLAY_FRAME_MS * SG_REPLAY_FRAME_MS;
-	total = (long long)binding->touch_frame_end_ms +
-	        binding->suffix_start_ms + binding->arrival_ms;
-	return touch_frame_end == binding->touch_frame_end_ms &&
-	       total == binding->total_cost_ms &&
-	       binding->total_cost_ms == link->cost_ms &&
-	       binding->sweep_clear_ms == link->sweep_clear_ms &&
-	       binding->link.exit_speed == link->exit_speed;
+	total = (long long)plan->touch_frame_end_ms +
+	        plan->suffix_start_ms + plan->arrival_ms;
+	return touch_frame_end == plan->touch_frame_end_ms &&
+	       total == plan->total_cost_ms;
+}
+
+static qboolean CompoundSwimLiveTouchCommitted(
+	const sg_compound_swim_live_state_t *state)
+{
+	return state &&
+	    (state->outer.phase == SG_COMPOUND_TOUCHED ||
+	     state->outer.phase == SG_COMPOUND_OPENING ||
+	     state->outer.phase == SG_COMPOUND_RIDE ||
+	     state->outer.phase == SG_COMPOUND_TOP ||
+	     state->outer.phase == SG_COMPOUND_SUFFIX_LEASED ||
+	     state->outer.phase == SG_COMPOUND_SUFFIX_CLEAR ||
+	     state->outer.phase == SG_COMPOUND_RELEASE_READY);
 }
 
 static qboolean CompoundSwimLiveProofValid(
@@ -164,14 +193,14 @@ static qboolean CompoundSwimLiveProofValid(
 	       proof->sweep_clear_ms % SG_REPLAY_FRAME_MS == 0;
 }
 
-static qboolean CompoundSwimLiveProofMatchesBinding(
+static qboolean CompoundSwimLiveProofMatchesPlan(
 	const sg_compound_swim_live_proof_t *proof,
-	const sg_compound_publication_binding_t *binding)
+	const sg_compound_swim_live_plan_t *plan)
 {
-	return CompoundSwimLiveProofValid(proof) && binding &&
-	       proof->arrival_ms == binding->arrival_ms &&
-	       proof->sweep_clear_ms == binding->sweep_clear_ms &&
-	       proof->exit_speed == binding->link.exit_speed;
+	return CompoundSwimLiveProofValid(proof) && plan &&
+	       proof->arrival_ms == plan->arrival_ms &&
+	       proof->sweep_clear_ms == plan->sweep_clear_ms &&
+	       proof->exit_speed == plan->exit_speed;
 }
 
 static qboolean CompoundSwimLiveSnapshotEqual(
@@ -230,7 +259,7 @@ static sg_compound_swim_live_result_t CompoundSwimLiveOwnedFailure(
 	if (!state->command_pending)
 	{
 		state->replay_kind = SG_COMPOUND_SWIM_LIVE_REPLAY_NONE;
-		state->zero_command_pending = false;
+		state->direct_command_pending = false;
 	}
 	state->sweep_clear = false;
 	state->arrived = false;
@@ -247,6 +276,27 @@ static sg_compound_swim_live_result_t CompoundSwimLiveActiveResult(
 	                               SG_COMPOUND_SWIM_LIVE_RUNNING,
 	    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE, SG_REPLAY_REASON_NONE,
 	    command_ready);
+}
+
+static sg_compound_swim_live_result_t CompoundSwimLiveRejectAcquired(
+	sg_compound_swim_live_state_t *state,
+	sg_compound_swim_live_state_t *candidate,
+	const sg_compound_swim_live_host_t *host,
+	sg_compound_swim_live_outcome_t released_outcome,
+	sg_compound_swim_live_failure_t failure,
+	sg_replay_reason_t replay_reason)
+{
+	if (host->release(host->context, &candidate->snapshot) ==
+	    SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
+		return CompoundSwimLiveResult(released_outcome, failure,
+		    replay_reason, false);
+	(void)SG_CompoundAdvance(&candidate->outer, SG_COMPOUND_EVENT_ABORT);
+	candidate->failure = failure;
+	candidate->replay_reason = replay_reason;
+	candidate->recovering = true;
+	*state = *candidate;
+	return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_RECOVERING,
+	    failure, replay_reason, false);
 }
 
 static qboolean CompoundSwimLiveAdvanceTime(int elapsed_ms, int *next_ms)
@@ -337,7 +387,7 @@ static int CompoundSwimLiveDelegate(void *context, int link_index,
 	return CompoundSwimLiveBeginReplay(state, delegate->pose,
 	    state->snapshot.binding.destination_seed.origin,
 	    delegate->destination_water, state->proof.arrival_ms,
-	    state->snapshot.binding.suffix.old_frame_z,
+	    state->plan.suffix.old_frame_z,
 	    SG_COMPOUND_SWIM_LIVE_REPLAY_SUFFIX);
 }
 
@@ -368,10 +418,14 @@ static sg_compound_swim_live_result_t CompoundSwimLiveFinishRelease(
 		    SG_REPLAY_REASON_INVALID_STATE);
 	state->guard_owned = false;
 	state->command_pending = false;
-	state->zero_command_pending = false;
+	state->direct_command_pending = false;
 	state->aborted_command_pending = false;
 	state->command_segment_checked = false;
 	state->replay_kind = SG_COMPOUND_SWIM_LIVE_REPLAY_NONE;
+	CompoundSwimLiveTransition(state, host,
+	    SG_COMPOUND_SWIM_LIVE_EVENT_COMPLETE,
+	    recovered ? state->failure : SG_COMPOUND_SWIM_LIVE_FAILURE_NONE,
+	    recovered ? state->replay_reason : SG_REPLAY_REASON_NONE);
 	return CompoundSwimLiveResult(
 	    recovered ? SG_COMPOUND_SWIM_LIVE_SAFE_STOPPED :
 	                SG_COMPOUND_SWIM_LIVE_COMPLETE,
@@ -394,10 +448,9 @@ static sg_compound_swim_live_result_t CompoundSwimLiveSweepStep(
 		    SG_REPLAY_REASON_INVALID_STATE);
 	if (segment == SG_COMPOUND_SWIM_LIVE_HOST_DENIED)
 	{
-		/* Approach and the pre-TOP zero frame are proved outside in the
-		 * generator and may not touch the mover sweep.  Recovery padding can
-		 * begin inside, while suffix/recovery replay records the exact last
-		 * contact required by its published clearance time. */
+		/* Approach and the pre-TOP zero frame may not touch the mover sweep.
+		 * Recovery padding can begin inside, while suffix/recovery replay records
+		 * the exact last contact required by the active plan's clearance time. */
 		if (state->replay_kind != SG_COMPOUND_SWIM_LIVE_REPLAY_SUFFIX &&
 		    state->replay_kind != SG_COMPOUND_SWIM_LIVE_REPLAY_RECOVERY &&
 		    state->outer.phase != SG_COMPOUND_RECOVER)
@@ -434,8 +487,6 @@ const char *SG_CompoundSwimLiveFailureName(
 	case SG_COMPOUND_SWIM_LIVE_FAILURE_ARGUMENT: return "argument";
 	case SG_COMPOUND_SWIM_LIVE_FAILURE_BINDING: return "binding";
 	case SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN: return "plan";
-	case SG_COMPOUND_SWIM_LIVE_FAILURE_SOURCE_CHECKPOINT:
-		return "source-checkpoint";
 	case SG_COMPOUND_SWIM_LIVE_FAILURE_ACQUIRE: return "acquire";
 	case SG_COMPOUND_SWIM_LIVE_FAILURE_AUTHORITY: return "authority";
 	case SG_COMPOUND_SWIM_LIVE_FAILURE_CADENCE: return "cadence";
@@ -454,16 +505,35 @@ const char *SG_CompoundSwimLiveFailureName(
 	}
 }
 
+const char *SG_CompoundSwimLiveEventName(
+	sg_compound_swim_live_event_t event)
+{
+	switch (event)
+	{
+	case SG_COMPOUND_SWIM_LIVE_EVENT_BEGIN: return "begin";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_TOUCH: return "touch";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_ACTIVATION: return "activation";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_TOP: return "top";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_SWEEP_CLEAR: return "sweep-clear";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_ARRIVAL: return "arrival";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_FAILURE: return "failure";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_RECOVERY: return "recovery";
+	case SG_COMPOUND_SWIM_LIVE_EVENT_COMPLETE: return "complete";
+	default: return "unknown";
+	}
+}
+
 sg_compound_swim_live_result_t SG_CompoundSwimLiveBegin(
 	sg_compound_swim_live_state_t *state,
 	const sg_compound_swim_live_host_t *host, uint32_t link_index,
-	const sg_replay_pose_t *pose)
+	const sg_compound_swim_live_start_t *start)
 {
 	sg_compound_swim_live_state_t candidate =
 		SG_COMPOUND_SWIM_LIVE_STATE_INITIALIZER;
 	sg_compound_swim_live_host_result_t result;
 
-	if (!state || !pose || !CompoundSwimLiveHostValid(host) ||
+	if (!state || !start || !CompoundSwimLivePoseValid(&start->pose) ||
+	    !isfinite(start->old_frame_z) || !CompoundSwimLiveHostValid(host) ||
 	    state->guard_owned || state->outer.phase != SG_COMPOUND_NONE)
 		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_REJECTED,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_ARGUMENT,
@@ -475,25 +545,14 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveBegin(
 		        SG_COMPOUND_SWIM_LIVE_WAIT : SG_COMPOUND_SWIM_LIVE_REJECTED,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_BINDING,
 		    SG_REPLAY_REASON_NONE, false);
-	if (!CompoundSwimLivePlanValid(&candidate.snapshot, link_index))
+	if (!CompoundSwimLiveBindingValid(&candidate.snapshot, link_index))
 		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_REJECTED,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN,
 		    SG_REPLAY_REASON_INVALID_ARGUMENT, false);
-	result = host->source_checkpoint(host->context, &candidate.snapshot,
-	                                 &candidate.angle_bias);
-	if (result != SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
-		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_REJECTED,
-		    SG_COMPOUND_SWIM_LIVE_FAILURE_SOURCE_CHECKPOINT,
-		    SG_REPLAY_REASON_NONE, false);
 	if (!SG_CompoundBegin(&candidate.outer, (int)link_index,
 	                      candidate.snapshot.mover_key, RL_DOOR_SWIM,
 	                      RLCM_PREOPEN) ||
-	    !SG_CompoundAdvance(&candidate.outer, SG_COMPOUND_EVENT_APPROACH) ||
-	    !CompoundSwimLiveBeginReplay(&candidate, pose,
-	        candidate.snapshot.binding.link.mechanism_anchor, true,
-	        SG_REPLAY_TIME_DISCOVER,
-	        candidate.snapshot.binding.source.old_frame_z,
-	        SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH))
+	    !SG_CompoundAdvance(&candidate.outer, SG_COMPOUND_EVENT_APPROACH))
 		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_REJECTED,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
 		    candidate.replay.progress.reason, false);
@@ -505,9 +564,32 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveBegin(
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_ACQUIRE,
 		    SG_REPLAY_REASON_NONE, false);
 	candidate.guard_owned = true;
-	candidate.zero_frame_old_z =
-		candidate.snapshot.binding.source.old_frame_z;
+	result = host->prepare(host->context, &candidate.snapshot, start,
+	                       &candidate.plan);
+	if (result != SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
+		return CompoundSwimLiveRejectAcquired(state, &candidate, host,
+		    result == SG_COMPOUND_SWIM_LIVE_HOST_DENIED ?
+		        SG_COMPOUND_SWIM_LIVE_WAIT : SG_COMPOUND_SWIM_LIVE_REJECTED,
+		    SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN,
+		    SG_REPLAY_REASON_NONE);
+	if (!CompoundSwimLivePlanValid(&candidate.plan))
+		return CompoundSwimLiveRejectAcquired(state, &candidate, host,
+		    SG_COMPOUND_SWIM_LIVE_REJECTED,
+		    SG_COMPOUND_SWIM_LIVE_FAILURE_PLAN,
+		    SG_REPLAY_REASON_INVALID_ARGUMENT);
+	if (!CompoundSwimLiveBeginReplay(&candidate, &start->pose,
+	        candidate.plan.mechanism_anchor, true,
+	        SG_REPLAY_TIME_DISCOVER, start->old_frame_z,
+	        SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH))
+		return CompoundSwimLiveRejectAcquired(state, &candidate, host,
+		    SG_COMPOUND_SWIM_LIVE_REJECTED,
+		    SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
+		    candidate.replay.progress.reason);
+	candidate.zero_frame_old_z = start->old_frame_z;
 	*state = candidate;
+	CompoundSwimLiveTransition(state, host,
+	    SG_COMPOUND_SWIM_LIVE_EVENT_BEGIN,
+	    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE, SG_REPLAY_REASON_NONE);
 	return CompoundSwimLiveActiveResult(state, false);
 }
 
@@ -549,7 +631,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLivePreStep(
 		    SG_REPLAY_REASON_INVALID_STATE);
 	VectorCopy(pose->origin, state->command_origin);
 	VectorClear(state->command_segment_end);
-	state->zero_command_pending = false;
+	state->direct_command_pending = false;
 	state->aborted_command_pending = false;
 	state->command_segment_checked = false;
 	if (state->replay_kind == SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH ||
@@ -563,10 +645,18 @@ sg_compound_swim_live_result_t SG_CompoundSwimLivePreStep(
 			    state->replay.progress.reason);
 	}
 	else if (state->outer.phase == SG_COMPOUND_TOUCHED ||
-	         state->outer.phase == SG_COMPOUND_OPENING ||
-	         state->outer.phase == SG_COMPOUND_RECOVER)
+	         state->outer.phase == SG_COMPOUND_OPENING)
 	{
-		state->zero_command_pending = true;
+		if (!SG_SwimReplayCommand(pose, state->plan.mechanism_anchor,
+		                          SG_SWIM_REPLAY_HOLD, command))
+			return CompoundSwimLiveOwnedFailure(state,
+			    SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
+			    SG_REPLAY_REASON_INVALID_CONTROL);
+		state->direct_command_pending = true;
+	}
+	else if (state->outer.phase == SG_COMPOUND_RECOVER)
+	{
+		state->direct_command_pending = true;
 	}
 	else
 	{
@@ -584,17 +674,31 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveAuthorizeTouch(
 	const sg_replay_pose_t *pose, int frame_serial)
 {
 	sg_compound_swim_live_result_t sweep;
+	qboolean touch_committed;
 
 	if (!state || !pose || !state->guard_owned || frame_serial < 0 ||
 	    !CompoundSwimLivePoseValid(pose) ||
-	    state->outer.phase != SG_COMPOUND_APPROACH ||
+	    trigger_key != state->snapshot.trigger_key)
+		return CompoundSwimLiveOwnedFailure(state,
+		    SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
+		    SG_REPLAY_REASON_TIMING_MISMATCH);
+	touch_committed = CompoundSwimLiveTouchCommitted(state);
+	if (touch_committed)
+	{
+		if (CompoundSwimLiveAuthorized(state, host) !=
+		    SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
+			return CompoundSwimLiveOwnedFailure(state,
+			    SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
+			    SG_REPLAY_REASON_INVALID_STATE);
+		return CompoundSwimLiveActiveResult(state, false);
+	}
+	if (state->outer.phase != SG_COMPOUND_APPROACH ||
 	    state->replay_kind != SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH ||
-	    !state->command_pending || state->zero_command_pending ||
+	    !state->command_pending || state->direct_command_pending ||
 	    state->replay.progress.elapsed_ms + SG_REPLAY_STEP_MS !=
-	        state->snapshot.binding.touch_ms ||
-	    trigger_key != state->snapshot.trigger_key ||
+	        state->plan.touch_ms ||
 	    !CompoundSwimLivePoseAtAnchor(pose,
-	        state->snapshot.binding.link.mechanism_anchor))
+	        state->plan.mechanism_anchor))
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
 		    SG_REPLAY_REASON_TIMING_MISMATCH);
@@ -616,6 +720,9 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveAuthorizeTouch(
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
 		    SG_REPLAY_REASON_INVALID_STATE);
 	state->touch_frame_serial = frame_serial;
+	CompoundSwimLiveTransition(state, host,
+	    SG_COMPOUND_SWIM_LIVE_EVENT_TOUCH,
+	    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE, SG_REPLAY_REASON_NONE);
 	return CompoundSwimLiveActiveResult(state, false);
 }
 
@@ -633,11 +740,14 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveAuthorizeActivation(
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_ACTIVATION,
 		    SG_REPLAY_REASON_INVALID_STATE);
 	if (CompoundSwimLiveAuthorized(state, host) !=
-	    SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED ||
+	        SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED ||
 	    !SG_CompoundAdvance(&state->outer, SG_COMPOUND_EVENT_ACTIVATE))
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_ACTIVATION,
 		    SG_REPLAY_REASON_INVALID_STATE);
+	CompoundSwimLiveTransition(state, host,
+	    SG_COMPOUND_SWIM_LIVE_EVENT_ACTIVATION,
+	    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE, SG_REPLAY_REASON_NONE);
 	return CompoundSwimLiveActiveResult(state, false);
 }
 
@@ -664,7 +774,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLivePostStep(
 	elapsed_valid = CompoundSwimLiveAdvanceTime(
 		state->transaction_elapsed_ms, &next_elapsed_ms);
 	/* The fourth 25 ms command is observed only after the intervening mover
-	 * entity pass.  This applies equally to replay and literal zero commands. */
+	 * entity pass. */
 	if (elapsed_valid && next_elapsed_ms % SG_REPLAY_FRAME_MS == 0)
 		return CompoundSwimLiveActiveResult(state, false);
 	aborted = state->aborted_command_pending;
@@ -675,7 +785,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLivePostStep(
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_AUTHORITY,
 		    SG_REPLAY_REASON_INVALID_STATE);
-	if (!state->zero_command_pending)
+	if (!state->direct_command_pending)
 	{
 		replay_observation =
 			state->replay_kind == SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH ?
@@ -684,7 +794,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLivePostStep(
 		                                 &replay_observation);
 	}
 	state->command_pending = false;
-	state->zero_command_pending = false;
+	state->direct_command_pending = false;
 	state->aborted_command_pending = false;
 	if (elapsed_valid)
 		state->transaction_elapsed_ms = next_elapsed_ms;
@@ -741,7 +851,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLivePostStep(
 		state->replay_kind = SG_COMPOUND_SWIM_LIVE_REPLAY_NONE;
 	}
 	if (state->outer.phase == SG_COMPOUND_APPROACH &&
-	    state->transaction_elapsed_ms >= state->snapshot.binding.touch_ms)
+	    state->transaction_elapsed_ms >= state->plan.touch_ms)
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
 		    SG_REPLAY_REASON_TIMING_MISMATCH);
@@ -767,7 +877,7 @@ static sg_compound_swim_live_result_t CompoundSwimLiveStartSuffix(
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_TOP,
 		    SG_REPLAY_REASON_INVALID_STATE);
 	if (host->suffix_checkpoint(host->context, &state->snapshot,
-	                            &state->angle_bias) !=
+	                            &state->plan) !=
 	    SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_SUFFIX_CHECKPOINT,
@@ -776,8 +886,7 @@ static sg_compound_swim_live_result_t CompoundSwimLiveStartSuffix(
 	result = host->prove_suffix(host->context, &state->snapshot, pose, false,
 	                            &state->proof);
 	if (result != SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED ||
-	    !CompoundSwimLiveProofMatchesBinding(&state->proof,
-	                                         &state->snapshot.binding))
+	    !CompoundSwimLiveProofMatchesPlan(&state->proof, &state->plan))
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_REPROOF,
 		    SG_REPLAY_REASON_TIMING_MISMATCH);
@@ -842,6 +951,10 @@ static sg_compound_swim_live_result_t CompoundSwimLiveSuffixBoundary(
 				return CompoundSwimLiveOwnedFailure(state,
 				    SG_COMPOUND_SWIM_LIVE_FAILURE_SWEEP,
 				    SG_REPLAY_REASON_INVALID_STATE);
+			CompoundSwimLiveTransition(state, host,
+			    SG_COMPOUND_SWIM_LIVE_EVENT_SWEEP_CLEAR,
+			    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE,
+			    SG_REPLAY_REASON_NONE);
 		}
 		else if (elapsed >= state->proof.sweep_clear_ms)
 		{
@@ -868,6 +981,10 @@ static sg_compound_swim_live_result_t CompoundSwimLiveSuffixBoundary(
 			return CompoundSwimLiveOwnedFailure(state,
 			    SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
 			    SG_REPLAY_REASON_INVALID_STATE);
+		CompoundSwimLiveTransition(state, host,
+		    SG_COMPOUND_SWIM_LIVE_EVENT_ARRIVAL,
+		    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE,
+		    SG_REPLAY_REASON_NONE);
 	}
 	if (state->sweep_clear && state->arrived)
 	{
@@ -876,7 +993,7 @@ static sg_compound_swim_live_result_t CompoundSwimLiveSuffixBoundary(
 			    SG_COMPOUND_SWIM_LIVE_FAILURE_SWEEP,
 			    SG_REPLAY_REASON_INVALID_STATE);
 		if (!recovered && state->transaction_elapsed_ms !=
-		    state->snapshot.binding.total_cost_ms)
+		    state->plan.total_cost_ms)
 			return CompoundSwimLiveOwnedFailure(state,
 			    SG_COMPOUND_SWIM_LIVE_FAILURE_TIMING,
 			    SG_REPLAY_REASON_TIMING_MISMATCH);
@@ -944,7 +1061,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveBoundary(
 		    SG_REPLAY_REASON_INVALID_STATE);
 	if (state->command_pending)
 	{
-		if (!state->zero_command_pending)
+		if (!state->direct_command_pending)
 		{
 			replay_observation =
 				state->replay_kind == SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH ?
@@ -953,7 +1070,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveBoundary(
 			                                 &replay_observation);
 		}
 		state->command_pending = false;
-		state->zero_command_pending = false;
+		state->direct_command_pending = false;
 		state->aborted_command_pending = false;
 		if (elapsed_valid)
 			state->transaction_elapsed_ms = boundary_ms;
@@ -1020,9 +1137,15 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveBoundary(
 		                  SG_REPLAY_REASON_INVALID_ARGUMENT);
 	state->last_boundary_ms = boundary_ms;
 	if (state->outer.phase == SG_COMPOUND_APPROACH)
+	{
+		if (state->replay_kind ==
+		        SG_COMPOUND_SWIM_LIVE_REPLAY_APPROACH &&
+		    state->transaction_elapsed_ms < state->plan.touch_ms)
+			return CompoundSwimLiveActiveResult(state, false);
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_TOUCH,
 		    SG_REPLAY_REASON_TIMING_MISMATCH);
+	}
 	if (state->outer.phase == SG_COMPOUND_TOUCHED)
 		return CompoundSwimLiveOwnedFailure(state,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_ACTIVATION,
@@ -1041,18 +1164,22 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveBoundary(
 			    SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
 			    SG_REPLAY_REASON_DAMAGING_FALL);
 		state->zero_frame_old_z = pose->velocity[2];
-		if (boundary_ms == state->snapshot.binding.touch_frame_end_ms +
-		                   state->snapshot.binding.suffix_start_ms)
+		if (boundary_ms == state->plan.touch_frame_end_ms +
+		                   state->plan.suffix_start_ms)
 		{
 			if (!SG_CompoundAdvance(&state->outer,
 			                        SG_COMPOUND_EVENT_TOP))
 				return CompoundSwimLiveOwnedFailure(state,
 				    SG_COMPOUND_SWIM_LIVE_FAILURE_TOP,
 				    SG_REPLAY_REASON_INVALID_STATE);
+			CompoundSwimLiveTransition(state, host,
+			    SG_COMPOUND_SWIM_LIVE_EVENT_TOP,
+			    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE,
+			    SG_REPLAY_REASON_NONE);
 			return CompoundSwimLiveStartSuffix(state, host, pose);
 		}
-		if (boundary_ms > state->snapshot.binding.touch_frame_end_ms +
-		                  state->snapshot.binding.suffix_start_ms)
+		if (boundary_ms > state->plan.touch_frame_end_ms +
+		                  state->plan.suffix_start_ms)
 			return CompoundSwimLiveOwnedFailure(state,
 			    SG_COMPOUND_SWIM_LIVE_FAILURE_TIMING,
 			    SG_REPLAY_REASON_TIMING_MISMATCH);
@@ -1071,6 +1198,7 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveRecover(
 {
 	sg_compound_swim_live_host_result_t outside, proof_result;
 	qboolean destination_water;
+	qboolean starting_recovery;
 
 	if (!state || !pose || !state->guard_owned ||
 	    !CompoundSwimLiveHostValid(host) || !isfinite(old_frame_z) ||
@@ -1095,6 +1223,8 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveRecover(
 		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_RECOVERING,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_AUTHORITY,
 		    SG_REPLAY_REASON_INVALID_STATE, false);
+	starting_recovery = state->outer.phase == SG_COMPOUND_RECOVER &&
+	    state->replay_kind == SG_COMPOUND_SWIM_LIVE_REPLAY_NONE;
 	if (state->outer.phase == SG_COMPOUND_RELEASE_READY)
 	{
 		if (host->at_top(host->context, &state->snapshot) !=
@@ -1123,7 +1253,13 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveRecover(
 		return CompoundSwimLiveActiveResult(state, false);
 	outside = host->outside_sweep(host->context, &state->snapshot, pose);
 	if (outside == SG_COMPOUND_SWIM_LIVE_HOST_ACCEPTED)
+	{
+		if (starting_recovery)
+			CompoundSwimLiveTransition(state, host,
+			    SG_COMPOUND_SWIM_LIVE_EVENT_RECOVERY, state->failure,
+			    state->replay_reason);
 		return CompoundSwimLiveFinishRelease(state, host, true);
+	}
 	if (state->transaction_elapsed_ms % SG_REPLAY_FRAME_MS != 0 ||
 	    (state->transaction_elapsed_ms > 0 &&
 	     state->last_boundary_ms != state->transaction_elapsed_ms))
@@ -1159,6 +1295,10 @@ sg_compound_swim_live_result_t SG_CompoundSwimLiveRecover(
 		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_RECOVERING,
 		    SG_COMPOUND_SWIM_LIVE_FAILURE_REPLAY,
 		    state->replay.progress.reason, false);
+	if (starting_recovery)
+		CompoundSwimLiveTransition(state, host,
+		    SG_COMPOUND_SWIM_LIVE_EVENT_RECOVERY, state->failure,
+		    state->replay_reason);
 	return CompoundSwimLiveActiveResult(state, false);
 }
 
@@ -1168,4 +1308,19 @@ qboolean SG_CompoundSwimLiveOwns(
 {
 	return state && state->guard_owned && link_index <= (uint32_t)INT_MAX &&
 	       SG_CompoundOwns(&state->outer, (int)link_index, mover_key);
+}
+
+sg_compound_swim_live_result_t SG_CompoundSwimLiveOrphaned(
+	sg_compound_swim_live_state_t *state, uint32_t link_index,
+	int mover_key)
+{
+	if (!state || !state->guard_owned ||
+	    state->snapshot.binding.link_index != link_index ||
+	    state->snapshot.mover_key != mover_key)
+		return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_REJECTED,
+		    SG_COMPOUND_SWIM_LIVE_FAILURE_ARGUMENT,
+		    SG_REPLAY_REASON_INVALID_ARGUMENT, false);
+	memset(state, 0, sizeof(*state));
+	return CompoundSwimLiveResult(SG_COMPOUND_SWIM_LIVE_SAFE_STOPPED,
+	    SG_COMPOUND_SWIM_LIVE_FAILURE_NONE, SG_REPLAY_REASON_NONE, false);
 }

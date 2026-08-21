@@ -6,6 +6,7 @@
 #include "sg_hook_live.h"
 #include "sg_hook_diagnostics.h"
 #include "sg_compound_guard.h"
+#include "sg_compound_swim_live.h"
 #include "sg_human_speed.h"
 #include "sg_door_approach.h"
 #include "sg_rune.h"
@@ -83,6 +84,7 @@ typedef struct sg_bot_s
 	/* Shared mover ownership survives death/respawn and is retired before the
 	 * containing process-storage slot is erased. */
 	sg_compound_guard_bot_t compound_guard;
+	sg_compound_swim_live_state_t compound_swim;
 	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */
 	vec3_t		stuck_origin;   /* dedicated short-range progress sample;

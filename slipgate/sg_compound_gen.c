@@ -1,4 +1,5 @@
 /* sg_compound_gen.c -- allocation-free topology selection for D_SWIM. */
+#include "../q_shared.h"
 #include "sg_compound_gen.h"
 
 #include <limits.h>
@@ -147,6 +148,7 @@ static void CompoundGenBuildProven(sg_compound_gen_proven_t *record,
 	record->link.to = candidate->destination;
 	record->link.action = (byte)RL_DOOR_SWIM;
 	record->link.provenance = (byte)RL_CONTRACTED;
+	record->link.mechanism_plan = RUNE_NO_MECHANISM_PLAN;
 	record->link.exit_speed = proof->exit_speed;
 	record->link.cost_ms = (short)proof->total_cost_ms;
 	record->link.mechanism_anchor[0] = candidate->mechanism_anchor[0];
@@ -247,7 +249,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 		SG_COMPOUND_GEN_INVALID);
 	size_t proven_count = 0;
 	size_t group_start;
-	int saw_improvement = 0;
+	int saw_destination = 0;
 
 	/* Deliberately first: the production-disabled path is inert even when no
 	 * discovery/proof capability has been supplied. */
@@ -372,9 +374,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 			crosses = source->component >= 0 &&
 			          destination->component >= 0 &&
 			          source->component != destination->component;
-			if (!new_bits && !crosses)
-				continue;
-			saw_improvement = 1;
+			saw_destination = 1;
 			memset(&proof, 0, sizeof(proof));
 			result.proof_calls++;
 			reason = request->prove(request->context, candidate, &proof);
@@ -439,7 +439,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 	}
 
 	result.selected = proven_count;
-	if (!saw_improvement)
+	if (!saw_destination)
 	{
 		result.status = SG_COMPOUND_GEN_NO_IMPROVEMENT;
 		return result;
