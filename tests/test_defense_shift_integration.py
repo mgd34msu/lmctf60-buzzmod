@@ -30,6 +30,16 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
             source,
         )
 
+    def test_attack_descent_wires_sticky_invalidation_before_latch(self) -> None:
+        source = (ROOT / "slipgate/sg_descend.c").read_text()
+        override = source.index("if (attack_descent_link >= 0 &&")
+        latch = source.index(
+            "if (!defense_shift_selected && !defense_patrol_selected &&",
+            override,
+        )
+
+        self.assertIn("incumbent_v = 1e30f;", source[override:latch])
+
     def test_exact_run_owns_the_step_and_deadline(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
 

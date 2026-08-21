@@ -286,10 +286,6 @@ static void Drop_LiveBoundaryLog(const edict_t *e, int link_index,
 static qboolean Carrier_LinkShelved(const sg_bot_t *bot, int link);
 int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context so the
-	 * body below reads exactly as it did when these arrived as arguments.
-	 * Four of the old parameters -- carrying, live, precision, rally_hold
-	 * -- turned out never to be read by this body and have no unpack. */
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
 	int team = tc->team;
@@ -1172,6 +1168,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	{
 		bestlink = attack_descent_link;
 		bestval = attack_descent_value;
+		incumbent_v = 1e30f;
 	}
 	if (supply_route && route_field[bot->seed] < SG_FIELD_INF)
 	{

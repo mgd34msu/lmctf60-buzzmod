@@ -70,7 +70,10 @@ static void TestAttackDescentCannotPriceItselfStill(void)
 	CHECK(SG_AttackDescentOverrideNeeded(1, 8000, 8000, infinity));
 	CHECK(SG_AttackDescentOverrideNeeded(1, 8000, 9000, infinity));
 	CHECK(!SG_AttackDescentOverrideNeeded(1, 8000, 7999, infinity));
-	CHECK(!SG_AttackDescentOverrideNeeded(1, 2500, 2500, infinity));
+	CHECK(SG_AttackDescentOverrideNeeded(1, 2500, 2500, infinity));
+	CHECK(SG_AttackDescentOverrideNeeded(1, 2000, 2200, infinity));
+	CHECK(SG_AttackDescentOverrideNeeded(1, 1, 1, infinity));
+	CHECK(!SG_AttackDescentOverrideNeeded(1, 1, 0, infinity));
 	CHECK(!SG_AttackDescentOverrideNeeded(0, 8000, 9000, infinity));
 	CHECK(!SG_AttackDescentOverrideNeeded(2, 8000, 9000, infinity));
 	CHECK(!SG_AttackDescentOverrideNeeded(1, infinity, 9000, infinity));
