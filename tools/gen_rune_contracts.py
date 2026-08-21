@@ -49,13 +49,13 @@ _PINNED_ENUMS = {
         0: "RLAP_ZERO", 1: "RLAP_RUN_WAYPOINT", 2: "RLAP_DROP_LIP",
         3: "RLAP_HOOK_CONTROL", 4: "RLAP_WORLD",
         5: "RLAP_TELEPORT_PAD", 6: "RLAP_DOOR_WAIT",
-        7: "RLAP_UNSUPPORTED", 8: "RLAP_DOOR_PREOPEN_CONTACT",
+        7: "RLAP_ROCKET_CONTROL", 8: "RLAP_DOOR_PREOPEN_CONTACT",
         9: "RLAP_DOOR_RIDE_INGRESS_LIP",
     },
     "control_policies": {
         0: "RLCP_RUN", 1: "RLCP_JUMP", 2: "RLCP_DROP",
         3: "RLCP_HOOK", 4: "RLCP_SWIM", 5: "RLCP_DECLARED",
-        6: "RLCP_UNSUPPORTED",
+        6: "RLCP_ROCKETJUMP",
     },
     "mechanism_policies": {
         0: "RLMP_NONE", 1: "RLMP_DOOR_WORLD_FIXED_1_8",
@@ -149,13 +149,20 @@ _PINNED_PROOF_LAW = {
     "hook_max_abs_pitch_degrees": 89, "hook_control_slack": 24,
     "water_hook_control_marker": 253, "hook_dry_settle_ms": 1000,
     "hook_water_settle_ms": 1250,
+    "rocketjump_health_min": 1, "rocketjump_health_max": 100,
+    "rocketjump_health_margin": 25, "rocketjump_equip_timeout_ms": 4000,
+    "rocketjump_arrival_grace_ms": 500,
+    "rocketjump_total_ms": 3000, "rocketjump_heading_slack": 32,
+    "rocketjump_rocket_speed": 650, "rocketjump_radius_damage": 120,
+    "rocketjump_damage_radius": 120, "rocketjump_player_mass": 200,
+    "rocketjump_viewheight": 22, "rocketjump_bbox_center": 4,
     "door_approach_horizontal_max": 320,
     "door_approach_vertical_max": 48,
     "door_egress_horizontal_max": 768,
     "door_egress_vertical_max": 96, "door_team_members_max": 16,
 }
 _PINNED_RUNTIME_SUPPORT = {
-    0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 0,
+    0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1,
     8: 1, 9: 0, 10: 1, 11: 0, 12: 1,
 }
 _FROZEN_BASE_ACTION_COUNT = 12
@@ -176,7 +183,7 @@ _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
     4: (1, 0, 4, ()),
     5: (1, 1, 5, ((5, 1),)),
     6: (1, 1, 6, ((6, 1),)),
-    7: (0, 0, 7, ()),
+    7: (1, 0, 7, ()),
     8: (1, 1, 8, ((1, 1), (2, 1))),
     9: (0, 0, 9, ()),
     10: (1, 0, 10, ()),

@@ -230,6 +230,21 @@ static int Codec_VectorOnDoorLattice(const float vector[3])
 	return 1;
 }
 
+static int Codec_RocketControl(const float vector[3])
+{
+	if (!Codec_VectorFinite(vector) ||
+	    vector[0] != (float)(int)vector[0] ||
+	    vector[1] != (float)(int)vector[1] ||
+	    vector[2] != (float)(int)vector[2])
+		return 0;
+	return vector[0] >= (float)INT16_MIN &&
+	       vector[0] <= (float)INT16_MAX &&
+	       vector[1] >= (float)INT16_MIN &&
+	       vector[1] <= (float)INT16_MAX &&
+	       vector[2] >= (float)SG_RUNE_PROOF_ROCKETJUMP_HEALTH_MIN &&
+	       vector[2] <= (float)SG_RUNE_PROOF_ROCKETJUMP_HEALTH_MAX;
+}
+
 static int Codec_ButtonRideEndpointValid(
 	const sg_rune_codec_link_t *link)
 {
@@ -308,8 +323,10 @@ static sg_rune_codec_diagnostic_t Codec_ValidateAnchor(
 		return Codec_VectorOnDoorLattice(anchor) ? RLCODEC_OK :
 			Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	case RLAP_HOOK_CONTROL:
-	case RLAP_UNSUPPORTED:
 		return RLCODEC_OK;
+	case RLAP_ROCKET_CONTROL:
+		return Codec_RocketControl(anchor) ? RLCODEC_OK :
+			Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	default:
 		return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	}
@@ -340,6 +357,12 @@ static sg_rune_codec_diagnostic_t Codec_ValidateLinkFields(
 	    (link->cost_ms < SG_RUNE_PROOF_SERVER_FRAME_MS ||
 	     link->cost_ms >= SG_RUNE_PROOF_DROP_TOTAL_MS ||
 	     link->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0))
+		return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
+	if (policy_action == RL_ROCKETJUMP &&
+	    (link->provenance != RL_PROVEN || link->min_speed != 0U ||
+	     link->heading_slack != SG_RUNE_PROOF_ROCKETJUMP_HEADING_SLACK ||
+	     link->cost_ms > SG_RUNE_PROOF_ROCKETJUMP_TOTAL_MS ||
+	     link->cost_ms % SG_RUNE_PROOF_PMOVE_SUBSTEP_MS != 0))
 		return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	diagnostic = Codec_ValidateAnchor(link->suffix_anchor,
 		(int)policy->suffix_anchor_policy);

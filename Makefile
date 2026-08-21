@@ -916,6 +916,9 @@ OBJS := \
 	sg_drop_live.o \
 	sg_swim_live.o \
 	sg_hook_live.o \
+	slipgate/sg_rocketjump_live.o \
+	slipgate/sg_rocketjump_cadence.o \
+	slipgate/sg_rocketjump_game.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \

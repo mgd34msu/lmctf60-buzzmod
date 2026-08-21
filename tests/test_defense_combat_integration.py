@@ -224,6 +224,12 @@ qboolean SG_ImmutableSupport(edict_t *ent)
     return true;
 }
 
+qboolean SG_RocketJumpGameOwns(const sg_bot_t *bot)
+{
+    (void)bot;
+    return false;
+}
+
 qboolean SG_TimerPending(float stamp)
 {
     return level.time < stamp;
@@ -789,7 +795,8 @@ class DefenseCombatIntegrationTest(unittest.TestCase):
             "floor.fraction < 1.0f", "floor.ent && floor.ent->client",
             "SG_ImmutableSupport(e->groundentity)", "MOVETYPE_WALK",
             "PMF_DUCKED", "pm_time", "bot->hook_phase",
-            "bot->rj_phase", "bot->nade_phase", "bot->drop_started",
+            "SG_RocketJumpGameOwns(bot)", "bot->nade_phase",
+            "bot->drop_started",
             "tc->jump_launch", "proved_control",
         ):
             self.assertIn(token, move)

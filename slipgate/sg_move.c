@@ -36,6 +36,7 @@
 #include "slipgate/sg_weave_policy.h"
 #include "slipgate/sg_team_collision.h"
 #include "slipgate/sg_traversal_transition.h"
+#include "slipgate/sg_rocketjump_game.h"
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
@@ -219,7 +220,8 @@ static qboolean DefenseCombatAuthority(edict_t *e, sg_bot_t *bot, int team,
 	    !tc->hold_post || tc->role != SG_ROLE_DEFEND || !bot->def_stand ||
 	    ClientHasFlag(e) != NULL || tc->hook_brake || tc->jump_launch ||
 	    tc->door_hold || tc->have_move || as_ok || bot->jump_started ||
-	    bot->drop_started || bot->hook_phase || bot->rj_phase || bot->nade_phase ||
+	    bot->drop_started || bot->hook_phase ||
+	    SG_RocketJumpGameOwns(bot) || bot->nade_phase ||
 	    SG_TimerPending(bot->beat_until) || bot->linger_hot ||
 	    bot->term_brake < 1.0f || e->health <= 0 || e->deadflag ||
 	    !e->groundentity ||
@@ -3368,33 +3370,6 @@ static qboolean EnemyFlagTouchMissionActive(qboolean strike_pressure,
 	return SG_EnemyFlagTouchMissionActive(strike_pressure, scoop_mission);
 }
 
-/* Phase two is the irreversible rocket-jump boundary: this exact production
- * emitter can launch the rocket before the next reconciliation frame. */
-static qboolean StrikeRocketJumpPhase2Command(const sg_bot_t *bot,
-	const edict_t *e, usercmd_t *cmd, float *view_yaw, float *view_pitch,
-	qboolean *have_move)
-{
-	float ry, rp;
-
-	if (!bot || !e || !e->client || !cmd || !view_yaw || !view_pitch ||
-	    !have_move || bot->rj_phase != 2)
-		return false;
-	ry = atan2f(bot->rj_aim[1], bot->rj_aim[0]) * 180.0f / M_PI;
-	rp = -asinf(bot->rj_aim[2]) * 180.0f / M_PI;
-	cmd->angles[YAW] = ANGLE2SHORT(ry) -
-	    e->client->ps.pmove.delta_angles[YAW];
-	cmd->angles[PITCH] = ANGLE2SHORT(rp) -
-	    e->client->ps.pmove.delta_angles[PITCH];
-	*view_yaw = ry;
-	*view_pitch = rp;
-	cmd->forwardmove = 0;
-	cmd->sidemove = 0;
-	cmd->upmove = 400;
-	cmd->buttons |= BUTTON_ATTACK;
-	*have_move = false;
-	return true;
-}
-
 typedef enum
 {
 	SG_DOOR_DRIVE_NONE,
@@ -3456,37 +3431,14 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * flies the same approach instead of falling back down the wall it
 		 * just climbed.
 		 */
-		/* rocket-jump phase steps run before the aim is built */
-		if (bot->rj_phase)
-		{
-			static gitem_t *rj_rl2;
-
-			if (!rj_rl2)
-				rj_rl2 = FindItem("Rocket Launcher");
-			if (SG_TimerReadyStrict(bot->rj_deadline))
-				bot->rj_phase = 0;
-			else if (bot->rj_phase == 1 && e->client->pers.weapon == rj_rl2)
-			{
-				bot->rj_phase = 2;
-				/* two weapon frames to guarantee the fire state runs */
-				SG_TimerArm(&bot->rj_fire_until, 0.25f);
-			}
-			else if (bot->rj_phase == 2 && SG_TimerReadyStrict(bot->rj_fire_until))
-			{
-				bot->rj_phase = 3;
-				SG_TimerArm(&bot->rj_deadline, 2.5f);
-			}
-			else if (bot->rj_phase == 3 && e->groundentity)
-			{
-				bot->rj_phase = 0;
-				bot->commit_link = -1;  /* the arc ended; argue fresh */
-			}
-		}
-
 		/* flying the arc: the landing is the aim, as with a cut rope */
-		if (bot->rj_phase == 3)
+		if (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT)
 		{
-			VectorCopy(bot->rj_dest, aim);
+			int axis;
+
+			for (axis = 0; axis < 3; axis++)
+				aim[axis] =
+				    bot->rocketjump.witness.destination_q8[axis] * 0.125f;
 			have_aim = true;
 		}
 
@@ -3494,11 +3446,20 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		 * landing seed without changing the trajectory. */
 		if (sg_cv.preturn->value &&
 		    ((bot->hook_phase == 3 && bot->flow_release) ||
-		     bot->rj_phase == 3) &&
+		     bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT) &&
 		    !e->groundentity && SG_Rune())
 		{
-			int ls = Rune_NearestSeed(SG_Rune(),
-			    (bot->rj_phase == 3) ? bot->rj_dest : bot->hook_dest);
+			vec3_t ballistic_destination;
+			int axis;
+			int ls;
+
+			if (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT)
+				for (axis = 0; axis < 3; axis++)
+					ballistic_destination[axis] =
+					    bot->rocketjump.witness.destination_q8[axis] * 0.125f;
+			else
+				VectorCopy(bot->hook_dest, ballistic_destination);
+			ls = Rune_NearestSeed(SG_Rune(), ballistic_destination);
 
 			if (ls >= 0)
 			{
@@ -3685,7 +3646,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		if (!have_aim && EnemyFlagTouchMissionActive(
 		        tc->strike_pressure, tc->scoop_mission) &&
 		    bot->hook_phase == 0 &&
-		    bot->rj_phase == 0 && bot->nade_phase == 0 &&
+		    !SG_RocketJumpGameOwns(bot) && bot->nade_phase == 0 &&
 		    SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag))
 		{
 			have_aim = true;
@@ -3802,7 +3763,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			if (sg_cv.pursuit->value > 0.0f &&
 			    !aim_is_anchor && l->action == RL_RUN && !precision &&
 			    e->waterlevel < 2 && bot->hook_phase == 0 &&
-			    bot->rj_phase == 0)
+			    !SG_RocketJumpGameOwns(bot))
 			{
 				vec3_t	chain[SG_PURSUIT_MAX];
 				float	look = sg_cv.pursuit->value;
@@ -3962,7 +3923,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				}
 				if (source_snapped || bot->hook_phase != 0 ||
 				    e->client->hookstate != 0 || e->client->hook != NULL ||
-				    bot->rj_phase != 0 ||
+				    SG_RocketJumpGameOwns(bot) ||
 				    bot->nade_phase != 0 ||
 				    e->client->ps.pmove.pm_time != 0 ||
 				    (e->client->ps.pmove.pm_flags &
@@ -4123,7 +4084,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * v_angle.
 			 */
 			if (l->action == RL_HOOK && bot->hook_phase == 0 &&
-			    bot->rj_phase == 0 && bot->nade_phase == 0 &&
+			    !SG_RocketJumpGameOwns(bot) && bot->nade_phase == 0 &&
 			    SG_HookOffhandReady(e))
 			{
 				qboolean source_water =
@@ -4289,7 +4250,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					           180.0f / M_PI;
 					if (source_snapped || bot->hook_phase != 0 ||
 					    e->client->hookstate != 0 || e->client->hook != NULL ||
-					    bot->rj_phase != 0 ||
+					    SG_RocketJumpGameOwns(bot) ||
 				    bot->nade_phase != 0 ||
 				    (e->groundentity != g_edicts &&
 				     !SG_ImmutableSupport(e->groundentity)) ||
@@ -4417,45 +4378,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				    &bot->drop_replay_active, &bot->drop_replay_link,
 				    &bot->drop_live_events);
 			}
-
-			/*
-			 * A rocket-jump link arms its sequence: raise the launcher,
-			 * then one aim-and-fire frame on the PROVEN aim vector
-			 * (anchor[0/1]; z = -sqrt(1-x^2-y^2), sg_rune.h), then fly
-			 * the arc. The selection gate above already priced the
-			 * health and checked the inventory.
-			 */
-			if (l->action == RL_ROCKETJUMP && bot->rj_phase == 0 &&
-			    e->groundentity)
-			{
-				float down_sq;
-
-				bot->rj_aim[0] = l->anchor[0];
-				bot->rj_aim[1] = l->anchor[1];
-				down_sq = 1.0f - l->anchor[0] * l->anchor[0] -
-				          l->anchor[1] * l->anchor[1];
-				/* The loader rejects an actually out-of-unit vector.  Clamp the
-				 * last sub-ulp rounding edge too: a sum that rounds to exactly
-				 * one can still make the sequential subtraction slightly negative
-				 * and must never feed NaN into ANGLE2SHORT. */
-				if (down_sq < 0.0f)
-					down_sq = 0.0f;
-				bot->rj_aim[2] = -sqrtf(down_sq);
-				VectorCopy(SG_Rune()->seeds[l->to].origin, bot->rj_dest);
-				bot->rj_phase = 1;
-				SG_TimerArm(&bot->rj_deadline, 4.0f);
-				bot->rj_use_next = 0.0f;
-			}
 		}
-
-		/*
-		 * Rocket-jump fire frame(s): the view IS the proven aim vector --
-		 * down and behind, which is what throws the body forward -- while
-		 * the jump and the trigger go down together. Weapon_RocketLauncher
-		 * fires along v_angle on its fire frame, same contract as the hook.
-		 */
-		(void)StrikeRocketJumpPhase2Command(bot, e, cmd, &view_yaw,
-		    &view_pitch, &have_move);
 
 		/* while aiming to fire, the cmd angles ARE the anchor bearing --
 		 * this overrides the navigation view for exactly one frame */
@@ -5652,7 +5575,7 @@ static int Hook_OnlineProof(edict_t *e, sg_bot_t *bot,
 	    (e->client->ps.pmove.pm_flags & ~PMF_ON_GROUND) != 0 ||
 	    e->client->ps.pmove.pm_time != 0 ||
 	    fabsf(e->viewheight - 22.0f) > 0.1f || !SG_HookOffhandReady(e) ||
-	    bot->rj_phase != 0 || bot->nade_phase != 0)
+	    SG_RocketJumpGameOwns(bot) || bot->nade_phase != 0)
 		return HOOK_PROOF_FAIL;
 	link = &SG_Rune()->links[bot->hook_link];
 	if (link->action != RL_HOOK || bot->commit_link != bot->hook_link)
@@ -5895,7 +5818,8 @@ static int Swim_OnlineProof(edict_t *e, sg_bot_t *bot, int link_index)
 	    e->movetype != MOVETYPE_WALK ||
 	    e->client->ps.pmove.pm_type != PM_NORMAL ||
 	    e->client->hookstate != 0 || e->client->hook != NULL ||
-	    bot->hook_phase != 0 || bot->rj_phase != 0 || bot->nade_phase != 0)
+	    bot->hook_phase != 0 || SG_RocketJumpGameOwns(bot) ||
+	    bot->nade_phase != 0)
 		return SWIM_PROOF_FAIL;
 	link = &SG_Rune()->links[link_index];
 	if (link->action != RL_SWIM)
@@ -5966,7 +5890,8 @@ static int TeleportSwim_OnlineProof(edict_t *e, sg_bot_t *bot,
 	    e->movetype != MOVETYPE_WALK ||
 	    e->client->ps.pmove.pm_type != PM_NORMAL ||
 	    e->client->hookstate != 0 || e->client->hook != NULL ||
-	    bot->hook_phase != 0 || bot->rj_phase != 0 || bot->nade_phase != 0)
+	    bot->hook_phase != 0 || SG_RocketJumpGameOwns(bot) ||
+	    bot->nade_phase != 0)
 		return SWIM_PROOF_FAIL;
 	link = &SG_Rune()->links[link_index];
 	if (link->action != RL_TELEPORT ||
@@ -6208,16 +6133,6 @@ qboolean SG_TestGenericRailMoveAllowed(const sg_bot_t *bot, const sg_think_t *tc
 	return GenericRailMoveAllowed(bot, tc);
 }
 
-qboolean SG_StrikeTestRocketJumpPhase2Command(const sg_bot_t *bot,
-	const edict_t *e, usercmd_t *cmd)
-{
-	float view_yaw = 0.0f;
-	float view_pitch = 0.0f;
-	qboolean have_move = true;
-
-	return StrikeRocketJumpPhase2Command(bot, e, cmd, &view_yaw,
-	    &view_pitch, &have_move);
-}
 #endif
 
 static void Hook_LiveSync(sg_bot_t *bot)
@@ -6944,6 +6859,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			return;
 		}
 	}
+	/* RL_ROCKETJUMP owns the complete four-command frame.  fire_rocket may
+	 * synchronously move its reducer from ARMED to FLIGHT during the first
+	 * ClientThink, so generic writers cannot run before the remaining steps. */
+	if (SG_RocketJumpGameEmit(bot, bestlink))
+		return;
 	qboolean drop_yaw_locked = tc->drop_yaw_locked;
 	qboolean proved_ballistic = (bestlink >= 0 && SG_Rune() &&
 	    SG_Rune()->links && bestlink < SG_Rune()->hdr.num_links &&
@@ -7263,7 +7183,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 		if (!proved_control && bot->hook_phase != 1 && bot->hook_phase != 3 &&
 		    !(bot->hook_phase == 2 && !bot->speedhook) &&
-		    bot->rj_phase == 0 && bot->nade_phase == 0)
+		    !SG_RocketJumpGameOwns(bot) && bot->nade_phase == 0)
 		{
 			SG_CombatFrame(e, cmd, &engaged);
 			if (cmd->buttons & BUTTON_ATTACK)
@@ -7662,7 +7582,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			    dose > 0.0f && sp >= SG_AS_FLOOR && have_move &&
 			    run_link && open_ahead && bestlink >= 0 && SG_Rune() &&
 			    !precision && !engaged &&
-			    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+			    bot->hook_phase == 0 && !SG_RocketJumpGameOwns(bot) &&
 			    bot->nade_phase == 0 && bot->term_brake >= 1.0f &&
 			    e->waterlevel <= 1 && SG_TimerReady(bot->beat_until) &&
 			    !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
@@ -8303,7 +8223,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    !e->client->ps.pmove.pm_time && !source_snapped)
 				{
 					if (declared_door &&
-					    (bot->hook_phase != 0 || bot->rj_phase != 0 ||
+					    (bot->hook_phase != 0 || SG_RocketJumpGameOwns(bot) ||
 					     bot->nade_phase != 0 || e->client->hookstate != 0 ||
 					     e->client->hook != NULL))
 					{
@@ -9229,19 +9149,6 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		 */
 		if (bot->hook_phase == 0 && e->client->hookstate != 0)
 			ctf_hook_abort(e);
-
-		/* rocket-jump phase 1: ask for the launcher through the same use
-		 * path a player's "use" command runs, at a polite rate */
-		if (bot->rj_phase == 1 && SG_TimerReady(bot->rj_use_next))
-		{
-			static gitem_t *rj_rl3;
-
-			if (!rj_rl3)
-				rj_rl3 = FindItem("Rocket Launcher");
-			if (rj_rl3 && rj_rl3->use)
-				rj_rl3->use(e, rj_rl3);
-			SG_TimerArm(&bot->rj_use_next, 0.5f);
-		}
 
 		if (wet_graph_aim &&
 		    (e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||

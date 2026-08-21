@@ -371,14 +371,12 @@ static void TestFreshTagAndOldCommitment(void)
 	bot.commit_until = 14.0f;
 	bot.sticky_link = 0;
 	bot.latch_until = 14.0f;
-	bot.rj_phase = 1;
-	bot.rj_deadline = 16.0f;
-	bot.rj_fire_until = 17.0f;
-	bot.rj_use_next = 18.0f;
+	bot.rocketjump.phase = SG_ROCKETJUMP_EQUIP;
+	bot.rocketjump.witness.link_index = 7;
 	CHECK(!SG_StrikeTestWeaponPrepareCommit(&bot, &tc));
 	CHECK(bot.commit_link == -1 && bot.sticky_link == -1);
-	CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
-	CHECK(bot.rj_fire_until == 0.0f && bot.rj_use_next == 0.0f);
+	CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_IDLE &&
+	    bot.rocketjump.witness.link_index == 0);
 	candidate = SG_StrikeTestWeaponFilterFreshCandidate(&bot, &tc, 1);
 	SG_StrikeTestCommitFreshLink(&bot, &tc, candidate);
 	CHECK(bot.commit_link == 1 && bot.strike_weapon_link == 1);
@@ -388,12 +386,13 @@ static void TestFreshTagAndOldCommitment(void)
 	bot.commit_until = 14.0f;
 	bot.sticky_link = 0;
 	bot.latch_until = 14.0f;
-	bot.rj_phase = 2;
-	bot.rj_deadline = 16.0f;
+	bot.rocketjump.phase = SG_ROCKETJUMP_ARMED;
+	bot.rocketjump.elapsed_ms = 1600;
 	CHECK(!SG_StrikeTestWeaponPrepareCommit(&bot, &tc));
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 	CHECK(bot.commit_link == 0 && bot.commit_until == 14.0f);
-	CHECK(bot.rj_phase == 2 && bot.rj_deadline == 16.0f);
+	CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_ARMED &&
+	    bot.rocketjump.elapsed_ms == 1600);
 	CHECK(bot.strike_weapon_link == -1 && !bot.strike_weapon_draining);
 	SG_StrikeTestCommitFreshLink(&bot, &tc, 1);
 	CHECK(bot.commit_link == 0 && bot.strike_weapon_link == -1);
@@ -613,13 +612,14 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 
 	WorldReset();
 	ArmExact(&bot, &tc, RL_RUN);
-	bot.rj_phase = 2;
-	bot.rj_deadline = 40.0f;
+	bot.rocketjump.phase = SG_ROCKETJUMP_ARMED;
+	bot.rocketjump.elapsed_ms = 400;
 	tc.strike_rush = true;
 	CHECK(!SG_StrikeTestWeaponPrepareCommit(&bot, &tc));
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 	CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f);
-	CHECK(bot.rj_phase == 2 && bot.rj_deadline == 40.0f);
+	CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_ARMED &&
+	    bot.rocketjump.elapsed_ms == 400);
 	CHECK(bot.strike_weapon_link == 1 && bot.strike_weapon_draining);
 
 	WorldReset();
@@ -648,16 +648,14 @@ static void TestDeadlineGoAndCurrentCandidate(void)
 	bot.commit_until = 30.0f;
 	bot.sticky_link = 0;
 	bot.latch_until = 25.0f;
-	bot.rj_phase = 1;
-	bot.rj_deadline = 40.0f;
-	bot.rj_fire_until = 41.0f;
-	bot.rj_use_next = 42.0f;
+	bot.rocketjump.phase = SG_ROCKETJUMP_EQUIP;
+	bot.rocketjump.witness.link_index = 7;
 	tc.strike_rush = true;
 	CHECK(!SG_StrikeTestWeaponPrepareCommit(&bot, &tc));
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
-	CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
-	CHECK(bot.rj_fire_until == 0.0f && bot.rj_use_next == 0.0f);
+	CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_IDLE &&
+	    bot.rocketjump.witness.link_index == 0);
 }
 
 static void TestSpeedHookAndStickyDrain(void)
@@ -708,28 +706,28 @@ static void TestRocketJumpBoundaries(void)
 
 	WorldReset();
 	ArmExact(&bot, &tc, RL_ROCKETJUMP);
-	bot.rj_phase = 1;
-	bot.rj_deadline = 40.0f;
-	bot.rj_fire_until = 41.0f;
-	bot.rj_use_next = 42.0f;
+	bot.rocketjump.phase = SG_ROCKETJUMP_EQUIP;
+	bot.rocketjump.witness.link_index = 7;
 	CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
 	CheckCleared(&bot);
-	CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
-	CHECK(bot.rj_fire_until == 0.0f && bot.rj_use_next == 0.0f);
+	CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_IDLE &&
+	    bot.rocketjump.witness.link_index == 0);
 
-	for (int phase = 2; phase <= 3; phase++)
+	for (int phase = SG_ROCKETJUMP_ARMED;
+	     phase <= SG_ROCKETJUMP_FLIGHT; phase++)
 	{
 		WorldReset();
 		ArmExact(&bot, &tc, RL_ROCKETJUMP);
-		bot.rj_phase = phase;
-		bot.rj_deadline = 40.0f;
+		bot.rocketjump.phase = (sg_rocketjump_phase_t)phase;
+		bot.rocketjump.elapsed_ms = 400;
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
 		CheckDraining(&bot);
-		CHECK(bot.rj_phase == phase && bot.rj_deadline == 40.0f);
+		CHECK(bot.rocketjump.phase == (sg_rocketjump_phase_t)phase &&
+		    bot.rocketjump.elapsed_ms == 400);
 		tc.strike_weapon_pursuit = true;
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
 		CheckDraining(&bot);
-		bot.rj_phase = 0;
+		bot.rocketjump.phase = SG_ROCKETJUMP_IDLE;
 		bot.commit_link = -1;
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
 		CHECK(bot.strike_weapon_link == -1);

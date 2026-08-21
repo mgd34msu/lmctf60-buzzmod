@@ -241,7 +241,7 @@ rally_done:;
 	/* Strike pressure shares this live-enemy approach action. */
 	if (pressure_approach && sg_cv.flycook->value &&
 	    !bot->jump_started && !bot->drop_started &&
-	    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+	    bot->hook_phase == 0 && !SG_RocketJumpLiveOwns(&bot->rocketjump) &&
 	    bot->nade_phase == 0 &&
 	    !(SG_Rune() && bot->commit_link >= 0 &&
 	      bot->commit_link < SG_Rune()->hdr.num_links &&
@@ -554,7 +554,8 @@ static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
 	 * route, and an active sortie is retired if one is acquired later. */
 	if (bot->lead_ent > 0 || bot->patrol_seed >= 0 ||
 	    bot->def_shift_seed >= 0 || bot->tac_seed >= 0 ||
-	    bot->rail_stage > 0 || bot->rj_phase > 0 || bot->nade_phase > 0 ||
+	    bot->rail_stage > 0 || SG_RocketJumpLiveOwns(&bot->rocketjump) ||
+	    bot->nade_phase > 0 ||
 	    bot->hook_phase > 0 || bot->jump_link >= 0 || bot->drop_link >= 0)
 		return true;
 	/* A pre-existing route commitment belongs to another action.  Once the

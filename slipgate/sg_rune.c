@@ -13,6 +13,7 @@
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_rune_door_scope.h"
 #include "slipgate/sg_compound_gen_game.h"
+#include "slipgate/sg_rocketjump_cadence.h"
 #include "slipgate/sg_util.h"
 
 #include <stdio.h>
@@ -4258,10 +4259,13 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
 	for (ai = 0; ai < 3; ai++)
 	{
 		sg_phantom_t ph;
+		sg_rocketjump_cadence_t cadence;
+		sg_rocketjump_cadence_event_t cadence_event;
 		usercmd_t cmd;
-		vec3_t aim, boom, before, kvel, want;
+		vec3_t aim, shot_angles, boom, before, kvel, want;
 		float flight_ms, t = tilts[ai] * (float)(M_PI / 180.0);
-		int elapsed, fsteps, s, health;
+		int elapsed, health;
+		short pitch_control, yaw_control;
 		byte heading;
 
 		/* down, and back over the shoulder: the horizontal part of the aim
@@ -4270,12 +4274,13 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
 		aim[0] = -tdir[0] * sinf(t);
 		aim[1] = -tdir[1] * sinf(t);
 		aim[2] = -cosf(t);
-
-		if (!SG_OracleRocketJumpAim(src, aim, boom, &flight_ms))
-		{
-			rj_noboom++;
-			continue;                   /* nothing under that aim to burst on */
-		}
+		vectoangles(aim, shot_angles);
+		pitch_control = (short)ANGLE2SHORT(shot_angles[PITCH]);
+		yaw_control = (short)ANGLE2SHORT(shot_angles[YAW]);
+		shot_angles[PITCH] = SHORT2ANGLE(pitch_control);
+		shot_angles[YAW] = SHORT2ANGLE(yaw_control);
+		shot_angles[ROLL] = 0.0f;
+		AngleVectors(shot_angles, aim, NULL, NULL);
 
 		SG_OraclePlace(&ph, src);
 		elapsed = 0;
@@ -4286,46 +4291,62 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
 		 */
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = STEP_MSEC;
+		cmd.angles[PITCH] = pitch_control;
+		cmd.angles[YAW] = yaw_control;
 		cmd.upmove = 400;
 		SG_OracleRun(&ph, &cmd, 1);
 		elapsed += STEP_MSEC;
 
-		/*
-		 * The rocket's own flight, rolled rather than assumed away. The
-		 * rocket leaves the muzzle at the same instant the jump key goes
-		 * down, so the jump step above IS the first step of the flight --
-		 * counting it again would detonate the rocket a step late and quietly
-		 * weaken every proof by the height the body gained in that step.
-		 */
-		fsteps = (int)(flight_ms / (float)STEP_MSEC + 0.5f);
-		for (s = 1; s < fsteps; s++)
+		if (!SG_OracleRocketJumpAim(ph.origin, pitch_control, yaw_control,
+		        boom, &flight_ms))
 		{
-			VectorSubtract(dst, ph.origin, want);
-			memset(&cmd, 0, sizeof(cmd));
-			cmd.msec = STEP_MSEC;
-			cmd.angles[YAW] = ANGLE2SHORT(atan2f(want[1], want[0])
-			                              * 180.0f / M_PI);
-			cmd.forwardmove = 400;      /* air control: weak, but real */
-			SG_OracleRun(&ph, &cmd, 1);
-			elapsed += STEP_MSEC;
+			rj_noboom++;
+			continue;
 		}
 
-		/* the detonation, applied by the oracle exactly as the game applies
-		 * it, and paid for in health */
-		VectorCopy(ph.velocity, before);
-		health = SG_OracleRocketJumpStep(&ph, boom);
+		if (!SG_RocketJumpCadenceBegin(&cadence, flight_ms,
+		    SG_RUNE_PROOF_SERVER_FRAME_MS))
+		{
+			rj_noboom++;
+			continue;
+		}
+		health = 0;
+		VectorClear(kvel);
+		while ((cadence_event = SG_RocketJumpCadenceNext(&cadence)) !=
+		       SG_ROCKETJUMP_CADENCE_DONE)
+		{
+			/* G_RunFrame advances projectiles before SG_RunFrame emits the
+			 * next body quartet.  The launch command itself moves the body
+			 * first; fire_rocket then starts at that post-25 ms pose. */
+			if (cadence_event == SG_ROCKETJUMP_CADENCE_IMPACT)
+			{
+				VectorCopy(ph.velocity, before);
+				health = SG_OracleRocketJumpStep(&ph, boom);
+				VectorSubtract(ph.velocity, before, kvel);
+			}
+			else if (cadence_event == SG_ROCKETJUMP_CADENCE_BODY_STEP)
+			{
+				VectorSubtract(dst, ph.origin, want);
+				memset(&cmd, 0, sizeof(cmd));
+				cmd.msec = STEP_MSEC;
+				cmd.angles[YAW] = ANGLE2SHORT(atan2f(want[1], want[0])
+				                              * 180.0f / M_PI);
+				cmd.forwardmove = 400;
+				SG_OracleRun(&ph, &cmd, 1);
+				elapsed += STEP_MSEC;
+			}
+		}
+
 		if (health <= 0)
 		{
 			rj_nolift++;
 			continue;                   /* out of range, or behind something */
 		}
-		VectorSubtract(ph.velocity, before, kvel);
 		if (kvel[2] <= 0.0f)
 		{
 			rj_nolift++;
 			continue;                   /* pushed sideways or down: not a jump */
 		}
-
 		/*
 		 * The heading the link records is the direction the blast actually
 		 * threw the body, taken from the velocity the oracle just added --
@@ -4342,11 +4363,8 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
 		{
 			VectorSubtract(dst, ph.origin, want);
 
-			if (want[0] * want[0] + want[1] * want[1] <
-			        ARRIVE_RADIUS * ARRIVE_RADIUS &&
-			    want[2] > -72.0f && want[2] < 72.0f &&
-			    (ph.groundentity || ph.waterlevel >= 2) &&
-			    Prove_Contact(ph.origin, dst))
+			if (SG_RocketJumpArrived(ph.origin, dst, ph.groundentity,
+			        ph.waterlevel, ph.groundentity_entity, NULL))
 			{
 				float sp = sqrtf(ph.velocity[0] * ph.velocity[0] +
 				                 ph.velocity[1] * ph.velocity[1]);
@@ -4355,10 +4373,10 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
 				*cost_ms = (short)elapsed;
 				*exit_speed = (byte)(sp / 4.0f > 255.0f ? 255 : sp / 4.0f);
 				*heading_out = heading;
-				/* the anchor's rocket-jump layout, documented in sg_rune.h:
-				 * the horizontal aim, then the price */
-				anchor_out[0] = aim[0];
-				anchor_out[1] = aim[1];
+				/* Exact signed usercmd pitch/yaw plus the worst-case health
+				 * price.  These three floats are integral and codec-checked. */
+				anchor_out[0] = (float)pitch_control;
+				anchor_out[1] = (float)yaw_control;
 				anchor_out[2] = (float)health;
 				return true;
 			}
@@ -4396,7 +4414,7 @@ static qboolean ProveRocketJump(int from, int to, vec3_t anchor_out,
  */
 static void Prove_RocketJumps(void)
 {
-#if 0
+#if 1
 	int i, j;
 	float ceiling = SG_OracleRocketJumpCeiling();
 
@@ -4476,6 +4494,13 @@ static void Prove_RocketJumps(void)
 			 * still be doing what was demonstrated.
 			 */
 			l->min_speed = 0;
+			sg_host.dprint("rune: rocketjump candidate from=%d to=%d "
+			    "source=(%.0f %.0f %.0f) destination=(%.0f %.0f %.0f) "
+			    "control=(%.0f %.0f) health=%.0f cost=%d\n",
+			    i, j, gen_seeds[i].origin[0], gen_seeds[i].origin[1],
+			    gen_seeds[i].origin[2], gen_seeds[j].origin[0],
+			    gen_seeds[j].origin[1], gen_seeds[j].origin[2],
+			    anchor[0], anchor[1], anchor[2], (int)cost);
 			rj_links++;
 		}
 	}

@@ -2183,12 +2183,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	VectorClear(bot->hp_prev_dep);
 	bot->hp_prev_land = 0.0f;
 
-	bot->rj_phase = 0;
-	VectorClear(bot->rj_aim);
-	VectorClear(bot->rj_dest);
-	bot->rj_deadline = 0.0f;
-	bot->rj_fire_until = 0.0f;
-	bot->rj_use_next = 0.0f;
+	memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
 	bot->nade_phase = 0;
 	SG_NadeTargetClear(bot);
 	bot->nade_until = 0.0f;
@@ -2471,7 +2466,7 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 	 * lands, then localize the outcome and argue a fresh step. */
 	if (!e->groundentity && e->waterlevel < 2)
 	{
-		if (bot->rj_phase == 3)
+		if (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT)
 			return;
 		if (commit &&
 		    (commit->action == RL_JUMP || commit->action == RL_DROP))
@@ -2969,10 +2964,7 @@ void SG_BotThink(sg_bot_t *bot)
 			return;
 		if (declared_door_guarded)
 			bot->seed = -1;
-		bot->rj_phase = 0;
-		bot->rj_deadline = 0.0f;
-		bot->rj_fire_until = 0.0f;
-		bot->rj_use_next = 0.0f;
+		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
 		bot->nade_phase = 0;
 		SG_NadeTargetClear(bot);
 		bot->nade_until = 0.0f;
@@ -3127,7 +3119,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_guard_paused = false;
 		bot->declared_guard_pause_started = 0.0f;
 		bot->declared_door_recovery_since = 0.0f;
-		bot->rj_phase = 0;
+		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
 		bot->nade_phase = 0;
 		SG_NadeTargetClear(bot);
 		if (SG_DeclaredDoorGuardRunState(bot) !=
@@ -3371,7 +3363,7 @@ void SG_BotThink(sg_bot_t *bot)
 	          sg_rune->links[bot->commit_link].action,
 	          SG_ACTF_SUPPRESS_LOCALIZATION)) &&
 	    !(bot->seed >= 0 && !e->groundentity && e->waterlevel < 2 &&
-	      (bot->rj_phase == 3 ||
+	      (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT ||
 	       (bot->commit_link >= 0 &&
 	        bot->commit_link < sg_rune->hdr.num_links &&
 	         (sg_rune->links[bot->commit_link].action == RL_JUMP ||

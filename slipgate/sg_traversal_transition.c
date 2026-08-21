@@ -16,7 +16,7 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 	memset(&state, 0, sizeof(state));
 	state.action = action;
 	state.hook_phase = bot->hook_phase;
-	state.rocketjump_phase = bot->rj_phase;
+	state.rocketjump_phase = (int)bot->rocketjump.phase;
 	state.jump_started = bot->jump_started;
 	state.drop_started = bot->drop_started;
 	state.swim_active = bot->swim_replay_active;
@@ -70,12 +70,9 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		bot->speedhook_pull_applied = false;
 		bot->flow_release = false;
 	}
-	if (bot->rj_phase == 1)
+	if (bot->rocketjump.phase == SG_ROCKETJUMP_EQUIP)
 	{
-		bot->rj_phase = 0;
-		bot->rj_deadline = 0.0f;
-		bot->rj_fire_until = 0.0f;
-		bot->rj_use_next = 0.0f;
+		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
 	}
 	switch (action)
 	{
@@ -108,10 +105,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		    &bot->swim_proved_ms, &bot->swim_elapsed_ms);
 		break;
 	case RL_ROCKETJUMP:
-		bot->rj_phase = 0;
-		bot->rj_deadline = 0.0f;
-		bot->rj_fire_until = 0.0f;
-		bot->rj_use_next = 0.0f;
+		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
 		break;
 	case RL_LIFT:
 	case RL_TELEPORT:

@@ -5,6 +5,7 @@
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_replay.h"
+#include "slipgate/sg_rocketjump_live.h"
 #include "slipgate/sg_rune.h"
 
 int SG_TeamIdx(int team)
@@ -268,6 +269,46 @@ qboolean SG_SupportedArrived(const vec3_t origin, const vec3_t destination,
 	    delta[2] <= -72.0f || delta[2] >= 72.0f ||
 	    (!grounded && waterlevel < 2) ||
 	    (waterlevel > 0 && (watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
+		return false;
+	VectorCopy(origin, from);
+	VectorCopy(destination, to);
+	from[2] += 16.0f;
+	to[2] += 16.0f;
+	tr = sg_host.trace(from, NULL, NULL, to, passent, MASK_PLAYERSOLID);
+	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+}
+
+/* The generator and live controller submit their fixed-point body pose to
+ * this one landing law.  A proximity hit cannot authorize a ledge through a
+ * startsolid chest trace, and a water landing cannot satisfy a dry launch. */
+qboolean SG_RocketJumpArrived(const vec3_t origin, const vec3_t destination,
+	qboolean grounded, int waterlevel, edict_t *support, edict_t *passent)
+{
+	short origin_q8[3], destination_q8[3];
+	vec3_t from, to;
+	trace_t tr;
+	int axis;
+
+	if (!origin || !destination || !grounded || waterlevel != 0 ||
+	    (support != g_edicts && !SG_ImmutableSupport(support)))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float origin_scaled = origin[axis] * 8.0f;
+		float destination_scaled = destination[axis] * 8.0f;
+
+		if (!isfinite(origin_scaled) || !isfinite(destination_scaled) ||
+		    origin_scaled < (float)INT16_MIN ||
+		    origin_scaled > (float)INT16_MAX ||
+		    destination_scaled < (float)INT16_MIN ||
+		    destination_scaled > (float)INT16_MAX ||
+		    origin_scaled != (float)(int)origin_scaled ||
+		    destination_scaled != (float)(int)destination_scaled)
+			return false;
+		origin_q8[axis] = (short)origin_scaled;
+		destination_q8[axis] = (short)destination_scaled;
+	}
+	if (!SG_RocketJumpArrivalEnvelope(origin_q8, destination_q8))
 		return false;
 	VectorCopy(origin, from);
 	VectorCopy(destination, to);

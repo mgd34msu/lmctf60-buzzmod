@@ -64,8 +64,9 @@ static void ArmBallistic(sg_bot_t *bot, int action, qboolean physical)
 	}
 	else
 	{
-		bot->rj_phase = physical ? 2 : 1;
-		bot->rj_deadline = 30.0f;
+		bot->rocketjump.phase = physical ? SG_ROCKETJUMP_ARMED :
+		    SG_ROCKETJUMP_EQUIP;
+		bot->rocketjump.witness.link_index = 1;
 	}
 }
 
@@ -131,7 +132,8 @@ static void TestCarryStartRetiresOnlyReversibleTraversal(void)
 		else if (actions[index] == RL_DROP)
 			CHECK(bot.drop_link == -1 && !bot.drop_started);
 		else
-			CHECK(bot.rj_phase == 0 && bot.rj_deadline == 0.0f);
+			CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_IDLE &&
+			    bot.rocketjump.witness.link_index == 0);
 		ResetWorld();
 		ArmBallistic(&bot, actions[index], true);
 		SG_CarryStartRetireSupersededRoute(&bot, true);

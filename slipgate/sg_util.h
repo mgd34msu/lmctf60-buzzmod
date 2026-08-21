@@ -52,6 +52,8 @@ qboolean SG_SwimArrived(const vec3_t origin, const vec3_t destination,
 	edict_t *passent);
 qboolean SG_SupportedArrived(const vec3_t origin, const vec3_t destination,
 	qboolean grounded, int watertype, int waterlevel, edict_t *passent);
+qboolean SG_RocketJumpArrived(const vec3_t origin, const vec3_t destination,
+	qboolean grounded, int waterlevel, edict_t *support, edict_t *passent);
 
 /* A runtime-supported outer action with the direct OWNS_CONTROL trait owns
  * the command stream from staging through its completion predicate. Tactical

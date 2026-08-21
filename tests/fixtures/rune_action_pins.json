@@ -1,7 +1,7 @@
 {
-  "action_contract_crc32": "5be12e46",
-  "action_contract_sha256": "a23335f1c516c7fdf870b271396118dcef33f7c4480e5cc62abd8abf705af648",
-  "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,door:8,door_swim:10,button_door:12;disabled=rocketjump:7,door_drop:9,door_hook:11;planless=run:0,jump:1,drop:2,hook:3,swim:4,door_swim:10;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3;seed.origin=signed_q8_exact;",
+  "action_contract_crc32": "f07312cd",
+  "action_contract_sha256": "45720f9a172783e8e2a41f69d7fcb07d88409a6d3f598098c87af3e2c9518188",
+  "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_swim:10,button_door:12;disabled=door_drop:9,door_hook:11;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_swim:10;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3;seed.origin=signed_q8_exact;",
   "mechanism_contract_crc32": "dd8de50f",
   "mechanism_contract_sha256": "848a2a52cd697ba7527a44ccdae48f1f962027d0292ff7dd7ec81622906688ee",
   "action_symbols": [

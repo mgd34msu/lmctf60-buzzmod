@@ -12,6 +12,7 @@
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_rune_proof.h"
+#include "slipgate/sg_rocketjump_live.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_door_approach.h"
@@ -6484,12 +6485,16 @@ done:
 }
 
 
-#define SG_RJ_RADIUS_DAMAGE	120.0f		/* p_weapon.c:865 */
-#define SG_RJ_DAMAGE_RADIUS	120.0f		/* p_weapon.c:866 */
-#define SG_RJ_ROCKET_SPEED	650.0f		/* p_weapon.c:889 */
-#define SG_RJ_PLAYER_MASS	200.0f		/* p_client.c:1926 */
-#define SG_RJ_VIEWHEIGHT	22.0f		/* p_client.c:1923 */
-#define SG_RJ_BBOX_CENTRE	4.0f		/* 0.5*(mins+maxs) z for a standing
+#define SG_RJ_RADIUS_DAMAGE \
+	((float)SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE)
+#define SG_RJ_DAMAGE_RADIUS \
+	((float)SG_RUNE_PROOF_ROCKETJUMP_DAMAGE_RADIUS)
+#define SG_RJ_ROCKET_SPEED \
+	((float)SG_RUNE_PROOF_ROCKETJUMP_ROCKET_SPEED)
+#define SG_RJ_PLAYER_MASS \
+	((float)SG_RUNE_PROOF_ROCKETJUMP_PLAYER_MASS)
+#define SG_RJ_BBOX_CENTRE \
+	((float)SG_RUNE_PROOF_ROCKETJUMP_BBOX_CENTER) /* standing
                                          * player box, g_combat.c:716-717 */
 
 /*
@@ -6501,21 +6506,18 @@ done:
  * Returns false when the shot never detonates near the shooter: no surface
  * within the trace, or sky (which frees the rocket silently).
  */
-qboolean SG_OracleRocketJumpAim(vec3_t origin, vec3_t aim,
+qboolean SG_OracleRocketJumpAim(vec3_t origin, short pitch, short yaw,
                                 vec3_t boom_out, float *flight_ms)
 {
-	vec3_t angles, forward, right, start, end, d;
+	vec3_t forward, start, end, d;
 	trace_t tr;
 	float travel;
 
-	vectoangles(aim, angles);
-	AngleVectors(angles, forward, right, NULL);
-
-	/* p_weapon.c:880-881 -> g_utils.c:7-12, right-handed */
-	start[0] = origin[0] + forward[0] * 8.0f + right[0] * 8.0f;
-	start[1] = origin[1] + forward[1] * 8.0f + right[1] * 8.0f;
-	start[2] = origin[2] + forward[2] * 8.0f + right[2] * 8.0f
-	           + (SG_RJ_VIEWHEIGHT - 8.0f);
+	/* Decode the authenticated controls directly. Re-deriving angles from a
+	 * near-vertical float forward vector can flip yaw by 180 degrees and mirror
+	 * the right-handed muzzle offset across the player. */
+	if (!SG_RocketJumpControlMuzzle(origin, pitch, yaw, start, forward))
+		return false;
 
 	VectorMA(start, 8192.0f, forward, end);
 	tr = sg_host.trace(start, NULL, NULL, end, NULL, MASK_SHOT);

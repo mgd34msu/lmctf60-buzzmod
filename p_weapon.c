@@ -12,6 +12,7 @@ extern void Weapon_PLASMA_Generic (edict_t *,int,int,int,int,int *,int *,void(*f
 // END
 #include "g_ctffunc.h"
 #include "slipgate/sg_cvars.h"
+#include "slipgate/sg_action_contract.generated.h"
 
 void SG_NoteRailShot(edict_t *shooter);
 
@@ -872,12 +873,12 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 	}
 	else
 	{
-		radius_damage = 120;
-		damage_radius = 120;
+		radius_damage = SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE;
+		damage_radius = SG_RUNE_PROOF_ROCKETJUMP_DAMAGE_RADIUS;
 	}
 #else
-	radius_damage = 120;
-	damage_radius = 120;
+	radius_damage = SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE;
+	damage_radius = SG_RUNE_PROOF_ROCKETJUMP_DAMAGE_RADIUS;
 #endif	
 	
 	if (is_quad)
@@ -898,9 +899,13 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
 		fire_rocket (ent, start, forward, damage, 750, damage_radius, radius_damage); //SURT 750 was 550 then 650 by id
 	else
-		fire_rocket (ent, start, forward, damage, 650, damage_radius, radius_damage); //SURT 
+		fire_rocket (ent, start, forward, damage,
+			SG_RUNE_PROOF_ROCKETJUMP_ROCKET_SPEED, damage_radius,
+			radius_damage); //SURT
 #else
-	fire_rocket (ent, start, forward, damage, 650, damage_radius, radius_damage); //SURT 
+	fire_rocket (ent, start, forward, damage,
+		SG_RUNE_PROOF_ROCKETJUMP_ROCKET_SPEED, damage_radius,
+		radius_damage); //SURT
 #endif
 
 	// send muzzle flash

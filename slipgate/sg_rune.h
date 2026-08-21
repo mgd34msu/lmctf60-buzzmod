@@ -238,8 +238,8 @@ typedef struct sg_rune_authority_s
  * struct tag is all a pointer declaration needs.
  */
 struct sg_phantom_s;
-qboolean	SG_OracleRocketJumpAim(vec3_t origin, vec3_t aim,
-                                   vec3_t boom_out, float *flight_ms);
+qboolean	SG_OracleRocketJumpAim(vec3_t origin, short pitch, short yaw,
+	vec3_t boom_out, float *flight_ms);
 int			SG_OracleRocketJumpStep(struct sg_phantom_s *ph, vec3_t boom);
 float		SG_OracleRocketJumpCeiling(void);
 

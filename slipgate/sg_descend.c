@@ -583,7 +583,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		     l->action == RL_ROCKETJUMP))
 			continue;
 		if (SG_ActionOwnsControl(l->action) &&
-		    (bot->hook_phase != 0 || bot->rj_phase != 0 ||
+		    (bot->hook_phase != 0 || SG_RocketJumpLiveOwns(&bot->rocketjump) ||
 		     bot->nade_phase != 0))
 			continue;       /* one exact action owns the command at a time */
 		if (l->action == RL_LIFT)
@@ -2452,7 +2452,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				 * the visible defender without stealing action-controller authority. */
 				if (rally_hold && live_room_enemy && !live_flag_terminal &&
 				    !bot->jump_started && !bot->drop_started &&
-				    bot->hook_phase == 0 && bot->rj_phase == 0 &&
+				    bot->hook_phase == 0 &&
+				    !SG_RocketJumpLiveOwns(&bot->rocketjump) &&
 				    bot->nade_phase == 0 &&
 				    !(bestlink >= 0 &&
 				      SG_ActionOwnsControl(
@@ -2495,7 +2496,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		sg_replay_reason_t drop_boundary_reason = SG_REPLAY_REASON_NONE;
 		qboolean ballistic = (!e->groundentity && e->waterlevel < 2 &&
 		    (cl->action == RL_JUMP || cl->action == RL_DROP ||
-		     (cl->action == RL_ROCKETJUMP && bot->rj_phase == 3)));
+		     (cl->action == RL_ROCKETJUMP &&
+		      bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT)));
 			int b;
 
 			/* A mechanism commitment never degrades into anchor-based movement.

@@ -948,7 +948,21 @@ def _validate_anchor_policy(
                 f"link {index} {field} is off the 1/8 door lattice",
             )
         return
-    if policy not in (contract.RLAP_HOOK_CONTROL, contract.RLAP_UNSUPPORTED):
+    if policy == contract.RLAP_ROCKET_CONTROL:
+        pitch, yaw, health = anchor
+        if (
+            pitch != int(pitch) or yaw != int(yaw) or health != int(health) or
+            not -32768 <= pitch <= 32767 or
+            not -32768 <= yaw <= 32767 or
+            not contract.RUNE_PROOF_ROCKETJUMP_HEALTH_MIN <= health <=
+                contract.RUNE_PROOF_ROCKETJUMP_HEALTH_MAX
+        ):
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has noncanonical rocket control",
+            )
+        return
+    if policy != contract.RLAP_HOOK_CONTROL:
         raise _wire_error(
             contract.RLW_BAD_LINK_RECORD,
             f"link {index} has unknown {field} policy {policy}",
@@ -1066,6 +1080,17 @@ def _validate_graph(
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,
                 f"link {index} has noncanonical DROP cost {link.cost_ms}",
+            )
+        if link.action == contract.RL_ROCKETJUMP and (
+            link.provenance != contract.RL_PROVEN or
+            link.min_speed != 0 or
+            link.heading_slack != contract.RUNE_PROOF_ROCKETJUMP_HEADING_SLACK or
+            link.cost_ms > contract.RUNE_PROOF_ROCKETJUMP_TOTAL_MS or
+            link.cost_ms % contract.RUNE_PROOF_PMOVE_SUBSTEP_MS != 0
+        ):
+            raise _wire_error(
+                contract.RLW_BAD_LINK_RECORD,
+                f"link {index} has noncanonical rocket control fields",
             )
         if link.reserved != 0:
             raise _wire_error(

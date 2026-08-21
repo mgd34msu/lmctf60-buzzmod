@@ -5,7 +5,7 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x5be12e46U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xf07312cdU,
 	"RUNE action contract drift");
 _Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xdd8de50fU,
 	"RUNE mechanism contract drift");
@@ -69,8 +69,8 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 	  RLAP_TELEPORT_PAD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_TELEPORT, RLFB_NONE, 0, "RL_TELEPORT", "TELEPORT", "TELE",
 	  "#00d18a" },
-	{ 0, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH,
-	  RLAP_UNSUPPORTED, RLAP_ZERO, RLAP_ZERO, RLCP_UNSUPPORTED, RLMP_NONE,
+	{ 1, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH,
+	  RLAP_ROCKET_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_ROCKETJUMP, RLMP_NONE,
 		  RL_ROCKETJUMP, RLFB_FIXED, 900, "RL_ROCKETJUMP", "ROCKETJUMP",
 	  "RJ", "#ff3b30" },
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_DRY_BOTH,
@@ -99,7 +99,7 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 static void TestActions(void)
 {
 	static const int runtime_owns_control[SG_ACTION_COUNT] =
-		{ 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1 };
+		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1 };
 	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
 		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1 };
 	static const int uses_hook_policy[SG_ACTION_COUNT] =

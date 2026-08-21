@@ -525,10 +525,10 @@ static void TestWholeGolden(void)
 		TEST_STRING_BYTES) == 0);
 	CHECK_U32(UINT32_C(0x624244c5), fixture.plans[0].closure_crc32);
 	CHECK_U32(UINT32_C(0x6c814182), GetU32(encoded + 20));
-	CHECK_U32(UINT32_C(0x7f41a756),
+	CHECK_U32(UINT32_C(0x91a8f2c8),
 		GetU32(encoded + SG_RUNE_CODEC_HEADER_CRC_OFFSET));
 	CHECK(SG_CRC32Buffer(encoded, sizeof(encoded), &file_crc));
-	CHECK_U32(UINT32_C(0x9b3ee178), file_crc);
+	CHECK_U32(UINT32_C(0xefe2cb03), file_crc);
 
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));
@@ -1066,6 +1066,63 @@ static void TestEmptyMechanismCompatibility(void)
 			1U, &fixture.workspace));
 }
 
+static sg_rune_codec_diagnostic_t ValidatePlanlessFixture(
+	fixture_t *fixture)
+{
+	static const unsigned char empty_strings[1] = { 0U };
+
+	FixtureWorkspace(fixture);
+	return SG_RuneCodecValidate(fixture->seeds, TEST_SEEDS, fixture->links,
+		TEST_LINKS, NULL, 0U, NULL, 0U, NULL, 0U, empty_strings, 1U,
+		&fixture->workspace);
+}
+
+static void MakeRocketJumpLink(fixture_t *fixture)
+{
+	FixtureInit(fixture);
+	fixture->links[0].action = RL_ROCKETJUMP;
+	fixture->links[0].provenance = RL_PROVEN;
+	fixture->links[0].cost_ms = 1800;
+	fixture->links[0].min_speed = 0U;
+	fixture->links[0].heading = 32U;
+	fixture->links[0].heading_slack = 32U;
+	fixture->links[0].exit_speed = 100U;
+	SetVector(fixture->links[0].suffix_anchor,
+		16384.0f, -8192.0f, 46.0f);
+	SetVector(fixture->links[0].mechanism_anchor, 0.0f, 0.0f, 0.0f);
+	fixture->links[0].sweep_clear_ms = 0U;
+	fixture->links[0].mode = RLCM_NONE;
+	fixture->links[0].activation_plan = SG_RUNE_CODEC_NO_ACTIVATION_PLAN;
+}
+
+static void TestRocketJumpControlCodec(void)
+{
+	fixture_t fixture;
+
+	MakeRocketJumpLink(&fixture);
+	CHECK_DIAGNOSTIC(RLCODEC_OK, ValidatePlanlessFixture(&fixture));
+	MakeRocketJumpLink(&fixture);
+	fixture.links[0].suffix_anchor[0] += 0.5f;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeRocketJumpLink(&fixture);
+	fixture.links[0].suffix_anchor[1] = 32768.0f;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeRocketJumpLink(&fixture);
+	fixture.links[0].suffix_anchor[2] = 0.0f;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeRocketJumpLink(&fixture);
+	fixture.links[0].suffix_anchor[2] = 101.0f;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeRocketJumpLink(&fixture);
+	fixture.links[0].min_speed = 1U;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+}
+
 int main(void)
 {
 	TestPrimitiveGolden();
@@ -1074,6 +1131,7 @@ int main(void)
 	TestGraphMalformed();
 	TestWholeMalformed();
 	TestEmptyMechanismCompatibility();
+	TestRocketJumpControlCodec();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_rune_codec_test: %d failure(s)\n", failures);

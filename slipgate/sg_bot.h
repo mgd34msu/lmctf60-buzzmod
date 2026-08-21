@@ -5,6 +5,7 @@
 #include "sg_drop_live.h"
 #include "sg_hook_live.h"
 #include "sg_hook_diagnostics.h"
+#include "sg_rocketjump_live.h"
 #include "sg_compound_guard.h"
 #include "sg_compound_swim_live.h"
 #include "sg_human_speed.h"
@@ -217,16 +218,10 @@ typedef struct sg_bot_s
 	int			orbit_last_seed; /* last seed consumed by the wide-orbit edge;
 		                             * belongs to this bot/life, not the process */
 
-	/* rocket-jump execution: the proof stored the aim (anchor[0/1], z
-	 * recoverable) and the worst-case health price (anchor[2]); the body
-	 * pays it only with the launcher up and the margin in hand */
-	int			rj_phase;           /* 0 none, 1 raising RL, 2 aim+fire,
-	                                 * 3 flying the arc */
-	vec3_t		rj_aim;             /* unit vector the proof fired on */
-	vec3_t		rj_dest;
-	float		rj_deadline;
-	float		rj_fire_until;      /* how long phase 2 holds the trigger */
-	float		rj_use_next;        /* weapon-switch request rate limit */
+	/* One authenticated launch/flight reducer.  The serialized witness,
+	 * projectile incarnation, callback snapshots, phase, and timers live
+	 * together so no parallel phase flags can authorize a shot. */
+	sg_rocketjump_live_state_t rocketjump;
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;
 	vec3_t		watch_org;

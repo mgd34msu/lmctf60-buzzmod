@@ -2,6 +2,7 @@
 #include "g_ctffunc.h"          /* CTF_TEAM_RED/BLUE for `sv sg add red|blue` */
 #include "slipgate/sg_local.h"  /* the SLIPGATE admin surface behind `sv sg` */
 #include "slipgate/sg_compound_swim_game.h"
+#include "slipgate/sg_rocketjump_game.h"
 #include "ctf_file_io.h"
 
 void SpawnLoadout_ListItems(void);
@@ -350,10 +351,21 @@ static void SVCmd_SG_f (void)
 			gi.cprintf(NULL, PRINT_HIGH,
 			    "slipgate: authenticated compound swim probe refused\n");
 	}
+	else if (Q_stricmp(sub, "rocketjump") == 0)
+	{
+		char *end = NULL;
+		long link = strtol(arg, &end, 10);
+
+		if (!*arg || !end || *end || link < 0 || link > INT_MAX ||
+		    !SG_RocketJumpGameStageAuthenticatedProbe((int)link))
+			gi.cprintf(NULL, PRINT_HIGH,
+			    "slipgate: authenticated rocketjump probe refused\n");
+	}
 	else
 		gi.cprintf(NULL, PRINT_HIGH,
 		           "usage: sv sg <add [red|blue] | list | remove [name|slot] "
-		           "| kick worst | weights [reload] | compoundswim <link>>\n");
+		           "| kick worst | weights [reload] | compoundswim <link> "
+		           "| rocketjump <link>>\n");
 }
 
 static void SVCmd_POVRecord_f(void)

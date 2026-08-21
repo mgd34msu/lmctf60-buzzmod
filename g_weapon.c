@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "slipgate/sg_rocketjump_game.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "slipgate/sg_cvars.h"
 
@@ -660,6 +661,12 @@ void fire_grenade2 (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int 
 fire_rocket
 =================
 */
+static void Rocket_Free(edict_t *ent)
+{
+	SG_RocketJumpGameProjectileFreed(ent);
+	G_FreeEdict(ent);
+}
+
 void rocket_touch (edict_t *ent, edict_t *other, cplane_t *plane, csurface_t *surf)
 {
 	vec3_t		origin;
@@ -667,10 +674,11 @@ void rocket_touch (edict_t *ent, edict_t *other, cplane_t *plane, csurface_t *su
 
 	if (other == ent->owner)
 		return;
+	SG_RocketJumpGameImpactBegin(ent, other, surf);
 
 	if (surf && (surf->flags & SURF_SKY))
 	{
-		G_FreeEdict (ent);
+		Rocket_Free(ent);
 		return;
 	}
 
@@ -699,6 +707,7 @@ void rocket_touch (edict_t *ent, edict_t *other, cplane_t *plane, csurface_t *su
 	}
 
 	T_RadiusDamage(ent, ent->owner, ent->radius_dmg, other, ent->dmg_radius, MOD_R_SPLASH);
+	SG_RocketJumpGameImpactEnd(ent);
 
 	gi.WriteByte (svc_temp_entity);
 	if (ent->waterlevel)
@@ -708,7 +717,7 @@ void rocket_touch (edict_t *ent, edict_t *other, cplane_t *plane, csurface_t *su
 	gi.WritePosition (origin);
 	gi.multicast (ent->s.origin, MULTICAST_PHS);
 
-	G_FreeEdict (ent);
+	Rocket_Free(ent);
 }
 
 void fire_rocket (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed, float damage_radius, int radius_damage)
@@ -734,7 +743,7 @@ void fire_rocket (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed
 	G_ProjectileOwnerSet(rocket, self);
 	rocket->touch = rocket_touch;
 	rocket->nextthink = level.time + 8000/speed;
-	rocket->think = G_FreeEdict;
+	rocket->think = Rocket_Free;
 	rocket->dmg = damage;
 	rocket->radius_dmg = radius_damage;
 	rocket->dmg_radius = damage_radius;
@@ -745,6 +754,7 @@ void fire_rocket (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed
 		check_dodge (self, rocket->s.origin, dir, speed);
 
 	gi.linkentity (rocket);
+	SG_RocketJumpGameFired(self, rocket);
 }
 
 

@@ -169,17 +169,6 @@ int main(void)
 	memset(&client, 0, sizeof(client));
 	memset(&cmd, 0, sizeof(cmd));
 	ent.client = &client;
-	bot.rj_phase = 1;
-	CHECK(!SG_StrikeTestRocketJumpPhase2Command(&bot, &ent, &cmd));
-	CHECK((cmd.buttons & BUTTON_ATTACK) == 0 && cmd.upmove == 0);
-	bot.rj_phase = 2;
-	bot.rj_aim[0] = 1.0f;
-	bot.rj_aim[1] = 0.0f;
-	bot.rj_aim[2] = -1.0f;
-	CHECK(SG_StrikeTestRocketJumpPhase2Command(&bot, &ent, &cmd));
-	CHECK((cmd.buttons & BUTTON_ATTACK) != 0);
-	CHECK(cmd.upmove == 400);
-	CHECK(cmd.forwardmove == 0 && cmd.sidemove == 0);
 
 	memset(&rune, 0, sizeof(rune));
 	memset(seeds, 0, sizeof(seeds));

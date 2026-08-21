@@ -108,8 +108,6 @@ qboolean SG_StrikeTestEnemyFlagTouchMissionActive(qboolean strike_pressure,
 	qboolean scoop_mission);
 qboolean SG_TestGenericRailMoveAllowed(const sg_bot_t *bot,
 	const sg_think_t *tc);
-qboolean SG_StrikeTestRocketJumpPhase2Command(const sg_bot_t *bot,
-	const edict_t *e, usercmd_t *cmd);
 #endif
 
 #endif
