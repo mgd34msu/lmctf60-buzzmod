@@ -1753,7 +1753,6 @@ void respawn (edict_t *self)
  */
 void spectator_respawn (edict_t *ent)
 {
-int i, numspec;
 //int New_Team;
 
 	// if the user wants to become a spectator, make sure he doesn't
@@ -1778,16 +1777,7 @@ int i, numspec;
 			return;
 		}
 
-		//This section here really should not need to be in because I am checking previous
-		//to this, but I am leaving it in as a precaution
-		//-bat
-
-		// count spectators
-		for (i = 1, numspec = 0; i <= maxclients->value; i++)
-			if (g_edicts[i].inuse && g_edicts[i].client->pers.spectator)
-				numspec++;
-
-		if (numspec >= maxspectators->value) {
+		if (G_SpectatorLimitBlocksAdmission(ent, false)) {
 			gi.cprintf(ent, PRINT_HIGH, "Server spectator limit is full.");
 			ent->client->pers.spectator = false;
 			// reset his spectator var
@@ -2548,8 +2538,6 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 	// check for a spectator
 	value = Info_ValueForKey (userinfo, "spectator");
 	if (deathmatch->value && *value && strcmp(value, "0")) {
-		int i, numspec;
-
 		if (*spectator_password->string && 
 			strcmp(spectator_password->string, "none") && 
 			strcmp(spectator_password->string, value)) {
@@ -2557,12 +2545,7 @@ qboolean ClientConnect (edict_t *ent, char *userinfo)
 			return false;
 		}
 
-		// count spectators
-		for (i = numspec = 0; i < maxclients->value; i++)
-			if (g_edicts[i+1].inuse && g_edicts[i+1].client->pers.spectator)
-				numspec++;
-
-		if (numspec >= maxspectators->value) {
+		if (G_SpectatorLimitBlocksAdmission(ent, false)) {
 			Info_SetValueForKey(userinfo, "rejmsg", "Server spectator limit is full.");
 			return false;
 		}

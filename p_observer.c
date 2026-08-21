@@ -2,6 +2,25 @@
 #include "g_ctffunc.h"
 #include "stdlog.h"
 
+qboolean G_SpectatorLimitBlocksAdmission(const edict_t *requester,
+	qboolean already_spectator)
+{
+	int slot;
+	int spectators = 0;
+
+	if (already_spectator)
+		return false;
+	for (slot = 1; slot <= maxclients->value; slot++)
+	{
+		const edict_t *client = &g_edicts[slot];
+
+		if (client != requester && client->inuse &&
+		    client->client->pers.spectator)
+			spectators++;
+	}
+	return spectators >= maxspectators->value;
+}
+
 
 /*
  * Observer_Start LIVES OUTSIDE the OLDOBSERVERCODE tomb. The 'new'

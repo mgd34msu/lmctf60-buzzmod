@@ -1083,12 +1083,14 @@ void POVLock_EndFrame(edict_t *ent);
 void ForceCommand(edict_t *ent, char *command);
 // LM_SURT
 void string_replace(edict_t *person, char *inmsg, char *outmsg, int outsize);
+void Observer_Start (edict_t *ent);
+qboolean G_SpectatorLimitBlocksAdmission(const edict_t *requester,
+	qboolean already_spectator);
 #ifdef OLDOBSERVERCODE
 void Camera_Start(edict_t *ent);
 void Camera_Stop(edict_t *ent);
 qboolean Camera_Think(edict_t *ent);
 void ChaseCam (edict_t *ent);
-void Observer_Start (edict_t *ent);
 #endif
 // LM_SURT
 // END LM_JORM

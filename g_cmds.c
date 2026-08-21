@@ -13,8 +13,6 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_combat.h"
 
-void Observer_Start(edict_t *e);
-
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
 void RefTogglePause(edict_t *ent);
@@ -2329,15 +2327,8 @@ void Cmd_PlayerList_f(edict_t *ent)
 
 void Cmd_Observe_f(edict_t *ent, int Observer_Type)
 {
-int i;
-int numspec;
-
-	//first check to see if the maxspectator var is set.
-	for(i = 1, numspec = 0; i <= maxclients->value; i++)
-		if(g_edicts[i].inuse && g_edicts[i].client->pers.spectator)
-			numspec++;
-
-	if (numspec >= maxspectators->value) 
+	if (G_SpectatorLimitBlocksAdmission(
+	    ent, ent->client->resp.spectator))
 	{
 		gi.cprintf(ent, PRINT_HIGH, "Server spectator limit is full.");
 		return;
