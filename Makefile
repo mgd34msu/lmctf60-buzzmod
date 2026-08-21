@@ -1480,7 +1480,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
-		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-Werror -Wpedantic -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
@@ -1489,7 +1489,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
-		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-Werror -Wpedantic -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
@@ -1505,7 +1505,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
-		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-Werror -Wpedantic -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 

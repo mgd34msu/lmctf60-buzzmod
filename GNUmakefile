@@ -1367,7 +1367,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		slipgate/sg_rocketjump_game.h slipgate/sg_rocketjump_live.h \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-Wpedantic -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
@@ -1375,7 +1375,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		slipgate/sg_rocketjump_game.h slipgate/sg_rocketjump_live.h \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-Wpedantic -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
@@ -1389,7 +1389,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 .sg_rocketjump_game_q_shared_under_test.gnu.o: q_shared.c \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-Wpedantic -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
