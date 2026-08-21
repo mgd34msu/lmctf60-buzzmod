@@ -720,12 +720,6 @@ static void Combat_CacheItems(void)
 
 /* ------------------------------------------------------------- perception */
 
-/*
- * CACO's sight gate, verbatim in behaviour: PVS, then a clear line from the
- * eyes to the target's centre against MASK_OPAQUE. sg_caco.c:100-114 holds the
- * original; it is static there, so this is a copy rather than a call. If that
- * gate ever changes, this one changes with it.
- */
 static qboolean Combat_Visible(edict_t *viewer, edict_t *target)
 {
 	vec3_t	eye, mid;

@@ -1291,10 +1291,6 @@ void SG_ChatItemSeen(edict_t *viewer, int index, qboolean up)
 	Chat_Queue(viewer, team, SG_CHAT_TOPIC_ITEM_GONE, line);
 }
 
-/*
- * The items CACO does not track. Same visibility test it uses: line from the
- * viewer's eyes to the target's centre, PVS first (sg_caco.c Caco_Visible).
- */
 static qboolean Chat_Visible(edict_t *viewer, edict_t *target)
 {
 	vec3_t	eye, mid;
