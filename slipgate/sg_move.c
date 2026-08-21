@@ -6885,6 +6885,17 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			     rune->links[record.link_index].action != RL_DOOR_DROP) ||
 			    bot->commit_link != record.link_index)
 			{
+				if (sg_cv.debug && sg_cv.debug->value > 0.0f &&
+				    sg_host.dprint)
+					sg_host.dprint("slipgate: compound guard dominance failed "
+					    "result=%d law=%d state=%d record_link=%d "
+					    "commit_link=%d action=%d keys=%u\n",
+					    guard_result, record.law, record.state,
+					    record.link_index, bot->commit_link,
+					    rune && rune->links && record.link_index >= 0 &&
+					        record.link_index < rune->hdr.num_links
+					        ? rune->links[record.link_index].action : -1,
+					    (unsigned int)record.key_count);
 				SG_DeclaredDoorTerminalDeath(bot);
 				return;
 			}
