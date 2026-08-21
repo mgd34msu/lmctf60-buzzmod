@@ -111,7 +111,7 @@ class StrikeIntegrationTest(unittest.TestCase):
                 "sg_strike_move_gate_test", [
                     "tests/sg_strike_move_gate_test.c",
                     "slipgate/sg_move.c", "slipgate/sg_feeler_probe.c",
-                    "slipgate/sg_localization.c",
+                    "slipgate/sg_defense_supply.c", "slipgate/sg_localization.c",
                     "slipgate/sg_strike.c",
                 ])
             self.assertIn("sg_strike_move_gate_test: ok", output)
@@ -488,7 +488,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrikeWeaponRouteVerdict", descend)
         self.assertIn("StrikeRailLateOverrideAllowed(bot, tc)", descend)
         self.assertIn("StrikeRailWatchdogAllowed(bot, tc)", descend)
-        self.assertIn("StrikeRailMoveAllowed(tc)", move)
+        self.assertIn("GenericRailMoveAllowed(bot, tc)", move)
         self.assertIn("memcpy(next_frame, frames", adapter)
         self.assertIn("SG_StrikeStep(&next_team[team_index]", adapter)
         self.assertIn("exactly once", header)

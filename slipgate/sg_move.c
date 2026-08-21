@@ -8,6 +8,7 @@
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_persona.h"
 #include "slipgate/sg_defense_shift.h"
+#include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
@@ -3287,11 +3288,8 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 		b[2] += 16.0f;
 		SG_PlanBeam(a, b);
 
-		/*
-		 * One more step down the same field, by the same first-order
-		 * descent the lookahead aim uses -- so the second segment is
-		 * the route the bot is about to take rather than a guess at it.
-		 */
+		/* Extend the beam through the next descending edge so it shows the
+		 * route the bot will take rather than a guessed continuation. */
 		if (route_field)
 		{
 			int li2, nv = route_field[to];
@@ -3335,10 +3333,11 @@ static void SG_DrawPlan(sg_bot_t *bot, int team, int link,
 	}
 }
 
-/* Allow generic rail movement only outside a committed strike action. */
-static qboolean StrikeRailMoveAllowed(const sg_think_t *tc)
+static qboolean GenericRailMoveAllowed(const sg_bot_t *bot, const sg_think_t *tc)
 {
-	return tc && SG_StrikeGenericRailAllowed(tc->strike_active);
+	return bot && tc && SG_StrikeGenericRailAllowed(tc->strike_active) &&
+	    SG_DefenseSupplyGenericRetryAllowed(
+	        (sg_defense_supply_phase_t)bot->def_supply_phase, bot->def_supply_armed);
 }
 
 /* Once the current live flag has passed the same-floor and player-hull trace,
@@ -4872,7 +4871,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the phantom's pmove did. Arrival, a better field value, or
 			 * the clock ends it; a timeout hands the link to the shelf.
 			 */
-			if (StrikeRailMoveAllowed(tc) &&
+			if (GenericRailMoveAllowed(bot, tc) &&
 			    bot->rail_stage > 0 && bestlink == bot->rail_link &&
 			    bestlink >= 0)
 			{
@@ -6196,9 +6195,9 @@ int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 	return SG_TerminalFieldSeed(rune, field, current_seed);
 }
 
-qboolean SG_StrikeTestRailMoveAllowed(const sg_think_t *tc)
+qboolean SG_TestGenericRailMoveAllowed(const sg_bot_t *bot, const sg_think_t *tc)
 {
-	return StrikeRailMoveAllowed(tc);
+	return GenericRailMoveAllowed(bot, tc);
 }
 
 qboolean SG_StrikeTestRocketJumpPhase2Command(const sg_bot_t *bot,

@@ -2,6 +2,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_crowd_pass.h"
+#include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_feeler_probe.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
@@ -120,9 +121,18 @@ int main(void)
 	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(true, false));
 	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(false, true));
 	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(true, true));
-	CHECK(SG_StrikeTestRailMoveAllowed(&tc));
+	CHECK(SG_TestGenericRailMoveAllowed(&bot, &tc));
 	tc.strike_active = true;
-	CHECK(!SG_StrikeTestRailMoveAllowed(&tc));
+	CHECK(!SG_TestGenericRailMoveAllowed(&bot, &tc));
+	tc.strike_active = false;
+	bot.def_supply_armed = true;
+	bot.def_supply_phase = SG_DEFENSE_SUPPLY_PHASE_OUTBOUND;
+	CHECK(!SG_TestGenericRailMoveAllowed(&bot, &tc));
+	bot.def_supply_phase = SG_DEFENSE_SUPPLY_PHASE_RETURN;
+	CHECK(!SG_TestGenericRailMoveAllowed(&bot, &tc));
+	bot.def_supply_armed = false;
+	bot.def_supply_phase = SG_DEFENSE_SUPPLY_PHASE_NONE;
+	CHECK(SG_TestGenericRailMoveAllowed(&bot, &tc));
 
 	memset(&ent, 0, sizeof(ent));
 	memset(&client, 0, sizeof(client));
