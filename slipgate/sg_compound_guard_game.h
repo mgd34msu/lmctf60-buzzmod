@@ -43,6 +43,8 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientSpawned(
 	struct edict_s *client);
 sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(
 	struct edict_s *client);
+sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnecting(
+	struct edict_s *client);
 sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnected(
 	struct edict_s *client);
 

@@ -2719,6 +2719,7 @@ void ClientDisconnect (edict_t *ent)
 			ctf_playerdropflag(ent, flag->item);
 		}
 	}
+	(void)SG_CompoundGuardGameClientDisconnecting(ent);
 	
 	if (ent->client->hook)
 	{
@@ -2726,6 +2727,7 @@ void ClientDisconnect (edict_t *ent)
 
 		G_FreeEdict (dead_hook);
 		ent->client->hook = NULL;
+		(void)SG_CompoundGuardGameBoltEvicted(ent, dead_hook);
 	}
 	
 	

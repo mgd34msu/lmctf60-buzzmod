@@ -13,6 +13,7 @@
 #include "sg_compound_guard_game.h"
 #include "sg_compound_swim_game.h"
 #include "sg_compound_drop_game.h"
+#include "sg_compound_hook_game.h"
 
 typedef struct sg_compound_guard_game_identity_s
 {
@@ -997,6 +998,48 @@ static int GameClientBlocksAnyClaim(edict_t *client, int client_key)
 	return 0;
 }
 
+static sg_compound_guard_result_t GameActionOrphan(sg_bot_t *bot,
+	int bolt_key, qboolean *handled)
+{
+	sg_mover_lease_record_t record;
+	sg_compound_guard_result_t result;
+	qboolean drop_owned;
+	qboolean hook_owned;
+
+	if (!bot)
+		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	if (handled)
+		*handled = false;
+	drop_owned = bot->compound_drop_live.guard_owned;
+	hook_owned = bot->compound_hook_live.guard_owned;
+	if (drop_owned && hook_owned)
+	{
+		GameQuarantineBot(bot);
+		return SG_COMPOUND_GUARD_HOST_ERROR;
+	}
+	if (!drop_owned && !hook_owned)
+		return SG_COMPOUND_GUARD_OK;
+	if (handled)
+		*handled = true;
+	result = drop_owned ? SG_CompoundDropGameOrphan(bot, bolt_key) :
+	                        SG_CompoundHookGameOrphan(bot);
+	if (result != SG_COMPOUND_GUARD_OK)
+	{
+		GameQuarantineBot(bot);
+		return result;
+	}
+	memset(&record, 0, sizeof(record));
+	if (SG_CompoundGuardValidate(&bot->compound_guard, &record) !=
+	        SG_COMPOUND_GUARD_OK ||
+	    record.law != SG_MOVER_LAW_COMPOUND_PREOPEN ||
+	    record.state != SG_MOVER_LEASE_ORPHAN)
+	{
+		GameQuarantineBot(bot);
+		return SG_COMPOUND_GUARD_HOST_ERROR;
+	}
+	return SG_COMPOUND_GUARD_OK;
+}
+
 sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 {
 	int bolt_key = 0;
@@ -1006,6 +1049,7 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	sg_compound_guard_result_t result;
 	qboolean claimed = false;
 	qboolean already_orphan = false;
+	qboolean action_orphaned = false;
 
 	bot = GameBotForClient(client);
 	if (!GameEdictKey(client, &client_key) ||
@@ -1034,28 +1078,13 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	    SG_COMPOUND_GUARD_RUN_TERMINAL)
 		claimed = true;
 	bolt_key = GameResolveHook(client);
-	if (bot->compound_drop_live.guard_owned)
+	result = GameActionOrphan(bot, bolt_key, &action_orphaned);
+	if (result != SG_COMPOUND_GUARD_OK)
+		return result;
+	if (action_orphaned)
 	{
-		result = SG_CompoundDropGameOrphan(bot, bolt_key);
-		if (result != SG_COMPOUND_GUARD_OK)
-		{
-			GameQuarantineBot(bot);
-			return result;
-		}
-		memset(&record, 0, sizeof(record));
-		if (SG_CompoundGuardValidate(&bot->compound_guard, &record) !=
-		        SG_COMPOUND_GUARD_OK)
-		{
-			GameQuarantineBot(bot);
-			return SG_COMPOUND_GUARD_HOST_ERROR;
-		}
-		already_orphan = record.law == SG_MOVER_LAW_COMPOUND_PREOPEN &&
-		                 record.state == SG_MOVER_LEASE_ORPHAN;
-		if (!already_orphan)
-		{
-			GameQuarantineBot(bot);
-			return SG_COMPOUND_GUARD_HOST_ERROR;
-		}
+		claimed = true;
+		already_orphan = true;
 	}
 	if (already_orphan)
 		result = SG_COMPOUND_GUARD_OK;
@@ -1074,6 +1103,27 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 		client->health = -100;
 	SG_CompoundSwimGameClientRetired(client);
 	return result;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnecting(
+	edict_t *client)
+{
+	int bolt_key;
+	int client_key;
+	sg_bot_t *bot = GameBotForClient(client);
+
+	if (!GameEdictKey(client, &client_key) ||
+	    !GameClientShape(client, client_key))
+	{
+		GameQuarantineBot(bot);
+		return bot && bot->compound_guard.attached ?
+		    SG_COMPOUND_GUARD_HOST_ERROR :
+		    SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	}
+	if (!bot || !bot->compound_guard.attached)
+		return SG_COMPOUND_GUARD_OK;
+	bolt_key = GameResolveHook(client);
+	return GameActionOrphan(bot, bolt_key, NULL);
 }
 
 void SG_CompoundGuardGameEntityFreed(edict_t *entity)

@@ -64,12 +64,18 @@ def test_death_body_respawn_and_disconnect_order() -> None:
 
     disconnect = between(client, "void ClientDisconnect", "//==============================================================")
     cancelled = disconnect.index("SG_CancelBotDelayedUses")
+    disconnecting = disconnect.index("SG_CompoundGuardGameClientDisconnecting")
     retired = disconnect.index("SG_CompoundGuardGameClientDisconnected")
+    assert cancelled < disconnecting
     assert cancelled < disconnect.index("gi.unlinkentity (ent);")
+    disconnect_hook_free = disconnect.index("G_FreeEdict (dead_hook);")
+    assert disconnecting < disconnect_hook_free < disconnect.index(
+        "ent->client->hook = NULL;", disconnect_hook_free
+    ) < disconnect.index("SG_CompoundGuardGameBoltEvicted", disconnect_hook_free)
     assert disconnect.index("gi.unlinkentity (ent);") < disconnect.index(
         "ent->solid = SOLID_NOT;"
     ) < disconnect.index("ent->inuse = false;") < retired
-    assert "SG_CompoundGuardGameBoltEvicted" not in disconnect
+    assert disconnect.count("SG_CompoundGuardGameBoltEvicted") == 1
 
     adapter = source("slipgate/sg_compound_guard_game.c")
     die_adapter = between(
