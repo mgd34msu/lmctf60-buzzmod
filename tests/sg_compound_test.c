@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "slipgate/sg_action.h"
 #include "slipgate/sg_compound.h"
 
 static int failures;
@@ -87,8 +88,16 @@ static void TestOwnershipAndDispatch(void)
 
 	SG_CompoundReset(&a);
 	SG_CompoundReset(&b);
-	for (action = RL_DOOR_DROP; action <= RL_DOOR_HOOK; action++)
-		CHECK(!SG_CompoundRuntimeReady(action));
+	for (action = 0; action < SG_ACTION_COUNT; action++)
+	{
+		int expected = SG_CompoundAction(action) &&
+			SG_ActionRuntimeSupported(action) &&
+			SG_ActionMechanismAdmitted(action);
+
+		CHECK(SG_CompoundRuntimeReady(action) == expected);
+	}
+	CHECK(!SG_CompoundRuntimeReady(RL_DOOR_DROP));
+	CHECK(!SG_CompoundRuntimeReady(RL_DOOR_HOOK));
 	CHECK(!SG_CompoundRuntimeReady(RL_DOOR));
 	CHECK(SG_CompoundSuffixAction(RL_DOOR_DROP) == RL_DROP);
 	CHECK(SG_CompoundSuffixAction(RL_DOOR_SWIM) == RL_SWIM);
