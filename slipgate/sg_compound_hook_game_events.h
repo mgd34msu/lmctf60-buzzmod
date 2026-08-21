@@ -18,12 +18,20 @@ typedef struct sg_compound_hook_game_events_s
 	qboolean release_requested;
 	qboolean abort_pending;
 	qboolean abort_recovery;
+	qboolean abort_consumed;
 	qboolean abort_receipt;
 	qboolean bolt_evicted;
 	qboolean release_applied;
 	qboolean door_passed;
 	qboolean contaminated;
 } sg_compound_hook_game_events_t;
+
+typedef enum sg_compound_hook_game_event_gate_e
+{
+	SG_COMPOUND_HOOK_GAME_EVENT_BYPASS = -1,
+	SG_COMPOUND_HOOK_GAME_EVENT_DENIED = 0,
+	SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED = 1
+} sg_compound_hook_game_event_gate_t;
 
 #define SG_COMPOUND_HOOK_GAME_EVENTS_INITIALIZER { 0 }
 
@@ -39,15 +47,18 @@ qboolean SG_CompoundHookGameTakeSafety(struct sg_bot_s *bot,
 sg_compound_hook_live_result_t SG_CompoundHookGameLinked(
 	struct edict_s *client, struct edict_s *bolt,
 	const sg_mover_subject_t *subject);
-qboolean SG_CompoundHookGameAttachWillApply(struct edict_s *bolt,
+sg_compound_hook_game_event_gate_t SG_CompoundHookGameAttachWillApply(
+	struct edict_s *bolt,
 	struct edict_s *target, const csurface_t *surface);
 sg_compound_hook_live_result_t SG_CompoundHookGameAttached(
 	struct edict_s *bolt);
 sg_compound_hook_live_result_t SG_CompoundHookGamePullApplied(
 	struct edict_s *client, struct edict_s *bolt);
-qboolean SG_CompoundHookGameReleaseRequested(struct edict_s *client,
+sg_compound_hook_game_event_gate_t SG_CompoundHookGameReleaseRequested(
+	struct edict_s *client,
 	struct edict_s *bolt);
-qboolean SG_CompoundHookGameAbortBegin(struct edict_s *client,
+sg_compound_hook_game_event_gate_t SG_CompoundHookGameAbortBegin(
+	struct edict_s *client,
 	struct edict_s *bolt);
 sg_compound_hook_live_result_t SG_CompoundHookGameAbortEnd(
 	struct edict_s *client);

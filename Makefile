@@ -589,6 +589,18 @@ COMPOUND_HOOK_GAME_TEST_BIN := sg_compound_hook_game_test.make
 COMPOUND_HOOK_GAME_TEST_OBJS := .sg_compound_hook_game_test.make.o \
 	.sg_compound_hook_game_under_test.make.o
 COMPOUND_HOOK_GAME_TEST_DEPS := $(COMPOUND_HOOK_GAME_TEST_OBJS:.o=.d)
+COMPOUND_HOOK_GAME_EVENTS_TEST_BIN := sg_compound_hook_game_events_test.make
+COMPOUND_HOOK_GAME_EVENTS_TEST_OBJS := \
+	.sg_compound_hook_game_events_test.make.o \
+	.sg_compound_hook_game_events_under_test.make.o
+COMPOUND_HOOK_GAME_EVENTS_TEST_DEPS := \
+	$(COMPOUND_HOOK_GAME_EVENTS_TEST_OBJS:.o=.d)
+COMPOUND_HOOK_GAME_EVENTS_ALL_ARTIFACTS := \
+	$(foreach flavor,gnu make,sg_compound_hook_game_events_test.$(flavor) \
+	.sg_compound_hook_game_events_test.$(flavor).o \
+	.sg_compound_hook_game_events_test.$(flavor).d \
+	.sg_compound_hook_game_events_under_test.$(flavor).o \
+	.sg_compound_hook_game_events_under_test.$(flavor).d)
 COMPOUND_HOOK_TEST_ALL_ARTIFACTS := \
 	$(foreach flavor,gnu make,sg_compound_hook_live_test.$(flavor) \
 	.sg_compound_hook_live_test.$(flavor).o \
@@ -1082,6 +1094,7 @@ OBJS := \
 	slipgate/sg_compound_hook_live.o \
 	slipgate/sg_compound_hook_live_finish.o \
 	slipgate/sg_compound_hook_game.o \
+	slipgate/sg_compound_hook_game_events.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
 	sg_swim_live.o \
@@ -1188,7 +1201,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test \
-	compound-hook-game-test rotator-sweep-test \
+	compound-hook-game-test compound-hook-game-events-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test maplist-rotation-test \
 	compound-swim-oracle-test compound-hook-oracle-test rune-door-scope-test \
 	snapshot-test clean strip FORCE
@@ -1344,6 +1357,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(COMPOUND_DROP_TRANSITION_TEST_DEPS)
 -include $(COMPOUND_HOOK_LIVE_TEST_DEPS)
 -include $(COMPOUND_HOOK_GAME_TEST_DEPS)
+-include $(COMPOUND_HOOK_GAME_EVENTS_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(HOOK_DISCIPLINE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
@@ -1600,6 +1614,12 @@ $(COMPOUND_HOOK_GAME_TEST_BIN): $(COMPOUND_HOOK_GAME_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ \
 		$(COMPOUND_HOOK_GAME_TEST_OBJS) $(LIBS)
+
+$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN): \
+		$(COMPOUND_HOOK_GAME_EVENTS_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -Wl,--gc-sections -o $@ \
+		$(COMPOUND_HOOK_GAME_EVENTS_TEST_OBJS) $(LIBS)
 
 $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -2704,6 +2724,26 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
 		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_hook_game_events_test.make.o: \
+		tests/sg_compound_hook_game_events_test.c \
+		tests/sg_compound_hook_game_events_fixture.h \
+		slipgate/sg_compound_hook_game_events.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) \
+		-DSG_COMPOUND_HOOK_GAME_EVENTS_TEST -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_game_events_under_test.make.o: \
+		slipgate/sg_compound_hook_game_events.c \
+		tests/sg_compound_hook_game_events_fixture.h \
+		slipgate/sg_compound_hook_game_events.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) \
+		-DSG_COMPOUND_HOOK_GAME_EVENTS_TEST -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_compound_hook_live_fixture.make.o: \
 		tests/sg_compound_hook_live_fixture.c \
 		tests/sg_compound_hook_live_fixture.h $(REVISION_HEADER)
@@ -3126,6 +3166,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_DROP_TRANSITION_TEST_BIN) \
 		$(COMPOUND_HOOK_LIVE_TEST_BIN) \
 		$(COMPOUND_HOOK_GAME_TEST_BIN) \
+		$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
 		$(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
@@ -3232,6 +3273,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_DROP_TRANSITION_TEST_BIN)
 	$(Q)./$(COMPOUND_HOOK_LIVE_TEST_BIN)
 	$(Q)./$(COMPOUND_HOOK_GAME_TEST_BIN)
+	$(Q)./$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN)
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
 	$(Q)./$(HOOK_DISCIPLINE_TEST_BIN)
 	$(Q)python3 $(HOOK_INTEGRATION_TEST)
@@ -3535,6 +3577,10 @@ compound-hook-game-test: $(COMPOUND_HOOK_GAME_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(COMPOUND_HOOK_GAME_TEST_BIN)
 
+compound-hook-game-events-test: $(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN)
+
 hook-live-test: $(HOOK_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(HOOK_LIVE_TEST_BIN)
@@ -3600,6 +3646,7 @@ clean:
 		$(ROCKETJUMP_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_DROP_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_HOOK_TEST_ALL_ARTIFACTS) \
+		$(COMPOUND_HOOK_GAME_EVENTS_ALL_ARTIFACTS) \
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_HOOK_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
