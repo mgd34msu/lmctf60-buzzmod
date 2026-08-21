@@ -16,14 +16,15 @@ def section(text: str, start: str, end: str) -> str:
 def main() -> None:
     descend = (ROOT / "slipgate/sg_descend.c").read_text(encoding="utf-8")
     commit = descend[descend.index("int Think_CommitLink(") :]
+    resolve = commit.index("sg_run_completion_t completion")
     handoff = commit.index("SG_RunCompletionHandoff(")
-    invalidate = commit.index("SG_RunInvalidateCompletedCandidate(")
+    retire_call = commit.index("SG_RunRetireCompletedTransaction(")
     latch = commit.index(
         "if (!defense_shift_selected && !defense_patrol_selected &&"
     )
-    assert invalidate < handoff < latch
+    assert resolve < handoff < retire_call < latch
     assert commit.count("SG_RunCompletionHandoff(") == 1
-    early = commit[invalidate:latch]
+    early = commit[resolve:latch]
     assert "completion == SG_RUN_ARRIVED" in early
     assert "bot->seed != incoming->to" in early
     assert "return -1;" in early
@@ -31,13 +32,13 @@ def main() -> None:
     transaction = section(
         descend,
         "qboolean SG_RunCompletionHandoff(",
-        "\nvoid SG_RunInvalidateCompletedCandidate(",
+        "\nvoid SG_RunRetireCompletedTransaction(",
     )
-    retire = transaction.index("SG_StagedTraversalCancel(bot, RL_RUN);")
+    cancel = transaction.index("SG_StagedTraversalCancel(bot, RL_RUN);")
     pmove = transaction.index("ClientThink(")
     validate = transaction.index("Run_HandoffBodyValid(")
     publish = transaction.index("bot->seed = completed->to;")
-    assert retire < pmove < validate < publish
+    assert cancel < pmove < validate < publish
     assert transaction.count("ClientThink(") == 1
     assert "for (step = 0; step < 4; step++)" in transaction
     assert "coast.msec = 25;" in transaction

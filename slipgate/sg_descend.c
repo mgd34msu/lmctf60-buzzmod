@@ -1370,27 +1370,28 @@ qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 	return true;
 }
 
-void SG_RunInvalidateCompletedCandidate(const rune_t *rune,
-	int completed_link, sg_run_completion_t completion, int localized_seed,
+void SG_RunRetireCompletedTransaction(const rune_t *rune,
+	int completed_link, sg_run_completion_t completion, sg_bot_t *bot,
 	int *next_link)
 {
 	const rune_link_t *completed;
 
-	if (!rune || !rune->links || !next_link ||
+	if (!rune || !rune->links || !bot || !next_link ||
 	    completion == SG_RUN_INCOMPLETE || completed_link < 0 ||
-	    completed_link >= rune->hdr.num_links)
+	    completed_link >= rune->hdr.num_links ||
+	    bot->commit_link != completed_link)
 		return;
 	completed = &rune->links[completed_link];
 	if (completed->action != RL_RUN || completed->to < 0 ||
 	    completed->to >= rune->hdr.num_seeds)
 		return;
-	/* A stale localized seed means the entire PickLink result came from the
-	 * departure fan. If localization already published the destination, retain
+	/* A stale seed invalidates the departure fan. At the destination retain
 	 * only a different, well-formed successor from that exact seed. */
-	if (localized_seed != completed->to || *next_link < 0 ||
+	if (bot->seed != completed->to || *next_link < 0 ||
 	    *next_link >= rune->hdr.num_links || *next_link == completed_link ||
 	    rune->links[*next_link].from != completed->to)
 		*next_link = -1;
+	SG_StagedTraversalCancel(bot, RL_RUN);
 }
 
 static void DefenseShiftReset(sg_bot_t *bot, qboolean reset_previous)
@@ -1986,10 +1987,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	/* PickLink ran against the frame's published seed. Resolve a completed RUN
-	 * before the latch and ribbon can record that old seed's candidate as a new
-	 * leg. A stale-seed arrival at a mechanism source consumes this frame in the
-	 * zero-input handoff and returns before any other command owner runs. */
+	/* Retire a completed RUN before latch and ribbon record stale ownership.
+	 * A stale-seed mechanism arrival consumes one zero-input handoff frame. */
 	if (bot->commit_link >= 0 && bot->commit_link < SG_Rune()->hdr.num_links)
 	{
 		rune_link_t *incoming = &SG_Rune()->links[bot->commit_link];
@@ -2000,13 +1999,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			    SG_Rune(), incoming, bot->seed, e->s.origin, goal_field);
 			int completed_link = bot->commit_link;
 
-			SG_RunInvalidateCompletedCandidate(SG_Rune(), completed_link,
-			    completion, bot->seed, &bestlink);
-			tc->bestlink = bestlink;
 			if (completion == SG_RUN_ARRIVED && bot->seed != incoming->to &&
 			    SG_RunCompletionHandoff(SG_Rune(), completed_link,
 			        completion, bot, tc, &bestlink))
 				return -1;
+			SG_RunRetireCompletedTransaction(SG_Rune(), completed_link,
+			    completion, bot, &bestlink);
+			tc->bestlink = bestlink;
 		}
 	}
 

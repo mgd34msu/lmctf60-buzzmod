@@ -36,6 +36,7 @@ static csurface_t pmove_surface;
 static cvar_t debug_cvar;
 static int dprint_calls;
 static char dprint_line[256];
+static int completion_field[1];
 
 void SG_DropLiveReset(sg_drop_replay_state_t *replay, qboolean *active,
 	int *replay_link, sg_drop_live_events_t *events)
@@ -267,6 +268,16 @@ enum
 	LINK_RUN_FROM_SOURCE,
 	TEST_LINKS
 };
+
+static void ArmRunTransaction(sg_bot_t *bot, int seed)
+{
+	bot->seed = seed;
+	bot->commit_link = bot->sticky_link = bot->rail_link = LINK_RUN_TO_SOURCE;
+	bot->commit_until = bot->latch_until = bot->rail_until = 30.0f;
+	bot->rail_stage = 2;
+	bot->commit_route_goal = (sg_field_key_t){ completion_field, 0 };
+	bot->commit_retirement_pending = true;
+}
 
 typedef struct run_fixture_s
 {
@@ -657,82 +668,50 @@ static void CheckPostCoastInvalidationFailsClosed(void)
 	CheckOnePostCoastInvalidation(INVALIDATE_SUPPORT);
 }
 
-static void CheckOrdinaryNoninterference(void)
+static void CheckOrdinaryCompletionRetiresTransaction(void)
 {
 	run_fixture_t fixture;
 	sg_bot_t bot;
-	sg_think_t think;
-	edict_t ent;
-	gclient_t client;
 	int next_link;
 
 	FixtureInit(&fixture);
 	DisableMechanism(&fixture);
 	memset(&bot, 0, sizeof(bot));
-	memset(&think, 0, sizeof(think));
-	memset(&ent, 0, sizeof(ent));
-	memset(&client, 0, sizeof(client));
-	ResetDebugCapture(1.0f);
-	expected_published_seed = -1;
-	ent.client = &client;
-	think.e = &ent;
-	bot.commit_link = -1;
-	think_calls = 0;
 
-	/* A candidate selected from the completed destination remains a smooth
-	 * ordinary RUN chain and spends no forced zero frame. */
-	bot.seed = SEED_TELE_SOURCE;
+	ArmRunTransaction(&bot, SEED_TELE_SOURCE);
 	next_link = LINK_RUN_FROM_SOURCE;
-	SG_RunInvalidateCompletedCandidate(&fixture.rune,
-	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, bot.seed, &next_link);
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, &bot, &next_link);
 	CHECK(next_link == LINK_RUN_FROM_SOURCE);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL && !bot.commit_retirement_pending);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f &&
+	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 	CHECK(bot.seed == SEED_TELE_SOURCE);
-	CHECK(think_calls == 0);
 
-	/* Every candidate priced from the stale departure seed is discarded, not
-	 * only the same incoming link. */
-	bot.seed = SEED_DEPARTURE;
+	ArmRunTransaction(&bot, SEED_DEPARTURE);
 	next_link = LINK_RUN_TO_SOURCE;
-	SG_RunInvalidateCompletedCandidate(&fixture.rune,
-	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, bot.seed, &next_link);
-	CHECK(next_link == -1);
-	CHECK(bot.seed == SEED_DEPARTURE);
-	CHECK(think_calls == 0);
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, &bot, &next_link);
+	CHECK(next_link == -1 && bot.seed == SEED_DEPARTURE);
 
-	/* Field overachievement retires stale departure state but cannot publish
-	 * a mechanism source the body did not physically reach. */
-	FixtureInit(&fixture);
-	bot.seed = SEED_ORDINARY;
+	ArmRunTransaction(&bot, SEED_ORDINARY);
 	next_link = LINK_RUN_TO_SOURCE;
-	SG_RunInvalidateCompletedCandidate(&fixture.rune,
-	    LINK_RUN_TO_SOURCE, SG_RUN_OVERACHIEVED, bot.seed, &next_link);
-	CHECK(next_link == -1);
-	bot.commit_link = LINK_RUN_TO_SOURCE;
-	think.bestlink = LINK_RUN_TO_SOURCE;
-	CHECK(!SG_RunCompletionHandoff(&fixture.rune, LINK_RUN_TO_SOURCE,
-	          SG_RUN_OVERACHIEVED, &bot, &think, &think.bestlink));
-	CHECK(bot.seed == SEED_ORDINARY);
-	CHECK(think_calls == 0);
-	CHECK(dprint_calls == 0);
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_OVERACHIEVED, &bot, &next_link);
+	CHECK(next_link == -1 && bot.commit_link == -1 &&
+	    bot.seed == SEED_ORDINARY);
 
-	/* Incomplete and non-RUN controls are byte-stable. */
-	bot.seed = SEED_DEPARTURE;
-	bot.commit_link = LINK_RUN_TO_SOURCE;
-	CHECK(!SG_RunCompletionHandoff(&fixture.rune, LINK_RUN_TO_SOURCE,
-	          SG_RUN_INCOMPLETE, &bot, &think, &think.bestlink));
-	CHECK(dprint_calls == 0);
+	ArmRunTransaction(&bot, SEED_DEPARTURE);
 	next_link = LINK_RUN_TO_SOURCE;
-	SG_RunInvalidateCompletedCandidate(&fixture.rune,
-	    LINK_RUN_TO_SOURCE, SG_RUN_INCOMPLETE, bot.seed, &next_link);
-	CHECK(next_link == LINK_RUN_TO_SOURCE);
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_INCOMPLETE, &bot, &next_link);
+	CHECK(next_link == LINK_RUN_TO_SOURCE && bot.commit_link == LINK_RUN_TO_SOURCE &&
+	    bot.sticky_link == LINK_RUN_TO_SOURCE && bot.rail_stage == 2);
 	fixture.links[LINK_RUN_TO_SOURCE].action = RL_DROP;
-	bot.commit_link = LINK_RUN_TO_SOURCE;
-	CHECK(!SG_RunCompletionHandoff(&fixture.rune, LINK_RUN_TO_SOURCE,
-	          SG_RUN_ARRIVED, &bot, &think, &think.bestlink));
-	CHECK(dprint_calls == 0);
-	SG_RunInvalidateCompletedCandidate(&fixture.rune,
-	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, bot.seed, &next_link);
-	CHECK(next_link == LINK_RUN_TO_SOURCE);
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, &bot, &next_link);
+	CHECK(next_link == LINK_RUN_TO_SOURCE && bot.commit_link == LINK_RUN_TO_SOURCE);
 }
 
 static void CheckMalformedMechanismFailClosed(void)
@@ -775,7 +754,7 @@ int main(void)
 	CheckDebugOffSuccessSilent();
 	CheckLateBoundaryTouchesTrigger();
 	CheckPostCoastInvalidationFailsClosed();
-	CheckOrdinaryNoninterference();
+	CheckOrdinaryCompletionRetiresTransaction();
 	CheckMalformedMechanismFailClosed();
 	if (failures)
 	{

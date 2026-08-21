@@ -39,8 +39,8 @@ sg_run_completion_t SG_RunCommitCompletion(const rune_t *rune,
 qboolean SG_RunMechanismPlanCandidateValid(const rune_t *rune, int seed,
 	int link_index);
 qboolean SG_RunHasMechanismSuccessor(const rune_t *rune, int seed);
-void SG_RunInvalidateCompletedCandidate(const rune_t *rune,
-	int completed_link, sg_run_completion_t completion, int localized_seed,
+void SG_RunRetireCompletedTransaction(const rune_t *rune,
+	int completed_link, sg_run_completion_t completion, sg_bot_t *bot,
 	int *next_link);
 qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 	sg_run_completion_t completion, sg_bot_t *bot, sg_think_t *tc,
