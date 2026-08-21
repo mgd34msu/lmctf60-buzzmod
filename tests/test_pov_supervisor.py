@@ -32,6 +32,7 @@ FAKE_SOURCE = r'''
 #define FLUSH() fflush(stdout)
 #endif
 static void ms(long n){struct timespec t={n/1000,(n%1000)*1000000};while(nanosleep(&t,&t)<0&&errno==EINTR){}}
+static const char *base(const char *p){const char *s=strrchr(p,'/');return s?s+1:p;}
 static int inventory(void){DIR*d=opendir("/proc/self/fd");struct dirent*e;int bad=0;if(!d)return 2;while((e=readdir(d))){char*x;long n=strtol(e->d_name,&x,10);if(*e->d_name&&!*x&&n>2&&n!=dirfd(d))bad=1;}closedir(d);puts(bad?"fd-inventory=bad":"fd-inventory=0,1,2");FLUSH();return bad;}
 static const char *arg_after(int ac,char**av,const char*w){for(int i=1;i+1<ac;i++)if(!strcmp(av[i],w))return av[i+1];return NULL;}
 #if !defined(ZERO_DEMO) || defined(REPLACE_CONFIG)
@@ -42,7 +43,7 @@ static void replace_config(int ac,char**av){const char*game=arg_after(ac,av,"gam
 static void emit_replacement(int ac,char**av){const char*cfg=arg_after(ac,av,"+exec");const char*game=arg_after(ac,av,"game");char path[8192],line[256];FILE*f;if(!cfg||!game||snprintf(path,sizeof(path),"%s/%s",game,cfg)>=(int)sizeof(path))return;f=fopen(path,"r");if(!f)return;while(fgets(line,sizeof(line),f)){printf("command=%s",line);FLUSH();}fclose(f);}
 #endif
 int main(int ac,char**av){
-  if(!strcmp(av[0],"q2ded")){
+  if(!strcmp(base(av[0]),"q2ded")){
 #ifdef REPLACE_CONFIG
     replace_config(ac,av);
 #endif
@@ -340,12 +341,16 @@ class SupervisorTest(unittest.TestCase):
             if line and not line.startswith("#"):
                 (maps / f"{line}.rune").write_bytes(b"rune")
                 (maps / f"{line}.snag").write_bytes(b"snag")
+        for module in ("game.so", "gamex86_64.so"):
+            (self.game / module).write_bytes(b"exact-module")
         shutil.copy2(self.supervisor, tools / "pov-supervisor")
         (tools / "gamestat.sh").write_text("#!/bin/bash\nexit 0\n")
         (tools / "gamestat.sh").chmod(0o700)
+        q2ded = self.root / "q2ded"
+        shutil.copy2(self.fake, q2ded)
         (self.game / "test.cfg").write_text("set baseline 1\n")
         env = {
-            "HOME": str(self.root), "Q2DED": str(self.fake),
+            "HOME": str(self.root), "Q2DED": str(q2ded),
             "YAMAGI_CLIENT": str(self.fake), "GAMEDIR_ROOT": str(self.game_root),
             "GAME": "testgame", "CFG": "test.cfg", "PORT_BASE": "28520",
             "POV_ENABLE": "1", "POV_FINALIZE_DELAY": "1",
