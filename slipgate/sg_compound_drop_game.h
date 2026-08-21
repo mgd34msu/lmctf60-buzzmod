@@ -13,6 +13,7 @@ qboolean SG_CompoundDropGamePose(const struct edict_s *entity,
 	sg_replay_pose_t *pose_out);
 qboolean SG_CompoundDropGameObservation(struct sg_bot_s *bot,
 	const struct edict_s *entity, sg_replay_observation_t *observation_out);
+int SG_CompoundDropGameStageAuthenticatedProbe(int link_index);
 
 /* -1 means this callback does not belong to an active D_DROP transaction. */
 int SG_CompoundDropGameAuthorizeTouch(struct sg_bot_s *bot,

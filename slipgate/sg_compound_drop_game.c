@@ -6,6 +6,7 @@
 
 #include "sg_compound_drop_game.h"
 #include "sg_compound_guard.h"
+#include "sg_cvars.h"
 #include "sg_hooks.h"
 #include "sg_local.h"
 #include "sg_bot.h"
@@ -271,6 +272,13 @@ static sg_compound_drop_live_host_result_t CompoundDropGameProve(
 	proof_out->arrival_ms = proof.arrival_ms;
 	proof_out->sweep_clear_ms = proof.sweep_clear_ms;
 	proof_out->exit_speed = proof.exit_speed;
+	if (sg_cv.debug && sg_cv.debug->value > 0.0f && sg_host.dprint)
+		sg_host.dprint("slipgate: ddrop suffix-proved bot=%d link=%u "
+		               "arrival_ms=%d clear_ms=%d origin=(%.3f %.3f %.3f)\n",
+		               (int)((sg_bot_t *)context - sg_bots),
+		               snapshot->binding.link_index, proof.arrival_ms,
+		               proof.sweep_clear_ms, pose->origin[0], pose->origin[1],
+		               pose->origin[2]);
 	return SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED;
 }
 
@@ -282,9 +290,14 @@ static sg_compound_drop_live_host_result_t CompoundDropGameRelease(
 
 	if (!CompoundDropGameCurrent(bot, snapshot, &current))
 		return SG_COMPOUND_DROP_LIVE_HOST_ERROR;
-	return SG_CompoundGuardReleaseProvedClear(&bot->compound_guard) ==
-	       SG_COMPOUND_GUARD_OK ? SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED :
-	                              SG_COMPOUND_DROP_LIVE_HOST_DENIED;
+	if (SG_CompoundGuardReleaseProvedClear(&bot->compound_guard) !=
+	    SG_COMPOUND_GUARD_OK)
+		return SG_COMPOUND_DROP_LIVE_HOST_DENIED;
+	if (sg_cv.debug && sg_cv.debug->value > 0.0f && sg_host.dprint)
+		sg_host.dprint("slipgate: ddrop released bot=%d link=%u frame=%d\n",
+		               (int)(bot - sg_bots), snapshot->binding.link_index,
+		               level.framenum);
+	return SG_COMPOUND_DROP_LIVE_HOST_ACCEPTED;
 }
 
 static sg_compound_drop_live_host_result_t CompoundDropGameOrphanHost(
@@ -376,6 +389,98 @@ qboolean SG_CompoundDropGamePose(const edict_t *entity,
 	return true;
 }
 
+int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
+{
+	rune_t *rune = SG_Rune();
+	const sg_compound_publication_binding_t *binding;
+	const sg_compound_world_preopen_t *mechanism;
+	sg_bot_t *bot = NULL;
+	edict_t *entity;
+	sg_compound_drop_live_host_t host;
+	sg_compound_drop_live_result_t result;
+	sg_replay_pose_t pose;
+	vec3_t staged_origin;
+	int axis, slot;
+
+	if (!sg_cv.debug || sg_cv.debug->value <= 0.0f || !rune ||
+	    !SG_RunePhysicsCompatible(rune) ||
+	    link_index < 0 || link_index >= rune->hdr.num_links ||
+	    !(binding = SG_CompoundPublicationBinding(rune,
+	        (uint32_t)link_index)) || binding->link.action != RL_DOOR_DROP ||
+	    !(mechanism = SG_CompoundPublicationMechanism(rune, binding)) ||
+	    mechanism->trigger_key <= 0 || mechanism->mover_key <= 0)
+		return false;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+	{
+		sg_compound_guard_result_t guard_result;
+
+		if (!sg_bots[slot].active || !sg_bots[slot].ent ||
+		    !sg_bots[slot].ent->inuse || !sg_bots[slot].ent->client ||
+		    sg_bots[slot].ent->deadflag != DEAD_NO ||
+		    sg_bots[slot].ent->health <= 0 ||
+		    sg_bots[slot].compound_drop_live.guard_owned)
+			continue;
+		guard_result = SG_CompoundGuardValidate(
+		    &sg_bots[slot].compound_guard, NULL);
+		if (guard_result == SG_COMPOUND_GUARD_NO_LEASE ||
+		    guard_result == SG_COMPOUND_GUARD_NOT_ATTACHED)
+		{
+			bot = &sg_bots[slot];
+			break;
+		}
+	}
+	if (!bot || !gi.unlinkentity || !sg_host.linkentity)
+		return false;
+	entity = bot->ent;
+	gi.unlinkentity(entity);
+	entity->client->ps.pmove = binding->source.pms;
+	entity->client->old_pmove = binding->source.old_pms;
+	for (axis = 0; axis < 3; axis++)
+	{
+		entity->s.origin[axis] = binding->source_seed.origin[axis];
+		entity->s.old_origin[axis] = binding->source_seed.origin[axis];
+		entity->velocity[axis] = binding->source.pms.velocity[axis] * 0.125f;
+	}
+	VectorClear(entity->client->oldvelocity);
+	entity->client->oldvelocity[2] = binding->source.old_frame_z;
+	entity->groundentity = binding->source.grounded ? g_edicts : NULL;
+	entity->groundentity_linkcount = entity->groundentity
+	    ? entity->groundentity->linkcount : 0;
+	entity->waterlevel = binding->source.waterlevel;
+	entity->watertype = binding->source.watertype;
+	memset(&bot->compound_drop_live, 0, sizeof(bot->compound_drop_live));
+	bot->compound_drop_live.drop_link = -1;
+	bot->seed = binding->link.from;
+	VectorCopy(entity->s.origin, bot->last_origin);
+	bot->commit_link = link_index;
+	bot->sticky_link = link_index;
+	bot->commit_until = level.time + 5.0f;
+	bot->latch_until = level.time + 5.0f;
+	VectorCopy(entity->s.origin, staged_origin);
+	sg_host.linkentity(entity);
+	if (!SG_CompoundDropGameHost(bot, &host) ||
+	    !SG_CompoundDropGamePose(entity, &pose))
+		return false;
+	result = SG_CompoundDropLiveBegin(&bot->compound_drop_live, &host,
+	    (uint32_t)link_index, &pose);
+	if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING ||
+	    !bot->compound_drop_live.guard_owned)
+	{
+		bot->commit_link = -1;
+		bot->sticky_link = -1;
+		return false;
+	}
+	if (sg_host.dprint)
+		sg_host.dprint("slipgate: ddrop probe-staged bot=%d link=%d "
+		               "source=(%.3f %.3f %.3f) destination=(%.3f %.3f %.3f)\n",
+		               slot, link_index, staged_origin[0], staged_origin[1],
+		               staged_origin[2],
+		               binding->destination_seed.origin[0],
+		               binding->destination_seed.origin[1],
+		               binding->destination_seed.origin[2]);
+	return true;
+}
+
 static qboolean CompoundDropGameContact(const sg_bot_t *bot,
 	const edict_t *entity, qboolean recovery)
 {
@@ -451,6 +556,12 @@ int SG_CompoundDropGameAuthorizeTouch(sg_bot_t *bot, edict_t *source,
 		return 0;
 	result = SG_CompoundDropLiveAuthorizeTouch(&bot->compound_drop_live,
 	    &host, source->s.number, &pose, frame_serial);
+	if (sg_cv.debug && sg_cv.debug->value > 0.0f && sg_host.dprint)
+		sg_host.dprint("slipgate: ddrop touch bot=%d link=%u frame=%d "
+		               "phase=%d outcome=%d\n", (int)(bot - sg_bots),
+		               bot->compound_drop_live.snapshot.binding.link_index,
+		               frame_serial, bot->compound_drop_live.outer.phase,
+		               result.outcome);
 	return result.outcome == SG_COMPOUND_DROP_LIVE_RUNNING;
 }
 
@@ -474,6 +585,12 @@ int SG_CompoundDropGameAuthorizeActivation(sg_bot_t *bot, edict_t *source,
 	result = SG_CompoundDropLiveAuthorizeActivation(
 	    &bot->compound_drop_live, &host, source->s.number,
 	    door_master->s.number, frame_serial);
+	if (sg_cv.debug && sg_cv.debug->value > 0.0f && sg_host.dprint)
+		sg_host.dprint("slipgate: ddrop activated bot=%d link=%u frame=%d "
+		               "phase=%d outcome=%d\n", (int)(bot - sg_bots),
+		               bot->compound_drop_live.snapshot.binding.link_index,
+		               frame_serial, bot->compound_drop_live.outer.phase,
+		               result.outcome);
 	return result.outcome == SG_COMPOUND_DROP_LIVE_RUNNING;
 }
 
