@@ -21,7 +21,7 @@
     "matched_parent_rule": "baseline and candidate use the same declared clean parent commit; baseline patch is empty and candidate patch is nonempty",
     "baseline_source_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "policy_probe_path": "tests/test_offense_flag_pickup_recovery.py",
-    "policy_probe_sha256": "909ca3c410ff840480478be11c6b7ee34bfa4065335eb86d4052f1d5bd0df5d5",
+    "policy_probe_sha256": "2ee56f0c273409abffe11a55a8b8291b5c29f37f78d0d86c6f3831c64b22ac7a",
     "build_recipe": "gnu-make-stage-a-v2",
     "build_year": "2026",
     "build_authority_paths": ["GNUmakefile", "GitRevisionInfo.tmpl"],
