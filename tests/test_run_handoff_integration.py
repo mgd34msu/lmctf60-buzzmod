@@ -33,7 +33,7 @@ def main() -> None:
         "qboolean SG_RunCompletionHandoff(",
         "\nvoid SG_RunInvalidateCompletedCandidate(",
     )
-    retire = transaction.index("bot->commit_link = -1;")
+    retire = transaction.index("SG_StagedTraversalCancel(bot, RL_RUN);")
     pmove = transaction.index("ClientThink(")
     validate = transaction.index("Run_HandoffBodyValid(")
     publish = transaction.index("bot->seed = completed->to;")

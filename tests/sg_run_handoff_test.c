@@ -1,4 +1,3 @@
-/* Focused production-linked regression for ordinary RUN -> mechanism handoff. */
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -13,6 +12,8 @@
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_route_dither.h"
+
+#include "slipgate/sg_traversal_transition.c"
 
 level_locals_t level;
 sg_cvars_t sg_cv;
@@ -35,6 +36,34 @@ static csurface_t pmove_surface;
 static cvar_t debug_cvar;
 static int dprint_calls;
 static char dprint_line[256];
+
+void SG_DropLiveReset(sg_drop_replay_state_t *replay, qboolean *active,
+	int *replay_link, sg_drop_live_events_t *events)
+{
+	(void)replay;
+	(void)active;
+	(void)replay_link;
+	(void)events;
+	abort();
+}
+
+void SG_SwimLiveReset(sg_swim_replay_state_t *replay, qboolean *active,
+	int *replay_link, qboolean *validated, int *proved_ms, int *elapsed_ms)
+{
+	(void)replay;
+	(void)active;
+	(void)replay_link;
+	(void)validated;
+	(void)proved_ms;
+	(void)elapsed_ms;
+	abort();
+}
+
+void SG_ButtonExecutionActionReset(sg_bot_t *bot)
+{
+	(void)bot;
+	abort();
+}
 
 void Pmove(pmove_t *pmove);
 
@@ -406,7 +435,11 @@ static void CheckHighSpeedTeleportHandoff(void)
 	PreparePmoveBody(&ent, &client, origin, velocity);
 	bot.seed = SEED_DEPARTURE;
 	bot.prev_seed = -1;
-	bot.commit_link = LINK_RUN_TO_SOURCE;
+	bot.commit_link = bot.sticky_link = bot.rail_link = LINK_RUN_TO_SOURCE;
+	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 2;
+	bot.commit_route_goal = (sg_field_key_t){ field, SEED_TELE_SOURCE };
+	bot.commit_retirement_pending = true;
 	think.e = &ent;
 	think.bestlink = next_link;
 	think.cmd.forwardmove = 400;
@@ -444,7 +477,11 @@ static void CheckHighSpeedTeleportHandoff(void)
 	CHECK(think.bestlink == -1);
 	CHECK(think.think_over);
 	CHECK(memcmp(&think.cmd, &zero, sizeof(zero)) == 0);
-	CHECK(bot.commit_link == -1);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
+	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+	CHECK(!bot.commit_retirement_pending);
 	CHECK(bot.seed == SEED_TELE_SOURCE);
 	CHECK(bot.prev_seed == SEED_DEPARTURE);
 	CHECK(bot.prev_seed_time == level.time);

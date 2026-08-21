@@ -1334,8 +1334,7 @@ qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 	 * and the incoming RUN before the first Pmove can execute a trigger touch. */
 	*next_link = -1;
 	tc->bestlink = -1;
-	bot->commit_link = -1;
-	bot->commit_until = 0.0f;
+	SG_StagedTraversalCancel(bot, RL_RUN);
 	memset(&tc->cmd, 0, sizeof(tc->cmd));
 	memset(&coast, 0, sizeof(coast));
 	coast.msec = 25;
