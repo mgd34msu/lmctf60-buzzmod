@@ -47,7 +47,7 @@ int main(int ac,char**av){
 #ifdef REPLACE_CONFIG
     replace_config(ac,av);
 #endif
-    char line[256];inventory();
+    char line[256],spectator[16]={0};inventory();
 #ifdef EXIT_EARLY
     if(fgets(line,sizeof(line),stdin)){close(0);for(;;)pause();}
 #endif
@@ -56,8 +56,11 @@ int main(int ac,char**av){
 #endif
     while(fgets(line,sizeof(line),stdin)){
       printf("command=%s",line);FLUSH();
-      if(!strncmp(line,"serverrecord ",13)){puts("pov_s03 entered the game");FLUSH();}
-      else if(!strncmp(line,"sv povrecord pov_s03 ",21)){puts("directive accepted");FLUSH();}
+      if(!strncmp(line,"serverrecord ",13)){
+        const char*server=strrchr(line,'-');
+        if(server&&strlen(server)>=4){snprintf(spectator,sizeof(spectator),"pov_%.3s",server+1);printf("%s entered the game\n",spectator);FLUSH();}
+      }
+      else if(*spectator&&!strncmp(line,"sv povrecord ",13)&&!strncmp(line+13,spectator,strlen(spectator))&&line[13+strlen(spectator)]==' '){puts("directive accepted");FLUSH();}
       else if(!strcmp(line,"quit\n")){
 #ifdef BAD_EXIT
         return 9;
@@ -72,7 +75,8 @@ int main(int ac,char**av){
   if(!strcmp(av[0],"quake2")&&!arg_after(ac,av,"basedir"))return 6;
   puts("STARTED");puts("povready");
 #ifdef YAMAGI_READY
-  puts("pov_s03 entered the game");
+  const char*name=arg_after(ac,av,"name");
+  if(name)printf("%s entered the game\n",name);
 #else
   puts("Serverdata packet received.");puts("Server active.");
 #endif
@@ -163,13 +167,14 @@ class SupervisorTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def command(self, *, q2=None, client=None, duration=1):
+    def command(self, *, q2=None, client=None, duration=1, server="s03", spectator=None):
+        spectator = spectator or f"pov_{server}"
         return [str(self.supervisor), "--q2ded", str(q2 or self.fake),
                 "--client", str(client or self.fake), "--gamedir-root", str(self.game_root),
                 "--game", "testgame", "--config", str(self.config),
                 "--normal-log", str(self.lanes / "normal.log"), "--lane-root", str(self.lanes),
-                "--wave", "42", "--server", "s03", "--map", "testmap", "--port", "28522",
-                "--spectator", "pov_s03", "--target", "[SG]Arach", "--duration", str(duration),
+                "--wave", "42", "--server", server, "--map", "testmap", "--port", "28522",
+                "--spectator", spectator, "--target", "[SG]Arach", "--duration", str(duration),
                 "--stagger", "0", "--finalize-delay", "1", "--ready-timeout", "3",
                 "--supervisor-fd", "4", "--iterate-fd", "3", "--parent-pid", str(os.getpid()),
                 "--parent-start", str(start_ticks(os.getpid()))]
@@ -222,6 +227,25 @@ class SupervisorTest(unittest.TestCase):
         manifest = (lane / "manifest.txt").read_text()
         self.assertIn("status=published\n", manifest)
         self.assertIn("waveloop_sha256=not-provided\n", manifest)
+
+    def test_configured_s08_identity_names_every_output(self):
+        result = self.invoke(server="s08")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lane = self.lane()
+        self.assertTrue(lane.name.startswith("pov-42-s08."), lane.name)
+        manifest = (lane / "manifest.txt").read_text()
+        self.assertIn("server=s08\n", manifest)
+        server_log = (lane / "server.log").read_text()
+        self.assertIn("command=serverrecord wave42-s08\n", server_log)
+        self.assertIn("command=sv povrecord pov_s08 [SG]Arach\n", server_log)
+        self.assertIn("command=sv povrecord off pov_s08\n", server_log)
+
+    def test_server_and_spectator_identity_must_match_the_ten_lanes(self):
+        for server, spectator in (("s00", "pov_s00"), ("s11", "pov_s11"),
+                                  ("s8", "pov_s8"), ("s08", "pov_s03")):
+            with self.subTest(server=server, spectator=spectator):
+                result = self.invoke(server=server, spectator=spectator)
+                self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_config_rename_cannot_change_pinned_commands(self):
         result = self.invoke(q2=self.replacement)
@@ -353,7 +377,7 @@ class SupervisorTest(unittest.TestCase):
             "HOME": str(self.root), "Q2DED": str(q2ded),
             "YAMAGI_CLIENT": str(self.fake), "GAMEDIR_ROOT": str(self.game_root),
             "GAME": "testgame", "CFG": "test.cfg", "PORT_BASE": "28520",
-            "POV_ENABLE": "1", "POV_FINALIZE_DELAY": "1",
+            "POV_ENABLE": "1", "POV_FINALIZE_DELAY": "1", "POV_LANE": "8",
         }
         result = subprocess.run(
             ["/bin/bash", "--noprofile", "--norc", str(script), "pipeline"],
