@@ -99,6 +99,11 @@ rune_t *SG_Rune(void)
 	return &rune_fixture;
 }
 
+int SG_CompoundSwimGameOwns(const sg_bot_t *bot)
+{
+	return bot && bot->compound_swim.guard_owned;
+}
+
 qboolean SG_ImmutableSupport(edict_t *entity)
 {
 	return entity == &edicts[0];
@@ -316,12 +321,55 @@ static void TestCommandFailureResetsAdapter(void)
 
 static void TestAuthenticatedStaging(void)
 {
+	sg_bot_t bot_before;
+	edict_t entity_before;
+	gclient_t client_before;
+
 	ResetFixture();
 	links[0].action = RL_RUN;
 	callback_enabled = 1;
 	CHECK(!SG_RocketJumpGameStageAuthenticatedProbe(TEST_LINK));
 	CHECK(sg_bots[0].rocketjump.phase == SG_ROCKETJUMP_IDLE);
 	links[0].action = RL_ROCKETJUMP;
+
+	sg_bots[0].compound_swim.guard_owned = true;
+	bot_before = sg_bots[0];
+	entity_before = edicts[BOT_EDICT];
+	client_before = clients[0];
+	CHECK(!SG_RocketJumpGameStageAuthenticatedProbe(TEST_LINK));
+	CHECK(!memcmp(&bot_before, &sg_bots[0], sizeof(bot_before)));
+	CHECK(!memcmp(&entity_before, &edicts[BOT_EDICT],
+	    sizeof(entity_before)));
+	CHECK(!memcmp(&client_before, &clients[0], sizeof(client_before)));
+	CHECK(!callback_sent);
+
+	sg_bots[0].compound_swim.guard_owned = false;
+	sg_bots[0].compound_guard.ticket.epoch = 1U;
+	sg_bots[0].compound_guard.ticket.serial = 1U;
+	bot_before = sg_bots[0];
+	entity_before = edicts[BOT_EDICT];
+	client_before = clients[0];
+	CHECK(!SG_RocketJumpGameStageAuthenticatedProbe(TEST_LINK));
+	CHECK(!memcmp(&bot_before, &sg_bots[0], sizeof(bot_before)));
+	CHECK(!memcmp(&entity_before, &edicts[BOT_EDICT],
+	    sizeof(entity_before)));
+	CHECK(!memcmp(&client_before, &clients[0], sizeof(client_before)));
+	CHECK(!callback_sent);
+
+	memset(&sg_bots[0].compound_guard.ticket, 0,
+	    sizeof(sg_bots[0].compound_guard.ticket));
+	sg_bots[0].hook_phase = 2;
+	bot_before = sg_bots[0];
+	entity_before = edicts[BOT_EDICT];
+	client_before = clients[0];
+	CHECK(!SG_RocketJumpGameStageAuthenticatedProbe(TEST_LINK));
+	CHECK(!memcmp(&bot_before, &sg_bots[0], sizeof(bot_before)));
+	CHECK(!memcmp(&entity_before, &edicts[BOT_EDICT],
+	    sizeof(entity_before)));
+	CHECK(!memcmp(&client_before, &clients[0], sizeof(client_before)));
+	CHECK(!callback_sent);
+
+	sg_bots[0].hook_phase = 0;
 	CHECK(SG_RocketJumpGameStageAuthenticatedProbe(TEST_LINK));
 	CHECK(sg_bots[0].rocketjump.phase == SG_ROCKETJUMP_FLIGHT);
 }

@@ -1,6 +1,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rocketjump_game.h"
@@ -23,6 +24,26 @@ static sg_bot_t *RocketJumpBotForEntity(const edict_t *entity)
 		if (sg_bots[slot].active && sg_bots[slot].ent == entity)
 			return &sg_bots[slot];
 	return NULL;
+}
+
+static qboolean RocketJumpStageBotIdle(const sg_bot_t *bot)
+{
+	const sg_mover_ticket_t *ticket;
+
+	if (!bot || SG_CompoundSwimGameOwns(bot))
+		return false;
+	ticket = &bot->compound_guard.ticket;
+	if (ticket->epoch != 0U || ticket->serial != 0U)
+		return false;
+	if (bot->hook_phase >= 2 ||
+	    SG_RocketJumpPhasePhysical(bot->rocketjump.phase) ||
+	    bot->jump_started || bot->drop_started ||
+	    bot->drop_replay_active || bot->swim_replay_active ||
+	    bot->swim_validated || bot->declared_touched ||
+	    bot->declared_triggered || bot->declared_activated ||
+	    bot->declared_guard_paused)
+		return false;
+	return true;
 }
 
 static qboolean RocketJumpQ8(float value, short *fixed_out)
@@ -349,7 +370,8 @@ int SG_RocketJumpGameStageAuthenticatedProbe(int link_index)
 	for (slot = 0; slot < SG_MAXBOTS; slot++)
 		if (sg_bots[slot].active && sg_bots[slot].ent &&
 		    sg_bots[slot].ent->inuse && sg_bots[slot].ent->client &&
-		    sg_bots[slot].ent->deadflag == DEAD_NO)
+		    sg_bots[slot].ent->deadflag == DEAD_NO &&
+		    RocketJumpStageBotIdle(&sg_bots[slot]))
 		{
 			bot = &sg_bots[slot];
 			break;
