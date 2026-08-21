@@ -13,12 +13,58 @@ import hookevents
 GAMESTAT = ROOT / "tools" / "gamestat.sh"
 ROLESTAT = ROOT / "tools" / "rolestat.py"
 
-CURRENT_ROWS = """\
-SG [SG]Arach: role=1 seed=1 goal=9000 sgoal=1000 spd=120 org=(0 0 0) link=1 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0
-SG [SG]Caco: role=0 seed=2 goal=12000 sgoal=7000 spd=300 org=(1000 0 0) link=2 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0
-SG [SG]Rune: role=2 seed=3 goal=5000 sgoal=4000 spd=250 org=(0 0 0) link=3 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0
-SG [SG]Slip: role=4 seed=4 goal=4500 sgoal=3500 spd=200 org=(600 0 0) link=4 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0
-"""
+CURRENT_ROWS = (
+    "[SG]Arach is now on the red team.\n"
+    "[SG]Caco is now on the red team.\n"
+    "[SG]Rune is now on the blue team.\n"
+    "[SG]Slip is now on the blue team.\n"
+    "[SG]Vore is now on the red team.\n"
+    "[SG]Field is now on the red team.\n"
+    "[SG]Gate is now on the blue team.\n"
+    "HOOKFIRE id=1 bot=Arach kind=graph link=3 role=0 map=test anchor_q8=0,0,0\n"
+    "SG [SG]Arach: role=1 seed=1 goal=9000 sgoal=1000 spd=120 org=(0 0 0) "
+    "link=1 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=100\n"
+    "SG [SG]Caco: role=0 seed=2 goal=12000 sgoal=7000 spd=300 org=(1000 0 0) "
+    "link=2 act=1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=101\n"
+    "SG [SG]Rune: role=2 seed=3 goal=5000 sgoal=4000 spd=250 org=(0 0 0) "
+    "link=3 act=3 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=102\n"
+    + "noise\n" * 13
+    + "[SG]Enemy stole the red flag.\n"
+    + "SG [SG]Slip: role=4 seed=4 goal=4500 sgoal=3500 spd=200 org=(600 0 0) "
+    "link=4 act=10 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=109\n"
+    "SG [SG]Vore: role=3 seed=5 goal=4000 sgoal=9000 spd=250 org=(0 0 0) "
+    "link=5 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=103\n"
+    "SG [SG]Vore: role=3 seed=6 goal=2500 sgoal=9000 spd=250 org=(100 0 0) "
+    "link=6 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=113\n"
+    "SG [SG]Gate: role=3 seed=6 goal=100 sgoal=100 spd=250 org=(100 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=114\n"
+    "SG [SG]Vore: role=0 seed=7 goal=7000 sgoal=7000 spd=250 org=(200 0 0) "
+    "link=7 act=0 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=123\n"
+    "[SG]Vore returned the red flag.\n"
+    "SG [SG]Rune: role=2 seed=8 goal=5000 sgoal=4000 spd=250 org=(0 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=200\n"
+    "SG [SG]Field: role=4 seed=9 goal=4500 sgoal=3500 spd=200 org=(0 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=201\n"
+    "SG [SG]Arach: role=2 seed=10 goal=5000 sgoal=4000 spd=250 org=(0 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=202\n"
+    "[SG]Enemy stole the blue flag.\n"
+    "SG [SG]Gate: role=3 seed=11 goal=6000 sgoal=9000 spd=250 org=(0 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=210\n"
+    "SG [SG]Gate: role=3 seed=12 goal=5000 sgoal=9000 spd=250 org=(100 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=220\n"
+    "[SG]Enemy captured the blue flag.\n"
+    "[SG]Enemy stole the red flag.\n"
+    "SG [SG]Vore: role=3 seed=13 goal=4500 sgoal=9000 spd=250 org=(200 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=230\n"
+    "SG [SG]Vore: role=3 seed=14 goal=4000 sgoal=9000 spd=250 org=(300 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=240\n"
+    "SG [SG]Arach: role=1 seed=15 goal=-1 sgoal=-1 spd=0 org=(0 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=300\n"
+    "SG [SG]Caco: role=0 seed=16 goal=-1 sgoal=-1 spd=0 org=(0 0 0) "
+    "link=-1 act=-1 hp=100 dh=0 dl=0 st=0.0 gnd=1 eng=0 frm=301\n"
+    "HOOKEND id=1 bot=Arach kind=graph link=3 role=0 map=test anchor_q8=0,0,0 "
+    "reason=arrived detail=none\n"
+)
 
 LEGACY_ROW = (
     "SG Arach[SG]: role=1 seed=1 goal=1000 spd=75 org=(-200 300 0) "
@@ -109,14 +155,19 @@ with tempfile.TemporaryDirectory(prefix="sg-role-consumers-") as tmp:
 
     game = run_gamestat(current)
     assert game.returncode == 0, game.stderr
-    assert "attacker floors: {'[SG]Caco': 7000}" in game.stdout
-    assert "defenders: 1 distinct 100u-cells, moving=1 still=0" in game.stdout
+    assert "HOOK: fires=1 ends=1" in game.stdout
+    assert "route_action_samples: RUN=4 JUMP=1 DROP=0 HOOK=1" in game.stdout
+    assert "D_SWIM=1" in game.stdout
+    assert "attacker floors: {'[SG]Caco': 7000, '[SG]Vore': 7000}" in game.stdout
+    assert "defenders: 1 distinct 100u-cells, moving=1 still=1" in game.stdout
 
     role = run_rolestat(current)
     assert role.returncode == 0, role.stderr
-    assert "defense 100% (1s)" in role.stdout
-    assert "pressure 100% (1s)" in role.stdout
-    assert "escorted-carry 100% (1s)" in role.stdout
+    assert "defense 50% (2 bot-samples)" in role.stdout
+    assert "pressure 66% (3 bot-samples)" in role.stdout
+    assert "same-team escort-buckets 66% (3 one-second team-buckets)" in role.stdout
+    assert "recover-cost closed -1250ms median delta (2 bot-traces, 2 windows)" in role.stdout
+    assert "open -500ms median delta (1 bot-traces, 1 windows)" in role.stdout
 
     legacy = tmpdir / "legacy.log"
     legacy.write_text(LEGACY_ROW)
@@ -124,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix="sg-role-consumers-") as tmp:
     role = run_rolestat(legacy)
     assert game.returncode == 0, game.stderr
     assert role.returncode == 0, role.stderr
-    assert "defense 100% (1s)" in role.stdout
+    assert "defense 100% (1 bot-samples)" in role.stdout
 
     empty = tmpdir / "wrong-schema.log"
     empty.write_text(
