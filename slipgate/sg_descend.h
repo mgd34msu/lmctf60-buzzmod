@@ -22,6 +22,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc);
 /* holds or releases the committed leg; context in, context out, cmd stays
  * a parameter until the movement stage speaks context */
 int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc);
+qboolean SG_CompoundDropCommitRetained(int action, qboolean guard_owned);
 
 /* Ordinary RUN completion is kept separate from the mechanism handoff. The
  * plan-candidate predicate below proves only action/plan admission;

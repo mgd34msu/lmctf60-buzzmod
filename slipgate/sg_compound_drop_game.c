@@ -478,6 +478,17 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 	bot->commit_until = level.time + 5.0f;
 	bot->latch_until = level.time + 5.0f;
 	VectorCopy(entity->s.origin, staged_origin);
+	bot->stuck_time = 0.0f;
+	VectorCopy(staged_origin, bot->stuck_origin);
+	VectorCopy(staged_origin, bot->watch_org);
+	VectorCopy(staged_origin, bot->stag_org);
+	VectorCopy(staged_origin, bot->wedge_org);
+	SG_Mark(&bot->watch_since);
+	SG_Mark(&bot->stag_since);
+	SG_Mark(&bot->wedge_since);
+	bot->seedless_active = false;
+	bot->seedless_since = 0.0f;
+	bot->seedless_turn_until = 0.0f;
 	sg_host.linkentity(entity);
 	if (!SG_CompoundDropGameHost(bot, &host) ||
 	    !SG_CompoundDropGamePose(entity, &pose))

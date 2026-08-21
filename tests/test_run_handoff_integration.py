@@ -29,6 +29,11 @@ def main() -> None:
     assert "bot->seed != incoming->to" in early
     assert "return -1;" in early
 
+    compound_boundary = commit.index("SG_CompoundDropLiveBoundary(")
+    compound_retain = commit.index("SG_CompoundDropCommitRetained(")
+    generic_terminal = commit.index("if (!ballistic)")
+    assert compound_boundary < compound_retain < generic_terminal
+
     transaction = section(
         descend,
         "qboolean SG_RunCompletionHandoff(",

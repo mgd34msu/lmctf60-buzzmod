@@ -1923,6 +1923,11 @@ static qboolean StrikeRailWatchdogAllowed(const sg_bot_t *bot,
 	        bot->def_supply_armed);
 }
 
+qboolean SG_CompoundDropCommitRetained(int action, qboolean guard_owned)
+{
+	return action == RL_DOOR_DROP && guard_owned;
+}
+
 int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 {
 	usercmd_t *cmd = &tc->cmd;
@@ -2565,6 +2570,12 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				return -1;
 			}
 		}
+		/* The compound reducer is the only authority allowed to retire this
+		 * physical transaction. Generic goal, timeout, and blacklist handling
+		 * cannot clear its graph identity while its mover lease remains active. */
+		if (SG_CompoundDropCommitRetained(cl->action,
+		        bot->compound_drop_live.guard_owned))
+			return bot->commit_link;
 		if (cl->action == RL_DROP && bot->drop_started &&
 		    bot->drop_replay_active)
 		{

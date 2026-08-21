@@ -13,6 +13,8 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 
 	if (!bot)
 		return false;
+	if (action == RL_DOOR_DROP && bot->compound_drop_live.guard_owned)
+		return true;
 	memset(&state, 0, sizeof(state));
 	state.action = action;
 	state.hook_phase = bot->hook_phase;
@@ -258,7 +260,9 @@ void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,
 qboolean SG_DefensePatrolRetire(sg_bot_t *bot, qboolean patrol_allowed)
 {
 	qboolean owned;
+	int action = RL_RUN;
 	int retired_link;
+	rune_t *rune;
 
 	if (!bot || patrol_allowed || bot->patrol_link < 0)
 		return false;
@@ -268,10 +272,13 @@ qboolean SG_DefensePatrolRetire(sg_bot_t *bot, qboolean patrol_allowed)
 	bot->patrol_seed = -1;
 	if (owned)
 	{
-		if (SG_TraversalControllerPhysical(bot, RL_RUN))
+		rune = SG_Rune();
+		if (rune && rune->links && retired_link < rune->hdr.num_links)
+			action = rune->links[retired_link].action;
+		if (SG_TraversalControllerPhysical(bot, action))
 			bot->commit_retirement_pending = true;
 		else
-			SG_StagedTraversalCancel(bot, RL_RUN);
+			SG_StagedTraversalCancel(bot, action);
 	}
 	else
 	{

@@ -420,6 +420,15 @@ static void CheckCompletionPredicates(void)
 	}
 }
 
+static void CheckCompoundDropCommitOwnership(void)
+{
+	CHECK(SG_CompoundDropCommitRetained(RL_DOOR_DROP, true));
+	CHECK(!SG_CompoundDropCommitRetained(RL_DOOR_DROP, false));
+	CHECK(!SG_CompoundDropCommitRetained(RL_DROP, true));
+	CHECK(!SG_CompoundDropCommitRetained(RL_DOOR, true));
+	CHECK(!SG_CompoundDropCommitRetained(RL_RUN, true));
+}
+
 static void CheckHighSpeedTeleportHandoff(void)
 {
 	run_fixture_t fixture;
@@ -766,6 +775,7 @@ static void CheckMalformedMechanismFailClosed(void)
 int main(void)
 {
 	CheckCompletionPredicates();
+	CheckCompoundDropCommitOwnership();
 	CheckHighSpeedTeleportHandoff();
 	CheckDebugOffSuccessSilent();
 	CheckLateBoundaryTouchesTrigger();
