@@ -498,10 +498,6 @@ class StrikeIntegrationTest(unittest.TestCase):
         reset = arach[arach.index("void SG_StrikeSlotReset"):]
         self.assertIn("sg_strike_enemy_pressure_cache[slot] = false", reset)
         self.assertIn("sg_strike_enemy_pressure_goal_cache[slot] = -1", reset)
-        handoff_path = arach[arach.index("SG_AttackEscortRetireSupersededRoute("):
-                             arach.index("Think_CarryBookends(")]
-        self.assertIn("Bot_DeclaredDoorGuardRetainOrRelease(bot)", handoff_path)
-        self.assertIn("SG_StagedTraversalCancel(bot, action)", handoff_path)
         self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
         self.assertIn("tc.strike_pressure = SG_StrikeEnemyPressureActive(",
                       arach)

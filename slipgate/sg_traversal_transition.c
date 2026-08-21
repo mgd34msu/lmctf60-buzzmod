@@ -204,15 +204,16 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 	SG_StagedTraversalCancel(bot, action);
 }
 
-void SG_AttackEscortRetireSupersededRoute(sg_bot_t *bot,
+qboolean SG_AttackHandoffRetireSupersededRoute(sg_bot_t *bot,
 	int previous_role, int current_role)
 {
 	rune_t *rune;
 	int action;
 
 	if (!bot || previous_role != SG_ROLE_ATTACK ||
-	    current_role != SG_ROLE_ESCORT)
-		return;
+	    (current_role != SG_ROLE_DEFEND && current_role != SG_ROLE_RECOVER &&
+	     current_role != SG_ROLE_ESCORT))
+		return false;
 	bot->tac_seed = -1;
 	bot->tac_time = 0.0f;
 	bot->sticky_link = -1;
@@ -223,19 +224,21 @@ void SG_AttackEscortRetireSupersededRoute(sg_bot_t *bot,
 	rune = SG_Rune();
 	if (!rune || !rune->links || bot->commit_link < 0 ||
 	    bot->commit_link >= rune->hdr.num_links)
-		return;
+		return true;
 	action = rune->links[bot->commit_link].action;
 	if (SG_DeclaredDoorRouteRequiresRelease(bot, action))
 	{
 		bot->commit_retirement_pending = true;
-		return;
+		return true;
 	}
 	if (SG_TraversalControllerPhysical(bot, action))
 	{
-		bot->commit_retirement_pending = true;
-		return;
+		if (action == RL_RUN)
+			bot->commit_retirement_pending = true;
+		return true;
 	}
 	SG_StagedTraversalCancel(bot, action);
+	return true;
 }
 
 void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,

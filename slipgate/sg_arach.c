@@ -2864,7 +2864,7 @@ void SG_BotThink(sg_bot_t *bot)
 	int team, bestlink = -1;
 	qboolean carrying;
 	qboolean rune_compatible;
-	qboolean declared_door_guarded;
+	qboolean declared_door_guarded, attack_handoff;
 	const sg_strike_team_t *strike_team = NULL;
 	const sg_strike_frame_t *strike_frame = NULL;
 	sg_strike_duty_t strike_duty = SG_STRIKE_DUTY_NONE;
@@ -3146,8 +3146,8 @@ void SG_BotThink(sg_bot_t *bot)
 	carrying = SG_BotCarrying(e);
 
 	role = StrikeRoleForBot(bot, carrying);
-	SG_AttackEscortRetireSupersededRoute(bot, bot->last_role, (int)role);
-	if (bot->last_role == SG_ROLE_ATTACK && role == SG_ROLE_ESCORT &&
+	attack_handoff = SG_AttackHandoffRetireSupersededRoute(bot, bot->last_role, (int)role);
+	if (attack_handoff &&
 	    bot->commit_retirement_pending && sg_rune && sg_rune->links &&
 	    bot->commit_link >= 0 && bot->commit_link < sg_rune->hdr.num_links)
 	{
