@@ -110,7 +110,7 @@ def test_generator_serializes_bounded_delayed_sound_terminals() -> None:
 
     generator = between(
         source("slipgate/sg_rune.c"),
-        "static void Link_Doors(void)",
+        "static void Link_Doors(door_topology_t *topology)",
         "rune: %d declared door links",
     )
     admission = generator.index("SG_DeclaredDoorActivatorSafe(door)")
