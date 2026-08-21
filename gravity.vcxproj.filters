@@ -362,6 +362,12 @@
     <ClCompile Include="slipgate\sg_compound_hook_game.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_hook_game_lifecycle.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_hook_game_events.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_compound_drop_game.c">
       <Filter>Source Files</Filter>
     </ClCompile>

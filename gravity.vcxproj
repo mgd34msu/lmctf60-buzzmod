@@ -396,6 +396,8 @@
     <ClCompile Include="slipgate\sg_compound_hook_live.c" />
     <ClCompile Include="slipgate\sg_compound_hook_live_finish.c" />
     <ClCompile Include="slipgate\sg_compound_hook_game.c" />
+    <ClCompile Include="slipgate\sg_compound_hook_game_lifecycle.c" />
+    <ClCompile Include="slipgate\sg_compound_hook_game_events.c" />
     <ClCompile Include="slipgate\sg_compound_drop_game.c" />
     <ClCompile Include="slipgate\sg_rune_door_scope.c" />
     <ClCompile Include="slipgate\sg_drop_live.c" />
