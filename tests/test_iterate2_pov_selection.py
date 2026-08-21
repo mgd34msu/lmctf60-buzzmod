@@ -66,7 +66,14 @@ class IterateSelectionTest(unittest.TestCase):
             (self.game_root / "testgame" / module).write_bytes(b"exact-module")
         maps = self.game_root / "testgame" / "maps"
         maps.mkdir()
-        shutil.copy2(REPO / "tools/iterate2.sh", self.tools / "iterate2.sh")
+        for name in (
+            "iterate2.sh",
+            "rune_contracts_generated.py",
+            "rune_pair_preflight.py",
+            "runeio.py",
+            "snagrepair.py",
+        ):
+            shutil.copy2(REPO / "tools" / name, self.tools / name)
         shutil.copy2(REPO / "tools/topmaps.txt", self.tools / "topmaps.txt")
         for line in (self.tools / "topmaps.txt").read_text().splitlines():
             if line and not line.startswith("#"):

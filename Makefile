@@ -1010,6 +1010,8 @@ POV_SUPERVISOR_BIN := tools/pov-supervisor
 POV_SUPERVISOR_TEST_BIN := pov_supervisor_unit.make
 POV_SUPERVISOR_TEST := tests/test_pov_supervisor.py
 POV_ITERATE_SELECTION_TEST := tests/test_iterate2_pov_selection.py
+RUNE_PAIR_PREFLIGHT_DEPS := tools/rune_pair_preflight.py tools/runeio.py \
+	tools/rune_contracts_generated.py tools/snagrepair.py
 POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
@@ -2820,7 +2822,8 @@ action-test: $(ACTION_TEST_BIN)
 
 # Linux tools-only supervisor: intentionally absent from Visual Studio projects.
 pov-supervisor-test: $(POV_SUPERVISOR_TEST_BIN) $(POV_SUPERVISOR_BIN) \
-		$(POV_SUPERVISOR_TEST) $(POV_ITERATE_SELECTION_TEST)
+		$(POV_SUPERVISOR_TEST) $(POV_ITERATE_SELECTION_TEST) \
+		$(RUNE_PAIR_PREFLIGHT_DEPS)
 	$(E) [TEST] $<
 	$(Q)./$(POV_SUPERVISOR_TEST_BIN)
 	$(Q)python3 -B $(POV_SUPERVISOR_TEST)

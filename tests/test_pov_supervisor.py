@@ -4,6 +4,7 @@ import os
 import pathlib
 import signal
 import shutil
+import sys
 import subprocess
 import tempfile
 import textwrap
@@ -11,6 +12,19 @@ import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "tools"))
+
+import runeio  # noqa: E402
+import snagrepair  # noqa: E402
+from tests.test_rune_artifact import _build_rune, _fix_header_crc  # noqa: E402
+
+
+def rune_for_map(map_name):
+    encoded = bytearray(_build_rune())
+    encoded[64:128] = map_name.encode("ascii") + b"\0" * (64 - len(map_name))
+    _fix_header_crc(encoded)
+    return bytes(encoded)
 
 FAKE_SOURCE = r'''
 #define _GNU_SOURCE
@@ -363,13 +377,27 @@ class SupervisorTest(unittest.TestCase):
         )
         script.write_text(source)
         script.chmod(0o700)
-        shutil.copy2(REPO / "tools/topmaps.txt", tools / "topmaps.txt")
+        for name in (
+            "rune_contracts_generated.py",
+            "rune_pair_preflight.py",
+            "runeio.py",
+            "snagrepair.py",
+            "topmaps.txt",
+        ):
+            shutil.copy2(REPO / "tools" / name, tools / name)
         maps = self.game / "maps"
         maps.mkdir()
         for line in (tools / "topmaps.txt").read_text().splitlines():
             if line and not line.startswith("#"):
-                (maps / f"{line}.rune").write_bytes(b"rune")
-                (maps / f"{line}.snag").write_bytes(b"snag")
+                rune_payload = rune_for_map(line)
+                rune_path = maps / f"{line}.rune"
+                rune_path.write_bytes(rune_payload)
+                rune = runeio.decode_rune(rune_payload)
+                rune_sha256 = hashlib.sha256(rune_payload).hexdigest()
+                (maps / f"{line}.snag").write_text(
+                    snagrepair.render(line, rune, [], "e" * 64, rune_sha256),
+                    encoding="ascii",
+                )
         for module in ("game.so", "gamex86_64.so"):
             (self.game / module).write_bytes(b"exact-module")
         shutil.copy2(self.supervisor, tools / "pov-supervisor")

@@ -31,6 +31,15 @@ DURATION_MS_MAX = 86400000
 SURCHARGE_MAX = 60000
 SNAG_FORMAT = 2
 MAX_EVIDENCE_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_SNAG_FILE_BYTES = (MAX_RECORDS + 32) * 256
+SNAG_HEADER_KEYS = (
+    "snag_format", "map", "bsp_checksum", "entity_crc", "physics_flags",
+    "gravity", "airaccelerate", "maxvelocity", "pmove_ms", "frame_ms",
+    "host_physics_id", "rune_payload_crc", "rune_header_crc",
+    "rune_action_contract_crc", "rune_mechanism_contract_crc",
+    "rune_num_seeds", "rune_num_links", "rune_sha256", "evidence_sha256",
+    "repairs",
+)
 
 
 def _finite_number(value, field):
@@ -446,6 +455,61 @@ def render(map_name, rune, repairs, evidence_sha256, rune_sha256):
             (seed_index, x, y, z, count, duration_ms, surcharge)
         )
     return "\n".join(lines) + "\n"
+
+
+def validate_file(path, rune, rune_sha256):
+    payload = _read_regular(path, MAX_SNAG_FILE_BYTES, "SNAG artifact")
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError("SNAG artifact is not ASCII") from exc
+    lines = text.splitlines()
+    if len(lines) < len(SNAG_HEADER_KEYS):
+        raise ValueError("SNAG binding is incomplete")
+
+    fields = {}
+    for key, line in zip(SNAG_HEADER_KEYS, lines):
+        name, separator, value = line.partition(" ")
+        if name != key or separator != " " or not value or " " in value:
+            raise ValueError(f"SNAG binding field {key} is malformed")
+        fields[key] = value
+    try:
+        repair_count = int(fields["repairs"], 10)
+    except ValueError as exc:
+        raise ValueError("SNAG repair count is malformed") from exc
+    if not 0 <= repair_count <= MAX_RECORDS:
+        raise ValueError("SNAG repair count exceeds runtime limit")
+    if len(lines) != len(SNAG_HEADER_KEYS) + repair_count:
+        raise ValueError("SNAG repair count does not own the complete tail")
+
+    repairs = []
+    for line in lines[len(SNAG_HEADER_KEYS):]:
+        values = line.split(" ")
+        if len(values) != 8 or values[0] != "repair":
+            raise ValueError("SNAG repair record is malformed")
+        try:
+            repairs.append((
+                int(values[1], 10),
+                float(values[2]),
+                float(values[3]),
+                float(values[4]),
+                int(values[5], 10),
+                int(values[6], 10),
+                int(values[7], 10),
+            ))
+        except ValueError as exc:
+            raise ValueError("SNAG repair record is malformed") from exc
+
+    expected = render(
+        rune.header.map_name,
+        rune,
+        repairs,
+        fields["evidence_sha256"],
+        rune_sha256,
+    )
+    if text != expected:
+        raise ValueError("SNAG binding does not match the authenticated RUNE")
+    return repair_count
 
 
 def atomic_write(path, payload):

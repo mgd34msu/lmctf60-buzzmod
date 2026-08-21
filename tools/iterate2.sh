@@ -104,6 +104,8 @@ for map_slot in 0 1 2 3 4 5 6 7 8 9; do
         fi
     done
 done
+/usr/bin/python3 -B "$SCRIPT_DIR/rune_pair_preflight.py" \
+    --maps-dir "$GAMEDIR_ROOT/$GAME/maps" "${MAPS[@]}" || exit 2
 module_sha256() {
     local path="$1" digest remainder
     [ -f "$path" ] || return 1
