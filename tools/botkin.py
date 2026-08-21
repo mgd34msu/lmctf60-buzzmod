@@ -5,8 +5,16 @@ Kinematics are derived from 10 Hz entity-origin deltas because serverrecord bot
 entities do not carry player-state velocity. Output includes pooled and per-bot
 movement, turn, stop, wall-contact, and route-texture metrics.
 """
-import struct, sys, math, os, statistics as st
+import argparse
 import collections
+import json
+import math
+import os
+from pathlib import Path
+import statistics as st
+import struct
+import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dm2speed as D
@@ -70,9 +78,10 @@ def parse_delta_entity_xyzyaw(r, bits, o):
     if bits & U_SOLID: r.skip(2)
 
 
-def walk(path, maxplayers=32):
+def walk(path, maxplayers=32, *, strict=False):
     """Returns {'map', 'svrecord', 'skins', 'tracks': {entnum: [(frame,x,y,z,yaw), ...]}}"""
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as source:
+        data = source.read()
     off = 0
     mapname = None
     skins = {}
@@ -80,6 +89,10 @@ def walk(path, maxplayers=32):
     tracks = {}
     frame_idx = 0
     svrecord = None
+    parse_complete = True
+    terminated = False
+    message_count = 0
+    wire_frames = []
     import re as _re
 
     def read_packetentities():
@@ -93,11 +106,25 @@ def walk(path, maxplayers=32):
             o = ents.setdefault(num, [0.0, 0.0, 0.0, 0.0])
             parse_delta_entity_xyzyaw(r, bits, o)
 
-    while off + 4 <= len(data):
+    while off < len(data):
+        if off + 4 > len(data):
+            if strict:
+                raise ValueError("truncated demo message length")
+            parse_complete = False
+            break
         (mlen,) = struct.unpack_from('<i', data, off)
         off += 4
         if mlen == -1:
+            terminated = True
+            if strict and off != len(data):
+                raise ValueError("demo has bytes after terminal marker")
             break
+        if mlen < 0 or off + mlen > len(data):
+            if strict:
+                raise ValueError("invalid or truncated demo message")
+            parse_complete = False
+            break
+        message_count += 1
         r = D.R(data[off:off+mlen])
         off += mlen
         try:
@@ -119,10 +146,11 @@ def walk(path, maxplayers=32):
                     parse_delta_entity_xyzyaw(r, bits, o)
                 elif svc == 20:
                     if svrecord:
-                        r.skip(4)
+                        wire_frames.append(r.s32())
                         svc2 = r.u8()
                         if svc2 != 18:
                             raise ValueError(f"expected packetentities, got {svc2}")
+                        ents.clear()
                         read_packetentities()
                         frame_idx += 1
                         for num, o in ents.items():
@@ -149,10 +177,31 @@ def walk(path, maxplayers=32):
                 elif svc == 5: r.skip(512)
                 elif svc in (6, 7): pass
                 else: raise ValueError(svc)
-        except Exception:
+            if strict and r.pos() != len(r.b):
+                raise ValueError("demo message was not consumed exactly")
+        except Exception as error:
+            if strict:
+                raise ValueError(
+                    f"malformed demo message ending at byte {off}"
+                ) from error
+            parse_complete = False
             continue
+    if strict:
+        if message_count == 0 or svrecord is None or frame_idx == 0:
+            raise ValueError("strict demo has no serverdata or frame messages")
+        if svrecord and (
+            len(wire_frames) != frame_idx
+            or any(
+                right != left + 1
+                for left, right in zip(wire_frames, wire_frames[1:])
+            )
+        ):
+            raise ValueError("serverrecord wire frames are incomplete")
+    parse_complete = parse_complete and (terminated or off == len(data))
     return {'map': mapname, 'svrecord': bool(svrecord), 'skins': skins,
-            'tracks': tracks, 'frames': frame_idx}
+            'tracks': tracks, 'frames': frame_idx,
+            'parse_complete': parse_complete, 'terminated': terminated,
+            'wire_frames': wire_frames}
 
 
 # ------------------------------------------------------------- grammar
@@ -285,49 +334,128 @@ def entity_grammar(track, name='?'):
     return out
 
 
-def main():
-    all_stats = []
-    for path in sys.argv[1:]:
-        d = walk(path)
-        base = os.path.basename(path)
-        if not d['svrecord']:
-            print(f"{base}: NOT a serverrecord demo (pov != -1), skipping")
+def analyze_demo(path, *, strict=False):
+    d = walk(path, strict=strict)
+    base = os.path.basename(path)
+    if d['parse_complete'] is not True:
+        raise ValueError("demo decode is incomplete")
+    if not d['svrecord']:
+        raise ValueError("demo is not a serverrecord")
+    if d['map'] is None:
+        raise ValueError("demo has no map identity")
+    if strict and not d['tracks']:
+        raise ValueError("demo has no player tracks")
+    names = {}
+    for number in d['tracks']:
+        skin = d['skins'].get(number - 1)
+        name = skin.split('\\', 1)[0] if skin else ''
+        if name:
+            names[number] = name
+    if strict and not names:
+        raise ValueError("demo has no named player tracks")
+    stats = []
+    for number, name in names.items():
+        track = d['tracks'][number]
+        grammar = entity_grammar(track, f"{base}:{name}")
+        if grammar is None:
+            if strict:
+                raise ValueError(f"{name} lacks 20 consecutive movement steps")
             continue
-        names = {n: d['skins'].get(n - 1, '?').split('\\')[0]
-                 for n in d['tracks']}
-        n_named = sum(1 for v in names.values() if v != '?')
-        print(f"{base}: map={d['map']} frames={d['frames']} "
-              f"entities={len(d['tracks'])} named={n_named}")
-        for num, track in d['tracks'].items():
-            nm = names.get(num, '?')
-            if nm == '?':
-                continue
-            g = entity_grammar(track, f"{base}:{nm}")
-            if g:
-                all_stats.append(g)
+        stats.append(grammar)
+    if strict and len(stats) != len(names):
+        raise ValueError("not every player track produced movement grammar")
+    return d, stats, len(names)
 
-    print(f"\n{len(all_stats)} bot-tracks with grammar\n")
+
+def print_report(all_stats, stream):
+    print(f"\n{len(all_stats)} bot-tracks with grammar\n", file=stream)
 
     def pool(key):
-        vals = [s[key] for s in all_stats if key in s]
-        return vals
+        return [row[key] for row in all_stats if key in row]
 
-    print("POOLED (median of per-track values):")
+    print("POOLED (median of per-track values):", file=stream)
     for key in ('air_gain_med', 'touch_loss_med', 'view_div_med',
                 'relaunches', 'still_share', 'stopstart_per_min',
                 'wallbumps_per_min', 'turn180_10hz_per_min',
                 'turn1hz_med', 'turn1hz_reversal_pct', 'straight_share',
                 'hspeed_med'):
-        vals = pool(key)
-        if vals:
-            print(f"  {key:26s} n={len(vals):3d} median={st.median(vals):8.2f} "
-                  f"mean={st.mean(vals):8.2f}")
+        values = pool(key)
+        if values:
+            print(
+                f"  {key:26s} n={len(values):3d} "
+                f"median={st.median(values):8.2f} mean={st.mean(values):8.2f}",
+                file=stream,
+            )
 
-    import json
-    outp = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'botkin_raw.json')
-    json.dump(all_stats, open(outp, 'w'), indent=1)
-    print(f"\nwrote {outp}")
+
+def write_json(path, value):
+    destination = Path(path)
+    payload = json.dumps(value, indent=1) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, destination)
+        directory = os.open(
+            destination.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    output = parser.add_mutually_exclusive_group(required=True)
+    output.add_argument('--stdout', action='store_true')
+    output.add_argument('--output', type=Path)
+    parser.add_argument(
+        '--strict', action='store_true',
+        help='reject incomplete demos and player tracks before publishing JSON',
+    )
+    parser.add_argument('demos', nargs='+')
+    args = parser.parse_args(argv)
+
+    all_stats = []
+    for path in args.demos:
+        base = os.path.basename(path)
+        try:
+            d, stats, named = analyze_demo(path, strict=args.strict)
+        except (OSError, ValueError) as error:
+            if args.strict:
+                print(f"botkin: {base}: {error}", file=sys.stderr)
+                return 1
+            print(f"botkin: skipping {base}: {error}", file=sys.stderr)
+            continue
+        print(
+            f"{base}: map={d['map']} frames={d['frames']} "
+            f"entities={len(d['tracks'])} named={named}",
+            file=sys.stderr,
+        )
+        all_stats.extend(stats)
+
+    print_report(all_stats, sys.stderr)
+    try:
+        if args.stdout:
+            json.dump(all_stats, sys.stdout, indent=1)
+            sys.stdout.write('\n')
+        else:
+            write_json(args.output, all_stats)
+            print(f"wrote {args.output}", file=sys.stderr)
+    except OSError as error:
+        print(f"botkin: cannot publish JSON: {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
