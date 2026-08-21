@@ -5,6 +5,7 @@
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_combat_alert_policy.h"
 #include "slipgate/sg_combat_commit_policy.h"
+#include "slipgate/sg_combat_land_lead.h"
 #include "slipgate/sg_combat_target_policy.h"
 #include "slipgate/sg_item_route.h"
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
@@ -102,7 +103,6 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
  * (plasma.c:99, :158; plasma.h:13), which GROWS with the quad multiply, so it
  * is computed from is_quad and plasma_mode instead of read from here.
  */
-#define SG_DSAFE_ROCKET		121.0f
 #define SG_DSAFE_GRENADE	161.0f
 #define SG_DSAFE_BFG		101.0f
 
@@ -978,7 +978,8 @@ static float Combat_DSafe(edict_t *self, int w)
 	switch (w)
 	{
 	case SG_W_ROCKETLAUNCHER:
-		return SG_DSAFE_ROCKET + (quad ? SG_QUAD_SPLASH_MARGIN : 0.0f);
+		return SG_CombatRocketRadius() + 1.0f +
+		       (quad ? SG_QUAD_SPLASH_MARGIN : 0.0f);
 	case SG_W_GRENADELAUNCHER:
 		return SG_DSAFE_GRENADE + (quad ? SG_QUAD_SPLASH_MARGIN : 0.0f);
 	case SG_W_BFG:
@@ -1361,14 +1362,6 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 	{
 		int held = Combat_Held(self);
 
-		/*
-		 * Mode 2: all 18 reviews found that commitment as shipped kept the
-		 * SPAWN BLASTER all game -- every judge named blaster-dominated
-		 * timelines with machine accuracy on every bot sheet, a conduct
-		 * no human sustains. The last-resort gun is not a gun a human
-		 * commits to; mode 2 refuses it and lets the ladder walk pick a
-		 * real weapon the moment one is stocked.
-		 */
 		if (held >= 0 && SG_CombatCommitCandidateAllowed(
 		        sg_cv.wcommit->value, held == SG_W_BLASTER,
 		        Combat_Stocked(self, held),
@@ -1995,14 +1988,6 @@ static void Combat_TexAcquire(edict_t *self, sg_combat_state_t *st,
 	over = flick * (SG_TEX_OVER_TRACK
 	                + (SG_TEX_OVER_FLICK - SG_TEX_OVER_TRACK) * style)
 	     * Combat_SkillLerp(skill, SG_TEX_OVER_MUL_S0, SG_TEX_OVER_MUL_S4);
-	/*
-	 * The cvar is a DOSE on the overshoot amplitude (1.0 == the adopted
-	 * texture exactly). Adoption closed 3.2 degrees of the aim-offset gap
-	 * out of ~3.9 remaining against the 10.89 human anchor; the ladder
-	 * asks whether the rest is simply more of the same medicine. The cap
-	 * still binds afterwards, so a big dose widens the common case
-	 * without inventing physically absurd flicks.
-	 */
 	over *= sg_cv.aimtexture->value;
 	if (over > SG_TEX_OVER_CAP)
 		over = SG_TEX_OVER_CAP;
@@ -2499,18 +2484,19 @@ static qboolean Combat_VelStable(sg_combat_state_t *st, edict_t *enemy)
 	return (level.time - st->vel_stable) >= SG_LEAD_STABLE;
 }
 
-/*
- * WEAPONS.md 2.2's two-pass intercept, generalised over the weapon's own
- * speed. MOVETYPE_FLYMISSILE and MOVETYPE_REFLECT apply no gravity
- * (g_weapon.c:417, :695, :986; plasma.c:212, :250-252), so a straight line is
- * the whole model. Hitscan (speed 0) skips it: no travel time, no lead.
- * Flight time carries the weapon's windup, which only the BFG has -- rule F1
- * is meant to be applied to 0.8 + d/400, not to d/400.
- */
-static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
+typedef struct
+{
+	float		projectile_time;
+	sg_combat_landing_t landing;
+	qboolean	landing_splash;
+} combat_solve_t;
+
+static combat_solve_t Combat_Solve(edict_t *enemy, int w, const vec3_t eye,
+                                   vec3_t lead)
 {
 	vec3_t	mid, delta;
-	float	dist, flight;
+	float	dist, speed;
+	combat_solve_t solve = { 0 };
 
 	Combat_Center(enemy, mid);
 	VectorCopy(mid, lead);
@@ -2518,53 +2504,29 @@ static float Combat_Solve(edict_t *enemy, int w, vec3_t eye, vec3_t lead)
 	VectorSubtract(mid, eye, delta);
 	dist = VectorLength(delta);
 
-	if (sg_weapons[w].speed <= 0.0f)
-		return 0.0f;			/* hitscan: aim at the centre, rule F2 */
+	speed = w == SG_W_ROCKETLAUNCHER ? SG_CombatRocketSpeed() :
+	        sg_weapons[w].speed;
+	if (speed <= 0.0f)
+		return solve;
 
-	/* Lead rockets toward an airborne target's predicted landing point. */
-	if (w == SG_W_ROCKETLAUNCHER && !enemy->groundentity &&
-	    sg_cv.landlead->value)
+	if (w == SG_W_ROCKETLAUNCHER &&
+	    SG_CombatLandingAim(enemy, lead, &solve.landing))
 	{
-		vec3_t p0, p1;
-		trace_t ltr;
-		/* The RUNE artifact admits any authenticated integral gravity.
-		 * Predict against the exact law whose bits gate this loaded graph,
-		 * rather than a historical default, or low-gravity maps aim splash
-		 * below the real touchdown. */
-		float tt, grav = sv_gravity ? sv_gravity->value : 800.0f;
-		int seg;
-
-		VectorCopy(mid, p0);
-		for (seg = 1; seg <= 30; seg++)
-		{
-			tt = 0.05f * (float)seg;
-			p1[0] = mid[0] + enemy->velocity[0] * tt;
-			p1[1] = mid[1] + enemy->velocity[1] * tt;
-			p1[2] = mid[2] + enemy->velocity[2] * tt
-			      - 0.5f * grav * tt * tt;
-			ltr = sg_host.trace(p0, enemy->mins, enemy->maxs, p1,
-			               enemy, MASK_PLAYERSOLID);
-			if (ltr.fraction < 1.0f)
-			{
-				VectorCopy(ltr.endpos, lead);
-				VectorSubtract(lead, eye, delta);
-				return sg_weapons[w].windup +
-				       VectorLength(delta) / sg_weapons[w].speed;
-			}
-			VectorCopy(p1, p0);
-		}
-		/* no floor inside 1.5s: fall through to the linear model */
+		solve.landing_splash = true;
+		return solve;
 	}
 
-	flight = sg_weapons[w].windup + dist / sg_weapons[w].speed;
-	VectorMA(mid, flight, enemy->velocity, lead);
+	solve.projectile_time = sg_weapons[w].windup +
+	                        dist / speed;
+	VectorMA(mid, solve.projectile_time, enemy->velocity, lead);
 
 	VectorSubtract(lead, eye, delta);
 	dist = VectorLength(delta);
-	flight = sg_weapons[w].windup + dist / sg_weapons[w].speed;
-	VectorMA(mid, flight, enemy->velocity, lead);
+	solve.projectile_time = sg_weapons[w].windup +
+	                        dist / speed;
+	VectorMA(mid, solve.projectile_time, enemy->velocity, lead);
 
-	return flight;
+	return solve;
 }
 
 /*
@@ -3487,18 +3449,7 @@ static qboolean Combat_LostHold(edict_t *self, sg_combat_state_t *st,
 static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
                         sg_combat_state_t *st, float skill, int inhand)
 {
-	/*
-	 * TAP VARIANCE (sg_tapvar). Every
-	 * judge read the rail cadence as "a single razor spike at ~1.7s,
-	 * zero spread": a held button refires a slow weapon the frame its
-	 * cycle completes, and the ON/OFF windows below never gate it
-	 * because the cycle outlasts the window rhythm. A human re-aims
-	 * between deliberate shots -- pub rail cadence is ragged. Each time
-	 * a slow weapon finishes firing and comes ready again, the next
-	 * press waits a skill-scaled beat drawn fresh per shot: the ladder's
-	 * bottom taps 0.2-0.7s late, the top 0.05-0.19s (pros with reload
-	 * cues ARE near-metronomic -- the spread stays honest to skill).
-	 */
+	/* Slow weapons wait a skill-scaled beat after consuming ammo. */
 	if (sg_cv.tapvar->value > 0.0f)
 	{
 		int hw = Combat_Held(self);
@@ -3538,17 +3489,7 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 		}
 	}
 
-	/*
-	 * FIRE DISCIPLINE (sg_firedisc), the answer
-	 * the tapvar family could not be). The judges read bot cadence as
-	 * needles on the refire line because the trigger is independent of
-	 * the legs: a bot mid-jink fires the frame the gun cycles. A human
-	 * holds through the jockeying and shoots from a planted beat --
-	 * the ragged inter-shot spread IS the movement showing through the
-	 * trigger. Suppress fire until the body's own heading has been
-	 * stable ~0.18s; every strafe reversal restarts the clock. The
-	 * carrier is exempt (its flee trigger conduct is separately tuned).
-	 */
+	/* Non-carriers hold fire until their horizontal heading is stable. */
 	if (sg_cv.firedisc->value > 0.0f &&
 	    !Combat_Carrying(self))
 	{
@@ -3892,7 +3833,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	vec3_t				eye, forward, mid, lead, aim, endp, impact;
 	vec3_t				muzzle, shotdir;
 	vec3_t				threat;
-	float				dist, held, frac, mag, len, flight, trace_len;
+	float				dist, held, frac, mag, len, trace_len;
 	float				source_pad;
 	float				yaw, pitch, skill, settle;
 	float				residual, span, shape;
@@ -3900,6 +3841,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	int					band, inhand, incumbent_index;
 	qboolean			clear_shot, carrier, ballistic, vel_stable, ray_hits;
 	combat_ray_result_t	ray_result;
+	combat_solve_t		solve;
 	qboolean			rattled, textured;
 
 	if (out_engaged)
@@ -3961,25 +3903,12 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 
 	Cbt_ChooseWeapon(self, st, enemy, dist, &carrier, &band);
 
-	/*
-	 * The firing solution is built for the weapon in HAND, not the one wanted:
-	 * a switch is 700-1100 ms away and the shot is now. An unknown weapon --
-	 * the grapple, hand grenades -- solves as the blaster and never fires,
-	 * because the trigger test below refuses anything Combat_Held cannot name.
-	 */
 	inhand = Combat_Held(self);
 	if (inhand < 0)
 		inhand = SG_W_BLASTER;
 	ballistic = false;
 
-	/* ---------------------------------------------------------------- lead
-	 *
-	 * WEAPONS.md 2.2: one refinement pass over the weapon's own projectile
-	 * speed, aimed at the bbox centre rather than the origin (rule F2 -- the
-	 * origin is 4 units below centre, p_client.c:1833-1834). Hitscan weapons
-	 * return the centre unchanged; there is no travel time to lead.
-	 */
-	flight = Combat_Solve(enemy, inhand, eye, lead);
+	solve = Combat_Solve(enemy, inhand, eye, lead);
 
 	VectorSubtract(lead, eye, aim);
 	len = VectorLength(aim);
@@ -3987,8 +3916,8 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		return;
 	VectorScale(aim, 1.0f / len, aim);
 
-
-	if (flight > 0.0f && inhand != SG_W_GRENADELAUNCHER && skill < SG_SKILL_MAX)
+	if (sg_weapons[inhand].speed > 0.0f &&
+	    inhand != SG_W_GRENADELAUNCHER && skill < SG_SKILL_MAX)
 	{
 		float jit = (float)tan(SG_LEAD_JITTER_S0
 		                       * (SG_SKILL_MAX - skill) / SG_SKILL_MAX
@@ -4099,12 +4028,6 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		VectorNormalize(aim);
 	}
 
-	/* ------------------------------------------------------------- the view
-	 *
-	 * A grenade owns its existing ballistic pitch solve unchanged.  Every other
-	 * weapon is packed, unpacked and constrained from its real muzzle until the
-	 * final physical ray is inside the target's live-size box.
-	 */
 	ray_hits = false;
 	source_pad = 0.0f;
 	if (inhand < 0 || ballistic)
@@ -4120,9 +4043,20 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	}
 	else
 	{
-		ray_result = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
-		                                     aim, cmd, muzzle, shotdir,
-		                                     &source_pad);
+		if (solve.landing_splash)
+		{
+			if (!Combat_FinalizePointRay(self, inhand, lead, aim, cmd, muzzle,
+			                            shotdir, &source_pad) ||
+			    !SG_CombatLandingSplashClear(self, enemy, muzzle, shotdir,
+			                                solve.landing,
+			                                &solve.projectile_time, impact))
+				return;
+			ray_result = COMBAT_RAY_MISS;
+		}
+		else
+			ray_result = Combat_FinalizeMuzzleAim(self, enemy, inhand, lead, st,
+			                                     aim, cmd, muzzle, shotdir,
+			                                     &source_pad);
 		/* A constrained physical miss still supplies the real muzzle and ray
 		 * for the wall/teammate veto below.  An unsupported or otherwise
 		 * invalid weapon supplies neither; never trace or trigger from
@@ -4141,7 +4075,19 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 	 * and T_RadiusDamage pays 120 - 0.5*d from the impact point out to it
 	 * (g_combat.c:742).
 	 */
-	if (ballistic)
+	if (solve.landing_splash)
+	{
+		float drift = solve.projectile_time * VectorLength(enemy->velocity);
+
+		if (!Combat_SplashSafe(self, inhand, impact))
+			return;
+		if (drift >= SG_LEAD_TOLERANCE && !vel_stable)
+		{
+			sg_cbt_why[4]++;
+			return;
+		}
+	}
+	else if (ballistic)
 	{
 		vec3_t v;
 
@@ -4284,7 +4230,7 @@ void SG_CombatFrame(edict_t *self, usercmd_t *cmd, qboolean *out_engaged)
 		 * (p_client.c:1833-1834). */
 		if (sg_weapons[inhand].speed > 0.0f)
 		{
-			float drift = flight * VectorLength(enemy->velocity);
+			float drift = solve.projectile_time * VectorLength(enemy->velocity);
 
 			if (drift >= SG_LEAD_TOLERANCE && !vel_stable)
 			{

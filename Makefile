@@ -27,8 +27,7 @@ COMPOUND_TEST_OBJS := .sg_compound_test.make.o \
 	.sg_compound_under_test.make.o .sg_compound_action_under_test.make.o
 COMPOUND_TEST_DEPS := $(COMPOUND_TEST_OBJS:.o=.d)
 MOVER_LEASE_TEST_BIN := sg_mover_lease_test.make
-MOVER_LEASE_TEST_OBJS := .sg_mover_lease_test.make.o \
-	.sg_mover_lease_under_test.make.o
+MOVER_LEASE_TEST_OBJS := .sg_mover_lease_test.make.o .sg_mover_lease_under_test.make.o
 MOVER_LEASE_TEST_DEPS := $(MOVER_LEASE_TEST_OBJS:.o=.d)
 MOVER_LEASE_TEST_ALL_ARTIFACTS := \
 	sg_mover_lease_test.gnu sg_mover_lease_test.make \
@@ -36,8 +35,7 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS := \
 	.sg_mover_lease_under_test.gnu.o .sg_mover_lease_under_test.gnu.d \
 	$(MOVER_LEASE_TEST_OBJS) $(MOVER_LEASE_TEST_DEPS)
 BUTTON_LIVE_TEST_BIN := sg_button_live_test.make
-BUTTON_LIVE_TEST_OBJS := .sg_button_live_test.make.o \
-	.sg_button_live_under_test.make.o
+BUTTON_LIVE_TEST_OBJS := .sg_button_live_test.make.o .sg_button_live_under_test.make.o
 BUTTON_LIVE_TEST_DEPS := $(BUTTON_LIVE_TEST_OBJS:.o=.d)
 BUTTON_LIVE_TEST_ALL_ARTIFACTS := \
 	sg_button_live_test.gnu sg_button_live_test.make \
@@ -521,6 +519,7 @@ WAVELOOP_PROCESS_TEST := tests/test_waveloop_process_scope.py
 TEMP_FLAG_DIAGNOSTIC_TEST := tests/test_no_temp_flag_diagnostics.py
 CARRIER_RETURN_TEST := tests/test_carrier_return_progress.py
 COMBAT_AIM_TEST := tests/test_combat_aim_envelope.py
+COMBAT_LAND_LEAD_TEST := tests/test_combat_land_lead.py
 OFFENSE_FLAG_PICKUP_TEST := tests/test_offense_flag_pickup_recovery.py
 ROTATOR_SWEEP_TEST_BIN := sg_rotator_sweep_test.make
 ROTATOR_SWEEP_TEST_OBJS := .sg_rotator_sweep_test.make.o .sg_rotator_sweep_under_test.make.o \
@@ -892,8 +891,7 @@ OBJS := \
 	slipgate/sg_pickup_target.o \
 	sg_fields.o \
 	slipgate/sg_snag_repair.o \
-	sg_caco.o \
-	sg_combat.o \
+	sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 	sg_cvars.o \
 	sg_hooks.o \
 	sg_util.o \
@@ -2482,7 +2480,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST) \
 		$(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST) \
 		$(DEFENSE_COMBAT_INTEGRATION_TEST) \
-		$(CARRIER_RETURN_TEST) $(COMBAT_AIM_TEST) \
+		$(CARRIER_RETURN_TEST) $(COMBAT_AIM_TEST) $(COMBAT_LAND_LEAD_TEST) \
 		$(OFFENSE_FLAG_PICKUP_TEST) tests/botfill_selector_test.py \
 		$(ITEM_COMMITMENT_TEST_BIN) $(ITEM_COMMITMENT_INTEGRATION_TEST) \
 		$(HOOK_DIAGNOSTICS_TEST_BIN) \
@@ -2565,6 +2563,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)python3 -B $(DEFENSE_COMBAT_INTEGRATION_TEST)
 	$(Q)python3 -B $(CARRIER_RETURN_TEST)
 	$(Q)python3 -B $(COMBAT_AIM_TEST)
+	$(Q)python3 -B $(COMBAT_LAND_LEAD_TEST)
 	$(Q)python3 -B -m unittest tests.test_offense_flag_pickup_recovery \
 		tests.botfill_selector_test tests.test_flag_state
 	$(Q)./$(ITEM_COMMITMENT_TEST_BIN)

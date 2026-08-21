@@ -103,8 +103,7 @@ COMPOUND_TEST_OBJS = .sg_compound_test.gnu.o \
 	.sg_compound_under_test.gnu.o .sg_compound_action_under_test.gnu.o
 COMPOUND_TEST_DEPS = $(COMPOUND_TEST_OBJS:.o=.d)
 MOVER_LEASE_TEST_BIN = sg_mover_lease_test.gnu
-MOVER_LEASE_TEST_OBJS = .sg_mover_lease_test.gnu.o \
-	.sg_mover_lease_under_test.gnu.o
+MOVER_LEASE_TEST_OBJS = .sg_mover_lease_test.gnu.o .sg_mover_lease_under_test.gnu.o
 MOVER_LEASE_TEST_DEPS = $(MOVER_LEASE_TEST_OBJS:.o=.d)
 MOVER_LEASE_TEST_ALL_ARTIFACTS = \
 	sg_mover_lease_test.gnu sg_mover_lease_test.make \
@@ -113,8 +112,7 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS = \
 	.sg_mover_lease_test.make.o .sg_mover_lease_test.make.d \
 	.sg_mover_lease_under_test.make.o .sg_mover_lease_under_test.make.d
 BUTTON_LIVE_TEST_BIN = sg_button_live_test.gnu
-BUTTON_LIVE_TEST_OBJS = .sg_button_live_test.gnu.o \
-	.sg_button_live_under_test.gnu.o
+BUTTON_LIVE_TEST_OBJS = .sg_button_live_test.gnu.o .sg_button_live_under_test.gnu.o
 BUTTON_LIVE_TEST_DEPS = $(BUTTON_LIVE_TEST_OBJS:.o=.d)
 BUTTON_LIVE_TEST_ALL_ARTIFACTS = \
 	sg_button_live_test.gnu sg_button_live_test.make \
@@ -625,6 +623,7 @@ WAVELOOP_PROCESS_TEST = tests/test_waveloop_process_scope.py
 TEMP_FLAG_DIAGNOSTIC_TEST = tests/test_no_temp_flag_diagnostics.py
 CARRIER_RETURN_TEST = tests/test_carrier_return_progress.py
 COMBAT_AIM_TEST = tests/test_combat_aim_envelope.py
+COMBAT_LAND_LEAD_TEST = tests/test_combat_land_lead.py
 OFFENSE_FLAG_PICKUP_TEST = tests/test_offense_flag_pickup_recovery.py
 ROTATOR_SWEEP_TEST_BIN = sg_rotator_sweep_test.gnu
 ROTATOR_SWEEP_TEST_OBJS = .sg_rotator_sweep_test.gnu.o .sg_rotator_sweep_under_test.gnu.o \
@@ -878,7 +877,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o \
+		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_publication.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -2187,7 +2186,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST) \
 		$(STRIKE_ADAPTER_TEST_BIN) $(STRIKE_ADAPTER_INTEGRATION_TEST) \
 		$(DEFENSE_COMBAT_INTEGRATION_TEST) \
-		$(CARRIER_RETURN_TEST) $(COMBAT_AIM_TEST) \
+		$(CARRIER_RETURN_TEST) $(COMBAT_AIM_TEST) $(COMBAT_LAND_LEAD_TEST) \
 		$(OFFENSE_FLAG_PICKUP_TEST) tests/botfill_selector_test.py \
 		$(ITEM_COMMITMENT_TEST_BIN) $(ITEM_COMMITMENT_INTEGRATION_TEST) \
 		$(HOOK_DIAGNOSTICS_TEST_BIN) \
@@ -2269,6 +2268,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	python3 -B $(DEFENSE_COMBAT_INTEGRATION_TEST)
 	python3 -B $(CARRIER_RETURN_TEST)
 	python3 -B $(COMBAT_AIM_TEST)
+	python3 -B $(COMBAT_LAND_LEAD_TEST)
 	python3 -B -m unittest tests.test_offense_flag_pickup_recovery \
 		tests.botfill_selector_test tests.test_flag_state
 	./$(ITEM_COMMITMENT_TEST_BIN)
