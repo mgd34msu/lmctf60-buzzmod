@@ -5,8 +5,8 @@
 #include "slipgate/sg_cvars.h"
 
 void SG_CombatHit(edict_t *att, edict_t *victim);
-void SG_NoteDamage(edict_t *victim, edict_t *att, int dmg,
-                   int means, vec3_t d);
+void SG_NoteDamage(edict_t *victim, edict_t *att, unsigned long att_ctfid,
+	int dmg, int means, vec3_t d);
 
 /*
 ============
@@ -648,7 +648,8 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 		SG_CombatHit(attacker, targ);
 
 		// Publish the hit to SG perception after damage lands.
-		SG_NoteDamage(targ, attacker, take, mod, dir);
+		SG_NoteDamage(targ, attacker,
+		    G_DamageAttackerCtfid(inflictor, attacker), take, mod, dir);
 
 		/* Debug damage telemetry records the committed hit. */
 		if (sg_cv.debug->value && client &&

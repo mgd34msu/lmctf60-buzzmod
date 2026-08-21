@@ -828,6 +828,9 @@ void	G_SetMovedir (vec3_t angles, vec3_t movedir);
 void	G_InitEdict (edict_t *e);
 edict_t	*G_Spawn (void);
 void	G_FreeEdict (edict_t *e);
+void	G_ProjectileOwnerSet (edict_t *projectile, edict_t *owner);
+unsigned long G_DamageAttackerCtfid (const edict_t *inflictor,
+	const edict_t *attacker);
 
 void	G_TouchTriggers (edict_t *ent);
 void	G_TouchSolids (edict_t *ent);
@@ -1448,6 +1451,7 @@ struct edict_s
 
 	//================================
 	int			movetype;
+	unsigned long	projectile_owner_ctfid;
 	int			flags;
 
 	char		*model;

@@ -1961,7 +1961,7 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	VectorClear (bolt->maxs);
 	bolt->s.modelindex = gi.modelindex ("models/objects/ghook/tris.md2");
 //	bolt->s.sound = gi.soundindex ("weapons/grapple/grfire.wav");
-	bolt->owner = self;
+	G_ProjectileOwnerSet(bolt, self);
 	bolt->touch = hook_touch;
 	bolt->die = hook_die;
 	bolt->nextthink = level.time + 1;

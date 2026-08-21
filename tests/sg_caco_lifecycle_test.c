@@ -2,6 +2,8 @@
 #include <string.h>
 
 #include "g_local.h"
+#include "g_ctffunc.h"
+#include "slipgate/sg_hooks.h"
 #include "slipgate/sg_local.h"
 
 qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
@@ -11,6 +13,18 @@ void Caco_EnemyPlace(rune_t *r, int team_index, int client, int seed,
 
 static edict_t test_edicts[4];
 static gclient_t test_clients[3];
+
+qboolean SG_OwnsBot(edict_t *entity)
+{
+	return entity == &test_edicts[2];
+}
+
+static qboolean NeverInPvs(const vec3_t first, const vec3_t second)
+{
+	(void)first;
+	(void)second;
+	return false;
+}
 
 static int failures;
 
@@ -34,6 +48,31 @@ static void ArmHit(int victim, int slot, int attacker, float time,
 	hit->time = time;
 	hit->unseen = true;
 	VectorCopy(from, hit->from);
+}
+
+static sg_damage_hit_t *HitAt(int victim, float time)
+{
+	int slot;
+
+	for (slot = 0; slot < SG_DMG_RING; slot++)
+		if (sg_caco_damage[victim][slot].landed &&
+		    sg_caco_damage[victim][slot].time == time)
+			return &sg_caco_damage[victim][slot];
+	return NULL;
+}
+
+static void CheckAnonymousImpact(float time)
+{
+	sg_damage_hit_t *hit = HitAt(1, time);
+	int slot;
+
+	CHECK(hit && hit->attacker == -1 && !hit->unseen);
+	CHECK(hit && hit->damage == 40 && hit->mod == MOD_ROCKET);
+	CHECK(hit && VectorLength(hit->from) == 0.0f);
+	CHECK(SG_HurtSince(&test_edicts[2], time - 0.5f));
+	CHECK(!SG_RecentUnseenHit(&test_edicts[2], 0.5f, NULL));
+	for (slot = 0; slot < SG_MAX_ENEMY_TRACK; slot++)
+		CHECK(sg_caco_enemies[0][slot].client != 0);
 }
 
 static void CheckEnemyObservationRetirement(void)
@@ -96,11 +135,95 @@ static void CheckEnemyObservationValidation(void)
 	CHECK(!Caco_EnemyObservationValid(NULL, 0, 0, 16, 0));
 }
 
+static void CheckProjectileGenerationRetirement(void)
+{
+	edict_t projectile;
+	edict_t source;
+	vec3_t direction = { 1.0f, 0.0f, 0.0f };
+	sg_damage_hit_t *hit;
+
+	memset(&projectile, 0, sizeof(projectile));
+	memset(&source, 0, sizeof(source));
+	test_edicts[1].inuse = true;
+	test_edicts[1].health = 100;
+	test_edicts[1].client->ctf.teamnum = CTF_TEAM_BLUE;
+	test_edicts[1].client->ctf.ctfid = 20;
+	test_edicts[2].inuse = true;
+	test_edicts[2].flags = FL_BOT;
+	test_edicts[2].health = 100;
+	test_edicts[2].client->ctf.teamnum = CTF_TEAM_RED;
+	sg_host.in_pvs = NeverInPvs;
+	G_ProjectileOwnerSet(&projectile, &test_edicts[1]);
+	CHECK(projectile.owner == &test_edicts[1]);
+	CHECK(projectile.projectile_owner_ctfid == 20);
+	CHECK(G_DamageAttackerCtfid(&source, &test_edicts[1]) == 20);
+
+	Caco_ResetClient(&test_edicts[1]);
+	test_edicts[1].client->ctf.ctfid = 21;
+	level.time = 12.0f;
+	CHECK(G_DamageAttackerCtfid(&projectile, &test_edicts[1]) == 20);
+	CHECK(G_DamageAttackerCtfid(&source, &test_edicts[1]) == 21);
+	CHECK(G_DamageAttackerCtfid(&test_edicts[1], &test_edicts[1]) == 21);
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1],
+	    G_DamageAttackerCtfid(&projectile, &test_edicts[1]),
+	    40, MOD_ROCKET, direction);
+	CheckAnonymousImpact(12.0f);
+
+	G_ProjectileOwnerSet(&projectile, &test_edicts[1]);
+	test_edicts[1].health = 0;
+	test_edicts[1].deadflag = DEAD_DEAD;
+	level.time = 13.0f;
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1],
+	    G_DamageAttackerCtfid(&projectile, &test_edicts[1]),
+	    40, MOD_ROCKET, direction);
+	CheckAnonymousImpact(13.0f);
+
+	test_edicts[1].health = 100;
+	test_edicts[1].deadflag = DEAD_NO;
+	Caco_ResetClient(&test_edicts[1]);
+	memset(&projectile, 0, sizeof(projectile));
+	projectile.owner = &test_edicts[1];
+	level.time = 14.0f;
+	CHECK(G_DamageAttackerCtfid(&projectile, &test_edicts[1]) == 0);
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1], 0,
+	    40, MOD_ROCKET, direction);
+	CheckAnonymousImpact(14.0f);
+
+	Caco_ResetClient(&test_edicts[1]);
+	G_ProjectileOwnerSet(&projectile, &test_edicts[3]);
+	projectile.projectile_owner_ctfid = test_edicts[1].client->ctf.ctfid;
+	level.time = 15.0f;
+	CHECK(G_DamageAttackerCtfid(&projectile, &test_edicts[1]) == 0);
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1], 0,
+	    40, MOD_ROCKET, direction);
+	CheckAnonymousImpact(15.0f);
+
+	Caco_ResetClient(&test_edicts[1]);
+	G_ProjectileOwnerSet(&projectile, &test_edicts[1]);
+	test_edicts[1].inuse = false;
+	level.time = 16.0f;
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1],
+	    G_DamageAttackerCtfid(&projectile, &test_edicts[1]),
+	    40, MOD_ROCKET, direction);
+	CheckAnonymousImpact(16.0f);
+
+	test_edicts[1].inuse = true;
+	level.time = 17.0f;
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1],
+	    G_DamageAttackerCtfid(&projectile, &test_edicts[1]),
+	    40, MOD_ROCKET, direction);
+	CHECK(SG_RecentUnseenHit(&test_edicts[2], 1.0f, NULL));
+	hit = HitAt(1, 17.0f);
+	CHECK(hit && hit->attacker == 0 && hit->unseen);
+}
+
 int SG_CacoLifecycleTest(void)
 {
 	edict_t *saved_edicts = g_edicts;
 	gclient_t *saved_clients = game.clients;
+	sg_host_t saved_host = sg_host;
 	float saved_time = level.time;
+	int saved_maxclients = game.maxclients;
 	vec3_t from = { 0.0f, 0.0f, 0.0f };
 	vec3_t dead_from = { 1.0f, 0.0f, 0.0f };
 	vec3_t live_from = { 0.0f, 1.0f, 0.0f };
@@ -148,9 +271,12 @@ int SG_CacoLifecycleTest(void)
 	CHECK(sg_caco_damage[victim_slot][1].attacker == 2);
 	CHECK(SG_RecentUnseenHit(&test_edicts[2], 2.0f, from));
 	CHECK(from[0] == 0.0f && from[1] == 1.0f);
+	CheckProjectileGenerationRetirement();
 
 	g_edicts = saved_edicts;
 	game.clients = saved_clients;
+	game.maxclients = saved_maxclients;
+	sg_host = saved_host;
 	level.time = saved_time;
 	return failures;
 }

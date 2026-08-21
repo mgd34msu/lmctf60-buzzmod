@@ -1583,11 +1583,7 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 
 sg_damage_hit_t sg_caco_damage[SG_DMG_CLIENTS][SG_DMG_RING];
 
-/*
- * Did this land on a line that existed for no time at all? Pellets and
- * slugs did; everything else -- blaster bolts included, they fly -- had to
- * travel to get here.
- */
+/* Instant-fire weapons locate the shooter instead of a projectile path. */
 static qboolean Caco_Hitscan(int mod)
 {
 	switch (mod)
@@ -1603,13 +1599,12 @@ static qboolean Caco_Hitscan(int mod)
 	}
 }
 
-/* how far back down the incoming line a projectile's firing point is
- * believed to be, world permitting -- a region, deliberately coarse */
+/* Maximum backtrack along an incoming projectile path. */
 #define SG_DMG_BACKTRACK	512.0f
 
 
-void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
-                   vec3_t dir)
+void SG_NoteDamage(edict_t *victim, edict_t *attacker,
+	unsigned long attacker_ctfid, int damage, int mod, vec3_t dir)
 {
 	sg_damage_hit_t	*ring, *slot;
 	vec3_t			eye, from;
@@ -1623,20 +1618,40 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 	 * is not an SG sighting or callout and must not leak across that boundary. */
 	if (!SG_OwnsBot(victim))
 		return;
-	if (!attacker || !attacker->inuse || !attacker->client ||
-	    attacker == victim)
-		return;
 
 	mod &= ~MOD_FRIENDLY_FIRE;
+	ci = (int)(victim->client - game.clients);
+	if (ci < 0 || ci >= SG_DMG_CLIENTS)
+		return;
+
+	ring = sg_caco_damage[ci];
+	slot = ring;
+	for (i = 1; i < SG_DMG_RING; i++)
+		if (ring[i].time < slot->time)
+			slot = &ring[i];
+	memset(slot, 0, sizeof(*slot));
+	slot->attacker = -1;
+	slot->landed = true;
+	slot->mod = mod;
+	slot->damage = damage;
+	slot->time = level.time;
+
+	if (!attacker || !attacker->inuse || !attacker->client ||
+	    attacker == victim || attacker->health <= 0 ||
+	    attacker->deadflag != DEAD_NO || attacker->movetype == MOVETYPE_NOCLIP ||
+	    attacker_ctfid == 0 || attacker_ctfid != attacker->client->ctf.ctfid)
+		return;
 	team = victim->client->ctf.teamnum;
 	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
 		return;
+	if (attacker->client->ctf.teamnum != CTF_TEAM_RED &&
+	    attacker->client->ctf.teamnum != CTF_TEAM_BLUE)
+		return;
 	if (attacker->client->ctf.teamnum == team)
-		return;		/* a teammate's rocket is regret, not contact */
+		return;
 
-	ci = (int)(victim->client - game.clients);
 	ac = (int)(attacker->client - game.clients);
-	if (ci < 0 || ci >= SG_DMG_CLIENTS || ac < 0)
+	if (ac < 0 || ac >= SG_DMG_CLIENTS)
 		return;
 
 	/* A rail hit is direct evidence of the attacker's firing cadence. */
@@ -1646,12 +1661,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 	VectorCopy(victim->s.origin, eye);
 	eye[2] += victim->viewheight;
 
-	/*
-	 * Where it came from is the reverse of the way it was going. T_Damage
-	 * normalises dir before any of this (g_combat.c), but a few damage
-	 * paths hand over a zero vector, and for those the bearing to the man
-	 * himself is the only direction there is.
-	 */
+	/* A zero damage direction falls back to the attacker bearing. */
 	VectorNegate(dir, from);
 	if (VectorNormalize(from) < 0.1f)
 	{
@@ -1663,18 +1673,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
 	seen = Caco_Visible(victim, attacker);
 	hitscan = Caco_Hitscan(mod);
 
-	/* oldest entry loses: four of them, and no head index to keep in sync */
-	ring = sg_caco_damage[ci];
-	slot = ring;
-	for (i = 1; i < SG_DMG_RING; i++)
-		if (ring[i].time < slot->time)
-			slot = &ring[i];
-
 	slot->attacker = ac;
-	slot->landed = true;
-	slot->mod = mod;
-	slot->damage = damage;
-	slot->time = level.time;
 	slot->unseen = !seen;
 	VectorCopy(from, slot->from);
 

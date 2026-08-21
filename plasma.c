@@ -183,7 +183,7 @@ Spawn_Goop
 (edict_t *ent, vec3_t start) {
 	edict_t *goop = G_Spawn();
 
-	goop->owner=	ent;
+	G_ProjectileOwnerSet(goop, ent);
 	goop->clipmask=	MASK_SHOT;
 	goop->solid=	SOLID_BBOX;
 	goop->svflags=	SVF_DEADMONSTER;

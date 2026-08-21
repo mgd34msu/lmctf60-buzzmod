@@ -364,7 +364,7 @@ void fire_blaster (edict_t *self, vec3_t start, vec3_t dir, int damage, int spee
 		bolt->solid = SOLID_BBOX;
 		bolt->s.renderfx |= RF_BEAM | RF_FULLBRIGHT;
 		bolt->s.modelindex = 1;			// must be non-zero
-		bolt->owner = self;
+		G_ProjectileOwnerSet(bolt, self);
 
 		// set the beam diameter
 		bolt->s.frame = 3;
@@ -423,7 +423,7 @@ void fire_blaster (edict_t *self, vec3_t start, vec3_t dir, int damage, int spee
 	VectorClear (bolt->maxs);
 	bolt->s.modelindex = gi.modelindex ("models/objects/laser/tris.md2");
 	bolt->s.sound = gi.soundindex ("misc/lasfly.wav");
-	bolt->owner = self;
+	G_ProjectileOwnerSet(bolt, self);
 	bolt->touch = blaster_touch;
 	bolt->nextthink = level.time + 2;
 	bolt->think = G_FreeEdict;
@@ -595,7 +595,7 @@ void fire_grenade (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int s
 	VectorClear (grenade->mins);
 	VectorClear (grenade->maxs);
 	grenade->s.modelindex = gi.modelindex ("models/objects/grenade/tris.md2");
-	grenade->owner = self;
+	G_ProjectileOwnerSet(grenade, self);
 	grenade->touch = Grenade_Touch;
 	grenade->nextthink = level.time + timer;
 	grenade->think = Grenade_Explode;
@@ -632,7 +632,7 @@ void fire_grenade2 (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int 
 	VectorClear (grenade->mins);
 	VectorClear (grenade->maxs);
 	grenade->s.modelindex = gi.modelindex ("models/objects/grenade2/tris.md2");
-	grenade->owner = self;
+	G_ProjectileOwnerSet(grenade, self);
 	grenade->touch = Grenade_Touch;
 	grenade->nextthink = level.time + timer;
 	grenade->think = Grenade_Explode;
@@ -731,7 +731,7 @@ void fire_rocket (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed
 	VectorClear (rocket->mins);
 	VectorClear (rocket->maxs);
 	rocket->s.modelindex = gi.modelindex ("models/objects/rocket/tris.md2");
-	rocket->owner = self;
+	G_ProjectileOwnerSet(rocket, self);
 	rocket->touch = rocket_touch;
 	rocket->nextthink = level.time + 8000/speed;
 	rocket->think = G_FreeEdict;
@@ -1024,7 +1024,7 @@ void fire_bfg (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed, f
 	VectorClear (bfg->mins);
 	VectorClear (bfg->maxs);
 	bfg->s.modelindex = gi.modelindex ("sprites/s_bfg1.sp2");
-	bfg->owner = self;
+	G_ProjectileOwnerSet(bfg, self);
 	bfg->touch = bfg_touch;
 	bfg->nextthink = level.time + 8000/speed;
 	bfg->think = G_FreeEdict;

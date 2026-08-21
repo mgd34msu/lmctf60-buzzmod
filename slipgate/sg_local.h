@@ -429,10 +429,9 @@ typedef struct
 
 extern sg_damage_hit_t sg_caco_damage[SG_DMG_CLIENTS][SG_DMG_RING];
 
-/* the T_Damage hand-off (g_combat.c, beside SG_CombatHit): every landed hit
- * on a bot, shooter seen or not */
-void SG_NoteDamage(edict_t *victim, edict_t *attacker, int damage, int mod,
-                   vec3_t dir);
+/* T_Damage records the hit; attacker_ctfid gates shooter identity. */
+void SG_NoteDamage(edict_t *victim, edict_t *attacker,
+	unsigned long attacker_ctfid, int damage, int mod, vec3_t dir);
 
 /* the newest hit from a shooter this bot could NOT see, if one landed within
  * `window` seconds. Fills a unit vector pointing back down the incoming line.

@@ -636,6 +636,21 @@ int main(void)
 
 
 class CombatAimEnvelopeTest(unittest.TestCase):
+    def test_every_player_projectile_binds_its_firing_generation(self) -> None:
+        weapon = (ROOT / "g_weapon.c").read_text()
+        hook = (ROOT / "p_weapon.c").read_text()
+        plasma = (ROOT / "plasma.c").read_text()
+
+        self.assertEqual(weapon.count("G_ProjectileOwnerSet("), 6)
+        self.assertNotIn("bolt->owner = self;", weapon)
+        self.assertNotIn("grenade->owner = self;", weapon)
+        self.assertNotIn("rocket->owner = self;", weapon)
+        self.assertNotIn("bfg->owner = self;", weapon)
+        self.assertIn("G_ProjectileOwnerSet(bolt, self);", hook)
+        self.assertNotIn("bolt->owner = self;", hook)
+        self.assertIn("G_ProjectileOwnerSet(goop, ent);", plasma)
+        self.assertNotIn("goop->owner=\tent;", plasma)
+
     def test_spawn_binds_combat_sequence_to_new_client_life(self) -> None:
         client = (ROOT / "p_client.c").read_text()
         spawn = client[client.index("client->ctf.ctfid = unique_id++;"):

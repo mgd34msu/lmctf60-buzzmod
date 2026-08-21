@@ -473,6 +473,26 @@ void G_InitEdict (edict_t *e)
 	SG_MechCatalogEntityInitialized(e);
 }
 
+void G_ProjectileOwnerSet(edict_t *projectile, edict_t *owner)
+{
+	projectile->owner = owner;
+	projectile->projectile_owner_ctfid =
+	    owner && owner->client ? owner->client->ctf.ctfid : 0;
+}
+
+unsigned long G_DamageAttackerCtfid(const edict_t *inflictor,
+	const edict_t *attacker)
+{
+	if (!inflictor || !attacker || !attacker->client)
+		return 0;
+	if (inflictor == attacker)
+		return attacker->client->ctf.ctfid;
+	if (inflictor->owner)
+		return inflictor->owner == attacker ?
+		    inflictor->projectile_owner_ctfid : 0;
+	return attacker->client->ctf.ctfid;
+}
+
 /*
 =================
 G_Spawn

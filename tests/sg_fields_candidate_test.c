@@ -63,11 +63,6 @@ int SG_TeamIdx(int team)
 	return team - CTF_TEAM_RED;
 }
 
-vec_t VectorLength(vec3_t v)
-{
-	return sqrtf(DotProduct(v, v));
-}
-
 static void TestDprint(const char *fmt, ...)
 {
 	(void)fmt;

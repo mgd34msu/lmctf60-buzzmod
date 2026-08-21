@@ -315,10 +315,10 @@ RUNE_MECHANISM_EXECUTION_TEST_OBJS = \
 	.sg_delayed_relay_dispatch_move_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_util_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_view_under_test.gnu.o \
-	.sg_delayed_relay_dispatch_utils_under_test.gnu.o \
+	.sg_game_utils_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_trigger_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_button_under_test.gnu.o \
-	.sg_delayed_relay_dispatch_q_shared_under_test.gnu.o
+	.sg_q_shared_under_test.gnu.o
 RUNE_MECHANISM_EXECUTION_TEST_DEPS = \
 	$(RUNE_MECHANISM_EXECUTION_TEST_OBJS:.o=.d)
 RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS = \
@@ -334,14 +334,14 @@ RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS = \
 	.sg_delayed_relay_dispatch_util_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_view_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_view_under_test.$(flavor).d \
-	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).o \
-	.sg_delayed_relay_dispatch_utils_under_test.$(flavor).d \
+	.sg_game_utils_under_test.$(flavor).o \
+	.sg_game_utils_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_trigger_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_trigger_under_test.$(flavor).d \
 	.sg_delayed_relay_dispatch_button_under_test.$(flavor).o \
 	.sg_delayed_relay_dispatch_button_under_test.$(flavor).d \
-	.sg_delayed_relay_dispatch_q_shared_under_test.$(flavor).o \
-	.sg_delayed_relay_dispatch_q_shared_under_test.$(flavor).d)
+	.sg_q_shared_under_test.$(flavor).o \
+	.sg_q_shared_under_test.$(flavor).d)
 RUNE_BINDING_TEST_BIN = sg_rune_binding_test.gnu
 RUNE_BINDING_TEST_OBJS = .sg_rune_binding_test.gnu.o \
 	.sg_rune_binding_under_test.gnu.o \
@@ -401,8 +401,8 @@ DANGER_TEST_OBJS = .sg_danger_test.gnu.o .sg_danger_under_test.gnu.o \
 DANGER_TEST_DEPS = $(DANGER_TEST_OBJS:.o=.d)
 FIELDS_CANDIDATE_TEST_BIN = sg_fields_candidate_test.gnu
 FIELDS_CANDIDATE_TEST_OBJS = .sg_fields_candidate_test.gnu.o \
-	.sg_caco_lifecycle_test.gnu.o \
-	.sg_fields_candidate_under_test.gnu.o \
+	.sg_caco_lifecycle_test.gnu.o .sg_game_utils_under_test.gnu.o \
+	.sg_q_shared_under_test.gnu.o .sg_fields_candidate_under_test.gnu.o \
 	.sg_caco_projection_under_test.gnu.o \
 	.sg_goal_projection_under_test.gnu.o \
 	.sg_snag_repair_under_test.gnu.o \
@@ -1538,7 +1538,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
-.sg_delayed_relay_dispatch_utils_under_test.gnu.o: g_utils.c \
+.sg_game_utils_under_test.gnu.o: g_utils.c \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
@@ -1560,7 +1560,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
-.sg_delayed_relay_dispatch_q_shared_under_test.gnu.o: q_shared.c \
+.sg_q_shared_under_test.gnu.o: q_shared.c \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
