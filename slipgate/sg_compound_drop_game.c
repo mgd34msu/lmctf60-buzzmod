@@ -389,6 +389,27 @@ qboolean SG_CompoundDropGamePose(const edict_t *entity,
 	return true;
 }
 
+void SG_CompoundDropGameDebugResult(sg_bot_t *bot, const char *stage,
+	const sg_compound_drop_live_result_t *result,
+	const sg_replay_pose_t *pose)
+{
+	if (!bot || !stage || !result || !pose || !sg_cv.debug ||
+	    sg_cv.debug->value <= 0.0f || !sg_host.dprint)
+		return;
+	sg_host.dprint("slipgate: ddrop stage=%s bot=%d link=%d phase=%d "
+	               "replay=%d outcome=%d failure=%s replay_reason=%d "
+	               "elapsed=%d origin=(%.3f %.3f %.3f) velocity=(%.3f %.3f %.3f)\n",
+	               stage, (int)(bot - sg_bots),
+	               bot->compound_drop_live.drop_link,
+	               bot->compound_drop_live.outer.phase,
+	               bot->compound_drop_live.replay_kind, result->outcome,
+	               SG_CompoundDropLiveFailureName(result->failure),
+	               result->replay_reason,
+	               bot->compound_drop_live.transaction_elapsed_ms,
+	               pose->origin[0], pose->origin[1], pose->origin[2],
+	               pose->velocity[0], pose->velocity[1], pose->velocity[2]);
+}
+
 int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 {
 	rune_t *rune = SG_Rune();
