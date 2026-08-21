@@ -10,7 +10,7 @@ if [[ ${POV_ENABLE-} == 1 && ! ${BASH_SOURCE[0]} =~ ^/proc/self/fd/[0-9]+$ ]]; t
     CLEAN_ENV=(POV_ENABLE=1 "ITERATE_TRUSTED_SCRIPT_DIR=$ITERATE_TRUSTED_SCRIPT_DIR")
     for clean_name in HOME USER LANG Q2DED GAMEDIR_ROOT GAME CFG PORT_BASE \
         YAMAGI_CLIENT POV_FINALIZE_DELAY DISPLAY WAYLAND_DISPLAY XAUTHORITY \
-        XDG_RUNTIME_DIR PULSE_SERVER; do
+        XDG_RUNTIME_DIR PULSE_SERVER POV_LANE POV_TARGET; do
         if [[ -v $clean_name ]]; then
             CLEAN_ENV+=("$clean_name=${!clean_name}")
         fi
@@ -32,10 +32,23 @@ if [[ ${POV_ENABLE-} == 1 ]]; then
     POV_ENABLED=1
     YAMAGI_CLIENT="${YAMAGI_CLIENT:-$HOME/Games/Quake2/engines/yquake2/release/quake2}"
     POV_FINALIZE_DELAY="${POV_FINALIZE_DELAY:-3}"
+    POV_LANE="${POV_LANE:-3}"
+    POV_TARGET="${POV_TARGET:-[SG]Arach}"
     [[ $POV_FINALIZE_DELAY =~ ^[1-9][0-9]*$ ]] || {
         echo "POV_FINALIZE_DELAY must be positive" >&2
         exit 2
     }
+    [[ $POV_LANE =~ ^([1-9]|10)$ ]] || {
+        echo "POV_LANE must be an integer in [1,10]" >&2
+        exit 2
+    }
+    [[ $POV_TARGET =~ ^\[SG\][A-Za-z]+$ ]] || {
+        echo "POV_TARGET must name one [SG] bot" >&2
+        exit 2
+    }
+    POV_SLOT=$((10#$POV_LANE - 1))
+    printf -v POV_SERVER 's%02d' "$POV_LANE"
+    POV_SPECTATOR="pov_$POV_SERVER"
 fi
 
 if ((POV_ENABLED)); then
@@ -91,6 +104,46 @@ for map_slot in 0 1 2 3 4 5 6 7 8 9; do
         fi
     done
 done
+module_sha256() {
+    local path="$1" digest remainder
+    [ -f "$path" ] || return 1
+    read -r digest remainder < <(/usr/bin/sha256sum -- "$path") || return 1
+    [[ $digest =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s' "$digest"
+}
+MODULE_SHA="$(module_sha256 "$GAMEDIR_ROOT/$GAME/game.so")" || {
+    echo "cannot hash deployed game.so" >&2
+    exit 2
+}
+MODULE64_SHA="$(module_sha256 "$GAMEDIR_ROOT/$GAME/gamex86_64.so")" || {
+    echo "cannot hash deployed gamex86_64.so" >&2
+    exit 2
+}
+if [[ $MODULE_SHA != "$MODULE64_SHA" ]]; then
+    echo "deployed game module hashes disagree" >&2
+    exit 2
+fi
+WAVE_MANIFEST="$LOG_DIR/wave-manifest.tsv"
+{
+    printf 'format\tlmctf-wave-manifest-1\n'
+    printf 'wave\t%s\n' "$NAME"
+    printf 'module_before_sha256\t%s\n' "$MODULE_SHA"
+    for map_slot in 0 1 2 3 4 5 6 7 8 9; do
+        printf 'lane\t%s\t%s\n' "${LABELS[$map_slot]}" "${MAPS[$map_slot]}"
+    done
+} > "$WAVE_MANIFEST.tmp" || exit 2
+/usr/bin/mv -f -- "$WAVE_MANIFEST.tmp" "$WAVE_MANIFEST" || exit 2
+
+finish_wave_manifest() {
+    local game_sha game64_sha
+    game_sha="$(module_sha256 "$GAMEDIR_ROOT/$GAME/game.so")" || return 1
+    game64_sha="$(module_sha256 "$GAMEDIR_ROOT/$GAME/gamex86_64.so")" || return 1
+    if [[ $game_sha != "$MODULE_SHA" || $game64_sha != "$MODULE_SHA" ]]; then
+        echo "deployed game module changed during wave $NAME" >&2
+        return 1
+    fi
+    printf 'module_after_sha256\t%s\n' "$game_sha" >> "$WAVE_MANIFEST"
+}
 FILLS=( "2"      "5:0"    "5"      "5"      "5"       "5:3"    "5:3"     "7"      "5"      "5")
 SECS=(  600      600      900      900      900       900      900       600      900      900)
 LONEWOLF=(1    1        1        1        1         1        1         1        1        1)
@@ -189,7 +242,7 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
     NORMAL_LOG="$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
     CHILD_LOG="$NORMAL_LOG"
     POV_SELECTED=0
-    if ((POV_ENABLED)) && [[ $i == 2 ]]; then
+    if ((POV_ENABLED)) && [[ $i == "$POV_SLOT" ]]; then
         POV_SELECTED=1
         CHILD_LOG="$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.pov-launch.log"
     fi
@@ -313,9 +366,9 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
                     --q2ded "$Q2DED" \
                     --client "$YAMAGI_CLIENT" --gamedir-root "$GAMEDIR_ROOT" \
                     --game "$GAME" --config "$GAMEDIR_ROOT/$GAME/$WCFG" --normal-log "$NORMAL_LOG" \
-                    --lane-root "$LOG_DIR" --wave "$NAME" --server s03 \
+                    --lane-root "$LOG_DIR" --wave "$NAME" --server "$POV_SERVER" \
                     --map "${MAPS[$i]}" --port "$((PORT_BASE + i))" \
-                    --spectator pov_s03 --target '[SG]Arach' \
+                    --spectator "$POV_SPECTATOR" --target "$POV_TARGET" \
                     --duration "${SECS[$i]}" --stagger "${STAGGER[$i]}" \
                     --finalize-delay "$POV_FINALIZE_DELAY" \
                     --supervisor-fd "$POV_SUPERVISOR_FD" \
@@ -355,14 +408,13 @@ if ((!POV_ENABLED)); then
             WAVE_STATUS=1
         fi
     done
+    finish_wave_manifest || WAVE_STATUS=1
     exit "$WAVE_STATUS"
 fi
 POV_STATUS=0
 for i in 0 1 2 3 4 5 6 7 8 9; do
     if ! wait "${FLEET_PIDS[$i]}"; then
-        if [[ $i == 2 ]]; then
-            POV_STATUS=1
-        fi
+        POV_STATUS=1
     fi
 done
 
@@ -374,4 +426,5 @@ for i in 0 1 2 3 4 5 6 7 8 9; do
         POV_STATUS=1
     fi
 done
+finish_wave_manifest || POV_STATUS=1
 exit "$POV_STATUS"

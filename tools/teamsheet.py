@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Render comparable team-play sheets from LMCTF demos.
+"""Render team-play sheets for spacing, objectives, and coordination.
 
-Panels measure spacing, carrier escort, home-stand coverage, and synchronized
-pushes from the shared position and flag-carry streams. Missing stand positions
-must be supplied by a map fixture. PNGs contain fixed-scale blind output; JSON
-sidecars retain source identities and derived scalars.
-"""
+PNGs use fixed scales; JSON sidecars retain source identities and scalars."""
 import argparse
 import collections
 import json
@@ -16,13 +12,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import film as F
-import routesheet as RS         # roc_auc / _ranks / glob helpers ONLY, for
-                                 # --calibrate -- same reuse fightsheet.py
-                                 # makes of this module
-import mapflags as MF           # read_game_file/bsp_entities/parse_ents ONLY,
-                                 # for major_item_locations -- same
-                                 # already-proven-elsewhere reuse rule
-                                 # resolve_stands applies to F.flag_stands
+import routesheet as RS
+import mapflags as MF
 
 import numpy as np
 
@@ -104,11 +95,7 @@ FIGDPI = 140
 
 
 class StandsMissing(Exception):
-    """Raised when panels 3/4 need a flag stand position this demo's own
-    carry windows never established and --stands does not supply either.
-    Caught in main() and reported as SKIP, the same treatment
-    F.DemoUndersampled and routesheet.RouteFixtureMissing get -- a refusal
-    to render a misleading (partial) sheet, not a crash."""
+    """No carry, BSP, or fixture establishes both flag stands."""
 
 
 # ============================================================ analysis
@@ -122,23 +109,34 @@ def team_members(labels, teams):
     return {t: sorted(n for n in labels if teams.get(n) == t) for t in TEAMS}
 
 
-def resolve_stands(mapname, windows, stands_file):
+def resolve_stands(mapname, windows, stands_file, gamedir=None):
     """{'red': (x,y), 'blue': (x,y)} or raise StandsMissing.
 
     Primary source is F.flag_stands(windows), the same carry-start-position
-    estimate film.py's own outcome classifier uses.  --stands (a mapname ->
-    {red:[x,y,z], blue:[x,y,z]} JSON file) fills in a color this demo never
-    had a carry of.  Only the (x, y) plane is used from either source --
+    estimate film.py's own outcome classifier uses.  The installed BSP, then
+    --stands, fills in a color this demo never had a carry of.  Only the
+    (x, y) plane is used from any source --
     flag_stands never had a z component (film.py MODULE the carry path only
     stores it for completeness, flag_stands' own median is 2-D), so keeping
     both sources 2-D avoids inventing a z the two could disagree on."""
     derived = F.flag_stands(windows)
     out = {}
+    bsp_stands = None
     missing = []
     for color in TEAMS:
         if color in derived:
             out[color] = (float(derived[color][0]), float(derived[color][1]))
             continue
+        if gamedir:
+            if bsp_stands is None:
+                try:
+                    bsp_stands = MF.flag_origins(gamedir, mapname)
+                except (OSError, ValueError):
+                    bsp_stands = {}
+            entry = bsp_stands.get(color)
+            if entry is not None:
+                out[color] = (float(entry[0]), float(entry[1]))
+                continue
         entry = (stands_file or {}).get(mapname or '', {}).get(color)
         if entry is not None and len(entry) >= 2:
             out[color] = (float(entry[0]), float(entry[1]))
@@ -148,8 +146,8 @@ def resolve_stands(mapname, windows, stands_file):
         raise StandsMissing(
             f"flag stand position(s) missing for {missing} on "
             f"map={mapname!r}: not derivable from this demo's own carry "
-            f"windows (no steal of that color occurred) and not present in "
-            f"the --stands file for this map. Provide --stands as a JSON "
+            f"windows (no steal of that color occurred), the installed BSP, "
+            f"or the --stands file. Provide --gamedir or --stands as a JSON "
             f"file mapping mapname -> "
             f'{{"red": [x,y,z], "blue": [x,y,z]}}.')
     return out
@@ -608,7 +606,7 @@ def analyze_demo(demo_path, pov_parity=False, pov_ent=None,
     posidx = position_index(tracks, labels)
 
     windows, n_excluded_carries = F.carry_windows(tracks, labels)
-    stands = resolve_stands(d['map'], windows, stands_file)
+    stands = resolve_stands(d['map'], windows, stands_file, gamedir)
 
     for w in windows:
         frac, total, escorted, team = window_escort_fraction(
@@ -844,8 +842,7 @@ NOTES_TEXT = "\n".join([
     "  * time on every panel is normalized to the match. No panel shows an absolute duration, a player count, or",
     "    a frame count; every axis ceiling is a fixed instrument constant, chosen once, never fit to this demo.",
     "  * escort, defense and spacing radii (400u / 600u) are fixed thresholds, identical on every sheet.",
-    "  * flag stand positions are estimated from this demo's own carry-start positions (or supplied by --stands",
-    "    when this demo never had a steal of that colour); they are geometric estimates, not read from game state.",
+    "  * flag stand positions come from carry starts, then the installed BSP or --stands for missing colours.",
     "  * panel 2's carry-window rows are a fixed, padded count, chosen by duration and drawn in time order; an",
     "    empty row means nothing filled it. Panel 3's steal/capture ticks are drawn even when a demo has none.",
     "  * a frame with no sampled player near a threshold reads as 'not present' on both demo shapes alike -- a",
@@ -967,7 +964,7 @@ def _cache_key(path, pov_parity, radius, fov, stands_path, gamedir=None,
         radius = fov = None
     return f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|" \
            f"{int(bool(pov_parity))}|{radius}|{fov}|{stands_path or ''}" \
-           f"|{gamedir or ''}|{items_path or ''}|teamsheet-v2"
+           f"|{gamedir or ''}|{items_path or ''}|teamsheet-v3"
 
 
 def load_stands_file(path):
@@ -1002,7 +999,7 @@ def _calib_cache_key(path, pov_parity, escort_radius, defense_radius,
     return f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|" \
            f"{int(bool(pov_parity))}|{escort_radius}|{defense_radius}|" \
            f"{stands_path or ''}|{gamedir or ''}|{items_path or ''}" \
-           f"|teamsheet-calib-v2"
+           f"|teamsheet-calib-v3"
 
 
 def collect_scalars(paths, pov_parity, escort_radius, defense_radius,
@@ -1133,13 +1130,13 @@ def main():
     ap.add_argument('--out', help='output directory (required to render)')
     ap.add_argument('--stands', default=None,
                     help='JSON file: mapname -> {"red":[x,y,z],'
-                         '"blue":[x,y,z]}, used when a demo\'s own carry '
-                         'windows never establish one of the two stands')
+                         '"blue":[x,y,z]}, fallback when a demo and the '
+                         'installed BSP do not establish both stands')
     ap.add_argument('--gamedir', default=None,
                     help='Quake2 game directory (maps/<name>.bsp loose or '
                          'in a .pak) EYE 1 (major_item_presence) reads '
-                         'item_health_mega/item_armor_body origins from, '
-                         'via mapflags.py\'s own BSP entity reader')
+                         'flag stands and major-item origins from, via '
+                         'mapflags.py\'s BSP entity reader')
     ap.add_argument('--items', default=None,
                     help='JSON file: mapname -> [[x,y,z], ...] major-item '
                          'locations, used when --gamedir is not given or a '
@@ -1233,6 +1230,7 @@ def main():
     items_file = load_items_file(args.items) if args.items else None
 
     if args.scalars:
+        scalar_failures = 0
         cpath = os.path.expanduser(args.cache)
         cache = {}
         if os.path.exists(cpath):
@@ -1250,6 +1248,7 @@ def main():
                 if row.get('skip'):
                     sys.stderr.write(f"SKIP {os.path.basename(p)}: "
                                      f"{row['skip']} (cached)\n")
+                    scalar_failures += 1
                     continue
             else:
                 try:
@@ -1264,10 +1263,12 @@ def main():
                     sys.stderr.write(f"SKIP {os.path.basename(p)}: "
                                      f"{type(e).__name__}: {e}\n")
                     cache[key] = {'skip': f'{type(e).__name__}: {e}'}
+                    scalar_failures += 1
                     continue
                 except Exception as e:
                     sys.stderr.write(f"FAIL {os.path.basename(p)}: "
                                      f"{type(e).__name__}: {e}\n")
+                    scalar_failures += 1
                     continue
                 row = {'map': a['d']['map'],
                        'shape': 'bot' if a['d']['svrecord'] else 'human'}
@@ -1280,7 +1281,7 @@ def main():
         os.makedirs(os.path.dirname(cpath) or '.', exist_ok=True)
         with open(cpath, 'w') as f:
             json.dump(cache, f)
-        return
+        return 1 if scalar_failures else 0
 
     if not args.out:
         ap.error('--out is required to render sheets')
@@ -1330,7 +1331,8 @@ def main():
 
     print(f"\n{len(ok)} sheet(s) written to {args.out}, "
           f"{len(skipped)} skipped, {len(failed)} failed")
+    return 1 if skipped or failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

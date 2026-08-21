@@ -1837,11 +1837,13 @@ def main():
 
     if args.coverage_report:
         rows = []
+        failures = 0
         for demo in args.demos:
             try:
                 d = walk_demo(demo)
                 if d['frames'] / FPS < DURATION_MIN_S:
                     print(f"SKIP {os.path.basename(demo)} (under-sampled)")
+                    failures += 1
                     continue
                 cap_tracks_to_duration(d)
                 labels, _teams = anonymize(d)
@@ -1860,13 +1862,15 @@ def main():
                       f"median_other={cov['median_other_fraction']:.3f}")
             except Exception as e:
                 print(f"FAIL {os.path.basename(demo)}: {type(e).__name__}: {e}")
+                failures += 1
         if rows:
             print(f"\nn={len(rows)} coverage min={min(rows):.3f} "
                   f"median={float(np.median(rows)):.3f} max={max(rows):.3f}")
-        return
+        return 1 if failures else 0
 
     if args.pool:
         pooled = []
+        failures = 0
         for demo in args.demos:
             try:
                 d = walk_demo(demo)
@@ -1881,14 +1885,16 @@ def main():
                 pooled.extend(ws)
             except DemoUndersampled:
                 print(f"SKIP {demo.rsplit('/',1)[-1]} (under-sampled)")
+                failures += 1
             except Exception as e:
                 print(f"FAIL {demo.rsplit('/',1)[-1]} ({type(e).__name__})")
+                failures += 1
         _dist, mean_pw, ent_bits, n_cl = carry_route_dissimilarity(pooled)
         print(f"POOLED demos={len(args.demos)} carries={len(pooled)} "
               f"mean_frechet={(mean_pw if mean_pw is not None else float('nan')):.0f} "
               f"entropy={(ent_bits if ent_bits is not None else float('nan')):.2f} bits "
               f"clusters={n_cl}")
-        return
+        return 1 if failures else 0
 
     ok, failed, skipped = [], [], []
     for path in args.demos:
@@ -1920,7 +1926,8 @@ def main():
     print(f"\n{len(ok)} sheet(s) written to {args.out}, "
           f"{len(skipped)} skipped (under-sampled), "
           f"{len(failed)} failed")
+    return 1 if skipped or failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

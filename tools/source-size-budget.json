@@ -59,12 +59,12 @@
     "tools/runegen_pair.py": 1,
     "tools/setup.sh": 7,
     "tools/stealstage.py": 7,
-    "tools/teamsheet.py": 9,
+    "tools/teamsheet.py": 8,
     "tools/waveloop.sh": 1
   },
   "oversized_files": {
-    "GNUmakefile": 2707,
-    "Makefile": 2948,
+    "GNUmakefile": 2713,
+    "Makefile": 2954,
     "slipgate/sg_arach.c": 3689,
     "slipgate/sg_caco.c": 2117,
     "slipgate/sg_chat.c": 3812,
@@ -114,18 +114,18 @@
     "tests/test_snagrepair.py": 911,
     "tests/test_strike_integration.py": 2057,
     "tools/bspmechanisms.py": 1855,
-    "tools/fightsheet.py": 2130,
-    "tools/film.py": 1926,
+    "tools/fightsheet.py": 2137,
+    "tools/film.py": 1933,
     "tools/gen_rune_contracts.py": 1305,
     "tools/hookevents.py": 993,
     "tools/outcomecard.py": 819,
-    "tools/routesheet.py": 1197,
+    "tools/routesheet.py": 1204,
     "tools/rune_corpus_controller.py": 3992,
     "tools/runegen.sh": 550,
     "tools/runegen_pair.py": 914,
     "tools/runeio.py": 2524,
     "tools/snag_corpus.py": 1103,
     "tools/stealstage.py": 3959,
-    "tools/teamsheet.py": 1336
+    "tools/teamsheet.py": 1338
   }
 }

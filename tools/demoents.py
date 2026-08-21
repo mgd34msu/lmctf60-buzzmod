@@ -74,7 +74,8 @@ def walk_entities(path, maxplayers=32):
     carry a frame number followed by entities encoded against a zero baseline.
     A signon player number of -1 selects the serverrecord shape.
     """
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as stream:
+        data = stream.read()
     off = 0
     playernum = None
     mapname = None
@@ -130,6 +131,7 @@ def walk_entities(path, maxplayers=32):
                             raise ValueError(
                                 f"svrecord frame not followed by "
                                 f"packetentities (got {svc2})")
+                        ents.clear()
                         parse_packetentities_track()
                         frame_idx += 1
                         for num, o in ents.items():

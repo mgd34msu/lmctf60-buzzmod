@@ -620,6 +620,8 @@ RUNGEN_TEST = tests/test_runegen_gate.py
 RUNGEN_PAIR_TEST = tests/test_runegen_pair.py
 RUNGEN_PAIR_TOOL = tools/runegen_pair.py
 BOTKIN_TEST = tests/test_botkin_cli.py
+FILM_PYTHON ?= $(HOME)/.venvs/slipgate-film/bin/python
+SHEET_CLI_TEST = tests/test_fightsheet_cli_status.py
 RUNE_CORPUS_CONTROLLER_TEST = tests/test_rune_corpus_controller.py
 BSPMECHANISMS_TEST = tests/test_bspmechanisms.py
 WAVELOOP_PROCESS_TEST = tests/test_waveloop_process_scope.py
@@ -1007,7 +1009,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-mechanism-catalog-test rune-mechanism-execution-test rune-binding-test \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
-	runegen-test botkin-test \
+	runegen-test botkin-test sheet-cli-test \
 	deslop-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-test fields-candidate-test snag-repair-test \
@@ -2177,7 +2179,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(RUNE_PYTHON_TESTS) \
 		$(RUNGEN_TEST) \
 		$(RUNGEN_PAIR_TEST) \
-		$(BOTKIN_TEST) \
+		$(BOTKIN_TEST) $(SHEET_CLI_TEST) \
 		$(RUNE_CORPUS_CONTROLLER_TEST) \
 		$(BSPMECHANISMS_TEST) \
 		$(WAVELOOP_PROCESS_TEST) \
@@ -2252,6 +2254,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	python3 $(RUNGEN_TEST)
 	python3 -m unittest tests.test_runegen_pair
 	python3 $(BOTKIN_TEST)
+	$(FILM_PYTHON) -B $(SHEET_CLI_TEST)
 	python3 -m unittest tests.test_rune_corpus_controller
 	python3 -B $(BSPMECHANISMS_TEST)
 	python3 $(WAVELOOP_PROCESS_TEST)
@@ -2327,6 +2330,9 @@ runegen-test: tools/runegen.sh $(RUNGEN_PAIR_TOOL) $(RUNGEN_TEST) \
 
 botkin-test: tools/botkin.py $(BOTKIN_TEST)
 	python3 $(BOTKIN_TEST)
+
+sheet-cli-test: $(SHEET_CLI_TEST)
+	$(FILM_PYTHON) -B $(SHEET_CLI_TEST)
 
 action-test: $(ACTION_TEST_BIN)
 	./$(ACTION_TEST_BIN)

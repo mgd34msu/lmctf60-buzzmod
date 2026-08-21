@@ -369,7 +369,8 @@ def parse_delta_entity_fight(r, bits, o, is_svrecord=False):
 
 def walk_demo_events(path, maxplayers=32, capture_events=True):
     """Decode a demo with the shared entity parser and retain combat events."""
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as stream:
+        data = stream.read()
     off = 0
     mapname = None
     skins = {}
@@ -441,6 +442,7 @@ def walk_demo_events(path, maxplayers=32, capture_events=True):
                             raise ValueError(
                                 f"svrecord frame not followed by "
                                 f"packetentities (got {svc2})")
+                        ents.clear()
                         read_packetentities()
                         snapshot()
                     else:
@@ -2044,10 +2046,10 @@ def main():
         ap.error('no demos given')
 
     if args.verify_parser:
-        verify_parser(args.demos)
-        return
+        return 0 if verify_parser(args.demos) else 1
 
     if args.scalars:
+        scalar_failures = 0
         print('demo_shape,map,basename,' + ','.join(SCALAR_KEYS))
         for p in args.demos:
             try:
@@ -2057,16 +2059,18 @@ def main():
                                  pov_fov=args.pov_fov)
             except F.DemoUndersampled as e:
                 sys.stderr.write(f"SKIP {os.path.basename(p)}: {e}\n")
+                scalar_failures += 1
                 continue
             except Exception as e:
                 sys.stderr.write(f"FAIL {os.path.basename(p)}: "
                                  f"{type(e).__name__}: {e}\n")
+                scalar_failures += 1
                 continue
             shape = 'bot' if a['d']['svrecord'] else 'human'
             vals = ','.join('' if a['scalars'][k] is None
                             else f"{a['scalars'][k]:.6f}" for k in SCALAR_KEYS)
             print(f"{shape},{a['d']['map']},{os.path.basename(p)},{vals}")
-        return
+        return 1 if scalar_failures else 0
 
     if not args.out:
         ap.error('--out is required to render sheets')
@@ -2124,7 +2128,10 @@ def main():
         for f_ in rep['findings']:
             print(f"  {f_}")
         print(f"  verdict: {'PASS' if rep['ok'] else 'FAIL'}")
+        if not rep['ok']:
+            return 1
+    return 1 if skipped or failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

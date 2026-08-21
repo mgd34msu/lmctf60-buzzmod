@@ -1109,11 +1109,13 @@ def main():
 
     if args.build_nodes:
         seen = {}
+        failures = 0
         for p in args.demos:
             try:
                 d = F.walk_demo(p)
             except Exception as e:
                 print(f"FAIL {os.path.basename(p)}: {e}")
+                failures += 1
                 continue
             m = d['map']
             if not m or m in seen:
@@ -1127,10 +1129,12 @@ def main():
                       f"-> {os.path.join(os.path.dirname(F.find_rune(args.runedir, m)), m + '.nodes.json')}")
             except Exception as e:
                 print(f"FAIL map={m}: {type(e).__name__}: {e}")
+                failures += 1
         print(f"\n{len(seen)} map fixture(s) available")
-        return
+        return 1 if failures else 0
 
     if args.scalars:
+        scalar_failures = 0
         print('demo_shape,map,basename,' + ','.join(SCALAR_KEYS))
         for p in args.demos:
             try:
@@ -1140,16 +1144,18 @@ def main():
                                  pov_fov=args.pov_fov)
             except (F.DemoUndersampled, RouteFixtureMissing) as e:
                 sys.stderr.write(f"SKIP {os.path.basename(p)}: {e}\n")
+                scalar_failures += 1
                 continue
             except Exception as e:
                 sys.stderr.write(f"FAIL {os.path.basename(p)}: "
                                  f"{type(e).__name__}: {e}\n")
+                scalar_failures += 1
                 continue
             shape = 'bot' if a['d']['svrecord'] else 'human'
             vals = ','.join('' if a['scalars'][k] is None
                             else f"{a['scalars'][k]:.6f}" for k in SCALAR_KEYS)
             print(f"{shape},{a['d']['map']},{os.path.basename(p)},{vals}")
-        return
+        return 1 if scalar_failures else 0
 
     if not args.out:
         ap.error('--out is required to render sheets')
@@ -1191,7 +1197,8 @@ def main():
 
     print(f"\n{len(ok)} sheet(s) written to {args.out}, "
           f"{len(skipped)} skipped, {len(failed)} failed")
+    return 1 if skipped or failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

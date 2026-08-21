@@ -1,5 +1,6 @@
 """Behavioral selection checks for iterate2's default-off contract."""
 import os
+import hashlib
 import pathlib
 import re
 import shutil
@@ -46,6 +47,8 @@ class IterateSelectionTest(unittest.TestCase):
         self.bin.mkdir()
         self.game_root = self.root / "games"
         (self.game_root / "testgame").mkdir(parents=True)
+        for module in ("game.so", "gamex86_64.so"):
+            (self.game_root / "testgame" / module).write_bytes(b"exact-module")
         maps = self.game_root / "testgame" / "maps"
         maps.mkdir()
         shutil.copy2(REPO / "tools/iterate2.sh", self.tools / "iterate2.sh")
@@ -100,7 +103,7 @@ class IterateSelectionTest(unittest.TestCase):
     def test_exact_opt_in_is_the_only_supervisor_selector(self):
         source = (REPO / "tools/iterate2.sh").read_text()
         self.assertIn("[[ ${POV_ENABLE-} == 1", source)
-        self.assertIn("if ((POV_ENABLED)) && [[ $i == 2 ]]", source)
+        self.assertIn('if ((POV_ENABLED)) && [[ $i == "$POV_SLOT" ]]', source)
         self.assertIn('exec "/proc/self/fd/$POV_SUPERVISOR_FD"', source)
         self.assertNotIn("pov-wave.sh", source)
         self.assertNotIn("pov-record.sh", source)
@@ -110,6 +113,25 @@ class IterateSelectionTest(unittest.TestCase):
         result, trace = self.run_off(None, "0")
         self.assertEqual(result.returncode, 2)
         self.assertIn("refusing empty fleet", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
+    def test_wave_manifest_binds_full_module_hash_and_lane_schedule(self):
+        result, _trace = self.run_off(None, "bound")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        manifest = self.tools / "iter-bound" / "wave-manifest.tsv"
+        rows = manifest.read_text().splitlines()
+        digest = hashlib.sha256(b"exact-module").hexdigest()
+        self.assertEqual(rows[0], "format\tlmctf-wave-manifest-1")
+        self.assertIn(f"module_before_sha256\t{digest}", rows)
+        self.assertIn(f"module_after_sha256\t{digest}", rows)
+        self.assertEqual(sum(row.startswith("lane\t") for row in rows), 10)
+
+    def test_mismatched_deployed_modules_refuse_to_launch(self):
+        module = self.game_root / "testgame" / "gamex86_64.so"
+        module.write_bytes(b"different-module")
+        result, trace = self.run_off(None, "mismatch")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("module hashes disagree", result.stderr)
         self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
 
     def test_human_demo_top20_rotates_on_distinct_server_offsets(self):
@@ -140,7 +162,7 @@ class IterateSelectionTest(unittest.TestCase):
         s08_cfg = (self.game_root / "testgame" / "waveflags-s8.cfg").read_text()
         self.assertIn('set sv_botfill "7"', s08_cfg)
 
-    def test_exact_opt_in_selects_only_s03_in_a_native_fast_fixture(self):
+    def test_exact_opt_in_selects_configured_lane_in_a_native_fast_fixture(self):
         script = self.tools / "iterate2.sh"
         source = script.read_text()
         source = source.replace('        /usr/bin/sleep "$1"', '        : "$1"')
@@ -156,15 +178,26 @@ class IterateSelectionTest(unittest.TestCase):
         env = {"PATH": str(self.bin), "HOME": str(self.root),
                "Q2DED": str(self.bin / "fake-q2"), "YAMAGI_CLIENT": str(self.bin / "fake-q2"),
                "GAMEDIR_ROOT": str(self.game_root), "GAME": "testgame", "CFG": "test.cfg",
-               "PORT_BASE": "28520", "POV_ENABLE": "1", "POV_FINALIZE_DELAY": "1"}
+               "PORT_BASE": "28520", "POV_ENABLE": "1", "POV_FINALIZE_DELAY": "1",
+               "POV_LANE": "5", "POV_TARGET": "[SG]Caco"}
         result = subprocess.run(["/bin/bash", "--noprofile", "--norc", str(script), "enabled"],
                                 cwd=self.root, env=env, text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         call = (self.root / "supervisor.called").read_text()
-        self.assertIn("[--server]\n[s03]\n", call)
-        self.assertIn("[--port]\n[28522]\n", call)
+        self.assertIn("[--server]\n[s05]\n", call)
+        self.assertIn("[--port]\n[28524]\n", call)
+        self.assertIn("[--spectator]\n[pov_s05]\n", call)
+        self.assertIn("[--target]\n[[SG]Caco]\n", call)
         logs = list((self.tools / "iter-enabled").glob("*.log"))
         self.assertEqual(len(logs), 10)
+
+        supervisor.unlink()
+        supervisor.symlink_to("/bin/false")
+        failed = subprocess.run(
+            ["/bin/bash", "--noprofile", "--norc", str(script), "failed"],
+            cwd=self.root, env=env, text=True, capture_output=True, timeout=10,
+        )
+        self.assertNotEqual(failed.returncode, 0)
 
     def test_changed_authority_files_use_only_current_observation_terms(self):
         forbidden = re.compile("|".join(("leg" + "acy", r"\bV[1-4]\b",
