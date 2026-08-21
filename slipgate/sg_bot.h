@@ -9,6 +9,8 @@
 #include "sg_compound_guard.h"
 #include "sg_compound_swim_live.h"
 #include "sg_compound_drop_live.h"
+#include "sg_compound_hook_game.h"
+#include "sg_compound_hook_game_events.h"
 #include "sg_human_speed.h"
 #include "sg_door_approach.h"
 #include "sg_rune.h"
@@ -90,6 +92,9 @@ typedef struct sg_bot_s
 	/* Authenticated PREOPEN D_DROP transaction.  While guard_owned, local
 	 * ownership ends only by proved release or lifecycle transfer/orphan. */
 	sg_compound_drop_live_state_t compound_drop_live;
+	sg_compound_hook_live_state_t compound_hook_live;
+	sg_compound_hook_game_state_t compound_hook_game;
+	sg_compound_hook_game_events_t compound_hook_events;
 	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */
 	vec3_t		stuck_origin;   /* dedicated short-range progress sample;

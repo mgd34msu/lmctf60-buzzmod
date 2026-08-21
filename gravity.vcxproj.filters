@@ -359,6 +359,9 @@
     <ClCompile Include="slipgate\sg_compound_hook_live_finish.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_hook_game.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_compound_drop_game.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -710,6 +713,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_compound_drop_game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_hook_game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compound_hook_game_events.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_door_scope.h">

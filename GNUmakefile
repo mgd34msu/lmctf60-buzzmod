@@ -687,6 +687,10 @@ COMPOUND_HOOK_LIVE_TEST_OBJS = .sg_compound_hook_live_test.gnu.o \
 	.sg_compound_hook_live_hook_under_test.gnu.o \
 	.sg_compound_hook_live_publication_under_test.gnu.o
 COMPOUND_HOOK_LIVE_TEST_DEPS = $(COMPOUND_HOOK_LIVE_TEST_OBJS:.o=.d)
+COMPOUND_HOOK_GAME_TEST_BIN = sg_compound_hook_game_test.gnu
+COMPOUND_HOOK_GAME_TEST_OBJS = .sg_compound_hook_game_test.gnu.o \
+	.sg_compound_hook_game_under_test.gnu.o
+COMPOUND_HOOK_GAME_TEST_DEPS = $(COMPOUND_HOOK_GAME_TEST_OBJS:.o=.d)
 COMPOUND_HOOK_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make,sg_compound_hook_live_test.$(flavor) \
 	.sg_compound_hook_live_test.$(flavor).o \
@@ -708,7 +712,12 @@ COMPOUND_HOOK_TEST_ALL_ARTIFACTS = \
 	.sg_compound_hook_live_hook_under_test.$(flavor).o \
 	.sg_compound_hook_live_hook_under_test.$(flavor).d \
 	.sg_compound_hook_live_publication_under_test.$(flavor).o \
-	.sg_compound_hook_live_publication_under_test.$(flavor).d)
+	.sg_compound_hook_live_publication_under_test.$(flavor).d \
+	sg_compound_hook_game_test.$(flavor) \
+	.sg_compound_hook_game_test.$(flavor).o \
+	.sg_compound_hook_game_test.$(flavor).d \
+	.sg_compound_hook_game_under_test.$(flavor).o \
+	.sg_compound_hook_game_under_test.$(flavor).d)
 HOOK_LIVE_TEST_BIN = sg_hook_live_test.gnu
 HOOK_LIVE_TEST_OBJS = .sg_hook_live_test.gnu.o \
 	.sg_hook_live_under_test.gnu.o .sg_hook_live_replay_under_test.gnu.o
@@ -1044,7 +1053,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
+		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -1186,7 +1195,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	drop-live-test swim-live-test compound-swim-live-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
-	compound-drop-transition-test compound-hook-live-test rotator-sweep-test \
+	compound-drop-transition-test compound-hook-live-test \
+	compound-hook-game-test rotator-sweep-test \
 	mover-subject-sweep-test entfile-test maplist-rotation-test \
 	compound-swim-oracle-test compound-hook-oracle-test rune-door-scope-test \
 	snapshot-test stripcr clean distclean FORCE
@@ -1454,6 +1464,10 @@ $(COMPOUND_DROP_TRANSITION_TEST_BIN): $(COMPOUND_DROP_TRANSITION_TEST_OBJS)
 $(COMPOUND_HOOK_LIVE_TEST_BIN): $(COMPOUND_HOOK_LIVE_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ \
 		$(COMPOUND_HOOK_LIVE_TEST_OBJS) $(LDFLAGS)
+
+$(COMPOUND_HOOK_GAME_TEST_BIN): $(COMPOUND_HOOK_GAME_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ \
+		$(COMPOUND_HOOK_GAME_TEST_OBJS) $(LDFLAGS)
 
 $(HOOK_LIVE_TEST_BIN): $(HOOK_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(HOOK_LIVE_TEST_OBJS) $(LDFLAGS)
@@ -2337,6 +2351,21 @@ $(COMPOUND_PUBLICATION_CASE_GNU_OBJS): .sg_%.gnu.o: tests/sg_%.c \
 		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
+.sg_compound_hook_game_test.gnu.o: tests/sg_compound_hook_game_test.c \
+		slipgate/sg_compound_hook_game.h \
+		slipgate/sg_compound_hook_game_events.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_compound_hook_game_under_test.gnu.o: \
+		slipgate/sg_compound_hook_game.c \
+		slipgate/sg_compound_hook_game.h \
+		slipgate/sg_compound_hook_game_events.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
 .sg_compound_hook_live_fixture.gnu.o: \
 		tests/sg_compound_hook_live_fixture.c \
 		tests/sg_compound_hook_live_fixture.h $(REVISION_HEADER)
@@ -2702,6 +2731,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_DROP_FANOUT_TEST_BIN) \
 		$(COMPOUND_DROP_TRANSITION_TEST_BIN) \
 		$(COMPOUND_HOOK_LIVE_TEST_BIN) \
+		$(COMPOUND_HOOK_GAME_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
 		$(HOOK_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
@@ -2806,6 +2836,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(COMPOUND_DROP_FANOUT_TEST_BIN)
 	./$(COMPOUND_DROP_TRANSITION_TEST_BIN)
 	./$(COMPOUND_HOOK_LIVE_TEST_BIN)
+	./$(COMPOUND_HOOK_GAME_TEST_BIN)
 	./$(HOOK_LIVE_TEST_BIN)
 	./$(HOOK_DISCIPLINE_TEST_BIN)
 	python3 $(HOOK_INTEGRATION_TEST)
@@ -3048,6 +3079,9 @@ compound-drop-transition-test: $(COMPOUND_DROP_TRANSITION_TEST_BIN)
 compound-hook-live-test: $(COMPOUND_HOOK_LIVE_TEST_BIN)
 	./$(COMPOUND_HOOK_LIVE_TEST_BIN)
 
+compound-hook-game-test: $(COMPOUND_HOOK_GAME_TEST_BIN)
+	./$(COMPOUND_HOOK_GAME_TEST_BIN)
+
 hook-live-test: $(HOOK_LIVE_TEST_BIN)
 	./$(HOOK_LIVE_TEST_BIN)
 
@@ -3245,6 +3279,7 @@ endif
 -include $(COMPOUND_DROP_FANOUT_TEST_DEPS)
 -include $(COMPOUND_DROP_TRANSITION_TEST_DEPS)
 -include $(COMPOUND_HOOK_LIVE_TEST_DEPS)
+-include $(COMPOUND_HOOK_GAME_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(HOOK_DISCIPLINE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)
