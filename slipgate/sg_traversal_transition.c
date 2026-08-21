@@ -204,15 +204,15 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 	SG_StagedTraversalCancel(bot, action);
 }
 
-qboolean SG_AttackHandoffRetireSupersededRoute(sg_bot_t *bot,
+qboolean SG_NonCarryHandoffRetireSupersededRoute(sg_bot_t *bot,
 	int previous_role, int current_role)
 {
 	rune_t *rune;
 	int action;
 
-	if (!bot || previous_role != SG_ROLE_ATTACK ||
-	    (current_role != SG_ROLE_DEFEND && current_role != SG_ROLE_RECOVER &&
-	     current_role != SG_ROLE_ESCORT))
+	if (!bot || previous_role < 0 || previous_role >= SG_ROLES ||
+	    current_role < 0 || current_role >= SG_ROLES ||
+	    previous_role == current_role || current_role == SG_ROLE_CARRY)
 		return false;
 	bot->tac_seed = -1;
 	bot->tac_time = 0.0f;

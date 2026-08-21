@@ -193,10 +193,11 @@ static void TestStrikeDutyRetiresSupersededRoute(void)
 	CHECK(bot.tac_seed == -1 && bot.commit_link == 0 && bot.hook_phase == 2);
 }
 
-static void TestAttackHandoffRetiresSupersededRoute(void)
+static void TestNonCarryHandoffRetiresSupersededRoute(void)
 {
 	static const int door_actions[] = { RL_DOOR, RL_BUTTON_DOOR };
 	sg_bot_t bot;
+	int previous, current;
 	size_t action_index;
 
 	ResetWorld();
@@ -208,7 +209,7 @@ static void TestAttackHandoffRetiresSupersededRoute(void)
 	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
 	bot.rail_stage = 1;
 	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
-	CHECK(SG_AttackHandoffRetireSupersededRoute(
+	CHECK(SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT));
 	CHECK(bot.tac_seed == -1 && bot.tac_time == 0.0f);
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
@@ -221,51 +222,52 @@ static void TestAttackHandoffRetiresSupersededRoute(void)
 	bot.sticky_link = bot.rail_link = 1;
 	bot.latch_until = bot.rail_until = 30.0f;
 	bot.rail_stage = 1;
-	SG_AttackHandoffRetireSupersededRoute(
+	SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
 	CHECK(bot.tac_seed == -1 && bot.sticky_link == -1 &&
 	    bot.rail_link == -1 && bot.rail_stage == 0);
 
+	for (previous = 0; previous < SG_ROLES; previous++)
+		for (current = 0; current < SG_ROLES; current++)
+		{
+			qboolean expected = previous != current && current != SG_ROLE_CARRY;
+
+			bot = Bot();
+			bot.tac_seed = 7;
+			bot.sticky_link = 1;
+			CHECK(SG_NonCarryHandoffRetireSupersededRoute(
+			    &bot, previous, current) == expected);
+			CHECK(bot.tac_seed == (expected ? -1 : 7));
+			CHECK(bot.sticky_link == (expected ? -1 : 1));
+		}
 	bot = Bot();
 	bot.tac_seed = 7;
-	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
-	CHECK(!SG_AttackHandoffRetireSupersededRoute(
-	    &bot, SG_ROLE_ATTACK, SG_ROLE_ATTACK));
-	CHECK(bot.tac_seed == 7 && bot.commit_link == 1 &&
-	    bot.sticky_link == 1 && bot.rail_link == 1);
-	CHECK(!SG_AttackHandoffRetireSupersededRoute(
-	    &bot, -1, SG_ROLE_ESCORT));
-	CHECK(bot.tac_seed == 7 && bot.commit_link == 1 &&
-	    bot.sticky_link == 1 && bot.rail_link == 1);
-	CHECK(!SG_AttackHandoffRetireSupersededRoute(
-	    &bot, SG_ROLE_ATTACK, SG_ROLE_CARRY));
-	CHECK(bot.tac_seed == 7 && bot.commit_link == 1 &&
-	    bot.sticky_link == 1 && bot.rail_link == 1);
+	CHECK(!SG_NonCarryHandoffRetireSupersededRoute(&bot, -1, SG_ROLE_ATTACK));
+	CHECK(!SG_NonCarryHandoffRetireSupersededRoute(&bot, SG_ROLES, SG_ROLE_ATTACK));
+	CHECK(!SG_NonCarryHandoffRetireSupersededRoute(&bot, SG_ROLE_ATTACK, -1));
+	CHECK(!SG_NonCarryHandoffRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLES));
+	CHECK(bot.tac_seed == 7);
 
 	ResetWorld();
 	ArmBallistic(&bot, RL_JUMP, false);
 	bot.rail_link = 1;
 	bot.rail_stage = 1;
 	bot.rail_until = 30.0f;
-	CHECK(SG_AttackHandoffRetireSupersededRoute(
+	CHECK(SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_RECOVER));
 	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
 	    bot.commit_route_goal.field == NULL);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f &&
 	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 	CHECK(bot.jump_link == -1 && !bot.jump_started);
-	ResetWorld();
-	ArmBallistic(&bot, RL_JUMP, false);
-	CHECK(SG_AttackHandoffRetireSupersededRoute(
-	    &bot, SG_ROLE_ATTACK, SG_ROLE_DEFEND));
-	CHECK(bot.commit_link == -1 && bot.jump_link == -1);
 
 	ResetWorld();
 	ArmBallistic(&bot, RL_JUMP, true);
 	bot.rail_link = 1;
 	bot.rail_stage = 1;
 	bot.rail_until = 30.0f;
-	SG_AttackHandoffRetireSupersededRoute(
+	SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_RECOVER);
 	CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
 	    bot.commit_route_goal.field == route_field);
@@ -275,13 +277,13 @@ static void TestAttackHandoffRetiresSupersededRoute(void)
 	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 
 	bot = AimingSpeedHook();
-	SG_AttackHandoffRetireSupersededRoute(
+	SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
 	CHECK(bot.commit_link == -1 && bot.hook_phase == 0 && !bot.speedhook);
 
 	bot = ArmedSpeedHook();
 	bot.speedhook_pull_applied = false;
-	SG_AttackHandoffRetireSupersededRoute(
+	SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 && bot.speedhook);
 	CHECK(bot.commit_retirement_pending && bot.sticky_link == -1 &&
@@ -294,7 +296,7 @@ static void TestAttackHandoffRetiresSupersededRoute(void)
 	links[1].action = RL_HOOK;
 	bot.commit_link = bot.hook_link = 1;
 	bot.hook_phase = 2;
-	SG_AttackHandoffRetireSupersededRoute(
+	SG_NonCarryHandoffRetireSupersededRoute(
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 &&
 	    !bot.commit_retirement_pending);
@@ -309,7 +311,7 @@ static void TestAttackHandoffRetiresSupersededRoute(void)
 		bot.commit_until = 30.0f;
 		bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
 		bot.declared_started = true;
-		SG_AttackHandoffRetireSupersededRoute(
+		SG_NonCarryHandoffRetireSupersededRoute(
 		    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
 		CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
 		    bot.commit_route_goal.field == route_field);
@@ -493,7 +495,7 @@ int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestStrikeDutyRetiresSupersededRoute();
-	TestAttackHandoffRetiresSupersededRoute();
+	TestNonCarryHandoffRetiresSupersededRoute();
 	TestDoorLeaseRetirement();
 	TestFlagTouchRetiresReversibleCommitment();
 	TestSpeedHookTerminalFinish();
