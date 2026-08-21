@@ -16,7 +16,7 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 	memset(&state, 0, sizeof(state));
 	state.action = action;
 	state.hook_phase = bot->hook_phase;
-	state.rocketjump_phase = (int)bot->rocketjump.phase;
+	state.rocketjump_phase = bot->rocketjump.phase;
 	state.jump_started = bot->jump_started;
 	state.drop_started = bot->drop_started;
 	state.swim_active = bot->swim_replay_active;

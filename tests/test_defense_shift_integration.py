@@ -183,11 +183,12 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
         self.assertIn("bot->patrol_link = chosen_link", source)
         self.assertIn("DefenseLocalRunReady(bot, bot->patrol_link", source)
 
-    def test_pending_patrol_retirement_is_checked_before_drop(self) -> None:
+    def test_physical_controller_is_checked_before_drop(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
-        pending = source.index("if (bot->commit_retirement_pending &&")
-        drop = source.index("if (drop_commit)", pending)
-        hold = source[pending:drop]
+        physical = source.index(
+            "if (drop_commit && SG_TraversalControllerPhysical(")
+        drop = source.index("if (drop_commit)", physical)
+        hold = source[physical:drop]
 
         self.assertIn("SG_TraversalControllerPhysical(", hold)
         self.assertIn("bot, cl->action", hold)

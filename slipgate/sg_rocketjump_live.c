@@ -1,6 +1,7 @@
 #include "q_shared.h"
 #include "slipgate/sg_rocketjump_live.h"
 
+#include <limits.h>
 #include <string.h>
 
 static qboolean RocketJumpBoolean(qboolean value)
@@ -273,7 +274,7 @@ qboolean SG_RocketJumpLiveStep(sg_rocketjump_live_state_t *state,
 	    state->phase != SG_ROCKETJUMP_ARMED &&
 	    state->phase != SG_ROCKETJUMP_FLIGHT)
 		return false;
-	if (state->elapsed_ms > SG_ROCKETJUMP_MAX_ACTION_MS - step_ms)
+	if (state->elapsed_ms > INT_MAX - step_ms)
 		return RocketJumpFail(state, SG_ROCKETJUMP_FAILURE_TIMEOUT);
 	state->elapsed_ms += step_ms;
 	if (state->phase == SG_ROCKETJUMP_EQUIP ||
@@ -313,8 +314,7 @@ qboolean SG_RocketJumpLiveBoundary(sg_rocketjump_live_state_t *state,
 qboolean SG_RocketJumpLiveOwns(const sg_rocketjump_live_state_t *state)
 {
 	return state && (state->phase == SG_ROCKETJUMP_EQUIP ||
-	                 state->phase == SG_ROCKETJUMP_ARMED ||
-	                 state->phase == SG_ROCKETJUMP_FLIGHT);
+	                 SG_RocketJumpPhasePhysical(state->phase));
 }
 
 const char *SG_RocketJumpLiveFailureName(sg_rocketjump_failure_t failure)

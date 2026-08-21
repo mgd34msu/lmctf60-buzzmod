@@ -1,10 +1,10 @@
-/* Pure live controller for one authenticated RL_ROCKETJUMP witness. */
 #ifndef SG_ROCKETJUMP_LIVE_H
 #define SG_ROCKETJUMP_LIVE_H
 
 #include <stdint.h>
 
 #include "slipgate/sg_action_contract.generated.h"
+#include "slipgate/sg_rocketjump_phase.h"
 
 #define SG_ROCKETJUMP_STEP_MS 25
 #define SG_ROCKETJUMP_FRAME_STEPS 4
@@ -19,16 +19,6 @@ typedef struct sg_rocketjump_projectile_key_s
 	uint32_t key;
 	uint32_t generation;
 } sg_rocketjump_projectile_key_t;
-
-typedef enum sg_rocketjump_phase_e
-{
-	SG_ROCKETJUMP_IDLE = 0,
-	SG_ROCKETJUMP_EQUIP,
-	SG_ROCKETJUMP_ARMED,
-	SG_ROCKETJUMP_FLIGHT,
-	SG_ROCKETJUMP_COMPLETE,
-	SG_ROCKETJUMP_FAILED
-} sg_rocketjump_phase_t;
 
 typedef enum sg_rocketjump_command_e
 {

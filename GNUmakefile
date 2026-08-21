@@ -618,6 +618,27 @@ HOOK_LIVE_TEST_BIN = sg_hook_live_test.gnu
 HOOK_LIVE_TEST_OBJS = .sg_hook_live_test.gnu.o \
 	.sg_hook_live_under_test.gnu.o .sg_hook_live_replay_under_test.gnu.o
 HOOK_LIVE_TEST_DEPS = $(HOOK_LIVE_TEST_OBJS:.o=.d)
+ROCKETJUMP_LIVE_TEST_BIN = sg_rocketjump_live_test.gnu
+ROCKETJUMP_LIVE_TEST_OBJS = .sg_rocketjump_live_test.gnu.o \
+	.sg_rocketjump_live_under_test.gnu.o
+ROCKETJUMP_LIVE_TEST_DEPS = $(ROCKETJUMP_LIVE_TEST_OBJS:.o=.d)
+ROCKETJUMP_CADENCE_TEST_BIN = sg_rocketjump_cadence_test.gnu
+ROCKETJUMP_CADENCE_TEST_OBJS = .sg_rocketjump_cadence_test.gnu.o \
+	.sg_rocketjump_cadence_under_test.gnu.o
+ROCKETJUMP_CADENCE_TEST_DEPS = $(ROCKETJUMP_CADENCE_TEST_OBJS:.o=.d)
+ROCKETJUMP_GAME_TEST_BIN = sg_rocketjump_game_test.gnu
+ROCKETJUMP_GAME_TEST_OBJS = .sg_rocketjump_game_test.gnu.o \
+	.sg_rocketjump_game_under_test.gnu.o \
+	.sg_rocketjump_game_live_under_test.gnu.o \
+	.sg_rocketjump_game_q_shared_under_test.gnu.o
+ROCKETJUMP_GAME_TEST_DEPS = $(ROCKETJUMP_GAME_TEST_OBJS:.o=.d)
+ROCKETJUMP_TEST_ALL_ARTIFACTS = \
+	sg_rocketjump_live_test.gnu sg_rocketjump_live_test.make \
+	sg_rocketjump_cadence_test.gnu sg_rocketjump_cadence_test.make \
+	sg_rocketjump_game_test.gnu sg_rocketjump_game_test.make \
+	$(ROCKETJUMP_LIVE_TEST_OBJS) $(ROCKETJUMP_LIVE_TEST_DEPS) \
+	$(ROCKETJUMP_CADENCE_TEST_OBJS) $(ROCKETJUMP_CADENCE_TEST_DEPS) \
+	$(ROCKETJUMP_GAME_TEST_OBJS) $(ROCKETJUMP_GAME_TEST_DEPS)
 HOOK_INTEGRATION_TEST = tests/test_hook_live_integration.py
 HOOK_DISCIPLINE_TEST_BIN = sg_hook_discipline_test.gnu
 HOOK_DISCIPLINE_TEST_OBJS = .sg_hook_discipline_test.gnu.o \
@@ -1212,6 +1233,15 @@ $(HOOK_DIAGNOSTICS_TEST_BIN): $(HOOK_DIAGNOSTICS_TEST_OBJS)
 $(RUN_HANDOFF_TEST_BIN): $(RUN_HANDOFF_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(RUN_HANDOFF_TEST_OBJS) $(LDFLAGS)
 
+$(ROCKETJUMP_LIVE_TEST_BIN): $(ROCKETJUMP_LIVE_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(ROCKETJUMP_LIVE_TEST_OBJS) $(LDFLAGS)
+
+$(ROCKETJUMP_CADENCE_TEST_BIN): $(ROCKETJUMP_CADENCE_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(ROCKETJUMP_CADENCE_TEST_OBJS) $(LDFLAGS)
+
+$(ROCKETJUMP_GAME_TEST_BIN): $(ROCKETJUMP_GAME_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(ROCKETJUMP_GAME_TEST_OBJS) $(LDFLAGS)
+
 $(COMPOUND_TEST_BIN): $(COMPOUND_TEST_OBJS)
 	$(CC) -o $@ $(COMPOUND_TEST_OBJS) $(LDFLAGS)
 
@@ -1307,6 +1337,61 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		slipgate/sg_button_live.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rocketjump_live_test.gnu.o: tests/sg_rocketjump_live_test.c \
+		slipgate/sg_rocketjump_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rocketjump_live_under_test.gnu.o: slipgate/sg_rocketjump_live.c \
+		slipgate/sg_rocketjump_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rocketjump_cadence_test.gnu.o: tests/sg_rocketjump_cadence_test.c \
+		slipgate/sg_rocketjump_cadence.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rocketjump_cadence_under_test.gnu.o: \
+		slipgate/sg_rocketjump_cadence.c \
+		slipgate/sg_rocketjump_cadence.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rocketjump_game_test.gnu.o: tests/sg_rocketjump_game_test.c \
+		slipgate/sg_rocketjump_game.h slipgate/sg_rocketjump_live.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_rocketjump_game_under_test.gnu.o: slipgate/sg_rocketjump_game.c \
+		slipgate/sg_rocketjump_game.h slipgate/sg_rocketjump_live.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
+
+.sg_rocketjump_game_live_under_test.gnu.o: \
+		slipgate/sg_rocketjump_live.c slipgate/sg_rocketjump_live.h \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rocketjump_game_q_shared_under_test.gnu.o: q_shared.c \
+		$(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
+		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-c -o $@ $<
 
 .sg_button_game_test.gnu.o: tests/sg_button_game_test.c \
 		slipgate/sg_button_live.h slipgate/sg_move.h $(REVISION_HEADER)
@@ -2261,6 +2346,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
+		$(ROCKETJUMP_LIVE_TEST_BIN) $(ROCKETJUMP_CADENCE_TEST_BIN) \
+		$(ROCKETJUMP_GAME_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST) \
 		$(COMPOUND_SWIM_GAME_TEST_BIN) \
 		$(COMPOUND_SWIM_GAME_INTEGRATION_TEST) \
@@ -2355,6 +2442,9 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	sh tests/sg_drop_begin_wiring_test.sh
 	./$(SWIM_LIVE_TEST_BIN)
 	./$(COMPOUND_SWIM_LIVE_TEST_BIN)
+	./$(ROCKETJUMP_LIVE_TEST_BIN)
+	./$(ROCKETJUMP_CADENCE_TEST_BIN)
+	./$(ROCKETJUMP_GAME_TEST_BIN)
 	python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
 	./$(COMPOUND_SWIM_GAME_TEST_BIN)
 	python3 $(COMPOUND_SWIM_GAME_INTEGRATION_TEST)
@@ -2684,6 +2774,7 @@ clean:
 			$(RUNE_ACCEPT_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_LIVE_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_GAME_TEST_ALL_ARTIFACTS) \
+			$(ROCKETJUMP_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
 			$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \
@@ -2761,6 +2852,9 @@ endif
 -include $(DROP_LIVE_TEST_DEPS)
 -include $(SWIM_LIVE_TEST_DEPS)
 -include $(COMPOUND_SWIM_LIVE_TEST_DEPS)
+-include $(ROCKETJUMP_LIVE_TEST_DEPS)
+-include $(ROCKETJUMP_CADENCE_TEST_DEPS)
+-include $(ROCKETJUMP_GAME_TEST_DEPS)
 -include $(HOOK_LIVE_TEST_DEPS)
 -include $(HOOK_DISCIPLINE_TEST_DEPS)
 -include $(ROTATOR_SWEEP_TEST_DEPS)

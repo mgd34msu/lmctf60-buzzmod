@@ -245,6 +245,21 @@ static qboolean RocketJumpBegin(sg_bot_t *bot, int link_index)
 	return true;
 }
 
+static qboolean RocketJumpConsumeTerminal(sg_bot_t *bot)
+{
+	const char *event;
+
+	if (!bot || (bot->rocketjump.phase != SG_ROCKETJUMP_COMPLETE &&
+	             bot->rocketjump.phase != SG_ROCKETJUMP_FAILED))
+		return false;
+	event = bot->rocketjump.phase == SG_ROCKETJUMP_COMPLETE ?
+	    "complete" : "failed";
+	RocketJumpReport(bot, event);
+	SG_RocketJumpLiveReset(&bot->rocketjump);
+	bot->commit_link = -1;
+	return true;
+}
+
 int SG_RocketJumpGameEmit(sg_bot_t *bot, int selected_link)
 {
 	edict_t *entity;
@@ -252,6 +267,8 @@ int SG_RocketJumpGameEmit(sg_bot_t *bot, int selected_link)
 
 	if (!bot || !(entity = bot->ent) || !entity->client)
 		return 0;
+	if (RocketJumpConsumeTerminal(bot))
+		return 1;
 	if (!SG_RocketJumpGameOwns(bot) && !RocketJumpBegin(bot, selected_link))
 		return 0;
 	if (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT)
@@ -263,13 +280,13 @@ int SG_RocketJumpGameEmit(sg_bot_t *bot, int selected_link)
 		        entity->groundentity != NULL))
 		{
 			RocketJumpReport(bot, "failed-boundary");
-			bot->commit_link = -1;
+			(void)RocketJumpConsumeTerminal(bot);
 			return 1;
 		}
 		if (bot->rocketjump.phase == SG_ROCKETJUMP_COMPLETE)
 		{
 			RocketJumpReport(bot, "arrived");
-			bot->commit_link = -1;
+			(void)RocketJumpConsumeTerminal(bot);
 			return 1;
 		}
 	}
@@ -289,7 +306,7 @@ int SG_RocketJumpGameEmit(sg_bot_t *bot, int selected_link)
 		if (control == SG_ROCKETJUMP_COMMAND_ZERO)
 		{
 			RocketJumpReport(bot, "failed-command");
-			bot->commit_link = -1;
+			(void)RocketJumpConsumeTerminal(bot);
 			return 1;
 		}
 		if (control == SG_ROCKETJUMP_COMMAND_EQUIP && step == 0)
@@ -304,14 +321,14 @@ int SG_RocketJumpGameEmit(sg_bot_t *bot, int selected_link)
 		if (!SG_RocketJumpGameOwns(bot))
 		{
 			RocketJumpReport(bot, "terminal-callback");
-			bot->commit_link = -1;
+			(void)RocketJumpConsumeTerminal(bot);
 			return 1;
 		}
 		if (!SG_RocketJumpLiveStep(&bot->rocketjump,
 		        SG_ROCKETJUMP_STEP_MS))
 		{
 			RocketJumpReport(bot, "failed-time");
-			bot->commit_link = -1;
+			(void)RocketJumpConsumeTerminal(bot);
 			return 1;
 		}
 	}

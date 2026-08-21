@@ -952,10 +952,16 @@ static void TestWeaponRouteRetirementVerdicts(void)
 	CHECK(SG_StrikeWeaponControllerPhysical(&state));
 	state.hook_phase = 0;
 	state.action = RL_ROCKETJUMP;
-	state.rocketjump_phase = 1;
+	state.rocketjump_phase = SG_ROCKETJUMP_EQUIP;
 	CHECK(!SG_StrikeWeaponControllerPhysical(&state));
-	state.rocketjump_phase = 2;
+	state.rocketjump_phase = SG_ROCKETJUMP_ARMED;
 	CHECK(SG_StrikeWeaponControllerPhysical(&state));
+	state.rocketjump_phase = SG_ROCKETJUMP_FLIGHT;
+	CHECK(SG_StrikeWeaponControllerPhysical(&state));
+	state.rocketjump_phase = SG_ROCKETJUMP_COMPLETE;
+	CHECK(!SG_StrikeWeaponControllerPhysical(&state));
+	state.rocketjump_phase = SG_ROCKETJUMP_FAILED;
+	CHECK(!SG_StrikeWeaponControllerPhysical(&state));
 
 	/* Guard acquisition/canonical staging is cancelable before contact.  The
 	 * first exact mechanism touch is the irreversible boundary. */

@@ -1123,10 +1123,8 @@ int SG_StrikeWeaponControllerPhysical(
 {
 	if (!state)
 		return 0;
-	/* These controllers can be layered over another link identity.  Phase two
-	 * is already irreversible: hook fire succeeded, or the rocket-jump fire
-	 * command may already have launched a rocket before phase three. */
-	if (state->hook_phase >= 2 || state->rocketjump_phase >= 2)
+	if (state->hook_phase >= 2 ||
+	    SG_RocketJumpPhasePhysical(state->rocketjump_phase))
 		return 1;
 	switch (state->action)
 	{

@@ -213,13 +213,28 @@ static void TestLaunchBoundaryAndTimeouts(void)
 	CHECK(state.failure == SG_ROCKETJUMP_FAILURE_LAUNCH_STATE);
 
 	Arm(&state, &witness, &observation);
-	CHECK(!SG_RocketJumpLiveStep(&state, 4001));
+	CHECK(SG_RocketJumpLiveStep(&state, 3025));
+	CHECK(SG_RocketJumpLiveStep(&state, 975));
+	CHECK(!SG_RocketJumpLiveStep(&state, 1));
 	CHECK(state.phase == SG_ROCKETJUMP_FAILED &&
 	      state.failure == SG_ROCKETJUMP_FAILURE_TIMEOUT);
 
 	BeginFlight(&state, &witness, &observation);
-	CHECK(!SG_RocketJumpLiveStep(&state, witness.cost_ms + 501));
+	state.witness.cost_ms = SG_ROCKETJUMP_MAX_ACTION_MS;
+	CHECK(SG_RocketJumpLiveStep(&state, 3025));
+	CHECK(SG_RocketJumpLiveStep(&state, 475));
+	CHECK(!SG_RocketJumpLiveStep(&state, 1));
 	CHECK(state.failure == SG_ROCKETJUMP_FAILURE_TIMEOUT);
+}
+
+static void TestPhysicalPhaseMembership(void)
+{
+	CHECK(!SG_RocketJumpPhasePhysical(SG_ROCKETJUMP_IDLE));
+	CHECK(!SG_RocketJumpPhasePhysical(SG_ROCKETJUMP_EQUIP));
+	CHECK(SG_RocketJumpPhasePhysical(SG_ROCKETJUMP_ARMED));
+	CHECK(SG_RocketJumpPhasePhysical(SG_ROCKETJUMP_FLIGHT));
+	CHECK(!SG_RocketJumpPhasePhysical(SG_ROCKETJUMP_COMPLETE));
+	CHECK(!SG_RocketJumpPhasePhysical(SG_ROCKETJUMP_FAILED));
 }
 
 static void TestSharedArrivalEnvelopeBoundaries(void)
@@ -264,6 +279,7 @@ int main(void)
 	TestImpactAuthentication();
 	TestArrivalRequiresBlast();
 	TestLaunchBoundaryAndTimeouts();
+	TestPhysicalPhaseMembership();
 	TestSharedArrivalEnvelopeBoundaries();
 	TestVerticalControlPreservesSerializedYaw();
 	if (failures)

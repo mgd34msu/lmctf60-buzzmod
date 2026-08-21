@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "slipgate/sg_action_contract.generated.h"
+#include "slipgate/sg_rocketjump_phase.h"
 
 #define SG_STRIKE_MAX_SLOTS 16
 #define SG_STRIKE_MAX_MEMBERS 4
@@ -58,7 +59,7 @@ typedef struct sg_strike_weapon_controller_state_s
 {
 	int action;
 	int hook_phase;
-	int rocketjump_phase;
+	sg_rocketjump_phase_t rocketjump_phase;
 	int jump_started;
 	int drop_started;
 	int swim_active;

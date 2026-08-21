@@ -701,8 +701,13 @@ static void TestSpeedHookAndStickyDrain(void)
 
 static void TestRocketJumpBoundaries(void)
 {
+	const sg_rocketjump_phase_t physical_phases[] = {
+		SG_ROCKETJUMP_ARMED,
+		SG_ROCKETJUMP_FLIGHT
+	};
 	sg_bot_t bot;
 	sg_think_t tc;
+	size_t phase_index;
 
 	WorldReset();
 	ArmExact(&bot, &tc, RL_ROCKETJUMP);
@@ -713,16 +718,19 @@ static void TestRocketJumpBoundaries(void)
 	CHECK(bot.rocketjump.phase == SG_ROCKETJUMP_IDLE &&
 	    bot.rocketjump.witness.link_index == 0);
 
-	for (int phase = SG_ROCKETJUMP_ARMED;
-	     phase <= SG_ROCKETJUMP_FLIGHT; phase++)
+	for (phase_index = 0;
+	     phase_index < sizeof(physical_phases) / sizeof(physical_phases[0]);
+	     phase_index++)
 	{
+		sg_rocketjump_phase_t phase = physical_phases[phase_index];
+
 		WorldReset();
 		ArmExact(&bot, &tc, RL_ROCKETJUMP);
-		bot.rocketjump.phase = (sg_rocketjump_phase_t)phase;
+		bot.rocketjump.phase = phase;
 		bot.rocketjump.elapsed_ms = 400;
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));
 		CheckDraining(&bot);
-		CHECK(bot.rocketjump.phase == (sg_rocketjump_phase_t)phase &&
+		CHECK(bot.rocketjump.phase == phase &&
 		    bot.rocketjump.elapsed_ms == 400);
 		tc.strike_weapon_pursuit = true;
 		CHECK(!SG_StrikeTestWeaponReconcile(&bot, &tc));

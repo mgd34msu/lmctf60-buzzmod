@@ -2859,8 +2859,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			staging_timed_out = false;
 			bestlink = bot->commit_link;
 		}
-		if (bot->commit_retirement_pending && SG_TraversalControllerPhysical(
-		        bot, cl->action))
+		if (drop_commit && SG_TraversalControllerPhysical(bot, cl->action))
 		{
 			drop_commit = false;
 			staging_timed_out = false;
@@ -2920,6 +2919,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					               "contact short");
 			}
 			bot->commit_link = -1;
+			SG_RocketJumpLiveReset(&bot->rocketjump);
 			bot->jump_link = -1;
 			bot->jump_started = false;
 			bot->drop_link = -1;
