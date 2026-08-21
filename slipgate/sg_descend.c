@@ -1385,11 +1385,10 @@ void SG_RunRetireCompletedTransaction(const rune_t *rune,
 	if (completed->action != RL_RUN || completed->to < 0 ||
 	    completed->to >= rune->hdr.num_seeds)
 		return;
-	/* A stale seed invalidates the departure fan. At the destination retain
-	 * only a different, well-formed successor from that exact seed. */
-	if (bot->seed != completed->to || *next_link < 0 ||
+	const int candidate_from = completion == SG_RUN_ARRIVED ? completed->to : bot->seed;
+	if ((completion == SG_RUN_ARRIVED && bot->seed != candidate_from) || *next_link < 0 ||
 	    *next_link >= rune->hdr.num_links || *next_link == completed_link ||
-	    rune->links[*next_link].from != completed->to)
+	    rune->links[*next_link].from != candidate_from)
 		*next_link = -1;
 	SG_StagedTraversalCancel(bot, RL_RUN);
 }

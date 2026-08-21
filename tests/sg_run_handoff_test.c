@@ -695,6 +695,22 @@ static void CheckOrdinaryCompletionRetiresTransaction(void)
 	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, &bot, &next_link);
 	CHECK(next_link == -1 && bot.seed == SEED_DEPARTURE);
 
+	SetLink(&fixture.links[LINK_RUN_FROM_SOURCE], SEED_ORDINARY,
+	    SEED_TELE_DESTINATION, RL_RUN);
+	ArmRunTransaction(&bot, SEED_ORDINARY);
+	next_link = LINK_RUN_FROM_SOURCE;
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_OVERACHIEVED, &bot, &next_link);
+	CHECK(next_link == LINK_RUN_FROM_SOURCE && bot.commit_link == -1 &&
+	    bot.seed == SEED_ORDINARY);
+
+	fixture.links[LINK_RUN_FROM_SOURCE].from = SEED_DEPARTURE;
+	ArmRunTransaction(&bot, SEED_ORDINARY);
+	next_link = LINK_RUN_FROM_SOURCE;
+	SG_RunRetireCompletedTransaction(&fixture.rune,
+	    LINK_RUN_TO_SOURCE, SG_RUN_OVERACHIEVED, &bot, &next_link);
+	CHECK(next_link == -1 && bot.commit_link == -1);
+
 	ArmRunTransaction(&bot, SEED_ORDINARY);
 	next_link = LINK_RUN_TO_SOURCE;
 	SG_RunRetireCompletedTransaction(&fixture.rune,
