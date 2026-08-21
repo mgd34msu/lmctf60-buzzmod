@@ -381,9 +381,10 @@ void SG_DefenseCombatLeaseReset(sg_bot_t *bot)
  * tangent -- nor create a blind fallback when both tangent probes failed. */
 static qboolean DefenseCombatApplyDuelWeave(qboolean hold_post,
 	qboolean proved_control, qboolean duel_hold, qboolean engaged,
-	short weave_side, usercmd_t *cmd)
+	qboolean flag_touch_terminal, short weave_side, usercmd_t *cmd)
 {
-	if (!cmd || hold_post || proved_control || !duel_hold || !engaged)
+	if (!cmd || hold_post || proved_control || !duel_hold || !engaged ||
+	    flag_touch_terminal)
 		return false;
 	cmd->forwardmove = 0;
 	cmd->sidemove = weave_side;
@@ -447,10 +448,6 @@ static qboolean DefenseCombatWriteFinal(edict_t *e, sg_bot_t *bot, int team,
 }
 
 #ifdef SG_DEFENSE_COMBAT_TEST
-/* Compiled production-path seam: it invokes the actual post planner (the
- * ordered long probes and, only when needed, short probes), then the same
- * generic/final arbitration Think_Emit uses. It exists only in the focused
- * executable regression. */
 extern void SG_DefenseCombatTestPostPlan(edict_t *e, sg_bot_t *bot,
 	sg_think_t *tc, int mutation_mask);
 
@@ -479,7 +476,7 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
 	if (enemy && enemy->client)
 		enemy_ctfid = enemy->client->ctf.ctfid;
 	DefenseCombatApplyDuelWeave(hold_post != 0, false, duel_hold != 0,
-	    engaged != 0, weave_side, cmd);
+	    engaged != 0, false, weave_side, cmd);
 	SG_DefenseCombatTestPostPlan(e, bot, &tc, mutation_mask);
 	final_as_ok = (mutation_mask & 32768) != 0; /* MUT_AS test seam */
 	return DefenseCombatWriteFinal(e, bot, team, &tc, final_as_ok, active, stand,
@@ -3340,15 +3337,18 @@ static qboolean GenericRailMoveAllowed(const sg_bot_t *bot, const sg_think_t *tc
 	        (sg_defense_supply_phase_t)bot->def_supply_phase, bot->def_supply_armed);
 }
 
-/* Once the current live flag has passed the same-floor and player-hull trace,
- * generic route steering has no remaining authority before the touch.  Its
- * probes extend beyond the item and can therefore "avoid" a wall which is
- * safely behind a pickup or scoring touch; heading smoothing can likewise
- * preserve a stale route bearing for the only frame that matters. */
-static qboolean FlagTerminalGenericSteeringAllowed(
-	qboolean flag_touch_terminal)
+static void FlagTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
+	sg_think_t *tc, qboolean flag_touch_terminal)
 {
-	return !flag_touch_terminal;
+	if (!flag_touch_terminal)
+		return;
+	bot->escape_until = 0.0f;
+	bot->stuck_time = 0.0f;
+	bot->hook_landbrake = 0.0f;
+	VectorCopy(e->s.origin, bot->stuck_origin);
+	tc->hold_post = false;
+	tc->rally_hold = false;
+	tc->rail_hold = false;
 }
 
 static qboolean EnemyFlagTouchMissionActive(qboolean strike_pressure,
@@ -3394,12 +3394,6 @@ typedef enum
 
 void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context so the
-	 * body below reads exactly as it did when these arrived as arguments;
-	 * cmd stays a real parameter until the whole frame speaks context.
-	 * Eight former parameters -- carrying, live, w, route_pure,
-	 * post_sight, duel_org, duel_want, duel_expo -- were never read by
-	 * this body and have no unpack. */
 	usercmd_t *cmd = &tc->cmd;
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
@@ -4533,7 +4527,9 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else if (!have_aim && role == SG_ROLE_RECOVER)
 			{
-				if (!SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf))
+				flag_touch_terminal =
+				    SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf);
+				if (!flag_touch_terminal)
 				{
 					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
 					    goal_field, bot->seed);
@@ -4694,6 +4690,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 
+		FlagTouchClaimMovement(bot, e, tc, flag_touch_terminal);
+		hold_post = tc->hold_post;
+		rally_hold = tc->rally_hold;
+		rail_hold = tc->rail_hold;
 		if (have_aim)
 		{
 			vec3_t probe;
@@ -4712,8 +4712,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			if (FlagTerminalGenericSteeringAllowed(
-			        flag_touch_terminal))
+			if (!flag_touch_terminal)
 			{
 			static const float fan_dense[11] = { 0, -15, 15, -30, 30, -60,
 			                                     60, -100, 100, -145, 145 };
@@ -4817,8 +4816,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 			/* Slew ordinary navigation headings to suppress fan-induced flapping.
 			 * Combat, precision movement, hooks, and water retain snap turns. */
-			if (FlagTerminalGenericSteeringAllowed(
-			        flag_touch_terminal) && sg_cv.smooth->value &&
+			if (!flag_touch_terminal && sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
@@ -5323,7 +5321,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bestlink = -1;
 			tc->bestlink = -1;
 		}
-		if (escort_terminal_hold && !tc->jump_launch &&
+		if (escort_terminal_hold && !flag_touch_terminal && !tc->jump_launch &&
 		    !bot->jump_started && !bot->drop_started && bot->hook_phase == 0)
 		{
 			cmd->forwardmove = 0;
@@ -6177,10 +6175,16 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
-qboolean SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(
-	qboolean attack_flag_terminal)
+void SG_StrikeTestFlagTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
+	sg_think_t *tc, qboolean terminal)
 {
-	return FlagTerminalGenericSteeringAllowed(attack_flag_terminal);
+	FlagTouchClaimMovement(bot, e, tc, terminal);
+}
+
+qboolean SG_StrikeTestFlagTouchDuelWeave(qboolean terminal, usercmd_t *cmd)
+{
+	return DefenseCombatApplyDuelWeave(false, false, true, true,
+	    terminal, 160, cmd);
 }
 
 qboolean SG_StrikeTestEnemyFlagTouchMissionActive(qboolean strike_pressure,
@@ -6878,14 +6882,8 @@ qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
 	return true;
 }
 
-/* Convert the selected movement policy into one client command. */
 void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 {
-	/* the former parameter list, unpacked from the think context so the
-	 * body below reads exactly as it did when these arrived as arguments;
-	 * cmd stays a real parameter until the whole frame speaks context.
-	 * Seventeen former parameters -- half the interface -- were never
-	 * read by this body and have no unpack. */
 	usercmd_t *cmd = &tc->cmd;
 	edict_t *e = tc->e;
 	sg_role_t role = tc->role;
@@ -8021,22 +8019,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					cmd->upmove = 400;
 			}
 
-			/*
-			 * No tricks while a rope is out -- the hook SETS velocity, so
-			 * there is nothing for an off-axis input to accumulate -- and
-			 * none on the final approach, where being able to stop on the
-			 * flag is worth more than the speed.
-			 */
-			/*
-			 * The weave replaces the step rather than adding to it: the
-			 * strafe work above leans off the direction of TRAVEL to harvest
-			 * acceleration down a route, and there is no route left to run
-			 * here. `engaged` and not `duel` is the test -- a target that
-			 * walked behind a wall two seconds ago is worth holding a range
-			 * against, and is not worth dodging.
-			 */
 			if (!DefenseCombatApplyDuelWeave(hold_post, proved_control,
-				duel_hold, engaged, weave_side, cmd) &&
+				duel_hold, engaged, tc->flag_touch_terminal, weave_side, cmd) &&
 				have_move && !precision && bot->hook_phase == 0 &&
 			         !proved_control)
 			{
@@ -8074,9 +8058,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					AngleVectors(vb, mf, mr, NULL);
 				}
 
-				/* Terminal movement stays on the direct aim without lean or hop. */
-				if (!bot->terminal)
-				SG_MovePolicy(e, cmd, mf, mr, move_dir,
+				if (!bot->terminal && !tc->flag_touch_terminal)
+					SG_MovePolicy(e, cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
 				              (float)cmd->msec / 1000.0f, airp);
 				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
@@ -8126,7 +8109,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 
 
-			if (bot->linger_hot && !proved_control &&
+			if (!tc->flag_touch_terminal && bot->linger_hot && !proved_control &&
 			    sg_cv.depace->value > 0.0f)
 			{
 				float dp = sg_cv.depace->value;

@@ -101,8 +101,9 @@ qboolean SG_NadeArmPrebreachLiveEnemy(sg_bot_t *bot, edict_t *e, int team);
 qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *link);
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
-qboolean SG_StrikeTestAttackFlagTerminalGenericSteeringAllowed(
-	qboolean attack_flag_terminal);
+void SG_StrikeTestFlagTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
+	sg_think_t *tc, qboolean terminal);
+qboolean SG_StrikeTestFlagTouchDuelWeave(qboolean terminal, usercmd_t *cmd);
 qboolean SG_StrikeTestEnemyFlagTouchMissionActive(qboolean strike_pressure,
 	qboolean scoop_mission);
 qboolean SG_TestGenericRailMoveAllowed(const sg_bot_t *bot,

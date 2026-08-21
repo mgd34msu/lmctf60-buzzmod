@@ -208,8 +208,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         fan = between(
             move,
             "Feelers: try the goal heading first",
-            "if (FlagTerminalGenericSteeringAllowed(\n"
-            "\t\t\t        flag_touch_terminal) && sg_cv.smooth->value",
+            "if (!flag_touch_terminal && sg_cv.smooth->value",
         )
         self.assertIn("SG_FeelerProbe(", fan)
         self.assertIn("feeler.trace", fan)
@@ -589,38 +588,33 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         self.assertFalse(seed_2_direct)
 
-    def test_carrier_does_not_home_on_hidden_dropped_own_flag(self) -> None:
+    def test_recover_flag_touch_owns_terminal_movement(self) -> None:
         move = source("slipgate/sg_move.c")
         fallback_start = move.index("/* last resort: the goal itself, by belief */")
         fallback = move[fallback_start:move.index("if (have_aim)", fallback_start)]
-        carrier = between(
+        recover = between(
             fallback,
-            "else if (!have_aim && role == SG_ROLE_CARRY)",
             "else if (!have_aim && role == SG_ROLE_RECOVER)",
+            "else if (!have_aim && role == SG_ROLE_DEFEND)",
         )
-        self.assertIn("gf = SG_OwnFlag(team);", carrier)
-        self.assertIn("flag_at_home = ctf_flagathome(gf);", carrier)
-        self.assertIn(
-            "SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf)", carrier)
-        self.assertIn(
-            "SG_OwnHomeFlagDirectTouchAuthority(e, team, &gf)", carrier)
-        self.assertIn("SG_StrikeCarrierOwnFlagAimAllowed(", carrier)
-        self.assertIn("flag_touch_terminal = true;", carrier)
-        self.assertIn("gf = NULL;", carrier)
-
-        authority = between(
+        self.assertLess(
+            recover.index("flag_touch_terminal ="),
+            recover.index("SG_OwnDroppedFlagDirectTouchAuthority"),
+        )
+        self.assertLess(
+            recover.index("SG_OwnDroppedFlagDirectTouchAuthority"),
+            recover.index("if (!flag_touch_terminal)"),
+        )
+        texture = between(
             move,
-            "static qboolean SG_OwnDroppedFlagDirectTouchAuthority",
-            "static int SG_TerminalFieldSeed",
+            "if (!DefenseCombatApplyDuelWeave(hold_post, proved_control",
+            "if (role == SG_ROLE_CARRY && cmd->forwardmove != 0",
         )
-        for token in (
-            "ctf_flagathome(flag)",
-            "SG_FlagPerceivable(e, flag)",
-            "SG_DistXY(flag->s.origin, e->s.origin) >= 160.0f",
-            "fabsf(flag->s.origin[2] - e->s.origin[2]) > 64.0f",
-            "sg_host.trace(e->s.origin, e->mins, e->maxs, flag->s.origin",
-        ):
-            self.assertIn(token, authority)
+        self.assertIn("tc->flag_touch_terminal, weave_side, cmd", texture)
+        self.assertIn("if (!bot->terminal && !tc->flag_touch_terminal)", texture)
+        self.assertIn("FlagTouchClaimMovement(", fallback)
+        for hold in ("hold_post", "rally_hold", "rail_hold"):
+            self.assertIn(f"{hold} = tc->{hold};", fallback)
 
     def test_live_flag_priority_precedes_graph_and_clears_hold(self) -> None:
         move = source("slipgate/sg_move.c")
@@ -640,7 +634,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         ):
             self.assertIn(token, local)
 
-        terminal_fallback = between(move, "if (gf)\n\t\t\t{", "\n\t\t}\n\n\t\tif (have_aim)")
+        terminal_fallback = between(
+            move, "if (gf)\n\t\t\t{", "FlagTouchClaimMovement")
         self.assertNotIn("home4", terminal_fallback)
         self.assertNotIn("Rune_NearestSeed", terminal_fallback)
         self.assertNotIn("role == SG_ROLE_ATTACK", terminal_fallback)
@@ -653,22 +648,11 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "if (!have_aim && bestlink >= 0)",
         )
         self.assertIn("flag_touch_terminal = true;", terminal)
-        smooth_start = (
-            "if (FlagTerminalGenericSteeringAllowed(\n"
-            "\t\t\t        flag_touch_terminal) && sg_cv.smooth->value"
-        )
+        smooth_start = "if (!flag_touch_terminal && sg_cv.smooth->value"
         fan = between(move, "Feelers: try the goal heading first", smooth_start)
-        self.assertIn(
-            "FlagTerminalGenericSteeringAllowed(\n"
-            "\t\t\t        flag_touch_terminal)",
-            fan,
-        )
+        self.assertIn("if (!flag_touch_terminal)", fan)
         smooth = between(move, smooth_start, "at a drop lip")
-        self.assertIn(
-            "FlagTerminalGenericSteeringAllowed(\n"
-            "\t\t\t        flag_touch_terminal)",
-            smooth,
-        )
+        self.assertIn("if (!flag_touch_terminal &&", smooth)
 
     def test_scoop_mission_finishes_the_relay_touch(self) -> None:
         goal = source("slipgate/sg_goal.c")
