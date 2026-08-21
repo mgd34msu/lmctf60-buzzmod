@@ -29,6 +29,13 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 	return SG_StrikeWeaponControllerPhysical(&state) ? true : false;
 }
 
+qboolean SG_DeclaredDoorRouteRequiresRelease(const sg_bot_t *bot, int action)
+{
+	return bot && (action == RL_DOOR || action == RL_BUTTON_DOOR) &&
+	       bot->declared_started && !bot->declared_touched &&
+	       !bot->declared_triggered && !bot->declared_activated;
+}
+
 sg_door_lease_retirement_t SG_DoorLeaseRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready)
 {
@@ -218,6 +225,11 @@ void SG_AttackEscortRetireSupersededRoute(sg_bot_t *bot,
 	    bot->commit_link >= rune->hdr.num_links)
 		return;
 	action = rune->links[bot->commit_link].action;
+	if (SG_DeclaredDoorRouteRequiresRelease(bot, action))
+	{
+		bot->commit_retirement_pending = true;
+		return;
+	}
 	if (SG_TraversalControllerPhysical(bot, action))
 	{
 		bot->commit_retirement_pending = true;

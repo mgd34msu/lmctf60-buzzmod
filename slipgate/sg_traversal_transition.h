@@ -16,6 +16,7 @@ typedef enum sg_speedhook_terminal_e
 } sg_speedhook_terminal_t;
 
 qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action);
+qboolean SG_DeclaredDoorRouteRequiresRelease(const sg_bot_t *bot, int action);
 sg_door_lease_retirement_t SG_DoorLeaseRetirement(
 	int release_proved_clear, int recovery_expired, int hold_open_ready);
 void SG_StagedTraversalCancel(sg_bot_t *bot, int action);

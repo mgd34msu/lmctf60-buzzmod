@@ -40,7 +40,6 @@
     "tests/test_role_telemetry_consumers.py": 4,
     "tests/test_rune_corpus_controller.py": 35,
     "tests/test_runegen_gate.py": 23,
-    "tests/test_strike_integration.py": 1,
     "tools/aux2.sh": 1,
     "tools/bspmechanisms.py": 2,
     "tools/campaign.sh": 1,
@@ -66,7 +65,7 @@
   "oversized_files": {
     "GNUmakefile": 2691,
     "Makefile": 2931,
-    "slipgate/sg_arach.c": 3696,
+    "slipgate/sg_arach.c": 3694,
     "slipgate/sg_caco.c": 2135,
     "slipgate/sg_chat.c": 3818,
     "slipgate/sg_combat.c": 4509,

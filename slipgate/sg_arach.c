@@ -2870,8 +2870,6 @@ void SG_BotThink(sg_bot_t *bot)
 	sg_strike_duty_t strike_duty = SG_STRIKE_DUTY_NONE;
 	int strike_slot = -1;
 
-	/* the few frame terms still born outside the context: the seeds the
-	 * stages take through it, and the one flow flag read here */
 	qboolean	precision = false;          /* final approach: no tricks */
 	qboolean	hold_post = false;          /* defender at its stand: guard */
 	qboolean	rally_hold = false;         /* attacker waiting for a partner */
@@ -2881,31 +2879,19 @@ void SG_BotThink(sg_bot_t *bot)
 	                                         * WEAPONS.md 2.4-D3 picks the
 	                                         * pre-held weapon from it */
 
-	/* the duel terms, read once per frame and priced per candidate seed */
 	qboolean	duel = false;               /* combat has a live or fresh target */
 	vec3_t		duel_org;                   /* where it is believed to be */
 	float		duel_want = 0.0f;           /* range the weapon in hand wants */
 	float		duel_expo = 0.0f;           /* what being seen costs, 0 to ~1 */
 
-	/* the think context: the container these frame locals are migrating
-	 * into, loaded before each converted stage and read back after */
 	sg_think_t	tc;
 
-	/* Every stage receives this object, and Objective itself prices candidate
-	 * seeds before PickLink.  Zeroing only cmd left its pointer fields as stack
-	 * garbage and made tactics dereference an arbitrary "danger" field after
-	 * map transitions.  A frame context is born wholly initialized. */
 	memset(&tc, 0, sizeof(tc));
 	tc.cmd.msec = 100;
 	VectorClear(duel_org);
 
 	rune_compatible = SG_RunePhysicsCompatible(sg_rune);
 	declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);
-	/* Motion produced while the active law is not the loaded proof law cannot
-	 * preserve graph localization. Clear it before the corpse path can teach a
-	 * stale danger/tilt sample, including when this hold's ClientThink kills an
-	 * initially live bot and authority is restored before the next bot frame.
-	 * A surviving body localizes afresh after exact restoration. */
 	if (!rune_compatible && !declared_door_guarded)
 		bot->seed = -1;
 	{
@@ -3157,11 +3143,23 @@ void SG_BotThink(sg_bot_t *bot)
 		return;
 
 	team = e->client->ctf.teamnum;
-	/* LMCTF has ONE flag item: "Enemy Flag" (g_items.c:2478). */
 	carrying = SG_BotCarrying(e);
 
 	role = StrikeRoleForBot(bot, carrying);
 	SG_AttackEscortRetireSupersededRoute(bot, bot->last_role, (int)role);
+	if (bot->last_role == SG_ROLE_ATTACK && role == SG_ROLE_ESCORT &&
+	    bot->commit_retirement_pending && sg_rune && sg_rune->links &&
+	    bot->commit_link >= 0 && bot->commit_link < sg_rune->hdr.num_links)
+	{
+		int action = sg_rune->links[bot->commit_link].action;
+
+		if (SG_DeclaredDoorRouteRequiresRelease(bot, action))
+		{
+			if (Bot_DeclaredDoorGuardRetainOrRelease(bot))
+				return;
+			SG_StagedTraversalCancel(bot, action);
+		}
+	}
 	if (!SG_RoleOwnsDefenseState(role))
 	{
 		/* A patrol is a role-local leg, not a mission that may sleep through

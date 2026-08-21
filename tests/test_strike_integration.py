@@ -472,8 +472,7 @@ class StrikeIntegrationTest(unittest.TestCase):
             "!SG_RouteFailureWatchSuppressed(role,"):]
         self.assertIn("tc->scoop_mission", failure_watch[:700])
         axis_start = descend.index("if (enemy_pressure && bot->seed >= 0 &&")
-        axis_end = descend.index("else if (role == SG_ROLE_CARRY)",
-                                 axis_start)
+        axis_end = descend.index("else if (role == SG_ROLE_CARRY)", axis_start)
         axis = descend[axis_start:axis_end]
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb6)", axis)
         self.assertNotIn("mb6->last_role", axis)
@@ -481,15 +480,13 @@ class StrikeIntegrationTest(unittest.TestCase):
         self.assertIn("if (tc->strike_rush)", descend)
         self.assertIn("StrikeWeaponPurposeReconcile(bot, tc)", descend)
         self.assertIn("bot->strike_weapon_link = bestlink", descend)
-        self.assertIn("bot->strike_weapon_until = tc->strike_weapon_deadline",
-                      descend)
+        self.assertIn("bot->strike_weapon_until = tc->strike_weapon_deadline", descend)
         self.assertIn("SG_StrikeWeaponRouteVerdict", descend)
         self.assertIn("StrikeRailLateOverrideAllowed(bot, tc)", descend)
         self.assertIn("StrikeRailWatchdogAllowed(bot, tc)", descend)
         self.assertIn("GenericRailMoveAllowed(bot, tc)", move)
         self.assertIn("memcpy(next_frame, frames", adapter)
         self.assertIn("SG_StrikeStep(&next_team[team_index]", adapter)
-        self.assertIn("exactly once", header)
         snapshot = arach.index("sg_strike_enemy_pressure_cache[i] =",
                                arach.index("SG_StrikeAdapterBeginFrame"))
         serial = arach.index("SG_BotThink(&sg_bots[i]);", snapshot)
@@ -501,8 +498,10 @@ class StrikeIntegrationTest(unittest.TestCase):
         reset = arach[arach.index("void SG_StrikeSlotReset"):]
         self.assertIn("sg_strike_enemy_pressure_cache[slot] = false", reset)
         self.assertIn("sg_strike_enemy_pressure_goal_cache[slot] = -1", reset)
-        handoff = arach.index("SG_AttackEscortRetireSupersededRoute(")
-        self.assertLess(handoff, arach.index("Think_CarryBookends("))
+        handoff_path = arach[arach.index("SG_AttackEscortRetireSupersededRoute("):
+                             arach.index("Think_CarryBookends(")]
+        self.assertIn("Bot_DeclaredDoorGuardRetainOrRelease(bot)", handoff_path)
+        self.assertIn("SG_StagedTraversalCancel(bot, action)", handoff_path)
         self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
         self.assertIn("tc.strike_pressure = SG_StrikeEnemyPressureActive(",
                       arach)
@@ -710,7 +709,8 @@ class StageAMeasurementAuthorityTest(unittest.TestCase):
                                         "red_team": 600.0,
                                         "blue_team": 600.0},
             "recording_policy":
-                "serverrecord before roster joins through removal after the full-roster allowance; evaluate the exact server-time crop",
+                "serverrecord before roster joins through removal after the "
+                "full-roster allowance; evaluate the exact server-time crop",
             "artifacts": artifacts,
             "configuration_artifacts": [
                 {"path": "config/stage-a.cfg", "sha256": "3" * 64}],

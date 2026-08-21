@@ -195,7 +195,9 @@ static void TestStrikeDutyRetiresSupersededRoute(void)
 
 static void TestAttackEscortRetiresSupersededRoute(void)
 {
+	static const int door_actions[] = { RL_DOOR, RL_BUTTON_DOOR };
 	sg_bot_t bot;
+	size_t action_index;
 
 	ResetWorld();
 	bot = Bot();
@@ -264,6 +266,23 @@ static void TestAttackEscortRetiresSupersededRoute(void)
 	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
 	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 &&
 	    bot.commit_retirement_pending);
+
+	for (action_index = 0;
+	     action_index < sizeof(door_actions) / sizeof(door_actions[0]);
+	     action_index++)
+	{
+		bot = Bot();
+		links[1].action = door_actions[action_index];
+		bot.commit_link = 1;
+		bot.commit_until = 30.0f;
+		bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
+		bot.declared_started = true;
+		SG_AttackEscortRetireSupersededRoute(
+		    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
+		CHECK(bot.commit_link == 1 && bot.commit_until == 30.0f &&
+		    bot.commit_route_goal.field == route_field);
+		CHECK(bot.declared_started && bot.commit_retirement_pending);
+	}
 }
 
 static void TestDoorLeaseRetirement(void)
