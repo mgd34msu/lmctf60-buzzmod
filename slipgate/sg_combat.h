@@ -145,6 +145,7 @@ void SG_CombatPost(edict_t *self, float sightline,
 /* belief-driven expectation: pre-select for a contact at roughly this
  * range before any line of sight exists; decays in seconds */
 void SG_CombatAlert(edict_t *self, float expect_range);
+void SG_CombatAlertFromBeliefs(edict_t *self, const int *goal_field);
 
 
 qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,

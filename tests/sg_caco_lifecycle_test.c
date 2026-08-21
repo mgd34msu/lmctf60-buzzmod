@@ -4,6 +4,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_combat_alert_policy.h"
 #include "slipgate/sg_local.h"
 
 qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
@@ -135,6 +136,90 @@ static void CheckEnemyObservationValidation(void)
 	CHECK(!Caco_EnemyObservationValid(NULL, 0, 0, 16, 0));
 }
 
+static qboolean SelectAlert(const sg_belief_enemy_t *rows, int count,
+	const rune_t *rune, const int *field, int maxclients,
+	const vec3_t origin, sg_combat_alert_selection_t *selected)
+{
+	return SG_CombatAlertSelect(rows, count, rune, field, maxclients,
+	    origin, 10.0f, selected);
+}
+
+static void CheckCombatAlertSelection(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[4];
+	int field[4] = { 100, 100, 100, 100 };
+	vec3_t origin = { 0.0f, 0.0f, 0.0f };
+	sg_belief_enemy_t rows[2];
+	sg_combat_alert_selection_t selected;
+	sg_combat_alert_selection_t untouched = { 77, 88.0f, 99.0f };
+
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(rows, 0, sizeof(rows));
+	rune.hdr.num_seeds = 4;
+	rune.seeds = seeds;
+	seeds[0].origin[0] = 1000.0f;
+	seeds[1].origin[0] = 120.0f;
+	seeds[2].origin[0] = 1199.0f;
+	seeds[3].origin[0] = 1200.0f;
+	rows[0] = (sg_belief_enemy_t){ 0, 0, 9.9f, false, false };
+	rows[1] = (sg_belief_enemy_t){ 7, 1, 7.1f, false, true };
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 7 && selected.range == 120.0f);
+	rows[0] = (sg_belief_enemy_t){ 7, 1, 7.1f, false, true };
+	rows[1] = (sg_belief_enemy_t){ 0, 0, 9.9f, false, false };
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 7 && selected.range == 120.0f);
+
+	rows[0] = (sg_belief_enemy_t){ 5, 1, 9.0f, false, false };
+	rows[1] = (sg_belief_enemy_t){ 7, 1, 9.5f, false, false };
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 7 && selected.seen_time == 9.5f);
+	rows[0].seen_time = rows[1].seen_time;
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 5);
+
+	rows[0] = (sg_belief_enemy_t){ 0, 0, 9.0f, false, false };
+	rows[1] = (sg_belief_enemy_t){ 7, 4, 9.0f, false, false };
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	rows[1] = (sg_belief_enemy_t){ 8, 1, 9.0f, false, false };
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	rows[1] = (sg_belief_enemy_t){ 7, 1, 7.0f, false, false };
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	rows[1].seen_time = 10.5f;
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	rows[1].seen_time = NAN;
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+
+	rows[1] = (sg_belief_enemy_t){ 7, 1, 9.0f, false, false };
+	field[1] = SG_FIELD_INF;
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	field[1] = -1;
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	field[1] = 100;
+	rows[1].seed = 3;
+	CHECK(SelectAlert(rows, 2, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 0);
+	rows[1].seed = 2;
+	CHECK(SelectAlert(rows + 1, 1, &rune, field, 8, origin, &selected));
+	CHECK(selected.client == 7 && selected.range == 1199.0f);
+
+	rows[1].seed = 3;
+	selected = untouched;
+	CHECK(!SelectAlert(rows + 1, 1, &rune, field, 8, origin, &selected));
+	CHECK(memcmp(&selected, &untouched, sizeof(selected)) == 0);
+	CHECK(!SelectAlert(NULL, 1, &rune, field, 8, origin, &selected));
+	CHECK(!SelectAlert(rows, 0, &rune, field, 8, origin, &selected));
+}
+
 static void CheckProjectileGenerationRetirement(void)
 {
 	edict_t projectile;
@@ -232,6 +317,7 @@ int SG_CacoLifecycleTest(void)
 	failures = 0;
 	CheckEnemyObservationRetirement();
 	CheckEnemyObservationValidation();
+	CheckCombatAlertSelection();
 	memset(test_edicts, 0, sizeof(test_edicts));
 	memset(test_clients, 0, sizeof(test_clients));
 	memset(sg_caco_damage, 0, sizeof(sg_caco_damage));

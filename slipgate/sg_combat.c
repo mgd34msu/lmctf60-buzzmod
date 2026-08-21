@@ -3,6 +3,7 @@
 #include "g_local.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_combat_alert_policy.h"
 #include "slipgate/sg_combat_commit_policy.h"
 #include "slipgate/sg_combat_target_policy.h"
 #include "slipgate/sg_item_route.h"
@@ -3124,13 +3125,6 @@ void SG_CombatWeights(edict_t *self, const sg_weights_t *role,
 		return;
 	Combat_CacheItems();
 
-	/*
-	 * The worths move on the bot's own state, which moves slowly compared to
-	 * a server frame, and two of them walk the edict list. Once a second is
-	 * the cadence 2.3 asks for and the one Fields_Refresh already runs on
-	 * (sg_fields.c:261), so the surface never sees a weight the fields have
-	 * not caught up with.
-	 */
 	if (level.time >= st->worth_next)
 	{
 		st->worth_next = level.time + SG_WEIGHT_TICK;
@@ -3161,14 +3155,7 @@ void SG_CombatPost(edict_t *self, float sightline,
 	st->post_defender = defender_stand;
 }
 
-/*
- * Expected contact from belief -- an ear in the PHS, a teammate's callout --
- * before any line of sight exists. The idle hand pre-selects for the range
- * the encounter is expected at, same D3b economics as the post: holding the
- * right weapon is free, raising it mid-contact costs a full cycle. The
- * expectation decays; a stale alarm must not leave a mid-band gun in hand
- * on a long-range route forever.
- */
+/* Pre-select for a believed contact; bounded decay prevents stale loadouts. */
 void SG_CombatAlert(edict_t *self, float expect_range)
 {
 	sg_combat_state_t *st = Combat_ClientState(self);
@@ -3179,13 +3166,24 @@ void SG_CombatAlert(edict_t *self, float expect_range)
 	st->alert_until = level.time + 3.0f;
 }
 
+void SG_CombatAlertFromBeliefs(edict_t *self, const int *goal_field)
+{
+	rune_t *rune = SG_Rune();
+	int team = self->client->ctf.teamnum;
+	sg_combat_alert_selection_t selected;
+
+	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) ||
+	    !rune || sg_fields.item[0] == NULL)
+		return;
+	if (SG_CombatAlertSelect(sg_caco_enemies[SG_TeamIdx(team)],
+	    SG_MAX_ENEMY_TRACK, rune, goal_field, game.maxclients,
+	    self->s.origin, level.time, &selected))
+		SG_CombatAlert(self, selected.range);
+}
+
 /* ------------------------------------------------------------- duel terms */
 
-/*
- * The live target, for callers outside the combat file (the grenade
- * lead wants the enemy's ENTITY -- velocity and box -- not a seed
- * belief). NULL unless this bot re-sighted its enemy this frame-ish.
- */
+/* Current live entity, not its retained seed belief. */
 static edict_t *Combat_EnemyIdentityCurrent(edict_t *self, int enemy_index,
                                             unsigned long enemy_ctfid)
 {
@@ -4390,12 +4388,6 @@ void SG_CombatWhy(void)
 }
 
 #ifdef SG_COMBAT_AIM_TEST
-/*
- * A deliberately narrow compiled seam for tests.  It exposes the production
- * pack -> muzzle -> constrain loop without adding a runtime API or depending
- * on a fake trace host.  The test supplies a centre plus live mins/maxs and
- * independently checks the returned physical ray against that box.
- */
 int SG_CombatAimTestFinalize(int weapon, int hand, int machinegun_shots,
                              int gunframe, float viewheight,
                              const vec3_t origin,

@@ -3785,41 +3785,8 @@ no_hold:;
 	                                role == SG_ROLE_DEFEND &&
 	                                goal_field[bot->seed] < 2500)));
 
-	/*
-	 * The ear (and teammates' eyes) arm everyone else too: a fresh contact
-	 * on the belief table within a second and a half of travel means the
-	 * idle hand should already hold the weapon that meeting calls for.
-	 * Range is estimated by the straight line to the believed seed --
-	 * corridors bend it, but a band estimate only has to be right to
-	 * within a band.
-	 */
 	if (!hold_post)
-	{
-		int s;
-
-		for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
-
-			if (en->client >= 0 && en->seed >= 0 &&
-			    SG_AgeUnder(en->seen_time, 3.0f) &&
-			    goal_field[en->seed] < SG_FIELD_INF &&
-			    sg_fields.item[0] != NULL)   /* fields alive */
-			{
-				vec3_t ed;
-				float dist;
-
-				VectorSubtract(SG_Rune()->seeds[en->seed].origin,
-				               e->s.origin, ed);
-				dist = VectorLength(ed);
-				if (dist < 1200.0f)
-				{
-					SG_CombatAlert(e, dist);
-					break;
-				}
-			}
-		}
-	}
+		SG_CombatAlertFromBeliefs(e, goal_field);
 
 	/*
 	 * Chaingun pre-spin (WEAPONS.md 2.4-D3a): the gun fires slow for its
