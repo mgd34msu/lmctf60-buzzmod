@@ -519,7 +519,7 @@ typedef struct sg_think_s {
 	qboolean		carrying;
 	vec3_t			move_dir;
 	float			view_yaw, view_pitch;
-	qboolean		have_move, open_ahead, run_link, flag_touch_terminal, precision;
+	qboolean		have_move, open_ahead, run_link, touch_terminal, precision;
 	qboolean		hold_post, rally_hold, rail_hold, patrol_walk, think_over;
 	int				rail_seed, rail_client;
 	float			rail_dose, post_yaw, post_sight;

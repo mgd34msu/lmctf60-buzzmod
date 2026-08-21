@@ -228,21 +228,20 @@ static inline int SG_CarrierJinkThreat(int client, int seed, int seed_count,
 }
 
 static inline int SG_CarrierJinkAllowed(int terminal,
-	int flag_touch_terminal)
+	int touch_terminal)
 {
-	return !terminal && !flag_touch_terminal;
+	return !terminal && !touch_terminal;
 }
 
-static inline int SG_FlagTouchOptionalPacingAllowed(
-	int flag_touch_terminal)
+static inline int SG_DirectTouchOptionalPacingAllowed(int touch_terminal)
 {
-	return !flag_touch_terminal;
+	return !touch_terminal;
 }
 
 static inline float SG_SpawnBeatDeadline(float deadline,
-	int flag_touch_terminal)
+	int touch_terminal)
 {
-	return SG_FlagTouchOptionalPacingAllowed(flag_touch_terminal)
+	return SG_DirectTouchOptionalPacingAllowed(touch_terminal)
 	    ? deadline : 0.0f;
 }
 

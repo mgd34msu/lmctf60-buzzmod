@@ -60,18 +60,20 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             lead,
         )
 
-    def test_selected_weapon_route_finishes_at_the_physical_pickup(self):
+    def test_direct_item_targets_claim_terminal_movement(self):
         move = self.text("slipgate/sg_move.c")
         start = move.index("/* last resort: the goal itself, by belief */")
         end = move.index("if (!have_aim && SG_OrderedEscortDirectAimAllowed", start)
         terminal = move[start:end]
-        self.assertIn(
-            "SG_WeaponPickupTarget(bot, tc->strike_weapon_pursuit, aim)",
+        self.assertRegex(
             terminal,
+            r"touch_terminal\s*=\s*SG_WeaponPickupTarget\(\s*"
+            r"bot,\s*tc->strike_weapon_pursuit,\s*aim\)\s*\|\|\s*"
+            r"Lead_PickupTarget\(bot,\s*aim\)\s*\|\|\s*"
+            r"SG_MegaPickupTarget\(tc,\s*aim\)\s*;",
         )
-        self.assertLess(
-            terminal.index("SG_WeaponPickupTarget"),
-            terminal.index("Lead_PickupTarget"),
+        self.assertRegex(
+            terminal, r"if\s*\(touch_terminal\)\s*have_aim\s*=\s*true\s*;"
         )
 
     def test_major_static_pickup_closes_lead_before_belief_bookkeeping(self):

@@ -587,7 +587,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         terminal = move[move.index(
             "if (!have_aim && EnemyFlagTouchMissionActive"):
                         move.index("if (!have_aim && bestlink >= 0)")]
-        self.assertIn("flag_touch_terminal = true;", terminal)
+        self.assertIn("touch_terminal = true;", terminal)
         self.assertIn("SG_FlagTouchBrake(bot, e, terminal_flag->s.origin, true)",
                       terminal)
         self.assertIn("SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",

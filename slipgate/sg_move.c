@@ -381,10 +381,10 @@ void SG_DefenseCombatLeaseReset(sg_bot_t *bot)
  * tangent -- nor create a blind fallback when both tangent probes failed. */
 static qboolean DefenseCombatApplyDuelWeave(qboolean hold_post,
 	qboolean proved_control, qboolean duel_hold, qboolean engaged,
-	qboolean flag_touch_terminal, short weave_side, usercmd_t *cmd)
+	qboolean touch_terminal, short weave_side, usercmd_t *cmd)
 {
 	if (!cmd || hold_post || proved_control || !duel_hold || !engaged ||
-	    flag_touch_terminal)
+	    touch_terminal)
 		return false;
 	cmd->forwardmove = 0;
 	cmd->sidemove = weave_side;
@@ -3337,10 +3337,10 @@ static qboolean GenericRailMoveAllowed(const sg_bot_t *bot, const sg_think_t *tc
 	        (sg_defense_supply_phase_t)bot->def_supply_phase, bot->def_supply_armed);
 }
 
-static void FlagTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
-	sg_think_t *tc, qboolean flag_touch_terminal)
+static void DirectTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
+	sg_think_t *tc, qboolean touch_terminal)
 {
-	if (!flag_touch_terminal)
+	if (!touch_terminal)
 		return;
 	bot->escape_until = 0.0f;
 	bot->stuck_time = 0.0f;
@@ -3411,7 +3411,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	vec3_t move_dir;
 	float view_yaw = tc->view_yaw, view_pitch = tc->view_pitch;
 	qboolean have_move = false, open_ahead = false, run_link = false;
-	qboolean flag_touch_terminal = false;
+	qboolean touch_terminal = false;
 	sg_door_drive_t door_hold = SG_DOOR_DRIVE_NONE;
 	edict_t *door_ent = NULL;
 	edict_t *ordered_escort = (role == SG_ROLE_ESCORT)
@@ -3678,7 +3678,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag))
 		{
 			have_aim = true;
-			flag_touch_terminal = true;
+			touch_terminal = true;
 			bestlink = -1;
 			tc->bestlink = -1;
 			rally_hold = false;
@@ -4491,8 +4491,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			/* An item route can end at a pad seed before the physical pickup.
 			 * Cross the final body-length to the exact live item before generic
 			 * role homing turns the bot back toward a flag. */
-			if (SG_WeaponPickupTarget(bot, tc->strike_weapon_pursuit, aim) ||
-			    Lead_PickupTarget(bot, aim) || SG_MegaPickupTarget(tc, aim))
+			touch_terminal = SG_WeaponPickupTarget(bot,
+			    tc->strike_weapon_pursuit, aim) || Lead_PickupTarget(bot, aim) ||
+			    SG_MegaPickupTarget(tc, aim);
+			if (touch_terminal)
 				have_aim = true;
 			/* Terminal homing uses the live flag entity rather than its spawn
 			 * marker, which may be offset after droptofloor. */
@@ -4523,13 +4525,13 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				    flag_at_home, direct_touch))
 					gf = NULL;
 				else if (direct_touch)
-					flag_touch_terminal = true;
+					touch_terminal = true;
 			}
 			else if (!have_aim && role == SG_ROLE_RECOVER)
 			{
-				flag_touch_terminal =
+				touch_terminal =
 				    SG_OwnDroppedFlagDirectTouchAuthority(e, team, &gf);
-				if (!flag_touch_terminal)
+				if (!touch_terminal)
 				{
 					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
 					    goal_field, bot->seed);
@@ -4652,7 +4654,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * SG_AttackFlagTerminalAim and its direct-touch proof.  This
 				 * fallback retains capture behavior only; an attacker without
 				 * that proof must never project through a stand marker. */
-				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
+				if (role == SG_ROLE_CARRY && touch_terminal &&
 				    bot->seed >= 0)
 				{
 					vec3_t fd7;
@@ -4684,13 +4686,13 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 				/* Throttle a misaligned carrier near the stand so its turn radius
 				 * converges on the capture touch. */
-				if (role == SG_ROLE_CARRY && flag_touch_terminal &&
+				if (role == SG_ROLE_CARRY && touch_terminal &&
 				    sg_cv.termbrake->value)
 					SG_FlagTouchBrake(bot, e, gf->s.origin, true);
 			}
 		}
 
-		FlagTouchClaimMovement(bot, e, tc, flag_touch_terminal);
+		DirectTouchClaimMovement(bot, e, tc, touch_terminal);
 		hold_post = tc->hold_post;
 		rally_hold = tc->rally_hold;
 		rail_hold = tc->rail_hold;
@@ -4712,7 +4714,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * the local gradient walk around a doorframe instead of into
 			 * it.
 			 */
-			if (!flag_touch_terminal)
+			if (!touch_terminal)
 			{
 			static const float fan_dense[11] = { 0, -15, 15, -30, 30, -60,
 			                                     60, -100, 100, -145, 145 };
@@ -4816,7 +4818,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 			/* Slew ordinary navigation headings to suppress fan-induced flapping.
 			 * Combat, precision movement, hooks, and water retain snap turns. */
-			if (!flag_touch_terminal && sg_cv.smooth->value &&
+			if (!touch_terminal && sg_cv.smooth->value &&
 			    !duel && !precision && bot->hook_phase == 0 &&
 			    e->waterlevel < 2)
 			{
@@ -5321,7 +5323,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			bestlink = -1;
 			tc->bestlink = -1;
 		}
-		if (escort_terminal_hold && !flag_touch_terminal && !tc->jump_launch &&
+		if (escort_terminal_hold && !touch_terminal && !tc->jump_launch &&
 		    !bot->jump_started && !bot->drop_started && bot->hook_phase == 0)
 		{
 			cmd->forwardmove = 0;
@@ -5371,7 +5373,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	tc->have_move = have_move;
 	tc->open_ahead = open_ahead;
 	tc->run_link = run_link;
-	tc->flag_touch_terminal = flag_touch_terminal;
+	tc->touch_terminal = touch_terminal;
 	tc->door_hold = door_hold;
 	tc->door_ent = door_ent;
 	tc->drop_yaw_locked = drop_yaw_locked;
@@ -6175,13 +6177,13 @@ static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
 }
 
 #ifdef SG_STRIKE_TRANSITION_TEST_API
-void SG_StrikeTestFlagTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
+void SG_StrikeTestDirectTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
 	sg_think_t *tc, qboolean terminal)
 {
-	FlagTouchClaimMovement(bot, e, tc, terminal);
+	DirectTouchClaimMovement(bot, e, tc, terminal);
 }
 
-qboolean SG_StrikeTestFlagTouchDuelWeave(qboolean terminal, usercmd_t *cmd)
+qboolean SG_StrikeTestDirectTouchDuelWeave(qboolean terminal, usercmd_t *cmd)
 {
 	return DefenseCombatApplyDuelWeave(false, false, true, true,
 	    terminal, 160, cmd);
@@ -6902,7 +6904,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean run_link = tc->run_link;
 	int door_hold = tc->door_hold;
 	bot->beat_until = SG_SpawnBeatDeadline(bot->beat_until,
-	    tc->flag_touch_terminal);
+	    tc->touch_terminal);
 	{
 		sg_mover_lease_record_t record;
 		sg_compound_guard_result_t guard_result;
@@ -7193,7 +7195,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	{
 		float dose = sg_cv.breather->value;
 		if (dose > 0.0f && role != SG_ROLE_CARRY && !proved_control &&
-		    SG_FlagTouchOptionalPacingAllowed(tc->flag_touch_terminal) &&
+		    SG_DirectTouchOptionalPacingAllowed(tc->touch_terminal) &&
 		    bot->hook_phase == 0 && !bot->engaged_last &&
 		    e->groundentity != NULL)
 		{
@@ -8020,7 +8022,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 
 			if (!DefenseCombatApplyDuelWeave(hold_post, proved_control,
-				duel_hold, engaged, tc->flag_touch_terminal, weave_side, cmd) &&
+				duel_hold, engaged, tc->touch_terminal, weave_side, cmd) &&
 				have_move && !precision && bot->hook_phase == 0 &&
 			         !proved_control)
 			{
@@ -8058,13 +8060,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					AngleVectors(vb, mf, mr, NULL);
 				}
 
-				if (!bot->terminal && !tc->flag_touch_terminal)
+				if (!bot->terminal && !tc->touch_terminal)
 					SG_MovePolicy(e, cmd, mf, mr, move_dir,
 				              open_ahead, run_link,
 				              (float)cmd->msec / 1000.0f, airp);
 				if (role == SG_ROLE_CARRY && cmd->forwardmove != 0 &&
 				    SG_CarrierJinkAllowed(bot->terminal,
-				        tc->flag_touch_terminal) &&
+				        tc->touch_terminal) &&
 				    open_ahead &&
 				    !sg_cv.noweave->value)
 				{
@@ -8107,9 +8109,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->forwardmove = (short)(cmd->forwardmove * 0.30f);
 				cmd->sidemove = (short)(cmd->sidemove * 0.30f);
 			}
-
-
-			if (!tc->flag_touch_terminal && bot->linger_hot && !proved_control &&
+			if (!tc->touch_terminal && bot->linger_hot && !proved_control &&
 			    sg_cv.depace->value > 0.0f)
 			{
 				float dp = sg_cv.depace->value;

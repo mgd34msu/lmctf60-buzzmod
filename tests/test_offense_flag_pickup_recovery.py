@@ -208,7 +208,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         fan = between(
             move,
             "Feelers: try the goal heading first",
-            "if (!flag_touch_terminal && sg_cv.smooth->value",
+            "if (!touch_terminal && sg_cv.smooth->value",
         )
         self.assertIn("SG_FeelerProbe(", fan)
         self.assertIn("feeler.trace", fan)
@@ -598,21 +598,21 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "else if (!have_aim && role == SG_ROLE_DEFEND)",
         )
         self.assertLess(
-            recover.index("flag_touch_terminal ="),
+            recover.index("touch_terminal ="),
             recover.index("SG_OwnDroppedFlagDirectTouchAuthority"),
         )
         self.assertLess(
             recover.index("SG_OwnDroppedFlagDirectTouchAuthority"),
-            recover.index("if (!flag_touch_terminal)"),
+            recover.index("if (!touch_terminal)"),
         )
         texture = between(
             move,
             "if (!DefenseCombatApplyDuelWeave(hold_post, proved_control",
             "if (role == SG_ROLE_CARRY && cmd->forwardmove != 0",
         )
-        self.assertIn("tc->flag_touch_terminal, weave_side, cmd", texture)
-        self.assertIn("if (!bot->terminal && !tc->flag_touch_terminal)", texture)
-        self.assertIn("FlagTouchClaimMovement(", fallback)
+        self.assertIn("tc->touch_terminal, weave_side, cmd", texture)
+        self.assertIn("if (!bot->terminal && !tc->touch_terminal)", texture)
+        self.assertIn("DirectTouchClaimMovement(", fallback)
         for hold in ("hold_post", "rally_hold", "rail_hold"):
             self.assertIn(f"{hold} = tc->{hold};", fallback)
 
@@ -635,7 +635,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             self.assertIn(token, local)
 
         terminal_fallback = between(
-            move, "if (gf)\n\t\t\t{", "FlagTouchClaimMovement")
+            move, "if (gf)\n\t\t\t{", "DirectTouchClaimMovement")
         self.assertNotIn("home4", terminal_fallback)
         self.assertNotIn("Rune_NearestSeed", terminal_fallback)
         self.assertNotIn("role == SG_ROLE_ATTACK", terminal_fallback)
@@ -647,12 +647,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "SG_AttackFlagTerminalAim(e, team, aim, &terminal_flag)",
             "if (!have_aim && bestlink >= 0)",
         )
-        self.assertIn("flag_touch_terminal = true;", terminal)
-        smooth_start = "if (!flag_touch_terminal && sg_cv.smooth->value"
+        self.assertIn("touch_terminal = true;", terminal)
+        smooth_start = "if (!touch_terminal && sg_cv.smooth->value"
         fan = between(move, "Feelers: try the goal heading first", smooth_start)
-        self.assertIn("if (!flag_touch_terminal)", fan)
+        self.assertIn("if (!touch_terminal)", fan)
         smooth = between(move, smooth_start, "at a drop lip")
-        self.assertIn("if (!flag_touch_terminal &&", smooth)
+        self.assertIn("if (!touch_terminal &&", smooth)
 
     def test_scoop_mission_finishes_the_relay_touch(self) -> None:
         goal = source("slipgate/sg_goal.c")
@@ -719,12 +719,12 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         )
         self.assertLess(
             carrier.index("SG_OwnHomeFlagDirectTouchAuthority"),
-            carrier.index("flag_touch_terminal = true;"),
+            carrier.index("touch_terminal = true;"),
         )
         self.assertIn(
-            "role == SG_ROLE_CARRY && flag_touch_terminal &&", fallback)
+            "role == SG_ROLE_CARRY && touch_terminal &&", fallback)
         self.assertIn(
-            "role == SG_ROLE_CARRY && flag_touch_terminal &&\n"
+            "role == SG_ROLE_CARRY && touch_terminal &&\n"
             "\t\t\t\t    sg_cv.termbrake->value",
             fallback,
         )

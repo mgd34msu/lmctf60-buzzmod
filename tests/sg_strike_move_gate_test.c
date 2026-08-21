@@ -113,8 +113,8 @@ int main(void)
 	memset(&tc, 0, sizeof(tc));
 	memset(&ent, 0, sizeof(ent));
 	memset(&cmd, 0, sizeof(cmd));
-	CHECK(SG_FlagTouchOptionalPacingAllowed(false));
-	CHECK(!SG_FlagTouchOptionalPacingAllowed(true));
+	CHECK(SG_DirectTouchOptionalPacingAllowed(false));
+	CHECK(!SG_DirectTouchOptionalPacingAllowed(true));
 	CHECK(SG_SpawnBeatDeadline(2.0f, false) == 2.0f);
 	CHECK(SG_SpawnBeatDeadline(2.0f, true) == 0.0f);
 	bot.escape_until = 8.0f;
@@ -123,13 +123,13 @@ int main(void)
 	tc.hold_post = tc.rally_hold = tc.rail_hold = true;
 	VectorSet(bot.stuck_origin, 1.0f, 2.0f, 3.0f);
 	VectorSet(ent.s.origin, 4.0f, 5.0f, 6.0f);
-	SG_StrikeTestFlagTouchClaimMovement(&bot, &ent, &tc, false);
+	SG_StrikeTestDirectTouchClaimMovement(&bot, &ent, &tc, false);
 	CHECK(bot.escape_until == 8.0f && bot.stuck_time == 2.0f &&
 	    bot.hook_landbrake == 3.0f && tc.hold_post && tc.rally_hold &&
 	    tc.rail_hold);
 	CHECK(bot.stuck_origin[0] == 1.0f && bot.stuck_origin[1] == 2.0f &&
 	    bot.stuck_origin[2] == 3.0f);
-	SG_StrikeTestFlagTouchClaimMovement(&bot, &ent, &tc, true);
+	SG_StrikeTestDirectTouchClaimMovement(&bot, &ent, &tc, true);
 	CHECK(bot.escape_until == 0.0f && bot.stuck_time == 0.0f &&
 	    bot.hook_landbrake == 0.0f && !tc.hold_post && !tc.rally_hold &&
 	    !tc.rail_hold);
@@ -137,9 +137,9 @@ int main(void)
 	    bot.stuck_origin[2] == 6.0f);
 	cmd.forwardmove = 400;
 	cmd.sidemove = 0;
-	CHECK(!SG_StrikeTestFlagTouchDuelWeave(true, &cmd));
+	CHECK(!SG_StrikeTestDirectTouchDuelWeave(true, &cmd));
 	CHECK(cmd.forwardmove == 400 && cmd.sidemove == 0);
-	CHECK(SG_StrikeTestFlagTouchDuelWeave(false, &cmd));
+	CHECK(SG_StrikeTestDirectTouchDuelWeave(false, &cmd));
 	CHECK(cmd.forwardmove == 0 && cmd.sidemove != 0);
 	CHECK(!SG_StrikeTestEnemyFlagTouchMissionActive(false, false));
 	CHECK(SG_StrikeTestEnemyFlagTouchMissionActive(true, false));
