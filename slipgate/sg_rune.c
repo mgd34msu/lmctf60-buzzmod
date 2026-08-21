@@ -6,6 +6,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_compound_world.h"
+#include "slipgate/sg_compound.h"
 #include "slipgate/sg_compound_action_gen.h"
 #include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune_install.h"
@@ -4490,6 +4491,49 @@ static rune_reject_reason_t Compound_DropPlanProve(void *opaque, int action,
 	return RLR_OK;
 }
 
+static int Compound_DropPublish(const rune_link_t *links, size_t count)
+{
+	size_t index;
+	int published = 0;
+
+	if ((!links && count > 0) || count > (size_t)LINK_MAX)
+		return 0;
+	for (index = 0; index < count; index++)
+	{
+		const rune_link_t *candidate = &links[index];
+		int existing = -1;
+		int link_index;
+
+		if (candidate->action != RL_DOOR_DROP ||
+		    SG_CompoundValidateLink(gen_seeds, (uint32_t)gen_num_seeds,
+		                            candidate) != RLR_OK)
+			continue;
+		for (link_index = 0; link_index < gen_num_links; link_index++)
+			if (gen_links[link_index].action == RL_DOOR_DROP &&
+			    gen_links[link_index].from == candidate->from &&
+			    gen_links[link_index].to == candidate->to)
+			{
+				existing = link_index;
+				break;
+			}
+		if (existing >= 0)
+		{
+			if (gen_links[existing].cost_ms <= candidate->cost_ms)
+				continue;
+			gen_links[existing] = *candidate;
+			continue;
+		}
+		if (gen_num_links >= LINK_MAX)
+		{
+			gen_link_overflow = true;
+			break;
+		}
+		gen_links[gen_num_links++] = *candidate;
+		published++;
+	}
+	return published;
+}
+
 static void Link_CompoundDrops(void)
 {
 	#define COMPOUND_WORLD_MAX 64
@@ -4501,6 +4545,7 @@ static void Link_CompoundDrops(void)
 	int logged = 0;
 	int planner_emitted = 0;
 	int planner_proofs = 0;
+	int planner_published = 0;
 	int contact_failures[128] = { 0 };
 	int proof_failures[128] = { 0 };
 	door_topology_t topology = { NULL, NULL };
@@ -4674,7 +4719,11 @@ static void Link_CompoundDrops(void)
 						result = SG_CompoundActionGenPlan(&request);
 						planner_proofs += (int)result.proof_calls;
 						if (result.status == SG_COMPOUND_ACTION_GEN_OK)
+						{
 							planner_emitted += (int)result.emitted;
+							planner_published += Compound_DropPublish(
+							    output, result.emitted);
+						}
 					}
 				}
 				for (di = 0; di < COMPOUND_DROP_FAN &&
@@ -4720,7 +4769,8 @@ static void Link_CompoundDrops(void)
 			               "contact=%d proof=%d\n", mi,
 			               contact_failures[mi], proof_failures[mi]);
 	sg_host.dprint("rune: door-drop planner proofs=%d emitted=%d "
-	               "published=0\n", planner_proofs, planner_emitted);
+	               "published=%d\n", planner_proofs, planner_emitted,
+	               planner_published);
 	if (planner_seeds)
 		sg_host.level_free(planner_seeds);
 	Door_TopologyFree(&topology);

@@ -937,6 +937,8 @@ OBJS := \
 	slipgate/sg_compound_action_gen.o \
 	slipgate/sg_compound_publication.o \
 	slipgate/sg_compound_action_publication.o \
+	slipgate/sg_compound_drop_live.o \
+	slipgate/sg_compound_drop_game.o \
 	slipgate/sg_rune_door_scope.o \
 	sg_drop_live.o \
 	sg_swim_live.o \

@@ -71,6 +71,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	/* This is the only production reset point for the immutable instance. */
 	SG_BotPOVInstanceReset(bot);
 	memset(bot, 0, sizeof(*bot));
+	bot->compound_drop_live.drop_link = -1;
 	bot->seed = -1;
 	bot->hook_link = -1;
 	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,

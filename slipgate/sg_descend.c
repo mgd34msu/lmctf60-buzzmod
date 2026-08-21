@@ -10,6 +10,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_bot_ping.h"
 #include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_declared_door_guard.h"
@@ -2513,6 +2514,54 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		/* The fourth literal command is completed here, after the intervening
 		 * entity/pusher pass. Resolve every production boundary: exact cost and
 		 * reducer caps are authoritative. */
+		if (cl->action == RL_DOOR_DROP &&
+		    bot->compound_drop_live.guard_owned &&
+		    bot->compound_drop_live.command_pending)
+		{
+			sg_compound_drop_live_host_t host;
+			sg_compound_drop_live_result_t result;
+			sg_replay_pose_t pose;
+			sg_replay_observation_t observation;
+
+			if (!SG_CompoundDropGameHost(bot, &host) ||
+			    !SG_CompoundDropGamePose(e, &pose) ||
+			    !SG_CompoundDropGameObservation(bot, e, &observation))
+			{
+				SG_DeclaredDoorTerminalDeath(bot);
+				return -1;
+			}
+			result = SG_CompoundDropLiveBoundary(
+			    &bot->compound_drop_live, &host, &pose, &observation);
+			if (result.outcome == SG_COMPOUND_DROP_LIVE_COMPLETE ||
+			    result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED)
+			{
+				bot->commit_link = -1;
+				return -1;
+			}
+			if (result.outcome == SG_COMPOUND_DROP_LIVE_RECOVERING)
+			{
+				result = SG_CompoundDropLiveRecover(
+				    &bot->compound_drop_live, &host, &pose,
+				    e->client->oldvelocity[2]);
+				if (result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED)
+				{
+					bot->commit_link = -1;
+					return -1;
+				}
+				if (result.outcome != SG_COMPOUND_DROP_LIVE_RECOVERING ||
+				    bot->compound_drop_live.replay_kind ==
+				        SG_COMPOUND_DROP_LIVE_REPLAY_NONE)
+				{
+					SG_DeclaredDoorTerminalDeath(bot);
+					return -1;
+				}
+			}
+			else if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING)
+			{
+				SG_DeclaredDoorTerminalDeath(bot);
+				return -1;
+			}
+		}
 		if (cl->action == RL_DROP && bot->drop_started &&
 		    bot->drop_replay_active)
 		{

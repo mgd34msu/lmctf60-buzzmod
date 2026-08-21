@@ -12,6 +12,7 @@
 #include "sg_compound_world.h"
 #include "sg_compound_guard_game.h"
 #include "sg_compound_swim_game.h"
+#include "sg_compound_drop_game.h"
 
 typedef struct sg_compound_guard_game_identity_s
 {
@@ -873,6 +874,9 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientSpawned(edict_t *client)
 	game_guard.protected_subject[key] = bot ? 1U : 0U;
 	if (!bot || !bot->compound_guard.attached)
 		return SG_COMPOUND_GUARD_OK;
+	/* The action controller relinquishes command ownership before the generic
+	 * guard transfers the durable claim to its process-owned orphan record. */
+	SG_CompoundDropGameOrphan(bot);
 	respawn_result = SG_CompoundGuardBotRespawn(&bot->compound_guard, key);
 	if (respawn_result != SG_COMPOUND_GUARD_OK)
 		GameQuarantineBot(bot);
