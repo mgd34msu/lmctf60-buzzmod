@@ -2532,6 +2532,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 			result = SG_CompoundDropLiveBoundary(
 			    &bot->compound_drop_live, &host, &pose, &observation);
+			SG_CompoundDropGameDebugResult(bot, "boundary", &result, &pose);
 			if (result.outcome == SG_COMPOUND_DROP_LIVE_COMPLETE ||
 			    result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED)
 			{
@@ -2543,6 +2544,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				result = SG_CompoundDropLiveRecover(
 				    &bot->compound_drop_live, &host, &pose,
 				    e->client->oldvelocity[2]);
+				SG_CompoundDropGameDebugResult(bot, "recover", &result,
+				    &pose);
 				if (result.outcome == SG_COMPOUND_DROP_LIVE_SAFE_STOPPED)
 				{
 					bot->commit_link = -1;

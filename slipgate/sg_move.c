@@ -6983,6 +6983,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		}
 		result = SG_CompoundDropLiveBegin(&bot->compound_drop_live,
 		    &host, (uint32_t)bestlink, &pose);
+		SG_CompoundDropGameDebugResult(bot, "begin", &result, &pose);
 		if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING)
 		{
 			bot->commit_link = -1;
@@ -9043,6 +9044,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 					result = SG_CompoundDropLivePreStep(
 					    &bot->compound_drop_live, &host, &pose, cmd);
+					SG_CompoundDropGameDebugResult(bot, "prestep", &result,
+					    &pose);
 					if (!result.command_ready)
 					{
 						SG_DeclaredDoorTerminalDeath(bot);
@@ -9115,6 +9118,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				}
 				result = SG_CompoundDropLivePostStep(
 				    &bot->compound_drop_live, &host, &pose, &observation);
+				SG_CompoundDropGameDebugResult(bot, "poststep", &result,
+				    &pose);
 				if (result.outcome != SG_COMPOUND_DROP_LIVE_RUNNING &&
 				    result.outcome != SG_COMPOUND_DROP_LIVE_RECOVERING)
 				{
