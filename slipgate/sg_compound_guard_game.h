@@ -50,7 +50,13 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientDisconnected(
  * is the centralized postcondition hook: protected client/body edicts that
  * G_FreeEdict refuses to free must not call it. */
 sg_compound_guard_result_t SG_CompoundGuardGameHookLinked(
-	struct edict_s *client, struct edict_s *bolt);
+	struct edict_s *client, struct edict_s *bolt,
+	sg_mover_subject_t *subject_out);
+/* YES returns the one current bolt.  NO means this exact generation retired;
+ * malformed identity, slot reuse, or ambiguous ownership is ERROR. */
+sg_compound_guard_observation_t SG_CompoundGuardGameHookObserve(
+	struct edict_s *client, const sg_mover_subject_t *subject,
+	struct edict_s **current_out);
 void SG_CompoundGuardGameEntityFreed(struct edict_s *entity);
 sg_compound_guard_result_t SG_CompoundGuardGameBoltEvicted(
 	struct edict_s *client, struct edict_s *bolt);

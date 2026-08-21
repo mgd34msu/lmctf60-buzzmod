@@ -881,12 +881,14 @@ sg_compound_guard_result_t SG_CompoundGuardGameClientSpawned(edict_t *client)
 }
 
 sg_compound_guard_result_t SG_CompoundGuardGameHookLinked(edict_t *client,
-	edict_t *bolt)
+	edict_t *bolt, sg_mover_subject_t *subject_out)
 {
 	int client_key, key;
 	sg_bot_t *bot = GameBotForClient(client);
 	sg_compound_guard_result_t result;
 
+	if (subject_out)
+		memset(subject_out, 0, sizeof(*subject_out));
 	if (!GameEdictKey(client, &client_key) ||
 	    !GameClientShape(client, client_key) ||
 	    !GameEdictKey(bolt, &key) || !GameHookShape(client, bolt, key))
@@ -896,11 +898,53 @@ sg_compound_guard_result_t SG_CompoundGuardGameHookLinked(edict_t *client,
 	}
 	result = GameMint(bolt, SG_MOVER_SUBJECT_HOOK_BOLT, &key);
 	if (result == SG_COMPOUND_GUARD_OK)
+	{
 		game_guard.protected_subject[key] =
 		    game_guard.protected_subject[client_key] ? 1U : 0U;
+		if (subject_out)
+		{
+			subject_out->kind = SG_MOVER_SUBJECT_HOOK_BOLT;
+			subject_out->edict_key = key;
+			subject_out->generation = game_guard.generation[key];
+		}
+	}
 	if (result != SG_COMPOUND_GUARD_OK)
 		GameQuarantineBot(bot);
 	return result;
+}
+
+sg_compound_guard_observation_t SG_CompoundGuardGameHookObserve(
+	edict_t *client, const sg_mover_subject_t *subject,
+	edict_t **current_out)
+{
+	uint64_t client_generation;
+	int client_key;
+	int key;
+
+	if (current_out)
+		*current_out = NULL;
+	if (!current_out || !SG_MoverSubjectValid(subject) ||
+	    subject->kind != SG_MOVER_SUBJECT_HOOK_BOLT ||
+	    !game_guard.initialized || game_guard.initialization_failed ||
+	    game_guard.generation_exhausted || !GameWorldValid() ||
+	    !GameEdictKey(client, &client_key) ||
+	    !GameClientShape(client, client_key) ||
+	    GameIdentity(&game_guard, client_key, &client_generation) !=
+	        SG_COMPOUND_GUARD_YES)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	key = subject->edict_key;
+	if (key <= game.maxclients + BODY_QUEUE_SIZE ||
+	    key >= globals.num_edicts || key >= game.maxentities ||
+	    key >= MAX_EDICTS || game_guard.generation[key] == 0U ||
+	    game_guard.generation[key] != subject->generation ||
+	    game_guard.kind[key] != SG_MOVER_SUBJECT_HOOK_BOLT)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	if (!game_guard.present[key])
+		return SG_COMPOUND_GUARD_NO;
+	if (GameResolveHook(client) != key)
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	*current_out = &g_edicts[key];
+	return SG_COMPOUND_GUARD_YES;
 }
 
 static int GameClientBlocksAnyClaim(edict_t *client, int client_key)

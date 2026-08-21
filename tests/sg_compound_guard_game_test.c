@@ -133,7 +133,9 @@ int SG_MoverSubjectValid(const sg_mover_subject_t *subject)
 {
 	return subject && subject->kind >= SG_MOVER_SUBJECT_CLIENT &&
 	       subject->kind <= SG_MOVER_SUBJECT_HOOK_BOLT &&
-	       subject->edict_key > 0 && subject->generation != 0U;
+	       subject->edict_key > 0 && subject->generation != 0U &&
+	       subject->reserved[0] == 0U && subject->reserved[1] == 0U &&
+	       subject->reserved[2] == 0U;
 }
 
 qboolean SG_MoverSubjectOutsideSweep(edict_t *member, edict_t *subject)
@@ -422,6 +424,16 @@ static void LiveEntity(int key, const char *classname)
 	entity->classname = (char *)classname;
 }
 
+static void LiveHook(int key, edict_t *owner)
+{
+	LiveEntity(key, "noclass");
+	entities[key].owner = owner;
+	entities[key].movetype = MOVETYPE_FLYMISSILE;
+	entities[key].solid = SOLID_BBOX;
+	entities[key].touch = hook_touch;
+	entities[key].die = hook_die;
+}
+
 static void ResetWorld(void)
 {
 	memset(entities, 0, sizeof(entities));
@@ -703,7 +715,7 @@ static void TestBodyAndHookIncarnations(void)
 	entities[11].solid = SOLID_BBOX;
 	entities[11].touch = hook_touch;
 	entities[11].die = hook_die;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11], NULL) ==
 	      SG_COMPOUND_GUARD_OK);
 	hook_generation = CurrentGeneration(11);
 	LiveEntity(10, "func_door");
@@ -801,7 +813,7 @@ static void TestBodyAndHookIncarnations(void)
 	entities[14].solid = SOLID_BBOX;
 	entities[14].touch = hook_touch;
 	entities[14].die = hook_die;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[2], &entities[14]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[2], &entities[14], NULL) ==
 	      SG_COMPOUND_GUARD_OK);
 	sweep_inside_key = 2;
 	CHECK(captured_host.all_subjects_outside(captured_host.context,
@@ -892,7 +904,7 @@ static void TestBodyAndHookIncarnations(void)
 	entities[12].solid = SOLID_BBOX;
 	entities[12].touch = hook_touch;
 	entities[12].die = hook_die;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[12]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[12], NULL) ==
 	      SG_COMPOUND_GUARD_OK);
 	entities[1].health = 25;
 	quarantines_before = quarantine_calls;
@@ -909,7 +921,7 @@ static void TestBodyAndHookIncarnations(void)
 	entities[4].touch = hook_touch;
 	entities[4].die = hook_die;
 	quarantines_before = quarantine_calls;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[4]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[4], NULL) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	CHECK(quarantine_calls == quarantines_before + 1);
 
@@ -919,25 +931,25 @@ static void TestBodyAndHookIncarnations(void)
 	entities[13].touch = hook_touch;
 	entities[13].die = hook_die;
 	quarantines_before = quarantine_calls;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13], NULL) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	CHECK(quarantine_calls == quarantines_before + 1);
 	entities[13].movetype = MOVETYPE_FLYMISSILE;
 	entities[13].classname = "not-a-hook";
 	quarantines_before = quarantine_calls;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13], NULL) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	CHECK(quarantine_calls == quarantines_before + 1);
 	entities[13].classname = "noclass";
 	entities[13].s.number = 14;
 	quarantines_before = quarantine_calls;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13], NULL) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	CHECK(quarantine_calls == quarantines_before + 1);
 	entities[13].s.number = 13;
 	entities[13].owner = &entities[2];
 	quarantines_before = quarantine_calls;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[13], NULL) ==
 	      SG_COMPOUND_GUARD_INVALID_ARGUMENT);
 	CHECK(quarantine_calls == quarantines_before + 1);
 	entities[13].owner = &entities[1];
@@ -956,6 +968,81 @@ static void TestBodyAndHookIncarnations(void)
 	SG_CompoundGuardGameEntityFreed(&entities[11]);
 	CHECK(captured_host.identity(captured_host.context, 11, &hook_generation) ==
 	      SG_COMPOUND_GUARD_NO);
+}
+
+static void TestHookSubjectObservation(void)
+{
+	edict_t *current = (edict_t *)(uintptr_t)1U;
+	sg_mover_subject_t first, second, wrong;
+
+	LiveHook(11, &entities[1]);
+	memset(&first, 0xa5, sizeof(first));
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11],
+	      &first) == SG_COMPOUND_GUARD_OK);
+	CHECK(first.kind == SG_MOVER_SUBJECT_HOOK_BOLT &&
+	      first.edict_key == 11 && first.generation != 0U &&
+	      first.reserved[0] == 0U && first.reserved[1] == 0U &&
+	      first.reserved[2] == 0U);
+	entities[1].client->hook = &entities[11];
+	entities[1].client->hookstate = 1;
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_YES);
+	CHECK(current == &entities[11]);
+
+	wrong = first;
+	wrong.generation++;
+	current = (edict_t *)(uintptr_t)1U;
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &wrong, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(current == NULL);
+	wrong = first;
+	wrong.reserved[0] = 1U;
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &wrong, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(SG_CompoundGuardGameHookObserve((edict_t *)(uintptr_t)1U, &first,
+	      &current) == SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, NULL) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[1].inuse = false;
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[1].inuse = true;
+
+	entities[11].touch = NULL;
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[11].touch = hook_touch;
+	entities[11].owner = &entities[2];
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	entities[11].owner = &entities[1];
+	LiveHook(12, &entities[1]);
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	memset(&entities[12], 0, sizeof(entities[12]));
+
+	entities[11].inuse = false;
+	SG_CompoundGuardGameEntityFreed(&entities[11]);
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(current == NULL);
+
+	LiveHook(11, &entities[1]);
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11],
+	      &second) == SG_COMPOUND_GUARD_OK);
+	CHECK(second.edict_key == first.edict_key &&
+	      second.generation > first.generation);
+	entities[1].client->hook = &entities[11];
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &first, &current) ==
+	      SG_COMPOUND_GUARD_OBSERVATION_ERROR);
+	CHECK(SG_CompoundGuardGameHookObserve(&entities[1], &second, &current) ==
+	      SG_COMPOUND_GUARD_YES);
+	CHECK(current == &entities[11]);
+
+	entities[11].inuse = false;
+	SG_CompoundGuardGameEntityFreed(&entities[11]);
+	entities[1].client->hook = NULL;
+	entities[1].client->hookstate = 0;
 }
 
 static void TestPusherFenceBasics(void)
@@ -1191,7 +1278,7 @@ static void TestCompoundDropDeathOwnsSingleOrphanEdge(void)
 	entities[11].solid = SOLID_BBOX;
 	entities[11].touch = hook_touch;
 	entities[11].die = hook_die;
-	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11]) ==
+	CHECK(SG_CompoundGuardGameHookLinked(&entities[1], &entities[11], NULL) ==
 	      SG_COMPOUND_GUARD_OK);
 	entities[1].client->hook = &entities[11];
 	entities[1].client->hookstate = 1;
@@ -1250,6 +1337,7 @@ int main(void)
 	      captured_host.set_terminal != NULL);
 	TestCompoundLifecycleDispatch();
 	TestIdentityABAAndBounds();
+	TestHookSubjectObservation();
 	TestPusherFenceBasics();
 	TestBodyAndHookIncarnations();
 	TestCompoundDropDeathOwnsSingleOrphanEdge();

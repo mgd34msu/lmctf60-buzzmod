@@ -1975,7 +1975,7 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	bolt->takedamage = DAMAGE_YES;
 	bolt->health = 59;	 // after 59 damage, hook destoyed
 	gi.linkentity (bolt);
-	(void)SG_CompoundGuardGameHookLinked(self, bolt);
+	(void)SG_CompoundGuardGameHookLinked(self, bolt, NULL);
 
 
 	//surt the muzzle flash code also causes a shotgun noise!!!!
