@@ -197,6 +197,35 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 	SG_StagedTraversalCancel(bot, action);
 }
 
+void SG_AttackEscortRetireSupersededRoute(sg_bot_t *bot,
+	int previous_role, int current_role)
+{
+	rune_t *rune;
+	int action;
+
+	if (!bot || previous_role != SG_ROLE_ATTACK ||
+	    current_role != SG_ROLE_ESCORT)
+		return;
+	bot->tac_seed = -1;
+	bot->tac_time = 0.0f;
+	bot->sticky_link = -1;
+	bot->latch_until = 0.0f;
+	bot->rail_link = -1;
+	bot->rail_stage = 0;
+	bot->rail_until = 0.0f;
+	rune = SG_Rune();
+	if (!rune || !rune->links || bot->commit_link < 0 ||
+	    bot->commit_link >= rune->hdr.num_links)
+		return;
+	action = rune->links[bot->commit_link].action;
+	if (SG_TraversalControllerPhysical(bot, action))
+	{
+		bot->commit_retirement_pending = true;
+		return;
+	}
+	SG_StagedTraversalCancel(bot, action);
+}
+
 void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,
 	qboolean duty_replaces_route)
 {

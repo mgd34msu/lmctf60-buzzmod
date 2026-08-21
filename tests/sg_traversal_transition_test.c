@@ -193,6 +193,79 @@ static void TestStrikeDutyRetiresSupersededRoute(void)
 	CHECK(bot.tac_seed == -1 && bot.commit_link == 0 && bot.hook_phase == 2);
 }
 
+static void TestAttackEscortRetiresSupersededRoute(void)
+{
+	sg_bot_t bot;
+
+	ResetWorld();
+	bot = Bot();
+	links[1].action = RL_RUN;
+	bot.tac_seed = 7;
+	bot.tac_time = 12.0f;
+	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
+	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 1;
+	bot.commit_route_goal = (sg_field_key_t){ route_field, 0 };
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
+	CHECK(bot.tac_seed == -1 && bot.tac_time == 0.0f);
+	CHECK(bot.commit_link == -1 && bot.commit_until == 0.0f &&
+	    bot.commit_route_goal.field == NULL);
+	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f &&
+	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
+
+	bot = Bot();
+	bot.tac_seed = 7;
+	bot.sticky_link = bot.rail_link = 1;
+	bot.latch_until = bot.rail_until = 30.0f;
+	bot.rail_stage = 1;
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
+	CHECK(bot.tac_seed == -1 && bot.sticky_link == -1 &&
+	    bot.rail_link == -1 && bot.rail_stage == 0);
+
+	bot = Bot();
+	bot.tac_seed = 7;
+	bot.commit_link = bot.sticky_link = bot.rail_link = 1;
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ATTACK);
+	CHECK(bot.tac_seed == 7 && bot.commit_link == 1 &&
+	    bot.sticky_link == 1 && bot.rail_link == 1);
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, -1, SG_ROLE_ESCORT);
+	CHECK(bot.tac_seed == 7 && bot.commit_link == 1 &&
+	    bot.sticky_link == 1 && bot.rail_link == 1);
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_CARRY);
+	CHECK(bot.tac_seed == 7 && bot.commit_link == 1 &&
+	    bot.sticky_link == 1 && bot.rail_link == 1);
+
+	bot = AimingSpeedHook();
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
+	CHECK(bot.commit_link == -1 && bot.hook_phase == 0 && !bot.speedhook);
+
+	bot = ArmedSpeedHook();
+	bot.speedhook_pull_applied = false;
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 && bot.speedhook);
+	CHECK(bot.commit_retirement_pending && bot.sticky_link == -1 &&
+	    bot.rail_link == -1);
+	CHECK(SG_SpeedHookTerminalFinish(&bot, false, 0, false) ==
+	    SG_SPEEDHOOK_TERMINAL_NOATTACH);
+	CHECK(bot.commit_link == -1 && !bot.commit_retirement_pending);
+
+	bot = Bot();
+	links[1].action = RL_HOOK;
+	bot.commit_link = bot.hook_link = 1;
+	bot.hook_phase = 2;
+	SG_AttackEscortRetireSupersededRoute(
+	    &bot, SG_ROLE_ATTACK, SG_ROLE_ESCORT);
+	CHECK(bot.commit_link == 1 && bot.hook_phase == 2 &&
+	    bot.commit_retirement_pending);
+}
+
 static void TestDoorLeaseRetirement(void)
 {
 	CHECK(SG_DoorLeaseRetirement(1, 0, 0) == SG_DOOR_LEASE_RELEASE);
@@ -369,6 +442,7 @@ int SG_TraversalTransitionTests(void)
 {
 	TestCarryStartRetiresOnlyReversibleTraversal();
 	TestStrikeDutyRetiresSupersededRoute();
+	TestAttackEscortRetiresSupersededRoute();
 	TestDoorLeaseRetirement();
 	TestFlagTouchRetiresReversibleCommitment();
 	TestSpeedHookTerminalFinish();

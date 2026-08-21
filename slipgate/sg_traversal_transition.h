@@ -23,6 +23,8 @@ void SG_SpeedHookReleaseFinish(sg_bot_t *bot);
 sg_speedhook_terminal_t SG_SpeedHookTerminalFinish(sg_bot_t *bot,
 	qboolean reached_speed, int hookstate, qboolean hook_present);
 void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started);
+void SG_AttackEscortRetireSupersededRoute(sg_bot_t *bot,
+	int previous_role, int current_role);
 void SG_StrikeDutyRetireSupersededRoute(sg_bot_t *bot,
 	qboolean duty_replaces_route);
 qboolean SG_DefensePatrolRetire(sg_bot_t *bot, qboolean patrol_allowed);

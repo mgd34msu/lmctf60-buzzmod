@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Executable and production-wiring checks for the strike frame adapter."""
-
 from pathlib import Path
 import hashlib
 import json
@@ -503,7 +501,8 @@ class StrikeIntegrationTest(unittest.TestCase):
         reset = arach[arach.index("void SG_StrikeSlotReset"):]
         self.assertIn("sg_strike_enemy_pressure_cache[slot] = false", reset)
         self.assertIn("sg_strike_enemy_pressure_goal_cache[slot] = -1", reset)
-        move = (ROOT / "slipgate/sg_move.c").read_text()
+        handoff = arach.index("SG_AttackEscortRetireSupersededRoute(")
+        self.assertLess(handoff, arach.index("Think_CarryBookends("))
         self.assertIn("SG_StrikeEnemyPressureSnapshot(bot)", move)
         self.assertIn("tc.strike_pressure = SG_StrikeEnemyPressureActive(",
                       arach)

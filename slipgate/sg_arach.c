@@ -3147,7 +3147,6 @@ void SG_BotThink(sg_bot_t *bot)
 	if (e->waterlevel == 0)
 		bot->swim_air_seed = -1;
 
-	/* my eyes feed the team belief before I decide from it */
 	Caco_See(sg_rune, e);
 	/* A proved rope owns the complete command before role/objective/approach
 	 * stages can arm a grenade, hold, or other mission-side action. It also
@@ -3162,6 +3161,7 @@ void SG_BotThink(sg_bot_t *bot)
 	carrying = SG_BotCarrying(e);
 
 	role = StrikeRoleForBot(bot, carrying);
+	SG_AttackEscortRetireSupersededRoute(bot, bot->last_role, (int)role);
 	if (!SG_RoleOwnsDefenseState(role))
 	{
 		/* A patrol is a role-local leg, not a mission that may sleep through
