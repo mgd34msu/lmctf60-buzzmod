@@ -45,6 +45,11 @@
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Hook_f(edict_t *ent);
 
+static int SG_TelemetryCoordinate(float coordinate)
+{
+	return (int)nearbyintf(coordinate);
+}
+
 /* Sound-directed splash is admitted against the authoritative client roster,
  * not the SG controller array. Humans and bots occupy the same damage space;
  * a human teammate near the heard-only belief is therefore the same veto as
@@ -9682,13 +9687,15 @@ hook_wait:;
 		if (bot->seed >= 0 && sfld && sfld[bot->seed] < SG_FIELD_INF)
 			sgoal = sfld[bot->seed];
 		SG_TimerArm(&bot->next_report, 1.0f);
-		sg_host.dprint("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%.0f %.0f %.0f) link=%d "
+		sg_host.dprint("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%d %d %d) link=%d "
 		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d frm=%d\n",
 		           e->client->pers.netname, role, bot->seed,
 		           (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
 		               ? goal_field[bot->seed] : -1,
 		           sgoal,
-		           sp, e->s.origin[0], e->s.origin[1], e->s.origin[2],
+		           sp, SG_TelemetryCoordinate(e->s.origin[0]),
+		           SG_TelemetryCoordinate(e->s.origin[1]),
+		           SG_TelemetryCoordinate(e->s.origin[2]),
 		           bestlink,
 		           (bestlink >= 0) ? SG_Rune()->links[bestlink].action : -1,
 		           bot->hook_phase, door_hold, (int)drop_yaw_locked,
