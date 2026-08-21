@@ -4396,6 +4396,32 @@ static void SG_OracleCompoundCaptureSuffix(const sg_phantom_t *ph,
 	proof->suffix_old_frame_z = old_frame_z;
 }
 
+static void SG_OracleCompoundDropCaptureSource(const sg_phantom_t *ph,
+	float old_frame_z, sg_compound_drop_proof_t *proof)
+{
+	proof->source_pms = ph->pms;
+	proof->source_old_pms = ph->old_pms;
+	VectorCopy(ph->origin, proof->source_origin);
+	VectorCopy(ph->velocity, proof->source_velocity);
+	proof->source_groundentity = ph->groundentity;
+	proof->source_watertype = ph->watertype;
+	proof->source_waterlevel = ph->waterlevel;
+	proof->source_old_frame_z = old_frame_z;
+}
+
+static void SG_OracleCompoundDropCaptureSuffix(const sg_phantom_t *ph,
+	float old_frame_z, sg_compound_drop_proof_t *proof)
+{
+	proof->suffix_pms = ph->pms;
+	proof->suffix_old_pms = ph->old_pms;
+	VectorCopy(ph->origin, proof->suffix_origin);
+	VectorCopy(ph->velocity, proof->suffix_velocity);
+	proof->suffix_groundentity = ph->groundentity;
+	proof->suffix_watertype = ph->watertype;
+	proof->suffix_waterlevel = ph->waterlevel;
+	proof->suffix_old_frame_z = old_frame_z;
+}
+
 static qboolean SG_OracleCompoundFixedVector(const vec3_t value)
 {
 	int axis;
@@ -4755,6 +4781,7 @@ rune_reject_reason_t SG_OracleCompoundDropPreopen(
 			reason = RLR_APPROACH_REPLAY_FAILED;
 			goto done;
 		}
+		SG_OracleCompoundDropCaptureSource(&ph, 0.0f, &candidate);
 		for (elapsed = 0; elapsed < SG_DOOR_APPROACH_LIMIT_MS;
 		     elapsed += SG_REPLAY_STEP_MS)
 		{
@@ -4835,6 +4862,7 @@ rune_reject_reason_t SG_OracleCompoundDropPreopen(
 	candidate.mover_top_ms = mover_step.elapsed_ms;
 	candidate.suffix_start_ms = mover_step.elapsed_ms - SG_REPLAY_FRAME_MS;
 	candidate.heading = heading;
+	SG_OracleCompoundDropCaptureSuffix(&ph, old_frame_z, &candidate);
 	reason = SG_OracleCompoundDropSuffix(&ph, resolved, member, destination,
 	    lip, heading, destination_water, &candidate);
 	if (reason != RLR_OK)

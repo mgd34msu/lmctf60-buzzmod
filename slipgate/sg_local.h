@@ -114,6 +114,22 @@ typedef struct sg_compound_swim_recovery_proof_s
 
 typedef struct sg_compound_drop_proof_s
 {
+	pmove_state_t	source_pms;
+	pmove_state_t	source_old_pms;
+	vec3_t	source_origin;
+	vec3_t	source_velocity;
+	qboolean	source_groundentity;
+	int	source_watertype;
+	int	source_waterlevel;
+	float	source_old_frame_z;
+	pmove_state_t	suffix_pms;
+	pmove_state_t	suffix_old_pms;
+	vec3_t	suffix_origin;
+	vec3_t	suffix_velocity;
+	qboolean	suffix_groundentity;
+	int	suffix_watertype;
+	int	suffix_waterlevel;
+	float	suffix_old_frame_z;
 	int	touch_ms;
 	int	touch_frame_end_ms;
 	int	mover_top_ms;

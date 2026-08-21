@@ -1,4 +1,4 @@
-/* sg_compound_publication.c -- atomic loader replay bindings for D_SWIM. */
+/* sg_compound_publication.c -- atomic loader replay bindings for compounds. */
 #include "../g_local.h"
 
 #include <limits.h>
@@ -159,11 +159,10 @@ static int CompoundPublicationNativeLinkValid(const rune_t *rune,
 		return 0;
 	source = &rune->seeds[link->from];
 	destination = &rune->seeds[link->to];
-	return link->action == RL_DOOR_SWIM &&
+	return (link->action == RL_DOOR_SWIM || link->action == RL_DOOR_DROP) &&
 	       link->provenance == RL_CONTRACTED &&
 	       link->mode == RLCM_PREOPEN &&
-	       link->min_speed == 0 && link->heading == 0 &&
-	       link->heading_slack == 0 &&
+	       link->min_speed == 0 &&
 	       link->cost_ms >= RUNE_MIN_COST_MS &&
 	       link->cost_ms <= RUNE_MAX_COST_MS &&
 	       link->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS == 0 &&
@@ -172,13 +171,19 @@ static int CompoundPublicationNativeLinkValid(const rune_t *rune,
 	       link->sweep_clear_ms <= (unsigned short)link->cost_ms &&
 	       (source->flags & ~(RSF_WATER | RSF_TOMBSTONE)) == 0 &&
 	       (destination->flags & ~(RSF_WATER | RSF_TOMBSTONE)) == 0 &&
-	       (source->flags & RSF_WATER) != 0 &&
 	       (source->flags & RSF_TOMBSTONE) == 0 &&
 	       (destination->flags & RSF_TOMBSTONE) == 0 &&
 	       CompoundPublicationWorldLattice3(source->origin) &&
 	       CompoundPublicationWorldRange3(destination->origin) &&
-	       CompoundPublicationPositiveZero3(link->anchor) &&
-	       CompoundPublicationWorldLattice3(link->mechanism_anchor);
+	       CompoundPublicationWorldLattice3(link->mechanism_anchor) &&
+	       ((link->action == RL_DOOR_SWIM &&
+	         (source->flags & RSF_WATER) != 0 &&
+	         link->heading == 0 && link->heading_slack == 0 &&
+	         CompoundPublicationPositiveZero3(link->anchor)) ||
+	        (link->action == RL_DOOR_DROP &&
+	         (source->flags & RSF_WATER) == 0 &&
+	         link->heading_slack == SG_RUNE_PROOF_DROP_CONTROL_MARKER &&
+	         CompoundPublicationWorldLattice3(link->anchor)));
 }
 
 static int CompoundPublicationMechanismEqual(
@@ -323,6 +328,32 @@ static void CompoundPublicationCheckpointSuffix(
 	checkpoint->old_frame_z = proof->suffix_old_frame_z;
 }
 
+static void CompoundPublicationCheckpointDropSource(
+	sg_compound_publication_checkpoint_t *checkpoint,
+	const sg_compound_drop_proof_t *proof)
+{
+	memset(checkpoint, 0, sizeof(*checkpoint));
+	checkpoint->pms = proof->source_pms;
+	checkpoint->old_pms = proof->source_old_pms;
+	checkpoint->grounded = proof->source_groundentity;
+	checkpoint->watertype = proof->source_watertype;
+	checkpoint->waterlevel = proof->source_waterlevel;
+	checkpoint->old_frame_z = proof->source_old_frame_z;
+}
+
+static void CompoundPublicationCheckpointDropSuffix(
+	sg_compound_publication_checkpoint_t *checkpoint,
+	const sg_compound_drop_proof_t *proof)
+{
+	memset(checkpoint, 0, sizeof(*checkpoint));
+	checkpoint->pms = proof->suffix_pms;
+	checkpoint->old_pms = proof->suffix_old_pms;
+	checkpoint->grounded = proof->suffix_groundentity;
+	checkpoint->watertype = proof->suffix_watertype;
+	checkpoint->waterlevel = proof->suffix_waterlevel;
+	checkpoint->old_frame_z = proof->suffix_old_frame_z;
+}
+
 static int CompoundPublicationCheckpointInternallyValid(
 	const sg_compound_publication_checkpoint_t *checkpoint,
 	const float origin[3], const float velocity[3])
@@ -402,6 +433,26 @@ static int CompoundPublicationBindingTimingValid(
 	proof.total_cost_ms = binding->total_cost_ms;
 	proof.exit_speed = binding->link.exit_speed;
 	return CompoundPublicationProofValid(&binding->link, &proof);
+}
+
+static int CompoundPublicationDropProofValid(const rune_link_t *link,
+	const sg_compound_drop_proof_t *drop)
+{
+	sg_compound_swim_proof_t timing;
+
+	if (!drop)
+		return 0;
+	memset(&timing, 0, sizeof(timing));
+	timing.touch_ms = drop->touch_ms;
+	timing.touch_frame_end_ms = drop->touch_frame_end_ms;
+	timing.mover_top_ms = drop->mover_top_ms;
+	timing.suffix_start_ms = drop->suffix_start_ms;
+	timing.arrival_ms = drop->arrival_ms;
+	timing.sweep_clear_ms = drop->sweep_clear_ms;
+	timing.total_cost_ms = drop->total_cost_ms;
+	timing.exit_speed = drop->exit_speed;
+	return CompoundPublicationProofValid(link, &timing) &&
+	       drop->heading == link->heading;
 }
 
 static int CompoundPublicationBindingMatchesRune(
@@ -514,7 +565,8 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 	if (!CompoundPublicationRuneShapeValid(rune) || !allocate || !deallocate)
 		return result;
 	for (link_index = 0; link_index < rune->hdr.num_links; link_index++)
-		if (rune->links[link_index].action == RL_DOOR_SWIM)
+		if (rune->links[link_index].action == RL_DOOR_SWIM ||
+		    rune->links[link_index].action == RL_DOOR_DROP)
 		{
 			compound_count++;
 			if (!CompoundPublicationNativeLinkValid(
@@ -599,13 +651,14 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 		const sg_compound_world_candidate_t *candidate;
 		sg_compound_swim_source_t source;
 		sg_compound_swim_proof_t proof;
+		sg_compound_drop_proof_t drop_proof;
 		sg_phantom_t phantom;
 		rune_reject_reason_t reason;
 		int hint_index;
 		int contact_found = 0;
 		vec3_t canonical_hint;
 
-		if (link->action != RL_DOOR_SWIM)
+		if (link->action != RL_DOOR_SWIM && link->action != RL_DOOR_DROP)
 			continue;
 		result.link_index = (uint32_t)link_index;
 		if (binding_index >= compound_count ||
@@ -634,16 +687,19 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 			goto fail;
 		}
 		memset(&source, 0, sizeof(source));
+		memset(&drop_proof, 0, sizeof(drop_proof));
 		memset(canonical_hint, 0, sizeof(canonical_hint));
-		reason = SG_OracleCompoundSwimPrepareSource(
-			rune->seeds[link->from].origin, &candidate->resolved, 0.0f,
-			&source,
-			NULL, true, true);
-		if (reason != RLR_OK)
+		if (link->action == RL_DOOR_SWIM)
 		{
-			result.status = SG_COMPOUND_PUBLICATION_SOURCE;
-			result.reason = reason;
-			goto fail;
+			reason = SG_OracleCompoundSwimPrepareSource(
+				rune->seeds[link->from].origin, &candidate->resolved, 0.0f,
+				&source, NULL, true, true);
+			if (reason != RLR_OK)
+			{
+				result.status = SG_COMPOUND_PUBLICATION_SOURCE;
+				result.reason = reason;
+				goto fail;
+			}
 		}
 		for (hint_index = 0; hint_index < candidate->hint_count;
 		     hint_index++)
@@ -651,9 +707,14 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 			vec3_t discovered;
 
 			memset(discovered, 0, sizeof(discovered));
-			reason = SG_OracleCompoundSwimDiscoverContact(
-				&source, &candidate->resolved,
-				candidate->hints[hint_index], discovered, NULL, true, true);
+			if (link->action == RL_DOOR_SWIM)
+				reason = SG_OracleCompoundSwimDiscoverContact(
+					&source, &candidate->resolved,
+					candidate->hints[hint_index], discovered, NULL, true, true);
+			else
+				reason = SG_OracleCompoundDropDiscoverContact(
+					rune->seeds[link->from].origin, &candidate->resolved,
+					candidate->hints[hint_index], discovered, true);
 			if (reason == RLR_OK &&
 			    CompoundPublicationVectorEqual(discovered,
 			                                   link->mechanism_anchor))
@@ -670,20 +731,33 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 			result.reason = RLR_BAD_MECHANISM_ANCHOR;
 			goto fail;
 		}
-		phantom = source.phantom;
 		memset(&proof, 0, sizeof(proof));
-		reason = SG_OracleCompoundSwimPreopen(
-			&phantom, &resolved, link->mechanism_anchor,
-			rune->seeds[link->to].origin,
-			(rune->seeds[link->to].flags & RSF_WATER) != 0,
-			source.old_frame_z, &proof, NULL, NULL, true, true);
+		if (link->action == RL_DOOR_SWIM)
+		{
+			phantom = source.phantom;
+			reason = SG_OracleCompoundSwimPreopen(
+				&phantom, &resolved, link->mechanism_anchor,
+				rune->seeds[link->to].origin,
+				(rune->seeds[link->to].flags & RSF_WATER) != 0,
+				source.old_frame_z, &proof, NULL, NULL, true, true);
+		}
+		else
+			reason = SG_OracleCompoundDropPreopen(
+				rune->seeds[link->from].origin, &resolved,
+				link->mechanism_anchor, rune->seeds[link->to].origin,
+				link->anchor, link->heading,
+				(rune->seeds[link->to].flags & RSF_WATER) != 0,
+				&drop_proof, true);
 		if (reason != RLR_OK)
 		{
 			result.status = SG_COMPOUND_PUBLICATION_REPLAY;
 			result.reason = reason;
 			goto fail;
 		}
-		if (!CompoundPublicationProofValid(link, &proof))
+		if ((link->action == RL_DOOR_SWIM &&
+		     !CompoundPublicationProofValid(link, &proof)) ||
+		    (link->action == RL_DOOR_DROP &&
+		     !CompoundPublicationDropProofValid(link, &drop_proof)))
 		{
 			result.status = SG_COMPOUND_PUBLICATION_MISMATCH;
 			result.reason = RLR_COST_MISMATCH;
@@ -696,18 +770,37 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 		binding->destination_seed = rune->seeds[link->to];
 		memcpy(binding->canonical_hint, canonical_hint,
 		       sizeof(binding->canonical_hint));
-		CompoundPublicationCheckpointSource(&binding->source, &source);
-		CompoundPublicationCheckpointSuffix(&binding->suffix, &proof);
-		if (!CompoundPublicationCheckpointInternallyValid(
-		        &binding->source, source.phantom.origin,
-		        source.phantom.velocity) ||
-		    !CompoundPublicationCheckpointInternallyValid(
-		        &binding->suffix, proof.suffix_origin,
-		        proof.suffix_velocity) ||
-		    !CompoundPublicationFloatBitsEqual(source.old_frame_z, 0.0f) ||
-		    source.phantom.waterlevel < 2 ||
-		    !(source.phantom.watertype & CONTENTS_WATER) ||
-		    (source.phantom.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+		if (link->action == RL_DOOR_SWIM)
+		{
+			CompoundPublicationCheckpointSource(&binding->source, &source);
+			CompoundPublicationCheckpointSuffix(&binding->suffix, &proof);
+		}
+		else
+		{
+			CompoundPublicationCheckpointDropSource(&binding->source,
+			                                        &drop_proof);
+			CompoundPublicationCheckpointDropSuffix(&binding->suffix,
+			                                        &drop_proof);
+		}
+		if (!CompoundPublicationCheckpointInternallyValid(&binding->source,
+		        link->action == RL_DOOR_SWIM ? source.phantom.origin :
+		                                       drop_proof.source_origin,
+		        link->action == RL_DOOR_SWIM ? source.phantom.velocity :
+		                                       drop_proof.source_velocity) ||
+		    !CompoundPublicationCheckpointInternallyValid(&binding->suffix,
+		        link->action == RL_DOOR_SWIM ? proof.suffix_origin :
+		                                       drop_proof.suffix_origin,
+		        link->action == RL_DOOR_SWIM ? proof.suffix_velocity :
+		                                       drop_proof.suffix_velocity) ||
+		    !CompoundPublicationFloatBitsEqual(binding->source.old_frame_z,
+		                                       0.0f) ||
+		    (link->action == RL_DOOR_SWIM &&
+		     (source.phantom.waterlevel < 2 ||
+		      !(source.phantom.watertype & CONTENTS_WATER) ||
+		      (source.phantom.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))) ||
+		    (link->action == RL_DOOR_DROP &&
+		     (drop_proof.source_waterlevel != 0 ||
+		      !drop_proof.source_groundentity)) ||
 		    !CompoundPublicationMechanismIndex(publication, &resolved,
 		                                       &binding->mechanism_index))
 		{
@@ -715,13 +808,20 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 			result.reason = RLR_MECHANISM_UNRESOLVED;
 			goto fail;
 		}
-		binding->touch_ms = proof.touch_ms;
-		binding->touch_frame_end_ms = proof.touch_frame_end_ms;
-		binding->mover_top_ms = proof.mover_top_ms;
-		binding->suffix_start_ms = proof.suffix_start_ms;
-		binding->arrival_ms = proof.arrival_ms;
-		binding->sweep_clear_ms = proof.sweep_clear_ms;
-		binding->total_cost_ms = proof.total_cost_ms;
+		binding->touch_ms = link->action == RL_DOOR_SWIM ? proof.touch_ms :
+		                                                    drop_proof.touch_ms;
+		binding->touch_frame_end_ms = link->action == RL_DOOR_SWIM ?
+		    proof.touch_frame_end_ms : drop_proof.touch_frame_end_ms;
+		binding->mover_top_ms = link->action == RL_DOOR_SWIM ?
+		    proof.mover_top_ms : drop_proof.mover_top_ms;
+		binding->suffix_start_ms = link->action == RL_DOOR_SWIM ?
+		    proof.suffix_start_ms : drop_proof.suffix_start_ms;
+		binding->arrival_ms = link->action == RL_DOOR_SWIM ? proof.arrival_ms :
+		                                                      drop_proof.arrival_ms;
+		binding->sweep_clear_ms = link->action == RL_DOOR_SWIM ?
+		    proof.sweep_clear_ms : drop_proof.sweep_clear_ms;
+		binding->total_cost_ms = link->action == RL_DOOR_SWIM ?
+		    proof.total_cost_ms : drop_proof.total_cost_ms;
 	}
 	if (binding_index != compound_count)
 	{
@@ -821,7 +921,8 @@ sg_compound_publication_result_t SG_CompoundPublicationRevalidate(
 	if (!rune->compound_publication)
 	{
 		for (index = 0; index < (size_t)rune->hdr.num_links; index++)
-			if (rune->links[index].action == RL_DOOR_SWIM)
+			if (rune->links[index].action == RL_DOOR_SWIM ||
+			    rune->links[index].action == RL_DOOR_DROP)
 				return CompoundPublicationResult(
 					SG_COMPOUND_PUBLICATION_INVALID,
 					RLR_BAD_CONTROL_POLICY, (uint32_t)index);
@@ -831,7 +932,8 @@ sg_compound_publication_result_t SG_CompoundPublicationRevalidate(
 	}
 	publication = rune->compound_publication;
 	for (index = 0; index < (size_t)rune->hdr.num_links; index++)
-		if (rune->links[index].action == RL_DOOR_SWIM)
+		if (rune->links[index].action == RL_DOOR_SWIM ||
+		    rune->links[index].action == RL_DOOR_DROP)
 			compound_count++;
 	if (compound_count != publication->binding_count)
 		return CompoundPublicationResult(SG_COMPOUND_PUBLICATION_MISMATCH,

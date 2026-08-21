@@ -311,6 +311,65 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *phantom,
 	return RLR_OK;
 }
 
+rune_reject_reason_t SG_OracleCompoundDropDiscoverContact(
+	const vec3_t source, const sg_compound_world_preopen_t *resolved,
+	const vec3_t canonical_hint, vec3_t mechanism_anchor,
+	qboolean loader_replay)
+{
+	(void)source; (void)resolved;
+	fixture.discover_calls++;
+	if (fixture.fail_discover || !canonical_hint || !mechanism_anchor ||
+	    !loader_replay)
+		return RLR_APPROACH_REPLAY_FAILED;
+	if (canonical_hint[0] == 11.0f)
+		Set3(mechanism_anchor, 20.0f, 0.0f, 0.0f);
+	else
+		Set3(mechanism_anchor, 19.0f, 0.0f, 0.0f);
+	return RLR_OK;
+}
+
+rune_reject_reason_t SG_OracleCompoundDropPreopen(
+	const vec3_t source, const sg_compound_world_preopen_t *resolved,
+	const vec3_t mechanism_anchor, const vec3_t destination,
+	const vec3_t lip, byte heading, qboolean destination_water,
+	sg_compound_drop_proof_t *proof, qboolean loader_replay)
+{
+	int axis;
+
+	(void)resolved; (void)destination;
+	fixture.replay_calls++;
+	if (fixture.fail_replay || !source || !mechanism_anchor || !lip ||
+	    !proof || destination_water || !loader_replay)
+		return RLR_SUFFIX_REPLAY_FAILED;
+	memset(proof, 0, sizeof(*proof));
+	FillPmove(&proof->source_pms, source, 100);
+	FillPmove(&proof->source_old_pms, source, 90);
+	FillPmove(&proof->suffix_pms, mechanism_anchor, 400);
+	FillPmove(&proof->suffix_old_pms, mechanism_anchor, 390);
+	for (axis = 0; axis < 3; axis++)
+	{
+		proof->source_origin[axis] = proof->source_pms.origin[axis] * 0.125f;
+		proof->source_velocity[axis] =
+			proof->source_pms.velocity[axis] * 0.125f;
+		proof->suffix_origin[axis] = proof->suffix_pms.origin[axis] * 0.125f;
+		proof->suffix_velocity[axis] =
+			proof->suffix_pms.velocity[axis] * 0.125f;
+	}
+	proof->source_groundentity = true;
+	proof->suffix_groundentity = true;
+	proof->suffix_old_frame_z = 1.0f;
+	proof->touch_ms = 25;
+	proof->touch_frame_end_ms = 100;
+	proof->mover_top_ms = 500;
+	proof->suffix_start_ms = 400;
+	proof->arrival_ms = 300;
+	proof->sweep_clear_ms = 200;
+	proof->total_cost_ms = 800;
+	proof->heading = heading;
+	proof->exit_speed = 12;
+	return RLR_OK;
+}
+
 static rune_link_t CompoundLink(int from, int to)
 {
 	rune_link_t link;
@@ -325,6 +384,17 @@ static rune_link_t CompoundLink(int from, int to)
 	Set3(link.mechanism_anchor, 20.0f, 0.0f, 0.0f);
 	link.sweep_clear_ms = 200;
 	link.mode = RLCM_PREOPEN;
+	return link;
+}
+
+static rune_link_t CompoundDropLink(int from, int to)
+{
+	rune_link_t link = CompoundLink(from, to);
+
+	link.action = RL_DOOR_DROP;
+	link.heading = 32;
+	link.heading_slack = SG_RUNE_PROOF_DROP_CONTROL_MARKER;
+	Set3(link.anchor, 24.0f, 0.0f, 0.0f);
 	return link;
 }
 
@@ -467,6 +537,40 @@ static void TestPositiveDedupAndMutation(void)
 	Destroy(&rune);
 	CHECK(fixture.allocation_calls == 4);
 	CHECK(fixture.free_calls == 4);
+	CHECK(fixture.live_allocations == 0);
+}
+
+static void TestDropPublication(void)
+{
+	rune_seed_t seeds[3];
+	rune_link_t links[3];
+	rune_t rune;
+	const sg_compound_publication_binding_t *binding;
+	sg_compound_publication_result_t result;
+
+	ResetFixture();
+	rune = RuneFixture(seeds, links);
+	seeds[0].flags = 0;
+	seeds[1].flags = 0;
+	links[0] = CompoundDropLink(0, 1);
+	rune.hdr.num_links = 1;
+	result = Build(&rune);
+	CHECK(result.status == SG_COMPOUND_PUBLICATION_OK);
+	CHECK(SG_CompoundPublicationCount(&rune) == 1);
+	binding = SG_CompoundPublicationBinding(&rune, 0);
+	CHECK(binding != NULL);
+	if (binding)
+	{
+		CHECK(binding->link.action == RL_DOOR_DROP);
+		CHECK(binding->source.grounded);
+		CHECK(binding->source.waterlevel == 0);
+		CHECK(binding->suffix.old_frame_z == 1.0f);
+		CHECK(binding->touch_ms == 25);
+		CHECK(binding->arrival_ms == 300);
+	}
+	CHECK(SG_CompoundPublicationRevalidate(&rune).status ==
+	      SG_COMPOUND_PUBLICATION_OK);
+	Destroy(&rune);
 	CHECK(fixture.live_allocations == 0);
 }
 
@@ -731,6 +835,7 @@ static void TestZeroCompoundIsInert(void)
 int main(void)
 {
 	TestPositiveDedupAndMutation();
+	TestDropPublication();
 	TestAtomicFailures();
 	TestCanonicalAndCountNegatives();
 	TestDeltaBiasAndExactFields();

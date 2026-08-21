@@ -1,4 +1,4 @@
-/* sg_compound_publication.h -- unpublished exact replay state for D_SWIM. */
+/* Atomic exact replay state for authenticated compound actions. */
 #ifndef SG_COMPOUND_PUBLICATION_H
 #define SG_COMPOUND_PUBLICATION_H
 
