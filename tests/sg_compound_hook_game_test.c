@@ -27,8 +27,6 @@ sg_cvars_t sg_cv;
 sg_bot_t sg_bots[SG_MAXBOTS];
 #define bot sg_bots[0]
 edict_t *g_edicts = entities;
-sg_host_t sg_host;
-sg_cvars_t sg_cv;
 
 const char *SG_CompoundHookLiveFailureName(
 	sg_compound_hook_live_failure_t failure)
@@ -109,14 +107,8 @@ static void Dprint(const char *format, ...)
 	(void)vsnprintf(event_log + used, sizeof(event_log) - used, format,
 	                arguments);
 	va_end(arguments);
-}
-
-void SG_CompoundHookGameDebugResult(sg_bot_t *candidate,
-	const char *stage, const sg_compound_hook_live_result_t *result)
-{
-	STUB_CHECK(candidate == &bot && stage && strcmp(stage, "begin") == 0 &&
-	    result && result->outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	debug_calls++;
+	if (strstr(format, "slipgate: dhook stage=") != NULL)
+		debug_calls++;
 }
 
 rune_t *SG_Rune(void) { return &rune_fixture; }
