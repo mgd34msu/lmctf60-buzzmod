@@ -27,14 +27,32 @@ static sg_bot_t *PushBotForEntity(const edict_t *entity)
 static qboolean PushObservation(edict_t *entity,
 	sg_push_observation_t *observation)
 {
+	int axis;
+
 	if (!entity || !entity->inuse || !entity->client || !observation)
 		return false;
 	memset(observation, 0, sizeof(*observation));
-	memcpy(observation->origin_q8, entity->client->ps.pmove.origin,
-		sizeof(observation->origin_q8));
+	observation->at_rest = true;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float fixed = entity->s.origin[axis] * 8.0f;
+
+		if (!isfinite(fixed) || fixed < SHRT_MIN || fixed > SHRT_MAX ||
+		    fixed != (float)(short)fixed)
+			return false;
+		observation->origin_q8[axis] = (short)fixed;
+		if (!isfinite(entity->velocity[axis]) ||
+		    entity->velocity[axis] != 0.0f)
+			observation->at_rest = false;
+	}
 	observation->alive = entity->deadflag == DEAD_NO && entity->health > 0;
 	observation->grounded = entity->groundentity != NULL;
 	observation->dry = entity->waterlevel == 0;
+	observation->immutable_support = entity->groundentity == g_edicts ||
+		SG_ImmutableSupport(entity->groundentity);
+	observation->ordinary_control =
+		entity->client->ps.pmove.pm_type == PM_NORMAL &&
+		entity->client->ps.pmove.pm_time == 0;
 	return true;
 }
 
@@ -329,7 +347,8 @@ void SG_PushGameTouched(edict_t *trigger, edict_t *entity)
 	uint32_t key = 0U;
 	uint32_t generation = 0U;
 
-	if (!bot || (bot->push.phase != SG_PUSH_APPROACH &&
+	if (!bot || (bot->push.phase != SG_PUSH_SETTLE &&
+	             bot->push.phase != SG_PUSH_APPROACH &&
 	             bot->push.phase != SG_PUSH_FLIGHT) || !trigger ||
 	    !entity || !entity->client)
 		return;
@@ -345,7 +364,7 @@ void SG_PushGameTouched(edict_t *trigger, edict_t *entity)
 		(void)SG_PushLiveTouched(&bot->push, key, entity->velocity);
 		return;
 	}
-	if (bot->push.phase == SG_PUSH_APPROACH &&
+	if (bot->push.phase != SG_PUSH_FLIGHT &&
 	    SG_PushLiveTouched(&bot->push, key, entity->velocity))
 	{
 		PushReport(bot, "touch");

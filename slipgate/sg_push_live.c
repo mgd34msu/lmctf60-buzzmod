@@ -14,15 +14,29 @@ static qboolean PushObservationValid(const sg_push_observation_t *observation)
 {
 	return observation && PushBoolean(observation->alive) &&
 	       PushBoolean(observation->grounded) &&
-	       PushBoolean(observation->dry);
+	       PushBoolean(observation->dry) &&
+	       PushBoolean(observation->immutable_support) &&
+	       PushBoolean(observation->at_rest) &&
+	       PushBoolean(observation->ordinary_control);
 }
 
-static qboolean PushSourceExact(const sg_push_witness_t *witness,
+static qboolean PushSourceAdmitted(const sg_push_witness_t *witness,
 	const sg_push_observation_t *observation)
 {
-	return witness && observation &&
-	       memcmp(witness->source_q8, observation->origin_q8,
-	           sizeof(witness->source_q8)) == 0;
+	int64_t distance = 0;
+	int axis;
+
+	if (!witness || !observation)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		int64_t delta = (int64_t)witness->source_q8[axis] -
+			observation->origin_q8[axis];
+
+		distance += delta * delta;
+	}
+	return distance < (int64_t)SG_PUSH_SOURCE_RADIUS_Q8 *
+		SG_PUSH_SOURCE_RADIUS_Q8;
 }
 
 static qboolean PushFail(sg_push_live_state_t *state,
@@ -124,10 +138,12 @@ qboolean SG_PushLiveBegin(sg_push_live_state_t *state,
 	    witness->cost_ms % SG_PUSH_STEP_MS != 0U)
 		return PushFail(state, SG_PUSH_FAILURE_WITNESS);
 	state->witness = *witness;
-	if (!PushSourceExact(witness, observation) || !observation->alive ||
-	    !observation->grounded || !observation->dry)
+	if (!PushSourceAdmitted(witness, observation) || !observation->alive ||
+	    !observation->grounded || !observation->dry ||
+	    !observation->immutable_support ||
+	    !observation->ordinary_control)
 		return PushFail(state, SG_PUSH_FAILURE_SOURCE);
-	state->phase = SG_PUSH_APPROACH;
+	state->phase = observation->at_rest ? SG_PUSH_APPROACH : SG_PUSH_SETTLE;
 	return true;
 }
 
@@ -139,8 +155,20 @@ sg_push_command_t SG_PushLiveCommand(sg_push_live_state_t *state,
 		PushFail(state, SG_PUSH_FAILURE_ARGUMENT);
 		return SG_PUSH_COMMAND_ZERO;
 	}
-	if (state->phase == SG_PUSH_APPROACH &&
-	    (!observation->alive || !observation->grounded || !observation->dry))
+	if (state->phase == SG_PUSH_SETTLE)
+	{
+		if (!PushSourceAdmitted(&state->witness, observation) ||
+		    !observation->alive || !observation->grounded ||
+		    !observation->dry || !observation->immutable_support ||
+		    !observation->ordinary_control)
+			PushFail(state, SG_PUSH_FAILURE_SOURCE);
+		else if (observation->at_rest)
+			state->phase = SG_PUSH_APPROACH;
+	}
+	else if (state->phase == SG_PUSH_APPROACH &&
+	         (!observation->alive || !observation->grounded ||
+	          !observation->dry || !observation->immutable_support ||
+	          !observation->ordinary_control))
 		PushFail(state, SG_PUSH_FAILURE_SOURCE);
 	else if (state->phase == SG_PUSH_FLIGHT &&
 	         (!observation->alive || !observation->dry))
@@ -152,7 +180,8 @@ qboolean SG_PushLiveTouched(sg_push_live_state_t *state,
 	uint32_t entry_key, const float push_velocity[3])
 {
 	if (!state || !push_velocity ||
-	    (state->phase != SG_PUSH_APPROACH &&
+	    (state->phase != SG_PUSH_SETTLE &&
+	     state->phase != SG_PUSH_APPROACH &&
 	     state->phase != SG_PUSH_FLIGHT))
 		return PushFail(state, SG_PUSH_FAILURE_TOUCH);
 	if (entry_key != state->witness.entry_key)
@@ -160,7 +189,7 @@ qboolean SG_PushLiveTouched(sg_push_live_state_t *state,
 	if (memcmp(push_velocity, state->witness.push_velocity,
 	    sizeof(state->witness.push_velocity)) != 0)
 		return PushFail(state, SG_PUSH_FAILURE_IMPULSE);
-	if (state->phase == SG_PUSH_APPROACH)
+	if (state->phase != SG_PUSH_FLIGHT)
 		state->phase = SG_PUSH_FLIGHT;
 	return true;
 }
@@ -170,14 +199,23 @@ qboolean SG_PushLiveStep(sg_push_live_state_t *state, int step_ms)
 	int deadline;
 
 	if (!state || step_ms <= 0 ||
-	    (state->phase != SG_PUSH_APPROACH &&
+	    (state->phase != SG_PUSH_SETTLE &&
+	     state->phase != SG_PUSH_APPROACH &&
 	     state->phase != SG_PUSH_FLIGHT))
 		return PushFail(state, SG_PUSH_FAILURE_ARGUMENT);
 	if (state->elapsed_ms > INT_MAX - step_ms)
 		return PushFail(state, SG_PUSH_FAILURE_TIMEOUT);
 	state->elapsed_ms += step_ms;
+	if (state->phase == SG_PUSH_SETTLE)
+	{
+		if (state->settle_ms > INT_MAX - step_ms)
+			return PushFail(state, SG_PUSH_FAILURE_TIMEOUT);
+		state->settle_ms += step_ms;
+		if (state->settle_ms > SG_PUSH_SETTLE_LIMIT_MS)
+			return PushFail(state, SG_PUSH_FAILURE_TIMEOUT);
+	}
 	deadline = (int)state->witness.cost_ms + SG_PUSH_ARRIVAL_GRACE_MS;
-	if (state->elapsed_ms > deadline)
+	if (state->elapsed_ms - state->settle_ms > deadline)
 		return PushFail(state, SG_PUSH_FAILURE_TIMEOUT);
 	return true;
 }
@@ -204,7 +242,8 @@ qboolean SG_PushLiveBoundary(sg_push_live_state_t *state,
 
 qboolean SG_PushLiveOwns(const sg_push_live_state_t *state)
 {
-	return state && (state->phase == SG_PUSH_APPROACH ||
+	return state && (state->phase == SG_PUSH_SETTLE ||
+	                 state->phase == SG_PUSH_APPROACH ||
 	                 state->phase == SG_PUSH_FLIGHT);
 }
 

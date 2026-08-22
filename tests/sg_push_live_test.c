@@ -35,11 +35,9 @@ static void Fixture(sg_push_witness_t *witness,
 	observation->alive = true;
 	observation->grounded = true;
 	observation->dry = true;
-#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
 	observation->immutable_support = true;
 	observation->at_rest = true;
 	observation->ordinary_control = true;
-#endif
 }
 
 static void TestNormalRunHandoffSourceEnvelope(void)
@@ -70,7 +68,6 @@ static void TestNormalRunHandoffSourceEnvelope(void)
 
 static void TestSourceSettleAndAdmission(void)
 {
-#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
 	sg_push_witness_t witness;
 	sg_push_observation_t observation;
 	sg_push_live_state_t state;
@@ -94,14 +91,10 @@ static void TestSourceSettleAndAdmission(void)
 	observation.ordinary_control = false;
 	CHECK(!SG_PushLiveBegin(&state, &witness, &observation));
 	CHECK(state.failure == SG_PUSH_FAILURE_SOURCE);
-#else
-	CHECK(0 && "push source observation state is missing");
-#endif
 }
 
 static void TestSourceSettleDriftAndTimeout(void)
 {
-#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
 	sg_push_witness_t witness;
 	sg_push_observation_t observation;
 	sg_push_live_state_t state;
@@ -126,14 +119,10 @@ static void TestSourceSettleDriftAndTimeout(void)
 	}
 	CHECK(!SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
 	CHECK(state.failure == SG_PUSH_FAILURE_TIMEOUT);
-#else
-	CHECK(0 && "push source settle state is missing");
-#endif
 }
 
 static void TestSourceSettleAuthenticatedTouch(void)
 {
-#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
 	sg_push_witness_t witness;
 	sg_push_observation_t observation;
 	sg_push_live_state_t state;
@@ -160,9 +149,6 @@ static void TestSourceSettleAuthenticatedTouch(void)
 	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
 	CHECK(!SG_PushLiveTouched(&state, witness.entry_key, wrong_impulse));
 	CHECK(state.failure == SG_PUSH_FAILURE_IMPULSE);
-#else
-	CHECK(0 && "push source settle touch state is missing");
-#endif
 }
 
 static void TestExactTouchAndZeroFlight(void)
@@ -183,11 +169,9 @@ static void TestExactTouchAndZeroFlight(void)
 		witness.push_velocity));
 	CHECK(state.phase == SG_PUSH_FLIGHT);
 	observation.grounded = false;
-#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
 	observation.immutable_support = false;
 	observation.at_rest = false;
 	observation.ordinary_control = false;
-#endif
 	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
 	CHECK(SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
 	CHECK(SG_PushLiveBoundary(&state, false, false));

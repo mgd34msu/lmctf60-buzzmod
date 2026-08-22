@@ -9,10 +9,13 @@
 #define SG_PUSH_ARRIVAL_RADIUS_Q8 384
 #define SG_PUSH_ARRIVAL_Z_Q8 576
 #define SG_PUSH_HEALTH_RESERVE 15
+#define SG_PUSH_SOURCE_RADIUS_Q8 384
+#define SG_PUSH_SETTLE_LIMIT_MS 1500
 
 typedef enum sg_push_phase_e
 {
 	SG_PUSH_IDLE = 0,
+	SG_PUSH_SETTLE,
 	SG_PUSH_APPROACH,
 	SG_PUSH_FLIGHT,
 	SG_PUSH_COMPLETE,
@@ -52,6 +55,9 @@ typedef struct sg_push_observation_s
 	qboolean alive;
 	qboolean grounded;
 	qboolean dry;
+	qboolean immutable_support;
+	qboolean at_rest;
+	qboolean ordinary_control;
 } sg_push_observation_t;
 
 typedef struct sg_push_live_state_s
@@ -60,6 +66,7 @@ typedef struct sg_push_live_state_s
 	sg_push_phase_t phase;
 	sg_push_failure_t failure;
 	int elapsed_ms;
+	int settle_ms;
 	qboolean airborne_seen;
 } sg_push_live_state_t;
 
