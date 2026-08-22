@@ -83,7 +83,7 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 	sg_rune_mechanism_binding_t binding;
 	uint32_t mover_keys[SG_RUNE_BINDING_MAX_MOVERS];
 	rune_t *rune;
-	size_t key_count;
+	size_t key_count = 0U;
 	size_t index;
 	int trigger_key;
 	int door_action;
