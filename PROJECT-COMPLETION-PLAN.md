@@ -415,6 +415,12 @@ diagnostic is determining whether valid multi-stage proofs are absent or the
 bounded selector discards them in favor of nearer one-stage candidates. The
 admission will not be widened without an exact replay witness.
 
+The latest process crash removed the temporary worktrees and map servers. It
+did not change either canonical branch or the saved repair branches. Work has
+resumed on `lmctf07`, `tomb05`, and `xmap13` from their saved commits. Only the
+uncommitted diagnostics and implementations must be reconstructed. The
+`xmap26` performance repair resumes when the next worker slot opens.
+
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
 2. Build and verify one new exact source, module, configuration, engine, reader,
