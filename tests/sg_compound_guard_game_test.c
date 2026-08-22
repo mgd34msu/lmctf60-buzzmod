@@ -382,6 +382,14 @@ qboolean SG_CompoundHookGameHost(sg_bot_t *bot,
 	return true;
 }
 
+void SG_CompoundHookGameDebugResult(sg_bot_t *bot, const char *stage,
+	const sg_compound_hook_live_result_t *result)
+{
+	(void)bot;
+	(void)stage;
+	(void)result;
+}
+
 sg_compound_hook_live_result_t SG_CompoundHookLiveOrphan(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host)

@@ -87,7 +87,7 @@
     "slipgate/sg_rune_mechanism_catalog.c": 1609,
     "slipgate/sg_strike.c": 1163,
     "tests/povlock_test.c": 852,
-    "tests/sg_compound_guard_game_test.c": 1559,
+    "tests/sg_compound_guard_game_test.c": 1567,
     "tests/sg_compound_guard_test.c": 1060,
     "tests/sg_compound_hook_game_test.c": 984,
     "tests/sg_compound_swim_live_test.c": 1175,
