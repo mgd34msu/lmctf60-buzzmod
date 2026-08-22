@@ -49,6 +49,43 @@ static sg_train_gate_observation_t Observation(sg_train_gate_pose_t pose)
 	return observation;
 }
 
+static void TestSweepSides(void)
+{
+	const float sweep_mins[3] = { -32.0f, -48.0f, 0.0f };
+	const float sweep_maxs[3] = { 32.0f, 48.0f, 256.0f };
+	const float west_mins[3] = { -80.0f, -16.0f, 24.0f };
+	const float west_maxs[3] = { -48.0f, 16.0f, 80.0f };
+	const float east_mins[3] = { 48.0f, -16.0f, 24.0f };
+	const float east_maxs[3] = { 80.0f, 16.0f, 80.0f };
+	const float north_mins[3] = { -16.0f, 64.0f, 24.0f };
+	const float north_maxs[3] = { 16.0f, 96.0f, 80.0f };
+	const float south_mins[3] = { -16.0f, -96.0f, 24.0f };
+	const float south_maxs[3] = { 16.0f, -64.0f, 80.0f };
+	const float inside_mins[3] = { -16.0f, -16.0f, 24.0f };
+	const float inside_maxs[3] = { 16.0f, 16.0f, 80.0f };
+	const float corner_mins[3] = { -80.0f, 64.0f, 24.0f };
+	const float corner_maxs[3] = { -48.0f, 96.0f, 80.0f };
+
+	CHECK(SG_TrainGateSweepSide(west_mins, west_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_X_MIN);
+	CHECK(SG_TrainGateSweepSide(east_mins, east_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_X_MAX);
+	CHECK(SG_TrainGateSweepSide(north_mins, north_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_Y_MAX);
+	CHECK(SG_TrainGateSweepSide(south_mins, south_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_Y_MIN);
+	CHECK(SG_TrainGateSweepSide(inside_mins, inside_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateSweepSide(corner_mins, corner_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_X_MIN) ==
+	    SG_TRAIN_GATE_SIDE_X_MAX);
+	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_Y_MAX) ==
+	    SG_TRAIN_GATE_SIDE_Y_MIN);
+	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_NONE) ==
+	    SG_TRAIN_GATE_SIDE_NONE);
+}
+
 static void Activate(sg_train_gate_state_t *state,
 	sg_train_gate_observation_t *observation)
 {
@@ -258,6 +295,7 @@ static void TestDriftTimeoutAndClearance(void)
 
 int main(void)
 {
+	TestSweepSides();
 	TestHappyPath();
 	TestOrderedSingleCallbacks();
 	TestShootHappyPath();
