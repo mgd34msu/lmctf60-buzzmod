@@ -282,13 +282,15 @@ The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `smap28`, `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap05`, `xmap12`, `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
-The first four incomplete generation-timeout cases (`lmctf15`, `lmctf25`,
-`lmctf58`, and `tw2ctf2`) reproduced terminal 900-second timeouts in base-link
-proof before the first progress interval. The remaining four are running as a
-four-worker background retest against the exact accepted `64344d4` module and
-immutable 175-map snapshot. Instrumented samples attribute roughly 80--84% of
-categorized base-link CPU to the shared hook prover, so the active performance
-repair targets its exact pair search rather than any map-specific bypass.
+All eight incomplete generation cases reproduced terminal 900-second timeouts
+in base-link proof before the first progress interval against the exact accepted
+`64344d4` module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
+`lmctf25` with 2,430, `lmctf58` with 2,108, `tw2ctf2` with 1,983, `xmap05`
+with 2,206, `xmap12` with 2,558, `xmap26` with 1,575, and `xmap29` with
+12,060. All eight share normalized timeout signature `870fb63c713b5d71496b56f6`.
+Instrumented samples attribute roughly 80--84% of categorized base-link CPU to
+the shared hook prover, so the active performance repair targets its exact pair
+search rather than any map-specific bypass.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
