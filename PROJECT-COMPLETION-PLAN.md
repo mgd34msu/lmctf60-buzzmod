@@ -289,6 +289,11 @@ four-worker background retest against the exact accepted `64344d4` module and
 immutable 175-map snapshot. Instrumented samples attribute roughly 80--84% of
 categorized base-link CPU to the shared hook prover, so the active performance
 repair targets its exact pair search rather than any map-specific bypass.
+Canonical commits `7d82ade`, `d344322`, and `89465f4` also reject a known
+water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
+run now reaches the same explicit no-write failure in about four seconds rather
+than wasting the full generation timeout; this improves boundedness but does not
+classify `xmap29` as repaired.
 Parallel graph-failure triage groups the remaining work into
 shared teleporter, platform/lift, door/train/activation, and push-controller
 repairs, with targeted train/elevator and advanced-push extensions after those
