@@ -913,11 +913,13 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
     def test_fake_engine_pass_failure_and_timeout_lifecycle(self):
         class FakeInput:
-            def __init__(self, process, output, private, ready, failure_line, exit_failure_line):
+            def __init__(self, process, output, private, ready, deferred,
+                         failure_line, exit_failure_line):
                 self.process = process
                 self.output = output
                 self.private = private
                 self.ready = ready
+                self.deferred = deferred
                 self.failure_line = failure_line
                 self.exit_failure_line = exit_failure_line
 
@@ -936,6 +938,13 @@ class RuneCorpusControllerTests(unittest.TestCase):
                             "slipgate: rune ready lmctf01, 7 seeds, 9 links, "
                             "4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
                         )
+                    if self.deferred:
+                        lines += (
+                            "slipgate: snag declaration missing or invalid for map "
+                            "lmctf01; fields rejected\n"
+                            "slipgate: field setup failed (no flags?); disabled "
+                            "until the next level\n"
+                        )
                     if self.failure_line is not None:
                         lines += self.failure_line + "\n"
                     self.output.write(lines.encode())
@@ -951,11 +960,13 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 return None
 
         class FakeProcess:
-            def __init__(self, output, private, ready, failure_line, exit_failure_line, pid):
+            def __init__(self, output, private, ready, deferred, failure_line,
+                         exit_failure_line, pid):
                 self.pid = pid
                 self.returncode = None
                 self.stdin = FakeInput(
-                    self, output, private, ready, failure_line, exit_failure_line
+                    self, output, private, ready, deferred, failure_line,
+                    exit_failure_line
                 )
 
             def poll(self):
@@ -975,8 +986,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 run_root: Path,
                 ready: bool,
                 generation_timeout: float,
+                deferred: bool = False,
                 failure_line: str | None = None,
                 exit_failure_line: str | None = None,
+                cold_load_snag_failure: bool = False,
             ):
                 descriptors: list[int] = []
                 launched_commands: list[list[str]] = []
@@ -1008,25 +1021,33 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     )
                     self.assertNotEqual("q2ded", launched_engine.name[:15])
                     fake = FakeProcess(
-                        kwargs["stdout"], Path(kwargs["cwd"]), ready,
+                        kwargs["stdout"], Path(kwargs["cwd"]), ready, deferred,
                         failure_line, exit_failure_line, 424241 + launch_number,
                     )
                     if launch_number == 2:
                         artifact = Path(kwargs["cwd"]) / "game/maps/lmctf01.rune"
                         snag = artifact.with_suffix(".snag")
                         evidence = Path(kwargs["cwd"]).parent / "snag-bootstrap-evidence.json"
-                        kwargs["stdout"].write(
-                            (
-                                "slipgate: snag ready map=lmctf01 repairs=0 "
-                                f"rune_sha256={controller.sha256_regular(artifact)} "
-                                f"evidence_sha256={controller.sha256_regular(evidence)} "
-                                f"snag_sha256={controller.sha256_regular(snag)}\n"
-                            ).encode("ascii")
-                        )
-                        kwargs["stdout"].write(
-                            b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
-                            b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
-                        )
+                        if cold_load_snag_failure:
+                            kwargs["stdout"].write(
+                                b"slipgate: snag declaration missing or invalid for "
+                                b"map lmctf01; fields rejected\n"
+                                b"slipgate: field setup failed (no flags?); disabled "
+                                b"until the next level\n"
+                            )
+                        else:
+                            kwargs["stdout"].write(
+                                (
+                                    "slipgate: snag ready map=lmctf01 repairs=0 "
+                                    f"rune_sha256={controller.sha256_regular(artifact)} "
+                                    f"evidence_sha256={controller.sha256_regular(evidence)} "
+                                    f"snag_sha256={controller.sha256_regular(snag)}\n"
+                                ).encode("ascii")
+                            )
+                            kwargs["stdout"].write(
+                                b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
+                                b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
+                            )
                         kwargs["stdout"].flush()
                     return fake
 
@@ -1085,18 +1106,21 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         gate_runner=FakeGateRunner("lmctf01"),
                     )
                 self.assertTrue(descriptors)
+                cold_load_expected = (
+                    result["classification"] == "PASS" or cold_load_snag_failure
+                )
                 self.assertEqual(
-                    2 if result["classification"] == "PASS" else 1,
+                    2 if cold_load_expected else 1,
                     len(launched_commands),
                 )
                 self.assertEqual(
-                    [0.001] if result["classification"] == "PASS" else [],
+                    [0.001] if cold_load_expected else [],
                     cold_load_timeouts,
                 )
                 return result
 
             pass_root = work / "pass-run"
-            passed = run_scenario(pass_root, True, 1.0)
+            passed = run_scenario(pass_root, False, 1.0, deferred=True)
             self.assertEqual("PASS", passed["classification"])
             pass_result = json.loads(
                 (pass_root / "runs/lmctf01/result.json").read_text()
@@ -1134,7 +1158,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             )
             rejected_root = work / "rejected-run"
             rejected = run_scenario(
-                rejected_root, False, 1.0, rejected_line
+                rejected_root, False, 1.0, failure_line=rejected_line
             )
             self.assertEqual("GEN_FAIL", rejected["classification"])
             self.assertEqual(rejected_line, rejected["detail"])
@@ -1162,11 +1186,20 @@ class RuneCorpusControllerTests(unittest.TestCase):
             timed_out = run_scenario(timeout_root, False, 0.02)
             self.assertEqual("TIMEOUT", timed_out["classification"])
             self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c_gnu.log").exists())
+
+            cold_failure_root = work / "cold-snag-failure-run"
+            cold_failure = run_scenario(
+                cold_failure_root, False, 1.0, deferred=True,
+                cold_load_snag_failure=True,
+            )
+            self.assertEqual("LINT_FAIL", cold_failure["classification"])
+            self.assertIn("snag declaration missing or invalid", cold_failure["detail"])
             self.thaw(snapshot)
             self.thaw(pass_root)
             self.thaw(rejected_root)
             self.thaw(fast_root)
             self.thaw(timeout_root)
+            self.thaw(cold_failure_root)
 
     def test_intermediate_symlink_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1381,6 +1414,54 @@ class RuneCorpusControllerTests(unittest.TestCase):
             )
             parsed = controller.parse_generation_log(good, "gatecase", artifact, attempt)
             self.assertEqual(5, parsed["counts"]["plans"])
+            deferred = good.replace(
+                "slipgate: rune ready gatecase, 7 seeds, 9 links, 4 mechanism "
+                "nodes, 5 plans, gravity 800, all fields up\n",
+                "slipgate: snag declaration missing or invalid for map gatecase; "
+                "fields rejected\n"
+                "slipgate: field setup failed (no flags?); disabled until the "
+                "next level\n",
+            )
+            parsed = controller.parse_generation_log(
+                deferred, "gatecase", artifact, attempt
+            )
+            self.assertEqual(5, parsed["counts"]["plans"])
+            self.assertTrue(controller.generation_deferred_publication_complete(
+                deferred.splitlines(), "gatecase"
+            ))
+            invalid_deferred = (
+                deferred.replace("map gatecase", "map wrongmap"),
+                deferred.replace(
+                    "slipgate: snag declaration missing or invalid for map gatecase; "
+                    "fields rejected\n"
+                    "slipgate: field setup failed (no flags?); disabled until the "
+                    "next level\n",
+                    "slipgate: field setup failed (no flags?); disabled until the "
+                    "next level\n"
+                    "slipgate: snag declaration missing or invalid for map gatecase; "
+                    "fields rejected\n",
+                ),
+                deferred.replace(
+                    "rune: wrote game/maps/gatecase.rune (7 seeds, 9 links, "
+                    "4 mechanism nodes, 2 triggers, 3 inventory edges, "
+                    "5 activation plans)\n",
+                    "",
+                ),
+            )
+            for invalid in invalid_deferred:
+                with self.subTest(invalid=invalid.splitlines()[-2:]):
+                    self.assertFalse(
+                        controller.generation_deferred_publication_complete(
+                            invalid.splitlines(), "gatecase"
+                        )
+                    )
+                    with self.assertRaisesRegex(
+                        controller.CorpusError,
+                        "generation completion|final write",
+                    ):
+                        controller.parse_generation_log(
+                            invalid, "gatecase", artifact, attempt
+                        )
             with self.assertRaisesRegex(controller.CorpusError, "objective-root"):
                 controller.parse_generation_log("prefix " + good, "gatecase", artifact, attempt)
             bad_later = good + "rune: generation refused malformed graph\n"
@@ -1553,6 +1634,17 @@ class RuneCorpusControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(controller.CorpusError, "counts disagree"):
             controller.parse_cold_load_log(
                 ready.replace("7 seeds", "8 seeds"), "lmctf01", counts
+            )
+        with self.assertRaisesRegex(
+            controller.CorpusError, "snag declaration missing or invalid"
+        ):
+            controller.parse_cold_load_log(
+                "slipgate: snag declaration missing or invalid for map lmctf01; "
+                "fields rejected\n"
+                "slipgate: field setup failed (no flags?); disabled until the "
+                "next level\n",
+                "lmctf01",
+                counts,
             )
 
     def test_cold_load_bootstrap_snag_uses_frozen_tool_and_exact_artifact(self):
