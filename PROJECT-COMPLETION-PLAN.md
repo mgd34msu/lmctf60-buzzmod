@@ -310,7 +310,12 @@ including `lmctf02a` and `lmctf04`.
       Replacement exact-source CI at `a130319` is fully green on `slipgate`
       and `main`, including both Windows builds, packaged Linux, all GCC and
       Clang host jobs, both Make dialects, and the version check.
-- [ ] Repair the missing central transition in `lmctf07`.
+- [ ] Repair the missing central transition in `lmctf07`. The four exact
+      health-1 buttons now each authenticate one firing side on the X axis.
+      Y is ambiguous and rejected; Z is the train motion axis and excluded.
+      Objective closure remains zero after testing both proved touch endpoints.
+      The next bounded diagnostic separates failure to fire the exact button
+      from failure of the reverse egress while the authenticated train is open.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -319,6 +324,13 @@ Diagnostic commit `0943897` retests prove that `lmctf27` and `tomb05` remain
 genuine graph failures. `tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
 objective root because its nearest flag seeds have no outgoing links.
+Exact `tomb05` replay proves the new TELEPORT_DROP traversal, but it does not
+close the objective core. From the two center dry seeds, the first airborne
+mechanism contact is a cataloged vertical `trigger_push`, not either bottom
+teleporter pad. The active repair is therefore a separate PUSH_JUMP admission:
+prove the center source, authentic trigger contact, serialized launch, stable
+upper landing, and full objective closure. A direct center-to-pad
+TELEPORT_JUMP was refuted and will not be published.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -367,6 +379,13 @@ RUNE, but generation never reached runtime-ready acceptance. `xmap26` remained
 inside base-link proof for the full bound. None of these artifacts is accepted,
 and all three maps remain in the unresolved queue. Further timing and stack
 diagnosis must separate the remaining base-link, post-base, and post-write work.
+An isolated exact `xmap26` controller run reproduced the base-link timeout with
+one worker, so the earlier concurrent batch was not the cause. Temporary
+per-source timing then showed that source 0 alone exceeds one CPU minute. It is
+a stable dry high seed paired against hundreds of lower seeds, repeatedly
+entering the exact drop prover. A behavior-preserving drop-pair optimization is
+active; it may reject only pairs that cannot execute the existing serialized
+controller and must retain all current proof and runtime gates.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
@@ -389,6 +408,12 @@ cannot authenticate the overlapping fields. An exact multi-member field
 repair is active. It must bind the complete overlap component, accept repeated
 touches only from equivalent members, reject mixed fields, and preserve the
 accepted single-member `smap28` behavior.
+The completed staged multi-field attempt passes the full GNU and Clang/Make
+host suites and publishes four exact PUSH links, but the real `xmap13` smoke
+still has no shared objective core and terminates `GEN_FAIL`. The active
+diagnostic is determining whether valid multi-stage proofs are absent or the
+bounded selector discards them in favor of nearer one-stage candidates. The
+admission will not be widened without an exact replay witness.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
