@@ -189,6 +189,49 @@ def main() -> None:
         "if (tc->think_over)",
     )
     assert "SG_HookOffhandReady(e)" in begin
+    ordered(
+        begin,
+        "SG_CompoundHookGameBegin(",
+        'SG_CompoundHookGameDebugResult(bot, "begin", &result)',
+        "result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING",
+    )
+
+    hook_game = source("slipgate/sg_compound_hook_game.c")
+    touch_debug = between(
+        hook_game,
+        "SG_CompoundHookGameAuthorizeTouch(",
+        "SG_CompoundHookGameAuthorizeActivation",
+    )
+    ordered(
+        touch_debug,
+        "SG_CompoundHookLiveTouch(",
+        'SG_CompoundHookGameDebugResult(bot, "touch", &result)',
+    )
+    activation_debug = between(
+        hook_game,
+        "SG_CompoundHookGameAuthorizeActivation(",
+        "SG_CompoundHookGameRecoverOwnedFailure",
+    )
+    ordered(
+        activation_debug,
+        "SG_CompoundHookLiveActivate(",
+        'SG_CompoundHookGameDebugResult(bot, "activation", &result)',
+    )
+    assert 'CompoundHookGameDebugStage(bot, "release-requested")' in hook_game
+
+    events = source("slipgate/sg_compound_hook_game_events.c")
+    for reducer, stage in (
+        ("SG_CompoundHookLiveLinked(", "linked"),
+        ("SG_CompoundHookLiveAttached(", "attached"),
+        ("SG_CompoundHookLivePullApplied(", "pull"),
+        ("SG_CompoundHookLiveReleaseApplied(", "release"),
+    ):
+        ordered(
+            events,
+            reducer,
+            f'SG_CompoundHookGameDebugResult(bot, "{stage}", &result)',
+        )
+    assert 'SG_CompoundHookGameDebugResult(bot, "terminal", &result)' in hook_step
 
     offhand = between(move, "qboolean SG_HookOffhandReady", "static qboolean Hook_LiveWitnessOK")
     for required in (

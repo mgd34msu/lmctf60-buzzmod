@@ -27,6 +27,15 @@ sg_cvars_t sg_cv;
 sg_bot_t sg_bots[SG_MAXBOTS];
 #define bot sg_bots[0]
 edict_t *g_edicts = entities;
+sg_host_t sg_host;
+sg_cvars_t sg_cv;
+
+const char *SG_CompoundHookLiveFailureName(
+	sg_compound_hook_live_failure_t failure)
+{
+	(void)failure;
+	return "test";
+}
 
 static sg_compound_guard_result_t acquire_result;
 static sg_compound_guard_result_t outside_result;

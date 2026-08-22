@@ -196,6 +196,9 @@ typedef struct sg_compound_hook_live_state_s
 
 #define SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER { 0 }
 
+const char *SG_CompoundHookLiveFailureName(
+	sg_compound_hook_live_failure_t failure);
+
 sg_compound_hook_live_result_t SG_CompoundHookLiveBegin(
 	sg_compound_hook_live_state_t *state,
 	const sg_compound_hook_live_host_t *host, uint32_t link_index,

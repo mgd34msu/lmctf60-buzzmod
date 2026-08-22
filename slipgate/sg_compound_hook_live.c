@@ -61,6 +61,36 @@ sg_compound_hook_live_result_t CompoundHookLiveActive(
 	              SG_REPLAY_REASON_NONE, command_ready);
 }
 
+const char *SG_CompoundHookLiveFailureName(
+	sg_compound_hook_live_failure_t failure)
+{
+	switch (failure)
+	{
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_NONE: return "none";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_ARGUMENT: return "argument";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_BINDING: return "binding";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_PLAN: return "plan";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_SOURCE_CHECKPOINT:
+		return "source-checkpoint";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_SUFFIX_CHECKPOINT:
+		return "suffix-checkpoint";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_ACQUIRE: return "acquire";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_AUTHORITY: return "authority";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_CADENCE: return "cadence";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_TOUCH: return "touch";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_ACTIVATION: return "activation";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_TOP: return "top";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_LINK: return "link";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY: return "identity";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY: return "replay";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_HOLD: return "hold";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_SWEEP: return "sweep";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_RELEASE: return "release";
+	case SG_COMPOUND_HOOK_LIVE_FAILURE_ORPHAN: return "orphan";
+	default: return "unknown";
+	}
+}
+
 static qboolean CompoundHookLiveSweepBool(qboolean value)
 {
 	return value == false || value == true;

@@ -7056,6 +7056,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		    SG_CompoundHookGameBegin(bot, (uint32_t)bestlink,
 		        SG_HookOffhandReady(e));
 
+		SG_CompoundHookGameDebugResult(bot, "begin", &result);
 		if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
 		{
 			bot->commit_link = -1;
@@ -9168,7 +9169,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					{
 						if (result.outcome ==
 						    SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
+						{
+							SG_CompoundHookGameDebugResult(bot,
+							    "terminal", &result);
 							bot->commit_link = -1;
+						}
 						else
 							SG_DeclaredDoorTerminalDeath(bot);
 						return;
@@ -9193,6 +9198,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						if (result.outcome ==
 						    SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
 						{
+							SG_CompoundHookGameDebugResult(bot,
+							    "terminal", &result);
 							bot->commit_link = -1;
 							return;
 						}
@@ -9332,6 +9339,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				if (result.outcome == SG_COMPOUND_HOOK_LIVE_COMPLETE ||
 				    result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
 				{
+					SG_CompoundHookGameDebugResult(bot, "terminal", &result);
 					bot->commit_link = -1;
 					return;
 				}

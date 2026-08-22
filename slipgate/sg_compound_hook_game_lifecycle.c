@@ -14,6 +14,8 @@ sg_compound_guard_result_t SG_CompoundHookGameOrphan(sg_bot_t *bot)
 	    !SG_CompoundHookGameHost(bot, &host))
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = SG_CompoundHookLiveOrphan(&bot->compound_hook_live, &host);
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED)
+		SG_CompoundHookGameDebugResult(bot, "orphan", &result);
 	return result.outcome == SG_COMPOUND_HOOK_LIVE_SAFE_STOPPED ?
 	    SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_HOST_ERROR;
 }

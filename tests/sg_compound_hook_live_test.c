@@ -600,6 +600,26 @@ static void TestPublishedTimeoutAllowsBoundedRecovery(void)
 	CHECK(fixture.abort_calls == 1);
 }
 
+static void TestFailureNamesAreExhaustive(void)
+{
+	static const char *const expected[] = {
+		"none", "argument", "binding", "plan", "source-checkpoint",
+		"suffix-checkpoint", "acquire", "authority", "cadence", "touch",
+		"activation", "top", "link", "identity", "replay", "hold",
+		"sweep", "release", "orphan"
+	};
+	size_t index;
+
+	for (index = 0; index < sizeof(expected) / sizeof(expected[0]); index++)
+		CHECK(strcmp(SG_CompoundHookLiveFailureName(
+		    (sg_compound_hook_live_failure_t)index), expected[index]) == 0);
+	CHECK(strcmp(SG_CompoundHookLiveFailureName(
+	    (sg_compound_hook_live_failure_t)-1), "unknown") == 0);
+	CHECK(strcmp(SG_CompoundHookLiveFailureName(
+	    (sg_compound_hook_live_failure_t)(sizeof(expected) /
+	        sizeof(expected[0]))), "unknown") == 0);
+}
+
 
 int main(void)
 {
@@ -615,6 +635,7 @@ int main(void)
 	TestLateAttachStopsAtPublishedTotal();
 	TestMissingAttachTimesOutIntoRetainedRecovery();
 	TestPublishedTimeoutAllowsBoundedRecovery();
+	TestFailureNamesAreExhaustive();
 	RunCompoundHookSafetyTests();
 	if (failures)
 	{

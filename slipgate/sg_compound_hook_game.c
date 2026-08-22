@@ -676,6 +676,54 @@ int SG_CompoundHookGameStageAuthenticatedProbe(int link_index)
 	return false;
 }
 
+void SG_CompoundHookGameDebugResult(sg_bot_t *bot, const char *stage,
+	const sg_compound_hook_live_result_t *result)
+{
+	const sg_compound_hook_live_state_t *live;
+	const edict_t *entity;
+
+	if (!bot || !stage || !result || !(entity = bot->ent) ||
+	    !sg_cv.debug || sg_cv.debug->value <= 0.0f || !sg_host.dprint)
+		return;
+	live = &bot->compound_hook_live;
+	sg_host.dprint("slipgate: dhook stage=%s client=%d link=%u phase=%d "
+	               "control=%d event=%d outcome=%d failure=%s "
+	               "replay_reason=%d elapsed=%d guard=%d local=%d linked=%d "
+	               "attached=%d release_requested=%d release_applied=%d "
+	               "hookstate=%d hook=%d origin=(%.3f %.3f %.3f) "
+	               "velocity=(%.3f %.3f %.3f)\n",
+	               stage, entity->s.number,
+	               live->snapshot.binding.link_index, live->outer.phase,
+	               live->control, live->last_event, result->outcome,
+	               SG_CompoundHookLiveFailureName(result->failure),
+	               result->replay_reason, live->transaction_elapsed_ms,
+	               live->guard_owned, live->local_owned, live->bolt_linked,
+	               bot->compound_hook_events.attached,
+	               bot->compound_hook_events.release_requested,
+	               bot->compound_hook_events.release_applied,
+	               entity->client ? entity->client->hookstate : -1,
+	               entity->client && entity->client->hook != NULL,
+	               entity->s.origin[0], entity->s.origin[1],
+	               entity->s.origin[2], entity->velocity[0],
+	               entity->velocity[1], entity->velocity[2]);
+}
+
+static void CompoundHookGameDebugStage(sg_bot_t *bot, const char *stage)
+{
+	const sg_compound_hook_live_state_t *live;
+
+	if (!bot || !stage || !sg_cv.debug || sg_cv.debug->value <= 0.0f ||
+	    !sg_host.dprint)
+		return;
+	live = &bot->compound_hook_live;
+	sg_host.dprint("slipgate: dhook stage=%s client=%d link=%u phase=%d "
+	               "control=%d event=%d guard=%d local=%d\n",
+	               stage, bot->ent ? bot->ent->s.number : -1,
+	               live->snapshot.binding.link_index, live->outer.phase,
+	               live->control, live->last_event, live->guard_owned,
+	               live->local_owned);
+}
+
 sg_compound_hook_live_result_t SG_CompoundHookGameBegin(sg_bot_t *bot,
 	uint32_t link_index, qboolean offhand_ready)
 {
@@ -721,6 +769,8 @@ sg_compound_hook_game_authorization_t SG_CompoundHookGameAuthorizeTouch(
 		return SG_COMPOUND_HOOK_GAME_DENIED;
 	result = SG_CompoundHookLiveTouch(&bot->compound_hook_live, &host,
 	    source->s.number, &pose, &observation, frame_serial);
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING)
+		SG_CompoundHookGameDebugResult(bot, "touch", &result);
 	return result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING ?
 	    SG_COMPOUND_HOOK_GAME_ACCEPTED : SG_COMPOUND_HOOK_GAME_DENIED;
 }
@@ -741,6 +791,8 @@ SG_CompoundHookGameAuthorizeActivation(sg_bot_t *bot, edict_t *source,
 		return SG_COMPOUND_HOOK_GAME_DENIED;
 	result = SG_CompoundHookLiveActivate(&bot->compound_hook_live, &host,
 	    source->s.number, door_master->s.number, frame_serial);
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING)
+		SG_CompoundHookGameDebugResult(bot, "activation", &result);
 	return result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING ?
 	    SG_COMPOUND_HOOK_GAME_ACCEPTED : SG_COMPOUND_HOOK_GAME_DENIED;
 }
@@ -764,11 +816,14 @@ sg_compound_hook_live_result_t SG_CompoundHookGameRecoverOwnedFailure(
 		return result;
 	result = SG_CompoundHookLiveRecover(&bot->compound_hook_live, &host,
 	    &pose, &observation, bot->ent->client->oldvelocity[2]);
+	SG_CompoundHookGameDebugResult(bot, "recovery", &result);
 	if (result.outcome != SG_COMPOUND_HOOK_LIVE_RECOVERING ||
 	    !same_slot_command)
 		return result;
-	return SG_CompoundHookLivePreStep(&bot->compound_hook_live, &host,
+	result = SG_CompoundHookLivePreStep(&bot->compound_hook_live, &host,
 	    &pose, &observation, same_slot_command);
+	SG_CompoundHookGameDebugResult(bot, "recovery-prestep", &result);
+	return result;
 }
 
 qboolean SG_CompoundHookGameApplyRequestedRelease(sg_bot_t *bot)
@@ -785,6 +840,7 @@ qboolean SG_CompoundHookGameApplyRequestedRelease(sg_bot_t *bot)
 	    bot->ent->client->hook);
 	if (gate != SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED)
 		return false;
+	CompoundHookGameDebugStage(bot, "release-requested");
 	ctf_hook_abort(bot->ent);
 	return bot->compound_hook_live.hook_released ||
 	       bot->compound_hook_live.recovering;

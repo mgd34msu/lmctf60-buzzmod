@@ -224,6 +224,7 @@ sg_compound_hook_live_result_t SG_CompoundHookGameLinked(
 	sg_replay_observation_t observation;
 	sg_compound_hook_live_bolt_t identity;
 	sg_bot_t *bot = HookGameBotForClient(client);
+	sg_compound_hook_live_result_t result;
 
 	if (!HookGameOwned(bot))
 		return HookGameEventResult(SG_COMPOUND_HOOK_LIVE_IDLE,
@@ -245,8 +246,13 @@ sg_compound_hook_live_result_t SG_CompoundHookGameLinked(
 		return HookGameEventResult(SG_COMPOUND_HOOK_LIVE_RECOVERING,
 		    SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY);
 	HookGameBoltIdentity(&bot->compound_hook_events, &identity);
-	return SG_CompoundHookLiveLinked(&bot->compound_hook_live, &host,
+	result = SG_CompoundHookLiveLinked(&bot->compound_hook_live, &host,
 	    &identity, level.framenum, &pose, &observation);
+#ifndef SG_COMPOUND_HOOK_GAME_EVENTS_TEST
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING)
+		SG_CompoundHookGameDebugResult(bot, "linked", &result);
+#endif
+	return result;
 }
 
 sg_compound_hook_game_event_gate_t SG_CompoundHookGameAttachWillApply(
@@ -278,6 +284,7 @@ sg_compound_hook_live_result_t SG_CompoundHookGameAttached(edict_t *bolt)
 	sg_compound_hook_live_host_t host;
 	sg_replay_pose_t pose;
 	sg_compound_hook_live_bolt_t identity;
+	sg_compound_hook_live_result_t result;
 	sg_bot_t *bot;
 	edict_t *current;
 	edict_t *target;
@@ -302,8 +309,13 @@ sg_compound_hook_live_result_t SG_CompoundHookGameAttached(edict_t *bolt)
 	bot->compound_hook_events.attach_target = NULL;
 	bot->compound_hook_events.attached = true;
 	HookGameBoltIdentity(&bot->compound_hook_events, &identity);
-	return SG_CompoundHookLiveAttached(&bot->compound_hook_live, &host,
+	result = SG_CompoundHookLiveAttached(&bot->compound_hook_live, &host,
 	    &identity, level.framenum, &pose);
+#ifndef SG_COMPOUND_HOOK_GAME_EVENTS_TEST
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING)
+		SG_CompoundHookGameDebugResult(bot, "attached", &result);
+#endif
+	return result;
 }
 
 sg_compound_hook_live_result_t SG_CompoundHookGamePullApplied(
@@ -312,6 +324,7 @@ sg_compound_hook_live_result_t SG_CompoundHookGamePullApplied(
 	sg_compound_hook_live_host_t host;
 	sg_replay_pose_t pose;
 	sg_compound_hook_live_bolt_t identity;
+	sg_compound_hook_live_result_t result;
 	sg_bot_t *bot = HookGameBotForClient(client);
 	edict_t *current;
 
@@ -329,8 +342,13 @@ sg_compound_hook_live_result_t SG_CompoundHookGamePullApplied(
 		return HookGameEventResult(SG_COMPOUND_HOOK_LIVE_RECOVERING,
 		    SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY);
 	HookGameBoltIdentity(&bot->compound_hook_events, &identity);
-	return SG_CompoundHookLivePullApplied(&bot->compound_hook_live, &host,
+	result = SG_CompoundHookLivePullApplied(&bot->compound_hook_live, &host,
 	    &identity, level.framenum, &pose);
+#ifndef SG_COMPOUND_HOOK_GAME_EVENTS_TEST
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING)
+		SG_CompoundHookGameDebugResult(bot, "pull", &result);
+#endif
+	return result;
 }
 
 sg_compound_hook_game_event_gate_t SG_CompoundHookGameReleaseRequested(
@@ -426,6 +444,10 @@ sg_compound_hook_live_result_t SG_CompoundHookGameAbortEnd(edict_t *client)
 	result = SG_CompoundHookLiveReleaseApplied(&bot->compound_hook_live,
 	    &host, &identity, level.framenum, &pose);
 	bot->compound_hook_events.release_applied = true;
+#ifndef SG_COMPOUND_HOOK_GAME_EVENTS_TEST
+	if (result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING)
+		SG_CompoundHookGameDebugResult(bot, "release", &result);
+#endif
 	return result;
 }
 
