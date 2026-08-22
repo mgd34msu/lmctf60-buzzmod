@@ -23,7 +23,16 @@ static sg_train_gate_witness_t Witness(void)
 	witness.train_key = 20U;
 	witness.closed_corner_key = 30U;
 	witness.open_corner_key = 40U;
+	witness.activation = SG_TRAIN_GATE_ACTIVATION_TOUCH;
 	witness.opening_bound_ms = 2000U;
+	return witness;
+}
+
+static sg_train_gate_witness_t ShootWitness(void)
+{
+	sg_train_gate_witness_t witness = Witness();
+
+	witness.activation = SG_TRAIN_GATE_ACTIVATION_SHOOT;
 	return witness;
 }
 
@@ -109,6 +118,77 @@ static void TestOrderedSingleCallbacks(void)
 	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
 }
 
+static void TestShootHappyPath(void)
+{
+	sg_train_gate_state_t state;
+	sg_train_gate_witness_t witness = ShootWitness();
+	sg_train_gate_observation_t observation =
+		Observation(SG_TRAIN_GATE_POSE_CLOSED);
+
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_EQUIP);
+	observation.weapon_ready = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_AIM_BUTTON);
+	observation.aim_contact_current = 1U;
+	observation.line_of_fire_clear = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_SHOOT_BUTTON);
+	CHECK(state.shot_requested == 1U);
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	observation.button_shot_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	observation.target_dispatch_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	observation.train_use_count = 1U;
+	observation.pose = SG_TRAIN_GATE_POSE_OPENING;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_OPENING);
+	observation.pose = SG_TRAIN_GATE_POSE_OPEN;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_EGRESS);
+	observation.body_clear = 1U;
+	observation.arrived = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_COMPLETE);
+}
+
+static void TestActivationMethodsStayDistinct(void)
+{
+	sg_train_gate_state_t state;
+	sg_train_gate_witness_t witness = Witness();
+	sg_train_gate_observation_t observation =
+		Observation(SG_TRAIN_GATE_POSE_CLOSED);
+
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	observation.button_shot_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
+
+	witness = ShootWitness();
+	observation = Observation(SG_TRAIN_GATE_POSE_CLOSED);
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	observation.button_touch_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
+
+	observation = Observation(SG_TRAIN_GATE_POSE_CLOSED);
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	observation.weapon_ready = 1U;
+	observation.aim_contact_current = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_AIM_BUTTON);
+	CHECK(state.shot_requested == 0U);
+}
+
 static void TestInvalidObservations(void)
 {
 	sg_train_gate_state_t state;
@@ -174,6 +254,8 @@ int main(void)
 {
 	TestHappyPath();
 	TestOrderedSingleCallbacks();
+	TestShootHappyPath();
+	TestActivationMethodsStayDistinct();
 	TestInvalidObservations();
 	TestDriftTimeoutAndClearance();
 	if (failures)
