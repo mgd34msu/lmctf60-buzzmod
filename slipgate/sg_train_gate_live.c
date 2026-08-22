@@ -97,6 +97,26 @@ sg_train_gate_side_t SG_TrainGateUniqueSourceSide(uint32_t side_mask)
 	return found;
 }
 
+int SG_TrainGateUniquePassageAxis(uint32_t axis_mask,
+	unsigned int motion_axis)
+{
+	int found = -1;
+	unsigned int axis;
+
+	if (motion_axis >= 3U || axis_mask == 0U || (axis_mask & ~0x7U) != 0U ||
+	    (axis_mask & (1U << motion_axis)) != 0U)
+		return -1;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		if ((axis_mask & (1U << axis)) == 0U)
+			continue;
+		if (found >= 0)
+			return -1;
+		found = (int)axis;
+	}
+	return found;
+}
+
 static int TrainBoolean(uint8_t value)
 {
 	return value <= 1U;
