@@ -30,6 +30,9 @@ override it.
       and installation.
 - [x] Required SNAG data fails closed when missing or invalid.
 - [x] Real two-process RUNE/SNAG workflow through q2ded.
+- [x] Standalone `tools/runegen.sh` escalates generator and cold-load timeouts,
+      then allows five seconds before forced termination. Its GNU and Make
+      tests pass. The 181-map Python controller already used escalation.
 
 ### `lmctf58`
 
@@ -121,7 +124,12 @@ proves the pipeline for that map but does not complete D_HOOK.
 
 Live preflight also rejected `as2m1`, `tw2ctf4`, `lmctf23`, `lmctf17`,
 `lmctf06`, `lmctf14`, `lmctf16`, `lmctf33`, and `xmap11` as D_HOOK
-witnesses. `lmctf04`, `smap38`, and `rtctf1` remain under evaluation.
+witnesses.
+
+The ranked search then tested 21 more maps. Nineteen completed with zero
+publication. `xmap26` and `xmap29` reached the bounded generation limit, and
+neither installed a pair. Results and logs remain under
+`/tmp/lmctf6-dhook-witness-search`. This ends blind brute-force selection.
 
 The exact `xmap06` witness pair is retained because it identifies the three
 published links used in the live failure analysis:
@@ -136,7 +144,8 @@ hazard makes them negative live evidence, not a completed lifecycle.
 
 ### D_HOOK work left
 
-1. Preflight more water and door candidates through the live strict resolver.
+1. Trace the reason 67 contact failures, reason 69 hook-proof failures, and
+   `xmap06` terminal hazard to their owning code or map constraints.
 2. Generate the first pair that publishes an admitted D_HOOK link without the
    `xmap06` terminal hazard.
 3. Independently accept, cold-load, and install that exact RUNE/SNAG pair.
