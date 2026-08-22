@@ -547,7 +547,8 @@ COMPOUND_DROP_FANOUT_TEST_DEPS := \
 COMPOUND_DROP_TRANSITION_TEST_BIN := sg_compound_drop_transition_test.make
 COMPOUND_DROP_TRANSITION_TEST_OBJS := \
 	.sg_compound_drop_transition_test.make.o \
-	.sg_compound_drop_transition_under_test.make.o
+	.sg_compound_drop_transition_under_test.make.o \
+	.sg_push_live_under_test.make.o
 COMPOUND_DROP_TRANSITION_TEST_DEPS := \
 	$(COMPOUND_DROP_TRANSITION_TEST_OBJS:.o=.d)
 COMPOUND_DROP_TEST_ALL_ARTIFACTS := \
