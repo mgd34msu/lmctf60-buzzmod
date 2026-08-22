@@ -17,6 +17,8 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 		return true;
 	if (action == RL_DOOR_HOOK && bot->compound_hook_live.guard_owned)
 		return true;
+	if (action == RL_PUSH && SG_PushLiveOwns(&bot->push))
+		return true;
 	memset(&state, 0, sizeof(state));
 	state.action = action;
 	state.hook_phase = bot->hook_phase;
@@ -110,6 +112,9 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		break;
 	case RL_ROCKETJUMP:
 		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
+		break;
+	case RL_PUSH:
+		SG_PushLiveReset(&bot->push);
 		break;
 	case RL_LIFT:
 	case RL_TELEPORT:

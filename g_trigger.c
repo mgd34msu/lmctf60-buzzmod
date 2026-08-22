@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_push_game.h"
 
 
 void InitTrigger (edict_t *self)
@@ -396,6 +397,7 @@ void trigger_push_touch (edict_t *self, edict_t *other, cplane_t *plane, csurfac
 		{
 			// don't take falling damage immediately from this
 			VectorCopy (other->velocity, other->client->oldvelocity);
+			SG_PushGameTouched(self, other);
 			if (other->fly_sound_debounce_time < level.time)
 			{
 				other->fly_sound_debounce_time = level.time + 1.5;

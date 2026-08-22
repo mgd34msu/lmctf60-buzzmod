@@ -6,6 +6,7 @@
 #include "sg_hook_live.h"
 #include "sg_hook_diagnostics.h"
 #include "sg_rocketjump_live.h"
+#include "sg_push_live.h"
 #include "sg_compound_guard.h"
 #include "sg_compound_swim_live.h"
 #include "sg_compound_drop_live.h"
@@ -259,6 +260,7 @@ typedef struct sg_bot_s
 	 * projectile incarnation, callback snapshots, phase, and timers live
 	 * together so no parallel phase flags can authorize a shot. */
 	sg_rocketjump_live_state_t rocketjump;
+	sg_push_live_state_t push;
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;
 	vec3_t		watch_org;

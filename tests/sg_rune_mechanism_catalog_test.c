@@ -1309,6 +1309,7 @@ static void TestPushVelocitySealed(void)
 	const rune_mechanism_node_t *node;
 	edict_t *push;
 	vec3_t expected;
+	float scale;
 
 	memset(&game, 0, sizeof(game));
 	memset(&level, 0, sizeof(level));
@@ -1328,7 +1329,10 @@ static void TestPushVelocitySealed(void)
 	push->solid = SOLID_TRIGGER;
 	push->speed = 85.0f;
 	VectorSet(push->movedir, -0.0697246f, 0.0f, 0.9975641f);
-	VectorScale(push->movedir, push->speed * 10.0f, expected);
+	scale = push->speed * 10.0f;
+	expected[0] = push->movedir[0] * scale;
+	expected[1] = push->movedir[1] * scale;
+	expected[2] = push->movedir[2] * scale;
 	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
 	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
 	node = NodeByKey(&view, 1U);

@@ -2185,6 +2185,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->hp_prev_land = 0.0f;
 
 	memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
+	SG_PushLiveReset(&bot->push);
 	bot->nade_phase = 0;
 	SG_NadeTargetClear(bot);
 	bot->nade_until = 0.0f;
@@ -2966,6 +2967,7 @@ void SG_BotThink(sg_bot_t *bot)
 		if (declared_door_guarded)
 			bot->seed = -1;
 		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
+		SG_PushLiveReset(&bot->push);
 		bot->nade_phase = 0;
 		SG_NadeTargetClear(bot);
 		bot->nade_until = 0.0f;
@@ -3122,6 +3124,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->declared_guard_pause_started = 0.0f;
 		bot->declared_door_recovery_since = 0.0f;
 		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
+		SG_PushLiveReset(&bot->push);
 		bot->nade_phase = 0;
 		SG_NadeTargetClear(bot);
 		if (SG_DeclaredDoorGuardRunState(bot) !=

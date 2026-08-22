@@ -18,7 +18,7 @@
 #define TEST_NODE_CAPACITY 3U
 #define TEST_EDGE_CAPACITY 6U
 #define TEST_STRING_BYTES 35U
-#define TEST_FILE_BYTES 547U
+#define TEST_FILE_BYTES 571U
 
 #define SEED_OFFSET SG_RUNE_CODEC_HEADER_BYTES
 #define LINK_OFFSET (SEED_OFFSET + TEST_SEEDS * SG_RUNE_CODEC_SEED_BYTES)
@@ -375,7 +375,7 @@ static void TestPrimitiveGolden(void)
 	sg_rune_codec_activation_edge_t decoded_edge;
 	sg_rune_codec_activation_plan_t decoded_plan;
 	sg_rune_codec_link_t decoded_link;
-	static const unsigned char golden_node[80] = {
+	static const unsigned char golden_node[92] = {
 		[0] = 0x01, [4] = 0x02, [6] = 0x1e,
 		[8] = 0x0d, [12] = 0x01,
 		[24] = 0xff, [25] = 0xff, [26] = 0xff, [27] = 0xff,
@@ -491,10 +491,10 @@ static void TestWholeGolden(void)
 	uint32_t action_descriptor_crc = 0U;
 	uint32_t file_crc = 0U;
 	static const unsigned char golden_extension[32] = {
-		0x50, 0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00,
+		0x5c, 0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00,
 		0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
 		0x01, 0x00, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
-		0x0f, 0xe5, 0x8d, 0xdd, 0x01, 0x00, 0x00, 0x00
+		0xba, 0x35, 0x72, 0x72, 0x01, 0x00, 0x00, 0x00
 	};
 
 	FixtureInit(&fixture);
@@ -515,7 +515,7 @@ static void TestWholeGolden(void)
 	CHECK(GetU32(encoded + 0) == SG_RUNE_CODEC_MAGIC);
 	CHECK(GetU32(encoded + 32) == SG_RUNE_ACTION_CONTRACT_CRC32);
 	CHECK(SG_ActionWireValid(RL_BUTTON_DOOR));
-	CHECK(SG_RUNE_WIRE_ACTION_MAX == RL_BUTTON_DOOR);
+	CHECK(SG_RUNE_WIRE_ACTION_MAX == RL_PUSH);
 	CHECK(encoded[4] == 0U && encoded[5] == 0U);
 	CHECK(memcmp(encoded + 128, golden_extension,
 		sizeof(golden_extension)) == 0);
@@ -525,11 +525,11 @@ static void TestWholeGolden(void)
 	CHECK(memcmp(encoded + STRING_OFFSET, canonical_strings,
 		TEST_STRING_BYTES) == 0);
 	CHECK_U32(UINT32_C(0x624244c5), fixture.plans[0].closure_crc32);
-	CHECK_U32(UINT32_C(0x6c814182), GetU32(encoded + 20));
-	CHECK_U32(UINT32_C(0x6335f469),
+	CHECK_U32(UINT32_C(0x77264ff8), GetU32(encoded + 20));
+	CHECK_U32(UINT32_C(0xbec2b1c2),
 		GetU32(encoded + SG_RUNE_CODEC_HEADER_CRC_OFFSET));
 	CHECK(SG_CRC32Buffer(encoded, sizeof(encoded), &file_crc));
-	CHECK_U32(UINT32_C(0x611a80ed), file_crc);
+	CHECK_U32(UINT32_C(0x470d284a), file_crc);
 
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));

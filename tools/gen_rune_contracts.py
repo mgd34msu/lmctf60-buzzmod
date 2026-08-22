@@ -27,7 +27,7 @@ _PINNED_ENUMS = {
         4: "RL_SWIM", 5: "RL_LIFT", 6: "RL_TELEPORT",
         7: "RL_ROCKETJUMP", 8: "RL_DOOR", 9: "RL_DOOR_DROP",
         10: "RL_DOOR_SWIM", 11: "RL_DOOR_HOOK",
-        12: "RL_BUTTON_DOOR",
+        12: "RL_BUTTON_DOOR", 13: "RL_PUSH",
     },
     "provenances": {
         0: "RL_PROVEN", 1: "RL_OBSERVED", 2: "RL_ADJUSTED",
@@ -163,7 +163,7 @@ _PINNED_PROOF_LAW = {
 }
 _PINNED_RUNTIME_SUPPORT = {
 	0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1,
-	8: 1, 9: 1, 10: 1, 11: 1, 12: 1,
+	8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1,
 }
 _FROZEN_BASE_ACTION_COUNT = 12
 _PINNED_MECHANISM_CONTROLLERS = {
@@ -174,6 +174,7 @@ _PINNED_MECHANISM_CONTROLLERS = {
     4: ("SG_MECHANISM_CONTROLLER_RELAY_DOOR", 0),
     5: ("SG_MECHANISM_CONTROLLER_PLATFORM", 0xD),
     6: ("SG_MECHANISM_CONTROLLER_TELEPORT", 0x5),
+    7: ("SG_MECHANISM_CONTROLLER_PUSH", 0x5),
 }
 _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
     0: (1, 0, 0, ()),
@@ -189,6 +190,7 @@ _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
 	10: (1, 0, 10, ()),
 	11: (1, 0, 11, ()),
     12: (1, 1, 12, ((3, 2),)),
+    13: (1, 1, 13, ((7, 1),)),
 }
 
 

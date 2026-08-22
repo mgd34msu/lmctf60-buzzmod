@@ -627,7 +627,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		 * phantom. Use the exact same conservative bound here and again at
 		 * launch: otherwise an unsafe cheapest edge is selected, rejected at
 		 * its source, then selected forever. */
-		if ((l->action == RL_JUMP || l->action == RL_DROP) &&
+		if ((l->action == RL_JUMP || l->action == RL_DROP ||
+		     l->action == RL_PUSH) &&
 		    !SG_BallisticSurvivable(e, l))
 			continue;
 

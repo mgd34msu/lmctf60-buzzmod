@@ -17,6 +17,7 @@
 #include "slipgate/sg_rune_door_scope.h"
 #include "slipgate/sg_compound_gen_game.h"
 #include "slipgate/sg_rocketjump_cadence.h"
+#include "slipgate/sg_push_live.h"
 #include "slipgate/sg_util.h"
 
 #include <stdio.h>
@@ -1931,10 +1932,15 @@ static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
 	uint16_t controller_kind, uint16_t expected_members, uint32_t cooldown_ms)
 {
 	sg_mechanism_plan_binding_t *binding;
+	qboolean push = controller_kind == SG_MECHANISM_CONTROLLER_PUSH;
 
 	if (!link || !gen_mechanism_bindings ||
 	    gen_num_mechanism_bindings >= (uint32_t)LINK_MAX ||
-	    !Mechanism_Node(entry_key) || !Mechanism_Node(mover_key) ||
+	    !Mechanism_Node(entry_key) ||
+	    (!push && !Mechanism_Node(mover_key)) ||
+	    (push && (mover_key != SG_MECH_NO_KEY ||
+	              destination_key != SG_MECH_NO_KEY ||
+	              expected_members != 1U || cooldown_ms != 0U)) ||
 	    (destination_key != SG_MECH_NO_KEY &&
 	     !Mechanism_Node(destination_key)) ||
 	    (egress_key != SG_MECH_NO_KEY && !Mechanism_Node(egress_key)) ||
@@ -1955,6 +1961,15 @@ static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
 	binding->cooldown_ms = cooldown_ms;
 	link->mechanism_plan = gen_num_mechanism_bindings++;
 	return true;
+}
+
+static qboolean Mechanism_BindPush(rune_link_t *link, edict_t *trigger)
+{
+	uint32_t entry_key = Mechanism_EntityKey(trigger);
+
+	return entry_key != SG_MECH_NO_KEY &&
+	       Mechanism_Bind(link, entry_key, SG_MECH_NO_KEY, SG_MECH_NO_KEY,
+	           SG_MECH_NO_KEY, SG_MECHANISM_CONTROLLER_PUSH, 1U, 0U);
 }
 
 static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
@@ -2130,7 +2145,7 @@ fail:
 
 static int gen_first_water = -1;        /* index of the first water seed, -1 none */
 static int gen_num_water;
-static int gen_lift_links, gen_tele_links, gen_door_links;
+static int gen_lift_links, gen_tele_links, gen_door_links, gen_push_links;
 static int gen_button_door_links, gen_swim_links;
 static int gen_door_drop_trials, gen_door_drop_proofs;
 static int gen_door_drop_compound_trials, gen_door_drop_compound_proofs;
@@ -2178,7 +2193,8 @@ static void Link_Declare_Tail(int mark)
 		if (gen_links[i].action != RL_LIFT &&
 		    gen_links[i].action != RL_TELEPORT &&
 		    gen_links[i].action != RL_DOOR &&
-		    gen_links[i].action != RL_BUTTON_DOOR)
+		    gen_links[i].action != RL_BUTTON_DOOR &&
+		    gen_links[i].action != RL_PUSH)
 			continue;               /* a drop proven by the lift pass stays PROVEN */
 		gen_links[i].provenance = RL_DECLARED;
 		gen_links[i].heading_slack = RUNE_DECLARED_CONTROL_MARKER;
@@ -3321,6 +3337,160 @@ static void Link_Teleporters(void)
 	}
 	if (gen_tele_links)
 		sg_host.dprint("rune: %d teleport links\n", gen_tele_links);
+}
+
+static qboolean Push_NodeShape(const rune_mechanism_node_t *node)
+{
+	return node && node->kind == SG_MECH_NODE_PUSH &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_TOUCHABLE) &&
+	       node->target_offset == 0U && node->targetname_offset == 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->spawnflags == 0U &&
+	       node->touch_callback == SG_MECH_CALLBACK_TRIGGER_PUSH_TOUCH &&
+	       node->use_callback == SG_MECH_CALLBACK_NONE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 680U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U &&
+	       isfinite(node->push_velocity[0]) &&
+	       isfinite(node->push_velocity[1]) &&
+	       isfinite(node->push_velocity[2]) &&
+	       (node->push_velocity[0] != 0.0f ||
+	        node->push_velocity[1] != 0.0f ||
+	        node->push_velocity[2] != 0.0f);
+}
+
+static int Push_Destination(const vec3_t landing)
+{
+	short landing_q8[3];
+	int best = -1;
+	int64_t best_distance = INT64_MAX;
+	int i, axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		float fixed = landing[axis] * 8.0f;
+
+		if (!isfinite(fixed) || fixed < (float)SHRT_MIN ||
+		    fixed > (float)SHRT_MAX || fixed != (float)(short)fixed)
+			return -1;
+		landing_q8[axis] = (short)fixed;
+	}
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		short seed_q8[3];
+		int64_t distance = 0;
+
+		if (!Gen_SeedHasOutgoing(i) || gen_source_waterlevel[i] != 0)
+			continue;
+		for (axis = 0; axis < 3; axis++)
+		{
+			int64_t delta;
+
+			seed_q8[axis] = (short)(gen_seeds[i].origin[axis] * 8.0f);
+			delta = (int64_t)seed_q8[axis] - landing_q8[axis];
+			distance += delta * delta;
+		}
+		if (!SG_PushArrivalEnvelope(landing_q8, seed_q8) ||
+		    distance >= best_distance)
+			continue;
+		best = i;
+		best_distance = distance;
+	}
+	return best;
+}
+
+static void Link_Pushes(void)
+{
+	uint32_t node_index;
+
+	for (node_index = 0U; node_index < gen_mechanism_catalog.num_nodes;
+	     node_index++)
+	{
+		const rune_mechanism_node_t *node =
+			&gen_mechanism_catalog.nodes[node_index];
+		edict_t *trigger;
+		int best_source = -1, best_destination = -1, best_cost = 0;
+		int64_t best_source_distance = INT64_MAX;
+		int source;
+
+		if (!Push_NodeShape(node) || node->key == 0U ||
+		    node->key >= (uint32_t)globals.num_edicts)
+			continue;
+		trigger = &g_edicts[node->key];
+		for (source = 0; source < gen_num_seeds; source++)
+		{
+			vec3_t landing;
+			int destination, cost_ms;
+			int64_t source_distance = 0;
+			int axis;
+			float dx, dy, dz;
+
+			if (!gen_source_stable[source] ||
+			    gen_source_waterlevel[source] != 0 ||
+			    !Gen_SeedHasIncoming(source))
+				continue;
+			dx = gen_seeds[source].origin[0] < trigger->absmin[0]
+			    ? trigger->absmin[0] - gen_seeds[source].origin[0]
+			    : gen_seeds[source].origin[0] > trigger->absmax[0]
+			        ? gen_seeds[source].origin[0] - trigger->absmax[0] : 0.0f;
+			dy = gen_seeds[source].origin[1] < trigger->absmin[1]
+			    ? trigger->absmin[1] - gen_seeds[source].origin[1]
+			    : gen_seeds[source].origin[1] > trigger->absmax[1]
+			        ? gen_seeds[source].origin[1] - trigger->absmax[1] : 0.0f;
+			dz = gen_seeds[source].origin[2] < trigger->absmin[2]
+			    ? trigger->absmin[2] - gen_seeds[source].origin[2]
+			    : gen_seeds[source].origin[2] > trigger->absmax[2]
+			        ? gen_seeds[source].origin[2] - trigger->absmax[2] : 0.0f;
+			if (dx * dx + dy * dy > 320.0f * 320.0f || fabsf(dz) > 128.0f)
+				continue;
+			Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
+			if (!SG_OraclePushFlight(gen_seeds[source].origin, trigger,
+			        node->push_velocity, landing, &cost_ms))
+				continue;
+			destination = Push_Destination(landing);
+			if (destination < 0 || destination == source || cost_ms <= 0 ||
+			    cost_ms > 30000)
+				continue;
+			for (axis = 0; axis < 3; axis++)
+			{
+				float center =
+					(trigger->absmin[axis] + trigger->absmax[axis]) * 0.5f;
+				int64_t delta = (int64_t)(
+					(gen_seeds[source].origin[axis] - center) * 8.0f);
+
+				source_distance += delta * delta;
+			}
+			if (source_distance >= best_source_distance)
+				continue;
+			best_source = source;
+			best_destination = destination;
+			best_cost = cost_ms;
+			best_source_distance = source_distance;
+		}
+		if (best_source >= 0)
+		{
+			int before = gen_num_links;
+
+			Link_Add(best_source, best_destination, RL_PUSH,
+			    (short)best_cost, 0);
+			if (gen_num_links > before)
+			{
+				rune_link_t *link = &gen_links[gen_num_links - 1];
+
+				if (!Mechanism_BindPush(link, trigger))
+					gen_num_links--;
+				else
+					gen_push_links++;
+			}
+		}
+	}
+	if (gen_push_links)
+		sg_host.dprint("rune: %d fixed push links\n", gen_push_links);
 }
 
 /* Link one canonical door team at its exact STATE_TOP pose for a synchronous
@@ -6163,6 +6333,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 		Link_Plats();           /* declared lift: bottom seed -> top seed */
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
+		Link_Pushes();
 		Link_Declare_Tail(declared_mark);
 	}
 
@@ -6831,7 +7002,7 @@ qboolean Rune_Generate(const char *mapname)
 	VectorClear(gen_prove_wp);
 	gen_first_water = -1;
 	gen_num_water = 0;
-	gen_lift_links = gen_tele_links = gen_door_links = 0;
+	gen_lift_links = gen_tele_links = gen_door_links = gen_push_links = 0;
 	gen_button_door_links = 0;
 	gen_swim_links = 0;
 	gen_door_drop_trials = gen_door_drop_proofs = 0;
@@ -7000,11 +7171,11 @@ qboolean Rune_Generate(const char *mapname)
 	sg_host.dprint("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
 	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d "
-	           "(lift=%d tele=%d door=%d button-door=%d); "
+	           "(lift=%d tele=%d door=%d button-door=%d push=%d); "
 	           "plat-down drop=%d unlinked=%d; momentum=%d waypoints=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
 	           gen_lift_links, gen_tele_links, gen_door_links,
-	           gen_button_door_links,
+	           gen_button_door_links, gen_push_links,
 	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
 	           gen_waypoint_links);
 	sg_host.dprint("rune: door-drop probe trials=%d proofs=%d\n",

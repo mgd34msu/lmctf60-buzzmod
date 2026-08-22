@@ -418,6 +418,8 @@ static const char *RuneFile_AdaptDecoded(rune_t *rune,
 		memcpy(destination->absmax_q8, source->absmax_q8,
 			sizeof(destination->absmax_q8));
 		destination->path_target_offset = source->path_target_offset;
+		memcpy(destination->push_velocity, source->push_velocity,
+			sizeof(destination->push_velocity));
 	}
 	for (index = 0U; index < header->num_activation_edges; index++)
 	{

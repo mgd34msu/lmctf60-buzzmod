@@ -17,7 +17,7 @@
 #define SG_RUNE_CODEC_HEADER_CRC_OFFSET 60U
 #define SG_RUNE_CODEC_ACTIVATION_PLAN_OFFSET 44U
 
-#define SG_RUNE_CODEC_ACTIVATION_NODE_BYTES 80U
+#define SG_RUNE_CODEC_ACTIVATION_NODE_BYTES 92U
 #define SG_RUNE_CODEC_ACTIVATION_EDGE_BYTES 16U
 #define SG_RUNE_CODEC_ACTIVATION_PLAN_BYTES 32U
 #define SG_RUNE_CODEC_MAX_SEEDS RUNE_MAX_SEEDS
@@ -145,6 +145,7 @@ typedef sg_mechanism_controller_t sg_rune_codec_controller_kind_t;
 #define SG_RUNE_CODEC_CONTROLLER_RELAY_DOOR SG_MECHANISM_CONTROLLER_RELAY_DOOR
 #define SG_RUNE_CODEC_CONTROLLER_PLATFORM SG_MECHANISM_CONTROLLER_PLATFORM
 #define SG_RUNE_CODEC_CONTROLLER_TELEPORT SG_MECHANISM_CONTROLLER_TELEPORT
+#define SG_RUNE_CODEC_CONTROLLER_PUSH SG_MECHANISM_CONTROLLER_PUSH
 
 typedef enum
 {
@@ -274,6 +275,7 @@ typedef struct sg_rune_codec_activation_node_s
 	int16_t absmin_q8[3];
 	int16_t absmax_q8[3];
 	uint32_t path_target_offset;
+	float push_velocity[3];
 } sg_rune_codec_activation_node_t;
 
 typedef struct sg_rune_codec_activation_edge_s
@@ -374,6 +376,8 @@ sg_rune_codec_diagnostic_t SG_RuneCodecDecodeActivationPlan(
 sg_rune_codec_diagnostic_t SG_RuneCodecPlanClosureCRC32(
 	const sg_rune_codec_activation_edge_t *edges, uint32_t first_edge,
 	uint32_t num_edges, uint32_t total_edges, uint32_t *crc_out);
+sg_rune_codec_diagnostic_t SG_RuneCodecPushClosureCRC32(uint32_t entry_key,
+	const float push_velocity[3], uint32_t *crc_out);
 
 sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,

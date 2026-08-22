@@ -45,6 +45,10 @@ void hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker,
 	int damage, vec3_t point);
 void trigger_relay_use(edict_t *self, edict_t *other, edict_t *activator);
 void Use_Target_Speaker(edict_t *self, edict_t *other, edict_t *activator);
+void trigger_push_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surf);
+
+#define SG_PUSH_PROOF_LIMIT_MS 10000
 
 /*
  * A phantom's trace must not pass through any entity: it models a player
@@ -561,6 +565,8 @@ static qboolean SG_OracleDeclaredTrigger(edict_t *trigger)
 	if (sg_oracle_declared_action == RL_LIFT)
 		return trigger->enemy == sg_oracle_declared_expected;
 	if (sg_oracle_declared_action == RL_DOOR)
+		return trigger == sg_oracle_declared_expected;
+	if (sg_oracle_declared_action == RL_PUSH)
 		return trigger == sg_oracle_declared_expected;
 	return false;
 }
@@ -6034,6 +6040,123 @@ qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 	sg_oracle_world_only = previous_world_only;
 	sg_oracle_contaminated = previous_contaminated;
 	return clean;
+}
+
+qboolean SG_OraclePushFlight(const vec3_t source, edict_t *trigger,
+	const float push_velocity[3], vec3_t landing, int *arrival_ms)
+{
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_touched = sg_oracle_declared_touched;
+	int old_action = sg_oracle_declared_action;
+	sg_phantom_t ph;
+	usercmd_t command;
+	vec3_t target;
+	qboolean airborne = false;
+	qboolean launched = false;
+	qboolean ok = false;
+	int elapsed = 0;
+	int axis;
+	float scale;
+
+	if (!source || !trigger || !push_velocity || !landing || !arrival_ms ||
+	    !trigger->inuse || !trigger->classname ||
+	    strcmp(trigger->classname, "trigger_push") != 0 ||
+	    trigger->touch != trigger_push_touch || trigger->solid != SOLID_TRIGGER ||
+	    trigger->spawnflags != 0 || trigger->speed != 85.0f)
+		return false;
+	scale = trigger->speed * 10.0f;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float stock = trigger->movedir[axis] * scale;
+		float fixed;
+
+		if (!isfinite(push_velocity[axis]) ||
+		    memcmp(&stock, &push_velocity[axis], sizeof(stock)) != 0)
+			return false;
+		fixed = push_velocity[axis] * 8.0f;
+		if (!isfinite(fixed) || fixed < (float)SHRT_MIN ||
+		    fixed > (float)SHRT_MAX)
+			return false;
+	}
+
+	sg_oracle_passent = NULL;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = trigger;
+	sg_oracle_declared_action = RL_PUSH;
+	sg_oracle_declared_touched = false;
+	SG_OraclePlace(&ph, (vec_t *)source);
+	memset(&command, 0, sizeof(command));
+	command.msec = 0;
+	SG_OracleRun(&ph, &command, 1);
+	if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
+	    !ph.groundentity || ph.waterlevel != 0)
+		goto done;
+	launched = sg_oracle_declared_touched;
+	VectorAdd(trigger->absmin, trigger->absmax, target);
+	VectorScale(target, 0.5f, target);
+	if (launched)
+	{
+		for (axis = 0; axis < 3; axis++)
+		{
+			ph.pms.velocity[axis] = (short)(push_velocity[axis] * 8.0f);
+			ph.velocity[axis] = ph.pms.velocity[axis] * 0.125f;
+		}
+	}
+
+	for (elapsed = 0; elapsed < SG_PUSH_PROOF_LIMIT_MS;
+	     elapsed += SG_RUNE_PROOF_PMOVE_SUBSTEP_MS)
+	{
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
+		if (!launched && !SG_DeclaredCommand(ph.origin, target, &ph.pms,
+		        &command))
+			goto done;
+		sg_oracle_declared_touched = false;
+		SG_OracleRun(&ph, &command, 1);
+		if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
+		    (ph.waterlevel > 0 &&
+		     (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
+			goto done;
+		if (sg_oracle_declared_touched)
+		{
+			for (axis = 0; axis < 3; axis++)
+			{
+				ph.pms.velocity[axis] =
+					(short)(push_velocity[axis] * 8.0f);
+				ph.velocity[axis] = ph.pms.velocity[axis] * 0.125f;
+			}
+			launched = true;
+		}
+		if (!launched && (!ph.groundentity || ph.waterlevel != 0))
+			goto done;
+		if (launched && !ph.groundentity)
+			airborne = true;
+		if (!launched ||
+		    ((elapsed + SG_RUNE_PROOF_PMOVE_SUBSTEP_MS) % 100) != 0)
+			continue;
+		if (airborne && ph.groundentity && ph.waterlevel == 0)
+		{
+			VectorCopy(ph.origin, landing);
+			*arrival_ms = elapsed + SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
+			ok = true;
+			goto done;
+		}
+	}
+
+done:
+	if (ph.door_passed)
+		ok = false;
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_action = old_action;
+	sg_oracle_declared_touched = old_touched;
+	return ok;
 }
 
 /* A collision trace stops DIST_EPSILON short of its floor.  That float is

@@ -1108,6 +1108,7 @@ static void TestPush(void)
 	push = Node(&fixture, 1U, SG_MECH_NODE_PUSH, "trigger_push");
 	push->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE;
 	push->touch_callback = SG_MECH_CALLBACK_TRIGGER_PUSH_TOUCH;
+	push->speed_q8 = 680U;
 	push->push_velocity[0] = -59.2648315f;
 	push->push_velocity[2] = 846.765747f;
 	fixture.binding.entry_key = 1U;
@@ -1124,12 +1125,12 @@ static void TestPush(void)
 	CHECK(fixture.plans[0].controller_kind ==
 		SG_MECHANISM_CONTROLLER_PUSH);
 	CHECK(fixture.plans[0].flags ==
-		(SG_MECHANISM_PLANF_TOUCH | SG_MECHANISM_PLANF_ATOMIC));
+		(SG_RUNE_CODEC_PLANF_TOUCH | SG_RUNE_CODEC_PLANF_ATOMIC));
 	CHECK(SG_RuneCodecPushClosureCRC32(push->key,
 		push->push_velocity, &closure_crc) == RLCODEC_OK);
 	CHECK(fixture.plans[0].closure_crc32 == closure_crc);
 
-	push->push_velocity[2] = 0.0f;
+	memset(push->push_velocity, 0, sizeof(push->push_velocity));
 	CHECK(!SG_MechanismPlansMaterialize(fixture.links, 2U,
 		&fixture.binding, 1U, &fixture.catalog, &fixture.buffers,
 		&fixture.result));

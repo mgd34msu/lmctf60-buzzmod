@@ -17,7 +17,7 @@
 #define TEST_EDGES 2U
 #define TEST_PLANS 1U
 #define TEST_STRING_BYTES 35U
-#define TEST_FILE_BYTES 547U
+#define TEST_FILE_BYTES 571U
 #define TEST_FRAGMENTS 11U
 
 static int failures;
@@ -339,7 +339,7 @@ static void ExpectPreflightFailure(fixture_t *fixture,
 static void TestCanonicalParity(void)
 {
 	static const size_t expected_sizes[TEST_FRAGMENTS] = {
-		160U, 16U, 16U, 48U, 48U, 80U, 80U, 16U, 16U, 32U, 35U
+		160U, 16U, 16U, 48U, 48U, 92U, 92U, 16U, 16U, 32U, 35U
 	};
 	fixture_t fixture;
 	fixture_t expected_fixture;
@@ -391,7 +391,7 @@ static void TestCanonicalParity(void)
 	CHECK(SG_CRC32Buffer(output + SG_RUNE_CODEC_HEADER_BYTES,
 		sizeof(output) - SG_RUNE_CODEC_HEADER_BYTES, &crc));
 	CHECK(crc == result.payload_crc32);
-	CHECK_U32(UINT32_C(0x6c814182), result.payload_crc32);
+	CHECK_U32(UINT32_C(0x77264ff8), result.payload_crc32);
 	CHECK(SG_ActionRuntimeSupported(RL_BUTTON_DOOR));
 }
 
@@ -651,7 +651,7 @@ static void TestSinkFailures(void)
 		0U, 1U, 0U, 1U, 0U, 0U
 	};
 	static const size_t fragment_sizes[TEST_FRAGMENTS] = {
-		160U, 16U, 16U, 48U, 48U, 80U, 80U, 16U, 16U, 32U, 35U
+		160U, 16U, 16U, 48U, 48U, 92U, 92U, 16U, 16U, 32U, 35U
 	};
 	size_t fail_call;
 

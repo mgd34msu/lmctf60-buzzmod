@@ -51,6 +51,9 @@ static void TestExactTouchAndZeroFlight(void)
 	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
 		witness.push_velocity));
 	CHECK(state.phase == SG_PUSH_FLIGHT);
+	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
+		witness.push_velocity));
+	CHECK(state.phase == SG_PUSH_FLIGHT);
 	observation.grounded = false;
 	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
 	CHECK(SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
@@ -79,6 +82,14 @@ static void TestTouchIdentityAndRawBitsFailClosed(void)
 	actual[0] = -0.0f;
 	CHECK(!SG_PushLiveTouched(&state, witness.entry_key, actual));
 	CHECK(state.failure == SG_PUSH_FAILURE_IMPULSE);
+
+	Fixture(&witness, &observation);
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
+		witness.push_velocity));
+	CHECK(!SG_PushLiveTouched(&state, witness.entry_key + 1U,
+		witness.push_velocity));
+	CHECK(state.failure == SG_PUSH_FAILURE_TOUCH);
 }
 
 static void TestBadWitnessAndTimeout(void)
@@ -101,11 +112,54 @@ static void TestBadWitnessAndTimeout(void)
 	CHECK(state.failure == SG_PUSH_FAILURE_TIMEOUT);
 }
 
+static void TestLandingHealthRequirement(void)
+{
+	int minimum_health = -1;
+
+	CHECK(SG_PushMinimumHealth(-360.0f, -303.0f, 846.765747f, 800.0f,
+		true, &minimum_health));
+	CHECK(minimum_health == 38);
+	CHECK(SG_PushMinimumHealth(0.0f, 0.0f, 0.0f, 800.0f, true,
+		&minimum_health));
+	CHECK(minimum_health == 16);
+	CHECK(SG_PushMinimumHealth(115.5f, 0.0f, 0.0f, 800.0f, true,
+		&minimum_health));
+	CHECK(minimum_health == 16);
+	CHECK(SG_PushMinimumHealth(116.5f, 0.0f, 0.0f, 800.0f, true,
+		&minimum_health));
+	CHECK(minimum_health == 17);
+	CHECK(SG_PushMinimumHealth(272.0f, 0.0f, 0.0f, 800.0f, true,
+		&minimum_health));
+	CHECK(minimum_health == 28);
+	CHECK(SG_PushMinimumHealth(-360.0f, -303.0f, 846.765747f, 800.0f,
+		false, &minimum_health));
+	CHECK(minimum_health == 1);
+	CHECK(!SG_PushMinimumHealth(NAN, -303.0f, 846.765747f, 800.0f,
+		true, &minimum_health));
+}
+
+static void TestArrivalEnvelope(void)
+{
+	short destination[3] = { 0, 0, 0 };
+	short origin[3] = { 383, 0, 0 };
+
+	CHECK(SG_PushArrivalEnvelope(origin, destination));
+	origin[0] = 384;
+	CHECK(!SG_PushArrivalEnvelope(origin, destination));
+	origin[0] = 0;
+	origin[2] = SG_PUSH_ARRIVAL_Z_Q8;
+	CHECK(SG_PushArrivalEnvelope(origin, destination));
+	origin[2]++;
+	CHECK(!SG_PushArrivalEnvelope(origin, destination));
+}
+
 int main(void)
 {
 	TestExactTouchAndZeroFlight();
 	TestTouchIdentityAndRawBitsFailClosed();
 	TestBadWitnessAndTimeout();
+	TestLandingHealthRequirement();
+	TestArrivalEnvelope();
 	if (failures)
 	{
 		fprintf(stderr, "sg_push_live_test: %d failure(s)\n", failures);

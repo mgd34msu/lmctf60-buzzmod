@@ -17,15 +17,14 @@ _Static_assert(FLT_RADIX == 2 && FLT_MANT_DIG == 24 && FLT_MAX_EXP == 128,
 _Static_assert(SG_RUNE_CODEC_HEADER_BYTES == 160U, "header size drift");
 _Static_assert(SG_RUNE_CODEC_SEED_BYTES == 16U, "seed size drift");
 _Static_assert(SG_RUNE_CODEC_LINK_BYTES == 48U, "link size drift");
-_Static_assert(SG_RUNE_CODEC_ACTIVATION_NODE_BYTES == 80U,
+_Static_assert(SG_RUNE_CODEC_ACTIVATION_NODE_BYTES == 92U,
 	"activation-node size drift");
 _Static_assert(SG_RUNE_CODEC_ACTIVATION_EDGE_BYTES == 16U,
 	"activation-edge size drift");
 _Static_assert(SG_RUNE_CODEC_ACTIVATION_PLAN_BYTES == 32U,
 	"activation-plan size drift");
 _Static_assert(RL_DOOR_HOOK == 11, "action graph generation drift");
-_Static_assert(RL_BUTTON_DOOR == 12,
-	"button-door action drift");
+_Static_assert(RL_PUSH == 13, "push action drift");
 
 #define Codec_PAYLOAD_CRC_OFFSET 20U
 #define Codec_RESERVED_ZERO_OFFSET 4U
@@ -546,7 +545,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecFileSize(uint32_t num_seeds,
 	    num_plans > num_links ||
 	    (num_nodes == 0U && num_edges != 0U) ||
 	    (num_nodes == 0U && num_plans != 0U) ||
-	    (num_plans != 0U && (num_nodes < 2U || num_edges < num_plans)))
+	    (num_plans != 0U && num_nodes == 0U))
 		return Codec_Diagnostic(RLW_BAD_COUNTS);
 	if (!Codec_AddSize(&total, num_seeds, SG_RUNE_CODEC_SEED_BYTES) ||
 	    !Codec_AddSize(&total, num_links, SG_RUNE_CODEC_LINK_BYTES) ||
@@ -980,8 +979,16 @@ static sg_rune_codec_diagnostic_t Codec_ValidateNodeFields(
 	    node->decel_q8 > SG_RUNE_CODEC_MAX_Q8)
 		return RLCODEC_BAD_ACTIVATION_NODE;
 	for (i = 0; i < 3; i++)
-		if (node->absmin_q8[i] > node->absmax_q8[i])
+		if (node->absmin_q8[i] > node->absmax_q8[i] ||
+		    !isfinite(node->push_velocity[i]) ||
+		    (node->kind != SG_RUNE_CODEC_NODE_PUSH &&
+		     memcmp(&node->push_velocity[i], "\0\0\0\0", 4U) != 0))
 			return RLCODEC_BAD_ACTIVATION_NODE;
+	if (node->kind == SG_RUNE_CODEC_NODE_PUSH &&
+	    node->push_velocity[0] == 0.0f &&
+	    node->push_velocity[1] == 0.0f &&
+	    node->push_velocity[2] == 0.0f)
+		return RLCODEC_BAD_ACTIVATION_NODE;
 	if ((node->flags & SG_RUNE_CODEC_NODEF_SYNTHETIC) != 0U &&
 	    node->owner_key == SG_RUNE_CODEC_NO_KEY)
 		return RLCODEC_BAD_ACTIVATION_NODE;
@@ -1050,6 +1057,9 @@ sg_rune_codec_diagnostic_t SG_RuneCodecEncodeActivationNode(
 		Codec_PutI16(raw + 70 + (size_t)i * 2U, node->absmax_q8[i]);
 	}
 	Codec_PutU32(raw + 76, node->path_target_offset);
+	for (i = 0; i < 3; i++)
+		Codec_PutFloat(raw + 80 + (size_t)i * 4U,
+			node->push_velocity[i]);
 	memcpy(encoded, raw, sizeof(raw));
 	return RLCODEC_OK;
 }
@@ -1092,6 +1102,8 @@ sg_rune_codec_diagnostic_t SG_RuneCodecDecodeActivationNode(
 		node.absmax_q8[i] = Codec_GetI16(encoded + 70 + (size_t)i * 2U);
 	}
 	node.path_target_offset = Codec_GetU32(encoded + 76);
+	for (i = 0; i < 3; i++)
+		node.push_velocity[i] = Codec_GetFloat(encoded + 80 + (size_t)i * 4U);
 	diagnostic = Codec_ValidateNodeFields(&node);
 	if (diagnostic != RLCODEC_OK)
 		return diagnostic;
@@ -1164,9 +1176,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidatePlanFields(
 	expected_flags = SG_MechanismControllerPlanFlags(plan->controller_kind);
 	if (expected_flags == 0U)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
-	if (!plan || !Codec_KeyValueValid(plan->entry_key) ||
-	    !Codec_KeyValueValid(plan->mover_key) ||
-	    plan->entry_key == plan->mover_key || plan->num_edges == 0U ||
+	if (!Codec_KeyValueValid(plan->entry_key) ||
 	    plan->num_edges > SG_RUNE_CODEC_MAX_PLAN_EDGES ||
 	    (plan->flags & ~SG_RUNE_CODEC_PLAN_FLAG_MASK) != 0U ||
 	    plan->flags != expected_flags ||
@@ -1174,6 +1184,16 @@ static sg_rune_codec_diagnostic_t Codec_ValidatePlanFields(
 	    plan->expected_members > SG_RUNE_CODEC_MAX_TEAM_MEMBERS ||
 	    plan->cooldown_ms > (uint32_t)SG_RUNE_CODEC_MAX_TIME_MS ||
 	    plan->closure_crc32 == 0U)
+		return RLCODEC_BAD_ACTIVATION_PLAN;
+	if (plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_PUSH)
+	{
+		if (plan->mover_key != SG_RUNE_CODEC_NO_KEY ||
+		    plan->num_edges != 0U || plan->expected_members != 1U ||
+		    plan->cooldown_ms != 0U)
+			return RLCODEC_BAD_ACTIVATION_PLAN;
+	}
+	else if (!Codec_KeyValueValid(plan->mover_key) ||
+	         plan->entry_key == plan->mover_key || plan->num_edges == 0U)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	return RLCODEC_OK;
 }
@@ -1258,6 +1278,33 @@ sg_rune_codec_diagnostic_t SG_RuneCodecPlanClosureCRC32(
 		if (!SG_CRC32Update(&state, encoded, sizeof(encoded)))
 			return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
 	}
+	*crc_out = SG_CRC32Final(state);
+	return RLCODEC_OK;
+}
+
+sg_rune_codec_diagnostic_t SG_RuneCodecPushClosureCRC32(uint32_t entry_key,
+	const float push_velocity[3], uint32_t *crc_out)
+{
+	static const unsigned char domain[4] = { 'P', 'U', 'S', 'H' };
+	unsigned char encoded[20];
+	uint32_t state;
+	int axis;
+
+	if (!crc_out || !push_velocity || !Codec_KeyValueValid(entry_key))
+		return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
+	*crc_out = 0U;
+	memcpy(encoded, domain, sizeof(domain));
+	Codec_PutU32(encoded + 4, entry_key);
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (!isfinite(push_velocity[axis]))
+			return RLCODEC_BAD_ACTIVATION_NODE;
+		Codec_PutFloat(encoded + 8 + (size_t)axis * 4U,
+			push_velocity[axis]);
+	}
+	state = SG_CRC32Init();
+	if (!SG_CRC32Update(&state, encoded, sizeof(encoded)))
+		return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
 	*crc_out = SG_CRC32Final(state);
 	return RLCODEC_OK;
 }
@@ -1691,6 +1738,31 @@ static int Codec_NodeExecutable(const sg_rune_codec_activation_node_t *node)
 	       !Codec_NodeHasUnknownCallback(node);
 }
 
+static int Codec_PushNodeSemanticValid(
+	const sg_rune_codec_activation_node_t *node,
+	const unsigned char *strings)
+{
+	return Codec_NodeExecutable(node) && strings &&
+	       node->kind == SG_RUNE_CODEC_NODE_PUSH &&
+	       node->flags == (SG_RUNE_CODEC_NODEF_REPEATABLE |
+	           SG_RUNE_CODEC_NODEF_TOUCHABLE) &&
+	       Codec_StringEqualLiteral(strings + node->classname_offset,
+	           "trigger_push") &&
+	       node->target_offset == 0U && node->targetname_offset == 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_RUNE_CODEC_NO_KEY &&
+	       node->team_master_key == SG_RUNE_CODEC_NO_KEY &&
+	       node->spawnflags == 0U &&
+	       node->touch_callback ==
+	           SG_RUNE_CODEC_CALLBACK_TRIGGER_PUSH_TOUCH &&
+	       node->use_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       node->think_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       node->blocked_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 680U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
 static uint32_t Codec_InventoryFanoutCount(
 	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
 	uint32_t from_key, uint16_t kind)
@@ -1872,14 +1944,26 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 	if (diagnostic != RLCODEC_OK || plan->first_edge > num_edges ||
 	    plan->num_edges > num_edges - plan->first_edge)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
+	entry_index = Codec_FindNode(nodes, num_nodes, plan->entry_key);
+	if (entry_index == UINT32_MAX ||
+	    !Codec_NodeExecutable(&nodes[entry_index]))
+		return RLCODEC_BAD_ACTIVATION_PLAN;
+	if (plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_PUSH)
+	{
+		diagnostic = SG_RuneCodecPushClosureCRC32(plan->entry_key,
+			nodes[entry_index].push_velocity, &closure_crc);
+		if (diagnostic != RLCODEC_OK ||
+		    closure_crc != plan->closure_crc32 ||
+		    !Codec_PushNodeSemanticValid(&nodes[entry_index], strings))
+			return RLCODEC_BAD_ACTIVATION_PLAN;
+		return RLCODEC_OK;
+	}
 	diagnostic = SG_RuneCodecPlanClosureCRC32(edges, plan->first_edge,
 		plan->num_edges, num_edges, &closure_crc);
 	if (diagnostic != RLCODEC_OK || closure_crc != plan->closure_crc32)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
-	entry_index = Codec_FindNode(nodes, num_nodes, plan->entry_key);
 	mover_index = Codec_FindNode(nodes, num_nodes, plan->mover_key);
-	if (entry_index == UINT32_MAX || mover_index == UINT32_MAX ||
-	    !Codec_NodeExecutable(&nodes[entry_index]) ||
+	if (mover_index == UINT32_MAX ||
 	    !Codec_NodeExecutable(&nodes[mover_index]))
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 
@@ -2550,9 +2634,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
 	if (num_plans > num_links)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	inventory_edges = num_plans != 0U ? plans[0].first_edge : num_edges;
-	if (inventory_edges > num_edges ||
-	    (num_plans != 0U && (num_nodes < 2U ||
-	     num_edges - inventory_edges < num_plans)))
+	if (inventory_edges > num_edges)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	if (!Codec_WorkspaceMechanismReady(workspace, num_nodes, num_edges,
 	    num_plans))

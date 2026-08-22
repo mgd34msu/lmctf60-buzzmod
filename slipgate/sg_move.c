@@ -39,6 +39,7 @@
 #include "slipgate/sg_team_collision.h"
 #include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_rocketjump_game.h"
+#include "slipgate/sg_push_game.h"
 #include "slipgate/sg_sound_policy.h"
 #include "slipgate/sg_price.h"     /* tc->role */
 #include "slipgate/sg_hooks.h"
@@ -3265,9 +3266,40 @@ qboolean SG_BallisticSurvivable(edict_t *e, const rune_link_t *l)
 	int damage;
 
 	if (!e || !l || !r ||
-	    (l->action != RL_JUMP && l->action != RL_DROP) ||
+	    (l->action != RL_JUMP && l->action != RL_DROP &&
+	     l->action != RL_PUSH) ||
 	    !SG_RunePhysicsCompatible(r))
 		return false;
+	if (l->action == RL_PUSH)
+	{
+		sg_rune_mechanism_binding_t binding;
+		float launch_source_z;
+		uint32_t link_index;
+		int minimum_health;
+
+		if (!r->links || !r->seeds || l->from < 0 || l->to < 0 ||
+		    l->from >= r->hdr.num_seeds || l->to >= r->hdr.num_seeds ||
+		    !isfinite(e->mins[2]) || e->mins[2] > 0.0f)
+			return false;
+		if (!SG_RuneLinkIndex(r, l, &link_index) ||
+		    !SG_RuneMechanismBindingCapture(r, link_index,
+		        &binding) || !binding.entry_node ||
+		    binding.entry_node->kind != SG_MECH_NODE_PUSH)
+			return false;
+		if (deathmatch && deathmatch->value && dmflags &&
+		    ((int)dmflags->value & DF_NO_FALLING))
+			return true;
+		launch_source_z = binding.entry_node->absmax_q8[2] * 0.125f -
+			e->mins[2];
+		if (launch_source_z < r->seeds[l->from].origin[2])
+			launch_source_z = r->seeds[l->from].origin[2];
+		if (!SG_PushMinimumHealth(launch_source_z,
+		        r->seeds[l->to].origin[2],
+		        binding.entry_node->push_velocity[2],
+		        r->artifact.identity.gravity, true, &minimum_health))
+			return false;
+		return e->health >= minimum_health;
+	}
 	if (r->seeds[l->to].flags & RSF_WATER)
 	{
 		int contents = sg_host.pointcontents(r->seeds[l->to].origin);
@@ -7389,6 +7421,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			return;
 		}
 	}
+	if (SG_PushGameEmit(bot, bestlink))
+		return;
 	/* RL_ROCKETJUMP owns the complete four-command frame.  fire_rocket may
 	 * synchronously move its reducer from ARMED to FLIGHT during the first
 	 * ClientThink, so generic writers cannot run before the remaining steps. */

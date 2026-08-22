@@ -1008,6 +1008,14 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 		node->use_callback = Catalog_UseCallback(entity);
 		node->think_callback = Catalog_ThinkCallback(entity);
 		node->blocked_callback = Catalog_BlockedCallback(entity);
+		if (node->kind == SG_MECH_NODE_PUSH)
+		{
+			float scale = entity->speed * 10.0f;
+			int axis;
+
+			for (axis = 0; axis < 3; axis++)
+				node->push_velocity[axis] = entity->movedir[axis] * scale;
+		}
 		if (catalog.sources[index].synthetic_kind != SG_MECH_SYNTHETIC_NONE)
 			node->flags |= SG_MECH_NODEF_SYNTHETIC;
 		if (entity->touch) node->flags |= SG_MECH_NODEF_TOUCHABLE;
@@ -1118,6 +1126,9 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 		    node->wait_ms == INT32_MAX || node->wait_ms == INT32_MIN ||
 		    node->speed_q8 == UINT32_MAX || node->accel_q8 == UINT32_MAX ||
 		    node->decel_q8 == UINT32_MAX ||
+		    !isfinite(node->push_velocity[0]) ||
+		    !isfinite(node->push_velocity[1]) ||
+		    !isfinite(node->push_velocity[2]) ||
 		    !Catalog_BoundsQ8(entity, node->absmin_q8, node->absmax_q8))
 		{
 			catalog.status = SG_MECH_CATALOG_FAILED;
@@ -1609,6 +1620,19 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	        Catalog_LivePointerKey(entity->enemy)) ||
 	    !Catalog_EdgeGroupMatchesTeam(key, entity))
 		return 0;
+	if (node->kind == SG_MECH_NODE_PUSH)
+	{
+		float current[3];
+		float scale = entity->speed * 10.0f;
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+			current[axis] = entity->movedir[axis] * scale;
+		if (!isfinite(current[0]) || !isfinite(current[1]) ||
+		    !isfinite(current[2]) ||
+		    memcmp(current, node->push_velocity, sizeof(current)) != 0)
+			return 0;
+	}
 	return 1;
 }
 
@@ -1623,7 +1647,7 @@ int SG_MechCatalogEntityExecutionMatches(uint32_t key,
 	const rune_mechanism_node_t *node, uint16_t controller_kind)
 {
 	if (controller_kind == SG_MECHANISM_CONTROLLER_NONE ||
-	    controller_kind > SG_MECHANISM_CONTROLLER_TELEPORT || !node ||
+	    controller_kind > SG_MECHANISM_CONTROLLER_PUSH || !node ||
 	    (node->flags & SG_MECH_NODEF_INVENTORY_ONLY) != 0U)
 		return 0;
 	return Catalog_EntityTopologyMatches(key, node, 1, controller_kind);

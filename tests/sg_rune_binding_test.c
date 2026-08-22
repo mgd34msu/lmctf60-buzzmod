@@ -2,6 +2,7 @@
 #include "q_shared.h"
 #include "slipgate/sg_crc32.h"
 #include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_codec.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 
 #include <stdio.h>
@@ -138,8 +139,10 @@ static void FixtureFinishPlanEdges(fixture_t *fixture, uint32_t entry_key,
 {
 	rune_t *rune = &fixture->rune;
 	uint32_t inventory = fixture->num_inventory_edges;
+	uint32_t node_index;
 
-	CHECK(inventory != 0U);
+	CHECK(inventory != 0U ||
+		fixture->plan.controller_kind == SG_MECHANISM_CONTROLLER_PUSH);
 	CHECK(plan_edge_count <= inventory);
 	memcpy(fixture->edges + inventory, fixture->edges,
 		plan_edge_count * sizeof(fixture->edges[0]));
@@ -147,7 +150,19 @@ static void FixtureFinishPlanEdges(fixture_t *fixture, uint32_t entry_key,
 	fixture->plan.mover_key = mover_key;
 	fixture->plan.first_edge = inventory;
 	fixture->plan.num_edges = plan_edge_count;
-	fixture->plan.closure_crc32 = ClosureCRC(fixture);
+	if (fixture->plan.controller_kind == SG_MECHANISM_CONTROLLER_PUSH)
+	{
+		for (node_index = 0U; node_index < fixture->num_nodes; node_index++)
+			if (fixture->nodes[node_index].key == entry_key)
+				break;
+		CHECK(node_index < fixture->num_nodes);
+		CHECK(node_index < fixture->num_nodes &&
+			SG_RuneCodecPushClosureCRC32(entry_key,
+				fixture->nodes[node_index].push_velocity,
+				&fixture->plan.closure_crc32) == RLCODEC_OK);
+	}
+	else
+		fixture->plan.closure_crc32 = ClosureCRC(fixture);
 
 	rune->artifact.magic = RUNE_ARTIFACT_MAGIC;
 	rune->artifact.header_crc32 = 1U;
@@ -461,6 +476,41 @@ static void TestTeleport(void)
 	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
 }
 
+static void TestPush(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *entry;
+	rune_link_t foreign_link;
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	uint32_t failure_index = UINT32_MAX;
+	uint32_t link_index = UINT32_MAX;
+	size_t count = 99U;
+
+	FixtureBegin(&fixture, RL_PUSH, SG_MECHANISM_CONTROLLER_PUSH, 0U, 1U);
+	entry = Node(&fixture, 10U, SG_MECH_NODE_PUSH,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE);
+	entry->touch_callback = SG_MECH_CALLBACK_TRIGGER_PUSH_TOUCH;
+	entry->speed_q8 = 680U;
+	entry->push_velocity[0] = -59.2648315f;
+	entry->push_velocity[2] = 846.765747f;
+	FixtureFinishPlanEdges(&fixture, 10U, SG_MECH_NO_KEY, 0U);
+	foreign_link = fixture.link;
+	CHECK(SG_RuneLinkIndex(&fixture.rune, &fixture.link, &link_index));
+	CHECK(link_index == 0U);
+	CHECK(!SG_RuneLinkIndex(&fixture.rune, &foreign_link, &link_index));
+	CHECK(link_index == UINT32_MAX);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.entry_entity == &fixture.entities[0]);
+	CHECK(binding.mover_node == NULL && binding.mover_entity == NULL);
+	CHECK(SG_RuneMechanismBindingMoverKeys(&binding, keys, &count));
+	CHECK(count == 0U);
+	CHECK(SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(failure_index == UINT32_MAX);
+	entry->push_velocity[2] = 846.0f;
+	CHECK(!SG_RuneMechanismBindingCurrent(&binding));
+}
+
 static void TestRetiredInventoryIsNeverExecutable(void)
 {
 	fixture_t fixture;
@@ -721,6 +771,7 @@ int main(void)
 	TestTriggeredVerticalDoorLift();
 	TestDescendingCarrierStagesUseAnchorIdentity();
 	TestTeleport();
+	TestPush();
 	TestRetiredInventoryIsNeverExecutable();
 	TestAutoDoor();
 	TestDirectDoor();

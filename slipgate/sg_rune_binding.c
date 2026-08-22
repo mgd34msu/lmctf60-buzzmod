@@ -3,6 +3,7 @@
 #include "sg_rune_binding.h"
 
 #include "sg_crc32.h"
+#include "sg_rune_codec.h"
 #include "sg_rune_mechanism_catalog.h"
 
 #include <math.h>
@@ -27,12 +28,22 @@ static int Binding_ClosureCRC(const rune_t *rune,
 	unsigned char encoded[16];
 	uint32_t state;
 	uint32_t ordinal;
+	const rune_mechanism_node_t *entry;
 
-	if (!rune || !plan || !crc_out || plan->num_edges == 0U ||
+	if (!rune || !plan || !crc_out ||
 	    plan->first_edge < rune->artifact.num_inventory_edges ||
 	    plan->first_edge > rune->artifact.num_mechanism_edges ||
 	    plan->num_edges >
 	        rune->artifact.num_mechanism_edges - plan->first_edge)
+		return 0;
+	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_PUSH)
+	{
+		entry = SG_RuneMechanismNodeByKey(rune, plan->entry_key);
+		return plan->num_edges == 0U && entry &&
+		       SG_RuneCodecPushClosureCRC32(entry->key,
+		           entry->push_velocity, crc_out) == RLCODEC_OK;
+	}
+	if (plan->num_edges == 0U)
 		return 0;
 	state = SG_CRC32Init();
 	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
@@ -209,7 +220,7 @@ static int Binding_ControllerShape(const rune_t *rune,
 {
 	uint16_t required_flags;
 
-	if (!rune || !link || !plan || !entry || !mover ||
+	if (!rune || !link || !plan || !entry ||
 	    !SG_ActionMechanismPlanAllowed(link->action, plan->controller_kind) ||
 	    !(required_flags = SG_MechanismControllerPlanFlags(
 	        plan->controller_kind)) || plan->flags != required_flags ||
@@ -218,6 +229,14 @@ static int Binding_ControllerShape(const rune_t *rune,
 		return 0;
 	switch (plan->controller_kind)
 	{
+	case SG_MECHANISM_CONTROLLER_PUSH:
+		return link->action == RL_PUSH && !mover &&
+		       plan->mover_key == SG_MECH_NO_KEY && plan->num_edges == 0U &&
+		       entry->kind == SG_MECH_NODE_PUSH &&
+		       entry->flags == (SG_MECH_NODEF_REPEATABLE |
+		           SG_MECH_NODEF_TOUCHABLE) &&
+		       entry->touch_callback == SG_MECH_CALLBACK_TRIGGER_PUSH_TOUCH &&
+		       plan->expected_members == 1U && plan->cooldown_ms == 0U;
 	case SG_MECHANISM_CONTROLLER_PLATFORM:
 	{
 		uint32_t cooldown = entry->wait_ms > RUNE_MAX_COST_MS
@@ -349,17 +368,21 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		plan->entry_key);
 	candidate.mover_node = SG_RuneMechanismNodeByKey(rune,
 		plan->mover_key);
-	if (!candidate.entry_node || !candidate.mover_node ||
+	if (!candidate.entry_node ||
+	    (plan->controller_kind != SG_MECHANISM_CONTROLLER_PUSH &&
+	     !candidate.mover_node) ||
 	    !Binding_ControllerShape(rune, link, plan, candidate.entry_node,
 	        candidate.mover_node) ||
 	    !Binding_NodeTopologyMatches(candidate.entry_node,
 	        plan->controller_kind, owned_execution) ||
-	    !Binding_NodeTopologyMatches(candidate.mover_node,
-	        plan->controller_kind, owned_execution) ||
+	    (candidate.mover_node &&
+	     !Binding_NodeTopologyMatches(candidate.mover_node,
+	         plan->controller_kind, owned_execution)) ||
 	    !(candidate.entry_entity = SG_MechCatalogResolveEntity(
 	        candidate.entry_node->key, candidate.entry_node)) ||
-	    !(candidate.mover_entity = SG_MechCatalogResolveEntity(
-	        candidate.mover_node->key, candidate.mover_node)))
+	    (candidate.mover_node &&
+	     !(candidate.mover_entity = SG_MechCatalogResolveEntity(
+	         candidate.mover_node->key, candidate.mover_node))))
 		return 0;
 	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
 	{
@@ -630,6 +653,8 @@ static int Binding_MoverKeys(const sg_rune_mechanism_binding_t *binding,
 	    !Binding_Current(binding, owned_execution))
 		return 0;
 	memset(keys, 0, sizeof(keys));
+	if (binding->plan->controller_kind == SG_MECHANISM_CONTROLLER_PUSH)
+		return 1;
 	if (!Binding_AddMover(binding, binding->mover_node, keys, &count))
 		return 0;
 	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)

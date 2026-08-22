@@ -122,6 +122,12 @@ static sg_compound_guard_result_t guard_validate_result;
 static sg_compound_guard_result_t guard_release_result;
 static int guard_release_calls;
 
+void SG_PushGameTouched(edict_t *trigger, edict_t *entity)
+{
+	(void)trigger;
+	(void)entity;
+}
+
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
 		fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, \

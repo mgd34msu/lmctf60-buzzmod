@@ -40,6 +40,24 @@ qboolean SG_RunePublishedShapeValid(const rune_t *rune)
 	return true;
 }
 
+qboolean SG_RuneLinkIndex(const rune_t *rune, const rune_link_t *link,
+	uint32_t *link_index_out)
+{
+	uint32_t link_index;
+
+	if (link_index_out)
+		*link_index_out = UINT32_MAX;
+	if (!link_index_out || !link || !SG_RunePublishedShapeValid(rune))
+		return false;
+	for (link_index = 0U; link_index < rune->artifact.num_links; link_index++)
+		if (&rune->links[link_index] == link)
+		{
+			*link_index_out = link_index;
+			return true;
+		}
+	return false;
+}
+
 int SG_RuneArtifactsEqual(const rune_artifact_t *left,
 	const rune_artifact_t *right)
 {

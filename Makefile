@@ -236,6 +236,7 @@ RUNE_MECHANISM_EXECUTION_TEST_OBJS := \
 	.sg_rune_mechanism_execution_test.make.o \
 	.sg_rune_mechanism_catalog_under_test.make.o \
 	.sg_rune_binding_under_test.make.o .sg_rune_runtime_under_test.make.o \
+	.sg_rune_codec_under_test.make.o \
 	.sg_rune_action_under_test.make.o .sg_rune_crc_under_test.make.o \
 	.sg_door_approach_under_test.make.o .sg_mover_lease_under_test.make.o \
 	.sg_delayed_relay_dispatch_move_under_test.make.o \
@@ -272,6 +273,7 @@ RUNE_BINDING_TEST_BIN := sg_rune_binding_test.make
 RUNE_BINDING_TEST_OBJS := .sg_rune_binding_test.make.o \
 	.sg_rune_binding_under_test.make.o \
 	.sg_rune_runtime_under_test.make.o \
+	.sg_rune_codec_under_test.make.o \
 	.sg_rune_action_under_test.make.o \
 	.sg_rune_crc_under_test.make.o
 RUNE_BINDING_TEST_DEPS := $(RUNE_BINDING_TEST_OBJS:.o=.d)
@@ -659,6 +661,7 @@ ROCKETJUMP_GAME_TEST_OBJS := .sg_rocketjump_game_test.make.o \
 ROCKETJUMP_GAME_TEST_DEPS := $(ROCKETJUMP_GAME_TEST_OBJS:.o=.d)
 ROCKETJUMP_TEST_ALL_ARTIFACTS := \
 	sg_rocketjump_live_test.gnu sg_rocketjump_live_test.make \
+	sg_push_live_test.gnu sg_push_live_test.make \
 	sg_rocketjump_cadence_test.gnu sg_rocketjump_cadence_test.make \
 	sg_rocketjump_game_test.gnu sg_rocketjump_game_test.make \
 	$(ROCKETJUMP_LIVE_TEST_OBJS) $(ROCKETJUMP_LIVE_TEST_DEPS) \
@@ -1116,6 +1119,8 @@ OBJS := \
 	slipgate/sg_rocketjump_live.o \
 	slipgate/sg_rocketjump_cadence.o \
 	slipgate/sg_rocketjump_game.o \
+	slipgate/sg_push_live.o \
+	slipgate/sg_push_game.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \

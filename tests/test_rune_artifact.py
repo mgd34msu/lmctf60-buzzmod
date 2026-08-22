@@ -190,6 +190,9 @@ def _build_rune() -> bytes:
                 64,
                 64,
                 0,
+                0.0,
+                0.0,
+                0.0,
             ),
             runeio.RUNE_ACTIVATION_NODE_STRUCT.pack(
                 2,
@@ -218,6 +221,9 @@ def _build_rune() -> bytes:
                 128,
                 512,
                 0,
+                0.0,
+                0.0,
+                0.0,
             ),
             runeio.RUNE_ACTIVATION_NODE_STRUCT.pack(
                 3,
@@ -246,6 +252,9 @@ def _build_rune() -> bytes:
                 8,
                 8,
                 0,
+                0.0,
+                0.0,
+                0.0,
             ),
         )
     )
@@ -340,6 +349,9 @@ def _build_edge_catalog() -> bytes:
             0,
             0,
             3 if key == 1 else 0,
+            0.0,
+            0.0,
+            0.0,
         )
 
     nodes = node(1, 1, -(1 << 31), (1 << 31) - 1) + node(2, 3, 0, 0)
@@ -475,6 +487,9 @@ def _build_direct_door(
             64,
             64,
             0,
+            0.0,
+            0.0,
+            0.0,
         )
 
     nodes = b"".join(
@@ -697,6 +712,9 @@ def _build_delayed_terminal_door(
             64,
             64,
             0,
+            0.0,
+            0.0,
+            0.0,
         )
 
     nodes = b"".join((
@@ -874,6 +892,9 @@ def _build_button_team(
             64,
             64,
             0,
+            0.0,
+            0.0,
+            0.0,
         )
 
     nodes = b"".join((
@@ -1115,6 +1136,9 @@ def _build_teleports(
             0,
             0,
             0,
+            0.0,
+            0.0,
+            0.0,
         )
 
     node_rows: list[bytes] = []

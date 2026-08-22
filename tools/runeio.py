@@ -46,7 +46,7 @@ RUNE_POLICY_LINK_STRUCT = struct.Struct("<IIBBBBBBh3f3fHBB")
 RUNE_HEADER_EXTENSION_STRUCT = struct.Struct("<HHHHIIIIII")
 RUNE_LINK_STRUCT = struct.Struct("<IIBBBBBBh3f3fHBBI")
 RUNE_ACTIVATION_NODE_STRUCT = struct.Struct(
-    "<IHHIIIIIIIHHHHiiIII3h3hI"
+    "<IHHIIIIIIIHHHHiiIII3h3hI3f"
 )
 RUNE_ACTIVATION_EDGE_STRUCT = struct.Struct("<IIHHI")
 RUNE_ACTIVATION_PLAN_STRUCT = struct.Struct("<IIIIHHHHII")
@@ -54,7 +54,7 @@ RUNE_ACTIVATION_PLAN_STRUCT = struct.Struct("<IIIIHHHHII")
 RUNE_HEADER_BYTES = 160
 RUNE_SEED_BYTES = 16
 RUNE_LINK_BYTES = 48
-RUNE_ACTIVATION_NODE_BYTES = 80
+RUNE_ACTIVATION_NODE_BYTES = 92
 RUNE_ACTIVATION_EDGE_BYTES = 16
 RUNE_ACTIVATION_PLAN_BYTES = 32
 RUNE_HEADER_CRC_OFFSET = HEADER_CRC_OFFSET
@@ -81,6 +81,7 @@ RUNE_CONTROLLER_BUTTON_DOOR = contract.SG_MECHANISM_CONTROLLER_BUTTON_DOOR
 RUNE_CONTROLLER_RELAY_DOOR = contract.SG_MECHANISM_CONTROLLER_RELAY_DOOR
 RUNE_CONTROLLER_PLATFORM = contract.SG_MECHANISM_CONTROLLER_PLATFORM
 RUNE_CONTROLLER_TELEPORT = contract.SG_MECHANISM_CONTROLLER_TELEPORT
+RUNE_CONTROLLER_PUSH = contract.SG_MECHANISM_CONTROLLER_PUSH
 
 
 def _carrier_door_spawnflags(spawnflags: int) -> bool:
@@ -97,6 +98,7 @@ RUNE_CALLBACK_USE_DOOR = 10
 RUNE_CALLBACK_THINK_CALC_MOVE_SPEED = 11
 RUNE_CALLBACK_THINK_SPAWN_DOOR_TRIGGER = 12
 RUNE_CALLBACK_TOUCH_PLAT_CENTER = 14
+RUNE_CALLBACK_TRIGGER_PUSH_TOUCH = 25
 RUNE_CALLBACK_TELEPORTER_TOUCH = 26
 RUNE_CALLBACK_USE_TARGET_SPEAKER = 32
 RUNE_CALLBACK_USE_AREAPORTAL = 33
@@ -422,6 +424,7 @@ class RuneActivationNode:
     absmin_q8: tuple[int, int, int]
     absmax_q8: tuple[int, int, int]
     path_target_offset: int
+    push_velocity: tuple[float, float, float]
 
     @property
     def kind_name(self) -> str:
@@ -1268,16 +1271,10 @@ def _rune_file_size(header: RuneHeader) -> int:
             contract.RLW_BAD_COUNTS,
             "node-free artifact contains mechanism edges or plans",
         )
-    plan_edges = (
-        header.num_activation_edges - header.num_inventory_edges
-    )
-    if header.num_activation_plans and (
-        header.num_activation_nodes < 2 or
-        plan_edges < header.num_activation_plans
-    ):
+    if header.num_activation_plans and header.num_activation_nodes == 0:
         raise _wire_error(
             contract.RLW_BAD_COUNTS,
-            "plans require at least two nodes and one edge each",
+            "plans require at least one node",
         )
     return (
         RUNE_HEADER_BYTES +
@@ -1423,6 +1420,7 @@ def _decode_rune_node(raw: bytes, index: int) -> RuneActivationNode:
         absmin_q8=(values[19], values[20], values[21]),
         absmax_q8=(values[22], values[23], values[24]),
         path_target_offset=values[25],
+        push_velocity=(values[26], values[27], values[28]),
     )
     callbacks = (
         node.touch_callback,
@@ -1454,6 +1452,15 @@ def _decode_rune_node(raw: bytes, index: int) -> RuneActivationNode:
         any(
             minimum > maximum
             for minimum, maximum in zip(node.absmin_q8, node.absmax_q8)
+        ) or
+        not all(math.isfinite(component) for component in node.push_velocity) or
+        (
+            node.kind != RUNE_NODE_PUSH_TRIGGER and
+            raw[80:92] != b"\0" * 12
+        ) or
+        (
+            node.kind == RUNE_NODE_PUSH_TRIGGER and
+            not any(component != 0.0 for component in node.push_velocity)
         )
     ):
         raise _wire_error(RLRUNE_BAD_ACTIVATION_NODE, f"node {index}")
@@ -1521,14 +1528,23 @@ def _decode_rune_plan(raw: bytes, index: int) -> RuneActivationPlan:
         raise _wire_error(contract.RLR_NONZERO_RESERVED, str(values[5]))
     if (
         plan.entry_key in (0, RUNE_NO_KEY) or
-        plan.mover_key in (0, RUNE_NO_KEY) or
-        plan.entry_key == plan.mover_key or
-        not 0 < plan.num_edges <= RUNE_MAX_PLAN_EDGES or
+        not 0 <= plan.num_edges <= RUNE_MAX_PLAN_EDGES or
         not expected_flags or
         plan.flags != expected_flags or
         not 0 < plan.expected_members <= RUNE_MAX_TEAM_MEMBERS or
         plan.cooldown_ms > RUNE_MAX_TIME_MS or
         plan.closure_crc32 == 0
+    ):
+        raise _wire_error(RLRUNE_BAD_ACTIVATION_PLAN, f"plan {index}")
+    if plan.controller_kind == RUNE_CONTROLLER_PUSH:
+        if (
+            plan.mover_key != RUNE_NO_KEY or plan.num_edges != 0 or
+            plan.expected_members != 1 or plan.cooldown_ms != 0
+        ):
+            raise _wire_error(RLRUNE_BAD_ACTIVATION_PLAN, f"plan {index}")
+    elif (
+        plan.mover_key in (0, RUNE_NO_KEY) or
+        plan.entry_key == plan.mover_key or plan.num_edges == 0
     ):
         raise _wire_error(RLRUNE_BAD_ACTIVATION_PLAN, f"plan {index}")
     return plan
@@ -1747,6 +1763,34 @@ def _rune_button_node_valid(
     )
 
 
+def _rune_push_node_valid(
+    node: RuneActivationNode,
+    strings: bytes,
+) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_PUSH_TRIGGER and
+        node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE) and
+        _rune_string(strings, node.classname_offset) == b"trigger_push" and
+        node.target_offset == node.targetname_offset ==
+        node.killtarget_offset == node.path_target_offset == 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.spawnflags == 0 and
+        node.touch_callback == RUNE_CALLBACK_TRIGGER_PUSH_TOUCH and
+        node.use_callback == node.think_callback == node.blocked_callback == 0 and
+        node.delay_ms == node.wait_ms == 0 and
+        node.speed_q8 == 680 and node.accel_q8 == node.decel_q8 == 0 and
+        all(math.isfinite(component) for component in node.push_velocity) and
+        any(component != 0.0 for component in node.push_velocity)
+    )
+
+
+def _rune_push_closure_crc(node: RuneActivationNode) -> int:
+    return _crc32(struct.pack(
+        "<4sI3f", b"PUSH", node.key, *node.push_velocity
+    ))
+
+
 def _rune_frame_complete_button_valid(
     node: RuneActivationNode,
     strings: bytes,
@@ -1841,10 +1885,16 @@ def _rune_validate_production_plan(
             f"plan {plan_index} {detail}",
         )
 
-    if (
-        entry is None or mover is None or
-        not _rune_node_executable(entry) or not _rune_node_executable(mover)
-    ):
+    if entry is None or not _rune_node_executable(entry):
+        fail("has a non-executable entry")
+    if plan.controller_kind == RUNE_CONTROLLER_PUSH:
+        if (
+            mover is not None or plan_edges or
+            not _rune_push_node_valid(entry, strings)
+        ):
+            fail("does not satisfy the push controller law")
+        return
+    if mover is None or not _rune_node_executable(mover):
         fail("has a non-executable entry or mover")
     if len(set(plan_edges)) != len(plan_edges):
         fail("contains a duplicate executable edge")
@@ -2396,7 +2446,12 @@ def _rune_validate_mechanisms(
     for index, plan in enumerate(plans):
         owner_link = plan_owners[index]
         assert owner_link is not None
-        if plan.entry_key not in key_set or plan.mover_key not in key_set:
+        push_plan = plan.controller_kind == RUNE_CONTROLLER_PUSH
+        if (
+            plan.entry_key not in key_set or
+            (not push_plan and plan.mover_key not in key_set) or
+            (push_plan and plan.mover_key != RUNE_NO_KEY)
+        ):
             raise _wire_error(
                 RLRUNE_BAD_ACTIVATION_PLAN,
                 f"plan {index} references an absent key",
@@ -2418,7 +2473,10 @@ def _rune_validate_mechanisms(
                 RLRUNE_BAD_ACTIVATION_PLAN,
                 f"plan {index} contains a non-inventory edge",
             )
-        closure_crc = _crc32(b"".join(plan_raw))
+        closure_crc = (
+            _rune_push_closure_crc(node_by_key[plan.entry_key])
+            if push_plan else _crc32(b"".join(plan_raw))
+        )
         if plan.closure_crc32 != closure_crc:
             raise _wire_error(
                 RLRUNE_BAD_ACTIVATION_PLAN,

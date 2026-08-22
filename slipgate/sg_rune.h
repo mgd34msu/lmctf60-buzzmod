@@ -150,6 +150,7 @@ typedef struct rune_mechanism_node_s
 	int16_t absmin_q8[3];
 	int16_t absmax_q8[3];
 	uint32_t path_target_offset;
+	float push_velocity[3];
 } rune_mechanism_node_t;
 
 typedef struct rune_mechanism_edge_s
@@ -259,8 +260,10 @@ qboolean	SG_RuneAuthorityMatchesArtifact(
 						 const rune_artifact_t *artifact);
 qboolean	SG_RunePhysicsCompatible(const rune_t *rune);
 qboolean	SG_RunePublishedShapeValid(const rune_t *rune);
+qboolean	SG_RuneLinkIndex(const rune_t *rune, const rune_link_t *link,
+	uint32_t *link_index_out);
 int		SG_RuneArtifactsEqual(const rune_artifact_t *left,
-					 const rune_artifact_t *right);
+	const rune_artifact_t *right);
 const rune_artifact_t *SG_RuneArtifact(const rune_t *rune);
 const rune_mechanism_node_t *SG_RuneMechanismNodeByKey(
 						 const rune_t *rune, uint32_t key);

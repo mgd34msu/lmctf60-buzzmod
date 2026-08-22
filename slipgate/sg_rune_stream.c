@@ -154,6 +154,8 @@ static void Stream_Node(const rune_mechanism_node_t *source,
 	memcpy(destination->absmax_q8, source->absmax_q8,
 		sizeof(destination->absmax_q8));
 	destination->path_target_offset = source->path_target_offset;
+	memcpy(destination->push_velocity, source->push_velocity,
+		sizeof(destination->push_velocity));
 }
 
 static void Stream_Edge(const rune_mechanism_edge_t *source,

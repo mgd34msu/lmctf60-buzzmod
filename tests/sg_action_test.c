@@ -5,9 +5,9 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x7c224587U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x53f71300U,
 	"RUNE action contract drift");
-_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xdd8de50fU,
+_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0x727235baU,
 	"RUNE mechanism contract drift");
 
 static int failures;

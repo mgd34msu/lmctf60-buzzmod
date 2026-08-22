@@ -2,6 +2,7 @@
 #include "../q_shared.h"
 #include "sg_rune_mechanism_plan.h"
 #include "sg_crc32.h"
+#include "sg_rune_codec.h"
 
 #include <limits.h>
 #include <math.h>
@@ -99,6 +100,32 @@ static int Mechanism_NodeExecutable(const rune_mechanism_node_t *node)
 	       node->use_callback != SG_MECH_CALLBACK_UNKNOWN &&
 	       node->think_callback != SG_MECH_CALLBACK_UNKNOWN &&
 	       node->blocked_callback != SG_MECH_CALLBACK_UNKNOWN;
+}
+
+static int Mechanism_PushShape(const rune_mechanism_node_t *node)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_PUSH &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_TOUCHABLE) &&
+	       node->target_offset == 0U && node->targetname_offset == 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->spawnflags == 0U &&
+	       node->touch_callback == SG_MECH_CALLBACK_TRIGGER_PUSH_TOUCH &&
+	       node->use_callback == SG_MECH_CALLBACK_NONE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 680U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U &&
+	       isfinite(node->push_velocity[0]) &&
+	       isfinite(node->push_velocity[1]) &&
+	       isfinite(node->push_velocity[2]) &&
+	       (node->push_velocity[0] != 0.0f ||
+	        node->push_velocity[1] != 0.0f ||
+	        node->push_velocity[2] != 0.0f);
 }
 
 static int Mechanism_SafeSpeaker(const rune_mechanism_node_t *node)
@@ -870,9 +897,13 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	state->first_plan_edge = state->result.num_edges;
 	state->master_count = 0U;
 	state->relay_count = 0U;
-	if (entry_index == UINT32_MAX || mover_index == UINT32_MAX ||
+	if (entry_index == UINT32_MAX ||
 	    !Mechanism_NodeExecutable(&state->catalog->nodes[entry_index]) ||
-	    !Mechanism_NodeExecutable(&state->catalog->nodes[mover_index]))
+	    (binding->controller_kind != SG_MECHANISM_CONTROLLER_PUSH &&
+	     (mover_index == UINT32_MAX ||
+	      !Mechanism_NodeExecutable(&state->catalog->nodes[mover_index]))) ||
+	    (binding->controller_kind == SG_MECHANISM_CONTROLLER_PUSH &&
+	     binding->mover_key != SG_MECH_NO_KEY))
 		return Mechanism_Fail(state, SG_MECHANISM_PLAN_BAD_BINDING,
 			link_index, plan_index);
 
@@ -885,6 +916,12 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	case SG_MECHANISM_CONTROLLER_TELEPORT:
 		closure_ok = Mechanism_MaterializeTeleport(state, binding);
 		break;
+	case SG_MECHANISM_CONTROLLER_PUSH:
+		closure_ok = binding->destination_key == SG_MECH_NO_KEY &&
+			binding->expected_members == 1U &&
+			binding->cooldown_ms == 0U &&
+			Mechanism_PushShape(&state->catalog->nodes[entry_index]);
+		break;
 	case SG_MECHANISM_CONTROLLER_AUTO_DOOR:
 	case SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR:
 	case SG_MECHANISM_CONTROLLER_BUTTON_DOOR:
@@ -896,7 +933,9 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 		closure_ok = 0;
 		break;
 	}
-	if (!closure_ok || state->result.num_edges == state->first_plan_edge)
+	if (!closure_ok ||
+	    (binding->controller_kind != SG_MECHANISM_CONTROLLER_PUSH &&
+	     state->result.num_edges == state->first_plan_edge))
 		return Mechanism_Fail(state, SG_MECHANISM_PLAN_BAD_CLOSURE,
 			link_index, plan_index);
 
@@ -913,9 +952,14 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	plan->flags = SG_MechanismControllerPlanFlags(binding->controller_kind);
 	plan->expected_members = binding->expected_members;
 	plan->cooldown_ms = binding->cooldown_ms;
-	if (plan->flags == 0U || !Mechanism_ClosureCRC32(state->buffers->edges,
-	    plan->first_edge, plan->num_edges, state->result.num_edges,
-	    &plan->closure_crc32))
+	if (plan->flags == 0U ||
+	    (binding->controller_kind == SG_MECHANISM_CONTROLLER_PUSH
+	        ? SG_RuneCodecPushClosureCRC32(plan->entry_key,
+	              state->catalog->nodes[entry_index].push_velocity,
+	              &plan->closure_crc32) != RLCODEC_OK
+	        : !Mechanism_ClosureCRC32(state->buffers->edges,
+	              plan->first_edge, plan->num_edges, state->result.num_edges,
+	              &plan->closure_crc32)))
 		return Mechanism_Fail(state, SG_MECHANISM_PLAN_BAD_CRC,
 			link_index, plan_index);
 	return 1;
@@ -954,8 +998,9 @@ int SG_MechanismPlansMaterialize(rune_link_t *links, uint32_t num_links,
 	    buffers->edge_capacity < catalog->num_edges ||
 	    (!buffers->plans && num_bindings != 0U) ||
 	    buffers->plan_capacity < num_bindings ||
-	    (num_bindings != 0U && (!buffers->edge_marks ||
-	     buffers->edge_mark_capacity < catalog->num_edges ||
+	    (num_bindings != 0U &&
+	     ((catalog->num_edges != 0U && (!buffers->edge_marks ||
+	       buffers->edge_mark_capacity < catalog->num_edges)) ||
 	     !buffers->node_marks ||
 	     buffers->node_mark_capacity < catalog->num_nodes ||
 	     !buffers->node_queue ||
@@ -989,8 +1034,7 @@ int SG_MechanismPlansMaterialize(rune_link_t *links, uint32_t num_links,
 		required++;
 	}
 	if (required != num_bindings ||
-	    (required != 0U && (catalog->num_nodes < 2U ||
-	     catalog->num_edges == 0U)))
+	    (required != 0U && catalog->num_nodes == 0U))
 	{
 		Mechanism_Fail(&state, SG_MECHANISM_PLAN_BAD_BINDING,
 			UINT32_MAX, required);
@@ -1003,8 +1047,9 @@ int SG_MechanismPlansMaterialize(rune_link_t *links, uint32_t num_links,
 	state.result.num_edges = catalog->num_edges;
 	if (required != 0U)
 	{
-		memset(buffers->edge_marks, 0,
-			(size_t)catalog->num_edges * sizeof(buffers->edge_marks[0]));
+		if (catalog->num_edges != 0U)
+			memset(buffers->edge_marks, 0,
+				(size_t)catalog->num_edges * sizeof(buffers->edge_marks[0]));
 		memset(buffers->node_marks, 0,
 			(size_t)catalog->num_nodes * sizeof(buffers->node_marks[0]));
 	}
