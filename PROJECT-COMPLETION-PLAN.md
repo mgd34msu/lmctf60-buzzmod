@@ -277,42 +277,41 @@ including `lmctf02a` and `lmctf04`.
       `67cc06ba71aa8237343e5dc9b18069fa476f1e4d9f48fda2f5b6171e3ccefca7`;
       its RUNE SHA-256 is
       `7cc6406e0f56d1d2e9441848a9826368c85ad0c0cb5594a3eca6b0b42f71eda6`.
-- [ ] The `smap28` fixed-push candidate is integrated locally from `652dc9d`
-      through `6449b76` but withheld from the remote branches. It adds the
-      authenticated `RL_PUSH` contract, stock
-      speed-85 flight proof, serialized impulse identity, pointer-free live
-      reducer, game adapter, and live debug probe. The exact-head run passed
-      generation, both C readers, Python, lint, authenticated SNAG creation,
-      and fresh cold load with 974 seeds, 15,244 links, and 4 PUSH plans. Both
-      flags reach the same 936-seed objective core. The real engine then logged
-      authenticated begin, trigger touch, and live completion with the bot alive
-      inside the destination envelope. Result SHA-256 is
-      `a895e7cc721a9ed76c541678655f3a1b2df2a5a1cbba5de3f38120db38aa5028`;
-      RUNE SHA-256 is
-      `c6a5bd441962aedbf6b85ef856185786b4c5f4f79d081496004670cb7923b947`;
-      and live-probe log SHA-256 is
-      `20efaa84d6d08cf9a069e813d727b49bb6e0347c3a0c9fde9853640774177963`.
-      Independent integration review then found that ordinary RUN handoff can
-      publish a nearby source while PUSH requires exact q8 equality, and that
-      PUSH admission reads cached playerstate without proving immutable support
-      or an at-rest authoritative body. Commits `2255a55` and `7090d00` repair
-      those boundaries with a strict nearby-source envelope, authoritative body
-      observations, and a bounded zero-command settle phase that owns an exact
-      synchronous trigger touch. Focused GNU and Make tests, the RUN-handoff
-      regression, full GNU module build, link check, and deslop audit pass.
-      Acceptance remains blocked until the exact repaired controller run and
-      live lifecycle are reproven.
+- [x] The `smap28` fixed-push repair is accepted locally. The integrated series
+      adds the authenticated `RL_PUSH` contract, stock speed-85 flight proof,
+      serialized impulse identity, pointer-free live reducer, game adapter, and
+      live debug probe. Independent review found two handoff defects, repaired
+      by commits `2255a55` and `7090d00`: ordinary RUN could publish a
+      nearby source that PUSH rejected, and PUSH trusted cached playerstate
+      without proving an at-rest authoritative body on immutable support. The
+      repaired exact head `fa76e4a` passed the full Make suite, focused GNU and
+      Make reducers, RUN-handoff and compound-transition regressions, module
+      link checking, and the zero-finding deslop audit. Its fresh controller run
+      passed generation, both C readers, Python, lint, authenticated SNAG
+      creation, and cold load with 974 seeds, 15,244 links, 119 mechanism nodes,
+      and 4 PUSH plans. Both flags reach the same 936-seed objective core from
+      roots 11 and 12. The exact repaired module SHA-256 is
+      `4024f94f558fdcb5630d054aa744a278e6e84d8ab3e064ed9db2a0af5e5bfeb6`;
+      result SHA-256 is
+      `a811c30dc42d66b8102e52fb0b060f698d0977c7c82896bd3415076f1dcde2a0`;
+      and the byte-identical RUNE SHA-256 is
+      `c6a5bd441962aedbf6b85ef856185786b4c5f4f79d081496004670cb7923b947`.
+      A fresh real-engine probe on that module logged authoritative rest at
+      begin, trigger touch, staged flight, and completion after 5,775 ms with
+      the bot alive inside the destination envelope. Its captured-session
+      SHA-256 is
+      `e790bf96f5faeaf01543ab1b77187175b95848e083161f42daa4710bb8a1c402`.
 - [ ] Repair the missing central transition in `lmctf07`.
 
-The corrected old no-artifact queue contains 26 maps after the later accepted
+The corrected old no-artifact queue contains 25 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, and `smap39` runs. Diagnostic
-commit `0943897` retests prove that `lmctf27`, `smap28`, and `tomb05` remain
-genuine graph failures. The `smap28` and `tomb05` cases reach objective-core
-with no closed route shared by both flags. `lmctf27` still cannot bind either
+commit `0943897` retests prove that `lmctf27` and `tomb05` remain genuine graph
+failures. `tomb05` reaches objective-core with no closed route shared by both
+flags. `lmctf27` still cannot bind either
 objective root because its nearest flag seeds have no outgoing links.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
-`smap28`, `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
+`tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap05`, `xmap12`, `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
@@ -344,8 +343,8 @@ shared teleporter, platform/lift, door/train/activation, and push-controller
 repairs, with targeted train/elevator and advanced-push extensions after those
 batches. `xmap13` joins the speed-85 push retest; `xmap18` joins the
 teleporter/shootable-door batch; and `xmap25` joins the platform/teleporter
-batch. The `smap28` PUSH handoff and authoritative-state repair remains active;
-after acceptance it becomes the source baseline for the `xmap13` retest.
+batch. The accepted `smap28` PUSH handoff and authoritative-state repair is the
+source baseline for the `xmap13` retest.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
