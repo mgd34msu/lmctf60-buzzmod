@@ -1643,8 +1643,9 @@ static int Catalog_TrainAtCorner(const edict_t *train, uint32_t corner_key)
 	return 1;
 }
 
-static int Catalog_TrainGateExecutionCurrent(uint32_t key,
-	const edict_t *entity, const rune_mechanism_node_t *node)
+static int Catalog_TrainGateExecutionPose(uint32_t key,
+	const edict_t *entity, const rune_mechanism_node_t *node,
+	sg_mech_train_gate_pose_t *pose_out)
 {
 	sg_mech_train_gate_state_t state;
 	uint32_t closed_key;
@@ -1653,7 +1654,9 @@ static int Catalog_TrainGateExecutionCurrent(uint32_t key,
 	uint32_t target_ent;
 	int stopped;
 
-	if (!entity || !node || node->kind != SG_MECH_NODE_TRAIN ||
+	if (pose_out)
+		*pose_out = SG_MECH_TRAIN_GATE_INVALID;
+	if (!pose_out || !entity || !node || node->kind != SG_MECH_NODE_TRAIN ||
 	    node->spawnflags != 2U || (entity->spawnflags & ~1) != 2 ||
 	    Catalog_NodeKind(key, entity) != SG_MECH_NODE_TRAIN ||
 	    Catalog_TouchCallback(entity) != node->touch_callback ||
@@ -1694,7 +1697,65 @@ static int Catalog_TrainGateExecutionCurrent(uint32_t key,
 	state.nextthink_pending = entity->nextthink > 0.0f;
 	state.moving = state.start_on && state.nextthink_pending;
 	state.stopped = stopped;
-	return SG_MechTrainGateExecutionStateValid(&state);
+	*pose_out = SG_MechTrainGatePose(&state);
+	return *pose_out != SG_MECH_TRAIN_GATE_INVALID;
+}
+
+static int Catalog_TrainGateExecutionCurrent(uint32_t key,
+	const edict_t *entity, const rune_mechanism_node_t *node)
+{
+	sg_mech_train_gate_pose_t pose;
+
+	return Catalog_TrainGateExecutionPose(key, entity, node, &pose) &&
+	       (pose == SG_MECH_TRAIN_GATE_CLOSED ||
+	        pose == SG_MECH_TRAIN_GATE_OPENING ||
+	        pose == SG_MECH_TRAIN_GATE_OPEN);
+}
+
+int SG_MechCatalogTrainGatePose(uint32_t key,
+	sg_mech_train_gate_pose_t *pose_out)
+{
+	const rune_mechanism_node_t *node;
+
+	if (pose_out)
+		*pose_out = SG_MECH_TRAIN_GATE_INVALID;
+	node = Catalog_SealedNode(key);
+	return pose_out && node && g_edicts && key < (uint32_t)globals.num_edicts &&
+	       Catalog_TrainGateExecutionPose(key, &g_edicts[key], node, pose_out);
+}
+
+int SG_MechCatalogTrainGateSweep(uint32_t key, float mins_out[3],
+	float maxs_out[3])
+{
+	const rune_mechanism_node_t *node = Catalog_SealedNode(key);
+	uint32_t closed_key;
+	uint32_t open_key;
+	edict_t *train;
+	edict_t *closed;
+	edict_t *open;
+	int axis;
+
+	if (!mins_out || !maxs_out || !node || node->kind != SG_MECH_NODE_TRAIN ||
+	    !g_edicts || key >= (uint32_t)globals.num_edicts ||
+	    !Catalog_TrainGateRouteKeys(key, &closed_key, &open_key) ||
+	    closed_key >= (uint32_t)globals.num_edicts ||
+	    open_key >= (uint32_t)globals.num_edicts)
+		return 0;
+	train = &g_edicts[key];
+	closed = &g_edicts[closed_key];
+	open = &g_edicts[open_key];
+	if (!train->inuse || !closed->inuse || !open->inuse)
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float extent = train->maxs[axis] - train->mins[axis];
+
+		mins_out[axis] = closed->s.origin[axis] < open->s.origin[axis]
+		    ? closed->s.origin[axis] : open->s.origin[axis];
+		maxs_out[axis] = (closed->s.origin[axis] > open->s.origin[axis]
+		    ? closed->s.origin[axis] : open->s.origin[axis]) + extent;
+	}
+	return 1;
 }
 
 static int Catalog_EntityTopologyMatches(uint32_t key,
@@ -1710,9 +1771,27 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	if (!SG_MechCatalogEntityMatches(key, node))
 		return 0;
 	entity = &g_edicts[key];
-	if (execution && controller_kind == SG_MECHANISM_CONTROLLER_TRAIN &&
+	if (execution &&
+	    (controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
+	     controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
 	    node->kind == SG_MECH_NODE_TRAIN)
 		return Catalog_TrainGateExecutionCurrent(key, entity, node);
+	if (execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT &&
+	    node->kind == SG_MECH_NODE_BUTTON &&
+	    (!entity->classname || strcmp(entity->classname, "func_button") ||
+	     node->flags != (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+	         SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE) ||
+	     entity->spawnflags != 0 || entity->touch ||
+	     entity->use != button_use || entity->think || entity->blocked ||
+	     entity->die != button_killed || entity->health != 1 ||
+	     entity->max_health != 1 || entity->takedamage != DAMAGE_YES ||
+	     entity->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+	     entity->moveinfo.endfunc || entity->nextthink != 0.0f ||
+	     entity->velocity[0] != 0.0f || entity->velocity[1] != 0.0f ||
+	     entity->velocity[2] != 0.0f || entity->avelocity[0] != 0.0f ||
+	     entity->avelocity[1] != 0.0f || entity->avelocity[2] != 0.0f))
+		return 0;
 	delay_ms = entity->delay > 0.0f
 		? (uint32_t)Catalog_DelayMS(entity->delay) : 0U;
 	owner_key = Catalog_LivePointerKey(entity->owner);
@@ -1795,7 +1874,7 @@ int SG_MechCatalogEntityExecutionMatches(uint32_t key,
 	const rune_mechanism_node_t *node, uint16_t controller_kind)
 {
 	if (controller_kind == SG_MECHANISM_CONTROLLER_NONE ||
-	    controller_kind > SG_MECHANISM_CONTROLLER_TRAIN || !node ||
+	    controller_kind > SG_MECHANISM_CONTROLLER_TRAIN_SHOOT || !node ||
 	    (node->flags & SG_MECH_NODEF_INVENTORY_ONLY) != 0U)
 		return 0;
 	return Catalog_EntityTopologyMatches(key, node, 1, controller_kind);

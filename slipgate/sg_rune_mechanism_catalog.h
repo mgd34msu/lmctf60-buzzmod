@@ -263,6 +263,11 @@ static inline int SG_MechTrainGateExecutionStateValid(
 	       pose == SG_MECH_TRAIN_GATE_OPEN;
 }
 
+int SG_MechCatalogTrainGatePose(uint32_t key,
+	sg_mech_train_gate_pose_t *pose_out);
+int SG_MechCatalogTrainGateSweep(uint32_t key, float mins_out[3],
+	float maxs_out[3]);
+
 typedef struct sg_mech_execution_state_s
 {
 	uint16_t controller_kind;
@@ -352,7 +357,8 @@ static inline int SG_MechExecutionStateValid(
 		         state->end_role == SG_MECH_EXEC_END_DOOR_ORIGIN));
 	}
 	if ((state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
-	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN) &&
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
 	    state->node_kind == SG_MECH_NODE_BUTTON)
 	{
 		if (!state->touch_matches || state->touch_cleared ||

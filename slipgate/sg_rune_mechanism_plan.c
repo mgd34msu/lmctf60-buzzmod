@@ -642,6 +642,8 @@ static int Mechanism_MaterializeTrain(mechanism_materializer_t *state,
 	const rune_mechanism_node_t *train;
 	const rune_mechanism_node_t *closed;
 	const rune_mechanism_node_t *open;
+	int shoot = binding->controller_kind ==
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
 	uint32_t button_index = Mechanism_FindNode(state, binding->entry_key);
 	uint32_t train_index = Mechanism_FindNode(state, binding->mover_key);
 	uint32_t closed_index = Mechanism_FindNode(state,
@@ -665,12 +667,14 @@ static int Mechanism_MaterializeTrain(mechanism_materializer_t *state,
 		SG_MECH_EDGE_ROUTE_TARGET);
 	open_route = Mechanism_EdgeGroup(state, binding->egress_key,
 		SG_MECH_EDGE_ROUTE_TARGET);
-	if (!Mechanism_NodeExecutable(button) ||
+	if ((binding->controller_kind != SG_MECHANISM_CONTROLLER_TRAIN &&
+	     !shoot) || !Mechanism_NodeExecutable(button) ||
 	    button->kind != SG_MECH_NODE_BUTTON ||
 	    button->flags != (SG_MECH_NODEF_REPEATABLE |
-	        SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE |
-	        SG_MECH_NODEF_MOVER) ||
-	    button->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	        SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+	        (shoot ? SG_MECH_NODEF_SHOOTABLE : SG_MECH_NODEF_TOUCHABLE)) ||
+	    button->touch_callback != (shoot ? SG_MECH_CALLBACK_NONE :
+	        SG_MECH_CALLBACK_BUTTON_TOUCH) ||
 	    button->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
 	    button->think_callback != SG_MECH_CALLBACK_NONE ||
 	    button->blocked_callback != SG_MECH_CALLBACK_NONE ||
@@ -1013,6 +1017,7 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	switch (binding->controller_kind)
 	{
 	case SG_MECHANISM_CONTROLLER_TRAIN:
+	case SG_MECHANISM_CONTROLLER_TRAIN_SHOOT:
 		closure_ok = Mechanism_MaterializeTrain(state, binding);
 		break;
 	case SG_MECHANISM_CONTROLLER_PLATFORM:

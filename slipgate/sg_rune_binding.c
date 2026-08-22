@@ -354,9 +354,12 @@ static int Binding_ControllerShape(const rune_t *rune,
 		           SG_MECH_EDGE_OWNER) == 1U &&
 		       Binding_TeleportDestination(rune, plan) != NULL;
 	case SG_MECHANISM_CONTROLLER_TRAIN:
+	case SG_MECHANISM_CONTROLLER_TRAIN_SHOOT:
 	{
 		const rune_mechanism_node_t *closed;
 		const rune_mechanism_node_t *open;
+		int shoot = plan->controller_kind ==
+			SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
 
 		return link->action == RL_TRAIN && plan->expected_members == 1U &&
 		       plan->cooldown_ms > 0U &&
@@ -365,9 +368,11 @@ static int Binding_ControllerShape(const rune_t *rune,
 		       Binding_NodeExecutable(entry) &&
 		       entry->kind == SG_MECH_NODE_BUTTON &&
 		       entry->flags == (SG_MECH_NODEF_REPEATABLE |
-		           SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE |
-		           SG_MECH_NODEF_MOVER) && entry->spawnflags == 0U &&
-		       entry->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH &&
+		           SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		           (shoot ? SG_MECH_NODEF_SHOOTABLE :
+		               SG_MECH_NODEF_TOUCHABLE)) && entry->spawnflags == 0U &&
+		       entry->touch_callback == (shoot ? SG_MECH_CALLBACK_NONE :
+		           SG_MECH_CALLBACK_BUTTON_TOUCH) &&
 		       entry->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
 		       entry->think_callback == SG_MECH_CALLBACK_NONE &&
 		       entry->blocked_callback == SG_MECH_CALLBACK_NONE &&
@@ -477,7 +482,8 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		plan->entry_key);
 	candidate.mover_node = SG_RuneMechanismNodeByKey(rune,
 		plan->mover_key);
-	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN &&
+	if ((plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
+	     plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
 	    !Binding_TrainTerminals(rune, plan, &candidate.destination_node,
 	        &candidate.egress_node))
 		return 0;
