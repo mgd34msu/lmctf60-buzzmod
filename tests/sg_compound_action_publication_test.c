@@ -116,7 +116,7 @@ static void TestHookPlan(void)
 	sg_replay_observation_t observation;
 
 	CommonBinding(&binding, RL_DOOR_HOOK, RLCM_PREOPEN);
-	binding.arrival_ms = 600;
+	binding.arrival_ms = 700;
 	binding.total_cost_ms = binding.touch_frame_end_ms +
 	                        binding.suffix_start_ms + binding.arrival_ms;
 	binding.link.cost_ms = (short)binding.total_cost_ms;
@@ -151,12 +151,12 @@ static void TestHookPlan(void)
 	binding.link.anchor[PITCH] =
 		SHORT2ANGLE((short)ANGLE2SHORT(-15.0f));
 
-	binding.arrival_ms = 500;
+	binding.arrival_ms = 600;
 	binding.total_cost_ms = binding.touch_frame_end_ms +
 	                        binding.suffix_start_ms + binding.arrival_ms;
 	binding.link.cost_ms = (short)binding.total_cost_ms;
 	CHECK(!SG_CompoundHookPublicationPlan(&binding, &spec));
-	binding.arrival_ms = 600;
+	binding.arrival_ms = 700;
 	binding.total_cost_ms = binding.touch_frame_end_ms +
 	                        binding.suffix_start_ms + binding.arrival_ms;
 	binding.link.cost_ms = (short)binding.total_cost_ms;
