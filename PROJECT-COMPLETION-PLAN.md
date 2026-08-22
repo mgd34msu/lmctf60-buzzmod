@@ -261,7 +261,11 @@ including `lmctf02a` and `lmctf04`.
       Exact-commit CI for `7c83260` then exposed one Windows-only C4701
       warning in the carrier resolver. Commit `4b9ff0f` initializes that helper
       output before its mutually exclusive capture calls; both focused harnesses
-      and both full local builds pass. Replacement exact-commit CI is pending.
+      and both full local builds pass. Replacement CI at `04fbe49` confirmed
+      both Windows builds and the packaged Linux module, then failed all four
+      host jobs only because the overflow regression's three Makefile lines had
+      not been added to the source-size budget. Commit `9c5fabf` corrects both
+      exact budgets, and the deslop audit now passes with zero findings.
 - [ ] Repair the remaining maps whose objective route core is closed.
       `smap39` is accepted at commits `8544da2`, `fed4c9f`, and `c4f9b48`.
       The source-identical live run passed generation, both readers, semantic
