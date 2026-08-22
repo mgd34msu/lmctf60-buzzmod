@@ -243,15 +243,21 @@ including `lmctf02a` and `lmctf04`.
 
 ### Repair tracks
 
-- [ ] Complete the isolated `lmctf05b` repair. The candidate
-      generalizes `START_OPEN` vertical `func_door` carrier support through
-      authenticated `RL_LIFT`, but it is not accepted yet. The unsuffixed
-      `lmctf05` map is not an acceptance target.
-      A source-identical live run now proves four lift links and a fully shared
-      objective route core in both directions. The next fail-closed blocker is
-      mechanism-plan materialization for the newly admitted descending carrier:
-      `bad-closure link=26007 plan=1`. Its repair remains isolated and
-      unaccepted.
+- [x] Complete the `lmctf05b` repair. Canonical feature commit `0fc35ef` and
+      budget commit `dc56fe0` generalize `START_OPEN` vertical `func_door`
+      carrier support through authenticated `RL_LIFT`. The unsuffixed
+      `lmctf05` map is not an acceptance target. The repair closes the
+      four-lift route core, admits exact ascending and descending carrier
+      identities, fixes the former `bad-closure` plan failure, and prevents a
+      multi-stage main-trigger phase-order bypass. A new post-repair
+      source-identical run passed generation, both C readers, Python, lint,
+      semantic gates, SNAG creation, and fresh-process cold load with 1,809
+      seeds, 38,921 links, and 6 plans. Its module SHA-256 is
+      `59241da9a3bc0a29d280a5ef9825de44f84febea385e94349ed2f53cbfe7ec09`;
+      result SHA-256 is
+      `bfb49cab7855e1cb1c3e6d397dc5ca852929d8e53e460a98680a17e0b7aff4a1`;
+      and RUNE SHA-256 is
+      `6c3f31c529f522326cd693318ed7198476744d06f3dddbc1a129b1199870b74b`.
 - [ ] Repair the remaining maps whose objective route core is closed.
       `smap39` is accepted at commits `8544da2`, `fed4c9f`, and `c4f9b48`.
       The source-identical live run passed generation, both readers, semantic
@@ -262,13 +268,24 @@ including `lmctf02a` and `lmctf04`.
       `7cc6406e0f56d1d2e9441848a9826368c85ad0c0cb5594a3eca6b0b42f71eda6`.
 - [ ] Repair the missing central transition in `lmctf07`.
 
-The corrected old no-artifact queue contains 27 maps after the later accepted
-`lmctf02a`, `lmctf04`, `smap14`, and `smap39` runs. Current-canonical commit
-Diagnostic commit `0943897` retests prove that `lmctf27`, `smap28`, and
-`tomb05` remain genuine
+The corrected old no-artifact queue contains 26 maps after the later accepted
+`lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, and `smap39` runs. Diagnostic
+commit `0943897` retests prove that `lmctf27`, `smap28`, and `tomb05` remain genuine
 graph failures. The `smap28` and `tomb05` cases still reach objective-core with
 no closed route shared by both flags. `lmctf27` still cannot bind either
 objective root because its nearest flag seeds have no outgoing links.
+The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
+`lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
+`smap28`, `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
+`xmap05`, `xmap12`, `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
+The eight incomplete generation-timeout cases are running as a four-worker
+background retest against the exact accepted `64344d4` module and immutable
+175-map snapshot. Parallel graph-failure triage groups the remaining work into
+shared teleporter, platform/lift, door/train/activation, and push-controller
+repairs, with targeted train/elevator and advanced-push extensions after those
+batches. `xmap13` joins the speed-85 push retest; `xmap18` joins the
+teleporter/shootable-door batch; and `xmap25` joins the platform/teleporter
+batch. The `smap28` source repair continues concurrently.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
