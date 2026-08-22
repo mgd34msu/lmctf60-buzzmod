@@ -19,6 +19,7 @@ static sg_compound_guard_result_t evicted_result;
 static sg_compound_guard_observation_t bolt_observation;
 static edict_t *observed_bolt;
 static int observe_calls;
+static int non_unit_forward;
 
 #define CHECK(condition) do { \
 	if (!(condition)) { \
@@ -110,11 +111,24 @@ void AngleVectors(vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
 {
 	(void)angles;
 	if (forward)
-		VectorSet(forward, 1.0f, 0.0f, 0.0f);
+		VectorSet(forward, non_unit_forward ? 2.0f : 1.0f, 0.0f, 0.0f);
 	if (right)
 		VectorSet(right, 0.0f, 1.0f, 0.0f);
 	if (up)
 		VectorSet(up, 0.0f, 0.0f, 1.0f);
+}
+
+vec_t VectorNormalize(vec3_t value)
+{
+	vec_t length = sqrtf(DotProduct(value, value));
+
+	if (length > 0.0f)
+	{
+		value[0] /= length;
+		value[1] /= length;
+		value[2] /= length;
+	}
+	return length;
 }
 
 void VectorScale(vec3_t in, vec_t scale, vec3_t out)
@@ -229,6 +243,7 @@ static void Init(edict_t *client, gclient_t *game_client, edict_t *bolt,
 	release_calls = 0;
 	evicted_calls = 0;
 	observe_calls = 0;
+	non_unit_forward = false;
 	evicted_result = SG_COMPOUND_GUARD_OK;
 	bolt_observation = SG_COMPOUND_GUARD_YES;
 	observed_bolt = bolt;
@@ -320,6 +335,11 @@ static void TestLaunchProof(void)
 	    SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(linked_calls == 0);
 	CHECK(!sg_bots[0].compound_hook_events.bolt_valid);
+	Init(&client, &game_client, &bolt, &target, &subject);
+	non_unit_forward = true;
+	CHECK(SG_CompoundHookGameLinked(&client, &bolt, &subject).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(linked_calls == 1);
 	Init(&client, &game_client, &bolt, &target, &subject);
 	at_top = false;
 	CHECK(SG_CompoundHookGameLinked(&client, &bolt, &subject).outcome ==

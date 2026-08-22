@@ -113,6 +113,8 @@ static int HookGameLaunchValid(const sg_bot_t *bot, const edict_t *bolt)
 	AngleVectors(view, forward, right, NULL);
 	CTF_HookMuzzle(client->s.origin, client->viewheight,
 	    client->client->pers.hand, forward, right, muzzle);
+	/* fire_hook normalizes this same AngleVectors result before scaling. */
+	VectorNormalize(forward);
 	VectorScale(forward, RUNE_HOOK_BOLT_SPEED, velocity);
 	return HookGameVectorEqual(bolt->s.origin, muzzle) &&
 	       HookGameVectorEqual(bolt->velocity, velocity);
