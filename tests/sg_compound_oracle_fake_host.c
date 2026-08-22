@@ -271,6 +271,8 @@ void HostPmove(pmove_t *pmove)
 	{
 		fixture_observation.hook_opening_commands++;
 		x = pmove->s.origin[0] / 8;
+		pmove->s.velocity[2] =
+			fixture_observation.hook_opening_commands <= 18 ? -406 : -296;
 		if (CommandZero(&pmove->cmd))
 		{
 			fixture_observation.hook_opening_zero_commands++;

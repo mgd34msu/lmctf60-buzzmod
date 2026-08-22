@@ -62,6 +62,7 @@ static int offhand_ready_calls;
 static int unlink_calls;
 static int link_calls;
 static int debug_calls;
+static int checkpoint_match_watertype;
 static char event_log[1024];
 
 static sg_compound_hook_live_result_t Result(
@@ -155,6 +156,7 @@ int SG_CompoundPublicationCheckpointMatches(
 	const sg_compound_publication_checkpoint_t *live,
 	const sg_compound_publication_angle_bias_t *bias)
 {
+	checkpoint_match_watertype = live ? live->watertype : 0;
 	return expected && live && bias && bias->axis[0] == 3 &&
 	    bias->axis[1] == 5 && bias->axis[2] == 7;
 }
@@ -555,6 +557,7 @@ static void FixtureInit(void)
 	offhand_calls = 0;
 	offhand_ready_calls = 2;
 	unlink_calls = link_calls = debug_calls = 0;
+	checkpoint_match_watertype = 0;
 	stub_failed = 0;
 	expected_frame = 17;
 	level.time = 12.0f;
@@ -586,8 +589,11 @@ static int HostFixture(void)
 	CHECK(SG_CompoundHookGameObservation(&bot, bot.ent, &observation));
 	CHECK(host.source_checkpoint(&bot, &snapshot, &pose, &observation) ==
 	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED);
+	bot.ent->watertype = CONTENTS_WATER | CONTENTS_MONSTER;
+	CHECK(SG_CompoundHookGamePose(bot.ent, &pose));
 	CHECK(host.suffix_checkpoint(&bot, &snapshot, &pose, &observation) ==
 	    SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED);
+	CHECK(checkpoint_match_watertype == CONTENTS_WATER);
 	pose.origin[0] += 0.125f;
 	CHECK(host.source_checkpoint(&bot, &snapshot, &pose, &observation) ==
 	    SG_COMPOUND_HOOK_LIVE_HOST_DENIED);

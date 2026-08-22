@@ -49,13 +49,14 @@ static void TestExpectedControlAndStablePopulation(void)
 	CHECK(baseline.proof.hook_spec.expected_settle_ms == 100);
 	CHECK(baseline.proof.arrival_ms == 500);
 	CHECK(baseline.proof.exit_speed == 2);
-	CHECK(baseline.proof.suffix_old_frame_z == 0.0f);
+	CHECK(baseline.proof.suffix_old_frame_z == -50.75f);
 	CHECK(baseline.proof.suffix_pms.origin[0] == 1280);
 	CHECK(baseline.proof.suffix_pms.origin[1] == 176);
 	CHECK(baseline.proof.suffix_pms.origin[2] == 0);
 	CHECK(baseline.proof.suffix_pms.velocity[0] == 0);
 	CHECK(baseline.proof.suffix_pms.velocity[1] == 64);
-	CHECK(baseline.proof.suffix_pms.velocity[2] == 0);
+	CHECK(baseline.proof.suffix_pms.velocity[2] == -296);
+	CHECK(baseline.proof.suffix_watertype == CONTENTS_WATER);
 	CHECK(baseline.proof.total_cost_ms ==
 	      baseline.proof.touch_frame_end_ms +
 	      baseline.proof.suffix_start_ms + baseline.proof.arrival_ms);

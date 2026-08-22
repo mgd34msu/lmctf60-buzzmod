@@ -7418,6 +7418,7 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 	vec3_t opening_view;
 	qboolean scope_entered = false;
 	qboolean member_staged = false;
+	float suffix_checkpoint_old_frame_z;
 	int remainder_commands;
 
 	if (!proof)
@@ -7536,13 +7537,15 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 		reason = RLR_MECHANISM_UNRESOLVED;
 		goto done;
 	}
+	suffix_checkpoint_old_frame_z = old_frame_z;
 	if (!SG_OracleCompoundFrame(ph, resolved, NULL, opening_view, 4,
 	                            &old_frame_z))
 	{
 		reason = RLR_RIDE_REPLAY_FAILED;
 		goto done;
 	}
-	SG_OracleCompoundHookCaptureSuffix(ph, old_frame_z, &candidate);
+	SG_OracleCompoundHookCaptureSuffix(ph, suffix_checkpoint_old_frame_z,
+	                                  &candidate);
 	reason = SG_OracleCompoundHookSuffix(ph, resolved, member, destination,
 	    expected_control, old_frame_z, &candidate, passent, world_only);
 	if (reason != RLR_OK)

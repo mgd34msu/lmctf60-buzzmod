@@ -180,8 +180,12 @@ static sg_compound_hook_live_host_result_t CompoundHookGameSuffix(
 	if (!observation || !CompoundHookGameResolve(bot, snapshot, &current) ||
 	    !bot->compound_hook_game.angle_bias_valid ||
 	    !CompoundHookGameCheckpoint(bot->ent, &live) ||
-	    !CompoundHookGamePoseMatches(bot->ent, pose, &live) ||
-	    !SG_CompoundPublicationCheckpointMatches(&snapshot->binding.suffix,
+	    !CompoundHookGamePoseMatches(bot->ent, pose, &live))
+		return SG_COMPOUND_HOOK_LIVE_HOST_DENIED;
+	/* SV_PointContents includes the linked client's own box hull.  Its
+	 * CONTENTS_MONSTER bit is not part of the world-only oracle state. */
+	live.watertype &= ~CONTENTS_MONSTER;
+	if (!SG_CompoundPublicationCheckpointMatches(&snapshot->binding.suffix,
 	        &live, &bot->compound_hook_game.angle_bias))
 		return SG_COMPOUND_HOOK_LIVE_HOST_DENIED;
 	return SG_COMPOUND_HOOK_LIVE_HOST_ACCEPTED;
