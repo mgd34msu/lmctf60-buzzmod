@@ -41,6 +41,17 @@ def main() -> None:
     assert "push <link>" in dispatch
 
     game = source("slipgate/sg_push_game.c")
+    arrived = between(game, "static qboolean PushArrived", "static edict_t *PushEntry")
+    assert "observation->alive" in arrived
+    report = between(game, "static void PushReport", "int SG_PushGameOwns")
+    assert "health=%d alive=%d" in report
+    emit = between(game, "int SG_PushGameEmit", "int SG_PushGameStageAuthenticatedProbe")
+    ordered(
+        emit,
+        "PushObservation(entity, &observation)",
+        "SG_PushLiveCommand(&bot->push, &observation)",
+        "SG_PushLiveBoundary(&bot->push",
+    )
     staging = between(
         game,
         "int SG_PushGameStageAuthenticatedProbe",
@@ -50,12 +61,19 @@ def main() -> None:
         staging,
         "PushWitness(link_index, &witness)",
         "SG_CompoundDropGameIdleAdmission(&sg_bots[slot])",
+        "bot_before = *bot",
+        "entity_before = *entity",
+        "client_before = *entity->client",
         "gi.unlinkentity(entity)",
         "witness.source_q8[axis]",
         "SG_PushLiveReset(&bot->push)",
         "gi.linkentity(entity)",
         "SG_PushGameEmit(bot, link_index)",
-        "bot->push.phase != SG_PUSH_FLIGHT",
+        "!SG_PushGameOwns(bot)",
+        "*entity->client = client_before",
+        "*entity = entity_before",
+        "*bot = bot_before",
+        "gi.linkentity(entity)",
         'PushReport(bot, "probe-staged")',
     )
     begin = between(game, "static qboolean PushBegin", "static qboolean PushConsumeTerminal")
@@ -66,6 +84,14 @@ def main() -> None:
         trigger,
         "VectorCopy (other->velocity, other->client->oldvelocity)",
         "SG_PushGameTouched(self, other)",
+    )
+    touched = game[game.index("void SG_PushGameTouched"):]
+    ordered(
+        touched,
+        "binding.entry_entity != trigger",
+        "memcmp(entity->velocity, entity->client->oldvelocity",
+        "SG_PushLiveTouched(&bot->push, key, entity->velocity)",
+        'PushReport(bot, "touch")',
     )
 
 

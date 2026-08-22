@@ -112,6 +112,27 @@ static void TestBadWitnessAndTimeout(void)
 	CHECK(state.failure == SG_PUSH_FAILURE_TIMEOUT);
 }
 
+static void TestDeadArrivalFails(void)
+{
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+
+	Fixture(&witness, &observation);
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
+		witness.push_velocity));
+	observation.grounded = false;
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(SG_PushLiveBoundary(&state, false, false));
+	observation.alive = false;
+	observation.grounded = true;
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(state.phase == SG_PUSH_FAILED);
+	CHECK(!SG_PushLiveBoundary(&state, true, true));
+	CHECK(state.phase != SG_PUSH_COMPLETE);
+}
+
 static void TestLandingHealthRequirement(void)
 {
 	float landing_velocity;
@@ -168,6 +189,7 @@ int main(void)
 	TestExactTouchAndZeroFlight();
 	TestTouchIdentityAndRawBitsFailClosed();
 	TestBadWitnessAndTimeout();
+	TestDeadArrivalFails();
 	TestLandingHealthRequirement();
 	TestArrivalEnvelope();
 	if (failures)

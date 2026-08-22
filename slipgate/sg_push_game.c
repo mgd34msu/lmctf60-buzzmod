@@ -85,7 +85,8 @@ static qboolean PushWitness(int link_index, sg_push_witness_t *witness)
 static qboolean PushArrived(const sg_bot_t *bot,
 	const sg_push_observation_t *observation)
 {
-	return bot && observation && observation->grounded && observation->dry &&
+	return bot && observation && observation->alive &&
+	       observation->grounded && observation->dry &&
 	       SG_PushArrivalEnvelope(observation->origin_q8,
 	           bot->push.witness.destination_q8);
 }
@@ -108,10 +109,13 @@ static void PushReport(const sg_bot_t *bot, const char *event)
 {
 	if (sg_cv.debug && sg_cv.debug->value && bot && bot->ent)
 		sg_host.dprint("PUSHLIVE %s event=%s link=%d phase=%d elapsed=%d "
-		    "failure=%s origin=(%.0f %.0f %.0f) velocity=(%.0f %.0f %.0f)\n",
+		    "failure=%s health=%d alive=%d origin=(%.0f %.0f %.0f) "
+		    "velocity=(%.0f %.0f %.0f)\n",
 		    bot->ent->client->pers.netname, event,
 		    bot->push.witness.link_index, (int)bot->push.phase,
 		    bot->push.elapsed_ms, SG_PushLiveFailureName(bot->push.failure),
+		    bot->ent->health,
+		    bot->ent->deadflag == DEAD_NO && bot->ent->health > 0,
 		    bot->ent->s.origin[0], bot->ent->s.origin[1],
 		    bot->ent->s.origin[2], bot->ent->velocity[0],
 		    bot->ent->velocity[1], bot->ent->velocity[2]);
@@ -191,6 +195,12 @@ int SG_PushGameEmit(sg_bot_t *bot, int selected_link)
 			bot->commit_link = -1;
 			return 1;
 		}
+		(void)SG_PushLiveCommand(&bot->push, &observation);
+		if (!SG_PushGameOwns(bot))
+		{
+			(void)PushConsumeTerminal(bot);
+			return 1;
+		}
 		if (bot->push.phase == SG_PUSH_FLIGHT &&
 		    !SG_PushLiveBoundary(&bot->push,
 		        PushArrived(bot, &observation), observation.grounded))
@@ -209,12 +219,6 @@ int SG_PushGameEmit(sg_bot_t *bot, int selected_link)
 		{
 			SG_PushLiveReset(&bot->push);
 			bot->commit_link = -1;
-			return 1;
-		}
-		(void)SG_PushLiveCommand(&bot->push, &observation);
-		if (!SG_PushGameOwns(bot))
-		{
-			(void)PushConsumeTerminal(bot);
 			return 1;
 		}
 		memset(&command, 0, sizeof(command));
@@ -254,8 +258,11 @@ int SG_PushGameEmit(sg_bot_t *bot, int selected_link)
 int SG_PushGameStageAuthenticatedProbe(int link_index)
 {
 	sg_push_witness_t witness;
+	sg_bot_t bot_before;
 	sg_bot_t *bot = NULL;
+	edict_t entity_before;
 	edict_t *entity;
+	gclient_t client_before;
 	int axis, slot;
 
 	if (!sg_cv.debug || sg_cv.debug->value <= 0.0f ||
@@ -271,6 +278,9 @@ int SG_PushGameStageAuthenticatedProbe(int link_index)
 	if (!bot)
 		return 0;
 	entity = bot->ent;
+	bot_before = *bot;
+	entity_before = *entity;
+	client_before = *entity->client;
 	gi.unlinkentity(entity);
 	for (axis = 0; axis < 3; axis++)
 	{
@@ -299,11 +309,13 @@ int SG_PushGameStageAuthenticatedProbe(int link_index)
 	bot->commit_until = level.time + 10.0f;
 	bot->latch_until = level.time + 10.0f;
 	gi.linkentity(entity);
-	if (!SG_PushGameEmit(bot, link_index) ||
-	    bot->push.phase != SG_PUSH_FLIGHT)
+	if (!SG_PushGameEmit(bot, link_index) || !SG_PushGameOwns(bot))
 	{
-		SG_PushLiveReset(&bot->push);
-		bot->commit_link = -1;
+		gi.unlinkentity(entity);
+		*entity->client = client_before;
+		*entity = entity_before;
+		*bot = bot_before;
+		gi.linkentity(entity);
 		return 0;
 	}
 	PushReport(bot, "probe-staged");
@@ -331,6 +343,12 @@ void SG_PushGameTouched(edict_t *trigger, edict_t *entity)
 	{
 		key = 0U;
 		(void)SG_PushLiveTouched(&bot->push, key, entity->velocity);
+		return;
+	}
+	if (bot->push.phase == SG_PUSH_APPROACH &&
+	    SG_PushLiveTouched(&bot->push, key, entity->velocity))
+	{
+		PushReport(bot, "touch");
 		return;
 	}
 	(void)SG_PushLiveTouched(&bot->push, key, entity->velocity);
