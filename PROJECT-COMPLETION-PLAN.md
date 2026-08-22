@@ -295,9 +295,13 @@ including `lmctf02a` and `lmctf04`.
       Independent integration review then found that ordinary RUN handoff can
       publish a nearby source while PUSH requires exact q8 equality, and that
       PUSH admission reads cached playerstate without proving immutable support
-      or an at-rest authoritative body. Acceptance remains blocked until those
-      boundaries are repaired and the normal handoff plus live lifecycle are
-      reproven.
+      or an at-rest authoritative body. Commits `2255a55` and `7090d00` repair
+      those boundaries with a strict nearby-source envelope, authoritative body
+      observations, and a bounded zero-command settle phase that owns an exact
+      synchronous trigger touch. Focused GNU and Make tests, the RUN-handoff
+      regression, full GNU module build, link check, and deslop audit pass.
+      Acceptance remains blocked until the exact repaired controller run and
+      live lifecycle are reproven.
 - [ ] Repair the missing central transition in `lmctf07`.
 
 The corrected old no-artifact queue contains 26 maps after the later accepted
