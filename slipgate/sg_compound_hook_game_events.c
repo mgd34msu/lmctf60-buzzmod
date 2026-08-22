@@ -94,10 +94,13 @@ static int HookGameBite(const edict_t *bolt, vec3_t bite)
 
 static int HookGameBiteValid(const sg_bot_t *bot, const edict_t *bolt)
 {
-	vec3_t bite;
+	vec3_t bite, miss;
 
-	return bot && HookGameBite(bolt, bite) &&
-	       HookGameVectorEqual(bite, bot->compound_hook_live.hook_spec.bite);
+	if (!bot || !HookGameBite(bolt, bite))
+		return 0;
+	VectorSubtract(bite, bot->compound_hook_live.hook_spec.bite, miss);
+	return DotProduct(miss, miss) <=
+	       RUNE_HOOK_BITE_TOLERANCE * RUNE_HOOK_BITE_TOLERANCE;
 }
 
 static int HookGameLaunchValid(const sg_bot_t *bot, const edict_t *bolt)

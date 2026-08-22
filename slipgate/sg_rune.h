@@ -24,6 +24,10 @@
 #define RUNE_HOOK_BOLT_SPEED 800.0f
 #define RUNE_HOOK_FRAME_DISTANCE 80.0f
 #define RUNE_HOOK_MAX_RAY 8192.0f
+/* Static traces and frame-stepped bolt collision reach the same world bite
+ * through different float operation orders. This is the existing maximum
+ * reconstruction residue admitted by generation and live reproof. */
+#define RUNE_HOOK_BITE_TOLERANCE 0.25f
 /* Dry graph hooks retain their proved entry-heading slack. Water-origin hooks
  * use an otherwise-invalid marker because their controller is a different
  * contract: actual-state online reproof, zero-input outbound drift, exact

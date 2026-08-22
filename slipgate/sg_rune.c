@@ -1199,7 +1199,7 @@ static qboolean ProveHookLateralCandidate(int from, int to,
 		return false;
 	VectorMA(muzzle, control_out[ROLL], forward, shot_end);
 	VectorSubtract(bite, shot_end, want);
-	if (VectorLength(want) > 0.25f)
+	if (VectorLength(want) > RUNE_HOOK_BITE_TOLERANCE)
 		return false;
 	VectorCopy(shot_end, bite);
 	if (CTF_HookPullVelocity(muzzle, bite, want) < 150 ||
@@ -1370,7 +1370,7 @@ static qboolean ProveHook(int from, int to, vec3_t control_out,
 				continue;
 			VectorMA(muzzle, control_out[ROLL], forward, aim);
 			VectorSubtract(bite, aim, want);
-			if (VectorLength(want) > 0.25f)
+			if (VectorLength(want) > RUNE_HOOK_BITE_TOLERANCE)
 				continue;
 			VectorCopy(aim, bite);
 			if (CTF_HookPullVelocity(muzzle, bite, want) < 150 ||

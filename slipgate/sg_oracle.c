@@ -7280,7 +7280,7 @@ static qboolean SG_OracleCompoundHookControl(const sg_phantom_t *ph,
 	if (shot_trace.startsolid || shot_trace.fraction >= 1.0f ||
 	    shot_trace.ent != g_edicts ||
 	    (shot_trace.surface && (shot_trace.surface->flags & SURF_SKY)) ||
-	    VectorLength(miss) > 0.25f ||
+	    VectorLength(miss) > RUNE_HOOK_BITE_TOLERANCE ||
 	    CTF_HookPullVelocity(muzzle, bite, miss) < 150 ||
 	    !SG_OracleHookFlightClear(muzzle, bite) ||
 	    !SG_OracleCompoundHookBoltOutside(resolved, muzzle, bite))

@@ -404,6 +404,30 @@ static void TestAuthorization(void)
 	    SG_COMPOUND_HOOK_LIVE_HOST_DENIED);
 }
 
+static void TestBiteProofBoundary(void)
+{
+	edict_t client, bolt, target;
+	gclient_t game_client;
+	sg_mover_subject_t subject;
+	csurface_t surface;
+
+	Init(&client, &game_client, &bolt, &target, &subject);
+	memset(&surface, 0, sizeof(surface));
+	CHECK(SG_CompoundHookGameLinked(&client, &bolt, &subject).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
+	client.client->hook = &bolt;
+	client.client->hookstate = 1;
+	VectorSet(sg_bots[0].compound_hook_live.hook_spec.bite,
+	    623.581726074f, 134.677978516f, -288.03125f);
+	VectorSet(bolt.s.origin,
+	    623.581665039f, 134.677978516f, -288.03125f);
+	CHECK(SG_CompoundHookGameAttachWillApply(&bolt, &target, &surface) ==
+	    SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED);
+	bolt.s.origin[0] -= 0.251f;
+	CHECK(SG_CompoundHookGameAttachWillApply(&bolt, &target, &surface) ==
+	    SG_COMPOUND_HOOK_GAME_EVENT_DENIED);
+}
+
 static void TestLifecycle(void)
 {
 	edict_t client, bolt, target;
@@ -576,6 +600,7 @@ int main(void)
 	TestLifecycle();
 	TestLaunchProof();
 	TestAuthorization();
+	TestBiteProofBoundary();
 	TestAbortFailures();
 	TestUnexpectedAbortRecoveryReceipt();
 	TestOrdinaryHookBypass();
