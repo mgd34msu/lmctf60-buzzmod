@@ -47,7 +47,7 @@ static void TestExpectedControlAndStablePopulation(void)
 	CHECK(baseline.proof.hook_spec.expected_release_ms == 25);
 	CHECK(baseline.proof.hook_spec.expected_settle_arrival_ms == 0);
 	CHECK(baseline.proof.hook_spec.expected_settle_ms == 100);
-	CHECK(baseline.proof.arrival_ms == 400);
+	CHECK(baseline.proof.arrival_ms == 500);
 	CHECK(baseline.proof.exit_speed == 2);
 	CHECK(baseline.proof.suffix_old_frame_z == 0.0f);
 	CHECK(baseline.proof.suffix_pms.origin[0] == 1280);
@@ -59,7 +59,7 @@ static void TestExpectedControlAndStablePopulation(void)
 	CHECK(baseline.proof.total_cost_ms ==
 	      baseline.proof.touch_frame_end_ms +
 	      baseline.proof.suffix_start_ms + baseline.proof.arrival_ms);
-	CHECK(baseline.proof.total_cost_ms == 900);
+	CHECK(baseline.proof.total_cost_ms == 1000);
 	CHECK(baseline.member_restored && baseline.globals_restored);
 	CHECK(baseline.suffix_commands == 16);
 
@@ -198,7 +198,7 @@ static void TestDiscoveredGenerationControl(void)
 	CHECK(response.reason == RLR_OK);
 	CHECK(response.proof.control[ROLL] > 0.0f);
 	CHECK(response.proof.touch_ms == 50);
-	CHECK(response.proof.total_cost_ms == 900);
+	CHECK(response.proof.total_cost_ms == 1000);
 	CHECK(response.member_restored && response.globals_restored);
 }
 
@@ -225,7 +225,7 @@ static void TestSweepResetAndWorldOnlyPropagation(void)
 	request.approach_foreign_trigger = true;
 	SG_CompoundHookOracleRunScenario(&request, &response);
 	CHECK(response.reason == RLR_OK);
-	CHECK(response.proof.arrival_ms == 400);
+	CHECK(response.proof.arrival_ms == 500);
 	CHECK(response.member_restored && response.globals_restored);
 
 	request = LoaderRequest();

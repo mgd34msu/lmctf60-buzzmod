@@ -163,7 +163,7 @@ qboolean SG_CompoundHookPublicationPlan(
 	            proof->spec.expected_settle_ms;
 	if (!ActionPublicationHookSpecValid(&proof->spec) ||
 	    proof->spec.flight_ms != flight_ms ||
-	    suffix_ms != binding->arrival_ms ||
+	    suffix_ms + SG_REPLAY_FRAME_MS != binding->arrival_ms ||
 	    memcmp(proof->spec.destination, binding->destination_seed.origin,
 	           sizeof(proof->spec.destination)) != 0 ||
 	    proof->spec.view_angles[PITCH] != binding->link.anchor[PITCH] ||

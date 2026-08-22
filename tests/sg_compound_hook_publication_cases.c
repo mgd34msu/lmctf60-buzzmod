@@ -41,9 +41,9 @@ static void TestHookPublication(void)
 		CHECK(binding->touch_frame_end_ms == 100);
 		CHECK(binding->mover_top_ms == 500);
 		CHECK(binding->suffix_start_ms == 400);
-		CHECK(binding->arrival_ms == 600);
+		CHECK(binding->arrival_ms == 700);
 		CHECK(binding->sweep_clear_ms == 200);
-		CHECK(binding->total_cost_ms == 1100);
+		CHECK(binding->total_cost_ms == 1200);
 		CHECK(SG_CompoundHookPublicationPlan(binding, &spec));
 		CHECK(memcmp(&spec, &binding->hook_proof.spec, sizeof(spec)) == 0);
 		CHECK(SG_CompoundPublicationRevalidate(&rune).status ==

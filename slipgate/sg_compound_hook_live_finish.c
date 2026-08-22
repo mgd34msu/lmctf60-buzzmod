@@ -287,7 +287,7 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveLinked(
 	              bolt, frame_serial))
 		return CompoundHookLiveActive(state, false);
 	expected_frame = (long long)state->touch_frame_serial +
-	                 state->snapshot.binding.suffix_start_ms /
+	                 state->snapshot.binding.mover_top_ms /
 	                     SG_REPLAY_FRAME_MS;
 	if (state->bolt_linked || state->outer.phase != SG_COMPOUND_TOP ||
 	    expected_frame != frame_serial ||

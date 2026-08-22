@@ -32,6 +32,7 @@ static void TestTouchFrameAndMoverSchedulesAreIndependent(void)
 		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
 	sg_compound_hook_live_bolt_t bolt = { 21, 9001U };
 	sg_compound_hook_live_result_t result;
+	sg_compound_hook_live_state_t early_state;
 	sg_replay_pose_t pose;
 	sg_replay_observation_t observation;
 	usercmd_t command;
@@ -40,8 +41,8 @@ static void TestTouchFrameAndMoverSchedulesAreIndependent(void)
 	Setup(&fixture, &host, &pose, &observation);
 	fixture.snapshot.binding.touch_ms = 175;
 	fixture.snapshot.binding.touch_frame_end_ms = 200;
-	fixture.snapshot.binding.total_cost_ms = 700;
-	fixture.snapshot.binding.link.cost_ms = 700;
+	fixture.snapshot.binding.total_cost_ms = 800;
+	fixture.snapshot.binding.link.cost_ms = 800;
 	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose,
 	                                  &observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -65,14 +66,19 @@ static void TestTouchFrameAndMoverSchedulesAreIndependent(void)
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	result = SG_CompoundHookLivePostStep(&state, &host, &pose, &observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	while (state.transaction_elapsed_ms < 400)
+	while (state.transaction_elapsed_ms < 500)
 	{
 		result = Step(&state, &host, &pose, &observation, NULL);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	}
-	CHECK(state.transaction_elapsed_ms == 400);
+	CHECK(state.transaction_elapsed_ms == 500);
 	CHECK(state.outer.phase == SG_COMPOUND_TOP);
-	result = SG_CompoundHookLiveLinked(&state, &host, &bolt, 4, &pose,
+	early_state = state;
+	result = SG_CompoundHookLiveLinked(&early_state, &host, &bolt, 4, &pose,
+	                                  &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
+	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_LINK);
+	result = SG_CompoundHookLiveLinked(&state, &host, &bolt, 5, &pose,
 	                                  &observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.outer.phase == SG_COMPOUND_SUFFIX_LEASED);
@@ -107,9 +113,9 @@ static void TestNominalHookLifecycle(void)
 	                                     &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY);
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	observation.hook_rope_valid = true;
 	observation.hook_rope_length = 200;
@@ -118,13 +124,13 @@ static void TestNominalHookLifecycle(void)
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_PULL);
 	wrong_state = state;
-	result = SG_CompoundHookLivePullApplied(&wrong_state, &host, &wrong, 4,
+	result = SG_CompoundHookLivePullApplied(&wrong_state, &host, &wrong, 5,
 	                                        &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	for (step = 0; step < 3; step++)
 		result = Step(&state, &host, &pose, &observation, NULL);
@@ -134,13 +140,13 @@ static void TestNominalHookLifecycle(void)
 	CHECK(state.sweep_clear);
 	wrong_state = state;
 	result = SG_CompoundHookLiveReleaseApplied(&wrong_state, &host, &wrong,
-	                                           5, &pose);
+	                                           6, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_IDENTITY);
-	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 5,
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
 	                                           &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 5,
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
 	                                           &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	pose.grounded = true;
@@ -259,14 +265,14 @@ static void TestSweepSegmentsCoverTouchAndPostClear(void)
 	Setup(&fixture, &host, &pose, &observation);
 	memset(&state, 0, sizeof(state));
 	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	observation.hook_rope_valid = true;
 	observation.hook_rope_length = 200;
 	for (step = 0; step < 4; step++)
 		result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4,
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5,
 	                                        &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	for (step = 0; step < 3; step++)
@@ -275,7 +281,7 @@ static void TestSweepSegmentsCoverTouchAndPostClear(void)
 	result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.sweep_clear && state.segment_clear_ready);
-	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 5,
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
 	                                           &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	fixture.sweep_cross_call = fixture.sweep_calls + 1;
@@ -302,7 +308,7 @@ static void TestSweepBoundaryMatchesPublishedFirstClear(void)
 	fixture.snapshot.binding.link.sweep_clear_ms = 200;
 	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
 	CHECK(!state.segment_clear_ready);
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	observation.hook_rope_valid = true;
 	observation.hook_rope_length = 200;
@@ -318,7 +324,7 @@ static void TestSweepBoundaryMatchesPublishedFirstClear(void)
 	fixture.snapshot.binding.link.sweep_clear_ms = 200;
 	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
 	fixture.sweep_cross_call = fixture.sweep_calls + 1;
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	observation.hook_rope_valid = true;
 	observation.hook_rope_length = 200;
@@ -326,7 +332,7 @@ static void TestSweepBoundaryMatchesPublishedFirstClear(void)
 		result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(!state.sweep_clear && !state.segment_clear_ready);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4,
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5,
 	                                        &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	for (step = 0; step < 3; step++)
@@ -438,7 +444,7 @@ static void TestReleaseNeedsBodyAndBoltClear(void)
 	Setup(&fixture, &host, &pose, &observation);
 	bolt = DriveToLinked(&fixture, &host, &state, &pose, &observation);
 	fixture.bolt_clear = 0;
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	observation.hook_rope_valid = true;
 	observation.hook_rope_length = 200;
@@ -447,7 +453,7 @@ static void TestReleaseNeedsBodyAndBoltClear(void)
 	(void)Step(&state, &host, &pose, &observation, NULL);
 	result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 4, &pose);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 5, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	(void)Step(&state, &host, &pose, &observation, NULL);
 	(void)Step(&state, &host, &pose, &observation, NULL);
@@ -456,7 +462,7 @@ static void TestReleaseNeedsBodyAndBoltClear(void)
 	result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.sweep_clear);
-	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 5,
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 6,
 	                                           &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	pose.grounded = true;
@@ -521,10 +527,10 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 	CHECK(memcmp(&parked, &state.hook, sizeof(parked)) == 0);
 	CHECK(state.transaction_elapsed_ms -
 	      state.snapshot.binding.mover_top_ms -
-	      state.hook.progress.elapsed_ms == SG_REPLAY_FRAME_MS);
-	CHECK(state.transaction_elapsed_ms == 500);
+	      state.hook.progress.elapsed_ms == 2 * SG_REPLAY_FRAME_MS);
+	CHECK(state.transaction_elapsed_ms == 600);
 	CHECK(fixture.hold_calls == hold_calls + 1);
-	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 6, &pose);
+	result = SG_CompoundHookLiveAttached(&state, &host, &bolt, 7, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.hook.phase == SG_HOOK_REPLAY_ATTACH_FRAME);
 	observation.hook_rope_valid = true;
@@ -533,7 +539,7 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 		result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.hook.phase == SG_HOOK_REPLAY_WAIT_PULL);
-	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 6, &pose);
+	result = SG_CompoundHookLivePullApplied(&state, &host, &bolt, 7, &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	for (step = 0; step < 3; step++)
 		result = Step(&state, &host, &pose, &observation, NULL);
@@ -541,7 +547,7 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 	result = Step(&state, &host, &pose, &observation, NULL);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state.sweep_clear);
-	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 7,
+	result = SG_CompoundHookLiveReleaseApplied(&state, &host, &bolt, 8,
 	                                           &pose);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
@@ -550,7 +556,7 @@ static void TestLateAttachStopsAtPublishedTotal(void)
 	CHECK(!result.command_ready);
 	CHECK(result.failure == SG_COMPOUND_HOOK_LIVE_FAILURE_REPLAY);
 	CHECK(result.replay_reason == SG_REPLAY_REASON_ACTION_TIMEOUT);
-	CHECK(state.transaction_elapsed_ms == 700);
+	CHECK(state.transaction_elapsed_ms == 800);
 	CHECK(state.guard_owned && fixture.release_calls == 0);
 	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,
 	                                    0.0f);
@@ -644,7 +650,7 @@ static void TestPublishedTimeoutAllowsBoundedRecovery(void)
 	result = SG_CompoundHookLiveBoundary(&state, &host, &pose,
 	                                     &observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
-	CHECK(state.transaction_elapsed_ms == 800);
+	CHECK(state.transaction_elapsed_ms == 900);
 	fixture.body_clear = 1;
 	fixture.bolt_clear = 1;
 	result = SG_CompoundHookLiveRecover(&state, &host, &pose, &observation,

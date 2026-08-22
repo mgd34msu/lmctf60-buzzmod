@@ -431,9 +431,9 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 	proof->touch_frame_end_ms = 100;
 	proof->mover_top_ms = 500;
 	proof->suffix_start_ms = 400;
-	proof->arrival_ms = 600;
+	proof->arrival_ms = 700;
 	proof->sweep_clear_ms = 200;
-	proof->total_cost_ms = 1100;
+	proof->total_cost_ms = 1200;
 	proof->exit_speed = 12;
 	memcpy(proof->control, expected_control, sizeof(proof->control));
 	if (!SG_HookControlDecode(proof->suffix_origin, 22.0f, RIGHT_HANDED,
@@ -488,7 +488,7 @@ rune_link_t CompoundHookLink(int from, int to)
 	rune_link_t link = CompoundLink(from, to);
 
 	link.action = RL_DOOR_HOOK;
-	link.cost_ms = 1100;
+	link.cost_ms = 1200;
 	link.heading_slack = SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER;
 	link.anchor[PITCH] = SHORT2ANGLE((short)ANGLE2SHORT(-15.0f));
 	link.anchor[YAW] = SHORT2ANGLE(ANGLE2SHORT(90.0f));

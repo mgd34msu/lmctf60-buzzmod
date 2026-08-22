@@ -7529,6 +7529,12 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 	    expected_control, old_frame_z, &candidate, passent, world_only);
 	if (reason != RLR_OK)
 		goto done;
+	if (candidate.arrival_ms > RUNE_MAX_COST_MS - SG_REPLAY_FRAME_MS)
+	{
+		reason = RLR_COST_MISMATCH;
+		goto done;
+	}
+	candidate.arrival_ms += SG_REPLAY_FRAME_MS;
 	if (candidate.touch_frame_end_ms >
 	        RUNE_MAX_COST_MS - candidate.suffix_start_ms ||
 	    candidate.arrival_ms > RUNE_MAX_COST_MS -

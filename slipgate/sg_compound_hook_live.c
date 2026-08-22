@@ -7,10 +7,10 @@ int CompoundHookLiveTopBoundaryMs(
 	const sg_compound_publication_binding_t *binding)
 {
 	if (!binding || binding->touch_frame_end_ms <= 0 ||
-	    binding->suffix_start_ms < 0 ||
-	    binding->touch_frame_end_ms > INT_MAX - binding->suffix_start_ms)
+	    binding->mover_top_ms < 0 ||
+	    binding->touch_frame_end_ms > INT_MAX - binding->mover_top_ms)
 		return -1;
-	return binding->touch_frame_end_ms + binding->suffix_start_ms;
+	return binding->touch_frame_end_ms + binding->mover_top_ms;
 }
 
 sg_compound_hook_live_result_t CompoundHookLiveResult(

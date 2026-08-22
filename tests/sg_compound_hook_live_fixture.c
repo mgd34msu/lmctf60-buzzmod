@@ -268,10 +268,10 @@ void Setup(fixture_t *fixture, sg_compound_hook_live_host_t *host,
 	binding->touch_frame_end_ms = 100;
 	binding->mover_top_ms = 300;
 	binding->suffix_start_ms = 200;
-	binding->arrival_ms = 300;
+	binding->arrival_ms = 400;
 	binding->sweep_clear_ms = 100;
-	binding->total_cost_ms = 600;
-	binding->link.cost_ms = 600;
+	binding->total_cost_ms = 700;
+	binding->link.cost_ms = 700;
 	binding->link.sweep_clear_ms = 100;
 	binding->source.old_frame_z = 0.0f;
 	hook->bite[0] = 160.0f;
@@ -341,10 +341,10 @@ void SetupLateAttach(fixture_t *fixture,
 {
 	Setup(fixture, host, pose, observation);
 	fixture->snapshot.binding.link.anchor[ROLL] = 160.0f;
-	fixture->snapshot.binding.arrival_ms = 400;
+	fixture->snapshot.binding.arrival_ms = 500;
 	fixture->snapshot.binding.sweep_clear_ms = 100;
-	fixture->snapshot.binding.total_cost_ms = 700;
-	fixture->snapshot.binding.link.cost_ms = 700;
+	fixture->snapshot.binding.total_cost_ms = 800;
+	fixture->snapshot.binding.link.cost_ms = 800;
 	fixture->snapshot.binding.link.sweep_clear_ms = 100;
 	fixture->snapshot.binding.hook_proof.spec.flight_ms = 200;
 }
@@ -383,7 +383,7 @@ void DriveToTop(fixture_t *fixture,
 {
 	sg_compound_hook_live_result_t result;
 	usercmd_t final_aim;
-	int step;
+	int final_step_ms, step;
 
 	result = SG_CompoundHookLiveBegin(state, host, 7, pose, observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -403,15 +403,19 @@ void DriveToTop(fixture_t *fixture,
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state->transaction_elapsed_ms == 25);
 	CHECK(!state->command_pending && !state->command_replay_consumed);
-	for (step = 0; step < 10 && state->transaction_elapsed_ms < 275; step++)
+	final_step_ms = fixture->snapshot.binding.touch_frame_end_ms +
+	                fixture->snapshot.binding.mover_top_ms -
+	                SG_REPLAY_STEP_MS;
+	for (step = 0; step < 20 &&
+	     state->transaction_elapsed_ms < final_step_ms; step++)
 	{
 		result = Step(state, host, pose, observation, NULL);
 		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 		if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
 			break;
 	}
-	CHECK(state->transaction_elapsed_ms == 275);
-	if (state->transaction_elapsed_ms != 275)
+	CHECK(state->transaction_elapsed_ms == final_step_ms);
+	if (state->transaction_elapsed_ms != final_step_ms)
 		return;
 	result = Step(state, host, pose, observation, &final_aim);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
@@ -434,7 +438,7 @@ sg_compound_hook_live_bolt_t DriveToLinked(fixture_t *fixture,
 	DriveToTop(fixture, host, state, pose, observation);
 	bolt.key = 21;
 	bolt.generation = 9001U;
-	result = SG_CompoundHookLiveLinked(state, host, &bolt, 3, pose,
+	result = SG_CompoundHookLiveLinked(state, host, &bolt, 4, pose,
 	                                   observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	CHECK(state->outer.phase == SG_COMPOUND_SUFFIX_LEASED);
@@ -442,7 +446,7 @@ sg_compound_hook_live_bolt_t DriveToLinked(fixture_t *fixture,
 	      (fixture->snapshot.binding.hook_proof.spec.flight_ms >
 	       SG_REPLAY_FRAME_MS ?
 	       SG_HOOK_REPLAY_FLIGHT : SG_HOOK_REPLAY_WAIT_ATTACH));
-	result = SG_CompoundHookLiveLinked(state, host, &bolt, 3, pose,
+	result = SG_CompoundHookLiveLinked(state, host, &bolt, 4, pose,
 	                                   observation);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
 	return bolt;
