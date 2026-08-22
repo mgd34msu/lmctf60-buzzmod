@@ -649,6 +649,7 @@ PUSH_LIVE_TEST_BIN := sg_push_live_test.make
 PUSH_LIVE_TEST_OBJS := .sg_push_live_test.make.o \
 	.sg_push_live_under_test.make.o .sg_push_falling_under_test.make.o
 PUSH_LIVE_TEST_DEPS := $(PUSH_LIVE_TEST_OBJS:.o=.d)
+PUSH_GAME_INTEGRATION_TEST := tests/test_push_game_integration.py
 ROCKETJUMP_CADENCE_TEST_BIN := sg_rocketjump_cadence_test.make
 ROCKETJUMP_CADENCE_TEST_OBJS := .sg_rocketjump_cadence_test.make.o \
 	.sg_rocketjump_cadence_under_test.make.o
@@ -1217,6 +1218,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test \
+	push-game-integration-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test \
@@ -3214,6 +3216,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
 		$(ROCKETJUMP_LIVE_TEST_BIN) $(ROCKETJUMP_CADENCE_TEST_BIN) \
 		$(PUSH_LIVE_TEST_BIN) \
+		$(PUSH_GAME_INTEGRATION_TEST) \
 		$(ROCKETJUMP_GAME_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST) \
 		$(COMPOUND_SWIM_GAME_TEST_BIN) \
@@ -3322,6 +3325,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(COMPOUND_SWIM_LIVE_TEST_BIN)
 	$(Q)./$(ROCKETJUMP_LIVE_TEST_BIN)
 	$(Q)./$(PUSH_LIVE_TEST_BIN)
+	$(Q)python3 -B $(PUSH_GAME_INTEGRATION_TEST)
 	$(Q)./$(ROCKETJUMP_CADENCE_TEST_BIN)
 	$(Q)./$(ROCKETJUMP_GAME_TEST_BIN)
 	$(Q)python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
@@ -3406,6 +3410,10 @@ rune-artifact-test: $(RUNE_PYTHON_TESTS)
 	$(Q)python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers \
 		tests.test_rune_water_overflow_failfast
+
+push-game-integration-test: $(PUSH_GAME_INTEGRATION_TEST)
+	$(E) [TEST] push game integration
+	$(Q)python3 -B $(PUSH_GAME_INTEGRATION_TEST)
 
 rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
 		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \

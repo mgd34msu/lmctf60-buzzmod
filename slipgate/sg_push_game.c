@@ -1,6 +1,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_move.h"
@@ -247,6 +248,65 @@ int SG_PushGameEmit(sg_bot_t *bot, int selected_link)
 			return 1;
 		}
 	}
+	return 1;
+}
+
+int SG_PushGameStageAuthenticatedProbe(int link_index)
+{
+	sg_push_witness_t witness;
+	sg_bot_t *bot = NULL;
+	edict_t *entity;
+	int axis, slot;
+
+	if (!sg_cv.debug || sg_cv.debug->value <= 0.0f ||
+	    !PushWitness(link_index, &witness))
+		return 0;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+		if (SG_CompoundDropGameIdleAdmission(&sg_bots[slot]) &&
+		    !SG_PushGameOwns(&sg_bots[slot]))
+		{
+			bot = &sg_bots[slot];
+			break;
+		}
+	if (!bot)
+		return 0;
+	entity = bot->ent;
+	gi.unlinkentity(entity);
+	for (axis = 0; axis < 3; axis++)
+	{
+		entity->s.origin[axis] = witness.source_q8[axis] * 0.125f;
+		entity->s.old_origin[axis] = entity->s.origin[axis];
+		entity->client->ps.pmove.origin[axis] = witness.source_q8[axis];
+		entity->client->ps.pmove.velocity[axis] = 0;
+	}
+	VectorClear(entity->velocity);
+	VectorClear(entity->client->oldvelocity);
+	entity->groundentity = g_edicts;
+	entity->groundentity_linkcount = g_edicts->linkcount;
+	entity->waterlevel = 0;
+	entity->watertype = 0;
+	entity->health = entity->max_health > 100 ? entity->max_health : 100;
+	entity->deadflag = DEAD_NO;
+	entity->client->ps.pmove.pm_type = PM_NORMAL;
+	entity->client->ps.pmove.pm_flags &= ~(PMF_DUCKED | PMF_JUMP_HELD);
+	entity->client->ps.pmove.pm_time = 0;
+	entity->client->old_pmove = entity->client->ps.pmove;
+	SG_PushLiveReset(&bot->push);
+	bot->seed = SG_Rune()->links[link_index].from;
+	VectorCopy(entity->s.origin, bot->last_origin);
+	bot->commit_link = link_index;
+	bot->sticky_link = link_index;
+	bot->commit_until = level.time + 10.0f;
+	bot->latch_until = level.time + 10.0f;
+	gi.linkentity(entity);
+	if (!SG_PushGameEmit(bot, link_index) ||
+	    bot->push.phase != SG_PUSH_FLIGHT)
+	{
+		SG_PushLiveReset(&bot->push);
+		bot->commit_link = -1;
+		return 0;
+	}
+	PushReport(bot, "probe-staged");
 	return 1;
 }
 

@@ -2,6 +2,7 @@
 #include "g_ctffunc.h"          /* CTF_TEAM_RED/BLUE for `sv sg add red|blue` */
 #include "slipgate/sg_local.h"  /* the SLIPGATE admin surface behind `sv sg` */
 #include "slipgate/sg_compound_swim_game.h"
+#include "slipgate/sg_push_game.h"
 #include "slipgate/sg_rocketjump_game.h"
 #include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_compound_hook_game.h"
@@ -363,6 +364,16 @@ static void SVCmd_SG_f (void)
 			gi.cprintf(NULL, PRINT_HIGH,
 			    "slipgate: authenticated rocketjump probe refused\n");
 	}
+	else if (Q_stricmp(sub, "push") == 0)
+	{
+		char *end = NULL;
+		long link = strtol(arg, &end, 10);
+
+		if (!*arg || !end || *end || link < 0 || link > INT_MAX ||
+		    !SG_PushGameStageAuthenticatedProbe((int)link))
+			gi.cprintf(NULL, PRINT_HIGH,
+			    "slipgate: authenticated push probe refused\n");
+	}
 	else if (Q_stricmp(sub, "compounddrop") == 0)
 	{
 		char *end = NULL;
@@ -387,7 +398,7 @@ static void SVCmd_SG_f (void)
 		gi.cprintf(NULL, PRINT_HIGH,
 		           "usage: sv sg <add [red|blue] | list | remove [name|slot] "
 		           "| kick worst | weights [reload] | compoundswim <link> "
-		           "| rocketjump <link> | compounddrop <link> "
+		           "| rocketjump <link> | push <link> | compounddrop <link> "
 		           "| compoundhook <link>>\n");
 }
 
