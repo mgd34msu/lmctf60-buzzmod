@@ -7309,6 +7309,9 @@ static qboolean SG_OracleHookTraverseMonitored(sg_phantom_t *ph,
 	sg_replay_status_t status;
 	usercmd_t cmd;
 	qboolean result = false;
+	qboolean fixed_step_valid = false;
+	sg_phantom_t fixed_step_phantom;
+	usercmd_t fixed_step_command;
 	edict_t *previous_passent;
 	qboolean previous_world_only, previous_contaminated;
 
@@ -7395,7 +7398,27 @@ static qboolean SG_OracleHookTraverseMonitored(sg_phantom_t *ph,
 			if (monitor && !monitor(monitor_context, ph, before, before,
 			                        state.progress.elapsed_ms))
 				goto done;
-			SG_OracleRun(ph, &cmd, 1);
+			/* A clean world-only Pmove step is deterministic for an exact
+			 * phantom and command. Once it returns the same phantom, later
+			 * repetitions are a proven fixed point. The reducer and observations
+			 * still advance one substep at a time, preserving replay boundaries
+			 * and failure reasons while avoiding redundant collision work. */
+			if (!(monitor == NULL && world_only && fixed_step_valid &&
+			      memcmp(ph, &fixed_step_phantom, sizeof(*ph)) == 0 &&
+			      memcmp(&cmd, &fixed_step_command, sizeof(cmd)) == 0))
+			{
+				sg_phantom_t step_start = *ph;
+
+				SG_OracleRun(ph, &cmd, 1);
+				if (monitor == NULL && world_only &&
+				    !sg_oracle_contaminated &&
+				    memcmp(ph, &step_start, sizeof(*ph)) == 0)
+				{
+					fixed_step_phantom = *ph;
+					fixed_step_command = cmd;
+					fixed_step_valid = true;
+				}
+			}
 			if (monitor && !monitor(monitor_context, ph, before, ph->origin,
 			                        state.progress.elapsed_ms +
 			                            SG_REPLAY_STEP_MS))
