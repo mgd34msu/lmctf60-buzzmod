@@ -181,16 +181,27 @@ both passed.
       controller suites each passed all 53 tests. A frozen-input `lmctf14` run
       completed generation, dual-reader acceptance, SNAG creation, and fresh
       cold load with a terminal PASS.
-- [x] Exact-commit CI for `98775a4` passed on both `slipgate` and `main`, with
-      the full Windows and Linux platform, compiler, and Make-dialect matrix.
-      Local and remote `slipgate` and `main` matched before this plan update.
+- [x] Teleporter staging and objective-core diagnostics are canonical at
+      `38f6e32`. `lmctf02a` completed generation, dual-reader acceptance,
+      semantic gates, authenticated SNAG creation, and fresh cold load with a
+      terminal PASS.
+- [x] Declared-door sibling egress replay is canonical at `119bc96`. Fresh
+      accepted pairs for both `lmctf03` and `mactf01` reached authenticated
+      SNAG-ready and RUNE-ready during cold load.
+- [x] The separate, fingerprinted cold-load timeout is canonical at `30c8667`.
+      The GNU and Make controller suites each passed all 55 tests. A sealed
+      `lmctf03` artifact passed direct cold load with the 10-second startup
+      delay and a 420-second cold-load budget.
+- [x] Exact-commit CI for `30c8667` passed on both `slipgate` and `main`. Both
+      runs passed the Windows x86 and x64 jobs, Linux, all four GCC and Clang
+      Make-dialect jobs, and the version check.
 
 The `72c52db` game module and its recorded evidence remain proven. They are no
 longer the final combined source and tool freeze. The controller changed after
 that freeze, and the active graph repairs will change game source. The old
 snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
 
-- [ ] Finish and integrate the graph and replay repairs.
+- [ ] Finish and integrate the remaining graph repairs.
 - [ ] Pass exact-commit CI for the final combined source and tools on both
       `slipgate` and `main`.
 - [ ] Rebuild the final module, create a new immutable 181-map input snapshot,
@@ -199,10 +210,12 @@ snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
 ## Active work: repair, refreeze, and regenerate all 181 RUNEs
 
 The run at `/tmp/lmctf6-rune181-72c52db` is sealed from acceptance and retained
-only as diagnostic evidence. At the durable checkpoint it had 39 terminal
-results: zero PASS, 13 `GEN_FAIL`, and 26 `TIMEOUT`. Ten workers were active and
-132 maps were pending. No artifact from this run belongs to the accepted
-corpus.
+only as diagnostic evidence. The run is complete with all 181 terminal results:
+zero PASS, 31 `GEN_FAIL`, and 150 `TIMEOUT`. No worker remains active. The final
+summary, every referenced result hash, each map identity, and each terminal
+classification passed the integrity check. No artifact from this run belongs
+to the accepted corpus. The project still requires a new freeze and a full
+181-map restart from an empty run root.
 
 Most recorded timeouts completed RUNE generation and were waiting for a
 same-process RUNE-ready line after the runtime correctly rejected the missing
@@ -212,16 +225,13 @@ remain timeouts unless later source repair lets generation finish.
 
 ### Repair tracks
 
-- [ ] Finish the teleporter-staging repair. The isolated candidate gives
-      `lmctf02a` a mutual objective core and writes its RUNE; it still needs the
-      complete focused and integration gates before canonical integration.
+- [ ] Finish the `lmctf04` objective-root repair. The candidate remains in
+      isolated validation until its focused gates and complete generation path
+      pass.
+- [ ] Repair the remaining maps whose objective route core is closed.
 - [ ] Repair the missing central transition in `lmctf07`.
-- [ ] Keep the route-core diagnostics isolated until each admitted repair has
-      focused regression and real generation evidence.
-- [ ] Repair `lmctf03` live declared-door replay at the rejected link.
-- [ ] Give the exact `lmctf04` flag-root seeds valid outbound routes.
 
-1. Finish the source-owned graph and replay repairs above, including every
+1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
 2. Build and verify one new exact source, module, configuration, engine, reader,
    linter, semantic-checker, and BSP snapshot.
@@ -286,7 +296,7 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ## Critical path
 
 ```text
-finish graph and replay repairs
+finish the remaining graph repairs
   -> pass exact CI and create a new source, module, and input freeze
   -> restart and validate all 181 RUNEs
   -> run ordinary real matches
@@ -305,7 +315,11 @@ finish graph and replay repairs
 - [x] Prior `72c52db` module identity and evidence proven.
 - [x] Controller deferred-SNAG phase repair, full tests, live cold-load proof,
       and exact CI on both branches.
-- [ ] Graph and replay blockers repaired and integrated.
+- [x] Teleporter and objective-core diagnostics integrated, with `lmctf02a`
+      accepted end to end.
+- [x] Declared-door replay integrated, with `lmctf03` and `mactf01` cold-ready.
+- [x] Separate cold-load timeout integrated, tested, and green in exact CI.
+- [ ] Remaining graph blockers repaired and integrated.
 - [ ] New final combined source, tool, module, and input freeze.
 - [ ] Exactly 181 newly generated and fully accepted RUNEs.
 - [ ] Real-match behavioral validation with ordinary map-list inputs.
