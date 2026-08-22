@@ -266,6 +266,9 @@ including `lmctf02a` and `lmctf04`.
       host jobs only because the overflow regression's three Makefile lines had
       not been added to the source-size budget. Commit `9c5fabf` corrects both
       exact budgets, and the deslop audit now passes with zero findings.
+      Exact-commit CI is fully green on both `slipgate` and `main` at
+      `698ed51`, including both Windows builds, the packaged Linux module, all
+      compiler jobs, both Make dialects, and the version check.
 - [ ] Repair the remaining maps whose objective route core is closed.
       `smap39` is accepted at commits `8544da2`, `fed4c9f`, and `c4f9b48`.
       The source-identical live run passed generation, both readers, semantic
@@ -299,8 +302,13 @@ byte-identical fixed point; reducer time, observations, hazards, and failure
 classification still advance normally. A complete `lmctf42` comparison wrote
 the same 285 seeds and 9,899 links with a byte-identical artifact while reducing
 base-link CPU from 19,126 ms to 15,796 ms. The seven non-overflow timeout maps
-still require parallel post-integration measurement; this optimization is not
-yet claimed to put all of them below 900 seconds.
+were then measured concurrently against the immutable `698ed51` source and
+module. `lmctf15`, `lmctf25`, `lmctf58`, `tw2ctf2`, `xmap05`, `xmap12`, and
+`xmap26` all reached the same 900-second base-link timeout before the first
+256-seed progress interval, wrote no artifact, and retained normalized
+signature `870fb63c713b5d71496b56f6`. The fixed-point optimization is therefore
+safe but insufficient for this family; structural hook-search reduction remains
+an active blocker.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
