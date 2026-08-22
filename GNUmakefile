@@ -541,6 +541,7 @@ HOOK_DIAGNOSTICS_TEST_ALL_ARTIFACTS = \
 RUN_HANDOFF_TEST_BIN = sg_run_handoff_test.gnu
 RUN_HANDOFF_TEST_OBJS = .sg_run_handoff_test.gnu.o \
 	.sg_run_handoff_descend_under_test.gnu.o \
+	.sg_push_live_under_test.gnu.o \
 	.sg_run_handoff_pmove_under_test.gnu.o \
 	.sg_run_handoff_q_shared_under_test.gnu.o
 RUN_HANDOFF_TEST_DEPS = $(RUN_HANDOFF_TEST_OBJS:.o=.d)

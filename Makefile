@@ -445,6 +445,7 @@ HOOK_DIAGNOSTICS_TEST_ALL_ARTIFACTS := \
 RUN_HANDOFF_TEST_BIN := sg_run_handoff_test.make
 RUN_HANDOFF_TEST_OBJS := .sg_run_handoff_test.make.o \
 	.sg_run_handoff_descend_under_test.make.o \
+	.sg_push_live_under_test.make.o \
 	.sg_run_handoff_pmove_under_test.make.o \
 	.sg_run_handoff_q_shared_under_test.make.o
 RUN_HANDOFF_TEST_DEPS := $(RUN_HANDOFF_TEST_OBJS:.o=.d)
