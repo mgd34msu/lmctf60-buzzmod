@@ -68,6 +68,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             }
             self.assertEqual(set(), required - sources, name)
 
+    def test_drop_live_results_are_initialized_for_strict_compilers(self):
+        for source in (
+            "slipgate/sg_compound_drop_live.c",
+            "slipgate/sg_compound_drop_live_finish.c",
+        ):
+            text = (ROOT / source).read_text()
+            self.assertNotIn("sg_drop_live_result_t live_result;", text, source)
+
 
 if __name__ == '__main__':
     unittest.main()

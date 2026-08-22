@@ -599,7 +599,7 @@ sg_compound_drop_live_result_t SG_CompoundDropLivePostStep(
 	const sg_replay_pose_t *pose,
 	const sg_replay_observation_t *observation)
 {
-	sg_drop_live_result_t live_result;
+	sg_drop_live_result_t live_result = { 0 };
 	sg_compound_drop_live_result_t sweep;
 	int next_elapsed_ms;
 	qboolean elapsed_valid;
