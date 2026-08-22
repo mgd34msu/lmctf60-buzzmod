@@ -29,7 +29,6 @@ tools/runs-archive/
 /.pov-native-live-*/
 /aux-*-launch.log
 /docs-layout-isa.md
-/PROJECT-COMPLETION-PLAN.md
 /*.gnu
 /*.make
 /tools/pov-supervisor
