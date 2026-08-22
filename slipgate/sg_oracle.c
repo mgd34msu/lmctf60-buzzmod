@@ -7484,13 +7484,21 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 		goto done;
 	}
 	old_frame_z = cursor.state.progress.old_frame_z;
+	if (expected_control)
+	{
+		opening_view[PITCH] = expected_control[PITCH];
+		opening_view[YAW] = expected_control[YAW];
+		opening_view[ROLL] = 0.0f;
+	}
+	else
+		VectorClear(opening_view);
 	remainder_commands =
 		((SG_REPLAY_FRAME_MS - candidate.touch_ms % SG_REPLAY_FRAME_MS) %
 		 SG_REPLAY_FRAME_MS) / SG_REPLAY_STEP_MS;
 	candidate.touch_frame_end_ms = candidate.touch_ms +
 	                               remainder_commands * SG_REPLAY_STEP_MS;
 	if (remainder_commands > 0 &&
-	    !SG_OracleCompoundFrame(ph, resolved, mechanism_anchor, NULL,
+	    !SG_OracleCompoundFrame(ph, resolved, NULL, opening_view,
 	                            remainder_commands, &old_frame_z))
 	{
 		reason = RLR_APPROACH_REPLAY_FAILED;
@@ -7514,7 +7522,7 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 		member_staged = true;
 		if (mover_step.at_top)
 			break;
-		if (!SG_OracleCompoundFrame(ph, resolved, mechanism_anchor, NULL, 4,
+		if (!SG_OracleCompoundFrame(ph, resolved, NULL, opening_view, 4,
 		                            &old_frame_z))
 		{
 			reason = RLR_RIDE_REPLAY_FAILED;
@@ -7528,14 +7536,6 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 		reason = RLR_MECHANISM_UNRESOLVED;
 		goto done;
 	}
-	if (expected_control)
-	{
-		opening_view[PITCH] = expected_control[PITCH];
-		opening_view[YAW] = expected_control[YAW];
-		opening_view[ROLL] = 0.0f;
-	}
-	else
-		VectorClear(opening_view);
 	if (!SG_OracleCompoundFrame(ph, resolved, NULL, opening_view, 4,
 	                            &old_frame_z))
 	{

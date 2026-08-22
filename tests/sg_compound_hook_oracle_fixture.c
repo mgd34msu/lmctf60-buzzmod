@@ -51,7 +51,7 @@ static void TestExpectedControlAndStablePopulation(void)
 	CHECK(baseline.proof.exit_speed == 2);
 	CHECK(baseline.proof.suffix_old_frame_z == 0.0f);
 	CHECK(baseline.proof.suffix_pms.origin[0] == 1280);
-	CHECK(baseline.proof.suffix_pms.origin[1] == 32);
+	CHECK(baseline.proof.suffix_pms.origin[1] == 176);
 	CHECK(baseline.proof.suffix_pms.origin[2] == 0);
 	CHECK(baseline.proof.suffix_pms.velocity[0] == 0);
 	CHECK(baseline.proof.suffix_pms.velocity[1] == 64);
@@ -61,10 +61,10 @@ static void TestExpectedControlAndStablePopulation(void)
 	      baseline.proof.suffix_start_ms + baseline.proof.arrival_ms);
 	CHECK(baseline.proof.total_cost_ms == 1000);
 	CHECK(baseline.member_restored && baseline.globals_restored);
-	CHECK(baseline.top_hold_commands == 4);
-	CHECK(baseline.top_zero_commands == 4);
-	CHECK(baseline.top_corrective_commands == 0);
-	CHECK(baseline.suffix_captured_after_top_hold);
+	CHECK(baseline.opening_commands == 22);
+	CHECK(baseline.opening_zero_commands == 22);
+	CHECK(baseline.opening_corrective_commands == 0);
+	CHECK(baseline.suffix_captured_after_opening);
 	CHECK(baseline.suffix_commands == 16);
 
 	request.loader_transient = true;

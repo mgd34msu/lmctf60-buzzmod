@@ -45,7 +45,7 @@ trace_t HostTrace(const vec3_t start, const vec3_t mins,
 			trace.fraction = 0.5f;
 			VectorCopy(start, trace.endpos);
 			trace.endpos[1] =
-				fixture_observation.last_hook_top_hold.origin[1] * 0.125f;
+				fixture_observation.last_hook_opening.origin[1] * 0.125f;
 			trace.endpos[2] = 26.0f;
 			return trace;
 		}
@@ -113,6 +113,8 @@ int HostBoxEdicts(const vec3_t mins, const vec3_t maxs,
 	    mins[2] < fixture_edicts[2].absmax[2])
 	{
 		list[count++] = &fixture_edicts[2];
+		if (fixture_config.hook_suffix)
+			fixture_observation.hook_opening_started = true;
 		if (fixture_config.contaminate_trigger && count < max_count)
 			list[count++] = &fixture_edicts[3];
 	}
@@ -243,6 +245,7 @@ int SuffixX(void)
 void HostPmove(pmove_t *pmove)
 {
 	vec3_t start, mins, maxs, end;
+	qboolean hook_opening;
 	int x = 60;
 
 	fixture_observation.pmove_calls++;
@@ -261,37 +264,35 @@ void HostPmove(pmove_t *pmove)
 	pmove->groundentity = NULL;
 	pmove->watertype = CONTENTS_WATER;
 	pmove->waterlevel = 3;
-	if (fixture_observation.top_staged)
+	hook_opening = fixture_config.hook_suffix &&
+	    fixture_observation.hook_opening_started &&
+	    !fixture_observation.hook_started;
+	if (hook_opening)
 	{
-		qboolean hook_top_hold = fixture_config.hook_suffix &&
-		    !fixture_observation.hook_started;
-
+		fixture_observation.hook_opening_commands++;
+		x = pmove->s.origin[0] / 8;
+		if (CommandZero(&pmove->cmd))
+		{
+			fixture_observation.hook_opening_zero_commands++;
+			pmove->s.origin[1] += 8;
+		}
+		else
+		{
+			fixture_observation.hook_opening_corrective_commands++;
+			pmove->s.origin[1] = 0;
+		}
+	}
+	else if (fixture_observation.top_staged)
+	{
 		if (!fixture_observation.first_top_seen)
 		{
 			fixture_observation.first_top_seen = true;
 			fixture_observation.first_top_command = pmove->cmd;
 		}
-		if (hook_top_hold)
-		{
-			fixture_observation.hook_top_hold_commands++;
-			if (CommandZero(&pmove->cmd))
-			{
-				fixture_observation.hook_top_zero_commands++;
-				pmove->s.origin[1] += 8;
-			}
-			else
-			{
-				fixture_observation.hook_top_corrective_commands++;
-				pmove->s.origin[1] = 0;
-			}
-		}
-		else
-			fixture_observation.suffix_commands++;
+		fixture_observation.suffix_commands++;
 		if (fixture_config.hook_suffix)
 		{
-			if (hook_top_hold)
-				x = 160;
-			else if (fixture_config.hook_sweep_mode ==
+			if (fixture_config.hook_sweep_mode ==
 			        SG_HOOK_ORACLE_SWEEP_PRECLEAR_CROSS &&
 			    fixture_observation.suffix_commands == 3)
 				x = -80;
@@ -318,10 +319,7 @@ void HostPmove(pmove_t *pmove)
 		    fixture_config.identity_drift_at_command ==
 		    fixture_observation.suffix_commands)
 			fixture_edicts[1].s.number = 9;
-		if (!hook_top_hold)
-			pmove->s.velocity[0] = 64;
-		if (hook_top_hold)
-			fixture_observation.last_hook_top_hold = pmove->s;
+		pmove->s.velocity[0] = 64;
 		if (fixture_config.drop_suffix)
 		{
 			qboolean wet = x <= -60 ||
@@ -407,4 +405,6 @@ void HostPmove(pmove_t *pmove)
 		}
 	}
 	pmove->s.origin[0] = (short)(x * 8);
+	if (hook_opening)
+		fixture_observation.last_hook_opening = pmove->s;
 }

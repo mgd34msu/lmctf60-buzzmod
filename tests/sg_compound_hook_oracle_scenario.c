@@ -6,7 +6,7 @@ void SG_CompoundHookOracleRunScenario(
 	sg_compound_hook_oracle_response_t *response)
 {
 	const vec3_t mechanism = { 160.0f, 0.0f, 0.0f };
-	const vec3_t hook_start = { 160.0f, 4.0f, 0.0f };
+	const vec3_t hook_start = { 160.0f, 22.0f, 0.0f };
 	const vec3_t destination = { 280.0f, 0.0f, 0.0f };
 	fixture_config_t scenario =
 		DefaultConfig(2, FIXTURE_SUFFIX_ALWAYS_OUTSIDE);
@@ -78,16 +78,16 @@ void SG_CompoundHookOracleRunScenario(
 	response->masked_contact_traces =
 		fixture_observation.transient_masked_contact_traces;
 	response->suffix_commands = fixture_observation.suffix_commands;
-	response->top_hold_commands =
-		fixture_observation.hook_top_hold_commands;
-	response->top_zero_commands =
-		fixture_observation.hook_top_zero_commands;
-	response->top_corrective_commands =
-		fixture_observation.hook_top_corrective_commands;
-	response->suffix_captured_after_top_hold =
-		response->top_hold_commands == 4 &&
+	response->opening_commands =
+		fixture_observation.hook_opening_commands;
+	response->opening_zero_commands =
+		fixture_observation.hook_opening_zero_commands;
+	response->opening_corrective_commands =
+		fixture_observation.hook_opening_corrective_commands;
+	response->suffix_captured_after_opening =
+		response->opening_commands == 22 &&
 		memcmp(&response->proof.suffix_pms,
-		       &fixture_observation.last_hook_top_hold,
+		       &fixture_observation.last_hook_opening,
 		       sizeof(response->proof.suffix_pms)) == 0;
 	response->member_restored =
 		MemberRestored(&fixture_edicts[1], &member_before);
