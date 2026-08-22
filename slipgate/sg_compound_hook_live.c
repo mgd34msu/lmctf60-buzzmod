@@ -3,6 +3,16 @@
 #include <limits.h>
 #include <string.h>
 
+int CompoundHookLiveTopBoundaryMs(
+	const sg_compound_publication_binding_t *binding)
+{
+	if (!binding || binding->touch_frame_end_ms <= 0 ||
+	    binding->suffix_start_ms < 0 ||
+	    binding->touch_frame_end_ms > INT_MAX - binding->suffix_start_ms)
+		return -1;
+	return binding->touch_frame_end_ms + binding->suffix_start_ms;
+}
+
 sg_compound_hook_live_result_t CompoundHookLiveResult(
 	sg_compound_hook_live_outcome_t outcome,
 	sg_compound_hook_live_failure_t failure,
@@ -299,7 +309,7 @@ sg_compound_hook_live_result_t SG_CompoundHookLivePreStep(
 	case SG_COMPOUND_HOOK_LIVE_CONTROL_SUFFIX:
 		if (state->hook.phase == SG_HOOK_REPLAY_WAIT_ATTACH &&
 		    state->transaction_elapsed_ms -
-		        state->snapshot.binding.mover_top_ms -
+		        CompoundHookLiveTopBoundaryMs(&state->snapshot.binding) -
 		        state->hook.progress.elapsed_ms >=
 		    SG_REPLAY_HOOK_FLIGHT_MAX_MS - state->hook.flight_body_ms)
 			return CompoundHookLiveOwnedFailure(state,
@@ -603,7 +613,8 @@ static sg_compound_hook_live_result_t ConsumeStep(
 	}
 	if (control == SG_COMPOUND_HOOK_LIVE_CONTROL_OPENING && boundary)
 	{
-		if (next_ms == state->snapshot.binding.mover_top_ms)
+		if (next_ms == CompoundHookLiveTopBoundaryMs(
+		        &state->snapshot.binding))
 		{
 			if (!SG_CompoundAdvance(&state->outer,
 			                        SG_COMPOUND_EVENT_TOP))
@@ -612,7 +623,8 @@ static sg_compound_hook_live_result_t ConsumeStep(
 				    SG_REPLAY_REASON_INVALID_STATE);
 			state->control = SG_COMPOUND_HOOK_LIVE_CONTROL_NONE;
 		}
-		else if (next_ms > state->snapshot.binding.mover_top_ms)
+		else if (next_ms > CompoundHookLiveTopBoundaryMs(
+		             &state->snapshot.binding))
 			return CompoundHookLiveOwnedFailure(state,
 			    SG_COMPOUND_HOOK_LIVE_FAILURE_TOP,
 			    SG_REPLAY_REASON_TIMING_MISMATCH);

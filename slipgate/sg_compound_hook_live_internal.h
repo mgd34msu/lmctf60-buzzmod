@@ -8,6 +8,8 @@ sg_compound_hook_live_result_t CompoundHookLiveResult(
 	sg_compound_hook_live_outcome_t outcome,
 	sg_compound_hook_live_failure_t failure,
 	sg_replay_reason_t reason, qboolean command_ready);
+int CompoundHookLiveTopBoundaryMs(
+	const sg_compound_publication_binding_t *binding);
 qboolean CompoundHookLiveHostValid(
 	const sg_compound_hook_live_host_t *host);
 sg_compound_hook_live_host_result_t CompoundHookLiveCurrent(

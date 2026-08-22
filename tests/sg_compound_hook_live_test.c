@@ -24,6 +24,60 @@ static void TestBeginOwnsOneOuterTransaction(void)
 	CHECK(fixture.acquire_calls == 1);
 }
 
+static void TestTouchFrameAndMoverSchedulesAreIndependent(void)
+{
+	fixture_t fixture;
+	sg_compound_hook_live_host_t host;
+	sg_compound_hook_live_state_t state =
+		SG_COMPOUND_HOOK_LIVE_STATE_INITIALIZER;
+	sg_compound_hook_live_bolt_t bolt = { 21, 9001U };
+	sg_compound_hook_live_result_t result;
+	sg_replay_pose_t pose;
+	sg_replay_observation_t observation;
+	usercmd_t command;
+	int step;
+
+	Setup(&fixture, &host, &pose, &observation);
+	fixture.snapshot.binding.touch_ms = 175;
+	fixture.snapshot.binding.touch_frame_end_ms = 200;
+	fixture.snapshot.binding.total_cost_ms = 700;
+	fixture.snapshot.binding.link.cost_ms = 700;
+	result = SG_CompoundHookLiveBegin(&state, &host, 7, &pose,
+	                                  &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	for (step = 0; step < 6; step++)
+	{
+		result = Step(&state, &host, &pose, &observation, NULL);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	}
+	CHECK(state.transaction_elapsed_ms == 150);
+	result = SG_CompoundHookLivePreStep(&state, &host, &pose, &observation,
+	                                    &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING &&
+	      result.command_ready);
+	result = SG_CompoundHookLiveApproveCommand(&state, &command);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	SetTouchPose(&fixture, &pose);
+	result = SG_CompoundHookLiveTouch(&state, &host, 11, &pose,
+	                                  &observation, 2);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLiveActivate(&state, &host, 11, 12, 2);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	result = SG_CompoundHookLivePostStep(&state, &host, &pose, &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	while (state.transaction_elapsed_ms < 400)
+	{
+		result = Step(&state, &host, &pose, &observation, NULL);
+		CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	}
+	CHECK(state.transaction_elapsed_ms == 400);
+	CHECK(state.outer.phase == SG_COMPOUND_TOP);
+	result = SG_CompoundHookLiveLinked(&state, &host, &bolt, 4, &pose,
+	                                  &observation);
+	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(state.outer.phase == SG_COMPOUND_SUFFIX_LEASED);
+}
+
 
 static void TestNominalHookLifecycle(void)
 {
@@ -624,6 +678,7 @@ static void TestFailureNamesAreExhaustive(void)
 int main(void)
 {
 	TestBeginOwnsOneOuterTransaction();
+	TestTouchFrameAndMoverSchedulesAreIndependent();
 	TestNominalHookLifecycle();
 	TestWrongGenerationRetainsLeaseForRecovery();
 	TestSweepSegmentsCoverTouchAndPostClear();

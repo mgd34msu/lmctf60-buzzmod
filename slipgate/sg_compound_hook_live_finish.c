@@ -105,8 +105,8 @@ static qboolean SnapshotValid(
 	    binding->touch_frame_end_ms % SG_REPLAY_FRAME_MS != 0 ||
 	    binding->total_cost_ms <= 0 ||
 	    binding->total_cost_ms > RUNE_MAX_COST_MS ||
-	    binding->mover_top_ms != binding->touch_frame_end_ms +
-	                              binding->suffix_start_ms)
+	    binding->suffix_start_ms !=
+	        binding->mover_top_ms - SG_REPLAY_FRAME_MS)
 		return false;
 	return SG_CompoundHookPublicationPlan(binding, hook_spec);
 }
@@ -287,8 +287,7 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveLinked(
 	              bolt, frame_serial))
 		return CompoundHookLiveActive(state, false);
 	expected_frame = (long long)state->touch_frame_serial +
-	                 (state->snapshot.binding.mover_top_ms -
-	                  state->snapshot.binding.touch_frame_end_ms) /
+	                 state->snapshot.binding.suffix_start_ms /
 	                     SG_REPLAY_FRAME_MS;
 	if (state->bolt_linked || state->outer.phase != SG_COMPOUND_TOP ||
 	    expected_frame != frame_serial ||
@@ -338,7 +337,8 @@ static qboolean HookEventFrameValid(
 	{
 	case SG_COMPOUND_HOOK_LIVE_EVENT_ATTACHED:
 		wait_ms = state->transaction_elapsed_ms -
-		          state->snapshot.binding.mover_top_ms;
+		          CompoundHookLiveTopBoundaryMs(
+		              &state->snapshot.binding);
 		expected = (long long)state->last_event_frame_serial + 1 +
 		           wait_ms / SG_REPLAY_FRAME_MS;
 		return state->last_event == SG_COMPOUND_HOOK_LIVE_EVENT_LINKED &&
