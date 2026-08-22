@@ -293,8 +293,14 @@ in base-link proof before the first progress interval against the exact accepted
 with 2,206, `xmap12` with 2,558, `xmap26` with 1,575, and `xmap29` with
 12,060. All eight share normalized timeout signature `870fb63c713b5d71496b56f6`.
 Instrumented samples attribute roughly 80--84% of categorized base-link CPU to
-the shared hook prover, so the active performance repair targets its exact pair
-search rather than any map-specific bypass.
+the shared hook prover. Commits `8ac00e5` and `7aa7807` now skip only a repeated
+world-only Pmove step after the exact phantom and command have reached a clean
+byte-identical fixed point; reducer time, observations, hazards, and failure
+classification still advance normally. A complete `lmctf42` comparison wrote
+the same 285 seeds and 9,899 links with a byte-identical artifact while reducing
+base-link CPU from 19,126 ms to 15,796 ms. The seven non-overflow timeout maps
+still require parallel post-integration measurement; this optimization is not
+yet claimed to put all of them below 900 seconds.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
