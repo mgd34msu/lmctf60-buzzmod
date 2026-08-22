@@ -6,6 +6,7 @@ void SG_CompoundHookOracleRunScenario(
 	sg_compound_hook_oracle_response_t *response)
 {
 	const vec3_t mechanism = { 160.0f, 0.0f, 0.0f };
+	const vec3_t hook_start = { 160.0f, 4.0f, 0.0f };
 	const vec3_t destination = { 280.0f, 0.0f, 0.0f };
 	fixture_config_t scenario =
 		DefaultConfig(2, FIXTURE_SUFFIX_ALWAYS_OUTSIDE);
@@ -52,7 +53,7 @@ void SG_CompoundHookOracleRunScenario(
 	}
 	Set3(response->control, 0.0f, 0.0f,
 	     160.0f + request->control_roll_delta);
-	if (!SG_HookControlDecode(mechanism, 22.0f, RIGHT_HANDED,
+	if (!SG_HookControlDecode(hook_start, 22.0f, RIGHT_HANDED,
 	        response->control, view, muzzle, response->bite))
 	{
 		response->reason = RLR_BAD_CONTROL_POLICY;
@@ -79,6 +80,10 @@ void SG_CompoundHookOracleRunScenario(
 	response->suffix_commands = fixture_observation.suffix_commands;
 	response->top_hold_commands =
 		fixture_observation.hook_top_hold_commands;
+	response->top_zero_commands =
+		fixture_observation.hook_top_zero_commands;
+	response->top_corrective_commands =
+		fixture_observation.hook_top_corrective_commands;
 	response->suffix_captured_after_top_hold =
 		response->top_hold_commands == 4 &&
 		memcmp(&response->proof.suffix_pms,

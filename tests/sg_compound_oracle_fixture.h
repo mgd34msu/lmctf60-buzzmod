@@ -75,6 +75,8 @@ typedef struct fixture_observation_s
 	int ride_zero_commands;
 	int suffix_commands;
 	int hook_top_hold_commands;
+	int hook_top_zero_commands;
+	int hook_top_corrective_commands;
 	int trace_calls;
 	int link_calls;
 	float link_origins[16];

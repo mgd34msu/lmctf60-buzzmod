@@ -44,6 +44,8 @@ trace_t HostTrace(const vec3_t start, const vec3_t mins,
 		{
 			trace.fraction = 0.5f;
 			VectorCopy(start, trace.endpos);
+			trace.endpos[1] =
+				fixture_observation.last_hook_top_hold.origin[1] * 0.125f;
 			trace.endpos[2] = 26.0f;
 			return trace;
 		}
@@ -270,7 +272,19 @@ void HostPmove(pmove_t *pmove)
 			fixture_observation.first_top_command = pmove->cmd;
 		}
 		if (hook_top_hold)
+		{
 			fixture_observation.hook_top_hold_commands++;
+			if (CommandZero(&pmove->cmd))
+			{
+				fixture_observation.hook_top_zero_commands++;
+				pmove->s.origin[1] += 8;
+			}
+			else
+			{
+				fixture_observation.hook_top_corrective_commands++;
+				pmove->s.origin[1] = 0;
+			}
+		}
 		else
 			fixture_observation.suffix_commands++;
 		if (fixture_config.hook_suffix)
