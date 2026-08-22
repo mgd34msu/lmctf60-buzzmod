@@ -129,8 +129,8 @@ static int HookGamePullValid(const sg_bot_t *bot, const edict_t *bolt)
 	const edict_t *client;
 
 	if (!bot || !(client = bot->ent) || !client->client || !bolt ||
-	    client->client->hookstate != 2 || !HookGameBite(bolt, bite) ||
-	    !HookGameVectorEqual(bite, bot->compound_hook_live.hook_spec.bite) ||
+	    client->client->hookstate != 2 || !HookGameBiteValid(bot, bolt) ||
+	    !HookGameBite(bolt, bite) ||
 	    !HookGameVectorEqual(client->client->v_angle,
 	        bot->compound_hook_live.hook_spec.view_angles))
 		return 0;

@@ -423,9 +423,24 @@ static void TestBiteProofBoundary(void)
 	    623.581665039f, 134.677978516f, -288.03125f);
 	CHECK(SG_CompoundHookGameAttachWillApply(&bolt, &target, &surface) ==
 	    SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED);
+	bolt.hook_target = &target;
+	VectorCopy(bolt.s.origin, bolt.hook_offset);
+	bolt.solid = SOLID_TRIGGER;
+	VectorClear(bolt.velocity);
+	client.client->hookstate = 2;
+	VectorSet(client.velocity, 4.0f, 5.0f, 6.0f);
+	VectorCopy(client.velocity, game_client.oldvelocity);
+	level.framenum = 41;
+	CHECK(SG_CompoundHookGameAttached(&bolt).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
+	CHECK(SG_CompoundHookGamePullApplied(&client, &bolt).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RUNNING);
 	bolt.s.origin[0] -= 0.251f;
+	bolt.hook_offset[0] -= 0.251f;
 	CHECK(SG_CompoundHookGameAttachWillApply(&bolt, &target, &surface) ==
 	    SG_COMPOUND_HOOK_GAME_EVENT_DENIED);
+	CHECK(SG_CompoundHookGamePullApplied(&client, &bolt).outcome ==
+	    SG_COMPOUND_HOOK_LIVE_RECOVERING);
 }
 
 static void TestLifecycle(void)
