@@ -117,7 +117,7 @@
     "tests/test_rune_corpus_controller.py": 2263,
     "tests/test_runegen_gate.py": 458,
     "tests/test_snagrepair.py": 911,
-    "tests/test_strike_integration.py": 2057,
+    "tests/test_strike_integration.py": 2058,
     "tools/bspmechanisms.py": 1855,
     "tools/fightsheet.py": 2137,
     "tools/film.py": 1933,
