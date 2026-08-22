@@ -223,6 +223,98 @@ static qboolean Blocks(const vec3_t start, const vec3_t mins,
 	return SG_OracleRotatorSweepBlocks(start, mins, maxs, end, mask);
 }
 
+static qboolean speculative_door_probe_blocked;
+
+static trace_t ClearWorldTrace(const vec3_t start, const vec3_t mins,
+	const vec3_t maxs, const vec3_t end, edict_t *passent, int contentmask)
+{
+	trace_t trace;
+
+	(void)start;
+	(void)mins;
+	(void)maxs;
+	(void)passent;
+	(void)contentmask;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = 1.0f;
+	VectorCopy(end, trace.endpos);
+	trace.ent = g_edicts;
+	return trace;
+}
+
+static void SpeculativeStepPmove(pmove_t *pmove)
+{
+	vec3_t start, raised, forward;
+	vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	trace_t trace;
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+		start[axis] = pmove->s.origin[axis] * 0.125f;
+	VectorCopy(start, raised);
+	raised[2] += 18.0f;
+	trace = pmove->trace(start, mins, maxs, raised);
+	speculative_door_probe_blocked = trace.startsolid || trace.allsolid ||
+	                                trace.fraction < 1.0f;
+
+	VectorCopy(start, forward);
+	forward[0] += 1.0f;
+	trace = pmove->trace(start, mins, maxs, forward);
+	if (!trace.startsolid && !trace.allsolid && trace.fraction == 1.0f)
+		pmove->s.origin[0] += 8;
+	VectorCopy(mins, pmove->mins);
+	VectorCopy(maxs, pmove->maxs);
+	pmove->s.pm_flags |= PMF_ON_GROUND;
+	pmove->groundentity = g_edicts;
+}
+
+static void TestDiscardedStepProbeDoesNotContaminate(void)
+{
+	edict_t ents[2];
+	sg_phantom_t ph;
+	usercmd_t cmd;
+	int axis;
+
+	memset(ents, 0, sizeof(ents));
+	memset(&ph, 0, sizeof(ph));
+	memset(&cmd, 0, sizeof(cmd));
+	g_edicts = ents;
+	globals.edicts = ents;
+	globals.edict_size = sizeof(edict_t);
+	globals.num_edicts = 2;
+	ents[0].inuse = true;
+	ents[0].s.number = 0;
+	ents[1].inuse = true;
+	ents[1].s.number = 1;
+	ents[1].classname = "func_door_rotating";
+	Set3(ents[1].mins, -14.0f, -17.0f, -68.0f);
+	Set3(ents[1].maxs, 154.0f, 13.0f, 68.0f);
+	VectorClear(ents[1].moveinfo.start_angles);
+	Set3(ents[1].moveinfo.end_angles, 0.0f, 90.0f, 0.0f);
+	VectorClear(ents[1].s.angles);
+	Set3(ph.origin, 153.0f, 52.0f, -103.875f);
+	for (axis = 0; axis < 3; axis++)
+		ph.pms.origin[axis] = (short)(ph.origin[axis] * 8.0f);
+	ph.old_pms = ph.pms;
+	ph.groundentity = true;
+	ph.groundentity_entity = &ents[0];
+	Set3(ph.mins, -16.0f, -16.0f, -24.0f);
+	Set3(ph.maxs, 16.0f, 16.0f, 32.0f);
+	cmd.msec = 25;
+	test_trigger_count = 0;
+	test_solid_count = 0;
+	speculative_door_probe_blocked = false;
+	sg_host.trace = ClearWorldTrace;
+	sg_host.box_edicts = TestBoxEdicts;
+	sg_host.pmove = SpeculativeStepPmove;
+
+	CHECK(SG_OracleRunWorld(&ph, &cmd, 1));
+	CHECK(speculative_door_probe_blocked);
+	CHECK(ph.origin[0] == 154.0f && ph.origin[1] == 52.0f &&
+	      ph.origin[2] == -103.875f);
+}
+
 static void TestWorldOverlapUsesExactRotatorSweep(void)
 {
 	edict_t ents[2];
@@ -431,6 +523,7 @@ int main(void)
 
 	TestReplayTriggerClassifier();
 	TestWorldOverlapUsesExactRotatorSweep();
+	TestDiscardedStepProbeDoesNotContaminate();
 
 	memset(ents, 0, sizeof(ents));
 	g_edicts = ents;

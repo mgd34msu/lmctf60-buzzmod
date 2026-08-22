@@ -1536,7 +1536,7 @@ static qboolean SG_OracleDeclaredSameDoorSet(edict_t *a, edict_t *b)
 
 static qboolean SG_OracleDoorTraceBlocked(sg_phantom_t *ph,
 	const vec3_t start, const vec3_t hull_mins, const vec3_t hull_maxs,
-	const vec3_t end)
+	const vec3_t end, qboolean record_passage)
 {
 	int i, axis;
 
@@ -1581,7 +1581,7 @@ static qboolean SG_OracleDoorTraceBlocked(sg_phantom_t *ph,
 			continue;
 		if (!SG_OracleDoorArmed(ph, door))
 			return true;
-		if (ph)
+		if (ph && record_passage)
 			ph->door_passed = true;
 	}
 	return false;
@@ -1593,7 +1593,7 @@ static qboolean SG_OracleDoorOverlap(sg_phantom_t *ph)
 	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
 
 	return ph && SG_OracleDoorTraceBlocked(ph, ph->origin, mins, maxs,
-	                                      ph->origin);
+	                                      ph->origin, true);
 }
 
 /* A target chain made only of speakers cannot change collision, movement, or
@@ -3979,10 +3979,6 @@ static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t en
 		sg_oracle_contaminated = true;
 
 	if (sg_oracle_world_only &&
-	    SG_OracleDoorTraceBlocked(sg_oracle_active_phantom,
-	                              start, mins, maxs, end))
-		sg_oracle_contaminated = true;
-	if (sg_oracle_world_only &&
 	    sg_oracle_declared_action == RL_BUTTON_DOOR &&
 	    tr.ent == sg_oracle_declared_expected &&
 	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f))
@@ -3996,6 +3992,23 @@ static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t en
 	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f) &&
 	    tr.ent && tr.ent != g_edicts)
 		sg_oracle_contaminated = true;
+	/* Pmove probes both the direct and step-up branches before selecting one.
+	 * An unarmed synthetic door sweep is collision authority for either probe,
+	 * not evidence that the body used that branch.  Return a fail-closed solid
+	 * trace so Pmove can discard the blocked candidate without poisoning the
+	 * accepted one.  Limit the synthetic query to the native trace endpoint: a
+	 * door behind an earlier world collision was never reached. */
+	if (sg_oracle_world_only && !tr.startsolid && !tr.allsolid &&
+	    SG_OracleDoorTraceBlocked(sg_oracle_active_phantom,
+	                              start, mins, maxs, tr.endpos, false))
+	{
+		tr.startsolid = true;
+		tr.allsolid = true;
+		tr.fraction = 0.0f;
+		VectorCopy(start, tr.endpos);
+		tr.ent = g_edicts;
+		tr.contents = CONTENTS_SOLID;
+	}
 	return tr;
 }
 
@@ -4029,7 +4042,8 @@ qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite)
 	/* The bolt has no serialized door-activation phase. Generation holds doors
 	 * nonsolid, so reject any ray through a door's complete motion envelope;
 	 * live reproof then cannot depend on a lucky open-door snapshot. */
-	if (SG_OracleDoorTraceBlocked(NULL, muzzle, bolt_mins, bolt_maxs, bite))
+	if (SG_OracleDoorTraceBlocked(NULL, muzzle, bolt_mins, bolt_maxs, bite,
+	                              false))
 		return false;
 	VectorScale(delta, 1.0f / distance, direction);
 	for (travelled = 80.0f; ; travelled += 80.0f)
@@ -5782,6 +5796,9 @@ void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 
 	for (i = 0; i < steps; i++)
 	{
+		vec3_t before;
+
+		VectorCopy(ph->origin, before);
 		memset(&pm, 0, sizeof(pm));
 		pm.s = ph->pms;
 		pm.cmd = *cmd;
@@ -5809,6 +5826,13 @@ void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 		ph->velocity[0] = pm.s.velocity[0] * 0.125f;
 		ph->velocity[1] = pm.s.velocity[1] * 0.125f;
 		ph->velocity[2] = pm.s.velocity[2] * 0.125f;
+		/* Armed-door passage is a property of the accepted body segment.  The
+		 * trace adapter already blocks every unarmed candidate, but retain this
+		 * fail-closed check across the decoded authoritative result. */
+		if (sg_oracle_world_only &&
+		    SG_OracleDoorTraceBlocked(ph, before, pm.mins, pm.maxs,
+		                              ph->origin, true))
+			sg_oracle_contaminated = true;
 		if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph))
 			sg_oracle_contaminated = true;
 	}
