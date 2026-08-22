@@ -6158,6 +6158,145 @@ static void Prove_RocketJumps(void)
 #endif
 }
 
+static void Prove_HookFrontier(void)
+{
+	door_topology_t topology = { NULL, NULL };
+	sg_rune_proof_hook_seed_t *seeds = NULL;
+	sg_rune_proof_hook_candidate_t *candidates = NULL;
+	uint16_t *component_trials = NULL;
+	uint16_t *source_trials = NULL;
+	size_t *source_cursor = NULL;
+	size_t *component_source_cursor = NULL;
+	sg_rune_proof_hook_frontier_t frontier;
+	size_t selected = 0, trial;
+	int component_count = 0, proofs = 0;
+	int active_components = 0, max_component_trials = 0;
+	int active_sources = 0, max_source_trials = 0;
+	unsigned int candidate_ranks[15] = { 0 };
+	unsigned int proof_ranks[15] = { 0 };
+	int i;
+
+	if (!Door_TopologyBuild(&topology))
+	{
+		sg_host.dprint("rune: hook frontier unavailable reason=topology\n");
+		return;
+	}
+	for (i = 0; i < gen_num_seeds; i++)
+		if (topology.component[i] >= component_count)
+			component_count = topology.component[i] + 1;
+	if (component_count <= 0)
+		goto done;
+	seeds = sg_host.level_alloc(sizeof(*seeds) * (size_t)gen_num_seeds);
+	candidates = sg_host.level_alloc(sizeof(*candidates) *
+	    SG_RUNE_PROOF_HOOK_FRONTIER_MAX);
+	component_trials = sg_host.level_alloc(sizeof(*component_trials) *
+	    (size_t)component_count);
+	source_trials = sg_host.level_alloc(sizeof(*source_trials) *
+	    (size_t)gen_num_seeds);
+	source_cursor = sg_host.level_alloc(sizeof(*source_cursor) *
+	    (size_t)gen_num_seeds);
+	component_source_cursor = sg_host.level_alloc(
+	    sizeof(*component_source_cursor) * (size_t)component_count);
+	if (!seeds || !candidates || !component_trials || !source_trials ||
+	    !source_cursor || !component_source_cursor)
+	{
+		sg_host.dprint("rune: hook frontier unavailable reason=allocation\n");
+		goto done;
+	}
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		seeds[i].origin_q8[0] = (int32_t)lrintf(gen_seeds[i].origin[0] * 8.0f);
+		seeds[i].origin_q8[1] = (int32_t)lrintf(gen_seeds[i].origin[1] * 8.0f);
+		seeds[i].origin_q8[2] = (int32_t)lrintf(gen_seeds[i].origin[2] * 8.0f);
+		seeds[i].component = topology.component[i];
+		seeds[i].objective_mask = topology.objective_mask[i];
+		seeds[i].water = (gen_seeds[i].flags & RSF_WATER) != 0;
+		seeds[i].stable = gen_source_stable[i] != 0;
+		seeds[i].waterlevel = gen_source_waterlevel[i];
+	}
+	memset(&frontier, 0, sizeof(frontier));
+	frontier.seeds = seeds;
+	frontier.seed_count = (size_t)gen_num_seeds;
+	frontier.component_count = (size_t)component_count;
+	frontier.global_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+	frontier.component_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+	frontier.source_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+	frontier.component_trials = component_trials;
+	frontier.source_trials = source_trials;
+	frontier.source_cursor = source_cursor;
+	frontier.component_source_cursor = component_source_cursor;
+	frontier.output = candidates;
+	frontier.output_capacity = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+	selected = SG_RuneProofSelectHookFrontier(&frontier);
+	for (i = 0; i < component_count; i++)
+	{
+		if (component_trials[i] > 0)
+			active_components++;
+		if ((int)component_trials[i] > max_component_trials)
+			max_component_trials = component_trials[i];
+	}
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		if (source_trials[i] > 0)
+			active_sources++;
+		if ((int)source_trials[i] > max_source_trials)
+			max_source_trials = source_trials[i];
+	}
+	for (trial = 0; trial < selected; trial++)
+	{
+		vec3_t anchor;
+		short cost;
+		byte espeed;
+		rune_link_t *link;
+
+		if (candidates[trial].rank < 15)
+			candidate_ranks[candidates[trial].rank]++;
+		if (!ProveHook(candidates[trial].from, candidates[trial].to,
+		        anchor, &cost, &espeed))
+			continue;
+		if (!Link_Add(candidates[trial].from, candidates[trial].to,
+		        RL_HOOK, cost, espeed))
+			continue;
+		link = &gen_links[gen_num_links - 1];
+		VectorCopy(anchor, link->anchor);
+		Link_Env_Hook(link, anchor);
+		if (candidates[trial].rank < 15)
+			proof_ranks[candidates[trial].rank]++;
+		proofs++;
+	}
+	sg_host.dprint("rune: hook frontier components=%d candidates=%u "
+	               "prover_calls=%u links=%d global_limit=%u "
+	               "schedule=rank-component-source-round-robin\n",
+	               component_count, (unsigned int)selected,
+	               (unsigned int)selected, proofs,
+	               (unsigned int)SG_RUNE_PROOF_HOOK_FRONTIER_MAX);
+	sg_host.dprint("rune: hook frontier distribution active_components=%d "
+	               "max_component_trials=%d active_sources=%d "
+	               "max_source_trials=%d "
+	               "candidate_ranks=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u "
+	               "proof_ranks=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+	               active_components, max_component_trials, active_sources,
+	               max_source_trials,
+	               candidate_ranks[0], candidate_ranks[1], candidate_ranks[2],
+	               candidate_ranks[3], candidate_ranks[4], candidate_ranks[5],
+	               candidate_ranks[6], candidate_ranks[7], candidate_ranks[8],
+	               candidate_ranks[9], candidate_ranks[10], candidate_ranks[11],
+	               candidate_ranks[12], candidate_ranks[13], candidate_ranks[14],
+	               proof_ranks[0], proof_ranks[1], proof_ranks[2], proof_ranks[3],
+	               proof_ranks[4], proof_ranks[5], proof_ranks[6], proof_ranks[7],
+	               proof_ranks[8], proof_ranks[9], proof_ranks[10], proof_ranks[11],
+	               proof_ranks[12], proof_ranks[13], proof_ranks[14]);
+
+done:
+	if (seeds) sg_host.level_free(seeds);
+	if (candidates) sg_host.level_free(candidates);
+	if (component_trials) sg_host.level_free(component_trials);
+	if (source_trials) sg_host.level_free(source_trials);
+	if (source_cursor) sg_host.level_free(source_cursor);
+	if (component_source_cursor) sg_host.level_free(component_source_cursor);
+	Door_TopologyFree(&topology);
+}
+
 static void Prove_BaseLinks(door_topology_t *topology)
 {
 	int i, j;
@@ -6185,19 +6324,6 @@ static void Prove_BaseLinks(door_topology_t *topology)
 			    d[0] * d[0] + d[1] * d[1] > LINK_REACH * LINK_REACH &&
 			    d[2] <= 128.0f && d[2] >= -256.0f)
 			{
-				vec3_t anchor;
-
-				if (!(gen_seeds[i].flags & RSF_WATER) &&
-				    ProveHook(i, j, anchor, &cost, &espeed))
-				{
-					rune_link_t *l;
-
-					if (!Link_Add(i, j, RL_HOOK, cost, espeed))
-						continue;
-					l = &gen_links[gen_num_links - 1];
-					VectorCopy(anchor, l->anchor);
-					Link_Env_Hook(l, anchor);
-				}
 				continue;
 			}
 			/*
@@ -6269,8 +6395,6 @@ static void Prove_BaseLinks(door_topology_t *topology)
 				Link_Add(i, j, RL_JUMP, cost, espeed);
 			else
 			{
-				vec3_t anchor;
-
 				/* A short ledge may be too low for the deep-drop partition but
 				 * still defeat both ordinary controllers: RUN brakes at the edge
 				 * and JUMP lands back on the upper shelf. Only after both exact
@@ -6295,19 +6419,6 @@ static void Prove_BaseLinks(door_topology_t *topology)
 						continue;
 					}
 				}
-
-				if ((!(gen_seeds[i].flags & RSF_WATER) ||
-				     (!(gen_seeds[j].flags & RSF_WATER) && d[2] > 128.0f)) &&
-				    ProveHook(i, j, anchor, &cost, &espeed))
-				{
-					rune_link_t *l;
-
-					if (!Link_Add(i, j, RL_HOOK, cost, espeed))
-						continue;
-					l = &gen_links[gen_num_links - 1];
-					VectorCopy(anchor, l->anchor);
-						Link_Env_Hook(l, anchor);
-				}
 				/* Keep only from-rest jumps until entry state is fully serialized. */
 			}
 		}
@@ -6321,16 +6432,19 @@ static void Prove_BaseLinks(door_topology_t *topology)
 	 * specialized links can be stamped with declared provenance. */
 	Prove_Swims();          /* swim links: water to water, water to shore */
 	{
-		/*
-		 * Mark the end of the proven links, run the two declaring passes, then
-		 * re-stamp what they appended. The lift and teleport links were read
-		 * off spawn data; the drops Link_Plats proves on the way down were
-		 * rolled by the oracle like any other, and Link_Declare_Tail leaves
-		 * those alone by looking at the action.
-		 */
+		/* Link_Plats may append both a declared ascent and a proved drop. Stamp
+		 * only the declared action before the hook topology snapshot. */
 		int declared_mark = gen_num_links;
 
 		Link_Plats();           /* declared lift: bottom seed -> top seed */
+		Link_Declare_Tail(declared_mark);
+	}
+	Prove_HookFrontier();
+	{
+		int declared_mark = gen_num_links;
+
+		/* Teleporter staging may itself require one of the bounded, proved hook
+		 * frontiers. Doors consume the completed hook and teleporter topology. */
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
 		Link_Pushes();
