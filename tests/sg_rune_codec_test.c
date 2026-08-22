@@ -525,10 +525,10 @@ static void TestWholeGolden(void)
 		TEST_STRING_BYTES) == 0);
 	CHECK_U32(UINT32_C(0x624244c5), fixture.plans[0].closure_crc32);
 	CHECK_U32(UINT32_C(0x6c814182), GetU32(encoded + 20));
-	CHECK_U32(UINT32_C(0xa01c9af1),
+	CHECK_U32(UINT32_C(0x6335f469),
 		GetU32(encoded + SG_RUNE_CODEC_HEADER_CRC_OFFSET));
 	CHECK(SG_CRC32Buffer(encoded, sizeof(encoded), &file_crc));
-	CHECK_U32(UINT32_C(0x66c22425), file_crc);
+	CHECK_U32(UINT32_C(0x611a80ed), file_crc);
 
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));

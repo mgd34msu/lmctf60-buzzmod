@@ -598,7 +598,7 @@ static void SetActiveController(int controller)
 	switch (controller)
 	{
 	case 0: sg_bots[0].hook_phase = 1; break;
-	case 1: sg_bots[0].rj_phase = 1; break;
+	case 1: sg_bots[0].rocketjump.phase = SG_ROCKETJUMP_EQUIP; break;
 	case 2: sg_bots[0].nade_phase = 1; break;
 	case 3: sg_bots[0].hook_replay_active = true; break;
 	case 4: clients[0].hookstate = 1; break;

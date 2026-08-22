@@ -334,7 +334,6 @@
     <ClCompile Include="slipgate\sg_compound_gen.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_compound_gen_game.c">
     <ClCompile Include="slipgate\sg_compound_action_gen.c">
       <Filter>Source Files</Filter>
     </ClCompile>

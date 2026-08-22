@@ -67,6 +67,8 @@ class RuneContractTests(unittest.TestCase):
 
         def ids(name):
             values = sections[name]
+            if not values:
+                return set()
             return {int(value.rsplit(":", 1)[1]) for value in values.split(",")}
 
         supported = {

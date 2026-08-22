@@ -376,6 +376,7 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 		int sweep_clear_ms;
 		int total_cost_ms;
 		rune_reject_reason_t reason;
+		sg_replay_reason_t replay_reason = SG_REPLAY_REASON_NONE;
 		int hint_index;
 		int contact_found = 0;
 		vec3_t canonical_hint;
@@ -464,7 +465,8 @@ sg_compound_publication_result_t SG_CompoundPublicationBuild(
 				&phantom, &resolved, link->mechanism_anchor,
 				rune->seeds[link->to].origin,
 				(rune->seeds[link->to].flags & RSF_WATER) != 0,
-				source.old_frame_z, &proof, NULL, true, true);
+				source.old_frame_z, &proof, &replay_reason, NULL,
+				true, true);
 		}
 		else if (link->action == RL_DOOR_DROP)
 			reason = SG_OracleCompoundDropPreopen(

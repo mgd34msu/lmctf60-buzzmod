@@ -83,6 +83,7 @@ static void TestRideAndCleanup(void)
 static void TestOwnershipAndDispatch(void)
 {
 	sg_compound_state_t a, b;
+	int action;
 	int calls = 0;
 
 	SG_CompoundReset(&a);

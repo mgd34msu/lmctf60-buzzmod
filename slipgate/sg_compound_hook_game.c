@@ -560,7 +560,10 @@ qboolean SG_CompoundHookGameIdleAdmission(const sg_bot_t *bot)
 	    bot->compound_drop_live.drop_active ||
 	    bot->compound_drop_live.command_pending ||
 	    bot->compound_drop_live.recovering || bot->hook_phase != 0 ||
-	    bot->hook_replay_active || bot->rj_phase != 0 || bot->nade_phase != 0 ||
+	    bot->hook_replay_active ||
+	    (bot->rocketjump.phase == SG_ROCKETJUMP_EQUIP ||
+	     SG_RocketJumpPhasePhysical(bot->rocketjump.phase)) ||
+	    bot->nade_phase != 0 ||
 	    bot->jump_started || bot->drop_started || bot->drop_replay_active ||
 	    bot->swim_replay_active || bot->swim_validated ||
 	    bot->declared_started || bot->declared_touched ||

@@ -23,7 +23,7 @@ static void TestTouchSubsteps(void)
 		member_before = fixture_edicts[1];
 		InitPhantom(&phantom, false);
 		result = SG_OracleCompoundSwimPreopen(&phantom, &resolved,
-			mechanism, destination, true, 0.0f, &proof, NULL, true,
+			mechanism, destination, true, 0.0f, &proof, NULL, NULL, true,
 			false);
 		CHECK(result == RLR_OK);
 		CHECK(proof.touch_ms == touch * 25);
@@ -85,7 +85,7 @@ static void RunFailure(const fixture_config_t *config,
 	InitPhantom(&phantom, damaging_fall);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
 		destination, true, damaging_fall ? -1000.0f : 0.0f,
-		&proof, NULL, true, false) == expected);
+		&proof, NULL, NULL, true, false) == expected);
 	CHECK(memcmp(&proof, zero, sizeof(proof)) == 0);
 	CHECK(MemberRestored(&fixture_edicts[1], &member_before));
 	CHECK(fixture_observation.callback_calls == 0);
@@ -174,7 +174,7 @@ static void TestPreopenSweepChordBoundaries(void)
 	member_before = fixture_edicts[1];
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
-	      destination, true, 0.0f, &proof, NULL, true, false) == RLR_OK);
+	      destination, true, 0.0f, &proof, NULL, NULL, true, false) == RLR_OK);
 	CHECK(proof.sweep_clear_ms == 100);
 	CHECK(proof.arrival_ms == 100);
 	CHECK(proof.total_cost_ms == 600);
@@ -199,7 +199,7 @@ static void TestResolvedIdentityFailsClosed(void)
 	resolved.mover_key = 4;
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
-		destination, true, 0.0f, &proof, NULL, true, false) ==
+		destination, true, 0.0f, &proof, NULL, NULL, true, false) ==
 	      RLR_MECHANISM_UNRESOLVED);
 	CHECK(fixture_observation.pmove_calls == 0);
 	CHECK(fixture_observation.link_calls == 0);
@@ -230,7 +230,7 @@ static void TestApproachArrivalSuppressedUntilTouch(void)
 		CHECK(Resolve(&resolved) == RLR_OK);
 		InitPhantom(&phantom, false);
 		CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved,
-			mechanism, destination, true, 0.0f, &proof, NULL, true,
+			mechanism, destination, true, 0.0f, &proof, NULL, NULL, true,
 			false) == RLR_OK);
 		CHECK(proof.touch_ms == expected_touch[index]);
 		CHECK(proof.touch_frame_end_ms == (index == 0 ? 200 : 100));
@@ -386,7 +386,7 @@ static void TestLoaderReplayNativeMask(void)
 	CHECK(Resolve(&resolved) == RLR_OK);
 	InitPhantom(&phantom, false);
 	CHECK(SG_OracleCompoundSwimPreopen(&phantom, &resolved, mechanism,
-		destination, true, 0.0f, &proof, NULL, true, true) == RLR_OK);
+		destination, true, 0.0f, &proof, NULL, NULL, true, true) == RLR_OK);
 	CHECK(fixture_observation.normal_pmove_masks > 0);
 	CHECK(fixture_observation.stripped_pmove_masks == 0);
 

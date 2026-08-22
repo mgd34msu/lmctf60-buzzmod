@@ -763,7 +763,7 @@ static int IdleFixture(void)
 	IDLE_BLOCK(bot.compound_drop_live.recovering = true);
 	IDLE_BLOCK(bot.hook_phase = 1);
 	IDLE_BLOCK(bot.hook_replay_active = true);
-	IDLE_BLOCK(bot.rj_phase = 1);
+	IDLE_BLOCK(bot.rocketjump.phase = SG_ROCKETJUMP_EQUIP);
 	IDLE_BLOCK(bot.nade_phase = 1);
 	IDLE_BLOCK(bot.jump_started = true);
 	IDLE_BLOCK(bot.drop_started = true);
