@@ -92,14 +92,12 @@ after the final source freeze.
       without dropping D_SWIM, D_DROP, or rocket-jump support.
 - [x] Unify the generated action contract for actions 7, 9, 10, and 11.
 - [x] Pass contract, action, codec, and source-size checks after the rebase.
-- [x] Synchronize local and remote `slipgate` and `main` without rewriting
-      history. Both branches track this plan and compare as zero ahead and zero
-      behind at the last completed sync.
 - [x] Pass the focused GNU D_HOOK suites, full GNU and Make host suites,
       production module builds and `ldd -r` checks, and deslop with zero
       findings at `225101e`. The verified worktree was clean.
-- [ ] Commit the verified integration to `slipgate`, merge it to `main`, push
-      both branches, and confirm zero ahead and zero behind.
+- [x] Merge and push the proven integrated source through `slipgate` to `main`
+      at `a226bb6`. Local and remote `slipgate` and `main` compare as zero ahead
+      and zero behind.
 
 ### Live candidate evidence
 
@@ -138,16 +136,15 @@ hazard makes them negative live evidence, not a completed lifecycle.
 
 ### D_HOOK work left
 
-1. Merge the verified integration source through `slipgate` to `main`.
-2. Preflight more water and door candidates through the live strict resolver.
-3. Generate the first pair that publishes an admitted D_HOOK link without the
+1. Preflight more water and door candidates through the live strict resolver.
+2. Generate the first pair that publishes an admitted D_HOOK link without the
    `xmap06` terminal hazard.
-4. Independently accept, cold-load, and install that exact RUNE/SNAG pair.
-5. Record one real lifecycle through approach, activation, hook fire, exact
+3. Independently accept, cold-load, and install that exact RUNE/SNAG pair.
+4. Record one real lifecycle through approach, activation, hook fire, exact
    bolt link, attach, pull, release or bounded recovery, settlement, ownership
    retirement, and ordinary route continuation.
 
-D_HOOK is complete only after step 5 passes in the real engine. A focused test,
+D_HOOK is complete only after step 4 passes in the real engine. A focused test,
 clean module link, or generated link alone is not enough.
 
 ## Final source freeze
