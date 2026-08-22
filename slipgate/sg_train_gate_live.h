@@ -37,7 +37,9 @@ typedef enum sg_train_gate_side_e
 	SG_TRAIN_GATE_SIDE_X_MIN,
 	SG_TRAIN_GATE_SIDE_X_MAX,
 	SG_TRAIN_GATE_SIDE_Y_MIN,
-	SG_TRAIN_GATE_SIDE_Y_MAX
+	SG_TRAIN_GATE_SIDE_Y_MAX,
+	SG_TRAIN_GATE_SIDE_Z_MIN,
+	SG_TRAIN_GATE_SIDE_Z_MAX
 } sg_train_gate_side_t;
 
 typedef enum sg_train_gate_command_e

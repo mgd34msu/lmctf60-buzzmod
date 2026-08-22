@@ -23,6 +23,10 @@ sg_train_gate_side_t SG_TrainGateSweepSide(const float bounds_mins[3],
 	    bounds_maxs[1] <= sweep_mins[1]);
 	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_Y_MAX,
 	    bounds_mins[1] >= sweep_maxs[1]);
+	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_Z_MIN,
+	    bounds_maxs[2] <= sweep_mins[2]);
+	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_Z_MAX,
+	    bounds_mins[2] >= sweep_maxs[2]);
 #undef SG_TRAIN_GATE_MATCH
 	return matches == 1U ? side : SG_TRAIN_GATE_SIDE_NONE;
 }
@@ -35,6 +39,8 @@ sg_train_gate_side_t SG_TrainGateOppositeSide(sg_train_gate_side_t side)
 	case SG_TRAIN_GATE_SIDE_X_MAX: return SG_TRAIN_GATE_SIDE_X_MIN;
 	case SG_TRAIN_GATE_SIDE_Y_MIN: return SG_TRAIN_GATE_SIDE_Y_MAX;
 	case SG_TRAIN_GATE_SIDE_Y_MAX: return SG_TRAIN_GATE_SIDE_Y_MIN;
+	case SG_TRAIN_GATE_SIDE_Z_MIN: return SG_TRAIN_GATE_SIDE_Z_MAX;
+	case SG_TRAIN_GATE_SIDE_Z_MAX: return SG_TRAIN_GATE_SIDE_Z_MIN;
 	default: return SG_TRAIN_GATE_SIDE_NONE;
 	}
 }
