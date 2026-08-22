@@ -31,7 +31,8 @@ _Static_assert(SEED_MAX == RUNE_MAX_SEEDS,
 _Static_assert(LINK_MAX == RUNE_MAX_LINKS,
 	"generator link capacity drift");
 #define LINK_REACH		192.0f		/* run/jump pairs within this reach */
-#define HOOK_REACH		448.0f		/* hook pairs may span further */
+#define HOOK_REACH		448.0f
+#define HOOK_PAIR_REACH	768.0f
 #define ARRIVE_RADIUS	40.0f
 #define STEP_MSEC		25			/* honest client-rate steps, 4 per frame */
 #define TRY_LIMIT_MS	3000		/* a link longer than this is not local */
@@ -5530,7 +5531,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 			water_pair = ((gen_seeds[i].flags | gen_seeds[j].flags) &
 			              RSF_WATER) != 0;
 			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
-			if (d[0] * d[0] + d[1] * d[1] > HOOK_REACH * HOOK_REACH)
+			if (d[0] * d[0] + d[1] * d[1] > HOOK_PAIR_REACH * HOOK_PAIR_REACH)
 				continue;
 			Rune_TelemetryAdd(&gen_telemetry.qualified, 1U);
 			/* beyond running reach only the hook applies */
