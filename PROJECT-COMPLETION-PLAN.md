@@ -206,6 +206,10 @@ both passed.
 - [x] The full GNU and Make gates passed for the `lmctf04` repair. Exact-commit
       CI then passed on both `slipgate` and `main` across the full Windows,
       Linux, compiler, and Make-dialect matrix.
+- [x] Permanent, untriggered `func_wall` geometry is immutable route support at
+      `5496ac5`. A source-identical `smap14` run generated 827 seeds and 31,524
+      links, retained one shared objective core, and passed both readers, lint,
+      and fresh cold load.
 
 The `72c52db` game module and its recorded evidence remain proven. They are no
 longer the final combined source and tool freeze. The controller changed after
@@ -250,12 +254,12 @@ including `lmctf02a` and `lmctf04`.
 - [ ] Repair the remaining maps whose objective route core is closed.
 - [ ] Repair the missing central transition in `lmctf07`.
 
-The corrected old no-artifact queue contains 29 maps after the later accepted
-`lmctf02a` and `lmctf04` runs. Current-canonical commit `0943897` retests prove
-that `lmctf27`, `smap14`, `smap28`, `smap39`, and `tomb05` remain genuine graph
-failures. The four `smap` or `tomb` cases still reach objective-core with no
-closed route shared by both flags. `lmctf27` still cannot bind either objective
-root because its nearest flag seeds have no outgoing links.
+The corrected old no-artifact queue contains 28 maps after the later accepted
+`lmctf02a`, `lmctf04`, and `smap14` runs. Current-canonical commit `0943897`
+retests prove that `lmctf27`, `smap28`, `smap39`, and `tomb05` remain genuine
+graph failures. The three `smap` or `tomb` cases still reach objective-core with
+no closed route shared by both flags. `lmctf27` still cannot bind either
+objective root because its nearest flag seeds have no outgoing links.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
