@@ -1285,6 +1285,7 @@ qboolean SG_LevelSetup(void)
 	{
 		sg_host.dprint("slipgate: field setup failed (no flags?); "
 		               "disabled until the next level\n");
+		sg_host.flush();
 		sg_setup_failed = true;
 		goto fail;
 	}
