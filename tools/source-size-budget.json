@@ -70,6 +70,7 @@
     "slipgate/sg_combat.c": 4431,
     "slipgate/sg_compound_guard.c": 1827,
     "slipgate/sg_compound_guard_game.c": 1201,
+    "slipgate/sg_compound_hook_game.c": 847,
     "slipgate/sg_compound_publication.c": 595,
     "slipgate/sg_compound_swim_live.c": 1171,
     "slipgate/sg_compound_world.c": 1330,
