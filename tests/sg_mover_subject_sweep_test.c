@@ -25,6 +25,8 @@ level_locals_t level;
 edict_t *g_edicts;
 sg_host_t sg_host;
 
+qboolean SG_MoverSubjectSweepRealImmutableSupport(edict_t *ent);
+
 static edict_t ents[TEST_EDICTS];
 static gclient_t clients[2];
 static int failures;
@@ -2208,8 +2210,21 @@ static void TestInvalidIdentitiesFailClosed(void)
 	CHECK(!SG_MoverSubjectOutsideSweep(mover, hook));
 }
 
+static void TestSpawnedTeleporterPedestalSupport(void)
+{
+	edict_t pedestal;
+
+	memset(&pedestal, 0, sizeof(pedestal));
+	pedestal.inuse = true;
+	pedestal.classname = "info_player_deathmatch";
+	CHECK(SG_MoverSubjectSweepRealImmutableSupport(&pedestal));
+	pedestal.classname = "info_player_start";
+	CHECK(!SG_MoverSubjectSweepRealImmutableSupport(&pedestal));
+}
+
 int main(void)
 {
+	TestSpawnedTeleporterPedestalSupport();
 	TestStableGroundSource();
 	TestButtonContactAndEndpointTiming();
 	TestBoundDoorSiblingAliasReplay();

@@ -466,11 +466,55 @@ static qboolean SG_OracleRotatorAnnulusBlocks(const edict_t *rotator,
 	return qmin <= outer2 && qmax >= inner2;
 }
 
-qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
+static qboolean SG_OracleRotatorEntitySweepBlocks(const edict_t *rotator,
+	const vec3_t start,
 	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
 	int contentmask)
 {
 	static const vec3_t zero = { 0.0f, 0.0f, 0.0f };
+	const vec_t *active_hull_mins;
+	const vec_t *active_hull_maxs;
+	double trace_pad;
+	int axial_axis;
+
+	if (!(contentmask & CONTENTS_SOLID))
+		return false;
+	if (!rotator || !start || !end || !SG_OracleFinite3(start) ||
+	    !SG_OracleFinite3(end) ||
+	    (!!hull_mins != !!hull_maxs) ||
+	    (hull_mins && (!SG_OracleFinite3(hull_mins) ||
+	                   !SG_OracleFinite3(hull_maxs) ||
+	                   hull_mins[0] > hull_maxs[0] ||
+	                   hull_mins[1] > hull_maxs[1] ||
+	                   hull_mins[2] > hull_maxs[2])))
+		return true;
+	if (rotator->solid != SOLID_BSP || !rotator->classname ||
+	    strcmp(rotator->classname, "func_rotating"))
+		return false;
+	if (!SG_OracleFinite3(rotator->s.origin) ||
+	    !SG_OracleFinite3(rotator->mins) ||
+	    !SG_OracleFinite3(rotator->maxs) ||
+	    rotator->mins[0] > rotator->maxs[0] ||
+	    rotator->mins[1] > rotator->maxs[1] ||
+	    rotator->mins[2] > rotator->maxs[2])
+		return true;
+	active_hull_mins = hull_mins ? hull_mins : zero;
+	active_hull_maxs = hull_maxs ? hull_maxs : zero;
+	trace_pad = SG_OracleRotatorTracePad(rotator, start, end,
+	                                      active_hull_mins, active_hull_maxs);
+	if (trace_pad < 0.0)
+		return true;
+	if (SG_OracleRotatorCanonicalAxis(rotator, &axial_axis))
+		return SG_OracleRotatorAnnulusBlocks(rotator, start, end,
+		    active_hull_mins, active_hull_maxs, axial_axis, trace_pad);
+	return SG_OracleRotatorSphereBlocks(rotator, start, end,
+	    active_hull_mins, active_hull_maxs, trace_pad);
+}
+
+qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
+	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
+	int contentmask)
+{
 	int i;
 
 	if (!(contentmask & CONTENTS_SOLID))
@@ -488,35 +532,12 @@ qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
 	for (i = 0; i < globals.num_edicts; i++)
 	{
 		edict_t *rotator = &g_edicts[i];
-		const vec_t *active_hull_mins = hull_mins ? hull_mins : zero;
-		const vec_t *active_hull_maxs = hull_maxs ? hull_maxs : zero;
-		double trace_pad;
-		int axial_axis;
 
 		if (rotator->solid != SOLID_BSP || !rotator->classname ||
 		    strcmp(rotator->classname, "func_rotating"))
 			continue;
-		if (!SG_OracleFinite3(rotator->s.origin) ||
-		    !SG_OracleFinite3(rotator->mins) ||
-		    !SG_OracleFinite3(rotator->maxs) ||
-		    rotator->mins[0] > rotator->maxs[0] ||
-		    rotator->mins[1] > rotator->maxs[1] ||
-		    rotator->mins[2] > rotator->maxs[2])
-			return true;
-		trace_pad = SG_OracleRotatorTracePad(rotator, start, end,
-		                                      active_hull_mins, active_hull_maxs);
-		if (trace_pad < 0.0)
-			return true;
-		if (SG_OracleRotatorCanonicalAxis(rotator, &axial_axis))
-		{
-			if (SG_OracleRotatorAnnulusBlocks(rotator, start, end,
-			                                active_hull_mins, active_hull_maxs,
-			                                axial_axis, trace_pad))
-				return true;
-		}
-		else if (SG_OracleRotatorSphereBlocks(rotator, start, end,
-			                                active_hull_mins, active_hull_maxs,
-			                                trace_pad))
+		if (SG_OracleRotatorEntitySweepBlocks(rotator, start, hull_mins,
+		        hull_maxs, end, contentmask))
 			return true;
 	}
 	return false;
@@ -3853,6 +3874,8 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 {
 	edict_t *touch[MAX_EDICTS];
 	vec3_t mins, maxs;
+	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
 	int i, num;
 
 	if (!sg_oracle_world_only || !sg_host.box_edicts)
@@ -3891,6 +3914,14 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 		 * brush, and SG_OracleDoorOverlap/TraceBlocked still enforce every pose. */
 		if (sg_oracle_declared_action == RL_DOOR &&
 		    SG_OracleDeclaredSetMember(sg_oracle_declared_expected, hit))
+			continue;
+		/* SV_LinkEdict publishes a rotating BSP through its radius cube.  Use
+		 * the authoritative full-motion sweep before treating that coarse box
+		 * as occupied; malformed geometry still fails closed in the sweep. */
+		if (hit->solid == SOLID_BSP && hit->classname &&
+		    !strcmp(hit->classname, "func_rotating") &&
+		    !SG_OracleRotatorEntitySweepBlocks(hit, ph->origin, hull_mins,
+		        hull_maxs, ph->origin, MASK_PLAYERSOLID))
 			continue;
 		/* World collision is supplied by the BSP, not BoxEdicts. Any linked
 		 * solid here is a client, mover, door, or other time-varying obstacle. */

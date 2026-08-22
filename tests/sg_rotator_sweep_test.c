@@ -7,10 +7,12 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 
 game_export_t globals;
 game_locals_t game;
+level_locals_t level;
 edict_t *g_edicts;
 sg_host_t sg_host;
 
@@ -113,6 +115,56 @@ int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
 	return SG_MechCatalogButtonEndpoints(key, node, entity, endpoints_out);
 }
 
+int SG_RuneMechanismBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	(void)binding;
+	return 0;
+}
+
+int SG_RuneMechanismBindingTopologyCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	(void)binding;
+	return 0;
+}
+
+edict_t *SG_RuneMechanismBindingResolveNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	(void)binding;
+	(void)key;
+	return NULL;
+}
+
+edict_t *SG_RuneMechanismBindingResolveTopologyNode(
+	const sg_rune_mechanism_binding_t *binding, uint32_t key)
+{
+	(void)binding;
+	(void)key;
+	return NULL;
+}
+
+int SG_RuneMechanismBindingMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	(void)binding;
+	(void)keys_out;
+	(void)key_count_out;
+	return 0;
+}
+
+int SG_RuneMechanismBindingTopologyMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	(void)binding;
+	(void)keys_out;
+	(void)key_count_out;
+	return 0;
+}
+
 static void DummyTouch(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf)
 {
@@ -169,6 +221,40 @@ static qboolean Blocks(const vec3_t start, const vec3_t mins,
 	const vec3_t maxs, const vec3_t end, int mask)
 {
 	return SG_OracleRotatorSweepBlocks(start, mins, maxs, end, mask);
+}
+
+static void TestWorldOverlapUsesExactRotatorSweep(void)
+{
+	edict_t ents[2];
+	sg_phantom_t ph;
+	usercmd_t cmd;
+	vec3_t brush_mins, brush_maxs;
+
+	memset(ents, 0, sizeof(ents));
+	memset(&ph, 0, sizeof(ph));
+	memset(&cmd, 0, sizeof(cmd));
+	g_edicts = ents;
+	globals.num_edicts = 2;
+	ents[0].inuse = true;
+	Set3(brush_mins, 32.0f, -8.0f, -8.0f);
+	Set3(brush_maxs, 64.0f, 8.0f, 8.0f);
+	Rotator(&ents[1], 0, 0.0f, 37.0f, 0.0f,
+	        brush_mins, brush_maxs);
+	ents[1].inuse = true;
+	test_trigger_count = 0;
+	test_solid_hits[0] = &ents[1];
+	test_solid_count = 1;
+	sg_host.box_edicts = TestBoxEdicts;
+
+	/* The linked radius cube reaches this point, but the authoritative
+	 * full-turn brush sweep does not. */
+	Set3(ph.origin, 0.0f, 0.0f, 80.0f);
+	CHECK(SG_OracleRunWorld(&ph, &cmd, 0));
+
+	/* A standing hull inside the swept annulus remains contaminated. */
+	Set3(ph.origin, 48.0f, 0.0f, 0.0f);
+	CHECK(!SG_OracleRunWorld(&ph, &cmd, 0));
+	test_solid_count = 0;
 }
 
 static void TestReplayTriggerClassifier(void)
@@ -344,6 +430,7 @@ int main(void)
 	float large;
 
 	TestReplayTriggerClassifier();
+	TestWorldOverlapUsesExactRotatorSweep();
 
 	memset(ents, 0, sizeof(ents));
 	g_edicts = ents;

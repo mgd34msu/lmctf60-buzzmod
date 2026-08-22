@@ -25,9 +25,12 @@ int SG_EnemyTeam(int team)
 
 qboolean SG_ImmutableSupport(edict_t *ent)
 {
+	/* Deathmatch spawns keep their classname when
+	 * SP_info_player_deathmatch creates the teleporter-destination pedestal. */
 	return ent && ent->inuse && ent->classname &&
 	       (!strcmp(ent->classname, "info_flag_red") ||
 	        !strcmp(ent->classname, "info_flag_blue") ||
+	        !strcmp(ent->classname, "info_player_deathmatch") ||
 	        !strcmp(ent->classname, "misc_teleporter_dest"));
 }
 
