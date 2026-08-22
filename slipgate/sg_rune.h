@@ -213,7 +213,7 @@ typedef struct rune_s
 	int				*next_link;
 	byte			*linked_seed; /* owns at least one outgoing link; incoming-only
 	                             * dead ends and true orphans are not routes */
-	/* Sparse loader-replayed state for D_SWIM only.  The table is built while
+	/* Sparse loader-replayed state for admitted compound actions.  It is built while
 	 * this rune is still an unpublished candidate and is destroyed with it. */
 	struct sg_compound_publication_s *compound_publication;
 } rune_t;

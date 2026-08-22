@@ -5,7 +5,7 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xd48249b6U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xb759a6adU,
 	"RUNE action contract drift");
 _Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xdd8de50fU,
 	"RUNE mechanism contract drift");
@@ -84,7 +84,7 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 	  RLAP_ZERO, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_SWIM,
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_SWIM, RLFB_INHERIT, 0,
 	  "RL_DOOR_SWIM", "DOOR_SWIM", "D_SWIM", "#5a9cff" },
-	{ 0, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_WATER_TO_DRY,
+	{ 1, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_WATER_TO_DRY,
 	  RLAP_HOOK_CONTROL, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_HOOK,
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_HOOK, RLFB_INHERIT, 0,
 	  "RL_DOOR_HOOK", "DOOR_HOOK", "D_HOOK", "#ff5bbd" },
@@ -99,9 +99,9 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 static void TestActions(void)
 {
 	static const int runtime_owns_control[SG_ACTION_COUNT] =
-		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1 };
+		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1 };
+		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1 };
 	static const int uses_hook_policy[SG_ACTION_COUNT] =
 		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
 	static const int field_bias_at_rope_1000[SG_ACTION_COUNT] =
@@ -202,16 +202,16 @@ static void TestActions(void)
 		}
 	}
 
-	/* Effective suffix is classification-only: it cannot authorize dispatch of
-	 * an unimplemented outer transaction. */
+	/* Effective suffix classification remains independent of outer dispatch. */
 	CHECK(SG_ActionRuntimeSupported(RL_DOOR_DROP));
 	CHECK(!SG_ActionMechanismPlanRequired(RL_DOOR_DROP));
 	CHECK(SG_ActionRuntimeSupported(SG_ActionEffectiveSuffix(RL_DOOR_DROP)));
 	CHECK(!SG_ActionHasTrait(RL_DOOR_DROP, SG_ACTF_BALLISTIC));
 	CHECK(SG_ActionEffectiveHasTrait(RL_DOOR_DROP, SG_ACTF_BALLISTIC));
-	CHECK(!SG_ActionRuntimeSupported(RL_DOOR_HOOK));
+	CHECK(SG_ActionRuntimeSupported(RL_DOOR_HOOK));
+	CHECK(!SG_ActionMechanismPlanRequired(RL_DOOR_HOOK));
 	CHECK(SG_ActionRuntimeSupported(SG_ActionEffectiveSuffix(RL_DOOR_HOOK)));
-	CHECK(!SG_ActionRuntimeHasTrait(RL_DOOR_HOOK, SG_ACTF_OWNS_CONTROL));
+	CHECK(SG_ActionRuntimeHasTrait(RL_DOOR_HOOK, SG_ACTF_OWNS_CONTROL));
 	CHECK(SG_ActionUsesHookPolicy(RL_DOOR_HOOK));
 	CHECK(SG_ActionFieldBiasMs(RL_ROCKETJUMP, 1000) == 900);
 	CHECK(SG_ActionFieldBiasMs(RL_DOOR_DROP, 1000) == 150);

@@ -138,6 +138,12 @@ class RuneContractTests(unittest.TestCase):
                 )
         self.assertFalse(GENERATED.action_mechanism_plan_allowed("door", 1))
         self.assertFalse(GENERATED.action_mechanism_plan_allowed(GENERATED.RL_DOOR, 99))
+        self.assertTrue(
+            GENERATED.action_mechanism_admitted(GENERATED.RL_DOOR_HOOK)
+        )
+        self.assertFalse(
+            GENERATED.action_mechanism_plan_required(GENERATED.RL_DOOR_HOOK)
+        )
 
     def test_wire_diagnostics_are_current(self):
         symbols = [entry["symbol"] for entry in self.document["wire_diagnostics"]]

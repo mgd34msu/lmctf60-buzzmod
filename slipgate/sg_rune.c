@@ -4537,6 +4537,49 @@ static int Compound_DropPublish(const rune_link_t *links, size_t count)
 	return published;
 }
 
+static int Compound_HookPublish(const rune_link_t *links, size_t count)
+{
+	size_t index;
+	int published = 0;
+
+	if ((!links && count > 0) || count > (size_t)LINK_MAX)
+		return 0;
+	for (index = 0; index < count; index++)
+	{
+		const rune_link_t *candidate = &links[index];
+		int existing = -1;
+		int link_index;
+
+		if (candidate->action != RL_DOOR_HOOK ||
+		    SG_CompoundValidateLink(gen_seeds, (uint32_t)gen_num_seeds,
+		                            candidate) != RLR_OK)
+			continue;
+		for (link_index = 0; link_index < gen_num_links; link_index++)
+			if (gen_links[link_index].action == RL_DOOR_HOOK &&
+			    gen_links[link_index].from == candidate->from &&
+			    gen_links[link_index].to == candidate->to)
+			{
+				existing = link_index;
+				break;
+			}
+		if (existing >= 0)
+		{
+			if (gen_links[existing].cost_ms <= candidate->cost_ms)
+				continue;
+			gen_links[existing] = *candidate;
+			continue;
+		}
+		if (gen_num_links >= LINK_MAX)
+		{
+			gen_link_overflow = true;
+			break;
+		}
+		gen_links[gen_num_links++] = *candidate;
+		published++;
+	}
+	return published;
+}
+
 static void Link_CompoundDrops(void)
 {
 	#define COMPOUND_WORLD_MAX 64
@@ -4797,7 +4840,7 @@ static rune_reject_reason_t Compound_HookPlanProve(void *opaque, int action,
 
 static void Link_CompoundHooks(void)
 {
-	#define COMPOUND_HOOK_PRODUCTION 0
+	#define COMPOUND_HOOK_PRODUCTION 1
 	#define COMPOUND_WORLD_MAX 64
 	#define COMPOUND_SOURCE_FAN 24
 	#define COMPOUND_HOOK_FAN 24
@@ -4808,6 +4851,7 @@ static void Link_CompoundHooks(void)
 	int oracle_proofs = 0;
 	int planner_emitted = 0;
 	int planner_proofs = 0;
+	int planner_published = 0;
 	int contact_failures[128] = { 0 };
 	int proof_failures[128] = { 0 };
 	door_topology_t topology = { NULL, NULL };
@@ -5028,15 +5072,19 @@ static void Link_CompoundHooks(void)
 					result = SG_CompoundActionGenPlan(&request);
 					planner_proofs += (int)result.proof_calls;
 					if (result.status == SG_COMPOUND_ACTION_GEN_OK)
+					{
 						planner_emitted += (int)result.emitted;
+						planner_published += Compound_HookPublish(output,
+						    result.emitted);
+					}
 				}
 			}
 		}
 	}
 	sg_host.dprint("rune: door-hook compound mechanisms=%d trials=%d "
-	               "proofs=%d planner_proofs=%d emitted=%d\n",
+	               "proofs=%d planner_proofs=%d emitted=%d published=%d\n",
 	               mechanism_count, oracle_trials, oracle_proofs,
-	               planner_proofs, planner_emitted);
+	               planner_proofs, planner_emitted, planner_published);
 	for (mi = 0; mi < 128; mi++)
 		if (contact_failures[mi] || proof_failures[mi])
 			sg_host.dprint("rune: door-hook compound reject reason=%d "
