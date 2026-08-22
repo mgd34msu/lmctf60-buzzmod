@@ -5806,7 +5806,119 @@ static int Graph_ReachCount(const byte *reached)
 	return count;
 }
 
-static void Graph_LogBoundaryLinks(const byte *red_reach,
+typedef struct
+{
+	int red_only;
+	int blue_only;
+	int shared;
+	int neither;
+} graph_partition_counts_t;
+
+#define OBJECTIVE_DIAG_PAIR_BUDGET 16777216ULL
+
+static unsigned int Graph_ObjectivePartitionMask(int seed,
+	const byte *red_reach, const byte *blue_reach)
+{
+	return (red_reach[seed] ? 1U : 0U) |
+	       (blue_reach[seed] ? 2U : 0U);
+}
+
+static void Graph_LogClosestPartitionPair(const char *pair,
+	unsigned int from_mask, unsigned int to_mask, int from_count, int to_count,
+	const byte *red_reach, const byte *blue_reach)
+{
+	unsigned long long possible =
+	    (unsigned long long)from_count * (unsigned long long)to_count;
+	unsigned long long comparisons = 0ULL;
+	int from_seed = -1, to_seed = -1;
+	int i, j;
+	float best = 1.0e30f;
+
+	/* Failure evidence must not turn a bounded graph pass into an unbounded
+	 * quadratic stall. These products are small on the failing corpus maps;
+	 * larger partitions retain their exact counts and explicitly report that
+	 * the nearest-pair search was skipped. */
+	if (possible > OBJECTIVE_DIAG_PAIR_BUDGET)
+	{
+		sg_host.dprint("rune: objective-gap pair=%s from=-1 to=-1 "
+		               "distance=-1.000 exact=0 pairs=%llu budget=%llu\n",
+		               pair, possible,
+		               (unsigned long long)OBJECTIVE_DIAG_PAIR_BUDGET);
+		return;
+	}
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		if (Graph_ObjectivePartitionMask(i, red_reach, blue_reach) !=
+		    from_mask)
+			continue;
+		for (j = 0; j < gen_num_seeds; j++)
+		{
+			vec3_t delta;
+			float distance2;
+
+			if (Graph_ObjectivePartitionMask(j, red_reach, blue_reach) !=
+			    to_mask)
+				continue;
+			comparisons++;
+			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, delta);
+			distance2 = DotProduct(delta, delta);
+			if (distance2 < best)
+			{
+				best = distance2;
+				from_seed = i;
+				to_seed = j;
+			}
+		}
+	}
+	if (from_seed >= 0 && to_seed >= 0)
+	{
+		vec3_t delta;
+
+		VectorSubtract(gen_seeds[to_seed].origin,
+		    gen_seeds[from_seed].origin, delta);
+		sg_host.dprint("rune: objective-gap pair=%s from=%d "
+		               "from_origin=(%.3f %.3f %.3f) to=%d "
+		               "to_origin=(%.3f %.3f %.3f) delta=(%.3f %.3f %.3f) "
+		               "distance=%.3f exact=1 pairs=%llu budget=%llu\n",
+		               pair, from_seed, gen_seeds[from_seed].origin[0],
+		               gen_seeds[from_seed].origin[1],
+		               gen_seeds[from_seed].origin[2], to_seed,
+		               gen_seeds[to_seed].origin[0],
+		               gen_seeds[to_seed].origin[1],
+		               gen_seeds[to_seed].origin[2], delta[0], delta[1],
+		               delta[2], sqrtf(best), comparisons,
+		               (unsigned long long)OBJECTIVE_DIAG_PAIR_BUDGET);
+	}
+}
+
+static void Graph_LogObjectivePartitions(const byte *red_reach,
+	const byte *blue_reach)
+{
+	graph_partition_counts_t counts = { 0, 0, 0, 0 };
+	int i;
+
+	for (i = 0; i < gen_num_seeds; i++)
+	{
+		switch (Graph_ObjectivePartitionMask(i, red_reach, blue_reach))
+		{
+		case 1U: counts.red_only++; break;
+		case 2U: counts.blue_only++; break;
+		case 3U: counts.shared++; break;
+		default: counts.neither++; break;
+		}
+	}
+	sg_host.dprint("rune: objective-partitions red_only=%d blue_only=%d "
+	               "shared=%d neither=%d\n", counts.red_only,
+	               counts.blue_only, counts.shared, counts.neither);
+	Graph_LogClosestPartitionPair("red-blue", 1U, 2U,
+	    counts.red_only, counts.blue_only, red_reach, blue_reach);
+	Graph_LogClosestPartitionPair("red-shared", 1U, 3U,
+	    counts.red_only, counts.shared, red_reach, blue_reach);
+	Graph_LogClosestPartitionPair("blue-shared", 2U, 3U,
+	    counts.blue_only, counts.shared, red_reach, blue_reach);
+}
+
+static void Graph_LogBoundaryLinks(const char *phase, const byte *red_reach,
 	const byte *blue_reach)
 {
 	int i, reported = 0;
@@ -5816,21 +5928,24 @@ static void Graph_LogBoundaryLinks(const byte *red_reach,
 	for (i = 0; i < gen_num_links && reported < 16; i++)
 	{
 		const rune_link_t *link = &gen_links[i];
-		unsigned int from_mask = (red_reach[link->from] ? 1U : 0U) |
-		    (blue_reach[link->from] ? 2U : 0U);
-		unsigned int to_mask = (red_reach[link->to] ? 1U : 0U) |
-		    (blue_reach[link->to] ? 2U : 0U);
+		unsigned int from_mask = Graph_ObjectivePartitionMask(link->from,
+		    red_reach, blue_reach);
+		unsigned int to_mask = Graph_ObjectivePartitionMask(link->to,
+		    red_reach, blue_reach);
 
 		if (from_mask == to_mask)
 			continue;
-		sg_host.dprint("rune: objective-boundary ordinal=%d link=%d from=%d to=%d "
+		sg_host.dprint("rune: objective-boundary phase=%s ordinal=%d "
+		               "link=%d from=%d to=%d "
 		               "from_reach=%u to_reach=%u action=%u provenance=%u plan=%u\n",
-		               reported, i, link->from, link->to, from_mask, to_mask,
+		               phase, reported, i, link->from, link->to,
+		               from_mask, to_mask,
 		               (unsigned int)link->action, (unsigned int)link->provenance,
 		               (unsigned int)link->mechanism_plan);
 		reported++;
 	}
-	sg_host.dprint("rune: objective-boundary reported=%d limit=16\n", reported);
+	sg_host.dprint("rune: objective-boundary phase=%s reported=%d limit=16\n",
+	               phase, reported);
 }
 
 static void Graph_ReverseReach(int root, const byte *allowed,
@@ -5938,6 +6053,8 @@ static qboolean Graph_PruneObjectiveCore(void)
 			initial_blue = Graph_ReachCount(blue_reach);
 			sg_host.dprint("rune: objective-core initial red_reach=%d blue_reach=%d\n",
 			               initial_red, initial_blue);
+			Graph_LogObjectivePartitions(red_reach, blue_reach);
+			Graph_LogBoundaryLinks("initial", red_reach, blue_reach);
 		}
 		for (i = 0; i < gen_num_seeds; i++)
 			if (keep[i] && (!red_reach[i] || !blue_reach[i]))
@@ -5962,7 +6079,7 @@ static qboolean Graph_PruneObjectiveCore(void)
 	{
 		Graph_LogObjectiveRoot("red", &red_diag, red_root);
 		Graph_LogObjectiveRoot("blue", &blue_diag, blue_root);
-		Graph_LogBoundaryLinks(red_reach, blue_reach);
+		Graph_LogBoundaryLinks("final", red_reach, blue_reach);
 		sg_host.dprint("rune: FAILED: flag objectives share no closed route core\n");
 		goto fail;
 	}

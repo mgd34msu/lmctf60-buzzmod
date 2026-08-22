@@ -163,6 +163,8 @@ static void TestBidirectionalCore(void)
 {
 	rune_seed_t seeds[2];
 	rune_link_t links[2];
+	rune_seed_t seed_snapshot[2];
+	rune_link_t link_snapshot[2];
 	edict_t red, blue;
 
 	ResetGraph(seeds, 2, links, 2, &red, &blue);
@@ -172,8 +174,52 @@ static void TestBidirectionalCore(void)
 	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
 	SetLink(&links[0], 0, 1);
 	SetLink(&links[1], 1, 0);
+	memcpy(seed_snapshot, seeds, sizeof(seeds));
+	memcpy(link_snapshot, links, sizeof(links));
 	CHECK(Graph_PruneObjectiveCore());
 	CHECK(strstr(diagnostic_log, "red_to_blue=1 blue_to_red=1") != NULL);
+	CHECK(strstr(diagnostic_log,
+	    "objective-partitions red_only=0 blue_only=0 shared=2 neither=0") != NULL);
+	CHECK(strstr(diagnostic_log,
+	    "objective-boundary phase=initial reported=0 limit=16") != NULL);
+	CHECK(gen_num_seeds == 2 && gen_num_links == 2);
+	CHECK(memcmp(seeds, seed_snapshot, sizeof(seeds)) == 0);
+	CHECK(memcmp(links, link_snapshot, sizeof(links)) == 0);
+}
+
+static void TestDisconnectedPartitionDiagnostics(void)
+{
+	rune_seed_t seeds[4];
+	rune_link_t links[4];
+	rune_seed_t seed_snapshot[4];
+	rune_link_t link_snapshot[4];
+	edict_t red, blue;
+
+	ResetGraph(seeds, 4, links, 4, &red, &blue);
+	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
+	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[2].origin, 400.0f, 0.0f, 0.0f);
+	VectorSet(seeds[3].origin, 500.0f, 0.0f, 0.0f);
+	SetLink(&links[0], 0, 2);
+	SetLink(&links[1], 2, 0);
+	SetLink(&links[2], 1, 3);
+	SetLink(&links[3], 3, 1);
+	memcpy(seed_snapshot, seeds, sizeof(seeds));
+	memcpy(link_snapshot, links, sizeof(links));
+	CHECK(!Graph_PruneObjectiveCore());
+	CHECK(strstr(diagnostic_log,
+	    "objective-partitions red_only=2 blue_only=2 shared=0 neither=0") != NULL);
+	CHECK(strstr(diagnostic_log,
+	    "objective-gap pair=red-blue from=2") != NULL);
+	CHECK(strstr(diagnostic_log, "to=3") != NULL);
+	CHECK(strstr(diagnostic_log, "distance=100.000 exact=1 pairs=4") != NULL);
+	CHECK(strstr(diagnostic_log,
+	    "objective-boundary phase=initial reported=0 limit=16") != NULL);
+	CHECK(gen_num_seeds == 4 && gen_num_links == 4);
+	CHECK(memcmp(seeds, seed_snapshot, sizeof(seeds)) == 0);
+	CHECK(memcmp(links, link_snapshot, sizeof(links)) == 0);
 }
 
 static void TestOneWayAndFixedPointFailures(void)
@@ -202,7 +248,8 @@ static void TestOneWayAndFixedPointFailures(void)
 	CHECK(strstr(diagnostic_log, "red_to_blue=0 blue_to_red=0") != NULL);
 	CHECK(strstr(diagnostic_log, "iteration=0 removed=6") != NULL);
 	CHECK(strstr(diagnostic_log, "iteration=1 removed=1") != NULL);
-	CHECK(strstr(diagnostic_log, "objective-boundary reported=") != NULL);
+	CHECK(strstr(diagnostic_log,
+	    "objective-boundary phase=initial reported=") != NULL);
 }
 
 static void TestOneWayCrossRootReject(void)
@@ -403,7 +450,7 @@ static void TestBoundaryCap(void)
 		red_reach[i] = (byte)(i & 1);
 	for (i = 0; i < 18; i++)
 		SetLink(&links[i], i, i + 1);
-	Graph_LogBoundaryLinks(red_reach, blue_reach);
+	Graph_LogBoundaryLinks("test", red_reach, blue_reach);
 	for (i = 0; i < 16; i++)
 	{
 		char expected[48];
@@ -418,7 +465,7 @@ static void TestBoundaryCap(void)
 	CHECK(strstr(diagnostic_log, "ordinal=16") == NULL);
 	CHECK(strstr(diagnostic_log, "link=16") == NULL);
 	CHECK(strstr(diagnostic_log,
-	    "objective-boundary reported=16 limit=16") != NULL);
+	    "objective-boundary phase=test reported=16 limit=16") != NULL);
 }
 
 static void TestZeroAndAllocationFailures(void)
@@ -497,6 +544,7 @@ int main(void)
 	sg_host.level_alloc = TestAlloc;
 	sg_host.level_free = TestFree;
 	TestBidirectionalCore();
+	TestDisconnectedPartitionDiagnostics();
 	TestOneWayCrossRootReject();
 	TestOneWayAndFixedPointFailures();
 	TestObjectiveMetricUnits();
