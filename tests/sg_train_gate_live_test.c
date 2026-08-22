@@ -65,6 +65,10 @@ static void TestSweepSides(void)
 	const float inside_maxs[3] = { 16.0f, 16.0f, 80.0f };
 	const float corner_mins[3] = { -80.0f, 64.0f, 24.0f };
 	const float corner_maxs[3] = { -48.0f, 96.0f, 80.0f };
+	const float below_mins[3] = { -16.0f, -16.0f, -64.0f };
+	const float below_maxs[3] = { 16.0f, 16.0f, -8.0f };
+	const float above_mins[3] = { -16.0f, -16.0f, 272.0f };
+	const float above_maxs[3] = { 16.0f, 16.0f, 328.0f };
 
 	CHECK(SG_TrainGateSweepSide(west_mins, west_maxs, sweep_mins,
 	    sweep_maxs) == SG_TRAIN_GATE_SIDE_X_MIN);
@@ -78,10 +82,16 @@ static void TestSweepSides(void)
 	    sweep_maxs) == SG_TRAIN_GATE_SIDE_NONE);
 	CHECK(SG_TrainGateSweepSide(corner_mins, corner_maxs, sweep_mins,
 	    sweep_maxs) == SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateSweepSide(below_mins, below_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_Z_MIN);
+	CHECK(SG_TrainGateSweepSide(above_mins, above_maxs, sweep_mins,
+	    sweep_maxs) == SG_TRAIN_GATE_SIDE_Z_MAX);
 	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_X_MIN) ==
 	    SG_TRAIN_GATE_SIDE_X_MAX);
 	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_Y_MAX) ==
 	    SG_TRAIN_GATE_SIDE_Y_MIN);
+	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_Z_MIN) ==
+	    SG_TRAIN_GATE_SIDE_Z_MAX);
 	CHECK(SG_TrainGateOppositeSide(SG_TRAIN_GATE_SIDE_NONE) ==
 	    SG_TRAIN_GATE_SIDE_NONE);
 }
