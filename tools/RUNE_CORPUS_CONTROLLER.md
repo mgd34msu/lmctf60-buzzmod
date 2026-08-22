@@ -8,17 +8,17 @@ both the C and Python acceptance paths.
 ## Fixed corpus
 
 - Use `tools/rune-corpus-maps.txt` as the sole ordered map manifest.
-- Require exactly 181 safe, unique names.
-- Require both the original `lmctf02` BSP and its padded `lmctf02c`
-  replacement as distinct corpus identities. Neither may stand in for the
-  other.
+- Require exactly 175 safe, unique names.
+- Exclude an unsuffixed base whenever an alphabetic-suffix variant exists.
+  Multiple variants remain separate identities, including `lmctf02a` and
+  `lmctf02c`.
 - The manifest SHA-256 is
-  `9bc55cb287f0b9d99fccf54cc1339e65fba30459e49b0b77cf1b67896c125452`.
+  `dc87ed408d299999501173ab65754e3d555a3505c7d8daf172ee542d710af98a`.
 - Assign stable ports by manifest index.  The reserved default range is
-  62000-62180; all selected TCP and UDP ports must be bind-tested before any
+  62000-62174; all selected TCP and UDP ports must be bind-tested before any
   engine starts.  A different base is part of the run fingerprint.
 
-This 181-map manifest is the conversion corpus. The production server rotation
+This 175-map manifest is the conversion corpus. The production server rotation
 and its cold-load/wave gate use the separate exact-20 runtime map list; passing
 that runtime gate never reduces or substitutes for converting this corpus.
 
@@ -139,7 +139,7 @@ retained `.snag` must still bind its exact evidence hash and declare
 
 Bootstrap sidecars are replaced only after the persistent ten-lane fleet has
 stopped cleanly and `fleet-runner.py::verify_stopped_residence_evidence`
-accepts its complete ledger. Run `snag_corpus.py` with the accepted 181 RUNE
+accepts its complete ledger. Run `snag_corpus.py` with the accepted 175 RUNE
 directory, stopped state root, evidence root, and the exact hash-bound fleet
 runner. The final builder:
 
@@ -152,7 +152,7 @@ runner. The final builder:
 - joins a visible demo stall to a controller/RUNE route episode only for the
   same player and an overlapping server-frame interval, rejecting ambiguous
   joins;
-- emits a RUNE-SHA-bound sidecar and canonical evidence record for all 181
+- emits a RUNE-SHA-bound sidecar and canonical evidence record for all 175
   maps, including explicit `NO_ACCEPTED_OBSERVATION` files for maps outside
   the observed top 20; and
 - rechecks the runner, stopped owner, evidence ledger, receipts, demos,
@@ -164,13 +164,13 @@ sidecar corpus is not accepted from opaque JSONL rows or from the bootstrap
 classification.
 
 After each terminal map, atomically regenerate `summary.json`, `summary.tsv`,
-and `heartbeat.json`.  The final summary includes the fingerprint, total 181,
+and `heartbeat.json`.  The final summary includes the fingerprint, total 175,
 counts by classification, every map result/hash, start/end timestamps, and a
-`complete` boolean that is true only when all 181 terminal results validate.
+`complete` boolean that is true only when all 175 terminal results validate.
 
 ## Launch gate
 
-First run only the controller self-tests and a dry-run that prints the 181
+First run only the controller self-tests and a dry-run that prints the 175
 stable map/port assignments and fingerprint.  Then run one approved smoke map
 with a fresh module, inspect its exact bytes through C and Python, and cold-load
 it through the runtime.  The full corpus may start only after that evidence is

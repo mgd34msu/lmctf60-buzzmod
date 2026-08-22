@@ -433,16 +433,39 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ))
             self.thaw(snapshot)
 
-    def test_manifest_and_all_181_stable_assignments(self):
+    def test_manifest_and_all_175_stable_assignments(self):
         maps = controller.validate_manifest()
         assignments = controller.stable_assignments(maps)
-        self.assertEqual(181, len(maps))
-        self.assertEqual(181, len(assignments))
-        self.assertEqual(list(range(181)), [item["index"] for item in assignments])
-        self.assertEqual(list(range(62000, 62181)), [item["port"] for item in assignments])
+        self.assertEqual(175, len(maps))
+        self.assertEqual(175, len(assignments))
+        self.assertEqual(list(range(175)), [item["index"] for item in assignments])
+        self.assertEqual(list(range(62000, 62175)), [item["port"] for item in assignments])
         self.assertEqual(maps, [item["map"] for item in assignments])
-        self.assertIn("lmctf02", maps)
+        self.assertIn("lmctf02a", maps)
         self.assertIn("lmctf02c", maps)
+
+    def test_manifest_variant_policy_excludes_unsuffixed_bases(self):
+        maps = controller.validate_manifest()
+        controller.validate_variant_scope(maps)
+        excluded = {"lmctf02", "lmctf05", "smap31", "xmap07", "xmap11", "xmap14"}
+        retained = {
+            "lmctf02a", "lmctf02c", "lmctf05b", "smap31a", "xmap07a",
+            "xmap11a", "xmap14a",
+        }
+        self.assertTrue(excluded.isdisjoint(maps))
+        self.assertTrue(retained.issubset(maps))
+        with self.assertRaisesRegex(
+            controller.CorpusError,
+            "unsuffixed map lmctf02 conflicts with variants lmctf02a, lmctf02c",
+        ):
+            controller.validate_variant_scope(
+                ["lmctf01", "lmctf02", "lmctf02a", "lmctf02c"]
+            )
+        with self.assertRaisesRegex(
+            controller.CorpusError,
+            "unsuffixed map tw2ctf3 conflicts with variants tw2ctf3a",
+        ):
+            controller.validate_variant_scope(["tw2ctf3", "tw2ctf3a"])
 
     def test_parent_map_authority_rejects_host_basename_inode_device_and_zero_inode(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -612,7 +635,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ):
                 maps = controller.validate_manifest(path)
             self.assertTrue(opened)
-            self.assertEqual(181, len(maps))
+            self.assertEqual(175, len(maps))
             self.assertEqual(b"attacker replacement\n", path.read_bytes())
 
     def test_snapshot_rejects_symlink_and_detects_input_mutation(self):
@@ -1358,9 +1381,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
             assignments = [line for line in lines if re.fullmatch(r"[0-9]{3}\t[^\t]+\t[0-9]+", line)]
             self.assertEqual(0, status)
             self.assertTrue(lines[0].startswith("fingerprint="))
-            self.assertEqual(181, len(assignments))
+            self.assertEqual(175, len(assignments))
             self.assertEqual("000\tlmctf01\t62000", assignments[0])
-            self.assertEqual("180\txmap30\t62180", assignments[-1])
+            self.assertEqual("174\txmap30\t62174", assignments[-1])
             self.thaw(snapshot)
 
     def test_cold_load_timeout_cli_default_and_override(self):
@@ -2204,7 +2227,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ))
             self.thaw(run_root)
 
-    def test_summary_rejects_181_incomplete_infra_terminal_records(self):
+    def test_summary_rejects_175_incomplete_infra_terminal_records(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)
             maps = controller.validate_manifest()

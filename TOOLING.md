@@ -48,6 +48,6 @@ cross-tool inputs and outputs without duplicating every option.
 
 ## Current boundary
 
-The current branch has the 181-map RUNE controller and strict readers. It does
+The current branch has the 175-map RUNE controller and strict readers. It does
 not yet contain the reviewed persistent fleet runner or release-bundle
 transaction. Integrate those before any production cutover.

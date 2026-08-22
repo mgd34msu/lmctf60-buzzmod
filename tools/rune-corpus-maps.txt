@@ -1,10 +1,8 @@
 lmctf01
-lmctf02
 lmctf02a
 lmctf02c
 lmctf03
 lmctf04
-lmctf05
 lmctf05b
 lmctf06
 lmctf07
@@ -113,7 +111,6 @@ smap27
 smap28
 smap29
 smap30
-smap31
 smap31a
 smap32
 smap33
@@ -152,16 +149,13 @@ xmap03
 xmap04
 xmap05
 xmap06
-xmap07
 xmap07a
 xmap08
 xmap09
 xmap10
-xmap11
 xmap11a
 xmap12
 xmap13
-xmap14
 xmap14a
 xmap15
 xmap16

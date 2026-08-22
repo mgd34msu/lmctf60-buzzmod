@@ -7,8 +7,11 @@ override it.
 ## Fixed scope
 
 - Generate a new RUNE for every map in `tools/rune-corpus-maps.txt`. The corpus
-  contains 181 maps. `lmctf02` and `lmctf02c` count separately.
-- Generate all 181 RUNEs from one frozen source, module, configuration, engine,
+  contains 175 maps. When a numbered map has one or more suffixed variants, the
+  variants are canonical and the unsuffixed base is out of scope. Keep every
+  listed variant when a map has more than one, such as `lmctf02a` and
+  `lmctf02c`.
+- Generate all 175 RUNEs from one frozen source, module, configuration, engine,
   reader set, linter, semantic checker set, and BSP set.
 - Treat every map list as an ordinary server or harness input. `topmaps.txt`
   and its 20 entries have no special completion or release status.
@@ -46,7 +49,7 @@ override it.
 - [x] Both C readers, Python decoding, lint, semantic checks, strict compilers,
       sanitizers, and live server execution passed.
 
-`lmctf58` is complete. Its RUNE will be regenerated with the other 180 maps
+`lmctf58` is complete. Its RUNE will be regenerated with the other 174 maps
 after the final source freeze.
 
 ### Traversal and support
@@ -195,7 +198,8 @@ both passed.
 - [x] Exact-commit CI for `30c8667` passed on both `slipgate` and `main`. Both
       runs passed the Windows x86 and x64 jobs, Linux, all four GCC and Clang
       Make-dialect jobs, and the version check.
-- [x] The `lmctf04` objective-root source repair is canonical at `3b6b1f5`.
+- [x] The `lmctf04` objective-root source repair is canonical at `caf773b`.
+      Commit `3b6b1f5` updates the source-size budget for that repair.
       Both flag roots bind, and the mutual core retains 979 seeds and 26,373
       links. The isolated end-to-end run passed both readers, Python, lint,
       authenticated SNAG creation, and fresh cold runtime-ready.
@@ -211,10 +215,10 @@ snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
 - [ ] Finish and integrate the remaining graph repairs.
 - [ ] Pass exact-commit CI for the final combined source and tools on both
       `slipgate` and `main`.
-- [ ] Rebuild the final module, create a new immutable 181-map input snapshot,
+- [ ] Rebuild the final module, create a new immutable 175-map input snapshot,
       and record its exact manifest and controller fingerprint.
 
-## Active work: repair, refreeze, and regenerate all 181 RUNEs
+## Active work: repair, refreeze, and regenerate all 175 RUNEs
 
 The run at `/tmp/lmctf6-rune181-72c52db` is sealed from acceptance and retained
 only as diagnostic evidence. The run is complete with all 181 terminal results:
@@ -222,19 +226,26 @@ zero PASS, 31 `GEN_FAIL`, and 150 `TIMEOUT`. No worker remains active. The final
 summary, every referenced result hash, each map identity, and each terminal
 classification passed the integrity check. No artifact from this run belongs
 to the accepted corpus. The project still requires a new freeze and a full
-181-map restart from an empty run root.
+175-map restart from an empty run root.
 
 Most recorded timeouts completed RUNE generation and were waiting for a
 same-process RUNE-ready line after the runtime correctly rejected the missing
 SNAG declaration. The controller repair removes that misclassification. At
-least `lmctf15` and `lmctf25` are genuine no-write generation timeouts and must
-remain timeouts unless later source repair lets generation finish.
+the old freeze, 32 maps wrote no artifact. Twenty-four stopped at a graph
+invariant, and eight timed out during generation. One of those 32 was the now
+excluded `lmctf05` base map. The corrected corpus contains 31 of those old
+no-artifact results. Later isolated evidence already supersedes some of them,
+including `lmctf02a` and `lmctf04`.
 
 ### Repair tracks
 
-- [ ] Complete the isolated `lmctf05` and `lmctf05b` repair. The candidate
+- [ ] Complete the isolated `lmctf05b` repair. The candidate
       generalizes `START_OPEN` vertical `func_door` carrier support through
-      authenticated `RL_LIFT`, but it is not accepted yet.
+      authenticated `RL_LIFT`, but it is not accepted yet. The unsuffixed
+      `lmctf05` map is not an acceptance target.
+      A source-identical smoke now proves both required carrier selections.
+      Generation reaches the next blocker, missing proved static-world top
+      egress for both carriers. That repair remains isolated and unaccepted.
 - [ ] Repair the remaining maps whose objective route core is closed.
 - [ ] Repair the missing central transition in `lmctf07`.
 
@@ -253,12 +264,12 @@ remain timeouts unless later source repair lets generation finish.
    - root-aware lint acceptance;
    - every applicable map-specific semantic check;
    - a fresh-process cold load with an admitted bot.
-5. Require exactly 181 PASS results. A generation failure, timeout, lint
+5. Require exactly 175 PASS results. A generation failure, timeout, lint
    failure, reader disagreement, semantic failure, or cold-load failure blocks
    completion.
 6. Repair any new failure at the source, data, or tool boundary that owns it,
    then refreeze and restart every artifact invalidated by that repair.
-7. Freeze the final 181-artifact manifest and its evidence hashes.
+7. Freeze the final 175-artifact manifest and its evidence hashes.
 
 ## Real-match validation
 
@@ -295,7 +306,7 @@ evidence.
 5. Merge the proven tree to `main` and require the same exact-commit CI.
 6. Set the release version, create the tag, and publish the intended assets.
 7. Download the release and verify its hashes and version identity.
-8. Record the final source, module, 181-artifact corpus, real-match evidence,
+8. Record the final source, module, 175-artifact corpus, real-match evidence,
    CI, tag, and release identities.
 
 Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
@@ -305,7 +316,7 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ```text
 finish the remaining graph repairs
   -> pass exact CI and create a new source, module, and input freeze
-  -> restart and validate all 181 RUNEs
+  -> restart and validate all 175 RUNEs
   -> run ordinary real matches
   -> repair defects and repeat invalidated evidence
   -> update documentation, tag, and publish
@@ -329,7 +340,7 @@ finish the remaining graph repairs
 - [x] `lmctf04` objective-root repair integrated and accepted end to end.
 - [ ] Remaining graph blockers repaired and integrated.
 - [ ] New final combined source, tool, module, and input freeze.
-- [ ] Exactly 181 newly generated and fully accepted RUNEs.
+- [ ] Exactly 175 newly generated and fully accepted RUNEs.
 - [ ] Real-match behavioral validation with ordinary map-list inputs.
 - [ ] Match-exposed defects repaired and revalidated.
 - [ ] Final compiler, Make dialect, platform, and repository gates.

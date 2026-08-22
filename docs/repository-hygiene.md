@@ -26,7 +26,7 @@ dialects and the relevant focused tests afterward.
 - `sqlite3.c` and `sqlite3.h` are the vendored SQLite 3.7.13 source used by all
   platform builds.
 - `assets/lmctf6-buzzmod.pak` is a required runtime and public asset.
-- `tools/rune-corpus-maps.txt` is the 181-map conversion authority.
+- `tools/rune-corpus-maps.txt` is the 175-map conversion authority.
   `tools/topmaps.txt` is the separate ordered 20-map fleet rotation.
 - Demo-derived corpora remain development inputs only while their producer and
   consumer are live. Seed-indexed data must be regenerated or rebound after a

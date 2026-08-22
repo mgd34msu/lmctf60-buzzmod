@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and verify the complete 181-map `.snag` sidecar corpus.
+"""Build and verify the complete `.snag` sidecar corpus.
 
 The bootstrap state does not claim that a map is clean.  It says that no
 authenticated residence has yet supplied controller-seed stall evidence, and
@@ -360,13 +360,13 @@ def _validate_authority(maps, manifest_sha256):
         raise ValueError("bootstrap map-manifest hash is not authoritative")
     authoritative_maps = rune_corpus_controller.validate_manifest()
     if maps != authoritative_maps:
-        raise ValueError("bootstrap map list is not the exact ordered 181 authority")
+        raise ValueError("bootstrap map list is not the exact ordered 175 authority")
 
 
 def _derive_final_corpus(
         maps, rune_dir: Path, state_root: Path, evidence_root: Path,
         fleet_runner_path: Path, manifest_sha256: str, surcharge: int):
-    """Derive all 181 sidecars from one verified native top-20 cycle."""
+    """Derive the authoritative sidecars from one verified native top-20 cycle."""
     _validate_authority(maps, manifest_sha256)
     if (type(surcharge) is not int or
             not 0 <= surcharge <= snagrepair.SURCHARGE_MAX):
@@ -982,7 +982,7 @@ def build_final(
         maps, rune_dir: Path, state_root: Path, evidence_root: Path,
         fleet_runner_path: Path, output: Path, manifest_sha256: str,
         surcharge: int = 1000):
-    """Publish one immutable final 181-map corpus without overwriting."""
+    """Publish one immutable final corpus without overwriting."""
     _validate_authority(maps, manifest_sha256)
     output_parent = Path(os.path.abspath(output.parent))
     try:

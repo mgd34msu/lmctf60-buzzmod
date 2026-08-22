@@ -33,7 +33,7 @@ and hash:
 - the two byte-identical Linux module aliases used by the server;
 - `lmctf6-buzzmod.pak`;
 - the production configuration;
-- the exact 181 BSP/RUNE pairs, including both `lmctf02` and `lmctf02c`;
+- the exact 175 BSP/RUNE pairs, including both `lmctf02a` and `lmctf02c`;
 - the ordered top-20 authority and ten cyclic rotations with offsets 0 through
   9;
 - every applicable accepted sidecar;
@@ -51,7 +51,7 @@ frozen source and bundle identity:
 
 1. Both Make dialects and all host tests pass under GCC and Clang.
 2. Linux x86_64 and Windows x86/x64 builds are warning-clean.
-3. All 181 RUNE artifacts pass both C readers, the Python reader, lint,
+3. All 175 RUNE artifacts pass both C readers, the Python reader, lint,
    applicable semantic checks, and a fresh-process cold load.
 4. The complete bundle passes assembly, install, post-verification, failure
    injection, and rollback tests.

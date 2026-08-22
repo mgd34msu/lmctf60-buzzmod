@@ -131,11 +131,11 @@ on failure.
 
 ### Independent acceptance
 
-`tools/rune_corpus_controller.py` is the 181-map conversion controller. A map
+`tools/rune_corpus_controller.py` is the 175-map conversion controller. A map
 may report PASS only when generation succeeds and the frozen GNU C reader, Make
 C reader, Python reader, linter, applicable semantic checker, and separate
 fresh-process cold load agree on the artifact. `tools/rune-corpus-maps.txt` is
-the 181-map conversion authority; `tools/topmaps.txt` is only the ordered
+the 175-map conversion authority; `tools/topmaps.txt` is only the ordered
 20-map production fleet list.
 
 ## Sidecars and analysis data

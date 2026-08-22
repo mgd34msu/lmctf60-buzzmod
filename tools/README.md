@@ -13,8 +13,8 @@ how the tools fit together and which artifacts they own.
 
 `rune-corpus-maps.txt`
 
-: Exact ordered list of 181 required maps. It includes both `lmctf02` and
-  `lmctf02c`.
+: Exact ordered list of 175 required maps. An unsuffixed base is excluded when
+  alphabetic variants exist. Both `lmctf02a` and `lmctf02c` remain required.
 
 `runegen.sh`
 
@@ -54,7 +54,7 @@ how the tools fit together and which artifacts they own.
 
 `snag_corpus.py`
 
-: Builds the 181-map snag corpus from verified stopped-residence receipts. It
+: Builds the 175-map snag corpus from verified stopped-residence receipts. It
   fails on missing, ambiguous, or changed authority.
 
 ## Demo and match analysis
@@ -138,7 +138,7 @@ receipts, and stopped-evidence verification. See
 `PROJECT-COMPLETION-PLAN.md`.
 
 `topmaps.txt` is the exact ordered 20-map production rotation. It is not the
-181-map conversion corpus.
+175-map conversion corpus.
 
 ## Data
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable controller for the fixed 181-map RUNE corpus.
+"""Durable controller for the fixed RUNE corpus.
 
 The controller is deliberately fail-closed.  ``dry-run`` never starts an
 engine.  ``smoke`` selects exactly one map; ``run`` selects the fixed corpus.
@@ -37,9 +37,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tools/rune-corpus-maps.txt"
 EXPECTED_MANIFEST_SHA256 = (
-    "9bc55cb287f0b9d99fccf54cc1339e65fba30459e49b0b77cf1b67896c125452"
+    "dc87ed408d299999501173ab65754e3d555a3505c7d8daf172ee542d710af98a"
 )
-CORPUS_SIZE = 181
+CORPUS_SIZE = 175
 DEFAULT_PORT_BASE = 62000
 CORPUS_ENGINE_BASENAME = "q2ded-rune-corpus"
 MAP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
@@ -490,9 +490,29 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> list[str]:
     for name in maps:
         if not MAP_NAME_RE.fullmatch(name):
             raise CorpusError(f"unsafe map name in manifest: {name!r}")
-    if "lmctf02" not in maps or "lmctf02c" not in maps:
-        raise CorpusError("manifest must retain both lmctf02 and lmctf02c")
+    validate_variant_scope(maps)
+    if "lmctf02a" not in maps or "lmctf02c" not in maps:
+        raise CorpusError("manifest must retain both lmctf02a and lmctf02c")
     return maps
+
+
+def validate_variant_scope(maps: Sequence[str]) -> None:
+    groups: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for name in maps:
+        match = re.fullmatch(r"(.+?)([0-9]+)([a-z]*)", name)
+        if match is None:
+            continue
+        groups.setdefault((match.group(1), match.group(2)), []).append(
+            (match.group(3), name)
+        )
+    for entries in groups.values():
+        bases = [name for suffix, name in entries if not suffix]
+        variants = sorted(name for suffix, name in entries if suffix)
+        if bases and variants:
+            raise CorpusError(
+                f"unsuffixed map {bases[0]} conflicts with variants "
+                f"{', '.join(variants)}"
+            )
 
 
 def stable_assignments(maps: Sequence[str], port_base: int = DEFAULT_PORT_BASE) -> list[dict[str, Any]]:

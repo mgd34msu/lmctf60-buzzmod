@@ -56,7 +56,7 @@ Current source includes steal → carry → escort → capture play, physics-pro
 RUNE navigation, grapple movement, combat and perception controllers, team
 roles, chat, and persistent match instrumentation. Completion still requires:
 
-- generate, independently accept, and cold-load RUNE artifacts for all 181
+- generate, independently accept, and cold-load RUNE artifacts for all 175
   authoritative maps;
 - finish the measured bot outcome and visible-behavior gaps while preserving
   the movement, combat, perception, and team-play non-regression gates;
@@ -93,7 +93,7 @@ under the exact module/BSP/config identity.
 
 | Area | Current code state |
 |-|-|
-| RUNE corpus | The tracked list/controller now covers 181 distinct maps (including both `lmctf02` and `lmctf02c`), requires GNU/Make C-reader agreement with Python and lint, runs applicable semantic checks, and requires a separate bounded cold-load process before PASS. The 181-map generation run has not yet completed. |
+| RUNE corpus | The tracked list/controller covers 175 distinct maps. When alphabetic variants exist, the unsuffixed base is excluded; both `lmctf02a` and `lmctf02c` remain separate identities. The controller requires GNU/Make C-reader agreement with Python and lint, runs applicable semantic checks, and requires a separate bounded cold-load process before PASS. The 175-map generation run has not yet completed. |
 | `lmctf58` | All ten required door-controller identities are retained. The accepted fresh artifact passes both C readers, Python decoding, lint, the exact semantic checker, sanitizers, and a separate fresh-process cold load. |
 | Fleet | Non-random maplists now preserve file order and advance/wrap in the same `q2ded` process. `iterate2.sh` still launches finite one-map processes with hard-coded roster tables, and `waveloop.sh` recreates them and discovers a repo-root module. Persistent ten-process top-20 operation and explicit bundle install are not implemented. |
 | Tool readers | `runeio.py --expected-identity` authenticates a reference RUNE and checks the artifact identity; `corpusgraph.py` has one strict loader with duplicate-key, non-finite-number, and contextual seed-weight validation. |

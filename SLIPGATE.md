@@ -45,9 +45,9 @@ client commands and consumes named host events. It does not synthesize outcomes.
 
 ## Current work
 
-The source implements the complete controller path, 181-map RUNE authority,
+The source implements the complete controller path, 175-map RUNE authority,
 ordered native map rotation, and all ten required `lmctf58` declared-door
-controllers. Open work is direct bot quality, final 181-map generation,
+controllers. Open work is direct bot quality, final 175-map generation,
 persistent fleet integration, transactional bundle integration, production
 acceptance, and release publication.
 
