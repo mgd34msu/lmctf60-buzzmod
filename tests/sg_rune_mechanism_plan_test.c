@@ -284,6 +284,117 @@ static void ExpectDoorMaterializationFailure(fixture_t *fixture)
 	CHECK(fixture->result.num_plans == 0U);
 }
 
+static void ExpectTrainMaterializationFailure(fixture_t *fixture)
+{
+	memset(fixture->edges, 0, sizeof(fixture->edges));
+	memset(fixture->plans, 0, sizeof(fixture->plans));
+	memset(fixture->edge_marks, 0, sizeof(fixture->edge_marks));
+	memset(fixture->node_marks, 0, sizeof(fixture->node_marks));
+	memset(fixture->node_queue, 0, sizeof(fixture->node_queue));
+	memset(&fixture->result, 0, sizeof(fixture->result));
+	fixture->links[0].mechanism_plan = 0U;
+	qsort(fixture->inventory, fixture->num_inventory,
+		sizeof(fixture->inventory[0]), EdgeCompare);
+	CHECK(!SG_MechanismPlansMaterialize(fixture->links, 2U,
+		&fixture->binding, 1U, &fixture->catalog, &fixture->buffers,
+		&fixture->result));
+	CHECK(fixture->result.diagnostic == SG_MECHANISM_PLAN_BAD_CLOSURE);
+}
+
+static void TrainFixture(fixture_t *fixture)
+{
+	static const char *const strings[] = {
+		"closed", "func_button", "func_train", "gate", "open",
+		"path_corner"
+	};
+	rune_mechanism_node_t *button;
+	rune_mechanism_node_t *train;
+	rune_mechanism_node_t *closed;
+	rune_mechanism_node_t *open;
+
+	FixtureInit(fixture, RL_TRAIN);
+	Strings(fixture, strings, 6U);
+	button = Node(fixture, 10U, SG_MECH_NODE_BUTTON, "func_button");
+	button->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER;
+	button->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	button->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	button->wait_ms = 1000;
+	button->speed_q8 = button->accel_q8 = button->decel_q8 = 320U;
+	Target(button, fixture, "gate");
+
+	train = Node(fixture, 20U, SG_MECH_NODE_TRAIN, "func_train");
+	train->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER;
+	train->spawnflags = 2U;
+	train->use_callback = SG_MECH_CALLBACK_TRAIN_USE;
+	train->blocked_callback = SG_MECH_CALLBACK_BLOCKED_TRAIN;
+	train->speed_q8 = train->accel_q8 = train->decel_q8 = 2400U;
+	Targetname(train, fixture, "gate");
+	Target(train, fixture, "open");
+
+	closed = Node(fixture, 30U, SG_MECH_NODE_PATH_CORNER, "path_corner");
+	closed->flags = SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_ONE_SHOT;
+	closed->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
+	closed->wait_ms = -1000;
+	Targetname(closed, fixture, "closed");
+	Target(closed, fixture, "open");
+
+	open = Node(fixture, 40U, SG_MECH_NODE_PATH_CORNER, "path_corner");
+	open->flags = SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_ONE_SHOT;
+	open->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
+	open->wait_ms = -1000;
+	Targetname(open, fixture, "open");
+	Target(open, fixture, "closed");
+
+	Edge(fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(fixture, 20U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	Edge(fixture, 30U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	Edge(fixture, 40U, 30U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	fixture->binding.entry_key = 10U;
+	fixture->binding.mover_key = 20U;
+	fixture->binding.destination_key = 30U;
+	fixture->binding.egress_key = 40U;
+	fixture->binding.controller_kind = SG_MECHANISM_CONTROLLER_TRAIN;
+	fixture->binding.expected_members = 1U;
+	fixture->binding.cooldown_ms = 2000U;
+}
+
+static void TestTrainGate(void)
+{
+	fixture_t fixture;
+	rune_mechanism_edge_t *train_edge;
+
+	TrainFixture(&fixture);
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].num_edges == 4U);
+	CHECK(fixture.edges[fixture.plans[0].first_edge + 0U].from_key == 10U);
+	CHECK(fixture.edges[fixture.plans[0].first_edge + 1U].from_key == 20U);
+	CHECK(fixture.edges[fixture.plans[0].first_edge + 1U].to_key == 40U);
+	CHECK(fixture.edges[fixture.plans[0].first_edge + 2U].from_key == 30U);
+	CHECK(fixture.edges[fixture.plans[0].first_edge + 3U].from_key == 40U);
+	train_edge = InventoryEdge(&fixture, 20U, 40U);
+	CHECK(train_edge != NULL);
+	if (train_edge)
+		train_edge->to_key = 30U;
+	ExpectTrainMaterializationFailure(&fixture);
+
+	TrainFixture(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[0].flags |= SG_MECH_NODEF_SHOOTABLE;
+	ExpectTrainMaterializationFailure(&fixture);
+
+	TrainFixture(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[1].spawnflags = 0U;
+	ExpectTrainMaterializationFailure(&fixture);
+
+	TrainFixture(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[2].spawnflags = 1U;
+	ExpectTrainMaterializationFailure(&fixture);
+}
+
 static void CodecNode(const rune_mechanism_node_t *source,
 	sg_rune_codec_activation_node_t *destination)
 {
@@ -1149,11 +1260,13 @@ int main(void)
 	TestDelayedSoundTerminal();
 	TestOnePlanPerLink();
 	TestPush();
+	TestTrainGate();
 	CHECK((covered_actions & (UINT32_C(1) << RL_LIFT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_TELEPORT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_DOOR)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_BUTTON_DOOR)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_PUSH)) != 0U);
+	CHECK((covered_actions & (UINT32_C(1) << RL_TRAIN)) != 0U);
 	if (failures)
 	{
 		fprintf(stderr, "sg_rune_mechanism_plan_test: %d failure(s)\n",

@@ -511,6 +511,56 @@ static void TestPush(void)
 	CHECK(!SG_RuneMechanismBindingCurrent(&binding));
 }
 
+static void TestTrainGate(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *button;
+	rune_mechanism_node_t *train;
+	rune_mechanism_node_t *closed;
+	rune_mechanism_node_t *open;
+
+	FixtureBegin(&fixture, RL_TRAIN, SG_MECHANISM_CONTROLLER_TRAIN,
+		2000U, 1U);
+	button = Node(&fixture, 10U, SG_MECH_NODE_BUTTON,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER);
+	button->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	button->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	button->wait_ms = 1000;
+	train = Node(&fixture, 20U, SG_MECH_NODE_TRAIN,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER);
+	train->spawnflags = 2U;
+	train->use_callback = SG_MECH_CALLBACK_TRAIN_USE;
+	train->blocked_callback = SG_MECH_CALLBACK_BLOCKED_TRAIN;
+	train->speed_q8 = train->accel_q8 = train->decel_q8 = 2400U;
+	closed = Node(&fixture, 30U, SG_MECH_NODE_PATH_CORNER,
+		SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_ONE_SHOT);
+	closed->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
+	closed->wait_ms = -1000;
+	open = Node(&fixture, 40U, SG_MECH_NODE_PATH_CORNER,
+		SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_ONE_SHOT);
+	open->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
+	open->wait_ms = -1000;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 20U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	Edge(&fixture, 30U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	Edge(&fixture, 40U, 30U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	FixtureFinish(&fixture, 10U, 20U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.destination_node == closed);
+	CHECK(binding.egress_node == open);
+	CHECK(binding.destination_entity == &fixture.entities[2]);
+	CHECK(binding.egress_entity == &fixture.entities[3]);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture.rune, 0U, &binding));
+
+	fixture.edges[1].to_key = 30U;
+	fixture.edges[fixture.plan.first_edge + 1U].to_key = 30U;
+	fixture.plan.closure_crc32 = ClosureCRC(&fixture);
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
 static void TestRetiredInventoryIsNeverExecutable(void)
 {
 	fixture_t fixture;
@@ -772,6 +822,7 @@ int main(void)
 	TestDescendingCarrierStagesUseAnchorIdentity();
 	TestTeleport();
 	TestPush();
+	TestTrainGate();
 	TestRetiredInventoryIsNeverExecutable();
 	TestAutoDoor();
 	TestDirectDoor();

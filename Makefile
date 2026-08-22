@@ -42,6 +42,10 @@ BUTTON_LIVE_TEST_ALL_ARTIFACTS := \
 	.sg_button_live_test.gnu.o .sg_button_live_test.gnu.d \
 	.sg_button_live_under_test.gnu.o .sg_button_live_under_test.gnu.d \
 	$(BUTTON_LIVE_TEST_OBJS) $(BUTTON_LIVE_TEST_DEPS)
+TRAIN_GATE_LIVE_TEST_BIN := sg_train_gate_live_test.make
+TRAIN_GATE_LIVE_TEST_OBJS := .sg_train_gate_live_test.make.o \
+	.sg_train_gate_live_under_test.make.o
+TRAIN_GATE_LIVE_TEST_DEPS := $(TRAIN_GATE_LIVE_TEST_OBJS:.o=.d)
 BUTTON_GAME_TEST_BIN := sg_button_game_test.make
 BUTTON_GAME_TEST_OBJS := .sg_button_game_test.make.o \
 	.sg_button_game_live_under_test.make.o \
@@ -1330,6 +1334,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
+-include $(TRAIN_GATE_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)
@@ -1550,6 +1555,10 @@ $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(BUTTON_LIVE_TEST_OBJS) $(LIBS)
 
+$(TRAIN_GATE_LIVE_TEST_BIN): $(TRAIN_GATE_LIVE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(TRAIN_GATE_LIVE_TEST_OBJS) $(LIBS)
+
 $(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LIBS)
@@ -1698,6 +1707,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_button_live_under_test.make.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_train_gate_live_test.make.o: tests/sg_train_gate_live_test.c \
+		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_train_gate_live_under_test.make.o: slipgate/sg_train_gate_live.c \
+		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -3434,6 +3457,10 @@ mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 button-live-test: $(BUTTON_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(BUTTON_LIVE_TEST_BIN)
+
+train-gate-live-test: $(TRAIN_GATE_LIVE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(TRAIN_GATE_LIVE_TEST_BIN)
 
 button-game-test: $(BUTTON_GAME_TEST_BIN)
 	$(E) [TEST] $<

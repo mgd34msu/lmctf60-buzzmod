@@ -100,7 +100,6 @@ THINK_CALLBACK(AngleMove_Begin)
 THINK_CALLBACK(AngleMove_Final)
 THINK_CALLBACK(AngleMove_Done)
 THINK_CALLBACK(Think_AccelMove)
-THINK_CALLBACK(func_train_find)
 THINK_CALLBACK(train_next)
 THINK_CALLBACK(train_wait)
 THINK_CALLBACK(trigger_elevator_init)
@@ -118,6 +117,26 @@ void SG_HooksInit(void)
 int Q_stricmp(const char *left, const char *right)
 {
 	return strcasecmp(left, right);
+}
+
+/* The production catalog seals after func_train_find has run. */
+void func_train_find(edict_t *self)
+{
+	edict_t *corner = NULL;
+	int index;
+
+	for (index = 1; self && self->target && index < globals.num_edicts; index++)
+		if (test_edicts[index].inuse && test_edicts[index].targetname &&
+		    !strcasecmp(test_edicts[index].targetname, self->target))
+		{
+			corner = &test_edicts[index];
+			break;
+		}
+	CHECK(corner != NULL);
+	if (!corner)
+		return;
+	self->target = corner->target;
+	VectorSubtract(corner->s.origin, self->mins, self->s.origin);
 }
 
 static void *TestAlloc(int bytes)
@@ -1345,6 +1364,174 @@ static void TestPushVelocitySealed(void)
 	CHECK(node && !SG_MechCatalogEntityTopologyMatches(1U, node));
 }
 
+static void SetupTrainGateCatalog(void)
+{
+	edict_t *button;
+	edict_t *train;
+	edict_t *closed;
+	edict_t *open;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 5;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "func_button");
+	InitializeEntity(2U, "func_train");
+	InitializeEntity(3U, "path_corner");
+	InitializeEntity(4U, "path_corner");
+	button = &test_edicts[1];
+	train = &test_edicts[2];
+	closed = &test_edicts[3];
+	open = &test_edicts[4];
+
+	button->target = "gate";
+	button->touch = button_touch;
+	button->use = button_use;
+	button->movetype = MOVETYPE_STOP;
+	button->solid = SOLID_BSP;
+	button->wait = button->moveinfo.wait = 1.0f;
+	button->moveinfo.speed = button->moveinfo.accel =
+		button->moveinfo.decel = 40.0f;
+
+	train->targetname = "gate";
+	train->target = "closed";
+	train->spawnflags = 2;
+	train->movetype = MOVETYPE_PUSH;
+	train->solid = SOLID_BSP;
+	train->use = train_use;
+	train->blocked = train_blocked;
+	train->moveinfo.speed = train->moveinfo.accel =
+		train->moveinfo.decel = 300.0f;
+	VectorSet(train->mins, -2.0f, -2.0f, -2.0f);
+
+	closed->targetname = "closed";
+	closed->target = "open";
+	closed->wait = -1.0f;
+	closed->touch = path_corner_touch;
+	VectorSet(closed->s.origin, 0.0f, 0.0f, 256.0f);
+	VectorSet(closed->absmin, -8.0f, -8.0f, 248.0f);
+	VectorSet(closed->absmax, 8.0f, 8.0f, 264.0f);
+
+	open->targetname = "open";
+	open->target = "closed";
+	open->wait = -1.0f;
+	open->touch = path_corner_touch;
+	VectorSet(open->s.origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(open->absmin, -8.0f, -8.0f, -8.0f);
+	VectorSet(open->absmax, 8.0f, 8.0f, 8.0f);
+
+	func_train_find(train);
+}
+
+static void TestPostFindTrainGateCatalog(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *button;
+	const rune_mechanism_node_t *train;
+	const rune_mechanism_node_t *closed;
+	const rune_mechanism_node_t *open;
+
+	SetupTrainGateCatalog();
+	CHECK(!strcmp(test_edicts[2].target, "open"));
+	CHECK(test_edicts[2].target_ent == NULL);
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	button = NodeByKey(&view, 1U);
+	train = NodeByKey(&view, 2U);
+	closed = NodeByKey(&view, 3U);
+	open = NodeByKey(&view, 4U);
+	CHECK(button && button->kind == SG_MECH_NODE_BUTTON);
+	CHECK(train && train->kind == SG_MECH_NODE_TRAIN);
+	CHECK(closed && closed->kind == SG_MECH_NODE_PATH_CORNER);
+	CHECK(open && open->kind == SG_MECH_NODE_PATH_CORNER);
+	CHECK(HasEdge(&view, 1U, 2U, SG_MECH_EDGE_TARGET, 0U));
+	CHECK(HasEdge(&view, 2U, 4U, SG_MECH_EDGE_ROUTE_TARGET, 0U));
+	CHECK(!HasEdge(&view, 2U, 3U, SG_MECH_EDGE_ROUTE_TARGET, 0U));
+	CHECK(HasEdge(&view, 3U, 4U, SG_MECH_EDGE_ROUTE_TARGET, 0U));
+	CHECK(HasEdge(&view, 4U, 3U, SG_MECH_EDGE_ROUTE_TARGET, 0U));
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, button,
+		SG_MECHANISM_CONTROLLER_TRAIN));
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, train,
+		SG_MECHANISM_CONTROLLER_TRAIN));
+}
+
+static sg_mech_train_gate_state_t TrainTuple(void)
+{
+	sg_mech_train_gate_state_t state;
+
+	memset(&state, 0, sizeof(state));
+	state.controller_kind = SG_MECHANISM_CONTROLLER_TRAIN;
+	state.node_kind = SG_MECH_NODE_TRAIN;
+	state.fixed_callbacks_match = 1;
+	state.at_closed = 1;
+	state.target_is_open = 1;
+	state.target_ent_is_none = 1;
+	state.stopped = 1;
+	state.think_role = SG_MECH_EXEC_THINK_SEALED;
+	state.end_role = SG_MECH_EXEC_END_NONE;
+	return state;
+}
+
+static void TestTrainGateExecutionTuples(void)
+{
+	sg_mech_train_gate_state_t state = TrainTuple();
+
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_CLOSED);
+	state.target_is_open = 0;
+	state.target_is_closed = 1;
+	state.target_ent_is_none = 0;
+	state.target_ent_is_open = 1;
+	state.think_role = SG_MECH_EXEC_THINK_LINEAR_FINAL;
+	state.end_role = SG_MECH_EXEC_END_TRAIN_CORNER;
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_CLOSED);
+
+	state.at_closed = 0;
+	state.start_on = 1;
+	state.stopped = 0;
+	state.moving = 1;
+	state.nextthink_pending = 1;
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_OPENING);
+	CHECK(SG_MechTrainGateExecutionStateValid(&state));
+
+	state.start_on = 0;
+	state.moving = 0;
+	state.stopped = 1;
+	state.nextthink_pending = 0;
+	state.at_open = 1;
+	state.target_is_closed = 0;
+	state.target_is_open = 1;
+	state.target_ent_is_open = 0;
+	state.target_ent_is_closed = 1;
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_OPEN);
+	CHECK(SG_MechTrainGateExecutionStateValid(&state));
+
+	state.at_open = 0;
+	state.start_on = 1;
+	state.stopped = 0;
+	state.moving = 1;
+	state.nextthink_pending = 1;
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_CLOSING);
+	CHECK(!SG_MechTrainGateExecutionStateValid(&state));
+
+	state.start_on = 0;
+	state.stopped = 1;
+	state.moving = 0;
+	state.nextthink_pending = 0;
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_INTERRUPTED);
+	CHECK(!SG_MechTrainGateExecutionStateValid(&state));
+	state.at_closed = 1;
+	state.at_open = 1;
+	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_INVALID);
+}
+
 int main(void)
 {
 	TestSealedCatalog();
@@ -1358,6 +1545,8 @@ int main(void)
 	TestFrameCompleteButtonCurrentness();
 	TestTinyPositiveDelayStaysAsynchronous();
 	TestPushVelocitySealed();
+	TestPostFindTrainGateCatalog();
+	TestTrainGateExecutionTuples();
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism catalog test(s) failed\n", failures);

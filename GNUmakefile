@@ -120,6 +120,10 @@ BUTTON_LIVE_TEST_ALL_ARTIFACTS = \
 	.sg_button_live_under_test.gnu.o .sg_button_live_under_test.gnu.d \
 	.sg_button_live_test.make.o .sg_button_live_test.make.d \
 	.sg_button_live_under_test.make.o .sg_button_live_under_test.make.d
+TRAIN_GATE_LIVE_TEST_BIN = sg_train_gate_live_test.gnu
+TRAIN_GATE_LIVE_TEST_OBJS = .sg_train_gate_live_test.gnu.o \
+	.sg_train_gate_live_under_test.gnu.o
+TRAIN_GATE_LIVE_TEST_DEPS = $(TRAIN_GATE_LIVE_TEST_OBJS:.o=.d)
 BUTTON_GAME_TEST_BIN = sg_button_game_test.gnu
 BUTTON_GAME_TEST_OBJS = .sg_button_game_test.gnu.o \
 	.sg_button_game_live_under_test.gnu.o \
@@ -1435,6 +1439,9 @@ $(MOVER_LEASE_TEST_BIN): $(MOVER_LEASE_TEST_OBJS)
 $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(BUTTON_LIVE_TEST_OBJS) $(LDFLAGS)
 
+$(TRAIN_GATE_LIVE_TEST_BIN): $(TRAIN_GATE_LIVE_TEST_OBJS)
+	$(CC) -o $@ $(TRAIN_GATE_LIVE_TEST_OBJS) $(LDFLAGS)
+
 $(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LDFLAGS)
 
@@ -1549,6 +1556,16 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_button_live_under_test.gnu.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_train_gate_live_test.gnu.o: tests/sg_train_gate_live_test.c \
+		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_train_gate_live_under_test.gnu.o: slipgate/sg_train_gate_live.c \
+		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
@@ -2992,6 +3009,9 @@ $(POV_SUPERVISOR_TEST_BIN): tests/pov_supervisor_unit.c tools/pov-spawn-linux.c 
 button-live-test: $(BUTTON_LIVE_TEST_BIN)
 	./$(BUTTON_LIVE_TEST_BIN)
 
+train-gate-live-test: $(TRAIN_GATE_LIVE_TEST_BIN)
+	./$(TRAIN_GATE_LIVE_TEST_BIN)
+
 button-game-test: $(BUTTON_GAME_TEST_BIN)
 	./$(BUTTON_GAME_TEST_BIN)
 	python3 $(BUTTON_GAME_INTEGRATION_TEST)
@@ -3337,6 +3357,7 @@ endif
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
+-include $(TRAIN_GATE_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)
