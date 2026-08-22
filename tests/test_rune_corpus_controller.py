@@ -760,6 +760,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 snapshot,
                 startup_timeout=11,
                 generation_timeout=22,
+                cold_load_timeout=33,
                 jobs=3,
                 port_base=62000,
             )
@@ -774,7 +775,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "acceptor_gnu_sha256", "acceptor_make_sha256",
                 "semantic_checker_manifest_sha256", "semantic_checkers",
                 "generation_timeout_seconds",
-                "startup_timeout_seconds", "job_count", "port_base",
+                "startup_timeout_seconds", "cold_load_timeout_seconds",
+                "job_count", "port_base",
                 "engine_arguments", "python_isolation_flags",
                 "python_gate_bootstrap_sha256", "engine_environment",
                 "guard_bootstrap_sha256",
@@ -785,7 +787,28 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual(expected, set(document))
             self.assertNotIn("version", document)
             self.assertNotIn("format", document)
+            self.assertEqual(33, document["cold_load_timeout_seconds"])
             self.assertEqual(controller.sha256_bytes(controller.canonical_json(document)), fingerprint)
+            self.thaw(snapshot)
+
+    def test_cold_load_timeout_changes_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            arguments = dict(
+                startup_timeout=10, generation_timeout=900,
+                cold_load_timeout=300, jobs=1, port_base=62000,
+            )
+            first_document, first_hash = controller.build_fingerprint_document(
+                snapshot, **arguments
+            )
+            arguments["cold_load_timeout"] = 420
+            second_document, second_hash = controller.build_fingerprint_document(
+                snapshot, **arguments
+            )
+            self.assertEqual(300, first_document["cold_load_timeout_seconds"])
+            self.assertEqual(420, second_document["cold_load_timeout_seconds"])
+            self.assertNotEqual(first_hash, second_hash)
             self.thaw(snapshot)
 
     def test_contract_sha_change_changes_fingerprint(self):
@@ -794,7 +817,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
             first = self.make_snapshot(work / "first", action_hash=b"a")
             second = self.make_snapshot(work / "second", action_hash=b"c")
             arguments = dict(
-                startup_timeout=1, generation_timeout=2, jobs=1, port_base=62000
+                startup_timeout=1, generation_timeout=2, cold_load_timeout=3,
+                jobs=1, port_base=62000,
             )
             _first_document, first_hash = controller.build_fingerprint_document(first, **arguments)
             _second_document, second_hash = controller.build_fingerprint_document(second, **arguments)
@@ -808,7 +832,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
             first = self.make_snapshot(work / "first", runtime_json=b"private json v1")
             second = self.make_snapshot(work / "second", runtime_json=b"private json v2")
             arguments = dict(
-                startup_timeout=1, generation_timeout=2, jobs=1, port_base=62000
+                startup_timeout=1, generation_timeout=2, cold_load_timeout=3,
+                jobs=1, port_base=62000,
             )
             first_document, first_hash = controller.build_fingerprint_document(
                 first, **arguments
@@ -961,15 +986,28 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
         class FakeProcess:
             def __init__(self, output, private, ready, deferred, failure_line,
-                         exit_failure_line, pid):
+                         exit_failure_line, pid, cold_output=None,
+                         cold_ready_after_polls=None):
                 self.pid = pid
                 self.returncode = None
+                self.poll_count = 0
+                self.cold_output = cold_output
+                self.cold_ready_after_polls = cold_ready_after_polls
                 self.stdin = FakeInput(
                     self, output, private, ready, deferred, failure_line,
                     exit_failure_line
                 )
 
             def poll(self):
+                self.poll_count += 1
+                if (
+                    self.cold_output is not None
+                    and self.cold_ready_after_polls is not None
+                    and self.poll_count >= self.cold_ready_after_polls
+                ):
+                    output = self.cold_output
+                    self.cold_output = None
+                    output()
                 return self.returncode
 
             def wait(self, timeout):
@@ -990,10 +1028,13 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 failure_line: str | None = None,
                 exit_failure_line: str | None = None,
                 cold_load_snag_failure: bool = False,
+                cold_load_timeout: float = 0.25,
+                cold_ready_after_polls: int | None = 1,
             ):
                 descriptors: list[int] = []
                 launched_commands: list[list[str]] = []
                 cold_load_timeouts: list[float] = []
+                cold_processes: list[FakeProcess] = []
                 original_cold_load = controller.run_fresh_cold_load
 
                 def popen(command, **kwargs):
@@ -1020,35 +1061,44 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         launched_engine,
                     )
                     self.assertNotEqual("q2ded", launched_engine.name[:15])
-                    fake = FakeProcess(
-                        kwargs["stdout"], Path(kwargs["cwd"]), ready, deferred,
-                        failure_line, exit_failure_line, 424241 + launch_number,
-                    )
+                    cold_output = None
                     if launch_number == 2:
                         artifact = Path(kwargs["cwd"]) / "game/maps/lmctf01.rune"
                         snag = artifact.with_suffix(".snag")
                         evidence = Path(kwargs["cwd"]).parent / "snag-bootstrap-evidence.json"
-                        if cold_load_snag_failure:
-                            kwargs["stdout"].write(
-                                b"slipgate: snag declaration missing or invalid for "
-                                b"map lmctf01; fields rejected\n"
-                                b"slipgate: field setup failed (no flags?); disabled "
-                                b"until the next level\n"
-                            )
-                        else:
-                            kwargs["stdout"].write(
-                                (
-                                    "slipgate: snag ready map=lmctf01 repairs=0 "
-                                    f"rune_sha256={controller.sha256_regular(artifact)} "
-                                    f"evidence_sha256={controller.sha256_regular(evidence)} "
-                                    f"snag_sha256={controller.sha256_regular(snag)}\n"
-                                ).encode("ascii")
-                            )
-                            kwargs["stdout"].write(
-                                b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
-                                b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
-                            )
-                        kwargs["stdout"].flush()
+                        def emit_cold_output():
+                            if cold_load_snag_failure:
+                                kwargs["stdout"].write(
+                                    b"slipgate: snag declaration missing or invalid for "
+                                    b"map lmctf01; fields rejected\n"
+                                    b"slipgate: field setup failed (no flags?); disabled "
+                                    b"until the next level\n"
+                                )
+                            else:
+                                kwargs["stdout"].write(
+                                    (
+                                        "slipgate: snag ready map=lmctf01 repairs=0 "
+                                        f"rune_sha256={controller.sha256_regular(artifact)} "
+                                        f"evidence_sha256={controller.sha256_regular(evidence)} "
+                                        f"snag_sha256={controller.sha256_regular(snag)}\n"
+                                    ).encode("ascii")
+                                )
+                                kwargs["stdout"].write(
+                                    b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
+                                    b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
+                                )
+                            kwargs["stdout"].flush()
+                        cold_output = emit_cold_output
+                    fake = FakeProcess(
+                        kwargs["stdout"], Path(kwargs["cwd"]), ready, deferred,
+                        failure_line, exit_failure_line, 424241 + launch_number,
+                        cold_output=cold_output,
+                        cold_ready_after_polls=(
+                            cold_ready_after_polls if launch_number == 2 else None
+                        ),
+                    )
+                    if launch_number == 2:
+                        cold_processes.append(fake)
                     return fake
 
                 def identity_for_engine(_pid, executable, expected_argv=None):
@@ -1103,25 +1153,32 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         run_root, snapshot, "lmctf01", 62000, "fingerprint",
                         startup_timeout=0.001,
                         generation_timeout=generation_timeout,
+                        cold_load_timeout=cold_load_timeout,
                         gate_runner=FakeGateRunner("lmctf01"),
                     )
                 self.assertTrue(descriptors)
                 cold_load_expected = (
-                    result["classification"] == "PASS" or cold_load_snag_failure
+                    (ready or deferred)
+                    and failure_line is None
+                    and exit_failure_line is None
                 )
                 self.assertEqual(
                     2 if cold_load_expected else 1,
                     len(launched_commands),
                 )
                 self.assertEqual(
-                    [0.001] if cold_load_expected else [],
+                    [cold_load_timeout] if cold_load_expected else [],
                     cold_load_timeouts,
                 )
-                return result
+                return result, cold_processes
 
             pass_root = work / "pass-run"
-            passed = run_scenario(pass_root, False, 1.0, deferred=True)
+            passed, cold_processes = run_scenario(
+                pass_root, False, 1.0, deferred=True,
+                cold_ready_after_polls=3,
+            )
             self.assertEqual("PASS", passed["classification"])
+            self.assertGreaterEqual(cold_processes[0].poll_count, 3)
             pass_result = json.loads(
                 (pass_root / "runs/lmctf01/result.json").read_text()
             )
@@ -1157,7 +1214,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "reason=invalid live declared-door replay index=9949"
             )
             rejected_root = work / "rejected-run"
-            rejected = run_scenario(
+            rejected, _cold_processes = run_scenario(
                 rejected_root, False, 1.0, failure_line=rejected_line
             )
             self.assertEqual("GEN_FAIL", rejected["classification"])
@@ -1175,7 +1232,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             exit_line = "rune: generation refused fast shutdown failure"
             fast_root = work / "fast-failure-run"
-            fast = run_scenario(
+            fast, _cold_processes = run_scenario(
                 fast_root, True, 1.0, exit_failure_line=exit_line
             )
             self.assertEqual("GEN_FAIL", fast["classification"])
@@ -1183,22 +1240,36 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual(exit_line, fast["failure_line"])
 
             timeout_root = work / "timeout-run"
-            timed_out = run_scenario(timeout_root, False, 0.02)
+            timed_out, _cold_processes = run_scenario(timeout_root, False, 0.02)
             self.assertEqual("TIMEOUT", timed_out["classification"])
             self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c_gnu.log").exists())
 
+            cold_timeout_root = work / "cold-timeout-run"
+            cold_timed_out, cold_processes = run_scenario(
+                cold_timeout_root, False, 1.0, deferred=True,
+                cold_load_timeout=0.02, cold_ready_after_polls=None,
+            )
+            self.assertEqual("LINT_FAIL", cold_timed_out["classification"])
+            self.assertEqual(
+                "fresh cold-load exited or timed out before runtime-ready",
+                cold_timed_out["detail"],
+            )
+            self.assertGreater(cold_processes[0].poll_count, 0)
+
             cold_failure_root = work / "cold-snag-failure-run"
-            cold_failure = run_scenario(
+            cold_failure, cold_processes = run_scenario(
                 cold_failure_root, False, 1.0, deferred=True,
-                cold_load_snag_failure=True,
+                cold_load_snag_failure=True, cold_load_timeout=5.0,
             )
             self.assertEqual("LINT_FAIL", cold_failure["classification"])
             self.assertIn("snag declaration missing or invalid", cold_failure["detail"])
+            self.assertLess(cold_processes[0].poll_count, 10)
             self.thaw(snapshot)
             self.thaw(pass_root)
             self.thaw(rejected_root)
             self.thaw(fast_root)
             self.thaw(timeout_root)
+            self.thaw(cold_timeout_root)
             self.thaw(cold_failure_root)
 
     def test_intermediate_symlink_is_rejected(self):
@@ -1291,6 +1362,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual("000\tlmctf01\t62000", assignments[0])
             self.assertEqual("180\txmap30\t62180", assignments[-1])
             self.thaw(snapshot)
+
+    def test_cold_load_timeout_cli_default_and_override(self):
+        parser = controller.build_parser()
+        default = parser.parse_args(["dry-run", "--snapshot", "/tmp/snapshot"])
+        overridden = parser.parse_args([
+            "dry-run", "--snapshot", "/tmp/snapshot",
+            "--cold-load-timeout", "420",
+        ])
+        self.assertEqual(300, default.cold_load_timeout)
+        self.assertEqual(420, overridden.cold_load_timeout)
 
     def test_atomic_publication_syncs_temp_published_file_and_parent(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1804,6 +1885,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 snapshot,
                 startup_timeout=10,
                 generation_timeout=900,
+                cold_load_timeout=300,
                 jobs=1,
                 port_base=62000,
             )
@@ -1917,6 +1999,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
             controller.atomic_write_json(result_path, incomplete)
             document, fingerprint = controller.build_fingerprint_document(
                 snapshot, startup_timeout=10, generation_timeout=900,
+                cold_load_timeout=300,
                 jobs=1, port_base=62000,
             )
             document_bytes = controller.canonical_json(document)

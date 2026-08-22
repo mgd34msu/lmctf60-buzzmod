@@ -64,10 +64,11 @@ again before accepting the final summary.
 The canonical run fingerprint is the SHA-256 of sorted compact JSON containing
 the complete input-manifest hash, ordered map-manifest hash, engine and module
 hashes, generated action and mechanism contract hashes, linter/reader,
-`snagrepair.py`, both-C-acceptor hashes, semantic manifest/checker hashes and applicability, generation
-and startup timeouts, job count, port base, engine arguments, and controller
-source hash. Resume is allowed only when the complete stored fingerprint
-document is byte-for-byte equal to the newly computed document.
+`snagrepair.py`, both-C-acceptor hashes, semantic manifest/checker hashes and
+applicability, generation, startup, and cold-load timeouts, job count, port
+base, engine arguments, and controller source hash. Resume is allowed only when
+the complete stored fingerprint document is byte-for-byte equal to the newly
+computed document.
 
 ## Current generation and acceptance grammar
 
@@ -110,7 +111,9 @@ q2ded process against those two files. `PASS` requires exactly one ordinary
 runtime-ready banner whose counts agree with generation, with no generator
 write banner. The cold-load process identity, command hash, staged artifact,
 bootstrap sidecar, and log are immutable terminal evidence and must differ from
-the generation process identity.
+the generation process identity. The cold-load timeout starts after the
+controller authenticates that second process. It is separate from the startup
+delay before the generation command and from the generation timeout.
 
 ## Durable per-map result and resume law
 

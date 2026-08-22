@@ -1061,12 +1061,18 @@ def build_fingerprint_document(
     *,
     startup_timeout: int,
     generation_timeout: int,
+    cold_load_timeout: int,
     jobs: int,
     port_base: int,
     engine_arguments: Sequence[str] = DEFAULT_ENGINE_ARGUMENTS,
     controller_source: Path | None = None,
 ) -> tuple[dict[str, Any], str]:
-    if startup_timeout <= 0 or generation_timeout <= 0 or jobs <= 0:
+    if (
+        startup_timeout <= 0
+        or generation_timeout <= 0
+        or cold_load_timeout <= 0
+        or jobs <= 0
+    ):
         raise CorpusError("timeouts and job count must be positive")
     validate_engine_arguments(engine_arguments)
     verified = verify_snapshot(snapshot)
@@ -1114,6 +1120,7 @@ def build_fingerprint_document(
         ],
         "generation_timeout_seconds": generation_timeout,
         "startup_timeout_seconds": startup_timeout,
+        "cold_load_timeout_seconds": cold_load_timeout,
         "job_count": jobs,
         "port_base": port_base,
         "engine_arguments": list(engine_arguments),
@@ -1140,6 +1147,7 @@ def verify_fingerprint_document(snapshot: Path, expected: Mapping[str, Any]) -> 
             snapshot,
             startup_timeout=int(expected["startup_timeout_seconds"]),
             generation_timeout=int(expected["generation_timeout_seconds"]),
+            cold_load_timeout=int(expected["cold_load_timeout_seconds"]),
             jobs=int(expected["job_count"]),
             port_base=int(expected["port_base"]),
             engine_arguments=tuple(expected["engine_arguments"]),
@@ -3459,6 +3467,7 @@ def run_one_map(
     *,
     startup_timeout: int,
     generation_timeout: int,
+    cold_load_timeout: int,
     engine_arguments: Sequence[str] = DEFAULT_ENGINE_ARGUMENTS,
     heartbeat: Callable[[str, str, Mapping[str, Any] | None], None] | None = None,
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
@@ -3699,7 +3708,7 @@ def run_one_map(
                     cold_load = run_fresh_cold_load(
                         attempt, snapshot, map_name, stable_port, fingerprint,
                         attempt_number, artifact, parsed["counts"], identity,
-                        timeout=startup_timeout,
+                        timeout=cold_load_timeout,
                         engine_arguments=engine_arguments,
                     )
                     classification = "PASS"
@@ -3819,6 +3828,7 @@ def execute_selection(
     port_base: int,
     startup_timeout: int,
     generation_timeout: int,
+    cold_load_timeout: int,
     jobs: int,
     engine_arguments: Sequence[str],
 ) -> dict[str, Any]:
@@ -3834,6 +3844,7 @@ def execute_selection(
         snapshot,
         startup_timeout=startup_timeout,
         generation_timeout=generation_timeout,
+        cold_load_timeout=cold_load_timeout,
         jobs=jobs,
         port_base=port_base,
         engine_arguments=engine_arguments,
@@ -3928,6 +3939,7 @@ def execute_selection(
                 fingerprint,
                 startup_timeout=startup_timeout,
                 generation_timeout=generation_timeout,
+                cold_load_timeout=cold_load_timeout,
                 engine_arguments=engine_arguments,
                 heartbeat=heartbeat.event,
                 _runtime_preflighted=False,
@@ -3989,6 +4001,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--port-base", type=int, default=DEFAULT_PORT_BASE)
         command.add_argument("--startup-timeout", type=int, default=10)
         command.add_argument("--generation-timeout", type=int, default=900)
+        command.add_argument("--cold-load-timeout", type=int, default=300)
         command.add_argument("--jobs", type=int, default=1)
         command.add_argument("--engine-argument", action="append", dest="engine_arguments")
         if name == "smoke":
@@ -4024,6 +4037,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.snapshot,
             startup_timeout=args.startup_timeout,
             generation_timeout=args.generation_timeout,
+            cold_load_timeout=args.cold_load_timeout,
             jobs=args.jobs,
             port_base=args.port_base,
             engine_arguments=engine_arguments,
@@ -4042,6 +4056,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             port_base=args.port_base,
             startup_timeout=args.startup_timeout,
             generation_timeout=args.generation_timeout,
+            cold_load_timeout=args.cold_load_timeout,
             jobs=args.jobs,
             engine_arguments=engine_arguments,
         )
