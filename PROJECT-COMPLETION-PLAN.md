@@ -354,10 +354,12 @@ exhaustive baseline. Two independent `xmap05` runs passed generation, both C
 readers, the Python reader, lint, SNAG, and fresh cold load. Each artifact has
 2,206 seeds and 41,251 links, and the two artifacts are byte-identical.
 `xmap12` also passed every gate with 2,562 seeds and 60,746 links. Both maps are
-no longer in the unresolved queue. Parallel smokes remain active for `lmctf15`,
-`lmctf25`, `lmctf58`, `tw2ctf2`, and `xmap26`. None is removed from the
-unresolved queue until its artifact passes every reader, semantic, lint, SNAG,
-and cold-load gate.
+no longer in the unresolved queue. `tw2ctf2` cleared base-link generation and
+proved 33,868 links, but objective pruning removed the red and blue route sets.
+It wrote no artifact and remains in the unresolved queue as a graph failure.
+Parallel smokes remain active for `lmctf15`, `lmctf25`, `lmctf58`, and
+`xmap26`. None is removed from the unresolved queue until its artifact passes
+every reader, semantic, lint, SNAG, and cold-load gate.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
