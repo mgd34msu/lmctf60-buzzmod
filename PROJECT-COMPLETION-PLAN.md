@@ -233,6 +233,19 @@ Current D_HOOK checkpoint on 2026-08-21:
       The pair contains 2,842 seeds and 90,144 retained links. Its ten strict
       mechanisms produced 538 contact-discovery attempts, all rejected with
       reason 67 before a hook proof trial, so it is a valid zero-witness pair.
+- [x] Rebase the complete committed D_HOOK stack onto the current integrated
+      `slipgate` source without dropping D_SWIM, D_DROP, or rocket-jump
+      support. The resulting integration branch reached `9ef35f4`, then
+      merged the synchronized canonical branch and plan at `b60271f`.
+      The unified generated action contract admits actions 7, 9, 10, and 11;
+      its action CRC32 is `7c224587` and its action SHA-256 is
+      `56c8052093f42e7ba0c2e16e7a92e0bbe9fe952c77d3d6c919495334a6cf2c7c`.
+      Contract, action, codec, and source-size checks pass; the complete
+      integrated dual-dialect host and module gates remain in progress.
+- [x] Repair the canonical branch topology without rewriting history.
+      Local and remote `slipgate` and `main` are synchronized at
+      `9fe95ad`, compare as zero ahead and zero behind, contain identical
+      trees, track this plan, and no longer ignore it.
 - [ ] Generate a real admitted D_HOOK link with the corrected committed module.
 - [ ] Independently accept and cold-load that exact RUNE/SNAG pair.
 - [ ] Record real execution through approach, activation, hook fire, exact bolt
