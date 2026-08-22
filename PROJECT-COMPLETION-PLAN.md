@@ -84,9 +84,7 @@ after the final source freeze.
 - The authenticated `sv sg compoundhook <link>` seam stages only an exact
   published link and records approach, activation, LINKED, ATTACHED, PULL,
   release or recovery, terminal outcome, and ownership retirement.
-- The corrected D_HOOK source checkpoint is frozen at `23ae46d`. Its focused
-  and full host suites passed under GNUmakefile and Makefile, both production
-  modules linked cleanly, and the tracked test worktrees were clean.
+- The final integrated D_HOOK source checkpoint is `225101e`.
 
 ### Integration status
 
@@ -97,7 +95,9 @@ after the final source freeze.
 - [x] Synchronize local and remote `slipgate` and `main` without rewriting
       history. Both branches track this plan and compare as zero ahead and zero
       behind at the last completed sync.
-- [ ] Finish the integrated GNUmakefile and Makefile host and module gates.
+- [x] Pass the focused GNU D_HOOK suites, full GNU and Make host suites,
+      production module builds and `ldd -r` checks, and deslop with zero
+      findings at `225101e`. The verified worktree was clean.
 - [ ] Commit the verified integration to `slipgate`, merge it to `main`, push
       both branches, and confirm zero ahead and zero behind.
 
@@ -121,6 +121,10 @@ proves the pipeline for that map but does not complete D_HOOK.
 | `smap10` | 10 | 538 approaches rejected before hook proof | valid pair, no witness |
 | `xmap06` | 10 | 12 trials, 3 published links | live attempts reached activation, then died in the same under-map water hazard before bolt linkage |
 
+Live preflight also rejected `as2m1`, `tw2ctf4`, `lmctf23`, `lmctf17`,
+`lmctf06`, `lmctf14`, `lmctf16`, `lmctf33`, and `xmap11` as D_HOOK
+witnesses. `lmctf04`, `smap38`, and `rtctf1` remain under evaluation.
+
 The exact `xmap06` witness pair is retained because it identifies the three
 published links used in the live failure analysis:
 
@@ -134,8 +138,7 @@ hazard makes them negative live evidence, not a completed lifecycle.
 
 ### D_HOOK work left
 
-1. Finish the rebased integration gates and merge the verified source through
-   `slipgate` to `main`.
+1. Merge the verified integration source through `slipgate` to `main`.
 2. Preflight more water and door candidates through the live strict resolver.
 3. Generate the first pair that publishes an admitted D_HOOK link without the
    `xmap06` terminal hazard.
