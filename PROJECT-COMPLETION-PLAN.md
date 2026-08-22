@@ -353,7 +353,17 @@ repairs, with targeted train/elevator and advanced-push extensions after those
 batches. `xmap13` joins the speed-85 push retest; `xmap18` joins the
 teleporter/shootable-door batch; and `xmap25` joins the platform/teleporter
 batch. The accepted `smap28` PUSH handoff and authoritative-state repair is the
-source baseline for the `xmap13` retest.
+source baseline for the `xmap13` retest. That exact retest terminated
+`GEN_FAIL` after 11 minutes 16 seconds, published 2 fixed PUSH links, wrote no
+artifact, and removed all 1,337 seeds during closed-core pruning. Result
+SHA-256 is
+`836ca597c6fdf22565d4e57c5a5386933caf5f16d6b67dfe6de599d297cabda1`.
+The BSP contains 12 connected overlapping push fields with equivalent stock
+impulses plus 4 singleton fields; the accepted single-trigger controller
+cannot authenticate the overlapping fields. An exact multi-member field
+repair is active. It must bind the complete overlap component, accept repeated
+touches only from equivalent members, reject mixed fields, and preserve the
+accepted single-member `smap28` behavior.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
