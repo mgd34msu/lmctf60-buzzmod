@@ -1186,6 +1186,54 @@ static void TestBoundDoorSiblingAliasReplay(void)
 	      sibling_trigger_hits[0] == sibling_trigger_a &&
 	      sibling_trigger_hits[1] == sibling_trigger_b);
 
+	/* Once the exact entry has opened the bound mover set, crossing an
+	 * opposite-side sibling with that same complete set is only a harmless
+	 * refresh.  Generation already admits this egress; loader replay must use
+	 * the sealed mover set to make the same decision. */
+	{
+		vec3_t source = { -40.0f, 0.0f, 0.0f };
+		vec3_t target = { 96.0f, 0.0f, 0.0f };
+		int arrival = -1;
+
+		sg_host.trace = StableGroundTrace;
+		sg_host.pointcontents = GroundPointContents;
+		sibling_pmove_preserve_zero = true;
+		sibling_pmove_x = 96.0f;
+		sibling_trigger_hit_count = 0;
+		CHECK(SG_OracleBoundDoorEgress(source, target, &binding, NULL,
+		    &arrival));
+		CHECK(arrival == 100);
+
+		/* AUTO and BUTTON plans do not own an independent Touch_Multi sibling. */
+		plan.controller_kind = SG_MECHANISM_CONTROLLER_AUTO_DOOR;
+		arrival = -1;
+		CHECK(!SG_OracleBoundDoorEgress(source, target, &binding, NULL,
+		    &arrival));
+		plan.controller_kind = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+		arrival = -1;
+		CHECK(!SG_OracleBoundButtonDoorEgress(source, target, &binding, NULL,
+		    &arrival, SG_BUTTON_SUPPORT_STATIC));
+		plan.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+
+		/* A sibling whose closure differs from the binding stays contaminating. */
+		sibling_trigger_b->target = other_target;
+		arrival = -1;
+		CHECK(!SG_OracleBoundDoorEgress(source, target, &binding, NULL,
+		    &arrival));
+		sibling_trigger_b->target = alias_target;
+
+		/* Live same-name geometry cannot broaden the sealed mover set. */
+		sibling_mover_keys[0] = HOOK_INDEX;
+		sibling_mover_count = 1U;
+		arrival = -1;
+		CHECK(!SG_OracleBoundDoorEgress(source, target, &binding, NULL,
+		    &arrival));
+		sibling_mover_keys[0] = MOVER_INDEX;
+		sibling_mover_keys[1] = HOOK_INDEX;
+		sibling_mover_count = 2U;
+		sibling_pmove_preserve_zero = false;
+	}
+
 	/* A different automatic trigger is also not the direct plan entry. */
 	sibling_trigger_b->touch = Touch_DoorTrigger;
 	sibling_trigger_b->owner = master;

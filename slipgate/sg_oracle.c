@@ -84,6 +84,8 @@ static qboolean SG_OracleDeclaredButtonDoorSafe(edict_t *button);
 static qboolean SG_OracleDeclaredButtonTopSafe(edict_t *button);
 static qboolean SG_OracleDeclaredDoorSourceSafe(edict_t *source);
 static qboolean SG_OracleDeclaredSameDoorSet(edict_t *a, edict_t *b);
+static qboolean SG_OracleBoundSameDoorSet(
+	const sg_rune_mechanism_binding_t *binding, edict_t *trigger);
 static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph);
 static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph);
 static int SG_OracleLiveEdictIndex(const edict_t *ent);
@@ -2657,6 +2659,39 @@ static int SG_BoundDoorMembers(
 	return SG_OracleBoundDoorBindingCurrent(binding) ? (int)count : -1;
 }
 
+/* Loader replay authenticates one entry trigger, but an already-open egress
+ * may cross an opposite-side trigger that refreshes the identical mover set.
+ * Compare that live trigger's complete canonical members against the sealed
+ * binding; a shared target name or partial overlap is not sufficient. */
+static qboolean SG_OracleBoundSameDoorSet(
+	const sg_rune_mechanism_binding_t *binding, edict_t *trigger)
+{
+	edict_t *bound[SG_RUNE_BINDING_MAX_MOVERS];
+	edict_t *candidate[SG_RUNE_BINDING_MAX_MOVERS];
+	int bound_count, candidate_count, candidate_index, bound_index;
+
+	if (!binding || !binding->plan ||
+	    binding->plan->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR)
+		return false;
+	bound_count = SG_BoundDoorMembers(binding, bound,
+	    SG_RUNE_BINDING_MAX_MOVERS);
+	candidate_count = SG_DeclaredDoorMembers(trigger, candidate,
+	    SG_RUNE_BINDING_MAX_MOVERS);
+	if (bound_count <= 0 || candidate_count != bound_count)
+		return false;
+	for (candidate_index = 0; candidate_index < candidate_count;
+	     candidate_index++)
+	{
+		for (bound_index = 0; bound_index < bound_count; bound_index++)
+			if (candidate[candidate_index] == bound[bound_index])
+				break;
+		if (bound_index == bound_count)
+			return false;
+	}
+	return SG_OracleBoundDoorBindingCurrent(binding);
+}
+
 qboolean SG_BoundDoorOutsideSweep(
 	const sg_rune_mechanism_binding_t *binding, const vec3_t origin)
 {
@@ -3832,10 +3867,12 @@ static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph)
 		}
 		if (sg_oracle_declared_door &&
 		    (hit == sg_oracle_declared_door ||
-		     (!sg_oracle_bound_door &&
-		      (sg_oracle_declared_action == RL_DOOR ||
+		     ((sg_oracle_declared_action == RL_DOOR ||
 		       sg_oracle_declared_action == RL_BUTTON_DOOR) &&
-		      SG_OracleDeclaredSameDoorSet(sg_oracle_declared_door, hit))))
+		      (sg_oracle_bound_door
+		           ? SG_OracleBoundSameDoorSet(sg_oracle_bound_door, hit)
+		           : SG_OracleDeclaredSameDoorSet(
+		                 sg_oracle_declared_door, hit)))))
 			continue;
 		/* A declared door approach owns exactly one scripted touch. Do not let
 		 * an unrelated auto-door or trigger_multiple become an unrecorded second
