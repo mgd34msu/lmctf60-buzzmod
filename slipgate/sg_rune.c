@@ -6873,6 +6873,12 @@ qboolean Rune_Generate(const char *mapname)
 	 * the pair loop sees them like any other seed. */
 	Seed_Water();
 	Rune_TelemetryPhaseEnd();
+	if (gen_water_overflow)
+	{
+		sg_host.dprint("rune: FAILED: water seed capacity exhausted; "
+		               "graph was not written\n");
+		goto cleanup;
+	}
 	if (gen_num_seeds <= 0)
 	{
 		door_status = Doors_Restore(&doors);
