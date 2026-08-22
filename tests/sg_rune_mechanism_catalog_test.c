@@ -1364,7 +1364,7 @@ static void TestPushVelocitySealed(void)
 	CHECK(node && !SG_MechCatalogEntityTopologyMatches(1U, node));
 }
 
-static void SetupTrainGateCatalog(void)
+static void SetupTrainGateCatalog(int shoot)
 {
 	edict_t *button;
 	edict_t *train;
@@ -1401,6 +1401,13 @@ static void SetupTrainGateCatalog(void)
 	button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
 	button->moveinfo.speed = button->moveinfo.accel =
 		button->moveinfo.decel = 40.0f;
+	if (shoot)
+	{
+		button->touch = NULL;
+		button->health = button->max_health = 1;
+		button->takedamage = DAMAGE_YES;
+		button->die = button_killed;
+	}
 
 	train->targetname = "gate";
 	train->target = "closed";
@@ -1440,7 +1447,7 @@ static void TestPostFindTrainGateCatalog(void)
 	const rune_mechanism_node_t *closed;
 	const rune_mechanism_node_t *open;
 
-	SetupTrainGateCatalog();
+	SetupTrainGateCatalog(0);
 	CHECK(!strcmp(test_edicts[2].target, "open"));
 	CHECK(test_edicts[2].target_ent == NULL);
 	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
@@ -1466,6 +1473,38 @@ static void TestPostFindTrainGateCatalog(void)
 		SG_MECHANISM_CONTROLLER_TRAIN));
 	CHECK(SG_MechCatalogEntityExecutionMatches(4U, open,
 		SG_MECHANISM_CONTROLLER_TRAIN));
+}
+
+static void TestPostFindTrainShootGateCatalog(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *button;
+	const rune_mechanism_node_t *train;
+	const rune_mechanism_node_t *closed;
+	const rune_mechanism_node_t *open;
+
+	SetupTrainGateCatalog(1);
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	button = NodeByKey(&view, 1U);
+	train = NodeByKey(&view, 2U);
+	closed = NodeByKey(&view, 3U);
+	open = NodeByKey(&view, 4U);
+	CHECK(button && button->flags == (SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_SHOOTABLE));
+	CHECK(button && button->touch_callback == SG_MECH_CALLBACK_NONE);
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, button,
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, train,
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	CHECK(SG_MechCatalogEntityExecutionMatches(3U, closed,
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	CHECK(SG_MechCatalogEntityExecutionMatches(4U, open,
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	test_edicts[1].health = 2;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(1U, button,
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
 }
 
 static sg_mech_train_gate_state_t TrainTuple(void)
@@ -1551,6 +1590,7 @@ int main(void)
 	TestTinyPositiveDelayStaysAsynchronous();
 	TestPushVelocitySealed();
 	TestPostFindTrainGateCatalog();
+	TestPostFindTrainShootGateCatalog();
 	TestTrainGateExecutionTuples();
 	if (failures != 0)
 	{

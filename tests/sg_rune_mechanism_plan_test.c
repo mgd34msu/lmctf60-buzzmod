@@ -373,6 +373,23 @@ static void TestTrainGate(void)
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 1U].to_key == 40U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 2U].from_key == 30U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 3U].from_key == 40U);
+
+	TrainFixture(&fixture);
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
+	fixture.nodes[0].flags = SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_SHOOTABLE;
+	fixture.nodes[0].touch_callback = SG_MECH_CALLBACK_NONE;
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].controller_kind ==
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT);
+	CHECK(fixture.plans[0].flags ==
+		(SG_RUNE_CODEC_PLANF_SHOOT | SG_RUNE_CODEC_PLANF_ATOMIC |
+		 SG_RUNE_CODEC_PLANF_REQUIRES_LEASE));
+	CHECK(fixture.plans[0].num_edges == 4U);
+
+	TrainFixture(&fixture);
+	FixtureFinish(&fixture);
 	train_edge = InventoryEdge(&fixture, 20U, 40U);
 	CHECK(train_edge != NULL);
 	if (train_edge)
