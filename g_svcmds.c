@@ -4,6 +4,7 @@
 #include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_rocketjump_game.h"
 #include "slipgate/sg_compound_drop_game.h"
+#include "slipgate/sg_compound_hook_game.h"
 #include "ctf_file_io.h"
 
 void SpawnLoadout_ListItems(void);
@@ -372,11 +373,22 @@ static void SVCmd_SG_f (void)
 			gi.cprintf(NULL, PRINT_HIGH,
 			    "slipgate: authenticated compound drop probe refused\n");
 	}
+	else if (Q_stricmp(sub, "compoundhook") == 0)
+	{
+		char *end = NULL;
+		long link = strtol(arg, &end, 10);
+
+		if (!*arg || !end || *end || link < 0 || link > INT_MAX ||
+		    !SG_CompoundHookGameStageAuthenticatedProbe((int)link))
+			gi.cprintf(NULL, PRINT_HIGH,
+			    "slipgate: authenticated compound hook probe refused\n");
+	}
 	else
 		gi.cprintf(NULL, PRINT_HIGH,
 		           "usage: sv sg <add [red|blue] | list | remove [name|slot] "
 		           "| kick worst | weights [reload] | compoundswim <link> "
-		           "| rocketjump <link> | compounddrop <link>>\n");
+		           "| rocketjump <link> | compounddrop <link> "
+		           "| compoundhook <link>>\n");
 }
 
 static void SVCmd_POVRecord_f(void)

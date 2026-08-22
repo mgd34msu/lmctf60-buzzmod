@@ -10,6 +10,9 @@
 #include "sg_compound_hook_game.h"
 #include "sg_compound_hook_game_events.h"
 #include "sg_compound_world.h"
+#include "sg_cvars.h"
+#include "sg_hooks.h"
+#include "sg_move.h"
 #include "sg_util.h"
 
 typedef struct compound_hook_game_current_s
@@ -566,6 +569,111 @@ qboolean SG_CompoundHookGameIdleAdmission(const sg_bot_t *bot)
 	    entity->client->hookstate != 0 || entity->client->hook != NULL)
 		return false;
 	return true;
+}
+
+int SG_CompoundHookGameStageAuthenticatedProbe(int link_index)
+{
+	rune_t *rune = SG_Rune();
+	const sg_compound_publication_binding_t *binding;
+	const sg_compound_world_preopen_t *mechanism;
+	sg_compound_hook_live_result_t result;
+	sg_bot_t *bot = NULL;
+	edict_t *entity;
+	vec3_t staged_origin;
+	int axis, slot;
+
+	if (!sg_cv.debug || sg_cv.debug->value <= 0.0f || !rune ||
+	    !SG_RunePhysicsCompatible(rune) || link_index < 0 ||
+	    link_index >= rune->hdr.num_links ||
+	    !(binding = SG_CompoundPublicationBinding(rune,
+	        (uint32_t)link_index)) || binding->link.action != RL_DOOR_HOOK ||
+	    !(mechanism = SG_CompoundPublicationMechanism(rune, binding)) ||
+	    mechanism->trigger_key <= 0 || mechanism->mover_key <= 0)
+		return false;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+		if (SG_CompoundHookGameIdleAdmission(&sg_bots[slot]) &&
+		    SG_HookOffhandReady(sg_bots[slot].ent))
+		{
+			bot = &sg_bots[slot];
+			break;
+		}
+	if (!bot || !gi.unlinkentity || !sg_host.linkentity)
+		return false;
+	entity = bot->ent;
+	{
+		sg_bot_t bot_before = *bot;
+		edict_t entity_before = *entity;
+		gclient_t client_before = *entity->client;
+
+		gi.unlinkentity(entity);
+		entity->client->ps.pmove = binding->source.pms;
+		entity->client->old_pmove = binding->source.old_pms;
+		for (axis = 0; axis < 3; axis++)
+		{
+			entity->s.origin[axis] = binding->source_seed.origin[axis];
+			entity->s.old_origin[axis] = binding->source_seed.origin[axis];
+			entity->velocity[axis] =
+			    binding->source.pms.velocity[axis] * 0.125f;
+		}
+		VectorClear(entity->client->oldvelocity);
+		entity->client->oldvelocity[2] = binding->source.old_frame_z;
+		entity->groundentity = binding->source.grounded ? g_edicts : NULL;
+		entity->groundentity_linkcount = entity->groundentity ?
+		    entity->groundentity->linkcount : 0;
+		entity->waterlevel = binding->source.waterlevel;
+		entity->watertype = binding->source.watertype;
+		SG_CompoundHookGameReset(bot);
+		bot->seed = binding->link.from;
+		VectorCopy(entity->s.origin, bot->last_origin);
+		bot->commit_link = link_index;
+		bot->sticky_link = link_index;
+		bot->commit_until = level.time + 5.0f;
+		bot->latch_until = level.time + 5.0f;
+		VectorCopy(entity->s.origin, staged_origin);
+		bot->stuck_time = 0.0f;
+		VectorCopy(staged_origin, bot->stuck_origin);
+		VectorCopy(staged_origin, bot->watch_org);
+		VectorCopy(staged_origin, bot->stag_org);
+		VectorCopy(staged_origin, bot->wedge_org);
+		SG_Mark(&bot->watch_since);
+		SG_Mark(&bot->stag_since);
+		SG_Mark(&bot->wedge_since);
+		bot->seedless_active = false;
+		bot->seedless_since = 0.0f;
+		bot->seedless_turn_until = 0.0f;
+		sg_host.linkentity(entity);
+		if (!SG_HookOffhandReady(entity))
+			goto rollback;
+		result = SG_CompoundHookGameBegin(bot, (uint32_t)link_index, true);
+		if (result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING ||
+		    !bot->compound_hook_live.guard_owned ||
+		    !bot->compound_hook_live.local_owned)
+		{
+			if (bot->compound_hook_live.guard_owned ||
+			    bot->compound_hook_live.local_owned)
+				return false;
+			goto rollback;
+		}
+		SG_CompoundHookGameDebugResult(bot, "begin", &result);
+		if (sg_host.dprint)
+			sg_host.dprint("slipgate: dhook probe-staged bot=%d link=%d "
+			    "trigger=%d mover=%d source=(%.3f %.3f %.3f) "
+			    "destination=(%.3f %.3f %.3f)\n", slot, link_index,
+			    mechanism->trigger_key, mechanism->mover_key,
+			    staged_origin[0], staged_origin[1], staged_origin[2],
+			    binding->destination_seed.origin[0],
+			    binding->destination_seed.origin[1],
+			    binding->destination_seed.origin[2]);
+		return true;
+
+	rollback:
+		gi.unlinkentity(entity);
+		*entity->client = client_before;
+		*entity = entity_before;
+		*bot = bot_before;
+		sg_host.linkentity(entity);
+	}
+	return false;
 }
 
 sg_compound_hook_live_result_t SG_CompoundHookGameBegin(sg_bot_t *bot,

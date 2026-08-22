@@ -1,11 +1,14 @@
 #include "../g_local.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_compound_hook_game.h"
+#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_hooks.h"
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "%s:%d: %s\n", \
 	__FILE__, __LINE__, #c); return 0; } } while (0)
@@ -17,7 +20,12 @@ static sg_compound_publication_binding_t binding;
 static sg_compound_world_preopen_t mechanism;
 static edict_t entities[8];
 static gclient_t client;
-static sg_bot_t bot;
+game_import_t gi;
+level_locals_t level;
+sg_host_t sg_host;
+sg_cvars_t sg_cv;
+sg_bot_t sg_bots[SG_MAXBOTS];
+#define bot sg_bots[0]
 edict_t *g_edicts = entities;
 
 static sg_compound_guard_result_t acquire_result;
@@ -42,6 +50,12 @@ static int recover_calls;
 static int prestep_calls;
 static int live_orphan_calls;
 static int stub_failed;
+static int offhand_calls;
+static int offhand_ready_calls;
+static int unlink_calls;
+static int link_calls;
+static int debug_calls;
+static char event_log[1024];
 
 static sg_compound_hook_live_result_t Result(
 	sg_compound_hook_live_outcome_t outcome)
@@ -51,6 +65,49 @@ static sg_compound_hook_live_result_t Result(
 	memset(&result, 0, sizeof(result));
 	result.outcome = outcome;
 	return result;
+}
+
+qboolean SG_HookOffhandReady(edict_t *entity)
+{
+	offhand_calls++;
+	return entity == bot.ent && offhand_calls <= offhand_ready_calls;
+}
+
+void SG_Mark(float *stamp)
+{
+	if (stamp)
+		*stamp = level.time;
+}
+
+static void UnlinkEntity(edict_t *entity)
+{
+	STUB_CHECK(entity == bot.ent);
+	unlink_calls++;
+}
+
+static void LinkEntity(edict_t *entity)
+{
+	STUB_CHECK(entity == bot.ent);
+	link_calls++;
+}
+
+static void Dprint(const char *format, ...)
+{
+	va_list arguments;
+	size_t used = strlen(event_log);
+
+	va_start(arguments, format);
+	(void)vsnprintf(event_log + used, sizeof(event_log) - used, format,
+	                arguments);
+	va_end(arguments);
+}
+
+void SG_CompoundHookGameDebugResult(sg_bot_t *candidate,
+	const char *stage, const sg_compound_hook_live_result_t *result)
+{
+	STUB_CHECK(candidate == &bot && stage && strcmp(stage, "begin") == 0 &&
+	    result && result->outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
+	debug_calls++;
 }
 
 rune_t *SG_Rune(void) { return &rune_fixture; }
@@ -441,10 +498,26 @@ static void FixtureInit(void)
 	memset(&mechanism, 0, sizeof(mechanism));
 	memset(entities, 0, sizeof(entities));
 	memset(&client, 0, sizeof(client));
-	memset(&bot, 0, sizeof(bot));
+	memset(sg_bots, 0, sizeof(sg_bots));
+	memset(&gi, 0, sizeof(gi));
+	memset(&sg_host, 0, sizeof(sg_host));
+	memset(&sg_cv, 0, sizeof(sg_cv));
+	memset(&level, 0, sizeof(level));
+	memset(event_log, 0, sizeof(event_log));
 	binding.link_index = 3U;
+	binding.link.from = 1;
 	binding.link.action = RL_DOOR_HOOK;
+	VectorSet(binding.source_seed.origin, 16.0f, 32.0f, 48.0f);
+	binding.source.pms.velocity[0] = 8;
+	binding.source.pms.velocity[1] = -16;
+	binding.source.pms.velocity[2] = 24;
+	binding.source.old_pms.pm_time = 7;
+	binding.source.old_frame_z = -5.0f;
+	binding.source.grounded = true;
+	binding.source.watertype = CONTENTS_WATER;
+	binding.source.waterlevel = 2;
 	binding.destination_seed.origin[0] = 64.0f;
+	rune_fixture.hdr.num_links = 4;
 	mechanism.trigger_key = 4;
 	mechanism.mover_key = 2;
 	entities[0].inuse = true;
@@ -478,8 +551,19 @@ static void FixtureInit(void)
 	physical_abort_calls = 0;
 	touch_calls = activate_calls = recover_calls = prestep_calls = 0;
 	live_orphan_calls = 0;
+	offhand_calls = 0;
+	offhand_ready_calls = 2;
+	unlink_calls = link_calls = debug_calls = 0;
 	stub_failed = 0;
 	expected_frame = 17;
+	level.time = 12.0f;
+	static cvar_t debug_cvar;
+	memset(&debug_cvar, 0, sizeof(debug_cvar));
+	debug_cvar.value = 1.0f;
+	sg_cv.debug = &debug_cvar;
+	gi.unlinkentity = UnlinkEntity;
+	sg_host.linkentity = LinkEntity;
+	sg_host.dprint = Dprint;
 }
 
 static int HostFixture(void)
@@ -548,6 +632,103 @@ static int TransactionFixture(void)
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(recover_calls == 1 && prestep_calls == 1 &&
 	    command.msec == SG_REPLAY_STEP_MS);
+	CHECK(!stub_failed);
+	return 1;
+}
+
+static int AuthenticatedProbeFixture(void)
+{
+	FixtureInit();
+	CHECK(SG_CompoundHookGameStageAuthenticatedProbe(3));
+	CHECK(offhand_calls == 2 && unlink_calls == 1 && link_calls == 1);
+	CHECK(debug_calls == 1);
+	CHECK(memcmp(bot.ent->s.origin, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(memcmp(bot.ent->s.old_origin, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(bot.ent->velocity[0] == 1.0f && bot.ent->velocity[1] == -2.0f &&
+	      bot.ent->velocity[2] == 3.0f);
+	CHECK(memcmp(&client.ps.pmove, &binding.source.pms,
+	             sizeof(binding.source.pms)) == 0);
+	CHECK(memcmp(&client.old_pmove, &binding.source.old_pms,
+	             sizeof(binding.source.old_pms)) == 0);
+	CHECK(client.oldvelocity[2] == -5.0f);
+	CHECK(bot.ent->groundentity == g_edicts &&
+	      bot.ent->watertype == CONTENTS_WATER && bot.ent->waterlevel == 2);
+	CHECK(bot.seed == 1 && bot.commit_link == 3 && bot.sticky_link == 3);
+	CHECK(bot.commit_until == 17.0f && bot.latch_until == 17.0f);
+	CHECK(memcmp(bot.last_origin, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(memcmp(bot.stuck_origin, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(memcmp(bot.watch_org, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(memcmp(bot.stag_org, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(memcmp(bot.wedge_org, binding.source_seed.origin,
+	             sizeof(vec3_t)) == 0);
+	CHECK(bot.watch_since == level.time && bot.stag_since == level.time &&
+	      bot.wedge_since == level.time);
+	CHECK(!bot.seedless_active && bot.seedless_since == 0.0f &&
+	      bot.seedless_turn_until == 0.0f);
+	CHECK(bot.compound_hook_live.guard_owned &&
+	      bot.compound_hook_live.local_owned);
+	CHECK(strstr(event_log, "dhook probe-staged bot=0 link=3 ") != NULL);
+	CHECK(strstr(event_log, "trigger=4 mover=2 ") != NULL);
+	CHECK(!stub_failed);
+	return 1;
+}
+
+static int AuthenticatedProbeRefusalFixture(void)
+{
+	sg_bot_t bot_before;
+	edict_t entity_before;
+	gclient_t client_before;
+
+	FixtureInit();
+	sg_cv.debug->value = 0.0f;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(3));
+	CHECK(offhand_calls == 0 && unlink_calls == 0 && link_calls == 0);
+	sg_cv.debug->value = 1.0f;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(-1));
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(4));
+	binding.link.action = RL_RUN;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(3));
+	binding.link.action = RL_DOOR_HOOK;
+	mechanism.trigger_key = 0;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(3));
+	mechanism.trigger_key = 4;
+	offhand_ready_calls = 0;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(3));
+	CHECK(unlink_calls == 0 && link_calls == 0 && debug_calls == 0);
+
+	FixtureInit();
+	VectorSet(bot.ent->s.origin, -91.0f, 12.0f, 33.0f);
+	VectorSet(bot.ent->velocity, 8.0f, 9.0f, 10.0f);
+	bot.commit_link = 44;
+	bot.sticky_link = 45;
+	bot_before = bot;
+	entity_before = *bot.ent;
+	client_before = client;
+	offhand_ready_calls = 1;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(3));
+	CHECK(offhand_calls == 2 && unlink_calls == 2 && link_calls == 2);
+	CHECK(memcmp(&bot, &bot_before, sizeof(bot_before)) == 0);
+	CHECK(memcmp(bot.ent, &entity_before, sizeof(entity_before)) == 0);
+	CHECK(memcmp(&client, &client_before, sizeof(client_before)) == 0);
+	CHECK(debug_calls == 0 && event_log[0] == '\0');
+
+	FixtureInit();
+	bot_before = bot;
+	entity_before = *bot.ent;
+	client_before = client;
+	acquire_result = SG_COMPOUND_GUARD_NOT_CLEAR;
+	CHECK(!SG_CompoundHookGameStageAuthenticatedProbe(3));
+	CHECK(unlink_calls == 2 && link_calls == 2);
+	CHECK(memcmp(&bot, &bot_before, sizeof(bot_before)) == 0);
+	CHECK(memcmp(bot.ent, &entity_before, sizeof(entity_before)) == 0);
+	CHECK(memcmp(&client, &client_before, sizeof(client_before)) == 0);
+	CHECK(debug_calls == 0 && event_log[0] == '\0');
 	CHECK(!stub_failed);
 	return 1;
 }
@@ -790,7 +971,9 @@ static int CurrentFixture(void)
 
 int main(void)
 {
-	if (!HostFixture() || !TransactionFixture() || !IdleFixture() ||
+	if (!HostFixture() || !TransactionFixture() ||
+	    !AuthenticatedProbeFixture() ||
+	    !AuthenticatedProbeRefusalFixture() || !IdleFixture() ||
 	    !SafetyFixture() ||
 	    !ClearFixture() || !TerminalFixture() || !OrphanWrapperFixture() ||
 	    !CurrentFixture())

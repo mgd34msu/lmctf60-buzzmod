@@ -88,6 +88,7 @@
     "tests/povlock_test.c": 852,
     "tests/sg_compound_guard_game_test.c": 1559,
     "tests/sg_compound_guard_test.c": 1060,
+    "tests/sg_compound_hook_game_test.c": 983,
     "tests/sg_compound_swim_live_test.c": 1175,
     "tests/sg_compound_publication_test.c": 15,
     "tests/sg_compound_swim_oracle_test.c": 18,

@@ -22,6 +22,48 @@ def ordered(text: str, *needles: str) -> None:
 
 
 def main() -> None:
+    service = source("g_svcmds.c")
+    dispatch = between(service, "static void SVCmd_SG_f", "static void SVCmd_POVRecord_f")
+    compound_hook = between(
+        dispatch,
+        'else if (Q_stricmp(sub, "compoundhook") == 0)',
+        "else\n\t\tgi.cprintf",
+    )
+    for required in (
+        "strtol(arg, &end, 10)",
+        "!*arg",
+        "*end",
+        "link < 0",
+        "link > INT_MAX",
+        "SG_CompoundHookGameStageAuthenticatedProbe((int)link)",
+        "authenticated compound hook probe refused",
+    ):
+        assert required in compound_hook
+    assert "compoundhook <link>" in dispatch
+
+    game = source("slipgate/sg_compound_hook_game.c")
+    staging = between(
+        game,
+        "int SG_CompoundHookGameStageAuthenticatedProbe",
+        "sg_compound_hook_live_result_t SG_CompoundHookGameBegin",
+    )
+    ordered(
+        staging,
+        "SG_CompoundHookGameIdleAdmission(&sg_bots[slot])",
+        "SG_HookOffhandReady(sg_bots[slot].ent)",
+        "gi.unlinkentity(entity)",
+        "binding->source.pms",
+        "SG_CompoundHookGameReset(bot)",
+        "sg_host.linkentity(entity)",
+        "SG_HookOffhandReady(entity)",
+        "SG_CompoundHookGameBegin(bot, (uint32_t)link_index, true)",
+        'SG_CompoundHookGameDebugResult(bot, "begin", &result)',
+        "dhook probe-staged",
+    )
+    assert "*entity->client = client_before" in staging
+    assert "*entity = entity_before" in staging
+    assert "*bot = bot_before" in staging
+
     weapon = source("p_weapon.c")
     launch = between(weapon, "edict_t *fire_hook", "void Draw_Hook")
     ordered(

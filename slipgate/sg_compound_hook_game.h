@@ -32,6 +32,9 @@ qboolean SG_CompoundHookGameTakeObservation(struct sg_bot_s *bot,
 	const struct edict_s *entity,
 	sg_replay_observation_t *observation_out);
 qboolean SG_CompoundHookGameIdleAdmission(const struct sg_bot_s *bot);
+int SG_CompoundHookGameStageAuthenticatedProbe(int link_index);
+void SG_CompoundHookGameDebugResult(struct sg_bot_s *bot,
+	const char *stage, const sg_compound_hook_live_result_t *result);
 sg_compound_hook_live_result_t SG_CompoundHookGameBegin(
 	struct sg_bot_s *bot, uint32_t link_index, qboolean offhand_ready);
 qboolean SG_CompoundHookGameCurrent(struct sg_bot_s *bot,
