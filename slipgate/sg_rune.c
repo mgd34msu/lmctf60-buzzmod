@@ -7385,5 +7385,6 @@ cleanup:
 	gen_num_links = 0;
 	if (scope_active)
 		SG_RuneProofScopeEnd();
+	Rune_LogFlush();
 	return generated;
 }
