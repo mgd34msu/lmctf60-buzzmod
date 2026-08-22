@@ -390,6 +390,7 @@
     <ClCompile Include="slipgate\sg_compound_gen_game.c" />
     <ClCompile Include="slipgate\sg_compound_action_gen.c" />
     <ClCompile Include="slipgate\sg_compound_publication.c" />
+    <ClCompile Include="slipgate\sg_compound_publication_build.c" />
     <ClCompile Include="slipgate\sg_compound_action_publication.c" />
     <ClCompile Include="slipgate\sg_compound_drop_live.c" />
     <ClCompile Include="slipgate\sg_compound_drop_live_finish.c" />
@@ -403,6 +404,9 @@
     <ClCompile Include="slipgate\sg_drop_live.c" />
     <ClCompile Include="slipgate\sg_swim_live.c" />
     <ClCompile Include="slipgate\sg_hook_live.c" />
+    <ClCompile Include="slipgate\sg_rocketjump_live.c" />
+    <ClCompile Include="slipgate\sg_rocketjump_cadence.c" />
+    <ClCompile Include="slipgate\sg_rocketjump_game.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_localization.c" />
     <ClCompile Include="slipgate\sg_pickup_target.c" />
@@ -426,6 +430,7 @@
     <ClCompile Include="slipgate\sg_caco.c" />
     <ClCompile Include="slipgate\sg_chat.c" />
     <ClCompile Include="slipgate\sg_combat.c" />
+    <ClCompile Include="slipgate\sg_combat_land_lead.c" />
     <ClCompile Include="slipgate\sg_fields.c" />
     <ClCompile Include="slipgate\sg_snag_repair.c" />
     <ClCompile Include="slipgate\sg_net.c" />

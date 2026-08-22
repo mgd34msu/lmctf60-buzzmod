@@ -427,7 +427,7 @@ sg_compound_drop_live_result_t SG_CompoundDropLivePreStep(
 	const sg_compound_drop_live_host_t *host,
 	const sg_replay_pose_t *pose, usercmd_t *command)
 {
-	sg_drop_live_result_t live_result;
+	sg_drop_live_result_t live_result = { 0 };
 
 	if (command)
 	{
@@ -607,6 +607,8 @@ sg_compound_drop_live_result_t SG_CompoundDropLivePostStep(
 	qboolean observation_valid;
 	qboolean aborted;
 
+	live_result.outcome = SG_DROP_LIVE_RUNNING;
+
 	if (!state || !pose || !observation || !state->guard_owned ||
 	    !state->command_pending || !CompoundDropLiveHostValid(host))
 		return CompoundDropLiveOwnedFailure(state,
@@ -639,8 +641,6 @@ sg_compound_drop_live_result_t SG_CompoundDropLivePostStep(
 		    (int)state->snapshot.binding.link_index, pose,
 		    observation->ground_support_valid, &state->drop_events);
 	}
-	else
-		live_result.outcome = SG_DROP_LIVE_RUNNING;
 	state->command_pending = false;
 	state->zero_command_pending = false;
 	state->aborted_command_pending = false;

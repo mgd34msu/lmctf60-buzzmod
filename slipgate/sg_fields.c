@@ -1366,10 +1366,10 @@ void Fields_Refresh(rune_t *r)
 		}
 		else
 		{
-			int seed;
+			int field_seed;
 
-			for (seed = 0; seed < r->hdr.num_seeds; seed++)
-				sg_fields.our_carrier[i][seed] = SG_FIELD_INF;
+			for (field_seed = 0; field_seed < r->hdr.num_seeds; field_seed++)
+				sg_fields.our_carrier[i][field_seed] = SG_FIELD_INF;
 			sg_fields.our_carrier_valid[i] = false;
 		}
 	}

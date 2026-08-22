@@ -93,11 +93,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install sheet test runtime
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/slipgate-film"
+          "$RUNNER_TEMP/slipgate-film/bin/pip" install -r tools/requirements.txt
+
       - name: Build module and run complete host suite
         shell: bash
         run: |
           set -o pipefail
-          make -B -f "${{ matrix.build_file }}" -j2 \
+          FILM_PYTHON="$RUNNER_TEMP/slipgate-film/bin/python" \
+            make -B -f "${{ matrix.build_file }}" -j2 \
             CC="${{ matrix.compiler }}" all host-test 2>&1 | tee host-test.log
           module=$(find . -maxdepth 1 -type f -name 'game*-lmctf-*.so' \
             -print -quit)

@@ -343,6 +343,9 @@
     <ClCompile Include="slipgate\sg_compound_publication.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_compound_publication_build.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_compound_action_publication.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -380,6 +383,15 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_hook_live.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rocketjump_live.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rocketjump_cadence.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rocketjump_game.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_arach.c">
@@ -449,6 +461,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_combat.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_combat_land_lead.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_fields.c">

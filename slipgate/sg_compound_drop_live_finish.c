@@ -312,7 +312,7 @@ sg_compound_drop_live_result_t SG_CompoundDropLiveBoundary(
 	const sg_replay_observation_t *observation)
 {
 	sg_compound_drop_live_contact_t contact;
-	sg_drop_live_result_t live_result;
+	sg_drop_live_result_t live_result = { 0 };
 	sg_replay_status_t status = SG_REPLAY_RUNNING;
 	sg_compound_drop_live_result_t sweep;
 	int boundary_ms;
@@ -320,6 +320,8 @@ sg_compound_drop_live_result_t SG_CompoundDropLiveBoundary(
 	qboolean observation_valid;
 	qboolean pose_valid;
 	qboolean aborted;
+
+	live_result.outcome = SG_DROP_LIVE_RUNNING;
 
 	if (!state || !pose || !observation || !state->guard_owned ||
 	    !CompoundDropLiveHostValid(host))

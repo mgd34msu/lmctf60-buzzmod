@@ -2036,14 +2036,14 @@ static void StrikePrepareFrame(void)
 		{
 			edict_t *ent = sg_bots[i].ent;
 			const sg_strike_team_t *team;
-			int team_index;
+			int frame_team_index;
 			qboolean participant = false;
 			sg_strike_duty_t duty = SG_STRIKE_DUTY_NONE;
 
 			if (!sg_strike_role_valid[i] || !ent || !ent->client)
 				continue;
-			team_index = SG_TeamIdx(ent->client->ctf.teamnum);
-			team = SG_StrikeAdapterTeam(&sg_strike_adapter, team_index);
+			frame_team_index = SG_TeamIdx(ent->client->ctf.teamnum);
+			team = SG_StrikeAdapterTeam(&sg_strike_adapter, frame_team_index);
 			if (team && SG_StrikeParticipant(team, i))
 			{
 				participant = true;
@@ -2055,7 +2055,7 @@ static void StrikePrepareFrame(void)
 			        participant, duty);
 			sg_strike_enemy_pressure_goal_cache[i] =
 			    sg_strike_enemy_pressure_cache[i]
-			        ? frames[team_index].slot[i].enemy_flag_goal_ms : -1;
+			        ? frames[frame_team_index].slot[i].enemy_flag_goal_ms : -1;
 			sg_strike_duty_cache[i] = duty;
 		}
 		for (team_index = 0; team_index < 2; team_index++)
