@@ -402,6 +402,7 @@ static int HookGameFinishAbort(sg_bot_t *bot)
 {
 	edict_t *current = NULL;
 	edict_t *bolt;
+	int active_release;
 
 	if (bot && bot->compound_hook_events.abort_receipt &&
 	    bot->compound_hook_events.bolt_evicted &&
@@ -414,12 +415,18 @@ static int HookGameFinishAbort(sg_bot_t *bot)
 	bot->compound_hook_events.abort_bolt = NULL;
 	bot->compound_hook_events.abort_pending = false;
 	bot->compound_hook_events.abort_consumed = true;
+	active_release = bot->compound_hook_events.attached &&
+	    bot->compound_hook_events.release_requested &&
+	    !bot->compound_hook_events.release_applied &&
+	    !bot->compound_hook_events.abort_recovery &&
+	    bot->compound_hook_live.hook.release_requested;
 	if (HookGameObserveBolt(bot, &current) != SG_COMPOUND_GUARD_NO || current ||
 	    !bot->ent || !bot->ent->client || bot->ent->client->hook ||
 	    bot->ent->client->hookstate != 0 ||
 	    !SG_CompoundHookGameAtTop(bot, &bot->compound_hook_live.snapshot) ||
-	    SG_CompoundGuardGameBoltEvicted(bot->ent, bolt) !=
-	        SG_COMPOUND_GUARD_OK)
+	    (!active_release &&
+	     SG_CompoundGuardGameBoltEvicted(bot->ent, bolt) !=
+	         SG_COMPOUND_GUARD_OK))
 		return 0;
 	bot->compound_hook_events.abort_receipt = true;
 	bot->compound_hook_events.bolt_evicted = true;

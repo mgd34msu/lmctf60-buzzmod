@@ -221,7 +221,8 @@ sg_compound_hook_live_result_t SG_CompoundHookLiveReleaseApplied(
 {
 	(void)pose;
 	CHECK(frame_serial == 43);
-	CHECK(evicted_calls == 1);
+	CHECK(evicted_calls ==
+	    (sg_bots[0].compound_hook_events.release_requested ? 0 : 1));
 	release_calls++;
 	return PureEvent(host, state, SG_COMPOUND_HOOK_LIVE_EVENT_RELEASE, bolt);
 }
@@ -445,7 +446,7 @@ static void TestBiteProofBoundary(void)
 
 static void TestLifecycle(void)
 {
-	edict_t client, bolt, target;
+	edict_t client, bolt, target, wrong_bolt;
 	gclient_t game_client;
 	sg_mover_subject_t subject;
 	sg_compound_hook_live_result_t result;
@@ -466,6 +467,9 @@ static void TestLifecycle(void)
 	sg_bots[0].compound_hook_live.hook.release_requested = true;
 	CHECK(SG_CompoundHookGameReleaseRequested(&client, &bolt) ==
 	    SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED);
+	wrong_bolt = bolt;
+	CHECK(SG_CompoundHookGameAbortBegin(&client, &wrong_bolt) ==
+	    SG_COMPOUND_HOOK_GAME_EVENT_DENIED);
 	CHECK(SG_CompoundHookGameAbortBegin(&client, &bolt) ==
 	    SG_COMPOUND_HOOK_GAME_EVENT_ACCEPTED);
 	bolt_observation = SG_COMPOUND_GUARD_NO;
@@ -475,11 +479,11 @@ static void TestLifecycle(void)
 	level.framenum = 43;
 	result = SG_CompoundHookGameAbortEnd(&client);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RUNNING);
-	CHECK(evicted_calls == 1);
+	CHECK(evicted_calls == 0);
 	CHECK(release_calls == 1);
 	result = SG_CompoundHookGameAbortEnd(&client);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
-	CHECK(evicted_calls == 1);
+	CHECK(evicted_calls == 0);
 	CHECK(release_calls == 1);
 }
 
@@ -498,7 +502,7 @@ static void TestAbortFailures(void)
 	bolt.inuse = false;
 	game_client.hook = NULL;
 	game_client.hookstate = 0;
-	evicted_result = SG_COMPOUND_GUARD_NOT_CLEAR;
+	evicted_result = SG_COMPOUND_GUARD_INVALID_TRANSITION;
 	result = SG_CompoundHookGameAbortEnd(&client);
 	CHECK(result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING);
 	CHECK(evicted_calls == 1);
