@@ -1,15 +1,15 @@
 {
-  "action_contract_crc32": "53f71300",
-  "action_contract_sha256": "609ff313d49b2c4a50454ecf0b27c2736de8f1b9fa9440c516450f8624af82a4",
-  "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7;seed.origin=signed_q8_exact;",
-  "mechanism_contract_crc32": "727235ba",
-  "mechanism_contract_sha256": "7fb9b41a1062da7210a63489a603024b08762cf35152ddf6967919af5dc417d0",
+  "action_contract_crc32": "3dcf09c1",
+  "action_contract_sha256": "e65b336403c1c4035c9775d7993025b452160ac365ce275735671bc9e1bbbc79",
+  "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8;seed.origin=signed_q8_exact;",
+  "mechanism_contract_crc32": "15be80db",
+  "mechanism_contract_sha256": "16842a998ca814e63680138b60d367794e7879a16e351cdd8830ee7a317c2218",
   "action_symbols": [
     "RL_RUN", "RL_JUMP", "RL_DROP", "RL_HOOK", "RL_SWIM", "RL_LIFT",
     "RL_TELEPORT", "RL_ROCKETJUMP", "RL_DOOR", "RL_DOOR_DROP",
-    "RL_DOOR_SWIM", "RL_DOOR_HOOK", "RL_BUTTON_DOOR", "RL_PUSH"
+    "RL_DOOR_SWIM", "RL_DOOR_HOOK", "RL_BUTTON_DOOR", "RL_PUSH", "RL_TRAIN"
   ],
-  "controller_flags": [[0, 0], [1, 13], [2, 13], [3, 13], [4, 0], [5, 13], [6, 5], [7, 5]],
+  "controller_flags": [[0, 0], [1, 13], [2, 13], [3, 13], [4, 0], [5, 13], [6, 5], [7, 5], [8, 13]],
   "wire_diagnostic_symbols": [
     "RLW_OK", "RLW_INVALID_ARGUMENT", "RLW_IO_ERROR", "RLW_BAD_MAGIC",
     "RLW_BAD_HEADER_SIZE", "RLW_BAD_SEED_SIZE", "RLW_BAD_LINK_SIZE",
