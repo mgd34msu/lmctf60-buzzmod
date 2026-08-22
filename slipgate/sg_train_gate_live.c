@@ -45,6 +45,32 @@ sg_train_gate_side_t SG_TrainGateOppositeSide(sg_train_gate_side_t side)
 	}
 }
 
+sg_train_gate_side_t SG_TrainGateSweepAxisSide(const float bounds_mins[3],
+	const float bounds_maxs[3], const float sweep_mins[3],
+	const float sweep_maxs[3], unsigned int axis)
+{
+	static const sg_train_gate_side_t lower[3] = {
+		SG_TRAIN_GATE_SIDE_X_MIN,
+		SG_TRAIN_GATE_SIDE_Y_MIN,
+		SG_TRAIN_GATE_SIDE_Z_MIN
+	};
+	static const sg_train_gate_side_t upper[3] = {
+		SG_TRAIN_GATE_SIDE_X_MAX,
+		SG_TRAIN_GATE_SIDE_Y_MAX,
+		SG_TRAIN_GATE_SIDE_Z_MAX
+	};
+
+	if (!bounds_mins || !bounds_maxs || !sweep_mins || !sweep_maxs ||
+	    axis >= 3U || bounds_mins[axis] > bounds_maxs[axis] ||
+	    sweep_mins[axis] >= sweep_maxs[axis])
+		return SG_TRAIN_GATE_SIDE_NONE;
+	if (bounds_maxs[axis] <= sweep_mins[axis])
+		return lower[axis];
+	if (bounds_mins[axis] >= sweep_maxs[axis])
+		return upper[axis];
+	return SG_TRAIN_GATE_SIDE_NONE;
+}
+
 static int TrainBoolean(uint8_t value)
 {
 	return value <= 1U;

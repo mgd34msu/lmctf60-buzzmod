@@ -104,6 +104,9 @@ sg_train_gate_command_t SG_TrainGateLiveStep(sg_train_gate_state_t *state,
 sg_train_gate_side_t SG_TrainGateSweepSide(const float bounds_mins[3],
 	const float bounds_maxs[3], const float sweep_mins[3],
 	const float sweep_maxs[3]);
+sg_train_gate_side_t SG_TrainGateSweepAxisSide(const float bounds_mins[3],
+	const float bounds_maxs[3], const float sweep_mins[3],
+	const float sweep_maxs[3], unsigned int axis);
 sg_train_gate_side_t SG_TrainGateOppositeSide(sg_train_gate_side_t side);
 
 #endif /* SG_TRAIN_GATE_LIVE_H */
