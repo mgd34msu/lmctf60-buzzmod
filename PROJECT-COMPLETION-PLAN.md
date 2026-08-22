@@ -258,6 +258,10 @@ including `lmctf02a` and `lmctf04`.
       `bfb49cab7855e1cb1c3e6d397dc5ca852929d8e53e460a98680a17e0b7aff4a1`;
       and RUNE SHA-256 is
       `6c3f31c529f522326cd693318ed7198476744d06f3dddbc1a129b1199870b74b`.
+      Exact-commit CI for `7c83260` then exposed one Windows-only C4701
+      warning in the carrier resolver. Commit `4b9ff0f` initializes that helper
+      output before its mutually exclusive capture calls; both focused harnesses
+      and both full local builds pass. Replacement exact-commit CI is pending.
 - [ ] Repair the remaining maps whose objective route core is closed.
       `smap39` is accepted at commits `8544da2`, `fed4c9f`, and `c4f9b48`.
       The source-identical live run passed generation, both readers, semantic
@@ -278,9 +282,14 @@ The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `smap28`, `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap05`, `xmap12`, `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
-The eight incomplete generation-timeout cases are running as a four-worker
-background retest against the exact accepted `64344d4` module and immutable
-175-map snapshot. Parallel graph-failure triage groups the remaining work into
+The first four incomplete generation-timeout cases (`lmctf15`, `lmctf25`,
+`lmctf58`, and `tw2ctf2`) reproduced terminal 900-second timeouts in base-link
+proof before the first progress interval. The remaining four are running as a
+four-worker background retest against the exact accepted `64344d4` module and
+immutable 175-map snapshot. Instrumented samples attribute roughly 80--84% of
+categorized base-link CPU to the shared hook prover, so the active performance
+repair targets its exact pair search rather than any map-specific bypass.
+Parallel graph-failure triage groups the remaining work into
 shared teleporter, platform/lift, door/train/activation, and push-controller
 repairs, with targeted train/elevator and advanced-push extensions after those
 batches. `xmap13` joins the speed-85 push retest; `xmap18` joins the
