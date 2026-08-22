@@ -13,7 +13,8 @@ static int LeaseStateValid(sg_mover_lease_state_t state)
 static int LeaseLawValid(sg_mover_lease_law_t law)
 {
 	return law == SG_MOVER_LAW_DECLARED_DOOR ||
-	       law == SG_MOVER_LAW_COMPOUND_PREOPEN;
+	       law == SG_MOVER_LAW_COMPOUND_PREOPEN ||
+	       law == SG_MOVER_LAW_TRAIN_GATE;
 }
 
 static int ReservedZero(const uint8_t reserved[3])

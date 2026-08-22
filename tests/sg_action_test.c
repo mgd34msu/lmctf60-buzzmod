@@ -5,9 +5,9 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x53f71300U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x3dcf09c1U,
 	"RUNE action contract drift");
-_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0x727235baU,
+_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0x15be80dbU,
 	"RUNE mechanism contract drift");
 
 static int failures;
@@ -97,18 +97,21 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0027U, RLEP_DRY_BOTH,
 	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_PUSH, RLFB_NONE, 0, "RL_PUSH", "PUSH", "PUSH", "#b76cff" },
+	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x003dU, RLEP_DRY_BOTH,
+	  RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+		  RL_TRAIN, RLFB_NONE, 0, "RL_TRAIN", "TRAIN", "TRAIN", "#00a6a6" },
 };
 
 static void TestActions(void)
 {
 	static const int runtime_owns_control[SG_ACTION_COUNT] =
-		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1 };
+		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1 };
 	static const int uses_hook_policy[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 };
+		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 };
 	static const int field_bias_at_rope_1000[SG_ACTION_COUNT] =
-		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000, 0, 0 };
+		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000, 0, 0, 0 };
 	static const unsigned int traits[] =
 	{
 		SG_ACTF_OWNS_CONTROL, SG_ACTF_BALLISTIC,
@@ -222,6 +225,7 @@ static void TestActions(void)
 	CHECK(SG_ActionFieldBiasMs(RL_DOOR_HOOK, 1000) == 1000);
 	CHECK(SG_ActionRuntimeSupported(RL_BUTTON_DOOR));
 	CHECK(SG_ActionEffectiveSuffix(RL_BUTTON_DOOR) == RL_DOOR);
+	CHECK(SG_ActionMechanismPlanRequired(RL_TRAIN));
 	CHECK(SG_ActionFieldBiasMs(RL_HOOK, -1) == 0);
 	CHECK(SG_ActionFieldBiasMs(RL_DOOR_HOOK, INT_MIN) == 0);
 	CHECK(SG_ActionFieldBiasMs(RL_HOOK, INT_MAX) == INT_MAX);
@@ -311,7 +315,7 @@ static void TestEndpointPolicies(void)
 		{ 1, 1, 1, 0 }, { 0, 1, 1, 1 }, { 1, 1, 1, 1 },
 		{ 1, 1, 1, 1 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 },
 		{ 1, 1, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 1, 0 },
-		{ 1, 0, 0, 0 }, { 1, 0, 0, 0 }
+		{ 1, 0, 0, 0 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 }
 	};
 	int action, policy;
 

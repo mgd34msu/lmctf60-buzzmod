@@ -14,6 +14,7 @@
 #include "sg_compound_swim_game.h"
 #include "sg_compound_drop_game.h"
 #include "sg_compound_hook_game.h"
+#include "sg_rune_mechanism_catalog.h"
 
 typedef struct sg_compound_guard_game_identity_s
 {
@@ -249,12 +250,27 @@ static sg_compound_guard_observation_t GameOutsideSweepMode(void *context,
 	subject_entity = &g_edicts[subject->edict_key];
 	for (index = 0U; index < key_count; index++)
 	{
+		vec3_t train_mins;
+		vec3_t train_maxs;
+
 		if (keys[index] == 0U || keys[index] >= (sg_mover_key_t)MAX_EDICTS ||
 		    keys[index] >= (sg_mover_key_t)globals.num_edicts ||
 		    !g_edicts[keys[index]].inuse)
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 		if (index > 0U && keys[index - 1U] >= keys[index])
 			return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+		if (SG_MechCatalogTrainGateSweep(keys[index], train_mins,
+		        train_maxs))
+		{
+			if (!(subject_entity->absmax[0] <= train_mins[0] ||
+			      subject_entity->absmin[0] >= train_maxs[0] ||
+			      subject_entity->absmax[1] <= train_mins[1] ||
+			      subject_entity->absmin[1] >= train_maxs[1] ||
+			      subject_entity->absmax[2] <= train_mins[2] ||
+			      subject_entity->absmin[2] >= train_maxs[2]))
+				return SG_COMPOUND_GUARD_NO;
+			continue;
+		}
 		if (!(prospective_push
 		      ? SG_MoverSubjectOutsideProspectivePush(
 		            &g_edicts[keys[index]], subject_entity)
@@ -405,6 +421,17 @@ static sg_compound_guard_observation_t GameHoldOpen(void *context,
 		return key_count == 1U &&
 		    SG_CompoundWorldHoldMember(members[0], lease_ms)
 		        ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+	if (law == SG_MOVER_LAW_TRAIN_GATE)
+	{
+		sg_mech_train_gate_pose_t pose;
+
+		return key_count == 1U &&
+		    SG_MechCatalogTrainGatePose(keys[0], &pose) &&
+		    (pose == SG_MECH_TRAIN_GATE_CLOSED ||
+		     pose == SG_MECH_TRAIN_GATE_OPENING ||
+		     pose == SG_MECH_TRAIN_GATE_OPEN)
+		        ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+	}
 	if (law != SG_MOVER_LAW_DECLARED_DOOR)
 		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 	return SG_DeclaredDoorHoldMembers(members, (int)key_count, lease_ms)
@@ -433,6 +460,16 @@ static sg_compound_guard_observation_t GameSetTerminal(void *context,
 		return key_count == 1U &&
 		    SG_CompoundWorldMemberTerminal(members[0])
 		        ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+	if (law == SG_MOVER_LAW_TRAIN_GATE)
+	{
+		sg_mech_train_gate_pose_t pose;
+
+		return key_count == 1U &&
+		    SG_MechCatalogTrainGatePose(keys[0], &pose) &&
+		    (pose == SG_MECH_TRAIN_GATE_CLOSED ||
+		     pose == SG_MECH_TRAIN_GATE_OPEN)
+		        ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+	}
 	if (law != SG_MOVER_LAW_DECLARED_DOOR)
 		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
 	return SG_DeclaredDoorMembersTerminal(members, (int)key_count)
@@ -640,7 +677,15 @@ int SG_CompoundGuardGameEntityMayDispatch(edict_t *entity)
 	 * standalone trains, plats, and rotators commonly have no teammaster and
 	 * keep their exact stock dispatch after NO_LEASE above. */
 	if (!door_shape)
-		return 0;
+	{
+		if (key_count != 1U ||
+		    SG_CompoundGuardTrainGatePusherFence(keys, key_count) !=
+		        SG_COMPOUND_GUARD_OK ||
+		    !SG_MoverProspectivePusherValid(&g_edicts[keys[0]]))
+			return 0;
+		return GameAllSubjectsOutsideMode(&game_guard, keys, key_count, 1) ==
+		       SG_COMPOUND_GUARD_YES;
+	}
 	/* Validate the pusher independently of population: an empty retirement
 	 * must not admit NaN clamp input, unsupported angles, stale linkage, or an
 	 * arbitrary prethink callback. */
@@ -1065,12 +1110,14 @@ sg_compound_guard_result_t SG_CompoundGuardGamePlayerDie(edict_t *client)
 	memset(&record, 0, sizeof(record));
 	(void)SG_CompoundGuardValidate(&bot->compound_guard, &record);
 	claimed = (record.law == SG_MOVER_LAW_DECLARED_DOOR ||
-	           record.law == SG_MOVER_LAW_COMPOUND_PREOPEN) &&
+	           record.law == SG_MOVER_LAW_COMPOUND_PREOPEN ||
+	           record.law == SG_MOVER_LAW_TRAIN_GATE) &&
 	          (record.state == SG_MOVER_LEASE_ACTIVE ||
 	           record.state == SG_MOVER_LEASE_PAUSED ||
 	           record.state == SG_MOVER_LEASE_QUARANTINED);
 	already_orphan = (record.law == SG_MOVER_LAW_DECLARED_DOOR ||
-	                  record.law == SG_MOVER_LAW_COMPOUND_PREOPEN) &&
+	                  record.law == SG_MOVER_LAW_COMPOUND_PREOPEN ||
+	                  record.law == SG_MOVER_LAW_TRAIN_GATE) &&
 	                 record.state == SG_MOVER_LEASE_ORPHAN;
 	if (GameClientBlocksAnyClaim(client, client_key))
 		claimed = true;

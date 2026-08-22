@@ -10,6 +10,7 @@
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_compound_hook_game.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 
 #define TEST_EDICTS 24
 
@@ -326,6 +327,32 @@ sg_compound_guard_result_t SG_CompoundGuardAnyDoorTransaction(void)
 {
 	any_door_calls++;
 	return any_door_result;
+}
+
+sg_compound_guard_result_t SG_CompoundGuardTrainGatePusherFence(
+	const sg_mover_key_t *keys, size_t key_count)
+{
+	(void)keys;
+	(void)key_count;
+	return SG_COMPOUND_GUARD_NO_LEASE;
+}
+
+int SG_MechCatalogTrainGatePose(uint32_t key,
+	sg_mech_train_gate_pose_t *pose_out)
+{
+	(void)key;
+	if (pose_out)
+		*pose_out = SG_MECH_TRAIN_GATE_INVALID;
+	return 0;
+}
+
+int SG_MechCatalogTrainGateSweep(uint32_t key, float mins_out[3],
+	float maxs_out[3])
+{
+	(void)key;
+	(void)mins_out;
+	(void)maxs_out;
+	return 0;
 }
 
 sg_compound_guard_result_t SG_CompoundGuardBodyWillReplace(int32_t body_key)

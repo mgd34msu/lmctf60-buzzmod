@@ -494,7 +494,7 @@ static void TestWholeGolden(void)
 		0x5c, 0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00,
 		0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
 		0x01, 0x00, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
-		0xba, 0x35, 0x72, 0x72, 0x01, 0x00, 0x00, 0x00
+		0xdb, 0x80, 0xbe, 0x15, 0x01, 0x00, 0x00, 0x00
 	};
 
 	FixtureInit(&fixture);
@@ -515,7 +515,7 @@ static void TestWholeGolden(void)
 	CHECK(GetU32(encoded + 0) == SG_RUNE_CODEC_MAGIC);
 	CHECK(GetU32(encoded + 32) == SG_RUNE_ACTION_CONTRACT_CRC32);
 	CHECK(SG_ActionWireValid(RL_BUTTON_DOOR));
-	CHECK(SG_RUNE_WIRE_ACTION_MAX == RL_PUSH);
+	CHECK(SG_RUNE_WIRE_ACTION_MAX == RL_TRAIN);
 	CHECK(encoded[4] == 0U && encoded[5] == 0U);
 	CHECK(memcmp(encoded + 128, golden_extension,
 		sizeof(golden_extension)) == 0);
@@ -526,10 +526,10 @@ static void TestWholeGolden(void)
 		TEST_STRING_BYTES) == 0);
 	CHECK_U32(UINT32_C(0x624244c5), fixture.plans[0].closure_crc32);
 	CHECK_U32(UINT32_C(0x77264ff8), GetU32(encoded + 20));
-	CHECK_U32(UINT32_C(0xbec2b1c2),
+	CHECK_U32(UINT32_C(0x156f6015),
 		GetU32(encoded + SG_RUNE_CODEC_HEADER_CRC_OFFSET));
 	CHECK(SG_CRC32Buffer(encoded, sizeof(encoded), &file_crc));
-	CHECK_U32(UINT32_C(0x470d284a), file_crc);
+	CHECK_U32(UINT32_C(0xb38611c1), file_crc);
 
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));

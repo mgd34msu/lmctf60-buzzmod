@@ -195,6 +195,44 @@ qboolean SG_HookAimAngles(const vec3_t origin, float viewheight,
 	return true;
 }
 
+qboolean SG_BlasterAimAngles(const vec3_t origin, float viewheight, int hand,
+	const vec3_t aim, vec3_t view_angles, vec3_t muzzle)
+{
+	vec3_t direction;
+	vec3_t forward;
+	vec3_t right;
+	vec3_t offset = { 24.0f, 8.0f, 0.0f };
+	int iteration;
+
+	if (!origin || !aim || !view_angles || !muzzle ||
+	    (hand != RIGHT_HANDED && hand != LEFT_HANDED &&
+	     hand != CENTER_HANDED) ||
+	    !SG_HookAimAngles(origin, viewheight, aim, view_angles))
+		return false;
+	offset[2] = viewheight - 8.0f;
+	if (hand == LEFT_HANDED)
+		offset[1] = -offset[1];
+	else if (hand == CENTER_HANDED)
+		offset[1] = 0.0f;
+	for (iteration = 0; iteration < 4; iteration++)
+	{
+		AngleVectors(view_angles, forward, right, NULL);
+		G_ProjectSource((vec_t *)origin, offset, forward, right, muzzle);
+		VectorSubtract(aim, muzzle, direction);
+		if (VectorNormalize(direction) == 0.0f)
+			return false;
+		vectoangles(direction, view_angles);
+		view_angles[PITCH] = SHORT2ANGLE((short)ANGLE2SHORT(
+			view_angles[PITCH]));
+		view_angles[YAW] = SHORT2ANGLE((short)ANGLE2SHORT(
+			view_angles[YAW]));
+		view_angles[ROLL] = 0.0f;
+	}
+	AngleVectors(view_angles, forward, right, NULL);
+	G_ProjectSource((vec_t *)origin, offset, forward, right, muzzle);
+	return true;
+}
+
 /* Graph-hook control.  The link stores the exact quantized view
  * angles that were proved and the distance travelled by the corresponding
  * handed muzzle ray to its static-world bite.  Reconstructing both from those

@@ -656,6 +656,7 @@ PUSH_LIVE_TEST_OBJS := .sg_push_live_test.make.o \
 	.sg_push_live_under_test.make.o .sg_push_falling_under_test.make.o
 PUSH_LIVE_TEST_DEPS := $(PUSH_LIVE_TEST_OBJS:.o=.d)
 PUSH_GAME_INTEGRATION_TEST := tests/test_push_game_integration.py
+TRAIN_GATE_GAME_INTEGRATION_TEST := tests/test_train_gate_game_integration.py
 ROCKETJUMP_CADENCE_TEST_BIN := sg_rocketjump_cadence_test.make
 ROCKETJUMP_CADENCE_TEST_OBJS := .sg_rocketjump_cadence_test.make.o \
 	.sg_rocketjump_cadence_under_test.make.o
@@ -1128,6 +1129,8 @@ OBJS := \
 	slipgate/sg_rocketjump_game.o \
 	slipgate/sg_push_live.o \
 	slipgate/sg_push_game.o \
+	slipgate/sg_train_gate_live.o \
+	slipgate/sg_train_gate_game.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -1224,7 +1227,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test \
-	push-game-integration-test \
+	push-game-integration-test train-gate-game-integration-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test \
@@ -3439,6 +3442,10 @@ rune-artifact-test: $(RUNE_PYTHON_TESTS)
 push-game-integration-test: $(PUSH_GAME_INTEGRATION_TEST)
 	$(E) [TEST] push game integration
 	$(Q)python3 -B $(PUSH_GAME_INTEGRATION_TEST)
+
+train-gate-game-integration-test: $(TRAIN_GATE_GAME_INTEGRATION_TEST)
+	$(E) [TEST] train gate game integration
+	$(Q)python3 -B $(TRAIN_GATE_GAME_INTEGRATION_TEST)
 
 rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
 		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \

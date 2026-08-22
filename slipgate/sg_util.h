@@ -36,6 +36,8 @@ qboolean SG_CanSee(edict_t *e, const vec3_t pt, float lift_z);
  * live execution re-proves that same control from its actual fixed-point source. */
 qboolean SG_HookAimAngles(const vec3_t origin, float viewheight,
 	const vec3_t aim, vec3_t view_angles);
+qboolean SG_BlasterAimAngles(const vec3_t origin, float viewheight, int hand,
+	const vec3_t aim, vec3_t view_angles, vec3_t muzzle);
 qboolean SG_HookControlDecode(const vec3_t origin, float viewheight, int hand,
 	const vec3_t control, vec3_t view_angles, vec3_t muzzle, vec3_t bite);
 

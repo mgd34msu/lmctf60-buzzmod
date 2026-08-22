@@ -38,7 +38,7 @@ class ButtonGameIntegrationTests(unittest.TestCase):
         self.assertLess(use.index("SG_AuthorizeButtonUse"),
                         use.index("self->activator"))
         killed = function_body("g_func.c", "button_killed")
-        self.assertLess(killed.index("SG_AuthorizeButtonUse"),
+        self.assertLess(killed.index("SG_AuthorizeButtonShot"),
                         killed.index("self->activator"))
 
     def test_token_lifecycle_hooks_precede_recycle_and_publication(self) -> None:

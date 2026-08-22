@@ -20,6 +20,7 @@
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_train_gate_game.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
@@ -2044,6 +2045,15 @@ qboolean SG_DeclaredDoorApproachExecutionFinish(sg_bot_t *bot,
 	return DoorStep_ApproachTicketFinish(bot, binding, entity);
 }
 
+qboolean SG_AuthorizeTrainUse(edict_t *train, edict_t *source,
+	edict_t *activator)
+{
+	int authority = SG_TrainGateGameAuthorizeTrainUse(train, source,
+	    activator);
+
+	return authority < 0 || authority > 0;
+}
+
 static qboolean MechanismStep_Binding(const sg_bot_t *bot, int action,
 	sg_rune_mechanism_binding_t *binding_out);
 
@@ -2423,6 +2433,8 @@ static qboolean DoorStep_ButtonBinding(sg_bot_t *bot, edict_t *source,
 
 qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 {
+	int train_authority = SG_TrainGateGameAuthorizeButtonTouch(source,
+	    activator);
 	sg_rune_mechanism_binding_t binding;
 	sg_mech_button_endpoints_t endpoints = { 0 };
 	sg_button_callback_token_t *token;
@@ -2433,6 +2445,9 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	int activator_key;
 	int axis;
 	int source_key;
+
+	if (train_authority >= 0)
+		return train_authority ? true : false;
 
 	if (!bot)
 	{
@@ -2538,10 +2553,15 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
  * damage cannot borrow a bot's active plan. */
 qboolean SG_AuthorizeButtonUse(edict_t *source, edict_t *activator)
 {
+	int train_authority = SG_TrainGateGameAuthorizeButtonUse(source,
+	    activator);
 	sg_rune_mechanism_binding_t binding;
 	sg_button_callback_token_t *token;
 	sg_bot_t *bot = DoorStep_EventBot(activator);
 	int source_key;
+
+	if (train_authority >= 0)
+		return train_authority ? true : false;
 
 	if (!bot)
 	{
@@ -2558,8 +2578,21 @@ qboolean SG_AuthorizeButtonUse(edict_t *source, edict_t *activator)
 	       !SG_DeclaredDoorGuardAnyClaim();
 }
 
+qboolean SG_AuthorizeButtonShot(edict_t *source, edict_t *inflictor,
+	edict_t *attacker, int damage)
+{
+	int train_authority = SG_TrainGateGameAuthorizeButtonShot(source,
+		inflictor, attacker, damage);
+
+	if (train_authority >= 0)
+		return train_authority ? true : false;
+	return SG_AuthorizeButtonUse(source, attacker);
+}
+
 qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 {
+	int train_authority = SG_TrainGateGameAuthorizeButtonTargets(source,
+	    activator);
 	sg_rune_mechanism_binding_t binding;
 	sg_button_callback_token_t *token;
 	sg_button_callback_result_t result;
@@ -2567,6 +2600,9 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 	int activator_key;
 	int authority = 0;
 	int source_key;
+
+	if (train_authority >= 0)
+		return train_authority ? true : false;
 
 	token = DoorStep_ButtonToken(source, &source_key);
 	if (SG_ButtonCallbackTokenState(token) != SG_BUTTON_CALLBACK_EMPTY)
@@ -2742,6 +2778,9 @@ qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
 	door_step_dispatch_t dispatch;
 	qboolean carrier = false;
 	uint32_t source_key;
+
+	if (SG_TrainGateGameHandleTargets(source, activator))
+		return true;
 
 	if (!bot)
 		return false;
@@ -7374,7 +7413,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 
 		guard_result = SG_CompoundGuardValidate(&bot->compound_guard, &record);
 		if ((record.law == SG_MOVER_LAW_DECLARED_DOOR ||
-		     record.law == SG_MOVER_LAW_COMPOUND_PREOPEN) &&
+		     record.law == SG_MOVER_LAW_COMPOUND_PREOPEN ||
+		     record.law == SG_MOVER_LAW_TRAIN_GATE) &&
 		    (record.state == SG_MOVER_LEASE_ACTIVE ||
 		     record.state == SG_MOVER_LEASE_PAUSED))
 		{
@@ -7394,6 +7434,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			       (rune->links[record.link_index].action == RL_DOOR_HOOK &&
 			        bot->compound_hook_live.guard_owned &&
 			        !bot->compound_drop_live.guard_owned))) ||
+			    (record.law == SG_MOVER_LAW_TRAIN_GATE &&
+			     (rune->links[record.link_index].action != RL_TRAIN ||
+			      !SG_TrainGateGameOwns(bot))) ||
 			    bot->commit_link != record.link_index)
 			{
 				if (sg_cv.debug && sg_cv.debug->value > 0.0f &&
@@ -7421,6 +7464,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			return;
 		}
 	}
+	if (SG_TrainGateGameEmit(bot, bestlink))
+		return;
 	if (SG_PushGameEmit(bot, bestlink))
 		return;
 	/* RL_ROCKETJUMP owns the complete four-command frame.  fire_rocket may

@@ -25,6 +25,8 @@ void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surf);
 void button_use(edict_t *self, edict_t *other, edict_t *activator);
+void button_killed(edict_t *self, edict_t *inflictor, edict_t *attacker,
+	int damage, vec3_t point);
 void door_secret_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_use(edict_t *self, edict_t *other, edict_t *activator);
 void door_go_down(edict_t *self);
@@ -4397,7 +4399,8 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 		 * solid pedestals are admitted here. */
 		if (SG_ImmutableSupport(hit) || hit == sg_oracle_compound_member ||
 		    hit == sg_oracle_declared_expected ||
-		    (sg_oracle_declared_action == RL_BUTTON_DOOR &&
+		    ((sg_oracle_declared_action == RL_BUTTON_DOOR ||
+		      sg_oracle_declared_action == RL_TRAIN) &&
 		     hit == sg_oracle_declared_door) ||
 		    SG_OracleDeclaredSetMember(sg_oracle_declared_door, hit))
 			continue;
@@ -4436,14 +4439,16 @@ static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t en
 		sg_oracle_contaminated = true;
 
 	if (sg_oracle_world_only &&
-	    sg_oracle_declared_action == RL_BUTTON_DOOR &&
+	    (sg_oracle_declared_action == RL_BUTTON_DOOR ||
+	     sg_oracle_declared_action == RL_TRAIN) &&
 	    tr.ent == sg_oracle_declared_expected &&
 	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f))
 		sg_oracle_declared_touched = true;
 	if (sg_oracle_world_only && !SG_ImmutableSupport(tr.ent) &&
 	    tr.ent != sg_oracle_compound_member &&
 	    tr.ent != sg_oracle_declared_expected &&
-	    !(sg_oracle_declared_action == RL_BUTTON_DOOR &&
+	    !((sg_oracle_declared_action == RL_BUTTON_DOOR ||
+	       sg_oracle_declared_action == RL_TRAIN) &&
 	      tr.ent == sg_oracle_declared_door) &&
 	    !SG_OracleDeclaredSetMember(sg_oracle_declared_door, tr.ent) &&
 	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f) &&
@@ -6558,7 +6563,7 @@ done:
  * while every other non-world solid/trigger remains contamination. */
 static qboolean SG_OracleDeclaredApproachInternal(const vec3_t source,
 	const vec3_t target, edict_t *entry, edict_t *support,
-	edict_t *approach_door, int action, int *arrival_ms)
+	edict_t *approach_door, int action, int *arrival_ms, vec3_t contact_out)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
@@ -6574,7 +6579,7 @@ static qboolean SG_OracleDeclaredApproachInternal(const vec3_t source,
 	int elapsed = 0;
 
 	if (!entry || !entry->inuse || !support || !support->inuse || !arrival_ms ||
-	    (action != RL_LIFT && action != RL_TELEPORT))
+	    (action != RL_LIFT && action != RL_TELEPORT && action != RL_TRAIN))
 		return false;
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
@@ -6612,6 +6617,8 @@ static qboolean SG_OracleDeclaredApproachInternal(const vec3_t source,
 		if (sg_oracle_declared_touched)
 		{
 			*arrival_ms = elapsed + 25;
+			if (contact_out)
+				VectorCopy(ph.origin, contact_out);
 			ok = true;
 			goto done;
 		}
@@ -6635,7 +6642,55 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	edict_t *entry, edict_t *support, int action, int *arrival_ms)
 {
 	return SG_OracleDeclaredApproachInternal(source, target, entry, support,
-		NULL, action, arrival_ms);
+		NULL, action, arrival_ms, NULL);
+}
+
+qboolean SG_OracleTrainGateApproach(const vec3_t source,
+	const vec3_t target, edict_t *button, int *arrival_ms,
+	vec3_t contact_out)
+{
+	if (contact_out)
+		VectorClear(contact_out);
+	return button && contact_out &&
+	       SG_OracleDeclaredApproachInternal(source, target, button, button,
+	           NULL, RL_TRAIN, arrival_ms, contact_out);
+}
+
+qboolean SG_OracleTrainGateShot(const vec3_t source, edict_t *button,
+	vec3_t contact_out, int *flight_ms)
+{
+	vec3_t aim;
+	vec3_t angles;
+	vec3_t forward;
+	vec3_t muzzle;
+	vec3_t end;
+	trace_t trace;
+
+	if (contact_out)
+		VectorClear(contact_out);
+	if (flight_ms)
+		*flight_ms = 0;
+	if (!source || !button || !button->inuse || !contact_out || !flight_ms ||
+	    !button->classname || strcmp(button->classname, "func_button") ||
+	    !button->takedamage || button->health != 1 ||
+	    button->max_health != 1 || button->die != button_killed)
+		return false;
+	aim[0] = (button->absmin[0] + button->absmax[0]) * 0.5f;
+	aim[1] = (button->absmin[1] + button->absmax[1]) * 0.5f;
+	aim[2] = (button->absmin[2] + button->absmax[2]) * 0.5f;
+	if (!SG_BlasterAimAngles(source, 22.0f, RIGHT_HANDED, aim, angles,
+	        muzzle))
+		return false;
+	AngleVectors(angles, forward, NULL, NULL);
+	VectorMA(muzzle, 8192.0f, forward, end);
+	trace = sg_host.trace(muzzle, NULL, NULL, end, NULL, MASK_SHOT);
+	if (trace.ent != button || trace.startsolid || trace.allsolid ||
+	    trace.fraction <= 0.0f || trace.fraction >= 1.0f)
+		return false;
+	VectorCopy(trace.endpos, contact_out);
+	VectorSubtract(contact_out, muzzle, end);
+	*flight_ms = (int)ceilf(VectorLength(end));
+	return *flight_ms > 0 && *flight_ms <= RUNE_MAX_COST_MS;
 }
 
 qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
@@ -6648,7 +6703,107 @@ qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
 	       (SG_DeclaredDoorDirectActivatorSafe(approach_door) ||
 	        SG_DeclaredDoorDelayedActivatorSafe(approach_door, &delay_ms)) &&
 	       SG_OracleDeclaredApproachInternal(source, target, entry, support,
-	           approach_door, RL_LIFT, arrival_ms);
+	           approach_door, RL_LIFT, arrival_ms, NULL);
+}
+
+static qboolean SG_TrainGateHullOutside(const vec3_t origin,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs)
+{
+	return origin[0] + 16.0f <= sweep_mins[0] ||
+	       origin[0] - 16.0f >= sweep_maxs[0] ||
+	       origin[1] + 16.0f <= sweep_mins[1] ||
+	       origin[1] - 16.0f >= sweep_maxs[1] ||
+	       origin[2] + 32.0f <= sweep_mins[2] ||
+	       origin[2] - 24.0f >= sweep_maxs[2];
+}
+
+static qboolean SG_TrainGateHullOutsideAxis(const vec3_t origin,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs,
+	unsigned int passage_axis)
+{
+	static const float hull_mins[3] = { -16.0f, -16.0f, -24.0f };
+	static const float hull_maxs[3] = { 16.0f, 16.0f, 32.0f };
+
+	if (passage_axis >= 3U)
+		return SG_TrainGateHullOutside(origin, sweep_mins, sweep_maxs);
+	return origin[passage_axis] + hull_maxs[passage_axis] <=
+	           sweep_mins[passage_axis] ||
+	       origin[passage_axis] + hull_mins[passage_axis] >=
+	           sweep_maxs[passage_axis];
+}
+
+qboolean SG_OracleTrainGateEgress(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *train,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs,
+	unsigned int passage_axis, int *arrival_ms)
+{
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_door = sg_oracle_declared_door;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_touched = sg_oracle_declared_touched;
+	int old_action = sg_oracle_declared_action;
+	sg_phantom_t ph;
+	usercmd_t cmd;
+	qboolean entered_sweep = false;
+	qboolean ok = false;
+	int elapsed;
+
+	if (!button || !button->inuse || !train || !train->inuse || !arrival_ms ||
+	    !sweep_mins || !sweep_maxs)
+		return false;
+	sg_oracle_passent = NULL;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = button;
+	sg_oracle_declared_door = train;
+	sg_oracle_declared_action = RL_TRAIN;
+	sg_oracle_declared_touched = false;
+	SG_OraclePlace(&ph, (vec_t *)source);
+	memset(&cmd, 0, sizeof(cmd));
+	SG_OracleRun(&ph, &cmd, 1);
+	if (sg_oracle_contaminated || !ph.groundentity || ph.waterlevel != 0)
+		goto done;
+	entered_sweep = !SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins,
+	    sweep_maxs, passage_axis);
+	for (elapsed = 0; elapsed < 5000; elapsed += 25)
+	{
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = 25;
+		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
+			goto done;
+		SG_OracleRun(&ph, &cmd, 1);
+		if (sg_oracle_contaminated ||
+		    (ph.waterlevel > 0 &&
+		     (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
+			goto done;
+		if (!SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins, sweep_maxs,
+		        passage_axis))
+			entered_sweep = true;
+		if (((elapsed + 25) % 100) == 0 && entered_sweep &&
+		    SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins, sweep_maxs,
+		        passage_axis) &&
+		    SG_SupportedArrived(ph.origin, target, ph.groundentity,
+		        ph.watertype, ph.waterlevel, NULL))
+		{
+			*arrival_ms = elapsed + 25;
+			ok = true;
+			goto done;
+		}
+	}
+
+done:
+	if (ph.door_passed)
+		ok = false;
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_door = old_door;
+	sg_oracle_declared_action = old_action;
+	sg_oracle_declared_touched = old_touched;
+	return ok;
 }
 
 /* Prove the lift's top-platform-to-static-graph handoff. The caller positions
