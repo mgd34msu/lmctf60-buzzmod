@@ -71,6 +71,32 @@ sg_train_gate_side_t SG_TrainGateSweepAxisSide(const float bounds_mins[3],
 	return SG_TRAIN_GATE_SIDE_NONE;
 }
 
+sg_train_gate_side_t SG_TrainGateUniqueSourceSide(uint32_t side_mask)
+{
+	const uint32_t known_mask =
+		(1U << SG_TRAIN_GATE_SIDE_X_MIN) |
+		(1U << SG_TRAIN_GATE_SIDE_X_MAX) |
+		(1U << SG_TRAIN_GATE_SIDE_Y_MIN) |
+		(1U << SG_TRAIN_GATE_SIDE_Y_MAX) |
+		(1U << SG_TRAIN_GATE_SIDE_Z_MIN) |
+		(1U << SG_TRAIN_GATE_SIDE_Z_MAX);
+	sg_train_gate_side_t found = SG_TRAIN_GATE_SIDE_NONE;
+	unsigned int side;
+
+	if (side_mask == 0U || (side_mask & ~known_mask) != 0U)
+		return SG_TRAIN_GATE_SIDE_NONE;
+	for (side = SG_TRAIN_GATE_SIDE_X_MIN;
+	     side <= SG_TRAIN_GATE_SIDE_Z_MAX; side++)
+	{
+		if ((side_mask & (1U << side)) == 0U)
+			continue;
+		if (found != SG_TRAIN_GATE_SIDE_NONE)
+			return SG_TRAIN_GATE_SIDE_NONE;
+		found = (sg_train_gate_side_t)side;
+	}
+	return found;
+}
+
 static int TrainBoolean(uint8_t value)
 {
 	return value <= 1U;
