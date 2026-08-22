@@ -359,10 +359,14 @@ proved 33,868 links, but objective pruning removed the red and blue route sets.
 It wrote no artifact and remains in the unresolved queue as a graph failure.
 `lmctf15` also cleared generation and proved 36,551 links. Each flag reached
 only 10 seeds, the two sets had no shared seed, and pruning removed all 2,138
-seeds. It also remains in the queue as a graph failure. Parallel smokes remain
-active for `lmctf25`, `lmctf58`, and `xmap26`. None is removed from the
-unresolved queue until its artifact passes every reader, semantic, lint, SNAG,
-and cold-load gate.
+seeds. It also remains in the queue as a graph failure. The final three smokes,
+`lmctf25`, `lmctf58`, and `xmap26`, reached the 30-minute bound. `lmctf25`
+finished base links after about 23 minutes, then timed out at
+the start of compound swim. `lmctf58` completed objective closure and wrote a
+RUNE, but generation never reached runtime-ready acceptance. `xmap26` remained
+inside base-link proof for the full bound. None of these artifacts is accepted,
+and all three maps remain in the unresolved queue. Further timing and stack
+diagnosis must separate the remaining base-link, post-base, and post-write work.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
