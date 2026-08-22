@@ -528,6 +528,7 @@ static void TestTrainGate(void)
 	button->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
 	button->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
 	button->wait_ms = 1000;
+	button->target_offset = 1U;
 	train = Node(&fixture, 20U, SG_MECH_NODE_TRAIN,
 		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
 		SG_MECH_NODEF_MOVER);
@@ -535,14 +536,17 @@ static void TestTrainGate(void)
 	train->use_callback = SG_MECH_CALLBACK_TRAIN_USE;
 	train->blocked_callback = SG_MECH_CALLBACK_BLOCKED_TRAIN;
 	train->speed_q8 = train->accel_q8 = train->decel_q8 = 2400U;
+	train->target_offset = train->targetname_offset = 1U;
 	closed = Node(&fixture, 30U, SG_MECH_NODE_PATH_CORNER,
 		SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_ONE_SHOT);
 	closed->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
 	closed->wait_ms = -1000;
+	closed->target_offset = 1U;
 	open = Node(&fixture, 40U, SG_MECH_NODE_PATH_CORNER,
 		SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_ONE_SHOT);
 	open->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
 	open->wait_ms = -1000;
+	open->target_offset = 1U;
 	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
 	Edge(&fixture, 20U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
 	Edge(&fixture, 30U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
@@ -553,6 +557,7 @@ static void TestTrainGate(void)
 	CHECK(binding.egress_node == open);
 	CHECK(binding.destination_entity == &fixture.entities[2]);
 	CHECK(binding.egress_entity == &fixture.entities[3]);
+	CheckDoorMovers(&binding, 20U, SG_MECH_NO_KEY);
 	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture.rune, 0U, &binding));
 
 	fixture.edges[1].to_key = 30U;

@@ -609,6 +609,109 @@ static int Mechanism_MaterializeTeleport(mechanism_materializer_t *state,
 	       Mechanism_AppendInventoryEdge(state, target.first);
 }
 
+static int Mechanism_TrainCornerShape(
+	const rune_mechanism_node_t *corner)
+{
+	return Mechanism_NodeExecutable(corner) &&
+	       corner->kind == SG_MECH_NODE_PATH_CORNER &&
+	       corner->flags == (SG_MECH_NODEF_TOUCHABLE |
+	           SG_MECH_NODEF_ONE_SHOT) && corner->spawnflags == 0U &&
+	       corner->touch_callback == SG_MECH_CALLBACK_PATH_CORNER_TOUCH &&
+	       corner->use_callback == SG_MECH_CALLBACK_NONE &&
+	       corner->think_callback == SG_MECH_CALLBACK_NONE &&
+	       corner->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       corner->delay_ms == 0 && corner->wait_ms == -1000 &&
+	       corner->target_offset != 0U && corner->killtarget_offset == 0U;
+}
+
+static int Mechanism_TrainNoSideEffects(
+	const mechanism_materializer_t *state, uint32_t key)
+{
+	return Mechanism_EdgeGroup(state, key, SG_MECH_EDGE_KILLTARGET).count == 0U &&
+	       Mechanism_EdgeGroup(state, key, SG_MECH_EDGE_PATH_TARGET).count == 0U;
+}
+
+static int Mechanism_MaterializeTrain(mechanism_materializer_t *state,
+	const sg_mechanism_plan_binding_t *binding)
+{
+	mechanism_edge_group_t button_target;
+	mechanism_edge_group_t train_route;
+	mechanism_edge_group_t closed_route;
+	mechanism_edge_group_t open_route;
+	const rune_mechanism_node_t *button;
+	const rune_mechanism_node_t *train;
+	const rune_mechanism_node_t *closed;
+	const rune_mechanism_node_t *open;
+	uint32_t button_index = Mechanism_FindNode(state, binding->entry_key);
+	uint32_t train_index = Mechanism_FindNode(state, binding->mover_key);
+	uint32_t closed_index = Mechanism_FindNode(state,
+		binding->destination_key);
+	uint32_t open_index = Mechanism_FindNode(state, binding->egress_key);
+
+	if (button_index == UINT32_MAX || train_index == UINT32_MAX ||
+	    closed_index == UINT32_MAX || open_index == UINT32_MAX ||
+	    binding->expected_members != 1U || binding->cooldown_ms == 0U ||
+	    binding->cooldown_ms > RUNE_MAX_COST_MS)
+		return 0;
+	button = &state->catalog->nodes[button_index];
+	train = &state->catalog->nodes[train_index];
+	closed = &state->catalog->nodes[closed_index];
+	open = &state->catalog->nodes[open_index];
+	button_target = Mechanism_EdgeGroup(state, binding->entry_key,
+		SG_MECH_EDGE_TARGET);
+	train_route = Mechanism_EdgeGroup(state, binding->mover_key,
+		SG_MECH_EDGE_ROUTE_TARGET);
+	closed_route = Mechanism_EdgeGroup(state, binding->destination_key,
+		SG_MECH_EDGE_ROUTE_TARGET);
+	open_route = Mechanism_EdgeGroup(state, binding->egress_key,
+		SG_MECH_EDGE_ROUTE_TARGET);
+	if (!Mechanism_NodeExecutable(button) ||
+	    button->kind != SG_MECH_NODE_BUTTON ||
+	    button->flags != (SG_MECH_NODEF_REPEATABLE |
+	        SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE |
+	        SG_MECH_NODEF_MOVER) ||
+	    button->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    button->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    button->think_callback != SG_MECH_CALLBACK_NONE ||
+	    button->blocked_callback != SG_MECH_CALLBACK_NONE ||
+	    button->spawnflags != 0U || button->delay_ms != 0 ||
+	    button->wait_ms <= 0 || button->target_offset == 0U ||
+	    button->killtarget_offset != 0U || button->path_target_offset != 0U ||
+	    !Mechanism_NodeExecutable(train) ||
+	    train->kind != SG_MECH_NODE_TRAIN ||
+	    train->flags != (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+	        SG_MECH_NODEF_MOVER) || train->spawnflags != 2U ||
+	    train->touch_callback != SG_MECH_CALLBACK_NONE ||
+	    train->use_callback != SG_MECH_CALLBACK_TRAIN_USE ||
+	    train->think_callback != SG_MECH_CALLBACK_NONE ||
+	    train->blocked_callback != SG_MECH_CALLBACK_BLOCKED_TRAIN ||
+	    train->delay_ms != 0 || train->speed_q8 == 0U ||
+	    train->speed_q8 != train->accel_q8 ||
+	    train->speed_q8 != train->decel_q8 ||
+	    train->target_offset == 0U || train->targetname_offset == 0U ||
+	    train->killtarget_offset != 0U || train->path_target_offset != 0U ||
+	    !Mechanism_TrainCornerShape(closed) ||
+	    !Mechanism_TrainCornerShape(open) ||
+	    !Mechanism_TrainNoSideEffects(state, binding->entry_key) ||
+	    !Mechanism_TrainNoSideEffects(state, binding->mover_key) ||
+	    !Mechanism_TrainNoSideEffects(state, binding->destination_key) ||
+	    !Mechanism_TrainNoSideEffects(state, binding->egress_key) ||
+	    button_target.count != 1U || train_route.count != 1U ||
+	    closed_route.count != 1U || open_route.count != 1U ||
+	    state->catalog->edges[button_target.first].to_key !=
+	        binding->mover_key ||
+	    state->catalog->edges[train_route.first].to_key != binding->egress_key ||
+	    state->catalog->edges[closed_route.first].to_key !=
+	        binding->egress_key ||
+	    state->catalog->edges[open_route.first].to_key !=
+	        binding->destination_key)
+		return 0;
+	return Mechanism_AppendInventoryEdge(state, button_target.first) &&
+	       Mechanism_AppendInventoryEdge(state, train_route.first) &&
+	       Mechanism_AppendInventoryEdge(state, closed_route.first) &&
+	       Mechanism_AppendInventoryEdge(state, open_route.first);
+}
+
 static int Mechanism_MaterializeDoorEntry(mechanism_materializer_t *state,
 	const sg_mechanism_plan_binding_t *binding)
 {
@@ -909,6 +1012,9 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 
 	switch (binding->controller_kind)
 	{
+	case SG_MECHANISM_CONTROLLER_TRAIN:
+		closure_ok = Mechanism_MaterializeTrain(state, binding);
+		break;
 	case SG_MECHANISM_CONTROLLER_PLATFORM:
 		closure_ok = Mechanism_MaterializePlatform(state, binding,
 			&state->links[link_index]);

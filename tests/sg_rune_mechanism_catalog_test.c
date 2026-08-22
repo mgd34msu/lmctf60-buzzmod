@@ -1398,6 +1398,7 @@ static void SetupTrainGateCatalog(void)
 	button->movetype = MOVETYPE_STOP;
 	button->solid = SOLID_BSP;
 	button->wait = button->moveinfo.wait = 1.0f;
+	button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
 	button->moveinfo.speed = button->moveinfo.accel =
 		button->moveinfo.decel = 40.0f;
 
@@ -1460,6 +1461,10 @@ static void TestPostFindTrainGateCatalog(void)
 	CHECK(SG_MechCatalogEntityExecutionMatches(1U, button,
 		SG_MECHANISM_CONTROLLER_TRAIN));
 	CHECK(SG_MechCatalogEntityExecutionMatches(2U, train,
+		SG_MECHANISM_CONTROLLER_TRAIN));
+	CHECK(SG_MechCatalogEntityExecutionMatches(3U, closed,
+		SG_MECHANISM_CONTROLLER_TRAIN));
+	CHECK(SG_MechCatalogEntityExecutionMatches(4U, open,
 		SG_MECHANISM_CONTROLLER_TRAIN));
 }
 
