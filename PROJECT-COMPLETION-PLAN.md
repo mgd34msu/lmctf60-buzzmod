@@ -87,7 +87,7 @@ after the final source freeze.
 - The authenticated `sv sg compoundhook <link>` seam stages only an exact
   published link and records approach, activation, LINKED, ATTACHED, PULL,
   release or recovery, terminal outcome, and ownership retirement.
-- The final integrated D_HOOK source checkpoint is `225101e`.
+- The canonical D_HOOK source is merged at `d5d4365`.
 
 ### Integration status
 
@@ -95,11 +95,11 @@ after the final source freeze.
       without dropping D_SWIM, D_DROP, or rocket-jump support.
 - [x] Unify the generated action contract for actions 7, 9, 10, and 11.
 - [x] Pass contract, action, codec, and source-size checks after the rebase.
-- [x] Pass the focused GNU D_HOOK suites, full GNU and Make host suites,
-      production module builds and `ldd -r` checks, and deslop with zero
-      findings at `225101e`. The verified worktree was clean.
-- [x] Merge and push the proven integrated source through `slipgate` to `main`
-      at `a226bb6`. Local and remote `slipgate` and `main` compare as zero ahead
+- [x] Pass the full GNU and Make host and module gates, `ldd -r`, and deslop
+      with zero findings on source-identical candidate `bfcabf2`. Its tracked
+      worktree was clean.
+- [x] Merge and push the proven fix stack through `slipgate` to `main` at
+      `d5d4365`. Local and remote `slipgate` and `main` compare as zero ahead
       and zero behind.
 
 ### Live candidate evidence
@@ -152,11 +152,10 @@ both passed.
 
 ## Active work: final source freeze
 
-The witness-producing fix stack remains isolated. Its canonical full gates and
-merge are in progress, so the final source and module are not frozen yet.
+Canonical D_HOOK integration is complete. Detached exact-commit freeze evidence
+is still running, so the final source and module are not frozen yet.
 
-1. Run the complete canonical gates on the witness-producing fix stack. Merge
-   the proven tree through `slipgate` to `main`.
+1. Complete detached exact-commit freeze verification on the canonical tree.
 2. Remove temporary probes, diagnostics, stale artifacts, and obsolete dormant
    assertions. Keep acceptance evidence needed for review.
 3. Regenerate all generated contracts from the final source.
@@ -237,8 +236,7 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ## Critical path
 
 ```text
-canonicalize the D_HOOK witness fixes and pass full source gates
-  -> freeze the final source and module
+freeze the final source and module from the canonical tree
   -> generate and validate all 181 RUNEs
   -> run ordinary real matches
   -> repair defects and repeat invalidated evidence
