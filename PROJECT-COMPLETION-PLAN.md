@@ -312,16 +312,16 @@ including `lmctf02a` and `lmctf04`.
       Clang host jobs, both Make dialects, and the version check.
 - [ ] Repair the missing central transition in `lmctf07`.
 
-The corrected old no-artifact queue contains 25 maps after the later accepted
-`lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, and `smap39` runs. Diagnostic
-commit `0943897` retests prove that `lmctf27` and `tomb05` remain genuine graph
-failures. `tomb05` reaches objective-core with no closed route shared by both
-flags. `lmctf27` still cannot bind either
+The corrected old no-artifact queue contains 24 maps after the later accepted
+`lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, and `xmap05` runs.
+Diagnostic commit `0943897` retests prove that `lmctf27` and `tomb05` remain
+genuine graph failures. `tomb05` reaches objective-core with no closed route
+shared by both flags. `lmctf27` still cannot bind either
 objective root because its nearest flag seeds have no outgoing links.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
-`xmap05`, `xmap12`, `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
+`xmap12`, `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
 `64344d4` module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
@@ -349,11 +349,13 @@ traversal, PUSH, hook, source-size, deslop, and unresolved-symbol gates.
 load. It has 285 seeds, 4,293 links, 496 hook links, and 4,895 ms of base-link
 CPU. Its seeds and links match the isolated scheduler run. All 3,754 ordinary
 RUN/JUMP/DROP/TELE links remain record-identical to the prior 9,899-link
-exhaustive baseline. Parallel smokes are now running for `lmctf15`,
-`lmctf25`, `lmctf58`, `tw2ctf2`, `xmap05`, `xmap12`, and `xmap26`, with an
-independent second `xmap05` run reserved for byte-determinism. None is removed
-from the unresolved queue until its artifact passes every reader, semantic,
-lint, SNAG, and cold-load gate.
+exhaustive baseline. Two independent `xmap05` runs passed generation, both C
+readers, the Python reader, lint, SNAG, and fresh cold load. Each artifact has
+2,206 seeds and 41,251 links, and the two artifacts are byte-identical.
+`xmap05` is no longer in the unresolved queue. Parallel smokes remain active
+for `lmctf15`, `lmctf25`, `lmctf58`, `tw2ctf2`, `xmap12`, and `xmap26`. None
+is removed from the unresolved queue until its artifact passes every reader,
+semantic, lint, SNAG, and cold-load gate.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
