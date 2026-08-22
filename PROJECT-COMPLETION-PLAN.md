@@ -247,17 +247,26 @@ including `lmctf02a` and `lmctf04`.
       generalizes `START_OPEN` vertical `func_door` carrier support through
       authenticated `RL_LIFT`, but it is not accepted yet. The unsuffixed
       `lmctf05` map is not an acceptance target.
-      A source-identical smoke now proves both required carrier selections.
-      The next blocker is a real bottom door, carrier, delayed top door, and
-      static-egress sequence. Its wire-neutral action-state repair remains
-      isolated and unaccepted.
+      A source-identical live run now proves four lift links and a fully shared
+      objective route core in both directions. The next fail-closed blocker is
+      mechanism-plan materialization for the newly admitted descending carrier:
+      `bad-closure link=26007 plan=1`. Its repair remains isolated and
+      unaccepted.
 - [ ] Repair the remaining maps whose objective route core is closed.
+      `smap39` is accepted at commits `8544da2`, `fed4c9f`, and `c4f9b48`.
+      The source-identical live run passed generation, both readers, semantic
+      gates, and fresh-process cold load with 998 seeds and 20,805 links. Its
+      result SHA-256 is
+      `67cc06ba71aa8237343e5dc9b18069fa476f1e4d9f48fda2f5b6171e3ccefca7`;
+      its RUNE SHA-256 is
+      `7cc6406e0f56d1d2e9441848a9826368c85ad0c0cb5594a3eca6b0b42f71eda6`.
 - [ ] Repair the missing central transition in `lmctf07`.
 
-The corrected old no-artifact queue contains 28 maps after the later accepted
-`lmctf02a`, `lmctf04`, and `smap14` runs. Current-canonical commit `0943897`
-retests prove that `lmctf27`, `smap28`, `smap39`, and `tomb05` remain genuine
-graph failures. The three `smap` or `tomb` cases still reach objective-core with
+The corrected old no-artifact queue contains 27 maps after the later accepted
+`lmctf02a`, `lmctf04`, `smap14`, and `smap39` runs. Current-canonical commit
+Diagnostic commit `0943897` retests prove that `lmctf27`, `smap28`, and
+`tomb05` remain genuine
+graph failures. The `smap28` and `tomb05` cases still reach objective-core with
 no closed route shared by both flags. `lmctf27` still cannot bind either
 objective root because its nearest flag seeds have no outgoing links.
 
