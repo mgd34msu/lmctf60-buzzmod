@@ -30,9 +30,9 @@ def main() -> None:
     for required in (
         "SG_MECH_NODEF_SHOOTABLE",
         "SG_MECH_CALLBACK_BUTTON_USE",
-        "SG_MECHANISM_CONTROLLER_TRAIN_SHOOT",
     ):
         assert required in shoot
+    assert "SG_MECHANISM_CONTROLLER_TRAIN_SHOOT" in rune
     assert "SG_OracleTrainGateShot" in rune
     assert "SG_OracleTrainGateShot" in source("slipgate/sg_oracle.c")
 
@@ -88,6 +88,20 @@ def main() -> None:
         source("g_func.c"), "void train_use", "void SP_func_train"
     )
     ordered(train_use, "SG_AuthorizeTrainUse", "self->activator = activator")
+    button_killed = between(
+        source("g_func.c"), "void button_killed", "void SP_func_button"
+    )
+    ordered(button_killed, "SG_AuthorizeButtonShot", "self->activator = attacker")
+
+    for required in (
+        "SG_TRAIN_GATE_COMMAND_EQUIP",
+        "SG_TRAIN_GATE_COMMAND_AIM_BUTTON",
+        "SG_TRAIN_GATE_COMMAND_SHOOT_BUTTON",
+        "SG_BlasterAimAngles",
+        "BUTTON_ATTACK",
+        "SG_TrainGateGameAuthorizeButtonShot",
+    ):
+        assert required in game
 
     move = source("slipgate/sg_move.c")
     for seam in (
