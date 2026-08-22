@@ -407,6 +407,8 @@
     <ClCompile Include="slipgate\sg_rocketjump_live.c" />
     <ClCompile Include="slipgate\sg_rocketjump_cadence.c" />
     <ClCompile Include="slipgate\sg_rocketjump_game.c" />
+    <ClCompile Include="slipgate\sg_push_live.c" />
+    <ClCompile Include="slipgate\sg_push_game.c" />
     <ClCompile Include="slipgate\sg_arach.c" />
     <ClCompile Include="slipgate\sg_localization.c" />
     <ClCompile Include="slipgate\sg_pickup_target.c" />
@@ -536,6 +538,8 @@
     <ClInclude Include="slipgate\sg_drop_live.h" />
     <ClInclude Include="slipgate\sg_swim_live.h" />
     <ClInclude Include="slipgate\sg_hook_live.h" />
+    <ClInclude Include="slipgate\sg_push_live.h" />
+    <ClInclude Include="slipgate\sg_push_game.h" />
     <ClInclude Include="ui_stats.h" />
     <ClInclude Include="ui_text.h" />
     <ClInclude Include="ui_layout.h" />
