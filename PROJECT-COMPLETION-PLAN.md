@@ -301,6 +301,13 @@ including `lmctf02a` and `lmctf04`.
       the bot alive inside the destination envelope. Its captured-session
       SHA-256 is
       `e790bf96f5faeaf01543ab1b77187175b95848e083161f42daa4710bb8a1c402`.
+      Published exact-head CI at `ce54608` passed Windows x86 and x64 and the
+      packaged Linux build, but both Clang host jobs rejected a near-`INT_MAX`
+      integer bound that rounded upward when compared with a float. Commit
+      `576497d` keeps that price and bound in `double`. The formerly failing
+      focused PUSH build now passes under Clang with both Make dialects, its
+      runtime test passes, and the deslop audit remains at zero findings.
+      Replacement exact-head CI is pending.
 - [ ] Repair the missing central transition in `lmctf07`.
 
 The corrected old no-artifact queue contains 25 maps after the later accepted
