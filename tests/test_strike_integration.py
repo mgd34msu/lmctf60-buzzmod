@@ -89,6 +89,7 @@ class StrikeIntegrationTest(unittest.TestCase):
                     "slipgate/sg_util.c",
                     "slipgate/sg_drop_live.c",
                     "slipgate/sg_swim_live.c",
+                    "slipgate/sg_push_live.c",
                     "slipgate/sg_defense_supply.c",
                     "slipgate/sg_action.c", "slipgate/sg_traversal_transition.c",
                 ])
