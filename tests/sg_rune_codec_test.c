@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_crc32.h"
@@ -1123,6 +1124,44 @@ static void TestRocketJumpControlCodec(void)
 		ValidatePlanlessFixture(&fixture));
 }
 
+static void TestPushNodeCodec(void)
+{
+	fixture_t fixture;
+	unsigned char encoded[SG_RUNE_CODEC_ACTIVATION_NODE_BYTES];
+	sg_rune_codec_activation_node_t decoded;
+	uint32_t crc = 0U;
+
+	FixtureInit(&fixture);
+	CHECK(SG_RUNE_CODEC_ACTIVATION_NODE_BYTES == 92U);
+	fixture.nodes[0].kind = SG_RUNE_CODEC_NODE_PUSH;
+	fixture.nodes[0].flags = SG_RUNE_CODEC_NODEF_REPEATABLE |
+		SG_RUNE_CODEC_NODEF_TOUCHABLE;
+	fixture.nodes[0].touch_callback =
+		SG_RUNE_CODEC_CALLBACK_TRIGGER_PUSH_TOUCH;
+	fixture.nodes[0].push_velocity[0] = -59.2648315f;
+	fixture.nodes[0].push_velocity[1] = 0.0f;
+	fixture.nodes[0].push_velocity[2] = 846.765747f;
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncodeActivationNode(
+		&fixture.nodes[0], encoded, sizeof(encoded)));
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecDecodeActivationNode(
+		encoded, sizeof(encoded), &decoded));
+	CHECK(memcmp(decoded.push_velocity, fixture.nodes[0].push_velocity,
+		sizeof(decoded.push_velocity)) == 0);
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecPushClosureCRC32(
+		decoded.key, decoded.push_velocity, &crc));
+	CHECK(crc != 0U);
+
+	fixture.nodes[0].push_velocity[0] = NAN;
+	CHECK_DIAGNOSTIC(RLCODEC_BAD_ACTIVATION_NODE,
+		SG_RuneCodecEncodeActivationNode(&fixture.nodes[0], encoded,
+			sizeof(encoded)));
+	FixtureInit(&fixture);
+	fixture.nodes[0].push_velocity[2] = 1.0f;
+	CHECK_DIAGNOSTIC(RLCODEC_BAD_ACTIVATION_NODE,
+		SG_RuneCodecEncodeActivationNode(&fixture.nodes[0], encoded,
+			sizeof(encoded)));
+}
+
 int main(void)
 {
 	TestPrimitiveGolden();
@@ -1132,6 +1171,7 @@ int main(void)
 	TestWholeMalformed();
 	TestEmptyMechanismCompatibility();
 	TestRocketJumpControlCodec();
+	TestPushNodeCodec();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_rune_codec_test: %d failure(s)\n", failures);

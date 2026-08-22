@@ -94,18 +94,21 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_DOOR, RLFB_INHERIT, 0,
 	  "RL_BUTTON_DOOR", "BUTTON_DOOR",
 	  "B_DOOR", "#ff9f0a" },
+	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0027U, RLEP_DRY_BOTH,
+	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+		  RL_PUSH, RLFB_NONE, 0, "RL_PUSH", "PUSH", "PUSH", "#b76cff" },
 };
 
 static void TestActions(void)
 {
 	static const int runtime_owns_control[SG_ACTION_COUNT] =
-		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1 };
+		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1 };
 	static const int uses_hook_policy[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
+		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 };
 	static const int field_bias_at_rope_1000[SG_ACTION_COUNT] =
-		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000, 0 };
+		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000, 0, 0 };
 	static const unsigned int traits[] =
 	{
 		SG_ACTF_OWNS_CONTROL, SG_ACTF_BALLISTIC,
@@ -308,7 +311,7 @@ static void TestEndpointPolicies(void)
 		{ 1, 1, 1, 0 }, { 0, 1, 1, 1 }, { 1, 1, 1, 1 },
 		{ 1, 1, 1, 1 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 },
 		{ 1, 1, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 1, 0 },
-		{ 1, 0, 0, 0 }
+		{ 1, 0, 0, 0 }, { 1, 0, 0, 0 }
 	};
 	int action, policy;
 

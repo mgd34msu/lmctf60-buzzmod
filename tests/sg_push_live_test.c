@@ -1,0 +1,116 @@
+#include "q_shared.h"
+#include "slipgate/sg_push_live.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static int failures;
+
+#define CHECK(condition_) do { \
+	if (!(condition_)) { \
+		fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, \
+			#condition_); \
+		failures++; \
+	} \
+} while (0)
+
+static void Fixture(sg_push_witness_t *witness,
+	sg_push_observation_t *observation)
+{
+	memset(witness, 0, sizeof(*witness));
+	memset(observation, 0, sizeof(*observation));
+	witness->link_index = 7;
+	witness->entry_key = 17U;
+	witness->source_q8[0] = observation->origin_q8[0] = 800;
+	witness->source_q8[1] = observation->origin_q8[1] = -1600;
+	witness->source_q8[2] = observation->origin_q8[2] = 256;
+	witness->destination_q8[0] = 2400;
+	witness->destination_q8[1] = -1600;
+	witness->destination_q8[2] = 768;
+	witness->push_velocity[0] = 0.0f;
+	witness->push_velocity[1] = -59.2648315f;
+	witness->push_velocity[2] = 846.765747f;
+	witness->cost_ms = 1200U;
+	observation->alive = true;
+	observation->grounded = true;
+	observation->dry = true;
+}
+
+static void TestExactTouchAndZeroFlight(void)
+{
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+
+	Fixture(&witness, &observation);
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(state.phase == SG_PUSH_APPROACH);
+	CHECK(SG_PushLiveOwns(&state));
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
+		witness.push_velocity));
+	CHECK(state.phase == SG_PUSH_FLIGHT);
+	observation.grounded = false;
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
+	CHECK(SG_PushLiveBoundary(&state, false, false));
+	CHECK(SG_PushLiveBoundary(&state, true, true));
+	CHECK(state.phase == SG_PUSH_COMPLETE);
+	CHECK(!SG_PushLiveOwns(&state));
+}
+
+static void TestTouchIdentityAndRawBitsFailClosed(void)
+{
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+	float actual[3];
+
+	Fixture(&witness, &observation);
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(!SG_PushLiveTouched(&state, witness.entry_key + 1U,
+		witness.push_velocity));
+	CHECK(state.failure == SG_PUSH_FAILURE_TOUCH);
+
+	Fixture(&witness, &observation);
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	memcpy(actual, witness.push_velocity, sizeof(actual));
+	actual[0] = -0.0f;
+	CHECK(!SG_PushLiveTouched(&state, witness.entry_key, actual));
+	CHECK(state.failure == SG_PUSH_FAILURE_IMPULSE);
+}
+
+static void TestBadWitnessAndTimeout(void)
+{
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+
+	Fixture(&witness, &observation);
+	witness.push_velocity[2] = NAN;
+	CHECK(!SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(state.failure == SG_PUSH_FAILURE_WITNESS);
+
+	Fixture(&witness, &observation);
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
+		witness.push_velocity));
+	CHECK(!SG_PushLiveStep(&state,
+		(int)witness.cost_ms + SG_PUSH_ARRIVAL_GRACE_MS + 1));
+	CHECK(state.failure == SG_PUSH_FAILURE_TIMEOUT);
+}
+
+int main(void)
+{
+	TestExactTouchAndZeroFlight();
+	TestTouchIdentityAndRawBitsFailClosed();
+	TestBadWitnessAndTimeout();
+	if (failures)
+	{
+		fprintf(stderr, "sg_push_live_test: %d failure(s)\n", failures);
+		return 1;
+	}
+	puts("sg_push_live_test: ok");
+	return 0;
+}

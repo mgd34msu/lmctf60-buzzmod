@@ -1303,6 +1303,44 @@ static void TestTinyPositiveDelayStaysAsynchronous(void)
 	CHECK(!SG_MechCatalogEntityTopologyMatches(1U, relay_node));
 }
 
+static void TestPushVelocitySealed(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *node;
+	edict_t *push;
+	vec3_t expected;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 2;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "trigger_push");
+	push = &test_edicts[1];
+	push->touch = trigger_push_touch;
+	push->solid = SOLID_TRIGGER;
+	push->speed = 85.0f;
+	VectorSet(push->movedir, -0.0697246f, 0.0f, 0.9975641f);
+	VectorScale(push->movedir, push->speed * 10.0f, expected);
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	node = NodeByKey(&view, 1U);
+	CHECK(node && node->kind == SG_MECH_NODE_PUSH);
+	CHECK(node && memcmp(node->push_velocity, expected,
+		sizeof(expected)) == 0);
+	CHECK(node && SG_MechCatalogEntityExecutionMatches(1U, node,
+		SG_MECHANISM_CONTROLLER_PUSH));
+	push->speed = 90.0f;
+	CHECK(node && !SG_MechCatalogEntityTopologyMatches(1U, node));
+}
+
 int main(void)
 {
 	TestSealedCatalog();
@@ -1315,6 +1353,7 @@ int main(void)
 	TestFrameCompleteButtonSealGates();
 	TestFrameCompleteButtonCurrentness();
 	TestTinyPositiveDelayStaysAsynchronous();
+	TestPushVelocitySealed();
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism catalog test(s) failed\n", failures);

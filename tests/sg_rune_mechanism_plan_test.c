@@ -241,7 +241,10 @@ static void FixtureFinish(fixture_t *fixture)
 	CHECK(fixture->result.num_inventory_edges == fixture->num_inventory);
 	CHECK(fixture->result.num_plans == 1U);
 	CHECK(fixture->plans[0].first_edge == fixture->num_inventory);
-	CHECK(fixture->plans[0].num_edges != 0U);
+	if (fixture->links[0].action == RL_PUSH)
+		CHECK(fixture->plans[0].num_edges == 0U);
+	else
+		CHECK(fixture->plans[0].num_edges != 0U);
 	CHECK(fixture->links[0].mechanism_plan == 0U);
 	CHECK(fixture->links[1].mechanism_plan == RUNE_NO_MECHANISM_PLAN);
 }
@@ -309,6 +312,8 @@ static void CodecNode(const rune_mechanism_node_t *source,
 	memcpy(destination->absmax_q8, source->absmax_q8,
 		sizeof(destination->absmax_q8));
 	destination->path_target_offset = source->path_target_offset;
+	memcpy(destination->push_velocity, source->push_velocity,
+		sizeof(destination->push_velocity));
 }
 
 static sg_rune_codec_diagnostic_t CodecValidationDiagnostic(
@@ -1091,6 +1096,45 @@ static void TestOnePlanPerLink(void)
 	CHECK(result.diagnostic == SG_MECHANISM_PLAN_BAD_BINDING);
 }
 
+static void TestPush(void)
+{
+	static const char *const strings[] = { "trigger_push" };
+	fixture_t fixture;
+	rune_mechanism_node_t *push;
+	uint32_t closure_crc = 0U;
+
+	FixtureInit(&fixture, RL_PUSH);
+	Strings(&fixture, strings, 1U);
+	push = Node(&fixture, 1U, SG_MECH_NODE_PUSH, "trigger_push");
+	push->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE;
+	push->touch_callback = SG_MECH_CALLBACK_TRIGGER_PUSH_TOUCH;
+	push->push_velocity[0] = -59.2648315f;
+	push->push_velocity[2] = 846.765747f;
+	fixture.binding.entry_key = 1U;
+	fixture.binding.mover_key = SG_MECH_NO_KEY;
+	fixture.binding.destination_key = SG_MECH_NO_KEY;
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_PUSH;
+	fixture.binding.expected_members = 1U;
+	fixture.binding.cooldown_ms = 0U;
+	FixtureFinish(&fixture);
+	CHECK(fixture.result.num_edges == 0U);
+	CHECK(fixture.plans[0].first_edge == 0U);
+	CHECK(fixture.plans[0].num_edges == 0U);
+	CHECK(fixture.plans[0].mover_key == SG_MECH_NO_KEY);
+	CHECK(fixture.plans[0].controller_kind ==
+		SG_MECHANISM_CONTROLLER_PUSH);
+	CHECK(fixture.plans[0].flags ==
+		(SG_MECHANISM_PLANF_TOUCH | SG_MECHANISM_PLANF_ATOMIC));
+	CHECK(SG_RuneCodecPushClosureCRC32(push->key,
+		push->push_velocity, &closure_crc) == RLCODEC_OK);
+	CHECK(fixture.plans[0].closure_crc32 == closure_crc);
+
+	push->push_velocity[2] = 0.0f;
+	CHECK(!SG_MechanismPlansMaterialize(fixture.links, 2U,
+		&fixture.binding, 1U, &fixture.catalog, &fixture.buffers,
+		&fixture.result));
+}
+
 int main(void)
 {
 	TestPlatform();
@@ -1103,10 +1147,12 @@ int main(void)
 	TestDirectDoorFullClosure();
 	TestDelayedSoundTerminal();
 	TestOnePlanPerLink();
+	TestPush();
 	CHECK((covered_actions & (UINT32_C(1) << RL_LIFT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_TELEPORT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_DOOR)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_BUTTON_DOOR)) != 0U);
+	CHECK((covered_actions & (UINT32_C(1) << RL_PUSH)) != 0U);
 	if (failures)
 	{
 		fprintf(stderr, "sg_rune_mechanism_plan_test: %d failure(s)\n",

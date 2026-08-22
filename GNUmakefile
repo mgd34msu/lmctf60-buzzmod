@@ -747,6 +747,10 @@ ROCKETJUMP_LIVE_TEST_BIN = sg_rocketjump_live_test.gnu
 ROCKETJUMP_LIVE_TEST_OBJS = .sg_rocketjump_live_test.gnu.o \
 	.sg_rocketjump_live_under_test.gnu.o
 ROCKETJUMP_LIVE_TEST_DEPS = $(ROCKETJUMP_LIVE_TEST_OBJS:.o=.d)
+PUSH_LIVE_TEST_BIN = sg_push_live_test.gnu
+PUSH_LIVE_TEST_OBJS = .sg_push_live_test.gnu.o \
+	.sg_push_live_under_test.gnu.o
+PUSH_LIVE_TEST_DEPS = $(PUSH_LIVE_TEST_OBJS:.o=.d)
 ROCKETJUMP_CADENCE_TEST_BIN = sg_rocketjump_cadence_test.gnu
 ROCKETJUMP_CADENCE_TEST_OBJS = .sg_rocketjump_cadence_test.gnu.o \
 	.sg_rocketjump_cadence_under_test.gnu.o
@@ -762,6 +766,7 @@ ROCKETJUMP_TEST_ALL_ARTIFACTS = \
 	sg_rocketjump_cadence_test.gnu sg_rocketjump_cadence_test.make \
 	sg_rocketjump_game_test.gnu sg_rocketjump_game_test.make \
 	$(ROCKETJUMP_LIVE_TEST_OBJS) $(ROCKETJUMP_LIVE_TEST_DEPS) \
+	$(PUSH_LIVE_TEST_OBJS) $(PUSH_LIVE_TEST_DEPS) \
 	$(ROCKETJUMP_CADENCE_TEST_OBJS) $(ROCKETJUMP_CADENCE_TEST_DEPS) \
 	$(ROCKETJUMP_GAME_TEST_OBJS) $(ROCKETJUMP_GAME_TEST_DEPS)
 HOOK_INTEGRATION_TEST = tests/test_hook_live_integration.py
@@ -1405,6 +1410,9 @@ $(RUN_HANDOFF_TEST_BIN): $(RUN_HANDOFF_TEST_OBJS)
 $(ROCKETJUMP_LIVE_TEST_BIN): $(ROCKETJUMP_LIVE_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(ROCKETJUMP_LIVE_TEST_OBJS) $(LDFLAGS)
 
+$(PUSH_LIVE_TEST_BIN): $(PUSH_LIVE_TEST_OBJS)
+	$(CC) -Wl,--gc-sections -o $@ $(PUSH_LIVE_TEST_OBJS) $(LDFLAGS)
+
 $(ROCKETJUMP_CADENCE_TEST_BIN): $(ROCKETJUMP_CADENCE_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(ROCKETJUMP_CADENCE_TEST_OBJS) $(LDFLAGS)
 
@@ -1545,6 +1553,18 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_rocketjump_live_under_test.gnu.o: slipgate/sg_rocketjump_live.c \
 		slipgate/sg_rocketjump_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_push_live_test.gnu.o: tests/sg_push_live_test.c \
+		slipgate/sg_push_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_push_live_under_test.gnu.o: slipgate/sg_push_live.c \
+		slipgate/sg_push_live.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -2778,6 +2798,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(REPLAY_TEST_BIN) $(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
 		$(ROCKETJUMP_LIVE_TEST_BIN) $(ROCKETJUMP_CADENCE_TEST_BIN) \
+		$(PUSH_LIVE_TEST_BIN) \
 		$(ROCKETJUMP_GAME_TEST_BIN) \
 		$(COMPOUND_SWIM_LIVE_INTEGRATION_TEST) \
 		$(COMPOUND_SWIM_GAME_TEST_BIN) \
@@ -2884,6 +2905,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(SWIM_LIVE_TEST_BIN)
 	./$(COMPOUND_SWIM_LIVE_TEST_BIN)
 	./$(ROCKETJUMP_LIVE_TEST_BIN)
+	./$(PUSH_LIVE_TEST_BIN)
 	./$(ROCKETJUMP_CADENCE_TEST_BIN)
 	./$(ROCKETJUMP_GAME_TEST_BIN)
 	python3 $(COMPOUND_SWIM_LIVE_INTEGRATION_TEST)
@@ -3339,6 +3361,7 @@ endif
 -include $(SWIM_LIVE_TEST_DEPS)
 -include $(COMPOUND_SWIM_LIVE_TEST_DEPS)
 -include $(ROCKETJUMP_LIVE_TEST_DEPS)
+-include $(PUSH_LIVE_TEST_DEPS)
 -include $(ROCKETJUMP_CADENCE_TEST_DEPS)
 -include $(ROCKETJUMP_GAME_TEST_DEPS)
 -include $(COMPOUND_DROP_LIVE_TEST_DEPS)
