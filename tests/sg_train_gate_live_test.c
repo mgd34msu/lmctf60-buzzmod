@@ -112,6 +112,12 @@ static void TestSweepSides(void)
 	CHECK(SG_TrainGateUniqueSourceSide(0U) == SG_TRAIN_GATE_SIDE_NONE);
 	CHECK(SG_TrainGateUniqueSourceSide(1U << 31) ==
 	    SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateUniquePassageAxis(1U << 0, 2U) == 0);
+	CHECK(SG_TrainGateUniquePassageAxis(1U << 1, 2U) == 1);
+	CHECK(SG_TrainGateUniquePassageAxis(0U, 2U) == -1);
+	CHECK(SG_TrainGateUniquePassageAxis((1U << 0) | (1U << 1), 2U) == -1);
+	CHECK(SG_TrainGateUniquePassageAxis(1U << 2, 2U) == -1);
+	CHECK(SG_TrainGateUniquePassageAxis(1U << 0, 3U) == -1);
 }
 
 static void Activate(sg_train_gate_state_t *state,
