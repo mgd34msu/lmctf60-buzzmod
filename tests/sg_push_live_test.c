@@ -1,4 +1,4 @@
-#include "q_shared.h"
+#include "g_local.h"
 #include "slipgate/sg_push_live.h"
 
 #include <math.h>
@@ -114,11 +114,21 @@ static void TestBadWitnessAndTimeout(void)
 
 static void TestLandingHealthRequirement(void)
 {
+	float landing_velocity;
+	float production_delta;
+	int production_damage;
 	int minimum_health = -1;
 
 	CHECK(SG_PushMinimumHealth(-360.0f, -303.0f, 846.765747f, 800.0f,
 		true, &minimum_health));
 	CHECK(minimum_health == 38);
+	landing_velocity = -sqrtf(846.765747f * 846.765747f +
+		2.0f * 800.0f * (-360.0f - -303.0f + 72.0f));
+	production_delta = P_FallDelta(landing_velocity, 0.0f, true, 0);
+	production_damage = (int)((production_delta - 30.0f) * 0.5f);
+	if (production_damage < 1)
+		production_damage = 1;
+	CHECK(minimum_health == production_damage + SG_PUSH_HEALTH_RESERVE + 1);
 	CHECK(SG_PushMinimumHealth(0.0f, 0.0f, 0.0f, 800.0f, true,
 		&minimum_health));
 	CHECK(minimum_health == 16);

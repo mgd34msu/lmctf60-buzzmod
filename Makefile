@@ -647,7 +647,7 @@ ROCKETJUMP_LIVE_TEST_OBJS := .sg_rocketjump_live_test.make.o \
 ROCKETJUMP_LIVE_TEST_DEPS := $(ROCKETJUMP_LIVE_TEST_OBJS:.o=.d)
 PUSH_LIVE_TEST_BIN := sg_push_live_test.make
 PUSH_LIVE_TEST_OBJS := .sg_push_live_test.make.o \
-	.sg_push_live_under_test.make.o
+	.sg_push_live_under_test.make.o .sg_push_falling_under_test.make.o
 PUSH_LIVE_TEST_DEPS := $(PUSH_LIVE_TEST_OBJS:.o=.d)
 ROCKETJUMP_CADENCE_TEST_BIN := sg_rocketjump_cadence_test.make
 ROCKETJUMP_CADENCE_TEST_OBJS := .sg_rocketjump_cadence_test.make.o \
@@ -1726,6 +1726,13 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. \
 		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_push_falling_under_test.make.o: p_view.c g_local.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -Wno-strict-prototypes -Wno-unused-parameter \
+		-ffunction-sections -fdata-sections -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_rocketjump_cadence_test.make.o: tests/sg_rocketjump_cadence_test.c \
 		slipgate/sg_rocketjump_cadence.h $(REVISION_HEADER)
