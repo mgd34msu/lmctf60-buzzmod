@@ -9,6 +9,12 @@
 
 #define SG_RUNE_BINDING_MAX_MOVERS 16U
 
+typedef enum sg_carrier_door_stage_e
+{
+	SG_CARRIER_DOOR_APPROACH = 0,
+	SG_CARRIER_DOOR_EGRESS = 1
+} sg_carrier_door_stage_t;
+
 struct edict_s;
 
 typedef struct sg_rune_mechanism_binding_s
@@ -71,6 +77,23 @@ int SG_RuneMechanismBindingMoverKeys(
 int SG_RuneMechanismBindingTopologyMoverKeys(
 	const sg_rune_mechanism_binding_t *binding,
 	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out);
+
+int SG_RuneMechanismBindingAuxDoorMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out);
+struct edict_s *SG_RuneMechanismBindingAuxTrigger(
+	const sg_rune_mechanism_binding_t *binding);
+int SG_RuneMechanismBindingAuxTriggerMatches(
+	const sg_rune_mechanism_binding_t *binding, const struct edict_s *entity);
+
+int SG_RuneMechanismBindingCarrierStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, struct edict_s **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out);
+int SG_RuneMechanismBindingCarrierStageTriggerMatches(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, const struct edict_s *entity);
 
 /* Fail closed unless every link governed by an admitted map mechanism can be
  * captured against the sealed live catalog before graph publication. */

@@ -15,6 +15,7 @@ typedef struct sg_mechanism_plan_binding_s
 	uint32_t entry_key;
 	uint32_t mover_key;
 	uint32_t destination_key;
+	uint32_t egress_key;
 	uint16_t controller_kind;
 	uint16_t expected_members;
 	uint32_t cooldown_ms;

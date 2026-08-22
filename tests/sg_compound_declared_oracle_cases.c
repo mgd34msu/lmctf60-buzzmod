@@ -225,6 +225,165 @@ static void TestDeclaredActivatorDelayedSoundTerminal(void)
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 }
 
+static void TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *speaker;
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "CabinGate";
+	door->delay = 1.0f;
+	door->moveinfo.distance = 120.0f;
+	VectorCopy(door->moveinfo.start_origin, door->moveinfo.end_origin);
+	door->moveinfo.end_origin[2] += 120.0f;
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 0.2f;
+	trigger->target = "CabinGate";
+
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+
+	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
+	speaker->inuse = true;
+	speaker->classname = "target_speaker";
+	speaker->use = Use_Target_Speaker;
+	speaker->targetname = "CabinBell";
+	door->target = "CabinBell";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	door->target = NULL;
+	door->message = "opening";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+}
+
+static void TestCompoundLiftAdmitsOnlySameDoorSetSibling(void)
+{
+	edict_t *door;
+	edict_t *foreign;
+	edict_t *selected;
+	edict_t *sibling;
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "CabinGate";
+	foreign = GuardDoor(GUARD_MEMBER_KEY);
+	foreign->targetname = "ForeignGate";
+	selected = &fixture_edicts[GUARD_TRIGGER_KEY];
+	sibling = &fixture_edicts[GUARD_SOURCE_KEY];
+	memset(selected, 0, sizeof(*selected));
+	selected->inuse = true;
+	selected->classname = "trigger_multiple";
+	selected->solid = SOLID_TRIGGER;
+	selected->movetype = MOVETYPE_NONE;
+	selected->touch = Touch_Multi;
+	selected->wait = 0.2f;
+	selected->target = door->targetname;
+	*sibling = *selected;
+	sibling->s.number = GUARD_SOURCE_KEY;
+	CHECK(SG_OracleDeclaredApproachTriggerAllowed(
+	    RL_LIFT, selected, sibling));
+
+	sibling->target = foreign->targetname;
+	CHECK(!SG_OracleDeclaredApproachTriggerAllowed(
+	    RL_LIFT, selected, sibling));
+	sibling->target = door->targetname;
+	CHECK(!SG_OracleDeclaredApproachTriggerAllowed(
+	    RL_TELEPORT, selected, sibling));
+}
+
+static void TestCompoundLiftDelayedTopDoorShape(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	uint32_t delay_ms = 0U;
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "TopGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 0.2f;
+	trigger->delay = 0.5f;
+	trigger->target = door->targetname;
+	CHECK(SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms));
+	CHECK(delay_ms == 500U);
+	CHECK(!SG_DeclaredDoorDirectActivatorSafe(trigger));
+
+	trigger->delay = 0.0f;
+	CHECK(!SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms));
+	trigger->delay = 0.5f;
+	trigger->killtarget = "TopGate";
+	CHECK(!SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms));
+}
+
+static void TestCompoundLiftDirectTopDoorMembers(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	vec3_t top_body = { 160.0f, 0.0f, 0.0f };
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "TopGate";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 0.2f;
+	trigger->target = door->targetname;
+	Set3(trigger->absmin, 159.0f, -24.0f, -40.0f);
+	Set3(trigger->absmax, 161.0f, 24.0f, 40.0f);
+	CHECK(SG_DeclaredDoorDirectActivatorSafe(trigger));
+	CHECK(SG_RuneTestLiftEgressDoorMemberCount(top_body) == 1);
+}
+
+static void TestCarrierEgressEnvelopeIncludesPlayerHull(void)
+{
+	float nearest = sqrtf(144.0f * 144.0f + 32.0f * 32.0f);
+	float brush_and_lattice = sqrtf(49.0f * 49.0f + 49.0f * 49.0f) +
+	    64.0f;
+	float radius = SG_RuneTestLiftEgressSearchRadius(49.0f, 49.0f);
+
+	CHECK(brush_and_lattice < nearest);
+	CHECK(radius >= nearest);
+	CHECK(fabsf(radius - brush_and_lattice - 16.0f) < 0.001f);
+}
+
+static void TestCarrierDirectionIsSignedNeutral(void)
+{
+	edict_t platform;
+	int ascending;
+	int descending;
+
+	memset(&platform, 0, sizeof(platform));
+	platform.moveinfo.speed = 20.0f;
+	platform.moveinfo.accel = 20.0f;
+	platform.moveinfo.decel = 20.0f;
+	ascending = SG_RuneTestPlatformTravelMs(&platform, 0.0f, 128.0f);
+	descending = SG_RuneTestPlatformTravelMs(&platform, 128.0f, 0.0f);
+	CHECK(ascending == 6400);
+	CHECK(descending == ascending);
+	CHECK(SG_RuneTestLiftEgressSpans(0.0f, 128.0f, 0.0f, 100.0f));
+	CHECK(!SG_RuneTestLiftEgressSpans(0.0f, 128.0f, 0.0f, 50.0f));
+	CHECK(SG_RuneTestLiftEgressSpans(128.0f, 0.0f, 128.0f, 28.0f));
+	CHECK(!SG_RuneTestLiftEgressSpans(128.0f, 0.0f, 128.0f, 78.0f));
+}
+
 static void TestDeclaredActivatorRejectsTeamAuthorityDrift(void)
 {
 	edict_t *master;
@@ -556,6 +715,12 @@ int SG_CompoundDeclaredOracleCasesRun(void)
 	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
 	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
 	TestDeclaredActivatorDelayedSoundTerminal();
+	TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay();
+	TestCompoundLiftAdmitsOnlySameDoorSetSibling();
+	TestCompoundLiftDelayedTopDoorShape();
+	TestCompoundLiftDirectTopDoorMembers();
+	TestCarrierEgressEnvelopeIncludesPlayerHull();
+	TestCarrierDirectionIsSignedNeutral();
 	TestDeclaredActivatorRejectsTeamAuthorityDrift();
 	TestDeclaredActivatorRejectsMalformedWorldBounds();
 	TestDeclaredDoorHoldMembersIsAtomic();

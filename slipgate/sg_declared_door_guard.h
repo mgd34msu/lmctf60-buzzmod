@@ -11,6 +11,8 @@ struct edict_s;
  * the process-wide mover guard. */
 sg_compound_guard_result_t SG_DeclaredDoorGuardAcquire(
 	struct sg_bot_s *bot, int link_index);
+sg_compound_guard_result_t SG_DeclaredCarrierDoorGuardAcquire(
+	struct sg_bot_s *bot, int link_index, int stage);
 sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorize(
 	struct sg_bot_s *bot, int link_index);
 /* Exact first-mutation authority: tuple authorization plus a fresh proof that

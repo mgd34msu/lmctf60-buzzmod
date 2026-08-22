@@ -8,6 +8,11 @@
 #include "slipgate/sg_rocketjump_live.h"
 #include "slipgate/sg_rune.h"
 
+void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surface);
+void Touch_Plat_Center(edict_t *ent, edict_t *other, cplane_t *plane,
+	csurface_t *surface);
+
 int SG_TeamIdx(int team)
 {
 	return team - CTF_TEAM_RED;
@@ -359,27 +364,13 @@ qboolean SG_TeleportApproachPoint(edict_t *pad, vec3_t approach)
  * the top postpones the return timer, so a waiting bot must get its whole
  * player hull outside before it can wait safely.  Return an XY escape point
  * only while the current body overlaps that expanded trigger footprint. */
-qboolean SG_LiftWaitPoint(edict_t *plat, const vec3_t origin, vec3_t wait)
+qboolean SG_LiftWaitPoint(edict_t *trigger, const vec3_t origin, vec3_t wait)
 {
-	edict_t *trigger = NULL;
 	float lo_x, hi_x, lo_y, hi_y;
 	float distances[4];
 	int i, side = 0;
 
-	if (!plat)
-		return false;
-	for (i = 0; i < globals.num_edicts; i++)
-	{
-		edict_t *candidate = &g_edicts[i];
-
-		if (candidate->inuse && candidate->solid == SOLID_TRIGGER &&
-		    candidate->enemy == plat)
-		{
-			trigger = candidate;
-			break;
-		}
-	}
-	if (!trigger)
+	if (!trigger || !trigger->inuse || trigger->solid != SOLID_TRIGGER)
 		return false;
 
 	/* Player hull is [-16,+16] in XY.  Two extra units clear linkentity's
@@ -407,16 +398,29 @@ qboolean SG_LiftWaitPoint(edict_t *plat, const vec3_t origin, vec3_t wait)
 	return true;
 }
 
-/* Client physics can clear groundentity before SV_Push translates a rider;
- * SG_RunFrame then observes the translated body with no ground pointer.  The
- * geometry after the pusher loop is authoritative: touching the top plane and
- * overlapping the platform footprint means this body is still being carried. */
+/* Client physics can clear groundentity before SV_Push translates a rider.
+ * Prefer the authoritative support pointer, then the live downward hull trace;
+ * the top-plane check preserves the stock func_plat fallback. */
 qboolean SG_LiftRider(edict_t *plat, edict_t *body)
 {
+	vec3_t end;
+	trace_t tr;
 	float feet;
 
 	if (!plat || !body || !plat->inuse || !body->inuse)
 		return false;
+	if (body->groundentity == plat)
+		return true;
+	if (sg_host.trace)
+	{
+		VectorCopy(body->s.origin, end);
+		end[2] -= 4.0f;
+		tr = sg_host.trace(body->s.origin, body->mins, body->maxs, end,
+		                   body, MASK_PLAYERSOLID);
+		if (!tr.startsolid && !tr.allsolid && tr.fraction < 1.0f &&
+		    tr.ent == plat && tr.plane.normal[2] >= 0.7f)
+			return true;
+	}
 	feet = body->s.origin[2] + body->mins[2];
 	if (fabsf(feet - plat->absmax[2]) > 4.0f)
 		return false;
@@ -426,29 +430,62 @@ qboolean SG_LiftRider(edict_t *plat, edict_t *body)
 	       body->absmin[1] < plat->absmax[1] - 1.0f;
 }
 
-/* Resolve the exact fixed-point player origin resting at a raised lift's
- * centre. Inline brush-model maxs include collision padding, so arithmetic
- * `origin + maxs + 24` is one unit above the physical top on stock maps and
- * Pmove will not categorize it as grounded. Trace the production player hull
- * onto the actual linked platform instead, then quantize exactly as
- * ClientThink/SG_OraclePlace do. Generation and live activation share this
- * result so the egress witness begins from the state runtime establishes. */
-qboolean SG_LiftTopRest(edict_t *plat, edict_t *passent, vec3_t rest)
+/* Resolve the exact fixed-point rider origin at the linked lift pose. Stock
+ * platforms support the body on their top plane; enclosed door carriers support
+ * it on the cabin floor selected by the physical trigger. Trace the production
+ * player hull onto the actual BSP, then quantize as ClientThink/SG_OraclePlace
+ * do so generation and live activation begin from the same state. */
+qboolean SG_LiftRest(edict_t *entry, edict_t *plat, edict_t *passent,
+	vec3_t rest)
 {
 	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
 	vec3_t start, end;
 	trace_t tr;
-	int axis;
+	int axis, attempt;
+	static const float lifts[] = { 8.0f, 24.0f, 40.0f, 56.0f };
 
-	if (!plat || !rest || !plat->inuse || !plat->classname ||
-	    strcmp(plat->classname, "func_plat") != 0)
+	if (!entry || !plat || !rest || !entry->inuse || !plat->inuse ||
+	    !plat->classname)
 		return false;
-	start[0] = plat->s.origin[0] + (plat->mins[0] + plat->maxs[0]) * 0.5f;
-	start[1] = plat->s.origin[1] + (plat->mins[1] + plat->maxs[1]) * 0.5f;
-	start[2] = plat->s.origin[2] + plat->maxs[2] + 24.0f;
-	VectorCopy(start, end);
-	end[2] -= 8.0f;
-	tr = sg_host.trace(start, mins, maxs, end, passent, MASK_PLAYERSOLID);
+	if (!strcmp(plat->classname, "func_plat") &&
+	    entry->touch == Touch_Plat_Center)
+	{
+		start[0] = plat->s.origin[0] +
+		    (plat->mins[0] + plat->maxs[0]) * 0.5f;
+		start[1] = plat->s.origin[1] +
+		    (plat->mins[1] + plat->maxs[1]) * 0.5f;
+		start[2] = plat->s.origin[2] + plat->maxs[2] + 24.0f;
+		VectorCopy(start, end);
+		end[2] -= 8.0f;
+		tr = sg_host.trace(start, mins, maxs, end, passent,
+		                   MASK_PLAYERSOLID);
+	}
+	else if (!strcmp(plat->classname, "func_door") &&
+	         entry->touch == Touch_Multi)
+	{
+		vec3_t delta;
+
+		VectorSubtract(plat->s.origin, plat->moveinfo.start_origin, delta);
+		for (axis = 0; axis < 3; axis++)
+			start[axis] =
+			    (entry->absmin[axis] + entry->absmax[axis]) * 0.5f +
+			    delta[axis];
+		for (attempt = 0; attempt < 4; attempt++)
+		{
+			start[2] += lifts[attempt];
+			VectorCopy(start, end);
+			end[2] -= 128.0f + lifts[attempt];
+			tr = sg_host.trace(start, mins, maxs, end, passent,
+			                   MASK_PLAYERSOLID);
+			start[2] -= lifts[attempt];
+			if (!tr.startsolid && !tr.allsolid)
+				break;
+		}
+		if (attempt == 4)
+			return false;
+	}
+	else
+		return false;
 	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f ||
 	    tr.ent != plat || tr.plane.normal[2] < 0.7f)
 		return false;

@@ -414,6 +414,26 @@ int SG_RuneMechanismBindingMoverKeys(
 	return unique_count > 0U;
 }
 
+int SG_RuneMechanismBindingCarrierStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, edict_t **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out)
+{
+	(void)binding;
+	(void)stage;
+	if (trigger_out)
+		*trigger_out = NULL;
+	if (keys_out)
+		memset(keys_out, 0,
+		    SG_RUNE_BINDING_MAX_MOVERS * sizeof(keys_out[0]));
+	if (key_count_out)
+		*key_count_out = 0U;
+	if (delay_ms_out)
+		*delay_ms_out = 0U;
+	return 0;
+}
+
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source)
 {
 	legacy_resolver_calls++;

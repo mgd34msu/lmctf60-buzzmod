@@ -137,6 +137,12 @@ void trigger_relay_use(edict_t *self, edict_t *other,
 void Use_Target_Speaker(edict_t *self, edict_t *other,
 	edict_t *activator);
 int SG_RuneTestDoorCooldownGapMs(edict_t *trigger);
+float SG_RuneTestLiftEgressSearchRadius(float halfx, float halfy);
+int SG_RuneTestPlatformTravelMs(edict_t *platform, float source_z,
+	float destination_z);
+qboolean SG_RuneTestLiftEgressSpans(float source_z, float destination_z,
+	float source_body_z, float egress_body_z);
+int SG_RuneTestLiftEgressDoorMemberCount(const vec3_t top_body);
 trace_t HostTrace(const vec3_t start, const vec3_t mins,
 	const vec3_t maxs, const vec3_t end, edict_t *passent, int mask);
 int HostPointContents(const vec3_t point);

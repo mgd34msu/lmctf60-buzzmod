@@ -115,6 +115,16 @@ static void Targetname(rune_mechanism_node_t *node,
 		node->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
 }
 
+static void TriggerBounds(rune_mechanism_node_t *node, int16_t center_x_q8)
+{
+	node->absmin_q8[0] = (int16_t)(center_x_q8 - 64);
+	node->absmax_q8[0] = (int16_t)(center_x_q8 + 64);
+	node->absmin_q8[1] = -64;
+	node->absmax_q8[1] = 64;
+	node->absmin_q8[2] = -64;
+	node->absmax_q8[2] = 64;
+}
+
 static void Edge(fixture_t *fixture, uint32_t from_key, uint32_t to_key,
 	uint16_t kind, uint16_t ordinal)
 {
@@ -200,6 +210,7 @@ static void FixtureInit(fixture_t *fixture, int action)
 	fixture->links[1].cost_ms = 100;
 	fixture->links[1].mechanism_plan = RUNE_NO_MECHANISM_PLAN;
 	fixture->binding.destination_key = SG_MECH_NO_KEY;
+	fixture->binding.egress_key = SG_MECH_NO_KEY;
 	covered_actions |= UINT32_C(1) << action;
 }
 
@@ -419,6 +430,203 @@ static void TestPlatform(void)
 	fixture.binding.expected_members = 1U;
 	FixtureFinish(&fixture);
 	CodecValidate(&fixture);
+}
+
+static void TestTriggeredVerticalDoorLift(void)
+{
+	static const char *const strings[] = {
+		"cabin_gate", "func_door", "lift", "trigger_multiple"
+	};
+	fixture_t fixture;
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *mover;
+	rune_mechanism_node_t *approach;
+	rune_mechanism_node_t *sibling;
+	rune_mechanism_node_t *gate;
+
+	FixtureInit(&fixture, RL_LIFT);
+	Strings(&fixture, strings, 4U);
+	entry = Node(&fixture, 1U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		"trigger_multiple");
+	entry->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE;
+	entry->owner_key = 2U;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	entry->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	entry->wait_ms = 200;
+	Target(entry, &fixture, "lift");
+	mover = Node(&fixture, 2U, SG_MECH_NODE_PLATFORM, "func_door");
+	mover->flags = SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_TEAM_MASTER;
+	mover->team_master_key = 2U;
+	mover->spawnflags = 5U;
+	mover->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	mover->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	Targetname(mover, &fixture, "lift");
+	approach = Node(&fixture, 3U, SG_MECH_NODE_TRIGGER,
+		"trigger_multiple");
+	approach->flags = SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE;
+	approach->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	approach->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	approach->wait_ms = 200;
+	TriggerBounds(approach, 0);
+	Target(approach, &fixture, "cabin_gate");
+	gate = Door(&fixture, 4U, 4U, 1);
+	Targetname(gate, &fixture, "cabin_gate");
+	sibling = Node(&fixture, 5U, SG_MECH_NODE_TRIGGER,
+		"trigger_multiple");
+	sibling->flags = SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE;
+	sibling->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	sibling->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	sibling->wait_ms = 200;
+	TriggerBounds(sibling, 0);
+	Target(sibling, &fixture, "cabin_gate");
+	Edge(&fixture, 1U, 2U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 1U, 2U, SG_MECH_EDGE_OWNER, 0U);
+	Edge(&fixture, 3U, 4U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 5U, 4U, SG_MECH_EDGE_TARGET, 0U);
+	fixture.binding.entry_key = 1U;
+	fixture.binding.mover_key = 2U;
+	fixture.binding.destination_key = 3U;
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_PLATFORM;
+	fixture.binding.expected_members = 2U;
+	fixture.binding.cooldown_ms = 200U;
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].num_edges == 4U);
+	CodecValidate(&fixture);
+}
+
+static void BuildTwoStageCarrier(fixture_t *fixture,
+	uint32_t approach_delay_ms, uint32_t egress_delay_ms,
+	int ambiguous_anchor, int overlapping_doors)
+{
+	static const char *const strings[] = {
+		"bottom_gate", "func_door", "lift", "top_gate",
+		"trigger_multiple"
+	};
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *mover;
+	rune_mechanism_node_t *bottom;
+	rune_mechanism_node_t *bottom_door;
+	rune_mechanism_node_t *top;
+	rune_mechanism_node_t *top_door;
+	rune_mechanism_edge_t *top_edge;
+
+	FixtureInit(fixture, RL_LIFT);
+	Strings(fixture, strings, 5U);
+	entry = Node(fixture, 1U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		"trigger_multiple");
+	entry->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE;
+	entry->owner_key = 2U;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	entry->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	entry->wait_ms = 200;
+	Target(entry, fixture, "lift");
+	mover = Node(fixture, 2U, SG_MECH_NODE_PLATFORM, "func_door");
+	mover->flags = SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_TEAM_MASTER;
+	mover->team_master_key = 2U;
+	mover->spawnflags = 5U;
+	mover->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	mover->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	Targetname(mover, fixture, "lift");
+	bottom = Node(fixture, 3U, SG_MECH_NODE_TRIGGER,
+		"trigger_multiple");
+	bottom->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE;
+	bottom->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	bottom->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	bottom->delay_ms = (int32_t)approach_delay_ms;
+	bottom->wait_ms = 200;
+	Target(bottom, fixture, "bottom_gate");
+	TriggerBounds(bottom, 0);
+	bottom_door = Door(fixture, 4U, 4U, 1);
+	Targetname(bottom_door, fixture, "bottom_gate");
+	top = Node(fixture, 5U, SG_MECH_NODE_TRIGGER, "trigger_multiple");
+	top->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE;
+	top->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	top->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	top->delay_ms = (int32_t)egress_delay_ms;
+	top->wait_ms = 200;
+	Target(top, fixture, overlapping_doors ? "bottom_gate" : "top_gate");
+	TriggerBounds(top, ambiguous_anchor ? 0 : 800);
+	top_door = Door(fixture, 6U, 6U, 1);
+	Targetname(top_door, fixture, "top_gate");
+	Edge(fixture, 1U, 2U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(fixture, 1U, 2U, SG_MECH_EDGE_OWNER, 0U);
+	Edge(fixture, 3U, 4U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(fixture, 5U, overlapping_doors ? 4U : 6U,
+		SG_MECH_EDGE_TARGET, 0U);
+	top_edge = InventoryEdge(fixture, 5U,
+		overlapping_doors ? 4U : 6U);
+	CHECK(top_edge != NULL);
+	if (top_edge)
+		top_edge->delay_ms = egress_delay_ms;
+	top_edge = InventoryEdge(fixture, 3U, 4U);
+	CHECK(top_edge != NULL);
+	if (top_edge)
+		top_edge->delay_ms = approach_delay_ms;
+	fixture->links[0].anchor[0] = 0.0f;
+	fixture->binding.entry_key = 1U;
+	fixture->binding.mover_key = 2U;
+	fixture->binding.destination_key = 3U;
+	fixture->binding.egress_key = 5U;
+	fixture->binding.controller_kind = SG_MECHANISM_CONTROLLER_PLATFORM;
+	fixture->binding.expected_members = 3U;
+	fixture->binding.cooldown_ms = 200U;
+}
+
+static void TestTriggeredVerticalDoorLiftWithDelayedEgress(void)
+{
+	fixture_t fixture;
+	rune_mechanism_edge_t *top_edge;
+
+	BuildTwoStageCarrier(&fixture, 0U, 500U, 0, 0);
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].num_edges == 4U);
+	CodecValidate(&fixture);
+
+	top_edge = InventoryEdge(&fixture, 5U, 6U);
+	CHECK(top_edge != NULL);
+	if (top_edge)
+		top_edge->delay_ms = 0U;
+	ExpectDoorMaterializationFailure(&fixture);
+}
+
+static void TestDescendingCarrierStageIdentity(void)
+{
+	fixture_t fixture;
+
+	BuildTwoStageCarrier(&fixture, 1000U, 0U, 0, 0);
+	fixture.nodes[1].spawnflags = 4U;
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].num_edges == 4U);
+	CodecValidate(&fixture);
+
+	BuildTwoStageCarrier(&fixture, 500U, 500U, 0, 0);
+	fixture.nodes[1].spawnflags = 4U;
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+
+	TriggerBounds(&fixture.nodes[4], 0);
+	CHECK(CodecValidationDiagnostic(&fixture) ==
+		RLCODEC_BAD_ACTIVATION_PLAN);
+
+	BuildTwoStageCarrier(&fixture, 1000U, 0U, 0, 0);
+	fixture.nodes[1].spawnflags = 4U;
+	FixtureFinish(&fixture);
+	TriggerBounds(&fixture.nodes[4], 0);
+	ExpectDoorMaterializationFailure(&fixture);
+
+	BuildTwoStageCarrier(&fixture, 1000U, 0U, 0, 0);
+	fixture.nodes[1].spawnflags = 4U;
+	FixtureFinish(&fixture);
+	InventoryEdge(&fixture, 5U, 6U)->to_key = 4U;
+	ExpectDoorMaterializationFailure(&fixture);
 }
 
 static void TestTeleport(void)
@@ -886,6 +1094,9 @@ static void TestOnePlanPerLink(void)
 int main(void)
 {
 	TestPlatform();
+	TestTriggeredVerticalDoorLift();
+	TestTriggeredVerticalDoorLiftWithDelayedEgress();
+	TestDescendingCarrierStageIdentity();
 	TestTeleport();
 	TestAutoDoor();
 	TestButtonDoor();

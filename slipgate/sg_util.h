@@ -71,9 +71,10 @@ qboolean SG_EscortTerminal(edict_t *bot, edict_t *target);
 #define SG_PLAT_STATE_BOTTOM 1
 #define SG_PLAT_STATE_UP     2
 #define SG_PLAT_STATE_DOWN   3
-qboolean SG_LiftWaitPoint(edict_t *plat, const vec3_t origin, vec3_t wait);
+qboolean SG_LiftWaitPoint(edict_t *entry, const vec3_t origin, vec3_t wait);
 qboolean SG_LiftRider(edict_t *plat, edict_t *body);
-qboolean SG_LiftTopRest(edict_t *plat, edict_t *passent, vec3_t rest);
+qboolean SG_LiftRest(edict_t *entry, edict_t *plat, edict_t *passent,
+	vec3_t rest);
 qboolean SG_TeleportApproachPoint(edict_t *pad, vec3_t approach);
 
 

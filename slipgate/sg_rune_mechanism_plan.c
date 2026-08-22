@@ -4,6 +4,7 @@
 #include "sg_crc32.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -201,6 +202,25 @@ static int Mechanism_AppendInventoryEdge(mechanism_materializer_t *state,
 	return 1;
 }
 
+static int Mechanism_AppendPlatformTriggerEdge(
+	mechanism_materializer_t *state, uint32_t inventory_index,
+	uint32_t delay_ms)
+{
+	uint32_t plan_edges = state->result.num_edges - state->first_plan_edge;
+
+	if (inventory_index >= state->catalog->num_edges ||
+	    state->catalog->edges[inventory_index].kind != SG_MECH_EDGE_TARGET ||
+	    state->catalog->edges[inventory_index].delay_ms != delay_ms ||
+	    state->buffers->edge_marks[inventory_index] == state->generation ||
+	    state->result.num_edges >= state->buffers->edge_capacity ||
+	    plan_edges >= RUNE_MAX_MECHANISM_PLAN_EDGES)
+		return 0;
+	state->buffers->edge_marks[inventory_index] = state->generation;
+	state->buffers->edges[state->result.num_edges++] =
+		state->catalog->edges[inventory_index];
+	return 1;
+}
+
 static int Mechanism_AddMaster(mechanism_materializer_t *state,
 	uint32_t node_index)
 {
@@ -253,25 +273,284 @@ static int Mechanism_AddSideEffect(mechanism_materializer_t *state,
 	return 1;
 }
 
+static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
+	uint32_t expected_physical);
+
+static int Mechanism_PlatformDoorTriggerShape(
+	const rune_mechanism_node_t *node, uint32_t delay_ms)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TRIGGER &&
+	       node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_MULTI &&
+	       (node->flags & (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE)) ==
+	           (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+	            SG_MECH_NODEF_USABLE) &&
+	       node->delay_ms >= 0 && (uint32_t)node->delay_ms == delay_ms &&
+	       node->wait_ms > 0 &&
+	       node->target_offset != 0U && node->killtarget_offset == 0U &&
+	       node->path_target_offset == 0U;
+}
+
+static int Mechanism_SameTargetGroup(const mechanism_materializer_t *state,
+	mechanism_edge_group_t left, mechanism_edge_group_t right,
+	uint32_t delay_ms)
+{
+	uint32_t index;
+
+	if (left.count == 0U || left.count != right.count)
+		return 0;
+	for (index = 0U; index < left.count; index++)
+	{
+		const rune_mechanism_edge_t *a =
+			&state->catalog->edges[left.first + index];
+		const rune_mechanism_edge_t *b =
+			&state->catalog->edges[right.first + index];
+
+		if (a->to_key != b->to_key || a->ordinal != b->ordinal ||
+		    a->delay_ms != delay_ms || b->delay_ms != delay_ms)
+			return 0;
+	}
+	return 1;
+}
+
+static int Mechanism_TriggerContainsAnchor(
+	const rune_mechanism_node_t *node, const rune_link_t *link)
+{
+	static const int hull_min_q8[3] = { -136, -136, -200 };
+	static const int hull_max_q8[3] = { 136, 136, 264 };
+	int axis;
+
+	if (!node || !link)
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled = link->anchor[axis] * 8.0f;
+		int anchor_q8;
+
+		if (!isfinite(scaled) || scaled != (float)(int)scaled)
+			return 0;
+		anchor_q8 = (int)scaled;
+		if (anchor_q8 + hull_max_q8[axis] <= node->absmin_q8[axis] ||
+		    anchor_q8 + hull_min_q8[axis] >= node->absmax_q8[axis])
+			return 0;
+	}
+	return 1;
+}
+
+static int Mechanism_PlatformStageContainsAnchor(
+	const mechanism_materializer_t *state, uint32_t trigger_key,
+	const rune_link_t *link)
+{
+	uint32_t reference_index = Mechanism_FindNode(state, trigger_key);
+	mechanism_edge_group_t reference;
+	uint32_t node_index;
+	uint32_t delay_ms;
+	int contains = 0;
+
+	if (reference_index == UINT32_MAX ||
+	    state->catalog->nodes[reference_index].delay_ms < 0)
+		return -1;
+	delay_ms = (uint32_t)state->catalog->nodes[reference_index].delay_ms;
+	reference = Mechanism_EdgeGroup(state, trigger_key,
+		SG_MECH_EDGE_TARGET);
+	if (reference.count == 0U)
+		return -1;
+	for (node_index = 0U; node_index < state->catalog->num_nodes;
+	     node_index++)
+	{
+		const rune_mechanism_node_t *node =
+			&state->catalog->nodes[node_index];
+		mechanism_edge_group_t candidate;
+
+		if (!Mechanism_PlatformDoorTriggerShape(node, delay_ms) ||
+		    node->target_offset !=
+		        state->catalog->nodes[reference_index].target_offset)
+			continue;
+		candidate = Mechanism_EdgeGroup(state, node->key,
+			SG_MECH_EDGE_TARGET);
+		if (!Mechanism_SameTargetGroup(state, reference, candidate, delay_ms))
+			return -1;
+		if (Mechanism_TriggerContainsAnchor(node, link))
+			contains = 1;
+	}
+	return contains;
+}
+
+static int Mechanism_MaterializePlatformDoorStage(
+	mechanism_materializer_t *state, uint32_t trigger_key,
+	uint32_t delay_ms)
+{
+	uint32_t reference_index = Mechanism_FindNode(state,
+		trigger_key);
+	mechanism_edge_group_t reference;
+	uint32_t node_index;
+	uint32_t edge_index;
+
+	if (reference_index == UINT32_MAX ||
+	    !Mechanism_PlatformDoorTriggerShape(
+	        &state->catalog->nodes[reference_index], delay_ms))
+		return 0;
+	reference = Mechanism_EdgeGroup(state, trigger_key,
+		SG_MECH_EDGE_TARGET);
+	if (reference.count == 0U)
+		return 0;
+	for (edge_index = 0U; edge_index < reference.count; edge_index++)
+	{
+		uint32_t destination_index = Mechanism_FindNode(state,
+			state->catalog->edges[reference.first + edge_index].to_key);
+		const rune_mechanism_node_t *destination;
+
+		if (destination_index == UINT32_MAX)
+			return 0;
+		destination = &state->catalog->nodes[destination_index];
+		if (destination->kind == SG_MECH_NODE_DOOR_MASTER)
+		{
+			if (!Mechanism_AddMaster(state, destination_index))
+				return 0;
+		}
+		else if (destination->kind == SG_MECH_NODE_DOOR_MEMBER)
+		{
+			uint32_t master;
+			int seen = 0;
+
+			for (master = 0U; master < state->master_count; master++)
+				if (state->catalog->nodes[
+				    state->master_indices[master]].key ==
+				    destination->team_master_key)
+					seen = 1;
+			if (!seen)
+				return 0;
+		}
+		else
+			return 0;
+	}
+	if (state->master_count == 0U)
+		return 0;
+	for (node_index = 0U; node_index < state->catalog->num_nodes; node_index++)
+	{
+		const rune_mechanism_node_t *node =
+			&state->catalog->nodes[node_index];
+		mechanism_edge_group_t candidate;
+
+		if (!Mechanism_PlatformDoorTriggerShape(node, delay_ms) ||
+		    node->target_offset !=
+		        state->catalog->nodes[reference_index].target_offset)
+			continue;
+		candidate = Mechanism_EdgeGroup(state, node->key,
+			SG_MECH_EDGE_TARGET);
+		if (!Mechanism_SameTargetGroup(state, reference, candidate,
+		        delay_ms))
+			return 0;
+		for (edge_index = 0U; edge_index < candidate.count; edge_index++)
+			if (!Mechanism_AppendPlatformTriggerEdge(state,
+			        candidate.first + edge_index, delay_ms))
+				return 0;
+	}
+	return 1;
+}
+
 static int Mechanism_MaterializePlatform(mechanism_materializer_t *state,
-	const sg_mechanism_plan_binding_t *binding)
+	const sg_mechanism_plan_binding_t *binding, const rune_link_t *owner_link)
 {
 	mechanism_edge_group_t owner = Mechanism_EdgeGroup(state,
 		binding->entry_key, SG_MECH_EDGE_OWNER);
+	mechanism_edge_group_t target = Mechanism_EdgeGroup(state,
+		binding->entry_key, SG_MECH_EDGE_TARGET);
 	uint32_t entry = Mechanism_FindNode(state, binding->entry_key);
 	uint32_t mover = Mechanism_FindNode(state, binding->mover_key);
+	const rune_mechanism_node_t *entry_node;
+	const rune_mechanism_node_t *mover_node;
+	uint32_t cooldown;
 
-	return entry != UINT32_MAX && mover != UINT32_MAX &&
-	       state->catalog->nodes[entry].kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
-	       state->catalog->nodes[entry].touch_callback ==
-	           SG_MECH_CALLBACK_TOUCH_PLAT_CENTER &&
-	       (state->catalog->nodes[entry].flags & SG_MECH_NODEF_SYNTHETIC) != 0U &&
-	       state->catalog->nodes[mover].kind == SG_MECH_NODE_PLATFORM &&
-	       binding->destination_key == SG_MECH_NO_KEY &&
-	       binding->expected_members == 1U && binding->cooldown_ms == 0U &&
-	       owner.count == 1U &&
-	       state->catalog->edges[owner.first].to_key == binding->mover_key &&
-	       Mechanism_AppendInventoryEdge(state, owner.first);
+	if (entry == UINT32_MAX || mover == UINT32_MAX)
+		return 0;
+	entry_node = &state->catalog->nodes[entry];
+	mover_node = &state->catalog->nodes[mover];
+	if (entry_node->kind != SG_MECH_NODE_PLATFORM_TRIGGER ||
+	    mover_node->kind != SG_MECH_NODE_PLATFORM ||
+	    owner.count != 1U ||
+	    state->catalog->edges[owner.first].to_key != binding->mover_key)
+		return 0;
+	if (entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_PLAT_CENTER)
+		return (entry_node->flags & SG_MECH_NODEF_SYNTHETIC) != 0U &&
+		       binding->destination_key == SG_MECH_NO_KEY &&
+		       binding->egress_key == SG_MECH_NO_KEY &&
+		       binding->expected_members == 1U &&
+		       binding->cooldown_ms == 0U && target.count == 0U &&
+		       Mechanism_AppendInventoryEdge(state, owner.first);
+	cooldown = entry_node->wait_ms > RUNE_MAX_COST_MS
+		? (uint32_t)RUNE_MAX_COST_MS : (uint32_t)entry_node->wait_ms;
+	if (!(entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&
+	       entry_node->use_callback == SG_MECH_CALLBACK_USE_MULTI &&
+	       (entry_node->flags & (SG_MECH_NODEF_SYNTHETIC |
+	           SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+	           SG_MECH_NODEF_USABLE)) ==
+	           (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+	            SG_MECH_NODEF_USABLE) &&
+	       entry_node->delay_ms == 0 && entry_node->wait_ms > 0 &&
+	       entry_node->killtarget_offset == 0U &&
+	       entry_node->path_target_offset == 0U &&
+	       mover_node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+	       mover_node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR &&
+	       SG_RuneCarrierDoorSpawnflags(mover_node->spawnflags) &&
+	       (mover_node->flags & (SG_MECH_NODEF_MOVER |
+	           SG_MECH_NODEF_TEAM_MASTER | SG_MECH_NODEF_SHOOTABLE)) ==
+	           (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER) &&
+	       binding->cooldown_ms == cooldown && target.count == 1U &&
+	       state->catalog->edges[target.first].to_key == binding->mover_key &&
+	       Mechanism_AppendInventoryEdge(state, target.first) &&
+	       Mechanism_AppendInventoryEdge(state, owner.first)))
+		return 0;
+	if (binding->destination_key == SG_MECH_NO_KEY)
+		return binding->egress_key == SG_MECH_NO_KEY &&
+		       binding->expected_members == 1U;
+	if (binding->egress_key != SG_MECH_NO_KEY)
+	{
+		uint32_t approach_index = Mechanism_FindNode(state,
+			binding->destination_key);
+		uint32_t egress_index = Mechanism_FindNode(state,
+			binding->egress_key);
+		const rune_mechanism_node_t *approach;
+		const rune_mechanism_node_t *egress;
+
+		if (approach_index == UINT32_MAX || egress_index == UINT32_MAX)
+			return 0;
+		approach = &state->catalog->nodes[approach_index];
+		egress = &state->catalog->nodes[egress_index];
+		if (approach->delay_ms < 0 || egress->delay_ms < 0 ||
+		    Mechanism_PlatformStageContainsAnchor(state,
+		        binding->destination_key, owner_link) != 1 ||
+		    Mechanism_PlatformStageContainsAnchor(state,
+		        binding->egress_key, owner_link) != 0 ||
+		    !Mechanism_MaterializePlatformDoorStage(state,
+		        binding->destination_key, (uint32_t)approach->delay_ms) ||
+		    !Mechanism_MaterializePlatformDoorStage(state,
+		        binding->egress_key, (uint32_t)egress->delay_ms))
+			return 0;
+		return binding->expected_members > 2U &&
+		       Mechanism_MaterializeDoorClosure(state,
+		           binding->expected_members - 1U);
+	}
+	if (binding->expected_members <= 1U)
+		return 0;
+	{
+		uint32_t approach_index = Mechanism_FindNode(state,
+			binding->destination_key);
+		const rune_mechanism_node_t *approach;
+
+		if (approach_index == UINT32_MAX)
+			return 0;
+		approach = &state->catalog->nodes[approach_index];
+		return approach->delay_ms >= 0 &&
+		       Mechanism_PlatformStageContainsAnchor(state,
+		           binding->destination_key, owner_link) == 1 &&
+	       Mechanism_MaterializePlatformDoorStage(state,
+	           binding->destination_key, (uint32_t)approach->delay_ms) &&
+	       Mechanism_MaterializeDoorClosure(state,
+	           binding->expected_members - 1U);
+	}
 }
 
 static int Mechanism_MaterializeTeleport(mechanism_materializer_t *state,
@@ -450,7 +729,7 @@ static int Mechanism_MaterializeDoorEntry(mechanism_materializer_t *state,
 }
 
 static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
-	const sg_mechanism_plan_binding_t *binding)
+	uint32_t expected_physical)
 {
 	uint32_t physical_count = 0U;
 	uint32_t i;
@@ -492,7 +771,7 @@ static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
 			physical_count++;
 		}
 	}
-	if (physical_count != binding->expected_members)
+	if (physical_count != expected_physical)
 		return 0;
 
 	/* Door members call G_UseTargets after movement. Preserve every admitted
@@ -600,7 +879,8 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	switch (binding->controller_kind)
 	{
 	case SG_MECHANISM_CONTROLLER_PLATFORM:
-		closure_ok = Mechanism_MaterializePlatform(state, binding);
+		closure_ok = Mechanism_MaterializePlatform(state, binding,
+			&state->links[link_index]);
 		break;
 	case SG_MECHANISM_CONTROLLER_TELEPORT:
 		closure_ok = Mechanism_MaterializeTeleport(state, binding);
@@ -609,7 +889,8 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	case SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR:
 	case SG_MECHANISM_CONTROLLER_BUTTON_DOOR:
 		closure_ok = Mechanism_MaterializeDoorEntry(state, binding) &&
-			Mechanism_MaterializeDoorClosure(state, binding);
+			Mechanism_MaterializeDoorClosure(state,
+			    binding->expected_members);
 		break;
 	default:
 		closure_ok = 0;

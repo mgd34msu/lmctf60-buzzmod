@@ -296,9 +296,15 @@ qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	const vec3_t anchor, edict_t *pad, float old_frame_z,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
 qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
-	edict_t *expected, int action, int *arrival_ms);
+	edict_t *entry, edict_t *support, int action, int *arrival_ms);
+qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
+	const vec3_t target, edict_t *entry, edict_t *support,
+	edict_t *approach_door, int *arrival_ms);
 qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	edict_t *support, int *arrival_ms);
+qboolean SG_OracleDeclaredCompoundLiftEgress(const vec3_t source,
+	const vec3_t target, edict_t *support, edict_t *egress_trigger,
+	int *arrival_ms);
 /* Exact repeatable-door declaration. The resolver accepts only a unique,
  * safe trigger whose anchor/source still match the generated contract. One
  * trigger may own several independent door teams; generation temporarily
@@ -306,6 +312,11 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source);
 qboolean SG_DeclaredDoorActivatorSafe(edict_t *trigger);
 qboolean SG_DeclaredDoorDirectActivatorSafe(edict_t *trigger);
+qboolean SG_DeclaredDoorDelayedActivatorSafe(edict_t *trigger,
+	uint32_t *delay_ms_out);
+qboolean SG_DeclaredDelayedDoorTouchMatches(edict_t *trigger,
+	const vec3_t activator_origin);
+qboolean SG_DeclaredDelayedDoorSameSet(edict_t *first, edict_t *second);
 qboolean SG_DeclaredButtonDoorSafe(edict_t *button);
 qboolean SG_OracleStablePopulationTrace(const vec3_t start,
 	const vec3_t mins, const vec3_t maxs, const vec3_t end,
@@ -344,6 +355,8 @@ qboolean SG_OracleReplaySourceEvents(edict_t *ent,
 	qboolean *contaminated, qboolean *door_passed);
 int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
 	int capacity);
+int SG_DeclaredDelayedDoorMembers(edict_t *trigger, edict_t **members,
+	int capacity);
 int SG_DeclaredDoorTriggerWaitMs(edict_t *trigger);
 struct sg_rune_mechanism_binding_s;
 /* Game-side mover ownership must not retire while any retained player,
@@ -359,6 +372,10 @@ qboolean SG_MoverProspectivePusherValid(edict_t *member);
 qboolean SG_MoverSubjectOutsideProspectivePush(edict_t *member,
 	edict_t *subject);
 qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin);
+qboolean SG_DeclaredDelayedDoorOutsideSweep(edict_t *trigger,
+	const vec3_t origin);
+qboolean SG_DeclaredDelayedDoorCrossesSweep(edict_t *trigger,
+	const vec3_t from, const vec3_t to);
 qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 	const vec3_t to);
 qboolean SG_DeclaredDoorAtTop(edict_t *trigger);
@@ -389,6 +406,8 @@ int SG_DeclaredDoorContractCost(edict_t *trigger, int approach_ms,
 	int touch_ms, int egress_ms);
 qboolean SG_DeclaredDoorTouchMatches(edict_t *trigger,
 	const vec3_t activator_origin);
+qboolean SG_OracleDeclaredApproachTriggerAllowed(int action,
+	edict_t *declared, edict_t *actual);
 qboolean SG_DeclaredDoorActivationMatches(edict_t *trigger,
 	edict_t *door_master, const vec3_t activator_origin);
 qboolean SG_DeclaredDoorEquivalentTouch(edict_t *expected,
@@ -398,6 +417,8 @@ qboolean SG_DeclaredDoorEquivalentActivation(edict_t *expected,
 	const vec3_t activator_origin);
 qboolean SG_DeclaredDoorSameSet(edict_t *first, edict_t *second);
 qboolean SG_DeclaredDoorApproachSourceClear(edict_t *trigger,
+	const vec3_t origin);
+qboolean SG_DeclaredDelayedDoorApproachSourceClear(edict_t *trigger,
 	const vec3_t origin);
 qboolean SG_OracleDeclaredDoorStepSafe(edict_t *ent, edict_t *trigger,
 	const usercmd_t *cmd);

@@ -23,4 +23,9 @@
 #define RUNE_MIN_COST_MS 1
 #define RUNE_MAX_COST_MS 30000
 
+static inline int SG_RuneCarrierDoorSpawnflags(uint32_t spawnflags)
+{
+	return spawnflags == UINT32_C(4) || spawnflags == UINT32_C(5);
+}
+
 #endif /* SG_RUNE_CONTRACT_H */

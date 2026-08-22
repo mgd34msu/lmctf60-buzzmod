@@ -159,12 +159,20 @@ typedef enum sg_mech_motion_state_e
 	SG_MECH_MOTION_TO_ORIGIN = 3
 } sg_mech_motion_state_t;
 
+typedef enum sg_mech_platform_profile_e
+{
+	SG_MECH_PLATFORM_PROFILE_NONE = 0,
+	SG_MECH_PLATFORM_PROFILE_STOCK,
+	SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER
+} sg_mech_platform_profile_t;
+
 typedef struct sg_mech_execution_state_s
 {
 	uint16_t controller_kind;
 	uint16_t node_kind;
 	uint16_t think_role;
 	uint16_t end_role;
+	uint16_t platform_profile;
 	int motion_state;
 	int fixed_callbacks_match;
 	int touch_matches;
@@ -205,10 +213,17 @@ static inline int SG_MechExecutionStateValid(
 		       state->end_role == SG_MECH_EXEC_END_NONE &&
 		       (state->think_role == SG_MECH_EXEC_THINK_SEALED ||
 		        state->think_role == SG_MECH_EXEC_THINK_MULTI_WAIT);
+	if (state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
+	    state->node_kind == SG_MECH_NODE_TRIGGER)
+		return state->touch_matches && !state->touch_cleared &&
+		       state->end_role == SG_MECH_EXEC_END_NONE &&
+		       (state->think_role == SG_MECH_EXEC_THINK_SEALED ||
+		        state->think_role == SG_MECH_EXEC_THINK_MULTI_WAIT);
 	if ((state->controller_kind == SG_MECHANISM_CONTROLLER_AUTO_DOOR ||
 	     state->controller_kind ==
 	         SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
-	     state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR) &&
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM) &&
 	    door_mover)
 	{
 		if ((!state->touch_matches && !state->touch_cleared) ||
@@ -267,32 +282,61 @@ static inline int SG_MechExecutionStateValid(
 		         state->end_role == SG_MECH_EXEC_END_BUTTON_ORIGIN));
 	}
 	if (state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
+	    state->node_kind == SG_MECH_NODE_PLATFORM_TRIGGER)
+	{
+		if (!state->touch_matches || state->touch_cleared ||
+		    state->end_role != SG_MECH_EXEC_END_NONE || !state->stopped)
+			return 0;
+		if (state->think_role == SG_MECH_EXEC_THINK_SEALED)
+			return !state->nextthink_pending;
+		return state->think_role == SG_MECH_EXEC_THINK_MULTI_WAIT &&
+		       state->nextthink_pending;
+	}
+	if (state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
 	    state->node_kind == SG_MECH_NODE_PLATFORM)
 	{
+		int carrier = state->platform_profile ==
+			SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER;
+		int stock = state->platform_profile ==
+			SG_MECH_PLATFORM_PROFILE_STOCK;
+
+		if (!carrier && !stock)
+			return 0;
 		if (!state->touch_matches || state->touch_cleared ||
 		    state->end_role == SG_MECH_EXEC_END_UNKNOWN)
 			return 0;
-		moving = SG_MechExecutionMovingThink(state->think_role, 0, 1);
+		moving = SG_MechExecutionMovingThink(state->think_role, 0, stock);
 		if (state->think_role == SG_MECH_EXEC_THINK_SEALED)
 			return (state->motion_state == SG_MECH_MOTION_AT_ORIGIN ||
 			        state->motion_state == SG_MECH_MOTION_AT_DESTINATION) &&
 			       state->end_role == SG_MECH_EXEC_END_NONE && state->stopped;
-		if (state->think_role == SG_MECH_EXEC_THINK_PLATFORM_RETURN)
+		if ((stock && state->think_role ==
+		         SG_MECH_EXEC_THINK_PLATFORM_RETURN) ||
+		    (carrier && state->think_role == SG_MECH_EXEC_THINK_DOOR_RETURN))
 			return state->motion_state == SG_MECH_MOTION_AT_DESTINATION &&
-			       state->end_role == SG_MECH_EXEC_END_PLATFORM_DESTINATION &&
+			       state->end_role == (stock
+			           ? SG_MECH_EXEC_END_PLATFORM_DESTINATION
+			           : SG_MECH_EXEC_END_DOOR_DESTINATION) &&
 			       state->nextthink_pending && state->stopped;
 		if (!moving)
 			return 0;
 		if (state->motion_state == SG_MECH_MOTION_TO_DESTINATION)
-			return state->end_role ==
-			       SG_MECH_EXEC_END_PLATFORM_DESTINATION;
+			return state->end_role == (stock
+			    ? SG_MECH_EXEC_END_PLATFORM_DESTINATION
+			    : SG_MECH_EXEC_END_DOOR_DESTINATION);
 		if (state->motion_state == SG_MECH_MOTION_TO_ORIGIN)
-			return state->end_role == SG_MECH_EXEC_END_PLATFORM_ORIGIN;
+			return state->end_role == (stock
+			    ? SG_MECH_EXEC_END_PLATFORM_ORIGIN
+			    : SG_MECH_EXEC_END_DOOR_ORIGIN);
 		return state->stopped &&
 		       ((state->motion_state == SG_MECH_MOTION_AT_DESTINATION &&
-		         state->end_role == SG_MECH_EXEC_END_PLATFORM_DESTINATION) ||
+		         state->end_role == (stock
+		             ? SG_MECH_EXEC_END_PLATFORM_DESTINATION
+		             : SG_MECH_EXEC_END_DOOR_DESTINATION)) ||
 		        (state->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
-		         state->end_role == SG_MECH_EXEC_END_PLATFORM_ORIGIN));
+		         state->end_role == (stock
+		             ? SG_MECH_EXEC_END_PLATFORM_ORIGIN
+		             : SG_MECH_EXEC_END_DOOR_ORIGIN)));
 	}
 	return state->touch_matches && !state->touch_cleared &&
 	       state->think_role == SG_MECH_EXEC_THINK_SEALED &&

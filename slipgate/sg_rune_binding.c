@@ -5,6 +5,8 @@
 #include "sg_crc32.h"
 #include "sg_rune_mechanism_catalog.h"
 
+#include <math.h>
+
 static void Binding_PutU16(unsigned char *output, uint16_t value)
 {
 	output[0] = (unsigned char)(value & UINT16_C(0xff));
@@ -160,6 +162,46 @@ static uint32_t Binding_DoorMoverCount(const rune_t *rune,
 	return count;
 }
 
+static uint32_t Binding_PlatformMoverCount(const rune_t *rune,
+	const rune_mechanism_plan_t *plan,
+	const rune_mechanism_node_t *platform)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	uint32_t count = 0U;
+	uint32_t ordinal;
+
+	if (!rune || !plan || !platform ||
+	    platform->kind != SG_MECH_NODE_PLATFORM)
+		return 0U;
+	keys[count++] = platform->key;
+	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&rune->mechanism_edges[plan->first_edge + ordinal];
+		const rune_mechanism_node_t *nodes[2];
+		uint32_t endpoint;
+
+		nodes[0] = SG_RuneMechanismNodeByKey(rune, edge->from_key);
+		nodes[1] = SG_RuneMechanismNodeByKey(rune, edge->to_key);
+		for (endpoint = 0U; endpoint < 2U; endpoint++)
+		{
+			uint32_t cursor;
+
+			if (!Binding_NodeDoorMover(nodes[endpoint]))
+				continue;
+			for (cursor = 0U; cursor < count; cursor++)
+				if (keys[cursor] == nodes[endpoint]->key)
+					break;
+			if (cursor != count)
+				continue;
+			if (count >= SG_RUNE_BINDING_MAX_MOVERS)
+				return 0U;
+			keys[count++] = nodes[endpoint]->key;
+		}
+	}
+	return count;
+}
+
 static int Binding_ControllerShape(const rune_t *rune,
 	const rune_link_t *link, const rune_mechanism_plan_t *plan,
 	const rune_mechanism_node_t *entry,
@@ -177,13 +219,44 @@ static int Binding_ControllerShape(const rune_t *rune,
 	switch (plan->controller_kind)
 	{
 	case SG_MECHANISM_CONTROLLER_PLATFORM:
+	{
+		uint32_t cooldown = entry->wait_ms > RUNE_MAX_COST_MS
+			? RUNE_MAX_COST_MS : (uint32_t)entry->wait_ms;
+		int stock = entry->touch_callback ==
+		        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER &&
+		    (entry->flags & SG_MECH_NODEF_SYNTHETIC) != 0U &&
+		    plan->cooldown_ms == 0U &&
+		    Binding_EdgeCount(rune, plan, entry->key, mover->key,
+		        SG_MECH_EDGE_TARGET) == 0U;
+		int carrier = entry->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&
+		    entry->use_callback == SG_MECH_CALLBACK_USE_MULTI &&
+		    (entry->flags & (SG_MECH_NODEF_SYNTHETIC |
+		        SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		        SG_MECH_NODEF_USABLE)) ==
+		        (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		         SG_MECH_NODEF_USABLE) &&
+		    entry->delay_ms == 0 && entry->wait_ms > 0 &&
+		    entry->killtarget_offset == 0U && entry->path_target_offset == 0U &&
+		    mover->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+		    mover->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR &&
+		    SG_RuneCarrierDoorSpawnflags(mover->spawnflags) &&
+		    (mover->flags & (SG_MECH_NODEF_MOVER |
+		        SG_MECH_NODEF_TEAM_MASTER | SG_MECH_NODEF_SHOOTABLE)) ==
+		        (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER) &&
+		    plan->cooldown_ms == cooldown &&
+		    Binding_EdgeCount(rune, plan, entry->key, mover->key,
+		        SG_MECH_EDGE_TARGET) == 1U;
+
 		return link->action == RL_LIFT &&
 		       entry->kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
 		       mover->kind == SG_MECH_NODE_PLATFORM &&
 		       entry->owner_key == mover->key &&
-		       plan->expected_members == 1U && plan->cooldown_ms == 0U &&
+		       ((stock && plan->expected_members == 1U) ||
+		        (carrier && Binding_PlatformMoverCount(rune, plan, mover) ==
+		            plan->expected_members)) &&
 		       Binding_EdgeCount(rune, plan, entry->key, mover->key,
-		           SG_MECH_EDGE_OWNER) == 1U;
+		           SG_MECH_EDGE_OWNER) == 1U && (stock || carrier);
+	}
 	case SG_MECHANISM_CONTROLLER_TELEPORT:
 		return link->action == RL_TELEPORT &&
 		       entry->kind == SG_MECH_NODE_TELEPORT_TRIGGER &&
@@ -575,7 +648,8 @@ static int Binding_MoverKeys(const sg_rune_mechanism_binding_t *binding,
 			return 0;
 	}
 	if (count == 0U ||
-	    ((binding->link->action == RL_DOOR ||
+	    ((binding->link->action == RL_LIFT ||
+	      binding->link->action == RL_DOOR ||
 	      binding->link->action == RL_BUTTON_DOOR) &&
 	     count != (size_t)binding->plan->expected_members))
 		return 0;
@@ -596,6 +670,330 @@ int SG_RuneMechanismBindingTopologyMoverKeys(
 	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
 {
 	return Binding_MoverKeys(binding, keys_out, key_count_out, 0);
+}
+
+int SG_RuneMechanismBindingAuxDoorMoverKeys(
+	const sg_rune_mechanism_binding_t *binding,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	uint32_t all[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t all_count;
+	size_t count = 0U;
+	size_t index;
+
+	if (key_count_out) *key_count_out = 0U;
+	if (!binding || !keys_out || !key_count_out || !binding->plan ||
+	    binding->plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM ||
+	    binding->plan->expected_members <= 1U ||
+	    !SG_RuneMechanismBindingMoverKeys(binding, all, &all_count))
+		return 0;
+	for (index = 0U; index < all_count; index++)
+	{
+		const rune_mechanism_node_t *node =
+			SG_RuneMechanismNodeByKey(binding->rune, all[index]);
+
+		if (all[index] == binding->mover_node->key)
+			continue;
+		if (!Binding_NodeDoorMover(node))
+			return 0;
+		keys_out[count++] = all[index];
+	}
+	if (count == 0U || count + 1U != binding->plan->expected_members)
+		return 0;
+	*key_count_out = count;
+	return 1;
+}
+
+struct edict_s *SG_RuneMechanismBindingAuxTrigger(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	const rune_mechanism_node_t *best = NULL;
+	uint32_t ordinal;
+
+	if (!binding || !binding->plan ||
+	    binding->plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM ||
+	    binding->plan->expected_members <= 1U ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return NULL;
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		const rune_mechanism_node_t *source;
+
+		if (!edge || edge->kind != SG_MECH_EDGE_TARGET ||
+		    edge->from_key == binding->entry_node->key)
+			continue;
+		source = SG_RuneMechanismNodeByKey(binding->rune, edge->from_key);
+		if (source && source->kind == SG_MECH_NODE_TRIGGER &&
+		    (!best || source->key < best->key))
+			best = source;
+	}
+	return best ? SG_RuneMechanismBindingResolveNode(binding, best->key) : NULL;
+}
+
+int SG_RuneMechanismBindingAuxTriggerMatches(
+	const sg_rune_mechanism_binding_t *binding, const struct edict_s *entity)
+{
+	uint32_t ordinal;
+
+	if (!binding || !entity || !binding->plan ||
+	    binding->plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM ||
+	    binding->plan->expected_members <= 1U ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return 0;
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		const rune_mechanism_node_t *source;
+
+		if (!edge || edge->kind != SG_MECH_EDGE_TARGET ||
+		    edge->from_key == binding->entry_node->key)
+			continue;
+		source = SG_RuneMechanismNodeByKey(binding->rune, edge->from_key);
+		if (source && source->kind == SG_MECH_NODE_TRIGGER &&
+		    SG_RuneMechanismBindingResolveNode(binding, source->key) == entity)
+			return SG_RuneMechanismBindingCurrent(binding);
+	}
+	return 0;
+}
+
+static int Binding_CarrierTriggerContainsAnchor(
+	const rune_mechanism_node_t *node, const rune_link_t *link)
+{
+	static const int hull_min_q8[3] = { -136, -136, -200 };
+	static const int hull_max_q8[3] = { 136, 136, 264 };
+	int axis;
+
+	if (!node || !link || node->kind != SG_MECH_NODE_TRIGGER)
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float scaled = link->anchor[axis] * 8.0f;
+		int anchor_q8;
+
+		if (!isfinite(scaled) || scaled != (float)(int)scaled)
+			return 0;
+		anchor_q8 = (int)scaled;
+		if (anchor_q8 + hull_max_q8[axis] <= node->absmin_q8[axis] ||
+		    anchor_q8 + hull_min_q8[axis] >= node->absmax_q8[axis])
+			return 0;
+	}
+	return 1;
+}
+
+static int Binding_CarrierTriggerClassMatches(
+	const sg_rune_mechanism_binding_t *binding,
+	const rune_mechanism_node_t *left, const rune_mechanism_node_t *right)
+{
+	uint32_t left_ordinal = 0U;
+	uint32_t right_ordinal = 0U;
+	uint32_t left_count = 0U;
+	uint32_t right_count = 0U;
+
+	if (!binding || !left || !right || left->kind != SG_MECH_NODE_TRIGGER ||
+	    right->kind != SG_MECH_NODE_TRIGGER ||
+	    left->delay_ms != right->delay_ms ||
+	    left->target_offset != right->target_offset)
+		return 0;
+	while (left_ordinal < binding->plan->num_edges ||
+	       right_ordinal < binding->plan->num_edges)
+	{
+		const rune_mechanism_edge_t *left_edge = NULL;
+		const rune_mechanism_edge_t *right_edge = NULL;
+
+		while (left_ordinal < binding->plan->num_edges)
+		{
+			left_edge = SG_RuneMechanismBindingEdgeAt(binding,
+				left_ordinal++);
+			if (left_edge && left_edge->kind == SG_MECH_EDGE_TARGET &&
+			    left_edge->from_key == left->key)
+				break;
+			left_edge = NULL;
+		}
+		while (right_ordinal < binding->plan->num_edges)
+		{
+			right_edge = SG_RuneMechanismBindingEdgeAt(binding,
+				right_ordinal++);
+			if (right_edge && right_edge->kind == SG_MECH_EDGE_TARGET &&
+			    right_edge->from_key == right->key)
+				break;
+			right_edge = NULL;
+		}
+		if (!left_edge || !right_edge)
+			return left_edge == right_edge && left_count != 0U &&
+			       left_count == right_count;
+		if (left_edge->to_key != right_edge->to_key ||
+		    left_edge->ordinal != right_edge->ordinal ||
+		    left_edge->delay_ms != right_edge->delay_ms)
+			return 0;
+		left_count++;
+		right_count++;
+	}
+	return left_count != 0U && left_count == right_count;
+}
+
+static const rune_mechanism_node_t *Binding_CarrierApproachTrigger(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	const rune_mechanism_node_t *approach = NULL;
+	uint32_t ordinal;
+
+	if (!binding || !binding->link || !binding->plan)
+		return NULL;
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		const rune_mechanism_node_t *source;
+
+		if (!edge || edge->kind != SG_MECH_EDGE_TARGET ||
+		    edge->from_key == binding->entry_node->key)
+			continue;
+		source = SG_RuneMechanismNodeByKey(binding->rune, edge->from_key);
+		if (!Binding_CarrierTriggerContainsAnchor(source, binding->link))
+			continue;
+		if (approach &&
+		    !Binding_CarrierTriggerClassMatches(binding, approach, source))
+			return NULL;
+		if (!approach || source->key < approach->key)
+			approach = source;
+	}
+	return approach;
+}
+
+static int Binding_CarrierStageNode(
+	const sg_rune_mechanism_binding_t *binding,
+	const rune_mechanism_node_t *node, sg_carrier_door_stage_t stage)
+{
+	const rune_mechanism_node_t *approach =
+		Binding_CarrierApproachTrigger(binding);
+	int same;
+
+	if (!approach || !node || node->kind != SG_MECH_NODE_TRIGGER)
+		return 0;
+	same = Binding_CarrierTriggerClassMatches(binding, approach, node);
+	return stage == SG_CARRIER_DOOR_APPROACH ? same : !same;
+}
+
+int SG_RuneMechanismBindingCarrierStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, struct edict_s **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out)
+{
+	const rune_mechanism_node_t *trigger = NULL;
+	uint32_t master_keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t master_count = 0U;
+	size_t key_count = 0U;
+	uint32_t ordinal;
+
+	if (trigger_out) *trigger_out = NULL;
+	if (key_count_out) *key_count_out = 0U;
+	if (delay_ms_out) *delay_ms_out = 0U;
+	if (!binding || !trigger_out || !keys_out || !key_count_out ||
+	    !delay_ms_out || !binding->plan ||
+	    binding->plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM ||
+	    binding->plan->expected_members <= 1U ||
+	    (stage != SG_CARRIER_DOOR_APPROACH &&
+	     stage != SG_CARRIER_DOOR_EGRESS) ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return 0;
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		const rune_mechanism_node_t *source;
+		const rune_mechanism_node_t *destination;
+		uint32_t master_key;
+		size_t index;
+
+		if (!edge || edge->kind != SG_MECH_EDGE_TARGET ||
+		    edge->from_key == binding->entry_node->key)
+			continue;
+		source = SG_RuneMechanismNodeByKey(binding->rune, edge->from_key);
+		if (!Binding_CarrierStageNode(binding, source, stage))
+			continue;
+		if ((uint32_t)source->delay_ms != edge->delay_ms)
+			return 0;
+		if (!trigger || source->key < trigger->key)
+			trigger = source;
+		destination = SG_RuneMechanismNodeByKey(binding->rune,
+			edge->to_key);
+		if (!Binding_NodeDoorMover(destination))
+			return 0;
+		master_key = destination->kind == SG_MECH_NODE_DOOR_MASTER
+			? destination->key : destination->team_master_key;
+		for (index = 0U; index < master_count; index++)
+			if (master_keys[index] == master_key)
+				break;
+		if (index == master_count)
+		{
+			if (master_count >= SG_RUNE_BINDING_MAX_MOVERS)
+				return 0;
+			master_keys[master_count++] = master_key;
+		}
+	}
+	if (!trigger || master_count == 0U)
+		return 0;
+	for (ordinal = 0U; ordinal < binding->rune->artifact.num_mechanism_nodes;
+	     ordinal++)
+	{
+		const rune_mechanism_node_t *node =
+			&binding->rune->mechanism_nodes[ordinal];
+		uint32_t master_key;
+		size_t index;
+
+		if (!Binding_NodeDoorMover(node))
+			continue;
+		master_key = node->kind == SG_MECH_NODE_DOOR_MASTER
+			? node->key : node->team_master_key;
+		for (index = 0U; index < master_count; index++)
+			if (master_keys[index] == master_key)
+				break;
+		if (index == master_count)
+			continue;
+		if (!Binding_NodeInClosure(binding, node->key) ||
+		    key_count >= SG_RUNE_BINDING_MAX_MOVERS)
+			return 0;
+		keys_out[key_count++] = node->key;
+	}
+	if (key_count == 0U ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return 0;
+	*trigger_out = SG_RuneMechanismBindingResolveNode(binding, trigger->key);
+	if (!*trigger_out)
+		return 0;
+	*key_count_out = key_count;
+	*delay_ms_out = (uint32_t)trigger->delay_ms;
+	return 1;
+}
+
+int SG_RuneMechanismBindingCarrierStageTriggerMatches(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, const struct edict_s *entity)
+{
+	uint32_t ordinal;
+
+	if (!entity || !binding || !binding->plan ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return 0;
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		const rune_mechanism_node_t *source;
+
+		if (!edge || edge->kind != SG_MECH_EDGE_TARGET ||
+		    edge->from_key == binding->entry_node->key)
+			continue;
+		source = SG_RuneMechanismNodeByKey(binding->rune, edge->from_key);
+		if (Binding_CarrierStageNode(binding, source, stage) &&
+		    SG_RuneMechanismBindingResolveNode(binding, source->key) == entity)
+			return SG_RuneMechanismBindingCurrent(binding);
+	}
+	return 0;
 }
 
 int SG_RuneMechanismBindingsReady(const rune_t *rune,

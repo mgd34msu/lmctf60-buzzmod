@@ -1460,6 +1460,12 @@ static int Codec_EdgeRelationValid(
 
 static int Codec_NodeExecutable(
 	const sg_rune_codec_activation_node_t *node);
+static uint32_t Codec_InventoryFanoutCount(
+	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
+	uint32_t from_key, uint16_t kind);
+static uint32_t Codec_InventoryFanoutAt(
+	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
+	uint32_t from_key, uint16_t kind, uint32_t ordinal);
 
 static int Codec_ButtonNodeShapeValid(
 	const sg_rune_codec_activation_node_t *node)
@@ -1563,9 +1569,77 @@ static int Codec_DoorNodeSemanticValid(
 	       node->team_master_key == master_key &&
 	       (node->spawnflags & (UINT32_C(1) | UINT32_C(32))) == 0U &&
 	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
-	       node->delay_ms == 0 && node->wait_ms > 0 &&
+	       node->delay_ms >= 0 &&
+	       (node->delay_ms == 0 || node->target_offset == 0U) &&
+	       node->wait_ms > 0 &&
 	       node->speed_q8 != 0U && node->accel_q8 == node->speed_q8 &&
 	       node->decel_q8 == node->speed_q8;
+}
+
+static int Codec_PlatformDoorTriggerShape(
+	const sg_rune_codec_activation_node_t *node)
+{
+	return Codec_NodeExecutable(node) &&
+	       node->kind == SG_RUNE_CODEC_NODE_TRIGGER &&
+	       node->touch_callback == SG_RUNE_CODEC_CALLBACK_TOUCH_MULTI &&
+	       node->use_callback == SG_RUNE_CODEC_CALLBACK_USE_MULTI &&
+	       (node->flags & (SG_RUNE_CODEC_NODEF_REPEATABLE |
+	           SG_RUNE_CODEC_NODEF_TOUCHABLE | SG_RUNE_CODEC_NODEF_USABLE)) ==
+	           (SG_RUNE_CODEC_NODEF_REPEATABLE |
+	            SG_RUNE_CODEC_NODEF_TOUCHABLE | SG_RUNE_CODEC_NODEF_USABLE) &&
+	       node->delay_ms >= 0 && node->wait_ms > 0 &&
+	       node->target_offset != 0U && node->killtarget_offset == 0U &&
+	       node->path_target_offset == 0U;
+}
+
+static int Codec_TriggerContainsLinkAnchor(
+	const sg_rune_codec_activation_node_t *node,
+	const sg_rune_codec_link_t *link)
+{
+	static const int hull_min_q8[3] = { -136, -136, -200 };
+	static const int hull_max_q8[3] = { 136, 136, 264 };
+	int axis;
+
+	if (!node || !link || !Codec_VectorOnPmoveLattice(link->suffix_anchor))
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		int anchor_q8 = (int)(link->suffix_anchor[axis] * 8.0f);
+
+		if (anchor_q8 + hull_max_q8[axis] <= node->absmin_q8[axis] ||
+		    anchor_q8 + hull_min_q8[axis] >= node->absmax_q8[axis])
+			return 0;
+	}
+	return 1;
+}
+
+static int Codec_SameTargetFanout(
+	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
+	uint32_t left_key, uint32_t right_key, uint32_t delay_ms)
+{
+	uint32_t left_count = Codec_InventoryFanoutCount(edges, inventory_edges,
+		left_key, SG_RUNE_CODEC_EDGE_TARGET);
+	uint32_t right_count = Codec_InventoryFanoutCount(edges, inventory_edges,
+		right_key, SG_RUNE_CODEC_EDGE_TARGET);
+	uint32_t i;
+
+	if (left_count == 0U || left_count != right_count)
+		return 0;
+	for (i = 0U; i < left_count; i++)
+	{
+		uint32_t left = Codec_InventoryFanoutAt(edges, inventory_edges,
+			left_key, SG_RUNE_CODEC_EDGE_TARGET, i);
+		uint32_t right = Codec_InventoryFanoutAt(edges, inventory_edges,
+			right_key, SG_RUNE_CODEC_EDGE_TARGET, i);
+
+		if (left == UINT32_MAX || right == UINT32_MAX ||
+		    edges[left].to_key != edges[right].to_key ||
+		    edges[left].ordinal != edges[right].ordinal ||
+		    edges[left].delay_ms != delay_ms ||
+		    edges[right].delay_ms != delay_ms)
+			return 0;
+	}
+	return 1;
 }
 
 static int Codec_SafeSpeaker(const sg_rune_codec_activation_node_t *node)
@@ -1719,6 +1793,23 @@ static sg_rune_codec_diagnostic_t Codec_ExpectInventoryEdge(
 	return RLCODEC_OK;
 }
 
+static sg_rune_codec_diagnostic_t Codec_ExpectPlatformTriggerEdge(
+	const sg_rune_codec_activation_edge_t *edges,
+	const sg_rune_codec_activation_plan_t *plan, uint32_t inventory_index,
+	uint32_t delay_ms, uint32_t generation,
+	sg_rune_codec_workspace_t *workspace, uint32_t *expected_count)
+{
+	if (!workspace || !expected_count ||
+	    workspace->edge_next[inventory_index] == generation ||
+	    edges[inventory_index].kind != SG_RUNE_CODEC_EDGE_TARGET ||
+	    edges[inventory_index].delay_ms != delay_ms ||
+	    !Codec_PlanContainsExactEdge(edges, plan, inventory_index))
+		return RLCODEC_BAD_ACTIVATION_PLAN;
+	workspace->edge_next[inventory_index] = generation;
+	(*expected_count)++;
+	return RLCODEC_OK;
+}
+
 static sg_rune_codec_diagnostic_t Codec_AddSideEffect(
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
 	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
@@ -1761,7 +1852,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
 	const sg_rune_codec_activation_edge_t *edges, uint32_t num_edges,
 	uint32_t inventory_edges, const sg_rune_codec_activation_plan_t *plan,
-	uint32_t plan_index, const unsigned char *strings,
+	uint32_t plan_index, const sg_rune_codec_link_t *owner_link,
+	const unsigned char *strings,
 	sg_rune_codec_workspace_t *workspace)
 {
 	uint32_t generation = plan_index + 1U;
@@ -1822,21 +1914,228 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 			inventory_edges, plan->entry_key, SG_RUNE_CODEC_EDGE_OWNER);
 		uint32_t owner_index = Codec_InventoryFanoutAt(edges,
 			inventory_edges, plan->entry_key, SG_RUNE_CODEC_EDGE_OWNER, 0U);
+		uint32_t target_count = Codec_InventoryFanoutCount(edges,
+			inventory_edges, plan->entry_key, SG_RUNE_CODEC_EDGE_TARGET);
+		uint32_t target_index = Codec_InventoryFanoutAt(edges,
+			inventory_edges, plan->entry_key, SG_RUNE_CODEC_EDGE_TARGET, 0U);
+		uint32_t cooldown = nodes[entry_index].wait_ms > RUNE_MAX_COST_MS
+			? RUNE_MAX_COST_MS : (uint32_t)nodes[entry_index].wait_ms;
+		int stock;
+		int carrier;
+		uint32_t class_indices[2] = { UINT32_MAX, UINT32_MAX };
+		uint32_t class_count = 0U;
+		uint32_t approach_class = UINT32_MAX;
 
-		if (nodes[entry_index].kind !=
-		        SG_RUNE_CODEC_NODE_PLATFORM_TRIGGER ||
-		    nodes[entry_index].touch_callback !=
-		        SG_RUNE_CODEC_CALLBACK_TOUCH_PLAT_CENTER ||
-		    (nodes[entry_index].flags & SG_RUNE_CODEC_NODEF_SYNTHETIC) == 0U ||
+		stock = nodes[entry_index].touch_callback ==
+		        SG_RUNE_CODEC_CALLBACK_TOUCH_PLAT_CENTER &&
+		    (nodes[entry_index].flags & SG_RUNE_CODEC_NODEF_SYNTHETIC) != 0U &&
+		    target_count == 0U && plan->cooldown_ms == 0U;
+		carrier = nodes[entry_index].touch_callback ==
+		        SG_RUNE_CODEC_CALLBACK_TOUCH_MULTI &&
+		    nodes[entry_index].use_callback == SG_RUNE_CODEC_CALLBACK_USE_MULTI &&
+		    (nodes[entry_index].flags & (SG_RUNE_CODEC_NODEF_SYNTHETIC |
+		        SG_RUNE_CODEC_NODEF_REPEATABLE | SG_RUNE_CODEC_NODEF_TOUCHABLE |
+		        SG_RUNE_CODEC_NODEF_USABLE)) ==
+		        (SG_RUNE_CODEC_NODEF_REPEATABLE | SG_RUNE_CODEC_NODEF_TOUCHABLE |
+		         SG_RUNE_CODEC_NODEF_USABLE) &&
+		    nodes[entry_index].delay_ms == 0 && nodes[entry_index].wait_ms > 0 &&
+		    nodes[entry_index].killtarget_offset == 0U &&
+		    nodes[entry_index].path_target_offset == 0U &&
+		    nodes[mover_index].use_callback == SG_RUNE_CODEC_CALLBACK_USE_DOOR &&
+		    nodes[mover_index].blocked_callback ==
+		        SG_RUNE_CODEC_CALLBACK_BLOCKED_DOOR &&
+		    SG_RuneCarrierDoorSpawnflags(nodes[mover_index].spawnflags) &&
+		    (nodes[mover_index].flags & (SG_RUNE_CODEC_NODEF_MOVER |
+		        SG_RUNE_CODEC_NODEF_TEAM_MASTER |
+		        SG_RUNE_CODEC_NODEF_SHOOTABLE)) ==
+		        (SG_RUNE_CODEC_NODEF_MOVER | SG_RUNE_CODEC_NODEF_TEAM_MASTER) &&
+		    target_count == 1U && target_index != UINT32_MAX &&
+		    edges[target_index].to_key == plan->mover_key &&
+		    plan->cooldown_ms == cooldown;
+		if (nodes[entry_index].kind != SG_RUNE_CODEC_NODE_PLATFORM_TRIGGER ||
 		    nodes[mover_index].kind != SG_RUNE_CODEC_NODE_PLATFORM ||
 		    owner_count != 1U || owner_index == UINT32_MAX ||
 		    edges[owner_index].to_key != plan->mover_key ||
-		    plan->expected_members != 1U || plan->cooldown_ms != 0U)
+		    (!stock && !carrier) ||
+		    (stock && plan->expected_members != 1U))
 			return RLCODEC_BAD_ACTIVATION_PLAN;
+		if (carrier)
+		{
+			diagnostic = Codec_ExpectInventoryEdge(edges, plan, target_index,
+				generation, workspace, &expected_count);
+			if (diagnostic != RLCODEC_OK)
+				return diagnostic;
+		}
 		diagnostic = Codec_ExpectInventoryEdge(edges, plan, owner_index,
 			generation, workspace, &expected_count);
 		if (diagnostic != RLCODEC_OK)
 			return diagnostic;
+		if (carrier && plan->expected_members > 1U)
+		{
+			if (!owner_link || owner_link->action != RL_LIFT ||
+			    !Codec_VectorOnPmoveLattice(owner_link->suffix_anchor))
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+			for (i = 0U; i < num_nodes; i++)
+			{
+				uint32_t count;
+				uint32_t ordinal;
+				uint32_t trigger_class;
+				int planned = 0;
+
+				if (!Codec_PlatformDoorTriggerShape(&nodes[i]))
+					continue;
+				count = Codec_InventoryFanoutCount(edges, inventory_edges,
+					nodes[i].key, SG_RUNE_CODEC_EDGE_TARGET);
+				for (ordinal = 0U; ordinal < count; ordinal++)
+				{
+					uint32_t candidate = Codec_InventoryFanoutAt(edges,
+						inventory_edges, nodes[i].key,
+						SG_RUNE_CODEC_EDGE_TARGET, ordinal);
+
+					if (candidate != UINT32_MAX &&
+					    Codec_PlanContainsExactEdge(edges, plan, candidate))
+					{
+						planned = 1;
+						break;
+					}
+				}
+				if (!planned)
+					continue;
+				for (trigger_class = 0U; trigger_class < class_count;
+				     trigger_class++)
+				{
+					uint32_t reference = class_indices[trigger_class];
+
+					if (nodes[reference].delay_ms == nodes[i].delay_ms &&
+					    nodes[reference].target_offset ==
+					        nodes[i].target_offset &&
+					    Codec_SameTargetFanout(edges, inventory_edges,
+					        nodes[reference].key, nodes[i].key,
+					        (uint32_t)nodes[i].delay_ms))
+						break;
+				}
+				if (trigger_class == class_count)
+				{
+					if (class_count == 2U)
+						return RLCODEC_BAD_ACTIVATION_PLAN;
+					class_indices[class_count++] = i;
+				}
+				if (Codec_TriggerContainsLinkAnchor(&nodes[i], owner_link))
+				{
+					if (approach_class != UINT32_MAX &&
+					    approach_class != trigger_class)
+						return RLCODEC_BAD_ACTIVATION_PLAN;
+					approach_class = trigger_class;
+				}
+			}
+			if (class_count == 0U || approach_class == UINT32_MAX)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+			for (uint32_t stage = 0U; stage < class_count; stage++)
+			{
+				uint32_t trigger_class = stage == 0U ? approach_class :
+					(approach_class == 0U ? 1U : 0U);
+				uint32_t reference_index = class_indices[trigger_class];
+				uint32_t delay_ms = (uint32_t)nodes[reference_index].delay_ms;
+				uint32_t stage_master_first = master_count;
+
+				if (stage != 0U && class_count == 1U)
+					return RLCODEC_BAD_ACTIVATION_PLAN;
+				for (i = 0U; i < num_nodes; i++)
+				{
+					uint32_t count;
+
+					if (!Codec_PlatformDoorTriggerShape(&nodes[i]) ||
+					    (uint32_t)nodes[i].delay_ms != delay_ms ||
+					    nodes[i].target_offset !=
+					        nodes[reference_index].target_offset)
+						continue;
+					if (!Codec_SameTargetFanout(edges, inventory_edges,
+					        nodes[reference_index].key, nodes[i].key,
+					        delay_ms))
+						return RLCODEC_BAD_ACTIVATION_PLAN;
+					count = Codec_InventoryFanoutCount(edges, inventory_edges,
+						nodes[i].key, SG_RUNE_CODEC_EDGE_TARGET);
+					for (j = 0U; j < count; j++)
+					{
+						const sg_rune_codec_activation_node_t *destination;
+						uint32_t destination_index;
+						uint32_t target_edge;
+
+						target_edge = Codec_InventoryFanoutAt(
+							edges, inventory_edges, nodes[i].key,
+							SG_RUNE_CODEC_EDGE_TARGET, j);
+						destination_index = target_edge == UINT32_MAX
+							? UINT32_MAX
+							: Codec_FindNode(nodes, num_nodes,
+							    edges[target_edge].to_key);
+
+						if (destination_index == UINT32_MAX)
+							return RLCODEC_BAD_ACTIVATION_PLAN;
+						destination = &nodes[destination_index];
+						if (destination->kind ==
+						    SG_RUNE_CODEC_NODE_DOOR_MASTER)
+						{
+							uint32_t prior;
+
+							for (prior = 0U;
+							     prior < master_count; prior++)
+							{
+								uint32_t touched_index;
+
+								touched_index = workspace->
+									node_touched[prior];
+								if (touched_index ==
+								    destination_index)
+									break;
+							}
+							if (prior < stage_master_first)
+								return RLCODEC_BAD_ACTIVATION_PLAN;
+							if (prior == master_count)
+							{
+								workspace->node_touched[
+									master_count] =
+									destination_index;
+								master_count++;
+							}
+						}
+						else if (destination->kind ==
+						         SG_RUNE_CODEC_NODE_DOOR_MEMBER)
+						{
+							int seen_master = 0;
+							uint32_t prior;
+
+							for (prior = stage_master_first;
+							     prior < master_count; prior++)
+							{
+								uint32_t prior_index;
+
+								prior_index = workspace->
+									node_touched[prior];
+
+								if (nodes[prior_index].key ==
+								    destination->team_master_key)
+									seen_master = 1;
+							}
+							if (!seen_master)
+								return RLCODEC_BAD_ACTIVATION_PLAN;
+						}
+						else
+							return RLCODEC_BAD_ACTIVATION_PLAN;
+						diagnostic = Codec_ExpectPlatformTriggerEdge(
+							edges, plan, target_edge, delay_ms,
+							generation, workspace, &expected_count);
+						if (diagnostic != RLCODEC_OK)
+							return diagnostic;
+					}
+				}
+				if (master_count == stage_master_first)
+					return RLCODEC_BAD_ACTIVATION_PLAN;
+			}
+			if (master_count == 0U)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+		}
+		else if (carrier && plan->expected_members != 1U)
+			return RLCODEC_BAD_ACTIVATION_PLAN;
 		break;
 	}
 
@@ -2064,7 +2363,9 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	}
 
-	if (plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_AUTO_DOOR ||
+	if ((plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_PLATFORM &&
+	     master_count != 0U) ||
+	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_AUTO_DOOR ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_BUTTON_DOOR ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_DIRECT_TRIGGER_DOOR)
 	{
@@ -2120,7 +2421,9 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 					return diagnostic;
 			}
 		}
-		if (physical_count != plan->expected_members)
+		if (physical_count != plan->expected_members -
+		        (plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_PLATFORM
+		            ? 1U : 0U))
 			return RLCODEC_BAD_ACTIVATION_PLAN;
 		/* Every physical mover's ordered G_UseTargets fanout is part of the
 		 * authenticated callback closure. */
@@ -2188,11 +2491,13 @@ static sg_rune_codec_diagnostic_t Codec_ValidateOnePlan(
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
 	const sg_rune_codec_activation_edge_t *edges, uint32_t num_edges,
 	uint32_t inventory_edges, const sg_rune_codec_activation_plan_t *plan,
-	uint32_t plan_index, const unsigned char *strings,
+	uint32_t plan_index, const sg_rune_codec_link_t *owner_link,
+	const unsigned char *strings,
 	sg_rune_codec_workspace_t *workspace)
 {
 	return Codec_ValidateProductionPlanExact(nodes, num_nodes, edges,
-		num_edges, inventory_edges, plan, plan_index, strings, workspace);
+		num_edges, inventory_edges, plan, plan_index, owner_link, strings,
+		workspace);
 }
 
 sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
@@ -2332,9 +2637,9 @@ sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
 
 		if (plan_index == SG_RUNE_CODEC_NO_ACTIVATION_PLAN)
 			continue;
-		workspace->plan_references[plan_index]++;
-		if (workspace->plan_references[plan_index] > 1U)
+		if (workspace->plan_references[plan_index] != 0U)
 			return RLCODEC_BAD_ACTIVATION_PLAN;
+		workspace->plan_references[plan_index] = i + 1U;
 	}
 	expected_first_edge = inventory_edges;
 	for (i = 0U; i < num_plans; i++)
@@ -2362,7 +2667,10 @@ sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
 			}
 		}
 		diagnostic = Codec_ValidateOnePlan(nodes, num_nodes, edges,
-			num_edges, inventory_edges, &plans[i], i, strings, workspace);
+			num_edges, inventory_edges, &plans[i], i,
+			workspace->plan_references[i] == 0U ? NULL :
+			    &links[workspace->plan_references[i] - 1U],
+			strings, workspace);
 		if (diagnostic != RLCODEC_OK)
 			return diagnostic;
 		expected_first_edge += plans[i].num_edges;
@@ -2370,7 +2678,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
 	if (expected_first_edge != num_edges)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	for (i = 0U; i < num_plans; i++)
-		if (workspace->plan_references[i] != 1U)
+		if (workspace->plan_references[i] == 0U)
 			return RLCODEC_BAD_ACTIVATION_PLAN;
 	return RLCODEC_OK;
 }

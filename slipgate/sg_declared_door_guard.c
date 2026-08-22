@@ -77,7 +77,8 @@ static void DeclaredDoorSortKeys(sg_mover_key_t *keys, size_t count)
 
 static sg_compound_guard_result_t DeclaredDoorResolve(
 	int link_index, sg_mover_key_t *keys_out, size_t *key_count_out,
-	edict_t **trigger_out, int *trigger_key_out, int owned_execution)
+	edict_t **trigger_out, int *trigger_key_out, int owned_execution,
+	int carrier_stage)
 {
 	sg_rune_mechanism_binding_t binding;
 	uint32_t mover_keys[SG_RUNE_BINDING_MAX_MOVERS];
@@ -85,6 +86,10 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 	size_t key_count;
 	size_t index;
 	int trigger_key;
+	int door_action;
+	int compound_lift = 0;
+	edict_t *carrier_trigger = NULL;
+	uint32_t carrier_delay_ms = 0U;
 
 	if (key_count_out)
 		*key_count_out = 0U;
@@ -102,13 +107,27 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 	              (uint32_t)link_index, &binding)
 	        : SG_RuneMechanismBindingCapture(rune,
 	              (uint32_t)link_index, &binding)) ||
-	    !SG_RuneMechanismBindingDoorAction(&binding) ||
-	    !SG_RuneMechanismBindingMoverKeys(&binding, mover_keys,
-	        &key_count) || key_count == 0U ||
+	    !((door_action = SG_RuneMechanismBindingDoorAction(&binding)) ||
+	      (compound_lift = binding.link->action == RL_LIFT &&
+	       binding.plan->controller_kind ==
+	           SG_MECHANISM_CONTROLLER_PLATFORM &&
+	       binding.plan->expected_members > 1U)) ||
+	    !(door_action
+	          ? SG_RuneMechanismBindingMoverKeys(&binding, mover_keys,
+	                &key_count)
+	          : carrier_stage >= SG_CARRIER_DOOR_APPROACH &&
+	                carrier_stage <= SG_CARRIER_DOOR_EGRESS &&
+	                SG_RuneMechanismBindingCarrierStage(&binding,
+	                    (sg_carrier_door_stage_t)carrier_stage,
+	                    &carrier_trigger, mover_keys, &key_count,
+	                    &carrier_delay_ms)) || key_count == 0U ||
 	    key_count > SG_MOVER_LEASE_MAX_KEYS ||
-	    !DeclaredDoorEdictKey(binding.entry_entity, &trigger_key) ||
-	    trigger_key <= 0 || (uint32_t)trigger_key != binding.entry_node->key ||
+	    !DeclaredDoorEdictKey(door_action ? binding.entry_entity :
+	        carrier_trigger, &trigger_key) ||
+	    trigger_key <= 0 ||
 	    !DeclaredDoorPhysicalKey(trigger_key))
+		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+	if (door_action && (uint32_t)trigger_key != binding.entry_node->key)
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
 	for (index = 0U; index < key_count; index++)
 	{
@@ -128,7 +147,8 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
 	*key_count_out = key_count;
 	if (trigger_out)
-		*trigger_out = binding.entry_entity;
+		*trigger_out = door_action ? binding.entry_entity :
+			carrier_trigger;
 	if (trigger_key_out)
 		*trigger_key_out = trigger_key;
 	return SG_COMPOUND_GUARD_OK;
@@ -149,11 +169,22 @@ static sg_compound_guard_result_t DeclaredDoorResolveBound(
 	    !DeclaredDoorPhysicalKey((int)mechanism_index))
 		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
 	result = DeclaredDoorResolve(link_index, keys_out, key_count_out,
-	    &trigger, &trigger_key, 1);
-	if (result != SG_COMPOUND_GUARD_OK)
-		return result;
-	if ((uint32_t)trigger_key != mechanism_index)
-		return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+	    &trigger, &trigger_key, 1, -1);
+	if (result != SG_COMPOUND_GUARD_OK ||
+	    (uint32_t)trigger_key != mechanism_index)
+	{
+		result = DeclaredDoorResolve(link_index, keys_out, key_count_out,
+			&trigger, &trigger_key, 1, SG_CARRIER_DOOR_APPROACH);
+		if (result != SG_COMPOUND_GUARD_OK ||
+		    (uint32_t)trigger_key != mechanism_index)
+		{
+			result = DeclaredDoorResolve(link_index, keys_out, key_count_out,
+				&trigger, &trigger_key, 1, SG_CARRIER_DOOR_EGRESS);
+			if (result != SG_COMPOUND_GUARD_OK ||
+			    (uint32_t)trigger_key != mechanism_index)
+				return SG_COMPOUND_GUARD_AUTHORITY_MISMATCH;
+		}
+	}
 	if (trigger_out)
 		*trigger_out = trigger;
 	return SG_COMPOUND_GUARD_OK;
@@ -358,16 +389,36 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAcquire(sg_bot_t *bot,
 	if (!bot)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
-	    &trigger_key, 0);
+	    &trigger_key, 0, -1);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	return SG_CompoundGuardAcquireDeclaredDoorBound(&bot->compound_guard,
 	    keys, key_count, link_index, (uint32_t)trigger_key);
 }
 
+sg_compound_guard_result_t SG_DeclaredCarrierDoorGuardAcquire(sg_bot_t *bot,
+	int link_index, int stage)
+{
+	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS];
+	size_t key_count;
+	int trigger_key;
+	sg_compound_guard_result_t result;
+
+	if (!bot || (stage != SG_CARRIER_DOOR_APPROACH &&
+	    stage != SG_CARRIER_DOOR_EGRESS))
+		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
+		&trigger_key, 0, stage);
+	if (result != SG_COMPOUND_GUARD_OK)
+		return result;
+	return SG_CompoundGuardAcquireDeclaredDoorBound(&bot->compound_guard,
+		keys, key_count, link_index, (uint32_t)trigger_key);
+}
+
 sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorize(sg_bot_t *bot,
 	int link_index)
 {
+	sg_mover_lease_record_t record;
 	sg_mover_key_t keys[SG_MOVER_LEASE_MAX_KEYS];
 	size_t key_count;
 	int trigger_key;
@@ -376,12 +427,22 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorize(sg_bot_t *bot,
 	if (!bot)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
-	    &trigger_key, 1);
+	    &trigger_key, 1, -1);
+	if (result == SG_COMPOUND_GUARD_OK)
+		return SG_CompoundGuardAuthorize(&bot->compound_guard,
+		    SG_MOVER_LAW_DECLARED_DOOR, keys, key_count, link_index,
+		    (uint32_t)trigger_key);
+	result = SG_CompoundGuardValidate(&bot->compound_guard, &record);
+	if (result != SG_COMPOUND_GUARD_OK || record.link_index != link_index)
+		return result == SG_COMPOUND_GUARD_OK
+			? SG_COMPOUND_GUARD_AUTHORITY_MISMATCH : result;
+	result = DeclaredDoorResolveBound(record.mechanism_index, link_index,
+		keys, &key_count, NULL);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	return SG_CompoundGuardAuthorize(&bot->compound_guard,
 	    SG_MOVER_LAW_DECLARED_DOOR, keys, key_count, link_index,
-	    (uint32_t)trigger_key);
+	    record.mechanism_index);
 }
 
 sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorizeActivation(
@@ -451,7 +512,7 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardResume(sg_bot_t *bot,
 	if (!bot)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	result = DeclaredDoorResolve(link_index, keys, &key_count, NULL,
-	    &trigger_key, 1);
+	    &trigger_key, 1, -1);
 	if (result != SG_COMPOUND_GUARD_OK)
 		return result;
 	result = SG_CompoundGuardValidate(&bot->compound_guard, &record);

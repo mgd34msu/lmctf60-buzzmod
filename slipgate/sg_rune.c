@@ -24,6 +24,7 @@
 #include <time.h>
 
 #define SEED_SPACING	64.0f
+#define PLAYER_HALF_WIDTH 16.0f
 #define SEED_MAX		RUNE_MAX_SEEDS
 #define LINK_MAX		RUNE_MAX_LINKS
 _Static_assert(SEED_MAX == RUNE_MAX_SEEDS,
@@ -1926,8 +1927,8 @@ static uint32_t Mechanism_TriggerCount(void)
 }
 
 static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
-	uint32_t mover_key, uint32_t destination_key, uint16_t controller_kind,
-	uint16_t expected_members, uint32_t cooldown_ms)
+	uint32_t mover_key, uint32_t destination_key, uint32_t egress_key,
+	uint16_t controller_kind, uint16_t expected_members, uint32_t cooldown_ms)
 {
 	sg_mechanism_plan_binding_t *binding;
 
@@ -1935,7 +1936,9 @@ static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
 	    gen_num_mechanism_bindings >= (uint32_t)LINK_MAX ||
 	    !Mechanism_Node(entry_key) || !Mechanism_Node(mover_key) ||
 	    (destination_key != SG_MECH_NO_KEY &&
-	     !Mechanism_Node(destination_key)) || expected_members == 0U ||
+	     !Mechanism_Node(destination_key)) ||
+	    (egress_key != SG_MECH_NO_KEY && !Mechanism_Node(egress_key)) ||
+	    expected_members == 0U ||
 	    expected_members > RUNE_MAX_MECHANISM_MEMBERS)
 	{
 		gen_mechanism_failed = true;
@@ -1946,6 +1949,7 @@ static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
 	binding->entry_key = entry_key;
 	binding->mover_key = mover_key;
 	binding->destination_key = destination_key;
+	binding->egress_key = egress_key;
 	binding->controller_kind = controller_kind;
 	binding->expected_members = expected_members;
 	binding->cooldown_ms = cooldown_ms;
@@ -1953,15 +1957,29 @@ static qboolean Mechanism_Bind(rune_link_t *link, uint32_t entry_key,
 	return true;
 }
 
-static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform)
+static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
+	edict_t *approach_door, edict_t *egress_door,
+	uint16_t expected_members)
 {
 	uint32_t mover_key = Mechanism_EntityKey(platform);
 	uint32_t entry_key = Mechanism_OwnedEntry(mover_key,
 		SG_MECH_NODE_PLATFORM_TRIGGER);
+	const rune_mechanism_node_t *entry_node = Mechanism_Node(entry_key);
+	uint32_t cooldown = 0U;
+
+	if (entry_node && entry_node->touch_callback ==
+	        SG_MECH_CALLBACK_TOUCH_MULTI)
+		cooldown = entry_node->wait_ms > RUNE_MAX_COST_MS
+		    ? RUNE_MAX_COST_MS : entry_node->wait_ms;
 
 	return mover_key != SG_MECH_NO_KEY && entry_key != SG_MECH_NO_KEY &&
-	       Mechanism_Bind(link, entry_key, mover_key, SG_MECH_NO_KEY,
-		SG_MECHANISM_CONTROLLER_PLATFORM, 1U, 0U);
+	       entry_node &&
+	       Mechanism_Bind(link, entry_key, mover_key,
+	           approach_door ? Mechanism_EntityKey(approach_door) :
+	               SG_MECH_NO_KEY,
+	           egress_door ? Mechanism_EntityKey(egress_door) :
+	               SG_MECH_NO_KEY,
+		SG_MECHANISM_CONTROLLER_PLATFORM, expected_members, cooldown);
 }
 
 static qboolean Mechanism_BindTeleport(rune_link_t *link, edict_t *pad,
@@ -1975,6 +1993,7 @@ static qboolean Mechanism_BindTeleport(rune_link_t *link, edict_t *pad,
 	return mover_key != SG_MECH_NO_KEY && entry_key != SG_MECH_NO_KEY &&
 	       destination_key != SG_MECH_NO_KEY &&
 	       Mechanism_Bind(link, entry_key, mover_key, destination_key,
+		SG_MECH_NO_KEY,
 		SG_MECHANISM_CONTROLLER_TELEPORT, 1U, 0U);
 }
 
@@ -2028,6 +2047,7 @@ static qboolean Mechanism_BindDoor(rune_link_t *link, edict_t *trigger)
 	else
 		goto fail;
 	return Mechanism_Bind(link, entry_key, primary, SG_MECH_NO_KEY,
+		SG_MECH_NO_KEY,
 		controller, (uint16_t)count, cooldown);
 
 fail:
@@ -2092,6 +2112,7 @@ static qboolean Mechanism_BindButtonDoor(rune_link_t *link, edict_t *button)
 	if (team_members + 1U > RUNE_MAX_MECHANISM_MEMBERS)
 		goto fail;
 	return Mechanism_Bind(link, entry_key, mover_key, SG_MECH_NO_KEY,
+		SG_MECH_NO_KEY,
 		SG_MECHANISM_CONTROLLER_BUTTON_DOOR,
 		(uint16_t)(team_members + 1U), (uint32_t)entry->wait_ms);
 
@@ -2589,7 +2610,8 @@ static qboolean Door_ApproachEnvelopeEligible(int controller_kind,
  * owns that final contact.  Connectivity requirements are evaluated against
  * the already-proven ordinary/swim graph. */
 static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
-	edict_t *expected, qboolean require_stable, qboolean require_dry,
+	edict_t *entry, edict_t *support, qboolean require_stable,
+	qboolean require_dry,
 	qboolean require_incoming, qboolean require_outgoing, int action,
 	int *approach_ms)
 {
@@ -2606,12 +2628,13 @@ static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
 
 		int trial_ms = 0;
 
+		VectorSubtract(gen_seeds[i].origin, body, d);
+		h2 = d[0] * d[0] + d[1] * d[1];
 		if ((require_stable && !gen_source_stable[i]) ||
 		    (require_dry && gen_source_waterlevel[i] != 0) ||
 		    (require_incoming && !Gen_SeedHasIncoming(i)) ||
 		    (require_outgoing && !Gen_SeedHasOutgoing(i)))
 			continue;
-		VectorSubtract(gen_seeds[i].origin, body, d);
 		/* The declared runtime controller is intentionally planar: it walks into
 		 * a pad/plat or off the top, but it neither jumps nor swims vertically.
 		 * Restrict endpoints to one Pmove step-height band so the swept hull is not
@@ -2620,7 +2643,6 @@ static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
 			continue;
 		if (fabsf(d[2]) > vert)
 			continue;
-		h2 = d[0] * d[0] + d[1] * d[1];
 		if (h2 > horiz * horiz)
 			continue;
 		VectorCopy(gen_seeds[i].origin, start);
@@ -2631,10 +2653,10 @@ static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
 		tr = sg_host.trace(start, mins, maxs, end,
 		                   NULL, MASK_PLAYERSOLID);
 		if (tr.startsolid || tr.allsolid ||
-		    (tr.fraction < 1.0f && tr.ent != expected))
+		    (tr.fraction < 1.0f && tr.ent != support))
 			continue;
 		if (approach_ms && !SG_OracleDeclaredApproach(
-		        gen_seeds[i].origin, body, expected, action, &trial_ms))
+		        gen_seeds[i].origin, body, entry, support, action, &trial_ms))
 			continue;
 		d3 = h2 + d[2] * d[2];
 		if (d3 < bestd)
@@ -2734,13 +2756,20 @@ static int Gen_LiftEgressSeed(vec3_t top_body, float horiz, edict_t *plat,
 	return best;
 }
 
+static float Lift_EgressSearchRadius(float halfx, float halfy)
+{
+	return sqrtf(halfx * halfx + halfy * halfy) + SEED_SPACING +
+	       PLAYER_HALF_WIDTH;
+}
 
-static short Plat_TravelMs(edict_t *e)
+
+static short Plat_TravelMs(edict_t *e, const vec3_t source,
+	const vec3_t destination)
 {
 	float speed = e->moveinfo.speed;
 	float accel = e->moveinfo.accel;
 	float decel = e->moveinfo.decel;
-	float dist = e->pos1[2] - e->pos2[2];
+	float dist = fabsf(destination[2] - source[2]);
 	float secs;
 
 	if (dist < 1.0f)
@@ -2786,6 +2815,238 @@ static short Plat_TravelMs(edict_t *e)
 	return (short)(secs * 1000.0f);
 }
 
+static qboolean Lift_EgressSpans(const vec3_t source,
+	const vec3_t destination, const vec3_t source_body,
+	const vec3_t egress_body)
+{
+	float travel_z;
+
+	if (!source || !destination || !source_body || !egress_body)
+		return false;
+	travel_z = destination[2] - source[2];
+	return (egress_body[2] - source_body[2]) * travel_z >=
+	       0.5f * travel_z * travel_z;
+}
+
+
+static qboolean Lift_Endpoints(edict_t *mover, edict_t **entry_out,
+	vec3_t source, vec3_t destination, qboolean *stock_out)
+{
+	uint32_t mover_key = Mechanism_EntityKey(mover);
+	uint32_t entry_key;
+	const rune_mechanism_node_t *mover_node;
+	const rune_mechanism_node_t *entry_node;
+	edict_t *entry;
+
+	if (entry_out) *entry_out = NULL;
+	if (stock_out) *stock_out = false;
+	if (!mover || !entry_out || !source || !destination || !stock_out ||
+	    mover_key == SG_MECH_NO_KEY ||
+	    !(mover_node = Mechanism_Node(mover_key)) ||
+	    mover_node->kind != SG_MECH_NODE_PLATFORM ||
+	    (entry_key = Mechanism_OwnedEntry(mover_key,
+	        SG_MECH_NODE_PLATFORM_TRIGGER)) == SG_MECH_NO_KEY ||
+	    entry_key >= (uint32_t)globals.num_edicts ||
+	    !(entry_node = Mechanism_Node(entry_key)))
+		return false;
+	entry = &g_edicts[entry_key];
+	if (!strcmp(mover->classname, "func_plat") && !mover->targetname &&
+	    entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_PLAT_CENTER)
+	{
+		VectorCopy(mover->pos2, source);
+		VectorCopy(mover->pos1, destination);
+		*stock_out = true;
+	}
+	else if (!strcmp(mover->classname, "func_door") &&
+	         entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&
+	         entry_node->use_callback == SG_MECH_CALLBACK_USE_MULTI &&
+	         mover_node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+	         mover_node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR)
+	{
+		VectorCopy(mover->moveinfo.start_origin, source);
+		VectorCopy(mover->moveinfo.end_origin, destination);
+	}
+	else
+		return false;
+	if (fabsf(destination[2] - source[2]) < 8.0f)
+		return false;
+	*entry_out = entry;
+	return true;
+}
+
+typedef struct
+{
+	edict_t *ent;
+	vec3_t origin, old_origin, angles, velocity, avelocity;
+	int state, linkcount;
+	solid_t solid;
+} door_pose_t;
+
+static int DoorTrigger_Targets(edict_t *trigger, edict_t **doors,
+	int capacity);
+static int DoorTrigger_Open(edict_t *trigger, door_pose_t *saved,
+	int capacity);
+static void DoorPose_Restore(door_pose_t *saved, int count);
+static int Door_TravelMs(edict_t *trigger);
+static int Door_WaitPoints(edict_t *trigger, vec3_t *points);
+static int Gen_CompoundLiftEgressSeed(const vec3_t top_body, float horiz,
+	edict_t *plat, edict_t **trigger_out, uint16_t *member_count_out,
+	int *egress_ms_out);
+
+static qboolean Lift_DoorStageDelay(edict_t *trigger,
+	uint32_t *delay_ms_out)
+{
+	if (delay_ms_out)
+		*delay_ms_out = 0U;
+	if (!trigger || !delay_ms_out)
+		return false;
+	if (SG_DeclaredDoorDirectActivatorSafe(trigger))
+		return true;
+	return SG_DeclaredDoorDelayedActivatorSafe(trigger, delay_ms_out);
+}
+
+static qboolean Lift_DoorStageTouchMatches(edict_t *trigger,
+	const vec3_t origin)
+{
+	uint32_t delay_ms;
+
+	if (SG_DeclaredDoorDirectActivatorSafe(trigger))
+		return SG_DeclaredDoorTouchMatches(trigger, origin);
+	return SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms) &&
+	       SG_DeclaredDelayedDoorTouchMatches(trigger, origin);
+}
+
+static qboolean Lift_DoorStageSameSet(edict_t *first, edict_t *second)
+{
+	uint32_t first_delay;
+	uint32_t second_delay;
+
+	if (!Lift_DoorStageDelay(first, &first_delay) ||
+	    !Lift_DoorStageDelay(second, &second_delay) ||
+	    first_delay != second_delay)
+		return false;
+	return first_delay == 0U ? SG_DeclaredDoorSameSet(first, second) :
+	       SG_DeclaredDelayedDoorSameSet(first, second);
+}
+
+static qboolean Lift_DoorStageCrossesSweep(edict_t *trigger,
+	const vec3_t from, const vec3_t to)
+{
+	uint32_t delay_ms;
+
+	if (!Lift_DoorStageDelay(trigger, &delay_ms))
+		return false;
+	return delay_ms == 0U ? SG_DeclaredDoorCrossesSweep(trigger, from, to) :
+	       SG_DeclaredDelayedDoorCrossesSweep(trigger, from, to);
+}
+
+static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
+	const vec3_t bottom_body, edict_t **door_out,
+	uint16_t *expected_members_out, vec3_t wait_out, int *approach_ms_out)
+{
+	#define LIFT_DOOR_WAIT_MAX 64
+	edict_t *best_door = NULL;
+	uint16_t best_members = 0U;
+	int best_seed = -1;
+	int best_ms = INT_MAX;
+	vec3_t best_wait = { 0.0f, 0.0f, 0.0f };
+	int trigger_index;
+
+	if (door_out) *door_out = NULL;
+	if (expected_members_out) *expected_members_out = 0U;
+	if (approach_ms_out) *approach_ms_out = 0;
+	if (wait_out) VectorClear(wait_out);
+	if (!entry || !support || !bottom_body || !door_out ||
+	    !expected_members_out || !wait_out || !approach_ms_out)
+		return -1;
+	for (trigger_index = 1; trigger_index < globals.num_edicts;
+	     trigger_index++)
+	{
+		edict_t *trigger = &g_edicts[trigger_index];
+		const rune_mechanism_node_t *trigger_node;
+		edict_t *members[RUNE_MAX_MECHANISM_MEMBERS];
+		vec3_t wait_points[LIFT_DOOR_WAIT_MAX];
+		int member_count;
+		int wait_count;
+		int wait_index;
+		int travel_ms;
+		uint32_t delay_ms;
+
+		trigger_node = Mechanism_Node(Mechanism_EntityKey(trigger));
+		if (!trigger_node || trigger_node->kind != SG_MECH_NODE_TRIGGER ||
+		    !Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX)
+			continue;
+		member_count = DoorTrigger_Targets(trigger, members,
+			RUNE_MAX_MECHANISM_MEMBERS);
+		travel_ms = Door_TravelMs(trigger);
+		if (member_count <= 0 || member_count >= RUNE_MAX_MECHANISM_MEMBERS ||
+		    travel_ms <= 0)
+			continue;
+		wait_count = Door_WaitPoints(trigger, wait_points);
+		for (wait_index = 0; wait_index < wait_count; wait_index++)
+		{
+			door_pose_t saved[RUNE_MAX_MECHANISM_MEMBERS];
+			int seed;
+
+			if (!Lift_DoorStageCrossesSweep(trigger,
+			        wait_points[wait_index], bottom_body))
+				continue;
+			for (seed = 0; seed < gen_num_seeds; seed++)
+			{
+				vec3_t delta;
+				int door_ms;
+				int carrier_ms;
+				int pose_count;
+				int total_ms;
+
+				if (!gen_source_stable[seed] ||
+				    gen_source_waterlevel[seed] != 0 ||
+				    !Gen_SeedHasIncoming(seed))
+					continue;
+				VectorSubtract(gen_seeds[seed].origin,
+				    wait_points[wait_index], delta);
+				if (!Door_ApproachEnvelopeEligible(
+				        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR,
+				        -1, delta) ||
+				    !SG_OracleDeclaredDoorApproach(gen_seeds[seed].origin,
+				        wait_points[wait_index], trigger, &door_ms,
+				        &carrier_ms))
+					continue;
+				pose_count = DoorTrigger_Open(trigger, saved,
+					RUNE_MAX_MECHANISM_MEMBERS);
+				if (pose_count <= 0)
+					continue;
+				carrier_ms = 0;
+				if (!SG_OracleDeclaredCompoundLiftApproach(
+				        wait_points[wait_index], bottom_body, entry, support,
+				        trigger, &carrier_ms))
+					carrier_ms = -1;
+				DoorPose_Restore(saved, pose_count);
+				if (carrier_ms < 0)
+					continue;
+				total_ms = door_ms + (int)delay_ms + travel_ms + carrier_ms;
+				if (total_ms < best_ms)
+				{
+					best_ms = total_ms;
+					best_seed = seed;
+					best_door = trigger;
+					best_members = (uint16_t)(member_count + 1);
+					VectorCopy(wait_points[wait_index], best_wait);
+				}
+			}
+		}
+	}
+	if (best_seed >= 0)
+	{
+		*door_out = best_door;
+		*expected_members_out = best_members;
+		VectorCopy(best_wait, wait_out);
+		*approach_ms_out = best_ms;
+	}
+	return best_seed;
+	#undef LIFT_DOOR_WAIT_MAX
+}
+
 
 static void Link_Plats(void)
 {
@@ -2794,85 +3055,132 @@ static void Link_Plats(void)
 
 	for (i = 0; i < globals.num_edicts; i++)
 	{
-		vec3_t bottom, bottom_body, top_body;
+		edict_t *entry;
+		vec3_t source, destination, anchor, bottom_body, top_body;
 		vec3_t saved_origin, saved_old_origin, saved_velocity;
 		float halfx, halfy, horiz;
-		int st_top, before, approach = -1;
+		int st_top = -1, before, approach = -1;
 		int approach_ms = 0, egress_ms = 0, saved_state, saved_linkcount;
+		int saved_solid;
 		int total_cost;
+		qboolean stock;
+		edict_t *approach_door = NULL;
+		edict_t *egress_door = NULL;
+		uint16_t expected_members = 1U;
+		vec3_t approach_wait;
 		short cost;
 
 		e = &g_edicts[i];
 		if (!e->inuse || !e->classname)
 			continue;
-		if (strcmp(e->classname, "func_plat") != 0)
+		if (!Lift_Endpoints(e, &entry, source, destination, &stock))
 			continue;
-		/* A targetnamed plat starts disabled at the top. Its center trigger
-		 * cannot activate STATE_UP; an unrelated button/relay must call use.
-		 * That external prerequisite is not serialized, so no executable
-		 * declared link may claim this lift. */
-		if (e->targetname)
-			continue;
-		if (e->pos1[2] - e->pos2[2] < 8.0f)
-			continue;                       /* travels nowhere worth a link */
-
-		bottom[0] = e->pos2[0] + (e->mins[0] + e->maxs[0]) * 0.5f;
-		bottom[1] = e->pos2[1] + (e->mins[1] + e->maxs[1]) * 0.5f;
-		bottom[2] = e->pos2[2] + e->maxs[2];
 		halfx = (e->maxs[0] - e->mins[0]) * 0.5f;
 		halfy = (e->maxs[1] - e->mins[1]) * 0.5f;
-		horiz = sqrtf(halfx * halfx + halfy * halfy) + SEED_SPACING;
+		horiz = Lift_EgressSearchRadius(halfx, halfy);
 
-		if (!Seed_Ground(bottom, bottom_body))
-			continue;
-		approach = Gen_MechanismSeedNear(bottom_body, horiz, 64.0f, e,
-		    true, true, true, false, RL_LIFT, &approach_ms);
-		if (approach < 0)
-		{
-			sg_host.dprint("rune: plat at (%.0f %.0f %.0f) unlinked, "
-			               "no static-world staging seed\n",
-			               bottom[0], bottom[1], bottom[2]);
-			continue;
-		}
-
-		/* Egress is part of the declaration. Raise only this platform for the
-		 * synchronous oracle scope, then restore every authoritative field before
-		 * generation continues; no server frame runs inside this command. */
 		VectorCopy(e->s.origin, saved_origin);
 		VectorCopy(e->s.old_origin, saved_old_origin);
 		VectorCopy(e->velocity, saved_velocity);
 		saved_state = e->moveinfo.state;
+		saved_solid = e->solid;
 		saved_linkcount = e->linkcount;
-		VectorCopy(e->pos1, e->s.origin);
-		VectorCopy(e->pos1, e->s.old_origin);
+		e->solid = SOLID_BSP;
+		VectorCopy(source, e->s.origin);
+		VectorCopy(source, e->s.old_origin);
+		VectorClear(e->velocity);
+		e->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+		sg_host.linkentity(e);
+		if (SG_LiftRest(entry, e, NULL, bottom_body))
+			approach = Gen_MechanismSeedNear(bottom_body, horiz, 64.0f,
+			    entry, e, true, true, true, false, RL_LIFT, &approach_ms);
+		if (approach < 0 && !stock)
+			approach = Lift_CompoundApproach(entry, e, bottom_body,
+				&approach_door, &expected_members, approach_wait,
+				&approach_ms);
+		if (stock)
+		{
+			anchor[0] = source[0] + (e->mins[0] + e->maxs[0]) * 0.5f;
+			anchor[1] = source[1] + (e->mins[1] + e->maxs[1]) * 0.5f;
+			anchor[2] = source[2] + e->maxs[2];
+		}
+		else if (approach_door)
+			VectorCopy(approach_wait, anchor);
+		else
+			VectorCopy(bottom_body, anchor);
+		VectorCopy(destination, e->s.origin);
+		VectorCopy(destination, e->s.old_origin);
 		VectorClear(e->velocity);
 		e->moveinfo.state = SG_PLAT_STATE_TOP;
 		sg_host.linkentity(e);
-		st_top = SG_LiftTopRest(e, NULL, top_body)
-		    ? Gen_LiftEgressSeed(top_body, horiz, e, &egress_ms) : -1;
+		if (approach >= 0 && SG_LiftRest(entry, e, NULL, top_body))
+			st_top = Gen_LiftEgressSeed(top_body, horiz, e, &egress_ms);
+		if (st_top < 0 && approach >= 0 && approach_door)
+		{
+			uint16_t egress_members = 0U;
+
+			st_top = Gen_CompoundLiftEgressSeed(top_body, horiz, e,
+				&egress_door, &egress_members, &egress_ms);
+			if (st_top >= 0)
+			{
+				edict_t *bottom_members[RUNE_MAX_MECHANISM_MEMBERS];
+				edict_t *top_members[RUNE_MAX_MECHANISM_MEMBERS];
+				int bottom_count = DoorTrigger_Targets(approach_door,
+					bottom_members, RUNE_MAX_MECHANISM_MEMBERS);
+				int top_count = DoorTrigger_Targets(egress_door,
+					top_members, RUNE_MAX_MECHANISM_MEMBERS);
+				int bottom_index;
+				int top_index;
+
+				if (bottom_count <= 0 || top_count <= 0 ||
+				    top_count != (int)egress_members ||
+				    1 + bottom_count + top_count >
+				        RUNE_MAX_MECHANISM_MEMBERS)
+					st_top = -1;
+				for (bottom_index = 0; st_top >= 0 &&
+				     bottom_index < bottom_count; bottom_index++)
+					for (top_index = 0; top_index < top_count; top_index++)
+						if (bottom_members[bottom_index] ==
+						    top_members[top_index])
+							st_top = -1;
+				if (st_top >= 0)
+				{
+					expected_members = (uint16_t)(1 + bottom_count +
+						top_count);
+				}
+			}
+		}
 		VectorCopy(saved_origin, e->s.origin);
 		VectorCopy(saved_old_origin, e->s.old_origin);
 		VectorCopy(saved_velocity, e->velocity);
 		e->moveinfo.state = saved_state;
+		e->solid = saved_solid;
 		sg_host.linkentity(e);
 		/* Linkentity necessarily increments this generation counter. No server
 		 * frame ran during the synchronous relocation, so restore the original
 		 * value too; otherwise live riders are spuriously detached after `sv rune`. */
 		e->linkcount = saved_linkcount;
+		if (approach < 0)
+		{
+			sg_host.dprint("rune: lift at (%.0f %.0f %.0f) unlinked, "
+			               "no static-world staging seed\n",
+			               source[0], source[1], source[2]);
+			continue;
+		}
 		if (st_top < 0 || approach == st_top)
 		{
-			sg_host.dprint("rune: plat at (%.0f %.0f %.0f) unlinked, "
+			sg_host.dprint("rune: lift at (%.0f %.0f %.0f) unlinked, "
 			               "no proved static-world top egress\n",
-			               bottom[0], bottom[1], bottom[2]);
+			               source[0], source[1], source[2]);
 			continue;
 		}
 		/* both ends can only be honest if the pair actually spans the
 		 * travel -- otherwise two seeds on the same level got picked */
-		if (gen_seeds[st_top].origin[2] - bottom_body[2] <
-		        (e->pos1[2] - e->pos2[2]) * 0.5f)
+		if (!Lift_EgressSpans(source, destination, bottom_body,
+		        gen_seeds[st_top].origin))
 			continue;
 
-		cost = Plat_TravelMs(e);
+		cost = Plat_TravelMs(e, source, destination);
 		total_cost = (int)cost + approach_ms + egress_ms;
 		if (total_cost <= 0 || total_cost > 30000)
 			continue;
@@ -2882,8 +3190,9 @@ static void Link_Plats(void)
 		{
 			rune_link_t *link = &gen_links[gen_num_links - 1];
 
-			VectorCopy(bottom, link->anchor);
-			if (!Mechanism_BindPlatform(link, e))
+			VectorCopy(anchor, link->anchor);
+			if (!Mechanism_BindPlatform(link, e, approach_door, egress_door,
+			        expected_members))
 				gen_num_links--;
 			else
 				gen_lift_links++;
@@ -2914,10 +3223,10 @@ static void Link_Plats(void)
 			else
 			{
 				gen_lift_down_none++;
-				sg_host.dprint("rune: plat at (%.0f %.0f %.0f) has no proven way "
+				sg_host.dprint("rune: lift at (%.0f %.0f %.0f) has no proven way "
 				           "down (no drop, and a top-parked plat does not "
 				           "descend on touch -- g_func.c:429)\n",
-				           bottom[0], bottom[1], bottom[2]);
+				           source[0], source[1], source[2]);
 			}
 		}
 	}
@@ -2929,12 +3238,13 @@ static void Link_Plats(void)
 
 static void Link_Teleporters(void)
 {
-	edict_t *e, *dest;
+	edict_t *e, *dest, *entry;
 	int i;
 
 	for (i = 0; i < globals.num_edicts; i++)
 	{
 		vec3_t pad, pad_body, arrive, arrive_body;
+		uint32_t entry_key;
 		int sd, before, approach = -1, approach_ms = 0;
 
 		e = &g_edicts[i];
@@ -2944,6 +3254,12 @@ static void Link_Teleporters(void)
 			continue;
 		if (!e->target)
 			continue;
+		entry_key = Mechanism_OwnedEntry(Mechanism_EntityKey(e),
+		    SG_MECH_NODE_TELEPORT_TRIGGER);
+		if (entry_key == SG_MECH_NO_KEY ||
+		    entry_key >= (uint32_t)globals.num_edicts)
+			continue;
+		entry = &g_edicts[entry_key];
 
 		dest = G_Find(NULL, FOFS(targetname), e->target);
 		if (!dest)
@@ -2973,7 +3289,7 @@ static void Link_Teleporters(void)
 		if (!Gen_SeedHasOutgoing(sd))
 			continue;
 		approach = Gen_MechanismSeedNear(pad_body,
-		    RUNE_TELEPORT_SEED_REACH, RUNE_TELEPORT_SEED_REACH, e,
+		    RUNE_TELEPORT_SEED_REACH, RUNE_TELEPORT_SEED_REACH, entry, e,
 		    true, true, true, false, RL_TELEPORT, &approach_ms);
 		if (approach < 0)
 			approach = Gen_TeleportWaterSeed(pad_body, e, &approach_ms);
@@ -3007,20 +3323,16 @@ static void Link_Teleporters(void)
 		sg_host.dprint("rune: %d teleport links\n", gen_tele_links);
 }
 
-typedef struct
-{
-	edict_t *ent;
-	vec3_t origin, old_origin, angles, velocity, avelocity;
-	int state, linkcount;
-	solid_t solid;
-} door_pose_t;
-
 /* Link one canonical door team at its exact STATE_TOP pose for a synchronous
  * egress proof. Rune generation already made the team SOLID_NOT; restoring
  * every authoritative field (including linkcount) makes `sv rune` invisible
  * to a live server once this scope ends. */
 static int DoorTrigger_Targets(edict_t *trigger, edict_t **doors, int capacity)
 {
+	uint32_t delay_ms = 0U;
+
+	if (SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms))
+		return SG_DeclaredDelayedDoorMembers(trigger, doors, capacity);
 	return SG_DeclaredDoorMembers(trigger, doors, capacity);
 }
 
@@ -3084,6 +3396,116 @@ static void DoorPose_Restore(door_pose_t *saved, int count)
 		sg_host.linkentity(member);
 		member->linkcount = saved[i].linkcount;
 	}
+}
+
+static edict_t *Lift_EgressDoorStage(const vec3_t top_body,
+	uint16_t *member_count_out)
+{
+	edict_t *match = NULL;
+	uint32_t match_delay = 0U;
+	int index;
+
+	if (member_count_out)
+		*member_count_out = 0U;
+	if (!top_body || !member_count_out)
+		return NULL;
+	for (index = 1; index < globals.num_edicts; index++)
+	{
+		edict_t *trigger = &g_edicts[index];
+		edict_t *members[RUNE_MAX_MECHANISM_MEMBERS];
+		uint32_t delay_ms;
+		int count;
+
+		if (!Lift_DoorStageDelay(trigger, &delay_ms) ||
+		    !Lift_DoorStageTouchMatches(trigger, top_body))
+			continue;
+		count = DoorTrigger_Targets(trigger, members,
+			RUNE_MAX_MECHANISM_MEMBERS);
+		if (count <= 0 || count >= RUNE_MAX_MECHANISM_MEMBERS)
+			return NULL;
+		if (match &&
+		    (delay_ms != match_delay ||
+		     !Lift_DoorStageSameSet(match, trigger)))
+			return NULL;
+		if (!match)
+		{
+			match = trigger;
+			match_delay = delay_ms;
+			*member_count_out = (uint16_t)count;
+		}
+	}
+	return match;
+}
+
+static int Gen_CompoundLiftEgressSeed(const vec3_t top_body, float horiz,
+	edict_t *plat, edict_t **trigger_out, uint16_t *member_count_out,
+	int *egress_ms_out)
+{
+	door_pose_t saved[RUNE_MAX_MECHANISM_MEMBERS];
+	edict_t *trigger;
+	uint32_t delay_ms = 0U;
+	uint16_t member_count;
+	float best_distance = 1e30f;
+	int best = -1;
+	int travel_ms = 0;
+	int pose_count;
+	int seed;
+
+	if (trigger_out)
+		*trigger_out = NULL;
+	if (member_count_out)
+		*member_count_out = 0U;
+	if (egress_ms_out)
+		*egress_ms_out = 0;
+	if (!top_body || !plat || !trigger_out || !member_count_out ||
+	    !egress_ms_out)
+		return -1;
+	trigger = Lift_EgressDoorStage(top_body, &member_count);
+	if (!trigger ||
+	    !Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX ||
+	    (travel_ms = Door_TravelMs(trigger)) <= 0)
+		return -1;
+	pose_count = DoorTrigger_Open(trigger, saved,
+		RUNE_MAX_MECHANISM_MEMBERS);
+	if (pose_count != (int)member_count)
+	{
+		if (pose_count > 0)
+			DoorPose_Restore(saved, pose_count);
+		return -1;
+	}
+	for (seed = 0; seed < gen_num_seeds; seed++)
+	{
+		vec3_t delta;
+		float horizontal_squared;
+		float distance_squared;
+		int rollout_ms;
+
+		if (!gen_source_stable[seed] || gen_source_waterlevel[seed] != 0 ||
+		    !Gen_SeedHasOutgoing(seed))
+			continue;
+		VectorSubtract(gen_seeds[seed].origin, top_body, delta);
+		if (fabsf(delta[2]) > 16.0f)
+			continue;
+		horizontal_squared = delta[0] * delta[0] + delta[1] * delta[1];
+		if (horizontal_squared > horiz * horiz ||
+		    !SG_OracleDeclaredCompoundLiftEgress(top_body,
+		        gen_seeds[seed].origin, plat, trigger, &rollout_ms))
+			continue;
+		distance_squared = horizontal_squared + delta[2] * delta[2];
+		if (distance_squared < best_distance)
+		{
+			best_distance = distance_squared;
+			best = seed;
+			*egress_ms_out = (int)delay_ms + travel_ms + rollout_ms;
+		}
+	}
+	DoorPose_Restore(saved, pose_count);
+	if (best >= 0)
+	{
+		*trigger_out = trigger;
+		*member_count_out = member_count;
+	}
+	return best;
 }
 
 static qboolean Button_Displacement(edict_t *button, vec3_t displacement)
@@ -3246,6 +3668,45 @@ static int Door_CooldownGapMs(edict_t *trigger)
 int SG_RuneTestDoorCooldownGapMs(edict_t *trigger)
 {
 	return Door_CooldownGapMs(trigger);
+}
+
+float SG_RuneTestLiftEgressSearchRadius(float halfx, float halfy)
+{
+	return Lift_EgressSearchRadius(halfx, halfy);
+}
+
+int SG_RuneTestPlatformTravelMs(edict_t *platform, float source_z,
+	float destination_z)
+{
+	vec3_t source = { 0.0f, 0.0f, 0.0f };
+	vec3_t destination = { 0.0f, 0.0f, 0.0f };
+
+	source[2] = source_z;
+	destination[2] = destination_z;
+	return Plat_TravelMs(platform, source, destination);
+}
+
+qboolean SG_RuneTestLiftEgressSpans(float source_z, float destination_z,
+	float source_body_z, float egress_body_z)
+{
+	vec3_t source = { 0.0f, 0.0f, 0.0f };
+	vec3_t destination = { 0.0f, 0.0f, 0.0f };
+	vec3_t source_body = { 0.0f, 0.0f, 0.0f };
+	vec3_t egress_body = { 0.0f, 0.0f, 0.0f };
+
+	source[2] = source_z;
+	destination[2] = destination_z;
+	source_body[2] = source_body_z;
+	egress_body[2] = egress_body_z;
+	return Lift_EgressSpans(source, destination, source_body, egress_body);
+}
+
+int SG_RuneTestLiftEgressDoorMemberCount(const vec3_t top_body)
+{
+	uint16_t member_count = 0U;
+
+	return Lift_EgressDoorStage(top_body, &member_count)
+		? (int)member_count : -1;
 }
 #endif
 
@@ -3610,11 +4071,26 @@ static void Door_WaitInsert(edict_t *trigger, const vec3_t point,
 	 * this exact brush; otherwise the thin-side pass can reuse a broad-side
 	 * anchor, emit the already-known direction, and never prove the reverse
 	 * crossing. */
-	if (!SG_DeclaredDoorTouchMatches(trigger, fixed))
+	if (!Lift_DoorStageTouchMatches(trigger, fixed))
 		return;
-	resolved = SG_DeclaredDoorForLink(fixed, fixed);
-	if (!SG_DeclaredDoorSameSet(resolved, trigger))
-		return;
+	{
+		uint32_t delay_ms;
+
+		if (!Lift_DoorStageDelay(trigger, &delay_ms))
+			return;
+		if (delay_ms == 0U)
+		{
+			resolved = SG_DeclaredDoorForLink(fixed, fixed);
+			if (!SG_DeclaredDoorSameSet(resolved, trigger))
+				return;
+		}
+		else
+		{
+			resolved = trigger;
+			if (!SG_DeclaredDelayedDoorTouchMatches(resolved, fixed))
+				return;
+		}
+	}
 	for (i = 0; i < *count; i++)
 	{
 		vec3_t delta;
@@ -5684,7 +6160,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 		 */
 		int declared_mark = gen_num_links;
 
-		Link_Plats();           /* func_plat: bottom seed -> top seed */
+		Link_Plats();           /* declared lift: bottom seed -> top seed */
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
 		Link_Declare_Tail(declared_mark);

@@ -58,6 +58,7 @@ static sg_phantom_t *sg_oracle_active_phantom;
 static qboolean sg_oracle_world_only;
 static qboolean sg_oracle_contaminated;
 static edict_t *sg_oracle_declared_expected;
+static edict_t *sg_oracle_declared_entry;
 static edict_t *sg_oracle_declared_door;
 /* The generator may synchronously pose one catalog-authenticated func_button
  * at its sealed TOP endpoint while proving the post-activation suffix.  This
@@ -80,6 +81,10 @@ static qboolean sg_oracle_compound_touched;
 static qboolean sg_oracle_loader_replay;
 
 static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger);
+static qboolean SG_OracleDeclaredActivatorSafeWithDelay(edict_t *trigger,
+	qboolean require_positive_delay);
+static qboolean SG_OracleDeclaredTriggerContains(edict_t *trigger,
+	const vec3_t origin);
 static qboolean SG_OracleDeclaredButtonDoorSafe(edict_t *button);
 static qboolean SG_OracleDeclaredButtonTopSafe(edict_t *button);
 static qboolean SG_OracleDeclaredDoorSourceSafe(edict_t *source);
@@ -549,6 +554,8 @@ static qboolean SG_OracleDeclaredTrigger(edict_t *trigger)
 {
 	if (!trigger || !sg_oracle_declared_expected)
 		return false;
+	if (sg_oracle_declared_entry)
+		return trigger == sg_oracle_declared_entry;
 	if (sg_oracle_declared_action == RL_TELEPORT)
 		return trigger->owner == sg_oracle_declared_expected;
 	if (sg_oracle_declared_action == RL_LIFT)
@@ -556,6 +563,19 @@ static qboolean SG_OracleDeclaredTrigger(edict_t *trigger)
 	if (sg_oracle_declared_action == RL_DOOR)
 		return trigger == sg_oracle_declared_expected;
 	return false;
+}
+
+qboolean SG_OracleDeclaredApproachTriggerAllowed(int action,
+	edict_t *declared, edict_t *actual)
+{
+	if (!declared || !actual)
+		return false;
+	if (declared == actual)
+		return true;
+	if (action == RL_DOOR || action == RL_BUTTON_DOOR)
+		return SG_OracleDeclaredSameDoorSet(declared, actual);
+	return action == RL_LIFT &&
+	       SG_DeclaredDoorSameSet(declared, actual);
 }
 
 /* Generation makes doors nonsolid so a phantom can prove the body motion on
@@ -1552,6 +1572,9 @@ static qboolean SG_OracleDoorTraceBlocked(sg_phantom_t *ph,
 		 * mover pose.  Pmove must see that live BSP, not this broad union. */
 		if (door == sg_oracle_compound_member)
 			continue;
+		if (sg_oracle_declared_action == RL_LIFT &&
+		    door == sg_oracle_declared_expected)
+			continue;
 		/* A declared door egress links this exact team at its real open pose.
 		 * Pmove collides with those brushes normally; the broad synthetic sweep
 		 * must not simultaneously pretend the same team is still closed. */
@@ -1664,10 +1687,13 @@ static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 	edict_t *target = NULL;
 	qboolean found = false;
 
-	if (!door || door->killtarget || door->delay != 0.0f)
+	if (!door || door->killtarget || door->message ||
+	    !isfinite(door->delay) || door->delay < 0.0f)
 		return false;
 	if (!door->target)
 		return true;
+	if (door->delay != 0.0f)
+		return false;
 	if (!door->target[0])
 		return false;
 	while ((target = G_Find(target, FOFS(targetname), door->target)) != NULL)
@@ -1847,9 +1873,6 @@ static qboolean SG_OracleDoorTeamSafe(edict_t *door)
 		return false;
 	for (member = master; member; member = member->teamchain)
 	{
-		float dz = member->moveinfo.end_origin[2] -
-		           member->moveinfo.start_origin[2];
-
 		if (!member->inuse || !member->classname ||
 		    strcmp(member->classname, "func_door") != 0 ||
 		    member->use != door_use || member->health > 0 ||
@@ -1861,7 +1884,7 @@ static qboolean SG_OracleDoorTeamSafe(edict_t *door)
 		    !isfinite(member->moveinfo.decel) ||
 		    fabsf(member->moveinfo.accel - member->moveinfo.speed) > 0.01f ||
 		    fabsf(member->moveinfo.decel - member->moveinfo.speed) > 0.01f ||
-		    !isfinite(member->moveinfo.wait) || fabsf(dz) > 1.0f ||
+		    !isfinite(member->moveinfo.wait) ||
 		    !SG_OracleDoorEffectsSafe(member))
 			return false;
 	}
@@ -1891,7 +1914,8 @@ static qboolean SG_OracleDeclaredMasterReachedBefore(edict_t *trigger,
 	return false;
 }
 
-static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
+static qboolean SG_OracleDeclaredActivatorSafeWithDelay(edict_t *trigger,
+	qboolean require_positive_delay)
 {
 	edict_t *target = NULL;
 	edict_t *master;
@@ -1905,6 +1929,8 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 	 * Their fixed one-second debounce is accounted by the shared cost helper. */
 	if (trigger->touch == Touch_DoorTrigger)
 	{
+		if (require_positive_delay)
+			return false;
 		if (!trigger->owner ||
 		    !SG_OracleDeclaredDoorTeamCanonical(trigger->owner, &master) ||
 		    trigger->owner != master)
@@ -1918,7 +1944,10 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 	    (trigger->spawnflags & (2 | 4)) || !isfinite(trigger->wait) ||
 	    trigger->wait <= 0.0f ||
 	    !VectorCompare(trigger->movedir, vec3_origin) ||
-	    trigger->delay != 0.0f || trigger->killtarget ||
+	    !isfinite(trigger->delay) ||
+	    (require_positive_delay ? trigger->delay <= 0.0f :
+	        trigger->delay != 0.0f) ||
+	    trigger->delay > (float)UINT32_MAX / 1000.0f || trigger->killtarget ||
 	    !trigger->target || !trigger->target[0])
 		return false;
 	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
@@ -1947,6 +1976,54 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
 		return false;
 	}
 	return found;
+}
+
+static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)
+{
+	return SG_OracleDeclaredActivatorSafeWithDelay(trigger, false);
+}
+
+qboolean SG_DeclaredDoorDelayedActivatorSafe(edict_t *trigger,
+	uint32_t *delay_ms_out)
+{
+	double milliseconds;
+
+	if (delay_ms_out)
+		*delay_ms_out = 0U;
+	if (!delay_ms_out ||
+	    !SG_OracleDeclaredActivatorSafeWithDelay(trigger, true))
+		return false;
+	milliseconds = (double)trigger->delay * 1000.0;
+	if (!isfinite(milliseconds) || milliseconds <= 0.0 ||
+	    milliseconds > (double)UINT32_MAX)
+		return false;
+	*delay_ms_out = (uint32_t)lround(milliseconds);
+	if (*delay_ms_out == 0U)
+		*delay_ms_out = 1U;
+	return true;
+}
+
+qboolean SG_DeclaredDelayedDoorTouchMatches(edict_t *trigger,
+	const vec3_t activator_origin)
+{
+	uint32_t delay_ms;
+
+	return trigger && activator_origin &&
+	       SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms) &&
+	       SG_OracleDeclaredTriggerContains(trigger, activator_origin) &&
+	       SG_DeclaredDelayedDoorOutsideSweep(trigger, activator_origin);
+}
+
+qboolean SG_DeclaredDelayedDoorSameSet(edict_t *first, edict_t *second)
+{
+	uint32_t first_delay;
+	uint32_t second_delay;
+
+	return first && second &&
+	       SG_DeclaredDoorDelayedActivatorSafe(first, &first_delay) &&
+	       SG_DeclaredDoorDelayedActivatorSafe(second, &second_delay) &&
+	       first_delay == second_delay &&
+	       SG_OracleDeclaredSameDoorSet(first, second);
 }
 
 /* The active BUTTON_DOOR controller intentionally admits only the stock
@@ -2585,16 +2662,19 @@ qboolean SG_MoverSubjectOutsideProspectivePush(edict_t *member,
 	                           mins, maxs);
 }
 
-qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin)
+static qboolean SG_DeclaredDoorOutsideSweepInternal(edict_t *trigger,
+	const vec3_t origin, qboolean delayed)
 {
 	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
 	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
 	int count, i;
 
-	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !origin)
+	if (!(delayed ? SG_OracleDeclaredActivatorSafeWithDelay(trigger, true) :
+	        SG_OracleDeclaredDoorSourceSafe(trigger)) || !origin)
 		return false;
-	count = SG_DeclaredDoorMembers(trigger, members,
+	count = delayed ? SG_DeclaredDelayedDoorMembers(trigger, members,
+	    SG_PHANTOM_ARMED_DOORS) : SG_DeclaredDoorMembers(trigger, members,
 	    SG_PHANTOM_ARMED_DOORS);
 	if (count <= 0)
 		return false;
@@ -2610,17 +2690,30 @@ qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin)
 	return true;
 }
 
-qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
-	const vec3_t to)
+qboolean SG_DeclaredDoorOutsideSweep(edict_t *trigger, const vec3_t origin)
+{
+	return SG_DeclaredDoorOutsideSweepInternal(trigger, origin, false);
+}
+
+qboolean SG_DeclaredDelayedDoorOutsideSweep(edict_t *trigger,
+	const vec3_t origin)
+{
+	return SG_DeclaredDoorOutsideSweepInternal(trigger, origin, true);
+}
+
+static qboolean SG_DeclaredDoorCrossesSweepInternal(edict_t *trigger,
+	const vec3_t from, const vec3_t to, qboolean delayed)
 {
 	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
 	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
 	edict_t *members[SG_PHANTOM_ARMED_DOORS];
 	int count, i;
 
-	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !from || !to)
+	if (!(delayed ? SG_OracleDeclaredActivatorSafeWithDelay(trigger, true) :
+	        SG_OracleDeclaredDoorSourceSafe(trigger)) || !from || !to)
 		return false;
-	count = SG_DeclaredDoorMembers(trigger, members,
+	count = delayed ? SG_DeclaredDelayedDoorMembers(trigger, members,
+	    SG_PHANTOM_ARMED_DOORS) : SG_DeclaredDoorMembers(trigger, members,
 	    SG_PHANTOM_ARMED_DOORS);
 	if (count <= 0)
 		return false;
@@ -2634,6 +2727,18 @@ qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
 			return true;
 	}
 	return false;
+}
+
+qboolean SG_DeclaredDoorCrossesSweep(edict_t *trigger, const vec3_t from,
+	const vec3_t to)
+{
+	return SG_DeclaredDoorCrossesSweepInternal(trigger, from, to, false);
+}
+
+qboolean SG_DeclaredDelayedDoorCrossesSweep(edict_t *trigger,
+	const vec3_t from, const vec3_t to)
+{
+	return SG_DeclaredDoorCrossesSweepInternal(trigger, from, to, true);
 }
 
 static int SG_BoundDoorMembers(
@@ -2813,6 +2918,35 @@ edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source)
 	return match;
 }
 
+static qboolean SG_DeclaredDelayedDoorForLinkMatches(edict_t *expected,
+	const vec3_t anchor, const vec3_t source)
+{
+	edict_t *match = NULL;
+	uint32_t expected_delay;
+	int i;
+
+	if (!expected || !anchor || !source ||
+	    !SG_DeclaredDoorDelayedActivatorSafe(expected, &expected_delay) ||
+	    !SG_DeclaredDelayedDoorTouchMatches(expected, anchor) ||
+	    !SG_DeclaredDelayedDoorOutsideSweep(expected, source))
+		return false;
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *trigger = &g_edicts[i];
+		uint32_t delay_ms;
+
+		if (!SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms) ||
+		    !SG_DeclaredDelayedDoorTouchMatches(trigger, anchor) ||
+		    !SG_DeclaredDelayedDoorOutsideSweep(trigger, source))
+			continue;
+		if (delay_ms != expected_delay ||
+		    (match && !SG_DeclaredDelayedDoorSameSet(match, trigger)))
+			return false;
+		match = trigger;
+	}
+	return match && SG_DeclaredDelayedDoorSameSet(match, expected);
+}
+
 /* Touch_Multi calls this before its cooldown test.  It records only the
  * expected live player contact that the declared approach oracle admitted;
  * whether G_UseTargets subsequently fires is deliberately separate. */
@@ -2882,6 +3016,30 @@ qboolean SG_DeclaredDoorApproachSourceClear(edict_t *trigger,
 
 		if (!SG_OracleDeclaredActivatorSafe(other) ||
 		    !SG_OracleDeclaredSameDoorSet(trigger, other))
+			continue;
+		if (SG_OracleDeclaredTriggerContains(other, origin))
+			return false;
+	}
+	return true;
+}
+
+qboolean SG_DeclaredDelayedDoorApproachSourceClear(edict_t *trigger,
+	const vec3_t origin)
+{
+	uint32_t delay_ms;
+	int i;
+
+	if (!trigger || !origin ||
+	    !SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms) ||
+	    !SG_DeclaredDelayedDoorOutsideSweep(trigger, origin))
+		return false;
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *other = &g_edicts[i];
+		uint32_t other_delay_ms;
+
+		if (!SG_DeclaredDoorDelayedActivatorSafe(other, &other_delay_ms) ||
+		    !SG_DeclaredDelayedDoorSameSet(trigger, other))
 			continue;
 		if (SG_OracleDeclaredTriggerContains(other, origin))
 			return false;
@@ -3526,13 +3684,15 @@ qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms)
  * masters, while G_Find may also encounter more than one member of a team;
  * deduplicate the physical brushes rather than charging or relinking them
  * twice. */
-int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
-	int capacity)
+static int SG_DeclaredDoorMembersInternal(edict_t *trigger,
+	edict_t **members, int capacity, qboolean delayed)
 {
 	edict_t *target = NULL;
 	int count = 0;
 
-	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !members || capacity <= 0)
+	if (!(delayed ? SG_OracleDeclaredActivatorSafeWithDelay(trigger, true) :
+	        SG_OracleDeclaredDoorSourceSafe(trigger)) ||
+	    !members || capacity <= 0)
 		return -1;
 	if (trigger->touch == Touch_DoorTrigger)
 	{
@@ -3570,6 +3730,18 @@ int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
 		}
 	}
 	return count;
+}
+
+int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
+	int capacity)
+{
+	return SG_DeclaredDoorMembersInternal(trigger, members, capacity, false);
+}
+
+int SG_DeclaredDelayedDoorMembers(edict_t *trigger, edict_t **members,
+	int capacity)
+{
+	return SG_DeclaredDoorMembersInternal(trigger, members, capacity, true);
 }
 
 /* One authoritative timing contract shared by generation and loading.  The
@@ -3866,13 +4038,12 @@ static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph)
 			continue;
 		}
 		if (sg_oracle_declared_door &&
-		    (hit == sg_oracle_declared_door ||
-		     ((sg_oracle_declared_action == RL_DOOR ||
-		       sg_oracle_declared_action == RL_BUTTON_DOOR) &&
-		      (sg_oracle_bound_door
-		           ? SG_OracleBoundSameDoorSet(sg_oracle_bound_door, hit)
-		           : SG_OracleDeclaredSameDoorSet(
-		                 sg_oracle_declared_door, hit)))))
+		    (sg_oracle_bound_door
+		         ? ((sg_oracle_declared_action == RL_DOOR ||
+		             sg_oracle_declared_action == RL_BUTTON_DOOR) &&
+		            SG_OracleBoundSameDoorSet(sg_oracle_bound_door, hit))
+		         : SG_OracleDeclaredApproachTriggerAllowed(
+		               sg_oracle_declared_action, sg_oracle_declared_door, hit)))
 			continue;
 		/* A declared door approach owns exactly one scripted touch. Do not let
 		 * an unrelated auto-door or trigger_multiple become an unrecorded second
@@ -4617,7 +4788,7 @@ static rune_reject_reason_t SG_OracleCompoundDropFirstContact(
 	rune_reject_reason_t reason = RLR_APPROACH_REPLAY_FAILED;
 	qboolean scope_entered = false;
 	usercmd_t command;
-	int elapsed;
+	int elapsed = 0;
 
 	if (contact_anchor)
 		VectorClear(contact_anchor);
@@ -5982,11 +6153,14 @@ done:
  * overlaps the one trigger owned by the declared pad/platform. The expected
  * solid still participates in Pmove collision; it is merely deterministic,
  * while every other non-world solid/trigger remains contamination. */
-qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
-	edict_t *expected, int action, int *arrival_ms)
+static qboolean SG_OracleDeclaredApproachInternal(const vec3_t source,
+	const vec3_t target, edict_t *entry, edict_t *support,
+	edict_t *approach_door, int action, int *arrival_ms)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_entry = sg_oracle_declared_entry;
+	edict_t *old_door = sg_oracle_declared_door;
 	qboolean old_world = sg_oracle_world_only;
 	qboolean old_contaminated = sg_oracle_contaminated;
 	qboolean old_touched = sg_oracle_declared_touched;
@@ -5994,15 +6168,17 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	sg_phantom_t ph;
 	usercmd_t cmd;
 	qboolean ok = false;
-	int elapsed;
+	int elapsed = 0;
 
-	if (!expected || !expected->inuse || !arrival_ms ||
+	if (!entry || !entry->inuse || !support || !support->inuse || !arrival_ms ||
 	    (action != RL_LIFT && action != RL_TELEPORT))
 		return false;
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
-	sg_oracle_declared_expected = expected;
+	sg_oracle_declared_expected = support;
+	sg_oracle_declared_entry = entry;
+	sg_oracle_declared_door = approach_door;
 	sg_oracle_declared_action = action;
 	sg_oracle_declared_touched = false;
 	SG_OraclePlace(&ph, (vec_t *)source);
@@ -6012,19 +6188,24 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	/* A staging seed already inside the mechanism trigger is not a separate,
 	 * routable source phase. */
 	if (sg_oracle_contaminated || sg_oracle_declared_touched ||
-	    SG_OracleDoorOverlap(&ph) ||
-	    !ph.groundentity || ph.waterlevel != 0)
+	    SG_OracleDoorOverlap(&ph) || !ph.groundentity || ph.waterlevel != 0)
+	{
 		goto done;
+	}
 	for (elapsed = 0; elapsed < 3000; elapsed += 25)
 	{
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 25;
 		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
+		{
 			goto done;
+		}
 		SG_OracleRun(&ph, &cmd, 1);
 		if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
 		    !ph.groundentity || ph.waterlevel != 0)
+		{
 			goto done;
+		}
 		if (sg_oracle_declared_touched)
 		{
 			*arrival_ms = elapsed + 25;
@@ -6040,9 +6221,31 @@ done:
 	sg_oracle_world_only = old_world;
 	sg_oracle_contaminated = old_contaminated;
 	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_entry = old_entry;
+	sg_oracle_declared_door = old_door;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
 	return ok;
+}
+
+qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
+	edict_t *entry, edict_t *support, int action, int *arrival_ms)
+{
+	return SG_OracleDeclaredApproachInternal(source, target, entry, support,
+		NULL, action, arrival_ms);
+}
+
+qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
+	const vec3_t target, edict_t *entry, edict_t *support,
+	edict_t *approach_door, int *arrival_ms)
+{
+	uint32_t delay_ms;
+
+	return approach_door &&
+	       (SG_DeclaredDoorDirectActivatorSafe(approach_door) ||
+	        SG_DeclaredDoorDelayedActivatorSafe(approach_door, &delay_ms)) &&
+	       SG_OracleDeclaredApproachInternal(source, target, entry, support,
+	           approach_door, RL_LIFT, arrival_ms);
 }
 
 /* Prove the lift's top-platform-to-static-graph handoff. The caller positions
@@ -6050,11 +6253,13 @@ done:
  * Its solid and center trigger are admitted, but success requires the player
  * hull to have left the platform footprint and reached the same supported
  * endpoint predicate used live. */
-qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
-	edict_t *support, int *arrival_ms)
+static qboolean SG_OracleDeclaredEgressInternal(const vec3_t source,
+	const vec3_t target, edict_t *support, edict_t *egress_trigger,
+	int *arrival_ms)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_door = sg_oracle_declared_door;
 	qboolean old_world = sg_oracle_world_only;
 	qboolean old_contaminated = sg_oracle_contaminated;
 	qboolean old_touched = sg_oracle_declared_touched;
@@ -6062,7 +6267,7 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	sg_phantom_t ph;
 	usercmd_t cmd;
 	qboolean ok = false;
-	int elapsed;
+	int elapsed = 0;
 
 	if (!support || !support->inuse || !arrival_ms)
 		return false;
@@ -6070,6 +6275,7 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
 	sg_oracle_declared_expected = support;
+	sg_oracle_declared_door = egress_trigger;
 	sg_oracle_declared_action = RL_LIFT;
 	sg_oracle_declared_touched = false;
 	SG_OraclePlace(&ph, (vec_t *)source);
@@ -6078,7 +6284,9 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	SG_OracleRun(&ph, &cmd, 1);
 	if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
 	    !ph.groundentity || ph.waterlevel != 0)
+	{
 		goto done;
+	}
 	for (elapsed = 0; elapsed < 3000; elapsed += 25)
 	{
 		qboolean outside;
@@ -6086,12 +6294,16 @@ qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 25;
 		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
+		{
 			goto done;
+		}
 		SG_OracleRun(&ph, &cmd, 1);
 		if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
 		    (ph.waterlevel > 0 &&
 		     (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
+		{
 			goto done;
+		}
 		/* Match SG_LiftRider exactly. Linked entity bounds carry a one-unit
 		 * fringe on both the platform and player; cancelling those fringes
 		 * makes the phantom's physical +/-16 hull leave at absmin/absmax,
@@ -6118,9 +6330,35 @@ done:
 	sg_oracle_world_only = old_world;
 	sg_oracle_contaminated = old_contaminated;
 	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_door = old_door;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
 	return ok;
+}
+
+qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
+	edict_t *support, int *arrival_ms)
+{
+	return SG_OracleDeclaredEgressInternal(source, target, support, NULL,
+		arrival_ms);
+}
+
+qboolean SG_OracleDeclaredCompoundLiftEgress(const vec3_t source,
+	const vec3_t target, edict_t *support, edict_t *egress_trigger,
+	int *arrival_ms)
+{
+	uint32_t delay_ms;
+	qboolean delayed;
+
+	delayed = SG_DeclaredDoorDelayedActivatorSafe(egress_trigger, &delay_ms);
+	return (delayed || SG_DeclaredDoorDirectActivatorSafe(egress_trigger)) &&
+	       (delayed
+	            ? SG_DeclaredDelayedDoorOutsideSweep(egress_trigger, source) &&
+	              SG_DeclaredDelayedDoorOutsideSweep(egress_trigger, target)
+	            : SG_DeclaredDoorOutsideSweep(egress_trigger, source) &&
+	              SG_DeclaredDoorOutsideSweep(egress_trigger, target)) &&
+	       SG_OracleDeclaredEgressInternal(source, target, support,
+	           egress_trigger, arrival_ms);
 }
 
 qboolean SG_OracleDoorApproachContactObserved(qboolean button_controller,
@@ -6205,6 +6443,7 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	qboolean triggered = false;
 	qboolean button_controller;
 	qboolean direct_controller;
+	qboolean delayed_controller;
 	int controller_kind;
 	sg_button_support_mode_t first_support = SG_BUTTON_SUPPORT_NONE;
 	sg_door_approach_state_t direct_state;
@@ -6220,6 +6459,12 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	    ? binding->plan && binding->plan->controller_kind ==
 	          SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
 	    : !button_controller && SG_DeclaredDoorDirectActivatorSafe(trigger);
+	{
+		uint32_t delay_ms;
+
+		delayed_controller = !binding && !button_controller &&
+		    SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms);
+	}
 	controller_kind = button_controller
 	    ? SG_MECHANISM_CONTROLLER_BUTTON_DOOR
 	    : (direct_controller
@@ -6239,9 +6484,14 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	                          source) ||
 	                       !SG_DeclaredButtonDoorContactMatches(trigger,
 	                          wait_point))
-	                    : !SG_DeclaredDoorSameSet(
-	                          SG_DeclaredDoorForLink(wait_point, source),
-	                          trigger))))
+	                    : delayed_controller
+	                        ? (!SG_DeclaredDelayedDoorApproachSourceClear(
+	                              trigger, source) ||
+	                           !SG_DeclaredDelayedDoorForLinkMatches(trigger,
+	                              wait_point, source))
+	                        : !SG_DeclaredDoorSameSet(
+	                              SG_DeclaredDoorForLink(wait_point, source),
+	                              trigger))))
 		return false;
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
@@ -6436,7 +6686,9 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 		    !SG_OracleDoorEgressWaterSafe(controller_kind,
 		        exact.waterlevel, exact.watertype) ||
 		    !(binding ? SG_BoundDoorOutsideSweep(binding, exact.origin) :
-		                 SG_DeclaredDoorOutsideSweep(trigger, exact.origin)))
+		      delayed_controller
+		          ? SG_DeclaredDelayedDoorOutsideSweep(trigger, exact.origin)
+		          : SG_DeclaredDoorOutsideSweep(trigger, exact.origin)))
 			goto done;
 		if (button_controller)
 		{

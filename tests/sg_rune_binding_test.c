@@ -322,6 +322,108 @@ static void TestPlatform(void)
 	incarnation_failure_key = SG_MECH_NO_KEY;
 }
 
+static void TestTriggeredVerticalDoorLift(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *mover;
+	uint32_t failure_index = UINT32_MAX;
+
+	FixtureBegin(&fixture, RL_LIFT, SG_MECHANISM_CONTROLLER_PLATFORM, 200U, 1U);
+	entry = Node(&fixture, 10U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE);
+	entry->owner_key = 20U;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	entry->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	entry->wait_ms = 200;
+	mover = Node(&fixture, 20U, SG_MECH_NODE_PLATFORM,
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_TEAM_MASTER);
+	mover->team_master_key = 20U;
+	mover->spawnflags = 5U;
+	mover->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	mover->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_OWNER, 0U);
+	FixtureFinish(&fixture, 10U, 20U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.entry_entity == &fixture.entities[0]);
+	CHECK(binding.mover_entity == &fixture.entities[1]);
+	CHECK(SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(failure_index == UINT32_MAX);
+	fixture.nodes[1].spawnflags = 3U;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
+static void TestDescendingCarrierStagesUseAnchorIdentity(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *mover;
+	rune_mechanism_node_t *approach;
+	rune_mechanism_node_t *egress;
+	struct edict_s *trigger = NULL;
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t key_count = 0U;
+	uint32_t delay_ms = 0U;
+
+	FixtureBegin(&fixture, RL_LIFT, SG_MECHANISM_CONTROLLER_PLATFORM,
+		200U, 3U);
+	entry = Node(&fixture, 10U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE);
+	entry->owner_key = 20U;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	entry->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	entry->wait_ms = 200;
+	mover = Node(&fixture, 20U, SG_MECH_NODE_PLATFORM,
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_TEAM_MASTER);
+	mover->team_master_key = 20U;
+	mover->spawnflags = 4U;
+	mover->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	mover->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	approach = Node(&fixture, 30U, SG_MECH_NODE_TRIGGER, 0U);
+	approach->delay_ms = 1000;
+	approach->target_offset = 1U;
+	approach->absmin_q8[0] = -64;
+	approach->absmax_q8[0] = 64;
+	approach->absmin_q8[1] = approach->absmin_q8[2] = -64;
+	approach->absmax_q8[1] = approach->absmax_q8[2] = 64;
+	Node(&fixture, 40U, SG_MECH_NODE_DOOR_MASTER,
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER)->team_master_key = 40U;
+	egress = Node(&fixture, 50U, SG_MECH_NODE_TRIGGER, 0U);
+	egress->target_offset = 2U;
+	egress->absmin_q8[0] = 736;
+	egress->absmax_q8[0] = 864;
+	egress->absmin_q8[1] = egress->absmin_q8[2] = -64;
+	egress->absmax_q8[1] = egress->absmax_q8[2] = 64;
+	Node(&fixture, 60U, SG_MECH_NODE_DOOR_MASTER,
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER)->team_master_key = 60U;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_OWNER, 0U);
+	Edge(&fixture, 30U, 40U, SG_MECH_EDGE_TARGET, 0U);
+	fixture.edges[2].delay_ms = 1000U;
+	Edge(&fixture, 50U, 60U, SG_MECH_EDGE_TARGET, 0U);
+	FixtureFinish(&fixture, 10U, 20U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(SG_RuneMechanismBindingCarrierStage(&binding,
+		SG_CARRIER_DOOR_APPROACH, &trigger, keys, &key_count, &delay_ms));
+	CHECK(trigger == &fixture.entities[2]);
+	CHECK(key_count == 1U && keys[0] == 40U && delay_ms == 1000U);
+	CHECK(SG_RuneMechanismBindingCarrierStage(&binding,
+		SG_CARRIER_DOOR_EGRESS, &trigger, keys, &key_count, &delay_ms));
+	CHECK(trigger == &fixture.entities[4]);
+	CHECK(key_count == 1U && keys[0] == 60U && delay_ms == 0U);
+	CHECK(SG_RuneMechanismBindingCarrierStageTriggerMatches(&binding,
+		SG_CARRIER_DOOR_APPROACH, &fixture.entities[2]));
+	CHECK(!SG_RuneMechanismBindingCarrierStageTriggerMatches(&binding,
+		SG_CARRIER_DOOR_APPROACH, &fixture.entities[4]));
+}
+
 static void TestTeleport(void)
 {
 	fixture_t fixture;
@@ -616,6 +718,8 @@ static void TestExecutionStates(void)
 int main(void)
 {
 	TestPlatform();
+	TestTriggeredVerticalDoorLift();
+	TestDescendingCarrierStagesUseAnchorIdentity();
 	TestTeleport();
 	TestRetiredInventoryIsNeverExecutable();
 	TestAutoDoor();

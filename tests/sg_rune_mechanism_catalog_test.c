@@ -862,6 +862,19 @@ static void TestExecutableMoverCurrentness(const char *classname,
 	    node->decel_q8 == 800U && node->wait_ms == 3000);
 	CHECK(SG_MechCatalogEntityTopologyMatches(1U, node));
 	CHECK(SG_MechCatalogEntityExecutionMatches(1U, node, controller_kind));
+	if (!strcmp(classname, "func_plat"))
+	{
+		entity->moveinfo.state = SG_PLAT_STATE_TOP;
+		entity->think = door_go_down;
+		entity->moveinfo.endfunc = door_hit_top;
+		entity->nextthink = 10.0f;
+		CHECK(!SG_MechCatalogEntityExecutionMatches(1U, node,
+			controller_kind));
+		entity->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+		entity->think = NULL;
+		entity->moveinfo.endfunc = NULL;
+		entity->nextthink = 0.0f;
+	}
 
 	/* Runtime moveinfo, not the map-key shadow fields, is authenticated. */
 	entity->speed = 17.0f;
@@ -946,6 +959,134 @@ static void TestExecutableMoverKinematicsStayCurrent(void)
 		SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR);
 	TestExecutableMoverCurrentness("func_plat", SG_MECH_NODE_PLATFORM,
 		SG_MECHANISM_CONTROLLER_PLATFORM);
+}
+
+static void SetupTriggeredVerticalDoorLiftCatalog(int spawnflags,
+	float start_z, float end_z)
+{
+	edict_t *trigger;
+	edict_t *mover;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 3;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "trigger_multiple");
+	InitializeEntity(2U, "func_door");
+	trigger = &test_edicts[1];
+	mover = &test_edicts[2];
+	trigger->target = "lift";
+	trigger->touch = Touch_Multi;
+	trigger->use = Use_Multi;
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->wait = 0.2f;
+	VectorSet(trigger->absmin, -34.0f, -34.0f, start_z + 6.0f);
+	VectorSet(trigger->absmax, 34.0f, 34.0f, start_z + 114.0f);
+	mover->targetname = "lift";
+	mover->spawnflags = spawnflags;
+	mover->movetype = MOVETYPE_PUSH;
+	mover->solid = SOLID_BSP;
+	mover->use = door_use;
+	mover->blocked = door_blocked;
+	mover->teammaster = mover;
+	mover->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	mover->moveinfo.wait = 5.0f;
+	mover->moveinfo.speed = 100.0f;
+	mover->moveinfo.accel = 100.0f;
+	mover->moveinfo.decel = 100.0f;
+	VectorSet(mover->mins, -50.0f, -50.0f, -10.0f);
+	VectorSet(mover->maxs, 50.0f, 50.0f, 130.0f);
+	VectorSet(mover->moveinfo.start_origin, 0.0f, 0.0f, start_z);
+	VectorSet(mover->moveinfo.end_origin, 0.0f, 0.0f, end_z);
+	VectorCopy(mover->moveinfo.start_origin, mover->s.origin);
+}
+
+static void TestTriggeredVerticalDoorLiftCatalog(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *trigger_node;
+	const rune_mechanism_node_t *mover_node;
+	edict_t *mover;
+
+	SetupTriggeredVerticalDoorLiftCatalog(5, -1024.0f, 0.0f);
+	mover = &test_edicts[2];
+
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	trigger_node = NodeByKey(&view, 1U);
+	mover_node = NodeByKey(&view, 2U);
+	CHECK(trigger_node && trigger_node->kind == SG_MECH_NODE_PLATFORM_TRIGGER);
+	CHECK(mover_node && mover_node->kind == SG_MECH_NODE_PLATFORM);
+	CHECK(trigger_node && trigger_node->owner_key == 2U);
+	CHECK(HasEdge(&view, 1U, 2U, SG_MECH_EDGE_TARGET, 0U));
+	CHECK(HasEdge(&view, 1U, 2U, SG_MECH_EDGE_OWNER, 0U));
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, trigger_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, mover_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+
+	mover->moveinfo.state = SG_PLAT_STATE_UP;
+	mover->think = Move_Done;
+	mover->moveinfo.endfunc = door_hit_top;
+	mover->velocity[2] = 100.0f;
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, mover_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+	mover->think = Move_Done;
+	mover->moveinfo.endfunc = plat_hit_top;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(2U, mover_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+	mover->moveinfo.endfunc = door_hit_top;
+	VectorClear(mover->velocity);
+	mover->moveinfo.state = SG_PLAT_STATE_TOP;
+	mover->think = door_go_down;
+	mover->nextthink = 10.0f;
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, mover_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+	mover->moveinfo.state = SG_PLAT_STATE_DOWN;
+	mover->think = Move_Done;
+	mover->moveinfo.endfunc = door_hit_bottom;
+	mover->nextthink = 0.0f;
+	mover->velocity[2] = -100.0f;
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, mover_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+	VectorClear(mover->velocity);
+	mover->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	mover->think = NULL;
+	mover->moveinfo.endfunc = NULL;
+	mover->spawnflags = 4;
+	CHECK(SG_MechCatalogEntityTopologyMatches(1U, trigger_node));
+	CHECK(!SG_MechCatalogEntityTopologyMatches(2U, mover_node));
+}
+
+static void TestDescendingTriggeredVerticalDoorLiftCatalog(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *trigger_node;
+	const rune_mechanism_node_t *mover_node;
+
+	SetupTriggeredVerticalDoorLiftCatalog(4, 0.0f, -1024.0f);
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	trigger_node = NodeByKey(&view, 1U);
+	mover_node = NodeByKey(&view, 2U);
+	CHECK(trigger_node && trigger_node->kind == SG_MECH_NODE_PLATFORM_TRIGGER);
+	CHECK(mover_node && mover_node->kind == SG_MECH_NODE_PLATFORM);
+	CHECK(trigger_node && trigger_node->owner_key == 2U);
+	CHECK(HasEdge(&view, 1U, 2U, SG_MECH_EDGE_TARGET, 0U));
+	CHECK(HasEdge(&view, 1U, 2U, SG_MECH_EDGE_OWNER, 0U));
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, trigger_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
+	CHECK(SG_MechCatalogEntityExecutionMatches(2U, mover_node,
+		SG_MECHANISM_CONTROLLER_PLATFORM));
 }
 
 static edict_t *InitializeFrameCompleteButton(float distance, float raw_speed)
@@ -1169,6 +1310,8 @@ int main(void)
 	TestInventoryOnlyKinematicsCanonicalized();
 	TestExecutableKinematicsRemainChecked();
 	TestExecutableMoverKinematicsStayCurrent();
+	TestTriggeredVerticalDoorLiftCatalog();
+	TestDescendingTriggeredVerticalDoorLiftCatalog();
 	TestFrameCompleteButtonSealGates();
 	TestFrameCompleteButtonCurrentness();
 	TestTinyPositiveDelayStaysAsynchronous();

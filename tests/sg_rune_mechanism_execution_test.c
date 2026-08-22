@@ -12,13 +12,14 @@
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_move.h"
+#include "slipgate/sg_util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_EDICTS 28
-#define TEST_LINKS 7U
+#define TEST_EDICTS 30
+#define TEST_LINKS 8U
 #define TEST_EDGE_CAPACITY 128U
 #define CELLAR_WITNESS_WATERTYPE 0x18000020
 
@@ -27,6 +28,12 @@ void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 void Use_Multi(edict_t *self, edict_t *other, edict_t *activator);
 void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator);
+qboolean SG_TestCarrierPendingStage(sg_carrier_action_phase_t phase,
+	int frame, int ready_frame, sg_carrier_door_stage_t *stage_out,
+	sg_carrier_action_phase_t *opening_out);
+qboolean SG_TestCarrierEgressPhase(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_action_phase_t *phase_out);
 
 enum test_key_e
 {
@@ -55,7 +62,9 @@ enum test_key_e
 	KEY_GATE_RELAY,
 	KEY_GATE_CLOSE_SPEAKER,
 	KEY_BOT,
-	KEY_SPARE
+	KEY_SPARE,
+	KEY_CARRIER_TRIGGER,
+	KEY_CARRIER
 };
 
 enum test_link_e
@@ -66,7 +75,8 @@ enum test_link_e
 	LINK_DIRECT_DOOR,
 	LINK_BUTTON_DOOR,
 	LINK_CELLAR_DOOR,
-	LINK_GATE_DOOR
+	LINK_GATE_DOOR,
+	LINK_CARRIER
 };
 
 enum delayed_chain_e
@@ -74,6 +84,7 @@ enum delayed_chain_e
 	CHAIN_FRONT = 0,
 	CHAIN_CELLAR,
 	CHAIN_GATE,
+	CHAIN_CARRIER,
 	CHAIN_COUNT
 };
 
@@ -107,6 +118,9 @@ static size_t callback_order_count[CHAIN_COUNT];
 static int compound_drop_probe_calls;
 static int compound_drop_delayed_tags;
 static int compound_hook_probe_calls;
+static sg_compound_guard_result_t guard_validate_result;
+static sg_compound_guard_result_t guard_release_result;
+static int guard_release_calls;
 
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
@@ -115,6 +129,41 @@ static int compound_hook_probe_calls;
 		failures++; \
 	} \
 } while (0)
+
+static void TestCarrierPendingFrameDispatch(void)
+{
+	sg_carrier_door_stage_t stage;
+	sg_carrier_action_phase_t opening;
+
+	stage = SG_CARRIER_DOOR_EGRESS;
+	opening = SG_CARRIER_PHASE_FAILED;
+	CHECK(!SG_TestCarrierPendingStage(
+	    SG_CARRIER_PHASE_APPROACH_DELAY_PENDING, 99, 100,
+	    &stage, &opening));
+	CHECK(stage == SG_CARRIER_DOOR_EGRESS);
+	CHECK(opening == SG_CARRIER_PHASE_FAILED);
+	CHECK(SG_TestCarrierPendingStage(
+	    SG_CARRIER_PHASE_APPROACH_DELAY_PENDING, 100, 100,
+	    &stage, &opening));
+	CHECK(stage == SG_CARRIER_DOOR_APPROACH);
+	CHECK(opening == SG_CARRIER_PHASE_APPROACH_OPENING);
+	CHECK(!SG_TestCarrierPendingStage(
+	    SG_CARRIER_PHASE_APPROACH_DELAY_PENDING, 101, 100,
+	    &stage, &opening));
+
+	stage = SG_CARRIER_DOOR_APPROACH;
+	opening = SG_CARRIER_PHASE_FAILED;
+	CHECK(SG_TestCarrierPendingStage(
+	    SG_CARRIER_PHASE_EGRESS_DELAY_PENDING, 208, 208,
+	    &stage, &opening));
+	CHECK(stage == SG_CARRIER_DOOR_EGRESS);
+	CHECK(opening == SG_CARRIER_PHASE_EGRESS_OPENING);
+	CHECK(!SG_TestCarrierPendingStage(
+	    SG_CARRIER_PHASE_EGRESS_DELAY_PENDING, 209, 208,
+	    &stage, &opening));
+	CHECK(!SG_TestCarrierPendingStage(
+	    SG_CARRIER_PHASE_CARRIER_READY, 208, 208, &stage, &opening));
+}
 
 #define TOUCH_CALLBACK(name_) \
 	void name_(edict_t *self, edict_t *other, cplane_t *plane, \
@@ -259,6 +308,8 @@ static int DoorChain(const edict_t *source)
 		return CHAIN_CELLAR;
 	if (source == &test_edicts[KEY_GATE_DOOR])
 		return CHAIN_GATE;
+	if (source == &test_edicts[KEY_CARRIER])
+		return CHAIN_CARRIER;
 	return -1;
 }
 
@@ -293,6 +344,7 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 	      self == &test_edicts[KEY_CELLAR_DOOR] ||
 	      self == &test_edicts[KEY_SPARE] ||
 	      self == &test_edicts[KEY_GATE_DOOR] ||
+	      self == &test_edicts[KEY_CARRIER] ||
 	      self == &test_edicts[KEY_AUTO_DOOR] ||
 	      self == &test_edicts[KEY_BUTTON_DOOR]);
 	if (chain < 0)
@@ -301,6 +353,8 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 		expected_trigger = &test_edicts[KEY_DIRECT_TRIGGER];
 	else if (chain == CHAIN_CELLAR)
 		expected_trigger = &test_edicts[KEY_CELLAR_TRIGGER];
+	else if (chain == CHAIN_CARRIER)
+		expected_trigger = &test_edicts[KEY_CARRIER_TRIGGER];
 	else
 		expected_trigger = &test_edicts[KEY_GATE_TRIGGER];
 	CHECK(other == expected_trigger);
@@ -310,7 +364,10 @@ void door_use(edict_t *self, edict_t *other, edict_t *activator)
 	door_uses[chain]++;
 	NoteCallback(chain, 'D');
 	VectorClear(self->velocity);
-	self->velocity[0] = 32.0f;
+	if (chain == CHAIN_CARRIER)
+		self->velocity[2] = 32.0f;
+	else
+		self->velocity[0] = 32.0f;
 	self->moveinfo.state = 2;
 	self->moveinfo.endfunc = door_hit_top;
 	self->think = Move_Final;
@@ -456,7 +513,15 @@ sg_compound_guard_result_t SG_CompoundGuardValidate(
 	(void)guard;
 	if (record_out)
 		memset(record_out, 0, sizeof(*record_out));
-	return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	return guard_validate_result;
+}
+
+sg_compound_guard_result_t SG_DeclaredDoorGuardReleaseProvedClear(
+	sg_bot_t *bot)
+{
+	CHECK(bot == &sg_bots[0]);
+	guard_release_calls++;
+	return guard_release_result;
 }
 
 int SG_CompoundSwimGameOwns(const sg_bot_t *bot)
@@ -656,7 +721,7 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	game.maxentities = TEST_EDICTS;
 	globals.edicts = test_edicts;
 	globals.edict_size = (int)sizeof(test_edicts[0]);
-	globals.num_edicts = KEY_SPARE + 1;
+	globals.num_edicts = KEY_CARRIER + 1;
 	level.framenum = 37;
 	sg_host.level_alloc = TestAlloc;
 	sg_host.level_free = TestFree;
@@ -665,6 +730,9 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	memset(door_uses, 0, sizeof(door_uses));
 	memset(open_speaker_uses, 0, sizeof(open_speaker_uses));
 	memset(close_speaker_uses, 0, sizeof(close_speaker_uses));
+	guard_validate_result = SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	guard_release_result = SG_COMPOUND_GUARD_INVALID_ARGUMENT;
+	guard_release_calls = 0;
 	memset(callback_order_count, 0, sizeof(callback_order_count));
 	memset(callback_order, 0, sizeof(callback_order));
 	SG_ButtonExecutionLevelReset();
@@ -789,6 +857,26 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	test_edicts[KEY_GATE_CLOSE_SPEAKER].targetname = "gate-close";
 	test_edicts[KEY_GATE_CLOSE_SPEAKER].use = Use_Target_Speaker;
 
+	InitializeEntity(KEY_CARRIER_TRIGGER, "trigger_multiple");
+	entity = &test_edicts[KEY_CARRIER_TRIGGER];
+	entity->target = "carrier";
+	entity->touch = Touch_Multi;
+	entity->use = Use_Multi;
+	entity->solid = SOLID_TRIGGER;
+	entity->movetype = MOVETYPE_NONE;
+	entity->wait = 0.2f;
+	VectorSet(entity->absmin, -34.0f, -34.0f, -1018.0f);
+	VectorSet(entity->absmax, 34.0f, 34.0f, -910.0f);
+	DoorEntity(KEY_CARRIER, "carrier");
+	entity = &test_edicts[KEY_CARRIER];
+	entity->spawnflags = 5;
+	entity->moveinfo.wait = 5.0f;
+	VectorSet(entity->mins, -50.0f, -50.0f, -10.0f);
+	VectorSet(entity->maxs, 50.0f, 50.0f, 130.0f);
+	VectorSet(entity->moveinfo.start_origin, 0.0f, 0.0f, -1024.0f);
+	VectorClear(entity->moveinfo.end_origin);
+	VectorCopy(entity->moveinfo.start_origin, entity->s.origin);
+
 	test_edicts[KEY_BOT].inuse = true;
 	test_edicts[KEY_BOT].s.number = KEY_BOT;
 	test_edicts[KEY_BOT].classname = "bot";
@@ -831,6 +919,15 @@ static void BuildRune(execution_fixture_t *fixture)
 	AddPlanEdge(fixture, KEY_PLATFORM_TRIGGER, KEY_PLATFORM,
 	    SG_MECH_EDGE_OWNER, 0U);
 	FinishPlan(fixture, LINK_PLATFORM);
+
+	ConfigureLink(fixture, LINK_CARRIER, RL_LIFT);
+	BeginPlan(fixture, LINK_CARRIER, SG_MECHANISM_CONTROLLER_PLATFORM,
+	    KEY_CARRIER_TRIGGER, KEY_CARRIER, 200U);
+	AddPlanEdge(fixture, KEY_CARRIER_TRIGGER, KEY_CARRIER,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_CARRIER_TRIGGER, KEY_CARRIER,
+	    SG_MECH_EDGE_OWNER, 0U);
+	FinishPlan(fixture, LINK_CARRIER);
 
 	ConfigureLink(fixture, LINK_TELEPORT, RL_TELEPORT);
 	BeginPlan(fixture, LINK_TELEPORT, SG_MECHANISM_CONTROLLER_TELEPORT,
@@ -1256,6 +1353,133 @@ static void DirectBotOwner(sg_bot_t *bot, int link_index)
 	bot->compound_guard.ticket.epoch = UINT64_C(19);
 	bot->compound_guard.ticket.serial = UINT64_C(23);
 	bot->compound_guard.ticket.slot = 1U;
+}
+
+static void TestCarrierExecution(execution_fixture_t *fixture)
+{
+	static const short source_q8[3] = { 0, 0, -7999 };
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity;
+
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = &test_edicts[KEY_CARRIER];
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	Use_Multi(&test_edicts[KEY_CARRIER_TRIGGER], NULL, entity);
+	CHECK(door_uses[CHAIN_CARRIER] == 0);
+	CHECK(!bot->declared_touched);
+	Touch_Multi(&test_edicts[KEY_CARRIER_TRIGGER], entity, NULL, NULL);
+	CHECK(bot->declared_touched);
+	CHECK(bot->declared_triggered);
+	CHECK(bot->declared_touch_frame == level.framenum);
+	CHECK(bot->declared_trigger_frame == level.framenum);
+	CHECK(door_uses[CHAIN_CARRIER] == 1);
+	CHECK(test_edicts[KEY_CARRIER].moveinfo.state == 2);
+	CHECK(test_edicts[KEY_CARRIER].velocity[2] == 32.0f);
+	CHECK(SG_RuneMechanismBindingCurrent(&binding));
+}
+
+static void TestCarrierOneStageStaticEgress(execution_fixture_t *fixture)
+{
+	static const short source_q8[3] = { 0, 0, -7999 };
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_carrier_action_phase_t phase;
+	rune_mechanism_plan_t *plan = &fixture->plans[LINK_CARRIER];
+	sg_bot_t *bot = &sg_bots[0];
+	uint32_t stage_keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t stage_count;
+	uint32_t delay_ms;
+	edict_t *stage_trigger;
+	uint32_t saved_carrier_key;
+	int speaker_uses;
+
+	BeginPlan(fixture, LINK_CARRIER, SG_MECHANISM_CONTROLLER_PLATFORM,
+	    KEY_CARRIER_TRIGGER, KEY_CARRIER, 200U);
+	AddPlanEdge(fixture, KEY_CARRIER_TRIGGER, KEY_CARRIER,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_CARRIER_TRIGGER, KEY_CARRIER,
+	    SG_MECH_EDGE_OWNER, 0U);
+	AddPlanEdge(fixture, KEY_GATE_TRIGGER, KEY_GATE_DOOR,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_GATE_DOOR, KEY_GATE_OPEN_SPEAKER,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_GATE_DOOR, KEY_GATE_RELAY,
+	    SG_MECH_EDGE_TARGET, 1U);
+	plan->expected_members = 2U;
+	FinishPlan(fixture, LINK_CARRIER);
+	fixture->rune.artifact.num_mechanism_edges = fixture->edge_count;
+	VectorClear(fixture->links[LINK_CARRIER].anchor);
+
+	DirectBotPose(source_q8, zero_velocity);
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	CHECK(SG_RuneMechanismBindingCurrent(&binding));
+	CHECK(SG_RuneMechanismBindingCarrierStage(&binding,
+	    SG_CARRIER_DOOR_APPROACH, &stage_trigger, stage_keys,
+	    &stage_count, &delay_ms));
+	CHECK(!SG_RuneMechanismBindingCarrierStage(&binding,
+	    SG_CARRIER_DOOR_EGRESS, &stage_trigger, stage_keys,
+	    &stage_count, &delay_ms));
+	bot->carrier_action.phase = SG_CARRIER_PHASE_CARRIER_READY;
+	bot->carrier_action.rune = &fixture->rune;
+	bot->carrier_action.artifact = fixture->rune.artifact;
+	bot->carrier_action.link = LINK_CARRIER;
+	bot->carrier_action.entry_key = binding.entry_node->key;
+	bot->carrier_action.carrier_key = binding.mover_node->key;
+	test_edicts[KEY_BOT].groundentity = &test_edicts[KEY_CARRIER];
+	bot->carrier_action.phase = SG_CARRIER_PHASE_APPROACH_OPENING;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(&test_edicts[KEY_CARRIER_TRIGGER],
+	    &test_edicts[KEY_BOT]));
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+	CHECK(!SG_AuthorizeDoorActivation(&test_edicts[KEY_CARRIER_TRIGGER],
+	    &test_edicts[KEY_CARRIER], &test_edicts[KEY_BOT]));
+	bot->declared_touched = false;
+	bot->declared_triggered = false;
+	bot->carrier_action.phase = SG_CARRIER_PHASE_CARRIER_READY;
+	bot->carrier_action.carrier_key = UINT32_MAX;
+	CHECK(!SG_AuthorizeDoorTriggerTouch(&test_edicts[KEY_CARRIER_TRIGGER],
+	    &test_edicts[KEY_BOT]));
+	bot->declared_touched = false;
+	bot->carrier_action.carrier_key = binding.mover_node->key;
+	CHECK(SG_AuthorizeDoorTriggerTouch(&test_edicts[KEY_CARRIER_TRIGGER],
+	    &test_edicts[KEY_BOT]));
+	CHECK(SG_AuthorizeDoorActivation(&test_edicts[KEY_CARRIER_TRIGGER],
+	    &test_edicts[KEY_CARRIER], &test_edicts[KEY_BOT]));
+	bot->declared_touched = false;
+	bot->declared_triggered = false;
+	CHECK(SG_TestCarrierEgressPhase(bot, &binding, &phase));
+	CHECK(phase == SG_CARRIER_PHASE_EGRESS_OPEN);
+	saved_carrier_key = bot->carrier_action.carrier_key;
+	bot->carrier_action.carrier_key = UINT32_MAX;
+	CHECK(!SG_TestCarrierEgressPhase(bot, &binding, &phase));
+	CHECK(phase == SG_CARRIER_PHASE_FAILED);
+	bot->carrier_action.carrier_key = saved_carrier_key;
+	bot->carrier_action.phase = SG_CARRIER_PHASE_EGRESS_OPEN;
+	guard_validate_result = SG_COMPOUND_GUARD_NO_LEASE;
+	CHECK(SG_CarrierActionComplete(bot, &binding));
+	CHECK(bot->carrier_action.phase == SG_CARRIER_PHASE_COMPLETE);
+	CHECK(guard_release_calls == 0);
+	bot->carrier_action.phase = SG_CARRIER_PHASE_EGRESS_OPEN;
+	bot->carrier_action.carrier_key = UINT32_MAX;
+	CHECK(!SG_CarrierActionComplete(bot, &binding));
+	CHECK(bot->carrier_action.phase == SG_CARRIER_PHASE_EGRESS_OPEN);
+	CHECK(guard_release_calls == 0);
+	bot->carrier_action.carrier_key = saved_carrier_key;
+
+	speaker_uses = open_speaker_uses[CHAIN_GATE];
+	CHECK(SG_HandleMechanismTargets(&test_edicts[KEY_GATE_DOOR],
+	    &test_edicts[KEY_BOT]));
+	CHECK(open_speaker_uses[CHAIN_GATE] == speaker_uses + 1);
+	CHECK(SG_HandleMechanismTargets(&test_edicts[KEY_AUTO_SPEAKER],
+	    &test_edicts[KEY_BOT]));
+	CHECK(open_speaker_uses[CHAIN_GATE] == speaker_uses + 1);
 }
 
 static void DirectPredictionObserved(sg_bot_t *bot,
@@ -1940,9 +2164,15 @@ int main(void)
 {
 	execution_fixture_t fixture;
 
+	TestCarrierPendingFrameDispatch();
 	FixtureBuild(&fixture);
 	TestPublicationGate(&fixture);
 	TestPlatform(&fixture);
+	FixtureBuild(&fixture);
+	TestCarrierExecution(&fixture);
+	FixtureBuild(&fixture);
+	TestCarrierOneStageStaticEgress(&fixture);
+	FixtureBuild(&fixture);
 	TestTeleport(&fixture);
 	TestAutoDoor(&fixture);
 	TestDirectDoor(&fixture);

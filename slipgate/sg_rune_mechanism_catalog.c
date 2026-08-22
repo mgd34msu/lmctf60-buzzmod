@@ -240,6 +240,88 @@ static const char *Catalog_Classname(uint32_t index, const edict_t *entity)
 	return entity ? entity->classname : NULL;
 }
 
+static int Catalog_TriggeredDoorLiftPair(uint32_t key,
+	uint32_t *trigger_key_out, uint32_t *mover_key_out)
+{
+	uint32_t trigger_key;
+
+	if (trigger_key_out) *trigger_key_out = 0U;
+	if (mover_key_out) *mover_key_out = 0U;
+	if (!g_edicts || globals.num_edicts <= 1 || key == 0U ||
+	    key >= (uint32_t)globals.num_edicts)
+		return 0;
+	for (trigger_key = 1U;
+	     trigger_key < (uint32_t)globals.num_edicts; trigger_key++)
+	{
+		edict_t *trigger = &g_edicts[trigger_key];
+		edict_t *mover = NULL;
+		uint32_t mover_key = 0U;
+		uint32_t destination;
+		uint32_t target_count = 0U;
+		int axis;
+
+		if (!trigger->inuse || !trigger->classname ||
+		    strcmp(trigger->classname, "trigger_multiple") ||
+		    trigger->touch != Touch_Multi || trigger->use != Use_Multi ||
+		    trigger->solid != SOLID_TRIGGER || trigger->movetype != MOVETYPE_NONE ||
+		    !trigger->target || !trigger->target[0] || trigger->targetname ||
+		    trigger->killtarget || trigger->pathtarget || trigger->message ||
+		    trigger->delay != 0.0f ||
+		    trigger->wait <= 0.0f || (trigger->spawnflags & (2 | 4)) != 0 ||
+		    trigger->movedir[0] != 0.0f || trigger->movedir[1] != 0.0f ||
+		    trigger->movedir[2] != 0.0f)
+			continue;
+		for (destination = 1U;
+		     destination < (uint32_t)globals.num_edicts; destination++)
+		{
+			edict_t *candidate = &g_edicts[destination];
+
+			if (!candidate->inuse || !candidate->targetname ||
+			    Q_stricmp(candidate->targetname, trigger->target))
+				continue;
+			target_count++;
+			mover = candidate;
+			mover_key = destination;
+		}
+		if (target_count != 1U || !mover || !mover->classname ||
+		    strcmp(mover->classname, "func_door") ||
+		    mover->use != door_use || mover->blocked != door_blocked ||
+		    mover->movetype != MOVETYPE_PUSH || mover->solid != SOLID_BSP ||
+		    mover->touch || mover->health || mover->max_health ||
+		    mover->takedamage || mover->team || mover->teamchain ||
+		    mover->teammaster != mover || (mover->flags & FL_TEAMSLAVE) != 0 ||
+		    mover->target || mover->killtarget || mover->pathtarget ||
+		    !SG_RuneCarrierDoorSpawnflags((uint32_t)mover->spawnflags) ||
+		    mover->moveinfo.wait <= 0.0f ||
+		    fabsf(mover->moveinfo.end_origin[2] -
+		        mover->moveinfo.start_origin[2]) < 8.0f)
+			continue;
+		for (axis = 0; axis < 2; axis++)
+			if (mover->moveinfo.start_origin[axis] !=
+			    mover->moveinfo.end_origin[axis])
+				break;
+		if (axis != 2)
+			continue;
+		for (axis = 0; axis < 3; axis++)
+		{
+			float source_min = mover->moveinfo.start_origin[axis] +
+				mover->mins[axis] - 1.0f;
+			float source_max = mover->moveinfo.start_origin[axis] +
+				mover->maxs[axis] + 1.0f;
+
+			if (trigger->absmin[axis] < source_min ||
+			    trigger->absmax[axis] > source_max)
+				break;
+		}
+		if (axis != 3 || (key != trigger_key && key != mover_key))
+			continue;
+		if (trigger_key_out) *trigger_key_out = trigger_key;
+		if (mover_key_out) *mover_key_out = mover_key;
+		return 1;
+	}
+	return 0;
+}
+
 static uint16_t Catalog_NodeKind(uint32_t index, const edict_t *entity)
 {
 	const char *name = Catalog_Classname(index, entity);
@@ -252,6 +334,9 @@ static uint16_t Catalog_NodeKind(uint32_t index, const edict_t *entity)
 		return SG_MECH_NODE_PLATFORM_TRIGGER;
 	if (synthetic == SG_MECH_SYNTHETIC_TELEPORT)
 		return SG_MECH_NODE_TELEPORT_TRIGGER;
+	if (Catalog_TriggeredDoorLiftPair(index, NULL, NULL))
+		return !strcmp(name, "trigger_multiple")
+			? SG_MECH_NODE_PLATFORM_TRIGGER : SG_MECH_NODE_PLATFORM;
 	if (!name)
 		return SG_MECH_NODE_CONTEXTUAL;
 	if (!strcmp(name, "func_button"))
@@ -417,6 +502,14 @@ static int Catalog_ExecutionCallbacksMatch(const edict_t *entity,
 	state.node_kind = node->kind;
 	state.think_role = Catalog_ExecutionThinkRole(entity, node);
 	state.end_role = Catalog_ExecutionEndRole(entity);
+	if (node->kind == SG_MECH_NODE_PLATFORM &&
+	    node->use_callback == SG_MECH_CALLBACK_USE_PLAT &&
+	    node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_PLAT)
+		state.platform_profile = SG_MECH_PLATFORM_PROFILE_STOCK;
+	else if (node->kind == SG_MECH_NODE_PLATFORM &&
+	         node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+	         node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR)
+		state.platform_profile = SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER;
 	state.motion_state = entity->moveinfo.state;
 	state.fixed_callbacks_match =
 		Catalog_UseCallback(entity) == node->use_callback &&
@@ -944,8 +1037,18 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 		    node->kind == SG_MECH_NODE_OTHER_MOVER ||
 		    node->kind == SG_MECH_NODE_OBJECTIVE)
 			node->flags |= SG_MECH_NODEF_INVENTORY_ONLY;
-		parent_key = Catalog_PointerKey(catalog.sources[index].synthetic_parent,
-			node_by_edict, edict_count);
+		{
+			uint32_t lift_trigger;
+			uint32_t lift_mover;
+
+			parent_key = Catalog_TriggeredDoorLiftPair(index,
+				&lift_trigger, &lift_mover) && index == lift_trigger
+				? lift_mover : SG_MECH_NO_KEY;
+		}
+		if (parent_key == SG_MECH_NO_KEY)
+			parent_key = Catalog_PointerKey(
+				catalog.sources[index].synthetic_parent,
+				node_by_edict, edict_count);
 		node->owner_key = parent_key != SG_MECH_NO_KEY ? parent_key
 			: Catalog_PointerKey(entity->owner, node_by_edict, edict_count);
 		node->team_master_key = Catalog_PointerKey(entity->teammaster,
@@ -1189,9 +1292,19 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 		        node_by_edict, edict_count) != SG_MECH_NO_KEY &&
 		    entity->owner != catalog.sources[index].synthetic_parent &&
 		    !Catalog_AppendEdge(catalog.edges, edge_capacity, &edge_count, index,
-		        Catalog_PointerKey(catalog.sources[index].synthetic_parent,
-		            node_by_edict, edict_count), SG_MECH_EDGE_OWNER, 0U, 0U))
+			    Catalog_PointerKey(catalog.sources[index].synthetic_parent,
+			        node_by_edict, edict_count), SG_MECH_EDGE_OWNER, 0U, 0U))
 			goto edge_overflow;
+		{
+			uint32_t lift_trigger;
+			uint32_t lift_mover;
+
+			if (Catalog_TriggeredDoorLiftPair(index, &lift_trigger,
+			        &lift_mover) && index == lift_trigger &&
+			    !Catalog_AppendEdge(catalog.edges, edge_capacity, &edge_count,
+			        index, lift_mover, SG_MECH_EDGE_OWNER, 0U, 0U))
+				goto edge_overflow;
+		}
 	}
 	qsort(catalog.edges, edge_count, sizeof(*catalog.edges), Catalog_EdgeCompare);
 	for (index = 1U; index < edge_count; index++)
@@ -1447,6 +1560,14 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	if (catalog.sources[key].synthetic_parent)
 		owner_key = Catalog_LivePointerKey(
 			catalog.sources[key].synthetic_parent);
+	{
+		uint32_t lift_trigger;
+		uint32_t lift_mover;
+
+		if (Catalog_TriggeredDoorLiftPair(key, &lift_trigger, &lift_mover) &&
+		    key == lift_trigger)
+			owner_key = lift_mover;
+	}
 	team_master_key = Catalog_LivePointerKey(entity->teammaster);
 	if (node->kind == SG_MECH_NODE_DOOR_MASTER &&
 	    team_master_key == SG_MECH_NO_KEY)

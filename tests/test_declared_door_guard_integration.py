@@ -90,8 +90,8 @@ def test_generator_serializes_bounded_delayed_sound_terminals() -> None:
     )
     activator = between(
         oracle,
+        "static qboolean SG_OracleDeclaredActivatorSafeWithDelay(",
         "static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger)\n{",
-        "/* The active BUTTON_DOOR controller",
     )
     door_effects = between(
         oracle,

@@ -78,6 +78,34 @@ typedef struct sg_door_approach_ticket_s
 	qboolean armed;
 } sg_door_approach_ticket_t;
 
+typedef enum sg_carrier_action_phase_e
+{
+	SG_CARRIER_PHASE_NONE = 0,
+	SG_CARRIER_PHASE_APPROACH_ARMED,
+	SG_CARRIER_PHASE_APPROACH_DELAY_PENDING,
+	SG_CARRIER_PHASE_APPROACH_OPENING,
+	SG_CARRIER_PHASE_CARRIER_READY,
+	SG_CARRIER_PHASE_EGRESS_ARMED,
+	SG_CARRIER_PHASE_EGRESS_DELAY_PENDING,
+	SG_CARRIER_PHASE_EGRESS_OPENING,
+	SG_CARRIER_PHASE_EGRESS_OPEN,
+	SG_CARRIER_PHASE_COMPLETE,
+	SG_CARRIER_PHASE_FAILED
+} sg_carrier_action_phase_t;
+
+typedef struct sg_carrier_action_state_s
+{
+	sg_carrier_action_phase_t phase;
+	const rune_t *rune;
+	rune_artifact_t artifact;
+	int link;
+	int event_frame;
+	int ready_frame;
+	uint32_t entry_key;
+	uint32_t carrier_key;
+	uint32_t trigger_key;
+} sg_carrier_action_state_t;
+
 typedef struct sg_bot_s
 {
 	edict_t		*ent;
@@ -275,7 +303,8 @@ typedef struct sg_bot_s
 	qboolean	declared_triggered; /* this RL_DOOR's validated Touch_Multi
 		                                * actually fired for this bot */
 	int			declared_trigger_frame; /* outer frame of that synchronous touch;
-		                                       * remaining 25 ms commands stop */
+			                                       * remaining 25 ms commands stop */
+	sg_carrier_action_state_t carrier_action;
 	int			declared_egress_proof_frame; /* cap live TOP rollout to once per
 		                                           * outer frame */
 	qboolean	declared_door_retreat; /* live suffix to `to` failed; own a

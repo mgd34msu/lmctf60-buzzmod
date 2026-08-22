@@ -1241,6 +1241,13 @@ def _build_teleports(
 
 
 class RuneRuneArtifactTests(unittest.TestCase):
+
+    def test_carrier_door_spawnflags_admit_both_directions(self):
+        self.assertTrue(runeio._carrier_door_spawnflags(4))
+        self.assertTrue(runeio._carrier_door_spawnflags(5))
+        for forbidden in (0, 1, 3, 6, 7):
+            with self.subTest(spawnflags=forbidden):
+                self.assertFalse(runeio._carrier_door_spawnflags(forbidden))
     def setUp(self) -> None:
         self.encoded = _build_rune()
 

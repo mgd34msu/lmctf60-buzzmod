@@ -1874,7 +1874,8 @@ $(COMPOUND_PUBLICATION_CASE_GNU_OBJS): .sg_%.gnu.o: tests/sg_%.c \
 		slipgate/sg_move.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
+		-fdata-sections -DSG_RUNE_MECHANISM_EXECUTION_TEST -I. \
+		-MMD -MP -MF $(patsubst %.o,%.d,$@) \
 		-c -o $@ $<
 
 .sg_delayed_relay_dispatch_util_under_test.gnu.o: slipgate/sg_util.c \

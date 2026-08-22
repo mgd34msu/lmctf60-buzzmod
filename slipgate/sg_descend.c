@@ -2771,14 +2771,19 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					{
 						edict_t *plat = mechanism_binding.mover_entity;
 
-					if (plat && SG_LiftRider(plat, e) &&
+					if (plat &&
+					    (mechanism_binding.plan->expected_members == 1U ||
+					     bot->carrier_action.phase ==
+					         SG_CARRIER_PHASE_EGRESS_OPEN) &&
+					    SG_LiftRider(plat, e) &&
 					    plat->moveinfo.state == SG_PLAT_STATE_TOP)
 					{
 						short top_fixed[3];
 						vec3_t top_body;
 						int axis;
 
-						if (SG_LiftTopRest(plat, e, top_body))
+						if (SG_LiftRest(mechanism_binding.entry_entity,
+						        plat, e, top_body))
 						{
 							for (axis = 0; axis < 3; axis++)
 								top_fixed[axis] = (short)(top_body[axis] * 8.0f);
@@ -2817,6 +2822,16 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					        SG_Rune()->seeds[cl->to].origin,
 					        e->groundentity != NULL, e->watertype,
 					        e->waterlevel, e);
+				}
+				if (declared_arrived)
+				{
+					if (cl->action == RL_LIFT &&
+					    mechanism_binding.plan->expected_members > 1U)
+					{
+						if (!SG_CarrierActionComplete(bot,
+						        &mechanism_binding))
+							declared_arrived = false;
+					}
 				}
 				if (declared_arrived)
 				{

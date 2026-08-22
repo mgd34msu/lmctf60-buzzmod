@@ -82,9 +82,14 @@ RUNE_CONTROLLER_RELAY_DOOR = contract.SG_MECHANISM_CONTROLLER_RELAY_DOOR
 RUNE_CONTROLLER_PLATFORM = contract.SG_MECHANISM_CONTROLLER_PLATFORM
 RUNE_CONTROLLER_TELEPORT = contract.SG_MECHANISM_CONTROLLER_TELEPORT
 
+
+def _carrier_door_spawnflags(spawnflags: int) -> bool:
+    return spawnflags in (4, 5)
+
 RUNE_CALLBACK_TOUCH_MULTI = 1
 RUNE_CALLBACK_TOUCH_DOOR_TRIGGER = 2
 RUNE_CALLBACK_BUTTON_TOUCH = 3
+RUNE_CALLBACK_USE_MULTI = 4
 RUNE_CALLBACK_BUTTON_USE = 5
 RUNE_CALLBACK_BLOCKED_DOOR = 8
 RUNE_CALLBACK_USE_TRIGGER_RELAY = 9
@@ -1702,7 +1707,8 @@ def _rune_door_node_valid(
         node.use_callback == RUNE_CALLBACK_USE_DOOR and
         node.think_callback == expected_think and
         node.blocked_callback == RUNE_CALLBACK_BLOCKED_DOOR and
-        node.delay_ms == 0 and
+        node.delay_ms >= 0 and
+        (node.delay_ms == 0 or node.target_offset == 0) and
         node.wait_ms > 0 and
         node.speed_q8 != 0 and
         node.accel_q8 == node.speed_q8 and
@@ -1815,6 +1821,7 @@ def _rune_safe_relay(node: RuneActivationNode) -> bool:
 def _rune_validate_production_plan(
     plan: RuneActivationPlan,
     plan_edges: tuple[RuneActivationEdge, ...],
+    owner_link: RuneLink,
     node_by_key: Mapping[int, RuneActivationNode],
     inventory_fanout: Mapping[
         tuple[int, int], tuple[RuneActivationEdge, ...]
@@ -1881,6 +1888,15 @@ def _rune_validate_production_plan(
             fail("would execute the same inventory edge more than once")
         expected.add(edge)
 
+    def add_platform_trigger_edge(
+        edge: RuneActivationEdge, delay_ms: int
+    ) -> None:
+        if edge.kind != RUNE_EDGE_TARGET or edge.delay_ms != delay_ms:
+            fail("contains a carrier trigger edge with the wrong delay")
+        if edge in expected:
+            fail("would execute the same inventory edge more than once")
+        expected.add(edge)
+
     def add_side_effect(
         edge: RuneActivationEdge, *, allow_areaportal: bool
     ) -> None:
@@ -1917,19 +1933,203 @@ def _rune_validate_production_plan(
                 fail("contains an empty sound relay")
             pending.extend((child, False) for child in reversed(fanout))
 
+    def add_door_closure(
+        masters: list[int], expected_physical: int
+    ) -> None:
+        if not masters or len(set(masters)) != len(masters):
+            fail("admits no door master or admits one more than once")
+        physical: list[RuneActivationNode] = []
+        for master_key in masters:
+            master_node = node_by_key.get(master_key)
+            if master_node is None or not _rune_door_node_valid(
+                master_node, master_key, master=True, strings=strings
+            ):
+                fail("contains a noncanonical door master")
+            physical.append(master_node)
+            members = door_members_by_master.get(master_key, ())
+            for member in members:
+                if not _rune_door_node_valid(
+                    member, master_key, master=False, strings=strings
+                ):
+                    fail("contains a noncanonical door member")
+            team_edges = inventory_fanout.get(
+                (master_key, RUNE_EDGE_TEAM), ()
+            )
+            if {edge.to_key for edge in team_edges} != {
+                member.key for member in members
+            }:
+                fail("does not authenticate the complete physical door team")
+            for edge in team_edges:
+                add_edge(edge)
+            physical.extend(members)
+        if len(physical) != expected_physical:
+            fail("expected_members excludes or adds physical door members")
+        for door in physical:
+            for edge in inventory_fanout.get(
+                (door.key, RUNE_EDGE_TARGET), ()
+            ):
+                add_side_effect(edge, allow_areaportal=True)
+
     controller = plan.controller_kind
     if controller == RUNE_CONTROLLER_PLATFORM:
         owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
+        targets = inventory_fanout.get((entry.key, RUNE_EDGE_TARGET), ())
+        stock = (
+            entry.touch_callback == RUNE_CALLBACK_TOUCH_PLAT_CENTER and
+            bool(entry.flags & RUNE_NODEF_SYNTHETIC) and
+            not targets and plan.cooldown_ms == 0
+        )
+        carrier = (
+            entry.touch_callback == RUNE_CALLBACK_TOUCH_MULTI and
+            entry.use_callback == RUNE_CALLBACK_USE_MULTI and
+            entry.flags & (
+                RUNE_NODEF_SYNTHETIC | RUNE_NODEF_REPEATABLE |
+                RUNE_NODEF_TOUCHABLE | RUNE_NODEF_USABLE
+            ) == (
+                RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE |
+                RUNE_NODEF_USABLE
+            ) and
+            entry.delay_ms == 0 and entry.wait_ms > 0 and
+            entry.killtarget_offset == 0 and entry.path_target_offset == 0 and
+            mover.use_callback == RUNE_CALLBACK_USE_DOOR and
+            mover.blocked_callback == RUNE_CALLBACK_BLOCKED_DOOR and
+            _carrier_door_spawnflags(mover.spawnflags) and
+            mover.flags & (
+                RUNE_NODEF_MOVER | RUNE_NODEF_TEAM_MASTER |
+                RUNE_NODEF_SHOOTABLE
+            ) == (RUNE_NODEF_MOVER | RUNE_NODEF_TEAM_MASTER) and
+            len(targets) == 1 and targets[0].to_key == mover.key and
+            plan.cooldown_ms == min(entry.wait_ms, RUNE_MAX_TIME_MS)
+        )
         if (
             entry.kind != RUNE_NODE_PLATFORM_TRIGGER or
-            entry.touch_callback != RUNE_CALLBACK_TOUCH_PLAT_CENTER or
-            not entry.flags & RUNE_NODEF_SYNTHETIC or
             mover.kind != RUNE_NODE_PLATFORM or
             len(owner) != 1 or owner[0].to_key != mover.key or
-            plan.expected_members != 1 or plan.cooldown_ms != 0
+            (stock and plan.expected_members != 1) or not (stock or carrier)
         ):
             fail("does not satisfy the platform controller law")
+        if carrier:
+            add_edge(targets[0])
         add_edge(owner[0])
+        if carrier and plan.expected_members > 1:
+            def carrier_trigger_shape(node: RuneActivationNode) -> bool:
+                return bool(
+                    _rune_node_executable(node) and
+                    node.kind == RUNE_NODE_TRIGGER and
+                    node.touch_callback == RUNE_CALLBACK_TOUCH_MULTI and
+                    node.use_callback == RUNE_CALLBACK_USE_MULTI and
+                    node.flags & (
+                        RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE |
+                        RUNE_NODEF_USABLE
+                    ) == (
+                        RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE |
+                        RUNE_NODEF_USABLE
+                    ) and
+                    node.delay_ms >= 0 and node.wait_ms > 0 and
+                    node.target_offset != 0 and
+                    node.killtarget_offset == node.path_target_offset == 0
+                )
+
+            plan_edge_set = set(plan_edges)
+            planned_triggers = [
+                node for node in node_by_key.values()
+                if carrier_trigger_shape(node) and any(
+                    edge in plan_edge_set for edge in inventory_fanout.get(
+                        (node.key, RUNE_EDGE_TARGET), ()
+                    )
+                )
+            ]
+
+            def trigger_signature(
+                node: RuneActivationNode,
+            ) -> tuple[int, int, tuple[tuple[int, int, int], ...]]:
+                return (
+                    node.delay_ms,
+                    node.target_offset,
+                    tuple(
+                        (edge.to_key, edge.ordinal, edge.delay_ms)
+                        for edge in inventory_fanout.get(
+                            (node.key, RUNE_EDGE_TARGET), ()
+                        )
+                    ),
+                )
+
+            def trigger_contains_anchor(node: RuneActivationNode) -> bool:
+                hull_min_q8 = (-136, -136, -200)
+                hull_max_q8 = (136, 136, 264)
+                for axis, coordinate in enumerate(owner_link.suffix_anchor):
+                    scaled = coordinate * 8.0
+                    if not math.isfinite(scaled) or scaled != int(scaled):
+                        return False
+                    anchor_q8 = int(scaled)
+                    if (
+                        anchor_q8 + hull_max_q8[axis] <= node.absmin_q8[axis] or
+                        anchor_q8 + hull_min_q8[axis] >= node.absmax_q8[axis]
+                    ):
+                        return False
+                return True
+
+            if owner_link.action != contract.RL_LIFT:
+                fail("is not owned by a lift link")
+            classes: dict[
+                tuple[int, int, tuple[tuple[int, int, int], ...]],
+                list[RuneActivationNode],
+            ] = {}
+            for node in planned_triggers:
+                classes.setdefault(trigger_signature(node), []).append(node)
+            if not classes or len(classes) > 2:
+                fail("has an invalid number of carrier trigger classes")
+            containing = [
+                signature for signature, members in classes.items()
+                if any(trigger_contains_anchor(node) for node in members)
+            ]
+            if len(containing) != 1:
+                fail("does not have one anchor-selected carrier approach")
+            approach_signature = containing[0]
+            ordered_signatures = [approach_signature] + [
+                signature for signature in classes
+                if signature != approach_signature
+            ]
+            masters: list[int] = []
+            for class_signature in ordered_signatures:
+                reference = classes[class_signature][0]
+                signature = class_signature[2]
+                stage_masters: list[int] = []
+                for node in node_by_key.values():
+                    if not carrier_trigger_shape(node) or (
+                        node.delay_ms != class_signature[0] or
+                        node.target_offset != class_signature[1]
+                    ):
+                        continue
+                    fanout = inventory_fanout.get(
+                        (node.key, RUNE_EDGE_TARGET), ()
+                    )
+                    if tuple(
+                        (edge.to_key, edge.ordinal, edge.delay_ms)
+                        for edge in fanout
+                    ) != signature:
+                        fail("has inconsistent equivalent carrier-trigger fanout")
+                    seen_masters = set(stage_masters)
+                    for edge in fanout:
+                        destination = node_by_key[edge.to_key]
+                        if destination.kind == RUNE_NODE_DOOR_MASTER:
+                            if destination.key in masters:
+                                fail("reuses one door mover across carrier stages")
+                            if destination.key not in seen_masters:
+                                stage_masters.append(destination.key)
+                                seen_masters.add(destination.key)
+                        elif (
+                            destination.kind != RUNE_NODE_DOOR_MEMBER or
+                            destination.team_master_key not in seen_masters
+                        ):
+                            fail("carrier trigger targets a slave before its master")
+                        add_platform_trigger_edge(edge, class_signature[0])
+                if not stage_masters:
+                    fail("carrier stage has no door master")
+                masters.extend(stage_masters)
+            add_door_closure(masters, plan.expected_members - 1)
+        elif carrier and plan.expected_members != 1:
+            fail("has an invalid carrier member count")
 
     elif controller == RUNE_CONTROLLER_TELEPORT:
         owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
@@ -2047,40 +2247,7 @@ def _rune_validate_production_plan(
             if not masters or mover.key != min(masters):
                 fail("does not bind mover_key to the smallest admitted master")
 
-        if len(set(masters)) != len(masters):
-            fail("admits a door master more than once")
-        physical: list[RuneActivationNode] = []
-        for master_key in masters:
-            master_node = node_by_key.get(master_key)
-            if master_node is None or not _rune_door_node_valid(
-                master_node, master_key, master=True, strings=strings
-            ):
-                fail("contains a noncanonical door master")
-            physical.append(master_node)
-            members = door_members_by_master.get(master_key, ())
-            for member in members:
-                if not _rune_door_node_valid(
-                    member, master_key, master=False, strings=strings
-                ):
-                    fail("contains a noncanonical door member")
-            team_edges = inventory_fanout.get(
-                (master_key, RUNE_EDGE_TEAM), ()
-            )
-            if {edge.to_key for edge in team_edges} != {
-                member.key for member in members
-            }:
-                fail("does not authenticate the complete physical door team")
-            for edge in team_edges:
-                add_edge(edge)
-            physical.extend(members)
-
-        if len(physical) != plan.expected_members:
-            fail("expected_members excludes or adds physical door members")
-        for door in physical:
-            for edge in inventory_fanout.get(
-                (door.key, RUNE_EDGE_TARGET), ()
-            ):
-                add_side_effect(edge, allow_areaportal=True)
+        add_door_closure(masters, plan.expected_members)
     else:
         fail("uses an unsupported controller")
 
@@ -2174,7 +2341,7 @@ def _rune_validate_mechanisms(
         key: tuple(members) for key, members in member_lists.items()
     }
 
-    plan_references = [0] * len(plans)
+    plan_owners: list[RuneLink | None] = [None] * len(plans)
     for index, link in enumerate(links):
         if not contract.action_mechanism_admitted(link.action):
             raise _wire_error(
@@ -2201,8 +2368,13 @@ def _rune_validate_mechanisms(
                 RLRUNE_BAD_ACTIVATION_PLAN,
                 f"link {index} has invalid plan binding",
             )
-        plan_references[link.activation_plan] += 1
-    if any(references != 1 for references in plan_references):
+        if plan_owners[link.activation_plan] is not None:
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                "one plan is referenced by more than one link",
+            )
+        plan_owners[link.activation_plan] = link
+    if any(owner is None for owner in plan_owners):
         raise _wire_error(
             RLRUNE_BAD_ACTIVATION_PLAN,
             "each plan must be referenced by exactly one link",
@@ -2222,6 +2394,8 @@ def _rune_validate_mechanisms(
         )
     inventory_raw = frozenset(raw_edges[:header.num_inventory_edges])
     for index, plan in enumerate(plans):
+        owner_link = plan_owners[index]
+        assert owner_link is not None
         if plan.entry_key not in key_set or plan.mover_key not in key_set:
             raise _wire_error(
                 RLRUNE_BAD_ACTIVATION_PLAN,
@@ -2254,6 +2428,7 @@ def _rune_validate_mechanisms(
         _rune_validate_production_plan(
             plan,
             edges[plan.first_edge:end],
+            owner_link,
             node_by_key,
             inventory_fanout,
             door_members_by_master,

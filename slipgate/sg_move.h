@@ -39,6 +39,8 @@ void SG_DeclaredDoorApproachExecutionRetain(sg_bot_t *bot);
 qboolean SG_ButtonExecutionSupportValid(
 	const sg_rune_mechanism_binding_t *binding, const sg_bot_t *bot,
 	const edict_t *subject);
+qboolean SG_CarrierActionComplete(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding);
 
 typedef enum sg_button_execution_anchor_state_e
 {
