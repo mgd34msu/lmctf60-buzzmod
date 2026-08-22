@@ -340,8 +340,27 @@ module. `lmctf15`, `lmctf25`, `lmctf58`, `tw2ctf2`, `xmap05`, `xmap12`, and
 `xmap26` all reached the same 900-second base-link timeout before the first
 256-seed progress interval, wrote no artifact, and retained normalized
 signature `870fb63c713b5d71496b56f6`. The fixed-point optimization is therefore
-safe but insufficient for this family; structural hook-search reduction remains
-an active blocker.
+safe but insufficient for this family. Commits `2d4ec94` and `dfeca10` replace
+the exhaustive hook-source cross product with a deterministic, globally
+bounded exact prover. Candidates are ranked, partitioned by connected seed
+component, and selected by component/source round robin; the only proof cap is
+the global 8,192-call budget, so no source or component is silently discarded.
+The complete GNU and Clang/Make host suites pass on the integrated source,
+including both long strike tests, traversal, PUSH, hook, source-size, deslop,
+and unresolved-symbol gates. The exact module SHA-256 is
+`1a60fef8ef552e25398090cc13009ee71620e9077c85842afc0d3a79a5e18617`;
+its immutable 175-map input-manifest SHA-256 is
+`40659da759396bdcf98727f4bdce157879445ce3ee4b01404cf3e836f7431ea3`.
+An integrated `lmctf42` smoke is fully accepted by both C readers, the Python
+reader, lint, and a fresh cold load: 285 seeds, 4,293 links, 496 hook links,
+and 4,895 ms of base-link CPU. Its seeds and every link are record-identical
+to the isolated accepted scheduler run, while all 3,754 ordinary
+RUN/JUMP/DROP/TELE links remain record-identical to the prior 9,899-link
+exhaustive baseline. Exact parallel smokes are now running for `lmctf15`,
+`lmctf25`, `lmctf58`, `tw2ctf2`, `xmap05`, `xmap12`, and `xmap26`, with an
+independent second `xmap05` run reserved for byte-determinism. None is removed
+from the unresolved queue until its artifact passes every reader, semantic,
+lint, SNAG, and cold-load gate.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
