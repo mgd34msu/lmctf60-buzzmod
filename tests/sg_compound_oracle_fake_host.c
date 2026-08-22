@@ -53,6 +53,7 @@ trace_t HostTrace(const vec3_t start, const vec3_t mins,
 	{
 		vec3_t delta;
 
+		fixture_observation.hook_started = true;
 		VectorSubtract(end, start, delta);
 		if (VectorLength(delta) <= 200.0f &&
 		    fixture_config.hook_muzzle_blocked)
@@ -260,15 +261,23 @@ void HostPmove(pmove_t *pmove)
 	pmove->waterlevel = 3;
 	if (fixture_observation.top_staged)
 	{
+		qboolean hook_top_hold = fixture_config.hook_suffix &&
+		    !fixture_observation.hook_started;
+
 		if (!fixture_observation.first_top_seen)
 		{
 			fixture_observation.first_top_seen = true;
 			fixture_observation.first_top_command = pmove->cmd;
 		}
-		fixture_observation.suffix_commands++;
+		if (hook_top_hold)
+			fixture_observation.hook_top_hold_commands++;
+		else
+			fixture_observation.suffix_commands++;
 		if (fixture_config.hook_suffix)
 		{
-			if (fixture_config.hook_sweep_mode ==
+			if (hook_top_hold)
+				x = 160;
+			else if (fixture_config.hook_sweep_mode ==
 			        SG_HOOK_ORACLE_SWEEP_PRECLEAR_CROSS &&
 			    fixture_observation.suffix_commands == 3)
 				x = -80;
@@ -287,13 +296,18 @@ void HostPmove(pmove_t *pmove)
 		}
 		else
 			x = SuffixX();
-		if (fixture_config.top_drift_at_command ==
+		if (fixture_config.top_drift_at_command > 0 &&
+		    fixture_config.top_drift_at_command ==
 		    fixture_observation.suffix_commands)
 			fixture_edicts[1].velocity[0] = 1.0f;
-		if (fixture_config.identity_drift_at_command ==
+		if (fixture_config.identity_drift_at_command > 0 &&
+		    fixture_config.identity_drift_at_command ==
 		    fixture_observation.suffix_commands)
 			fixture_edicts[1].s.number = 9;
-		pmove->s.velocity[0] = 64;
+		if (!hook_top_hold)
+			pmove->s.velocity[0] = 64;
+		if (hook_top_hold)
+			fixture_observation.last_hook_top_hold = pmove->s;
 		if (fixture_config.drop_suffix)
 		{
 			qboolean wet = x <= -60 ||

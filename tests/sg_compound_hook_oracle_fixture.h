@@ -49,6 +49,8 @@ typedef struct sg_compound_hook_oracle_response_s
 	int masked_shot_traces;
 	int masked_contact_traces;
 	int suffix_commands;
+	int top_hold_commands;
+	qboolean suffix_captured_after_top_hold;
 } sg_compound_hook_oracle_response_t;
 
 void SG_CompoundHookOracleRunScenario(

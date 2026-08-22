@@ -61,6 +61,8 @@ static void TestExpectedControlAndStablePopulation(void)
 	      baseline.proof.suffix_start_ms + baseline.proof.arrival_ms);
 	CHECK(baseline.proof.total_cost_ms == 1000);
 	CHECK(baseline.member_restored && baseline.globals_restored);
+	CHECK(baseline.top_hold_commands == 4);
+	CHECK(baseline.suffix_captured_after_top_hold);
 	CHECK(baseline.suffix_commands == 16);
 
 	request.loader_transient = true;

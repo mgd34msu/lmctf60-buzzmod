@@ -74,11 +74,14 @@ typedef struct fixture_observation_s
 	int zero_commands;
 	int ride_zero_commands;
 	int suffix_commands;
+	int hook_top_hold_commands;
 	int trace_calls;
 	int link_calls;
 	float link_origins[16];
 	qboolean stage_started;
 	qboolean top_staged;
+	qboolean hook_started;
+	pmove_state_t last_hook_top_hold;
 	qboolean first_snapinitial;
 	int later_snapinitial;
 	qboolean first_top_seen;

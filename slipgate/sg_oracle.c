@@ -7524,6 +7524,12 @@ rune_reject_reason_t SG_OracleCompoundHookPreopen(
 		reason = RLR_MECHANISM_UNRESOLVED;
 		goto done;
 	}
+	if (!SG_OracleCompoundHoldFrame(ph, resolved, mechanism_anchor, 4,
+	                                &old_frame_z))
+	{
+		reason = RLR_RIDE_REPLAY_FAILED;
+		goto done;
+	}
 	SG_OracleCompoundHookCaptureSuffix(ph, old_frame_z, &candidate);
 	reason = SG_OracleCompoundHookSuffix(ph, resolved, member, destination,
 	    expected_control, old_frame_z, &candidate, passent, world_only);

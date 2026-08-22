@@ -77,6 +77,13 @@ void SG_CompoundHookOracleRunScenario(
 	response->masked_contact_traces =
 		fixture_observation.transient_masked_contact_traces;
 	response->suffix_commands = fixture_observation.suffix_commands;
+	response->top_hold_commands =
+		fixture_observation.hook_top_hold_commands;
+	response->suffix_captured_after_top_hold =
+		response->top_hold_commands == 4 &&
+		memcmp(&response->proof.suffix_pms,
+		       &fixture_observation.last_hook_top_hold,
+		       sizeof(response->proof.suffix_pms)) == 0;
 	response->member_restored =
 		MemberRestored(&fixture_edicts[1], &member_before);
 	response->transient_restored =
