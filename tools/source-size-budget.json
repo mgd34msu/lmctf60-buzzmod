@@ -83,7 +83,7 @@
     "slipgate/sg_net.c": 905,
     "slipgate/sg_oracle.c": 8113,
     "slipgate/sg_replay.c": 1197,
-    "slipgate/sg_rune.c": 7212,
+    "slipgate/sg_rune.c": 7218,
     "slipgate/sg_rune_binding.c": 1034,
     "slipgate/sg_rune_codec.c": 3067,
     "slipgate/sg_rune_mechanism_catalog.c": 1730,
