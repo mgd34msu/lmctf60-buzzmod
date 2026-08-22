@@ -35,6 +35,134 @@ static void Fixture(sg_push_witness_t *witness,
 	observation->alive = true;
 	observation->grounded = true;
 	observation->dry = true;
+#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
+	observation->immutable_support = true;
+	observation->at_rest = true;
+	observation->ordinary_control = true;
+#endif
+}
+
+static void TestNormalRunHandoffSourceEnvelope(void)
+{
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+
+	Fixture(&witness, &observation);
+	observation.origin_q8[0] += 383;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+
+	Fixture(&witness, &observation);
+	observation.origin_q8[0] += 384;
+	CHECK(!SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(state.failure == SG_PUSH_FAILURE_SOURCE);
+
+	Fixture(&witness, &observation);
+	observation.origin_q8[0] += 271;
+	observation.origin_q8[1] += 271;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+
+	Fixture(&witness, &observation);
+	observation.origin_q8[0] += 272;
+	observation.origin_q8[1] += 272;
+	CHECK(!SG_PushLiveBegin(&state, &witness, &observation));
+}
+
+static void TestSourceSettleAndAdmission(void)
+{
+#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+	Fixture(&witness, &observation);
+	observation.at_rest = false;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(state.phase == SG_PUSH_SETTLE);
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(state.phase == SG_PUSH_SETTLE);
+	CHECK(SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
+	observation.at_rest = true;
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(state.phase == SG_PUSH_APPROACH);
+
+	Fixture(&witness, &observation);
+	observation.immutable_support = false;
+	CHECK(!SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(state.failure == SG_PUSH_FAILURE_SOURCE);
+
+	Fixture(&witness, &observation);
+	observation.ordinary_control = false;
+	CHECK(!SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(state.failure == SG_PUSH_FAILURE_SOURCE);
+#else
+	CHECK(0 && "push source observation state is missing");
+#endif
+}
+
+static void TestSourceSettleDriftAndTimeout(void)
+{
+#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+	int step;
+
+	Fixture(&witness, &observation);
+	observation.at_rest = false;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	observation.origin_q8[0] += SG_PUSH_SOURCE_RADIUS_Q8;
+	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
+	CHECK(state.phase == SG_PUSH_FAILED);
+	CHECK(state.failure == SG_PUSH_FAILURE_SOURCE);
+
+	Fixture(&witness, &observation);
+	observation.at_rest = false;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	for (step = 0; step < SG_PUSH_SETTLE_LIMIT_MS / SG_PUSH_STEP_MS; step++)
+	{
+		CHECK(SG_PushLiveCommand(&state, &observation) ==
+			SG_PUSH_COMMAND_ZERO);
+		CHECK(SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
+	}
+	CHECK(!SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
+	CHECK(state.failure == SG_PUSH_FAILURE_TIMEOUT);
+#else
+	CHECK(0 && "push source settle state is missing");
+#endif
+}
+
+static void TestSourceSettleAuthenticatedTouch(void)
+{
+#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
+	sg_push_witness_t witness;
+	sg_push_observation_t observation;
+	sg_push_live_state_t state;
+	float wrong_impulse[3];
+
+	Fixture(&witness, &observation);
+	observation.at_rest = false;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(SG_PushLiveTouched(&state, witness.entry_key,
+		witness.push_velocity));
+	CHECK(state.phase == SG_PUSH_FLIGHT);
+
+	Fixture(&witness, &observation);
+	observation.at_rest = false;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(!SG_PushLiveTouched(&state, witness.entry_key + 1U,
+		witness.push_velocity));
+	CHECK(state.failure == SG_PUSH_FAILURE_TOUCH);
+
+	Fixture(&witness, &observation);
+	observation.at_rest = false;
+	memcpy(wrong_impulse, witness.push_velocity, sizeof(wrong_impulse));
+	wrong_impulse[1] += 1.0f;
+	CHECK(SG_PushLiveBegin(&state, &witness, &observation));
+	CHECK(!SG_PushLiveTouched(&state, witness.entry_key, wrong_impulse));
+	CHECK(state.failure == SG_PUSH_FAILURE_IMPULSE);
+#else
+	CHECK(0 && "push source settle touch state is missing");
+#endif
 }
 
 static void TestExactTouchAndZeroFlight(void)
@@ -55,6 +183,11 @@ static void TestExactTouchAndZeroFlight(void)
 		witness.push_velocity));
 	CHECK(state.phase == SG_PUSH_FLIGHT);
 	observation.grounded = false;
+#ifdef SG_PUSH_OBSERVATION_SOURCE_STATE
+	observation.immutable_support = false;
+	observation.at_rest = false;
+	observation.ordinary_control = false;
+#endif
 	CHECK(SG_PushLiveCommand(&state, &observation) == SG_PUSH_COMMAND_ZERO);
 	CHECK(SG_PushLiveStep(&state, SG_PUSH_STEP_MS));
 	CHECK(SG_PushLiveBoundary(&state, false, false));
@@ -186,6 +319,10 @@ static void TestArrivalEnvelope(void)
 
 int main(void)
 {
+	TestNormalRunHandoffSourceEnvelope();
+	TestSourceSettleAndAdmission();
+	TestSourceSettleDriftAndTimeout();
+	TestSourceSettleAuthenticatedTouch();
 	TestExactTouchAndZeroFlight();
 	TestTouchIdentityAndRawBitsFailClosed();
 	TestBadWitnessAndTimeout();

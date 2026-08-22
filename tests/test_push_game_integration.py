@@ -41,6 +41,29 @@ def main() -> None:
     assert "push <link>" in dispatch
 
     game = source("slipgate/sg_push_game.c")
+    observation = between(
+        game,
+        "static qboolean PushObservation",
+        "static qboolean PushWitness",
+    )
+    for required in (
+        "entity->s.origin[axis] * 8.0f",
+        "isfinite(fixed)",
+        "fixed < SHRT_MIN",
+        "fixed > SHRT_MAX",
+        "fixed != (float)(short)fixed",
+        "entity->groundentity == g_edicts",
+        "SG_ImmutableSupport(entity->groundentity)",
+        "entity->velocity[axis] != 0.0f",
+        "observation->immutable_support",
+        "observation->at_rest",
+        "observation->ordinary_control",
+        "entity->client->ps.pmove.pm_type == PM_NORMAL",
+        "entity->client->ps.pmove.pm_time == 0",
+    ):
+        assert required in observation
+    assert "ps.pmove.origin" not in observation
+    assert "ps.pmove.velocity" not in observation
     arrived = between(game, "static qboolean PushArrived", "static edict_t *PushEntry")
     assert "observation->alive" in arrived
     report = between(game, "static void PushReport", "int SG_PushGameOwns")
@@ -51,6 +74,14 @@ def main() -> None:
         "PushObservation(entity, &observation)",
         "SG_PushLiveCommand(&bot->push, &observation)",
         "SG_PushLiveBoundary(&bot->push",
+    )
+    ordered(
+        emit,
+        "SG_PushLiveCommand(&bot->push, &observation)",
+        "memset(&command, 0, sizeof(command))",
+        "bot->push.phase == SG_PUSH_APPROACH",
+        "ClientThink(entity, &command)",
+        "SG_PushLiveStep(&bot->push, SG_PUSH_STEP_MS)",
     )
     staging = between(
         game,
