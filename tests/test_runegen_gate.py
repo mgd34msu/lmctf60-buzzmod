@@ -215,6 +215,7 @@ class RunegenGateTest(unittest.TestCase):
         old_snag: bytes | None = b"old-snag",
         maxclients: str = "16",
         signal_run: bool = False,
+        require_kill_after: bool = False,
     ):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -249,6 +250,20 @@ class RunegenGateTest(unittest.TestCase):
             launch_count = work / "launch-count"
             commands = work / "commands"
             ready = work / "ready"
+            if require_kill_after:
+                probe_bin = work / "probe-bin"
+                probe_bin.mkdir()
+                timeout_probe = probe_bin / "timeout"
+                timeout_probe.write_text(
+                    "#!/usr/bin/env bash\n"
+                    "case \" $* \" in\n"
+                    "  *\" --kill-after=5s \"*) ;;\n"
+                    "  *) echo 'missing TERM-to-KILL escalation' >&2; exit 96 ;;\n"
+                    "esac\n"
+                    "exec /usr/bin/timeout \"$@\"\n",
+                    encoding="utf-8",
+                )
+                timeout_probe.chmod(0o755)
             sentinel_root = game_root / ".runegen-stage.unrelated"
             sentinel_engine = engine_dir / ".runegen-stage.unrelated"
             sentinel_root.mkdir()
@@ -256,6 +271,8 @@ class RunegenGateTest(unittest.TestCase):
             (sentinel_root / "keep").write_bytes(b"root")
             (sentinel_engine / "keep").write_bytes(b"engine")
             environment = os.environ.copy()
+            if require_kill_after:
+                environment["PATH"] = f"{probe_bin}:{environment['PATH']}"
             environment.update(
                 {
                     "Q2DED": str(engine),
@@ -418,6 +435,12 @@ class RunegenGateTest(unittest.TestCase):
         self.assertNotEqual(0, result["completed"].returncode)
         self.assertEqual(b"old-rune", result["rune"])
         self.assertEqual(b"old-snag", result["snag"])
+
+    def test_engine_timeout_escalates_term_to_kill(self):
+        result = self.run_scenario("success", require_kill_after=True)
+        completed = result["completed"]
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual(2, result["launches"])
 
     def test_dry_run_describes_two_engines_and_pair_transaction(self):
         result = self.run_scenario("success", dry_run=True)

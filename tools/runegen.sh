@@ -242,7 +242,8 @@ run_engine() {
             printf '%s\n' "maxclients" "sv rune" "quit"
         ) | (
             cd "$GAMEDIR_ROOT" &&
-            exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED_REAL" \
+            exec stdbuf -oL timeout --kill-after=5s "$TIMEOUT_SECS" \
+                "$Q2DED_REAL" \
                 -portable +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" \
                 +set net_port "$port" +exec "$CFG" \
@@ -254,7 +255,8 @@ run_engine() {
             printf '%s\n' "maxclients" "sv sg add red" "quit"
         ) | (
             cd "$GAMEDIR_ROOT" &&
-            exec stdbuf -oL timeout "$TIMEOUT_SECS" "$Q2DED_REAL" \
+            exec stdbuf -oL timeout --kill-after=5s "$TIMEOUT_SECS" \
+                "$Q2DED_REAL" \
                 -portable +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" \
                 +set net_port "$port" +exec "$CFG" \
