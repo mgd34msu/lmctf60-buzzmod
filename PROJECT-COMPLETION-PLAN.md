@@ -152,8 +152,18 @@ both passed.
 
 ## Active work: final source freeze
 
-Canonical D_HOOK integration is complete. Detached exact-commit freeze evidence
-is still running, so the final source and module are not frozen yet.
+Canonical D_HOOK integration is complete. Source candidate `72c52db` fixes the
+MSVC project graph, runner Python configuration, and D_DROP PostStep
+initialization.
+
+- [x] Exact-commit `slipgate` and `main` CI passed on Windows x86 and x64 and
+      on Linux with GNUmakefile and Makefile under GCC and Clang. Every job
+      uploaded its intended artifacts.
+- [x] Local and remote `slipgate` and `main` compare as zero ahead and zero
+      behind.
+- [ ] Complete the detached module and snapshot freeze at `72c52db`.
+
+The final source and module are not frozen yet.
 
 1. Complete detached exact-commit freeze verification on the canonical tree.
 2. Remove temporary probes, diagnostics, stale artifacts, and obsolete dormant
