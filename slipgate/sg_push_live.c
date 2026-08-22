@@ -98,9 +98,9 @@ qboolean SG_PushMinimumHealth(float source_z, float destination_z,
 		delta = 0.0f;
 	if (delta > 30.0f)
 	{
-		float priced = (delta - 30.0f) * 0.5f;
+		double priced = ((double)delta - 30.0) * 0.5;
 
-		if (priced > INT_MAX - SG_PUSH_HEALTH_RESERVE - 1)
+		if (priced > (double)INT_MAX - SG_PUSH_HEALTH_RESERVE - 1)
 			return false;
 		damage = (int)priced;
 		if (damage < 1)
