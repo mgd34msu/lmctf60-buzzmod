@@ -9,7 +9,7 @@
     "RL_TELEPORT", "RL_ROCKETJUMP", "RL_DOOR", "RL_DOOR_DROP",
     "RL_DOOR_SWIM", "RL_DOOR_HOOK", "RL_BUTTON_DOOR", "RL_PUSH", "RL_TRAIN"
   ],
-  "controller_flags": [[0, 0], [1, 13], [2, 13], [3, 13], [4, 0], [5, 13], [6, 5], [7, 5], [8, 13]],
+  "controller_flags": [[0, 0], [1, 13], [2, 13], [3, 13], [4, 0], [5, 13], [6, 5], [7, 5], [8, 13], [9, 28]],
   "wire_diagnostic_symbols": [
     "RLW_OK", "RLW_INVALID_ARGUMENT", "RLW_IO_ERROR", "RLW_BAD_MAGIC",
     "RLW_BAD_HEADER_SIZE", "RLW_BAD_SEED_SIZE", "RLW_BAD_LINK_SIZE",

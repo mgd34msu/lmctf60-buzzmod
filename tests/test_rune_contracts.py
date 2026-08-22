@@ -123,6 +123,10 @@ class RuneContractTests(unittest.TestCase):
         expected_flags = dict(self.pins["controller_flags"])
         self.assertEqual(14, GENERATED.RL_TRAIN)
         self.assertEqual(8, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN)
+        self.assertEqual(9, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT)
+        self.assertEqual(28, GENERATED.mechanism_controller_plan_flags(
+            GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
+        ))
         for controller, flags in expected_flags.items():
             self.assertEqual(flags, GENERATED.mechanism_controller_plan_flags(controller))
         self.assertIsNone(GENERATED.mechanism_controller_plan_flags(99))
@@ -135,6 +139,7 @@ class RuneContractTests(unittest.TestCase):
             (GENERATED.RL_BUTTON_DOOR, GENERATED.SG_MECHANISM_CONTROLLER_BUTTON_DOOR),
             (GENERATED.RL_PUSH, GENERATED.SG_MECHANISM_CONTROLLER_PUSH),
             (GENERATED.RL_TRAIN, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN),
+            (GENERATED.RL_TRAIN, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT),
         }
         for action in range(GENERATED.ACTION_COUNT):
             for controller in expected_flags:
