@@ -150,7 +150,7 @@ hazard makes them negative live evidence, not a completed lifecycle.
 D_HOOK is complete. Its source integration and required real-engine lifecycle
 both passed.
 
-## Final source and module freeze
+## Prior freeze and current invalidation
 
 - [x] Frozen source `72c52db` passed exact-commit `slipgate` and `main` CI on
       Windows x86 and x64 and on Linux with GNUmakefile and Makefile under GCC
@@ -172,18 +172,62 @@ both passed.
       `/tmp/lmctf6-final-freeze-72c52db/FREEZE-EVIDENCE.md` and
       `/tmp/lmctf6-final-freeze-72c52db/FREEZE-MANIFEST.json`; supporting logs
       are under `/tmp/lmctf6-final-freeze-72c52db/logs`.
+- [x] The corpus controller now treats the exact post-write, same-map missing
+      SNAG and field-setup sequence as deferred publication. It then stops the
+      generator, runs the artifact gates, creates the authenticated zero-repair
+      SNAG, and requires a fresh cold-load RUNE-ready result. Missing or invalid
+      SNAG data during cold load still fails closed.
+- [x] The controller repair is canonical at `98775a4`. Its GNU and Make
+      controller suites each passed all 53 tests. A frozen-input `lmctf14` run
+      completed generation, dual-reader acceptance, SNAG creation, and fresh
+      cold load with a terminal PASS.
+- [x] Exact-commit CI for `98775a4` passed on both `slipgate` and `main`, with
+      the full Windows and Linux platform, compiler, and Make-dialect matrix.
+      Local and remote `slipgate` and `main` matched before this plan update.
 
-Any source or generated-contract change after this freeze invalidates the
-module freeze and every RUNE generated from it.
+The `72c52db` game module and its recorded evidence remain proven. They are no
+longer the final combined source and tool freeze. The controller changed after
+that freeze, and the active graph repairs will change game source. The old
+snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
 
-## Active work: generate and validate all 181 RUNEs
+- [ ] Finish and integrate the graph and replay repairs.
+- [ ] Pass exact-commit CI for the final combined source and tools on both
+      `slipgate` and `main`.
+- [ ] Rebuild the final module, create a new immutable 181-map input snapshot,
+      and record its exact manifest and controller fingerprint.
 
-The frozen inputs are ready. No corpus worker has started.
+## Active work: repair, refreeze, and regenerate all 181 RUNEs
 
-1. Run the controller against the exact frozen snapshot with durable isolated
-   output roots, disjoint worker ports, ten bounded workers, and per-map
-   timeouts.
-2. Require every map to produce:
+The run at `/tmp/lmctf6-rune181-72c52db` is sealed from acceptance and retained
+only as diagnostic evidence. At the durable checkpoint it had 39 terminal
+results: zero PASS, 13 `GEN_FAIL`, and 26 `TIMEOUT`. Ten workers were active and
+132 maps were pending. No artifact from this run belongs to the accepted
+corpus.
+
+Most recorded timeouts completed RUNE generation and were waiting for a
+same-process RUNE-ready line after the runtime correctly rejected the missing
+SNAG declaration. The controller repair removes that misclassification. At
+least `lmctf15` and `lmctf25` are genuine no-write generation timeouts and must
+remain timeouts unless later source repair lets generation finish.
+
+### Repair tracks
+
+- [ ] Finish the teleporter-staging repair. The isolated candidate gives
+      `lmctf02a` a mutual objective core and writes its RUNE; it still needs the
+      complete focused and integration gates before canonical integration.
+- [ ] Repair the missing central transition in `lmctf07`.
+- [ ] Keep the route-core diagnostics isolated until each admitted repair has
+      focused regression and real generation evidence.
+- [ ] Repair `lmctf03` live declared-door replay at the rejected link.
+- [ ] Give the exact `lmctf04` flag-root seeds valid outbound routes.
+
+1. Finish the source-owned graph and replay repairs above, including every
+   failure found by the diagnostic run.
+2. Build and verify one new exact source, module, configuration, engine, reader,
+   linter, semantic-checker, and BSP snapshot.
+3. Restart the controller from an empty run root with durable isolated output,
+   disjoint worker ports, ten bounded workers, and per-map timeouts.
+4. Require every map to produce:
    - a new RUNE;
    - the matching SNAG declaration, including authenticated zero repairs;
    - two valid objective roots;
@@ -192,13 +236,12 @@ The frozen inputs are ready. No corpus worker has started.
    - root-aware lint acceptance;
    - every applicable map-specific semantic check;
    - a fresh-process cold load with an admitted bot.
-3. Require exactly 181 PASS results. A generation failure, timeout, lint
+5. Require exactly 181 PASS results. A generation failure, timeout, lint
    failure, reader disagreement, semantic failure, or cold-load failure blocks
    completion.
-4. Repair failures at the source, data, or tool boundary that owns them.
-5. If frozen source changes, rebuild and regenerate every affected artifact so
-   the accepted corpus has one final identity.
-6. Freeze the final 181-artifact manifest and its evidence hashes.
+6. Repair any new failure at the source, data, or tool boundary that owns it,
+   then refreeze and restart every artifact invalidated by that repair.
+7. Freeze the final 181-artifact manifest and its evidence hashes.
 
 ## Real-match validation
 
@@ -243,10 +286,12 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ## Critical path
 
 ```text
-generate and validate all 181 RUNEs
+finish graph and replay repairs
+  -> pass exact CI and create a new source, module, and input freeze
+  -> restart and validate all 181 RUNEs
   -> run ordinary real matches
   -> repair defects and repeat invalidated evidence
-  -> pass CI, update documentation, tag, and publish
+  -> update documentation, tag, and publish
 ```
 
 ## Completion checklist
@@ -257,7 +302,11 @@ generate and validate all 181 RUNEs
 - [x] Rocket jump.
 - [x] D_DROP.
 - [x] D_HOOK integrated and completed in the real engine.
-- [x] Final source and module freeze.
+- [x] Prior `72c52db` module identity and evidence proven.
+- [x] Controller deferred-SNAG phase repair, full tests, live cold-load proof,
+      and exact CI on both branches.
+- [ ] Graph and replay blockers repaired and integrated.
+- [ ] New final combined source, tool, module, and input freeze.
 - [ ] Exactly 181 newly generated and fully accepted RUNEs.
 - [ ] Real-match behavioral validation with ordinary map-list inputs.
 - [ ] Match-exposed defects repaired and revalidated.
