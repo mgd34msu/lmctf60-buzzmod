@@ -83,7 +83,6 @@ static void TestRideAndCleanup(void)
 static void TestOwnershipAndDispatch(void)
 {
 	sg_compound_state_t a, b;
-	int action;
 	int calls = 0;
 
 	SG_CompoundReset(&a);
@@ -98,7 +97,7 @@ static void TestOwnershipAndDispatch(void)
 	}
 	CHECK(SG_CompoundRuntimeReady(RL_DOOR_DROP));
 	CHECK(SG_CompoundRuntimeReady(RL_DOOR_SWIM));
-	CHECK(!SG_CompoundRuntimeReady(RL_DOOR_HOOK));
+	CHECK(SG_CompoundRuntimeReady(RL_DOOR_HOOK));
 	CHECK(!SG_CompoundRuntimeReady(RL_DOOR));
 	CHECK(SG_CompoundSuffixAction(RL_DOOR_DROP) == RL_DROP);
 	CHECK(SG_CompoundSuffixAction(RL_DOOR_SWIM) == RL_SWIM);
