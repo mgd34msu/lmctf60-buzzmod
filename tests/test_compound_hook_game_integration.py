@@ -254,6 +254,17 @@ def main() -> None:
     assert "bot->compound_drop_live.guard_owned" in dominance
     assert "bot->compound_hook_live.guard_owned" in dominance
 
+    arach = source("slipgate/sg_arach.c")
+    stale_cleanup = between(
+        arach, "if (bot->hook_phase == 0 &&", "Think_RespawnEdge(bot, e);"
+    )
+    ordered(
+        stale_cleanup,
+        "!SG_CompoundHookGameOwnsHostRope(bot)",
+        "ctf_hook_abort(e)",
+        "ClientThink(e, &tc.cmd)",
+    )
+
     descend = source("slipgate/sg_descend.c")
     assert "SG_CompoundHookLiveBoundary(" not in descend
     assert "Cmd_Hook_f(e)" not in descend

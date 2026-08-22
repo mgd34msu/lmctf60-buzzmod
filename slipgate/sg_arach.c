@@ -40,6 +40,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_compound_guard_game.h"
+#include "slipgate/sg_compound_hook_game.h"
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
@@ -3069,6 +3070,7 @@ void SG_BotThink(sg_bot_t *bot)
 	 * different law than their witness. Retire it in its own zero-input frame,
 	 * then let route selection resume from the resulting authoritative state. */
 	if (bot->hook_phase == 0 &&
+	    !SG_CompoundHookGameOwnsHostRope(bot) &&
 	    (e->client->hookstate != 0 || e->client->hook != NULL))
 	{
 		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,

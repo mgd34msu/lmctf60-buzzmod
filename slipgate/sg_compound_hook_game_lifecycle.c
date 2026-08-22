@@ -4,6 +4,13 @@
 #include "sg_bot.h"
 #include "sg_compound_hook_game.h"
 
+qboolean SG_CompoundHookGameOwnsHostRope(const sg_bot_t *bot)
+{
+	return bot && bot->compound_hook_live.guard_owned &&
+	       bot->compound_hook_live.local_owned &&
+	       bot->compound_hook_live.outer.phase != SG_COMPOUND_NONE;
+}
+
 sg_compound_guard_result_t SG_CompoundHookGameOrphan(sg_bot_t *bot)
 {
 	sg_compound_hook_live_host_t host;

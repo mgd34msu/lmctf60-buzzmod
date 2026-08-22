@@ -976,6 +976,21 @@ static int CurrentFixture(void)
 	return 1;
 }
 
+static int HostRopeOwnershipFixture(void)
+{
+	FixtureInit();
+	CHECK(!SG_CompoundHookGameOwnsHostRope(&bot));
+	bot.compound_hook_live.guard_owned = true;
+	CHECK(!SG_CompoundHookGameOwnsHostRope(&bot));
+	bot.compound_hook_live.local_owned = true;
+	CHECK(!SG_CompoundHookGameOwnsHostRope(&bot));
+	bot.compound_hook_live.outer.phase = SG_COMPOUND_TOP;
+	CHECK(SG_CompoundHookGameOwnsHostRope(&bot));
+	bot.compound_hook_live.local_owned = false;
+	CHECK(!SG_CompoundHookGameOwnsHostRope(&bot));
+	return 1;
+}
+
 int main(void)
 {
 	if (!HostFixture() || !TransactionFixture() ||
@@ -983,7 +998,7 @@ int main(void)
 	    !AuthenticatedProbeRefusalFixture() || !IdleFixture() ||
 	    !SafetyFixture() ||
 	    !ClearFixture() || !TerminalFixture() || !OrphanWrapperFixture() ||
-	    !CurrentFixture())
+	    !CurrentFixture() || !HostRopeOwnershipFixture())
 		return 1;
 	puts("sg_compound_hook_game_test: ok");
 	return 0;
