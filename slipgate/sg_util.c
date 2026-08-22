@@ -27,11 +27,20 @@ qboolean SG_ImmutableSupport(edict_t *ent)
 {
 	/* Deathmatch spawns keep their classname when
 	 * SP_info_player_deathmatch creates the teleporter-destination pedestal. */
-	return ent && ent->inuse && ent->classname &&
-	       (!strcmp(ent->classname, "info_flag_red") ||
-	        !strcmp(ent->classname, "info_flag_blue") ||
-	        !strcmp(ent->classname, "info_player_deathmatch") ||
-	        !strcmp(ent->classname, "misc_teleporter_dest"));
+	if (!ent || !ent->inuse || !ent->classname)
+		return false;
+	if (!strcmp(ent->classname, "info_flag_red") ||
+	    !strcmp(ent->classname, "info_flag_blue") ||
+	    !strcmp(ent->classname, "info_player_deathmatch") ||
+	    !strcmp(ent->classname, "misc_teleporter_dest"))
+		return true;
+	/* SP_func_wall leaves an untriggered wall permanently linked as BSP
+	 * geometry. Animation-only flags do not change that lifetime. Treat it as
+	 * world support only while every authoritative static property still
+	 * matches; triggered and toggled walls remain transient movers. */
+	return !strcmp(ent->classname, "func_wall") &&
+	       !(ent->spawnflags & 7) && ent->solid == SOLID_BSP &&
+	       ent->movetype == MOVETYPE_PUSH && !ent->use;
 }
 
 qboolean SG_ActionOwnsControl(int action)

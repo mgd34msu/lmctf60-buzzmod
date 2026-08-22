@@ -2258,9 +2258,10 @@ static void TestInvalidIdentitiesFailClosed(void)
 	CHECK(!SG_MoverSubjectOutsideSweep(mover, hook));
 }
 
-static void TestSpawnedTeleporterPedestalSupport(void)
+static void TestImmutableMapSupport(void)
 {
 	edict_t pedestal;
+	edict_t wall;
 
 	memset(&pedestal, 0, sizeof(pedestal));
 	pedestal.inuse = true;
@@ -2268,11 +2269,26 @@ static void TestSpawnedTeleporterPedestalSupport(void)
 	CHECK(SG_MoverSubjectSweepRealImmutableSupport(&pedestal));
 	pedestal.classname = "info_player_start";
 	CHECK(!SG_MoverSubjectSweepRealImmutableSupport(&pedestal));
+
+	memset(&wall, 0, sizeof(wall));
+	wall.inuse = true;
+	wall.classname = "func_wall";
+	wall.solid = SOLID_BSP;
+	wall.movetype = MOVETYPE_PUSH;
+	CHECK(SG_MoverSubjectSweepRealImmutableSupport(&wall));
+	wall.spawnflags = 1;
+	CHECK(!SG_MoverSubjectSweepRealImmutableSupport(&wall));
+	wall.spawnflags = 0;
+	wall.use = door_use;
+	CHECK(!SG_MoverSubjectSweepRealImmutableSupport(&wall));
+	wall.use = NULL;
+	wall.solid = SOLID_NOT;
+	CHECK(!SG_MoverSubjectSweepRealImmutableSupport(&wall));
 }
 
 int main(void)
 {
-	TestSpawnedTeleporterPedestalSupport();
+	TestImmutableMapSupport();
 	TestStableGroundSource();
 	TestButtonContactAndEndpointTiming();
 	TestBoundDoorSiblingAliasReplay();

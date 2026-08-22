@@ -97,7 +97,7 @@
     "tests/sg_compound_world_test.c": 1209,
     "tests/sg_declared_door_guard_test.c": 1070,
     "tests/sg_drop_live_test.c": 946,
-    "tests/sg_mover_subject_sweep_test.c": 2293,
+    "tests/sg_mover_subject_sweep_test.c": 2309,
     "tests/sg_replay_test.c": 1177,
     "tests/sg_rune_codec_test.c": 1142,
     "tests/sg_rune_install_test.c": 1011,
