@@ -277,7 +277,7 @@ including `lmctf02a` and `lmctf04`.
       `67cc06ba71aa8237343e5dc9b18069fa476f1e4d9f48fda2f5b6171e3ccefca7`;
       its RUNE SHA-256 is
       `7cc6406e0f56d1d2e9441848a9826368c85ad0c0cb5594a3eca6b0b42f71eda6`.
-- [x] The `smap28` fixed-push repair is accepted locally. The integrated series
+- [x] The `smap28` fixed-push repair is accepted. The integrated series
       adds the authenticated `RL_PUSH` contract, stock speed-85 flight proof,
       serialized impulse identity, pointer-free live reducer, game adapter, and
       live debug probe. Independent review found two handoff defects, repaired
@@ -307,7 +307,9 @@ including `lmctf02a` and `lmctf04`.
       `576497d` keeps that price and bound in `double`. The formerly failing
       focused PUSH build now passes under Clang with both Make dialects, its
       runtime test passes, and the deslop audit remains at zero findings.
-      Replacement exact-head CI is pending.
+      Replacement exact-source CI at `a130319` is fully green on `slipgate`
+      and `main`, including both Windows builds, packaged Linux, all GCC and
+      Clang host jobs, both Make dialects, and the version check.
 - [ ] Repair the missing central transition in `lmctf07`.
 
 The corrected old no-artifact queue contains 25 maps after the later accepted
