@@ -104,6 +104,14 @@ static void TestSweepSides(void)
 	    sweep_maxs, 2U) == SG_TRAIN_GATE_SIDE_NONE);
 	CHECK(SG_TrainGateSweepAxisSide(west_mins, west_maxs, sweep_mins,
 	    sweep_maxs, 3U) == SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateUniqueSourceSide(
+	    1U << SG_TRAIN_GATE_SIDE_Z_MIN) == SG_TRAIN_GATE_SIDE_Z_MIN);
+	CHECK(SG_TrainGateUniqueSourceSide(
+	    (1U << SG_TRAIN_GATE_SIDE_Z_MIN) |
+	    (1U << SG_TRAIN_GATE_SIDE_Z_MAX)) == SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateUniqueSourceSide(0U) == SG_TRAIN_GATE_SIDE_NONE);
+	CHECK(SG_TrainGateUniqueSourceSide(1U << 31) ==
+	    SG_TRAIN_GATE_SIDE_NONE);
 }
 
 static void Activate(sg_train_gate_state_t *state,
