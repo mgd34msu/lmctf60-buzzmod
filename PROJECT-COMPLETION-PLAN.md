@@ -195,6 +195,13 @@ both passed.
 - [x] Exact-commit CI for `30c8667` passed on both `slipgate` and `main`. Both
       runs passed the Windows x86 and x64 jobs, Linux, all four GCC and Clang
       Make-dialect jobs, and the version check.
+- [x] The `lmctf04` objective-root source repair is canonical at `3b6b1f5`.
+      Both flag roots bind, and the mutual core retains 979 seeds and 26,373
+      links. The isolated end-to-end run passed both readers, Python, lint,
+      authenticated SNAG creation, and fresh cold runtime-ready.
+- [x] The full GNU and Make gates passed for the `lmctf04` repair. Exact-commit
+      CI then passed on both `slipgate` and `main` across the full Windows,
+      Linux, compiler, and Make-dialect matrix.
 
 The `72c52db` game module and its recorded evidence remain proven. They are no
 longer the final combined source and tool freeze. The controller changed after
@@ -225,9 +232,9 @@ remain timeouts unless later source repair lets generation finish.
 
 ### Repair tracks
 
-- [ ] Finish the `lmctf04` objective-root repair. The candidate remains in
-      isolated validation until its focused gates and complete generation path
-      pass.
+- [ ] Complete the isolated `lmctf05` and `lmctf05b` repair. The candidate
+      generalizes `START_OPEN` vertical `func_door` carrier support through
+      authenticated `RL_LIFT`, but it is not accepted yet.
 - [ ] Repair the remaining maps whose objective route core is closed.
 - [ ] Repair the missing central transition in `lmctf07`.
 
@@ -319,6 +326,7 @@ finish the remaining graph repairs
       accepted end to end.
 - [x] Declared-door replay integrated, with `lmctf03` and `mactf01` cold-ready.
 - [x] Separate cold-load timeout integrated, tested, and green in exact CI.
+- [x] `lmctf04` objective-root repair integrated and accepted end to end.
 - [ ] Remaining graph blockers repaired and integrated.
 - [ ] New final combined source, tool, module, and input freeze.
 - [ ] Exactly 181 newly generated and fully accepted RUNEs.
