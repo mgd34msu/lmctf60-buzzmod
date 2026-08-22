@@ -59,6 +59,13 @@ SNAG_READY_RE = re.compile(
     r"repairs=([0-9]+) rune_sha256=([0-9a-f]{64}) "
     r"evidence_sha256=([0-9a-f]{64}) snag_sha256=([0-9a-f]{64})$"
 )
+SNAG_DECLARATION_FAILURE_RE = re.compile(
+    r"^slipgate: snag declaration missing or invalid for map "
+    r"([A-Za-z0-9_][A-Za-z0-9_-]{0,62}); fields rejected$"
+)
+DEFERRED_FIELD_FAILURE = (
+    "slipgate: field setup failed (no flags?); disabled until the next level"
+)
 FAILURE_RE = re.compile(
     r"^rune: (?:rejected .+|FAILED(?::| |$).*|generation refused .+|"
     r"revalidation failed .+|install failed .+|"
@@ -72,6 +79,41 @@ def last_anchored_failure(lines: Sequence[str]) -> str | None:
         if FAILURE_RE.fullmatch(line):
             return line
     return None
+
+
+def last_cold_load_failure(
+    lines: Sequence[str], map_name: str
+) -> str | None:
+    """Return a generator failure or the expected map's SNAG load failure."""
+    failure = last_anchored_failure(lines)
+    if failure is not None:
+        return failure
+    for line in reversed(lines):
+        match = SNAG_DECLARATION_FAILURE_RE.fullmatch(line)
+        if match is not None and match.group(1) == map_name:
+            return line
+    return None
+
+
+def generation_deferred_publication_complete(
+    lines: Sequence[str], map_name: str
+) -> bool:
+    """Recognize the exact post-write failure that the cold load will resolve."""
+    expected_artifact = f"game/maps/{map_name}.rune"
+    for index in range(len(lines) - 2):
+        write = WRITE_RE.fullmatch(lines[index])
+        snag = SNAG_DECLARATION_FAILURE_RE.fullmatch(lines[index + 1])
+        if (
+            write is not None
+            and write.group(1) == expected_artifact
+            and snag is not None
+            and snag.group(1) == map_name
+            and lines[index + 2] == DEFERRED_FIELD_FAILURE
+        ):
+            return True
+    return False
+
+
 REPORT_FIELDS = (
     "seed_count",
     "link_count",
@@ -1914,16 +1956,21 @@ def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path
         (index, item) for index, item in ready
         if index > write_index and item.group(1) == map_name
     ]
-    if len(matching_ready) != 1:
+    deferred_publication = generation_deferred_publication_complete(
+        lines, map_name
+    )
+    if len(matching_ready) + int(deferred_publication) != 1:
         raise CorpusError(
-            f"expected one post-write runtime-ready line, found {len(matching_ready)}"
+            "expected one post-write generation completion, found "
+            f"{len(matching_ready) + int(deferred_publication)}"
         )
-    _ready_index, ready_match = matching_ready[0]
-    ready_counts = tuple(int(ready_match.group(index)) for index in range(2, 6))
-    if ready_counts != (
-        counts["seeds"], counts["links"], counts["mechanism_nodes"], counts["plans"]
-    ):
-        raise CorpusError("runtime-ready counts disagree with generator counts")
+    if matching_ready:
+        _ready_index, ready_match = matching_ready[0]
+        ready_counts = tuple(int(ready_match.group(index)) for index in range(2, 6))
+        if ready_counts != (
+            counts["seeds"], counts["links"], counts["mechanism_nodes"], counts["plans"]
+        ):
+            raise CorpusError("runtime-ready counts disagree with generator counts")
     return {"objective_roots": {"red": red, "blue": blue}, "counts": counts}
 
 
@@ -3093,7 +3140,7 @@ def parse_cold_load_log(
 ) -> dict[str, int]:
     """Accept exactly one ordinary-load READY record and no generation write."""
     lines = text.splitlines()
-    failure = last_anchored_failure(lines)
+    failure = last_cold_load_failure(lines, map_name)
     if failure is not None:
         raise CorpusError(f"fresh cold-load rejected artifact: {failure}")
     if any(WRITE_RE.fullmatch(line) is not None for line in lines):
@@ -3329,7 +3376,7 @@ def run_fresh_cold_load(
             except UnicodeDecodeError as exc:
                 raise GateIntegrityError("fresh cold-load log is not valid UTF-8") from exc
             lines = current.splitlines()
-            if last_anchored_failure(lines) is not None:
+            if last_cold_load_failure(lines, map_name) is not None:
                 break
             if any(
                 (match := READY_RE.fullmatch(line)) is not None
@@ -3355,6 +3402,9 @@ def run_fresh_cold_load(
         except UnicodeDecodeError as exc:
             raise GateIntegrityError("fresh cold-load log is not valid UTF-8") from exc
         if not accepted:
+            failure = last_cold_load_failure(final_log.splitlines(), map_name)
+            if failure is not None:
+                raise CorpusError(f"fresh cold-load rejected artifact: {failure}")
             raise CorpusError("fresh cold-load exited or timed out before runtime-ready")
         parse_cold_load_log(final_log, map_name, banner_counts)
         if process.returncode != 0:
@@ -3521,6 +3571,7 @@ def run_one_map(
         while time.monotonic() < deadline and process.poll() is None:
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         ready_seen = False
+        deferred_publication_seen = False
         failure_seen = False
         deadline_expired = False
         if process.poll() is None:
@@ -3546,13 +3597,21 @@ def run_one_map(
                     and match.group(1) == map_name
                     for line in lines
                 )
-                if failure_seen or ready_seen:
+                deferred_publication_seen = (
+                    generation_deferred_publication_complete(lines, map_name)
+                )
+                if failure_seen or ready_seen or deferred_publication_seen:
                     if ready_seen:
                         # Allow buffered post-ready diagnostics to arrive before quit.
                         time.sleep(0.25)
                     break
                 time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-            deadline_expired = not ready_seen and not failure_seen and process.poll() is None
+            deadline_expired = (
+                not ready_seen
+                and not deferred_publication_seen
+                and not failure_seen
+                and process.poll() is None
+            )
         if process.poll() is None:
             assert process.stdin is not None
             process.stdin.write(b"quit\n")
@@ -3570,7 +3629,18 @@ def run_one_map(
             final_log = log_path.read_text(encoding="utf-8", errors="strict")
         except UnicodeDecodeError as exc:
             raise CorpusError("server log is not valid UTF-8") from exc
-        final_failure = last_anchored_failure(final_log.splitlines())
+        final_lines = final_log.splitlines()
+        final_failure = last_anchored_failure(final_lines)
+        ready_seen = ready_seen or any(
+            (match := READY_RE.fullmatch(line)) is not None
+            and match.group(1) == map_name
+            for line in final_lines
+        )
+        deferred_publication_seen = generation_deferred_publication_complete(
+            final_lines, map_name
+        )
+        if ready_seen or deferred_publication_seen:
+            deadline_expired = False
         if final_failure is not None:
             failure_line = final_failure
             failure_seen = True
@@ -3583,9 +3653,9 @@ def run_one_map(
         elif deadline_expired:
             classification = "TIMEOUT"
             detail = "generation timeout before runtime-ready acceptance"
-        elif not ready_seen:
+        elif not ready_seen and not deferred_publication_seen:
             classification = "GEN_FAIL"
-            detail = "engine exited before runtime-ready acceptance"
+            detail = "engine exited before accepted generation completion"
         if classification not in ("TIMEOUT", "GEN_FAIL"):
             if process.returncode != 0:
                 classification = "GEN_FAIL"
