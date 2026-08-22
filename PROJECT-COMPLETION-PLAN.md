@@ -150,43 +150,40 @@ hazard makes them negative live evidence, not a completed lifecycle.
 D_HOOK is complete. Its source integration and required real-engine lifecycle
 both passed.
 
-## Active work: final source freeze
+## Final source and module freeze
 
-Canonical D_HOOK integration is complete. Source candidate `72c52db` fixes the
-MSVC project graph, runner Python configuration, and D_DROP PostStep
-initialization.
-
-- [x] Exact-commit `slipgate` and `main` CI passed on Windows x86 and x64 and
-      on Linux with GNUmakefile and Makefile under GCC and Clang. Every job
-      uploaded its intended artifacts.
-- [x] Local and remote `slipgate` and `main` compare as zero ahead and zero
-      behind.
-- [ ] Complete the detached module and snapshot freeze at `72c52db`.
-
-The final source and module are not frozen yet.
-
-1. Complete detached exact-commit freeze verification on the canonical tree.
-2. Remove temporary probes, diagnostics, stale artifacts, and obsolete dormant
-   assertions. Keep acceptance evidence needed for review.
-3. Regenerate all generated contracts from the final source.
-4. Run the complete GNUmakefile and Makefile host suites under GCC and Clang.
-5. Run strict warnings, ASan, UBSan, dependency checks, exported `GetGameAPI`,
-   module loading, `ldd -r`, diff checks, and deslop.
-6. Build both production module aliases and prove their intended identity.
-7. Freeze the source commit, final module hashes, configuration, engine,
-   readers, linter, semantic checks, BSP set, and 181-map manifest.
+- [x] Frozen source `72c52db` passed exact-commit `slipgate` and `main` CI on
+      Windows x86 and x64 and on Linux with GNUmakefile and Makefile under GCC
+      and Clang. Both CI runs are green and uploaded their intended artifacts.
+- [x] The chosen GNU module has SHA-256
+      `2d9cf6029586cf07918617ab9d8f459356787dd70cf63a6a153fc6af35ec52d5`.
+      The snapshot uses those exact bytes for both `game/game.so` and
+      `game/gamex86_64.so`.
+- [x] The immutable input snapshot is
+      `/tmp/lmctf6-final-freeze-72c52db/input-snapshot`. It contains all
+      181 required BSPs and has no writable file, writable directory, or
+      symlink.
+- [x] The input-manifest SHA-256 is
+      `422144842721e6bda7e1433d0edb0b17b464dc6ac0c074ef49dd292dff58d0a5`.
+- [x] All 53 controller tests passed. The jobs=10 dry-run assigned all 181 maps
+      and produced fingerprint
+      `01b84dfb9203909293af4483d335af12bb67842ada4dc09c57ff77a7af3a2221`.
+- [x] Freeze reports are
+      `/tmp/lmctf6-final-freeze-72c52db/FREEZE-EVIDENCE.md` and
+      `/tmp/lmctf6-final-freeze-72c52db/FREEZE-MANIFEST.json`; supporting logs
+      are under `/tmp/lmctf6-final-freeze-72c52db/logs`.
 
 Any source or generated-contract change after this freeze invalidates the
 module freeze and every RUNE generated from it.
 
-## Generate and validate all 181 RUNEs
+## Active work: generate and validate all 181 RUNEs
 
-1. Create a read-only generation snapshot from the frozen final candidate.
-2. Include the exact engine, module aliases, production physics and config,
-   181 BSPs, map manifest, readers, linter, and semantic checks.
-3. Use durable isolated output roots, disjoint worker ports, bounded parallel
-   workers, and per-map timeouts.
-4. Require every map to produce:
+The frozen inputs are ready. No corpus worker has started.
+
+1. Run the controller against the exact frozen snapshot with durable isolated
+   output roots, disjoint worker ports, ten bounded workers, and per-map
+   timeouts.
+2. Require every map to produce:
    - a new RUNE;
    - the matching SNAG declaration, including authenticated zero repairs;
    - two valid objective roots;
@@ -195,13 +192,13 @@ module freeze and every RUNE generated from it.
    - root-aware lint acceptance;
    - every applicable map-specific semantic check;
    - a fresh-process cold load with an admitted bot.
-5. Require exactly 181 PASS results. A generation failure, timeout, lint
+3. Require exactly 181 PASS results. A generation failure, timeout, lint
    failure, reader disagreement, semantic failure, or cold-load failure blocks
    completion.
-6. Repair failures at the source, data, or tool boundary that owns them.
-7. If frozen source changes, rebuild and regenerate every affected artifact so
+4. Repair failures at the source, data, or tool boundary that owns them.
+5. If frozen source changes, rebuild and regenerate every affected artifact so
    the accepted corpus has one final identity.
-8. Freeze the final 181-artifact manifest and its evidence hashes.
+6. Freeze the final 181-artifact manifest and its evidence hashes.
 
 ## Real-match validation
 
@@ -246,8 +243,7 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ## Critical path
 
 ```text
-freeze the final source and module from the canonical tree
-  -> generate and validate all 181 RUNEs
+generate and validate all 181 RUNEs
   -> run ordinary real matches
   -> repair defects and repeat invalidated evidence
   -> pass CI, update documentation, tag, and publish
@@ -261,7 +257,7 @@ freeze the final source and module from the canonical tree
 - [x] Rocket jump.
 - [x] D_DROP.
 - [x] D_HOOK integrated and completed in the real engine.
-- [ ] Final source and module freeze.
+- [x] Final source and module freeze.
 - [ ] Exactly 181 newly generated and fully accepted RUNEs.
 - [ ] Real-match behavioral validation with ordinary map-list inputs.
 - [ ] Match-exposed defects repaired and revalidated.
