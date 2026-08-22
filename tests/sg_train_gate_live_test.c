@@ -187,6 +187,12 @@ static void TestActivationMethodsStayDistinct(void)
 	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
 		SG_TRAIN_GATE_COMMAND_AIM_BUTTON);
 	CHECK(state.shot_requested == 0U);
+	observation.line_of_fire_clear = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_SHOOT_BUTTON);
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 2000U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
 }
 
 static void TestInvalidObservations(void)

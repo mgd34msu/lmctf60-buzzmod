@@ -14,7 +14,9 @@ static int TrainWitnessValid(const sg_train_gate_witness_t *witness)
 	unsigned int first;
 	unsigned int second;
 
-	if (!witness || witness->opening_bound_ms == 0U)
+	if (!witness || witness->opening_bound_ms == 0U ||
+	    (witness->activation != SG_TRAIN_GATE_ACTIVATION_TOUCH &&
+	     witness->activation != SG_TRAIN_GATE_ACTIVATION_SHOOT))
 		return 0;
 	keys[0] = witness->button_key;
 	keys[1] = witness->train_key;
@@ -42,12 +44,13 @@ static int TrainObservationShapeValid(
 	       TrainBoolean(observation->binding_current) &&
 	       TrainBoolean(observation->body_clear) &&
 	       TrainBoolean(observation->arrived) &&
+	       TrainBoolean(observation->weapon_ready) &&
+	       TrainBoolean(observation->aim_contact_current) &&
+	       TrainBoolean(observation->line_of_fire_clear) &&
 	       observation->button_touch_count <= 1U &&
+	       observation->button_shot_count <= 1U &&
 	       observation->target_dispatch_count <= 1U &&
-	       observation->train_use_count <= 1U &&
-	       observation->button_touch_count >=
-	           observation->target_dispatch_count &&
-	       observation->target_dispatch_count >= observation->train_use_count;
+	       observation->train_use_count <= 1U;
 }
 
 static int TrainObservationCurrent(
@@ -69,13 +72,39 @@ static int TrainCallbacksAdvance(sg_train_gate_state_t *state,
 {
 	if (!state || !observation ||
 	    observation->button_touch_count < state->button_touch_count ||
+	    observation->button_shot_count < state->button_shot_count ||
 	    observation->target_dispatch_count < state->target_dispatch_count ||
 	    observation->train_use_count < state->train_use_count)
 		return 0;
+	if (state->witness.activation == SG_TRAIN_GATE_ACTIVATION_TOUCH)
+	{
+		if (observation->button_shot_count != 0U ||
+		    observation->button_touch_count <
+	        observation->target_dispatch_count ||
+		    observation->target_dispatch_count < observation->train_use_count)
+			return 0;
+	}
+	else if (observation->button_touch_count != 0U ||
+	         observation->button_shot_count <
+	             observation->target_dispatch_count ||
+	         observation->target_dispatch_count < observation->train_use_count ||
+	         (observation->button_shot_count != 0U &&
+	          state->shot_requested == 0U))
+		return 0;
 	state->button_touch_count = observation->button_touch_count;
+	state->button_shot_count = observation->button_shot_count;
 	state->target_dispatch_count = observation->target_dispatch_count;
 	state->train_use_count = observation->train_use_count;
 	return 1;
+}
+
+static int TrainActivated(const sg_train_gate_state_t *state)
+{
+	return state &&
+	       ((state->witness.activation == SG_TRAIN_GATE_ACTIVATION_TOUCH &&
+	         state->button_touch_count == 1U) ||
+	        (state->witness.activation == SG_TRAIN_GATE_ACTIVATION_SHOOT &&
+	         state->button_shot_count == 1U));
 }
 
 static int TrainOpeningClock(sg_train_gate_state_t *state, uint16_t step_ms)
@@ -98,6 +127,7 @@ int SG_TrainGateLiveBegin(sg_train_gate_state_t *state,
 	if (!TrainWitnessValid(witness) || !TrainObservationCurrent(observation) ||
 	    observation->pose != SG_TRAIN_GATE_POSE_CLOSED ||
 	    observation->button_touch_count != 0U ||
+	    observation->button_shot_count != 0U ||
 	    observation->target_dispatch_count != 0U ||
 	    observation->train_use_count != 0U)
 	{
@@ -125,13 +155,30 @@ sg_train_gate_command_t SG_TrainGateLiveStep(sg_train_gate_state_t *state,
 
 	if (state->phase == SG_TRAIN_GATE_APPROACH)
 	{
-		if (state->button_touch_count == 0U)
+		if (!TrainActivated(state))
 		{
 			if (observation->pose != SG_TRAIN_GATE_POSE_CLOSED)
 				TrainFail(state);
-			return state->phase == SG_TRAIN_GATE_FAILED
-				? SG_TRAIN_GATE_COMMAND_ZERO
-				: SG_TRAIN_GATE_COMMAND_TO_BUTTON;
+			if (state->phase == SG_TRAIN_GATE_FAILED)
+				return SG_TRAIN_GATE_COMMAND_ZERO;
+			if (state->witness.activation == SG_TRAIN_GATE_ACTIVATION_TOUCH)
+				return SG_TRAIN_GATE_COMMAND_TO_BUTTON;
+			if (!TrainOpeningClock(state, step_ms))
+			{
+				TrainFail(state);
+				return SG_TRAIN_GATE_COMMAND_ZERO;
+			}
+			if (observation->weapon_ready == 0U)
+				return SG_TRAIN_GATE_COMMAND_EQUIP;
+			if (observation->aim_contact_current == 0U ||
+			    observation->line_of_fire_clear == 0U)
+				return SG_TRAIN_GATE_COMMAND_AIM_BUTTON;
+			if (state->shot_requested == 0U)
+			{
+				state->shot_requested = 1U;
+				return SG_TRAIN_GATE_COMMAND_SHOOT_BUTTON;
+			}
+			return SG_TRAIN_GATE_COMMAND_ZERO;
 		}
 		state->phase = SG_TRAIN_GATE_DISPATCH;
 	}
@@ -162,7 +209,7 @@ sg_train_gate_command_t SG_TrainGateLiveStep(sg_train_gate_state_t *state,
 	if (state->phase == SG_TRAIN_GATE_OPENING)
 	{
 		if (!TrainOpeningClock(state, step_ms) ||
-		    state->button_touch_count != 1U ||
+		    !TrainActivated(state) ||
 		    state->target_dispatch_count != 1U || state->train_use_count != 1U)
 		{
 			TrainFail(state);
@@ -181,7 +228,7 @@ sg_train_gate_command_t SG_TrainGateLiveStep(sg_train_gate_state_t *state,
 	if (state->phase == SG_TRAIN_GATE_EGRESS)
 	{
 		if (observation->pose != SG_TRAIN_GATE_POSE_OPEN ||
-		    state->button_touch_count != 1U ||
+		    !TrainActivated(state) ||
 		    state->target_dispatch_count != 1U || state->train_use_count != 1U)
 		{
 			TrainFail(state);
