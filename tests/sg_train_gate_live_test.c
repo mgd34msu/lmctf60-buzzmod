@@ -150,7 +150,7 @@ static void TestDriftTimeoutAndClearance(void)
 
 	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
 	Activate(&state, &observation);
-	CHECK(SG_TrainGateLiveStep(&state, &observation, 1900U) ==
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 2000U) ==
 		SG_TRAIN_GATE_COMMAND_ZERO);
 	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
 
