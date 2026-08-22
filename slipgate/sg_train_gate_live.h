@@ -31,6 +31,15 @@ typedef enum sg_train_gate_activation_e
 	SG_TRAIN_GATE_ACTIVATION_SHOOT
 } sg_train_gate_activation_t;
 
+typedef enum sg_train_gate_side_e
+{
+	SG_TRAIN_GATE_SIDE_NONE = 0,
+	SG_TRAIN_GATE_SIDE_X_MIN,
+	SG_TRAIN_GATE_SIDE_X_MAX,
+	SG_TRAIN_GATE_SIDE_Y_MIN,
+	SG_TRAIN_GATE_SIDE_Y_MAX
+} sg_train_gate_side_t;
+
 typedef enum sg_train_gate_command_e
 {
 	SG_TRAIN_GATE_COMMAND_ZERO = 0,
@@ -90,5 +99,9 @@ int SG_TrainGateLiveBegin(sg_train_gate_state_t *state,
 	const sg_train_gate_observation_t *observation);
 sg_train_gate_command_t SG_TrainGateLiveStep(sg_train_gate_state_t *state,
 	const sg_train_gate_observation_t *observation, uint16_t step_ms);
+sg_train_gate_side_t SG_TrainGateSweepSide(const float bounds_mins[3],
+	const float bounds_maxs[3], const float sweep_mins[3],
+	const float sweep_maxs[3]);
+sg_train_gate_side_t SG_TrainGateOppositeSide(sg_train_gate_side_t side);
 
 #endif /* SG_TRAIN_GATE_LIVE_H */

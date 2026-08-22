@@ -3,6 +3,42 @@
 
 #include <string.h>
 
+sg_train_gate_side_t SG_TrainGateSweepSide(const float bounds_mins[3],
+	const float bounds_maxs[3], const float sweep_mins[3],
+	const float sweep_maxs[3])
+{
+	sg_train_gate_side_t side = SG_TRAIN_GATE_SIDE_NONE;
+	unsigned int matches = 0U;
+
+	if (!bounds_mins || !bounds_maxs || !sweep_mins || !sweep_maxs)
+		return SG_TRAIN_GATE_SIDE_NONE;
+#define SG_TRAIN_GATE_MATCH(candidate, expression) do { \
+	if (expression) { side = candidate; matches++; } \
+} while (0)
+	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_X_MIN,
+	    bounds_maxs[0] <= sweep_mins[0]);
+	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_X_MAX,
+	    bounds_mins[0] >= sweep_maxs[0]);
+	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_Y_MIN,
+	    bounds_maxs[1] <= sweep_mins[1]);
+	SG_TRAIN_GATE_MATCH(SG_TRAIN_GATE_SIDE_Y_MAX,
+	    bounds_mins[1] >= sweep_maxs[1]);
+#undef SG_TRAIN_GATE_MATCH
+	return matches == 1U ? side : SG_TRAIN_GATE_SIDE_NONE;
+}
+
+sg_train_gate_side_t SG_TrainGateOppositeSide(sg_train_gate_side_t side)
+{
+	switch (side)
+	{
+	case SG_TRAIN_GATE_SIDE_X_MIN: return SG_TRAIN_GATE_SIDE_X_MAX;
+	case SG_TRAIN_GATE_SIDE_X_MAX: return SG_TRAIN_GATE_SIDE_X_MIN;
+	case SG_TRAIN_GATE_SIDE_Y_MIN: return SG_TRAIN_GATE_SIDE_Y_MAX;
+	case SG_TRAIN_GATE_SIDE_Y_MAX: return SG_TRAIN_GATE_SIDE_Y_MIN;
+	default: return SG_TRAIN_GATE_SIDE_NONE;
+	}
+}
+
 static int TrainBoolean(uint8_t value)
 {
 	return value <= 1U;
