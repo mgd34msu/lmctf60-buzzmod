@@ -62,9 +62,9 @@ after the final source freeze.
       player positions.
 - [x] Role, movement, combat, objective, hook, and coordination reporting has
       executable coverage.
-- [ ] D_HOOK final integration and real-engine proof.
+- [x] D_HOOK source integration and recorded real-engine lifecycle.
 
-## Active work: D_HOOK
+## Completed feature: D_HOOK
 
 ### Implemented
 
@@ -131,37 +131,32 @@ publication. `xmap26` and `xmap29` reached the bounded generation limit, and
 neither installed a pair. Results and logs remain under
 `/tmp/lmctf6-dhook-witness-search`. This ends blind brute-force selection.
 
-The exact `xmap06` witness pair is retained because it identifies the three
-published links used in the live failure analysis:
-
-- RUNE SHA-256: `16e754c2899f6e0aa2072bb26740832a91206428b4acb53c249fb90b91537e26`
-- SNAG SHA-256: `3ef88df4334477ed4605d48fe7f3d19151c6b65a07880c9af4963199722cbe3b`
-
 The `xmap06` runs also exposed and verified the old 100 ms touch-frame defect.
 The corrected runtime uses `touch_frame_end_ms + suffix_start_ms`. All three
 links now reach authenticated Begin, touch, and activation. Their shared map
 hazard makes them negative live evidence, not a completed lifecycle.
 
-### D_HOOK work left
+### Accepted real-engine witness
 
-1. Trace the reason 67 contact failures, reason 69 hook-proof failures, and
-   `xmap06` terminal hazard to their owning code or map constraints.
-2. Generate the first pair that publishes an admitted D_HOOK link without the
-   `xmap06` terminal hazard.
-3. Independently accept, cold-load, and install that exact RUNE/SNAG pair.
-4. Record one real lifecycle through approach, activation, hook fire, exact
-   bolt link, attach, pull, release or bounded recovery, settlement, ownership
-   retirement, and ordinary route continuation.
+- [x] `xmap06` link 89637 reached Begin, touch and activation, LINKED at 500 ms,
+      ATTACHED at 900 ms, four pull steps, and applied release at 1400 ms.
+- [x] The action reached terminal COMPLETE with no failure at 2200 ms, cleared
+      ownership, and delivered the bot to a dry destination.
+- [x] The accepted witness uses module SHA-256
+      `32a344865eb2e99b65acf8ce033eae46c1af715cf4170e2b8df26079c2d43df1`
+      and lifecycle-log SHA-256
+      `97a142d62784c40d93eb34672691406379bbff65e432d50dd8f4be9903ad2ed8`.
 
-D_HOOK is complete only after step 4 passes in the real engine. A focused test,
-clean module link, or generated link alone is not enough.
+D_HOOK is complete. Its source integration and required real-engine lifecycle
+both passed.
 
-## Final source freeze
+## Active work: final source freeze
 
-After D_HOOK completes:
+The witness-producing fix stack remains isolated. Its canonical full gates and
+merge are in progress, so the final source and module are not frozen yet.
 
-1. Integrate every accepted feature into `slipgate`, then merge the proven tree
-   to `main`.
+1. Run the complete canonical gates on the witness-producing fix stack. Merge
+   the proven tree through `slipgate` to `main`.
 2. Remove temporary probes, diagnostics, stale artifacts, and obsolete dormant
    assertions. Keep acceptance evidence needed for review.
 3. Regenerate all generated contracts from the final source.
@@ -242,7 +237,7 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ## Critical path
 
 ```text
-finish integration and live-prove D_HOOK
+canonicalize the D_HOOK witness fixes and pass full source gates
   -> freeze the final source and module
   -> generate and validate all 181 RUNEs
   -> run ordinary real matches
@@ -257,7 +252,7 @@ finish integration and live-prove D_HOOK
 - [x] D_SWIM.
 - [x] Rocket jump.
 - [x] D_DROP.
-- [ ] D_HOOK integrated and completed in the real engine.
+- [x] D_HOOK integrated and completed in the real engine.
 - [ ] Final source and module freeze.
 - [ ] Exactly 181 newly generated and fully accepted RUNEs.
 - [ ] Real-match behavioral validation with ordinary map-list inputs.
