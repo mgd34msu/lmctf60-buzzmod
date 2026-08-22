@@ -244,10 +244,18 @@ including `lmctf02a` and `lmctf04`.
       authenticated `RL_LIFT`, but it is not accepted yet. The unsuffixed
       `lmctf05` map is not an acceptance target.
       A source-identical smoke now proves both required carrier selections.
-      Generation reaches the next blocker, missing proved static-world top
-      egress for both carriers. That repair remains isolated and unaccepted.
+      The next blocker is a real bottom door, carrier, delayed top door, and
+      static-egress sequence. Its wire-neutral action-state repair remains
+      isolated and unaccepted.
 - [ ] Repair the remaining maps whose objective route core is closed.
 - [ ] Repair the missing central transition in `lmctf07`.
+
+The corrected old no-artifact queue contains 29 maps after the later accepted
+`lmctf02a` and `lmctf04` runs. Current-canonical commit `0943897` retests prove
+that `lmctf27`, `smap14`, `smap28`, `smap39`, and `tomb05` remain genuine graph
+failures. The four `smap` or `tomb` cases still reach objective-core with no
+closed route shared by both flags. `lmctf27` still cannot bind either objective
+root because its nearest flag seeds have no outgoing links.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
