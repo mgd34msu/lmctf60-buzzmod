@@ -41,6 +41,7 @@ static void TestDeclaredActivatorAcceptsMasterThenSlaveFanout(void)
 	edict_t *member;
 	edict_t *trigger;
 	edict_t *members[2] = { NULL, NULL };
+	vec3_t source = { 200.0f, 0.0f, 0.0f };
 
 	ResetGuardFixture();
 	master = GuardDoor(GUARD_MASTER_KEY);
@@ -62,11 +63,15 @@ static void TestDeclaredActivatorAcceptsMasterThenSlaveFanout(void)
 	trigger->touch = Touch_Multi;
 	trigger->wait = 1.0f;
 	trigger->target = "SHAREDGATE";
+	Set3(trigger->absmin, 190.0f, -24.0f, -40.0f);
+	Set3(trigger->absmax, 210.0f, 24.0f, 40.0f);
 
 	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
 	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 2);
 	CHECK(members[0] == master);
 	CHECK(members[1] == member);
+	CHECK(SG_DeclaredDoorActivationMatches(trigger, master, source));
+	CHECK(SG_DeclaredDoorActivationMatches(trigger, member, source));
 
 	/* A slave-only target remains unrepresentable: direct door_use on it is a
 	 * no-op and cannot establish controller authority for the team. */
@@ -80,7 +85,9 @@ static void TestDeclaredActivatorAcceptsSynchronousRelayDoor(void)
 	edict_t *door;
 	edict_t *trigger;
 	edict_t *relay;
+	edict_t *unrelated;
 	edict_t *members[2] = { NULL, NULL };
+	vec3_t source = { 200.0f, 0.0f, 0.0f };
 
 	ResetGuardFixture();
 	door = GuardDoor(GUARD_MASTER_KEY);
@@ -95,6 +102,8 @@ static void TestDeclaredActivatorAcceptsSynchronousRelayDoor(void)
 	trigger->touch = Touch_Multi;
 	trigger->wait = 1.0f;
 	trigger->target = "CellRelay";
+	Set3(trigger->absmin, 190.0f, -24.0f, -40.0f);
+	Set3(trigger->absmax, 210.0f, 24.0f, 40.0f);
 	relay = &fixture_edicts[GUARD_SOURCE_KEY];
 	memset(relay, 0, sizeof(*relay));
 	relay->inuse = true;
@@ -107,9 +116,14 @@ static void TestDeclaredActivatorAcceptsSynchronousRelayDoor(void)
 	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
 	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 1);
 	CHECK(members[0] == door);
+	CHECK(SG_DeclaredDoorActivationMatches(trigger, door, source));
+	unrelated = GuardDoor(GUARD_EXTRA_KEY);
+	unrelated->targetname = "OtherDoor";
+	CHECK(!SG_DeclaredDoorActivationMatches(trigger, unrelated, source));
 
 	relay->delay = 0.1f;
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(!SG_DeclaredDoorActivationMatches(trigger, door, source));
 	relay->delay = 0.0f;
 	relay->killtarget = "CellDoor";
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
@@ -120,7 +134,10 @@ static void TestDeclaredActivatorAcceptsSynchronousRelayDoor(void)
 	relay->target = "MissingDoor";
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 	relay->target = "CellRelay2";
+	memset(&fixture_edicts[GUARD_EXTRA_KEY], 0,
+	    sizeof(fixture_edicts[GUARD_EXTRA_KEY]));
 	fixture_edicts[GUARD_EXTRA_KEY].inuse = true;
+	fixture_edicts[GUARD_EXTRA_KEY].s.number = GUARD_EXTRA_KEY;
 	fixture_edicts[GUARD_EXTRA_KEY].classname = "trigger_relay";
 	fixture_edicts[GUARD_EXTRA_KEY].use = trigger_relay_use;
 	fixture_edicts[GUARD_EXTRA_KEY].targetname = "CellRelay2";

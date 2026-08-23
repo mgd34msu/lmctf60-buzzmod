@@ -1715,44 +1715,27 @@ static qboolean SG_OracleDoorArmed(const sg_phantom_t *ph, edict_t *door)
 	return false;
 }
 
-static qboolean SG_OracleDoorMember(edict_t *master, edict_t *ent)
+static qboolean SG_OracleDoorMember(edict_t *source, edict_t *ent)
 {
-	edict_t *target = NULL, *member;
+	edict_t *members[SG_PHANTOM_ARMED_DOORS];
+	edict_t *master, *member;
+	int count, index;
 
-	if (!master || !ent)
+	if (!source || !ent)
 		return false;
-	/* RL_DOOR stores the unique trigger as its mechanism identity because one
-	 * trigger may legitimately fire several unteamed leaves. */
-	if (master->classname &&
-	    (!strcmp(master->classname, "trigger_multiple") ||
-	     !strcmp(master->classname, "func_button")))
+	/* Resolve declared controllers through the same exact enumeration used to
+	 * publish their proof pose.  This includes one authenticated synchronous
+	 * relay hop as well as direct and generated door triggers. */
+	if (SG_OracleDeclaredDoorSourceSafe(source))
 	{
-		while ((target = G_Find(target, FOFS(targetname), master->target)) != NULL)
-		{
-			edict_t *door_master;
-
-			if (!target->classname ||
-			    strncmp(target->classname, "func_door", 9) != 0)
-				continue;
-			door_master = target->teammaster ? target->teammaster : target;
-			for (member = door_master; member; member = member->teamchain)
-				if (member == ent)
-					return true;
-		}
-		return false;
-	}
-	/* Think_SpawnDoorTrigger creates one anonymous trigger owned by the exact
-	 * canonical door master.  It has no target string to resolve. */
-	if (master->touch == Touch_DoorTrigger && master->owner)
-	{
-		edict_t *door_master = master->owner->teammaster
-		    ? master->owner->teammaster : master->owner;
-
-		for (member = door_master; member; member = member->teamchain)
-			if (member == ent)
+		count = SG_DeclaredDoorMembers(source, members,
+		    SG_PHANTOM_ARMED_DOORS);
+		for (index = 0; index < count; index++)
+			if (members[index] == ent)
 				return true;
 		return false;
 	}
+	master = source;
 	master = master->teammaster ? master->teammaster : master;
 	for (member = master; member; member = member->teamchain)
 		if (member == ent)
