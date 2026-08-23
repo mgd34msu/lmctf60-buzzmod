@@ -617,9 +617,12 @@ staged-PUSH repair: all eight multi-stage witnesses become airborne, then cross
 a symmetric stock iris activator pair whose four-leaf door teams generation has
 already posed open. Reusing the existing declared-activator and canonical-team
 validators proves all eight flights clean and uncontaminated through landing.
-They then fail only at destination-seed ownership. The active diagnostic is the
-nearest dry/outgoing seed and its exact envelope predicates; no PUSH admission
-change is yet justified.
+They then fail destination-seed ownership. A bounded post-landing replay stays
+grounded, dry, clean, and outside every door sweep for ten seconds, but world
+collision pins the body at first contact despite accepted commands. No stable
+seed owns that contact and no existing controller reaches the nearest stable
+outgoing seed. `xmap13` therefore joins the end-of-plan human traversal list;
+an unproved obstacle-detour controller will not be invented speculatively.
 
 A fresh immutable generation batch now covers the entire historical 23-map
 queue with four concurrent workers. It includes already diagnosed maps and the
@@ -642,18 +645,18 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
-| `lmctf27` | The bounded relay-aware RL_DOOR repair fixes the original defect: both objective roots bind and 241 authenticated door links serialize. The real map still fails with 4 red-reachable, 490 blue-reachable, 4 shared, and 130 neither seeds. Exact RUN/JUMP/DROP plus HOOK over the 64 closest boundary pairs are refuted; authentic train/PUSH mechanisms touching the cut are under inventory. |
+| `lmctf27` | The bounded relay-aware RL_DOOR repair fixes root binding. The remaining objective-door egress timed out because a duplicated legacy membership resolver overlaid a closed synthetic sweep on door leaves already posed TOP through the relay-aware path. The candidate routes trace blocking through the shared exact declared-member enumeration; focused regressions and the real smoke are next. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
-| `tw2ctf2` | 33,868 links and 570 initially shared seeds. The blue staging route is a valid grounded long RUN beyond fixed admission. The red result edge-seeks and becomes airborne, so it is explicitly rejected as RL_RUN. The active search accepts only a grounded red proof into the authenticated HOOK return; otherwise the sides require different contracts. |
+| `tw2ctf2` | 33,868 links and 570 initially shared seeds. Exact mirror-pair grounded long RUNs reach both authenticated HOOK returns, but publishing only those two proved-waypoint links does not close mutual-root reach and the batch rolls back. They are necessary but not sufficient; the post-two-link four-mask graph and next directed SCC cut are under reconstruction. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | 1,094 seeds all prune; nine lift links have no descent and another lift lacks staging. |
-| `xmap13` | All 1,337 seeds still prune. Existing declared-door validation proves all eight mirrored staged flights clean through landing, but no stable outgoing seed owns the first grounded frame. Exact post-landing movement to the nearest stable outgoing seeds fails for all eight candidates; the active diagnostic separates command rejection, support loss, contamination, hazard, and timeout before choosing or rejecting a new contract. |
+| `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
