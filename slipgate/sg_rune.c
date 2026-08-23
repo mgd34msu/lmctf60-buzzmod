@@ -8077,6 +8077,47 @@ static void Graph_ReverseReach(int root, const byte *allowed,
 	}
 }
 
+static qboolean Graph_ProveHookReverseDrop(const byte *red_reach,
+	const byte *blue_reach, int *link_out)
+{
+	int old_links = gen_num_links;
+	int i;
+
+	if (link_out)
+		*link_out = -1;
+	/* A proved ascent into a one-sided objective component may have a physical
+	 * walkoff back into the shared component that the ordinary pair admission
+	 * never offered to the drop controller. Only a graph that already failed
+	 * objective closure reaches this exact inverse proof. */
+	for (i = 0; i < old_links; i++)
+	{
+		rune_link_t boundary = gen_links[i];
+		unsigned int from_mask = Graph_ObjectivePartitionMask(boundary.from,
+		    red_reach, blue_reach);
+		unsigned int to_mask = Graph_ObjectivePartitionMask(boundary.to,
+		    red_reach, blue_reach);
+		vec3_t lip;
+		short cost;
+		byte exit_speed;
+
+		if (boundary.action != RL_HOOK || from_mask != 3U ||
+		    (to_mask != 1U && to_mask != 2U) ||
+		    gen_seeds[boundary.to].origin[2] <=
+		        gen_seeds[boundary.from].origin[2] + 160.0f ||
+		    Link_Exists(boundary.to, boundary.from) ||
+		    !ProveDrop(boundary.to, boundary.from, lip, &cost, &exit_speed))
+			continue;
+		if (!Link_Add(boundary.to, boundary.from, RL_DROP, cost, exit_speed))
+			return false;
+		VectorCopy(lip, gen_links[gen_num_links - 1].anchor);
+		Link_Env_Drop(&gen_links[gen_num_links - 1], dd_last_heading);
+		if (link_out)
+			*link_out = gen_num_links - 1;
+		return true;
+	}
+	return false;
+}
+
 static qboolean Graph_PruneObjectiveCore(void)
 {
 	int *first_in = NULL, *next_in = NULL, *queue = NULL;
@@ -8085,6 +8126,7 @@ static qboolean Graph_PruneObjectiveCore(void)
 	int red_root, blue_root, i, old_links, changed, iteration = 0;
 	int initial_red = 0, initial_blue = 0, final_red = 0, final_blue = 0;
 	int kept_seeds = 0, new_links = 0;
+	int repair_link = -1, repairs = 0;
 	uint32_t new_bindings = 0U;
 
 	if (!redflag || !blueflag || !redflag->inuse || !blueflag->inuse)
@@ -8157,6 +8199,31 @@ static qboolean Graph_PruneObjectiveCore(void)
 			               initial_red, initial_blue);
 			Graph_LogObjectivePartitions(red_reach, blue_reach);
 			Graph_LogBoundaryLinks("initial", red_reach, blue_reach);
+			if ((!blue_reach[red_root] || !red_reach[blue_root]) &&
+			    Graph_ProveHookReverseDrop(red_reach, blue_reach,
+			        &repair_link))
+			{
+				repairs++;
+				sg_host.dprint("rune: objective-repair kind=hook-reverse-drop "
+				               "link=%d repairs=%d\n", repair_link, repairs);
+				sg_host.level_free(next_in);
+				next_in = sg_host.level_alloc(sizeof(*next_in) *
+				    (size_t)gen_num_links);
+				if (!next_in)
+					goto fail;
+				for (i = 0; i < gen_num_seeds; i++)
+					first_in[i] = -1;
+				memset(has_out, 0, (size_t)gen_num_seeds);
+				memset(keep, 1, (size_t)gen_num_seeds);
+				for (i = 0; i < gen_num_links; i++)
+				{
+					has_out[gen_links[i].from] = 1;
+					next_in[i] = first_in[gen_links[i].to];
+					first_in[gen_links[i].to] = i;
+				}
+				changed = 1;
+				continue;
+			}
 		}
 		for (i = 0; i < gen_num_seeds; i++)
 			if (keep[i] && (!red_reach[i] || !blue_reach[i]))
