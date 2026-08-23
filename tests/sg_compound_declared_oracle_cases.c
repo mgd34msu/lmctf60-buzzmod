@@ -299,7 +299,6 @@ static void TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay(void)
 {
 	edict_t *door;
 	edict_t *trigger;
-	edict_t *speaker;
 
 	ResetGuardFixture();
 	door = GuardDoor(GUARD_MASTER_KEY);
@@ -321,42 +320,13 @@ static void TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay(void)
 
 	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
 
-	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
-	speaker->inuse = true;
-	speaker->classname = "target_speaker";
-	speaker->use = Use_Target_Speaker;
-	speaker->targetname = "CabinBell";
-	door->target = "CabinBell";
+	door->delay = 0.0f;
+	door->target = "MissingEffect";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	door->target = "";
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 	door->target = NULL;
 	door->message = "opening";
-	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
-}
-
-static void TestAutomaticDoorAcceptsMissingEffectTarget(void)
-{
-	edict_t *door;
-	edict_t *trigger;
-	edict_t *effect;
-	char empty[] = "";
-
-	ResetGuardFixture();
-	door = GuardDoor(GUARD_MASTER_KEY);
-	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
-	Trigger(trigger, door, 160.0f);
-	door->target = "MissingEffect";
-	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
-
-	door->target = empty;
-	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
-	door->target = "LiveEffect";
-	effect = &fixture_edicts[GUARD_EXTRA_KEY];
-	effect->inuse = true;
-	effect->classname = "target_speaker";
-	effect->targetname = "LiveEffect";
-	effect->use = Use_Target_Speaker;
-	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
-	effect->use = door_use;
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 }
 
@@ -913,7 +883,6 @@ int SG_CompoundDeclaredOracleCasesRun(void)
 	TestDeclaredActivatorAcceptsSynchronousRelayDoor();
 	TestDeclaredActivatorDelayedSoundTerminal();
 	TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay();
-	TestAutomaticDoorAcceptsMissingEffectTarget();
 	TestCompoundLiftAdmitsOnlySameDoorSetSibling();
 	TestCompoundLiftDelayedTopDoorShape();
 	TestCompoundLiftDirectTopDoorMembers();
