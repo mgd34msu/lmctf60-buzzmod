@@ -371,8 +371,15 @@ including `lmctf02a` and `lmctf04`.
       or that stock initializer for an otherwise exact train catalog shape and
       retains rejection of unknown or dynamic callbacks. The complete accepted
       train series is now replayed on a fresh branch from current `slipgate`;
-      focused gates and the full GNU runtime suite pass. Source-policy cleanup,
-      the Make/Clang suite, and the final immutable smoke remain.
+      focused gates, both full host suites, module link checking, and deslop
+      pass. The integrated smoke retains all 1,889 seeds in both directions and
+      materializes eight plans, but the writer rejects the serialized plan set
+      before artifact output. The duplicate-link validator incorrectly omits
+      serialized activation-plan identity, collapsing two independently
+      authenticated shoot buttons that share source, destination, action, and
+      mover. C and Python identity are being corrected together while retaining
+      rejection of an exact same-plan duplicate. No reader or cold-load gate has
+      run yet.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -459,7 +466,11 @@ rocket-jump replay likewise produced only same-side transitions and never
 changed the objective masks after the first round. The existing controller
 inventory is exhausted. A generic target-steered low-gravity DROP diagnostic
 is now testing the two exact cuts with destination-derived air control and a
-runtime-serializable command law.
+runtime-serializable command law. Four gravity-derived steering schedules each
+proved zero stable exact arrivals in both directions, so that controller is
+also refuted and no wire change was made. A bounded multi-source Pmove search
+over a generic command lattice is now looking for the actual physical route
+before any further controller is proposed.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -584,7 +595,11 @@ it is already inside the center trigger and lacks the dry planar approach the
 current oracle and runtime require. The active design is the smallest generic
 water-approach-to-lift transaction that reuses existing compound entry and
 RL_LIFT contracts where they can represent the full activation, carry, and dry
-egress proof.
+egress proof. Five platforms have one supported water seed already overlapping
+the center trigger; the sixth requires a physical six-unit swim approach. The
+common gate therefore proves authoritative water movement until matched trigger
+contact and platform support coincide, then switches to the existing lift
+hold, carry, and egress transaction.
 The canonical source also rejects a known water-seed-capacity overflow before
 base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
