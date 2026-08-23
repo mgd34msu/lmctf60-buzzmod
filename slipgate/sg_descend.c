@@ -2772,13 +2772,20 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					else if (bot->declared_started && cl->action == RL_LIFT)
 					{
 						edict_t *plat = mechanism_binding.mover_entity;
+						int destination_state = plat &&
+						    plat->spawnflags == 32 &&
+						    mechanism_binding.entry_node &&
+						    mechanism_binding.entry_node->touch_callback ==
+						        SG_MECH_CALLBACK_BUTTON_TOUCH &&
+						    cl->mode == RLCM_RIDE
+						        ? SG_PLAT_STATE_BOTTOM : SG_PLAT_STATE_TOP;
 
 					if (plat &&
 					    (mechanism_binding.plan->expected_members == 1U ||
 					     bot->carrier_action.phase ==
 					         SG_CARRIER_PHASE_EGRESS_OPEN) &&
 					    SG_LiftRider(plat, e) &&
-					    plat->moveinfo.state == SG_PLAT_STATE_TOP)
+					    plat->moveinfo.state == destination_state)
 					{
 						short top_fixed[3];
 						vec3_t top_body;

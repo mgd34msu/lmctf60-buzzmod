@@ -645,7 +645,8 @@ static int Mechanism_MaterializePlatform(mechanism_materializer_t *state,
 		       entry_node->path_target_offset == 0U &&
 		       mover_node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
 		       mover_node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR &&
-		       SG_RuneCarrierDoorSpawnflags(mover_node->spawnflags) &&
+		       SG_RuneButtonCarrierDoorSpawnflags(
+		           mover_node->spawnflags) &&
 		       (mover_node->flags & (SG_MECH_NODEF_MOVER |
 		           SG_MECH_NODEF_TEAM_MASTER | SG_MECH_NODEF_SHOOTABLE)) ==
 		           (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER) &&
@@ -653,6 +654,8 @@ static int Mechanism_MaterializePlatform(mechanism_materializer_t *state,
 		       binding->egress_key == SG_MECH_NO_KEY &&
 		       binding->expected_members == 1U &&
 		       binding->cooldown_ms == cooldown && target.count == 1U &&
+		       (owner_link->mode == RLCM_NONE ||
+		        owner_link->mode == RLCM_RIDE) &&
 		       state->catalog->edges[target.first].to_key == binding->mover_key &&
 		       Mechanism_AppendInventoryEdge(state, target.first) &&
 		       Mechanism_AppendInventoryEdge(state, owner.first);

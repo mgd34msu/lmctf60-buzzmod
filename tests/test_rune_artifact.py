@@ -1577,7 +1577,7 @@ class RuneRuneArtifactTests(unittest.TestCase):
     def setUp(self) -> None:
         self.encoded = _build_rune()
 
-    def test_nonatomic_lift_ride_keeps_mode_but_no_mechanism_proof(self):
+    def test_nonatomic_lift_ride_accepts_bounded_board_anchor(self):
         seeds = (
             runeio.RuneSeed((0.0, 0.0, 0.0)),
             runeio.RuneSeed((128.0, 0.0, 0.0)),
@@ -1609,10 +1609,8 @@ class RuneRuneArtifactTests(unittest.TestCase):
             )
 
         validate(lift)
-        for malformed in (
-            replace(lift, mechanism_anchor=(0.125, 0.0, 0.0)),
-            replace(lift, sweep_clear_ms=100),
-        ):
+        validate(replace(lift, mechanism_anchor=(0.125, 0.0, 0.0)))
+        for malformed in (replace(lift, sweep_clear_ms=100),):
             with self.subTest(link=malformed):
                 self.assert_wire_code(
                     contract.RLW_BAD_LINK_RECORD,

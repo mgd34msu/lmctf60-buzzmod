@@ -2509,6 +2509,26 @@ static qboolean MechanismStep_ButtonCarrierBinding(sg_bot_t *bot,
 	       binding_out->plan->expected_members == 1U;
 }
 
+static qboolean MechanismStep_ToggleCarrierRider(edict_t *carrier,
+	edict_t *body)
+{
+	return carrier && body && SG_LiftRider(carrier, body) &&
+	       body->s.origin[0] + body->mins[0] >= carrier->absmin[0] + 0.125f &&
+	       body->s.origin[0] + body->maxs[0] <= carrier->absmax[0] - 0.125f &&
+	       body->s.origin[1] + body->mins[1] >= carrier->absmin[1] + 0.125f &&
+	       body->s.origin[1] + body->maxs[1] <= carrier->absmax[1] - 0.125f;
+}
+
+static qboolean MechanismStep_ToggleCarrierActivationSupport(edict_t *carrier,
+	edict_t *body)
+{
+	return carrier && body &&
+	       (SG_LiftRider(carrier, body) ||
+	        (body->waterlevel == 0 && body->groundentity &&
+	         (body->groundentity == g_edicts ||
+	          SG_ImmutableSupport(body->groundentity))));
+}
+
 qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 {
 	int train_authority = SG_TrainGateGameAuthorizeButtonTouch(source,
@@ -2525,6 +2545,7 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	int source_key;
 	qboolean button_door;
 	qboolean button_carrier;
+	qboolean toggle_carrier;
 
 	if (train_authority >= 0)
 		return train_authority ? true : false;
@@ -2541,6 +2562,7 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	button_door = DoorStep_ButtonBinding(bot, source, &binding);
 	button_carrier = !button_door &&
 	    MechanismStep_ButtonCarrierBinding(bot, source, &binding);
+	toggle_carrier = button_carrier && binding.mover_entity->spawnflags == 32;
 	if (!button_door && !button_carrier)
 		return !DoorStep_DeclaredClaimHeld(bot) &&
 		       !SG_DeclaredDoorGuardAnyClaim();
@@ -2565,7 +2587,12 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    (activator->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 	    activator->client->ps.pmove.pm_time || !activator->groundentity ||
-	    activator->waterlevel != 0 || !bot->declared_started ||
+	    (!toggle_carrier && activator->waterlevel != 0) ||
+	    (toggle_carrier && activator->waterlevel != 0 &&
+	     (!(activator->watertype & CONTENTS_WATER) ||
+	      (activator->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+	      !SG_LiftRider(binding.mover_entity, activator))) ||
+	    !bot->declared_started ||
 	    bot->declared_guard_paused ||
 	    SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) !=
 	        SG_COMPOUND_GUARD_OK ||
@@ -2573,9 +2600,16 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 		return false;
 	if (button_carrier)
 	{
+		int required_state = binding.link->mode == RLCM_RIDE
+			? SG_PLAT_STATE_TOP : SG_PLAT_STATE_BOTTOM;
+		qboolean supported = activator->groundentity == source ||
+		    (toggle_carrier && (activator->groundentity == g_edicts ||
+		     SG_ImmutableSupport(activator->groundentity) ||
+		     SG_LiftRider(binding.mover_entity, activator)));
+
 		if (token_state != SG_BUTTON_CALLBACK_EMPTY ||
-		    activator->groundentity != source ||
-		    binding.mover_entity->moveinfo.state != SG_PLAT_STATE_BOTTOM)
+		    !supported ||
+		    binding.mover_entity->moveinfo.state != required_state)
 			return false;
 	}
 	else if (token_state == SG_BUTTON_CALLBACK_PENDING)
@@ -2691,6 +2725,7 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 	int activator_key;
 	int authority = 0;
 	int source_key;
+	qboolean button_carrier = false;
 
 	if (train_authority >= 0)
 		return train_authority ? true : false;
@@ -2699,11 +2734,16 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 	if (SG_ButtonCallbackTokenState(token) != SG_BUTTON_CALLBACK_EMPTY)
 	{
 		activator_key = DoorStep_EdictKey(activator);
+		if (bot)
+			button_carrier = MechanismStep_ButtonCarrierBinding(bot, source,
+			    &binding);
 		if (bot &&
-		    (DoorStep_ButtonBinding(bot, source, &binding) ||
-		     MechanismStep_ButtonCarrierBinding(bot, source, &binding)) &&
+		    (button_carrier || DoorStep_ButtonBinding(bot, source, &binding)) &&
 		    bot->declared_started && bot->declared_touched &&
 		    source->activator == activator && !bot->declared_guard_paused &&
+		    (!button_carrier || binding.mover_entity->spawnflags != 32 ||
+		     MechanismStep_ToggleCarrierActivationSupport(
+		         binding.mover_entity, activator)) &&
 		    SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) ==
 		        SG_COMPOUND_GUARD_OK &&
 		    SG_RuneMechanismBindingCurrent(&binding))
@@ -2712,6 +2752,8 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 		    activator_key, bot ? bot->commit_link : -1,
 		    bot ? &bot->compound_guard.owner : NULL,
 		    bot ? &bot->compound_guard.ticket : NULL, authority);
+		if (result == SG_BUTTON_CALLBACK_AUTHORIZE && button_carrier)
+			bot->declared_trigger_frame = level.framenum;
 		return result == SG_BUTTON_CALLBACK_AUTHORIZE;
 	}
 	if (!DoorStep_SGProvenanceActivator(activator))
@@ -2947,11 +2989,17 @@ qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
 	}
 	if (source == binding.entry_entity)
 	{
+		qboolean button_carrier = carrier &&
+		    binding.entry_node->touch_callback ==
+		        SG_MECH_CALLBACK_BUTTON_TOUCH;
+
 		if (!bot->declared_touched)
 			return true;
-		if (binding.plan->controller_kind !=
-		        SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
-		    bot->declared_touch_frame != level.framenum)
+		if ((button_carrier
+		        ? bot->declared_trigger_frame != level.framenum
+		        : binding.plan->controller_kind !=
+		              SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+		          bot->declared_touch_frame != level.framenum))
 			return true;
 	}
 	/* The guarded branch consumes the event before name-based stock traversal,
@@ -3142,6 +3190,13 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	if (MechanismStep_CarrierPlan(bot, &binding) &&
 	    binding.entry_entity == source)
 	{
+		qboolean button_entry = binding.entry_node->touch_callback ==
+		    SG_MECH_CALLBACK_BUTTON_TOUCH;
+		qboolean toggle_entry = button_entry &&
+		    binding.mover_entity->spawnflags == 32;
+		int required_state = binding.link->mode == RLCM_RIDE
+			? SG_PLAT_STATE_TOP : SG_PLAT_STATE_BOTTOM;
+
 		if (binding.mover_entity != door_master || !bot->declared_started ||
 		    bot->declared_guard_paused || bot->declared_triggered ||
 		    (binding.plan->expected_members > 1U &&
@@ -3151,7 +3206,13 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 		    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
 		    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 		    !bot->declared_touched ||
-		    bot->declared_touch_frame != level.framenum ||
+		    (button_entry
+		        ? bot->declared_trigger_frame != level.framenum ||
+		          (toggle_entry &&
+		           (binding.mover_entity->moveinfo.state != required_state ||
+		            !MechanismStep_ToggleCarrierActivationSupport(
+		                binding.mover_entity, activator)))
+		        : bot->declared_touch_frame != level.framenum) ||
 		    !SG_RuneMechanismBindingCurrent(&binding))
 			return false;
 		bot->declared_triggered = true;
@@ -7762,10 +7823,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean water_lift = declared_control &&
 	    SG_Rune()->links[bestlink].action == RL_LIFT &&
 	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].from].flags & RSF_WATER);
-	qboolean water_declared = water_tele || water_lift;
+	qboolean water_lift_exit = declared_control &&
+	    SG_Rune()->links[bestlink].action == RL_LIFT &&
+	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].to].flags & RSF_WATER);
+	qboolean water_declared = water_tele || water_lift || water_lift_exit;
 	qboolean water_control = proved_swim ||
 	    (water_tele && !bot->declared_activated) ||
-	    (water_lift && !bot->declared_touched);
+	    (water_lift && !bot->declared_touched) ||
+	    (water_lift_exit && bot->declared_activated);
 	qboolean swim_hazard = water_control && e->waterlevel > 0 &&
 	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
 	qboolean swim_emergency = water_control && e->waterlevel >= 3 &&
@@ -7863,8 +7928,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * commitment.  Never acquire or execute a door from that stale snapshot.
 	 * If an older declared-door transaction already exists, retire it only
 	 * through the same positive whole-sweep clearance gate. */
-	if ((declared_door || guarded_button_lift) &&
-	    bot->commit_link != bestlink)
+	if ((declared_door && bot->commit_link != bestlink) ||
+	    (guarded_button_lift && bot->commit_link != bestlink))
 	{
 		if (bot->declared_started && !DoorStep_AbortOrRetain(bot, bestlink))
 			return;
@@ -9149,6 +9214,12 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    mechanism_binding.entry_node &&
 				    mechanism_binding.entry_node->touch_callback ==
 				        SG_MECH_CALLBACK_BUTTON_TOUCH;
+				qboolean button_toggle = button_carrier &&
+				    mechanism_binding.mover_entity &&
+				    mechanism_binding.mover_entity->spawnflags == 32;
+				int lift_destination_state = button_toggle &&
+				    decl->mode == RLCM_RIDE
+				        ? SG_PLAT_STATE_BOTTOM : SG_PLAT_STATE_TOP;
 				qboolean direct_drive = true;
 				qboolean button_motion_hold = false;
 
@@ -9672,6 +9743,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					VectorCopy(door_effective_anchor, target);
 				else
 					VectorCopy(decl->anchor, target);
+				if (button_toggle && bot->declared_touched &&
+				    (!bot->declared_triggered ||
+				     !MechanismStep_ToggleCarrierRider(
+				         mechanism_binding.mover_entity, e)))
+					VectorCopy(decl->mechanism_anchor, target);
 				if (water_tele && !bot->declared_activated)
 				{
 					edict_t *pad = mechanism_binding.mover_entity;
@@ -9712,6 +9788,33 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						bot->commit_link = -1;
 						hold = true;
 					}
+					else if (button_toggle && !bot->declared_triggered)
+					{
+						int source_state = decl->mode == RLCM_RIDE
+							? SG_PLAT_STATE_TOP : SG_PLAT_STATE_BOTTOM;
+
+						if (plat->moveinfo.state != source_state)
+						{
+							bot->commit_link = -1;
+							hold = true;
+						}
+						else if (bot->declared_touched &&
+						         MechanismStep_ToggleCarrierRider(plat, e))
+							hold = true;
+					}
+					else if (button_toggle &&
+					         ((plat->moveinfo.state != SG_PLAT_STATE_UP &&
+					           plat->moveinfo.state != SG_PLAT_STATE_DOWN &&
+					           plat->moveinfo.state != lift_destination_state) ||
+					          (!SG_LiftRider(plat, e) &&
+					           plat->moveinfo.state == lift_destination_state)))
+					{
+						bot->commit_link = -1;
+						hold = true;
+					}
+					else if (button_toggle &&
+					         MechanismStep_ToggleCarrierRider(plat, e))
+						hold = true;
 					else if ((platform_ride || platform_door_ascent) &&
 					         !MechanismStep_CarrierStateCurrent(bot,
 					             &mechanism_binding))
@@ -9879,7 +9982,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 					if (plat && SG_LiftRider(plat, e))
 					{
-						if (plat->moveinfo.state == SG_PLAT_STATE_TOP)
+						if (plat->moveinfo.state == lift_destination_state)
 						{
 							vec3_t top_body;
 							short top_fixed[3];
@@ -9905,6 +10008,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 							         Ballistic_SourceExact(e, top_fixed) &&
 							         !Ballistic_SourceRest(e))
 								hold = true;
+							else if (button_toggle && bot->commit_link >= 0 &&
+							         Ballistic_SourceExact(e, top_fixed) &&
+							         Ballistic_SourceRest(e))
+								bot->declared_activated = true;
 						}
 					}
 					else if (plat &&
@@ -9936,7 +10043,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    : e->client->v_angle[YAW];
 				cmd->msec = msec;
 				if ((water_tele && !bot->declared_activated) ||
-				    (water_lift && !bot->declared_touched))
+				    (water_lift && !bot->declared_touched) ||
+				    (water_lift_exit && bot->declared_activated))
 					SG_SwimCommand(e->s.origin, target,
 					               &e->client->ps.pmove, cmd);
 				else
@@ -10499,7 +10607,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				drop_replay_failed = true;
 			}
 			if ((proved_swim || water_tele ||
-			     (water_lift && !bot->declared_touched)) &&
+			     (water_lift && !bot->declared_touched) ||
+			     (water_lift_exit && bot->declared_activated)) &&
 			    bot->swim_validated &&
 			    !swim_emergency && !swim_hazard &&
 			    bot->commit_link == bestlink)

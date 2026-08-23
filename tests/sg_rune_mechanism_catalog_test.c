@@ -1162,6 +1162,113 @@ static void TestDescendingTriggeredVerticalDoorLiftCatalog(void)
 		SG_MECHANISM_CONTROLLER_PLATFORM));
 }
 
+static void SetupToggleButtonLiftCatalog(void)
+{
+	edict_t *mover;
+	edict_t *start_button;
+	edict_t *end_button;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 4;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "func_door");
+	InitializeEntity(2U, "func_button");
+	InitializeEntity(3U, "func_button");
+	mover = &test_edicts[1];
+	start_button = &test_edicts[2];
+	end_button = &test_edicts[3];
+	mover->targetname = "toggle-lift";
+	mover->spawnflags = 32;
+	mover->movetype = MOVETYPE_PUSH;
+	mover->solid = SOLID_BSP;
+	mover->use = door_use;
+	mover->blocked = door_blocked;
+	mover->teammaster = mover;
+	mover->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	mover->moveinfo.wait = 3.0f;
+	mover->moveinfo.speed = 100.0f;
+	mover->moveinfo.accel = 100.0f;
+	mover->moveinfo.decel = 100.0f;
+	VectorSet(mover->mins, -64.0f, -48.0f, -218.0f);
+	VectorSet(mover->maxs, 64.0f, 48.0f, 218.0f);
+	VectorClear(mover->moveinfo.start_origin);
+	VectorSet(mover->moveinfo.end_origin, 0.0f, 0.0f, -418.0f);
+	VectorCopy(mover->moveinfo.start_origin, mover->s.origin);
+	VectorCopy(mover->mins, mover->absmin);
+	VectorCopy(mover->maxs, mover->absmax);
+	start_button->target = "toggle-lift";
+	start_button->touch = button_touch;
+	start_button->use = button_use;
+	start_button->solid = SOLID_BSP;
+	start_button->movetype = MOVETYPE_STOP;
+	start_button->wait = 3.0f;
+	start_button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	VectorSet(start_button->absmin, -96.0f, -14.0f, 230.0f);
+	VectorSet(start_button->absmax, -68.0f, 14.0f, 242.0f);
+	end_button->target = "toggle-lift";
+	end_button->touch = button_touch;
+	end_button->use = button_use;
+	end_button->solid = SOLID_BSP;
+	end_button->movetype = MOVETYPE_STOP;
+	end_button->wait = 3.0f;
+	end_button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	VectorSet(end_button->absmin, -14.0f, -14.0f, -212.0f);
+	VectorSet(end_button->absmax, 14.0f, 14.0f, -200.0f);
+}
+
+static void TestToggleButtonLiftCatalog(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *mover;
+	const rune_mechanism_node_t *start_button;
+	const rune_mechanism_node_t *end_button;
+
+	SetupToggleButtonLiftCatalog();
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	mover = NodeByKey(&view, 1U);
+	start_button = NodeByKey(&view, 2U);
+	end_button = NodeByKey(&view, 3U);
+	CHECK(mover && mover->kind == SG_MECH_NODE_PLATFORM);
+	CHECK(start_button && start_button->kind == SG_MECH_NODE_PLATFORM_TRIGGER);
+	CHECK(end_button && end_button->kind == SG_MECH_NODE_PLATFORM_TRIGGER);
+	CHECK(start_button && start_button->owner_key == 1U);
+	CHECK(end_button && end_button->owner_key == 1U);
+	CHECK(HasEdge(&view, 2U, 1U, SG_MECH_EDGE_TARGET, 0U));
+	CHECK(HasEdge(&view, 2U, 1U, SG_MECH_EDGE_OWNER, 0U));
+	CHECK(HasEdge(&view, 3U, 1U, SG_MECH_EDGE_TARGET, 0U));
+	CHECK(HasEdge(&view, 3U, 1U, SG_MECH_EDGE_OWNER, 0U));
+
+	SetupToggleButtonLiftCatalog();
+	test_edicts[3].target = NULL;
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	CHECK(NodeByKey(&view, 1U)->kind == SG_MECH_NODE_DOOR_MASTER);
+	CHECK(NodeByKey(&view, 2U)->kind == SG_MECH_NODE_BUTTON);
+
+	SetupToggleButtonLiftCatalog();
+	test_edicts[3].delay = 0.1f;
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	CHECK(NodeByKey(&view, 1U)->kind == SG_MECH_NODE_DOOR_MASTER);
+
+	SetupToggleButtonLiftCatalog();
+	VectorSet(test_edicts[3].absmin, -14.0f, -14.0f, 230.0f);
+	VectorSet(test_edicts[3].absmax, 14.0f, 14.0f, 242.0f);
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	CHECK(NodeByKey(&view, 1U)->kind == SG_MECH_NODE_DOOR_MASTER);
+}
+
 static edict_t *InitializeFrameCompleteButton(float distance, float raw_speed)
 {
 	edict_t *button;
@@ -1640,6 +1747,7 @@ int main(void)
 	TestShootDoorOwnedPoseCurrentness();
 	TestTriggeredVerticalDoorLiftCatalog();
 	TestDescendingTriggeredVerticalDoorLiftCatalog();
+	TestToggleButtonLiftCatalog();
 	TestFrameCompleteButtonSealGates();
 	TestFrameCompleteButtonCurrentness();
 	TestTinyPositiveDelayStaysAsynchronous();

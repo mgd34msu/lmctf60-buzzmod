@@ -370,8 +370,16 @@ static sg_rune_codec_diagnostic_t Codec_ValidateLinkFields(
 		return diagnostic;
 	if (!SG_ActionHasTrait(policy_action, SG_ACTF_ATOMIC))
 	{
-		if (!Codec_VectorExactZero(link->mechanism_anchor) ||
-		    link->sweep_clear_ms != 0U)
+		if (link->sweep_clear_ms != 0U)
+			return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
+		if (policy_action == RL_LIFT)
+		{
+			diagnostic = Codec_ValidateAnchor(link->mechanism_anchor,
+			    RLAP_WORLD);
+			if (diagnostic != RLCODEC_OK)
+				return diagnostic;
+		}
+		else if (!Codec_VectorExactZero(link->mechanism_anchor))
 			return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 		return RLCODEC_OK;
 	}
@@ -2191,6 +2199,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		int stock;
 		int carrier;
 		int button_carrier;
+		int toggle_button_carrier;
 		uint32_t class_indices[2] = { UINT32_MAX, UINT32_MAX };
 		uint32_t class_count = 0U;
 		uint32_t approach_class = UINT32_MAX;
@@ -2243,7 +2252,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		        SG_RUNE_CODEC_CALLBACK_USE_DOOR &&
 		    nodes[mover_index].blocked_callback ==
 		        SG_RUNE_CODEC_CALLBACK_BLOCKED_DOOR &&
-		    SG_RuneCarrierDoorSpawnflags(nodes[mover_index].spawnflags) &&
+		    SG_RuneButtonCarrierDoorSpawnflags(
+		        nodes[mover_index].spawnflags) &&
 		    (nodes[mover_index].flags & (SG_RUNE_CODEC_NODEF_MOVER |
 		        SG_RUNE_CODEC_NODEF_TEAM_MASTER |
 		        SG_RUNE_CODEC_NODEF_SHOOTABLE)) ==
@@ -2251,12 +2261,18 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		         SG_RUNE_CODEC_NODEF_TEAM_MASTER) &&
 		    target_count == 1U && target_index != UINT32_MAX &&
 		    edges[target_index].to_key == plan->mover_key &&
-		    plan->cooldown_ms == cooldown && plan->expected_members == 1U;
+		    plan->cooldown_ms == cooldown && plan->expected_members == 1U &&
+		    owner_link && (owner_link->mode == RLCM_NONE ||
+		     owner_link->mode == RLCM_RIDE);
+		toggle_button_carrier = button_carrier &&
+		    nodes[mover_index].spawnflags == 32U;
 		if (nodes[entry_index].kind != SG_RUNE_CODEC_NODE_PLATFORM_TRIGGER ||
 		    nodes[mover_index].kind != SG_RUNE_CODEC_NODE_PLATFORM ||
 		    owner_count != 1U || owner_index == UINT32_MAX ||
 		    edges[owner_index].to_key != plan->mover_key ||
 		    (!stock && !carrier && !button_carrier) || !owner_link ||
+		    (toggle_button_carrier ==
+		        Codec_VectorExactZero(owner_link->mechanism_anchor)) ||
 		    (stock && ((owner_link->mode == RLCM_RIDE &&
 		                   plan->expected_members <= 1U) ||
 		              (owner_link->mode != RLCM_NONE &&

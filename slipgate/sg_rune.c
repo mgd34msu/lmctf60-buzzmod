@@ -2252,13 +2252,13 @@ fail:
 	return false;
 }
 
-static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
-	edict_t *approach_door, edict_t *egress_door,
-	uint16_t expected_members)
+static qboolean Mechanism_BindPlatformEntry(rune_link_t *link,
+	edict_t *platform, edict_t *entry, edict_t *approach_door,
+	edict_t *egress_door, uint16_t expected_members)
 {
 	uint32_t mover_key = Mechanism_EntityKey(platform);
-	uint32_t entry_key = Mechanism_OwnedEntry(mover_key,
-		SG_MECH_NODE_PLATFORM_TRIGGER);
+	uint32_t entry_key = entry ? Mechanism_EntityKey(entry) :
+		Mechanism_OwnedEntry(mover_key, SG_MECH_NODE_PLATFORM_TRIGGER);
 	const rune_mechanism_node_t *entry_node = Mechanism_Node(entry_key);
 	uint32_t cooldown = 0U;
 
@@ -2276,6 +2276,14 @@ static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
 	           egress_door ? Mechanism_EntityKey(egress_door) :
 	               SG_MECH_NO_KEY,
 		SG_MECHANISM_CONTROLLER_PLATFORM, expected_members, cooldown);
+}
+
+static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
+	edict_t *approach_door, edict_t *egress_door,
+	uint16_t expected_members)
+{
+	return Mechanism_BindPlatformEntry(link, platform, NULL, approach_door,
+		egress_door, expected_members);
 }
 
 static qboolean Mechanism_BindTeleport(rune_link_t *link, edict_t *pad,
@@ -2967,7 +2975,6 @@ static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
 		vec3_t start, end;
 		float h2, d3;
 		trace_t tr;
-
 		int trial_ms = 0;
 
 		VectorSubtract(gen_seeds[i].origin, body, d);
@@ -3009,7 +3016,9 @@ static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
 				      entry, support, action, &trial_ms);
 
 			if (!proved)
+			{
 				continue;
+			}
 		}
 		d3 = h2 + d[2] * d[2];
 		if (d3 < bestd)
@@ -3146,7 +3155,9 @@ static int Gen_LiftEgressSeed(vec3_t top_body, float horiz, edict_t *plat,
 			continue;
 		if (!SG_OracleDeclaredEgress(top_body, gen_seeds[i].origin,
 		                              plat, &trial_ms))
+		{
 			continue;
+		}
 		d3 = h2 + d[2] * d[2];
 		if (d3 < bestd)
 		{
@@ -3356,6 +3367,250 @@ static qboolean Lift_DoorStageCrossesSweep(edict_t *trigger,
 	       SG_DeclaredDelayedDoorCrossesSweep(trigger, from, to);
 }
 
+static int Gen_ToggleButtonLiftApproach(const vec3_t button_body,
+	edict_t *button, edict_t *carrier, vec3_t button_contact,
+	vec3_t board_contact, vec3_t carrier_origin,
+	int *approach_ms_out)
+{
+	int best = -1;
+	int best_ms = INT_MAX;
+	int seed;
+
+	if (button_contact)
+		VectorClear(button_contact);
+	if (board_contact)
+		VectorClear(board_contact);
+	if (carrier_origin && carrier)
+		VectorCopy(carrier->s.origin, carrier_origin);
+	if (approach_ms_out)
+		*approach_ms_out = 0;
+	if (!button_body || !button || !carrier || !button_contact || !board_contact ||
+	    !carrier_origin || !approach_ms_out)
+		return -1;
+	for (seed = 0; seed < gen_num_seeds; seed++)
+	{
+		vec3_t activation;
+		vec3_t contact;
+		vec3_t delta;
+		vec3_t trial_carrier_origin;
+		int trial_ms;
+		qboolean proved = false;
+		qboolean water_candidate = false;
+
+		VectorCopy(carrier->s.origin, trial_carrier_origin);
+		VectorSubtract(gen_seeds[seed].origin, button_body, delta);
+		if (!Gen_SeedHasIncoming(seed))
+			continue;
+		if ((gen_seeds[seed].flags & RSF_WATER) &&
+		    gen_source_waterlevel[seed] >= 2 &&
+		    (gen_source_watertype[seed] & CONTENTS_WATER) &&
+		    !(gen_source_watertype[seed] & (CONTENTS_LAVA | CONTENTS_SLIME)) &&
+		    DotProduct(delta, delta) <= SG_SWIM_REACH * SG_SWIM_REACH)
+		{
+			sg_phantom_t phantom;
+			water_candidate = true;
+			SG_OraclePlace(&phantom, gen_seeds[seed].origin);
+			phantom.waterlevel = gen_source_waterlevel[seed];
+			phantom.watertype = gen_source_watertype[seed];
+			proved = SG_OracleButtonLiftSwimBoard(&phantom, button_body,
+			    button, carrier, &trial_ms, activation, contact,
+			    trial_carrier_origin);
+		}
+		else if (!gen_source_stable[seed] || gen_source_waterlevel[seed] != 0)
+			continue;
+		if (water_candidate ? !proved :
+		    !SG_OracleButtonLiftBoard(gen_seeds[seed].origin, button_body,
+		        button, carrier, &trial_ms, activation, contact,
+		        trial_carrier_origin))
+			continue;
+		if (trial_ms >= best_ms)
+			continue;
+		best = seed;
+		best_ms = trial_ms;
+		VectorCopy(activation, button_contact);
+		VectorCopy(contact, board_contact);
+		VectorCopy(trial_carrier_origin, carrier_origin);
+	}
+	if (best >= 0)
+		*approach_ms_out = best_ms;
+	return best;
+}
+
+static int Gen_ToggleButtonLiftWaterEgress(const vec3_t carried_body,
+	edict_t *carrier, int *egress_ms_out)
+{
+	int best = -1;
+	int best_ms = INT_MAX;
+	float best_distance = 1.0e30f;
+	int seed;
+
+	if (egress_ms_out)
+		*egress_ms_out = 0;
+	if (!carried_body || !carrier || !egress_ms_out)
+		return -1;
+	for (seed = 0; seed < gen_num_seeds; seed++)
+	{
+		vec3_t delta;
+		float distance;
+		int trial_ms;
+
+		if (!(gen_seeds[seed].flags & RSF_WATER) ||
+		    gen_source_waterlevel[seed] < 2 ||
+		    !(gen_source_watertype[seed] & CONTENTS_WATER) ||
+		    (gen_source_watertype[seed] & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+		    !Gen_SeedHasOutgoing(seed))
+			continue;
+		VectorSubtract(gen_seeds[seed].origin, carried_body, delta);
+		distance = DotProduct(delta, delta);
+		if (distance > SG_SWIM_REACH * SG_SWIM_REACH ||
+		    !SG_OracleButtonLiftSwimEgress(carried_body,
+		        gen_seeds[seed].origin, carrier, &trial_ms))
+			continue;
+		if (trial_ms < best_ms ||
+		    (trial_ms == best_ms && distance < best_distance))
+		{
+			best = seed;
+			best_ms = trial_ms;
+			best_distance = distance;
+		}
+	}
+	if (best >= 0)
+		*egress_ms_out = best_ms;
+	return best;
+}
+
+static void Link_ToggleButtonCarriers(void)
+{
+	uint32_t mover_index;
+
+	for (mover_index = 0U;
+	     mover_index < gen_mechanism_catalog.num_nodes; mover_index++)
+	{
+		const rune_mechanism_node_t *mover_node =
+			&gen_mechanism_catalog.nodes[mover_index];
+		edict_t *carrier;
+		uint32_t entry_index;
+
+		if (mover_node->kind != SG_MECH_NODE_PLATFORM ||
+		    mover_node->spawnflags != 32U ||
+		    mover_node->key >= (uint32_t)globals.num_edicts)
+			continue;
+		carrier = &g_edicts[mover_node->key];
+		for (entry_index = 0U;
+		     entry_index < gen_mechanism_catalog.num_nodes; entry_index++)
+		{
+			const rune_mechanism_node_t *entry_node =
+				&gen_mechanism_catalog.nodes[entry_index];
+			edict_t *button;
+			vec3_t source, destination, displacement;
+			vec3_t button_target, button_body, board_contact, carried_body;
+			vec3_t board_carrier_origin;
+			vec3_t saved_origin, saved_old_origin, saved_velocity;
+			float halfx, halfy, horiz;
+			int endpoint;
+			int approach;
+			int egress;
+			int approach_ms;
+			int egress_ms;
+			int saved_state;
+			int saved_solid;
+			int saved_linkcount;
+			int before;
+			short travel_ms;
+			int total_ms;
+
+			if (entry_node->kind != SG_MECH_NODE_PLATFORM_TRIGGER ||
+			    entry_node->owner_key != mover_node->key ||
+			    entry_node->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+			    entry_node->key >= (uint32_t)globals.num_edicts)
+				continue;
+			button = &g_edicts[entry_node->key];
+			endpoint = SG_ToggleCarrierButtonEndpoint(button, carrier);
+			if (endpoint < 0)
+				continue;
+			if (endpoint == 0)
+			{
+				VectorCopy(carrier->moveinfo.start_origin, source);
+				VectorCopy(carrier->moveinfo.end_origin, destination);
+			}
+			else
+			{
+				VectorCopy(carrier->moveinfo.end_origin, source);
+				VectorCopy(carrier->moveinfo.start_origin, destination);
+			}
+			VectorSubtract(destination, source, displacement);
+			halfx = (carrier->maxs[0] - carrier->mins[0]) * 0.5f;
+			halfy = (carrier->maxs[1] - carrier->mins[1]) * 0.5f;
+			horiz = Lift_EgressSearchRadius(halfx, halfy);
+			VectorCopy(carrier->s.origin, saved_origin);
+			VectorCopy(carrier->s.old_origin, saved_old_origin);
+			VectorCopy(carrier->velocity, saved_velocity);
+			saved_state = carrier->moveinfo.state;
+			saved_solid = carrier->solid;
+			saved_linkcount = carrier->linkcount;
+			carrier->solid = SOLID_BSP;
+			VectorCopy(source, carrier->s.origin);
+			VectorCopy(source, carrier->s.old_origin);
+			VectorClear(carrier->velocity);
+			carrier->moveinfo.state = endpoint == 0
+				? SG_PLAT_STATE_BOTTOM : SG_PLAT_STATE_TOP;
+			sg_host.linkentity(carrier);
+			VectorAdd(button->absmin, button->absmax, button_target);
+			VectorScale(button_target, 0.5f, button_target);
+			approach = Gen_ToggleButtonLiftApproach(button_target, button,
+			    carrier, button_body, board_contact, board_carrier_origin,
+			    &approach_ms);
+			VectorSubtract(destination, board_carrier_origin, displacement);
+			if (approach >= 0)
+			{
+				if (!SG_OracleButtonLiftCarry(board_contact, displacement,
+				        carrier, carried_body))
+					approach = -1;
+			}
+			VectorCopy(destination, carrier->s.origin);
+			VectorCopy(destination, carrier->s.old_origin);
+			VectorClear(carrier->velocity);
+			carrier->moveinfo.state = endpoint == 0
+				? SG_PLAT_STATE_TOP : SG_PLAT_STATE_BOTTOM;
+			sg_host.linkentity(carrier);
+			egress = approach < 0 ? -1 : endpoint == 0
+				? Gen_ToggleButtonLiftWaterEgress(carried_body, carrier,
+				    &egress_ms)
+				: Gen_LiftEgressSeed(carried_body, horiz, carrier, &egress_ms);
+			VectorCopy(saved_origin, carrier->s.origin);
+			VectorCopy(saved_old_origin, carrier->s.old_origin);
+			VectorCopy(saved_velocity, carrier->velocity);
+			carrier->moveinfo.state = saved_state;
+			carrier->solid = saved_solid;
+			sg_host.linkentity(carrier);
+			carrier->linkcount = saved_linkcount;
+			if (approach < 0 || egress < 0 || approach == egress)
+				continue;
+			travel_ms = Plat_TravelMs(carrier, board_carrier_origin,
+			    destination);
+			total_ms = approach_ms + (int)travel_ms + egress_ms;
+			if (travel_ms <= 0 || total_ms <= 0 ||
+			    total_ms > RUNE_MAX_COST_MS)
+				continue;
+			before = gen_num_links;
+			Link_Add(approach, egress, RL_LIFT, (short)total_ms, 0);
+			if (gen_num_links <= before)
+				continue;
+			gen_links[gen_num_links - 1].mode = endpoint == 0
+				? RLCM_NONE : RLCM_RIDE;
+			VectorCopy(button_body, gen_links[gen_num_links - 1].anchor);
+			VectorCopy(board_contact,
+			    gen_links[gen_num_links - 1].mechanism_anchor);
+			if (!Mechanism_BindPlatformEntry(
+			        &gen_links[gen_num_links - 1], carrier, button,
+			        NULL, NULL, 1U))
+				gen_num_links--;
+			else
+				gen_lift_links++;
+		}
+	}
+}
+
 static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
 	const vec3_t bottom_body, edict_t **door_out,
 	uint16_t *expected_members_out, vec3_t wait_out,
@@ -3514,8 +3769,10 @@ static void Link_Plats(void)
 		e->moveinfo.state = SG_PLAT_STATE_BOTTOM;
 		sg_host.linkentity(e);
 		if (SG_LiftRest(entry, e, NULL, bottom_body))
+		{
 			approach = Gen_MechanismSeedNear(bottom_body, horiz, 64.0f,
 			    entry, e, true, true, true, false, RL_LIFT, &approach_ms);
+		}
 		if (approach < 0)
 			approach = Lift_CompoundApproach(entry, e, bottom_body,
 				&approach_door, &expected_members, approach_wait,
@@ -3539,7 +3796,9 @@ static void Link_Plats(void)
 		e->moveinfo.state = SG_PLAT_STATE_TOP;
 		sg_host.linkentity(e);
 		if (approach >= 0 && SG_LiftRest(entry, e, NULL, top_body))
+		{
 			st_top = Gen_LiftEgressSeed(top_body, horiz, e, &egress_ms);
+		}
 		if (st_top < 0 && approach >= 0 && approach_door)
 		{
 			uint16_t egress_members = 0U;
@@ -3690,6 +3949,7 @@ static void Link_Plats(void)
 			}
 		}
 	}
+	Link_ToggleButtonCarriers();
 	if (gen_lift_links)
 		sg_host.dprint("rune: %d lift links (%d matching drops down, %d with no way down)\n",
 		           gen_lift_links, gen_lift_down_drop, gen_lift_down_none);
@@ -9146,6 +9406,108 @@ done:
 	return closed;
 }
 
+static qboolean Prove_ObjectiveSwimClosure(int red_root, int blue_root)
+{
+	byte *red_reach = NULL;
+	byte *blue_reach = NULL;
+	int link_mark = gen_num_links;
+	int drop_mark = gen_env_drop;
+	int hook_mark = gen_env_hook;
+	int swim_links = 0;
+	qboolean closed = false;
+
+	red_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	blue_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!red_reach || !blue_reach)
+		goto done;
+	for (;;)
+	{
+		door_topology_t topology = { NULL, NULL };
+		qboolean merged = false;
+		int from, to;
+
+		if (!Graph_ObjectiveReachMasks(red_root, blue_root,
+		        red_reach, blue_reach))
+			goto done;
+		if (blue_reach[red_root] && red_reach[blue_root])
+		{
+			closed = true;
+			break;
+		}
+		if (Graph_ProveObjectiveReverse(red_reach, blue_reach,
+		        NULL, NULL))
+			continue;
+		if (!Door_TopologyBuild(&topology))
+			goto done;
+		for (from = 0; from < gen_num_seeds && !merged; from++)
+		{
+			if (!(gen_seeds[from].flags & RSF_WATER))
+				continue;
+			for (to = from + 1; to < gen_num_seeds; to++)
+			{
+				vec3_t delta;
+				short forward_cost = 0, reverse_cost = 0;
+				byte forward_speed = 0, reverse_speed = 0;
+				qboolean have_forward, have_reverse;
+
+				if (!(gen_seeds[to].flags & RSF_WATER) ||
+				    topology.component[from] == topology.component[to] ||
+				    Graph_ObjectivePartitionMask(from, red_reach, blue_reach) ==
+				        Graph_ObjectivePartitionMask(to, red_reach, blue_reach))
+					continue;
+				VectorSubtract(gen_seeds[to].origin,
+				    gen_seeds[from].origin, delta);
+				if (DotProduct(delta, delta) >
+				    SG_SWIM_REACH * SG_SWIM_REACH)
+					continue;
+				have_forward = Link_Exists(from, to) ||
+				    ProveSwim(from, to, &forward_cost, &forward_speed);
+				have_reverse = Link_Exists(to, from) ||
+				    ProveSwim(to, from, &reverse_cost, &reverse_speed);
+				if (!have_forward || !have_reverse)
+					continue;
+				if (!Link_Exists(from, to))
+				{
+					if (!Link_Add(from, to, RL_SWIM,
+					        forward_cost, forward_speed))
+						goto merge_failed;
+					gen_links[gen_num_links - 1].heading_slack = 0;
+					swim_links++;
+				}
+				if (!Link_Exists(to, from))
+				{
+					if (!Link_Add(to, from, RL_SWIM,
+					        reverse_cost, reverse_speed))
+						goto merge_failed;
+					gen_links[gen_num_links - 1].heading_slack = 0;
+					swim_links++;
+				}
+				merged = true;
+				break;
+			}
+		}
+	merge_failed:
+		Door_TopologyFree(&topology);
+		if (!merged)
+			break;
+	}
+
+done:
+	sg_host.dprint("rune: objective swim closure links=%d closed=%d\n",
+	    gen_num_links - link_mark, closed ? 1 : 0);
+	if (!closed)
+	{
+		gen_num_links = link_mark;
+		gen_env_drop = drop_mark;
+		gen_env_hook = hook_mark;
+	}
+	else
+		gen_swim_links += swim_links;
+	if (red_reach) sg_host.level_free(red_reach);
+	if (blue_reach) sg_host.level_free(blue_reach);
+	return closed;
+}
+
 static qboolean Graph_PruneObjectiveCoreTry(qboolean defer_route_failure,
 	int *red_root_out, int *blue_root_out)
 {
@@ -9367,6 +9729,8 @@ static qboolean Graph_PruneObjectiveCoreWithClosure(void)
 		return true;
 	if (red_root < 0 || blue_root < 0)
 		return false;
+	if (Prove_ObjectiveSwimClosure(red_root, blue_root))
+		return Graph_PruneObjectiveCore();
 	Prove_ObjectiveClosure(red_root, blue_root);
 	return Graph_PruneObjectiveCore();
 }

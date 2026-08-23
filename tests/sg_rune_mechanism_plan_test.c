@@ -746,6 +746,19 @@ static void TestButtonPlatform(void)
 	CodecValidate(&fixture);
 
 	BuildButtonPlatform(&fixture);
+	fixture.nodes[1].spawnflags = 32U;
+	fixture.links[0].mode = RLCM_RIDE;
+	fixture.links[0].mechanism_anchor[0] = 1.0f;
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+
+	BuildButtonPlatform(&fixture);
+	fixture.nodes[1].spawnflags = 32U;
+	FixtureFinish(&fixture);
+	fixture.links[0].mode = RLCM_PREOPEN;
+	ExpectPlatformClosureFailure(&fixture);
+
+	BuildButtonPlatform(&fixture);
 	FixtureFinish(&fixture);
 	fixture.nodes[0].spawnflags = 1U;
 	ExpectPlatformClosureFailure(&fixture);

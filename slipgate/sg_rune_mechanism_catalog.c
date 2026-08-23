@@ -241,6 +241,49 @@ static const char *Catalog_Classname(uint32_t index, const edict_t *entity)
 	return entity ? entity->classname : NULL;
 }
 
+static int Catalog_PhysicalButtonEntry(const edict_t *button)
+{
+	return button && button->inuse && button->classname &&
+	       !strcmp(button->classname, "func_button") &&
+	       button->touch == button_touch && button->use == button_use &&
+	       button->solid == SOLID_BSP && button->movetype == MOVETYPE_STOP &&
+	       !button->think && !button->blocked && !button->die &&
+	       button->health == 0 && button->max_health == 0 &&
+	       button->takedamage == DAMAGE_NO && button->spawnflags == 0 &&
+	       button->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+	       button->nextthink == 0.0f && button->target && button->target[0] &&
+	       !button->targetname && !button->killtarget && !button->pathtarget &&
+	       !button->message && button->delay == 0.0f && button->wait > 0.0f;
+}
+
+static int Catalog_ToggleButtonLiftSet(const edict_t *mover)
+{
+	uint32_t index;
+	uint32_t count = 0U;
+	uint32_t endpoint_mask = 0U;
+
+	if (!mover || !mover->targetname || mover->spawnflags != 32)
+		return 0;
+	for (index = 1U; index < (uint32_t)globals.num_edicts; index++)
+	{
+		edict_t *button = &g_edicts[index];
+		int endpoint;
+
+		if (!button->inuse || !button->classname ||
+		    strcmp(button->classname, "func_button") || !button->target ||
+		    Q_stricmp(button->target, mover->targetname))
+			continue;
+		if (!Catalog_PhysicalButtonEntry(button))
+			return 0;
+		endpoint = SG_ToggleCarrierButtonEndpoint(button, mover);
+		if (endpoint < 0)
+			return 0;
+		count++;
+		endpoint_mask |= UINT32_C(1) << endpoint;
+	}
+	return count == 2U && endpoint_mask == UINT32_C(3);
+}
+
 static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 	uint32_t *trigger_key_out, uint32_t *mover_key_out)
 {
@@ -262,15 +305,7 @@ static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 		int button_entry;
 		int axis;
 
-		button_entry = trigger->inuse && trigger->classname &&
-		    !strcmp(trigger->classname, "func_button") &&
-		    trigger->touch == button_touch && trigger->use == button_use &&
-		    trigger->solid == SOLID_BSP && trigger->movetype == MOVETYPE_STOP &&
-		    !trigger->think && !trigger->blocked && !trigger->die &&
-		    trigger->health == 0 && trigger->max_health == 0 &&
-		    trigger->takedamage == DAMAGE_NO && trigger->spawnflags == 0 &&
-		    trigger->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
-		    trigger->nextthink == 0.0f;
+		button_entry = Catalog_PhysicalButtonEntry(trigger);
 		if (!trigger->inuse || !trigger->classname ||
 		    (!button_entry &&
 		     (strcmp(trigger->classname, "trigger_multiple") ||
@@ -305,7 +340,11 @@ static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 		    mover->takedamage || mover->team || mover->teamchain ||
 		    mover->teammaster != mover || (mover->flags & FL_TEAMSLAVE) != 0 ||
 		    mover->target || mover->killtarget || mover->pathtarget ||
-		    !SG_RuneCarrierDoorSpawnflags((uint32_t)mover->spawnflags) ||
+		    (button_entry
+		        ? !SG_RuneButtonCarrierDoorSpawnflags(
+		              (uint32_t)mover->spawnflags)
+		        : !SG_RuneCarrierDoorSpawnflags(
+		              (uint32_t)mover->spawnflags)) ||
 		    mover->moveinfo.wait <= 0.0f ||
 		    fabsf(mover->moveinfo.end_origin[2] -
 		        mover->moveinfo.start_origin[2]) < 8.0f)
@@ -316,7 +355,17 @@ static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 				break;
 		if (axis != 2)
 			continue;
-		for (axis = 0; axis < 3; axis++)
+		if (button_entry && mover->spawnflags == 32)
+		{
+			if (!isfinite(mover->moveinfo.speed) ||
+			    mover->moveinfo.speed <= 0.0f ||
+			    mover->moveinfo.accel != mover->moveinfo.speed ||
+			    mover->moveinfo.decel != mover->moveinfo.speed ||
+			    !Catalog_ToggleButtonLiftSet(mover) ||
+			    SG_ToggleCarrierButtonEndpoint(trigger, mover) < 0)
+				continue;
+		}
+		else for (axis = 0; axis < 3; axis++)
 		{
 			float source_min = mover->moveinfo.start_origin[axis] +
 				mover->mins[axis] - 1.0f;
@@ -327,7 +376,9 @@ static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 			    trigger->absmax[axis] > source_max)
 				break;
 		}
-		if (axis != 3 || (key != trigger_key && key != mover_key))
+		if ((!button_entry || mover->spawnflags != 32) && axis != 3)
+			continue;
+		if (key != trigger_key && key != mover_key)
 			continue;
 		if (trigger_key_out) *trigger_key_out = trigger_key;
 		if (mover_key_out) *mover_key_out = mover_key;

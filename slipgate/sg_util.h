@@ -75,6 +75,43 @@ qboolean SG_EscortTerminal(edict_t *bot, edict_t *target);
 #define SG_PLAT_STATE_DOWN   3
 qboolean SG_LiftWaitPoint(edict_t *entry, const vec3_t origin, vec3_t wait);
 qboolean SG_LiftRider(edict_t *plat, edict_t *body);
+static inline int SG_ToggleCarrierButtonEndpoint(const edict_t *button,
+	const edict_t *carrier)
+{
+	float gap[2];
+	int endpoint;
+	int axis;
+
+	if (!button || !carrier || !button->inuse || !carrier->inuse)
+		return -1;
+	for (endpoint = 0; endpoint < 2; endpoint++)
+	{
+		const vec_t *origin = endpoint == 0
+			? carrier->moveinfo.start_origin : carrier->moveinfo.end_origin;
+		float delta = button->absmax[2] -
+			(origin[2] + carrier->maxs[2]);
+
+		gap[endpoint] = delta < 0.0f ? -delta : delta;
+	}
+	endpoint = gap[1] < gap[0] ? 1 : 0;
+	if (gap[endpoint] > 64.0f || gap[0] == gap[1])
+		return -1;
+	for (axis = 0; axis < 2; axis++)
+	{
+		const vec_t *origin = endpoint == 0
+			? carrier->moveinfo.start_origin : carrier->moveinfo.end_origin;
+		float carrier_min = origin[axis] + carrier->mins[axis];
+		float carrier_max = origin[axis] + carrier->maxs[axis];
+		float separation = button->absmax[axis] < carrier_min
+			? carrier_min - button->absmax[axis]
+			: button->absmin[axis] > carrier_max
+				? button->absmin[axis] - carrier_max : 0.0f;
+
+		if (separation > 64.0f)
+			return -1;
+	}
+	return endpoint;
+}
 qboolean SG_LiftRest(edict_t *entry, edict_t *plat, edict_t *passent,
 	vec3_t rest);
 qboolean SG_TeleportApproachPoint(edict_t *pad, vec3_t approach);
