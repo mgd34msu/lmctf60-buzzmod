@@ -2000,6 +2000,106 @@ static sg_rune_codec_diagnostic_t Codec_AddSideEffect(
 	return RLCODEC_OK;
 }
 
+static int Codec_MasterSeen(
+	const sg_rune_codec_activation_node_t *nodes,
+	const sg_rune_codec_workspace_t *workspace, uint32_t master_count,
+	uint32_t key)
+{
+	uint32_t i;
+
+	for (i = 0U; i < master_count; i++)
+		if (nodes[workspace->node_touched[i]].key == key)
+			return 1;
+	return 0;
+}
+
+static sg_rune_codec_diagnostic_t Codec_DiscoverRelayDoorTargets(
+	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
+	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
+	sg_rune_codec_workspace_t *workspace,
+	uint32_t relay_count, uint32_t *master_count, uint32_t *smallest)
+{
+	uint32_t i;
+
+	if (!nodes || !edges || !workspace || !master_count || !smallest)
+		return RLCODEC_BAD_ACTIVATION_PLAN;
+	for (i = 0U; i < relay_count; i++)
+	{
+		uint32_t relay_index = workspace->node_queue[i];
+		uint32_t target_count = Codec_InventoryFanoutCount(edges,
+			inventory_edges, nodes[relay_index].key,
+			SG_RUNE_CODEC_EDGE_TARGET);
+		uint32_t j;
+
+		for (j = 0U; j < target_count; j++)
+		{
+			uint32_t edge_index = Codec_InventoryFanoutAt(edges,
+				inventory_edges, nodes[relay_index].key,
+				SG_RUNE_CODEC_EDGE_TARGET, j);
+			uint32_t destination_index;
+			const sg_rune_codec_activation_node_t *destination;
+
+			if (edge_index == UINT32_MAX)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+			destination_index = Codec_FindNode(nodes, num_nodes,
+				edges[edge_index].to_key);
+			if (destination_index == UINT32_MAX)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+			destination = &nodes[destination_index];
+			if (destination->kind == SG_RUNE_CODEC_NODE_DOOR_MASTER)
+			{
+				if (Codec_MasterSeen(nodes, workspace, *master_count,
+				        destination->key) || *master_count >= num_nodes)
+					return RLCODEC_BAD_ACTIVATION_PLAN;
+				workspace->node_touched[(*master_count)++] =
+					destination_index;
+				if (destination->key < *smallest)
+					*smallest = destination->key;
+			}
+			else if (destination->kind == SG_RUNE_CODEC_NODE_DOOR_MEMBER &&
+			    !Codec_MasterSeen(nodes, workspace, *master_count,
+			        destination->team_master_key))
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+		}
+	}
+	return RLCODEC_OK;
+}
+
+static sg_rune_codec_diagnostic_t Codec_AddRelayEffect(
+	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
+	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
+	const sg_rune_codec_activation_plan_t *plan, uint32_t inventory_index,
+	uint32_t generation, sg_rune_codec_workspace_t *workspace,
+	uint32_t *expected_count, uint32_t *relay_count,
+	uint32_t master_count)
+{
+	uint32_t destination_index;
+	const sg_rune_codec_activation_node_t *destination;
+
+	if (inventory_index >= inventory_edges)
+		return RLCODEC_BAD_ACTIVATION_PLAN;
+	destination_index = Codec_FindNode(nodes, num_nodes,
+		edges[inventory_index].to_key);
+	if (destination_index == UINT32_MAX)
+		return RLCODEC_BAD_ACTIVATION_PLAN;
+	destination = &nodes[destination_index];
+	if (destination->kind == SG_RUNE_CODEC_NODE_DOOR_MASTER ||
+	    destination->kind == SG_RUNE_CODEC_NODE_DOOR_MEMBER)
+	{
+		uint32_t master_key = destination->kind ==
+		        SG_RUNE_CODEC_NODE_DOOR_MASTER
+		    ? destination->key : destination->team_master_key;
+
+		if (!Codec_MasterSeen(nodes, workspace, master_count, master_key))
+			return RLCODEC_BAD_ACTIVATION_PLAN;
+		return Codec_ExpectInventoryEdge(edges, plan, inventory_index,
+			generation, workspace, expected_count);
+	}
+	return Codec_AddSideEffect(nodes, num_nodes, edges, inventory_edges,
+		plan, inventory_index, 0, generation, workspace, expected_count,
+		relay_count);
+}
+
 static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
 	const sg_rune_codec_activation_edge_t *edges, uint32_t num_edges,
@@ -2590,6 +2690,11 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 			if (diagnostic != RLCODEC_OK)
 				return diagnostic;
 		}
+		diagnostic = Codec_DiscoverRelayDoorTargets(nodes, num_nodes, edges,
+			inventory_edges, workspace, relay_count,
+			&master_count, &smallest);
+		if (diagnostic != RLCODEC_OK)
+			return diagnostic;
 		if (master_count == 0U || smallest != plan->mover_key)
 			return RLCODEC_BAD_ACTIVATION_PLAN;
 		break;
@@ -2710,10 +2815,9 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 				inventory_edges, nodes[relay_index].key,
 				SG_RUNE_CODEC_EDGE_TARGET, j);
 
-			diagnostic = Codec_AddSideEffect(nodes, num_nodes, edges,
-				inventory_edges, plan,
-				target_index, 0, generation, workspace, &expected_count,
-				&relay_count);
+			diagnostic = Codec_AddRelayEffect(nodes, num_nodes, edges,
+				inventory_edges, plan, target_index, generation, workspace,
+				&expected_count, &relay_count, master_count);
 			if (diagnostic != RLCODEC_OK)
 				return diagnostic;
 		}

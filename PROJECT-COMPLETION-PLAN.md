@@ -381,12 +381,12 @@ including `lmctf02a` and `lmctf04`.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58`, `lmctf07`, `lmctf40`, `xmap25`, and `xmap29` subsequently
-passed every acceptance gate, leaving 18 maps in the live repair queue.
-Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
+runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `xmap25`, and `xmap29`
+subsequently passed every acceptance gate, leaving 17 maps in the live repair
+queue.
+Exact retests prove that `tomb05` remains a genuine graph failure.
 `tomb05` reaches objective-core with no closed route
-shared by both flags. `lmctf27` still cannot bind either
-objective root because its nearest flag seeds have no outgoing links.
+shared by both flags.
 Exact `tomb05` replay proves the new TELEPORT_DROP traversal, but it does not
 close the objective core. From the two center dry seeds, the first airborne
 mechanism contact is a cataloged vertical `trigger_push`, not either bottom
@@ -471,7 +471,7 @@ also refuted and no wire change was made. A bounded multi-source Pmove search
 over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
-`lmctf25`, `lmctf27`, `lmctf30`, `lmctf45`, `tomb05`,
+`lmctf25`, `lmctf30`, `lmctf45`, `tomb05`,
 `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
@@ -645,7 +645,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
-| `lmctf27` | PASS: 620 seeds, 6,751 retained links, 316 authenticated plans, and 490 seeds reachable from both roots; both C readers, Python, lint, SNAG, fresh cold load, and runtime-ready pass. Budget, accepted-map identity, and full source gates remain before integration. |
+| `lmctf27` | PASS and integrated: 620 seeds, 6,751 retained links, 316 authenticated plans, and 490 seeds reachable from both roots; both C readers, Python, lint, SNAG, fresh cold load, runtime-ready, accepted-map identity, GNU, Make/Clang, production linkage, and deslop pass. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
@@ -655,7 +655,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
-| `xmap04` | 1,094 seeds all prune. Correction: the automatic-door-to-stock-platform ascent is causal, moving all 485 blue-only seeds into shared reach while 489 red-only remain. The missing reverse belongs to that same key234 platform: top dispatch does not summon and door-mediated bottom egress proves none. Ordinary and existing-family crossings are refuted; those two PLATFORM predicates are under diagnosis. |
+| `xmap04` | Causal closure is proved: the automatic-door ascent plus the exact reverse key234 transaction yields 974 shared seeds and mutual objective reach. The diagnostic edge then fails materialization because it has no plan. The active unit is generic PLATFORM serialization/runtime replay for upper dispatch, timer-safe center board, carry to bottom, and exact automatic-door lower egress. |
 | `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |

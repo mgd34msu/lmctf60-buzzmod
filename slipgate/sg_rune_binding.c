@@ -109,6 +109,33 @@ static uint32_t Binding_EdgeCount(const rune_t *rune,
 	return count;
 }
 
+static int Binding_DirectDoorEntryReachesMover(const rune_t *rune,
+	const rune_mechanism_plan_t *plan,
+	const rune_mechanism_node_t *entry,
+	const rune_mechanism_node_t *mover)
+{
+	uint32_t ordinal;
+	uint32_t paths = Binding_EdgeCount(rune, plan, entry->key, mover->key,
+		SG_MECH_EDGE_TARGET);
+
+	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&rune->mechanism_edges[plan->first_edge + ordinal];
+		const rune_mechanism_node_t *relay;
+
+		if (edge->from_key != entry->key ||
+		    edge->kind != SG_MECH_EDGE_TARGET ||
+		    !(relay = SG_RuneMechanismNodeByKey(rune, edge->to_key)) ||
+		    relay->kind != SG_MECH_NODE_RELAY ||
+		    relay->use_callback != SG_MECH_CALLBACK_USE_TRIGGER_RELAY)
+			continue;
+		paths += Binding_EdgeCount(rune, plan, relay->key, mover->key,
+			SG_MECH_EDGE_TARGET);
+	}
+	return paths == 1U;
+}
+
 static int Binding_TrainTerminals(const rune_t *rune,
 	const rune_mechanism_plan_t *plan,
 	const rune_mechanism_node_t **closed_out,
@@ -425,8 +452,7 @@ static int Binding_ControllerShape(const rune_t *rune,
 		       Binding_NodeDoorMover(mover) && plan->cooldown_ms > 0U &&
 		       Binding_DoorMoverCount(rune, plan, mover) ==
 		           plan->expected_members &&
-		       Binding_EdgeCount(rune, plan, entry->key, mover->key,
-		           SG_MECH_EDGE_TARGET) == 1U;
+		       Binding_DirectDoorEntryReachesMover(rune, plan, entry, mover);
 	case SG_MECHANISM_CONTROLLER_BUTTON_DOOR:
 		return link->action == RL_BUTTON_DOOR &&
 		       entry->kind == SG_MECH_NODE_BUTTON &&
