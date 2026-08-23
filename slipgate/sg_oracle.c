@@ -99,6 +99,8 @@ static qboolean SG_OracleBoundSameDoorSet(
 	const sg_rune_mechanism_binding_t *binding, edict_t *trigger);
 static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph);
 static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph);
+static qboolean SG_OracleRotatingDoorBoxOverlapIsCoarse(edict_t *door,
+	const sg_phantom_t *ph);
 static int SG_OracleLiveEdictIndex(const edict_t *ent);
 static qboolean SG_OracleMoverSweepIdentity(edict_t *member);
 static int SG_DeclaredDoorMembersResolved(edict_t *source,
@@ -1093,6 +1095,7 @@ static void *SG_OracleDoorBoundsCacheTestAllocationFailure(int size)
 int SG_OracleTestDoorBoundsCacheCases(void)
 {
 	edict_t saved, *door;
+	sg_phantom_t phantom;
 	sg_oracle_door_bounds_cache_t *rotating_entry;
 	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
 	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
@@ -1159,6 +1162,17 @@ int SG_OracleTestDoorBoundsCacheCases(void)
 	VectorSet(door->moveinfo.end_angles, 0.0f, 90.0f, 0.0f);
 	SG_OracleDoorBounds(door, hull_mins, hull_maxs,
 	                    expected_mins, expected_maxs);
+	memset(&phantom, 0, sizeof(phantom));
+	VectorCopy(door->s.origin, phantom.origin);
+	if (SG_OracleRotatingDoorBoxOverlapIsCoarse(door, &phantom))
+		failures |= 128;
+	phantom.origin[0] = expected_maxs[0] + 1.0f;
+	if (!SG_OracleRotatingDoorBoxOverlapIsCoarse(door, &phantom))
+		failures |= 256;
+	door->solid = SOLID_NOT;
+	if (SG_OracleRotatingDoorBoxOverlapIsCoarse(door, &phantom))
+		failures |= 512;
+	door->solid = SOLID_BSP;
 	SG_OracleDoorBoundsCacheBegin();
 	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
 	                          actual_mins, actual_maxs);
@@ -1469,6 +1483,33 @@ static qboolean SG_OracleSegmentBox(const vec3_t start, const vec3_t end,
 		}
 	}
 	return true;
+}
+
+/* SV_LinkEdict publishes a rotating BSP through a coarse radius cube.  A
+ * partial-arc door can therefore appear in AREA_SOLID even when the player is
+ * outside every authenticated pose of the brush.  The complete analytic door
+ * sweep remains collision authority for that broad-phase hit. */
+static qboolean SG_OracleRotatingDoorBoxOverlapIsCoarse(edict_t *door,
+	const sg_phantom_t *ph)
+{
+	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t mins, maxs;
+	int index, axis;
+
+	if (!door || !ph || door->solid != SOLID_BSP || !door->classname ||
+	    strcmp(door->classname, "func_door_rotating") != 0)
+		return false;
+	index = SG_OracleLiveEdictIndex(door);
+	if (index <= 0)
+		return false;
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs, mins, maxs);
+	if (!SG_OracleFinite3(mins) || !SG_OracleFinite3(maxs))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if (mins[axis] > maxs[axis])
+			return false;
+	return !SG_OracleSegmentBox(ph->origin, ph->origin, mins, maxs);
 }
 
 typedef struct sg_oracle_population_snapshot_s
@@ -4883,6 +4924,8 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 		    !strcmp(hit->classname, "func_rotating") &&
 		    !SG_OracleRotatorEntitySweepBlocks(hit, ph->origin, hull_mins,
 		        hull_maxs, ph->origin, MASK_PLAYERSOLID))
+			continue;
+		if (SG_OracleRotatingDoorBoxOverlapIsCoarse(hit, ph))
 			continue;
 		/* World collision is supplied by the BSP, not BoxEdicts. Any linked
 		 * solid here is a client, mover, door, or other time-varying obstacle. */
