@@ -381,9 +381,10 @@ including `lmctf02a` and `lmctf04`.
       rejection of an exact same-plan duplicate. No reader or cold-load gate has
       run yet.
 
-The corrected old no-artifact queue contains 23 maps after the later accepted
+The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs.
+runs. `lmctf58` subsequently passed every acceptance gate, leaving 22 maps in
+the live repair queue.
 Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
 `tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
@@ -471,9 +472,9 @@ proved zero stable exact arrivals in both directions, so that controller is
 also refuted and no wire change was made. A bounded multi-source Pmove search
 over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
-The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
-`lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
-`tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
+The live exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
+`lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `tomb05`,
+`tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
