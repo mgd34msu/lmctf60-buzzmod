@@ -101,6 +101,8 @@ static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph);
 static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph);
 static int SG_OracleLiveEdictIndex(const edict_t *ent);
 static qboolean SG_OracleMoverSweepIdentity(edict_t *member);
+static int SG_DeclaredDoorMembersResolved(edict_t *source,
+	edict_t **members, int capacity);
 
 /* A synchronous loader replay deliberately poses authenticated movers without
  * running their callbacks.  During that scope the immutable sealed topology
@@ -1726,10 +1728,10 @@ static qboolean SG_OracleDoorMember(edict_t *source, edict_t *ent)
 	/* Resolve declared controllers through the same exact enumeration used to
 	 * publish their proof pose.  This includes one authenticated synchronous
 	 * relay hop as well as direct and generated door triggers. */
-	if (SG_OracleDeclaredDoorSourceSafe(source))
+	count = SG_DeclaredDoorMembersResolved(source, members,
+	    SG_PHANTOM_ARMED_DOORS);
+	if (count >= 0)
 	{
-		count = SG_DeclaredDoorMembers(source, members,
-		    SG_PHANTOM_ARMED_DOORS);
 		for (index = 0; index < count; index++)
 			if (members[index] == ent)
 				return true;
@@ -4360,18 +4362,18 @@ static int SG_DeclaredDoorMembersAddTeam(edict_t *target,
  * masters, while G_Find may also encounter more than one member of a team;
  * deduplicate the physical brushes rather than charging or relinking them
  * twice. */
-static int SG_DeclaredDoorMembersInternal(edict_t *trigger,
-	edict_t **members, int capacity, qboolean delayed)
+static int SG_DeclaredDoorMembersResolved(edict_t *trigger,
+	edict_t **members, int capacity)
 {
 	edict_t *target = NULL;
 	int count = 0;
 
-	if (!(delayed ? SG_OracleDeclaredActivatorSafeWithDelay(trigger, true) :
-	        SG_OracleDeclaredDoorSourceSafe(trigger)) ||
-	    !members || capacity <= 0)
+	if (!trigger || !members || capacity <= 0)
 		return -1;
 	if (trigger->touch == Touch_DoorTrigger)
 	{
+		if (!trigger->owner)
+			return -1;
 		edict_t *master = trigger->owner->teammaster
 		    ? trigger->owner->teammaster : trigger->owner;
 		edict_t *member;
@@ -4384,10 +4386,16 @@ static int SG_DeclaredDoorMembersInternal(edict_t *trigger,
 		}
 		return count;
 	}
+	if (!trigger->classname ||
+	    (strcmp(trigger->classname, "trigger_multiple") != 0 &&
+	     strcmp(trigger->classname, "func_button") != 0) ||
+	    !trigger->target || !trigger->target[0])
+		return -1;
 	while ((target = G_Find(target, FOFS(targetname), trigger->target)) != NULL)
 	{
 		if (target->classname &&
 		    !Q_stricmp(target->classname, "trigger_relay") &&
+		    !strcmp(trigger->classname, "trigger_multiple") &&
 		    SG_OracleDeclaredRelayDoorTargetsSafe(target))
 		{
 			edict_t *relay_target = NULL;
@@ -4414,6 +4422,15 @@ static int SG_DeclaredDoorMembersInternal(edict_t *trigger,
 			return -1;
 	}
 	return count;
+}
+
+static int SG_DeclaredDoorMembersInternal(edict_t *trigger,
+	edict_t **members, int capacity, qboolean delayed)
+{
+	if (!(delayed ? SG_OracleDeclaredActivatorSafeWithDelay(trigger, true) :
+	        SG_OracleDeclaredDoorSourceSafe(trigger)))
+		return -1;
+	return SG_DeclaredDoorMembersResolved(trigger, members, capacity);
 }
 
 int SG_DeclaredDoorMembers(edict_t *trigger, edict_t **members,
