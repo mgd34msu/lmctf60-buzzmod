@@ -572,11 +572,6 @@ static void Seed_Add(vec3_t origin)
 	 * undefined float-to-short conversion and later write a self-rejected rune. */
 	if (!Seed_OnPmoveGrid(origin))
 		return;
-	if (gen_num_seeds >= SEED_MAX)
-	{
-		gen_seed_overflow = true;
-		return;
-	}
 	/* The entity germ pass tests mapper origin before grounding, and every
 	 * caller can converge on the same floor point. The final grounded point is
 	 * the identity that matters, so dedupe again at the only insertion gate. */
@@ -590,6 +585,14 @@ static void Seed_Add(vec3_t origin)
 	 * source. */
 	if (submerged && (watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
 		return;
+	/* Filling the last slot is legal. Only a distinct, admissible seed beyond
+	 * the shared graph capacity is an overflow; duplicate or hazardous
+	 * candidates do not make an otherwise complete graph fail. */
+	if (gen_num_seeds >= SEED_MAX)
+	{
+		gen_seed_overflow = true;
+		return;
+	}
 	VectorCopy(origin, gen_seeds[gen_num_seeds].origin);
 	gen_seeds[gen_num_seeds].area_hint = 0;
 	gen_seeds[gen_num_seeds].flags = submerged ? RSF_WATER : 0;
@@ -2352,7 +2355,6 @@ fail:
 
 
 #define SG_WATER_SPACING	64.0f		/* the water lattice, 3D */
-#define SG_WATER_MAX		8192		/* cap: a big ocean must not eat SEED_MAX */
 #define SG_SWIM_REACH		192.0f		/* swim pairs proven within this, 3D */
 #define SG_PAD_REACH		RUNE_TELEPORT_SEED_REACH
 
@@ -2488,15 +2490,16 @@ static qboolean Seed_WaterFree(vec3_t p)
 /*
  * The six lattice neighbours of a point, in three dimensions -- a water
  * volume has an inside, so up and down are directions like any other.
- * Returns how many became seeds.
+ * Returns false only when a distinct, admissible water seed exceeds the
+ * shared graph capacity.
  */
-static int Seed_WaterNeighbours(vec3_t from)
+static qboolean Seed_WaterNeighbours(vec3_t from)
 {
 	static const float dirs6[6][3] = {
 		{ 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 },
 		{ 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 },
 	};
-	int k, added = 0;
+	int k;
 
 	for (k = 0; k < 6; k++)
 	{
@@ -2513,10 +2516,13 @@ static int Seed_WaterNeighbours(vec3_t from)
 		if (!Seed_WaterFree(cand))
 			continue;
 		if (Seed_AddWater(cand) < 0)
-			break;              /* seed table full */
-		added++;
+		{
+			if (gen_seed_overflow)
+				return false;
+			break;
+		}
 	}
-	return added;
+	return true;
 }
 
 
@@ -2534,17 +2540,16 @@ static void Seed_Water(void)
 	static const float drops[3] = { 0.0f, -64.0f, -128.0f };
 	int dry = gen_num_seeds;
 	int i, k, z, entries = 0, existing = 0;
+	qboolean capacity_exhausted = false;
 
 	for (i = 0; i < dry; i++)
 		if (gen_seeds[i].flags & RSF_WATER)
 			existing++;
 	gen_num_water = existing;
 
-	for (i = 0; i < dry; i++)
+	for (i = 0; i < dry && !capacity_exhausted; i++)
 	{
-		if (gen_num_water >= SG_WATER_MAX)
-			break;
-		for (k = 0; k < 4; k++)
+		for (k = 0; k < 4 && !capacity_exhausted; k++)
 		{
 			for (z = 0; z < 3; z++)
 			{
@@ -2561,7 +2566,11 @@ static void Seed_Water(void)
 				if (!Seed_WaterFree(cand))
 					continue;
 				if (Seed_AddWater(cand) < 0)
+				{
+					if (gen_seed_overflow)
+						capacity_exhausted = true;
 					break;
+				}
 				entries++;
 				break;          /* one entry per direction is enough */
 			}
@@ -2578,20 +2587,21 @@ static void Seed_Water(void)
 	 * are water-flood frontiers too, not merely labels: otherwise a narrow or
 	 * deep pool can retain one incoming-only floor seed and no swim volume. */
 	gen_first_water = 0;
-	for (i = 0; i < gen_num_seeds && gen_num_water < SG_WATER_MAX; i++)
+	for (i = 0; i < gen_num_seeds && !capacity_exhausted; i++)
 	{
 		vec3_t here;
 
 		if (!(gen_seeds[i].flags & RSF_WATER))
 			continue;
 		VectorCopy(gen_seeds[i].origin, here);
-		Seed_WaterNeighbours(here);
+		if (!Seed_WaterNeighbours(here))
+			capacity_exhausted = true;
 	}
-	if (gen_num_water >= SG_WATER_MAX)
+	if (capacity_exhausted)
 	{
 		gen_water_overflow = true;
-		sg_host.dprint("rune: water seed cap %d reached; graph will not be written\n",
-		               SG_WATER_MAX);
+		sg_host.dprint("rune: total seed capacity %d exhausted during water "
+		               "discovery; graph will not be written\n", SEED_MAX);
 	}
 
 	sg_host.dprint("rune: %d water seeds (%d entered from dry land)\n",
