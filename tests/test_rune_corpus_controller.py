@@ -121,6 +121,7 @@ class FakeGateRunner:
                     runtime / "lib/libffi.so.8",
                     runtime / "lib/liblzma.so.5",
                     runtime / "lib/libz.so.1",
+                    runtime / "lib/libzstd.so.1",
                 )),
                 "sys_path": [str((runtime / f"lib/python{version}").resolve(strict=True))],
                 "dont_write_bytecode": True,
@@ -148,6 +149,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
         action_hash: bytes = b"a",
         runtime_json: bytes = b"private json",
         runtime_source: Path | None = None,
+        runtime_omissions: frozenset[str] = frozenset(),
         actual_tools: bool = False,
         acceptor_output: bytes | None = None,
     ) -> Path:
@@ -196,9 +198,12 @@ class RuneCorpusControllerTests(unittest.TestCase):
             "lib/libffi.so.8": b"private libffi",
             "lib/liblzma.so.5": b"private liblzma",
             "lib/libz.so.1": b"private libz",
+            "lib/libzstd.so.1": b"private libzstd",
         }
         if runtime_source is None:
             for relative, data in runtime_files.items():
+                if relative in runtime_omissions:
+                    continue
                 path = runtime / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 if ".so" in path.name and not data.startswith(b"\x7fELF"):
@@ -726,6 +731,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(controller.CorpusError, "bytecode cache"):
             controller._python_runtime_layout(entries)
+
+    def test_python_runtime_closure_requires_libzstd(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                controller.CorpusError, r"libraries=.*'libzstd': 0"
+            ):
+                self.make_snapshot(
+                    Path(temporary),
+                    runtime_omissions=frozenset({"lib/libzstd.so.1"}),
+                )
 
     def test_private_runtime_probe_rejects_host_origins_and_ignores_host_env(self):
         with tempfile.TemporaryDirectory() as temporary:
