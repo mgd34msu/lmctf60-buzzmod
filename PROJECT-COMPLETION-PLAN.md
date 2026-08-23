@@ -381,8 +381,8 @@ including `lmctf02a` and `lmctf04`.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58`, `lmctf07`, `lmctf40`, and `xmap29` subsequently passed every
-acceptance gate, leaving 19 maps in the live repair queue.
+runs. `lmctf58`, `lmctf07`, `lmctf40`, `xmap25`, and `xmap29` subsequently
+passed every acceptance gate, leaving 18 maps in the live repair queue.
 Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
 `tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
@@ -473,7 +473,7 @@ before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
 `lmctf25`, `lmctf27`, `lmctf30`, `lmctf45`, `tomb05`,
 `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
-`xmap13`, `xmap18`, `xmap25`, and `xmap26`.
+`xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
 module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
@@ -600,16 +600,14 @@ common gate therefore proves authoritative water movement until matched trigger
 contact and platform support coincide, then switches to the existing lift
 hold, carry, and egress transaction.
 The canonical source also rejects a known water-seed-capacity overflow before
-base-link proof. An isolated real `xmap29`
-run now reaches the same explicit no-write failure in about four seconds rather
-than wasting the full generation timeout; this improves boundedness but does not
-classify `xmap29` as repaired.
+base-link proof. `xmap29` later passed with a replay-proved sparse water graph,
+so the obsolete dense-capacity failure is no longer in the repair queue.
 Parallel graph-failure triage groups the remaining work into
 shared teleporter, platform/lift, door/train/activation, and push-controller
 repairs, with targeted train/elevator and advanced-push extensions after those
-batches. `xmap13` joins the speed-85 push retest; `xmap18` joins the
-teleporter/shootable-door batch; and `xmap25` joins the platform/teleporter
-batch. The accepted `smap28` PUSH handoff and authoritative-state repair is the
+batches. `xmap13` joins the speed-85 push retest, while `xmap18` joins the
+teleporter/shootable-door batch. `xmap25` has since passed its full acceptance
+stack. The accepted `smap28` PUSH handoff and authoritative-state repair is the
 source baseline for the `xmap13` retest. That exact retest terminated
 `GEN_FAIL` after 11 minutes 16 seconds, published 2 fixed PUSH links, wrote no
 artifact, and removed all 1,337 seeds during closed-core pruning.
@@ -669,7 +667,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `xmap04` | 1,094 seeds all prune; nine lift links have no descent and another lift lacks staging. |
 | `xmap13` | The baseline publishes two PUSH links and all 1,337 seeds prune; the staged four-link branch still needs its repaired-snapshot run. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
-| `xmap25` | 1,733 seeds are initially shared, but reverse closure from the blue-only component fails. |
+| `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
 | `xmap29` | PASS with a replay-proved sparse water graph: 6,465 seeds, 5,348 exact SWIM links, and 68,935 total links. |
 
