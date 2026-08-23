@@ -2979,6 +2979,8 @@ static int Gen_LiftWaterSeed(const vec3_t bottom_body, edict_t *entry,
 		if (distance > SG_SWIM_REACH * SG_SWIM_REACH)
 			continue;
 		SG_OraclePlace(&phantom, gen_seeds[seed].origin);
+		phantom.waterlevel = gen_source_waterlevel[seed];
+		phantom.watertype = gen_source_watertype[seed];
 		if (!SG_OracleLiftSwimApproach(&phantom, bottom_body, entry,
 		        platform, 0.0f, &proof, NULL, true))
 			continue;

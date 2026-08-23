@@ -6258,7 +6258,7 @@ static qboolean SG_OracleLiftSwimSupported(const sg_phantom_t *ph,
 	vec3_t end;
 	trace_t trace;
 
-	if (!ph || !platform || !ph->groundentity || !sg_host.trace)
+	if (!ph || !platform || !sg_host.trace)
 		return false;
 	VectorCopy(ph->origin, end);
 	end[2] -= 4.0f;

@@ -727,7 +727,6 @@ static void TestLiftSwimApproach(void)
 	platform->classname = "func_plat";
 	entry->touch = Touch_Multi;
 	InitPhantom(&phantom, false);
-	phantom.groundentity = true;
 	CHECK(SG_OracleLiftSwimApproach(&phantom, anchor, entry, platform,
 	    0.0f, &proof, NULL, true));
 	CHECK(proof.arrival_ms == 0);
