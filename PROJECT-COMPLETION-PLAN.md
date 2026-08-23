@@ -399,9 +399,7 @@ teleporter/shootable-door batch; and `xmap25` joins the platform/teleporter
 batch. The accepted `smap28` PUSH handoff and authoritative-state repair is the
 source baseline for the `xmap13` retest. That exact retest terminated
 `GEN_FAIL` after 11 minutes 16 seconds, published 2 fixed PUSH links, wrote no
-artifact, and removed all 1,337 seeds during closed-core pruning. Result
-SHA-256 is
-`836ca597c6fdf22565d4e57c5a5386933caf5f16d6b67dfe6de599d297cabda1`.
+artifact, and removed all 1,337 seeds during closed-core pruning.
 The BSP contains 12 connected overlapping push fields with equivalent stock
 impulses plus 4 singleton fields; the accepted single-trigger controller
 cannot authenticate the overlapping fields. An exact multi-member field
@@ -410,16 +408,19 @@ touches only from equivalent members, reject mixed fields, and preserve the
 accepted single-member `smap28` behavior.
 The completed staged multi-field attempt passes the full GNU and Clang/Make
 host suites and publishes four exact PUSH links, but the real `xmap13` smoke
-still has no shared objective core and terminates `GEN_FAIL`. The active
-diagnostic is determining whether valid multi-stage proofs are absent or the
-bounded selector discards them in favor of nearer one-stage candidates. The
-admission will not be widened without an exact replay witness.
+still has no shared objective core and terminates `GEN_FAIL`. A recovered
+instrumented smoke completed base-link proof across all 1,337 seeds and again
+published four one-stage PUSH links. It produced no multi-stage candidate
+before selection, so the bounded selector is not discarding a valid staged
+proof. The next repair must find the missing exact staged replay witness before
+changing admission.
 
 The latest process crash removed the temporary worktrees and map servers. It
 did not change either canonical branch or the saved repair branches. Work has
 resumed on `lmctf07`, `tomb05`, and `xmap13` from their saved commits. Only the
-uncommitted diagnostics and implementations must be reconstructed. The
-`xmap26` performance repair resumes when the next worker slot opens.
+uncommitted diagnostics and implementations had to be reconstructed. The
+`xmap26` performance repair is also active from the recorded isolated timing
+baseline.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
