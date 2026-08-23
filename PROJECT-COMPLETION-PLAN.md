@@ -330,6 +330,14 @@ including `lmctf02a` and `lmctf04`.
       and had not returned after more than five minutes. It was reverted. The
       replacement reuses the unique proved high crossing, then separately
       proves each low-button approach and high-entry handoff with bounded work.
+      Its first real smoke finished normally in 3 minutes 45 seconds, retained
+      two touch and four shoot links, but added no extended touch link and left
+      the vertical objective gap unchanged. All four low buttons have exact
+      approaches, but each low-contact-to-high-entry proof fails before the
+      crossing leg. The active diagnostic replays only those authenticated
+      low-source/high-seed pairs through the existing rocket-jump oracle. A
+      success would be an independent rocket-jump link into the already-proved
+      high touch train link, not a relabeled train entry.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -356,8 +364,13 @@ contact-neighborhood, trace-plane, and fixed-point bracket experiments were
 refuted. The final generic bracket reproduced the saved fixture's exact source,
 lip, and heading on real `tomb05`, but the unchanged oracle stayed grounded and
 timed out without traversing. The fixture is valid for the isolated contract,
-not a real map traversal. That entire contact-edge experiment is being removed;
-diagnosis returns to the post-PUSH component graph for the actual missing leg.
+not a real map traversal. That entire contact-edge experiment was removed;
+the final component graph proves that rocket jumps provide one-way inbound legs
+from the outer basins to each flag SCC. The flag exits are ordinary RUN/HOOK on
+one side and RUN/JUMP on the other, but they terminate in dead SCCs. PUSH_JUMP
+targets unrelated upper components. Exact replay of 1,303 topology-derived
+outbound DROP pairs proved none, so DROP is not the return controller. The
+existing HOOK oracle is now being tested over the same outbound frontier.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -429,8 +442,16 @@ full GNU and Make/Clang host suites pass. Corrected per-source profiling shows
 stable sources finish in about 4.5--5 seconds. Source 0 makes 419 prover calls,
 while ordinary RUN/JUMP accounts for only 12 calls and 244 steps. DROP remains
 dominant. The earlier no-output probe expected a removed marker and ran past
-source 0. Temporary counters are now dividing DROP time between lip search and
-rollout/reducer work before the next general optimization.
+source 0. Exact stage profiling attributes 4.755 of 4.824 rollout seconds to
+6,379 native oracle frames. It reused 7,643 cached frames; reducer, destination
+contact, and cache work together took only 32 milliseconds. A proposed general
+optimization replaced lip-keyed linear prefixes with a bounded per-source trie
+of exact command histories to share native movement across lip candidates.
+Exact measurement refuted that design: it created essentially
+the same native nodes and cache hits as the linear cache, proving no additional
+cross-lip sharing. The trie and its probes were reverted. The next measurement
+counts repeated full native transition inputs among the remaining cache misses
+before any broader state-transition cache is considered.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
