@@ -2215,6 +2215,43 @@ fail:
 	return false;
 }
 
+static qboolean Mechanism_BindShootDoor(rune_link_t *link, edict_t *master,
+	uint32_t opening_bound_ms)
+{
+	edict_t *member;
+	uint32_t master_key = Mechanism_EntityKey(master);
+	uint16_t members = 0U;
+
+	if (!link || !master || master_key == SG_MECH_NO_KEY ||
+	    opening_bound_ms == 0U || opening_bound_ms > RUNE_MAX_COST_MS)
+		goto fail;
+	for (member = master; member; member = member->teamchain)
+	{
+		const rune_mechanism_node_t *node =
+			Mechanism_Node(Mechanism_EntityKey(member));
+
+		if (!node || (node->kind != SG_MECH_NODE_DOOR_MASTER &&
+		        node->kind != SG_MECH_NODE_DOOR_MEMBER) ||
+		    (node->flags & (SG_MECH_NODEF_MOVER |
+		         SG_MECH_NODEF_SHOOTABLE)) !=
+		        (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE) ||
+		    node->team_master_key != master_key ||
+		    !SG_MechCatalogEntityExecutionMatches(node->key, node,
+		        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) || members == UINT16_MAX)
+			goto fail;
+		members++;
+	}
+	if (members == 0U)
+		goto fail;
+	return Mechanism_Bind(link, master_key, master_key, SG_MECH_NO_KEY,
+		SG_MECH_NO_KEY, SG_MECHANISM_CONTROLLER_TRAIN_SHOOT, members,
+		opening_bound_ms);
+
+fail:
+	gen_mechanism_failed = true;
+	return false;
+}
+
 static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
 	edict_t *approach_door, edict_t *egress_door,
 	uint16_t expected_members)
@@ -4149,6 +4186,27 @@ static float Train_SeedSweepAxisGap(const vec3_t origin,
 	if (side == upper[axis])
 		return (origin[axis] + hull_mins[axis]) - sweep_maxs[axis];
 	return HUGE_VALF;
+}
+
+static float Train_SeedSweepGapSquared(const vec3_t origin,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs)
+{
+	static const float hull_mins[3] = { -16.0f, -16.0f, -24.0f };
+	static const float hull_maxs[3] = { 16.0f, 16.0f, 32.0f };
+	float distance = 0.0f;
+
+	for (int axis = 0; axis < 3; axis++)
+	{
+		float body_min = origin[axis] + hull_mins[axis];
+		float body_max = origin[axis] + hull_maxs[axis];
+		float gap = body_max < sweep_mins[axis]
+			? sweep_mins[axis] - body_max
+			: (body_min > sweep_maxs[axis]
+				? body_min - sweep_maxs[axis] : 0.0f);
+
+		distance += gap * gap;
+	}
+	return distance;
 }
 
 static void Link_Trains(void)
@@ -8521,6 +8579,392 @@ done:
 	return ok;
 }
 
+static qboolean ShootDoor_Shot(const vec3_t source, edict_t *master,
+	vec3_t contact_out, int *flight_ms)
+{
+	edict_t *member;
+	vec3_t aim, angles, forward, muzzle, end;
+	trace_t trace;
+
+	if (contact_out) VectorClear(contact_out);
+	if (flight_ms) *flight_ms = 0;
+	if (!source || !master || !contact_out || !flight_ms)
+		return false;
+	for (member = master; member; member = member->teamchain)
+	{
+		if (!member->inuse || !member->classname ||
+		    strcmp(member->classname, "func_door") || member->health <= 0 ||
+		    member->health != member->max_health ||
+		    member->takedamage != DAMAGE_YES || !member->die)
+			return false;
+		for (int axis = 0; axis < 3; axis++)
+			aim[axis] = 0.5f * (member->absmin[axis] + member->absmax[axis]);
+		if (!SG_BlasterAimAngles(source, 22.0f, RIGHT_HANDED, aim, angles,
+		        muzzle))
+			continue;
+		AngleVectors(angles, forward, NULL, NULL);
+		VectorMA(muzzle, 8192.0f, forward, end);
+		trace = sg_host.trace(muzzle, NULL, NULL, end, NULL, MASK_SHOT);
+		if (trace.ent != member || trace.startsolid || trace.allsolid ||
+		    trace.fraction <= 0.0f || trace.fraction >= 1.0f)
+			continue;
+		VectorCopy(trace.endpos, contact_out);
+		VectorSubtract(contact_out, muzzle, end);
+		*flight_ms = (int)ceilf(VectorLength(end));
+		return *flight_ms > 0 && *flight_ms <= RUNE_MAX_COST_MS;
+	}
+	return false;
+}
+
+static edict_t *ShootDoor_StandingSupport(const vec3_t origin)
+{
+	vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t down;
+	trace_t trace;
+
+	VectorCopy(origin, down);
+	down[2] -= 4.0f;
+	trace = sg_host.trace((vec_t *)origin, mins, maxs, down, NULL,
+		MASK_PLAYERSOLID);
+	if (trace.startsolid || trace.allsolid || trace.fraction >= 1.0f ||
+	    trace.plane.normal[2] < 0.7f)
+		return NULL;
+	return trace.ent;
+}
+
+static uint32_t ShootDoor_OpeningBound(edict_t *master)
+{
+	edict_t *member;
+	float maximum_ms = 0.0f;
+
+	for (member = master; member; member = member->teamchain)
+	{
+		vec3_t delta;
+		float duration_ms;
+
+		if (member->moveinfo.speed <= 0.0f)
+			return 0U;
+		VectorSubtract(member->moveinfo.end_origin,
+			member->moveinfo.start_origin, delta);
+		duration_ms = VectorLength(delta) * 1000.0f /
+			member->moveinfo.speed + 100.0f;
+		if (!isfinite(duration_ms) || duration_ms <= 0.0f)
+			return 0U;
+		if (duration_ms > maximum_ms)
+			maximum_ms = duration_ms;
+	}
+	if (maximum_ms <= 0.0f || maximum_ms > RUNE_MAX_COST_MS)
+		return 0U;
+	return (uint32_t)ceilf(maximum_ms / 100.0f) * 100U;
+}
+
+static qboolean ShootDoor_PoseOpen(edict_t *master, door_pose_t *saved,
+	int capacity, int *count_out, vec3_t sweep_min, vec3_t sweep_max)
+{
+	edict_t *member;
+	int count = 0;
+
+	if (count_out) *count_out = 0;
+	if (!master || !saved || capacity <= 0 || !count_out)
+		return false;
+	VectorSet(sweep_min, HUGE_VALF, HUGE_VALF, HUGE_VALF);
+	VectorSet(sweep_max, -HUGE_VALF, -HUGE_VALF, -HUGE_VALF);
+	for (member = master; member; member = member->teamchain)
+	{
+		door_pose_t *pose;
+
+		if (count >= capacity)
+			goto fail;
+		pose = &saved[count++];
+		memset(pose, 0, sizeof(*pose));
+		pose->ent = member;
+		VectorCopy(member->s.origin, pose->origin);
+		VectorCopy(member->s.old_origin, pose->old_origin);
+		VectorCopy(member->s.angles, pose->angles);
+		VectorCopy(member->velocity, pose->velocity);
+		VectorCopy(member->avelocity, pose->avelocity);
+		pose->state = member->moveinfo.state;
+		pose->solid = member->solid;
+		pose->linkcount = member->linkcount;
+		for (int axis = 0; axis < 3; axis++)
+		{
+			float start_min = member->moveinfo.start_origin[axis] +
+				member->mins[axis];
+			float start_max = member->moveinfo.start_origin[axis] +
+				member->maxs[axis];
+			float end_min = member->moveinfo.end_origin[axis] +
+				member->mins[axis];
+			float end_max = member->moveinfo.end_origin[axis] +
+				member->maxs[axis];
+
+			if (start_min < sweep_min[axis]) sweep_min[axis] = start_min;
+			if (end_min < sweep_min[axis]) sweep_min[axis] = end_min;
+			if (start_max > sweep_max[axis]) sweep_max[axis] = start_max;
+			if (end_max > sweep_max[axis]) sweep_max[axis] = end_max;
+		}
+		VectorCopy(member->moveinfo.end_origin, member->s.origin);
+		VectorCopy(member->moveinfo.end_origin, member->s.old_origin);
+		VectorClear(member->velocity);
+		VectorClear(member->avelocity);
+		member->moveinfo.state = SG_PLAT_STATE_TOP;
+		member->solid = SOLID_BSP;
+		sg_host.linkentity(member);
+	}
+	*count_out = count;
+	return count > 0;
+
+fail:
+	DoorPose_Restore(saved, count);
+	return false;
+}
+
+static int ShootDoor_PassageAxis(edict_t *master,
+	const vec3_t sweep_min, const vec3_t sweep_max)
+{
+	int motion_axis = -1;
+	int passage_axis = -1;
+	float passage_extent = HUGE_VALF;
+
+	for (int axis = 0; axis < 3; axis++)
+	{
+		if (fabsf(master->moveinfo.end_origin[axis] -
+		        master->moveinfo.start_origin[axis]) <= 0.125f)
+			continue;
+		if (motion_axis >= 0)
+			return -1;
+		motion_axis = axis;
+	}
+	if (motion_axis < 0)
+		return -1;
+	for (int axis = 0; axis < 2; axis++)
+		if (axis != motion_axis &&
+		    sweep_max[axis] - sweep_min[axis] < passage_extent)
+		{
+			passage_axis = axis;
+			passage_extent = sweep_max[axis] - sweep_min[axis];
+		}
+	return passage_axis;
+}
+
+static qboolean ShootDoor_AddLink(int from, int to, edict_t *master,
+	uint32_t opening_bound, int cross_ms, int flight_ms)
+{
+	int before = gen_num_links;
+	int cost = cross_ms + flight_ms + (int)opening_bound;
+	rune_link_t *link;
+
+	if (cost <= 0 || cost > RUNE_MAX_COST_MS || cross_ms <= 0 ||
+	    cross_ms > cost || (cross_ms % 100) != 0)
+		return false;
+	if (!Link_Add(from, to, RL_TRAIN, (short)cost, 0))
+		return false;
+	if (gen_num_links == before)
+		return true;
+	link = &gen_links[gen_num_links - 1];
+	VectorCopy(gen_seeds[from].origin, link->anchor);
+	VectorCopy(gen_seeds[to].origin, link->mechanism_anchor);
+	link->provenance = RL_DECLARED;
+	link->heading_slack = RUNE_DECLARED_CONTROL_MARKER;
+	link->sweep_clear_ms = (uint16_t)cross_ms;
+	link->mode = RLCM_PREOPEN;
+	if (!Mechanism_BindShootDoor(link, master, opening_bound))
+	{
+		gen_num_links = before;
+		return false;
+	}
+	gen_train_links++;
+	gen_declared_links++;
+	return true;
+}
+
+static qboolean Link_ShootDoors(const door_topology_t *topology,
+	int red_root, int blue_root)
+{
+	int link_mark = gen_num_links;
+	int train_mark = gen_train_links;
+	int declared_mark = gen_declared_links;
+	uint32_t binding_mark = gen_num_mechanism_bindings;
+	byte *red_reach = NULL;
+	byte *blue_reach = NULL;
+	qboolean closed = false;
+
+	if (!topology || !topology->component)
+		return false;
+	for (uint32_t node_index = 0U;
+	     node_index < gen_mechanism_catalog.num_nodes; node_index++)
+	{
+		const rune_mechanism_node_t *node =
+			&gen_mechanism_catalog.nodes[node_index];
+		edict_t *master;
+		door_pose_t saved[16];
+		vec3_t sweep_min, sweep_max;
+		int member_count = 0;
+		int passage_axis;
+		int side_component[2] = { -1, -1 };
+		float best_sum = HUGE_VALF;
+		uint32_t opening_bound;
+
+		if (node->kind != SG_MECH_NODE_DOOR_MASTER ||
+		    (node->flags & SG_MECH_NODEF_SHOOTABLE) == 0U ||
+		    node->key == 0U || node->key >= (uint32_t)globals.num_edicts)
+			continue;
+		if (
+		    !(master = &g_edicts[node->key]) ||
+		    !SG_MechCatalogEntityExecutionMatches(node->key, node,
+		        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) ||
+		    !(opening_bound = ShootDoor_OpeningBound(master)) ||
+		    !ShootDoor_PoseOpen(master, saved, 16, &member_count,
+		        sweep_min, sweep_max))
+			continue;
+		passage_axis = ShootDoor_PassageAxis(master, sweep_min, sweep_max);
+		if (passage_axis >= 0)
+		{
+			for (int left = 0; left < gen_num_seeds; left++)
+			{
+				sg_train_gate_side_t left_side;
+				float left_gap;
+
+				if (!gen_source_stable[left] ||
+				    gen_source_waterlevel[left] != 0)
+					continue;
+				left_side = Train_SeedSweepAxisSide(gen_seeds[left].origin,
+					sweep_min, sweep_max, (unsigned int)passage_axis);
+				if (left_side == SG_TRAIN_GATE_SIDE_NONE)
+					continue;
+				left_gap = Train_SeedSweepGapSquared(gen_seeds[left].origin,
+					sweep_min, sweep_max);
+				for (int right = 0; right < gen_num_seeds; right++)
+				{
+					sg_train_gate_side_t right_side;
+					float right_gap;
+
+					if (!gen_source_stable[right] ||
+					    gen_source_waterlevel[right] != 0 ||
+					    topology->component[left] == topology->component[right])
+						continue;
+					right_side = Train_SeedSweepAxisSide(
+						gen_seeds[right].origin, sweep_min, sweep_max,
+						(unsigned int)passage_axis);
+					if (right_side != SG_TrainGateOppositeSide(left_side))
+						continue;
+					right_gap = Train_SeedSweepGapSquared(
+						gen_seeds[right].origin, sweep_min, sweep_max);
+					if (left_gap + right_gap >= best_sum)
+						continue;
+					best_sum = left_gap + right_gap;
+					side_component[0] = topology->component[left];
+					side_component[1] = topology->component[right];
+				}
+			}
+		}
+		DoorPose_Restore(saved, member_count);
+		if (passage_axis < 0 || side_component[0] < 0 ||
+		    side_component[1] < 0)
+			continue;
+		for (int direction = 0; direction < 2; direction++)
+		{
+			qboolean proved = false;
+			int calls = 0;
+			int selected_from = -1;
+			int selected_to = -1;
+			int selected_cross_ms = 0;
+			int selected_flight_ms = 0;
+
+			for (int from = 0; from < gen_num_seeds && !proved && calls < 4096;
+			     from++)
+			{
+				vec3_t contact;
+				int flight_ms;
+				sg_train_gate_side_t from_side;
+
+				if (topology->component[from] != side_component[direction] ||
+				    !gen_source_stable[from] || gen_source_waterlevel[from] != 0 ||
+				    !ShootDoor_Shot(gen_seeds[from].origin, master, contact,
+				        &flight_ms))
+					continue;
+				from_side = Train_SeedSweepAxisSide(gen_seeds[from].origin,
+					sweep_min, sweep_max, (unsigned int)passage_axis);
+				if (!ShootDoor_PoseOpen(master, saved, 16, &member_count,
+				        sweep_min, sweep_max))
+					continue;
+				for (int to = 0; to < gen_num_seeds && !proved && calls < 4096;
+				     to++)
+				{
+					vec3_t delta, landing;
+					int destination = to;
+					int cross_ms;
+					edict_t *landing_support;
+					edict_t *seed_support;
+
+					if (topology->component[to] != side_component[1 - direction] ||
+					    !gen_source_stable[to] || gen_source_waterlevel[to] != 0 ||
+					    Link_Exists(from, to) ||
+					    Train_SeedSweepAxisSide(gen_seeds[to].origin, sweep_min,
+					        sweep_max, (unsigned int)passage_axis) !=
+					        SG_TrainGateOppositeSide(from_side))
+						continue;
+					VectorSubtract(gen_seeds[to].origin, gen_seeds[from].origin,
+						delta);
+					if (delta[0] * delta[0] + delta[1] * delta[1] >
+					        512.0f * 512.0f || fabsf(delta[2]) > 128.0f)
+						continue;
+					calls++;
+					if (member_count > 1)
+					{
+						if (!SG_OracleShootDoorCross(gen_seeds[from].origin,
+						        gen_seeds[to].origin, master, master, sweep_min,
+						        sweep_max, (unsigned int)passage_axis, &cross_ms,
+						        landing))
+							continue;
+						destination = Seed_NearbyIndex(landing);
+						landing_support = ShootDoor_StandingSupport(landing);
+						seed_support = destination >= 0 ?
+							ShootDoor_StandingSupport(
+							    gen_seeds[destination].origin) : NULL;
+						if (destination < 0 || !gen_source_stable[destination] ||
+						    gen_source_waterlevel[destination] != 0 ||
+						    !landing_support || landing_support != seed_support ||
+						    !SG_SupportedArrived(landing,
+						        gen_seeds[destination].origin, true, 0, 0, NULL))
+							continue;
+					}
+					else if (!SG_OracleTrainGateCross(gen_seeds[from].origin,
+					        gen_seeds[to].origin, master, master, sweep_min,
+					        sweep_max, (unsigned int)passage_axis, &cross_ms))
+						continue;
+					selected_from = from;
+					selected_to = destination;
+					selected_cross_ms = cross_ms;
+					selected_flight_ms = flight_ms;
+					proved = true;
+				}
+				DoorPose_Restore(saved, member_count);
+			}
+			if (proved && !ShootDoor_AddLink(selected_from, selected_to, master,
+			        opening_bound, selected_cross_ms, selected_flight_ms))
+				goto done;
+		}
+	}
+	red_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	blue_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	closed = red_reach && blue_reach &&
+		Graph_ObjectiveReachMasks(red_root, blue_root, red_reach, blue_reach) &&
+		blue_reach[red_root] && red_reach[blue_root];
+
+done:
+	if (!closed)
+	{
+		gen_num_links = link_mark;
+		gen_num_mechanism_bindings = binding_mark;
+		gen_train_links = train_mark;
+		gen_declared_links = declared_mark;
+	}
+	if (red_reach) sg_host.level_free(red_reach);
+	if (blue_reach) sg_host.level_free(blue_reach);
+	return closed;
+}
+
 #define OBJECTIVE_CLOSURE_RUN_CALL_MAX 8192
 
 static qboolean Prove_ObjectiveClosure(int red_root, int blue_root)
@@ -8560,6 +9004,11 @@ static qboolean Prove_ObjectiveClosure(int red_root, int blue_root)
 	        red_forward, blue_forward) ||
 	    !Door_TopologyBuild(&topology))
 		goto done;
+	if (Link_ShootDoors(&topology, red_root, blue_root))
+	{
+		closed = true;
+		goto done;
+	}
 
 	for (int i = 0; i < gen_num_links; i++)
 	{

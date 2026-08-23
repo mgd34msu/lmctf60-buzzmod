@@ -134,6 +134,10 @@ TRAIN_GATE_LIVE_TEST_BIN = sg_train_gate_live_test.gnu
 TRAIN_GATE_LIVE_TEST_OBJS = .sg_train_gate_live_test.gnu.o \
 	.sg_train_gate_live_under_test.gnu.o
 TRAIN_GATE_LIVE_TEST_DEPS = $(TRAIN_GATE_LIVE_TEST_OBJS:.o=.d)
+SHOOT_DOOR_LIVE_TEST_BIN = sg_shoot_door_live_test.gnu
+SHOOT_DOOR_LIVE_TEST_OBJS = .sg_shoot_door_live_test.gnu.o \
+	.sg_shoot_door_live_under_test.gnu.o
+SHOOT_DOOR_LIVE_TEST_DEPS = $(SHOOT_DOOR_LIVE_TEST_OBJS:.o=.d)
 BUTTON_GAME_TEST_BIN = sg_button_game_test.gnu
 BUTTON_GAME_TEST_OBJS = .sg_button_game_test.gnu.o \
 	.sg_button_game_live_under_test.gnu.o \
@@ -771,6 +775,7 @@ PUSH_LIVE_TEST_OBJS = .sg_push_live_test.gnu.o \
 PUSH_LIVE_TEST_DEPS = $(PUSH_LIVE_TEST_OBJS:.o=.d)
 PUSH_GAME_INTEGRATION_TEST = tests/test_push_game_integration.py
 TRAIN_GATE_GAME_INTEGRATION_TEST = tests/test_train_gate_game_integration.py
+SHOOT_DOOR_GAME_INTEGRATION_TEST = tests/test_shoot_door_game_integration.py
 ROCKETJUMP_CADENCE_TEST_BIN = sg_rocketjump_cadence_test.gnu
 ROCKETJUMP_CADENCE_TEST_OBJS = .sg_rocketjump_cadence_test.gnu.o \
 	.sg_rocketjump_cadence_under_test.gnu.o
@@ -1101,7 +1106,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
+		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o slipgate/sg_shoot_door_live.o slipgate/sg_shoot_door_game.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -1243,6 +1248,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test \
 	push-game-integration-test train-gate-game-integration-test \
+	shoot-door-game-integration-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test \
@@ -1457,6 +1463,9 @@ $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 $(TRAIN_GATE_LIVE_TEST_BIN): $(TRAIN_GATE_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(TRAIN_GATE_LIVE_TEST_OBJS) $(LDFLAGS)
 
+$(SHOOT_DOOR_LIVE_TEST_BIN): $(SHOOT_DOOR_LIVE_TEST_OBJS)
+	$(CC) -o $@ $(SHOOT_DOOR_LIVE_TEST_OBJS) $(LDFLAGS)
+
 $(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LDFLAGS)
 
@@ -1581,6 +1590,16 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_train_gate_live_under_test.gnu.o: slipgate/sg_train_gate_live.c \
 		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_shoot_door_live_test.gnu.o: tests/sg_shoot_door_live_test.c \
+		slipgate/sg_shoot_door_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_shoot_door_live_under_test.gnu.o: slipgate/sg_shoot_door_live.c \
+		slipgate/sg_shoot_door_live.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
@@ -2801,7 +2820,7 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
-		$(BUTTON_LIVE_TEST_BIN) \
+		$(BUTTON_LIVE_TEST_BIN) $(SHOOT_DOOR_LIVE_TEST_BIN) \
 		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
@@ -2886,6 +2905,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(MOVER_LEASE_TEST_BIN)
 	./$(WATER_FOREST_TEST_BIN)
 	./$(BUTTON_LIVE_TEST_BIN)
+	./$(SHOOT_DOOR_LIVE_TEST_BIN)
 	./$(BUTTON_GAME_TEST_BIN)
 	python3 $(BUTTON_GAME_INTEGRATION_TEST)
 	./$(COMPOUND_GUARD_TEST_BIN)
@@ -3041,6 +3061,9 @@ button-live-test: $(BUTTON_LIVE_TEST_BIN)
 train-gate-live-test: $(TRAIN_GATE_LIVE_TEST_BIN)
 	./$(TRAIN_GATE_LIVE_TEST_BIN)
 
+shoot-door-live-test: $(SHOOT_DOOR_LIVE_TEST_BIN)
+	./$(SHOOT_DOOR_LIVE_TEST_BIN)
+
 button-game-test: $(BUTTON_GAME_TEST_BIN)
 	./$(BUTTON_GAME_TEST_BIN)
 	python3 $(BUTTON_GAME_INTEGRATION_TEST)
@@ -3058,6 +3081,9 @@ push-game-integration-test: $(PUSH_GAME_INTEGRATION_TEST)
 
 train-gate-game-integration-test: $(TRAIN_GATE_GAME_INTEGRATION_TEST)
 	python3 -B $(TRAIN_GATE_GAME_INTEGRATION_TEST)
+
+shoot-door-game-integration-test: $(SHOOT_DOOR_GAME_INTEGRATION_TEST)
+	python3 -B $(SHOOT_DOOR_GAME_INTEGRATION_TEST)
 
 rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
 		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \
@@ -3395,6 +3421,7 @@ endif
 -include $(WATER_FOREST_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
 -include $(TRAIN_GATE_LIVE_TEST_DEPS)
+-include $(SHOOT_DOOR_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)

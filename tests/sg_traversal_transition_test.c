@@ -25,6 +25,17 @@ void SG_TrainGateGameReset(sg_bot_t *bot)
 	(void)bot;
 }
 
+int SG_ShootDoorGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_ShootDoorGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+}
+
 #define CHECK(condition) do { \
 	if (!(condition)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", \

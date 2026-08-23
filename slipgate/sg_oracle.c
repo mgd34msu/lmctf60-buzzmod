@@ -14,6 +14,7 @@
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_rocketjump_live.h"
 #include "slipgate/sg_rocketjump_impact.h"
+#include "slipgate/sg_shoot_door_live.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_door_approach.h"
@@ -7541,7 +7542,8 @@ static qboolean SG_TrainGateHullOutsideAxis(const vec3_t origin,
 static qboolean SG_OracleTrainGateMove(const vec3_t source,
 	const vec3_t target, edict_t *button, edict_t *train,
 	const vec3_t sweep_mins, const vec3_t sweep_maxs,
-	unsigned int passage_axis, qboolean require_cross, int *arrival_ms)
+	unsigned int passage_axis, qboolean require_cross, int *arrival_ms,
+	vec3_t observed_landing)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
@@ -7554,6 +7556,7 @@ static qboolean SG_OracleTrainGateMove(const vec3_t source,
 	usercmd_t cmd;
 	qboolean entered_sweep = false;
 	qboolean ok = false;
+	int source_side = 0;
 	int elapsed;
 
 	if (!source || !target || !button || !button->inuse || !train ||
@@ -7574,14 +7577,39 @@ static qboolean SG_OracleTrainGateMove(const vec3_t source,
 	if (sg_oracle_contaminated || !ph.groundentity || ph.waterlevel != 0)
 		goto done;
 	if (require_cross)
+	{
 		entered_sweep = !SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins,
 		    sweep_maxs, passage_axis);
+		if (observed_landing &&
+		    ph.origin[passage_axis] + ph.maxs[passage_axis] <=
+		    sweep_mins[passage_axis])
+			source_side = -1;
+		else if (observed_landing &&
+		         ph.origin[passage_axis] + ph.mins[passage_axis] >=
+		    sweep_maxs[passage_axis])
+			source_side = 1;
+	}
 	for (elapsed = 0; elapsed < 5000; elapsed += 25)
 	{
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 25;
 		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
 			goto done;
+		if (observed_landing)
+		{
+			float gap = 0.0f;
+
+			if (ph.origin[passage_axis] + ph.maxs[passage_axis] <=
+			    sweep_mins[passage_axis])
+				gap = sweep_mins[passage_axis] -
+				    (ph.origin[passage_axis] + ph.maxs[passage_axis]);
+			else if (ph.origin[passage_axis] + ph.mins[passage_axis] >=
+			    sweep_maxs[passage_axis])
+				gap = ph.origin[passage_axis] + ph.mins[passage_axis] -
+				    sweep_maxs[passage_axis];
+			if (gap * 8.0f <= SG_SHOOT_DOOR_JUMP_APPROACH_Q8)
+				cmd.upmove = 400;
+		}
 		SG_OracleRun(&ph, &cmd, 1);
 		if (sg_oracle_contaminated ||
 		    (ph.waterlevel > 0 &&
@@ -7600,9 +7628,25 @@ static qboolean SG_OracleTrainGateMove(const vec3_t source,
 		        ph.watertype, ph.waterlevel, NULL))
 		{
 			*arrival_ms = elapsed + 25;
+			if (observed_landing)
+				VectorCopy(ph.origin, observed_landing);
 			ok = true;
 			goto done;
 		}
+	}
+	if (observed_landing && require_cross && entered_sweep &&
+	    source_side != 0 && !sg_oracle_contaminated &&
+	    ph.groundentity && ph.waterlevel == 0 &&
+	    ((source_side < 0 &&
+	      ph.origin[passage_axis] + ph.mins[passage_axis] >=
+	          sweep_maxs[passage_axis]) ||
+	     (source_side > 0 &&
+	      ph.origin[passage_axis] + ph.maxs[passage_axis] <=
+	          sweep_mins[passage_axis])))
+	{
+		VectorCopy(ph.origin, observed_landing);
+		*arrival_ms = 5000;
+		ok = true;
 	}
 
 done:
@@ -7622,7 +7666,7 @@ qboolean SG_OracleTrainGateEntry(const vec3_t source,
 	const vec3_t entry, edict_t *button, edict_t *train, int *arrival_ms)
 {
 	return SG_OracleTrainGateMove(source, entry, button, train, NULL, NULL,
-	    0U, false, arrival_ms);
+	    0U, false, arrival_ms, NULL);
 }
 
 qboolean SG_OracleTrainGateCross(const vec3_t entry,
@@ -7631,14 +7675,23 @@ qboolean SG_OracleTrainGateCross(const vec3_t entry,
 	unsigned int passage_axis, int *arrival_ms)
 {
 	return SG_OracleTrainGateMove(entry, target, button, train, sweep_mins,
-	    sweep_maxs, passage_axis, true, arrival_ms);
+	    sweep_maxs, passage_axis, true, arrival_ms, NULL);
+}
+
+qboolean SG_OracleShootDoorCross(const vec3_t entry,
+	const vec3_t target, edict_t *button, edict_t *train,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs,
+	unsigned int passage_axis, int *arrival_ms, vec3_t landing)
+{
+	return SG_OracleTrainGateMove(entry, target, button, train, sweep_mins,
+	    sweep_maxs, passage_axis, true, arrival_ms, landing);
 }
 
 qboolean SG_OracleTrainGateExit(const vec3_t cross,
 	const vec3_t target, edict_t *button, edict_t *train, int *arrival_ms)
 {
 	return SG_OracleTrainGateMove(cross, target, button, train, NULL, NULL,
-	    0U, false, arrival_ms);
+	    0U, false, arrival_ms, NULL);
 }
 
 /* Prove the lift's top-platform-to-static-graph handoff. The caller positions

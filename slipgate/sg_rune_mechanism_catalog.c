@@ -38,6 +38,7 @@ extern void button_wait(edict_t *);
 extern void button_return(edict_t *);
 extern void button_done(edict_t *);
 extern void button_killed(edict_t *, edict_t *, edict_t *, int, vec3_t);
+extern void door_killed(edict_t *, edict_t *, edict_t *, int, vec3_t);
 extern void Think_CalcMoveSpeed(edict_t *);
 extern void Think_SpawnDoorTrigger(edict_t *);
 extern void plat_go_down(edict_t *);
@@ -1836,6 +1837,23 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	     entity->velocity[0] != 0.0f || entity->velocity[1] != 0.0f ||
 	     entity->velocity[2] != 0.0f || entity->avelocity[0] != 0.0f ||
 	     entity->avelocity[1] != 0.0f || entity->avelocity[2] != 0.0f))
+		return 0;
+	if (execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT &&
+	    (node->kind == SG_MECH_NODE_DOOR_MASTER ||
+	     node->kind == SG_MECH_NODE_DOOR_MEMBER) &&
+	    (!entity->classname || strcmp(entity->classname, "func_door") ||
+	     (node->flags & (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE)) !=
+	         (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE) ||
+	     entity->use != door_use || entity->blocked != door_blocked ||
+	     entity->die != door_killed || entity->max_health <= 0 ||
+	     entity->health != entity->max_health ||
+	     !((entity->takedamage == DAMAGE_YES &&
+	        (entity->moveinfo.state == SG_PLAT_STATE_BOTTOM ||
+	         entity->moveinfo.state == SG_PLAT_STATE_DOWN)) ||
+	       (entity->takedamage == DAMAGE_NO &&
+	        (entity->moveinfo.state == SG_PLAT_STATE_UP ||
+	         entity->moveinfo.state == SG_PLAT_STATE_TOP)))))
 		return 0;
 	delay_ms = entity->delay > 0.0f
 		? (uint32_t)Catalog_DelayMS(entity->delay) : 0U;
