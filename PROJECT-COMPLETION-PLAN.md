@@ -305,7 +305,7 @@ including `lmctf02a` and `lmctf04`.
       Replacement exact-source CI is fully green on `slipgate`
       and `main`, including both Windows builds, packaged Linux, all GCC and
       Clang host jobs, both Make dialects, and the version check.
-- [ ] Repair the missing central transition in `lmctf07`. The four exact
+- [x] Repair the missing central transition in `lmctf07`. The four exact
       health-1 buttons each authenticate one firing side on the X axis. Y is
       ambiguous and rejected; Z is the train motion axis and excluded. A real
       smoke with separate firing, entry, and open-pose egress proofs published
@@ -365,26 +365,24 @@ including `lmctf02a` and `lmctf04`.
       RIDE records alongside PREOPEN touch-crossing records, dropping the four
       existing shoot reversals. Filtering that lookup by train mode restores the
       complete 2 touch + 2 ride + 4 shoot graph and retains all 1,889 seeds in
-      both directions. Artifact materialization then rejected the first PREOPEN
-      plan because the sealed stock train was still in its initial
-      `FUNC_TRAIN_FIND` callback state. The active generic fix accepts only NONE
-      or that stock initializer for an otherwise exact train catalog shape and
-      retains rejection of unknown or dynamic callbacks. The complete accepted
-      train series is now replayed on a fresh branch from current `slipgate`;
-      focused gates, both full host suites, module link checking, and deslop
-      pass. The integrated smoke retains all 1,889 seeds in both directions and
-      materializes eight plans, but the writer rejects the serialized plan set
-      before artifact output. The duplicate-link validator incorrectly omits
-      serialized activation-plan identity, collapsing two independently
-      authenticated shoot buttons that share source, destination, action, and
-      mover. C and Python identity are being corrected together while retaining
-      rejection of an exact same-plan duplicate. No reader or cold-load gate has
-      run yet.
+      both directions. Artifact materialization then exposed two independent
+      contract-boundary defects. Link identity omitted the activation plan and
+      collapsed distinct authenticated shoot buttons; the Python reader also
+      lacked the C contract's sealed-stock TRAIN and TRAIN_SHOOT validation.
+      Both now enforce exact plan identity, stock callbacks, the two-corner
+      train cycle, button shape, and four-edge closure while rejecting an exact
+      duplicate or unsealed callback. Both full host suites, 41 Python
+      contract/artifact tests, module linkage, lint, and deslop pass. The fresh
+      immutable smoke passes generation, both C readers, Python, lint, SNAG, and
+      cold load with 3,403 seeds, 69,230 links, 80 mechanism nodes, 56 mechanism
+      edges, 14 triggers, and eight plans. The objective core retains 1,889
+      seeds in both directions. `lmctf07` is complete and leaves the live repair
+      queue.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58` subsequently passed every acceptance gate, leaving 22 maps in
-the live repair queue.
+runs. `lmctf58` and `lmctf07` subsequently passed every acceptance gate,
+leaving 21 maps in the live repair queue.
 Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
 `tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
@@ -472,8 +470,8 @@ proved zero stable exact arrivals in both directions, so that controller is
 also refuted and no wire change was made. A bounded multi-source Pmove search
 over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
-The live exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
-`lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `tomb05`,
+The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
+`lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `tomb05`,
 `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
