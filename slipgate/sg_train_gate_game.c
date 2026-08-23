@@ -99,6 +99,7 @@ static int TrainWitness(int link_index, sg_train_gate_witness_t *witness)
 	    !TrainQ8(rune->seeds[binding.link->from].origin,
 	        witness->source_q8) ||
 	    !TrainQ8(binding.link->anchor, witness->entry_q8) ||
+	    !TrainQ8(binding.link->mechanism_anchor, witness->cross_q8) ||
 	    !TrainQ8(rune->seeds[binding.link->to].origin,
 	        witness->destination_q8))
 		return 0;
@@ -149,6 +150,7 @@ static int TrainObservation(sg_bot_t *bot,
 	edict_t *entity;
 	vec3_t destination;
 	vec3_t entry;
+	vec3_t cross;
 	int axis;
 
 	if (!bot || !(entity = bot->ent) || !entity->inuse || !entity->client ||
@@ -167,11 +169,16 @@ static int TrainObservation(sg_bot_t *bot,
 	for (axis = 0; axis < 3; axis++)
 	{
 		entry[axis] = bot->train_gate.live.witness.entry_q8[axis] * 0.125f;
+		cross[axis] = bot->train_gate.live.witness.cross_q8[axis] * 0.125f;
 		destination[axis] =
 		    bot->train_gate.live.witness.destination_q8[axis] * 0.125f;
 	}
 	observation->entry_arrived = observation->supported && observation->dry &&
 	    SG_SupportedArrived(entity->s.origin, entry,
+	        entity->groundentity != NULL, entity->watertype,
+	        entity->waterlevel, NULL);
+	observation->cross_arrived = observation->supported && observation->dry &&
+	    SG_SupportedArrived(entity->s.origin, cross,
 	        entity->groundentity != NULL, entity->watertype,
 	        entity->waterlevel, NULL);
 	observation->arrived = observation->supported && observation->dry &&
@@ -373,13 +380,16 @@ int SG_TrainGateGameEmit(sg_bot_t *bot, int selected_link)
 		command.msec = SG_TRAIN_GATE_STEP_MS;
 		if (control == SG_TRAIN_GATE_COMMAND_TO_BUTTON ||
 		    control == SG_TRAIN_GATE_COMMAND_TO_ENTRY ||
+		    control == SG_TRAIN_GATE_COMMAND_TO_CROSS ||
 		    control == SG_TRAIN_GATE_COMMAND_TO_EGRESS)
 		{
 			const int16_t *q8 = control == SG_TRAIN_GATE_COMMAND_TO_BUTTON
 			    ? bot->train_gate.live.witness.button_q8
 			    : (control == SG_TRAIN_GATE_COMMAND_TO_ENTRY
 			          ? bot->train_gate.live.witness.entry_q8
-			          : bot->train_gate.live.witness.destination_q8);
+			          : (control == SG_TRAIN_GATE_COMMAND_TO_CROSS
+			                ? bot->train_gate.live.witness.cross_q8
+			                : bot->train_gate.live.witness.destination_q8));
 
 			for (axis = 0; axis < 3; axis++)
 				target[axis] = q8[axis] * 0.125f;

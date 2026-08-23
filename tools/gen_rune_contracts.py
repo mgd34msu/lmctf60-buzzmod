@@ -50,7 +50,7 @@ _PINNED_ENUMS = {
         3: "RLAP_HOOK_CONTROL", 4: "RLAP_WORLD",
         5: "RLAP_TELEPORT_PAD", 6: "RLAP_DOOR_WAIT",
         7: "RLAP_ROCKET_CONTROL", 8: "RLAP_DOOR_PREOPEN_CONTACT",
-        9: "RLAP_DOOR_RIDE_INGRESS_LIP",
+        9: "RLAP_DOOR_RIDE_INGRESS_LIP", 10: "RLAP_TRAIN_CROSS",
     },
     "control_policies": {
         0: "RLCP_RUN", 1: "RLCP_JUMP", 2: "RLCP_DROP",
@@ -59,6 +59,7 @@ _PINNED_ENUMS = {
     },
     "mechanism_policies": {
         0: "RLMP_NONE", 1: "RLMP_DOOR_WORLD_FIXED_1_8",
+        2: "RLMP_TRAIN_WORLD_FIXED_1_8",
     },
     "field_bias_policies": {
         0: "RLFB_NONE", 1: "RLFB_FIXED", 2: "RLFB_ROPE_CVAR",
@@ -714,7 +715,7 @@ def validate_document(document):
                     action["ride_mechanism_anchor_policy"] != 0 or
                     action["mode_mask"] != 1):
                 _fail(where, "ordinary actions require zero mechanism anchors and NONE mode")
-        else:
+        elif mechanism == 1:
             required = 1 | 4 | 8 | 16 | 32 | 64
             if action["mode_mask"] & 1 or not action["trait_mask"] & required == required:
                 _fail(where, "mechanism action lacks atomic door-lease traits or uses NONE mode")
@@ -723,6 +724,15 @@ def validate_document(document):
             if (action["preopen_mechanism_anchor_policy"] != (8 if preopen_enabled else 0) or
                     action["ride_mechanism_anchor_policy"] != (9 if ride_enabled else 0)):
                 _fail(where, "mode-specific mechanism anchor policy mismatch")
+        elif mechanism == 2:
+            required = 1 | 4 | 8 | 16 | 32
+            if (action["trait_mask"] & required != required or
+                    action["mode_mask"] != (1 << 1) or
+                    action["preopen_mechanism_anchor_policy"] != 10 or
+                    action["ride_mechanism_anchor_policy"] != 0):
+                _fail(where, "train mechanism requires one fixed crossing waypoint")
+        else:
+            _fail(where, "unknown mechanism policy")
 
     _validate_action_cycles(actions)
     for action in actions:

@@ -11,6 +11,7 @@ typedef enum sg_train_gate_phase_e
 	SG_TRAIN_GATE_DISPATCH,
 	SG_TRAIN_GATE_OPENING,
 	SG_TRAIN_GATE_ENTRY,
+	SG_TRAIN_GATE_CROSS,
 	SG_TRAIN_GATE_EGRESS,
 	SG_TRAIN_GATE_COMPLETE,
 	SG_TRAIN_GATE_FAILED
@@ -51,6 +52,7 @@ typedef enum sg_train_gate_command_e
 	SG_TRAIN_GATE_COMMAND_AIM_BUTTON,
 	SG_TRAIN_GATE_COMMAND_SHOOT_BUTTON,
 	SG_TRAIN_GATE_COMMAND_TO_ENTRY,
+	SG_TRAIN_GATE_COMMAND_TO_CROSS,
 	SG_TRAIN_GATE_COMMAND_TO_EGRESS
 } sg_train_gate_command_t;
 
@@ -65,6 +67,7 @@ typedef struct sg_train_gate_witness_s
 	int16_t source_q8[3];
 	int16_t button_q8[3];
 	int16_t entry_q8[3];
+	int16_t cross_q8[3];
 	int16_t destination_q8[3];
 	uint16_t opening_bound_ms;
 } sg_train_gate_witness_t;
@@ -78,6 +81,7 @@ typedef struct sg_train_gate_observation_s
 	uint8_t binding_current;
 	uint8_t body_clear;
 	uint8_t entry_arrived;
+	uint8_t cross_arrived;
 	uint8_t arrived;
 	uint8_t weapon_ready;
 	uint8_t aim_contact_current;

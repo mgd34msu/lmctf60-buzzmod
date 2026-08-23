@@ -317,6 +317,8 @@ qboolean SG_OracleTrainGateCross(const vec3_t entry,
 	const vec3_t target, edict_t *button, edict_t *train,
 	const vec3_t sweep_mins, const vec3_t sweep_maxs,
 	unsigned int passage_axis, int *arrival_ms);
+qboolean SG_OracleTrainGateExit(const vec3_t cross,
+	const vec3_t target, edict_t *button, edict_t *train, int *arrival_ms);
 qboolean SG_OracleDeclaredCompoundLiftEgress(const vec3_t source,
 	const vec3_t target, edict_t *support, edict_t *egress_trigger,
 	int *arrival_ms);

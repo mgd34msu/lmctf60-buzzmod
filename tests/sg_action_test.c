@@ -5,9 +5,9 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x3dcf09c1U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x1e9e6975U,
 	"RUNE action contract drift");
-_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0x15be80dbU,
+_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xbef56f72U,
 	"RUNE mechanism contract drift");
 
 static int failures;
@@ -97,8 +97,9 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0027U, RLEP_DRY_BOTH,
 	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_PUSH, RLFB_NONE, 0, "RL_PUSH", "PUSH", "PUSH", "#b76cff" },
-	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x003dU, RLEP_DRY_BOTH,
-	  RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+	{ 1, RL_DECLARED, 0x0008U, 0x02U, 0x003dU, RLEP_DRY_BOTH,
+	  RLAP_WORLD, RLAP_TRAIN_CROSS, RLAP_ZERO, RLCP_DECLARED,
+	  RLMP_TRAIN_WORLD_FIXED_1_8,
 		  RL_TRAIN, RLFB_NONE, 0, "RL_TRAIN", "TRAIN", "TRAIN", "#00a6a6" },
 };
 

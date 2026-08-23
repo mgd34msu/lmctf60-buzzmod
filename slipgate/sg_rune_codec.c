@@ -319,6 +319,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidateAnchor(
 	case RLAP_DOOR_WAIT:
 	case RLAP_DOOR_PREOPEN_CONTACT:
 	case RLAP_DOOR_RIDE_INGRESS_LIP:
+	case RLAP_TRAIN_CROSS:
 		return Codec_VectorOnDoorLattice(anchor) ? RLCODEC_OK :
 			Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	case RLAP_HOOK_CONTROL:
@@ -377,7 +378,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateLinkFields(
 	if (link->sweep_clear_ms == 0U ||
 	    link->sweep_clear_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0U ||
 	    link->sweep_clear_ms > (uint16_t)link->cost_ms ||
-	    policy->mechanism_policy != RLMP_DOOR_WORLD_FIXED_1_8)
+	    (policy->mechanism_policy != RLMP_DOOR_WORLD_FIXED_1_8 &&
+	     policy->mechanism_policy != RLMP_TRAIN_WORLD_FIXED_1_8))
 		return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	if (link->mode == RLCM_PREOPEN)
 		mechanism_policy = (int)policy->preopen_mechanism_anchor_policy;

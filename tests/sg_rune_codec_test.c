@@ -494,7 +494,7 @@ static void TestWholeGolden(void)
 		0x5c, 0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00,
 		0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
 		0x01, 0x00, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
-		0xdb, 0x80, 0xbe, 0x15, 0x01, 0x00, 0x00, 0x00
+		0x72, 0x6f, 0xf5, 0xbe, 0x01, 0x00, 0x00, 0x00
 	};
 
 	FixtureInit(&fixture);
@@ -526,10 +526,10 @@ static void TestWholeGolden(void)
 		TEST_STRING_BYTES) == 0);
 	CHECK_U32(UINT32_C(0x624244c5), fixture.plans[0].closure_crc32);
 	CHECK_U32(UINT32_C(0x77264ff8), GetU32(encoded + 20));
-	CHECK_U32(UINT32_C(0x156f6015),
+	CHECK_U32(UINT32_C(0x7206f6e4),
 		GetU32(encoded + SG_RUNE_CODEC_HEADER_CRC_OFFSET));
 	CHECK(SG_CRC32Buffer(encoded, sizeof(encoded), &file_crc));
-	CHECK_U32(UINT32_C(0xb38611c1), file_crc);
+	CHECK_U32(UINT32_C(0xa5d7b19f), file_crc);
 
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));
@@ -556,6 +556,28 @@ static void TestPrimitiveMalformed(void)
 	fixture_t fixture;
 	unsigned char encoded[SG_RUNE_CODEC_ACTIVATION_NODE_BYTES];
 	sg_rune_codec_activation_node_t decoded;
+	sg_rune_codec_link_t decoded_link;
+
+	FixtureInit(&fixture);
+	fixture.links[0].action = RL_TRAIN;
+	fixture.links[0].provenance = RL_DECLARED;
+	fixture.links[0].cost_ms = 200;
+	SetVector(fixture.links[0].suffix_anchor, 16.0f, 24.0f, 32.0f);
+	SetVector(fixture.links[0].mechanism_anchor, 48.125f, 56.0f, 64.0f);
+	fixture.links[0].sweep_clear_ms = 100U;
+	fixture.links[0].mode = RLCM_PREOPEN;
+	CHECK_DIAGNOSTIC(RLCODEC_OK,
+		SG_RuneCodecEncodeLink(&fixture.links[0], encoded,
+			SG_RUNE_CODEC_LINK_BYTES));
+	CHECK_DIAGNOSTIC(RLCODEC_OK,
+		SG_RuneCodecDecodeLink(encoded, SG_RUNE_CODEC_LINK_BYTES,
+			&decoded_link));
+	CHECK(decoded_link.action == RL_TRAIN);
+	CHECK(decoded_link.mode == RLCM_PREOPEN);
+	CHECK(decoded_link.sweep_clear_ms == 100U);
+	CHECK(memcmp(decoded_link.mechanism_anchor,
+		fixture.links[0].mechanism_anchor,
+		sizeof(decoded_link.mechanism_anchor)) == 0);
 
 	FixtureInit(&fixture);
 	MakeFrameCompleteButton(&fixture.nodes[0]);

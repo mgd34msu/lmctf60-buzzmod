@@ -893,6 +893,7 @@ _WORLD_ANCHOR_POLICIES = frozenset(
         contract.RLAP_DOOR_WAIT,
         contract.RLAP_DOOR_PREOPEN_CONTACT,
         contract.RLAP_DOOR_RIDE_INGRESS_LIP,
+        contract.RLAP_TRAIN_CROSS,
     )
 )
 _FIXED_DOOR_ANCHOR_POLICIES = frozenset(
@@ -900,6 +901,7 @@ _FIXED_DOOR_ANCHOR_POLICIES = frozenset(
         contract.RLAP_DOOR_WAIT,
         contract.RLAP_DOOR_PREOPEN_CONTACT,
         contract.RLAP_DOOR_RIDE_INGRESS_LIP,
+        contract.RLAP_TRAIN_CROSS,
     )
 )
 
@@ -1141,7 +1143,10 @@ def _validate_graph(
                 contract.RLW_BAD_LINK_RECORD,
                 f"link {index} has invalid sweep-clear time",
             )
-        if action["mechanism_policy"] != contract.RLMP_DOOR_WORLD_FIXED_1_8:
+        if action["mechanism_policy"] not in (
+            contract.RLMP_DOOR_WORLD_FIXED_1_8,
+            contract.RLMP_TRAIN_WORLD_FIXED_1_8,
+        ):
             raise _wire_error(
                 contract.RLW_BAD_LINK_RECORD,
                 f"link {index} has unknown mechanism policy",

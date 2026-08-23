@@ -6828,6 +6828,13 @@ qboolean SG_OracleTrainGateCross(const vec3_t entry,
 	    sweep_maxs, passage_axis, true, arrival_ms);
 }
 
+qboolean SG_OracleTrainGateExit(const vec3_t cross,
+	const vec3_t target, edict_t *button, edict_t *train, int *arrival_ms)
+{
+	return SG_OracleTrainGateMove(cross, target, button, train, NULL, NULL,
+	    0U, false, arrival_ms);
+}
+
 /* Prove the lift's top-platform-to-static-graph handoff. The caller positions
  * the resolved platform at its authoritative top for this synchronous scope.
  * Its solid and center trigger are admitted, but success requires the player

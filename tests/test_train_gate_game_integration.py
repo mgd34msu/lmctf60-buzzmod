@@ -56,7 +56,7 @@ def main() -> None:
         shoot_train,
         "for (destination = 0; destination < gen_num_seeds; destination++)",
         "new_bits = topology->objective_mask[destination] & missing",
-        "SG_OracleTrainGateCross(best_contact",
+        "SG_OracleTrainGateExit",
         "selected_destination[slot] = destination",
     )
     assert shoot_train.count("SG_OracleTrainGateShot") == 1
@@ -68,6 +68,7 @@ def main() -> None:
         "SG_RuneMechanismBindingMoverKeys",
         "mover_count != 1U",
         "witness->entry_q8",
+        "witness->cross_q8",
         "binding.entry_entity->absmin",
         "witness->closed_corner_key",
         "witness->open_corner_key",
@@ -97,6 +98,7 @@ def main() -> None:
         "TrainObservation(bot, &observation)",
         "SG_TrainGateLiveStep",
         "SG_TRAIN_GATE_COMMAND_TO_ENTRY",
+        "SG_TRAIN_GATE_COMMAND_TO_CROSS",
         "SG_DeclaredCommand",
         "ClientThink(entity, &command)",
     )

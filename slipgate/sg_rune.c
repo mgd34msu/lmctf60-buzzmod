@@ -4052,6 +4052,10 @@ static void Link_Trains(void)
 				rune_link_t *link = &gen_links[gen_num_links - 1];
 
 				VectorCopy(best_contact, link->anchor);
+				VectorCopy(gen_seeds[best_destination].origin,
+				    link->mechanism_anchor);
+				link->sweep_clear_ms = (uint16_t)best_egress_ms;
+				link->mode = RLCM_PREOPEN;
 				if (!Mechanism_BindTrain(link, button, train, closed, open,
 				        opening_bound, SG_MECHANISM_CONTROLLER_TRAIN))
 					gen_num_links--;
@@ -4283,7 +4287,7 @@ static void Link_TrainShootButtons(
 			{
 				sg_train_gate_side_t destination_side =
 				    SG_TrainGateOppositeSide(source_side);
-				int base_cost = best_cost - cross_ms_by_axis[passage_axis];
+				int base_cost = best_cost;
 				int missing = 3 & ~topology->objective_mask[best_source];
 				int destination;
 				door_pose_t saved;
@@ -4312,14 +4316,14 @@ static void Link_TrainShootButtons(
 					        topology->component[best_source];
 					if (!new_bits && (missing != 0 || !crosses))
 						continue;
-					VectorSubtract(gen_seeds[destination].origin, best_contact,
-					    delta);
+					VectorSubtract(gen_seeds[destination].origin,
+					    gen_seeds[best_destination].origin, delta);
 					if (delta[0] * delta[0] + delta[1] * delta[1] >
 					        1600.0f * 1600.0f || fabsf(delta[2]) > 256.0f ||
-					    !SG_OracleTrainGateCross(best_contact,
+					    !SG_OracleTrainGateExit(
+					        gen_seeds[best_destination].origin,
 					        gen_seeds[destination].origin, button, train,
-					        sweep_mins, sweep_maxs,
-					        (unsigned int)passage_axis, &cross_ms))
+					        &cross_ms))
 						continue;
 					if (base_cost > RUNE_MAX_COST_MS - cross_ms)
 						continue;
@@ -4371,6 +4375,11 @@ static void Link_TrainShootButtons(
 					rune_link_t *link = &gen_links[gen_num_links - 1];
 
 					VectorCopy(best_contact, link->anchor);
+					VectorCopy(gen_seeds[best_destination].origin,
+					    link->mechanism_anchor);
+					link->sweep_clear_ms =
+					    (uint16_t)cross_ms_by_axis[passage_axis];
+					link->mode = RLCM_PREOPEN;
 					if (!Mechanism_BindTrain(link, button, train, closed, open,
 					        best_transaction_bound,
 					        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT))
