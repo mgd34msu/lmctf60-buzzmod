@@ -559,6 +559,12 @@ static void TestTrainGate(void)
 	CHECK(binding.egress_entity == &fixture.entities[3]);
 	CheckDoorMovers(&binding, 20U, SG_MECH_NO_KEY);
 	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture.rune, 0U, &binding));
+	train->think_callback = SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture.rune, 0U, &binding));
+	train->think_callback = SG_MECH_CALLBACK_TRAIN_NEXT;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	train->think_callback = SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
 
 	fixture.edges[1].to_key = 30U;
 	fixture.edges[fixture.plan.first_edge + 1U].to_key = 30U;

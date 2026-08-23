@@ -281,6 +281,12 @@ static int Binding_TrainCornerShape(const rune_mechanism_node_t *corner)
 	       corner->target_offset != 0U && corner->killtarget_offset == 0U;
 }
 
+static int Binding_TrainSealedThink(uint16_t callback)
+{
+	return callback == SG_MECH_CALLBACK_NONE ||
+	       callback == SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
+}
+
 static int Binding_ControllerShape(const rune_t *rune,
 	const rune_link_t *link, const rune_mechanism_plan_t *plan,
 	const rune_mechanism_node_t *entry,
@@ -387,7 +393,7 @@ static int Binding_ControllerShape(const rune_t *rune,
 		       mover->spawnflags == 2U &&
 		       mover->touch_callback == SG_MECH_CALLBACK_NONE &&
 		       mover->use_callback == SG_MECH_CALLBACK_TRAIN_USE &&
-		       mover->think_callback == SG_MECH_CALLBACK_NONE &&
+		       Binding_TrainSealedThink(mover->think_callback) &&
 		       mover->blocked_callback == SG_MECH_CALLBACK_BLOCKED_TRAIN &&
 		       mover->delay_ms == 0 && mover->speed_q8 != 0U &&
 		       mover->speed_q8 == mover->accel_q8 &&

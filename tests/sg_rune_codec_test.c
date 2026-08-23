@@ -1205,6 +1205,41 @@ static void TestPushNodeCodec(void)
 			sizeof(encoded)));
 }
 
+static void TestTrainFindNodeCodec(void)
+{
+	fixture_t fixture;
+	unsigned char encoded[SG_RUNE_CODEC_ACTIVATION_NODE_BYTES];
+	sg_rune_codec_activation_node_t decoded;
+
+	FixtureInit(&fixture);
+	memset(&fixture.nodes[0], 0, sizeof(fixture.nodes[0]));
+	fixture.nodes[0].key = 20U;
+	fixture.nodes[0].kind = SG_RUNE_CODEC_NODE_TRAIN;
+	fixture.nodes[0].flags = SG_RUNE_CODEC_NODEF_REPEATABLE |
+		SG_RUNE_CODEC_NODEF_USABLE | SG_RUNE_CODEC_NODEF_MOVER;
+	fixture.nodes[0].classname_offset = 1U;
+	fixture.nodes[0].target_offset = 13U;
+	fixture.nodes[0].targetname_offset = 25U;
+	fixture.nodes[0].owner_key = SG_RUNE_CODEC_NO_KEY;
+	fixture.nodes[0].team_master_key = SG_RUNE_CODEC_NO_KEY;
+	fixture.nodes[0].spawnflags = 2U;
+	fixture.nodes[0].use_callback = SG_RUNE_CODEC_CALLBACK_TRAIN_USE;
+	fixture.nodes[0].think_callback =
+		SG_RUNE_CODEC_CALLBACK_FUNC_TRAIN_FIND;
+	fixture.nodes[0].blocked_callback =
+		SG_RUNE_CODEC_CALLBACK_BLOCKED_TRAIN;
+	fixture.nodes[0].speed_q8 = fixture.nodes[0].accel_q8 =
+		fixture.nodes[0].decel_q8 = 2400U;
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncodeActivationNode(
+		&fixture.nodes[0], encoded, sizeof(encoded)));
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecDecodeActivationNode(
+		encoded, sizeof(encoded), &decoded));
+	CHECK(decoded.kind == SG_RUNE_CODEC_NODE_TRAIN);
+	CHECK(decoded.think_callback ==
+		SG_RUNE_CODEC_CALLBACK_FUNC_TRAIN_FIND);
+	CHECK(decoded.use_callback == SG_RUNE_CODEC_CALLBACK_TRAIN_USE);
+}
+
 int main(void)
 {
 	TestPrimitiveGolden();
@@ -1215,6 +1250,7 @@ int main(void)
 	TestEmptyMechanismCompatibility();
 	TestRocketJumpControlCodec();
 	TestPushNodeCodec();
+	TestTrainFindNodeCodec();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_rune_codec_test: %d failure(s)\n", failures);

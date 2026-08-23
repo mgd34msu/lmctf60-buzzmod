@@ -631,6 +631,12 @@ static int Mechanism_TrainNoSideEffects(
 	       Mechanism_EdgeGroup(state, key, SG_MECH_EDGE_PATH_TARGET).count == 0U;
 }
 
+static int Mechanism_TrainSealedThink(uint16_t callback)
+{
+	return callback == SG_MECH_CALLBACK_NONE ||
+	       callback == SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
+}
+
 static int Mechanism_MaterializeTrain(mechanism_materializer_t *state,
 	const sg_mechanism_plan_binding_t *binding)
 {
@@ -687,7 +693,7 @@ static int Mechanism_MaterializeTrain(mechanism_materializer_t *state,
 	        SG_MECH_NODEF_MOVER) || train->spawnflags != 2U ||
 	    train->touch_callback != SG_MECH_CALLBACK_NONE ||
 	    train->use_callback != SG_MECH_CALLBACK_TRAIN_USE ||
-	    train->think_callback != SG_MECH_CALLBACK_NONE ||
+	    !Mechanism_TrainSealedThink(train->think_callback) ||
 	    train->blocked_callback != SG_MECH_CALLBACK_BLOCKED_TRAIN ||
 	    train->delay_ms != 0 || train->speed_q8 == 0U ||
 	    train->speed_q8 != train->accel_q8 ||

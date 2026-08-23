@@ -44,6 +44,10 @@ typedef struct fixture_s
 	sg_mechanism_plan_result_t result;
 } fixture_t;
 
+static sg_rune_codec_diagnostic_t CodecValidationDiagnostic(
+	const fixture_t *fixture);
+static void CodecValidate(const fixture_t *fixture);
+
 static uint32_t StringOffset(const fixture_t *fixture, const char *value)
 {
 	uint32_t offset = 1U;
@@ -351,6 +355,9 @@ static void TrainFixture(fixture_t *fixture)
 	Edge(fixture, 20U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
 	Edge(fixture, 30U, 40U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
 	Edge(fixture, 40U, 30U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	fixture->links[0].mode = RLCM_PREOPEN;
+	fixture->links[0].mechanism_anchor[2] = -2.0f;
+	fixture->links[0].sweep_clear_ms = 100U;
 	fixture->binding.entry_key = 10U;
 	fixture->binding.mover_key = 20U;
 	fixture->binding.destination_key = 30U;
@@ -367,12 +374,28 @@ static void TestTrainGate(void)
 
 	TrainFixture(&fixture);
 	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
 	CHECK(fixture.plans[0].num_edges == 4U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 0U].from_key == 10U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 1U].from_key == 20U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 1U].to_key == 40U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 2U].from_key == 30U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge + 3U].from_key == 40U);
+
+	TrainFixture(&fixture);
+	fixture.nodes[1].think_callback = SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+	fixture.links[0].mode = RLCM_RIDE;
+	fixture.links[0].mechanism_anchor[2] = 32.0f;
+	CodecValidate(&fixture);
+
+	fixture.nodes[1].think_callback = SG_MECH_CALLBACK_TRAIN_NEXT;
+	CHECK(CodecValidationDiagnostic(&fixture) == RLCODEC_BAD_ACTIVATION_PLAN);
+	TrainFixture(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[1].think_callback = SG_MECH_CALLBACK_TRAIN_NEXT;
+	ExpectTrainMaterializationFailure(&fixture);
 
 	TrainFixture(&fixture);
 	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
