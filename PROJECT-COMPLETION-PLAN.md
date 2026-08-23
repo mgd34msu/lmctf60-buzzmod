@@ -369,7 +369,10 @@ including `lmctf02a` and `lmctf04`.
       plan because the sealed stock train was still in its initial
       `FUNC_TRAIN_FIND` callback state. The active generic fix accepts only NONE
       or that stock initializer for an otherwise exact train catalog shape and
-      retains rejection of unknown or dynamic callbacks.
+      retains rejection of unknown or dynamic callbacks. The complete accepted
+      train series is now replayed on a fresh branch from current `slipgate`;
+      focused gates and the full GNU runtime suite pass. Source-policy cleanup,
+      the Make/Clang suite, and the final immutable smoke remain.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -447,7 +450,16 @@ replay exhausted both cuts without a proof. Twenty first stable DROP landings
 matched no existing canonical seed envelope, so destination reassociation is
 also refuted. The next bounded diagnostic derives new canonical ground seeds
 only from those proved landings, publishes the exact DROP to each derived seed,
-and recomputes ordinary links and objective masks for at most four rounds.
+and recomputes ordinary links and objective masks. All 20 landings produced
+valid unique canonical seeds; 16 exact DROP links and 112 ordinary links were
+proved, but they expanded only same-side components. Authenticated teleporter,
+PUSH, and PUSH_JUMP admission from those seeds proved none. HOOK also proved
+only one incidental same-side link at its bound. Eight rounds of iterative
+rocket-jump replay likewise produced only same-side transitions and never
+changed the objective masks after the first round. The existing controller
+inventory is exhausted. A generic target-steered low-gravity DROP diagnostic
+is now testing the two exact cuts with destination-derived air control and a
+runtime-serializable command law.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -560,7 +572,19 @@ failure in about 299 seconds wall with the same 1,575 seeds, 46,087 links,
 catalog shape, objective roots, base counters, and prune result. Objective
 pruning removes every seed, so no artifact is written and the map remains a
 graph-connectivity repair. Its exact pruning cut and authentic nearby
-mechanisms are next.
+mechanisms are next. The pre-prune graph has 94 components: one 443-seed red
+component, one 464-seed blue component, and 92 components reached by neither.
+Every boundary link points out from an objective component; none returns or
+crosses between objectives. Only the six center-touch platforms and their six
+synthetic triggers touch that cut. The repair is tracing the exact platform
+staging rejection. Each bottom pose has one rest-plane seed reached only by
+SWIM and no outgoing link; each top pose has four dry egress seeds in the
+corresponding objective component. RL_LIFT rejects the bottom source because
+it is already inside the center trigger and lacks the dry planar approach the
+current oracle and runtime require. The active design is the smallest generic
+water-approach-to-lift transaction that reuses existing compound entry and
+RL_LIFT contracts where they can represent the full activation, carry, and dry
+egress proof.
 The canonical source also rejects a known water-seed-capacity overflow before
 base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
