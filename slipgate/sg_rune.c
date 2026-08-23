@@ -4093,7 +4093,6 @@ static void Link_TrainShootButtons(
 		vec3_t sweep_mins;
 		vec3_t sweep_maxs;
 		int source_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
-		int flight_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
 		float gap_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
 		vec3_t contact_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
 		uint32_t source_side_mask[3] = { 0U, 0U, 0U };
@@ -4119,7 +4118,6 @@ static void Link_TrainShootButtons(
 			     side_index <= SG_TRAIN_GATE_SIDE_Z_MAX; side_index++)
 			{
 				source_by_axis_side[axis][side_index] = -1;
-				flight_by_axis_side[axis][side_index] = INT_MAX;
 				gap_by_axis_side[axis][side_index] = HUGE_VALF;
 				VectorClear(contact_by_axis_side[axis][side_index]);
 			}
@@ -4161,6 +4159,7 @@ static void Link_TrainShootButtons(
 		{
 			vec3_t contact;
 			int flight_ms;
+			door_pose_t saved;
 
 			if (!gen_source_stable[source] ||
 			    gen_source_waterlevel[source] != 0 ||
@@ -4170,9 +4169,16 @@ static void Link_TrainShootButtons(
 			    !SG_OracleTrainGateShot(gen_seeds[source].origin, button,
 			        contact, &flight_ms))
 				continue;
+			Train_PoseOpen(train, open, &saved);
 			for (axis = 0; axis < 3; axis++)
 			{
 				sg_train_gate_side_t source_side;
+				sg_train_gate_side_t destination_side;
+				vec3_t delta;
+				uint32_t transaction_bound;
+				int egress_ms;
+				int cost;
+				float gap;
 
 				if (axis == motion_axis)
 					continue;
@@ -4182,92 +4188,56 @@ static void Link_TrainShootButtons(
 				if (source_side == SG_TRAIN_GATE_SIDE_NONE)
 					continue;
 				source_side_mask[axis] |= 1U << source_side;
-				{
-					float gap = Train_SeedSweepAxisGap(
-					    gen_seeds[source].origin, sweep_mins, sweep_maxs,
-					    (unsigned int)axis, source_side);
-
-					if (gap > gap_by_axis_side[axis][source_side] ||
-					    (gap == gap_by_axis_side[axis][source_side] &&
-					     flight_ms >= flight_by_axis_side[axis][source_side]))
-						continue;
-					gap_by_axis_side[axis][source_side] = gap;
-				}
-				source_by_axis_side[axis][source_side] = source;
-				flight_by_axis_side[axis][source_side] = flight_ms;
-				VectorCopy(contact,
-				    contact_by_axis_side[axis][source_side]);
-			}
-		}
-		{
-			door_pose_t saved;
-
-			Train_PoseOpen(train, open, &saved);
-			for (axis = 0; axis < 3; axis++)
-			{
-				sg_train_gate_side_t source_side;
-				sg_train_gate_side_t destination_side;
-				int axis_source;
-				int destination;
-				uint32_t transaction_bound;
-
-				if (axis == motion_axis)
-					continue;
-				source_side =
-				    SG_TrainGateUniqueSourceSide(source_side_mask[axis]);
 				destination_side = SG_TrainGateOppositeSide(source_side);
-				if (source_side == SG_TRAIN_GATE_SIDE_NONE ||
-				    destination_side == SG_TRAIN_GATE_SIDE_NONE)
-					continue;
-				axis_source = source_by_axis_side[axis][source_side];
-				if (axis_source < 0 ||
+				if (destination_side == SG_TRAIN_GATE_SIDE_NONE ||
 				    Train_SeedSweepAxisSide(gen_seeds[reverse_source].origin,
 				        sweep_mins, sweep_maxs, (unsigned int)axis) != source_side ||
 				    Train_SeedSweepAxisSide(
 				        gen_seeds[reverse_destination].origin, sweep_mins,
-				        sweep_maxs, (unsigned int)axis) != destination_side)
+				        sweep_maxs, (unsigned int)axis) != destination_side ||
+				    source == reverse_destination ||
+				    !gen_source_stable[reverse_destination] ||
+				    gen_source_waterlevel[reverse_destination] != 0 ||
+				    !Gen_SeedHasOutgoing(reverse_destination))
 					continue;
-				transaction_bound = opening_bound + (uint32_t)
-				    flight_by_axis_side[axis][source_side] + 1100U;
+				transaction_bound = opening_bound + (uint32_t)flight_ms + 1100U;
 				if (transaction_bound > RUNE_MAX_COST_MS)
 					continue;
-				for (destination = reverse_destination;
-				     destination == reverse_destination; destination++)
-				{
-					vec3_t delta;
-					int egress_ms;
-					int cost;
-
-					if (destination == axis_source ||
-					    !gen_source_stable[destination] ||
-					    gen_source_waterlevel[destination] != 0 ||
-					    !Gen_SeedHasOutgoing(destination) ||
-					    Train_SeedSweepAxisSide(
-					        gen_seeds[destination].origin, sweep_mins,
-					        sweep_maxs, (unsigned int)axis) != destination_side)
-						continue;
-					VectorSubtract(gen_seeds[destination].origin,
-					    gen_seeds[axis_source].origin, delta);
-					if (delta[0] * delta[0] + delta[1] * delta[1] >
-					        1600.0f * 1600.0f || fabsf(delta[2]) > 256.0f ||
-					    !SG_OracleTrainGateEgress(
-					        gen_seeds[axis_source].origin,
-					        gen_seeds[destination].origin, button, train,
-					        sweep_mins, sweep_maxs, (unsigned int)axis,
-					        &egress_ms))
-						continue;
-					cost = (int)transaction_bound + egress_ms;
-					if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
-					    cost >= cost_by_axis[axis])
-						continue;
-					destination_by_axis[axis] = destination;
-					cost_by_axis[axis] = cost;
-					transaction_bound_by_axis[axis] = transaction_bound;
-				}
-				if (destination_by_axis[axis] >= 0)
-					closure_axis_mask |= 1U << axis;
+				VectorSubtract(gen_seeds[reverse_destination].origin,
+				    gen_seeds[source].origin, delta);
+				if (delta[0] * delta[0] + delta[1] * delta[1] >
+				        1600.0f * 1600.0f || fabsf(delta[2]) > 256.0f ||
+				    !SG_OracleTrainGateEgress(gen_seeds[source].origin,
+				        gen_seeds[reverse_destination].origin, button, train,
+				        sweep_mins, sweep_maxs, (unsigned int)axis, &egress_ms))
+					continue;
+				cost = (int)transaction_bound + egress_ms;
+				gap = Train_SeedSweepAxisGap(gen_seeds[source].origin,
+				    sweep_mins, sweep_maxs, (unsigned int)axis, source_side);
+				if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
+				    cost > cost_by_axis[axis] ||
+				    (cost == cost_by_axis[axis] &&
+				     gap >= gap_by_axis_side[axis][source_side]))
+					continue;
+				source_by_axis_side[axis][source_side] = source;
+				gap_by_axis_side[axis][source_side] = gap;
+				VectorCopy(contact,
+				    contact_by_axis_side[axis][source_side]);
+				destination_by_axis[axis] = reverse_destination;
+				cost_by_axis[axis] = cost;
+				transaction_bound_by_axis[axis] = transaction_bound;
 			}
 			DoorPose_Restore(&saved, 1);
+		}
+		for (axis = 0; axis < 3; axis++)
+		{
+			sg_train_gate_side_t source_side =
+			    SG_TrainGateUniqueSourceSide(source_side_mask[axis]);
+
+			if (axis != motion_axis && source_side != SG_TRAIN_GATE_SIDE_NONE &&
+			    source_by_axis_side[axis][source_side] >= 0 &&
+			    destination_by_axis[axis] >= 0)
+				closure_axis_mask |= 1U << axis;
 		}
 		passage_axis = SG_TrainGateUniquePassageAxis(closure_axis_mask,
 		    (unsigned int)motion_axis);
