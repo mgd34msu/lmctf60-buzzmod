@@ -983,6 +983,7 @@ def _validate_graph(
     seeds: tuple[RuneSeed, ...],
     links: tuple[RunePolicyLink, ...],
     raw_links: tuple[bytes, ...],
+    activation_plans: tuple[int, ...],
 ) -> None:
     if not 0 < len(seeds) <= MAX_SEEDS:
         raise _wire_error(
@@ -992,8 +993,8 @@ def _validate_graph(
         raise _wire_error(
             contract.RLW_BAD_COUNTS, f"{len(links)} links"
         )
-    if len(raw_links) != len(links):
-        raise AssertionError("raw link count does not match decoded links")
+    if len(raw_links) != len(links) or len(activation_plans) != len(links):
+        raise AssertionError("link metadata count does not match decoded links")
 
     for index, seed in enumerate(seeds):
         if (
@@ -1008,8 +1009,10 @@ def _validate_graph(
             )
 
     linked_sources: set[int] = set()
-    identities: set[tuple[int, int, int]] = set()
-    for index, (link, raw) in enumerate(zip(links, raw_links)):
+    identities: set[tuple[int, int, int, int]] = set()
+    for index, (link, raw, activation_plan) in enumerate(
+        zip(links, raw_links, activation_plans)
+    ):
         if len(raw) != RUNE_POLICY_LINK_BYTES:
             raise AssertionError("raw link has wrong internal size")
         if (
@@ -1047,7 +1050,12 @@ def _validate_graph(
                 contract.RLW_BAD_LINK_RECORD,
                 f"link {index} has unknown action {link.action}",
             ) from exc
-        identity = (link.source, link.destination, link.action)
+        identity = (
+            link.source,
+            link.destination,
+            link.action,
+            activation_plan,
+        )
         if identity in identities:
             raise _wire_error(
                 contract.RLW_DUPLICATE_LINK,
@@ -2614,6 +2622,7 @@ def _decode_rune_artifact(
         seeds_tuple,
         projected_links,
         tuple(raw_prefix_links),
+        tuple(link.activation_plan for link in links_tuple),
     )
     _rune_validate_seed_lattice(seeds_tuple)
     _rune_validate_strings(nodes_tuple, strings)

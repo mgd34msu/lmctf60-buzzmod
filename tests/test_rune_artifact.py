@@ -285,6 +285,52 @@ def _build_rune() -> bytes:
     )
 
 
+def _build_two_button_same_mover(*, second_plan: int = 1) -> bytes:
+    base = _build_rune()[runeio.RUNE_HEADER_BYTES:]
+    seed_bytes = 2 * runeio.RUNE_SEED_BYTES
+    link_bytes = 2 * runeio.RUNE_LINK_BYTES
+    node_bytes = 3 * runeio.RUNE_ACTIVATION_NODE_BYTES
+    edge_bytes = 2 * runeio.RUNE_ACTIVATION_EDGE_BYTES
+    plan_offset = seed_bytes + link_bytes + node_bytes + edge_bytes
+    strings = base[plan_offset + runeio.RUNE_ACTIVATION_PLAN_BYTES:]
+    first_link = base[seed_bytes:seed_bytes + runeio.RUNE_LINK_BYTES]
+    reverse_link = base[
+        seed_bytes + runeio.RUNE_LINK_BYTES:seed_bytes + link_bytes
+    ]
+    duplicate = list(runeio.RUNE_LINK_STRUCT.unpack(first_link))
+    duplicate[-1] = second_plan
+    links = first_link + runeio.RUNE_LINK_STRUCT.pack(*duplicate) + reverse_link
+    nodes = base[seed_bytes + link_bytes:seed_bytes + link_bytes + node_bytes]
+    second_button = bytearray(nodes[:runeio.RUNE_ACTIVATION_NODE_BYTES])
+    struct.pack_into("<I", second_button, 0, 4)
+    nodes += second_button
+    inventory = b"".join((
+        runeio.RUNE_ACTIVATION_EDGE_STRUCT.pack(1, 2, 1, 0, 0),
+        runeio.RUNE_ACTIVATION_EDGE_STRUCT.pack(4, 2, 1, 0, 0),
+    ))
+    plan_values = list(runeio.RUNE_ACTIVATION_PLAN_STRUCT.unpack(
+        base[plan_offset:plan_offset + runeio.RUNE_ACTIVATION_PLAN_BYTES]
+    ))
+    plan_values[2] = 2
+    first_plan = runeio.RUNE_ACTIVATION_PLAN_STRUCT.pack(*plan_values)
+    plan_values[0] = 4
+    plan_values[2] = 3
+    plan_values[-1] = zlib.crc32(inventory[16:]) & 0xFFFFFFFF
+    plans = first_plan + runeio.RUNE_ACTIVATION_PLAN_STRUCT.pack(*plan_values)
+    payload = base[:seed_bytes] + links + nodes + inventory * 2 + plans + strings
+    return _wrap_rune_payload(
+        payload,
+        num_seeds=2,
+        num_links=3,
+        num_nodes=4,
+        num_edges=4,
+        num_plans=2,
+        string_bytes=len(strings),
+        num_inventory_edges=2,
+        map_name="twobuttons",
+    )
+
+
 def _build_edge_catalog() -> bytes:
     strings = b"\0a\0b\0"
     seeds = b"".join(
@@ -1306,6 +1352,22 @@ class RuneRuneArtifactTests(unittest.TestCase):
         self.assertEqual(1, summary["plan_count"])
         self.assertEqual(1, summary["inventory_edge_count"])
         self.assertEqual(1, summary["plan_edge_count"])
+
+    def test_link_identity_includes_activation_plan(self):
+        decoded = runeio.decode_rune(_build_two_button_same_mover())
+        self.assertEqual((0, 1), tuple(
+            link.activation_plan for link in decoded.links[:2]
+        ))
+        self.assertEqual(
+            decoded.activation_plans[0].mover_key,
+            decoded.activation_plans[1].mover_key,
+        )
+        self.assert_wire_code(
+            contract.RLW_DUPLICATE_LINK,
+            lambda: runeio.decode_rune(
+                _build_two_button_same_mover(second_plan=0)
+            ),
+        )
 
     def test_header_payload_and_contract_authentication(self):
         bad_header_crc = bytearray(self.encoded)

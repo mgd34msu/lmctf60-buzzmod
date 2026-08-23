@@ -471,13 +471,21 @@ static sg_rune_codec_diagnostic_t Codec_ValidateActionGraph(
 	for (i = 0U; i < num_links; i++)
 	{
 		const sg_rune_codec_link_t *link = &links[i];
+		uint64_t plan;
 
 		if (link->source >= num_seeds || link->destination >= num_seeds ||
 		    link->source == link->destination ||
 		    Codec_ValidateLinkFields(link) != RLCODEC_OK)
 			return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
-		workspace->graph_link_keys[i] = ((uint64_t)link->source << 23) |
-			((uint64_t)link->destination << 8) | (uint64_t)link->action;
+		if (link->activation_plan == SG_RUNE_CODEC_NO_ACTIVATION_PLAN)
+			plan = SG_RUNE_CODEC_MAX_ACTIVATION_PLANS;
+		else if (link->activation_plan < SG_RUNE_CODEC_MAX_ACTIVATION_PLANS)
+			plan = link->activation_plan;
+		else
+			return RLCODEC_BAD_ACTIVATION_PLAN;
+		workspace->graph_link_keys[i] = ((uint64_t)link->source << 42) |
+			((uint64_t)link->destination << 27) |
+			((uint64_t)link->action << 19) | plan;
 	}
 	Codec_SortKeys(workspace->graph_link_keys, (size_t)num_links);
 	for (i = 1U; i < num_links; i++)
