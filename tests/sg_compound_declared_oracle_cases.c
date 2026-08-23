@@ -707,6 +707,101 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 	CHECK(!SG_DeclaredDoorMembersTerminal(members, 1));
 }
 
+static void TestLiftSwimApproach(void)
+{
+	fixture_config_t config = DefaultConfig(1, FIXTURE_SUFFIX_SUCCESS);
+	sg_phantom_t phantom;
+	sg_swim_proof_t proof;
+	vec3_t anchor = { 0.0f, 0.0f, 0.0f };
+	edict_t *platform;
+	edict_t *entry;
+
+	/* Existing overlap is an exact zero-command proof only when trigger and
+	 * matched-platform support coincide. */
+	config.mechanism_x = 0.0f;
+	config.source_x = 0.0f;
+	config.lift_support = true;
+	ResetFixture(&config);
+	platform = &fixture_edicts[1];
+	entry = &fixture_edicts[2];
+	platform->classname = "func_plat";
+	entry->touch = Touch_Multi;
+	InitPhantom(&phantom, false);
+	phantom.groundentity = true;
+	CHECK(SG_OracleLiftSwimApproach(&phantom, anchor, entry, platform,
+	    0.0f, &proof, NULL, true));
+	CHECK(proof.arrival_ms == 0);
+	CHECK(fixture_observation.pmove_calls == 0);
+
+	/* A six-unit separation from the expanded trigger fringe must be crossed by
+	 * authoritative Pmove before the same support/contact observation commits. */
+	config.source_x = 24.0f;
+	ResetFixture(&config);
+	platform = &fixture_edicts[1];
+	entry = &fixture_edicts[2];
+	platform->classname = "func_plat";
+	entry->touch = Touch_Multi;
+	InitPhantom(&phantom, false);
+	CHECK(SG_OracleLiftSwimApproach(&phantom, anchor, entry, platform,
+	    0.0f, &proof, NULL, true));
+	CHECK(proof.arrival_ms == SG_SWIM_STEP_MSEC);
+	CHECK(fixture_observation.pmove_calls == 1);
+
+	/* Wrong trigger, wrong platform, trigger without support, and support
+	 * without a proved trigger approach all fail closed. */
+	ResetFixture(&config);
+	platform = &fixture_edicts[1];
+	platform->classname = "func_plat";
+	InitPhantom(&phantom, false);
+	CHECK(!SG_OracleLiftSwimApproach(&phantom, anchor, &fixture_edicts[3],
+	    platform, 0.0f, &proof, NULL, true));
+
+	ResetFixture(&config);
+	entry = &fixture_edicts[2];
+	entry->touch = Touch_Multi;
+	InitPhantom(&phantom, false);
+	CHECK(!SG_OracleLiftSwimApproach(&phantom, anchor, entry,
+	    &fixture_edicts[4], 0.0f, &proof, NULL, true));
+
+	config.source_x = 0.0f;
+	config.lift_support = false;
+	ResetFixture(&config);
+	platform = &fixture_edicts[1];
+	entry = &fixture_edicts[2];
+	platform->classname = "func_plat";
+	entry->touch = Touch_Multi;
+	InitPhantom(&phantom, false);
+	CHECK(!SG_OracleLiftSwimApproach(&phantom, anchor, entry, platform,
+	    0.0f, &proof, NULL, true));
+
+	config.source_x = 24.0f;
+	config.lift_support = true;
+	config.touch_substep = 0;
+	ResetFixture(&config);
+	platform = &fixture_edicts[1];
+	entry = &fixture_edicts[2];
+	platform->classname = "func_plat";
+	entry->touch = Touch_Multi;
+	InitPhantom(&phantom, false);
+	phantom.groundentity = true;
+	CHECK(!SG_OracleLiftSwimApproach(&phantom, anchor, entry, platform,
+	    0.0f, &proof, NULL, true));
+
+	/* A dry unstable body is outside the serialized water-entry contract. */
+	config.source_x = 0.0f;
+	ResetFixture(&config);
+	platform = &fixture_edicts[1];
+	entry = &fixture_edicts[2];
+	platform->classname = "func_plat";
+	entry->touch = Touch_Multi;
+	InitPhantom(&phantom, false);
+	phantom.waterlevel = 0;
+	phantom.watertype = 0;
+	phantom.groundentity = false;
+	CHECK(!SG_OracleLiftSwimApproach(&phantom, anchor, entry, platform,
+	    0.0f, &proof, NULL, true));
+}
+
 
 int SG_CompoundDeclaredOracleCasesRun(void)
 {
@@ -731,5 +826,6 @@ int SG_CompoundDeclaredOracleCasesRun(void)
 	TestDeclaredDoorHoldMembersRequiresClosedTeam();
 	TestDeclaredDoorHoldMembersRejectsForeignPointers();
 	TestDeclaredDoorMembersTerminalRequiresPhysicalPose();
+	TestLiftSwimApproach();
 	return failures - before;
 }

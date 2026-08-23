@@ -6250,6 +6250,109 @@ done:
 	return ok;
 }
 
+static qboolean SG_OracleLiftSwimSupported(const sg_phantom_t *ph,
+	edict_t *platform)
+{
+	vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t end;
+	trace_t trace;
+
+	if (!ph || !platform || !ph->groundentity || !sg_host.trace)
+		return false;
+	VectorCopy(ph->origin, end);
+	end[2] -= 4.0f;
+	trace = sg_host.trace((vec_t *)ph->origin, mins, maxs, end,
+	    sg_oracle_passent, MASK_PLAYERSOLID);
+	return !trace.startsolid && !trace.allsolid && trace.fraction < 1.0f &&
+	       trace.ent == platform && trace.plane.normal[2] >= 0.7f;
+}
+
+/* A water-entry lift owns only the exact synthesized center trigger and the
+ * matched platform support.  The shared swim controller may reach the trigger
+ * from deep water, but declaration begins only when that same observation is
+ * also a valid rider state.  Existing dry lifts retain their planar oracle. */
+qboolean SG_OracleLiftSwimApproach(sg_phantom_t *ph,
+	const vec3_t anchor, edict_t *entry, edict_t *platform,
+	float old_frame_z, sg_swim_proof_t *proof, edict_t *passent,
+	qboolean world_only)
+{
+	usercmd_t cmd;
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_entry = sg_oracle_declared_entry;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_touched = sg_oracle_declared_touched;
+	int old_action = sg_oracle_declared_action;
+	qboolean ok = false;
+	int elapsed;
+
+	if (!ph || !anchor || !entry || !entry->inuse || !platform ||
+	    !platform->inuse || !proof || ph->waterlevel < 2 ||
+	    !(ph->watertype & CONTENTS_WATER) ||
+	    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		return false;
+	memset(proof, 0, sizeof(*proof));
+	sg_oracle_passent = passent;
+	sg_oracle_world_only = world_only;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = platform;
+	sg_oracle_declared_entry = entry;
+	sg_oracle_declared_action = RL_LIFT;
+	sg_oracle_declared_touched = false;
+	if (SG_OracleTriggerOverlap(ph) || sg_oracle_contaminated ||
+	    SG_OracleSolidOverlap(ph) || SG_OracleDoorOverlap(ph))
+		goto done;
+	if (sg_oracle_declared_touched)
+	{
+		if (!SG_OracleLiftSwimSupported(ph, platform))
+			goto done;
+		proof->arrival_ms = 0;
+		ok = true;
+		goto done;
+	}
+	for (elapsed = 0; elapsed < 3000; elapsed += SG_SWIM_STEP_MSEC)
+	{
+		if (ph->waterlevel > 0 &&
+		    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+			goto done;
+		if (elapsed > 0 && (elapsed % 100) == 0)
+		{
+			if (P_FallDelta(old_frame_z, ph->velocity[2], ph->groundentity,
+			                ph->waterlevel) > 30.0f)
+				goto done;
+			old_frame_z = ph->velocity[2];
+		}
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = SG_SWIM_STEP_MSEC;
+		if (!SG_SwimCommand(ph->origin, anchor, &ph->pms, &cmd))
+			goto done;
+		SG_OracleRun(ph, &cmd, 1);
+		if (sg_oracle_contaminated || SG_OracleDoorOverlap(ph))
+			goto done;
+		if (sg_oracle_declared_touched)
+		{
+			if (!SG_OracleLiftSwimSupported(ph, platform))
+				goto done;
+			proof->arrival_ms = elapsed + SG_SWIM_STEP_MSEC;
+			ok = true;
+			goto done;
+		}
+	}
+done:
+	if (ph->door_passed)
+		ok = false;
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_entry = old_entry;
+	sg_oracle_declared_action = old_action;
+	sg_oracle_declared_touched = old_touched;
+	return ok;
+}
+
 
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 {

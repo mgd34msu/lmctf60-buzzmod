@@ -27,7 +27,7 @@ def test_acquire_precedes_declared_start_and_first_command() -> None:
     move = source("slipgate/sg_move.c")
     control = between(
         move,
-        "if (!water_tele && !bot->declared_started &&\n"
+        "if (!water_declared && !bot->declared_started &&\n"
         "\t\t\t\t    source_exact && source_rest",
         "if (declared_door)\n\t\t\t\t{\n\t\t\t\t\tshort wait_fixed",
     )

@@ -14,6 +14,16 @@ short SG_RuneProofGravity(void)
 	return 800;
 }
 
+float P_FallDelta(float old_velocity_z, float velocity_z,
+	qboolean grounded, int waterlevel)
+{
+	(void)old_velocity_z;
+	(void)velocity_z;
+	(void)grounded;
+	(void)waterlevel;
+	return 0.0f;
+}
+
 edict_t fixture_edicts[FIXTURE_EDICTS];
 gclient_t fixture_clients[5];
 cvar_t fixture_gravity;

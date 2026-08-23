@@ -2895,6 +2895,7 @@ qboolean SG_AuthorizeLiftTouch(edict_t *source, edict_t *platform,
 {
 	sg_rune_mechanism_binding_t binding;
 	sg_bot_t *bot = DoorStep_EventBot(activator);
+	qboolean water_entry;
 
 	if (!bot)
 		return true;
@@ -2905,6 +2906,12 @@ qboolean SG_AuthorizeLiftTouch(edict_t *source, edict_t *platform,
 	    activator->deadflag || activator->movetype != MOVETYPE_WALK ||
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    !SG_RuneMechanismBindingCurrent(&binding))
+		return false;
+	water_entry = binding.link->from >= 0 &&
+	    binding.link->from < SG_Rune()->hdr.num_seeds &&
+	    (SG_Rune()->seeds[binding.link->from].flags & RSF_WATER);
+	if (water_entry &&
+	    (!bot->swim_validated || !SG_LiftRider(platform, activator)))
 		return false;
 	bot->declared_touched = true;
 	bot->declared_touch_frame = level.framenum;
@@ -6525,6 +6532,81 @@ static int TeleportSwim_OnlineProof(edict_t *e, sg_bot_t *bot,
 	return SWIM_PROOF_OK;
 }
 
+static int LiftSwim_OnlineProof(edict_t *e, sg_bot_t *bot, int link_index)
+{
+	rune_link_t *link;
+	sg_rune_mechanism_binding_t binding;
+	sg_phantom_t ph;
+	sg_swim_proof_t proof;
+	vec3_t approach;
+	edict_t *platform;
+	int i, proof_slot;
+
+	if (!e || !e->client || !bot || !SG_Rune() || link_index < 0 ||
+	    link_index >= SG_Rune()->hdr.num_links || bot->commit_link != link_index ||
+	    level.intermissiontime || GamePaused() || e->health <= 0 || e->deadflag ||
+	    e->movetype != MOVETYPE_WALK ||
+	    e->client->ps.pmove.pm_type != PM_NORMAL ||
+	    e->client->hookstate != 0 || e->client->hook != NULL ||
+	    bot->hook_phase != 0 || SG_RocketJumpGameOwns(bot) ||
+	    bot->nade_phase != 0 || e->waterlevel < 2 ||
+	    !(e->watertype & CONTENTS_WATER) ||
+	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		return SWIM_PROOF_FAIL;
+	link = &SG_Rune()->links[link_index];
+	if (link->action != RL_LIFT ||
+	    !(SG_Rune()->seeds[link->from].flags & RSF_WATER))
+		return SWIM_PROOF_FAIL;
+	if (!SG_RuneMechanismBindingCapture(SG_Rune(), (uint32_t)link_index,
+	        &binding) || binding.link->action != RL_LIFT ||
+	    binding.plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM)
+		return SWIM_PROOF_FAIL;
+	platform = binding.mover_entity;
+	if (!platform || platform->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+	    !SG_LiftRest(binding.entry_entity, platform, e, approach))
+		return SWIM_PROOF_FAIL;
+	proof_slot = (int)(bot - sg_bots);
+	if (proof_slot < 0 || proof_slot >= SG_MAXBOTS)
+		return SWIM_PROOF_FAIL;
+	if (level.framenum < sg_swim_reproof_frame)
+	{
+		sg_swim_reproof_frame = -1;
+		sg_swim_reproof_slot = 0;
+	}
+	if (sg_swim_reproof_frame == level.framenum)
+		return SWIM_PROOF_BUSY;
+	if (sg_swim_reproof_frame == level.framenum - 1 &&
+	    proof_slot <= sg_swim_reproof_slot)
+		return SWIM_PROOF_BUSY;
+	sg_swim_reproof_frame = level.framenum;
+	sg_swim_reproof_slot = proof_slot;
+
+	memset(&ph, 0, sizeof(ph));
+	ph.pms = e->client->ps.pmove;
+	ph.old_pms = e->client->old_pmove;
+	for (i = 0; i < 3; i++)
+	{
+		ph.pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
+		ph.pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
+		ph.origin[i] = ph.pms.origin[i] * 0.125f;
+		ph.velocity[i] = ph.pms.velocity[i] * 0.125f;
+	}
+	ph.pms.gravity = (short)sv_gravity->value;
+	ph.groundentity = e->groundentity != NULL;
+	ph.waterlevel = e->waterlevel;
+	ph.watertype = e->watertype;
+	if (!SG_OracleLiftSwimApproach(&ph, approach, binding.entry_entity,
+	        platform, e->client->oldvelocity[2], &proof, e, true))
+		return SWIM_PROOF_FAIL;
+	bot->swim_validated = true;
+	bot->swim_proved_ms = proof.arrival_ms;
+	bot->swim_elapsed_ms = 0;
+	bot->declared_started = true;
+	bot->declared_start_frame = level.framenum;
+	SG_TimerArm(&bot->commit_until, link->cost_ms * 0.001f + 0.5f);
+	return SWIM_PROOF_OK;
+}
+
 static void Swim_ProofFail(edict_t *e, sg_bot_t *bot, int link_index,
 	float shelf_seconds)
 {
@@ -7514,8 +7596,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean water_tele = declared_control &&
 	    SG_Rune()->links[bestlink].action == RL_TELEPORT &&
 	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].from].flags & RSF_WATER);
+	qboolean water_lift = declared_control &&
+	    SG_Rune()->links[bestlink].action == RL_LIFT &&
+	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].from].flags & RSF_WATER);
+	qboolean water_declared = water_tele || water_lift;
 	qboolean water_control = proved_swim ||
-	    (water_tele && !bot->declared_activated);
+	    (water_tele && !bot->declared_activated) ||
+	    (water_lift && !bot->declared_touched);
 	qboolean swim_hazard = water_control && e->waterlevel > 0 &&
 	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
 	qboolean swim_emergency = water_control && e->waterlevel >= 3 &&
@@ -7672,6 +7759,30 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			return;
 		}
 	}
+	if (water_lift && !bot->swim_validated &&
+	    !swim_emergency && !swim_hazard)
+	{
+		int online = LiftSwim_OnlineProof(e, bot, bestlink);
+		usercmd_t wait_cmd;
+		int wait_step;
+
+		memset(&wait_cmd, 0, sizeof(wait_cmd));
+		wait_cmd.msec = SG_SWIM_STEP_MSEC;
+		if (online == SWIM_PROOF_BUSY)
+		{
+			SG_TimerArm(&bot->commit_until, 3.0f);
+			for (wait_step = 0; wait_step < 4; wait_step++)
+				ClientThink(e, &wait_cmd);
+			return;
+		}
+		if (online != SWIM_PROOF_OK)
+		{
+			Swim_ProofFail(e, bot, bestlink, 5.0f);
+			for (wait_step = 0; wait_step < 4; wait_step++)
+				ClientThink(e, &wait_cmd);
+			return;
+		}
+	}
 
 	/* Drowning and hazardous liquid are safety interrupts, not optional
 	 * modifiers. They invalidate this exact endpoint traversal before any
@@ -7696,7 +7807,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		    SG_SWIM_LIVE_EARLY_HAZARD_SHELF_SECONDS);
 		SG_TeachLinkFutility(bestlink);
 	}
-	if (water_tele && (swim_emergency || swim_hazard))
+	if (water_declared && (swim_emergency || swim_hazard))
 	{
 		vec3_t destination;
 		int air_from = SG_Rune()->links[bestlink].from;
@@ -8859,7 +8970,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				VectorCopy(decl->anchor, door_effective_anchor);
 				source_exact = Ballistic_SourceExact(e, source_pms);
 				source_rest = Ballistic_SourceRest(e);
-				if (!water_tele && !bot->declared_started &&
+				if (!water_declared && !bot->declared_started &&
 				    !source_exact && source_rest)
 				{
 					qboolean capture = true;
@@ -8877,7 +8988,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						source_snapped = Ballistic_CanonicalizeSource(e, source,
 						    source_pms);
 				}
-				if (!water_tele && !bot->declared_started &&
+				if (!water_declared && !bot->declared_started &&
 				    source_exact && source_rest &&
 				    (e->groundentity == g_edicts ||
 				     SG_ImmutableSupport(e->groundentity)) &&
@@ -9357,6 +9468,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						hold = true;
 					}
 				}
+				if (water_lift && !bot->declared_touched)
+				{
+					edict_t *platform = mechanism_binding.mover_entity;
+
+					if (!platform ||
+					    platform->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+					    !SG_LiftRest(mechanism_binding.entry_entity,
+					        platform, e, target))
+					{
+						bot->commit_link = -1;
+						hold = true;
+					}
+				}
 				if (!bot->declared_started &&
 				    (source_snapped || (source_exact && !source_rest)))
 					hold = true;
@@ -9503,7 +9627,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    ? atan2f(dd[1], dd[0]) * 180.0f / (float)M_PI
 				    : e->client->v_angle[YAW];
 				cmd->msec = msec;
-				if (water_tele && !bot->declared_activated)
+				if ((water_tele && !bot->declared_activated) ||
+				    (water_lift && !bot->declared_touched))
 					SG_SwimCommand(e->s.origin, target,
 					               &e->client->ps.pmove, cmd);
 				else
@@ -10065,7 +10190,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				drop_recovery_failed = true;
 				drop_replay_failed = true;
 			}
-			if ((proved_swim || water_tele) && bot->swim_validated &&
+			if ((proved_swim || water_tele ||
+			     (water_lift && !bot->declared_touched)) &&
+			    bot->swim_validated &&
 			    !swim_emergency && !swim_hazard &&
 			    bot->commit_link == bestlink)
 				bot->swim_elapsed_ms += SG_SWIM_STEP_MSEC;
