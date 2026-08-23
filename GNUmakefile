@@ -111,6 +111,16 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS = \
 	.sg_mover_lease_under_test.gnu.o .sg_mover_lease_under_test.gnu.d \
 	.sg_mover_lease_test.make.o .sg_mover_lease_test.make.d \
 	.sg_mover_lease_under_test.make.o .sg_mover_lease_under_test.make.d
+WATER_FOREST_TEST_BIN = sg_water_forest_test.gnu
+WATER_FOREST_TEST_OBJS = .sg_water_forest_test.gnu.o \
+	.sg_water_forest_under_test.gnu.o
+WATER_FOREST_TEST_DEPS = $(WATER_FOREST_TEST_OBJS:.o=.d)
+WATER_FOREST_TEST_ALL_ARTIFACTS = \
+	sg_water_forest_test.gnu sg_water_forest_test.make \
+	.sg_water_forest_test.gnu.o .sg_water_forest_test.gnu.d \
+	.sg_water_forest_under_test.gnu.o .sg_water_forest_under_test.gnu.d \
+	.sg_water_forest_test.make.o .sg_water_forest_test.make.d \
+	.sg_water_forest_under_test.make.o .sg_water_forest_under_test.make.d
 BUTTON_LIVE_TEST_BIN = sg_button_live_test.gnu
 BUTTON_LIVE_TEST_OBJS = .sg_button_live_test.gnu.o .sg_button_live_under_test.gnu.o
 BUTTON_LIVE_TEST_DEPS = $(BUTTON_LIVE_TEST_OBJS:.o=.d)
@@ -1091,7 +1101,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
+		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o sg_oracle.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o slipgate/sg_snag_repair.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 sg_chat.o sg_net.o sg_persona.o
 
@@ -1210,6 +1220,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
 .PHONY: all dep host-test action-test compound-test mover-lease-test \
+	water-forest-test \
 	povlock-test pov-session-production-test pov-supervisor-test \
 	button-live-test button-game-test \
 	compound-guard-test compound-guard-game-test declared-door-guard-test \
@@ -1436,6 +1447,9 @@ $(COMPOUND_TEST_BIN): $(COMPOUND_TEST_OBJS)
 
 $(MOVER_LEASE_TEST_BIN): $(MOVER_LEASE_TEST_OBJS)
 	$(CC) -o $@ $(MOVER_LEASE_TEST_OBJS) $(LDFLAGS)
+
+$(WATER_FOREST_TEST_BIN): $(WATER_FOREST_TEST_OBJS)
+	$(CC) -o $@ $(WATER_FOREST_TEST_OBJS) $(LDFLAGS)
 
 $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(BUTTON_LIVE_TEST_OBJS) $(LDFLAGS)
@@ -1703,6 +1717,18 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_mover_lease_under_test.gnu.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_water_forest_test.gnu.o: tests/sg_water_forest_test.c \
+		slipgate/sg_water_forest.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_water_forest_under_test.gnu.o: slipgate/sg_water_forest.c \
+		slipgate/sg_water_forest.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
@@ -2774,7 +2800,8 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		$(MOVER_LEASE_TEST_BIN) $(BUTTON_LIVE_TEST_BIN) \
+		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
+		$(BUTTON_LIVE_TEST_BIN) \
 		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
@@ -2857,6 +2884,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
 	./$(MOVER_LEASE_TEST_BIN)
+	./$(WATER_FOREST_TEST_BIN)
 	./$(BUTTON_LIVE_TEST_BIN)
 	./$(BUTTON_GAME_TEST_BIN)
 	python3 $(BUTTON_GAME_INTEGRATION_TEST)
@@ -3041,6 +3069,9 @@ compound-test: $(COMPOUND_TEST_BIN)
 
 mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 	./$(MOVER_LEASE_TEST_BIN)
+
+water-forest-test: $(WATER_FOREST_TEST_BIN)
+	./$(WATER_FOREST_TEST_BIN)
 
 compound-guard-test: $(COMPOUND_GUARD_TEST_BIN)
 	./$(COMPOUND_GUARD_TEST_BIN)
@@ -3327,6 +3358,7 @@ clean:
 			$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_HOOK_ORACLE_TEST_ALL_ARTIFACTS) \
 			$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
+			$(WATER_FOREST_TEST_ALL_ARTIFACTS) \
 			$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \
 			$(BUTTON_GAME_TEST_ALL_ARTIFACTS) \
 			$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
@@ -3360,6 +3392,7 @@ endif
 -include $(ACTION_TEST_DEPS)
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
+-include $(WATER_FOREST_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
 -include $(TRAIN_GATE_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)

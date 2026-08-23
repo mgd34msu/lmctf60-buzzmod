@@ -19,6 +19,7 @@
 #include "slipgate/sg_rocketjump_cadence.h"
 #include "slipgate/sg_push_live.h"
 #include "slipgate/sg_train_gate_live.h"
+#include "slipgate/sg_water_forest.h"
 #include "slipgate/sg_util.h"
 
 #include <stdio.h>
@@ -54,6 +55,11 @@ static rune_link_t	*gen_links;
 static int			gen_num_links;
 static qboolean		gen_link_overflow;
 static qboolean		gen_water_overflow;
+static sg_water_forest_t gen_water_forest;
+static int *gen_water_parents;
+static uint8_t *gen_water_ranks;
+static sg_water_edge_t *gen_water_edges;
+static int *gen_water_edge_slots;
 
 static sg_mech_catalog_view_t gen_mechanism_catalog;
 static sg_mechanism_plan_binding_t *gen_mechanism_bindings;
@@ -407,13 +413,14 @@ static int Seed_HashKey(vec3_t p)
 	return (int)(h & (HASH_SIZE - 1));
 }
 
-static qboolean Seed_Nearby(vec3_t p)
+static int Seed_NearbyIndex(vec3_t p)
 {
-	int dx, dy, dz, i;
+	int best = -1, dx, dy, dz, i;
+	float best_distance = 0.0f;
 	vec3_t d;
 
 	if (!Seed_Representable(p))
-		return true; /* invalid candidates are never insertion opportunities */
+		return -2;
 	/* The acceptance radius crosses hash-cell boundaries in all three axes.
 	 * Searching only p's own cell admitted duplicate/near-duplicate seeds on
 	 * opposite sides of a boundary, inflating the O(n^2) proof and making
@@ -433,13 +440,28 @@ static qboolean Seed_Nearby(vec3_t p)
 				for (i = hash_head[key]; i >= 0; i = hash_next[i])
 				{
 					VectorSubtract(gen_seeds[i].origin, p, d);
-					if (d[2] > -48.0f && d[2] < 48.0f &&
-					    d[0] * d[0] + d[1] * d[1] <
-					        SEED_SPACING * SEED_SPACING * 0.81f)
-						return true;
+					if (d[2] > -48.0f && d[2] < 48.0f)
+					{
+						float horizontal = d[0] * d[0] + d[1] * d[1];
+						float distance = horizontal + d[2] * d[2];
+
+						if (horizontal <
+						        SEED_SPACING * SEED_SPACING * 0.81f &&
+						    (best < 0 || distance < best_distance ||
+						     (distance == best_distance && i < best)))
+						{
+							best = i;
+							best_distance = distance;
+						}
+					}
 				}
 			}
-	return false;
+	return best;
+}
+
+static qboolean Seed_Nearby(vec3_t p)
+{
+	return Seed_NearbyIndex(p) != -1;
 }
 
 /*
@@ -2485,12 +2507,96 @@ static qboolean Seed_WaterFree(vec3_t p)
 	       !(ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME));
 }
 
+static qboolean ProveSwim(int from, int to, short *cost_ms,
+	byte *exit_speed);
+
+static int Water_ProveEdge(void *context, int from, int to,
+	sg_water_proof_t *proof)
+{
+	short cost;
+	byte exit_speed;
+
+	(void)context;
+	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
+	if (!ProveSwim(from, to, &cost, &exit_speed))
+		return 0;
+	proof->cost_ms = cost;
+	proof->exit_speed = exit_speed;
+	return 1;
+}
+
+static sg_water_connect_result_t Water_Connect(int from, int to)
+{
+	sg_water_connect_result_t result = SG_WaterForestConnect(
+		&gen_water_forest, from, to, Water_ProveEdge, NULL);
+
+	if (result == SG_WATER_CONNECT_OVERFLOW)
+		gen_water_overflow = true;
+	return result;
+}
+
+static void Seed_RemoveWater(int seed)
+{
+	int key;
+
+	if (seed != gen_num_seeds - 1)
+		return;
+	key = Seed_HashKey(gen_seeds[seed].origin);
+	if (hash_head[key] == seed)
+		hash_head[key] = hash_next[seed];
+	gen_num_seeds--;
+	gen_num_water--;
+}
+
+typedef enum water_discover_result_e
+{
+	WATER_DISCOVER_NONE,
+	WATER_DISCOVER_CONNECTED,
+	WATER_DISCOVER_OVERFLOW
+} water_discover_result_t;
+
+static water_discover_result_t Seed_DiscoverWater(int from, vec3_t candidate)
+{
+	int nearby, destination, added = false;
+	sg_water_connect_result_t result;
+
+	if (!Seed_WaterFree(candidate))
+		return WATER_DISCOVER_NONE;
+	nearby = Seed_NearbyIndex(candidate);
+	if (nearby == -2 ||
+	    (nearby >= 0 && !(gen_seeds[nearby].flags & RSF_WATER)))
+		return WATER_DISCOVER_NONE;
+	if (nearby >= 0)
+		destination = nearby;
+	else
+	{
+		destination = Seed_AddWater(candidate);
+		if (destination < 0)
+			return gen_seed_overflow ? WATER_DISCOVER_OVERFLOW
+			                         : WATER_DISCOVER_NONE;
+		added = true;
+	}
+	result = Water_Connect(from, destination);
+	if (result == SG_WATER_CONNECT_OVERFLOW)
+	{
+		if (added)
+			Seed_RemoveWater(destination);
+		return WATER_DISCOVER_OVERFLOW;
+	}
+	if (result == SG_WATER_CONNECT_RECORDED ||
+	    result == SG_WATER_CONNECT_ALREADY)
+		return WATER_DISCOVER_CONNECTED;
+	if (added)
+		Seed_RemoveWater(destination);
+	return WATER_DISCOVER_NONE;
+}
+
 /*
  * The six lattice neighbours of a point, in three dimensions -- a water
  * volume has an inside, so up and down are directions like any other.
  * Returns false only on shared seed-capacity overflow.
  */
-static qboolean Seed_WaterNeighbours(vec3_t from)
+static qboolean Seed_WaterNeighbours(int from)
 {
 	static const float dirs6[6][3] = {
 		{ 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 },
@@ -2504,16 +2610,12 @@ static qboolean Seed_WaterNeighbours(vec3_t from)
 
 		Rune_TelemetryAdd(&gen_telemetry.water_scans, 1U);
 
-		cand[0] = from[0] + dirs6[k][0] * SG_WATER_SPACING;
-		cand[1] = from[1] + dirs6[k][1] * SG_WATER_SPACING;
-		cand[2] = from[2] + dirs6[k][2] * SG_WATER_SPACING;
+		cand[0] = gen_seeds[from].origin[0] + dirs6[k][0] * SG_WATER_SPACING;
+		cand[1] = gen_seeds[from].origin[1] + dirs6[k][1] * SG_WATER_SPACING;
+		cand[2] = gen_seeds[from].origin[2] + dirs6[k][2] * SG_WATER_SPACING;
 
-		if (Seed_Nearby(cand))
-			continue;
-		if (!Seed_WaterFree(cand))
-			continue;
-		if (Seed_AddWater(cand) < 0)
-			return !gen_seed_overflow;
+		if (Seed_DiscoverWater(from, cand) == WATER_DISCOVER_OVERFLOW)
+			return false;
 	}
 	return true;
 }
@@ -2541,11 +2643,14 @@ static void Seed_Water(void)
 
 	for (i = 0; i < dry && !capacity_exhausted; i++)
 	{
+		if (gen_seeds[i].flags & RSF_WATER)
+			continue;
 		for (k = 0; k < 4 && !capacity_exhausted; k++)
 		{
 			for (z = 0; z < 3; z++)
 			{
 				vec3_t cand;
+				water_discover_result_t result;
 
 				Rune_TelemetryAdd(&gen_telemetry.water_scans, 1U);
 
@@ -2553,17 +2658,17 @@ static void Seed_Water(void)
 				cand[1] = gen_seeds[i].origin[1] + around[k][1] * SG_WATER_SPACING;
 				cand[2] = gen_seeds[i].origin[2] + 24.0f + drops[z];
 
-				if (Seed_Nearby(cand))
-					continue;
-				if (!Seed_WaterFree(cand))
-					continue;
-				if (Seed_AddWater(cand) < 0)
+				result = Seed_DiscoverWater(i, cand);
+				if (result == WATER_DISCOVER_OVERFLOW)
 				{
-					capacity_exhausted = gen_seed_overflow;
+					capacity_exhausted = true;
 					break;
 				}
-				entries++;
-				break;          /* one entry per direction is enough */
+				if (result == WATER_DISCOVER_CONNECTED)
+				{
+					entries++;
+					break;
+				}
 			}
 		}
 	}
@@ -2580,30 +2685,22 @@ static void Seed_Water(void)
 	gen_first_water = 0;
 	for (i = 0; i < gen_num_seeds && !capacity_exhausted; i++)
 	{
-		vec3_t here;
-
 		if (!(gen_seeds[i].flags & RSF_WATER))
 			continue;
-		VectorCopy(gen_seeds[i].origin, here);
-		capacity_exhausted = !Seed_WaterNeighbours(here);
+		capacity_exhausted = !Seed_WaterNeighbours(i);
 	}
 	if (capacity_exhausted)
 	{
 		gen_water_overflow = true;
-		sg_host.dprint("rune: total seed capacity %d exhausted during water "
-		               "discovery; graph will not be written\n", SEED_MAX);
+		sg_host.dprint("rune: water discovery capacity exhausted; "
+		               "graph will not be written\n");
 	}
 
 	sg_host.dprint("rune: %d water seeds (%d entered from dry land)\n",
 	           gen_num_water, entries);
 }
 
-/*
- * A from-seed index over the links the pair loop already wrote, so the swim
- * pass can ask "is this pair linked already" without walking every link. It
- * is a snapshot: links the swim pass itself adds are not in it, which is
- * safe because that pass visits each ordered pair exactly once.
- */
+/* A snapshot of links written before the sparse swim forest is published. */
 static int *sw_first, *sw_next;
 
 static void Link_Index_Build(void)
@@ -2666,71 +2763,40 @@ static qboolean ProveSwim(int from, int to, short *cost_ms, byte *exit_speed)
 	return true;
 }
 
-static void Prove_Swim_Pair(int from, int to)
-{
-	short cost;
-	byte espeed;
-	int have = Link_Index_Find(from, to);
-
-	/* DROP and HOOK have their own complete proofs and controllers.  Ordinary
-	 * direct pairs are absent from the dry pass and must earn a SWIM record
-	 * here; no existing record is ever converted by changing its action byte. */
-	if (have >= 0)
-		return;
-	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
-	if (ProveSwim(from, to, &cost, &espeed))
-	{
-		if (Link_Add(from, to, RL_SWIM, cost, espeed))
-		{
-			/* Zero is the exact-controller marker in this otherwise unused
-			 * field. Old RUN/JUMP records relabelled SWIM retain 255 and are
-			 * rejected by both Rune_Load and runelint. */
-			gen_links[gen_num_links - 1].heading_slack = 0;
-			gen_swim_links++;
-		}
-	}
-}
-
-/*
- * Swim links: water to water, and water to and from the shore. Only water
- * seeds drive the outer loop, so this costs time proportional to the water
- * in the map, not to the map. Every ORDERED pair is visited exactly once:
- * two water seeds each take their own turn as i and each does its own
- * outgoing direction, while a dry j never takes a turn at all, so its
- * direction back into the water is done here.
- */
 static void Prove_Swims(void)
 {
-	int i, j;
+	size_t i, publishable = 0;
 
-	if (gen_first_water < 0)
+	if (gen_first_water < 0 || gen_water_forest.edge_count == 0)
 		return;
 
 	Link_Index_Build();
-
-	for (i = 0; i < gen_num_seeds; i++)
+	for (i = 0; i < gen_water_forest.edge_count; i++)
 	{
-		if (!(gen_seeds[i].flags & RSF_WATER))
+		sg_water_edge_t *edge = &gen_water_forest.edges[i];
+
+		if (Link_Index_Find(edge->from, edge->to) < 0)
+			publishable++;
+	}
+	if (publishable > (size_t)(LINK_MAX - gen_num_links))
+	{
+		gen_link_overflow = true;
+		goto done;
+	}
+	for (i = 0; i < gen_water_forest.edge_count; i++)
+	{
+		sg_water_edge_t *edge = &gen_water_forest.edges[i];
+
+		if (Link_Index_Find(edge->from, edge->to) >= 0)
 			continue;
-		for (j = 0; j < gen_num_seeds; j++)
-		{
-			vec3_t d;
-
-			if (i == j)
-				continue;
-			Rune_TelemetryAdd(&gen_telemetry.pair_scans, 1U);
-			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
-			if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >
-			        SG_SWIM_REACH * SG_SWIM_REACH)
-				continue;
-
-			Prove_Swim_Pair(i, j);
-			/* the way back, unless j is water and will come round as i */
-			if (!(gen_seeds[j].flags & RSF_WATER))
-				Prove_Swim_Pair(j, i);
-		}
+		if (!Link_Add(edge->from, edge->to, RL_SWIM,
+		    (short)edge->proof.cost_ms, edge->proof.exit_speed))
+			break;
+		gen_links[gen_num_links - 1].heading_slack = 0;
+		gen_swim_links++;
 	}
 
+done:
 	sg_host.game_free(sw_first);
 	sg_host.game_free(sw_next);
 	sw_first = NULL;
@@ -8363,11 +8429,25 @@ qboolean Rune_Generate(const char *mapname)
 	gen_seeds = NULL;
 	gen_links = NULL;
 	gen_mechanism_bindings = NULL;
+	gen_water_parents = NULL;
+	gen_water_ranks = NULL;
+	gen_water_edges = NULL;
+	gen_water_edge_slots = NULL;
 	gen_seeds = sg_host.game_alloc(sizeof(rune_seed_t) * SEED_MAX);
 	gen_links = sg_host.game_alloc(sizeof(rune_link_t) * LINK_MAX);
 	gen_mechanism_bindings = sg_host.game_alloc(
 		sizeof(*gen_mechanism_bindings) * LINK_MAX);
-	if (!gen_seeds || !gen_links || !gen_mechanism_bindings)
+	gen_water_parents = sg_host.game_alloc(sizeof(*gen_water_parents) * SEED_MAX);
+	gen_water_ranks = sg_host.game_alloc(sizeof(*gen_water_ranks) * SEED_MAX);
+	gen_water_edges = sg_host.game_alloc(sizeof(*gen_water_edges) * LINK_MAX);
+	gen_water_edge_slots = sg_host.game_alloc(
+		sizeof(*gen_water_edge_slots) * LINK_MAX * 2U);
+	if (!gen_seeds || !gen_links || !gen_mechanism_bindings ||
+	    !gen_water_parents || !gen_water_ranks || !gen_water_edges ||
+	    !gen_water_edge_slots ||
+	    !SG_WaterForestInit(&gen_water_forest, gen_water_parents,
+	    gen_water_ranks, SEED_MAX, gen_water_edges, LINK_MAX,
+	    gen_water_edge_slots, LINK_MAX * 2U))
 	{
 		sg_host.dprint("rune: FAILED: generator allocation; graph was not written\n");
 		goto cleanup;
@@ -8771,9 +8851,21 @@ cleanup:
 		sg_host.game_free(gen_links);
 	if (gen_mechanism_bindings)
 		sg_host.game_free(gen_mechanism_bindings);
+	if (gen_water_parents)
+		sg_host.game_free(gen_water_parents);
+	if (gen_water_ranks)
+		sg_host.game_free(gen_water_ranks);
+	if (gen_water_edges)
+		sg_host.game_free(gen_water_edges);
+	if (gen_water_edge_slots)
+		sg_host.game_free(gen_water_edge_slots);
 	gen_seeds = NULL;
 	gen_links = NULL;
 	gen_mechanism_bindings = NULL;
+	gen_water_parents = NULL;
+	gen_water_ranks = NULL;
+	gen_water_edges = NULL;
+	gen_water_edge_slots = NULL;
 	gen_num_mechanism_bindings = 0U;
 	gen_num_seeds = 0;
 	gen_num_links = 0;
