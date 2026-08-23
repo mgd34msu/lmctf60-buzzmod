@@ -310,6 +310,18 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 qboolean SG_OracleButtonLiftApproach(const vec3_t source,
 	const vec3_t target, edict_t *button, edict_t *platform,
 	int *arrival_ms);
+qboolean SG_OracleButtonLiftBoard(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *platform,
+	int *arrival_ms, vec3_t button_contact_out, vec3_t board_contact_out,
+	vec3_t platform_origin_out);
+qboolean SG_OracleButtonLiftSwimBoard(sg_phantom_t *phantom,
+	const vec3_t target, edict_t *button, edict_t *platform,
+	int *arrival_ms, vec3_t button_contact_out, vec3_t board_contact_out,
+	vec3_t platform_origin_out);
+qboolean SG_OracleButtonLiftSwimEgress(const vec3_t source,
+	const vec3_t target, edict_t *platform, int *arrival_ms);
+qboolean SG_OracleButtonLiftCarry(const vec3_t source,
+	const vec3_t displacement, edict_t *platform, vec3_t destination_out);
 qboolean SG_OracleTrainGateApproach(const vec3_t source,
 	const vec3_t target, edict_t *button, int *arrival_ms,
 	vec3_t contact_out);

@@ -609,6 +609,7 @@ typedef struct execution_fixture_s
 	uint32_t edge_count;
 	qboolean multi_cellar;
 	qboolean button_carrier;
+	qboolean toggle_carrier;
 } execution_fixture_t;
 
 static void PutU16(unsigned char *output, uint16_t value)
@@ -910,13 +911,32 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	VectorCopy(entity->moveinfo.start_origin, entity->s.origin);
 	DoorEntity(KEY_CARRIER, "carrier");
 	entity = &test_edicts[KEY_CARRIER];
-	entity->spawnflags = 5;
+	entity->spawnflags = fixture->toggle_carrier ? 32 : 5;
 	entity->moveinfo.wait = 5.0f;
 	VectorSet(entity->mins, -50.0f, -50.0f, -10.0f);
 	VectorSet(entity->maxs, 50.0f, 50.0f, 130.0f);
 	VectorSet(entity->moveinfo.start_origin, 0.0f, 0.0f, -1024.0f);
 	VectorClear(entity->moveinfo.end_origin);
 	VectorCopy(entity->moveinfo.start_origin, entity->s.origin);
+	VectorAdd(entity->s.origin, entity->mins, entity->absmin);
+	VectorAdd(entity->s.origin, entity->maxs, entity->absmax);
+	if (fixture->toggle_carrier)
+	{
+		InitializeEntity(KEY_SPARE, "func_button");
+		entity = &test_edicts[KEY_SPARE];
+		entity->target = "carrier";
+		entity->touch = button_touch;
+		entity->use = button_use;
+		entity->solid = SOLID_BSP;
+		entity->movetype = MOVETYPE_STOP;
+		entity->wait = 0.2f;
+		entity->moveinfo.wait = 0.2f;
+		entity->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+		VectorSet(entity->absmin, -34.0f, -34.0f, 6.0f);
+		VectorSet(entity->absmax, 34.0f, 34.0f, 114.0f);
+		VectorClear(entity->moveinfo.start_origin);
+		VectorSet(entity->moveinfo.end_origin, 0.0f, 0.0f, 4.0f);
+	}
 
 	test_edicts[KEY_BOT].inuse = true;
 	test_edicts[KEY_BOT].s.number = KEY_BOT;
@@ -1104,6 +1124,16 @@ static void FixtureBuildButtonCarrier(execution_fixture_t *fixture)
 {
 	memset(fixture, 0, sizeof(*fixture));
 	fixture->button_carrier = true;
+	BuildLiveCatalog(fixture);
+	BuildRune(fixture);
+	active_rune = &fixture->rune;
+}
+
+static void FixtureBuildToggleCarrier(execution_fixture_t *fixture)
+{
+	memset(fixture, 0, sizeof(*fixture));
+	fixture->button_carrier = true;
+	fixture->toggle_carrier = true;
 	BuildLiveCatalog(fixture);
 	BuildRune(fixture);
 	active_rune = &fixture->rune;
@@ -1609,6 +1639,119 @@ static void TestButtonCarrierExecution(execution_fixture_t *fixture)
 	CHECK(bot->declared_triggered);
 	CHECK(door_uses[CHAIN_CARRIER] == 1);
 	CHECK(carrier->moveinfo.state == SG_PLAT_STATE_UP);
+}
+
+static void TestToggleButtonCarrierExecution(execution_fixture_t *fixture)
+{
+	static const short source_q8[3] = { 0, 0, -7999 };
+	static const short partial_q8[3] = { 360, 0, -7999 };
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *button;
+	edict_t *carrier;
+	edict_t *entity;
+
+	FixtureBuildToggleCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = button;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	CHECK(SG_AuthorizeButtonTouch(button, entity));
+	button->activator = entity;
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->moveinfo.endfunc = button_wait;
+	button->think = Move_Done;
+	button->nextthink = 0.0f;
+	level.framenum++;
+	CHECK(!SG_AuthorizeButtonTargets(button, entity));
+	CHECK(!bot->declared_triggered);
+	CHECK(door_uses[CHAIN_CARRIER] == 0);
+
+	FixtureBuildToggleCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = &test_edicts[KEY_AUTO_DOOR];
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(!SG_AuthorizeButtonTouch(button, entity));
+
+	FixtureBuildToggleCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = g_edicts;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	CHECK(SG_AuthorizeButtonTouch(button, entity));
+	button->activator = entity;
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->moveinfo.endfunc = button_wait;
+	button->think = Move_Done;
+	button->nextthink = 0.0f;
+	entity->groundentity = carrier;
+	level.framenum++;
+	CHECK(SG_AuthorizeButtonTargets(button, entity));
+	CHECK(bot->declared_trigger_frame == level.framenum);
+	CHECK(SG_HandleMechanismTargets(button, entity));
+	CHECK(bot->declared_triggered);
+	CHECK(door_uses[CHAIN_CARRIER] == 1);
+	CHECK(carrier->moveinfo.state == SG_PLAT_STATE_UP);
+
+	FixtureBuildToggleCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(partial_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = g_edicts;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_AuthorizeButtonTouch(button, entity));
+	button->activator = entity;
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->moveinfo.endfunc = button_wait;
+	button->think = Move_Done;
+	button->nextthink = 0.0f;
+	level.framenum++;
+	CHECK(SG_AuthorizeButtonTargets(button, entity));
+	CHECK(SG_HandleMechanismTargets(button, entity));
+	CHECK(carrier->moveinfo.state == SG_PLAT_STATE_UP);
+
+	FixtureBuildToggleCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(partial_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = carrier;
+	entity->waterlevel = 3;
+	entity->watertype = CONTENTS_WATER;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_AuthorizeButtonTouch(button, entity));
+	button->activator = entity;
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->moveinfo.endfunc = button_wait;
+	button->think = Move_Done;
+	button->nextthink = 0.0f;
+	level.framenum++;
+	CHECK(SG_AuthorizeButtonTargets(button, entity));
+	CHECK(SG_HandleMechanismTargets(button, entity));
+	CHECK(carrier->moveinfo.state == SG_PLAT_STATE_UP);
+
+	FixtureBuildToggleCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(partial_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = carrier;
+	entity->waterlevel = 3;
+	entity->watertype = CONTENTS_SLIME;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(!SG_AuthorizeButtonTouch(button, entity));
 }
 
 static void TestCarrierOneStageStaticEgress(execution_fixture_t *fixture)
@@ -2403,6 +2546,7 @@ int main(void)
 	FixtureBuild(&fixture);
 	TestCarrierExecution(&fixture);
 	TestButtonCarrierExecution(&fixture);
+	TestToggleButtonCarrierExecution(&fixture);
 	FixtureBuild(&fixture);
 	TestCarrierOneStageStaticEgress(&fixture);
 	FixtureBuild(&fixture);

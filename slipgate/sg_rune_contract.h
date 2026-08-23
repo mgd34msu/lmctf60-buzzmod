@@ -28,4 +28,10 @@ static inline int SG_RuneCarrierDoorSpawnflags(uint32_t spawnflags)
 	return spawnflags == UINT32_C(4) || spawnflags == UINT32_C(5);
 }
 
+static inline int SG_RuneButtonCarrierDoorSpawnflags(uint32_t spawnflags)
+{
+	return SG_RuneCarrierDoorSpawnflags(spawnflags) ||
+	       spawnflags == UINT32_C(32);
+}
+
 #endif /* SG_RUNE_CONTRACT_H */

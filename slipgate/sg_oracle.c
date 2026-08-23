@@ -7284,9 +7284,119 @@ qboolean SG_OracleTrainGateApproach(const vec3_t source,
 	           NULL, NULL, RL_TRAIN, arrival_ms, contact_out, NULL);
 }
 
-qboolean SG_OracleTrainRideBoard(const vec3_t source,
+static qboolean SG_OracleButtonCarrierSupported(const sg_phantom_t *ph,
+	edict_t *carrier, qboolean contained)
+{
+	float feet;
+
+	if (!ph || !carrier)
+		return false;
+	if (contained &&
+	    (ph->origin[0] + ph->mins[0] < carrier->absmin[0] + 0.125f ||
+	     ph->origin[0] + ph->maxs[0] > carrier->absmax[0] - 0.125f ||
+	     ph->origin[1] + ph->mins[1] < carrier->absmin[1] + 0.125f ||
+	     ph->origin[1] + ph->maxs[1] > carrier->absmax[1] - 0.125f))
+		return false;
+	if (ph->groundentity_entity == carrier)
+		return true;
+	feet = ph->origin[2] + ph->mins[2];
+	return fabsf(feet - carrier->absmax[2]) <= 4.0f &&
+	       ph->origin[0] + ph->maxs[0] > carrier->absmin[0] + 1.0f &&
+	       ph->origin[0] + ph->mins[0] < carrier->absmax[0] - 1.0f &&
+	       ph->origin[1] + ph->maxs[1] > carrier->absmin[1] + 1.0f &&
+	       ph->origin[1] + ph->mins[1] < carrier->absmax[1] - 1.0f;
+}
+
+static qboolean SG_OracleButtonLiftMovingBoard(sg_phantom_t *ph,
+	edict_t *platform, int *moving_ms_out)
+{
+	vec3_t destination;
+	vec3_t direction;
+	float remaining;
+	float step;
+	int moving_ms = 0;
+
+	if (moving_ms_out)
+		*moving_ms_out = 0;
+	if (!ph || !platform || !moving_ms_out ||
+	    !isfinite(platform->moveinfo.speed) || platform->moveinfo.speed <= 0.0f)
+		return false;
+	if (SG_OracleButtonCarrierSupported(ph, platform, true))
+		return true;
+	if (VectorCompare(platform->s.origin, platform->moveinfo.start_origin))
+		VectorCopy(platform->moveinfo.end_origin, destination);
+	else if (VectorCompare(platform->s.origin, platform->moveinfo.end_origin))
+		VectorCopy(platform->moveinfo.start_origin, destination);
+	else
+		return false;
+	VectorSubtract(destination, platform->s.origin, direction);
+	remaining = VectorNormalize(direction);
+	step = platform->moveinfo.speed * (float)SG_SWIM_STEP_MSEC * 0.001f;
+	if (!isfinite(remaining) || remaining < 8.0f ||
+	    !isfinite(step) || step <= 0.0f)
+		return false;
+	while (remaining > 0.0f && moving_ms < 1000 &&
+	       !SG_OracleButtonCarrierSupported(ph, platform, true))
+	{
+		vec3_t body_destination;
+		vec3_t board_target;
+		trace_t trace;
+		float amount = remaining < step ? remaining : step;
+		qboolean carried = SG_OracleButtonCarrierSupported(ph, platform, false);
+		int axis;
+
+		VectorCopy(ph->origin, body_destination);
+		if (carried)
+		{
+			VectorMA(ph->origin, amount, direction, body_destination);
+			if (!SG_OracleStablePopulationTrace(ph->origin, ph->mins, ph->maxs,
+			        body_destination, platform, true, &trace) ||
+			    trace.startsolid || trace.allsolid || trace.fraction < 1.0f)
+				return false;
+		}
+		VectorMA(platform->s.origin, amount, direction, platform->s.origin);
+		VectorCopy(platform->s.origin, platform->s.old_origin);
+		sg_host.linkentity(platform);
+		if (carried)
+		{
+			VectorCopy(body_destination, ph->origin);
+			for (axis = 0; axis < 3; axis++)
+				ph->pms.origin[axis] = (short)(ph->origin[axis] * 8.0f);
+		}
+		board_target[0] = (platform->absmin[0] + platform->absmax[0]) * 0.5f;
+		board_target[1] = (platform->absmin[1] + platform->absmax[1]) * 0.5f;
+		board_target[2] = platform->absmax[2] + 24.125f;
+		{
+			usercmd_t cmd;
+
+			memset(&cmd, 0, sizeof(cmd));
+			cmd.msec = SG_SWIM_STEP_MSEC;
+			if (ph->waterlevel > 0)
+			{
+				if (!SG_SwimCommand(ph->origin, board_target, &ph->pms, &cmd))
+					return false;
+			}
+			else if (!SG_DeclaredCommand(ph->origin, board_target, &ph->pms,
+			             &cmd))
+				return false;
+			SG_OracleRun(ph, &cmd, 1);
+		}
+		if (sg_oracle_contaminated ||
+		    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+			return false;
+		remaining -= amount;
+		moving_ms += SG_SWIM_STEP_MSEC;
+	}
+	if (!SG_OracleButtonCarrierSupported(ph, platform, true))
+		return false;
+	*moving_ms_out = moving_ms;
+	return true;
+}
+
+static qboolean SG_OracleButtonCarrierBoard(const vec3_t source,
 	const vec3_t target, edict_t *button, edict_t *train,
-	int *arrival_ms, vec3_t contact_out)
+	int action, int *arrival_ms, vec3_t activation_out, vec3_t contact_out,
+	vec3_t carrier_origin_out)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
@@ -7301,20 +7411,31 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	usercmd_t cmd;
 	vec3_t travel;
 	vec3_t board_target;
+	vec3_t saved_carrier_origin;
+	vec3_t saved_carrier_old_origin;
 	double dwell_ms;
 	int activation_ms;
 	int elapsed;
 	int dwell_limit;
 	int candidate;
 	int jump_ms;
+	int saved_carrier_linkcount;
 	qboolean ok = false;
 
 	if (contact_out)
 		VectorClear(contact_out);
+	if (activation_out)
+		VectorClear(activation_out);
+	if (carrier_origin_out)
+		VectorClear(carrier_origin_out);
 	if (!button || !train || !contact_out || !arrival_ms || !button->inuse ||
 	    !train->inuse || !button->classname || !train->classname ||
 	    strcmp(button->classname, "func_button") != 0 ||
-	    strcmp(train->classname, "func_train") != 0 ||
+	    (action == RL_TRAIN
+	        ? strcmp(train->classname, "func_train") != 0
+	        : action == RL_LIFT
+	            ? strcmp(train->classname, "func_door") != 0
+	            : true) ||
 	    button->touch != button_touch || button->use != button_use ||
 	    !train->use || !button->target || !train->targetname ||
 	    strcmp(button->target, train->targetname) != 0 ||
@@ -7329,8 +7450,12 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	 * stock acceleration profile cannot reach the endpoint sooner. */
 	if (!isfinite(dwell_ms) || dwell_ms < 25.0 || dwell_ms > 3000.0)
 		return false;
+	VectorCopy(train->s.origin, saved_carrier_origin);
+	VectorCopy(train->s.old_origin, saved_carrier_old_origin);
+	saved_carrier_linkcount = train->linkcount;
 	if (!SG_OracleDeclaredApproachInternal(source, target, button, button,
-	        train, NULL, RL_TRAIN, &activation_ms, NULL, &ph))
+	        train, NULL, action,
+	        &activation_ms, NULL, &ph))
 		return false;
 	activated = ph;
 	dwell_limit = (int)floor(dwell_ms);
@@ -7340,7 +7465,7 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	sg_oracle_declared_expected = button;
 	sg_oracle_declared_entry = button;
 	sg_oracle_declared_door = train;
-	sg_oracle_declared_action = RL_TRAIN;
+	sg_oracle_declared_action = action;
 	sg_oracle_declared_touched = false;
 	for (candidate = 0; candidate < 6 && !ok; candidate++)
 	{
@@ -7349,6 +7474,9 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 			int stable_ms = 0;
 			qboolean trial_clean = true;
 
+			VectorCopy(saved_carrier_origin, train->s.origin);
+			VectorCopy(saved_carrier_old_origin, train->s.old_origin);
+			sg_host.linkentity(train);
 			ph = activated;
 			sg_oracle_contaminated = false;
 			for (elapsed = 25; elapsed <= dwell_limit; elapsed += 25)
@@ -7403,16 +7531,40 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 					trial_clean = false;
 					break;
 				}
-				if (ph.groundentity_entity != train)
+				if (!SG_OracleButtonCarrierSupported(&ph, train,
+				        action == RL_LIFT))
 				{
+					if (action == RL_LIFT && elapsed == dwell_limit)
+					{
+						int moving_ms;
+
+						if (!SG_OracleButtonLiftMovingBoard(&ph, train,
+						        &moving_ms))
+						{
+							trial_clean = false;
+							break;
+						}
+						*arrival_ms = activation_ms + elapsed + moving_ms;
+						if (activation_out)
+							VectorCopy(activated.origin, activation_out);
+						VectorCopy(ph.origin, contact_out);
+						if (carrier_origin_out)
+							VectorCopy(train->s.origin, carrier_origin_out);
+						ok = true;
+						break;
+					}
 					stable_ms = 0;
 					continue;
 				}
 				stable_ms += 25;
-				if (stable_ms < 100)
+				if (stable_ms < (action == RL_LIFT ? 25 : 100))
 					continue;
 				*arrival_ms = activation_ms + elapsed;
+				if (activation_out)
+					VectorCopy(activated.origin, activation_out);
 				VectorCopy(ph.origin, contact_out);
+				if (carrier_origin_out)
+					VectorCopy(train->s.origin, carrier_origin_out);
 				ok = true;
 				break;
 			}
@@ -7423,6 +7575,10 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 
 	if (ph.door_passed)
 		ok = false;
+	VectorCopy(saved_carrier_origin, train->s.origin);
+	VectorCopy(saved_carrier_old_origin, train->s.old_origin);
+	sg_host.linkentity(train);
+	train->linkcount = saved_carrier_linkcount;
 	sg_oracle_passent = old_passent;
 	sg_oracle_world_only = old_world;
 	sg_oracle_contaminated = old_contaminated;
@@ -7434,8 +7590,225 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	return ok;
 }
 
-qboolean SG_OracleTrainRideCarry(const vec3_t source,
-	const vec3_t displacement, edict_t *train, vec3_t destination_out)
+qboolean SG_OracleTrainRideBoard(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *train,
+	int *arrival_ms, vec3_t contact_out)
+{
+	return SG_OracleButtonCarrierBoard(source, target, button, train,
+		RL_TRAIN, arrival_ms, NULL, contact_out, NULL);
+}
+
+qboolean SG_OracleButtonLiftBoard(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *platform,
+	int *arrival_ms, vec3_t button_contact_out, vec3_t board_contact_out,
+	vec3_t platform_origin_out)
+{
+	return platform && platform->spawnflags == 32 && platform_origin_out &&
+	       SG_OracleButtonCarrierBoard(source, target, button, platform,
+	           RL_LIFT, arrival_ms, button_contact_out, board_contact_out,
+	           platform_origin_out);
+}
+
+qboolean SG_OracleButtonLiftSwimBoard(sg_phantom_t *ph,
+	const vec3_t target, edict_t *button, edict_t *platform,
+	int *arrival_ms, vec3_t button_contact_out, vec3_t board_contact_out,
+	vec3_t platform_origin_out)
+{
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_entry = sg_oracle_declared_entry;
+	edict_t *old_member = sg_oracle_compound_member;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_touched = sg_oracle_declared_touched;
+	int old_action = sg_oracle_declared_action;
+	usercmd_t cmd;
+	vec3_t travel;
+	vec3_t saved_origin;
+	vec3_t saved_old_origin;
+	vec3_t saved_platform_origin;
+	vec3_t saved_platform_old_origin;
+	double dwell_ms;
+	int elapsed;
+	int saved_linkcount;
+	int saved_platform_linkcount;
+	qboolean ok = false;
+
+	if (button_contact_out)
+		VectorClear(button_contact_out);
+	if (board_contact_out)
+		VectorClear(board_contact_out);
+	if (platform_origin_out)
+		VectorClear(platform_origin_out);
+	if (arrival_ms)
+		*arrival_ms = 0;
+	if (!ph || !target || !button || !platform || !arrival_ms ||
+	    !button_contact_out || !board_contact_out || !platform_origin_out ||
+	    !button->inuse ||
+	    !platform->inuse || !button->classname || !platform->classname ||
+	    strcmp(button->classname, "func_button") ||
+	    strcmp(platform->classname, "func_door") ||
+	    platform->spawnflags != 32 || button->touch != button_touch ||
+	    button->use != button_use || !button->target || !platform->targetname ||
+	    strcmp(button->target, platform->targetname) || ph->waterlevel < 2 ||
+	    !(ph->watertype & CONTENTS_WATER) ||
+	    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+	    !isfinite(button->moveinfo.speed) || button->moveinfo.speed <= 0.0f)
+		return false;
+	VectorSubtract(button->moveinfo.end_origin,
+	    button->moveinfo.start_origin, travel);
+	dwell_ms = (double)VectorLength(travel) /
+	    (double)button->moveinfo.speed * 1000.0;
+	if (!isfinite(dwell_ms) || dwell_ms < 25.0 || dwell_ms > 3000.0)
+		return false;
+	VectorCopy(button->s.origin, saved_origin);
+	VectorCopy(button->s.old_origin, saved_old_origin);
+	saved_linkcount = button->linkcount;
+	VectorCopy(platform->s.origin, saved_platform_origin);
+	VectorCopy(platform->s.old_origin, saved_platform_old_origin);
+	saved_platform_linkcount = platform->linkcount;
+
+	sg_oracle_passent = NULL;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = button;
+	sg_oracle_declared_entry = button;
+	sg_oracle_compound_member = platform;
+	sg_oracle_declared_action = RL_LIFT;
+	sg_oracle_declared_touched = false;
+	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph) ||
+	    sg_oracle_contaminated || sg_oracle_declared_touched)
+		goto done;
+	for (elapsed = 0; elapsed < 3000; elapsed += SG_SWIM_STEP_MSEC)
+	{
+		int hold;
+
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = SG_SWIM_STEP_MSEC;
+		if (!SG_SwimCommand(ph->origin, target, &ph->pms, &cmd))
+			goto done;
+		SG_OracleRun(ph, &cmd, 1);
+		if (sg_oracle_contaminated ||
+		    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+			goto done;
+		if (!sg_oracle_declared_touched)
+			continue;
+		VectorCopy(ph->origin, button_contact_out);
+		for (hold = SG_SWIM_STEP_MSEC; hold <= (int)floor(dwell_ms);
+		     hold += SG_SWIM_STEP_MSEC)
+		{
+			vec3_t board_target;
+			float fraction = (float)hold / (float)floor(dwell_ms);
+			int axis;
+
+			for (axis = 0; axis < 3; axis++)
+				button->s.origin[axis] = button->moveinfo.start_origin[axis] +
+				    fraction * travel[axis];
+			VectorCopy(button->s.origin, button->s.old_origin);
+			sg_host.linkentity(button);
+			board_target[0] =
+			    (platform->absmin[0] + platform->absmax[0]) * 0.5f;
+			board_target[1] =
+			    (platform->absmin[1] + platform->absmax[1]) * 0.5f;
+			board_target[2] = platform->absmax[2] + 24.125f;
+			memset(&cmd, 0, sizeof(cmd));
+			cmd.msec = SG_SWIM_STEP_MSEC;
+			if (ph->waterlevel > 0)
+			{
+				if (!SG_SwimCommand(ph->origin, board_target, &ph->pms, &cmd))
+					goto done;
+			}
+			else if (!SG_DeclaredCommand(ph->origin, board_target, &ph->pms,
+			             &cmd))
+				goto done;
+			SG_OracleRun(ph, &cmd, 1);
+			if (sg_oracle_contaminated ||
+			    (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+				goto done;
+		}
+		if (!SG_OracleButtonCarrierSupported(ph, platform, true))
+		{
+			int moving_ms;
+
+			if (!SG_OracleButtonLiftMovingBoard(ph, platform, &moving_ms))
+				goto done;
+			*arrival_ms += moving_ms;
+		}
+		*arrival_ms += elapsed + SG_SWIM_STEP_MSEC + (int)floor(dwell_ms);
+		VectorCopy(ph->origin, board_contact_out);
+		VectorCopy(platform->s.origin, platform_origin_out);
+		ok = true;
+		goto done;
+	}
+
+done:
+	if (ph->door_passed)
+		ok = false;
+	VectorCopy(saved_origin, button->s.origin);
+	VectorCopy(saved_old_origin, button->s.old_origin);
+	sg_host.linkentity(button);
+	button->linkcount = saved_linkcount;
+	VectorCopy(saved_platform_origin, platform->s.origin);
+	VectorCopy(saved_platform_old_origin, platform->s.old_origin);
+	sg_host.linkentity(platform);
+	platform->linkcount = saved_platform_linkcount;
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_entry = old_entry;
+	sg_oracle_compound_member = old_member;
+	sg_oracle_declared_action = old_action;
+	sg_oracle_declared_touched = old_touched;
+	return ok;
+}
+
+qboolean SG_OracleButtonLiftSwimEgress(const vec3_t source,
+	const vec3_t target, edict_t *platform, int *arrival_ms)
+{
+	edict_t *old_expected = sg_oracle_declared_expected;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	int old_action = sg_oracle_declared_action;
+	sg_phantom_t ph;
+	sg_swim_proof_t proof;
+	usercmd_t cmd;
+	qboolean ok = false;
+
+	if (arrival_ms)
+		*arrival_ms = 0;
+	if (!source || !target || !platform || !arrival_ms || !platform->inuse ||
+	    !platform->classname || strcmp(platform->classname, "func_door") ||
+	    platform->spawnflags != 32)
+		return false;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = platform;
+	sg_oracle_declared_action = RL_LIFT;
+	SG_OraclePlace(&ph, (vec_t *)source);
+	memset(&cmd, 0, sizeof(cmd));
+	SG_OracleRun(&ph, &cmd, 1);
+	if (sg_oracle_contaminated ||
+	    !SG_OracleButtonCarrierSupported(&ph, platform, true) ||
+	    ph.waterlevel < 2 || !(ph.watertype & CONTENTS_WATER) ||
+	    (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
+		goto done;
+	if (!SG_OracleSwimTraverse(&ph, target, true, 0.0f, &proof, NULL, true))
+		goto done;
+	*arrival_ms = proof.arrival_ms;
+	ok = true;
+
+done:
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_action = old_action;
+	return ok;
+}
+
+static qboolean SG_OracleVerticalRideCarry(const vec3_t source,
+	const vec3_t displacement, edict_t *train, qboolean ascending_only,
+	vec3_t destination_out)
 {
 	vec3_t mins = { -16.0f, -16.0f, -24.0f };
 	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
@@ -7447,7 +7820,9 @@ qboolean SG_OracleTrainRideCarry(const vec3_t source,
 	if (!source || !displacement || !train || !train->inuse ||
 	    !destination_out || !SG_OracleFinite3(source) ||
 	    !SG_OracleFinite3(displacement) || fabsf(displacement[0]) > 0.125f ||
-	    fabsf(displacement[1]) > 0.125f || displacement[2] < 8.0f)
+	    fabsf(displacement[1]) > 0.125f ||
+	    (ascending_only ? displacement[2] < 8.0f
+	                    : fabsf(displacement[2]) < 8.0f))
 		return false;
 	for (axis = 0; axis < 3; axis++)
 		destination_out[axis] = source[axis] + displacement[axis];
@@ -7461,6 +7836,23 @@ qboolean SG_OracleTrainRideCarry(const vec3_t source,
 		return false;
 	}
 	return true;
+}
+
+qboolean SG_OracleTrainRideCarry(const vec3_t source,
+	const vec3_t displacement, edict_t *train, vec3_t destination_out)
+{
+	return SG_OracleVerticalRideCarry(source, displacement, train, true,
+		destination_out);
+}
+
+qboolean SG_OracleButtonLiftCarry(const vec3_t source,
+	const vec3_t displacement, edict_t *platform, vec3_t destination_out)
+{
+	return platform && platform->classname &&
+	       !strcmp(platform->classname, "func_door") &&
+	       platform->spawnflags == 32 &&
+	       SG_OracleVerticalRideCarry(source, displacement, platform, false,
+	           destination_out);
 }
 
 qboolean SG_OracleTrainGateShot(const vec3_t source, edict_t *button,
@@ -7714,6 +8106,7 @@ static qboolean SG_OracleDeclaredEgressInternal(const vec3_t source,
 	usercmd_t cmd;
 	qboolean ok = false;
 	int elapsed = 0;
+	int settle_ms = 0;
 
 	if (!support || !support->inuse || !arrival_ms ||
 	    (action != RL_LIFT && action != RL_TRAIN))
@@ -7729,11 +8122,27 @@ static qboolean SG_OracleDeclaredEgressInternal(const vec3_t source,
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 0;
 	SG_OracleRun(&ph, &cmd, 1);
+	if (!sg_oracle_contaminated && !SG_OracleDoorOverlap(&ph) &&
+	    !ph.groundentity && ph.waterlevel == 0 && action == RL_LIFT &&
+	    support->spawnflags == 32 &&
+	    SG_OracleButtonCarrierSupported(&ph, support, true))
+	{
+		while (!ph.groundentity && settle_ms < 200)
+		{
+			memset(&cmd, 0, sizeof(cmd));
+			cmd.msec = 25;
+			SG_OracleRun(&ph, &cmd, 1);
+			settle_ms += 25;
+			if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
+			    ph.waterlevel != 0 ||
+			    (!ph.groundentity &&
+			     !SG_OracleButtonCarrierSupported(&ph, support, true)))
+				break;
+		}
+	}
 	if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
 	    !ph.groundentity || ph.waterlevel != 0)
-	{
 		goto done;
-	}
 	for (elapsed = 0; elapsed < 3000; elapsed += 25)
 	{
 		qboolean outside;
@@ -7748,9 +8157,7 @@ static qboolean SG_OracleDeclaredEgressInternal(const vec3_t source,
 		if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
 		    (ph.waterlevel > 0 &&
 		     (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
-		{
 			goto done;
-		}
 		/* Match SG_LiftRider exactly. Linked entity bounds carry a one-unit
 		 * fringe on both the platform and player; cancelling those fringes
 		 * makes the phantom's physical +/-16 hull leave at absmin/absmax,
@@ -7764,7 +8171,7 @@ static qboolean SG_OracleDeclaredEgressInternal(const vec3_t source,
 		    SG_SupportedArrived(ph.origin, target, ph.groundentity,
 		                        ph.watertype, ph.waterlevel, NULL))
 		{
-			*arrival_ms = elapsed + 25;
+			*arrival_ms = settle_ms + elapsed + 25;
 			ok = true;
 			goto done;
 		}

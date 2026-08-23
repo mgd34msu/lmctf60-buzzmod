@@ -422,11 +422,12 @@ static int Binding_ControllerShape(const rune_t *rune,
 		    entry->path_target_offset == 0U &&
 		    mover->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
 		    mover->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR &&
-		    SG_RuneCarrierDoorSpawnflags(mover->spawnflags) &&
+		    SG_RuneButtonCarrierDoorSpawnflags(mover->spawnflags) &&
 		    (mover->flags & (SG_MECH_NODEF_MOVER |
 		        SG_MECH_NODEF_TEAM_MASTER | SG_MECH_NODEF_SHOOTABLE)) ==
 		        (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER) &&
 		    plan->cooldown_ms == cooldown && plan->expected_members == 1U &&
+		    (link->mode == RLCM_NONE || link->mode == RLCM_RIDE) &&
 		    Binding_EdgeCount(rune, plan, entry->key, mover->key,
 		        SG_MECH_EDGE_TARGET) == 1U;
 

@@ -87,6 +87,10 @@ RUNE_CONTROLLER_TRAIN_SHOOT = contract.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
 def _carrier_door_spawnflags(spawnflags: int) -> bool:
     return spawnflags in (4, 5)
 
+
+def _button_carrier_door_spawnflags(spawnflags: int) -> bool:
+    return _carrier_door_spawnflags(spawnflags) or spawnflags == 32
+
 RUNE_CALLBACK_TOUCH_MULTI = 1
 RUNE_CALLBACK_TOUCH_DOOR_TRIGGER = 2
 RUNE_CALLBACK_BUTTON_TOUCH = 3
@@ -1139,7 +1143,20 @@ def _validate_graph(
         )
         compound = bool(action["trait_mask"] & contract.SG_ACTF_ATOMIC)
         if not compound:
-            if raw[28:40] != _ZERO_12 or link.sweep_clear_ms != 0:
+            if link.sweep_clear_ms != 0:
+                raise _wire_error(
+                    contract.RLW_BAD_LINK_RECORD,
+                    f"link {index} has nonzero noncompound mechanism proof",
+                )
+            if link.action == contract.RL_LIFT:
+                _validate_anchor_policy(
+                    link.mechanism_anchor,
+                    raw[28:40],
+                    contract.RLAP_WORLD,
+                    index,
+                    "mechanism anchor",
+                )
+            elif raw[28:40] != _ZERO_12:
                 raise _wire_error(
                     contract.RLW_BAD_LINK_RECORD,
                     f"link {index} has nonzero noncompound mechanism proof",
@@ -2138,14 +2155,46 @@ def _rune_validate_production_plan(
             len(targets) == 1 and targets[0].to_key == mover.key and
             plan.cooldown_ms == min(entry.wait_ms, RUNE_MAX_TIME_MS)
         )
+        button_carrier = (
+            entry.touch_callback == RUNE_CALLBACK_BUTTON_TOUCH and
+            entry.use_callback == RUNE_CALLBACK_BUTTON_USE and
+            entry.flags & (
+                RUNE_NODEF_SYNTHETIC | RUNE_NODEF_REPEATABLE |
+                RUNE_NODEF_TOUCHABLE | RUNE_NODEF_USABLE |
+                RUNE_NODEF_MOVER | RUNE_NODEF_SHOOTABLE |
+                RUNE_NODEF_FRAME_COMPLETE_MOVER
+            ) == (
+                RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE |
+                RUNE_NODEF_USABLE | RUNE_NODEF_MOVER
+            ) and
+            entry.spawnflags == 0 and entry.delay_ms == 0 and
+            entry.wait_ms > 0 and entry.killtarget_offset == 0 and
+            entry.path_target_offset == 0 and
+            mover.use_callback == RUNE_CALLBACK_USE_DOOR and
+            mover.blocked_callback == RUNE_CALLBACK_BLOCKED_DOOR and
+            _button_carrier_door_spawnflags(mover.spawnflags) and
+            mover.flags & (
+                RUNE_NODEF_MOVER | RUNE_NODEF_TEAM_MASTER |
+                RUNE_NODEF_SHOOTABLE
+            ) == (RUNE_NODEF_MOVER | RUNE_NODEF_TEAM_MASTER) and
+            len(targets) == 1 and targets[0].to_key == mover.key and
+            plan.cooldown_ms == min(entry.wait_ms, RUNE_MAX_TIME_MS) and
+            plan.expected_members == 1 and
+            owner_link.mode in (contract.RLCM_NONE, contract.RLCM_RIDE)
+        )
+        toggle_button_carrier = button_carrier and mover.spawnflags == 32
         if (
             entry.kind != RUNE_NODE_PLATFORM_TRIGGER or
             mover.kind != RUNE_NODE_PLATFORM or
             len(owner) != 1 or owner[0].to_key != mover.key or
-            not (stock or carrier)
+            not (stock or carrier or button_carrier) or
+            toggle_button_carrier == all(
+                component == 0.0 for component in
+                owner_link.mechanism_anchor
+            )
         ):
             fail("does not satisfy the platform controller law")
-        if carrier:
+        if carrier or button_carrier:
             add_edge(targets[0])
         add_edge(owner[0])
         if stock:

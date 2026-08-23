@@ -528,26 +528,35 @@ qboolean SG_LiftRest(edict_t *entry, edict_t *plat, edict_t *passent,
 	else if (!strcmp(plat->classname, "func_door") &&
 	         entry->touch == button_touch)
 	{
-		start[0] = (entry->absmin[0] + entry->absmax[0]) * 0.5f;
-		start[1] = (entry->absmin[1] + entry->absmax[1]) * 0.5f;
+		int entry_endpoint = SG_ToggleCarrierButtonEndpoint(entry, plat);
+		int current_endpoint;
+
+		if (entry_endpoint < 0)
+			entry_endpoint = 0;
 		if (VectorCompare(plat->s.origin, plat->moveinfo.start_origin))
+			current_endpoint = 0;
+		else if (VectorCompare(plat->s.origin, plat->moveinfo.end_origin))
+			current_endpoint = 1;
+		else
+			return false;
+		if (current_endpoint == entry_endpoint)
 		{
+			start[0] = (entry->absmin[0] + entry->absmax[0]) * 0.5f;
+			start[1] = (entry->absmin[1] + entry->absmax[1]) * 0.5f;
 			start[2] = entry->absmax[2] + 24.125f;
 			expected = entry;
 		}
-		else if (VectorCompare(plat->s.origin, plat->moveinfo.end_origin))
+		else
 		{
+			start[0] = (plat->absmin[0] + plat->absmax[0]) * 0.5f;
+			start[1] = (plat->absmin[1] + plat->absmax[1]) * 0.5f;
 			start[2] = plat->absmax[2] + 24.125f;
 			expected = plat;
 		}
-		else
-			return false;
 		VectorCopy(start, end);
 		end[2] -= expected == entry ? 8.0f : 128.0f;
 		tr = sg_host.trace(start, mins, maxs, end, passent,
 		                   MASK_PLAYERSOLID);
-		if (tr.ent != expected)
-			return false;
 	}
 	else
 		return false;
