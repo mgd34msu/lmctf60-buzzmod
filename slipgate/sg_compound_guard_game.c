@@ -15,6 +15,7 @@
 #include "sg_compound_drop_game.h"
 #include "sg_compound_hook_game.h"
 #include "sg_rune_mechanism_catalog.h"
+#include "sg_util.h"
 
 typedef struct sg_compound_guard_game_identity_s
 {
@@ -399,6 +400,75 @@ static sg_compound_guard_observation_t GameAllSubjectsOutside(void *context,
 	return GameAllSubjectsOutsideMode(context, keys, key_count, 0);
 }
 
+static int GameShootDoorTeam(const sg_mover_key_t *keys, size_t key_count,
+	edict_t *members[SG_MOVER_LEASE_MAX_KEYS])
+{
+	rune_t *rune = SG_Rune();
+	uint32_t master_key = SG_MECH_NO_KEY;
+	size_t index;
+
+	if (!rune || !SG_RunePublishedShapeValid(rune) || !keys || !members ||
+	    key_count == 0U || key_count > SG_MOVER_LEASE_MAX_KEYS)
+		return 0;
+	for (index = 0U; index < key_count; index++)
+	{
+		const rune_mechanism_node_t *node =
+			SG_RuneMechanismNodeByKey(rune, keys[index]);
+
+		if (!node || (node->kind != SG_MECH_NODE_DOOR_MASTER &&
+		              node->kind != SG_MECH_NODE_DOOR_MEMBER) ||
+		    !SG_MechCatalogEntityExecutionMatches(keys[index], node,
+		        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) ||
+		    !(members[index] = SG_MechCatalogResolveEntity(keys[index], node)))
+			return 0;
+		if (node->kind == SG_MECH_NODE_DOOR_MASTER)
+		{
+			if (master_key != SG_MECH_NO_KEY ||
+			    node->team_master_key != node->key)
+				return 0;
+			master_key = node->key;
+		}
+	}
+	if (master_key == SG_MECH_NO_KEY)
+		return 0;
+	for (index = 0U; index < key_count; index++)
+	{
+		const rune_mechanism_node_t *node =
+			SG_RuneMechanismNodeByKey(rune, keys[index]);
+
+		if (!node || node->team_master_key != master_key)
+			return 0;
+	}
+	return 1;
+}
+
+static sg_compound_guard_observation_t GameShootDoorHold(
+	const sg_mover_key_t *keys, size_t key_count, int lease_ms)
+{
+	edict_t *members[SG_MOVER_LEASE_MAX_KEYS];
+	size_t index;
+	int closed = 1;
+	int opening = 1;
+	int open = 1;
+
+	if (!GameShootDoorTeam(keys, key_count, members))
+		return SG_COMPOUND_GUARD_OBSERVATION_ERROR;
+	for (index = 0U; index < key_count; index++)
+	{
+		closed = closed &&
+			members[index]->moveinfo.state == SG_PLAT_STATE_BOTTOM;
+		opening = opening &&
+			members[index]->moveinfo.state == SG_PLAT_STATE_UP;
+		open = open && members[index]->moveinfo.state == SG_PLAT_STATE_TOP;
+	}
+	if (closed || opening)
+		return SG_COMPOUND_GUARD_YES;
+	if (!open)
+		return SG_COMPOUND_GUARD_NO;
+	return SG_DeclaredDoorHoldMembers(members, (int)key_count, lease_ms)
+	    ? SG_COMPOUND_GUARD_YES : SG_COMPOUND_GUARD_NO;
+}
+
 static sg_compound_guard_observation_t GameHoldOpen(void *context,
 	sg_mover_lease_law_t law, const sg_mover_key_t *keys,
 	size_t key_count, int lease_ms)
@@ -424,7 +494,11 @@ static sg_compound_guard_observation_t GameHoldOpen(void *context,
 	if (law == SG_MOVER_LAW_TRAIN_GATE)
 	{
 		sg_mech_train_gate_pose_t pose;
+		sg_compound_guard_observation_t shoot_door =
+			GameShootDoorHold(keys, key_count, lease_ms);
 
+		if (shoot_door != SG_COMPOUND_GUARD_OBSERVATION_ERROR)
+			return shoot_door;
 		return key_count == 1U &&
 		    SG_MechCatalogTrainGatePose(keys[0], &pose) &&
 		    (pose == SG_MECH_TRAIN_GATE_CLOSED ||
@@ -463,7 +537,12 @@ static sg_compound_guard_observation_t GameSetTerminal(void *context,
 	if (law == SG_MOVER_LAW_TRAIN_GATE)
 	{
 		sg_mech_train_gate_pose_t pose;
+		edict_t *shoot_members[SG_MOVER_LEASE_MAX_KEYS];
 
+		if (GameShootDoorTeam(keys, key_count, shoot_members))
+			return SG_DeclaredDoorMembersTerminal(shoot_members,
+			    (int)key_count) ? SG_COMPOUND_GUARD_YES :
+			        SG_COMPOUND_GUARD_NO;
 		return key_count == 1U &&
 		    SG_MechCatalogTrainGatePose(keys[0], &pose) &&
 		    (pose == SG_MECH_TRAIN_GATE_CLOSED ||

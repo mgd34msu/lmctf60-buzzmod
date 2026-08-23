@@ -85,6 +85,11 @@ void button_killed(edict_t *self, edict_t *inflictor, edict_t *attacker,
 {
 	(void)self; (void)inflictor; (void)attacker; (void)damage; (void)point;
 }
+void door_killed(edict_t *self, edict_t *inflictor, edict_t *attacker,
+	int damage, vec3_t point)
+{
+	(void)self; (void)inflictor; (void)attacker; (void)damage; (void)point;
+}
 THINK_CALLBACK(Think_CalcMoveSpeed)
 THINK_CALLBACK(Think_SpawnDoorTrigger)
 THINK_CALLBACK(plat_go_down)
@@ -980,6 +985,55 @@ static void TestExecutableMoverKinematicsStayCurrent(void)
 		SG_MECHANISM_CONTROLLER_PLATFORM);
 }
 
+static void TestShootDoorOwnedPoseCurrentness(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *node;
+	edict_t *door;
+
+	BuildExecutableMoverCatalog(&view, "func_door");
+	door = &test_edicts[1];
+	door->health = door->max_health = 1;
+	door->takedamage = DAMAGE_YES;
+	door->die = door_killed;
+	/* Health is part of catalog identity, so reseal the authentic shootable
+	 * shape rather than mutating it after publication. */
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "func_door");
+	door = &test_edicts[1];
+	door->wait = door->moveinfo.wait = 3.0f;
+	door->moveinfo.speed = door->moveinfo.accel = door->moveinfo.decel = 100.0f;
+	door->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	door->movetype = MOVETYPE_PUSH;
+	door->solid = SOLID_BSP;
+	door->use = door_use;
+	door->blocked = door_blocked;
+	door->die = door_killed;
+	door->health = door->max_health = 1;
+	door->takedamage = DAMAGE_YES;
+	door->teammaster = door;
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	node = NodeByKey(&view, 1U);
+	CHECK(node && (node->flags & SG_MECH_NODEF_SHOOTABLE) != 0U);
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, node,
+	    SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	door->moveinfo.state = SG_PLAT_STATE_TOP;
+	door->takedamage = DAMAGE_NO;
+	door->think = door_go_down;
+	door->nextthink = 1.0f;
+	door->moveinfo.endfunc = door_hit_top;
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, node,
+	    SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	door->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(1U, node,
+	    SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+	door->moveinfo.state = SG_PLAT_STATE_TOP;
+	door->takedamage = DAMAGE_YES;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(1U, node,
+	    SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
+}
+
 static void SetupTriggeredVerticalDoorLiftCatalog(int spawnflags,
 	float start_z, float end_z)
 {
@@ -1583,6 +1637,7 @@ int main(void)
 	TestInventoryOnlyKinematicsCanonicalized();
 	TestExecutableKinematicsRemainChecked();
 	TestExecutableMoverKinematicsStayCurrent();
+	TestShootDoorOwnedPoseCurrentness();
 	TestTriggeredVerticalDoorLiftCatalog();
 	TestDescendingTriggeredVerticalDoorLiftCatalog();
 	TestFrameCompleteButtonSealGates();

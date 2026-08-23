@@ -8,6 +8,7 @@
 #include "sg_rocketjump_live.h"
 #include "sg_push_live.h"
 #include "sg_train_gate_game.h"
+#include "sg_shoot_door_game.h"
 #include "sg_compound_guard.h"
 #include "sg_compound_swim_live.h"
 #include "sg_compound_drop_live.h"
@@ -263,6 +264,7 @@ typedef struct sg_bot_s
 	sg_rocketjump_live_state_t rocketjump;
 	sg_push_live_state_t push;
 	sg_train_gate_game_state_t train_gate;
+	sg_shoot_door_game_state_t shoot_door;
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;
 	vec3_t		watch_org;

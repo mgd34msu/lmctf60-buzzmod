@@ -21,6 +21,7 @@
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_train_gate_game.h"
+#include "slipgate/sg_shoot_door_game.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
@@ -3051,6 +3052,13 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	if (SG_CompoundSwimGameOwns(bot))
 		return SG_CompoundSwimGameAuthorizeActivation(source, door_master,
 		    activator);
+	{
+		int shoot_door = SG_ShootDoorGameAuthorizeActivation(source,
+		    door_master, activator);
+
+		if (shoot_door >= 0)
+			return shoot_door ? true : false;
+	}
 	{
 		int compound = SG_CompoundDropGameAuthorizeActivation(bot, source,
 		    door_master, activator, level.framenum);
@@ -7629,7 +7637,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			        !bot->compound_drop_live.guard_owned))) ||
 			    (record.law == SG_MOVER_LAW_TRAIN_GATE &&
 			     (rune->links[record.link_index].action != RL_TRAIN ||
-			      !SG_TrainGateGameOwns(bot))) ||
+			      (!SG_TrainGateGameOwns(bot) &&
+			       !SG_ShootDoorGameOwns(bot)))) ||
 			    bot->commit_link != record.link_index)
 			{
 				if (sg_cv.debug && sg_cv.debug->value > 0.0f &&
@@ -7657,6 +7666,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			return;
 		}
 	}
+	if (SG_ShootDoorGameEmit(bot, bestlink))
+		return;
 	if (SG_TrainGateGameEmit(bot, bestlink))
 		return;
 	if (SG_PushGameEmit(bot, bestlink))

@@ -1803,7 +1803,12 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	     entity->use != door_use || entity->blocked != door_blocked ||
 	     entity->die != door_killed || entity->max_health <= 0 ||
 	     entity->health != entity->max_health ||
-	     entity->takedamage != DAMAGE_YES))
+	     !((entity->takedamage == DAMAGE_YES &&
+	        (entity->moveinfo.state == SG_PLAT_STATE_BOTTOM ||
+	         entity->moveinfo.state == SG_PLAT_STATE_DOWN)) ||
+	       (entity->takedamage == DAMAGE_NO &&
+	        (entity->moveinfo.state == SG_PLAT_STATE_UP ||
+	         entity->moveinfo.state == SG_PLAT_STATE_TOP)))))
 		return 0;
 	delay_ms = entity->delay > 0.0f
 		? (uint32_t)Catalog_DelayMS(entity->delay) : 0U;
