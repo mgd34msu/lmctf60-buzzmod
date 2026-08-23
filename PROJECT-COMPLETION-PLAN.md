@@ -639,7 +639,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | Map | Current result |
 | --- | --- |
 | `lmctf01` | 2,401 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
-| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. The red root SCC reaches two dead singleton platform-top seeds through exactly 16 RUN boundaries aligned with externally activated start-open vertical door teams `r_plat1`/`r_plat2`; no LIFT/DOOR links publish. Existing door/lift/button and ordinary controllers are replaying only those cuts. |
+| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. Reverse RUN/JUMP/DROP/HOOK/rocket-jump rejects all 16 red-forward cuts. Six vertical button-door teams are rejected by both safe-door admission and lift endpoint ownership, leaving no movement proof call. The lane is testing whether the existing serialized action can represent the missing authenticated button-carrier transaction. |
 | `lmctf07` | PASS after the accepted train/button repair. |
 | `lmctf12` | 2,263 seeds all prune; the disjoint objective sides have no boundary link. |
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
@@ -652,7 +652,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf3` | Runtime-localized lower destinations prove four authenticated teleports and merge each root with its same-side upper return, but the core still fails. Exhaustive RUN/JUMP/DROP/HOOK/rocket-jump refutes all four new root-central and central-opposite-return cuts. The real destination ownership fix is necessary but insufficient; an intermediate singleton/one-way SCC chain at the base-central threshold is under mechanism/staging diagnosis. |
+| `tw2ctf3` | A combined diagnostic PASS writes 1,815 seeds/29,952 links with roots 224/225 and four teleports. Teleport-only remains insufficient. Closure appears when stock automatic-door teams whose mapper target resolves to zero live entities are admitted as runtime no-ops, enabling ordinary door-aware RUN proof through the symmetric trigger. Zero-target-door-only isolation is running before production. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | PASS: 1,094 seeds, 13,356 links, 11 lift links, 12 plans, and 974 seeds reachable from both roots; artifact write, both C readers, Python, lint, SNAG, fresh cold load, and byte-identical regeneration pass. Full GNU and Make/Clang suites remain before integration. |
