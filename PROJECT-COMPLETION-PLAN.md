@@ -382,8 +382,8 @@ including `lmctf02a` and `lmctf04`.
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
 runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `lmctf45`, `tw2ctf2`,
-`xmap25`, and `xmap29` subsequently passed every acceptance gate, leaving 15
-maps in the live repair queue.
+`xmap04`, `xmap25`, and `xmap29` subsequently passed every acceptance gate,
+leaving 14 maps in the live repair queue.
 Exact retests prove that `tomb05` remains a genuine graph failure.
 `tomb05` reaches objective-core with no closed route
 shared by both flags.
@@ -472,7 +472,7 @@ over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
 `lmctf25`, `lmctf30`, `tomb05`,
-`tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
+`tw2ctf3`, `tw2ctf4`, `xmap02`,
 `xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
@@ -652,10 +652,10 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf3` | A combined diagnostic PASS writes 1,815 seeds/29,952 links with roots 224/225 and four teleports. Teleport-only remains insufficient. Closure appears when stock automatic-door teams whose mapper target resolves to zero live entities are admitted as runtime no-ops, enabling ordinary door-aware RUN proof through the symmetric trigger. Zero-target-door-only isolation is running before production. |
+| `tw2ctf3` | Causal isolation PASS without teleport fallback: 1,815 seeds/29,948 links, roots 224/225, and all acceptance gates green. The repair is ordinary automatic-door safety when a nonempty mapper target resolves to zero live targetnames; matched unsafe targets remain rejected. Diagnostics are being stripped before clean production and full gates. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
-| `xmap04` | PASS: 1,094 seeds, 13,356 links, 11 lift links, 12 plans, and 974 seeds reachable from both roots; artifact write, both C readers, Python, lint, SNAG, fresh cold load, and byte-identical regeneration pass. Full GNU and Make/Clang suites remain before integration. |
+| `xmap04` | PASS and integrated: 1,094 seeds, 13,356 links, 11 lift links, 12 plans, and 974 seeds reachable from both roots; both readers, lint, SNAG, cold load, byte-identical regeneration, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
