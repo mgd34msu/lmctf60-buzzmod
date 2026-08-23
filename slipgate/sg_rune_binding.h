@@ -102,6 +102,11 @@ int SG_RuneMechanismBindingCarrierStage(
 	sg_carrier_door_stage_t stage, struct edict_s **trigger_out,
 	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
 	uint32_t *delay_ms_out);
+int SG_RuneMechanismBindingLiftDoorStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, struct edict_s **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out);
 int SG_RuneMechanismBindingCarrierStageTriggerMatches(
 	const sg_rune_mechanism_binding_t *binding,
 	sg_carrier_door_stage_t stage, const struct edict_s *entity);

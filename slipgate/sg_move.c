@@ -2096,45 +2096,6 @@ static qboolean MechanismStep_StockPlatformDoorPlan(const sg_bot_t *bot,
 	           &trigger, keys, &count);
 }
 
-static qboolean MechanismStep_PlatformAutoDoorContains(
-	const sg_rune_mechanism_binding_t *binding, const edict_t *door)
-{
-	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
-	size_t count;
-	size_t index;
-	edict_t *trigger;
-
-	if (!door || !SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
-	        &trigger, keys, &count))
-		return false;
-	for (index = 0U; index < count; index++)
-		if (SG_RuneMechanismBindingResolveNode(binding, keys[index]) == door)
-			return SG_RuneMechanismBindingCurrent(binding) ? true : false;
-	return false;
-}
-
-static qboolean MechanismStep_PlatformAutoDoorsTop(
-	const sg_rune_mechanism_binding_t *binding)
-{
-	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
-	size_t count;
-	size_t index;
-	edict_t *trigger;
-
-	if (!SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
-	        &trigger, keys, &count))
-		return false;
-	for (index = 0U; index < count; index++)
-	{
-		edict_t *door = SG_RuneMechanismBindingResolveNode(binding,
-			keys[index]);
-
-		if (!door || door->moveinfo.state != SG_PLAT_STATE_TOP)
-			return false;
-	}
-	return SG_RuneMechanismBindingCurrent(binding) ? true : false;
-}
-
 static void MechanismStep_CarrierStateReset(sg_bot_t *bot)
 {
 	if (bot)
@@ -2196,7 +2157,7 @@ static qboolean MechanismStep_CarrierStageContainsMover(
 	edict_t *trigger;
 	size_t index;
 
-	if (!mover || !SG_RuneMechanismBindingCarrierStage(binding, stage,
+	if (!mover || !SG_RuneMechanismBindingLiftDoorStage(binding, stage,
 	        &trigger, keys, &count, &delay_ms))
 		return false;
 	for (index = 0U; index < count; index++)
@@ -2215,7 +2176,7 @@ static qboolean MechanismStep_CarrierStageDoorsTop(
 	edict_t *trigger;
 	size_t index;
 
-	if (!SG_RuneMechanismBindingCarrierStage(binding, stage,
+	if (!SG_RuneMechanismBindingLiftDoorStage(binding, stage,
 	        &trigger, keys, &count, &delay_ms))
 		return false;
 	for (index = 0U; index < count; index++)
@@ -2242,13 +2203,13 @@ static qboolean MechanismStep_CarrierEgressPhase(sg_bot_t *bot,
 		*phase_out = SG_CARRIER_PHASE_FAILED;
 	if (!phase_out || !MechanismStep_CarrierStateCurrent(bot, binding))
 		return false;
-	if (SG_RuneMechanismBindingCarrierStage(binding,
+	if (SG_RuneMechanismBindingLiftDoorStage(binding,
 	        SG_CARRIER_DOOR_EGRESS, &trigger, keys, &count, &delay_ms))
 	{
 		*phase_out = SG_CARRIER_PHASE_EGRESS_ARMED;
 		return true;
 	}
-	if (!SG_RuneMechanismBindingCarrierStage(binding,
+	if (!SG_RuneMechanismBindingLiftDoorStage(binding,
 	        SG_CARRIER_DOOR_APPROACH, &trigger, keys, &count, &delay_ms) ||
 	    !MechanismStep_CarrierStateCurrent(bot, binding))
 		return false;
@@ -3106,8 +3067,9 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	}
 	if (MechanismStep_StockPlatformDoorPlan(bot, &binding) &&
 	    SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(&binding,
-	        source) && MechanismStep_PlatformAutoDoorContains(&binding,
-	        door_master))
+	        source) && MechanismStep_CarrierStageContainsMover(&binding,
+	        binding.link->mode == RLCM_RIDE ? SG_CARRIER_DOOR_EGRESS :
+	        SG_CARRIER_DOOR_APPROACH, door_master))
 	{
 		qboolean ride = binding.link->mode == RLCM_RIDE;
 		sg_carrier_action_phase_t phase = ride
@@ -9728,8 +9690,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						}
 						if (carrier->phase ==
 						        SG_CARRIER_PHASE_APPROACH_OPENING &&
-						    MechanismStep_PlatformAutoDoorsTop(
-						        &mechanism_binding))
+						    MechanismStep_CarrierStageDoorsTop(
+						        &mechanism_binding,
+						        SG_CARRIER_DOOR_APPROACH))
 							carrier->phase = SG_CARRIER_PHASE_CARRIER_READY;
 						if (carrier->phase ==
 						        SG_CARRIER_PHASE_APPROACH_OPENING)

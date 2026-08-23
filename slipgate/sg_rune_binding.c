@@ -1265,6 +1265,26 @@ int SG_RuneMechanismBindingCarrierStage(
 	return 1;
 }
 
+int SG_RuneMechanismBindingLiftDoorStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, struct edict_s **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out)
+{
+	if (binding && binding->link && binding->entry_node &&
+	    binding->entry_node->touch_callback ==
+	        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER)
+	{
+		if (delay_ms_out) *delay_ms_out = 0U;
+		return stage == (binding->link->mode == RLCM_RIDE
+		           ? SG_CARRIER_DOOR_EGRESS : SG_CARRIER_DOOR_APPROACH) &&
+		       SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
+		           trigger_out, keys_out, key_count_out);
+	}
+	return SG_RuneMechanismBindingCarrierStage(binding, stage, trigger_out,
+		keys_out, key_count_out, delay_ms_out);
+}
+
 int SG_RuneMechanismBindingCarrierStageTriggerMatches(
 	const sg_rune_mechanism_binding_t *binding,
 	sg_carrier_door_stage_t stage, const struct edict_s *entity)

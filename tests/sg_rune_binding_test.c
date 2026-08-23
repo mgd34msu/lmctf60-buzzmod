@@ -346,6 +346,7 @@ static void TestStockPlatformRideWithAutomaticDoorEgress(void)
 	rune_mechanism_node_t *door;
 	struct edict_s *egress_entity = NULL;
 	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	uint32_t delay_ms = UINT32_MAX;
 	size_t key_count = 0U;
 
 	FixtureBegin(&fixture, RL_LIFT, SG_MECHANISM_CONTROLLER_PLATFORM,
@@ -371,11 +372,23 @@ static void TestStockPlatformRideWithAutomaticDoorEgress(void)
 		&egress_entity, keys, &key_count));
 	CHECK(egress_entity == &fixture.entities[2]);
 	CHECK(key_count == 1U && keys[0] == 40U);
+	CHECK(SG_RuneMechanismBindingLiftDoorStage(&binding,
+		SG_CARRIER_DOOR_EGRESS, &egress_entity, keys, &key_count,
+		&delay_ms));
+	CHECK(delay_ms == 0U && egress_entity == &fixture.entities[2]);
+	CHECK(!SG_RuneMechanismBindingLiftDoorStage(&binding,
+		SG_CARRIER_DOOR_APPROACH, &egress_entity, keys, &key_count,
+		&delay_ms));
 	CHECK(SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(
 		&binding, &fixture.entities[2]));
 	CHECK(!SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(
 		&binding, &fixture.entities[0]));
 
+	fixture.link.mode = RLCM_NONE;
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(SG_RuneMechanismBindingLiftDoorStage(&binding,
+		SG_CARRIER_DOOR_APPROACH, &egress_entity, keys, &key_count,
+		&delay_ms));
 	fixture.link.mode = RLCM_PREOPEN;
 	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
 	fixture.link.mode = RLCM_RIDE;
