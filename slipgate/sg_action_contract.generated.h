@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 
-#define SG_RUNE_ACTION_CONTRACT_CRC32 0x44c420cfU
-#define SG_RUNE_ACTION_CONTRACT_SHA256 "1c7b6e3e5224ec566277d1d799e6c97f9469b147ebffb81d13219d1cffa00705"
+#define SG_RUNE_ACTION_CONTRACT_CRC32 0xd3907ac4U
+#define SG_RUNE_ACTION_CONTRACT_SHA256 "6218f935fdd3397054e5173b2d718dd88dfb7486794ed5c9654e0732153e24d2"
 #define SG_RUNE_ACTION_CONTRACT_DESCRIPTOR "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9;seed.origin=signed_q8_exact;"
 #define SG_MECHANISM_CONTRACT_CRC32 0xbef56f72U
 #define SG_MECHANISM_CONTRACT_SHA256 "559d5f24edc2319ab64a6773c498036eb0c8c9cdbf388400bafd9d58b9dd7fcd"
@@ -390,7 +390,7 @@ static inline int SG_ActionMechanismPlanAllowed(int action, uint16_t controller)
 	X(RL_DROP, 2, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0003U, RLEP_FROM_DRY, RLAP_DROP_LIP, RLAP_ZERO, RLAP_ZERO, RLCP_DROP, RLMP_NONE, RL_DROP, RLFB_FIXED, 150, "DROP", "DROP", "#e0c000") \
 	X(RL_HOOK, 3, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0001U, RLEP_NOT_BOTH_WATER, RLAP_HOOK_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_HOOK, RLMP_NONE, RL_HOOK, RLFB_ROPE_CVAR, 0, "HOOK", "HOOK", "#ff8c1a") \
 	X(RL_SWIM, 4, 1, RL_PROVEN, 0x0001U, 0x01U, 0x0021U, RLEP_AT_LEAST_ONE_WATER, RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_SWIM, RLMP_NONE, RL_SWIM, RLFB_NONE, 0, "SWIM", "SWIM", "#3d7dff") \
-	X(RL_LIFT, 5, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY, RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_LIFT, RLFB_NONE, 0, "LIFT", "LIFT", "#8f5cff") \
+	X(RL_LIFT, 5, 1, RL_DECLARED, 0x0008U, 0x05U, 0x0025U, RLEP_ANY, RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_LIFT, RLFB_NONE, 0, "LIFT", "LIFT", "#8f5cff") \
 	X(RL_TELEPORT, 6, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY, RLAP_TELEPORT_PAD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_TELEPORT, RLFB_NONE, 0, "TELEPORT", "TELE", "#00d18a") \
 	X(RL_ROCKETJUMP, 7, 1, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH, RLAP_ROCKET_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_ROCKETJUMP, RLMP_NONE, RL_ROCKETJUMP, RLFB_FIXED, 900, "ROCKETJUMP", "RJ", "#ff3b30") \
 	X(RL_DOOR, 8, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_DRY_BOTH, RLAP_DOOR_WAIT, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_DOOR, RLFB_NONE, 0, "DOOR", "DOOR", "#ff66c4") \

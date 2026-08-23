@@ -75,9 +75,9 @@ typedef struct rune_link_s
 	short	cost_ms;        /* real traversal time, milliseconds */
 
 	vec3_t	anchor;
-	/* Compound records retain their independent mechanism witness and
-	 * temporal boundary in the native graph.  Noncompound records keep these
-	 * fields exactly zero with mode RLCM_NONE. */
+	/* Mechanism compounds retain an independent witness and temporal boundary.
+	 * Actions without those policies keep both fields exactly zero; their
+	 * contract still determines which traversal modes are legal. */
 	vec3_t	mechanism_anchor;
 	unsigned short sweep_clear_ms;
 	byte	mode;

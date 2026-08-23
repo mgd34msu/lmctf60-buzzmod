@@ -337,6 +337,52 @@ static void TestPlatform(void)
 	incarnation_failure_key = SG_MECH_NO_KEY;
 }
 
+static void TestStockPlatformRideWithAutomaticDoorEgress(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *egress;
+	rune_mechanism_node_t *door;
+	struct edict_s *egress_entity = NULL;
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t key_count = 0U;
+
+	FixtureBegin(&fixture, RL_LIFT, SG_MECHANISM_CONTROLLER_PLATFORM,
+		0U, 2U);
+	fixture.link.mode = RLCM_RIDE;
+	entry = Node(&fixture, 10U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		SG_MECH_NODEF_SYNTHETIC | SG_MECH_NODEF_TOUCHABLE);
+	entry->owner_key = 20U;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_PLAT_CENTER;
+	Node(&fixture, 20U, SG_MECH_NODE_PLATFORM, SG_MECH_NODEF_MOVER);
+	egress = Node(&fixture, 30U, SG_MECH_NODE_AUTO_DOOR_TRIGGER,
+		SG_MECH_NODEF_SYNTHETIC | SG_MECH_NODEF_TOUCHABLE);
+	egress->owner_key = 40U;
+	egress->touch_callback = SG_MECH_CALLBACK_TOUCH_DOOR_TRIGGER;
+	door = Node(&fixture, 40U, SG_MECH_NODE_DOOR_MASTER,
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER);
+	door->team_master_key = 40U;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_OWNER, 0U);
+	Edge(&fixture, 30U, 40U, SG_MECH_EDGE_OWNER, 0U);
+	FixtureFinish(&fixture, 10U, 20U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(SG_RuneMechanismBindingPlatformAutoDoorStage(&binding,
+		&egress_entity, keys, &key_count));
+	CHECK(egress_entity == &fixture.entities[2]);
+	CHECK(key_count == 1U && keys[0] == 40U);
+	CHECK(SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(
+		&binding, &fixture.entities[2]));
+	CHECK(!SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(
+		&binding, &fixture.entities[0]));
+
+	fixture.link.mode = RLCM_PREOPEN;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	fixture.link.mode = RLCM_RIDE;
+	egress->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
 static void TestTriggeredVerticalDoorLift(void)
 {
 	fixture_t fixture;
@@ -829,6 +875,7 @@ static void TestExecutionStates(void)
 int main(void)
 {
 	TestPlatform();
+	TestStockPlatformRideWithAutomaticDoorEgress();
 	TestTriggeredVerticalDoorLift();
 	TestDescendingCarrierStagesUseAnchorIdentity();
 	TestTeleport();

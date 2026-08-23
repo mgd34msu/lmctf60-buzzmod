@@ -7494,7 +7494,7 @@ qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
 	uint32_t delay_ms;
 
 	return approach_door &&
-	       (SG_DeclaredDoorDirectActivatorSafe(approach_door) ||
+	       (SG_DeclaredDoorActivatorSafe(approach_door) ||
 	        SG_DeclaredDoorDelayedActivatorSafe(approach_door, &delay_ms)) &&
 	       SG_OracleDeclaredApproachInternal(source, target, entry, support,
 	           approach_door, NULL, RL_LIFT, arrival_ms, NULL, NULL);
@@ -7754,7 +7754,7 @@ qboolean SG_OracleDeclaredCompoundLiftEgress(const vec3_t source,
 	qboolean delayed;
 
 	delayed = SG_DeclaredDoorDelayedActivatorSafe(egress_trigger, &delay_ms);
-	return (delayed || SG_DeclaredDoorDirectActivatorSafe(egress_trigger)) &&
+	return (delayed || SG_DeclaredDoorActivatorSafe(egress_trigger)) &&
 	       (delayed
 	            ? SG_DeclaredDelayedDoorOutsideSweep(egress_trigger, source) &&
 	              SG_DeclaredDelayedDoorOutsideSweep(egress_trigger, target)

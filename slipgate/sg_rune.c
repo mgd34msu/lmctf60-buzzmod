@@ -3245,6 +3245,8 @@ static int Door_WaitPoints(edict_t *trigger, vec3_t *points);
 static int Gen_CompoundLiftEgressSeed(const vec3_t top_body, float horiz,
 	edict_t *plat, edict_t **trigger_out, uint16_t *member_count_out,
 	int *egress_ms_out);
+static int Gen_CompoundLiftDoorExit(const vec3_t body, edict_t *plat,
+	edict_t **trigger_out, uint16_t *member_count_out, int *egress_ms_out);
 
 static qboolean Lift_DoorStageDelay(edict_t *trigger,
 	uint32_t *delay_ms_out)
@@ -3253,7 +3255,7 @@ static qboolean Lift_DoorStageDelay(edict_t *trigger,
 		*delay_ms_out = 0U;
 	if (!trigger || !delay_ms_out)
 		return false;
-	if (SG_DeclaredDoorDirectActivatorSafe(trigger))
+	if (SG_DeclaredDoorActivatorSafe(trigger))
 		return true;
 	return SG_DeclaredDoorDelayedActivatorSafe(trigger, delay_ms_out);
 }
@@ -3263,7 +3265,7 @@ static qboolean Lift_DoorStageTouchMatches(edict_t *trigger,
 {
 	uint32_t delay_ms;
 
-	if (SG_DeclaredDoorDirectActivatorSafe(trigger))
+	if (SG_DeclaredDoorActivatorSafe(trigger))
 		return SG_DeclaredDoorTouchMatches(trigger, origin);
 	return SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms) &&
 	       SG_DeclaredDelayedDoorTouchMatches(trigger, origin);
@@ -3326,7 +3328,9 @@ static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
 		uint32_t delay_ms;
 
 		trigger_node = Mechanism_Node(Mechanism_EntityKey(trigger));
-		if (!trigger_node || trigger_node->kind != SG_MECH_NODE_TRIGGER ||
+		if (!trigger_node ||
+		    (trigger_node->kind != SG_MECH_NODE_TRIGGER &&
+		     trigger_node->kind != SG_MECH_NODE_AUTO_DOOR_TRIGGER) ||
 		    !Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX)
 			continue;
 		member_count = DoorTrigger_Targets(trigger, members,
@@ -3414,6 +3418,9 @@ static void Link_Plats(void)
 		float halfx, halfy, horiz;
 		int st_top = -1, before, approach = -1;
 		int approach_ms = 0, egress_ms = 0, saved_state, saved_linkcount;
+		int dispatch_ms = 0, lower_ms = 0, lower_seed = -1;
+		edict_t *lower_door = NULL;
+		uint16_t lower_members = 0U;
 		int saved_solid;
 		int total_cost;
 		qboolean stock;
@@ -3447,21 +3454,21 @@ static void Link_Plats(void)
 		if (SG_LiftRest(entry, e, NULL, bottom_body))
 			approach = Gen_MechanismSeedNear(bottom_body, horiz, 64.0f,
 			    entry, e, true, true, true, false, RL_LIFT, &approach_ms);
-		if (approach < 0 && !stock)
+		if (approach < 0)
 			approach = Lift_CompoundApproach(entry, e, bottom_body,
 				&approach_door, &expected_members, approach_wait,
 				&approach_ms);
 		if (approach < 0 && stock)
 			approach = Gen_LiftWaterSeed(bottom_body, entry, e,
 			    &approach_ms);
-		if (stock)
+		if (approach_door)
+			VectorCopy(approach_wait, anchor);
+		else if (stock)
 		{
 			anchor[0] = source[0] + (e->mins[0] + e->maxs[0]) * 0.5f;
 			anchor[1] = source[1] + (e->mins[1] + e->maxs[1]) * 0.5f;
 			anchor[2] = source[2] + e->maxs[2];
 		}
-		else if (approach_door)
-			VectorCopy(approach_wait, anchor);
 		else
 			VectorCopy(bottom_body, anchor);
 		VectorCopy(destination, e->s.origin);
@@ -3505,6 +3512,18 @@ static void Link_Plats(void)
 						top_count);
 				}
 			}
+		}
+		if (stock && st_top >= 0)
+		{
+			VectorCopy(source, e->s.origin);
+			VectorCopy(source, e->s.old_origin);
+			VectorClear(e->velocity);
+			e->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+			sg_host.linkentity(e);
+			if (SG_OracleDeclaredApproach(gen_seeds[st_top].origin,
+			        top_body, entry, e, RL_LIFT, &dispatch_ms))
+				lower_seed = Gen_CompoundLiftDoorExit(bottom_body, e,
+				    &lower_door, &lower_members, &lower_ms);
 		}
 		VectorCopy(saved_origin, e->s.origin);
 		VectorCopy(saved_old_origin, e->s.old_origin);
@@ -3552,6 +3571,29 @@ static void Link_Plats(void)
 				gen_num_links--;
 			else
 				gen_lift_links++;
+		}
+		if (stock && st_top >= 0 && lower_seed >= 0)
+		{
+			int reverse_cost = dispatch_ms + 1000 + (int)cost + lower_ms;
+
+			if (reverse_cost > 0 && reverse_cost <= RUNE_MAX_COST_MS)
+			{
+				before = gen_num_links;
+				Link_Add(st_top, lower_seed, RL_LIFT,
+				    (short)reverse_cost, 0);
+				if (gen_num_links > before)
+				{
+					rune_link_t *link = &gen_links[gen_num_links - 1];
+
+					link->mode = RLCM_RIDE;
+					VectorCopy(top_body, link->anchor);
+					if (!Mechanism_BindPlatform(link, e, NULL, lower_door,
+					        (uint16_t)(1U + lower_members)))
+						gen_num_links--;
+					else
+						gen_lift_links++;
+				}
+			}
 		}
 
 
@@ -4932,6 +4974,76 @@ static int Gen_CompoundLiftEgressSeed(const vec3_t top_body, float horiz,
 	{
 		*trigger_out = trigger;
 		*member_count_out = member_count;
+	}
+	return best;
+}
+
+static int Gen_CompoundLiftDoorExit(const vec3_t body, edict_t *plat,
+	edict_t **trigger_out, uint16_t *member_count_out, int *egress_ms_out)
+{
+	int best = -1;
+	float best_distance = 1.0e30f;
+	int trigger_index;
+
+	if (trigger_out) *trigger_out = NULL;
+	if (member_count_out) *member_count_out = 0U;
+	if (egress_ms_out) *egress_ms_out = 0;
+	if (!body || !plat || !trigger_out || !member_count_out || !egress_ms_out)
+		return -1;
+	for (trigger_index = 1; trigger_index < globals.num_edicts;
+	     trigger_index++)
+	{
+		edict_t *trigger = &g_edicts[trigger_index];
+		edict_t *members[RUNE_MAX_MECHANISM_MEMBERS];
+		door_pose_t saved[RUNE_MAX_MECHANISM_MEMBERS];
+		uint32_t delay_ms;
+		int member_count, travel_ms, pose_count, seed;
+
+		if (!Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX)
+			continue;
+		member_count = DoorTrigger_Targets(trigger, members,
+		    RUNE_MAX_MECHANISM_MEMBERS);
+		travel_ms = Door_TravelMs(trigger);
+		if (member_count <= 0 || member_count >= RUNE_MAX_MECHANISM_MEMBERS ||
+		    travel_ms <= 0)
+			continue;
+		pose_count = DoorTrigger_Open(trigger, saved,
+		    RUNE_MAX_MECHANISM_MEMBERS);
+		if (pose_count != member_count)
+		{
+			if (pose_count > 0) DoorPose_Restore(saved, pose_count);
+			continue;
+		}
+		for (seed = 0; seed < gen_num_seeds; seed++)
+		{
+			vec3_t delta;
+			float distance2;
+			int rollout_ms;
+
+			if (!gen_source_stable[seed] ||
+			    gen_source_waterlevel[seed] != 0 ||
+			    !Gen_SeedHasOutgoing(seed) ||
+			    !Lift_DoorStageCrossesSweep(trigger, body,
+			        gen_seeds[seed].origin))
+				continue;
+			VectorSubtract(gen_seeds[seed].origin, body, delta);
+			if (fabsf(delta[2]) > 16.0f ||
+			    delta[0] * delta[0] + delta[1] * delta[1] >
+			        HOOK_PAIR_REACH * HOOK_PAIR_REACH ||
+			    !SG_OracleDeclaredCompoundLiftEgress(body,
+			        gen_seeds[seed].origin, plat, trigger, &rollout_ms))
+				continue;
+			distance2 = DotProduct(delta, delta);
+			if (distance2 < best_distance)
+			{
+				best_distance = distance2;
+				best = seed;
+				*trigger_out = trigger;
+				*member_count_out = (uint16_t)member_count;
+				*egress_ms_out = (int)delay_ms + travel_ms + rollout_ms;
+			}
+		}
+		DoorPose_Restore(saved, pose_count);
 	}
 	return best;
 }

@@ -371,7 +371,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidateLinkFields(
 	if (!SG_ActionHasTrait(policy_action, SG_ACTF_ATOMIC))
 	{
 		if (!Codec_VectorExactZero(link->mechanism_anchor) ||
-		    link->sweep_clear_ms != 0U || link->mode != RLCM_NONE)
+		    link->sweep_clear_ms != 0U)
 			return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 		return RLCODEC_OK;
 	}
@@ -2220,8 +2220,11 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		    nodes[mover_index].kind != SG_RUNE_CODEC_NODE_PLATFORM ||
 		    owner_count != 1U || owner_index == UINT32_MAX ||
 		    edges[owner_index].to_key != plan->mover_key ||
-		    (!stock && !carrier) ||
-		    (stock && plan->expected_members != 1U))
+		    (!stock && !carrier) || !owner_link ||
+		    (stock && ((owner_link->mode == RLCM_RIDE &&
+		                   plan->expected_members <= 1U) ||
+		              (owner_link->mode != RLCM_NONE &&
+		                   owner_link->mode != RLCM_RIDE))))
 			return RLCODEC_BAD_ACTIVATION_PLAN;
 		if (carrier)
 		{
@@ -2234,6 +2237,53 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 			generation, workspace, &expected_count);
 		if (diagnostic != RLCODEC_OK)
 			return diagnostic;
+		if (stock && plan->expected_members > 1U)
+		{
+			uint32_t egress_count = 0U;
+
+			for (i = 0U; i < num_nodes; i++)
+			{
+				uint32_t egress_owner_count;
+				uint32_t egress_owner_index;
+				uint32_t door_index;
+
+				if (nodes[i].kind !=
+				        SG_RUNE_CODEC_NODE_AUTO_DOOR_TRIGGER ||
+				    nodes[i].touch_callback !=
+				        SG_RUNE_CODEC_CALLBACK_TOUCH_DOOR_TRIGGER ||
+				    (nodes[i].flags &
+				        SG_RUNE_CODEC_NODEF_SYNTHETIC) == 0U)
+					continue;
+				egress_owner_count = Codec_InventoryFanoutCount(edges,
+					inventory_edges, nodes[i].key,
+					SG_RUNE_CODEC_EDGE_OWNER);
+				egress_owner_index = Codec_InventoryFanoutAt(edges,
+					inventory_edges, nodes[i].key,
+					SG_RUNE_CODEC_EDGE_OWNER, 0U);
+				if (egress_owner_count != 1U ||
+				    egress_owner_index == UINT32_MAX ||
+				    !Codec_PlanContainsExactEdge(edges, plan,
+				        egress_owner_index))
+					continue;
+				door_index = Codec_FindNode(nodes, num_nodes,
+					edges[egress_owner_index].to_key);
+				if (door_index == UINT32_MAX ||
+				    nodes[door_index].kind !=
+				        SG_RUNE_CODEC_NODE_DOOR_MASTER ||
+				    nodes[i].owner_key != nodes[door_index].key ||
+				    egress_count != 0U)
+					return RLCODEC_BAD_ACTIVATION_PLAN;
+				diagnostic = Codec_ExpectInventoryEdge(edges, plan,
+					egress_owner_index, generation, workspace,
+					&expected_count);
+				if (diagnostic != RLCODEC_OK)
+					return diagnostic;
+				workspace->node_touched[master_count++] = door_index;
+				egress_count++;
+			}
+			if (egress_count != 1U)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+		}
 		if (carrier && plan->expected_members > 1U)
 		{
 			if (!owner_link || owner_link->action != RL_LIFT ||

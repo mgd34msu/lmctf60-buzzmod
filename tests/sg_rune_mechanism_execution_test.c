@@ -19,7 +19,7 @@
 #include <string.h>
 
 #define TEST_EDICTS 30
-#define TEST_LINKS 8U
+#define TEST_LINKS 9U
 #define TEST_EDGE_CAPACITY 128U
 #define CELLAR_WITNESS_WATERTYPE 0x18000020
 
@@ -70,6 +70,7 @@ enum test_key_e
 enum test_link_e
 {
 	LINK_PLATFORM = 0,
+	LINK_PLATFORM_RIDE,
 	LINK_TELEPORT,
 	LINK_AUTO_DOOR,
 	LINK_DIRECT_DOOR,
@@ -474,7 +475,9 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorizeActivation(
 	sg_bot_t *bot, int link_index)
 {
 	return bot == &sg_bots[0] &&
-	    (link_index == LINK_DIRECT_DOOR ||
+	    (link_index == LINK_PLATFORM ||
+	     link_index == LINK_PLATFORM_RIDE ||
+	     link_index == LINK_DIRECT_DOOR ||
 	     link_index == LINK_CELLAR_DOOR ||
 	     link_index == LINK_GATE_DOOR)
 	    ? SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_INVALID_ARGUMENT;
@@ -933,6 +936,20 @@ static void BuildRune(execution_fixture_t *fixture)
 	    SG_MECH_EDGE_OWNER, 0U);
 	FinishPlan(fixture, LINK_PLATFORM);
 
+	ConfigureLink(fixture, LINK_PLATFORM_RIDE, RL_LIFT);
+	fixture->links[LINK_PLATFORM_RIDE].mode = RLCM_RIDE;
+	BeginPlan(fixture, LINK_PLATFORM_RIDE,
+	    SG_MECHANISM_CONTROLLER_PLATFORM,
+	    KEY_PLATFORM_TRIGGER, KEY_PLATFORM, 0U);
+	AddPlanEdge(fixture, KEY_PLATFORM_TRIGGER, KEY_PLATFORM,
+	    SG_MECH_EDGE_OWNER, 0U);
+	AddPlanEdge(fixture, KEY_AUTO_TRIGGER, KEY_AUTO_DOOR,
+	    SG_MECH_EDGE_OWNER, 0U);
+	AddPlanEdge(fixture, KEY_AUTO_DOOR, KEY_AUTO_SPEAKER,
+	    SG_MECH_EDGE_TARGET, 0U);
+	fixture->plans[LINK_PLATFORM_RIDE].expected_members = 2U;
+	FinishPlan(fixture, LINK_PLATFORM_RIDE);
+
 	ConfigureLink(fixture, LINK_CARRIER, RL_LIFT);
 	BeginPlan(fixture, LINK_CARRIER, SG_MECHANISM_CONTROLLER_PLATFORM,
 	    KEY_CARRIER_TRIGGER, KEY_CARRIER, 200U);
@@ -1173,6 +1190,53 @@ static void TestPlatformWaterTouch(execution_fixture_t *fixture)
 	CHECK(bot->declared_touched);
 	CHECK(bot->declared_touch_frame == level.framenum);
 	fixture->seeds[0] = saved_seed;
+}
+
+static void TestPlatformRideDoorEgress(execution_fixture_t *fixture)
+{
+	static const short origin_q8[3] = { 0, 0, 0 };
+	static const short velocity_q8[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity = &test_edicts[KEY_BOT];
+	edict_t *platform = &test_edicts[KEY_PLATFORM];
+
+	DirectBotPose(origin_q8, velocity_q8);
+	DirectBotOwner(bot, LINK_PLATFORM_RIDE);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_PLATFORM_RIDE, &binding));
+	bot->carrier_action.phase = SG_CARRIER_PHASE_CARRIER_READY;
+	bot->carrier_action.rune = &fixture->rune;
+	bot->carrier_action.artifact = fixture->rune.artifact;
+	bot->carrier_action.link = LINK_PLATFORM_RIDE;
+	bot->carrier_action.entry_key = KEY_PLATFORM_TRIGGER;
+	bot->carrier_action.carrier_key = KEY_PLATFORM;
+	platform->moveinfo.state = SG_PLAT_STATE_TOP;
+	platform->moveinfo.endfunc = plat_hit_top;
+	platform->think = plat_go_down;
+	platform->nextthink = level.time + 1.0f;
+	entity->groundentity = platform;
+	CHECK(SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    platform, entity));
+	bot->declared_touched = false;
+	entity->groundentity = NULL;
+	CHECK(!SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    platform, entity));
+
+	entity->groundentity = platform;
+	bot->declared_touched = true;
+	bot->carrier_action.phase = SG_CARRIER_PHASE_EGRESS_ARMED;
+	platform->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	platform->moveinfo.endfunc = NULL;
+	platform->think = NULL;
+	platform->nextthink = 0.0f;
+	CHECK(SG_AuthorizeDoorTriggerTouch(&test_edicts[KEY_AUTO_TRIGGER],
+	    entity));
+	CHECK(bot->carrier_action.phase == SG_CARRIER_PHASE_EGRESS_OPENING);
+	CHECK(SG_AuthorizeDoorActivation(&test_edicts[KEY_AUTO_TRIGGER],
+	    &test_edicts[KEY_AUTO_DOOR], entity));
+	CHECK(bot->declared_activated);
+	CHECK(bot->carrier_action.phase == SG_CARRIER_PHASE_EGRESS_OPEN);
 }
 
 static void TestTeleport(execution_fixture_t *fixture)
@@ -2228,6 +2292,8 @@ int main(void)
 	TestPlatform(&fixture);
 	FixtureBuild(&fixture);
 	TestPlatformWaterTouch(&fixture);
+	FixtureBuild(&fixture);
+	TestPlatformRideDoorEgress(&fixture);
 	FixtureBuild(&fixture);
 	TestCarrierExecution(&fixture);
 	FixtureBuild(&fixture);

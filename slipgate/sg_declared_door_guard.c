@@ -75,6 +75,29 @@ static void DeclaredDoorSortKeys(sg_mover_key_t *keys, size_t count)
 	}
 }
 
+static int DeclaredDoorLiftStage(
+	const sg_rune_mechanism_binding_t *binding, int stage,
+	edict_t **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out)
+{
+	if (!binding || !binding->link)
+		return 0;
+	if (binding->entry_node && binding->entry_node->touch_callback ==
+	        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER)
+	{
+		if (delay_ms_out) *delay_ms_out = 0U;
+		return stage == (binding->link->mode == RLCM_RIDE
+		           ? SG_CARRIER_DOOR_EGRESS
+		           : SG_CARRIER_DOOR_APPROACH) &&
+		       SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
+		           trigger_out, keys_out, key_count_out);
+	}
+	return SG_RuneMechanismBindingCarrierStage(binding,
+		(sg_carrier_door_stage_t)stage, trigger_out, keys_out,
+		key_count_out, delay_ms_out);
+}
+
 static sg_compound_guard_result_t DeclaredDoorResolve(
 	int link_index, sg_mover_key_t *keys_out, size_t *key_count_out,
 	edict_t **trigger_out, int *trigger_key_out, int owned_execution,
@@ -117,8 +140,7 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 	                &key_count)
 	          : carrier_stage >= SG_CARRIER_DOOR_APPROACH &&
 	                carrier_stage <= SG_CARRIER_DOOR_EGRESS &&
-	                SG_RuneMechanismBindingCarrierStage(&binding,
-	                    (sg_carrier_door_stage_t)carrier_stage,
+	                DeclaredDoorLiftStage(&binding, carrier_stage,
 	                    &carrier_trigger, mover_keys, &key_count,
 	                    &carrier_delay_ms)) || key_count == 0U ||
 	    key_count > SG_MOVER_LEASE_MAX_KEYS ||

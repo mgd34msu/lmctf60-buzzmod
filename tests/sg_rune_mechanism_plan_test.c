@@ -588,6 +588,60 @@ static void TestPlatform(void)
 	CodecValidate(&fixture);
 }
 
+static void TestStockPlatformRideWithAutomaticDoorEgress(void)
+{
+	static const char *const strings[] = {
+		"func_door", "func_plat", "trigger_auto", "trigger_plat"
+	};
+	fixture_t fixture;
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *egress;
+
+	FixtureInit(&fixture, RL_LIFT);
+	Strings(&fixture, strings, 4U);
+	fixture.links[0].mode = RLCM_RIDE;
+	entry = Node(&fixture, 1U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		"trigger_plat");
+	entry->flags = SG_MECH_NODEF_SYNTHETIC | SG_MECH_NODEF_TOUCHABLE;
+	entry->owner_key = 2U;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_PLAT_CENTER;
+	Node(&fixture, 2U, SG_MECH_NODE_PLATFORM, "func_plat")->flags =
+		SG_MECH_NODEF_MOVER;
+	egress = Node(&fixture, 3U, SG_MECH_NODE_AUTO_DOOR_TRIGGER,
+		"trigger_auto");
+	egress->flags = SG_MECH_NODEF_SYNTHETIC | SG_MECH_NODEF_TOUCHABLE;
+	egress->owner_key = 4U;
+	egress->touch_callback = SG_MECH_CALLBACK_TOUCH_DOOR_TRIGGER;
+	Door(&fixture, 4U, 4U, 1);
+	Edge(&fixture, 1U, 2U, SG_MECH_EDGE_OWNER, 0U);
+	Edge(&fixture, 3U, 4U, SG_MECH_EDGE_OWNER, 0U);
+	fixture.binding.entry_key = 1U;
+	fixture.binding.mover_key = 2U;
+	fixture.binding.egress_key = 3U;
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_PLATFORM;
+	fixture.binding.expected_members = 2U;
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+
+	fixture.links[0].mode = RLCM_NONE;
+	fixture.binding.destination_key = 3U;
+	fixture.binding.egress_key = SG_MECH_NO_KEY;
+	memset(fixture.edges, 0, sizeof(fixture.edges));
+	memset(fixture.plans, 0, sizeof(fixture.plans));
+	memset(fixture.edge_marks, 0, sizeof(fixture.edge_marks));
+	memset(fixture.node_marks, 0, sizeof(fixture.node_marks));
+	memset(fixture.node_queue, 0, sizeof(fixture.node_queue));
+	memset(&fixture.result, 0, sizeof(fixture.result));
+	fixture.links[0].mechanism_plan = 0U;
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+	fixture.links[0].mode = RLCM_PREOPEN;
+	ExpectDoorMaterializationFailure(&fixture);
+	fixture.links[0].mode = RLCM_NONE;
+	egress->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	ExpectDoorMaterializationFailure(&fixture);
+}
+
 static void TestTriggeredVerticalDoorLift(void)
 {
 	static const char *const strings[] = {
@@ -1330,6 +1384,7 @@ static void TestPush(void)
 int main(void)
 {
 	TestPlatform();
+	TestStockPlatformRideWithAutomaticDoorEgress();
 	TestTriggeredVerticalDoorLift();
 	TestTriggeredVerticalDoorLiftWithDelayedEgress();
 	TestDescendingCarrierStageIdentity();

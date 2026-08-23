@@ -713,7 +713,7 @@ def validate_document(document):
         if mechanism == 0:
             if (action["preopen_mechanism_anchor_policy"] != 0 or
                     action["ride_mechanism_anchor_policy"] != 0 or
-                    action["mode_mask"] != 1):
+                    not action["mode_mask"] & 1):
                 _fail(where, "ordinary actions require zero mechanism anchors and NONE mode")
         elif mechanism == 1:
             required = 1 | 4 | 8 | 16 | 32 | 64
