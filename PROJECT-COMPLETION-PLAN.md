@@ -637,6 +637,16 @@ uncommitted diagnostics and implementations had to be reconstructed. The
 `xmap13` diagnostic proved that its staged PUSH selector receives no candidate;
 that repair resumes when an active slot frees.
 
+A fresh immutable generation batch now covers the entire historical 23-map
+queue with four concurrent workers. It includes already diagnosed maps and the
+accepted `lmctf58` so that indirect repairs and stale queue entries are proved
+by current artifacts rather than inferred from older results. Maps changed by
+an in-flight repair are rerun after that repair passes its full gates and joins
+the next frozen source. `tomb05` no longer justifies speculative controller
+work: if ordinary generation still cannot discover its physical return route,
+an authoritative human traversal will be used to identify the missing generic
+transition before any new admission is implemented.
+
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
 2. Build and verify one new exact source, module, configuration, engine, reader,
