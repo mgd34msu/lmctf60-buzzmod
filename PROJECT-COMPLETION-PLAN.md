@@ -20,6 +20,11 @@ override it.
   traversal link to make such a map pass. Human play must later identify the
   missing path or paths and drive a replay-proved RUNE update, but that update
   does not block the initial release.
+- Post-match learning satisfies that update requirement; live RUNE mutation is
+  not required. The server-side trace must be able to record every active
+  non-bot client's exact movement and isolate any selected client and frame
+  window for replay. The capture and importer tests must remain green in the
+  final source freeze.
 - Treat every map list as an ordinary server or harness input. `topmaps.txt`
   and its 20 entries have no special completion or release status.
 - Judge bot quality from behavior during play. Scores and wins provide context,
