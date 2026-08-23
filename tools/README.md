@@ -98,6 +98,43 @@ how the tools fit together and which artifacts they own.
 
 ## Telemetry and diagnostics
 
+`humantrace.py`
+
+: Imports the server-side `sg_humantrace` stream as exact Pmove replay
+  evidence. A client demo is not a substitute because it contains snapshots,
+  not the `usercmd_t` values that the server executed.
+
+  Create the output directory before starting the server. Set these cvars in
+  the server configuration, then load the map and traverse the route as a
+  human player:
+
+  ```text
+  set sg_humantrace_dir "/absolute/path/to/traces"
+  set sg_humantrace 1
+  map lmctf01
+  ```
+
+  The server prints the trace path when the first normal human Pmove runs. Each
+  JSONL step contains the raw command, the exact fixed-point state before and
+  after Pmove, the touched entity keys, the ground entity, and the water state.
+  The writer excludes bots and flushes every step.
+
+  Import one player's route after the traversal:
+
+  ```sh
+  python3 tools/humantrace.py \
+    /absolute/path/to/traces/humantrace-lmctf01.jsonl \
+    --map lmctf01 --client 1 --from-frame 120 --through-frame 760 \
+    --output /absolute/path/to/traces/lmctf01.replay.json
+  ```
+
+  Omit the frame options to import the full session. The importer validates and
+  preserves the captured map, BSP, entity, physics, and module identity. It
+  also starts a new replay segment when the authoritative state changes
+  between commands. Such a change can identify a pusher, teleporter, grapple
+  update, or other server-frame effect that a Pmove-only replay must model
+  explicitly.
+
 `gamestat.sh`, `rolestat.py`
 
 : Parse production rows of the form `role`, `seed`, `goal`, `sgoal`, `spd`, and

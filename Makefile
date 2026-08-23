@@ -383,6 +383,8 @@ HUMAN_SPEED_TEST_OBJS := .sg_human_speed_test.make.o \
 	.sg_human_speed_q_shared_under_test.make.o
 HUMAN_SPEED_TEST_DEPS := $(HUMAN_SPEED_TEST_OBJS:.o=.d)
 HUMAN_SPEED_INTEGRATION_TEST := tests/test_human_speed_integration.py
+HUMAN_TRACE_TESTS := tests/test_humantrace.py \
+	tests/test_human_trace_integration.py
 HUMAN_SPEED_TEST_ALL_ARTIFACTS := \
 	sg_human_speed_test.gnu sg_human_speed_test.make \
 	.sg_human_speed_test.gnu.o .sg_human_speed_test.gnu.d \
@@ -1162,6 +1164,7 @@ OBJS := \
 	sg_client.o \
 	slipgate/sg_pov_identity.o \
 	slipgate/sg_human_speed.o \
+	slipgate/sg_human_trace.o \
 	slipgate/sg_door_approach.o \
 	slipgate/sg_defense_shift.o \
 	slipgate/sg_defense_supply.o \
@@ -3283,6 +3286,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST) \
 		$(SPECTATOR_SOUND_TEST_BIN) tests/test_spectator_limit.py \
 		$(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST) \
+		$(HUMAN_TRACE_TESTS) \
 		$(DOOR_APPROACH_TEST_BIN) $(DOOR_APPROACH_INTEGRATION_TEST) \
 		$(DEFENSE_SHIFT_TEST_BIN) $(DEFENSE_SHIFT_INTEGRATION_TEST) \
 		$(DEFENSE_SUPPLY_TEST_BIN) $(DEFENSE_SUPPLY_INTEGRATION_TEST) \
@@ -3381,6 +3385,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(SPECTATOR_SOUND_TEST_BIN) && python3 -B tests/test_spectator_limit.py
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
+	$(Q)python3 -B -m unittest tests.test_humantrace \
+		tests.test_human_trace_integration
 	$(Q)./$(DOOR_APPROACH_TEST_BIN)
 	$(Q)python3 -B $(DOOR_APPROACH_INTEGRATION_TEST)
 	$(Q)./$(DEFENSE_SHIFT_TEST_BIN)
@@ -3655,6 +3661,11 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 	$(E) [TEST] $<
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
+
+human-trace-test: $(HUMAN_TRACE_TESTS)
+	$(E) [TEST] $<
+	$(Q)python3 -B -m unittest tests.test_humantrace \
+		tests.test_human_trace_integration
 
 door-approach-test: $(DOOR_APPROACH_TEST_BIN)
 	$(E) [TEST] $<

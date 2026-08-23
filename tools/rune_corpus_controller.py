@@ -904,6 +904,7 @@ def _python_runtime_layout(entries: Sequence[Mapping[str, Any]]) -> dict[str, An
         ("libffi", r"lib/libffi\.so(?:\.[0-9]+)*"),
         ("liblzma", r"lib/liblzma\.so(?:\.[0-9]+)*"),
         ("libz", r"lib/libz\.so(?:\.[0-9]+)*"),
+        ("libzstd", r"lib/libzstd\.so(?:\.[0-9]+)*"),
     ):
         matches = [entry for relative, entry in by_relative.items() if re.fullmatch(pattern, relative)]
         library_counts[name] = len(matches)
@@ -1659,6 +1660,7 @@ def preflight_python_runtime(
         (snapshot / layout[name]["path"]).resolve(strict=True)
         for name in (
             "libpython", "libbz2", "libcrypto", "libffi", "liblzma", "libz",
+            "libzstd",
             *(f"extension_{name}" for name in (
                 "bz2", "ctypes", "hashlib", "json", "lzma", "socket", "struct",
                 "array", "fcntl", "math", "select", "zlib",
