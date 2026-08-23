@@ -612,26 +612,12 @@ source baseline for the `xmap13` retest. That exact retest terminated
 `GEN_FAIL` after 11 minutes 16 seconds, published 2 fixed PUSH links, wrote no
 artifact, and removed all 1,337 seeds during closed-core pruning.
 The BSP contains 12 connected overlapping push fields with equivalent stock
-impulses plus 4 singleton fields; the accepted single-trigger controller
-cannot authenticate the overlapping fields. An exact multi-member field
-repair is active. It must bind the complete overlap component, accept repeated
-touches only from equivalent members, reject mixed fields, and preserve the
-accepted single-member `smap28` behavior.
-The completed staged multi-field attempt passes the full GNU and Clang/Make
-host suites and publishes four exact PUSH links, but the real `xmap13` smoke
-still has no shared objective core and terminates `GEN_FAIL`. A recovered
-instrumented smoke completed base-link proof across all 1,337 seeds and again
-published four one-stage PUSH links. It produced no multi-stage candidate
-before selection, so the bounded selector is not discarding a valid staged
-proof. The next repair must find the missing exact staged replay witness before
-changing admission.
-
-The latest process crash removed the temporary worktrees and map servers. It
-did not change either canonical branch or the saved repair branches. Work has
-resumed on `lmctf07`, `tomb05`, and `xmap26` from their saved commits. Only the
-uncommitted diagnostics and implementations had to be reconstructed. The
-`xmap13` diagnostic proved that its staged PUSH selector receives no candidate;
-that repair resumes when an active slot frees.
+impulses plus 4 singleton fields. A terminal discriminator refuted the saved
+staged-PUSH repair: all eight multi-stage witnesses become airborne, then the
+oracle marks them contaminated before any stable landing. No destination-seed
+lookup occurs, and only the four one-stage links materialize. That branch will
+not be imported. The active diagnostic now identifies the exact contaminating
+collision before any replacement admission is considered.
 
 A fresh immutable generation batch now covers the entire historical 23-map
 queue with four concurrent workers. It includes already diagnosed maps and the
@@ -660,12 +646,12 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
-| `tw2ctf2` | 33,868 links and 570 initially shared seeds; reverse closure fails over ordinary links. |
+| `tw2ctf2` | 33,868 links and 570 initially shared seeds. Exact replay proves symmetric upper HOOK return legs, but neither source SCC is forward-reachable from its objective root; the active diagnosis is the root-to-return-leg staging cut. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | 1,094 seeds all prune; nine lift links have no descent and another lift lacks staging. |
-| `xmap13` | The baseline publishes two PUSH links and all 1,337 seeds prune; the staged four-link branch still needs its repaired-snapshot run. |
+| `xmap13` | All 1,337 seeds still prune. The saved staged-PUSH repair is refuted because every multi-stage witness is contaminated inside the oracle before landing; the exact contaminating collision is under diagnosis. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
