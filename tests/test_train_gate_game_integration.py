@@ -15,9 +15,11 @@ def between(text: str, start: str, end: str) -> str:
 
 
 def ordered(text: str, *needles: str) -> None:
+    haystack = " ".join(text.split())
     cursor = 0
     for needle in needles:
-        cursor = text.index(needle, cursor) + len(needle)
+        normalized = " ".join(needle.split())
+        cursor = haystack.index(normalized, cursor) + len(normalized)
 
 
 def main() -> None:
