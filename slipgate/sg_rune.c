@@ -8347,6 +8347,118 @@ done:
 	return ok;
 }
 
+#define OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX 16
+
+typedef struct {
+	int seed[2];
+	float distance2;
+} objective_rocket_pair_t;
+
+static qboolean Graph_ProveObjectiveRocketClosure(int red_root, int blue_root,
+	const byte *red_reach, const byte *blue_reach, int *calls_out)
+{
+	objective_rocket_pair_t candidates[OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX];
+	byte *candidate_red = NULL, *candidate_blue = NULL;
+	int calls = 0;
+	qboolean closed = false;
+
+	if (calls_out)
+		*calls_out = 0;
+	candidate_red = sg_host.level_alloc((size_t)gen_num_seeds);
+	candidate_blue = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!candidate_red || !candidate_blue)
+		goto done;
+	for (int rank = 0; rank < OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX; rank++)
+	{
+		candidates[rank].seed[0] = -1;
+		candidates[rank].seed[1] = -1;
+		candidates[rank].distance2 = 1.0e30f;
+	}
+	for (int red = 0; red < gen_num_seeds; red++)
+	{
+		if (Graph_ObjectivePartitionMask(red, red_reach, blue_reach) != 1U)
+			continue;
+		for (int blue = 0; blue < gen_num_seeds; blue++)
+		{
+			vec3_t delta;
+			float distance2;
+			int rank;
+
+			if (Graph_ObjectivePartitionMask(blue, red_reach,
+			        blue_reach) != 2U)
+				continue;
+			Rune_TelemetryAdd(&gen_telemetry.pair_scans, 1U);
+			VectorSubtract(gen_seeds[red].origin,
+			    gen_seeds[blue].origin, delta);
+			distance2 = DotProduct(delta, delta);
+			for (rank = 0; rank < OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX; rank++)
+				if (distance2 < candidates[rank].distance2)
+					break;
+			if (rank == OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX)
+				continue;
+			for (int move = OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX - 1;
+			     move > rank; move--)
+				candidates[move] = candidates[move - 1];
+			candidates[rank].seed[0] = red;
+			candidates[rank].seed[1] = blue;
+			candidates[rank].distance2 = distance2;
+		}
+	}
+	for (int rank = 0; rank < OBJECTIVE_CLOSURE_ROCKET_PAIR_MAX &&
+	     candidates[rank].seed[0] >= 0; rank++)
+	{
+		vec3_t anchor[2];
+		short cost[2];
+		byte speed[2], heading[2];
+		qboolean proved = true;
+		int link_mark = gen_num_links;
+
+		for (int direction = 0; direction < 2; direction++)
+		{
+			calls++;
+			if (!SG_RUNE_OBJECTIVE_ROCKET_PROVER(
+			        candidates[rank].seed[direction],
+			        candidates[rank].seed[1 - direction], anchor[direction],
+			        &cost[direction], &speed[direction], &heading[direction]))
+				proved = false;
+		}
+		if (!proved)
+			continue;
+		for (int direction = 0; direction < 2; direction++)
+		{
+			rune_link_t *link;
+
+			if (!Link_Add(candidates[rank].seed[direction],
+			        candidates[rank].seed[1 - direction], RL_ROCKETJUMP,
+			        cost[direction], speed[direction]))
+			{
+				gen_num_links = link_mark;
+				goto done;
+			}
+			link = &gen_links[gen_num_links - 1];
+			VectorCopy(anchor[direction], link->anchor);
+			link->heading = heading[direction];
+			link->heading_slack = SG_RJ_SLACK;
+			link->min_speed = 0;
+		}
+		if (Graph_ObjectiveReachMasks(red_root, blue_root,
+		        candidate_red, candidate_blue) &&
+		    candidate_blue[red_root] && candidate_red[blue_root])
+		{
+			closed = true;
+			goto done;
+		}
+		gen_num_links = link_mark;
+	}
+
+done:
+	if (candidate_red) sg_host.level_free(candidate_red);
+	if (candidate_blue) sg_host.level_free(candidate_blue);
+	if (calls_out)
+		*calls_out = calls;
+	return closed;
+}
+
 static qboolean Graph_ObjectiveForwardMasks(int red_root, int blue_root,
 	byte *red_forward, byte *blue_forward)
 {
@@ -8423,6 +8535,7 @@ static qboolean Prove_ObjectiveClosure(int red_root, int blue_root)
 	byte hook_speed[2] = { 0, 0 };
 	int calls[2] = { 0, 0 };
 	int rejected[2] = { 0, 0 };
+	int rocket_calls = 0;
 	int link_mark = gen_num_links;
 	int envelope_mark = gen_env_hook;
 	qboolean closed = false;
@@ -8430,11 +8543,19 @@ static qboolean Prove_ObjectiveClosure(int red_root, int blue_root)
 	memset(hook_anchor, 0, sizeof(hook_anchor));
 	red_reach = sg_host.level_alloc((size_t)gen_num_seeds);
 	blue_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!red_reach || !blue_reach ||
+	    !Graph_ObjectiveReachMasks(red_root, blue_root,
+	        red_reach, blue_reach))
+		goto done;
+	if (Graph_ProveObjectiveRocketClosure(red_root, blue_root,
+	        red_reach, blue_reach, &rocket_calls))
+	{
+		closed = true;
+		goto done;
+	}
 	red_forward = sg_host.level_alloc((size_t)gen_num_seeds);
 	blue_forward = sg_host.level_alloc((size_t)gen_num_seeds);
-	if (!red_reach || !blue_reach || !red_forward || !blue_forward ||
-	    !Graph_ObjectiveReachMasks(red_root, blue_root,
-	        red_reach, blue_reach) ||
+	if (!red_forward || !blue_forward ||
 	    !Graph_ObjectiveForwardMasks(red_root, blue_root,
 	        red_forward, blue_forward) ||
 	    !Door_TopologyBuild(&topology))
@@ -8558,9 +8679,9 @@ static qboolean Prove_ObjectiveClosure(int red_root, int blue_root)
 	    blue_reach[red_root] && red_reach[blue_root];
 
 done:
-	sg_host.dprint("rune: objective closure run_calls=%d/%d "
+	sg_host.dprint("rune: objective closure rocket_calls=%d run_calls=%d/%d "
 	               "nonruntime=%d/%d links=%d closed=%d limit=%d\n",
-	               calls[0], calls[1], rejected[0], rejected[1],
+	               rocket_calls, calls[0], calls[1], rejected[0], rejected[1],
 	               gen_num_links - link_mark, closed ? 1 : 0,
 	               OBJECTIVE_CLOSURE_RUN_CALL_MAX);
 	if (!closed)
