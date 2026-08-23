@@ -3249,23 +3249,25 @@ static int Gen_CompoundLiftDoorExit(const vec3_t body, edict_t *plat,
 	edict_t **trigger_out, uint16_t *member_count_out, int *egress_ms_out);
 
 static qboolean Lift_DoorStageDelay(edict_t *trigger,
-	uint32_t *delay_ms_out)
+	uint32_t *delay_ms_out, qboolean automatic)
 {
 	if (delay_ms_out)
 		*delay_ms_out = 0U;
 	if (!trigger || !delay_ms_out)
 		return false;
-	if (SG_DeclaredDoorActivatorSafe(trigger))
+	if (SG_DeclaredDoorDirectActivatorSafe(trigger) || (automatic &&
+	    SG_DeclaredDoorActivatorSafe(trigger)))
 		return true;
 	return SG_DeclaredDoorDelayedActivatorSafe(trigger, delay_ms_out);
 }
 
 static qboolean Lift_DoorStageTouchMatches(edict_t *trigger,
-	const vec3_t origin)
+	const vec3_t origin, qboolean automatic)
 {
 	uint32_t delay_ms;
 
-	if (SG_DeclaredDoorActivatorSafe(trigger))
+	if (SG_DeclaredDoorDirectActivatorSafe(trigger) || (automatic &&
+	    SG_DeclaredDoorActivatorSafe(trigger)))
 		return SG_DeclaredDoorTouchMatches(trigger, origin);
 	return SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms) &&
 	       SG_DeclaredDelayedDoorTouchMatches(trigger, origin);
@@ -3276,8 +3278,8 @@ static qboolean Lift_DoorStageSameSet(edict_t *first, edict_t *second)
 	uint32_t first_delay;
 	uint32_t second_delay;
 
-	if (!Lift_DoorStageDelay(first, &first_delay) ||
-	    !Lift_DoorStageDelay(second, &second_delay) ||
+	if (!Lift_DoorStageDelay(first, &first_delay, false) ||
+	    !Lift_DoorStageDelay(second, &second_delay, false) ||
 	    first_delay != second_delay)
 		return false;
 	return first_delay == 0U ? SG_DeclaredDoorSameSet(first, second) :
@@ -3285,11 +3287,11 @@ static qboolean Lift_DoorStageSameSet(edict_t *first, edict_t *second)
 }
 
 static qboolean Lift_DoorStageCrossesSweep(edict_t *trigger,
-	const vec3_t from, const vec3_t to)
+	const vec3_t from, const vec3_t to, qboolean automatic)
 {
 	uint32_t delay_ms;
 
-	if (!Lift_DoorStageDelay(trigger, &delay_ms))
+	if (!Lift_DoorStageDelay(trigger, &delay_ms, automatic))
 		return false;
 	return delay_ms == 0U ? SG_DeclaredDoorCrossesSweep(trigger, from, to) :
 	       SG_DeclaredDelayedDoorCrossesSweep(trigger, from, to);
@@ -3297,7 +3299,8 @@ static qboolean Lift_DoorStageCrossesSweep(edict_t *trigger,
 
 static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
 	const vec3_t bottom_body, edict_t **door_out,
-	uint16_t *expected_members_out, vec3_t wait_out, int *approach_ms_out)
+	uint16_t *expected_members_out, vec3_t wait_out,
+	int *approach_ms_out, qboolean stock)
 {
 	#define LIFT_DOOR_WAIT_MAX 64
 	edict_t *best_door = NULL;
@@ -3329,9 +3332,9 @@ static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
 
 		trigger_node = Mechanism_Node(Mechanism_EntityKey(trigger));
 		if (!trigger_node ||
-		    (trigger_node->kind != SG_MECH_NODE_TRIGGER &&
-		     trigger_node->kind != SG_MECH_NODE_AUTO_DOOR_TRIGGER) ||
-		    !Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX)
+		    (trigger_node->kind != SG_MECH_NODE_TRIGGER && (!stock ||
+		     trigger_node->kind != SG_MECH_NODE_AUTO_DOOR_TRIGGER)) ||
+		    !Lift_DoorStageDelay(trigger, &delay_ms, stock) || delay_ms > INT_MAX)
 			continue;
 		member_count = DoorTrigger_Targets(trigger, members,
 			RUNE_MAX_MECHANISM_MEMBERS);
@@ -3346,7 +3349,7 @@ static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
 			int seed;
 
 			if (!Lift_DoorStageCrossesSweep(trigger,
-			        wait_points[wait_index], bottom_body))
+			        wait_points[wait_index], bottom_body, stock))
 				continue;
 			for (seed = 0; seed < gen_num_seeds; seed++)
 			{
@@ -3457,7 +3460,7 @@ static void Link_Plats(void)
 		if (approach < 0)
 			approach = Lift_CompoundApproach(entry, e, bottom_body,
 				&approach_door, &expected_members, approach_wait,
-				&approach_ms);
+				&approach_ms, stock);
 		if (approach < 0 && stock)
 			approach = Gen_LiftWaterSeed(bottom_body, entry, e,
 			    &approach_ms);
@@ -4886,8 +4889,8 @@ static edict_t *Lift_EgressDoorStage(const vec3_t top_body,
 		uint32_t delay_ms;
 		int count;
 
-		if (!Lift_DoorStageDelay(trigger, &delay_ms) ||
-		    !Lift_DoorStageTouchMatches(trigger, top_body))
+		if (!Lift_DoorStageDelay(trigger, &delay_ms, false) ||
+		    !Lift_DoorStageTouchMatches(trigger, top_body, false))
 			continue;
 		count = DoorTrigger_Targets(trigger, members,
 			RUNE_MAX_MECHANISM_MEMBERS);
@@ -4931,8 +4934,8 @@ static int Gen_CompoundLiftEgressSeed(const vec3_t top_body, float horiz,
 	    !egress_ms_out)
 		return -1;
 	trigger = Lift_EgressDoorStage(top_body, &member_count);
-	if (!trigger ||
-	    !Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX ||
+	if (!trigger || !Lift_DoorStageDelay(trigger, &delay_ms, false) ||
+	    delay_ms > INT_MAX ||
 	    (travel_ms = Door_TravelMs(trigger)) <= 0)
 		return -1;
 	pose_count = DoorTrigger_Open(trigger, saved,
@@ -4999,7 +5002,8 @@ static int Gen_CompoundLiftDoorExit(const vec3_t body, edict_t *plat,
 		uint32_t delay_ms;
 		int member_count, travel_ms, pose_count, seed;
 
-		if (!Lift_DoorStageDelay(trigger, &delay_ms) || delay_ms > INT_MAX)
+		if (!Lift_DoorStageDelay(trigger, &delay_ms, true) || delay_ms > INT_MAX ||
+		    !Lift_DoorStageTouchMatches(trigger, body, true))
 			continue;
 		member_count = DoorTrigger_Targets(trigger, members,
 		    RUNE_MAX_MECHANISM_MEMBERS);
@@ -5024,7 +5028,7 @@ static int Gen_CompoundLiftDoorExit(const vec3_t body, edict_t *plat,
 			    gen_source_waterlevel[seed] != 0 ||
 			    !Gen_SeedHasOutgoing(seed) ||
 			    !Lift_DoorStageCrossesSweep(trigger, body,
-			        gen_seeds[seed].origin))
+			        gen_seeds[seed].origin, true))
 				continue;
 			VectorSubtract(gen_seeds[seed].origin, body, delta);
 			if (fabsf(delta[2]) > 16.0f ||
@@ -5691,12 +5695,12 @@ static void Door_WaitInsert(edict_t *trigger, const vec3_t point,
 	 * this exact brush; otherwise the thin-side pass can reuse a broad-side
 	 * anchor, emit the already-known direction, and never prove the reverse
 	 * crossing. */
-	if (!Lift_DoorStageTouchMatches(trigger, fixed))
+	if (!Lift_DoorStageTouchMatches(trigger, fixed, false))
 		return;
 	{
 		uint32_t delay_ms;
 
-		if (!Lift_DoorStageDelay(trigger, &delay_ms))
+		if (!Lift_DoorStageDelay(trigger, &delay_ms, false))
 			return;
 		if (delay_ms == 0U)
 		{
