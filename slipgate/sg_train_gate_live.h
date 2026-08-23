@@ -39,6 +39,13 @@ typedef enum sg_train_gate_mode_e
 	SG_TRAIN_GATE_MODE_RIDE
 } sg_train_gate_mode_t;
 
+typedef enum sg_train_gate_ride_direction_e
+{
+	SG_TRAIN_GATE_RIDE_NONE = 0,
+	SG_TRAIN_GATE_RIDE_OPEN_TO_CLOSED,
+	SG_TRAIN_GATE_RIDE_CLOSED_TO_OPEN
+} sg_train_gate_ride_direction_t;
+
 typedef enum sg_train_gate_side_e
 {
 	SG_TRAIN_GATE_SIDE_NONE = 0,
@@ -71,6 +78,7 @@ typedef struct sg_train_gate_witness_s
 	uint32_t open_corner_key;
 	sg_train_gate_activation_t activation;
 	sg_train_gate_mode_t mode;
+	sg_train_gate_ride_direction_t ride_direction;
 	int16_t source_q8[3];
 	int16_t button_q8[3];
 	int16_t entry_q8[3];

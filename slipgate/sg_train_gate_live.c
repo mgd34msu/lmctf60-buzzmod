@@ -133,8 +133,12 @@ static int TrainWitnessValid(const sg_train_gate_witness_t *witness)
 	     witness->activation != SG_TRAIN_GATE_ACTIVATION_SHOOT) ||
 	    (witness->mode != SG_TRAIN_GATE_MODE_CROSS &&
 	     witness->mode != SG_TRAIN_GATE_MODE_RIDE) ||
+	    (witness->mode == SG_TRAIN_GATE_MODE_CROSS &&
+	     witness->ride_direction != SG_TRAIN_GATE_RIDE_NONE) ||
 	    (witness->mode == SG_TRAIN_GATE_MODE_RIDE &&
-	     witness->activation != SG_TRAIN_GATE_ACTIVATION_TOUCH))
+	     (witness->activation != SG_TRAIN_GATE_ACTIVATION_TOUCH ||
+	      (witness->ride_direction != SG_TRAIN_GATE_RIDE_OPEN_TO_CLOSED &&
+	       witness->ride_direction != SG_TRAIN_GATE_RIDE_CLOSED_TO_OPEN))))
 		return 0;
 	keys[0] = witness->button_key;
 	keys[1] = witness->train_key;
@@ -241,11 +245,21 @@ static int TrainOpeningClock(sg_train_gate_state_t *state, uint16_t step_ms)
 static sg_train_gate_command_t TrainRideStep(sg_train_gate_state_t *state,
 	const sg_train_gate_observation_t *observation, uint16_t step_ms)
 {
+	sg_train_gate_pose_t start_pose =
+		state->witness.ride_direction == SG_TRAIN_GATE_RIDE_OPEN_TO_CLOSED
+		? SG_TRAIN_GATE_POSE_OPEN : SG_TRAIN_GATE_POSE_CLOSED;
+	sg_train_gate_pose_t moving_pose =
+		state->witness.ride_direction == SG_TRAIN_GATE_RIDE_OPEN_TO_CLOSED
+		? SG_TRAIN_GATE_POSE_CLOSING : SG_TRAIN_GATE_POSE_OPENING;
+	sg_train_gate_pose_t end_pose =
+		state->witness.ride_direction == SG_TRAIN_GATE_RIDE_OPEN_TO_CLOSED
+		? SG_TRAIN_GATE_POSE_CLOSED : SG_TRAIN_GATE_POSE_OPEN;
+
 	if (state->phase == SG_TRAIN_GATE_APPROACH)
 	{
 		if (!TrainActivated(state))
 		{
-			if (observation->pose != SG_TRAIN_GATE_POSE_CLOSED ||
+			if (observation->pose != start_pose ||
 			    observation->riding != 0U)
 			{
 				TrainFail(state);
@@ -271,12 +285,12 @@ static sg_train_gate_command_t TrainRideStep(sg_train_gate_state_t *state,
 		}
 		if (state->train_use_count == 0U)
 		{
-			if (observation->pose != SG_TRAIN_GATE_POSE_CLOSED)
+			if (observation->pose != start_pose)
 				TrainFail(state);
 			return SG_TRAIN_GATE_COMMAND_ZERO;
 		}
 		if (state->target_dispatch_count != 1U ||
-		    observation->pose != SG_TRAIN_GATE_POSE_OPENING)
+		    observation->pose != moving_pose)
 		{
 			TrainFail(state);
 			return SG_TRAIN_GATE_COMMAND_ZERO;
@@ -293,9 +307,9 @@ static sg_train_gate_command_t TrainRideStep(sg_train_gate_state_t *state,
 			TrainFail(state);
 			return SG_TRAIN_GATE_COMMAND_ZERO;
 		}
-		if (observation->pose == SG_TRAIN_GATE_POSE_OPENING)
+		if (observation->pose == moving_pose)
 			return SG_TRAIN_GATE_COMMAND_ZERO;
-		if (observation->pose != SG_TRAIN_GATE_POSE_OPEN ||
+		if (observation->pose != end_pose ||
 		    observation->cross_arrived != 1U)
 		{
 			TrainFail(state);
@@ -306,7 +320,7 @@ static sg_train_gate_command_t TrainRideStep(sg_train_gate_state_t *state,
 
 	if (state->phase == SG_TRAIN_GATE_EGRESS)
 	{
-		if (observation->pose != SG_TRAIN_GATE_POSE_OPEN ||
+		if (observation->pose != end_pose ||
 		    !TrainActivated(state) || state->target_dispatch_count != 1U ||
 		    state->train_use_count != 1U)
 		{
@@ -333,7 +347,9 @@ int SG_TrainGateLiveBegin(sg_train_gate_state_t *state,
 		return 0;
 	memset(state, 0, sizeof(*state));
 	if (!TrainWitnessValid(witness) || !TrainObservationCurrent(observation) ||
-	    observation->pose != SG_TRAIN_GATE_POSE_CLOSED ||
+	    observation->pose != (witness->mode != SG_TRAIN_GATE_MODE_RIDE ||
+	        witness->ride_direction == SG_TRAIN_GATE_RIDE_CLOSED_TO_OPEN
+	        ? SG_TRAIN_GATE_POSE_CLOSED : SG_TRAIN_GATE_POSE_OPEN) ||
 	    observation->button_touch_count != 0U ||
 	    observation->button_shot_count != 0U ||
 	    observation->target_dispatch_count != 0U ||

@@ -3849,6 +3849,35 @@ static void Train_PoseAt(edict_t *train, edict_t *corner,
 	Train_SetPose(train, corner);
 }
 
+static qboolean Train_RideEndpoints(edict_t *closed, edict_t *open,
+	edict_t **lower_out, edict_t **upper_out, vec3_t displacement_out)
+{
+	vec3_t delta;
+
+	if (lower_out) *lower_out = NULL;
+	if (upper_out) *upper_out = NULL;
+	if (displacement_out) VectorClear(displacement_out);
+	if (!closed || !open || !lower_out || !upper_out || !displacement_out)
+		return false;
+	VectorSubtract(open->s.origin, closed->s.origin, delta);
+	if (fabsf(delta[0]) > 0.125f || fabsf(delta[1]) > 0.125f ||
+	    fabsf(delta[2]) < 8.0f)
+		return false;
+	if (delta[2] > 0.0f)
+	{
+		*lower_out = closed;
+		*upper_out = open;
+	}
+	else
+	{
+		*lower_out = open;
+		*upper_out = closed;
+	}
+	VectorSubtract((*upper_out)->s.origin, (*lower_out)->s.origin,
+	    displacement_out);
+	return displacement_out[2] >= 8.0f;
+}
+
 static qboolean Train_OppositeSide(const vec3_t contact,
 	const vec3_t destination, const vec3_t sweep_mins,
 	const vec3_t sweep_maxs)
@@ -4095,6 +4124,8 @@ static void Link_TrainRides(void)
 		edict_t *train;
 		edict_t *closed;
 		edict_t *open;
+		edict_t *lower;
+		edict_t *upper;
 		uint32_t closed_key;
 		uint32_t open_key;
 		uint32_t best_opening_bound = 0U;
@@ -4124,14 +4155,12 @@ static void Link_TrainRides(void)
 		train = &g_edicts[train_node->key];
 		closed = &g_edicts[closed_key];
 		open = &g_edicts[open_key];
-		VectorSubtract(open->s.origin, closed->s.origin, displacement);
-		if (fabsf(displacement[0]) > 0.125f ||
-		    fabsf(displacement[1]) > 0.125f || displacement[2] < 8.0f)
+		if (!Train_RideEndpoints(closed, open, &lower, &upper, displacement))
 			continue;
 		halfx = (train->maxs[0] - train->mins[0]) * 0.5f;
 		halfy = (train->maxs[1] - train->mins[1]) * 0.5f;
 		egress_radius = Lift_EgressSearchRadius(halfx, halfy);
-		Train_PoseAt(train, closed, &saved);
+		Train_PoseAt(train, lower, &saved);
 		for (button_index = 0U;
 		     button_index < gen_mechanism_catalog.num_nodes; button_index++)
 		{
@@ -4179,7 +4208,7 @@ static void Link_TrainRides(void)
 				        button_center, button, train, &approach_ms, board) ||
 				    !SG_OracleTrainRideCarry(board, displacement, train, top))
 					continue;
-				Train_SetPose(train, open);
+				Train_SetPose(train, upper);
 				for (destination = 0; destination < gen_num_seeds;
 				     destination++)
 				{
@@ -4215,7 +4244,7 @@ static void Link_TrainRides(void)
 					VectorCopy(board, best_board);
 					VectorCopy(top, best_top);
 				}
-				Train_SetPose(train, closed);
+				Train_SetPose(train, lower);
 			}
 		}
 		DoorPose_Restore(&saved, 1);

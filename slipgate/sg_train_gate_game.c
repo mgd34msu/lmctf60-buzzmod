@@ -121,6 +121,19 @@ static int TrainWitness(int link_index, sg_train_gate_witness_t *witness)
 		? SG_TRAIN_GATE_ACTIVATION_SHOOT : SG_TRAIN_GATE_ACTIVATION_TOUCH;
 	witness->mode = binding.link->mode == RLCM_RIDE
 		? SG_TRAIN_GATE_MODE_RIDE : SG_TRAIN_GATE_MODE_CROSS;
+	if (witness->mode == SG_TRAIN_GATE_MODE_RIDE)
+	{
+		vec3_t corner_delta;
+
+		VectorSubtract(binding.egress_entity->s.origin,
+		    binding.destination_entity->s.origin, corner_delta);
+		if (fabsf(corner_delta[0]) > 0.125f ||
+		    fabsf(corner_delta[1]) > 0.125f || fabsf(corner_delta[2]) < 8.0f)
+			return 0;
+		witness->ride_direction = corner_delta[2] < 0.0f
+			? SG_TRAIN_GATE_RIDE_OPEN_TO_CLOSED
+			: SG_TRAIN_GATE_RIDE_CLOSED_TO_OPEN;
+	}
 	witness->opening_bound_ms = (uint16_t)binding.plan->cooldown_ms;
 	return 1;
 }

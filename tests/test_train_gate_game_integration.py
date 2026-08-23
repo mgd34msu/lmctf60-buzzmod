@@ -70,7 +70,7 @@ def main() -> None:
         ride,
         "SG_OracleTrainRideBoard",
         "SG_OracleTrainRideCarry",
-        "Train_SetPose(train, open)",
+        "Train_SetPose(train, upper)",
         "SG_OracleTrainRideEgress",
         "link->mode = RLCM_RIDE",
         "Mechanism_BindTrain",
