@@ -3,6 +3,45 @@
 
 #include <string.h>
 
+void SG_TrainGateReverseTouchBegin(sg_train_gate_reverse_touch_t *selection)
+{
+	if (!selection)
+		return;
+	selection->source = -1;
+	selection->destination = -1;
+	selection->matches = 0U;
+}
+
+void SG_TrainGateReverseTouchConsider(sg_train_gate_reverse_touch_t *selection,
+	int preopen_touch, int source, int destination)
+{
+	if (!selection || !preopen_touch || source < 0 || destination < 0)
+		return;
+	if (selection->matches == 0U)
+	{
+		selection->source = source;
+		selection->destination = destination;
+	}
+	if (selection->matches != UINT32_MAX)
+		selection->matches++;
+}
+
+int SG_TrainGateReverseTouchResult(
+	const sg_train_gate_reverse_touch_t *selection,
+	int *source_out, int *destination_out)
+{
+	if (source_out)
+		*source_out = -1;
+	if (destination_out)
+		*destination_out = -1;
+	if (!selection || !source_out || !destination_out ||
+	    selection->matches != 1U)
+		return 0;
+	*source_out = selection->source;
+	*destination_out = selection->destination;
+	return 1;
+}
+
 sg_train_gate_side_t SG_TrainGateSweepSide(const float bounds_mins[3],
 	const float bounds_maxs[3], const float sweep_mins[3],
 	const float sweep_maxs[3])

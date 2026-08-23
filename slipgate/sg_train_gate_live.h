@@ -120,6 +120,20 @@ typedef struct sg_train_gate_state_s
 	uint8_t shot_requested;
 } sg_train_gate_state_t;
 
+typedef struct sg_train_gate_reverse_touch_s
+{
+	int source;
+	int destination;
+	uint32_t matches;
+} sg_train_gate_reverse_touch_t;
+
+void SG_TrainGateReverseTouchBegin(sg_train_gate_reverse_touch_t *selection);
+void SG_TrainGateReverseTouchConsider(sg_train_gate_reverse_touch_t *selection,
+	int preopen_touch, int source, int destination);
+int SG_TrainGateReverseTouchResult(
+	const sg_train_gate_reverse_touch_t *selection,
+	int *source_out, int *destination_out);
+
 int SG_TrainGateLiveBegin(sg_train_gate_state_t *state,
 	const sg_train_gate_witness_t *witness,
 	const sg_train_gate_observation_t *observation);

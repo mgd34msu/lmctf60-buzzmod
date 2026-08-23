@@ -3747,12 +3747,12 @@ static qboolean Train_ShootButtonShape(const rune_mechanism_node_t *node)
 static qboolean Train_ReverseTouchEndpoints(uint32_t train_key,
 	int *source_out, int *destination_out)
 {
+	sg_train_gate_reverse_touch_t selection;
 	int link_index;
-	int found_source = -1;
-	int found_destination = -1;
 
 	if (!source_out || !destination_out || !gen_mechanism_bindings)
 		return false;
+	SG_TrainGateReverseTouchBegin(&selection);
 	for (link_index = 0; link_index < gen_num_links; link_index++)
 	{
 		const rune_link_t *link = &gen_links[link_index];
@@ -3765,16 +3765,11 @@ static qboolean Train_ReverseTouchEndpoints(uint32_t train_key,
 		if (binding->controller_kind != SG_MECHANISM_CONTROLLER_TRAIN ||
 		    binding->mover_key != train_key)
 			continue;
-		if (found_source >= 0)
-			return false;
-		found_source = link->to;
-		found_destination = link->from;
+		SG_TrainGateReverseTouchConsider(&selection,
+		    link->mode == RLCM_PREOPEN, link->to, link->from);
 	}
-	if (found_source < 0 || found_destination < 0)
-		return false;
-	*source_out = found_source;
-	*destination_out = found_destination;
-	return true;
+	return SG_TrainGateReverseTouchResult(&selection,
+	    source_out, destination_out) ? true : false;
 }
 
 static uint32_t Train_OpeningBound(edict_t *button, edict_t *train,

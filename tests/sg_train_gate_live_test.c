@@ -129,6 +129,25 @@ static void TestSweepSides(void)
 	CHECK(SG_TrainGateUniquePassageAxis(1U << 0, 3U) == -1);
 }
 
+static void TestReverseTouchSelection(void)
+{
+	sg_train_gate_reverse_touch_t selection;
+	int source;
+	int destination;
+
+	SG_TrainGateReverseTouchBegin(&selection);
+	SG_TrainGateReverseTouchConsider(&selection, 1, 20, 10);
+	SG_TrainGateReverseTouchConsider(&selection, 0, 40, 30);
+	CHECK(SG_TrainGateReverseTouchResult(&selection, &source, &destination));
+	CHECK(source == 20);
+	CHECK(destination == 10);
+
+	SG_TrainGateReverseTouchConsider(&selection, 1, 60, 50);
+	CHECK(!SG_TrainGateReverseTouchResult(&selection, &source, &destination));
+	CHECK(source == -1);
+	CHECK(destination == -1);
+}
+
 static void Activate(sg_train_gate_state_t *state,
 	sg_train_gate_observation_t *observation)
 {
@@ -517,6 +536,7 @@ static void TestRideOppositeRouteOrientation(void)
 int main(void)
 {
 	TestSweepSides();
+	TestReverseTouchSelection();
 	TestHappyPath();
 	TestOrderedSingleCallbacks();
 	TestShootHappyPath();
