@@ -642,18 +642,18 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
-| `lmctf27` | The bounded relay-aware RL_DOOR repair fixes the original defect: both objective roots bind and 241 authenticated door links serialize. The real map still fails a separate closure cut with 4 red-reachable, 490 blue-reachable, 4 shared, and 130 neither seeds; that new SCC boundary is under diagnosis. |
+| `lmctf27` | The bounded relay-aware RL_DOOR repair fixes the original defect: both objective roots bind and 241 authenticated door links serialize. The real map still fails with 4 red-reachable, 490 blue-reachable, 4 shared, and 130 neither seeds. Exact DROP plus ordinary RUN/JUMP refute the nearest blue-only-to-shared cut; bounded HOOK replay is next. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
-| `tw2ctf2` | 33,868 links and 570 initially shared seeds. Exact replay proves symmetric upper HOOK return legs, but every published family lacks the reverse entry. The nearest staging hulls immediately hit world floor; DROP reaches stable landings on the red side without a destination win and admits no blue-side lip. A bounded unchanged RUN/JUMP replay is testing wider admission only across those two exact cuts. |
+| `tw2ctf2` | 33,868 links and 570 initially shared seeds. Symmetric wider unchanged RUN legs are now proved from each objective-root forward set into the already-authenticated upper HOOK returns. The active gate is grounded/runtime serialization plus real objective closure before replacing the fixed RUN admission bounds. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | 1,094 seeds all prune; nine lift links have no descent and another lift lacks staging. |
-| `xmap13` | All 1,337 seeds still prune. Existing declared-door validation proves all eight mirrored staged flights clean through landing, but each fails destination-seed ownership. The active diagnostic is the nearest dry/outgoing seed and exact envelope rejection; PUSH admission remains unchanged. |
+| `xmap13` | All 1,337 seeds still prune. Existing declared-door validation proves all eight mirrored staged flights clean through landing, but no stable outgoing seed owns the first grounded frame. Envelope widening is refuted; the active work is a generic serialized post-landing ground-egress proof from that exact live state. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
