@@ -164,6 +164,35 @@ size_t SG_RuneProofSelectHookFrontier(
 	return selected;
 }
 
+int SG_RuneProofObjectiveRunCandidate(
+	const sg_rune_proof_objective_run_seed_t *from,
+	const sg_rune_proof_objective_run_seed_t *to,
+	uint8_t objective_bit)
+{
+	int64_t dx, dy, dz, horizontal2;
+	const int64_t minimum = SG_RUNE_PROOF_OBJECTIVE_RUN_MIN_HORIZONTAL_Q8;
+	const int64_t maximum = SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_HORIZONTAL_Q8;
+
+	if (!from || !to || (objective_bit != 1U && objective_bit != 2U) ||
+	    !(from->forward_mask & objective_bit) || from->component == to->component ||
+	    !from->stable || !to->stable || from->waterlevel != 0U ||
+	    to->waterlevel != 0U)
+		return 0;
+	dx = (int64_t)to->origin_q8[0] - from->origin_q8[0];
+	dy = (int64_t)to->origin_q8[1] - from->origin_q8[1];
+	dz = (int64_t)to->origin_q8[2] - from->origin_q8[2];
+	horizontal2 = dx * dx + dy * dy;
+	return horizontal2 > minimum * minimum &&
+	       horizontal2 <= maximum * maximum &&
+	       dz >= -SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_VERTICAL_Q8 &&
+	       dz <= SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_VERTICAL_Q8;
+}
+
+int SG_RuneProofObjectiveRunReplayAccepted(int edge_seek, int airborne)
+{
+	return !edge_seek && !airborne;
+}
+
 int SG_RuneProofScopeBegin(float gravity)
 {
 	if (sg_rune_proof_scope_active || !isfinite(gravity) ||

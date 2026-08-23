@@ -138,6 +138,50 @@ int main(void)
 	CHECK(SG_RuneProofSelectHookFrontier(&frontier) == 0);
 
 	{
+		sg_rune_proof_objective_run_seed_t from, to;
+
+		memset(&from, 0, sizeof(from));
+		memset(&to, 0, sizeof(to));
+		from.origin_q8[0] = -320 * 8;
+		from.origin_q8[1] = -240 * 8;
+		from.component = 1;
+		from.forward_mask = 1;
+		from.stable = 1;
+		to.origin_q8[0] = 64 * 8;
+		to.origin_q8[1] = 272 * 8;
+		to.component = 2;
+		to.stable = 1;
+		CHECK(SG_RuneProofObjectiveRunCandidate(&from, &to, 1));
+		from.origin_q8[0] = 320 * 8;
+		from.origin_q8[1] = 240 * 8;
+		from.forward_mask = 2;
+		to.origin_q8[0] = -64 * 8;
+		to.origin_q8[1] = -272 * 8;
+		CHECK(SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 1));
+		to.component = from.component;
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		to.component = 2;
+		to.stable = 0;
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		to.stable = 1;
+		to.waterlevel = 1;
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		to.waterlevel = 0;
+		to.origin_q8[2] = 17 * 8;
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		to.origin_q8[2] = 0;
+		to.origin_q8[0] = from.origin_q8[0] + 192 * 8;
+		to.origin_q8[1] = from.origin_q8[1];
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		to.origin_q8[0] = from.origin_q8[0] + 769 * 8;
+		CHECK(!SG_RuneProofObjectiveRunCandidate(&from, &to, 2));
+		CHECK(SG_RuneProofObjectiveRunReplayAccepted(0, 0));
+		CHECK(!SG_RuneProofObjectiveRunReplayAccepted(1, 0));
+		CHECK(!SG_RuneProofObjectiveRunReplayAccepted(0, 1));
+	}
+
+	{
 		float off = 0.0f;
 		float on = 1.0f;
 		float invalid = NAN;

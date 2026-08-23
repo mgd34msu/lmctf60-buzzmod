@@ -381,9 +381,9 @@ including `lmctf02a` and `lmctf04`.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `xmap25`, and `xmap29`
-subsequently passed every acceptance gate, leaving 17 maps in the live repair
-queue.
+runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `tw2ctf2`, `xmap25`, and
+`xmap29` subsequently passed every acceptance gate, leaving 16 maps in the live
+repair queue.
 Exact retests prove that `tomb05` remains a genuine graph failure.
 `tomb05` reaches objective-core with no closed route
 shared by both flags.
@@ -472,7 +472,7 @@ over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
 `lmctf25`, `lmctf30`, `lmctf45`, `tomb05`,
-`tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
+`tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
@@ -651,7 +651,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf45` | Fresh current source has 1,369 seeds/14,598 links. Across 71 unique shared-to-one-sided boundary pairs, reverse RUN/JUMP/DROP prove none, native HOOK proves all 48 blue cuts, and native rocket-jump proves 19 of 23 red cuts. A generic fail-closed inverse repair is testing one serialized topology-improving link per fixed-point recompute, preserving cheaper exact families first. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
-| `tw2ctf2` | Clean-production PASS: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both C readers, Python, lint, SNAG/semantic checks, and cold load pass. Focused, accepted-map identity, and full source gates remain before integration. |
+| `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |

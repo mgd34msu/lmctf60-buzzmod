@@ -55,6 +55,25 @@ typedef struct sg_rune_proof_hook_frontier_s
 size_t SG_RuneProofSelectHookFrontier(
 	const sg_rune_proof_hook_frontier_t *frontier);
 
+#define SG_RUNE_PROOF_OBJECTIVE_RUN_MIN_HORIZONTAL_Q8 (192 * 8)
+#define SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_HORIZONTAL_Q8 (768 * 8)
+#define SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_VERTICAL_Q8 (16 * 8)
+
+typedef struct sg_rune_proof_objective_run_seed_s
+{
+	int32_t origin_q8[3];
+	int component;
+	uint8_t forward_mask;
+	uint8_t stable;
+	uint8_t waterlevel;
+} sg_rune_proof_objective_run_seed_t;
+
+int SG_RuneProofObjectiveRunCandidate(
+	const sg_rune_proof_objective_run_seed_t *from,
+	const sg_rune_proof_objective_run_seed_t *to,
+	uint8_t objective_bit);
+int SG_RuneProofObjectiveRunReplayAccepted(int edge_seek, int airborne);
+
 /* Nominal oracle placement uses 800 outside this single-owner scope. Active
  * generation begins with its already captured integral gravity and must end
  * the scope on every exit. Nested begin attempts fail without mutation. */
