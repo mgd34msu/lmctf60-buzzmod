@@ -616,8 +616,10 @@ impulses plus 4 singleton fields. A terminal discriminator refuted the saved
 staged-PUSH repair: all eight multi-stage witnesses become airborne, then the
 oracle marks them contaminated before any stable landing. No destination-seed
 lookup occurs, and only the four one-stage links materialize. That branch will
-not be imported. The active diagnostic now identifies the exact contaminating
-collision before any replacement admission is considered.
+not be imported. The contaminant is a symmetric stock iris activator pair whose
+four-leaf door teams generation has already posed open; a diagnostic replay is
+testing whether the existing declared-activator and canonical-door-team
+validators can authenticate that handoff without weakening the proof.
 
 A fresh immutable generation batch now covers the entire historical 23-map
 queue with four concurrent workers. It includes already diagnosed maps and the
@@ -640,7 +642,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
-| `lmctf27` | Neither objective root binds because both nearest flag seeds have no outgoing link. |
+| `lmctf27` | Neither objective root binds because the symmetric flag shelves overlap ordinary `trigger_multiple` entities whose synchronous relay targets own the matching cell-door teams. Direct-target-only door admission misses that relay closure, after which generic source-stability filtering removes every shelf seed. The active repair is confined to an authenticated RL_DOOR plan if existing callback guards serialize the relay chain. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
@@ -651,7 +653,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | 1,094 seeds all prune; nine lift links have no descent and another lift lacks staging. |
-| `xmap13` | All 1,337 seeds still prune. The saved staged-PUSH repair is refuted because every multi-stage witness is contaminated inside the oracle before landing; the exact contaminating collision is under diagnosis. |
+| `xmap13` | All 1,337 seeds still prune. The saved staged-PUSH repair is refuted; the exact contaminant is a symmetric stock iris activator pair whose door teams are already posed open during generation. A diagnostic reuse of the declared activator/team validators is testing whether that handoff permits an authenticated landing. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
