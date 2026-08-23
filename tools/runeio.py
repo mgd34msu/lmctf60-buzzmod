@@ -30,8 +30,6 @@ SEED_BYTES = 16
 RUNE_POLICY_LINK_BYTES = 44
 MAP_NAME_BYTES = 64
 HEADER_CRC_OFFSET = 60
-NONCOMPOUND_TAIL_OFFSET = 28
-NONCOMPOUND_TAIL_BYTES = 16
 MAX_SEEDS = 32768
 MAX_LINKS = 262144
 MIN_COST_MS = 1
@@ -235,7 +233,6 @@ SEED_FLAG_MASK = RSF_WATER | RSF_TOMBSTONE
 
 _MAP_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 _ZERO_12 = b"\x00" * 12
-_ZERO_16 = b"\x00" * NONCOMPOUND_TAIL_BYTES
 _WORLD_MIN = (
     contract.RUNE_PROOF_WORLD_FIXED_MIN /
     contract.RUNE_PROOF_WORLD_FIXED_SCALE
@@ -1142,10 +1139,10 @@ def _validate_graph(
         )
         compound = bool(action["trait_mask"] & contract.SG_ACTF_ATOMIC)
         if not compound:
-            if raw[NONCOMPOUND_TAIL_OFFSET:] != _ZERO_16:
+            if raw[28:40] != _ZERO_12 or link.sweep_clear_ms != 0:
                 raise _wire_error(
                     contract.RLW_BAD_LINK_RECORD,
-                    f"link {index} has nonzero noncompound tail",
+                    f"link {index} has nonzero noncompound mechanism proof",
                 )
             continue
 

@@ -1513,6 +1513,48 @@ class RuneRuneArtifactTests(unittest.TestCase):
     def setUp(self) -> None:
         self.encoded = _build_rune()
 
+    def test_nonatomic_lift_ride_keeps_mode_but_no_mechanism_proof(self):
+        seeds = (
+            runeio.RuneSeed((0.0, 0.0, 0.0)),
+            runeio.RuneSeed((128.0, 0.0, 0.0)),
+        )
+        lift = runeio.RunePolicyLink(
+            0, 1, contract.RL_LIFT, contract.RL_DECLARED,
+            0, 0, 0, 0, 100, mode=contract.RLCM_RIDE,
+        )
+        run = runeio.RunePolicyLink(
+            1, 0, contract.RL_RUN, contract.RL_PROVEN,
+            0, 0, 0, 0, 100,
+        )
+
+        def packed(link, plan):
+            return runeio.RUNE_LINK_STRUCT.pack(
+                link.source, link.destination, link.action, link.provenance,
+                link.min_speed, link.heading, link.heading_slack,
+                link.exit_speed, link.cost_ms, *link.suffix_anchor,
+                *link.mechanism_anchor, link.sweep_clear_ms, link.mode,
+                link.reserved, plan,
+            )[:runeio.RUNE_POLICY_LINK_BYTES]
+
+        def validate(candidate):
+            runeio._validate_graph(
+                seeds, (candidate, run),
+                (packed(candidate, 0), packed(run,
+                    runeio.RUNE_NO_ACTIVATION_PLAN)),
+                (0, runeio.RUNE_NO_ACTIVATION_PLAN),
+            )
+
+        validate(lift)
+        for malformed in (
+            replace(lift, mechanism_anchor=(0.125, 0.0, 0.0)),
+            replace(lift, sweep_clear_ms=100),
+        ):
+            with self.subTest(link=malformed):
+                self.assert_wire_code(
+                    contract.RLW_BAD_LINK_RECORD,
+                    lambda malformed=malformed: validate(malformed),
+                )
+
     def assert_wire_code(self, code: int, operation) -> None:
         with self.assertRaises(runeio.RuneWireError) as raised:
             operation()
