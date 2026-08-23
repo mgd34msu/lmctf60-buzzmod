@@ -863,6 +863,8 @@ static int gen_waypoint_links;
  */
 static vec3_t gen_prove_wp;
 static qboolean gen_prove_has_wp;
+static qboolean gen_prove_last_edge_seek;
+static qboolean gen_prove_last_airborne;
 
 /*
  * Entry speed for the NEXT Prove roll, consumed by Prove at placement. Zero
@@ -890,6 +892,8 @@ static qboolean Prove(int from, int to, qboolean jump,
 	int wp_n = 0;
 
 	Rune_TelemetryAdd(&gen_telemetry.prover_calls, 1U);
+	gen_prove_last_edge_seek = false;
+	gen_prove_last_airborne = false;
 	SG_OraclePlace(&ph, gen_seeds[from].origin);
 	/* Seed_Ground established this as a standing source, and the live bot's
 	 * launch gate likewise knows groundentity before command zero. Pmove will
@@ -1030,6 +1034,7 @@ static qboolean Prove(int from, int to, qboolean jump,
 		if (!jump && want[2] < -100.0f &&
 		    d[0] * d[0] + d[1] * d[1] < 160.0f * 160.0f && ph.groundentity)
 		{
+			gen_prove_last_edge_seek = true;
 			/*
 			 * The 48-unit probe found an edge from almost nowhere: lattice
 			 * seeds sit 64 or more from any lip, so eight drop links existed
@@ -1151,6 +1156,8 @@ static qboolean Prove(int from, int to, qboolean jump,
 
 		if (!SG_OracleRunWorld(&ph, &cmd, 1))
 			return false;
+		if (!ph.groundentity && ph.waterlevel < 2)
+			gen_prove_last_airborne = true;
 		/* Only ordinary RUN has a runtime wait/resume policy for a validated
 		 * door precondition. A jump cannot pause after its tap without changing
 		 * the proved launch state. */
@@ -8123,7 +8130,276 @@ static qboolean Graph_ProveHookReverseDrop(const byte *red_reach,
 	return false;
 }
 
-static qboolean Graph_PruneObjectiveCore(void)
+static qboolean Graph_ObjectiveReachMasks(int red_root, int blue_root,
+	byte *red_reach, byte *blue_reach)
+{
+	int *first_in = NULL, *next_in = NULL, *queue = NULL;
+	byte *allowed = NULL;
+	qboolean ok = false;
+
+	if (!red_reach || !blue_reach || red_root < 0 || blue_root < 0 ||
+	    red_root >= gen_num_seeds || blue_root >= gen_num_seeds)
+		return false;
+	first_in = sg_host.level_alloc(sizeof(*first_in) * (size_t)gen_num_seeds);
+	next_in = sg_host.level_alloc(sizeof(*next_in) *
+	    (size_t)(gen_num_links ? gen_num_links : 1));
+	queue = sg_host.level_alloc(sizeof(*queue) * (size_t)gen_num_seeds);
+	allowed = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!first_in || !next_in || !queue || !allowed)
+		goto done;
+	memset(allowed, 1, (size_t)gen_num_seeds);
+	for (int i = 0; i < gen_num_seeds; i++)
+		first_in[i] = -1;
+	for (int i = 0; i < gen_num_links; i++)
+	{
+		next_in[i] = first_in[gen_links[i].to];
+		first_in[gen_links[i].to] = i;
+	}
+	Graph_ReverseReach(red_root, allowed, first_in, next_in, queue,
+	    red_reach);
+	Graph_ReverseReach(blue_root, allowed, first_in, next_in, queue,
+	    blue_reach);
+	ok = true;
+
+done:
+	if (first_in) sg_host.level_free(first_in);
+	if (next_in) sg_host.level_free(next_in);
+	if (queue) sg_host.level_free(queue);
+	if (allowed) sg_host.level_free(allowed);
+	return ok;
+}
+
+static qboolean Graph_ObjectiveForwardMasks(int red_root, int blue_root,
+	byte *red_forward, byte *blue_forward)
+{
+	int *first_out = NULL, *next_out = NULL, *queue = NULL;
+	qboolean ok = false;
+	int roots[2];
+	byte *outputs[2];
+
+	if (!red_forward || !blue_forward || red_root < 0 || blue_root < 0 ||
+	    red_root >= gen_num_seeds || blue_root >= gen_num_seeds)
+		return false;
+	first_out = sg_host.level_alloc(sizeof(*first_out) *
+	    (size_t)gen_num_seeds);
+	next_out = sg_host.level_alloc(sizeof(*next_out) *
+	    (size_t)(gen_num_links ? gen_num_links : 1));
+	queue = sg_host.level_alloc(sizeof(*queue) * (size_t)gen_num_seeds);
+	if (!first_out || !next_out || !queue)
+		goto done;
+	for (int i = 0; i < gen_num_seeds; i++)
+		first_out[i] = -1;
+	for (int i = 0; i < gen_num_links; i++)
+	{
+		next_out[i] = first_out[gen_links[i].from];
+		first_out[gen_links[i].from] = i;
+	}
+	roots[0] = red_root;
+	roots[1] = blue_root;
+	outputs[0] = red_forward;
+	outputs[1] = blue_forward;
+	for (int side = 0; side < 2; side++)
+	{
+		int head = 0, tail = 0;
+
+		memset(outputs[side], 0, (size_t)gen_num_seeds);
+		outputs[side][roots[side]] = 1;
+		queue[tail++] = roots[side];
+		while (head < tail)
+		{
+			int at = queue[head++];
+
+			for (int edge = first_out[at]; edge >= 0;
+			     edge = next_out[edge])
+			{
+				int to = gen_links[edge].to;
+
+				if (!outputs[side][to])
+				{
+					outputs[side][to] = 1;
+					queue[tail++] = to;
+				}
+			}
+		}
+	}
+	ok = true;
+
+done:
+	if (first_out) sg_host.level_free(first_out);
+	if (next_out) sg_host.level_free(next_out);
+	if (queue) sg_host.level_free(queue);
+	return ok;
+}
+
+#define OBJECTIVE_CLOSURE_RUN_CALL_MAX 8192
+
+static qboolean Prove_ObjectiveClosure(int red_root, int blue_root)
+{
+	door_topology_t topology = { NULL, NULL };
+	byte *red_reach = NULL, *blue_reach = NULL;
+	byte *red_forward = NULL, *blue_forward = NULL;
+	int hook_from[2] = { -1, -1 };
+	int hook_to[2] = { -1, -1 };
+	vec3_t hook_anchor[2];
+	short hook_cost[2] = { 0, 0 };
+	byte hook_speed[2] = { 0, 0 };
+	int calls[2] = { 0, 0 };
+	int rejected[2] = { 0, 0 };
+	int link_mark = gen_num_links;
+	int envelope_mark = gen_env_hook;
+	qboolean closed = false;
+
+	memset(hook_anchor, 0, sizeof(hook_anchor));
+	red_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	blue_reach = sg_host.level_alloc((size_t)gen_num_seeds);
+	red_forward = sg_host.level_alloc((size_t)gen_num_seeds);
+	blue_forward = sg_host.level_alloc((size_t)gen_num_seeds);
+	if (!red_reach || !blue_reach || !red_forward || !blue_forward ||
+	    !Graph_ObjectiveReachMasks(red_root, blue_root,
+	        red_reach, blue_reach) ||
+	    !Graph_ObjectiveForwardMasks(red_root, blue_root,
+	        red_forward, blue_forward) ||
+	    !Door_TopologyBuild(&topology))
+		goto done;
+
+	for (int i = 0; i < gen_num_links; i++)
+	{
+		const rune_link_t *link = &gen_links[i];
+		unsigned int from_mask = Graph_ObjectivePartitionMask(link->from,
+		    red_reach, blue_reach);
+		unsigned int to_mask = Graph_ObjectivePartitionMask(link->to,
+		    red_reach, blue_reach);
+		int side;
+		vec3_t anchor;
+		short cost;
+		byte speed;
+
+		if (from_mask != 3U || (to_mask != 1U && to_mask != 2U) ||
+		    topology.component[link->from] == topology.component[link->to])
+			continue;
+		side = to_mask == 1U ? 0 : 1;
+		if (hook_from[side] >= 0 ||
+		    !ProveHook(link->to, link->from, anchor, &cost, &speed))
+			continue;
+		hook_from[side] = link->to;
+		hook_to[side] = link->from;
+		VectorCopy(anchor, hook_anchor[side]);
+		hook_cost[side] = cost;
+		hook_speed[side] = speed;
+	}
+	if (hook_from[0] < 0 || hook_from[1] < 0)
+		goto done;
+
+	for (int side = 0; side < 2; side++)
+	{
+		int target_component = topology.component[hook_from[side]];
+		qboolean proved = false;
+
+		for (int radius =
+		         SG_RUNE_PROOF_OBJECTIVE_RUN_MIN_HORIZONTAL_Q8 / 8 + 64;
+		     radius <= SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_HORIZONTAL_Q8 / 8 &&
+		     !proved &&
+		     calls[side] < OBJECTIVE_CLOSURE_RUN_CALL_MAX;
+		     radius += 64)
+		{
+			float radius2 = (float)radius * (float)radius;
+			float previous2 = (float)(radius - 64) * (float)(radius - 64);
+
+			for (int from = 0; from < gen_num_seeds && !proved &&
+			     calls[side] < OBJECTIVE_CLOSURE_RUN_CALL_MAX; from++)
+			{
+				for (int to = 0; to < gen_num_seeds && !proved &&
+				     calls[side] < OBJECTIVE_CLOSURE_RUN_CALL_MAX; to++)
+				{
+					sg_rune_proof_objective_run_seed_t source = { 0 };
+					sg_rune_proof_objective_run_seed_t target = { 0 };
+					vec3_t delta;
+					float horizontal2;
+					short cost;
+					byte speed;
+
+					if (topology.component[to] != target_component)
+						continue;
+					for (int axis = 0; axis < 3; axis++)
+					{
+						source.origin_q8[axis] = (int32_t)lrintf(
+						    gen_seeds[from].origin[axis] * 8.0f);
+						target.origin_q8[axis] = (int32_t)lrintf(
+						    gen_seeds[to].origin[axis] * 8.0f);
+					}
+					source.component = topology.component[from];
+					target.component = topology.component[to];
+					source.forward_mask =
+					    (red_forward[from] ? 1U : 0U) |
+					    (blue_forward[from] ? 2U : 0U);
+					source.stable = gen_source_stable[from] ? 1U : 0U;
+					target.stable = gen_source_stable[to] ? 1U : 0U;
+					source.waterlevel = gen_source_waterlevel[from];
+					target.waterlevel = gen_source_waterlevel[to];
+					if (!SG_RuneProofObjectiveRunCandidate(&source, &target,
+					        side ? 2U : 1U))
+						continue;
+					VectorSubtract(gen_seeds[to].origin,
+					    gen_seeds[from].origin, delta);
+					horizontal2 = delta[0] * delta[0] +
+					    delta[1] * delta[1];
+					if (horizontal2 <= previous2 || horizontal2 > radius2)
+						continue;
+					calls[side]++;
+					if (!Prove(from, to, false, &cost, &speed))
+						continue;
+					if (!SG_RuneProofObjectiveRunReplayAccepted(
+					        gen_prove_last_edge_seek,
+					        gen_prove_last_airborne))
+					{
+						rejected[side]++;
+						continue;
+					}
+					if (!Link_Add(from, to, RL_RUN, cost, speed))
+						goto done;
+					if (gen_prove_has_wp)
+						VectorCopy(gen_prove_wp,
+						    gen_links[gen_num_links - 1].anchor);
+					if (!Link_Add(hook_from[side], hook_to[side], RL_HOOK,
+					        hook_cost[side], hook_speed[side]))
+						goto done;
+					VectorCopy(hook_anchor[side],
+					    gen_links[gen_num_links - 1].anchor);
+					Link_Env_Hook(&gen_links[gen_num_links - 1],
+					    hook_anchor[side]);
+					proved = true;
+				}
+			}
+		}
+		if (!proved)
+			goto done;
+	}
+	closed = gen_num_links == link_mark + 4 &&
+	    Graph_ObjectiveReachMasks(red_root, blue_root,
+	        red_reach, blue_reach) &&
+	    blue_reach[red_root] && red_reach[blue_root];
+
+done:
+	sg_host.dprint("rune: objective closure run_calls=%d/%d "
+	               "nonruntime=%d/%d links=%d closed=%d limit=%d\n",
+	               calls[0], calls[1], rejected[0], rejected[1],
+	               gen_num_links - link_mark, closed ? 1 : 0,
+	               OBJECTIVE_CLOSURE_RUN_CALL_MAX);
+	if (!closed)
+	{
+		gen_num_links = link_mark;
+		gen_env_hook = envelope_mark;
+	}
+	if (red_reach) sg_host.level_free(red_reach);
+	if (blue_reach) sg_host.level_free(blue_reach);
+	if (red_forward) sg_host.level_free(red_forward);
+	if (blue_forward) sg_host.level_free(blue_forward);
+	Door_TopologyFree(&topology);
+	return closed;
+}
+
+static qboolean Graph_PruneObjectiveCoreTry(qboolean defer_route_failure,
+	int *red_root_out, int *blue_root_out)
 {
 	int *first_in = NULL, *next_in = NULL, *queue = NULL;
 	byte *has_out = NULL, *keep = NULL, *red_reach = NULL, *blue_reach = NULL;
@@ -8134,6 +8410,8 @@ static qboolean Graph_PruneObjectiveCore(void)
 	int repair_link = -1, repairs = 0;
 	uint32_t new_bindings = 0U;
 
+	if (red_root_out) *red_root_out = -1;
+	if (blue_root_out) *blue_root_out = -1;
 	if (!redflag || !blueflag || !redflag->inuse || !blueflag->inuse)
 	{
 		sg_host.dprint("rune: FAILED: objective flags are unavailable\n");
@@ -8176,6 +8454,8 @@ static qboolean Graph_PruneObjectiveCore(void)
 	}
 	red_root = Graph_ObjectiveRoot(redflag->homeposition, has_out, &red_diag);
 	blue_root = Graph_ObjectiveRoot(blueflag->homeposition, has_out, &blue_diag);
+	if (red_root_out) *red_root_out = red_root;
+	if (blue_root_out) *blue_root_out = blue_root;
 	if (red_root < 0 || blue_root < 0)
 	{
 		Graph_LogObjectiveRoot("red", &red_diag, red_root);
@@ -8251,6 +8531,8 @@ static qboolean Graph_PruneObjectiveCore(void)
 	               red_reach[blue_root] ? 1 : 0, iteration);
 	if (!keep[red_root] || !keep[blue_root])
 	{
+		if (defer_route_failure)
+			goto fail;
 		Graph_LogObjectiveRoot("red", &red_diag, red_root);
 		Graph_LogObjectiveRoot("blue", &blue_diag, blue_root);
 		Graph_LogBoundaryLinks("final", red_reach, blue_reach);
@@ -8318,6 +8600,23 @@ fail:
 	if (red_reach) sg_host.level_free(red_reach);
 	if (blue_reach) sg_host.level_free(blue_reach);
 	return false;
+}
+
+static qboolean Graph_PruneObjectiveCore(void)
+{
+	return Graph_PruneObjectiveCoreTry(false, NULL, NULL);
+}
+
+static qboolean Graph_PruneObjectiveCoreWithClosure(void)
+{
+	int red_root, blue_root;
+
+	if (Graph_PruneObjectiveCoreTry(true, &red_root, &blue_root))
+		return true;
+	if (red_root < 0 || blue_root < 0)
+		return false;
+	Prove_ObjectiveClosure(red_root, blue_root);
+	return Graph_PruneObjectiveCore();
 }
 
 /* ------------------------------------------------------------------- IO */
@@ -8732,7 +9031,7 @@ qboolean Rune_Generate(const char *mapname)
 	 * every non-core geometry sample before writing so runtime localization and
 	 * the deployment linter share the same fail-closed topology contract. */
 	Rune_TelemetryPhaseStart("objective-core");
-	if (!Graph_PruneObjectiveCore())
+	if (!Graph_PruneObjectiveCoreWithClosure())
 		goto cleanup;
 	Rune_TelemetryPhaseEnd();
 	/* SEED_MAX/LINK_MAX are inclusive graph count limits.  Filling the final
