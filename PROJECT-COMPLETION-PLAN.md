@@ -381,8 +381,8 @@ including `lmctf02a` and `lmctf04`.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58` and `lmctf07` subsequently passed every acceptance gate,
-leaving 21 maps in the live repair queue.
+runs. `lmctf58`, `lmctf07`, and `lmctf40` subsequently passed every acceptance
+gate, leaving 20 maps in the live repair queue.
 Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
 `tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
@@ -471,7 +471,7 @@ also refuted and no wire change was made. A bounded multi-source Pmove search
 over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
-`lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `tomb05`,
+`lmctf25`, `lmctf27`, `lmctf30`, `lmctf45`, `tomb05`,
 `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
@@ -660,7 +660,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
-| `lmctf58` | The graph closes and a RUNE is written; fresh cleanup diagnosis is still running before acceptance. |
+| `lmctf58` | The graph closes with 1,896 shared seeds and writes 30,993 links, but generator cleanup exceeds 1,800 seconds before acceptance. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | 33,868 links and 570 initially shared seeds; reverse closure fails over ordinary links. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
