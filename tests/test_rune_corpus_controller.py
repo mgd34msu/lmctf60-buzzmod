@@ -657,6 +657,18 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 controller.verify_snapshot(snapshot)
             self.thaw(snapshot)
 
+    def test_snapshot_completes_partial_regular_file_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            real_write = os.write
+
+            def partial_write(fd, payload):
+                return real_write(fd, payload[:17])
+
+            with mock.patch.object(os, "write", side_effect=partial_write):
+                snapshot = self.make_snapshot(Path(temporary))
+            controller.verify_snapshot(snapshot)
+            self.thaw(snapshot)
+
     def test_snapshot_rejects_unmanifested_file_and_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)

@@ -727,7 +727,12 @@ def create_input_snapshot(
                             break
                         digest.update(chunk)
                         copied_size += len(chunk)
-                        os.write(target_fd, chunk)
+                        offset = 0
+                        while offset < len(chunk):
+                            written = os.write(target_fd, chunk[offset:])
+                            if written <= 0:
+                                raise CorpusError(f"snapshot write failed: {destination}")
+                            offset += written
                     os.fchmod(target_fd, stat.S_IMODE(source_info.st_mode) & ~0o222)
                     os.fsync(target_fd)
                 finally:
