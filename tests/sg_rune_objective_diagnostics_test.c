@@ -8,6 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "g_local.h"
+
+static qboolean TestObjectiveDropProver(int from, int to, vec3_t lip_out,
+	short *cost_ms, byte *exit_speed);
+#define SG_RUNE_OBJECTIVE_DROP_PROVER TestObjectiveDropProver
 #include "slipgate/sg_rune.c"
 
 sg_host_t sg_host;
@@ -20,6 +25,10 @@ static FILE *telemetry_output;
 static int telemetry_flush_calls;
 static int allocations_before_failure = -1;
 static int failures;
+static qboolean objective_drop_succeeds;
+static int objective_drop_calls;
+static int objective_drop_from;
+static int objective_drop_to;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -77,6 +86,20 @@ static void *TestAlloc(int size)
 static void TestFree(void *memory)
 {
 	free(memory);
+}
+
+static qboolean TestObjectiveDropProver(int from, int to, vec3_t lip_out,
+	short *cost_ms, byte *exit_speed)
+{
+	objective_drop_calls++;
+	objective_drop_from = from;
+	objective_drop_to = to;
+	if (!objective_drop_succeeds)
+		return false;
+	VectorSet(lip_out, 10.0f, 20.0f, 30.0f);
+	*cost_ms = 1100;
+	*exit_speed = 74;
+	return true;
 }
 
 static trace_t TestTrace(const vec3_t start, const vec3_t mins,
@@ -138,6 +161,10 @@ static void ResetGraph(rune_seed_t *seeds, int seed_count,
 	memset(&gen_telemetry, 0, sizeof(gen_telemetry));
 	memset(&gen_phase_telemetry, 0, sizeof(gen_phase_telemetry));
 	allocations_before_failure = -1;
+	objective_drop_succeeds = false;
+	objective_drop_calls = 0;
+	objective_drop_from = -1;
+	objective_drop_to = -1;
 	telemetry_flush_calls = 0;
 	memset(red, 0, sizeof(*red));
 	memset(blue, 0, sizeof(*blue));
@@ -271,6 +298,39 @@ static void TestOneWayCrossRootReject(void)
 	    "objective-core initial red_reach=1 blue_reach=2") != NULL);
 	CHECK(strstr(diagnostic_log,
 	    "FAILED: flag objectives share no closed route core") != NULL);
+}
+
+static void TestHookReverseDropRepair(void)
+{
+	rune_seed_t seeds[4];
+	rune_link_t links[6];
+	edict_t red, blue;
+
+	ResetGraph(seeds, 4, links, 5, &red, &blue);
+	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
+	VectorSet(blue.homeposition, 1000.0f, 0.0f, 240.0f);
+	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 240.0f);
+	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
+	VectorSet(seeds[3].origin, 936.0f, 0.0f, 240.0f);
+	SetLink(&links[0], 0, 2);
+	SetLink(&links[1], 2, 0);
+	SetLink(&links[2], 1, 3);
+	SetLink(&links[3], 3, 1);
+	SetLink(&links[4], 2, 3);
+	links[4].action = RL_HOOK;
+	objective_drop_succeeds = true;
+	CHECK(Graph_PruneObjectiveCore());
+	CHECK(objective_drop_calls == 1);
+	CHECK(objective_drop_from == 3 && objective_drop_to == 2);
+	CHECK(gen_num_links == 6);
+	CHECK(links[5].from == 3 && links[5].to == 2);
+	CHECK(links[5].action == RL_DROP);
+	CHECK(links[5].cost_ms == 1100 && links[5].exit_speed == 74);
+	CHECK(strstr(diagnostic_log,
+	    "objective-repair kind=hook-reverse-drop") != NULL);
+	CHECK(strstr(diagnostic_log,
+	    "red_to_blue=1 blue_to_red=1") != NULL);
 }
 
 static void TestObjectiveMetricUnits(void)
@@ -546,6 +606,7 @@ int main(void)
 	TestBidirectionalCore();
 	TestDisconnectedPartitionDiagnostics();
 	TestOneWayCrossRootReject();
+	TestHookReverseDropRepair();
 	TestOneWayAndFixedPointFailures();
 	TestObjectiveMetricUnits();
 	TestNearestUnlinked();

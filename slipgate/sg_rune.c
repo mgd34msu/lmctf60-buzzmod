@@ -8077,6 +8077,10 @@ static void Graph_ReverseReach(int root, const byte *allowed,
 	}
 }
 
+#ifndef SG_RUNE_OBJECTIVE_DROP_PROVER
+#define SG_RUNE_OBJECTIVE_DROP_PROVER ProveDrop
+#endif
+
 static qboolean Graph_ProveHookReverseDrop(const byte *red_reach,
 	const byte *blue_reach, int *link_out)
 {
@@ -8105,7 +8109,8 @@ static qboolean Graph_ProveHookReverseDrop(const byte *red_reach,
 		    gen_seeds[boundary.to].origin[2] <=
 		        gen_seeds[boundary.from].origin[2] + 160.0f ||
 		    Link_Exists(boundary.to, boundary.from) ||
-		    !ProveDrop(boundary.to, boundary.from, lip, &cost, &exit_speed))
+		    !SG_RUNE_OBJECTIVE_DROP_PROVER(boundary.to, boundary.from, lip,
+		        &cost, &exit_speed))
 			continue;
 		if (!Link_Add(boundary.to, boundary.from, RL_DROP, cost, exit_speed))
 			return false;
