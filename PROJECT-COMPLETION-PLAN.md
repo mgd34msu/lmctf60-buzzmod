@@ -654,13 +654,13 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf07` | PASS after the accepted train/button repair. |
 | `lmctf12` | 2,263 seeds all prune; the disjoint objective sides have no boundary link. |
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
-| `lmctf19` | 2,153 seeds all prune; the objective sides are 112 units apart across ordinary dead-end links. |
+| `lmctf19` | 2,153 seeds all prune; the apparent 112-unit gap is solid world, while the true frontier has inward declared doors with shoot buttons but zero BUTTON_DOOR links. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
 | `lmctf27` | Neither objective root binds because both nearest flag seeds have no outgoing link. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
-| `lmctf58` | The graph closes with 1,896 shared seeds and writes 30,993 links, but generator cleanup exceeds 1,800 seconds before acceptance. |
+| `lmctf58` | The graph closes with 1,896 shared seeds and writes 30,993 links; runtime door-plan replay exceeds 1,800 seconds inside repeated synthetic sweep validation. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | 33,868 links and 570 initially shared seeds; reverse closure fails over ordinary links. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
@@ -671,7 +671,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | 1,733 seeds are initially shared, but reverse closure from the blue-only component fails. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
-| `xmap29` | Water-seed capacity is exhausted before base-link proof; no graph is written. |
+| `xmap29` | The invalid water-only seed bound is repaired on its branch, exposing 18,106 total seeds; radius-pair SWIM then fills all 262,144 link slots and times out. |
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
