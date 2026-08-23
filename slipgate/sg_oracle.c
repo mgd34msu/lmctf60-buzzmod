@@ -6674,15 +6674,17 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	qboolean old_touched = sg_oracle_declared_touched;
 	int old_action = sg_oracle_declared_action;
 	sg_phantom_t ph;
+	sg_phantom_t activated;
 	usercmd_t cmd;
 	vec3_t travel;
 	vec3_t board_target;
 	double dwell_ms;
 	int activation_ms;
 	int elapsed;
-	int stable_ms = 0;
+	int dwell_limit;
+	int candidate;
+	int jump_ms;
 	qboolean ok = false;
-	int axis;
 
 	if (contact_out)
 		VectorClear(contact_out);
@@ -6707,17 +6709,8 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	if (!SG_OracleDeclaredApproachInternal(source, target, button, button,
 	        train, NULL, RL_TRAIN, &activation_ms, NULL, &ph))
 		return false;
-	for (axis = 0; axis < 2; axis++)
-	{
-		float lower = train->absmin[axis] + 16.125f;
-		float upper = train->absmax[axis] - 16.125f;
-
-		if (lower > upper)
-			return false;
-		board_target[axis] = ph.origin[axis] < lower ? lower :
-		    ph.origin[axis] > upper ? upper : ph.origin[axis];
-	}
-	board_target[2] = ph.origin[2];
+	activated = ph;
+	dwell_limit = (int)floor(dwell_ms);
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
@@ -6726,32 +6719,85 @@ qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	sg_oracle_declared_door = train;
 	sg_oracle_declared_action = RL_TRAIN;
 	sg_oracle_declared_touched = false;
-	for (elapsed = 25; elapsed <= (int)floor(dwell_ms); elapsed += 25)
+	for (candidate = 0; candidate < 6 && !ok; candidate++)
 	{
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = 25;
-		if (stable_ms == 0 &&
-		    !SG_DeclaredCommand(ph.origin, board_target, &ph.pms, &cmd))
-			goto done;
-		SG_OracleRun(&ph, &cmd, 1);
-		if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
-		    !ph.groundentity || ph.waterlevel != 0)
-			goto done;
-		if (ph.groundentity_entity != train)
+		for (jump_ms = 0; jump_ms <= dwell_limit && !ok; jump_ms += 100)
 		{
-			stable_ms = 0;
-			continue;
+			int stable_ms = 0;
+			qboolean trial_clean = true;
+
+			ph = activated;
+			sg_oracle_contaminated = false;
+			for (elapsed = 25; elapsed <= dwell_limit; elapsed += 25)
+			{
+				float xlo;
+				float xhi;
+				float ylo;
+				float yhi;
+
+				xlo = train->absmin[0] + 16.125f;
+				xhi = train->absmax[0] - 16.125f;
+				ylo = train->absmin[1] + 16.125f;
+				yhi = train->absmax[1] - 16.125f;
+				if (xlo > xhi || ylo > yhi)
+				{
+					trial_clean = false;
+					break;
+				}
+				if (candidate == 0)
+				{
+					board_target[0] = ph.origin[0] < xlo ? xlo :
+					    ph.origin[0] > xhi ? xhi : ph.origin[0];
+					board_target[1] = ph.origin[1] < ylo ? ylo :
+					    ph.origin[1] > yhi ? yhi : ph.origin[1];
+				}
+				else if (candidate == 1)
+				{
+					board_target[0] = (xlo + xhi) * 0.5f;
+					board_target[1] = (ylo + yhi) * 0.5f;
+				}
+				else
+				{
+					board_target[0] = (candidate & 1) ? xhi : xlo;
+					board_target[1] = (candidate & 2) ? yhi : ylo;
+				}
+				board_target[2] = train->absmax[2] + 24.125f;
+				memset(&cmd, 0, sizeof(cmd));
+				cmd.msec = 25;
+				if (stable_ms == 0 &&
+				    !SG_DeclaredCommand(ph.origin, board_target, &ph.pms, &cmd))
+				{
+					trial_clean = false;
+					break;
+				}
+				if (stable_ms == 0 && elapsed >= jump_ms &&
+				    elapsed < jump_ms + 50)
+					cmd.upmove = 400;
+				SG_OracleRun(&ph, &cmd, 1);
+				if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
+				    ph.waterlevel != 0)
+				{
+					trial_clean = false;
+					break;
+				}
+				if (ph.groundentity_entity != train)
+				{
+					stable_ms = 0;
+					continue;
+				}
+				stable_ms += 25;
+				if (stable_ms < 100)
+					continue;
+				*arrival_ms = activation_ms + elapsed;
+				VectorCopy(ph.origin, contact_out);
+				ok = true;
+				break;
+			}
+			if (!trial_clean)
+				continue;
 		}
-		stable_ms += 25;
-		if (stable_ms < 100)
-			continue;
-		*arrival_ms = activation_ms + elapsed;
-		VectorCopy(ph.origin, contact_out);
-		ok = true;
-		goto done;
 	}
 
-done:
 	if (ph.door_passed)
 		ok = false;
 	sg_oracle_passent = old_passent;
