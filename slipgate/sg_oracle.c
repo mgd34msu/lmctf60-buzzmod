@@ -6025,17 +6025,17 @@ qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 	edict_t *previous_passent = sg_oracle_passent;
 	qboolean previous_world_only = sg_oracle_world_only;
 	qboolean previous_contaminated = sg_oracle_contaminated;
-	qboolean clean;
+	qboolean initial_clear, clean;
 
 	if (!sg_host.box_edicts)
 		return false;
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
-	if (!SG_OracleTriggerOverlap(ph) && !SG_OracleSolidOverlap(ph))
+	initial_clear = !SG_OracleTriggerOverlap(ph) && !SG_OracleSolidOverlap(ph);
+	if (initial_clear)
 		SG_OracleRun(ph, cmd, steps);
-	clean = !sg_oracle_contaminated &&
-	        !SG_OracleTriggerOverlap(ph) && !SG_OracleSolidOverlap(ph);
+	clean = initial_clear && !sg_oracle_contaminated;
 	sg_oracle_passent = previous_passent;
 	sg_oracle_world_only = previous_world_only;
 	sg_oracle_contaminated = previous_contaminated;
