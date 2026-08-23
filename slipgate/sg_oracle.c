@@ -910,6 +910,250 @@ static void SG_OracleDoorBounds(edict_t *door,
 	}
 }
 
+typedef struct sg_oracle_door_bounds_state_s
+{
+	qboolean rotating;
+	int use_kind;
+	vec3_t origin;
+	vec3_t angles;
+	vec3_t mins;
+	vec3_t maxs;
+	vec3_t absmin;
+	vec3_t absmax;
+	vec3_t pos1;
+	vec3_t pos2;
+	vec3_t start_origin;
+	vec3_t end_origin;
+	vec3_t start_angles;
+	vec3_t end_angles;
+} sg_oracle_door_bounds_state_t;
+
+typedef struct sg_oracle_door_bounds_cache_s
+{
+	sg_oracle_door_bounds_state_t state;
+	qboolean has_hull;
+	vec3_t hull_mins;
+	vec3_t hull_maxs;
+	vec3_t mins;
+	vec3_t maxs;
+	struct sg_oracle_door_bounds_cache_s *next;
+} sg_oracle_door_bounds_cache_t;
+
+static sg_oracle_door_bounds_cache_t
+	*sg_oracle_door_bounds_cache[MAX_EDICTS];
+static qboolean sg_oracle_door_bounds_cache_active;
+
+static int SG_OracleDoorBoundsUseKind(const edict_t *door)
+{
+	if (door->use == door_use)
+		return 1;
+	if (door->use == door_secret_use)
+		return 2;
+	return 0;
+}
+
+static void SG_OracleDoorBoundsStateCapture(
+	sg_oracle_door_bounds_state_t *state, const edict_t *door)
+{
+	memset(state, 0, sizeof(*state));
+	state->rotating = !strcmp(door->classname, "func_door_rotating");
+	state->use_kind = SG_OracleDoorBoundsUseKind(door);
+	VectorCopy(door->mins, state->mins);
+	VectorCopy(door->maxs, state->maxs);
+	if (state->rotating)
+	{
+		VectorCopy(door->s.origin, state->origin);
+		VectorCopy(door->s.angles, state->angles);
+		VectorCopy(door->moveinfo.start_angles, state->start_angles);
+		VectorCopy(door->moveinfo.end_angles, state->end_angles);
+		return;
+	}
+	VectorCopy(door->absmin, state->absmin);
+	VectorCopy(door->absmax, state->absmax);
+	VectorCopy(door->moveinfo.start_origin, state->start_origin);
+	VectorCopy(door->moveinfo.end_origin, state->end_origin);
+	if (state->use_kind == 2)
+	{
+		VectorCopy(door->pos1, state->pos1);
+		VectorCopy(door->pos2, state->pos2);
+	}
+}
+
+static qboolean SG_OracleDoorBoundsVectorMatches(const vec3_t first,
+	const vec3_t second)
+{
+	return first[0] == second[0] && first[1] == second[1] &&
+	       first[2] == second[2];
+}
+
+static qboolean SG_OracleDoorBoundsStateMatches(
+	const sg_oracle_door_bounds_state_t *state, const edict_t *door)
+{
+	sg_oracle_door_bounds_state_t current;
+
+	if (!state || !door || !door->classname)
+		return false;
+	SG_OracleDoorBoundsStateCapture(&current, door);
+	return memcmp(state, &current, sizeof(current)) == 0;
+}
+
+static void SG_OracleDoorBoundsCacheClear(void)
+{
+	int index;
+
+	for (index = 0; index < MAX_EDICTS; index++)
+	{
+		sg_oracle_door_bounds_cache_t *entry =
+			sg_oracle_door_bounds_cache[index];
+
+		while (entry)
+		{
+			sg_oracle_door_bounds_cache_t *next = entry->next;
+
+			sg_host.game_free(entry);
+			entry = next;
+		}
+		sg_oracle_door_bounds_cache[index] = NULL;
+	}
+}
+
+void SG_OracleDoorBoundsCacheBegin(void)
+{
+	SG_OracleDoorBoundsCacheClear();
+	sg_oracle_door_bounds_cache_active = true;
+}
+
+void SG_OracleDoorBoundsCacheEnd(void)
+{
+	sg_oracle_door_bounds_cache_active = false;
+	SG_OracleDoorBoundsCacheClear();
+}
+
+static void SG_OracleDoorBoundsScoped(int index, edict_t *door,
+	const vec3_t hull_mins, const vec3_t hull_maxs,
+	vec3_t dmins, vec3_t dmaxs)
+{
+	sg_oracle_door_bounds_cache_t *entry;
+	qboolean has_hull = hull_mins && hull_maxs;
+
+	if (!sg_oracle_door_bounds_cache_active || index <= 0 ||
+	    index >= MAX_EDICTS || !door || door != &g_edicts[index] ||
+	    (!has_hull && (hull_mins || hull_maxs)))
+	{
+		SG_OracleDoorBounds(door, hull_mins, hull_maxs, dmins, dmaxs);
+		return;
+	}
+	entry = sg_oracle_door_bounds_cache[index];
+	if (entry && !SG_OracleDoorBoundsStateMatches(&entry->state, door))
+	{
+		sg_oracle_door_bounds_cache_active = false;
+		SG_OracleDoorBoundsCacheClear();
+		SG_OracleDoorBounds(door, hull_mins, hull_maxs, dmins, dmaxs);
+		return;
+	}
+	for (; entry; entry = entry->next)
+		if (entry->has_hull == has_hull &&
+		    (!has_hull ||
+		     (SG_OracleDoorBoundsVectorMatches(entry->hull_mins, hull_mins) &&
+		      SG_OracleDoorBoundsVectorMatches(entry->hull_maxs, hull_maxs))))
+		{
+			VectorCopy(entry->mins, dmins);
+			VectorCopy(entry->maxs, dmaxs);
+			return;
+		}
+	SG_OracleDoorBounds(door, hull_mins, hull_maxs, dmins, dmaxs);
+	entry = sg_host.game_alloc(sizeof(*entry));
+	if (!entry)
+		return;
+	memset(entry, 0, sizeof(*entry));
+	SG_OracleDoorBoundsStateCapture(&entry->state, door);
+	entry->has_hull = has_hull;
+	if (has_hull)
+	{
+		VectorCopy(hull_mins, entry->hull_mins);
+		VectorCopy(hull_maxs, entry->hull_maxs);
+	}
+	VectorCopy(dmins, entry->mins);
+	VectorCopy(dmaxs, entry->maxs);
+	entry->next = sg_oracle_door_bounds_cache[index];
+	sg_oracle_door_bounds_cache[index] = entry;
+}
+
+static void *SG_OracleDoorBoundsCacheTestAllocationFailure(int size)
+{
+	(void)size;
+	return NULL;
+}
+
+int SG_OracleTestDoorBoundsCacheCases(void)
+{
+	edict_t saved, *door;
+	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t other_maxs = { 8.0f, 8.0f, 16.0f };
+	vec3_t expected_mins, expected_maxs, actual_mins, actual_maxs;
+	void *(*allocate)(int) = sg_host.game_alloc;
+	int failures = 0;
+	int index;
+
+	if (!g_edicts || globals.edicts != g_edicts || globals.num_edicts <= 1 ||
+	    globals.num_edicts > MAX_EDICTS || !sg_host.game_alloc ||
+	    !sg_host.game_free)
+		return 1;
+	index = globals.num_edicts - 1;
+	door = &g_edicts[index];
+	saved = *door;
+	memset(door, 0, sizeof(*door));
+	door->inuse = true;
+	door->s.number = index;
+	door->classname = "func_door";
+	door->use = door_use;
+	door->solid = SOLID_BSP;
+	door->linkcount = 1;
+	VectorSet(door->mins, -32.0f, -24.0f, -8.0f);
+	VectorSet(door->maxs, 32.0f, 24.0f, 72.0f);
+	VectorCopy(door->mins, door->absmin);
+	VectorCopy(door->maxs, door->absmax);
+	VectorSet(door->moveinfo.end_origin, 64.0f, 0.0f, 0.0f);
+	SG_OracleDoorBounds(door, hull_mins, hull_maxs,
+	                    expected_mins, expected_maxs);
+	SG_OracleDoorBoundsCacheBegin();
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
+	                          actual_mins, actual_maxs);
+	if (!SG_OracleDoorBoundsVectorMatches(expected_mins, actual_mins) ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_maxs, actual_maxs) ||
+	    !sg_oracle_door_bounds_cache[index])
+		failures |= 2;
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, other_maxs,
+	                          actual_mins, actual_maxs);
+	if (!sg_oracle_door_bounds_cache[index] ||
+	    !sg_oracle_door_bounds_cache[index]->next)
+		failures |= 4;
+	door->absmax[0] += 1.0f;
+	SG_OracleDoorBounds(door, hull_mins, hull_maxs,
+	                    expected_mins, expected_maxs);
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
+	                          actual_mins, actual_maxs);
+	if (sg_oracle_door_bounds_cache_active ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_mins, actual_mins) ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_maxs, actual_maxs))
+		failures |= 8;
+	SG_OracleDoorBoundsCacheEnd();
+
+	sg_host.game_alloc = SG_OracleDoorBoundsCacheTestAllocationFailure;
+	SG_OracleDoorBoundsCacheBegin();
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
+	                          actual_mins, actual_maxs);
+	if (sg_oracle_door_bounds_cache[index] ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_mins, actual_mins) ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_maxs, actual_maxs))
+		failures |= 16;
+	sg_host.game_alloc = allocate;
+	SG_OracleDoorBoundsCacheEnd();
+	*door = saved;
+	return failures;
+}
+
 /* Match the staging and 1/8-unit clamp in SV_Physics_Pusher/SV_Push without
  * performing an undefined float-to-int conversion on malformed velocity. */
 static qboolean SG_OracleProspectivePusherStep(const edict_t *door,
@@ -1587,7 +1831,7 @@ static qboolean SG_OracleDoorTraceBlocked(sg_phantom_t *ph,
 		if (sg_oracle_declared_door &&
 		    SG_OracleDeclaredSetMember(sg_oracle_declared_door, door))
 			continue;
-		SG_OracleDoorBounds(door, hull_mins, hull_maxs, mins, maxs);
+		SG_OracleDoorBoundsScoped(i, door, hull_mins, hull_maxs, mins, maxs);
 		/* A translating door remains a solid brush at its open destination.
 		 * It is never safe to erase that pose merely because its trigger fired. */
 		if (!strcmp(door->classname, "func_door") && door->use == door_use &&

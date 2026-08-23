@@ -6531,6 +6531,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 
 	Drop_PrefixCacheClear();
 	drop_prefix_cache_enabled = true;
+	SG_OracleDoorBoundsCacheBegin();
 	for (i = 0; i < gen_num_seeds; i++)
 	{
 		for (j = 0; j < gen_num_seeds; j++)
@@ -6656,6 +6657,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 			sg_host.dprint("rune: proving %d/%d seeds, %d links\n",
 			           i, gen_num_seeds, gen_num_links);
 	}
+	SG_OracleDoorBoundsCacheEnd();
 	drop_prefix_cache_enabled = false;
 	Drop_PrefixCacheClear();
 
