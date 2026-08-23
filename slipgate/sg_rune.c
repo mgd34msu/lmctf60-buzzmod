@@ -4072,6 +4072,7 @@ static void Link_Trains(void)
 static void Link_TrainShootButtons(
 	const sg_compound_gen_game_topology_t *topology)
 {
+	#define TRAIN_SHOOT_DEST_FAN 8
 	uint32_t button_index;
 
 	for (button_index = 0U;
@@ -4095,6 +4096,9 @@ static void Link_TrainShootButtons(
 		int source_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
 		float gap_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
 		vec3_t contact_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
+		int destination_fan[3][TRAIN_SHOOT_DEST_FAN];
+		float destination_score[3][TRAIN_SHOOT_DEST_FAN];
+		int destination_count[3] = { 0, 0, 0 };
 		uint32_t source_side_mask[3] = { 0U, 0U, 0U };
 		uint32_t closure_axis_mask = 0U;
 		int destination_by_axis[3] = { -1, -1, -1 };
@@ -4114,6 +4118,9 @@ static void Link_TrainShootButtons(
 		int side_index;
 
 		for (axis = 0; axis < 3; axis++)
+		{
+			int slot;
+
 			for (side_index = SG_TRAIN_GATE_SIDE_NONE;
 			     side_index <= SG_TRAIN_GATE_SIDE_Z_MAX; side_index++)
 			{
@@ -4121,6 +4128,12 @@ static void Link_TrainShootButtons(
 				gap_by_axis_side[axis][side_index] = HUGE_VALF;
 				VectorClear(contact_by_axis_side[axis][side_index]);
 			}
+			for (slot = 0; slot < TRAIN_SHOOT_DEST_FAN; slot++)
+			{
+				destination_fan[axis][slot] = -1;
+				destination_score[axis][slot] = HUGE_VALF;
+			}
+		}
 
 		if (!Train_ShootButtonShape(button_node) || button_node->key == 0U ||
 		    button_node->key >= (uint32_t)globals.num_edicts ||
@@ -4155,6 +4168,71 @@ static void Link_TrainShootButtons(
 		        &reverse_destination) || !topology || !topology->component ||
 		    topology->component[reverse_source] < 0)
 			continue;
+		for (axis = 0; axis < 3; axis++)
+		{
+			sg_train_gate_side_t source_side;
+			sg_train_gate_side_t destination_side;
+			int missing_objectives;
+			int destination;
+
+			if (axis == motion_axis)
+				continue;
+			source_side = Train_SeedSweepAxisSide(
+			    gen_seeds[reverse_source].origin, sweep_mins, sweep_maxs,
+			    (unsigned int)axis);
+			destination_side = SG_TrainGateOppositeSide(source_side);
+			if (source_side == SG_TRAIN_GATE_SIDE_NONE ||
+			    destination_side == SG_TRAIN_GATE_SIDE_NONE ||
+			    Train_SeedSweepAxisSide(gen_seeds[reverse_destination].origin,
+			        sweep_mins, sweep_maxs, (unsigned int)axis) !=
+			        destination_side)
+				continue;
+			missing_objectives = 3 & ~topology->objective_mask[reverse_source];
+			for (destination = 0; destination < gen_num_seeds; destination++)
+			{
+				vec3_t delta;
+				float score;
+				int slot;
+
+				if (destination == reverse_source ||
+				    !gen_source_stable[destination] ||
+				    gen_source_waterlevel[destination] != 0 ||
+				    !Gen_SeedHasOutgoing(destination) ||
+				    Train_SeedSweepAxisSide(gen_seeds[destination].origin,
+				        sweep_mins, sweep_maxs, (unsigned int)axis) !=
+				        destination_side ||
+				    (missing_objectives != 0
+				         ? (topology->objective_mask[destination] &
+				               missing_objectives) == 0
+				         : topology->component[destination] ==
+				               topology->component[reverse_source]))
+					continue;
+				VectorSubtract(gen_seeds[destination].origin,
+				    gen_seeds[reverse_source].origin, delta);
+				if (delta[0] * delta[0] + delta[1] * delta[1] >
+				        1600.0f * 1600.0f || fabsf(delta[2]) > 256.0f)
+					continue;
+				score = delta[0] * delta[0] + delta[1] * delta[1] +
+				    delta[2] * delta[2];
+				for (slot = 0; slot < destination_count[axis]; slot++)
+					if (score < destination_score[axis][slot])
+						break;
+				if (slot >= TRAIN_SHOOT_DEST_FAN)
+					continue;
+				if (destination_count[axis] < TRAIN_SHOOT_DEST_FAN)
+					destination_count[axis]++;
+				for (side_index = destination_count[axis] - 1;
+				     side_index > slot; side_index--)
+				{
+					destination_fan[axis][side_index] =
+					    destination_fan[axis][side_index - 1];
+					destination_score[axis][side_index] =
+					    destination_score[axis][side_index - 1];
+				}
+				destination_fan[axis][slot] = destination;
+				destination_score[axis][slot] = score;
+			}
+		}
 		for (source = 0; source < gen_num_seeds; source++)
 		{
 			vec3_t contact;
@@ -4177,8 +4255,7 @@ static void Link_TrainShootButtons(
 				vec3_t entry_delta;
 				vec3_t egress_delta;
 				uint32_t transaction_bound;
-				int egress_ms;
-				int cost;
+				int fan_index;
 				float gap;
 
 				if (axis == motion_axis)
@@ -4193,47 +4270,52 @@ static void Link_TrainShootButtons(
 				if (destination_side == SG_TRAIN_GATE_SIDE_NONE ||
 				    Train_SeedSweepAxisSide(gen_seeds[reverse_source].origin,
 				        sweep_mins, sweep_maxs, (unsigned int)axis) != source_side ||
-				    Train_SeedSweepAxisSide(
-				        gen_seeds[reverse_destination].origin, sweep_mins,
-				        sweep_maxs, (unsigned int)axis) != destination_side ||
-				    source == reverse_destination ||
-				    !gen_source_stable[reverse_destination] ||
-				    gen_source_waterlevel[reverse_destination] != 0 ||
-				    !Gen_SeedHasOutgoing(reverse_destination))
+				    destination_count[axis] == 0)
 					continue;
 				transaction_bound = opening_bound + (uint32_t)flight_ms + 1100U;
 				if (transaction_bound > RUNE_MAX_COST_MS)
 					continue;
 				VectorSubtract(gen_seeds[reverse_source].origin,
 				    gen_seeds[source].origin, entry_delta);
-				VectorSubtract(gen_seeds[reverse_destination].origin,
-				    gen_seeds[reverse_source].origin, egress_delta);
 				if (entry_delta[0] * entry_delta[0] +
 				        entry_delta[1] * entry_delta[1] > 1600.0f * 1600.0f ||
-				    fabsf(entry_delta[2]) > 256.0f ||
-				    egress_delta[0] * egress_delta[0] +
-				        egress_delta[1] * egress_delta[1] > 1600.0f * 1600.0f ||
-				    fabsf(egress_delta[2]) > 256.0f ||
-				    !SG_OracleTrainGateEgress(gen_seeds[source].origin,
-				        gen_seeds[reverse_source].origin,
-				        gen_seeds[reverse_destination].origin, button, train,
-				        sweep_mins, sweep_maxs, (unsigned int)axis, &egress_ms))
+				    fabsf(entry_delta[2]) > 256.0f)
 					continue;
-				cost = (int)transaction_bound + egress_ms;
 				gap = Train_SeedSweepAxisGap(gen_seeds[source].origin,
 				    sweep_mins, sweep_maxs, (unsigned int)axis, source_side);
-				if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
-				    cost > cost_by_axis[axis] ||
-				    (cost == cost_by_axis[axis] &&
-				     gap >= gap_by_axis_side[axis][source_side]))
-					continue;
-				source_by_axis_side[axis][source_side] = source;
-				gap_by_axis_side[axis][source_side] = gap;
-				VectorCopy(gen_seeds[reverse_source].origin,
-				    contact_by_axis_side[axis][source_side]);
-				destination_by_axis[axis] = reverse_destination;
-				cost_by_axis[axis] = cost;
-				transaction_bound_by_axis[axis] = transaction_bound;
+				for (fan_index = 0; fan_index < destination_count[axis];
+				     fan_index++)
+				{
+					int destination = destination_fan[axis][fan_index];
+					int egress_ms;
+					int cost;
+
+					VectorSubtract(gen_seeds[destination].origin,
+					    gen_seeds[reverse_source].origin, egress_delta);
+					if (egress_delta[0] * egress_delta[0] +
+					        egress_delta[1] * egress_delta[1] >
+					        1600.0f * 1600.0f ||
+					    fabsf(egress_delta[2]) > 256.0f ||
+					    !SG_OracleTrainGateEgress(gen_seeds[source].origin,
+					        gen_seeds[reverse_source].origin,
+					        gen_seeds[destination].origin, button, train,
+					        sweep_mins, sweep_maxs, (unsigned int)axis,
+					        &egress_ms))
+						continue;
+					cost = (int)transaction_bound + egress_ms;
+					if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
+					    cost > cost_by_axis[axis] ||
+					    (cost == cost_by_axis[axis] &&
+					     gap >= gap_by_axis_side[axis][source_side]))
+						continue;
+					source_by_axis_side[axis][source_side] = source;
+					gap_by_axis_side[axis][source_side] = gap;
+					VectorCopy(gen_seeds[reverse_source].origin,
+					    contact_by_axis_side[axis][source_side]);
+					destination_by_axis[axis] = destination;
+					cost_by_axis[axis] = cost;
+					transaction_bound_by_axis[axis] = transaction_bound;
+				}
 			}
 			DoorPose_Restore(&saved, 1);
 		}
@@ -4285,6 +4367,7 @@ static void Link_TrainShootButtons(
 			}
 		}
 	}
+	#undef TRAIN_SHOOT_DEST_FAN
 }
 
 /* Link one canonical door team at its exact STATE_TOP pose for a synchronous
