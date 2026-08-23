@@ -299,7 +299,6 @@ static void TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay(void)
 {
 	edict_t *door;
 	edict_t *trigger;
-	edict_t *speaker;
 
 	ResetGuardFixture();
 	door = GuardDoor(GUARD_MASTER_KEY);
@@ -321,12 +320,10 @@ static void TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay(void)
 
 	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
 
-	speaker = &fixture_edicts[GUARD_EXTRA_KEY];
-	speaker->inuse = true;
-	speaker->classname = "target_speaker";
-	speaker->use = Use_Target_Speaker;
-	speaker->targetname = "CabinBell";
-	door->target = "CabinBell";
+	door->delay = 0.0f;
+	door->target = "MissingEffect";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	door->target = "";
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 	door->target = NULL;
 	door->message = "opening";

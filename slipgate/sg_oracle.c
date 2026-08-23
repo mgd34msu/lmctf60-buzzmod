@@ -2310,7 +2310,6 @@ static qboolean SG_OraclePlanSoundOnlyTargets(edict_t *source, int depth)
 static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 {
 	edict_t *target = NULL;
-	qboolean found = false;
 
 	if (!door || door->killtarget || door->message ||
 	    !isfinite(door->delay) || door->delay < 0.0f)
@@ -2325,7 +2324,6 @@ static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 	{
 		if (!target->inuse || !target->classname)
 			return false;
-		found = true;
 		/* G_UseTargets deliberately skips a door's func_areaportal; the door
 		 * updates it through door_use_areaportals instead. */
 		if (!Q_stricmp(target->classname, "func_areaportal"))
@@ -2339,7 +2337,9 @@ static qboolean SG_OracleDoorEffectsSafe(edict_t *door)
 			continue;
 		return false;
 	}
-	return found;
+	/* A nonempty mapper target with no live recipient is an exact
+	 * G_UseTargets no-op. */
+	return true;
 }
 
 /* Static declared mechanisms must remain the same edict incarnations for the
