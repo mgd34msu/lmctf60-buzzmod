@@ -7477,13 +7477,16 @@ qboolean Rune_Generate(const char *mapname)
 	}
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("compound-swim");
+	SG_OracleDoorBoundsCacheBegin();
 	if (!SG_CompoundGenGameGenerate(gen_seeds, (size_t)gen_num_seeds,
 	    gen_links, &gen_num_links, LINK_MAX, &compound_topology,
 	    sg_host.level_alloc, sg_host.level_free))
 	{
+		SG_OracleDoorBoundsCacheEnd();
 		sg_host.dprint("rune: FAILED: compound-swim generation\n");
 		goto cleanup;
 	}
+	SG_OracleDoorBoundsCacheEnd();
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("compound-links");
 	Link_CompoundDrops();

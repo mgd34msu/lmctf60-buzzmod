@@ -1088,6 +1088,7 @@ static void *SG_OracleDoorBoundsCacheTestAllocationFailure(int size)
 int SG_OracleTestDoorBoundsCacheCases(void)
 {
 	edict_t saved, *door;
+	sg_oracle_door_bounds_cache_t *rotating_entry;
 	vec3_t hull_mins = { -16.0f, -16.0f, -24.0f };
 	vec3_t hull_maxs = { 16.0f, 16.0f, 32.0f };
 	vec3_t other_maxs = { 8.0f, 8.0f, 16.0f };
@@ -1138,6 +1139,41 @@ int SG_OracleTestDoorBoundsCacheCases(void)
 	    !SG_OracleDoorBoundsVectorMatches(expected_mins, actual_mins) ||
 	    !SG_OracleDoorBoundsVectorMatches(expected_maxs, actual_maxs))
 		failures |= 8;
+	SG_OracleDoorBoundsCacheEnd();
+
+	memset(door, 0, sizeof(*door));
+	door->inuse = true;
+	door->s.number = index;
+	door->classname = "func_door_rotating";
+	door->use = door_use;
+	door->solid = SOLID_BSP;
+	VectorSet(door->s.origin, 128.0f, -64.0f, 16.0f);
+	VectorSet(door->mins, -48.0f, -8.0f, -8.0f);
+	VectorSet(door->maxs, 48.0f, 8.0f, 8.0f);
+	VectorSet(door->moveinfo.start_angles, 0.0f, 0.0f, 0.0f);
+	VectorSet(door->moveinfo.end_angles, 0.0f, 90.0f, 0.0f);
+	SG_OracleDoorBounds(door, hull_mins, hull_maxs,
+	                    expected_mins, expected_maxs);
+	SG_OracleDoorBoundsCacheBegin();
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
+	                          actual_mins, actual_maxs);
+	rotating_entry = sg_oracle_door_bounds_cache[index];
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
+	                          actual_mins, actual_maxs);
+	if (!rotating_entry || sg_oracle_door_bounds_cache[index] != rotating_entry ||
+	    rotating_entry->next ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_mins, actual_mins) ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_maxs, actual_maxs))
+		failures |= 32;
+	door->moveinfo.end_angles[YAW] = 120.0f;
+	SG_OracleDoorBounds(door, hull_mins, hull_maxs,
+	                    expected_mins, expected_maxs);
+	SG_OracleDoorBoundsScoped(index, door, hull_mins, hull_maxs,
+	                          actual_mins, actual_maxs);
+	if (sg_oracle_door_bounds_cache_active ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_mins, actual_mins) ||
+	    !SG_OracleDoorBoundsVectorMatches(expected_maxs, actual_maxs))
+		failures |= 64;
 	SG_OracleDoorBoundsCacheEnd();
 
 	sg_host.game_alloc = SG_OracleDoorBoundsCacheTestAllocationFailure;
