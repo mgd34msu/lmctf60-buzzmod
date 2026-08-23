@@ -322,8 +322,14 @@ including `lmctf02a` and `lmctf04`.
       catalog, plan, binding, game, contract, codec, generator, and object
       builds. Real smokes prove 6 or 10 exact crossings per button and as many
       as 728 supported far-side handoffs, but none has a next leg into the
-      missing objective component. The next diagnostic checks whether the
-      authenticated controller is proving the already-satisfied direction.
+      missing objective component. The controller is proving authenticated
+      base-to-center travel in both directions; neither center side can shoot
+      the outer button to reverse the same transaction. Each radiator also has
+      two low touch buttons and one high touch button. The first low-to-high
+      composition was refuted because its entry-by-crossing fan was quadratic
+      and had not returned after more than five minutes. It was reverted. The
+      replacement reuses the unique proved high crossing, then separately
+      proves each low-button approach and high-entry handoff with bounded work.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -345,10 +351,13 @@ rejected tomb05's valid stock push speeds; replacing them with finite positive
 speed validation retained the exact serialized-velocity check. Real smokes now
 publish one witness for all four unique PUSH_JUMP component transitions plus
 two same-component shortcuts, exhausting the proved PUSH_JUMP graph. The next
-leg is TELEPORT_DROP, but its initial geometry proposer rejects the saved exact
-source before calling the physical oracle. Wider distance, angular, and broad
-stepped-lip experiments were refuted. The active diagnostic compares the saved
-lip's exact fixed-point delta with the first physical-oracle rejection.
+leg is TELEPORT_DROP. Wider distance, angular, broad stepped-lip,
+contact-neighborhood, trace-plane, and fixed-point bracket experiments were
+refuted. The final generic bracket reproduced the saved fixture's exact source,
+lip, and heading on real `tomb05`, but the unchanged oracle stayed grounded and
+timed out without traversing. The fixture is valid for the isolated contract,
+not a real map traversal. That entire contact-edge experiment is being removed;
+diagnosis returns to the post-PUSH component graph for the actual missing leg.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -416,9 +425,12 @@ reduces the measured DROP cost from 10.323 seconds to 4.651 seconds. Cache-on
 and cache-off `lmctf42` runs pass every controller gate with identical ordered
 seeds, links, decoded records, counters, and final artifact bytes. The bounded
 active-source cache uses at most 1.55 MB on the measured xmap26 source. Both
-full GNU and Make/Clang host suites pass. Source 0 still exceeds five minutes
-because ordinary RUN/JUMP proof dominates the remaining cost; a bounded
-per-source profile is next.
+full GNU and Make/Clang host suites pass. Corrected per-source profiling shows
+stable sources finish in about 4.5--5 seconds. Source 0 makes 419 prover calls,
+while ordinary RUN/JUMP accounts for only 12 calls and 244 steps. DROP remains
+dominant. The earlier no-output probe expected a removed marker and ran past
+source 0. Temporary counters are now dividing DROP time between lip search and
+rollout/reducer work before the next general optimization.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
@@ -450,10 +462,10 @@ changing admission.
 
 The latest process crash removed the temporary worktrees and map servers. It
 did not change either canonical branch or the saved repair branches. Work has
-resumed on `lmctf07`, `tomb05`, and `xmap13` from their saved commits. Only the
+resumed on `lmctf07`, `tomb05`, and `xmap26` from their saved commits. Only the
 uncommitted diagnostics and implementations had to be reconstructed. The
-`xmap26` performance repair is also active from the recorded isolated timing
-baseline.
+`xmap13` diagnostic proved that its staged PUSH selector receives no candidate;
+that repair resumes when an active slot frees.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
