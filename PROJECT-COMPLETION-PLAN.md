@@ -334,10 +334,14 @@ including `lmctf02a` and `lmctf04`.
       two touch and four shoot links, but added no extended touch link and left
       the vertical objective gap unchanged. All four low buttons have exact
       approaches, but each low-contact-to-high-entry proof fails before the
-      crossing leg. The active diagnostic replays only those authenticated
-      low-source/high-seed pairs through the existing rocket-jump oracle. A
-      success would be an independent rocket-jump link into the already-proved
-      high touch train link, not a relabeled train entry.
+      crossing leg. Replaying the four authenticated low-source/high-seed pairs
+      through the unchanged rocket-jump oracle also proved none. The last
+      rocket-jump discriminator substituted the exact high contact for the seed
+      target and also proved none, ruling out target association. The active
+      controller now proves a carried train transaction along the exact
+      248-unit motion axis: authenticated low touch, boarding at the low pose,
+      declared mover travel, and stable high landing. It does not use
+      gate-crossing or direct-physics semantics.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -370,7 +374,12 @@ from the outer basins to each flag SCC. The flag exits are ordinary RUN/HOOK on
 one side and RUN/JUMP on the other, but they terminate in dead SCCs. PUSH_JUMP
 targets unrelated upper components. Exact replay of 1,303 topology-derived
 outbound DROP pairs proved none, so DROP is not the return controller. The
-existing HOOK oracle is now being tested over the same outbound frontier.
+existing HOOK oracle also proved none over the same outbound frontier. Landing
+observation then found 12 exact DROP proofs, but their only unique component
+transitions were already inside the flag-forward dead-end closures. Adding all
+of them changes no objective reachability, so that experiment was removed. The
+next diagnostic inventories authenticated mechanisms incident to the four
+dead-end flag-exit SCCs before selecting another controller class.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -447,11 +456,16 @@ source 0. Exact stage profiling attributes 4.755 of 4.824 rollout seconds to
 contact, and cache work together took only 32 milliseconds. A proposed general
 optimization replaced lip-keyed linear prefixes with a bounded per-source trie
 of exact command histories to share native movement across lip candidates.
-Exact measurement refuted that design: it created essentially
-the same native nodes and cache hits as the linear cache, proving no additional
-cross-lip sharing. The trie and its probes were reverted. The next measurement
-counts repeated full native transition inputs among the remaining cache misses
-before any broader state-transition cache is considered.
+Exact measurement refuted that design: it created essentially the same native
+nodes and cache hits as the linear cache, proving no additional cross-lip
+sharing. The trie and its probes were reverted. The next measurement found only
+44 repeated full native transition inputs among 6,379 remaining calls, ruling
+out a general state-transition cache. Low-distortion hot-path profiling
+attributes 3.617 of 3.734 Pmove seconds to synthetic door checks; engine traces
+and point-contents together take only 45 milliseconds. More than two million
+door candidates repeatedly recompute identical bounds. A scoped exact
+door-bounds cache is next, with structural invalidation at pose and phase
+changes plus exact fallback on any mismatch or allocation failure.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
