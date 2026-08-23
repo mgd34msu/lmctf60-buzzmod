@@ -100,6 +100,7 @@ static qboolean SG_OracleBoundSameDoorSet(
 static qboolean SG_OracleTriggerOverlap(sg_phantom_t *ph);
 static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph);
 static int SG_OracleLiveEdictIndex(const edict_t *ent);
+static qboolean SG_OracleMoverSweepIdentity(edict_t *member);
 
 /* A synchronous loader replay deliberately poses authenticated movers without
  * running their callbacks.  During that scope the immutable sealed topology
@@ -1759,6 +1760,308 @@ static qboolean SG_OracleDoorMember(edict_t *master, edict_t *ent)
 	return false;
 }
 
+typedef struct sg_oracle_bound_member_scope_s
+{
+	const sg_rune_mechanism_binding_t *binding;
+	edict_t *members[SG_RUNE_BINDING_MAX_MOVERS];
+	int member_indices[SG_RUNE_BINDING_MAX_MOVERS];
+	sg_oracle_door_bounds_state_t member_states[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	edict_t *saved_edicts;
+	int saved_num_edicts;
+	qboolean active;
+} sg_oracle_bound_member_scope_t;
+
+static sg_oracle_bound_member_scope_t sg_oracle_bound_member_scope;
+
+typedef struct sg_oracle_door_egress_replay_key_s
+{
+	vec3_t source;
+	vec3_t target;
+	edict_t *trigger;
+	edict_t *passent;
+	edict_t *members[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t member_count;
+	int controller_kind;
+	int support_mode;
+} sg_oracle_door_egress_replay_key_t;
+
+typedef struct sg_oracle_door_egress_replay_entry_s
+{
+	sg_oracle_door_egress_replay_key_t key;
+	int arrival_ms;
+} sg_oracle_door_egress_replay_entry_t;
+
+#define SG_ORACLE_DOOR_EGRESS_REPLAY_CACHE_MAX 1024U
+
+typedef struct sg_oracle_door_egress_replay_cache_s
+{
+	sg_oracle_door_egress_replay_entry_t
+		entries[SG_ORACLE_DOOR_EGRESS_REPLAY_CACHE_MAX];
+	size_t count;
+	qboolean active;
+} sg_oracle_door_egress_replay_cache_t;
+
+static sg_oracle_door_egress_replay_cache_t
+	sg_oracle_door_egress_replay_cache;
+
+qboolean SG_OracleDoorEgressReplayCacheBegin(void)
+{
+	if (sg_oracle_door_egress_replay_cache.active)
+		return false;
+	memset(&sg_oracle_door_egress_replay_cache, 0,
+	    sizeof(sg_oracle_door_egress_replay_cache));
+	sg_oracle_door_egress_replay_cache.active = true;
+	return true;
+}
+
+void SG_OracleDoorEgressReplayCacheEnd(void)
+{
+	memset(&sg_oracle_door_egress_replay_cache, 0,
+	    sizeof(sg_oracle_door_egress_replay_cache));
+}
+
+static qboolean SG_OracleDoorEgressReplayKeyCapture(
+	sg_oracle_door_egress_replay_key_t *key, const vec3_t source,
+	const vec3_t target, const sg_rune_mechanism_binding_t *binding,
+	edict_t *passent, sg_button_support_mode_t support_mode)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	size_t index;
+
+	if (!key || !source || !target || !binding || !binding->plan ||
+	    !binding->entry_entity ||
+	    !SG_OracleBoundDoorBindingCurrent(binding) ||
+	    !SG_OracleBoundDoorMoverKeys(binding, keys, &count) || count == 0U ||
+	    count > SG_RUNE_BINDING_MAX_MOVERS)
+		return false;
+	memset(key, 0, sizeof(*key));
+	VectorCopy(source, key->source);
+	VectorCopy(target, key->target);
+	key->trigger = binding->entry_entity;
+	key->passent = passent;
+	key->member_count = count;
+	key->controller_kind = binding->plan->controller_kind;
+	key->support_mode = support_mode;
+	for (index = 0U; index < count; index++)
+	{
+		key->members[index] =
+		    SG_OracleBoundDoorResolveNode(binding, keys[index]);
+		if (!key->members[index])
+			return false;
+	}
+	return true;
+}
+
+static qboolean SG_OracleDoorEgressReplayCacheLookup(
+	const sg_oracle_door_egress_replay_key_t *key, int *arrival_ms)
+{
+	size_t index;
+
+	if (!key || !arrival_ms || !sg_oracle_door_egress_replay_cache.active)
+		return false;
+	for (index = 0U; index < sg_oracle_door_egress_replay_cache.count;
+	     index++)
+		if (memcmp(key,
+		        &sg_oracle_door_egress_replay_cache.entries[index].key,
+		        sizeof(*key)) == 0)
+		{
+			*arrival_ms =
+			    sg_oracle_door_egress_replay_cache.entries[index].arrival_ms;
+			return true;
+		}
+	return false;
+}
+
+static void SG_OracleDoorEgressReplayCacheStore(
+	const sg_oracle_door_egress_replay_key_t *key, int arrival_ms)
+{
+	sg_oracle_door_egress_replay_entry_t *entry;
+
+	if (!key || arrival_ms <= 0 ||
+	    !sg_oracle_door_egress_replay_cache.active ||
+	    sg_oracle_door_egress_replay_cache.count >=
+	        SG_ORACLE_DOOR_EGRESS_REPLAY_CACHE_MAX)
+		return;
+	entry = &sg_oracle_door_egress_replay_cache.entries[
+	    sg_oracle_door_egress_replay_cache.count++];
+	entry->key = *key;
+	entry->arrival_ms = arrival_ms;
+}
+
+int SG_OracleTestDoorEgressReplayCacheCases(void)
+{
+	sg_oracle_door_egress_replay_cache_t saved =
+	    sg_oracle_door_egress_replay_cache;
+	sg_oracle_door_egress_replay_key_t key, changed;
+	edict_t entities[4];
+	int arrival = 0;
+	int failures = 0;
+
+	memset(entities, 0, sizeof(entities));
+	memset(&key, 0, sizeof(key));
+	VectorSet(key.source, 1.0f, 2.0f, 3.0f);
+	VectorSet(key.target, 4.0f, 5.0f, 6.0f);
+	key.trigger = &entities[0];
+	key.passent = &entities[1];
+	key.members[0] = &entities[2];
+	key.members[1] = &entities[3];
+	key.member_count = 2U;
+	key.controller_kind = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	key.support_mode = SG_BUTTON_SUPPORT_NONE;
+	memset(&sg_oracle_door_egress_replay_cache, 0,
+	    sizeof(sg_oracle_door_egress_replay_cache));
+	if (!SG_OracleDoorEgressReplayCacheBegin() ||
+	    SG_OracleDoorEgressReplayCacheBegin())
+		failures |= 1;
+	SG_OracleDoorEgressReplayCacheStore(&key, 725);
+	if (!SG_OracleDoorEgressReplayCacheLookup(&key, &arrival) ||
+	    arrival != 725)
+		failures |= 2;
+	changed = key;
+	changed.source[0] += 0.125f;
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 4;
+	changed = key;
+	changed.target[2] += 0.125f;
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 8;
+	changed = key;
+	changed.trigger = &entities[1];
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 16;
+	changed = key;
+	changed.passent = NULL;
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 32;
+	changed = key;
+	changed.members[0] = key.members[1];
+	changed.members[1] = key.members[0];
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 64;
+	changed = key;
+	changed.member_count = 1U;
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 128;
+	changed = key;
+	changed.controller_kind = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 256;
+	changed = key;
+	changed.support_mode = SG_BUTTON_SUPPORT_STATIC;
+	if (SG_OracleDoorEgressReplayCacheLookup(&changed, &arrival))
+		failures |= 512;
+	sg_oracle_door_egress_replay_cache.count =
+	    SG_ORACLE_DOOR_EGRESS_REPLAY_CACHE_MAX;
+	SG_OracleDoorEgressReplayCacheStore(&changed, 800);
+	if (sg_oracle_door_egress_replay_cache.count !=
+	    SG_ORACLE_DOOR_EGRESS_REPLAY_CACHE_MAX)
+		failures |= 1024;
+	SG_OracleDoorEgressReplayCacheEnd();
+	if (SG_OracleDoorEgressReplayCacheLookup(&key, &arrival) ||
+	    sg_oracle_door_egress_replay_cache.active ||
+	    sg_oracle_door_egress_replay_cache.count != 0U)
+		failures |= 2048;
+	sg_oracle_door_egress_replay_cache = saved;
+	return failures;
+}
+
+static qboolean SG_OracleBoundMemberScopeBegin(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	size_t index;
+	size_t prior;
+
+	if (sg_oracle_bound_member_scope.active || !binding ||
+	    !sg_oracle_loader_replay ||
+	    !SG_OracleBoundDoorBindingCurrent(binding) ||
+	    !SG_OracleBoundDoorMoverKeys(binding, keys, &count) || count == 0U ||
+	    count > SG_RUNE_BINDING_MAX_MOVERS)
+		return false;
+	memset(&sg_oracle_bound_member_scope, 0,
+	    sizeof(sg_oracle_bound_member_scope));
+	for (index = 0U; index < count; index++)
+	{
+		edict_t *member = SG_OracleBoundDoorResolveNode(binding, keys[index]);
+		int member_index;
+
+		member_index = SG_OracleLiveEdictIndex(member);
+		if (!member || member_index <= 0 ||
+		    !SG_OracleMoverSweepIdentity(member))
+			goto fail;
+		for (prior = 0U; prior < index; prior++)
+			if (sg_oracle_bound_member_scope.members[prior] == member)
+				goto fail;
+		sg_oracle_bound_member_scope.members[index] = member;
+		sg_oracle_bound_member_scope.member_indices[index] = member_index;
+		SG_OracleDoorBoundsStateCapture(
+		    &sg_oracle_bound_member_scope.member_states[index], member);
+	}
+	if (!g_edicts || globals.edicts != g_edicts ||
+	    globals.num_edicts <= 0 || globals.num_edicts > MAX_EDICTS)
+		goto fail;
+	sg_oracle_bound_member_scope.saved_edicts = g_edicts;
+	sg_oracle_bound_member_scope.saved_num_edicts = globals.num_edicts;
+	sg_oracle_bound_member_scope.binding = binding;
+	sg_oracle_bound_member_scope.count = count;
+	sg_oracle_bound_member_scope.active = true;
+	return true;
+
+fail:
+	memset(&sg_oracle_bound_member_scope, 0,
+	    sizeof(sg_oracle_bound_member_scope));
+	return false;
+}
+
+static qboolean SG_OracleBoundMemberScopeEnd(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count = 0U;
+	qboolean valid = sg_oracle_bound_member_scope.active &&
+	    sg_oracle_bound_member_scope.binding == binding &&
+	    SG_OracleBoundDoorBindingCurrent(binding) &&
+	    SG_OracleBoundDoorMoverKeys(binding, keys, &count) &&
+	    count == sg_oracle_bound_member_scope.count;
+	size_t index;
+
+	if (valid && (g_edicts != sg_oracle_bound_member_scope.saved_edicts ||
+	              globals.edicts != g_edicts ||
+	              globals.num_edicts !=
+	                  sg_oracle_bound_member_scope.saved_num_edicts))
+		valid = false;
+	if (valid)
+		for (index = 0U; index < count; index++)
+		{
+			edict_t *member = SG_OracleBoundDoorResolveNode(binding, keys[index]);
+			sg_oracle_door_bounds_state_t state;
+
+			if (member != sg_oracle_bound_member_scope.members[index] ||
+			    SG_OracleLiveEdictIndex(member) !=
+			        sg_oracle_bound_member_scope.member_indices[index] ||
+			    !SG_OracleMoverSweepIdentity(member))
+			{
+				valid = false;
+				break;
+			}
+			SG_OracleDoorBoundsStateCapture(&state, member);
+			if (memcmp(&state,
+			        &sg_oracle_bound_member_scope.member_states[index],
+			        sizeof(state)) != 0)
+			{
+				valid = false;
+				break;
+			}
+		}
+
+	memset(&sg_oracle_bound_member_scope, 0,
+	    sizeof(sg_oracle_bound_member_scope));
+	return valid;
+}
+
 static qboolean SG_OracleDeclaredSetMember(edict_t *trigger, edict_t *ent)
 {
 	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
@@ -1767,6 +2070,17 @@ static qboolean SG_OracleDeclaredSetMember(edict_t *trigger, edict_t *ent)
 
 	if (sg_oracle_bound_door)
 	{
+		if (sg_oracle_bound_member_scope.active)
+		{
+			if (sg_oracle_bound_member_scope.binding !=
+			    sg_oracle_bound_door || !ent)
+				return false;
+			for (index = 0U;
+			     index < sg_oracle_bound_member_scope.count; index++)
+				if (sg_oracle_bound_member_scope.members[index] == ent)
+					return true;
+			return false;
+		}
 		if (!ent || !SG_OracleBoundDoorMoverKeys(
 		        sg_oracle_bound_door, keys, &count))
 			return false;
@@ -3037,6 +3351,15 @@ static int SG_BoundDoorMembers(
 	size_t count;
 	size_t index;
 
+	if (sg_oracle_bound_member_scope.active)
+	{
+		if (binding != sg_oracle_bound_member_scope.binding || !members ||
+		    capacity < (int)sg_oracle_bound_member_scope.count)
+			return -1;
+		for (index = 0U; index < sg_oracle_bound_member_scope.count; index++)
+			members[index] = sg_oracle_bound_member_scope.members[index];
+		return (int)sg_oracle_bound_member_scope.count;
+	}
 	if (!binding || !members || capacity <= 0 ||
 	    !SG_OracleBoundDoorBindingCurrent(binding) ||
 	    !SG_OracleBoundDoorMoverKeys(binding, keys, &count) ||
@@ -3101,12 +3424,20 @@ qboolean SG_BoundDoorOutsideSweep(
 	{
 		vec3_t mins, maxs;
 
-		SG_OracleDoorBounds(members[index], hull_mins, hull_maxs,
-		    mins, maxs);
+		if (sg_oracle_bound_member_scope.active &&
+		    binding == sg_oracle_bound_member_scope.binding)
+			SG_OracleDoorBoundsScoped(
+			    sg_oracle_bound_member_scope.member_indices[index],
+			    members[index], hull_mins, hull_maxs, mins, maxs);
+		else
+			SG_OracleDoorBounds(members[index], hull_mins, hull_maxs,
+			    mins, maxs);
 		if (SG_OracleSegmentBox(origin, origin, mins, maxs))
 			return false;
 	}
-	return SG_OracleBoundDoorBindingCurrent(binding);
+	return sg_oracle_bound_member_scope.active &&
+	    binding == sg_oracle_bound_member_scope.binding
+	    ? true : SG_OracleBoundDoorBindingCurrent(binding);
 }
 
 qboolean SG_BoundDoorCrossesSweep(
@@ -7340,6 +7671,8 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	qboolean button_controller;
 	qboolean direct_controller;
 	qboolean delayed_controller;
+	qboolean member_scope_active = false;
+	qboolean bounds_cache_active = false;
 	int controller_kind;
 	sg_button_support_mode_t first_support = SG_BUTTON_SUPPORT_NONE;
 	sg_door_approach_state_t direct_state;
@@ -7389,6 +7722,14 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	                              SG_DeclaredDoorForLink(wait_point, source),
 	                              trigger))))
 		return false;
+	if (binding && sg_oracle_loader_replay)
+	{
+		if (!SG_OracleBoundMemberScopeBegin(binding))
+			return false;
+		member_scope_active = true;
+		SG_OracleDoorBoundsCacheBegin();
+		bounds_cache_active = true;
+	}
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
@@ -7612,6 +7953,10 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	}
 
 done:
+	if (bounds_cache_active)
+		SG_OracleDoorBoundsCacheEnd();
+	if (member_scope_active && !SG_OracleBoundMemberScopeEnd(binding))
+		ok = false;
 	sg_oracle_passent = old_passent;
 	sg_oracle_world_only = old_world;
 	sg_oracle_contaminated = old_contaminated;
@@ -7684,6 +8029,7 @@ static qboolean SG_OracleDoorEgress(const vec3_t source,
 	usercmd_t cmd;
 	qboolean ok = false;
 	qboolean button_controller;
+	qboolean member_scope_active = false;
 	int controller_kind;
 	float old_frame_z;
 	int elapsed;
@@ -7712,6 +8058,12 @@ static qboolean SG_OracleDoorEgress(const vec3_t source,
 	    !(binding ? SG_BoundDoorCrossesSweep(binding, source, target) :
 	                 SG_DeclaredDoorCrossesSweep(trigger, source, target)))
 		return false;
+	if (binding && sg_oracle_loader_replay)
+	{
+		if (!SG_OracleBoundMemberScopeBegin(binding))
+			return false;
+		member_scope_active = true;
+	}
 	sg_oracle_passent = passent;
 	sg_oracle_world_only = true;
 	sg_oracle_contaminated = false;
@@ -7774,6 +8126,8 @@ static qboolean SG_OracleDoorEgress(const vec3_t source,
 	}
 
 done:
+	if (member_scope_active && !SG_OracleBoundMemberScopeEnd(binding))
+		ok = false;
 	sg_oracle_passent = old_passent;
 	sg_oracle_world_only = old_world;
 	sg_oracle_contaminated = old_contaminated;
@@ -7782,6 +8136,31 @@ done:
 	sg_oracle_bound_door = old_bound;
 	sg_oracle_declared_action = old_action;
 	sg_oracle_declared_touched = old_touched;
+	return ok;
+}
+
+static qboolean SG_OracleBoundDoorEgressReplayCached(const vec3_t source,
+	const vec3_t target, const sg_rune_mechanism_binding_t *binding,
+	edict_t *passent, int *arrival_ms,
+	sg_button_support_mode_t support_mode)
+{
+	sg_oracle_door_egress_replay_key_t key;
+	qboolean cacheable;
+	qboolean ok;
+
+	if (!arrival_ms)
+		return false;
+	cacheable = sg_oracle_door_egress_replay_cache.active &&
+	    SG_OracleDoorEgressReplayKeyCapture(&key, source, target, binding,
+	        passent, support_mode);
+	if (cacheable &&
+	    SG_OracleDoorEgressReplayCacheLookup(&key, arrival_ms))
+		return true;
+	ok = SG_OracleDoorEgress(source, target,
+	    binding ? binding->entry_entity : NULL, binding, passent, arrival_ms,
+	    support_mode);
+	if (ok && cacheable)
+		SG_OracleDoorEgressReplayCacheStore(&key, *arrival_ms);
 	return ok;
 }
 
@@ -7984,6 +8363,7 @@ static qboolean SG_OracleValidateDoorLink(const vec3_t source,
 	int expected_mode = RLCM_NONE;
 	qboolean button_controller;
 	qboolean button_posed = false;
+	qboolean egress_cache_active = false;
 	qboolean old_loader_replay;
 	qboolean valid = false;
 
@@ -8072,23 +8452,32 @@ static qboolean SG_OracleValidateDoorLink(const vec3_t source,
 		button_posed = true;
 		if (!VectorCompare(posed_displacement, displacement))
 			goto restore;
-		if (!SG_OracleBoundButtonDoorEgress(effective_anchor, target, binding,
-		        NULL, &egress_ms, expected))
+		SG_OracleDoorBoundsCacheBegin();
+		egress_cache_active = true;
+		if (!SG_OracleBoundDoorEgressReplayCached(effective_anchor, target,
+		        binding, NULL, &egress_ms, expected))
 			goto restore;
 		if (((egress_ms + 99) / 100) * 100 !=
 		    binding->link->sweep_clear_ms)
 			goto restore;
 	}
-	else if (!(binding ? SG_OracleBoundDoorEgress(anchor, target, binding,
-	              NULL, &egress_ms) :
-	            SG_OracleDeclaredDoorEgress(anchor, target, trigger, NULL,
-	              &egress_ms)))
-		goto restore;
+	else
+	{
+		SG_OracleDoorBoundsCacheBegin();
+		egress_cache_active = true;
+		if (!(binding ? SG_OracleBoundDoorEgressReplayCached(anchor, target,
+		              binding, NULL, &egress_ms, SG_BUTTON_SUPPORT_NONE) :
+		            SG_OracleDeclaredDoorEgress(anchor, target, trigger, NULL,
+		              &egress_ms)))
+			goto restore;
+	}
 	contract_cost = SG_DoorContractCost(trigger, binding, approach_ms,
 	    touch_ms, egress_ms);
 	valid = contract_cost > 0 && stored_cost_ms >= contract_cost;
 
 restore:
+	if (egress_cache_active)
+		SG_OracleDoorBoundsCacheEnd();
 	if (button_posed)
 		SG_OracleDeclaredDoorTopEnd(&button_saved, 1);
 	if (pose_count > 0)

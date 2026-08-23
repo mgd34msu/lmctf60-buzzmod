@@ -381,8 +381,8 @@ including `lmctf02a` and `lmctf04`.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58`, `lmctf07`, and `lmctf40` subsequently passed every acceptance
-gate, leaving 20 maps in the live repair queue.
+runs. `lmctf58`, `lmctf07`, `lmctf40`, and `xmap29` subsequently passed every
+acceptance gate, leaving 19 maps in the live repair queue.
 Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
 `tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
@@ -473,7 +473,7 @@ before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
 `lmctf25`, `lmctf27`, `lmctf30`, `lmctf45`, `tomb05`,
 `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
-`xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
+`xmap13`, `xmap18`, `xmap25`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
 module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
@@ -660,7 +660,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
-| `lmctf58` | The graph closes with 1,896 shared seeds and writes 30,993 links; runtime door-plan replay exceeds 1,800 seconds inside repeated synthetic sweep validation. |
+| `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | 33,868 links and 570 initially shared seeds; reverse closure fails over ordinary links. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
@@ -671,7 +671,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | 1,733 seeds are initially shared, but reverse closure from the blue-only component fails. |
 | `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
-| `xmap29` | The invalid water-only seed bound is repaired on its branch, exposing 18,106 total seeds; radius-pair SWIM then fills all 262,144 link slots and times out. |
+| `xmap29` | PASS with a replay-proved sparse water graph: 6,465 seeds, 5,348 exact SWIM links, and 68,935 total links. |
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.

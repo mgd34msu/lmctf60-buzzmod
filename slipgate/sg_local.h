@@ -199,6 +199,8 @@ void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 void SG_OracleDoorBoundsCacheBegin(void);
 void SG_OracleDoorBoundsCacheEnd(void);
+qboolean SG_OracleDoorEgressReplayCacheBegin(void);
+void SG_OracleDoorEgressReplayCacheEnd(void);
 qboolean SG_OraclePushFlight(const vec3_t source, edict_t *trigger,
 	const float push_velocity[3], vec3_t landing, int *arrival_ms);
 qboolean SG_OracleRunCompoundWorld(sg_phantom_t *ph, usercmd_t *cmd,

@@ -34,6 +34,15 @@ MOVER_LEASE_TEST_ALL_ARTIFACTS := \
 	.sg_mover_lease_test.gnu.o .sg_mover_lease_test.gnu.d \
 	.sg_mover_lease_under_test.gnu.o .sg_mover_lease_under_test.gnu.d \
 	$(MOVER_LEASE_TEST_OBJS) $(MOVER_LEASE_TEST_DEPS)
+WATER_FOREST_TEST_BIN := sg_water_forest_test.make
+WATER_FOREST_TEST_OBJS := .sg_water_forest_test.make.o \
+	.sg_water_forest_under_test.make.o
+WATER_FOREST_TEST_DEPS := $(WATER_FOREST_TEST_OBJS:.o=.d)
+WATER_FOREST_TEST_ALL_ARTIFACTS := \
+	sg_water_forest_test.gnu sg_water_forest_test.make \
+	.sg_water_forest_test.gnu.o .sg_water_forest_test.gnu.d \
+	.sg_water_forest_under_test.gnu.o .sg_water_forest_under_test.gnu.d \
+	$(WATER_FOREST_TEST_OBJS) $(WATER_FOREST_TEST_DEPS)
 BUTTON_LIVE_TEST_BIN := sg_button_live_test.make
 BUTTON_LIVE_TEST_OBJS := .sg_button_live_test.make.o .sg_button_live_under_test.make.o
 BUTTON_LIVE_TEST_DEPS := $(BUTTON_LIVE_TEST_OBJS:.o=.d)
@@ -1091,6 +1100,7 @@ OBJS := \
 	slipgate/sg_rune_mechanism_plan.o \
 	slipgate/sg_rune_runtime.o \
 	slipgate/sg_rune_binding.o \
+	slipgate/sg_water_forest.o \
 	sg_sidecar_wire.o \
 	sg_sidecar_loader.o \
 	sg_sidecar_store.o \
@@ -1206,6 +1216,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
 .PHONY: all default host-test action-test compound-test mover-lease-test \
+	water-forest-test \
 	povlock-test pov-session-production-test pov-supervisor-test \
 	button-live-test button-game-test \
 	compound-guard-test compound-guard-game-test declared-door-guard-test \
@@ -1336,6 +1347,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(ACTION_TEST_DEPS)
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
+-include $(WATER_FOREST_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
 -include $(TRAIN_GATE_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
@@ -1554,6 +1566,10 @@ $(MOVER_LEASE_TEST_BIN): $(MOVER_LEASE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(MOVER_LEASE_TEST_OBJS) $(LIBS)
 
+$(WATER_FOREST_TEST_BIN): $(WATER_FOREST_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(WATER_FOREST_TEST_OBJS) $(LIBS)
+
 $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(BUTTON_LIVE_TEST_OBJS) $(LIBS)
@@ -1703,6 +1719,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_button_live_test.make.o: tests/sg_button_live_test.c \
 		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_water_forest_test.make.o: tests/sg_water_forest_test.c \
+		slipgate/sg_water_forest.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_water_forest_under_test.make.o: slipgate/sg_water_forest.c \
+		slipgate/sg_water_forest.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -3188,7 +3218,8 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		$(MOVER_LEASE_TEST_BIN) $(BUTTON_LIVE_TEST_BIN) \
+		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
+		$(BUTTON_LIVE_TEST_BIN) \
 		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
@@ -3272,6 +3303,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(ACTION_TEST_BIN)
 	$(Q)./$(COMPOUND_TEST_BIN)
 	$(Q)./$(MOVER_LEASE_TEST_BIN)
+	$(Q)./$(WATER_FOREST_TEST_BIN)
 	$(Q)./$(BUTTON_LIVE_TEST_BIN)
 	$(Q)./$(BUTTON_GAME_TEST_BIN)
 	$(Q)python3 $(BUTTON_GAME_INTEGRATION_TEST)
@@ -3460,6 +3492,10 @@ compound-test: $(COMPOUND_TEST_BIN)
 mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(MOVER_LEASE_TEST_BIN)
+
+water-forest-test: $(WATER_FOREST_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(WATER_FOREST_TEST_BIN)
 
 button-live-test: $(BUTTON_LIVE_TEST_BIN)
 	$(E) [TEST] $<
@@ -3758,6 +3794,7 @@ clean:
 		$(COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_HOOK_ORACLE_TEST_ALL_ARTIFACTS) \
 		$(MOVER_LEASE_TEST_ALL_ARTIFACTS) \
+		$(WATER_FOREST_TEST_ALL_ARTIFACTS) \
 		$(BUTTON_LIVE_TEST_ALL_ARTIFACTS) \
 		$(BUTTON_GAME_TEST_ALL_ARTIFACTS) \
 		$(COMPOUND_GUARD_TEST_ALL_ARTIFACTS) \
