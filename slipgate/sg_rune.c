@@ -5003,8 +5003,7 @@ static int Gen_CompoundLiftDoorExit(const vec3_t body, edict_t *plat,
 		uint32_t delay_ms;
 		int member_count, travel_ms, pose_count, seed;
 
-		if (!Lift_DoorStageDelay(trigger, &delay_ms, true) || delay_ms > INT_MAX ||
-		    !Lift_DoorStageTouchMatches(trigger, body, true))
+		if (!Lift_DoorStageDelay(trigger, &delay_ms, true) || delay_ms > INT_MAX)
 			continue;
 		member_count = DoorTrigger_Targets(trigger, members,
 		    RUNE_MAX_MECHANISM_MEMBERS);
