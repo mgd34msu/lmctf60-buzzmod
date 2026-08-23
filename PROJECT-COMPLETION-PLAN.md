@@ -639,7 +639,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | Map | Current result |
 | --- | --- |
 | `lmctf01` | 2,401 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
-| `lmctf06` | 1,488 seeds all prune; 16 ordinary boundaries enter dead components. |
+| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. The red root SCC reaches two dead singleton platform-top seeds through exactly 16 RUN boundaries aligned with externally activated start-open vertical door teams `r_plat1`/`r_plat2`; no LIFT/DOOR links publish. Existing door/lift/button and ordinary controllers are replaying only those cuts. |
 | `lmctf07` | PASS after the accepted train/button repair. |
 | `lmctf12` | 2,263 seeds all prune; the disjoint objective sides have no boundary link. |
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
@@ -652,10 +652,10 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf3` | 1,815 seeds/28,863 links all prune. Red and blue root SCCs each lack the reverse of a proved RL_LIFT ascent; exact missing cuts are SCC82-to-80 and SCC86-to-85. Teleporter destination singletons are forward dead ends and currently noncausal. Existing families are being replayed only over the two lift-descent cuts. |
+| `tw2ctf3` | 1,815 seeds/28,863 links all prune. Exact bounded movement replay proves none of the four neutral-core legs. Each upper pad has exactly one admitted candidate, but every trace hits worldspawn at the same fraction, proving planar staging is correctly wall-separated. Lower-pad arrivals are valid but land 24 units from canonical ownership. Catalog geometry and seed discovery are under diagnosis. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
-| `xmap04` | PASS on exact head with roots 80/81, 1,094 seeds, 13,356 links, and 12 plans; both C readers, Python, lint, SNAG, fresh cold load, and byte-identical regeneration pass. Full GNU and Make/Clang suites remain before integration. |
+| `xmap04` | The broad ownership version passed, but the narrowed stock-only admission regresses to GEN_FAIL with 489 red-only/485 blue-only seeds, nine lift links, and zero door replays. The lane is isolating which mover234 compound-admission predicate was lost before changing the contract; full suites are paused. |
 | `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
