@@ -18,6 +18,7 @@
 #include "slipgate/sg_compound_gen_game.h"
 #include "slipgate/sg_rocketjump_cadence.h"
 #include "slipgate/sg_push_live.h"
+#include "slipgate/sg_train_gate_live.h"
 #include "slipgate/sg_util.h"
 
 #include <stdio.h>
@@ -2120,6 +2121,70 @@ static qboolean Mechanism_BindPush(rune_link_t *link, edict_t *trigger)
 	           SG_MECH_NO_KEY, SG_MECHANISM_CONTROLLER_PUSH, 1U, 0U);
 }
 
+static qboolean Mechanism_TrainRoute(uint32_t train_key,
+	uint32_t *closed_key_out, uint32_t *open_key_out)
+{
+	const rune_mechanism_edge_t *train_open;
+	const rune_mechanism_edge_t *open_closed;
+	const rune_mechanism_edge_t *closed_open;
+	uint32_t open_key;
+	uint32_t closed_key;
+
+	if (closed_key_out) *closed_key_out = SG_MECH_NO_KEY;
+	if (open_key_out) *open_key_out = SG_MECH_NO_KEY;
+	if (!closed_key_out || !open_key_out ||
+	    !(train_open = Mechanism_InventoryEdge(train_key,
+	        SG_MECH_EDGE_ROUTE_TARGET, 0U)) ||
+	    Mechanism_InventoryEdge(train_key, SG_MECH_EDGE_ROUTE_TARGET, 1U))
+		return false;
+	open_key = train_open->to_key;
+	if (!(open_closed = Mechanism_InventoryEdge(open_key,
+	        SG_MECH_EDGE_ROUTE_TARGET, 0U)) ||
+	    Mechanism_InventoryEdge(open_key, SG_MECH_EDGE_ROUTE_TARGET, 1U))
+		return false;
+	closed_key = open_closed->to_key;
+	if (!(closed_open = Mechanism_InventoryEdge(closed_key,
+	        SG_MECH_EDGE_ROUTE_TARGET, 0U)) ||
+	    Mechanism_InventoryEdge(closed_key, SG_MECH_EDGE_ROUTE_TARGET, 1U) ||
+	    closed_open->to_key != open_key)
+		return false;
+	*closed_key_out = closed_key;
+	*open_key_out = open_key;
+	return true;
+}
+
+static qboolean Mechanism_BindTrain(rune_link_t *link, edict_t *button,
+	edict_t *train, edict_t *closed, edict_t *open, uint32_t opening_bound_ms,
+	uint16_t controller_kind)
+{
+	uint32_t button_key = Mechanism_EntityKey(button);
+	uint32_t train_key = Mechanism_EntityKey(train);
+	uint32_t closed_key = Mechanism_EntityKey(closed);
+	uint32_t open_key = Mechanism_EntityKey(open);
+	const rune_mechanism_edge_t *target;
+	uint32_t route_closed;
+	uint32_t route_open;
+
+	if ((controller_kind != SG_MECHANISM_CONTROLLER_TRAIN &&
+	     controller_kind != SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) ||
+	    opening_bound_ms == 0U || opening_bound_ms > RUNE_MAX_COST_MS ||
+	    button_key == SG_MECH_NO_KEY || train_key == SG_MECH_NO_KEY ||
+	    closed_key == SG_MECH_NO_KEY || open_key == SG_MECH_NO_KEY ||
+	    !(target = Mechanism_InventoryEdge(button_key, SG_MECH_EDGE_TARGET,
+	        0U)) ||
+	    Mechanism_InventoryEdge(button_key, SG_MECH_EDGE_TARGET, 1U) ||
+	    target->to_key != train_key ||
+	    !Mechanism_TrainRoute(train_key, &route_closed, &route_open) ||
+	    route_closed != closed_key || route_open != open_key)
+		goto fail;
+	return Mechanism_Bind(link, button_key, train_key, closed_key, open_key,
+	    controller_kind, 1U, opening_bound_ms);
+
+fail:
+	gen_mechanism_failed = true;
+	return false;
+}
+
 static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
 	edict_t *approach_door, edict_t *egress_door,
 	uint16_t expected_members)
@@ -2294,6 +2359,7 @@ fail:
 static int gen_first_water = -1;        /* index of the first water seed, -1 none */
 static int gen_num_water;
 static int gen_lift_links, gen_tele_links, gen_door_links, gen_push_links;
+static int gen_train_links;
 static int gen_button_door_links, gen_swim_links;
 static int gen_door_drop_trials, gen_door_drop_proofs;
 static int gen_door_drop_compound_trials, gen_door_drop_compound_proofs;
@@ -2342,7 +2408,8 @@ static void Link_Declare_Tail(int mark)
 		    gen_links[i].action != RL_TELEPORT &&
 		    gen_links[i].action != RL_DOOR &&
 		    gen_links[i].action != RL_BUTTON_DOOR &&
-		    gen_links[i].action != RL_PUSH)
+		    gen_links[i].action != RL_PUSH &&
+		    gen_links[i].action != RL_TRAIN)
 			continue;               /* a drop proven by the lift pass stays PROVEN */
 		gen_links[i].provenance = RL_DECLARED;
 		gen_links[i].heading_slack = RUNE_DECLARED_CONTROL_MARKER;
@@ -3639,6 +3706,924 @@ static void Link_Pushes(void)
 	}
 	if (gen_push_links)
 		sg_host.dprint("rune: %d fixed push links\n", gen_push_links);
+}
+
+static qboolean Train_NodeShape(const rune_mechanism_node_t *node)
+{
+	return node && node->kind == SG_MECH_NODE_TRAIN &&
+	       node->spawnflags == 2U &&
+	       node->use_callback == SG_MECH_CALLBACK_TRAIN_USE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_TRAIN &&
+	       node->speed_q8 > 0U && node->speed_q8 != UINT32_MAX;
+}
+
+static qboolean Train_ButtonShape(const rune_mechanism_node_t *node)
+{
+	return node && node->kind == SG_MECH_NODE_BUTTON &&
+	       (node->flags & (SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE |
+	           SG_MECH_NODEF_SHOOTABLE)) ==
+	           (SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE) &&
+	       node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH &&
+	       node->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
+	       node->speed_q8 > 0U && node->speed_q8 != UINT32_MAX;
+}
+
+static qboolean Train_ShootButtonShape(const rune_mechanism_node_t *node)
+{
+	return node && node->kind == SG_MECH_NODE_BUTTON &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+	           SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE) &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->spawnflags == 0U && node->delay_ms == 0 &&
+	       node->wait_ms > 0 && node->target_offset != 0U &&
+	       node->killtarget_offset == 0U &&
+	       node->path_target_offset == 0U && node->speed_q8 > 0U &&
+	       node->speed_q8 != UINT32_MAX;
+}
+
+static qboolean Train_ReverseTouchEndpoints(uint32_t train_key,
+	int *source_out, int *destination_out)
+{
+	sg_train_gate_reverse_touch_t selection;
+	int link_index;
+
+	if (!source_out || !destination_out || !gen_mechanism_bindings)
+		return false;
+	SG_TrainGateReverseTouchBegin(&selection);
+	for (link_index = 0; link_index < gen_num_links; link_index++)
+	{
+		const rune_link_t *link = &gen_links[link_index];
+		const sg_mechanism_plan_binding_t *binding;
+
+		if (link->action != RL_TRAIN ||
+		    link->mechanism_plan >= gen_num_mechanism_bindings)
+			continue;
+		binding = &gen_mechanism_bindings[link->mechanism_plan];
+		if (binding->controller_kind != SG_MECHANISM_CONTROLLER_TRAIN ||
+		    binding->mover_key != train_key)
+			continue;
+		SG_TrainGateReverseTouchConsider(&selection,
+		    link->mode == RLCM_PREOPEN, link->to, link->from);
+	}
+	return SG_TrainGateReverseTouchResult(&selection,
+	    source_out, destination_out) ? true : false;
+}
+
+static uint32_t Train_OpeningBound(edict_t *button, edict_t *train,
+	edict_t *closed, edict_t *open)
+{
+	vec3_t delta;
+	float button_distance;
+	float train_distance;
+	float total_ms;
+	uint32_t rounded;
+
+	if (!button || !train || !closed || !open ||
+	    button->moveinfo.speed <= 0.0f || train->moveinfo.speed <= 0.0f)
+		return 0U;
+	VectorSubtract(button->moveinfo.end_origin,
+	    button->moveinfo.start_origin, delta);
+	button_distance = VectorLength(delta);
+	VectorSubtract(open->s.origin, closed->s.origin, delta);
+	train_distance = VectorLength(delta);
+	total_ms = button_distance * 1000.0f / button->moveinfo.speed +
+	    train_distance * 1000.0f / train->moveinfo.speed + 500.0f;
+	if (!isfinite(total_ms) || total_ms <= 0.0f ||
+	    total_ms > (float)RUNE_MAX_COST_MS)
+		return 0U;
+	rounded = (uint32_t)ceilf(total_ms / 100.0f) * 100U;
+	return rounded <= RUNE_MAX_COST_MS ? rounded : 0U;
+}
+
+static void Train_Sweep(edict_t *train, edict_t *closed, edict_t *open,
+	vec3_t mins_out, vec3_t maxs_out)
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+	{
+		float extent = train->maxs[axis] - train->mins[axis];
+
+		mins_out[axis] = closed->s.origin[axis] < open->s.origin[axis]
+		    ? closed->s.origin[axis] : open->s.origin[axis];
+		maxs_out[axis] = (closed->s.origin[axis] > open->s.origin[axis]
+		    ? closed->s.origin[axis] : open->s.origin[axis]) + extent;
+	}
+}
+
+static void Train_SetPose(edict_t *train, edict_t *corner)
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+		train->s.origin[axis] = corner->s.origin[axis] - train->mins[axis];
+	VectorCopy(train->s.origin, train->s.old_origin);
+	VectorClear(train->velocity);
+	VectorClear(train->avelocity);
+	train->solid = SOLID_BSP;
+	sg_host.linkentity(train);
+}
+
+static void Train_PoseAt(edict_t *train, edict_t *corner,
+	door_pose_t *saved)
+{
+
+	memset(saved, 0, sizeof(*saved));
+	saved->ent = train;
+	VectorCopy(train->s.origin, saved->origin);
+	VectorCopy(train->s.old_origin, saved->old_origin);
+	VectorCopy(train->s.angles, saved->angles);
+	VectorCopy(train->velocity, saved->velocity);
+	VectorCopy(train->avelocity, saved->avelocity);
+	saved->state = train->moveinfo.state;
+	saved->solid = train->solid;
+	saved->linkcount = train->linkcount;
+	Train_SetPose(train, corner);
+}
+
+static qboolean Train_RideEndpoints(edict_t *closed, edict_t *open,
+	edict_t **lower_out, edict_t **upper_out, vec3_t displacement_out)
+{
+	vec3_t delta;
+
+	if (lower_out) *lower_out = NULL;
+	if (upper_out) *upper_out = NULL;
+	if (displacement_out) VectorClear(displacement_out);
+	if (!closed || !open || !lower_out || !upper_out || !displacement_out)
+		return false;
+	VectorSubtract(open->s.origin, closed->s.origin, delta);
+	if (fabsf(delta[0]) > 0.125f || fabsf(delta[1]) > 0.125f ||
+	    fabsf(delta[2]) < 8.0f)
+		return false;
+	if (delta[2] > 0.0f)
+	{
+		*lower_out = closed;
+		*upper_out = open;
+	}
+	else
+	{
+		*lower_out = open;
+		*upper_out = closed;
+	}
+	VectorSubtract((*upper_out)->s.origin, (*lower_out)->s.origin,
+	    displacement_out);
+	return displacement_out[2] >= 8.0f;
+}
+
+static qboolean Train_OppositeSide(const vec3_t contact,
+	const vec3_t destination, const vec3_t sweep_mins,
+	const vec3_t sweep_maxs)
+{
+	float gap[4];
+	int side = -1;
+	int index;
+
+	gap[0] = sweep_mins[0] - (contact[0] + 16.0f);
+	gap[1] = (contact[0] - 16.0f) - sweep_maxs[0];
+	gap[2] = sweep_mins[1] - (contact[1] + 16.0f);
+	gap[3] = (contact[1] - 16.0f) - sweep_maxs[1];
+	for (index = 0; index < 4; index++)
+		if (gap[index] >= 0.0f &&
+		    (side < 0 || gap[index] < gap[side]))
+			side = index;
+	switch (side)
+	{
+	case 0: return destination[0] - 16.0f >= sweep_maxs[0];
+	case 1: return destination[0] + 16.0f <= sweep_mins[0];
+	case 2: return destination[1] - 16.0f >= sweep_maxs[1];
+	case 3: return destination[1] + 16.0f <= sweep_mins[1];
+	default: return false;
+	}
+}
+
+static int Train_TravelAxis(edict_t *closed, edict_t *open)
+{
+	int axis;
+	int travel_axis = -1;
+
+	if (!closed || !open)
+		return -1;
+	for (axis = 0; axis < 3; axis++)
+	{
+		if (fabsf(open->s.origin[axis] - closed->s.origin[axis]) <= 0.125f)
+			continue;
+		if (travel_axis >= 0)
+			return -1;
+		travel_axis = axis;
+	}
+	return travel_axis;
+}
+
+static sg_train_gate_side_t Train_SeedSweepAxisSide(const vec3_t origin,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs, unsigned int axis)
+{
+	vec3_t bounds_mins;
+	vec3_t bounds_maxs;
+
+	bounds_mins[0] = origin[0] - 16.0f;
+	bounds_mins[1] = origin[1] - 16.0f;
+	bounds_mins[2] = origin[2] - 24.0f;
+	bounds_maxs[0] = origin[0] + 16.0f;
+	bounds_maxs[1] = origin[1] + 16.0f;
+	bounds_maxs[2] = origin[2] + 32.0f;
+	return SG_TrainGateSweepAxisSide(bounds_mins, bounds_maxs,
+	    sweep_mins, sweep_maxs, axis);
+}
+
+static float Train_SeedSweepAxisGap(const vec3_t origin,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs, unsigned int axis,
+	sg_train_gate_side_t side)
+{
+	static const sg_train_gate_side_t lower[3] = {
+		SG_TRAIN_GATE_SIDE_X_MIN,
+		SG_TRAIN_GATE_SIDE_Y_MIN,
+		SG_TRAIN_GATE_SIDE_Z_MIN
+	};
+	static const sg_train_gate_side_t upper[3] = {
+		SG_TRAIN_GATE_SIDE_X_MAX,
+		SG_TRAIN_GATE_SIDE_Y_MAX,
+		SG_TRAIN_GATE_SIDE_Z_MAX
+	};
+	static const float hull_mins[3] = { -16.0f, -16.0f, -24.0f };
+	static const float hull_maxs[3] = { 16.0f, 16.0f, 32.0f };
+
+	if (axis >= 3U)
+		return HUGE_VALF;
+	if (side == lower[axis])
+		return sweep_mins[axis] - (origin[axis] + hull_maxs[axis]);
+	if (side == upper[axis])
+		return (origin[axis] + hull_mins[axis]) - sweep_maxs[axis];
+	return HUGE_VALF;
+}
+
+static void Link_Trains(void)
+{
+	uint32_t button_index;
+
+	for (button_index = 0U;
+	     button_index < gen_mechanism_catalog.num_nodes; button_index++)
+	{
+		const rune_mechanism_node_t *button_node =
+			&gen_mechanism_catalog.nodes[button_index];
+		const rune_mechanism_edge_t *target;
+		const rune_mechanism_node_t *train_node;
+		const rune_mechanism_node_t *closed_node;
+		const rune_mechanism_node_t *open_node;
+		edict_t *button;
+		edict_t *train;
+		edict_t *closed;
+		edict_t *open;
+		uint32_t closed_key;
+		uint32_t open_key;
+		uint32_t opening_bound;
+		vec3_t button_center;
+		vec3_t sweep_mins;
+		vec3_t sweep_maxs;
+		int best_source = -1;
+		int best_destination = -1;
+		int best_egress_ms = 0;
+		int best_cost = INT_MAX;
+		vec3_t best_contact = { 0.0f, 0.0f, 0.0f };
+		int source;
+
+		if (!Train_ButtonShape(button_node) || button_node->key == 0U ||
+		    button_node->key >= (uint32_t)globals.num_edicts ||
+		    !(target = Mechanism_InventoryEdge(button_node->key,
+		        SG_MECH_EDGE_TARGET, 0U)) ||
+		    Mechanism_InventoryEdge(button_node->key, SG_MECH_EDGE_TARGET, 1U) ||
+		    !(train_node = Mechanism_Node(target->to_key)) ||
+		    !Train_NodeShape(train_node) ||
+		    !Mechanism_TrainRoute(train_node->key, &closed_key, &open_key) ||
+		    !(closed_node = Mechanism_Node(closed_key)) ||
+		    !(open_node = Mechanism_Node(open_key)) ||
+		    closed_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    open_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    train_node->key >= (uint32_t)globals.num_edicts ||
+		    closed_key >= (uint32_t)globals.num_edicts ||
+		    open_key >= (uint32_t)globals.num_edicts)
+			continue;
+		button = &g_edicts[button_node->key];
+		train = &g_edicts[train_node->key];
+		closed = &g_edicts[closed_key];
+		open = &g_edicts[open_key];
+		opening_bound = Train_OpeningBound(button, train, closed, open);
+		if (opening_bound == 0U)
+			continue;
+		button_center[0] = (button->absmin[0] + button->absmax[0]) * 0.5f;
+		button_center[1] = (button->absmin[1] + button->absmax[1]) * 0.5f;
+		button_center[2] = (button->absmin[2] + button->absmax[2]) * 0.5f;
+		Train_Sweep(train, closed, open, sweep_mins, sweep_maxs);
+		for (source = 0; source < gen_num_seeds; source++)
+		{
+			vec3_t delta;
+			vec3_t contact;
+			int approach_ms;
+			int destination;
+			door_pose_t saved;
+
+			if (!gen_source_stable[source] ||
+			    gen_source_waterlevel[source] != 0 ||
+			    !Gen_SeedHasIncoming(source))
+				continue;
+			VectorSubtract(gen_seeds[source].origin, button_center, delta);
+			if (delta[0] * delta[0] + delta[1] * delta[1] >
+			        320.0f * 320.0f || fabsf(delta[2]) > 128.0f ||
+			    !SG_OracleTrainGateApproach(gen_seeds[source].origin,
+			        button_center, button, &approach_ms, contact))
+				continue;
+			Train_PoseAt(train, open, &saved);
+			for (destination = 0; destination < gen_num_seeds; destination++)
+			{
+				vec3_t egress_delta;
+				int egress_ms;
+				int cost;
+
+				if (destination == source ||
+				    !gen_source_stable[destination] ||
+				    gen_source_waterlevel[destination] != 0 ||
+				    !Gen_SeedHasOutgoing(destination))
+					continue;
+				VectorSubtract(gen_seeds[destination].origin, contact,
+				    egress_delta);
+				if (egress_delta[0] * egress_delta[0] +
+				        egress_delta[1] * egress_delta[1] > 1600.0f * 1600.0f ||
+				    fabsf(egress_delta[2]) > 256.0f ||
+				    !Train_OppositeSide(contact,
+				        gen_seeds[destination].origin, sweep_mins, sweep_maxs) ||
+				    !SG_OracleTrainGateCross(contact,
+				        gen_seeds[destination].origin, button, train,
+				        sweep_mins, sweep_maxs, 3U, &egress_ms))
+					continue;
+				cost = approach_ms + (int)opening_bound + egress_ms;
+				if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
+				    cost >= best_cost)
+					continue;
+				best_source = source;
+				best_destination = destination;
+				best_egress_ms = egress_ms;
+				best_cost = cost;
+				VectorCopy(contact, best_contact);
+			}
+			DoorPose_Restore(&saved, 1);
+		}
+		if (best_source >= 0)
+		{
+			int before = gen_num_links;
+
+			Link_Add(best_source, best_destination, RL_TRAIN,
+			    (short)best_cost, 0);
+			if (gen_num_links > before)
+			{
+				rune_link_t *link = &gen_links[gen_num_links - 1];
+
+				VectorCopy(best_contact, link->anchor);
+				VectorCopy(gen_seeds[best_destination].origin,
+				    link->mechanism_anchor);
+				link->sweep_clear_ms = (uint16_t)best_egress_ms;
+				link->mode = RLCM_PREOPEN;
+				if (!Mechanism_BindTrain(link, button, train, closed, open,
+				        opening_bound, SG_MECHANISM_CONTROLLER_TRAIN))
+					gen_num_links--;
+				else
+					gen_train_links++;
+			}
+		}
+	}
+	if (gen_train_links)
+		sg_host.dprint("rune: %d sealed train links\n", gen_train_links);
+}
+
+static void Link_TrainRides(void)
+{
+	uint32_t train_index;
+	int added = 0;
+
+	for (train_index = 0U;
+	     train_index < gen_mechanism_catalog.num_nodes; train_index++)
+	{
+		const rune_mechanism_node_t *train_node =
+			&gen_mechanism_catalog.nodes[train_index];
+		const rune_mechanism_node_t *closed_node;
+		const rune_mechanism_node_t *open_node;
+		edict_t *best_button = NULL;
+		edict_t *train;
+		edict_t *closed;
+		edict_t *open;
+		edict_t *lower;
+		edict_t *upper;
+		uint32_t closed_key;
+		uint32_t open_key;
+		uint32_t best_opening_bound = 0U;
+		vec3_t displacement;
+		vec3_t best_board = { 0.0f, 0.0f, 0.0f };
+		vec3_t best_top = { 0.0f, 0.0f, 0.0f };
+		float halfx;
+		float halfy;
+		float egress_radius;
+		int best_source = -1;
+		int best_destination = -1;
+		int best_egress_ms = 0;
+		int best_cost = INT_MAX;
+		uint32_t button_index;
+		door_pose_t saved;
+
+		if (!Train_NodeShape(train_node) || train_node->key == 0U ||
+		    train_node->key >= (uint32_t)globals.num_edicts ||
+		    !Mechanism_TrainRoute(train_node->key, &closed_key, &open_key) ||
+		    !(closed_node = Mechanism_Node(closed_key)) ||
+		    !(open_node = Mechanism_Node(open_key)) ||
+		    closed_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    open_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    closed_key >= (uint32_t)globals.num_edicts ||
+		    open_key >= (uint32_t)globals.num_edicts)
+			continue;
+		train = &g_edicts[train_node->key];
+		closed = &g_edicts[closed_key];
+		open = &g_edicts[open_key];
+		if (!Train_RideEndpoints(closed, open, &lower, &upper, displacement))
+			continue;
+		halfx = (train->maxs[0] - train->mins[0]) * 0.5f;
+		halfy = (train->maxs[1] - train->mins[1]) * 0.5f;
+		egress_radius = Lift_EgressSearchRadius(halfx, halfy);
+		Train_PoseAt(train, lower, &saved);
+		for (button_index = 0U;
+		     button_index < gen_mechanism_catalog.num_nodes; button_index++)
+		{
+			const rune_mechanism_node_t *button_node =
+				&gen_mechanism_catalog.nodes[button_index];
+			const rune_mechanism_edge_t *target;
+			edict_t *button;
+			uint32_t opening_bound;
+			vec3_t button_center;
+			int source;
+
+			if (!Train_ButtonShape(button_node) || button_node->key == 0U ||
+			    button_node->key >= (uint32_t)globals.num_edicts ||
+			    !(target = Mechanism_InventoryEdge(button_node->key,
+			        SG_MECH_EDGE_TARGET, 0U)) ||
+			    Mechanism_InventoryEdge(button_node->key,
+			        SG_MECH_EDGE_TARGET, 1U) || target->to_key != train_node->key)
+				continue;
+			button = &g_edicts[button_node->key];
+			opening_bound = Train_OpeningBound(button, train, closed, open);
+			if (opening_bound == 0U)
+				continue;
+			button_center[0] =
+				(button->absmin[0] + button->absmax[0]) * 0.5f;
+			button_center[1] =
+				(button->absmin[1] + button->absmax[1]) * 0.5f;
+			button_center[2] =
+				(button->absmin[2] + button->absmax[2]) * 0.5f;
+			for (source = 0; source < gen_num_seeds; source++)
+			{
+				vec3_t delta;
+				vec3_t board;
+				vec3_t top;
+				int approach_ms;
+				int destination;
+
+				if (!gen_source_stable[source] ||
+				    gen_source_waterlevel[source] != 0 ||
+				    !Gen_SeedHasIncoming(source))
+					continue;
+				VectorSubtract(gen_seeds[source].origin, button_center, delta);
+				if (delta[0] * delta[0] + delta[1] * delta[1] >
+				        320.0f * 320.0f || fabsf(delta[2]) > 128.0f ||
+				    !SG_OracleTrainRideBoard(gen_seeds[source].origin,
+				        button_center, button, train, &approach_ms, board) ||
+				    !SG_OracleTrainRideCarry(board, displacement, train, top))
+					continue;
+				Train_SetPose(train, upper);
+				for (destination = 0; destination < gen_num_seeds;
+				     destination++)
+				{
+					vec3_t egress_delta;
+					float horizontal2;
+					int egress_ms;
+					int cost;
+
+					if (destination == source ||
+					    !gen_source_stable[destination] ||
+					    gen_source_waterlevel[destination] != 0 ||
+					    !Gen_SeedHasOutgoing(destination))
+						continue;
+					VectorSubtract(gen_seeds[destination].origin, top,
+					    egress_delta);
+					horizontal2 = egress_delta[0] * egress_delta[0] +
+					    egress_delta[1] * egress_delta[1];
+					if (fabsf(egress_delta[2]) > 16.0f ||
+					    horizontal2 > egress_radius * egress_radius ||
+					    !SG_OracleTrainRideEgress(top,
+					        gen_seeds[destination].origin, train, &egress_ms))
+						continue;
+					cost = approach_ms + (int)opening_bound + egress_ms;
+					if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
+					    cost >= best_cost)
+						continue;
+					best_button = button;
+					best_source = source;
+					best_destination = destination;
+					best_opening_bound = opening_bound;
+					best_egress_ms = egress_ms;
+					best_cost = cost;
+					VectorCopy(board, best_board);
+					VectorCopy(top, best_top);
+				}
+				Train_SetPose(train, lower);
+			}
+		}
+		DoorPose_Restore(&saved, 1);
+		if (best_button && best_source >= 0 && best_destination >= 0)
+		{
+			int before = gen_num_links;
+
+			Link_Add(best_source, best_destination, RL_TRAIN,
+			    (short)best_cost, 0);
+			if (gen_num_links > before)
+			{
+				rune_link_t *link = &gen_links[gen_num_links - 1];
+
+				VectorCopy(best_board, link->anchor);
+				VectorCopy(best_top, link->mechanism_anchor);
+				link->sweep_clear_ms = (uint16_t)best_egress_ms;
+				link->mode = RLCM_RIDE;
+				if (!Mechanism_BindTrain(link, best_button, train, closed,
+				        open, best_opening_bound,
+				        SG_MECHANISM_CONTROLLER_TRAIN))
+					gen_num_links--;
+				else
+				{
+					gen_train_links++;
+					added++;
+				}
+			}
+		}
+	}
+	if (added)
+		sg_host.dprint("rune: %d sealed carried train links\n", added);
+}
+
+static void Link_TrainShootButtons(
+	const sg_compound_gen_game_topology_t *topology)
+{
+	#define TRAIN_SHOOT_DEST_SLOTS 4
+	uint32_t button_index;
+
+	for (button_index = 0U;
+	     button_index < gen_mechanism_catalog.num_nodes; button_index++)
+	{
+		const rune_mechanism_node_t *button_node =
+			&gen_mechanism_catalog.nodes[button_index];
+		const rune_mechanism_edge_t *target;
+		const rune_mechanism_node_t *train_node;
+		const rune_mechanism_node_t *closed_node;
+		const rune_mechanism_node_t *open_node;
+		edict_t *button;
+		edict_t *train;
+		edict_t *closed;
+		edict_t *open;
+		uint32_t closed_key;
+		uint32_t open_key;
+		uint32_t opening_bound;
+		vec3_t sweep_mins;
+		vec3_t sweep_maxs;
+		int source_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
+		float gap_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
+		vec3_t contact_by_axis_side[3][SG_TRAIN_GATE_SIDE_Z_MAX + 1];
+		uint32_t source_side_mask[3] = { 0U, 0U, 0U };
+		uint32_t closure_axis_mask = 0U;
+		int destination_by_axis[3] = { -1, -1, -1 };
+		int cost_by_axis[3] = { INT_MAX, INT_MAX, INT_MAX };
+		int cross_ms_by_axis[3] = { 0, 0, 0 };
+		uint32_t transaction_bound_by_axis[3] = { 0U, 0U, 0U };
+		int selected_destination[TRAIN_SHOOT_DEST_SLOTS] = { -1, -1, -1, -1 };
+		int selected_cost[TRAIN_SHOOT_DEST_SLOTS] = {
+			INT_MAX, INT_MAX, INT_MAX, INT_MAX
+		};
+		int selected_cross[TRAIN_SHOOT_DEST_SLOTS] = { -1, -1, -1, -1 };
+		int selected_cross_ms[TRAIN_SHOOT_DEST_SLOTS] = { 0, 0, 0, 0 };
+		int best_source = -1;
+		int best_destination = -1;
+		int best_cost = INT_MAX;
+		uint32_t best_transaction_bound = 0U;
+		vec3_t best_contact = { 0.0f, 0.0f, 0.0f };
+		int motion_axis;
+		int passage_axis = -1;
+		int reverse_source = -1;
+		int reverse_destination = -1;
+		int source;
+		int axis;
+		int side_index;
+
+		for (axis = 0; axis < 3; axis++)
+			for (side_index = SG_TRAIN_GATE_SIDE_NONE;
+			     side_index <= SG_TRAIN_GATE_SIDE_Z_MAX; side_index++)
+			{
+				source_by_axis_side[axis][side_index] = -1;
+				gap_by_axis_side[axis][side_index] = HUGE_VALF;
+				VectorClear(contact_by_axis_side[axis][side_index]);
+			}
+
+		if (!Train_ShootButtonShape(button_node) || button_node->key == 0U ||
+		    button_node->key >= (uint32_t)globals.num_edicts ||
+		    !(target = Mechanism_InventoryEdge(button_node->key,
+		        SG_MECH_EDGE_TARGET, 0U)) ||
+		    Mechanism_InventoryEdge(button_node->key, SG_MECH_EDGE_TARGET, 1U) ||
+		    !(train_node = Mechanism_Node(target->to_key)) ||
+		    !Train_NodeShape(train_node) ||
+		    !Mechanism_TrainRoute(train_node->key, &closed_key, &open_key) ||
+		    !(closed_node = Mechanism_Node(closed_key)) ||
+		    !(open_node = Mechanism_Node(open_key)) ||
+		    closed_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    open_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    train_node->key >= (uint32_t)globals.num_edicts ||
+		    closed_key >= (uint32_t)globals.num_edicts ||
+		    open_key >= (uint32_t)globals.num_edicts)
+			continue;
+		button = &g_edicts[button_node->key];
+		train = &g_edicts[train_node->key];
+		closed = &g_edicts[closed_key];
+		open = &g_edicts[open_key];
+		if (!SG_MechCatalogEntityExecutionMatches(button_node->key,
+		        button_node, SG_MECHANISM_CONTROLLER_TRAIN_SHOOT))
+			continue;
+		opening_bound = Train_OpeningBound(button, train, closed, open);
+		if (opening_bound == 0U)
+			continue;
+		Train_Sweep(train, closed, open, sweep_mins, sweep_maxs);
+		motion_axis = Train_TravelAxis(closed, open);
+		if (motion_axis < 0 ||
+		    !Train_ReverseTouchEndpoints(train_node->key, &reverse_source,
+		        &reverse_destination) || !topology || !topology->component ||
+		    topology->component[reverse_source] < 0)
+			continue;
+		for (source = 0; source < gen_num_seeds; source++)
+		{
+			vec3_t contact;
+			int flight_ms;
+			door_pose_t saved;
+
+			if (!gen_source_stable[source] ||
+			    gen_source_waterlevel[source] != 0 ||
+			    !Gen_SeedHasIncoming(source) || !Gen_SeedHasOutgoing(source) ||
+			    topology->component[source] !=
+			        topology->component[reverse_source] ||
+			    !SG_OracleTrainGateShot(gen_seeds[source].origin, button,
+			        contact, &flight_ms))
+				continue;
+			Train_PoseAt(train, open, &saved);
+			for (axis = 0; axis < 3; axis++)
+			{
+				sg_train_gate_side_t source_side;
+				sg_train_gate_side_t destination_side;
+				vec3_t entry_delta;
+				vec3_t egress_delta;
+				uint32_t transaction_bound;
+				int entry_ms;
+				int cross_ms;
+				int egress_ms;
+				int cost;
+				float gap;
+
+				if (axis == motion_axis)
+					continue;
+				source_side = Train_SeedSweepAxisSide(
+				    gen_seeds[source].origin, sweep_mins, sweep_maxs,
+				    (unsigned int)axis);
+				if (source_side == SG_TRAIN_GATE_SIDE_NONE)
+					continue;
+				source_side_mask[axis] |= 1U << source_side;
+				destination_side = SG_TrainGateOppositeSide(source_side);
+				if (destination_side == SG_TRAIN_GATE_SIDE_NONE ||
+				    Train_SeedSweepAxisSide(
+				        gen_seeds[reverse_source].origin, sweep_mins,
+				        sweep_maxs, (unsigned int)axis) != source_side ||
+				    Train_SeedSweepAxisSide(
+				        gen_seeds[reverse_destination].origin, sweep_mins,
+				        sweep_maxs, (unsigned int)axis) != destination_side ||
+				    source == reverse_destination ||
+				    !gen_source_stable[reverse_destination] ||
+				    gen_source_waterlevel[reverse_destination] != 0 ||
+				    !Gen_SeedHasOutgoing(reverse_destination))
+					continue;
+				transaction_bound = opening_bound + (uint32_t)flight_ms + 1100U;
+				if (transaction_bound > RUNE_MAX_COST_MS)
+					continue;
+				VectorSubtract(gen_seeds[reverse_source].origin,
+				    gen_seeds[source].origin, entry_delta);
+				VectorSubtract(gen_seeds[reverse_destination].origin,
+				    gen_seeds[reverse_source].origin, egress_delta);
+				if (entry_delta[0] * entry_delta[0] +
+				        entry_delta[1] * entry_delta[1] > 1600.0f * 1600.0f ||
+				    fabsf(entry_delta[2]) > 256.0f ||
+				    egress_delta[0] * egress_delta[0] +
+				        egress_delta[1] * egress_delta[1] > 1600.0f * 1600.0f ||
+				    fabsf(egress_delta[2]) > 256.0f ||
+				    !SG_OracleTrainGateEntry(gen_seeds[source].origin,
+				        gen_seeds[reverse_source].origin, button, train,
+				        &entry_ms) ||
+				    !SG_OracleTrainGateCross(gen_seeds[reverse_source].origin,
+				        gen_seeds[reverse_destination].origin, button, train,
+				        sweep_mins, sweep_maxs, (unsigned int)axis, &cross_ms))
+					continue;
+				if (entry_ms > RUNE_MAX_COST_MS - cross_ms)
+					continue;
+				egress_ms = entry_ms + cross_ms;
+				cost = (int)transaction_bound + egress_ms;
+				gap = Train_SeedSweepAxisGap(gen_seeds[source].origin,
+				    sweep_mins, sweep_maxs, (unsigned int)axis, source_side);
+				if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
+				    cost > cost_by_axis[axis] ||
+				    (cost == cost_by_axis[axis] &&
+				     gap >= gap_by_axis_side[axis][source_side]))
+					continue;
+				source_by_axis_side[axis][source_side] = source;
+				gap_by_axis_side[axis][source_side] = gap;
+				VectorCopy(gen_seeds[reverse_source].origin,
+				    contact_by_axis_side[axis][source_side]);
+				destination_by_axis[axis] = reverse_destination;
+				cost_by_axis[axis] = cost;
+				cross_ms_by_axis[axis] = cross_ms;
+				transaction_bound_by_axis[axis] = transaction_bound;
+			}
+			DoorPose_Restore(&saved, 1);
+		}
+		for (axis = 0; axis < 3; axis++)
+		{
+			sg_train_gate_side_t source_side =
+			    SG_TrainGateUniqueSourceSide(source_side_mask[axis]);
+
+			if (axis != motion_axis && source_side != SG_TRAIN_GATE_SIDE_NONE &&
+			    source_by_axis_side[axis][source_side] >= 0 &&
+			    destination_by_axis[axis] >= 0)
+				closure_axis_mask |= 1U << axis;
+		}
+		passage_axis = SG_TrainGateUniquePassageAxis(closure_axis_mask,
+		    (unsigned int)motion_axis);
+		if (passage_axis >= 0)
+		{
+			sg_train_gate_side_t source_side =
+			    SG_TrainGateUniqueSourceSide(source_side_mask[passage_axis]);
+
+			best_source = source_by_axis_side[passage_axis][source_side];
+			best_destination = destination_by_axis[passage_axis];
+			best_cost = cost_by_axis[passage_axis];
+			best_transaction_bound = transaction_bound_by_axis[passage_axis];
+			VectorCopy(contact_by_axis_side[passage_axis][source_side],
+			    best_contact);
+
+			selected_destination[0] = best_destination;
+			selected_cost[0] = best_cost;
+			selected_cross[0] = best_destination;
+			selected_cross_ms[0] = cross_ms_by_axis[passage_axis];
+			if (cross_ms_by_axis[passage_axis] > 0 &&
+			    best_cost > cross_ms_by_axis[passage_axis])
+			{
+				sg_train_gate_side_t destination_side =
+				    SG_TrainGateOppositeSide(source_side);
+				int pre_cross_cost =
+				    best_cost - cross_ms_by_axis[passage_axis];
+				int missing = 3 & ~topology->objective_mask[best_source];
+				int cross_destination;
+				door_pose_t saved;
+
+				Train_PoseAt(train, open, &saved);
+				for (cross_destination = 0;
+				     cross_destination < gen_num_seeds; cross_destination++)
+				{
+					vec3_t cross_delta;
+					int cross_ms;
+					int destination;
+
+					if (!gen_source_stable[cross_destination] ||
+					    gen_source_waterlevel[cross_destination] != 0 ||
+					    Train_SeedSweepAxisSide(
+					        gen_seeds[cross_destination].origin,
+					        sweep_mins, sweep_maxs,
+					        (unsigned int)passage_axis) != destination_side)
+						continue;
+					VectorSubtract(gen_seeds[cross_destination].origin,
+					    best_contact, cross_delta);
+					if (cross_delta[0] * cross_delta[0] +
+					        cross_delta[1] * cross_delta[1] >
+					            1600.0f * 1600.0f ||
+					    fabsf(cross_delta[2]) > 256.0f ||
+					    !SG_OracleTrainGateCross(best_contact,
+					        gen_seeds[cross_destination].origin, button, train,
+					        sweep_mins, sweep_maxs,
+					        (unsigned int)passage_axis, &cross_ms))
+						continue;
+					for (destination = 0; destination < gen_num_seeds;
+					     destination++)
+					{
+						vec3_t exit_delta;
+						int new_bits;
+						int crosses;
+						int exit_ms;
+						int cost;
+						int slot;
+
+						if (destination == cross_destination ||
+						    !gen_source_stable[destination] ||
+						    gen_source_waterlevel[destination] != 0 ||
+						    !Gen_SeedHasOutgoing(destination) ||
+						    Train_SeedSweepAxisSide(
+						        gen_seeds[destination].origin, sweep_mins,
+						        sweep_maxs, (unsigned int)passage_axis) !=
+						        destination_side)
+							continue;
+						new_bits =
+						    topology->objective_mask[destination] & missing;
+						crosses = topology->component[destination] >= 0 &&
+						    topology->component[destination] !=
+						        topology->component[best_source];
+						if (!new_bits && (missing != 0 || !crosses))
+							continue;
+						VectorSubtract(
+						    gen_seeds[destination].origin,
+						    gen_seeds[cross_destination].origin,
+						    exit_delta);
+						if (exit_delta[0] * exit_delta[0] +
+						        exit_delta[1] * exit_delta[1] >
+						        1600.0f * 1600.0f ||
+						    fabsf(exit_delta[2]) > 256.0f ||
+						    !SG_OracleTrainGateExit(
+						        gen_seeds[cross_destination].origin,
+						        gen_seeds[destination].origin,
+						        button, train,
+						        &exit_ms) ||
+						    pre_cross_cost >
+						        RUNE_MAX_COST_MS - cross_ms - exit_ms)
+							continue;
+						cost = pre_cross_cost + cross_ms + exit_ms;
+						for (slot = 1; slot <= 2; slot++)
+							if ((new_bits & (1 << (slot - 1))) &&
+							    cost < selected_cost[slot])
+							{
+								selected_destination[slot] =
+								    destination;
+								selected_cost[slot] = cost;
+								selected_cross[slot] =
+								    cross_destination;
+								selected_cross_ms[slot] = cross_ms;
+							}
+						if (missing == 0 && crosses &&
+						    cost < selected_cost[3])
+						{
+							selected_destination[3] = destination;
+							selected_cost[3] = cost;
+							selected_cross[3] = cross_destination;
+							selected_cross_ms[3] = cross_ms;
+						}
+					}
+				}
+				DoorPose_Restore(&saved, 1);
+			}
+		}
+		if (best_source >= 0 && best_destination >= 0)
+		{
+			int slot;
+
+			for (slot = 0; slot < TRAIN_SHOOT_DEST_SLOTS; slot++)
+			{
+				int before = gen_num_links;
+				int earlier;
+
+				if (selected_destination[slot] < 0 || selected_cross[slot] < 0 ||
+				    selected_cost[slot] <= 0 ||
+				    selected_cost[slot] > RUNE_MAX_COST_MS)
+					continue;
+				for (earlier = 0; earlier < slot; earlier++)
+					if (selected_destination[earlier] ==
+					        selected_destination[slot])
+						break;
+				if (earlier < slot)
+					continue;
+				Link_Add(best_source, selected_destination[slot], RL_TRAIN,
+				    (short)selected_cost[slot], 0);
+				if (gen_num_links > before)
+				{
+					rune_link_t *link = &gen_links[gen_num_links - 1];
+
+					VectorCopy(best_contact, link->anchor);
+					VectorCopy(gen_seeds[selected_cross[slot]].origin,
+					    link->mechanism_anchor);
+					link->sweep_clear_ms = (uint16_t)selected_cross_ms[slot];
+					link->mode = RLCM_PREOPEN;
+					if (!Mechanism_BindTrain(link, button, train, closed, open,
+					        best_transaction_bound,
+					        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT))
+						gen_num_links--;
+					else
+						gen_train_links++;
+				}
+			}
+		}
+	}
+	#undef TRAIN_SHOOT_DEST_SLOTS
 }
 
 /* Link one canonical door team at its exact STATE_TOP pose for a synchronous
@@ -6682,6 +7667,9 @@ static void Prove_BaseLinks(door_topology_t *topology)
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
 		Link_Pushes();
+		Link_Trains();
+		Link_TrainRides();
+		Link_TrainShootButtons(topology);
 		Link_Declare_Tail(declared_mark);
 	}
 
@@ -7352,6 +8340,7 @@ qboolean Rune_Generate(const char *mapname)
 	gen_first_water = -1;
 	gen_num_water = 0;
 	gen_lift_links = gen_tele_links = gen_door_links = gen_push_links = 0;
+	gen_train_links = 0;
 	gen_button_door_links = 0;
 	gen_swim_links = 0;
 	gen_door_drop_trials = gen_door_drop_proofs = 0;
@@ -7523,11 +8512,11 @@ qboolean Rune_Generate(const char *mapname)
 	sg_host.dprint("rune: geodrop nolip=%d fenced=%d flew=%d landedsteps=%d won=%d\n",
 	           dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won);
 	sg_host.dprint("rune: envelopes drop=%d hook=%d; declared=%d "
-	           "(lift=%d tele=%d door=%d button-door=%d push=%d); "
+	           "(lift=%d tele=%d door=%d button-door=%d push=%d train=%d); "
 	           "plat-down drop=%d unlinked=%d; momentum=%d waypoints=%d\n",
 	           gen_env_drop, gen_env_hook, gen_declared_links,
 	           gen_lift_links, gen_tele_links, gen_door_links,
-	           gen_button_door_links, gen_push_links,
+	           gen_button_door_links, gen_push_links, gen_train_links,
 	           gen_lift_down_drop, gen_lift_down_none, gen_momentum_links,
 	           gen_waypoint_links);
 	sg_host.dprint("rune: door-drop probe trials=%d proofs=%d\n",

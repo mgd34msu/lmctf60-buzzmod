@@ -42,6 +42,10 @@ BUTTON_LIVE_TEST_ALL_ARTIFACTS := \
 	.sg_button_live_test.gnu.o .sg_button_live_test.gnu.d \
 	.sg_button_live_under_test.gnu.o .sg_button_live_under_test.gnu.d \
 	$(BUTTON_LIVE_TEST_OBJS) $(BUTTON_LIVE_TEST_DEPS)
+TRAIN_GATE_LIVE_TEST_BIN := sg_train_gate_live_test.make
+TRAIN_GATE_LIVE_TEST_OBJS := .sg_train_gate_live_test.make.o \
+	.sg_train_gate_live_under_test.make.o
+TRAIN_GATE_LIVE_TEST_DEPS := $(TRAIN_GATE_LIVE_TEST_OBJS:.o=.d)
 BUTTON_GAME_TEST_BIN := sg_button_game_test.make
 BUTTON_GAME_TEST_OBJS := .sg_button_game_test.make.o \
 	.sg_button_game_live_under_test.make.o \
@@ -652,6 +656,7 @@ PUSH_LIVE_TEST_OBJS := .sg_push_live_test.make.o \
 	.sg_push_live_under_test.make.o .sg_push_falling_under_test.make.o
 PUSH_LIVE_TEST_DEPS := $(PUSH_LIVE_TEST_OBJS:.o=.d)
 PUSH_GAME_INTEGRATION_TEST := tests/test_push_game_integration.py
+TRAIN_GATE_GAME_INTEGRATION_TEST := tests/test_train_gate_game_integration.py
 ROCKETJUMP_CADENCE_TEST_BIN := sg_rocketjump_cadence_test.make
 ROCKETJUMP_CADENCE_TEST_OBJS := .sg_rocketjump_cadence_test.make.o \
 	.sg_rocketjump_cadence_under_test.make.o
@@ -1124,6 +1129,8 @@ OBJS := \
 	slipgate/sg_rocketjump_game.o \
 	slipgate/sg_push_live.o \
 	slipgate/sg_push_game.o \
+	slipgate/sg_train_gate_live.o \
+	slipgate/sg_train_gate_game.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -1220,7 +1227,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-install-test rune-proof-test rune-objective-diagnostics-test \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test \
-	push-game-integration-test \
+	push-game-integration-test train-gate-game-integration-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test \
@@ -1330,6 +1337,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(COMPOUND_TEST_DEPS)
 -include $(MOVER_LEASE_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
+-include $(TRAIN_GATE_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)
@@ -1550,6 +1558,10 @@ $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(BUTTON_LIVE_TEST_OBJS) $(LIBS)
 
+$(TRAIN_GATE_LIVE_TEST_BIN): $(TRAIN_GATE_LIVE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(TRAIN_GATE_LIVE_TEST_OBJS) $(LIBS)
+
 $(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LIBS)
@@ -1698,6 +1710,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_button_live_under_test.make.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_train_gate_live_test.make.o: tests/sg_train_gate_live_test.c \
+		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_train_gate_live_under_test.make.o: slipgate/sg_train_gate_live.c \
+		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -3417,6 +3443,10 @@ push-game-integration-test: $(PUSH_GAME_INTEGRATION_TEST)
 	$(E) [TEST] push game integration
 	$(Q)python3 -B $(PUSH_GAME_INTEGRATION_TEST)
 
+train-gate-game-integration-test: $(TRAIN_GATE_GAME_INTEGRATION_TEST)
+	$(E) [TEST] train gate game integration
+	$(Q)python3 -B $(TRAIN_GATE_GAME_INTEGRATION_TEST)
+
 rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
 		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \
 		tools/rune-corpus-maps.txt
@@ -3434,6 +3464,10 @@ mover-lease-test: $(MOVER_LEASE_TEST_BIN)
 button-live-test: $(BUTTON_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(BUTTON_LIVE_TEST_BIN)
+
+train-gate-live-test: $(TRAIN_GATE_LIVE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(TRAIN_GATE_LIVE_TEST_BIN)
 
 button-game-test: $(BUTTON_GAME_TEST_BIN)
 	$(E) [TEST] $<

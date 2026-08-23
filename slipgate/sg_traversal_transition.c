@@ -6,6 +6,7 @@
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_traversal_transition.h"
+#include "slipgate/sg_train_gate_game.h"
 
 qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 {
@@ -18,6 +19,8 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 	if (action == RL_DOOR_HOOK && bot->compound_hook_live.guard_owned)
 		return true;
 	if (action == RL_PUSH && SG_PushLiveOwns(&bot->push))
+		return true;
+	if (action == RL_TRAIN && SG_TrainGateGameOwns(bot))
 		return true;
 	memset(&state, 0, sizeof(state));
 	state.action = action;
@@ -115,6 +118,9 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		break;
 	case RL_PUSH:
 		SG_PushLiveReset(&bot->push);
+		break;
+	case RL_TRAIN:
+		SG_TrainGateGameReset(bot);
 		break;
 	case RL_LIFT:
 	case RL_TELEPORT:

@@ -2,6 +2,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_train_gate_game.h"
 
 /*
 =========================================================
@@ -759,7 +760,7 @@ void button_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *s
 
 void button_killed (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
-	if (!SG_AuthorizeButtonUse(self, attacker))
+	if (!SG_AuthorizeButtonShot(self, inflictor, attacker, damage))
 		return;
 	self->activator = attacker;
 	self->health = self->max_health;
@@ -1662,6 +1663,8 @@ void func_train_find (edict_t *self)
 
 void train_use (edict_t *self, edict_t *other, edict_t *activator)
 {
+	if (!SG_AuthorizeTrainUse(self, other, activator))
+		return;
 	self->activator = activator;
 
 	if (self->spawnflags & TRAIN_START_ON)

@@ -66,6 +66,18 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	abort();
 }
 
+int SG_TrainGateGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_TrainGateGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+	abort();
+}
+
 void Pmove(pmove_t *pmove);
 
 enum

@@ -148,6 +148,7 @@ typedef enum sg_mech_execution_end_e
 	SG_MECH_EXEC_END_BUTTON_ORIGIN,
 	SG_MECH_EXEC_END_PLATFORM_DESTINATION,
 	SG_MECH_EXEC_END_PLATFORM_ORIGIN,
+	SG_MECH_EXEC_END_TRAIN_CORNER,
 	SG_MECH_EXEC_END_UNKNOWN
 } sg_mech_execution_end_t;
 
@@ -165,6 +166,107 @@ typedef enum sg_mech_platform_profile_e
 	SG_MECH_PLATFORM_PROFILE_STOCK,
 	SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER
 } sg_mech_platform_profile_t;
+
+typedef enum sg_mech_train_gate_pose_e
+{
+	SG_MECH_TRAIN_GATE_CLOSED = 0,
+	SG_MECH_TRAIN_GATE_OPENING,
+	SG_MECH_TRAIN_GATE_OPEN,
+	SG_MECH_TRAIN_GATE_CLOSING,
+	SG_MECH_TRAIN_GATE_INTERRUPTED,
+	SG_MECH_TRAIN_GATE_INVALID
+} sg_mech_train_gate_pose_t;
+
+/* Neutralized stock func_train facts.  The adapter derives these booleans
+ * from exact entity identities and terminal origins. */
+typedef struct sg_mech_train_gate_state_s
+{
+	uint16_t controller_kind;
+	uint16_t node_kind;
+	uint16_t think_role;
+	uint16_t end_role;
+	int fixed_callbacks_match;
+	int at_closed;
+	int at_open;
+	int target_is_closed;
+	int target_is_open;
+	int target_ent_is_none;
+	int target_ent_is_closed;
+	int target_ent_is_open;
+	int start_on;
+	int moving;
+	int stopped;
+	int nextthink_pending;
+} sg_mech_train_gate_state_t;
+
+static inline sg_mech_train_gate_pose_t SG_MechTrainGatePose(
+	const sg_mech_train_gate_state_t *state)
+{
+	int moving_think;
+	int target_count;
+	int target_ent_count;
+
+	if (!state || !state->fixed_callbacks_match ||
+	    state->controller_kind != SG_MECHANISM_CONTROLLER_TRAIN ||
+	    state->node_kind != SG_MECH_NODE_TRAIN)
+		return SG_MECH_TRAIN_GATE_INVALID;
+	target_count = !!state->target_is_closed + !!state->target_is_open;
+	target_ent_count = !!state->target_ent_is_none +
+		!!state->target_ent_is_closed + !!state->target_ent_is_open;
+	if (target_count != 1 || target_ent_count != 1 ||
+	    (state->at_closed && state->at_open))
+		return SG_MECH_TRAIN_GATE_INVALID;
+	moving_think = state->think_role == SG_MECH_EXEC_THINK_LINEAR_BEGIN ||
+		state->think_role == SG_MECH_EXEC_THINK_LINEAR_FINAL ||
+		state->think_role == SG_MECH_EXEC_THINK_LINEAR_DONE ||
+		state->think_role == SG_MECH_EXEC_THINK_ACCELERATED;
+	if (state->at_closed && state->target_is_open &&
+	    state->target_ent_is_none && !state->start_on && !state->moving &&
+	    state->stopped && !state->nextthink_pending &&
+	    state->think_role == SG_MECH_EXEC_THINK_SEALED &&
+	    state->end_role == SG_MECH_EXEC_END_NONE)
+		return SG_MECH_TRAIN_GATE_CLOSED;
+	if (state->at_closed && state->target_is_closed &&
+	    state->target_ent_is_open && !state->start_on && !state->moving &&
+	    state->stopped && !state->nextthink_pending && moving_think &&
+	    state->end_role == SG_MECH_EXEC_END_TRAIN_CORNER)
+		return SG_MECH_TRAIN_GATE_CLOSED;
+	if (state->target_is_closed && state->target_ent_is_open &&
+	    state->start_on && state->moving &&
+	    state->nextthink_pending && moving_think &&
+	    state->end_role == SG_MECH_EXEC_END_TRAIN_CORNER && !state->at_open)
+		return SG_MECH_TRAIN_GATE_OPENING;
+	if (state->at_open && state->target_is_open &&
+	    state->target_ent_is_closed && !state->start_on && !state->moving &&
+	    state->stopped && !state->nextthink_pending && moving_think &&
+	    state->end_role == SG_MECH_EXEC_END_TRAIN_CORNER)
+		return SG_MECH_TRAIN_GATE_OPEN;
+	if (state->target_is_open && state->target_ent_is_closed &&
+	    state->start_on && state->moving &&
+	    state->nextthink_pending && moving_think &&
+	    state->end_role == SG_MECH_EXEC_END_TRAIN_CORNER && !state->at_closed)
+		return SG_MECH_TRAIN_GATE_CLOSING;
+	if (!state->at_closed && !state->at_open && !state->start_on &&
+	    !state->moving && state->stopped && !state->nextthink_pending &&
+	    moving_think && state->end_role == SG_MECH_EXEC_END_TRAIN_CORNER)
+		return SG_MECH_TRAIN_GATE_INTERRUPTED;
+	return SG_MECH_TRAIN_GATE_INVALID;
+}
+
+static inline int SG_MechTrainGateExecutionStateValid(
+	const sg_mech_train_gate_state_t *state)
+{
+	sg_mech_train_gate_pose_t pose = SG_MechTrainGatePose(state);
+
+	return pose == SG_MECH_TRAIN_GATE_CLOSED ||
+	       pose == SG_MECH_TRAIN_GATE_OPENING ||
+	       pose == SG_MECH_TRAIN_GATE_OPEN;
+}
+
+int SG_MechCatalogTrainGatePose(uint32_t key,
+	sg_mech_train_gate_pose_t *pose_out);
+int SG_MechCatalogTrainGateSweep(uint32_t key, float mins_out[3],
+	float maxs_out[3]);
 
 typedef struct sg_mech_execution_state_s
 {
@@ -254,7 +356,9 @@ static inline int SG_MechExecutionStateValid(
 		        (state->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
 		         state->end_role == SG_MECH_EXEC_END_DOOR_ORIGIN));
 	}
-	if (state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	if ((state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
 	    state->node_kind == SG_MECH_NODE_BUTTON)
 	{
 		if (!state->touch_matches || state->touch_cleared ||

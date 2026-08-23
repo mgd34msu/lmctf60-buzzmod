@@ -20,6 +20,11 @@
 #define TEST_FILE_BYTES 571U
 #define TEST_FRAGMENTS 11U
 
+#define DUAL_BUTTON_NODES 3U
+#define DUAL_BUTTON_EDGES 4U
+#define DUAL_BUTTON_PLANS 2U
+#define DUAL_BUTTON_LINKS 3U
+
 static int failures;
 
 #define CHECK(expression) do { \
@@ -88,6 +93,29 @@ typedef struct fixture_s
 	uint8_t string_marks[64];
 	sg_rune_codec_workspace_t workspace;
 } fixture_t;
+
+typedef struct dual_button_fixture_s
+{
+	sg_rune_codec_identity_t identity;
+	sg_rune_codec_seed_t seeds[TEST_SEEDS];
+	sg_rune_codec_link_t links[DUAL_BUTTON_LINKS];
+	sg_rune_codec_activation_node_t nodes[DUAL_BUTTON_NODES];
+	sg_rune_codec_activation_edge_t edges[DUAL_BUTTON_EDGES];
+	sg_rune_codec_activation_plan_t plans[DUAL_BUTTON_PLANS];
+	unsigned char strings[64];
+	uint64_t graph_link_keys[DUAL_BUTTON_LINKS];
+	uint8_t graph_source_marks[TEST_SEEDS];
+	uint32_t plan_references[DUAL_BUTTON_PLANS];
+	uint32_t node_references[DUAL_BUTTON_NODES];
+	uint32_t node_heads[DUAL_BUTTON_NODES];
+	uint32_t node_indegrees[DUAL_BUTTON_NODES];
+	uint32_t node_generations[DUAL_BUTTON_NODES];
+	uint32_t node_touched[DUAL_BUTTON_NODES];
+	uint32_t node_queue[DUAL_BUTTON_NODES];
+	uint32_t edge_next[DUAL_BUTTON_EDGES];
+	uint8_t string_marks[64];
+	sg_rune_codec_workspace_t workspace;
+} dual_button_fixture_t;
 
 typedef struct memory_sink_s
 {
@@ -245,6 +273,72 @@ static void FixtureInit(fixture_t *fixture)
 		TEST_EDGES, &closure_crc) == RLCODEC_OK);
 	fixture->plans[0].closure_crc32 = closure_crc;
 	memcpy(fixture->strings, canonical_strings, TEST_STRING_BYTES);
+}
+
+static void DualButtonWorkspace(dual_button_fixture_t *fixture)
+{
+	sg_rune_codec_workspace_t *workspace = &fixture->workspace;
+
+	memset(workspace, 0, sizeof(*workspace));
+	workspace->graph_link_keys = fixture->graph_link_keys;
+	workspace->graph_link_key_capacity = DUAL_BUTTON_LINKS;
+	workspace->graph_source_marks = fixture->graph_source_marks;
+	workspace->graph_source_mark_capacity = TEST_SEEDS;
+	workspace->plan_references = fixture->plan_references;
+	workspace->plan_reference_capacity = DUAL_BUTTON_PLANS;
+	workspace->node_references = fixture->node_references;
+	workspace->node_reference_capacity = DUAL_BUTTON_NODES;
+	workspace->node_heads = fixture->node_heads;
+	workspace->node_head_capacity = DUAL_BUTTON_NODES;
+	workspace->node_indegrees = fixture->node_indegrees;
+	workspace->node_indegree_capacity = DUAL_BUTTON_NODES;
+	workspace->node_generations = fixture->node_generations;
+	workspace->node_generation_capacity = DUAL_BUTTON_NODES;
+	workspace->node_touched = fixture->node_touched;
+	workspace->node_touched_capacity = DUAL_BUTTON_NODES;
+	workspace->node_queue = fixture->node_queue;
+	workspace->node_queue_capacity = DUAL_BUTTON_NODES;
+	workspace->edge_next = fixture->edge_next;
+	workspace->edge_next_capacity = DUAL_BUTTON_EDGES;
+	workspace->string_marks = fixture->string_marks;
+	workspace->string_mark_capacity = sizeof(fixture->string_marks);
+}
+
+static void DualButtonInit(dual_button_fixture_t *fixture)
+{
+	fixture_t base;
+	uint32_t closure_crc;
+
+	FixtureInit(&base);
+	memset(fixture, 0, sizeof(*fixture));
+	memcpy(&fixture->identity, &base.identity, sizeof(fixture->identity));
+	memcpy(fixture->seeds, base.seeds, sizeof(fixture->seeds));
+	fixture->links[0] = base.links[0];
+	fixture->links[1] = base.links[0];
+	fixture->links[1].activation_plan = 1U;
+	fixture->links[2] = base.links[1];
+	fixture->nodes[0] = base.nodes[0];
+	fixture->nodes[1] = base.nodes[1];
+	fixture->nodes[2] = base.nodes[0];
+	fixture->nodes[2].key = 3U;
+	fixture->edges[0] = base.edges[0];
+	fixture->edges[1] = base.edges[0];
+	fixture->edges[1].from_key = 3U;
+	fixture->edges[2] = fixture->edges[0];
+	fixture->edges[3] = fixture->edges[1];
+	fixture->plans[0] = base.plans[0];
+	fixture->plans[0].first_edge = 2U;
+	CHECK(SG_RuneCodecPlanClosureCRC32(fixture->edges, 2U, 1U,
+		DUAL_BUTTON_EDGES, &closure_crc) == RLCODEC_OK);
+	fixture->plans[0].closure_crc32 = closure_crc;
+	fixture->plans[1] = fixture->plans[0];
+	fixture->plans[1].entry_key = 3U;
+	fixture->plans[1].first_edge = 3U;
+	CHECK(SG_RuneCodecPlanClosureCRC32(fixture->edges, 3U, 1U,
+		DUAL_BUTTON_EDGES, &closure_crc) == RLCODEC_OK);
+	fixture->plans[1].closure_crc32 = closure_crc;
+	memcpy(fixture->strings, canonical_strings, TEST_STRING_BYTES);
+	DualButtonWorkspace(fixture);
 }
 
 static memory_sink_t MakeSink(unsigned char *bytes, size_t capacity)
@@ -737,6 +831,55 @@ static void TestMutationDetection(void)
 	}
 }
 
+static sg_rune_artifact_write_result_t WriteDualButtonFixture(
+	dual_button_fixture_t *fixture, memory_sink_t *sink)
+{
+	DualButtonWorkspace(fixture);
+	return SG_RuneArtifactWrite(&fixture->identity, fixture->seeds, TEST_SEEDS,
+		fixture->links, DUAL_BUTTON_LINKS, fixture->nodes,
+		DUAL_BUTTON_NODES, fixture->edges, DUAL_BUTTON_EDGES,
+		fixture->plans, DUAL_BUTTON_PLANS, fixture->strings,
+		TEST_STRING_BYTES, &fixture->workspace, MemorySink, sink);
+}
+
+static void TestActivationPlanLinkIdentity(void)
+{
+	dual_button_fixture_t fixture;
+	dual_button_fixture_t decoded;
+	sg_rune_codec_header_t header;
+	unsigned char output[1024];
+	memory_sink_t sink = MakeSink(output, sizeof(output));
+	sg_rune_artifact_write_result_t result;
+
+	DualButtonInit(&fixture);
+	result = WriteDualButtonFixture(&fixture, &sink);
+	CHECK_RESULT(result, RLCODEC_OK, SG_RUNE_ARTIFACT_WRITE_STAGE_DONE,
+		SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
+	DualButtonInit(&decoded);
+	CHECK(SG_RuneCodecDecode(output, sink.size, &fixture.identity, &header,
+		decoded.seeds, TEST_SEEDS, decoded.links, DUAL_BUTTON_LINKS,
+		decoded.nodes, DUAL_BUTTON_NODES, decoded.edges,
+		DUAL_BUTTON_EDGES, decoded.plans, DUAL_BUTTON_PLANS,
+		decoded.strings, sizeof(decoded.strings), &decoded.workspace) ==
+		RLCODEC_OK);
+	CHECK(header.num_links == DUAL_BUTTON_LINKS);
+	CHECK(decoded.links[0].source == decoded.links[1].source);
+	CHECK(decoded.links[0].destination == decoded.links[1].destination);
+	CHECK(decoded.links[0].action == decoded.links[1].action);
+	CHECK(decoded.links[0].activation_plan == 0U);
+	CHECK(decoded.links[1].activation_plan == 1U);
+	CHECK(decoded.plans[0].mover_key == decoded.plans[1].mover_key);
+
+	DualButtonInit(&fixture);
+	fixture.links[1].activation_plan = fixture.links[0].activation_plan;
+	sink = MakeSink(output, sizeof(output));
+	result = WriteDualButtonFixture(&fixture, &sink);
+	CHECK_RESULT(result, RLW_DUPLICATE_LINK,
+		SG_RUNE_ARTIFACT_WRITE_STAGE_VALIDATE,
+		SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
+	CHECK(result.bytes_written == 0U && sink.calls == 0U);
+}
+
 int main(void)
 {
 	TestCanonicalParity();
@@ -747,6 +890,7 @@ int main(void)
 	TestWorkspaceAliasing();
 	TestSinkFailures();
 	TestMutationDetection();
+	TestActivationPlanLinkIdentity();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_rune_artifact_writer_test: %d failure(s)\n",

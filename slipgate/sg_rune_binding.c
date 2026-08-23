@@ -109,6 +109,51 @@ static uint32_t Binding_EdgeCount(const rune_t *rune,
 	return count;
 }
 
+static int Binding_TrainTerminals(const rune_t *rune,
+	const rune_mechanism_plan_t *plan,
+	const rune_mechanism_node_t **closed_out,
+	const rune_mechanism_node_t **open_out)
+{
+	const rune_mechanism_edge_t *button_target;
+	const rune_mechanism_edge_t *train_route;
+	const rune_mechanism_edge_t *closed_route;
+	const rune_mechanism_edge_t *open_route;
+	const rune_mechanism_node_t *closed;
+	const rune_mechanism_node_t *open;
+
+	if (closed_out)
+		*closed_out = NULL;
+	if (open_out)
+		*open_out = NULL;
+	if (!rune || !plan || !closed_out || !open_out || plan->num_edges != 4U)
+		return 0;
+	button_target = &rune->mechanism_edges[plan->first_edge + 0U];
+	train_route = &rune->mechanism_edges[plan->first_edge + 1U];
+	closed_route = &rune->mechanism_edges[plan->first_edge + 2U];
+	open_route = &rune->mechanism_edges[plan->first_edge + 3U];
+	closed = SG_RuneMechanismNodeByKey(rune, closed_route->from_key);
+	open = SG_RuneMechanismNodeByKey(rune, closed_route->to_key);
+	if (!closed || !open ||
+	    !Binding_EdgeMatches(button_target, plan->entry_key,
+	        plan->mover_key, SG_MECH_EDGE_TARGET) ||
+	    !Binding_EdgeMatches(train_route, plan->mover_key, open->key,
+	        SG_MECH_EDGE_ROUTE_TARGET) ||
+	    !Binding_EdgeMatches(closed_route, closed->key, open->key,
+	        SG_MECH_EDGE_ROUTE_TARGET) ||
+	    !Binding_EdgeMatches(open_route, open->key, closed->key,
+	        SG_MECH_EDGE_ROUTE_TARGET) ||
+	    button_target->ordinal != 0U || train_route->ordinal != 0U ||
+	    closed_route->ordinal != 0U || open_route->ordinal != 0U ||
+	    button_target->delay_ms != 0U || train_route->delay_ms != 0U ||
+	    closed_route->delay_ms != 0U || open_route->delay_ms != 0U ||
+	    closed == open || closed->kind != SG_MECH_NODE_PATH_CORNER ||
+	    open->kind != SG_MECH_NODE_PATH_CORNER)
+		return 0;
+	*closed_out = closed;
+	*open_out = open;
+	return 1;
+}
+
 static const rune_mechanism_node_t *Binding_TeleportDestination(
 	const rune_t *rune, const rune_mechanism_plan_t *plan)
 {
@@ -213,6 +258,35 @@ static uint32_t Binding_PlatformMoverCount(const rune_t *rune,
 	return count;
 }
 
+static int Binding_NodeExecutable(const rune_mechanism_node_t *node)
+{
+	return node && (node->flags & SG_MECH_NODEF_INVENTORY_ONLY) == 0U &&
+	       node->touch_callback != SG_MECH_CALLBACK_UNKNOWN &&
+	       node->use_callback != SG_MECH_CALLBACK_UNKNOWN &&
+	       node->think_callback != SG_MECH_CALLBACK_UNKNOWN &&
+	       node->blocked_callback != SG_MECH_CALLBACK_UNKNOWN;
+}
+
+static int Binding_TrainCornerShape(const rune_mechanism_node_t *corner)
+{
+	return Binding_NodeExecutable(corner) &&
+	       corner->kind == SG_MECH_NODE_PATH_CORNER &&
+	       corner->flags == (SG_MECH_NODEF_TOUCHABLE |
+	           SG_MECH_NODEF_ONE_SHOT) && corner->spawnflags == 0U &&
+	       corner->touch_callback == SG_MECH_CALLBACK_PATH_CORNER_TOUCH &&
+	       corner->use_callback == SG_MECH_CALLBACK_NONE &&
+	       corner->think_callback == SG_MECH_CALLBACK_NONE &&
+	       corner->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       corner->delay_ms == 0 && corner->wait_ms == -1000 &&
+	       corner->target_offset != 0U && corner->killtarget_offset == 0U;
+}
+
+static int Binding_TrainSealedThink(uint16_t callback)
+{
+	return callback == SG_MECH_CALLBACK_NONE ||
+	       callback == SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
+}
+
 static int Binding_ControllerShape(const rune_t *rune,
 	const rune_link_t *link, const rune_mechanism_plan_t *plan,
 	const rune_mechanism_node_t *entry,
@@ -285,6 +359,52 @@ static int Binding_ControllerShape(const rune_t *rune,
 		       Binding_EdgeCount(rune, plan, entry->key, mover->key,
 		           SG_MECH_EDGE_OWNER) == 1U &&
 		       Binding_TeleportDestination(rune, plan) != NULL;
+	case SG_MECHANISM_CONTROLLER_TRAIN:
+	case SG_MECHANISM_CONTROLLER_TRAIN_SHOOT:
+	{
+		const rune_mechanism_node_t *closed;
+		const rune_mechanism_node_t *open;
+		int shoot = plan->controller_kind ==
+			SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
+
+		return link->action == RL_TRAIN && plan->expected_members == 1U &&
+		       plan->cooldown_ms > 0U &&
+		       plan->cooldown_ms <= RUNE_MAX_COST_MS &&
+		       Binding_TrainTerminals(rune, plan, &closed, &open) &&
+		       Binding_NodeExecutable(entry) &&
+		       entry->kind == SG_MECH_NODE_BUTTON &&
+		       entry->flags == (SG_MECH_NODEF_REPEATABLE |
+		           SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		           (shoot ? SG_MECH_NODEF_SHOOTABLE :
+		               SG_MECH_NODEF_TOUCHABLE)) && entry->spawnflags == 0U &&
+		       entry->touch_callback == (shoot ? SG_MECH_CALLBACK_NONE :
+		           SG_MECH_CALLBACK_BUTTON_TOUCH) &&
+		       entry->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
+		       entry->think_callback == SG_MECH_CALLBACK_NONE &&
+		       entry->blocked_callback == SG_MECH_CALLBACK_NONE &&
+		       entry->delay_ms == 0 && entry->wait_ms > 0 &&
+		       entry->target_offset != 0U &&
+		       entry->killtarget_offset == 0U &&
+		       entry->path_target_offset == 0U &&
+		       Binding_NodeExecutable(mover) &&
+		       mover->kind == SG_MECH_NODE_TRAIN &&
+		       mover->flags == (SG_MECH_NODEF_REPEATABLE |
+		           SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER) &&
+		       mover->spawnflags == 2U &&
+		       mover->touch_callback == SG_MECH_CALLBACK_NONE &&
+		       mover->use_callback == SG_MECH_CALLBACK_TRAIN_USE &&
+		       Binding_TrainSealedThink(mover->think_callback) &&
+		       mover->blocked_callback == SG_MECH_CALLBACK_BLOCKED_TRAIN &&
+		       mover->delay_ms == 0 && mover->speed_q8 != 0U &&
+		       mover->speed_q8 == mover->accel_q8 &&
+		       mover->speed_q8 == mover->decel_q8 &&
+		       mover->target_offset != 0U &&
+		       mover->targetname_offset != 0U &&
+		       mover->killtarget_offset == 0U &&
+		       mover->path_target_offset == 0U &&
+		       Binding_TrainCornerShape(closed) &&
+		       Binding_TrainCornerShape(open);
+	}
 	case SG_MECHANISM_CONTROLLER_AUTO_DOOR:
 		return link->action == RL_DOOR &&
 		       entry->kind == SG_MECH_NODE_AUTO_DOOR_TRIGGER &&
@@ -368,6 +488,11 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		plan->entry_key);
 	candidate.mover_node = SG_RuneMechanismNodeByKey(rune,
 		plan->mover_key);
+	if ((plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
+	     plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
+	    !Binding_TrainTerminals(rune, plan, &candidate.destination_node,
+	        &candidate.egress_node))
+		return 0;
 	if (!candidate.entry_node ||
 	    (plan->controller_kind != SG_MECHANISM_CONTROLLER_PUSH &&
 	     !candidate.mover_node) ||
@@ -382,7 +507,14 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 	        candidate.entry_node->key, candidate.entry_node)) ||
 	    (candidate.mover_node &&
 	     !(candidate.mover_entity = SG_MechCatalogResolveEntity(
-	         candidate.mover_node->key, candidate.mover_node))))
+	         candidate.mover_node->key, candidate.mover_node))) ||
+	    (candidate.destination_node &&
+	        !(candidate.destination_entity = SG_MechCatalogResolveEntity(
+	            candidate.destination_node->key,
+	            candidate.destination_node))) ||
+	    (candidate.egress_node &&
+	        !(candidate.egress_entity = SG_MechCatalogResolveEntity(
+	            candidate.egress_node->key, candidate.egress_node))))
 		return 0;
 	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
 	{
@@ -429,8 +561,12 @@ static int Binding_Current(const sg_rune_mechanism_binding_t *binding,
 	       current.link == binding->link && current.plan == binding->plan &&
 	       current.entry_node == binding->entry_node &&
 	       current.mover_node == binding->mover_node &&
+	       current.destination_node == binding->destination_node &&
+	       current.egress_node == binding->egress_node &&
 	       current.entry_entity == binding->entry_entity &&
-	       current.mover_entity == binding->mover_entity;
+	       current.mover_entity == binding->mover_entity &&
+	       current.destination_entity == binding->destination_entity &&
+	       current.egress_entity == binding->egress_entity;
 }
 
 int SG_RuneMechanismBindingCurrent(
@@ -615,7 +751,12 @@ static int Binding_AddMover(const sg_rune_mechanism_binding_t *binding,
 	/* A func_button is itself MOVETYPE_STOP, but a BUTTON_DOOR lease owns the
 	 * authenticated door closure, not the switch brush.  Likewise side-effect
 	 * movers in the callback closure never become door lease members. */
-	if (binding->link->action == RL_DOOR ||
+	if (binding->link->action == RL_TRAIN)
+	{
+		if (node->kind != SG_MECH_NODE_TRAIN)
+			return 1;
+	}
+	else if (binding->link->action == RL_DOOR ||
 	    binding->link->action == RL_BUTTON_DOOR)
 	{
 		if (!Binding_NodeDoorMover(node))
@@ -674,6 +815,7 @@ static int Binding_MoverKeys(const sg_rune_mechanism_binding_t *binding,
 	}
 	if (count == 0U ||
 	    ((binding->link->action == RL_LIFT ||
+	      binding->link->action == RL_TRAIN ||
 	      binding->link->action == RL_DOOR ||
 	      binding->link->action == RL_BUTTON_DOOR) &&
 	     count != (size_t)binding->plan->expected_members))

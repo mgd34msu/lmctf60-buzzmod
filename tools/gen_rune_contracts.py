@@ -27,7 +27,7 @@ _PINNED_ENUMS = {
         4: "RL_SWIM", 5: "RL_LIFT", 6: "RL_TELEPORT",
         7: "RL_ROCKETJUMP", 8: "RL_DOOR", 9: "RL_DOOR_DROP",
         10: "RL_DOOR_SWIM", 11: "RL_DOOR_HOOK",
-        12: "RL_BUTTON_DOOR", 13: "RL_PUSH",
+        12: "RL_BUTTON_DOOR", 13: "RL_PUSH", 14: "RL_TRAIN",
     },
     "provenances": {
         0: "RL_PROVEN", 1: "RL_OBSERVED", 2: "RL_ADJUSTED",
@@ -50,7 +50,7 @@ _PINNED_ENUMS = {
         3: "RLAP_HOOK_CONTROL", 4: "RLAP_WORLD",
         5: "RLAP_TELEPORT_PAD", 6: "RLAP_DOOR_WAIT",
         7: "RLAP_ROCKET_CONTROL", 8: "RLAP_DOOR_PREOPEN_CONTACT",
-        9: "RLAP_DOOR_RIDE_INGRESS_LIP",
+        9: "RLAP_DOOR_RIDE_INGRESS_LIP", 10: "RLAP_TRAIN_CROSS",
     },
     "control_policies": {
         0: "RLCP_RUN", 1: "RLCP_JUMP", 2: "RLCP_DROP",
@@ -59,6 +59,7 @@ _PINNED_ENUMS = {
     },
     "mechanism_policies": {
         0: "RLMP_NONE", 1: "RLMP_DOOR_WORLD_FIXED_1_8",
+        2: "RLMP_TRAIN_WORLD_FIXED_1_8",
     },
     "field_bias_policies": {
         0: "RLFB_NONE", 1: "RLFB_FIXED", 2: "RLFB_ROPE_CVAR",
@@ -163,7 +164,7 @@ _PINNED_PROOF_LAW = {
 }
 _PINNED_RUNTIME_SUPPORT = {
 	0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1,
-	8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1,
+	8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1,
 }
 _FROZEN_BASE_ACTION_COUNT = 12
 _PINNED_MECHANISM_CONTROLLERS = {
@@ -175,6 +176,8 @@ _PINNED_MECHANISM_CONTROLLERS = {
     5: ("SG_MECHANISM_CONTROLLER_PLATFORM", 0xD),
     6: ("SG_MECHANISM_CONTROLLER_TELEPORT", 0x5),
     7: ("SG_MECHANISM_CONTROLLER_PUSH", 0x5),
+    8: ("SG_MECHANISM_CONTROLLER_TRAIN", 0xD),
+    9: ("SG_MECHANISM_CONTROLLER_TRAIN_SHOOT", 0x1C),
 }
 _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
     0: (1, 0, 0, ()),
@@ -191,6 +194,7 @@ _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
 	11: (1, 0, 11, ()),
     12: (1, 1, 12, ((3, 2),)),
     13: (1, 1, 13, ((7, 1),)),
+    14: (1, 1, 14, ((8, 1), (9, 1))),
 }
 
 
@@ -711,7 +715,7 @@ def validate_document(document):
                     action["ride_mechanism_anchor_policy"] != 0 or
                     action["mode_mask"] != 1):
                 _fail(where, "ordinary actions require zero mechanism anchors and NONE mode")
-        else:
+        elif mechanism == 1:
             required = 1 | 4 | 8 | 16 | 32 | 64
             if action["mode_mask"] & 1 or not action["trait_mask"] & required == required:
                 _fail(where, "mechanism action lacks atomic door-lease traits or uses NONE mode")
@@ -720,6 +724,15 @@ def validate_document(document):
             if (action["preopen_mechanism_anchor_policy"] != (8 if preopen_enabled else 0) or
                     action["ride_mechanism_anchor_policy"] != (9 if ride_enabled else 0)):
                 _fail(where, "mode-specific mechanism anchor policy mismatch")
+        elif mechanism == 2:
+            required = 1 | 4 | 8 | 16 | 32
+            if (action["trait_mask"] & required != required or
+                    action["mode_mask"] != ((1 << 1) | (1 << 2)) or
+                    action["preopen_mechanism_anchor_policy"] != 10 or
+                    action["ride_mechanism_anchor_policy"] != 4):
+                _fail(where, "train mechanism requires crossing and ride waypoints")
+        else:
+            _fail(where, "unknown mechanism policy")
 
     _validate_action_cycles(actions)
     for action in actions:
