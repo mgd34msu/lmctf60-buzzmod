@@ -4024,7 +4024,7 @@ static void Link_Trains(void)
 				    fabsf(egress_delta[2]) > 256.0f ||
 				    !Train_OppositeSide(contact,
 				        gen_seeds[destination].origin, sweep_mins, sweep_maxs) ||
-				    !SG_OracleTrainGateEgress(contact,
+				    !SG_OracleTrainGateEgress(contact, contact,
 				        gen_seeds[destination].origin, button, train,
 				        sweep_mins, sweep_maxs, 3U, &egress_ms))
 					continue;
@@ -4174,7 +4174,8 @@ static void Link_TrainShootButtons(
 			{
 				sg_train_gate_side_t source_side;
 				sg_train_gate_side_t destination_side;
-				vec3_t delta;
+				vec3_t entry_delta;
+				vec3_t egress_delta;
 				uint32_t transaction_bound;
 				int egress_ms;
 				int cost;
@@ -4203,11 +4204,18 @@ static void Link_TrainShootButtons(
 				transaction_bound = opening_bound + (uint32_t)flight_ms + 1100U;
 				if (transaction_bound > RUNE_MAX_COST_MS)
 					continue;
+				VectorSubtract(gen_seeds[reverse_source].origin,
+				    gen_seeds[source].origin, entry_delta);
 				VectorSubtract(gen_seeds[reverse_destination].origin,
-				    gen_seeds[source].origin, delta);
-				if (delta[0] * delta[0] + delta[1] * delta[1] >
-				        1600.0f * 1600.0f || fabsf(delta[2]) > 256.0f ||
+				    gen_seeds[reverse_source].origin, egress_delta);
+				if (entry_delta[0] * entry_delta[0] +
+				        entry_delta[1] * entry_delta[1] > 1600.0f * 1600.0f ||
+				    fabsf(entry_delta[2]) > 256.0f ||
+				    egress_delta[0] * egress_delta[0] +
+				        egress_delta[1] * egress_delta[1] > 1600.0f * 1600.0f ||
+				    fabsf(egress_delta[2]) > 256.0f ||
 				    !SG_OracleTrainGateEgress(gen_seeds[source].origin,
+				        gen_seeds[reverse_source].origin,
 				        gen_seeds[reverse_destination].origin, button, train,
 				        sweep_mins, sweep_maxs, (unsigned int)axis, &egress_ms))
 					continue;
@@ -4221,7 +4229,7 @@ static void Link_TrainShootButtons(
 					continue;
 				source_by_axis_side[axis][source_side] = source;
 				gap_by_axis_side[axis][source_side] = gap;
-				VectorCopy(contact,
+				VectorCopy(gen_seeds[reverse_source].origin,
 				    contact_by_axis_side[axis][source_side]);
 				destination_by_axis[axis] = reverse_destination;
 				cost_by_axis[axis] = cost;

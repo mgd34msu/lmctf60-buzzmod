@@ -56,6 +56,8 @@ def main() -> None:
     for required in (
         "SG_RuneMechanismBindingMoverKeys",
         "mover_count != 1U",
+        "witness->entry_q8",
+        "binding.entry_entity->absmin",
         "witness->closed_corner_key",
         "witness->open_corner_key",
     ):
@@ -83,6 +85,7 @@ def main() -> None:
         emit,
         "TrainObservation(bot, &observation)",
         "SG_TrainGateLiveStep",
+        "SG_TRAIN_GATE_COMMAND_TO_ENTRY",
         "SG_DeclaredCommand",
         "ClientThink(entity, &command)",
     )

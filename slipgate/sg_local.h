@@ -312,7 +312,7 @@ qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
 qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	edict_t *support, int *arrival_ms);
 qboolean SG_OracleTrainGateEgress(const vec3_t source,
-	const vec3_t target, edict_t *button, edict_t *train,
+	const vec3_t entry, const vec3_t target, edict_t *button, edict_t *train,
 	const vec3_t sweep_mins, const vec3_t sweep_maxs,
 	unsigned int passage_axis, int *arrival_ms);
 qboolean SG_OracleDeclaredCompoundLiftEgress(const vec3_t source,

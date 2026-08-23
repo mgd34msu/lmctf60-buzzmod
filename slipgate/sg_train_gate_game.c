@@ -81,6 +81,7 @@ static int TrainWitness(int link_index, sg_train_gate_witness_t *witness)
 {
 	rune_t *rune = SG_Rune();
 	sg_rune_mechanism_binding_t binding;
+	vec3_t button_center;
 	uint32_t mover_keys[SG_RUNE_BINDING_MAX_MOVERS];
 	size_t mover_count = 0U;
 
@@ -97,9 +98,17 @@ static int TrainWitness(int link_index, sg_train_gate_witness_t *witness)
 	    binding.plan->cooldown_ms > UINT16_MAX ||
 	    !TrainQ8(rune->seeds[binding.link->from].origin,
 	        witness->source_q8) ||
-	    !TrainQ8(binding.link->anchor, witness->button_q8) ||
+	    !TrainQ8(binding.link->anchor, witness->entry_q8) ||
 	    !TrainQ8(rune->seeds[binding.link->to].origin,
 	        witness->destination_q8))
+		return 0;
+	button_center[0] =
+		(binding.entry_entity->absmin[0] + binding.entry_entity->absmax[0]) * 0.5f;
+	button_center[1] =
+		(binding.entry_entity->absmin[1] + binding.entry_entity->absmax[1]) * 0.5f;
+	button_center[2] =
+		(binding.entry_entity->absmin[2] + binding.entry_entity->absmax[2]) * 0.5f;
+	if (!TrainQ8(button_center, witness->button_q8))
 		return 0;
 	witness->link_index = (uint32_t)link_index;
 	witness->button_key = binding.entry_node->key;
@@ -139,6 +148,7 @@ static int TrainObservation(sg_bot_t *bot,
 	sg_rune_mechanism_binding_t binding;
 	edict_t *entity;
 	vec3_t destination;
+	vec3_t entry;
 	int axis;
 
 	if (!bot || !(entity = bot->ent) || !entity->inuse || !entity->client ||
@@ -155,8 +165,15 @@ static int TrainObservation(sg_bot_t *bot,
 	observation->body_clear = TrainBodyClear(entity,
 	    bot->train_gate.live.witness.train_key);
 	for (axis = 0; axis < 3; axis++)
+	{
+		entry[axis] = bot->train_gate.live.witness.entry_q8[axis] * 0.125f;
 		destination[axis] =
 		    bot->train_gate.live.witness.destination_q8[axis] * 0.125f;
+	}
+	observation->entry_arrived = observation->supported && observation->dry &&
+	    SG_SupportedArrived(entity->s.origin, entry,
+	        entity->groundentity != NULL, entity->watertype,
+	        entity->waterlevel, NULL);
 	observation->arrived = observation->supported && observation->dry &&
 	    SG_SupportedArrived(entity->s.origin, destination,
 	        entity->groundentity != NULL, entity->watertype,
@@ -355,11 +372,14 @@ int SG_TrainGateGameEmit(sg_bot_t *bot, int selected_link)
 		memset(&command, 0, sizeof(command));
 		command.msec = SG_TRAIN_GATE_STEP_MS;
 		if (control == SG_TRAIN_GATE_COMMAND_TO_BUTTON ||
+		    control == SG_TRAIN_GATE_COMMAND_TO_ENTRY ||
 		    control == SG_TRAIN_GATE_COMMAND_TO_EGRESS)
 		{
 			const int16_t *q8 = control == SG_TRAIN_GATE_COMMAND_TO_BUTTON
 			    ? bot->train_gate.live.witness.button_q8
-			    : bot->train_gate.live.witness.destination_q8;
+			    : (control == SG_TRAIN_GATE_COMMAND_TO_ENTRY
+			          ? bot->train_gate.live.witness.entry_q8
+			          : bot->train_gate.live.witness.destination_q8);
 
 			for (axis = 0; axis < 3; axis++)
 				target[axis] = q8[axis] * 0.125f;

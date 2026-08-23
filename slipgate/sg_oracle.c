@@ -6733,7 +6733,7 @@ static qboolean SG_TrainGateHullOutsideAxis(const vec3_t origin,
 }
 
 qboolean SG_OracleTrainGateEgress(const vec3_t source,
-	const vec3_t target, edict_t *button, edict_t *train,
+	const vec3_t entry, const vec3_t target, edict_t *button, edict_t *train,
 	const vec3_t sweep_mins, const vec3_t sweep_maxs,
 	unsigned int passage_axis, int *arrival_ms)
 {
@@ -6746,12 +6746,14 @@ qboolean SG_OracleTrainGateEgress(const vec3_t source,
 	int old_action = sg_oracle_declared_action;
 	sg_phantom_t ph;
 	usercmd_t cmd;
-	qboolean entered_sweep = false;
+	qboolean entered_sweep;
+	qboolean reached_entry = false;
 	qboolean ok = false;
-	int elapsed;
+	int elapsed = 0;
+	int stage_elapsed;
 
-	if (!button || !button->inuse || !train || !train->inuse || !arrival_ms ||
-	    !sweep_mins || !sweep_maxs)
+	if (!entry || !button || !button->inuse || !train || !train->inuse ||
+	    !arrival_ms || !sweep_mins || !sweep_maxs)
 		return false;
 	sg_oracle_passent = NULL;
 	sg_oracle_world_only = true;
@@ -6765,15 +6767,39 @@ qboolean SG_OracleTrainGateEgress(const vec3_t source,
 	SG_OracleRun(&ph, &cmd, 1);
 	if (sg_oracle_contaminated || !ph.groundentity || ph.waterlevel != 0)
 		goto done;
+	if (SG_SupportedArrived(ph.origin, entry, ph.groundentity,
+	        ph.watertype, ph.waterlevel, NULL))
+		reached_entry = true;
+	for (stage_elapsed = 0; !reached_entry && stage_elapsed < 5000;
+	     stage_elapsed += 25)
+	{
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = 25;
+		if (!SG_DeclaredCommand(ph.origin, entry, &ph.pms, &cmd))
+			goto done;
+		SG_OracleRun(&ph, &cmd, 1);
+		elapsed += 25;
+		if (sg_oracle_contaminated ||
+		    (ph.waterlevel > 0 &&
+		     (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
+			goto done;
+		if ((stage_elapsed + 25) % 100 == 0 &&
+		    SG_SupportedArrived(ph.origin, entry, ph.groundentity,
+		        ph.watertype, ph.waterlevel, NULL))
+			reached_entry = true;
+	}
+	if (!reached_entry)
+		goto done;
 	entered_sweep = !SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins,
 	    sweep_maxs, passage_axis);
-	for (elapsed = 0; elapsed < 5000; elapsed += 25)
+	for (stage_elapsed = 0; stage_elapsed < 5000; stage_elapsed += 25)
 	{
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 25;
 		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
 			goto done;
 		SG_OracleRun(&ph, &cmd, 1);
+		elapsed += 25;
 		if (sg_oracle_contaminated ||
 		    (ph.waterlevel > 0 &&
 		     (ph.watertype & (CONTENTS_LAVA | CONTENTS_SLIME))))
@@ -6781,13 +6807,13 @@ qboolean SG_OracleTrainGateEgress(const vec3_t source,
 		if (!SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins, sweep_maxs,
 		        passage_axis))
 			entered_sweep = true;
-		if (((elapsed + 25) % 100) == 0 && entered_sweep &&
+		if (((stage_elapsed + 25) % 100) == 0 && entered_sweep &&
 		    SG_TrainGateHullOutsideAxis(ph.origin, sweep_mins, sweep_maxs,
 		        passage_axis) &&
 		    SG_SupportedArrived(ph.origin, target, ph.groundentity,
 		        ph.watertype, ph.waterlevel, NULL))
 		{
-			*arrival_ms = elapsed + 25;
+			*arrival_ms = elapsed;
 			ok = true;
 			goto done;
 		}

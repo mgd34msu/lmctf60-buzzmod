@@ -150,6 +150,10 @@ static void TestHappyPath(void)
 	Activate(&state, &observation);
 	observation.pose = SG_TRAIN_GATE_POSE_OPEN;
 	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
+	CHECK(state.phase == SG_TRAIN_GATE_ENTRY);
+	observation.entry_arrived = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
 		SG_TRAIN_GATE_COMMAND_TO_EGRESS);
 	CHECK(state.phase == SG_TRAIN_GATE_EGRESS);
 	observation.body_clear = 1U;
@@ -221,6 +225,9 @@ static void TestShootHappyPath(void)
 		SG_TRAIN_GATE_COMMAND_ZERO);
 	CHECK(state.phase == SG_TRAIN_GATE_OPENING);
 	observation.pose = SG_TRAIN_GATE_POSE_OPEN;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
+	observation.entry_arrived = 1U;
 	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
 		SG_TRAIN_GATE_COMMAND_TO_EGRESS);
 	observation.body_clear = 1U;
@@ -315,6 +322,9 @@ static void TestDriftTimeoutAndClearance(void)
 	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
 	Activate(&state, &observation);
 	observation.pose = SG_TRAIN_GATE_POSE_OPEN;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
+	observation.entry_arrived = 1U;
 	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
 		SG_TRAIN_GATE_COMMAND_TO_EGRESS);
 	observation.arrived = 1U;

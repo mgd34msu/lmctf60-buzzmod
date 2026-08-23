@@ -157,6 +157,7 @@ static int TrainObservationShapeValid(
 	       TrainBoolean(observation->dry) &&
 	       TrainBoolean(observation->binding_current) &&
 	       TrainBoolean(observation->body_clear) &&
+	       TrainBoolean(observation->entry_arrived) &&
 	       TrainBoolean(observation->arrived) &&
 	       TrainBoolean(observation->weapon_ready) &&
 	       TrainBoolean(observation->aim_contact_current) &&
@@ -336,6 +337,20 @@ sg_train_gate_command_t SG_TrainGateLiveStep(sg_train_gate_state_t *state,
 			TrainFail(state);
 			return SG_TRAIN_GATE_COMMAND_ZERO;
 		}
+		state->phase = SG_TRAIN_GATE_ENTRY;
+	}
+
+	if (state->phase == SG_TRAIN_GATE_ENTRY)
+	{
+		if (observation->pose != SG_TRAIN_GATE_POSE_OPEN ||
+		    !TrainActivated(state) ||
+		    state->target_dispatch_count != 1U || state->train_use_count != 1U)
+		{
+			TrainFail(state);
+			return SG_TRAIN_GATE_COMMAND_ZERO;
+		}
+		if (observation->entry_arrived == 0U)
+			return SG_TRAIN_GATE_COMMAND_TO_ENTRY;
 		state->phase = SG_TRAIN_GATE_EGRESS;
 	}
 
