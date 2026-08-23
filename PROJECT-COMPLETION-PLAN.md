@@ -645,6 +645,34 @@ work: if ordinary generation still cannot discover its physical return route,
 an authoritative human traversal will be used to identify the missing generic
 transition before any new admission is implemented.
 
+The fresh batch has replaced the old queue labels with these current results:
+
+| Map | Current result |
+| --- | --- |
+| `lmctf01` | 2,401 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
+| `lmctf06` | 1,488 seeds all prune; 16 ordinary boundaries enter dead components. |
+| `lmctf07` | PASS after the accepted train/button repair. |
+| `lmctf12` | 2,263 seeds all prune; the disjoint objective sides have no boundary link. |
+| `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
+| `lmctf19` | 2,153 seeds all prune; the objective sides are 112 units apart across ordinary dead-end links. |
+| `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
+| `lmctf27` | Neither objective root binds because both nearest flag seeds have no outgoing link. |
+| `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
+| `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
+| `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
+| `lmctf58` | The graph closes and a RUNE is written; fresh cleanup diagnosis is still running before acceptance. |
+| `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
+| `tw2ctf2` | 33,868 links and 570 initially shared seeds; reverse closure fails over ordinary links. |
+| `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
+| `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
+| `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
+| `xmap04` | 1,094 seeds all prune; nine lift links have no descent and another lift lacks staging. |
+| `xmap13` | The baseline publishes two PUSH links and all 1,337 seeds prune; the staged four-link branch still needs its repaired-snapshot run. |
+| `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
+| `xmap25` | 1,733 seeds are initially shared, but reverse closure from the blue-only component fails. |
+| `xmap26` | Six water-to-lift links now publish; a later static-world 1,440-unit cut still prunes all 1,575 seeds. |
+| `xmap29` | Water-seed capacity is exhausted before base-link proof; no graph is written. |
+
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
 2. Build and verify one new exact source, module, configuration, engine, reader,

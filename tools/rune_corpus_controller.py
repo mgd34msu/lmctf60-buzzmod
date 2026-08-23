@@ -100,15 +100,19 @@ def generation_deferred_publication_complete(
 ) -> bool:
     """Recognize the exact post-write failure that the cold load will resolve."""
     expected_artifact = f"game/maps/{map_name}.rune"
-    for index in range(len(lines) - 2):
+    write_seen = False
+    for index in range(len(lines) - 1):
         write = WRITE_RE.fullmatch(lines[index])
-        snag = SNAG_DECLARATION_FAILURE_RE.fullmatch(lines[index + 1])
+        if write is not None and write.group(1) == expected_artifact:
+            write_seen = True
+            continue
+        if not write_seen:
+            continue
+        snag = SNAG_DECLARATION_FAILURE_RE.fullmatch(lines[index])
         if (
-            write is not None
-            and write.group(1) == expected_artifact
-            and snag is not None
+            snag is not None
             and snag.group(1) == map_name
-            and lines[index + 2] == DEFERRED_FIELD_FAILURE
+            and lines[index + 1] == DEFERRED_FIELD_FAILURE
         ):
             return True
     return False

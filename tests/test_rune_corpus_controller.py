@@ -1533,6 +1533,23 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertTrue(controller.generation_deferred_publication_complete(
                 deferred.splitlines(), "gatecase"
             ))
+            interleaved = deferred.replace(
+                "slipgate: snag declaration missing or invalid for map gatecase; "
+                "fields rejected\n",
+                "CBTWHY frames=0 seen=0 fire=0\n"
+                "CBTSCAN unteamed=0 same=0 acquired=0\n"
+                "slipgate: snag declaration missing or invalid for map gatecase; "
+                "fields rejected\n",
+            )
+            self.assertTrue(controller.generation_deferred_publication_complete(
+                interleaved.splitlines(), "gatecase"
+            ))
+            self.assertEqual(
+                5,
+                controller.parse_generation_log(
+                    interleaved, "gatecase", artifact, attempt
+                )["counts"]["plans"],
+            )
             invalid_deferred = (
                 deferred.replace("map gatecase", "map wrongmap"),
                 deferred.replace(
