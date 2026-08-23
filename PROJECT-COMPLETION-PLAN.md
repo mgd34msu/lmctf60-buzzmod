@@ -654,7 +654,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf07` | PASS after the accepted train/button repair. |
 | `lmctf12` | 2,263 seeds all prune; the disjoint objective sides have no boundary link. |
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
-| `lmctf19` | 2,153 seeds all prune; the apparent 112-unit gap is solid world, while the true frontier has inward declared doors with shoot buttons but zero BUTTON_DOOR links. |
+| `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
 | `lmctf27` | Neither objective root binds because both nearest flag seeds have no outgoing link. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
