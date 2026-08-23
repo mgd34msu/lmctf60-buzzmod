@@ -341,7 +341,14 @@ including `lmctf02a` and `lmctf04`.
       controller now proves a carried train transaction along the exact
       248-unit motion axis: authenticated low touch, boarding at the low pose,
       declared mover travel, and stable high landing. It does not use
-      gate-crossing or direct-physics semantics.
+      gate-crossing or direct-physics semantics. Its focused reducer, contract,
+      codec, reader, and game-integration tests pass, but the first real smoke
+      emitted zero ride links and left the objective graph unchanged. Live
+      route capture then proved both trains expose the lower endpoint as OPEN
+      and travel upward through CLOSING to CLOSED, opposite the earlier text
+      ordering assumption. The corrected generator and reducer now derive lower
+      and upper poses from the live route and pass both-orientation focused
+      tests. A new real smoke is next.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -378,8 +385,22 @@ existing HOOK oracle also proved none over the same outbound frontier. Landing
 observation then found 12 exact DROP proofs, but their only unique component
 transitions were already inside the flag-forward dead-end closures. Adding all
 of them changes no objective reachability, so that experiment was removed. The
-next diagnostic inventories authenticated mechanisms incident to the four
-dead-end flag-exit SCCs before selecting another controller class.
+authenticated mechanism inventory then proved no PUSH or PUSH_JUMP from 15
+dead-exit seeds against four nearby push nodes. Direct teleporter approach also
+had zero production-envelope candidates, and both bottom teleporters lack a
+static-world staging seed. The earlier TELEPORT_DROP scan preceded later HOOK
+and rocket-jump links, so it did not cover the final dead-exit frontier. A late
+replay found three production-envelope pairs but zero unchanged controller
+proofs, ruling that path out too. Exhaustive bounded RUN, JUMP, and HOOK replay
+found no admitted ordinary witness. The map uses gravity 100, while ordinary
+JUMP discovery still uses fixed normal-gravity bounds. A wider diagnostic found
+five exact unchanged JUMP proofs that the old admission excluded, confirming a
+general physics-scaling defect. Their same-side links alone do not close the
+map. Applying the full physics envelope admitted 613,836 pairs and produced 124
+shared seeds, but pruning still found no bidirectional core and the extra proof
+work was too broad. That integration was held back. The active diagnostic now
+examines the first pruning boundary around those shared seeds to derive the
+missing reverse transition before narrowing any production admission.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -464,8 +485,20 @@ out a general state-transition cache. Low-distortion hot-path profiling
 attributes 3.617 of 3.734 Pmove seconds to synthetic door checks; engine traces
 and point-contents together take only 45 milliseconds. More than two million
 door candidates repeatedly recompute identical bounds. A scoped exact
-door-bounds cache is next, with structural invalidation at pose and phase
-changes plus exact fallback on any mismatch or allocation failure.
+door-bounds cache validates mover state and exact hull on every hit, with scope
+teardown and original-path fallback on mismatch or allocation failure. Focused
+GNU/GCC and Make/Clang tests pass. On the same `xmap26` source class, it reduced
+CPU from 4.854--5.005 seconds to 120 milliseconds, using 30 entries and about
+16.6 KB. Cache-on and cache-off `lmctf42` smokes both passed generation, dual C
+readers, the Python reader, lint, SNAG, and cold load with identical ordered
+seeds, links, mechanism records, telemetry counters, and artifact bytes. The
+full GNU/GCC suite, exact source-size audit, and full Make/Clang suite pass. A
+real `xmap26` smoke remains before integration. The first real smoke was
+manually interrupted after 4 minutes 54 seconds because its
+missing progress line was mistaken for a stall; it produced no result. A
+bounded follow-up proves sources 0--7 remain at 0--111 milliseconds with zero
+cache-state mismatches. Sampling is locating the later dominant source before
+the next uninterrupted smoke.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
