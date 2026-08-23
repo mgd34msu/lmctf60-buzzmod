@@ -1561,7 +1561,11 @@ def _decode_rune_plan(raw: bytes, index: int) -> RuneActivationPlan:
             raise _wire_error(RLRUNE_BAD_ACTIVATION_PLAN, f"plan {index}")
     elif (
         plan.mover_key in (0, RUNE_NO_KEY) or
-        plan.entry_key == plan.mover_key or plan.num_edges == 0
+        (
+            plan.entry_key == plan.mover_key and
+            plan.controller_kind != RUNE_CONTROLLER_TRAIN_SHOOT
+        ) or
+        plan.num_edges == 0
     ):
         raise _wire_error(RLRUNE_BAD_ACTIVATION_PLAN, f"plan {index}")
     return plan
@@ -1709,13 +1713,11 @@ def _rune_door_node_valid(
     forbidden_flag = (
         RUNE_NODEF_TEAM_MEMBER if master else RUNE_NODEF_TEAM_MASTER
     )
-    # The spawn function chooses this callback for each brush before team
-    # roles are assigned.  Targeted brushes retain Think_CalcMoveSpeed;
-    # anonymous brushes retain Think_SpawnDoorTrigger, including team slaves
-    # for which that callback is subsequently a no-op.
+    # Health and targetname independently select Think_CalcMoveSpeed.
+    # Shootable brushes therefore retain it even without a targetname.
     expected_think = (
         RUNE_CALLBACK_THINK_CALC_MOVE_SPEED
-        if node.targetname_offset else
+        if node.flags & RUNE_NODEF_SHOOTABLE or node.targetname_offset else
         RUNE_CALLBACK_THINK_SPAWN_DOOR_TRIGGER
     )
     return bool(
@@ -2311,6 +2313,21 @@ def _rune_validate_production_plan(
             fail("does not satisfy the teleport controller law")
         add_edge(owner[0])
         add_edge(targets[0])
+
+    elif (
+        controller == RUNE_CONTROLLER_TRAIN_SHOOT and
+        entry.kind == RUNE_NODE_DOOR_MASTER
+    ):
+        if (
+            owner_link.action != contract.RL_TRAIN or
+            owner_link.mode != contract.RLCM_PREOPEN or
+            entry.key != mover.key or
+            not entry.flags & RUNE_NODEF_SHOOTABLE or
+            plan.expected_members <= 0 or
+            not 0 < plan.cooldown_ms <= RUNE_MAX_TIME_MS
+        ):
+            fail("does not satisfy the shootable-door controller law")
+        add_door_closure([entry.key], plan.expected_members)
 
     elif controller in (RUNE_CONTROLLER_TRAIN, RUNE_CONTROLLER_TRAIN_SHOOT):
         button_targets = inventory_fanout.get(

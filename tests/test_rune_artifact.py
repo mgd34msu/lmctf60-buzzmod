@@ -1504,6 +1504,70 @@ def _build_teleports(
 
 class RuneRuneArtifactTests(unittest.TestCase):
 
+    def test_shootable_door_plan_uses_shared_train_identity(self):
+        raw_plan = runeio.RUNE_ACTIVATION_PLAN_STRUCT.pack(
+            10,
+            10,
+            1,
+            1,
+            runeio.RUNE_CONTROLLER_TRAIN_SHOOT,
+            0,
+            contract.mechanism_controller_plan_flags(
+                runeio.RUNE_CONTROLLER_TRAIN_SHOOT
+            ),
+            2,
+            1200,
+            1,
+        )
+        plan = runeio._decode_rune_plan(raw_plan, 0)
+        self.assertEqual(plan.entry_key, plan.mover_key)
+
+        node = runeio.RuneActivationNode(
+            key=10,
+            kind=runeio.RUNE_NODE_DOOR_MASTER,
+            flags=(
+                runeio.RUNE_NODEF_REPEATABLE |
+                runeio.RUNE_NODEF_USABLE |
+                runeio.RUNE_NODEF_MOVER |
+                runeio.RUNE_NODEF_TEAM_MASTER |
+                runeio.RUNE_NODEF_SHOOTABLE
+            ),
+            classname_offset=1,
+            target_offset=0,
+            targetname_offset=0,
+            killtarget_offset=0,
+            owner_key=runeio.RUNE_NO_KEY,
+            team_master_key=10,
+            spawnflags=0,
+            touch_callback=0,
+            use_callback=runeio.RUNE_CALLBACK_USE_DOOR,
+            think_callback=runeio.RUNE_CALLBACK_THINK_CALC_MOVE_SPEED,
+            blocked_callback=runeio.RUNE_CALLBACK_BLOCKED_DOOR,
+            delay_ms=0,
+            wait_ms=3000,
+            speed_q8=800,
+            accel_q8=800,
+            decel_q8=800,
+            absmin_q8=(0, 0, 0),
+            absmax_q8=(64, 64, 64),
+            path_target_offset=0,
+            push_velocity=(0.0, 0.0, 0.0),
+        )
+        strings = b"\0func_door\0"
+        self.assertTrue(runeio._rune_door_node_valid(
+            node, 10, master=True, strings=strings
+        ))
+        self.assertFalse(runeio._rune_door_node_valid(
+            replace(
+                node,
+                think_callback=
+                runeio.RUNE_CALLBACK_THINK_SPAWN_DOOR_TRIGGER,
+            ),
+            10,
+            master=True,
+            strings=strings,
+        ))
+
     def test_carrier_door_spawnflags_admit_both_directions(self):
         self.assertTrue(runeio._carrier_door_spawnflags(4))
         self.assertTrue(runeio._carrier_door_spawnflags(5))

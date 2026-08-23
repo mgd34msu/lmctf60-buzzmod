@@ -1595,15 +1595,16 @@ static int Codec_DoorNodeShapeValid(
 		    : SG_RUNE_CODEC_NODEF_TEAM_MEMBER);
 	uint16_t forbidden = master ? SG_RUNE_CODEC_NODEF_TEAM_MEMBER :
 		SG_RUNE_CODEC_NODEF_TEAM_MASTER;
-	/* SP_func_door and SP_func_door_rotating choose this callback for each
-	 * individual brush before G_FindTeams assigns captain/member roles.  A
-	 * safe declared door cannot be shootable, so its sealed post-first-frame
-	 * callback is determined exactly by that brush's own targetname: targeted
-	 * brushes retain Think_CalcMoveSpeed; anonymous brushes retain
-	 * Think_SpawnDoorTrigger (which is a no-op on a team slave). */
-	uint16_t expected_think = node && node->targetname_offset != 0U
+	/* SP_func_door selects Think_CalcMoveSpeed when either health or a
+	 * targetname is present.  Shootable brushes therefore retain that callback
+	 * even without a targetname; ordinary anonymous brushes retain
+	 * Think_SpawnDoorTrigger. */
+	uint16_t expected_think = node &&
+		(node->flags & SG_RUNE_CODEC_NODEF_SHOOTABLE) != 0U
 		? SG_RUNE_CODEC_CALLBACK_THINK_CALC_MOVE_SPEED
-		: SG_RUNE_CODEC_CALLBACK_THINK_SPAWN_DOOR_TRIGGER;
+		: (node && node->targetname_offset != 0U
+			? SG_RUNE_CODEC_CALLBACK_THINK_CALC_MOVE_SPEED
+			: SG_RUNE_CODEC_CALLBACK_THINK_SPAWN_DOOR_TRIGGER);
 
 	return Codec_NodeExecutable(node) &&
 	       node->kind == (master ? SG_RUNE_CODEC_NODE_DOOR_MASTER

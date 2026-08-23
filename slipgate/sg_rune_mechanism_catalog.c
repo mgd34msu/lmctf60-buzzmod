@@ -38,6 +38,7 @@ extern void button_wait(edict_t *);
 extern void button_return(edict_t *);
 extern void button_done(edict_t *);
 extern void button_killed(edict_t *, edict_t *, edict_t *, int, vec3_t);
+extern void door_killed(edict_t *, edict_t *, edict_t *, int, vec3_t);
 extern void Think_CalcMoveSpeed(edict_t *);
 extern void Think_SpawnDoorTrigger(edict_t *);
 extern void plat_go_down(edict_t *);

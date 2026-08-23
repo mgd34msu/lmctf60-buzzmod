@@ -453,6 +453,8 @@ static void TestShootDoor(void)
 	member = Door(&fixture, 20U, 10U, 0);
 	master->flags |= SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_SHOOTABLE;
 	member->flags |= SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_SHOOTABLE;
+	master->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
+	member->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
 	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TEAM, 0U);
 	fixture.binding.entry_key = 10U;
 	fixture.binding.mover_key = 10U;
@@ -466,6 +468,10 @@ static void TestShootDoor(void)
 	CHECK(fixture.plans[0].num_edges == 1U);
 	CHECK(fixture.edges[fixture.plans[0].first_edge].kind ==
 		SG_MECH_EDGE_TEAM);
+	master->think_callback = SG_MECH_CALLBACK_THINK_SPAWN_DOOR_TRIGGER;
+	CHECK(CodecValidationDiagnostic(&fixture) ==
+		RLCODEC_BAD_ACTIVATION_NODE);
+	master->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
 
 	fixture.links[0].mode = RLCM_NONE;
 	ExpectTrainMaterializationFailure(&fixture);
