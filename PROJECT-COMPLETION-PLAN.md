@@ -90,7 +90,7 @@ after the final source freeze.
 - The authenticated `sv sg compoundhook <link>` seam stages only an exact
   published link and records approach, activation, LINKED, ATTACHED, PULL,
   release or recovery, terminal outcome, and ownership retirement.
-- The canonical D_HOOK source is merged at `d5d4365`.
+- The canonical D_HOOK source is merged into both working branches.
 
 ### Integration status
 
@@ -99,11 +99,10 @@ after the final source freeze.
 - [x] Unify the generated action contract for actions 7, 9, 10, and 11.
 - [x] Pass contract, action, codec, and source-size checks after the rebase.
 - [x] Pass the full GNU and Make host and module gates, `ldd -r`, and deslop
-      with zero findings on source-identical candidate `bfcabf2`. Its tracked
+      with zero findings on the source-identical candidate. Its tracked
       worktree was clean.
-- [x] Merge and push the proven fix stack through `slipgate` to `main` at
-      `d5d4365`. Local and remote `slipgate` and `main` compare as zero ahead
-      and zero behind.
+- [x] Merge and push the proven fix stack through `slipgate` to `main`. Local
+      and remote `slipgate` and `main` compare as zero ahead and zero behind.
 
 ### Live candidate evidence
 
@@ -155,63 +154,59 @@ both passed.
 
 ## Prior freeze and current invalidation
 
-- [x] Frozen source `72c52db` passed exact-commit `slipgate` and `main` CI on
+- [x] The prior frozen source passed exact-source `slipgate` and `main` CI on
       Windows x86 and x64 and on Linux with GNUmakefile and Makefile under GCC
       and Clang. Both CI runs are green and uploaded their intended artifacts.
 - [x] The chosen GNU module has SHA-256
       `2d9cf6029586cf07918617ab9d8f459356787dd70cf63a6a153fc6af35ec52d5`.
       The snapshot uses those exact bytes for both `game/game.so` and
       `game/gamex86_64.so`.
-- [x] The immutable input snapshot is
-      `/tmp/lmctf6-final-freeze-72c52db/input-snapshot`. It contains all
-      181 required BSPs and has no writable file, writable directory, or
-      symlink.
+- [x] The prior immutable input snapshot contained all 181 then-required BSPs
+      and had no writable file, writable directory, or symlink.
 - [x] The input-manifest SHA-256 is
       `422144842721e6bda7e1433d0edb0b17b464dc6ac0c074ef49dd292dff58d0a5`.
 - [x] All 53 controller tests passed. The jobs=10 dry-run assigned all 181 maps
       and produced fingerprint
       `01b84dfb9203909293af4483d335af12bb67842ada4dc09c57ff77a7af3a2221`.
-- [x] Freeze reports are
-      `/tmp/lmctf6-final-freeze-72c52db/FREEZE-EVIDENCE.md` and
-      `/tmp/lmctf6-final-freeze-72c52db/FREEZE-MANIFEST.json`; supporting logs
-      are under `/tmp/lmctf6-final-freeze-72c52db/logs`.
+- [x] The prior freeze reports, manifest, and supporting logs passed their
+      integrity checks. Their temporary run directory is no longer present.
 - [x] The corpus controller now treats the exact post-write, same-map missing
       SNAG and field-setup sequence as deferred publication. It then stops the
       generator, runs the artifact gates, creates the authenticated zero-repair
       SNAG, and requires a fresh cold-load RUNE-ready result. Missing or invalid
       SNAG data during cold load still fails closed.
-- [x] The controller repair is canonical at `98775a4`. Its GNU and Make
-      controller suites each passed all 53 tests. A frozen-input `lmctf14` run
+- [x] The controller repair is canonical. Its GNU and Make controller suites
+      each passed all 53 tests. A frozen-input `lmctf14` run
       completed generation, dual-reader acceptance, SNAG creation, and fresh
       cold load with a terminal PASS.
-- [x] Teleporter staging and objective-core diagnostics are canonical at
-      `38f6e32`. `lmctf02a` completed generation, dual-reader acceptance,
+- [x] Teleporter staging and objective-core diagnostics are canonical.
+      `lmctf02a` completed generation, dual-reader acceptance,
       semantic gates, authenticated SNAG creation, and fresh cold load with a
       terminal PASS.
-- [x] Declared-door sibling egress replay is canonical at `119bc96`. Fresh
+- [x] Declared-door sibling egress replay is canonical. Fresh
       accepted pairs for both `lmctf03` and `mactf01` reached authenticated
       SNAG-ready and RUNE-ready during cold load.
-- [x] The separate, fingerprinted cold-load timeout is canonical at `30c8667`.
+- [x] The separate, fingerprinted cold-load timeout is canonical.
       The GNU and Make controller suites each passed all 55 tests. A sealed
       `lmctf03` artifact passed direct cold load with the 10-second startup
       delay and a 420-second cold-load budget.
-- [x] Exact-commit CI for `30c8667` passed on both `slipgate` and `main`. Both
+- [x] Exact-source CI passed on both `slipgate` and `main`. Both
       runs passed the Windows x86 and x64 jobs, Linux, all four GCC and Clang
       Make-dialect jobs, and the version check.
-- [x] The `lmctf04` objective-root source repair is canonical at `caf773b`.
-      Commit `3b6b1f5` updates the source-size budget for that repair.
+- [x] The `lmctf04` objective-root source repair and its source-size budget are
+      canonical.
       Both flag roots bind, and the mutual core retains 979 seeds and 26,373
       links. The isolated end-to-end run passed both readers, Python, lint,
       authenticated SNAG creation, and fresh cold runtime-ready.
 - [x] The full GNU and Make gates passed for the `lmctf04` repair. Exact-commit
       CI then passed on both `slipgate` and `main` across the full Windows,
       Linux, compiler, and Make-dialect matrix.
-- [x] Permanent, untriggered `func_wall` geometry is immutable route support at
-      `5496ac5`. A source-identical `smap14` run generated 827 seeds and 31,524
+- [x] Permanent, untriggered `func_wall` geometry is canonical immutable route
+      support. A source-identical `smap14` run generated 827 seeds and 31,524
       links, retained one shared objective core, and passed both readers, lint,
       and fresh cold load.
 
-The `72c52db` game module and its recorded evidence remain proven. They are no
+The prior frozen game module and its recorded evidence remain proven. They are no
 longer the final combined source and tool freeze. The controller changed after
 that freeze, and the active graph repairs will change game source. The old
 snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
@@ -224,10 +219,10 @@ snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
 
 ## Active work: repair, refreeze, and regenerate all 175 RUNEs
 
-The run at `/tmp/lmctf6-rune181-72c52db` is sealed from acceptance and retained
-only as diagnostic evidence. The run is complete with all 181 terminal results:
+The prior 181-map run is sealed from acceptance and retained only as diagnostic
+evidence. It completed with all 181 terminal results:
 zero PASS, 31 `GEN_FAIL`, and 150 `TIMEOUT`. No worker remains active. The final
-summary, every referenced result hash, each map identity, and each terminal
+summary, every referenced result identity, each map identity, and each terminal
 classification passed the integrity check. No artifact from this run belongs
 to the accepted corpus. The project still requires a new freeze and a full
 175-map restart from an empty run root.
@@ -243,8 +238,8 @@ including `lmctf02a` and `lmctf04`.
 
 ### Repair tracks
 
-- [x] Complete the `lmctf05b` repair. Canonical feature commit `0fc35ef` and
-      budget commit `dc56fe0` generalize `START_OPEN` vertical `func_door`
+- [x] Complete the `lmctf05b` repair. The canonical source and budget changes
+      generalize `START_OPEN` vertical `func_door`
       carrier support through authenticated `RL_LIFT`. The unsuffixed
       `lmctf05` map is not an acceptance target. The repair closes the
       four-lift route core, admits exact ascending and descending carrier
@@ -258,19 +253,19 @@ including `lmctf02a` and `lmctf04`.
       `bfb49cab7855e1cb1c3e6d397dc5ca852929d8e53e460a98680a17e0b7aff4a1`;
       and RUNE SHA-256 is
       `6c3f31c529f522326cd693318ed7198476744d06f3dddbc1a129b1199870b74b`.
-      Exact-commit CI for `7c83260` then exposed one Windows-only C4701
-      warning in the carrier resolver. Commit `4b9ff0f` initializes that helper
+      Exact-source CI then exposed one Windows-only C4701 warning in the carrier
+      resolver. The repair initializes that helper
       output before its mutually exclusive capture calls; both focused harnesses
-      and both full local builds pass. Replacement CI at `04fbe49` confirmed
+      and both full local builds pass. Replacement CI confirmed
       both Windows builds and the packaged Linux module, then failed all four
       host jobs only because the overflow regression's three Makefile lines had
-      not been added to the source-size budget. Commit `9c5fabf` corrects both
-      exact budgets, and the deslop audit now passes with zero findings.
-      Exact-commit CI is fully green on both `slipgate` and `main` at
-      `698ed51`, including both Windows builds, the packaged Linux module, all
+      not been added to the source-size budget. The canonical source corrects
+      both exact budgets, and the deslop audit now passes with zero findings.
+      Exact-source CI is fully green on both `slipgate` and `main`, including
+      both Windows builds, the packaged Linux module, all
       compiler jobs, both Make dialects, and the version check.
 - [ ] Repair the remaining maps whose objective route core is closed.
-      `smap39` is accepted at commits `8544da2`, `fed4c9f`, and `c4f9b48`.
+      `smap39` is accepted in the canonical source.
       The source-identical live run passed generation, both readers, semantic
       gates, and fresh-process cold load with 998 seeds and 20,805 links. Its
       result SHA-256 is
@@ -280,11 +275,11 @@ including `lmctf02a` and `lmctf04`.
 - [x] The `smap28` fixed-push repair is accepted. The integrated series
       adds the authenticated `RL_PUSH` contract, stock speed-85 flight proof,
       serialized impulse identity, pointer-free live reducer, game adapter, and
-      live debug probe. Independent review found two handoff defects, repaired
-      by commits `2255a55` and `7090d00`: ordinary RUN could publish a
+      live debug probe. Independent review found and repaired two handoff
+      defects: ordinary RUN could publish a
       nearby source that PUSH rejected, and PUSH trusted cached playerstate
       without proving an at-rest authoritative body on immutable support. The
-      repaired exact head `fa76e4a` passed the full Make suite, focused GNU and
+      repaired exact source passed the full Make suite, focused GNU and
       Make reducers, RUN-handoff and compound-transition regressions, module
       link checking, and the zero-finding deslop audit. Its fresh controller run
       passed generation, both C readers, Python, lint, authenticated SNAG
@@ -301,13 +296,13 @@ including `lmctf02a` and `lmctf04`.
       the bot alive inside the destination envelope. Its captured-session
       SHA-256 is
       `e790bf96f5faeaf01543ab1b77187175b95848e083161f42daa4710bb8a1c402`.
-      Published exact-head CI at `ce54608` passed Windows x86 and x64 and the
+      Published exact-source CI passed Windows x86 and x64 and the
       packaged Linux build, but both Clang host jobs rejected a near-`INT_MAX`
-      integer bound that rounded upward when compared with a float. Commit
-      `576497d` keeps that price and bound in `double`. The formerly failing
+      integer bound that rounded upward when compared with a float. The repair
+      keeps that price and bound in `double`. The formerly failing
       focused PUSH build now passes under Clang with both Make dialects, its
       runtime test passes, and the deslop audit remains at zero findings.
-      Replacement exact-source CI at `a130319` is fully green on `slipgate`
+      Replacement exact-source CI is fully green on `slipgate`
       and `main`, including both Windows builds, packaged Linux, all GCC and
       Clang host jobs, both Make dialects, and the version check.
 - [ ] Repair the missing central transition in `lmctf07`. The four exact
@@ -348,13 +343,19 @@ including `lmctf02a` and `lmctf04`.
       and travel upward through CLOSING to CLOSED, opposite the earlier text
       ordering assumption. The corrected generator and reducer now derive lower
       and upper poses from the live route and pass both-orientation focused
-      tests. A new real smoke is next.
+      tests. The corrected-direction smoke finished normally but published no
+      ride link. Both trains had floor-supported button approaches and nearby
+      boarding candidates, but none boarded while the old controller required
+      simultaneous button contact and train support. The active replacement
+      separates authenticated floor-button activation from subsequent boarding,
+      then advances the declared mover timing while requiring real train support
+      before carry and upper egress.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
 runs.
-Diagnostic commit `0943897` retests prove that `lmctf27` and `tomb05` remain
-genuine graph failures. `tomb05` reaches objective-core with no closed route
+Exact retests prove that `lmctf27` and `tomb05` remain genuine graph failures.
+`tomb05` reaches objective-core with no closed route
 shared by both flags. `lmctf27` still cannot bind either
 objective root because its nearest flag seeds have no outgoing links.
 Exact `tomb05` replay proves the new TELEPORT_DROP traversal, but it does not
@@ -399,30 +400,34 @@ general physics-scaling defect. Their same-side links alone do not close the
 map. Applying the full physics envelope admitted 613,836 pairs and produced 124
 shared seeds, but pruning still found no bidirectional core and the extra proof
 work was too broad. That integration was held back. The active diagnostic now
-examines the first pruning boundary around those shared seeds to derive the
-missing reverse transition before narrowing any production admission.
+examines the first pruning boundary around those shared seeds. Both nearest
+side-only-to-shared reverse DROP pairs have stable dry sources but no
+player-hull lip, so neither admits a walkoff or landing and DROP is ruled out at
+that exact boundary. A bounded streaming report is identifying only the held
+low-gravity JUMP links needed to assemble the shared components before any
+production admission is narrowed.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, `xmap25`, `xmap26`, and `xmap29`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
-`64344d4` module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
+module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
 `lmctf25` with 2,430, `lmctf58` with 2,108, `tw2ctf2` with 1,983, `xmap05`
 with 2,206, `xmap12` with 2,558, `xmap26` with 1,575, and `xmap29` with
-12,060. All eight share normalized timeout signature `870fb63c713b5d71496b56f6`.
+12,060. All eight share the same normalized timeout signature.
 Instrumented samples attribute roughly 80--84% of categorized base-link CPU to
-the shared hook prover. Commits `8ac00e5` and `7aa7807` now skip only a repeated
+the shared hook prover. The canonical optimization skips only a repeated
 world-only Pmove step after the exact phantom and command have reached a clean
 byte-identical fixed point; reducer time, observations, hazards, and failure
 classification still advance normally. A complete `lmctf42` comparison wrote
 the same 285 seeds and 9,899 links with a byte-identical artifact while reducing
 base-link CPU from 19,126 ms to 15,796 ms. The seven non-overflow timeout maps
-were then measured concurrently against the immutable `698ed51` source and
+were then measured concurrently against one immutable source and
 module. `lmctf15`, `lmctf25`, `lmctf58`, `tw2ctf2`, `xmap05`, `xmap12`, and
 `xmap26` all reached the same 900-second base-link timeout before the first
-256-seed progress interval, wrote no artifact, and retained normalized
-signature `870fb63c713b5d71496b56f6`. The fixed-point optimization is therefore
+256-seed progress interval, wrote no artifact, and retained the same normalized
+signature. The fixed-point optimization is therefore
 safe but insufficient for this family. The hook prover now ranks candidates by
 connected seed component and checks them with component/source round robin. It
 stops after 8,192 calls. It does not cap individual sources or components. The
@@ -496,11 +501,16 @@ full GNU/GCC suite, exact source-size audit, and full Make/Clang suite pass. A
 real `xmap26` smoke remains before integration. The first real smoke was
 manually interrupted after 4 minutes 54 seconds because its
 missing progress line was mistaken for a stall; it produced no result. A
-bounded follow-up proves sources 0--7 remain at 0--111 milliseconds with zero
-cache-state mismatches. Sampling is locating the later dominant source before
-the next uninterrupted smoke.
-Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
-known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
+bounded follow-up proves all 1,575 sources finish in about 31 seconds with zero
+cache-state mismatches. The apparent source-loop stall was buffered output.
+Post-source profiling localized the remaining cost to compound swim proof,
+which previously ran for more than 39 seconds without returning. Keeping the
+same exact validated door-bounds cache active through that phase finishes it in
+about 18 seconds with zero state mismatches. Diagnostics are being removed and
+cache-on/cache-off identity plus both full host suites must pass before the
+next uninterrupted real smoke.
+The canonical source also rejects a known water-seed-capacity overflow before
+base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
 than wasting the full generation timeout; this improves boundedness but does not
 classify `xmap29` as repaired.
@@ -616,7 +626,7 @@ finish the remaining graph repairs
 - [x] Rocket jump.
 - [x] D_DROP.
 - [x] D_HOOK integrated and completed in the real engine.
-- [x] Prior `72c52db` module identity and evidence proven.
+- [x] Prior frozen module identity and evidence proven.
 - [x] Controller deferred-SNAG phase repair, full tests, live cold-load proof,
       and exact CI on both branches.
 - [x] Teleporter and objective-core diagnostics integrated, with `lmctf02a`
