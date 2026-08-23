@@ -1,6 +1,6 @@
 {
-  "action_contract_crc32": "44c420cf",
-  "action_contract_sha256": "1c7b6e3e5224ec566277d1d799e6c97f9469b147ebffb81d13219d1cffa00705",
+  "action_contract_crc32": "d3907ac4",
+  "action_contract_sha256": "6218f935fdd3397054e5173b2d718dd88dfb7486794ed5c9654e0732153e24d2",
   "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9;seed.origin=signed_q8_exact;",
   "mechanism_contract_crc32": "bef56f72",
   "mechanism_contract_sha256": "559d5f24edc2319ab64a6773c498036eb0c8c9cdbf388400bafd9d58b9dd7fcd",

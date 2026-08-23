@@ -367,11 +367,45 @@ static int Binding_ControllerShape(const rune_t *rune,
 		    Binding_EdgeCount(rune, plan, entry->key, mover->key,
 		        SG_MECH_EDGE_TARGET) == 1U;
 
+		int stock_door = 0;
+
+		if (stock && (link->mode == RLCM_NONE ||
+		        link->mode == RLCM_RIDE) && plan->expected_members > 1U)
+		{
+			uint32_t ordinal;
+			uint32_t matches = 0U;
+
+			for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
+			{
+				const rune_mechanism_edge_t *edge =
+					&rune->mechanism_edges[plan->first_edge + ordinal];
+				const rune_mechanism_node_t *egress =
+					SG_RuneMechanismNodeByKey(rune, edge->from_key);
+				const rune_mechanism_node_t *door =
+					SG_RuneMechanismNodeByKey(rune, edge->to_key);
+
+				if (edge->kind != SG_MECH_EDGE_OWNER ||
+				    edge->from_key == entry->key || !egress ||
+				    egress->kind != SG_MECH_NODE_AUTO_DOOR_TRIGGER ||
+				    egress->touch_callback !=
+				        SG_MECH_CALLBACK_TOUCH_DOOR_TRIGGER ||
+				    (egress->flags & SG_MECH_NODEF_SYNTHETIC) == 0U ||
+				    egress->owner_key != edge->to_key ||
+				    !Binding_NodeDoorMover(door) ||
+				    Binding_DoorMoverCount(rune, plan, door) !=
+				        plan->expected_members - 1U)
+					continue;
+				matches++;
+			}
+			stock_door = matches == 1U;
+		}
+
 		return link->action == RL_LIFT &&
 		       entry->kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
 		       mover->kind == SG_MECH_NODE_PLATFORM &&
 		       entry->owner_key == mover->key &&
-		       ((stock && plan->expected_members == 1U) ||
+		       ((stock && link->mode == RLCM_NONE &&
+		         plan->expected_members == 1U) || stock_door ||
 		        (carrier && Binding_PlatformMoverCount(rune, plan, mover) ==
 		            plan->expected_members)) &&
 		       Binding_EdgeCount(rune, plan, entry->key, mover->key,
@@ -952,6 +986,74 @@ int SG_RuneMechanismBindingAuxTriggerMatches(
 	return 0;
 }
 
+int SG_RuneMechanismBindingPlatformAutoDoorStage(
+	const sg_rune_mechanism_binding_t *binding, struct edict_s **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	const rune_mechanism_node_t *trigger = NULL;
+	uint32_t all[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t all_count = 0U;
+	size_t count = 0U;
+	uint32_t ordinal;
+
+	if (trigger_out) *trigger_out = NULL;
+	if (key_count_out) *key_count_out = 0U;
+	if (!binding || !trigger_out || !keys_out || !key_count_out ||
+	    !binding->link || binding->link->action != RL_LIFT ||
+	    (binding->link->mode != RLCM_NONE &&
+	     binding->link->mode != RLCM_RIDE) || !binding->plan ||
+	    binding->plan->controller_kind != SG_MECHANISM_CONTROLLER_PLATFORM ||
+	    binding->plan->expected_members <= 1U ||
+	    !SG_RuneMechanismBindingCurrent(binding))
+		return 0;
+	for (ordinal = 0U; ordinal < binding->plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			SG_RuneMechanismBindingEdgeAt(binding, ordinal);
+		const rune_mechanism_node_t *source;
+
+		if (!edge || edge->kind != SG_MECH_EDGE_OWNER ||
+		    edge->from_key == binding->entry_node->key)
+			continue;
+		source = SG_RuneMechanismNodeByKey(binding->rune, edge->from_key);
+		if (!source || source->kind != SG_MECH_NODE_AUTO_DOOR_TRIGGER ||
+		    source->touch_callback != SG_MECH_CALLBACK_TOUCH_DOOR_TRIGGER ||
+		    source->owner_key != edge->to_key || trigger)
+			return 0;
+		trigger = source;
+	}
+	if (!trigger || !SG_RuneMechanismBindingMoverKeys(binding, all,
+	        &all_count))
+		return 0;
+	for (ordinal = 0U; ordinal < all_count; ordinal++)
+	{
+		if (all[ordinal] == binding->mover_node->key)
+			continue;
+		if (count >= SG_RUNE_BINDING_MAX_MOVERS)
+			return 0;
+		keys_out[count++] = all[ordinal];
+	}
+	if (count + 1U != binding->plan->expected_members)
+		return 0;
+	*trigger_out = SG_RuneMechanismBindingResolveNode(binding, trigger->key);
+	if (!*trigger_out)
+		return 0;
+	*key_count_out = count;
+	return SG_RuneMechanismBindingCurrent(binding);
+}
+
+int SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(
+	const sg_rune_mechanism_binding_t *binding,
+	const struct edict_s *entity)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	struct edict_s *trigger;
+
+	return entity && SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
+		&trigger, keys, &count) && trigger == entity;
+}
+
 static int Binding_CarrierTriggerContainsAnchor(
 	const rune_mechanism_node_t *node, const rune_link_t *link)
 {
@@ -1161,6 +1263,26 @@ int SG_RuneMechanismBindingCarrierStage(
 	*key_count_out = key_count;
 	*delay_ms_out = (uint32_t)trigger->delay_ms;
 	return 1;
+}
+
+int SG_RuneMechanismBindingLiftDoorStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, struct edict_s **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out)
+{
+	if (binding && binding->link && binding->entry_node &&
+	    binding->entry_node->touch_callback ==
+	        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER)
+	{
+		if (delay_ms_out) *delay_ms_out = 0U;
+		return stage == (binding->link->mode == RLCM_RIDE
+		           ? SG_CARRIER_DOOR_EGRESS : SG_CARRIER_DOOR_APPROACH) &&
+		       SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
+		           trigger_out, keys_out, key_count_out);
+	}
+	return SG_RuneMechanismBindingCarrierStage(binding, stage, trigger_out,
+		keys_out, key_count_out, delay_ms_out);
 }
 
 int SG_RuneMechanismBindingCarrierStageTriggerMatches(

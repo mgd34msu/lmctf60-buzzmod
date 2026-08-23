@@ -555,6 +555,32 @@ static int Mechanism_MaterializePlatformDoorStage(
 	return 1;
 }
 
+static int Mechanism_MaterializePlatformAutoDoorStage(
+	mechanism_materializer_t *state, uint32_t trigger_key,
+	uint16_t expected_members)
+{
+	uint32_t trigger_index = Mechanism_FindNode(state, trigger_key);
+	mechanism_edge_group_t owner = Mechanism_EdgeGroup(state, trigger_key,
+		SG_MECH_EDGE_OWNER);
+	uint32_t mover_index;
+	const rune_mechanism_node_t *trigger;
+
+	if (trigger_index == UINT32_MAX || expected_members == 0U ||
+	    owner.count != 1U)
+		return 0;
+	trigger = &state->catalog->nodes[trigger_index];
+	mover_index = Mechanism_FindNode(state,
+		state->catalog->edges[owner.first].to_key);
+	if (trigger->kind != SG_MECH_NODE_AUTO_DOOR_TRIGGER ||
+	    trigger->touch_callback != SG_MECH_CALLBACK_TOUCH_DOOR_TRIGGER ||
+	    (trigger->flags & SG_MECH_NODEF_SYNTHETIC) == 0U ||
+	    mover_index == UINT32_MAX ||
+	    !Mechanism_AppendInventoryEdge(state, owner.first) ||
+	    !Mechanism_AddMaster(state, mover_index))
+		return 0;
+	return Mechanism_MaterializeDoorClosure(state, expected_members);
+}
+
 static int Mechanism_MaterializePlatform(mechanism_materializer_t *state,
 	const sg_mechanism_plan_binding_t *binding, const rune_link_t *owner_link)
 {
@@ -578,12 +604,30 @@ static int Mechanism_MaterializePlatform(mechanism_materializer_t *state,
 	    state->catalog->edges[owner.first].to_key != binding->mover_key)
 		return 0;
 	if (entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_PLAT_CENTER)
-		return (entry_node->flags & SG_MECH_NODEF_SYNTHETIC) != 0U &&
+	{
+		if ((entry_node->flags & SG_MECH_NODEF_SYNTHETIC) == 0U ||
+		    binding->cooldown_ms != 0U || target.count != 0U ||
+		    !Mechanism_AppendInventoryEdge(state, owner.first))
+			return 0;
+		if (owner_link->mode == RLCM_NONE)
+		{
+			if (binding->expected_members == 1U)
+				return binding->destination_key == SG_MECH_NO_KEY &&
+				       binding->egress_key == SG_MECH_NO_KEY;
+			return binding->destination_key != SG_MECH_NO_KEY &&
+			       binding->egress_key == SG_MECH_NO_KEY &&
+			       Mechanism_MaterializePlatformAutoDoorStage(state,
+			           binding->destination_key,
+			           (uint16_t)(binding->expected_members - 1U));
+		}
+		return owner_link->mode == RLCM_RIDE &&
 		       binding->destination_key == SG_MECH_NO_KEY &&
-		       binding->egress_key == SG_MECH_NO_KEY &&
-		       binding->expected_members == 1U &&
-		       binding->cooldown_ms == 0U && target.count == 0U &&
-		       Mechanism_AppendInventoryEdge(state, owner.first);
+		       binding->egress_key != SG_MECH_NO_KEY &&
+		       binding->expected_members > 1U &&
+		       Mechanism_MaterializePlatformAutoDoorStage(state,
+		           binding->egress_key,
+		           (uint16_t)(binding->expected_members - 1U));
+	}
 	cooldown = entry_node->wait_ms > RUNE_MAX_COST_MS
 		? (uint32_t)RUNE_MAX_COST_MS : (uint32_t)entry_node->wait_ms;
 	if (!(entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&

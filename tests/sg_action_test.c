@@ -5,7 +5,7 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0x44c420cfU,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xd3907ac4U,
 	"RUNE action contract drift");
 _Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xbef56f72U,
 	"RUNE mechanism contract drift");
@@ -62,7 +62,7 @@ static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 	{ 1, RL_PROVEN, 0x0001U, 0x01U, 0x0021U, RLEP_AT_LEAST_ONE_WATER,
 	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_SWIM, RLMP_NONE,
 		  RL_SWIM, RLFB_NONE, 0, "RL_SWIM", "SWIM", "SWIM", "#3d7dff" },
-	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY,
+	{ 1, RL_DECLARED, 0x0008U, 0x05U, 0x0025U, RLEP_ANY,
 	  RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_LIFT, RLFB_NONE, 0, "RL_LIFT", "LIFT", "LIFT", "#8f5cff" },
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY,

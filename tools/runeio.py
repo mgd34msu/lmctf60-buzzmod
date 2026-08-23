@@ -30,8 +30,6 @@ SEED_BYTES = 16
 RUNE_POLICY_LINK_BYTES = 44
 MAP_NAME_BYTES = 64
 HEADER_CRC_OFFSET = 60
-NONCOMPOUND_TAIL_OFFSET = 28
-NONCOMPOUND_TAIL_BYTES = 16
 MAX_SEEDS = 32768
 MAX_LINKS = 262144
 MIN_COST_MS = 1
@@ -235,7 +233,6 @@ SEED_FLAG_MASK = RSF_WATER | RSF_TOMBSTONE
 
 _MAP_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 _ZERO_12 = b"\x00" * 12
-_ZERO_16 = b"\x00" * NONCOMPOUND_TAIL_BYTES
 _WORLD_MIN = (
     contract.RUNE_PROOF_WORLD_FIXED_MIN /
     contract.RUNE_PROOF_WORLD_FIXED_SCALE
@@ -1142,10 +1139,10 @@ def _validate_graph(
         )
         compound = bool(action["trait_mask"] & contract.SG_ACTF_ATOMIC)
         if not compound:
-            if raw[NONCOMPOUND_TAIL_OFFSET:] != _ZERO_16:
+            if raw[28:40] != _ZERO_12 or link.sweep_clear_ms != 0:
                 raise _wire_error(
                     contract.RLW_BAD_LINK_RECORD,
-                    f"link {index} has nonzero noncompound tail",
+                    f"link {index} has nonzero noncompound mechanism proof",
                 )
             continue
 
@@ -2143,12 +2140,41 @@ def _rune_validate_production_plan(
             entry.kind != RUNE_NODE_PLATFORM_TRIGGER or
             mover.kind != RUNE_NODE_PLATFORM or
             len(owner) != 1 or owner[0].to_key != mover.key or
-            (stock and plan.expected_members != 1) or not (stock or carrier)
+            not (stock or carrier)
         ):
             fail("does not satisfy the platform controller law")
         if carrier:
             add_edge(targets[0])
         add_edge(owner[0])
+        if stock:
+            if owner_link.mode not in (
+                contract.RLCM_NONE, contract.RLCM_RIDE
+            ) or (
+                owner_link.mode == contract.RLCM_RIDE and
+                plan.expected_members <= 1
+            ):
+                fail("has an unsupported stock platform mode")
+            if plan.expected_members > 1:
+                plan_edge_set = set(plan_edges)
+                auto_stages = []
+                for node in node_by_key.values():
+                    fanout = inventory_fanout.get(
+                        (node.key, RUNE_EDGE_OWNER), ()
+                    )
+                    if (
+                        node.kind == RUNE_NODE_AUTO_DOOR_TRIGGER and
+                        node.touch_callback ==
+                            RUNE_CALLBACK_TOUCH_DOOR_TRIGGER and
+                        node.flags & RUNE_NODEF_SYNTHETIC and
+                        len(fanout) == 1 and fanout[0] in plan_edge_set
+                    ):
+                        auto_stages.append(fanout[0])
+                if len(auto_stages) != 1:
+                    fail("does not have one automatic-door platform stage")
+                add_edge(auto_stages[0])
+                add_door_closure(
+                    [auto_stages[0].to_key], plan.expected_members - 1
+                )
         if carrier and plan.expected_members > 1:
             def carrier_trigger_shape(node: RuneActivationNode) -> bool:
                 return bool(

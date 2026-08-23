@@ -589,7 +589,7 @@
         "runtime_supported": 1,
         "default_provenance": 3,
         "provenance_mask": 8,
-        "mode_mask": 1,
+        "mode_mask": 5,
         "trait_mask": 37,
         "endpoint_policy": 0,
         "suffix_anchor_policy": 4,

@@ -39,6 +39,7 @@ static int rune_shape_valid;
 static int binding_capture_valid;
 static int binding_current_valid;
 static int catalog_topology_valid;
+static int platform_stage_valid;
 static int legacy_resolver_calls;
 static int failures;
 
@@ -201,6 +202,7 @@ static void ResetFixture(void)
 	binding_capture_valid = 1;
 	binding_current_valid = 1;
 	catalog_topology_valid = 1;
+	platform_stage_valid = 0;
 	legacy_resolver_calls = 0;
 	acquire_calls = 0;
 	authorize_calls = 0;
@@ -255,7 +257,9 @@ const rune_mechanism_plan_t *SG_RuneMechanismPlanForLink(
 	const rune_t *rune, uint32_t link_index)
 {
 	if (!rune || rune != current_rune || !rune_shape_valid ||
-	    link_index != TEST_LINK || rune->links[link_index].action != RL_DOOR)
+	    link_index != TEST_LINK ||
+	    (rune->links[link_index].action != RL_DOOR &&
+	     rune->links[link_index].action != RL_LIFT))
 		return NULL;
 	return &mechanism_plan;
 }
@@ -432,6 +436,42 @@ int SG_RuneMechanismBindingCarrierStage(
 	if (delay_ms_out)
 		*delay_ms_out = 0U;
 	return 0;
+}
+
+int SG_RuneMechanismBindingPlatformAutoDoorStage(
+	const sg_rune_mechanism_binding_t *binding, edict_t **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out)
+{
+	if (trigger_out)
+		*trigger_out = NULL;
+	if (keys_out)
+		memset(keys_out, 0,
+		    SG_RUNE_BINDING_MAX_MOVERS * sizeof(keys_out[0]));
+	if (key_count_out)
+		*key_count_out = 0U;
+	if (!platform_stage_valid || !binding || !trigger_out || !keys_out ||
+	    !key_count_out || !SG_RuneMechanismBindingCurrent(binding))
+		return 0;
+	*trigger_out = &entities[28];
+	keys_out[0] = 10U;
+	keys_out[1] = 11U;
+	*key_count_out = 2U;
+	return 1;
+}
+
+int SG_RuneMechanismBindingLiftDoorStage(
+	const sg_rune_mechanism_binding_t *binding,
+	sg_carrier_door_stage_t stage, edict_t **trigger_out,
+	uint32_t keys_out[SG_RUNE_BINDING_MAX_MOVERS], size_t *key_count_out,
+	uint32_t *delay_ms_out)
+{
+	if (delay_ms_out)
+		*delay_ms_out = 0U;
+	return binding && binding->link &&
+	       stage == (binding->link->mode == RLCM_RIDE
+	           ? SG_CARRIER_DOOR_EGRESS : SG_CARRIER_DOOR_APPROACH) &&
+	       SG_RuneMechanismBindingPlatformAutoDoorStage(binding,
+	           trigger_out, keys_out, key_count_out);
 }
 
 edict_t *SG_DeclaredDoorForLink(const vec3_t anchor, const vec3_t source)
@@ -697,6 +737,44 @@ static void TestAcquireCanonicalizes(void)
 	CHECK(guard_record.keys[1] == 11U);
 	CHECK(guard_record.keys[2] == 12U);
 	CHECK(legacy_resolver_calls == 0);
+}
+
+static void ConfigureStockPlatformStage(int mode)
+{
+	links[0].action = RL_LIFT;
+	links[0].mode = (byte)mode;
+	mechanism_plan.controller_kind = SG_MECHANISM_CONTROLLER_PLATFORM;
+	mechanism_plan.expected_members = 3U;
+	mechanism_nodes[29].touch_callback =
+		SG_MECH_CALLBACK_TOUCH_PLAT_CENTER;
+	platform_stage_valid = 1;
+}
+
+static void TestStockPlatformDoorStageOwnership(void)
+{
+	sg_bot_t bot;
+
+	ResetFixture();
+	memset(&bot, 0, sizeof(bot));
+	ConfigureStockPlatformStage(RLCM_NONE);
+	CHECK(SG_DeclaredCarrierDoorGuardAcquire(&bot, TEST_LINK,
+	          SG_CARRIER_DOOR_APPROACH) == SG_COMPOUND_GUARD_OK);
+	CHECK(last_mechanism == 28U && last_key_count == 2U &&
+	      last_keys[0] == 10U && last_keys[1] == 11U);
+	CHECK(SG_DeclaredCarrierDoorGuardAcquire(&bot, TEST_LINK,
+	          SG_CARRIER_DOOR_EGRESS) ==
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
+
+	ResetFixture();
+	memset(&bot, 0, sizeof(bot));
+	ConfigureStockPlatformStage(RLCM_RIDE);
+	CHECK(SG_DeclaredCarrierDoorGuardAcquire(&bot, TEST_LINK,
+	          SG_CARRIER_DOOR_EGRESS) == SG_COMPOUND_GUARD_OK);
+	CHECK(last_mechanism == 28U && last_key_count == 2U &&
+	      last_keys[0] == 10U && last_keys[1] == 11U);
+	CHECK(SG_DeclaredCarrierDoorGuardAcquire(&bot, TEST_LINK,
+	          SG_CARRIER_DOOR_APPROACH) ==
+	      SG_COMPOUND_GUARD_AUTHORITY_MISMATCH);
 }
 
 static void TestPlanBindingRejectsRediscoveryDrift(void)
@@ -1071,6 +1149,7 @@ static void TestUnsupportedActivationRespectsGlobalLease(void)
 int main(void)
 {
 	TestAcquireCanonicalizes();
+	TestStockPlatformDoorStageOwnership();
 	TestPlanBindingRejectsRediscoveryDrift();
 	TestMalformedAndStaleDeclarations();
 	TestCoreFailuresPassThrough();

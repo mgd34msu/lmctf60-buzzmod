@@ -2080,6 +2080,22 @@ static qboolean MechanismStep_CompoundCarrierPlan(const sg_bot_t *bot,
 	       binding_out->plan->expected_members > 1U;
 }
 
+static qboolean MechanismStep_StockPlatformDoorPlan(const sg_bot_t *bot,
+	sg_rune_mechanism_binding_t *binding_out)
+{
+	uint32_t keys[SG_RUNE_BINDING_MAX_MOVERS];
+	size_t count;
+	edict_t *trigger;
+
+	return MechanismStep_Binding(bot, RL_LIFT, binding_out) &&
+	       binding_out->plan->controller_kind ==
+	           SG_MECHANISM_CONTROLLER_PLATFORM &&
+	       binding_out->entry_node->touch_callback ==
+	           SG_MECH_CALLBACK_TOUCH_PLAT_CENTER &&
+	       SG_RuneMechanismBindingPlatformAutoDoorStage(binding_out,
+	           &trigger, keys, &count);
+}
+
 static void MechanismStep_CarrierStateReset(sg_bot_t *bot)
 {
 	if (bot)
@@ -2103,6 +2119,16 @@ static qboolean MechanismStep_CarrierStateBegin(sg_bot_t *bot,
 	bot->carrier_action.ready_frame = -1;
 	bot->carrier_action.entry_key = binding->entry_node->key;
 	bot->carrier_action.carrier_key = binding->mover_node->key;
+	return true;
+}
+
+static qboolean MechanismStep_PlatformRideStateBegin(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding)
+{
+	if (!binding || !binding->link || binding->link->mode != RLCM_RIDE ||
+	    !MechanismStep_CarrierStateBegin(bot, binding))
+		return false;
+	bot->carrier_action.phase = SG_CARRIER_PHASE_CARRIER_READY;
 	return true;
 }
 
@@ -2131,7 +2157,7 @@ static qboolean MechanismStep_CarrierStageContainsMover(
 	edict_t *trigger;
 	size_t index;
 
-	if (!mover || !SG_RuneMechanismBindingCarrierStage(binding, stage,
+	if (!mover || !SG_RuneMechanismBindingLiftDoorStage(binding, stage,
 	        &trigger, keys, &count, &delay_ms))
 		return false;
 	for (index = 0U; index < count; index++)
@@ -2150,7 +2176,7 @@ static qboolean MechanismStep_CarrierStageDoorsTop(
 	edict_t *trigger;
 	size_t index;
 
-	if (!SG_RuneMechanismBindingCarrierStage(binding, stage,
+	if (!SG_RuneMechanismBindingLiftDoorStage(binding, stage,
 	        &trigger, keys, &count, &delay_ms))
 		return false;
 	for (index = 0U; index < count; index++)
@@ -2177,13 +2203,13 @@ static qboolean MechanismStep_CarrierEgressPhase(sg_bot_t *bot,
 		*phase_out = SG_CARRIER_PHASE_FAILED;
 	if (!phase_out || !MechanismStep_CarrierStateCurrent(bot, binding))
 		return false;
-	if (SG_RuneMechanismBindingCarrierStage(binding,
+	if (SG_RuneMechanismBindingLiftDoorStage(binding,
 	        SG_CARRIER_DOOR_EGRESS, &trigger, keys, &count, &delay_ms))
 	{
 		*phase_out = SG_CARRIER_PHASE_EGRESS_ARMED;
 		return true;
 	}
-	if (!SG_RuneMechanismBindingCarrierStage(binding,
+	if (!SG_RuneMechanismBindingLiftDoorStage(binding,
 	        SG_CARRIER_DOOR_APPROACH, &trigger, keys, &count, &delay_ms) ||
 	    !MechanismStep_CarrierStateCurrent(bot, binding))
 		return false;
@@ -2272,6 +2298,36 @@ qboolean SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator)
 
 		if (compound >= 0)
 			return compound ? true : false;
+	}
+	if (MechanismStep_StockPlatformDoorPlan(bot, &binding) &&
+	    SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(&binding,
+	        source))
+	{
+		qboolean ride = binding.link->mode == RLCM_RIDE;
+		sg_carrier_action_phase_t phase = ride
+			? SG_CARRIER_PHASE_EGRESS_ARMED
+			: SG_CARRIER_PHASE_APPROACH_ARMED;
+
+		if (!bot->declared_started ||
+		    (ride ? !bot->declared_touched : bot->declared_touched) ||
+		    bot->declared_triggered || bot->declared_activated ||
+		    bot->carrier_action.phase != phase ||
+		    !MechanismStep_CarrierStateCurrent(bot, &binding) ||
+		    activator->health <= 0 || activator->deadflag ||
+		    activator->movetype != MOVETYPE_WALK ||
+		    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+		    activator->waterlevel != 0 || !activator->groundentity ||
+		    binding.mover_entity->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+		    SG_DeclaredDoorGuardAuthorizeActivation(bot,
+		        bot->commit_link) != SG_COMPOUND_GUARD_OK ||
+		    !SG_RuneMechanismBindingCurrent(&binding))
+			return false;
+		bot->declared_triggered = true;
+		bot->declared_touch_frame = level.framenum;
+		bot->carrier_action.phase = ride
+			? SG_CARRIER_PHASE_EGRESS_OPENING
+			: SG_CARRIER_PHASE_APPROACH_OPENING;
+		return true;
 	}
 	if (MechanismStep_CarrierPlan(bot, &binding) &&
 	    binding.entry_entity == source)
@@ -2407,6 +2463,10 @@ qboolean SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator)
 
 	if (!bot)
 		return true;
+	if (MechanismStep_StockPlatformDoorPlan(bot, &binding) &&
+	    SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(&binding,
+	        source))
+		return false;
 	if (MechanismStep_CarrierPlan(bot, &binding) &&
 	    (binding.entry_entity == source ||
 	     SG_RuneMechanismBindingCarrierStageTriggerMatches(&binding,
@@ -2907,6 +2967,24 @@ qboolean SG_AuthorizeLiftTouch(edict_t *source, edict_t *platform,
 	    activator->client->ps.pmove.pm_type != PM_NORMAL ||
 	    !SG_RuneMechanismBindingCurrent(&binding))
 		return false;
+	if (binding.link->mode == RLCM_RIDE &&
+	    (bot->carrier_action.phase != SG_CARRIER_PHASE_CARRIER_READY ||
+	     !MechanismStep_CarrierStateCurrent(bot, &binding) ||
+	     platform->moveinfo.state != SG_PLAT_STATE_TOP ||
+	     !SG_LiftRider(platform, activator)))
+		return false;
+	if (binding.link->mode == RLCM_NONE &&
+	    binding.plan->expected_members > 1U)
+	{
+		if (bot->carrier_action.phase != SG_CARRIER_PHASE_CARRIER_READY ||
+		    !MechanismStep_CarrierStateCurrent(bot, &binding) ||
+		    platform->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+		    !SG_LiftRider(platform, activator) ||
+		    SG_DeclaredDoorGuardReleaseProvedClear(bot) !=
+		        SG_COMPOUND_GUARD_OK)
+			return false;
+		bot->carrier_action.phase = SG_CARRIER_PHASE_COMPLETE;
+	}
 	water_entry = binding.link->from >= 0 &&
 	    binding.link->from < SG_Rune()->hdr.num_seeds &&
 	    (SG_Rune()->seeds[binding.link->from].flags & RSF_WATER);
@@ -2986,6 +3064,39 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 
 		if (compound >= 0)
 			return compound ? true : false;
+	}
+	if (MechanismStep_StockPlatformDoorPlan(bot, &binding) &&
+	    SG_RuneMechanismBindingPlatformAutoDoorStageTriggerMatches(&binding,
+	        source) && MechanismStep_CarrierStageContainsMover(&binding,
+	        binding.link->mode == RLCM_RIDE ? SG_CARRIER_DOOR_EGRESS :
+	        SG_CARRIER_DOOR_APPROACH, door_master))
+	{
+		qboolean ride = binding.link->mode == RLCM_RIDE;
+		sg_carrier_action_phase_t phase = ride
+			? SG_CARRIER_PHASE_EGRESS_OPENING
+			: SG_CARRIER_PHASE_APPROACH_OPENING;
+
+		if (!bot->declared_started ||
+		    (ride ? !bot->declared_touched : bot->declared_touched) ||
+		    !bot->declared_triggered || bot->declared_activated ||
+		    bot->carrier_action.phase != phase ||
+		    !MechanismStep_CarrierStateCurrent(bot, &binding) ||
+		    bot->declared_touch_frame != level.framenum ||
+		    activator->health <= 0 || activator->deadflag ||
+		    activator->movetype != MOVETYPE_WALK ||
+		    activator->client->ps.pmove.pm_type != PM_NORMAL ||
+		    binding.mover_entity->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+		    SG_DeclaredDoorGuardAuthorizeActivation(bot,
+		        bot->commit_link) != SG_COMPOUND_GUARD_OK ||
+		    !SG_RuneMechanismBindingCurrent(&binding))
+			return false;
+		bot->declared_trigger_frame = level.framenum;
+		if (ride)
+		{
+			bot->declared_activated = true;
+			bot->carrier_action.phase = SG_CARRIER_PHASE_EGRESS_OPEN;
+		}
+		return true;
 	}
 	if (MechanismStep_CarrierPlan(bot, &binding) &&
 	    binding.entry_entity == source)
@@ -8962,7 +9073,22 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    mechanism_binding.plan &&
 				    mechanism_binding.plan->controller_kind ==
 				        SG_MECHANISM_CONTROLLER_PLATFORM &&
-				    mechanism_binding.plan->expected_members > 1U;
+				    mechanism_binding.plan->expected_members > 1U &&
+				    mechanism_binding.entry_node->touch_callback ==
+				        SG_MECH_CALLBACK_TOUCH_MULTI;
+				qboolean platform_ride = decl->action == RL_LIFT &&
+				    decl->mode == RLCM_RIDE && mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_PLATFORM &&
+				    mechanism_binding.entry_node->touch_callback ==
+				        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER;
+				qboolean platform_door_ascent = decl->action == RL_LIFT &&
+				    decl->mode == RLCM_NONE && mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_PLATFORM &&
+				    mechanism_binding.plan->expected_members > 1U &&
+				    mechanism_binding.entry_node->touch_callback ==
+				        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER;
 				qboolean direct_drive = true;
 				qboolean button_motion_hold = false;
 
@@ -9015,8 +9141,20 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 					if (!declared_door)
 					{
-						if (!compound_carrier ||
-						    (MechanismStep_CarrierStateBegin(bot,
+						if ((platform_ride &&
+						     MechanismStep_PlatformRideStateBegin(bot,
+						         &mechanism_binding)) ||
+						    (platform_door_ascent &&
+						     MechanismStep_CarrierStateBegin(bot,
+						         &mechanism_binding) &&
+						     SG_DeclaredCarrierDoorGuardAcquire(bot, bestlink,
+						         SG_CARRIER_DOOR_APPROACH) ==
+						         SG_COMPOUND_GUARD_OK) ||
+						    (!platform_ride && !platform_door_ascent &&
+						     !compound_carrier) ||
+						    (!platform_ride && !platform_door_ascent &&
+						     compound_carrier &&
+						     MechanismStep_CarrierStateBegin(bot,
 						         &mechanism_binding) &&
 						     SG_DeclaredCarrierDoorGuardAcquire(
 						         bot, bestlink,
@@ -9498,6 +9636,87 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						bot->commit_link = -1;
 						hold = true;
 					}
+					else if ((platform_ride || platform_door_ascent) &&
+					         !MechanismStep_CarrierStateCurrent(bot,
+					             &mechanism_binding))
+					{
+						bot->carrier_action.phase = SG_CARRIER_PHASE_FAILED;
+						bot->commit_link = -1;
+						hold = true;
+					}
+					else if (platform_ride && !bot->declared_touched &&
+					         plat->moveinfo.state != SG_PLAT_STATE_TOP)
+					{
+						bot->carrier_action.phase = SG_CARRIER_PHASE_FAILED;
+						bot->commit_link = -1;
+						hold = true;
+					}
+					else if (platform_ride && bot->declared_touched &&
+					         bot->carrier_action.phase ==
+					             SG_CARRIER_PHASE_CARRIER_READY)
+					{
+						if (!SG_LiftRider(plat, e))
+						{
+							bot->carrier_action.phase = SG_CARRIER_PHASE_FAILED;
+							bot->commit_link = -1;
+							hold = true;
+						}
+						else if (plat->moveinfo.state == SG_PLAT_STATE_BOTTOM)
+						{
+							if (SG_DeclaredCarrierDoorGuardAcquire(bot,
+							        bestlink, SG_CARRIER_DOOR_EGRESS) !=
+							    SG_COMPOUND_GUARD_OK)
+							{
+								bot->carrier_action.phase =
+									SG_CARRIER_PHASE_FAILED;
+								bot->commit_link = -1;
+								hold = true;
+							}
+							else
+								bot->carrier_action.phase =
+									SG_CARRIER_PHASE_EGRESS_ARMED;
+						}
+					}
+					else if (platform_door_ascent)
+					{
+						sg_carrier_action_state_t *carrier =
+							&bot->carrier_action;
+
+						if (bot->declared_touched && !SG_LiftRider(plat, e))
+						{
+							carrier->phase = SG_CARRIER_PHASE_FAILED;
+							bot->commit_link = -1;
+							hold = true;
+						}
+						if (carrier->phase ==
+						        SG_CARRIER_PHASE_APPROACH_OPENING &&
+						    MechanismStep_CarrierStageDoorsTop(
+						        &mechanism_binding,
+						        SG_CARRIER_DOOR_APPROACH))
+							carrier->phase = SG_CARRIER_PHASE_CARRIER_READY;
+						if (carrier->phase ==
+						        SG_CARRIER_PHASE_APPROACH_OPENING)
+							hold = true;
+						else if (carrier->phase ==
+						         SG_CARRIER_PHASE_CARRIER_READY)
+						{
+							if (SG_DeclaredDoorGuardHoldOpen(bot, 1000) !=
+							        SG_COMPOUND_GUARD_OK ||
+							    !SG_LiftRest(mechanism_binding.entry_entity,
+							        plat, e, carrier_body))
+							{
+								carrier->phase = SG_CARRIER_PHASE_FAILED;
+								bot->commit_link = -1;
+								hold = true;
+							}
+							else if (!bot->declared_touched)
+								VectorCopy(carrier_body, target);
+						}
+						if (bot->declared_touched &&
+						    plat->moveinfo.state == SG_PLAT_STATE_TOP &&
+						    SG_LiftRider(plat, e))
+							bot->declared_activated = true;
+					}
 					else if (compound_carrier &&
 					         !MechanismStep_CarrierStateCurrent(bot,
 					             &mechanism_binding))
@@ -9619,7 +9838,20 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						    mechanism_binding.entry_entity,
 						    e->s.origin, target);
 					}
+					if (platform_ride && plat && bot->commit_link >= 0 &&
+					    bot->declared_touched &&
+					    plat->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+					    bot->carrier_action.phase >=
+					        SG_CARRIER_PHASE_EGRESS_ARMED)
+						VectorCopy(SG_Rune()->seeds[decl->to].origin, target);
 				}
+				if (platform_ride && bot->declared_activated &&
+				    bot->carrier_action.phase == SG_CARRIER_PHASE_EGRESS_OPEN &&
+				    SG_SupportedArrived(e->s.origin,
+				        SG_Rune()->seeds[decl->to].origin,
+				        e->groundentity != NULL, e->watertype, e->waterlevel, e) &&
+				    !SG_CarrierActionComplete(bot, &mechanism_binding))
+					hold = true;
 				VectorSubtract(target, e->s.origin, dd);
 				dd[2] = 0.0f;
 				horiz = VectorLength(dd);

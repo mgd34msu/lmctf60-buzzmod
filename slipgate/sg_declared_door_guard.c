@@ -117,7 +117,7 @@ static sg_compound_guard_result_t DeclaredDoorResolve(
 	                &key_count)
 	          : carrier_stage >= SG_CARRIER_DOOR_APPROACH &&
 	                carrier_stage <= SG_CARRIER_DOOR_EGRESS &&
-	                SG_RuneMechanismBindingCarrierStage(&binding,
+	                SG_RuneMechanismBindingLiftDoorStage(&binding,
 	                    (sg_carrier_door_stage_t)carrier_stage,
 	                    &carrier_trigger, mover_keys, &key_count,
 	                    &carrier_delay_ms)) || key_count == 0U ||
