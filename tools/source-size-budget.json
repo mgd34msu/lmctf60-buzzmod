@@ -116,7 +116,7 @@
     "tests/test_bspmechanisms.py": 1268,
     "tests/test_defense_combat_integration.py": 901,
     "tests/test_offense_flag_pickup_recovery.py": 1003,
-    "tests/test_rune_artifact.py": 2187,
+    "tests/test_rune_artifact.py": 2385,
     "tests/test_rune_corpus_controller.py": 2263,
     "tests/test_runegen_gate.py": 458,
     "tests/test_snagrepair.py": 911,
@@ -131,7 +131,7 @@
     "tools/rune_corpus_controller.py": 4097,
     "tools/runegen.sh": 552,
     "tools/runegen_pair.py": 914,
-    "tools/runeio.py": 2796,
+    "tools/runeio.py": 2921,
     "tools/snag_corpus.py": 1103,
     "tools/stealstage.py": 3959,
     "tools/teamsheet.py": 1338
