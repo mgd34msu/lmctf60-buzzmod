@@ -333,6 +333,33 @@ static void TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay(void)
 	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
 }
 
+static void TestAutomaticDoorAcceptsMissingEffectTarget(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *effect;
+	char empty[] = "";
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	Trigger(trigger, door, 160.0f);
+	door->target = "MissingEffect";
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+
+	door->target = empty;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	door->target = "LiveEffect";
+	effect = &fixture_edicts[GUARD_EXTRA_KEY];
+	effect->inuse = true;
+	effect->classname = "target_speaker";
+	effect->targetname = "LiveEffect";
+	effect->use = Use_Target_Speaker;
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	effect->use = door_use;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+}
+
 static void TestCompoundLiftAdmitsOnlySameDoorSetSibling(void)
 {
 	edict_t *door;
@@ -886,6 +913,7 @@ int SG_CompoundDeclaredOracleCasesRun(void)
 	TestDeclaredActivatorAcceptsSynchronousRelayDoor();
 	TestDeclaredActivatorDelayedSoundTerminal();
 	TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay();
+	TestAutomaticDoorAcceptsMissingEffectTarget();
 	TestCompoundLiftAdmitsOnlySameDoorSetSibling();
 	TestCompoundLiftDelayedTopDoorShape();
 	TestCompoundLiftDirectTopDoorMembers();
