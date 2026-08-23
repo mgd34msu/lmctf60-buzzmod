@@ -1988,6 +1988,7 @@ def _rune_validate_production_plan(
 
     expected: set[RuneActivationEdge] = set()
     relay_invocations: set[int] = set()
+    pending_relays: list[RuneActivationNode] = []
 
     def delayed_sound_only_relay(
         node: RuneActivationNode, depth: int
@@ -2026,38 +2027,28 @@ def _rune_validate_production_plan(
     def add_side_effect(
         edge: RuneActivationEdge, *, allow_areaportal: bool
     ) -> None:
-        # Use an explicit stack so a hostile 8192-node relay chain cannot
-        # exhaust Python's recursion limit before producing a wire error.
-        pending = [(edge, allow_areaportal)]
-        while pending:
-            current, current_allows_areaportal = pending.pop()
-            if current.kind != RUNE_EDGE_TARGET or current.delay_ms != 0:
-                fail("contains a delayed or non-target side effect")
-            add_edge(current)
-            destination = node_by_key[current.to_key]
-            if _rune_safe_speaker(destination):
-                continue
-            if current_allows_areaportal and _rune_safe_areaportal(destination):
-                continue
-            # Preserve the inbound engine ordinal, but stop before the bound
-            # positive-delay relay can schedule DelayedUse.  Its omitted
-            # inventory suffix must be completely sound-only.
-            if (
-                destination.delay_ms > 0 and
-                delayed_sound_only_relay(destination, 1)
-            ):
-                continue
-            if not _rune_safe_relay(destination):
-                fail("contains a mutable speaker, relay, or side-effect endpoint")
-            if destination.key in relay_invocations:
-                fail("contains a cyclic or multiply invoked relay closure")
-            relay_invocations.add(destination.key)
-            fanout = inventory_fanout.get(
-                (destination.key, RUNE_EDGE_TARGET), ()
-            )
-            if not fanout:
-                fail("contains an empty sound relay")
-            pending.extend((child, False) for child in reversed(fanout))
+        if edge.kind != RUNE_EDGE_TARGET or edge.delay_ms != 0:
+            fail("contains a delayed or non-target side effect")
+        add_edge(edge)
+        destination = node_by_key[edge.to_key]
+        if _rune_safe_speaker(destination):
+            return
+        if allow_areaportal and _rune_safe_areaportal(destination):
+            return
+        # Preserve the inbound engine ordinal, but stop before the bound
+        # positive-delay relay can schedule DelayedUse.  Its omitted
+        # inventory suffix must be completely sound-only.
+        if (
+            destination.delay_ms > 0 and
+            delayed_sound_only_relay(destination, 1)
+        ):
+            return
+        if not _rune_safe_relay(destination):
+            fail("contains a mutable speaker, relay, or side-effect endpoint")
+        if destination.key in relay_invocations:
+            fail("contains a cyclic or multiply invoked relay closure")
+        relay_invocations.add(destination.key)
+        pending_relays.append(destination)
 
     def add_door_closure(
         masters: list[int], expected_physical: int
@@ -2095,6 +2086,27 @@ def _rune_validate_production_plan(
                 (door.key, RUNE_EDGE_TARGET), ()
             ):
                 add_side_effect(edge, allow_areaportal=True)
+        relay_index = 0
+        while relay_index < len(pending_relays):
+            relay = pending_relays[relay_index]
+            relay_index += 1
+            fanout = inventory_fanout.get(
+                (relay.key, RUNE_EDGE_TARGET), ()
+            )
+            if not fanout:
+                fail("contains an empty sound relay")
+            for edge in fanout:
+                destination = node_by_key[edge.to_key]
+                if destination.kind == RUNE_NODE_DOOR_MASTER:
+                    if destination.key not in masters:
+                        fail("relay targets an unauthenticated door master")
+                    add_edge(edge)
+                elif destination.kind == RUNE_NODE_DOOR_MEMBER:
+                    if destination.team_master_key not in masters:
+                        fail("relay targets an unauthenticated door member")
+                    add_edge(edge)
+                else:
+                    add_side_effect(edge, allow_areaportal=False)
 
     controller = plan.controller_kind
     if controller == RUNE_CONTROLLER_PLATFORM:
@@ -2432,6 +2444,21 @@ def _rune_validate_production_plan(
                     add_edge(edge)  # authenticated door_use no-op
                 else:
                     add_side_effect(edge, allow_areaportal=False)
+            for relay in tuple(pending_relays):
+                for edge in inventory_fanout.get(
+                    (relay.key, RUNE_EDGE_TARGET), ()
+                ):
+                    destination = node_by_key[edge.to_key]
+                    if destination.kind == RUNE_NODE_DOOR_MASTER:
+                        if destination.key in seen_masters:
+                            fail("relay admits one door master more than once")
+                        masters.append(destination.key)
+                        seen_masters.add(destination.key)
+                    elif (
+                        destination.kind == RUNE_NODE_DOOR_MEMBER and
+                        destination.team_master_key not in seen_masters
+                    ):
+                        fail("relay targets a door slave before its master")
             if not masters or mover.key != min(masters):
                 fail("does not bind mover_key to the smallest admitted master")
 

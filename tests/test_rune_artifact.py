@@ -620,6 +620,8 @@ def _build_direct_door(
     speaker_spawnflags: int = 0,
     relay_delay_ms: int = 0,
     door_spawnflags: int = 2 | 4,
+    relay_door: bool = False,
+    relay_slave_first: bool = False,
 ) -> bytes:
     """Build a complete direct-trigger door and benign-effect closure."""
 
@@ -630,6 +632,7 @@ def _build_direct_door(
         b"func_areaportal",
         b"func_door",
         b"member_effect",
+        *((b"relay_door",) if relay_door else ()),
         b"relay_sound",
         b"target_speaker",
         b"trigger_multiple",
@@ -732,7 +735,7 @@ def _build_direct_door(
                        runeio.RUNE_NODEF_MOVER |
                        runeio.RUNE_NODEF_TEAM_MASTER),
                 target=b"door_effect",
-                targetname=b"fan",
+                targetname=(b"relay_door" if relay_door else b"fan"),
                 team_master_key=2,
                 spawnflags=door_spawnflags,
                 use_callback=runeio.RUNE_CALLBACK_USE_DOOR,
@@ -747,7 +750,7 @@ def _build_direct_door(
                        runeio.RUNE_NODEF_MOVER |
                        runeio.RUNE_NODEF_TEAM_MEMBER),
                 target=b"member_effect",
-                targetname=b"fan",
+                targetname=(b"relay_door" if relay_door else b"fan"),
                 team_master_key=2,
                 spawnflags=door_spawnflags,
                 use_callback=runeio.RUNE_CALLBACK_USE_DOOR,
@@ -765,7 +768,7 @@ def _build_direct_door(
             ),
             node(
                 5, runeio.RUNE_NODE_RELAY, b"trigger_relay",
-                target=b"relay_sound",
+                target=(b"relay_door" if relay_door else b"relay_sound"),
                 targetname=b"fan",
                 use_callback=runeio.RUNE_CALLBACK_USE_TRIGGER_RELAY,
                 delay_ms=relay_delay_ms,
@@ -804,15 +807,26 @@ def _build_direct_door(
         )
     )
 
+    relay_rows = (
+        [
+            (5, destination, runeio.RUNE_EDGE_TARGET, ordinal, 0)
+            for ordinal, destination in enumerate(
+                (3, 2) if relay_slave_first else (2, 3)
+            )
+        ]
+        if relay_door else
+        [(5, 6, runeio.RUNE_EDGE_TARGET, 0, 0)]
+    )
+    effective_entry_order = (4, 5) if relay_door else entry_order
     edge_rows = [
         *( (1, destination, runeio.RUNE_EDGE_TARGET, ordinal, 0)
-           for ordinal, destination in enumerate(entry_order) ),
+           for ordinal, destination in enumerate(effective_entry_order) ),
         (2, 7, runeio.RUNE_EDGE_TARGET, 0, 0),
         (2, 8, runeio.RUNE_EDGE_TARGET, 1, 0),
         (2, 9, runeio.RUNE_EDGE_TARGET, 2, 0),
         (2, 3, runeio.RUNE_EDGE_TEAM, 0, 0),
         (3, 10, runeio.RUNE_EDGE_TARGET, 0, 0),
-        (5, 6, runeio.RUNE_EDGE_TARGET, 0, 0),
+        *relay_rows,
         (9, 11, runeio.RUNE_EDGE_TARGET, 0, 0),
     ]
     inventory = tuple(
@@ -2015,6 +2029,24 @@ class RuneRuneArtifactTests(unittest.TestCase):
         self.assertEqual(
             runeio.RUNE_CONTROLLER_DIRECT_TRIGGER_DOOR,
             decoded.activation_plans[0].controller_kind,
+        )
+
+    def test_direct_door_plan_authenticates_one_synchronous_relay(self):
+        decoded = runeio.decode(_build_direct_door(relay_door=True))
+        self.assertEqual(
+            [(1, 4), (1, 5), (5, 2), (5, 3)],
+            [
+                (edge.from_key, edge.to_key)
+                for edge in decoded.plan_edges
+                if edge.from_key in (1, 5)
+            ],
+        )
+        self.assert_wire_code(
+            runeio.RLRUNE_BAD_ACTIVATION_PLAN,
+            lambda: runeio.decode(_build_direct_door(
+                relay_door=True,
+                relay_slave_first=True,
+            )),
         )
 
     def test_delayed_sound_terminal_retains_inbound_ordinal_only(self):
