@@ -134,6 +134,10 @@ TRAIN_GATE_LIVE_TEST_BIN = sg_train_gate_live_test.gnu
 TRAIN_GATE_LIVE_TEST_OBJS = .sg_train_gate_live_test.gnu.o \
 	.sg_train_gate_live_under_test.gnu.o
 TRAIN_GATE_LIVE_TEST_DEPS = $(TRAIN_GATE_LIVE_TEST_OBJS:.o=.d)
+SHOOT_DOOR_LIVE_TEST_BIN = sg_shoot_door_live_test.gnu
+SHOOT_DOOR_LIVE_TEST_OBJS = .sg_shoot_door_live_test.gnu.o \
+	.sg_shoot_door_live_under_test.gnu.o
+SHOOT_DOOR_LIVE_TEST_DEPS = $(SHOOT_DOOR_LIVE_TEST_OBJS:.o=.d)
 BUTTON_GAME_TEST_BIN = sg_button_game_test.gnu
 BUTTON_GAME_TEST_OBJS = .sg_button_game_test.gnu.o \
 	.sg_button_game_live_under_test.gnu.o \
@@ -1457,6 +1461,9 @@ $(BUTTON_LIVE_TEST_BIN): $(BUTTON_LIVE_TEST_OBJS)
 $(TRAIN_GATE_LIVE_TEST_BIN): $(TRAIN_GATE_LIVE_TEST_OBJS)
 	$(CC) -o $@ $(TRAIN_GATE_LIVE_TEST_OBJS) $(LDFLAGS)
 
+$(SHOOT_DOOR_LIVE_TEST_BIN): $(SHOOT_DOOR_LIVE_TEST_OBJS)
+	$(CC) -o $@ $(SHOOT_DOOR_LIVE_TEST_OBJS) $(LDFLAGS)
+
 $(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LDFLAGS)
 
@@ -1581,6 +1588,16 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_train_gate_live_under_test.gnu.o: slipgate/sg_train_gate_live.c \
 		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_shoot_door_live_test.gnu.o: tests/sg_shoot_door_live_test.c \
+		slipgate/sg_shoot_door_live.h $(REVISION_HEADER)
+	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
+		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_shoot_door_live_under_test.gnu.o: slipgate/sg_shoot_door_live.c \
+		slipgate/sg_shoot_door_live.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
@@ -2801,7 +2818,7 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
-		$(BUTTON_LIVE_TEST_BIN) \
+		$(BUTTON_LIVE_TEST_BIN) $(SHOOT_DOOR_LIVE_TEST_BIN) \
 		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
@@ -2886,6 +2903,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(MOVER_LEASE_TEST_BIN)
 	./$(WATER_FOREST_TEST_BIN)
 	./$(BUTTON_LIVE_TEST_BIN)
+	./$(SHOOT_DOOR_LIVE_TEST_BIN)
 	./$(BUTTON_GAME_TEST_BIN)
 	python3 $(BUTTON_GAME_INTEGRATION_TEST)
 	./$(COMPOUND_GUARD_TEST_BIN)
@@ -3040,6 +3058,9 @@ button-live-test: $(BUTTON_LIVE_TEST_BIN)
 
 train-gate-live-test: $(TRAIN_GATE_LIVE_TEST_BIN)
 	./$(TRAIN_GATE_LIVE_TEST_BIN)
+
+shoot-door-live-test: $(SHOOT_DOOR_LIVE_TEST_BIN)
+	./$(SHOOT_DOOR_LIVE_TEST_BIN)
 
 button-game-test: $(BUTTON_GAME_TEST_BIN)
 	./$(BUTTON_GAME_TEST_BIN)
@@ -3395,6 +3416,7 @@ endif
 -include $(WATER_FOREST_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
 -include $(TRAIN_GATE_LIVE_TEST_DEPS)
+-include $(SHOOT_DOOR_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)

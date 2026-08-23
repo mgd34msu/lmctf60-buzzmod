@@ -325,6 +325,7 @@ static inline int SG_MechExecutionStateValid(
 	     state->controller_kind ==
 	         SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM) &&
 	    door_mover)
 	{

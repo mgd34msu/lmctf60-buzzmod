@@ -1203,7 +1203,10 @@ static sg_rune_codec_diagnostic_t Codec_ValidatePlanFields(
 			return RLCODEC_BAD_ACTIVATION_PLAN;
 	}
 	else if (!Codec_KeyValueValid(plan->mover_key) ||
-	         plan->entry_key == plan->mover_key || plan->num_edges == 0U)
+	         (plan->entry_key == plan->mover_key &&
+	          plan->controller_kind !=
+	              SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT) ||
+	         plan->num_edges == 0U)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	return RLCODEC_OK;
 }
@@ -2522,6 +2525,22 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		int shoot = plan->controller_kind ==
 			SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT;
 
+		if (shoot && nodes[entry_index].kind ==
+		        SG_RUNE_CODEC_NODE_DOOR_MASTER)
+		{
+			if (!owner_link || owner_link->action != RL_TRAIN ||
+			    owner_link->mode != RLCM_PREOPEN ||
+			    plan->entry_key != plan->mover_key ||
+			    plan->expected_members == 0U || plan->cooldown_ms == 0U ||
+			    plan->cooldown_ms > SG_RUNE_CODEC_MAX_TIME_MS ||
+			    nodes[entry_index].team_master_key != plan->entry_key ||
+			    (nodes[entry_index].flags &
+			        SG_RUNE_CODEC_NODEF_SHOOTABLE) == 0U)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+			workspace->node_touched[master_count++] = entry_index;
+			break;
+		}
+
 		if (!owner_link || owner_link->action != RL_TRAIN ||
 		    plan->expected_members != 1U || plan->cooldown_ms == 0U ||
 		    plan->cooldown_ms > SG_RUNE_CODEC_MAX_TIME_MS ||
@@ -2756,6 +2775,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 
 	if ((plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_PLATFORM &&
 	     master_count != 0U) ||
+	    (plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT &&
+	     master_count != 0U) ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_AUTO_DOOR ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_BUTTON_DOOR ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_DIRECT_TRIGGER_DOOR)
@@ -2769,6 +2790,11 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 
 			if (!Codec_DoorNodeShapeValid(&nodes[master_node_index], 1))
 				return RLCODEC_BAD_ACTIVATION_NODE;
+			if (plan->controller_kind ==
+			        SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT &&
+			    (nodes[master_node_index].flags &
+			        SG_RUNE_CODEC_NODEF_SHOOTABLE) == 0U)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
 			if (!Codec_DoorNodeSemanticValid(&nodes[master_node_index],
 			    master_key, strings))
 				return RLCODEC_BAD_ACTIVATION_PLAN;
@@ -2779,6 +2805,11 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 				{
 					if (!Codec_DoorNodeShapeValid(&nodes[j], 0))
 						return RLCODEC_BAD_ACTIVATION_NODE;
+					if (plan->controller_kind ==
+					        SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT &&
+					    (nodes[j].flags &
+					        SG_RUNE_CODEC_NODEF_SHOOTABLE) == 0U)
+						return RLCODEC_BAD_ACTIVATION_PLAN;
 					if (!Codec_DoorNodeSemanticValid(&nodes[j], master_key,
 					    strings))
 						return RLCODEC_BAD_ACTIVATION_PLAN;

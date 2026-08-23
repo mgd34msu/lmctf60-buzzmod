@@ -314,6 +314,47 @@ static int Binding_TrainSealedThink(uint16_t callback)
 	       callback == SG_MECH_CALLBACK_FUNC_TRAIN_FIND;
 }
 
+static int Binding_ShootDoorShape(const rune_t *rune,
+	const rune_link_t *link, const rune_mechanism_plan_t *plan,
+	const rune_mechanism_node_t *entry,
+	const rune_mechanism_node_t *mover)
+{
+	uint32_t index;
+	uint32_t physical = 0U;
+
+	if (!rune || !link || !plan || !entry || entry != mover ||
+	    link->action != RL_TRAIN || link->mode != RLCM_PREOPEN ||
+	    plan->controller_kind != SG_MECHANISM_CONTROLLER_TRAIN_SHOOT ||
+	    plan->entry_key != plan->mover_key ||
+	    plan->cooldown_ms == 0U ||
+	    plan->cooldown_ms > RUNE_MAX_COST_MS ||
+	    entry->kind != SG_MECH_NODE_DOOR_MASTER ||
+	    entry->team_master_key != entry->key ||
+	    Binding_DoorMoverCount(rune, plan, entry) != plan->expected_members)
+		return 0;
+	for (index = 0U; index < rune->artifact.num_mechanism_nodes; index++)
+	{
+		const rune_mechanism_node_t *node = &rune->mechanism_nodes[index];
+
+		if (node->key != entry->key &&
+		    !(node->kind == SG_MECH_NODE_DOOR_MEMBER &&
+		      node->team_master_key == entry->key))
+			continue;
+		if (!Binding_NodeExecutable(node) ||
+		    (node->kind != SG_MECH_NODE_DOOR_MASTER &&
+		     node->kind != SG_MECH_NODE_DOOR_MEMBER) ||
+		    (node->flags & (SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		         SG_MECH_NODEF_SHOOTABLE)) !=
+		        (SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		         SG_MECH_NODEF_SHOOTABLE) ||
+		    node->use_callback != SG_MECH_CALLBACK_USE_DOOR ||
+		    node->blocked_callback != SG_MECH_CALLBACK_BLOCKED_DOOR)
+			return 0;
+		physical++;
+	}
+	return physical == plan->expected_members;
+}
+
 static int Binding_ControllerShape(const rune_t *rune,
 	const rune_link_t *link, const rune_mechanism_plan_t *plan,
 	const rune_mechanism_node_t *entry,
@@ -427,6 +468,9 @@ static int Binding_ControllerShape(const rune_t *rune,
 		const rune_mechanism_node_t *open;
 		int shoot = plan->controller_kind ==
 			SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
+
+		if (shoot && entry->kind == SG_MECH_NODE_DOOR_MASTER)
+			return Binding_ShootDoorShape(rune, link, plan, entry, mover);
 
 		return link->action == RL_TRAIN && plan->expected_members == 1U &&
 		       plan->cooldown_ms > 0U &&
@@ -550,6 +594,8 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		plan->mover_key);
 	if ((plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
 	     plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
+	    candidate.entry_node &&
+	    candidate.entry_node->kind == SG_MECH_NODE_BUTTON &&
 	    !Binding_TrainTerminals(rune, plan, &candidate.destination_node,
 	        &candidate.egress_node))
 		return 0;
@@ -813,7 +859,13 @@ static int Binding_AddMover(const sg_rune_mechanism_binding_t *binding,
 	 * movers in the callback closure never become door lease members. */
 	if (binding->link->action == RL_TRAIN)
 	{
-		if (node->kind != SG_MECH_NODE_TRAIN)
+		int shoot_door = binding->plan->controller_kind ==
+		        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT &&
+		    binding->entry_node &&
+		    binding->entry_node->kind == SG_MECH_NODE_DOOR_MASTER;
+
+		if (shoot_door ? !Binding_NodeDoorMover(node) :
+		        node->kind != SG_MECH_NODE_TRAIN)
 			return 1;
 	}
 	else if (binding->link->action == RL_DOOR ||

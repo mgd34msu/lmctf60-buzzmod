@@ -1792,6 +1792,18 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	     entity->velocity[2] != 0.0f || entity->avelocity[0] != 0.0f ||
 	     entity->avelocity[1] != 0.0f || entity->avelocity[2] != 0.0f))
 		return 0;
+	if (execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT &&
+	    (node->kind == SG_MECH_NODE_DOOR_MASTER ||
+	     node->kind == SG_MECH_NODE_DOOR_MEMBER) &&
+	    (!entity->classname || strcmp(entity->classname, "func_door") ||
+	     (node->flags & (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE)) !=
+	         (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_SHOOTABLE) ||
+	     entity->use != door_use || entity->blocked != door_blocked ||
+	     entity->die != door_killed || entity->max_health <= 0 ||
+	     entity->health != entity->max_health ||
+	     entity->takedamage != DAMAGE_YES))
+		return 0;
 	delay_ms = entity->delay > 0.0f
 		? (uint32_t)Catalog_DelayMS(entity->delay) : 0U;
 	owner_key = Catalog_LivePointerKey(entity->owner);
