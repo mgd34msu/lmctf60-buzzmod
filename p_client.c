@@ -5,6 +5,7 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_human_trace.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_compound_guard_game.h"
@@ -2812,6 +2813,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	qboolean	povlock_frame;
 	qboolean	povrecord_frame;
 	pmove_t	pm;
+	pmove_state_t	human_trace_before;
 	edict_t		*flag;  // CTF CODE -- LM_JORM
 	vec3_t 	offset; // CTF CODE -- LM_JORM
 
@@ -2987,8 +2989,10 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 
 		// perform a pmove
 		SG_HumanSpeedPmoveBegin(ent, &pm.s, pm.cmd.msec);
+		human_trace_before = pm.s;
 		gi.Pmove (&pm);
 		SG_HumanSpeedPmoveEnd(ent, &pm.s, pm.cmd.msec);
+		SG_HumanTracePmove(ent, &human_trace_before, &pm);
 
 		// save results of pmove
 		client->ps.pmove = pm.s;

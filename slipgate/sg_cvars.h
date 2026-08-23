@@ -40,6 +40,8 @@
 	X(freeride, "sg_freeride", "0") \
 	X(handoff, "sg_handoff", "0") \
 	X(hookpong, "sg_hookpong", "0") \
+	X(humantrace, "sg_humantrace", "0") \
+	X(humantracedir, "sg_humantrace_dir", "") \
 	X(hopfire, "sg_hopfire", "0") \
 	X(humanprior, "sg_humanprior", "0") \
 	X(interpose, "sg_interpose", "3") \

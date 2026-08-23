@@ -74,6 +74,14 @@ void SG_HumanSpeedPmoveEnd(edict_t *ent, const pmove_state_t *pmove,
 	(void)command_msec;
 }
 
+void SG_HumanTracePmove(edict_t *ent, const pmove_state_t *before,
+	const pmove_t *after)
+{
+	(void)ent;
+	(void)before;
+	(void)after;
+}
+
 void G_TouchTriggers(edict_t *ent)
 {
 	(void)ent;
