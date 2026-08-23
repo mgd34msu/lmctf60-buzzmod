@@ -4948,7 +4948,9 @@ static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t en
 
 	if (sg_oracle_world_only &&
 	    (sg_oracle_declared_action == RL_BUTTON_DOOR ||
-	     sg_oracle_declared_action == RL_TRAIN) &&
+	     sg_oracle_declared_action == RL_TRAIN ||
+	     (sg_oracle_declared_action == RL_LIFT &&
+	      sg_oracle_declared_expected == sg_oracle_declared_entry)) &&
 	    tr.ent == sg_oracle_declared_expected &&
 	    (tr.startsolid || tr.allsolid || tr.fraction < 1.0f))
 		sg_oracle_declared_touched = true;
@@ -7259,6 +7261,16 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 {
 	return SG_OracleDeclaredApproachInternal(source, target, entry, support,
 		NULL, NULL, action, arrival_ms, NULL, NULL);
+}
+
+qboolean SG_OracleButtonLiftApproach(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *platform,
+	int *arrival_ms)
+{
+	return button && platform && button->touch == button_touch &&
+	       platform->classname && !strcmp(platform->classname, "func_door") &&
+	       SG_OracleDeclaredApproachInternal(source, target, button, button,
+	           platform, button, RL_LIFT, arrival_ms, NULL, NULL);
 }
 
 qboolean SG_OracleTrainGateApproach(const vec3_t source,

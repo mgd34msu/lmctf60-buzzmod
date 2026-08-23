@@ -2190,6 +2190,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 			? RUNE_MAX_COST_MS : (uint32_t)nodes[entry_index].wait_ms;
 		int stock;
 		int carrier;
+		int button_carrier;
 		uint32_t class_indices[2] = { UINT32_MAX, UINT32_MAX };
 		uint32_t class_count = 0U;
 		uint32_t approach_class = UINT32_MAX;
@@ -2220,17 +2221,48 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		    target_count == 1U && target_index != UINT32_MAX &&
 		    edges[target_index].to_key == plan->mover_key &&
 		    plan->cooldown_ms == cooldown;
+		button_carrier = nodes[entry_index].touch_callback ==
+		        SG_RUNE_CODEC_CALLBACK_BUTTON_TOUCH &&
+		    nodes[entry_index].use_callback ==
+		        SG_RUNE_CODEC_CALLBACK_BUTTON_USE &&
+		    (nodes[entry_index].flags & (SG_RUNE_CODEC_NODEF_SYNTHETIC |
+		        SG_RUNE_CODEC_NODEF_REPEATABLE |
+		        SG_RUNE_CODEC_NODEF_TOUCHABLE |
+		        SG_RUNE_CODEC_NODEF_USABLE | SG_RUNE_CODEC_NODEF_MOVER |
+		        SG_RUNE_CODEC_NODEF_SHOOTABLE |
+		        SG_RUNE_CODEC_NODEF_FRAME_COMPLETE_MOVER)) ==
+		        (SG_RUNE_CODEC_NODEF_REPEATABLE |
+		         SG_RUNE_CODEC_NODEF_TOUCHABLE |
+		         SG_RUNE_CODEC_NODEF_USABLE | SG_RUNE_CODEC_NODEF_MOVER) &&
+		    nodes[entry_index].spawnflags == 0U &&
+		    nodes[entry_index].delay_ms == 0 &&
+		    nodes[entry_index].wait_ms > 0 &&
+		    nodes[entry_index].killtarget_offset == 0U &&
+		    nodes[entry_index].path_target_offset == 0U &&
+		    nodes[mover_index].use_callback ==
+		        SG_RUNE_CODEC_CALLBACK_USE_DOOR &&
+		    nodes[mover_index].blocked_callback ==
+		        SG_RUNE_CODEC_CALLBACK_BLOCKED_DOOR &&
+		    SG_RuneCarrierDoorSpawnflags(nodes[mover_index].spawnflags) &&
+		    (nodes[mover_index].flags & (SG_RUNE_CODEC_NODEF_MOVER |
+		        SG_RUNE_CODEC_NODEF_TEAM_MASTER |
+		        SG_RUNE_CODEC_NODEF_SHOOTABLE)) ==
+		        (SG_RUNE_CODEC_NODEF_MOVER |
+		         SG_RUNE_CODEC_NODEF_TEAM_MASTER) &&
+		    target_count == 1U && target_index != UINT32_MAX &&
+		    edges[target_index].to_key == plan->mover_key &&
+		    plan->cooldown_ms == cooldown && plan->expected_members == 1U;
 		if (nodes[entry_index].kind != SG_RUNE_CODEC_NODE_PLATFORM_TRIGGER ||
 		    nodes[mover_index].kind != SG_RUNE_CODEC_NODE_PLATFORM ||
 		    owner_count != 1U || owner_index == UINT32_MAX ||
 		    edges[owner_index].to_key != plan->mover_key ||
-		    (!stock && !carrier) || !owner_link ||
+		    (!stock && !carrier && !button_carrier) || !owner_link ||
 		    (stock && ((owner_link->mode == RLCM_RIDE &&
 		                   plan->expected_members <= 1U) ||
 		              (owner_link->mode != RLCM_NONE &&
 		                   owner_link->mode != RLCM_RIDE))))
 			return RLCODEC_BAD_ACTIVATION_PLAN;
-		if (carrier)
+		if (carrier || button_carrier)
 		{
 			diagnostic = Codec_ExpectInventoryEdge(edges, plan, target_index,
 				generation, workspace, &expected_count);

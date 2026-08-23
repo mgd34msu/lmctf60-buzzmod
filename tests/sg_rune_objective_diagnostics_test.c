@@ -39,6 +39,9 @@ static qboolean objective_hook_succeeds;
 static int objective_hook_calls;
 static qboolean objective_rocket_succeeds;
 static int objective_rocket_calls;
+static int objective_rocket_success_limit;
+static int objective_rocket_from[4];
+static int objective_rocket_to[4];
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -129,10 +132,15 @@ static qboolean TestObjectiveHookProver(int from, int to, vec3_t control_out,
 static qboolean TestObjectiveRocketProver(int from, int to, vec3_t anchor_out,
 	short *cost_ms, byte *exit_speed, byte *heading_out)
 {
-	(void)from;
-	(void)to;
 	objective_rocket_calls++;
-	if (!objective_rocket_succeeds)
+	if (objective_rocket_calls <= 4)
+	{
+		objective_rocket_from[objective_rocket_calls - 1] = from;
+		objective_rocket_to[objective_rocket_calls - 1] = to;
+	}
+	if (!objective_rocket_succeeds ||
+	    (objective_rocket_success_limit >= 0 &&
+	     objective_rocket_calls > objective_rocket_success_limit))
 		return false;
 	VectorSet(anchor_out, -30.0f, 45.0f, 88.0f);
 	*cost_ms = 1300;
@@ -208,6 +216,9 @@ static void ResetGraph(rune_seed_t *seeds, int seed_count,
 	objective_hook_calls = 0;
 	objective_rocket_succeeds = false;
 	objective_rocket_calls = 0;
+	objective_rocket_success_limit = -1;
+	memset(objective_rocket_from, -1, sizeof(objective_rocket_from));
+	memset(objective_rocket_to, -1, sizeof(objective_rocket_to));
 	gen_env_drop = 0;
 	gen_env_hook = 0;
 	telemetry_flush_calls = 0;
@@ -445,6 +456,68 @@ static void TestObjectiveReverseRocketRepair(void)
 	CHECK(links[5].min_speed == 0);
 	CHECK(strstr(diagnostic_log,
 	    "objective-repair kind=reverse-rocketjump") != NULL);
+}
+
+static void TestObjectiveRocketClosure(void)
+{
+	rune_seed_t seeds[4];
+	rune_link_t links[6];
+	byte red_reach[4] = { 1, 0, 1, 0 };
+	byte blue_reach[4] = { 0, 1, 0, 1 };
+	edict_t red, blue;
+	int calls = 0;
+
+	ResetGraph(seeds, 4, links, 4, &red, &blue);
+	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[2].origin, 400.0f, 0.0f, 0.0f);
+	VectorSet(seeds[3].origin, 500.0f, 0.0f, 0.0f);
+	SetLink(&links[0], 0, 2);
+	SetLink(&links[1], 2, 0);
+	SetLink(&links[2], 1, 3);
+	SetLink(&links[3], 3, 1);
+	objective_rocket_succeeds = true;
+	CHECK(Graph_ProveObjectiveRocketClosure(0, 1, red_reach, blue_reach,
+	    &calls));
+	CHECK(calls == 2 && objective_rocket_calls == 2);
+	CHECK(objective_rocket_from[0] == 2 && objective_rocket_to[0] == 3);
+	CHECK(objective_rocket_from[1] == 3 && objective_rocket_to[1] == 2);
+	CHECK(gen_num_links == 6);
+	for (int i = 4; i < 6; i++)
+	{
+		CHECK(links[i].action == RL_ROCKETJUMP);
+		CHECK(links[i].cost_ms == 1300 && links[i].exit_speed == 76);
+		CHECK(links[i].heading == 37 && links[i].heading_slack == SG_RJ_SLACK);
+		CHECK(links[i].min_speed == 0);
+	}
+}
+
+static void TestObjectiveRocketClosureRollback(void)
+{
+	rune_seed_t seeds[4];
+	rune_link_t links[6];
+	byte red_reach[4] = { 1, 0, 1, 0 };
+	byte blue_reach[4] = { 0, 1, 0, 1 };
+	edict_t red, blue;
+	int calls = 0;
+
+	ResetGraph(seeds, 4, links, 4, &red, &blue);
+	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[2].origin, 400.0f, 0.0f, 0.0f);
+	VectorSet(seeds[3].origin, 500.0f, 0.0f, 0.0f);
+	objective_rocket_succeeds = true;
+	objective_rocket_success_limit = 1;
+	CHECK(!Graph_ProveObjectiveRocketClosure(0, 1, red_reach, blue_reach,
+	    &calls));
+	CHECK(calls == 8 && gen_num_links == 4);
+
+	objective_rocket_calls = 0;
+	objective_rocket_success_limit = -1;
+	allocations_before_failure = 2;
+	CHECK(!Graph_ProveObjectiveRocketClosure(0, 1, red_reach, blue_reach,
+	    &calls));
+	CHECK(calls == 8 && gen_num_links == 4);
 }
 
 static void TestObjectiveMetricUnits(void)
@@ -723,6 +796,8 @@ int main(void)
 	TestHookReverseDropRepair();
 	TestObjectiveReverseHookRepair();
 	TestObjectiveReverseRocketRepair();
+	TestObjectiveRocketClosure();
+	TestObjectiveRocketClosureRollback();
 	TestOneWayAndFixedPointFailures();
 	TestObjectiveMetricUnits();
 	TestNearestUnlinked();

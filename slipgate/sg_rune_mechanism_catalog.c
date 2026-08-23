@@ -259,18 +259,31 @@ static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 		uint32_t mover_key = 0U;
 		uint32_t destination;
 		uint32_t target_count = 0U;
+		int button_entry;
 		int axis;
 
+		button_entry = trigger->inuse && trigger->classname &&
+		    !strcmp(trigger->classname, "func_button") &&
+		    trigger->touch == button_touch && trigger->use == button_use &&
+		    trigger->solid == SOLID_BSP && trigger->movetype == MOVETYPE_STOP &&
+		    !trigger->think && !trigger->blocked && !trigger->die &&
+		    trigger->health == 0 && trigger->max_health == 0 &&
+		    trigger->takedamage == DAMAGE_NO && trigger->spawnflags == 0 &&
+		    trigger->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
+		    trigger->nextthink == 0.0f;
 		if (!trigger->inuse || !trigger->classname ||
-		    strcmp(trigger->classname, "trigger_multiple") ||
-		    trigger->touch != Touch_Multi || trigger->use != Use_Multi ||
-		    trigger->solid != SOLID_TRIGGER || trigger->movetype != MOVETYPE_NONE ||
+		    (!button_entry &&
+		     (strcmp(trigger->classname, "trigger_multiple") ||
+		      trigger->touch != Touch_Multi || trigger->use != Use_Multi ||
+		      trigger->solid != SOLID_TRIGGER ||
+		      trigger->movetype != MOVETYPE_NONE)) ||
 		    !trigger->target || !trigger->target[0] || trigger->targetname ||
 		    trigger->killtarget || trigger->pathtarget || trigger->message ||
 		    trigger->delay != 0.0f ||
-		    trigger->wait <= 0.0f || (trigger->spawnflags & (2 | 4)) != 0 ||
-		    trigger->movedir[0] != 0.0f || trigger->movedir[1] != 0.0f ||
-		    trigger->movedir[2] != 0.0f)
+		    trigger->wait <= 0.0f ||
+		    (!button_entry && ((trigger->spawnflags & (2 | 4)) != 0 ||
+		     trigger->movedir[0] != 0.0f || trigger->movedir[1] != 0.0f ||
+		     trigger->movedir[2] != 0.0f)))
 			continue;
 		for (destination = 1U;
 		     destination < (uint32_t)globals.num_edicts; destination++)
@@ -336,8 +349,8 @@ static uint16_t Catalog_NodeKind(uint32_t index, const edict_t *entity)
 	if (synthetic == SG_MECH_SYNTHETIC_TELEPORT)
 		return SG_MECH_NODE_TELEPORT_TRIGGER;
 	if (Catalog_TriggeredDoorLiftPair(index, NULL, NULL))
-		return !strcmp(name, "trigger_multiple")
-			? SG_MECH_NODE_PLATFORM_TRIGGER : SG_MECH_NODE_PLATFORM;
+		return !strcmp(name, "func_door")
+			? SG_MECH_NODE_PLATFORM : SG_MECH_NODE_PLATFORM_TRIGGER;
 	if (!name)
 		return SG_MECH_NODE_CONTEXTUAL;
 	if (!strcmp(name, "func_button"))
@@ -513,6 +526,10 @@ static int Catalog_ExecutionCallbacksMatch(const edict_t *entity,
 	         node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
 	         node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR)
 		state.platform_profile = SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER;
+	else if (node->kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
+	         node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH &&
+	         node->use_callback == SG_MECH_CALLBACK_BUTTON_USE)
+		state.platform_profile = SG_MECH_PLATFORM_PROFILE_BUTTON_ENTRY;
 	state.motion_state = entity->moveinfo.state;
 	state.fixed_callbacks_match =
 		Catalog_UseCallback(entity) == node->use_callback &&
@@ -1759,6 +1776,23 @@ int SG_MechCatalogTrainGateSweep(uint32_t key, float mins_out[3],
 	return 1;
 }
 
+static int Catalog_ButtonPlatformMoverSealed(uint32_t key)
+{
+	uint32_t index;
+
+	if (catalog.status != SG_MECH_CATALOG_READY)
+		return 0;
+	for (index = 0U; index < catalog.num_nodes; index++)
+		if (catalog.nodes[index].kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
+		    catalog.nodes[index].owner_key == key &&
+		    catalog.nodes[index].touch_callback ==
+		        SG_MECH_CALLBACK_BUTTON_TOUCH &&
+		    catalog.nodes[index].use_callback ==
+		        SG_MECH_CALLBACK_BUTTON_USE)
+			return 1;
+	return 0;
+}
+
 static int Catalog_EntityTopologyMatches(uint32_t key,
 	const rune_mechanism_node_t *node, int execution,
 	uint16_t controller_kind)
@@ -1768,10 +1802,21 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	uint32_t owner_key;
 	uint32_t team_master_key;
 	uint16_t target_kind;
+	int button_platform_entry;
+	int button_platform_mover;
 
 	if (!SG_MechCatalogEntityMatches(key, node))
 		return 0;
 	entity = &g_edicts[key];
+	button_platform_entry = execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
+	    node->kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
+	    node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH &&
+	    node->use_callback == SG_MECH_CALLBACK_BUTTON_USE;
+	button_platform_mover = execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
+	    node->kind == SG_MECH_NODE_PLATFORM &&
+	    Catalog_ButtonPlatformMoverSealed(key);
 	if (execution &&
 	    (controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
 	     controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
@@ -1816,6 +1861,9 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	if (catalog.sources[key].synthetic_parent)
 		owner_key = Catalog_LivePointerKey(
 			catalog.sources[key].synthetic_parent);
+	if (button_platform_entry)
+		owner_key = node->owner_key;
+	else
 	{
 		uint32_t lift_trigger;
 		uint32_t lift_mover;
@@ -1831,7 +1879,8 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	target_kind = node->kind == SG_MECH_NODE_TRAIN ||
 		node->kind == SG_MECH_NODE_PATH_CORNER
 		? SG_MECH_EDGE_ROUTE_TARGET : SG_MECH_EDGE_TARGET;
-	if (Catalog_NodeKind(key, entity) != node->kind ||
+	if ((!button_platform_entry && !button_platform_mover &&
+	     Catalog_NodeKind(key, entity) != node->kind) ||
 	    (execution
 	        ? !Catalog_ExecutionCallbacksMatch(entity, node,
 	              controller_kind)

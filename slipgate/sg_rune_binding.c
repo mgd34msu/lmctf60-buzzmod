@@ -407,6 +407,28 @@ static int Binding_ControllerShape(const rune_t *rune,
 		    plan->cooldown_ms == cooldown &&
 		    Binding_EdgeCount(rune, plan, entry->key, mover->key,
 		        SG_MECH_EDGE_TARGET) == 1U;
+		int button_carrier = entry->touch_callback ==
+		        SG_MECH_CALLBACK_BUTTON_TOUCH &&
+		    entry->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
+		    (entry->flags & (SG_MECH_NODEF_SYNTHETIC |
+		        SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		        SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		        SG_MECH_NODEF_SHOOTABLE |
+		        SG_MECH_NODEF_FRAME_COMPLETE_MOVER)) ==
+		        (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		         SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER) &&
+		    entry->spawnflags == 0U && entry->delay_ms == 0 &&
+		    entry->wait_ms > 0 && entry->killtarget_offset == 0U &&
+		    entry->path_target_offset == 0U &&
+		    mover->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+		    mover->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR &&
+		    SG_RuneCarrierDoorSpawnflags(mover->spawnflags) &&
+		    (mover->flags & (SG_MECH_NODEF_MOVER |
+		        SG_MECH_NODEF_TEAM_MASTER | SG_MECH_NODEF_SHOOTABLE)) ==
+		        (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER) &&
+		    plan->cooldown_ms == cooldown && plan->expected_members == 1U &&
+		    Binding_EdgeCount(rune, plan, entry->key, mover->key,
+		        SG_MECH_EDGE_TARGET) == 1U;
 
 		int stock_door = 0;
 
@@ -446,11 +468,12 @@ static int Binding_ControllerShape(const rune_t *rune,
 		       mover->kind == SG_MECH_NODE_PLATFORM &&
 		       entry->owner_key == mover->key &&
 		       ((stock && link->mode == RLCM_NONE &&
-		         plan->expected_members == 1U) || stock_door ||
+		         plan->expected_members == 1U) || stock_door || button_carrier ||
 		        (carrier && Binding_PlatformMoverCount(rune, plan, mover) ==
 		            plan->expected_members)) &&
 		       Binding_EdgeCount(rune, plan, entry->key, mover->key,
-		           SG_MECH_EDGE_OWNER) == 1U && (stock || carrier);
+		           SG_MECH_EDGE_OWNER) == 1U &&
+		       (stock || carrier || button_carrier);
 	}
 	case SG_MECHANISM_CONTROLLER_TELEPORT:
 		return link->action == RL_TELEPORT &&
