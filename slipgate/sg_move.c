@@ -2063,10 +2063,14 @@ static qboolean MechanismStep_CarrierPlan(const sg_bot_t *bot,
 	return MechanismStep_Binding(bot, RL_LIFT, binding_out) &&
 	       binding_out->plan->controller_kind ==
 	           SG_MECHANISM_CONTROLLER_PLATFORM &&
-	       binding_out->entry_node->touch_callback ==
-	           SG_MECH_CALLBACK_TOUCH_MULTI &&
-	       binding_out->entry_node->use_callback ==
-	           SG_MECH_CALLBACK_USE_MULTI &&
+	       ((binding_out->entry_node->touch_callback ==
+	             SG_MECH_CALLBACK_TOUCH_MULTI &&
+	         binding_out->entry_node->use_callback ==
+	             SG_MECH_CALLBACK_USE_MULTI) ||
+	        (binding_out->entry_node->touch_callback ==
+	             SG_MECH_CALLBACK_BUTTON_TOUCH &&
+	         binding_out->entry_node->use_callback ==
+	             SG_MECH_CALLBACK_BUTTON_USE)) &&
 	       binding_out->mover_node->use_callback ==
 	           SG_MECH_CALLBACK_USE_DOOR &&
 	       binding_out->mover_node->blocked_callback ==
@@ -2491,6 +2495,19 @@ static qboolean DoorStep_ButtonBinding(sg_bot_t *bot, edict_t *source,
 	       binding_out->entry_entity == source;
 }
 
+static qboolean MechanismStep_ButtonCarrierBinding(sg_bot_t *bot,
+	edict_t *source, sg_rune_mechanism_binding_t *binding_out)
+{
+	return bot && source && binding_out &&
+	       MechanismStep_CarrierPlan(bot, binding_out) &&
+	       binding_out->entry_node->touch_callback ==
+	           SG_MECH_CALLBACK_BUTTON_TOUCH &&
+	       binding_out->entry_node->use_callback ==
+	           SG_MECH_CALLBACK_BUTTON_USE &&
+	       binding_out->entry_entity == source &&
+	       binding_out->plan->expected_members == 1U;
+}
+
 qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 {
 	int train_authority = SG_TrainGateGameAuthorizeButtonTouch(source,
@@ -2505,6 +2522,8 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	int activator_key;
 	int axis;
 	int source_key;
+	qboolean button_door;
+	qboolean button_carrier;
 
 	if (train_authority >= 0)
 		return train_authority ? true : false;
@@ -2518,7 +2537,10 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 		return DoorStep_UnownedBotActivator(activator) &&
 		       DoorStep_ButtonOrdinaryEvent(token, (uint32_t)source_key);
 	}
-	if (!DoorStep_ButtonBinding(bot, source, &binding))
+	button_door = DoorStep_ButtonBinding(bot, source, &binding);
+	button_carrier = !button_door &&
+	    MechanismStep_ButtonCarrierBinding(bot, source, &binding);
+	if (!button_door && !button_carrier)
 		return !DoorStep_DeclaredClaimHeld(bot) &&
 		       !SG_DeclaredDoorGuardAnyClaim();
 	token = DoorStep_ButtonToken(source, &source_key);
@@ -2548,7 +2570,14 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	        SG_COMPOUND_GUARD_OK ||
 	    !SG_RuneMechanismBindingCurrent(&binding))
 		return false;
-	if (token_state == SG_BUTTON_CALLBACK_PENDING)
+	if (button_carrier)
+	{
+		if (token_state != SG_BUTTON_CALLBACK_EMPTY ||
+		    activator->groundentity != source ||
+		    binding.mover_entity->moveinfo.state != SG_PLAT_STATE_BOTTOM)
+			return false;
+	}
+	else if (token_state == SG_BUTTON_CALLBACK_PENDING)
 	{
 		/* Idempotent physical overlap may recur while the same callback is in
 		 * flight.  It can confirm, but never rewrite, the first-touch support
@@ -2595,7 +2624,7 @@ qboolean SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator)
 	        activator_key, bot->commit_link, &bot->compound_guard.owner,
 	        &bot->compound_guard.ticket))
 		return false;
-	if (token_state == SG_BUTTON_CALLBACK_EMPTY)
+	if (token_state == SG_BUTTON_CALLBACK_EMPTY && !button_carrier)
 	{
 		bot->declared_button_latched = true;
 		bot->declared_button_rider = rider;
@@ -2632,7 +2661,8 @@ qboolean SG_AuthorizeButtonUse(edict_t *source, edict_t *activator)
 		return DoorStep_UnownedBotActivator(activator) &&
 		       DoorStep_ButtonOrdinaryEvent(token, (uint32_t)source_key);
 	}
-	if (DoorStep_ButtonBinding(bot, source, &binding))
+	if (DoorStep_ButtonBinding(bot, source, &binding) ||
+	    MechanismStep_ButtonCarrierBinding(bot, source, &binding))
 		return false;
 	return !DoorStep_DeclaredClaimHeld(bot) &&
 	       !SG_DeclaredDoorGuardAnyClaim();
@@ -2668,7 +2698,9 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 	if (SG_ButtonCallbackTokenState(token) != SG_BUTTON_CALLBACK_EMPTY)
 	{
 		activator_key = DoorStep_EdictKey(activator);
-		if (bot && DoorStep_ButtonBinding(bot, source, &binding) &&
+		if (bot &&
+		    (DoorStep_ButtonBinding(bot, source, &binding) ||
+		     MechanismStep_ButtonCarrierBinding(bot, source, &binding)) &&
 		    bot->declared_started && bot->declared_touched &&
 		    source->activator == activator && !bot->declared_guard_paused &&
 		    SG_DeclaredDoorGuardAuthorizeActivation(bot, bot->commit_link) ==
@@ -2687,7 +2719,8 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 		return DoorStep_UnownedBotActivator(activator);
 	/* A planned button callback cannot be reconstructed from mutable bot state
 	 * after its physical-touch token was lost or consumed. */
-	if (!DoorStep_ButtonBinding(bot, source, &binding))
+	if (!DoorStep_ButtonBinding(bot, source, &binding) &&
+	    !MechanismStep_ButtonCarrierBinding(bot, source, &binding))
 		return !DoorStep_DeclaredClaimHeld(bot) &&
 		       !SG_DeclaredDoorGuardAnyClaim();
 	return false;
@@ -7704,6 +7737,14 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	              (uint32_t)bestlink, &mechanism_binding)
 	        : SG_RuneMechanismBindingCapture(SG_Rune(),
 	              (uint32_t)bestlink, &mechanism_binding));
+	qboolean guarded_button_lift = mechanism_bound && declared_control &&
+	    SG_Rune()->links[bestlink].action == RL_LIFT &&
+	    mechanism_binding.plan &&
+	    mechanism_binding.plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_PLATFORM &&
+	    mechanism_binding.entry_node &&
+	    mechanism_binding.entry_node->touch_callback ==
+	        SG_MECH_CALLBACK_BUTTON_TOUCH;
 	qboolean water_tele = declared_control &&
 	    SG_Rune()->links[bestlink].action == RL_TELEPORT &&
 	    (SG_Rune()->seeds[SG_Rune()->links[bestlink].from].flags & RSF_WATER);
@@ -7795,7 +7836,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		return;
 	if (!mechanism_bound)
 	{
-		if (declared_door && bot->declared_started)
+		if ((declared_door || guarded_button_lift) && bot->declared_started)
 			DoorStep_RetainFailedAuthority(bot, bestlink);
 		else
 		{
@@ -7811,7 +7852,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	 * commitment.  Never acquire or execute a door from that stale snapshot.
 	 * If an older declared-door transaction already exists, retire it only
 	 * through the same positive whole-sweep clearance gate. */
-	if (declared_door && bot->commit_link != bestlink)
+	if ((declared_door || guarded_button_lift) &&
+	    bot->commit_link != bestlink)
 	{
 		if (bot->declared_started && !DoorStep_AbortOrRetain(bot, bestlink))
 			return;
@@ -9089,6 +9131,13 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    mechanism_binding.plan->expected_members > 1U &&
 				    mechanism_binding.entry_node->touch_callback ==
 				        SG_MECH_CALLBACK_TOUCH_PLAT_CENTER;
+				qboolean button_carrier = decl->action == RL_LIFT &&
+				    mechanism_binding.plan &&
+				    mechanism_binding.plan->controller_kind ==
+				        SG_MECHANISM_CONTROLLER_PLATFORM &&
+				    mechanism_binding.entry_node &&
+				    mechanism_binding.entry_node->touch_callback ==
+				        SG_MECH_CALLBACK_BUTTON_TOUCH;
 				qboolean direct_drive = true;
 				qboolean button_motion_hold = false;
 
@@ -9141,7 +9190,23 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					}
 					if (!declared_door)
 					{
-						if ((platform_ride &&
+						if (button_carrier)
+						{
+							sg_compound_guard_result_t acquire_result =
+							    SG_DeclaredDoorGuardAcquire(bot, bestlink);
+
+							if (acquire_result == SG_COMPOUND_GUARD_OK)
+							{
+								bot->declared_started = true;
+								bot->declared_start_frame = level.framenum;
+								bot->declared_guard_paused = false;
+								bot->declared_guard_pause_started = 0.0f;
+								bot->declared_door_recovery_since = 0.0f;
+							}
+							else
+								return;
+						}
+						else if ((platform_ride &&
 						     MechanismStep_PlatformRideStateBegin(bot,
 						         &mechanism_binding)) ||
 						    (platform_door_ascent &&

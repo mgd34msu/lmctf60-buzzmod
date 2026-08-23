@@ -630,6 +630,32 @@ static int Mechanism_MaterializePlatform(mechanism_materializer_t *state,
 	}
 	cooldown = entry_node->wait_ms > RUNE_MAX_COST_MS
 		? (uint32_t)RUNE_MAX_COST_MS : (uint32_t)entry_node->wait_ms;
+	if (entry_node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH)
+		return entry_node->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
+		       (entry_node->flags & (SG_MECH_NODEF_SYNTHETIC |
+		           SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		           SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		           SG_MECH_NODEF_SHOOTABLE |
+		           SG_MECH_NODEF_FRAME_COMPLETE_MOVER)) ==
+		           (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		            SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER) &&
+		       entry_node->spawnflags == 0U && entry_node->delay_ms == 0 &&
+		       entry_node->wait_ms > 0 &&
+		       entry_node->killtarget_offset == 0U &&
+		       entry_node->path_target_offset == 0U &&
+		       mover_node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+		       mover_node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR &&
+		       SG_RuneCarrierDoorSpawnflags(mover_node->spawnflags) &&
+		       (mover_node->flags & (SG_MECH_NODEF_MOVER |
+		           SG_MECH_NODEF_TEAM_MASTER | SG_MECH_NODEF_SHOOTABLE)) ==
+		           (SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER) &&
+		       binding->destination_key == SG_MECH_NO_KEY &&
+		       binding->egress_key == SG_MECH_NO_KEY &&
+		       binding->expected_members == 1U &&
+		       binding->cooldown_ms == cooldown && target.count == 1U &&
+		       state->catalog->edges[target.first].to_key == binding->mover_key &&
+		       Mechanism_AppendInventoryEdge(state, target.first) &&
+		       Mechanism_AppendInventoryEdge(state, owner.first);
 	if (!(entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&
 	       entry_node->use_callback == SG_MECH_CALLBACK_USE_MULTI &&
 	       (entry_node->flags & (SG_MECH_NODEF_SYNTHETIC |

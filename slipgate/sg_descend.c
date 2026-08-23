@@ -15,6 +15,7 @@
 #include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_rune_binding.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
@@ -2933,7 +2934,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		 * retain the exact action and ticket; no timeout or shelf is allowed to
 		 * turn uncertainty into mover reuse. */
 		if (drop_commit &&
-		    (cl->action == RL_DOOR || cl->action == RL_BUTTON_DOOR) &&
+		    (cl->action == RL_DOOR || cl->action == RL_BUTTON_DOOR ||
+		     (cl->action == RL_LIFT && mechanism_binding.plan &&
+		      mechanism_binding.plan->controller_kind ==
+		          SG_MECHANISM_CONTROLLER_PLATFORM &&
+		      mechanism_binding.entry_node &&
+		      mechanism_binding.entry_node->touch_callback ==
+		          SG_MECH_CALLBACK_BUTTON_TOUCH)) &&
 		    bot->declared_started &&
 		    SG_DeclaredDoorGuardReleaseProvedClear(bot) !=
 		        SG_COMPOUND_GUARD_OK)

@@ -288,6 +288,22 @@ static void ExpectDoorMaterializationFailure(fixture_t *fixture)
 	CHECK(fixture->result.num_plans == 0U);
 }
 
+static void ExpectPlatformClosureFailure(fixture_t *fixture)
+{
+	memset(fixture->edges, 0, sizeof(fixture->edges));
+	memset(fixture->plans, 0, sizeof(fixture->plans));
+	memset(fixture->edge_marks, 0, sizeof(fixture->edge_marks));
+	memset(fixture->node_marks, 0, sizeof(fixture->node_marks));
+	memset(fixture->node_queue, 0, sizeof(fixture->node_queue));
+	memset(&fixture->result, 0, sizeof(fixture->result));
+	fixture->links[0].mechanism_plan = 0U;
+	CHECK(!SG_MechanismPlansMaterialize(fixture->links, 2U,
+		&fixture->binding, 1U, &fixture->catalog, &fixture->buffers,
+		&fixture->result));
+	CHECK(fixture->result.diagnostic == SG_MECHANISM_PLAN_BAD_CLOSURE);
+	CHECK(fixture->result.num_plans == 0U);
+}
+
 static void ExpectTrainMaterializationFailure(fixture_t *fixture)
 {
 	memset(fixture->edges, 0, sizeof(fixture->edges));
@@ -640,6 +656,67 @@ static void TestStockPlatformRideWithAutomaticDoorEgress(void)
 	fixture.links[0].mode = RLCM_NONE;
 	egress->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
 	ExpectDoorMaterializationFailure(&fixture);
+}
+
+static void BuildButtonPlatform(fixture_t *fixture)
+{
+	static const char *const strings[] = {
+		"func_button", "func_door", "lift"
+	};
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *mover;
+
+	FixtureInit(fixture, RL_LIFT);
+	Strings(fixture, strings, 3U);
+	entry = Node(fixture, 1U, SG_MECH_NODE_PLATFORM_TRIGGER,
+		"func_button");
+	entry->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER;
+	entry->owner_key = 2U;
+	entry->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	entry->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	entry->wait_ms = 200;
+	Target(entry, fixture, "lift");
+	mover = Node(fixture, 2U, SG_MECH_NODE_PLATFORM, "func_door");
+	mover->flags = SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		SG_MECH_NODEF_TEAM_MASTER;
+	mover->team_master_key = 2U;
+	mover->spawnflags = 5U;
+	mover->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	mover->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	Targetname(mover, fixture, "lift");
+	Edge(fixture, 1U, 2U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(fixture, 1U, 2U, SG_MECH_EDGE_OWNER, 0U);
+	fixture->binding.entry_key = 1U;
+	fixture->binding.mover_key = 2U;
+	fixture->binding.controller_kind = SG_MECHANISM_CONTROLLER_PLATFORM;
+	fixture->binding.expected_members = 1U;
+	fixture->binding.cooldown_ms = 200U;
+}
+
+static void TestButtonPlatform(void)
+{
+	fixture_t fixture;
+
+	BuildButtonPlatform(&fixture);
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].num_edges == 2U);
+	CodecValidate(&fixture);
+
+	BuildButtonPlatform(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[0].spawnflags = 1U;
+	ExpectPlatformClosureFailure(&fixture);
+
+	BuildButtonPlatform(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[0].touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	ExpectPlatformClosureFailure(&fixture);
+
+	BuildButtonPlatform(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[1].spawnflags = 0U;
+	ExpectPlatformClosureFailure(&fixture);
 }
 
 static void TestTriggeredVerticalDoorLift(void)
@@ -1385,6 +1462,7 @@ int main(void)
 {
 	TestPlatform();
 	TestStockPlatformRideWithAutomaticDoorEgress();
+	TestButtonPlatform();
 	TestTriggeredVerticalDoorLift();
 	TestTriggeredVerticalDoorLiftWithDelayedEgress();
 	TestDescendingCarrierStageIdentity();

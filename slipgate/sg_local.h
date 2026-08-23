@@ -307,6 +307,9 @@ qboolean SG_OracleLiftSwimApproach(sg_phantom_t *ph,
 	qboolean world_only);
 qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	edict_t *entry, edict_t *support, int action, int *arrival_ms);
+qboolean SG_OracleButtonLiftApproach(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *platform,
+	int *arrival_ms);
 qboolean SG_OracleTrainGateApproach(const vec3_t source,
 	const vec3_t target, edict_t *button, int *arrival_ms,
 	vec3_t contact_out);

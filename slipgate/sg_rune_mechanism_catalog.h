@@ -164,7 +164,8 @@ typedef enum sg_mech_platform_profile_e
 {
 	SG_MECH_PLATFORM_PROFILE_NONE = 0,
 	SG_MECH_PLATFORM_PROFILE_STOCK,
-	SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER
+	SG_MECH_PLATFORM_PROFILE_DOOR_CARRIER,
+	SG_MECH_PLATFORM_PROFILE_BUTTON_ENTRY
 } sg_mech_platform_profile_t;
 
 typedef enum sg_mech_train_gate_pose_e
@@ -356,10 +357,15 @@ static inline int SG_MechExecutionStateValid(
 		        (state->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
 		         state->end_role == SG_MECH_EXEC_END_DOOR_ORIGIN));
 	}
-	if ((state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	if (((state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	      state->node_kind == SG_MECH_NODE_BUTTON) ||
+	     (state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
+	      state->node_kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
+	      state->platform_profile == SG_MECH_PLATFORM_PROFILE_BUTTON_ENTRY) ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
-	    state->node_kind == SG_MECH_NODE_BUTTON)
+	    (state->node_kind == SG_MECH_NODE_BUTTON ||
+	     state->platform_profile == SG_MECH_PLATFORM_PROFILE_BUTTON_ENTRY))
 	{
 		if (!state->touch_matches || state->touch_cleared ||
 		    state->end_role == SG_MECH_EXEC_END_UNKNOWN)
