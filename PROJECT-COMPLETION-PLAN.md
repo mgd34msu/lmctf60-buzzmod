@@ -311,11 +311,14 @@ including `lmctf02a` and `lmctf04`.
       and `main`, including both Windows builds, packaged Linux, all GCC and
       Clang host jobs, both Make dialects, and the version check.
 - [ ] Repair the missing central transition in `lmctf07`. The four exact
-      health-1 buttons now each authenticate one firing side on the X axis.
-      Y is ambiguous and rejected; Z is the train motion axis and excluded.
-      Objective closure remains zero after testing both proved touch endpoints.
-      The next bounded diagnostic separates failure to fire the exact button
-      from failure of the reverse egress while the authenticated train is open.
+      health-1 buttons each authenticate one firing side on the X axis. Y is
+      ambiguous and rejected; Z is the train motion axis and excluded. A real
+      smoke with separate firing, entry, and open-pose egress proofs published
+      four shoot-train links and closed red-to-blue travel, but blue-to-red
+      remained open. Pre-ranking alternate exits by Euclidean distance
+      regressed to zero links and was refuted. The active repair restores the
+      four-link baseline, proves entry separately, then scans objective-improving
+      egress endpoints under the authenticated open pose.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -330,7 +333,12 @@ mechanism contact is a cataloged vertical `trigger_push`, not either bottom
 teleporter pad. The active repair is therefore a separate PUSH_JUMP admission:
 prove the center source, authentic trigger contact, serialized launch, stable
 upper landing, and full objective closure. A direct center-to-pad
-TELEPORT_JUMP was refuted and will not be published.
+TELEPORT_JUMP was refuted and will not be published. The staged traversal
+contract, reducers, ownership, callbacks, and artifact wiring pass the complete
+GNU and Make/Clang host suites. The first real smoke still published only two
+teleport links and zero PUSH links from its 24-node, 12-edge mechanism catalog.
+The active diagnosis is why the real catalog exposes no push link to the staged
+publisher despite the focused catalog tests.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -385,7 +393,13 @@ per-source timing then showed that source 0 alone exceeds one CPU minute. It is
 a stable dry high seed paired against hundreds of lower seeds, repeatedly
 entering the exact drop prover. A behavior-preserving drop-pair optimization is
 active; it may reject only pairs that cannot execute the existing serialized
-controller and must retain all current proof and runtime gates.
+controller and must retain all current proof and runtime gates. Removing one
+duplicate final overlap query preserved all measured outcomes and replay steps
+while reducing the isolated Clang source-0 cost by 8.2 percent. A short-landing
+preflight was refuted because it added rollouts and replay steps for only a
+further 7.8 percent reduction, and its source changes were reverted. The active
+measurement targets the deeper cost: each Pmove trace rescans the full edict
+population.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
