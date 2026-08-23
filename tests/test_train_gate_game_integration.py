@@ -50,7 +50,15 @@ def main() -> None:
         "SG_OracleTrainGateCross",
         "source_by_axis_side[axis][source_side] = source",
     )
+    ordered(
+        shoot_train,
+        "for (destination = 0; destination < gen_num_seeds; destination++)",
+        "new_bits = topology->objective_mask[destination] & missing",
+        "SG_OracleTrainGateCross(best_contact",
+        "selected_destination[slot] = destination",
+    )
     assert shoot_train.count("SG_OracleTrainGateShot") == 1
+    assert "TRAIN_SHOOT_DEST_FAN" not in shoot_train
 
     game = source("slipgate/sg_train_gate_game.c")
     witness = between(game, "static int TrainWitness", "static sg_train_gate_pose_t")
