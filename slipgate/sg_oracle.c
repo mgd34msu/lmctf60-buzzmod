@@ -2101,26 +2101,23 @@ static qboolean SG_OracleDeclaredSetMember(edict_t *trigger, edict_t *ent)
  * is not enough to prove there are no extra movers. */
 static int SG_OracleDeclaredDoorSet(edict_t *trigger, edict_t **set, int cap)
 {
-	edict_t *target = NULL;
+	edict_t *members[SG_PHANTOM_ARMED_DOORS];
+	int member_count;
 	int count = 0;
+	int member_index;
 
 	if (!SG_OracleDeclaredDoorSourceSafe(trigger) || !set || cap <= 0)
 		return -1;
-	if (trigger->touch == Touch_DoorTrigger)
+	member_count = SG_DeclaredDoorMembers(trigger, members,
+	    SG_PHANTOM_ARMED_DOORS);
+	if (member_count <= 0)
+		return -1;
+	for (member_index = 0; member_index < member_count; member_index++)
 	{
-		set[0] = trigger->owner->teammaster
-		    ? trigger->owner->teammaster : trigger->owner;
-		return 1;
-	}
-	while ((target = G_Find(target, FOFS(targetname), trigger->target)) != NULL)
-	{
-		edict_t *master;
+		edict_t *master = members[member_index]->teammaster
+		    ? members[member_index]->teammaster : members[member_index];
 		int i;
 
-		if (!target->classname ||
-		    strncmp(target->classname, "func_door", 9) != 0)
-			continue;
-		master = target->teammaster ? target->teammaster : target;
 		for (i = 0; i < count; i++)
 			if (set[i] == master)
 				break;
@@ -2516,6 +2513,52 @@ static qboolean SG_OracleDeclaredMasterReachedBefore(edict_t *trigger,
 	return false;
 }
 
+/* A stock relay dispatch is synchronous when delay is zero.  Admit one such
+ * indirection only when its entire fanout is the same declared door closure
+ * the entry trigger could have named directly.  The existing mechanism plan
+ * records both target edges, so runtime replays this callback rather than
+ * treating the relay as invisible. */
+static qboolean SG_OracleDeclaredRelayDoorTargetsSafe(edict_t *relay)
+{
+	edict_t *target = NULL;
+	edict_t *master;
+	qboolean found = false;
+
+	if (!relay || !relay->inuse || !relay->classname ||
+	    Q_stricmp(relay->classname, "trigger_relay") ||
+	    relay->use != trigger_relay_use || !isfinite(relay->delay) ||
+	    relay->delay != 0.0f || relay->killtarget || relay->pathtarget ||
+	    relay->message || !relay->target || !relay->target[0] ||
+	    SG_OracleEntityKilltargetable(relay))
+		return false;
+	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
+	                        relay->target)) != NULL)
+	{
+		if (!target->inuse || !target->classname)
+			return false;
+		if (strncmp(target->classname, "func_door", 9) == 0)
+		{
+			if (!SG_OracleDeclaredDoorTeamCanonical(target, &master) ||
+			    !SG_OracleDeclaredDoorTeamSafe(target) ||
+			    ((target->flags & FL_TEAMSLAVE) &&
+			     !SG_OracleDeclaredMasterReachedBefore(relay, target, master)))
+				return false;
+			if (!(target->flags & FL_TEAMSLAVE))
+				found = true;
+			continue;
+		}
+		if (!Q_stricmp(target->classname, "target_speaker") &&
+		    target->use == Use_Target_Speaker)
+			continue;
+		if (!Q_stricmp(target->classname, "trigger_relay") &&
+		    target->use == trigger_relay_use &&
+		    SG_OraclePlanSoundOnlyTargets(target, 1))
+			continue;
+		return false;
+	}
+	return found;
+}
+
 static qboolean SG_OracleDeclaredActivatorSafeWithDelay(edict_t *trigger,
 	qboolean require_positive_delay)
 {
@@ -2572,9 +2615,17 @@ static qboolean SG_OracleDeclaredActivatorSafeWithDelay(edict_t *trigger,
 		    target->use == Use_Target_Speaker)
 			continue;
 		if (!Q_stricmp(target->classname, "trigger_relay") &&
-		    target->use == trigger_relay_use &&
-		    SG_OraclePlanSoundOnlyTargets(target, 1))
-			continue;
+		    target->use == trigger_relay_use)
+		{
+			if (SG_OraclePlanSoundOnlyTargets(target, 1))
+				continue;
+			if (!require_positive_delay &&
+			    SG_OracleDeclaredRelayDoorTargetsSafe(target))
+			{
+				found = true;
+				continue;
+			}
+		}
 		return false;
 	}
 	return found;
@@ -4298,6 +4349,29 @@ qboolean SG_DeclaredDoorHoldOpen(edict_t *trigger, int lease_ms)
 	return SG_DeclaredDoorHoldMembers(members, count, lease_ms);
 }
 
+static int SG_DeclaredDoorMembersAddTeam(edict_t *target,
+	edict_t **members, int capacity, int count)
+{
+	edict_t *master, *member;
+	int i;
+
+	if (!target || !members || capacity <= 0)
+		return -1;
+	master = target->teammaster ? target->teammaster : target;
+	for (member = master; member; member = member->teamchain)
+	{
+		for (i = 0; i < count; i++)
+			if (members[i] == member)
+				break;
+		if (i < count)
+			continue;
+		if (count >= capacity)
+			return -1;
+		members[count++] = member;
+	}
+	return count;
+}
+
 /* Expand one declared activator to the exact unique member list used by the
  * generator's temporary TOP pose.  A trigger may name several independent
  * masters, while G_Find may also encounter more than one member of a team;
@@ -4329,24 +4403,32 @@ static int SG_DeclaredDoorMembersInternal(edict_t *trigger,
 	}
 	while ((target = G_Find(target, FOFS(targetname), trigger->target)) != NULL)
 	{
-		edict_t *master, *member;
-		int i;
+		if (target->classname &&
+		    !Q_stricmp(target->classname, "trigger_relay") &&
+		    SG_OracleDeclaredRelayDoorTargetsSafe(target))
+		{
+			edict_t *relay_target = NULL;
 
+			while ((relay_target = G_Find(relay_target, FOFS(targetname),
+			                        target->target)) != NULL)
+			{
+				if (!relay_target->classname ||
+				    strncmp(relay_target->classname, "func_door", 9) != 0)
+					continue;
+				count = SG_DeclaredDoorMembersAddTeam(relay_target,
+				    members, capacity, count);
+				if (count < 0)
+					return -1;
+			}
+			continue;
+		}
 		if (!target->classname ||
 		    strncmp(target->classname, "func_door", 9) != 0)
 			continue;
-		master = target->teammaster ? target->teammaster : target;
-		for (member = master; member; member = member->teamchain)
-		{
-			for (i = 0; i < count; i++)
-				if (members[i] == member)
-					break;
-			if (i < count)
-				continue;
-			if (count >= capacity)
-				return -1;
-			members[count++] = member;
-		}
+		count = SG_DeclaredDoorMembersAddTeam(target, members, capacity,
+		    count);
+		if (count < 0)
+			return -1;
 	}
 	return count;
 }
@@ -4567,10 +4649,56 @@ static qboolean SG_OracleDoorCooldownSafe(edict_t *door, float trigger_wait)
 	return closed_after > 1.0e20f || trigger_wait <= closed_after;
 }
 
+static qboolean SG_OracleRelayDoorTargets(edict_t *relay,
+	float trigger_wait, edict_t **doors, int *num_doors)
+{
+	edict_t *target = NULL;
+	qboolean found = false;
+
+	if (!relay || !doors || !num_doors || !relay->inuse ||
+	    !relay->classname || Q_stricmp(relay->classname, "trigger_relay") ||
+	    relay->use != trigger_relay_use || !isfinite(relay->delay) ||
+	    relay->delay != 0.0f || relay->killtarget || relay->pathtarget ||
+	    relay->message || !relay->target || !relay->target[0])
+		return false;
+	while ((target = G_Find(target, FOFS(targetname), relay->target)) != NULL)
+	{
+		edict_t *master;
+		int i;
+
+		if (!target->inuse || !target->classname)
+			return false;
+		if (strncmp(target->classname, "func_door", 9) == 0)
+		{
+			master = target->teammaster ? target->teammaster : target;
+			if ((target->flags & FL_TEAMSLAVE) ||
+			    !SG_OracleDoorCooldownSafe(master, trigger_wait))
+				return false;
+			for (i = 0; i < *num_doors; i++)
+				if (doors[i] == master)
+					return false;
+			if (*num_doors >= SG_PHANTOM_ARMED_DOORS)
+				return false;
+			doors[(*num_doors)++] = master;
+			found = true;
+			continue;
+		}
+		if (!Q_stricmp(target->classname, "target_speaker") &&
+		    target->use == Use_Target_Speaker)
+			continue;
+		if (!Q_stricmp(target->classname, "trigger_relay") &&
+		    target->use == trigger_relay_use &&
+		    SG_OracleSoundOnlyTargets(target, 1))
+			continue;
+		return false;
+	}
+	return found;
+}
+
 /* A static proof may ignore a Touch_Multi only when a live player can fire it
- * on every visit and its complete direct target set is safe doors plus sound.
- * Disabled/NOT_PLAYER/one-shot/facing triggers and relays to doors all fail
- * closed: their state or missing interaction is not encoded in a rune link. */
+ * on every visit and its complete target set is safe doors plus sound.  One
+ * synchronous relay hop is admissible because both edges are encoded in the
+ * rune link; all other scripted indirection fails closed. */
 static qboolean SG_OracleDoorActivator(edict_t *trigger, sg_phantom_t *ph)
 {
 	edict_t *target = NULL;
@@ -4605,9 +4733,14 @@ static qboolean SG_OracleDoorActivator(edict_t *trigger, sg_phantom_t *ph)
 		    target->use == Use_Target_Speaker)
 			continue;
 		if (!Q_stricmp(target->classname, "trigger_relay") &&
-		    target->use == trigger_relay_use &&
-		    SG_OracleSoundOnlyTargets(target, 1))
-			continue;
+		    target->use == trigger_relay_use)
+		{
+			if (SG_OracleSoundOnlyTargets(target, 1))
+				continue;
+			if (SG_OracleRelayDoorTargets(target, trigger->wait, doors,
+			        &num_doors))
+				continue;
+		}
 		return false;
 	}
 	if (num_doors == 0)

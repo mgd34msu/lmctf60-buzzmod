@@ -1023,6 +1023,46 @@ static void TestDirectDoorFullClosure(void)
 	}
 }
 
+static void TestDirectDoorSynchronousRelayClosure(void)
+{
+	static const char *const strings[] = {
+		"CellDoor", "CellRelay", "func_door", "trigger_multiple",
+		"trigger_relay"
+	};
+	fixture_t fixture;
+	rune_mechanism_node_t *entry;
+	rune_mechanism_node_t *relay;
+	rune_mechanism_node_t *door;
+
+	FixtureInit(&fixture, RL_DOOR);
+	Strings(&fixture, strings, 5U);
+	entry = Node(&fixture, 1U, SG_MECH_NODE_TRIGGER, "trigger_multiple");
+	entry->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE;
+	entry->touch_callback = SG_MECH_CALLBACK_TOUCH_MULTI;
+	entry->use_callback = SG_MECH_CALLBACK_USE_MULTI;
+	entry->wait_ms = 1000;
+	Target(entry, &fixture, "CellRelay");
+	relay = Node(&fixture, 2U, SG_MECH_NODE_RELAY, "trigger_relay");
+	relay->flags = SG_MECH_NODEF_USABLE;
+	relay->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	Targetname(relay, &fixture, "CellRelay");
+	Target(relay, &fixture, "CellDoor");
+	door = Door(&fixture, 3U, 3U, 1);
+	Targetname(door, &fixture, "CellDoor");
+	Edge(&fixture, 1U, 2U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 2U, 3U, SG_MECH_EDGE_TARGET, 0U);
+	fixture.binding.entry_key = 1U;
+	fixture.binding.mover_key = 3U;
+	fixture.binding.controller_kind =
+		SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	fixture.binding.expected_members = 1U;
+	fixture.binding.cooldown_ms = 1000U;
+	FixtureFinish(&fixture);
+	CHECK(fixture.plans[0].num_edges == 2U);
+	CodecValidate(&fixture);
+}
+
 static void BuildDelayedSoundTerminalFixture(fixture_t *fixture)
 {
 	static const char *const strings[] = {
@@ -1297,6 +1337,7 @@ int main(void)
 	TestAutoDoor();
 	TestButtonDoor();
 	TestDirectDoorFullClosure();
+	TestDirectDoorSynchronousRelayClosure();
 	TestDelayedSoundTerminal();
 	TestOnePlanPerLink();
 	TestPush();

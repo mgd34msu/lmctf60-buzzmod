@@ -300,6 +300,83 @@ static int Mechanism_AddSideEffect(mechanism_materializer_t *state,
 	return 1;
 }
 
+static int Mechanism_MasterSeen(const mechanism_materializer_t *state,
+	uint32_t key)
+{
+	uint32_t i;
+
+	for (i = 0U; i < state->master_count; i++)
+		if (state->catalog->nodes[state->master_indices[i]].key == key)
+			return 1;
+	return 0;
+}
+
+/* DIRECT_TRIGGER_DOOR may reach its physical mover through one synchronous
+ * relay.  Discover those masters before materializing the physical closure;
+ * the relay target edges remain in their existing later dispatch position. */
+static int Mechanism_DiscoverRelayDoorTargets(
+	mechanism_materializer_t *state, uint32_t *smallest)
+{
+	uint32_t relay_count = state->relay_count;
+	uint32_t i;
+
+	if (!smallest)
+		return 0;
+	for (i = 0U; i < relay_count; i++)
+	{
+		const rune_mechanism_node_t *relay =
+			&state->catalog->nodes[state->buffers->node_queue[i]];
+		mechanism_edge_group_t target = Mechanism_EdgeGroup(state,
+			relay->key, SG_MECH_EDGE_TARGET);
+		uint32_t j;
+
+		for (j = 0U; j < target.count; j++)
+		{
+			uint32_t destination_index = Mechanism_FindNode(state,
+				state->catalog->edges[target.first + j].to_key);
+			const rune_mechanism_node_t *destination;
+
+			if (destination_index == UINT32_MAX)
+				return 0;
+			destination = &state->catalog->nodes[destination_index];
+			if (destination->kind == SG_MECH_NODE_DOOR_MASTER)
+			{
+				if (!Mechanism_AddMaster(state, destination_index))
+					return 0;
+				if (destination->key < *smallest)
+					*smallest = destination->key;
+			}
+			else if (destination->kind == SG_MECH_NODE_DOOR_MEMBER &&
+			    !Mechanism_MasterSeen(state,
+			        destination->team_master_key))
+				return 0;
+		}
+	}
+	return 1;
+}
+
+static int Mechanism_AddRelayEffect(mechanism_materializer_t *state,
+	uint32_t inventory_index)
+{
+	uint32_t destination_index;
+	const rune_mechanism_node_t *destination;
+
+	if (inventory_index >= state->catalog->num_edges)
+		return 0;
+	destination_index = Mechanism_FindNode(state,
+		state->catalog->edges[inventory_index].to_key);
+	if (destination_index == UINT32_MAX)
+		return 0;
+	destination = &state->catalog->nodes[destination_index];
+	if (destination->kind == SG_MECH_NODE_DOOR_MASTER)
+		return Mechanism_MasterSeen(state, destination->key) &&
+		       Mechanism_AppendInventoryEdge(state, inventory_index);
+	if (destination->kind == SG_MECH_NODE_DOOR_MEMBER)
+		return Mechanism_MasterSeen(state, destination->team_master_key) &&
+		       Mechanism_AppendInventoryEdge(state, inventory_index);
+	return Mechanism_AddSideEffect(state, inventory_index, 0);
+}
+
 static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
 	uint32_t expected_physical);
 
@@ -857,6 +934,8 @@ static int Mechanism_MaterializeDoorEntry(mechanism_materializer_t *state,
 			else if (!Mechanism_AddSideEffect(state, edge_index, 0))
 				return 0;
 		}
+		if (!Mechanism_DiscoverRelayDoorTargets(state, &smallest))
+			return 0;
 		if (state->master_count == 0U || smallest != binding->mover_key)
 			return 0;
 		break;
@@ -949,7 +1028,7 @@ static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
 		if (target.count == 0U)
 			return 0;
 		for (j = 0U; j < target.count; j++)
-			if (!Mechanism_AddSideEffect(state, target.first + j, 0))
+			if (!Mechanism_AddRelayEffect(state, target.first + j))
 				return 0;
 	}
 	return 1;

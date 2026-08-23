@@ -75,6 +75,59 @@ static void TestDeclaredActivatorAcceptsMasterThenSlaveFanout(void)
 	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == -1);
 }
 
+static void TestDeclaredActivatorAcceptsSynchronousRelayDoor(void)
+{
+	edict_t *door;
+	edict_t *trigger;
+	edict_t *relay;
+	edict_t *members[2] = { NULL, NULL };
+
+	ResetGuardFixture();
+	door = GuardDoor(GUARD_MASTER_KEY);
+	door->targetname = "CellDoor";
+	trigger = &fixture_edicts[GUARD_TRIGGER_KEY];
+	memset(trigger, 0, sizeof(*trigger));
+	trigger->inuse = true;
+	trigger->s.number = GUARD_TRIGGER_KEY;
+	trigger->classname = "trigger_multiple";
+	trigger->solid = SOLID_TRIGGER;
+	trigger->movetype = MOVETYPE_NONE;
+	trigger->touch = Touch_Multi;
+	trigger->wait = 1.0f;
+	trigger->target = "CellRelay";
+	relay = &fixture_edicts[GUARD_SOURCE_KEY];
+	memset(relay, 0, sizeof(*relay));
+	relay->inuse = true;
+	relay->s.number = GUARD_SOURCE_KEY;
+	relay->classname = "trigger_relay";
+	relay->use = trigger_relay_use;
+	relay->targetname = "CellRelay";
+	relay->target = "CellDoor";
+
+	CHECK(SG_DeclaredDoorActivatorSafe(trigger));
+	CHECK(SG_DeclaredDoorMembers(trigger, members, 2) == 1);
+	CHECK(members[0] == door);
+
+	relay->delay = 0.1f;
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay->delay = 0.0f;
+	relay->killtarget = "CellDoor";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay->killtarget = NULL;
+	relay->message = "opening";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay->message = NULL;
+	relay->target = "MissingDoor";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+	relay->target = "CellRelay2";
+	fixture_edicts[GUARD_EXTRA_KEY].inuse = true;
+	fixture_edicts[GUARD_EXTRA_KEY].classname = "trigger_relay";
+	fixture_edicts[GUARD_EXTRA_KEY].use = trigger_relay_use;
+	fixture_edicts[GUARD_EXTRA_KEY].targetname = "CellRelay2";
+	fixture_edicts[GUARD_EXTRA_KEY].target = "CellDoor";
+	CHECK(!SG_DeclaredDoorActivatorSafe(trigger));
+}
+
 static void TestDeclaredActivatorDelayedSoundTerminal(void)
 {
 	edict_t *door;
@@ -813,6 +866,7 @@ int SG_CompoundDeclaredOracleCasesRun(void)
 	CHECK(SG_OracleTestDoorEgressReplayCacheCases() == 0);
 	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
 	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
+	TestDeclaredActivatorAcceptsSynchronousRelayDoor();
 	TestDeclaredActivatorDelayedSoundTerminal();
 	TestDeclaredActivatorAcceptsVerticalDoorWithEmptyDelay();
 	TestCompoundLiftAdmitsOnlySameDoorSetSibling();
