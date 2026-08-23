@@ -331,6 +331,184 @@ def _build_two_button_same_mover(*, second_plan: int = 1) -> bytes:
     )
 
 
+def _build_train_plan(
+    controller: int,
+    *,
+    sealed_think: int = runeio.RUNE_CALLBACK_FUNC_TRAIN_FIND,
+) -> bytes:
+    values = (b"closed", b"func_button", b"func_train", b"gate", b"open")
+    strings = b"\0" + b"".join(value + b"\0" for value in values)
+    offsets: dict[bytes, int] = {}
+    offset = 1
+    for value in values:
+        offsets[value] = offset
+        offset += len(value) + 1
+
+    seeds = b"".join((
+        runeio.SEED_STRUCT.pack(0.0, 0.0, 0.0, 1, 0),
+        runeio.SEED_STRUCT.pack(128.0, 0.0, 0.0, 2, 0),
+    ))
+    links = b"".join((
+        runeio.RUNE_LINK_STRUCT.pack(
+            0, 1, contract.RL_TRAIN, contract.RL_DECLARED,
+            0, 0, 254, 0, 1000,
+            8.0, 8.0, 8.0, 16.0, 16.0, 16.0,
+            100, contract.RLCM_PREOPEN, 0, 0,
+        ),
+        runeio.RUNE_LINK_STRUCT.pack(
+            1, 0, contract.RL_RUN, contract.RL_PROVEN,
+            0, 0, 0, 0, 100,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0, contract.RLCM_NONE, 0,
+            runeio.RUNE_NO_ACTIVATION_PLAN,
+        ),
+    ))
+
+    def node(
+        key: int,
+        kind: int,
+        classname: bytes,
+        *,
+        flags: int,
+        target: bytes,
+        targetname: bytes | None = None,
+        spawnflags: int = 0,
+        touch_callback: int = 0,
+        use_callback: int = 0,
+        think_callback: int = 0,
+        blocked_callback: int = 0,
+        wait_ms: int = 0,
+        speed_q8: int = 0,
+    ) -> bytes:
+        return runeio.RUNE_ACTIVATION_NODE_STRUCT.pack(
+            key,
+            kind,
+            flags,
+            offsets[classname],
+            offsets[target],
+            offsets[targetname] if targetname is not None else 0,
+            0,
+            runeio.RUNE_NO_KEY,
+            runeio.RUNE_NO_KEY,
+            spawnflags,
+            touch_callback,
+            use_callback,
+            think_callback,
+            blocked_callback,
+            0,
+            wait_ms,
+            speed_q8,
+            speed_q8,
+            speed_q8,
+            0,
+            0,
+            0,
+            64,
+            64,
+            64,
+            0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    shoot = controller == contract.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
+    nodes = b"".join((
+        node(
+            1,
+            runeio.RUNE_NODE_BUTTON,
+            b"func_button",
+            flags=(
+                runeio.RUNE_NODEF_REPEATABLE |
+                runeio.RUNE_NODEF_USABLE |
+                runeio.RUNE_NODEF_MOVER |
+                (runeio.RUNE_NODEF_SHOOTABLE if shoot else
+                 runeio.RUNE_NODEF_TOUCHABLE)
+            ),
+            target=b"gate",
+            touch_callback=(0 if shoot else runeio.RUNE_CALLBACK_BUTTON_TOUCH),
+            use_callback=runeio.RUNE_CALLBACK_BUTTON_USE,
+            wait_ms=3000,
+        ),
+        node(
+            2,
+            runeio.RUNE_NODE_TRAIN,
+            b"func_train",
+            flags=(
+                runeio.RUNE_NODEF_REPEATABLE |
+                runeio.RUNE_NODEF_USABLE |
+                runeio.RUNE_NODEF_MOVER
+            ),
+            target=b"open",
+            targetname=b"gate",
+            spawnflags=2,
+            use_callback=runeio.RUNE_CALLBACK_TRAIN_USE,
+            think_callback=sealed_think,
+            blocked_callback=runeio.RUNE_CALLBACK_BLOCKED_TRAIN,
+            speed_q8=240,
+        ),
+        node(
+            3,
+            runeio.RUNE_NODE_PATH_CORNER,
+            b"open",
+            flags=runeio.RUNE_NODEF_TOUCHABLE | runeio.RUNE_NODEF_ONE_SHOT,
+            target=b"closed",
+            targetname=b"open",
+            touch_callback=runeio.RUNE_CALLBACK_PATH_CORNER_TOUCH,
+            wait_ms=-1000,
+        ),
+        node(
+            4,
+            runeio.RUNE_NODE_PATH_CORNER,
+            b"closed",
+            flags=runeio.RUNE_NODEF_TOUCHABLE | runeio.RUNE_NODEF_ONE_SHOT,
+            target=b"open",
+            targetname=b"closed",
+            touch_callback=runeio.RUNE_CALLBACK_PATH_CORNER_TOUCH,
+            wait_ms=-1000,
+        ),
+    ))
+    inventory_rows = (
+        (1, 2, runeio.RUNE_EDGE_TARGET, 0, 0),
+        (2, 3, runeio.RUNE_EDGE_ROUTE_TARGET, 0, 0),
+        (3, 4, runeio.RUNE_EDGE_ROUTE_TARGET, 0, 0),
+        (4, 3, runeio.RUNE_EDGE_ROUTE_TARGET, 0, 0),
+    )
+    inventory = tuple(
+        runeio.RUNE_ACTIVATION_EDGE_STRUCT.pack(*row)
+        for row in inventory_rows
+    )
+    plan_edges = inventory[:2] + (inventory[3], inventory[2])
+    plan_edge_bytes = b"".join(plan_edges)
+    plan = runeio.RUNE_ACTIVATION_PLAN_STRUCT.pack(
+        1,
+        2,
+        len(inventory),
+        len(plan_edges),
+        controller,
+        0,
+        contract.mechanism_controller_plan_flags(controller),
+        1,
+        3000,
+        zlib.crc32(plan_edge_bytes) & 0xFFFFFFFF,
+    )
+    payload = (
+        seeds + links + nodes + b"".join(inventory) + plan_edge_bytes +
+        plan + strings
+    )
+    return _wrap_rune_payload(
+        payload,
+        num_seeds=2,
+        num_links=2,
+        num_nodes=4,
+        num_edges=8,
+        num_plans=1,
+        string_bytes=len(strings),
+        num_inventory_edges=4,
+        map_name="trainplan",
+    )
+
+
 def _build_edge_catalog() -> bytes:
     strings = b"\0a\0b\0"
     seeds = b"".join(
@@ -1368,6 +1546,26 @@ class RuneRuneArtifactTests(unittest.TestCase):
                 _build_two_button_same_mover(second_plan=0)
             ),
         )
+
+    def test_train_controllers_require_the_sealed_stock_cycle(self):
+        controllers = (
+            contract.SG_MECHANISM_CONTROLLER_TRAIN,
+            contract.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT,
+        )
+        for controller in controllers:
+            with self.subTest(controller=controller):
+                decoded = runeio.decode_rune(_build_train_plan(controller))
+                self.assertEqual(
+                    controller,
+                    decoded.activation_plans[0].controller_kind,
+                )
+                self.assert_wire_code(
+                    runeio.RLRUNE_BAD_ACTIVATION_PLAN,
+                    lambda: runeio.decode_rune(_build_train_plan(
+                        controller,
+                        sealed_think=runeio.RUNE_CALLBACK_TRAIN_NEXT,
+                    )),
+                )
 
     def test_header_payload_and_contract_authentication(self):
         bad_header_crc = bytearray(self.encoded)

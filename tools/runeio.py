@@ -82,6 +82,8 @@ RUNE_CONTROLLER_RELAY_DOOR = contract.SG_MECHANISM_CONTROLLER_RELAY_DOOR
 RUNE_CONTROLLER_PLATFORM = contract.SG_MECHANISM_CONTROLLER_PLATFORM
 RUNE_CONTROLLER_TELEPORT = contract.SG_MECHANISM_CONTROLLER_TELEPORT
 RUNE_CONTROLLER_PUSH = contract.SG_MECHANISM_CONTROLLER_PUSH
+RUNE_CONTROLLER_TRAIN = contract.SG_MECHANISM_CONTROLLER_TRAIN
+RUNE_CONTROLLER_TRAIN_SHOOT = contract.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
 
 
 def _carrier_door_spawnflags(spawnflags: int) -> bool:
@@ -98,8 +100,13 @@ RUNE_CALLBACK_USE_DOOR = 10
 RUNE_CALLBACK_THINK_CALC_MOVE_SPEED = 11
 RUNE_CALLBACK_THINK_SPAWN_DOOR_TRIGGER = 12
 RUNE_CALLBACK_TOUCH_PLAT_CENTER = 14
+RUNE_CALLBACK_TRAIN_USE = 18
+RUNE_CALLBACK_FUNC_TRAIN_FIND = 19
+RUNE_CALLBACK_TRAIN_NEXT = 20
+RUNE_CALLBACK_BLOCKED_TRAIN = 22
 RUNE_CALLBACK_TRIGGER_PUSH_TOUCH = 25
 RUNE_CALLBACK_TELEPORTER_TOUCH = 26
+RUNE_CALLBACK_PATH_CORNER_TOUCH = 27
 RUNE_CALLBACK_USE_TARGET_SPEAKER = 32
 RUNE_CALLBACK_USE_AREAPORTAL = 33
 
@@ -1875,6 +1882,62 @@ def _rune_safe_relay(node: RuneActivationNode) -> bool:
     return _rune_relay_shape(node) and node.delay_ms == 0
 
 
+def _rune_train_button_shape(
+    button: RuneActivationNode, *, shoot: bool
+) -> bool:
+    expected_flags = (
+        RUNE_NODEF_REPEATABLE |
+        RUNE_NODEF_USABLE |
+        RUNE_NODEF_MOVER |
+        (RUNE_NODEF_SHOOTABLE if shoot else RUNE_NODEF_TOUCHABLE)
+    )
+    return bool(
+        _rune_node_executable(button) and
+        button.kind == RUNE_NODE_BUTTON and
+        button.flags == expected_flags and
+        button.touch_callback == (
+            0 if shoot else RUNE_CALLBACK_BUTTON_TOUCH
+        ) and
+        button.use_callback == RUNE_CALLBACK_BUTTON_USE and
+        button.think_callback == button.blocked_callback == 0 and
+        button.spawnflags == 0 and button.delay_ms == 0 and
+        button.wait_ms > 0 and button.target_offset != 0 and
+        button.killtarget_offset == button.path_target_offset == 0
+    )
+
+
+def _rune_train_mover_shape(train: RuneActivationNode) -> bool:
+    expected_flags = (
+        RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE | RUNE_NODEF_MOVER
+    )
+    return bool(
+        _rune_node_executable(train) and
+        train.kind == RUNE_NODE_TRAIN and train.flags == expected_flags and
+        train.spawnflags == 2 and train.touch_callback == 0 and
+        train.use_callback == RUNE_CALLBACK_TRAIN_USE and
+        train.think_callback in (0, RUNE_CALLBACK_FUNC_TRAIN_FIND) and
+        train.blocked_callback == RUNE_CALLBACK_BLOCKED_TRAIN and
+        train.delay_ms == 0 and train.speed_q8 != 0 and
+        train.speed_q8 == train.accel_q8 == train.decel_q8 and
+        train.target_offset != 0 and train.targetname_offset != 0 and
+        train.killtarget_offset == train.path_target_offset == 0
+    )
+
+
+def _rune_train_corner_shape(corner: RuneActivationNode) -> bool:
+    return bool(
+        _rune_node_executable(corner) and
+        corner.kind == RUNE_NODE_PATH_CORNER and
+        corner.flags == (RUNE_NODEF_TOUCHABLE | RUNE_NODEF_ONE_SHOT) and
+        corner.spawnflags == 0 and
+        corner.touch_callback == RUNE_CALLBACK_PATH_CORNER_TOUCH and
+        corner.use_callback == corner.think_callback ==
+        corner.blocked_callback == 0 and
+        corner.delay_ms == 0 and corner.wait_ms == -1000 and
+        corner.target_offset != 0 and corner.killtarget_offset == 0
+    )
+
+
 def _rune_validate_production_plan(
     plan: RuneActivationPlan,
     plan_edges: tuple[RuneActivationEdge, ...],
@@ -2210,6 +2273,68 @@ def _rune_validate_production_plan(
             fail("does not satisfy the teleport controller law")
         add_edge(owner[0])
         add_edge(targets[0])
+
+    elif controller in (RUNE_CONTROLLER_TRAIN, RUNE_CONTROLLER_TRAIN_SHOOT):
+        button_targets = inventory_fanout.get(
+            (entry.key, RUNE_EDGE_TARGET), ()
+        )
+        train_routes = inventory_fanout.get(
+            (mover.key, RUNE_EDGE_ROUTE_TARGET), ()
+        )
+        open_node = (
+            node_by_key.get(train_routes[0].to_key)
+            if len(train_routes) == 1 else None
+        )
+        open_routes = (
+            inventory_fanout.get(
+                (open_node.key, RUNE_EDGE_ROUTE_TARGET), ()
+            )
+            if open_node is not None else ()
+        )
+        closed_node = (
+            node_by_key.get(open_routes[0].to_key)
+            if len(open_routes) == 1 else None
+        )
+        closed_routes = (
+            inventory_fanout.get(
+                (closed_node.key, RUNE_EDGE_ROUTE_TARGET), ()
+            )
+            if closed_node is not None else ()
+        )
+
+        def train_no_side_effects(node: RuneActivationNode) -> bool:
+            return not (
+                inventory_fanout.get((node.key, RUNE_EDGE_KILLTARGET), ()) or
+                inventory_fanout.get((node.key, RUNE_EDGE_PATH_TARGET), ())
+            )
+
+        if (
+            owner_link.action != contract.RL_TRAIN or
+            plan.expected_members != 1 or
+            not 0 < plan.cooldown_ms <= RUNE_MAX_TIME_MS or
+            not _rune_train_button_shape(
+                entry,
+                shoot=controller == RUNE_CONTROLLER_TRAIN_SHOOT,
+            ) or
+            not _rune_train_mover_shape(mover) or
+            len(button_targets) != 1 or
+            button_targets[0].to_key != mover.key or
+            len(train_routes) != 1 or
+            open_node is None or closed_node is None or
+            open_node.key == closed_node.key or
+            len(open_routes) != 1 or len(closed_routes) != 1 or
+            closed_routes[0].to_key != open_node.key or
+            not _rune_train_corner_shape(open_node) or
+            not _rune_train_corner_shape(closed_node) or
+            not all(train_no_side_effects(node) for node in (
+                entry, mover, open_node, closed_node
+            ))
+        ):
+            fail("does not satisfy the train controller law")
+        add_edge(button_targets[0])
+        add_edge(train_routes[0])
+        add_edge(closed_routes[0])
+        add_edge(open_routes[0])
 
     elif controller in (
         RUNE_CONTROLLER_AUTO_DOOR,
