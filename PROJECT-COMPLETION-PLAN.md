@@ -383,7 +383,8 @@ The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
 runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `lmctf45`, `tw2ctf2`,
 `tw2ctf3`, `xmap02`, `xmap04`, `xmap25`, and `xmap29` subsequently passed
-every acceptance gate, leaving 12 maps in the live repair queue.
+every acceptance gate. The later `tw2ctf4` shoot-door repair also passed every
+gate, leaving 11 maps in the live repair queue.
 Exact retests prove that `tomb05` remains a genuine graph failure.
 `tomb05` reaches objective-core with no closed route
 shared by both flags.
@@ -471,9 +472,7 @@ also refuted and no wire change was made. A bounded multi-source Pmove search
 over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
-`lmctf25`, `lmctf30`, `tomb05`,
-`tw2ctf4`,
-`xmap13`, `xmap18`, and `xmap26`.
+`lmctf25`, `lmctf30`, `tomb05`, `xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
 module and immutable 175-map snapshot: `lmctf15` with 2,138 seeds,
@@ -653,7 +652,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `tomb05` | Current immutable generation proves 961 seeds/12,200 links, then all prune: 56 red-only, 52 blue-only, 0 shared, and 853 neither. Its closest opposing seeds are 128 units apart. Automatic controllers remain exhausted; authoritative human traversal is reserved for the end. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `tw2ctf3` | PASS and integrated without teleport changes: 1,815 seeds/29,948 links, roots 224/225, 156 mechanism nodes, 27 triggers, 62 inventory edges, and 12 plans. The generic repair recognizes that a nonempty automatic-door target resolving to zero live targetnames is an exact stock no-op. Both readers, Python, lint, SNAG, fresh cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf4` | The generic authenticated shoot-door pass resolves all six teams, proves nine crossings, and serializes the twelve links needed for objective closure. A clean immutable generation now writes 2,066 seeds/31,503 links with 1,990 seeds reachable from both objectives, 246 mechanism nodes, and 14 plans. Both current C readers, Python decoding, lint, SNAG, and fresh cold load pass. The source-owned runtime adapter and post-merge regression smoke remain before integration. |
+| `tw2ctf4` | PASS and integrated: the generic authenticated shoot-door pass resolves all six teams, proves nine crossings, and serializes the twelve links needed for objective closure. The source-owned runtime adapter equips, aims, fires, authenticates the door-team transition, and crosses under the same serialized contract. A fresh post-merge immutable run writes 2,066 seeds/31,503 links with 1,990 seeds reachable from both objectives, 246 mechanism nodes, 35 inventory edges, and 14 plans. Both C readers, Python, lint, SNAG, fresh cold load, focused GNU and Make/Clang suites, production linkage, source-size, and deslop pass. |
 | `xmap02` | PASS and integrated. The previous graph had 1,462 seeds/21,679 links, with 698 red-only, 682 blue-only, 0 shared, and 82 neither; its closest opposing seeds were 345 units apart. Exact native rocket-jump replay succeeds in both directions across that flat gap, which the ordinary global scheduler excluded because its rise is below 80 units and its horizontal separation exceeds 320. The bounded, map-independent objective-closure transaction selects the nearest opposing partitions, retains only a two-way replay-proved pair that closes both roots, and rolls back every partial attempt. The accepted artifact adds exactly two `RL_ROCKETJUMP` links and retains 1,462 seeds/21,100 links. Generation, both C readers, Python, lint, SNAG, semantic checks, fresh cold load, GNU, Clang, source-size, and deslop pass. A successful-map control remains byte-identical. |
 | `xmap04` | PASS and integrated: 1,094 seeds, 13,356 links, 11 lift links, 12 plans, and 974 seeds reachable from both roots; both readers, lint, SNAG, cold load, byte-identical regeneration, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `xmap13` | Current immutable generation proves 1,337 seeds/20,970 links, then all prune: 380 red-only, 376 blue-only, 0 shared, and 581 neither. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
