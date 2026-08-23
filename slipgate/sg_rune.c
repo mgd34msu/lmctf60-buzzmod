@@ -6657,7 +6657,6 @@ static void Prove_BaseLinks(door_topology_t *topology)
 			sg_host.dprint("rune: proving %d/%d seeds, %d links\n",
 			           i, gen_num_seeds, gen_num_links);
 	}
-	SG_OracleDoorBoundsCacheEnd();
 	drop_prefix_cache_enabled = false;
 	Drop_PrefixCacheClear();
 
@@ -6665,6 +6664,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 	 * declared-mechanism passes consume the completed base graph so their
 	 * specialized links can be stamped with declared provenance. */
 	Prove_Swims();          /* swim links: water to water, water to shore */
+	SG_OracleDoorBoundsCacheEnd();
 	{
 		/* Link_Plats may append both a declared ascent and a proved drop. Stamp
 		 * only the declared action before the hook topology snapshot. */
