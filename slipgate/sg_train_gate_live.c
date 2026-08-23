@@ -265,20 +265,14 @@ static sg_train_gate_command_t TrainRideStep(sg_train_gate_state_t *state,
 				TrainFail(state);
 				return SG_TRAIN_GATE_COMMAND_ZERO;
 			}
-			return SG_TRAIN_GATE_COMMAND_TO_ENTRY;
-		}
-		if (observation->riding != 1U)
-		{
-			TrainFail(state);
-			return SG_TRAIN_GATE_COMMAND_ZERO;
+			return SG_TRAIN_GATE_COMMAND_TO_BUTTON;
 		}
 		state->phase = SG_TRAIN_GATE_DISPATCH;
 	}
 
 	if (state->phase == SG_TRAIN_GATE_DISPATCH)
 	{
-		if (!TrainOpeningClock(state, step_ms) ||
-		    observation->riding != 1U)
+		if (!TrainOpeningClock(state, step_ms))
 		{
 			TrainFail(state);
 			return SG_TRAIN_GATE_COMMAND_ZERO;
@@ -286,7 +280,19 @@ static sg_train_gate_command_t TrainRideStep(sg_train_gate_state_t *state,
 		if (state->train_use_count == 0U)
 		{
 			if (observation->pose != start_pose)
+			{
 				TrainFail(state);
+				return SG_TRAIN_GATE_COMMAND_ZERO;
+			}
+			if (observation->riding != 1U ||
+			    observation->entry_arrived != 1U)
+				return SG_TRAIN_GATE_COMMAND_TO_ENTRY;
+			return SG_TRAIN_GATE_COMMAND_ZERO;
+		}
+		if (observation->riding != 1U ||
+		    observation->entry_arrived != 1U)
+		{
+			TrainFail(state);
 			return SG_TRAIN_GATE_COMMAND_ZERO;
 		}
 		if (state->target_dispatch_count != 1U ||

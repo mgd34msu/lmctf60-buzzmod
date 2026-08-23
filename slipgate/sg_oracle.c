@@ -6564,7 +6564,7 @@ done:
 static qboolean SG_OracleDeclaredApproachInternal(const vec3_t source,
 	const vec3_t target, edict_t *entry, edict_t *support,
 	edict_t *approach_door, edict_t *required_ground, int action,
-	int *arrival_ms, vec3_t contact_out)
+	int *arrival_ms, vec3_t contact_out, sg_phantom_t *arrival_out)
 {
 	edict_t *old_passent = sg_oracle_passent;
 	edict_t *old_expected = sg_oracle_declared_expected;
@@ -6622,6 +6622,8 @@ static qboolean SG_OracleDeclaredApproachInternal(const vec3_t source,
 			*arrival_ms = elapsed + 25;
 			if (contact_out)
 				VectorCopy(ph.origin, contact_out);
+			if (arrival_out)
+				*arrival_out = ph;
 			ok = true;
 			goto done;
 		}
@@ -6645,7 +6647,7 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	edict_t *entry, edict_t *support, int action, int *arrival_ms)
 {
 	return SG_OracleDeclaredApproachInternal(source, target, entry, support,
-		NULL, NULL, action, arrival_ms, NULL);
+		NULL, NULL, action, arrival_ms, NULL, NULL);
 }
 
 qboolean SG_OracleTrainGateApproach(const vec3_t source,
@@ -6656,18 +6658,111 @@ qboolean SG_OracleTrainGateApproach(const vec3_t source,
 		VectorClear(contact_out);
 	return button && contact_out &&
 	       SG_OracleDeclaredApproachInternal(source, target, button, button,
-	           NULL, NULL, RL_TRAIN, arrival_ms, contact_out);
+	           NULL, NULL, RL_TRAIN, arrival_ms, contact_out, NULL);
 }
 
 qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	const vec3_t target, edict_t *button, edict_t *train,
 	int *arrival_ms, vec3_t contact_out)
 {
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_entry = sg_oracle_declared_entry;
+	edict_t *old_door = sg_oracle_declared_door;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	qboolean old_touched = sg_oracle_declared_touched;
+	int old_action = sg_oracle_declared_action;
+	sg_phantom_t ph;
+	usercmd_t cmd;
+	vec3_t travel;
+	vec3_t board_target;
+	double dwell_ms;
+	int activation_ms;
+	int elapsed;
+	int stable_ms = 0;
+	qboolean ok = false;
+	int axis;
+
 	if (contact_out)
 		VectorClear(contact_out);
-	return button && train && contact_out &&
-	       SG_OracleDeclaredApproachInternal(source, target, button, button,
-	           train, train, RL_TRAIN, arrival_ms, contact_out);
+	if (!button || !train || !contact_out || !arrival_ms || !button->inuse ||
+	    !train->inuse || !button->classname || !train->classname ||
+	    strcmp(button->classname, "func_button") != 0 ||
+	    strcmp(train->classname, "func_train") != 0 ||
+	    button->touch != button_touch || button->use != button_use ||
+	    !train->use || !button->target || !train->targetname ||
+	    strcmp(button->target, train->targetname) != 0 ||
+	    !isfinite(button->moveinfo.speed) || button->moveinfo.speed <= 0.0f)
+		return false;
+	VectorSubtract(button->moveinfo.end_origin,
+	    button->moveinfo.start_origin, travel);
+	dwell_ms = (double)VectorLength(travel) /
+	    (double)button->moveinfo.speed * 1000.0;
+	/* button_wait dispatches the train only after this translation completes.
+	 * The floor of distance/max-speed is a conservative real lower dwell: the
+	 * stock acceleration profile cannot reach the endpoint sooner. */
+	if (!isfinite(dwell_ms) || dwell_ms < 25.0 || dwell_ms > 3000.0)
+		return false;
+	if (!SG_OracleDeclaredApproachInternal(source, target, button, button,
+	        train, NULL, RL_TRAIN, &activation_ms, NULL, &ph))
+		return false;
+	for (axis = 0; axis < 2; axis++)
+	{
+		float lower = train->absmin[axis] + 16.125f;
+		float upper = train->absmax[axis] - 16.125f;
+
+		if (lower > upper)
+			return false;
+		board_target[axis] = ph.origin[axis] < lower ? lower :
+		    ph.origin[axis] > upper ? upper : ph.origin[axis];
+	}
+	board_target[2] = ph.origin[2];
+	sg_oracle_passent = NULL;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = button;
+	sg_oracle_declared_entry = button;
+	sg_oracle_declared_door = train;
+	sg_oracle_declared_action = RL_TRAIN;
+	sg_oracle_declared_touched = false;
+	for (elapsed = 25; elapsed <= (int)floor(dwell_ms); elapsed += 25)
+	{
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = 25;
+		if (stable_ms == 0 &&
+		    !SG_DeclaredCommand(ph.origin, board_target, &ph.pms, &cmd))
+			goto done;
+		SG_OracleRun(&ph, &cmd, 1);
+		if (sg_oracle_contaminated || SG_OracleDoorOverlap(&ph) ||
+		    !ph.groundentity || ph.waterlevel != 0)
+			goto done;
+		if (ph.groundentity_entity != train)
+		{
+			stable_ms = 0;
+			continue;
+		}
+		stable_ms += 25;
+		if (stable_ms < 100)
+			continue;
+		*arrival_ms = activation_ms + elapsed;
+		VectorCopy(ph.origin, contact_out);
+		ok = true;
+		goto done;
+	}
+
+done:
+	if (ph.door_passed)
+		ok = false;
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_entry = old_entry;
+	sg_oracle_declared_door = old_door;
+	sg_oracle_declared_action = old_action;
+	sg_oracle_declared_touched = old_touched;
+	return ok;
 }
 
 qboolean SG_OracleTrainRideCarry(const vec3_t source,
@@ -6746,7 +6841,7 @@ qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
 	       (SG_DeclaredDoorDirectActivatorSafe(approach_door) ||
 	        SG_DeclaredDoorDelayedActivatorSafe(approach_door, &delay_ms)) &&
 	       SG_OracleDeclaredApproachInternal(source, target, entry, support,
-	           approach_door, NULL, RL_LIFT, arrival_ms, NULL);
+	           approach_door, NULL, RL_LIFT, arrival_ms, NULL, NULL);
 }
 
 static qboolean SG_TrainGateHullOutside(const vec3_t origin,

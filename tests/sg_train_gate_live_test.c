@@ -365,10 +365,12 @@ static void TestRideHappyPath(void)
 
 	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
 	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_BUTTON);
+	observation.button_touch_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
 		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
 	observation.riding = 1U;
 	observation.entry_arrived = 1U;
-	observation.button_touch_count = 1U;
 	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
 		SG_TRAIN_GATE_COMMAND_ZERO);
 	observation.target_dispatch_count = 1U;
@@ -439,6 +441,46 @@ static void TestRideRejectsSupportLossAndWrongTop(void)
 	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
 }
 
+static void TestRideRejectsDispatchBeforeBoarding(void)
+{
+	sg_train_gate_state_t state;
+	sg_train_gate_witness_t witness = RideWitness();
+	sg_train_gate_observation_t observation =
+		Observation(SG_TRAIN_GATE_POSE_OPEN);
+
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	observation.button_touch_count = 1U;
+	observation.target_dispatch_count = 1U;
+	observation.train_use_count = 1U;
+	observation.pose = SG_TRAIN_GATE_POSE_CLOSING;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
+
+	observation = Observation(SG_TRAIN_GATE_POSE_OPEN);
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	observation.button_touch_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
+	observation.entry_arrived = 1U;
+	observation.target_dispatch_count = 1U;
+	observation.train_use_count = 1U;
+	observation.pose = SG_TRAIN_GATE_POSE_CLOSING;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
+
+	witness.opening_bound_ms = 25U;
+	observation = Observation(SG_TRAIN_GATE_POSE_OPEN);
+	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	observation.button_touch_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_ZERO);
+	CHECK(state.phase == SG_TRAIN_GATE_FAILED);
+}
+
 static void TestRideOppositeRouteOrientation(void)
 {
 	sg_train_gate_state_t state;
@@ -448,9 +490,13 @@ static void TestRideOppositeRouteOrientation(void)
 
 	witness.ride_direction = SG_TRAIN_GATE_RIDE_CLOSED_TO_OPEN;
 	CHECK(SG_TrainGateLiveBegin(&state, &witness, &observation));
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_BUTTON);
+	observation.button_touch_count = 1U;
+	CHECK(SG_TrainGateLiveStep(&state, &observation, 25U) ==
+		SG_TRAIN_GATE_COMMAND_TO_ENTRY);
 	observation.riding = 1U;
 	observation.entry_arrived = 1U;
-	observation.button_touch_count = 1U;
 	observation.target_dispatch_count = 1U;
 	observation.train_use_count = 1U;
 	observation.pose = SG_TRAIN_GATE_POSE_OPENING;
@@ -479,6 +525,7 @@ int main(void)
 	TestDriftTimeoutAndClearance();
 	TestRideHappyPath();
 	TestRideRejectsSupportLossAndWrongTop();
+	TestRideRejectsDispatchBeforeBoarding();
 	TestRideOppositeRouteOrientation();
 	if (failures)
 	{
