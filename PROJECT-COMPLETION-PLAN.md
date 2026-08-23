@@ -381,9 +381,9 @@ including `lmctf02a` and `lmctf04`.
 
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
-runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `tw2ctf2`, `xmap25`, and
-`xmap29` subsequently passed every acceptance gate, leaving 16 maps in the live
-repair queue.
+runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `lmctf45`, `tw2ctf2`,
+`xmap25`, and `xmap29` subsequently passed every acceptance gate, leaving 15
+maps in the live repair queue.
 Exact retests prove that `tomb05` remains a genuine graph failure.
 `tomb05` reaches objective-core with no closed route
 shared by both flags.
@@ -471,7 +471,7 @@ also refuted and no wire change was made. A bounded multi-source Pmove search
 over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
-`lmctf25`, `lmctf30`, `lmctf45`, `tomb05`,
+`lmctf25`, `lmctf30`, `tomb05`,
 `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
 `xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
@@ -648,14 +648,14 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf27` | PASS and integrated: 620 seeds, 6,751 retained links, 316 authenticated plans, and 490 seeds reachable from both roots; both C readers, Python, lint, SNAG, fresh cold load, runtime-ready, accepted-map identity, GNU, Make/Clang, production linkage, and deslop pass. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
-| `lmctf45` | Fresh current source has 1,369 seeds/14,598 links. Across 71 unique shared-to-one-sided boundary pairs, reverse RUN/JUMP/DROP prove none, native HOOK proves all 48 blue cuts, and native rocket-jump proves 19 of 23 red cuts. A generic fail-closed inverse repair is testing one serialized topology-improving link per fixed-point recompute, preserving cheaper exact families first. |
+| `lmctf45` | PASS and integrated: the generic fixed-point inverse repair adds exactly HOOK, rocket-jump, HOOK; 1,071 seeds become reachable from both roots and the 1,369-seed/14,287-link artifact passes all readers, lint, SNAG, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
+| `tw2ctf3` | 1,815 seeds/28,863 links all prune. Red and blue root SCCs each lack the reverse of a proved RL_LIFT ascent; exact missing cuts are SCC82-to-80 and SCC86-to-85. Teleporter destination singletons are forward dead ends and currently noncausal. Existing families are being replayed only over the two lift-descent cuts. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
-| `xmap04` | Causal closure is proved: the automatic-door ascent plus the exact reverse key234 transaction yields 974 shared seeds and mutual objective reach. The diagnostic edge then fails materialization because it has no plan. The active unit is generic PLATFORM serialization/runtime replay for upper dispatch, timer-safe center board, carry to bottom, and exact automatic-door lower egress. |
+| `xmap04` | PASS on exact head with roots 80/81, 1,094 seeds, 13,356 links, and 12 plans; both C readers, Python, lint, SNAG, fresh cold load, and byte-identical regeneration pass. Full GNU and Make/Clang suites remain before integration. |
 | `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
