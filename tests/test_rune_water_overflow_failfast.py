@@ -14,8 +14,8 @@ class WaterOverflowFailFastTests(unittest.TestCase):
         water_end = SOURCE.index("static void Link_Index_Build(void)", water_start)
         water = SOURCE[water_start:water_end]
         self.assertIn("i < gen_num_seeds && !capacity_exhausted", water)
-        self.assertIn("if (gen_seed_overflow)", water)
-        self.assertIn("capacity_exhausted = true;", water)
+        self.assertIn("capacity_exhausted = gen_seed_overflow;", water)
+        self.assertIn("capacity_exhausted = !Seed_WaterNeighbours(here);", water)
 
     def test_only_distinct_admissible_seeds_can_overflow(self) -> None:
         add_start = SOURCE.index("static void Seed_Add(vec3_t origin)")

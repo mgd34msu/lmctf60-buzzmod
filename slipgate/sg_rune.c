@@ -585,9 +585,7 @@ static void Seed_Add(vec3_t origin)
 	 * source. */
 	if (submerged && (watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
 		return;
-	/* Filling the last slot is legal. Only a distinct, admissible seed beyond
-	 * the shared graph capacity is an overflow; duplicate or hazardous
-	 * candidates do not make an otherwise complete graph fail. */
+	/* Only a distinct, admissible seed beyond the shared capacity overflows. */
 	if (gen_num_seeds >= SEED_MAX)
 	{
 		gen_seed_overflow = true;
@@ -2490,8 +2488,7 @@ static qboolean Seed_WaterFree(vec3_t p)
 /*
  * The six lattice neighbours of a point, in three dimensions -- a water
  * volume has an inside, so up and down are directions like any other.
- * Returns false only when a distinct, admissible water seed exceeds the
- * shared graph capacity.
+ * Returns false only on shared seed-capacity overflow.
  */
 static qboolean Seed_WaterNeighbours(vec3_t from)
 {
@@ -2516,15 +2513,10 @@ static qboolean Seed_WaterNeighbours(vec3_t from)
 		if (!Seed_WaterFree(cand))
 			continue;
 		if (Seed_AddWater(cand) < 0)
-		{
-			if (gen_seed_overflow)
-				return false;
-			break;
-		}
+			return !gen_seed_overflow;
 	}
 	return true;
 }
-
 
 static void Seed_Water(void)
 {
@@ -2567,8 +2559,7 @@ static void Seed_Water(void)
 					continue;
 				if (Seed_AddWater(cand) < 0)
 				{
-					if (gen_seed_overflow)
-						capacity_exhausted = true;
+					capacity_exhausted = gen_seed_overflow;
 					break;
 				}
 				entries++;
@@ -2594,8 +2585,7 @@ static void Seed_Water(void)
 		if (!(gen_seeds[i].flags & RSF_WATER))
 			continue;
 		VectorCopy(gen_seeds[i].origin, here);
-		if (!Seed_WaterNeighbours(here))
-			capacity_exhausted = true;
+		capacity_exhausted = !Seed_WaterNeighbours(here);
 	}
 	if (capacity_exhausted)
 	{
