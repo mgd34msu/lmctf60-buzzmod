@@ -54,10 +54,13 @@ def main() -> None:
     )
     ordered(
         shoot_train,
-        "for (destination = 0; destination < gen_num_seeds; destination++)",
+        "for (cross_destination = 0;",
+        "SG_OracleTrainGateCross(best_contact",
+        "for (destination = 0; destination < gen_num_seeds;",
         "new_bits = topology->objective_mask[destination] & missing",
         "SG_OracleTrainGateExit",
         "selected_destination[slot] = destination",
+        "selected_cross[slot] = cross_destination",
     )
     assert shoot_train.count("SG_OracleTrainGateShot") == 1
     assert "TRAIN_SHOOT_DEST_FAN" not in shoot_train

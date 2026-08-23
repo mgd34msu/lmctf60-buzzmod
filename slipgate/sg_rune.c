@@ -4110,6 +4110,8 @@ static void Link_TrainShootButtons(
 		int selected_cost[TRAIN_SHOOT_DEST_SLOTS] = {
 			INT_MAX, INT_MAX, INT_MAX, INT_MAX
 		};
+		int selected_cross[TRAIN_SHOOT_DEST_SLOTS] = { -1, -1, -1, -1 };
+		int selected_cross_ms[TRAIN_SHOOT_DEST_SLOTS] = { 0, 0, 0, 0 };
 		int best_source = -1;
 		int best_destination = -1;
 		int best_cost = INT_MAX;
@@ -4117,6 +4119,7 @@ static void Link_TrainShootButtons(
 		vec3_t best_contact = { 0.0f, 0.0f, 0.0f };
 		int motion_axis;
 		int passage_axis = -1;
+		int exact_crosses = 0;
 		int exact_destinations = 0;
 		int reverse_source = -1;
 		int reverse_destination = -1;
@@ -4282,73 +4285,110 @@ static void Link_TrainShootButtons(
 
 			selected_destination[0] = best_destination;
 			selected_cost[0] = best_cost;
+			selected_cross[0] = best_destination;
+			selected_cross_ms[0] = cross_ms_by_axis[passage_axis];
 			if (cross_ms_by_axis[passage_axis] > 0 &&
 			    best_cost > cross_ms_by_axis[passage_axis])
 			{
 				sg_train_gate_side_t destination_side =
 				    SG_TrainGateOppositeSide(source_side);
-				int base_cost = best_cost;
+				int pre_cross_cost =
+				    best_cost - cross_ms_by_axis[passage_axis];
 				int missing = 3 & ~topology->objective_mask[best_source];
-				int destination;
+				int cross_destination;
 				door_pose_t saved;
 
 				Train_PoseOpen(train, open, &saved);
-				for (destination = 0; destination < gen_num_seeds; destination++)
+				for (cross_destination = 0;
+				     cross_destination < gen_num_seeds; cross_destination++)
 				{
-					vec3_t delta;
-					int new_bits;
-					int crosses;
+					vec3_t cross_delta;
 					int cross_ms;
-					int cost;
-					int slot;
+					int destination;
 
-					if (destination == best_source ||
-					    !gen_source_stable[destination] ||
-					    gen_source_waterlevel[destination] != 0 ||
-					    !Gen_SeedHasOutgoing(destination) ||
-					    Train_SeedSweepAxisSide(gen_seeds[destination].origin,
+					if (!gen_source_stable[cross_destination] ||
+					    gen_source_waterlevel[cross_destination] != 0 ||
+					    Train_SeedSweepAxisSide(
+					        gen_seeds[cross_destination].origin,
 					        sweep_mins, sweep_maxs,
 					        (unsigned int)passage_axis) != destination_side)
 						continue;
-					new_bits = topology->objective_mask[destination] & missing;
-					crosses = topology->component[destination] >= 0 &&
-					    topology->component[destination] !=
-					        topology->component[best_source];
-					if (!new_bits && (missing != 0 || !crosses))
+					VectorSubtract(gen_seeds[cross_destination].origin,
+					    best_contact, cross_delta);
+					if (cross_delta[0] * cross_delta[0] +
+					        cross_delta[1] * cross_delta[1] > 1600.0f * 1600.0f ||
+					    fabsf(cross_delta[2]) > 256.0f ||
+					    !SG_OracleTrainGateCross(best_contact,
+					        gen_seeds[cross_destination].origin, button, train,
+					        sweep_mins, sweep_maxs,
+					        (unsigned int)passage_axis, &cross_ms))
 						continue;
-					VectorSubtract(gen_seeds[destination].origin,
-					    gen_seeds[best_destination].origin, delta);
-					if (delta[0] * delta[0] + delta[1] * delta[1] >
-					        1600.0f * 1600.0f || fabsf(delta[2]) > 256.0f ||
-					    !SG_OracleTrainGateExit(
-					        gen_seeds[best_destination].origin,
-					        gen_seeds[destination].origin, button, train,
-					        &cross_ms))
-						continue;
-					if (base_cost > RUNE_MAX_COST_MS - cross_ms)
-						continue;
-					cost = base_cost + cross_ms;
-					exact_destinations++;
-					for (slot = 1; slot <= 2; slot++)
-						if ((new_bits & (1 << (slot - 1))) &&
-						    cost < selected_cost[slot])
-						{
-							selected_destination[slot] = destination;
-							selected_cost[slot] = cost;
-						}
-					if (missing == 0 && crosses && cost < selected_cost[3])
+					exact_crosses++;
+					for (destination = 0; destination < gen_num_seeds;
+					     destination++)
 					{
-						selected_destination[3] = destination;
-						selected_cost[3] = cost;
+						vec3_t exit_delta;
+						int new_bits;
+						int crosses;
+						int exit_ms;
+						int cost;
+						int slot;
+
+						if (destination == cross_destination ||
+						    !gen_source_stable[destination] ||
+						    gen_source_waterlevel[destination] != 0 ||
+						    !Gen_SeedHasOutgoing(destination) ||
+						    Train_SeedSweepAxisSide(
+						        gen_seeds[destination].origin, sweep_mins,
+						        sweep_maxs, (unsigned int)passage_axis) !=
+						        destination_side)
+							continue;
+						new_bits = topology->objective_mask[destination] & missing;
+						crosses = topology->component[destination] >= 0 &&
+						    topology->component[destination] !=
+						        topology->component[best_source];
+						if (!new_bits && (missing != 0 || !crosses))
+							continue;
+						VectorSubtract(gen_seeds[destination].origin,
+						    gen_seeds[cross_destination].origin, exit_delta);
+						if (exit_delta[0] * exit_delta[0] +
+						        exit_delta[1] * exit_delta[1] >
+						        1600.0f * 1600.0f ||
+						    fabsf(exit_delta[2]) > 256.0f ||
+						    !SG_OracleTrainGateExit(
+						        gen_seeds[cross_destination].origin,
+						        gen_seeds[destination].origin, button, train,
+						        &exit_ms) ||
+						    pre_cross_cost >
+						        RUNE_MAX_COST_MS - cross_ms - exit_ms)
+							continue;
+						cost = pre_cross_cost + cross_ms + exit_ms;
+						exact_destinations++;
+						for (slot = 1; slot <= 2; slot++)
+							if ((new_bits & (1 << (slot - 1))) &&
+							    cost < selected_cost[slot])
+							{
+								selected_destination[slot] = destination;
+								selected_cost[slot] = cost;
+								selected_cross[slot] = cross_destination;
+								selected_cross_ms[slot] = cross_ms;
+							}
+						if (missing == 0 && crosses && cost < selected_cost[3])
+						{
+							selected_destination[3] = destination;
+							selected_cost[3] = cost;
+							selected_cross[3] = cross_destination;
+							selected_cross_ms[3] = cross_ms;
+						}
 					}
 				}
 				DoorPose_Restore(&saved, 1);
 			}
 		}
-		sg_host.dprint("rune: train shoot button=%u source_axes=%x/%x/%x closure_axes=0x%x passage=%d source=%d destination=%d exact_exits=%d\n",
+		sg_host.dprint("rune: train shoot button=%u source_axes=%x/%x/%x closure_axes=0x%x passage=%d source=%d destination=%d exact_crosses=%d exact_exits=%d\n",
 		    button_node->key, source_side_mask[0], source_side_mask[1],
 		    source_side_mask[2], closure_axis_mask, passage_axis, best_source,
-		    best_destination, exact_destinations);
+		    best_destination, exact_crosses, exact_destinations);
 		if (best_source >= 0 && best_destination >= 0)
 		{
 			int slot;
@@ -4358,7 +4398,7 @@ static void Link_TrainShootButtons(
 				int before = gen_num_links;
 				int earlier;
 
-				if (selected_destination[slot] < 0 ||
+				if (selected_destination[slot] < 0 || selected_cross[slot] < 0 ||
 				    selected_cost[slot] <= 0 ||
 				    selected_cost[slot] > RUNE_MAX_COST_MS)
 					continue;
@@ -4375,10 +4415,9 @@ static void Link_TrainShootButtons(
 					rune_link_t *link = &gen_links[gen_num_links - 1];
 
 					VectorCopy(best_contact, link->anchor);
-					VectorCopy(gen_seeds[best_destination].origin,
+					VectorCopy(gen_seeds[selected_cross[slot]].origin,
 					    link->mechanism_anchor);
-					link->sweep_clear_ms =
-					    (uint16_t)cross_ms_by_axis[passage_axis];
+					link->sweep_clear_ms = (uint16_t)selected_cross_ms[slot];
 					link->mode = RLCM_PREOPEN;
 					if (!Mechanism_BindTrain(link, button, train, closed, open,
 					        best_transaction_bound,
