@@ -382,8 +382,8 @@ including `lmctf02a` and `lmctf04`.
 The corrected old no-artifact queue contained 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
 runs. `lmctf58`, `lmctf07`, `lmctf27`, `lmctf40`, `lmctf45`, `tw2ctf2`,
-`xmap04`, `xmap25`, and `xmap29` subsequently passed every acceptance gate,
-leaving 14 maps in the live repair queue.
+`tw2ctf3`, `xmap04`, `xmap25`, and `xmap29` subsequently passed every
+acceptance gate, leaving 13 maps in the live repair queue.
 Exact retests prove that `tomb05` remains a genuine graph failure.
 `tomb05` reaches objective-core with no closed route
 shared by both flags.
@@ -472,7 +472,7 @@ over a generic command lattice is now looking for the actual physical route
 before any further controller is proposed.
 The live exact queue is `lmctf01`, `lmctf06`, `lmctf12`, `lmctf15`, `lmctf19`,
 `lmctf25`, `lmctf30`, `tomb05`,
-`tw2ctf3`, `tw2ctf4`, `xmap02`,
+`tw2ctf4`, `xmap02`,
 `xmap13`, `xmap18`, and `xmap26`.
 All eight incomplete generation cases reproduced terminal 900-second timeouts
 in base-link proof before the first progress interval against the exact accepted
@@ -638,22 +638,22 @@ The fresh batch has replaced the old queue labels with these current results:
 
 | Map | Current result |
 | --- | --- |
-| `lmctf01` | 2,401 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
-| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. Native reverse replay rejects all 16 red-forward cuts. Four exact button-to-vertical-carrier pairs now enter the mechanism catalog, but publish zero lift links, locating the next failure inside PLATFORM admission/rest/approach rather than target discovery. A narrow entry-profile diagnostic is running. |
+| `lmctf01` | Current immutable generation proves 1,776 seeds/16,816 links, then all prune: 999 red-only, 425 blue-only, 0 shared, and 352 neither. The closest opposing seeds remain separated by a 252-unit cut. |
+| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. Native reverse replay rejects all 16 red-forward cuts. Four exact button-to-vertical-carrier pairs enter the mechanism catalog but publish zero lift links because both the button entries and their paired carriers were classified as PLATFORM. The active generic repair classifies a paired non-door entry as PLATFORM_TRIGGER before replaying physical rest and approach. |
 | `lmctf07` | PASS after the accepted train/button repair. |
-| `lmctf12` | Fresh current source has 1,972 seeds after sparse-water integration: 939 red-only, 921 blue-only, 0 shared, 112 neither; roots 129/130 and zero boundary links. Inventory has six resolved teleporter pairs and three externally targeted quad doors; all six teleporter sources lack static staging. Exact SCC/cut diagnosis is active. |
-| `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
+| `lmctf12` | Fresh current source has 1,972 seeds after sparse-water integration: 939 red-only, 921 blue-only, 0 shared, and 112 neither. Its 26-SCC condensation has the red and blue roots in separate sink SCCs with no outgoing links. Native RUN/JUMP/DROP/HOOK/rocket-jump replay rejects the 16 nearest 240-unit cross-SCC pairs. All six teleporter approaches prove, but four remain same-side and the two neutral upper pads terminate separately into the red and blue sinks. An exact running-jump entry replay is active. |
+| `lmctf15` | Current immutable generation proves 1,953 seeds/19,785 links, then all prune: each flag remains isolated in a separate ten-seed component and no seed is shared. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
 | `lmctf27` | PASS and integrated: 620 seeds, 6,751 retained links, 316 authenticated plans, and 490 seeds reachable from both roots; both C readers, Python, lint, SNAG, fresh cold load, runtime-ready, accepted-map identity, GNU, Make/Clang, production linkage, and deslop pass. |
-| `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
+| `lmctf30` | Current immutable generation proves 746 seeds/3,798 links, then all prune: 248 red-only, 250 blue-only, 0 shared, and 248 neither. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | PASS and integrated: the generic fixed-point inverse repair adds exactly HOOK, rocket-jump, HOOK; 1,071 seeds become reachable from both roots and the 1,369-seed/14,287-link artifact passes all readers, lint, SNAG, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
-| `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
+| `tomb05` | Current immutable generation proves 961 seeds/12,200 links, then all prune: 56 red-only, 52 blue-only, 0 shared, and 853 neither. Its closest opposing seeds are 128 units apart. Automatic controllers remain exhausted; authoritative human traversal is reserved for the end. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf3` | Clean-production PASS without teleport changes: 1,815 seeds/29,948 links, roots 224/225, and both readers, Python/lint/semantic checks, SNAG, and fresh cold load green. The sole repair is automatic-door safety when a nonempty mapper target resolves to zero live targetnames. Accepted-map identity and full source gates remain before integration. |
-| `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
+| `tw2ctf3` | PASS and integrated without teleport changes: 1,815 seeds/29,948 links, roots 224/225, 156 mechanism nodes, 27 triggers, 62 inventory edges, and 12 plans. The generic repair recognizes that a nonempty automatic-door target resolving to zero live targetnames is an exact stock no-op. Both readers, Python, lint, SNAG, fresh cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
+| `tw2ctf4` | Current immutable generation proves 2,066 seeds/31,850 links, then all prune: 596 red-only, 606 blue-only, 0 shared, and 864 neither. The initial boundary contains ordinary RUN and rocket-jump links into neutral components, but no mechanism owns the reverse objective cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | PASS and integrated: 1,094 seeds, 13,356 links, 11 lift links, 12 plans, and 974 seeds reachable from both roots; both readers, lint, SNAG, cold load, byte-identical regeneration, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
