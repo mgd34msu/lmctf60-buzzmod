@@ -883,6 +883,23 @@ static int Mechanism_MaterializeDoorEntry(mechanism_materializer_t *state,
 	entry = &state->catalog->nodes[entry_index];
 	switch (binding->controller_kind)
 	{
+	case SG_MECHANISM_CONTROLLER_TRAIN_SHOOT:
+		if (binding->entry_key != binding->mover_key ||
+		    binding->egress_key != SG_MECH_NO_KEY ||
+		    binding->cooldown_ms == 0U ||
+		    binding->cooldown_ms > RUNE_MAX_COST_MS ||
+		    entry->kind != SG_MECH_NODE_DOOR_MASTER ||
+		    entry->team_master_key != entry->key ||
+		    (entry->flags & (SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		         SG_MECH_NODEF_SHOOTABLE | SG_MECH_NODEF_TEAM_MASTER)) !=
+		        (SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER |
+		         SG_MECH_NODEF_SHOOTABLE | SG_MECH_NODEF_TEAM_MASTER) ||
+		    entry->use_callback != SG_MECH_CALLBACK_USE_DOOR ||
+		    entry->blocked_callback != SG_MECH_CALLBACK_BLOCKED_DOOR ||
+		    !Mechanism_AddMaster(state, mover_index))
+			return 0;
+		break;
+
 	case SG_MECHANISM_CONTROLLER_AUTO_DOOR:
 	{
 		mechanism_edge_group_t owner = Mechanism_EdgeGroup(state,
@@ -1173,7 +1190,16 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 	{
 	case SG_MECHANISM_CONTROLLER_TRAIN:
 	case SG_MECHANISM_CONTROLLER_TRAIN_SHOOT:
-		closure_ok = Mechanism_MaterializeTrain(state, binding);
+		if (binding->controller_kind ==
+		        SG_MECHANISM_CONTROLLER_TRAIN_SHOOT &&
+		    state->catalog->nodes[entry_index].kind ==
+		        SG_MECH_NODE_DOOR_MASTER)
+			closure_ok = state->links[link_index].mode == RLCM_PREOPEN &&
+				Mechanism_MaterializeDoorEntry(state, binding) &&
+				Mechanism_MaterializeDoorClosure(state,
+				    binding->expected_members);
+		else
+			closure_ok = Mechanism_MaterializeTrain(state, binding);
 		break;
 	case SG_MECHANISM_CONTROLLER_PLATFORM:
 		closure_ok = Mechanism_MaterializePlatform(state, binding,

@@ -451,6 +451,48 @@ static void TestTrainGate(void)
 	ExpectTrainMaterializationFailure(&fixture);
 }
 
+static void TestShootDoor(void)
+{
+	fixture_t fixture;
+	rune_mechanism_node_t *master;
+	rune_mechanism_node_t *member;
+
+	FixtureInit(&fixture, RL_TRAIN);
+	fixture.links[0].mode = RLCM_PREOPEN;
+	fixture.links[0].mechanism_anchor[2] = -2.0f;
+	fixture.links[0].sweep_clear_ms = 100U;
+	{
+		static const char *const strings[] = { "func_door" };
+		Strings(&fixture, strings, 1U);
+	}
+	master = Door(&fixture, 10U, 10U, 1);
+	member = Door(&fixture, 20U, 10U, 0);
+	master->flags |= SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_SHOOTABLE;
+	member->flags |= SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_SHOOTABLE;
+	master->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
+	member->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TEAM, 0U);
+	fixture.binding.entry_key = 10U;
+	fixture.binding.mover_key = 10U;
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_TRAIN_SHOOT;
+	fixture.binding.expected_members = 2U;
+	fixture.binding.cooldown_ms = 1200U;
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+	CHECK(fixture.plans[0].controller_kind ==
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT);
+	CHECK(fixture.plans[0].num_edges == 1U);
+	CHECK(fixture.edges[fixture.plans[0].first_edge].kind ==
+		SG_MECH_EDGE_TEAM);
+	master->think_callback = SG_MECH_CALLBACK_THINK_SPAWN_DOOR_TRIGGER;
+	CHECK(CodecValidationDiagnostic(&fixture) ==
+		RLCODEC_BAD_ACTIVATION_NODE);
+	master->think_callback = SG_MECH_CALLBACK_THINK_CALC_MOVE_SPEED;
+
+	fixture.links[0].mode = RLCM_NONE;
+	ExpectTrainMaterializationFailure(&fixture);
+}
+
 static void CodecNode(const rune_mechanism_node_t *source,
 	sg_rune_codec_activation_node_t *destination)
 {
@@ -1475,6 +1517,7 @@ int main(void)
 	TestOnePlanPerLink();
 	TestPush();
 	TestTrainGate();
+	TestShootDoor();
 	CHECK((covered_actions & (UINT32_C(1) << RL_LIFT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_TELEPORT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_DOOR)) != 0U);

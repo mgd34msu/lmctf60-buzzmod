@@ -55,6 +55,10 @@ TRAIN_GATE_LIVE_TEST_BIN := sg_train_gate_live_test.make
 TRAIN_GATE_LIVE_TEST_OBJS := .sg_train_gate_live_test.make.o \
 	.sg_train_gate_live_under_test.make.o
 TRAIN_GATE_LIVE_TEST_DEPS := $(TRAIN_GATE_LIVE_TEST_OBJS:.o=.d)
+SHOOT_DOOR_LIVE_TEST_BIN := sg_shoot_door_live_test.make
+SHOOT_DOOR_LIVE_TEST_OBJS := .sg_shoot_door_live_test.make.o \
+	.sg_shoot_door_live_under_test.make.o
+SHOOT_DOOR_LIVE_TEST_DEPS := $(SHOOT_DOOR_LIVE_TEST_OBJS:.o=.d)
 BUTTON_GAME_TEST_BIN := sg_button_game_test.make
 BUTTON_GAME_TEST_OBJS := .sg_button_game_test.make.o \
 	.sg_button_game_live_under_test.make.o \
@@ -666,6 +670,7 @@ PUSH_LIVE_TEST_OBJS := .sg_push_live_test.make.o \
 PUSH_LIVE_TEST_DEPS := $(PUSH_LIVE_TEST_OBJS:.o=.d)
 PUSH_GAME_INTEGRATION_TEST := tests/test_push_game_integration.py
 TRAIN_GATE_GAME_INTEGRATION_TEST := tests/test_train_gate_game_integration.py
+SHOOT_DOOR_GAME_INTEGRATION_TEST := tests/test_shoot_door_game_integration.py
 ROCKETJUMP_CADENCE_TEST_BIN := sg_rocketjump_cadence_test.make
 ROCKETJUMP_CADENCE_TEST_OBJS := .sg_rocketjump_cadence_test.make.o \
 	.sg_rocketjump_cadence_under_test.make.o
@@ -1141,6 +1146,8 @@ OBJS := \
 	slipgate/sg_push_game.o \
 	slipgate/sg_train_gate_live.o \
 	slipgate/sg_train_gate_game.o \
+	slipgate/sg_shoot_door_live.o \
+	slipgate/sg_shoot_door_game.o \
 	sg_oracle.o \
 	sg_rune.o \
 	sg_arach.o \
@@ -1239,6 +1246,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	replay-test hook-discipline-test \
 	drop-live-test swim-live-test compound-swim-live-test \
 	push-game-integration-test train-gate-game-integration-test \
+	shoot-door-game-integration-test \
 	compound-swim-game-test rotator-sweep-test \
 	compound-drop-live-test compound-drop-game-test \
 	compound-drop-transition-test compound-hook-live-test \
@@ -1350,6 +1358,7 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(WATER_FOREST_TEST_DEPS)
 -include $(BUTTON_LIVE_TEST_DEPS)
 -include $(TRAIN_GATE_LIVE_TEST_DEPS)
+-include $(SHOOT_DOOR_LIVE_TEST_DEPS)
 -include $(BUTTON_GAME_TEST_DEPS)
 -include $(COMPOUND_GUARD_TEST_DEPS)
 -include $(COMPOUND_GUARD_GAME_TEST_DEPS)
@@ -1578,6 +1587,10 @@ $(TRAIN_GATE_LIVE_TEST_BIN): $(TRAIN_GATE_LIVE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -o $@ $(TRAIN_GATE_LIVE_TEST_OBJS) $(LIBS)
 
+$(SHOOT_DOOR_LIVE_TEST_BIN): $(SHOOT_DOOR_LIVE_TEST_OBJS)
+	$(E) [TEST-LD] $@
+	$(Q)$(CC) -o $@ $(SHOOT_DOOR_LIVE_TEST_OBJS) $(LIBS)
+
 $(BUTTON_GAME_TEST_BIN): $(BUTTON_GAME_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(BUTTON_GAME_TEST_OBJS) $(LIBS)
@@ -1754,6 +1767,20 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 .sg_train_gate_live_under_test.make.o: slipgate/sg_train_gate_live.c \
 		slipgate/sg_train_gate_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_shoot_door_live_test.make.o: tests/sg_shoot_door_live_test.c \
+		slipgate/sg_shoot_door_live.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_shoot_door_live_under_test.make.o: slipgate/sg_shoot_door_live.c \
+		slipgate/sg_shoot_door_live.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -3219,7 +3246,7 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
-		$(BUTTON_LIVE_TEST_BIN) \
+		$(BUTTON_LIVE_TEST_BIN) $(SHOOT_DOOR_LIVE_TEST_BIN) \
 		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_TEST_BIN) \
 		$(COMPOUND_GUARD_GAME_INTEGRATION_TEST) \
@@ -3305,6 +3332,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(MOVER_LEASE_TEST_BIN)
 	$(Q)./$(WATER_FOREST_TEST_BIN)
 	$(Q)./$(BUTTON_LIVE_TEST_BIN)
+	$(Q)./$(SHOOT_DOOR_LIVE_TEST_BIN)
 	$(Q)./$(BUTTON_GAME_TEST_BIN)
 	$(Q)python3 $(BUTTON_GAME_INTEGRATION_TEST)
 	$(Q)./$(COMPOUND_GUARD_TEST_BIN)
@@ -3479,6 +3507,10 @@ train-gate-game-integration-test: $(TRAIN_GATE_GAME_INTEGRATION_TEST)
 	$(E) [TEST] train gate game integration
 	$(Q)python3 -B $(TRAIN_GATE_GAME_INTEGRATION_TEST)
 
+shoot-door-game-integration-test: $(SHOOT_DOOR_GAME_INTEGRATION_TEST)
+	$(E) [TEST] shoot door game integration
+	$(Q)python3 -B $(SHOOT_DOOR_GAME_INTEGRATION_TEST)
+
 rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
 		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \
 		tools/rune-corpus-maps.txt
@@ -3504,6 +3536,10 @@ button-live-test: $(BUTTON_LIVE_TEST_BIN)
 train-gate-live-test: $(TRAIN_GATE_LIVE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(TRAIN_GATE_LIVE_TEST_BIN)
+
+shoot-door-live-test: $(SHOOT_DOOR_LIVE_TEST_BIN)
+	$(E) [TEST] $<
+	$(Q)./$(SHOOT_DOOR_LIVE_TEST_BIN)
 
 button-game-test: $(BUTTON_GAME_TEST_BIN)
 	$(E) [TEST] $<

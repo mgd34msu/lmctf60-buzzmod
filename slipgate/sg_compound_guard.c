@@ -866,7 +866,8 @@ sg_compound_guard_result_t SG_CompoundGuardAcquireTrainGate(
 	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
 	size_t key_count, int link_index, uint32_t mechanism_index)
 {
-	if (key_count != 1U || mechanism_index == 0U)
+	if (key_count == 0U || key_count > SG_MOVER_LEASE_MAX_KEYS ||
+	    mechanism_index == 0U)
 		return SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	return Acquire(bot, keys, key_count, SG_MOVER_LAW_TRAIN_GATE,
 	    link_index, mechanism_index);

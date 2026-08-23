@@ -1038,6 +1038,24 @@ static void TestRecordWideAcquireReleaseAndFrameMaintenance(void)
 	      SG_COMPOUND_GUARD_RUN_READY);
 }
 
+static void TestTrainGateOwnsCompleteMoverSet(void)
+{
+	sg_compound_guard_bot_t bot;
+	sg_mover_key_t keys[2] = { 150U, 151U };
+	sg_mover_lease_record_t record;
+
+	ResetGuard();
+	Attach(&bot, 10, 11);
+	fake.all_outside = 1;
+	CHECK(SG_CompoundGuardAcquireTrainGate(&bot, keys, 2U, 24, 150U) ==
+	      SG_COMPOUND_GUARD_OK);
+	CHECK(SG_CompoundGuardValidate(&bot, &record) == SG_COMPOUND_GUARD_OK);
+	CHECK(record.law == SG_MOVER_LAW_TRAIN_GATE && record.key_count == 2U &&
+	      record.keys[0] == keys[0] && record.keys[1] == keys[1]);
+	CHECK(SG_CompoundGuardAuthorize(&bot, SG_MOVER_LAW_TRAIN_GATE, keys, 2U,
+	      24, 150U) == SG_COMPOUND_GUARD_OK);
+}
+
 int main(void)
 {
 	TestCompoundOverlapQuery();
@@ -1050,6 +1068,7 @@ int main(void)
 	TestBodyReuseTransaction();
 	TestLevelResetAndReasons();
 	TestRecordWideAcquireReleaseAndFrameMaintenance();
+	TestTrainGateOwnsCompleteMoverSet();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_guard_test: %d failure(s)\n", failures);

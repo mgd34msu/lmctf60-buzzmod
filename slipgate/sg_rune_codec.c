@@ -1203,7 +1203,10 @@ static sg_rune_codec_diagnostic_t Codec_ValidatePlanFields(
 			return RLCODEC_BAD_ACTIVATION_PLAN;
 	}
 	else if (!Codec_KeyValueValid(plan->mover_key) ||
-	         plan->entry_key == plan->mover_key || plan->num_edges == 0U)
+	         (plan->entry_key == plan->mover_key &&
+	          plan->controller_kind !=
+	              SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT) ||
+	         plan->num_edges == 0U)
 		return RLCODEC_BAD_ACTIVATION_PLAN;
 	return RLCODEC_OK;
 }
@@ -1592,15 +1595,16 @@ static int Codec_DoorNodeShapeValid(
 		    : SG_RUNE_CODEC_NODEF_TEAM_MEMBER);
 	uint16_t forbidden = master ? SG_RUNE_CODEC_NODEF_TEAM_MEMBER :
 		SG_RUNE_CODEC_NODEF_TEAM_MASTER;
-	/* SP_func_door and SP_func_door_rotating choose this callback for each
-	 * individual brush before G_FindTeams assigns captain/member roles.  A
-	 * safe declared door cannot be shootable, so its sealed post-first-frame
-	 * callback is determined exactly by that brush's own targetname: targeted
-	 * brushes retain Think_CalcMoveSpeed; anonymous brushes retain
-	 * Think_SpawnDoorTrigger (which is a no-op on a team slave). */
-	uint16_t expected_think = node && node->targetname_offset != 0U
+	/* SP_func_door selects Think_CalcMoveSpeed when either health or a
+	 * targetname is present.  Shootable brushes therefore retain that callback
+	 * even without a targetname; ordinary anonymous brushes retain
+	 * Think_SpawnDoorTrigger. */
+	uint16_t expected_think = node &&
+		(node->flags & SG_RUNE_CODEC_NODEF_SHOOTABLE) != 0U
 		? SG_RUNE_CODEC_CALLBACK_THINK_CALC_MOVE_SPEED
-		: SG_RUNE_CODEC_CALLBACK_THINK_SPAWN_DOOR_TRIGGER;
+		: (node && node->targetname_offset != 0U
+			? SG_RUNE_CODEC_CALLBACK_THINK_CALC_MOVE_SPEED
+			: SG_RUNE_CODEC_CALLBACK_THINK_SPAWN_DOOR_TRIGGER);
 
 	return Codec_NodeExecutable(node) &&
 	       node->kind == (master ? SG_RUNE_CODEC_NODE_DOOR_MASTER
@@ -2554,6 +2558,22 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		int shoot = plan->controller_kind ==
 			SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT;
 
+		if (shoot && nodes[entry_index].kind ==
+		        SG_RUNE_CODEC_NODE_DOOR_MASTER)
+		{
+			if (!owner_link || owner_link->action != RL_TRAIN ||
+			    owner_link->mode != RLCM_PREOPEN ||
+			    plan->entry_key != plan->mover_key ||
+			    plan->expected_members == 0U || plan->cooldown_ms == 0U ||
+			    plan->cooldown_ms > SG_RUNE_CODEC_MAX_TIME_MS ||
+			    nodes[entry_index].team_master_key != plan->entry_key ||
+			    (nodes[entry_index].flags &
+			        SG_RUNE_CODEC_NODEF_SHOOTABLE) == 0U)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
+			workspace->node_touched[master_count++] = entry_index;
+			break;
+		}
+
 		if (!owner_link || owner_link->action != RL_TRAIN ||
 		    plan->expected_members != 1U || plan->cooldown_ms == 0U ||
 		    plan->cooldown_ms > SG_RUNE_CODEC_MAX_TIME_MS ||
@@ -2788,6 +2808,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 
 	if ((plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_PLATFORM &&
 	     master_count != 0U) ||
+	    (plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT &&
+	     master_count != 0U) ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_AUTO_DOOR ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_BUTTON_DOOR ||
 	    plan->controller_kind == SG_RUNE_CODEC_CONTROLLER_DIRECT_TRIGGER_DOOR)
@@ -2801,6 +2823,11 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 
 			if (!Codec_DoorNodeShapeValid(&nodes[master_node_index], 1))
 				return RLCODEC_BAD_ACTIVATION_NODE;
+			if (plan->controller_kind ==
+			        SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT &&
+			    (nodes[master_node_index].flags &
+			        SG_RUNE_CODEC_NODEF_SHOOTABLE) == 0U)
+				return RLCODEC_BAD_ACTIVATION_PLAN;
 			if (!Codec_DoorNodeSemanticValid(&nodes[master_node_index],
 			    master_key, strings))
 				return RLCODEC_BAD_ACTIVATION_PLAN;
@@ -2811,6 +2838,11 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 				{
 					if (!Codec_DoorNodeShapeValid(&nodes[j], 0))
 						return RLCODEC_BAD_ACTIVATION_NODE;
+					if (plan->controller_kind ==
+					        SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT &&
+					    (nodes[j].flags &
+					        SG_RUNE_CODEC_NODEF_SHOOTABLE) == 0U)
+						return RLCODEC_BAD_ACTIVATION_PLAN;
 					if (!Codec_DoorNodeSemanticValid(&nodes[j], master_key,
 					    strings))
 						return RLCODEC_BAD_ACTIVATION_PLAN;

@@ -631,6 +631,45 @@ static void TestTrainGate(void)
 	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
 }
 
+static void TestShootDoor(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *master;
+	rune_mechanism_node_t *member;
+
+	FixtureBegin(&fixture, RL_TRAIN,
+		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT, 1200U, 2U);
+	fixture.link.mode = RLCM_PREOPEN;
+	master = Node(&fixture, 10U, SG_MECH_NODE_DOOR_MASTER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER |
+		SG_MECH_NODEF_SHOOTABLE);
+	master->team_master_key = 10U;
+	master->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	master->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	member = Node(&fixture, 20U, SG_MECH_NODE_DOOR_MEMBER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MEMBER |
+		SG_MECH_NODEF_SHOOTABLE);
+	member->team_master_key = 10U;
+	member->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	member->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TEAM, 0U);
+	FixtureFinish(&fixture, 10U, 10U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.entry_node == master && binding.mover_node == master);
+	CHECK(binding.destination_node == NULL && binding.egress_node == NULL);
+	CheckDoorMovers(&binding, 10U, 20U);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture.rune, 0U, &binding));
+
+	member->flags &= ~SG_MECH_NODEF_SHOOTABLE;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	member->flags |= SG_MECH_NODEF_SHOOTABLE;
+	fixture.link.mode = RLCM_NONE;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
 static void TestRetiredInventoryIsNeverExecutable(void)
 {
 	fixture_t fixture;
@@ -894,6 +933,7 @@ int main(void)
 	TestTeleport();
 	TestPush();
 	TestTrainGate();
+	TestShootDoor();
 	TestRetiredInventoryIsNeverExecutable();
 	TestAutoDoor();
 	TestDirectDoor();
