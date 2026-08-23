@@ -8093,7 +8093,6 @@ static void Graph_ReverseReach(int root, const byte *allowed,
 #ifndef SG_RUNE_OBJECTIVE_ROCKET_PROVER
 #define SG_RUNE_OBJECTIVE_ROCKET_PROVER ProveRocketJump
 #endif
-
 static qboolean Graph_ProveObjectiveReverse(const byte *red_reach,
 	const byte *blue_reach, int *link_out, byte *action_out)
 {
@@ -8529,7 +8528,8 @@ static qboolean Graph_PruneObjectiveCoreTry(qboolean defer_route_failure,
 			        &repair_link, &repair_action))
 			{
 				repairs++;
-				sg_host.dprint("rune: objective-repair kind=%s link=%d repairs=%d\n",
+				sg_host.dprint("rune: objective-repair kind=%s link=%d "
+				               "repairs=%d\n",
 				               repair_action == RL_DROP ? "hook-reverse-drop" :
 				               repair_action == RL_HOOK ? "reverse-hook" :
 				               "reverse-rocketjump", repair_link, repairs);
