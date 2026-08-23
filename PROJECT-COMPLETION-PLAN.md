@@ -363,8 +363,13 @@ including `lmctf02a` and `lmctf04`.
       new RIDE records then exposed an exact selector bug: reverse-touch
       endpoint discovery rejected the mover because it counted independent
       RIDE records alongside PREOPEN touch-crossing records, dropping the four
-      existing shoot reversals. The active fix filters that lookup by train mode
-      and adds mixed-mode ambiguity coverage before the next full smoke.
+      existing shoot reversals. Filtering that lookup by train mode restores the
+      complete 2 touch + 2 ride + 4 shoot graph and retains all 1,889 seeds in
+      both directions. Artifact materialization then rejected the first PREOPEN
+      plan because the sealed stock train was still in its initial
+      `FUNC_TRAIN_FIND` callback state. The active generic fix accepts only NONE
+      or that stock initializer for an otherwise exact train catalog shape and
+      retains rejection of unknown or dynamic callbacks.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -437,7 +442,12 @@ open. The four-mask SCC report proves those 124 seeds are returnable to both
 roots but reachable from neither. The two exact missing cuts run from each
 side's root-cycle component to the opposite side's return component. Existing
 RUN, JUMP, DROP, HOOK, and rocket-jump controllers are being replayed over all
-production-admitted pairs for only those two component transitions.
+production-admitted pairs for only those two component transitions. That exact
+replay exhausted both cuts without a proof. Twenty first stable DROP landings
+matched no existing canonical seed envelope, so destination reassociation is
+also refuted. The next bounded diagnostic derives new canonical ground seeds
+only from those proved landings, publishes the exact DROP to each derived seed,
+and recomputes ordinary links and objective masks for at most four rounds.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -540,13 +550,17 @@ which previously ran for more than 39 seconds without returning. Keeping the
 same exact validated door-bounds cache active through that phase finishes it in
 about 18 seconds with zero state mismatches. Diagnostics are being removed and
 cache-on/cache-off `lmctf42` artifacts and normalized counters are identical.
-The focused oracle test and both full host suites pass. An immutable exact
-`xmap26` smoke completed generation inside the configured bound after about 824
-CPU seconds, including compound swim and all later generation phases. It
-terminated `GEN_FAIL` because objective pruning removed all 1,575 seeds; no
-artifact was written, so reader, lint, SNAG, and cold-load gates did not run.
-The performance blocker is solved and `xmap26` is now a graph-connectivity
-repair. Its exact pruning cut and authentic nearby mechanisms are next.
+The focused oracle test and both full host suites pass. A fresh cache scope
+around the separate compound-swim generator then reduced that phase from about
+555 seconds to 18 seconds with zero state mismatches. Cache-off and cache-on
+`lmctf42` artifacts remain ordered and byte-identical, rotating cache hit and
+state-drift coverage passes, and both full host suites pass. The verified cache
+changes are canonical. The complete `xmap26` rerun now reaches the same graph
+failure in about 299 seconds wall with the same 1,575 seeds, 46,087 links,
+catalog shape, objective roots, base counters, and prune result. Objective
+pruning removes every seed, so no artifact is written and the map remains a
+graph-connectivity repair. Its exact pruning cut and authentic nearby
+mechanisms are next.
 The canonical source also rejects a known water-seed-capacity overflow before
 base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
