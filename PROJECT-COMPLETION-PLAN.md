@@ -349,7 +349,22 @@ including `lmctf02a` and `lmctf04`.
       simultaneous button contact and train support. The active replacement
       separates authenticated floor-button activation from subsequent boarding,
       then advances the declared mover timing while requiring real train support
-      before carry and upper egress.
+      before carry and upper egress. Focused tests pass immediate dispatch,
+      exact support, both route orientations, and late-board rejection. Its
+      first immutable real smoke still published only the two existing touch
+      links and no carried ride link. Temporary stage counters are separating
+      physical activation, dispatch dwell, boarding, carry, and egress before
+      the next controller change. All 120 eligible calls authenticated dispatch
+      and dwell; 76 physically activated the floor button, but none acquired
+      exact train support before motion. The owning failure is now narrowed to
+      the post-touch support target and controller. A bounded live-AABB
+      RUN/JUMP fan proved that handoff and published two carried ride links,
+      raising initial reachability to 1,646 red seeds and 1,624 blue seeds. The
+      new RIDE records then exposed an exact selector bug: reverse-touch
+      endpoint discovery rejected the mover because it counted independent
+      RIDE records alongside PREOPEN touch-crossing records, dropping the four
+      existing shoot reversals. The active fix filters that lookup by train mode
+      and adds mixed-mode ambiguity coverage before the next full smoke.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -405,7 +420,24 @@ side-only-to-shared reverse DROP pairs have stable dry sources but no
 player-hull lip, so neither admits a walkoff or landing and DROP is ruled out at
 that exact boundary. A bounded streaming report is identifying only the held
 low-gravity JUMP links needed to assemble the shared components before any
-production admission is narrowed.
+production admission is narrowed. That reconstruction found zero out-of-normal
+RUN or JUMP edges crossing baseline components inside the apparent 124-seed
+shared partition. The partition was an indirect scheduling and redundancy
+perturbation, not a missing low-gravity traversal. Broad admission and all
+diagnostics have therefore been removed; the repair continues from the
+unchanged baseline side-only-to-shared route gap. A four-round bounded
+flag-forward JUMP iteration reached fixed point after three rounds: seven exact
+proofs produced four same-side component transitions but zero shared objective
+seeds. The next diagnostic isolates rocket-jump scheduling by component and
+missing-objective bit after only those exact JUMP witnesses. Fair per-component
+rocket-jump queues preserve all three known inbound witnesses and prove four
+component transitions in 383 calls, restoring 124 initially shared seeds. The
+objective prune still removes that entire set because the reverse route remains
+open. The four-mask SCC report proves those 124 seeds are returnable to both
+roots but reachable from neither. The two exact missing cuts run from each
+side's root-cycle component to the opposite side's return component. Existing
+RUN, JUMP, DROP, HOOK, and rocket-jump controllers are being replayed over all
+production-admitted pairs for only those two component transitions.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -507,8 +539,14 @@ Post-source profiling localized the remaining cost to compound swim proof,
 which previously ran for more than 39 seconds without returning. Keeping the
 same exact validated door-bounds cache active through that phase finishes it in
 about 18 seconds with zero state mismatches. Diagnostics are being removed and
-cache-on/cache-off identity plus both full host suites must pass before the
-next uninterrupted real smoke.
+cache-on/cache-off `lmctf42` artifacts and normalized counters are identical.
+The focused oracle test and both full host suites pass. An immutable exact
+`xmap26` smoke completed generation inside the configured bound after about 824
+CPU seconds, including compound swim and all later generation phases. It
+terminated `GEN_FAIL` because objective pruning removed all 1,575 seeds; no
+artifact was written, so reader, lint, SNAG, and cold-load gates did not run.
+The performance blocker is solved and `xmap26` is now a graph-connectivity
+repair. Its exact pruning cut and authentic nearby mechanisms are next.
 The canonical source also rejects a known water-seed-capacity overflow before
 base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
