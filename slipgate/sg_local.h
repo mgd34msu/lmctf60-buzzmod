@@ -301,11 +301,31 @@ qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
 qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	edict_t *entry, edict_t *support, int action, int *arrival_ms);
+qboolean SG_OracleTrainGateApproach(const vec3_t source,
+	const vec3_t target, edict_t *button, int *arrival_ms,
+	vec3_t contact_out);
+qboolean SG_OracleTrainRideBoard(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *train,
+	int *arrival_ms, vec3_t contact_out);
+qboolean SG_OracleTrainRideCarry(const vec3_t source,
+	const vec3_t displacement, edict_t *train, vec3_t destination_out);
+qboolean SG_OracleTrainGateShot(const vec3_t source, edict_t *button,
+	vec3_t contact_out, int *flight_ms);
 qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
 	const vec3_t target, edict_t *entry, edict_t *support,
 	edict_t *approach_door, int *arrival_ms);
 qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	edict_t *support, int *arrival_ms);
+qboolean SG_OracleTrainRideEgress(const vec3_t source,
+	const vec3_t target, edict_t *train, int *arrival_ms);
+qboolean SG_OracleTrainGateEntry(const vec3_t source,
+	const vec3_t entry, edict_t *button, edict_t *train, int *arrival_ms);
+qboolean SG_OracleTrainGateCross(const vec3_t entry,
+	const vec3_t target, edict_t *button, edict_t *train,
+	const vec3_t sweep_mins, const vec3_t sweep_maxs,
+	unsigned int passage_axis, int *arrival_ms);
+qboolean SG_OracleTrainGateExit(const vec3_t cross,
+	const vec3_t target, edict_t *button, edict_t *train, int *arrival_ms);
 qboolean SG_OracleDeclaredCompoundLiftEgress(const vec3_t source,
 	const vec3_t target, edict_t *support, edict_t *egress_trigger,
 	int *arrival_ms);
@@ -787,7 +807,11 @@ qboolean	SG_AuthorizeDoorTriggerTouch(edict_t *source, edict_t *activator);
 qboolean	SG_AuthorizeDoorTriggerUse(edict_t *source, edict_t *activator);
 qboolean	SG_AuthorizeButtonTouch(edict_t *source, edict_t *activator);
 qboolean	SG_AuthorizeButtonUse(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeButtonShot(edict_t *source, edict_t *inflictor,
+	edict_t *attacker, int damage);
 qboolean	SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator);
+qboolean	SG_AuthorizeTrainUse(edict_t *train, edict_t *source,
+						 edict_t *activator);
 void		SG_ButtonExecutionEntityFreed(edict_t *entity);
 qboolean	SG_HandleMechanismTargets(edict_t *source,
 								      edict_t *activator);

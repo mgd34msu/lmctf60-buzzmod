@@ -58,6 +58,17 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	(void)bot;
 }
 
+int SG_TrainGateGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_TrainGateGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+}
+
 static sg_bot_t CompoundDrop(qboolean owned)
 {
 	sg_bot_t bot;

@@ -128,6 +128,13 @@ void SG_PushGameTouched(edict_t *trigger, edict_t *entity)
 	(void)entity;
 }
 
+int SG_TrainGateGameHandleTargets(edict_t *source, edict_t *activator)
+{
+	(void)source;
+	(void)activator;
+	return 0;
+}
+
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
 		fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, \

@@ -14,6 +14,17 @@ static rune_t rune;
 
 void SG_StrikeTestSetRune(rune_t *value);
 
+int SG_TrainGateGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_TrainGateGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+}
+
 #define CHECK(condition) do { \
 	if (!(condition)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", \

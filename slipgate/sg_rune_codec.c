@@ -319,6 +319,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidateAnchor(
 	case RLAP_DOOR_WAIT:
 	case RLAP_DOOR_PREOPEN_CONTACT:
 	case RLAP_DOOR_RIDE_INGRESS_LIP:
+	case RLAP_TRAIN_CROSS:
 		return Codec_VectorOnDoorLattice(anchor) ? RLCODEC_OK :
 			Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	case RLAP_HOOK_CONTROL:
@@ -377,7 +378,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateLinkFields(
 	if (link->sweep_clear_ms == 0U ||
 	    link->sweep_clear_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0U ||
 	    link->sweep_clear_ms > (uint16_t)link->cost_ms ||
-	    policy->mechanism_policy != RLMP_DOOR_WORLD_FIXED_1_8)
+	    (policy->mechanism_policy != RLMP_DOOR_WORLD_FIXED_1_8 &&
+	     policy->mechanism_policy != RLMP_TRAIN_WORLD_FIXED_1_8))
 		return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
 	if (link->mode == RLCM_PREOPEN)
 		mechanism_policy = (int)policy->preopen_mechanism_anchor_policy;
@@ -469,13 +471,21 @@ static sg_rune_codec_diagnostic_t Codec_ValidateActionGraph(
 	for (i = 0U; i < num_links; i++)
 	{
 		const sg_rune_codec_link_t *link = &links[i];
+		uint64_t plan;
 
 		if (link->source >= num_seeds || link->destination >= num_seeds ||
 		    link->source == link->destination ||
 		    Codec_ValidateLinkFields(link) != RLCODEC_OK)
 			return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
-		workspace->graph_link_keys[i] = ((uint64_t)link->source << 23) |
-			((uint64_t)link->destination << 8) | (uint64_t)link->action;
+		if (link->activation_plan == SG_RUNE_CODEC_NO_ACTIVATION_PLAN)
+			plan = SG_RUNE_CODEC_MAX_ACTIVATION_PLANS;
+		else if (link->activation_plan < SG_RUNE_CODEC_MAX_ACTIVATION_PLANS)
+			plan = link->activation_plan;
+		else
+			return RLCODEC_BAD_ACTIVATION_PLAN;
+		workspace->graph_link_keys[i] = ((uint64_t)link->source << 42) |
+			((uint64_t)link->destination << 27) |
+			((uint64_t)link->action << 19) | plan;
 	}
 	Codec_SortKeys(workspace->graph_link_keys, (size_t)num_links);
 	for (i = 1U; i < num_links; i++)
@@ -1738,6 +1748,76 @@ static int Codec_NodeExecutable(const sg_rune_codec_activation_node_t *node)
 	       !Codec_NodeHasUnknownCallback(node);
 }
 
+static int Codec_TrainSealedThink(uint16_t callback)
+{
+	return callback == SG_RUNE_CODEC_CALLBACK_NONE ||
+	       callback == SG_RUNE_CODEC_CALLBACK_FUNC_TRAIN_FIND;
+}
+
+static int Codec_TrainButtonShape(
+	const sg_rune_codec_activation_node_t *button, int shoot)
+{
+	return Codec_NodeExecutable(button) &&
+	       button->kind == SG_RUNE_CODEC_NODE_BUTTON &&
+	       button->flags == (SG_RUNE_CODEC_NODEF_REPEATABLE |
+	           SG_RUNE_CODEC_NODEF_USABLE | SG_RUNE_CODEC_NODEF_MOVER |
+	           (shoot ? SG_RUNE_CODEC_NODEF_SHOOTABLE :
+	               SG_RUNE_CODEC_NODEF_TOUCHABLE)) &&
+	       button->touch_callback == (shoot ? SG_RUNE_CODEC_CALLBACK_NONE :
+	           SG_RUNE_CODEC_CALLBACK_BUTTON_TOUCH) &&
+	       button->use_callback == SG_RUNE_CODEC_CALLBACK_BUTTON_USE &&
+	       button->think_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       button->blocked_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       button->spawnflags == 0U && button->delay_ms == 0 &&
+	       button->wait_ms > 0 && button->target_offset != 0U &&
+	       button->killtarget_offset == 0U && button->path_target_offset == 0U;
+}
+
+static int Codec_TrainMoverShape(
+	const sg_rune_codec_activation_node_t *train)
+{
+	return Codec_NodeExecutable(train) &&
+	       train->kind == SG_RUNE_CODEC_NODE_TRAIN &&
+	       train->flags == (SG_RUNE_CODEC_NODEF_REPEATABLE |
+	           SG_RUNE_CODEC_NODEF_USABLE | SG_RUNE_CODEC_NODEF_MOVER) &&
+	       train->spawnflags == 2U &&
+	       train->touch_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       train->use_callback == SG_RUNE_CODEC_CALLBACK_TRAIN_USE &&
+	       Codec_TrainSealedThink(train->think_callback) &&
+	       train->blocked_callback == SG_RUNE_CODEC_CALLBACK_BLOCKED_TRAIN &&
+	       train->delay_ms == 0 && train->speed_q8 != 0U &&
+	       train->speed_q8 == train->accel_q8 &&
+	       train->speed_q8 == train->decel_q8 &&
+	       train->target_offset != 0U && train->targetname_offset != 0U &&
+	       train->killtarget_offset == 0U && train->path_target_offset == 0U;
+}
+
+static int Codec_TrainCornerShape(
+	const sg_rune_codec_activation_node_t *corner)
+{
+	return Codec_NodeExecutable(corner) &&
+	       corner->kind == SG_RUNE_CODEC_NODE_PATH_CORNER &&
+	       corner->flags == (SG_RUNE_CODEC_NODEF_TOUCHABLE |
+	           SG_RUNE_CODEC_NODEF_ONE_SHOT) && corner->spawnflags == 0U &&
+	       corner->touch_callback ==
+	           SG_RUNE_CODEC_CALLBACK_PATH_CORNER_TOUCH &&
+	       corner->use_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       corner->think_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       corner->blocked_callback == SG_RUNE_CODEC_CALLBACK_NONE &&
+	       corner->delay_ms == 0 && corner->wait_ms == -1000 &&
+	       corner->target_offset != 0U && corner->killtarget_offset == 0U;
+}
+
+static int Codec_TrainNoSideEffects(
+	const sg_rune_codec_activation_edge_t *edges, uint32_t inventory_edges,
+	uint32_t key)
+{
+	return Codec_InventoryFanoutCount(edges, inventory_edges, key,
+	           SG_RUNE_CODEC_EDGE_KILLTARGET) == 0U &&
+	       Codec_InventoryFanoutCount(edges, inventory_edges, key,
+	           SG_RUNE_CODEC_EDGE_PATH_TARGET) == 0U;
+}
+
 static int Codec_PushNodeSemanticValid(
 	const sg_rune_codec_activation_node_t *node,
 	const unsigned char *strings)
@@ -2254,6 +2334,78 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 			generation, workspace, &expected_count);
 		if (diagnostic == RLCODEC_OK)
 			diagnostic = Codec_ExpectInventoryEdge(edges, plan, target_index,
+				generation, workspace, &expected_count);
+		if (diagnostic != RLCODEC_OK)
+			return diagnostic;
+		break;
+	}
+
+	case SG_RUNE_CODEC_CONTROLLER_TRAIN:
+	case SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT:
+	{
+		uint32_t button_target_count = Codec_InventoryFanoutCount(edges,
+			inventory_edges, plan->entry_key, SG_RUNE_CODEC_EDGE_TARGET);
+		uint32_t train_route_count = Codec_InventoryFanoutCount(edges,
+			inventory_edges, plan->mover_key,
+			SG_RUNE_CODEC_EDGE_ROUTE_TARGET);
+		uint32_t button_target = Codec_InventoryFanoutAt(edges,
+			inventory_edges, plan->entry_key, SG_RUNE_CODEC_EDGE_TARGET, 0U);
+		uint32_t train_route = Codec_InventoryFanoutAt(edges,
+			inventory_edges, plan->mover_key,
+			SG_RUNE_CODEC_EDGE_ROUTE_TARGET, 0U);
+		uint32_t open_index = train_route == UINT32_MAX ? UINT32_MAX :
+			Codec_FindNode(nodes, num_nodes, edges[train_route].to_key);
+		uint32_t open_route_count = open_index == UINT32_MAX ? 0U :
+			Codec_InventoryFanoutCount(edges, inventory_edges,
+			    nodes[open_index].key, SG_RUNE_CODEC_EDGE_ROUTE_TARGET);
+		uint32_t open_route = open_index == UINT32_MAX ? UINT32_MAX :
+			Codec_InventoryFanoutAt(edges, inventory_edges,
+			    nodes[open_index].key, SG_RUNE_CODEC_EDGE_ROUTE_TARGET, 0U);
+		uint32_t closed_index = open_route == UINT32_MAX ? UINT32_MAX :
+			Codec_FindNode(nodes, num_nodes, edges[open_route].to_key);
+		uint32_t closed_route_count = closed_index == UINT32_MAX ? 0U :
+			Codec_InventoryFanoutCount(edges, inventory_edges,
+			    nodes[closed_index].key, SG_RUNE_CODEC_EDGE_ROUTE_TARGET);
+		uint32_t closed_route = closed_index == UINT32_MAX ? UINT32_MAX :
+			Codec_InventoryFanoutAt(edges, inventory_edges,
+			    nodes[closed_index].key, SG_RUNE_CODEC_EDGE_ROUTE_TARGET, 0U);
+		int shoot = plan->controller_kind ==
+			SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT;
+
+		if (!owner_link || owner_link->action != RL_TRAIN ||
+		    plan->expected_members != 1U || plan->cooldown_ms == 0U ||
+		    plan->cooldown_ms > SG_RUNE_CODEC_MAX_TIME_MS ||
+		    !Codec_TrainButtonShape(&nodes[entry_index], shoot) ||
+		    !Codec_TrainMoverShape(&nodes[mover_index]) ||
+		    button_target_count != 1U || train_route_count != 1U ||
+		    button_target == UINT32_MAX || train_route == UINT32_MAX ||
+		    edges[button_target].to_key != plan->mover_key ||
+		    open_index == UINT32_MAX || closed_index == UINT32_MAX ||
+		    open_index == closed_index || open_route_count != 1U ||
+		    closed_route_count != 1U || open_route == UINT32_MAX ||
+		    closed_route == UINT32_MAX ||
+		    edges[closed_route].to_key != nodes[open_index].key ||
+		    !Codec_TrainCornerShape(&nodes[closed_index]) ||
+		    !Codec_TrainCornerShape(&nodes[open_index]) ||
+		    !Codec_TrainNoSideEffects(edges, inventory_edges,
+		        plan->entry_key) ||
+		    !Codec_TrainNoSideEffects(edges, inventory_edges,
+		        plan->mover_key) ||
+		    !Codec_TrainNoSideEffects(edges, inventory_edges,
+		        nodes[closed_index].key) ||
+		    !Codec_TrainNoSideEffects(edges, inventory_edges,
+		        nodes[open_index].key))
+			return RLCODEC_BAD_ACTIVATION_PLAN;
+		diagnostic = Codec_ExpectInventoryEdge(edges, plan, button_target,
+			generation, workspace, &expected_count);
+		if (diagnostic == RLCODEC_OK)
+			diagnostic = Codec_ExpectInventoryEdge(edges, plan, train_route,
+				generation, workspace, &expected_count);
+		if (diagnostic == RLCODEC_OK)
+			diagnostic = Codec_ExpectInventoryEdge(edges, plan, closed_route,
+				generation, workspace, &expected_count);
+		if (diagnostic == RLCODEC_OK)
+			diagnostic = Codec_ExpectInventoryEdge(edges, plan, open_route,
 				generation, workspace, &expected_count);
 		if (diagnostic != RLCODEC_OK)
 			return diagnostic;

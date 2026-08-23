@@ -55,6 +55,40 @@ static edict_t *use_targets_source;
 static edict_t *use_targets_activator;
 static int failures;
 
+int SG_TrainGateGameAuthorizeButtonTouch(edict_t *button,
+	edict_t *activator)
+{
+	(void)button;
+	(void)activator;
+	return -1;
+}
+
+int SG_TrainGateGameAuthorizeButtonUse(edict_t *button,
+	edict_t *activator)
+{
+	(void)button;
+	(void)activator;
+	return -1;
+}
+
+int SG_TrainGateGameAuthorizeButtonShot(edict_t *button,
+	edict_t *inflictor, edict_t *attacker, int damage)
+{
+	(void)button;
+	(void)inflictor;
+	(void)attacker;
+	(void)damage;
+	return -1;
+}
+
+int SG_TrainGateGameAuthorizeButtonTargets(edict_t *button,
+	edict_t *activator)
+{
+	(void)button;
+	(void)activator;
+	return -1;
+}
+
 #define CHECK(expression) do { \
 	if (!(expression)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", \

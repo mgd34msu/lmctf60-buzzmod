@@ -148,6 +148,9 @@ sg_compound_guard_result_t SG_CompoundGuardAcquireDeclaredDoorBound(
 sg_compound_guard_result_t SG_CompoundGuardAcquireCompoundPreopen(
 	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
 	size_t key_count, int link_index, uint32_t mechanism_index);
+sg_compound_guard_result_t SG_CompoundGuardAcquireTrainGate(
+	sg_compound_guard_bot_t *bot, const sg_mover_key_t *keys,
+	size_t key_count, int link_index, uint32_t mechanism_index);
 
 sg_compound_guard_result_t SG_CompoundGuardValidate(
 	sg_compound_guard_bot_t *bot, sg_mover_lease_record_t *record_out);
@@ -236,6 +239,8 @@ sg_compound_guard_result_t SG_CompoundGuardDoorPusherFence(
  * lets a malformed/unbounded pusher team preserve stock behavior only when no
  * protected door transaction or physical retirement exists anywhere. */
 sg_compound_guard_result_t SG_CompoundGuardAnyDoorTransaction(void);
+sg_compound_guard_result_t SG_CompoundGuardTrainGatePusherFence(
+	const sg_mover_key_t *keys, size_t key_count);
 /* Exact callback fence for the restricted compound mover class.  This query
  * is observation-only and ignores valid declared-door records, but reports
  * occupied for invalid input, unavailable/corrupt state, or overlap with any

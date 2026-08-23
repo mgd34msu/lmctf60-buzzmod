@@ -56,7 +56,8 @@ typedef enum sg_mover_lease_law_e
 {
 	SG_MOVER_LAW_NONE = 0,
 	SG_MOVER_LAW_DECLARED_DOOR,
-	SG_MOVER_LAW_COMPOUND_PREOPEN
+	SG_MOVER_LAW_COMPOUND_PREOPEN,
+	SG_MOVER_LAW_TRAIN_GATE
 } sg_mover_lease_law_t;
 
 /* Tickets are scoped to their originating registry.  The game adapter owns

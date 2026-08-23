@@ -24,8 +24,12 @@ typedef struct sg_rune_mechanism_binding_s
 	const rune_mechanism_plan_t *plan;
 	const rune_mechanism_node_t *entry_node;
 	const rune_mechanism_node_t *mover_node;
+	const rune_mechanism_node_t *destination_node;
+	const rune_mechanism_node_t *egress_node;
 	struct edict_s *entry_entity;
 	struct edict_s *mover_entity;
+	struct edict_s *destination_entity;
+	struct edict_s *egress_entity;
 	uint32_t link_index;
 } sg_rune_mechanism_binding_t;
 

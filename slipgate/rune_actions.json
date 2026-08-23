@@ -14,8 +14,8 @@
         "node.flags=synthetic:1,repeatable:2,touchable:4,usable:8,mover:16,team_master:32,team_member:64,inventory_only:128,one_shot:256,shootable:512,start_disabled:1024,frame_complete_mover:2048,mask:4095;",
         "callback=none:0,touch_multi:1,touch_door_trigger:2,button_touch:3,use_multi:4,button_use:5,think_multi_wait:6,think_button_wait:7,blocked_door:8,use_trigger_relay:9,use_door:10,think_calc_move_speed:11,think_spawn_door_trigger:12,trigger_enable:13,touch_plat_center:14,use_plat:15,plat_go_down:16,blocked_plat:17,train_use:18,func_train_find:19,train_next:20,train_wait:21,blocked_train:22,elevator_use:23,elevator_init:24,push_touch:25,teleporter_touch:26,path_corner_touch:27,touch_item:28,think_delay:29,secret_door_use:30,secret_door_blocked:31,use_target_speaker:32,use_areaportal:33,unknown:65535;",
         "edge.kind=none:0,target:1,killtarget:2,owner:3,team:4,path_target:5,move_target:6,target_ent:7,enemy:8,route_target:9;",
-        "controller_ids=none:0,auto_door:1,direct_trigger_door:2,button_door:3,relay_door:4,platform:5,teleport:6,push:7;",
-        "plan.flags=touch:1,use:2,atomic:4,requires_lease:8,mask:15;",
+        "controller_ids=none:0,auto_door:1,direct_trigger_door:2,button_door:3,relay_door:4,platform:5,teleport:6,push:7,train:8,train_shoot:9;",
+        "plan.flags=touch:1,use:2,atomic:4,requires_lease:8,shoot:16,mask:31;",
         "null_key=4294967295,no_plan=4294967295;",
         "limits=seeds:32768,links:262144,nodes:8192,edges:262144,plans:262144,plan_edges:65536,strings:1048576,plan_time_ms:30000,node_time_ms:int32,edge_delay_ms:uint32,q8:262136,members:16;",
         "canonical=nodes_key_ascending,inventory_edge_prefix,inventory_exhaustive,inventory_edge_key_order,inventory_fanout_ordinal,plan_edge_partition,plan_edges_copy_inventory,strings_nul_sorted_unique_referenced,closure_crc,target_ascii_casefold;",
@@ -61,6 +61,16 @@
           "id": 7,
           "symbol": "SG_MECHANISM_CONTROLLER_PUSH",
           "plan_flags": 5
+        },
+        {
+          "id": 8,
+          "symbol": "SG_MECHANISM_CONTROLLER_TRAIN",
+          "plan_flags": 13
+        },
+        {
+          "id": 9,
+          "symbol": "SG_MECHANISM_CONTROLLER_TRAIN_SHOOT",
+          "plan_flags": 28
         }
       ],
       "action_requirements": [
@@ -182,6 +192,20 @@
           "plans": [
             {
               "controller": 7
+            }
+          ]
+        },
+        {
+          "action": 14,
+          "admitted": 1,
+          "plan_required": 1,
+          "link_policy_action": 14,
+          "plans": [
+            {
+              "controller": 8
+            },
+            {
+              "controller": 9
             }
           ]
         }
@@ -400,6 +424,10 @@
       {
         "id": 9,
         "symbol": "RLAP_DOOR_RIDE_INGRESS_LIP"
+      },
+      {
+        "id": 10,
+        "symbol": "RLAP_TRAIN_CROSS"
       }
     ],
     "control_policies": [
@@ -440,6 +468,10 @@
       {
         "id": 1,
         "symbol": "RLMP_DOOR_WORLD_FIXED_1_8"
+      },
+      {
+        "id": 2,
+        "symbol": "RLMP_TRAIN_WORLD_FIXED_1_8"
       }
     ],
     "field_bias_policies": [
@@ -712,6 +744,24 @@
         "effective_suffix": 13,
         "field_bias_policy": 0,
         "field_bias_ms": 0
+      },
+      {
+        "id": 14,
+        "symbol": "RL_TRAIN",
+        "runtime_supported": 1,
+        "default_provenance": 3,
+        "provenance_mask": 8,
+        "mode_mask": 6,
+        "trait_mask": 61,
+        "endpoint_policy": 1,
+        "suffix_anchor_policy": 4,
+        "preopen_mechanism_anchor_policy": 10,
+        "ride_mechanism_anchor_policy": 4,
+        "control_policy": 5,
+        "mechanism_policy": 2,
+        "effective_suffix": 14,
+        "field_bias_policy": 0,
+        "field_bias_ms": 0
       }
     ],
     "reasons": [
@@ -898,8 +948,8 @@
     ],
     "action_range": {
       "first_action": 0,
-      "last_action": 13,
-      "descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7;seed.origin=signed_q8_exact;"
+      "last_action": 14,
+      "descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9;seed.origin=signed_q8_exact;"
     }
   },
   "wire_diagnostics": [
@@ -1119,6 +1169,12 @@
         "name": "PUSH",
         "short_name": "PUSH",
         "color": "#b76cff"
+      },
+      {
+        "id": 14,
+        "name": "TRAIN",
+        "short_name": "TRAIN",
+        "color": "#00a6a6"
       }
     ],
     "reasons": [
