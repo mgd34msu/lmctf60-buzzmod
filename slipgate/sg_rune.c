@@ -2949,6 +2949,55 @@ static int Gen_TeleportWaterSeed(vec3_t pad_body, edict_t *pad,
 	return best;
 }
 
+static int Gen_LiftWaterSeed(const vec3_t bottom_body, edict_t *entry,
+	edict_t *platform, int *approach_ms)
+{
+	int seed;
+	int best = -1;
+	int best_ms = INT_MAX;
+	float best_distance = 1.0e30f;
+
+	if (!bottom_body || !entry || !platform || !approach_ms)
+		return -1;
+	SG_OracleDoorBoundsCacheBegin();
+	for (seed = 0; seed < gen_num_seeds; seed++)
+	{
+		sg_phantom_t phantom;
+		sg_swim_proof_t proof;
+		vec3_t delta;
+		float distance;
+
+		if (!(gen_seeds[seed].flags & RSF_WATER) ||
+		    gen_source_waterlevel[seed] < 2 ||
+		    !(gen_source_watertype[seed] & CONTENTS_WATER) ||
+		    (gen_source_watertype[seed] &
+		        (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+		    !Gen_SeedHasIncoming(seed))
+			continue;
+		VectorSubtract(gen_seeds[seed].origin, bottom_body, delta);
+		distance = DotProduct(delta, delta);
+		if (distance > SG_SWIM_REACH * SG_SWIM_REACH)
+			continue;
+		SG_OraclePlace(&phantom, gen_seeds[seed].origin);
+		phantom.waterlevel = gen_source_waterlevel[seed];
+		phantom.watertype = gen_source_watertype[seed];
+		if (!SG_OracleLiftSwimApproach(&phantom, bottom_body, entry,
+		        platform, 0.0f, &proof, NULL, true))
+			continue;
+		if (proof.arrival_ms < best_ms ||
+		    (proof.arrival_ms == best_ms && distance < best_distance))
+		{
+			best = seed;
+			best_ms = proof.arrival_ms;
+			best_distance = distance;
+		}
+	}
+	SG_OracleDoorBoundsCacheEnd();
+	if (best >= 0)
+		*approach_ms = best_ms;
+	return best;
+}
+
 /* Select a static top egress by replaying the same planar controller from the
  * actual raised platform. The caller has synchronously linked `plat` at pos1;
  * every candidate must already own an ordinary outgoing continuation. */
@@ -3329,6 +3378,9 @@ static void Link_Plats(void)
 			approach = Lift_CompoundApproach(entry, e, bottom_body,
 				&approach_door, &expected_members, approach_wait,
 				&approach_ms);
+		if (approach < 0 && stock)
+			approach = Gen_LiftWaterSeed(bottom_body, entry, e,
+			    &approach_ms);
 		if (stock)
 		{
 			anchor[0] = source[0] + (e->mins[0] + e->maxs[0]) * 0.5f;

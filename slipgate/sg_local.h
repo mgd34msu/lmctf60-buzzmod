@@ -299,6 +299,10 @@ rune_reject_reason_t SG_OracleCompoundSwimContinue(sg_phantom_t *ph,
 qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	const vec3_t anchor, edict_t *pad, float old_frame_z,
 	sg_swim_proof_t *proof, edict_t *passent, qboolean world_only);
+qboolean SG_OracleLiftSwimApproach(sg_phantom_t *ph,
+	const vec3_t anchor, edict_t *entry, edict_t *platform,
+	float old_frame_z, sg_swim_proof_t *proof, edict_t *passent,
+	qboolean world_only);
 qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 	edict_t *entry, edict_t *support, int action, int *arrival_ms);
 qboolean SG_OracleTrainGateApproach(const vec3_t source,

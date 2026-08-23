@@ -1107,6 +1107,10 @@ static void TestPublicationGate(execution_fixture_t *fixture)
 	CHECK(SG_RuneMechanismBindingsReady(&fixture->rune, &failure_index));
 }
 
+static void DirectBotPose(const short origin_q8[3],
+	const short velocity_q8[3]);
+static void DirectBotOwner(sg_bot_t *bot, int link_index);
+
 static void TestPlatform(execution_fixture_t *fixture)
 {
 	sg_rune_mechanism_binding_t binding;
@@ -1125,6 +1129,50 @@ static void TestPlatform(execution_fixture_t *fixture)
 	    LINK_PLATFORM, &binding));
 	platform->think = UnknownThink;
 	CHECK(!SG_RuneMechanismBindingCurrent(&binding));
+}
+
+static void TestPlatformWaterTouch(execution_fixture_t *fixture)
+{
+	static const short origin_q8[3] = { 0, 0, 0 };
+	static const short velocity_q8[3] = { 0, 0, 0 };
+	rune_link_t saved_link = fixture->links[LINK_PLATFORM];
+	rune_seed_t saved_seed = fixture->seeds[0];
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *entity;
+	edict_t *platform = &test_edicts[KEY_PLATFORM];
+
+	/* The existing dry declaration remains sufficient and does not mutate its
+	 * serialized seed or link. */
+	DirectBotPose(origin_q8, velocity_q8);
+	entity = &test_edicts[KEY_BOT];
+	DirectBotOwner(bot, LINK_PLATFORM);
+	CHECK(SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    platform, entity));
+	CHECK(memcmp(&saved_link, &fixture->links[LINK_PLATFORM],
+	    sizeof(saved_link)) == 0);
+	CHECK(memcmp(&saved_seed, &fixture->seeds[0], sizeof(saved_seed)) == 0);
+
+	/* A water declaration requires the exact cataloged trigger/platform pair,
+	 * the replayed swim proof, and simultaneous matched-platform support. */
+	fixture->seeds[0].flags |= RSF_WATER;
+	DirectBotOwner(bot, LINK_PLATFORM);
+	entity->groundentity = platform;
+	CHECK(!SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    platform, entity));
+	bot->swim_validated = true;
+	CHECK(!SG_AuthorizeLiftTouch(&test_edicts[KEY_AUTO_TRIGGER],
+	    platform, entity));
+	CHECK(!SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    &test_edicts[KEY_CARRIER], entity));
+	entity->groundentity = NULL;
+	CHECK(!SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    platform, entity));
+	entity->groundentity = platform;
+	CHECK(SG_AuthorizeLiftTouch(&test_edicts[KEY_PLATFORM_TRIGGER],
+	    platform, entity));
+	CHECK(bot->declared_touched);
+	CHECK(bot->declared_touch_frame == level.framenum);
+	fixture->seeds[0] = saved_seed;
 }
 
 static void TestTeleport(execution_fixture_t *fixture)
@@ -1247,9 +1295,6 @@ static void TestDirectDoor(execution_fixture_t *fixture)
 	door->use = UnknownUse;
 	CHECK(!SG_RuneMechanismBindingCurrent(&binding));
 }
-
-static void DirectBotPose(const short origin_q8[3],
-	const short velocity_q8[3]);
 
 static void TestProductionDelayedRelayDispatch(execution_fixture_t *fixture,
 	int chain, int link_index, uint32_t trigger_key,
@@ -2181,6 +2226,8 @@ int main(void)
 	FixtureBuild(&fixture);
 	TestPublicationGate(&fixture);
 	TestPlatform(&fixture);
+	FixtureBuild(&fixture);
+	TestPlatformWaterTouch(&fixture);
 	FixtureBuild(&fixture);
 	TestCarrierExecution(&fixture);
 	FixtureBuild(&fixture);

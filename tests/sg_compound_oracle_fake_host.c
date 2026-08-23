@@ -86,6 +86,8 @@ trace_t HostTrace(const vec3_t start, const vec3_t mins,
 			fixture_observation.normal_pmove_masks++;
 		trace.fraction = 0.5f;
 		trace.ent = &fixture_edicts[1];
+		if (fixture_config.lift_support)
+			trace.plane.normal[2] = 1.0f;
 	}
 	return trace;
 }
@@ -261,7 +263,8 @@ void HostPmove(pmove_t *pmove)
 	Set3(maxs, 16.0f, 16.0f, 32.0f);
 	(void)pmove->trace(start, mins, maxs, end);
 
-	pmove->groundentity = NULL;
+	pmove->groundentity = fixture_config.lift_support ?
+	    &fixture_edicts[1] : NULL;
 	pmove->watertype = CONTENTS_WATER;
 	pmove->waterlevel = 3;
 	hook_opening = fixture_config.hook_suffix &&

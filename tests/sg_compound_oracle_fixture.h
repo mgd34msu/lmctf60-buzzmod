@@ -43,6 +43,7 @@ typedef struct fixture_config_s
 	qboolean opening_drift;
 	qboolean source_hazard;
 	qboolean source_dry;
+	qboolean lift_support;
 	qboolean force_foreign_trigger;
 	qboolean suffix_hazard;
 	qboolean drop_suffix;
