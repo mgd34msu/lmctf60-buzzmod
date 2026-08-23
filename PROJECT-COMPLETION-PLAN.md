@@ -13,11 +13,13 @@ override it.
   `lmctf02c`.
 - Generate all 175 RUNEs from one frozen source, module, configuration, engine,
   reader set, linter, semantic checker set, and BSP set.
-- `tomb05` is the sole route-completeness exception. Release its best proven,
-  structurally valid RUNE even if bots still require human play to learn the
-  missing flag route. Do not invent a traversal link to make it pass. A later
-  human trace must identify the missing generic transition and drive an updated
-  RUNE, but that update does not block the initial release.
+- A route-only failure does not block release when the frozen RUNE is
+  structurally valid, both objective regions work, and real matches prove that
+  bots still fight, attack, and defend normally. The only allowed omission is
+  the path between the flags or the carried-flag return path. Do not invent a
+  traversal link to make such a map pass. Human play must later identify the
+  missing path or paths and drive a replay-proved RUNE update, but that update
+  does not block the initial release.
 - Treat every map list as an ordinary server or harness input. `topmaps.txt`
   and its 20 entries have no special completion or release status.
 - Judge bot quality from behavior during play. Scores and wins provide context,
@@ -655,7 +657,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | PASS and integrated: the generic fixed-point inverse repair adds exactly HOOK, rocket-jump, HOOK; 1,071 seeds become reachable from both roots and the 1,369-seed/14,287-link artifact passes all readers, lint, SNAG, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
-| `tomb05` | Current immutable generation proves 961 seeds/12,200 links, then all prune: 56 red-only, 52 blue-only, 0 shared, and 853 neither. Its closest opposing seeds are 128 units apart. Automatic controllers remain exhausted. It is the explicit release exception: retain the best structurally valid proved graph without a fabricated crossing, release it, then use authoritative human traversal to identify the missing generic transition for a later RUNE update. |
+| `tomb05` | Current immutable generation proves 961 seeds/12,200 links, then all prune: 56 red-only, 52 blue-only, 0 shared, and 853 neither. Its closest opposing seeds are 128 units apart. Automatic controllers remain exhausted. It is the first confirmed route-only release case: retain the best structurally valid proved graph without a fabricated crossing, prove normal combat, attack, and defense in a real match, release it, then use authoritative human traversal to identify the missing generic transition for a later RUNE update. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `tw2ctf3` | PASS and integrated without teleport changes: 1,815 seeds/29,948 links, roots 224/225, 156 mechanism nodes, 27 triggers, 62 inventory edges, and 12 plans. The generic repair recognizes that a nonempty automatic-door target resolving to zero live targetnames is an exact stock no-op. Both readers, Python, lint, SNAG, fresh cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
 | `tw2ctf4` | PASS and integrated: the generic authenticated shoot-door pass resolves all six teams, proves nine crossings, and serializes the twelve links needed for objective closure. The source-owned runtime adapter equips, aims, fires, authenticates the door-team transition, and crosses under the same serialized contract. A fresh post-merge immutable run writes 2,066 seeds/31,503 links with 1,990 seeds reachable from both objectives, 246 mechanism nodes, 35 inventory edges, and 14 plans. Both C readers, Python, lint, SNAG, fresh cold load, focused GNU and Make/Clang suites, production linkage, source-size, and deslop pass. |
@@ -674,7 +676,11 @@ and module identity. `tools/humantrace.py` validates and segments those records,
 rejecting discontinuities caused by pushers, teleports, hooks, or server-side
 effects. The resulting evidence identifies the missing generic transition; it
 does not authorize a RUNE link until the corresponding oracle replays and proves
-that transition. A connected human run remains required for each reserved map.
+that transition. A connected human run remains required to complete each
+reserved map's later route update, but it does not block initial release when
+the map satisfies the route-only release rule. Current candidates are
+`lmctf01`, `lmctf12`, `lmctf19`, `tomb05`, `xmap13`, `xmap18`, and `xmap26`;
+each candidate must still prove normal local attack and defense in a real match.
 
 1. Finish the source-owned graph repairs above, including every
    failure found by the diagnostic run.
@@ -691,12 +697,12 @@ that transition. A connected human run remains required for each reserved map.
    - root-aware lint acceptance;
    - every applicable map-specific semantic check;
    - a fresh-process cold load with an admitted bot.
-5. Require 174 route-complete PASS results plus the explicit `tomb05`
-   exception. The `tomb05` artifact must still be newly generated from the same
-   freeze, structurally valid, accepted by every reader, lint-clean, and
-   cold-loadable; only its incomplete automated objective route is exempt. For
-   every other map, a generation failure, timeout, lint failure, reader
-   disagreement, semantic failure, or cold-load failure blocks completion.
+5. Require all 175 artifacts to be newly generated from the same freeze,
+   structurally valid, accepted by every reader, lint-clean, and cold-loadable.
+   Each map must then have either a route-complete PASS or documented real-match
+   proof for the route-only release rule. Any other generation failure,
+   timeout, lint failure, reader disagreement, semantic failure, cold-load
+   failure, or gameplay defect blocks completion.
 6. Repair any new failure at the source, data, or tool boundary that owns it,
    then refreeze and restart every artifact invalidated by that repair.
 7. Freeze the final 175-artifact manifest and its evidence hashes.
@@ -746,7 +752,8 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ```text
 finish the remaining graph repairs
   -> pass exact CI and create a new source, module, and input freeze
-  -> restart and validate 174 route-complete RUNEs plus the proved tomb05 exception
+  -> restart and structurally validate all 175 RUNEs
+  -> prove route completion or the route-only real-match rule for each map
   -> run ordinary real matches
   -> repair defects and repeat invalidated evidence
   -> update documentation, tag, and publish
@@ -770,8 +777,8 @@ finish the remaining graph repairs
 - [x] `lmctf04` objective-root repair integrated and accepted end to end.
 - [ ] Remaining graph blockers repaired and integrated.
 - [ ] New final combined source, tool, module, and input freeze.
-- [ ] 174 newly generated route-complete RUNEs plus one structurally accepted
-      `tomb05` release-exception RUNE.
+- [ ] 175 newly generated, structurally accepted RUNEs; each route-complete or
+      backed by real-match proof of the route-only release rule.
 - [ ] Real-match behavioral validation with ordinary map-list inputs.
 - [ ] Match-exposed defects repaired and revalidated.
 - [ ] Final compiler, Make dialect, platform, and repository gates.
