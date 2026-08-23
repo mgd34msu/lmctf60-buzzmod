@@ -3241,7 +3241,8 @@ static int DoorTrigger_Open(edict_t *trigger, door_pose_t *saved,
 	int capacity);
 static void DoorPose_Restore(door_pose_t *saved, int count);
 static int Door_TravelMs(edict_t *trigger);
-static int Door_WaitPoints(edict_t *trigger, vec3_t *points);
+static int Door_WaitPoints(edict_t *trigger, vec3_t *points,
+	qboolean automatic);
 static int Gen_CompoundLiftEgressSeed(const vec3_t top_body, float horiz,
 	edict_t *plat, edict_t **trigger_out, uint16_t *member_count_out,
 	int *egress_ms_out);
@@ -3342,7 +3343,7 @@ static int Lift_CompoundApproach(edict_t *entry, edict_t *support,
 		if (member_count <= 0 || member_count >= RUNE_MAX_MECHANISM_MEMBERS ||
 		    travel_ms <= 0)
 			continue;
-		wait_count = Door_WaitPoints(trigger, wait_points);
+		wait_count = Door_WaitPoints(trigger, wait_points, stock);
 		for (wait_index = 0; wait_index < wait_count; wait_index++)
 		{
 			door_pose_t saved[RUNE_MAX_MECHANISM_MEMBERS];
@@ -5679,7 +5680,7 @@ done:
 #define DOOR_WAIT_MAX 64
 
 static void Door_WaitInsert(edict_t *trigger, const vec3_t point,
-	vec3_t *points, int *count)
+	vec3_t *points, int *count, qboolean automatic)
 {
 	edict_t *resolved;
 	vec3_t fixed;
@@ -5695,12 +5696,12 @@ static void Door_WaitInsert(edict_t *trigger, const vec3_t point,
 	 * this exact brush; otherwise the thin-side pass can reuse a broad-side
 	 * anchor, emit the already-known direction, and never prove the reverse
 	 * crossing. */
-	if (!Lift_DoorStageTouchMatches(trigger, fixed, false))
+	if (!Lift_DoorStageTouchMatches(trigger, fixed, automatic))
 		return;
 	{
 		uint32_t delay_ms;
 
-		if (!Lift_DoorStageDelay(trigger, &delay_ms, false))
+		if (!Lift_DoorStageDelay(trigger, &delay_ms, automatic))
 			return;
 		if (delay_ms == 0U)
 		{
@@ -5736,7 +5737,8 @@ static void Door_WaitInsert(edict_t *trigger, const vec3_t point,
  * on static geometry, and retain only exact, unambiguous, full-sweep-clear
  * trigger contacts. The approach oracle must still connect an ordinary seed
  * to the point before any link is emitted. */
-static int Door_WaitPoints(edict_t *trigger, vec3_t *points)
+static int Door_WaitPoints(edict_t *trigger, vec3_t *points,
+	qboolean automatic)
 {
 	static const float fractions[5] = {
 		0.0f, 0.25f, 0.5f, 0.75f, 1.0f
@@ -5749,7 +5751,8 @@ static int Door_WaitPoints(edict_t *trigger, vec3_t *points)
 		return 0;
 	for (i = 0; i < gen_num_seeds; i++)
 		if (gen_source_waterlevel[i] == 0)
-			Door_WaitInsert(trigger, gen_seeds[i].origin, points, &count);
+			Door_WaitInsert(trigger, gen_seeds[i].origin, points, &count,
+			    automatic);
 
 	/* SG_OracleDeclaredTriggerContains uses the linked-player +/-1 fringe.
 	 * Remain one fixed-point unit inside that open overlap interval. */
@@ -5770,7 +5773,8 @@ static int Door_WaitPoints(edict_t *trigger, vec3_t *points)
 				candidate[1] = ylo + fractions[yi] * (yhi - ylo);
 				candidate[2] = zprobe[zi];
 				if (Seed_Ground(candidate, ground))
-					Door_WaitInsert(trigger, ground, points, &count);
+					Door_WaitInsert(trigger, ground, points, &count,
+					    automatic);
 			}
 	return count;
 }
@@ -5992,7 +5996,7 @@ static void Link_Doors(door_topology_t *topology)
 			continue;
 		num_wait = button_controller
 		    ? Button_WaitPoints(door, door_wait, &button_stats)
-		    : Door_WaitPoints(door, door_wait);
+		    : Door_WaitPoints(door, door_wait, false);
 		if (button_controller)
 			sg_host.dprint("rune: button %d members=%d travel=%d cooldown=%d "
 			               "wait=%d proposed=%d grounded=%d accepted=%d "
