@@ -432,6 +432,8 @@ static const char *Rune_ReplayDoorPlans(rune_t *r, uint32_t *index_out)
 {
 	int i;
 
+	if (!SG_OracleDoorEgressReplayCacheBegin())
+		return "door egress replay cache busy";
 	for (i = 0; i < r->hdr.num_links; i++)
 	{
 		rune_link_t *link = &r->links[i];
@@ -456,9 +458,11 @@ static const char *Rune_ReplayDoorPlans(rune_t *r, uint32_t *index_out)
 				i, check);
 			if (index_out)
 				*index_out = (uint32_t)i;
+			SG_OracleDoorEgressReplayCacheEnd();
 			return "invalid live declared-door replay";
 		}
 	}
+	SG_OracleDoorEgressReplayCacheEnd();
 	return NULL;
 }
 

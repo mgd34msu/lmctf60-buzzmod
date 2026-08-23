@@ -810,6 +810,7 @@ int SG_CompoundDeclaredOracleCasesRun(void)
 	ResetFixture(&config);
 	CHECK(SG_RuneTestDropPrefixCacheCases() == 0);
 	CHECK(SG_OracleTestDoorBoundsCacheCases() == 0);
+	CHECK(SG_OracleTestDoorEgressReplayCacheCases() == 0);
 	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
 	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
 	TestDeclaredActivatorDelayedSoundTerminal();
