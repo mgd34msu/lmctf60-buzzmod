@@ -710,8 +710,11 @@ static void TestDeclaredDoorMembersTerminalRequiresPhysicalPose(void)
 
 int SG_CompoundDeclaredOracleCasesRun(void)
 {
+	fixture_config_t config = DefaultConfig(2, FIXTURE_SUFFIX_SUCCESS);
 	int before = failures;
 
+	ResetFixture(&config);
+	CHECK(SG_RuneTestDropPrefixCacheCases() == 0);
 	TestDeclaredActivatorRejectsCaseFoldedKilltargets();
 	TestDeclaredActivatorAcceptsMasterThenSlaveFanout();
 	TestDeclaredActivatorDelayedSoundTerminal();

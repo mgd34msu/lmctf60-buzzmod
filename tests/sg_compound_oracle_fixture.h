@@ -137,6 +137,7 @@ void trigger_relay_use(edict_t *self, edict_t *other,
 void Use_Target_Speaker(edict_t *self, edict_t *other,
 	edict_t *activator);
 int SG_RuneTestDoorCooldownGapMs(edict_t *trigger);
+int SG_RuneTestDropPrefixCacheCases(void);
 float SG_RuneTestLiftEgressSearchRadius(float halfx, float halfy);
 int SG_RuneTestPlatformTravelMs(edict_t *platform, float source_z,
 	float destination_z);

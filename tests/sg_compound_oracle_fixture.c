@@ -1,4 +1,16 @@
+#include <stdlib.h>
+
 #include "sg_compound_oracle_fixture.h"
+
+static void *GameAllocate(int size)
+{
+	return malloc((size_t)size);
+}
+
+static void GameFree(void *block)
+{
+	free(block);
+}
 
 void Door(edict_t *door)
 {
@@ -142,6 +154,8 @@ void ResetFixture(const fixture_config_t *config)
 	sg_host.pointcontents = HostPointContents;
 	sg_host.box_edicts = HostBoxEdicts;
 	sg_host.pmove = HostPmove;
+	sg_host.game_alloc = GameAllocate;
+	sg_host.game_free = GameFree;
 	sg_host.linkentity = HostLinkEntity;
 }
 

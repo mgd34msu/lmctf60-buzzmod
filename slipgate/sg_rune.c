@@ -1461,6 +1461,133 @@ typedef struct sg_drop_trial_s
 	sg_phantom_t	end;
 } sg_drop_trial_t;
 
+#define DROP_PREFIX_MAX_FRAMES \
+	(SG_REPLAY_DROP_TOTAL_MS / SG_REPLAY_STEP_MS)
+#define DROP_PREFIX_CHUNK_FRAMES 8
+#define DROP_PREFIX_MAX_CHUNKS \
+	((DROP_PREFIX_MAX_FRAMES + DROP_PREFIX_CHUNK_FRAMES - 1) / \
+	 DROP_PREFIX_CHUNK_FRAMES)
+
+typedef struct drop_prefix_frame_s
+{
+	usercmd_t command;
+	sg_phantom_t phantom;
+	qboolean clean;
+} drop_prefix_frame_t;
+
+typedef struct drop_prefix_chunk_s
+{
+	drop_prefix_frame_t frame[DROP_PREFIX_CHUNK_FRAMES];
+} drop_prefix_chunk_t;
+
+typedef struct drop_prefix_cache_s
+{
+	vec3_t source;
+	vec3_t lip;
+	byte heading;
+	int count;
+	drop_prefix_chunk_t *chunk[DROP_PREFIX_MAX_CHUNKS];
+	struct drop_prefix_cache_s *next;
+} drop_prefix_cache_t;
+
+static drop_prefix_cache_t *drop_prefix_cache;
+static qboolean drop_prefix_cache_enabled;
+
+static void Drop_PrefixCacheClear(void)
+{
+	drop_prefix_cache_t *entry = drop_prefix_cache;
+
+	while (entry)
+	{
+		drop_prefix_cache_t *next = entry->next;
+		int i;
+
+		for (i = 0; i < DROP_PREFIX_MAX_CHUNKS; i++)
+			if (entry->chunk[i])
+				sg_host.game_free(entry->chunk[i]);
+		sg_host.game_free(entry);
+		entry = next;
+	}
+	drop_prefix_cache = NULL;
+}
+
+static drop_prefix_cache_t *Drop_PrefixCacheGet(vec3_t source, vec3_t lip,
+	byte heading)
+{
+	drop_prefix_cache_t *entry;
+
+	/* Base-link sources are contiguous.  Retaining only the active source
+	 * bounds storage without limiting how many exact prefixes it may prove. */
+	if (drop_prefix_cache &&
+	    !VectorCompare(drop_prefix_cache->source, source))
+		Drop_PrefixCacheClear();
+	for (entry = drop_prefix_cache; entry; entry = entry->next)
+		if (entry->heading == heading &&
+		    VectorCompare(entry->source, source) &&
+		    VectorCompare(entry->lip, lip))
+			return entry;
+	entry = sg_host.game_alloc(sizeof(*entry));
+	if (!entry)
+		return NULL;
+	memset(entry, 0, sizeof(*entry));
+	VectorCopy(source, entry->source);
+	VectorCopy(lip, entry->lip);
+	entry->heading = heading;
+	entry->next = drop_prefix_cache;
+	drop_prefix_cache = entry;
+	return entry;
+}
+
+static qboolean Drop_PrefixReplay(drop_prefix_cache_t *prefix, int *index,
+	const usercmd_t *command, qboolean recovery, sg_phantom_t *phantom,
+	qboolean *clean)
+{
+	drop_prefix_chunk_t *chunk;
+	int frame;
+
+	if (!prefix || !index || !command || recovery || !phantom || !clean ||
+	    *index < 0 || *index >= prefix->count)
+		return false;
+	chunk = prefix->chunk[*index / DROP_PREFIX_CHUNK_FRAMES];
+	frame = *index % DROP_PREFIX_CHUNK_FRAMES;
+	if (!chunk ||
+	    memcmp(command, &chunk->frame[frame].command,
+	           sizeof(*command)) != 0)
+		return false;
+	*phantom = chunk->frame[frame].phantom;
+	*clean = chunk->frame[frame].clean;
+	(*index)++;
+	return true;
+}
+
+static qboolean Drop_PrefixRecord(drop_prefix_cache_t *prefix, int *index,
+	const usercmd_t *command, qboolean recovery,
+	const sg_phantom_t *phantom, qboolean clean)
+{
+	drop_prefix_chunk_t *chunk;
+	int slot, frame;
+
+	if (!prefix || !index || !command || recovery || !phantom ||
+	    *index != prefix->count || prefix->count >= DROP_PREFIX_MAX_FRAMES)
+		return false;
+	slot = *index / DROP_PREFIX_CHUNK_FRAMES;
+	frame = *index % DROP_PREFIX_CHUNK_FRAMES;
+	chunk = prefix->chunk[slot];
+	if (!chunk)
+	{
+		chunk = sg_host.game_alloc(sizeof(*chunk));
+		if (!chunk)
+			return false;
+		prefix->chunk[slot] = chunk;
+	}
+	chunk->frame[frame].command = *command;
+	chunk->frame[frame].phantom = *phantom;
+	chunk->frame[frame].clean = clean;
+	prefix->count++;
+	(*index)++;
+	return true;
+}
+
 /* The point probe only proposes a lip. The player-sized rollout below is the
  * authority on whether that proposal is executable. */
 static qboolean Drop_FindLip(vec3_t src, vec3_t dir, float limit, vec3_t lip)
@@ -1611,6 +1738,8 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 	usercmd_t cmd;
 	qboolean arrival_contact, recovery_contact;
 	qboolean outside_before = true;
+	drop_prefix_cache_t *prefix;
+	int prefix_index = 0;
 	int last_sweep_contact_ms = 0;
 
 	memset(trial, 0, sizeof(*trial));
@@ -1626,12 +1755,15 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 	Drop_ReplayObservation(&ph, require_deep_water, false, false,
 	                       &observation);
 	status = SG_DropReplayBegin(&state, &spec, &pose, &observation, 0.0f);
+	prefix = drop_prefix_cache_enabled && !compound_trigger
+	    ? Drop_PrefixCacheGet(src, lip, heading) : NULL;
 	if (compound_trigger)
 		outside_before = SG_DeclaredDoorOutsideSweep(compound_trigger,
 		    ph.origin);
 	while (status == SG_REPLAY_RUNNING)
 	{
 		vec3_t before;
+		qboolean clean;
 
 		status = SG_DropReplayPreStep(&state, &pose, &cmd);
 		if (state.walkoff)
@@ -1639,10 +1771,26 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 		if (status != SG_REPLAY_RUNNING)
 			break;
 		VectorCopy(ph.origin, before);
-		if (!(compound_trigger
-		          ? SG_OracleRunCompoundWorld(&ph, &cmd, 1,
-		                compound_trigger, compound_member)
-		          : SG_OracleRunWorld(&ph, &cmd, 1)))
+		/* Before recovery, source, lip, and heading completely determine each
+		 * command and Pmove result.  The synchronous generator does not advance
+		 * the world between pairs.  Re-run destination contact and the reducer;
+		 * a command mismatch or destination-directed recovery returns to native
+		 * Pmove at the exact cached pose. */
+		if (!Drop_PrefixReplay(prefix, &prefix_index, &cmd, state.recovery,
+		                       &ph, &clean))
+		{
+			if (prefix && !state.recovery && prefix_index < prefix->count)
+				prefix = NULL;
+			clean = compound_trigger
+			    ? SG_OracleRunCompoundWorld(&ph, &cmd, 1,
+			          compound_trigger, compound_member)
+			    : SG_OracleRunWorld(&ph, &cmd, 1);
+			if (prefix && !state.recovery &&
+			    !Drop_PrefixRecord(prefix, &prefix_index, &cmd, false,
+			                       &ph, clean))
+				prefix = NULL;
+		}
+		if (!clean)
 			break;
 		Drop_ReplayPose(&ph, &pose);
 		Drop_ReplayContacts(&state, &ph, dst, &arrival_contact,
@@ -3835,6 +3983,86 @@ static int Door_CooldownGapMs(edict_t *trigger)
 }
 
 #ifdef SG_RUNE_TIMING_TEST
+static void *Drop_PrefixTestAllocationFailure(int size)
+{
+	(void)size;
+	return NULL;
+}
+
+int SG_RuneTestDropPrefixCacheCases(void)
+{
+	drop_prefix_cache_t local;
+	drop_prefix_chunk_t local_chunk;
+	drop_prefix_cache_t *entry;
+	usercmd_t command, mismatch;
+	sg_phantom_t phantom, expected;
+	vec3_t source = { 1.0f, 2.0f, 3.0f };
+	vec3_t next_source = { 4.0f, 5.0f, 6.0f };
+	vec3_t lip = { 7.0f, 8.0f, 9.0f };
+	qboolean clean = true;
+	void *(*allocate)(int) = sg_host.game_alloc;
+	int failures = 0;
+	int index;
+
+	memset(&local, 0, sizeof(local));
+	memset(&local_chunk, 0, sizeof(local_chunk));
+	memset(&command, 0, sizeof(command));
+	memset(&phantom, 0, sizeof(phantom));
+	command.msec = SG_REPLAY_STEP_MS;
+	phantom.pms.origin[0] = 80;
+	local.chunk[0] = &local_chunk;
+	local_chunk.frame[0].command = command;
+	local_chunk.frame[0].phantom = phantom;
+	local_chunk.frame[0].clean = false;
+	local.count = 1;
+
+	index = 0;
+	memset(&expected, 0, sizeof(expected));
+	if (!Drop_PrefixReplay(&local, &index, &command, false,
+	                       &expected, &clean) || index != 1 || clean ||
+	    memcmp(&expected, &phantom, sizeof(expected)) != 0)
+		failures |= 1;
+	mismatch = command;
+	mismatch.forwardmove = 1;
+	index = 0;
+	if (Drop_PrefixReplay(&local, &index, &mismatch, false,
+	                      &expected, &clean) || index != 0)
+		failures |= 2;
+	index = 0;
+	if (Drop_PrefixReplay(&local, &index, &command, true,
+	                      &expected, &clean) || index != 0)
+		failures |= 4;
+
+	index = local.count;
+	phantom.pms.origin[0] = 160;
+	if (!Drop_PrefixRecord(&local, &index, &command, false, &phantom, true) ||
+	    local.count != 2 || index != 2 ||
+	    local_chunk.frame[1].phantom.pms.origin[0] != 160)
+		failures |= 8;
+	if (Drop_PrefixRecord(&local, &index, &command, true, &phantom, true) ||
+	    local.count != 2 || index != 2)
+		failures |= 16;
+	local.count = DROP_PREFIX_CHUNK_FRAMES;
+	index = local.count;
+	sg_host.game_alloc = Drop_PrefixTestAllocationFailure;
+	if (Drop_PrefixRecord(&local, &index, &command, false, &phantom, true) ||
+	    local.count != DROP_PREFIX_CHUNK_FRAMES || index != local.count)
+		failures |= 32;
+	sg_host.game_alloc = allocate;
+
+	Drop_PrefixCacheClear();
+	entry = Drop_PrefixCacheGet(source, lip, 17);
+	if (!entry || Drop_PrefixCacheGet(source, lip, 17) != entry ||
+	    entry->next)
+		failures |= 64;
+	entry = Drop_PrefixCacheGet(next_source, lip, 17);
+	if (!entry || entry != drop_prefix_cache || entry->next ||
+	    !VectorCompare(entry->source, next_source))
+		failures |= 128;
+	Drop_PrefixCacheClear();
+	return failures;
+}
+
 int SG_RuneTestDoorCooldownGapMs(edict_t *trigger)
 {
 	return Door_CooldownGapMs(trigger);
@@ -6301,6 +6529,8 @@ static void Prove_BaseLinks(door_topology_t *topology)
 {
 	int i, j;
 
+	Drop_PrefixCacheClear();
+	drop_prefix_cache_enabled = true;
 	for (i = 0; i < gen_num_seeds; i++)
 	{
 		for (j = 0; j < gen_num_seeds; j++)
@@ -6426,6 +6656,8 @@ static void Prove_BaseLinks(door_topology_t *topology)
 			sg_host.dprint("rune: proving %d/%d seeds, %d links\n",
 			           i, gen_num_seeds, gen_num_links);
 	}
+	drop_prefix_cache_enabled = false;
+	Drop_PrefixCacheClear();
 
 	/* Ordinary pairs touching water are reserved for Prove_Swims.  The
 	 * declared-mechanism passes consume the completed base graph so their
@@ -7037,6 +7269,7 @@ qboolean Rune_Generate(const char *mapname)
 	const char *canonical_mapname;
 
 	SG_RuneDoorScopeInit(&doors);
+	Drop_PrefixCacheClear();
 	SG_HooksInit();
 	memset(&gen_mechanism_catalog, 0, sizeof(gen_mechanism_catalog));
 	if (SG_MechCatalogSnapshot(&gen_mechanism_catalog) !=
@@ -7462,6 +7695,7 @@ qboolean Rune_Generate(const char *mapname)
 
 cleanup:
 	Rune_TelemetryPhaseEnd();
+	Drop_PrefixCacheClear();
 	Door_TopologyFree(&compound_topology);
 	if (SG_RuneDoorScopeActive(&doors))
 	{
