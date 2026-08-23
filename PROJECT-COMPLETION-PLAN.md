@@ -639,9 +639,9 @@ The fresh batch has replaced the old queue labels with these current results:
 | Map | Current result |
 | --- | --- |
 | `lmctf01` | 2,401 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
-| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. Reverse RUN/JUMP/DROP/HOOK/rocket-jump rejects all 16 red-forward cuts. Six vertical button-door teams are rejected by both safe-door admission and lift endpoint ownership, leaving no movement proof call. The lane is testing whether the existing serialized action can represent the missing authenticated button-carrier transaction. |
+| `lmctf06` | Fresh current source has 1,437 seeds/12,528 links, all prune. Native reverse replay rejects all 16 red-forward cuts. Four exact button-to-vertical-carrier pairs now enter the mechanism catalog, but publish zero lift links, locating the next failure inside PLATFORM admission/rest/approach rather than target discovery. A narrow entry-profile diagnostic is running. |
 | `lmctf07` | PASS after the accepted train/button repair. |
-| `lmctf12` | 2,263 seeds all prune; the disjoint objective sides have no boundary link. |
+| `lmctf12` | Fresh current source has 1,972 seeds after sparse-water integration: 939 red-only, 921 blue-only, 0 shared, 112 neither; roots 129/130 and zero boundary links. Inventory has six resolved teleporter pairs and three externally targeted quad doors; all six teleporter sources lack static staging. Exact SCC/cut diagnosis is active. |
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
@@ -652,7 +652,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
 | `tw2ctf2` | PASS and integrated: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both readers, lint, SNAG/semantic checks, cold load, accepted-map identity, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
-| `tw2ctf3` | Causal isolation PASS without teleport fallback: 1,815 seeds/29,948 links, roots 224/225, and all acceptance gates green. The repair is ordinary automatic-door safety when a nonempty mapper target resolves to zero live targetnames; matched unsafe targets remain rejected. Diagnostics are being stripped before clean production and full gates. |
+| `tw2ctf3` | Clean-production PASS without teleport changes: 1,815 seeds/29,948 links, roots 224/225, and both readers, Python/lint/semantic checks, SNAG, and fresh cold load green. The sole repair is automatic-door safety when a nonempty mapper target resolves to zero live targetnames. Accepted-map identity and full source gates remain before integration. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
 | `xmap04` | PASS and integrated: 1,094 seeds, 13,356 links, 11 lift links, 12 plans, and 974 seeds reachable from both roots; both readers, lint, SNAG, cold load, byte-identical regeneration, GNU, Make/Clang, production linkage, source-size, and deslop pass. |
