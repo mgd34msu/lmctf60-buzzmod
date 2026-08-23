@@ -12,7 +12,13 @@
 
 static qboolean TestObjectiveDropProver(int from, int to, vec3_t lip_out,
 	short *cost_ms, byte *exit_speed);
+static qboolean TestObjectiveHookProver(int from, int to, vec3_t control_out,
+	short *cost_ms, byte *exit_speed);
+static qboolean TestObjectiveRocketProver(int from, int to, vec3_t anchor_out,
+	short *cost_ms, byte *exit_speed, byte *heading_out);
 #define SG_RUNE_OBJECTIVE_DROP_PROVER TestObjectiveDropProver
+#define SG_RUNE_OBJECTIVE_HOOK_PROVER TestObjectiveHookProver
+#define SG_RUNE_OBJECTIVE_ROCKET_PROVER TestObjectiveRocketProver
 #include "slipgate/sg_rune.c"
 
 sg_host_t sg_host;
@@ -29,6 +35,10 @@ static qboolean objective_drop_succeeds;
 static int objective_drop_calls;
 static int objective_drop_from;
 static int objective_drop_to;
+static qboolean objective_hook_succeeds;
+static int objective_hook_calls;
+static qboolean objective_rocket_succeeds;
+static int objective_rocket_calls;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -102,6 +112,35 @@ static qboolean TestObjectiveDropProver(int from, int to, vec3_t lip_out,
 	return true;
 }
 
+static qboolean TestObjectiveHookProver(int from, int to, vec3_t control_out,
+	short *cost_ms, byte *exit_speed)
+{
+	(void)from;
+	(void)to;
+	objective_hook_calls++;
+	if (!objective_hook_succeeds)
+		return false;
+	VectorSet(control_out, 10.0f, 90.0f, 30.0f);
+	*cost_ms = 1200;
+	*exit_speed = 75;
+	return true;
+}
+
+static qboolean TestObjectiveRocketProver(int from, int to, vec3_t anchor_out,
+	short *cost_ms, byte *exit_speed, byte *heading_out)
+{
+	(void)from;
+	(void)to;
+	objective_rocket_calls++;
+	if (!objective_rocket_succeeds)
+		return false;
+	VectorSet(anchor_out, -30.0f, 45.0f, 88.0f);
+	*cost_ms = 1300;
+	*exit_speed = 76;
+	*heading_out = 37;
+	return true;
+}
+
 static trace_t TestTrace(const vec3_t start, const vec3_t mins,
 	const vec3_t maxs, const vec3_t end, edict_t *passent, int mask)
 {
@@ -165,6 +204,12 @@ static void ResetGraph(rune_seed_t *seeds, int seed_count,
 	objective_drop_calls = 0;
 	objective_drop_from = -1;
 	objective_drop_to = -1;
+	objective_hook_succeeds = false;
+	objective_hook_calls = 0;
+	objective_rocket_succeeds = false;
+	objective_rocket_calls = 0;
+	gen_env_drop = 0;
+	gen_env_hook = 0;
 	telemetry_flush_calls = 0;
 	memset(red, 0, sizeof(*red));
 	memset(blue, 0, sizeof(*blue));
@@ -331,6 +376,75 @@ static void TestHookReverseDropRepair(void)
 	    "objective-repair kind=hook-reverse-drop") != NULL);
 	CHECK(strstr(diagnostic_log,
 	    "red_to_blue=1 blue_to_red=1") != NULL);
+}
+
+static void TestObjectiveReverseHookRepair(void)
+{
+	rune_seed_t seeds[4];
+	rune_link_t links[6];
+	edict_t red, blue;
+
+	ResetGraph(seeds, 4, links, 5, &red, &blue);
+	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
+	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
+	VectorSet(seeds[3].origin, 936.0f, 0.0f, 0.0f);
+	SetLink(&links[0], 0, 2);
+	SetLink(&links[1], 2, 0);
+	SetLink(&links[2], 1, 3);
+	SetLink(&links[3], 3, 1);
+	SetLink(&links[4], 2, 3);
+	objective_hook_succeeds = true;
+	CHECK(Graph_PruneObjectiveCore());
+	CHECK(objective_hook_calls == 1);
+	CHECK(objective_rocket_calls == 0);
+	CHECK(gen_num_links == 6);
+	CHECK(links[5].from == 3 && links[5].to == 2);
+	CHECK(links[5].action == RL_HOOK);
+	CHECK(links[5].cost_ms == 1200 && links[5].exit_speed == 75);
+	CHECK(links[5].anchor[0] == 10.0f && links[5].anchor[1] == 90.0f &&
+	    links[5].anchor[2] == 30.0f);
+	CHECK(links[5].heading == 64);
+	CHECK(links[5].heading_slack == RUNE_HOOK_CONTROL_SLACK);
+	CHECK(links[5].min_speed == 0 && gen_env_hook == 1);
+	CHECK(strstr(diagnostic_log, "objective-repair kind=reverse-hook") != NULL);
+}
+
+static void TestObjectiveReverseRocketRepair(void)
+{
+	rune_seed_t seeds[4];
+	rune_link_t links[6];
+	edict_t red, blue;
+
+	ResetGraph(seeds, 4, links, 5, &red, &blue);
+	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
+	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
+	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
+	VectorSet(seeds[3].origin, 936.0f, 0.0f, 0.0f);
+	SetLink(&links[0], 0, 2);
+	SetLink(&links[1], 2, 0);
+	SetLink(&links[2], 1, 3);
+	SetLink(&links[3], 3, 1);
+	SetLink(&links[4], 2, 3);
+	objective_rocket_succeeds = true;
+	CHECK(Graph_PruneObjectiveCore());
+	CHECK(objective_hook_calls == 1);
+	CHECK(objective_rocket_calls == 1);
+	CHECK(gen_num_links == 6);
+	CHECK(links[5].from == 3 && links[5].to == 2);
+	CHECK(links[5].action == RL_ROCKETJUMP);
+	CHECK(links[5].cost_ms == 1300 && links[5].exit_speed == 76);
+	CHECK(links[5].anchor[0] == -30.0f && links[5].anchor[1] == 45.0f &&
+	    links[5].anchor[2] == 88.0f);
+	CHECK(links[5].heading == 37);
+	CHECK(links[5].heading_slack == SG_RJ_SLACK);
+	CHECK(links[5].min_speed == 0);
+	CHECK(strstr(diagnostic_log,
+	    "objective-repair kind=reverse-rocketjump") != NULL);
 }
 
 static void TestObjectiveMetricUnits(void)
@@ -607,6 +721,8 @@ int main(void)
 	TestDisconnectedPartitionDiagnostics();
 	TestOneWayCrossRootReject();
 	TestHookReverseDropRepair();
+	TestObjectiveReverseHookRepair();
+	TestObjectiveReverseRocketRepair();
 	TestOneWayAndFixedPointFailures();
 	TestObjectiveMetricUnits();
 	TestNearestUnlinked();

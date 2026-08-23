@@ -8087,45 +8087,83 @@ static void Graph_ReverseReach(int root, const byte *allowed,
 #ifndef SG_RUNE_OBJECTIVE_DROP_PROVER
 #define SG_RUNE_OBJECTIVE_DROP_PROVER ProveDrop
 #endif
-
-static qboolean Graph_ProveHookReverseDrop(const byte *red_reach,
-	const byte *blue_reach, int *link_out)
+#ifndef SG_RUNE_OBJECTIVE_HOOK_PROVER
+#define SG_RUNE_OBJECTIVE_HOOK_PROVER ProveHook
+#endif
+#ifndef SG_RUNE_OBJECTIVE_ROCKET_PROVER
+#define SG_RUNE_OBJECTIVE_ROCKET_PROVER ProveRocketJump
+#endif
+static qboolean Graph_ProveObjectiveReverse(const byte *red_reach,
+	const byte *blue_reach, int *link_out, byte *action_out)
 {
 	int old_links = gen_num_links;
-	int i;
+	int action_pass, i;
 
 	if (link_out)
 		*link_out = -1;
 	/* A proved ascent into a one-sided objective component may have a physical
 	 * walkoff back into the shared component that the ordinary pair admission
-	 * never offered to the drop controller. Only a graph that already failed
-	 * objective closure reaches this exact inverse proof. */
-	for (i = 0; i < old_links; i++)
+	 * never offered to the drop controller. More generally, a generated
+	 * shared-to-one-sided boundary identifies the exact inverse pair whose
+	 * absence prevents objective closure. Re-run the native controllers on
+	 * that pair instead of changing their global candidate budgets. Only a
+	 * graph that already failed objective closure reaches these proofs. */
+	for (action_pass = 0; action_pass < 3; action_pass++)
 	{
-		rune_link_t boundary = gen_links[i];
-		unsigned int from_mask = Graph_ObjectivePartitionMask(boundary.from,
-		    red_reach, blue_reach);
-		unsigned int to_mask = Graph_ObjectivePartitionMask(boundary.to,
-		    red_reach, blue_reach);
-		vec3_t lip;
-		short cost;
-		byte exit_speed;
+		for (i = 0; i < old_links; i++)
+		{
+			rune_link_t boundary = gen_links[i];
+			unsigned int from_mask = Graph_ObjectivePartitionMask(boundary.from,
+			    red_reach, blue_reach);
+			unsigned int to_mask = Graph_ObjectivePartitionMask(boundary.to,
+			    red_reach, blue_reach);
+			vec3_t anchor;
+			short cost;
+			byte exit_speed, heading = 0;
+			qboolean proved;
 
-		if (boundary.action != RL_HOOK || from_mask != 3U ||
-		    (to_mask != 1U && to_mask != 2U) ||
-		    gen_seeds[boundary.to].origin[2] <=
-		        gen_seeds[boundary.from].origin[2] + 160.0f ||
-		    Link_Exists(boundary.to, boundary.from) ||
-		    !SG_RUNE_OBJECTIVE_DROP_PROVER(boundary.to, boundary.from, lip,
-		        &cost, &exit_speed))
-			continue;
-		if (!Link_Add(boundary.to, boundary.from, RL_DROP, cost, exit_speed))
-			return false;
-		VectorCopy(lip, gen_links[gen_num_links - 1].anchor);
-		Link_Env_Drop(&gen_links[gen_num_links - 1], dd_last_heading);
-		if (link_out)
-			*link_out = gen_num_links - 1;
-		return true;
+			if (from_mask != 3U || (to_mask != 1U && to_mask != 2U) ||
+			    Link_Exists(boundary.to, boundary.from))
+				continue;
+			if (action_pass == 0)
+			{
+				if (boundary.action != RL_HOOK ||
+				    gen_seeds[boundary.to].origin[2] <=
+				        gen_seeds[boundary.from].origin[2] + 160.0f)
+					continue;
+				proved = SG_RUNE_OBJECTIVE_DROP_PROVER(boundary.to,
+				    boundary.from, anchor, &cost, &exit_speed);
+			}
+			else if (action_pass == 1)
+				proved = SG_RUNE_OBJECTIVE_HOOK_PROVER(boundary.to,
+				    boundary.from, anchor, &cost, &exit_speed);
+			else
+				proved = SG_RUNE_OBJECTIVE_ROCKET_PROVER(boundary.to,
+				    boundary.from, anchor, &cost, &exit_speed, &heading);
+			if (!proved)
+				continue;
+			if (!Link_Add(boundary.to, boundary.from,
+			    action_pass == 0 ? RL_DROP :
+			    action_pass == 1 ? RL_HOOK : RL_ROCKETJUMP,
+			    cost, exit_speed))
+				return false;
+			VectorCopy(anchor, gen_links[gen_num_links - 1].anchor);
+			if (action_pass == 0)
+				Link_Env_Drop(&gen_links[gen_num_links - 1], dd_last_heading);
+			else if (action_pass == 1)
+				Link_Env_Hook(&gen_links[gen_num_links - 1], anchor);
+			else
+			{
+				gen_links[gen_num_links - 1].heading = heading;
+				gen_links[gen_num_links - 1].heading_slack = SG_RJ_SLACK;
+				gen_links[gen_num_links - 1].min_speed = 0;
+			}
+			if (link_out)
+				*link_out = gen_num_links - 1;
+			if (action_out)
+				*action_out = gen_links[gen_num_links - 1].action;
+			return true;
+		}
 	}
 	return false;
 }
@@ -8408,6 +8446,7 @@ static qboolean Graph_PruneObjectiveCoreTry(qboolean defer_route_failure,
 	int initial_red = 0, initial_blue = 0, final_red = 0, final_blue = 0;
 	int kept_seeds = 0, new_links = 0;
 	int repair_link = -1, repairs = 0;
+	byte repair_action = RL_RUN;
 	uint32_t new_bindings = 0U;
 
 	if (red_root_out) *red_root_out = -1;
@@ -8485,12 +8524,15 @@ static qboolean Graph_PruneObjectiveCoreTry(qboolean defer_route_failure,
 			Graph_LogObjectivePartitions(red_reach, blue_reach);
 			Graph_LogBoundaryLinks("initial", red_reach, blue_reach);
 			if ((!blue_reach[red_root] || !red_reach[blue_root]) &&
-			    Graph_ProveHookReverseDrop(red_reach, blue_reach,
-			        &repair_link))
+			    Graph_ProveObjectiveReverse(red_reach, blue_reach,
+			        &repair_link, &repair_action))
 			{
 				repairs++;
-				sg_host.dprint("rune: objective-repair kind=hook-reverse-drop "
-				               "link=%d repairs=%d\n", repair_link, repairs);
+				sg_host.dprint("rune: objective-repair kind=%s link=%d "
+				               "repairs=%d\n",
+				               repair_action == RL_DROP ? "hook-reverse-drop" :
+				               repair_action == RL_HOOK ? "reverse-hook" :
+				               "reverse-rocketjump", repair_link, repairs);
 				sg_host.level_free(next_in);
 				next_in = sg_host.level_alloc(sizeof(*next_in) *
 				    (size_t)gen_num_links);
