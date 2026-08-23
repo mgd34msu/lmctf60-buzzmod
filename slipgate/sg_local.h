@@ -304,6 +304,11 @@ qboolean SG_OracleDeclaredApproach(const vec3_t source, const vec3_t target,
 qboolean SG_OracleTrainGateApproach(const vec3_t source,
 	const vec3_t target, edict_t *button, int *arrival_ms,
 	vec3_t contact_out);
+qboolean SG_OracleTrainRideBoard(const vec3_t source,
+	const vec3_t target, edict_t *button, edict_t *train,
+	int *arrival_ms, vec3_t contact_out);
+qboolean SG_OracleTrainRideCarry(const vec3_t source,
+	const vec3_t displacement, edict_t *train, vec3_t destination_out);
 qboolean SG_OracleTrainGateShot(const vec3_t source, edict_t *button,
 	vec3_t contact_out, int *flight_ms);
 qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
@@ -311,6 +316,8 @@ qboolean SG_OracleDeclaredCompoundLiftApproach(const vec3_t source,
 	edict_t *approach_door, int *arrival_ms);
 qboolean SG_OracleDeclaredEgress(const vec3_t source, const vec3_t target,
 	edict_t *support, int *arrival_ms);
+qboolean SG_OracleTrainRideEgress(const vec3_t source,
+	const vec3_t target, edict_t *train, int *arrival_ms);
 qboolean SG_OracleTrainGateEntry(const vec3_t source,
 	const vec3_t entry, edict_t *button, edict_t *train, int *arrival_ms);
 qboolean SG_OracleTrainGateCross(const vec3_t entry,

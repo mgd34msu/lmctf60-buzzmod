@@ -3819,10 +3819,22 @@ static void Train_Sweep(edict_t *train, edict_t *closed, edict_t *open,
 	}
 }
 
-static void Train_PoseOpen(edict_t *train, edict_t *open,
-	door_pose_t *saved)
+static void Train_SetPose(edict_t *train, edict_t *corner)
 {
 	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+		train->s.origin[axis] = corner->s.origin[axis] - train->mins[axis];
+	VectorCopy(train->s.origin, train->s.old_origin);
+	VectorClear(train->velocity);
+	VectorClear(train->avelocity);
+	train->solid = SOLID_BSP;
+	sg_host.linkentity(train);
+}
+
+static void Train_PoseAt(edict_t *train, edict_t *corner,
+	door_pose_t *saved)
+{
 
 	memset(saved, 0, sizeof(*saved));
 	saved->ent = train;
@@ -3834,13 +3846,7 @@ static void Train_PoseOpen(edict_t *train, edict_t *open,
 	saved->state = train->moveinfo.state;
 	saved->solid = train->solid;
 	saved->linkcount = train->linkcount;
-	for (axis = 0; axis < 3; axis++)
-		train->s.origin[axis] = open->s.origin[axis] - train->mins[axis];
-	VectorCopy(train->s.origin, train->s.old_origin);
-	VectorClear(train->velocity);
-	VectorClear(train->avelocity);
-	train->solid = SOLID_BSP;
-	sg_host.linkentity(train);
+	Train_SetPose(train, corner);
 }
 
 static qboolean Train_OppositeSide(const vec3_t contact,
@@ -4005,7 +4011,7 @@ static void Link_Trains(void)
 			    !SG_OracleTrainGateApproach(gen_seeds[source].origin,
 			        button_center, button, &approach_ms, contact))
 				continue;
-			Train_PoseOpen(train, open, &saved);
+			Train_PoseAt(train, open, &saved);
 			for (destination = 0; destination < gen_num_seeds; destination++)
 			{
 				vec3_t egress_delta;
@@ -4071,6 +4077,176 @@ static void Link_Trains(void)
 	}
 	if (gen_train_links)
 		sg_host.dprint("rune: %d sealed train links\n", gen_train_links);
+}
+
+static void Link_TrainRides(void)
+{
+	uint32_t train_index;
+	int added = 0;
+
+	for (train_index = 0U;
+	     train_index < gen_mechanism_catalog.num_nodes; train_index++)
+	{
+		const rune_mechanism_node_t *train_node =
+			&gen_mechanism_catalog.nodes[train_index];
+		const rune_mechanism_node_t *closed_node;
+		const rune_mechanism_node_t *open_node;
+		edict_t *best_button = NULL;
+		edict_t *train;
+		edict_t *closed;
+		edict_t *open;
+		uint32_t closed_key;
+		uint32_t open_key;
+		uint32_t best_opening_bound = 0U;
+		vec3_t displacement;
+		vec3_t best_board = { 0.0f, 0.0f, 0.0f };
+		vec3_t best_top = { 0.0f, 0.0f, 0.0f };
+		float halfx;
+		float halfy;
+		float egress_radius;
+		int best_source = -1;
+		int best_destination = -1;
+		int best_egress_ms = 0;
+		int best_cost = INT_MAX;
+		uint32_t button_index;
+		door_pose_t saved;
+
+		if (!Train_NodeShape(train_node) || train_node->key == 0U ||
+		    train_node->key >= (uint32_t)globals.num_edicts ||
+		    !Mechanism_TrainRoute(train_node->key, &closed_key, &open_key) ||
+		    !(closed_node = Mechanism_Node(closed_key)) ||
+		    !(open_node = Mechanism_Node(open_key)) ||
+		    closed_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    open_node->kind != SG_MECH_NODE_PATH_CORNER ||
+		    closed_key >= (uint32_t)globals.num_edicts ||
+		    open_key >= (uint32_t)globals.num_edicts)
+			continue;
+		train = &g_edicts[train_node->key];
+		closed = &g_edicts[closed_key];
+		open = &g_edicts[open_key];
+		VectorSubtract(open->s.origin, closed->s.origin, displacement);
+		if (fabsf(displacement[0]) > 0.125f ||
+		    fabsf(displacement[1]) > 0.125f || displacement[2] < 8.0f)
+			continue;
+		halfx = (train->maxs[0] - train->mins[0]) * 0.5f;
+		halfy = (train->maxs[1] - train->mins[1]) * 0.5f;
+		egress_radius = Lift_EgressSearchRadius(halfx, halfy);
+		Train_PoseAt(train, closed, &saved);
+		for (button_index = 0U;
+		     button_index < gen_mechanism_catalog.num_nodes; button_index++)
+		{
+			const rune_mechanism_node_t *button_node =
+				&gen_mechanism_catalog.nodes[button_index];
+			const rune_mechanism_edge_t *target;
+			edict_t *button;
+			uint32_t opening_bound;
+			vec3_t button_center;
+			int source;
+
+			if (!Train_ButtonShape(button_node) || button_node->key == 0U ||
+			    button_node->key >= (uint32_t)globals.num_edicts ||
+			    !(target = Mechanism_InventoryEdge(button_node->key,
+			        SG_MECH_EDGE_TARGET, 0U)) ||
+			    Mechanism_InventoryEdge(button_node->key,
+			        SG_MECH_EDGE_TARGET, 1U) || target->to_key != train_node->key)
+				continue;
+			button = &g_edicts[button_node->key];
+			opening_bound = Train_OpeningBound(button, train, closed, open);
+			if (opening_bound == 0U)
+				continue;
+			button_center[0] =
+				(button->absmin[0] + button->absmax[0]) * 0.5f;
+			button_center[1] =
+				(button->absmin[1] + button->absmax[1]) * 0.5f;
+			button_center[2] =
+				(button->absmin[2] + button->absmax[2]) * 0.5f;
+			for (source = 0; source < gen_num_seeds; source++)
+			{
+				vec3_t delta;
+				vec3_t board;
+				vec3_t top;
+				int approach_ms;
+				int destination;
+
+				if (!gen_source_stable[source] ||
+				    gen_source_waterlevel[source] != 0 ||
+				    !Gen_SeedHasIncoming(source))
+					continue;
+				VectorSubtract(gen_seeds[source].origin, button_center, delta);
+				if (delta[0] * delta[0] + delta[1] * delta[1] >
+				        320.0f * 320.0f || fabsf(delta[2]) > 128.0f ||
+				    !SG_OracleTrainRideBoard(gen_seeds[source].origin,
+				        button_center, button, train, &approach_ms, board) ||
+				    !SG_OracleTrainRideCarry(board, displacement, train, top))
+					continue;
+				Train_SetPose(train, open);
+				for (destination = 0; destination < gen_num_seeds;
+				     destination++)
+				{
+					vec3_t egress_delta;
+					float horizontal2;
+					int egress_ms;
+					int cost;
+
+					if (destination == source ||
+					    !gen_source_stable[destination] ||
+					    gen_source_waterlevel[destination] != 0 ||
+					    !Gen_SeedHasOutgoing(destination))
+						continue;
+					VectorSubtract(gen_seeds[destination].origin, top,
+					    egress_delta);
+					horizontal2 = egress_delta[0] * egress_delta[0] +
+					    egress_delta[1] * egress_delta[1];
+					if (fabsf(egress_delta[2]) > 16.0f ||
+					    horizontal2 > egress_radius * egress_radius ||
+					    !SG_OracleTrainRideEgress(top,
+					        gen_seeds[destination].origin, train, &egress_ms))
+						continue;
+					cost = approach_ms + (int)opening_bound + egress_ms;
+					if (cost <= 0 || cost > RUNE_MAX_COST_MS ||
+					    cost >= best_cost)
+						continue;
+					best_button = button;
+					best_source = source;
+					best_destination = destination;
+					best_opening_bound = opening_bound;
+					best_egress_ms = egress_ms;
+					best_cost = cost;
+					VectorCopy(board, best_board);
+					VectorCopy(top, best_top);
+				}
+				Train_SetPose(train, closed);
+			}
+		}
+		DoorPose_Restore(&saved, 1);
+		if (best_button && best_source >= 0 && best_destination >= 0)
+		{
+			int before = gen_num_links;
+
+			Link_Add(best_source, best_destination, RL_TRAIN,
+			    (short)best_cost, 0);
+			if (gen_num_links > before)
+			{
+				rune_link_t *link = &gen_links[gen_num_links - 1];
+
+				VectorCopy(best_board, link->anchor);
+				VectorCopy(best_top, link->mechanism_anchor);
+				link->sweep_clear_ms = (uint16_t)best_egress_ms;
+				link->mode = RLCM_RIDE;
+				if (!Mechanism_BindTrain(link, best_button, train, closed,
+				        open, best_opening_bound,
+				        SG_MECHANISM_CONTROLLER_TRAIN))
+					gen_num_links--;
+				else
+				{
+					gen_train_links++;
+					added++;
+				}
+			}
+		}
+	}
+	if (added)
+		sg_host.dprint("rune: %d sealed carried train links\n", added);
 }
 
 static void Link_TrainShootButtons(
@@ -4183,7 +4359,7 @@ static void Link_TrainShootButtons(
 			    !SG_OracleTrainGateShot(gen_seeds[source].origin, button,
 			        contact, &flight_ms))
 				continue;
-			Train_PoseOpen(train, open, &saved);
+			Train_PoseAt(train, open, &saved);
 			for (axis = 0; axis < 3; axis++)
 			{
 				sg_train_gate_side_t source_side;
@@ -4298,7 +4474,7 @@ static void Link_TrainShootButtons(
 				int cross_destination;
 				door_pose_t saved;
 
-				Train_PoseOpen(train, open, &saved);
+				Train_PoseAt(train, open, &saved);
 				for (cross_destination = 0;
 				     cross_destination < gen_num_seeds; cross_destination++)
 				{
@@ -7474,6 +7650,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
 		Link_Pushes();
 		Link_Trains();
+		Link_TrainRides();
 		Link_TrainShootButtons(topology);
 		Link_Declare_Tail(declared_mark);
 	}

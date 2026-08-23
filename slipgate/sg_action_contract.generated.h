@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 
-#define SG_RUNE_ACTION_CONTRACT_CRC32 0x1e9e6975U
-#define SG_RUNE_ACTION_CONTRACT_SHA256 "a72d6770f5392b2fb9ba1f977d49e4367d3af63edce26a7f3ac17ee59ebc8275"
+#define SG_RUNE_ACTION_CONTRACT_CRC32 0x44c420cfU
+#define SG_RUNE_ACTION_CONTRACT_SHA256 "1c7b6e3e5224ec566277d1d799e6c97f9469b147ebffb81d13219d1cffa00705"
 #define SG_RUNE_ACTION_CONTRACT_DESCRIPTOR "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9;seed.origin=signed_q8_exact;"
 #define SG_MECHANISM_CONTRACT_CRC32 0xbef56f72U
 #define SG_MECHANISM_CONTRACT_SHA256 "559d5f24edc2319ab64a6773c498036eb0c8c9cdbf388400bafd9d58b9dd7fcd"
@@ -399,7 +399,7 @@ static inline int SG_ActionMechanismPlanAllowed(int action, uint16_t controller)
 	X(RL_DOOR_HOOK, 11, 1, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_WATER_TO_DRY, RLAP_HOOK_CONTROL, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_HOOK, RLMP_DOOR_WORLD_FIXED_1_8, RL_HOOK, RLFB_INHERIT, 0, "DOOR_HOOK", "D_HOOK", "#ff5bbd") \
 	X(RL_BUTTON_DOOR, 12, 1, RL_DECLARED, 0x0008U, 0x06U, 0x007dU, RLEP_DRY_BOTH, RLAP_DOOR_WAIT, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP, RLCP_DECLARED, RLMP_DOOR_WORLD_FIXED_1_8, RL_DOOR, RLFB_INHERIT, 0, "BUTTON_DOOR", "B_DOOR", "#ff9f0a") \
 	X(RL_PUSH, 13, 1, RL_DECLARED, 0x0008U, 0x01U, 0x0027U, RLEP_DRY_BOTH, RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE, RL_PUSH, RLFB_NONE, 0, "PUSH", "PUSH", "#b76cff") \
-	X(RL_TRAIN, 14, 1, RL_DECLARED, 0x0008U, 0x02U, 0x003dU, RLEP_DRY_BOTH, RLAP_WORLD, RLAP_TRAIN_CROSS, RLAP_ZERO, RLCP_DECLARED, RLMP_TRAIN_WORLD_FIXED_1_8, RL_TRAIN, RLFB_NONE, 0, "TRAIN", "TRAIN", "#00a6a6")
+	X(RL_TRAIN, 14, 1, RL_DECLARED, 0x0008U, 0x06U, 0x003dU, RLEP_DRY_BOTH, RLAP_WORLD, RLAP_TRAIN_CROSS, RLAP_WORLD, RLCP_DECLARED, RLMP_TRAIN_WORLD_FIXED_1_8, RL_TRAIN, RLFB_NONE, 0, "TRAIN", "TRAIN", "#00a6a6")
 
 /* X(symbol, id, message) */
 #define SG_RUNE_REJECTION_REASON_ROWS(X) \

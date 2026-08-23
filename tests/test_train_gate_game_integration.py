@@ -47,7 +47,7 @@ def main() -> None:
         "topology->component[source] !=",
         "topology->component[reverse_source]",
         "SG_OracleTrainGateShot",
-        "Train_PoseOpen",
+        "Train_PoseAt",
         "SG_OracleTrainGateEntry",
         "SG_OracleTrainGateCross",
         "source_by_axis_side[axis][source_side] = source",
@@ -65,6 +65,17 @@ def main() -> None:
     assert shoot_train.count("SG_OracleTrainGateShot") == 1
     assert "TRAIN_SHOOT_DEST_FAN" not in shoot_train
 
+    ride = between(rune, "static void Link_TrainRides", "static void Link_TrainShootButtons")
+    ordered(
+        ride,
+        "SG_OracleTrainRideBoard",
+        "SG_OracleTrainRideCarry",
+        "Train_SetPose(train, open)",
+        "SG_OracleTrainRideEgress",
+        "link->mode = RLCM_RIDE",
+        "Mechanism_BindTrain",
+    )
+
     game = source("slipgate/sg_train_gate_game.c")
     witness = between(game, "static int TrainWitness", "static sg_train_gate_pose_t")
     for required in (
@@ -75,6 +86,7 @@ def main() -> None:
         "binding.entry_entity->absmin",
         "witness->closed_corner_key",
         "witness->open_corner_key",
+        "witness->mode",
     ):
         assert required in witness
 
@@ -134,6 +146,8 @@ def main() -> None:
         "SG_BlasterAimAngles",
         "BUTTON_ATTACK",
         "SG_TrainGateGameAuthorizeButtonShot",
+        "SG_LiftRider(binding.mover_entity, activator)",
+        "TrainOriginExact",
     ):
         assert required in game
 

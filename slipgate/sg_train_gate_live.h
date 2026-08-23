@@ -33,6 +33,12 @@ typedef enum sg_train_gate_activation_e
 	SG_TRAIN_GATE_ACTIVATION_SHOOT
 } sg_train_gate_activation_t;
 
+typedef enum sg_train_gate_mode_e
+{
+	SG_TRAIN_GATE_MODE_CROSS = 0,
+	SG_TRAIN_GATE_MODE_RIDE
+} sg_train_gate_mode_t;
+
 typedef enum sg_train_gate_side_e
 {
 	SG_TRAIN_GATE_SIDE_NONE = 0,
@@ -64,6 +70,7 @@ typedef struct sg_train_gate_witness_s
 	uint32_t closed_corner_key;
 	uint32_t open_corner_key;
 	sg_train_gate_activation_t activation;
+	sg_train_gate_mode_t mode;
 	int16_t source_q8[3];
 	int16_t button_q8[3];
 	int16_t entry_q8[3];
@@ -86,6 +93,7 @@ typedef struct sg_train_gate_observation_s
 	uint8_t weapon_ready;
 	uint8_t aim_contact_current;
 	uint8_t line_of_fire_clear;
+	uint8_t riding;
 	uint8_t button_touch_count;
 	uint8_t button_shot_count;
 	uint8_t target_dispatch_count;

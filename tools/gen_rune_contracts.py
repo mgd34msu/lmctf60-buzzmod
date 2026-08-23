@@ -727,10 +727,10 @@ def validate_document(document):
         elif mechanism == 2:
             required = 1 | 4 | 8 | 16 | 32
             if (action["trait_mask"] & required != required or
-                    action["mode_mask"] != (1 << 1) or
+                    action["mode_mask"] != ((1 << 1) | (1 << 2)) or
                     action["preopen_mechanism_anchor_policy"] != 10 or
-                    action["ride_mechanism_anchor_policy"] != 0):
-                _fail(where, "train mechanism requires one fixed crossing waypoint")
+                    action["ride_mechanism_anchor_policy"] != 4):
+                _fail(where, "train mechanism requires crossing and ride waypoints")
         else:
             _fail(where, "unknown mechanism policy")
 

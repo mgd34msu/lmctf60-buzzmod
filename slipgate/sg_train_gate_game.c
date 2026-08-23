@@ -119,6 +119,8 @@ static int TrainWitness(int link_index, sg_train_gate_witness_t *witness)
 	witness->activation = binding.plan->controller_kind ==
 		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
 		? SG_TRAIN_GATE_ACTIVATION_SHOOT : SG_TRAIN_GATE_ACTIVATION_TOUCH;
+	witness->mode = binding.link->mode == RLCM_RIDE
+		? SG_TRAIN_GATE_MODE_RIDE : SG_TRAIN_GATE_MODE_CROSS;
 	witness->opening_bound_ms = (uint16_t)binding.plan->cooldown_ms;
 	return 1;
 }
@@ -143,6 +145,25 @@ static int TrainBodyClear(const edict_t *entity, uint32_t train_key)
 	        entity->absmax[2] <= mins[2] || entity->absmin[2] >= maxs[2]);
 }
 
+static int TrainOriginExact(const edict_t *entity, const int16_t origin_q8[3],
+	int require_rest)
+{
+	int axis;
+
+	if (!entity || !origin_q8)
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		float origin = entity->s.origin[axis] * 8.0f;
+		float velocity = entity->velocity[axis] * 8.0f;
+
+		if (!isfinite(origin) || origin != (float)origin_q8[axis] ||
+		    (require_rest && (!isfinite(velocity) || velocity != 0.0f)))
+			return 0;
+	}
+	return 1;
+}
+
 static int TrainObservation(sg_bot_t *bot,
 	sg_train_gate_observation_t *observation)
 {
@@ -158,7 +179,6 @@ static int TrainObservation(sg_bot_t *bot,
 		return 0;
 	memset(observation, 0, sizeof(*observation));
 	observation->alive = entity->deadflag == DEAD_NO && entity->health > 0;
-	observation->supported = entity->groundentity != NULL;
 	observation->dry = entity->waterlevel == 0;
 	observation->binding_current = TrainBinding(
 	    (int)bot->train_gate.live.witness.link_index,
@@ -166,6 +186,11 @@ static int TrainObservation(sg_bot_t *bot,
 	observation->pose = TrainPose(bot->train_gate.live.witness.train_key);
 	observation->body_clear = TrainBodyClear(entity,
 	    bot->train_gate.live.witness.train_key);
+	observation->riding = binding.mover_entity &&
+	    SG_LiftRider(binding.mover_entity, entity);
+	observation->supported = entity->groundentity != NULL ||
+	    (bot->train_gate.live.witness.mode == SG_TRAIN_GATE_MODE_RIDE &&
+	     observation->riding);
 	for (axis = 0; axis < 3; axis++)
 	{
 		entry[axis] = bot->train_gate.live.witness.entry_q8[axis] * 0.125f;
@@ -185,6 +210,13 @@ static int TrainObservation(sg_bot_t *bot,
 	    SG_SupportedArrived(entity->s.origin, destination,
 	        entity->groundentity != NULL, entity->watertype,
 	        entity->waterlevel, NULL);
+	if (bot->train_gate.live.witness.mode == SG_TRAIN_GATE_MODE_RIDE)
+	{
+		observation->entry_arrived = observation->riding &&
+		    TrainOriginExact(entity, bot->train_gate.live.witness.entry_q8, 0);
+		observation->cross_arrived = observation->riding &&
+		    TrainOriginExact(entity, bot->train_gate.live.witness.cross_q8, 1);
+	}
 	observation->button_touch_count = bot->train_gate.button_touch_count;
 	observation->button_shot_count = bot->train_gate.button_shot_count;
 	observation->target_dispatch_count =
@@ -464,7 +496,11 @@ int SG_TrainGateGameAuthorizeButtonTouch(edict_t *button, edict_t *activator)
 	    binding.plan->controller_kind != SG_MECHANISM_CONTROLLER_TRAIN ||
 	    bot->train_gate.live.phase != SG_TRAIN_GATE_APPROACH ||
 	    bot->train_gate.button_touch_count != 0U ||
-	    button->moveinfo.state != SG_PLAT_STATE_BOTTOM)
+	    button->moveinfo.state != SG_PLAT_STATE_BOTTOM ||
+	    (bot->train_gate.live.witness.mode == SG_TRAIN_GATE_MODE_RIDE &&
+	     (!SG_LiftRider(binding.mover_entity, activator) ||
+	      !TrainOriginExact(activator,
+	          bot->train_gate.live.witness.entry_q8, 0))))
 		return 0;
 	bot->train_gate.button_touch_count = 1U;
 	return 1;

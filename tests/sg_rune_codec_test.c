@@ -526,10 +526,10 @@ static void TestWholeGolden(void)
 		TEST_STRING_BYTES) == 0);
 	CHECK_U32(UINT32_C(0x624244c5), fixture.plans[0].closure_crc32);
 	CHECK_U32(UINT32_C(0x77264ff8), GetU32(encoded + 20));
-	CHECK_U32(UINT32_C(0x7206f6e4),
+	CHECK_U32(UINT32_C(0x7a0d237e),
 		GetU32(encoded + SG_RUNE_CODEC_HEADER_CRC_OFFSET));
 	CHECK(SG_CRC32Buffer(encoded, sizeof(encoded), &file_crc));
-	CHECK_U32(UINT32_C(0xa5d7b19f), file_crc);
+	CHECK_U32(UINT32_C(0x85d450b5), file_crc);
 
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));
@@ -578,6 +578,27 @@ static void TestPrimitiveMalformed(void)
 	CHECK(memcmp(decoded_link.mechanism_anchor,
 		fixture.links[0].mechanism_anchor,
 		sizeof(decoded_link.mechanism_anchor)) == 0);
+
+	fixture.links[0].mode = RLCM_RIDE;
+	SetVector(fixture.links[0].mechanism_anchor, 48.0f, 56.0f, 320.0f);
+	CHECK_DIAGNOSTIC(RLCODEC_OK,
+		SG_RuneCodecEncodeLink(&fixture.links[0], encoded,
+			SG_RUNE_CODEC_LINK_BYTES));
+	CHECK_DIAGNOSTIC(RLCODEC_OK,
+		SG_RuneCodecDecodeLink(encoded, SG_RUNE_CODEC_LINK_BYTES,
+			&decoded_link));
+	CHECK(decoded_link.action == RL_TRAIN);
+	CHECK(decoded_link.mode == RLCM_RIDE);
+	CHECK(decoded_link.sweep_clear_ms == 100U);
+	CHECK(memcmp(decoded_link.mechanism_anchor,
+		fixture.links[0].mechanism_anchor,
+		sizeof(decoded_link.mechanism_anchor)) == 0);
+	fixture.links[0].mechanism_anchor[2] =
+		(float)SG_RUNE_PROOF_WORLD_FIXED_MAX /
+		(float)SG_RUNE_PROOF_WORLD_FIXED_SCALE + 1.0f;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		SG_RuneCodecEncodeLink(&fixture.links[0], encoded,
+			SG_RUNE_CODEC_LINK_BYTES));
 
 	FixtureInit(&fixture);
 	MakeFrameCompleteButton(&fixture.nodes[0]);
