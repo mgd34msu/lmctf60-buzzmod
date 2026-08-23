@@ -316,9 +316,12 @@ including `lmctf02a` and `lmctf04`.
       smoke with separate firing, entry, and open-pose egress proofs published
       four shoot-train links and closed red-to-blue travel, but blue-to-red
       remained open. Pre-ranking alternate exits by Euclidean distance
-      regressed to zero links and was refuted. The active repair restores the
-      four-link baseline, proves entry separately, then scans objective-improving
-      egress endpoints under the authenticated open pose.
+      regressed to zero links and was refuted. An exhaustive exact scan then
+      found no one-segment entry-to-objective exit. The active three-leg
+      controller serializes a proved crossing checkpoint and executes
+      firing-to-entry, entry-to-crossing, and crossing-to-egress as separate
+      states. Its focused reducer, catalog, plan, binding, game, contract,
+      codec, generator, and object builds pass; the real smoke remains pending.
 
 The corrected old no-artifact queue contains 23 maps after the later accepted
 `lmctf02a`, `lmctf04`, `lmctf05b`, `smap14`, `smap39`, `xmap05`, and `xmap12`
@@ -335,10 +338,14 @@ prove the center source, authentic trigger contact, serialized launch, stable
 upper landing, and full objective closure. A direct center-to-pad
 TELEPORT_JUMP was refuted and will not be published. The staged traversal
 contract, reducers, ownership, callbacks, and artifact wiring pass the complete
-GNU and Make/Clang host suites. The first real smoke still published only two
-teleport links and zero PUSH links from its 24-node, 12-edge mechanism catalog.
-The active diagnosis is why the real catalog exposes no push link to the staged
-publisher despite the focused catalog tests.
+GNU and Make/Clang host suites. Two inherited speed-85 predicates initially
+rejected tomb05's valid stock push speeds; replacing them with finite positive
+speed validation retained the exact serialized-velocity check. Real smokes now
+publish four authenticated PUSH_JUMP links, but all four land in non-objective
+graph islands. Directional topology selection proved that no single successful
+jump has both a flag-forward source half and an opposite-flag-reverse landing
+half. The active diagnostic is deriving the smallest composable mechanism
+sequence from every proved candidate's directed masks and components.
 The exact queue is `lmctf01`, `lmctf06`, `lmctf07`, `lmctf12`, `lmctf15`,
 `lmctf19`, `lmctf25`, `lmctf27`, `lmctf30`, `lmctf40`, `lmctf45`, `lmctf58`,
 `tomb05`, `tw2ctf2`, `tw2ctf3`, `tw2ctf4`, `xmap02`, `xmap04`,
@@ -398,8 +405,13 @@ duplicate final overlap query preserved all measured outcomes and replay steps
 while reducing the isolated Clang source-0 cost by 8.2 percent. A short-landing
 preflight was refuted because it added rollouts and replay steps for only a
 further 7.8 percent reduction, and its source changes were reverted. The active
-measurement targets the deeper cost: each Pmove trace rescans the full edict
-population.
+population-scan theory was also refuted because exact DROP generation bypasses
+that discovery path. Exact profiling attributes the remaining cost to native
+Pmove and collision. An uncommitted prefix-cache prototype preserves all 298
+rollout outcomes and 14,022 reducer steps, reuses 7,654 identical physics steps,
+and reduces the measured DROP cost from 10.323 seconds to 4.651 seconds. It must
+still pass mismatch and refutation tests plus exhaustive-versus-cache artifact
+comparison before it can land.
 Canonical commits `7d82ade`, `d344322`, `89465f4`, and `e54efa6` also reject a
 known water-seed-capacity overflow before base-link proof. An isolated real `xmap29`
 run now reaches the same explicit no-write failure in about four seconds rather
