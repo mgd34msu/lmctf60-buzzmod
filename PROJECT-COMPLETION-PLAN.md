@@ -645,17 +645,17 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf15` | 36,551 links; both flags remain isolated in separate ten-seed components. |
 | `lmctf19` | Automated inventory is exhausted: both flags are symmetric one-way DROP basins, and wider RUN plus reverse JUMP/HOOK/rocket-jump replays prove no egress. It awaits an end-of-plan human traversal. |
 | `lmctf25` | The old timeout is gone; 45,903 links complete before all 2,413 seeds prune. |
-| `lmctf27` | Relay-aware RL_DOOR generation closes the real graph at 620 seeds, 6,751 links, 316 door links, and 490 seeds reachable from both roots. Exact live-loader rotating-door sweep handling and one-hop synchronous-relay Python parity now accept the frozen artifact; diagnostics are stripped and a fresh full snapshot smoke is next. |
+| `lmctf27` | PASS: 620 seeds, 6,751 retained links, 316 authenticated plans, and 490 seeds reachable from both roots; both C readers, Python, lint, SNAG, fresh cold load, and runtime-ready pass. Budget, accepted-map identity, and full source gates remain before integration. |
 | `lmctf30` | 849 seeds all prune; the water-to-lift repair leaves the graph unchanged. |
 | `lmctf40` | PASS in 67 seconds after the controller accepts non-adjacent deferred-publication diagnostics. |
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
-| `tw2ctf2` | PASS in a fully current frozen snapshot: one grounded waypoint RUN plus one exact HOOK per side yields 1,922 seeds reachable from both roots and a 1,983-seed/33,586-link artifact; both C readers, Python, lint, SNAG, semantic checks, and cold load pass. Diagnostics are being stripped before focused and full source gates. |
+| `tw2ctf2` | Clean-production PASS: the generic post-prune closure publishes exactly four proved links, retains 1,922 seeds from both roots, and writes a 1,983-seed/33,586-link artifact; both C readers, Python, lint, SNAG/semantic checks, and cold load pass. Focused, accepted-map identity, and full source gates remain before integration. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
-| `xmap04` | 1,094 seeds all prune. The tenth lift's clean staging paths cross two real automatic-touch door sweeps, so ignoring `door_passed` is invalid. The existing compound door-to-lift oracle owns that exact transaction but is currently called only for nonstock platforms. A fail-closed stock-platform replay is testing causality; the separate reverse ride remains noncausal. |
+| `xmap04` | 1,094 seeds all prune. Correction: the automatic-door-to-stock-platform ascent is causal, moving all 485 blue-only seeds into shared reach while 489 red-only remain. The missing reverse belongs to that same key234 platform: top dispatch does not summon and door-mediated bottom egress proves none. Ordinary and existing-family crossings are refuted; those two PLATFORM predicates are under diagnosis. |
 | `xmap13` | All 1,337 seeds still prune. Clean staged flights land outside every door sweep, but world collision pins the body at an unowned first-ground state and accepted movement cannot reach the nearest stable outgoing seed. Existing automated controllers are exhausted; it awaits end-of-plan human traversal. |
 | `xmap18` | All 2,850 seeds prune across a 2,666-unit central cut; teleporter admission was exactly replayed and refuted. |
 | `xmap25` | PASS after a fail-closed final-topology repair replay-proves exactly one reverse DROP across a one-sided HOOK boundary; all 1,920 objective-reachable seeds are shared, and the accepted `lmctf42` artifact remains byte-identical. |
