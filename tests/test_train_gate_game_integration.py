@@ -46,7 +46,8 @@ def main() -> None:
         "topology->component[reverse_source]",
         "SG_OracleTrainGateShot",
         "Train_PoseOpen",
-        "SG_OracleTrainGateEgress",
+        "SG_OracleTrainGateEntry",
+        "SG_OracleTrainGateCross",
         "source_by_axis_side[axis][source_side] = source",
     )
     assert shoot_train.count("SG_OracleTrainGateShot") == 1

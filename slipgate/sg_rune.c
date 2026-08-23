@@ -4024,7 +4024,7 @@ static void Link_Trains(void)
 				    fabsf(egress_delta[2]) > 256.0f ||
 				    !Train_OppositeSide(contact,
 				        gen_seeds[destination].origin, sweep_mins, sweep_maxs) ||
-				    !SG_OracleTrainGateEgress(contact, contact,
+				    !SG_OracleTrainGateCross(contact,
 				        gen_seeds[destination].origin, button, train,
 				        sweep_mins, sweep_maxs, 3U, &egress_ms))
 					continue;
@@ -4177,6 +4177,7 @@ static void Link_TrainShootButtons(
 				vec3_t entry_delta;
 				vec3_t egress_delta;
 				uint32_t transaction_bound;
+				int entry_ms;
 				int egress_ms;
 				int cost;
 				float gap;
@@ -4214,11 +4215,16 @@ static void Link_TrainShootButtons(
 				    egress_delta[0] * egress_delta[0] +
 				        egress_delta[1] * egress_delta[1] > 1600.0f * 1600.0f ||
 				    fabsf(egress_delta[2]) > 256.0f ||
-				    !SG_OracleTrainGateEgress(gen_seeds[source].origin,
-				        gen_seeds[reverse_source].origin,
+				    !SG_OracleTrainGateEntry(gen_seeds[source].origin,
+				        gen_seeds[reverse_source].origin, button, train,
+				        &entry_ms) ||
+				    !SG_OracleTrainGateCross(gen_seeds[reverse_source].origin,
 				        gen_seeds[reverse_destination].origin, button, train,
 				        sweep_mins, sweep_maxs, (unsigned int)axis, &egress_ms))
 					continue;
+			if (entry_ms > RUNE_MAX_COST_MS - egress_ms)
+				continue;
+			egress_ms += entry_ms;
 				cost = (int)transaction_bound + egress_ms;
 				gap = Train_SeedSweepAxisGap(gen_seeds[source].origin,
 				    sweep_mins, sweep_maxs, (unsigned int)axis, source_side);
