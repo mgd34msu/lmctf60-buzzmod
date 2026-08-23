@@ -648,7 +648,7 @@ The fresh batch has replaced the old queue labels with these current results:
 | `lmctf45` | 157 seeds are initially shared, but reverse closure fails and all 1,619 seeds prune. |
 | `lmctf58` | PASS after exact scoped door-bound reuse removes redundant loader sweeps; the regenerated artifact is byte-identical to the accepted reference. |
 | `tomb05` | 961 seeds all prune; automatic discovery remains deferred pending a human traversal if needed. |
-| `tw2ctf2` | 33,868 links and 570 initially shared seeds. Symmetric wider unchanged RUN legs are now proved from each objective-root forward set into the already-authenticated upper HOOK returns. The active gate is grounded/runtime serialization plus real objective closure before replacing the fixed RUN admission bounds. |
+| `tw2ctf2` | 33,868 links and 570 initially shared seeds. Wider RUN-prover searches physically reach both authenticated upper HOOK returns, but that prover may use an internal edge-seek/fall path that RL_RUN cannot serialize, while unchanged DROP rejects both cuts. The active diagnostic records grounded/airborne state and exact trajectories before choosing a contract. |
 | `tw2ctf3` | 1,815 seeds all prune; lift descent and teleporter staging both fail. |
 | `tw2ctf4` | 2,128 seeds all prune; no mechanism yet owns the reverse cut. |
 | `xmap02` | 1,480 seeds all prune; four teleporter pads lack staging, but causality remains unproved. |
