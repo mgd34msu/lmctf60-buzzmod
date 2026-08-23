@@ -34,7 +34,9 @@ def main() -> None:
         assert required in shoot
     assert "SG_MECHANISM_CONTROLLER_TRAIN_SHOOT" in rune
     assert "SG_OracleTrainGateShot" in rune
-    assert "SG_OracleTrainGateShot" in source("slipgate/sg_oracle.c")
+    oracle = source("slipgate/sg_oracle.c")
+    assert "SG_OracleTrainGateShot" in oracle
+    assert "passage_axis > 3U" in oracle
     shoot_train = between(
         rune,
         "static void Link_TrainShootButtons",

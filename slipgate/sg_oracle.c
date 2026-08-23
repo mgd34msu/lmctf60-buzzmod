@@ -6752,7 +6752,7 @@ static qboolean SG_OracleTrainGateMove(const vec3_t source,
 
 	if (!source || !target || !button || !button->inuse || !train ||
 	    !train->inuse || !arrival_ms ||
-	    (require_cross && (!sweep_mins || !sweep_maxs || passage_axis >= 3U)))
+	    (require_cross && (!sweep_mins || !sweep_maxs || passage_axis > 3U)))
 		return false;
 	*arrival_ms = 0;
 	sg_oracle_passent = NULL;
