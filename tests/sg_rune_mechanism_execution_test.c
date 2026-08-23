@@ -136,6 +136,22 @@ int SG_TrainGateGameHandleTargets(edict_t *source, edict_t *activator)
 	return 0;
 }
 
+int SG_TrainGateGameAuthorizeButtonTouch(edict_t *button,
+	edict_t *activator)
+{
+	(void)button;
+	(void)activator;
+	return -1;
+}
+
+int SG_TrainGateGameAuthorizeButtonTargets(edict_t *button,
+	edict_t *activator)
+{
+	(void)button;
+	(void)activator;
+	return -1;
+}
+
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
 		fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, \
@@ -479,7 +495,8 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorizeActivation(
 	     link_index == LINK_PLATFORM_RIDE ||
 	     link_index == LINK_DIRECT_DOOR ||
 	     link_index == LINK_CELLAR_DOOR ||
-	     link_index == LINK_GATE_DOOR)
+	     link_index == LINK_GATE_DOOR ||
+	     link_index == LINK_CARRIER)
 	    ? SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 }
 
@@ -591,6 +608,7 @@ typedef struct execution_fixture_s
 	sg_mech_catalog_view_t catalog;
 	uint32_t edge_count;
 	qboolean multi_cellar;
+	qboolean button_carrier;
 } execution_fixture_t;
 
 static void PutU16(unsigned char *output, uint16_t value)
@@ -873,16 +891,23 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	test_edicts[KEY_GATE_CLOSE_SPEAKER].targetname = "gate-close";
 	test_edicts[KEY_GATE_CLOSE_SPEAKER].use = Use_Target_Speaker;
 
-	InitializeEntity(KEY_CARRIER_TRIGGER, "trigger_multiple");
+	InitializeEntity(KEY_CARRIER_TRIGGER,
+	    fixture->button_carrier ? "func_button" : "trigger_multiple");
 	entity = &test_edicts[KEY_CARRIER_TRIGGER];
 	entity->target = "carrier";
-	entity->touch = Touch_Multi;
-	entity->use = Use_Multi;
-	entity->solid = SOLID_TRIGGER;
-	entity->movetype = MOVETYPE_NONE;
+	entity->touch = fixture->button_carrier ? button_touch : Touch_Multi;
+	entity->use = fixture->button_carrier ? button_use : Use_Multi;
+	entity->solid = fixture->button_carrier ? SOLID_BSP : SOLID_TRIGGER;
+	entity->movetype = fixture->button_carrier
+	    ? MOVETYPE_STOP : MOVETYPE_NONE;
 	entity->wait = 0.2f;
+	entity->moveinfo.wait = 0.2f;
+	entity->moveinfo.state = SG_PLAT_STATE_BOTTOM;
 	VectorSet(entity->absmin, -34.0f, -34.0f, -1018.0f);
 	VectorSet(entity->absmax, 34.0f, 34.0f, -910.0f);
+	VectorSet(entity->moveinfo.start_origin, 0.0f, 0.0f, -1024.0f);
+	VectorSet(entity->moveinfo.end_origin, 0.0f, 0.0f, -1020.0f);
+	VectorCopy(entity->moveinfo.start_origin, entity->s.origin);
 	DoorEntity(KEY_CARRIER, "carrier");
 	entity = &test_edicts[KEY_CARRIER];
 	entity->spawnflags = 5;
@@ -1070,6 +1095,15 @@ static void FixtureBuildMultiMaster(execution_fixture_t *fixture)
 {
 	memset(fixture, 0, sizeof(*fixture));
 	fixture->multi_cellar = true;
+	BuildLiveCatalog(fixture);
+	BuildRune(fixture);
+	active_rune = &fixture->rune;
+}
+
+static void FixtureBuildButtonCarrier(execution_fixture_t *fixture)
+{
+	memset(fixture, 0, sizeof(*fixture));
+	fixture->button_carrier = true;
 	BuildLiveCatalog(fixture);
 	BuildRune(fixture);
 	active_rune = &fixture->rune;
@@ -1503,6 +1537,78 @@ static void TestCarrierExecution(execution_fixture_t *fixture)
 	CHECK(test_edicts[KEY_CARRIER].moveinfo.state == 2);
 	CHECK(test_edicts[KEY_CARRIER].velocity[2] == 32.0f);
 	CHECK(SG_RuneMechanismBindingCurrent(&binding));
+}
+
+static void TestButtonCarrierExecution(execution_fixture_t *fixture)
+{
+	static const short source_q8[3] = { 0, 0, -7999 };
+	static const short zero_velocity[3] = { 0, 0, 0 };
+	sg_rune_mechanism_binding_t binding;
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *button;
+	edict_t *carrier;
+	edict_t *entity;
+	char *saved_target;
+
+	FixtureBuildButtonCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	CHECK(!SG_AuthorizeButtonTouch(button, entity));
+	CHECK(!bot->declared_touched);
+
+	FixtureBuildButtonCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = button;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	carrier->moveinfo.state = SG_PLAT_STATE_TOP;
+	CHECK(!SG_AuthorizeButtonTouch(button, entity));
+	carrier->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	CHECK(SG_AuthorizeButtonTouch(button, entity));
+	button->activator = entity;
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->moveinfo.endfunc = button_wait;
+	button->think = Move_Done;
+	button->nextthink = 0.0f;
+	CHECK(SG_MechCatalogEntityExecutionMatches(KEY_CARRIER_TRIGGER,
+	    binding.entry_node, SG_MECHANISM_CONTROLLER_PLATFORM));
+	CHECK(SG_MechCatalogEntityExecutionMatches(KEY_CARRIER,
+	    binding.mover_node, SG_MECHANISM_CONTROLLER_PLATFORM));
+	CHECK(SG_RuneMechanismBindingCurrent(&binding));
+	saved_target = button->target;
+	button->target = "wrong-carrier";
+	CHECK(!SG_AuthorizeButtonTargets(button, entity));
+	button->target = saved_target;
+
+	FixtureBuildButtonCarrier(fixture);
+	button = &test_edicts[KEY_CARRIER_TRIGGER];
+	carrier = &test_edicts[KEY_CARRIER];
+	DirectBotPose(source_q8, zero_velocity);
+	entity = &test_edicts[KEY_BOT];
+	entity->groundentity = button;
+	DirectBotOwner(bot, LINK_CARRIER);
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_CARRIER, &binding));
+	CHECK(SG_AuthorizeButtonTouch(button, entity));
+	button->activator = entity;
+	button->moveinfo.state = SG_PLAT_STATE_TOP;
+	button->moveinfo.endfunc = button_wait;
+	button->think = Move_Done;
+	button->nextthink = 0.0f;
+	CHECK(SG_AuthorizeButtonTargets(button, entity));
+	CHECK(SG_HandleMechanismTargets(button, entity));
+	CHECK(bot->declared_triggered);
+	CHECK(door_uses[CHAIN_CARRIER] == 1);
+	CHECK(carrier->moveinfo.state == SG_PLAT_STATE_UP);
 }
 
 static void TestCarrierOneStageStaticEgress(execution_fixture_t *fixture)
@@ -2296,6 +2402,7 @@ int main(void)
 	TestPlatformRideDoorEgress(&fixture);
 	FixtureBuild(&fixture);
 	TestCarrierExecution(&fixture);
+	TestButtonCarrierExecution(&fixture);
 	FixtureBuild(&fixture);
 	TestCarrierOneStageStaticEgress(&fixture);
 	FixtureBuild(&fixture);

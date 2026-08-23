@@ -12,6 +12,8 @@ void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surface);
 void Touch_Plat_Center(edict_t *ent, edict_t *other, cplane_t *plane,
 	csurface_t *surface);
+void button_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surface);
 
 int SG_TeamIdx(int team)
 {
@@ -479,6 +481,7 @@ qboolean SG_LiftRest(edict_t *entry, edict_t *plat, edict_t *passent,
 	vec3_t mins = { -16, -16, -24 }, maxs = { 16, 16, 32 };
 	vec3_t start, end;
 	trace_t tr;
+	edict_t *expected = plat;
 	int axis, attempt;
 	static const float lifts[] = { 8.0f, 24.0f, 40.0f, 56.0f };
 
@@ -522,10 +525,34 @@ qboolean SG_LiftRest(edict_t *entry, edict_t *plat, edict_t *passent,
 		if (attempt == 4)
 			return false;
 	}
+	else if (!strcmp(plat->classname, "func_door") &&
+	         entry->touch == button_touch)
+	{
+		start[0] = (entry->absmin[0] + entry->absmax[0]) * 0.5f;
+		start[1] = (entry->absmin[1] + entry->absmax[1]) * 0.5f;
+		if (VectorCompare(plat->s.origin, plat->moveinfo.start_origin))
+		{
+			start[2] = entry->absmax[2] + 24.125f;
+			expected = entry;
+		}
+		else if (VectorCompare(plat->s.origin, plat->moveinfo.end_origin))
+		{
+			start[2] = plat->absmax[2] + 24.125f;
+			expected = plat;
+		}
+		else
+			return false;
+		VectorCopy(start, end);
+		end[2] -= expected == entry ? 8.0f : 128.0f;
+		tr = sg_host.trace(start, mins, maxs, end, passent,
+		                   MASK_PLAYERSOLID);
+		if (tr.ent != expected)
+			return false;
+	}
 	else
 		return false;
 	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f ||
-	    tr.ent != plat || tr.plane.normal[2] < 0.7f)
+	    tr.ent != expected || tr.plane.normal[2] < 0.7f)
 		return false;
 	for (axis = 0; axis < 3; axis++)
 	{

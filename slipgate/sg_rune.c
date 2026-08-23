@@ -2225,8 +2225,9 @@ static qboolean Mechanism_BindPlatform(rune_link_t *link, edict_t *platform,
 	const rune_mechanism_node_t *entry_node = Mechanism_Node(entry_key);
 	uint32_t cooldown = 0U;
 
-	if (entry_node && entry_node->touch_callback ==
-	        SG_MECH_CALLBACK_TOUCH_MULTI)
+	if (entry_node &&
+	    (entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI ||
+	     entry_node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH))
 		cooldown = entry_node->wait_ms > RUNE_MAX_COST_MS
 		    ? RUNE_MAX_COST_MS : entry_node->wait_ms;
 
@@ -2957,11 +2958,22 @@ static int Gen_MechanismSeedNear(vec3_t body, float horiz, float vert,
 		tr = sg_host.trace(start, mins, maxs, end,
 		                   NULL, MASK_PLAYERSOLID);
 		if (tr.startsolid || tr.allsolid ||
-		    (tr.fraction < 1.0f && tr.ent != support))
+		    (tr.fraction < 1.0f && tr.ent != support && tr.ent != entry))
 			continue;
-		if (approach_ms && !SG_OracleDeclaredApproach(
-		        gen_seeds[i].origin, body, entry, support, action, &trial_ms))
-			continue;
+		if (approach_ms)
+		{
+			const rune_mechanism_node_t *entry_node =
+			    Mechanism_Node(Mechanism_EntityKey(entry));
+			qboolean proved = action == RL_LIFT && entry_node &&
+			    entry_node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH
+				? SG_OracleButtonLiftApproach(gen_seeds[i].origin, body,
+				      entry, support, &trial_ms)
+				: SG_OracleDeclaredApproach(gen_seeds[i].origin, body,
+				      entry, support, action, &trial_ms);
+
+			if (!proved)
+				continue;
+		}
 		d3 = h2 + d[2] * d[2];
 		if (d3 < bestd)
 		{
@@ -3213,6 +3225,15 @@ static qboolean Lift_Endpoints(edict_t *mover, edict_t **entry_out,
 	else if (!strcmp(mover->classname, "func_door") &&
 	         entry_node->touch_callback == SG_MECH_CALLBACK_TOUCH_MULTI &&
 	         entry_node->use_callback == SG_MECH_CALLBACK_USE_MULTI &&
+	         mover_node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+	         mover_node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR)
+	{
+		VectorCopy(mover->moveinfo.start_origin, source);
+		VectorCopy(mover->moveinfo.end_origin, destination);
+	}
+	else if (!strcmp(mover->classname, "func_door") &&
+	         entry_node->touch_callback == SG_MECH_CALLBACK_BUTTON_TOUCH &&
+	         entry_node->use_callback == SG_MECH_CALLBACK_BUTTON_USE &&
 	         mover_node->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
 	         mover_node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR)
 	{
