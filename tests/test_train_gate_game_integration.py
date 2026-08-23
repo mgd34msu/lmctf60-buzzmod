@@ -35,6 +35,21 @@ def main() -> None:
     assert "SG_MECHANISM_CONTROLLER_TRAIN_SHOOT" in rune
     assert "SG_OracleTrainGateShot" in rune
     assert "SG_OracleTrainGateShot" in source("slipgate/sg_oracle.c")
+    shoot_train = between(
+        rune,
+        "static void Link_TrainShootButtons",
+        "/* Link one canonical door team",
+    )
+    ordered(
+        shoot_train,
+        "topology->component[source] !=",
+        "topology->component[reverse_source]",
+        "SG_OracleTrainGateShot",
+        "Train_PoseOpen",
+        "axis_source = source_by_axis_side",
+        "SG_OracleTrainGateEgress",
+    )
+    assert shoot_train.count("SG_OracleTrainGateShot") == 1
 
     game = source("slipgate/sg_train_gate_game.c")
     witness = between(game, "static int TrainWitness", "static sg_train_gate_pose_t")

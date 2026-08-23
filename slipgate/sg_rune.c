@@ -4069,7 +4069,8 @@ static void Link_Trains(void)
 		sg_host.dprint("rune: %d sealed train links\n", gen_train_links);
 }
 
-static void Link_TrainShootButtons(void)
+static void Link_TrainShootButtons(
+	const sg_compound_gen_game_topology_t *topology)
 {
 	uint32_t button_index;
 
@@ -4153,7 +4154,8 @@ static void Link_TrainShootButtons(void)
 		motion_axis = Train_TravelAxis(closed, open);
 		if (motion_axis < 0 ||
 		    !Train_ReverseTouchEndpoints(train_node->key, &reverse_source,
-		        &reverse_destination))
+		        &reverse_destination) || !topology || !topology->component ||
+		    topology->component[reverse_source] < 0)
 			continue;
 		for (source = 0; source < gen_num_seeds; source++)
 		{
@@ -4163,6 +4165,8 @@ static void Link_TrainShootButtons(void)
 			if (!gen_source_stable[source] ||
 			    gen_source_waterlevel[source] != 0 ||
 			    !Gen_SeedHasIncoming(source) || !Gen_SeedHasOutgoing(source) ||
+			    topology->component[source] !=
+			        topology->component[reverse_source] ||
 			    !SG_OracleTrainGateShot(gen_seeds[source].origin, button,
 			        contact, &flight_ms))
 				continue;
@@ -4215,15 +4219,13 @@ static void Link_TrainShootButtons(void)
 				if (source_side == SG_TRAIN_GATE_SIDE_NONE ||
 				    destination_side == SG_TRAIN_GATE_SIDE_NONE)
 					continue;
-				axis_source = reverse_source;
-				if (Train_SeedSweepAxisSide(gen_seeds[axis_source].origin,
+				axis_source = source_by_axis_side[axis][source_side];
+				if (axis_source < 0 ||
+				    Train_SeedSweepAxisSide(gen_seeds[reverse_source].origin,
 				        sweep_mins, sweep_maxs, (unsigned int)axis) != source_side ||
 				    Train_SeedSweepAxisSide(
 				        gen_seeds[reverse_destination].origin, sweep_mins,
-				        sweep_maxs, (unsigned int)axis) != destination_side ||
-				    !SG_OracleTrainGateShot(gen_seeds[axis_source].origin, button,
-				        contact_by_axis_side[axis][source_side],
-				        &flight_by_axis_side[axis][source_side]))
+				        sweep_maxs, (unsigned int)axis) != destination_side)
 					continue;
 				transaction_bound = opening_bound + (uint32_t)
 				    flight_by_axis_side[axis][source_side] + 1100U;
@@ -7349,7 +7351,7 @@ static void Prove_BaseLinks(door_topology_t *topology)
 		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
 		Link_Pushes();
 		Link_Trains();
-		Link_TrainShootButtons();
+		Link_TrainShootButtons(topology);
 		Link_Declare_Tail(declared_mark);
 	}
 
