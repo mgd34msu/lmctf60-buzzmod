@@ -787,6 +787,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "python_loader_arguments", "python_handshake_sha256",
                 "pseudo_map_allowlist", "python_environment", "acceptor_environment",
                 "controller_sha256",
+                "finalizer_sha256", "route_only_policy_sha256",
+                "route_only_policy_version",
             }
             self.assertEqual(expected, set(document))
             self.assertNotIn("version", document)

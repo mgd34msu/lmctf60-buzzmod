@@ -112,16 +112,27 @@ python3 -B tools/fleet-runner.py route-only-verify \
 ```
 
 The spec fixes the candidate lane/map order, engine/client/module/config/film
-identities, active bundle state, and controller authority. The controller
-reopens every final corpus result in manifest order: every noncandidate must
-be `PASS`, and the selected subset is exactly the candidate maps classified
-`ROUTE_ONLY`/`local_only`. A candidate classified `PASS` cannot appear in the
-spec, and omitting or adding a selected lane fails before launch. Selected
-roots and private game roots must be pairwise disjoint. Each lane has an
+identities, active bundle state, and content-addressed corpus authority. The
+finalizer reopens every immutable selected attempt in manifest order: every
+noncandidate must be `PASS`, and the selected subset is exactly the candidate
+maps classified `ROUTE_ONLY`/`local_only`. Mutable per-map result pointers are
+not match authority. A candidate classified `PASS` cannot appear in the spec,
+and omitting or adding a selected lane fails before launch. Selected roots and
+private game roots must be pairwise disjoint. Each lane has an
 initially absent `route-only-session.db` destination,
 and exact loaded `game.so`, `gamex86_64.so`, empty maplist, BSP, RUNE, and SNAG
 copies. Each selected controller result must match its RUNE and BSP bytes,
 module bytes, and the controller's stable port assignment.
+
+Export the strict `controller_authority` object from the verified final corpus;
+do not assemble its mixed file identities or 175-result inventory by hand:
+
+```sh
+python3 -B tools/fleet-runner.py route-only-authority \
+  --snapshot /freeze/rune-inputs \
+  --corpus-root /archive/rune-corpora/CORPUS_ID \
+  > /evidence/controller-authority.json
+```
 
 If all ten candidates are `PASS`, use the same command with an empty `lanes`
 array. It authenticates the full final controller result set, writes a frozen

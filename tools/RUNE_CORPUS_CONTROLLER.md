@@ -149,6 +149,44 @@ must remain canonical, bind the run fingerprint and artifact hash, and the
 retained `.snag` must still bind its exact evidence hash and declare
 `repairs 0`.
 
+## Final corpus publication
+
+After all 175 maps are accepted, publish the release authority with the exact
+frozen snapshot and generation run root:
+
+```sh
+python3 -B tools/rune_corpus_controller.py finalize \
+  --snapshot /freeze/rune-inputs \
+  --run-root /evidence/rune-generation \
+  --output-parent /archive/rune-corpora
+```
+
+Finalization rechecks every accepted result and its gates, permits
+`ROUTE_ONLY` only for the approved candidate policy, and publishes the
+content-addressed authority at `OUTPUT_PARENT/CORPUS_ID` without replacing an
+existing directory. It does not relocate the attempts: retained process
+evidence names the absolute private engine path that actually ran. The
+authority binds the selected immutable attempt results in the sealed source
+run root. `run` and `smoke` cannot resume that root. A repeated command may
+only verify and return the same corpus identity.
+
+Retain the sealed generation root permanently at the same absolute path as
+the content-addressed authority. Moving or deleting it invalidates the process
+and evidence paths recorded by the accepted attempts.
+
+Verify the published bytes independently before bundle assembly:
+
+```sh
+python3 -B tools/rune_corpus_controller.py verify-final \
+  --snapshot /freeze/rune-inputs \
+  --corpus-root /archive/rune-corpora/CORPUS_ID
+```
+
+The canonical authority binds the input fingerprint, shared route-only policy,
+ordered classifications, stable ports, selected attempt results, artifacts,
+and retained evidence. Mutable per-map result pointers and reports do not
+authorize the final corpus.
+
 ## Final sidecar attribution
 
 Bootstrap sidecars are replaced only after the persistent ten-lane fleet has

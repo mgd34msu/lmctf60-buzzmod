@@ -25,8 +25,8 @@ The project is complete when one unchanged source commit satisfies every gate:
 | Gameplay and bot source | Complete. D_SWIM, rocket jump, D_DROP, D_HOOK, combat, roles, objectives, local fallback, and human trace capture are implemented. |
 | Map source repair | Complete. No remaining map requires another source-owned graph repair for initial release. |
 | Corpus classification | 175 maps total. Development evidence identifies 10 route-only candidates, but this is not a fixed final count. Regenerate and test all 175 normally after the final freeze; classify only the maps that still fail complete-route closure as `ROUTE_ONLY`. |
-| Branches | `main` and `slipgate` share the current pre-freeze candidate. The synchronized commit must pass exact CI before the freeze. |
-| Current source wave | The route-only release work, production Dijkstra fallback, and CI-discovered fleet process/pipe repairs are integrated and independently reviewed. Full local gates and exact candidate CI pass. |
+| Branches | `main` and `slipgate` share the last exact-CI-green pre-freeze commit. The corpus-finalization wave must repeat synchronization and exact CI before the freeze. |
+| Current source wave | Production Dijkstra, fleet deadline repairs, final-corpus sealing, and fleet authority export are integrated. Both full local gates and independent review pass. |
 | Final freeze | Not started. Begin it only after exact CI passes on the synchronized commit. |
 | Final 175-map run | Not started. |
 | Production matches | Not started. Fake-engine tests are tooling proof, not match evidence. |
@@ -209,10 +209,11 @@ production late selector now runs after ordinary/BSP/swim closure and before
 human evidence or local-only publication. It uses exact movement owners,
 retains accepted links on open completion, and rolls them back on fatal error.
 
-Both full local build/test gates, source-size checks, deslop, linkage, and the
-complete-diff review pass. Focused fleet tests also cover the high-FD release
-barrier and cross-pipe event ordering. Complete every stage 1 gate below before
-creating the final snapshot.
+The pre-freeze source now seals the accepted immutable attempts behind a
+content-addressed authority, excludes mutable result pointers, exports the
+strict fleet handoff, and rejects out-of-policy route-only results. Both full
+local gates and independent adversarial review pass. Repeat synchronization
+and exact CI on both branches before creating the snapshot.
 
 ## Final execution plan
 
@@ -251,7 +252,10 @@ release tag.
    summary alone is not enough.
 5. Recheck every artifact through both C readers, the Python reader, lint,
    semantic checks, matching SNAG validation, and fresh-process cold load.
-6. Freeze the accepted corpus manifest and its evidence hashes.
+6. Run the controller `finalize` command. It must recheck all 175 results,
+   reject route-only classifications outside the approved candidate policy,
+   seal the source run root, and publish one immutable content-addressed corpus.
+7. Run `verify-final` against the published corpus before bundle assembly.
 
 ### 4. Install and test the production bundle
 

@@ -27,14 +27,16 @@ import sys
 import time
 from typing import Any, Mapping, Sequence
 
+if __package__:
+    from .rune_corpus_policy import APPROVED_ROUTE_ONLY_MAPS
+else:
+    from rune_corpus_policy import APPROVED_ROUTE_ONLY_MAPS
+
 
 LANES = tuple(f"s{index:02d}" for index in range(1, 11))
 OFFSETS = tuple(range(10))
 ROUTE_ONLY_LANES = tuple(f"r{index:02d}" for index in range(1, 11))
-ROUTE_ONLY_MAPS = (
-    "lmctf01", "lmctf06", "lmctf12", "lmctf15", "lmctf19",
-    "lmctf25", "tomb05", "xmap13", "xmap18", "xmap26",
-)
+ROUTE_ONLY_MAPS = APPROVED_ROUTE_ONLY_MAPS
 TOPMAPS_PATH = Path(__file__).with_name("topmaps.txt")
 MAX_JSON_BYTES = 64 * 1024 * 1024
 ZERO_HASH = "0" * 64
@@ -277,6 +279,31 @@ def _verify_file_record(record: Any, label: str, *, evidence_root: Path | None =
     current = _file_record(path)
     if current != record:
         raise FleetError(f"{label} file identity drift")
+    return path
+
+
+def _verify_final_file_record(
+        record: Any, label: str, *, evidence_root: Path | None = None,
+        ) -> Path:
+    """Verify the portable immutable-file record emitted by the finalizer."""
+    if not isinstance(record, dict) or set(record) != {"path", "mode", "size", "sha256"}:
+        raise FleetError(f"invalid {label} final file identity")
+    if (not isinstance(record["path"], str) or not Path(record["path"]).is_absolute() or
+            type(record["mode"]) is not int or record["mode"] < 0 or
+            record["mode"] > 0o777 or record["mode"] & 0o222 or
+            type(record["size"]) is not int or record["size"] < 0 or
+            not _valid_hash(record["sha256"])):
+        raise FleetError(f"invalid {label} final file identity fields")
+    path = Path(record["path"])
+    if evidence_root is not None:
+        path = _inside(path, evidence_root, label)
+    payload, info = _read_regular(path)
+    current = {
+        "path": str(path), "mode": stat.S_IMODE(info.st_mode),
+        "size": len(payload), "sha256": _hash(payload),
+    }
+    if info.st_nlink != 1 or current != record:
+        raise FleetError(f"{label} final file identity drift")
     return path
 
 
@@ -718,19 +745,96 @@ def _load_film_module(record: Any):
     return module
 
 
+def _load_route_finalizer(record: Any):
+    """Load the hash-attested final-corpus verifier beside this runner."""
+    path = Path(__file__).with_name("rune_corpus_finalizer.py")
+    if record != _file_record(path):
+        raise FleetError("route-only finalizer bytes differ from authority")
+    module_name = f"_lmctf_route_finalizer_{record['sha256']}"
+    module_spec = importlib.util.spec_from_file_location(module_name, path)
+    if module_spec is None or module_spec.loader is None:
+        raise FleetError("cannot load route-only final-corpus verifier")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_name] = module
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception:
+        if sys.modules.get(module_name) is module:
+            del sys.modules[module_name]
+        raise
+    if not callable(getattr(module, "verify_final_corpus", None)):
+        raise FleetError("route-only final-corpus verifier lacks verify_final_corpus")
+    return module
+
+
+def _load_route_controller(record: Any):
+    """Load the hash-attested corpus controller with normal module identity."""
+    path = Path(__file__).with_name("rune_corpus_controller.py")
+    if record != _file_record(path):
+        raise FleetError("route-only controller bytes differ from authority")
+    module_name = f"_lmctf_route_controller_{record['sha256']}"
+    module_spec = importlib.util.spec_from_file_location(module_name, path)
+    if module_spec is None or module_spec.loader is None:
+        raise FleetError("cannot load route-only controller verifier")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_name] = module
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception:
+        if sys.modules.get(module_name) is module:
+            del sys.modules[module_name]
+        raise
+    if not callable(getattr(module, "verify_snapshot", None)):
+        raise FleetError("route-only controller lacks snapshot verification")
+    return module
+
+
+def build_route_controller_authority(
+    snapshot_value: os.PathLike[str] | str,
+    corpus_root_value: os.PathLike[str] | str,
+) -> dict[str, Any]:
+    """Export the strict final-corpus object embedded in a route-only spec."""
+    snapshot = _safe_root(snapshot_value, "controller snapshot")
+    corpus_root = _safe_root(corpus_root_value, "final corpus root")
+    controller_record = _file_record(Path(__file__).with_name("rune_corpus_controller.py"))
+    finalizer_record = _file_record(Path(__file__).with_name("rune_corpus_finalizer.py"))
+    controller = _load_route_controller(controller_record)
+    finalizer = _load_route_finalizer(finalizer_record)
+    try:
+        verified = finalizer.verify_final_corpus(
+            controller, snapshot=snapshot, corpus_root=corpus_root
+        )
+    except Exception as exc:
+        raise FleetError(f"route-only final corpus is invalid: {exc}") from exc
+    if not isinstance(verified, Mapping):
+        raise FleetError("route-only final corpus verifier returned an invalid result")
+    required = {"corpus_id", "authority", "run_root", "port_base", "results"}
+    if set(verified) != required:
+        raise FleetError("route-only final corpus export is incomplete")
+    return {
+        "controller": controller_record,
+        "finalizer": finalizer_record,
+        "snapshot": str(snapshot),
+        "run_root": verified["run_root"],
+        "corpus_authority": verified["authority"],
+        "corpus_id": verified["corpus_id"],
+        "results": verified["results"],
+    }
+
+
 def _validate_route_controller_authority(
         authority: Any, bundle_roles: Mapping[str, dict], engine: Mapping[str, Any],
         aliases: Sequence[dict],
         ) -> dict[str, dict]:
-    """Re-open every accepted ROUTE_ONLY controller result, fail closed.
+    """Bind route-only matches to one verified immutable final corpus.
 
-    The controller owns RUNE acceptance. The ordinary-match receipt replays
-    the whole final corpus authority, then retains only its fixed candidate
-    maps classified local-only against the immutable snapshot and active bundle.
+    The finalizer owns all corpus revalidation. This layer verifies its own
+    bytes and the published authority, then retains only approved local-only
+    maps whose RUNE and BSP still match the active installed bundle.
     """
     required = {
-        "controller", "snapshot", "run_root", "fingerprint",
-        "fingerprint_document", "results",
+        "controller", "finalizer", "snapshot", "run_root", "corpus_authority",
+        "corpus_id", "results",
     }
     if not isinstance(authority, dict) or set(authority) != required:
         raise FleetError("route-only controller authority is incomplete")
@@ -740,25 +844,26 @@ def _validate_route_controller_authority(
         raise FleetError("route-only controller bytes differ from authority")
     if (not isinstance(authority["snapshot"], str) or
             not isinstance(authority["run_root"], str) or
-            not _valid_hash(authority["fingerprint"])):
-        raise FleetError("route-only controller path or fingerprint is invalid")
+            not _valid_hash(authority["corpus_id"])):
+        raise FleetError("route-only controller path or corpus ID is invalid")
     snapshot = _safe_root(authority["snapshot"], "controller snapshot")
     run_root = _safe_root(authority["run_root"], "controller run root")
-    document = _verify_file_record(
-        authority["fingerprint_document"], "controller fingerprint document"
+    corpus_authority_path = _verify_final_file_record(
+        authority["corpus_authority"], "final corpus authority"
     )
-    if document != _inside(run_root / "fingerprint-document.json", run_root,
-                           "controller fingerprint document"):
-        raise FleetError("route-only controller fingerprint document path drift")
-    document_bytes, _document_info = _read_regular(document)
-    module_spec = importlib.util.spec_from_file_location(
-        f"_lmctf_route_controller_{controller_record['sha256']}", controller_path
+    corpus_root = _safe_root(corpus_authority_path.parent, "final corpus root")
+    if corpus_root.name != authority["corpus_id"]:
+        raise FleetError("route-only final corpus root is not content-addressed")
+    expected_authority_path = _inside(
+        corpus_root / "corpus-authority.json", corpus_root, "final corpus authority"
     )
-    if module_spec is None or module_spec.loader is None:
-        raise FleetError("cannot load route-only controller verifier")
-    controller = importlib.util.module_from_spec(module_spec)
+    if corpus_authority_path != expected_authority_path:
+        raise FleetError("route-only final corpus authority path drift")
+    corpus_authority, _corpus_authority_bytes = _read_json(corpus_authority_path)
+    if corpus_authority.get("corpus_id") != authority["corpus_id"]:
+        raise FleetError("route-only final corpus authority corpus ID drift")
     try:
-        module_spec.loader.exec_module(controller)
+        controller = _load_route_controller(controller_record)
         verified_snapshot = controller.verify_snapshot(snapshot)
     except Exception as exc:
         raise FleetError(f"route-only controller snapshot is invalid: {exc}") from exc
@@ -783,36 +888,65 @@ def _validate_route_controller_authority(
         raise FleetError(f"route-only controller map manifest is invalid: {exc}") from exc
     if not set(ROUTE_ONLY_MAPS).issubset(maps):
         raise FleetError("route-only controller map manifest lacks a candidate")
-    results = authority["results"]
+    try:
+        verified_corpus = _load_route_finalizer(authority["finalizer"]).verify_final_corpus(
+            controller, snapshot=snapshot, corpus_root=corpus_root
+        )
+    except FleetError:
+        raise
+    except Exception as exc:
+        raise FleetError(f"route-only final corpus is invalid: {exc}") from exc
+    if not isinstance(verified_corpus, Mapping):
+        raise FleetError("route-only final corpus verifier returned an invalid result")
+    if verified_corpus.get("corpus_id") != authority["corpus_id"]:
+        raise FleetError("route-only final corpus verifier corpus ID drift")
+    if verified_corpus.get("authority") != authority["corpus_authority"]:
+        raise FleetError("route-only final corpus verifier authority drift")
+    verified_run_root = verified_corpus.get("run_root")
+    if not isinstance(verified_run_root, (str, os.PathLike)):
+        raise FleetError("route-only final corpus verifier run root is invalid")
+    if _safe_root(verified_run_root, "final corpus verifier run root") != run_root:
+        raise FleetError("route-only final corpus verifier run root drift")
+    port_base = verified_corpus.get("port_base")
+    if type(port_base) is not int or not (1 <= port_base <= 65535 - len(maps) + 1):
+        raise FleetError("route-only final corpus verifier port base is invalid")
+    results = verified_corpus.get("results")
+    if results != authority["results"]:
+        raise FleetError("route-only final corpus result inventory drift")
     if not isinstance(results, list) or len(results) != len(maps):
-        raise FleetError("route-only controller result inventory is incomplete")
+        raise FleetError("route-only final corpus result inventory is incomplete")
     checked = {}
     for index, item in enumerate(results):
-        if not isinstance(item, dict) or set(item) != {"map", "result", "stable_port"}:
-            raise FleetError("route-only controller result record is invalid")
+        if not isinstance(item, dict) or set(item) != {
+                "map", "stable_port", "classification", "route_contract", "attempt",
+                "attempt_result"}:
+            raise FleetError("route-only final corpus result record is invalid")
         map_name = maps[index]
         if (item["map"] != map_name or type(item["stable_port"]) is not int or
-                item["stable_port"] != controller.DEFAULT_PORT_BASE + maps.index(map_name)):
-            raise FleetError("route-only controller result map or port drift")
-        result_path = _verify_file_record(item["result"], "controller result")
-        if result_path != _inside(run_root / "runs" / map_name / "result.json", run_root,
-                                  "controller result"):
-            raise FleetError("route-only controller result path drift")
+                item["stable_port"] != port_base + maps.index(map_name) or
+                type(item["attempt"]) is not int or item["attempt"] < 1 or
+                item["classification"] not in {"PASS", "ROUTE_ONLY"} or
+                item["route_contract"] not in {"complete", "local_only"}):
+            raise FleetError("route-only final corpus result map or port drift")
+        expected_result_path = (
+            run_root / "runs" / map_name / f"attempt-{item['attempt']:04d}" / "result.json"
+        )
+        result_path = _verify_final_file_record(
+            item["attempt_result"], "final corpus attempt result", evidence_root=run_root
+        )
+        if result_path != _inside(expected_result_path, run_root, "final corpus attempt result"):
+            raise FleetError("route-only final corpus result path drift")
         try:
-            accepted = controller.validate_resumable_pass(
-                result_path, run_root=run_root, fingerprint=authority["fingerprint"],
-                fingerprint_document_bytes=document_bytes,
-                stable_port=item["stable_port"], snapshot=snapshot,
-                runtime_preflighted=True,
-            )
             result, _raw = controller._load_json_regular(result_path)
         except Exception as exc:
-            raise FleetError(f"route-only controller result is invalid: {exc}") from exc
-        classification = result.get("classification") if isinstance(result, dict) else None
-        if (accepted is not True or not isinstance(result, dict) or
-                result.get("map") != map_name or
-                classification not in {"PASS", "ROUTE_ONLY"}):
-            raise FleetError("route-only controller did not accept the final result")
+            raise FleetError(f"route-only final corpus result is invalid: {exc}") from exc
+        if (not isinstance(result, dict) or result.get("map") != map_name or
+                result.get("stable_port") != item["stable_port"] or
+                result.get("classification") != item["classification"] or
+                result.get("route_contract") != item["route_contract"] or
+                result.get("attempt") != item["attempt"]):
+            raise FleetError("route-only final corpus did not accept the final result")
+        classification = item["classification"]
         if classification == "ROUTE_ONLY" and map_name in ROUTE_ONLY_MAPS:
             asset_role = roles.get(f"asset:{map_name}")
             rune_role = bundle_roles.get(f"rune:{map_name}")
@@ -821,7 +955,7 @@ def _validate_route_controller_authority(
                     not isinstance(bsp_role, dict) or
                     result.get("artifact_sha256") != rune_role.get("sha256") or
                     asset_role.get("sha256") != bsp_role.get("sha256")):
-                raise FleetError("route-only controller artifact differs from active bundle")
+                raise FleetError("route-only final corpus artifact differs from active bundle")
         checked[map_name] = (classification, item)
     return _select_route_only_results(maps, checked)
 
@@ -1750,6 +1884,11 @@ def _parser() -> argparse.ArgumentParser:
     route_run.add_argument("--spec", type=Path, required=True)
     route_run.add_argument("--state-root", type=Path, required=True)
     route_run.add_argument("--evidence-root", type=Path, required=True)
+    authority = subparsers.add_parser(
+        "route-only-authority", help="export verified final-corpus match authority"
+    )
+    authority.add_argument("--snapshot", type=Path, required=True)
+    authority.add_argument("--corpus-root", type=Path, required=True)
     return parser
 
 
@@ -1782,6 +1921,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sys.modules[__name__], arguments.spec,
                 arguments.state_root, arguments.evidence_root,
             )
+        elif arguments.command == "route-only-authority":
+            print(_canonical(build_route_controller_authority(
+                arguments.snapshot, arguments.corpus_root
+            )).decode("ascii"), end="")
         else:
             raise FleetError("unrecognized fleet-runner command")
         return 0
