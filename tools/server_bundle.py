@@ -35,6 +35,8 @@ FIXED_ROLES = {
     "module-secondary": "game/gamex86_64.so",
     "pak": "game/lmctf6-buzzmod.pak",
     "config": "game/server.cfg",
+    "route-only-config": "game/route-only-match.cfg",
+    "route-only-maplist": "game/route-only-maplist.txt",
     "topmaps": "game/topmaps.txt",
     **{f"maplist:{lane}": f"game/maplists/{lane}.txt" for lane in LANES},
 }
@@ -266,6 +268,13 @@ def _role_path(role: str) -> str:
 
 
 def _role_payload(role: str) -> bytes | None:
+    if role in {"route-only-config", "route-only-maplist"}:
+        path = Path(__file__).with_name(
+            "route-only-match.cfg" if role == "route-only-config"
+            else "route-only-maplist.txt"
+        )
+        payload, _info = _read_regular(path, 1024 * 1024)
+        return payload
     if role == "topmaps":
         payload, _info = _read_regular(
             Path(__file__).with_name("topmaps.txt"), 1024 * 1024

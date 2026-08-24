@@ -116,6 +116,7 @@ typedef struct sg_rune_late_route_s
 typedef struct sg_rune_late_report_s
 {
 	sg_rune_late_route_t route[SG_RUNE_LATE_OBJECTIVE_COUNT];
+	uint64_t endpoint_pair_count;
 	uint32_t candidate_count;
 	uint32_t pair_count;
 	uint32_t next_pair_cursor;

@@ -47,6 +47,11 @@ class BundleFixture:
         self.config = b"set dedicated 1\n"
         self._add("config", "game/server.cfg", self.config)
         self._add(
+            "route-only-config", "game/route-only-match.cfg",
+            (ROOT / "tools" / "route-only-match.cfg").read_bytes(),
+        )
+        self._add("route-only-maplist", "game/route-only-maplist.txt", b"")
+        self._add(
             "topmaps", "game/topmaps.txt", (ROOT / "tools" / "topmaps.txt").read_bytes()
         )
         for offset, lane in enumerate(LANES):
@@ -202,6 +207,30 @@ class ServerBundleTest(unittest.TestCase):
                 rotation.write_spec(),
                 self.root / "bad-rotation.tar",
                 self.root / "bad-rotation.json",
+            )
+
+        missing_route_config = BundleFixture(self.root, "missing-route-config", b"same\n")
+        missing_route_config.entries = [
+            item for item in missing_route_config.entries
+            if item["role"] != "route-only-config"
+        ]
+        with self.assertRaisesRegex(server_bundle.BundleError, "incomplete"):
+            server_bundle.build_bundle(
+                missing_route_config.write_spec(),
+                self.root / "missing-route-config.tar",
+                self.root / "missing-route-config.json",
+            )
+
+        ambient_maplist = BundleFixture(self.root, "ambient-route-maplist", b"same\n")
+        route_maplist = next(
+            item for item in ambient_maplist.entries
+            if item["role"] == "route-only-maplist"
+        )
+        Path(route_maplist["source"]).write_bytes(b"ambient-map\n")
+        with self.assertRaisesRegex(server_bundle.BundleError, "content"):
+            server_bundle.build_bundle(
+                ambient_maplist.write_spec(), self.root / "ambient-route-maplist.tar",
+                self.root / "ambient-route-maplist.json",
             )
 
         install = self.root / "partial"

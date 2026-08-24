@@ -62,8 +62,8 @@ roles, chat, and persistent match instrumentation. Completion still requires:
   the movement, combat, perception, and team-play non-regression gates;
 - run the ten-server production fleet as persistent processes over the exact
   rotated top-20 lists and retain map-local receipts across native transitions;
-- freeze, install, verify, and publish one hash-bound source/corpus/bundle
-  identity.
+- freeze, install, and verify one hash-bound source/corpus/bundle identity,
+  then publish the supported module and static-asset release.
 
 See [`SLIPGATE.md`](SLIPGATE.md) for the design and current behavior, and the
 completion plan for the exact gates and dependency graph.
@@ -95,7 +95,7 @@ under the exact module/BSP/config identity.
 |-|-|
 | RUNE corpus | The tracked list/controller covers 175 distinct maps. When alphabetic variants exist, the unsuffixed base is excluded; both `lmctf02a` and `lmctf02c` remain separate identities. The controller requires GNU/Make C-reader agreement with Python and lint, runs applicable semantic checks, and requires a separate bounded cold-load process before PASS. The 175-map generation run has not yet completed. |
 | `lmctf58` | All ten required door-controller identities are retained. The accepted fresh artifact passes both C readers, Python decoding, lint, the exact semantic checker, sanitizers, and a separate fresh-process cold load. |
-| Fleet | Non-random maplists now preserve file order and advance/wrap in the same `q2ded` process. `iterate2.sh` still launches finite one-map processes with hard-coded roster tables, and `waveloop.sh` recreates them and discovers a repo-root module. Persistent ten-process top-20 operation and explicit bundle install are not implemented. |
+| Fleet | Non-random maplists preserve file order and advance/wrap in the same `q2ded` process. The authenticated bundle installer and persistent fleet runner are implemented and test-covered; production installation and the ten-process run against the final 175-map bundle remain pending. |
 | Tool readers | `runeio.py --expected-identity` authenticates a reference RUNE and checks the artifact identity; `corpusgraph.py` has one strict loader with duplicate-key, non-finite-number, and contextual seed-weight validation. |
 | Bot outcomes | Telemetry consumers now parse the production `seed/goal/sgoal/spd` schema and fail on zero recognized rows. Exact-build matched trials for steal initiation, conversion, defense, and captures remain open. |
 | Release | The workflow builds the Linux/Windows modules and runs both Make-dialect host gates. The complete authenticated server bundle, transactional cutover, persistent-fleet cycle, and final tag are not complete. |

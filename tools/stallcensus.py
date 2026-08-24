@@ -8,6 +8,7 @@ The output describes evidence; snagrepair owns repair selection and encoding.
 
 import argparse
 import glob as globmod
+import importlib
 import json
 import math
 import os
@@ -15,8 +16,20 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import film
-import conduct
+
+
+class _AnalysisModule:
+    """Load visual-analysis dependencies only for the visual reducers."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, name):
+        return getattr(importlib.import_module(self.name), name)
+
+
+film = _AnalysisModule("film")
+conduct = _AnalysisModule("conduct")
 
 DT = 0.1                     # server frame step, same as conduct.py/film.py
 
