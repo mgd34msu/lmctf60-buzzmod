@@ -63,8 +63,8 @@
     "tools/waveloop.sh": 1
   },
   "oversized_files": {
-    "GNUmakefile": 3984,
-    "Makefile": 4447,
+    "GNUmakefile": 3983,
+    "Makefile": 4446,
     "slipgate/sg_arach.c": 3766,
     "slipgate/sg_caco.c": 2117,
     "slipgate/sg_chat.c": 3812,

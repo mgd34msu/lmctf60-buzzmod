@@ -1503,7 +1503,7 @@ def _spawn_held_engine(lane: str, engine: dict, argv: list[str], cwd: Path,
         _arm_parent_death(parent)
 
     barrier = (
-        "fd=$1; shift; IFS= read -r release <&$fd; "
+        "fd=$1; shift; IFS= read -r release < /proc/self/fd/$fd; "
         "test \"$release\" = R || exit 125; exec \"$@\""
     )
     wrapper = ["/bin/sh", "-c", barrier, "fleet-barrier", str(release_read), *argv]
