@@ -11,6 +11,19 @@ from tools import rune_corpus_controller as controller
 
 
 class BuildPythonRuntimeTest(unittest.TestCase):
+    def test_optional_zstd_extension_is_a_dependency_root_when_available(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dynload = Path(temporary)
+            zstd = dynload / "_zstd.cpython-314-x86_64-linux-gnu.so"
+            unrelated = dynload / "_sqlite3.cpython-314-x86_64-linux-gnu.so"
+            zstd.write_bytes(b"zstd")
+            unrelated.write_bytes(b"sqlite")
+
+            roots = build_python_runtime._extension_dependency_roots(dynload)
+
+            self.assertIn(zstd, roots)
+            self.assertNotIn(unrelated, roots)
+
     def test_loader_listing_extracts_only_resolved_absolute_libraries(self):
         listing = """
 \tlinux-vdso.so.1 (0x00007fff)
