@@ -56,6 +56,20 @@ snapshot must contain:
   the ten-controller/two-flag-route-core checker for `lmctf58`);
 - the generator configuration and the map manifest.
 
+Use the standalone `tools/rune.cfg` as the generator configuration. Snapshot it
+with this role and logical path:
+
+```text
+generator_config@game/rune.cfg=/absolute/path/to/tools/rune.cfg
+```
+
+The file sets `deathmatch 1`, `maxclients 16`, `timelimit 0`, `capturelimit 8`,
+`ctfflags 16`, `minimumplayers 0`, `bot_grapple 0`, `bot_groundhook 0`,
+`maplist_file "__none__"`, and `sv_botfill 0`. It must contain no `exec`,
+`botfile`, `botlib`, map, or port command. The tracked
+`rune-onebot-validation.cfg` and `rune-solo-validation.cfg` files are
+validation-only overlays. Do not snapshot either overlay.
+
 Write `input-manifest.json` by hashing every regular input file, rejecting
 symlinks and unsupported file types, then make the snapshot read-only.  The
 controller must verify every path, mode, size, and SHA-256 before launch and

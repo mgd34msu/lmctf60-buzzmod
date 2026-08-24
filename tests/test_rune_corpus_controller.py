@@ -87,9 +87,13 @@ def bootstrap_snag_text(
 
 
 class FakeGateRunner:
-    def __init__(self, map_name: str, *, python_seeds: int | None = None):
+    def __init__(
+        self, map_name: str, *, python_seeds: int | None = None,
+        load_libzstd: bool = True,
+    ):
         self.map_name = map_name
         self.python_seeds = python_seeds
+        self.load_libzstd = load_libzstd
         self.commands: list[list[str]] = []
         self.kwargs: list[dict] = []
 
@@ -135,7 +139,7 @@ class FakeGateRunner:
                     runtime / "lib/libffi.so.8",
                     runtime / "lib/liblzma.so.5",
                     runtime / "lib/libz.so.1",
-                    runtime / "lib/libzstd.so.1",
+                    *((runtime / "lib/libzstd.so.1",) if self.load_libzstd else ()),
                 )),
                 "sys_path": [str((runtime / f"lib/python{version}").resolve(strict=True))],
                 "dont_write_bytecode": True,
@@ -775,15 +779,18 @@ class RuneCorpusControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(controller.CorpusError, "bytecode cache"):
             controller._python_runtime_layout(entries)
 
-    def test_python_runtime_closure_requires_libzstd(self):
+    def test_python_runtime_closure_accepts_build_without_optional_libzstd(self):
         with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(
-                controller.CorpusError, r"libraries=.*'libzstd': 0"
-            ):
-                self.make_snapshot(
-                    Path(temporary),
-                    runtime_omissions=frozenset({"lib/libzstd.so.1"}),
-                )
+            snapshot = self.make_snapshot(
+                Path(temporary),
+                runtime_omissions=frozenset({"lib/libzstd.so.1"}),
+            )
+            self.assertNotIn(
+                "libzstd", controller.verify_snapshot(snapshot)["python_runtime"]
+            )
+            controller.preflight_python_runtime(
+                snapshot, runner=FakeGateRunner("lmctf01", load_libzstd=False)
+            )
 
     def test_private_runtime_probe_rejects_host_origins_and_ignores_host_env(self):
         with tempfile.TemporaryDirectory() as temporary:

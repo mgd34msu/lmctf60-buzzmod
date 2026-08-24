@@ -307,7 +307,7 @@ including `lmctf02a` and `lmctf04`.
       Exact-source CI is fully green on both `slipgate` and `main`, including
       both Windows builds, the packaged Linux module, all
       compiler jobs, both Make dialects, and the version check.
-- [ ] Repair the remaining maps whose objective route core is closed.
+- [x] Repair the remaining maps whose objective route core is closed.
       `smap39` is accepted in the canonical source.
       The source-identical live run passed generation, both readers, semantic
       gates, and fresh-process cold load with 998 seeds and 20,805 links. Its
@@ -1421,9 +1421,22 @@ manifested extension layout satisfies the unchanged fail-closed private-runtime
 contract. Two independent reviews found no semantic defect, the exact cached
 Python artifact built a private runtime under Ubuntu 24.04, and the complete
 GNUmakefile/Makefile by GCC/Clang local matrix again passes with zero warnings
-and clean `ldd -r`. Committing and synchronizing this repair and then repeating
-exact CI on both refs remain in progress. The detached-final-commit 175-map
-freeze remains pending.
+and clean `ldd -r`. The synchronized exact-CI rerun passed both Windows builds
+and the packaged Linux module, then all four host jobs found one remaining
+portable-runtime assumption: the controller required `libzstd` even when the
+selected Python build neither links nor loads it. The builder already copies
+the actual loader-reported dependency closure, and preflight rejects every
+loaded library outside the immutable manifest. A failing portability regression
+now covers a valid runtime without optional `libzstd`; removing only that fixed
+marker passes the complete 66-test controller/runtime/workflow suite while
+retaining the hostile-library rejection gate. The repeated full
+GNUmakefile/Makefile by GCC/Clang local matrix is green with zero warnings and
+clean `ldd -r`; exact CI must still be repeated for this repair.
+
+The detached-final-commit 175-map freeze remains pending. The standalone
+generator config is tracked at `tools/rune.cfg`. Before the final snapshot,
+snapshot it directly as `generator_config@game/rune.cfg`. The tracked
+validation configs remain overlays and must not be used as the generator role.
 
 ## Real-match validation
 

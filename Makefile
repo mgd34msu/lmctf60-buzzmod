@@ -791,6 +791,7 @@ BOTKIN_TEST := tests/test_botkin_cli.py
 FILM_PYTHON ?= $(HOME)/.venvs/slipgate-film/bin/python
 SHEET_CLI_TEST := tests/test_fightsheet_cli_status.py
 RUNE_CORPUS_CONTROLLER_TEST := tests/test_rune_corpus_controller.py
+RUNE_GENERATOR_CONFIG_TEST := tests/test_rune_generator_config.py
 BUILD_PYTHON_RUNTIME_TEST := tests/test_build_python_runtime.py
 FLEET_RUNNER_TEST := tests/test_fleet_runner.py
 FLEET_RUNNER_LIVE_TEST := tests/test_fleet_runner_live.py
@@ -1359,6 +1360,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-mechanism-catalog-test rune-mechanism-execution-test rune-binding-test \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
+	rune-generator-config-test \
 	fleet-runner-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
 	deslop-test \
@@ -3611,7 +3613,9 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(RUNGEN_TEST) \
 		$(RUNGEN_PAIR_TEST) \
 		$(BOTKIN_TEST) $(SHEET_CLI_TEST) \
-		$(RUNE_CORPUS_CONTROLLER_TEST) $(BUILD_PYTHON_RUNTIME_TEST) \
+		$(RUNE_CORPUS_CONTROLLER_TEST) $(RUNE_GENERATOR_CONFIG_TEST) \
+		tools/rune.cfg \
+		$(BUILD_PYTHON_RUNTIME_TEST) \
 		$(FLEET_RUNNER_TEST) $(FLEET_RUNNER_LIVE_TEST) \
 		tools/fleet-runner.py tools/fleet_runner_live.py tools/topmaps.txt \
 		$(SERVER_BUNDLE_TEST) tools/server_bundle.py \
@@ -3710,6 +3714,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)python3 $(BOTKIN_TEST)
 	$(Q)$(FILM_PYTHON) -B $(SHEET_CLI_TEST)
 	$(Q)python3 -m unittest tests.test_rune_corpus_controller \
+		tests.test_rune_generator_config \
 		tests.test_build_python_runtime
 	$(Q)python3 -B $(BSPMECHANISMS_TEST)
 	$(Q)python3 $(WAVELOOP_PROCESS_TEST)
@@ -3866,6 +3871,10 @@ rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
 	$(E) [TEST] RUNE corpus controller
 	$(Q)python3 -m unittest tests.test_rune_corpus_controller \
 		tests.test_build_python_runtime
+
+rune-generator-config-test: $(RUNE_GENERATOR_CONFIG_TEST) tools/rune.cfg
+	$(E) [TEST] RUNE generator config
+	$(Q)python3 -m unittest tests.test_rune_generator_config
 
 fleet-runner-test: $(FLEET_RUNNER_TEST) $(FLEET_RUNNER_LIVE_TEST) \
 		$(SERVER_BUNDLE_TEST) tools/fleet-runner.py tools/fleet_runner_live.py \
