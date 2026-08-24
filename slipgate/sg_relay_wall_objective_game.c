@@ -387,8 +387,8 @@ static int RelayWallGameProve(void *raw,
 	edict_t *wall;
 	const rune_mechanism_node_t *wall_node;
 	uint32_t pose_count = 0U;
-	uint32_t approach_ms;
-	uint32_t egress_ms;
+	uint32_t approach_ms = 0U;
+	uint32_t egress_ms = 0U;
 	int opened = 0;
 	int proved = 0;
 	int outcome = 0;

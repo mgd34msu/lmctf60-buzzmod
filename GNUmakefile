@@ -1635,18 +1635,18 @@ $(COMPOUND_PUBLICATION_TEST_BIN): $(COMPOUND_PUBLICATION_TEST_OBJS)
 
 $(RUNE_INSTALL_TEST_BIN): $(RUNE_INSTALL_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_INSTALL_TEST_OBJS) $(LDFLAGS)
-
 $(RUNE_PROOF_TEST_BIN): $(RUNE_PROOF_TEST_OBJS)
 	$(CC) -o $@ $(RUNE_PROOF_TEST_OBJS) $(LDFLAGS)
 
 $(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN): \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS) slipgate/sg_rune_late_path.c \
-		slipgate/sg_rune_reverse_boundary.c slipgate/sg_rune_topology.c
+		slipgate/sg_rune_reverse_boundary.c slipgate/sg_rune_topology.c \
+		tests/sg_rune_objective_diagnostics_link_stubs.c
 	$(CC) $(CFLAGS) -std=c11 -I. -Wl,--gc-sections -o $@ \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS) \
 		slipgate/sg_rune_late_path.c slipgate/sg_rune_reverse_boundary.c \
-		slipgate/sg_rune_topology.c $(LDFLAGS)
-
+		slipgate/sg_rune_topology.c \
+		tests/sg_rune_objective_diagnostics_link_stubs.c $(LDFLAGS)
 $(REPLAY_TEST_BIN): $(REPLAY_TEST_OBJS)
 	$(CC) -o $@ $(REPLAY_TEST_OBJS) $(LDFLAGS)
 

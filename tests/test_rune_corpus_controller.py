@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import tempfile
 import threading
@@ -26,6 +27,18 @@ from tests.test_rune_artifact import _build_rune
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def small_python_elf(loader_name: str) -> bytes:
+    """Return a minimal ELF64 fixture whose PT_INTERP names ``loader_name``."""
+    interpreter = f"/lib64/{loader_name}".encode("ascii") + b"\0"
+    elf_header = b"\x7fELF\x02\x01\x01" + b"\0" * 9 + struct.pack(
+        "<HHIQQQIHHHHHH", 3, 62, 1, 0, 64, 0, 0, 64, 56, 1, 0, 0, 0,
+    )
+    program_header = struct.pack(
+        "<IIQQQQQQ", 3, 4, 120, 0, 0, len(interpreter), len(interpreter), 1,
+    )
+    return elf_header + program_header + interpreter
 
 
 def report(map_name: str, *, seeds: int = 7, links: int = 9,
@@ -150,6 +163,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
         action_hash: bytes = b"a",
         runtime_json: bytes = b"private json",
         runtime_source: Path | None = None,
+        runtime_native_fixture: tuple[str, bytes] | None = None,
         runtime_omissions: frozenset[str] = frozenset(),
         actual_tools: bool = False,
         acceptor_output: bytes | None = None,
@@ -169,14 +183,21 @@ class RuneCorpusControllerTests(unittest.TestCase):
         add("bin/q2ded", "engine", b"#!/bin/sh\nexit 0\n", 0o755)
         runtime = runtime_source or sources / "python-runtime-source"
         version = f"{os.sys.version_info.major}.{os.sys.version_info.minor}"
-        loader = next(
-            Path(line.rsplit(maxsplit=1)[-1]).resolve(strict=True)
-            for line in Path("/proc/self/maps").read_text().splitlines()
-            if "/ld-linux-" in line and line.rsplit(maxsplit=1)[-1].startswith("/")
-        )
+        if runtime_native_fixture is None:
+            loader = next(
+                Path(line.rsplit(maxsplit=1)[-1]).resolve(strict=True)
+                for line in Path("/proc/self/maps").read_text().splitlines()
+                if "/ld-linux-" in line and line.rsplit(maxsplit=1)[-1].startswith("/")
+            )
+            interpreter_data = Path(os.sys.executable).resolve(strict=True).read_bytes()
+            loader_data = loader.read_bytes()
+        else:
+            loader_name, interpreter_data = runtime_native_fixture
+            loader = Path("/fixture") / loader_name
+            loader_data = interpreter_data
         runtime_files = {
-            f"bin/python{version}": Path(os.sys.executable).resolve(strict=True).read_bytes(),
-            f"lib/{loader.name}": loader.read_bytes(),
+            f"bin/python{version}": interpreter_data,
+            f"lib/{loader.name}": loader_data,
             f"lib/libpython{version}.so.1.0": b"private libpython",
             f"lib/python{version}/json/__init__.py": runtime_json,
             f"lib/python{version}/runpy.py": b"private runpy",
@@ -676,13 +697,24 @@ class RuneCorpusControllerTests(unittest.TestCase):
     def test_snapshot_completes_partial_regular_file_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
             real_write = os.write
+            loader_name = "ld-linux-x86-64.so.2"
+            native_fixture = small_python_elf(loader_name)
+            write_sizes = []
 
             def partial_write(fd, payload):
-                return real_write(fd, payload[:17])
+                written = real_write(fd, payload[:17])
+                write_sizes.append(written)
+                return written
 
             with mock.patch.object(os, "write", side_effect=partial_write):
-                snapshot = self.make_snapshot(Path(temporary))
+                snapshot = self.make_snapshot(
+                    Path(temporary),
+                    runtime_native_fixture=(loader_name, native_fixture),
+                )
             controller.verify_snapshot(snapshot)
+            self.assertGreater(len(native_fixture), 17)
+            self.assertGreater(len(write_sizes), 1)
+            self.assertTrue(all(0 < size <= 17 for size in write_sizes))
             self.thaw(snapshot)
 
     def test_snapshot_rejects_unmanifested_file_and_directory(self):

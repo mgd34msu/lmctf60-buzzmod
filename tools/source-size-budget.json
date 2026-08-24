@@ -124,7 +124,7 @@
     "tests/test_defense_combat_integration.py": 901,
     "tests/test_offense_flag_pickup_recovery.py": 1003,
     "tests/test_rune_artifact.py": 2918,
-    "tests/test_rune_corpus_controller.py": 2331,
+    "tests/test_rune_corpus_controller.py": 2363,
     "tests/test_runegen_gate.py": 458,
     "tests/test_snagrepair.py": 911,
     "tests/test_strike_integration.py": 2058,
