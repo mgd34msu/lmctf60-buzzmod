@@ -1407,13 +1407,23 @@ contract is part of both rune-update gates. The production private-Python
 runtime builder is documented and its real link-free output is tested with the
 corpus controller. These focused targets pass under GNU and Make.
 
-The final combined staged source now passes the complete local pre-integration
-matrix: GNUmakefile and Makefile with both GCC and Clang, including `all` and
-the full `host-test` suite. All four warning scans are empty, all four modules
-pass `ldd -r`, the generated action contract is current, both deslop gates
-report zero findings, and the worktree and cached diff checks are clean. Exact
-commit CI, branch integration, and the detached-final-commit 175-map freeze
-remain pending.
+The final combined source passed the complete local pre-integration matrix:
+GNUmakefile and Makefile with both GCC and Clang, including `all` and the full
+`host-test` suite. All four warning scans were empty, all four modules passed
+`ldd -r`, the generated action contract was current, both deslop gates reported
+zero findings, and the worktree and cached diff checks were clean. That source
+was committed, merged, and pushed with `main` and `slipgate` at the same merge
+commit. Exact CI on both refs then exposed eight MSVC warning locations and a
+hosted-runner Python-runtime-builder test that assumes `/usr/bin/python3` has
+the required extension modules. The warning-only repairs preserve runtime
+semantics. CI now provisions a pinned standard CPython 3.14 whose separately
+manifested extension layout satisfies the unchanged fail-closed private-runtime
+contract. Two independent reviews found no semantic defect, the exact cached
+Python artifact built a private runtime under Ubuntu 24.04, and the complete
+GNUmakefile/Makefile by GCC/Clang local matrix again passes with zero warnings
+and clean `ldd -r`. Committing and synchronizing this repair and then repeating
+exact CI on both refs remain in progress. The detached-final-commit 175-map
+freeze remains pending.
 
 ## Real-match validation
 
@@ -1485,8 +1495,9 @@ Downloadable RUNE or PAK packaging remains deferred until explicitly resumed.
 ## Critical path
 
 ```text
-finish the remaining graph repairs
-  -> pass exact CI and create a new source, module, and input freeze
+commit and synchronize the locally proven exact-CI repairs
+  -> pass exact CI on both synchronized branches
+  -> create a new source, module, and input freeze
   -> restart and structurally validate all 175 RUNEs
   -> prove route completion or the route-only real-match rule for each map
   -> run ordinary real matches
@@ -1510,7 +1521,7 @@ finish the remaining graph repairs
 - [x] Declared-door replay integrated, with `lmctf03` and `mactf01` cold-ready.
 - [x] Separate cold-load timeout integrated, tested, and green in exact CI.
 - [x] `lmctf04` objective-root repair integrated and accepted end to end.
-- [ ] Remaining graph blockers repaired and integrated.
+- [x] Remaining graph blockers repaired and integrated.
 - [ ] New final combined source, tool, module, and input freeze.
 - [x] Immutable server-bundle assembly, verification, atomic activation,
       installed identity, failure recovery, and rollback tooling.

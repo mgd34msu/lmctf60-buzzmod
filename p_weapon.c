@@ -2000,7 +2000,7 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 			if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM))
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghit.wav"), 1, ATTN_NORM, 0);
 			else
-				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8, ATTN_NORM, 0);
+				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8f, ATTN_NORM, 0);
 			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 8, 8, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
 		}
 	}
@@ -2092,7 +2092,7 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	gi.linkentity(bolt);
 	SG_HumanTraceHookFire(self, bolt);
 	gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/grfire.wav"),
-	    0.8, ATTN_NORM, 0);
+	    0.8f, ATTN_NORM, 0);
 	tr = gi.trace(self->s.origin, NULL, NULL, bolt->s.origin, self,
 	    MASK_SHOT);
 	if (tr.fraction < 1.0)

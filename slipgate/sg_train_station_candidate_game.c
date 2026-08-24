@@ -228,32 +228,34 @@ static int StationDirectionGenerate(
 	}
 	for (approach = 0; approach < request->num_seeds; approach++)
 	{
-		station_dry_candidate_t candidate;
+		station_dry_candidate_t ranked_candidate;
 		uint32_t position;
 
 		if (best_dry_by_approach[approach] < 0 ||
 		    !StationApproachDistance2(request->seeds[approach].origin, train,
-		        &candidate.distance2))
+		        &ranked_candidate.distance2))
 			continue;
-		candidate.dry_index = best_dry_by_approach[approach];
-		candidate.approach = approach;
+		ranked_candidate.dry_index = best_dry_by_approach[approach];
+		ranked_candidate.approach = approach;
 		if (ranked_count == STATION_BOARD_PROOF_CAP &&
-		    !StationCandidateBefore(&candidate, &ranked[ranked_count - 1U]))
+		    !StationCandidateBefore(&ranked_candidate,
+		        &ranked[ranked_count - 1U]))
 			continue;
 		position = ranked_count < STATION_BOARD_PROOF_CAP ? ranked_count++ :
 			STATION_BOARD_PROOF_CAP - 1U;
 		while (position > 0U &&
-		       StationCandidateBefore(&candidate, &ranked[position - 1U]))
+		       StationCandidateBefore(&ranked_candidate,
+		           &ranked[position - 1U]))
 		{
 			ranked[position] = ranked[position - 1U];
 			position--;
 		}
-		ranked[position] = candidate;
+		ranked[position] = ranked_candidate;
 	}
 	sg_host.level_free(best_dry_by_approach);
 	for (uint32_t rank = 0U; rank < ranked_count; rank++)
 	{
-		int approach = ranked[rank].approach;
+		int board_approach = ranked[rank].approach;
 		vec3_t stage;
 		vec3_t board;
 		vec3_t carried;
@@ -262,12 +264,12 @@ static int StationDirectionGenerate(
 		uint32_t step;
 		qboolean carry_ok = true;
 
-		if (!StationBoardStage(request->seeds[approach].origin, train,
+		if (!StationBoardStage(request->seeds[board_approach].origin, train,
 		        stage))
 			continue;
 		StationSetPose(train, source_corner);
 		station_diagnostics.board_attempts++;
-		if (!SG_OracleTrainStationBoard(request->seeds[approach].origin,
+		if (!SG_OracleTrainStationBoard(request->seeds[board_approach].origin,
 		        stage, train,
 		        direction->source_dwell_ms, &approach_ms, board))
 			continue;
@@ -308,7 +310,7 @@ static int StationDirectionGenerate(
 			int egress_ms;
 			int cost = RUNE_MAX_COST_MS;
 
-			if (destination == approach ||
+			if (destination == board_approach ||
 			    !request->source_stable[destination] ||
 			    request->source_waterlevel[destination] != 0 ||
 			    !request->has_outgoing(request->context, destination))
@@ -326,7 +328,7 @@ static int StationDirectionGenerate(
 			station_diagnostics.egress_successes++;
 			if (cost >= best_cost)
 				continue;
-			best_source = approach;
+			best_source = board_approach;
 			best_destination = destination;
 			best_egress_ms = egress_ms;
 			best_cost = cost;
