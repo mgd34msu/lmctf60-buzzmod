@@ -51,4 +51,11 @@ sg_rune_file_inspect_status_t SG_RuneFileInspect(const char *path,
 	const rune_identity_t *expected_identity, rune_artifact_t *artifact_out,
 	int *os_error_out);
 
+/* Re-read and hash the entire authenticated artifact. MATCH means both the
+ * decoded identity/extent and the exact encoded bytes still match the source
+ * snapshot named by expected_sha256. */
+sg_rune_file_inspect_status_t SG_RuneFileInspectExact(const char *path,
+	const rune_identity_t *expected_identity, const char *expected_sha256,
+	rune_artifact_t *artifact_out, int *os_error_out);
+
 #endif /* SG_RUNE_FILE_H */

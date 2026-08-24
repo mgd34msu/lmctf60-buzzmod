@@ -11,6 +11,31 @@ how the tools fit together and which artifacts they own.
   both native readers, Python decoding, lint, applicable semantic checks, and a
   separate bounded cold load agree on the artifact.
 
+`build_python_runtime.py`
+
+: Builds the link-free private Python runtime required by an immutable corpus
+  snapshot. The output path must not already exist. Build it from the Python
+  interpreter that will supply the standard library and extension modules:
+
+  ```sh
+  python3 -B tools/build_python_runtime.py \
+    --python /usr/bin/python3 \
+    --output /absolute/path/to/python-runtime
+  ```
+
+  Pass that exact directory to the complete snapshot command under the one
+  required runtime role and logical name:
+
+  ```text
+  --file python_runtime@python-runtime=/absolute/path/to/python-runtime
+  ```
+
+  The builder copies the interpreter, dynamic loader, standard library,
+  extension modules, and their resolved shared-library closure without
+  symlinks. It removes bytecode caches and freezes the completed directory.
+  The controller hashes every file and runs Python through the copied loader;
+  do not modify the directory after the builder returns.
+
 `rune-corpus-maps.txt`
 
 : Exact ordered list of 175 required maps. An unsuffixed base is excluded when
@@ -135,6 +160,34 @@ how the tools fit together and which artifacts they own.
   update, or other server-frame effect that a Pmove-only replay must model
   explicitly.
 
+  Legacy traces captured before runtime RUNE binding can be recovered without
+  weakening normal imports. Recovery requires an unbound replay, a
+  `local_only` RUNE, and exact map, BSP, entity, and physics identity:
+
+  ```sh
+  python3 tools/runelearn.py recover \
+    --rune /absolute/path/to/maps/lmctf01.rune \
+    --replay /absolute/path/to/traces/lmctf01.replay.json \
+    --output /absolute/path/to/traces/lmctf01.recovered.json
+  ```
+
+  The recovered binding is marked `posthoc-identity-exact`. It only permits
+  route nomination; the in-engine oracle must still reproduce every edge.
+
+  To nominate both dry runs and legacy hook pulls from that recovered v1
+  replay, build one source-bound learning artifact:
+
+  ```sh
+  python3 tools/runelearn.py legacy-combined-build \
+    --rune /absolute/path/to/maps/lmctf01.rune \
+    --replay /absolute/path/to/traces/lmctf01.recovered.json \
+    --output /absolute/path/to/maps/lmctf01.rlearn
+  ```
+
+  This command validates the replay and its post-hoc binding once, then writes
+  deterministic dry and hook sections for one update. `legacy-build` remains
+  the hook-only form.
+
 `gamestat.sh`, `rolestat.py`
 
 : Parse production rows of the form `role`, `seed`, `goal`, `sgoal`, `spd`, and
@@ -172,7 +225,15 @@ production boundary. Do not use them to install or certify a release.
 Production requires one authenticated persistent runner with ten cyclic map
 lists, exact process ownership, immutable engine and client images, residence
 receipts, and stopped-evidence verification. See
-`PROJECT-COMPLETION-PLAN.md`.
+`FLEET_RUNNER.md` for its installed-input, run, and verification contract.
+
+`server_bundle.py`
+
+: Builds the authenticated 175-map server archive and manifest. It installs a
+  frozen content-addressed generation, commits one active-state file, verifies
+  the installed tree, and switches to the retained rollback generation. See
+  `SERVER_BUNDLE.md` for the exact build, install, verify, and rollback
+  commands.
 
 `topmaps.txt` is the exact ordered 20-map production rotation. It is not the
 175-map conversion corpus.

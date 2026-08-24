@@ -28,6 +28,7 @@ _PINNED_ENUMS = {
         7: "RL_ROCKETJUMP", 8: "RL_DOOR", 9: "RL_DOOR_DROP",
         10: "RL_DOOR_SWIM", 11: "RL_DOOR_HOOK",
         12: "RL_BUTTON_DOOR", 13: "RL_PUSH", 14: "RL_TRAIN",
+        15: "RL_CHAIN_HOOK",
     },
     "provenances": {
         0: "RL_PROVEN", 1: "RL_OBSERVED", 2: "RL_ADJUSTED",
@@ -51,6 +52,9 @@ _PINNED_ENUMS = {
         5: "RLAP_TELEPORT_PAD", 6: "RLAP_DOOR_WAIT",
         7: "RLAP_ROCKET_CONTROL", 8: "RLAP_DOOR_PREOPEN_CONTACT",
         9: "RLAP_DOOR_RIDE_INGRESS_LIP", 10: "RLAP_TRAIN_CROSS",
+    },
+    "secondary_control_policies": {
+        0: "RLSCP_NONE", 1: "RLSCP_HOOK_CONTROL",
     },
     "control_policies": {
         0: "RLCP_RUN", 1: "RLCP_JUMP", 2: "RLCP_DROP",
@@ -164,7 +168,7 @@ _PINNED_PROOF_LAW = {
 }
 _PINNED_RUNTIME_SUPPORT = {
 	0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1,
-	8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1,
+    8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1,
 }
 _FROZEN_BASE_ACTION_COUNT = 12
 _PINNED_MECHANISM_CONTROLLERS = {
@@ -172,12 +176,14 @@ _PINNED_MECHANISM_CONTROLLERS = {
     1: ("SG_MECHANISM_CONTROLLER_AUTO_DOOR", 0xD),
     2: ("SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR", 0xD),
     3: ("SG_MECHANISM_CONTROLLER_BUTTON_DOOR", 0xD),
-    4: ("SG_MECHANISM_CONTROLLER_RELAY_DOOR", 0),
+    4: ("SG_MECHANISM_CONTROLLER_RELAY_DOOR", 0xD),
     5: ("SG_MECHANISM_CONTROLLER_PLATFORM", 0xD),
     6: ("SG_MECHANISM_CONTROLLER_TELEPORT", 0x5),
     7: ("SG_MECHANISM_CONTROLLER_PUSH", 0x5),
     8: ("SG_MECHANISM_CONTROLLER_TRAIN", 0xD),
     9: ("SG_MECHANISM_CONTROLLER_TRAIN_SHOOT", 0x1C),
+	10: ("SG_MECHANISM_CONTROLLER_TIMED_VAULT", 0xD),
+	11: ("SG_MECHANISM_CONTROLLER_TRAIN_STATION", 0xC),
 }
 _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
     0: (1, 0, 0, ()),
@@ -192,9 +198,9 @@ _PINNED_ACTION_MECHANISM_REQUIREMENTS = {
     9: (1, 0, 9, ()),
 	10: (1, 0, 10, ()),
 	11: (1, 0, 11, ()),
-    12: (1, 1, 12, ((3, 2),)),
+	12: (1, 1, 12, (3, 4, 10)),
     13: (1, 1, 13, ((7, 1),)),
-    14: (1, 1, 14, ((8, 1), (9, 1))),
+    14: (1, 1, 14, ((8, 1), (9, 1), (11, 1))),
 }
 
 
@@ -581,7 +587,8 @@ def validate_document(document):
         document["contract"],
         (
             "action_range", "mechanism_contract", "wire", "proof_law", "provenances", "modes", "traits", "endpoint_policies",
-            "anchor_policies", "control_policies", "mechanism_policies",
+            "anchor_policies", "secondary_control_policies",
+            "control_policies", "mechanism_policies",
             "field_bias_policies", "actions", "reasons",
         ),
         "contract",
@@ -593,7 +600,8 @@ def validate_document(document):
     _validate_drop_timing_law(contract["proof_law"])
     enum_names = (
         "provenances", "modes", "endpoint_policies", "anchor_policies",
-        "control_policies", "mechanism_policies", "field_bias_policies",
+        "secondary_control_policies", "control_policies",
+        "mechanism_policies", "field_bias_policies",
     )
     enum_values = {}
     all_symbols = set()
@@ -635,7 +643,8 @@ def validate_document(document):
     action_keys = (
         "id", "symbol", "runtime_supported", "default_provenance",
         "provenance_mask", "mode_mask", "trait_mask", "endpoint_policy",
-        "suffix_anchor_policy", "preopen_mechanism_anchor_policy",
+        "suffix_anchor_policy", "secondary_control_policy",
+        "preopen_mechanism_anchor_policy",
         "ride_mechanism_anchor_policy", "control_policy", "mechanism_policy",
         "effective_suffix", "field_bias_policy", "field_bias_ms",
     )
@@ -682,6 +691,7 @@ def validate_document(document):
         references = (
             ("endpoint_policy", "endpoint_policies"),
             ("suffix_anchor_policy", "anchor_policies"),
+            ("secondary_control_policy", "secondary_control_policies"),
             ("preopen_mechanism_anchor_policy", "anchor_policies"),
             ("ride_mechanism_anchor_policy", "anchor_policies"),
             ("control_policy", "control_policies"),
@@ -707,6 +717,12 @@ def validate_document(document):
             _fail(where, "inherited bias requires a distinct suffix")
 
         mechanism = action["mechanism_policy"]
+        secondary_control = action["secondary_control_policy"]
+        if ((action["id"] == 15) != (secondary_control == 1)):
+            _fail(
+                where,
+                "only RL_CHAIN_HOOK requires the secondary hook control",
+            )
         has_effective_suffix = action["effective_suffix"] != action["id"]
         if bool(action["trait_mask"] & 64) != has_effective_suffix:
             _fail(where, "effective-suffix trait and target disagree")
@@ -715,7 +731,11 @@ def validate_document(document):
                     action["ride_mechanism_anchor_policy"] != 0 or
                     not action["mode_mask"] & 1):
                 _fail(where, "ordinary actions require zero mechanism anchors and NONE mode")
+            if secondary_control != 0 and action["mode_mask"] != 1:
+                _fail(where, "secondary-control actions require NONE mode only")
         elif mechanism == 1:
+            if secondary_control != 0:
+                _fail(where, "mechanism actions cannot own secondary control")
             required = 1 | 4 | 8 | 16 | 32 | 64
             if action["mode_mask"] & 1 or not action["trait_mask"] & required == required:
                 _fail(where, "mechanism action lacks atomic door-lease traits or uses NONE mode")
@@ -725,6 +745,8 @@ def validate_document(document):
                     action["ride_mechanism_anchor_policy"] != (9 if ride_enabled else 0)):
                 _fail(where, "mode-specific mechanism anchor policy mismatch")
         elif mechanism == 2:
+            if secondary_control != 0:
+                _fail(where, "mechanism actions cannot own secondary control")
             required = 1 | 4 | 8 | 16 | 32
             if (action["trait_mask"] & required != required or
                     action["mode_mask"] != ((1 << 1) | (1 << 2)) or
@@ -968,6 +990,8 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
         ("sg_action_trait_t", contract["traits"], "bit"),
         ("rune_endpoint_policy_t", contract["endpoint_policies"], "id"),
         ("rune_anchor_policy_t", contract["anchor_policies"], "id"),
+        ("rune_secondary_control_policy_t",
+         contract["secondary_control_policies"], "id"),
         ("rune_control_policy_t", contract["control_policies"], "id"),
         ("rune_mechanism_policy_t", contract["mechanism_policies"], "id"),
         ("rune_field_bias_policy_t", contract["field_bias_policies"], "id"),
@@ -984,6 +1008,7 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
     lines.extend((
         "/* X(symbol, id, runtime_supported, default_provenance, provenance_mask,",
         " *   mode_mask, trait_mask, endpoint_policy, suffix_anchor_policy,",
+        " *   secondary_control_policy,",
         " *   preopen_mechanism_anchor_policy, ride_mechanism_anchor_policy,",
         " *   control_policy, mechanism_policy,",
         " *   effective_suffix, field_bias_policy, field_bias_ms,",
@@ -1002,6 +1027,8 @@ def render_c(document, crc32_value=None, sha256_value=None) -> bytes:
                 f"0x{action['trait_mask']:04x}U",
                 contract["endpoint_policies"][action["endpoint_policy"]]["symbol"],
                 contract["anchor_policies"][action["suffix_anchor_policy"]]["symbol"],
+                contract["secondary_control_policies"]
+                        [action["secondary_control_policy"]]["symbol"],
                 contract["anchor_policies"][action["preopen_mechanism_anchor_policy"]]["symbol"],
                 contract["anchor_policies"][action["ride_mechanism_anchor_policy"]]["symbol"],
                 contract["control_policies"][action["control_policy"]]["symbol"],
@@ -1081,7 +1108,8 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
     lines.append("")
     for category in (
         "provenances", "modes", "traits", "endpoint_policies",
-        "anchor_policies", "control_policies", "mechanism_policies",
+        "anchor_policies", "secondary_control_policies", "control_policies",
+        "mechanism_policies",
         "field_bias_policies", "actions", "reasons",
     ):
         key = "bit" if category == "traits" else "id"
@@ -1109,6 +1137,7 @@ def render_python(document, crc32_value=None, sha256_value=None) -> bytes:
             ("trait_mask", action["trait_mask"]),
             ("endpoint_policy", action["endpoint_policy"]),
             ("suffix_anchor_policy", action["suffix_anchor_policy"]),
+            ("secondary_control_policy", action["secondary_control_policy"]),
             ("preopen_mechanism_anchor_policy",
              action["preopen_mechanism_anchor_policy"]),
             ("ride_mechanism_anchor_policy",

@@ -43,6 +43,19 @@ class SpectatorLimitWiringTest(unittest.TestCase):
         for section in (observe, respawn, connect):
             self.assertNotIn("numspec", section)
 
+    def test_teamless_observer_join_does_not_use_suicide_switch(self) -> None:
+        commands = (ROOT / "g_cmds.c").read_text()
+        team = commands[commands.index("void Cmd_Team_f"):
+                        commands.index("void Cmd_FlagStatus_f")]
+        observer = team[team.index(
+            "ent->client->ctf.teamnum <= CTF_TEAM_UNDEFINED"):
+            team.index("if(ent->client->resp.spectator)")]
+
+        self.assertIn("!ent->client->resp.spectator", observer)
+        self.assertIn("ctf_SetEntTeam(ent, newnum);", observer)
+        self.assertIn("respawn(ent);", observer)
+        self.assertNotIn("Team_Change", observer)
+
 
 if __name__ == "__main__":
     unittest.main()

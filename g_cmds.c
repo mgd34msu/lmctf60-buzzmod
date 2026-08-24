@@ -12,6 +12,7 @@
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_human_trace.h"
 
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
@@ -1135,8 +1136,27 @@ void Cmd_Team_f (edict_t *ent)
 
 	LowerCase(rawnew); //converts to lower case
 
-	//If they are a spectator, team code screwed up, so do this instead.
-	//if(ent->client->pers.spectator)
+	/* A teamless client may already have observer physics even when the
+	 * engine spectator cvar is off. Joining from that state must not take
+	 * Team_Change's active-player suicide path. */
+	if (ent->client->ctf.teamnum <= CTF_TEAM_UNDEFINED &&
+	    !ent->client->resp.spectator)
+	{
+		if (strcmp(rawnew, "red") == 0)
+			newnum = CTF_TEAM_RED;
+		else if (strcmp(rawnew, "blue") == 0)
+			newnum = CTF_TEAM_BLUE;
+
+		if (newnum)
+		{
+			ctf_SetEntTeam(ent, newnum);
+			respawn(ent);
+		}
+		return;
+	}
+
+	/* Engine spectators leave through the userinfo transition so password
+	 * checks and the existing spectator lifecycle still run. */
 	if(ent->client->resp.spectator)
 	{
 		if(strcmp(rawnew, "red") == 0)
@@ -1447,6 +1467,7 @@ void Cmd_Hook_f (edict_t *ent)
 void Cmd_Unhook_f (edict_t *ent)
 {
 	gitem_t		*it;
+
 	
 	if ((int)ctfflags->value & CTF_OFFHAND_HOOK)	
 	{
@@ -1455,11 +1476,17 @@ void Cmd_Unhook_f (edict_t *ent)
 		// Can't offhand your hook if it is your current weapon
 		if (ent->client->pers.weapon == it)
 		{
+			/* Stufftext alone leaves the authoritative rope live until the
+			 * client returns -attack. Release it in this command now; the
+			 * historical -attack still clears the selected weapon's button. */
+			SG_HumanTraceHookRelease(ent);
+			ctf_hook_abort(ent);
 			ForceCommand(ent, "-attack\n");
 			return;
 		}
 		else
 		{
+			SG_HumanTraceHookRelease(ent);
 			ctf_hook_abort(ent);
 		}
 	}

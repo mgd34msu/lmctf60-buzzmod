@@ -59,6 +59,54 @@ typedef struct sg_mechanism_plan_result_s
 	uint32_t num_plans;
 } sg_mechanism_plan_result_t;
 
+typedef struct sg_timed_vault_plan_witness_s
+{
+	uint32_t entry_key;
+	uint32_t mover_key;
+	uint32_t member_key;
+	uint32_t short_relay_key;
+	uint32_t restore_relay_key;
+	uint32_t effect_keys[9];
+	uint32_t touch_hold_ms;
+	uint32_t readiness_ms;
+	uint32_t usable_window_ms;
+	uint32_t restore_ms;
+} sg_timed_vault_plan_witness_t;
+
+typedef struct sg_relay_wall_plan_witness_s
+{
+	uint32_t entry_key;
+	uint32_t wall_key;
+	uint32_t immediate_relay_key;
+	uint32_t restore_relay_key;
+	uint32_t touch_hold_ms;
+	uint32_t cooldown_ms;
+	uint32_t active_window_ms;
+	uint32_t restore_ms;
+} sg_relay_wall_plan_witness_t;
+
+/* Identify one complete delayed-button, immediate/restore relay pair with
+ * identical ordered fanout and exactly one toggle wall. */
+int SG_RelayWallPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_relay_wall_plan_witness_t *witness_out);
+
+/* Identify only the complete two-leaf, two-relay, eight-laser and one-speaker
+ * timed-vault catalog shape. The result is suitable for generator binding;
+ * the materializer independently revalidates the same closure. */
+int SG_TimedVaultPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_timed_vault_plan_witness_t *witness_out);
+
+/* Select the complete nonstandard button plan, if any, and return the exact
+ * generator binding fields. Ordinary direct-door buttons are not admitted. */
+int SG_ButtonMechanismPlanBindingDiscover(
+	const sg_mech_catalog_view_t *catalog, uint32_t entry_key,
+	sg_mechanism_plan_binding_t *binding_out);
+
+/* Select either an authenticated nonstandard button transaction or the
+ * ordinary direct button-to-door-team binding. */
+int SG_ButtonDoorPlanBindingDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_mechanism_plan_binding_t *binding_out);
+
 /* Materialize one unique plan per surviving plan-required link. Inventory
  * edges remain the exact prefix; every appended plan edge is a byte-exact
  * inventory copy in controller execution order. Planless actions must retain

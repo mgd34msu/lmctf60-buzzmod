@@ -738,6 +738,31 @@ static void TestExecutionAnchor(void)
 	    SG_BUTTON_EXECUTION_ANCHOR_INVALID);
 }
 
+static void TestTimedVaultRetainsPhysicalButtonLaw(void)
+{
+	edict_t *button;
+	edict_t *subject;
+	vec3_t bottom = { 32.0f, 48.0f, 44.125f };
+	vec3_t effective;
+
+	ResetFixture();
+	plan_fixture.controller_kind = SG_MECHANISM_CONTROLLER_TIMED_VAULT;
+	button = &edicts[BUTTON_KEY];
+	subject = &edicts[BOT_KEY];
+	PlannedTouch();
+	CHECK(sg_bots[0].declared_button_latched);
+	CHECK(!sg_bots[0].declared_button_rider);
+	CHECK(SG_ButtonExecutionSupportValid(&binding_fixture, &sg_bots[0],
+	    subject));
+	button->moveinfo.state = TEST_STATE_TOP;
+	VectorCopy(button->moveinfo.end_origin, button->s.origin);
+	VectorCopy(button->s.origin, button->s.old_origin);
+	CHECK(SG_ButtonExecutionAnchor(&binding_fixture, &sg_bots[0], subject,
+	    bottom, link_fixture.mechanism_anchor, link_fixture.mode, effective) ==
+	    SG_BUTTON_EXECUTION_ANCHOR_TOP);
+	CHECK(VectorCompare(effective, bottom));
+}
+
 int main(void)
 {
 	TestExactDeferredCallback();
@@ -747,6 +772,7 @@ int main(void)
 	TestBottomOnlyMintAndResetHooks();
 	TestExactEntrySupport();
 	TestExecutionAnchor();
+	TestTimedVaultRetainsPhysicalButtonLaw();
 	if (failures)
 	{
 		fprintf(stderr, "%d button game test(s) failed\n", failures);

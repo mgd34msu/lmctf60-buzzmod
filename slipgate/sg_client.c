@@ -14,6 +14,7 @@
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_hook_live.h"
+#include "slipgate/sg_hook_game.h"
 #include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_swim_live.h"
@@ -64,6 +65,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 		SG_StrikeSlotReset(slot);
 	(void)SG_CompoundGuardGameBotSlotReset(&bot->compound_guard);
 	SG_CompoundSwimGameReset(bot);
+	SG_TrainStationGameReset(bot);
 	SG_ButtonExecutionActionReset(bot);
 	/* Spell out the grenade identity retirement before raw storage reuse:
 	 * a recycled bot slot must never inherit a client-life binding. */
@@ -75,6 +77,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->compound_drop_live.drop_link = -1;
 	bot->seed = -1;
 	bot->hook_link = -1;
+	SG_ChainHookGameReset(bot);
 	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
 	    &bot->hook_replay_link, &bot->hook_final_guard);
 	SG_HookDiagnosticsReset(&bot->hook_diagnostics);
@@ -319,21 +322,6 @@ void Botfill_Frame(void)
 				sg_botfill_under_streak[t] = 0;
 		}
 	}
-}
-
-/*
- * Ownership, for the compatibility glue to ask. Two bot systems may share
- * the match, and the old code's FL_BOT loops must
- * not assume every bot is theirs.
- */
-qboolean SG_OwnsBot(edict_t *ent)
-{
-	int i;
-
-	for (i = 0; i < SG_MAXBOTS; i++)
-		if (sg_bots[i].active && sg_bots[i].ent == ent)
-			return true;
-	return false;
 }
 
 /* The engine allocates real clients without consulting edict->inuse. If it

@@ -2,13 +2,14 @@
 #include "q_shared.h"
 #include "slipgate/sg_rune_mechanism_plan.h"
 #include "slipgate/sg_rune_codec.h"
+#include "slipgate/sg_train_station_plan.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_NODES 16U
-#define TEST_INVENTORY_EDGES 32U
+#define TEST_NODES 32U
+#define TEST_INVENTORY_EDGES 64U
 #define TEST_EDGES 96U
 #define TEST_PLANS 8U
 #define TEST_STRINGS 256U
@@ -493,6 +494,136 @@ static void TestShootDoor(void)
 	ExpectTrainMaterializationFailure(&fixture);
 }
 
+static void TrainStationFixture(fixture_t *fixture)
+{
+	static const char *const strings[] = {
+		"func_train", "path_corner", "target_speaker"
+	};
+	static const uint32_t effect_sources[] = {
+		28U, 29U, 32U, 35U, 36U, 41U
+	};
+	static const uint32_t route[SG_TRAIN_STATION_ROUTE_CORNERS] = {
+		28U, 29U, 30U, 31U, 32U, 33U, 34U,
+		35U, 36U, 37U, 38U, 41U, 40U, 39U
+	};
+	rune_mechanism_node_t *master;
+	rune_mechanism_node_t *member;
+	uint32_t key;
+	uint32_t index;
+
+	FixtureInit(fixture, RL_TRAIN);
+	Strings(fixture, strings, 3U);
+	master = Node(fixture, 5U, SG_MECH_NODE_TRAIN, "func_train");
+	master->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER;
+	master->owner_key = SG_MECH_NO_KEY;
+	master->team_master_key = 5U;
+	master->spawnflags = 1U;
+	master->use_callback = SG_MECH_CALLBACK_TRAIN_USE;
+	master->think_callback = SG_MECH_CALLBACK_TRAIN_NEXT;
+	master->blocked_callback = SG_MECH_CALLBACK_BLOCKED_TRAIN;
+	master->speed_q8 = master->accel_q8 = master->decel_q8 = 3200U;
+	master->target_offset = StringOffset(fixture, "path_corner");
+	for (key = 28U; key <= 41U; key++)
+	{
+		rune_mechanism_node_t *corner = Node(fixture, key,
+			SG_MECH_NODE_PATH_CORNER, "path_corner");
+
+		corner->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE;
+		corner->owner_key = SG_MECH_NO_KEY;
+		corner->team_master_key = SG_MECH_NO_KEY;
+		corner->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
+		corner->wait_ms = key == 28U || key == 35U ? 3000 : 0;
+		corner->target_offset = StringOffset(fixture, "path_corner");
+		corner->targetname_offset = StringOffset(fixture, "path_corner");
+	}
+	member = Node(fixture, 42U, SG_MECH_NODE_TRAIN, "func_train");
+	*member = *master;
+	member->key = 42U;
+	member->flags &= ~SG_MECH_NODEF_TEAM_MASTER;
+	member->flags |= SG_MECH_NODEF_TEAM_MEMBER;
+	for (key = 78U; key <= 89U; key++)
+	{
+		rune_mechanism_node_t *speaker = Node(fixture, key,
+			SG_MECH_NODE_TARGET_SPEAKER, "target_speaker");
+
+		speaker->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+		speaker->owner_key = SG_MECH_NO_KEY;
+		speaker->team_master_key = SG_MECH_NO_KEY;
+		speaker->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+		speaker->targetname_offset = StringOffset(fixture, "path_corner");
+	}
+	Edge(fixture, 5U, 42U, SG_MECH_EDGE_TEAM, 0U);
+	Edge(fixture, 5U, 29U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	Edge(fixture, 42U, 36U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	for (index = 0U; index < SG_TRAIN_STATION_ROUTE_CORNERS; index++)
+		Edge(fixture, route[index],
+			route[(index + 1U) % SG_TRAIN_STATION_ROUTE_CORNERS],
+			SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	for (index = 0U; index < sizeof(effect_sources) /
+	        sizeof(effect_sources[0]); index++)
+	{
+		uint32_t first_speaker = 78U + index * 2U;
+
+		fixture->nodes[effect_sources[index] - 27U].path_target_offset =
+			StringOffset(fixture, "path_corner");
+		Edge(fixture, effect_sources[index], first_speaker,
+			SG_MECH_EDGE_PATH_TARGET, 0U);
+		Edge(fixture, effect_sources[index], first_speaker + 1U,
+			SG_MECH_EDGE_PATH_TARGET, 1U);
+	}
+	fixture->links[0].mode = RLCM_RIDE;
+	fixture->links[0].anchor[0] = -32.0f;
+	fixture->links[0].mechanism_anchor[2] = 32.0f;
+	fixture->links[0].sweep_clear_ms = 100U;
+	fixture->binding.entry_key = 28U;
+	fixture->binding.mover_key = 5U;
+	fixture->binding.destination_key = 35U;
+	fixture->binding.egress_key = 42U;
+	fixture->binding.controller_kind =
+		SG_MECHANISM_CONTROLLER_TRAIN_STATION;
+	fixture->binding.expected_members = 2U;
+	fixture->binding.cooldown_ms = 3000U;
+}
+
+static void TestTrainStation(void)
+{
+	fixture_t fixture;
+
+	TrainStationFixture(&fixture);
+	FixtureFinish(&fixture);
+	CodecValidate(&fixture);
+	CHECK(fixture.result.num_plans == 1U);
+	CHECK(fixture.plans[0].controller_kind ==
+		SG_MECHANISM_CONTROLLER_TRAIN_STATION);
+	CHECK(fixture.plans[0].flags == (SG_RUNE_CODEC_PLANF_ATOMIC |
+		SG_RUNE_CODEC_PLANF_REQUIRES_LEASE));
+	CHECK(fixture.plans[0].num_edges == 29U);
+
+	TrainStationFixture(&fixture);
+	FixtureFinish(&fixture);
+	VectorClear(fixture.links[0].anchor);
+	CHECK(CodecValidationDiagnostic(&fixture) ==
+		RLCODEC_BAD_ACTIVATION_PLAN);
+
+	TrainStationFixture(&fixture);
+	FixtureFinish(&fixture);
+	VectorCopy(fixture.links[0].mechanism_anchor,
+		fixture.links[0].anchor);
+	CHECK(CodecValidationDiagnostic(&fixture) ==
+		RLCODEC_BAD_ACTIVATION_PLAN);
+
+	TrainStationFixture(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[8].wait_ms = 0;
+	ExpectTrainMaterializationFailure(&fixture);
+
+	TrainStationFixture(&fixture);
+	FixtureFinish(&fixture);
+	fixture.nodes[2].wait_ms = 3000;
+	ExpectTrainMaterializationFailure(&fixture);
+}
+
 static void CodecNode(const rune_mechanism_node_t *source,
 	sg_rune_codec_activation_node_t *destination)
 {
@@ -612,14 +743,20 @@ static sg_rune_codec_diagnostic_t CodecValidationDiagnostic(
 	workspace.edge_next_capacity = TEST_EDGES;
 	workspace.string_marks = string_marks;
 	workspace.string_mark_capacity = TEST_STRINGS;
-	return SG_RuneCodecValidate(seeds, 2U, links, 2U, nodes,
+	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+		seeds, 2U, links, 2U, nodes,
 		fixture->num_nodes, edges, fixture->result.num_edges, plans, 1U,
 		fixture->strings, fixture->string_bytes, &workspace);
 }
 
 static void CodecValidate(const fixture_t *fixture)
 {
-	CHECK(CodecValidationDiagnostic(fixture) == RLCODEC_OK);
+	sg_rune_codec_diagnostic_t diagnostic =
+		CodecValidationDiagnostic(fixture);
+
+	if (diagnostic != RLCODEC_OK)
+		fprintf(stderr, "codec validation diagnostic: %d\n", diagnostic);
+	CHECK(diagnostic == RLCODEC_OK);
 }
 
 static void TestPlatform(void)
@@ -1071,6 +1208,7 @@ static void TestButtonDoor(void)
 	rune_mechanism_node_t *button;
 	rune_mechanism_node_t *door;
 	rune_mechanism_node_t *member;
+	sg_mechanism_plan_binding_t discovered;
 
 	FixtureInit(&fixture, RL_BUTTON_DOOR);
 	Strings(&fixture, strings, 3U);
@@ -1097,6 +1235,15 @@ static void TestButtonDoor(void)
 	fixture.binding.expected_members = 2U;
 	fixture.binding.cooldown_ms = 3000U;
 	FixtureFinish(&fixture);
+	CHECK(SG_ButtonDoorPlanBindingDiscover(&fixture.catalog, 1U,
+	    &discovered));
+	CHECK(discovered.entry_key == 1U && discovered.mover_key == 2U);
+	CHECK(discovered.destination_key == SG_MECH_NO_KEY &&
+	    discovered.egress_key == SG_MECH_NO_KEY);
+	CHECK(discovered.controller_kind ==
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR);
+	CHECK(discovered.expected_members == 2U &&
+	    discovered.cooldown_ms == 3000U);
 	CHECK(fixture.plans[0].num_edges == 3U);
 	CodecValidate(&fixture);
 
@@ -1109,6 +1256,323 @@ static void TestButtonDoor(void)
 	CHECK(!SG_MechanismPlansMaterialize(fixture.links, 2U,
 		&fixture.binding, 1U, &fixture.catalog, &fixture.buffers,
 		&fixture.result));
+	CHECK(fixture.result.diagnostic == SG_MECHANISM_PLAN_BAD_CLOSURE);
+}
+
+static void TestRelayWall(void)
+{
+	static const char *const strings[] = {
+		"Forcefield", "GateControl", "func_button", "func_wall",
+		"target_speaker", "trigger_hurt", "trigger_relay"
+	};
+	fixture_t fixture;
+	sg_relay_wall_plan_witness_t witness;
+	sg_mechanism_plan_binding_t discovered;
+	rune_mechanism_node_t *button;
+	rune_mechanism_node_t *immediate;
+	rune_mechanism_node_t *delayed;
+	rune_mechanism_node_t *wall;
+	rune_mechanism_node_t *looped_speaker_a;
+	rune_mechanism_node_t *normal_speaker;
+	rune_mechanism_node_t *looped_speaker_b;
+	rune_mechanism_node_t *hurt;
+	rune_mechanism_edge_t *edge;
+
+	FixtureInit(&fixture, RL_BUTTON_DOOR);
+	Strings(&fixture, strings, 7U);
+	button = Node(&fixture, 1U, SG_MECH_NODE_BUTTON, "func_button");
+	button->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER;
+	button->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	button->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	button->delay_ms = 200;
+	button->wait_ms = 4000;
+	button->speed_q8 = 800U;
+	button->accel_q8 = 800U;
+	button->decel_q8 = 800U;
+	Target(button, &fixture, "GateControl");
+
+	immediate = Node(&fixture, 2U, SG_MECH_NODE_RELAY, "trigger_relay");
+	immediate->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+	immediate->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	immediate->delay_ms = 0;
+	immediate->wait_ms = 0;
+	Target(immediate, &fixture, "Forcefield");
+	Targetname(immediate, &fixture, "GateControl");
+	delayed = Node(&fixture, 3U, SG_MECH_NODE_RELAY, "trigger_relay");
+	delayed->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+	delayed->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	delayed->delay_ms = 4000;
+	delayed->wait_ms = 0;
+	Target(delayed, &fixture, "Forcefield");
+	Targetname(delayed, &fixture, "GateControl");
+
+	wall = Node(&fixture, 4U, SG_MECH_NODE_TOGGLE_WALL, "func_wall");
+	wall->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER;
+	wall->spawnflags = 7U;
+	wall->use_callback = SG_MECH_CALLBACK_USE_FUNC_WALL;
+	Target(wall, &fixture, "GateControl");
+	Targetname(wall, &fixture, "Forcefield");
+	looped_speaker_a = Node(&fixture, 5U, SG_MECH_NODE_TARGET_SPEAKER,
+		"target_speaker");
+	looped_speaker_a->flags = SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_USABLE;
+	looped_speaker_a->spawnflags = 1U;
+	looped_speaker_a->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	Targetname(looped_speaker_a, &fixture, "Forcefield");
+	normal_speaker = Node(&fixture, 6U, SG_MECH_NODE_TARGET_SPEAKER,
+		"target_speaker");
+	normal_speaker->flags = SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_USABLE;
+	normal_speaker->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	Targetname(normal_speaker, &fixture, "Forcefield");
+	looped_speaker_b = Node(&fixture, 7U, SG_MECH_NODE_TARGET_SPEAKER,
+		"target_speaker");
+	looped_speaker_b->flags = SG_MECH_NODEF_REPEATABLE |
+		SG_MECH_NODEF_USABLE;
+	looped_speaker_b->spawnflags = 1U;
+	looped_speaker_b->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	Targetname(looped_speaker_b, &fixture, "Forcefield");
+	hurt = Node(&fixture, 8U, SG_MECH_NODE_TRIGGER_HURT, "trigger_hurt");
+	hurt->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE;
+	hurt->spawnflags = 2U;
+	hurt->touch_callback = SG_MECH_CALLBACK_TOUCH_HURT;
+	hurt->use_callback = SG_MECH_CALLBACK_USE_HURT;
+	Targetname(hurt, &fixture, "Forcefield");
+
+	Edge(&fixture, 1U, 2U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 1U, 3U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 2U, 4U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 2U, 5U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 2U, 6U, SG_MECH_EDGE_TARGET, 2U);
+	Edge(&fixture, 2U, 7U, SG_MECH_EDGE_TARGET, 3U);
+	Edge(&fixture, 2U, 8U, SG_MECH_EDGE_TARGET, 4U);
+	Edge(&fixture, 3U, 4U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 3U, 5U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 3U, 6U, SG_MECH_EDGE_TARGET, 2U);
+	Edge(&fixture, 3U, 7U, SG_MECH_EDGE_TARGET, 3U);
+	Edge(&fixture, 3U, 8U, SG_MECH_EDGE_TARGET, 4U);
+	for (edge = fixture.inventory;
+	     edge < fixture.inventory + fixture.num_inventory; edge++)
+		edge->delay_ms = edge->from_key == 1U ? 200U :
+		    (edge->from_key == 3U ? 4000U : 0U);
+	fixture.binding.entry_key = 1U;
+	fixture.binding.mover_key = 4U;
+	fixture.binding.destination_key = 2U;
+	fixture.binding.egress_key = 3U;
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_RELAY_DOOR;
+	fixture.binding.expected_members = 1U;
+	fixture.binding.cooldown_ms = 4000U;
+	FixtureFinish(&fixture);
+	CHECK(SG_RelayWallPlanDiscover(&fixture.catalog, 1U, &witness));
+	CHECK(witness.entry_key == 1U);
+	CHECK(witness.wall_key == 4U);
+	CHECK(witness.immediate_relay_key == 2U);
+	CHECK(witness.restore_relay_key == 3U);
+	CHECK(witness.touch_hold_ms == 200U);
+	CHECK(witness.cooldown_ms == 4000U);
+	CHECK(witness.active_window_ms == 4000U);
+	CHECK(witness.restore_ms == 4000U);
+	CHECK(SG_ButtonMechanismPlanBindingDiscover(&fixture.catalog, 1U,
+	    &discovered));
+	CHECK(discovered.entry_key == 1U && discovered.mover_key == 4U);
+	CHECK(discovered.destination_key == 2U && discovered.egress_key == 3U);
+	CHECK(discovered.controller_kind ==
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR);
+	CHECK(discovered.expected_members == 1U &&
+	    discovered.cooldown_ms == 4000U);
+	CHECK(fixture.plans[0].num_edges == 12U);
+	CHECK(fixture.plans[0].controller_kind ==
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR);
+	CodecValidate(&fixture);
+	looped_speaker_a->spawnflags = 8U;
+	CHECK(!SG_RelayWallPlanDiscover(&fixture.catalog, 1U, &witness));
+	CHECK(!SG_ButtonMechanismPlanBindingDiscover(&fixture.catalog, 1U,
+	    &discovered));
+	looped_speaker_a->spawnflags = 1U;
+
+	InventoryEdge(&fixture, 3U, 8U)->to_key = 7U;
+	CHECK(!SG_RelayWallPlanDiscover(&fixture.catalog, 1U, &witness));
+	CHECK(!SG_ButtonMechanismPlanBindingDiscover(&fixture.catalog, 1U,
+	    &discovered));
+	memset(fixture.edges, 0, sizeof(fixture.edges));
+	memset(fixture.plans, 0, sizeof(fixture.plans));
+	memset(&fixture.result, 0, sizeof(fixture.result));
+	fixture.links[0].mechanism_plan = 0U;
+	CHECK(!SG_MechanismPlansMaterialize(fixture.links, 2U,
+	    &fixture.binding, 1U, &fixture.catalog, &fixture.buffers,
+	    &fixture.result));
+	CHECK(fixture.result.diagnostic == SG_MECHANISM_PLAN_BAD_CLOSURE);
+}
+
+static void TestTimedVault(void)
+{
+	static const char *const strings[] = {
+		"DoorPortal", "LaserEnd", "VaultControl", "VaultLasers",
+		"func_areaportal", "func_button", "func_door",
+		"target_laser", "target_speaker", "trigger_relay"
+	};
+	fixture_t fixture;
+	sg_timed_vault_plan_witness_t witness;
+	rune_mechanism_node_t *node;
+	uint32_t key;
+
+	FixtureInit(&fixture, RL_BUTTON_DOOR);
+	Strings(&fixture, strings, 10U);
+	node = Node(&fixture, 1U, SG_MECH_NODE_BUTTON, "func_button");
+	node->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER;
+	node->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	node->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	node->wait_ms = 10000;
+	node->speed_q8 = node->accel_q8 = node->decel_q8 = 800U;
+	Target(node, &fixture, "VaultControl");
+	node = Node(&fixture, 2U, SG_MECH_NODE_RELAY, "trigger_relay");
+	node->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+	node->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	node->delay_ms = 1000;
+	Target(node, &fixture, "VaultLasers");
+	Targetname(node, &fixture, "VaultControl");
+	node = Node(&fixture, 3U, SG_MECH_NODE_RELAY, "trigger_relay");
+	node->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+	node->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	node->delay_ms = 10000;
+	Target(node, &fixture, "VaultLasers");
+	Targetname(node, &fixture, "VaultControl");
+	node = Door(&fixture, 4U, 4U, 1);
+	node->kind = SG_MECH_NODE_DOOR_MASTER;
+	Target(node, &fixture, "DoorPortal");
+	Targetname(node, &fixture, "VaultControl");
+	node = Door(&fixture, 5U, 4U, 0);
+	node->kind = SG_MECH_NODE_DOOR_MEMBER;
+	Target(node, &fixture, "DoorPortal");
+	Targetname(node, &fixture, "VaultControl");
+	for (key = 6U; key <= 13U; key++)
+	{
+		node = Node(&fixture, key, SG_MECH_NODE_TARGET_LASER,
+			"target_laser");
+		node->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+		node->spawnflags = (key & 1U) ? 3U : 17U;
+		node->use_callback = SG_MECH_CALLBACK_USE_TARGET_LASER;
+		node->think_callback = SG_MECH_CALLBACK_THINK_TARGET_LASER;
+		Target(node, &fixture, "LaserEnd");
+		Targetname(node, &fixture, "VaultLasers");
+	}
+	node = Node(&fixture, 14U, SG_MECH_NODE_TARGET_SPEAKER,
+		"target_speaker");
+	node->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+	node->spawnflags = 1U;
+	node->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	Targetname(node, &fixture, "VaultLasers");
+	node = Node(&fixture, 15U, SG_MECH_NODE_AREAPORTAL,
+		"func_areaportal");
+	node->flags = SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE;
+	node->use_callback = SG_MECH_CALLBACK_USE_AREAPORTAL;
+	Targetname(node, &fixture, "DoorPortal");
+	Edge(&fixture, 1U, 2U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 1U, 3U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 1U, 4U, SG_MECH_EDGE_TARGET, 2U);
+	Edge(&fixture, 1U, 5U, SG_MECH_EDGE_TARGET, 3U);
+	for (key = 6U; key <= 14U; key++)
+	{
+		Edge(&fixture, 2U, key, SG_MECH_EDGE_TARGET, key - 6U);
+		InventoryEdge(&fixture, 2U, key)->delay_ms = 1000U;
+	}
+	for (key = 6U; key <= 14U; key++)
+	{
+		Edge(&fixture, 3U, key, SG_MECH_EDGE_TARGET, key - 6U);
+		InventoryEdge(&fixture, 3U, key)->delay_ms = 10000U;
+	}
+	Edge(&fixture, 4U, 15U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 4U, 5U, SG_MECH_EDGE_TEAM, 0U);
+	Edge(&fixture, 5U, 15U, SG_MECH_EDGE_TARGET, 0U);
+	fixture.binding.entry_key = 1U;
+	fixture.binding.mover_key = 4U;
+	fixture.binding.destination_key = 2U;
+	fixture.binding.egress_key = 3U;
+	fixture.binding.controller_kind = SG_MECHANISM_CONTROLLER_TIMED_VAULT;
+	fixture.binding.expected_members = 2U;
+	fixture.binding.cooldown_ms = 10000U;
+	FixtureFinish(&fixture);
+	memset(&witness, 0, sizeof(witness));
+	CHECK(SG_TimedVaultPlanDiscover(&fixture.catalog, 1U, &witness));
+	CHECK(witness.entry_key == 1U);
+	CHECK(witness.mover_key == 4U);
+	CHECK(witness.member_key == 5U);
+	CHECK(witness.short_relay_key == 2U);
+	CHECK(witness.restore_relay_key == 3U);
+	CHECK(witness.touch_hold_ms == 200U);
+	CHECK(witness.readiness_ms == 1000U);
+	CHECK(witness.usable_window_ms == 9000U);
+	CHECK(witness.restore_ms == 10000U);
+	{
+		rune_link_t directed[4];
+		sg_mechanism_plan_binding_t bindings[4];
+		rune_mechanism_edge_t edges[160];
+		rune_mechanism_plan_t plans[4];
+		uint32_t edge_marks[TEST_INVENTORY_EDGES];
+		uint32_t node_marks[TEST_NODES];
+		uint32_t node_queue[TEST_NODES];
+		sg_mechanism_plan_buffers_t buffers;
+		sg_mechanism_plan_result_t result;
+		uint32_t index;
+
+		memset(directed, 0, sizeof(directed));
+		memset(edges, 0, sizeof(edges));
+		memset(plans, 0, sizeof(plans));
+		memset(edge_marks, 0, sizeof(edge_marks));
+		memset(node_marks, 0, sizeof(node_marks));
+		memset(node_queue, 0, sizeof(node_queue));
+		memset(&buffers, 0, sizeof(buffers));
+		memset(&result, 0, sizeof(result));
+		for (index = 0U; index < 4U; index++)
+		{
+			directed[index].from = (uint16_t)index;
+			directed[index].to = (uint16_t)(index ^ 1U);
+			directed[index].action = RL_BUTTON_DOOR;
+			directed[index].provenance = RL_PROVEN;
+			directed[index].mode = RLCM_PREOPEN;
+			directed[index].mechanism_plan = index;
+			bindings[index] = fixture.binding;
+		}
+		buffers.edges = edges;
+		buffers.edge_capacity = 160U;
+		buffers.plans = plans;
+		buffers.plan_capacity = 4U;
+		buffers.edge_marks = edge_marks;
+		buffers.edge_mark_capacity = TEST_INVENTORY_EDGES;
+		buffers.node_marks = node_marks;
+		buffers.node_mark_capacity = TEST_NODES;
+		buffers.node_queue = node_queue;
+		buffers.node_queue_capacity = TEST_NODES;
+		CHECK(SG_MechanismPlansMaterialize(directed, 4U, bindings, 4U,
+		    &fixture.catalog, &buffers, &result));
+		CHECK(result.num_plans == 4U);
+		for (index = 0U; index < 4U; index++)
+		{
+			CHECK(directed[index].mechanism_plan == index);
+			CHECK(plans[index].controller_kind ==
+			    SG_MECHANISM_CONTROLLER_TIMED_VAULT);
+			CHECK(plans[index].cooldown_ms == witness.restore_ms);
+			CHECK(plans[index].num_edges == 25U);
+		}
+	}
+	CHECK(fixture.plans[0].num_edges == 25U);
+	CHECK(fixture.plans[0].controller_kind ==
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT);
+	CodecValidate(&fixture);
+
+	InventoryEdge(&fixture, 3U, 14U)->to_key = 13U;
+	CHECK(!SG_TimedVaultPlanDiscover(&fixture.catalog, 1U, &witness));
+	memset(fixture.edges, 0, sizeof(fixture.edges));
+	memset(fixture.plans, 0, sizeof(fixture.plans));
+	memset(&fixture.result, 0, sizeof(fixture.result));
+	fixture.links[0].mechanism_plan = 0U;
+	CHECK(!SG_MechanismPlansMaterialize(fixture.links, 2U,
+	    &fixture.binding, 1U, &fixture.catalog, &fixture.buffers,
+	    &fixture.result));
 	CHECK(fixture.result.diagnostic == SG_MECHANISM_PLAN_BAD_CLOSURE);
 }
 
@@ -1524,12 +1988,15 @@ int main(void)
 	TestTeleport();
 	TestAutoDoor();
 	TestButtonDoor();
+	TestRelayWall();
+	TestTimedVault();
 	TestDirectDoorFullClosure();
 	TestDirectDoorSynchronousRelayClosure();
 	TestDelayedSoundTerminal();
 	TestOnePlanPerLink();
 	TestPush();
 	TestTrainGate();
+	TestTrainStation();
 	TestShootDoor();
 	CHECK((covered_actions & (UINT32_C(1) << RL_LIFT)) != 0U);
 	CHECK((covered_actions & (UINT32_C(1) << RL_TELEPORT)) != 0U);

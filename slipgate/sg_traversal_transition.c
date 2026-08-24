@@ -2,11 +2,13 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
 #include "slipgate/sg_drop_live.h"
+#include "slipgate/sg_hook_game.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_strike.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_train_gate_game.h"
+#include "slipgate/sg_train_station_game.h"
 #include "slipgate/sg_shoot_door_game.h"
 
 qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
@@ -19,10 +21,13 @@ qboolean SG_TraversalControllerPhysical(const sg_bot_t *bot, int action)
 		return true;
 	if (action == RL_DOOR_HOOK && bot->compound_hook_live.guard_owned)
 		return true;
+	if (action == RL_CHAIN_HOOK && SG_ChainHookGameOwns(bot))
+		return true;
 	if (action == RL_PUSH && SG_PushLiveOwns(&bot->push))
 		return true;
 	if (action == RL_TRAIN &&
-	    (SG_TrainGateGameOwns(bot) || SG_ShootDoorGameOwns(bot)))
+	    (SG_TrainGateGameOwns(bot) || SG_TrainStationGameOwns(bot) ||
+	     SG_ShootDoorGameOwns(bot)))
 		return true;
 	memset(&state, 0, sizeof(state));
 	state.action = action;
@@ -101,6 +106,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		    &bot->drop_replay_link, &bot->drop_live_events);
 		break;
 	case RL_HOOK:
+	case RL_CHAIN_HOOK:
 		bot->hook_phase = 0;
 		bot->hook_link = -1;
 		bot->hook_deadline = 0.0f;
@@ -109,6 +115,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		bot->speedhook = false;
 		bot->speedhook_pull_applied = false;
 		bot->flow_release = false;
+		SG_ChainHookGameReset(bot);
 		break;
 	case RL_SWIM:
 		SG_SwimLiveReset(&bot->swim_replay, &bot->swim_replay_active,
@@ -123,6 +130,7 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 		break;
 	case RL_TRAIN:
 		SG_TrainGateGameReset(bot);
+		SG_TrainStationGameReset(bot);
 		SG_ShootDoorGameReset(bot);
 		break;
 	case RL_LIFT:
@@ -209,7 +217,8 @@ void SG_CarryStartRetireSupersededRoute(sg_bot_t *bot, qboolean carry_started)
 	    bot->commit_link < 0 || bot->commit_link >= rune->hdr.num_links)
 		return;
 	action = rune->links[bot->commit_link].action;
-	if ((action != RL_HOOK && action != RL_JUMP && action != RL_DROP &&
+	if ((action != RL_HOOK && action != RL_CHAIN_HOOK &&
+	     action != RL_JUMP && action != RL_DROP &&
 	     action != RL_ROCKETJUMP && action != RL_DOOR_DROP &&
 	     action != RL_DOOR_HOOK) ||
 	    SG_TraversalControllerPhysical(bot, action))

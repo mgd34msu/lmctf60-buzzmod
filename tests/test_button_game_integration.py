@@ -61,7 +61,7 @@ class ButtonGameIntegrationTests(unittest.TestCase):
         support = function_body("slipgate/sg_move.c",
                                 "SG_ButtonExecutionSupportValid")
         for requirement in (
-            "SG_MECHANISM_CONTROLLER_BUTTON_DOOR",
+            "SG_MechanismControllerUsesButton",
             "SG_RuneMechanismBindingCurrent",
             "DoorStep_ButtonTransactionCurrent",
             "RLCM_PREOPEN",
@@ -69,6 +69,12 @@ class ButtonGameIntegrationTests(unittest.TestCase):
             "SG_LiftRider",
         ):
             self.assertIn(requirement, support)
+        controller = function_body(
+            "slipgate/sg_rune_mechanism_catalog.h",
+            "SG_MechanismControllerUsesButton",
+        )
+        self.assertIn("SG_MECHANISM_CONTROLLER_BUTTON_DOOR", controller)
+        self.assertIn("SG_MECHANISM_CONTROLLER_TIMED_VAULT", controller)
 
     def test_oracle_uses_controller_specific_declared_action(self) -> None:
         oracle = (ROOT / "slipgate/sg_oracle.c").read_text(encoding="utf-8")

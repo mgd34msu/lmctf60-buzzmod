@@ -17,13 +17,6 @@ cvar_t *ctfflags;
 level_locals_t level;
 game_export_t globals;
 
-int SG_ActionFieldBiasMs(int action, int rope_bias_ms)
-{
-	(void)action;
-	(void)rope_bias_ms;
-	return 0;
-}
-
 sg_identity_status_t SG_LevelIdentitySnapshot(const char *map,
 	sg_level_identity_t *out)
 {

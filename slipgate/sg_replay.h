@@ -22,6 +22,7 @@
 #define SG_REPLAY_HOOK_DEST_Z           96.0f
 #define SG_REPLAY_HOOK_RELEASE_ROPE     130
 #define SG_REPLAY_HOOK_PULL_LIMIT_MS    3000
+#define SG_REPLAY_HOOK_FLING_SETTLE_MS  3000
 #define SG_REPLAY_SWIM_PITCH_LIMIT      85.0f
 #define SG_REPLAY_HOOK_FLIGHT_MAX_MS \
 	(((SG_RUNE_PROOF_HOOK_MAX_RAY + SG_RUNE_PROOF_HOOK_FRAME_DISTANCE - 1) / \
@@ -31,7 +32,10 @@ typedef enum sg_replay_status_e
 {
 	SG_REPLAY_RUNNING = 0,
 	SG_REPLAY_ARRIVED,
-	SG_REPLAY_FAILED
+	SG_REPLAY_FAILED,
+	/* A hook rope ended at its proved release boundary.  Only a sequence
+	 * coordinator may consume this; it is never graph arrival. */
+	SG_REPLAY_RELEASED
 } sg_replay_status_t;
 
 typedef enum sg_swim_replay_control_e
@@ -66,7 +70,8 @@ typedef enum sg_replay_reason_e
 	SG_REPLAY_REASON_HOOK_RELEASE_MISSED,
 	SG_REPLAY_REASON_HOOK_PULL_TIMEOUT,
 	SG_REPLAY_REASON_HOOK_SETTLE_TIMEOUT,
-	SG_REPLAY_REASON_HOOK_TERMINAL_LOST
+	SG_REPLAY_REASON_HOOK_TERMINAL_LOST,
+	SG_REPLAY_REASON_CHECKPOINT_MISMATCH
 } sg_replay_reason_t;
 
 /* Exact state presented to the next 25 ms command.  The integer pmove state
@@ -158,6 +163,12 @@ typedef enum sg_hook_replay_phase_e
 	SG_HOOK_REPLAY_SETTLE
 } sg_hook_replay_phase_t;
 
+typedef enum sg_hook_replay_terminal_e
+{
+	SG_HOOK_REPLAY_TERMINAL_SETTLE = 0,
+	SG_HOOK_REPLAY_TERMINAL_RELEASE_HANDOFF
+} sg_hook_replay_terminal_t;
+
 typedef struct sg_hook_replay_spec_s
 {
 	vec3_t bite;             /* identity for the host adapter; not ray-traced here */
@@ -169,6 +180,8 @@ typedef struct sg_hook_replay_spec_s
 	int expected_pull_ms;
 	int expected_settle_arrival_ms;
 	int expected_settle_ms;
+	qboolean fling_release;
+	sg_hook_replay_terminal_t terminal;
 } sg_hook_replay_spec_t;
 
 typedef struct sg_hook_replay_state_s
@@ -217,10 +230,13 @@ qboolean SG_HookReplaySettled(const sg_hook_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
 qboolean SG_HookReplayReleaseReady(const sg_hook_replay_spec_t *spec,
 	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
+qboolean SG_HookReplayFlingReleaseReady(const sg_hook_replay_spec_t *spec,
+	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation);
 /* Pure fixed-view command renderer used by the live adapter's immutable
  * WAIT_ATTACH shadow.  It neither reads nor mutates replay state. */
 qboolean SG_HookReplayFixedViewCommand(const sg_replay_pose_t *pose,
 	const vec3_t view_angles, usercmd_t *command);
+qboolean SG_HookReplaySpecValid(const sg_hook_replay_spec_t *spec);
 
 sg_replay_status_t SG_DropReplayBegin(sg_drop_replay_state_t *state,
 	const sg_drop_replay_spec_t *spec, const sg_replay_pose_t *pose,

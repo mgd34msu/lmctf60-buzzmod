@@ -41,11 +41,12 @@ and `Makefile`. It excludes generated files and `tests/support/` imports. It doe
 not classify the root Quake II and LMCTF source or vendored SQLite as new project
 code.
 
-`tools/deslop_audit.py` reads `tools/source-size-budget.json`. The audit rejects
-new files over 800 lines. It also rejects lines over 100 columns in files that
-have no exception. An existing exception may not grow. A smaller exception makes
-the audit fail until the budget is lowered. Run `make deslop-test` with either
-Make dialect.
+`tools/deslop_audit.py` reads `tools/source-size-budget.json`. Eight hundred
+lines is the default review threshold; a larger cohesive module needs an
+explicit recorded allowance. The audit also rejects lines over 100 columns in
+files that have no exception. Do not add unrelated work to an existing size
+exception. Lower stale allowances when a file becomes smaller. Run
+`make deslop-test` with either Make dialect.
 
 Split source at an ownership or lifecycle boundary. Keep the public interface in
 one header. Do not use arbitrary line ranges or numbered files as boundaries.

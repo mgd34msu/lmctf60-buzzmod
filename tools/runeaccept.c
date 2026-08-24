@@ -1,5 +1,6 @@
 /* runeaccept.c -- standalone production-loader acceptance for one artifact. */
 #include "q_shared.h"
+#include "slipgate/sg_action_contract.generated.h"
 #include "slipgate/sg_rune_file.h"
 #include "slipgate/sg_rune_codec.h"
 
@@ -235,6 +236,15 @@ int main(int argc, char **argv)
 	uint32_t plan_edge_count;
 	int exit_code = 1;
 
+	if (argc == 2 && strcmp(argv[1], "--contracts") == 0)
+	{
+		printf("{\"action_contract_sha256\":\"%s\","
+		       "\"mechanism_contract_sha256\":\"%s\"}\n",
+			SG_RUNE_ACTION_CONTRACT_SHA256,
+			SG_RUNE_MECHANISM_CONTRACT_SHA256);
+		return 0;
+	}
+
 	if (argc == 3 && strcmp(argv[1], "--require-mechanisms") == 0)
 	{
 		require_mechanisms = 1;
@@ -245,7 +255,8 @@ int main(int argc, char **argv)
 	else
 	{
 		fprintf(stderr,
-			"usage: runeaccept [--require-mechanisms] ARTIFACT\n");
+			"usage: runeaccept [--contracts] "
+			"[--require-mechanisms] ARTIFACT\n");
 		return 2;
 	}
 	if (!Accept_ReadIdentity(path, &identity))
@@ -282,13 +293,16 @@ int main(int argc, char **argv)
 	printf("{\"edge_count\":%" PRIu32 ",\"inventory_edge_count\":%" PRIu32
 	       ",\"link_count\":%" PRIu32 ",\"map_name\":\"%s\""
 	       ",\"node_count\":%" PRIu32 ",\"plan_count\":%" PRIu32
-	       ",\"plan_edge_count\":%" PRIu32 ",\"seed_count\":%" PRIu32
+	       ",\"plan_edge_count\":%" PRIu32 ",\"route_contract\":\"%s\""
+	       ",\"seed_count\":%" PRIu32
 	       ",\"trigger_count\":%" PRIu32 "}\n",
 		rune->artifact.num_mechanism_edges,
 		rune->artifact.num_inventory_edges, rune->artifact.num_links,
 		rune->artifact.identity.map_name,
 		rune->artifact.num_mechanism_nodes,
 		rune->artifact.num_mechanism_plans, plan_edge_count,
+		rune->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY
+		    ? "local_only" : "complete",
 		rune->artifact.num_seeds, trigger_count);
 	exit_code = 0;
 

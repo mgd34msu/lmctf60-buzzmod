@@ -5,9 +5,9 @@
 
 #include "slipgate/sg_action.h"
 
-_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xd3907ac4U,
+_Static_assert(SG_RUNE_ACTION_CONTRACT_CRC32 == 0xdd1b1c98U,
 	"RUNE action contract drift");
-_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0xbef56f72U,
+_Static_assert(SG_RUNE_MECHANISM_CONTRACT_CRC32 == 0x032f37b7U,
 	"RUNE mechanism contract drift");
 
 static int failures;
@@ -29,6 +29,7 @@ typedef struct expected_action_s
 	unsigned int trait_mask;
 	int endpoint_policy;
 	int suffix_anchor_policy;
+	int secondary_control_policy;
 	int preopen_mechanism_anchor_policy;
 	int ride_mechanism_anchor_policy;
 	int control_policy;
@@ -48,71 +49,75 @@ typedef struct expected_action_s
 static const expected_action_t expected_actions[SG_ACTION_COUNT] =
 {
 	{ 1, RL_PROVEN, 0x000fU, 0x01U, 0x0000U, RLEP_DRY_BOTH,
-	  RLAP_RUN_WAYPOINT, RLAP_ZERO, RLAP_ZERO, RLCP_RUN, RLMP_NONE,
+	  RLAP_RUN_WAYPOINT, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_RUN, RLMP_NONE,
 		  RL_RUN, RLFB_NONE, 0, "RL_RUN", "RUN", "RUN", "#9a9a9a" },
 	{ 1, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH,
-	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_JUMP, RLMP_NONE,
+	  RLAP_ZERO, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_JUMP, RLMP_NONE,
 		  RL_JUMP, RLFB_NONE, 0, "RL_JUMP", "JUMP", "JUMP", "#00c8d7" },
 	{ 1, RL_PROVEN, 0x0001U, 0x01U, 0x0003U, RLEP_FROM_DRY,
-	  RLAP_DROP_LIP, RLAP_ZERO, RLAP_ZERO, RLCP_DROP, RLMP_NONE,
+	  RLAP_DROP_LIP, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_DROP, RLMP_NONE,
 		  RL_DROP, RLFB_FIXED, 150, "RL_DROP", "DROP", "DROP", "#e0c000" },
 	{ 1, RL_PROVEN, 0x0001U, 0x01U, 0x0001U, RLEP_NOT_BOTH_WATER,
-	  RLAP_HOOK_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_HOOK, RLMP_NONE,
+	  RLAP_HOOK_CONTROL, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_HOOK, RLMP_NONE,
 		  RL_HOOK, RLFB_ROPE_CVAR, 0, "RL_HOOK", "HOOK", "HOOK", "#ff8c1a" },
 	{ 1, RL_PROVEN, 0x0001U, 0x01U, 0x0021U, RLEP_AT_LEAST_ONE_WATER,
-	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_SWIM, RLMP_NONE,
+	  RLAP_ZERO, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_SWIM, RLMP_NONE,
 		  RL_SWIM, RLFB_NONE, 0, "RL_SWIM", "SWIM", "SWIM", "#3d7dff" },
 	{ 1, RL_DECLARED, 0x0008U, 0x05U, 0x0025U, RLEP_ANY,
-	  RLAP_WORLD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+	  RLAP_WORLD, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_LIFT, RLFB_NONE, 0, "RL_LIFT", "LIFT", "LIFT", "#8f5cff" },
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_ANY,
-	  RLAP_TELEPORT_PAD, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+	  RLAP_TELEPORT_PAD, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_TELEPORT, RLFB_NONE, 0, "RL_TELEPORT", "TELEPORT", "TELE",
 	  "#00d18a" },
 	{ 1, RL_PROVEN, 0x000fU, 0x01U, 0x0003U, RLEP_DRY_BOTH,
-	  RLAP_ROCKET_CONTROL, RLAP_ZERO, RLAP_ZERO, RLCP_ROCKETJUMP, RLMP_NONE,
+	  RLAP_ROCKET_CONTROL, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_ROCKETJUMP, RLMP_NONE,
 		  RL_ROCKETJUMP, RLFB_FIXED, 900, "RL_ROCKETJUMP", "ROCKETJUMP",
 	  "RJ", "#ff3b30" },
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0025U, RLEP_DRY_BOTH,
-	  RLAP_DOOR_WAIT, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+	  RLAP_DOOR_WAIT, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_DOOR, RLFB_NONE, 0, "RL_DOOR", "DOOR", "DOOR", "#ff66c4" },
 	{ 1, RL_CONTRACTED, 0x0010U, 0x06U, 0x007dU, RLEP_FROM_DRY,
-	  RLAP_DROP_LIP, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP,
+	  RLAP_DROP_LIP, RLSCP_NONE, RLAP_DOOR_PREOPEN_CONTACT, RLAP_DOOR_RIDE_INGRESS_LIP,
 		  RLCP_DROP, RLMP_DOOR_WORLD_FIXED_1_8, RL_DROP, RLFB_INHERIT, 0,
 	  "RL_DOOR_DROP", "DOOR_DROP", "D_DROP", "#d4a600" },
 	{ 1, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_FROM_WATER,
-	  RLAP_ZERO, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_SWIM,
+	  RLAP_ZERO, RLSCP_NONE, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_SWIM,
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_SWIM, RLFB_INHERIT, 0,
 	  "RL_DOOR_SWIM", "DOOR_SWIM", "D_SWIM", "#5a9cff" },
 	{ 1, RL_CONTRACTED, 0x0010U, 0x02U, 0x007dU, RLEP_WATER_TO_DRY,
-	  RLAP_HOOK_CONTROL, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_HOOK,
+	  RLAP_HOOK_CONTROL, RLSCP_NONE, RLAP_DOOR_PREOPEN_CONTACT, RLAP_ZERO, RLCP_HOOK,
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_HOOK, RLFB_INHERIT, 0,
 	  "RL_DOOR_HOOK", "DOOR_HOOK", "D_HOOK", "#ff5bbd" },
 	{ 1, RL_DECLARED, 0x0008U, 0x06U, 0x007dU, RLEP_DRY_BOTH,
-	  RLAP_DOOR_WAIT, RLAP_DOOR_PREOPEN_CONTACT,
+	  RLAP_DOOR_WAIT, RLSCP_NONE, RLAP_DOOR_PREOPEN_CONTACT,
 	  RLAP_DOOR_RIDE_INGRESS_LIP, RLCP_DECLARED,
 		  RLMP_DOOR_WORLD_FIXED_1_8, RL_DOOR, RLFB_INHERIT, 0,
 	  "RL_BUTTON_DOOR", "BUTTON_DOOR",
 	  "B_DOOR", "#ff9f0a" },
 	{ 1, RL_DECLARED, 0x0008U, 0x01U, 0x0027U, RLEP_DRY_BOTH,
-	  RLAP_ZERO, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
+	  RLAP_ZERO, RLSCP_NONE, RLAP_ZERO, RLAP_ZERO, RLCP_DECLARED, RLMP_NONE,
 		  RL_PUSH, RLFB_NONE, 0, "RL_PUSH", "PUSH", "PUSH", "#b76cff" },
 	{ 1, RL_DECLARED, 0x0008U, 0x06U, 0x003dU, RLEP_DRY_BOTH,
-	  RLAP_WORLD, RLAP_TRAIN_CROSS, RLAP_WORLD, RLCP_DECLARED,
+	  RLAP_WORLD, RLSCP_NONE, RLAP_TRAIN_CROSS, RLAP_WORLD, RLCP_DECLARED,
 	  RLMP_TRAIN_WORLD_FIXED_1_8,
 		  RL_TRAIN, RLFB_NONE, 0, "RL_TRAIN", "TRAIN", "TRAIN", "#00a6a6" },
+	{ 1, RL_PROVEN, 0x0001U, 0x01U, 0x0061U, RLEP_NOT_BOTH_WATER,
+	  RLAP_HOOK_CONTROL, RLSCP_HOOK_CONTROL, RLAP_ZERO, RLAP_ZERO,
+	  RLCP_HOOK, RLMP_NONE, RL_HOOK, RLFB_INHERIT, 0,
+	  "RL_CHAIN_HOOK", "CHAIN_HOOK", "C_HOOK", "#ff7a00" },
 };
 
 static void TestActions(void)
 {
 	static const int runtime_owns_control[SG_ACTION_COUNT] =
-		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+		{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 	static const int runtime_suppresses_localization[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1 };
+		{ 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1 };
 	static const int uses_hook_policy[SG_ACTION_COUNT] =
-		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 };
+		{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1 };
 	static const int field_bias_at_rope_1000[SG_ACTION_COUNT] =
-		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000, 0, 0, 0 };
+		{ 0, 0, 150, 1000, 0, 0, 0, 900, 0, 150, 0, 1000, 0, 0, 0, 1000 };
 	static const unsigned int traits[] =
 	{
 		SG_ACTF_OWNS_CONTROL, SG_ACTF_BALLISTIC,
@@ -148,6 +153,8 @@ static void TestActions(void)
 		CHECK((int)desc->endpoint_policy == expect->endpoint_policy);
 		CHECK((int)desc->suffix_anchor_policy ==
 		      expect->suffix_anchor_policy);
+		CHECK((int)desc->secondary_control_policy ==
+		      expect->secondary_control_policy);
 		CHECK((int)desc->preopen_mechanism_anchor_policy ==
 		      expect->preopen_mechanism_anchor_policy);
 		CHECK((int)desc->ride_mechanism_anchor_policy ==
@@ -170,6 +177,10 @@ static void TestActions(void)
 		CHECK(SG_ActionEndpointPolicy(action) ==
 		      (int)desc->endpoint_policy);
 		CHECK(SG_ActionEffectiveSuffix(action) == expect->effective_suffix);
+		CHECK(SG_ActionSecondaryControlPolicy(action) ==
+		      expect->secondary_control_policy);
+		CHECK(SG_ActionHasSecondaryControl(action) ==
+		      (action == RL_CHAIN_HOOK));
 		CHECK(SG_ActionRuntimeHasTrait(action, SG_ACTF_OWNS_CONTROL) ==
 		      runtime_owns_control[action]);
 		CHECK(SG_ActionRuntimeHasTrait(
@@ -235,6 +246,8 @@ static void TestActions(void)
 	CHECK(SG_ActionDescribe(SG_ACTION_COUNT) == NULL);
 	CHECK(SG_ActionDescribe(INT_MIN) == NULL);
 	CHECK(SG_ActionDescribe(INT_MAX) == NULL);
+	CHECK(SG_ActionSecondaryControlPolicy(INT_MAX) == -1);
+	CHECK(!SG_ActionHasSecondaryControl(INT_MAX));
 	CHECK(!SG_ActionKnown(-1));
 	CHECK(!SG_ActionKnown(SG_ACTION_COUNT));
 	CHECK(!SG_ActionKnown(INT_MIN));
@@ -316,7 +329,8 @@ static void TestEndpointPolicies(void)
 		{ 1, 1, 1, 0 }, { 0, 1, 1, 1 }, { 1, 1, 1, 1 },
 		{ 1, 1, 1, 1 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 },
 		{ 1, 1, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 1, 0 },
-		{ 1, 0, 0, 0 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 }
+		{ 1, 0, 0, 0 }, { 1, 0, 0, 0 }, { 1, 0, 0, 0 },
+		{ 1, 1, 1, 0 }
 	};
 	int action, policy;
 

@@ -961,6 +961,32 @@ static void TestHookFlightReleaseAndEventFailures(void)
 	CHECK(state.progress.reason == SG_REPLAY_REASON_CONTAMINATED);
 }
 
+static void TestHookFlingRelease(void)
+{
+	sg_hook_replay_spec_t spec = TestHookSpec();
+	sg_hook_replay_state_t state;
+	sg_replay_pose_t pose = TestPose(0.0f, 0.0f, 0.0f);
+	sg_replay_observation_t observation = TestObservation();
+
+	VectorSet(spec.destination, 1200.0f, 0.0f, -200.0f);
+	spec.fling_release = true;
+	spec.settle_limit_ms = SG_REPLAY_HOOK_FLING_SETTLE_MS;
+	pose.pms.gravity = 100;
+	VectorSet(pose.velocity, 600.0f, 0.0f, 0.0f);
+	CHECK(SG_HookReplayFlingReleaseReady(&spec, &pose, &observation));
+	pose.velocity[0] = -600.0f;
+	CHECK(!SG_HookReplayFlingReleaseReady(&spec, &pose, &observation));
+	pose.velocity[0] = 299.0f;
+	CHECK(!SG_HookReplayFlingReleaseReady(&spec, &pose, &observation));
+	pose.velocity[0] = 600.0f;
+	CHECK_STATUS(SG_HookReplayBegin(&state, &spec, &pose, &observation,
+	                                0.0f), SG_REPLAY_RUNNING);
+
+	spec.fling_release = false;
+	CHECK_STATUS(SG_HookReplayBegin(&state, &spec, &pose, &observation,
+	                                0.0f), SG_REPLAY_FAILED);
+}
+
 static void TestHookPullAndSettleCaps(void)
 {
 	sg_hook_replay_spec_t spec = TestHookSpec();
@@ -1164,6 +1190,7 @@ int main(void)
 	TestHookDoorLatch();
 	TestHookEventsCommandsAndMidframe();
 	TestHookFlightReleaseAndEventFailures();
+	TestHookFlingRelease();
 	TestHookPullAndSettleCaps();
 	TestMalformedAndCadenceFailures();
 

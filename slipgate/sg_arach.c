@@ -2,10 +2,12 @@
 #include "g_ctffunc.h"
 #include "g_tourney.h"              /* Match_Mode -- the clock read's one caveat */
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_localization.h"
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_chat.h"       /* human orders replace the role quota */
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_hook_game.h"
 #include "slipgate/sg_persona.h"    /* the roster's names, wired to behaviour */
 
 /*
@@ -35,6 +37,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_danger_policy.h"
 #include "slipgate/sg_sidecar_loader.h"
 #include "slipgate/sg_sidecar_store.h"
+#include "slipgate/sg_timed_vault_egress.h"
 
 #define FIELD_INF       0x3fffffff
 #include "slipgate/sg_bot.h"
@@ -297,16 +300,19 @@ void Rune_Free(rune_t *r)
 }
 
 /* Wire validation owns duplicates and route ownership.  This final component
- * is intentionally world-dependent: both live flag stands must localize, and
- * every non-tombstone seed must reach each objective in the preserved graph. */
+ * is intentionally world-dependent: both live flag stands must localize.
+ * Complete artifacts require every live seed to reach both stands; the
+ * authenticated local-only contract requires at least one and rejects neutral
+ * geometry as well as a needlessly weakened complete graph. */
 static const char *Rune_ValidateObjectiveCore(rune_t *r)
 {
 	int *first_in = NULL, *next_in = NULL, *queue = NULL;
-	byte *seen = NULL;
+	byte *reach[2] = { NULL, NULL };
 	edict_t *stands[2];
 	int roots[2];
 	int ns = r->hdr.num_seeds, nl = r->hdr.num_links;
 	int i, which;
+	qboolean complete = true;
 	const char *failure = NULL;
 
 	/* The stand markers are stable even while a live flag is carried, and are
@@ -321,10 +327,22 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 	}
 	for (which = 0; which < 2; which++)
 	{
-		roots[which] = Rune_NearestSeed(r, stands[which]->s.origin);
+		roots[which] = r->artifact.route_contract ==
+			RUNE_ROUTE_CONTRACT_LOCAL_ONLY
+			? SG_LocalObjectiveSeed(r, stands[which]->s.origin)
+			: Rune_NearestSeed(r, stands[which]->s.origin);
 		if (roots[which] < 0)
 		{
-			failure = "flag objective root is not routable";
+			failure = r->artifact.route_contract ==
+				RUNE_ROUTE_CONTRACT_LOCAL_ONLY
+				? "flag stand does not resolve to one local-only objective"
+				: "flag objective root is not routable";
+			goto done;
+		}
+		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY &&
+		    !(r->seeds[roots[which]].flags & RSF_OBJECTIVE))
+		{
+			failure = "local-only objective marker does not match flag root";
 			goto done;
 		}
 	}
@@ -333,8 +351,9 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 	next_in = sg_host.level_alloc(sizeof(*next_in) *
 	                              (size_t)(nl ? nl : 1));
 	queue = sg_host.level_alloc(sizeof(*queue) * (size_t)ns);
-	seen = sg_host.level_alloc((size_t)ns);
-	if (!first_in || !next_in || !queue || !seen)
+	reach[0] = sg_host.level_alloc((size_t)ns);
+	reach[1] = sg_host.level_alloc((size_t)ns);
+	if (!first_in || !next_in || !queue || !reach[0] || !reach[1])
 	{
 		failure = "graph-contract allocation failure";
 		goto done;
@@ -351,8 +370,8 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 	{
 		int head = 0, tail = 0;
 
-		memset(seen, 0, (size_t)ns);
-		seen[roots[which]] = 1;
+		memset(reach[which], 0, (size_t)ns);
+		reach[which][roots[which]] = 1;
 		queue[tail++] = roots[which];
 		while (head < tail)
 		{
@@ -363,21 +382,47 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 			{
 				int from = r->links[li].from;
 
-				if (seen[from])
+				if (reach[which][from])
 					continue;
-				seen[from] = 1;
+				reach[which][from] = 1;
 				queue[tail++] = from;
 			}
 		}
-		for (i = 0; i < ns; i++)
-			if (!(r->seeds[i].flags & RSF_TOMBSTONE) && !seen[i])
-			{
-				failure = which == 0
-				    ? "live seed outside red objective reverse component"
-				    : "live seed outside blue objective reverse component";
-				goto done;
-			}
 	}
+	for (i = 0; i < ns; i++)
+	{
+		if (r->seeds[i].flags & RSF_TOMBSTONE)
+			continue;
+		if (!reach[0][i] || !reach[1][i])
+			complete = false;
+		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_COMPLETE &&
+		    !reach[0][i])
+		{
+			failure = "live seed outside red objective reverse component";
+			goto done;
+		}
+		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_COMPLETE &&
+		    !reach[1][i])
+		{
+			failure = "live seed outside blue objective reverse component";
+			goto done;
+		}
+		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY &&
+		    !reach[0][i] && !reach[1][i])
+		{
+			failure = "live seed outside both objective reverse components";
+			goto done;
+		}
+	}
+	if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY)
+	{
+		if (roots[0] == roots[1])
+			failure = "local-only objectives resolve to one root";
+		else if (complete)
+			failure = "complete objective graph mislabeled local-only";
+	}
+	else if (r->artifact.route_contract != RUNE_ROUTE_CONTRACT_COMPLETE)
+		failure = "unknown route contract";
 
 done:
 	if (first_in)
@@ -386,8 +431,10 @@ done:
 		sg_host.level_free(next_in);
 	if (queue)
 		sg_host.level_free(queue);
-	if (seen)
-		sg_host.level_free(seen);
+	if (reach[0])
+		sg_host.level_free(reach[0]);
+	if (reach[1])
+		sg_host.level_free(reach[1]);
 	return failure;
 }
 
@@ -421,8 +468,11 @@ static const char *Rune_BuildOutboundIndexes(rune_t *r)
 	{
 		qboolean tombstone =
 		    (r->seeds[i].flags & RSF_TOMBSTONE) != 0;
+		qboolean objective =
+		    (r->seeds[i].flags & RSF_OBJECTIVE) != 0;
 
-		if (tombstone == (r->linked_seed[i] != 0))
+		if ((tombstone && (r->linked_seed[i] || objective)) ||
+		    (!tombstone && !r->linked_seed[i] && !objective))
 			return "invalid route-core seed ownership";
 	}
 	return NULL;
@@ -558,7 +608,14 @@ rune_t *Rune_Load(const char *mapname)
 		goto cleanup;
 	}
 	failure_stage = "door-replay";
+	if (!SG_TimedVaultEgressScopeBegin(rune->seeds, rune->hdr.num_seeds,
+	        rune->links, rune->hdr.num_links))
+	{
+		failure = "timed-vault water escape index unavailable";
+		goto cleanup;
+	}
 	failure = Rune_ReplayDoorPlans(rune, &failure_index);
+	SG_TimedVaultEgressScopeEnd();
 	SG_RuneProofScopeEnd();
 	proof_scope_active = false;
 	if (failure)
@@ -1040,11 +1097,10 @@ void SG_DangerPersistenceReset(void)
 
 static int *Air_Build(const rune_t *r)
 {
-	int i, li, qhead = 0, qtail = 0;
 	int n;
 	int *airnext = NULL, *dist = NULL, *incoming = NULL;
 	int *next_incoming = NULL, *queue = NULL;
-	qboolean complete;
+	qboolean complete = false;
 
 	if (!r || r->hdr.num_seeds <= 0)
 		return NULL;
@@ -1057,19 +1113,6 @@ static int *Air_Build(const rune_t *r)
 	queue = sg_host.level_alloc(sizeof(int) * n);
 	if (!airnext || !dist || !incoming || !next_incoming || !queue)
 		goto cleanup;
-	for (i = 0; i < n; i++)
-	{
-		airnext[i] = -1;
-		incoming[i] = -1;
-		if ((r->seeds[i].flags & RSF_WATER) &&
-		    !(r->seeds[i].flags & RSF_TOMBSTONE))
-			dist[i] = 0x7fffff;
-		else
-		{
-			dist[i] = 0;
-			queue[qtail++] = i;
-		}
-	}
 	/* Dry seeds are the only zero-distance air sources.  In particular, do
 	 * not call a submerged water seed "air" merely because it owns a direct
 	 * shoreline edge: that suppresses the relaxation below and leaves its
@@ -1081,35 +1124,11 @@ static int *Air_Build(const rune_t *r)
 	 * silently truncated valid long pools and depended on link order; this is
 	 * O(seeds+links), converges for the full format bounds, and chooses a shortest
 	 * number-of-strokes escape. */
-	for (li = 0; li < r->hdr.num_links; li++)
-	{
-		const rune_link_t *l = &r->links[li];
-
-		next_incoming[li] = -1;
-		if (l->action != RL_SWIM ||
-		    !(r->seeds[l->from].flags & RSF_WATER))
-			continue;
-		next_incoming[li] = incoming[l->to];
-		incoming[l->to] = li;
-	}
-	while (qhead < qtail)
-	{
-		int to = queue[qhead++];
-
-		for (li = incoming[to]; li >= 0; li = next_incoming[li])
-		{
-			const rune_link_t *l = &r->links[li];
-
-			if (dist[l->from] != 0x7fffff)
-				continue;
-			dist[l->from] = dist[to] + 1;
-			airnext[l->from] = to;
-			queue[qtail++] = l->from;
-		}
-	}
+	complete = SG_WaterEscapeIndexBuild(r->seeds, n, r->links,
+	    r->hdr.num_links, airnext, dist, incoming, next_incoming, queue);
 
 cleanup:
-	complete = airnext && dist && incoming && next_incoming && queue;
+	complete = complete && airnext && dist && incoming && next_incoming && queue;
 	if (dist)
 		sg_host.level_free(dist);
 	if (incoming)
@@ -1282,6 +1301,14 @@ qboolean SG_LevelSetup(void)
 		sg_setup_failed = true;
 		goto fail;
 	}
+	if (!SG_TimedVaultEgressScopeBegin(candidate->seeds,
+	        candidate->hdr.num_seeds, candidate->links,
+	        candidate->hdr.num_links))
+	{
+		sg_host.dprint("slipgate: timed-vault water escape setup failed\n");
+		sg_setup_failed = true;
+		goto fail;
+	}
 	/* Fields_Setup writes sg_fields while consuming only the local candidate.
 	 * Those fields are not usable until sg_rune is published below; every
 	 * failure path zeros the structure before releasing the candidate. */
@@ -1393,6 +1420,9 @@ qboolean SG_LevelSetup(void)
 	Escape_Load(sg_rune_map); /* map-keyed configuration, not a graph sidecar */
 	Caco_Reset();
 
+	sg_host.dprint("slipgate: route contract %s\n",
+	    sg_rune->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY
+	        ? "local-only" : "complete");
 	sg_host.dprint("slipgate: rune ready %s, %d seeds, %d links, "
 	               "%u mechanism nodes, %u plans, gravity %.0f, all fields "
 	               "up\n", sg_rune->artifact.identity.map_name,
@@ -1403,6 +1433,7 @@ qboolean SG_LevelSetup(void)
 	return true;
 
 fail:
+	SG_TimedVaultEgressScopeEnd();
 	Danger_PersistenceRelease();
 	Danger_ResetLevel();
 	Sidecar_CandidatesRelease(&sidecars);
@@ -1761,6 +1792,33 @@ static int StrikeFieldCost(const int *field, int seed)
 	    seed >= SG_Rune()->hdr.num_seeds || field[seed] >= SG_FIELD_INF)
 		return -1;
 	return field[seed];
+}
+
+/* A local-only graph deliberately has no proved route across one objective
+ * cut.  Keep every ordinary role field while it is reachable; only replace an
+ * infinite selection with the authenticated union field.  This prevents a
+ * missing flag closure from masquerading as lost localization while never
+ * implying an edge between the retained components. */
+static qboolean RouteLocalNormalize(sg_bot_t *bot, sg_think_t *tc)
+{
+	const int *local;
+
+	if (!bot || !tc || !SG_Rune() ||
+	    SG_Rune()->artifact.route_contract != RUNE_ROUTE_CONTRACT_LOCAL_ONLY ||
+	    bot->seed < 0 || bot->seed >= SG_Rune()->hdr.num_seeds ||
+	    !tc->goal_field || tc->goal_field[bot->seed] < SG_FIELD_INF)
+		return false;
+	local = sg_fields.to_local_objective;
+	if (!local || local[bot->seed] >= SG_FIELD_INF)
+		return false;
+	tc->goal_field = local;
+	tc->route_field = local;
+	tc->route_pure = true;
+	tc->scoop_mission = false;
+	tc->rune_handoff_route = false;
+	tc->mega = 0.0f;
+	bot->last_goalcost = local[bot->seed];
+	return true;
 }
 
 static qboolean StrikeAttackEligible(sg_role_t role, qboolean carrying,
@@ -2156,6 +2214,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics, "death", "lifecycle");
 	bot->hook_phase = 0;
 	bot->hook_link = -1;
+	SG_ChainHookGameReset(bot);
 	bot->hook_bite_logged = false;
 	bot->hook_attached_validated = false;
 	bot->hook_landbrake = 0.0f;
@@ -2175,6 +2234,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->hook_settle_ms = 0;
 	bot->hook_proved_pull_ms = 0;
 	bot->hook_proved_release_ms = 0;
+	bot->hook_proved_fling_release = false;
 	bot->hook_proved_arrival_ms = 0;
 	bot->hook_proved_settle_ms = 0;
 	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
@@ -2932,6 +2992,7 @@ void SG_BotThink(sg_bot_t *bot)
 				ctf_hook_abort(e);
 			bot->hook_phase = 0;
 			bot->hook_link = -1;
+			SG_ChainHookGameReset(bot);
 			bot->hook_entity = NULL;
 			bot->speedhook = false;
 			bot->speedhook_pull_applied = false;
@@ -2953,6 +3014,7 @@ void SG_BotThink(sg_bot_t *bot)
 			ctf_hook_abort(e);
 		bot->hook_phase = 0;
 		bot->hook_link = -1;
+		SG_ChainHookGameReset(bot);
 		bot->hook_bite_logged = false;
 		bot->hook_attached_validated = false;
 		bot->hook_landbrake = 0.0f;
@@ -3275,6 +3337,7 @@ void SG_BotThink(sg_bot_t *bot)
 		}
 	}
 	Think_Objective(bot, &tc);
+	(void)RouteLocalNormalize(bot, &tc);
 
 	/* Strike is a coordinator overlay, not a second role allocator.  It may
 	 * select the route owned by a duty (home, carrier, or enemy flag) while
@@ -3343,6 +3406,7 @@ void SG_BotThink(sg_bot_t *bot)
 			StrikeRetireGenericRail(bot, &tc);
 		}
 	}
+	(void)RouteLocalNormalize(bot, &tc);
 
 	goal_field = tc.goal_field;
 	/* Objective published the prior route cost before the strike overlay may
@@ -3365,6 +3429,8 @@ void SG_BotThink(sg_bot_t *bot)
 	bot->terminal = false;
 
 	Think_TrackSeed(bot, e, team);
+	if (RouteLocalNormalize(bot, &tc))
+		goal_field = tc.goal_field;
 	if ((bot->seed < 0 || goal_field[bot->seed] >= SG_FIELD_INF) &&
 	    !Think_SpeedhookOwnsSeed(bot) &&
 	    !(bot->seed >= 0 && bot->commit_link >= 0 &&
@@ -3604,6 +3670,7 @@ void SG_LevelChange(void)
 		(void)SG_HookDiagnosticsFinish(&sg_bots[i].hook_diagnostics,
 		    "map-transition", "level-change");
 	SG_ButtonExecutionLevelReset();
+	SG_TimedVaultEgressScopeEnd();
 	(void)SG_CompoundGuardGameLevelReset();
 	/* The fallback transition path must be as fail-closed as SpawnEntities. */
 	SG_DangerPersistenceReset();

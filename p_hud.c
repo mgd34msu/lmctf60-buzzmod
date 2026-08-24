@@ -3,6 +3,7 @@
 #include "g_tourney.h"
 #include "bat.h"
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
+#include "slipgate/sg_human_trace.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
 #include "ui_boards.h"              // settled boards: UI_Boards_MatchEnd from BeginIntermission
 #include "ui_text.h"                // bounded appender, needed by ui_layout.h below
@@ -73,6 +74,7 @@ void BeginIntermission (edict_t *targ)
 
 	if (level.intermissiontime)
 		return;		// already activated
+	SG_HumanTraceMatchEnd();
 
 	MvpDisp = 1;
 

@@ -465,8 +465,15 @@ void	ServerCommand (void)
 		SVCmd_POVRecord_f ();
 	else if (Q_stricmp (cmd, "rune") == 0)
 	{
-		/* SLIPGATE: generate the rune for the loaded map. */
-		Rune_Generate(level.mapname);
+		/* SLIPGATE: generation remains the default; human evidence is an
+		 * explicit, source-bound update transaction. */
+		if (gi.argc() == 2)
+			Rune_Generate(level.mapname);
+		else if (gi.argc() == 3 &&
+		         Q_stricmp(gi.argv(2), "update") == 0)
+			Rune_Update(level.mapname);
+		else
+			gi.cprintf(NULL, PRINT_HIGH, "usage: sv rune [update]\n");
 	}
 	else
 		gi.cprintf (NULL, PRINT_HIGH, "Unknown server command \"%s\"\n", cmd);

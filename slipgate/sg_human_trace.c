@@ -3,15 +3,36 @@
 #include "sg_cvars.h"
 #include "sg_human_trace.h"
 #include "sg_identity.h"
+#include "sg_local.h"
 
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 
-#define SG_HUMAN_TRACE_FORMAT "lmctf-human-trace-v1"
+#define SG_HUMAN_TRACE_FORMAT "lmctf-human-trace-v2"
 
 static FILE *sg_human_trace_file;
 static unsigned long sg_human_trace_sequence;
+static unsigned long sg_human_trace_hook_event;
 static qboolean sg_human_trace_open_failed;
+static qboolean sg_human_trace_match_ended;
+static qboolean sg_human_trace_rune_bound;
+
+static qboolean HumanTraceVectorQ8(const vec3_t vector, int32_t out[3])
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		double scaled = (double)vector[i] * 8.0;
+
+		if (!isfinite(scaled) || scaled < (double)INT32_MIN ||
+		    scaled > (double)INT32_MAX)
+			return false;
+		out[i] = (int32_t)lround(scaled);
+	}
+	return true;
+}
 
 static int HumanTraceEntityKey(const edict_t *entity)
 {
@@ -57,7 +78,7 @@ static qboolean HumanTraceOpen(void)
 
 	if (sg_human_trace_file)
 		return true;
-	if (sg_human_trace_open_failed)
+	if (sg_human_trace_open_failed || sg_human_trace_match_ended)
 		return false;
 	if (SG_LevelIdentitySnapshot(level.mapname, &identity) != SG_IDENTITY_OK)
 	{
@@ -97,6 +118,77 @@ static qboolean HumanTraceOpen(void)
 	return true;
 }
 
+static qboolean HumanTraceBindRune(qboolean allow_transient_load)
+{
+	const rune_t *rune;
+	rune_t *transient_rune = NULL;
+	const rune_artifact_t *artifact;
+	const rune_identity_t *identity;
+	int written;
+	qboolean result = true;
+
+	if (sg_human_trace_rune_bound)
+		return true;
+	rune = SG_Rune();
+	if (!rune && allow_transient_load)
+	{
+		transient_rune = Rune_Load(level.mapname);
+		rune = transient_rune;
+	}
+	if (!rune || rune->artifact.route_contract !=
+	    RUNE_ROUTE_CONTRACT_LOCAL_ONLY || !rune->encoded_sha256[0])
+		goto cleanup;
+	artifact = &rune->artifact;
+	identity = &artifact->identity;
+	written = fprintf(sg_human_trace_file,
+		"{\"format\":\"%s\",\"kind\":\"rune-bind\","
+		"\"start_sequence\":%lu,\"start_hook_event\":%lu,"
+		"\"frame\":%d,\"map\":\"%s\","
+		"\"bsp_checksum\":%u,\"entity_crc32\":%u,"
+		"\"physics_flags\":%u,\"gravity\":%.9g,"
+		"\"airaccelerate\":%.9g,\"maxvelocity\":%.9g,"
+		"\"pmove_substep_ms\":%u,\"server_frame_ms\":%u,"
+		"\"host_physics_id\":%u,\"route_contract\":%u,"
+		"\"payload_crc32\":%u,\"header_crc32\":%u,"
+		"\"action_contract_crc32\":%u,"
+		"\"mechanism_contract_crc32\":%u,"
+		"\"num_seeds\":%u,\"num_links\":%u,"
+		"\"num_mechanism_nodes\":%u,"
+		"\"num_mechanism_edges\":%u,"
+		"\"num_inventory_edges\":%u,"
+		"\"num_mechanism_plans\":%u,\"string_bytes\":%u,"
+		"\"rune_sha256\":\"%s\"}\n",
+		SG_HUMAN_TRACE_FORMAT, sg_human_trace_sequence + 1UL,
+		sg_human_trace_hook_event + 1UL,
+		level.framenum, identity->map_name, identity->bsp_checksum,
+		identity->entity_crc32, identity->physics_flags,
+		(double)identity->gravity, (double)identity->airaccelerate,
+		(double)identity->maxvelocity,
+		(unsigned int)identity->pmove_substep_ms,
+		(unsigned int)identity->server_frame_ms,
+		identity->host_physics_id,
+		(unsigned int)artifact->route_contract, artifact->payload_crc32,
+		artifact->header_crc32, artifact->action_contract_crc32,
+		artifact->mechanism_contract_crc32, artifact->num_seeds,
+		artifact->num_links, artifact->num_mechanism_nodes,
+		artifact->num_mechanism_edges, artifact->num_inventory_edges,
+		artifact->num_mechanism_plans, artifact->string_bytes,
+		rune->encoded_sha256);
+	if (written < 0 || fflush(sg_human_trace_file) != 0)
+	{
+		gi.dprintf("humantrace: could not bind LOCAL_ONLY RUNE evidence\n");
+		fclose(sg_human_trace_file);
+		sg_human_trace_file = NULL;
+		sg_human_trace_open_failed = true;
+		result = false;
+		goto cleanup;
+	}
+	sg_human_trace_rune_bound = true;
+cleanup:
+	Rune_Free(transient_rune);
+	return result;
+}
+
 void SG_HumanTraceNewLevel(void)
 {
 	if (sg_human_trace_file)
@@ -105,7 +197,24 @@ void SG_HumanTraceNewLevel(void)
 		sg_human_trace_file = NULL;
 	}
 	sg_human_trace_sequence = 0;
+	sg_human_trace_hook_event = 0;
 	sg_human_trace_open_failed = false;
+	sg_human_trace_match_ended = false;
+	sg_human_trace_rune_bound = false;
+}
+
+void SG_HumanTraceMatchEnd(void)
+{
+	if (sg_human_trace_file)
+	{
+		int flush_failed = fflush(sg_human_trace_file) != 0;
+		int close_failed = fclose(sg_human_trace_file) != 0;
+
+		if (flush_failed || close_failed)
+			gi.dprintf("humantrace: match-end close failed\n");
+		sg_human_trace_file = NULL;
+	}
+	sg_human_trace_match_ended = true;
 }
 
 void SG_HumanTracePmove(edict_t *entity,
@@ -122,7 +231,7 @@ void SG_HumanTracePmove(edict_t *entity,
 	    after->numtouch > MAXTOUCH)
 		return;
 	client_key = HumanTraceEntityKey(entity);
-	if (client_key <= 0 || !HumanTraceOpen())
+	if (client_key <= 0 || !HumanTraceOpen() || !HumanTraceBindRune(false))
 		return;
 	command = &after->cmd;
 	fprintf(sg_human_trace_file,
@@ -150,4 +259,112 @@ void SG_HumanTracePmove(edict_t *entity,
 			HumanTraceEntityKey(after->touchents[i]));
 	fputs("]}\n", sg_human_trace_file);
 	fflush(sg_human_trace_file);
+}
+
+static qboolean HumanTraceHookReady(edict_t *entity)
+{
+	SG_CvarsInit();
+	if (!sg_cv.humantrace->value || !entity || !entity->client ||
+	    !entity->inuse || (entity->flags & FL_BOT))
+		return false;
+	if (!HumanTraceOpen() || !HumanTraceBindRune(true))
+		return false;
+	return sg_human_trace_rune_bound;
+}
+
+static void HumanTraceHookCommit(int written)
+{
+	if (written >= 0 && fflush(sg_human_trace_file) == 0)
+		return;
+	gi.dprintf("humantrace: hook telemetry write failed\n");
+	if (sg_human_trace_file)
+		fclose(sg_human_trace_file);
+	sg_human_trace_file = NULL;
+	sg_human_trace_open_failed = true;
+}
+
+void SG_HumanTraceHookFire(edict_t *entity, edict_t *hook)
+{
+	int32_t origin[3], velocity[3];
+	int written;
+	int client_key, hook_key;
+
+	if (!HumanTraceHookReady(entity) || !hook || hook->owner != entity ||
+	    !HumanTraceVectorQ8(entity->s.origin, origin) ||
+	    !HumanTraceVectorQ8(entity->velocity, velocity))
+		return;
+	client_key = HumanTraceEntityKey(entity);
+	hook_key = HumanTraceEntityKey(hook);
+	if (client_key <= 0 || hook_key <= 0)
+		return;
+	written = fprintf(sg_human_trace_file,
+		"{\"format\":\"%s\",\"kind\":\"hook-fire\","
+		"\"event\":%lu,\"after_step\":%lu,\"client\":%d,"
+		"\"frame\":%d,\"hook\":%d,"
+		"\"origin_q8\":[%d,%d,%d],\"velocity_q8\":[%d,%d,%d],"
+		"\"view_short\":[%d,%d],\"hand\":%d}\n",
+		SG_HUMAN_TRACE_FORMAT, ++sg_human_trace_hook_event,
+		sg_human_trace_sequence, client_key, level.framenum, hook_key,
+		origin[0], origin[1], origin[2], velocity[0], velocity[1],
+		velocity[2], (short)ANGLE2SHORT(entity->client->v_angle[PITCH]),
+		(short)ANGLE2SHORT(entity->client->v_angle[YAW]),
+		entity->client->pers.hand);
+	HumanTraceHookCommit(written);
+}
+
+void SG_HumanTraceHookAttach(edict_t *entity, edict_t *hook,
+	edict_t *target)
+{
+	int32_t bite[3];
+	int written;
+	int client_key, hook_key, target_key;
+
+	if (!HumanTraceHookReady(entity) || !hook || !target ||
+	    hook->owner != entity || hook->hook_target != target ||
+	    !HumanTraceVectorQ8(hook->s.origin, bite))
+		return;
+	client_key = HumanTraceEntityKey(entity);
+	hook_key = HumanTraceEntityKey(hook);
+	target_key = HumanTraceEntityKey(target);
+	if (client_key <= 0 || hook_key <= 0 || target_key < 0)
+		return;
+	written = fprintf(sg_human_trace_file,
+		"{\"format\":\"%s\",\"kind\":\"hook-attach\","
+		"\"event\":%lu,\"after_step\":%lu,\"client\":%d,"
+		"\"frame\":%d,\"hook\":%d,\"bite_q8\":[%d,%d,%d],"
+		"\"target\":%d,\"world\":%d}\n",
+		SG_HUMAN_TRACE_FORMAT, ++sg_human_trace_hook_event,
+		sg_human_trace_sequence, client_key, level.framenum, hook_key,
+		bite[0], bite[1], bite[2], target_key, target == g_edicts ? 1 : 0);
+	HumanTraceHookCommit(written);
+}
+
+void SG_HumanTraceHookRelease(edict_t *entity)
+{
+	edict_t *hook;
+	int32_t origin[3], velocity[3];
+	int written;
+	int client_key, hook_key;
+
+	if (!HumanTraceHookReady(entity))
+		return;
+	hook = entity->client->hook;
+	if (!hook || hook->owner != entity ||
+	    !HumanTraceVectorQ8(entity->s.origin, origin) ||
+	    !HumanTraceVectorQ8(entity->velocity, velocity))
+		return;
+	client_key = HumanTraceEntityKey(entity);
+	hook_key = HumanTraceEntityKey(hook);
+	if (client_key <= 0 || hook_key <= 0)
+		return;
+	written = fprintf(sg_human_trace_file,
+		"{\"format\":\"%s\",\"kind\":\"hook-release\","
+		"\"event\":%lu,\"after_step\":%lu,\"client\":%d,"
+		"\"frame\":%d,\"hook\":%d,"
+		"\"origin_q8\":[%d,%d,%d],\"velocity_q8\":[%d,%d,%d]}\n",
+		SG_HUMAN_TRACE_FORMAT, ++sg_human_trace_hook_event,
+		sg_human_trace_sequence, client_key, level.framenum, hook_key,
+		origin[0], origin[1], origin[2], velocity[0], velocity[1],
+		velocity[2]);
+	HumanTraceHookCommit(written);
 }

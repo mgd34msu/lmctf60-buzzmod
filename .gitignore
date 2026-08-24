@@ -23,6 +23,7 @@ tools/iter-*/
 tools/aux-[0-9]*/
 tools/*.log
 tools/runs-archive/
+tools/waveloop-stop
 
 # transient diagnostics, native POV sandboxes, and host-test products
 /.diag-*.gdb

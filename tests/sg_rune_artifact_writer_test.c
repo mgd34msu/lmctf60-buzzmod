@@ -410,7 +410,8 @@ static sg_rune_artifact_write_result_t WriteFixture(fixture_t *fixture,
 	memory_sink_t *sink)
 {
 	FixtureWorkspace(fixture);
-	return SG_RuneArtifactWrite(&fixture->identity, fixture->seeds, TEST_SEEDS,
+	return SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture->identity, fixture->seeds, TEST_SEEDS,
 		fixture->links, TEST_LINKS, fixture->nodes, TEST_NODES,
 		fixture->edges, TEST_EDGES, fixture->plans, TEST_PLANS,
 		fixture->strings, TEST_STRING_BYTES, &fixture->workspace,
@@ -473,7 +474,8 @@ static void TestCanonicalParity(void)
 		sizeof(fixture.strings)) == 0);
 
 	FixtureInit(&expected_fixture);
-	CHECK(SG_RuneCodecEncode(&expected_fixture.identity,
+	CHECK(SG_RuneCodecEncode(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&expected_fixture.identity,
 		expected_fixture.seeds, TEST_SEEDS, expected_fixture.links,
 		TEST_LINKS, expected_fixture.nodes, TEST_NODES,
 		expected_fixture.edges, TEST_EDGES, expected_fixture.plans,
@@ -508,7 +510,8 @@ static void TestNoMechanism(void)
 	fixture.links[0].activation_plan = SG_RUNE_CODEC_NO_ACTIVATION_PLAN;
 	fixture.strings[0] = 0U;
 	FixtureWorkspace(&fixture);
-	result = SG_RuneArtifactWrite(&fixture.identity, fixture.seeds, TEST_SEEDS,
+	result = SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture.identity, fixture.seeds, TEST_SEEDS,
 		fixture.links, TEST_LINKS, NULL, 0U, NULL, 0U, NULL, 0U,
 		fixture.strings, 1U, &fixture.workspace, MemorySink, &sink);
 	CHECK_RESULT(result, RLCODEC_OK, SG_RUNE_ARTIFACT_WRITE_STAGE_DONE,
@@ -518,6 +521,42 @@ static void TestNoMechanism(void)
 	CHECK(sink.calls == 6U);
 	CHECK(sink.fragment_sizes[0] == SG_RUNE_CODEC_HEADER_BYTES);
 	CHECK(sink.fragment_sizes[5] == 1U);
+}
+
+static void TestRouteContract(void)
+{
+	fixture_t fixture;
+	unsigned char output[TEST_FILE_BYTES];
+	memory_sink_t sink = MakeSink(output, sizeof(output));
+	sg_rune_artifact_write_result_t result;
+	sg_rune_codec_header_t header;
+
+	FixtureInit(&fixture);
+	fixture.seeds[0].flags |= SG_RUNE_CODEC_SEED_OBJECTIVE;
+	fixture.seeds[1].flags |= SG_RUNE_CODEC_SEED_OBJECTIVE;
+	result = SG_RuneArtifactWrite(
+		RUNE_ROUTE_CONTRACT_LOCAL_ONLY, &fixture.identity, fixture.seeds,
+		TEST_SEEDS, fixture.links, TEST_LINKS, fixture.nodes, TEST_NODES,
+		fixture.edges, TEST_EDGES, fixture.plans, TEST_PLANS,
+		fixture.strings, TEST_STRING_BYTES, &fixture.workspace, MemorySink,
+		&sink);
+	CHECK_RESULT(result, RLCODEC_OK, SG_RUNE_ARTIFACT_WRITE_STAGE_DONE,
+		SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
+	CHECK(SG_RuneCodecDecodeHeader(output, SG_RUNE_CODEC_HEADER_BYTES,
+		&header) == RLCODEC_OK);
+	CHECK(header.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY);
+
+	FixtureWorkspace(&fixture);
+	sink = MakeSink(output, sizeof(output));
+	result = SG_RuneArtifactWrite(2U, &fixture.identity,
+		fixture.seeds, TEST_SEEDS, fixture.links, TEST_LINKS, fixture.nodes,
+		TEST_NODES, fixture.edges, TEST_EDGES, fixture.plans, TEST_PLANS,
+		fixture.strings, TEST_STRING_BYTES, &fixture.workspace, MemorySink,
+		&sink);
+	CHECK_RESULT(result, RLCODEC_BAD_ROUTE_CONTRACT,
+		SG_RUNE_ARTIFACT_WRITE_STAGE_PREFLIGHT_HEADER,
+		SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
+	CHECK(result.bytes_written == 0U && sink.calls == 0U);
 }
 
 static void TestPreflightSections(void)
@@ -531,7 +570,7 @@ static void TestPreflightSections(void)
 		SG_RUNE_ARTIFACT_WRITE_STAGE_PREFLIGHT_HEADER,
 		SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
 	FixtureInit(&fixture);
-	fixture.seeds[1].flags = 4;
+	fixture.seeds[1].flags = 8;
 	ExpectPreflightFailure(&fixture,
 		(sg_rune_codec_diagnostic_t)RLW_BAD_SEED_RECORD,
 		SG_RUNE_ARTIFACT_WRITE_STAGE_PREFLIGHT_SEED, 1U);
@@ -572,7 +611,8 @@ static void TestArgumentsAndBounds(void)
 	sink = MakeSink(NULL, SIZE_MAX);
 #define CALL_WRITER(identity_, seeds_, links_, nodes_, edges_, plans_, \
 		strings_, workspace_, sink_) \
-	SG_RuneArtifactWrite((identity_), (seeds_), TEST_SEEDS, (links_), TEST_LINKS, \
+	SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE, (identity_), \
+		(seeds_), TEST_SEEDS, (links_), TEST_LINKS, \
 		(nodes_), TEST_NODES, (edges_), TEST_EDGES, (plans_), TEST_PLANS, \
 		(strings_), TEST_STRING_BYTES, (workspace_), (sink_), &sink)
 	result = CALL_WRITER(NULL, fixture.seeds, fixture.links, fixture.nodes,
@@ -614,7 +654,8 @@ static void TestArgumentsAndBounds(void)
 #undef CALL_WRITER
 	CHECK(sink.calls == 0U);
 
-	result = SG_RuneArtifactWrite(&fixture.identity, fixture.seeds,
+	result = SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture.identity, fixture.seeds,
 		SG_RUNE_CODEC_MAX_SEEDS + 1U, fixture.links, TEST_LINKS,
 		fixture.nodes, TEST_NODES, fixture.edges, TEST_EDGES,
 		fixture.plans, TEST_PLANS, fixture.strings, TEST_STRING_BYTES,
@@ -622,7 +663,8 @@ static void TestArgumentsAndBounds(void)
 	CHECK_RESULT(result, RLW_BAD_COUNTS, SG_RUNE_ARTIFACT_WRITE_STAGE_ARGUMENT,
 		SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
 	CHECK(result.file_size == 0U && sink.calls == 0U);
-	result = SG_RuneArtifactWrite(&fixture.identity, fixture.seeds, TEST_SEEDS,
+	result = SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture.identity, fixture.seeds, TEST_SEEDS,
 		fixture.links, TEST_LINKS, fixture.nodes, TEST_NODES,
 		fixture.edges, TEST_EDGES, fixture.plans, TEST_PLANS,
 		fixture.strings, SG_RUNE_CODEC_MAX_STRING_BYTES + 1U,
@@ -677,7 +719,8 @@ static void TestWorkspaceCapacities(void)
 		capacities[10] = &fixture.workspace.string_mark_capacity;
 		*capacities[index] = 0U;
 		sink = MakeSink(NULL, SIZE_MAX);
-		result = SG_RuneArtifactWrite(&fixture.identity, fixture.seeds,
+		result = SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+			&fixture.identity, fixture.seeds,
 			TEST_SEEDS, fixture.links, TEST_LINKS, fixture.nodes,
 			TEST_NODES, fixture.edges, TEST_EDGES, fixture.plans,
 			TEST_PLANS, fixture.strings, TEST_STRING_BYTES,
@@ -700,7 +743,8 @@ static void TestWorkspaceAliasing(void)
 	memcpy(links_before, fixture.links, sizeof(links_before));
 	fixture.workspace.graph_link_keys = (uint64_t *)fixture.links;
 	sink = MakeSink(NULL, SIZE_MAX);
-	result = SG_RuneArtifactWrite(&fixture.identity, fixture.seeds, TEST_SEEDS,
+	result = SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture.identity, fixture.seeds, TEST_SEEDS,
 		fixture.links, TEST_LINKS, fixture.nodes, TEST_NODES,
 		fixture.edges, TEST_EDGES, fixture.plans, TEST_PLANS,
 		fixture.strings, TEST_STRING_BYTES, &fixture.workspace,
@@ -714,7 +758,8 @@ static void TestWorkspaceAliasing(void)
 	FixtureInit(&fixture);
 	fixture.workspace.node_heads = fixture.workspace.node_references;
 	sink = MakeSink(NULL, SIZE_MAX);
-	result = SG_RuneArtifactWrite(&fixture.identity, fixture.seeds, TEST_SEEDS,
+	result = SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture.identity, fixture.seeds, TEST_SEEDS,
 		fixture.links, TEST_LINKS, fixture.nodes, TEST_NODES,
 		fixture.edges, TEST_EDGES, fixture.plans, TEST_PLANS,
 		fixture.strings, TEST_STRING_BYTES, &fixture.workspace,
@@ -835,7 +880,8 @@ static sg_rune_artifact_write_result_t WriteDualButtonFixture(
 	dual_button_fixture_t *fixture, memory_sink_t *sink)
 {
 	DualButtonWorkspace(fixture);
-	return SG_RuneArtifactWrite(&fixture->identity, fixture->seeds, TEST_SEEDS,
+	return SG_RuneArtifactWrite(RUNE_ROUTE_CONTRACT_COMPLETE,
+		&fixture->identity, fixture->seeds, TEST_SEEDS,
 		fixture->links, DUAL_BUTTON_LINKS, fixture->nodes,
 		DUAL_BUTTON_NODES, fixture->edges, DUAL_BUTTON_EDGES,
 		fixture->plans, DUAL_BUTTON_PLANS, fixture->strings,
@@ -884,6 +930,7 @@ int main(void)
 {
 	TestCanonicalParity();
 	TestNoMechanism();
+	TestRouteContract();
 	TestPreflightSections();
 	TestArgumentsAndBounds();
 	TestWorkspaceCapacities();

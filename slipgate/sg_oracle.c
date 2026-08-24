@@ -8,13 +8,17 @@
 #include "slipgate/sg_compound.h"
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_oracle_internal.h"
 #include "slipgate/sg_replay.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_rune_mechanism_plan.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_rocketjump_live.h"
 #include "slipgate/sg_rocketjump_impact.h"
 #include "slipgate/sg_shoot_door_live.h"
+#include "slipgate/sg_train_station_board_path.h"
+#include "slipgate/sg_timed_vault_egress.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_door_approach.h"
@@ -140,20 +144,6 @@ static edict_t *SG_OracleBoundDoorResolveNode(
 	    : SG_RuneMechanismBindingResolveNode(binding, key);
 }
 
-/* func_rotating uses these private g_func.c spawnflag values. */
-#define SG_ROTATOR_X_AXIS 4
-#define SG_ROTATOR_Y_AXIS 8
-/* The collision model backs a trace off by DIST_EPSILON (1/32).  This local
- * spelling keeps the phase-independent topology model conservative in the
- * same float/trace domain without importing engine-private headers. */
-#define SG_ROTATOR_TRACE_EPSILON (1.0 / 32.0)
-/* AngleVectors rounds sin/cos to float, then forms up to three products and
- * two sums per coordinate before CM consumes the result.  64 float epsilons
- * at the largest participating coordinate/radius covers those operations,
- * origin subtraction, and later radial dot products without pretending the
- * double oracle arithmetic is the engine's float collision domain. */
-#define SG_ROTATOR_FLOAT_ENVELOPE_ULPS 64.0
-
 /* door spawnflags from g_func.c; kept local so the movement oracle does not
  * depend on that implementation file's private macros. */
 #define SG_DOOR_START_OPEN 1
@@ -165,401 +155,6 @@ static qboolean SG_OracleDeclaredActivatorSafe(edict_t *trigger);
 static qboolean SG_OracleFinite3(const vec3_t value)
 {
 	return isfinite(value[0]) && isfinite(value[1]) && isfinite(value[2]);
-}
-
-static double SG_OraclePointSegmentDistance2(const vec3_t point,
-	const vec3_t start, const vec3_t end)
-{
-	double dx = (double)end[0] - (double)start[0];
-	double dy = (double)end[1] - (double)start[1];
-	double dz = (double)end[2] - (double)start[2];
-	double px = (double)point[0] - (double)start[0];
-	double py = (double)point[1] - (double)start[1];
-	double pz = (double)point[2] - (double)start[2];
-	double length2 = dx * dx + dy * dy + dz * dz;
-	double t, ex, ey, ez;
-
-	if (!isfinite(length2))
-		return -1.0;
-	if (length2 == 0.0)
-		return px * px + py * py + pz * pz;
-	t = (px * dx + py * dy + pz * dz) / length2;
-	if (!isfinite(t))
-		return -1.0;
-	if (t < 0.0)
-		t = 0.0;
-	else if (t > 1.0)
-		t = 1.0;
-	ex = (double)start[0] + t * dx;
-	ey = (double)start[1] + t * dy;
-	ez = (double)start[2] + t * dz;
-	ex = (double)point[0] - ex;
-	ey = (double)point[1] - ey;
-	ez = (double)point[2] - ez;
-	return ex * ex + ey * ey + ez * ez;
-}
-
-static double SG_OracleRotatorTracePad(const edict_t *rotator,
-	const vec3_t start, const vec3_t end, const vec3_t hull_mins,
-	const vec3_t hull_maxs)
-{
-	double brush_radius2 = 0.0, hull_radius2 = 0.0;
-	double coordinate_scale = 0.0, scale, pad;
-	int corner, axis;
-
-	for (axis = 0; axis < 3; axis++)
-	{
-		double values[5];
-		int value;
-
-		values[0] = fabs((double)start[axis]);
-		values[1] = fabs((double)end[axis]);
-		values[2] = fabs((double)rotator->s.origin[axis]);
-		values[3] = fabs((double)hull_mins[axis]);
-		values[4] = fabs((double)hull_maxs[axis]);
-		for (value = 0; value < 5; value++)
-			if (values[value] > coordinate_scale)
-				coordinate_scale = values[value];
-	}
-	for (corner = 0; corner < 8; corner++)
-	{
-		double length2 = 0.0;
-
-		for (axis = 0; axis < 3; axis++)
-		{
-			double value = (corner & (1 << axis)) ?
-				(double)rotator->maxs[axis] : (double)rotator->mins[axis];
-
-			length2 += value * value;
-		}
-		if (length2 > brush_radius2)
-			brush_radius2 = length2;
-	}
-	for (axis = 0; axis < 3; axis++)
-	{
-		double lo = fabs((double)hull_mins[axis]);
-		double hi = fabs((double)hull_maxs[axis]);
-		double value = lo > hi ? lo : hi;
-
-		hull_radius2 += value * value;
-	}
-	if (!isfinite(coordinate_scale) || !isfinite(brush_radius2) ||
-	    !isfinite(hull_radius2))
-		return -1.0;
-	/* Include the full brush radius, not only the inner radius: a float
-	 * transformed corner can perturb the nearest annulus boundary by the
-	 * magnitude of every local component. */
-	scale = coordinate_scale + sqrt(brush_radius2) + sqrt(hull_radius2);
-	if (!isfinite(scale))
-		return -1.0;
-	if (scale < 1.0)
-		scale = 1.0;
-	pad = SG_ROTATOR_TRACE_EPSILON +
-	      SG_ROTATOR_FLOAT_ENVELOPE_ULPS * (double)FLT_EPSILON * scale;
-	return isfinite(pad) ? nextafter(pad, INFINITY) : -1.0;
-}
-
-static qboolean SG_OracleRotatorSphereBlocks(const edict_t *rotator,
-	const vec3_t start, const vec3_t end, const vec3_t hull_mins,
-	const vec3_t hull_maxs, double trace_pad)
-{
-	double brush_radius2 = 0.0, hull_radius2 = 0.0, radius, distance2;
-	int corner, axis;
-
-	for (corner = 0; corner < 8; corner++)
-	{
-		double length2 = 0.0;
-
-		for (axis = 0; axis < 3; axis++)
-		{
-			double value = (corner & (1 << axis)) ?
-				(double)rotator->maxs[axis] : (double)rotator->mins[axis];
-
-			length2 += value * value;
-		}
-		if (length2 > brush_radius2)
-			brush_radius2 = length2;
-	}
-	for (axis = 0; axis < 3; axis++)
-	{
-		double lo = fabs((double)hull_mins[axis]);
-		double hi = fabs((double)hull_maxs[axis]);
-		double value = lo > hi ? lo : hi;
-
-		hull_radius2 += value * value;
-	}
-	radius = sqrt(brush_radius2) + sqrt(hull_radius2) + trace_pad;
-	distance2 = SG_OraclePointSegmentDistance2(rotator->s.origin, start, end);
-	if (!isfinite(radius) || !isfinite(distance2) || distance2 < 0.0)
-		return true;
-	/* A tangent is occupied.  Move the sphere out by an ULP before squaring,
-	 * then round that squared boundary outward too; float bounds otherwise
-	 * make an exact brush corner spuriously clear on some libm builds. */
-	radius = nextafter(radius, INFINITY);
-	return distance2 <= nextafter(radius * radius, INFINITY);
-}
-
-static qboolean SG_OracleRotatorCanonicalAxis(const edict_t *rotator,
-	int *axial_axis)
-{
-	qboolean x_axis = (rotator->spawnflags & SG_ROTATOR_X_AXIS) != 0;
-	qboolean y_axis = (rotator->spawnflags & SG_ROTATOR_Y_AXIS) != 0;
-	int dynamic_axis;
-
-	if (x_axis && y_axis)
-		return false;
-	if (x_axis)
-	{
-		*axial_axis = 0;
-		dynamic_axis = 2;              /* roll around X */
-	}
-	else if (y_axis)
-	{
-		*axial_axis = 1;
-		dynamic_axis = 0;              /* pitch around Y */
-	}
-	else
-	{
-		*axial_axis = 2;
-		dynamic_axis = 1;              /* yaw around Z */
-	}
-	return (dynamic_axis == 0 || rotator->s.angles[0] == 0.0f) &&
-	       (dynamic_axis == 1 || rotator->s.angles[1] == 0.0f) &&
-	       (dynamic_axis == 2 || rotator->s.angles[2] == 0.0f);
-}
-
-/* A full-turn canonical rotator occupies an axial slab and a perpendicular
- * radial annulus.  This intentionally ignores the dynamic Euler component:
- * topology and exposure must not change as the brush turns.  The fixed-axis
- * checks above keep the cheap annulus exact for the three engine mappings;
- * unusual geometry falls back to a conservative pivot sphere below. */
-static qboolean SG_OracleRotatorAnnulusBlocks(const edict_t *rotator,
-	const vec3_t start, const vec3_t end, const vec3_t hull_mins,
-	const vec3_t hull_maxs, int axial_axis, double trace_pad)
-{
-	int u = (axial_axis + 1) % 3;
-	int v = (axial_axis + 2) % 3;
-	double delta_axis, low, high, lo = 0.0, hi = 1.0;
-	double inner2 = 0.0, outer2 = 0.0, hull_radius;
-	double q0, q1, qvertex, qmin, qmax, qdelta_u, qdelta_v;
-	double radial_u, radial_v;
-	int corner;
-
-	low = (double)rotator->s.origin[axial_axis] +
-	      (double)rotator->mins[axial_axis] - (double)hull_maxs[axial_axis] -
-	      trace_pad;
-	high = (double)rotator->s.origin[axial_axis] +
-	       (double)rotator->maxs[axial_axis] - (double)hull_mins[axial_axis] +
-	       trace_pad;
-	delta_axis = (double)end[axial_axis] - (double)start[axial_axis];
-	if (!isfinite(low) || !isfinite(high) || !isfinite(delta_axis))
-		return true;
-	if (delta_axis == 0.0)
-	{
-		if (start[axial_axis] < low || start[axial_axis] > high)
-			return false;
-	}
-	else
-	{
-		double at_low = (low - (double)start[axial_axis]) / delta_axis;
-		double at_high = (high - (double)start[axial_axis]) / delta_axis;
-		double enter = at_low < at_high ? at_low : at_high;
-		double leave = at_low > at_high ? at_low : at_high;
-
-		if (enter > lo)
-			lo = enter;
-		if (leave < hi)
-			hi = leave;
-		if (!isfinite(enter) || !isfinite(leave))
-			return true;
-		if (lo > hi || hi < 0.0 || lo > 1.0)
-			return false;
-		if (lo < 0.0)
-			lo = 0.0;
-		if (hi > 1.0)
-			hi = 1.0;
-	}
-
-	/* Distance from the origin to the unrotated perpendicular rectangle. */
-	if (rotator->mins[u] > 0.0f)
-		radial_u = (double)rotator->mins[u];
-	else if (rotator->maxs[u] < 0.0f)
-		radial_u = (double)rotator->maxs[u];
-	else
-		radial_u = 0.0;
-	if (rotator->mins[v] > 0.0f)
-		radial_v = (double)rotator->mins[v];
-	else if (rotator->maxs[v] < 0.0f)
-		radial_v = (double)rotator->maxs[v];
-	else
-		radial_v = 0.0;
-	inner2 = radial_u * radial_u + radial_v * radial_v;
-	for (corner = 0; corner < 4; corner++)
-	{
-		double du = (corner & 1) ? (double)rotator->maxs[u] :
-			(double)rotator->mins[u];
-		double dv = (corner & 2) ? (double)rotator->maxs[v] :
-			(double)rotator->mins[v];
-		double length2 = du * du + dv * dv;
-
-		if (length2 > outer2)
-			outer2 = length2;
-	}
-	hull_radius = hypot(
-		fabs((double)hull_mins[u]) > fabs((double)hull_maxs[u]) ?
-		fabs((double)hull_mins[u]) : fabs((double)hull_maxs[u]),
-		fabs((double)hull_mins[v]) > fabs((double)hull_maxs[v]) ?
-		fabs((double)hull_mins[v]) : fabs((double)hull_maxs[v]));
-	{
-		if (!isfinite(inner2) || !isfinite(outer2) ||
-		    !isfinite(hull_radius))
-			return true;
-		double inner = sqrt(inner2) - hull_radius -
-		               trace_pad;
-		double outer = sqrt(outer2) + hull_radius +
-		               trace_pad;
-
-		if (!isfinite(inner) || !isfinite(outer))
-			return true;
-		/* Grow the occupied annulus at both radial boundaries.  An exact
-		 * tangent blocks, and a one-ULP libm rounding error must never turn
-		 * that into a phase-dependent clear trace. */
-		if (inner > 0.0)
-			inner = nextafter(inner, -INFINITY);
-		else
-			inner = 0.0;
-		outer = nextafter(outer, INFINITY);
-		inner2 = inner > 0.0 ? nextafter(inner * inner, -INFINITY) : 0.0;
-		outer2 = nextafter(outer * outer, INFINITY);
-	}
-
-	qdelta_u = (double)end[u] - (double)start[u];
-	qdelta_v = (double)end[v] - (double)start[v];
-	/* q0/q1 are only endpoints of the slab-clipped segment below. */
-	{
-		double pu0 = (double)start[u] - (double)rotator->s.origin[u] +
-			lo * qdelta_u;
-		double pv0 = (double)start[v] - (double)rotator->s.origin[v] +
-			lo * qdelta_v;
-		double pu1 = (double)start[u] - (double)rotator->s.origin[u] +
-			hi * qdelta_u;
-		double pv1 = (double)start[v] - (double)rotator->s.origin[v] +
-			hi * qdelta_v;
-		double denom = qdelta_u * qdelta_u + qdelta_v * qdelta_v;
-
-		q0 = pu0 * pu0 + pv0 * pv0;
-		q1 = pu1 * pu1 + pv1 * pv1;
-		qmin = q0 < q1 ? q0 : q1;
-		qmax = q0 > q1 ? q0 : q1;
-		if (!isfinite(q0) || !isfinite(q1) || !isfinite(denom))
-			return true;
-		if (denom > 0.0)
-		{
-			double t = -(((double)start[u] - (double)rotator->s.origin[u]) *
-			             qdelta_u + ((double)start[v] -
-			             (double)rotator->s.origin[v]) * qdelta_v) / denom;
-
-			if (t < lo)
-				t = lo;
-			else if (t > hi)
-				t = hi;
-			if (!isfinite(t))
-				return true;
-			qvertex = (double)start[u] - (double)rotator->s.origin[u] +
-			          t * qdelta_u;
-			qvertex = qvertex * qvertex;
-			{
-				double pv = (double)start[v] - (double)rotator->s.origin[v] +
-				            t * qdelta_v;
-				qvertex += pv * pv;
-			}
-			if (!isfinite(qvertex))
-				return true;
-			if (qvertex < qmin)
-				qmin = qvertex;
-		}
-	}
-	if (!isfinite(qmin) || !isfinite(qmax) || !isfinite(inner2) ||
-	    !isfinite(outer2))
-		return true;
-	return qmin <= outer2 && qmax >= inner2;
-}
-
-static qboolean SG_OracleRotatorEntitySweepBlocks(const edict_t *rotator,
-	const vec3_t start,
-	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
-	int contentmask)
-{
-	static const vec3_t zero = { 0.0f, 0.0f, 0.0f };
-	const vec_t *active_hull_mins;
-	const vec_t *active_hull_maxs;
-	double trace_pad;
-	int axial_axis;
-
-	if (!(contentmask & CONTENTS_SOLID))
-		return false;
-	if (!rotator || !start || !end || !SG_OracleFinite3(start) ||
-	    !SG_OracleFinite3(end) ||
-	    (!!hull_mins != !!hull_maxs) ||
-	    (hull_mins && (!SG_OracleFinite3(hull_mins) ||
-	                   !SG_OracleFinite3(hull_maxs) ||
-	                   hull_mins[0] > hull_maxs[0] ||
-	                   hull_mins[1] > hull_maxs[1] ||
-	                   hull_mins[2] > hull_maxs[2])))
-		return true;
-	if (rotator->solid != SOLID_BSP || !rotator->classname ||
-	    strcmp(rotator->classname, "func_rotating"))
-		return false;
-	if (!SG_OracleFinite3(rotator->s.origin) ||
-	    !SG_OracleFinite3(rotator->mins) ||
-	    !SG_OracleFinite3(rotator->maxs) ||
-	    rotator->mins[0] > rotator->maxs[0] ||
-	    rotator->mins[1] > rotator->maxs[1] ||
-	    rotator->mins[2] > rotator->maxs[2])
-		return true;
-	active_hull_mins = hull_mins ? hull_mins : zero;
-	active_hull_maxs = hull_maxs ? hull_maxs : zero;
-	trace_pad = SG_OracleRotatorTracePad(rotator, start, end,
-	                                      active_hull_mins, active_hull_maxs);
-	if (trace_pad < 0.0)
-		return true;
-	if (SG_OracleRotatorCanonicalAxis(rotator, &axial_axis))
-		return SG_OracleRotatorAnnulusBlocks(rotator, start, end,
-		    active_hull_mins, active_hull_maxs, axial_axis, trace_pad);
-	return SG_OracleRotatorSphereBlocks(rotator, start, end,
-	    active_hull_mins, active_hull_maxs, trace_pad);
-}
-
-qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
-	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
-	int contentmask)
-{
-	int i;
-
-	if (!(contentmask & CONTENTS_SOLID))
-		return false;
-	if (!start || !end || !SG_OracleFinite3(start) || !SG_OracleFinite3(end) ||
-	    (!!hull_mins != !!hull_maxs) ||
-	    (hull_mins && (!SG_OracleFinite3(hull_mins) ||
-	                   !SG_OracleFinite3(hull_maxs) ||
-	                   hull_mins[0] > hull_maxs[0] ||
-	                   hull_mins[1] > hull_maxs[1] ||
-	                   hull_mins[2] > hull_maxs[2])))
-		return true;
-	if (!g_edicts || globals.num_edicts < 0)
-		return true;
-	for (i = 0; i < globals.num_edicts; i++)
-	{
-		edict_t *rotator = &g_edicts[i];
-
-		if (rotator->solid != SOLID_BSP || !rotator->classname ||
-		    strcmp(rotator->classname, "func_rotating"))
-			continue;
-		if (SG_OracleRotatorEntitySweepBlocks(rotator, start, hull_mins,
-		        hull_maxs, end, contentmask))
-			return true;
-	}
-	return false;
 }
 
 static qboolean SG_OracleDeclaredTrigger(edict_t *trigger)
@@ -2711,14 +2306,64 @@ qboolean SG_DeclaredDelayedDoorSameSet(edict_t *first, edict_t *second)
  * cross-team/effect-target buttons require different execution laws and
  * remain visible in the mechanism inventory without plan authority.  A
  * master followed by same-team slave no-ops is one canonical door team. */
+qboolean SG_OracleTimedVaultClosureCurrent(
+	const sg_mech_catalog_view_t *catalog,
+	const sg_timed_vault_plan_witness_t *witness,
+	qboolean top_pose_authenticated)
+{
+	uint32_t keys[14];
+	uint32_t key_count = 0U;
+	uint32_t i;
+
+	if (!catalog || !catalog->nodes || !witness)
+		return false;
+	keys[key_count++] = witness->entry_key;
+	keys[key_count++] = witness->mover_key;
+	keys[key_count++] = witness->member_key;
+	keys[key_count++] = witness->short_relay_key;
+	keys[key_count++] = witness->restore_relay_key;
+	for (i = 0U; i < 9U; i++)
+		keys[key_count++] = witness->effect_keys[i];
+	for (i = 0U; i < key_count; i++)
+	{
+		uint32_t low = 0U;
+		uint32_t high = catalog->num_nodes;
+
+		while (low < high)
+		{
+			uint32_t middle = low + (high - low) / 2U;
+
+			if (catalog->nodes[middle].key < keys[i]) low = middle + 1U;
+			else high = middle;
+		}
+		if (low == catalog->num_nodes || catalog->nodes[low].key != keys[i])
+			return false;
+		if (!(top_pose_authenticated &&
+		      (keys[i] == witness->entry_key ||
+		       keys[i] == witness->mover_key ||
+		       keys[i] == witness->member_key)) &&
+		    !SG_MechCatalogEntityExecutionMatches(keys[i],
+		        &catalog->nodes[low], SG_MECHANISM_CONTROLLER_TIMED_VAULT))
+			return false;
+	}
+	return true;
+}
+
 static qboolean SG_OracleDeclaredButtonTargetsSafe(edict_t *button)
 {
+	sg_timed_vault_plan_witness_t vault;
+	sg_mech_catalog_view_t view;
 	edict_t *target = NULL;
 	edict_t *master = NULL;
 	int matches = 0;
 
 	if (!button || !button->target || !button->target[0])
 		return false;
+	if (SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY &&
+	    SG_TimedVaultPlanDiscover(&view,
+	        (uint32_t)SG_OracleLiveEdictIndex(button), &vault))
+		return SG_OracleTimedVaultClosureCurrent(&view, &vault,
+		    button == sg_oracle_declared_button_top);
 	while ((target = G_Find(target, (int)offsetof(edict_t, targetname),
 	                        button->target)) != NULL)
 	{
@@ -2831,6 +2476,23 @@ qboolean SG_DeclaredDoorDirectActivatorSafe(edict_t *trigger)
 qboolean SG_DeclaredButtonDoorSafe(edict_t *button)
 {
 	return SG_OracleDeclaredButtonDoorSafe(button);
+}
+
+int SG_DeclaredButtonDoorControllerKind(edict_t *button)
+{
+	sg_timed_vault_plan_witness_t vault;
+	sg_mech_catalog_view_t view;
+	qboolean top_pose = button == sg_oracle_declared_button_top;
+
+	if (!(top_pose ? SG_OracleDeclaredButtonTopSafe(button) :
+	                 SG_OracleDeclaredButtonDoorSafe(button)))
+		return SG_MECHANISM_CONTROLLER_NONE;
+	if (SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY &&
+	    SG_TimedVaultPlanDiscover(&view,
+	        (uint32_t)SG_OracleLiveEdictIndex(button), &vault) &&
+	    SG_OracleTimedVaultClosureCurrent(&view, &vault, top_pose))
+		return SG_MECHANISM_CONTROLLER_TIMED_VAULT;
+	return SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
 }
 
 qboolean SG_OracleButtonCarryClear(edict_t *button, const vec3_t from,
@@ -3548,8 +3210,8 @@ qboolean SG_BoundDoorTouchMatches(
 	const vec3_t activator_origin)
 {
 	return binding && activator_origin &&
-	       binding->plan->controller_kind !=
-	           SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	       !SG_MechanismControllerUsesButton(
+	           binding->plan->controller_kind) &&
 	       SG_OracleBoundDoorBindingCurrent(binding) &&
 	       SG_OracleDeclaredTriggerContains(binding->entry_entity,
 	           activator_origin) &&
@@ -3566,8 +3228,8 @@ qboolean SG_BoundDoorEntryContactMatches(
 	    !SG_OracleBoundDoorBindingCurrent(binding) ||
 	    !(entry = binding->entry_entity))
 		return false;
-	if (binding->plan->controller_kind ==
-	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR)
+	if (SG_MechanismControllerUsesButton(
+	        binding->plan->controller_kind))
 	{
 		/* A solid BSP button fires on the first exact collision trace, not when
 		 * the player merely enters its broad expanded AABB.  The latter can be
@@ -3871,8 +3533,8 @@ static qboolean SG_OracleDoorStepSafe(edict_t *ent, edict_t *trigger,
 	sg_oracle_declared_expected = trigger;
 	sg_oracle_declared_door = NULL; /* the complete mover sweep stays blocked */
 	sg_oracle_bound_door = binding;
-	sg_oracle_declared_action = binding && binding->plan->controller_kind ==
-	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR ? RL_BUTTON_DOOR : RL_DOOR;
+	sg_oracle_declared_action = binding && SG_MechanismControllerUsesButton(
+	    binding->plan->controller_kind) ? RL_BUTTON_DOOR : RL_DOOR;
 	sg_oracle_declared_touched = false;
 	if (!SG_OracleTriggerOverlap(&ph) && !SG_OracleSolidOverlap(&ph))
 	{
@@ -4050,16 +3712,18 @@ static qboolean SG_OracleDoorContinue(edict_t *ent, const vec3_t target,
 	int old_action = sg_oracle_declared_action;
 	sg_phantom_t ph;
 	usercmd_t cmd;
+	vec3_t command_target;
 	qboolean ok = false;
 	qboolean button_controller;
+	qboolean exact_capture;
 	int controller_kind;
 	float old_frame_z;
-	int elapsed, axis;
+	int elapsed, axis, egress_limit, route_seed = -1;
 
 	controller_kind = binding && binding->plan
 	    ? binding->plan->controller_kind : SG_MECHANISM_CONTROLLER_NONE;
-	button_controller = controller_kind ==
-	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	button_controller = SG_MechanismControllerUsesButton(controller_kind);
+	egress_limit = SG_TimedVaultEgressBudgetMs(controller_kind);
 	if (!ent || !ent->inuse || !ent->client || !target || !trigger ||
 	    !arrival_ms || !sv_gravity || ent->health <= 0 || ent->deadflag ||
 	    ent->movetype != MOVETYPE_WALK || ent->s.modelindex != 255 ||
@@ -4103,11 +3767,16 @@ static qboolean SG_OracleDoorContinue(edict_t *ent, const vec3_t target,
 	sg_oracle_declared_touched = false;
 	if (SG_OracleTriggerOverlap(&ph) || SG_OracleSolidOverlap(&ph))
 		goto restore;
-	for (elapsed = 0; elapsed < 5000; elapsed += 25)
+	for (elapsed = 0; elapsed < egress_limit; elapsed += 25)
 	{
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 25;
-		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
+		if (!SG_TimedVaultEgressScopeTarget(controller_kind, ph.waterlevel,
+		        ph.origin, ph.velocity, target, &route_seed, &exact_capture,
+		        command_target) ||
+		    !SG_DeclaredEgressCommandMode(controller_kind, ph.waterlevel,
+		        exact_capture, ph.origin, ph.velocity, command_target,
+		        &ph.pms, &cmd))
 			goto restore;
 		SG_OracleRun(&ph, &cmd, 1);
 		if (sg_oracle_contaminated ||
@@ -4527,7 +4196,8 @@ static int SG_DoorContractCost(edict_t *trigger,
 	if (trigger_ms <= 0)
 		return -1;
 	button_controller = binding
-	    ? binding->plan->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    ? (qboolean)SG_MechanismControllerUsesButton(
+	          binding->plan->controller_kind)
 	    : SG_OracleDeclaredButtonDoorSafe(trigger);
 	if (button_controller)
 	{
@@ -5043,7 +4713,7 @@ qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite)
 	return true;
 }
 
-static void SG_OracleReplayPose(const sg_phantom_t *ph, sg_replay_pose_t *pose)
+void SG_OracleReplayPose(const sg_phantom_t *ph, sg_replay_pose_t *pose)
 {
 	if (!pose)
 		return;
@@ -5058,7 +4728,7 @@ static void SG_OracleReplayPose(const sg_phantom_t *ph, sg_replay_pose_t *pose)
 	pose->waterlevel = ph->waterlevel;
 }
 
-static qboolean SG_OracleReplayContactClear(const vec3_t origin,
+qboolean SG_OracleReplayContactClear(const vec3_t origin,
 	const vec3_t destination, edict_t *passent)
 {
 	vec3_t from, to;
@@ -5072,6 +4742,38 @@ static qboolean SG_OracleReplayContactClear(const vec3_t origin,
 	        MASK_PLAYERSOLID, sg_oracle_loader_replay, &tr))
 		return false;
 	return !tr.startsolid && !tr.allsolid && tr.fraction >= 1.0f;
+}
+
+void SG_OracleReplayScopeBegin(sg_oracle_replay_scope_t *scope,
+	edict_t *passent, qboolean world_only)
+{
+	if (!scope)
+		return;
+	scope->passent = sg_oracle_passent;
+	scope->world_only = sg_oracle_world_only;
+	scope->contaminated = sg_oracle_contaminated;
+	sg_oracle_passent = passent;
+	sg_oracle_world_only = world_only;
+	sg_oracle_contaminated = false;
+}
+
+void SG_OracleReplayScopeEnd(const sg_oracle_replay_scope_t *scope)
+{
+	if (!scope)
+		return;
+	sg_oracle_passent = scope->passent;
+	sg_oracle_world_only = scope->world_only;
+	sg_oracle_contaminated = scope->contaminated;
+}
+
+qboolean SG_OracleReplayStartClear(sg_phantom_t *ph)
+{
+	return ph && !SG_OracleTriggerOverlap(ph) && !SG_OracleSolidOverlap(ph);
+}
+
+qboolean SG_OracleReplayContaminated(void)
+{
+	return sg_oracle_contaminated;
 }
 
 static qboolean SG_OracleSwimArrivalMayTrace(const sg_phantom_t *ph,
@@ -6701,7 +6403,7 @@ qboolean SG_OracleTeleportSwimApproach(sg_phantom_t *ph,
 	qboolean old_touched = sg_oracle_declared_touched;
 	int old_action = sg_oracle_declared_action;
 	qboolean ok = false;
-	int elapsed;
+	int elapsed = 0;
 
 	if (!ph || !pad || !proof)
 		return false;
@@ -7307,6 +7009,211 @@ static qboolean SG_OracleButtonCarrierSupported(const sg_phantom_t *ph,
 	       ph->origin[1] + ph->mins[1] < carrier->absmax[1] - 1.0f;
 }
 
+qboolean SG_OracleTrainStationBoard(const vec3_t source,
+	const vec3_t approach, edict_t *train, uint32_t dwell_ms,
+	int *arrival_ms, vec3_t contact_out)
+{
+	edict_t *old_passent = sg_oracle_passent;
+	edict_t *old_expected = sg_oracle_declared_expected;
+	edict_t *old_entry = sg_oracle_declared_entry;
+	qboolean old_world = sg_oracle_world_only;
+	qboolean old_contaminated = sg_oracle_contaminated;
+	int old_action = sg_oracle_declared_action;
+	sg_phantom_t initial;
+	sg_phantom_t ph;
+	sg_train_station_board_path_t approach_path;
+	usercmd_t cmd;
+	qboolean ok = false;
+	int candidate;
+	int jump_ms;
+	int approach_elapsed;
+
+	if (arrival_ms)
+		*arrival_ms = 0;
+	if (contact_out)
+		VectorClear(contact_out);
+	if (!source || !approach || !train || !arrival_ms || !contact_out ||
+	    !train->inuse ||
+	    !train->classname || strcmp(train->classname, "func_train") ||
+	    train->spawnflags != 1 || dwell_ms != 3000U ||
+	    !SG_OracleFinite3(source) || !SG_OracleFinite3(approach) ||
+	    (source[0] == approach[0] && source[1] == approach[1] &&
+	     source[2] == approach[2]) || !SG_OracleFinite3(train->absmin) ||
+	    !SG_OracleFinite3(train->absmax))
+		return false;
+	sg_oracle_passent = NULL;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	sg_oracle_declared_expected = train;
+	sg_oracle_declared_entry = NULL;
+	sg_oracle_declared_action = RL_TRAIN;
+	SG_OraclePlace(&initial, (vec_t *)source);
+	if (!SG_TrainStationApproachPathBuild(source, approach, &approach_path))
+		goto done;
+	memset(&cmd, 0, sizeof(cmd));
+	SG_OracleRun(&initial, &cmd, 1);
+	if (sg_oracle_contaminated || !initial.groundentity ||
+	    initial.waterlevel != 0 ||
+	    SG_OracleButtonCarrierSupported(&initial, train, false))
+		goto done;
+	for (approach_elapsed = 25; approach_elapsed <= 3000;
+	     approach_elapsed += 25)
+	{
+		vec3_t target;
+
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.msec = 25;
+		SG_TrainStationBoardPathNextTarget(initial.origin, &approach_path,
+			target);
+		if (!SG_DeclaredCommand(initial.origin, target, &initial.pms,
+		        &cmd))
+			goto done;
+		SG_OracleRun(&initial, &cmd, 1);
+		if (sg_oracle_contaminated || initial.waterlevel != 0 ||
+		    SG_OracleButtonCarrierSupported(&initial, train, false))
+			goto done;
+		if (SG_SupportedArrived(initial.origin, approach,
+		        initial.groundentity != 0, initial.watertype,
+		        initial.waterlevel, NULL))
+			break;
+	}
+	if (approach_elapsed > 3000)
+		goto done;
+	for (candidate = 0; candidate < 5 && !ok; candidate++)
+	{
+		vec3_t interior;
+		float xlo = train->absmin[0] + 16.125f;
+		float xhi = train->absmax[0] - 16.125f;
+		float ylo = train->absmin[1] + 16.125f;
+		float yhi = train->absmax[1] - 16.125f;
+
+		if (xlo > xhi || ylo > yhi)
+			goto done;
+		if (candidate == 0)
+		{
+			interior[0] = initial.origin[0] < xlo ? xlo :
+				initial.origin[0] > xhi ? xhi : initial.origin[0];
+			interior[1] = initial.origin[1] < ylo ? ylo :
+				initial.origin[1] > yhi ? yhi : initial.origin[1];
+		}
+		else if (candidate == 1)
+		{
+			interior[0] = (xlo + xhi) * 0.5f;
+			interior[1] = (ylo + yhi) * 0.5f;
+		}
+		else
+		{
+			interior[0] = (candidate & 1) ? xhi : xlo;
+			interior[1] = (candidate & 2) ? yhi : ylo;
+		}
+		interior[2] = initial.origin[2];
+		for (jump_ms = 0; jump_ms <= (int)dwell_ms && !ok;
+		     jump_ms += 100)
+		{
+				sg_train_station_board_path_t path;
+				int elapsed;
+				int stable_ms = 0;
+
+				if (!SG_TrainStationBoardPathBuildCanonical(initial.origin,
+				        train->absmin, train->absmax, interior, &path))
+					goto done;
+				ph = initial;
+				sg_oracle_contaminated = false;
+				for (elapsed = 25; elapsed <= (int)dwell_ms; elapsed += 25)
+				{
+					vec3_t target;
+
+					SG_TrainStationBoardPathNextTarget(ph.origin, &path,
+						target);
+					memset(&cmd, 0, sizeof(cmd));
+					cmd.msec = 25;
+					if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
+						break;
+					if (elapsed >= jump_ms && elapsed < jump_ms + 50)
+						cmd.upmove = 400;
+					SG_OracleRun(&ph, &cmd, 1);
+					if (sg_oracle_contaminated)
+						break;
+					if (ph.waterlevel != 0)
+						break;
+					if (!SG_OracleButtonCarrierSupported(&ph, train, false))
+					{
+						stable_ms = 0;
+						continue;
+					}
+					stable_ms += 25;
+					if (stable_ms < 100) continue;
+					*arrival_ms = approach_elapsed + elapsed;
+					VectorCopy(ph.origin, contact_out);
+					ok = true;
+				}
+			}
+	}
+
+done:
+	sg_oracle_passent = old_passent;
+	sg_oracle_world_only = old_world;
+	sg_oracle_contaminated = old_contaminated;
+	sg_oracle_declared_expected = old_expected;
+	sg_oracle_declared_entry = old_entry;
+	sg_oracle_declared_action = old_action;
+	return ok;
+}
+
+qboolean SG_OracleTrainStationCarry(const vec3_t source,
+	edict_t *from_corner, edict_t *to_corner, edict_t *train,
+	vec3_t destination_out)
+{
+	vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	vec3_t maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t expected_origin;
+	vec3_t delta;
+	vec3_t down;
+	trace_t support;
+	trace_t travel;
+	int axis;
+
+	if (destination_out)
+		VectorClear(destination_out);
+	if (!source || !from_corner || !to_corner || !train ||
+	    !destination_out || !from_corner->inuse || !to_corner->inuse ||
+	    !train->inuse || !from_corner->classname || !to_corner->classname ||
+	    !train->classname || strcmp(from_corner->classname, "path_corner") ||
+	    strcmp(to_corner->classname, "path_corner") ||
+	    strcmp(train->classname, "func_train") ||
+	    !SG_OracleFinite3(source) || !SG_OracleFinite3(from_corner->s.origin) ||
+	    !SG_OracleFinite3(to_corner->s.origin))
+		return false;
+	for (axis = 0; axis < 3; axis++)
+	{
+		expected_origin[axis] = from_corner->s.origin[axis] -
+			train->mins[axis];
+		if (fabsf(train->s.origin[axis] - expected_origin[axis]) > 0.125f)
+			return false;
+		delta[axis] = to_corner->s.origin[axis] -
+			from_corner->s.origin[axis];
+		destination_out[axis] = source[axis] + delta[axis];
+	}
+	VectorCopy(source, down);
+	down[2] -= 4.0f;
+	support = sg_host.trace((vec_t *)source, mins, maxs, down, NULL,
+		MASK_PLAYERSOLID);
+	if (support.startsolid || support.allsolid || support.fraction >= 1.0f ||
+	    support.ent != train || support.plane.normal[2] < 0.7f)
+		goto fail;
+	travel = sg_host.trace((vec_t *)source, mins, maxs, destination_out,
+		train, MASK_PLAYERSOLID);
+	if (travel.startsolid || travel.allsolid || travel.fraction < 1.0f ||
+	    SG_OracleRotatorSweepBlocks(source, mins, maxs, destination_out,
+	        MASK_PLAYERSOLID))
+		goto fail;
+	return true;
+
+fail:
+	VectorClear(destination_out);
+	return false;
+}
+
 static qboolean SG_OracleButtonLiftMovingBoard(sg_phantom_t *ph,
 	edict_t *platform, int *moving_ms_out)
 {
@@ -7546,10 +7453,12 @@ static qboolean SG_OracleButtonCarrierBoard(const vec3_t source,
 						}
 						*arrival_ms = activation_ms + elapsed + moving_ms;
 						if (activation_out)
-							VectorCopy(activated.origin, activation_out);
+							VectorCopy(activated.origin,
+								activation_out);
 						VectorCopy(ph.origin, contact_out);
 						if (carrier_origin_out)
-							VectorCopy(train->s.origin, carrier_origin_out);
+							VectorCopy(train->s.origin,
+								carrier_origin_out);
 						ok = true;
 						break;
 					}
@@ -8105,7 +8014,7 @@ static qboolean SG_OracleDeclaredEgressInternal(const vec3_t source,
 	sg_phantom_t ph;
 	usercmd_t cmd;
 	qboolean ok = false;
-	int elapsed = 0;
+	int elapsed;
 	int settle_ms = 0;
 
 	if (!support || !support->inuse || !arrival_ms ||
@@ -8255,6 +8164,11 @@ qboolean SG_OracleDoorShallowWadeSafe(int waterlevel, int watertype)
 qboolean SG_OracleDoorEgressWaterSafe(int controller_kind, int waterlevel,
 	int watertype)
 {
+	if (controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT)
+		return waterlevel >= 0 && waterlevel <= 3 &&
+		       (waterlevel == 0 || (watertype & CONTENTS_WATER)) &&
+		       !(watertype & (CONTENTS_MIST | CONTENTS_LAVA |
+		                        CONTENTS_SLIME));
 	if (controller_kind == SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR)
 		return SG_OracleDoorShallowWadeSafe(waterlevel, watertype);
 	return waterlevel == 0 &&
@@ -8329,8 +8243,8 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 	int elapsed, resume_ms = 0, first_touch_ms = 0;
 
 	button_controller = binding
-	    ? binding->plan && binding->plan->controller_kind ==
-	          SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    ? binding->plan && SG_MechanismControllerUsesButton(
+	          binding->plan->controller_kind)
 	    : SG_OracleDeclaredButtonDoorSafe(trigger);
 	direct_controller = binding
 	    ? binding->plan && binding->plan->controller_kind ==
@@ -8342,8 +8256,10 @@ static qboolean SG_OracleDoorApproach(const vec3_t source,
 		delayed_controller = !binding && !button_controller &&
 		    SG_DeclaredDoorDelayedActivatorSafe(trigger, &delay_ms);
 	}
-	controller_kind = button_controller
-	    ? SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	controller_kind = binding && binding->plan
+	    ? binding->plan->controller_kind
+	    : button_controller
+	    ? SG_DeclaredButtonDoorControllerKind(trigger)
 	    : (direct_controller
 	          ? SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
 	          : SG_MECHANISM_CONTROLLER_AUTO_DOOR);
@@ -8647,8 +8563,7 @@ qboolean SG_OracleBoundButtonDoorApproach(const vec3_t source,
 	int *touch_ms, sg_button_support_mode_t *support_mode)
 {
 	return binding && binding->plan &&
-	    binding->plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    SG_MechanismControllerUsesButton(binding->plan->controller_kind)
 	    ? SG_OracleDoorApproach(source, wait_point, binding->entry_entity,
 	          binding, arrival_ms, touch_ms, support_mode)
 	    : false;
@@ -8675,24 +8590,27 @@ static qboolean SG_OracleDoorEgress(const vec3_t source,
 	int old_action = sg_oracle_declared_action;
 	sg_phantom_t ph;
 	usercmd_t cmd;
+	vec3_t command_target;
 	qboolean ok = false;
 	qboolean button_controller;
+	qboolean exact_capture;
 	qboolean member_scope_active = false;
 	int controller_kind;
 	float old_frame_z;
-	int elapsed;
+	int elapsed, egress_limit, route_seed = -1;
 
 	button_controller = binding
-	    ? binding->plan && binding->plan->controller_kind ==
-	          SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    ? binding->plan && SG_MechanismControllerUsesButton(
+	          binding->plan->controller_kind)
 	    : (SG_OracleDeclaredButtonDoorSafe(trigger) ||
 	       SG_OracleDeclaredButtonTopSafe(trigger));
 	controller_kind = binding && binding->plan
 	    ? binding->plan->controller_kind
-	    : (button_controller ? SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    : (button_controller ? SG_DeclaredButtonDoorControllerKind(trigger)
 	                         : (SG_DeclaredDoorDirectActivatorSafe(trigger)
 	                               ? SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR
 	                               : SG_MECHANISM_CONTROLLER_AUTO_DOOR));
+	egress_limit = SG_TimedVaultEgressBudgetMs(controller_kind);
 	if (!trigger || !arrival_ms ||
 	    (button_controller != (support_mode != SG_BUTTON_SUPPORT_NONE)) ||
 	    (button_controller && support_mode != SG_BUTTON_SUPPORT_STATIC &&
@@ -8705,7 +8623,9 @@ static qboolean SG_OracleDoorEgress(const vec3_t source,
 	                 SG_DeclaredDoorOutsideSweep(trigger, target)) ||
 	    !(binding ? SG_BoundDoorCrossesSweep(binding, source, target) :
 	                 SG_DeclaredDoorCrossesSweep(trigger, source, target)))
+	{
 		return false;
+	}
 	if (binding && sg_oracle_loader_replay)
 	{
 		if (!SG_OracleBoundMemberScopeBegin(binding))
@@ -8740,11 +8660,16 @@ static qboolean SG_OracleDoorEgress(const vec3_t source,
 			goto done;
 	}
 	old_frame_z = ph.velocity[2];
-	for (elapsed = 0; elapsed < 5000; elapsed += 25)
+	for (elapsed = 0; elapsed < egress_limit; elapsed += 25)
 	{
 		memset(&cmd, 0, sizeof(cmd));
 		cmd.msec = 25;
-		if (!SG_DeclaredCommand(ph.origin, target, &ph.pms, &cmd))
+		if (!SG_TimedVaultEgressScopeTarget(controller_kind, ph.waterlevel,
+		        ph.origin, ph.velocity, target, &route_seed, &exact_capture,
+		        command_target) ||
+		    !SG_DeclaredEgressCommandMode(controller_kind, ph.waterlevel,
+		        exact_capture, ph.origin, ph.velocity, command_target,
+		        &ph.pms, &cmd))
 			goto done;
 		SG_OracleRun(&ph, &cmd, 1);
 		if (sg_oracle_contaminated ||
@@ -8854,8 +8779,7 @@ qboolean SG_OracleBoundButtonDoorEgress(const vec3_t source,
 	sg_button_support_mode_t support_mode)
 {
 	return binding && binding->plan &&
-	    binding->plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR
+	    SG_MechanismControllerUsesButton(binding->plan->controller_kind)
 	    ? SG_OracleDoorEgress(source, target, binding->entry_entity, binding,
 	          passent, arrival_ms, support_mode)
 	    : false;
@@ -9004,7 +8928,7 @@ static qboolean SG_OracleValidateDoorLink(const vec3_t source,
 	const sg_rune_mechanism_binding_t *binding, int stored_cost_ms)
 {
 	sg_declared_door_pose_t saved[SG_PHANTOM_ARMED_DOORS];
-	sg_declared_door_pose_t button_saved;
+	sg_declared_door_pose_t button_saved = {0};
 	edict_t *resolved;
 	vec3_t effective_anchor, displacement;
 	int pose_count = 0, approach_ms, touch_ms, egress_ms, contract_cost;
@@ -9020,8 +8944,7 @@ static qboolean SG_OracleValidateDoorLink(const vec3_t source,
 	                 binding->entry_entity != trigger)))
 		return false;
 	button_controller = binding && binding->plan &&
-	    binding->plan->controller_kind ==
-	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	    SG_MechanismControllerUsesButton(binding->plan->controller_kind);
 	if (!binding && SG_OracleDeclaredButtonDoorSafe(trigger))
 		return false; /* the active button witness requires its authenticated tail */
 	VectorCopy(anchor, effective_anchor);
@@ -9150,287 +9073,6 @@ qboolean SG_OracleValidateBoundDoorLink(const vec3_t source,
 	    binding->entry_entity, binding, stored_cost_ms) : false;
 }
 
-/*
- * One production end-frame pull. The fixed view is part of a proved graph
- * hook's command profile, so the current phantom origin plus that view yields
- * the same handed muzzle start the live weapon will use. Return the integer
- * rope length so the prover can make release decisions in the same units.
- */
-static int SG_OracleHookPullVelocity(const sg_phantom_t *ph,
-	const vec3_t bite, const vec3_t view_angles, int hand, vec3_t velocity)
-{
-	vec3_t angles, forward, right, muzzle;
-
-	VectorCopy(view_angles, angles);
-	AngleVectors(angles, forward, right, NULL);
-	CTF_HookMuzzle(ph->origin, 22.0f, hand, forward, right, muzzle);
-	return CTF_HookPullVelocity(muzzle, bite, velocity);
-}
-
-int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
-	const vec3_t view_angles, int hand)
-{
-	int rope;
-
-	rope = SG_OracleHookPullVelocity(ph, bite, view_angles, hand,
-		ph->velocity);
-
-	/* write back into the fixed-point state Pmove will read */
-	ph->pms.velocity[0] = (short)(ph->velocity[0] * 8.0f);
-	ph->pms.velocity[1] = (short)(ph->velocity[1] * 8.0f);
-	ph->pms.velocity[2] = (short)(ph->velocity[2] * 8.0f);
-	return rope;
-}
-
-static qboolean SG_OracleSupportedArrivalMayTrace(const sg_phantom_t *ph,
-	const vec3_t destination)
-{
-	vec3_t delta;
-
-	if (!ph)
-		return false;
-	VectorSubtract(destination, ph->origin, delta);
-	return delta[0] * delta[0] + delta[1] * delta[1] <
-	           SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS &&
-	       delta[2] > -SG_REPLAY_ARRIVE_Z &&
-	       delta[2] < SG_REPLAY_ARRIVE_Z &&
-	       (ph->groundentity || ph->waterlevel >= 2) &&
-	       !(ph->waterlevel > 0 &&
-	         (ph->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)));
-}
-
-static void SG_OracleHookObservation(const sg_phantom_t *ph,
-	const vec3_t bite, const vec3_t destination, const vec3_t view_angles,
-	int hand, qboolean check_rope, qboolean check_contact, edict_t *passent,
-	sg_replay_observation_t *observation)
-{
-	vec3_t pull_velocity;
-
-	if (!observation)
-		return;
-	memset(observation, 0, sizeof(*observation));
-	if (!ph)
-		return;
-	observation->contaminated = sg_oracle_contaminated;
-	observation->door_passed = ph->door_passed;
-	observation->contact_clear = true;
-	if (!observation->contaminated && check_contact &&
-	    SG_OracleSupportedArrivalMayTrace(ph, destination))
-		observation->contact_clear = SG_OracleReplayContactClear(ph->origin,
-			destination, passent);
-	observation->hook_rope_valid = check_rope;
-	if (check_rope)
-		observation->hook_rope_length = SG_OracleHookPullVelocity(ph, bite,
-			view_angles, hand, pull_velocity);
-}
-
-typedef qboolean (*sg_oracle_hook_monitor_fn)(void *context,
-	const sg_phantom_t *ph, const vec3_t before, const vec3_t after,
-	int elapsed_ms);
-
-static qboolean SG_OracleHookTraverseMonitored(sg_phantom_t *ph,
-	const vec3_t bite,
-	const vec3_t destination, const vec3_t view_angles, int hand,
-	int flight_ms, int settle_limit_ms, float old_frame_z,
-	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only,
-	sg_oracle_hook_monitor_fn monitor, void *monitor_context)
-{
-	sg_hook_replay_spec_t spec;
-	sg_hook_replay_state_t state;
-	sg_replay_pose_t pose;
-	sg_replay_observation_t observation;
-	sg_replay_status_t status;
-	usercmd_t cmd;
-	qboolean result = false;
-	qboolean fixed_point_valid = false;
-	sg_phantom_t fixed_point_phantom;
-	usercmd_t fixed_point_command;
-	edict_t *previous_passent;
-	qboolean previous_world_only, previous_contaminated;
-
-	if (!ph || !proof || flight_ms < SG_REPLAY_FRAME_MS ||
-	    flight_ms > SG_REPLAY_HOOK_FLIGHT_MAX_MS ||
-	    (flight_ms % SG_REPLAY_FRAME_MS) != 0 ||
-	    settle_limit_ms < RUNE_HOOK_DRY_SETTLE_MS ||
-	    settle_limit_ms > RUNE_HOOK_WATER_SETTLE_MS)
-		return false;
-	memset(proof, 0, sizeof(*proof));
-	/* The server is single-threaded, but keep this API scoped so every return
-	 * restores the default offline context. */
-	previous_passent = sg_oracle_passent;
-	previous_world_only = sg_oracle_world_only;
-	previous_contaminated = sg_oracle_contaminated;
-	sg_oracle_passent = passent;
-	sg_oracle_world_only = world_only;
-	sg_oracle_contaminated = false;
-	if (SG_OracleTriggerOverlap(ph) || SG_OracleSolidOverlap(ph))
-		goto done;
-	if (monitor && !monitor(monitor_context, ph, ph->origin, ph->origin, 0))
-		goto done;
-	memset(&spec, 0, sizeof(spec));
-	VectorCopy(bite, spec.bite);
-	VectorCopy(destination, spec.destination);
-	VectorCopy(view_angles, spec.view_angles);
-	spec.flight_ms = flight_ms;
-	spec.settle_limit_ms = settle_limit_ms;
-	spec.expected_release_ms = SG_REPLAY_TIME_DISCOVER;
-	spec.expected_pull_ms = SG_REPLAY_TIME_DISCOVER;
-	spec.expected_settle_arrival_ms = SG_REPLAY_TIME_DISCOVER;
-	spec.expected_settle_ms = SG_REPLAY_TIME_DISCOVER;
-	SG_OracleReplayPose(ph, &pose);
-	SG_OracleHookObservation(ph, bite, destination, view_angles, hand,
-		false, false, passent, &observation);
-	status = SG_HookReplayBegin(&state, &spec, &pose, &observation,
-		old_frame_z);
-	while (status == SG_REPLAY_RUNNING)
-	{
-		qboolean check_contact;
-
-		if (state.phase == SG_HOOK_REPLAY_WAIT_ATTACH)
-		{
-			if (monitor && !monitor(monitor_context, ph, ph->origin,
-			                        ph->origin, state.progress.elapsed_ms))
-				goto done;
-			status = SG_HookReplayAttached(&state, &pose);
-			if (status == SG_REPLAY_RUNNING)
-			{
-				proof->attach_pms = state.attach_pms;
-				proof->attach_groundentity = state.attach_grounded;
-				proof->attach_watertype = state.attach_watertype;
-				proof->attach_waterlevel = state.attach_waterlevel;
-			}
-			continue;
-		}
-		if (state.phase == SG_HOOK_REPLAY_WAIT_PULL)
-		{
-			if (monitor && !monitor(monitor_context, ph, ph->origin,
-			                        ph->origin, state.progress.elapsed_ms))
-				goto done;
-			SG_OracleHookStep(ph, bite, view_angles, hand);
-			SG_OracleReplayPose(ph, &pose);
-			if (monitor && !monitor(monitor_context, ph, ph->origin,
-			                        ph->origin, state.progress.elapsed_ms))
-				goto done;
-			status = SG_HookReplayPullApplied(&state, &pose);
-			continue;
-		}
-		/* Legacy settlement checks once at each frame start.  Reuse a
-		 * post-command observation within the frame so a failed contact trace
-		 * is not repeated before the next command. */
-		if (state.phase == SG_HOOK_REPLAY_SETTLE &&
-		    state.phase_step == 0 && !state.arrived_in_frame)
-			SG_OracleHookObservation(ph, bite, destination, view_angles, hand,
-				false, true, passent, &observation);
-		status = SG_HookReplayPreStep(&state, &pose, &observation, &cmd);
-		if (status != SG_REPLAY_RUNNING)
-			break;
-		{
-			vec3_t before;
-
-			VectorCopy(ph->origin, before);
-			if (monitor && !monitor(monitor_context, ph, before, before,
-			                        state.progress.elapsed_ms))
-				goto done;
-			if (!(monitor == NULL && world_only && fixed_point_valid &&
-			      memcmp(ph, &fixed_point_phantom, sizeof(*ph)) == 0 &&
-			      memcmp(&cmd, &fixed_point_command, sizeof(cmd)) == 0))
-			{
-				sg_phantom_t step_start = *ph;
-
-				SG_OracleRun(ph, &cmd, 1);
-				if (monitor == NULL && world_only &&
-				    !sg_oracle_contaminated &&
-				    memcmp(ph, &step_start, sizeof(*ph)) == 0)
-				{
-					fixed_point_phantom = *ph;
-					fixed_point_command = cmd;
-					fixed_point_valid = true;
-				}
-			}
-			if (monitor && !monitor(monitor_context, ph, before, ph->origin,
-			                        state.progress.elapsed_ms +
-			                            SG_REPLAY_STEP_MS))
-				goto done;
-		}
-		SG_OracleReplayPose(ph, &pose);
-		check_contact = state.phase == SG_HOOK_REPLAY_SETTLE &&
-			(!state.arrived_in_frame ||
-			 (state.phase_step + 1 ==
-			      SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS &&
-			  SG_ReplayFallDelta(state.progress.old_frame_z,
-			      pose.velocity[2], pose.grounded, pose.waterlevel) <=
-			      SG_RUNE_PROOF_DAMAGING_FALL_DELTA));
-		SG_OracleHookObservation(ph, bite, destination, view_angles, hand,
-			!sg_oracle_contaminated &&
-			    ((state.phase == SG_HOOK_REPLAY_ATTACH_FRAME &&
-			      state.phase_step + 1 ==
-			          SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS) ||
-			     (state.phase == SG_HOOK_REPLAY_PULL_FRAME &&
-			      !state.release_requested)),
-			check_contact, passent, &observation);
-		/* If substep four first discovers settlement, legacy immediately
-		 * performs a second same-pose trace for terminal persistence after its
-		 * boundary hazard checks.  Preserve that call only when those checks
-		 * can pass; an already-latched arrival used the single trace above as
-		 * its persistence check. */
-		if (!observation.contaminated &&
-		    state.phase == SG_HOOK_REPLAY_SETTLE &&
-		    !state.arrived_in_frame &&
-		    state.phase_step + 1 ==
-		        SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS &&
-		    SG_OracleSupportedArrivalMayTrace(ph, destination) &&
-		    observation.contact_clear &&
-		    SG_ReplayFallDelta(state.progress.old_frame_z,
-		        pose.velocity[2], pose.grounded, pose.waterlevel) <=
-		        SG_RUNE_PROOF_DAMAGING_FALL_DELTA)
-			observation.contact_clear = SG_OracleReplayContactClear(
-				ph->origin, destination, passent);
-		status = SG_HookReplayPostStep(&state, &pose, &observation);
-		if (status == SG_REPLAY_RUNNING && state.release_requested &&
-		    !state.release_applied)
-		{
-			/* ctf_hook_abort clears vertical velocity and oldvelocity Z on
-			 * support.  The pure reducer owns the history; this adapter owns
-			 * the exact external phantom write. */
-			if (ph->groundentity)
-			{
-				ph->velocity[2] = 0.0f;
-				ph->pms.velocity[2] = 0;
-			}
-			SG_OracleReplayPose(ph, &pose);
-			status = SG_HookReplayReleaseApplied(&state, &pose);
-		}
-	}
-	if (status == SG_REPLAY_ARRIVED ||
-	    (status == SG_REPLAY_FAILED &&
-	     state.progress.reason == SG_REPLAY_REASON_DOOR_PASSED &&
-	     state.progress.arrival_ms != SG_REPLAY_TIME_DISCOVER))
-	{
-		proof->pull_ms = state.pull_ms;
-		proof->release_ms = state.release_ms;
-		proof->settle_arrival_ms = state.settle_arrival_ms;
-		proof->settle_ms = state.settle_ms;
-		proof->exit_speed = state.progress.exit_speed;
-		result = status == SG_REPLAY_ARRIVED;
-	}
-done:
-	if (ph->door_passed)
-		result = false;
-	sg_oracle_passent = previous_passent;
-	sg_oracle_world_only = previous_world_only;
-	sg_oracle_contaminated = previous_contaminated;
-	return result;
-}
-
-qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
-	const vec3_t destination, const vec3_t view_angles, int hand,
-	int flight_ms, int settle_limit_ms, float old_frame_z,
-	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only)
-{
-	return SG_OracleHookTraverseMonitored(ph, bite, destination,
-	    view_angles, hand, flight_ms, settle_limit_ms, old_frame_z, proof,
-	    passent, world_only, NULL, NULL);
-}
 
 typedef struct sg_oracle_compound_hook_monitor_s
 {
@@ -9667,7 +9309,8 @@ static rune_reject_reason_t SG_OracleCompoundHookSuffix(
 		        (int)ceilf(control[ROLL] / RUNE_HOOK_FRAME_DISTANCE) *
 		            SG_REPLAY_FRAME_MS,
 		        RUNE_HOOK_WATER_SETTLE_MS, old_frame_z, &hook, passent,
-		        world_only, SG_OracleCompoundHookMonitor, &monitor))
+		        world_only, SG_OracleCompoundHookMonitor, &monitor, false,
+		        SG_HOOK_REPLAY_TERMINAL_SETTLE))
 			continue;
 		if (!monitor.sweep_clear_ms ||
 		    monitor.failure_reason != RLR_OK)

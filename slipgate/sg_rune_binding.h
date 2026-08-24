@@ -30,6 +30,8 @@ typedef struct sg_rune_mechanism_binding_s
 	struct edict_s *mover_entity;
 	struct edict_s *destination_entity;
 	struct edict_s *egress_entity;
+	float station_approach[3];
+	float station_boarding[3];
 	uint32_t link_index;
 } sg_rune_mechanism_binding_t;
 
@@ -43,6 +45,13 @@ int SG_RuneMechanismBindingCapture(const rune_t *rune, uint32_t link_index,
  * callbacks.  Callers must already hold the corresponding transaction. */
 int SG_RuneMechanismBindingCaptureOwned(const rune_t *rune,
 	uint32_t link_index, sg_rune_mechanism_binding_t *binding_out);
+/* Passive controller 11 rebind.  Stock continuous-train phase fields are
+ * intentionally left to the station adapter; all immutable catalog and plan
+ * authority remains exact. */
+int SG_RuneMechanismStationBindingCapture(const rune_t *rune,
+	uint32_t link_index, sg_rune_mechanism_binding_t *binding_out);
+int SG_RuneMechanismStationBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding);
 int SG_RuneMechanismBindingCurrent(
 	const sg_rune_mechanism_binding_t *binding);
 /* Revalidate the sealed incarnation, immutable callbacks, strings, pointer

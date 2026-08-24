@@ -6,6 +6,12 @@
 
 #include "sg_action_contract.generated.h"
 
+static inline int SG_MechanismControllerUsesButton(int controller_kind)
+{
+	return controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	       controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT;
+}
+
 #define SG_MECH_NO_KEY UINT32_MAX
 #define SG_MECH_MAX_Q8 UINT32_C(262136)
 
@@ -38,7 +44,10 @@ typedef enum sg_mech_node_kind_e
 	SG_MECH_NODE_OTHER_MOVER = 19,
 	SG_MECH_NODE_CONTEXTUAL = 20,
 	SG_MECH_NODE_TARGET_SPEAKER = 21,
-	SG_MECH_NODE_AREAPORTAL = 22
+	SG_MECH_NODE_AREAPORTAL = 22,
+	SG_MECH_NODE_TOGGLE_WALL = 23,
+	SG_MECH_NODE_TRIGGER_HURT = 24,
+	SG_MECH_NODE_TARGET_LASER = 25
 } sg_mech_node_kind_t;
 
 typedef enum sg_mech_node_flag_e
@@ -95,6 +104,11 @@ typedef enum sg_mech_callback_e
 	SG_MECH_CALLBACK_SECRET_DOOR_BLOCKED = 31,
 	SG_MECH_CALLBACK_USE_TARGET_SPEAKER = 32,
 	SG_MECH_CALLBACK_USE_AREAPORTAL = 33,
+	SG_MECH_CALLBACK_USE_FUNC_WALL = 34,
+	SG_MECH_CALLBACK_TOUCH_HURT = 35,
+	SG_MECH_CALLBACK_USE_HURT = 36,
+	SG_MECH_CALLBACK_USE_TARGET_LASER = 37,
+	SG_MECH_CALLBACK_THINK_TARGET_LASER = 38,
 	SG_MECH_CALLBACK_UNKNOWN = 65535
 } sg_mech_callback_t;
 
@@ -326,6 +340,7 @@ static inline int SG_MechExecutionStateValid(
 	     state->controller_kind ==
 	         SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	     state->controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT ||
 	     state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM) &&
 	    door_mover)
@@ -358,7 +373,8 @@ static inline int SG_MechExecutionStateValid(
 		        (state->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
 		         state->end_role == SG_MECH_EXEC_END_DOOR_ORIGIN));
 	}
-	if (((state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	if ((((state->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	       state->controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT) &&
 	      state->node_kind == SG_MECH_NODE_BUTTON) ||
 	     (state->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
 	      state->node_kind == SG_MECH_NODE_PLATFORM_TRIGGER &&
@@ -510,6 +526,14 @@ int SG_MechCatalogEntityTopologyMatches(uint32_t key,
 	const struct rune_mechanism_node_s *node);
 int SG_MechCatalogEntityExecutionMatches(uint32_t key,
 	const struct rune_mechanism_node_s *node, uint16_t controller_kind);
+/* Continuous station trains keep their sealed identity, team, callbacks, and
+ * kinematics while stock train_next changes target, target_ent, think,
+ * endfunc, wait, and origin.  This narrower matcher authenticates only the
+ * immutable portion; the station adapter validates the live phase. */
+int SG_MechCatalogStationTrainImmutableMatches(uint32_t key,
+	const struct rune_mechanism_node_s *node);
+struct edict_s *SG_MechCatalogResolveStationEntity(uint32_t key,
+	const struct rune_mechanism_node_s *node);
 int SG_MechCatalogEntityRetired(uint32_t key,
 	const struct rune_mechanism_node_s *node);
 /* Return the exact current process-local incarnation for one live edict.

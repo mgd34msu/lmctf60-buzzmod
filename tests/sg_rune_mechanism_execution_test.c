@@ -11,6 +11,7 @@
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_relay_wall_game.h"
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_util.h"
 
@@ -18,8 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TEST_EDICTS 30
-#define TEST_LINKS 9U
+#define TEST_EDICTS 42
+#define TEST_LINKS 10U
 #define TEST_EDGE_CAPACITY 128U
 #define CELLAR_WITNESS_WATERTYPE 0x18000020
 
@@ -28,6 +29,11 @@ void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 void Use_Multi(edict_t *self, edict_t *other, edict_t *activator);
 void trigger_relay_use(edict_t *self, edict_t *other,
 	edict_t *activator);
+void func_wall_use(edict_t *self, edict_t *other, edict_t *activator);
+void hurt_use(edict_t *self, edict_t *other, edict_t *activator);
+void hurt_touch(edict_t *self, edict_t *other, cplane_t *plane,
+	csurface_t *surface);
+void Think_Delay(edict_t *entity);
 qboolean SG_TestCarrierPendingStage(sg_carrier_action_phase_t phase,
 	int frame, int ready_frame, sg_carrier_door_stage_t *stage_out,
 	sg_carrier_action_phase_t *opening_out);
@@ -64,7 +70,15 @@ enum test_key_e
 	KEY_BOT,
 	KEY_SPARE,
 	KEY_CARRIER_TRIGGER,
-	KEY_CARRIER
+	KEY_CARRIER,
+	KEY_RELAY_BUTTON,
+	KEY_RELAY_IMMEDIATE,
+	KEY_RELAY_RESTORE,
+	KEY_RELAY_WALL,
+	KEY_RELAY_HURT,
+	KEY_RELAY_SPEAKER_A,
+	KEY_RELAY_SPEAKER_B,
+	KEY_RELAY_BODY
 };
 
 enum test_link_e
@@ -77,7 +91,8 @@ enum test_link_e
 	LINK_BUTTON_DOOR,
 	LINK_CELLAR_DOOR,
 	LINK_GATE_DOOR,
-	LINK_CARRIER
+	LINK_CARRIER,
+	LINK_RELAY_WALL
 };
 
 enum delayed_chain_e
@@ -122,6 +137,7 @@ static int compound_hook_probe_calls;
 static sg_compound_guard_result_t guard_validate_result;
 static sg_compound_guard_result_t guard_release_result;
 static int guard_release_calls;
+static int relay_wall_speaker_uses;
 
 void SG_PushGameTouched(edict_t *trigger, edict_t *entity)
 {
@@ -423,6 +439,15 @@ void Use_Target_Speaker(edict_t *self, edict_t *other,
 	int chain = -1;
 	int closing = 0;
 
+	if (self == &test_edicts[KEY_RELAY_SPEAKER_A] ||
+	    self == &test_edicts[KEY_RELAY_SPEAKER_B])
+	{
+		CHECK(other == &test_edicts[KEY_RELAY_IMMEDIATE] ||
+		      other == &test_edicts[KEY_RELAY_RESTORE]);
+		CHECK(activator == &test_edicts[KEY_BOT] || !activator);
+		relay_wall_speaker_uses++;
+		return;
+	}
 	CHECK(activator == &test_edicts[KEY_BOT]);
 	if (self == &test_edicts[KEY_DIRECT_SPEAKER])
 	{
@@ -496,7 +521,8 @@ sg_compound_guard_result_t SG_DeclaredDoorGuardAuthorizeActivation(
 	     link_index == LINK_DIRECT_DOOR ||
 	     link_index == LINK_CELLAR_DOOR ||
 	     link_index == LINK_GATE_DOOR ||
-	     link_index == LINK_CARRIER)
+	     link_index == LINK_CARRIER ||
+	     link_index == LINK_RELAY_WALL)
 	    ? SG_COMPOUND_GUARD_OK : SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 }
 
@@ -593,6 +619,16 @@ static void *TestAlloc(int bytes)
 static void TestFree(void *memory)
 {
 	free(memory);
+}
+
+static void TestLinkEntity(edict_t *entity)
+{
+	(void)entity;
+}
+
+static void TestUnlinkEntity(edict_t *entity)
+{
+	(void)entity;
 }
 
 typedef struct execution_fixture_s
@@ -754,10 +790,16 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	guard_hold_calls = 0;
 	guard_pause_calls = 0;
 	game.maxentities = TEST_EDICTS;
+	game.maxclients = 1;
+	maxclients_value.value = 1.0f;
 	globals.edicts = test_edicts;
 	globals.edict_size = (int)sizeof(test_edicts[0]);
-	globals.num_edicts = KEY_CARRIER + 1;
+	globals.num_edicts = KEY_RELAY_BODY + 1;
+	globals.max_edicts = TEST_EDICTS;
 	level.framenum = 37;
+	level.time = 3.7f;
+	gi.linkentity = TestLinkEntity;
+	gi.unlinkentity = TestUnlinkEntity;
 	sg_host.level_alloc = TestAlloc;
 	sg_host.level_free = TestFree;
 	memset(relay_g_use_targets, 0, sizeof(relay_g_use_targets));
@@ -765,6 +807,7 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 	memset(door_uses, 0, sizeof(door_uses));
 	memset(open_speaker_uses, 0, sizeof(open_speaker_uses));
 	memset(close_speaker_uses, 0, sizeof(close_speaker_uses));
+	relay_wall_speaker_uses = 0;
 	guard_validate_result = SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	guard_release_result = SG_COMPOUND_GUARD_INVALID_ARGUMENT;
 	guard_release_calls = 0;
@@ -938,6 +981,60 @@ static void BuildLiveCatalog(execution_fixture_t *fixture)
 		VectorSet(entity->moveinfo.end_origin, 0.0f, 0.0f, 4.0f);
 	}
 
+	InitializeEntity(KEY_RELAY_BUTTON, "func_button");
+	entity = &test_edicts[KEY_RELAY_BUTTON];
+	entity->target = "relay-control";
+	entity->delay = 0.2f;
+	entity->wait = 4.0f;
+	entity->movetype = MOVETYPE_STOP;
+	entity->solid = SOLID_BSP;
+	entity->touch = button_touch;
+	entity->use = button_use;
+	entity->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	entity->moveinfo.wait = 4.0f;
+	entity->moveinfo.speed = 100.0f;
+	entity->moveinfo.accel = 100.0f;
+	entity->moveinfo.decel = 100.0f;
+	InitializeEntity(KEY_RELAY_IMMEDIATE, "trigger_relay");
+	test_edicts[KEY_RELAY_IMMEDIATE].targetname = "relay-control";
+	test_edicts[KEY_RELAY_IMMEDIATE].target = "forcefield";
+	test_edicts[KEY_RELAY_IMMEDIATE].use = trigger_relay_use;
+	test_edicts[KEY_RELAY_IMMEDIATE].wait = 0.0f;
+	InitializeEntity(KEY_RELAY_RESTORE, "trigger_relay");
+	test_edicts[KEY_RELAY_RESTORE].targetname = "relay-control";
+	test_edicts[KEY_RELAY_RESTORE].target = "forcefield";
+	test_edicts[KEY_RELAY_RESTORE].delay = 4.0f;
+	test_edicts[KEY_RELAY_RESTORE].use = trigger_relay_use;
+	test_edicts[KEY_RELAY_RESTORE].wait = 0.0f;
+	InitializeEntity(KEY_RELAY_WALL, "func_wall");
+	entity = &test_edicts[KEY_RELAY_WALL];
+	entity->targetname = "forcefield";
+	entity->wait = 0.0f;
+	entity->spawnflags = 7;
+	entity->movetype = MOVETYPE_PUSH;
+	entity->solid = SOLID_BSP;
+	entity->use = func_wall_use;
+	VectorSet(entity->absmin, -32.0f, -32.0f, -32.0f);
+	VectorSet(entity->absmax, 32.0f, 32.0f, 32.0f);
+	InitializeEntity(KEY_RELAY_HURT, "trigger_hurt");
+	entity = &test_edicts[KEY_RELAY_HURT];
+	entity->targetname = "forcefield";
+	entity->wait = 0.0f;
+	entity->spawnflags = 2;
+	entity->solid = SOLID_TRIGGER;
+	entity->touch = hurt_touch;
+	entity->use = hurt_use;
+	InitializeEntity(KEY_RELAY_SPEAKER_A, "target_speaker");
+	test_edicts[KEY_RELAY_SPEAKER_A].targetname = "forcefield";
+	test_edicts[KEY_RELAY_SPEAKER_A].use = Use_Target_Speaker;
+	test_edicts[KEY_RELAY_SPEAKER_A].wait = 0.0f;
+	InitializeEntity(KEY_RELAY_SPEAKER_B, "target_speaker");
+	test_edicts[KEY_RELAY_SPEAKER_B].targetname = "forcefield";
+	test_edicts[KEY_RELAY_SPEAKER_B].use = Use_Target_Speaker;
+	test_edicts[KEY_RELAY_SPEAKER_B].wait = 0.0f;
+	InitializeEntity(KEY_RELAY_BODY, "body-probe");
+	test_edicts[KEY_RELAY_BODY].solid = SOLID_NOT;
+
 	test_edicts[KEY_BOT].inuse = true;
 	test_edicts[KEY_BOT].s.number = KEY_BOT;
 	test_edicts[KEY_BOT].classname = "bot";
@@ -1069,6 +1166,33 @@ static void BuildRune(execution_fixture_t *fixture)
 	AddPlanEdge(fixture, KEY_GATE_DOOR, KEY_GATE_RELAY,
 	    SG_MECH_EDGE_TARGET, 1U);
 	FinishPlan(fixture, LINK_GATE_DOOR);
+
+	ConfigureLink(fixture, LINK_RELAY_WALL, RL_BUTTON_DOOR);
+	fixture->links[LINK_RELAY_WALL].mode = RLCM_PREOPEN;
+	BeginPlan(fixture, LINK_RELAY_WALL,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR,
+	    KEY_RELAY_BUTTON, KEY_RELAY_WALL, 4000U);
+	AddPlanEdge(fixture, KEY_RELAY_BUTTON, KEY_RELAY_IMMEDIATE,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_RELAY_BUTTON, KEY_RELAY_RESTORE,
+	    SG_MECH_EDGE_TARGET, 1U);
+	AddPlanEdge(fixture, KEY_RELAY_IMMEDIATE, KEY_RELAY_WALL,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_RELAY_IMMEDIATE, KEY_RELAY_HURT,
+	    SG_MECH_EDGE_TARGET, 1U);
+	AddPlanEdge(fixture, KEY_RELAY_IMMEDIATE, KEY_RELAY_SPEAKER_A,
+	    SG_MECH_EDGE_TARGET, 2U);
+	AddPlanEdge(fixture, KEY_RELAY_IMMEDIATE, KEY_RELAY_SPEAKER_B,
+	    SG_MECH_EDGE_TARGET, 3U);
+	AddPlanEdge(fixture, KEY_RELAY_RESTORE, KEY_RELAY_WALL,
+	    SG_MECH_EDGE_TARGET, 0U);
+	AddPlanEdge(fixture, KEY_RELAY_RESTORE, KEY_RELAY_HURT,
+	    SG_MECH_EDGE_TARGET, 1U);
+	AddPlanEdge(fixture, KEY_RELAY_RESTORE, KEY_RELAY_SPEAKER_A,
+	    SG_MECH_EDGE_TARGET, 2U);
+	AddPlanEdge(fixture, KEY_RELAY_RESTORE, KEY_RELAY_SPEAKER_B,
+	    SG_MECH_EDGE_TARGET, 3U);
+	FinishPlan(fixture, LINK_RELAY_WALL);
 
 	memset(rune, 0, sizeof(*rune));
 	rune->artifact.magic = RUNE_ARTIFACT_MAGIC;
@@ -1459,6 +1583,143 @@ static void TestProductionDelayedRelayDispatch(execution_fixture_t *fixture,
 	CHECK(!test_edicts[KEY_SPARE].inuse);
 	CHECK(test_edicts[KEY_SPARE].classname == NULL);
 	CHECK(SG_RuneMechanismBindingCurrent(&binding));
+}
+
+static edict_t *RelayWallDelayedBySource(uint32_t source_key)
+{
+	int index;
+
+	for (index = 0; index < globals.num_edicts; index++)
+		if (test_edicts[index].inuse && test_edicts[index].classname &&
+		    strcmp(test_edicts[index].classname, "DelayedUse") == 0 &&
+		    test_edicts[index].sg_delayed_source_key == source_key)
+			return &test_edicts[index];
+	return NULL;
+}
+
+static void TestRelayWallLiveDelayedLifecycle(
+	execution_fixture_t *fixture)
+{
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *button = &test_edicts[KEY_RELAY_BUTTON];
+	edict_t *activator = &test_edicts[KEY_BOT];
+	edict_t *delayed = NULL;
+	edict_t *restoration;
+	edict_t *body = &test_edicts[KEY_RELAY_BODY];
+	int delayed_tags = compound_drop_delayed_tags;
+
+	DirectBotOwner(bot, LINK_RELAY_WALL);
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+	button->activator = activator;
+	CHECK(SG_RuneMechanismBindingCaptureOwned(&fixture->rune,
+	    LINK_RELAY_WALL, &(sg_rune_mechanism_binding_t){0}));
+	G_UseTargets(button, activator);
+	CHECK(compound_drop_delayed_tags == delayed_tags + 1);
+	delayed = RelayWallDelayedBySource(KEY_RELAY_BUTTON);
+	CHECK(delayed != NULL);
+	if (delayed)
+	{
+		CHECK(delayed->think == Think_Delay);
+		CHECK(delayed->activator == activator);
+		CHECK(delayed->nextthink == level.time + button->delay);
+		CHECK(!SG_RelayWallGameDelayedUseDurable(delayed));
+		level.framenum = 39;
+		level.time = 3.9f;
+		Think_Delay(delayed);
+	}
+	CHECK(compound_drop_delayed_tags == delayed_tags + 2);
+	CHECK(test_edicts[KEY_RELAY_WALL].solid == SOLID_NOT);
+	CHECK(test_edicts[KEY_RELAY_HURT].solid == SOLID_NOT);
+	CHECK(relay_wall_speaker_uses == 2);
+	restoration = RelayWallDelayedBySource(KEY_RELAY_RESTORE);
+	CHECK(restoration != NULL);
+	if (!restoration)
+		return;
+	CHECK(SG_RelayWallGameDelayedUseDurable(restoration));
+	CHECK(restoration->nextthink == level.time + 4.0f);
+	SG_CancelBotDelayedUses(activator);
+	CHECK(restoration->inuse);
+	CHECK(restoration->activator == NULL);
+	CHECK(SG_RelayWallGameDelayedUseDurable(restoration));
+	body->solid = SOLID_BBOX;
+	VectorSet(body->absmin, -8.0f, -8.0f, -8.0f);
+	VectorSet(body->absmax, 8.0f, 8.0f, 8.0f);
+	level.framenum = 79;
+	level.time = 7.9f;
+	Think_Delay(restoration);
+	CHECK(restoration->inuse);
+	CHECK(SG_RelayWallGameDelayedUseDeferred(restoration));
+	CHECK(restoration->nextthink == 8.0f);
+	CHECK(test_edicts[KEY_RELAY_WALL].solid == SOLID_NOT);
+	CHECK(test_edicts[KEY_RELAY_HURT].solid == SOLID_NOT);
+	CHECK(relay_wall_speaker_uses == 2);
+	body->solid = SOLID_NOT;
+	level.framenum = 80;
+	level.time = 8.0f;
+	Think_Delay(restoration);
+	CHECK(!restoration->inuse);
+	CHECK(test_edicts[KEY_RELAY_WALL].solid == SOLID_BSP);
+	CHECK(test_edicts[KEY_RELAY_HURT].solid == SOLID_TRIGGER);
+	CHECK(relay_wall_speaker_uses == 4);
+}
+
+static void TestRelayWallHumanDelayRemainsStock(void)
+{
+	edict_t *button = &test_edicts[KEY_RELAY_BUTTON];
+	edict_t *human = &test_edicts[KEY_RELAY_BODY];
+	edict_t *delayed = NULL;
+	int delayed_tags = compound_drop_delayed_tags;
+	int index;
+
+	human->client = &bot_client;
+	human->health = 100;
+	button->activator = human;
+	G_UseTargets(button, human);
+	CHECK(compound_drop_delayed_tags == delayed_tags + 1);
+	for (index = 0; index < globals.num_edicts; index++)
+		if (test_edicts[index].inuse && test_edicts[index].classname &&
+		    strcmp(test_edicts[index].classname, "DelayedUse") == 0)
+			delayed = &test_edicts[index];
+	CHECK(delayed != NULL);
+	if (!delayed)
+		return;
+	CHECK(delayed->activator == human);
+	CHECK(delayed->target == button->target);
+	CHECK(delayed->message == button->message);
+	CHECK(delayed->killtarget == button->killtarget);
+	CHECK(delayed->nextthink == level.time + button->delay);
+	CHECK(delayed->think == Think_Delay);
+	CHECK(delayed->sg_relay_wall_live == NULL);
+	CHECK(delayed->sg_delayed_source_key == 0U);
+	CHECK(delayed->sg_delayed_source_generation == 0U);
+}
+
+static void TestRelayWallDelayedIdentityDriftFailsClosed(void)
+{
+	sg_bot_t *bot = &sg_bots[0];
+	edict_t *button = &test_edicts[KEY_RELAY_BUTTON];
+	edict_t *activator = &test_edicts[KEY_BOT];
+	edict_t *delayed;
+
+	DirectBotOwner(bot, LINK_RELAY_WALL);
+	bot->declared_touched = true;
+	bot->declared_touch_frame = level.framenum;
+	button->activator = activator;
+	G_UseTargets(button, activator);
+	delayed = RelayWallDelayedBySource(KEY_RELAY_BUTTON);
+	CHECK(delayed != NULL);
+	if (!delayed)
+		return;
+	delayed->sg_delayed_source_generation++;
+	level.framenum = 39;
+	level.time = 3.9f;
+	Think_Delay(delayed);
+	CHECK(!delayed->inuse);
+	CHECK(RelayWallDelayedBySource(KEY_RELAY_RESTORE) == NULL);
+	CHECK(test_edicts[KEY_RELAY_WALL].solid == SOLID_BSP);
+	CHECK(test_edicts[KEY_RELAY_HURT].solid == SOLID_TRIGGER);
+	CHECK(relay_wall_speaker_uses == 0);
 }
 
 static void TestButtonDoor(execution_fixture_t *fixture)
@@ -2564,6 +2825,12 @@ int main(void)
 	    LINK_CELLAR_DOOR, KEY_CELLAR_TRIGGER, "DR", 0);
 	TestProductionDelayedRelayDispatch(&fixture, CHAIN_GATE,
 	    LINK_GATE_DOOR, KEY_GATE_TRIGGER, "DSR", 1);
+	FixtureBuild(&fixture);
+	TestRelayWallLiveDelayedLifecycle(&fixture);
+	FixtureBuild(&fixture);
+	TestRelayWallHumanDelayRemainsStock();
+	FixtureBuild(&fixture);
+	TestRelayWallDelayedIdentityDriftFailsClosed();
 	/* Exact mirrored lmctf58 CellarDoor2 approach coordinates captured from
 	 * the real BSP trace.  Both run the same production binding/ticket/touch/
 	 * relay/door composition with opposite X velocity. */
@@ -2592,7 +2859,6 @@ int main(void)
 	TestDirectApproachMultiMaster(&fixture);
 	TestDirectApproachShallowTicket(&fixture);
 	CHECK(compound_drop_probe_calls > 0);
-	CHECK(compound_drop_delayed_tags == 0);
 	CHECK(compound_hook_probe_calls > 0);
 	if (failures != 0)
 	{

@@ -20,6 +20,7 @@ extern void trigger_push_touch(edict_t *, edict_t *, cplane_t *, csurface_t *);
 extern void teleporter_touch(edict_t *, edict_t *, cplane_t *, csurface_t *);
 extern void path_corner_touch(edict_t *, edict_t *, cplane_t *, csurface_t *);
 extern void Touch_Item(edict_t *, edict_t *, cplane_t *, csurface_t *);
+extern void hurt_touch(edict_t *, edict_t *, cplane_t *, csurface_t *);
 
 extern void Use_Multi(edict_t *, edict_t *, edict_t *);
 extern void button_use(edict_t *, edict_t *, edict_t *);
@@ -32,6 +33,9 @@ extern void trigger_elevator_use(edict_t *, edict_t *, edict_t *);
 extern void door_secret_use(edict_t *, edict_t *, edict_t *);
 extern void Use_Target_Speaker(edict_t *, edict_t *, edict_t *);
 extern void Use_Areaportal(edict_t *, edict_t *, edict_t *);
+extern void func_wall_use(edict_t *, edict_t *, edict_t *);
+extern void hurt_use(edict_t *, edict_t *, edict_t *);
+extern void target_laser_use(edict_t *, edict_t *, edict_t *);
 
 extern void multi_wait(edict_t *);
 extern void button_wait(edict_t *);
@@ -59,6 +63,8 @@ extern void train_next(edict_t *);
 extern void train_wait(edict_t *);
 extern void trigger_elevator_init(edict_t *);
 extern void Think_Delay(edict_t *);
+extern void target_laser_start(edict_t *);
+extern void target_laser_think(edict_t *);
 
 extern void door_blocked(edict_t *, edict_t *);
 extern void plat_blocked(edict_t *, edict_t *);
@@ -387,6 +393,13 @@ static int Catalog_TriggeredDoorLiftPair(uint32_t key,
 	return 0;
 }
 
+static int Catalog_TargetLaserPending(const edict_t *entity)
+{
+	return entity && entity->classname &&
+	       !strcmp(entity->classname, "target_laser") && !entity->use &&
+	       entity->think == target_laser_start && entity->nextthink > 0.0f;
+}
+
 static uint16_t Catalog_NodeKind(uint32_t index, const edict_t *entity)
 {
 	const char *name = Catalog_Classname(index, entity);
@@ -433,6 +446,18 @@ static uint16_t Catalog_NodeKind(uint32_t index, const edict_t *entity)
 		return SG_MECH_NODE_TARGET_SPEAKER;
 	if (!strcmp(name, "func_areaportal"))
 		return SG_MECH_NODE_AREAPORTAL;
+	if (!strcmp(name, "func_wall"))
+		return entity->spawnflags == 7 && entity->use == func_wall_use
+			? SG_MECH_NODE_TOGGLE_WALL : SG_MECH_NODE_OTHER_MOVER;
+	if (!strcmp(name, "trigger_hurt"))
+		return (entity->spawnflags & 3) == 2 &&
+		       entity->touch == hurt_touch && entity->use == hurt_use
+			? SG_MECH_NODE_TRIGGER_HURT : SG_MECH_NODE_OTHER_TRIGGER;
+	if (!strcmp(name, "target_laser"))
+		return ((entity->use == target_laser_use &&
+		         (entity->think == target_laser_think || !entity->think)) ||
+		        Catalog_TargetLaserPending(entity))
+			? SG_MECH_NODE_TARGET_LASER : SG_MECH_NODE_CONTEXTUAL;
 	if (!strcmp(name, "info_flag_red") ||
 	    !strcmp(name, "info_flag_blue") ||
 	    !strcmp(name, "item_flag_team1") ||
@@ -459,11 +484,14 @@ static uint16_t Catalog_TouchCallback(const edict_t *entity)
 	if (entity->touch == teleporter_touch) return SG_MECH_CALLBACK_TELEPORTER_TOUCH;
 	if (entity->touch == path_corner_touch) return SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
 	if (entity->touch == Touch_Item) return SG_MECH_CALLBACK_TOUCH_ITEM;
+	if (entity->touch == hurt_touch) return SG_MECH_CALLBACK_TOUCH_HURT;
 	return SG_MECH_CALLBACK_UNKNOWN;
 }
 
 static uint16_t Catalog_UseCallback(const edict_t *entity)
 {
+	if (Catalog_TargetLaserPending(entity))
+		return SG_MECH_CALLBACK_USE_TARGET_LASER;
 	if (!entity->use) return SG_MECH_CALLBACK_NONE;
 	if (entity->use == Use_Multi) return SG_MECH_CALLBACK_USE_MULTI;
 	if (entity->use == button_use) return SG_MECH_CALLBACK_BUTTON_USE;
@@ -476,11 +504,19 @@ static uint16_t Catalog_UseCallback(const edict_t *entity)
 	if (entity->use == door_secret_use) return SG_MECH_CALLBACK_SECRET_DOOR_USE;
 	if (entity->use == Use_Target_Speaker) return SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
 	if (entity->use == Use_Areaportal) return SG_MECH_CALLBACK_USE_AREAPORTAL;
+	if (entity->use == func_wall_use) return SG_MECH_CALLBACK_USE_FUNC_WALL;
+	if (entity->use == hurt_use) return SG_MECH_CALLBACK_USE_HURT;
+	if (entity->use == target_laser_use)
+		return SG_MECH_CALLBACK_USE_TARGET_LASER;
 	return SG_MECH_CALLBACK_UNKNOWN;
 }
 
 static uint16_t Catalog_ThinkCallback(const edict_t *entity)
 {
+	if (Catalog_TargetLaserPending(entity))
+		return (entity->spawnflags & 1)
+			? SG_MECH_CALLBACK_THINK_TARGET_LASER
+			: SG_MECH_CALLBACK_NONE;
 	if (!entity->think) return SG_MECH_CALLBACK_NONE;
 	if (entity->think == multi_wait) return SG_MECH_CALLBACK_THINK_MULTI_WAIT;
 	if (entity->think == button_wait) return SG_MECH_CALLBACK_THINK_BUTTON_WAIT;
@@ -492,6 +528,8 @@ static uint16_t Catalog_ThinkCallback(const edict_t *entity)
 	if (entity->think == train_wait) return SG_MECH_CALLBACK_TRAIN_WAIT;
 	if (entity->think == trigger_elevator_init) return SG_MECH_CALLBACK_TRIGGER_ELEVATOR_INIT;
 	if (entity->think == Think_Delay) return SG_MECH_CALLBACK_THINK_DELAY;
+	if (entity->think == target_laser_think)
+		return SG_MECH_CALLBACK_THINK_TARGET_LASER;
 	return SG_MECH_CALLBACK_UNKNOWN;
 }
 
@@ -560,6 +598,18 @@ static int Catalog_ExecutionCallbacksMatch(const edict_t *entity,
 	const rune_mechanism_node_t *node, uint16_t controller_kind)
 {
 	sg_mech_execution_state_t state;
+
+	if (controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT &&
+	    node && node->kind == SG_MECH_NODE_TARGET_LASER)
+		return entity && !entity->touch && !entity->blocked &&
+		       ((Catalog_TargetLaserPending(entity) &&
+		         ((uint32_t)entity->spawnflags & 1U) != 0U) ||
+		        (entity->use == target_laser_use &&
+		         (((entity->spawnflags & 1) != 0 &&
+		         entity->think == target_laser_think &&
+		         entity->nextthink > 0.0f) ||
+		        ((entity->spawnflags & 1) == 0 && !entity->think &&
+		         entity->nextthink == 0.0f))));
 
 	if (!entity || !node || !isfinite(entity->nextthink) ||
 	    entity->nextthink < 0.0f)
@@ -813,14 +863,21 @@ static int Catalog_BoundsQ8(const edict_t *entity, int16_t mins[3],
 	int16_t maxs[3])
 {
 	int axis;
-	int linked_bounds = entity->area.prev != NULL;
+	int local_brush = entity->solid == SOLID_NOT &&
+		((entity->model && entity->model[0] == '*') ||
+		 (entity->classname && !strcmp(entity->classname, "func_wall")));
+	int linked_bounds = !local_brush && entity->area.prev != NULL;
 
 	for (axis = 0; axis < 3; axis++)
 	{
 		double low = (double)(linked_bounds ? entity->absmin[axis]
-			: entity->s.origin[axis]) * 8.0;
+			: local_brush
+				? entity->s.origin[axis] + entity->mins[axis]
+				: entity->s.origin[axis]) * 8.0;
 		double high = (double)(linked_bounds ? entity->absmax[axis]
-			: entity->s.origin[axis]) * 8.0;
+			: local_brush
+				? entity->s.origin[axis] + entity->maxs[axis]
+				: entity->s.origin[axis]) * 8.0;
 		long low_q8;
 		long high_q8;
 
@@ -1090,7 +1147,8 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 		if (catalog.sources[index].synthetic_kind != SG_MECH_SYNTHETIC_NONE)
 			node->flags |= SG_MECH_NODEF_SYNTHETIC;
 		if (entity->touch) node->flags |= SG_MECH_NODEF_TOUCHABLE;
-		if (entity->use) node->flags |= SG_MECH_NODEF_USABLE;
+		if (entity->use || Catalog_TargetLaserPending(entity))
+			node->flags |= SG_MECH_NODEF_USABLE;
 		if (entity->movetype == MOVETYPE_PUSH || entity->movetype == MOVETYPE_STOP)
 			node->flags |= SG_MECH_NODEF_MOVER;
 		if (entity->teammaster == entity ||
@@ -1136,6 +1194,8 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 		    node->team_master_key == SG_MECH_NO_KEY)
 			node->team_master_key = index;
 		node->spawnflags = (uint32_t)entity->spawnflags;
+		if (node->kind == SG_MECH_NODE_TARGET_LASER)
+			node->spawnflags &= ~UINT32_C(0x80000000);
 		node->delay_ms = Catalog_DelayMS(entity->delay);
 		/* Executable movers consume moveinfo at runtime.  Other records retain
 		 * the existing entity-field inventory representation. */
@@ -1852,9 +1912,13 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	uint32_t delay_ms;
 	uint32_t owner_key;
 	uint32_t team_master_key;
+	uint32_t enemy_key;
 	uint16_t target_kind;
 	int button_platform_entry;
 	int button_platform_mover;
+	int relay_wall_stateful;
+	int timed_vault_laser;
+	int enemy_matches;
 
 	if (!SG_MechCatalogEntityMatches(key, node))
 		return 0;
@@ -1868,6 +1932,60 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	    controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
 	    node->kind == SG_MECH_NODE_PLATFORM &&
 	    Catalog_ButtonPlatformMoverSealed(key);
+	relay_wall_stateful = execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_RELAY_DOOR &&
+	    (node->kind == SG_MECH_NODE_TOGGLE_WALL ||
+	     node->kind == SG_MECH_NODE_TRIGGER_HURT);
+	timed_vault_laser = execution &&
+	    controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT &&
+	    node->kind == SG_MECH_NODE_TARGET_LASER;
+	/* The passive station plan is publishable static authority, but its live
+	 * moving-train adapter is a separate contract.  Never let the generic
+	 * callback tuple accidentally authorize execution in the meantime. */
+	if (execution && controller_kind ==
+	        SG_MECHANISM_CONTROLLER_TRAIN_STATION)
+		return 0;
+	if (relay_wall_stateful)
+	{
+		int stopped = entity->velocity[0] == 0.0f &&
+		    entity->velocity[1] == 0.0f && entity->velocity[2] == 0.0f &&
+		    entity->avelocity[0] == 0.0f &&
+		    entity->avelocity[1] == 0.0f &&
+		    entity->avelocity[2] == 0.0f;
+
+		if (!stopped || entity->nextthink != 0.0f || entity->think ||
+		    entity->blocked || (entity->svflags & SVF_NOCLIENT) !=
+		        (node->kind == SG_MECH_NODE_TOGGLE_WALL &&
+		         entity->solid == SOLID_NOT ? SVF_NOCLIENT : 0))
+			return 0;
+		if (node->kind == SG_MECH_NODE_TOGGLE_WALL)
+		{
+			if (!entity->classname || strcmp(entity->classname, "func_wall") ||
+			    entity->spawnflags != 7 || entity->movetype != MOVETYPE_PUSH ||
+			    entity->touch || entity->use != func_wall_use ||
+			    (entity->solid != SOLID_BSP && entity->solid != SOLID_NOT))
+				return 0;
+		}
+		else if (!entity->classname ||
+		         strcmp(entity->classname, "trigger_hurt") ||
+		         (entity->spawnflags & 3) != 2 ||
+		         entity->movetype != MOVETYPE_NONE ||
+		         entity->touch != hurt_touch || entity->use != hurt_use ||
+		         (entity->solid != SOLID_TRIGGER &&
+		          entity->solid != SOLID_NOT))
+			return 0;
+	}
+	if (timed_vault_laser && !Catalog_TargetLaserPending(entity) &&
+	    (!entity->classname || strcmp(entity->classname, "target_laser") ||
+	     entity->movetype != MOVETYPE_NONE || entity->solid != SOLID_NOT ||
+	     entity->touch || entity->use != target_laser_use || entity->blocked ||
+	     ((entity->spawnflags & 1) != 0
+	         ? ((entity->svflags & SVF_NOCLIENT) != 0 ||
+	            entity->think != target_laser_think ||
+	            entity->nextthink <= 0.0f)
+	         : ((entity->svflags & SVF_NOCLIENT) == 0 || entity->think ||
+	            entity->nextthink != 0.0f))))
+		return 0;
 	if (execution &&
 	    (controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
 	     controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
@@ -1924,9 +2042,20 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 			owner_key = lift_mover;
 	}
 	team_master_key = Catalog_LivePointerKey(entity->teammaster);
+	enemy_key = Catalog_LivePointerKey(entity->enemy);
 	if (node->kind == SG_MECH_NODE_DOOR_MASTER &&
 	    team_master_key == SG_MECH_NO_KEY)
 		team_master_key = key;
+	enemy_matches = Catalog_EdgeGroupMatchesPointer(key,
+	    SG_MECH_EDGE_ENEMY, enemy_key);
+	if (timed_vault_laser)
+		enemy_matches = Catalog_TargetLaserPending(entity)
+		    ? enemy_matches
+		    : enemy_key != SG_MECH_NO_KEY &&
+		      Catalog_EdgeGroupMatchesPointer(key,
+		          SG_MECH_EDGE_TARGET, enemy_key) &&
+		      (enemy_matches || Catalog_EdgeGroupMatchesPointer(key,
+		          SG_MECH_EDGE_ENEMY, SG_MECH_NO_KEY));
 	target_kind = node->kind == SG_MECH_NODE_TRAIN ||
 		node->kind == SG_MECH_NODE_PATH_CORNER
 		? SG_MECH_EDGE_ROUTE_TARGET : SG_MECH_EDGE_TARGET;
@@ -1941,7 +2070,13 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	           Catalog_BlockedCallback(entity) != node->blocked_callback)) ||
 	    (execution && !Catalog_ExecutableMoverKinematicsCurrent(entity,
 	        node)) ||
-	    (uint32_t)entity->spawnflags != node->spawnflags ||
+	    (node->kind == SG_MECH_NODE_TARGET_LASER
+	        ? (((uint32_t)entity->spawnflags & UINT32_C(0x7ffffffe)) !=
+	              (node->spawnflags & UINT32_C(0x7ffffffe)) ||
+	           (!execution &&
+	            ((uint32_t)entity->spawnflags & 1U) !=
+	              (node->spawnflags & 1U)))
+	        : (uint32_t)entity->spawnflags != node->spawnflags) ||
 	    owner_key != node->owner_key ||
 	    team_master_key != node->team_master_key ||
 	    !Catalog_StringMatches(node->classname_offset, entity->classname) ||
@@ -1961,8 +2096,7 @@ static int Catalog_EntityTopologyMatches(uint32_t key,
 	        Catalog_LivePointerKey(entity->movetarget)) ||
 	    !Catalog_EdgeGroupMatchesPointer(key, SG_MECH_EDGE_TARGET_ENT,
 	        Catalog_LivePointerKey(entity->target_ent)) ||
-	    !Catalog_EdgeGroupMatchesPointer(key, SG_MECH_EDGE_ENEMY,
-	        Catalog_LivePointerKey(entity->enemy)) ||
+	    !enemy_matches ||
 	    !Catalog_EdgeGroupMatchesTeam(key, entity))
 		return 0;
 	if (node->kind == SG_MECH_NODE_PUSH)
@@ -1992,10 +2126,71 @@ int SG_MechCatalogEntityExecutionMatches(uint32_t key,
 	const rune_mechanism_node_t *node, uint16_t controller_kind)
 {
 	if (controller_kind == SG_MECHANISM_CONTROLLER_NONE ||
-	    controller_kind > SG_MECHANISM_CONTROLLER_TRAIN_SHOOT || !node ||
+	    controller_kind > SG_MECHANISM_CONTROLLER_TIMED_VAULT || !node ||
 	    (node->flags & SG_MECH_NODEF_INVENTORY_ONLY) != 0U)
 		return 0;
 	return Catalog_EntityTopologyMatches(key, node, 1, controller_kind);
+}
+
+int SG_MechCatalogStationTrainImmutableMatches(uint32_t key,
+	const rune_mechanism_node_t *node)
+{
+	const rune_mechanism_node_t *sealed = Catalog_SealedNode(key);
+	edict_t *entity;
+	uint16_t think_role;
+	uint16_t end_role;
+
+	if (catalog.status != SG_MECH_CATALOG_READY || !node || !sealed ||
+	    node->key != key || node->kind != SG_MECH_NODE_TRAIN ||
+	    memcmp(node, sealed, sizeof(*node)) != 0 || !g_edicts ||
+	    key == 0U || key >= (uint32_t)globals.num_edicts ||
+	    !catalog.live_generations || !catalog.sealed_generations ||
+	    catalog.sealed_generations[key] == 0U ||
+	    catalog.live_generations[key] != catalog.sealed_generations[key])
+		return 0;
+	entity = &g_edicts[key];
+	think_role = Catalog_ExecutionThinkRole(entity, node);
+	end_role = Catalog_ExecutionEndRole(entity);
+	return entity->inuse && entity->s.number == (int)key &&
+	       Catalog_NodeKind(key, entity) == SG_MECH_NODE_TRAIN &&
+	       Catalog_TouchCallback(entity) == node->touch_callback &&
+	       Catalog_UseCallback(entity) == SG_MECH_CALLBACK_TRAIN_USE &&
+	       node->use_callback == SG_MECH_CALLBACK_TRAIN_USE &&
+	       Catalog_BlockedCallback(entity) ==
+	           SG_MECH_CALLBACK_BLOCKED_TRAIN &&
+	       node->blocked_callback == SG_MECH_CALLBACK_BLOCKED_TRAIN &&
+	       (uint32_t)entity->spawnflags == node->spawnflags &&
+	       Catalog_LivePointerKey(entity->owner) == node->owner_key &&
+	       Catalog_LivePointerKey(entity->teammaster) ==
+	           node->team_master_key &&
+	       Catalog_StringMatches(node->classname_offset,
+	           entity->classname) &&
+	       Catalog_StringMatches(node->targetname_offset,
+	           entity->targetname) &&
+	       Catalog_StringMatches(node->killtarget_offset,
+	           entity->killtarget) &&
+	       Catalog_StringMatches(node->path_target_offset,
+	           entity->pathtarget) &&
+	       Catalog_Q8(entity->moveinfo.speed) == node->speed_q8 &&
+	       Catalog_Q8(entity->moveinfo.accel) == node->accel_q8 &&
+	       Catalog_Q8(entity->moveinfo.decel) == node->decel_q8 &&
+	       isfinite(entity->nextthink) && entity->nextthink >= 0.0f &&
+	       (think_role == SG_MECH_EXEC_THINK_SEALED ||
+	        think_role == SG_MECH_EXEC_THINK_LINEAR_BEGIN ||
+	        think_role == SG_MECH_EXEC_THINK_LINEAR_FINAL ||
+	        think_role == SG_MECH_EXEC_THINK_LINEAR_DONE ||
+	        think_role == SG_MECH_EXEC_THINK_ACCELERATED) &&
+	       (end_role == SG_MECH_EXEC_END_NONE ||
+	        end_role == SG_MECH_EXEC_END_TRAIN_CORNER);
+}
+
+edict_t *SG_MechCatalogResolveStationEntity(uint32_t key,
+	const rune_mechanism_node_t *node)
+{
+	if (node && node->kind == SG_MECH_NODE_TRAIN)
+		return SG_MechCatalogStationTrainImmutableMatches(key, node)
+			? &g_edicts[key] : NULL;
+	return SG_MechCatalogResolveEntity(key, node);
 }
 
 int SG_MechCatalogEntityRetired(uint32_t key,

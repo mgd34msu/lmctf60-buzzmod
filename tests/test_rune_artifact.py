@@ -1504,6 +1504,286 @@ def _build_teleports(
 
 class RuneRuneArtifactTests(unittest.TestCase):
 
+    def test_trigger_count_excludes_stateful_hazard_targets(self):
+        kinds = (
+            runeio.RUNE_NODE_BUTTON,
+            runeio.RUNE_NODE_RELAY,
+            runeio.RUNE_NODE_TRIGGER_HURT,
+        )
+
+        self.assertEqual(
+            2,
+            sum(kind in runeio._RUNE_TRIGGER_NODE_KINDS for kind in kinds),
+        )
+
+    def test_continuous_station_plan_and_distinct_approach_are_readable(self):
+        route = (28, 29, 30, 31, 32, 33, 34,
+                 35, 36, 37, 38, 41, 40, 39)
+
+        def station_node(
+            key: int, kind: int, flags: int, *, master: int,
+            wait_ms: int = 0,
+        ) -> runeio.RuneActivationNode:
+            train = kind == runeio.RUNE_NODE_TRAIN
+            return runeio.RuneActivationNode(
+                key=key,
+                kind=kind,
+                flags=flags,
+                classname_offset=0,
+                target_offset=1,
+                targetname_offset=0 if train else 1,
+                killtarget_offset=0,
+                owner_key=runeio.RUNE_NO_KEY,
+                team_master_key=master,
+                spawnflags=1 if train else 0,
+                touch_callback=(
+                    0 if train else runeio.RUNE_CALLBACK_PATH_CORNER_TOUCH
+                ),
+                use_callback=(
+                    runeio.RUNE_CALLBACK_TRAIN_USE if train else 0
+                ),
+                think_callback=(
+                    runeio.RUNE_CALLBACK_TRAIN_NEXT if train else 0
+                ),
+                blocked_callback=(
+                    runeio.RUNE_CALLBACK_BLOCKED_TRAIN if train else 0
+                ),
+                delay_ms=0,
+                wait_ms=wait_ms,
+                speed_q8=3200 if train else 0,
+                accel_q8=3200 if train else 0,
+                decel_q8=3200 if train else 0,
+                absmin_q8=(0, 0, 0),
+                absmax_q8=(64, 64, 64),
+                path_target_offset=0,
+                push_velocity=(0.0, 0.0, 0.0),
+            )
+
+        master_flags = (
+            runeio.RUNE_NODEF_REPEATABLE | runeio.RUNE_NODEF_USABLE |
+            runeio.RUNE_NODEF_MOVER | runeio.RUNE_NODEF_TEAM_MASTER
+        )
+        member_flags = (
+            runeio.RUNE_NODEF_REPEATABLE | runeio.RUNE_NODEF_USABLE |
+            runeio.RUNE_NODEF_MOVER | runeio.RUNE_NODEF_TEAM_MEMBER
+        )
+        corner_flags = (
+            runeio.RUNE_NODEF_REPEATABLE | runeio.RUNE_NODEF_TOUCHABLE
+        )
+        nodes = [station_node(
+            5, runeio.RUNE_NODE_TRAIN, master_flags, master=5,
+        )]
+        nodes.extend(
+            station_node(
+                key, runeio.RUNE_NODE_PATH_CORNER, corner_flags,
+                master=runeio.RUNE_NO_KEY,
+                wait_ms=3000 if key in (28, 35) else 0,
+            )
+            for key in route
+        )
+        nodes.append(station_node(
+            42, runeio.RUNE_NODE_TRAIN, member_flags, master=5,
+        ))
+        edge = runeio.RuneActivationEdge
+        edges = (
+            edge(5, 42, runeio.RUNE_EDGE_TEAM, 0, 0),
+            edge(5, 29, runeio.RUNE_EDGE_ROUTE_TARGET, 0, 0),
+            edge(42, 36, runeio.RUNE_EDGE_ROUTE_TARGET, 0, 0),
+            *(edge(route[index], route[(index + 1) % len(route)],
+                   runeio.RUNE_EDGE_ROUTE_TARGET, 0, 0)
+              for index in range(len(route))),
+        )
+        fanout = {
+            (item.from_key, item.kind): (item,)
+            for item in edges
+        }
+        plan = runeio.RuneActivationPlan(
+            28, 5, 0, len(edges),
+            runeio.RUNE_CONTROLLER_TRAIN_STATION,
+            contract.mechanism_controller_plan_flags(
+                runeio.RUNE_CONTROLLER_TRAIN_STATION
+            ),
+            2, 3000, 0,
+        )
+        owner = runeio.RuneLink(
+            0, 1, contract.RL_TRAIN, contract.RL_DECLARED,
+            0, 0, 0, 0, 1000,
+            (-96.0, 0.0, 0.0), (0.0, 0.0, 16.0),
+            100, contract.RLCM_RIDE, 0, 0,
+        )
+
+        runeio._rune_validate_production_plan(
+            plan, edges, owner, {item.key: item for item in nodes},
+            fanout, {}, b"\0x\0", 0,
+        )
+        with self.assertRaises(runeio.RuneWireError):
+            runeio._rune_validate_production_plan(
+                plan, edges,
+                replace(owner, suffix_anchor=owner.mechanism_anchor),
+                {item.key: item for item in nodes}, fanout, {}, b"\0x\0", 0,
+            )
+
+    def test_relay_wall_plan_requires_identical_typed_fanout(self):
+        values = (
+            b"barrier", b"fan", b"func_button", b"func_wall",
+            b"target_speaker", b"trigger_hurt", b"trigger_relay",
+        )
+        strings = b"\0" + b"".join(value + b"\0" for value in values)
+        offsets: dict[bytes, int] = {}
+        offset = 1
+        for value in values:
+            offsets[value] = offset
+            offset += len(value) + 1
+
+        def node(
+            key: int,
+            kind: int,
+            classname: bytes,
+            *,
+            flags: int,
+            target: bytes | None = None,
+            targetname: bytes | None = None,
+            spawnflags: int = 0,
+            touch_callback: int = 0,
+            use_callback: int = 0,
+            delay_ms: int = 0,
+            wait_ms: int = 0,
+            speed_q8: int = 0,
+        ) -> runeio.RuneActivationNode:
+            return runeio.RuneActivationNode(
+                key=key,
+                kind=kind,
+                flags=flags,
+                classname_offset=offsets[classname],
+                target_offset=offsets[target] if target is not None else 0,
+                targetname_offset=(
+                    offsets[targetname] if targetname is not None else 0
+                ),
+                killtarget_offset=0,
+                owner_key=runeio.RUNE_NO_KEY,
+                team_master_key=runeio.RUNE_NO_KEY,
+                spawnflags=spawnflags,
+                touch_callback=touch_callback,
+                use_callback=use_callback,
+                think_callback=0,
+                blocked_callback=0,
+                delay_ms=delay_ms,
+                wait_ms=wait_ms,
+                speed_q8=speed_q8,
+                accel_q8=speed_q8,
+                decel_q8=speed_q8,
+                absmin_q8=(0, 0, 0),
+                absmax_q8=(64, 64, 64),
+                path_target_offset=0,
+                push_velocity=(0.0, 0.0, 0.0),
+            )
+
+        nodes = (
+            node(
+                10, runeio.RUNE_NODE_BUTTON, b"func_button",
+                flags=(
+                    runeio.RUNE_NODEF_REPEATABLE |
+                    runeio.RUNE_NODEF_TOUCHABLE |
+                    runeio.RUNE_NODEF_USABLE |
+                    runeio.RUNE_NODEF_MOVER
+                ),
+                target=b"fan",
+                touch_callback=runeio.RUNE_CALLBACK_BUTTON_TOUCH,
+                use_callback=runeio.RUNE_CALLBACK_BUTTON_USE,
+                delay_ms=200,
+                wait_ms=4000,
+                speed_q8=320,
+            ),
+            node(
+                20, runeio.RUNE_NODE_RELAY, b"trigger_relay",
+                flags=runeio.RUNE_NODEF_USABLE,
+                target=b"barrier", targetname=b"fan",
+                use_callback=runeio.RUNE_CALLBACK_USE_TRIGGER_RELAY,
+            ),
+            node(
+                30, runeio.RUNE_NODE_RELAY, b"trigger_relay",
+                flags=runeio.RUNE_NODEF_USABLE,
+                target=b"barrier", targetname=b"fan",
+                use_callback=runeio.RUNE_CALLBACK_USE_TRIGGER_RELAY,
+                delay_ms=4000,
+            ),
+            node(
+                40, runeio.RUNE_NODE_TOGGLE_WALL, b"func_wall",
+                flags=(
+                    runeio.RUNE_NODEF_REPEATABLE |
+                    runeio.RUNE_NODEF_USABLE |
+                    runeio.RUNE_NODEF_MOVER
+                ),
+                target=b"fan", targetname=b"barrier", spawnflags=7,
+                use_callback=runeio.RUNE_CALLBACK_USE_FUNC_WALL,
+            ),
+            node(
+                50, runeio.RUNE_NODE_TARGET_SPEAKER, b"target_speaker",
+                flags=(runeio.RUNE_NODEF_REPEATABLE |
+                       runeio.RUNE_NODEF_USABLE),
+                targetname=b"barrier", spawnflags=1,
+                use_callback=runeio.RUNE_CALLBACK_USE_TARGET_SPEAKER,
+            ),
+            node(
+                60, runeio.RUNE_NODE_TRIGGER_HURT, b"trigger_hurt",
+                flags=(
+                    runeio.RUNE_NODEF_REPEATABLE |
+                    runeio.RUNE_NODEF_TOUCHABLE |
+                    runeio.RUNE_NODEF_USABLE
+                ),
+                targetname=b"barrier", spawnflags=2,
+                touch_callback=runeio.RUNE_CALLBACK_TOUCH_HURT,
+                use_callback=runeio.RUNE_CALLBACK_USE_HURT,
+            ),
+            node(
+                70, runeio.RUNE_NODE_TARGET_SPEAKER, b"target_speaker",
+                flags=(runeio.RUNE_NODEF_REPEATABLE |
+                       runeio.RUNE_NODEF_USABLE),
+                targetname=b"barrier", spawnflags=1,
+                use_callback=runeio.RUNE_CALLBACK_USE_TARGET_SPEAKER,
+            ),
+        )
+        edge = runeio.RuneActivationEdge
+        inventory = (
+            edge(10, 20, runeio.RUNE_EDGE_TARGET, 0, 200),
+            edge(10, 30, runeio.RUNE_EDGE_TARGET, 1, 200),
+            *(edge(20, key, runeio.RUNE_EDGE_TARGET, ordinal, 0)
+              for ordinal, key in enumerate((40, 50, 60, 70))),
+            *(edge(30, key, runeio.RUNE_EDGE_TARGET, ordinal, 4000)
+              for ordinal, key in enumerate((40, 50, 60, 70))),
+        )
+        plan = runeio.RuneActivationPlan(
+            10, 40, len(inventory), len(inventory),
+            runeio.RUNE_CONTROLLER_RELAY_DOOR, 0, 1, 4000, 0,
+        )
+        owner = runeio.RuneLink(
+            0, 1, contract.RL_BUTTON_DOOR, contract.RL_DECLARED,
+            0, 0, 0, 0, 4200,
+            (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+            0, contract.RLCM_PREOPEN, 0, 0,
+        )
+
+        def validate(edges: tuple[runeio.RuneActivationEdge, ...]) -> None:
+            fanout: dict[
+                tuple[int, int], tuple[runeio.RuneActivationEdge, ...]
+            ] = {}
+            for source in (10, 20, 30):
+                fanout[(source, runeio.RUNE_EDGE_TARGET)] = tuple(
+                    item for item in edges if item.from_key == source
+                )
+            runeio._rune_validate_production_plan(
+                plan, edges, owner, {item.key: item for item in nodes},
+                fanout, {}, strings, 0,
+            )
+
+        validate(inventory)
+        malformed = list(inventory)
+        malformed[6] = replace(malformed[6], to_key=50)
+        self.assert_wire_code(
+            runeio.RLRUNE_BAD_ACTIVATION_PLAN,
+            lambda: validate(tuple(malformed)),
+        )
+
     def test_shootable_door_plan_uses_shared_train_identity(self):
         raw_plan = runeio.RUNE_ACTIVATION_PLAN_STRUCT.pack(
             10,
@@ -1606,11 +1886,58 @@ class RuneRuneArtifactTests(unittest.TestCase):
                 (packed(candidate, 0), packed(run,
                     runeio.RUNE_NO_ACTIVATION_PLAN)),
                 (0, runeio.RUNE_NO_ACTIVATION_PLAN),
+                runeio.RUNE_ROUTE_CONTRACT_COMPLETE,
             )
 
         validate(lift)
         validate(replace(lift, mechanism_anchor=(0.125, 0.0, 0.0)))
         for malformed in (replace(lift, sweep_clear_ms=100),):
+            with self.subTest(link=malformed):
+                self.assert_wire_code(
+                    contract.RLW_BAD_LINK_RECORD,
+                    lambda malformed=malformed: validate(malformed),
+                )
+
+    def test_chain_hook_owns_only_the_second_control_slot(self):
+        seeds = (
+            runeio.RuneSeed((0.0, 0.0, 0.0)),
+            runeio.RuneSeed((128.0, 0.0, 0.0)),
+        )
+        chain = runeio.RunePolicyLink(
+            0, 1, contract.RL_CHAIN_HOOK, contract.RL_PROVEN,
+            0, 0, 0, 0, 1000,
+            suffix_anchor=(0.0, 0.0, 512.0),
+            mechanism_anchor=(0.0, 90.0, 512.0),
+        )
+        run = runeio.RunePolicyLink(
+            1, 0, contract.RL_RUN, contract.RL_PROVEN,
+            0, 0, 0, 0, 100,
+        )
+
+        def packed(link):
+            return runeio.RUNE_LINK_STRUCT.pack(
+                link.source, link.destination, link.action, link.provenance,
+                link.min_speed, link.heading, link.heading_slack,
+                link.exit_speed, link.cost_ms, *link.suffix_anchor,
+                *link.mechanism_anchor, link.sweep_clear_ms, link.mode,
+                link.reserved, runeio.RUNE_NO_ACTIVATION_PLAN,
+            )[:runeio.RUNE_POLICY_LINK_BYTES]
+
+        def validate(candidate):
+            runeio._validate_graph(
+                seeds, (candidate, run), (packed(candidate), packed(run)),
+                (runeio.RUNE_NO_ACTIVATION_PLAN,) * 2,
+                runeio.RUNE_ROUTE_CONTRACT_COMPLETE,
+        )
+
+        self.assertEqual((0.0, 90.0, 512.0), chain.secondary_control)
+        self.assertIsNone(run.secondary_control)
+        validate(chain)
+        for malformed in (
+            replace(chain, action=contract.RL_HOOK),
+            replace(chain, mechanism_anchor=(89.1, 90.0, 512.0)),
+            replace(chain, mechanism_anchor=(0.0, 90.0, 0.0)),
+        ):
             with self.subTest(link=malformed):
                 self.assert_wire_code(
                     contract.RLW_BAD_LINK_RECORD,
@@ -1626,6 +1953,10 @@ class RuneRuneArtifactTests(unittest.TestCase):
         decoded = runeio.decode_rune(self.encoded)
         self.assertIsInstance(decoded, runeio.RuneArtifact)
         self.assertEqual("runetest", decoded.header.map_name)
+        self.assertEqual(
+            runeio.RUNE_ROUTE_CONTRACT_COMPLETE,
+            decoded.header.route_contract,
+        )
         self.assertEqual(2, len(decoded.seeds))
         self.assertEqual(2, len(decoded.links))
         self.assertEqual(3, len(decoded.activation_nodes))
@@ -1642,12 +1973,46 @@ class RuneRuneArtifactTests(unittest.TestCase):
         )
 
         summary = runeio.summarize_rune(decoded)
+        self.assertEqual("complete", summary["route_contract"])
         self.assertEqual(2, summary["trigger_count"])
         self.assertEqual(3, summary["node_count"])
         self.assertEqual(2, summary["edge_count"])
         self.assertEqual(1, summary["plan_count"])
         self.assertEqual(1, summary["inventory_edge_count"])
         self.assertEqual(1, summary["plan_edge_count"])
+
+    def test_route_contract_is_authenticated_and_strict(self):
+        local_only = bytearray(self.encoded)
+        struct.pack_into(
+            "<H", local_only, 4,
+            runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY,
+        )
+        struct.pack_into(
+            "<H", local_only, runeio.RUNE_HEADER_BYTES + 14,
+            runeio.RSF_OBJECTIVE,
+        )
+        struct.pack_into(
+            "<H", local_only,
+            runeio.RUNE_HEADER_BYTES + runeio.RUNE_SEED_BYTES + 14,
+            runeio.RSF_OBJECTIVE,
+        )
+        _fix_payload_and_header_crc(local_only)
+        decoded = runeio.decode_rune(local_only)
+        self.assertEqual(
+            runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY,
+            decoded.header.route_contract,
+        )
+        self.assertEqual(
+            "local_only", runeio.summarize_rune(decoded)["route_contract"]
+        )
+
+        unknown = bytearray(local_only)
+        struct.pack_into("<H", unknown, 4, 2)
+        _fix_header_crc(unknown)
+        self.assert_wire_code(
+            runeio.RLRUNE_BAD_ROUTE_CONTRACT,
+            lambda: runeio.decode_rune(unknown),
+        )
 
     def test_link_identity_includes_activation_plan(self):
         decoded = runeio.decode_rune(_build_two_button_same_mover())
@@ -2494,6 +2859,9 @@ class RuneRuneArtifactTests(unittest.TestCase):
 
     def test_lint_objective_roots_require_full_reverse_reachability(self):
         artifact = SimpleNamespace(
+            header=SimpleNamespace(
+                route_contract=runeio.RUNE_ROUTE_CONTRACT_COMPLETE
+            ),
             seeds=[SimpleNamespace(flags=0) for _ in range(3)],
             links=(
                 SimpleNamespace(source=0, destination=1),
@@ -2507,6 +2875,7 @@ class RuneRuneArtifactTests(unittest.TestCase):
         self.assertIn("outside blue flag reverse component (seed 1): 1 (33%)", flaws)
 
         connected = SimpleNamespace(
+            header=artifact.header,
             seeds=artifact.seeds,
             links=artifact.links + (
                 SimpleNamespace(source=2, destination=0),
@@ -2515,6 +2884,34 @@ class RuneRuneArtifactTests(unittest.TestCase):
         )
         self.assertEqual(
             [], runelint._objective_reachability_flaws(connected, (0, 1))
+        )
+
+        local_only = SimpleNamespace(
+            header=SimpleNamespace(
+                route_contract=runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY
+            ),
+            seeds=[
+                SimpleNamespace(flags=runeio.RSF_OBJECTIVE),
+                SimpleNamespace(flags=runeio.RSF_OBJECTIVE),
+                SimpleNamespace(flags=0),
+            ],
+            links=(
+                SimpleNamespace(source=0, destination=0),
+                SimpleNamespace(source=1, destination=1),
+                SimpleNamespace(source=2, destination=0),
+            ),
+        )
+        self.assertEqual(
+            [], runelint._objective_reachability_flaws(local_only, (0, 1))
+        )
+        local_complete = SimpleNamespace(
+            header=local_only.header,
+            seeds=local_only.seeds,
+            links=connected.links,
+        )
+        self.assertEqual(
+            ["complete objective graph is mislabeled local-only"],
+            runelint._objective_reachability_flaws(local_complete, (0, 1)),
         )
 
 if __name__ == "__main__":

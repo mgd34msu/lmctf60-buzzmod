@@ -71,15 +71,23 @@ def _objective_reachability_flaws(artifact, objective_roots):
     for link in artifact.links:
         reverse[link.destination].append(link.source)
 
+    reached = []
     for team, root in zip(('red', 'blue'), objective_roots):
         if not 0 <= root < seed_count:
             flaws.append(f'{team} objective root {root} is out of range')
+            reached.append(set())
             continue
         if root not in live:
             flaws.append(f'{team} objective root {root} is a tombstone')
+            reached.append(set())
             continue
-        if root not in sources:
+        if root not in sources and not (
+            artifact.header.route_contract ==
+            runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY and
+            artifact.seeds[root].flags & runeio.RSF_OBJECTIVE
+        ):
             flaws.append(f'{team} objective root {root} is not routable')
+            reached.append(set())
             continue
 
         seen = {root}
@@ -90,12 +98,40 @@ def _objective_reachability_flaws(artifact, objective_roots):
                 if source in live and source not in seen:
                     seen.add(source)
                     pending.append(source)
-        unreachable = live - seen
-        if unreachable:
+        reached.append(seen)
+    if flaws:
+        return flaws
+    if artifact.header.route_contract == runeio.RUNE_ROUTE_CONTRACT_COMPLETE:
+        for team, root, seen in zip(
+            ('red', 'blue'), objective_roots, reached
+        ):
+            unreachable = live - seen
+            if unreachable:
+                flaws.append(
+                    f'outside {team} flag reverse component (seed {root}): '
+                    f'{len(unreachable)} '
+                    f'({100 * len(unreachable) // max(1, len(live))}%)'
+                )
+    elif artifact.header.route_contract == runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY:
+        marked = {
+            index for index, seed in enumerate(artifact.seeds)
+            if seed.flags & runeio.RSF_OBJECTIVE
+        }
+        if marked != set(objective_roots):
+            flaws.append('local-only objective markers do not match roots')
+        neither = live - (reached[0] | reached[1])
+        if neither:
             flaws.append(
-                f'outside {team} flag reverse component (seed {root}): '
-                f'{len(unreachable)} ({100 * len(unreachable) // max(1, len(live))}%)'
+                f'outside both flag reverse components: {len(neither)} '
+                f'({100 * len(neither) // max(1, len(live))}%)'
             )
+        if live <= reached[0] and live <= reached[1]:
+            flaws.append('complete objective graph is mislabeled local-only')
+    else:
+        flaws.append(
+            f'unknown authenticated route contract '
+            f'{artifact.header.route_contract}'
+        )
     return flaws
 
 
@@ -107,7 +143,16 @@ def lint(path, *, objective_roots=None):
     flaws = []
     outdegree = collections.Counter(link.source for link in artifact.links)
     for index, seed in enumerate(artifact.seeds):
-        if not seed.flags & runeio.RSF_TOMBSTONE and not outdegree[index]:
+        terminal_objective = (
+            artifact.header.route_contract ==
+            runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY and
+            seed.flags & runeio.RSF_OBJECTIVE
+        )
+        if (
+            not seed.flags & runeio.RSF_TOMBSTONE and
+            not outdegree[index] and
+            not terminal_objective
+        ):
             flaws.append(f'live seed {index} has no outgoing link')
     if objective_roots is not None:
         flaws.extend(_objective_reachability_flaws(artifact, objective_roots))
@@ -118,8 +163,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--objective-roots', nargs=2, type=int, metavar=('RED', 'BLUE'),
-        help='authoritative post-spawn flag seed indices; require every live '
-             'seed to route to both objectives',
+        help='authoritative post-spawn flag seed indices; enforce the '
+             'artifact-authenticated complete or local-only graph contract',
     )
     parser.add_argument('paths', nargs='+')
     args = parser.parse_args(argv)

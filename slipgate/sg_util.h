@@ -64,6 +64,12 @@ qboolean SG_RocketJumpArrived(const vec3_t origin, const vec3_t destination,
 qboolean SG_ActionOwnsControl(int action);
 qboolean SG_DeclaredCommand(const vec3_t origin, const vec3_t target,
 	const pmove_state_t *pms, usercmd_t *cmd);
+qboolean SG_DeclaredEgressCommand(int controller_kind, int waterlevel,
+	const vec3_t origin, const vec3_t target, const pmove_state_t *pms,
+	usercmd_t *cmd);
+qboolean SG_DeclaredEgressCommandMode(int controller_kind, int waterlevel,
+	qboolean exact_capture, const vec3_t origin, const vec3_t velocity,
+	const vec3_t target, const pmove_state_t *pms, usercmd_t *cmd);
 qboolean SG_EscortTerminal(edict_t *bot, edict_t *target);
 
 /* g_func.c keeps these values file-local, but declared lift execution must

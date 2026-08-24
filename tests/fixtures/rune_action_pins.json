@@ -1,15 +1,16 @@
 {
-  "action_contract_crc32": "d3907ac4",
-  "action_contract_sha256": "6218f935fdd3397054e5173b2d718dd88dfb7486794ed5c9654e0732153e24d2",
-  "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9;seed.origin=signed_q8_exact;",
-  "mechanism_contract_crc32": "bef56f72",
-  "mechanism_contract_sha256": "559d5f24edc2319ab64a6773c498036eb0c8c9cdbf388400bafd9d58b9dd7fcd",
+  "action_contract_crc32": "dd1b1c98",
+  "action_contract_sha256": "d9af4b06bd8710496db335d630da0788c5d75f7e4c1818bf87be0d1a09b8ff61",
+  "action_contract_descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14,chain_hook:15;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14,chain_hook:15;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11,chain_hook:15;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9|train_station:11;seed.origin=signed_q8_exact;",
+  "mechanism_contract_crc32": "032f37b7",
+  "mechanism_contract_sha256": "ab7059ce361571c59b910446bfac77f91a87ef5faf1d971e5197d1dc0e9a4a97",
   "action_symbols": [
     "RL_RUN", "RL_JUMP", "RL_DROP", "RL_HOOK", "RL_SWIM", "RL_LIFT",
     "RL_TELEPORT", "RL_ROCKETJUMP", "RL_DOOR", "RL_DOOR_DROP",
-    "RL_DOOR_SWIM", "RL_DOOR_HOOK", "RL_BUTTON_DOOR", "RL_PUSH", "RL_TRAIN"
+    "RL_DOOR_SWIM", "RL_DOOR_HOOK", "RL_BUTTON_DOOR", "RL_PUSH", "RL_TRAIN",
+    "RL_CHAIN_HOOK"
   ],
-  "controller_flags": [[0, 0], [1, 13], [2, 13], [3, 13], [4, 0], [5, 13], [6, 5], [7, 5], [8, 13], [9, 28]],
+  "controller_flags": [[0, 0], [1, 13], [2, 13], [3, 13], [4, 13], [5, 13], [6, 5], [7, 5], [8, 13], [9, 28], [10, 13], [11, 12]],
   "wire_diagnostic_symbols": [
     "RLW_OK", "RLW_INVALID_ARGUMENT", "RLW_IO_ERROR", "RLW_BAD_MAGIC",
     "RLW_BAD_HEADER_SIZE", "RLW_BAD_SEED_SIZE", "RLW_BAD_LINK_SIZE",

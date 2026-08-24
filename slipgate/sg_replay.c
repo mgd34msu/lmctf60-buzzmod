@@ -320,6 +320,7 @@ const char *SG_ReplayReasonName(sg_replay_reason_t reason)
 	case SG_REPLAY_REASON_HOOK_PULL_TIMEOUT: return "hook pull timeout";
 	case SG_REPLAY_REASON_HOOK_SETTLE_TIMEOUT: return "hook settle timeout";
 	case SG_REPLAY_REASON_HOOK_TERMINAL_LOST: return "hook terminal lost";
+	case SG_REPLAY_REASON_CHECKPOINT_MISMATCH: return "checkpoint mismatch";
 	default: return "unknown";
 	}
 }
@@ -424,6 +425,33 @@ qboolean SG_HookReplayReleaseReady(const sg_hook_replay_spec_t *spec,
 	                    SG_REPLAY_HOOK_DEST_RADIUS,
 	                    SG_REPLAY_HOOK_DEST_Z) ||
 	       observation->hook_rope_length < SG_REPLAY_HOOK_RELEASE_ROPE;
+}
+
+qboolean SG_HookReplayFlingReleaseReady(
+	const sg_hook_replay_spec_t *spec, const sg_replay_pose_t *pose,
+	const sg_replay_observation_t *observation)
+{
+	vec3_t delta;
+	float distance, speed, toward, seconds, predicted_z;
+
+	if (!spec || !pose || !observation || !observation->hook_rope_valid)
+		return false;
+	VectorSubtract(spec->destination, pose->origin, delta);
+	distance = sqrtf(delta[0] * delta[0] + delta[1] * delta[1]);
+	speed = sqrtf(pose->velocity[0] * pose->velocity[0] +
+	              pose->velocity[1] * pose->velocity[1]);
+	if (distance < SG_REPLAY_HOOK_DEST_RADIUS || speed < 300.0f)
+		return false;
+	toward = (pose->velocity[0] * delta[0] +
+	          pose->velocity[1] * delta[1]) / (speed * distance);
+	if (toward < 0.5f)
+		return false;
+	seconds = distance / (speed * toward);
+	if (seconds < 0.1f || seconds > 3.0f)
+		return false;
+	predicted_z = pose->origin[2] + pose->velocity[2] * seconds -
+	              0.5f * pose->pms.gravity * seconds * seconds;
+	return fabsf(predicted_z - spec->destination[2]) <= 384.0f;
 }
 
 static qboolean ReplayDropSpecValid(const sg_drop_replay_spec_t *spec)
@@ -741,23 +769,40 @@ sg_replay_status_t SG_SwimReplayPostStep(sg_swim_replay_state_t *state,
 	return state->progress.status;
 }
 
-static qboolean ReplayHookSpecValid(const sg_hook_replay_spec_t *spec)
+qboolean SG_HookReplaySpecValid(const sg_hook_replay_spec_t *spec)
 {
 	int max_settle;
+	int settle_limit_max;
 
-	if (!spec || !ReplayFiniteVec(spec->bite) ||
+	if (!spec || !ReplayBoolValid(spec->fling_release) ||
+	    (spec->terminal != SG_HOOK_REPLAY_TERMINAL_SETTLE &&
+	     spec->terminal != SG_HOOK_REPLAY_TERMINAL_RELEASE_HANDOFF) ||
+	    !ReplayFiniteVec(spec->bite) ||
 	    !ReplayFiniteVec(spec->destination) ||
 	    !ReplayHookViewValid(spec->view_angles) ||
 	    spec->flight_ms < SG_REPLAY_FRAME_MS ||
 	    spec->flight_ms > SG_REPLAY_HOOK_FLIGHT_MAX_MS ||
 	    (spec->flight_ms % SG_REPLAY_FRAME_MS) != 0 ||
-	    spec->settle_limit_ms < SG_RUNE_PROOF_HOOK_DRY_SETTLE_MS ||
-	    spec->settle_limit_ms > SG_RUNE_PROOF_HOOK_WATER_SETTLE_MS ||
 	    !ReplayExpectedTime(spec->expected_release_ms, SG_REPLAY_STEP_MS) ||
 	    !ReplayExpectedTime(spec->expected_pull_ms, SG_REPLAY_FRAME_MS) ||
 	    !ReplayExpectedTime(spec->expected_settle_arrival_ms,
 	                        SG_REPLAY_STEP_MS) ||
 	    !ReplayExpectedTime(spec->expected_settle_ms, SG_REPLAY_FRAME_MS))
+		return false;
+	if (spec->terminal == SG_HOOK_REPLAY_TERMINAL_RELEASE_HANDOFF)
+	{
+		if (spec->settle_limit_ms != 0 ||
+		    spec->expected_settle_arrival_ms != SG_REPLAY_TIME_DISCOVER ||
+		    spec->expected_settle_ms != SG_REPLAY_TIME_DISCOVER)
+			return false;
+	}
+	else if (spec->settle_limit_ms < SG_RUNE_PROOF_HOOK_DRY_SETTLE_MS)
+		return false;
+	settle_limit_max = spec->fling_release
+	    ? SG_REPLAY_HOOK_FLING_SETTLE_MS
+	    : SG_RUNE_PROOF_HOOK_WATER_SETTLE_MS;
+	if (spec->terminal == SG_HOOK_REPLAY_TERMINAL_SETTLE &&
+	    spec->settle_limit_ms > settle_limit_max)
 		return false;
 	if (spec->expected_release_ms != SG_REPLAY_TIME_DISCOVER &&
 	    (spec->expected_release_ms <= 0 ||
@@ -800,7 +845,7 @@ sg_replay_status_t SG_HookReplayBegin(sg_hook_replay_state_t *state,
 	state->progress.arrival_ms = SG_REPLAY_TIME_DISCOVER;
 	state->release_ms = SG_REPLAY_TIME_DISCOVER;
 	state->settle_arrival_ms = SG_REPLAY_TIME_DISCOVER;
-	if (!ReplayHookSpecValid(spec) || !ReplayObservationValid(observation))
+	if (!SG_HookReplaySpecValid(spec) || !ReplayObservationValid(observation))
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_INVALID_ARGUMENT);
 	if (!ReplayPoseValid(pose) || !isfinite(old_frame_z))
 		return ReplayFail(&state->progress, SG_REPLAY_REASON_NONFINITE_POSE);
@@ -871,6 +916,19 @@ sg_replay_status_t SG_HookReplayPullApplied(sg_hook_replay_state_t *state,
 	return state->progress.status;
 }
 
+static sg_replay_status_t ReplayHookFinishRelease(
+	sg_hook_replay_state_t *state)
+{
+	if (state->spec.terminal == SG_HOOK_REPLAY_TERMINAL_RELEASE_HANDOFF)
+	{
+		state->progress.status = SG_REPLAY_RELEASED;
+		return state->progress.status;
+	}
+	state->phase = SG_HOOK_REPLAY_SETTLE;
+	state->arrived_in_frame = false;
+	return state->progress.status;
+}
+
 sg_replay_status_t SG_HookReplayReleaseApplied(sg_hook_replay_state_t *state,
 	const sg_replay_pose_t *pose)
 {
@@ -904,8 +962,7 @@ sg_replay_status_t SG_HookReplayReleaseApplied(sg_hook_replay_state_t *state,
 		    state->pull_ms != state->spec.expected_pull_ms)
 			return ReplayFail(&state->progress,
 			                  SG_REPLAY_REASON_TIMING_MISMATCH);
-		state->phase = SG_HOOK_REPLAY_SETTLE;
-		state->arrived_in_frame = false;
+		return ReplayHookFinishRelease(state);
 	}
 	return state->progress.status;
 }
@@ -1077,7 +1134,8 @@ sg_replay_status_t SG_HookReplayPostStep(sg_hook_replay_state_t *state,
 		if (!observation->hook_rope_valid)
 			return ReplayFail(&state->progress,
 			                  SG_REPLAY_REASON_INVALID_ARGUMENT);
-		if (SG_HookReplayReleaseReady(&state->spec, pose, observation))
+		if (!state->spec.fling_release &&
+		    SG_HookReplayReleaseReady(&state->spec, pose, observation))
 			return ReplayFail(&state->progress,
 			                  SG_REPLAY_REASON_HOOK_RELEASE_BEFORE_PULL);
 		state->phase = SG_HOOK_REPLAY_WAIT_PULL;
@@ -1091,7 +1149,9 @@ sg_replay_status_t SG_HookReplayPostStep(sg_hook_replay_state_t *state,
 			if (!observation->hook_rope_valid)
 				return ReplayFail(&state->progress,
 				                  SG_REPLAY_REASON_INVALID_ARGUMENT);
-			ready = SG_HookReplayReleaseReady(&state->spec, pose, observation);
+			ready = state->spec.fling_release
+			    ? SG_HookReplayFlingReleaseReady(&state->spec, pose, observation)
+			    : SG_HookReplayReleaseReady(&state->spec, pose, observation);
 			if (ready)
 			{
 				if (state->spec.expected_release_ms !=
@@ -1129,9 +1189,7 @@ sg_replay_status_t SG_HookReplayPostStep(sg_hook_replay_state_t *state,
 			    state->pull_ms != state->spec.expected_pull_ms)
 				return ReplayFail(&state->progress,
 				                  SG_REPLAY_REASON_TIMING_MISMATCH);
-			state->phase = SG_HOOK_REPLAY_SETTLE;
-			state->arrived_in_frame = false;
-			return state->progress.status;
+			return ReplayHookFinishRelease(state);
 		}
 		if (state->pull_ms >= SG_REPLAY_HOOK_PULL_LIMIT_MS)
 			return ReplayFail(&state->progress,

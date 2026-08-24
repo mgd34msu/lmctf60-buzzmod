@@ -14,6 +14,7 @@ typedef struct sg_action_desc_s
 	unsigned int trait_mask;
 	rune_endpoint_policy_t endpoint_policy;
 	rune_anchor_policy_t suffix_anchor_policy;
+	rune_secondary_control_policy_t secondary_control_policy;
 	rune_anchor_policy_t preopen_mechanism_anchor_policy;
 	rune_anchor_policy_t ride_mechanism_anchor_policy;
 	rune_control_policy_t control_policy;
@@ -58,6 +59,8 @@ int SG_ActionEffectiveSuffix(int action);
 int SG_ActionRuntimeHasTrait(int action, unsigned int trait);
 /* Policy-only inheritance. Neither helper authorizes execution or dispatch. */
 int SG_ActionUsesHookPolicy(int action);
+int SG_ActionSecondaryControlPolicy(int action);
+int SG_ActionHasSecondaryControl(int action);
 int SG_ActionFieldBiasMs(int action, int rope_bias_ms);
 int SG_EndpointPolicyKnown(int policy);
 int SG_ActionEndpointPolicy(int action);

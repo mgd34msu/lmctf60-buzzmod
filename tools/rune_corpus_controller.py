@@ -54,6 +54,9 @@ READY_RE = re.compile(
     r"([0-9]+) seeds, ([0-9]+) links, ([0-9]+) mechanism nodes, "
     r"([0-9]+) plans, gravity -?[0-9]+, all fields up$"
 )
+ROUTE_READY_RE = re.compile(
+    r"^slipgate: route contract (complete|local-only)$"
+)
 SNAG_READY_RE = re.compile(
     r"^slipgate: snag ready map=([A-Za-z0-9_][A-Za-z0-9_-]{0,62}) "
     r"repairs=([0-9]+) rune_sha256=([0-9a-f]{64}) "
@@ -128,15 +131,18 @@ REPORT_FIELDS = (
     "edge_count",
     "plan_count",
 )
+ROUTE_CONTRACTS = frozenset({"complete", "local_only"})
+SUCCESS_CLASSIFICATIONS = frozenset({"PASS", "ROUTE_ONLY"})
 TERMINAL_CLASSIFICATIONS = frozenset(
-    {"PASS", "LINT_FAIL", "GEN_FAIL", "TIMEOUT", "INFRA_FAIL"}
+    {"PASS", "ROUTE_ONLY", "LINT_FAIL", "GEN_FAIL", "TIMEOUT", "INFRA_FAIL"}
 )
 TERMINAL_RESULT_FIELDS = frozenset(
     {
         "fingerprint", "map", "stable_port", "attempt", "started_at", "ended_at",
         "classification", "normalized_signature", "detail", "failure_line",
         "command_sha256", "owner_record", "evidence", "server_log_sha256",
-        "artifact", "artifact_sha256", "objective_roots", "banner_counts",
+        "artifact", "artifact_sha256", "route_contract", "objective_roots",
+        "banner_counts",
         "decoded_counts", "gate_output_sha256", "gate_log_sha256",
         "semantic_gate_labels", "cold_load_owner_record",
         "cold_load_command_sha256", "cold_load_log_sha256",
@@ -697,6 +703,15 @@ def create_input_snapshot(
         raise CorpusError(
             "GNU and Make acceptors must be distinct runeaccept.gnu/runeaccept.make inputs"
         )
+    contracts_source = next(
+        source for role, source in inputs.values() if role == "contracts"
+    )
+    expected_contracts = _contract_hashes(contracts_source)
+    for role in ("acceptor_gnu", "acceptor_make"):
+        acceptor = next(source for item_role, source in inputs.values()
+                        if item_role == role)
+        if _acceptor_contract_hashes(acceptor) != expected_contracts:
+            raise CorpusError(f"{role} contract identity mismatch")
     for logical, (role, _source) in inputs.items():
         if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX):
             name = role.removeprefix(SEMANTIC_CHECKER_ROLE_PREFIX)
@@ -1084,6 +1099,27 @@ def _contract_hashes(path: Path) -> tuple[str, str]:
     if action is None or mechanism is None:
         raise CorpusError("generated contract hashes are missing or malformed")
     return action.group(1).lower(), mechanism.group(1).lower()
+
+
+def _acceptor_contract_hashes(path: Path) -> tuple[str, str]:
+    try:
+        completed = subprocess.run(
+            [str(path.resolve(strict=True)), "--contracts"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+            env=dict(ACCEPTOR_ENVIRONMENT), timeout=10,
+        )
+        value = json.loads(bytes(completed.stdout or b""))
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        raise CorpusError(f"cannot read acceptor contract identity: {path}") from exc
+    if completed.returncode != 0 or not isinstance(value, dict) or set(value) != {
+        "action_contract_sha256", "mechanism_contract_sha256",
+    }:
+        raise CorpusError(f"invalid acceptor contract identity: {path}")
+    hashes = (value["action_contract_sha256"], value["mechanism_contract_sha256"])
+    if any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+           for item in hashes):
+        raise CorpusError(f"invalid acceptor contract hashes: {path}")
+    return hashes
 
 
 def build_fingerprint_document(
@@ -2026,6 +2062,8 @@ def _gate_report(data: bytes, label: str) -> dict[str, Any]:
             raise CorpusError(f"{label} has invalid {field}")
     if not isinstance(value.get("map_name"), str):
         raise CorpusError(f"{label} has invalid map_name")
+    if value.get("route_contract") not in ROUTE_CONTRACTS:
+        raise CorpusError(f"{label} has invalid route_contract")
     return value
 
 
@@ -2048,6 +2086,12 @@ def validate_gate_agreement(
             raise CorpusError(f"GNU/Make C {field} count mismatch")
         if gnu_report[field] != py_report[field]:
             raise CorpusError(f"C/Python {field} count mismatch")
+    if not (
+        gnu_report["route_contract"]
+        == make_report["route_contract"]
+        == py_report["route_contract"]
+    ):
+        raise CorpusError("GNU/Make/Python route contract mismatch")
     banner_mapping = {
         "seed_count": "seeds",
         "link_count": "links",
@@ -2143,9 +2187,17 @@ def run_gates(
             raise CorpusError(f"{label} gate exited {completed.returncode}")
         if regular_file_record(artifact) != before:
             raise GateIntegrityError(f"artifact changed during {label} gate")
+    lint_arguments = [str(artifact)]
+    if objective_roots is not None:
+        if set(objective_roots) != {"red", "blue"}:
+            raise GateIntegrityError("lint requires exact objective roots")
+        lint_arguments = [
+            "--objective-roots", str(objective_roots["red"]),
+            str(objective_roots["blue"]), str(artifact),
+        ]
     python_gates: list[tuple[str, Path, list[str]]] = [
         ("python", runeio, [str(artifact)]),
-        ("lint", runelint, [str(artifact)]),
+        ("lint", runelint, lint_arguments),
     ]
     semantic_labels: list[str] = []
     if semantic_checkers:
@@ -2204,8 +2256,13 @@ def run_gates(
         outputs["c_gnu"], outputs["c_make"], outputs["python"],
         map_name, banner_counts,
     )
+    python_report = _gate_report(outputs["python"], "Python gate")
+    route_contract = python_report.get("route_contract")
+    if route_contract not in ROUTE_CONTRACTS:
+        raise CorpusError("Python gate has invalid route_contract")
     return {
         "decoded_counts": decoded,
+        "route_contract": route_contract,
         "gate_output_sha256": {key: sha256_bytes(value) for key, value in outputs.items()},
         "gate_logs": log_records,
         "semantic_gate_labels": semantic_labels,
@@ -2469,8 +2526,13 @@ def _validate_terminal_schema(
             or identity.executable_sha256 != sha256_regular(expected_engine)
         ):
             raise CorpusError("terminal owner process identity disagrees with evidence")
-        if classification == "PASS" and identity.cmdline_sha256 != value["command_sha256"]:
-            raise CorpusError("PASS owner observed command differs from expected command")
+        if (
+            classification in SUCCESS_CLASSIFICATIONS
+            and identity.cmdline_sha256 != value["command_sha256"]
+        ):
+            raise CorpusError(
+                "successful owner observed command differs from expected command"
+            )
 
     server_log = attempt / "server.log"
     if server_log not in paths or not _is_sha256(value["server_log_sha256"]):
@@ -2480,7 +2542,7 @@ def _validate_terminal_schema(
 
     artifact_record = value["artifact"]
     if artifact_record is None:
-        if value["artifact_sha256"] is not None:
+        if value["artifact_sha256"] is not None or value["route_contract"] is not None:
             raise CorpusError("terminal result has an orphan artifact hash")
         artifact = server_log
     else:
@@ -2500,11 +2562,19 @@ def _validate_terminal_schema(
     if banner is not None and not _exact_nonnegative_ints(banner, banner_fields):
         raise CorpusError("terminal result has invalid banner counts")
 
-    if classification == "PASS":
+    if classification in SUCCESS_CLASSIFICATIONS:
         if artifact_record is None or roots is None or banner is None:
-            raise CorpusError("PASS lacks artifact or generation reports")
+            raise CorpusError("successful result lacks artifact or generation reports")
+        route_contract = value["route_contract"]
+        if route_contract not in ROUTE_CONTRACTS:
+            raise CorpusError("successful result has invalid route contract")
+        expected_classification = (
+            "PASS" if route_contract == "complete" else "ROUTE_ONLY"
+        )
+        if classification != expected_classification:
+            raise CorpusError("classification disagrees with route contract")
         if value["failure_line"] is not None:
-            raise CorpusError("PASS contains a failure line")
+            raise CorpusError("successful result contains a failure line")
         if not _exact_nonnegative_ints(value["decoded_counts"], REPORT_FIELDS):
             raise CorpusError("PASS has invalid decoded counts")
         semantic_labels = value["semantic_gate_labels"]
@@ -2631,7 +2701,7 @@ def _validate_terminal_schema(
             cold_text = cold_log.read_text(encoding="utf-8", errors="strict")
         except UnicodeDecodeError as exc:
             raise CorpusError("PASS fresh cold-load log is not valid UTF-8") from exc
-        parse_cold_load_log(cold_text, map_name, banner)
+        parse_cold_load_log(cold_text, map_name, banner, route_contract)
         validate_cold_load_snag_attestation(
             cold_text,
             map_name,
@@ -2646,7 +2716,9 @@ def _validate_terminal_schema(
             "cold_load_command_sha256", "cold_load_log_sha256",
             "cold_load_snag_record", "cold_load_snag_evidence_record",
         )):
-            raise CorpusError("non-PASS result contains successful gate reports")
+            raise CorpusError("failed result contains successful gate reports")
+        if value["route_contract"] is not None:
+            raise CorpusError("failed result contains a route contract")
         failure_line = value["failure_line"]
         if failure_line is not None and (
             classification != "GEN_FAIL"
@@ -2689,6 +2761,7 @@ def _recheck_pass_gates(
     )
     if (
         checked["decoded_counts"] != result["decoded_counts"]
+        or checked["route_contract"] != result["route_contract"]
         or checked["gate_output_sha256"] != result["gate_output_sha256"]
         or checked["semantic_gate_labels"] != result["semantic_gate_labels"]
     ):
@@ -2714,7 +2787,7 @@ def validate_resumable_pass(
             return False
         if set(result) != TERMINAL_RESULT_FIELDS:
             return False
-        if result.get("classification") != "PASS":
+        if result.get("classification") not in SUCCESS_CLASSIFICATIONS:
             return False
         stored_document = run_root / "fingerprint-document.json"
         _value, stored_bytes = _load_json_regular(stored_document)
@@ -2816,7 +2889,7 @@ def validate_terminal_result(
             fingerprint=fingerprint,
             stable_port=stable_port,
         )
-        if value["classification"] == "PASS":
+        if value["classification"] in SUCCESS_CLASSIFICATIONS:
             if snapshot is None or fingerprint_document_bytes is None:
                 return None
             stored_document = run_root / "fingerprint-document.json"
@@ -3141,6 +3214,7 @@ def recover_stale_attempts(
                     "server_log_sha256": sha256_regular(server_log) if server_log.exists() else None,
                     "artifact": None,
                     "artifact_sha256": None,
+                    "route_contract": None,
                     "objective_roots": None,
                     "banner_counts": None,
                     "decoded_counts": None,
@@ -3175,7 +3249,8 @@ def validate_engine_arguments(arguments: Sequence[str]) -> None:
 
 
 def parse_cold_load_log(
-    text: str, map_name: str, banner_counts: Mapping[str, int]
+    text: str, map_name: str, banner_counts: Mapping[str, int],
+    route_contract: str | None = None,
 ) -> dict[str, int]:
     """Accept exactly one ordinary-load READY record and no generation write."""
     lines = text.splitlines()
@@ -3198,6 +3273,16 @@ def parse_cold_load_log(
     }
     if any(counts[name] != banner_counts.get(name) for name in counts):
         raise CorpusError("fresh cold-load counts disagree with generator counts")
+    if route_contract is not None:
+        expected = route_contract.replace("_", "-")
+        routes = [
+            match.group(1) for line in lines
+            if (match := ROUTE_READY_RE.fullmatch(line)) is not None
+        ]
+        if routes != [expected]:
+            raise CorpusError(
+                "fresh cold-load route contract disagrees with staged artifact"
+            )
     return counts
 
 
@@ -3340,6 +3425,7 @@ def run_fresh_cold_load(
     attempt_number: int,
     source_artifact: Path,
     banner_counts: Mapping[str, int],
+    route_contract: str,
     generation_identity: ProcessIdentity,
     *,
     timeout: float,
@@ -3445,7 +3531,9 @@ def run_fresh_cold_load(
             if failure is not None:
                 raise CorpusError(f"fresh cold-load rejected artifact: {failure}")
             raise CorpusError("fresh cold-load exited or timed out before runtime-ready")
-        parse_cold_load_log(final_log, map_name, banner_counts)
+        parse_cold_load_log(
+            final_log, map_name, banner_counts, route_contract
+        )
         if process.returncode != 0:
             raise CorpusError(f"fresh cold-load engine exited with status {process.returncode}")
         if regular_file_record(source_artifact) != source_before:
@@ -3738,14 +3826,18 @@ def run_one_map(
                     )
                     cold_load = run_fresh_cold_load(
                         attempt, snapshot, map_name, stable_port, fingerprint,
-                        attempt_number, artifact, parsed["counts"], identity,
+                        attempt_number, artifact, parsed["counts"],
+                        gate["route_contract"], identity,
                         timeout=cold_load_timeout,
                         engine_arguments=engine_arguments,
                     )
-                    classification = "PASS"
+                    classification = (
+                        "PASS" if gate["route_contract"] == "complete"
+                        else "ROUTE_ONLY"
+                    )
                     detail = (
-                        "generation, dual readers, semantic gates, and fresh "
-                        "cold-load passed"
+                        "generation, dual readers, graph-contract lint, "
+                        "semantic gates, and fresh cold-load passed"
                     )
                 except GateIntegrityError as exc:
                     classification = "INFRA_FAIL"
@@ -3803,6 +3895,7 @@ def run_one_map(
         "server_log_sha256": sha256_regular(log_path),
         "artifact": artifact_record,
         "artifact_sha256": artifact_record["sha256"] if artifact_record else None,
+        "route_contract": gate["route_contract"] if gate else None,
         "objective_roots": parsed["objective_roots"] if parsed else None,
         "banner_counts": parsed["counts"] if parsed else None,
         "decoded_counts": gate["decoded_counts"] if gate else None,
@@ -4097,7 +4190,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if item["map"] in selected
         }
         return 0 if len(selected_results) == len(selected) and all(
-            selected_results.get(name) == "PASS" for name in selected
+            selected_results.get(name) in SUCCESS_CLASSIFICATIONS
+            for name in selected
         ) else 1
     except CorpusError as exc:
         print(f"rune-corpus: {exc}", file=sys.stderr)

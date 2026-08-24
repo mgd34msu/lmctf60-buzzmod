@@ -4,10 +4,12 @@
 
 #include "sg_drop_live.h"
 #include "sg_hook_live.h"
+#include "sg_chain_hook_replay.h"
 #include "sg_hook_diagnostics.h"
 #include "sg_rocketjump_live.h"
 #include "sg_push_live.h"
 #include "sg_train_gate_game.h"
+#include "sg_train_station_game.h"
 #include "sg_shoot_door_game.h"
 #include "sg_compound_guard.h"
 #include "sg_compound_swim_live.h"
@@ -182,6 +184,7 @@ typedef struct sg_bot_s
 	int			hook_settle_ms; /* literal 25 ms post-release proof clock */
 	int			hook_proved_pull_ms;   /* online witness boundary, not level.time */
 	int			hook_proved_release_ms;
+	qboolean		hook_proved_fling_release;
 	int			hook_proved_arrival_ms;
 	int			hook_proved_settle_ms;
 
@@ -196,6 +199,19 @@ typedef struct sg_bot_s
 	 * final comparison immediately before ClientThink. */
 	sg_hook_live_command_guard_t hook_final_guard;
 	edict_t		*hook_entity;
+	/* RL_CHAIN_HOOK owns two authenticated bolts and the rope-free handoff
+	 * between them as one fail-closed graph action.  The first leg reuses the
+	 * ordinary hook witness fields above; these fields retain the complete
+	 * coordinator and the second attachment checkpoint. */
+	sg_chain_hook_replay_state_t chain_hook_replay;
+	qboolean	chain_hook_active;
+	int		chain_hook_link;
+	int		chain_hook_leg;
+	pmove_state_t chain_hook_second_attach_pms;
+	qboolean	chain_hook_second_attach_groundentity;
+	int		chain_hook_second_attach_watertype;
+	int		chain_hook_second_attach_waterlevel;
+	edict_t		*chain_hook_first_entity;
 	/* Host-owned command history for the independent legacy differential.
 	 * It deliberately does not mirror reducer phase: release completes the
 	 * current fixed-view 100 ms frame before this switches to settlement. */
@@ -264,6 +280,7 @@ typedef struct sg_bot_s
 	sg_rocketjump_live_state_t rocketjump;
 	sg_push_live_state_t push;
 	sg_train_gate_game_state_t train_gate;
+	sg_train_station_game_state_t train_station;
 	sg_shoot_door_game_state_t shoot_door;
 	int			watch_link;     /* the link under progress-watch */
 	float		watch_since;

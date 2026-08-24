@@ -66,6 +66,13 @@ RUNE_MAX_Q8 = 262136
 RUNE_MAX_TEAM_MEMBERS = 16
 RUNE_NO_KEY = 0xFFFFFFFF
 RUNE_NO_ACTIVATION_PLAN = 0xFFFFFFFF
+RUNE_ROUTE_CONTRACT_COMPLETE = 0
+RUNE_ROUTE_CONTRACT_LOCAL_ONLY = 1
+
+RUNE_ROUTE_CONTRACT_NAMES = {
+    RUNE_ROUTE_CONTRACT_COMPLETE: "complete",
+    RUNE_ROUTE_CONTRACT_LOCAL_ONLY: "local_only",
+}
 
 RUNE_MECHANISM_CONTRACT_CRC32 = (
     contract.RUNE_MECHANISM_CONTRACT_CRC32
@@ -82,6 +89,10 @@ RUNE_CONTROLLER_TELEPORT = contract.SG_MECHANISM_CONTROLLER_TELEPORT
 RUNE_CONTROLLER_PUSH = contract.SG_MECHANISM_CONTROLLER_PUSH
 RUNE_CONTROLLER_TRAIN = contract.SG_MECHANISM_CONTROLLER_TRAIN
 RUNE_CONTROLLER_TRAIN_SHOOT = contract.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
+RUNE_CONTROLLER_TIMED_VAULT = contract.SG_MECHANISM_CONTROLLER_TIMED_VAULT
+RUNE_CONTROLLER_TRAIN_STATION = (
+    contract.SG_MECHANISM_CONTROLLER_TRAIN_STATION
+)
 
 
 def _carrier_door_spawnflags(spawnflags: int) -> bool:
@@ -111,6 +122,11 @@ RUNE_CALLBACK_TELEPORTER_TOUCH = 26
 RUNE_CALLBACK_PATH_CORNER_TOUCH = 27
 RUNE_CALLBACK_USE_TARGET_SPEAKER = 32
 RUNE_CALLBACK_USE_AREAPORTAL = 33
+RUNE_CALLBACK_USE_FUNC_WALL = 34
+RUNE_CALLBACK_TOUCH_HURT = 35
+RUNE_CALLBACK_USE_HURT = 36
+RUNE_CALLBACK_USE_TARGET_LASER = 37
+RUNE_CALLBACK_THINK_TARGET_LASER = 38
 
 RUNE_NODE_NONE = 0
 RUNE_NODE_TRIGGER = 1
@@ -135,6 +151,9 @@ RUNE_NODE_OTHER_MOVER = 19
 RUNE_NODE_CONTEXTUAL = 20
 RUNE_NODE_TARGET_SPEAKER = 21
 RUNE_NODE_AREAPORTAL = 22
+RUNE_NODE_TOGGLE_WALL = 23
+RUNE_NODE_TRIGGER_HURT = 24
+RUNE_NODE_TARGET_LASER = 25
 RUNE_NODEF_SYNTHETIC = 1
 RUNE_NODEF_REPEATABLE = 2
 RUNE_NODEF_TOUCHABLE = 4
@@ -149,13 +168,15 @@ RUNE_NODEF_START_DISABLED = 1024
 RUNE_NODEF_FRAME_COMPLETE_MOVER = 2048
 RUNE_NODE_FLAG_MASK = 4095
 RUNE_CALLBACK_UNKNOWN = 0xFFFF
-RUNE_CALLBACK_MAX_KNOWN = 33
+RUNE_CALLBACK_MAX_KNOWN = 38
 
-_RUNE_TOUCH_CALLBACKS = frozenset((0, 1, 2, 3, 14, 25, 26, 27, 28, 0xFFFF))
-_RUNE_USE_CALLBACKS = frozenset(
-    (0, 4, 5, 9, 10, 13, 15, 18, 23, 30, 32, 33, 0xFFFF)
+_RUNE_TOUCH_CALLBACKS = frozenset(
+    (0, 1, 2, 3, 14, 25, 26, 27, 28, 35, 0xFFFF)
 )
-_RUNE_THINK_CALLBACKS = frozenset((0, 6, 7, 11, 12, 16, 19, 20, 21, 24, 29, 0xFFFF))
+_RUNE_USE_CALLBACKS = frozenset(
+    (0, 4, 5, 9, 10, 13, 15, 18, 23, 30, 32, 33, 34, 36, 37, 0xFFFF)
+)
+_RUNE_THINK_CALLBACKS = frozenset((0, 6, 7, 11, 12, 16, 19, 20, 21, 24, 29, 38, 0xFFFF))
 _RUNE_BLOCKED_CALLBACKS = frozenset((0, 8, 17, 22, 31, 0xFFFF))
 
 RUNE_NODE_KIND_NAMES = {
@@ -182,6 +203,9 @@ RUNE_NODE_KIND_NAMES = {
     RUNE_NODE_CONTEXTUAL: "contextual",
     RUNE_NODE_TARGET_SPEAKER: "target_speaker",
     RUNE_NODE_AREAPORTAL: "areaportal",
+    RUNE_NODE_TOGGLE_WALL: "toggle_wall",
+    RUNE_NODE_TRIGGER_HURT: "trigger_hurt",
+    RUNE_NODE_TARGET_LASER: "target_laser",
 }
 
 RUNE_EDGE_TARGET = 1
@@ -233,7 +257,8 @@ assert RUNE_POLICY_LINK_STRUCT.size == RUNE_POLICY_LINK_BYTES
 
 RSF_WATER = 1
 RSF_TOMBSTONE = 2
-SEED_FLAG_MASK = RSF_WATER | RSF_TOMBSTONE
+RSF_OBJECTIVE = 4
+SEED_FLAG_MASK = RSF_WATER | RSF_TOMBSTONE | RSF_OBJECTIVE
 
 _MAP_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 _ZERO_12 = b"\x00" * 12
@@ -254,6 +279,7 @@ _RUNE_WIRE_DIAGNOSTICS: Mapping[int, tuple[str, str]] = {
     132: ("RLRUNE_BAD_STRING_POOL", "bad current string pool"),
     133: ("RLRUNE_DUPLICATE_NODE_KEY", "duplicate current node key"),
     134: ("RLRUNE_BAD_MECHANISM_GRAPH", "bad current mechanism graph"),
+    136: ("RLRUNE_BAD_ROUTE_CONTRACT", "bad route contract"),
 }
 
 RLRUNE_BAD_MECHANISM_CONTRACT = 128
@@ -263,6 +289,7 @@ RLRUNE_BAD_ACTIVATION_PLAN = 131
 RLRUNE_BAD_STRING_POOL = 132
 RLRUNE_DUPLICATE_NODE_KEY = 133
 RLRUNE_BAD_MECHANISM_GRAPH = 134
+RLRUNE_BAD_ROUTE_CONTRACT = 136
 
 
 class RuneWireError(ValueError):
@@ -334,6 +361,16 @@ class RunePolicyLink:
     mode: int = contract.RLCM_NONE
     reserved: int = 0
 
+    @property
+    def secondary_control(self) -> tuple[float, float, float] | None:
+        action = contract.ACTION_BY_ID.get(self.action)
+        if (
+            action is not None and
+            action["secondary_control_policy"] != contract.RLSCP_NONE
+        ):
+            return self.mechanism_anchor
+        return None
+
 
 
 @dataclass(frozen=True)
@@ -341,6 +378,7 @@ class RuneHeader:
     """Authenticated RUNE header."""
 
     magic: int
+    route_contract: int
     header_bytes: int
     seed_bytes: int
     link_bytes: int
@@ -406,6 +444,16 @@ class RuneLink:
     mode: int
     reserved: int
     activation_plan: int
+
+    @property
+    def secondary_control(self) -> tuple[float, float, float] | None:
+        action = contract.ACTION_BY_ID.get(self.action)
+        if (
+            action is not None and
+            action["secondary_control_policy"] != contract.RLSCP_NONE
+        ):
+            return self.mechanism_anchor
+        return None
 
 
 @dataclass(frozen=True)
@@ -987,11 +1035,32 @@ def _validate_anchor_policy(
         )
 
 
+def _canonical_hook_control(control: tuple[float, float, float]) -> bool:
+    pitch, yaw, distance = control
+
+    def decoded_short_angle(value: float) -> float:
+        encoded = int(value * 65536 / 360) & 0xFFFF
+        signed = encoded if encoded < 0x8000 else encoded - 0x10000
+        return signed * (360.0 / 65536)
+
+    return (
+        all(math.isfinite(component) for component in control) and
+        -contract.RUNE_PROOF_HOOK_MAX_ABS_PITCH_DEGREES <= pitch <=
+            contract.RUNE_PROOF_HOOK_MAX_ABS_PITCH_DEGREES and
+        -180.0 <= yaw < 180.0 and
+        pitch == decoded_short_angle(pitch) and
+        yaw == decoded_short_angle(yaw) and
+        contract.RUNE_PROOF_HOOK_MIN_RAY <= distance <=
+            contract.RUNE_PROOF_HOOK_MAX_RAY
+    )
+
+
 def _validate_graph(
     seeds: tuple[RuneSeed, ...],
     links: tuple[RunePolicyLink, ...],
     raw_links: tuple[bytes, ...],
     activation_plans: tuple[int, ...],
+    route_contract: int,
 ) -> None:
     if not 0 < len(seeds) <= MAX_SEEDS:
         raise _wire_error(
@@ -1004,6 +1073,7 @@ def _validate_graph(
     if len(raw_links) != len(links) or len(activation_plans) != len(links):
         raise AssertionError("link metadata count does not match decoded links")
 
+    objectives = 0
     for index, seed in enumerate(seeds):
         if (
             len(seed.origin) != 3 or
@@ -1015,6 +1085,15 @@ def _validate_graph(
             raise _wire_error(
                 contract.RLW_BAD_SEED_RECORD, f"seed {index}"
             )
+        objectives += bool(seed.flags & RSF_OBJECTIVE)
+    if (
+        route_contract == RUNE_ROUTE_CONTRACT_COMPLETE and objectives or
+        route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY and objectives != 2
+    ):
+        raise _wire_error(
+            contract.RLW_BAD_ROUTE_OWNERSHIP,
+            f"route contract has {objectives} objective seeds",
+        )
 
     linked_sources: set[int] = set()
     identities: set[tuple[int, int, int, int]] = set()
@@ -1148,7 +1227,20 @@ def _validate_graph(
                     contract.RLW_BAD_LINK_RECORD,
                     f"link {index} has nonzero noncompound mechanism proof",
                 )
-            if link.action == contract.RL_LIFT:
+            secondary_policy = action["secondary_control_policy"]
+            if secondary_policy != contract.RLSCP_NONE:
+                if (
+                    link.action != contract.RL_CHAIN_HOOK or
+                    secondary_policy != contract.RLSCP_HOOK_CONTROL or
+                    action["mechanism_policy"] != contract.RLMP_NONE or
+                    link.mode != contract.RLCM_NONE or
+                    not _canonical_hook_control(link.mechanism_anchor)
+                ):
+                    raise _wire_error(
+                        contract.RLW_BAD_LINK_RECORD,
+                        f"link {index} has invalid secondary hook control",
+                    )
+            elif link.action == contract.RL_LIFT:
                 _validate_anchor_policy(
                     link.mechanism_anchor,
                     raw[28:40],
@@ -1229,7 +1321,12 @@ def _validate_graph(
 
     for index, seed in enumerate(seeds):
         tombstone = bool(seed.flags & RSF_TOMBSTONE)
-        if tombstone == (index in linked_sources):
+        objective = bool(seed.flags & RSF_OBJECTIVE)
+        has_outgoing = index in linked_sources
+        if (
+            tombstone and (has_outgoing or objective) or
+            not tombstone and not has_outgoing and not objective
+        ):
             raise _wire_error(
                 contract.RLW_BAD_ROUTE_OWNERSHIP,
                 f"seed {index} tombstone/outgoing identity mismatch",
@@ -1326,6 +1423,7 @@ def _decode_rune_header(data: bytes) -> RuneHeader:
     extension = RUNE_HEADER_EXTENSION_STRUCT.unpack_from(data, 128)
     header = RuneHeader(
         magic=prefix[0],
+        route_contract=prefix[1],
         header_bytes=prefix[2],
         seed_bytes=prefix[3],
         link_bytes=prefix[4],
@@ -1356,8 +1454,10 @@ def _decode_rune_header(data: bytes) -> RuneHeader:
     )
     if header.magic != RUNE_MAGIC:
         raise _wire_error(contract.RLW_BAD_MAGIC, f"0x{header.magic:08x}")
-    if prefix[1] != 0:
-        raise _wire_error(contract.RLR_NONZERO_RESERVED, str(prefix[1]))
+    if header.route_contract not in RUNE_ROUTE_CONTRACT_NAMES:
+        raise _wire_error(
+            RLRUNE_BAD_ROUTE_CONTRACT, str(header.route_contract)
+        )
     if header.header_bytes != RUNE_HEADER_BYTES:
         raise _wire_error(contract.RLW_BAD_HEADER_SIZE, str(header.header_bytes))
     if header.seed_bytes != RUNE_SEED_BYTES:
@@ -1871,6 +1971,25 @@ def _rune_safe_speaker(node: RuneActivationNode) -> bool:
     )
 
 
+def _rune_relay_wall_speaker(
+    node: RuneActivationNode, strings: bytes
+) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_TARGET_SPEAKER and
+        node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE) and
+        not node.spawnflags & ~7 and
+        _rune_string(strings, node.classname_offset) == b"target_speaker" and
+        node.use_callback == RUNE_CALLBACK_USE_TARGET_SPEAKER and
+        node.touch_callback == node.think_callback == node.blocked_callback == 0 and
+        node.target_offset == node.killtarget_offset ==
+        node.path_target_offset == 0 and node.targetname_offset != 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.delay_ms == node.wait_ms == 0 and
+        node.speed_q8 == node.accel_q8 == node.decel_q8 == 0
+    )
+
+
 def _rune_safe_areaportal(node: RuneActivationNode) -> bool:
     return bool(
         _rune_node_executable(node) and
@@ -1879,6 +1998,134 @@ def _rune_safe_areaportal(node: RuneActivationNode) -> bool:
         node.touch_callback == node.think_callback == node.blocked_callback == 0 and
         node.target_offset == node.killtarget_offset ==
         node.path_target_offset == 0
+    )
+
+
+def _rune_timed_vault_speaker(node: RuneActivationNode, strings: bytes) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_TARGET_SPEAKER and
+        node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE) and
+        node.spawnflags == 1 and
+        _rune_string(strings, node.classname_offset) == b"target_speaker" and
+        node.use_callback == RUNE_CALLBACK_USE_TARGET_SPEAKER and
+        node.touch_callback == node.think_callback == node.blocked_callback == 0 and
+        node.target_offset == node.killtarget_offset ==
+        node.path_target_offset == 0 and node.targetname_offset != 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.delay_ms == node.wait_ms == 0 and
+        node.speed_q8 == node.accel_q8 == node.decel_q8 == 0
+    )
+
+
+def _rune_timed_vault_laser(node: RuneActivationNode, strings: bytes) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_TARGET_LASER and
+        node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE) and
+        node.spawnflags & 1 and not node.spawnflags & ~0x7f and
+        _rune_string(strings, node.classname_offset) == b"target_laser" and
+        node.touch_callback == node.blocked_callback == 0 and
+        node.use_callback == RUNE_CALLBACK_USE_TARGET_LASER and
+        node.think_callback == RUNE_CALLBACK_THINK_TARGET_LASER and
+        node.target_offset != 0 and node.targetname_offset != 0 and
+        node.killtarget_offset == node.path_target_offset == 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.delay_ms == node.wait_ms == 0 and
+        node.speed_q8 == node.accel_q8 == node.decel_q8 == 0
+    )
+
+
+def _rune_timed_vault_relay(
+    node: RuneActivationNode, strings: bytes, delay_ms: int
+) -> bool:
+    return bool(
+        _rune_relay_shape(node) and
+        node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE) and
+        _rune_string(strings, node.classname_offset) == b"trigger_relay" and
+        node.spawnflags == 0 and node.targetname_offset != 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.delay_ms == delay_ms and node.wait_ms == 0 and
+        node.speed_q8 == node.accel_q8 == node.decel_q8 == 0
+    )
+
+
+def _rune_toggle_wall(node: RuneActivationNode, strings: bytes) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_TOGGLE_WALL and
+        node.flags == (
+            RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE | RUNE_NODEF_MOVER
+        ) and
+        _rune_string(strings, node.classname_offset) == b"func_wall" and
+        node.spawnflags == 7 and
+        node.touch_callback == node.think_callback ==
+        node.blocked_callback == 0 and
+        node.use_callback == RUNE_CALLBACK_USE_FUNC_WALL and
+        node.killtarget_offset == node.path_target_offset == 0 and
+        node.targetname_offset != 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.delay_ms == node.wait_ms == 0 and
+        node.speed_q8 == node.accel_q8 == node.decel_q8 == 0
+    )
+
+
+def _rune_trigger_hurt(node: RuneActivationNode, strings: bytes) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_TRIGGER_HURT and
+        node.flags == (
+            RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE |
+            RUNE_NODEF_USABLE
+        ) and
+        _rune_string(strings, node.classname_offset) == b"trigger_hurt" and
+        node.spawnflags & 3 == 2 and
+        node.touch_callback == RUNE_CALLBACK_TOUCH_HURT and
+        node.use_callback == RUNE_CALLBACK_USE_HURT and
+        node.think_callback == node.blocked_callback == 0 and
+        node.target_offset == node.killtarget_offset ==
+        node.path_target_offset == 0 and
+        node.targetname_offset != 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.delay_ms == node.wait_ms == 0
+    )
+
+
+def _rune_relay_wall_button(
+    node: RuneActivationNode, strings: bytes
+) -> bool:
+    return bool(
+        _rune_node_executable(node) and
+        node.kind == RUNE_NODE_BUTTON and
+        node.flags == (
+            RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE |
+            RUNE_NODEF_USABLE | RUNE_NODEF_MOVER
+        ) and
+        _rune_string(strings, node.classname_offset) == b"func_button" and
+        node.spawnflags == 0 and
+        node.touch_callback == RUNE_CALLBACK_BUTTON_TOUCH and
+        node.use_callback == RUNE_CALLBACK_BUTTON_USE and
+        node.think_callback == node.blocked_callback == 0 and
+        node.target_offset != 0 and
+        node.targetname_offset == node.killtarget_offset ==
+        node.path_target_offset == 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        0 < node.delay_ms <= RUNE_MAX_TIME_MS and
+        0 < node.wait_ms <= RUNE_MAX_TIME_MS and
+        node.speed_q8 != 0 and
+        node.accel_q8 == node.decel_q8 == node.speed_q8
+    )
+
+
+def _rune_relay_wall_relay(
+    node: RuneActivationNode, strings: bytes
+) -> bool:
+    return bool(
+        _rune_relay_shape(node) and
+        _rune_string(strings, node.classname_offset) == b"trigger_relay" and
+        node.targetname_offset != 0 and
+        node.owner_key == node.team_master_key == RUNE_NO_KEY and
+        node.spawnflags == 0 and node.wait_ms == 0
     )
 
 
@@ -2346,6 +2593,134 @@ def _rune_validate_production_plan(
         elif carrier and plan.expected_members != 1:
             fail("has an invalid carrier member count")
 
+    elif controller == RUNE_CONTROLLER_TRAIN_STATION:
+        route_count = 14
+        team = inventory_fanout.get((mover.key, RUNE_EDGE_TEAM), ())
+        mover_route = inventory_fanout.get(
+            (mover.key, RUNE_EDGE_ROUTE_TARGET), ()
+        )
+
+        def station_train_shape(
+            node: RuneActivationNode, team_flag: int, master_key: int
+        ) -> bool:
+            return bool(
+                _rune_node_executable(node) and
+                node.kind == RUNE_NODE_TRAIN and
+                node.flags == (
+                    RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE |
+                    RUNE_NODEF_MOVER | team_flag
+                ) and
+                node.team_master_key == master_key and
+                node.owner_key == RUNE_NO_KEY and node.spawnflags == 1 and
+                node.touch_callback == 0 and
+                node.use_callback == RUNE_CALLBACK_TRAIN_USE and
+                node.think_callback == RUNE_CALLBACK_TRAIN_NEXT and
+                node.blocked_callback == RUNE_CALLBACK_BLOCKED_TRAIN and
+                node.delay_ms == node.wait_ms == 0 and
+                node.speed_q8 != 0 and
+                node.speed_q8 == node.accel_q8 == node.decel_q8 and
+                node.target_offset != 0 and node.targetname_offset == 0 and
+                node.killtarget_offset == node.path_target_offset == 0
+            )
+
+        def station_corner_shape(node: RuneActivationNode) -> bool:
+            return bool(
+                _rune_node_executable(node) and
+                node.kind == RUNE_NODE_PATH_CORNER and
+                node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_TOUCHABLE) and
+                node.owner_key == node.team_master_key == RUNE_NO_KEY and
+                node.spawnflags == 0 and
+                node.touch_callback == RUNE_CALLBACK_PATH_CORNER_TOUCH and
+                node.use_callback == node.think_callback ==
+                node.blocked_callback == 0 and node.delay_ms == 0 and
+                node.wait_ms in (0, 3000) and
+                node.target_offset != 0 and node.targetname_offset != 0 and
+                node.killtarget_offset == 0
+            )
+
+        def station_speaker_shape(node: RuneActivationNode) -> bool:
+            return bool(
+                _rune_node_executable(node) and
+                node.kind == RUNE_NODE_TARGET_SPEAKER and
+                node.flags == (RUNE_NODEF_REPEATABLE | RUNE_NODEF_USABLE) and
+                node.use_callback == RUNE_CALLBACK_USE_TARGET_SPEAKER and
+                node.touch_callback == node.think_callback ==
+                node.blocked_callback == 0 and node.spawnflags & 3 == 0 and
+                node.target_offset == node.killtarget_offset ==
+                node.path_target_offset == 0
+            )
+
+        if (
+            owner_link.action != contract.RL_TRAIN or
+            owner_link.mode != contract.RLCM_RIDE or
+            owner_link.suffix_anchor == owner_link.mechanism_anchor or
+            plan.expected_members != 2 or plan.cooldown_ms != 3000 or
+            plan.flags != contract.mechanism_controller_plan_flags(
+                RUNE_CONTROLLER_TRAIN_STATION
+            ) or len(team) != 1 or len(mover_route) != 1 or
+            not station_train_shape(
+                mover, RUNE_NODEF_TEAM_MASTER, mover.key
+            ) or inventory_fanout.get((mover.key, RUNE_EDGE_KILLTARGET), ()) or
+            inventory_fanout.get((mover.key, RUNE_EDGE_PATH_TARGET), ())
+        ):
+            fail("does not satisfy the continuous-station controller law")
+        companion = node_by_key[team[0].to_key]
+        companion_route = inventory_fanout.get(
+            (companion.key, RUNE_EDGE_ROUTE_TARGET), ()
+        )
+        if (
+            not station_train_shape(
+                companion, RUNE_NODEF_TEAM_MEMBER, mover.key
+            ) or companion.speed_q8 != mover.speed_q8 or
+            len(companion_route) != 1 or
+            inventory_fanout.get(
+                (companion.key, RUNE_EDGE_KILLTARGET), ()
+            ) or inventory_fanout.get(
+                (companion.key, RUNE_EDGE_PATH_TARGET), ()
+            )
+        ):
+            fail("has an invalid continuous-station companion")
+        add_edge(team[0])
+        add_edge(mover_route[0])
+        add_edge(companion_route[0])
+        route: list[int] = []
+        stations: list[int] = []
+        cursor = entry.key
+        for _step in range(route_count):
+            corner = node_by_key[cursor]
+            route_edges = inventory_fanout.get(
+                (corner.key, RUNE_EDGE_ROUTE_TARGET), ()
+            )
+            effects = inventory_fanout.get(
+                (corner.key, RUNE_EDGE_PATH_TARGET), ()
+            )
+            if (
+                cursor in route or not station_corner_shape(corner) or
+                len(route_edges) != 1 or
+                inventory_fanout.get(
+                    (corner.key, RUNE_EDGE_KILLTARGET), ()
+                ) or bool(corner.path_target_offset) != bool(effects)
+            ):
+                fail("has an invalid continuous-station route")
+            route.append(cursor)
+            if corner.wait_ms == 3000:
+                stations.append(cursor)
+            add_edge(route_edges[0])
+            for effect in effects:
+                if (
+                    effect.delay_ms != 0 or
+                    not station_speaker_shape(node_by_key[effect.to_key])
+                ):
+                    fail("has an invalid station-arrival side effect")
+                add_edge(effect)
+            cursor = route_edges[0].to_key
+        if (
+            cursor != entry.key or stations != [route[0], route[7]] or
+            mover_route[0].to_key != route[1] or
+            companion_route[0].to_key != route[8]
+        ):
+            fail("does not preserve the two-way continuous-station route")
+
     elif controller == RUNE_CONTROLLER_TELEPORT:
         owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
         targets = inventory_fanout.get((entry.key, RUNE_EDGE_TARGET), ())
@@ -2440,13 +2815,153 @@ def _rune_validate_production_plan(
         add_edge(closed_routes[0])
         add_edge(open_routes[0])
 
+    elif controller == RUNE_CONTROLLER_RELAY_DOOR:
+        button_targets = inventory_fanout.get(
+            (entry.key, RUNE_EDGE_TARGET), ()
+        )
+        if (
+            owner_link.action != contract.RL_BUTTON_DOOR or
+            owner_link.mode != contract.RLCM_PREOPEN or
+            plan.expected_members != 1 or
+            plan.cooldown_ms != entry.wait_ms or
+            not _rune_relay_wall_button(entry, strings) or
+            not _rune_toggle_wall(mover, strings) or
+            len(button_targets) != 2
+        ):
+            fail("does not satisfy the relay-wall entry law")
+        immediate = None
+        delayed = None
+        for edge in button_targets:
+            relay = node_by_key[edge.to_key]
+            if (
+                edge.delay_ms != entry.delay_ms or
+                not _rune_relay_wall_relay(relay, strings)
+            ):
+                fail("has an invalid timed relay entry")
+            if relay.delay_ms == 0:
+                if immediate is not None:
+                    fail("has more than one immediate relay")
+                immediate = relay
+            else:
+                if delayed is not None or relay.delay_ms > RUNE_MAX_TIME_MS:
+                    fail("has more than one bounded delayed relay")
+                delayed = relay
+            add_platform_trigger_edge(edge, entry.delay_ms)
+        if immediate is None or delayed is None:
+            fail("does not have one immediate and one delayed relay")
+        immediate_targets = inventory_fanout.get(
+            (immediate.key, RUNE_EDGE_TARGET), ()
+        )
+        delayed_targets = inventory_fanout.get(
+            (delayed.key, RUNE_EDGE_TARGET), ()
+        )
+        if not immediate_targets or len(immediate_targets) != len(delayed_targets):
+            fail("relay fanout counts differ")
+        wall_count = 0
+        for left, right in zip(immediate_targets, delayed_targets):
+            if (
+                left.ordinal != right.ordinal or
+                left.to_key != right.to_key or left.delay_ms != 0 or
+                right.delay_ms != delayed.delay_ms
+            ):
+                fail("relay fanouts are not identical and ordered")
+            destination = node_by_key[left.to_key]
+            if _rune_toggle_wall(destination, strings):
+                wall_count += 1
+                if destination.key != mover.key or wall_count != 1:
+                    fail("does not bind exactly one primary toggle wall")
+            elif not (
+                _rune_trigger_hurt(destination, strings) or
+                _rune_relay_wall_speaker(destination, strings)
+            ):
+                fail("contains an unknown stateful relay target")
+            add_platform_trigger_edge(left, 0)
+            add_platform_trigger_edge(right, delayed.delay_ms)
+        if wall_count != 1:
+            fail("does not authenticate its primary toggle wall")
+
     elif controller in (
         RUNE_CONTROLLER_AUTO_DOOR,
         RUNE_CONTROLLER_DIRECT_TRIGGER_DOOR,
         RUNE_CONTROLLER_BUTTON_DOOR,
+        RUNE_CONTROLLER_TIMED_VAULT,
     ):
         masters: list[int] = []
-        if controller == RUNE_CONTROLLER_AUTO_DOOR:
+        if controller == RUNE_CONTROLLER_TIMED_VAULT:
+            targets = inventory_fanout.get((entry.key, RUNE_EDGE_TARGET), ())
+            short_relay = None
+            restore_relay = None
+            door_count = 0
+            if (
+                owner_link.action != contract.RL_BUTTON_DOOR or
+                owner_link.mode != contract.RLCM_PREOPEN or
+                plan.expected_members != 2 or plan.cooldown_ms != 10000 or
+                not _rune_button_node_valid(entry, strings) or
+                entry.delay_ms != 0 or entry.wait_ms != 10000 or
+                len(targets) != 4
+            ):
+                fail("does not satisfy the timed-vault entry law")
+            for edge in targets:
+                destination = node_by_key[edge.to_key]
+                if edge.delay_ms != 0:
+                    fail("has a delayed button dispatch edge")
+                if destination.kind == RUNE_NODE_RELAY:
+                    if (
+                        _rune_timed_vault_relay(destination, strings, 1000) and
+                        short_relay is None
+                    ):
+                        short_relay = destination
+                    elif (
+                        _rune_timed_vault_relay(destination, strings, 10000) and
+                        restore_relay is None
+                    ):
+                        restore_relay = destination
+                    else:
+                        fail("does not have exact one- and ten-second relays")
+                elif destination.kind == RUNE_NODE_DOOR_MASTER:
+                    if destination.key != mover.key or masters:
+                        fail("does not bind its canonical vault door master")
+                    masters.append(destination.key)
+                    door_count += 1
+                elif (
+                    destination.kind == RUNE_NODE_DOOR_MEMBER and
+                    destination.team_master_key == mover.key and masters
+                ):
+                    door_count += 1
+                else:
+                    fail("has an unknown timed-vault dispatch target")
+                add_platform_trigger_edge(edge, 0)
+            if short_relay is None or restore_relay is None or door_count != 2:
+                fail("does not bind two relays and two door leaves")
+            short_targets = inventory_fanout.get(
+                (short_relay.key, RUNE_EDGE_TARGET), ()
+            )
+            restore_targets = inventory_fanout.get(
+                (restore_relay.key, RUNE_EDGE_TARGET), ()
+            )
+            if len(short_targets) != 9 or len(restore_targets) != 9:
+                fail("does not bind eight lasers and one speaker")
+            laser_count = 0
+            speaker_count = 0
+            for left, right in zip(short_targets, restore_targets):
+                if (
+                    left.ordinal != right.ordinal or
+                    left.to_key != right.to_key or
+                    left.delay_ms != 1000 or right.delay_ms != 10000
+                ):
+                    fail("timed-vault relay fanouts are not identical and ordered")
+                destination = node_by_key[left.to_key]
+                if _rune_timed_vault_laser(destination, strings):
+                    laser_count += 1
+                elif _rune_timed_vault_speaker(destination, strings):
+                    speaker_count += 1
+                else:
+                    fail("contains an unknown timed-vault stateful target")
+                add_platform_trigger_edge(left, 1000)
+                add_platform_trigger_edge(right, 10000)
+            if laser_count != 8 or speaker_count != 1:
+                fail("does not bind exactly eight lasers and one speaker")
+        elif controller == RUNE_CONTROLLER_AUTO_DOOR:
             owner = inventory_fanout.get((entry.key, RUNE_EDGE_OWNER), ())
             if (
                 entry.kind != RUNE_NODE_AUTO_DOOR_TRIGGER or
@@ -2564,6 +3079,7 @@ def _rune_validate_production_plan(
 
 def _rune_validate_mechanisms(
     header: RuneHeader,
+    seeds: tuple[RuneSeed, ...],
     links: tuple[RuneLink, ...],
     nodes: tuple[RuneActivationNode, ...],
     edges: tuple[RuneActivationEdge, ...],
@@ -2740,6 +3256,14 @@ def _rune_validate_mechanisms(
                 f"plan {index} closure CRC stored=0x{plan.closure_crc32:08x}, "
                 f"computed=0x{closure_crc:08x}",
             )
+        if (
+            plan.controller_kind == RUNE_CONTROLLER_TRAIN_STATION and
+            owner_link.suffix_anchor == seeds[owner_link.source].origin
+        ):
+            raise _wire_error(
+                RLRUNE_BAD_ACTIVATION_PLAN,
+                f"plan {index} has no distinct dry station approach",
+            )
         _rune_validate_production_plan(
             plan,
             edges[plan.first_edge:end],
@@ -2867,6 +3391,7 @@ def _decode_rune_artifact(
         projected_links,
         tuple(raw_prefix_links),
         tuple(link.activation_plan for link in links_tuple),
+        header.route_contract,
     )
     _rune_validate_seed_lattice(seeds_tuple)
     _rune_validate_strings(nodes_tuple, strings)
@@ -2881,6 +3406,7 @@ def _decode_rune_artifact(
             )
     _rune_validate_mechanisms(
         header,
+        seeds_tuple,
         links_tuple,
         nodes_tuple,
         edges_tuple,
@@ -2974,6 +3500,9 @@ def summarize_rune(rune: RuneArtifact) -> dict[str, object]:
     }
     return {
         "map_name": rune.header.map_name,
+        "route_contract": RUNE_ROUTE_CONTRACT_NAMES[
+            rune.header.route_contract
+        ],
         "seed_count": len(rune.seeds),
         "link_count": len(rune.links),
         "trigger_count": rune.trigger_count,

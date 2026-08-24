@@ -25,6 +25,47 @@ void SG_TrainGateGameReset(sg_bot_t *bot)
 	(void)bot;
 }
 
+int SG_TrainStationGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_TrainStationGameReset(sg_bot_t *bot)
+{
+	int owned;
+
+	if (!bot)
+		return;
+	owned = bot->train_station.active == 1U &&
+	        bot->commit_link == (int)bot->train_station.link_index;
+	memset(&bot->train_station, 0, sizeof(bot->train_station));
+	if (owned)
+		bot->commit_link = -1;
+}
+
+int SG_ChainHookGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_ChainHookGameReset(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	memset(&bot->chain_hook_replay, 0, sizeof(bot->chain_hook_replay));
+	bot->chain_hook_active = false;
+	bot->chain_hook_link = -1;
+	bot->chain_hook_leg = 0;
+	bot->chain_hook_first_entity = NULL;
+	memset(&bot->chain_hook_second_attach_pms, 0,
+	       sizeof(bot->chain_hook_second_attach_pms));
+	bot->chain_hook_second_attach_groundentity = false;
+	bot->chain_hook_second_attach_watertype = 0;
+	bot->chain_hook_second_attach_waterlevel = 0;
+}
+
 int SG_ShootDoorGameOwns(const sg_bot_t *bot)
 {
 	(void)bot;
