@@ -1433,12 +1433,10 @@ retaining the hostile-library rejection gate. The repeated full
 GNUmakefile/Makefile by GCC/Clang local matrix is green with zero warnings and
 clean `ldd -r`; exact CI must still be repeated for this repair.
 
-The detached-final-commit 175-map freeze remains pending. A readiness audit
-also found that both tracked validation configs execute an untracked
-`rune.cfg`, while the controller snapshots exactly one generator config. Before
-the final snapshot, the approved generator config must be standalone and
-snapshotted directly as `generator_config@game/rune.cfg`; no staged config may
-depend on another absent config file.
+The detached-final-commit 175-map freeze remains pending. The standalone
+generator config is tracked at `tools/rune.cfg`. Before the final snapshot,
+snapshot it directly as `generator_config@game/rune.cfg`. The tracked
+validation configs remain overlays and must not be used as the generator role.
 
 ## Real-match validation
 
