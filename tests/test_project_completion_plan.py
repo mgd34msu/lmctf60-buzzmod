@@ -2,24 +2,16 @@
 """Keep the completion plan compact without weakening its release contract."""
 
 import re
+import runpy
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = ROOT / "PROJECT-COMPLETION-PLAN.md"
-ROUTE_ONLY_CANDIDATES = {
-    "lmctf01",
-    "lmctf06",
-    "lmctf12",
-    "lmctf15",
-    "lmctf19",
-    "lmctf25",
-    "tomb05",
-    "xmap13",
-    "xmap18",
-    "xmap26",
-}
+ROUTE_ONLY_CANDIDATES = set(runpy.run_path(
+    ROOT / "tools" / "rune_corpus_policy.py"
+)["APPROVED_ROUTE_ONLY_MAPS"])
 
 
 class ProjectCompletionPlanTest(unittest.TestCase):
@@ -176,7 +168,10 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             generation.index("complete-route contract first"),
             generation.index("approved `route_only`"),
         )
-        self.assertIn("corpus manifest and its evidence hashes", generation)
+        for required in (
+            "content-addressed corpus", "`finalize`", "`verify-final`"
+        ):
+            self.assertIn(required, generation)
         self.assertIn("abandon the freeze", matches)
         self.assertIn("zero to ten", matches)
         release = self.section(

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import sys
 import tempfile
 import time
@@ -27,6 +28,9 @@ RUNTIME = ROOT / "tools" / "fleet_runner_live.py"
 
 
 def _runner():
+    tools = str(RUNNER.parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
     spec = importlib.util.spec_from_file_location("route_only_evidence_runner", RUNNER)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load route-only runner")
@@ -105,6 +109,58 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
     def setUpClass(cls):
         cls.runner = _runner()
 
+    def test_finalizer_loader_requires_the_attested_sibling_bytes(self):
+        record = self.runner._file_record(ROOT / "tools" / "rune_corpus_finalizer.py")
+        finalizer = self.runner._load_route_finalizer(record)
+        self.assertTrue(callable(finalizer.verify_final_corpus))
+        mismatch = {**record, "sha256": "0" * 64}
+        with self.assertRaisesRegex(ValueError, "bytes differ"):
+            self.runner._load_route_finalizer(mismatch)
+
+    def test_controller_loader_registers_dataclass_module_identity(self):
+        record = self.runner._file_record(ROOT / "tools" / "rune_corpus_controller.py")
+        loaded = self.runner._load_route_controller(record)
+        self.assertTrue(callable(loaded.verify_snapshot))
+        self.assertIs(loaded, sys.modules[loaded.__name__])
+
+    def test_authority_exporter_uses_verified_finalizer_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / "snapshot"
+            corpus_root = root / ("e" * 64)
+            snapshot.mkdir()
+            corpus_root.mkdir()
+            authority_path = corpus_root / "corpus-authority.json"
+            authority_path.write_bytes(self.runner._canonical({"fixture": True}))
+            authority_path.chmod(0o444)
+            payload, info = self.runner._read_regular(authority_path)
+            authority_record = {
+                "path": str(authority_path), "mode": stat.S_IMODE(info.st_mode),
+                "size": len(payload), "sha256": self.runner._hash(payload),
+            }
+            verified = {
+                "corpus_id": corpus_root.name, "authority": authority_record,
+                "run_root": str(root / "run"), "port_base": 62000, "results": [],
+            }
+            fake_finalizer = SimpleNamespace(
+                verify_final_corpus=lambda *_args, **_kwargs: verified
+            )
+            with (
+                mock.patch.object(
+                    self.runner, "_load_route_controller", return_value=object()
+                ),
+                mock.patch.object(
+                        self.runner, "_load_route_finalizer",
+                        return_value=fake_finalizer
+                ),
+            ):
+                exported = self.runner.build_route_controller_authority(
+                    snapshot, corpus_root
+                )
+            self.assertEqual(verified["corpus_id"], exported["corpus_id"])
+            self.assertEqual(verified["authority"], exported["corpus_authority"])
+            self.assertEqual([], exported["results"])
+
     def test_final_controller_remainder_selects_only_ordered_candidates(self):
         maps = tuple(
             line.strip()
@@ -157,40 +213,71 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
         self.assertEqual(175, len(maps))
         self.assertEqual(175, len(set(maps)))
 
+        def final_record(path: Path) -> dict:
+            current = self.runner._file_record(path)
+            return {
+                "path": current["path"],
+                "mode": stat.S_IMODE(path.stat().st_mode),
+                "size": current["size"],
+                "sha256": current["sha256"],
+            }
+
         def build(root: Path):
-            snapshot, run_root = root / "snapshot", root / "run"
+            corpus_id = "e" * 64
+            snapshot = root / "snapshot"
+            run_root = root / "run"
+            corpus_root = root / "published" / corpus_id
             snapshot.mkdir(parents=True)
             run_root.mkdir()
+            corpus_root.mkdir(parents=True)
             manifest = snapshot / "rune-corpus-maps.txt"
             manifest.write_text("\n".join(maps) + "\n", encoding="ascii")
-            document = run_root / "fingerprint-document.json"
-            document.write_bytes(self.runner._canonical({"fixture": "fingerprint"}))
             engine = root / "q2ded"
             engine.write_bytes(b"engine\n")
             result_items = []
             for index, map_name in enumerate(maps):
-                result_path = run_root / "runs" / map_name / "result.json"
+                attempt = run_root / "runs" / map_name / "attempt-0001"
+                result_path = attempt / "result.json"
                 result_path.parent.mkdir(parents=True)
                 classification = "ROUTE_ONLY" if map_name == "lmctf01" else "PASS"
                 result_path.write_bytes(self.runner._canonical({
-                    "map": map_name, "classification": classification,
+                    "map": map_name, "stable_port": 62000 + index,
+                    "classification": classification, "attempt": 1,
                     "route_contract": (
                         "local_only" if classification == "ROUTE_ONLY" else "complete"
                     ),
                     "artifact_sha256": "a" * 64 if map_name == "lmctf01" else "c" * 64,
                 }))
+                result_path.chmod(0o444)
+                pointer = run_root / "runs" / map_name / "result.json"
+                pointer.write_bytes(self.runner._canonical({
+                    "map": map_name, "classification": "GEN_FAIL",
+                }))
                 result_items.append({
-                    "map": map_name, "result": self.runner._file_record(result_path),
-                    "stable_port": 62000 + index,
+                    "map": map_name, "stable_port": 62000 + index,
+                    "classification": classification,
+                    "route_contract": (
+                        "local_only" if classification == "ROUTE_ONLY" else "complete"
+                    ),
+                    "attempt": 1,
+                    "attempt_result": final_record(result_path),
                 })
+            corpus_authority = {
+                "format": "lmctf-final-corpus-fixture-v1",
+                "corpus_id": corpus_id,
+            }
+            corpus_authority_path = corpus_root / "corpus-authority.json"
+            corpus_authority_path.write_bytes(self.runner._canonical(corpus_authority))
+            corpus_authority_path.chmod(0o444)
             engine_record = self.runner._file_record(engine)
             authority = {
                 "controller": self.runner._file_record(
                     ROOT / "tools" / "rune_corpus_controller.py"
                 ),
+                "finalizer": {"fixture": "hash-attested-finalizer"},
                 "snapshot": str(snapshot), "run_root": str(run_root),
-                "fingerprint": "f" * 64,
-                "fingerprint_document": self.runner._file_record(document),
+                "corpus_authority": final_record(corpus_authority_path),
+                "corpus_id": corpus_id,
                 "results": result_items,
             }
             snapshot_roles = {
@@ -205,21 +292,25 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 "bsp:lmctf01": {"sha256": "d" * 64},
                 "rune:lmctf01": {"sha256": "a" * 64},
             }
-            return authority, bundle_roles, engine_record, snapshot_roles
+            return (authority, bundle_roles, engine_record, snapshot_roles,
+                    corpus_authority, json.loads(json.dumps(result_items)))
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            authority, roles, engine, snapshot_roles = build(root)
+            (
+                authority, roles, engine, snapshot_roles, corpus_authority,
+                verified_results,
+            ) = build(root)
             controller_path = ROOT / "tools" / "rune_corpus_controller.py"
 
-            def invoke(value, role_records, engine_record, role_snapshot):
-                # Existing controller tests own snapshot and resumable-pass depth.
-                # This real outer call owns all-175 composition and selection.
+            def invoke(value, role_records, engine_record, role_snapshot,
+                       final_authority, final_results):
+                # Finalizer tests own full revalidation. This outer call proves
+                # only fleet binding to the sealed 175-map inventory.
                 fixture = SimpleNamespace(
                     DEFAULT_PORT_BASE=62000,
                     verify_snapshot=lambda _snapshot: {"by_role": role_snapshot},
                     validate_manifest=lambda _manifest: list(maps),
-                    validate_resumable_pass=lambda *_args, **_kwargs: True,
                     _load_json_regular=lambda path: (
                         json.loads(path.read_text()), path.read_bytes()
                     ),
@@ -237,27 +328,57 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 def module_from_spec(spec):
                     return fixture if spec is module_spec else original_module(spec)
 
+                finalizer = SimpleNamespace(
+                    verify_final_corpus=lambda _controller, *, snapshot, corpus_root: {
+                        "corpus_id": final_authority["corpus_id"],
+                        "authority": value["corpus_authority"],
+                        "run_root": value["run_root"],
+                        "port_base": 62000,
+                        "results": final_results,
+                    }
+                )
                 with mock.patch.object(
                         self.runner.importlib.util, "spec_from_file_location",
                         side_effect=spec_from_file_location), mock.patch.object(
                             self.runner.importlib.util, "module_from_spec",
-                            side_effect=module_from_spec):
+                            side_effect=module_from_spec), mock.patch.object(
+                                self.runner, "_load_route_finalizer", return_value=finalizer,
+                                create=True):
                     return self.runner._validate_route_controller_authority(
                         value, role_records, engine_record, [{"sha256": "b" * 64}] * 2
                     )
 
-            self.assertEqual({"lmctf01"}, set(invoke(authority, roles, engine, snapshot_roles)))
+            self.assertEqual(
+                {"lmctf01"},
+                set(invoke(
+                    authority, roles, engine, snapshot_roles, corpus_authority,
+                    verified_results,
+                )),
+            )
 
             mutation_index = 0
 
             def reject(mutator, expression):
                 nonlocal mutation_index
                 mutation_index += 1
-                value, roles, engine, snapshot_roles = build(root / f"mutation-{mutation_index}")
+                (
+                    value, roles, engine, snapshot_roles, final_authority,
+                    final_results,
+                ) = build(root / f"mutation-{mutation_index}")
                 mutator(value)
                 with self.assertRaisesRegex(ValueError, expression):
-                    invoke(value, roles, engine, snapshot_roles)
+                    invoke(
+                        value, roles, engine, snapshot_roles, final_authority,
+                        final_results,
+                    )
 
+            reject(lambda value: value.pop("corpus_authority"), "incomplete")
+            def tamper_corpus_authority(value):
+                path = Path(value["corpus_authority"]["path"])
+                path.chmod(0o644)
+                path.write_bytes(self.runner._canonical({"corpus_id": "a" * 64}))
+            reject(tamper_corpus_authority, "identity drift")
+            reject(lambda value: value.update(corpus_id="a" * 64), "content-addressed")
             reject(lambda value: value["results"].pop(), "inventory")
             reject(lambda value: value["results"].append(dict(value["results"][0])), "inventory")
             def reorder(value):
@@ -268,20 +389,9 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
             reject(lambda value: value["results"].__setitem__(0, value["results"][1]), "drift")
             reject(lambda value: value["results"].__setitem__(1, value["results"][0]), "drift")
             reject(lambda value: value["results"][0].update(stable_port=62001), "drift")
-            reject(
-                lambda value: value["results"][0].update(
-                    result=value["results"][1]["result"]
-                ),
-                "drift",
-            )
-            def classification_drift(value):
-                path = Path(value["results"][0]["result"]["path"])
-                path.write_bytes(self.runner._canonical({
-                    "map": "lmctf01", "classification": "GEN_FAIL",
-                    "route_contract": None, "artifact_sha256": None,
-                }))
-                value["results"][0]["result"] = self.runner._file_record(path)
-            reject(classification_drift, "final result")
+            reject(lambda value: value["results"][0].update(
+                attempt_result=value["results"][1]["attempt_result"]
+            ), "drift")
 
     def test_run_spec_rejects_duplicate_or_mismatched_candidate_lanes(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -33,6 +33,11 @@ import threading
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+if __package__:
+    from .rune_corpus_policy import APPROVED_ROUTE_ONLY_MAPS, POLICY_VERSION
+else:
+    from rune_corpus_policy import APPROVED_ROUTE_ONLY_MAPS, POLICY_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tools/rune-corpus-maps.txt"
@@ -42,6 +47,9 @@ EXPECTED_MANIFEST_SHA256 = (
 CORPUS_SIZE = 175
 DEFAULT_PORT_BASE = 62000
 CORPUS_ENGINE_BASENAME = "q2ded-rune-corpus"
+FINALIZER_SOURCE = Path(__file__).with_name("rune_corpus_finalizer.py")
+ROUTE_ONLY_POLICY_SOURCE = Path(__file__).with_name("rune_corpus_policy.py")
+FINAL_CORPUS_SEAL = "final-corpus-seal.json"
 MAP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 ROOT_RE = re.compile(r"^rune: objective roots red=([0-9]+) blue=([0-9]+)$")
 WRITE_RE = re.compile(
@@ -1201,6 +1209,9 @@ def build_fingerprint_document(
         "python_environment": dict(PYTHON_ENVIRONMENT),
         "acceptor_environment": dict(ACCEPTOR_ENVIRONMENT),
         "controller_sha256": sha256_regular(controller),
+        "finalizer_sha256": sha256_regular(FINALIZER_SOURCE),
+        "route_only_policy_sha256": sha256_regular(ROUTE_ONLY_POLICY_SOURCE),
+        "route_only_policy_version": POLICY_VERSION,
     }
     encoded = canonical_json(document)
     return document, sha256_bytes(encoded)
@@ -1902,9 +1913,12 @@ def wait_for_exec_identity(
 
 
 class ControllerLock:
-    def __init__(self, run_root: Path, fingerprint: str):
+    def __init__(
+        self, run_root: Path, fingerprint: str, *, publish_owner: bool = True
+    ):
         self.run_root = run_root
         self.fingerprint = fingerprint
+        self.publish_owner = publish_owner
         self.fd: int | None = None
 
     def __enter__(self) -> "ControllerLock":
@@ -1918,12 +1932,13 @@ class ControllerLock:
             os.close(self.fd)
             self.fd = None
             raise CorpusError("another corpus controller holds the run lock") from exc
-        identity = capture_process_identity(os.getpid())
-        atomic_write_json(
-            self.run_root / "controller-owner.json",
-            {"fingerprint": self.fingerprint, "process": identity.as_dict(), "started_at": utc_now()},
-            mode=0o600,
-        )
+        if self.publish_owner:
+            identity = capture_process_identity(os.getpid())
+            atomic_write_json(
+                self.run_root / "controller-owner.json",
+                {"fingerprint": self.fingerprint, "process": identity.as_dict(),
+                 "started_at": utc_now()}, mode=0o600,
+            )
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
@@ -2735,8 +2750,9 @@ def _recheck_pass_gates(
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]],
     runtime_preflighted: bool = False,
 ) -> None:
-    # Resume acceptance is a fresh authority decision, never a cached probe.
-    preflight_python_runtime(snapshot, runner=gate_runner)
+    # One caller-owned preflight may cover a bounded validation transaction.
+    if not runtime_preflighted:
+        preflight_python_runtime(snapshot, runner=gate_runner)
     verified = verify_snapshot(snapshot)
     roles = verified["by_role"]
     interpreter = snapshot / verified["python_runtime"]["interpreter"]["path"]
@@ -3971,7 +3987,14 @@ def execute_selection(
         port_base=port_base,
         engine_arguments=engine_arguments,
     )
-    with ControllerLock(run_root, fingerprint):
+    sealed = (run_root / FINAL_CORPUS_SEAL).exists() or (
+        run_root / FINAL_CORPUS_SEAL
+    ).is_symlink()
+    with ControllerLock(run_root, fingerprint, publish_owner=not sealed):
+        if (run_root / FINAL_CORPUS_SEAL).exists() or (
+            run_root / FINAL_CORPUS_SEAL
+        ).is_symlink():
+            raise CorpusError("finalized corpus run root cannot resume")
         preflight_started = utc_now()
         try:
             preflight = preflight_python_runtime(snapshot)
@@ -4128,6 +4151,13 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--engine-argument", action="append", dest="engine_arguments")
         if name == "smoke":
             command.add_argument("map")
+    finalize = subparsers.add_parser("finalize", help="publish an immutable final corpus")
+    finalize.add_argument("--snapshot", type=Path, required=True)
+    finalize.add_argument("--run-root", type=Path, required=True)
+    finalize.add_argument("--output-parent", type=Path, required=True)
+    verify_final = subparsers.add_parser("verify-final", help="verify a final corpus")
+    verify_final.add_argument("--snapshot", type=Path, required=True)
+    verify_final.add_argument("--corpus-root", type=Path, required=True)
     return parser
 
 
@@ -4152,6 +4182,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "snapshot":
             _snapshot_cli(args.file, args.output)
             print(f"snapshot={args.output}")
+            return 0
+        if args.command in {"finalize", "verify-final"}:
+            if __package__:
+                from . import rune_corpus_finalizer as finalizer
+            else:
+                import rune_corpus_finalizer as finalizer
+            if args.command == "finalize":
+                result = finalizer.finalize_corpus(
+                    sys.modules[__name__], snapshot=args.snapshot,
+                    run_root=args.run_root, output_parent=args.output_parent,
+                )
+            else:
+                result = finalizer.verify_final_corpus(
+                    sys.modules[__name__], snapshot=args.snapshot,
+                    corpus_root=args.corpus_root,
+                )
+            print(f"corpus_id={result['corpus_id']}")
             return 0
         maps = validate_manifest()
         engine_arguments = tuple(args.engine_arguments or DEFAULT_ENGINE_ARGUMENTS)
@@ -4191,7 +4238,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             selected_results.get(name) in SUCCESS_CLASSIFICATIONS
             for name in selected
         ) else 1
-    except CorpusError as exc:
+    except (CorpusError, OSError) as exc:
         print(f"rune-corpus: {exc}", file=sys.stderr)
         return 2
 

@@ -9,7 +9,9 @@ how the tools fit together and which artifacts they own.
 
 : Runs the authoritative map corpus. A map reaches PASS only after generation,
   both native readers, Python decoding, lint, applicable semantic checks, and a
-  separate bounded cold load agree on the artifact.
+  separate bounded cold load agree on the artifact. Its `finalize` command
+  publishes the accepted 175-map result set as an immutable content-addressed
+  corpus; `verify-final` reopens that publication before bundle assembly.
 
 `build_python_runtime.py`
 

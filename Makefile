@@ -792,6 +792,7 @@ BOTKIN_TEST := tests/test_botkin_cli.py
 FILM_PYTHON ?= $(HOME)/.venvs/slipgate-film/bin/python
 SHEET_CLI_TEST := tests/test_fightsheet_cli_status.py
 RUNE_CORPUS_CONTROLLER_TEST := tests/test_rune_corpus_controller.py
+RUNE_CORPUS_FINALIZER_TEST := tests/test_rune_corpus_finalizer.py
 RUNE_GENERATOR_CONFIG_TEST := tests/test_rune_generator_config.py
 BUILD_PYTHON_RUNTIME_TEST := tests/test_build_python_runtime.py
 FLEET_RUNNER_TEST := tests/test_fleet_runner.py
@@ -3720,6 +3721,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)python3 $(BOTKIN_TEST)
 	$(Q)$(FILM_PYTHON) -B $(SHEET_CLI_TEST)
 	$(Q)python3 -m unittest tests.test_rune_corpus_controller \
+		tests.test_rune_corpus_finalizer \
 		tests.test_rune_generator_config \
 		tests.test_build_python_runtime
 	$(Q)python3 -B $(BSPMECHANISMS_TEST)
@@ -3877,11 +3879,14 @@ shoot-door-game-integration-test: $(SHOOT_DOOR_GAME_INTEGRATION_TEST)
 	$(Q)python3 -B $(SHOOT_DOOR_GAME_INTEGRATION_TEST)
 
 rune-corpus-controller-test: $(RUNE_CORPUS_CONTROLLER_TEST) \
+		$(RUNE_CORPUS_FINALIZER_TEST) \
 		$(BUILD_PYTHON_RUNTIME_TEST) tools/build_python_runtime.py \
-		tools/rune_corpus_controller.py tools/RUNE_CORPUS_CONTROLLER.md \
+		tools/rune_corpus_controller.py tools/rune_corpus_finalizer.py \
+		tools/rune_corpus_policy.py tools/RUNE_CORPUS_CONTROLLER.md \
 		tools/rune-corpus-maps.txt
 	$(E) [TEST] RUNE corpus controller
 	$(Q)python3 -m unittest tests.test_rune_corpus_controller \
+		tests.test_rune_corpus_finalizer \
 		tests.test_build_python_runtime
 
 rune-generator-config-test: $(RUNE_GENERATOR_CONFIG_TEST) tools/rune.cfg
