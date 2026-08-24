@@ -3,11 +3,15 @@
 #include "sg_rune_mechanism_plan.h"
 #include "sg_crc32.h"
 #include "sg_rune_codec.h"
+#include "sg_timed_vault_transaction.h"
+#include "sg_train_station_plan.h"
 
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
+
+#define TIMED_VAULT_SERVER_FRAME_MS 100U
 
 typedef struct mechanism_edge_group_s
 {
@@ -141,6 +145,79 @@ static int Mechanism_SafeSpeaker(const rune_mechanism_node_t *node)
 	       node->path_target_offset == 0U;
 }
 
+static int Mechanism_RelayWallSpeaker(const rune_mechanism_node_t *node)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TARGET_SPEAKER &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       (node->spawnflags & ~UINT32_C(7)) == 0U &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TARGET_SPEAKER &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset == 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Mechanism_RelayShape(const rune_mechanism_node_t *node);
+
+static int Mechanism_TimedVaultSpeaker(const rune_mechanism_node_t *node)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TARGET_SPEAKER &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       node->spawnflags == 1U &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TARGET_SPEAKER &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset == 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Mechanism_TimedVaultLaser(const rune_mechanism_node_t *node)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TARGET_LASER &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       (node->spawnflags & 1U) != 0U &&
+	       (node->spawnflags & ~UINT32_C(0x7f)) == 0U &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TARGET_LASER &&
+	       node->think_callback == SG_MECH_CALLBACK_THINK_TARGET_LASER &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset != 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Mechanism_TimedVaultRelay(const rune_mechanism_node_t *node,
+	int32_t delay_ms)
+{
+	return Mechanism_RelayShape(node) &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       node->spawnflags == 0U && node->targetname_offset != 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->wait_ms == 0 && node->delay_ms == delay_ms &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
 static int Mechanism_SafeAreaportal(const rune_mechanism_node_t *node)
 {
 	return Mechanism_NodeExecutable(node) &&
@@ -151,6 +228,44 @@ static int Mechanism_SafeAreaportal(const rune_mechanism_node_t *node)
 	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
 	       node->target_offset == 0U && node->killtarget_offset == 0U &&
 	       node->path_target_offset == 0U;
+}
+
+static int Mechanism_ToggleWallShape(const rune_mechanism_node_t *node)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TOGGLE_WALL &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER) &&
+	       node->spawnflags == 7U &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_FUNC_WALL &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Mechanism_TriggerHurtShape(const rune_mechanism_node_t *node)
+{
+	return Mechanism_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TRIGGER_HURT &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE) &&
+	       (node->spawnflags & UINT32_C(3)) == UINT32_C(2) &&
+	       node->touch_callback == SG_MECH_CALLBACK_TOUCH_HURT &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_HURT &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset == 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0;
 }
 
 static int Mechanism_RelayShape(const rune_mechanism_node_t *node)
@@ -169,6 +284,381 @@ static int Mechanism_RelayShape(const rune_mechanism_node_t *node)
 static int Mechanism_SafeRelay(const rune_mechanism_node_t *node)
 {
 	return Mechanism_RelayShape(node) && node->delay_ms == 0;
+}
+
+int SG_RelayWallPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_relay_wall_plan_witness_t *witness_out)
+{
+	mechanism_materializer_t state;
+	mechanism_edge_group_t button_targets;
+	mechanism_edge_group_t immediate_targets;
+	mechanism_edge_group_t restore_targets;
+	const rune_mechanism_node_t *button;
+	const rune_mechanism_node_t *immediate = NULL;
+	const rune_mechanism_node_t *restore = NULL;
+	const rune_mechanism_node_t *wall = NULL;
+	uint32_t entry_index;
+	uint32_t index;
+
+	if (witness_out)
+		memset(witness_out, 0, sizeof(*witness_out));
+	if (!catalog || !catalog->nodes || !catalog->edges || !witness_out)
+		return 0;
+	memset(&state, 0, sizeof(state));
+	state.catalog = catalog;
+	entry_index = Mechanism_FindNode(&state, entry_key);
+	if (entry_index == UINT32_MAX)
+		return 0;
+	button = &catalog->nodes[entry_index];
+	button_targets = Mechanism_EdgeGroup(&state, button->key,
+		SG_MECH_EDGE_TARGET);
+	if (button->kind != SG_MECH_NODE_BUTTON ||
+	    button->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    button->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    (button->flags & (SG_MECH_NODEF_SHOOTABLE |
+	        SG_MECH_NODEF_FRAME_COMPLETE_MOVER)) != 0U ||
+	    button->delay_ms <= 0 || button->delay_ms > RUNE_MAX_COST_MS ||
+	    button->wait_ms <= 0 || button->wait_ms > RUNE_MAX_COST_MS ||
+	    button->killtarget_offset != 0U ||
+	    button->path_target_offset != 0U || button_targets.count != 2U)
+		return 0;
+	for (index = 0U; index < button_targets.count; index++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&catalog->edges[button_targets.first + index];
+		uint32_t target_index = Mechanism_FindNode(&state, edge->to_key);
+		const rune_mechanism_node_t *relay = target_index == UINT32_MAX
+			? NULL : &catalog->nodes[target_index];
+
+		if (!relay || edge->delay_ms != (uint32_t)button->delay_ms ||
+		    !Mechanism_RelayShape(relay))
+			return 0;
+		if (relay->delay_ms == 0)
+		{
+			if (immediate)
+				return 0;
+			immediate = relay;
+		}
+		else
+		{
+			if (restore || relay->delay_ms > RUNE_MAX_COST_MS)
+				return 0;
+			restore = relay;
+		}
+	}
+	if (!immediate || !restore || immediate == restore)
+		return 0;
+	immediate_targets = Mechanism_EdgeGroup(&state, immediate->key,
+		SG_MECH_EDGE_TARGET);
+	restore_targets = Mechanism_EdgeGroup(&state, restore->key,
+		SG_MECH_EDGE_TARGET);
+	if (immediate_targets.count == 0U ||
+	    immediate_targets.count != restore_targets.count)
+		return 0;
+	for (index = 0U; index < immediate_targets.count; index++)
+	{
+		const rune_mechanism_edge_t *open_edge =
+			&catalog->edges[immediate_targets.first + index];
+		const rune_mechanism_edge_t *restore_edge =
+			&catalog->edges[restore_targets.first + index];
+		uint32_t target_index = Mechanism_FindNode(&state, open_edge->to_key);
+		const rune_mechanism_node_t *target = target_index == UINT32_MAX
+			? NULL : &catalog->nodes[target_index];
+
+		if (!target || open_edge->ordinal != restore_edge->ordinal ||
+		    open_edge->to_key != restore_edge->to_key ||
+		    open_edge->delay_ms != 0U ||
+		    restore_edge->delay_ms != (uint32_t)restore->delay_ms)
+			return 0;
+		if (Mechanism_ToggleWallShape(target))
+		{
+			if (wall)
+				return 0;
+			wall = target;
+		}
+		else if (!Mechanism_TriggerHurtShape(target) &&
+		         !Mechanism_RelayWallSpeaker(target))
+			return 0;
+	}
+	if (!wall)
+		return 0;
+	witness_out->entry_key = button->key;
+	witness_out->wall_key = wall->key;
+	witness_out->immediate_relay_key = immediate->key;
+	witness_out->restore_relay_key = restore->key;
+	witness_out->touch_hold_ms = (uint32_t)button->delay_ms;
+	witness_out->cooldown_ms = (uint32_t)button->wait_ms;
+	witness_out->active_window_ms = (uint32_t)restore->delay_ms;
+	witness_out->restore_ms = (uint32_t)restore->delay_ms;
+	return 1;
+}
+
+int SG_TimedVaultPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_timed_vault_plan_witness_t *witness_out)
+{
+	mechanism_materializer_t state;
+	mechanism_edge_group_t button_targets;
+	mechanism_edge_group_t short_targets;
+	mechanism_edge_group_t restore_targets;
+	const rune_mechanism_node_t *button;
+	const rune_mechanism_node_t *mover = NULL;
+	const rune_mechanism_node_t *member = NULL;
+	const rune_mechanism_node_t *short_relay = NULL;
+	const rune_mechanism_node_t *restore_relay = NULL;
+	uint32_t entry_index;
+	uint32_t mover_ordinal = UINT32_MAX;
+	uint32_t member_ordinal = UINT32_MAX;
+	uint32_t member_count = 0U;
+	uint32_t laser_count = 0U;
+	uint32_t speaker_count = 0U;
+	uint32_t i;
+
+	if (witness_out)
+		memset(witness_out, 0, sizeof(*witness_out));
+	if (!catalog || !catalog->nodes || !catalog->edges || !witness_out)
+		return 0;
+	memset(&state, 0, sizeof(state));
+	state.catalog = catalog;
+	entry_index = Mechanism_FindNode(&state, entry_key);
+	if (entry_index == UINT32_MAX)
+		return 0;
+	button = &catalog->nodes[entry_index];
+	button_targets = Mechanism_EdgeGroup(&state, entry_key,
+		SG_MECH_EDGE_TARGET);
+	if (button->kind != SG_MECH_NODE_BUTTON ||
+	    button->flags != (SG_MECH_NODEF_REPEATABLE |
+	        SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE |
+	        SG_MECH_NODEF_MOVER) ||
+	    button->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    button->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    button->think_callback != SG_MECH_CALLBACK_NONE ||
+	    button->blocked_callback != SG_MECH_CALLBACK_NONE ||
+	    button->spawnflags != 0U || button->target_offset == 0U ||
+	    button->targetname_offset != 0U ||
+	    button->owner_key != SG_MECH_NO_KEY ||
+	    button->team_master_key != SG_MECH_NO_KEY ||
+	    button->delay_ms != 0 || button->wait_ms != 10000 ||
+	    button->killtarget_offset != 0U ||
+	    button->path_target_offset != 0U || button_targets.count != 4U)
+		return 0;
+	for (i = 0U; i < button_targets.count; i++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&catalog->edges[button_targets.first + i];
+		uint32_t target_index = Mechanism_FindNode(&state, edge->to_key);
+		const rune_mechanism_node_t *target = target_index == UINT32_MAX
+			? NULL : &catalog->nodes[target_index];
+
+		if (!target || edge->ordinal != i || edge->delay_ms != 0U ||
+		    target->targetname_offset != button->target_offset)
+			return 0;
+		if (Mechanism_TimedVaultRelay(target, 1000))
+		{
+			if (short_relay)
+				return 0;
+			short_relay = target;
+		}
+		else if (Mechanism_TimedVaultRelay(target, 10000))
+		{
+			if (restore_relay)
+				return 0;
+			restore_relay = target;
+		}
+		else if (Mechanism_NodeExecutable(target) &&
+		         target->kind == SG_MECH_NODE_DOOR_MASTER &&
+		         target->team_master_key == target->key &&
+		         target->use_callback == SG_MECH_CALLBACK_USE_DOOR &&
+		         target->blocked_callback == SG_MECH_CALLBACK_BLOCKED_DOOR)
+		{
+			if (mover)
+				return 0;
+			mover = target;
+			mover_ordinal = i;
+		}
+		else if (Mechanism_NodeExecutable(target) &&
+		         target->kind == SG_MECH_NODE_DOOR_MEMBER && !member)
+		{
+			member = target;
+			member_ordinal = i;
+		}
+		else
+			return 0;
+	}
+	if (!mover || !member || !short_relay || !restore_relay ||
+	    member->team_master_key != mover->key || mover_ordinal >= member_ordinal)
+		return 0;
+	for (i = 0U; i < catalog->num_nodes; i++)
+		if (catalog->nodes[i].kind == SG_MECH_NODE_DOOR_MEMBER &&
+		    catalog->nodes[i].team_master_key == mover->key)
+			member_count++;
+	{
+		mechanism_edge_group_t team = Mechanism_EdgeGroup(&state, mover->key,
+			SG_MECH_EDGE_TEAM);
+
+		if (member_count != 1U || team.count != 1U ||
+		    catalog->edges[team.first].to_key != member->key ||
+		    catalog->edges[team.first].ordinal != 0U ||
+		    catalog->edges[team.first].delay_ms != 0U)
+			return 0;
+	}
+	short_targets = Mechanism_EdgeGroup(&state, short_relay->key,
+		SG_MECH_EDGE_TARGET);
+	restore_targets = Mechanism_EdgeGroup(&state, restore_relay->key,
+		SG_MECH_EDGE_TARGET);
+	if (short_relay->target_offset == 0U ||
+	    short_relay->target_offset != restore_relay->target_offset ||
+	    short_targets.count != 9U || restore_targets.count != 9U)
+		return 0;
+	for (i = 0U; i < short_targets.count; i++)
+	{
+		const rune_mechanism_edge_t *short_edge =
+			&catalog->edges[short_targets.first + i];
+		const rune_mechanism_edge_t *restore_edge =
+			&catalog->edges[restore_targets.first + i];
+		uint32_t target_index = Mechanism_FindNode(&state,
+			short_edge->to_key);
+		const rune_mechanism_node_t *target = target_index == UINT32_MAX
+			? NULL : &catalog->nodes[target_index];
+
+		if (!target || short_edge->ordinal != i ||
+		    restore_edge->ordinal != i ||
+		    short_edge->to_key != restore_edge->to_key ||
+		    short_edge->delay_ms != 1000U ||
+		    restore_edge->delay_ms != 10000U ||
+		    target->targetname_offset != short_relay->target_offset)
+			return 0;
+		if (Mechanism_TimedVaultLaser(target))
+			laser_count++;
+		else if (Mechanism_TimedVaultSpeaker(target))
+			speaker_count++;
+		else
+			return 0;
+		witness_out->effect_keys[i] = target->key;
+	}
+	if (laser_count != 8U || speaker_count != 1U)
+		return 0;
+	witness_out->entry_key = entry_key;
+	witness_out->mover_key = mover->key;
+	witness_out->member_key = member->key;
+	witness_out->short_relay_key = short_relay->key;
+	witness_out->restore_relay_key = restore_relay->key;
+	witness_out->touch_hold_ms =
+		SG_TIMED_VAULT_TOUCH_TO_DISPATCH_FRAMES *
+		TIMED_VAULT_SERVER_FRAME_MS;
+	witness_out->readiness_ms =
+		SG_TIMED_VAULT_SHORT_RELAY_FRAMES * TIMED_VAULT_SERVER_FRAME_MS;
+	witness_out->usable_window_ms =
+		SG_TIMED_VAULT_SAFE_LEASE_FRAMES * TIMED_VAULT_SERVER_FRAME_MS;
+	witness_out->restore_ms =
+		SG_TIMED_VAULT_RESTORE_RELAY_FRAMES * TIMED_VAULT_SERVER_FRAME_MS;
+	return witness_out->touch_hold_ms == 200U &&
+	       witness_out->readiness_ms == 1000U &&
+	       witness_out->usable_window_ms == 9000U &&
+	       witness_out->restore_ms == 10000U;
+}
+
+int SG_ButtonMechanismPlanBindingDiscover(
+	const sg_mech_catalog_view_t *catalog, uint32_t entry_key,
+	sg_mechanism_plan_binding_t *binding_out)
+{
+	sg_relay_wall_plan_witness_t relay_wall;
+	sg_timed_vault_plan_witness_t timed_vault;
+
+	if (binding_out)
+		memset(binding_out, 0, sizeof(*binding_out));
+	if (!catalog || !binding_out)
+		return 0;
+	if (SG_RelayWallPlanDiscover(catalog, entry_key, &relay_wall))
+	{
+		binding_out->entry_key = relay_wall.entry_key;
+		binding_out->mover_key = relay_wall.wall_key;
+		binding_out->destination_key = relay_wall.immediate_relay_key;
+		binding_out->egress_key = relay_wall.restore_relay_key;
+		binding_out->controller_kind = SG_MECHANISM_CONTROLLER_RELAY_DOOR;
+		binding_out->expected_members = 1U;
+		binding_out->cooldown_ms = relay_wall.cooldown_ms;
+		return 1;
+	}
+	if (!SG_TimedVaultPlanDiscover(catalog, entry_key, &timed_vault))
+		return 0;
+	binding_out->entry_key = timed_vault.entry_key;
+	binding_out->mover_key = timed_vault.mover_key;
+	binding_out->destination_key = timed_vault.short_relay_key;
+	binding_out->egress_key = timed_vault.restore_relay_key;
+	binding_out->controller_kind = SG_MECHANISM_CONTROLLER_TIMED_VAULT;
+	binding_out->expected_members = 2U;
+	binding_out->cooldown_ms = timed_vault.restore_ms;
+	return 1;
+}
+
+int SG_ButtonDoorPlanBindingDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_mechanism_plan_binding_t *binding_out)
+{
+	mechanism_materializer_t state;
+	mechanism_edge_group_t targets;
+	const rune_mechanism_node_t *entry;
+	uint32_t entry_index;
+	uint32_t mover_key = SG_MECH_NO_KEY;
+	uint32_t team_members = 0U;
+	uint32_t index;
+
+	if (binding_out)
+		memset(binding_out, 0, sizeof(*binding_out));
+	if (!catalog || !binding_out)
+		return 0;
+	if (SG_ButtonMechanismPlanBindingDiscover(catalog, entry_key,
+	        binding_out))
+		return 1;
+	memset(&state, 0, sizeof(state));
+	state.catalog = catalog;
+	entry_index = Mechanism_FindNode(&state, entry_key);
+	if (entry_index == UINT32_MAX)
+		return 0;
+	entry = &catalog->nodes[entry_index];
+	targets = Mechanism_EdgeGroup(&state, entry_key, SG_MECH_EDGE_TARGET);
+	if (entry->kind != SG_MECH_NODE_BUTTON ||
+	    entry->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    entry->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    entry->wait_ms <= 0 || targets.count == 0U)
+		return 0;
+	for (index = 0U; index < targets.count; index++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&catalog->edges[targets.first + index];
+		uint32_t destination_index = Mechanism_FindNode(&state, edge->to_key);
+		const rune_mechanism_node_t *destination =
+			destination_index == UINT32_MAX ? NULL :
+			&catalog->nodes[destination_index];
+
+		if (!destination)
+			return 0;
+		if (destination->kind == SG_MECH_NODE_DOOR_MASTER)
+		{
+			if (mover_key != SG_MECH_NO_KEY)
+				return 0;
+			mover_key = destination->key;
+		}
+		else if (destination->kind != SG_MECH_NODE_DOOR_MEMBER ||
+		         mover_key == SG_MECH_NO_KEY ||
+		         destination->team_master_key != mover_key)
+			return 0;
+	}
+	if (mover_key == SG_MECH_NO_KEY)
+		return 0;
+	for (index = 0U; index < catalog->num_edges; index++)
+		if (catalog->edges[index].from_key == mover_key &&
+		    catalog->edges[index].kind == SG_MECH_EDGE_TEAM)
+			team_members++;
+	if (team_members + 1U > RUNE_MAX_MECHANISM_MEMBERS)
+		return 0;
+	binding_out->entry_key = entry_key;
+	binding_out->mover_key = mover_key;
+	binding_out->destination_key = SG_MECH_NO_KEY;
+	binding_out->egress_key = SG_MECH_NO_KEY;
+	binding_out->controller_kind = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	binding_out->expected_members = (uint16_t)(team_members + 1U);
+	binding_out->cooldown_ms = (uint32_t)entry->wait_ms;
+	return 1;
 }
 
 /* A positive-delay sound relay is intentionally invoked but never expanded:
@@ -872,6 +1362,29 @@ static int Mechanism_MaterializeTrain(mechanism_materializer_t *state,
 	       Mechanism_AppendInventoryEdge(state, open_route.first);
 }
 
+static int Mechanism_MaterializeTrainStation(
+	mechanism_materializer_t *state,
+	const sg_mechanism_plan_binding_t *binding, const rune_link_t *owner_link)
+{
+	sg_train_station_plan_witness_t witness;
+	uint32_t index;
+
+	if (!owner_link || owner_link->action != RL_TRAIN ||
+	    owner_link->mode != RLCM_RIDE ||
+	    binding->controller_kind !=
+	        SG_MECHANISM_CONTROLLER_TRAIN_STATION ||
+	    binding->expected_members != 2U || binding->cooldown_ms != 3000U ||
+	    !SG_TrainStationPlanAuthenticate(state->catalog, binding->entry_key,
+	        binding->mover_key, binding->destination_key,
+	        binding->egress_key, &witness))
+		return 0;
+	for (index = 0U; index < witness.edge_count; index++)
+		if (!Mechanism_AppendInventoryEdge(state,
+		        witness.edge_indices[index]))
+			return 0;
+	return 1;
+}
+
 static int Mechanism_MaterializeDoorEntry(mechanism_materializer_t *state,
 	const sg_mechanism_plan_binding_t *binding)
 {
@@ -1038,6 +1551,210 @@ static int Mechanism_MaterializeDoorEntry(mechanism_materializer_t *state,
 }
 
 static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
+	uint32_t expected_physical);
+
+static int Mechanism_MaterializeRelayWall(mechanism_materializer_t *state,
+	const sg_mechanism_plan_binding_t *binding)
+{
+	uint32_t entry_index = Mechanism_FindNode(state, binding->entry_key);
+	uint32_t immediate_index = Mechanism_FindNode(state,
+		binding->destination_key);
+	uint32_t delayed_index = Mechanism_FindNode(state, binding->egress_key);
+	const rune_mechanism_node_t *entry;
+	const rune_mechanism_node_t *immediate;
+	const rune_mechanism_node_t *delayed;
+	mechanism_edge_group_t button_targets;
+	mechanism_edge_group_t immediate_targets;
+	mechanism_edge_group_t delayed_targets;
+	uint32_t wall_count = 0U;
+	uint32_t i;
+
+	if (entry_index == UINT32_MAX || immediate_index == UINT32_MAX ||
+	    delayed_index == UINT32_MAX ||
+	    binding->destination_key == binding->egress_key ||
+	    binding->expected_members != 1U)
+		return 0;
+	entry = &state->catalog->nodes[entry_index];
+	immediate = &state->catalog->nodes[immediate_index];
+	delayed = &state->catalog->nodes[delayed_index];
+	button_targets = Mechanism_EdgeGroup(state, entry->key,
+		SG_MECH_EDGE_TARGET);
+	immediate_targets = Mechanism_EdgeGroup(state, immediate->key,
+		SG_MECH_EDGE_TARGET);
+	delayed_targets = Mechanism_EdgeGroup(state, delayed->key,
+		SG_MECH_EDGE_TARGET);
+	if (entry->kind != SG_MECH_NODE_BUTTON ||
+	    entry->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    entry->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    (entry->flags & (SG_MECH_NODEF_SHOOTABLE |
+	        SG_MECH_NODEF_FRAME_COMPLETE_MOVER)) != 0U ||
+	    entry->delay_ms <= 0 || entry->delay_ms > RUNE_MAX_COST_MS ||
+	    entry->wait_ms <= 0 || entry->wait_ms > RUNE_MAX_COST_MS ||
+	    entry->killtarget_offset != 0U || entry->path_target_offset != 0U ||
+	    binding->cooldown_ms != (uint32_t)entry->wait_ms ||
+	    !Mechanism_RelayShape(immediate) || immediate->delay_ms != 0 ||
+	    !Mechanism_RelayShape(delayed) || delayed->delay_ms <= 0 ||
+	    delayed->delay_ms > RUNE_MAX_COST_MS || button_targets.count != 2U ||
+	    immediate_targets.count == 0U ||
+	    immediate_targets.count != delayed_targets.count)
+		return 0;
+	for (i = 0U; i < button_targets.count; i++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&state->catalog->edges[button_targets.first + i];
+
+		if ((edge->to_key != immediate->key && edge->to_key != delayed->key) ||
+		    edge->delay_ms != (uint32_t)entry->delay_ms ||
+		    !Mechanism_AppendPlatformTriggerEdge(state,
+		        button_targets.first + i, (uint32_t)entry->delay_ms))
+			return 0;
+	}
+	for (i = 0U; i < immediate_targets.count; i++)
+	{
+		const rune_mechanism_edge_t *left =
+			&state->catalog->edges[immediate_targets.first + i];
+		const rune_mechanism_edge_t *right =
+			&state->catalog->edges[delayed_targets.first + i];
+		uint32_t destination_index = Mechanism_FindNode(state, left->to_key);
+		const rune_mechanism_node_t *destination;
+
+		if (destination_index == UINT32_MAX ||
+		    left->ordinal != right->ordinal || left->to_key != right->to_key ||
+		    left->delay_ms != 0U ||
+		    right->delay_ms != (uint32_t)delayed->delay_ms)
+			return 0;
+		destination = &state->catalog->nodes[destination_index];
+		if (Mechanism_ToggleWallShape(destination))
+		{
+			if (destination->key != binding->mover_key || ++wall_count != 1U)
+				return 0;
+		}
+		else if (!Mechanism_TriggerHurtShape(destination) &&
+		         !Mechanism_RelayWallSpeaker(destination))
+			return 0;
+		if (!Mechanism_AppendPlatformTriggerEdge(state,
+		        immediate_targets.first + i, 0U) ||
+		    !Mechanism_AppendPlatformTriggerEdge(state,
+		        delayed_targets.first + i, (uint32_t)delayed->delay_ms))
+			return 0;
+	}
+	return wall_count == 1U;
+}
+
+static int Mechanism_MaterializeTimedVault(mechanism_materializer_t *state,
+	const sg_mechanism_plan_binding_t *binding)
+{
+	uint32_t entry_index = Mechanism_FindNode(state, binding->entry_key);
+	uint32_t mover_index = Mechanism_FindNode(state, binding->mover_key);
+	uint32_t short_index = Mechanism_FindNode(state, binding->destination_key);
+	uint32_t restore_index = Mechanism_FindNode(state, binding->egress_key);
+	mechanism_edge_group_t button_targets;
+	mechanism_edge_group_t short_targets;
+	mechanism_edge_group_t restore_targets;
+	const rune_mechanism_node_t *button;
+	const rune_mechanism_node_t *mover;
+	const rune_mechanism_node_t *short_relay;
+	const rune_mechanism_node_t *restore_relay;
+	uint32_t relay_count = 0U;
+	uint32_t member_count = 0U;
+	uint32_t laser_count = 0U;
+	uint32_t speaker_count = 0U;
+	uint32_t i;
+
+	if (entry_index == UINT32_MAX || mover_index == UINT32_MAX ||
+	    short_index == UINT32_MAX || restore_index == UINT32_MAX ||
+	    binding->destination_key == binding->egress_key ||
+	    binding->expected_members != 2U || binding->cooldown_ms != 10000U)
+		return 0;
+	button = &state->catalog->nodes[entry_index];
+	mover = &state->catalog->nodes[mover_index];
+	short_relay = &state->catalog->nodes[short_index];
+	restore_relay = &state->catalog->nodes[restore_index];
+	button_targets = Mechanism_EdgeGroup(state, button->key,
+		SG_MECH_EDGE_TARGET);
+	short_targets = Mechanism_EdgeGroup(state, short_relay->key,
+		SG_MECH_EDGE_TARGET);
+	restore_targets = Mechanism_EdgeGroup(state, restore_relay->key,
+		SG_MECH_EDGE_TARGET);
+	if (button->kind != SG_MECH_NODE_BUTTON ||
+	    button->flags != (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+	        SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER) ||
+	    button->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    button->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    button->think_callback != SG_MECH_CALLBACK_NONE ||
+	    button->blocked_callback != SG_MECH_CALLBACK_NONE ||
+	    button->spawnflags != 0U || button->target_offset == 0U ||
+	    button->targetname_offset != 0U || button->owner_key != SG_MECH_NO_KEY ||
+	    button->team_master_key != SG_MECH_NO_KEY ||
+	    button->delay_ms != 0 || button->wait_ms != 10000 ||
+	    button->killtarget_offset != 0U || button->path_target_offset != 0U ||
+	    mover->kind != SG_MECH_NODE_DOOR_MASTER ||
+	    mover->team_master_key != mover->key ||
+	    mover->use_callback != SG_MECH_CALLBACK_USE_DOOR ||
+	    mover->blocked_callback != SG_MECH_CALLBACK_BLOCKED_DOOR ||
+	    !Mechanism_TimedVaultRelay(short_relay, 1000) ||
+	    !Mechanism_TimedVaultRelay(restore_relay, 10000) ||
+	    button_targets.count != 4U ||
+	    short_targets.count != 9U || restore_targets.count != 9U ||
+	    !Mechanism_AddMaster(state, mover_index))
+		return 0;
+	for (i = 0U; i < button_targets.count; i++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&state->catalog->edges[button_targets.first + i];
+		uint32_t target_index = Mechanism_FindNode(state, edge->to_key);
+		const rune_mechanism_node_t *target = target_index == UINT32_MAX
+			? NULL : &state->catalog->nodes[target_index];
+
+		if (!target || edge->delay_ms != 0U)
+			return 0;
+		if (target->key == short_relay->key ||
+		    target->key == restore_relay->key)
+			relay_count++;
+		else if (target->key == mover->key)
+			member_count++;
+		else if (target->kind == SG_MECH_NODE_DOOR_MEMBER &&
+		         target->team_master_key == mover->key)
+			member_count++;
+		else
+			return 0;
+		if (!Mechanism_AppendPlatformTriggerEdge(state,
+		        button_targets.first + i, 0U))
+			return 0;
+	}
+	if (relay_count != 2U || member_count != 2U)
+		return 0;
+	for (i = 0U; i < short_targets.count; i++)
+	{
+		const rune_mechanism_edge_t *left =
+			&state->catalog->edges[short_targets.first + i];
+		const rune_mechanism_edge_t *right =
+			&state->catalog->edges[restore_targets.first + i];
+		uint32_t target_index = Mechanism_FindNode(state, left->to_key);
+		const rune_mechanism_node_t *target = target_index == UINT32_MAX
+			? NULL : &state->catalog->nodes[target_index];
+
+		if (!target || left->ordinal != right->ordinal ||
+		    left->to_key != right->to_key || left->delay_ms != 1000U ||
+		    right->delay_ms != 10000U)
+			return 0;
+		if (Mechanism_TimedVaultLaser(target))
+			laser_count++;
+		else if (Mechanism_TimedVaultSpeaker(target))
+			speaker_count++;
+		else
+			return 0;
+		if (!Mechanism_AppendPlatformTriggerEdge(state,
+		        short_targets.first + i, 1000U) ||
+		    !Mechanism_AppendPlatformTriggerEdge(state,
+		        restore_targets.first + i, 10000U))
+			return 0;
+	}
+	return laser_count == 8U && speaker_count == 1U &&
+	       Mechanism_MaterializeDoorClosure(state, 2U);
+}
+
+static int Mechanism_MaterializeDoorClosure(mechanism_materializer_t *state,
 	uint32_t expected_physical)
 {
 	uint32_t physical_count = 0U;
@@ -1191,6 +1908,10 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 
 	switch (binding->controller_kind)
 	{
+	case SG_MECHANISM_CONTROLLER_TRAIN_STATION:
+		closure_ok = Mechanism_MaterializeTrainStation(state, binding,
+			&state->links[link_index]);
+		break;
 	case SG_MECHANISM_CONTROLLER_TRAIN:
 	case SG_MECHANISM_CONTROLLER_TRAIN_SHOOT:
 		if (binding->controller_kind ==
@@ -1216,6 +1937,16 @@ static int Mechanism_MaterializeOne(mechanism_materializer_t *state,
 			binding->expected_members == 1U &&
 			binding->cooldown_ms == 0U &&
 			Mechanism_PushShape(&state->catalog->nodes[entry_index]);
+		break;
+	case SG_MECHANISM_CONTROLLER_RELAY_DOOR:
+		closure_ok = state->links[link_index].action == RL_BUTTON_DOOR &&
+			state->links[link_index].mode == RLCM_PREOPEN &&
+			Mechanism_MaterializeRelayWall(state, binding);
+		break;
+	case SG_MECHANISM_CONTROLLER_TIMED_VAULT:
+		closure_ok = state->links[link_index].action == RL_BUTTON_DOOR &&
+			state->links[link_index].mode == RLCM_PREOPEN &&
+			Mechanism_MaterializeTimedVault(state, binding);
 		break;
 	case SG_MECHANISM_CONTROLLER_AUTO_DOOR:
 	case SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR:

@@ -7,6 +7,8 @@
 #include "slipgate/sg_replay.h"
 #include "slipgate/sg_rocketjump_live.h"
 #include "slipgate/sg_rune.h"
+#include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_timed_vault_egress.h"
 
 void Touch_Multi(edict_t *self, edict_t *other, cplane_t *plane,
 	csurface_t *surface);
@@ -82,6 +84,84 @@ qboolean SG_DeclaredCommand(const vec3_t origin, const vec3_t target,
 	cmd->angles[ROLL] = -pms->delta_angles[ROLL];
 	if (horiz > 4.0f)
 		cmd->forwardmove = (horiz < 32.0f) ? 200 : 400;
+	return true;
+}
+
+qboolean SG_DeclaredEgressCommand(int controller_kind, int waterlevel,
+	const vec3_t origin, const vec3_t target, const pmove_state_t *pms,
+	usercmd_t *cmd)
+
+{
+	return SG_DeclaredEgressCommandMode(controller_kind, waterlevel, false,
+	    origin, vec3_origin, target, pms, cmd);
+}
+
+qboolean SG_DeclaredEgressCommandMode(int controller_kind, int waterlevel,
+	qboolean exact_capture, const vec3_t origin, const vec3_t velocity,
+	const vec3_t target, const pmove_state_t *pms, usercmd_t *cmd)
+{
+	vec3_t delta, desired_velocity, velocity_error, control_target;
+	float distance, speed, desired_speed, error_speed;
+	byte msec;
+	int axis, thrust;
+
+	if (!origin || !velocity || !target || !pms || !cmd ||
+	    waterlevel < 0 || waterlevel > 3)
+		return false;
+	if (!exact_capture ||
+	    controller_kind != SG_MECHANISM_CONTROLLER_TIMED_VAULT ||
+	    waterlevel < 2)
+		return controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT &&
+			       waterlevel >= 2
+			    ? SG_SwimCommand(origin, target, pms, cmd)
+			    : SG_DeclaredCommand(origin, target, pms, cmd);
+	VectorSubtract(target, origin, delta);
+	distance = VectorLength(delta);
+	speed = sqrtf(DotProduct(velocity, velocity));
+	if (!isfinite(distance) || !isfinite(speed))
+		return false;
+	if (distance <= SG_TIMED_VAULT_CAPTURE_DISTANCE &&
+	    speed <= SG_TIMED_VAULT_CAPTURE_SPEED)
+	{
+		msec = cmd->msec;
+		memset(cmd, 0, sizeof(*cmd));
+		cmd->msec = msec;
+		return true;
+	}
+	desired_speed = distance > SG_TIMED_VAULT_CAPTURE_DISTANCE
+	    ? (distance - SG_TIMED_VAULT_CAPTURE_DISTANCE) * 4.0f : 0.0f;
+	if (distance > SG_TIMED_VAULT_CAPTURE_DISTANCE && desired_speed < 16.0f)
+		desired_speed = 16.0f;
+	if (desired_speed > 100.0f)
+		desired_speed = 100.0f;
+	if (distance > 0.0f)
+		VectorScale(delta, desired_speed / distance, desired_velocity);
+	else
+		VectorClear(desired_velocity);
+	VectorSubtract(desired_velocity, velocity, velocity_error);
+	error_speed = VectorLength(velocity_error);
+	if (!isfinite(error_speed))
+		return false;
+	if (error_speed < 0.001f)
+	{
+		VectorCopy(delta, velocity_error);
+		error_speed = VectorLength(velocity_error);
+		if (error_speed < 0.001f)
+		{
+			VectorSet(velocity_error, 1.0f, 0.0f, 0.0f);
+			error_speed = 1.0f;
+		}
+	}
+	for (axis = 0; axis < 3; axis++)
+		control_target[axis] = origin[axis] + velocity_error[axis];
+	if (!SG_SwimCommand(origin, control_target, pms, cmd))
+		return false;
+	thrust = (int)ceilf(error_speed * 4.0f);
+	if (thrust < 1)
+		thrust = 1;
+	if (thrust > 400)
+		thrust = 400;
+	cmd->forwardmove = (short)thrust;
 	return true;
 }
 

@@ -39,6 +39,7 @@
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"      /* sg_grab_time, sg_push_until */
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_hook_game.h"
 #include "slipgate/sg_move.h"
 
 void		Cmd_Kill_f(edict_t *ent);
@@ -556,7 +557,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		/* Route policy inherits the suffix; hook_water and the readiness branch
 		 * below remain exact bare-HOOK controller checks. */
 		qboolean hook_policy = SG_ActionUsesHookPolicy(l->action);
-		qboolean hook_water = l->action == RL_HOOK &&
+		qboolean hook_water =
+		    (l->action == RL_HOOK || l->action == RL_CHAIN_HOOK) &&
 		    (SG_Rune()->seeds[l->from].flags & RSF_WATER);
 		sg_rune_mechanism_binding_t mechanism_binding = { 0 };
 		qboolean mechanism_bound = false;
@@ -636,10 +638,11 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		/* Graph hooks prove the offhand production schedule.  A
 		 * weapon-held grapple has activation/fire frames and is a different
 		 * controller, so it is not an executable edge in this graph. */
-		if ((l->action == RL_HOOK || l->action == RL_DOOR_HOOK) &&
+		if ((l->action == RL_HOOK || l->action == RL_CHAIN_HOOK ||
+		     l->action == RL_DOOR_HOOK) &&
 		    !SG_HookOffhandReady(e))
 			continue;
-		if (l->action == RL_HOOK)
+		if (l->action == RL_HOOK || l->action == RL_CHAIN_HOOK)
 		{
 			if (hook_water)
 			{

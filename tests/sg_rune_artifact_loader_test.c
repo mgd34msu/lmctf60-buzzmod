@@ -281,7 +281,8 @@ static void EncodeFixture(fixture_t *fixture,
 	size_t encoded_size = 0U;
 
 	WorkspaceInit(&fixture->encode_workspace);
-	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(&fixture->identity,
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(
+		RUNE_ROUTE_CONTRACT_COMPLETE, &fixture->identity,
 		fixture->seeds, TEST_SEEDS, fixture->links, TEST_LINKS,
 		fixture->nodes, TEST_NODES, fixture->edges, TEST_EDGES,
 		fixture->plans, TEST_PLANS, fixture->strings,
@@ -605,7 +606,8 @@ static void TestInventoryWithoutPlans(void)
 	 * neither require plan backing nor invalidate an otherwise complete
 	 * inventory publication. */
 	WorkspaceInit(&fixture.encode_workspace);
-	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(&fixture.identity,
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(
+		RUNE_ROUTE_CONTRACT_COMPLETE, &fixture.identity,
 		fixture.seeds, TEST_SEEDS, fixture.links, TEST_LINKS,
 		fixture.nodes, TEST_NODES, fixture.edges,
 		TEST_INVENTORY_EDGES,
@@ -629,7 +631,8 @@ static void TestInventoryWithoutPlans(void)
 	/* Node-only inventories likewise publish without dummy edge or plan
 	 * storage.  Each backing pointer is governed solely by its own count. */
 	WorkspaceInit(&fixture.encode_workspace);
-	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(&fixture.identity,
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(
+		RUNE_ROUTE_CONTRACT_COMPLETE, &fixture.identity,
 		fixture.seeds, TEST_SEEDS, fixture.links, TEST_LINKS,
 		fixture.nodes, TEST_NODES, NULL, 0U, NULL, 0U,
 		fixture.strings, TEST_STRING_BYTES,

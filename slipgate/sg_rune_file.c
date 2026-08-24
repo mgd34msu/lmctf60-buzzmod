@@ -205,6 +205,8 @@ static const char *RuneFile_DiagnosticText(sg_rune_codec_diagnostic_t diagnostic
 		return "invalid mechanism graph";
 	case RLCODEC_NONZERO_RESERVED:
 		return "nonzero reserved header field";
+	case RLCODEC_BAD_ROUTE_CONTRACT:
+		return "invalid route contract";
 	default:
 		return "unknown RUNE diagnostic";
 	}
@@ -290,6 +292,7 @@ static void RuneFile_ArtifactFromWire(const sg_rune_codec_header_t *source,
 {
 	memset(destination, 0, sizeof(*destination));
 	destination->magic = source->magic;
+	destination->route_contract = source->route_contract;
 	destination->payload_crc32 = source->payload_crc32;
 	destination->header_crc32 = source->header_crc32;
 	destination->action_contract_crc32 = source->action_contract_crc32;
@@ -775,4 +778,116 @@ sg_rune_file_inspect_status_t SG_RuneFileInspect(const char *path,
 		return SG_RUNE_FILE_INSPECT_DRIFT;
 	RuneFile_ArtifactFromWire(&wire_header, artifact_out);
 	return SG_RUNE_FILE_INSPECT_MATCH;
+}
+
+static int RuneFile_SHA256TextValid(const char *text)
+{
+	size_t index;
+
+	if (!text || strlen(text) != 64U)
+		return 0;
+	for (index = 0U; index < 64U; index++)
+		if (!((text[index] >= '0' && text[index] <= '9') ||
+		      (text[index] >= 'a' && text[index] <= 'f')))
+			return 0;
+	return 1;
+}
+
+sg_rune_file_inspect_status_t SG_RuneFileInspectExact(const char *path,
+	const rune_identity_t *expected_identity, const char *expected_sha256,
+	rune_artifact_t *artifact_out, int *os_error_out)
+{
+	unsigned char header_bytes[SG_RUNE_CODEC_HEADER_BYTES];
+	unsigned char *snapshot = NULL;
+	sg_rune_codec_identity_t wire_identity;
+	sg_rune_codec_header_t wire_header;
+	FILE *file = NULL;
+	char actual_sha256[65];
+	long file_length;
+	size_t expected_file_size;
+	size_t read_size;
+	int saved_error = 0;
+	int close_status;
+	sg_rune_file_inspect_status_t status = SG_RUNE_FILE_INSPECT_ERROR;
+
+	if (artifact_out)
+		memset(artifact_out, 0, sizeof(*artifact_out));
+	if (os_error_out)
+		*os_error_out = 0;
+	if (!path || !path[0] || !expected_identity || !artifact_out ||
+	    !RuneFile_SHA256TextValid(expected_sha256))
+		return SG_RUNE_FILE_INSPECT_DRIFT;
+	RuneFile_WireIdentity(expected_identity, &wire_identity);
+	errno = 0;
+	file = fopen(path, "rb");
+	if (!file)
+	{
+		if (os_error_out)
+			*os_error_out = errno ? errno : EIO;
+		return SG_RUNE_FILE_INSPECT_ERROR;
+	}
+	read_size = fread(header_bytes, 1U, sizeof(header_bytes), file);
+	if (read_size != sizeof(header_bytes) || ferror(file) ||
+	    SG_RuneCodecDecodeHeader(header_bytes, sizeof(header_bytes),
+	        &wire_header) != RLCODEC_OK ||
+	    SG_RuneCodecMatchIdentity(&wire_header, &wire_identity) != RLCODEC_OK ||
+	    SG_RuneCodecFileSize(wire_header.num_seeds, wire_header.num_links,
+	        wire_header.num_activation_nodes,
+	        wire_header.num_activation_edges,
+	        wire_header.num_activation_plans, wire_header.string_bytes,
+	        &expected_file_size) != RLCODEC_OK)
+	{
+		status = ferror(file) ? SG_RUNE_FILE_INSPECT_ERROR
+			: SG_RUNE_FILE_INSPECT_DRIFT;
+		saved_error = status == SG_RUNE_FILE_INSPECT_ERROR
+			? (errno ? errno : EIO) : 0;
+		goto done;
+	}
+	if (fseek(file, 0, SEEK_END) != 0 ||
+	    (file_length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		saved_error = errno ? errno : EIO;
+		goto done;
+	}
+	if (expected_file_size != (size_t)file_length)
+	{
+		status = SG_RUNE_FILE_INSPECT_DRIFT;
+		goto done;
+	}
+	snapshot = malloc(expected_file_size ? expected_file_size : 1U);
+	if (!snapshot)
+	{
+		saved_error = ENOMEM;
+		goto done;
+	}
+	read_size = fread(snapshot, 1U, expected_file_size, file);
+	if (read_size != expected_file_size || ferror(file))
+	{
+		saved_error = errno ? errno : EIO;
+		goto done;
+	}
+	SG_RuneFileSHA256Buffer(snapshot, expected_file_size, actual_sha256);
+	if (strcmp(actual_sha256, expected_sha256) != 0)
+	{
+		status = SG_RUNE_FILE_INSPECT_DRIFT;
+		goto done;
+	}
+	RuneFile_ArtifactFromWire(&wire_header, artifact_out);
+	status = SG_RUNE_FILE_INSPECT_MATCH;
+
+done:
+	errno = 0;
+	close_status = fclose(file);
+	if (close_status != 0)
+	{
+		status = SG_RUNE_FILE_INSPECT_ERROR;
+		if (!saved_error)
+			saved_error = errno ? errno : EIO;
+	}
+	free(snapshot);
+	if (status == SG_RUNE_FILE_INSPECT_ERROR && os_error_out)
+		*os_error_out = saved_error ? saved_error : EIO;
+	if (status != SG_RUNE_FILE_INSPECT_MATCH)
+		memset(artifact_out, 0, sizeof(*artifact_out));
+	return status;
 }

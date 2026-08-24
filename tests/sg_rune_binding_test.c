@@ -4,12 +4,13 @@
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_codec.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_train_station_plan.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#define TEST_NODES 8U
-#define TEST_INVENTORY_EDGES 12U
+#define TEST_NODES 16U
+#define TEST_INVENTORY_EDGES 30U
 
 struct edict_s
 {
@@ -262,6 +263,31 @@ struct edict_s *SG_MechCatalogResolveEntity(uint32_t key,
 	    key == incarnation_failure_key || key == retired_key ||
 	    (index = NodeIndex(active_fixture, key)) < 0 ||
 	    node != &active_fixture->nodes[index])
+		return NULL;
+	return &active_fixture->entities[index];
+}
+
+int SG_MechCatalogStationTrainImmutableMatches(uint32_t key,
+	const struct rune_mechanism_node_s *node)
+{
+	int index;
+
+	if (!catalog_ready || !active_fixture || !node ||
+	    node->kind != SG_MECH_NODE_TRAIN || key == incarnation_failure_key ||
+	    key == retired_key || (index = NodeIndex(active_fixture, key)) < 0)
+		return 0;
+	return node == &active_fixture->nodes[index];
+}
+
+struct edict_s *SG_MechCatalogResolveStationEntity(uint32_t key,
+	const struct rune_mechanism_node_s *node)
+{
+	int index;
+
+	if (node && node->kind != SG_MECH_NODE_TRAIN)
+		return SG_MechCatalogResolveEntity(key, node);
+	if (!SG_MechCatalogStationTrainImmutableMatches(key, node) ||
+	    (index = NodeIndex(active_fixture, key)) < 0)
 		return NULL;
 	return &active_fixture->entities[index];
 }
@@ -864,6 +890,278 @@ static void TestButtonDoor(void)
 	CHECK(binding.mover_entity == &fixture.entities[1]);
 }
 
+static void TestRelayWall(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *node;
+	uint32_t index;
+
+	FixtureBegin(&fixture, RL_BUTTON_DOOR,
+		SG_MECHANISM_CONTROLLER_RELAY_DOOR, 4000U, 1U);
+	fixture.link.mode = RLCM_PREOPEN;
+	node = Node(&fixture, 10U, SG_MECH_NODE_BUTTON,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER);
+	node->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	node->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	node->target_offset = 1U;
+	node->delay_ms = 200;
+	node->wait_ms = 4000;
+	node->speed_q8 = node->accel_q8 = node->decel_q8 = 800U;
+	node = Node(&fixture, 20U, SG_MECH_NODE_RELAY,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	node->target_offset = node->targetname_offset = 1U;
+	node = Node(&fixture, 30U, SG_MECH_NODE_RELAY,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	node->target_offset = node->targetname_offset = 1U;
+	node->delay_ms = 4000;
+	node = Node(&fixture, 40U, SG_MECH_NODE_TOGGLE_WALL,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER);
+	node->use_callback = SG_MECH_CALLBACK_USE_FUNC_WALL;
+	node->spawnflags = 7U;
+	node->target_offset = 1U;
+	node->targetname_offset = 1U;
+	node = Node(&fixture, 50U, SG_MECH_NODE_TARGET_SPEAKER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->spawnflags = 1U;
+	node->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	node->targetname_offset = 1U;
+	node = Node(&fixture, 60U, SG_MECH_NODE_TRIGGER_HURT,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE);
+	node->touch_callback = SG_MECH_CALLBACK_TOUCH_HURT;
+	node->use_callback = SG_MECH_CALLBACK_USE_HURT;
+	node->spawnflags = 2U;
+	node->targetname_offset = 1U;
+	node = Node(&fixture, 70U, SG_MECH_NODE_TARGET_SPEAKER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->spawnflags = 1U;
+	node->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	node->targetname_offset = 1U;
+
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 10U, 30U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 20U, 40U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 20U, 50U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 20U, 60U, SG_MECH_EDGE_TARGET, 2U);
+	Edge(&fixture, 20U, 70U, SG_MECH_EDGE_TARGET, 3U);
+	Edge(&fixture, 30U, 40U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 30U, 50U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 30U, 60U, SG_MECH_EDGE_TARGET, 2U);
+	Edge(&fixture, 30U, 70U, SG_MECH_EDGE_TARGET, 3U);
+	fixture.edges[0].delay_ms = 200U;
+	fixture.edges[1].delay_ms = 200U;
+	for (index = 6U; index < 10U; index++)
+		fixture.edges[index].delay_ms = 4000U;
+	FixtureFinish(&fixture, 10U, 40U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.destination_node && binding.destination_node->key == 20U);
+	CHECK(binding.egress_node && binding.egress_node->key == 30U);
+	CheckDoorMovers(&binding, 40U, SG_MECH_NO_KEY);
+	fixture.nodes[4].spawnflags = 8U;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	fixture.nodes[4].spawnflags = 1U;
+
+	fixture.edges[8].to_key = 70U;
+	fixture.edges[fixture.plan.first_edge + 8U].to_key = 70U;
+	fixture.plan.closure_crc32 = ClosureCRC(&fixture);
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	fixture.edges[8].to_key = 60U;
+	fixture.edges[fixture.plan.first_edge + 8U].to_key = 60U;
+	fixture.edges[8].ordinal = 3U;
+	fixture.edges[fixture.plan.first_edge + 8U].ordinal = 3U;
+	fixture.plan.closure_crc32 = ClosureCRC(&fixture);
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
+static void TestTimedVault(void)
+{
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *node;
+	uint32_t key;
+
+	FixtureBegin(&fixture, RL_BUTTON_DOOR,
+		SG_MECHANISM_CONTROLLER_TIMED_VAULT, 10000U, 2U);
+	fixture.link.mode = RLCM_PREOPEN;
+	node = Node(&fixture, 10U, SG_MECH_NODE_BUTTON,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE |
+		SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER);
+	node->touch_callback = SG_MECH_CALLBACK_BUTTON_TOUCH;
+	node->use_callback = SG_MECH_CALLBACK_BUTTON_USE;
+	node->target_offset = 1U;
+	node->wait_ms = 10000;
+	node = Node(&fixture, 20U, SG_MECH_NODE_RELAY,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	node->target_offset = node->targetname_offset = 1U;
+	node->delay_ms = 1000;
+	node = Node(&fixture, 30U, SG_MECH_NODE_RELAY,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->use_callback = SG_MECH_CALLBACK_USE_TRIGGER_RELAY;
+	node->target_offset = node->targetname_offset = 1U;
+	node->delay_ms = 10000;
+	node = Node(&fixture, 40U, SG_MECH_NODE_DOOR_MASTER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER);
+	node->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	node->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	node->team_master_key = 40U;
+	node->target_offset = node->targetname_offset = 1U;
+	node = Node(&fixture, 50U, SG_MECH_NODE_DOOR_MEMBER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MEMBER);
+	node->use_callback = SG_MECH_CALLBACK_USE_DOOR;
+	node->blocked_callback = SG_MECH_CALLBACK_BLOCKED_DOOR;
+	node->team_master_key = 40U;
+	node->target_offset = node->targetname_offset = 1U;
+	for (key = 60U; key <= 130U; key += 10U)
+	{
+		node = Node(&fixture, key, SG_MECH_NODE_TARGET_LASER,
+			SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+		node->spawnflags = (key & 20U) ? 3U : 17U;
+		node->use_callback = SG_MECH_CALLBACK_USE_TARGET_LASER;
+		node->think_callback = SG_MECH_CALLBACK_THINK_TARGET_LASER;
+		node->target_offset = node->targetname_offset = 1U;
+	}
+	node = Node(&fixture, 140U, SG_MECH_NODE_TARGET_SPEAKER,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->spawnflags = 1U;
+	node->use_callback = SG_MECH_CALLBACK_USE_TARGET_SPEAKER;
+	node->targetname_offset = 1U;
+	node = Node(&fixture, 150U, SG_MECH_NODE_AREAPORTAL,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE);
+	node->use_callback = SG_MECH_CALLBACK_USE_AREAPORTAL;
+	node->targetname_offset = 1U;
+	Edge(&fixture, 10U, 20U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 10U, 30U, SG_MECH_EDGE_TARGET, 1U);
+	Edge(&fixture, 10U, 40U, SG_MECH_EDGE_TARGET, 2U);
+	Edge(&fixture, 10U, 50U, SG_MECH_EDGE_TARGET, 3U);
+	for (key = 60U; key <= 140U; key += 10U)
+	{
+		Edge(&fixture, 20U, key, SG_MECH_EDGE_TARGET, (key - 60U) / 10U);
+		fixture.edges[fixture.num_inventory_edges - 1U].delay_ms = 1000U;
+	}
+	for (key = 60U; key <= 140U; key += 10U)
+	{
+		Edge(&fixture, 30U, key, SG_MECH_EDGE_TARGET, (key - 60U) / 10U);
+		fixture.edges[fixture.num_inventory_edges - 1U].delay_ms = 10000U;
+	}
+	Edge(&fixture, 40U, 150U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&fixture, 40U, 50U, SG_MECH_EDGE_TEAM, 0U);
+	Edge(&fixture, 50U, 150U, SG_MECH_EDGE_TARGET, 0U);
+	FixtureFinish(&fixture, 10U, 40U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.destination_node && binding.destination_node->key == 20U);
+	CHECK(binding.egress_node && binding.egress_node->key == 30U);
+	CheckDoorMovers(&binding, 40U, 50U);
+
+	fixture.edges[17U].to_key = 130U;
+	fixture.edges[fixture.plan.first_edge + 17U].to_key = 130U;
+	fixture.plan.closure_crc32 = ClosureCRC(&fixture);
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
+static void TestTrainStation(void)
+{
+	static const uint32_t route[SG_TRAIN_STATION_ROUTE_CORNERS] = {
+		28U, 29U, 30U, 31U, 32U, 33U, 34U,
+		35U, 36U, 37U, 38U, 41U, 40U, 39U
+	};
+	fixture_t fixture;
+	sg_rune_mechanism_binding_t binding;
+	rune_mechanism_node_t *node;
+	uint32_t key;
+	uint32_t index;
+
+	FixtureBegin(&fixture, RL_TRAIN,
+		SG_MECHANISM_CONTROLLER_TRAIN_STATION, 3000U, 2U);
+	fixture.link.mode = RLCM_RIDE;
+	node = Node(&fixture, 5U, SG_MECH_NODE_TRAIN,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MASTER);
+	node->team_master_key = 5U;
+	node->spawnflags = 1U;
+	node->use_callback = SG_MECH_CALLBACK_TRAIN_USE;
+	node->think_callback = SG_MECH_CALLBACK_TRAIN_NEXT;
+	node->blocked_callback = SG_MECH_CALLBACK_BLOCKED_TRAIN;
+	node->speed_q8 = node->accel_q8 = node->decel_q8 = 3200U;
+	node->target_offset = 1U;
+	for (key = 28U; key <= 41U; key++)
+	{
+		node = Node(&fixture, key, SG_MECH_NODE_PATH_CORNER,
+			SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_TOUCHABLE);
+		node->touch_callback = SG_MECH_CALLBACK_PATH_CORNER_TOUCH;
+		node->wait_ms = key == 28U || key == 35U ? 3000 : 0;
+		node->target_offset = node->targetname_offset = 1U;
+	}
+	node = Node(&fixture, 42U, SG_MECH_NODE_TRAIN,
+		SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE |
+		SG_MECH_NODEF_MOVER | SG_MECH_NODEF_TEAM_MEMBER);
+	node->team_master_key = 5U;
+	node->spawnflags = 1U;
+	node->use_callback = SG_MECH_CALLBACK_TRAIN_USE;
+	node->think_callback = SG_MECH_CALLBACK_TRAIN_NEXT;
+	node->blocked_callback = SG_MECH_CALLBACK_BLOCKED_TRAIN;
+	node->speed_q8 = node->accel_q8 = node->decel_q8 = 3200U;
+	node->target_offset = 1U;
+	Edge(&fixture, 5U, 42U, SG_MECH_EDGE_TEAM, 0U);
+	Edge(&fixture, 5U, 29U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	Edge(&fixture, 42U, 36U, SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	for (index = 0U; index < SG_TRAIN_STATION_ROUTE_CORNERS; index++)
+		Edge(&fixture, route[index],
+			route[(index + 1U) % SG_TRAIN_STATION_ROUTE_CORNERS],
+			SG_MECH_EDGE_ROUTE_TARGET, 0U);
+	fixture.seeds[0].origin[0] = -64.0f;
+	fixture.seeds[1].origin[0] = 200.0f;
+	fixture.link.anchor[0] = -96.0f;
+	fixture.link.mechanism_anchor[2] = 16.0f;
+	FixtureFinishPlanEdges(&fixture, 28U, 5U, 17U);
+	CHECK(SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(binding.destination_node && binding.destination_node->key == 35U);
+	CHECK(binding.egress_node && binding.egress_node->key == 42U);
+	CHECK(binding.plan && binding.plan->flags ==
+		(SG_RUNE_CODEC_PLANF_ATOMIC |
+		 SG_RUNE_CODEC_PLANF_REQUIRES_LEASE));
+	CHECK(SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	fixture.link.anchor[0] += 8.0f;
+	CHECK(!SG_RuneMechanismStationBindingCurrent(&binding));
+	fixture.link.anchor[0] -= 8.0f;
+	CHECK(SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	fixture.link.anchor[0] = fixture.seeds[0].origin[0];
+	CHECK(!SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	fixture.link.anchor[0] = -96.0f;
+	memcpy(fixture.link.anchor, fixture.link.mechanism_anchor,
+		sizeof(fixture.link.anchor));
+	CHECK(!SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	fixture.link.anchor[0] = -96.0f;
+	fixture.link.anchor[1] = fixture.link.anchor[2] = 0.0f;
+	execution_failure_key = 28U;
+	CHECK(SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	execution_failure_key = SG_MECH_NO_KEY;
+	topology_failure_key = 5U;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+	CHECK(SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	topology_failure_key = SG_MECH_NO_KEY;
+	incarnation_failure_key = 5U;
+	CHECK(!SG_RuneMechanismStationBindingCapture(&fixture.rune, 0U,
+		&binding));
+	incarnation_failure_key = SG_MECH_NO_KEY;
+
+	fixture.nodes[8].wait_ms = 0;
+	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
+}
+
 static void TestExecutionStates(void)
 {
 	sg_mech_execution_state_t state;
@@ -938,6 +1236,9 @@ int main(void)
 	TestAutoDoor();
 	TestDirectDoor();
 	TestButtonDoor();
+	TestRelayWall();
+	TestTimedVault();
+	TestTrainStation();
 	TestExecutionStates();
 	if (failures != 0)
 	{

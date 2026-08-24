@@ -221,6 +221,7 @@ static uint32_t Sidecar_Magic(sg_sidecar_kind_t kind)
 static int Sidecar_ArtifactValid(const rune_artifact_t *artifact)
 {
 	return artifact && artifact->magic == RUNE_ARTIFACT_MAGIC &&
+		SG_RuneRouteContractValid(artifact->route_contract) &&
 		artifact->num_seeds > 0U &&
 		artifact->num_seeds <= RUNE_MAX_SEEDS &&
 		artifact->num_links <= RUNE_MAX_LINKS &&

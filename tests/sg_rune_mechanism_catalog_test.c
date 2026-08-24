@@ -3,6 +3,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_train_station_plan.h"
 #include "slipgate/sg_util.h"
 
 #include <math.h>
@@ -11,7 +12,7 @@
 #include <string.h>
 #include <strings.h>
 
-#define TEST_EDICTS 9
+#define TEST_EDICTS 96
 
 game_locals_t game;
 level_locals_t level;
@@ -61,6 +62,7 @@ TOUCH_CALLBACK(trigger_push_touch)
 TOUCH_CALLBACK(teleporter_touch)
 TOUCH_CALLBACK(path_corner_touch)
 TOUCH_CALLBACK(Touch_Item)
+TOUCH_CALLBACK(hurt_touch)
 TOUCH_CALLBACK(UnknownTouch)
 
 USE_CALLBACK(Use_Multi)
@@ -74,12 +76,17 @@ USE_CALLBACK(trigger_elevator_use)
 USE_CALLBACK(door_secret_use)
 USE_CALLBACK(Use_Target_Speaker)
 USE_CALLBACK(Use_Areaportal)
+USE_CALLBACK(func_wall_use)
+USE_CALLBACK(hurt_use)
+USE_CALLBACK(target_laser_use)
 USE_CALLBACK(UnknownUse)
 
 THINK_CALLBACK(multi_wait)
 THINK_CALLBACK(button_wait)
 THINK_CALLBACK(button_return)
 THINK_CALLBACK(button_done)
+THINK_CALLBACK(target_laser_start)
+THINK_CALLBACK(target_laser_think)
 void button_killed(edict_t *self, edict_t *inflictor, edict_t *attacker,
 	int damage, vec3_t point)
 {
@@ -548,7 +555,7 @@ static void TestEntityGeneration(void)
 	memset(&sg_host, 0, sizeof(sg_host));
 	g_edicts = test_edicts;
 	game.maxentities = TEST_EDICTS;
-	globals.num_edicts = 2;
+	globals.num_edicts = 4;
 	sg_host.level_alloc = TestAlloc;
 	sg_host.level_free = TestFree;
 	SG_MechCatalogBegin();
@@ -1668,6 +1675,133 @@ static void TestPostFindTrainShootGateCatalog(void)
 		SG_MECHANISM_CONTROLLER_TRAIN_SHOOT));
 }
 
+static void TestTrainStationCatalog(void)
+{
+	static const uint32_t route[SG_TRAIN_STATION_ROUTE_CORNERS] = {
+		28U, 29U, 30U, 31U, 32U, 33U, 34U,
+		35U, 36U, 37U, 38U, 41U, 40U, 39U
+	};
+	static char names[SG_TRAIN_STATION_ROUTE_CORNERS][12];
+	static const struct {
+		uint32_t route_index;
+		uint32_t first_speaker;
+		const char *targetname;
+	} effects[] = {
+		{ 0U, 86U, "redstop" }, { 1U, 80U, "bump1" },
+		{ 4U, 78U, "bump2" }, { 7U, 88U, "bluestop" },
+		{ 8U, 84U, "bump3" }, { 11U, 82U, "bump4" }
+	};
+	sg_mech_catalog_view_t view;
+	sg_train_station_plan_witness_t witness;
+	edict_t *master;
+	edict_t *member;
+	uint32_t destination;
+	uint32_t companion;
+	uint32_t index;
+	extern void Move_Begin(edict_t *self);
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 90;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(5U, "func_train");
+	for (index = 0U; index < SG_TRAIN_STATION_ROUTE_CORNERS; index++)
+	{
+		edict_t *corner;
+
+		snprintf(names[index], sizeof(names[index]), "train%u",
+			(unsigned int)(index + 1U));
+		InitializeEntity(route[index], "path_corner");
+		corner = &test_edicts[route[index]];
+		corner->targetname = names[index];
+		corner->target = names[(index + 1U) %
+			SG_TRAIN_STATION_ROUTE_CORNERS];
+		corner->wait = route[index] == 28U || route[index] == 35U
+			? 3.0f : 0.0f;
+		corner->touch = path_corner_touch;
+		corner->solid = SOLID_TRIGGER;
+	}
+	for (index = 0U; index < sizeof(effects) / sizeof(effects[0]); index++)
+	{
+		uint32_t speaker_key;
+
+		test_edicts[route[effects[index].route_index]].pathtarget =
+			(char *)effects[index].targetname;
+		for (speaker_key = effects[index].first_speaker;
+		     speaker_key < effects[index].first_speaker + 2U;
+		     speaker_key++)
+		{
+			edict_t *speaker;
+
+			InitializeEntity(speaker_key, "target_speaker");
+			speaker = &test_edicts[speaker_key];
+			speaker->targetname = (char *)effects[index].targetname;
+			speaker->wait = 0.0f;
+			speaker->use = Use_Target_Speaker;
+		}
+	}
+	InitializeEntity(42U, "func_train");
+	master = &test_edicts[5];
+	member = &test_edicts[42];
+	master->target = names[0];
+	member->target = names[7];
+	master->teammaster = master;
+	master->teamchain = member;
+	member->teammaster = master;
+	member->flags |= FL_TEAMSLAVE;
+	for (index = 0U; index < 2U; index++)
+	{
+		edict_t *train = index == 0U ? master : member;
+
+		train->spawnflags = 1;
+		train->wait = 0.0f;
+		train->movetype = MOVETYPE_PUSH;
+		train->solid = SOLID_BSP;
+		train->use = train_use;
+		train->think = train_next;
+		train->blocked = train_blocked;
+		train->moveinfo.speed = train->moveinfo.accel =
+			train->moveinfo.decel = 400.0f;
+	}
+	func_train_find(master);
+	func_train_find(member);
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	CHECK(SG_TrainStationPlanDiscover(&view, 28U, 5U, &destination,
+		&companion, &witness));
+	CHECK(destination == 35U);
+	CHECK(companion == 42U);
+	CHECK(witness.route_count == SG_TRAIN_STATION_ROUTE_CORNERS);
+	CHECK(witness.edge_count == 29U);
+	CHECK(!SG_MechCatalogEntityExecutionMatches(5U, NodeByKey(&view, 5U),
+		SG_MECHANISM_CONTROLLER_TRAIN_STATION));
+	CHECK(!SG_MechCatalogEntityExecutionMatches(42U, NodeByKey(&view, 42U),
+		SG_MECHANISM_CONTROLLER_TRAIN_STATION));
+	CHECK(SG_MechCatalogStationTrainImmutableMatches(5U,
+		NodeByKey(&view, 5U)));
+	CHECK(SG_MechCatalogStationTrainImmutableMatches(42U,
+		NodeByKey(&view, 42U)));
+	master->target_ent = &test_edicts[29U];
+	master->target = test_edicts[29U].target;
+	master->think = Move_Begin;
+	master->nextthink = 2.0f;
+	CHECK(!SG_MechCatalogEntityTopologyMatches(5U,
+		NodeByKey(&view, 5U)));
+	CHECK(SG_MechCatalogStationTrainImmutableMatches(5U,
+		NodeByKey(&view, 5U)));
+	SG_MechCatalogEntityInitialized(master);
+	CHECK(!SG_MechCatalogStationTrainImmutableMatches(5U,
+		NodeByKey(&view, 5U)));
+}
+
 static sg_mech_train_gate_state_t TrainTuple(void)
 {
 	sg_mech_train_gate_state_t state;
@@ -1737,6 +1871,271 @@ static void TestTrainGateExecutionTuples(void)
 	CHECK(SG_MechTrainGatePose(&state) == SG_MECH_TRAIN_GATE_INVALID);
 }
 
+static void BuildRelayWallCatalog(sg_mech_catalog_view_t *view)
+{
+	edict_t *button;
+	edict_t *immediate;
+	edict_t *delayed;
+	edict_t *wall;
+	edict_t *hurt;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 8;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "func_button");
+	InitializeEntity(2U, "trigger_relay");
+	InitializeEntity(3U, "trigger_relay");
+	InitializeEntity(4U, "func_wall");
+	InitializeEntity(5U, "target_speaker");
+	InitializeEntity(6U, "trigger_hurt");
+	InitializeEntity(7U, "target_speaker");
+
+	button = &test_edicts[1];
+	button->target = "gate-controller";
+	button->touch = button_touch;
+	button->use = button_use;
+	button->movetype = MOVETYPE_STOP;
+	button->solid = SOLID_BSP;
+	button->delay = 0.2f;
+	button->wait = 4.0f;
+	button->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+	button->moveinfo.wait = 4.0f;
+	VectorSet(button->moveinfo.start_origin, 0.0f, 0.0f, 0.0f);
+	VectorSet(button->moveinfo.end_origin, 0.0f, 0.0f, -2.0f);
+
+	immediate = &test_edicts[2];
+	immediate->targetname = "gate-controller";
+	immediate->target = "forcefield";
+	immediate->use = trigger_relay_use;
+	immediate->delay = 0.0f;
+	immediate->wait = 0.0f;
+
+	delayed = &test_edicts[3];
+	delayed->targetname = "gate-controller";
+	delayed->target = "forcefield";
+	delayed->use = trigger_relay_use;
+	delayed->delay = 4.0f;
+	delayed->wait = 0.0f;
+
+	wall = &test_edicts[4];
+	wall->targetname = "forcefield";
+	wall->spawnflags = 7;
+	wall->movetype = MOVETYPE_PUSH;
+	wall->solid = SOLID_NOT;
+	wall->svflags = SVF_NOCLIENT;
+	wall->area.prev = &wall->area;
+	wall->area.next = &wall->area;
+	wall->use = func_wall_use;
+	wall->wait = 0.0f;
+	VectorSet(wall->s.origin, 100.0f, -200.0f, -600.0f);
+	VectorSet(wall->mins, -16.0f, -64.0f, -64.0f);
+	VectorSet(wall->maxs, 16.0f, 64.0f, 64.0f);
+
+	test_edicts[5].targetname = "forcefield";
+	test_edicts[5].use = Use_Target_Speaker;
+	test_edicts[5].wait = 0.0f;
+	hurt = &test_edicts[6];
+	hurt->targetname = "forcefield";
+	hurt->spawnflags = 2;
+	hurt->solid = SOLID_TRIGGER;
+	hurt->touch = hurt_touch;
+	hurt->use = hurt_use;
+	hurt->wait = 0.0f;
+	test_edicts[7].targetname = "forcefield";
+	test_edicts[7].use = Use_Target_Speaker;
+	test_edicts[7].wait = 0.0f;
+
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(view) == SG_MECH_CATALOG_READY);
+}
+
+static void TestRelayWallCatalogStates(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *wall;
+	const rune_mechanism_node_t *hurt;
+	void (*saved_use)(edict_t *, edict_t *, edict_t *);
+
+	memset(&view, 0, sizeof(view));
+	BuildRelayWallCatalog(&view);
+	wall = NodeByKey(&view, 4U);
+	hurt = NodeByKey(&view, 6U);
+	CHECK(wall && wall->kind == SG_MECH_NODE_TOGGLE_WALL);
+	CHECK(wall && wall->use_callback == SG_MECH_CALLBACK_USE_FUNC_WALL);
+	CHECK(wall && wall->absmin_q8[0] == 672 &&
+	    wall->absmin_q8[1] == -2112 && wall->absmin_q8[2] == -5312 &&
+	    wall->absmax_q8[0] == 928 && wall->absmax_q8[1] == -1088 &&
+	    wall->absmax_q8[2] == -4288);
+	CHECK(wall && (wall->flags & SG_MECH_NODEF_INVENTORY_ONLY) == 0U);
+	CHECK(hurt && hurt->kind == SG_MECH_NODE_TRIGGER_HURT);
+	CHECK(hurt && hurt->touch_callback == SG_MECH_CALLBACK_TOUCH_HURT);
+	CHECK(hurt && hurt->use_callback == SG_MECH_CALLBACK_USE_HURT);
+	CHECK(hurt && (hurt->flags & SG_MECH_NODEF_INVENTORY_ONLY) == 0U);
+	CHECK(SG_MechCatalogEntityExecutionMatches(4U, wall,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+	CHECK(SG_MechCatalogEntityExecutionMatches(6U, hurt,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+
+	test_edicts[4].solid = SOLID_NOT;
+	test_edicts[4].svflags |= SVF_NOCLIENT;
+	test_edicts[6].solid = SOLID_NOT;
+	CHECK(SG_MechCatalogEntityExecutionMatches(4U, wall,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+	CHECK(SG_MechCatalogEntityExecutionMatches(6U, hurt,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+
+	test_edicts[4].svflags &= ~SVF_NOCLIENT;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(4U, wall,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+	test_edicts[4].svflags |= SVF_NOCLIENT;
+	test_edicts[6].solid = SOLID_BSP;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(6U, hurt,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+	test_edicts[6].solid = SOLID_NOT;
+
+	saved_use = test_edicts[4].use;
+	test_edicts[4].use = UnknownUse;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(4U, wall,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+	test_edicts[4].use = saved_use;
+	test_edicts[4].spawnflags = 3;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(4U, wall,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+	test_edicts[4].spawnflags = 7;
+	test_edicts[6].touch = UnknownTouch;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(6U, hurt,
+	    SG_MECHANISM_CONTROLLER_RELAY_DOOR));
+}
+
+static void TestTimedVaultLaserCatalogStates(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *laser;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 3;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "target_laser");
+	InitializeEntity(2U, "info_notnull");
+	test_edicts[1].target = "laser-end";
+	test_edicts[1].targetname = "vault-lasers";
+	test_edicts[1].spawnflags = (int)(0x80000000U | 17U);
+	test_edicts[1].movetype = MOVETYPE_NONE;
+	test_edicts[1].solid = SOLID_NOT;
+	test_edicts[1].svflags = 0;
+	test_edicts[1].use = target_laser_use;
+	test_edicts[1].think = target_laser_think;
+	test_edicts[1].nextthink = 1.1f;
+	test_edicts[1].wait = 0.0f;
+	test_edicts[1].enemy = &test_edicts[2];
+	test_edicts[2].targetname = "laser-end";
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	laser = NodeByKey(&view, 1U);
+	CHECK(laser && laser->kind == SG_MECH_NODE_TARGET_LASER);
+	CHECK(laser && laser->spawnflags == 17U);
+	CHECK(laser && laser->use_callback ==
+	    SG_MECH_CALLBACK_USE_TARGET_LASER);
+	CHECK(laser && laser->think_callback ==
+	    SG_MECH_CALLBACK_THINK_TARGET_LASER);
+	CHECK(laser && (laser->flags & SG_MECH_NODEF_INVENTORY_ONLY) == 0U);
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+
+	test_edicts[1].spawnflags &= ~1;
+	test_edicts[1].svflags |= SVF_NOCLIENT;
+	test_edicts[1].think = NULL;
+	test_edicts[1].nextthink = 0.0f;
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+	test_edicts[1].use = UnknownUse;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+}
+
+static void TestTimedVaultLaserPendingInitializerSealsFinalContract(void)
+{
+	sg_mech_catalog_view_t view;
+	const rune_mechanism_node_t *laser;
+
+	memset(&game, 0, sizeof(game));
+	memset(&level, 0, sizeof(level));
+	memset(&gi, 0, sizeof(gi));
+	memset(&globals, 0, sizeof(globals));
+	memset(test_edicts, 0, sizeof(test_edicts));
+	memset(&sg_host, 0, sizeof(sg_host));
+	g_edicts = test_edicts;
+	game.maxentities = TEST_EDICTS;
+	globals.num_edicts = 4;
+	sg_host.level_alloc = TestAlloc;
+	sg_host.level_free = TestFree;
+	SG_MechCatalogBegin();
+	InitializeEntity(1U, "target_laser");
+	InitializeEntity(2U, "info_notnull");
+	InitializeEntity(3U, "info_notnull");
+	test_edicts[1].target = "laser-end";
+	test_edicts[1].targetname = "vault-lasers";
+	test_edicts[1].spawnflags = 17;
+	test_edicts[1].think = target_laser_start;
+	test_edicts[1].nextthink = 1.0f;
+	test_edicts[1].wait = 0.0f;
+	test_edicts[2].targetname = "laser-end";
+	test_edicts[3].targetname = "wrong-end";
+	CHECK(SG_MechCatalogSeal() == SG_MECH_CATALOG_READY);
+	CHECK(SG_MechCatalogSnapshot(&view) == SG_MECH_CATALOG_READY);
+	laser = NodeByKey(&view, 1U);
+	CHECK(laser && laser->kind == SG_MECH_NODE_TARGET_LASER);
+	CHECK(laser && laser->flags ==
+	    (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE));
+	CHECK(laser && laser->use_callback ==
+	    SG_MECH_CALLBACK_USE_TARGET_LASER);
+	CHECK(laser && laser->think_callback ==
+	    SG_MECH_CALLBACK_THINK_TARGET_LASER);
+	CHECK(laser && (laser->flags & SG_MECH_NODEF_INVENTORY_ONLY) == 0U);
+
+	/* The catalog is projected, not the world: stock still owns the delayed
+	 * initializer.  Once it publishes the authored START_ON state, that exact
+	 * live entity must satisfy the sealed controller contract. */
+	CHECK(test_edicts[1].use == NULL);
+	CHECK(test_edicts[1].think == target_laser_start);
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+	test_edicts[1].movetype = MOVETYPE_NONE;
+	test_edicts[1].solid = SOLID_NOT;
+	test_edicts[1].svflags = 0;
+	test_edicts[1].use = target_laser_use;
+	test_edicts[1].think = target_laser_think;
+	test_edicts[1].nextthink = 1.1f;
+	test_edicts[1].enemy = &test_edicts[2];
+	CHECK(SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+	test_edicts[1].enemy = &test_edicts[3];
+	CHECK(!SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+	test_edicts[1].enemy = NULL;
+	CHECK(!SG_MechCatalogEntityExecutionMatches(1U, laser,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+}
+
 int main(void)
 {
 	TestSealedCatalog();
@@ -1754,7 +2153,11 @@ int main(void)
 	TestPushVelocitySealed();
 	TestPostFindTrainGateCatalog();
 	TestPostFindTrainShootGateCatalog();
+	TestTrainStationCatalog();
 	TestTrainGateExecutionTuples();
+	TestRelayWallCatalogStates();
+	TestTimedVaultLaserCatalogStates();
+	TestTimedVaultLaserPendingInitializerSealsFinalContract();
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d mechanism catalog test(s) failed\n", failures);

@@ -7,11 +7,13 @@
 
 #define SG_ACTION_DESC_ROW(symbol_, id_, runtime_supported_, default_prov_, \
 	provenance_mask_, mode_mask_, trait_mask_, endpoint_, suffix_anchor_, \
-	preopen_anchor_, ride_anchor_, control_, mechanism_, effective_suffix_, \
+	secondary_control_, preopen_anchor_, ride_anchor_, control_, mechanism_, \
+	effective_suffix_, \
 	bias_policy_, bias_ms_, name_, short_name_, color_) \
 	{ symbol_, runtime_supported_, default_prov_, provenance_mask_, mode_mask_, \
-	  trait_mask_, endpoint_, suffix_anchor_, preopen_anchor_, ride_anchor_, \
-	  control_, mechanism_, effective_suffix_, bias_policy_, bias_ms_, \
+	  trait_mask_, endpoint_, suffix_anchor_, secondary_control_, \
+	  preopen_anchor_, ride_anchor_, control_, mechanism_, effective_suffix_, \
+	  bias_policy_, bias_ms_, \
 	  #symbol_, name_, short_name_, color_ },
 
 static const sg_action_desc_t sg_action_descs[SG_ACTION_COUNT] =
@@ -145,6 +147,18 @@ int SG_ActionRuntimeHasTrait(int action, unsigned int trait)
 int SG_ActionUsesHookPolicy(int action)
 {
 	return SG_ActionEffectiveSuffix(action) == RL_HOOK;
+}
+
+int SG_ActionSecondaryControlPolicy(int action)
+{
+	const sg_action_desc_t *desc = SG_ActionDescribe(action);
+
+	return desc ? (int)desc->secondary_control_policy : -1;
+}
+
+int SG_ActionHasSecondaryControl(int action)
+{
+	return SG_ActionSecondaryControlPolicy(action) > RLSCP_NONE;
 }
 
 int SG_ActionFieldBiasMs(int action, int rope_bias_ms)

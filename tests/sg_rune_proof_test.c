@@ -212,6 +212,40 @@ int main(void)
 	SG_RuneProofScopeEnd();
 	CHECK(!SG_RuneProofScopeActive());
 	CHECK(SG_RuneProofGravity() == 800);
+
+	{
+		sg_rune_proof_hook_seed_t low_gravity_seeds[2];
+		sg_rune_proof_hook_candidate_t output[1];
+		sg_rune_proof_hook_frontier_t low_gravity;
+		uint16_t component_trials_local[2], source_trials_local[2];
+		size_t source_cursor_local[2], component_cursor_local[2];
+
+		memset(low_gravity_seeds, 0, sizeof(low_gravity_seeds));
+		low_gravity_seeds[0].component = 0;
+		low_gravity_seeds[0].objective_mask = 1;
+		low_gravity_seeds[0].stable = 1;
+		low_gravity_seeds[1].origin_q8[0] = 1200 * 8;
+		low_gravity_seeds[1].component = 1;
+		low_gravity_seeds[1].objective_mask = 2;
+		low_gravity_seeds[1].stable = 1;
+		memset(&low_gravity, 0, sizeof(low_gravity));
+		low_gravity.seeds = low_gravity_seeds;
+		low_gravity.seed_count = 2;
+		low_gravity.component_count = 2;
+		low_gravity.global_limit = 1;
+		low_gravity.component_limit = 1;
+		low_gravity.source_limit = 1;
+		low_gravity.component_trials = component_trials_local;
+		low_gravity.source_trials = source_trials_local;
+		low_gravity.source_cursor = source_cursor_local;
+		low_gravity.component_source_cursor = component_cursor_local;
+		low_gravity.output = output;
+		low_gravity.output_capacity = 1;
+		CHECK(SG_RuneProofSelectHookFrontier(&low_gravity) == 0);
+		CHECK(SG_RuneProofScopeBegin(100.0f));
+		CHECK(SG_RuneProofSelectHookFrontier(&low_gravity) == 1);
+		SG_RuneProofScopeEnd();
+	}
 	CHECK(SG_RuneProofScopeBegin(800.0f));
 	CHECK(SG_RuneProofGravity() == 800);
 	SG_RuneProofScopeEnd();

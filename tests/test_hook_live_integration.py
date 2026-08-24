@@ -12,6 +12,8 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[1] / "slipgate" / "sg_move.c"
 text = SOURCE.read_text(encoding="utf-8")
+HOOK_GAME = (Path(__file__).resolve().parents[1] / "slipgate" /
+             "sg_hook_game.c").read_text(encoding="utf-8")
 P_VIEW = (Path(__file__).resolve().parents[1] / "p_view.c").read_text(
     encoding="utf-8"
 )
@@ -44,7 +46,13 @@ def body(start: str, end: str) -> str:
     return text[begin:finish]
 
 
-legacy = body("static qboolean Hook_LiveLegacyCommand", "static void Hook_LiveResultLog")
+def hook_game_body(start: str, end: str) -> str:
+    begin = HOOK_GAME.index(start)
+    finish = HOOK_GAME.index(end, begin)
+    return HOOK_GAME[begin:finish]
+
+
+legacy = hook_game_body("static qboolean Hook_LiveLegacyCommand", "static void Hook_LiveResultLog")
 assert "hook_legacy_command_bot" in legacy
 assert "bot->hook_legacy_settle" in legacy
 assert "bot->hook_legacy_arrived" in legacy
@@ -54,19 +62,19 @@ assert "state->" not in legacy
 assert "SG_HookReplaySettled" not in legacy
 assert "bot->hook_replay" not in legacy
 
-observation = body("static void Hook_LiveObservation", "static const sg_bot_t *hook_legacy_command_bot")
+observation = hook_game_body("static void Hook_LiveObservation", "static const sg_bot_t *hook_legacy_command_bot")
 assert "sample_settlement_contact && bot->hook_legacy_settle" in observation
 assert "observation->contact_clear = Hook_SettleArrived(e, bot);" in observation
 assert observation.count("Hook_SettleArrived(e, bot)") == 1
 
-shelves = body("static float Hook_LiveShelfSeconds", "static void Hook_LiveSync")
+shelves = hook_game_body("static float Hook_LiveShelfSeconds", "static void Hook_LiveSync")
 assert "SG_HOOK_REPLAY_SETTLE" in shelves and "return 60.0f;" in shelves
 assert "SG_HOOK_REPLAY_WAIT_PULL" in shelves
 assert "SG_HOOK_REPLAY_PULL_FRAME" in shelves
 assert "return 30.0f;" in shelves
 assert "SG_REPLAY_REASON_HAZARDOUS_LIQUID ? 30.0f : 15.0f" in shelves
 
-active = body("static qboolean Hook_LiveActiveFrame", "void SG_HookLiveEndFrame")
+active = hook_game_body("static qboolean Hook_LiveActiveFrame", "void SG_HookLiveEndFrame")
 assert "Hook_SourceStateOK(e, bot)" in active
 assert "Hook_LiveWitnessOK(e, bot)" in active
 assert "Hook_AttachmentMaintained(e, bot)" in active
@@ -90,18 +98,18 @@ assert "expected = command" not in active
 active_guard = active.index("SG_HookLiveValidateStoredFinalCommand")
 assert active_guard < active.index("ClientThink(e, &command);", active_guard)
 preflight = active[:active.index("if (replay_phase == SG_HOOK_REPLAY_FLIGHT)")]
-assert "Hook_GraphFail(e, bot, 30.0f);" in preflight
+assert "SG_HookGameFail(e, bot, 30.0f);" in preflight
 identity = active[:active.index("if (replay_phase == SG_HOOK_REPLAY_FLIGHT)")]
-assert identity.index("Hook_GraphFail(e, bot, 30.0f);") < identity.index(
+assert identity.index("SG_HookGameFail(e, bot, 30.0f);") < identity.index(
     "if (!Hook_LiveIdentityCurrent(e, bot))"
 )
 assert "replay_phase == SG_HOOK_REPLAY_PULL_FRAME" in identity
-assert "Hook_GraphFail(e, bot, 15.0f);" in identity
+assert "SG_HookGameFail(e, bot, 15.0f);" in identity
 
-retire = body("static qboolean Hook_LiveRetireNonRunning", "static qboolean Hook_LiveWaitAttachFrame")
+retire = hook_game_body("static qboolean Hook_LiveRetireNonRunning", "static qboolean Hook_LiveWaitAttachFrame")
 assert "Hook_LiveSync(bot);" in retire
 
-wait_attach = body("static qboolean Hook_LiveWaitAttachFrame", "static qboolean Hook_LiveActiveFrame")
+wait_attach = hook_game_body("static qboolean Hook_LiveWaitAttachFrame", "static qboolean Hook_LiveActiveFrame")
 assert "entry_pms = e->client->ps.pmove;" in wait_attach
 assert "entry_pose.pms = entry_pms;" in wait_attach
 assert "SG_HookLiveWaitAttachStep" in wait_attach
@@ -116,7 +124,7 @@ assert "SG_HookLivePostStep" not in wait_attach
 assert "Hook_LiveTailCommand(bot, false, &entry_pms" in wait_attach
 assert "for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)" in wait_attach
 assert "if (!failed && e->waterlevel > 0" in wait_attach
-assert "Hook_GraphFail(e, bot, 30.0f);" in wait_attach
+assert "SG_HookGameFail(e, bot, 30.0f);" in wait_attach
 assert "Hook_AttachmentOK" not in wait_attach
 
 late_wait = "if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH &&"
@@ -129,10 +137,10 @@ assert "e->client->hookstate == 1 && e->client->hook" in late_branch
 assert "Hook_SourceStateOK(e, bot)" in late_branch
 assert "Hook_LiveWitnessOK(e, bot)" in late_branch
 assert "SG_TimerReadyStrict(bot->hook_deadline)" in late_branch
-assert "Hook_GraphFail(e, bot, 15.0f);" in late_branch
+assert "SG_HookGameFail(e, bot, 15.0f);" in late_branch
 assert "return Hook_LiveWaitAttachFrame(bot, e, link_index);" in late_branch
 assert "if (!Hook_AttachmentOK(e, bot))" in attach_branch
-assert "Hook_GraphFail(e, bot, 15.0f);" in attach_branch
+assert "SG_HookGameFail(e, bot, 15.0f);" in attach_branch
 assert active.count("SG_HookLiveAttached(") == 1
 
 bridge = ADAPTER[ADAPTER.index("sg_hook_live_result_t SG_HookLiveWaitAttachStep"):ADAPTER.index("sg_hook_live_result_t SG_HookLiveValidateFinalCommand")]
@@ -184,13 +192,13 @@ assert CLIENT.count("&bot->hook_final_guard);") == 1
 assert ARACH.count("&bot->hook_final_guard);") == 2
 assert "SG_HookLiveCommandGuardClear(&bot->hook_final_guard);" not in CLIENT
 assert "SG_HookLiveCommandGuardClear(&bot->hook_final_guard);" not in ARACH
-assert text.count("Hook_LiveClearFinalGuard(bot);") == 4
+assert HOOK_GAME.count("Hook_LiveClearFinalGuard(bot);") == 4
 assert ADAPTER_TEST.count("command.buttons = BUTTON_USE;") >= 2
 assert ADAPTER_TEST.count("SG_HookLiveValidateStoredFinalCommand") >= 5
 assert "Reset itself must discard an unconsumed bridge approval" in ADAPTER_TEST
 assert "Begin is also a lifecycle boundary" in ADAPTER_TEST
 
-endframe = body("void SG_HookLiveEndFrame", "static qboolean Hook_LiveBeginAfterFire")
+endframe = hook_game_body("void SG_HookLiveEndFrame", "qboolean SG_HookGameBeginAfterFire")
 assert "SG_HookLivePullApplied" in endframe
 assert "Hook_LiveSync(bot)" in endframe
 assert "bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL" in endframe
@@ -204,12 +212,13 @@ pull = P_VIEW.index("Weapon_Hook_Fire(ent);")
 observe = P_VIEW.index("SG_HookLiveEndFrame(ent);", pull)
 assert pull < observe
 
-hook_stage = body("if (l->action == RL_HOOK", "hook_stage_done: ;")
+hook_stage = body("if ((l->action == RL_HOOK || l->action == RL_CHAIN_HOOK)",
+                  "hook_stage_done: ;")
 assert "SG_HookStageSourceCompatible" in hook_stage
 source_reject = hook_stage.index("if (!SG_HookStageSourceCompatible")
 source_abort = hook_stage.index("ballistic_abort = true;", source_reject)
 source_release = hook_stage.index(
-    "SG_StagedTraversalCancel(bot, RL_HOOK);", source_reject)
+    "SG_StagedTraversalCancel(bot, l->action);", source_reject)
 assert source_reject < source_release < source_abort
 worth = hook_stage.index("SG_HookCurrentRideWorth")
 decode = hook_stage.index("SG_HookControlDecode")
@@ -218,16 +227,17 @@ assert "Fields_LinkTraversalCostMs(l)" in hook_stage
 assert "!SG_HookRideLaunchAllowed(worth)" in hook_stage
 assert '"value-unassessed"' in hook_stage
 assert '"value-skip"' in hook_stage
-assert 'Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,' in hook_stage
+assert "SG_HookGameDisciplineRetire(" in hook_stage
+assert "e, bot, bestlink, 5.0f, false," in hook_stage
 assert '"decode-retire"' in hook_stage
 assert hook_stage.index('"decode-retire"') > decode
 assert "SG_HOOK_RIDE_UNASSESSED" in DISCIPLINE
 assert "from_goal > to_goal + SG_HOOK_DISCIPLINE_SERVED_FIELD_MS" in DISCIPLINE
 
-discipline_retire = body("static void Hook_DisciplineRetire",
-                         "qboolean SG_HookOffhandReady")
+discipline_retire = hook_game_body("void SG_HookGameDisciplineRetire",
+                                   "qboolean SG_HookOffhandReady")
 assert "Hook_ShelveLink(bot, link_index, shelf_seconds);" in discipline_retire
-assert "SG_StagedTraversalCancel(bot, RL_HOOK);" in discipline_retire
+assert "SG_StagedTraversalCancel(bot, SG_Rune()->links[link_index].action);" in discipline_retire
 assert "SG_Rune()->links[link_index].action != RL_HOOK" in discipline_retire
 assert "if (failure)" in discipline_retire
 assert "hookban_until" not in discipline_retire
@@ -236,24 +246,24 @@ assert "HOOKDISC" in discipline_retire
 assert "hookban_until" not in DESCEND
 assert "hookban_until" not in BOT
 
-graph_fail = body("static void Hook_GraphFail", "static void Hook_DisciplineRetire")
+graph_fail = hook_game_body("void SG_HookGameFail", "void SG_HookGameDisciplineRetire")
 assert "SG_HookFailureStreakAdvance" not in graph_fail
 
 aim_start = text.index("else if (bot->hook_phase == 1 && SG_TimerReadyStrict(")
 aim_end = text.index("else if (bot->hook_phase == 1)", aim_start + 1)
 aim = text[aim_start:aim_end]
-assert 'Hook_DisciplineRetire(e, bot, failed_link, 5.0f, true,' in aim
+assert 'SG_HookGameDisciplineRetire(e, bot, failed_link, 5.0f, true,' in aim
 assert '"aim-retire"' in aim
 assert "hookfail_streak" not in aim
 assert "if (failed_speedhook)" in aim
 speedhook_timeout = aim[aim.index("if (failed_speedhook)"):aim.index("else", aim.index("if (failed_speedhook)"))]
-assert "Hook_DisciplineRetire" not in speedhook_timeout
+assert "SG_HookGameDisciplineRetire" not in speedhook_timeout
 
 fire_end = text.index("else if (bot->hook_phase == 2)", aim_end)
 fire = text[aim_end:fire_end]
 fire_worth = fire.index("SG_HookCurrentRideWorth")
 fire_retire = fire.index('"value-fire-skip"')
-fire_proof = fire.index("Hook_OnlineProof")
+fire_proof = fire.index("SG_HookGameOnlineProof")
 fire_command = fire.index("Cmd_Hook_f(e);")
 assert fire_worth < fire_retire < fire_proof < fire_command
 assert "route_field[hook_link->from]" in fire
@@ -289,8 +299,8 @@ assert "route_field[bot->seed]" in landing_value
 assert "route_field[hl->to]" in landing_value
 assert "goal_field[bot->seed]" not in landing_value
 assert "goal_field[hl->to]" not in landing_value
-assert 'Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
+assert 'SG_HookGameDisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]
-assert "Hook_LiveBeginAfterFire" in fire
+assert "SG_HookGameBeginAfterFire" in fire
 
 print("hook_live_integration_contract: ok")

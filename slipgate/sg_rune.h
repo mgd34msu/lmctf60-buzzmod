@@ -50,6 +50,8 @@
                              * two-objective route core; has no links and
                              * makes localization fail closed instead of
                              * snapping through it to a farther live seed */
+#define RSF_OBJECTIVE	4   /* authenticated local-only flag root; may be a
+                             * terminal graph sink */
 
 /* Fail-closed native controller markers retained by the runtime adapter. */
 #define RUNE_DECLARED_CONTROL_MARKER 254
@@ -78,6 +80,8 @@ typedef struct rune_link_s
 	/* Mechanism compounds retain an independent witness and temporal boundary.
 	 * Actions without those policies keep both fields exactly zero; their
 	 * contract still determines which traversal modes are legal. */
+	/* Action-discriminated wire bytes 28..39: mechanism witness for declared
+	 * actions, secondary hook control for RL_CHAIN_HOOK, exact zero otherwise. */
 	vec3_t	mechanism_anchor;
 	unsigned short sweep_clear_ms;
 	byte	mode;
@@ -108,6 +112,7 @@ typedef struct rune_identity_s
 typedef struct rune_artifact_s
 {
 	uint32_t magic;
+	uint16_t route_contract;
 	uint32_t payload_crc32;
 	uint32_t header_crc32;
 	uint32_t action_contract_crc32;
@@ -250,6 +255,7 @@ float		SG_OracleRocketJumpCeiling(void);
 
 /* sg_rune.c -- generation and IO */
 qboolean	Rune_Generate(const char *mapname);     /* seeds + proves + writes */
+qboolean	Rune_Update(const char *mapname);       /* source-bound human update */
 rune_t		*Rune_Load(const char *mapname);
 void		Rune_Free(rune_t *rune);
 void		Rune_DumpVisual(const rune_t *rune, const char *path);  /* html */

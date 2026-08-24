@@ -66,6 +66,12 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	abort();
 }
 
+void SG_ChainHookGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+	abort();
+}
+
 int SG_TrainGateGameOwns(const sg_bot_t *bot)
 {
 	(void)bot;
@@ -73,6 +79,12 @@ int SG_TrainGateGameOwns(const sg_bot_t *bot)
 }
 
 void SG_TrainGateGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+	abort();
+}
+
+void SG_TrainStationGameReset(sg_bot_t *bot)
 {
 	(void)bot;
 	abort();

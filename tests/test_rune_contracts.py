@@ -52,7 +52,7 @@ class RuneContractTests(unittest.TestCase):
             set(contract["mechanism_contract"]),
         )
         for action in contract["actions"]:
-            self.assertEqual(16, len(action))
+            self.assertEqual(17, len(action))
         for requirement in contract["mechanism_contract"]["action_requirements"]:
             for plan in requirement["plans"]:
                 self.assertEqual({"controller"}, set(plan))
@@ -124,6 +124,7 @@ class RuneContractTests(unittest.TestCase):
         self.assertEqual(14, GENERATED.RL_TRAIN)
         self.assertEqual(8, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN)
         self.assertEqual(9, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT)
+        self.assertEqual(11, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_STATION)
         self.assertEqual(28, GENERATED.mechanism_controller_plan_flags(
             GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
         ))
@@ -137,9 +138,12 @@ class RuneContractTests(unittest.TestCase):
             (GENERATED.RL_DOOR, GENERATED.SG_MECHANISM_CONTROLLER_AUTO_DOOR),
             (GENERATED.RL_DOOR, GENERATED.SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR),
             (GENERATED.RL_BUTTON_DOOR, GENERATED.SG_MECHANISM_CONTROLLER_BUTTON_DOOR),
+            (GENERATED.RL_BUTTON_DOOR, GENERATED.SG_MECHANISM_CONTROLLER_RELAY_DOOR),
+            (GENERATED.RL_BUTTON_DOOR, GENERATED.SG_MECHANISM_CONTROLLER_TIMED_VAULT),
             (GENERATED.RL_PUSH, GENERATED.SG_MECHANISM_CONTROLLER_PUSH),
             (GENERATED.RL_TRAIN, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN),
             (GENERATED.RL_TRAIN, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_SHOOT),
+            (GENERATED.RL_TRAIN, GENERATED.SG_MECHANISM_CONTROLLER_TRAIN_STATION),
         }
         for action in range(GENERATED.ACTION_COUNT):
             for controller in expected_flags:
@@ -155,6 +159,46 @@ class RuneContractTests(unittest.TestCase):
         self.assertFalse(
             GENERATED.action_mechanism_plan_required(GENERATED.RL_DOOR_HOOK)
         )
+
+    def test_chain_hook_is_planless_wire_only_with_secondary_control(self):
+        action = GENERATED.action_contract(GENERATED.RL_CHAIN_HOOK)
+        self.assertTrue(GENERATED.is_runtime_supported(GENERATED.RL_CHAIN_HOOK))
+        self.assertTrue(
+            GENERATED.action_mechanism_admitted(GENERATED.RL_CHAIN_HOOK)
+        )
+        self.assertFalse(
+            GENERATED.action_mechanism_plan_required(GENERATED.RL_CHAIN_HOOK)
+        )
+        self.assertEqual(GENERATED.RL_HOOK, action["effective_suffix"])
+        self.assertEqual(
+            GENERATED.RLSCP_HOOK_CONTROL,
+            action["secondary_control_policy"],
+        )
+        self.assertEqual(GENERATED.RLMP_NONE, action["mechanism_policy"])
+
+        for mutate in (
+            lambda row: row.__setitem__("mechanism_policy", 1),
+            lambda row: row.__setitem__("mode_mask", 3),
+            lambda row: row.__setitem__("secondary_control_policy", 0),
+        ):
+            malformed = copy.deepcopy(self.document)
+            mutate(malformed["contract"]["actions"][GENERATED.RL_CHAIN_HOOK])
+            with self.assertRaises(GENERATOR.ContractError):
+                GENERATOR.validate_document(malformed)
+
+        malformed = copy.deepcopy(self.document)
+        malformed["contract"]["actions"][GENERATED.RL_DOOR_HOOK][
+            "secondary_control_policy"
+        ] = GENERATED.RLSCP_HOOK_CONTROL
+        with self.assertRaises(GENERATOR.ContractError):
+            GENERATOR.validate_document(malformed)
+
+        malformed = copy.deepcopy(self.document)
+        malformed["contract"]["actions"][GENERATED.RL_RUN][
+            "secondary_control_policy"
+        ] = GENERATED.RLSCP_HOOK_CONTROL
+        with self.assertRaises(GENERATOR.ContractError):
+            GENERATOR.validate_document(malformed)
 
     def test_wire_diagnostics_are_current(self):
         symbols = [entry["symbol"] for entry in self.document["wire_diagnostics"]]

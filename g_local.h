@@ -824,6 +824,7 @@ edict_t *G_Find (edict_t *from, int fieldofs, char *match);
 edict_t *findradius (edict_t *from, vec3_t org, float rad);
 edict_t *findallradius (edict_t *from, vec3_t org, float rad); // LM_JORM
 edict_t *G_PickTarget (char *targetname);
+void	Think_Delay (edict_t *ent);
 void	G_UseTargets (edict_t *ent, edict_t *activator);
 void	G_SetMovedir (vec3_t angles, vec3_t movedir);
 
@@ -1584,6 +1585,8 @@ struct edict_s
 	/* Exact source incarnation for a bot-owned delayed target callback. */
 	uint32_t        sg_delayed_source_key;
 	uint32_t        sg_delayed_source_generation;
+	struct sg_relay_wall_game_state_s *sg_relay_wall_live;
+	struct sg_timed_vault_game_runtime_state_s *sg_timed_vault_live;
 	// END CTF CODE
 
 };

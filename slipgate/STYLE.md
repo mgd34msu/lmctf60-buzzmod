@@ -8,13 +8,14 @@
 - Split a file when unrelated state or lifecycle rules appear in it.
 
 `tools/source-size-budget.json` records current size debt in authored source.
-New files may contain at most 800 lines. Files without a recorded line-length
-exception may not contain lines over 100 columns after tab expansion. Existing
-exceptions may not grow. When a change reduces an exception, lower the recorded
-value in the same commit.
+Eight hundred lines is the default review threshold, not a hard module limit.
+A cohesive module may exceed it when another split would divide one subsystem;
+record that allowance explicitly. Files without a recorded line-length
+exception may not contain lines over 100 columns after tab expansion.
 
-The budget is a ceiling, not a target. Split a file at a subsystem, state owner,
-or lifecycle boundary. Do not split a file into numbered fragments.
+Do not grow an existing monolith merely because it already has an allowance.
+Split at a subsystem, state owner, or lifecycle boundary. Do not split a file
+into numbered fragments or manufacture tiny files to satisfy a line count.
 
 ## Functions and state
 

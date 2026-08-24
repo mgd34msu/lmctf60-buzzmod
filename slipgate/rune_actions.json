@@ -10,11 +10,11 @@
         "node92=key:u32@0,kind:u16@4,flags:u16@6,classname:u32@8,target:u32@12,targetname:u32@16,killtarget:u32@20,owner:u32@24,team_master:u32@28,spawnflags:u32@32,touch:u16@36,use:u16@38,think:u16@40,blocked:u16@42,delay:i32@44,wait:i32@48,speed_q8:u32@52,accel_q8:u32@56,decel_q8:u32@60,absmin_q8:i16x3@64,absmax_q8:i16x3@70,pathtarget:u32@76,push_velocity:f32x3@80;",
         "edge16=from:u32@0,to:u32@4,kind:u16@8,ordinal:u16@10,delay_ms:u32@12;",
         "plan32=entry:u32@0,mover:u32@4,first_edge:u32@8,num_edges:u32@12,controller:u16@16,reserved:u16@18=0,flags:u16@20,members:u16@22,cooldown_ms:u32@24,closure_crc32:u32@28;",
-        "node.kind=none:0,trigger:1,button:2,relay:3,door_master:4,door_member:5,auto_door_trigger:6,platform:7,platform_trigger:8,train:9,path_corner:10,elevator:11,push:12,teleporter:13,teleport_trigger:14,teleport_dest:15,objective:16,secret_door:17,other_trigger:18,other_mover:19,contextual:20,target_speaker:21,areaportal:22;",
+		"node.kind=none:0,trigger:1,button:2,relay:3,door_master:4,door_member:5,auto_door_trigger:6,platform:7,platform_trigger:8,train:9,path_corner:10,elevator:11,push:12,teleporter:13,teleport_trigger:14,teleport_dest:15,objective:16,secret_door:17,other_trigger:18,other_mover:19,contextual:20,target_speaker:21,areaportal:22,toggle_wall:23,trigger_hurt:24,target_laser:25;",
         "node.flags=synthetic:1,repeatable:2,touchable:4,usable:8,mover:16,team_master:32,team_member:64,inventory_only:128,one_shot:256,shootable:512,start_disabled:1024,frame_complete_mover:2048,mask:4095;",
-        "callback=none:0,touch_multi:1,touch_door_trigger:2,button_touch:3,use_multi:4,button_use:5,think_multi_wait:6,think_button_wait:7,blocked_door:8,use_trigger_relay:9,use_door:10,think_calc_move_speed:11,think_spawn_door_trigger:12,trigger_enable:13,touch_plat_center:14,use_plat:15,plat_go_down:16,blocked_plat:17,train_use:18,func_train_find:19,train_next:20,train_wait:21,blocked_train:22,elevator_use:23,elevator_init:24,push_touch:25,teleporter_touch:26,path_corner_touch:27,touch_item:28,think_delay:29,secret_door_use:30,secret_door_blocked:31,use_target_speaker:32,use_areaportal:33,unknown:65535;",
+		"callback=none:0,touch_multi:1,touch_door_trigger:2,button_touch:3,use_multi:4,button_use:5,think_multi_wait:6,think_button_wait:7,blocked_door:8,use_trigger_relay:9,use_door:10,think_calc_move_speed:11,think_spawn_door_trigger:12,trigger_enable:13,touch_plat_center:14,use_plat:15,plat_go_down:16,blocked_plat:17,train_use:18,func_train_find:19,train_next:20,train_wait:21,blocked_train:22,elevator_use:23,elevator_init:24,push_touch:25,teleporter_touch:26,path_corner_touch:27,touch_item:28,think_delay:29,secret_door_use:30,secret_door_blocked:31,use_target_speaker:32,use_areaportal:33,use_func_wall:34,touch_hurt:35,use_hurt:36,use_target_laser:37,think_target_laser:38,unknown:65535;",
         "edge.kind=none:0,target:1,killtarget:2,owner:3,team:4,path_target:5,move_target:6,target_ent:7,enemy:8,route_target:9;",
-        "controller_ids=none:0,auto_door:1,direct_trigger_door:2,button_door:3,relay_door:4,platform:5,teleport:6,push:7,train:8,train_shoot:9;",
+		"controller_ids=none:0,auto_door:1,direct_trigger_door:2,button_door:3,relay_door:4,platform:5,teleport:6,push:7,train:8,train_shoot:9,timed_vault:10,train_station:11;",
         "plan.flags=touch:1,use:2,atomic:4,requires_lease:8,shoot:16,mask:31;",
         "null_key=4294967295,no_plan=4294967295;",
         "limits=seeds:32768,links:262144,nodes:8192,edges:262144,plans:262144,plan_edges:65536,strings:1048576,plan_time_ms:30000,node_time_ms:int32,edge_delay_ms:uint32,q8:262136,members:16;",
@@ -45,7 +45,7 @@
         {
           "id": 4,
           "symbol": "SG_MECHANISM_CONTROLLER_RELAY_DOOR",
-          "plan_flags": 0
+          "plan_flags": 13
         },
         {
           "id": 5,
@@ -71,6 +71,16 @@
           "id": 9,
           "symbol": "SG_MECHANISM_CONTROLLER_TRAIN_SHOOT",
           "plan_flags": 28
+		},
+		{
+		  "id": 10,
+		  "symbol": "SG_MECHANISM_CONTROLLER_TIMED_VAULT",
+		  "plan_flags": 13
+		},
+		{
+		  "id": 11,
+		  "symbol": "SG_MECHANISM_CONTROLLER_TRAIN_STATION",
+		  "plan_flags": 12
         }
       ],
       "action_requirements": [
@@ -181,7 +191,13 @@
           "plans": [
             {
               "controller": 3
-            }
+            },
+          {
+            "controller": 4
+		  },
+		  {
+			"controller": 10
+          }
           ]
         },
         {
@@ -206,8 +222,18 @@
             },
             {
               "controller": 9
+			},
+			{
+			  "controller": 11
             }
           ]
+        },
+        {
+          "action": 15,
+          "admitted": 1,
+          "plan_required": 0,
+          "link_policy_action": 15,
+          "plans": []
         }
       ]
     },
@@ -430,6 +456,16 @@
         "symbol": "RLAP_TRAIN_CROSS"
       }
     ],
+    "secondary_control_policies": [
+      {
+        "id": 0,
+        "symbol": "RLSCP_NONE"
+      },
+      {
+        "id": 1,
+        "symbol": "RLSCP_HOOK_CONTROL"
+      }
+    ],
     "control_policies": [
       {
         "id": 0,
@@ -503,6 +539,7 @@
         "trait_mask": 0,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 1,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 0,
@@ -521,6 +558,7 @@
         "trait_mask": 3,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 0,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 1,
@@ -539,6 +577,7 @@
         "trait_mask": 3,
         "endpoint_policy": 2,
         "suffix_anchor_policy": 2,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 2,
@@ -557,6 +596,7 @@
         "trait_mask": 1,
         "endpoint_policy": 4,
         "suffix_anchor_policy": 3,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 3,
@@ -575,6 +615,7 @@
         "trait_mask": 33,
         "endpoint_policy": 3,
         "suffix_anchor_policy": 0,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 4,
@@ -593,6 +634,7 @@
         "trait_mask": 37,
         "endpoint_policy": 0,
         "suffix_anchor_policy": 4,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 5,
@@ -611,6 +653,7 @@
         "trait_mask": 37,
         "endpoint_policy": 0,
         "suffix_anchor_policy": 5,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 5,
@@ -629,6 +672,7 @@
         "trait_mask": 3,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 7,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 6,
@@ -647,6 +691,7 @@
         "trait_mask": 37,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 6,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 5,
@@ -665,6 +710,7 @@
         "trait_mask": 125,
         "endpoint_policy": 2,
         "suffix_anchor_policy": 2,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 8,
         "ride_mechanism_anchor_policy": 9,
         "control_policy": 2,
@@ -683,6 +729,7 @@
         "trait_mask": 125,
         "endpoint_policy": 5,
         "suffix_anchor_policy": 0,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 8,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 4,
@@ -701,6 +748,7 @@
         "trait_mask": 125,
         "endpoint_policy": 6,
         "suffix_anchor_policy": 3,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 8,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 3,
@@ -719,6 +767,7 @@
         "trait_mask": 125,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 6,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 8,
         "ride_mechanism_anchor_policy": 9,
         "control_policy": 5,
@@ -737,6 +786,7 @@
         "trait_mask": 39,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 0,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 0,
         "ride_mechanism_anchor_policy": 0,
         "control_policy": 5,
@@ -755,12 +805,32 @@
         "trait_mask": 61,
         "endpoint_policy": 1,
         "suffix_anchor_policy": 4,
+        "secondary_control_policy": 0,
         "preopen_mechanism_anchor_policy": 10,
         "ride_mechanism_anchor_policy": 4,
         "control_policy": 5,
         "mechanism_policy": 2,
         "effective_suffix": 14,
         "field_bias_policy": 0,
+        "field_bias_ms": 0
+      },
+      {
+        "id": 15,
+        "symbol": "RL_CHAIN_HOOK",
+        "runtime_supported": 1,
+        "default_provenance": 0,
+        "provenance_mask": 1,
+        "mode_mask": 1,
+        "trait_mask": 97,
+        "endpoint_policy": 4,
+        "suffix_anchor_policy": 3,
+        "secondary_control_policy": 1,
+        "preopen_mechanism_anchor_policy": 0,
+        "ride_mechanism_anchor_policy": 0,
+        "control_policy": 3,
+        "mechanism_policy": 0,
+        "effective_suffix": 3,
+        "field_bias_policy": 3,
         "field_bias_ms": 0
       }
     ],
@@ -948,8 +1018,8 @@
     ],
     "action_range": {
       "first_action": 0,
-      "last_action": 14,
-      "descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9;seed.origin=signed_q8_exact;"
+      "last_action": 15,
+      "descriptor": "rune-action-contract;actions=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11;additional=button_door:12,push:13,train:14,chain_hook:15;button_door.link_policy=button_door:12;button_door.anchor=first_touch_support,endpoint_q8_displacement;runtime=run:0,jump:1,drop:2,hook:3,swim:4,lift:5,teleport:6,rocketjump:7,door:8,door_drop:9,door_swim:10,door_hook:11,button_door:12,push:13,train:14,chain_hook:15;disabled=;planless=run:0,jump:1,drop:2,hook:3,swim:4,rocketjump:7,door_drop:9,door_swim:10,door_hook:11,chain_hook:15;plan_required=lift:5/platform:5,teleport:6/teleport:6,door:8/auto_door:1|direct_trigger_door:2,button_door:12/button_door:3,push:13/push:7,train:14/train:8|train_shoot:9|train_station:11;seed.origin=signed_q8_exact;"
     }
   },
   "wire_diagnostics": [
@@ -1175,6 +1245,12 @@
         "name": "TRAIN",
         "short_name": "TRAIN",
         "color": "#00a6a6"
+      },
+      {
+        "id": 15,
+        "name": "CHAIN_HOOK",
+        "short_name": "C_HOOK",
+        "color": "#ff7a00"
       }
     ],
     "reasons": [

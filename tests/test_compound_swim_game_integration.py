@@ -54,7 +54,9 @@ class CompoundSwimGameIntegrationTest(unittest.TestCase):
         source = (ROOT / "slipgate" / "sg_rune.c").read_text()
         base = section(source, "static void Prove_BaseLinks(", "/* A field is useful")
         self.assertIn("Link_Doors(topology)", base)
-        generate = section(source, "qboolean Rune_Generate(", "\ncleanup:")
+        generate = section(
+            source, "static qboolean Rune_GenerateMode(", "\ncleanup:"
+        )
         snapshot = generate.index("Prove_BaseLinks(&compound_topology)")
         restore = generate.index("Doors_Restore(&doors)", snapshot)
         compound = generate.index(

@@ -11,6 +11,7 @@ struct sg_rune_stream_s
 {
 	sg_rune_stream_free_fn release;
 	void *allocation_context;
+	uint16_t route_contract;
 	sg_rune_codec_identity_t identity;
 	sg_rune_codec_seed_t *seeds;
 	uint32_t num_seeds;
@@ -118,6 +119,8 @@ static void Stream_Link(const rune_link_t *source,
 	destination->cost_ms = source->cost_ms;
 	memcpy(destination->suffix_anchor, source->anchor,
 		sizeof(destination->suffix_anchor));
+	/* The codec policy, not this mechanical adapter, decides whether bytes
+	 * 28..39 are a mechanism witness or a secondary control. */
 	memcpy(destination->mechanism_anchor, source->mechanism_anchor,
 		sizeof(destination->mechanism_anchor));
 	destination->sweep_clear_ms = source->sweep_clear_ms;
@@ -199,6 +202,7 @@ sg_rune_stream_t *SG_RuneStreamCreate(
 	if (failure_out)
 		*failure_out = Stream_Result(RLW_INVALID_ARGUMENT);
 	if (!source || !source->identity || !source->seeds ||
+	    !SG_RuneRouteContractValid(source->route_contract) ||
 	    source->num_seeds == 0U || !source->strings ||
 	    source->string_bytes == 0U || !allocate || !release ||
 	    (source->num_links != 0U && !source->links) ||
@@ -212,6 +216,7 @@ sg_rune_stream_t *SG_RuneStreamCreate(
 	memset(stream, 0, sizeof(*stream));
 	stream->release = release;
 	stream->allocation_context = allocation_context;
+	stream->route_contract = source->route_contract;
 	stream->num_seeds = source->num_seeds;
 	stream->num_links = source->num_links;
 	stream->num_nodes = source->num_nodes;
@@ -323,8 +328,9 @@ sg_rune_stream_result_t SG_RuneStreamWrite(void *opaque,
 		return Stream_Result(RLW_INVALID_ARGUMENT);
 	bridge.sink = sink;
 	bridge.context = sink_context;
-	result = SG_RuneArtifactWrite(&stream->identity, stream->seeds,
-		stream->num_seeds, stream->links, stream->num_links,
+	result = SG_RuneArtifactWrite(stream->route_contract,
+		&stream->identity, stream->seeds, stream->num_seeds, stream->links,
+		stream->num_links,
 		stream->nodes, stream->num_nodes, stream->edges, stream->num_edges,
 		stream->plans, stream->num_plans, stream->strings,
 		stream->string_bytes, &stream->workspace, Stream_Sink, &bridge);

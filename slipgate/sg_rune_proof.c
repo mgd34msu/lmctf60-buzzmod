@@ -27,6 +27,8 @@ int SG_RuneProofHookLateralWindow(float horizontal, float rise)
 
 #define SG_RUNE_PROOF_HOOK_RANKS 15
 #define SG_RUNE_PROOF_HOOK_REACH_Q8 (768 * 8)
+#define SG_RUNE_PROOF_HOOK_LOW_GRAVITY_REACH_Q8 (1600 * 8)
+#define SG_RUNE_PROOF_HOOK_LOW_GRAVITY_MAX 200
 #define SG_RUNE_PROOF_HOOK_LOCAL_Q8 (192 * 8)
 #define SG_RUNE_PROOF_HOOK_NEAR_Q8 (448 * 8)
 #define SG_RUNE_PROOF_HOOK_MAX_RISE_Q8 (512 * 8)
@@ -38,6 +40,7 @@ static int SG_RuneProofHookRank(const sg_rune_proof_hook_seed_t *from,
 {
 	int64_t dx, dy, horizontal2;
 	int32_t dz;
+	int32_t reach_q8;
 	int category, distance;
 
 	if (!from || !to || from == to || from->component < 0 ||
@@ -48,8 +51,10 @@ static int SG_RuneProofHookRank(const sg_rune_proof_hook_seed_t *from,
 	dy = (int64_t)to->origin_q8[1] - from->origin_q8[1];
 	dz = to->origin_q8[2] - from->origin_q8[2];
 	horizontal2 = dx * dx + dy * dy;
-	if (horizontal2 > (int64_t)SG_RUNE_PROOF_HOOK_REACH_Q8 *
-	        SG_RUNE_PROOF_HOOK_REACH_Q8 ||
+	reach_q8 = sg_rune_scoped_gravity <= SG_RUNE_PROOF_HOOK_LOW_GRAVITY_MAX
+	    ? SG_RUNE_PROOF_HOOK_LOW_GRAVITY_REACH_Q8
+	    : SG_RUNE_PROOF_HOOK_REACH_Q8;
+	if (horizontal2 > (int64_t)reach_q8 * reach_q8 ||
 	    dz > SG_RUNE_PROOF_HOOK_MAX_RISE_Q8 ||
 	    (dz < -SG_RUNE_PROOF_HOOK_MAX_RISE_Q8 &&
 	     (!to->water || dz < -SG_RUNE_PROOF_HOOK_MAX_FALL_Q8)))

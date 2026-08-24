@@ -35,8 +35,10 @@
 #define SG_RUNE_CODEC_NO_ACTIVATION_PLAN UINT32_MAX
 #define SG_RUNE_CODEC_SEED_WATER UINT16_C(1)
 #define SG_RUNE_CODEC_SEED_TOMBSTONE UINT16_C(2)
+#define SG_RUNE_CODEC_SEED_OBJECTIVE UINT16_C(4)
 #define SG_RUNE_CODEC_SEED_FLAG_MASK \
-	(SG_RUNE_CODEC_SEED_WATER | SG_RUNE_CODEC_SEED_TOMBSTONE)
+	(SG_RUNE_CODEC_SEED_WATER | SG_RUNE_CODEC_SEED_TOMBSTONE | \
+	 SG_RUNE_CODEC_SEED_OBJECTIVE)
 
 typedef enum
 {
@@ -62,7 +64,10 @@ typedef enum
 	SG_RUNE_CODEC_NODE_OTHER_MOVER = 19,
 	SG_RUNE_CODEC_NODE_CONTEXTUAL = 20,
 	SG_RUNE_CODEC_NODE_TARGET_SPEAKER = 21,
-	SG_RUNE_CODEC_NODE_AREAPORTAL = 22
+	SG_RUNE_CODEC_NODE_AREAPORTAL = 22,
+	SG_RUNE_CODEC_NODE_TOGGLE_WALL = 23,
+	SG_RUNE_CODEC_NODE_TRIGGER_HURT = 24,
+	SG_RUNE_CODEC_NODE_TARGET_LASER = 25
 } sg_rune_codec_node_kind_t;
 
 typedef enum
@@ -118,6 +123,11 @@ typedef enum
 	SG_RUNE_CODEC_CALLBACK_SECRET_DOOR_BLOCKED = 31,
 	SG_RUNE_CODEC_CALLBACK_USE_TARGET_SPEAKER = 32,
 	SG_RUNE_CODEC_CALLBACK_USE_AREAPORTAL = 33,
+	SG_RUNE_CODEC_CALLBACK_USE_FUNC_WALL = 34,
+	SG_RUNE_CODEC_CALLBACK_TOUCH_HURT = 35,
+	SG_RUNE_CODEC_CALLBACK_USE_HURT = 36,
+	SG_RUNE_CODEC_CALLBACK_USE_TARGET_LASER = 37,
+	SG_RUNE_CODEC_CALLBACK_THINK_TARGET_LASER = 38,
 	SG_RUNE_CODEC_CALLBACK_UNKNOWN = 65535
 } sg_rune_codec_callback_id_t;
 
@@ -149,6 +159,10 @@ typedef sg_mechanism_controller_t sg_rune_codec_controller_kind_t;
 #define SG_RUNE_CODEC_CONTROLLER_TRAIN SG_MECHANISM_CONTROLLER_TRAIN
 #define SG_RUNE_CODEC_CONTROLLER_TRAIN_SHOOT \
 	SG_MECHANISM_CONTROLLER_TRAIN_SHOOT
+#define SG_RUNE_CODEC_CONTROLLER_TIMED_VAULT \
+	SG_MECHANISM_CONTROLLER_TIMED_VAULT
+#define SG_RUNE_CODEC_CONTROLLER_TRAIN_STATION \
+	SG_MECHANISM_CONTROLLER_TRAIN_STATION
 
 typedef enum
 {
@@ -172,7 +186,8 @@ typedef enum
 	RLCODEC_BAD_STRING_POOL = 132,
 	RLCODEC_DUPLICATE_NODE_KEY = 133,
 	RLCODEC_BAD_MECHANISM_GRAPH = 134,
-	RLCODEC_NONZERO_RESERVED = 135
+	RLCODEC_NONZERO_RESERVED = 135,
+	RLCODEC_BAD_ROUTE_CONTRACT = 136
 } sg_rune_codec_diagnostic_t;
 
 typedef struct sg_rune_codec_identity_s
@@ -198,9 +213,9 @@ typedef struct sg_rune_codec_seed_s
 
 typedef struct sg_rune_codec_header_s
 {
-	/* Byte offsets are stable. The u16 at offset 4 is reserved-zero bytes only
-	 * and deliberately has no semantic field here. */
+	/* Byte offsets are stable. route_contract occupies bytes 4..5. */
 	uint32_t magic;
+	uint16_t route_contract;
 	uint16_t header_bytes;
 	uint16_t seed_bytes;
 	uint16_t link_bytes;
@@ -247,6 +262,8 @@ typedef struct sg_rune_codec_link_s
 	uint8_t exit_speed;
 	int16_t cost_ms;
 	float suffix_anchor[3];
+	/* Action-discriminated bytes 28..39; see the generated secondary-control
+	 * policy before interpreting these as mechanism authority. */
 	float mechanism_anchor[3];
 	uint16_t sweep_clear_ms;
 	uint8_t mode;
@@ -384,7 +401,8 @@ sg_rune_codec_diagnostic_t SG_RuneCodecPushClosureCRC32(uint32_t entry_key,
 	const float push_velocity[3], uint32_t *crc_out);
 
 sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
-	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,
+	uint16_t route_contract, const sg_rune_codec_seed_t *seeds,
+	uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
 	const sg_rune_codec_activation_edge_t *edges, uint32_t num_edges,
@@ -397,7 +415,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecMatchIdentity(
 	const sg_rune_codec_identity_t *expected_identity);
 
 sg_rune_codec_diagnostic_t SG_RuneCodecEncode(
-	const sg_rune_codec_identity_t *identity,
+	uint16_t route_contract, const sg_rune_codec_identity_t *identity,
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,

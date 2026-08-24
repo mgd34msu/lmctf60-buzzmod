@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 import sys
 import tempfile
 import unittest
@@ -17,10 +18,26 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import runegen_pair
-from tests.test_rune_artifact import _build_rune
+import runeio
+from tests.test_rune_artifact import _build_rune, _fix_payload_and_header_crc
 
 
 MAP = "runetest"
+
+
+def _build_local_only_rune() -> bytes:
+    encoded = bytearray(_build_rune())
+    struct.pack_into("<H", encoded, 4, runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY)
+    struct.pack_into(
+        "<H", encoded, runeio.RUNE_HEADER_BYTES + 14, runeio.RSF_OBJECTIVE
+    )
+    struct.pack_into(
+        "<H", encoded,
+        runeio.RUNE_HEADER_BYTES + runeio.RUNE_SEED_BYTES + 14,
+        runeio.RSF_OBJECTIVE,
+    )
+    _fix_payload_and_header_crc(encoded)
+    return bytes(encoded)
 
 
 class RunegenPairTest(unittest.TestCase):
@@ -206,6 +223,55 @@ class RunegenPairTest(unittest.TestCase):
         self.assertEqual("old-snag", (record.directory / "old.snag").read_text())
         self.assertTrue(backup_manifest["old"]["rune"]["exists"])
         self.assertTrue(backup_manifest["old"]["snag"]["exists"])
+
+    def test_complete_pair_coherently_replaces_local_only_pair(self):
+        self.rune.write_bytes(_build_local_only_rune())
+        runegen_pair.write_provenance(
+            MAP, self.rune, self.engine, self.config,
+            (self.module_primary, self.module_secondary), 16,
+            {"seeds": 2, "links": 2, "mechanism_nodes": 3, "plans": 1},
+            self.provenance,
+        )
+        provisional = self.stage()
+        live = self._live_pair()
+        runegen_pair.install_pair(provisional, live, self.root / "local-backup")
+        self.assertEqual(
+            runeio.RUNE_ROUTE_CONTRACT_LOCAL_ONLY,
+            runeio.read(live / f"{MAP}.rune").header.route_contract,
+        )
+
+        complete_maps = self.root / "complete-stage/maps"
+        complete_maps.mkdir(parents=True)
+        complete_rune = complete_maps / f"{MAP}.rune"
+        complete_rune.write_bytes(_build_rune())
+        complete_provenance = self.root / "complete-provenance.json"
+        complete_evidence = self.root / "complete-evidence.json"
+        complete_manifest = self.root / "complete-pair.json"
+        runegen_pair.write_provenance(
+            MAP, complete_rune, self.engine, self.config,
+            (self.module_primary, self.module_secondary), 16,
+            {"seeds": 2, "links": 2, "mechanism_nodes": 3, "plans": 1},
+            complete_provenance,
+        )
+        complete = runegen_pair.stage_explicit_zero_pair(
+            MAP, complete_maps, complete_evidence, complete_provenance,
+            complete_manifest,
+        )
+        backup = runegen_pair.install_pair(
+            complete, live, self.root / "complete-backup"
+        )
+        self.assertEqual(
+            runeio.RUNE_ROUTE_CONTRACT_COMPLETE,
+            runeio.read(live / f"{MAP}.rune").header.route_contract,
+        )
+        self.assertEqual(
+            complete.snag.path.read_bytes(),
+            (live / f"{MAP}.snag").read_bytes(),
+        )
+        self.assertEqual(
+            provisional.rune.path.read_bytes(),
+            (backup.directory / "old.rune").read_bytes(),
+        )
 
     def test_install_failure_restores_old_pair_and_old_absence(self):
         pair = self.stage()

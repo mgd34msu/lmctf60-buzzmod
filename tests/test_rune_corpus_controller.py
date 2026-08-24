@@ -39,6 +39,7 @@ def report(map_name: str, *, seeds: int = 7, links: int = 9,
         "node_count": nodes,
         "plan_count": plans,
         "plan_edge_count": plan_edges,
+        "route_contract": "complete",
         "seed_count": seeds,
         "trigger_count": triggers,
     })
@@ -152,6 +153,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
         runtime_omissions: frozenset[str] = frozenset(),
         actual_tools: bool = False,
         acceptor_output: bytes | None = None,
+        acceptor_action_hash: bytes | None = None,
     ) -> Path:
         parent.mkdir(parents=True, exist_ok=True)
         sources = parent / "sources"
@@ -250,18 +252,27 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "tools/lmctf58_rune_accept.py", "semantic_checker:lmctf58",
                 b"def main(argv):\n print('{\"map_name\":\"lmctf58\"}')\n return 0\n",
             )
-        add(
-            "runeaccept.gnu",
-            "acceptor_gnu",
-            b"#!/bin/sh\nprintf '%s\\n' '" + gate_report + b"'\n",
-            0o755,
+        if actual_tools:
+            action_text, mechanism_text = controller._contract_hashes(
+                ROOT / "tools/rune_contracts_generated.py"
+            )
+            acceptor_hash = action_text.encode("ascii")
+            acceptor_mechanism_hash = mechanism_text.encode("ascii")
+        else:
+            acceptor_hash = (acceptor_action_hash or action_hash) * 64
+            acceptor_mechanism_hash = b"b" * 64
+        acceptor_script = (
+            b"#!/bin/sh\n"
+            b"if [ \"$1\" = --contracts ]; then\n"
+            b" printf '%s\\n' '{\"action_contract_sha256\":\""
+            + acceptor_hash
+            + b"\",\"mechanism_contract_sha256\":\""
+            + acceptor_mechanism_hash
+            + b"\"}'\n"
+            b"else\n printf '%s\\n' '" + gate_report + b"'\nfi\n"
         )
-        add(
-            "runeaccept.make",
-            "acceptor_make",
-            b"#!/bin/sh\nprintf '%s\\n' '" + gate_report + b"'\n",
-            0o755,
-        )
+        add("runeaccept.gnu", "acceptor_gnu", acceptor_script, 0o755)
+        add("runeaccept.make", "acceptor_make", acceptor_script, 0o755)
         add("game/rune.cfg", "generator_config", b"set dedicated 1\n")
         add(
             "tools/rune-semantic-checkers.json", "semantic_checker_manifest",
@@ -876,6 +887,15 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.thaw(first)
             self.thaw(second)
 
+    def test_snapshot_rejects_acceptor_built_for_stale_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                controller.CorpusError, "acceptor_gnu contract identity mismatch"
+            ):
+                self.make_snapshot(
+                    Path(temporary), action_hash=b"a", acceptor_action_hash=b"c"
+                )
+
     def test_private_runtime_byte_change_changes_full_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -1132,6 +1152,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
                                         f"evidence_sha256={controller.sha256_regular(evidence)} "
                                         f"snag_sha256={controller.sha256_regular(snag)}\n"
                                     ).encode("ascii")
+                                )
+                                kwargs["stdout"].write(
+                                    b"slipgate: route contract complete\n"
                                 )
                                 kwargs["stdout"].write(
                                     b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
@@ -1999,6 +2022,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "owner_record": str(owner.relative_to(run_root)),
                 "artifact": artifact_record,
                 "artifact_sha256": artifact_record["sha256"],
+                "route_contract": "complete",
                 "evidence": evidence,
                 "server_log_sha256": controller.sha256_regular(server),
                 "objective_roots": {"red": 1, "blue": 2},

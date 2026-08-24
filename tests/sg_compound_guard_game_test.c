@@ -85,6 +85,42 @@ static sg_compound_guard_run_t run_state = SG_COMPOUND_GUARD_RUN_READY;
 static int global_record_present;
 static sg_mover_lease_record_t global_record;
 
+rune_t *SG_Rune(void)
+{
+	return NULL;
+}
+
+qboolean SG_RunePublishedShapeValid(const rune_t *rune)
+{
+	(void)rune;
+	return false;
+}
+
+const rune_mechanism_node_t *SG_RuneMechanismNodeByKey(
+	const rune_t *rune, uint32_t key)
+{
+	(void)rune;
+	(void)key;
+	return NULL;
+}
+
+int SG_MechCatalogEntityExecutionMatches(uint32_t key,
+	const rune_mechanism_node_t *node, uint16_t controller_kind)
+{
+	(void)key;
+	(void)node;
+	(void)controller_kind;
+	return 0;
+}
+
+edict_t *SG_MechCatalogResolveEntity(uint32_t key,
+	const rune_mechanism_node_t *node)
+{
+	(void)key;
+	(void)node;
+	return NULL;
+}
+
 void SG_CompoundSwimGameClientRetired(edict_t *client)
 {
 	if (client != &entities[1])
@@ -686,6 +722,22 @@ static void TestCompoundLifecycleDispatch(void)
 	      compound_terminal_calls == terminal_before);
 	CHECK(hold_member_calls == 0 && terminal_member_calls == 0);
 	compound_expected_member = NULL;
+}
+
+static void TestShootDoorAuthorityUnavailable(void)
+{
+	sg_mover_key_t members[] = { 10U, 12U };
+	int hold_before = hold_member_calls;
+	int terminal_before = terminal_member_calls;
+
+	CHECK(captured_host.hold_open(captured_host.context,
+	      SG_MOVER_LAW_TRAIN_GATE, members, 2U, 500) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(captured_host.set_terminal(captured_host.context,
+	      SG_MOVER_LAW_TRAIN_GATE, members, 2U) ==
+	      SG_COMPOUND_GUARD_NO);
+	CHECK(hold_member_calls == hold_before);
+	CHECK(terminal_member_calls == terminal_before);
 }
 
 static uint64_t CurrentGeneration(int key)
@@ -1588,6 +1640,7 @@ int main(void)
 	      captured_host.hold_open != NULL &&
 	      captured_host.set_terminal != NULL);
 	TestCompoundLifecycleDispatch();
+	TestShootDoorAuthorityUnavailable();
 	TestIdentityABAAndBounds();
 	TestHookSubjectObservation();
 	TestPusherFenceBasics();

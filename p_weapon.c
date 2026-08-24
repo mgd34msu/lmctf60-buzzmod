@@ -1,8 +1,10 @@
 // g_weapon.c
 
 #include "g_local.h"
+#include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_compound_hook_game_events.h"
+#include "slipgate/sg_human_trace.h"
 #include "m_player.h"
 #include "g_tourney.h"
 
@@ -1797,10 +1799,10 @@ hook_touch
 Touch function for the grappling hook
 =================
 */
-void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *surf)
+static void SG_BotHookTouch(edict_t *self, edict_t *other,
+	cplane_t *plane, csurface_t *surf)
 {
 	vec3_t dest;
-	sg_compound_hook_game_event_gate_t compound_gate;
 
 	if (!other)
 		return;
@@ -1851,8 +1853,9 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 		ctf_hook_abort(self->owner);
 		return;
 	}
-	compound_gate = SG_CompoundHookGameAttachWillApply(self, other, surf);
-	if (compound_gate == SG_COMPOUND_HOOK_GAME_EVENT_DENIED)
+	if (SG_OwnsBot(self->owner) &&
+	    SG_CompoundHookGameAttachWillApply(self, other, surf) ==
+	        SG_COMPOUND_HOOK_GAME_EVENT_DENIED)
 	{
 		if (self->owner && self->owner->client &&
 		    !self->owner->client->hook)
@@ -1907,22 +1910,24 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 		
 	if (!self->hook_target)
 	{
-		sg_compound_hook_live_result_t compound_result;
-
 		self->hook_target = other;
 		VectorSubtract(self->s.origin, self->hook_target->absmin, dest);
 		VectorCopy(dest, self->hook_offset);
 		self->solid = SOLID_TRIGGER;
 		gi.linkentity(self);
-		compound_result = SG_CompoundHookGameAttached(self);
-		if (compound_result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING ||
-		    compound_result.outcome == SG_COMPOUND_HOOK_LIVE_REJECTED)
+		if (SG_OwnsBot(self->owner))
 		{
-			if (self->owner && self->owner->client &&
-			    !self->owner->client->hook)
-				self->owner->client->hook = self;
-			ctf_hook_abort(self->owner);
-			return;
+			sg_compound_hook_live_result_t compound_result =
+			    SG_CompoundHookGameAttached(self);
+
+			if (compound_result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING ||
+			    compound_result.outcome == SG_COMPOUND_HOOK_LIVE_REJECTED)
+			{
+				if (self->owner->client && !self->owner->client->hook)
+					self->owner->client->hook = self;
+				ctf_hook_abort(self->owner);
+				return;
+			}
 		}
 	}
 
@@ -1934,6 +1939,96 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 	else
 		gi.WriteDir (plane->normal);
 	gi.multicast (self->s.origin, MULTICAST_PVS);	
+}
+
+/* Unmodified LMCTF hook collision path. Bot bolts use SG_BotHookTouch and
+ * never enter this function. */
+void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *surf)
+{
+	vec3_t dest;
+
+	if (!other)
+		return;
+
+	if (other == self->owner)
+		return;
+
+	if (self->hook_target && self->hook_target != other)
+		return;
+
+	if (other &&
+		(strcmp(other->classname, "bodyque") != 0) &&
+		(!ctf_validateplayer(other, CTF_TEAM_ANYTEAM)) &&
+		(strcmp(other->classname, "worldspawn") != 0) &&
+		(strncmp(other->classname, "func", 4) != 0) &&
+		(strncmp(other->classname, "info_flag", 9) != 0)
+		)
+	{
+		ctf_hook_abort(self->owner);
+		return;
+	}
+
+	if ((surf && (surf->flags & SURF_SKY)) ||
+		((other->client) && (self->owner->client->ctf.teamnum == other->client->ctf.teamnum)) ||
+		other->deadflag)
+	{
+		ctf_hook_abort(self->owner);
+		return;
+	}
+
+	VectorClear (self->velocity);
+
+	if (self->owner->client)
+	{
+		self->owner->client->hookstate = 2;
+	}
+
+	if (! ((int)ctfflags->value & CTF_NO_GRAP_DAMAGE) || (!other->client))
+	{
+		if (self->hook_target == other)
+		{
+			if ( (level.framenum % 7) == 0 && (level.framenum != self->hook_lastframe) )
+			{
+				if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM))
+					gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/gkilling.wav"), 1, ATTN_NORM, 0);
+				T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 1, 1, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+				self->hook_lastframe = level.framenum;
+			}
+		}
+		else
+		{
+			if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM))
+				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghit.wav"), 1, ATTN_NORM, 0);
+			else
+				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8, ATTN_NORM, 0);
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 8, 8, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+		}
+	}
+
+	if (other->deadflag)
+	{
+		ctf_hook_abort(self->owner);
+		return;
+	}
+
+	if (!self->hook_target)
+	{
+		self->hook_target = other;
+		VectorSubtract(self->s.origin, self->hook_target->absmin, dest);
+		VectorCopy(dest, self->hook_offset);
+		self->solid = SOLID_TRIGGER;
+		gi.linkentity(self);
+		SG_HumanTraceHookAttach(self->owner, self, other);
+	}
+
+	gi.WriteByte (svc_temp_entity);
+	gi.WriteByte (TE_BLASTER);
+	gi.WritePosition (self->s.origin);
+	if (!plane)
+		gi.WriteDir (vec3_origin);
+	else
+		gi.WriteDir (plane->normal);
+	gi.multicast (self->s.origin, MULTICAST_PVS);
 }
 
 void Grapple_Bolt_Think(edict_t *self)
@@ -1967,13 +2062,51 @@ hook_die(edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_
 	ctf_hook_abort(self->owner);
 }
 
+static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
+	vec3_t dir, int speed)
+{
+	edict_t *bolt;
+	trace_t tr;
+
+	VectorNormalize(dir);
+	bolt = G_Spawn();
+	VectorCopy(start, bolt->s.origin);
+	VectorCopy(start, bolt->s.old_origin);
+	vectoangles(dir, bolt->s.angles);
+	bolt->s.angles[PITCH] += 90;
+	VectorScale(dir, speed, bolt->velocity);
+	bolt->movetype = MOVETYPE_FLYMISSILE;
+	bolt->clipmask = MASK_SHOT;
+	bolt->solid = SOLID_BBOX;
+	VectorClear(bolt->mins);
+	VectorClear(bolt->maxs);
+	bolt->s.modelindex = gi.modelindex("models/objects/ghook/tris.md2");
+	G_ProjectileOwnerSet(bolt, self);
+	bolt->touch = hook_touch;
+	bolt->die = hook_die;
+	bolt->nextthink = level.time + 1;
+	bolt->think = Grapple_Bolt_Think;
+	bolt->dmg = 2;
+	bolt->takedamage = DAMAGE_YES;
+	bolt->health = 59;
+	gi.linkentity(bolt);
+	SG_HumanTraceHookFire(self, bolt);
+	gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/grfire.wav"),
+	    0.8, ATTN_NORM, 0);
+	tr = gi.trace(self->s.origin, NULL, NULL, bolt->s.origin, self,
+	    MASK_SHOT);
+	if (tr.fraction < 1.0)
+	{
+		VectorMA(bolt->s.origin, -10, dir, bolt->s.origin);
+		bolt->touch(bolt, tr.ent, NULL, NULL);
+	}
+	return bolt;
+}
+
 edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 {
 	edict_t	*bolt;
 	trace_t	tr;
-	sg_compound_hook_live_result_t compound_result;
-	sg_compound_guard_result_t guard_result;
-	sg_mover_subject_t subject;
 
 	VectorNormalize (dir);
 
@@ -1992,7 +2125,7 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	bolt->s.modelindex = gi.modelindex ("models/objects/ghook/tris.md2");
 //	bolt->s.sound = gi.soundindex ("weapons/grapple/grfire.wav");
 	G_ProjectileOwnerSet(bolt, self);
-	bolt->touch = hook_touch;
+	bolt->touch = SG_BotHookTouch;
 	bolt->die = hook_die;
 	bolt->nextthink = level.time + 1;
 	bolt->think = Grapple_Bolt_Think;
@@ -2000,19 +2133,26 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	bolt->takedamage = DAMAGE_YES;
 	bolt->health = 59;	 // after 59 damage, hook destoyed
 	gi.linkentity (bolt);
-	guard_result = SG_CompoundGuardGameHookLinked(self, bolt, &subject);
-	if (guard_result != SG_COMPOUND_GUARD_OK)
+	if (SG_OwnsBot(self))
 	{
-		G_FreeEdict(bolt);
-		return NULL;
-	}
-	compound_result = SG_CompoundHookGameLinked(self, bolt, &subject);
-	if (compound_result.outcome != SG_COMPOUND_HOOK_LIVE_IDLE &&
-	    compound_result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
-	{
-		self->client->hook = bolt;
-		ctf_hook_abort(self);
-		return NULL;
+		sg_compound_hook_live_result_t compound_result;
+		sg_compound_guard_result_t guard_result;
+		sg_mover_subject_t subject;
+
+		guard_result = SG_CompoundGuardGameHookLinked(self, bolt, &subject);
+		if (guard_result != SG_COMPOUND_GUARD_OK)
+		{
+			G_FreeEdict(bolt);
+			return NULL;
+		}
+		compound_result = SG_CompoundHookGameLinked(self, bolt, &subject);
+		if (compound_result.outcome != SG_COMPOUND_HOOK_LIVE_IDLE &&
+		    compound_result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
+		{
+			self->client->hook = bolt;
+			ctf_hook_abort(self);
+			return NULL;
+		}
 	}
 
 
@@ -2040,10 +2180,15 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	if (tr.fraction < 1.0)
 	{
 		VectorMA (bolt->s.origin, -10, dir, bolt->s.origin);
-		self->client->hook = bolt;
-		bolt->touch (bolt, tr.ent, NULL, NULL);
-		if (self->client->hook != bolt)
-			return NULL;
+		if (SG_OwnsBot(self))
+		{
+			self->client->hook = bolt;
+			bolt->touch (bolt, tr.ent, NULL, NULL);
+			if (self->client->hook != bolt)
+				return NULL;
+		}
+		else
+			bolt->touch (bolt, tr.ent, NULL, NULL);
 	}
 	return bolt;
 }	
@@ -2174,6 +2319,7 @@ void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
 
 	VectorCopy (velocity, ent->velocity);
 	VectorCopy (ent->velocity, ent->client->oldvelocity);
+	if (SG_OwnsBot(ent))
 	{
 		sg_compound_hook_live_result_t compound_result =
 		    SG_CompoundHookGamePullApplied(ent, ent->client->hook);
@@ -2184,11 +2330,95 @@ void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
 	}
 }
 
+static void LMCTF_HumanHookFire(edict_t *ent)
+{
+	vec3_t offset, start, forward, right, dir;
+	int speed;
+	vec3_t dest;
+
+	ent->client->isfiring = 0;
+	if (ent->client->hookstate == 0)
+		VectorCopy(ent->client->v_angle, ent->client->hookangle);
+	AngleVectors(ent->client->v_angle, forward, right, NULL);
+	VectorSet(offset, 8, 8, ent->viewheight - 8);
+	P_ProjectSource(ent->client, ent->s.origin, offset, forward, right, start);
+
+	switch (ent->client->hookstate)
+	{
+	case 0:
+		VectorScale(forward, -2, ent->client->kick_origin);
+		ent->client->kick_angles[0] = -1;
+		ent->client->hookstate++;
+		ent->client->isfiring = 1;
+		ent->client->hook = LMCTF_FireHumanHook(ent, start, forward,
+		    GRAPPLE_FIRE_HOOK_SPEED);
+		Draw_Hook(ent, start, ent->client->hook->s.origin);
+		/* fall through */
+	case 1:
+		if (ent->client->hook)
+			Draw_Hook(ent, start, ent->client->hook->s.origin);
+		break;
+	case 2:
+		if (!ent->client->hook)
+		{
+			ent->client->hookstate = 0;
+			break;
+		}
+		if (ent->client->hook->hook_target)
+		{
+			VectorAdd(ent->client->hook->hook_target->absmin,
+			    ent->client->hook->hook_offset, dest);
+			VectorCopy(dest, ent->client->hook->s.origin);
+		}
+		Draw_Hook(ent, start, ent->client->hook->s.origin);
+		VectorSubtract(ent->client->hook->s.origin, start, dir);
+		speed = VectorLength(dir);
+		if (!ent->client->hooklength)
+			ent->client->hooklength = speed;
+		ent->client->hooklength = speed;
+		VectorNormalize(dir);
+		if (speed > 120)
+		{
+#ifdef WEAP_BALANCE_OK
+			if ((int)ctfflags->value & CTF_WEAP_BALANCE)
+				VectorScale(dir, GRAPPLE_PULL_BALANCED_SPEED, dir);
+			else
+				VectorScale(dir, GRAPPLE_PULL_SPEED, dir);
+#else
+			VectorScale(dir, GRAPPLE_PULL_SPEED, dir);
+#endif
+			SV_AddGravity(ent);
+		}
+		else if (speed > 100)
+			VectorScale(dir, speed * 5, dir);
+		else if (speed > 80)
+			VectorScale(dir, speed * 4, dir);
+		else if (speed > 40)
+			VectorScale(dir, speed * 3, dir);
+		else if (speed > 20)
+			VectorScale(dir, speed * 2, dir);
+		else if (speed > 10)
+			VectorScale(dir, speed, dir);
+		VectorCopy(dir, ent->velocity);
+		VectorCopy(ent->velocity, ent->client->oldvelocity);
+		break;
+	default:
+		ctf_hook_abort(ent);
+		break;
+	}
+}
+
 
 void Weapon_Hook_Fire (edict_t *ent)
 {
 	vec3_t	mins, maxs, start, forward, right;
 	float		*v;
+
+	if (!SG_OwnsBot(ent))
+	{
+		LMCTF_HumanHookFire(ent);
+		return;
+	}
 
 	v = tv(-15,-15,-15);
 	_VectorCopy (v, mins);
@@ -2216,7 +2446,7 @@ void Weapon_Hook_Fire (edict_t *ent)
 		ent->client->isfiring = 1;
 
 		ent->client->hook = fire_hook (ent, start, forward, GRAPPLE_FIRE_HOOK_SPEED);
-		if (!ent->client->hook)
+		if (SG_OwnsBot(ent) && !ent->client->hook)
 		{
 			ent->client->hookstate = 0;
 			break;
@@ -2264,6 +2494,7 @@ void Weapon_Hook (edict_t *ent)
 	
 	if ( !((ent->client->latched_buttons|ent->client->buttons) & BUTTON_ATTACK))
 	{
+		SG_HumanTraceHookRelease(ent);
 		ctf_hook_abort(ent);
 	}
 	

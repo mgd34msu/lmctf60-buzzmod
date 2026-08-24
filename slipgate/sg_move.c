@@ -18,11 +18,16 @@
 #include "slipgate/sg_button_live.h"
 #include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_declared_door_guard.h"
+#include "slipgate/sg_relay_wall_game.h"
+#include "slipgate/sg_timed_vault_game_runtime.h"
+#include "slipgate/sg_timed_vault_egress.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_train_gate_game.h"
+#include "slipgate/sg_train_station_game.h"
 #include "slipgate/sg_shoot_door_game.h"
 #include "slipgate/sg_drop_live.h"
+#include "slipgate/sg_hook_game.h"
 #include "slipgate/sg_hook_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_hook_discipline.h"
@@ -803,10 +808,6 @@ static edict_t *SG_NadeArmedTarget(edict_t *e, const sg_bot_t *bot)
 	return SG_NadeBoundLiveTarget(e, bot);
 }
 
-static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
-	float shelf_seconds, qboolean failure, const char *reason,
-	int from_goal, int to_goal);
-
 static void Hook_DiagnosticEmit(void *opaque, const char *line)
 {
 	(void)opaque;
@@ -931,8 +932,6 @@ void SG_HumanSpeedPmoveEnd(edict_t *entity, const pmove_state_t *pmove,
 	memset(&bot->as_landing_before, 0, sizeof(bot->as_landing_before));
 }
 
-static int sg_hook_reproof_frame = -1;
-static int sg_hook_reproof_slot = 0;
 static int sg_swim_reproof_frame = -1;
 static int sg_swim_reproof_slot = 0;
 static uint32_t sg_mechanism_dispatch_depth;
@@ -1296,8 +1295,8 @@ sg_button_execution_anchor_state_t SG_ButtonExecutionAnchor(
 	    subject != bot->ent || !subject->inuse ||
 	    binding->entry_node->key == 0U ||
 	    binding->entry_node->key >= MAX_EDICTS ||
-	    binding->plan->controller_kind !=
-	        SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	    !SG_MechanismControllerUsesButton(
+	        binding->plan->controller_kind) ||
 	    DoorStep_EdictKey(button) != (int)binding->entry_node->key ||
 	    !SG_RuneMechanismBindingCurrent(binding) ||
 	    !bot->declared_touched || !bot->declared_button_latched ||
@@ -1379,8 +1378,8 @@ qboolean SG_ButtonExecutionSupportValid(
 	support = subject->groundentity;
 	ordinary = support &&
 	    (support == g_edicts || SG_ImmutableSupport(support));
-	button = binding->plan->controller_kind ==
-	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+	button = SG_MechanismControllerUsesButton(
+	    binding->plan->controller_kind);
 	current = button &&
 	    DoorStep_EdictKey(binding->entry_entity) ==
 	        (int)binding->entry_node->key &&
@@ -1721,6 +1720,15 @@ static qboolean DoorStep_ApproachCommandScoped(const sg_bot_t *bot)
 	return bot && (bot->declared_door_ticket.armed ||
 	       (sg_door_approach_command.active &&
 	        sg_door_approach_command.bot == bot));
+}
+
+static void DoorStep_Activate(sg_bot_t *bot,
+	const sg_rune_mechanism_binding_t *binding)
+{
+	bot->declared_activated = true;
+	if (binding->plan && binding->plan->controller_kind ==
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT)
+		bot->swim_air_seed = -1;
 }
 
 static qboolean DoorStep_ApproachCallbackReject(sg_bot_t *bot,
@@ -2491,8 +2499,10 @@ static qboolean DoorStep_ButtonBinding(sg_bot_t *bot, edict_t *source,
 {
 	return bot && source && binding_out &&
 	       DoorStep_DeclaredBinding(bot, binding_out) &&
-	       binding_out->plan->controller_kind ==
-	           SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	       (binding_out->plan->controller_kind ==
+	            SG_MECHANISM_CONTROLLER_BUTTON_DOOR ||
+	        binding_out->plan->controller_kind ==
+	            SG_MECHANISM_CONTROLLER_TIMED_VAULT) &&
 	       binding_out->entry_entity == source;
 }
 
@@ -2909,6 +2919,8 @@ static qboolean MechanismStep_CarrierPendingDispatch(sg_bot_t *bot,
 
 qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
 {
+	sg_timed_vault_runtime_target_result_t timed_vault;
+	sg_relay_wall_game_target_result_t relay_wall;
 	sg_rune_mechanism_binding_t binding;
 	sg_bot_t *bot = DoorStep_EventBot(activator);
 	door_step_dispatch_t dispatch;
@@ -2917,6 +2929,16 @@ qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
 
 	if (SG_TrainGateGameHandleTargets(source, activator))
 		return true;
+	timed_vault = SG_TimedVaultRuntimeHandleTargets(source, activator);
+	if (timed_vault == SG_TIMED_VAULT_RUNTIME_HANDLED)
+		return true;
+	if (timed_vault == SG_TIMED_VAULT_RUNTIME_ALLOW_STOCK)
+		return false;
+	relay_wall = SG_RelayWallGameHandleTargets(source, activator);
+	if (relay_wall == SG_RELAY_WALL_GAME_HANDLED)
+		return true;
+	if (relay_wall == SG_RELAY_WALL_GAME_ALLOW_STOCK)
+		return false;
 
 	if (!bot)
 		return false;
@@ -2997,8 +3019,8 @@ qboolean SG_HandleMechanismTargets(edict_t *source, edict_t *activator)
 			return true;
 		if ((button_carrier
 		        ? bot->declared_trigger_frame != level.framenum
-		        : binding.plan->controller_kind !=
-		              SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+		        : !SG_MechanismControllerUsesButton(
+		              binding.plan->controller_kind) &&
 		          bot->declared_touch_frame != level.framenum))
 			return true;
 	}
@@ -3304,7 +3326,7 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	if (!DoorStep_BindingContainsMover(&binding, door_master) ||
 	    !SG_RuneMechanismBindingCurrent(&binding))
 		return DoorStep_ApproachCallbackReject(bot, command_scoped);
-	if (binding.plan->controller_kind == SG_MECHANISM_CONTROLLER_BUTTON_DOOR)
+	if (SG_MechanismControllerUsesButton(binding.plan->controller_kind))
 	{
 		if (!bot->declared_touched || source->activator != activator)
 			return false;
@@ -3320,7 +3342,7 @@ qboolean SG_AuthorizeDoorActivation(edict_t *source, edict_t *door_master,
 	if (bot->declared_triggered || bot->declared_activated)
 		return true;
 	if (!bot->declared_touched ||
-	    (binding.plan->controller_kind != SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+	    (!SG_MechanismControllerUsesButton(binding.plan->controller_kind) &&
 	     bot->declared_touch_frame != level.framenum))
 		return false;
 	bot->declared_triggered = true;
@@ -3420,7 +3442,7 @@ static qboolean Hook_LinkWaterSource(const sg_bot_t *bot)
 	    bot->hook_link >= SG_Rune()->hdr.num_links)
 		return false;
 	link = &SG_Rune()->links[bot->hook_link];
-	return link->action == RL_HOOK &&
+	return (link->action == RL_HOOK || link->action == RL_CHAIN_HOOK) &&
 	       (SG_Rune()->seeds[link->from].flags & RSF_WATER) != 0;
 }
 
@@ -4884,7 +4906,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			 * The view is the aim: LMCTF's Weapon_Hook_Fire fires along
 			 * v_angle.
 			 */
-			if (l->action == RL_HOOK && bot->hook_phase == 0 &&
+			if ((l->action == RL_HOOK || l->action == RL_CHAIN_HOOK) &&
+			    bot->hook_phase == 0 &&
 			    !SG_RocketJumpGameOwns(bot) && bot->nade_phase == 0 &&
 			    SG_HookOffhandReady(e))
 			{
@@ -4914,7 +4937,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					/* The edge remains valid from its proved source.  This body is not
 					 * in that source state, so release the commitment, force fresh
 					 * localization, and spend no generic command toward the landing. */
-					SG_StagedTraversalCancel(bot, RL_HOOK);
+					SG_StagedTraversalCancel(bot, l->action);
 					bot->seed = -1;
 					ballistic_abort = true;
 					goto hook_stage_done;
@@ -4961,7 +4984,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					                  * 8.0f) * 0.125f;
 					if (!SG_HookRideLaunchAllowed(worth))
 					{
-						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, false,
+						SG_HookGameDisciplineRetire(
+						    e, bot, bestlink, 5.0f, false,
 						    worth == SG_HOOK_RIDE_UNASSESSED
 						        ? "value-unassessed" : "value-skip",
 						    route_field[l->from], route_field[l->to]);
@@ -4975,6 +4999,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						VectorCopy(SG_Rune()->seeds[l->to].origin,
 						           bot->hook_dest);
 						bot->hook_link = bestlink;
+						SG_ChainHookGameStage(bot,
+						    l->action == RL_CHAIN_HOOK ? bestlink : -1);
 						bot->hook_bite_logged = false;
 						bot->hook_attached_validated = false;
 						bot->hook_phase = 1;
@@ -4985,7 +5011,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					}
 					else
 					{
-						Hook_DisciplineRetire(e, bot, bestlink, 5.0f, true,
+						SG_HookGameDisciplineRetire(
+						    e, bot, bestlink, 5.0f, true,
 						    "decode-retire", 0, 0);
 					}
 				}
@@ -6107,472 +6134,6 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 	tc->hook_brake = hook_brake;
 }
 
-static qboolean Hook_GraphReleaseReady(edict_t *e, const sg_bot_t *bot)
-{
-	vec3_t view, forward, right, muzzle, bite, velocity, dest_dir;
-	int rope;
-
-	if (!e || !e->client || e->client->hookstate != 2 ||
-	    !e->client->hook)
-		return false;
-	VectorCopy(bot->hook_view, view);
-	AngleVectors(view, forward, right, NULL);
-	CTF_HookMuzzle(e->s.origin, e->viewheight, e->client->pers.hand,
-	               forward, right, muzzle);
-	if (e->client->hook->hook_target)
-		VectorAdd(e->client->hook->hook_target->absmin,
-		          e->client->hook->hook_offset, bite);
-	else
-		VectorCopy(e->client->hook->s.origin, bite);
-	rope = CTF_HookPullVelocity(muzzle, bite, velocity);
-	VectorSubtract(bot->hook_dest, e->s.origin, dest_dir);
-	return ((dest_dir[0] * dest_dir[0] + dest_dir[1] * dest_dir[1] <
-	         80.0f * 80.0f && dest_dir[2] > -96.0f && dest_dir[2] < 96.0f) ||
-	        rope < 130.0f);
-}
-
-static void Hook_GraphRelease(edict_t *e, sg_bot_t *bot,
-	qboolean *cut_in_step)
-{
-	ctf_hook_abort(e);
-	bot->hook_phase = 3;
-	bot->flow_release = false;
-	bot->hook_settle_ms = 0;
-	*cut_in_step = true;
-}
-
-static void Hook_ShelveLink(sg_bot_t *bot, int link_index, float seconds)
-{
-	int b, oldest = 0;
-
-	if (!SG_Rune() || link_index < 0 ||
-	    link_index >= SG_Rune()->hdr.num_links)
-		return;
-	for (b = 0; b < SG_BL_MAX; b++)
-		if (bot->bl_until[b] < bot->bl_until[oldest])
-			oldest = b;
-	bot->bl_link[oldest] = link_index;
-	SG_TimerArm(&bot->bl_until[oldest], seconds);
-}
-
-static void Hook_Shelve(sg_bot_t *bot, float seconds)
-{
-	Hook_ShelveLink(bot, bot->hook_link, seconds);
-}
-
-static void Hook_LiveClearFinalGuard(sg_bot_t *bot)
-{
-	if (bot)
-		SG_HookLiveCommandGuardClear(&bot->hook_final_guard);
-}
-
-static void Hook_GraphFailDetail(edict_t *e, sg_bot_t *bot,
-	float shelf_seconds, const char *detail)
-{
-	(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics, "graph-fail", detail);
-	if (e && e->client && e->client->hookstate != 0)
-		ctf_hook_abort(e);
-	Hook_Shelve(bot, shelf_seconds);
-	SG_StagedTraversalCancel(bot, RL_HOOK);
-	SG_HookLiveDeactivate(&bot->hook_replay, &bot->hook_replay_active,
-	    &bot->hook_replay_link);
-	Hook_LiveClearFinalGuard(bot);
-	bot->hook_entity = NULL;
-	bot->hook_legacy_settle = false;
-	bot->hook_legacy_arrived = false;
-	bot->hook_pull_ms = 0;
-	bot->hook_settle_ms = 0;
-}
-
-static void Hook_GraphFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
-{
-	Hook_GraphFailDetail(e, bot, shelf_seconds, "legacy");
-}
-
-/* This is deliberately narrower than Hook_GraphFail: only a selected graph
- * link that could not be valued, decoded, or aimed owns this discipline. */
-static void Hook_DisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
-	float shelf_seconds, qboolean failure, const char *reason,
-	int from_goal, int to_goal)
-{
-	int gain = from_goal - to_goal;
-
-	if (!bot || !SG_Rune() || link_index < 0 ||
-	    link_index >= SG_Rune()->hdr.num_links ||
-	    SG_Rune()->links[link_index].action != RL_HOOK)
-		return;
-	Hook_ShelveLink(bot, link_index, shelf_seconds);
-	if (sg_cv.debug->value)
-	{
-		if (failure)
-			sg_host.dprint("HOOKDISC %s %s link=%d shelf=%.0f\n",
-			    e && e->client ? e->client->pers.netname : "?",
-			    reason ? reason : "retire", link_index, shelf_seconds);
-		else
-			sg_host.dprint("HOOKDISC %s %s link=%d from=%d to=%d gain=%d min=%d shelf=%.0f\n",
-			    e && e->client ? e->client->pers.netname : "?",
-			    reason ? reason : "value-skip", link_index,
-			    from_goal, to_goal, gain, SG_HOOK_DISCIPLINE_SERVED_FIELD_MS,
-			    shelf_seconds);
-	}
-	if (e && e->client && e->client->hookstate != 0)
-		ctf_hook_abort(e);
-	SG_StagedTraversalCancel(bot, RL_HOOK);
-	bot->hook_pull_ms = 0;
-	bot->hook_settle_ms = 0;
-	SG_HookLiveDeactivate(&bot->hook_replay, &bot->hook_replay_active,
-	    &bot->hook_replay_link);
-	Hook_LiveClearFinalGuard(bot);
-	bot->hook_entity = NULL;
-	bot->hook_legacy_settle = false;
-	bot->hook_legacy_arrived = false;
-}
-
-qboolean SG_HookOffhandReady(edict_t *e)
-{
-	static gitem_t *hook;
-
-	if (!hook)
-		hook = FindItem("Grappling Hook");
-	return (e && e->client && hook &&
-	        ((int)ctfflags->value & CTF_OFFHAND_HOOK) &&
-	        e->client->pers.hand == RIGHT_HANDED &&
-	        e->client->pers.inventory[ITEM_INDEX(hook)] > 0 &&
-	        e->client->pers.weapon != hook && e->client->newweapon != hook &&
-	        e->client->hookstate == 0 && e->client->hook == NULL);
-}
-
-static qboolean Hook_LiveWitnessOK(const edict_t *e, const sg_bot_t *bot)
-{
-	return e && e->client && bot && e->health > 0 && !e->deadflag &&
-	       e->health == bot->hook_source_health &&
-	       e->movetype == MOVETYPE_WALK &&
-	       e->client->ps.pmove.pm_type == PM_NORMAL &&
-	       e->client->pers.hand == RIGHT_HANDED &&
-	       !(e->client->ps.pmove.pm_flags & PMF_DUCKED) &&
-	       e->client->ps.pmove.pm_time == 0 &&
-	       fabsf(e->viewheight - 22.0f) <= 0.1f &&
-	       !(e->waterlevel > 0 &&
-	         (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)));
-}
-
-static qboolean Hook_SourceStateOK(const edict_t *e, const sg_bot_t *bot)
-{
-	int i;
-
-	if (!Hook_LiveWitnessOK(e, bot) || bot->hook_source_water ||
-	    e->waterlevel != 0 || !e->groundentity ||
-	    (e->groundentity != g_edicts &&
-	     !SG_ImmutableSupport(e->groundentity)))
-		return false;
-	for (i = 0; i < 3; i++)
-		if ((short)(e->s.origin[i] * 8.0f) !=
-		    (short)(bot->hook_source[i] * 8.0f) ||
-		    (short)(e->velocity[i] * 8.0f) !=
-		    bot->hook_source_pms.velocity[i])
-			return false;
-	if (e->client->ps.pmove.pm_type != bot->hook_source_pms.pm_type ||
-	    e->client->ps.pmove.pm_flags != bot->hook_source_pms.pm_flags ||
-	    e->client->ps.pmove.pm_time != bot->hook_source_pms.pm_time ||
-	    e->client->ps.pmove.gravity != bot->hook_source_pms.gravity)
-		return false;
-	return true;
-}
-
-enum
-{
-	HOOK_PROOF_FAIL = 0,
-	HOOK_PROOF_OK = 1,
-	HOOK_PROOF_BUSY = 2
-};
-
-/* Passing the shooter to gi.trace correctly excludes its body, but Yamagi
- * also excludes every entity owned by that passedict. A real hook bolt does
- * NOT ignore its sibling rocket/grenade, so check those separately. Keep the
- * check conservative and engine-portable: a stack fake-edict reproduces
- * Yamagi's owner rule, but API-3 proxy engines require passedict to belong to
- * the exported edict array. The linked abs bounds already include the
- * engine's one-unit clip fringe. */
-static qboolean Hook_OwnedSolidBlocksShot(edict_t *owner,
-	const vec3_t start, const vec3_t end)
-{
-	edict_t *touch[MAX_EDICTS];
-	vec3_t query_min, query_max, delta;
-	int axis, i, num;
-
-	if (!owner || !sg_host.box_edicts)
-		return true;                 /* exact witness unavailable: fail closed */
-	for (axis = 0; axis < 3; axis++)
-	{
-		query_min[axis] = (start[axis] < end[axis] ? start[axis] : end[axis])
-		                - 1.0f;
-		query_max[axis] = (start[axis] > end[axis] ? start[axis] : end[axis])
-		                + 1.0f;
-		delta[axis] = end[axis] - start[axis];
-	}
-	num = sg_host.box_edicts(query_min, query_max, touch, MAX_EDICTS,
-	                          AREA_SOLID);
-	for (i = 0; i < num; i++)
-	{
-		edict_t *hit = touch[i];
-		float enter = 0.0f, leave = 1.0f;
-
-		if (!hit || !hit->inuse || hit == owner || hit->owner != owner ||
-		    hit->solid == SOLID_NOT)
-			continue;
-		for (axis = 0; axis < 3; axis++)
-		{
-			float a, b, inv;
-
-			if (fabsf(delta[axis]) < 0.0001f)
-			{
-				if (start[axis] < hit->absmin[axis] ||
-				    start[axis] > hit->absmax[axis])
-					break;
-				continue;
-			}
-			inv = 1.0f / delta[axis];
-			a = (hit->absmin[axis] - start[axis]) * inv;
-			b = (hit->absmax[axis] - start[axis]) * inv;
-			if (a > b)
-			{
-				float swap = a;
-				a = b;
-				b = swap;
-			}
-			if (a > enter) enter = a;
-			if (b < leave) leave = b;
-			if (enter > leave)
-				break;
-		}
-		if (axis == 3 && leave >= 0.0f && enter <= 1.0f)
-			return true;
-	}
-	return false;
-}
-
-/* Re-prove from the exact fixed-point state Cmd_Hook_f is about to consume.
- * The rune control is a planning prior; this witness is the executable
- * contract for the bot's actual position inside the source cell. */
-static int Hook_OnlineProof(edict_t *e, sg_bot_t *bot,
-	float nominal_distance, float *flight_distance)
-{
-	rune_link_t *link;
-	sg_phantom_t ph;
-	sg_hook_proof_t proof;
-	vec3_t forward, right, muzzle, shot_end, source_to_muzzle;
-	trace_t muzzle_tr, shot_tr;
-	float shot_len;
-	vec3_t source_delta;
-	qboolean source_water;
-	int i, flight_ms, proof_slot;
-
-	if (!e || !e->client || !bot || !flight_distance || !SG_Rune() ||
-	    bot->hook_link < 0 || bot->hook_link >= SG_Rune()->hdr.num_links ||
-	    level.intermissiontime || GamePaused() ||
-	    e->health <= 0 || e->deadflag || e->movetype != MOVETYPE_WALK ||
-	    e->client->ps.pmove.pm_type != PM_NORMAL ||
-	    (want_funky_gravity && want_funky_gravity->value != 0.0f) ||
-	    (e->client->ps.pmove.pm_flags & ~PMF_ON_GROUND) != 0 ||
-	    e->client->ps.pmove.pm_time != 0 ||
-	    fabsf(e->viewheight - 22.0f) > 0.1f || !SG_HookOffhandReady(e) ||
-	    SG_RocketJumpGameOwns(bot) || bot->nade_phase != 0)
-		return HOOK_PROOF_FAIL;
-	link = &SG_Rune()->links[bot->hook_link];
-	if (link->action != RL_HOOK || bot->commit_link != bot->hook_link)
-		return HOOK_PROOF_FAIL;
-	source_water =
-	    (SG_Rune()->seeds[link->from].flags & RSF_WATER) != 0;
-	if ((source_water &&
-	     ((SG_Rune()->seeds[link->to].flags & RSF_WATER) ||
-	      link->heading_slack != RUNE_WATER_HOOK_CONTROL_MARKER ||
-	      e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
-	      (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))) ||
-	    (!source_water &&
-	     (link->heading_slack != RUNE_HOOK_CONTROL_SLACK ||
-	      !e->groundentity ||
-	      (e->groundentity != g_edicts &&
-	       !SG_ImmutableSupport(e->groundentity)) || e->waterlevel != 0)))
-		return HOOK_PROOF_FAIL;
-	VectorSubtract(SG_Rune()->seeds[link->from].origin, e->s.origin,
-	               source_delta);
-	if (source_delta[0] * source_delta[0] + source_delta[1] * source_delta[1] >
-	        20.0f * 20.0f || fabsf(source_delta[2]) > 16.0f)
-		return HOOK_PROOF_FAIL;
-	if (!source_water)
-		for (i = 0; i < 3; i++)
-			if ((short)(e->velocity[i] * 8.0f) != 0)
-				return HOOK_PROOF_FAIL;
-	if ((short)ANGLE2SHORT(e->client->v_angle[PITCH]) !=
-	        (short)ANGLE2SHORT(bot->hook_view[PITCH]) ||
-	    (short)ANGLE2SHORT(e->client->v_angle[YAW]) !=
-	        (short)ANGLE2SHORT(bot->hook_view[YAW]) ||
-	    fabsf(e->client->v_angle[ROLL]) > 0.001f)
-		return HOOK_PROOF_FAIL;
-	proof_slot = (int)(bot - sg_bots);
-	if (proof_slot < 0 || proof_slot >= SG_MAXBOTS)
-		return HOOK_PROOF_FAIL;
-	/* At most one expensive witness per server frame. Rotate the grant through
-	 * sg_bots slots, the exact ascending order SG_RunFrame visits. A low slot
-	 * that repeatedly finds bad local geometry
-	 * must not consume every frame ahead of later bots. If no waiter exists past
-	 * the last owner, one frame is left unused and the following frame wraps. */
-	if (level.framenum < sg_hook_reproof_frame)
-	{
-		sg_hook_reproof_frame = -1; /* level-time rewind */
-		sg_hook_reproof_slot = 0;
-	}
-	if (sg_hook_reproof_frame == level.framenum)
-		return HOOK_PROOF_BUSY;
-	if (sg_hook_reproof_frame == level.framenum - 1 &&
-	    proof_slot <= sg_hook_reproof_slot)
-		return HOOK_PROOF_BUSY;
-	sg_hook_reproof_frame = level.framenum;
-	sg_hook_reproof_slot = proof_slot;
-
-	AngleVectors(e->client->v_angle, forward, right, NULL);
-	CTF_HookMuzzle(e->s.origin, e->viewheight, e->client->pers.hand,
-	               forward, right, muzzle);
-	muzzle_tr = sg_host.trace(e->s.origin, NULL, NULL, muzzle, e, MASK_SHOT);
-	if (muzzle_tr.startsolid || muzzle_tr.fraction < 1.0f)
-		return HOOK_PROOF_FAIL;
-	VectorNormalize(forward);
-	shot_len = nominal_distance + 96.0f;
-	if (shot_len < 160.0f)
-		shot_len = 160.0f;
-	if (shot_len > RUNE_HOOK_MAX_RAY)
-		shot_len = RUNE_HOOK_MAX_RAY;
-	VectorMA(muzzle, shot_len, forward, shot_end);
-	shot_tr = sg_host.trace(muzzle, NULL, NULL, shot_end, e, MASK_SHOT);
-	if (shot_tr.startsolid || shot_tr.fraction >= 1.0f ||
-	    shot_tr.ent != g_edicts ||
-	    (shot_tr.surface && (shot_tr.surface->flags & SURF_SKY)))
-		return HOOK_PROOF_FAIL;
-	if (Hook_OwnedSolidBlocksShot(e, muzzle, shot_tr.endpos))
-		return HOOK_PROOF_FAIL;
-	VectorSubtract(shot_tr.endpos, muzzle, source_to_muzzle);
-	*flight_distance = DotProduct(source_to_muzzle, forward);
-	if (*flight_distance < 1.0f || *flight_distance > RUNE_HOOK_MAX_RAY)
-		return HOOK_PROOF_FAIL;
-	VectorMA(muzzle, *flight_distance, forward, bot->hook_anchor);
-	if (!SG_OracleHookFlightClear(muzzle, bot->hook_anchor))
-		return HOOK_PROOF_FAIL;
-	flight_ms = (int)ceilf(*flight_distance /
-	                          RUNE_HOOK_FRAME_DISTANCE) * 100;
-
-	memset(&ph, 0, sizeof(ph));
-	ph.pms = e->client->ps.pmove;
-	ph.old_pms = e->client->old_pmove;
-	for (i = 0; i < 3; i++)
-	{
-		ph.pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
-		ph.pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
-		ph.origin[i] = ph.pms.origin[i] * 0.125f;
-		ph.velocity[i] = ph.pms.velocity[i] * 0.125f;
-	}
-	ph.pms.gravity = (short)sv_gravity->value;
-	ph.groundentity = e->groundentity != NULL;
-	ph.watertype = e->watertype;
-	ph.waterlevel = e->waterlevel;
-	if (!SG_OracleHookTraverse(&ph, bot->hook_anchor, bot->hook_dest,
-	                           bot->hook_view, RIGHT_HANDED, flight_ms,
-	                           source_water ? RUNE_HOOK_WATER_SETTLE_MS
-	                                        : RUNE_HOOK_DRY_SETTLE_MS,
-	                           e->client->oldvelocity[2], &proof, e, true))
-		return HOOK_PROOF_FAIL;
-	if (source_water)
-	{
-		float available_air = e->waterlevel >= 3
-		    ? SG_TimerRemaining(e->air_finished) : 12.0f;
-		float action_seconds =
-		    (flight_ms + proof.pull_ms + proof.settle_ms) * 0.001f + 0.2f;
-
-		if (available_air <= action_seconds)
-			return HOOK_PROOF_FAIL;
-	}
-
-	VectorCopy(e->s.origin, bot->hook_source);
-	bot->hook_source[0] = (short)(bot->hook_source[0] * 8.0f) * 0.125f;
-	bot->hook_source[1] = (short)(bot->hook_source[1] * 8.0f) * 0.125f;
-	bot->hook_source[2] = (short)(bot->hook_source[2] * 8.0f) * 0.125f;
-	bot->hook_source_pms = e->client->ps.pmove;
-	for (i = 0; i < 3; i++)
-	{
-		bot->hook_source_pms.origin[i] = (short)(e->s.origin[i] * 8.0f);
-		bot->hook_source_pms.velocity[i] = (short)(e->velocity[i] * 8.0f);
-	}
-	bot->hook_attach_pms = proof.attach_pms;
-	bot->hook_source_water = source_water;
-	bot->hook_source_health = e->health;
-	bot->hook_attach_groundentity = proof.attach_groundentity;
-	bot->hook_attach_watertype = proof.attach_watertype;
-	bot->hook_attach_waterlevel = proof.attach_waterlevel;
-	bot->hook_proved_pull_ms = proof.pull_ms;
-	bot->hook_proved_release_ms = proof.release_ms;
-	bot->hook_proved_arrival_ms = proof.settle_arrival_ms;
-	bot->hook_proved_settle_ms = proof.settle_ms;
-	return HOOK_PROOF_OK;
-}
-
-static qboolean Hook_AttachmentOK(edict_t *e, sg_bot_t *bot)
-{
-	vec3_t miss;
-	int i;
-
-	if (!Hook_LiveWitnessOK(e, bot) || e->client->hookstate != 2 ||
-	    !e->client->hook || e->client->hook->hook_target != g_edicts ||
-	    (!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-	    (!!e->groundentity != !!bot->hook_attach_groundentity) ||
-	    (e->groundentity && e->groundentity != g_edicts &&
-	     !SG_ImmutableSupport(e->groundentity)) ||
-	    e->watertype != bot->hook_attach_watertype ||
-	    e->waterlevel != bot->hook_attach_waterlevel)
-		return false;
-	VectorSubtract(e->client->hook->s.origin, bot->hook_anchor, miss);
-	if (VectorLength(miss) > 0.5f)
-		return false;
-	for (i = 0; i < 3; i++)
-		if ((short)(e->s.origin[i] * 8.0f) != bot->hook_attach_pms.origin[i] ||
-		    (short)(e->velocity[i] * 8.0f) != bot->hook_attach_pms.velocity[i])
-			return false;
-	if (e->client->ps.pmove.pm_type != bot->hook_attach_pms.pm_type ||
-	    e->client->ps.pmove.pm_flags != bot->hook_attach_pms.pm_flags ||
-	    e->client->ps.pmove.pm_time != bot->hook_attach_pms.pm_time ||
-	    e->client->ps.pmove.gravity != bot->hook_attach_pms.gravity ||
-	    memcmp(&e->client->old_pmove, &bot->hook_attach_pms,
-	           sizeof(bot->hook_attach_pms)) != 0)
-		return false;
-	/* Remove collision epsilon from the proved trajectory. The target is the
-	 * immutable world, so keeping the target-relative offset in sync is safe. */
-	VectorCopy(bot->hook_anchor, e->client->hook->s.origin);
-	VectorSubtract(bot->hook_anchor, g_edicts->absmin,
-	               e->client->hook->hook_offset);
-	return true;
-}
-
-static qboolean Hook_AttachmentMaintained(edict_t *e, sg_bot_t *bot)
-{
-	vec3_t miss;
-
-	if (!e || !e->client || e->client->hookstate != 2 ||
-	    !e->client->hook || e->client->hook->hook_target != g_edicts)
-		return false;
-	VectorSubtract(e->client->hook->s.origin, bot->hook_anchor, miss);
-	if (VectorLength(miss) > 0.5f)
-		return false;
-	VectorCopy(bot->hook_anchor, e->client->hook->s.origin);
-	VectorSubtract(bot->hook_anchor, g_edicts->absmin,
-	               e->client->hook->hook_offset);
-	return true;
-}
-
-static qboolean Hook_SettleArrived(const edict_t *e, const sg_bot_t *bot)
-{
-	return SG_SupportedArrived(e->s.origin, bot->hook_dest,
-	                           e->groundentity != NULL, e->watertype,
-	                           e->waterlevel, (edict_t *)e);
-}
-
 static void Swim_LivePose(const edict_t *e, sg_replay_pose_t *pose)
 {
 	SG_SwimLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
@@ -6842,144 +6403,6 @@ static void Swim_ProofFail(edict_t *e, sg_bot_t *bot, int link_index,
 		           e->client->pers.netname, link_index);
 }
 
-static void Hook_LivePose(const edict_t *e, sg_replay_pose_t *pose)
-{
-	SG_DropLivePose(pose, e && e->client ? &e->client->ps.pmove : NULL,
-	    e ? e->s.origin : NULL, e ? e->velocity : NULL,
-	    e && e->groundentity != NULL, e ? e->watertype : 0,
-	    e ? e->waterlevel : 0);
-}
-
-/* A live graph-hook owner is the graph link plus the exact bolt created by
- * Cmd_Hook_f.  Once release has aborted the bolt, phase 3 deliberately owns
- * the no-bolt settlement; no recycled client hook may substitute for it. */
-static qboolean Hook_LiveIdentityCurrent(const edict_t *e,
-	const sg_bot_t *bot)
-{
-	if (!e || !e->client || !bot || !SG_Rune() || !bot->hook_replay_active ||
-	    bot->hook_replay_link < 0 || bot->hook_link != bot->hook_replay_link ||
-	    bot->commit_link != bot->hook_replay_link ||
-	    bot->hook_replay_link >= SG_Rune()->hdr.num_links ||
-	    SG_Rune()->links[bot->hook_replay_link].action != RL_HOOK)
-		return false;
-	if (bot->hook_phase == 2)
-		return bot->hook_entity != NULL && e->client->hook == bot->hook_entity;
-	return bot->hook_phase == 3 && e->client->hookstate == 0 &&
-	       e->client->hook == NULL && bot->hook_entity != NULL;
-}
-
-static void Hook_LiveObservation(const edict_t *e, const sg_bot_t *bot,
-	qboolean sample_settlement_contact, sg_replay_observation_t *observation)
-{
-	vec3_t view, forward, right, muzzle, bite, velocity;
-
-	memset(observation, 0, sizeof(*observation));
-	if (!e || !e->client || !bot)
-		return;
-	/* The old graph controller sampled its supported-destination predicate only
-	 * at its settlement decision points.  The caller also suppresses it after
-	 * its historical arrival latch, except for the final terminal check.  Do
-	 * not introduce that contact (and its support trace) during bolt flight,
-	 * attach, pull, or zero-fill substeps. */
-	if (sample_settlement_contact && bot->hook_legacy_settle)
-		observation->contact_clear = Hook_SettleArrived(e, bot);
-	if (e->client->hookstate != 2 || !e->client->hook)
-		return;
-	VectorCopy(bot->hook_view, view);
-	AngleVectors(view, forward, right, NULL);
-	CTF_HookMuzzle(e->s.origin, e->viewheight, e->client->pers.hand,
-	               forward, right, muzzle);
-	if (e->client->hook->hook_target)
-		VectorAdd(e->client->hook->hook_target->absmin,
-		          e->client->hook->hook_offset, bite);
-	else
-		VectorCopy(e->client->hook->s.origin, bite);
-	observation->hook_rope_length = CTF_HookPullVelocity(muzzle, bite, velocity);
-	observation->hook_rope_valid = observation->hook_rope_length >= 0;
-}
-
-/* The adapter callback intentionally receives no host context.  The game is
- * single-threaded and this scoped pointer exists only around PreStep, so the
- * independent historical controller can use the body-owned destination,
- * fixed view, and release latch without consulting reducer phase or arrival.
- */
-static const sg_bot_t *hook_legacy_command_bot;
-
-static qboolean Hook_LiveLegacyCommand(const sg_hook_replay_state_t *state,
-	const sg_replay_pose_t *pose, const sg_replay_observation_t *observation,
-	usercmd_t *command)
-{
-	float dx, dy, dz, yaw;
-	const sg_bot_t *bot = hook_legacy_command_bot;
-
-	(void)state;
-	if (!bot || !pose || !observation || !command)
-		return false;
-	memset(command, 0, sizeof(*command));
-	command->msec = SG_REPLAY_STEP_MS;
-	if (bot->hook_legacy_settle &&
-	    (bot->hook_legacy_arrived || observation->contact_clear))
-		return true; /* literal post-arrival zero fill */
-	if (bot->hook_legacy_settle)
-	{
-		dx = bot->hook_dest[0] - pose->origin[0];
-		dy = bot->hook_dest[1] - pose->origin[1];
-		dz = bot->hook_dest[2] - pose->origin[2];
-		if (!isfinite(dx) || !isfinite(dy) || !isfinite(dz))
-			return false;
-		yaw = atan2f(dy, dx) * 180.0f / (float)M_PI;
-		command->angles[PITCH] = -pose->pms.delta_angles[PITCH];
-		command->angles[YAW] = ANGLE2SHORT(yaw) - pose->pms.delta_angles[YAW];
-		command->angles[ROLL] = -pose->pms.delta_angles[ROLL];
-		command->forwardmove = 400;
-		return true;
-	}
-	command->angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
-	                         pose->pms.delta_angles[PITCH];
-	command->angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
-	                       pose->pms.delta_angles[YAW];
-	command->angles[ROLL] = -pose->pms.delta_angles[ROLL];
-	return true;
-}
-
-static void Hook_LiveResultLog(const edict_t *e, int link_index,
-	const char *phase, const sg_hook_live_result_t *result)
-{
-	if (!result || result->outcome == SG_HOOK_LIVE_RUNNING ||
-	    result->outcome == SG_HOOK_LIVE_ARRIVED || !sg_cv.debug->value)
-		return;
-	sg_host.dprint("HOOKREPLAY %s link=%d phase=%s adapter=%s replay=%s\n",
-	    e && e->client ? e->client->pers.netname : "?", link_index,
-	    phase ? phase : "?", SG_HookLiveFailureName(result->failure),
-	    SG_ReplayReasonName(result->replay_reason));
-}
-
-static float Hook_LiveShelfSeconds(sg_hook_replay_phase_t replay_phase,
-	sg_replay_reason_t reason)
-{
-	/* Preserve the legacy executor's three ownership shelves.  The reducer
-	 * reports a reason, but the historical controller chose its retry period
-	 * at the point that owned the body: launch/attach (15), pull/release (30),
-	 * or settlement (60).  A boundary liquid report is the only exception
-	 * while the bolt is still out: the old post-frame liquid interrupt was 30.
-	 * The caller handles the old *pre-frame* liquid interrupt explicitly,
-	 * because that was 30 even while phase 3 was about to settle. */
-	switch (replay_phase)
-	{
-	case SG_HOOK_REPLAY_SETTLE:
-		return 60.0f;
-	case SG_HOOK_REPLAY_WAIT_PULL:
-	case SG_HOOK_REPLAY_PULL_FRAME:
-		return 30.0f;
-	case SG_HOOK_REPLAY_FLIGHT:
-	case SG_HOOK_REPLAY_WAIT_ATTACH:
-	case SG_HOOK_REPLAY_ATTACH_FRAME:
-	default:
-		return reason == SG_REPLAY_REASON_HAZARDOUS_LIQUID ? 30.0f : 15.0f;
-	}
-}
-
-#ifdef SG_STRIKE_TRANSITION_TEST_API
 void SG_StrikeTestDirectTouchClaimMovement(sg_bot_t *bot, const edict_t *e,
 	sg_think_t *tc, qboolean terminal)
 {
@@ -7007,674 +6430,6 @@ int SG_StrikeTestTerminalFieldSeed(const rune_t *rune, const int *field,
 qboolean SG_TestGenericRailMoveAllowed(const sg_bot_t *bot, const sg_think_t *tc)
 {
 	return GenericRailMoveAllowed(bot, tc);
-}
-
-#endif
-
-static void Hook_LiveSync(sg_bot_t *bot)
-{
-	if (!bot)
-		return;
-	bot->hook_pull_ms = bot->hook_replay.pull_ms;
-	bot->hook_settle_ms = bot->hook_replay.settle_ms;
-}
-
-static void Hook_LiveTailCommand(const sg_bot_t *bot, qboolean settlement,
-	const pmove_state_t *pms, usercmd_t *command)
-{
-	if (!command)
-		return;
-	SG_HookLiveZeroCommand(command);
-	/* A legacy pull failure still consumed the remaining substeps with zero
-	 * movement and its immutable rope view.  Settlement failures consumed
-	 * literal zero commands. */
-	if (!settlement && bot && pms)
-	{
-		command->angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
-		                         pms->delta_angles[PITCH];
-		command->angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
-		                       pms->delta_angles[YAW];
-		command->angles[ROLL] = -pms->delta_angles[ROLL];
-	}
-}
-
-/* Hook_GraphFail deliberately zeros the public clocks.  The legacy pull loop
- * nevertheless incremented hook_pull_ms after every remaining zero-input
- * ClientThink in that same outer frame; preserve that observable fixed-step
- * history without giving settlement failures a clock they never had. */
-static void Hook_LiveTailAdvance(sg_bot_t *bot, qboolean pull_clock)
-{
-	if (bot && pull_clock)
-		bot->hook_pull_ms += SG_REPLAY_STEP_MS;
-}
-
-static qboolean Hook_LiveRetireNonRunning(edict_t *e, sg_bot_t *bot,
-	int link_index, const char *phase, sg_hook_replay_phase_t replay_phase,
-	const sg_hook_live_result_t *result)
-{
-	Hook_LiveResultLog(e, link_index, phase, result);
-	if (!result || result->outcome == SG_HOOK_LIVE_RUNNING)
-		return false;
-	if (result->outcome == SG_HOOK_LIVE_ARRIVED)
-	{
-		/* The fourth settlement ClientThink has already completed; retain the
-		 * exact terminal 100 ms clock the legacy body left behind. */
-		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
-		    "arrived", "reducer");
-		Hook_LiveSync(bot);
-		bot->commit_link = -1;
-		bot->hook_phase = 0;
-		bot->hook_link = -1;
-		Hook_LiveClearFinalGuard(bot);
-		bot->hook_entity = NULL;
-		bot->hook_legacy_settle = false;
-		bot->hook_legacy_arrived = false;
-		return true;
-	}
-	Hook_GraphFailDetail(e, bot,
-	    Hook_LiveShelfSeconds(replay_phase, result->replay_reason),
-	    SG_ReplayReasonName(result->replay_reason));
-	return true;
-}
-
-/* The 100 ms predictor deliberately ends at an attachment acknowledgement,
- * not at a promise that the engine has already changed hookstate.  The old
- * graph body kept its one entry command unchanged for all four ClientThink
- * calls while that exact outgoing bolt remained in flight.  Snapshot pose and
- * PMove input at frame entry; the outer identity gate deliberately remains
- * authoritative for this full frame.  An attach or lost bolt during a substep
- * is observed at the next outer-frame gate, just as it was before the adapter
- * existed. */
-static qboolean Hook_LiveWaitAttachFrame(sg_bot_t *bot, edict_t *e,
-	int link_index)
-{
-	int step;
-	qboolean failed = false;
-	pmove_state_t entry_pms;
-	sg_replay_pose_t entry_pose;
-	sg_replay_observation_t observation;
-
-	entry_pms = e->client->ps.pmove;
-	Hook_LivePose(e, &entry_pose);
-	entry_pose.pms = entry_pms;
-	Hook_LiveObservation(e, bot, false, &observation);
-	for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)
-	{
-		sg_hook_live_result_t result;
-		usercmd_t command;
-
-		if (failed)
-		{
-			Hook_LiveTailCommand(bot, false, &entry_pms, &command);
-			ClientThink(e, &command);
-			continue;
-		}
-		memset(&command, 0, sizeof(command));
-		command.msec = SG_REPLAY_STEP_MS;
-		hook_legacy_command_bot = bot;
-		result = SG_HookLiveWaitAttachStep(&bot->hook_replay,
-		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-		    true, &entry_pose, &observation, Hook_LiveLegacyCommand, &command,
-		    &bot->hook_final_guard);
-		hook_legacy_command_bot = NULL;
-		if (Hook_LiveRetireNonRunning(e, bot, link_index, "wait-attach",
-		    SG_HOOK_REPLAY_WAIT_ATTACH, &result))
-		{
-			if (result.outcome == SG_HOOK_LIVE_ARRIVED)
-				return true;
-			Hook_LiveTailCommand(bot, false, &entry_pms, &command);
-			ClientThink(e, &command);
-			failed = true;
-			continue;
-		}
-		/* The adapter saved the canonical command before any later host writer;
-		 * consume that one-shot approval immediately before ClientThink. */
-		result = SG_HookLiveValidateStoredFinalCommand(&bot->hook_replay,
-		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-		    true, &bot->hook_final_guard, &command);
-		if (Hook_LiveRetireNonRunning(e, bot, link_index,
-		    "wait-attach-final-command", SG_HOOK_REPLAY_WAIT_ATTACH, &result))
-		{
-			Hook_LiveTailCommand(bot, false, &entry_pms, &command);
-			ClientThink(e, &command);
-			failed = true;
-			continue;
-		}
-		ClientThink(e, &command);
-	}
-	/* The pre-frame liquid gate is above.  This is the old post-flight gate,
-	 * which observes all four frozen commands before applying its 30 s shelf. */
-	if (!failed && e->waterlevel > 0 &&
-	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-		Hook_GraphFail(e, bot, 30.0f);
-	return true;
-}
-
-static qboolean Hook_LiveActiveFrame(sg_bot_t *bot, edict_t *e)
-{
-	int step, link_index;
-	sg_hook_replay_phase_t replay_phase;
-	qboolean failed = false;
-	qboolean release_seen = false;
-	qboolean frame_settlement;
-	qboolean frame_pull_clock;
-
-	link_index = bot ? bot->hook_link : -1;
-	replay_phase = bot ? bot->hook_replay.phase : SG_HOOK_REPLAY_FLIGHT;
-	/* Match the legacy pre-command liquid interrupt.  It was a 30 s retry in
-	 * both rope and phase-3 settlement; only a liquid divergence observed
-	 * after settlement's four historical commands took its 60 s shelf. */
-	if (e->waterlevel > 0 &&
-	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-	{
-		Hook_GraphFail(e, bot, 30.0f);
-		return true;
-	}
-	/* In rope ownership phases, the historical maintenance gate preceded any
-	 * abstract identity law: a vanished/replaced bolt is the old 15 s
-	 * attachment failure, not a 30 s pull-timing failure.  A live bolt that
-	 * still satisfies that gate may then expose a link/owner identity drift to
-	 * the adapter below. */
-	if (!Hook_LiveIdentityCurrent(e, bot))
-	{
-		if ((replay_phase == SG_HOOK_REPLAY_ATTACH_FRAME ||
-		     replay_phase == SG_HOOK_REPLAY_WAIT_PULL ||
-		     replay_phase == SG_HOOK_REPLAY_PULL_FRAME) &&
-		    !Hook_AttachmentMaintained(e, bot))
-		{
-			Hook_GraphFail(e, bot, 15.0f);
-			return true;
-		}
-		else
-		{
-			sg_hook_live_result_t result = SG_HookLivePostStep(
-			    &bot->hook_replay, &bot->hook_replay_active,
-			    &bot->hook_replay_link, bot->hook_link, false, NULL, NULL);
-
-			Hook_LiveRetireNonRunning(e, bot, link_index, "identity",
-			                         replay_phase, &result);
-			return true;
-		}
-	}
-	/* Outbound bolt flight retains the old witness gate before it submits its
-	 * four fixed-view commands. */
-	if (replay_phase == SG_HOOK_REPLAY_FLIGHT)
-	{
-		if (e->client->hookstate != 1 || !e->client->hook ||
-		    (!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-		    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
-		    SG_TimerReadyStrict(bot->hook_deadline))
-		{
-			Hook_GraphFail(e, bot, 15.0f);
-			return true;
-		}
-	}
-	/* WAIT_ATTACH is a reducer event barrier, not an engine attachment
-	 * predicate.  Preserve the old late-bolt tolerance: while the original
-	 * bolt is still outward-bound, retain its source/witness/deadline gate and
-	 * spend one whole fixed-view frame before inspecting attachment again. */
-	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH &&
-	    e->client->hookstate == 1 && e->client->hook)
-	{
-		if ((!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-		    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
-		    SG_TimerReadyStrict(bot->hook_deadline))
-		{
-			Hook_GraphFail(e, bot, 15.0f);
-			return true;
-		}
-		return Hook_LiveWaitAttachFrame(bot, e, link_index);
-	}
-	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH)
-	{
-		sg_replay_pose_t pose;
-		sg_hook_live_result_t result;
-
-		if (!Hook_AttachmentOK(e, bot))
-		{
-			Hook_GraphFail(e, bot, 15.0f);
-			return true;
-		}
-		bot->hook_attached_validated = true;
-		Hook_LivePose(e, &pose);
-		result = SG_HookLiveAttached(&bot->hook_replay,
-		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-		    true, &pose);
-		if (Hook_LiveRetireNonRunning(e, bot, link_index, "attached",
-		                             SG_HOOK_REPLAY_WAIT_ATTACH, &result))
-			return true;
-		Hook_LiveSync(bot);
-		replay_phase = bot->hook_replay.phase;
-	}
-	/* AttachmentOK owns the first attached frame.  Every later attached and
-	 * pull frame retains the legacy immutable-bite maintenance check. */
-	if ((replay_phase == SG_HOOK_REPLAY_ATTACH_FRAME ||
-	     replay_phase == SG_HOOK_REPLAY_WAIT_PULL ||
-	     replay_phase == SG_HOOK_REPLAY_PULL_FRAME) &&
-	    !Hook_AttachmentMaintained(e, bot))
-	{
-		Hook_GraphFail(e, bot, 15.0f);
-		return true;
-	}
-	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_PULL)
-	{
-		/* The one production pull is acknowledged by SG_HookLiveEndFrame,
-		 * immediately after Weapon_Hook_Fire in ClientEndServerFrame. */
-		Hook_GraphFail(e, bot, 30.0f);
-		return true;
-	}
-	frame_settlement = bot->hook_legacy_settle;
-	frame_pull_clock = !frame_settlement &&
-	                   bot->hook_replay.phase == SG_HOOK_REPLAY_PULL_FRAME;
-	for (step = 0; step < SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS; step++)
-	{
-		sg_replay_pose_t pose;
-		sg_replay_observation_t observation;
-		sg_hook_live_result_t result;
-		usercmd_t command;
-		sg_hook_replay_phase_t step_phase;
-		qboolean post_arrival_contact;
-
-		if (failed)
-		{
-			Hook_LiveTailCommand(bot, frame_settlement,
-			    &e->client->ps.pmove, &command);
-			ClientThink(e, &command);
-			Hook_LiveTailAdvance(bot, frame_pull_clock);
-			continue;
-		}
-
-		Hook_LivePose(e, &pose);
-		Hook_LiveObservation(e, bot,
-		    frame_settlement && !bot->hook_legacy_arrived, &observation);
-		memset(&command, 0, sizeof(command));
-		command.msec = SG_REPLAY_STEP_MS;
-		step_phase = bot->hook_replay.phase;
-		hook_legacy_command_bot = bot;
-		result = SG_HookLivePreStep(&bot->hook_replay,
-		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-		    true, &pose, &observation, Hook_LiveLegacyCommand, &command,
-		    &bot->hook_final_guard);
-		hook_legacy_command_bot = NULL;
-		if (Hook_LiveRetireNonRunning(e, bot, link_index, "prestep",
-		                             step_phase, &result))
-		{
-			if (result.outcome == SG_HOOK_LIVE_ARRIVED)
-				return true;
-			Hook_LiveTailCommand(bot, frame_settlement,
-			    &e->client->ps.pmove, &command);
-			ClientThink(e, &command);
-			Hook_LiveTailAdvance(bot, frame_pull_clock);
-			failed = true;
-			continue;
-		}
-		if (frame_settlement && observation.contact_clear)
-			bot->hook_legacy_arrived = true;
-		/* Do not recopy command here: the adapter owns the earlier immutable
-		 * approval so a downstream writer remains visible at this boundary. */
-		result = SG_HookLiveValidateStoredFinalCommand(&bot->hook_replay,
-		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-		    true, &bot->hook_final_guard, &command);
-		if (Hook_LiveRetireNonRunning(e, bot, link_index, "final-command",
-		                             step_phase, &result))
-		{
-			Hook_LiveTailCommand(bot, frame_settlement,
-			    &e->client->ps.pmove, &command);
-			ClientThink(e, &command);
-			Hook_LiveTailAdvance(bot, frame_pull_clock);
-			failed = true;
-			continue;
-		}
-		ClientThink(e, &command);
-		Hook_LivePose(e, &pose);
-		/* A non-arrived legacy settlement checked contact once after its
-		 * submitted command.  Once arrival latched, it issued literal zeros
-		 * without more contact traces until the one terminal check at substep 4.
-		 * Keep both samples explicit so the host differential is historical,
-		 * rather than a mirror of the reducer's arrival bit. */
-		Hook_LiveObservation(e, bot,
-		    frame_settlement && !bot->hook_legacy_arrived, &observation);
-		post_arrival_contact = observation.contact_clear;
-		if (frame_settlement &&
-		    step == SG_REPLAY_FRAME_MS / SG_REPLAY_STEP_MS - 1 &&
-		    (bot->hook_legacy_arrived || post_arrival_contact))
-			Hook_LiveObservation(e, bot, true, &observation);
-		step_phase = bot->hook_replay.phase;
-		result = SG_HookLivePostStep(&bot->hook_replay,
-		    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-		    Hook_LiveIdentityCurrent(e, bot), &pose, &observation);
-		if (Hook_LiveRetireNonRunning(e, bot, link_index, "poststep",
-		                             step_phase, &result))
-		{
-			if (result.outcome == SG_HOOK_LIVE_ARRIVED)
-				return true;
-			failed = true;
-			continue;
-		}
-		if (frame_settlement && post_arrival_contact)
-			bot->hook_legacy_arrived = true;
-		Hook_LiveSync(bot);
-		if (bot->hook_replay.release_requested &&
-		    !bot->hook_replay.release_applied)
-		{
-			/* Exact order: reducer requests release, production abort mutates the
-			 * hook/body, then the adapter records that resulting authoritative pose. */
-			ctf_hook_abort(e);
-			bot->hook_phase = 3;
-			bot->flow_release = false;
-			bot->hook_settle_ms = 0;
-			Hook_LivePose(e, &pose);
-			result = SG_HookLiveReleaseApplied(&bot->hook_replay,
-			    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-			    Hook_LiveIdentityCurrent(e, bot), &pose);
-			if (Hook_LiveRetireNonRunning(e, bot, link_index, "release",
-			                             SG_HOOK_REPLAY_PULL_FRAME, &result))
-			{
-				failed = true;
-				continue;
-			}
-			Hook_LiveSync(bot);
-			release_seen = true;
-		}
-	}
-	/* A release in substep 1/2/3 still finishes this outer fixed-view frame.
-	 * The following frame is the first independent legacy settlement frame. */
-	if (!failed && release_seen)
-	{
-		bot->hook_legacy_settle = true;
-		bot->hook_legacy_arrived = false;
-	}
-	return true;
-}
-
-void SG_HookLiveEndFrame(edict_t *e)
-{
-	sg_bot_t *bot;
-	sg_replay_pose_t pose;
-	sg_hook_live_result_t result;
-
-	if (!e || !e->client)
-		return;
-	bot = HumanSpeed_BotForEntity(e);
-	if (bot && bot->speedhook && bot->hook_phase == 2 &&
-	    e->client->hookstate == 2 && e->client->hook)
-		bot->speedhook_pull_applied = true;
-	if (!bot || !bot->hook_replay_active ||
-	    bot->hook_replay.phase != SG_HOOK_REPLAY_WAIT_PULL)
-		return;
-	Hook_LivePose(e, &pose);
-	result = SG_HookLivePullApplied(&bot->hook_replay,
-	    &bot->hook_replay_active, &bot->hook_replay_link, bot->hook_link,
-	    Hook_LiveIdentityCurrent(e, bot), &pose);
-	if (!Hook_LiveRetireNonRunning(e, bot, bot->hook_link, "pull",
-	    SG_HOOK_REPLAY_WAIT_PULL, &result))
-		Hook_LiveSync(bot);
-}
-
-static qboolean Hook_LiveBeginAfterFire(edict_t *e, sg_bot_t *bot,
-	int link_index, float flight_distance)
-{
-	sg_hook_replay_spec_t spec;
-	sg_replay_pose_t pose;
-	sg_replay_observation_t observation;
-	sg_hook_live_result_t result;
-
-	if (!e || !e->client || !bot || !SG_Rune() || link_index < 0 ||
-	    link_index >= SG_Rune()->hdr.num_links ||
-	    SG_Rune()->links[link_index].action != RL_HOOK ||
-	    bot->hook_link != link_index || bot->commit_link != link_index ||
-	    e->client->hookstate != 1 || !e->client->hook)
-		return false;
-	memset(&spec, 0, sizeof(spec));
-	VectorCopy(bot->hook_anchor, spec.bite);
-	VectorCopy(bot->hook_dest, spec.destination);
-	VectorCopy(bot->hook_view, spec.view_angles);
-	spec.flight_ms = (int)ceilf(flight_distance /
-	                             RUNE_HOOK_FRAME_DISTANCE) * SG_REPLAY_FRAME_MS;
-	spec.settle_limit_ms = bot->hook_source_water ? RUNE_HOOK_WATER_SETTLE_MS :
-	                                                RUNE_HOOK_DRY_SETTLE_MS;
-	spec.expected_release_ms = bot->hook_proved_release_ms;
-	spec.expected_pull_ms = bot->hook_proved_pull_ms;
-	spec.expected_settle_arrival_ms = bot->hook_proved_arrival_ms;
-	spec.expected_settle_ms = bot->hook_proved_settle_ms;
-	Hook_LiveClearFinalGuard(bot);
-	bot->hook_legacy_settle = false;
-	bot->hook_legacy_arrived = false;
-	bot->hook_entity = e->client->hook;
-	Hook_LivePose(e, &pose);
-	Hook_LiveObservation(e, bot, false, &observation);
-	result = SG_HookLiveBegin(&bot->hook_replay, &bot->hook_replay_active,
-	    &bot->hook_replay_link, link_index, true, &spec, &pose, &observation,
-	    e->client->oldvelocity[2], &bot->hook_final_guard);
-	if (result.outcome == SG_HOOK_LIVE_RUNNING)
-		return true;
-	Hook_LiveResultLog(e, link_index, "begin", &result);
-	bot->hook_entity = NULL;
-	return false;
-}
-
-/* The proved graph-hook executor is intentionally outside the normal surface
- * pipeline. A tall ride can have no nearby seed, and fan/combat/holds/scalers
- * are not part of the oracle witness. */
-qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
-{
-	usercmd_t cmd;
-	int step;
-	qboolean cut = false;
-	qboolean failed = false;
-	qboolean arrived = false;
-
-	if (!bot || !e || !e->client || bot->speedhook || bot->hook_link < 0 ||
-	    (bot->hook_phase != 2 && bot->hook_phase != 3))
-		return false;
-	if (bot->hook_replay_active)
-		return Hook_LiveActiveFrame(bot, e);
-	/* Online proof rejects harmful liquid on every 100 ms boundary. Dynamic
-	 * combat can still perturb the live body after proof; retire that diverged
-	 * witness before it deliberately continues through lava/slime. */
-	if (e->waterlevel > 0 &&
-	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-	{
-		Hook_GraphFail(e, bot, 30.0f);
-		return true;
-	}
-
-	memset(&cmd, 0, sizeof(cmd));
-	cmd.msec = 25;
-	if (bot->hook_phase == 2)
-	{
-		/* Outbound flight owns no body input. Dry bodies must remain at their
-		 * source; water bodies may take only the zero-input drift rolled by the
-		 * witness, whose complete state is checked when attachment occurs. */
-		if (e->client->hookstate == 1 && e->client->hook)
-		{
-			if ((!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-			    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
-			    SG_TimerReadyStrict(bot->hook_deadline))
-			{
-				Hook_GraphFail(e, bot, 15.0f);
-				return true;
-			}
-			cmd.angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
-			                         e->client->ps.pmove.delta_angles[PITCH];
-			cmd.angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
-			                       e->client->ps.pmove.delta_angles[YAW];
-			cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
-			for (step = 0; step < 4; step++)
-				ClientThink(e, &cmd);
-			if (e->waterlevel > 0 &&
-			    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-				Hook_GraphFail(e, bot, 30.0f);
-			return true;
-		}
-		if ((!bot->hook_attached_validated && !Hook_AttachmentOK(e, bot)) ||
-		    (bot->hook_attached_validated && !Hook_AttachmentMaintained(e, bot)))
-		{
-			Hook_GraphFail(e, bot, 15.0f);
-			return true;
-		}
-		if (!bot->hook_attached_validated)
-		{
-			bot->hook_attached_validated = true;
-			bot->hook_pull_ms = 0;
-			/* Attachment happened in the entity loop. Spend this frame's four
-			 * no-op commands at the exact source; the first pull is the normal
-			 * ClientEndServerFrame call that follows. */
-			cmd.angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
-			                         e->client->ps.pmove.delta_angles[PITCH];
-			cmd.angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
-			                       e->client->ps.pmove.delta_angles[YAW];
-			cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
-			for (step = 0; step < 4; step++)
-				ClientThink(e, &cmd);
-			if (e->waterlevel > 0 &&
-			    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-				Hook_GraphFail(e, bot, 30.0f);
-			return true;
-		}
-
-		for (step = 0; step < 4; step++)
-		{
-			qboolean ready;
-
-			cmd.angles[PITCH] = ANGLE2SHORT(bot->hook_view[PITCH]) -
-			                         e->client->ps.pmove.delta_angles[PITCH];
-			cmd.angles[YAW] = ANGLE2SHORT(bot->hook_view[YAW]) -
-			                       e->client->ps.pmove.delta_angles[YAW];
-			cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
-			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
-			ClientThink(e, &cmd);
-			bot->hook_pull_ms += 25;
-			if (failed || cut)
-				continue;
-			ready = Hook_GraphReleaseReady(e, bot);
-			if (ready && bot->hook_pull_ms == bot->hook_proved_release_ms)
-				Hook_GraphRelease(e, bot, &cut);
-			else if (ready ||
-			         bot->hook_pull_ms >= bot->hook_proved_release_ms)
-			{
-				Hook_GraphFail(e, bot, 30.0f);
-				failed = true;
-			}
-		}
-		if (failed)
-			return true;
-		if (e->waterlevel > 0 &&
-		    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-		{
-			Hook_GraphFail(e, bot, 30.0f);
-			return true;
-		}
-		if ((cut && bot->hook_pull_ms != bot->hook_proved_pull_ms) ||
-		    (!cut && bot->hook_pull_ms >= bot->hook_proved_pull_ms))
-		{
-			Hook_GraphFail(e, bot, 30.0f);
-		}
-		return true;
-	}
-
-	/* Literal oracle settlement: re-aim at the destination before every 25 ms
-	 * forward command. First arrival and the fully consumed 100 ms frame are
-	 * separate proof boundaries: after arrival, zero commands fill the frame,
-	 * and the body must still be in the destination envelope at its end. */
-	for (step = 0; step < 4; step++)
-	{
-		vec3_t d;
-		float yaw;
-
-		memset(&cmd, 0, sizeof(cmd));
-		cmd.msec = 25;
-		if (failed)
-		{
-			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
-			ClientThink(e, &cmd);
-			continue;
-		}
-		if (arrived)
-		{
-			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
-			ClientThink(e, &cmd);
-			bot->hook_settle_ms += 25;
-			continue;
-		}
-		if (Hook_SettleArrived(e, bot))
-		{
-			if (bot->hook_settle_ms == bot->hook_proved_arrival_ms)
-				arrived = true;
-			else
-			{
-				Hook_GraphFail(e, bot, 60.0f);
-				failed = true;
-			}
-			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
-			ClientThink(e, &cmd);
-			if (!failed)
-				bot->hook_settle_ms += 25;
-			continue;
-		}
-		if (bot->hook_settle_ms >= bot->hook_proved_arrival_ms ||
-		    bot->hook_settle_ms >= bot->hook_proved_settle_ms)
-		{
-			Hook_GraphFail(e, bot, 60.0f);
-			failed = true;
-			cmd.forwardmove = cmd.sidemove = cmd.upmove = 0;
-			ClientThink(e, &cmd);
-			continue;
-		}
-		VectorSubtract(bot->hook_dest, e->s.origin, d);
-		yaw = atan2f(d[1], d[0]) * 180.0f / (float)M_PI;
-		cmd.angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
-		cmd.angles[YAW] = ANGLE2SHORT(yaw) -
-		                   e->client->ps.pmove.delta_angles[YAW];
-		cmd.angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
-		cmd.forwardmove = 400;
-		cmd.sidemove = cmd.upmove = 0;
-		ClientThink(e, &cmd);
-		bot->hook_settle_ms += 25;
-		if (Hook_SettleArrived(e, bot))
-		{
-			if (bot->hook_settle_ms == bot->hook_proved_arrival_ms)
-				arrived = true;
-			else
-			{
-				Hook_GraphFail(e, bot, 60.0f);
-				failed = true;
-			}
-		}
-		else if (bot->hook_settle_ms >= bot->hook_proved_arrival_ms)
-		{
-			Hook_GraphFail(e, bot, 60.0f);
-			failed = true;
-		}
-	}
-	if (!failed && e->waterlevel > 0 &&
-	    (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))
-	{
-		Hook_GraphFail(e, bot, 60.0f);
-		failed = true;
-	}
-	if (!failed && bot->hook_settle_ms == bot->hook_proved_settle_ms)
-	{
-		if (arrived && Hook_SettleArrived(e, bot))
-			cut = true;
-		else
-		{
-			Hook_GraphFail(e, bot, 60.0f);
-			failed = true;
-		}
-	}
-	else if (!failed && bot->hook_settle_ms > bot->hook_proved_settle_ms)
-	{
-		Hook_GraphFail(e, bot, 60.0f);
-		failed = true;
-	}
-	if (!failed && cut)
-	{
-		bot->commit_link = -1;
-		bot->hook_phase = 0;
-		bot->hook_link = -1;
-	}
-	return true;
 }
 
 void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
@@ -7761,6 +6516,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	if (SG_ShootDoorGameEmit(bot, bestlink))
+		return;
+	if (SG_TrainStationGameEmit(bot, bestlink))
 		return;
 	if (SG_TrainGateGameEmit(bot, bestlink))
 		return;
@@ -9074,8 +7831,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				cmd->upmove = 0;
 			}
 			if (step == 0 && bot->hook_phase == 2 && !bot->speedhook &&
-			    Hook_GraphReleaseReady(e, bot))
-				Hook_GraphRelease(e, bot, &hook_cut_in_step);
+			    SG_HookGameReleaseReady(e, bot))
+				SG_HookGameRelease(e, bot, &hook_cut_in_step);
 
 			/* The sole pull happens later in ClientEndServerFrame, exactly where
 			 * humans receive it. These commands consume the previous end-frame
@@ -9168,6 +7925,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			{
 				rune_link_t *decl = &SG_Rune()->links[bestlink];
 				vec3_t dd, target, source;
+				vec3_t command_target;
 				vec3_t door_effective_anchor;
 				float yaw, horiz;
 				byte msec = cmd->msec;
@@ -9181,8 +7939,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				    SG_BUTTON_EXECUTION_ANCHOR_BOTTOM;
 				qboolean button_controller = declared_door &&
 				    mechanism_binding.plan &&
-				    mechanism_binding.plan->controller_kind ==
-				        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+				    SG_MechanismControllerUsesButton(
+				        mechanism_binding.plan->controller_kind);
 				qboolean direct_controller = declared_door &&
 				    mechanism_binding.plan &&
 				    mechanism_binding.plan->controller_kind ==
@@ -9352,8 +8110,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					{
 						door_trigger = mechanism_binding.entry_entity;
 						button_controller = mechanism_binding.plan &&
-						    mechanism_binding.plan->controller_kind ==
-						        SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+						    SG_MechanismControllerUsesButton(
+						        mechanism_binding.plan->controller_kind);
 						direct_controller = mechanism_binding.plan &&
 						    mechanism_binding.plan->controller_kind ==
 						        SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
@@ -9597,7 +8355,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 										window_ok = SG_BoundDoorAtTopFor(&mechanism_binding,
 										    egress_window_ms + 100);
 									if (egress_ok && window_ok)
-										bot->declared_activated = true;
+									{
+										DoorStep_Activate(
+										bot,
+										&mechanism_binding);
+									}
 									else
 										hold = true;
 								}
@@ -10048,8 +8810,22 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 					SG_SwimCommand(e->s.origin, target,
 					               &e->client->ps.pmove, cmd);
 				else
-					SG_DeclaredCommand(e->s.origin, target,
-					                   &e->client->ps.pmove, cmd);
+				{
+					int controller_kind = mechanism_binding.plan
+					    ? mechanism_binding.plan->controller_kind
+					    : SG_MECHANISM_CONTROLLER_NONE;
+					qboolean exact_capture;
+
+					if (!SG_TimedVaultEgressScopeTarget(controller_kind,
+					        e->waterlevel, e->s.origin, e->velocity, target,
+					        &bot->swim_air_seed, &exact_capture,
+					        command_target) ||
+					    !SG_DeclaredEgressCommandMode(controller_kind,
+					        e->waterlevel, exact_capture, e->s.origin,
+					        e->velocity, command_target,
+					        &e->client->ps.pmove, cmd))
+						hold = true;
+				}
 				/* Match the door oracle's final braking envelope before the first
 				 * accepted activator touch.  The later per-step preflight still owns
 				 * the complete mover sweep and can fail this command closed. */
@@ -10379,6 +9155,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						return;
 					}
 				}
+				(void)SG_TimedVaultRuntimeApplyCommand(e, cmd);
 				bot->as_landing_command = as_ok && as_chain &&
 				    !proved_control && !door_hold;
 				ClientThink(e, cmd);
@@ -10627,9 +9404,9 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			/* The hook proof permits release between its 25 ms usercmds, but
 			 * velocity is not overwritten again until the next 100 ms boundary. */
 			if (!hook_cut_in_step && bot->hook_phase == 2 && !bot->speedhook &&
-			    Hook_GraphReleaseReady(e, bot))
+			    SG_HookGameReleaseReady(e, bot))
 			{
-				Hook_GraphRelease(e, bot, &hook_cut_in_step);
+				SG_HookGameRelease(e, bot, &hook_cut_in_step);
 			}
 
 			/*
@@ -10686,7 +9463,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			if (sg_cv.debug->value)
 				sg_host.dprint("HOOKWATERHOLD %s link=%d\n",
 				           e->client->pers.netname, bot->hook_link);
-			Hook_GraphFail(e, bot, wet_aim_hazard ? 30.0f : 1.0f);
+			SG_HookGameFail(e, bot, wet_aim_hazard ? 30.0f : 1.0f);
 		}
 		else if (bot->hook_phase == 1 && SG_TimerReadyStrict(bot->hook_deadline))
 		{
@@ -10714,7 +9491,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			}
 			else
 			{
-				Hook_DisciplineRetire(e, bot, failed_link, 5.0f, true,
+				SG_HookGameDisciplineRetire(e, bot, failed_link, 5.0f, true,
 				    "aim-retire", 0, 0);
 			}
 			if (sg_cv.debug->value)
@@ -10779,46 +9556,51 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				sg_hook_ride_worth_t worth;
 				int link_index = bot->hook_link;
 				int online;
+				qboolean chain_hook;
 
 				/* Aim may outlive its route field. Reprice the complete edge at
 				 * the irreversible fire boundary. */
 				if (!route_field || !rune || !rune->links || link_index < 0 ||
 				    link_index >= rune->hdr.num_links ||
-				    (hook_link = &rune->links[link_index])->action != RL_HOOK ||
+				    ((hook_link = &rune->links[link_index])->action != RL_HOOK &&
+				     hook_link->action != RL_CHAIN_HOOK) ||
 				    hook_link->from < 0 || hook_link->from >= rune->hdr.num_seeds ||
 				    hook_link->to < 0 || hook_link->to >= rune->hdr.num_seeds)
 				{
-					Hook_GraphFail(e, bot, 5.0f);
+					SG_HookGameFail(e, bot, 5.0f);
 					goto hook_wait;
 				}
+				chain_hook = hook_link->action == RL_CHAIN_HOOK;
 				worth = SG_HookCurrentRideWorth(route_field[hook_link->from],
 				    route_field[hook_link->to],
 				    Fields_LinkTraversalCostMs(hook_link));
 				if (!SG_HookRideLaunchAllowed(worth))
 				{
-					Hook_DisciplineRetire(e, bot, link_index, 5.0f, false,
+					SG_HookGameDisciplineRetire(e, bot, link_index, 5.0f, false,
 					    worth == SG_HOOK_RIDE_UNASSESSED
 					        ? "value-fire-unassessed" : "value-fire-skip",
 					    route_field[hook_link->from],
 					    route_field[hook_link->to]);
 					goto hook_wait;
 				}
-				online = Hook_OnlineProof(e, bot, hook_link->anchor[ROLL],
-				    &graph_flight_dist);
+				online = chain_hook ?
+				    SG_ChainHookGameOnlineProof(e, bot) :
+				    SG_HookGameOnlineProof(e, bot, hook_link->anchor[ROLL],
+				        &graph_flight_dist);
 
-				if (online == HOOK_PROOF_BUSY)
+				if (online == SG_HOOK_GAME_PROOF_BUSY)
 				{
 					/* Queueing is not an aim failure: keep the exact zero-input view
 					 * and give this bot a fresh window behind the one-proof budget. */
 					SG_TimerArm(&bot->hook_deadline, 3.0f);
 					goto hook_wait;
 				}
-				if (online != HOOK_PROOF_OK)
+				if (online != SG_HOOK_GAME_PROOF_OK)
 				{
 					if (sg_cv.debug->value)
 						sg_host.dprint("HOOKREPROOFF %s link=%d\n",
 						           e->client->pers.netname, bot->hook_link);
-					Hook_GraphFail(e, bot, 5.0f);
+					SG_HookGameFail(e, bot, 5.0f);
 					goto hook_wait;
 				}
 			}
@@ -10867,17 +9649,23 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			bot->hook_phase = 2;
 			if (!bot->speedhook)
 			{
-				if (!Hook_LiveBeginAfterFire(e, bot, bot->hook_link,
-				                             graph_flight_dist))
+				qboolean chain_hook =
+				    SG_ChainHookGamePrepared(bot, bot->hook_link);
+
+				if (!(chain_hook ?
+				        SG_ChainHookGameBeginAfterFire(e, bot, bot->hook_link) :
+				        SG_HookGameBeginAfterFire(e, bot, bot->hook_link,
+				            graph_flight_dist)))
 				{
-					Hook_GraphFailDetail(e, bot, 15.0f, "begin-failed");
+					SG_HookGameFailDetail(e, bot, 15.0f, "begin-failed");
 					goto hook_wait;
 				}
 				/* Bolt flight is quantized in 80-unit entity frames. This clock
 				 * starts only after successful fire; aim time is not charged. */
-				SG_TimerArm(&bot->hook_deadline,
-				    ceilf(graph_flight_dist /
-				          RUNE_HOOK_FRAME_DISTANCE) * 0.1f + 0.2f);
+				if (!chain_hook)
+					SG_TimerArm(&bot->hook_deadline,
+					    ceilf(graph_flight_dist /
+					          RUNE_HOOK_FRAME_DISTANCE) * 0.1f + 0.2f);
 				bot->hook_attached_validated = false;
 			}
 		}
@@ -10897,7 +9685,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 				VectorSubtract(e->client->hook->s.origin,
 				               bot->hook_anchor, ba);
 				if (VectorLength(ba) > 96.0f)
-					sg_host.dprint("HOOKBITE %s off=%.0f into=%s org=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) got=(%.0f %.0f %.0f)\n",
+					sg_host.dprint(
+					    "HOOKBITE %s off=%.0f into=%s "
+					    "org=(%.0f %.0f %.0f) want=(%.0f %.0f %.0f) "
+					    "got=(%.0f %.0f %.0f)\n",
 					           e->client->pers.netname, VectorLength(ba),
 					           ht->classname ? ht->classname :
 					           (ht == g_edicts ? "world" : "?"),
@@ -11051,11 +9842,11 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						           speed_end);
 				}
 			}
-			else if ((attached && Hook_GraphReleaseReady(e, bot)) ||
+			else if ((attached && SG_HookGameReleaseReady(e, bot)) ||
 			    SG_TimerReadyStrict(bot->hook_deadline) || e->client->hookstate == 0)
 			{
 				qboolean completed = attached &&
-				    (arrived || Hook_GraphReleaseReady(e, bot));
+				    (arrived || SG_HookGameReleaseReady(e, bot));
 
 				if (!completed)
 					(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,

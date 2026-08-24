@@ -17,7 +17,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from tests.test_rune_artifact import _build_rune
+from tests.test_rune_artifact import _build_rune, _fix_header_crc
 import rune_contracts_generated as contract
 import runeio
 import seedservo
@@ -81,7 +81,8 @@ class RuneToolReaderTests(unittest.TestCase):
 
     def test_tools_reject_nonzero_header_reserved_slot(self):
         malformed = bytearray(_build_rune())
-        struct.pack_into("<H", malformed, 4, 1)
+        struct.pack_into("<H", malformed, 134, 1)
+        _fix_header_crc(malformed)
         path = self._write_rune(bytes(malformed))
 
         for reader in (film.load_rune_seeds, seedservo.load_rune):

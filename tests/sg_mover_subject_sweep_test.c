@@ -1,6 +1,7 @@
 /* Focused game-boundary contract for retained subjects versus full movers. */
 #include <float.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -8,8 +9,12 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_world.h"
+#include "slipgate/sg_oracle_internal.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_rune_mechanism_plan.h"
+#include "slipgate/sg_replay.h"
+#include "slipgate/sg_timed_vault_egress.h"
 #include "slipgate/sg_util.h"
 
 #define TEST_EDICTS 16
@@ -26,6 +31,7 @@ edict_t *g_edicts;
 sg_host_t sg_host;
 
 qboolean SG_MoverSubjectSweepRealImmutableSupport(edict_t *ent);
+void Pmove(pmove_t *pmove);
 
 static edict_t ents[TEST_EDICTS];
 static gclient_t clients[2];
@@ -86,6 +92,17 @@ static int cellar_wade_steps;
 static int cellar_wade_water_step;
 static int cellar_wade_initial_water;
 static int cellar_wade_mode;
+static int timed_vault_discover;
+static sg_mech_catalog_view_t timed_vault_catalog;
+static sg_timed_vault_plan_witness_t timed_vault_witness;
+static uint32_t timed_vault_execution_fail_key;
+static uint32_t timed_vault_execution_calls;
+static csurface_t vault_floor_surface;
+static float vault_floor_z;
+static float vault_shore_y;
+static float vault_far_shore_y;
+static qboolean vault_far_shore_enabled;
+static qboolean vault_side_corridor_enabled;
 
 enum cellar_wade_mode_e
 {
@@ -94,6 +111,78 @@ enum cellar_wade_mode_e
 	CELLAR_WADE_LAVA,
 	CELLAR_WADE_SLIME
 };
+
+void Com_DPrintf(const char *format, ...)
+{
+	(void)format;
+}
+
+static trace_t VaultFloorTrace(vec3_t start, vec3_t mins, vec3_t maxs,
+	vec3_t end)
+{
+	trace_t trace;
+	float start_bottom = start[2] + mins[2];
+	float end_bottom = end[2] + mins[2];
+
+	(void)maxs;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = 1.0f;
+	VectorCopy(end, trace.endpos);
+	if (start_bottom < vault_floor_z)
+	{
+		trace.startsolid = true;
+		trace.allsolid = end_bottom < vault_floor_z;
+		trace.fraction = 0.0f;
+		VectorCopy(start, trace.endpos);
+	}
+	else if (end_bottom < vault_floor_z)
+	{
+		float distance = start_bottom - end_bottom;
+		float fraction = (start_bottom - vault_floor_z - 0.03125f) /
+		    distance;
+
+		if (fraction < 0.0f)
+			fraction = 0.0f;
+		if (fraction > 1.0f)
+			fraction = 1.0f;
+		trace.fraction = fraction;
+		trace.endpos[0] = start[0] + fraction * (end[0] - start[0]);
+		trace.endpos[1] = start[1] + fraction * (end[1] - start[1]);
+		trace.endpos[2] = start[2] + fraction * (end[2] - start[2]);
+	}
+	if (trace.fraction < 1.0f)
+	{
+		trace.ent = &ents[0];
+		trace.contents = CONTENTS_SOLID;
+		trace.surface = &vault_floor_surface;
+		trace.plane.normal[2] = 1.0f;
+		trace.plane.dist = vault_floor_z;
+	}
+	return trace;
+}
+
+static int AllWaterPointContents(vec3_t point)
+{
+	(void)point;
+	return CONTENTS_WATER;
+}
+
+static int VaultShorePointContents(vec3_t point)
+{
+	return point[1] < vault_shore_y &&
+	        (!vault_far_shore_enabled || point[1] > vault_far_shore_y) &&
+	        (!vault_side_corridor_enabled || fabsf(point[0]) < 128.0f)
+	    ? CONTENTS_WATER : 0;
+}
+
+static qboolean VaultSourceReachable(const vec3_t origin,
+	const vec3_t source, void *context)
+{
+	(void)origin;
+	(void)source;
+	(void)context;
+	return true;
+}
 
 short SG_RuneProofGravity(void)
 {
@@ -423,6 +512,35 @@ int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
 {
 	return entity && entity->moveinfo.state == SG_PLAT_STATE_BOTTOM &&
 	       SG_MechCatalogButtonEndpoints(key, node, entity, endpoints_out);
+}
+
+sg_mech_catalog_status_t SG_MechCatalogSnapshot(
+	sg_mech_catalog_view_t *view_out)
+{
+	if (!timed_vault_discover || !view_out)
+		return SG_MECH_CATALOG_NOT_READY;
+	*view_out = timed_vault_catalog;
+	return SG_MECH_CATALOG_READY;
+}
+
+int SG_TimedVaultPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_timed_vault_plan_witness_t *witness_out)
+{
+	if (!timed_vault_discover || !catalog || !witness_out ||
+	    entry_key != timed_vault_witness.entry_key)
+		return 0;
+	*witness_out = timed_vault_witness;
+	return 1;
+}
+
+int SG_MechCatalogEntityExecutionMatches(uint32_t key,
+	const rune_mechanism_node_t *node, uint16_t controller_kind)
+{
+	if (!node || node->key != key ||
+	    controller_kind != SG_MECHANISM_CONTROLLER_TIMED_VAULT)
+		return 0;
+	timed_vault_execution_calls++;
+	return key != timed_vault_execution_fail_key;
 }
 
 edict_t *SG_RuneMechanismBindingResolveNode(
@@ -1076,6 +1194,372 @@ static void TestDirectDoorShallowWadeParity(void)
 	sv_gravity = NULL;
 }
 
+static void TestTimedVaultEgressControlLaw(void)
+{
+	vec3_t source = { 0.0f, 0.0f, -220.0f };
+	vec3_t target = { 100.0f, 0.0f, 0.0f };
+	vec3_t velocity = { 0.0f, 0.0f, 0.0f };
+	pmove_state_t pms;
+	usercmd_t command;
+
+	CHECK(SG_MechanismControllerUsesButton(
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR));
+	CHECK(SG_MechanismControllerUsesButton(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT));
+	CHECK(!SG_MechanismControllerUsesButton(
+	    SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR));
+	CHECK(SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 0, 0));
+	CHECK(SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 1,
+	    CELLAR_WITNESS_WATERTYPE));
+	CHECK(SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2,
+	    CELLAR_WITNESS_WATERTYPE));
+	CHECK(SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 3,
+	    CELLAR_WITNESS_WATERTYPE));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2, CONTENTS_MIST));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2,
+	    CONTENTS_WATER | CONTENTS_LAVA));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2,
+	    CONTENTS_WATER | CONTENTS_SLIME));
+	CHECK(!SG_OracleDoorEgressWaterSafe(
+	    SG_MECHANISM_CONTROLLER_BUTTON_DOOR, 2,
+	    CELLAR_WITNESS_WATERTYPE));
+
+	memset(&pms, 0, sizeof(pms));
+	memset(&command, 0, sizeof(command));
+	command.msec = SG_SWIM_STEP_MSEC;
+	CHECK(SG_DeclaredEgressCommand(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2, source, target,
+	    &pms, &command));
+	CHECK(command.forwardmove == 400);
+	CHECK(command.angles[PITCH] != 0);
+
+	target[0] = 50.0f;
+	target[2] = source[2];
+	memset(&command, 0, sizeof(command));
+	command.msec = SG_SWIM_STEP_MSEC;
+	CHECK(SG_DeclaredEgressCommandMode(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2, true, source, vec3_origin, target,
+	    &pms, &command));
+	CHECK(command.forwardmove > 0);
+	VectorCopy(source, target);
+	memset(&command, 0, sizeof(command));
+	command.msec = SG_SWIM_STEP_MSEC;
+	CHECK(SG_DeclaredEgressCommandMode(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2, true, source, velocity, target,
+	    &pms, &command));
+	CHECK(command.forwardmove == 0);
+	velocity[2] = -8.125f;
+	memset(&command, 0, sizeof(command));
+	command.msec = SG_SWIM_STEP_MSEC;
+	CHECK(SG_DeclaredEgressCommandMode(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 2, true, source, velocity, target,
+	    &pms, &command));
+	CHECK(command.forwardmove > 0);
+	target[0] = 100.0f;
+	target[2] = 0.0f;
+
+	memset(&command, 0, sizeof(command));
+	command.msec = SG_SWIM_STEP_MSEC;
+	CHECK(SG_DeclaredEgressCommand(
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 0, source, target,
+	    &pms, &command));
+	CHECK(command.forwardmove == 400);
+	CHECK(command.angles[PITCH] == 0);
+}
+
+static void TestTimedVaultExactCaptureConvergesUnderRealPmove(void)
+{
+	rune_seed_t seeds[3];
+	int next[3] = { 1, 2, -1 };
+	pmove_state_t state;
+	qboolean exact_capture;
+	qboolean next_hop_progress = false;
+	qboolean next_hop_captured = false;
+	vec3_t command_target, origin, velocity;
+	int route_seed = -2;
+	int step;
+
+	memset(seeds, 0, sizeof(seeds));
+	VectorSet(seeds[0].origin, 64.0f, -2624.0f, -635.875f);
+	VectorSet(seeds[1].origin, 128.0f, -2624.0f, -635.875f);
+	VectorSet(seeds[2].origin, 192.0f, -2624.0f, -635.875f);
+	seeds[0].flags = seeds[1].flags = RSF_WATER;
+	memset(&state, 0, sizeof(state));
+	state.pm_type = PM_NORMAL;
+	state.origin[0] = (short)(55.0f * 8.0f);
+	state.origin[1] = (short)(-2621.0f * 8.0f);
+	state.origin[2] = (short)(-635.25f * 8.0f);
+	state.velocity[0] = (short)(4.375f * 8.0f);
+	state.velocity[1] = (short)(-2.5f * 8.0f);
+	state.velocity[2] = (short)(-0.25f * 8.0f);
+	state.gravity = 800;
+	vault_floor_z = -659.5f;
+	VectorSet(origin, 55.0f, -2621.0f, -635.25f);
+	VectorSet(velocity, 4.375f, -2.5f, -0.25f);
+	CHECK(SG_TimedVaultEgressAdvancePose(seeds, 3, next,
+	    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 3, origin, velocity,
+	    seeds[2].origin, &route_seed, &exact_capture, command_target));
+	CHECK(route_seed == -2);
+	CHECK(exact_capture);
+	CHECK(VectorCompare(command_target, seeds[0].origin));
+	if (route_seed != -2)
+		return;
+
+	for (step = 0; step < 80; step++)
+	{
+		vec3_t before_delta, after_delta;
+		pmove_t pmove;
+		usercmd_t command;
+		float before_distance, after_distance;
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			origin[axis] = state.origin[axis] * 0.125f;
+			velocity[axis] = state.velocity[axis] * 0.125f;
+		}
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_SWIM_STEP_MSEC;
+		CHECK(SG_DeclaredEgressCommandMode(
+		    SG_MECHANISM_CONTROLLER_TIMED_VAULT, 3, exact_capture,
+		    origin, velocity, command_target, &state, &command));
+		VectorSubtract(seeds[1].origin, origin, before_delta);
+		before_distance = VectorLength(before_delta);
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.s = state;
+		pmove.cmd = command;
+		pmove.trace = VaultFloorTrace;
+		pmove.pointcontents = AllWaterPointContents;
+		Pmove(&pmove);
+		state = pmove.s;
+		for (axis = 0; axis < 3; axis++)
+		{
+			origin[axis] = state.origin[axis] * 0.125f;
+			velocity[axis] = state.velocity[axis] * 0.125f;
+		}
+		VectorSubtract(seeds[1].origin, origin, after_delta);
+		after_distance = VectorLength(after_delta);
+		if (after_distance < before_distance)
+			next_hop_progress = true;
+		CHECK(SG_TimedVaultEgressAdvancePose(seeds, 3, next,
+		    SG_MECHANISM_CONTROLLER_TIMED_VAULT, pmove.waterlevel,
+		    origin, velocity, seeds[2].origin, &route_seed, &exact_capture,
+		    command_target));
+		if (route_seed == 1)
+		{
+			next_hop_captured = true;
+			break;
+		}
+	}
+	CHECK(next_hop_progress);
+	CHECK(next_hop_captured);
+}
+
+static void TestTimedVaultEightHopRouteReachesShoreWithinLease(void)
+{
+	rune_seed_t seeds[9];
+	int next[9] = { 1, 2, 3, 4, 5, 6, 7, 8, -1 };
+	pmove_state_t state;
+	qboolean exact_capture;
+	qboolean arrived = false;
+	vec3_t command_target, origin, velocity;
+	int route_seed = 0;
+	int step, waterlevel = 2;
+
+	memset(seeds, 0, sizeof(seeds));
+	for (step = 0; step < 9; step++)
+		VectorSet(seeds[step].origin, 64.0f,
+		    -2624.0f + 64.0f * (float)step, -635.875f);
+	for (step = 0; step < 8; step++)
+		seeds[step].flags = RSF_WATER;
+	memset(&state, 0, sizeof(state));
+	state.pm_type = PM_NORMAL;
+	state.origin[0] = (short)(56.875f * 8.0f);
+	state.origin[1] = (short)(-2620.5f * 8.0f);
+	state.origin[2] = (short)(-635.25f * 8.0f);
+	state.velocity[0] = (short)(4.125f * 8.0f);
+	state.velocity[1] = (short)(-1.75f * 8.0f);
+	state.velocity[2] = (short)(-0.25f * 8.0f);
+	state.gravity = 800;
+	vault_floor_z = -659.5f;
+	vault_shore_y = -2144.0f;
+	vault_far_shore_enabled = false;
+
+	for (step = 0; step < (9000 - 3250) / SG_SWIM_STEP_MSEC; step++)
+	{
+		pmove_t pmove;
+		usercmd_t command;
+		vec3_t delta;
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			origin[axis] = state.origin[axis] * 0.125f;
+			velocity[axis] = state.velocity[axis] * 0.125f;
+		}
+		CHECK(SG_TimedVaultEgressAdvancePose(seeds, 9, next,
+		    SG_MECHANISM_CONTROLLER_TIMED_VAULT, waterlevel,
+		    origin, velocity, seeds[8].origin, &route_seed, &exact_capture,
+		    command_target));
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_SWIM_STEP_MSEC;
+		CHECK(SG_DeclaredEgressCommandMode(
+		    SG_MECHANISM_CONTROLLER_TIMED_VAULT, waterlevel,
+		    exact_capture, origin, velocity, command_target, &state,
+		    &command));
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.s = state;
+		pmove.cmd = command;
+		pmove.trace = VaultFloorTrace;
+		pmove.pointcontents = VaultShorePointContents;
+		Pmove(&pmove);
+		state = pmove.s;
+		waterlevel = pmove.waterlevel;
+		for (axis = 0; axis < 3; axis++)
+			origin[axis] = state.origin[axis] * 0.125f;
+		VectorSubtract(seeds[8].origin, origin, delta);
+		if (pmove.groundentity && pmove.waterlevel < 2 &&
+		    delta[0] * delta[0] + delta[1] * delta[1] <
+		        SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS &&
+		    fabsf(delta[2]) < SG_REPLAY_ARRIVE_Z)
+		{
+			arrived = true;
+			break;
+		}
+	}
+	CHECK(arrived);
+	CHECK(step * SG_SWIM_STEP_MSEC + 3250 < 9000);
+}
+
+static void TestTimedVaultTargetFacingRouteFromRealCandidateState(void)
+{
+	rune_seed_t seeds[19];
+	rune_link_t links[13];
+	int next[19], dist[19], incoming[19], next_incoming[13], queue[19];
+	int heap[19], heap_pos[19];
+	float score[19];
+	pmove_state_t state;
+	qboolean exact_capture;
+	qboolean arrived = false;
+	vec3_t command_target, origin, velocity;
+	int source, route_seed, step, waterlevel = 2;
+	int i;
+
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	VectorSet(seeds[0].origin, 0.0f, -2624.0f, -635.875f);
+	VectorSet(seeds[1].origin, 64.0f, -2624.0f, -635.875f);
+	for (i = 2; i <= 9; i++)
+		VectorSet(seeds[i].origin, 0.0f,
+		    -2624.0f - 80.0f * (float)(i - 1), -635.875f);
+	for (i = 10; i <= 14; i++)
+		VectorSet(seeds[i].origin, 64.0f,
+		    -2624.0f + 64.0f * (float)(i - 9), -635.875f);
+	VectorSet(seeds[15].origin, 192.0f, -2304.0f, -635.875f);
+	VectorSet(seeds[16].origin, 192.0f, -2432.0f, -635.875f);
+	VectorSet(seeds[17].origin, 192.0f, -2560.0f, -635.875f);
+	VectorSet(seeds[18].origin, 64.0f, -2560.0f, -635.875f);
+	for (i = 0; i < 9; i++)
+		seeds[i].flags = RSF_WATER;
+	for (i = 10; i < 14; i++)
+		seeds[i].flags = RSF_WATER;
+	links[0].from = 0;
+	links[0].to = 2;
+	links[0].action = RL_SWIM;
+	for (i = 1; i < 8; i++)
+	{
+		links[i].from = i + 1;
+		links[i].to = i + 2;
+		links[i].action = RL_SWIM;
+	}
+	links[8].from = 1;
+	links[8].to = 10;
+	links[8].action = RL_SWIM;
+	for (i = 9; i < 13; i++)
+	{
+		links[i].from = i + 1;
+		links[i].to = i + 2;
+		links[i].action = RL_SWIM;
+	}
+	CHECK(SG_WaterEscapeIndexBuild(seeds, 19, links, 13, next, dist,
+	    incoming, next_incoming, queue));
+	CHECK(SG_WaterEscapeTargetIndexBuild(seeds, 19, links, 13,
+	    seeds[18].origin, next, score, incoming, next_incoming, heap,
+	    heap_pos));
+	VectorSet(origin, 1.0f, -2619.375f, -580.0f);
+	VectorSet(velocity, 10.125f, 14.625f, -585.5f);
+	source = SG_TimedVaultEgressSourceSelect(seeds, 19, next, origin,
+	    seeds[18].origin, VaultSourceReachable, NULL);
+	CHECK(source == 11);
+	if (source != 11)
+		return;
+	route_seed = -source - 2;
+	memset(&state, 0, sizeof(state));
+	state.pm_type = PM_NORMAL;
+	for (i = 0; i < 3; i++)
+	{
+		state.origin[i] = (short)(origin[i] * 8.0f);
+		state.velocity[i] = (short)(velocity[i] * 8.0f);
+	}
+	state.gravity = 800;
+	vault_floor_z = -659.5f;
+	vault_shore_y = -2336.0f;
+	vault_far_shore_y = -2520.0f;
+	vault_far_shore_enabled = true;
+	vault_side_corridor_enabled = true;
+	for (step = 0; step < (9000 - 1375) / SG_SWIM_STEP_MSEC; step++)
+	{
+		pmove_t pmove;
+		usercmd_t command;
+		vec3_t delta;
+
+		for (i = 0; i < 3; i++)
+		{
+			origin[i] = state.origin[i] * 0.125f;
+			velocity[i] = state.velocity[i] * 0.125f;
+		}
+		CHECK(SG_TimedVaultEgressAdvancePose(seeds, 19, next,
+		    SG_MECHANISM_CONTROLLER_TIMED_VAULT, waterlevel, origin,
+		    velocity, seeds[18].origin, &route_seed, &exact_capture,
+		    command_target));
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_SWIM_STEP_MSEC;
+		CHECK(SG_DeclaredEgressCommandMode(
+		    SG_MECHANISM_CONTROLLER_TIMED_VAULT, waterlevel, exact_capture,
+		    origin, velocity, command_target, &state, &command));
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.s = state;
+		pmove.cmd = command;
+		pmove.trace = VaultFloorTrace;
+		pmove.pointcontents = VaultShorePointContents;
+		Pmove(&pmove);
+		state = pmove.s;
+		waterlevel = pmove.waterlevel;
+		for (i = 0; i < 3; i++)
+			origin[i] = state.origin[i] * 0.125f;
+		VectorSubtract(seeds[18].origin, origin, delta);
+		if (pmove.groundentity && pmove.waterlevel < 2 &&
+		    delta[0] * delta[0] + delta[1] * delta[1] <
+		        SG_REPLAY_ARRIVE_RADIUS * SG_REPLAY_ARRIVE_RADIUS &&
+		    fabsf(delta[2]) < SG_REPLAY_ARRIVE_Z)
+		{
+			arrived = true;
+			break;
+		}
+	}
+	vault_far_shore_enabled = false;
+	vault_side_corridor_enabled = false;
+	CHECK(arrived);
+	CHECK(step * SG_SWIM_STEP_MSEC + 1375 < 9000);
+}
+
 static void TestBoundDoorSiblingAliasReplay(void)
 {
 	static char alias_target[] = "alias_target";
@@ -1711,6 +2195,68 @@ static void TestButtonContactAndEndpointTiming(void)
 	memset(&sg_host, 0, sizeof(sg_host));
 }
 
+static void TestTimedVaultTopPoseRetainsExactClosure(void)
+{
+	rune_mechanism_node_t nodes[14];
+	uint32_t index;
+
+	memset(nodes, 0, sizeof(nodes));
+	memset(&timed_vault_catalog, 0, sizeof(timed_vault_catalog));
+	memset(&timed_vault_witness, 0, sizeof(timed_vault_witness));
+	for (index = 0U; index < 14U; index++)
+		nodes[index].key = index + 1U;
+	timed_vault_catalog.nodes = nodes;
+	timed_vault_catalog.num_nodes = 14U;
+	timed_vault_witness.entry_key = 1U;
+	timed_vault_witness.mover_key = 2U;
+	timed_vault_witness.member_key = 3U;
+	timed_vault_witness.short_relay_key = 4U;
+	timed_vault_witness.restore_relay_key = 5U;
+	for (index = 0U; index < 9U; index++)
+		timed_vault_witness.effect_keys[index] = index + 6U;
+
+	/* The sealed BOTTOM pose validates all 14 live entities. */
+	timed_vault_execution_fail_key = 0U;
+	timed_vault_execution_calls = 0U;
+	CHECK(SG_OracleTimedVaultClosureCurrent(&timed_vault_catalog,
+	    &timed_vault_witness, false));
+	CHECK(timed_vault_execution_calls == 14U);
+
+	/* Generation has already authenticated the three physical movers at their
+	 * exact TOP endpoints; only those poses may differ from the sealed state. */
+	timed_vault_execution_fail_key = timed_vault_witness.entry_key;
+	timed_vault_execution_calls = 0U;
+	CHECK(SG_OracleTimedVaultClosureCurrent(&timed_vault_catalog,
+	    &timed_vault_witness, true));
+	CHECK(timed_vault_execution_calls == 11U);
+
+	/* Both door leaves are in the same authenticated synchronous TOP pose. */
+	timed_vault_execution_fail_key = timed_vault_witness.mover_key;
+	timed_vault_execution_calls = 0U;
+	CHECK(SG_OracleTimedVaultClosureCurrent(&timed_vault_catalog,
+	    &timed_vault_witness, true));
+	CHECK(timed_vault_execution_calls == 11U);
+	timed_vault_execution_fail_key = timed_vault_witness.member_key;
+	timed_vault_execution_calls = 0U;
+	CHECK(SG_OracleTimedVaultClosureCurrent(&timed_vault_catalog,
+	    &timed_vault_witness, true));
+	CHECK(timed_vault_execution_calls == 11U);
+
+	/* Every relay and effect in the remaining closure stays exact. */
+	timed_vault_execution_fail_key = timed_vault_witness.short_relay_key;
+	timed_vault_execution_calls = 0U;
+	CHECK(!SG_OracleTimedVaultClosureCurrent(&timed_vault_catalog,
+	    &timed_vault_witness, true));
+	CHECK(timed_vault_execution_calls == 1U);
+
+	/* Prevalidation never licenses a missing catalog node. */
+	timed_vault_execution_fail_key = 0U;
+	timed_vault_catalog.num_nodes = 13U;
+	CHECK(!SG_OracleTimedVaultClosureCurrent(&timed_vault_catalog,
+	    &timed_vault_witness, true));
+	timed_vault_catalog.num_nodes = 14U;
+}
+
 static void TestStableGroundSource(void)
 {
 	vec3_t raw, stable;
@@ -2291,8 +2837,13 @@ int main(void)
 	TestImmutableMapSupport();
 	TestStableGroundSource();
 	TestButtonContactAndEndpointTiming();
+	TestTimedVaultTopPoseRetainsExactClosure();
 	TestBoundDoorSiblingAliasReplay();
 	TestDirectDoorShallowWadeParity();
+	TestTimedVaultEgressControlLaw();
+	TestTimedVaultExactCaptureConvergesUnderRealPmove();
+	TestTimedVaultEightHopRouteReachesShoreWithinLease();
+	TestTimedVaultTargetFacingRouteFromRealCandidateState();
 	TestTranslationAndBoundary();
 	TestRotatingAndSecretSweeps();
 	TestProspectivePushSweep();

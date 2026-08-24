@@ -4,7 +4,9 @@
 #include "slipgate/sg_compound_guard_game.h"
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
+#include "slipgate/sg_relay_wall_game.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_timed_vault_game_runtime.h"
 
 
 void G_ProjectSource (vec3_t point, vec3_t distance, vec3_t forward, vec3_t right, vec3_t result)
@@ -174,12 +176,17 @@ void Think_Delay (edict_t *ent)
 	 * human input. */
 	if ((ent->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR) &&
 	    (!ent->activator || !ent->activator->inuse ||
-	     !ent->activator->client || !SG_OwnsBot(ent->activator)))
+	     !ent->activator->client || !SG_OwnsBot(ent->activator)) &&
+	    !SG_RelayWallGameDelayedUseDurable(ent) &&
+	    !SG_TimedVaultRuntimeDelayedUseDurable(ent))
 	{
 		G_FreeEdict (ent);
 		return;
 	}
 	G_UseTargets (ent, ent->activator);
+	if (SG_RelayWallGameDelayedUseDeferred(ent) ||
+	    SG_TimedVaultRuntimeDelayedUseDeferred(ent))
+		return;
 	G_FreeEdict (ent);
 }
 
@@ -204,6 +211,11 @@ void SG_CancelBotDelayedUses(edict_t *activator)
 		    strcmp(delayed->classname, "DelayedUse") != 0 ||
 		    !(delayed->spawnflags & SG_DELAYED_USE_BOT_ACTIVATOR) ||
 		    delayed->activator != activator)
+			continue;
+		SG_RelayWallGameRetireActivator(delayed, activator);
+		SG_TimedVaultRuntimeRetireActivator(delayed, activator);
+		if (SG_RelayWallGameDelayedUseDurable(delayed) ||
+		    SG_TimedVaultRuntimeDelayedUseDurable(delayed))
 			continue;
 		G_FreeEdict (delayed);
 	}
@@ -257,6 +269,8 @@ void G_UseTargets (edict_t *ent, edict_t *activator)
 		t->target = ent->target;
 		t->killtarget = ent->killtarget;
 		SG_CompoundDropGameTagDelayedTarget(ent, activator, t);
+		SG_RelayWallGameTagDelayedTarget(ent, activator, t);
+		SG_TimedVaultRuntimeTagDelayedTarget(ent, activator, t);
 		return;
 	}
 	
@@ -540,6 +554,8 @@ Marks the edict as free
 void G_FreeEdict (edict_t *ed)
 {
 	SG_ButtonExecutionEntityFreed(ed);
+	SG_TimedVaultRuntimeEntityFreed(ed);
+	SG_RelayWallGameEntityFreed(ed);
 	gi.unlinkentity (ed);		// unlink from world
 	SG_MechCatalogInvalidate(ed);
 

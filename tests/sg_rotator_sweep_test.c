@@ -9,6 +9,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_rune_mechanism_plan.h"
 
 game_export_t globals;
 game_locals_t game;
@@ -21,6 +22,31 @@ static edict_t *test_solid_hits[MAX_EDICTS];
 static gclient_t test_clients[1];
 static int test_trigger_count;
 static int test_solid_count;
+
+sg_mech_catalog_status_t SG_MechCatalogSnapshot(
+	sg_mech_catalog_view_t *view_out)
+{
+	(void)view_out;
+	return SG_MECH_CATALOG_NOT_READY;
+}
+
+int SG_TimedVaultPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_timed_vault_plan_witness_t *witness_out)
+{
+	(void)catalog;
+	(void)entry_key;
+	(void)witness_out;
+	return 0;
+}
+
+int SG_MechCatalogEntityExecutionMatches(uint32_t key,
+	const rune_mechanism_node_t *node, uint16_t controller_kind)
+{
+	(void)key;
+	(void)node;
+	(void)controller_kind;
+	return 0;
+}
 
 static int TestBoxEdicts(const vec3_t mins, const vec3_t maxs,
 	edict_t **list, int maxcount, int areatype)

@@ -75,10 +75,43 @@ than presenting partial evidence as a release.
 
 ## Operator commands
 
-After the bundle installer and rollback tools land, this document will name
-their exact reviewed commands. The current `tools/deploy.sh`, `iterate2.sh`,
-`waveloop.sh`, and `wavewatch.sh` do not implement the final bundle or
-persistent-fleet contract and are not release interfaces.
+Build and verify the final server archive and manifest:
+
+```sh
+python3 -B tools/server_bundle.py build \
+  --spec /freeze/server-bundle-build.json \
+  --archive /release/lmctf-server-bundle.tar \
+  --manifest /release/lmctf-server-bundle.json
+python3 -B tools/server_bundle.py verify \
+  --archive /release/lmctf-server-bundle.tar \
+  --manifest /release/lmctf-server-bundle.json
+```
+
+Install the first generation and verify its physical file identities:
+
+```sh
+python3 -B tools/server_bundle.py install \
+  --archive /release/lmctf-server-bundle.tar \
+  --manifest /release/lmctf-server-bundle.json \
+  --root /srv/lmctf-bundles \
+  --expect-active none
+python3 -B tools/server_bundle.py verify-installed \
+  --root /srv/lmctf-bundles
+```
+
+Later installs replace `none` with the verified current bundle ID. Rollback
+names both the expected active ID and the retained target:
+
+```sh
+python3 -B tools/server_bundle.py rollback \
+  --root /srv/lmctf-bundles \
+  --expect-active CURRENT_BUNDLE_ID \
+  --to RETAINED_BUNDLE_ID
+```
+
+`tools/SERVER_BUNDLE.md` defines the canonical build specification. The current
+`tools/deploy.sh`, `iterate2.sh`, `waveloop.sh`, and `wavewatch.sh` remain
+development tools and are not release interfaces.
 
 Previous milestone notes and pre-SemVer release descriptions remain available
 from their tags and Git history. They are intentionally not duplicated here,

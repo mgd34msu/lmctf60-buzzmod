@@ -66,11 +66,14 @@ def main() -> None:
 
     weapon = source("p_weapon.c")
     launch = between(weapon, "edict_t *fire_hook", "void Draw_Hook")
+    assert "bolt->touch = SG_BotHookTouch;" in launch
     ordered(
         launch,
+        "if (SG_OwnsBot(self))",
         "SG_CompoundGuardGameHookLinked(",
         "SG_CompoundHookGameLinked(",
         "tr = gi.trace",
+        "if (SG_OwnsBot(self))",
         "self->client->hook = bolt",
         "bolt->touch",
         "if (self->client->hook != bolt)",
@@ -79,9 +82,11 @@ def main() -> None:
     assert "G_FreeEdict" in launch
     assert "return NULL" in launch
 
-    touch = between(weapon, "void hook_touch", "void Grapple_Bolt_Think")
+    bot_touch = between(
+        weapon, "static void SG_BotHookTouch", "void hook_touch"
+    )
     ordered(
-        touch,
+        bot_touch,
         "SG_CompoundHookGameAttachWillApply(",
         "VectorClear (self->velocity)",
         "self->hook_target = other",
@@ -89,23 +94,61 @@ def main() -> None:
         "SG_CompoundHookGameAttached(",
     )
 
+    human_touch = between(weapon, "void hook_touch", "void Grapple_Bolt_Think")
+    assert "SG_HumanTraceHookAttach" in human_touch
+    for bot_only in ("SG_OwnsBot", "SG_BotHookTouch", "SG_Compound"):
+        assert bot_only not in human_touch
+    ordered(
+        human_touch,
+        "VectorClear (self->velocity)",
+        "self->hook_target = other",
+        "gi.linkentity(self)",
+    )
+
+    human_launch = between(
+        weapon, "static edict_t *LMCTF_FireHumanHook", "edict_t *fire_hook"
+    )
+    assert "G_ProjectileOwnerSet(bolt, self);" in human_launch
+    assert "bolt->owner = self;" not in human_launch
+    assert "bolt->touch = hook_touch;" in human_launch
+    assert "SG_HumanTraceHookFire" in human_launch
+    for bot_only in ("SG_OwnsBot", "SG_BotHookTouch", "SG_Compound"):
+        assert bot_only not in human_launch
+
     pull = between(weapon, "void CTF_HookPullStep", "void Weapon_Hook_Fire")
     ordered(
         pull,
         "ent->client->hooklength = speed",
         "VectorCopy (velocity, ent->velocity)",
         "VectorCopy (ent->velocity, ent->client->oldvelocity)",
+        "if (SG_OwnsBot(ent))",
         "SG_CompoundHookGamePullApplied(",
     )
 
     fire = between(
         weapon, "void Weapon_Hook_Fire", "void Weapon_Hook (edict_t *ent)"
     )
-    assert "if (!ent->client->hook)" in fire
+    assert "if (!SG_OwnsBot(ent))" in fire
+    assert "LMCTF_HumanHookFire(ent);" in fire
+    assert "if (SG_OwnsBot(ent) && !ent->client->hook)" in fire
+
+    commands = source("g_cmds.c")
+    release = between(commands, "void Cmd_Unhook_f", "void Cmd_Ctfmenu_f")
+    assert "ctf_hook_abort(ent);" in release
+    selected_release = between(
+        release,
+        "if (ent->client->pers.weapon == it)",
+        "else",
+    )
+    ordered(selected_release, "ctf_hook_abort(ent);", 'ForceCommand(ent, "-attack\\n");')
+    assert "hook_input_release" not in commands
+    assert "hook_input_release" not in source("g_local.h")
+    assert "LMCTF_HumanHookInputFrame" not in source("p_view.c")
 
     abort = between(source("g_ctffunc.c"), "void ctf_hook_abort", "char *")
     ordered(
         abort,
+        "if (SG_OwnsBot(ent))",
         "SG_CompoundHookGameAbortBegin(",
         "ent->client->hookstate = 0",
         "G_FreeEdict",
@@ -233,7 +276,12 @@ def main() -> None:
         )
     assert 'SG_CompoundHookGameDebugResult(bot, "terminal", &result)' in hook_step
 
-    offhand = between(move, "qboolean SG_HookOffhandReady", "static qboolean Hook_LiveWitnessOK")
+    physical_hook_game = source("slipgate/sg_hook_game.c")
+    offhand = between(
+        physical_hook_game,
+        "qboolean SG_HookOffhandReady",
+        "static qboolean Hook_LiveWitnessOK",
+    )
     for required in (
         "CTF_OFFHAND_HOOK",
         "RIGHT_HANDED",
@@ -268,7 +316,10 @@ def main() -> None:
     descend = source("slipgate/sg_descend.c")
     assert "SG_CompoundHookLiveBoundary(" not in descend
     assert "Cmd_Hook_f(e)" not in descend
-    assert "l->action == RL_HOOK || l->action == RL_DOOR_HOOK" in descend
+    assert (
+        "l->action == RL_HOOK || l->action == RL_CHAIN_HOOK ||" in descend
+        and "l->action == RL_DOOR_HOOK" in descend
+    )
 
 
 if __name__ == "__main__":

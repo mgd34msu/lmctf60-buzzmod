@@ -117,13 +117,6 @@ int Rune_NearestSeed(rune_t *r, vec3_t p)
 	return best;
 }
 
-int SG_ActionFieldBiasMs(int action, int rope_bias_ms)
-{
-	(void)action;
-	(void)rope_bias_ms;
-	return 0;
-}
-
 _Static_assert(SG_DPO_POST_RED == 0, "DPO post-red plane drift");
 _Static_assert(SG_DPO_POST_BLUE == 1, "DPO post-blue plane drift");
 _Static_assert(SG_DPO_INTERCEPT_RED == 2, "DPO intercept-red plane drift");
@@ -504,6 +497,7 @@ static void CheckLocalFieldSeedAdmission(void)
 	rune_seed_t seeds[2];
 	byte linked[2] = { 1, 1 };
 	int field[2] = { SG_FIELD_INF, 500 };
+	vec3_t point = { 0.0f, 0.0f, 0.0f };
 
 	memset(&rune, 0, sizeof(rune));
 	memset(seeds, 0, sizeof(seeds));
@@ -522,6 +516,21 @@ static void CheckLocalFieldSeedAdmission(void)
 	CHECK(SG_LocalSeedScore(&rune, field, 1, 1.0f, 0.0f, 0.0f) < 0.0f);
 	linked[1] = 1;
 	CHECK(SG_LocalSeedScore(&rune, NULL, 1, 1.0f, 0.0f, 0.0f) >= 0.0f);
+
+	rune.artifact.route_contract = RUNE_ROUTE_CONTRACT_LOCAL_ONLY;
+	linked[0] = 0;
+	seeds[0].flags = RSF_OBJECTIVE;
+	seeds[1].flags = RSF_OBJECTIVE;
+	seeds[1].origin[0] = 300.0f;
+	CHECK(SG_LocalObjectiveSeed(&rune, point) == 0);
+	point[0] = 150.0f;
+	CHECK(SG_LocalObjectiveSeed(&rune, point) == -1);
+	point[0] = 32.0f;
+	seeds[1].origin[0] = 64.0f;
+	CHECK(SG_LocalObjectiveSeed(&rune, point) == -1);
+	rune.artifact.route_contract = RUNE_ROUTE_CONTRACT_COMPLETE;
+	point[0] = 0.0f;
+	CHECK(SG_LocalObjectiveSeed(&rune, point) == -1);
 }
 
 static void CheckCarrierProjectionPricesWholeEdge(void)

@@ -5,6 +5,9 @@
 #include "sg_rune.h"
 #include "sg_door_approach.h"
 #include "sg_replay.h"
+#include "sg_hook_oracle.h"
+#include "sg_client_ownership.h"
+
 
 #define SG_MAX_SEEDS	32768
 #define SG_FIELD_INF	0x3fffffff
@@ -58,19 +61,6 @@ typedef struct sg_door_approach_prediction_s
 	int waterlevel;
 	qboolean expected_touch;
 } sg_door_approach_prediction_t;
-
-typedef struct sg_hook_proof_s
-{
-	int		pull_ms;
-	int		release_ms;       /* first 25 ms boundary satisfying release */
-	int		settle_arrival_ms;/* first 25 ms boundary inside destination */
-	int		settle_ms;
-	byte	exit_speed;
-	pmove_state_t attach_pms; /* state after quantized outbound zero commands */
-	qboolean attach_groundentity;
-	int		attach_watertype;
-	int		attach_waterlevel;
-} sg_hook_proof_t;
 
 typedef struct sg_swim_proof_s
 {
@@ -212,12 +202,6 @@ qboolean SG_OracleRunCompoundWorld(sg_phantom_t *ph, usercmd_t *cmd,
 qboolean SG_OracleRotatorSweepBlocks(const vec3_t start,
 	const vec3_t hull_mins, const vec3_t hull_maxs, const vec3_t end,
 	int contentmask);
-int SG_OracleHookStep(sg_phantom_t *ph, const vec3_t bite,
-	const vec3_t view_angles, int hand);
-qboolean SG_OracleHookTraverse(sg_phantom_t *ph, const vec3_t bite,
-	const vec3_t destination, const vec3_t view_angles, int hand,
-	int flight_ms, int settle_limit_ms, float old_frame_z,
-	sg_hook_proof_t *proof, edict_t *passent, qboolean world_only);
 qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite);
 qboolean SG_OracleSwimTraverse(sg_phantom_t *ph, const vec3_t destination,
 	qboolean destination_water, float old_frame_z, sg_swim_proof_t *proof,
@@ -328,6 +312,12 @@ qboolean SG_OracleTrainGateApproach(const vec3_t source,
 qboolean SG_OracleTrainRideBoard(const vec3_t source,
 	const vec3_t target, edict_t *button, edict_t *train,
 	int *arrival_ms, vec3_t contact_out);
+qboolean SG_OracleTrainStationBoard(const vec3_t source,
+	const vec3_t approach, edict_t *train, uint32_t dwell_ms,
+	int *arrival_ms, vec3_t contact_out);
+qboolean SG_OracleTrainStationCarry(const vec3_t source,
+	edict_t *from_corner, edict_t *to_corner, edict_t *train,
+	vec3_t destination_out);
 qboolean SG_OracleTrainRideCarry(const vec3_t source,
 	const vec3_t displacement, edict_t *train, vec3_t destination_out);
 qboolean SG_OracleTrainGateShot(const vec3_t source, edict_t *button,
@@ -367,6 +357,7 @@ qboolean SG_DeclaredDelayedDoorTouchMatches(edict_t *trigger,
 	const vec3_t activator_origin);
 qboolean SG_DeclaredDelayedDoorSameSet(edict_t *first, edict_t *second);
 qboolean SG_DeclaredButtonDoorSafe(edict_t *button);
+int SG_DeclaredButtonDoorControllerKind(edict_t *button);
 qboolean SG_OracleStablePopulationTrace(const vec3_t start,
 	const vec3_t mins, const vec3_t maxs, const vec3_t end,
 	edict_t *passent, qboolean population_independent, trace_t *trace_out);
@@ -702,6 +693,8 @@ typedef struct
 	int		red_flag_seed, blue_flag_seed;
 
 	int		*to_red_flag, *to_blue_flag;        /* stands (capture points) */
+	int		*to_local_objective;                 /* nearest proved stand;
+	                                             * local-only RUNEs */
 	int		*to_flag_now[2][2];                 /* [believing team][flag colour] */
 	int		*item[SG_FIELD_CLASSES];
 	unsigned item_sig[SG_FIELD_CLASSES];
@@ -815,7 +808,6 @@ typedef struct
 	float	intercept;
 } sg_weights_t;
 
-qboolean	SG_OwnsBot(edict_t *ent);
 /* Ordinary dose-2 bot commands mark one exact ClientThink.  The game boundary
  * consumes that mark so every other SG Pmove resets fractional landing time. */
 void	SG_HumanSpeedClientThinkBegin(edict_t *ent);

@@ -1149,6 +1149,7 @@ int SG_StrikeWeaponControllerPhysical(
 		    state->declared_guard_paused != 0;
 	case RL_RUN:
 	case RL_HOOK:
+	case RL_CHAIN_HOOK:
 	case RL_ROCKETJUMP:
 	default:
 		return 0;

@@ -1,4 +1,5 @@
 #include "sg_compound_oracle_fixture.h"
+#include "slipgate/sg_rune_mechanism_plan.h"
 
 game_export_t globals;
 game_locals_t game;
@@ -6,6 +7,31 @@ edict_t *g_edicts;
 level_locals_t level;
 sg_host_t sg_host;
 cvar_t *sv_gravity;
+
+sg_mech_catalog_status_t SG_MechCatalogSnapshot(
+	sg_mech_catalog_view_t *view_out)
+{
+	(void)view_out;
+	return SG_MECH_CATALOG_NOT_READY;
+}
+
+int SG_TimedVaultPlanDiscover(const sg_mech_catalog_view_t *catalog,
+	uint32_t entry_key, sg_timed_vault_plan_witness_t *witness_out)
+{
+	(void)catalog;
+	(void)entry_key;
+	(void)witness_out;
+	return 0;
+}
+
+int SG_MechCatalogEntityExecutionMatches(uint32_t key,
+	const rune_mechanism_node_t *node, uint16_t controller_kind)
+{
+	(void)key;
+	(void)node;
+	(void)controller_kind;
+	return 0;
+}
 
 int SG_RuneTestDoorCooldownGapMs(edict_t *trigger);
 

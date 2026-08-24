@@ -16,19 +16,12 @@ def between(text: str, start: str, end: str) -> str:
 
 
 def main() -> None:
-    lateral = between(
-        SOURCE,
-        "static qboolean ProveHookLateralCandidate",
-        "static qboolean ProveHook(",
-    )
     base_links = between(
         SOURCE,
         "static void Prove_BaseLinks(",
         "/* A field is useful",
     )
-    assert "#define HOOK_REACH\t\t448.0f" in SOURCE
     assert "#define HOOK_PAIR_REACH\t768.0f" in SOURCE
-    assert "VectorMA(muzzle, HOOK_REACH, forward, shot_end);" in lateral
     assert "HOOK_PAIR_REACH * HOOK_PAIR_REACH" in base_links
     assert "HOOK_REACH * HOOK_REACH" not in base_links
 

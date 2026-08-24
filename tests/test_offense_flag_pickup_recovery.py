@@ -417,7 +417,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         helper = between(
             move,
             "static qboolean SG_AttackFlagTerminalAim",
-            "static void Hook_DisciplineRetire",
+            "static void SG_FlagTouchBrake",
         )
 
         attacker = (229.0, -699.0)

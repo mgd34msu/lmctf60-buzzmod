@@ -1,6 +1,7 @@
 /* sg_rune_binding.c -- authenticated native mechanism-plan bindings. */
 #include "../q_shared.h"
 #include "sg_rune_binding.h"
+#include "sg_train_station_plan.h"
 
 #include "sg_crc32.h"
 #include "sg_rune_codec.h"
@@ -294,6 +295,343 @@ static int Binding_NodeExecutable(const rune_mechanism_node_t *node)
 	       node->blocked_callback != SG_MECH_CALLBACK_UNKNOWN;
 }
 
+static int Binding_ToggleWallShape(const rune_mechanism_node_t *node)
+{
+	return Binding_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TOGGLE_WALL &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_USABLE | SG_MECH_NODEF_MOVER) &&
+	       node->spawnflags == 7U &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_FUNC_WALL &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Binding_TriggerHurtShape(const rune_mechanism_node_t *node)
+{
+	return Binding_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TRIGGER_HURT &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE |
+	           SG_MECH_NODEF_TOUCHABLE | SG_MECH_NODEF_USABLE) &&
+	       (node->spawnflags & UINT32_C(3)) == UINT32_C(2) &&
+	       node->touch_callback == SG_MECH_CALLBACK_TOUCH_HURT &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_HURT &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset == 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0;
+}
+
+static int Binding_RelayWallSpeakerShape(
+	const rune_mechanism_node_t *node)
+{
+	return Binding_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TARGET_SPEAKER &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       (node->spawnflags & ~UINT32_C(7)) == 0U &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TARGET_SPEAKER &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset == 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Binding_TimedVaultSpeakerShape(const rune_mechanism_node_t *node)
+{
+	return Binding_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TARGET_SPEAKER &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       node->spawnflags == 1U &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TARGET_SPEAKER &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset == 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Binding_TimedVaultLaserShape(const rune_mechanism_node_t *node)
+{
+	return Binding_NodeExecutable(node) &&
+	       node->kind == SG_MECH_NODE_TARGET_LASER &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       (node->spawnflags & 1U) != 0U &&
+	       (node->spawnflags & ~UINT32_C(0x7f)) == 0U &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TARGET_LASER &&
+	       node->think_callback == SG_MECH_CALLBACK_THINK_TARGET_LASER &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset != 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == 0 && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static int Binding_TimedVaultRelayShape(const rune_mechanism_node_t *node,
+	int32_t delay_ms)
+{
+	return Binding_NodeExecutable(node) && node->kind == SG_MECH_NODE_RELAY &&
+	       node->flags == (SG_MECH_NODEF_REPEATABLE | SG_MECH_NODEF_USABLE) &&
+	       node->spawnflags == 0U &&
+	       node->touch_callback == SG_MECH_CALLBACK_NONE &&
+	       node->use_callback == SG_MECH_CALLBACK_USE_TRIGGER_RELAY &&
+	       node->think_callback == SG_MECH_CALLBACK_NONE &&
+	       node->blocked_callback == SG_MECH_CALLBACK_NONE &&
+	       node->target_offset != 0U && node->targetname_offset != 0U &&
+	       node->killtarget_offset == 0U && node->path_target_offset == 0U &&
+	       node->owner_key == SG_MECH_NO_KEY &&
+	       node->team_master_key == SG_MECH_NO_KEY &&
+	       node->delay_ms == delay_ms && node->wait_ms == 0 &&
+	       node->speed_q8 == 0U && node->accel_q8 == 0U &&
+	       node->decel_q8 == 0U;
+}
+
+static const rune_mechanism_edge_t *Binding_PlanTargetAt(
+	const rune_t *rune, const rune_mechanism_plan_t *plan,
+	uint32_t from_key, uint16_t target_ordinal)
+{
+	const rune_mechanism_edge_t *found = NULL;
+	uint32_t ordinal;
+
+	if (!rune || !plan)
+		return NULL;
+	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&rune->mechanism_edges[plan->first_edge + ordinal];
+
+		if (edge->from_key != from_key || edge->kind != SG_MECH_EDGE_TARGET ||
+		    edge->ordinal != target_ordinal)
+			continue;
+		if (found)
+			return NULL;
+		found = edge;
+	}
+	return found;
+}
+
+static uint32_t Binding_PlanTargetCount(const rune_t *rune,
+	const rune_mechanism_plan_t *plan, uint32_t from_key)
+{
+	uint32_t count = 0U;
+	uint32_t ordinal;
+
+	for (ordinal = 0U; rune && plan && ordinal < plan->num_edges; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge =
+			&rune->mechanism_edges[plan->first_edge + ordinal];
+
+		if (edge->from_key == from_key && edge->kind == SG_MECH_EDGE_TARGET)
+			count++;
+	}
+	return count;
+}
+
+static int Binding_RelayWallTerminals(const rune_t *rune,
+	const rune_mechanism_plan_t *plan,
+	const rune_mechanism_node_t **immediate_out,
+	const rune_mechanism_node_t **delayed_out)
+{
+	const rune_mechanism_node_t *entry;
+	const rune_mechanism_node_t *mover;
+	const rune_mechanism_node_t *immediate = NULL;
+	const rune_mechanism_node_t *delayed = NULL;
+	uint32_t fanout_count;
+	uint32_t wall_count = 0U;
+	uint32_t ordinal;
+
+	if (immediate_out)
+		*immediate_out = NULL;
+	if (delayed_out)
+		*delayed_out = NULL;
+	if (!rune || !plan || !immediate_out || !delayed_out ||
+	    !(entry = SG_RuneMechanismNodeByKey(rune, plan->entry_key)) ||
+	    !(mover = SG_RuneMechanismNodeByKey(rune, plan->mover_key)) ||
+	    entry->kind != SG_MECH_NODE_BUTTON ||
+	    entry->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    entry->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    entry->delay_ms <= 0 || entry->delay_ms > RUNE_MAX_COST_MS ||
+	    entry->wait_ms <= 0 || entry->wait_ms > RUNE_MAX_COST_MS ||
+	    plan->cooldown_ms != (uint32_t)entry->wait_ms ||
+	    plan->expected_members != 1U || !Binding_ToggleWallShape(mover) ||
+	    Binding_PlanTargetCount(rune, plan, entry->key) != 2U)
+		return 0;
+	for (ordinal = 0U; ordinal < 2U; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge = Binding_PlanTargetAt(rune, plan,
+			entry->key, (uint16_t)ordinal);
+		const rune_mechanism_node_t *relay;
+
+		if (!edge || edge->delay_ms != (uint32_t)entry->delay_ms ||
+		    !(relay = SG_RuneMechanismNodeByKey(rune, edge->to_key)) ||
+		    !Binding_NodeExecutable(relay) ||
+		    relay->kind != SG_MECH_NODE_RELAY ||
+		    relay->use_callback != SG_MECH_CALLBACK_USE_TRIGGER_RELAY ||
+		    relay->touch_callback != SG_MECH_CALLBACK_NONE ||
+		    relay->think_callback != SG_MECH_CALLBACK_NONE ||
+		    relay->blocked_callback != SG_MECH_CALLBACK_NONE ||
+		    relay->target_offset == 0U || relay->targetname_offset == 0U ||
+		    relay->killtarget_offset != 0U || relay->path_target_offset != 0U)
+			return 0;
+		if (relay->delay_ms == 0)
+		{
+			if (immediate)
+				return 0;
+			immediate = relay;
+		}
+		else
+		{
+			if (delayed || relay->delay_ms > RUNE_MAX_COST_MS)
+				return 0;
+			delayed = relay;
+		}
+	}
+	if (!immediate || !delayed || immediate == delayed)
+		return 0;
+	fanout_count = Binding_PlanTargetCount(rune, plan, immediate->key);
+	if (fanout_count == 0U ||
+	    fanout_count != Binding_PlanTargetCount(rune, plan, delayed->key) ||
+	    plan->num_edges != 2U + 2U * fanout_count)
+		return 0;
+	for (ordinal = 0U; ordinal < fanout_count; ordinal++)
+	{
+		const rune_mechanism_edge_t *left = Binding_PlanTargetAt(rune, plan,
+			immediate->key, (uint16_t)ordinal);
+		const rune_mechanism_edge_t *right = Binding_PlanTargetAt(rune, plan,
+			delayed->key, (uint16_t)ordinal);
+		const rune_mechanism_node_t *destination;
+
+		if (!left || !right || left->to_key != right->to_key ||
+		    left->delay_ms != 0U ||
+		    right->delay_ms != (uint32_t)delayed->delay_ms ||
+		    !(destination = SG_RuneMechanismNodeByKey(rune, left->to_key)))
+			return 0;
+		if (Binding_ToggleWallShape(destination))
+		{
+			if (destination->key != mover->key || ++wall_count != 1U)
+				return 0;
+		}
+		else if (!Binding_TriggerHurtShape(destination) &&
+		         !Binding_RelayWallSpeakerShape(destination))
+			return 0;
+	}
+	if (wall_count != 1U)
+		return 0;
+	*immediate_out = immediate;
+	*delayed_out = delayed;
+	return 1;
+}
+
+static int Binding_TimedVaultTerminals(const rune_t *rune,
+	const rune_mechanism_plan_t *plan,
+	const rune_mechanism_node_t **short_out,
+	const rune_mechanism_node_t **restore_out)
+{
+	const rune_mechanism_node_t *entry;
+	const rune_mechanism_node_t *short_relay = NULL;
+	const rune_mechanism_node_t *restore_relay = NULL;
+	uint32_t door_count = 0U;
+	uint32_t relay_count = 0U;
+	uint32_t laser_count = 0U;
+	uint32_t speaker_count = 0U;
+	uint32_t ordinal;
+
+	if (short_out) *short_out = NULL;
+	if (restore_out) *restore_out = NULL;
+	if (!rune || !plan || !short_out || !restore_out ||
+	    !(entry = SG_RuneMechanismNodeByKey(rune, plan->entry_key)) ||
+	    entry->kind != SG_MECH_NODE_BUTTON ||
+	    entry->touch_callback != SG_MECH_CALLBACK_BUTTON_TOUCH ||
+	    entry->use_callback != SG_MECH_CALLBACK_BUTTON_USE ||
+	    entry->delay_ms != 0 || entry->wait_ms != 10000 ||
+	    plan->cooldown_ms != 10000U || plan->expected_members != 2U ||
+	    Binding_PlanTargetCount(rune, plan, entry->key) != 4U)
+		return 0;
+	for (ordinal = 0U; ordinal < 4U; ordinal++)
+	{
+		const rune_mechanism_edge_t *edge = Binding_PlanTargetAt(rune, plan,
+			entry->key, (uint16_t)ordinal);
+		const rune_mechanism_node_t *node;
+
+		if (!edge || edge->delay_ms != 0U ||
+		    !(node = SG_RuneMechanismNodeByKey(rune, edge->to_key)))
+			return 0;
+		if (node->kind == SG_MECH_NODE_RELAY)
+		{
+			if (Binding_TimedVaultRelayShape(node, 1000) && !short_relay)
+				short_relay = node;
+			else if (Binding_TimedVaultRelayShape(node, 10000) &&
+			         !restore_relay)
+				restore_relay = node;
+			else
+				return 0;
+			relay_count++;
+		}
+		else if (node->key == plan->mover_key &&
+		         node->kind == SG_MECH_NODE_DOOR_MASTER)
+			door_count++;
+		else if (node->kind == SG_MECH_NODE_DOOR_MEMBER &&
+		         node->team_master_key == plan->mover_key)
+			door_count++;
+		else
+			return 0;
+	}
+	if (relay_count != 2U || door_count != 2U || !short_relay ||
+	    !restore_relay || Binding_PlanTargetCount(rune, plan,
+	        short_relay->key) != 9U ||
+	    Binding_PlanTargetCount(rune, plan, restore_relay->key) != 9U)
+		return 0;
+	for (ordinal = 0U; ordinal < 9U; ordinal++)
+	{
+		const rune_mechanism_edge_t *left = Binding_PlanTargetAt(rune, plan,
+			short_relay->key, (uint16_t)ordinal);
+		const rune_mechanism_edge_t *right = Binding_PlanTargetAt(rune, plan,
+			restore_relay->key, (uint16_t)ordinal);
+		const rune_mechanism_node_t *node;
+
+		if (!left || !right || left->to_key != right->to_key ||
+		    left->delay_ms != 1000U || right->delay_ms != 10000U ||
+		    !(node = SG_RuneMechanismNodeByKey(rune, left->to_key)))
+			return 0;
+		if (Binding_TimedVaultLaserShape(node))
+			laser_count++;
+		else if (Binding_TimedVaultSpeakerShape(node))
+			speaker_count++;
+		else
+			return 0;
+	}
+	if (laser_count != 8U || speaker_count != 1U || plan->num_edges != 25U)
+		return 0;
+	*short_out = short_relay;
+	*restore_out = restore_relay;
+	return 1;
+}
+
 static int Binding_TrainCornerShape(const rune_mechanism_node_t *corner)
 {
 	return Binding_NodeExecutable(corner) &&
@@ -371,6 +709,54 @@ static int Binding_ControllerShape(const rune_t *rune,
 		return 0;
 	switch (plan->controller_kind)
 	{
+	case SG_MECHANISM_CONTROLLER_TRAIN_STATION:
+	{
+		sg_mech_catalog_view_t view;
+		sg_train_station_plan_witness_t witness;
+		uint32_t destination_key;
+		uint32_t companion_key;
+		uint32_t index;
+		int approach_is_source = 1;
+		int approach_is_boarding = 1;
+
+		memset(&view, 0, sizeof(view));
+		view.nodes = rune->mechanism_nodes;
+		view.num_nodes = rune->artifact.num_mechanism_nodes;
+		view.edges = rune->mechanism_edges;
+		view.num_edges = rune->artifact.num_inventory_edges;
+		view.strings = rune->mechanism_strings;
+		view.string_bytes = rune->artifact.string_bytes;
+		if (link->from < 0 ||
+		    link->from >= (int)rune->artifact.num_seeds)
+			return 0;
+		for (index = 0U; index < 3U; index++)
+		{
+			if (!isfinite(link->anchor[index]) ||
+			    !isfinite(link->mechanism_anchor[index]))
+				return 0;
+			if (link->anchor[index] !=
+			    rune->seeds[link->from].origin[index])
+				approach_is_source = 0;
+			if (link->anchor[index] != link->mechanism_anchor[index])
+				approach_is_boarding = 0;
+		}
+		if (approach_is_source || approach_is_boarding ||
+		    link->action != RL_TRAIN || link->mode != RLCM_RIDE ||
+		    plan->expected_members != 2U || plan->cooldown_ms != 3000U ||
+		    !SG_TrainStationPlanDiscover(&view, plan->entry_key,
+		        plan->mover_key, &destination_key, &companion_key,
+		        &witness) || plan->num_edges != witness.edge_count)
+			return 0;
+		for (index = 0U; index < witness.edge_count; index++)
+			if (memcmp(&rune->mechanism_edges[plan->first_edge + index],
+			        &rune->mechanism_edges[witness.edge_indices[index]],
+			        sizeof(rune->mechanism_edges[0])) != 0)
+				return 0;
+		return destination_key != plan->entry_key &&
+		       companion_key != plan->mover_key &&
+		       entry->key == plan->entry_key &&
+		       mover->key == plan->mover_key;
+	}
 	case SG_MECHANISM_CONTROLLER_PUSH:
 		return link->action == RL_PUSH && !mover &&
 		       plan->mover_key == SG_MECH_NO_KEY && plan->num_edges == 0U &&
@@ -565,6 +951,25 @@ static int Binding_ControllerShape(const rune_t *rune,
 		           plan->expected_members &&
 		       Binding_EdgeCount(rune, plan, entry->key, mover->key,
 		           SG_MECH_EDGE_TARGET) == 1U;
+	case SG_MECHANISM_CONTROLLER_RELAY_DOOR:
+	{
+		const rune_mechanism_node_t *immediate;
+		const rune_mechanism_node_t *delayed;
+
+		return link->action == RL_BUTTON_DOOR && link->mode == RLCM_PREOPEN &&
+		       Binding_RelayWallTerminals(rune, plan, &immediate, &delayed);
+	}
+	case SG_MECHANISM_CONTROLLER_TIMED_VAULT:
+	{
+		const rune_mechanism_node_t *short_relay;
+		const rune_mechanism_node_t *restore_relay;
+
+		return link->action == RL_BUTTON_DOOR && link->mode == RLCM_PREOPEN &&
+		       Binding_NodeDoorMover(mover) &&
+		       Binding_DoorMoverCount(rune, plan, mover) == 2U &&
+		       Binding_TimedVaultTerminals(rune, plan, &short_relay,
+		           &restore_relay);
+	}
 	default:
 		return 0;
 	}
@@ -573,10 +978,31 @@ static int Binding_ControllerShape(const rune_t *rune,
 static int Binding_NodeTopologyMatches(const rune_mechanism_node_t *node,
 	uint16_t controller_kind, int owned_execution)
 {
+	if (owned_execution == 2)
+	{
+		if (controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_STATION &&
+		    node && node->kind == SG_MECH_NODE_TRAIN)
+			return SG_MechCatalogStationTrainImmutableMatches(node->key,
+				node);
+		return node && SG_MechCatalogEntityTopologyMatches(node->key,
+			node);
+	}
 	return node && (owned_execution
 		? SG_MechCatalogEntityExecutionMatches(node->key, node,
 		      controller_kind)
 		: SG_MechCatalogEntityTopologyMatches(node->key, node));
+}
+
+static struct edict_s *Binding_ResolveEntity(
+	const rune_mechanism_node_t *node, uint16_t controller_kind,
+	int owned_execution)
+{
+	if (!node)
+		return NULL;
+	if (owned_execution == 2 && controller_kind ==
+	        SG_MECHANISM_CONTROLLER_TRAIN_STATION)
+		return SG_MechCatalogResolveStationEntity(node->key, node);
+	return SG_MechCatalogResolveEntity(node->key, node);
 }
 
 static int Binding_Capture(const rune_t *rune, uint32_t link_index,
@@ -616,11 +1042,43 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		plan->entry_key);
 	candidate.mover_node = SG_RuneMechanismNodeByKey(rune,
 		plan->mover_key);
+	if (plan->controller_kind ==
+	        SG_MECHANISM_CONTROLLER_TRAIN_STATION)
+	{
+		sg_mech_catalog_view_t view;
+		sg_train_station_plan_witness_t witness;
+		uint32_t destination_key;
+		uint32_t companion_key;
+
+		memset(&view, 0, sizeof(view));
+		view.nodes = rune->mechanism_nodes;
+		view.num_nodes = rune->artifact.num_mechanism_nodes;
+		view.edges = rune->mechanism_edges;
+		view.num_edges = rune->artifact.num_inventory_edges;
+		view.strings = rune->mechanism_strings;
+		view.string_bytes = rune->artifact.string_bytes;
+		if (!SG_TrainStationPlanDiscover(&view, plan->entry_key,
+		        plan->mover_key, &destination_key, &companion_key,
+		        &witness))
+			return 0;
+		candidate.destination_node = SG_RuneMechanismNodeByKey(rune,
+			destination_key);
+		candidate.egress_node = SG_RuneMechanismNodeByKey(rune,
+			companion_key);
+	}
 	if ((plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN ||
 	     plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_SHOOT) &&
 	    candidate.entry_node &&
 	    candidate.entry_node->kind == SG_MECH_NODE_BUTTON &&
 	    !Binding_TrainTerminals(rune, plan, &candidate.destination_node,
+	        &candidate.egress_node))
+		return 0;
+	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_RELAY_DOOR &&
+	    !Binding_RelayWallTerminals(rune, plan, &candidate.destination_node,
+	        &candidate.egress_node))
+		return 0;
+	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT &&
+	    !Binding_TimedVaultTerminals(rune, plan, &candidate.destination_node,
 	        &candidate.egress_node))
 		return 0;
 	if (!candidate.entry_node ||
@@ -633,18 +1091,20 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 	    (candidate.mover_node &&
 	     !Binding_NodeTopologyMatches(candidate.mover_node,
 	         plan->controller_kind, owned_execution)) ||
-	    !(candidate.entry_entity = SG_MechCatalogResolveEntity(
-	        candidate.entry_node->key, candidate.entry_node)) ||
+	    !(candidate.entry_entity = Binding_ResolveEntity(
+	        candidate.entry_node, plan->controller_kind, owned_execution)) ||
 	    (candidate.mover_node &&
-	     !(candidate.mover_entity = SG_MechCatalogResolveEntity(
-	         candidate.mover_node->key, candidate.mover_node))) ||
+	     !(candidate.mover_entity = Binding_ResolveEntity(
+	         candidate.mover_node, plan->controller_kind,
+	         owned_execution))) ||
 	    (candidate.destination_node &&
-	        !(candidate.destination_entity = SG_MechCatalogResolveEntity(
-	            candidate.destination_node->key,
-	            candidate.destination_node))) ||
+	        !(candidate.destination_entity = Binding_ResolveEntity(
+	            candidate.destination_node, plan->controller_kind,
+	            owned_execution))) ||
 	    (candidate.egress_node &&
-	        !(candidate.egress_entity = SG_MechCatalogResolveEntity(
-	            candidate.egress_node->key, candidate.egress_node))))
+	        !(candidate.egress_entity = Binding_ResolveEntity(
+	            candidate.egress_node, plan->controller_kind,
+	            owned_execution))))
 		return 0;
 	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
 	{
@@ -660,9 +1120,18 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		        owned_execution) ||
 		    !Binding_NodeTopologyMatches(to, plan->controller_kind,
 		        owned_execution) ||
-		    !SG_MechCatalogResolveEntity(from->key, from) ||
-		    !SG_MechCatalogResolveEntity(to->key, to))
+		    !Binding_ResolveEntity(from, plan->controller_kind,
+		        owned_execution) ||
+		    !Binding_ResolveEntity(to, plan->controller_kind,
+		        owned_execution))
 			return 0;
+	}
+	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_STATION)
+	{
+		memcpy(candidate.station_approach, link->anchor,
+			sizeof(candidate.station_approach));
+		memcpy(candidate.station_boarding, link->mechanism_anchor,
+			sizeof(candidate.station_boarding));
 	}
 	*binding_out = candidate;
 	return 1;
@@ -680,6 +1149,12 @@ int SG_RuneMechanismBindingCaptureOwned(const rune_t *rune,
 	return Binding_Capture(rune, link_index, binding_out, 1);
 }
 
+int SG_RuneMechanismStationBindingCapture(const rune_t *rune,
+	uint32_t link_index, sg_rune_mechanism_binding_t *binding_out)
+{
+	return Binding_Capture(rune, link_index, binding_out, 2);
+}
+
 static int Binding_Current(const sg_rune_mechanism_binding_t *binding,
 	int owned_execution)
 {
@@ -688,6 +1163,11 @@ static int Binding_Current(const sg_rune_mechanism_binding_t *binding,
 	return binding && binding->rune &&
 	       Binding_Capture(binding->rune, binding->link_index, &current,
 	           owned_execution) &&
+	       (owned_execution != 2 ||
+	        (memcmp(current.station_approach, binding->station_approach,
+	             sizeof(current.station_approach)) == 0 &&
+	         memcmp(current.station_boarding, binding->station_boarding,
+	             sizeof(current.station_boarding)) == 0)) &&
 	       current.link == binding->link && current.plan == binding->plan &&
 	       current.entry_node == binding->entry_node &&
 	       current.mover_node == binding->mover_node &&
@@ -709,6 +1189,12 @@ int SG_RuneMechanismBindingTopologyCurrent(
 	const sg_rune_mechanism_binding_t *binding)
 {
 	return Binding_Current(binding, 0);
+}
+
+int SG_RuneMechanismStationBindingCurrent(
+	const sg_rune_mechanism_binding_t *binding)
+{
+	return Binding_Current(binding, 2);
 }
 
 const rune_mechanism_edge_t *SG_RuneMechanismBindingEdgeAt(
@@ -895,7 +1381,10 @@ static int Binding_AddMover(const sg_rune_mechanism_binding_t *binding,
 	else if (binding->link->action == RL_DOOR ||
 	    binding->link->action == RL_BUTTON_DOOR)
 	{
-		if (!Binding_NodeDoorMover(node))
+		if (binding->plan->controller_kind ==
+		        SG_MECHANISM_CONTROLLER_RELAY_DOOR
+		        ? node->kind != SG_MECH_NODE_TOGGLE_WALL
+		        : !Binding_NodeDoorMover(node))
 			return 1;
 	}
 	else if ((node->flags & SG_MECH_NODEF_MOVER) == 0U)

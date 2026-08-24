@@ -14,6 +14,7 @@ qboolean SG_RunePublishedShapeValid(const rune_t *rune)
 	if (!rune || !rune->seeds || !rune->first_link ||
 	    !rune->linked_seed ||
 	    rune->artifact.magic != RUNE_ARTIFACT_MAGIC ||
+	    !SG_RuneRouteContractValid(rune->artifact.route_contract) ||
 	    rune->artifact.header_crc32 == 0U ||
 	    rune->hdr.magic != (int)RUNE_ARTIFACT_MAGIC ||
 	    rune->hdr.num_seeds <= 0 || rune->hdr.num_seeds > RUNE_MAX_SEEDS ||
@@ -63,6 +64,7 @@ int SG_RuneArtifactsEqual(const rune_artifact_t *left,
 {
 	return left && right &&
 	       left->magic == right->magic &&
+	       left->route_contract == right->route_contract &&
 	       left->payload_crc32 == right->payload_crc32 &&
 	       left->header_crc32 == right->header_crc32 &&
 	       left->action_contract_crc32 == right->action_contract_crc32 &&

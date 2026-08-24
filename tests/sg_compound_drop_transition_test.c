@@ -1,5 +1,6 @@
 /* Route-retirement boundaries cannot cancel a physically owned D_DROP. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "g_local.h"
@@ -58,6 +59,18 @@ void SG_ButtonExecutionActionReset(sg_bot_t *bot)
 	(void)bot;
 }
 
+int SG_ChainHookGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_ChainHookGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+	abort();
+}
+
 int SG_TrainGateGameOwns(const sg_bot_t *bot)
 {
 	(void)bot;
@@ -67,6 +80,18 @@ int SG_TrainGateGameOwns(const sg_bot_t *bot)
 void SG_TrainGateGameReset(sg_bot_t *bot)
 {
 	(void)bot;
+}
+
+int SG_TrainStationGameOwns(const sg_bot_t *bot)
+{
+	(void)bot;
+	return 0;
+}
+
+void SG_TrainStationGameReset(sg_bot_t *bot)
+{
+	(void)bot;
+	abort();
 }
 
 int SG_ShootDoorGameOwns(const sg_bot_t *bot)

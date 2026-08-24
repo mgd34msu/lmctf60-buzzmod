@@ -12,6 +12,7 @@
 #include "sg_compound_world.h"
 #include "sg_cvars.h"
 #include "sg_hooks.h"
+#include "sg_hook_game.h"
 #include "sg_move.h"
 #include "sg_util.h"
 
