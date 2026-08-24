@@ -25,8 +25,8 @@ The project is complete when one unchanged source commit satisfies every gate:
 | Gameplay and bot source | Complete. D_SWIM, rocket jump, D_DROP, D_HOOK, combat, roles, objectives, local fallback, and human trace capture are implemented. |
 | Map source repair | Complete. No remaining map requires another source-owned graph repair for initial release. |
 | Corpus classification | 175 maps total. Development evidence identifies 10 route-only candidates, but this is not a fixed final count. Regenerate and test all 175 normally after the final freeze; classify only the maps that still fail complete-route closure as `ROUTE_ONLY`. |
-| Branches | `slipgate`, `main`, and both remote refs point to the same proven commit. Exact CI is green for that commit. |
-| Current source wave | Implementation, independent review, both local host gates, clean module builds, linkage, and deslop are complete. The wave sets version `1.0.0`, adds the controller-derived route-only verifier, updates release docs, and compacts this plan. Integration and exact CI remain. |
+| Branches | `main` remains on the prior proven tree. `slipgate` contains the pushed release wave plus the current uncommitted pre-freeze fixes. Exact CI and branch resynchronization remain. |
+| Current source wave | The route-only release work and production Dijkstra fallback are implemented and independently reviewed. Both full local build/test gates pass. Commit and exact CI remain. |
 | Final freeze | Not started. Current uncommitted changes would invalidate it. |
 | Final 175-map run | Not started. |
 | Production matches | Not started. Fake-engine tests are tooling proof, not match evidence. |
@@ -104,6 +104,11 @@ A `local_only` RUNE is releasable only when all of these conditions hold:
   world validator resolves both to spawned flag stands and rejects arbitrary
   terminal sinks.
 - The generator exhausts ordinary closure work before it emits `local_only`.
+- After ordinary and BSP-aware repair, the late selector cyclically considers
+  any ordered disconnected SCC pair. It publishes only exact-proved RUN,
+  JUMP, DROP, SWIM, or direct HOOK links and rebuilds SCCs after each addition.
+  Its 64 windows cover at most 4,096 SCC slots; exhaustion returns
+  `OPEN_BUDGET` and continues to human evidence, then local-only.
 - The generator does not add a link only to change the classification.
 - The only missing behavior is an inter-flag path or a carried-flag return
   path.
@@ -198,18 +203,16 @@ initial release.
 
 ## Current pre-freeze work
 
-The implementation and focused review are complete. The route-only verifier
-authenticates all 175 final controller results, derives an ordered zero-to-ten
-subset from the fixed candidate universe, and launches only that subset. Each
-selected lane uses a disjoint private game root whose module, maplist, BSP,
-RUNE, and SNAG bytes match the installed bundle. A zero-map remainder produces
-verified no-op evidence without launching a process.
+The route-only verifier authenticates all 175 final controller results and
+launches only the remaining candidate subset in isolated game roots. The
+production late selector now runs after ordinary/BSP/swim closure and before
+human evidence or local-only publication. It uses exact movement owners,
+retains accepted links on open completion, and rolls them back on fatal error.
 
-Both Make dialect host gates, clean module builds, source-size checks, deslop,
-and linkage checks pass on the complete worktree. Before creating the final
-snapshot:
+Both full local build/test gates, source-size checks, deslop, linkage, and the
+complete-diff review pass. Before creating the final snapshot:
 
-1. Review the complete diff and remove accidental outputs.
+1. Commit the pre-freeze wave on `slipgate`.
 2. Land and prove the source candidate through stage 1 below.
 
 ## Final execution plan
@@ -326,8 +329,8 @@ controller run root.
 - [x] RUNE, SNAG, reader, lint, semantic, cold-load, and rollback tooling
   implemented.
 - [x] Authenticated server-bundle and persistent-fleet tooling implemented.
-- [ ] Final route-only verifier, release docs, version, and compact-plan wave
-  integrated.
+- [ ] Final route-only verifier, Dijkstra fallback, release docs, version, and
+  compact-plan wave integrated.
 - [ ] Final source commit synchronized and exact CI green on both branches.
 - [ ] New immutable source, module, configuration, tool, and 175-map freeze.
 - [ ] All 175 new RUNEs accepted as `PASS` or approved `ROUTE_ONLY`.

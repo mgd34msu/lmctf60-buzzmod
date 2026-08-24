@@ -109,6 +109,8 @@ typedef struct late_adjacency_s
 	int *in_head;
 	int *out_next;
 	int *in_next;
+	int *region_head;
+	int *region_next;
 	uint32_t *region_pair;
 	uint32_t region_pair_count;
 } late_adjacency_t;
@@ -189,6 +191,8 @@ static void LateAdjacencyFree(late_adjacency_t *adjacency)
 	free(adjacency->in_head);
 	free(adjacency->out_next);
 	free(adjacency->in_next);
+	free(adjacency->region_head);
+	free(adjacency->region_next);
 	free(adjacency->region_pair);
 	memset(adjacency, 0, sizeof(*adjacency));
 }
@@ -201,6 +205,10 @@ static qboolean LateAdjacencyBuild(const sg_rune_late_graph_t *graph,
 	memset(adjacency, 0, sizeof(*adjacency));
 	adjacency->out_head = malloc(graph->seed_count * sizeof(*adjacency->out_head));
 	adjacency->in_head = malloc(graph->seed_count * sizeof(*adjacency->in_head));
+	adjacency->region_head = malloc(graph->region_count *
+		sizeof(*adjacency->region_head));
+	adjacency->region_next = malloc(graph->seed_count *
+		sizeof(*adjacency->region_next));
 	if (graph->link_count)
 	{
 		adjacency->out_next =
@@ -211,6 +219,7 @@ static qboolean LateAdjacencyBuild(const sg_rune_late_graph_t *graph,
 			malloc(graph->link_count * sizeof(*adjacency->region_pair));
 	}
 	if (!adjacency->out_head || !adjacency->in_head ||
+		!adjacency->region_head || !adjacency->region_next ||
 		(graph->link_count && (!adjacency->out_next || !adjacency->in_next ||
 		 !adjacency->region_pair)))
 	{
@@ -221,6 +230,16 @@ static qboolean LateAdjacencyBuild(const sg_rune_late_graph_t *graph,
 	{
 		adjacency->out_head[i] = -1;
 		adjacency->in_head[i] = -1;
+	}
+	for (i = 0; i < graph->region_count; i++)
+		adjacency->region_head[i] = -1;
+	for (i = graph->seed_count; i > 0; i--)
+	{
+		uint32_t seed = i - 1U;
+		uint32_t region = (uint32_t)graph->regions[seed];
+
+		adjacency->region_next[seed] = adjacency->region_head[region];
+		adjacency->region_head[region] = (int)seed;
 	}
 	for (i = 0; i < graph->link_count; i++)
 	{
@@ -568,60 +587,63 @@ static void LateEnumerate(const sg_rune_late_graph_t *graph,
 	uint32_t pair_count = graph->region_count * (graph->region_count - 1U);
 	uint32_t remaining = pair_count - graph->pair_cursor;
 	uint32_t window = capacity < remaining ? capacity : remaining;
-	uint32_t from;
+	uint32_t slot;
 
 	report->pair_count = pair_count;
 	report->next_pair_cursor = pair_count
 		? (graph->pair_cursor + window) % pair_count : 0U;
-	for (from = 0; from < window; from++)
-		candidates[from].from = -1;
-	for (from = 0; from < graph->seed_count; from++)
+	for (slot = 0; slot < window; slot++)
+		candidates[slot].from = -1;
+	for (slot = 0; slot < window; slot++)
 	{
-		uint32_t to;
+		uint32_t pair = (graph->pair_cursor + slot) % pair_count;
+		uint32_t from_region = pair / (graph->region_count - 1U);
+		uint32_t encoded_to = pair % (graph->region_count - 1U);
+		uint32_t to_region = encoded_to < from_region
+			? encoded_to : encoded_to + 1U;
+		int from;
 
-		for (to = 0; to < graph->seed_count; to++)
+		if (LateRegionLink(adjacency, pair))
+			continue;
+		for (from = adjacency->region_head[from_region]; from >= 0;
+			 from = adjacency->region_next[from])
 		{
-			sg_rune_late_proposal_t proposal;
-			sg_rune_late_candidate_t candidate;
-			uint32_t from_region = (uint32_t)graph->regions[from];
-			uint32_t to_region = (uint32_t)graph->regions[to];
-			uint32_t pair, slot;
+			int to;
 
-			if (from_region == to_region)
-				continue;
-			pair = from_region * (graph->region_count - 1U) +
-				(to_region < from_region ? to_region : to_region - 1U);
-			if (LateRegionLink(adjacency, pair) ||
-				LateReversesOneWay(graph, adjacency, (int)from, (int)to))
-				continue;
-			slot = (pair + pair_count - graph->pair_cursor) % pair_count;
-			if (slot >= window)
-				continue;
-			memset(&proposal, 0, sizeof(proposal));
-			if (!eligibility(callback_data, graph, (int)from, (int)to,
-				&proposal))
-				continue;
-			if (!proposal.cost_ms || proposal.cost_ms > RUNE_MAX_COST_MS ||
-				!SG_ActionMechanismAdmitted(proposal.action))
-				continue;
-			memset(&candidate, 0, sizeof(candidate));
-			candidate.from = (int)from;
-			candidate.to = (int)to;
-			candidate.from_region = (int)from_region;
-			candidate.to_region = (int)to_region;
-			candidate.action = proposal.action;
-			candidate.reversible = !LateOneWay(proposal.action);
-			candidate.cost_ms = proposal.cost_ms;
-			LateCandidateScore(graph, from_distance, to_distance,
-				report->route, &candidate);
-			if (candidates[slot].from < 0 ||
-				LateFrontierCompare(&candidate, &candidates[slot]) < 0)
-				candidates[slot] = candidate;
+			for (to = adjacency->region_head[to_region]; to >= 0;
+				 to = adjacency->region_next[to])
+			{
+				sg_rune_late_proposal_t proposal;
+				sg_rune_late_candidate_t candidate;
+
+				report->endpoint_pair_count++;
+				if (LateReversesOneWay(graph, adjacency, from, to))
+					continue;
+				memset(&proposal, 0, sizeof(proposal));
+				if (!eligibility(callback_data, graph, from, to, &proposal))
+					continue;
+				if (!proposal.cost_ms || proposal.cost_ms > RUNE_MAX_COST_MS ||
+					!SG_ActionMechanismAdmitted(proposal.action))
+					continue;
+				memset(&candidate, 0, sizeof(candidate));
+				candidate.from = from;
+				candidate.to = to;
+				candidate.from_region = (int)from_region;
+				candidate.to_region = (int)to_region;
+				candidate.action = proposal.action;
+				candidate.reversible = !LateOneWay(proposal.action);
+				candidate.cost_ms = proposal.cost_ms;
+				LateCandidateScore(graph, from_distance, to_distance,
+					report->route, &candidate);
+				if (candidates[slot].from < 0 ||
+					LateFrontierCompare(&candidate, &candidates[slot]) < 0)
+					candidates[slot] = candidate;
+			}
 		}
 	}
-	for (from = 0; from < window; from++)
-		if (candidates[from].from >= 0)
-			candidates[report->candidate_count++] = candidates[from];
+	for (slot = 0; slot < window; slot++)
+		if (candidates[slot].from >= 0)
+			candidates[report->candidate_count++] = candidates[slot];
 }
 
 sg_rune_late_status_t SG_RuneLatePathSelect(

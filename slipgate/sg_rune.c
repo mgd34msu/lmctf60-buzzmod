@@ -8101,6 +8101,332 @@ done:
 	return closed;
 }
 
+#define RUNE_LATE_PAIR_WINDOW 64U
+#define RUNE_LATE_SELECTOR_CALL_LIMIT 64U
+
+typedef struct rune_late_context_s
+{
+	sg_rune_late_rejections_t rejections;
+	uint64_t endpoint_pairs;
+	uint64_t scheduled_pairs;
+	uint32_t selector_calls;
+	uint32_t topology_rebuilds;
+	uint32_t max_regions;
+	uint32_t exact_attempts;
+	uint32_t accepted;
+	int link_mark;
+	int drop_mark;
+	int hook_mark;
+	int swim_mark;
+	int waypoint_mark;
+} rune_late_context_t;
+
+#ifndef SG_RUNE_LATE_RUN_PROVER
+#define SG_RUNE_LATE_RUN_PROVER Prove
+#endif
+#ifndef SG_RUNE_LATE_DROP_PROVER
+#define SG_RUNE_LATE_DROP_PROVER ProveDrop
+#endif
+#ifndef SG_RUNE_LATE_SWIM_PROVER
+#define SG_RUNE_LATE_SWIM_PROVER ProveSwim
+#endif
+#ifndef SG_RUNE_LATE_HOOK_PROVER
+#define SG_RUNE_LATE_HOOK_PROVER ProveHook
+#endif
+#ifndef SG_RUNE_LATE_GRAVITY
+#define SG_RUNE_LATE_GRAVITY() SG_RuneProofGravity()
+#endif
+
+static qboolean Rune_LateEligible(void *data,
+	const sg_rune_late_graph_t *graph, int from, int to,
+	sg_rune_late_proposal_t *proposal)
+{
+	rune_late_context_t *context = data;
+	vec3_t delta;
+	float horizontal, distance, reach;
+	qboolean source_water;
+	uint32_t cost;
+
+	if (!context || !graph || !proposal || from < 0 || to < 0 ||
+		(uint32_t)from >= graph->seed_count ||
+		(uint32_t)to >= graph->seed_count || from == to ||
+		SG_RuneLateRejectionsContains(&context->rejections, from, to) ||
+		(gen_seeds[from].flags & RSF_TOMBSTONE) ||
+		(gen_seeds[to].flags & RSF_TOMBSTONE))
+		return false;
+	source_water = (gen_seeds[from].flags & RSF_WATER) != 0;
+	if ((!source_water && (!gen_source_stable[from] ||
+		 gen_source_waterlevel[from] != 0)) ||
+		(source_water && gen_source_waterlevel[from] < 2))
+		return false;
+	VectorSubtract(gen_seeds[to].origin, gen_seeds[from].origin, delta);
+	horizontal = sqrtf(delta[0] * delta[0] + delta[1] * delta[1]);
+	reach = SG_RUNE_LATE_GRAVITY() <= 200 ? 1600.0f : HOOK_PAIR_REACH;
+	if (!isfinite(horizontal) || !isfinite(delta[2]) || horizontal > reach ||
+		fabsf(delta[2]) > RUNE_HOOK_MAX_RAY)
+		return false;
+	distance = sqrtf(DotProduct(delta, delta));
+	if (!isfinite(distance))
+		return false;
+	cost = (uint32_t)ceilf(distance * 3.125f) + 100U;
+	if (cost > RUNE_MAX_COST_MS)
+		cost = RUNE_MAX_COST_MS;
+	proposal->cost_ms = cost ? cost : 1U;
+	if ((gen_seeds[from].flags | gen_seeds[to].flags) & RSF_WATER)
+		proposal->action = RL_SWIM;
+	else if (delta[2] < -160.0f)
+		proposal->action = RL_DROP;
+	else if (horizontal > 448.0f || delta[2] > 128.0f)
+		proposal->action = RL_HOOK;
+	else if (delta[2] > 16.0f)
+		proposal->action = RL_JUMP;
+	else
+		proposal->action = RL_RUN;
+	return true;
+}
+
+static qboolean Rune_LateActionApplicable(int from, int to, int action)
+{
+	qboolean from_water = (gen_seeds[from].flags & RSF_WATER) != 0;
+	qboolean to_water = (gen_seeds[to].flags & RSF_WATER) != 0;
+
+	if (action == RL_SWIM)
+		return from_water || to_water;
+	if (action == RL_RUN || action == RL_JUMP)
+		return !from_water && !to_water;
+	if (action == RL_DROP)
+		return !from_water &&
+			gen_seeds[to].origin[2] < gen_seeds[from].origin[2];
+	if (action == RL_HOOK)
+		return !(from_water && to_water);
+	return false;
+}
+
+static int Rune_LateTryAction(rune_late_context_t *context,
+	int from, int to, int action)
+{
+	vec3_t anchor;
+	short cost;
+	byte speed;
+	qboolean proved;
+
+	if (!Rune_LateActionApplicable(from, to, action))
+		return 0;
+	context->exact_attempts++;
+	if (action == RL_RUN || action == RL_JUMP)
+		proved = SG_RUNE_LATE_RUN_PROVER(from, to, action == RL_JUMP,
+			&cost, &speed);
+	else if (action == RL_DROP)
+		proved = SG_RUNE_LATE_DROP_PROVER(from, to, anchor, &cost, &speed);
+	else if (action == RL_SWIM)
+		proved = SG_RUNE_LATE_SWIM_PROVER(from, to, &cost, &speed);
+	else
+		proved = SG_RUNE_LATE_HOOK_PROVER(from, to, anchor, &cost, &speed);
+	if (!proved)
+		return 0;
+	if (!Link_Add(from, to, (rune_action_t)action, cost, speed))
+		return -1;
+	if (action == RL_RUN && gen_prove_has_wp)
+	{
+		VectorCopy(gen_prove_wp, gen_links[gen_num_links - 1].anchor);
+		gen_waypoint_links++;
+	}
+	else if (action == RL_DROP)
+	{
+		VectorCopy(anchor, gen_links[gen_num_links - 1].anchor);
+		Link_Env_Drop(&gen_links[gen_num_links - 1], dd_last_heading);
+	}
+	else if (action == RL_SWIM)
+	{
+		gen_links[gen_num_links - 1].heading_slack = 0;
+		gen_swim_links++;
+	}
+	else if (action == RL_HOOK)
+	{
+		VectorCopy(anchor, gen_links[gen_num_links - 1].anchor);
+		Link_Env_Hook(&gen_links[gen_num_links - 1], anchor);
+	}
+	return 1;
+}
+
+static int Rune_LateTryBridge(rune_late_context_t *context,
+	const sg_rune_late_candidate_t *candidate)
+{
+	/* Chain hooks need a two-control witness; rocket jumps remain disabled in
+	 * generation until their launch state is serialized. */
+	static const byte fallback[] = {
+		RL_RUN, RL_JUMP, RL_DROP, RL_SWIM, RL_HOOK
+	};
+	byte action[sizeof(fallback) + 1U];
+	size_t count = 0U;
+
+	action[count++] = candidate->action;
+	for (size_t i = 0U; i < sizeof(fallback); i++)
+	{
+		qboolean duplicate = false;
+
+		for (size_t j = 0U; j < count; j++)
+			if (action[j] == fallback[i])
+				duplicate = true;
+		if (!duplicate)
+			action[count++] = fallback[i];
+	}
+	for (size_t i = 0U; i < count; i++)
+	{
+		int result = Rune_LateTryAction(context, candidate->from,
+			candidate->to, action[i]);
+
+		if (result)
+			return result;
+	}
+	return 0;
+}
+
+static sg_rune_late_completion_t Graph_ProveLatePath(
+	int red_root, int blue_root)
+{
+	rune_late_context_t context;
+	sg_rune_topology_graph_t topology_graph = {
+		gen_seeds, (uint32_t)gen_num_seeds, gen_links, &gen_num_links,
+		LINK_MAX
+	};
+	sg_rune_topology_snapshot_t topology = {0};
+	sg_rune_late_candidate_t *candidates = NULL;
+	int *rejected_from = NULL, *rejected_to = NULL;
+	uint32_t pair_cursor = 0U;
+	qboolean offered_in_tour = false;
+	sg_rune_late_completion_t completion = SG_RUNE_LATE_COMPLETION_FATAL;
+
+	memset(&context, 0, sizeof(context));
+	context.link_mark = gen_num_links;
+	context.drop_mark = gen_env_drop;
+	context.hook_mark = gen_env_hook;
+	context.swim_mark = gen_swim_links;
+	context.waypoint_mark = gen_waypoint_links;
+	topology.components = Rune_TopologyAllocate(
+		(size_t)gen_num_seeds * sizeof(*topology.components));
+	topology.component_capacity = (uint32_t)gen_num_seeds;
+	candidates = Rune_TopologyAllocate(
+		RUNE_LATE_PAIR_WINDOW * sizeof(*candidates));
+	rejected_from = Rune_TopologyAllocate(
+		SG_RUNE_LATE_REJECTION_TABLE_SIZE * sizeof(*rejected_from));
+	rejected_to = Rune_TopologyAllocate(
+		SG_RUNE_LATE_REJECTION_TABLE_SIZE * sizeof(*rejected_to));
+	if (!topology.components || !candidates || !rejected_from ||
+		!rejected_to || !SG_RuneLateRejectionsInit(&context.rejections,
+		rejected_from, rejected_to, SG_RUNE_LATE_REJECTION_TABLE_SIZE,
+		SG_RUNE_LATE_REJECTION_LIMIT))
+		goto done;
+
+	for (;;)
+	{
+		sg_rune_late_graph_t graph;
+		sg_rune_late_report_t report;
+		qboolean accepted = false;
+
+		if (SG_RuneTopologySnapshotBuild(&topology_graph, &topology,
+			Rune_TopologyAllocate, Rune_TopologyRelease) !=
+			SG_RUNE_TOPOLOGY_OK)
+			goto done;
+		context.topology_rebuilds++;
+		if (topology.component_count > context.max_regions)
+			context.max_regions = topology.component_count;
+		if (topology.components[red_root] == topology.components[blue_root])
+		{
+			completion = SG_RUNE_LATE_COMPLETION_CLOSED;
+			break;
+		}
+		memset(&graph, 0, sizeof(graph));
+		graph.seeds = gen_seeds;
+		graph.seed_count = (uint32_t)gen_num_seeds;
+		graph.links = gen_links;
+		graph.link_count = (uint32_t)gen_num_links;
+		graph.regions = topology.components;
+		graph.region_count = topology.component_count;
+		graph.pair_cursor = pair_cursor;
+		graph.objective[0] = red_root;
+		graph.objective[1] = blue_root;
+		if (context.selector_calls >= RUNE_LATE_SELECTOR_CALL_LIMIT)
+		{
+			completion = SG_RUNE_LATE_COMPLETION_OPEN_BUDGET;
+			break;
+		}
+		{
+			uint32_t pair_count = graph.region_count *
+				(graph.region_count - 1U);
+			uint32_t remaining = pair_count - pair_cursor;
+
+			context.scheduled_pairs += remaining < RUNE_LATE_PAIR_WINDOW
+				? remaining : RUNE_LATE_PAIR_WINDOW;
+		}
+		context.selector_calls++;
+		if (SG_RuneLatePathSelect(&graph, Rune_LateEligible, &context,
+			candidates, RUNE_LATE_PAIR_WINDOW, &report) != SG_RUNE_LATE_OK)
+			goto done;
+		context.endpoint_pairs += report.endpoint_pair_count;
+		offered_in_tour = offered_in_tour || report.candidate_count != 0U;
+		for (uint32_t i = 0U; i < report.candidate_count; i++)
+		{
+			int result = Rune_LateTryBridge(&context, &candidates[i]);
+
+			if (result < 0)
+				goto done;
+			if (result > 0)
+			{
+				context.accepted++;
+				accepted = true;
+				break;
+			}
+			if (!SG_RuneLateRejectionsRecord(&context.rejections,
+				candidates[i].from, candidates[i].to))
+			{
+				completion = SG_RUNE_LATE_COMPLETION_OPEN_BUDGET;
+				goto done;
+			}
+		}
+		if (accepted)
+		{
+			pair_cursor = 0U;
+			offered_in_tour = false;
+			continue;
+		}
+		pair_cursor = report.next_pair_cursor;
+		if (!pair_cursor)
+		{
+			if (!offered_in_tour)
+			{
+				completion = SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED;
+				break;
+			}
+			offered_in_tour = false;
+		}
+	}
+
+done:
+	if (!SG_RuneLateCompletionKeepsMerges(completion))
+	{
+		gen_num_links = context.link_mark;
+		gen_env_drop = context.drop_mark;
+		gen_env_hook = context.hook_mark;
+		gen_swim_links = context.swim_mark;
+		gen_waypoint_links = context.waypoint_mark;
+	}
+	sg_host.dprint("rune: late-path status=%s selectors=%u scheduled=%llu "
+		"pairs=%llu proofs=%u accepted=%u rejected=%u rebuilds=%u "
+		"max_regions=%u links=%d\n",
+		SG_RuneLateCompletionName(completion), context.selector_calls,
+		(unsigned long long)context.scheduled_pairs,
+		(unsigned long long)context.endpoint_pairs, context.exact_attempts,
+		context.accepted, context.rejections.count, context.topology_rebuilds,
+		context.max_regions,
+		gen_num_links - context.link_mark);
+	Rune_TopologyRelease(topology.components);
+	Rune_TopologyRelease(candidates);
+	Rune_TopologyRelease(rejected_from);
+	Rune_TopologyRelease(rejected_to);
+	return completion;
+}
+
 static qboolean Graph_ApplyObjectiveKeep(const byte *keep,
 	const char *description)
 {
@@ -8532,6 +8858,7 @@ static qboolean Graph_PruneObjectiveCoreWithClosure(
 {
 	int red_root, blue_root, repair;
 	sg_rune_learning_apply_status_t learning_status;
+	sg_rune_late_completion_t late_completion;
 
 	if (!route_contract_out)
 		return false;
@@ -8549,6 +8876,11 @@ static qboolean Graph_PruneObjectiveCoreWithClosure(
 	if (red_root < 0 || blue_root < 0)
 		return false;
 	if (Prove_ObjectiveSwimClosure(red_root, blue_root))
+		return Graph_PruneObjectiveCore();
+	late_completion = Graph_ProveLatePath(red_root, blue_root);
+	if (late_completion == SG_RUNE_LATE_COMPLETION_FATAL)
+		return false;
+	if (late_completion == SG_RUNE_LATE_COMPLETION_CLOSED)
 		return Graph_PruneObjectiveCore();
 	if (learning)
 	{

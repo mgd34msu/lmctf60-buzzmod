@@ -3127,7 +3127,6 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(BUILD_PYTHON_RUNTIME_TEST) \
 		$(FLEET_RUNNER_TEST) $(FLEET_RUNNER_LIVE_TEST) \
 		tools/fleet-runner.py tools/fleet_runner_live.py tools/topmaps.txt \
-		route-only-match-test \
 		$(SERVER_BUNDLE_TEST) tools/server_bundle.py \
 		$(BSPMECHANISMS_TEST) \
 		$(WAVELOOP_PROCESS_TEST) \
@@ -3311,6 +3310,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	python3 -B $(DESLOP_AUDIT_TEST)
 	python3 -B $(DESLOP_AUDIT)
 	python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
+	python3 -B -m unittest tests.test_fleet_runner_live tests.test_route_only_evidence \
+		tests.test_route_only_match_config tests.test_server_bundle
 
 project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
 		PROJECT-COMPLETION-PLAN.md

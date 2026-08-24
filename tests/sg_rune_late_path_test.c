@@ -258,6 +258,24 @@ static void TestRoundRobinCrossesOldCapacity(void)
 	CHECK(attempts > 256 && attempts <= 380);
 }
 
+static void TestWindowScansOnlyScheduledRegions(void)
+{
+	rune_seed_t seeds[6];
+	int regions[6] = {0, 0, 1, 1, 2, 2};
+	sg_rune_late_graph_t graph = Graph(seeds, 6, NULL, 0,
+		regions, 3, 0, 5);
+	sg_rune_late_candidate_t candidate;
+	sg_rune_late_report_t report;
+
+	memset(seeds, 0, sizeof(seeds));
+	graph.pair_cursor = PairCursor(3, 1, 2);
+	CHECK(SG_RuneLatePathSelect(&graph, AllEligible, NULL,
+		&candidate, 1, &report) == SG_RUNE_LATE_OK);
+	CHECK(report.endpoint_pair_count == 4U);
+	CHECK(report.candidate_count == 1U);
+	CHECK(candidate.from_region == 1 && candidate.to_region == 2);
+}
+
 static void TestOneWayTeleportIsDiagnosticOnly(void)
 {
 	rune_seed_t seeds[2];
@@ -423,6 +441,7 @@ int main(void)
 	TestNeutralRegionsRemainEligible();
 	TestNeutralFrontierIsNotStarved();
 	TestRoundRobinCrossesOldCapacity();
+	TestWindowScansOnlyScheduledRegions();
 	TestOneWayTeleportIsDiagnosticOnly();
 	TestParallelRegionEdgeIsSuppressed();
 	TestAlternativeLimitAndOrder();

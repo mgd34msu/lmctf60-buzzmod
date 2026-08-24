@@ -26,11 +26,12 @@ class RuneUpdateIntegrationTest(unittest.TestCase):
         relay = body.index("Prove_RelayWallObjectiveClosure")
         core = body.index("Graph_PruneObjectiveCoreTry")
         swim = body.index("Prove_ObjectiveSwimClosure")
+        late = body.index("Graph_ProveLatePath")
         prior = body.index("Graph_ApplyLearningEvidence")
         local = body.index("Graph_PruneLocalObjectiveUnion")
 
-        self.assertEqual([relay, core, swim, prior, local],
-                         sorted([relay, core, swim, prior, local]))
+        self.assertEqual([relay, core, swim, late, prior, local],
+                         sorted([relay, core, swim, late, prior, local]))
         self.assertLess(prior, local)
         self.assertNotIn("Prove_ObjectiveClosure", body)
         apply = source.index("Graph_ApplyLearningEvidence")
@@ -88,7 +89,7 @@ class RuneUpdateIntegrationTest(unittest.TestCase):
         self.assertIn("recheck.source_rune = learning_source;", generator)
         self.assertIn("loaded_source = recheck->source_rune;", authority)
 
-    def test_open_post_inventory_state_publishes_without_fair_late_prover(self) -> None:
+    def test_open_post_inventory_state_runs_fair_late_prover_before_fallback(self) -> None:
         source = (ROOT / "slipgate" / "sg_rune.c").read_text(
             encoding="utf-8")
 
@@ -96,8 +97,21 @@ class RuneUpdateIntegrationTest(unittest.TestCase):
         prune_end = source.index("/* ----------------", prune_begin)
         prune = source[prune_begin:prune_end]
         self.assertNotIn("Prove_ObjectiveClosure", prune)
+        self.assertIn("Graph_ProveLatePath", prune)
+        self.assertLess(prune.index("Graph_ProveLatePath"),
+                        prune.index("Graph_ApplyLearningEvidence"))
         self.assertIn("Graph_PruneLocalObjectiveUnion", prune)
         self.assertIn("RUNE_ROUTE_CONTRACT_LOCAL_ONLY", prune)
+
+    def test_late_fallback_does_not_revive_unserialized_actions(self) -> None:
+        source = (ROOT / "slipgate" / "sg_rune.c").read_text(
+            encoding="utf-8")
+        begin = source.index("static int Rune_LateTryBridge")
+        end = source.index("static sg_rune_late_completion_t", begin)
+        fallback = source[begin:end]
+
+        self.assertNotIn("RL_CHAIN_HOOK", fallback)
+        self.assertNotIn("RL_ROCKETJUMP", fallback)
 
 
 if __name__ == "__main__":
