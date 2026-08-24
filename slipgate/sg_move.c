@@ -2728,7 +2728,7 @@ qboolean SG_AuthorizeButtonTargets(edict_t *source, edict_t *activator)
 {
 	int train_authority = SG_TrainGateGameAuthorizeButtonTargets(source,
 	    activator);
-	sg_rune_mechanism_binding_t binding;
+	sg_rune_mechanism_binding_t binding = { 0 };
 	sg_button_callback_token_t *token;
 	sg_button_callback_result_t result;
 	sg_bot_t *bot = DoorStep_EventBot(activator);

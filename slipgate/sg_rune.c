@@ -2766,7 +2766,7 @@ static int Gen_ToggleButtonLiftApproach(const vec3_t button_body,
 		vec3_t contact;
 		vec3_t delta;
 		vec3_t trial_carrier_origin;
-		int trial_ms;
+		int trial_ms = 0;
 		qboolean proved = false;
 		qboolean water_candidate = false;
 
@@ -2884,7 +2884,7 @@ static void Link_ToggleButtonCarriers(void)
 			int approach;
 			int egress;
 			int approach_ms;
-			int egress_ms;
+			int egress_ms = 0;
 			int saved_state;
 			int saved_solid;
 			int saved_linkcount;

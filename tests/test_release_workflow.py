@@ -37,16 +37,33 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('if grep -q "warning:" host-test.log;', self.source)
 
     def test_host_matrix_installs_its_sheet_test_runtime(self):
+        verification = self.source.partition('\n  verification:\n')[2].partition(
+            '\n  windows:\n')[0]
+        self.assertTrue(verification)
+        setup_python = (
+            'uses: actions/setup-python@'
+            '5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0'
+        )
         self.assertIn(
-            'python3 -m venv "$RUNNER_TEMP/slipgate-film"', self.source)
+            setup_python,
+            verification,
+        )
+        self.assertIn('python-version: "3.14"', verification)
+        self.assertIn(
+            'python3 -m venv "$RUNNER_TEMP/slipgate-film"', verification)
         self.assertIn(
             '"$RUNNER_TEMP/slipgate-film/bin/pip" install -r '
             'tools/requirements.txt',
-            self.source,
+            verification,
         )
         self.assertIn(
             'FILM_PYTHON="$RUNNER_TEMP/slipgate-film/bin/python"',
-            self.source,
+            verification,
+        )
+        self.assertLess(
+            verification.index(setup_python),
+            verification.index(
+                'python3 -m venv "$RUNNER_TEMP/slipgate-film"'),
         )
 
     def test_windows_project_builds_current_traversal_sources(self):

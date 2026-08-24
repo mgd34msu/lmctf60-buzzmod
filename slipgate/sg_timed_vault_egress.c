@@ -438,11 +438,12 @@ qboolean SG_TimedVaultEgressAdvancePose(const rune_seed_t *seeds,
 	{
 		vec3_t delta;
 		float distance;
-		int hop = next[i];
+		int candidate_hop = next[i];
 
 		if (!(seeds[i].flags & RSF_WATER) ||
-		    (seeds[i].flags & RSF_TOMBSTONE) || hop < 0 ||
-		    hop >= num_seeds || (seeds[hop].flags & RSF_TOMBSTONE))
+		    (seeds[i].flags & RSF_TOMBSTONE) || candidate_hop < 0 ||
+		    candidate_hop >= num_seeds ||
+		    (seeds[candidate_hop].flags & RSF_TOMBSTONE))
 			continue;
 		VectorSubtract(seeds[i].origin, origin, delta);
 		distance = DotProduct(delta, delta);
