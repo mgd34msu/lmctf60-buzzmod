@@ -25,9 +25,9 @@ The project is complete when one unchanged source commit satisfies every gate:
 | Gameplay and bot source | Complete. D_SWIM, rocket jump, D_DROP, D_HOOK, combat, roles, objectives, local fallback, and human trace capture are implemented. |
 | Map source repair | Complete. No remaining map requires another source-owned graph repair for initial release. |
 | Corpus classification | 175 maps total. Development evidence identifies 10 route-only candidates, but this is not a fixed final count. Regenerate and test all 175 normally after the final freeze; classify only the maps that still fail complete-route closure as `ROUTE_ONLY`. |
-| Branches | `main` remains on the prior proven tree. `slipgate` contains the pushed release wave plus the current uncommitted pre-freeze fixes. Exact CI and branch resynchronization remain. |
-| Current source wave | The route-only release work and production Dijkstra fallback are implemented and independently reviewed. Both full local build/test gates pass. Commit and exact CI remain. |
-| Final freeze | Not started. Current uncommitted changes would invalidate it. |
+| Branches | `main` remains on the prior proven tree. The pre-freeze candidate is committed and pushed on `slipgate`; exact CI and branch resynchronization remain. |
+| Current source wave | The route-only release work and production Dijkstra fallback are implemented, independently reviewed, committed, and pushed. Both full local build/test gates pass. Exact CI remains. |
+| Final freeze | Not started. Exact CI and branch resynchronization block it. |
 | Final 175-map run | Not started. |
 | Production matches | Not started. Fake-engine tests are tooling proof, not match evidence. |
 | Release | Final `v1.0.0` is not tagged or published. Historical releases remain. |
@@ -210,10 +210,9 @@ human evidence or local-only publication. It uses exact movement owners,
 retains accepted links on open completion, and rolls them back on fatal error.
 
 Both full local build/test gates, source-size checks, deslop, linkage, and the
-complete-diff review pass. Before creating the final snapshot:
-
-1. Commit the pre-freeze wave on `slipgate`.
-2. Land and prove the source candidate through stage 1 below.
+complete-diff review pass. The pre-freeze wave is committed on `slipgate`.
+Land and prove that candidate through stage 1 below before creating the final
+snapshot.
 
 ## Final execution plan
 
