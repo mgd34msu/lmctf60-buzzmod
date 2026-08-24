@@ -22,6 +22,7 @@ import time
 import unittest
 from unittest import mock
 
+from tools import build_python_runtime
 from tools import rune_corpus_controller as controller
 from tests.test_rune_artifact import _build_rune
 
@@ -318,107 +319,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
             for name in names + files:
                 Path(directory, name).chmod(0o700)
 
-    def make_real_private_runtime(self, root: Path) -> Path:
-        """Construct a link-free private runtime and its loader --list closure."""
-        runtime = root / "python-runtime"
-        required_extensions = {
-            "_bz2", "_ctypes", "_hashlib", "_json", "_lzma", "_socket",
-            "_struct", "array", "fcntl", "math", "select", "zlib",
-        }
-        selected = None
-        candidates = [Path("/usr/bin/python3"), Path(os.sys.executable)]
-        for candidate in dict.fromkeys(candidates):
-            try:
-                interpreter = candidate.resolve(strict=True)
-                details = json.loads(subprocess.run(
-                    [str(interpreter), "-c",
-                     "import json,os,sys; print(json.dumps({"
-                     "'version': list(sys.version_info[:2]), "
-                     "'stdlib': os.path.dirname(os.__file__)}))"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    check=True, text=True,
-                ).stdout)
-                version = ".".join(str(part) for part in details["version"])
-                stdlib = Path(details["stdlib"]).resolve(strict=True)
-                dynload = stdlib / "lib-dynload"
-                extension_names = {path.name for path in dynload.iterdir()
-                                   if path.is_file()}
-                if not all(any(name.startswith(required) for name in extension_names)
-                           for required in required_extensions):
-                    continue
-                loader = Path(controller.elf_interpreter(interpreter)).resolve(
-                    strict=True
-                )
-                listed = subprocess.run(
-                    [str(loader), "--list", str(interpreter)],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    check=True, text=True,
-                ).stdout
-                if not re.search(r"\blibpython[^\s]*\.so", listed):
-                    continue
-                selected = (interpreter, stdlib, version, loader)
-                break
-            except (OSError, KeyError, TypeError, ValueError,
-                    json.JSONDecodeError, subprocess.CalledProcessError,
-                    controller.CorpusError):
-                continue
-        if selected is None:
-            self.skipTest(
-                "host has no dynamically linked Python with the required "
-                "extension closure"
-            )
-        interpreter, stdlib, version, loader = selected
-
-        def copy(source: Path, target: Path) -> None:
-            source = source.resolve(strict=True)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            target.chmod(0o755 if os.access(source, os.X_OK) else 0o644)
-
-        copy(interpreter, runtime / f"bin/python{version}")
-        copy(loader, runtime / "lib" / loader.name)
-        for directory, names, files in os.walk(stdlib, followlinks=False):
-            current = Path(directory)
-            names[:] = [name for name in names if name not in ("__pycache__", "site-packages")]
-            for name in files:
-                if name.endswith(".pyc"):
-                    continue
-                source = current / name
-                if source.is_file():
-                    copy(source, runtime / "lib" / f"python{version}" / source.relative_to(stdlib))
-
-        queue = [runtime / f"bin/python{version}"] + [
-            path for path in (runtime / "lib" / f"python{version}" / "lib-dynload").iterdir()
-            if path.is_file() and any(path.name.startswith(name) for name in required_extensions)
-        ]
-        seen: set[Path] = set()
-        while queue:
-            candidate = queue.pop()
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            listed = subprocess.run([str(loader), "--list", str(candidate)], stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, check=True).stdout.decode("utf-8")
-            for line in listed.splitlines():
-                match = re.match(r"\s*(\S+)\s+=>\s+(/[^\s()]+)", line)
-                if match is None:
-                    continue
-                soname, raw = match.groups()
-                source = Path(raw).resolve(strict=True)
-                if source == loader:
-                    continue
-                for name in (source.name, soname):
-                    target = runtime / "lib" / name
-                    if not target.exists():
-                        copy(source, target)
-                        if name == source.name:
-                            queue.append(target)
-        return runtime
-
     def test_linux_private_runtime_handshake_uses_private_loader_and_manifest_maps(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
-            runtime = self.make_real_private_runtime(work)
+            runtime = build_python_runtime.build_runtime(work / "python-runtime")
             artifact = work / "runetest.rune"
             artifact.write_bytes(_build_rune())
             expected_report = subprocess.run(

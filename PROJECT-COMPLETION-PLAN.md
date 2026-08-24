@@ -1441,7 +1441,14 @@ rejected. A deterministic regression now requires `_zstd` to seed dependency
 discovery when present without making it mandatory on Python builds that omit
 it. The 63-test controller/runtime/config suite and both Make-dialect focused
 targets pass, and the exact hosted Python 3.14.7 artifact now loads its copied
-`libzstd` from the private runtime. Exact CI must be repeated for this repair.
+`libzstd` from the private runtime. The following exact-CI run confirmed the
+product builder repair but found that the controller integration test still
+constructed a private runtime with a stale 95-line copy of the old builder.
+That test-only copy omitted the new optional dependency root and reproduced
+the rejected host mapping. The integration test now consumes the production
+builder directly, leaving the controller to validate it independently. The
+63-test suite and both Make-dialect focused targets pass; exact CI must be
+repeated for this test repair.
 
 The detached-final-commit 175-map freeze remains pending. The standalone
 generator config is tracked at `tools/rune.cfg`. Before the final snapshot,
