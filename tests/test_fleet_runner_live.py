@@ -103,6 +103,7 @@ CLIENT_SOURCE = r'''
 #include <unistd.h>
 int main(int argc, char **argv) {
     char marker[1024];
+    int delayed = 0;
     if (argc != 2) return 2;
     setvbuf(stdout, NULL, _IONBF, 0);
     snprintf(marker, sizeof(marker), "%s.go", argv[1]);
@@ -112,6 +113,7 @@ int main(int argc, char **argv) {
             unlink(marker);
             FILE *out = fopen(argv[1], "wb"); if (!out) return 3;
             fputs("pov\n", out); fclose(out);
+            if (!delayed) { usleep(200000); delayed = 1; }
             puts("recording to pov.dm2."); puts("Stopped demo.");
         }
         usleep(20000);

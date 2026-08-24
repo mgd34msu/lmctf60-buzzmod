@@ -220,6 +220,7 @@ def _spawn_client(core, lane: str, lane_spec: dict, client_record: dict, output)
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         preexec_fn=lambda: core._arm_parent_death(parent),
     )
+    os.set_blocking(process.stdout.fileno(), False)
     pidfd = os.pidfd_open(process.pid)
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
@@ -341,15 +342,17 @@ def _player_inventory(core, film, demo: dict, run: LaneRun, sequence: int) -> li
 
 
 def _finish_residence(core, film, spec: dict, run: LaneRun,
-                      evidence: Path, bundle_id: str) -> tuple[Path, dict]:
+                      evidence: Path, bundle_id: str,
+                      campaign_deadline: float) -> tuple[Path, dict]:
     sequence = run.cycle.sequence - 1
     map_name = core.expected_map(run.lane, sequence)
     if (sequence < 0 or sequence > 20 or run.server_demo is None or
-            run.pov_source is None or not run.pov_started or not run.pov_stopped):
+            run.pov_source is None):
         raise ValueError(f"{run.lane} has an incomplete residence lifecycle")
+    _await_pov_lifecycle(spec, run, campaign_deadline)
     directory = evidence / "receipts" / run.lane / f"{sequence:02d}"
     (directory / "segments").mkdir(parents=True)
-    deadline = time.monotonic() + 5.0
+    deadline = min(campaign_deadline, time.monotonic() + 5.0)
     while time.monotonic() < deadline:
         if run.server_demo.is_file() and run.pov_source.is_file():
             break
@@ -407,7 +410,8 @@ def _finish_residence(core, film, spec: dict, run: LaneRun,
 
 
 def _consume_engine(core, film, spec: dict, run: LaneRun, line: bytes,
-                    evidence: Path, receipts: list, bundle_id: str) -> None:
+                    evidence: Path, receipts: list, bundle_id: str,
+                    campaign_deadline: float) -> None:
     run.server_log.write(line)
     if run.cycle.sequence >= 0:
         run.console.append(line)
@@ -418,7 +422,9 @@ def _consume_engine(core, film, spec: dict, run: LaneRun, line: bytes,
         run.cycle.map_committed(map_name, run.engine.identity)
         if prior >= 0:
             receipts.append(
-                _finish_residence(core, film, spec, run, evidence, bundle_id)
+                _finish_residence(
+                    core, film, spec, run, evidence, bundle_id, campaign_deadline
+                )
             )
         if not run.cycle.complete:
             _start_residence(core, spec, run, map_name)
@@ -466,6 +472,38 @@ def _drain_lines(buffer: bytearray, chunk: bytes):
             return
         yield bytes(buffer[:newline + 1])
         del buffer[:newline + 1]
+
+
+def _await_pov_lifecycle(spec: dict, run: LaneRun,
+                         campaign_deadline: float) -> None:
+    if run.pov_started and run.pov_stopped:
+        return
+    if run.client.stdout is None:
+        raise ValueError(f"{run.lane} client output stream is closed")
+    waiter = selectors.DefaultSelector()
+    waiter.register(run.client.stdout, selectors.EVENT_READ)
+    deadline = min(campaign_deadline, time.monotonic() + 5.0)
+    try:
+        while time.monotonic() < deadline:
+            if run.client.poll() is not None:
+                raise ValueError(f"{run.lane} client exited before POV completion")
+            remaining = max(0.0, deadline - time.monotonic())
+            events = waiter.select(min(0.1, remaining))
+            if not events:
+                continue
+            try:
+                chunk = os.read(run.client.stdout.fileno(), 65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise ValueError(f"{run.lane} client output closed before POV completion")
+            for line in _drain_lines(run.client_buffer, chunk):
+                _consume_client(spec, run, line)
+            if run.pov_started and run.pov_stopped:
+                return
+    finally:
+        waiter.close()
+    raise ValueError(f"{run.lane} client did not confirm POV completion")
 
 
 def _stop_process(process, pidfd: int) -> None:
@@ -571,7 +609,10 @@ def run_fleet(core, spec_path: Path, state_root: Path, evidence_root: Path) -> N
                 continue
             for key, _mask in events:
                 lane, kind = key.data
-                chunk = os.read(key.fileobj.fileno(), 65536)
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                except BlockingIOError:
+                    continue
                 if not chunk:
                     selector.unregister(key.fileobj)
                     continue
@@ -581,7 +622,7 @@ def run_fleet(core, spec_path: Path, state_root: Path, evidence_root: Path) -> N
                     if kind == "engine":
                         _consume_engine(
                             core, film, spec, run, line, evidence_root, receipts,
-                            bundle["bundle_id"],
+                            bundle["bundle_id"], deadline,
                         )
                     else:
                         _consume_client(spec, run, line)
@@ -720,16 +761,18 @@ def _start_route_match(core, spec: dict, run: LaneRun) -> None:
 
 def _finish_route_match(core, film, spec: dict, run: LaneRun,
                         evidence: Path, bundle_id: str,
-                        controller_results: dict[str, dict]) -> tuple[Path, dict]:
+                        controller_results: dict[str, dict],
+                        campaign_deadline: float) -> tuple[Path, dict]:
     map_name = core.expected_route_only_map(run.lane)
-    if (run.server_demo is None or run.pov_source is None or not run.pov_started or
-            not run.pov_stopped or not run.route_ready or not run.rune_ready or
+    if (run.server_demo is None or run.pov_source is None or
+            not run.route_ready or not run.rune_ready or
             run.exit_frame is None or run.exit_time is None or run.exit_time < 600.0 or
             not run.backup_confirmed or not run.spec["statsdb_backup"].is_file()):
         raise ValueError(f"{run.lane} route-only match lifecycle is incomplete")
+    _await_pov_lifecycle(spec, run, campaign_deadline)
     directory = evidence / "receipts" / run.lane
     (directory / "segments").mkdir(parents=True)
-    deadline = time.monotonic() + 5.0
+    deadline = min(campaign_deadline, time.monotonic() + 5.0)
     while time.monotonic() < deadline:
         if run.server_demo.is_file() and run.pov_source.is_file():
             break
@@ -801,7 +844,8 @@ def _finish_route_match(core, film, spec: dict, run: LaneRun,
 
 def _consume_route_engine(core, film, spec: dict, run: LaneRun, line: bytes,
                           evidence: Path, receipts: list, bundle_id: str,
-                          controller_results: dict[str, dict]) -> None:
+                          controller_results: dict[str, dict],
+                          campaign_deadline: float) -> None:
     run.server_log.write(line)
     stripped = line.rstrip(b"\n")
     identity = IDENTITY_RE.match(stripped)
@@ -816,7 +860,8 @@ def _consume_route_engine(core, film, spec: dict, run: LaneRun, line: bytes,
             run.console.append(line)
         else:
             receipts.append(_finish_route_match(
-                core, film, spec, run, evidence, bundle_id, controller_results
+                core, film, spec, run, evidence, bundle_id, controller_results,
+                campaign_deadline,
             ))
         return
     if run.cycle.sequence >= 0:
@@ -973,7 +1018,10 @@ def run_route_only(core, spec_path: Path, state_root: Path, evidence_root: Path)
                 continue
             for key, _mask in events:
                 lane, kind = key.data
-                chunk = os.read(key.fileobj.fileno(), 65536)
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                except BlockingIOError:
+                    continue
                 if not chunk:
                     selector.unregister(key.fileobj)
                     continue
@@ -984,6 +1032,7 @@ def run_route_only(core, spec_path: Path, state_root: Path, evidence_root: Path)
                         _consume_route_engine(
                             core, film, spec, run, line, evidence_root, receipts,
                             inputs["bundle"]["bundle_id"], inputs["controller_results"],
+                            deadline,
                         )
                     else:
                         _consume_client(spec, run, line)

@@ -6,11 +6,13 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -81,6 +83,24 @@ def _database(path: Path, *, extra_match: bool = False, combat: bool = True) -> 
 
 
 class RouteOnlyEvidenceTest(unittest.TestCase):
+    def test_pov_wait_honors_campaign_deadline(self):
+        live = _runtime()
+        read_fd, write_fd = os.pipe()
+        try:
+            with os.fdopen(read_fd, "rb", buffering=0) as client_stdout:
+                os.set_blocking(client_stdout.fileno(), False)
+                run = SimpleNamespace(
+                    lane="r01", pov_started=False, pov_stopped=False,
+                    client=SimpleNamespace(stdout=client_stdout, poll=lambda: None),
+                    client_buffer=bytearray(), client_log=io.BytesIO(),
+                )
+                started = time.monotonic()
+                with self.assertRaisesRegex(ValueError, "did not confirm"):
+                    live._await_pov_lifecycle({}, run, started + 0.05)
+                self.assertLess(time.monotonic() - started, 0.5)
+        finally:
+            os.close(write_fd)
+
     @classmethod
     def setUpClass(cls):
         cls.runner = _runner()
@@ -465,18 +485,18 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 live._consume_route_engine(
                     self.runner, None, spec, run,
                     b"slipgate: rune identity committed map=lmctf01 bsp=1\n",
-                    root, [], "b" * 64, {"lmctf01": {}},
+                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"),
                 )
                 live._consume_route_engine(
                     self.runner, None, spec, run, b"Timelimit hit.\n",
-                    root, [], "b" * 64, {"lmctf01": {}},
+                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"),
                 )
                 self.assertIn(b"sv statsdb backup route-only-session.db\n",
                               command_stream.getvalue())
                 live._consume_route_engine(
                     self.runner, None, spec, run,
                     b"EXITLEVEL frame=6000 time=600.0 changemap=nextmap\n",
-                    root, [], "b" * 64, {"lmctf01": {}},
+                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"),
                 )
                 self.assertTrue(run.cycle.pending_exit)
             finally:
