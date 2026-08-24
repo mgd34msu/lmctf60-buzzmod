@@ -36,6 +36,7 @@ REQUIRED_EXTENSIONS = (
     "select",
     "zlib",
 )
+OPTIONAL_EXTENSION_DEPENDENCY_ROOTS = ("_zstd",)
 LIBRARY_LINE = re.compile(
     r"\s*(\S+)\s+=>\s+(/[^\s()]+)(?:\s+\([^)]*\))?\s*\Z"
 )
@@ -99,6 +100,17 @@ def _has_extension(directory: Path, stem: str) -> bool:
         (path.name == f"{stem}.so" or path.name.startswith(f"{stem}.")) and
         path.name.endswith(".so")
         for path in directory.iterdir()
+    )
+
+
+def _extension_dependency_roots(directory: Path) -> list[Path]:
+    stems = (*REQUIRED_EXTENSIONS, *OPTIONAL_EXTENSION_DEPENDENCY_ROOTS)
+    return sorted(
+        path for path in directory.iterdir()
+        if path.is_file() and not path.is_symlink() and any(
+            path.name == f"{stem}.so" or path.name.startswith(f"{stem}.")
+            for stem in stems
+        )
     )
 
 
@@ -215,12 +227,9 @@ def build_runtime(output: Path, python: Path | None = None) -> Path:
         _copy_stdlib(stdlib, staging / "lib" / f"python{version}")
 
         dynload = staging / "lib" / f"python{version}" / "lib-dynload"
-        queue = [staging / f"bin/python{version}"] + [
-            path for path in dynload.iterdir()
-            if any(
-                path.name == f"{name}.so" or path.name.startswith(f"{name}.")
-                for name in REQUIRED_EXTENSIONS
-            )
+        queue = [
+            staging / f"bin/python{version}",
+            *_extension_dependency_roots(dynload),
         ]
         seen: set[Path] = set()
         while queue:

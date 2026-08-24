@@ -254,7 +254,7 @@ longer the final combined source and tool freeze. The controller changed after
 that freeze, and the active graph repairs will change game source. The old
 snapshot, fingerprint, and generated RUNEs cannot authorize the final corpus.
 
-- [ ] Finish and integrate the remaining graph repairs.
+- [x] Finish and integrate the remaining graph repairs.
 - [ ] Pass exact-commit CI for the final combined source and tools on both
       `slipgate` and `main`.
 - [ ] Rebuild the final module, create a new immutable 175-map input snapshot,
@@ -1431,7 +1431,17 @@ now covers a valid runtime without optional `libzstd`; removing only that fixed
 marker passes the complete 66-test controller/runtime/workflow suite while
 retaining the hostile-library rejection gate. The repeated full
 GNUmakefile/Makefile by GCC/Clang local matrix is green with zero warnings and
-clean `ldd -r`; exact CI must still be repeated for this repair.
+clean `ldd -r`. The next exact-CI run passed both Windows builds and the Linux
+package on both branches, then exposed a narrower private-runtime dependency
+gap in all four host jobs. Python 3.14 imports the optional `_zstd` extension
+through `shutil` when that extension exists, but the builder copied `_zstd`
+without treating it as a dependency root. On the hosted runner that allowed
+the private process to map the host `libzstd`, which the controller correctly
+rejected. A deterministic regression now requires `_zstd` to seed dependency
+discovery when present without making it mandatory on Python builds that omit
+it. The 63-test controller/runtime/config suite and both Make-dialect focused
+targets pass, and the exact hosted Python 3.14.7 artifact now loads its copied
+`libzstd` from the private runtime. Exact CI must be repeated for this repair.
 
 The detached-final-commit 175-map freeze remains pending. The standalone
 generator config is tracked at `tools/rune.cfg`. Before the final snapshot,
