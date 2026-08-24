@@ -26,8 +26,8 @@ The project is complete when one unchanged source commit satisfies every gate:
 | Map source repair | Complete. No remaining map requires another source-owned graph repair for initial release. |
 | Corpus classification | 175 maps total. Development evidence identifies 10 route-only candidates, but this is not a fixed final count. Regenerate and test all 175 normally after the final freeze; classify only the maps that still fail complete-route closure as `ROUTE_ONLY`. |
 | Branches | `main` and `slipgate` share the last exact-CI-green pre-freeze commit. The corpus-finalization wave must repeat synchronization and exact CI before the freeze. |
-| Current source wave | Production Dijkstra, fleet deadline repairs, final-corpus sealing, and fleet authority export are integrated. Both full local gates and independent review pass. |
-| Final freeze | Not started. Begin it only after exact CI passes on the synchronized commit. |
+| Current source wave | Production Dijkstra, fleet deadline repairs, final-corpus sealing, fleet authority export, and the Btrfs runtime-map identity repair are integrated. Focused local gates and independent review pass; full host gates and exact CI remain. |
+| Final freeze | No accepted freeze exists. Runtime preflight exposed the Btrfs identity defect now repaired in the source wave. Begin the freeze only after exact CI passes on the synchronized repair commit. |
 | Final 175-map run | Not started. |
 | Production matches | Not started. Fake-engine tests are tooling proof, not match evidence. |
 | Release | Final `v1.0.0` is not tagged or published. Historical releases remain. |
@@ -211,9 +211,11 @@ retains accepted links on open completion, and rolls them back on fatal error.
 
 The pre-freeze source now seals the accepted immutable attempts behind a
 content-addressed authority, excludes mutable result pointers, exports the
-strict fleet handoff, and rejects out-of-policy route-only results. Both full
-local gates and independent adversarial review pass. Repeat synchronization
-and exact CI on both branches before creating the snapshot.
+strict fleet handoff, rejects out-of-policy route-only results, and validates
+private-runtime mappings across Btrfs subvolume device identities. Focused
+local gates and independent adversarial review pass. Run the full host gates,
+then repeat synchronization and exact CI on both branches before creating the
+snapshot.
 
 ## Final execution plan
 

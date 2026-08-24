@@ -1330,6 +1330,7 @@ def _read_frame(
 @dataclasses.dataclass
 class RetainedSnapshot:
     records: dict[tuple[int, int], dict[str, Any]]
+    paths: dict[str, dict[str, Any]]
     descriptors: list[int]
 
     def close(self) -> None:
@@ -1342,8 +1343,9 @@ class RetainedSnapshot:
 
 
 def _retained_snapshot_files(snapshot: Path, verified: Mapping[str, Any]) -> RetainedSnapshot:
-    retained = RetainedSnapshot({}, [])
+    retained = RetainedSnapshot({}, {}, [])
     try:
+        mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
         for entry in verified["manifest"]["files"]:
             logical = str(entry["path"])
             path = snapshot / logical
@@ -1356,10 +1358,17 @@ def _retained_snapshot_files(snapshot: Path, verified: Mapping[str, Any]) -> Ret
             key = (info.st_dev, info.st_ino)
             if key in retained.records:
                 raise ProcessIntegrityError("two manifested inputs alias one inode")
-            retained.records[key] = {
+            record = {
                 **dict(entry), "dev": info.st_dev, "ino": info.st_ino,
                 "canonical_path": str(path.resolve(strict=True)),
             }
+            record["mount_identity"] = _mount_identity(
+                mountinfo, record["canonical_path"]
+            )
+            if record["canonical_path"] in retained.paths:
+                raise ProcessIntegrityError("two manifested inputs share one path")
+            retained.records[key] = record
+            retained.paths[record["canonical_path"]] = record
         return retained
     except BaseException:
         retained.close()
@@ -1371,6 +1380,106 @@ _PROC_MAP_RE = re.compile(
     r"(?P<offset>[0-9a-f]+)\s+(?P<major>[0-9a-f]+):(?P<minor>[0-9a-f]+)\s+"
     r"(?P<inode>[0-9]+)(?:\s+(?P<path>.*))?$"
 )
+
+
+_MOUNT_FIELD_ESCAPE_RE = re.compile(r"\\([0-7]{3})")
+
+
+def _mount_field(value: str) -> str:
+    if re.search(r"\\(?![0-7]{3})", value):
+        raise ProcessIntegrityError("malformed mountinfo escape")
+    decoded = _MOUNT_FIELD_ESCAPE_RE.sub(
+        lambda match: chr(int(match.group(1), 8)), value
+    )
+    return decoded
+
+
+@dataclasses.dataclass(frozen=True)
+class MountIdentity:
+    mount_id: int
+    parent_id: int
+    device: int
+    root: str
+    mount_point: str
+    filesystem: str
+    mountinfo_line: str
+
+
+def _mount_identity(mountinfo: str, pathname: str) -> MountIdentity | None:
+    candidate = PurePosixPath(pathname)
+    matching: list[MountIdentity] = []
+    for line in mountinfo.splitlines():
+        left, separator, right = line.partition(" - ")
+        left_fields = left.split()
+        right_fields = right.split()
+        if not separator or len(left_fields) < 6 or len(right_fields) < 3:
+            raise ProcessIntegrityError("malformed process mountinfo")
+        device_fields = left_fields[2].split(":")
+        if len(device_fields) != 2:
+            raise ProcessIntegrityError("malformed process mount device")
+        try:
+            mount_id = int(left_fields[0])
+            parent_id = int(left_fields[1])
+            device = os.makedev(int(device_fields[0]), int(device_fields[1]))
+        except ValueError as exc:
+            raise ProcessIntegrityError("malformed process mount identity") from exc
+        root = _mount_field(left_fields[3])
+        if not PurePosixPath(root).is_absolute():
+            raise ProcessIntegrityError("process mount root is not absolute")
+        mount_point = PurePosixPath(_mount_field(left_fields[4]))
+        if not mount_point.is_absolute():
+            raise ProcessIntegrityError("process mount point is not absolute")
+        if candidate != mount_point and mount_point not in candidate.parents:
+            continue
+        matching.append(MountIdentity(
+            mount_id, parent_id, device, root, str(mount_point), right_fields[0], line
+        ))
+    if not matching:
+        return None
+    deepest = max(len(PurePosixPath(item.mount_point).parts) for item in matching)
+    peers = [
+        item for item in matching
+        if len(PurePosixPath(item.mount_point).parts) == deepest
+    ]
+    covered_ids = {item.parent_id for item in peers}
+    visible = [item for item in peers if item.mount_id not in covered_ids]
+    if len(visible) != 1:
+        raise ProcessIntegrityError("ambiguous process mount identity")
+    return visible[0]
+
+
+def _same_mount_namespace(pid: int) -> bool:
+    try:
+        parent = Path("/proc/self/ns/mnt").stat()
+        child = Path(f"/proc/{pid}/ns/mnt").stat()
+    except OSError:
+        return False
+    return (parent.st_dev, parent.st_ino) == (child.st_dev, child.st_ino)
+
+
+def _mapping_mount_matches(
+    pid: int, pathname: str, device: int, record: Mapping[str, Any]
+) -> bool:
+    expected = record.get("mount_identity")
+    if (
+        not isinstance(expected, MountIdentity)
+        or expected.device != device
+        or (expected.filesystem != "btrfs" and record["dev"] != device)
+        or not _same_mount_namespace(pid)
+    ):
+        return False
+    try:
+        parent_text = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        child_text = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    parent = _mount_identity(parent_text, pathname)
+    child = _mount_identity(child_text, pathname)
+    return (
+        parent == expected
+        and child == expected
+        and _same_mount_namespace(pid)
+    )
 
 
 def _pidfd_is_live(pidfd: int) -> bool:
@@ -1430,6 +1539,8 @@ def _validate_verified_python_process(
 ) -> tuple[ProcessIdentity, str]:
     if not _pidfd_is_live(pidfd):
         raise ProcessIntegrityError("verified Python exited before parent validation")
+    if not _same_mount_namespace(pid):
+        raise ProcessIntegrityError("verified Python changed mount namespace")
     start_before = _proc_start_ticks(pid)
     layout = verified["python_runtime"]
     loader = snapshot / str(layout["loader"]["path"])
@@ -1467,14 +1578,27 @@ def _validate_verified_python_process(
             continue
         record = retained.records.get((dev, inode))
         if record is None:
+            candidate = retained.paths.get(pathname)
+            if (
+                candidate is not None
+                and candidate["ino"] == inode
+                and isinstance(candidate.get("mount_identity"), MountIdentity)
+                and candidate["mount_identity"].filesystem == "btrfs"
+            ):
+                record = candidate
+        if record is None:
             raise ProcessIntegrityError(f"mapped device/inode is not manifested: {pathname}")
         if pathname != record["canonical_path"]:
             raise ProcessIntegrityError(f"mapped path is not the canonical manifested path: {pathname}")
+        if not _mapping_mount_matches(pid, pathname, dev, record):
+            raise ProcessIntegrityError(f"mapped mount identity is not manifested: {pathname}")
         _validate_retained_path(snapshot, record)
     if _proc_start_ticks(pid) != start_before or capture_process_identity(pid) != identity:
         raise ProcessIntegrityError("verified Python identity changed during map validation")
     if not _pidfd_is_live(pidfd):
         raise ProcessIntegrityError("verified Python exited during parent validation")
+    if not _same_mount_namespace(pid):
+        raise ProcessIntegrityError("verified Python changed mount namespace")
     return identity, sha256_bytes(map_text.encode("utf-8"))
 
 
