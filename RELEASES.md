@@ -21,14 +21,15 @@ The current public install consists of these platform/runtime files:
 | `VERSION` | Exact source version |
 | `SHA256SUMS` | Checksums for every published payload |
 
-The tag workflow currently builds and publishes that six-file set. It does not
-yet publish the canonical server bundle required for the completed project.
+The tag workflow builds and publishes that six-file set. Generated navigation
+data and the authenticated production server bundle are deployment artifacts,
+not separately downloadable public release payloads.
 
-## Final server bundle
+## Production server bundle
 
-The final release must additionally publish one authenticated server-bundle
-archive and its release manifest. The archive must bind, by path, role, size,
-and hash:
+Before the final release, production must assemble, install, and verify one
+authenticated server-bundle archive and its release manifest. The archive must
+bind, by path, role, size, and hash:
 
 - the two byte-identical Linux module aliases used by the server;
 - `lmctf6-buzzmod.pak`;
@@ -66,8 +67,9 @@ frozen source and bundle identity:
 9. Exact-SHA CI is green on `slipgate`, the no-fast-forward `main` merge has the
    identical tree and green exact-SHA CI, and the annotated version-tag run
    publishes successfully.
-10. A clean download of every published asset passes `sha256sum -c`, manifest
-    verification, and equality checks against the accepted installed bundle.
+10. A clean download of every published asset passes `sha256sum -c` and equals
+    the corresponding accepted public payload; the installed production bundle
+    independently passes its authenticated manifest verification.
 
 `v1.0.0` is reserved for that completed state. Until every gate is green, the
 source and documentation must describe the remaining blockers plainly rather

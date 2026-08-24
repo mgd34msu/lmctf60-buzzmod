@@ -776,6 +776,7 @@ HOOK_DISCIPLINE_TEST_ALL_ARTIFACTS := \
 	.sg_hook_discipline_under_test.make.d
 RUNE_NAMING_TEST := tests/test_rune_naming.py
 RELEASE_WORKFLOW_TEST := tests/test_release_workflow.py
+PROJECT_COMPLETION_PLAN_TEST := tests/test_project_completion_plan.py
 DESLOP_AUDIT := tools/deslop_audit.py
 DESLOP_AUDIT_TEST := tests/test_deslop_audit.py
 SOURCE_SIZE_BUDGET := tools/source-size-budget.json
@@ -795,6 +796,8 @@ RUNE_GENERATOR_CONFIG_TEST := tests/test_rune_generator_config.py
 BUILD_PYTHON_RUNTIME_TEST := tests/test_build_python_runtime.py
 FLEET_RUNNER_TEST := tests/test_fleet_runner.py
 FLEET_RUNNER_LIVE_TEST := tests/test_fleet_runner_live.py
+ROUTE_ONLY_EVIDENCE_TEST := tests/test_route_only_evidence.py
+ROUTE_ONLY_MATCH_CONFIG_TEST := tests/test_route_only_match_config.py
 SERVER_BUNDLE_TEST := tests/test_server_bundle.py
 CHAIN_HOOK_FRONTIER_INTEGRATION_TEST := \
 	tests/test_chain_hook_frontier_integration.py
@@ -1361,7 +1364,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
-	fleet-runner-test server-bundle-test \
+	project-completion-plan-test \
+	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
 	deslop-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
@@ -3608,6 +3612,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(SIDECAR_STORE_TEST_BIN) \
 		$(RUNE_NAMING_TEST) \
 		$(RELEASE_WORKFLOW_TEST) \
+		$(PROJECT_COMPLETION_PLAN_TEST) \
 		$(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) $(SOURCE_SIZE_BUDGET) \
 		$(RUNE_PYTHON_TESTS) \
 		$(RUNGEN_TEST) \
@@ -3618,6 +3623,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(BUILD_PYTHON_RUNTIME_TEST) \
 		$(FLEET_RUNNER_TEST) $(FLEET_RUNNER_LIVE_TEST) \
 		tools/fleet-runner.py tools/fleet_runner_live.py tools/topmaps.txt \
+		route-only-match-test \
 		$(SERVER_BUNDLE_TEST) tools/server_bundle.py \
 		$(BSPMECHANISMS_TEST) \
 		$(WAVELOOP_PROCESS_TEST) \
@@ -3799,6 +3805,12 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(ENGINE_SNAPSHOT_TEST)
 	$(Q)python3 -B $(DESLOP_AUDIT_TEST)
 	$(Q)python3 -B $(DESLOP_AUDIT)
+	$(Q)python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
+
+project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
+		PROJECT-COMPLETION-PLAN.md
+	$(E) [TEST] project completion plan
+	$(Q)python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
 
 deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 		$(SOURCE_SIZE_BUDGET)
@@ -3877,10 +3889,20 @@ rune-generator-config-test: $(RUNE_GENERATOR_CONFIG_TEST) tools/rune.cfg
 	$(Q)python3 -m unittest tests.test_rune_generator_config
 
 fleet-runner-test: $(FLEET_RUNNER_TEST) $(FLEET_RUNNER_LIVE_TEST) \
+		$(ROUTE_ONLY_EVIDENCE_TEST) $(ROUTE_ONLY_MATCH_CONFIG_TEST) \
 		$(SERVER_BUNDLE_TEST) tools/fleet-runner.py tools/fleet_runner_live.py \
+		tools/route-only-match.cfg tools/route-only-maplist.txt \
 		tools/server_bundle.py tools/topmaps.txt tools/rune-corpus-maps.txt
 	$(E) [TEST] persistent fleet runner
 	$(Q)python3 -B -m unittest tests.test_fleet_runner tests.test_fleet_runner_live
+
+route-only-match-test: $(ROUTE_ONLY_EVIDENCE_TEST) $(ROUTE_ONLY_MATCH_CONFIG_TEST) \
+		$(FLEET_RUNNER_LIVE_TEST) $(SERVER_BUNDLE_TEST) \
+		tools/fleet-runner.py tools/fleet_runner_live.py \
+		tools/route-only-match.cfg tools/route-only-maplist.txt tools/server_bundle.py
+	$(E) [TEST] route-only ordinary match evidence
+	$(Q)python3 -B -m unittest tests.test_fleet_runner_live tests.test_route_only_evidence \
+		tests.test_route_only_match_config tests.test_server_bundle
 
 server-bundle-test: $(SERVER_BUNDLE_TEST) tools/server_bundle.py \
 		tools/fleet-runner.py tools/topmaps.txt tools/rune-corpus-maps.txt

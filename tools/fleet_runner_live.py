@@ -22,6 +22,10 @@ IDENTITY_RE = re.compile(
     rb"^slipgate: rune identity committed map=([a-z0-9._-]+) "
 )
 EXIT_RE = re.compile(rb"^EXITLEVEL frame=([0-9]+) time=([0-9.]+) changemap=(\S+)$")
+ROUTE_CONTRACT_RE = re.compile(rb"^slipgate: route contract local-only$")
+RUNE_READY_RE = re.compile(rb"^slipgate: rune ready ([a-z0-9._-]+), ")
+STATS_BACKUP_RE = re.compile(rb"^statsdb: backed up to (.+)$")
+TIMELIMIT_RE = re.compile(rb"^Timelimit hit\.$")
 CENSUS_RE = re.compile(rb"^SGCENSUS (\[SG\][A-Za-z0-9_-]+): frm=([0-9]+) alive=([01])$")
 ROSTER_RE = re.compile(
     rb"^\s*([0-9]+)\s+(\[SG\][A-Za-z0-9_-]+)\s+(red|blue)\s+"
@@ -49,6 +53,13 @@ class LaneRun:
     pov_stopped: bool = False
     pov_requested: bool = False
     spectator_entered: bool = False
+    route_ready: bool = False
+    rune_ready: bool = False
+    exit_frame: int | None = None
+    exit_time: float | None = None
+    backup_confirmed: bool = False
+    backup_requested: bool = False
+    timelimit_seen: bool = False
 
 
 def _write_all(stream, payload: bytes) -> None:
@@ -231,10 +242,13 @@ def _spawn_client(core, lane: str, lane_spec: dict, client_record: dict, output)
     return process, pidfd, identity
 
 
-def _start(core, spec: dict, lanes: dict, evidence: Path):
+def _start(core, spec: dict, lanes: dict, evidence: Path, *,
+           lane_order=None, cycle_factory=None):
+    lane_order = core.LANES if lane_order is None else tuple(lane_order)
+    cycle_factory = core.FleetCycle if cycle_factory is None else cycle_factory
     children = []
     try:
-        for lane in core.LANES:
+        for lane in lane_order:
             child = core._spawn_held_engine(
                 lane, spec["engine"], lanes[lane]["argv"], lanes[lane]["root"],
                 subprocess.PIPE,
@@ -265,7 +279,7 @@ def _start(core, spec: dict, lanes: dict, evidence: Path):
             )
             runs[lane] = LaneRun(
                 lane, lanes[lane], child, client,
-                core.FleetCycle(lane, child.identity), server_log, client_log,
+                cycle_factory(lane, child.identity), server_log, client_log,
             )
             runs[lane].client_pidfd = pidfd
             runs[lane].client_identity = client_identity
@@ -608,6 +622,403 @@ def run_fleet(core, spec_path: Path, state_root: Path, evidence_root: Path) -> N
         os.close(lock_fd)
         lock_fd = -1
         core.verify_stopped_residence_evidence(state_root, evidence_root)
+    except BaseException as exc:
+        if runs:
+            _stop_all(core, {lane: run.engine for lane, run in runs.items()}, runs)
+        try:
+            _write_atomic(core, state_root / "failure.json",
+                          core._canonical({"error": str(exc), "state": "FAILED"}))
+        except OSError:
+            pass
+        raise
+    finally:
+        if lock_fd >= 0:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
+
+
+def _route_inputs(core, spec: dict) -> dict:
+    client = core._verify_file_record(spec["client"], "route-only client")
+    config = core._verify_file_record(spec["route_config"], "route-only config")
+    film = core._verify_file_record(spec["film"], "route-only film decoder")
+    runtime = core._verify_file_record(spec["runtime"], "route-only runtime")
+    if runtime.resolve() != Path(__file__).resolve():
+        raise ValueError("route-only run specification names another runtime helper")
+    aliases = spec["module_aliases"]
+    if not isinstance(aliases, list) or len(aliases) != 2:
+        raise ValueError("route-only run needs two module aliases")
+    for alias in aliases:
+        core._verify_file_record(alias, "route-only module alias")
+    if aliases[0]["sha256"] != aliases[1]["sha256"]:
+        raise ValueError("route-only module aliases differ")
+    bundle, bundle_verifier = core._verify_installed_bundle(spec["installed_bundle"])
+    roles = core._bundle_role_records(bundle)
+    core._verify_bundle_copy(spec["route_config"], roles, "route-only-config",
+                             "route-only config")
+    for alias, role in zip(aliases, ("module-primary", "module-secondary"), strict=True):
+        core._verify_bundle_copy(alias, roles, role, "route-only module alias")
+    controller_results = core._validate_route_controller_authority(
+        spec["controller_authority"], roles, spec["engine"], aliases
+    )
+    return {
+        "client": spec["client"], "client_path": client,
+        "route_config": spec["route_config"], "route_config_path": config,
+        "film": spec["film"], "film_path": film, "runtime": spec["runtime"],
+        "module_aliases": aliases, "bundle": bundle, "bundle_roles": roles,
+        "bundle_verifier": bundle_verifier, "controller_results": controller_results,
+    }
+
+
+def _route_lane_inputs(core, lanes: dict, bundle_roles: dict[str, dict],
+                       lane_order: tuple[str, ...]) -> None:
+    for lane in lane_order:
+        map_name = core.expected_route_only_map(lane)
+        artifacts = lanes[lane]["artifacts"]
+        runtime_files = core._route_runtime_files(
+            lane, map_name, lanes[lane]["game_root"], bundle_roles
+        )
+        for field, role, label in (
+                ("bsp_file", f"bsp:{map_name}", "BSP"),
+                ("rune_file", f"rune:{map_name}", "RUNE"),
+                ("snag_file", f"snag:{map_name}", "SNAG")):
+            core._verify_bundle_copy(artifacts[field], bundle_roles, role,
+                                     f"{lane} {label}")
+            if artifacts[field] != runtime_files[field]:
+                raise ValueError(f"{lane} supplied {label} is not its loaded runtime file")
+        lanes[lane]["runtime_files"] = runtime_files
+
+
+def _start_route_match(core, spec: dict, run: LaneRun) -> None:
+    map_name = core.expected_route_only_map(run.lane)
+    basename = f"route-only-{spec['campaign_id']}-{run.lane}"
+    run.server_demo = run.spec["serverrecord_dir"] / f"{basename}.dm2"
+    run.pov_source = run.spec["pov_demo"]
+    if (run.server_demo.exists() or run.pov_source.exists() or
+            run.spec["statsdb_backup"].exists()):
+        raise ValueError(f"{run.lane} route-only output already exists")
+    run.console = []
+    run.roster = {}
+    run.census = {}
+    run.pov_started = False
+    run.pov_stopped = False
+    run.pov_requested = False
+    run.route_ready = False
+    run.rune_ready = False
+    run.exit_frame = None
+    run.exit_time = None
+    run.backup_confirmed = False
+    run.backup_requested = False
+    run.timelimit_seen = False
+    _command(run, f"serverrecord {basename}")
+    _command(run, "sv sg list")
+    _maybe_start_pov(spec, run)
+    if map_name != run.spec["map"]:
+        raise ValueError(f"{run.lane} route-only map identity drift")
+
+
+def _finish_route_match(core, film, spec: dict, run: LaneRun,
+                        evidence: Path, bundle_id: str,
+                        controller_results: dict[str, dict]) -> tuple[Path, dict]:
+    map_name = core.expected_route_only_map(run.lane)
+    if (run.server_demo is None or run.pov_source is None or not run.pov_started or
+            not run.pov_stopped or not run.route_ready or not run.rune_ready or
+            run.exit_frame is None or run.exit_time is None or run.exit_time < 600.0 or
+            not run.backup_confirmed or not run.spec["statsdb_backup"].is_file()):
+        raise ValueError(f"{run.lane} route-only match lifecycle is incomplete")
+    directory = evidence / "receipts" / run.lane
+    (directory / "segments").mkdir(parents=True)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if run.server_demo.is_file() and run.pov_source.is_file():
+            break
+        time.sleep(0.02)
+    else:
+        raise ValueError(f"{run.lane} route-only demos did not close")
+    server = _copy_stable(core, run.server_demo, directory / "serverrecord.dm2")
+    pov = _copy_stable(core, run.pov_source, directory / "pov.dm2", remove=True)
+    database = _copy_stable(core, run.spec["statsdb_backup"],
+                            directory / "session.db")
+    demo = film.walk_demo(directory / "serverrecord.dm2", strict=True)
+    if (demo.get("map") != map_name or demo.get("svrecord") is not True or
+            demo.get("parse_complete") is not True or demo.get("terminated") is not True):
+        raise ValueError(f"{run.lane} route-only serverrecord map or shape drift")
+    wire = demo.get("wire_framenums")
+    if (not isinstance(wire, list) or not wire or run.exit_frame != wire[-1] or
+            wire != list(range(wire[0], wire[-1] + 1)) or len(wire) < 6000):
+        raise ValueError("route-only serverrecord has no wire frame authority")
+    players = _player_inventory(core, film, demo, run, 0)
+    segment_payload = b"".join(run.console)
+    segment_path = directory / "segments" / "console.log"
+    _write_atomic(core, segment_path, segment_payload)
+    segment = core._file_record(segment_path)
+    artifact = run.spec["artifacts"]
+    measurement = {"start_frame": wire[0] - 1, "end_frame": wire[-1]}
+    try:
+        lines = segment_payload.decode("ascii").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("route-only console is not ASCII") from exc
+    behavior = core._route_telemetry(
+        lines, players, measurement, Path(artifact["rune_file"]["path"]), map_name, demo
+    )
+    behavior["session"] = core._route_session_database(
+        directory / "session.db", players, map_name
+    )
+    receipt = {
+        "format": core.FORMAT_ROUTE_RECEIPT, "campaign_id": spec["campaign_id"],
+        "bundle_id": bundle_id, "lane": run.lane, "map": map_name,
+        "runner_sha256": core._hash(Path(core.__file__).read_bytes()),
+        "engine_generation": run.engine.identity,
+        "client_generation": run.client_identity,
+        "bsp_file": artifact["bsp_file"], "rune_file": artifact["rune_file"],
+        "rune_sha256": artifact["rune_file"]["sha256"],
+        "snag_file": artifact["snag_file"], "sg_players": players,
+        "residence": {"start_frame": wire[0] - 1, "end_frame": wire[-1],
+                      "measurement": measurement, "exit_frame": run.exit_frame,
+                      "exit_time_seconds": run.exit_time},
+        "serverrecord": {"demo_path": server["path"], "demo_sha256": server["sha256"],
+                         "demo_size": server["size"],
+                         "demo_frame_range": {"start": 1,
+                                              "end_exclusive": len(wire) + 1}},
+        "console_segment": {"path": "console.log", "sha256": segment["sha256"],
+                            "size": segment["size"]},
+        "runtime_files": run.spec["runtime_files"],
+        "pov": {"demo_path": pov["path"], "demo_sha256": pov["sha256"],
+                "demo_size": pov["size"], "spectator": spec["spectator"],
+                "target": spec["target"], "start_confirmed": True,
+                "stop_confirmed": True},
+        "session_database": database,
+        "runtime": {"identity_committed": True, "route_contract": "local-only",
+                    "rune_ready": True},
+        "behavior": behavior, "controller_result": controller_results[map_name],
+    }
+    receipt["receipt_hash"] = core.receipt_hash(receipt)
+    path = directory / "receipt.json"
+    _write_atomic(core, path, core._canonical(receipt))
+    return path, receipt
+
+
+def _consume_route_engine(core, film, spec: dict, run: LaneRun, line: bytes,
+                          evidence: Path, receipts: list, bundle_id: str,
+                          controller_results: dict[str, dict]) -> None:
+    run.server_log.write(line)
+    stripped = line.rstrip(b"\n")
+    identity = IDENTITY_RE.match(stripped)
+    if identity:
+        map_name = identity.group(1).decode("ascii")
+        prior = run.cycle.sequence
+        if prior >= 0:
+            run.console.append(line)
+        run.cycle.map_committed(map_name, run.engine.identity)
+        if prior < 0:
+            _start_route_match(core, spec, run)
+            run.console.append(line)
+        else:
+            receipts.append(_finish_route_match(
+                core, film, spec, run, evidence, bundle_id, controller_results
+            ))
+        return
+    if run.cycle.sequence >= 0:
+        run.console.append(line)
+    if ROUTE_CONTRACT_RE.fullmatch(stripped):
+        run.route_ready = True
+        return
+    ready = RUNE_READY_RE.match(stripped)
+    if ready:
+        if ready.group(1).decode("ascii") != core.expected_route_only_map(run.lane):
+            raise ValueError(f"{run.lane} route-only RUNE-ready map drift")
+        run.rune_ready = True
+        return
+    if TIMELIMIT_RE.fullmatch(stripped):
+        if run.timelimit_seen or run.backup_requested:
+            raise ValueError(f"{run.lane} route-only timelimit repeated")
+        run.timelimit_seen = True
+        # EndDMLevel/BeginIntermission has committed the match before q2ded
+        # processes its next stdin command.  Back up in that intermission
+        # window; waiting for EXITLEVEL races the queued gamemap command.
+        _command(run, "sv statsdb backup route-only-session.db")
+        run.backup_requested = True
+        return
+    exited = EXIT_RE.match(stripped)
+    if exited:
+        run.cycle.level_exited(run.engine.identity)
+        run.exit_frame = int(exited.group(1))
+        run.exit_time = float(exited.group(2))
+        if not run.timelimit_seen or run.exit_time < 600.0:
+            raise ValueError(f"{run.lane} route-only match did not reach timelimit")
+        if run.pov_started and not run.pov_stopped:
+            _command(run, f"sv povrecord off {spec['spectator']}")
+        return
+    census = CENSUS_RE.match(stripped)
+    if census:
+        run.census.setdefault(census.group(1).decode(), []).append(int(census.group(2)))
+        return
+    roster = ROSTER_RE.match(stripped)
+    if roster:
+        name = roster.group(2).decode()
+        run.roster[name] = (int(roster.group(1)), 1 if roster.group(3) == b"red" else 2)
+        _maybe_start_pov(spec, run)
+        return
+    roster_end = ROSTER_END_RE.match(stripped)
+    if roster_end and int(roster_end.group(1)) != 10:
+        raise ValueError(f"{run.lane} route-only roster is not exactly ten bots")
+    backup = STATS_BACKUP_RE.match(stripped)
+    if backup:
+        try:
+            backup_name = Path(backup.group(1).decode("ascii")).name
+        except UnicodeDecodeError as exc:
+            raise ValueError("route-only stats backup name is not ASCII") from exc
+        if backup_name != run.spec["statsdb_backup"].name:
+            raise ValueError(f"{run.lane} route-only stats backup path drift")
+        run.backup_confirmed = True
+    if f"{spec['spectator']} entered the game".encode() in line:
+        run.spectator_entered = True
+        _maybe_start_pov(spec, run)
+    if b"povrecord: directive rejected" in line:
+        raise ValueError(f"{run.lane} route-only POV directive was rejected")
+
+
+def _graceful_route_engine_stop(runs: dict[str, LaneRun]) -> None:
+    for run in runs.values():
+        _command(run, "quit")
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if all(run.engine.process.poll() is not None for run in runs.values()):
+            return
+        time.sleep(0.02)
+    raise ValueError("route-only engine did not exit after authenticated quit")
+
+
+def run_route_only(core, spec_path: Path, state_root: Path, evidence_root: Path) -> None:
+    """Run the controller-selected ordinary-match exception subset."""
+    core._reject_development_controller_environment()
+    if state_root.exists() or evidence_root.exists():
+        raise ValueError("route-only state and evidence roots must be absent")
+    spec, lanes = core._validate_route_only_run_spec(spec_path)
+    inputs = _route_inputs(core, spec)
+    lane_order = core._validate_route_only_lane_selection(
+        lanes, inputs["controller_results"]
+    )
+    _route_lane_inputs(core, lanes, inputs["bundle_roles"], lane_order)
+    state_root.mkdir(mode=0o700)
+    evidence_root.mkdir(mode=0o700)
+    lock_path = state_root / "route-only.lock"
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    runs = {}
+    receipts = []
+    try:
+        release_ns = 0
+        if lane_order:
+            runs, release_ns = _start(
+                core, spec, lanes, evidence_root, lane_order=lane_order,
+                cycle_factory=core.RouteOnlyCycle,
+            )
+        owner = {
+            "format": core.FORMAT_ROUTE_OWNER, "state": "RUNNING",
+            "campaign_id": spec["campaign_id"], "bundle_id": inputs["bundle"]["bundle_id"],
+            "runner_sha256": core._hash(Path(core.__file__).read_bytes()), "no_op": not lane_order,
+            "release_monotonic_ns": release_ns, "graceful_quit": False,
+            "selected_lanes": list(lane_order), "selected_count": len(lane_order),
+            "processes": {lane: runs[lane].engine.identity for lane in lane_order},
+            "clients": {lane: runs[lane].client_identity for lane in lane_order},
+            "inputs": {"engine": spec["engine"], "client": spec["client"],
+                       "route_config": spec["route_config"], "film": spec["film"],
+                       "runtime": spec["runtime"], "module_aliases": spec["module_aliases"],
+                       "installed_bundle": spec["installed_bundle"],
+                       "bundle_verifier": inputs["bundle_verifier"],
+                       **core._route_helper_records()},
+            "controller_authority": spec["controller_authority"],
+            "matches": {lane: core.expected_route_only_map(lane)
+                        for lane in lane_order},
+            "lane_runtime": {lane: lanes[lane]["runtime_files"]
+                             for lane in lane_order},
+            "ledger_entries": 0, "ledger_tail_hash": core.ZERO_HASH,
+            "lock_path": str(lock_path.resolve()),
+        }
+        owner_path = state_root / "route-only-owner.json"
+        _write_atomic(core, owner_path, core._canonical(owner))
+        if not lane_order:
+            _write_atomic(core, evidence_root / "route-only-ledger.jsonl", b"")
+            owner.update(state="SAFE_STOPPED")
+            _write_atomic(core, owner_path.with_name("route-only-owner.final.json"),
+                          core._canonical(owner))
+            os.replace(owner_path.with_name("route-only-owner.final.json"), owner_path)
+            _freeze(evidence_root)
+            _freeze(state_root)
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+            lock_fd = -1
+            core.verify_stopped_route_only_evidence(state_root, evidence_root)
+            return
+        config = _config_payload(core, inputs["route_config_path"])
+        for lane in lane_order:
+            _write_all(runs[lane].engine.process.stdin, config)
+            _command(runs[lane], f"map {core.expected_route_only_map(lane)}")
+        film = _load_film(inputs["film_path"])
+        selector = selectors.DefaultSelector()
+        for lane, run in runs.items():
+            selector.register(run.engine.process.stdout, selectors.EVENT_READ, (lane, "engine"))
+            selector.register(run.client.stdout, selectors.EVENT_READ, (lane, "client"))
+        deadline = time.monotonic() + spec["timeout_seconds"]
+        while not all(run.cycle.complete for run in runs.values()):
+            if time.monotonic() >= deadline:
+                raise ValueError("route-only campaign exceeded its timeout")
+            events = selector.select(0.25)
+            if not events:
+                if any(run.engine.process.poll() is not None or run.client.poll() is not None
+                       for run in runs.values()):
+                    raise ValueError("route-only child exited before match completion")
+                continue
+            for key, _mask in events:
+                lane, kind = key.data
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                run = runs[lane]
+                buffer = run.engine_buffer if kind == "engine" else run.client_buffer
+                for line in _drain_lines(buffer, chunk):
+                    if kind == "engine":
+                        _consume_route_engine(
+                            core, film, spec, run, line, evidence_root, receipts,
+                            inputs["bundle"]["bundle_id"], inputs["controller_results"],
+                        )
+                    else:
+                        _consume_client(spec, run, line)
+        selector.close()
+        if len(receipts) != len(lane_order):
+            raise ValueError("route-only campaign did not publish each selected receipt")
+        _graceful_route_engine_stop(runs)
+        owner["graceful_quit"] = True
+        _stop_all(core, {lane: run.engine for lane, run in runs.items()}, runs)
+        runs = {}
+        previous, ledger = core.ZERO_HASH, []
+        by_lane = {receipt["lane"]: (path, receipt) for path, receipt in receipts}
+        for index, lane in enumerate(lane_order):
+            path, receipt = by_lane[lane]
+            entry = {"format": core.FORMAT_ROUTE_LEDGER, "index": index,
+                     "previous_hash": previous,
+                     "receipt_path": path.relative_to(evidence_root).as_posix(),
+                     "receipt_hash": receipt["receipt_hash"]}
+            entry["entry_hash"] = core.ledger_entry_hash(entry)
+            previous = entry["entry_hash"]
+            ledger.append(entry)
+        _write_atomic(core, evidence_root / "route-only-ledger.jsonl",
+                      b"".join(core._canonical(entry) for entry in ledger))
+        owner.update(
+            state="SAFE_STOPPED", ledger_entries=len(lane_order), ledger_tail_hash=previous
+        )
+        _write_atomic(core, owner_path.with_name("route-only-owner.final.json"),
+                      core._canonical(owner))
+        os.replace(owner_path.with_name("route-only-owner.final.json"), owner_path)
+        _freeze(evidence_root)
+        _freeze(state_root)
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        lock_fd = -1
+        core.verify_stopped_route_only_evidence(state_root, evidence_root)
     except BaseException as exc:
         if runs:
             _stop_all(core, {lane: run.engine for lane, run in runs.items()}, runs)
