@@ -34,7 +34,7 @@ following conditions:
 | Corpus inputs | 175 canonical maps: 156 preserved adoption candidates and 19 missing artifacts (`smap32` plus the manifest entries from `xmap13` through `xmap30`, using canonical `xmap14a`). No final validation run has started. |
 | Controller | Adoption, one-shot replacement, crash recovery, provenance, and unbounded review are implemented and independently reviewed. The focused controller, finalizer, and integration suites pass. Production leaves the generation timeout unset; an explicit safety override is fingerprinted only when deliberately supplied. |
 | Timing bounds | Startup/identity and cold-load readiness use generous authenticated bounds. Owned-child teardown is bounded. These bounds do not limit generation or review work. |
-| Branches and CI | The full GNU/Make and GCC/Clang host matrix is green locally. The current wave remains uncommitted on `slipgate`; push, exact CI, merge to `main`, synchronized refs, and exact CI on both refs remain. |
+| Branches and CI | The full GNU/Make and GCC/Clang host matrix is green locally. The first exact CI run exposed one Windows-only `stat` type warning; its narrow platform fix is under validation. A fresh exact CI run, merge to `main`, synchronized refs, and exact CI on both refs remain. |
 | Freeze and corpus | No accepted freeze or final 175-map corpus exists. Freeze creation must wait for the current controller wave and CI. |
 | Bundle, matches, release | Final-corpus authority is bound through bundle installation and both fleet paths, with exact-byte loading for every executable Python input. Focused tests pass. Production installation and matches have not started. Fake-engine tests are tooling proof, not match evidence. `v1.0.0` is not tagged or published. |
 
@@ -190,9 +190,9 @@ optional learning does not block the initial release.
 ## Current pre-freeze work
 
 The controller/finalizer hardening, exact final-corpus authority binding, fresh
-`smap32` staged proof, and full four-way host matrix are complete. Commit and
-exact CI remain before the freeze. The immutable freeze and corpus run have not
-started.
+`smap32` staged proof, and full four-way host matrix are complete. A narrow
+Windows warning fix and fresh exact CI remain before the freeze. The immutable
+freeze and corpus run have not started.
 
 ## Execution plan
 

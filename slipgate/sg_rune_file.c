@@ -29,7 +29,13 @@ typedef struct rune_file_sha256_s
 	size_t used;
 } rune_file_sha256_t;
 
-static int RuneFile_StreamStat(FILE *file, struct stat *status)
+#ifdef _WIN32
+typedef struct _stat rune_file_stat_t;
+#else
+typedef struct stat rune_file_stat_t;
+#endif
+
+static int RuneFile_StreamStat(FILE *file, rune_file_stat_t *status)
 {
 #ifdef _WIN32
 	return _fstat(_fileno(file), status);
@@ -38,8 +44,8 @@ static int RuneFile_StreamStat(FILE *file, struct stat *status)
 #endif
 }
 
-static qboolean RuneFile_StatMatches(const struct stat *left,
-	const struct stat *right)
+static qboolean RuneFile_StatMatches(const rune_file_stat_t *left,
+	const rune_file_stat_t *right)
 {
 	if (left->st_dev != right->st_dev || left->st_ino != right->st_ino ||
 	    left->st_size != right->st_size)
@@ -535,8 +541,8 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	size_t file_size = 0U;
 	size_t read_size;
 	long file_length;
-	struct stat file_before;
-	struct stat file_after;
+	rune_file_stat_t file_before;
+	rune_file_stat_t file_after;
 	uint32_t failure_index = UINT32_MAX;
 	const char *failure;
 
