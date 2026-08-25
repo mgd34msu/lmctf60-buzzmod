@@ -868,6 +868,8 @@ void		SG_WeightsReload(void);             /* re-read the global weights file and
  */
 float		SG_TiltCaution(edict_t *ent);
 void		SG_RunFrame(void);      /* drive all SLIPGATE bots, once per frame */
+qboolean	SG_LevelSetup(void);    /* publish this level's staged RUNE */
+void		SG_LevelSetupAfterRuneWrite(void); /* load a written RUNE when none is active */
 void		Botfill_Reset(void);    /* clear level-time cadence and hysteresis */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
 void		SG_DangerCheckpoint(const char *event); /* final dirty save */

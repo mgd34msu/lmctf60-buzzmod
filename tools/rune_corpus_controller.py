@@ -50,8 +50,15 @@ CORPUS_ENGINE_BASENAME = "q2ded-rune-corpus"
 FINALIZER_SOURCE = Path(__file__).with_name("rune_corpus_finalizer.py")
 ROUTE_ONLY_POLICY_SOURCE = Path(__file__).with_name("rune_corpus_policy.py")
 FINAL_CORPUS_SEAL = "final-corpus-seal.json"
+ADOPTION_POLICY_VERSION = 1
+EXPECTED_ADOPTED_RUNE_COUNT = 156
+ADOPTED_RUNE_ROLE_PREFIX = "adopted_rune:"
+ADOPTED_RUNE_ROOT = PurePosixPath("adopted-runes")
 MAP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 ROOT_RE = re.compile(r"^rune: objective roots red=([0-9]+) blue=([0-9]+)$")
+RUNTIME_ROOT_RE = re.compile(
+    r"^slipgate: objective roots red=([0-9]+) blue=([0-9]+)$"
+)
 WRITE_RE = re.compile(
     r"^rune: wrote ([^\r\n]+) \(([0-9]+) seeds, ([0-9]+) links, "
     r"([0-9]+) mechanism nodes, ([0-9]+) triggers, ([0-9]+) inventory "
@@ -82,6 +89,18 @@ FAILURE_RE = re.compile(
     r"revalidation failed .+|install failed .+|"
     r"cleanup restored pending door scope;.*)$"
 )
+RUNTIME_INFRA_RE = re.compile(r"^rune: infrastructure .+$")
+COLD_WORLD_REJECTION_RE = re.compile(
+    r"^rune: rejected game/maps/"
+    r"([A-Za-z0-9_][A-Za-z0-9_-]{0,62})\.rune "
+    r"stage=(live-catalog-rebind|mechanism-rebind|compound-replay|"
+    r"door-replay|objective-core) reason=.+$"
+)
+SETUP_TERMINAL_RE = re.compile(
+    r"^slipgate: rune setup terminal map="
+    r"([A-Za-z0-9_][A-Za-z0-9_-]{0,62}) "
+    r"source=(autoload|write) class=(infra|artifact) stage=([a-z-]+)$"
+)
 
 
 def last_anchored_failure(lines: Sequence[str]) -> str | None:
@@ -92,16 +111,64 @@ def last_anchored_failure(lines: Sequence[str]) -> str | None:
     return None
 
 
+def setup_terminal_receipt(
+    lines: Sequence[str], map_name: str, source: str
+) -> tuple[str, str, str] | None:
+    matches = [
+        (line, match) for line in lines
+        if (match := SETUP_TERMINAL_RE.fullmatch(line)) is not None
+        and match.group(1) == map_name and match.group(2) == source
+    ]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise CorpusError("duplicate setup-terminal receipt")
+    line, match = matches[0]
+    return match.group(3), match.group(4), line
+
+
 def last_cold_load_failure(
     lines: Sequence[str], map_name: str
 ) -> str | None:
     """Return a generator failure or the expected map's SNAG load failure."""
+    terminal = setup_terminal_receipt(lines, map_name, "autoload")
+    if terminal is not None and terminal[0] == "infra":
+        return terminal[2]
+    for line in reversed(lines):
+        if RUNTIME_INFRA_RE.fullmatch(line):
+            return line
     failure = last_anchored_failure(lines)
     if failure is not None:
         return failure
     for line in reversed(lines):
         match = SNAG_DECLARATION_FAILURE_RE.fullmatch(line)
         if match is not None and match.group(1) == map_name:
+            return line
+    return None
+
+
+def cold_loader_rejection(lines: Sequence[str], map_name: str) -> str | None:
+    """Return a paired selected-map world rejection, never a bare diagnostic."""
+    if any(RUNTIME_INFRA_RE.fullmatch(line) is not None for line in lines):
+        return None
+    terminal = setup_terminal_receipt(lines, map_name, "autoload")
+    if terminal is None or terminal[0] != "artifact":
+        return None
+    failure = last_anchored_failure(lines)
+    match = COLD_WORLD_REJECTION_RE.fullmatch(failure or "")
+    if (match is not None and match.group(1) == map_name and
+            match.group(2) == terminal[1]):
+        return failure
+    return None
+
+
+def runtime_infrastructure_failure(
+    lines: Sequence[str], map_name: str
+) -> str | None:
+    """Return the selected map's explicit runtime infrastructure receipt."""
+    prefix = f"rune: infrastructure game/maps/{map_name}.rune "
+    for line in reversed(lines):
+        if RUNTIME_INFRA_RE.fullmatch(line) and line.startswith(prefix):
             return line
     return None
 
@@ -129,6 +196,123 @@ def generation_deferred_publication_complete(
     return False
 
 
+class IncrementalLineReader:
+    """Read one append-only UTF-8 log without repeatedly rescanning it."""
+
+    def __init__(
+        self, path: Path, *, writer_identity: tuple[int, int] | None = None
+    ):
+        self.path = path
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        self.fd = os.open(path, flags)
+        info = os.fstat(self.fd)
+        self.identity = (info.st_dev, info.st_ino)
+        if writer_identity is not None and self.identity != writer_identity:
+            os.close(self.fd)
+            self.fd = -1
+            raise CorpusError("observed log does not match the writer descriptor")
+        self.offset = 0
+        self.partial = b""
+        self.observed_digest = hashlib.sha256()
+
+    def read_new(self) -> list[str]:
+        current = self.path.lstat()
+        if stat.S_ISLNK(current.st_mode) or (current.st_dev, current.st_ino) != self.identity:
+            raise CorpusError("observed log was replaced")
+        info = os.fstat(self.fd)
+        if (info.st_dev, info.st_ino) != self.identity:
+            raise CorpusError("observed log identity changed")
+        if info.st_size < self.offset:
+            raise CorpusError("observed log was truncated")
+        os.lseek(self.fd, self.offset, os.SEEK_SET)
+        remaining = info.st_size - self.offset
+        chunks: list[bytes] = []
+        while remaining:
+            data = os.read(self.fd, remaining)
+            if not data:
+                raise CorpusError("observed log was truncated during read")
+            chunks.append(data)
+            remaining -= len(data)
+        data = b"".join(chunks)
+        self.offset += len(data)
+        self.observed_digest.update(data)
+        payload = self.partial + data
+        chunks = payload.split(b"\n")
+        self.partial = chunks.pop()
+        try:
+            return [chunk.decode("utf-8", errors="strict").rstrip("\r") for chunk in chunks]
+        except UnicodeDecodeError as exc:
+            raise CorpusError("observed log is not valid UTF-8") from exc
+
+    def finish(self) -> list[str]:
+        lines = self.read_new()
+        if not self.partial:
+            return lines
+        try:
+            line = self.partial.decode("utf-8", errors="strict").rstrip("\r")
+        except UnicodeDecodeError as exc:
+            raise CorpusError("observed log is not valid UTF-8") from exc
+        self.partial = b""
+        return [*lines, line]
+
+    def bound_record(self) -> dict[str, int | str]:
+        """Return the final held-fd identity and digest after draining it."""
+        info = os.fstat(self.fd)
+        if (info.st_dev, info.st_ino) != self.identity or info.st_size != self.offset:
+            raise CorpusError("observed log changed before final binding")
+        digest = hashlib.sha256()
+        position = 0
+        while position < info.st_size:
+            chunk = os.pread(self.fd, min(65536, info.st_size - position), position)
+            if not chunk:
+                raise CorpusError("observed log was truncated during final hash")
+            digest.update(chunk)
+            position += len(chunk)
+        record: dict[str, int | str] = {
+            "device": info.st_dev, "inode": info.st_ino, "size": info.st_size,
+            "sha256": digest.hexdigest(),
+        }
+        if record["sha256"] != self.observed_digest.hexdigest():
+            raise CorpusError("observed log changed after it was parsed")
+        self.verify_named_record(record)
+        return record
+
+    def verify_named_record(self, record: Mapping[str, int | str]) -> None:
+        """Reject replacement or rewrite of the bound log pathname."""
+        current = self.path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or current.st_dev != record["device"]
+            or current.st_ino != record["inode"]
+            or current.st_size != record["size"]
+        ):
+            raise CorpusError("observed log was replaced after final binding")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self.path, flags)
+        try:
+            info = os.fstat(fd)
+            if (
+                info.st_dev != record["device"] or info.st_ino != record["inode"]
+                or info.st_size != record["size"]
+            ):
+                raise CorpusError("observed log identity changed after final binding")
+            digest = hashlib.sha256()
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            if digest.hexdigest() != record["sha256"]:
+                raise CorpusError("observed log changed after final binding")
+        finally:
+            os.close(fd)
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+
 REPORT_FIELDS = (
     "seed_count",
     "link_count",
@@ -141,12 +325,26 @@ REPORT_FIELDS = (
 )
 ROUTE_CONTRACTS = frozenset({"complete", "local_only"})
 SUCCESS_CLASSIFICATIONS = frozenset({"PASS", "ROUTE_ONLY"})
+ATTEMPT_INTENT_FORMAT = "lmctf-rune-attempt-intent-v2"
+ATTEMPT_KINDS = frozenset({
+    "adopted_validation", "generated_missing", "generated_replacement",
+})
+ATTEMPT_INTENT_FIELDS = frozenset({
+    "format", "fingerprint", "map", "stable_port", "attempt", "kind",
+    "created_at", "source_artifact", "rejection_result",
+})
+TERMINAL_RESULT_FORMAT = "lmctf-rune-attempt-result-v2"
+ATTEMPT_COMMIT_FORMAT = "lmctf-rune-attempt-commit-v1"
+ATTEMPT_ABORT_FORMAT = "lmctf-rune-attempt-abort-v1"
+ATTEMPT_DISPOSITIONS = frozenset({"accepted", "artifact_rejected", "infra_failed"})
 TERMINAL_CLASSIFICATIONS = frozenset(
     {"PASS", "ROUTE_ONLY", "LINT_FAIL", "GEN_FAIL", "TIMEOUT", "INFRA_FAIL"}
 )
 TERMINAL_RESULT_FIELDS = frozenset(
     {
-        "fingerprint", "map", "stable_port", "attempt", "started_at", "ended_at",
+        "format", "fingerprint", "map", "stable_port", "attempt", "attempt_kind",
+        "disposition", "intent_record", "provenance", "generation_report",
+        "started_at", "ended_at",
         "classification", "normalized_signature", "detail", "failure_line",
         "command_sha256", "owner_record", "evidence", "server_log_sha256",
         "artifact", "artifact_sha256", "route_contract", "objective_roots",
@@ -182,16 +380,24 @@ PYTHON_RUNTIME_ROLE_PREFIX = "python_runtime:"
 PYTHON_RUNTIME_ROOT = PurePosixPath("python-runtime")
 PYTHON_ISOLATION_FLAGS = ("-I", "-S", "-B")
 PYTHON_GATE_BOOTSTRAP = (
-    "import json,os,runpy,struct,sys;"
-    "control,release,mode,target=int(sys.argv[1]),int(sys.argv[2]),sys.argv[3],sys.argv[4];"
+    "import ctypes,json,os,runpy,signal,struct,sys;"
+    "parent,control,release,mode,target="
+    "int(sys.argv[1]),int(sys.argv[2]),int(sys.argv[3]),sys.argv[4],sys.argv[5];"
+    "libc=ctypes.CDLL(None,use_errno=True);"
+    "(libc.prctl(1,signal.SIGKILL,0,0,0)!=0 or os.getppid()!=parent) and os._exit(125);"
     "sys.path.insert(0,os.path.dirname(target));"
     "namespace=runpy.run_path(target,run_name='__rune_gate__');"
     "main=namespace.get('main');"
     "assert callable(main),'target has no callable main';"
     "emit=lambda value:os.write(control,struct.pack('!I',len(json.dumps(value,sort_keys=True,separators=(',',':')).encode('ascii')))+json.dumps(value,sort_keys=True,separators=(',',':')).encode('ascii'));"
-    "emit({'phase':'READY','mode':mode,'argv_sha256':__import__('hashlib').sha256(b'\\0'.join(os.fsencode(x) for x in sys.argv[5:])+b'\\0').hexdigest()});"
+    "emit({'phase':'READY','mode':mode,'argv_sha256':"
+    "__import__('hashlib').sha256(b'\\0'.join(os.fsencode(x) "
+    "for x in sys.argv[6:])+b'\\0').hexdigest()});"
     "assert os.read(release,1)==b'R','release denied';"
-    "rc=(exec(sys.argv[5],namespace) if mode=='preflight' else main(sys.argv[5:]));rc=0 if rc is None else int(rc);"
+    "\ntry:\n rc=(exec(sys.argv[6],namespace) if mode=='preflight' "
+    "else main(sys.argv[6:]));rc=0 if rc is None else int(rc)\n"
+    "except SystemExit as exc:\n rc=exc.code if type(exc.code) is int else 3\n"
+    "except BaseException:\n rc=3\n"
     "emit({'phase':'DONE','mode':mode,'rc':rc});"
     "assert os.read(release,1)==b'R','final release denied';"
     "raise SystemExit(rc)"
@@ -211,6 +417,11 @@ ENGINE_ENVIRONMENT = {
 }
 ACCEPTOR_ENVIRONMENT = dict(ENGINE_ENVIRONMENT)
 PYTHON_ENVIRONMENT = dict(ENGINE_ENVIRONMENT)
+# ``--contracts`` is deterministic metadata emitted before any artifact work.
+# A five-minute cap contains a malformed acceptor while the parent still holds
+# its pidfd; artifact gates and all runtime phases intentionally have no such
+# wall-clock deadline.
+ACCEPTOR_CONTRACT_PROBE_TIMEOUT = 300.0
 # Compatibility name for consumers of the previous public helper.  It has no
 # dynamic-loader authority: every Python invocation names its loader directly.
 CHILD_ENVIRONMENT = ENGINE_ENVIRONMENT
@@ -267,6 +478,10 @@ class CorpusError(RuntimeError):
 
 class GateIntegrityError(CorpusError):
     """A gate launch or immutable input invariant failed (never a lint result)."""
+
+
+class ArtifactRejectedError(CorpusError):
+    """A typed validator conclusively rejected the frozen artifact bytes."""
 
 
 class ProcessIntegrityError(GateIntegrityError):
@@ -333,6 +548,65 @@ def _open_regular(
         os.close(fd)
         raise CorpusError(f"not one unaliased regular file: {path}")
     return fd, after
+
+
+def _regular_input_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    """Return the mutable identity fields which bind one source descriptor."""
+    return (
+        info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+        info.st_ctime_ns, stat.S_IMODE(info.st_mode), info.st_nlink,
+    )
+
+
+@dataclasses.dataclass
+class _BoundRegularInput:
+    """One source held open while an external probe and snapshot copy agree."""
+    path: Path
+    fd: int
+    info: os.stat_result
+    sha256: str
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+
+def _bind_regular_input(path: Path) -> _BoundRegularInput:
+    """Open and hash one source before its descriptor leaves the parent."""
+    fd, info = _open_regular(path)
+    try:
+        digest = _sha256_fd(fd)
+        final = os.fstat(fd)
+        named = path.lstat()
+        if (
+            not stat.S_ISREG(named.st_mode)
+            or _regular_input_identity(final) != _regular_input_identity(info)
+            or _regular_input_identity(named) != _regular_input_identity(info)
+        ):
+            raise CorpusError(f"input changed while binding: {path}")
+        return _BoundRegularInput(path, fd, info, digest)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _validate_bound_regular_input(bound: _BoundRegularInput) -> None:
+    """Reject a source replacement or rewrite before copying the held bytes."""
+    try:
+        named = bound.path.lstat()
+    except OSError as exc:
+        raise CorpusError(
+            f"input changed after contract probe: {bound.path}"
+        ) from exc
+    current = os.fstat(bound.fd)
+    if (
+        not stat.S_ISREG(named.st_mode)
+        or _regular_input_identity(current) != _regular_input_identity(bound.info)
+        or _regular_input_identity(named) != _regular_input_identity(bound.info)
+        or _sha256_fd(bound.fd) != bound.sha256
+    ):
+        raise CorpusError(f"input changed after contract probe: {bound.path}")
 
 
 def read_regular_bytes(
@@ -657,7 +931,14 @@ def create_input_snapshot(
     semantic_roles = {
         role for role in role_list if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX)
     }
-    fixed_role_list = [role for role in role_list if role not in semantic_roles]
+    adopted_role_list = [
+        role for role in role_list if role.startswith(ADOPTED_RUNE_ROLE_PREFIX)
+    ]
+    adopted_roles = set(adopted_role_list)
+    fixed_role_list = [
+        role for role in role_list
+        if role not in semantic_roles and role not in adopted_roles
+    ]
     roles = set(fixed_role_list)
     required_inputs = REQUIRED_SNAPSHOT_ROLES | {PYTHON_RUNTIME_INPUT_ROLE}
     if roles != required_inputs or len(fixed_role_list) != len(required_inputs):
@@ -669,6 +950,21 @@ def create_input_snapshot(
     maps = validate_manifest(
         next(source for role, source in inputs.values() if role == "map_manifest")
     )
+    adopted_maps = [role.removeprefix(ADOPTED_RUNE_ROLE_PREFIX)
+                    for role in adopted_role_list]
+    if (
+        len(adopted_roles) != len(adopted_role_list)
+        or len(set(adopted_maps)) != len(adopted_maps)
+        or any(map_name not in maps for map_name in adopted_maps)
+        or any(
+            logical != (
+                ADOPTED_RUNE_ROOT / f"{role.removeprefix(ADOPTED_RUNE_ROLE_PREFIX)}.rune"
+            ).as_posix()
+            for logical, (role, _source) in inputs.items()
+            if role.startswith(ADOPTED_RUNE_ROLE_PREFIX)
+        )
+    ):
+        raise CorpusError("adopted RUNE roles must name one manifest map at its canonical path")
     asset_maps = [role.partition(":")[2] for role, _ in inputs.values() if role.startswith("asset:")]
     if sorted(asset_maps) != sorted(maps) or len(asset_maps) != CORPUS_SIZE:
         raise CorpusError("snapshot assets must cover every manifest map exactly once")
@@ -714,86 +1010,132 @@ def create_input_snapshot(
     contracts_source = next(
         source for role, source in inputs.values() if role == "contracts"
     )
-    expected_contracts = _contract_hashes(contracts_source)
-    for role in ("acceptor_gnu", "acceptor_make"):
-        acceptor = next(source for item_role, source in inputs.values()
-                        if item_role == role)
-        if _acceptor_contract_hashes(acceptor) != expected_contracts:
-            raise CorpusError(f"{role} contract identity mismatch")
-    for logical, (role, _source) in inputs.items():
-        if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX):
-            name = role.removeprefix(SEMANTIC_CHECKER_ROLE_PREFIX)
-            if PurePosixPath(logical).name != f"{name}_rune_accept.py":
-                raise CorpusError("semantic checker role/path mismatch")
-    inputs = _expand_python_runtime_inputs(inputs)
-    output.mkdir(parents=True, mode=0o700)
-    entries: list[dict[str, Any]] = []
+    retained_inputs: dict[str, _BoundRegularInput] = {
+        "contracts": _bind_regular_input(contracts_source),
+    }
     try:
-        for logical_name in sorted(inputs):
-            role, source = inputs[logical_name]
-            logical = _safe_logical_path(logical_name)
-            destination = output.joinpath(*logical.parts)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            source_fd, source_info = _open_regular(source)
-            try:
-                digest = hashlib.sha256()
-                copied_size = 0
-                target_fd = os.open(
-                    destination,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
-                    stat.S_IMODE(source_info.st_mode),
-                )
+        expected_contracts = _contract_hashes(
+            contracts_source, source_fd=retained_inputs["contracts"].fd,
+        )
+        for role in ("acceptor_gnu", "acceptor_make"):
+            acceptor = next(source for item_role, source in inputs.values()
+                            if item_role == role)
+            bound = _bind_regular_input(acceptor)
+            retained_inputs[role] = bound
+            if _acceptor_contract_hashes(acceptor, source_fd=bound.fd) != expected_contracts:
+                raise CorpusError(f"{role} contract identity mismatch")
+        _validate_bound_regular_input(retained_inputs["contracts"])
+        for logical, (role, _source) in inputs.items():
+            if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX):
+                name = role.removeprefix(SEMANTIC_CHECKER_ROLE_PREFIX)
+                if PurePosixPath(logical).name != f"{name}_rune_accept.py":
+                    raise CorpusError("semantic checker role/path mismatch")
+        inputs = _expand_python_runtime_inputs(inputs)
+        output.mkdir(parents=True, mode=0o700)
+        entries: list[dict[str, Any]] = []
+        try:
+            for logical_name in sorted(inputs):
+                role, source = inputs[logical_name]
+                logical = _safe_logical_path(logical_name)
+                destination = output.joinpath(*logical.parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                bound = retained_inputs.get(role)
+                if bound is None:
+                    source_fd, source_info = _open_regular(source)
+                else:
+                    _validate_bound_regular_input(bound)
+                    source_fd = os.dup(bound.fd)
+                    source_info = os.fstat(source_fd)
                 try:
-                    while True:
-                        chunk = os.read(source_fd, 1024 * 1024)
-                        if not chunk:
-                            break
-                        digest.update(chunk)
-                        copied_size += len(chunk)
-                        offset = 0
-                        while offset < len(chunk):
-                            written = os.write(target_fd, chunk[offset:])
-                            if written <= 0:
-                                raise CorpusError(f"snapshot write failed: {destination}")
-                            offset += written
-                    os.fchmod(target_fd, stat.S_IMODE(source_info.st_mode) & ~0o222)
-                    os.fsync(target_fd)
+                    digest = hashlib.sha256()
+                    copied_size = 0
+                    target_fd = os.open(
+                        destination,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                        stat.S_IMODE(source_info.st_mode),
+                    )
+                    try:
+                        while True:
+                            chunk = os.read(source_fd, 1024 * 1024)
+                            if not chunk:
+                                break
+                            digest.update(chunk)
+                            copied_size += len(chunk)
+                            offset = 0
+                            while offset < len(chunk):
+                                written = os.write(target_fd, chunk[offset:])
+                                if written <= 0:
+                                    raise CorpusError(f"snapshot write failed: {destination}")
+                                offset += written
+                        os.fchmod(target_fd, stat.S_IMODE(source_info.st_mode) & ~0o222)
+                        os.fsync(target_fd)
+                    finally:
+                        os.close(target_fd)
+                    source_final = os.fstat(source_fd)
                 finally:
-                    os.close(target_fd)
-                source_final = os.fstat(source_fd)
-            finally:
-                os.close(source_fd)
-            if (source_final.st_dev, source_final.st_ino, source_final.st_size, source_final.st_mtime_ns) != (
-                source_info.st_dev, source_info.st_ino, source_info.st_size, source_info.st_mtime_ns
-            ) or copied_size != source_info.st_size:
-                raise CorpusError(f"input changed while copying: {source}")
-            source_record = {
-                "mode": stat.S_IMODE(source_info.st_mode),
-                "size": copied_size,
-                "sha256": digest.hexdigest(),
-            }
-            copied = regular_file_record(destination, logical_path=logical.as_posix())
-            if copied["sha256"] != source_record["sha256"] or copied["size"] != source_record["size"]:
-                raise CorpusError(f"snapshot copy mismatch: {source}")
-            copied["role"] = role
-            entries.append(copied)
-        primary = next(entry for entry in entries if entry["role"] == "module_primary")
-        secondary = next(entry for entry in entries if entry["role"] == "module_secondary")
-        if primary["sha256"] != secondary["sha256"]:
-            raise CorpusError("production module files do not have identical bytes")
-        manifest = {"files": entries}
-        atomic_write_json(output / "input-manifest.json", manifest, mode=0o444)
-        freeze_tree(output)
-        verify_snapshot(output)
-        return manifest
-    except BaseException:
-        if output.exists():
-            for directory, names, files in os.walk(output, topdown=False):
-                for name in names + files:
-                    Path(directory, name).chmod(0o700)
-            output.chmod(0o700)
-            shutil.rmtree(output)
-        raise
+                    os.close(source_fd)
+                source_identity = (
+                    source_final.st_dev, source_final.st_ino,
+                    source_final.st_size, source_final.st_mtime_ns,
+                )
+                expected_source_identity = (
+                    source_info.st_dev, source_info.st_ino,
+                    source_info.st_size, source_info.st_mtime_ns,
+                )
+                if (
+                    source_identity != expected_source_identity
+                    or copied_size != source_info.st_size
+                ):
+                    raise CorpusError(f"input changed while copying: {source}")
+                if bound is not None:
+                    try:
+                        named = source.lstat()
+                    except OSError as exc:
+                        raise CorpusError(
+                            f"input changed after contract probe: {source}"
+                        ) from exc
+                    if (
+                        not stat.S_ISREG(named.st_mode)
+                        or _regular_input_identity(source_final)
+                        != _regular_input_identity(bound.info)
+                        or _regular_input_identity(named)
+                        != _regular_input_identity(bound.info)
+                        or digest.hexdigest() != bound.sha256
+                    ):
+                        raise CorpusError(f"input changed after contract probe: {source}")
+                source_record = {
+                    "mode": stat.S_IMODE(source_info.st_mode),
+                    "size": copied_size,
+                    "sha256": digest.hexdigest(),
+                }
+                copied = regular_file_record(destination, logical_path=logical.as_posix())
+                if (
+                    copied["sha256"] != source_record["sha256"]
+                    or copied["size"] != source_record["size"]
+                ):
+                    raise CorpusError(f"snapshot copy mismatch: {source}")
+                copied["role"] = role
+                entries.append(copied)
+            primary = next(entry for entry in entries if entry["role"] == "module_primary")
+            secondary = next(entry for entry in entries if entry["role"] == "module_secondary")
+            if primary["sha256"] != secondary["sha256"]:
+                raise CorpusError("production module files do not have identical bytes")
+            manifest = {"files": entries}
+            atomic_write_json(output / "input-manifest.json", manifest, mode=0o444)
+            freeze_tree(output)
+            verify_snapshot(output)
+            return manifest
+        except BaseException:
+            if output.exists():
+                for directory, names, files in os.walk(output, topdown=False):
+                    for name in names + files:
+                        Path(directory, name).chmod(0o700)
+                output.chmod(0o700)
+                shutil.rmtree(output)
+            raise
+    finally:
+        for bound in retained_inputs.values():
+            bound.close()
 
 
 def _load_json_regular(
@@ -1016,13 +1358,33 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         role for role in non_asset_roles
         if role.startswith(SEMANTIC_CHECKER_ROLE_PREFIX)
     }
-    fixed_roles = [role for role in non_asset_roles if role not in semantic_roles]
+    adopted_roles = {
+        role for role in non_asset_roles if role.startswith(ADOPTED_RUNE_ROLE_PREFIX)
+    }
+    fixed_roles = [
+        role for role in non_asset_roles
+        if role not in semantic_roles and role not in adopted_roles
+    ]
     roles = set(fixed_roles)
     if roles != REQUIRED_SNAPSHOT_ROLES or len(fixed_roles) != len(REQUIRED_SNAPSHOT_ROLES):
         raise CorpusError("verified snapshot has incorrect required roles")
     maps = validate_manifest(snapshot / next(
         str(entry["path"]) for entry in entries if entry["role"] == "map_manifest"
     ))
+    adopted_runes: dict[str, Mapping[str, Any]] = {}
+    for entry in entries:
+        role = str(entry["role"])
+        if not role.startswith(ADOPTED_RUNE_ROLE_PREFIX):
+            continue
+        map_name = role.removeprefix(ADOPTED_RUNE_ROLE_PREFIX)
+        if (
+            map_name not in maps
+            or str(entry["path"])
+            != (ADOPTED_RUNE_ROOT / f"{map_name}.rune").as_posix()
+            or map_name in adopted_runes
+        ):
+            raise CorpusError("verified adopted RUNE role/path mismatch")
+        adopted_runes[map_name] = entry
     assets = [role.partition(":")[2] for role in seen_roles if role.startswith("asset:")]
     if sorted(assets) != sorted(maps) or len(assets) != CORPUS_SIZE:
         raise CorpusError("verified snapshot has incomplete map assets")
@@ -1086,13 +1448,26 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         "manifest": manifest,
         "manifest_sha256": sha256_bytes(manifest_bytes),
         "by_role": {entry["role"]: entry for entry in entries},
+        "adopted_runes": adopted_runes,
         "python_runtime": python_runtime,
         "semantic_checkers": semantic_manifest,
     }
 
 
-def _contract_hashes(path: Path) -> tuple[str, str]:
-    text = path.read_text(encoding="ascii")
+def _contract_hashes(
+    path: Path, *, source_fd: int | None = None,
+) -> tuple[str, str]:
+    if source_fd is None:
+        text = path.read_text(encoding="ascii")
+    else:
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        try:
+            while chunk := os.read(source_fd, 1024 * 1024):
+                chunks.append(chunk)
+        finally:
+            os.lseek(source_fd, 0, os.SEEK_SET)
+        text = b"".join(chunks).decode("ascii")
     action = re.search(
         r"^RUNE_ACTION_CONTRACT_SHA256 = ['\"]([0-9a-fA-F]{64})['\"]$",
         text,
@@ -1108,16 +1483,40 @@ def _contract_hashes(path: Path) -> tuple[str, str]:
     return action.group(1).lower(), mechanism.group(1).lower()
 
 
-def _acceptor_contract_hashes(path: Path) -> tuple[str, str]:
+def _acceptor_contract_hashes(
+    path: Path,
+    *,
+    source_fd: int | None = None,
+    heartbeat_check: Callable[[], None] | None = None,
+) -> tuple[str, str]:
+    owned_fd = source_fd is None
     try:
-        completed = subprocess.run(
-            [str(path.resolve(strict=True)), "--contracts"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-            env=dict(ACCEPTOR_ENVIRONMENT), timeout=10,
+        if source_fd is None:
+            source_fd, _source_info = _open_regular(path)
+        assert source_fd is not None
+        acceptor_parent = path.parent.resolve(strict=True)
+        completed = _run_guarded_gate(
+            [
+                os.fspath(Path(sys.executable).resolve(strict=True)),
+                *PYTHON_ISOLATION_FLAGS,
+                "-c",
+                GUARD_BOOTSTRAP,
+                str(os.getpid()),
+                "--",
+                f"/proc/self/fd/{source_fd}",
+                "--contracts",
+            ],
+            cwd=acceptor_parent,
+            heartbeat_check=heartbeat_check,
+            pass_fds=(source_fd,),
+            deadline=ACCEPTOR_CONTRACT_PROBE_TIMEOUT,
         )
         value = json.loads(bytes(completed.stdout or b""))
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    except (OSError, GateIntegrityError, json.JSONDecodeError) as exc:
         raise CorpusError(f"cannot read acceptor contract identity: {path}") from exc
+    finally:
+        if owned_fd and source_fd is not None:
+            os.close(source_fd)
     if completed.returncode != 0 or not isinstance(value, dict) or set(value) != {
         "action_contract_sha256", "mechanism_contract_sha256",
     }:
@@ -1129,28 +1528,37 @@ def _acceptor_contract_hashes(path: Path) -> tuple[str, str]:
     return hashes
 
 
+def _validate_generation_timeout(generation_timeout: int | None) -> None:
+    if (
+        generation_timeout is not None
+        and (
+            isinstance(generation_timeout, bool)
+            or not isinstance(generation_timeout, int)
+            or generation_timeout <= 0
+        )
+    ):
+        raise CorpusError("generation timeout must be null or a positive integer")
+
+
 def build_fingerprint_document(
     snapshot: Path,
     *,
     startup_timeout: int,
-    generation_timeout: int,
+    generation_timeout: int | None,
     cold_load_timeout: int,
     jobs: int,
     port_base: int,
     engine_arguments: Sequence[str] = DEFAULT_ENGINE_ARGUMENTS,
     controller_source: Path | None = None,
 ) -> tuple[dict[str, Any], str]:
-    if (
-        startup_timeout <= 0
-        or generation_timeout <= 0
-        or cold_load_timeout <= 0
-        or jobs <= 0
-    ):
+    if startup_timeout <= 0 or cold_load_timeout <= 0 or jobs <= 0:
         raise CorpusError("timeouts and job count must be positive")
+    _validate_generation_timeout(generation_timeout)
     validate_engine_arguments(engine_arguments)
     verified = verify_snapshot(snapshot)
     by_role = verified["by_role"]
     python_runtime = verified["python_runtime"]
+    adopted_runes = verified["adopted_runes"]
     contracts_path = snapshot / by_role["contracts"]["path"]
     action_hash, mechanism_hash = _contract_hashes(contracts_path)
     controller = controller_source or Path(__file__).resolve()
@@ -1191,6 +1599,14 @@ def build_fingerprint_document(
             }
             for item in verified["semantic_checkers"]
         ],
+        "adoption_policy_version": ADOPTION_POLICY_VERSION,
+        "adopted_runes": [
+            {
+                key: adopted_runes[map_name][key]
+                for key in ("path", "mode", "size", "sha256", "role")
+            }
+            for map_name in sorted(adopted_runes)
+        ],
         "generation_timeout_seconds": generation_timeout,
         "startup_timeout_seconds": startup_timeout,
         "cold_load_timeout_seconds": cold_load_timeout,
@@ -1219,16 +1635,18 @@ def build_fingerprint_document(
 
 def verify_fingerprint_document(snapshot: Path, expected: Mapping[str, Any]) -> str:
     try:
+        generation_timeout = expected["generation_timeout_seconds"]
+        _validate_generation_timeout(generation_timeout)
         rebuilt, fingerprint = build_fingerprint_document(
             snapshot,
             startup_timeout=int(expected["startup_timeout_seconds"]),
-            generation_timeout=int(expected["generation_timeout_seconds"]),
+            generation_timeout=generation_timeout,
             cold_load_timeout=int(expected["cold_load_timeout_seconds"]),
             jobs=int(expected["job_count"]),
             port_base=int(expected["port_base"]),
             engine_arguments=tuple(expected["engine_arguments"]),
         )
-    except (KeyError, TypeError, ValueError) as exc:
+    except (CorpusError, KeyError, TypeError, ValueError) as exc:
         raise CorpusError("fingerprint document has invalid fields") from exc
     if canonical_json(rebuilt) != canonical_json(dict(expected)):
         raise CorpusError("frozen inputs no longer match the fingerprint document")
@@ -1270,7 +1688,8 @@ def _sha256_fd(fd: int) -> str:
 
 
 def _read_frame(
-    control_fd: int, stdout_fd: int, deadline: float, output: bytearray, *, limit: int,
+    control_fd: int, stdout_fd: int, deadline: float | None, output: bytearray, *, limit: int,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> Mapping[str, Any]:
     """Read one length-prefixed frame while continuously draining gate stdout."""
     header = bytearray()
@@ -1280,12 +1699,16 @@ def _read_frame(
     selector.register(stdout_fd, selectors.EVENT_READ, "stdout")
     try:
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if heartbeat_check is not None:
+                heartbeat_check()
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 raise ProcessIntegrityError("verified Python handshake deadline expired")
-            events = selector.select(remaining)
+            events = selector.select(0.1 if remaining is None else remaining)
             if not events:
-                raise ProcessIntegrityError("verified Python handshake deadline expired")
+                if remaining is not None:
+                    raise ProcessIntegrityError("verified Python handshake deadline expired")
+                continue
             for key, _event in events:
                 try:
                     chunk = os.read(key.fd, 65536)
@@ -1602,15 +2025,25 @@ def _validate_verified_python_process(
     return identity, sha256_bytes(map_text.encode("utf-8"))
 
 
-def _drain_until_exit(process: subprocess.Popen[bytes], stdout_fd: int, output: bytearray, deadline: float, *, limit: int) -> None:
+def _drain_until_exit(
+    process: subprocess.Popen[bytes],
+    stdout_fd: int,
+    output: bytearray,
+    deadline: float | None,
+    *,
+    limit: int,
+    heartbeat_check: Callable[[], None] | None = None,
+) -> None:
     selector = selectors.DefaultSelector()
     selector.register(stdout_fd, selectors.EVENT_READ)
     try:
         while process.poll() is None or selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if heartbeat_check is not None:
+                heartbeat_check()
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 raise ProcessIntegrityError("verified Python did not exit by its deadline")
-            for key, _event in selector.select(min(remaining, 0.1)):
+            for key, _event in selector.select(0.1 if remaining is None else min(remaining, 0.1)):
                 try:
                     chunk = os.read(key.fd, 65536)
                 except BlockingIOError:
@@ -1628,13 +2061,23 @@ def _drain_until_exit(process: subprocess.Popen[bytes], stdout_fd: int, output: 
 def run_verified_python(
     snapshot: Path, layout: Mapping[str, Any], mode: str, target: Path,
     argv: Sequence[str], *, runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
-    timeout: float = 30.0, stdout_limit: int = 8 * 1024 * 1024,
+    timeout: float = 300.0, stdout_limit: int = 8 * 1024 * 1024,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> tuple[int, bytes, dict[str, Any]]:
     """Run a gate only after parent verification at READY and DONE."""
+    if runner is subprocess.run:
+        require_pidfd_support()
     command_prefix = _private_python_command(snapshot, layout, PYTHON_GATE_BOOTSTRAP)
     if runner is not subprocess.run:
-        command = [*command_prefix, "-1", "-1", mode, str(target), *argv]
-        completed = runner(command, cwd=snapshot / "python-runtime", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False, env=dict(PYTHON_ENVIRONMENT))
+        command = [
+            *command_prefix, str(os.getpid()), "-1", "-1", mode,
+            str(target), *argv,
+        ]
+        completed = runner(
+            command, cwd=snapshot / "python-runtime",
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+            env=dict(PYTHON_ENVIRONMENT),
+        )
         expected_command_sha256 = sha256_bytes(_nul_argv(command))
         loader = snapshot / str(layout["loader"]["path"])
         parent_identity = capture_process_identity(os.getpid())
@@ -1659,9 +2102,15 @@ def run_verified_python(
     try:
         verified = verify_snapshot(snapshot)
         retained = _retained_snapshot_files(snapshot, verified)
-        command = [*command_prefix, str(control_w), str(release_r), mode, str(target), *argv]
-        process = subprocess.Popen(command, cwd=snapshot / "python-runtime", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   close_fds=True, pass_fds=(control_w, release_r), env=dict(PYTHON_ENVIRONMENT))
+        command = [
+            *command_prefix, str(os.getpid()), str(control_w), str(release_r),
+            mode, str(target), *argv,
+        ]
+        process = subprocess.Popen(
+            command, cwd=snapshot / "python-runtime", stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, close_fds=True,
+            pass_fds=(control_w, release_r), env=dict(PYTHON_ENVIRONMENT),
+        )
         pidfd = open_pidfd(process.pid)
         if pidfd is None:
             raise ProcessIntegrityError("verified Python pidfd is unavailable")
@@ -1670,28 +2119,30 @@ def run_verified_python(
         assert process.stdout is not None
         stdout_fd = process.stdout.fileno()
         os.set_blocking(control_r, False); os.set_blocking(stdout_fd, False)
-        deadline = time.monotonic() + timeout
-        ready = _read_frame(control_r, stdout_fd, deadline, output, limit=stdout_limit)
+        ready_deadline = time.monotonic() + timeout
+        ready = _read_frame(control_r, stdout_fd, ready_deadline, output, limit=stdout_limit,
+                            heartbeat_check=heartbeat_check)
         if (ready.get("phase") != "READY" or ready.get("mode") != mode
                 or ready.get("argv_sha256") != sha256_bytes(_nul_argv(argv))):
             raise ProcessIntegrityError("verified Python READY report is invalid")
         ready_identity, ready_maps = _validate_verified_python_process(
             process.pid, pidfd, snapshot, verified, retained, command
         )
-        if time.monotonic() > deadline:
+        if time.monotonic() > ready_deadline:
             raise ProcessIntegrityError("verified Python READY validation exceeded its deadline")
         os.write(release_w, b"R")
-        done = _read_frame(control_r, stdout_fd, deadline, output, limit=stdout_limit)
+        done = _read_frame(control_r, stdout_fd, None, output, limit=stdout_limit,
+                           heartbeat_check=heartbeat_check)
         if done.get("phase") != "DONE" or done.get("mode") != mode or type(done.get("rc")) is not int:
             raise ProcessIntegrityError("verified Python DONE report is invalid")
         done_identity, done_maps = _validate_verified_python_process(
             process.pid, pidfd, snapshot, verified, retained, command
         )
-        if time.monotonic() > deadline:
-            raise ProcessIntegrityError("verified Python DONE validation exceeded its deadline")
         os.write(release_w, b"R")
-        _drain_until_exit(process, stdout_fd, output, deadline, limit=stdout_limit)
-        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        teardown_deadline = time.monotonic() + 10.0
+        _drain_until_exit(process, stdout_fd, output, teardown_deadline, limit=stdout_limit,
+                          heartbeat_check=heartbeat_check)
+        process.wait(timeout=max(0.0, teardown_deadline - time.monotonic()))
         if process.returncode != done["rc"]:
             raise ProcessIntegrityError("verified Python exit status disagrees with DONE")
         verify_snapshot(snapshot)
@@ -1705,11 +2156,7 @@ def run_verified_python(
         }
     finally:
         if process is not None and process.poll() is None:
-            process.kill()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+            shutdown_spawned_child(process, pidfd)
         if pidfd is not None:
             os.close(pidfd)
         if retained is not None:
@@ -1743,6 +2190,7 @@ def preflight_python_runtime(
     snapshot: Path,
     *,
     runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Execute and prove the complete private Python authority before use."""
     before = verify_snapshot(snapshot)
@@ -1752,6 +2200,7 @@ def preflight_python_runtime(
     target = snapshot / before["by_role"]["runeio"]["path"]
     completed_returncode, output, lifecycle = run_verified_python(
         snapshot, layout, "preflight", target, [PYTHON_RUNTIME_PROBE], runner=runner,
+        heartbeat_check=heartbeat_check,
     )
     if completed_returncode != 0:
         raise CorpusError(
@@ -1987,35 +2436,41 @@ def shutdown_captured_child(
         raise CorpusError("owned child did not stop after descriptor KILL") from exc
 
 
-def parent_death_guard(expected_parent: int) -> Callable[[], None]:
-    """Return a pre-exec hook that arms Linux PR_SET_PDEATHSIG."""
-    def arm() -> None:
-        arm_parent_death(expected_parent)
-    return arm
+def shutdown_spawned_child(
+    process: subprocess.Popen[bytes], pidfd: int | None,
+) -> None:
+    """Bounded teardown before exec identity is available.
 
-
-def arm_parent_death(expected_parent: int) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != expected_parent:
-        os._exit(125)
-
-
-def _guard_exec(arguments: Sequence[str]) -> int:
-    if len(arguments) < 3 or arguments[1] != "--":
-        raise CorpusError("invalid guarded-exec invocation")
-    expected_parent = int(arguments[0])
-    command = list(arguments[2:])
-    if not command:
-        raise CorpusError("guarded-exec command is empty")
-    arm_parent_death(expected_parent)
-    os.environ.clear()
-    os.environ.update(ENGINE_ENVIRONMENT)
-    os.execv(command[0], command)
-    return 125
+    The pidfd captured immediately after fork names this exact child even when
+    it has not yet execed the authenticated engine, so it is the only safe
+    recovery authority in that narrow startup window.
+    """
+    if process.poll() is not None:
+        return
+    sender = getattr(signal, "pidfd_send_signal", None)
+    if pidfd is None or sender is None:
+        raise CorpusError("pre-auth child has no exact pidfd teardown authority")
+    try:
+        sender(pidfd, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        sender(pidfd, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired as exc:
+        raise CorpusError("pre-auth child did not stop after pidfd KILL") from exc
 
 
 def wait_for_exec_identity(
-    pid: int, executable: Path, expected_argv: bytes | None = None, timeout: float = 5.0
+    pid: int, executable: Path, expected_argv: bytes | None = None, timeout: float = 300.0
 ) -> ProcessIdentity:
     expected_hash = sha256_regular(executable)
     expected_path = executable.resolve(strict=True)
@@ -2093,7 +2548,7 @@ def preflight_ports(ports: Iterable[int]) -> None:
             sock.close()
 
 
-def next_attempt_directory(run_root: Path, map_name: str) -> tuple[int, Path]:
+def _next_attempt_path(run_root: Path, map_name: str) -> tuple[int, Path, Path]:
     if not MAP_NAME_RE.fullmatch(map_name):
         raise CorpusError(f"unsafe map name: {map_name!r}")
     reject_symlink_components(run_root)
@@ -2110,8 +2565,290 @@ def next_attempt_directory(run_root: Path, map_name: str) -> tuple[int, Path]:
             attempts.append(int(match.group(1)))
     number = max(attempts, default=0) + 1
     attempt = map_root / f"attempt-{number:04d}"
+    return number, map_root, attempt
+
+
+def next_attempt_directory(run_root: Path, map_name: str) -> tuple[int, Path]:
+    number, _map_root, attempt = _next_attempt_path(run_root, map_name)
     attempt.mkdir(mode=0o700)
     return number, attempt
+
+
+@dataclasses.dataclass(frozen=True)
+class MapWork:
+    kind: str
+    source_artifact: Mapping[str, Any] | None
+    rejection_result: str | None
+
+
+def _intent_record_path(run_root: Path, attempt: Path) -> str:
+    return str((attempt / "intent.json").relative_to(run_root))
+
+
+def write_attempt_intent(
+    run_root: Path,
+    attempt: Path,
+    *,
+    fingerprint: str,
+    map_name: str,
+    stable_port: int,
+    attempt_number: int,
+    work: MapWork,
+) -> dict[str, Any]:
+    if work.kind not in ATTEMPT_KINDS:
+        raise CorpusError("attempt intent kind is invalid")
+    source = None if work.source_artifact is None else {
+        key: work.source_artifact[key]
+        for key in ("path", "mode", "size", "sha256", "role")
+    }
+    if work.kind == "generated_missing":
+        if source is not None or work.rejection_result is not None:
+            raise CorpusError("missing-generation intent has unexpected provenance")
+    elif source is None:
+        raise CorpusError("adoption intent lacks its frozen source artifact")
+    if work.kind == "generated_replacement" and work.rejection_result is None:
+        raise CorpusError("replacement intent lacks its rejected adoption result")
+    if work.kind == "adopted_validation" and work.rejection_result is not None:
+        raise CorpusError("adoption intent has unexpected rejection provenance")
+    intent = {
+        "format": ATTEMPT_INTENT_FORMAT,
+        "fingerprint": fingerprint,
+        "map": map_name,
+        "stable_port": stable_port,
+        "attempt": attempt_number,
+        "kind": work.kind,
+        "created_at": utc_now(),
+        "source_artifact": source,
+        "rejection_result": work.rejection_result,
+    }
+    atomic_write_json(attempt / "intent.json", intent, mode=0o444)
+    return intent
+
+
+def create_attempt_with_intent(
+    run_root: Path,
+    *,
+    fingerprint: str,
+    map_name: str,
+    stable_port: int,
+    work: MapWork,
+) -> tuple[int, Path, dict[str, Any]]:
+    """Publish an intent-bearing attempt atomically; never leave a guessed kind."""
+    number, map_root, attempt = _next_attempt_path(run_root, map_name)
+    temporary = Path(tempfile.mkdtemp(prefix=f".attempt-{number:04d}-", dir=map_root))
+    try:
+        intent = write_attempt_intent(
+            run_root, temporary, fingerprint=fingerprint, map_name=map_name,
+            stable_port=stable_port, attempt_number=number, work=work,
+        )
+        fsync_tree(temporary)
+        os.rename(temporary, attempt)
+        fsync_tree(map_root)
+    except BaseException:
+        if temporary.exists() and not (temporary / "intent.json").exists():
+            debris = list(temporary.iterdir())
+            if all(
+                child.is_file() and not child.is_symlink()
+                and re.fullmatch(r"\.intent\.json\.[A-Za-z0-9_-]+", child.name)
+                for child in debris
+            ):
+                shutil.rmtree(temporary)
+        raise
+    return number, attempt, intent
+
+
+def _load_attempt_intent(
+    run_root: Path,
+    attempt: Path,
+    *,
+    fingerprint: str,
+    map_name: str,
+    stable_port: int,
+    attempt_number: int,
+) -> dict[str, Any]:
+    intent, raw = _load_json_regular(attempt / "intent.json")
+    if (
+        not isinstance(intent, dict)
+        or set(intent) != ATTEMPT_INTENT_FIELDS
+        or raw != canonical_json(intent)
+        or intent.get("format") != ATTEMPT_INTENT_FORMAT
+        or intent.get("fingerprint") != fingerprint
+        or intent.get("map") != map_name
+        or intent.get("stable_port") != stable_port
+        or intent.get("attempt") != attempt_number
+        or intent.get("kind") not in ATTEMPT_KINDS
+        or not _is_timestamp(intent.get("created_at"))
+    ):
+        raise CorpusError("attempt intent is invalid")
+    source = intent["source_artifact"]
+    rejection = intent["rejection_result"]
+    if intent["kind"] == "generated_missing":
+        if source is not None or rejection is not None:
+            raise CorpusError("missing-generation intent has invalid provenance")
+    else:
+        if not isinstance(source, dict) or set(source) != {
+                "path", "mode", "size", "sha256", "role"}:
+            raise CorpusError("adoption intent has invalid source artifact")
+        if intent["kind"] == "generated_replacement":
+            if not isinstance(rejection, str) or not rejection:
+                raise CorpusError("replacement intent has invalid rejection provenance")
+            _safe_logical_path(rejection)
+        elif rejection is not None:
+            raise CorpusError("adoption intent has invalid rejection provenance")
+    return intent
+
+
+def promote_pending_attempts(
+    run_root: Path, map_name: str, *, fingerprint: str, stable_port: int,
+) -> None:
+    """Promote a durable hidden intent directory after an interrupted rename."""
+    map_root = run_root / "runs" / map_name
+    if not map_root.exists():
+        return
+    for temporary in sorted(map_root.glob(".attempt-*-*")):
+        match = re.fullmatch(r"\.attempt-([0-9]{4,})-[A-Za-z0-9_-]+", temporary.name)
+        if match is None or not temporary.is_dir() or temporary.is_symlink():
+            raise CorpusError("invalid hidden attempt entry")
+        number = int(match.group(1))
+        intent_path = temporary / "intent.json"
+        if not intent_path.exists():
+            debris = list(temporary.iterdir())
+            if not debris or not all(
+                child.is_file() and not child.is_symlink()
+                and re.fullmatch(r"\.intent\.json\.[A-Za-z0-9_-]+", child.name)
+                for child in debris
+            ):
+                raise CorpusError("hidden attempt lacks intent and has unexpected content")
+            for child in debris:
+                child.unlink()
+            temporary.rmdir()
+            continue
+        _load_attempt_intent(
+            run_root, temporary, fingerprint=fingerprint, map_name=map_name,
+            stable_port=stable_port, attempt_number=number,
+        )
+        destination = map_root / f"attempt-{number:04d}"
+        if destination.exists() or destination.is_symlink():
+            raise CorpusError("hidden intent attempt conflicts with canonical attempt")
+        os.rename(temporary, destination)
+        fsync_tree(map_root)
+
+
+def load_map_history(
+    run_root: Path,
+    map_name: str,
+    *,
+    fingerprint: str,
+    stable_port: int,
+) -> list[dict[str, Any]]:
+    map_root = run_root / "runs" / map_name
+    if not map_root.exists():
+        return []
+    promote_pending_attempts(
+        run_root, map_name, fingerprint=fingerprint, stable_port=stable_port,
+    )
+    reject_symlink_components(map_root)
+    history: list[dict[str, Any]] = []
+    for attempt in sorted(map_root.glob("attempt-*")):
+        match = re.fullmatch(r"attempt-([0-9]{4,})", attempt.name)
+        if match is None or not attempt.is_dir() or attempt.is_symlink():
+            raise CorpusError("map history has an invalid attempt directory")
+        number = int(match.group(1))
+        intent = _load_attempt_intent(
+            run_root, attempt, fingerprint=fingerprint, map_name=map_name,
+            stable_port=stable_port, attempt_number=number,
+        )
+        result_path = attempt / "result.json"
+        result = None
+        commit = _attempt_commit_path(run_root, map_name, number)
+        abort = _attempt_abort_path(run_root, map_name, number)
+        has_commit = commit.exists() or commit.is_symlink()
+        has_abort = abort.exists() or abort.is_symlink()
+        if has_commit and has_abort:
+            raise CorpusError("attempt has conflicting external authorities")
+        if (has_commit or has_abort) and not result_path.exists():
+            raise CorpusError("external attempt authority has no frozen result")
+        if result_path.exists() or result_path.is_symlink():
+            if not has_commit:
+                if not has_abort or abort.is_symlink():
+                    raise CorpusError("frozen pending result has no recovery authority")
+                _validate_attempt_abort(run_root, map_name, attempt, number)
+                history.append({
+                    "attempt": number, "path": attempt, "intent": intent,
+                    "result": None, "aborted": True,
+                })
+                continue
+            result, raw = _load_json_regular(result_path)
+            if not isinstance(result, dict) or raw != canonical_json(result):
+                raise CorpusError("attempt result is not canonical")
+            _validate_attempt_commit(run_root, map_name, attempt, number)
+            _validate_terminal_schema(
+                result, run_root=run_root, attempt=attempt, map_name=map_name,
+                fingerprint=fingerprint, stable_port=stable_port,
+            )
+        history.append({
+            "attempt": number,
+            "path": attempt,
+            "intent": intent,
+            "result": result,
+        })
+    for directory_name in ("commits", "aborts"):
+        directory = map_root / directory_name
+        if not directory.exists():
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            raise CorpusError("attempt authority directory is invalid")
+        for authority in directory.iterdir():
+            match = re.fullmatch(r"attempt-([0-9]{4,})\.json", authority.name)
+            if match is None or authority.is_symlink() or not authority.is_file():
+                raise CorpusError("attempt authority record is invalid")
+            if not (map_root / f"attempt-{int(match.group(1)):04d}").is_dir():
+                raise CorpusError("orphan external attempt authority")
+    accepted = [
+        item for item in history
+        if isinstance(item["result"], dict)
+        and item["result"].get("classification") in SUCCESS_CLASSIFICATIONS
+    ]
+    if accepted and history[-1] is not accepted[-1]:
+        raise CorpusError("map history contains an attempt after acceptance")
+    return history
+
+
+def decide_map_work(
+    map_name: str,
+    history: Sequence[Mapping[str, Any]],
+    *,
+    run_root: Path,
+    adopted_runes: Mapping[str, Mapping[str, Any]],
+) -> MapWork | None:
+    adopted = adopted_runes.get(map_name)
+    if any(
+        isinstance(item.get("result"), Mapping)
+        and item["result"].get("classification") in SUCCESS_CLASSIFICATIONS
+        for item in history
+    ):
+        return None
+    if adopted is None:
+        return MapWork("generated_missing", None, None)
+    replacement = [
+        item for item in history
+        if item["intent"]["kind"] == "generated_replacement"
+    ]
+    if replacement:
+        return None
+    rejected = [
+        item for item in history
+        if item["intent"]["kind"] == "adopted_validation"
+        and isinstance(item.get("result"), Mapping)
+        and item["result"].get("disposition") == "artifact_rejected"
+    ]
+    if rejected:
+        result_path = Path(rejected[-1]["path"]) / "result.json"
+        return MapWork(
+            "generated_replacement", adopted,
+            str(result_path.relative_to(run_root)),
+        )
+    return MapWork("adopted_validation", adopted, None)
 
 
 def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path) -> dict[str, Any]:
@@ -2209,7 +2946,7 @@ def validate_gate_agreement(
     c_make_output: bytes,
     python_output: bytes,
     map_name: str,
-    banner_counts: Mapping[str, int],
+    banner_counts: Mapping[str, int] | None,
 ) -> dict[str, int]:
     gnu_report = _gate_report(c_gnu_output, "GNU C gate")
     make_report = _gate_report(c_make_output, "Make C gate")
@@ -2237,9 +2974,10 @@ def validate_gate_agreement(
         "inventory_edge_count": "inventory_edges",
         "plan_count": "plans",
     }
-    for report_name, banner_name in banner_mapping.items():
-        if py_report[report_name] != banner_counts.get(banner_name):
-            raise CorpusError(f"generator/{report_name} count mismatch")
+    if banner_counts is not None:
+        for report_name, banner_name in banner_mapping.items():
+            if py_report[report_name] != banner_counts.get(banner_name):
+                raise CorpusError(f"generator/{report_name} count mismatch")
     return {field: py_report[field] for field in REPORT_FIELDS}
 
 
@@ -2255,10 +2993,69 @@ def semantic_checkers_for_map(
     ]
 
 
+def _run_guarded_gate(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    heartbeat_check: Callable[[], None] | None,
+    pass_fds: Sequence[int] = (),
+    deadline: float | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one C acceptor with parent-death protection and liveness polling."""
+    require_pidfd_support()
+    if deadline is not None and deadline <= 0:
+        raise GateIntegrityError("guarded C gate deadline must be positive")
+    process = subprocess.Popen(
+        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        close_fds=True, pass_fds=tuple(pass_fds), env=dict(ACCEPTOR_ENVIRONMENT),
+    )
+    pidfd = open_pidfd(process.pid)
+    if pidfd is None:
+        shutdown_spawned_child(process, None)
+        raise GateIntegrityError("guarded C gate has no pidfd")
+    if process.stdout is None:
+        shutdown_spawned_child(process, pidfd)
+        os.close(pidfd)
+        raise GateIntegrityError("guarded C gate has no captured stdout")
+    stdout_fd = process.stdout.fileno()
+    os.set_blocking(stdout_fd, False)
+    selector = selectors.DefaultSelector()
+    selector.register(stdout_fd, selectors.EVENT_READ)
+    output = bytearray()
+    expires_at = time.monotonic() + deadline if deadline is not None else None
+    try:
+        while process.poll() is None or selector.get_map():
+            if heartbeat_check is not None:
+                heartbeat_check()
+            remaining = None if expires_at is None else expires_at - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise GateIntegrityError("guarded C gate did not exit by its deadline")
+            for key, _event in selector.select(
+                0.1 if remaining is None else min(0.1, remaining)
+            ):
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fd)
+                    continue
+                output.extend(chunk)
+                if len(output) > 8 * 1024 * 1024:
+                    raise GateIntegrityError("guarded C gate stdout exceeds bounded evidence limit")
+        return subprocess.CompletedProcess(command, process.returncode, bytes(output))
+    finally:
+        selector.close()
+        if process.poll() is None:
+            shutdown_spawned_child(process, pidfd)
+        process.stdout.close()
+        os.close(pidfd)
+
+
 def run_gates(
     artifact: Path,
     map_name: str,
-    banner_counts: Mapping[str, int],
+    banner_counts: Mapping[str, int] | None,
     *,
     acceptor_gnu: Path,
     acceptor_make: Path,
@@ -2267,9 +3064,11 @@ def run_gates(
     runelint: Path,
     objective_roots: Mapping[str, int] | None = None,
     semantic_checkers: Sequence[tuple[str, Path]] = (),
+    reader_only: bool = False,
     log_directory: Path | None,
     runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     fingerprint: str | None = None,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     before = regular_file_record(artifact)
     snapshot = python_interpreter.parents[2]
@@ -2277,7 +3076,7 @@ def run_gates(
         verified = verify_snapshot(snapshot)
     except CorpusError:
         if runner is subprocess.run:
-            raise
+            raise GateIntegrityError("frozen snapshot verification failed") from None
         # Focused fake-only callers may supply isolated paths without a full
         # snapshot.  Production calls cannot take this branch.
         verified = None
@@ -2307,23 +3106,43 @@ def run_gates(
         }
         atomic_write_json(log_directory / f"gate-{label}.integrity.json", document)
     for label, command in commands:
-        completed = runner(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-            env=dict(ACCEPTOR_ENVIRONMENT),
-        )
+        guarded_command = command
+        guarded_cwd: Path | None = None
+        if runner is subprocess.run:
+            if layout is None:
+                raise GateIntegrityError("production C gate has no verified runtime")
+            guarded_command = _private_python_command(
+                snapshot, layout, GUARD_BOOTSTRAP,
+                str(os.getpid()), "--", *command,
+            )
+            guarded_cwd = snapshot / "python-runtime"
+        if runner is subprocess.run:
+            assert guarded_cwd is not None
+            completed = _run_guarded_gate(
+                guarded_command, cwd=guarded_cwd,
+                heartbeat_check=heartbeat_check,
+            )
+        else:
+            completed = runner(
+                guarded_command,
+                cwd=guarded_cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                env=dict(ACCEPTOR_ENVIRONMENT),
+            )
         output = bytes(completed.stdout or b"")
         outputs[label] = output
         if log_directory is not None:
             path = log_directory / f"gate-{label}.log"
             atomic_write_bytes(path, output)
             log_records[label] = regular_file_record(path)
-        if completed.returncode != 0:
-            raise CorpusError(f"{label} gate exited {completed.returncode}")
         if regular_file_record(artifact) != before:
             raise GateIntegrityError(f"artifact changed during {label} gate")
+        if completed.returncode != 0:
+            if completed.returncode == 1:
+                raise ArtifactRejectedError(f"{label} gate rejected the artifact")
+            raise GateIntegrityError(f"{label} gate exited {completed.returncode}")
     lint_arguments = [str(artifact)]
     if objective_roots is not None:
         if set(objective_roots) != {"red", "blue"}:
@@ -2334,10 +3153,11 @@ def run_gates(
         ]
     python_gates: list[tuple[str, Path, list[str]]] = [
         ("python", runeio, [str(artifact)]),
-        ("lint", runelint, lint_arguments),
     ]
+    if not reader_only:
+        python_gates.append(("lint", runelint, lint_arguments))
     semantic_labels: list[str] = []
-    if semantic_checkers:
+    if semantic_checkers and not reader_only:
         if objective_roots is None or set(objective_roots) != {"red", "blue"}:
             raise GateIntegrityError("semantic gates require exact objective roots")
         for name, target in semantic_checkers:
@@ -2367,7 +3187,8 @@ def run_gates(
                 rc, output, lifecycle = completed.returncode, bytes(completed.stdout or b""), {"ready": None, "done": None}
             else:
                 rc, output, lifecycle = run_verified_python(
-                    snapshot, layout, label, target, target_arguments, runner=runner
+                    snapshot, layout, label, target, target_arguments, runner=runner,
+                    heartbeat_check=heartbeat_check,
                 )
         except CorpusError as exc:
             write_integrity(label, lifecycle, None, str(exc), gate_started)
@@ -2378,25 +3199,30 @@ def run_gates(
             atomic_write_bytes(path, output)
             log_records[label] = regular_file_record(path)
         write_integrity(label, lifecycle, rc, None, gate_started)
-        if rc != 0:
-            raise CorpusError(f"{label} gate exited {rc}")
         if regular_file_record(artifact) != before:
             raise GateIntegrityError(f"artifact changed during {label} gate")
+        if rc == 1:
+            raise ArtifactRejectedError(f"{label} gate rejected the artifact")
+        if rc != 0:
+            raise GateIntegrityError(f"{label} gate exited {rc}")
         if label.startswith("semantic-"):
             try:
                 semantic_report = json.loads(output)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise CorpusError(f"{label} did not emit one JSON report") from exc
+                raise GateIntegrityError(f"{label} did not emit one JSON report") from exc
             if not isinstance(semantic_report, dict) or semantic_report.get("map_name") != map_name:
-                raise CorpusError(f"{label} report map mismatch")
-    decoded = validate_gate_agreement(
-        outputs["c_gnu"], outputs["c_make"], outputs["python"],
-        map_name, banner_counts,
-    )
-    python_report = _gate_report(outputs["python"], "Python gate")
-    route_contract = python_report.get("route_contract")
-    if route_contract not in ROUTE_CONTRACTS:
-        raise CorpusError("Python gate has invalid route_contract")
+                raise GateIntegrityError(f"{label} report map mismatch")
+    try:
+        decoded = validate_gate_agreement(
+            outputs["c_gnu"], outputs["c_make"], outputs["python"],
+            map_name, banner_counts,
+        )
+        python_report = _gate_report(outputs["python"], "Python gate")
+        route_contract = python_report.get("route_contract")
+        if route_contract not in ROUTE_CONTRACTS:
+            raise CorpusError("Python gate has invalid route_contract")
+    except CorpusError as exc:
+        raise GateIntegrityError(str(exc)) from exc
     return {
         "decoded_counts": decoded,
         "route_contract": route_contract,
@@ -2414,6 +3240,97 @@ def _relative_evidence_record(path: Path, run_root: Path) -> dict[str, Any]:
     except ValueError as exc:
         raise CorpusError(f"evidence is outside run root: {path}") from exc
     return regular_file_record(resolved, logical_path=relative)
+
+
+def _attempt_commit_path(run_root: Path, map_name: str, attempt_number: int) -> Path:
+    return run_root / "runs" / map_name / "commits" / f"attempt-{attempt_number:04d}.json"
+
+
+def _attempt_commit_value(
+    run_root: Path, map_name: str, attempt: Path, attempt_number: int
+) -> dict[str, Any]:
+    return {
+        "format": ATTEMPT_COMMIT_FORMAT,
+        "attempt": attempt_number,
+        "result": _relative_evidence_record(attempt / "result.json", run_root),
+    }
+
+
+def _publish_attempt_commit(
+    run_root: Path, map_name: str, attempt: Path, attempt_number: int
+) -> None:
+    commit = _attempt_commit_path(run_root, map_name, attempt_number)
+    abort = _attempt_abort_path(run_root, map_name, attempt_number)
+    if abort.exists() or abort.is_symlink():
+        raise CorpusError("attempt commit conflicts with abort authority")
+    value = _attempt_commit_value(run_root, map_name, attempt, attempt_number)
+    if commit.exists() or commit.is_symlink():
+        stored, raw = _load_json_regular(commit)
+        if stored != value or raw != canonical_json(value):
+            raise CorpusError("attempt commit disagrees with frozen result")
+        fsync_tree(commit.parent.parent)
+        return
+    atomic_write_json(commit, value, mode=0o444)
+    fsync_tree(commit.parent.parent)
+
+
+def _validate_attempt_commit(
+    run_root: Path, map_name: str, attempt: Path, attempt_number: int
+) -> None:
+    commit = _attempt_commit_path(run_root, map_name, attempt_number)
+    abort = _attempt_abort_path(run_root, map_name, attempt_number)
+    if abort.exists() or abort.is_symlink():
+        raise CorpusError("attempt commit conflicts with abort authority")
+    value, raw = _load_json_regular(commit)
+    expected = _attempt_commit_value(run_root, map_name, attempt, attempt_number)
+    if value != expected or raw != canonical_json(expected):
+        raise CorpusError("attempt commit disagrees with frozen result")
+
+
+def _attempt_abort_path(run_root: Path, map_name: str, attempt_number: int) -> Path:
+    return run_root / "runs" / map_name / "aborts" / f"attempt-{attempt_number:04d}.json"
+
+
+def _publish_attempt_abort(
+    run_root: Path, map_name: str, attempt: Path, attempt_number: int
+) -> None:
+    value = {
+        "format": ATTEMPT_ABORT_FORMAT,
+        "attempt": attempt_number,
+        "intent": _relative_evidence_record(attempt / "intent.json", run_root),
+        "pending_result": _relative_evidence_record(attempt / "result.json", run_root),
+    }
+    path = _attempt_abort_path(run_root, map_name, attempt_number)
+    commit = _attempt_commit_path(run_root, map_name, attempt_number)
+    if commit.exists() or commit.is_symlink():
+        raise CorpusError("attempt abort conflicts with commit authority")
+    if path.exists() or path.is_symlink():
+        stored, raw = _load_json_regular(path)
+        if stored != value or raw != canonical_json(value):
+            raise CorpusError("attempt abort disagrees with frozen pending result")
+        fsync_tree(path.parent.parent)
+        return
+    atomic_write_json(path, value, mode=0o444)
+    fsync_tree(path.parent.parent)
+
+
+def _validate_attempt_abort(
+    run_root: Path, map_name: str, attempt: Path, attempt_number: int
+) -> None:
+    """Bind a frozen, uncommitted result to the external retry authority."""
+    path = _attempt_abort_path(run_root, map_name, attempt_number)
+    commit = _attempt_commit_path(run_root, map_name, attempt_number)
+    if commit.exists() or commit.is_symlink():
+        raise CorpusError("attempt abort conflicts with commit authority")
+    value, raw = _load_json_regular(path)
+    expected = {
+        "format": ATTEMPT_ABORT_FORMAT,
+        "attempt": attempt_number,
+        "intent": _relative_evidence_record(attempt / "intent.json", run_root),
+        "pending_result": _relative_evidence_record(attempt / "result.json", run_root),
+    }
+    if value != expected or raw != canonical_json(expected):
+        raise CorpusError("attempt abort disagrees with frozen pending result")
 
 
 def _validate_evidence_record(run_root: Path, record: Mapping[str, Any]) -> Path:
@@ -2583,6 +3500,8 @@ def _validate_terminal_schema(
 ) -> Path:
     if set(value) != TERMINAL_RESULT_FIELDS:
         raise CorpusError("terminal result has an incomplete or extra field set")
+    if value["format"] != TERMINAL_RESULT_FORMAT:
+        raise CorpusError("terminal result has an invalid format")
     if value["map"] != map_name or value["fingerprint"] != fingerprint:
         raise CorpusError("terminal result identity mismatch")
     if value["stable_port"] != stable_port:
@@ -2592,17 +3511,46 @@ def _validate_terminal_schema(
         raise CorpusError("terminal result has invalid attempt")
     if attempt.name != f"attempt-{attempt_number:04d}":
         raise CorpusError("terminal result attempt path mismatch")
+    intent = _load_attempt_intent(
+        run_root, attempt, fingerprint=fingerprint, map_name=map_name,
+        stable_port=stable_port, attempt_number=attempt_number,
+    )
+    if value["attempt_kind"] != intent["kind"]:
+        raise CorpusError("terminal result kind disagrees with immutable intent")
+    if value["intent_record"] != _intent_record_path(run_root, attempt):
+        raise CorpusError("terminal result intent record mismatch")
+    if value["provenance"] != {
+        "source_artifact": intent["source_artifact"],
+        "rejection_result": intent["rejection_result"],
+    }:
+        raise CorpusError("terminal result provenance disagrees with immutable intent")
     classification = value["classification"]
     if classification not in TERMINAL_CLASSIFICATIONS:
         raise CorpusError("terminal result has invalid classification")
+    disposition = value["disposition"]
+    if disposition not in ATTEMPT_DISPOSITIONS:
+        raise CorpusError("terminal result has invalid disposition")
+    if classification in SUCCESS_CLASSIFICATIONS:
+        expected_disposition = "accepted"
+    elif value["attempt_kind"] == "adopted_validation" and classification in {
+        "LINT_FAIL", "GEN_FAIL",
+    }:
+        expected_disposition = "artifact_rejected"
+    else:
+        expected_disposition = "infra_failed"
+    if disposition != expected_disposition:
+        raise CorpusError("terminal result disposition disagrees with outcome")
     if not _is_timestamp(value["started_at"]) or not _is_timestamp(value["ended_at"]):
         raise CorpusError("terminal result has invalid lifecycle timestamps")
     if not isinstance(value["detail"], str) or not value["detail"]:
         raise CorpusError("terminal result has invalid detail")
     if value["normalized_signature"] != normalized_signature(classification, value["detail"]):
         raise CorpusError("terminal result normalized signature mismatch")
-    if not _is_sha256(value["command_sha256"]):
+    generation_kind = value["attempt_kind"] != "adopted_validation"
+    if generation_kind and not _is_sha256(value["command_sha256"]):
         raise CorpusError("terminal result has invalid command hash")
+    if not generation_kind and value["command_sha256"] is not None:
+        raise CorpusError("adopted result has a generation command")
 
     records = value["evidence"]
     if not isinstance(records, list) or not records:
@@ -2619,29 +3567,43 @@ def _validate_terminal_schema(
         raise CorpusError("terminal result evidence set is incomplete")
 
     owner = attempt / "owner.json"
-    if value["owner_record"] != str(owner.relative_to(run_root)) or owner not in paths:
+    if not generation_kind:
+        if (
+            value["owner_record"] is not None
+            or value["server_log_sha256"] is not None
+            or owner in paths
+            or (attempt / "server.log") in paths
+        ):
+            raise CorpusError("adopted result contains generation evidence")
+        identity = None
+    elif value["owner_record"] != str(owner.relative_to(run_root)) or owner not in paths:
         raise CorpusError("terminal result owner record mismatch")
-    owner_value, _owner_raw = _load_json_regular(owner)
+    if generation_kind:
+        owner_value, _owner_raw = _load_json_regular(owner)
+    else:
+        owner_value = None
     owner_fields = {
         "fingerprint", "map", "attempt", "created_at", "process",
         "pidfd_captured", "command_sha256",
     }
-    if not isinstance(owner_value, dict) or set(owner_value) != owner_fields or (
-        owner_value.get("fingerprint") != fingerprint
+    if generation_kind and (
+        not isinstance(owner_value, dict)
+        or set(owner_value) != owner_fields
+        or owner_value.get("fingerprint") != fingerprint
         or owner_value.get("map") != map_name
         or owner_value.get("attempt") != attempt_number
     ):
         raise CorpusError("terminal result owner identity mismatch")
-    if (
+    if generation_kind and (
         not _is_timestamp(owner_value["created_at"])
         or type(owner_value["pidfd_captured"]) is not bool
         or not _is_sha256(owner_value["command_sha256"])
         or owner_value["command_sha256"] != value["command_sha256"]
     ):
         raise CorpusError("terminal result owner lifecycle mismatch")
-    process_value = owner_value["process"]
+    process_value = owner_value["process"] if generation_kind else None
     if process_value is None:
-        if classification != "INFRA_FAIL" or owner_value["pidfd_captured"]:
+        if generation_kind and (classification != "INFRA_FAIL" or owner_value["pidfd_captured"]):
             raise CorpusError("only pre-identity INFRA_FAIL may lack a process")
     else:
         try:
@@ -2672,20 +3634,28 @@ def _validate_terminal_schema(
             )
 
     server_log = attempt / "server.log"
-    if server_log not in paths or not _is_sha256(value["server_log_sha256"]):
-        raise CorpusError("terminal result lacks a server log")
-    if value["server_log_sha256"] != sha256_regular(server_log):
-        raise CorpusError("terminal result server log hash mismatch")
+    if generation_kind:
+        if server_log not in paths or not _is_sha256(value["server_log_sha256"]):
+            raise CorpusError("terminal result lacks a server log")
+        if value["server_log_sha256"] != sha256_regular(server_log):
+            raise CorpusError("terminal result server log hash mismatch")
 
     artifact_record = value["artifact"]
     if artifact_record is None:
         if value["artifact_sha256"] is not None or value["route_contract"] is not None:
             raise CorpusError("terminal result has an orphan artifact hash")
-        artifact = server_log
+        artifact = server_log if generation_kind else attempt / "missing-artifact"
     else:
         artifact = _validate_evidence_record(run_root, artifact_record)
         if artifact not in paths or value["artifact_sha256"] != artifact_record["sha256"]:
             raise CorpusError("terminal result artifact mismatch")
+    if not generation_kind and artifact_record is not None:
+        source = value["provenance"]["source_artifact"]
+        if (
+            artifact_record["sha256"] != source["sha256"]
+            or artifact_record["size"] != source["size"]
+        ):
+            raise CorpusError("adopted artifact differs from its frozen candidate")
 
     roots = value["objective_roots"]
     banner = value["banner_counts"]
@@ -2698,6 +3668,15 @@ def _validate_terminal_schema(
     )
     if banner is not None and not _exact_nonnegative_ints(banner, banner_fields):
         raise CorpusError("terminal result has invalid banner counts")
+    generation_report = value["generation_report"]
+    if generation_kind:
+        expected_report = (
+            None if roots is None else {"objective_roots": roots, "banner_counts": banner}
+        )
+        if generation_report != expected_report:
+            raise CorpusError("generated result has an invalid generation report")
+    elif generation_report is not None:
+        raise CorpusError("adopted result fakes generation evidence")
 
     if classification in SUCCESS_CLASSIFICATIONS:
         if artifact_record is None or roots is None or banner is None:
@@ -2830,15 +3809,21 @@ def _validate_terminal_schema(
             or Path(cold_identity.executable) != cold_engine
             or cold_identity.executable_sha256 != sha256_regular(cold_engine)
             or cold_identity.cmdline_sha256 != value["cold_load_command_sha256"]
-            or (cold_identity.pid, cold_identity.boot_id, cold_identity.start_ticks)
-            == (identity.pid, identity.boot_id, identity.start_ticks)
+            or (
+                generation_kind
+                and identity is not None
+                and (cold_identity.pid, cold_identity.boot_id, cold_identity.start_ticks)
+                == (identity.pid, identity.boot_id, identity.start_ticks)
+            )
         ):
             raise CorpusError("PASS fresh cold-load is not a distinct authenticated process")
         try:
             cold_text = cold_log.read_text(encoding="utf-8", errors="strict")
         except UnicodeDecodeError as exc:
             raise CorpusError("PASS fresh cold-load log is not valid UTF-8") from exc
-        parse_cold_load_log(cold_text, map_name, banner, route_contract)
+        cold_runtime = parse_cold_load_log(cold_text, map_name, banner, route_contract)
+        if cold_runtime["objective_roots"] != roots:
+            raise CorpusError("fresh cold-load roots disagree with stored roots")
         validate_cold_load_snag_attestation(
             cold_text,
             map_name,
@@ -2873,10 +3858,14 @@ def _recheck_pass_gates(
     artifact: Path,
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]],
     runtime_preflighted: bool = False,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> None:
     # One caller-owned preflight may cover a bounded validation transaction.
     if not runtime_preflighted:
-        preflight_python_runtime(snapshot, runner=gate_runner)
+        preflight_python_runtime(
+            snapshot, runner=gate_runner,
+            heartbeat_check=heartbeat_check,
+        )
     verified = verify_snapshot(snapshot)
     roles = verified["by_role"]
     interpreter = snapshot / verified["python_runtime"]["interpreter"]["path"]
@@ -2896,6 +3885,7 @@ def _recheck_pass_gates(
         log_directory=None,
         runner=gate_runner,
         fingerprint=str(result["fingerprint"]),
+        heartbeat_check=heartbeat_check,
     )
     if (
         checked["decoded_counts"] != result["decoded_counts"]
@@ -2916,6 +3906,7 @@ def validate_resumable_pass(
     snapshot: Path,
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     runtime_preflighted: bool = False,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> bool:
     if not result_path.exists():
         return False
@@ -2948,6 +3939,7 @@ def validate_resumable_pass(
             gate_runner=gate_runner,
             recheck_pass_gates=True,
             runtime_preflighted=runtime_preflighted,
+            heartbeat_check=heartbeat_check,
         )
         if validated is None:
             raise GateIntegrityError("stored PASS result failed integrity validation")
@@ -2972,7 +3964,11 @@ def normalized_signature(classification: str, detail: str) -> str:
     return sha256_bytes(f"{classification}:{normalized}".encode("utf-8"))[:24]
 
 
-def publish_result(run_root: Path, map_name: str, result: Mapping[str, Any], attempt: Path) -> Path:
+def publish_result(
+    run_root: Path, map_name: str, result: Mapping[str, Any], attempt: Path,
+    *, held_log_bindings: Sequence[tuple[IncrementalLineReader, Mapping[str, int | str]]] = (),
+    validate_pending: bool = False,
+) -> Path:
     if result.get("classification") not in TERMINAL_CLASSIFICATIONS:
         raise CorpusError("cannot publish a nonterminal classification")
     published = json.loads(json.dumps(result))
@@ -2985,9 +3981,23 @@ def publish_result(run_root: Path, map_name: str, result: Mapping[str, Any], att
     # Preserve the complete terminal record with the immutable attempt as well
     # as at the per-map resume pointer.  A later attempt may advance the
     # pointer, but can never erase the prior record.
-    atomic_write_json(attempt / "result.json", published)
+    atomic_write_json(attempt / "result.json", published, mode=0o444)
     freeze_tree(attempt)
     fsync_tree(attempt)
+    for reader, record in held_log_bindings:
+        reader.verify_named_record(record)
+    if validate_pending:
+        _validate_terminal_schema(
+            published,
+            run_root=run_root,
+            attempt=attempt,
+            map_name=map_name,
+            fingerprint=str(published.get("fingerprint", "")),
+            stable_port=int(published.get("stable_port", 0)),
+        )
+    _publish_attempt_commit(
+        run_root, map_name, attempt, int(published.get("attempt", 0))
+    )
     result_path = run_root / "runs" / map_name / "result.json"
     atomic_write_json(result_path, published)
     return result_path
@@ -3005,6 +4015,7 @@ def validate_terminal_result(
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     recheck_pass_gates: bool = True,
     runtime_preflighted: bool = False,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> tuple[dict[str, Any], bytes] | None:
     """Validate one terminal pointer and every immutable referenced byte."""
     try:
@@ -3019,6 +4030,7 @@ def validate_terminal_result(
         attempt_value, attempt_raw = _load_json_regular(attempt / "result.json")
         if attempt_raw != raw or attempt_value != value:
             return None
+        _validate_attempt_commit(run_root, map_name, attempt, attempt_number)
         artifact = _validate_terminal_schema(
             value,
             run_root=run_root,
@@ -3044,6 +4056,7 @@ def validate_terminal_result(
                     artifact=artifact,
                     gate_runner=gate_runner,
                     runtime_preflighted=runtime_preflighted,
+                    heartbeat_check=heartbeat_check,
                 )
         return value, raw
     except (CorpusError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -3064,6 +4077,7 @@ def regenerate_reports(
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     recheck_pass_gates: bool = True,
     runtime_preflighted: bool = False,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
@@ -3080,6 +4094,7 @@ def regenerate_reports(
             gate_runner=gate_runner,
             recheck_pass_gates=recheck_pass_gates,
             runtime_preflighted=runtime_preflighted,
+            heartbeat_check=heartbeat_check,
         )
         if validated is None:
             continue
@@ -3132,16 +4147,57 @@ def regenerate_reports(
 class HeartbeatPublisher:
     """Thread-safe atomic live heartbeat for bounded concurrent attempts."""
 
-    def __init__(self, run_root: Path, fingerprint: str, total: int):
+    def __init__(
+        self, run_root: Path, fingerprint: str, total: int, *, ticker_interval: float = 5.0
+    ):
+        if ticker_interval <= 0:
+            raise CorpusError("heartbeat ticker interval must be positive")
         self.run_root = run_root
         self.fingerprint = fingerprint
         self.total = total
         self.controller_process = capture_process_identity(os.getpid()).as_dict()
         self.lock = threading.Lock()
         self.sequence = 0
-        self.terminal = 0
+        self.terminal_maps: set[str] = set()
         self.active: dict[str, dict[str, Any]] = {}
+        self.ticker_error: Exception | None = None
+        self.ticker_interval = ticker_interval
+        self.stop_ticker = threading.Event()
+        self.ticker = threading.Thread(target=self._run_ticker, daemon=True)
+        self.closed = False
         self.publish()
+        self.ticker.start()
+
+    def __enter__(self) -> "HeartbeatPublisher":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.close()
+
+    def _run_ticker(self) -> None:
+        while not self.stop_ticker.wait(self.ticker_interval):
+            try:
+                with self.lock:
+                    now = utc_now()
+                    for item in self.active.values():
+                        item["heartbeat_at"] = now
+                    self.sequence += 1
+                    atomic_write_json(self.run_root / "heartbeat.json", self._document(False))
+            except Exception as exc:
+                self.ticker_error = exc
+                return
+
+    def _raise_ticker_error(self) -> None:
+        if self.ticker_error is not None:
+            raise CorpusError("heartbeat ticker failed") from self.ticker_error
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        self.stop_ticker.set()
+        self.ticker.join()
+        self._raise_ticker_error()
 
     def _document(self, complete: bool = False) -> dict[str, Any]:
         return {
@@ -3149,7 +4205,7 @@ class HeartbeatPublisher:
             "controller_process": self.controller_process,
             "sequence": self.sequence,
             "updated_at": utc_now(),
-            "terminal": self.terminal,
+            "terminal": len(self.terminal_maps),
             "total": self.total,
             "active": [self.active[name] for name in sorted(self.active)],
             "complete": complete,
@@ -3160,9 +4216,19 @@ class HeartbeatPublisher:
             self.sequence += 1
             atomic_write_json(self.run_root / "heartbeat.json", self._document(complete))
 
+    def seed_terminals(self, map_names: Iterable[str]) -> None:
+        """Initialize the controller-owned terminal set from validated history."""
+        self._raise_ticker_error()
+        with self.lock:
+            self.terminal_maps = set(map_names)
+            self.sequence += 1
+            atomic_write_json(self.run_root / "heartbeat.json", self._document(False))
+
     def event(self, event: str, map_name: str, details: Mapping[str, Any] | None = None) -> None:
+        self._raise_ticker_error()
         with self.lock:
             if event == "active":
+                self.terminal_maps.discard(map_name)
                 self.active[map_name] = {"map": map_name, **dict(details or {})}
             elif event == "beat":
                 if map_name in self.active:
@@ -3171,18 +4237,23 @@ class HeartbeatPublisher:
                 self.active.pop(map_name, None)
             elif event == "terminal":
                 self.active.pop(map_name, None)
-                self.terminal += 1
+                self.terminal_maps.add(map_name)
             else:
                 raise CorpusError(f"unknown heartbeat event: {event}")
             self.sequence += 1
             atomic_write_json(self.run_root / "heartbeat.json", self._document(False))
 
     def finish(self, terminal: int, complete: bool) -> None:
-        with self.lock:
-            self.terminal = terminal
-            self.active.clear()
-            self.sequence += 1
-            atomic_write_json(self.run_root / "heartbeat.json", self._document(complete))
+        try:
+            self._raise_ticker_error()
+            with self.lock:
+                if terminal != len(self.terminal_maps):
+                    raise CorpusError("heartbeat terminal set disagrees with final summary")
+                self.active.clear()
+                self.sequence += 1
+                atomic_write_json(self.run_root / "heartbeat.json", self._document(complete))
+        finally:
+            self.close()
 
 
 def run_bounded(
@@ -3213,6 +4284,25 @@ def run_bounded(
     return results
 
 
+def _order_full_corpus_assignments(
+    assignments: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    queues: dict[str, list[Mapping[str, Any]]] = {
+        kind: [] for kind in ATTEMPT_KINDS
+    }
+    for assignment in assignments:
+        queues[assignment["work"].kind].append(assignment)
+    adopted = queues["adopted_validation"]
+    missing = queues["generated_missing"]
+    ordered = [
+        queue[index]
+        for index in range(max(len(adopted), len(missing)))
+        for queue in (adopted, missing)
+        if index < len(queue)
+    ]
+    return ordered + queues["generated_replacement"]
+
+
 def recover_stale_owned_child(
     owner_record: Path,
     *,
@@ -3237,6 +4327,31 @@ def recover_stale_owned_child(
     return True
 
 
+def recover_owned_child_to_exit(owner_record: Path, identity: ProcessIdentity) -> bool:
+    """Stop one verified stale child, escalating only through its pidfd identity."""
+    if not process_identity_matches(identity):
+        return False
+    recover_stale_owned_child(owner_record)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and process_identity_matches(identity):
+        time.sleep(0.05)
+    if not process_identity_matches(identity):
+        return True
+    pidfd = open_pidfd(identity.pid)
+    try:
+        if not signal_owned_child(identity, owner_record, signal.SIGKILL, pidfd=pidfd):
+            raise CorpusError("stale child remained live and ownership could not be proven")
+    finally:
+        if pidfd is not None:
+            os.close(pidfd)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and process_identity_matches(identity):
+        time.sleep(0.05)
+    if process_identity_matches(identity):
+        raise CorpusError("stale owned child remained live after descriptor KILL")
+    return True
+
+
 def recover_stale_attempts(
     run_root: Path,
     selected_maps: Sequence[str],
@@ -3249,10 +4364,131 @@ def recover_stale_attempts(
         map_root = run_root / "runs" / map_name
         if not map_root.exists():
             continue
+        promote_pending_attempts(
+            run_root, map_name, fingerprint=fingerprint,
+            stable_port=int(assignments[map_name]["port"]),
+        )
         for attempt in sorted(map_root.glob("attempt-*")):
             owner = attempt / "owner.json"
             terminal = attempt / "result.json"
-            if owner.exists() and not terminal.exists():
+            attempt_match = re.fullmatch(r"attempt-([0-9]+)", attempt.name)
+            if attempt_match is None:
+                raise CorpusError("stale recovery has an invalid attempt directory")
+            attempt_number = int(attempt_match.group(1))
+            commit = _attempt_commit_path(run_root, map_name, attempt_number)
+            abort = _attempt_abort_path(run_root, map_name, attempt_number)
+            has_commit = commit.exists() or commit.is_symlink()
+            has_abort = abort.exists() or abort.is_symlink()
+            if has_commit and has_abort:
+                raise CorpusError("stale attempt has conflicting external authorities")
+            if (has_commit or has_abort) and not terminal.exists():
+                raise CorpusError("stale external authority has no frozen result")
+            if terminal.exists() and has_commit and not commit.is_symlink():
+                value, raw = _load_json_regular(terminal)
+                if not isinstance(value, dict) or raw != canonical_json(value):
+                    raise CorpusError("stale terminal result is not canonical")
+                freeze_tree(attempt)
+                fsync_tree(attempt)
+                _validate_attempt_commit(run_root, map_name, attempt, attempt_number)
+                fsync_tree(commit.parent.parent)
+                _validate_terminal_schema(
+                    value, run_root=run_root, attempt=attempt, map_name=map_name,
+                    fingerprint=fingerprint,
+                    stable_port=int(assignments[map_name]["port"]),
+                )
+                continue
+            if terminal.exists() or terminal.is_symlink():
+                # The immutable attempt was frozen before its external commit.
+                # Its result can no longer be authenticated against held log FDs,
+                # so preserve it as evidence and retry through an external INFRA
+                # authority.  It must never authorize a replacement.
+                if terminal.is_symlink():
+                    raise CorpusError("stale pending result is a symlink")
+                freeze_tree(attempt)
+                fsync_tree(attempt)
+                if has_abort:
+                    _validate_attempt_abort(run_root, map_name, attempt, attempt_number)
+                    fsync_tree(abort.parent.parent)
+                else:
+                    _publish_attempt_abort(run_root, map_name, attempt, attempt_number)
+                recovered += 1
+                continue
+            intent_path = attempt / "intent.json"
+            if not intent_path.exists():
+                if any(attempt.iterdir()):
+                    raise CorpusError("nonempty attempt lacks its immutable intent")
+                attempt.rmdir()
+                continue
+            intent = _load_attempt_intent(
+                run_root, attempt, fingerprint=fingerprint, map_name=map_name,
+                stable_port=int(assignments[map_name]["port"]),
+                attempt_number=attempt_number,
+            )
+            cold_owner = attempt / "cold-load" / "owner.json"
+            if cold_owner.exists():
+                cold_value, _cold_raw = _load_json_regular(cold_owner)
+                if (
+                    cold_value.get("fingerprint") != fingerprint
+                    or cold_value.get("map") != map_name
+                    or cold_value.get("attempt") != attempt_number
+                ):
+                    raise CorpusError("stale cold-load owner identity mismatch")
+                cold_process = cold_value.get("process")
+                captured = cold_value.get("pidfd_captured")
+                if cold_process is None:
+                    if captured is not False:
+                        raise CorpusError("malformed stale cold-load owner record")
+                else:
+                    if captured is not True:
+                        raise CorpusError("malformed stale cold-load owner record")
+                    try:
+                        cold_identity = ProcessIdentity(**cold_process)
+                    except (TypeError, ValueError) as exc:
+                        raise CorpusError("malformed stale cold-load owner record") from exc
+                    recover_owned_child_to_exit(cold_owner, cold_identity)
+            if not owner.exists() and intent["kind"] == "adopted_validation":
+                detail = "stale adopted validation ended before any child launch"
+                evidence = [
+                    _relative_evidence_record(path, run_root)
+                    for path in sorted(attempt.rglob("*"))
+                    if path.is_file() and not path.is_symlink()
+                ]
+                result = {
+                    "format": TERMINAL_RESULT_FORMAT,
+                    "fingerprint": fingerprint, "map": map_name,
+                    "stable_port": int(assignments[map_name]["port"]),
+                    "attempt": attempt_number, "attempt_kind": intent["kind"],
+                    "disposition": "infra_failed",
+                    "intent_record": _intent_record_path(run_root, attempt),
+                    "provenance": {
+                        "source_artifact": intent["source_artifact"],
+                        "rejection_result": intent["rejection_result"],
+                    },
+                    "generation_report": None, "started_at": intent["created_at"],
+                    "ended_at": utc_now(), "classification": "INFRA_FAIL",
+                    "normalized_signature": normalized_signature("INFRA_FAIL", detail),
+                    "detail": detail, "failure_line": None, "command_sha256": None,
+                    "owner_record": None, "evidence": evidence, "server_log_sha256": None,
+                    "artifact": None, "artifact_sha256": None, "route_contract": None,
+                    "objective_roots": None, "banner_counts": None,
+                    "decoded_counts": None, "gate_output_sha256": None,
+                    "gate_log_sha256": None, "semantic_gate_labels": None,
+                    "cold_load_owner_record": None, "cold_load_command_sha256": None,
+                    "cold_load_log_sha256": None, "cold_load_snag_record": None,
+                    "cold_load_snag_evidence_record": None,
+                }
+                publish_result(run_root, map_name, result, attempt)
+                recovered += 1
+                continue
+            if not owner.exists():
+                command_hash = sha256_bytes(b"prelaunch-generation-recovery")
+                atomic_write_json(owner, {
+                    "fingerprint": fingerprint, "map": map_name,
+                    "attempt": attempt_number, "created_at": intent["created_at"],
+                    "process": None, "pidfd_captured": False,
+                    "command_sha256": command_hash,
+                }, mode=0o600)
+            if owner.exists():
                 owner_value, _owner_bytes = _load_json_regular(owner)
                 if not isinstance(owner_value, dict):
                     raise CorpusError(f"malformed stale owner record: {owner}")
@@ -3265,8 +4501,6 @@ def recover_stale_attempts(
                         identity = ProcessIdentity(**process_value)
                     except (TypeError, ValueError) as exc:
                         raise CorpusError(f"malformed stale owner record: {owner}") from exc
-                attempt_match = re.fullmatch(r"attempt-([0-9]+)", attempt.name)
-                attempt_number = int(attempt_match.group(1)) if attempt_match else 0
                 owner_matches = (
                     owner_value.get("fingerprint") == fingerprint
                     and owner_value.get("map") == map_name
@@ -3335,11 +4569,25 @@ def recover_stale_attempts(
                 started_at = owner_value.get("created_at")
                 if not _is_timestamp(started_at):
                     started_at = utc_now()
+                evidence = [
+                    _relative_evidence_record(path, run_root)
+                    for path in sorted(attempt.rglob("*"))
+                    if path.is_file() and not path.is_symlink()
+                ]
                 result = {
+                    "format": TERMINAL_RESULT_FORMAT,
                     "fingerprint": fingerprint,
                     "map": map_name,
                     "stable_port": int(assignments[map_name]["port"]),
                     "attempt": attempt_number,
+                    "attempt_kind": intent["kind"],
+                    "disposition": "infra_failed",
+                    "intent_record": _intent_record_path(run_root, attempt),
+                    "provenance": {
+                        "source_artifact": intent["source_artifact"],
+                        "rejection_result": intent["rejection_result"],
+                    },
+                    "generation_report": None,
                     "started_at": started_at,
                     "ended_at": utc_now(),
                     "classification": "INFRA_FAIL",
@@ -3367,6 +4615,35 @@ def recover_stale_attempts(
                 }
                 publish_result(run_root, map_name, result, attempt)
                 recovered += 1
+        terminals: list[tuple[int, dict[str, Any], bytes]] = []
+        for attempt in sorted(map_root.glob("attempt-*")):
+            match = re.fullmatch(r"attempt-([0-9]+)", attempt.name)
+            terminal = attempt / "result.json"
+            if (match is None or not terminal.exists() or
+                    not _attempt_commit_path(
+                        run_root, map_name, int(match.group(1))
+                    ).exists()):
+                continue
+            value, raw = _load_json_regular(terminal)
+            if not isinstance(value, dict) or raw != canonical_json(value):
+                raise CorpusError("terminal attempt is not canonical during pointer recovery")
+            _validate_attempt_commit(run_root, map_name, attempt, int(match.group(1)))
+            fsync_tree(_attempt_commit_path(
+                run_root, map_name, int(match.group(1))
+            ).parent.parent)
+            terminals.append((int(match.group(1)), value, raw))
+        if terminals:
+            latest_number, latest_value, latest_raw = max(terminals, key=lambda item: item[0])
+            pointer = map_root / "result.json"
+            if pointer.exists() or pointer.is_symlink():
+                pointer_value, pointer_raw = _load_json_regular(pointer)
+                if not any(
+                    pointer_value == value and pointer_raw == raw
+                    for _number, value, raw in terminals
+                ):
+                    raise CorpusError("stale terminal pointer disagrees with immutable history")
+            if not pointer.exists() or pointer_raw != latest_raw:
+                atomic_write_bytes(pointer, latest_raw)
     return recovered
 
 
@@ -3389,7 +4666,7 @@ def validate_engine_arguments(arguments: Sequence[str]) -> None:
 def parse_cold_load_log(
     text: str, map_name: str, banner_counts: Mapping[str, int],
     route_contract: str | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Accept exactly one ordinary-load READY record and no generation write."""
     lines = text.splitlines()
     failure = last_cold_load_failure(lines, map_name)
@@ -3421,7 +4698,15 @@ def parse_cold_load_log(
             raise CorpusError(
                 "fresh cold-load route contract disagrees with staged artifact"
             )
-    return counts
+    roots = [match for line in lines if (match := RUNTIME_ROOT_RE.fullmatch(line))]
+    if len(roots) != 1:
+        raise CorpusError(
+            f"fresh cold-load expected one runtime objective-root line, found {len(roots)}"
+        )
+    return {
+        "counts": counts,
+        "objective_roots": {"red": int(roots[0].group(1)), "blue": int(roots[0].group(2))},
+    }
 
 
 def validate_cold_load_snag_attestation(
@@ -3486,6 +4771,8 @@ def stage_bootstrap_snag(
     map_name: str,
     artifact: Path,
     fingerprint: str,
+    *,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Create the explicit zero-repair sidecar needed for a fresh cold load."""
     before = regular_file_record(artifact)
@@ -3514,6 +4801,7 @@ def stage_bootstrap_snag(
             "--evidence-manifest", str(evidence),
             "--output", str(target),
         ],
+        heartbeat_check=heartbeat_check,
     )
     if rc != 0:
         raise CorpusError(f"snag-bootstrap gate exited {rc}")
@@ -3564,10 +4852,11 @@ def run_fresh_cold_load(
     source_artifact: Path,
     banner_counts: Mapping[str, int],
     route_contract: str,
-    generation_identity: ProcessIdentity,
+    generation_identity: ProcessIdentity | None,
     *,
     timeout: float,
     engine_arguments: Sequence[str] = DEFAULT_ENGINE_ARGUMENTS,
+    heartbeat_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Load gated bytes in a second private q2ded and return frozen evidence."""
     source_before = regular_file_record(source_artifact)
@@ -3583,7 +4872,9 @@ def run_fresh_cold_load(
     if staged["sha256"] != source_before["sha256"] or staged["size"] != source_before["size"]:
         raise GateIntegrityError("fresh cold-load artifact copy mismatch")
     snag = stage_bootstrap_snag(
-        cold_root, snapshot, map_name, artifact, fingerprint)
+        cold_root, snapshot, map_name, artifact, fingerprint,
+        heartbeat_check=heartbeat_check,
+    )
 
     command = [str(engine)] + [
         value.format(port=stable_port, map=map_name, config=config_name)
@@ -3597,6 +4888,10 @@ def run_fresh_cold_load(
     pidfd: int | None = None
     shutdown_error: CorpusError | None = None
     log_stream = log_path.open("wb")
+    writer_identity = (os.fstat(log_stream.fileno()).st_dev,
+                       os.fstat(log_stream.fileno()).st_ino)
+    observer: IncrementalLineReader | None = None
+    transfer_observer = False
     try:
         atomic_write_json(owner_path, {
             "fingerprint": fingerprint, "attempt": attempt_number,
@@ -3616,8 +4911,8 @@ def run_fresh_cold_load(
         pidfd = open_pidfd(process.pid)
         if pidfd is None:
             raise GateIntegrityError("fresh cold-load engine has no pidfd")
-        identity = wait_for_exec_identity(process.pid, engine, _nul_argv(command))
-        if (
+        identity = wait_for_exec_identity(process.pid, engine, _nul_argv(command), timeout=timeout)
+        if generation_identity is not None and (
             identity.pid, identity.boot_id, identity.start_ticks
         ) == (
             generation_identity.pid, generation_identity.boot_id,
@@ -3632,14 +4927,20 @@ def run_fresh_cold_load(
         }, mode=0o600)
         deadline = time.monotonic() + timeout
         accepted = False
+        observer = IncrementalLineReader(
+            log_path, writer_identity=writer_identity
+        )
+        observed_lines: list[str] = []
         while time.monotonic() < deadline and process.poll() is None:
+            if heartbeat_check is not None:
+                heartbeat_check()
             log_stream.flush()
             try:
-                current = log_path.read_text(encoding="utf-8", errors="strict")
-            except UnicodeDecodeError as exc:
-                raise GateIntegrityError("fresh cold-load log is not valid UTF-8") from exc
-            lines = current.splitlines()
-            if last_cold_load_failure(lines, map_name) is not None:
+                observed_lines.extend(observer.read_new())
+            except CorpusError as exc:
+                raise GateIntegrityError(str(exc)) from exc
+            lines = observed_lines
+            if setup_terminal_receipt(lines, map_name, "autoload") is not None:
                 break
             if any(
                 (match := READY_RE.fullmatch(line)) is not None
@@ -3660,16 +4961,27 @@ def run_fresh_cold_load(
                 shutdown_captured_child(process, identity, owner_path, pidfd)
         log_stream.flush()
         os.fsync(log_stream.fileno())
-        try:
-            final_log = log_path.read_text(encoding="utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise GateIntegrityError("fresh cold-load log is not valid UTF-8") from exc
+        observed_lines.extend(observer.finish())
+        log_record = observer.bound_record()
+        final_log = "\n".join(observed_lines) + ("\n" if observed_lines else "")
         if not accepted:
             failure = last_cold_load_failure(final_log.splitlines(), map_name)
             if failure is not None:
-                raise CorpusError(f"fresh cold-load rejected artifact: {failure}")
+                if regular_file_record(source_artifact) != source_before:
+                    raise GateIntegrityError(
+                        "artifact changed during failed fresh cold-load"
+                    )
+                if regular_file_record(artifact) != staged:
+                    raise GateIntegrityError(
+                        "fresh cold-load changed failed staged artifact"
+                    )
+                if cold_loader_rejection(final_log.splitlines(), map_name) is not None:
+                    raise ArtifactRejectedError(
+                        f"fresh cold-load rejected artifact: {failure}"
+                    )
+                raise GateIntegrityError(f"fresh cold-load failed: {failure}")
             raise CorpusError("fresh cold-load exited or timed out before runtime-ready")
-        parse_cold_load_log(
+        runtime = parse_cold_load_log(
             final_log, map_name, banner_counts, route_contract
         )
         if process.returncode != 0:
@@ -3691,18 +5003,27 @@ def run_fresh_cold_load(
             evidence_sha256=str(snag["evidence"]["sha256"]),
             snag_sha256=str(snag["snag"]["sha256"]),
         )
+        transfer_observer = True
         return {
             "owner": owner_path,
             "log": log_path,
+            "log_record": log_record,
+            "log_observer": observer,
             "command_sha256": command_hash,
             "snag": snag,
+            "objective_roots": runtime["objective_roots"],
         }
     finally:
         if process is not None and process.poll() is None:
             if identity is None or pidfd is None:
-                shutdown_error = GateIntegrityError(
-                    "fresh cold-load child identity was never captured"
-                )
+                try:
+                    shutdown_spawned_child(process, pidfd)
+                except CorpusError as exc:
+                    shutdown_error = exc
+                else:
+                    shutdown_error = GateIntegrityError(
+                        "fresh cold-load child identity was never captured"
+                    )
             else:
                 try:
                     shutdown_captured_child(process, identity, owner_path, pidfd)
@@ -3710,9 +5031,205 @@ def run_fresh_cold_load(
                     shutdown_error = exc
         if pidfd is not None:
             os.close(pidfd)
+        if observer is not None and not transfer_observer:
+            observer.close()
         log_stream.close()
         if shutdown_error is not None:
             raise shutdown_error
+
+
+def _reader_banner(decoded: Mapping[str, int]) -> dict[str, int]:
+    return {
+        "seeds": decoded["seed_count"],
+        "links": decoded["link_count"],
+        "mechanism_nodes": decoded["node_count"],
+        "triggers": decoded["trigger_count"],
+        "inventory_edges": decoded["inventory_edge_count"],
+        "plans": decoded["plan_count"],
+    }
+
+
+def run_adopted_map(
+    run_root: Path,
+    snapshot: Path,
+    map_name: str,
+    stable_port: int,
+    fingerprint: str,
+    attempt: Path,
+    attempt_number: int,
+    intent: Mapping[str, Any],
+    work: MapWork,
+    *,
+    cold_load_timeout: int,
+    engine_arguments: Sequence[str],
+    heartbeat: Callable[[str, str, Mapping[str, Any] | None], None] | None,
+    gate_runner: Callable[..., subprocess.CompletedProcess[bytes]],
+) -> dict[str, Any]:
+    """Authenticate a frozen candidate without asking the server to generate."""
+    if work.source_artifact is None:
+        raise CorpusError("adopted validation has no snapshot artifact")
+    verified = verify_snapshot(snapshot)
+    roles = verified["by_role"]
+    started_at = utc_now()
+    _private, _engine, artifact, _config = stage_private_inputs(
+        attempt, snapshot, map_name
+    )
+    _copy_snapshot_file(snapshot, work.source_artifact, artifact)
+    classification = "INFRA_FAIL"
+    disposition = "infra_failed"
+    detail = "adopted validation did not start"
+    reader: dict[str, Any] | None = None
+    gate: dict[str, Any] | None = None
+    cold_load: dict[str, Any] | None = None
+    cold_observer: IncrementalLineReader | None = None
+    roots: dict[str, int] | None = None
+    banner: dict[str, int] | None = None
+    stage = "readers"
+
+    def publish_heartbeat(stage_name: str) -> None:
+        if heartbeat is None:
+            return
+        try:
+            heartbeat("active", map_name, {
+                "attempt": attempt_number, "stable_port": stable_port,
+                "started_at": started_at, "stage": stage_name,
+                "heartbeat_at": utc_now(),
+            })
+        except CorpusError as exc:
+            raise GateIntegrityError("adoption heartbeat failed") from exc
+
+    def heartbeat_check() -> None:
+        if heartbeat is not None:
+            heartbeat("beat", map_name, None)
+
+    try:
+        publish_heartbeat("readers")
+        stage = "preflight"
+        preflight_python_runtime(
+            snapshot, runner=gate_runner,
+            heartbeat_check=heartbeat_check if heartbeat is not None else None,
+        )
+        stage = "readers"
+        reader = run_gates(
+            artifact, map_name, None,
+            acceptor_gnu=snapshot / roles["acceptor_gnu"]["path"],
+            acceptor_make=snapshot / roles["acceptor_make"]["path"],
+            python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
+            runeio=snapshot / roles["runeio"]["path"],
+            runelint=snapshot / roles["runelint"]["path"],
+            reader_only=True, log_directory=attempt, runner=gate_runner, fingerprint=fingerprint,
+            heartbeat_check=heartbeat_check if heartbeat is not None else None,
+        )
+        banner = _reader_banner(reader["decoded_counts"])
+        stage = "cold_load"
+        publish_heartbeat("cold_load")
+        cold_load = run_fresh_cold_load(
+            attempt, snapshot, map_name, stable_port, fingerprint, attempt_number,
+            artifact, banner, reader["route_contract"], None,
+            timeout=cold_load_timeout, engine_arguments=engine_arguments,
+            heartbeat_check=heartbeat_check if heartbeat is not None else None,
+        )
+        cold_observer = cold_load["log_observer"]
+        roots = cold_load["objective_roots"]
+        stage = "lint"
+        publish_heartbeat("lint")
+        gate = run_gates(
+            artifact, map_name, banner,
+            acceptor_gnu=snapshot / roles["acceptor_gnu"]["path"],
+            acceptor_make=snapshot / roles["acceptor_make"]["path"],
+            python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
+            runeio=snapshot / roles["runeio"]["path"],
+            runelint=snapshot / roles["runelint"]["path"], objective_roots=roots,
+            semantic_checkers=semantic_checkers_for_map(snapshot, verified, map_name),
+            log_directory=attempt, runner=gate_runner, fingerprint=fingerprint,
+            heartbeat_check=heartbeat_check if heartbeat is not None else None,
+        )
+        classification = "PASS" if gate["route_contract"] == "complete" else "ROUTE_ONLY"
+        disposition = "accepted"
+        detail = "frozen artifact, dual readers, runtime roots, gates, and fresh cold-load passed"
+    except GateIntegrityError as exc:
+        detail = str(exc)
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = str(exc)
+    except ArtifactRejectedError as exc:
+        detail = str(exc)
+        classification = "LINT_FAIL"
+        disposition = "artifact_rejected"
+    except CorpusError as exc:
+        detail = str(exc)
+        classification = "INFRA_FAIL"
+        disposition = "infra_failed"
+        reader = gate = cold_load = None
+        roots = banner = None
+    finally:
+        if heartbeat is not None:
+            try:
+                heartbeat("inactive", map_name, None)
+            except CorpusError as exc:
+                classification = "INFRA_FAIL"
+                disposition = "infra_failed"
+                detail = "adoption heartbeat failed"
+    if classification not in SUCCESS_CLASSIFICATIONS:
+        reader = gate = cold_load = None
+        roots = banner = None
+    evidence = [
+        _relative_evidence_record(path, run_root)
+        for path in sorted(attempt.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    ]
+    artifact_record = _relative_evidence_record(artifact, run_root)
+    result = {
+        "format": TERMINAL_RESULT_FORMAT,
+        "fingerprint": fingerprint, "map": map_name, "stable_port": stable_port,
+        "attempt": attempt_number, "attempt_kind": "adopted_validation",
+        "disposition": disposition, "intent_record": _intent_record_path(run_root, attempt),
+        "provenance": {"source_artifact": intent["source_artifact"], "rejection_result": None},
+        "generation_report": None, "started_at": started_at, "ended_at": utc_now(),
+        "classification": classification,
+        "normalized_signature": normalized_signature(classification, detail),
+        "detail": detail, "failure_line": None, "command_sha256": None,
+        "owner_record": None, "evidence": evidence, "server_log_sha256": None,
+        "artifact": artifact_record, "artifact_sha256": artifact_record["sha256"],
+        "route_contract": gate["route_contract"] if gate else None,
+        "objective_roots": roots, "banner_counts": banner,
+        "decoded_counts": gate["decoded_counts"] if gate else None,
+        "gate_output_sha256": gate["gate_output_sha256"] if gate else None,
+        "gate_log_sha256": (
+            {name: record["sha256"] for name, record in gate["gate_logs"].items()}
+            if gate else None
+        ),
+        "semantic_gate_labels": gate["semantic_gate_labels"] if gate else None,
+        "cold_load_owner_record": (
+            str(cold_load["owner"].relative_to(run_root))
+            if cold_load else None
+        ),
+        "cold_load_command_sha256": cold_load["command_sha256"] if cold_load else None,
+        "cold_load_log_sha256": (
+            str(cold_load["log_record"]["sha256"]) if cold_load else None
+        ),
+        "cold_load_snag_record": (
+            str(Path(cold_load["snag"]["snag"]["path"]).relative_to(run_root))
+            if cold_load else None
+        ),
+        "cold_load_snag_evidence_record": (
+            str(Path(cold_load["snag"]["evidence"]["path"]).relative_to(run_root))
+            if cold_load else None
+        ),
+    }
+    cold_binding = (
+        (cold_observer, cold_load["log_record"])
+        if cold_load is not None else None
+    )
+    try:
+        publish_result(
+            run_root, map_name, result, attempt,
+            held_log_bindings=(cold_binding,) if cold_binding is not None else (),
+            validate_pending=True,
+        )
+    finally:
+        if cold_observer is not None and cold_observer.fd >= 0:
+            cold_observer.close()
+    return result
 
 
 def run_one_map(
@@ -3723,19 +5240,30 @@ def run_one_map(
     fingerprint: str,
     *,
     startup_timeout: int,
-    generation_timeout: int,
+    generation_timeout: int | None,
     cold_load_timeout: int,
     engine_arguments: Sequence[str] = DEFAULT_ENGINE_ARGUMENTS,
+    work: MapWork | None = None,
     heartbeat: Callable[[str, str, Mapping[str, Any] | None], None] | None = None,
     gate_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
-    _runtime_preflighted: bool = False,
 ) -> dict[str, Any]:
     """Launch one private engine attempt.  Tests replace this function."""
+    _validate_generation_timeout(generation_timeout)
     validate_engine_arguments(engine_arguments)
     verified = verify_snapshot(snapshot)
     roles = verified["by_role"]
     python_interpreter = snapshot / verified["python_runtime"]["interpreter"]["path"]
-    attempt_number, attempt = next_attempt_directory(run_root, map_name)
+    work = work or MapWork("generated_missing", None, None)
+    attempt_number, attempt, intent = create_attempt_with_intent(
+        run_root, fingerprint=fingerprint, map_name=map_name,
+        stable_port=stable_port, work=work,
+    )
+    if work.kind == "adopted_validation":
+        return run_adopted_map(
+            run_root, snapshot, map_name, stable_port, fingerprint, attempt, attempt_number,
+            intent, work, cold_load_timeout=cold_load_timeout,
+            engine_arguments=engine_arguments, heartbeat=heartbeat, gate_runner=gate_runner,
+        )
     started_at = utc_now()
     private, engine, artifact, config_name = stage_private_inputs(
         attempt, snapshot, map_name
@@ -3747,6 +5275,8 @@ def run_one_map(
     command_hash = sha256_bytes(b"\0".join(os.fsencode(value) for value in command) + b"\0")
     log_path = attempt / "server.log"
     log_stream = log_path.open("wb")
+    writer_identity = (os.fstat(log_stream.fileno()).st_dev,
+                       os.fstat(log_stream.fileno()).st_ino)
     process: subprocess.Popen[bytes] | None = None
     pidfd: int | None = None
     owner_path = attempt / "owner.json"
@@ -3757,6 +5287,8 @@ def run_one_map(
     cold_load: dict[str, Any] | None = None
     failure_line: str | None = None
     shutdown_error: CorpusError | None = None
+    observer: IncrementalLineReader | None = None
+    generation_log_record: dict[str, int | str] | None = None
     try:
         atomic_write_json(
             owner_path,
@@ -3773,7 +5305,16 @@ def run_one_map(
         )
         preflight_started = utc_now()
         try:
-            preflight = preflight_python_runtime(snapshot, runner=gate_runner)
+            if heartbeat is not None:
+                heartbeat("active", map_name, {
+                    "attempt": attempt_number, "stable_port": stable_port,
+                    "started_at": started_at, "stage": "preflight",
+                    "heartbeat_at": utc_now(),
+                })
+            preflight = preflight_python_runtime(
+                snapshot, runner=gate_runner,
+                heartbeat_check=(lambda: heartbeat("beat", map_name, None)) if heartbeat else None,
+            )
         except CorpusError as exc:
             atomic_write_json(attempt / "runtime-preflight.json", {
                 "fingerprint": fingerprint, "started_at": preflight_started,
@@ -3805,7 +5346,9 @@ def run_one_map(
         pidfd = open_pidfd(process.pid)
         if pidfd is None:
             raise CorpusError("launched engine has no pidfd")
-        identity = wait_for_exec_identity(process.pid, engine, _nul_argv(command))
+        identity = wait_for_exec_identity(
+            process.pid, engine, _nul_argv(command), timeout=startup_timeout
+        )
         atomic_write_json(
             owner_path,
             {
@@ -3819,6 +5362,13 @@ def run_one_map(
             },
             mode=0o600,
         )
+        # Hold the authenticated log descriptor from identity publication
+        # onward.  The engine may exit before the next poll, but its final log
+        # still determines this attempt's terminal result.
+        observer = IncrementalLineReader(
+            log_path, writer_identity=writer_identity
+        )
+        observed_lines: list[str] = []
         if pidfd is None:
             raise CorpusError("captured engine has no pidfd; attempt left unfinished")
         if heartbeat is not None:
@@ -3833,31 +5383,37 @@ def run_one_map(
                     "heartbeat_at": utc_now(),
                 },
             )
-        deadline = time.monotonic() + startup_timeout
-        while time.monotonic() < deadline and process.poll() is None:
-            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         ready_seen = False
         deferred_publication_seen = False
         failure_seen = False
+        infrastructure_failure_seen = False
         deadline_expired = False
         if process.poll() is None:
             assert process.stdin is not None
             process.stdin.write(b"sv rune\n")
             process.stdin.flush()
-            deadline = time.monotonic() + generation_timeout
+            deadline = (
+                time.monotonic() + generation_timeout
+                if generation_timeout is not None else None
+            )
             next_heartbeat = time.monotonic()
-            while time.monotonic() < deadline and process.poll() is None:
-                if heartbeat is not None and time.monotonic() >= next_heartbeat:
+            while process.poll() is None:
+                now = time.monotonic()
+                if heartbeat is not None and now >= next_heartbeat:
                     heartbeat("beat", map_name, None)
-                    next_heartbeat = time.monotonic() + 5.0
+                    next_heartbeat = now + 5.0
                 log_stream.flush()
-                try:
-                    current_log = log_path.read_text(encoding="utf-8", errors="strict")
-                except UnicodeDecodeError as exc:
-                    raise CorpusError("server log is not valid UTF-8") from exc
-                lines = current_log.splitlines()
+                observed_lines.extend(observer.read_new())
+                lines = observed_lines
                 failure_line = last_anchored_failure(lines)
                 failure_seen = failure_line is not None
+                runtime_failure = runtime_infrastructure_failure(lines, map_name)
+                write_terminal = setup_terminal_receipt(lines, map_name, "write")
+                if write_terminal is not None and write_terminal[0] == "infra":
+                    runtime_failure = write_terminal[2]
+                infrastructure_failure_seen = runtime_failure is not None
+                if runtime_failure is not None:
+                    failure_line = runtime_failure
                 ready_seen = any(
                     (match := READY_RE.fullmatch(line)) is not None
                     and match.group(1) == map_name
@@ -3866,18 +5422,19 @@ def run_one_map(
                 deferred_publication_seen = (
                     generation_deferred_publication_complete(lines, map_name)
                 )
-                if failure_seen or ready_seen or deferred_publication_seen:
+                if (failure_seen or infrastructure_failure_seen or ready_seen
+                        or deferred_publication_seen):
                     if ready_seen:
                         # Allow buffered post-ready diagnostics to arrive before quit.
                         time.sleep(0.25)
                     break
-                time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-            deadline_expired = (
-                not ready_seen
-                and not deferred_publication_seen
-                and not failure_seen
-                and process.poll() is None
-            )
+                if deadline is not None and now >= deadline:
+                    deadline_expired = True
+                    break
+                if deadline is None:
+                    time.sleep(0.1)
+                else:
+                    time.sleep(min(0.1, max(0.0, deadline - now)))
         if process.poll() is None:
             assert process.stdin is not None
             process.stdin.write(b"quit\n")
@@ -3886,24 +5443,39 @@ def run_one_map(
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 shutdown_captured_child(process, identity, owner_path, pidfd)
+        if heartbeat is not None:
+            heartbeat("active", map_name, {
+                "attempt": attempt_number, "stable_port": stable_port,
+                "started_at": started_at, "stage": "post_generation",
+                "heartbeat_at": utc_now(),
+            })
         # The child has exited (or bounded shutdown completed).  This is the
         # authoritative last read: diagnostics written during exit must not be
         # lost to an earlier polling snapshot.
         log_stream.flush()
         os.fsync(log_stream.fileno())
-        try:
-            final_log = log_path.read_text(encoding="utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise CorpusError("server log is not valid UTF-8") from exc
-        final_lines = final_log.splitlines()
+        observed_lines.extend(observer.finish())
+        generation_log_record = observer.bound_record()
+        final_lines = observed_lines
+        final_log = "\n".join(final_lines) + ("\n" if final_lines else "")
         final_failure = last_anchored_failure(final_lines)
+        final_infrastructure_failure = runtime_infrastructure_failure(
+            final_lines, map_name
+        )
+        deferred_publication_seen = generation_deferred_publication_complete(
+            final_lines, map_name
+        )
+        write_terminal = setup_terminal_receipt(final_lines, map_name, "write")
+        if (
+            write_terminal is not None
+            and write_terminal[0] == "infra"
+            and not (deferred_publication_seen and write_terminal[1] == "fields")
+        ):
+            final_infrastructure_failure = write_terminal[2]
         ready_seen = ready_seen or any(
             (match := READY_RE.fullmatch(line)) is not None
             and match.group(1) == map_name
             for line in final_lines
-        )
-        deferred_publication_seen = generation_deferred_publication_complete(
-            final_lines, map_name
         )
         if ready_seen or deferred_publication_seen:
             deadline_expired = False
@@ -3911,7 +5483,12 @@ def run_one_map(
             failure_line = final_failure
             failure_seen = True
             deadline_expired = False
-        if failure_seen:
+        if final_infrastructure_failure is not None:
+            classification = "INFRA_FAIL"
+            detail = final_infrastructure_failure
+            failure_line = None
+            deadline_expired = False
+        elif failure_seen:
             classification = "GEN_FAIL"
             if failure_line is None:
                 raise CorpusError("anchored failure classification lost its record")
@@ -3922,7 +5499,13 @@ def run_one_map(
         elif not ready_seen and not deferred_publication_seen:
             classification = "GEN_FAIL"
             detail = "engine exited before accepted generation completion"
-        if classification not in ("TIMEOUT", "GEN_FAIL"):
+        proceed_with_success = (
+            (ready_seen or deferred_publication_seen)
+            and not failure_seen
+            and final_infrastructure_failure is None
+            and not deadline_expired
+        )
+        if proceed_with_success:
             if process.returncode != 0:
                 classification = "GEN_FAIL"
                 detail = f"engine exited with status {process.returncode}"
@@ -3945,6 +5528,12 @@ def run_one_map(
                 if parsed is None:
                     raise CorpusError(detail)
                 try:
+                    if heartbeat is not None:
+                        heartbeat("active", map_name, {
+                            "attempt": attempt_number, "stable_port": stable_port,
+                            "started_at": started_at, "stage": "readers",
+                            "heartbeat_at": utc_now(),
+                        })
                     gate = run_gates(
                         artifact,
                         map_name,
@@ -3961,13 +5550,25 @@ def run_one_map(
                         log_directory=attempt,
                         runner=gate_runner,
                         fingerprint=fingerprint,
+                        heartbeat_check=(
+                            lambda: heartbeat("beat", map_name, None)
+                        ) if heartbeat else None,
                     )
+                    if heartbeat is not None:
+                        heartbeat("active", map_name, {
+                            "attempt": attempt_number, "stable_port": stable_port,
+                            "started_at": started_at, "stage": "cold_load",
+                            "heartbeat_at": utc_now(),
+                        })
                     cold_load = run_fresh_cold_load(
                         attempt, snapshot, map_name, stable_port, fingerprint,
                         attempt_number, artifact, parsed["counts"],
                         gate["route_contract"], identity,
                         timeout=cold_load_timeout,
                         engine_arguments=engine_arguments,
+                        heartbeat_check=(
+                            lambda: heartbeat("beat", map_name, None)
+                        ) if heartbeat else None,
                     )
                     classification = (
                         "PASS" if gate["route_contract"] == "complete"
@@ -3995,7 +5596,14 @@ def run_one_map(
             try:
                 identity
             except UnboundLocalError:
-                shutdown_error = CorpusError("live child identity was never captured")
+                try:
+                    shutdown_spawned_child(process, pidfd)
+                except CorpusError as exc:
+                    shutdown_error = exc
+                else:
+                    shutdown_error = CorpusError(
+                        "live child identity was never captured"
+                    )
             else:
                 try:
                     shutdown_captured_child(process, identity, owner_path, pidfd)
@@ -4003,6 +5611,8 @@ def run_one_map(
                     shutdown_error = exc
         if pidfd is not None:
             os.close(pidfd)
+        if observer is not None and generation_log_record is None:
+            observer.close()
         log_stream.close()
         if heartbeat is not None:
             heartbeat("inactive", map_name, None)
@@ -4011,16 +5621,32 @@ def run_one_map(
     if shutdown_error is not None:
         raise shutdown_error
     ended_at = utc_now()
+    if observer is not None and generation_log_record is not None:
+        observer.verify_named_record(generation_log_record)
     evidence = []
     for path in sorted(attempt.rglob("*")):
         if path.is_file() and not path.is_symlink():
             evidence.append(_relative_evidence_record(path, run_root))
     artifact_record = _relative_evidence_record(artifact, run_root) if artifact.exists() else None
     result = {
+        "format": TERMINAL_RESULT_FORMAT,
         "fingerprint": fingerprint,
         "map": map_name,
         "stable_port": stable_port,
         "attempt": attempt_number,
+        "attempt_kind": work.kind,
+        "disposition": (
+            "accepted" if classification in SUCCESS_CLASSIFICATIONS else "infra_failed"
+        ),
+        "intent_record": _intent_record_path(run_root, attempt),
+        "provenance": {
+            "source_artifact": intent["source_artifact"],
+            "rejection_result": intent["rejection_result"],
+        },
+        "generation_report": (
+            {"objective_roots": parsed["objective_roots"], "banner_counts": parsed["counts"]}
+            if parsed else None
+        ),
         "started_at": started_at,
         "ended_at": ended_at,
         "classification": classification,
@@ -4030,7 +5656,10 @@ def run_one_map(
         "command_sha256": command_hash,
         "owner_record": str(owner_path.relative_to(run_root)),
         "evidence": evidence,
-        "server_log_sha256": sha256_regular(log_path),
+        "server_log_sha256": (
+            str(generation_log_record["sha256"])
+            if generation_log_record is not None else sha256_regular(log_path)
+        ),
         "artifact": artifact_record,
         "artifact_sha256": artifact_record["sha256"] if artifact_record else None,
         "route_contract": gate["route_contract"] if gate else None,
@@ -4050,7 +5679,7 @@ def run_one_map(
             cold_load["command_sha256"] if cold_load else None
         ),
         "cold_load_log_sha256": (
-            sha256_regular(cold_load["log"]) if cold_load else None
+            str(cold_load["log_record"]["sha256"]) if cold_load else None
         ),
         "cold_load_snag_record": (
             str(Path(cold_load["snag"]["snag"]["path"]).relative_to(run_root))
@@ -4061,7 +5690,22 @@ def run_one_map(
             if cold_load else None
         ),
     }
-    publish_result(run_root, map_name, result, attempt)
+    try:
+        held_bindings: list[tuple[IncrementalLineReader, Mapping[str, int | str]]] = []
+        if observer is not None and generation_log_record is not None:
+            held_bindings.append((observer, generation_log_record))
+        if cold_load is not None:
+            held_bindings.append((cold_load["log_observer"], cold_load["log_record"]))
+        publish_result(
+            run_root, map_name, result, attempt,
+            held_log_bindings=held_bindings,
+            validate_pending=True,
+        )
+    finally:
+        if observer is not None and observer.fd >= 0:
+            observer.close()
+        if cold_load is not None and cold_load["log_observer"].fd >= 0:
+            cold_load["log_observer"].close()
     return result
 
 
@@ -4089,7 +5733,7 @@ def execute_selection(
     selected_maps: Sequence[str],
     port_base: int,
     startup_timeout: int,
-    generation_timeout: int,
+    generation_timeout: int | None,
     cold_load_timeout: int,
     jobs: int,
     engine_arguments: Sequence[str],
@@ -4098,6 +5742,14 @@ def execute_selection(
     if run_root.exists() or run_root.is_symlink():
         reject_symlink_components(run_root)
     maps = validate_manifest()
+    planning_snapshot = verify_snapshot(snapshot)
+    adopted_runes = planning_snapshot["adopted_runes"]
+    if len(selected_maps) == CORPUS_SIZE and len(adopted_runes) != EXPECTED_ADOPTED_RUNE_COUNT:
+        raise CorpusError(
+            f"full corpus run requires exactly {EXPECTED_ADOPTED_RUNE_COUNT} adopted RUNEs"
+        )
+    if len(selected_maps) == CORPUS_SIZE and jobs < 2:
+        raise CorpusError("full corpus run requires jobs >= 2")
     assignments = stable_assignments(maps, port_base)
     lookup = {item["map"]: item for item in assignments}
     if any(name not in lookup for name in selected_maps):
@@ -4114,14 +5766,20 @@ def execute_selection(
     sealed = (run_root / FINAL_CORPUS_SEAL).exists() or (
         run_root / FINAL_CORPUS_SEAL
     ).is_symlink()
-    with ControllerLock(run_root, fingerprint, publish_owner=not sealed):
+    with ControllerLock(run_root, fingerprint, publish_owner=not sealed), \
+            HeartbeatPublisher(run_root, fingerprint, CORPUS_SIZE) as heartbeat:
         if (run_root / FINAL_CORPUS_SEAL).exists() or (
             run_root / FINAL_CORPUS_SEAL
         ).is_symlink():
             raise CorpusError("finalized corpus run root cannot resume")
         preflight_started = utc_now()
         try:
-            preflight = preflight_python_runtime(snapshot)
+            heartbeat.event("active", "__controller_preflight__", {"stage": "preflight"})
+            preflight = preflight_python_runtime(
+                snapshot,
+                heartbeat_check=lambda: heartbeat.event("beat", "__controller_preflight__"),
+            )
+            heartbeat.event("inactive", "__controller_preflight__")
         except CorpusError as exc:
             atomic_write_json(run_root / "runtime-preflight.json", {
                 "fingerprint": fingerprint, "started_at": preflight_started,
@@ -4163,7 +5821,7 @@ def execute_selection(
                 maps,
                 fingerprint,
                 started_at,
-                publish_heartbeat=True,
+                publish_heartbeat=False,
                 snapshot=snapshot,
                 fingerprint_document_bytes=document_bytes,
                 port_base=port_base,
@@ -4171,12 +5829,20 @@ def execute_selection(
             )
         require_pidfd_support()
         preflight_ports(item["port"] for item in assignments if item["map"] in selected_maps)
-        heartbeat = HeartbeatPublisher(run_root, fingerprint, CORPUS_SIZE)
         pending_assignments: list[dict[str, Any]] = []
+        terminal_maps: set[str] = set()
         for map_name in selected_maps:
             port = int(lookup[map_name]["port"])
             result_path = run_root / "runs" / map_name / "result.json"
-            if result_path.exists() and validate_resumable_pass(
+            history = load_map_history(
+                run_root, map_name, fingerprint=fingerprint, stable_port=port,
+            )
+            if any(item["result"] is not None for item in history):
+                terminal_maps.add(map_name)
+            work = decide_map_work(
+                map_name, history, run_root=run_root, adopted_runes=adopted_runes,
+            )
+            if work is None and result_path.exists() and validate_resumable_pass(
                 result_path,
                 run_root=run_root,
                 fingerprint=fingerprint,
@@ -4184,6 +5850,7 @@ def execute_selection(
                 stable_port=port,
                 snapshot=snapshot,
                 runtime_preflighted=True,
+                heartbeat_check=lambda: heartbeat.event("beat", map_name),
             ):
                 regenerate_reports(
                     run_root,
@@ -4197,7 +5864,13 @@ def execute_selection(
                     recheck_pass_gates=False,
                 )
                 continue
-            pending_assignments.append(dict(lookup[map_name]))
+            if work is None:
+                raise CorpusError("accepted or replacement-exhausted map cannot be resumed")
+            if work is not None:
+                pending = dict(lookup[map_name])
+                pending["work"] = work
+                pending_assignments.append(pending)
+        heartbeat.seed_terminals(terminal_maps)
 
         def worker(assignment: Mapping[str, Any]) -> dict[str, Any]:
             return run_one_map(
@@ -4210,8 +5883,8 @@ def execute_selection(
                 generation_timeout=generation_timeout,
                 cold_load_timeout=cold_load_timeout,
                 engine_arguments=engine_arguments,
+                work=assignment.get("work"),
                 heartbeat=heartbeat.event,
-                _runtime_preflighted=False,
             )
 
         def terminal(_assignment: Mapping[str, Any], _result: Any) -> None:
@@ -4230,7 +5903,12 @@ def execute_selection(
             )
             heartbeat.event("terminal", str(_assignment["map"]), None)
 
-        run_bounded(pending_assignments, jobs, worker, terminal)
+        ordered_assignments = (
+            _order_full_corpus_assignments(pending_assignments)
+            if len(selected_maps) == CORPUS_SIZE
+            else pending_assignments
+        )
+        run_bounded(ordered_assignments, jobs, worker, terminal)
         if verify_fingerprint_document(snapshot, document) != fingerprint:
             raise CorpusError("frozen inputs changed before final summary")
         summary = regenerate_reports(
@@ -4244,7 +5922,9 @@ def execute_selection(
             fingerprint_document_bytes=document_bytes,
             port_base=port_base,
             runtime_preflighted=True,
+            heartbeat_check=lambda: heartbeat.event("beat", "__controller_final_summary__"),
         )
+        heartbeat.seed_terminals(item["map"] for item in summary["maps"])
         heartbeat.finish(len(summary["maps"]), bool(summary["complete"]))
         return summary
 
@@ -4268,8 +5948,11 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--snapshot", type=Path, required=True)
         command.add_argument("--run-root", type=Path, required=name != "dry-run")
         command.add_argument("--port-base", type=int, default=DEFAULT_PORT_BASE)
-        command.add_argument("--startup-timeout", type=int, default=10)
-        command.add_argument("--generation-timeout", type=int, default=900)
+        command.add_argument("--startup-timeout", type=int, default=300)
+        command.add_argument(
+            "--generation-timeout", type=int, default=None,
+            help="positive explicit generation deadline in seconds",
+        )
         command.add_argument("--cold-load-timeout", type=int, default=300)
         command.add_argument("--jobs", type=int, default=1)
         command.add_argument("--engine-argument", action="append", dest="engine_arguments")
@@ -4299,8 +5982,6 @@ def _snapshot_cli(entries: Sequence[tuple[str, Path]], output: Path) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
-    if raw_arguments and raw_arguments[0] == "_guard-exec":
-        return _guard_exec(raw_arguments[1:])
     args = build_parser().parse_args(raw_arguments)
     try:
         if args.command == "snapshot":

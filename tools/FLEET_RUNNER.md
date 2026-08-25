@@ -25,7 +25,10 @@ map-list drift, development-launcher arguments, and a runtime helper that is
 not the sibling of the exact runner being executed. It imports the exact
 sibling `server_bundle.py`, verifies the active installed generation, and
 requires each runtime module, config, maplist, BSP, RUNE, and SNAG copy to match
-its installed role by size and SHA-256. Every residence records that bundle ID.
+its installed role by size and SHA-256. Before launch, it replays the installed
+sealed final corpus across all 175 maps and requires the RUNE, BSP, module, and
+every present SNAG role to match. Every residence records that bundle ID and the
+same final-corpus binding.
 
 The state and evidence roots must not exist before `run`. Stop the old
 `wavewatch` and `waveloop` development fleet first. They are neither a parent
@@ -112,30 +115,21 @@ python3 -B tools/fleet-runner.py route-only-verify \
 ```
 
 The spec fixes the candidate lane/map order, engine/client/module/config/film
-identities, active bundle state, and content-addressed corpus authority. The
-finalizer reopens every immutable selected attempt in manifest order: every
-noncandidate must be `PASS`, and the selected subset is exactly the candidate
-maps classified `ROUTE_ONLY`/`local_only`. Mutable per-map result pointers are
-not match authority. A candidate classified `PASS` cannot appear in the spec,
-and omitting or adding a selected lane fails before launch. Selected roots and
-private game roots must be pairwise disjoint. Each lane has an
+records, and active bundle state. It does not contain a separately assembled
+controller authority. Before route-only selection, the runner replays the same
+installed 175-map final-corpus binding used by normal fleet. The selected subset
+is exactly the candidate maps classified `ROUTE_ONLY`/`local_only`; every other
+map must be `PASS`. Mutable per-map result pointers are not match authority. A
+candidate classified `PASS` cannot appear in the spec, and omitting or adding a
+selected lane fails before launch. Selected roots and private game roots must be
+pairwise disjoint. Each lane has an
 initially absent `route-only-session.db` destination,
 and exact loaded `game.so`, `gamex86_64.so`, empty maplist, BSP, RUNE, and SNAG
 copies. Each selected controller result must match its RUNE and BSP bytes,
 module bytes, and the controller's stable port assignment.
 
-Export the strict `controller_authority` object from the verified final corpus;
-do not assemble its mixed file identities or 175-result inventory by hand:
-
-```sh
-python3 -B tools/fleet-runner.py route-only-authority \
-  --snapshot /freeze/rune-inputs \
-  --corpus-root /archive/rune-corpora/CORPUS_ID \
-  > /evidence/controller-authority.json
-```
-
-If all ten candidates are `PASS`, use the same command with an empty `lanes`
-array. It authenticates the full final controller result set, writes a frozen
+If all ten candidates are `PASS`, use an empty `lanes` array. The runner
+authenticates the full installed final-corpus result set, writes a frozen
 `SAFE_STOPPED` no-op owner and a zero-entry ledger, then verifies them. It does
 not launch an engine or client, load a film, issue `quit`, or create receipts.
 

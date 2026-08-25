@@ -1,352 +1,306 @@
 # LMCTF BuzzMod project completion plan
 
-This file is the current execution plan. It records scope, acceptance rules,
-current status, and remaining work. Git history and immutable run manifests
-record experiments and superseded evidence.
+This is the current execution plan. Git history and immutable run records hold
+superseded experiments and detailed evidence.
 
 ## Completion definition
 
-The project is complete when one unchanged source commit satisfies every gate:
+The project is complete when one unchanged source commit satisfies all of the
+following conditions:
 
-1. Exact CI passes on synchronized `slipgate` and `main` branches.
-2. One immutable input snapshot produces 175 accepted RUNEs.
-3. Every RUNE passes both C readers, the Python reader, lint, applicable
-   semantic checks, and a fresh-process cold load.
-4. Every map is either route-complete or meets the route-only release contract.
-5. The authenticated production bundle is installed and verified.
-6. Ordinary matches prove the required bot behavior on the installed bytes.
-7. The release tag points to the unchanged frozen commit.
-8. Downloaded public assets pass version and hash checks.
+1. Exact CI is green on synchronized `slipgate` and `main` branches.
+2. One immutable snapshot binds the final source, tools, runtime, 175 canonical
+   BSPs, and 156 existing RUNE candidates.
+3. All 175 maps have accepted RUNEs. Existing candidates are validated before
+   generation and passing bytes remain unchanged. A rejected candidate may be
+   replaced once from the frozen build. The 19 missing RUNEs are generated.
+4. Every accepted RUNE passes both C readers, the Python reader, lint,
+   applicable semantic checks, matching SNAG validation, and a fresh-process
+   cold load.
+5. Every map is route-complete or satisfies the route-only release contract.
+6. The authenticated production bundle is installed and verified.
+7. Ordinary matches prove the required bot behavior on the installed bytes.
+8. The release tag points to the unchanged frozen commit, and downloaded public
+   assets pass version and integrity checks.
 
 ## Current status
 
 | Area | Status |
 |---|---|
-| Gameplay and bot source | Complete. D_SWIM, rocket jump, D_DROP, D_HOOK, combat, roles, objectives, local fallback, and human trace capture are implemented. |
-| Map source repair | Complete. No remaining map requires another source-owned graph repair for initial release. |
-| Corpus classification | 175 maps total. Development evidence identifies 10 route-only candidates, but this is not a fixed final count. Regenerate and test all 175 normally after the final freeze; classify only the maps that still fail complete-route closure as `ROUTE_ONLY`. |
-| Branches | `main` and `slipgate` share the last exact-CI-green pre-freeze commit. The corpus-finalization wave must repeat synchronization and exact CI before the freeze. |
-| Current source wave | Production Dijkstra, fleet deadline repairs, final-corpus sealing, fleet authority export, and the Btrfs runtime-map identity repair are integrated. Focused local gates and independent review pass; full host gates and exact CI remain. |
-| Final freeze | No accepted freeze exists. Runtime preflight exposed the Btrfs identity defect now repaired in the source wave. Begin the freeze only after exact CI passes on the synchronized repair commit. |
-| Final 175-map run | Not started. |
-| Production matches | Not started. Fake-engine tests are tooling proof, not match evidence. |
-| Release | Final `v1.0.0` is not tagged or published. Historical releases remain. |
+| Gameplay and bots | Implemented: combat, roles, objectives, D_SWIM, rocket jump, D_DROP, D_HOOK, local fallback, and human trace capture. |
+| Dijkstra fallback | Production-wired after ordinary and BSP-aware closure. It is not a tested-but-uncalled path. |
+| Botless RUNE load | Fixed. A real `lmctf01` probe loaded the existing RUNE and SNAG, built fields, and emitted route, objective-root, and ready receipts. |
+| `smap32` | Duplicate teleporter fanout is preserved while executable closure selects ordinal zero. A fresh run from zero adopted RUNEs passed generation, both C readers, Python, lint, semantic checks, staged SNAG validation, and a distinct-process cold load. |
+| Corpus inputs | 175 canonical maps: 156 preserved adoption candidates and 19 missing artifacts (`smap32` plus the manifest entries from `xmap13` through `xmap30`, using canonical `xmap14a`). No final validation run has started. |
+| Controller | Adoption, one-shot replacement, crash recovery, provenance, and unbounded review are implemented and independently reviewed. The focused controller, finalizer, and integration suites pass. Production leaves the generation timeout unset; an explicit safety override is fingerprinted only when deliberately supplied. |
+| Timing bounds | Startup/identity and cold-load readiness use generous authenticated bounds. Owned-child teardown is bounded. These bounds do not limit generation or review work. |
+| Branches and CI | The full GNU/Make and GCC/Clang host matrix is green locally. The current wave remains uncommitted on `slipgate`; push, exact CI, merge to `main`, synchronized refs, and exact CI on both refs remain. |
+| Freeze and corpus | No accepted freeze or final 175-map corpus exists. Freeze creation must wait for the current controller wave and CI. |
+| Bundle, matches, release | Final-corpus authority is bound through bundle installation and both fleet paths, with exact-byte loading for every executable Python input. Focused tests pass. Production installation and matches have not started. Fake-engine tests are tooling proof, not match evidence. `v1.0.0` is not tagged or published. |
 
-## Fixed scope
+## Fixed authority and policy
 
 ### Corpus authority
 
-- `tools/rune-corpus-maps.txt` is the only map authority. It contains 175 maps.
-- The durable asset directory contains 180 BSPs. The manifest excludes the
-  retained unsuffixed bases `lmctf05`, `smap31`, `xmap07`, `xmap11`, and
-  `xmap14`.
-- If a numbered map has suffixed variants, the variants are canonical and the
-  unsuffixed base is out of scope. Keep every listed variant. For example,
-  keep both `lmctf02a` and `lmctf02c`.
+- `tools/rune-corpus-maps.txt` is the sole authority for the 175 maps.
+- The durable asset set has 180 BSPs. The manifest excludes unsuffixed bases
+  `lmctf05`, `smap31`, `xmap07`, `xmap11`, and `xmap14` because their suffixed
+  variants are canonical. In each case, the unsuffixed base is out of scope and
+  every listed variant remains in scope.
 - Build the frozen BSP set by iterating the manifest. Do not copy all 180 BSPs.
-- Generate all 175 RUNEs from one frozen source, module, configuration, engine,
-  reader set, linter, semantic checker set, and BSP set.
-- Treat every map list as an ordinary schedule input. `tools/topmaps.txt` has
-  no special completion or release authority.
+- `tools/topmaps.txt` is an ordinary schedule list. It has no special
+  completion or release authority.
 
 ### Configuration roles
 
-- Snapshot `tools/rune.cfg` as `generator_config@game/rune.cfg`. It is the
-  generator configuration.
-- Do not substitute validation overlays for the generator configuration.
-- `tools/route-only-match.cfg` is only for ordinary route-only matches.
-- Bind the empty `tools/route-only-maplist.txt` into the production bundle.
-  The empty file prevents LMCTF from falling back to an ambient `maplist.txt`.
+- Snapshot `tools/rune.cfg` as the generator configuration. Validation and
+  match overlays cannot replace it.
+- `tools/route-only-match.cfg` is only for ordinary route-only matches. The
+  production bundle includes the empty `tools/route-only-maplist.txt` so LMCTF
+  cannot fall back to an ambient map list.
+- Preserve legacy LMCTF gameplay behavior. Change it only when requested bot or
+  telemetry work requires it.
+
+### Existing and missing RUNEs
+
+- The snapshot contains 156 adoption candidates, not 156 accepted artifacts.
+- Validate each candidate from its frozen bytes. Do not ask the server to
+  regenerate it first.
+- Preserve every passing candidate byte-for-byte.
+- Only a conclusive, authenticated artifact rejection authorizes replacement.
+  Infrastructure, lifecycle, observation, or host failures retry adoption.
+- Publishing the immutable `generated_replacement` intent consumes that map's
+  only replacement attempt for the freeze. It is never repeated in the same
+  freeze, even if later infrastructure fails.
+- Missing maps use normal generation attempts and may resume in the same run
+  root after non-accepted attempts.
+- Production leaves the generation timeout unset, so generation and review have
+  no elapsed-time deadline. An optional safety override is allowed only when
+  deliberately supplied for a controlled run and is included in the fingerprint.
+  The external acceptor `--contracts` metadata probe has a justified 300-second
+  bound to contain a hung metadata handshake. It does not bound generation or
+  review.
+  Time bounds otherwise apply only to authenticated external startup/readiness
+  or owned-child teardown, with a documented safety reason and ample margin.
 
 ### Distribution scope
 
-- Publish the Linux and Windows modules, `VERSION`, `SHA256SUMS`, and the
-  tracked `assets/lmctf6-buzzmod.pak`.
-- The public PAK contains static scoreboard art and sounds. It does not contain
-  generated navigation data.
-- Defer separate downloads of generated RUNEs, the generated corpus, and the
-  production server bundle until the user resumes that work.
+- Publish the supported Linux and Windows modules, `VERSION`, `SHA256SUMS`, and
+  the tracked `assets/lmctf6-buzzmod.pak`.
+- The public PAK contains static scoreboard art and sounds, not generated
+  navigation data.
+- Defer separate downloads of generated RUNEs. The generated corpus and
+  production server bundle remain authenticated release evidence and install
+  inputs unless the release scope explicitly adds them as public downloads.
 
 ## RUNE acceptance rules
 
-### Common requirements
+Every accepted artifact must:
 
-Every accepted artifact must satisfy these rules:
+- bind the frozen module, BSP, configuration, runtime, and tool identities;
+- contain exactly two authenticated objective roots resolving to flag stands;
+- contain no unproved traversal link;
+- produce agreement between the two C readers and the Python reader;
+- pass lint and each applicable semantic checker;
+- load in a new q2ded process with its exact-bound SNAG, without fallback or
+  mixed sidecar state; and
+- stop generation and cold-load processes cleanly.
 
-- The RUNE and matching SNAG use the frozen module, BSP, configuration, and
-  tool identities.
-- The RUNE has exactly two authenticated objective roots that resolve to the
-  spawned flag stands.
-- The generator publishes no unproved traversal link.
-- Both C readers and the Python reader agree.
-- Lint and every applicable semantic checker pass.
-- A new q2ded process loads the RUNE and admits bots without fallback or mixed
-  sidecar state.
-- Generation and cold-load processes stop cleanly.
+### Complete
 
-### Complete route contract
-
-A `complete` RUNE requires every live seed to reach both objective roots.
+A `complete` wire contract requires every live seed to reach both objective
+roots. The controller classifies an accepted artifact with this contract as
+`PASS`.
 
 ### Route-only release contract
 
-A `local_only` RUNE is releasable only when all of these conditions hold:
+`local_only` is the RUNE wire contract. `ROUTE_ONLY` is the controller result
+classification for an accepted artifact carrying that contract. Such an
+artifact is releasable only when:
 
-- Every live seed reaches at least one authenticated objective root.
-- Seeds that reach neither objective remain tombstoned.
-- Every live seed has a finite local-objective fallback field.
-- Runtime selection uses that field instead of seedless recovery when the
-  missing inter-flag edge makes a coordinator objective unreachable. Combat,
-  reachable attack, defense, escort, recovery, and item behavior stay active
-  in each proved component.
-- The seed payload contains exactly two authenticated root markers. Only those
-  roots may remain terminal live sinks after neutral geometry is removed; the
-  world validator resolves both to spawned flag stands and rejects arbitrary
-  terminal sinks.
-- The generator exhausts ordinary closure work before it emits `local_only`.
-- After ordinary and BSP-aware repair, the late selector cyclically considers
-  any ordered disconnected SCC pair. It publishes only exact-proved RUN,
-  JUMP, DROP, SWIM, or direct HOOK links and rebuilds SCCs after each addition.
-  Its 64 windows cover at most 4,096 SCC slots; exhaustion returns
-  `OPEN_BUDGET` and continues to human evidence, then local-only.
-- The generator does not add a link only to change the classification.
-- The only missing behavior is an inter-flag path or a carried-flag return
-  path.
-- A real match proves normal combat and reachable attack and defense behavior
-  for both teams.
-- The artifact loads as `ROUTE_ONLY`. A normal `PASS` remains a distinct
-  result.
+- every live seed reaches at least one objective root and seeds reaching
+  neither remain tombstoned;
+- every live seed has a finite local-objective fallback field;
+- combat, reachable attack, defense, escort, seedless recovery, item behavior,
+  and mechanism behavior remain active in each proved component;
+- exactly two authenticated root markers remain and both resolve to spawned
+  flag stands;
+- ordinary closure, BSP comparison/repair, and the configured production
+  Dijkstra late-path search have completed;
+- every added RUN, JUMP, DROP, SWIM, or direct HOOK edge was exactly proved;
+- the only missing behavior is an inter-flag or carried-flag return path; and
+- an ordinary match proves useful play for both teams.
 
-A complete graph mislabeled `local_only` must fail. An unknown route contract
-must fail.
+The validator rejects arbitrary terminal sinks as objective substitutes.
+
+A complete graph mislabeled `local_only`, an unknown route contract, or a link
+added only to change classification fails acceptance.
 
 ### Human learning
 
-- Human traces are evidence. They do not authorize direct topology changes.
-- The server must record every active non-bot client's movement and isolate a
-  selected client and frame range.
-- Capture and importer tests must pass in the final source freeze.
-- The importer may nominate a transition. The in-engine oracle must replay and
-  prove the transition before a new RUNE includes it.
-- Post-match learning is sufficient for initial release. Live RUNE mutation is
-  not required.
-- A learned replacement must pass the complete two-objective validator and all
-  normal readers, lint, semantic checks, and cold-load checks. Regenerate its
-  exact-bound SNAG and retained learned sidecars, then cold-load the staged
-  bundle.
-- Install new sidecars before the RUNE commit point. Publish the new graph only
-  at the next coherent map setup. Partial installation must fail closed and
-  must never publish mixed graph and sidecar state.
+- Human traces nominate movement. They never directly authorize topology.
+- Capture and importer tests must retain the exact client and frame-range
+  evidence needed to replay a nomination.
+- The server records active human movement and can isolate a client and frame
+  range. The in-engine oracle must replay and prove a nominated transition.
+- Post-match learning is sufficient for the initial release; live mutation is
+  optional.
+- A learned replacement must pass the complete validator and the normal reader,
+  lint, semantic, exact-bound SNAG, and cold-load chain. It must cold-load the
+  staged bundle before acceptance.
+- Install new sidecars before the RUNE commit point. Publication must never
+  publish mixed graph and sidecar state; partial installation fails closed.
 
-## Implemented systems
+## Implemented systems and mandatory gates
 
-The final source candidate includes these systems:
+The source candidate includes the current RUNE format, transactional RUNE and
+SNAG handling, independent readers, root-aware fail-closed publication,
+mechanism handling, human capture and replay, local fallback, private Python
+runtime closure, authenticated server-bundle installation and rollback, and
+the persistent ten-lane match fleet.
 
-- One current RUNE wire format and runtime contract.
-- Transactional RUNE and SNAG generation, validation, cold load, installation,
-  and rollback.
-- Strict GNU C, independent Make C, and Python readers.
-- Root-aware identity checks and fail-closed publication.
-- D_SWIM, rocket jump, D_DROP, and D_HOOK generation and runtime behavior.
-- Door, button, lift, train, teleporter, water, drop, hook, and objective
-  mechanism handling needed by the corpus.
-- Human trace capture, hook events, exact replay, and nomination-only learning.
-- Local-objective fallback for valid `local_only` graphs.
-- A private Python runtime builder with native dependency closure checks.
-- An authenticated server-bundle builder, installer, rollback path, and active
-  bundle identity.
-- A persistent ten-lane fleet runner with stopped-process verification,
-  serverrecord and POV evidence, receipts, and a hash-chained ledger.
-
-The stable focused targets are:
-
-```sh
-make -f GNUmakefile rune-corpus-controller-test
-make -f Makefile rune-corpus-controller-test
-make -f GNUmakefile server-bundle-test
-make -f Makefile server-bundle-test
-make -f GNUmakefile fleet-runner-test
-make -f Makefile fleet-runner-test
-make -f GNUmakefile route-only-match-test
-make -f Makefile route-only-match-test
-make -f GNUmakefile project-completion-plan-test
-make -f Makefile project-completion-plan-test
-```
-
-The full host gates remain mandatory. Focused targets do not replace them.
+Focused targets include the controller, bundle, fleet, route-only match, and
+plan tests under both build files. The full GNU and Make host gates remain
+mandatory; focused tests never replace them.
 
 ## Route-only candidate inventory
 
-These ten maps previously had valid local objective regions but no proved
-complete flag route. They are candidates, not a fixed release class. Improved
-generation may make some or all of them ordinary `PASS` maps under the frozen
-build. Regenerate and evaluate every candidate through the complete-route
-contract before applying the route-only release contract.
+These maps are candidates, not a fixed release class. They were classified
+earlier in development, and the final count may be lower because later
+generation repairs now run on every map.
 
-| Development candidate | Current unresolved reason |
+| Map | Development-era unresolved reason |
 |---|---|
-| `lmctf01` | Exact replays reject the remaining partition cuts. Two human playthroughs have already been imported. |
-| `lmctf06` | The timed BFG shortcut works, but it is not the objective cut. Ranked reverse-hook repairs reject. |
-| `lmctf12` | BSP contact repair added genuine SWIM links, but it did not close the route. Two human routes have been imported. |
-| `lmctf15` | The timed vault mechanism works. Exact movement still leaves the two flags in separate components. |
-| `lmctf19` | Each flag is in a one-way DROP basin. Exact egress replays reject. |
-| `lmctf25` | The train mechanism works, but exact movement found no valid boarding link into the missing route. |
-| `tomb05` | Human play proves the gravity-100 exterior hook route. The current oracle has not converted that route into a proved graph edge. |
-| `xmap13` | Staged PUSH and door-egress replays remain pinned before a stable outgoing seed. |
-| `xmap18` | Rocket-jump and teleporter witnesses reach neutral regions but do not connect the objective regions. |
-| `xmap26` | Sparse-water generation is corrected, but the remaining objective cut has no proved bridge. |
+| `lmctf01` | Exact replays rejected remaining partition cuts; two human runs are imported. |
+| `lmctf06` | The timed BFG shortcut works, but ranked reverse-hook repairs did not close the objective cut. |
+| `lmctf12` | BSP contact repair added real SWIM links but did not close the route; two human routes are imported. |
+| `lmctf15` | The timed vault works, while exact movement left the flags in separate components. |
+| `lmctf19` | Each flag was in a one-way DROP basin and exact egress replay rejected. |
+| `lmctf25` | The train works, but exact movement found no valid boarding link into the missing route. |
+| `tomb05` | Human play proves the gravity-100 exterior hook route; the oracle had not converted it into a proved edge. |
+| `xmap13` | PUSH and door-egress replays remained pinned before a stable outgoing seed. |
+| `xmap18` | Rocket-jump and teleporter witnesses reached neutral regions without joining the objectives. |
+| `xmap26` | Sparse-water generation was corrected, but the objective cut had no proved bridge. |
 
-No additional human play is required before the initial release. For any map
-that remains route-only, later human play must identify the missing path and
-drive a replay-proved complete-route update. That update does not block the
-initial release.
+For each remaining candidate, the final report must identify the missing path.
+Apply the complete-route contract before applying the route-only fallback. A
+later replay-proved complete-route update can replace the fallback, but that
+optional learning does not block the initial release.
 
 ## Current pre-freeze work
 
-The route-only verifier authenticates all 175 final controller results and
-launches only the remaining candidate subset in isolated game roots. The
-production late selector now runs after ordinary/BSP/swim closure and before
-human evidence or local-only publication. It uses exact movement owners,
-retains accepted links on open completion, and rolls them back on fatal error.
+The controller/finalizer hardening, exact final-corpus authority binding, fresh
+`smap32` staged proof, and full four-way host matrix are complete. Commit and
+exact CI remain before the freeze. The immutable freeze and corpus run have not
+started.
 
-The pre-freeze source now seals the accepted immutable attempts behind a
-content-addressed authority, excludes mutable result pointers, exports the
-strict fleet handoff, rejects out-of-policy route-only results, and validates
-private-runtime mappings across Btrfs subvolume device identities. Focused
-local gates and independent adversarial review pass. Run the full host gates,
-then repeat synchronization and exact CI on both branches before creating the
-snapshot.
-
-## Final execution plan
+## Execution plan
 
 ### 1. Land the final source candidate
 
-1. Review the complete diff and remove accidental outputs.
-2. Commit the coherent source wave on `slipgate`.
-3. Push `slipgate` and require exact-commit CI.
-4. Merge the proven tree into `main` with a no-fast-forward merge.
-5. Move `slipgate` to the merge commit so both branches have the same history
-   and tree.
-6. Push both refs atomically.
-7. Require exact-commit CI on both synchronized refs.
+1. Complete controller/finalizer recovery, adoption, one-shot replacement,
+   provenance, heartbeat, and no-review-deadline tests.
+2. Retain the completed staged `smap32` SNAG and cold-load proof as the fresh
+   pre-freeze runtime check.
+3. Review comments and source size, remove accidental outputs, and update exact
+   budgets only for reviewed final counts.
+4. Run warning-clean builds, focused suites, and full GNU and Make host gates.
+5. Commit and push the coherent wave on `slipgate`; require exact-commit CI.
+6. Merge to `main`, move `slipgate` to the merge commit, push both refs, and
+   require exact green CI on both synchronized refs.
 
 ### 2. Create the immutable freeze
 
-1. Build warning-clean GNU and Make modules from the final commit.
-2. Require the two Linux module aliases to be byte-identical.
-3. Build and verify the private Python runtime.
-4. Snapshot the 175 manifest-selected BSPs and every generator input.
-5. Record the source, module, engine, Python runtime, configuration, reader,
-   linter, semantic checker, and BSP identities.
-6. Make the snapshot immutable.
-
-Do not commit source or documentation changes from this freeze through the
-release tag.
+1. Build warning-clean GNU and Make modules from the synchronized commit and
+   require the production module aliases to be byte-identical.
+2. Build and verify the private Python runtime.
+3. Snapshot all frozen source/tool/runtime inputs and the 175 manifest-selected
+   BSPs.
+4. Add the exact 156 preserved RUNE candidates as adoption inputs.
+5. Make the snapshot immutable. Do not commit source or documentation changes
+   through the release tag.
 
 ### 3. Generate and accept all 175 RUNEs
 
 1. Start with an empty controller run root.
-2. Run bounded parallel workers with isolated ports.
-3. Retry failures with the same controller command and run root. Do not use a
-   separate resume path.
-4. Apply the complete-route contract first. Require each result to be `PASS` or,
-   only after complete-route closure fails, approved `ROUTE_ONLY`. A complete
-   summary alone is not enough.
-5. Recheck every artifact through both C readers, the Python reader, lint,
-   semantic checks, matching SNAG validation, and fresh-process cold load.
-6. Run the controller `finalize` command. It must recheck all 175 results,
-   reject route-only classifications outside the approved candidate policy,
-   seal the source run root, and publish one immutable content-addressed corpus.
-7. Run `verify-final` against the published corpus before bundle assembly.
+2. Validate all 156 candidates. Preserve passes; retry adoption infrastructure
+   failures; create one final-build replacement only after authenticated
+   artifact rejection.
+3. Generate the 19 missing maps: `smap32` plus the manifest entries from
+   `xmap13` through `xmap30`, using canonical `xmap14a` rather than `xmap14`.
+4. Run with `jobs > 1`. While both queues are nonempty, overlap adoption
+   validation with missing-artifact generation. Leave the production generation
+   timeout unset. Fingerprint any deliberate safety override.
+5. Apply the complete-route contract first. Require every terminal result to be
+   `PASS` or approved `ROUTE_ONLY`, then recheck every reader, semantic, SNAG,
+   and cold-load receipt.
+6. Run `finalize` to bind all 175 accepted results and their ordered provenance
+   histories into one immutable content-addressed corpus.
+7. Run `verify-final` before bundle assembly.
 
 ### 4. Install and test the production bundle
 
-1. Assemble the authenticated bundle from the accepted freeze.
-2. Verify the archive and release manifest.
-3. Install one content-addressed generation.
-4. Verify every installed role and both module aliases.
-5. Prove failure recovery and rollback.
-6. Cold-load the installed maps before match evidence begins.
+1. Assemble the authenticated bundle, then verify its archive and release
+   manifest.
+2. Install one content-addressed generation and verify every installed role and
+   both module aliases.
+3. Prove failure recovery and rollback.
+4. Cold-load the installed maps before match evidence begins.
 
 ### 5. Collect real-match evidence
 
-Run both match programs against the installed frozen bytes:
+- Run the final route-only remainder, which may contain zero to ten maps.
+- Run the persistent ten-process fleet over the scheduled 20-map rotations.
+- Retain evidence for earned perception; movement; objectives; mechanisms;
+  combat; roles; item pursuit and commitment retirement; recovery; one terminal
+  lifecycle per hook use; exact rosters; recordings; spectator sound
+  attribution; and clean shutdown.
 
-- Run the final route-only remainder in parallel with `route-only-run`. It may
-  contain zero to ten of the development candidates.
-- Run the ten-process persistent fleet over the scheduled 20-map rotations.
-
-Retain evidence for:
-
-- movement and route progress;
-- objective pursuit and flag interactions;
-- doors, water, drops, hooks, rocket jumps, lifts, trains, teleporters, and
-  other published mechanisms;
-- combat, weapon use, aiming, splash safety, and earned perception;
-- carriers, escorts, recovery, interception, and defense;
-- item pursuit and commitment retirement;
-- bounded recovery from failed movement;
-- hook fire, sustain, pull, release, re-fire, and one terminal lifecycle for
-  every physical hook;
-- exact rosters, serverrecord, POV recording, playback, spectator sound
-  attribution, and clean shutdown.
-
-Judge behavior from play. Scores, wins, captures, completion of a named map
-list, and parser output do not replace observed behavior.
-
-If a match exposes a source defect, abandon the freeze. Fix the owning source,
-restart exact CI, create a new freeze, and repeat every invalidated gate.
+Judge behavior from play. Scores, wins, captures, schedule completion, and
+parser output do not replace observed behavior. If a match exposes a source
+defect, abandon the freeze, fix the source, rerun CI, and repeat every
+invalidated downstream gate.
 
 ### 6. Tag and verify the release
 
 1. Tag the unchanged frozen commit as `v1.0.0`.
 2. Publish the supported modules and static public assets.
-3. Download every public asset into a clean directory.
-4. Verify `VERSION` and `SHA256SUMS`.
-5. Compare each downloaded payload with its accepted public payload.
-6. Verify the installed production bundle independently through its manifest.
-7. Record the final source, module, corpus, match, CI, tag, and release
-   identities.
-8. Add any evidence-only plan update after the release. Do not rebuild the
-   release from that later documentation commit.
+3. Download the release into a clean directory and verify `VERSION`,
+   `SHA256SUMS`, and every payload.
+4. Independently verify the installed production bundle and record the final
+   source, module, corpus, match, CI, tag, and release identities.
+5. Make any evidence-only plan update after the release. Do not rebuild the
+   release or retag the frozen commit.
 
 ## Invalidation rules
 
 - A source, tool, module, configuration, engine, Python runtime, reader,
-  linter, semantic checker, or BSP change invalidates the freeze and every
-  generated artifact that depends on it.
-- A RUNE change invalidates its SNAG, cold-load result, bundle identity, and
-  match evidence.
+  linter, semantic checker, or BSP change invalidates the snapshot and all
+  downstream evidence.
+- A RUNE change invalidates its SNAG, cold-load, bundle, and match evidence.
 - A bundle change invalidates installed-bundle and match evidence.
-- Fake-engine tests prove tooling behavior only. They never replace real-match
-  evidence.
-- Development-era artifacts and prior freezes cannot authorize the final
-  corpus.
-
-Earlier runs informed the source repairs. Final acceptance starts from a new
-frozen source, module, configuration, engine, tool set, BSP manifest, and empty
-controller run root.
+- Fake-engine tests never replace real-match evidence.
+- Development artifacts and prior freezes cannot authorize the final corpus.
 
 ## Completion checklist
 
-- [x] Gameplay and traversal source implemented.
-- [x] Map source repairs complete for initial release.
-- [x] RUNE, SNAG, reader, lint, semantic, cold-load, and rollback tooling
-  implemented.
-- [x] Authenticated server-bundle and persistent-fleet tooling implemented.
-- [x] Final route-only verifier, Dijkstra fallback, release docs, version, and
-  compact-plan wave integrated.
-- [ ] Final source commit synchronized and exact CI green on both branches.
-- [ ] New immutable source, module, configuration, tool, and 175-map freeze.
-- [ ] All 175 new RUNEs accepted as `PASS` or approved `ROUTE_ONLY`.
-- [ ] Production bundle installed and verified.
+- [x] Gameplay, traversal, learning, RUNE, SNAG, reader, bundle, and fleet
+  systems implemented.
+- [x] Dijkstra late-path selection wired into production generation.
+- [x] Pre-freeze controller/finalizer and `smap32` proofs complete.
+- [ ] Full host gates and exact CI green on synchronized `slipgate` and `main`.
+- [ ] Immutable final snapshot contains 175 BSPs and 156 adoption candidates.
+- [ ] All 156 candidates validated; passes preserved and authorized failures
+  replaced at most once.
+- [ ] All 19 missing RUNEs generated and accepted.
+- [ ] All 175 artifacts finalized and independently verified.
+- [ ] Production bundle installed and rollback verified.
 - [ ] Route-only and persistent-fleet real-match evidence accepted.
-- [ ] Any match-exposed defects repaired and invalidated evidence repeated.
-- [ ] Unchanged frozen commit tagged and public release hashes verified.
+- [ ] Any match-exposed defect repaired and invalidated evidence repeated.
+- [ ] Unchanged frozen commit tagged and public release verified.
 
-## Plan maintenance rule
+## Maintenance rule
 
-Keep this file current and compact. Update status, decisions, gates, and the
-checklist. Do not append command transcripts, temporary paths, rejected
-hypotheses, intermediate hashes, or superseded run narratives. Store those in
-Git history or immutable evidence records.
+Keep this file current and compact. Update status, gates, and the checklist.
+Do not add command transcripts, temporary paths, unnecessary hashes, rejected
+hypotheses, or superseded narratives.

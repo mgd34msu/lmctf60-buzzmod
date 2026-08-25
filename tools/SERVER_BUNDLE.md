@@ -6,12 +6,12 @@ generation.
 
 ## Write the build specification
 
-Create one canonical JSON object with the top-level keys `files`, `format`, and
-`identities`. Set `format` to `lmctf-server-bundle-build-v1`. The `identities`
-object contains lowercase SHA-256 values named `source`, `engine`,
-`rune_format`, `action_contract`, `mechanism_contract`, and `configuration`.
-Each `files` entry contains `source`, `path`, and `role`. Sort object keys, omit
-spaces, and end the file with one newline.
+Create one canonical JSON object with the top-level keys `files` and `format`.
+Set `format` to `lmctf-server-bundle-build-v2`. Each `files` entry contains
+`source`, `path`, and `role`. Sort object keys, omit spaces, and end the file
+with one newline. Do not supply handwritten identity hashes. The build command
+receives the sealed snapshot and final corpus separately and derives its binding
+by replaying `corpus-authority.json`.
 
 The shown file list is abbreviated. The complete specification contains these
 roles and paths:
@@ -27,13 +27,18 @@ roles and paths:
 
 The builder rejects an extra role, a missing required role, a wrong target
 path, a symlink, a changed input, a noncanonical rotation, unequal module
-aliases, and a configuration identity that differs from the config bytes.
+aliases, a v1 specification, and a bundle whose RUNE, BSP, module, or present
+SNAG bytes differ from the sealed final corpus. Every top-20 SNAG is required.
+For each optional SNAG, the builder reopens that map's final accepted result and
+requires its `cold_load_snag_record` to match the bundled bytes.
 
 ## Build and verify the release files
 
 ```sh
 python3 -B tools/server_bundle.py build \
   --spec /freeze/server-bundle-build.json \
+  --snapshot /freeze/rune-inputs \
+  --corpus-root /archive/rune-corpora/CORPUS_ID \
   --archive /release/lmctf-server-bundle.tar \
   --manifest /release/lmctf-server-bundle.json
 
@@ -42,9 +47,11 @@ python3 -B tools/server_bundle.py verify \
   --manifest /release/lmctf-server-bundle.json
 ```
 
-The manifest binds the archive name, size, SHA-256, identities, and every file
-role, path, mode, size, and SHA-256. The tar contains only sorted regular file
-members. It has fixed ownership metadata and timestamps.
+The manifest binds the archive name, size, SHA-256, the re-verifiable sealed
+final-corpus reference, and every file role, path, mode, size, and SHA-256.
+The tar contains only sorted regular file members. It has fixed ownership
+metadata and timestamps. Installation records that same corpus ID and snapshot
+in each active or rollback state reference.
 
 ## Install one generation
 

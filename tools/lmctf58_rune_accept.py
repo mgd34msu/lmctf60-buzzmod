@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import sys
 
 try:
     import rune_contracts_generated as contract
@@ -130,8 +131,12 @@ def main(argv: list[str] | None = None) -> int:
         evidence = validate(
             runeio.read(args.artifact), tuple(args.objective_roots)
         )
-    except (OSError, ValueError) as exc:
-        parser.error(str(exc))
+    except OSError as exc:
+        print(f"lmctf58 gate infrastructure failure: {exc}", file=sys.stderr)
+        return 3
+    except ValueError as exc:
+        print(f"lmctf58 gate rejected artifact: {exc}", file=sys.stderr)
+        return 1
     print(json.dumps(evidence, sort_keys=True))
     return 0
 

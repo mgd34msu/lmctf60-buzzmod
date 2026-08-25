@@ -18,7 +18,7 @@ from unittest import mock
 
 from tests.test_server_bundle import BundleFixture
 from tests.test_rune_artifact import _build_rune, _fix_payload_and_header_crc
-from tools import runeio, server_bundle
+from tools import runeio
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +28,14 @@ RUNTIME = ROOT / "tools" / "fleet_runner_live.py"
 
 def _load():
     spec = importlib.util.spec_from_file_location("fleet_runner_live_test_core", RUNNER)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _live_runtime():
+    spec = importlib.util.spec_from_file_location("fleet_runner_live_test_runtime", RUNTIME)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -45,6 +53,23 @@ def _write(path: Path, payload: bytes) -> dict:
     return {"path": str(path.resolve()), "size": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
             "device": info.st_dev, "inode": info.st_ino}
+
+
+def _installed_bundle_fixture(core, root: Path, label: str, prepare=None):
+    fixture = BundleFixture(root, label, b"module\n")
+    if prepare is not None:
+        prepare(fixture)
+    active = {
+        "bundle_id": "f" * 64,
+        "final_corpus": {"fixture": label},
+        "files": [
+            {**core._file_record(Path(entry["source"])), "role": entry["role"]}
+            for entry in fixture.entries
+        ],
+    }
+    state = _write(root / f"{label}-installed.json", b"installed\n")
+    verifier = core._file_record(ROOT / "tools" / "server_bundle.py")
+    return fixture, active, state, verifier
 
 
 ENGINE_SOURCE = r'''
@@ -268,6 +293,15 @@ def _route_rune(map_name: str) -> bytes:
 
 
 class FleetRunnerLiveTest(unittest.TestCase):
+    def test_film_loader_delegates_the_exact_validated_record(self):
+        live = _live_runtime()
+        record = {"sha256": "a" * 64, "path": "/immutable/film.py"}
+        decoder = object()
+        core = mock.Mock()
+        core._load_film_module.return_value = decoder
+        self.assertIs(live._load_film(core, record), decoder)
+        core._load_film_module.assert_called_once_with(record)
+
     @classmethod
     def setUpClass(cls):
         cls.core = _load()
@@ -285,14 +319,9 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 self.assertEqual(compiled.returncode, 0, compiled.stderr)
             engine_record = _write(engine, engine.read_bytes())
             client_record = _write(client, client.read_bytes())
-            bundle = BundleFixture(root, "bundle", b"module\n")
-            archive, manifest = root / "bundle.tar", root / "bundle.json"
-            server_bundle.build_bundle(bundle.write_spec(), archive, manifest)
-            install = root / "installed"
-            installed = server_bundle.install_bundle(
-                manifest, archive, install, expected_active=None
+            _bundle, active_bundle, installed_bundle, bundle_verifier = _installed_bundle_fixture(
+                self.core, root, "fleet-bundle"
             )
-            installed_bundle = self.core._file_record(install / "install-state.json")
             config = _write(root / "fleet.cfg", b"set dedicated 1\n")
             film = _write(root / "film.py", FILM_SOURCE.encode())
             module_a = _write(root / "game.so", b"module\n")
@@ -341,15 +370,24 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 "timeout_seconds": 60, "lanes": lanes,
             }))
             state, evidence = root / "state", root / "evidence"
-            completed = subprocess.run(
-                [sys.executable, "-B", str(RUNNER), "run", "--spec", str(spec),
-                 "--state-root", str(state), "--evidence-root", str(evidence)],
-                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, check=False, timeout=30,
-            )
             try:
-                self.assertEqual(completed.returncode, 0, completed.stderr)
-                receipts = self.core.verify_stopped_residence_evidence(state, evidence)
+                live = _live_runtime()
+                with mock.patch.object(
+                        self.core, "_verify_installed_bundle",
+                        return_value=(active_bundle, bundle_verifier)), mock.patch.object(
+                            self.core, "_validate_installed_final_corpus",
+                            side_effect=ValueError("cross-map SNAG")), mock.patch.object(
+                                live, "_start", side_effect=AssertionError("fleet launched")):
+                    with self.assertRaisesRegex(ValueError, "cross-map SNAG"):
+                        live.run_fleet(self.core, spec, state, evidence)
+                self.assertFalse(state.exists())
+                self.assertFalse(evidence.exists())
+                with mock.patch.object(
+                        self.core, "_verify_installed_bundle",
+                        return_value=(active_bundle, bundle_verifier)), mock.patch.object(
+                            self.core, "_validate_installed_final_corpus", return_value={}):
+                    live.run_fleet(self.core, spec, state, evidence)
+                    receipts = self.core.verify_stopped_residence_evidence(state, evidence)
                 self.assertEqual(len(receipts), 210)
                 for lane in self.core.LANES:
                     generations = {
@@ -378,17 +416,15 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 self.assertEqual(compiled.returncode, 0, compiled.stderr)
             engine_record = _write(engine, engine.read_bytes())
             client_record = _write(client, client.read_bytes())
-            bundle = BundleFixture(root, "bundle", b"module\n")
-            for map_name in self.core.ROUTE_ONLY_MAPS:
-                entry = next(item for item in bundle.entries
-                             if item["role"] == f"rune:{map_name}")
-                Path(entry["source"]).write_bytes(_route_rune(map_name))
-            archive, manifest = root / "bundle.tar", root / "bundle.json"
-            server_bundle.build_bundle(bundle.write_spec(), archive, manifest)
-            install = root / "installed"
-            server_bundle.install_bundle(manifest, archive, install, expected_active=None)
-            installed_bundle = self.core._file_record(install / "install-state.json")
-            active, _verifier = self.core._verify_installed_bundle(installed_bundle)
+            def prepare(bundle):
+                for map_name in self.core.ROUTE_ONLY_MAPS:
+                    entry = next(item for item in bundle.entries
+                                 if item["role"] == f"rune:{map_name}")
+                    Path(entry["source"]).write_bytes(_route_rune(map_name))
+
+            bundle, active, installed_bundle, bundle_verifier = _installed_bundle_fixture(
+                self.core, root, "route-bundle", prepare
+            )
             roles = self.core._bundle_role_records(active)
             film = _write(root / "route-film.py", ROUTE_FILM_SOURCE.encode())
             selected_lanes = ("r01", "r04")
@@ -424,7 +460,7 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 })
             spec = root / "route-run.json"
             spec.write_bytes(_canonical({
-                "format": "lmctf-route-only-run-spec-v2", "campaign_id": "route-fixture",
+                "format": "lmctf-route-only-run-spec-v3", "campaign_id": "route-fixture",
                 "engine": engine_record, "client": client_record,
                 "route_config": self.core._file_record(Path(roles["route-only-config"]["path"])),
                 "film": film, "runtime": self.core._file_record(RUNTIME),
@@ -434,7 +470,7 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 ],
                 "spectator": "RouteObserver", "target": "[SG]Bot01",
                 "timeout_seconds": 60, "installed_bundle": installed_bundle,
-                "controller_authority": {"fixture": "mixed"}, "lanes": lanes,
+                "lanes": lanes,
             }))
             state, evidence = root / "state", root / "evidence"
             live_spec = importlib.util.spec_from_file_location("fleet_runner_live", RUNTIME)
@@ -443,18 +479,35 @@ class FleetRunnerLiveTest(unittest.TestCase):
             sys.modules["fleet_runner_live"] = live
             live_spec.loader.exec_module(live)
 
-            def controller_fixture(authority, _roles, _engine, _aliases):
-                if authority["fixture"] == "zero":
-                    return {}
-                return {self.core.expected_route_only_map(lane): {
-                    "fixture": "route-controller",
-                    "map": self.core.expected_route_only_map(lane),
-                } for lane in selected_lanes}
+            all_maps = tuple(
+                entry["role"].removeprefix("rune:") for entry in bundle.entries
+                if entry["role"].startswith("rune:")
+            )
+            selected_maps = {self.core.expected_route_only_map(lane) for lane in selected_lanes}
+            mixed_results = {
+                map_name: {"classification": "ROUTE_ONLY" if map_name in selected_maps else "PASS"}
+                for map_name in all_maps
+            }
+            zero_results = {
+                map_name: {"classification": "PASS"} for map_name in all_maps
+            }
 
             try:
                 with mock.patch.object(
-                        self.core, "_validate_route_controller_authority",
-                        side_effect=controller_fixture):
+                        self.core, "_verify_installed_bundle",
+                        return_value=(active, bundle_verifier)), mock.patch.object(
+                            self.core, "_validate_installed_final_corpus",
+                            side_effect=ValueError("cross-map SNAG")), mock.patch.object(
+                                live, "_start", side_effect=AssertionError("route launched")):
+                    with self.assertRaisesRegex(ValueError, "cross-map SNAG"):
+                        live.run_route_only(self.core, spec, state, evidence)
+                self.assertFalse(state.exists())
+                self.assertFalse(evidence.exists())
+                with mock.patch.object(
+                        self.core, "_verify_installed_bundle",
+                        return_value=(active, bundle_verifier)), mock.patch.object(
+                            self.core, "_validate_installed_final_corpus",
+                            return_value=mixed_results):
                     self.assertEqual(0, self.core.main([
                         "route-only-run", "--spec", str(spec), "--state-root", str(state),
                         "--evidence-root", str(evidence),
@@ -477,13 +530,15 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 zero_spec = root / "route-zero.json"
                 zero_spec.write_bytes(_canonical({
                     **json.loads(spec.read_text()), "campaign_id": "route-zero",
-                    "controller_authority": {"fixture": "zero"}, "film": engine_record,
+                    "film": engine_record,
                     "lanes": [],
                 }))
                 zero_state, zero_evidence = root / "zero-state", root / "zero-evidence"
                 with mock.patch.object(
-                        self.core, "_validate_route_controller_authority",
-                        side_effect=controller_fixture), mock.patch.object(
+                        self.core, "_verify_installed_bundle",
+                        return_value=(active, bundle_verifier)), mock.patch.object(
+                            self.core, "_validate_installed_final_corpus",
+                            return_value=zero_results), mock.patch.object(
                             live, "_start", side_effect=AssertionError("zero selection launched")):
                     self.assertEqual(0, self.core.main([
                         "route-only-run", "--spec", str(zero_spec),

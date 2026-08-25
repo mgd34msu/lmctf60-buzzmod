@@ -13,6 +13,7 @@ import ctypes
 from dataclasses import dataclass
 import fcntl
 import hashlib
+import importlib.abc
 import importlib.util
 import json
 import math
@@ -40,14 +41,14 @@ ROUTE_ONLY_MAPS = APPROVED_ROUTE_ONLY_MAPS
 TOPMAPS_PATH = Path(__file__).with_name("topmaps.txt")
 MAX_JSON_BYTES = 64 * 1024 * 1024
 ZERO_HASH = "0" * 64
-FORMAT_OWNER = "lmctf-fleet-owner-v1"
+FORMAT_OWNER = "lmctf-fleet-owner-v2"
 FORMAT_RECEIPT = "lmctf-fleet-residence-v1"
 FORMAT_LEDGER = "lmctf-fleet-ledger-entry-v1"
 FORMAT_SPEC = "lmctf-fleet-run-spec-v1"
-FORMAT_ROUTE_OWNER = "lmctf-route-only-owner-v2"
+FORMAT_ROUTE_OWNER = "lmctf-route-only-owner-v3"
 FORMAT_ROUTE_RECEIPT = "lmctf-route-only-receipt-v2"
 FORMAT_ROUTE_LEDGER = "lmctf-route-only-ledger-entry-v2"
-FORMAT_ROUTE_SPEC = "lmctf-route-only-run-spec-v2"
+FORMAT_ROUTE_SPEC = "lmctf-route-only-run-spec-v3"
 SAFE_ATOM = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
@@ -265,6 +266,49 @@ def _file_record(path: Path) -> dict:
     }
 
 
+class _AttestedSourceLoader(importlib.abc.Loader):
+    """Execute the bytes authenticated before the module spec was created."""
+
+    def __init__(self, path: Path, payload: bytes):
+        self.path = path
+        self.payload = payload
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module) -> None:
+        code = compile(self.payload, str(self.path), "exec", dont_inherit=True)
+        exec(code, module.__dict__)
+
+
+def _load_attested_module(
+        path: Path, record: Mapping[str, Any], label: str, module_name: str,
+        ) -> Any:
+    """Load only the bytes captured while checking ``record``."""
+    payload, info = _read_regular(path, maximum=2 * 1024 * 1024 * 1024)
+    current = {
+        "path": str(path.resolve()),
+        "size": len(payload), "sha256": _hash(payload),
+        "device": info.st_dev, "inode": info.st_ino,
+    }
+    if record != current:
+        raise FleetError(f"{label} bytes differ from authority")
+    module_spec = importlib.util.spec_from_file_location(
+        module_name, path, loader=_AttestedSourceLoader(path, payload)
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise FleetError(f"cannot load {label}")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_name] = module
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception:
+        if sys.modules.get(module_name) is module:
+            del sys.modules[module_name]
+        raise
+    return module
+
+
 def _verify_file_record(record: Any, label: str, *, evidence_root: Path | None = None) -> Path:
     if not isinstance(record, dict) or set(record) != {
             "path", "size", "sha256", "device", "inode"}:
@@ -311,14 +355,11 @@ def _verify_installed_bundle(record: Any) -> tuple[dict, dict]:
     state_path = _verify_file_record(record, "installed bundle state")
     verifier_path = Path(__file__).with_name("server_bundle.py")
     verifier_record = _file_record(verifier_path)
-    module_spec = importlib.util.spec_from_file_location(
-        f"_lmctf_server_bundle_{verifier_record['sha256']}", verifier_path
-    )
-    if module_spec is None or module_spec.loader is None:
-        raise FleetError("cannot load the installed bundle verifier")
-    module = importlib.util.module_from_spec(module_spec)
     try:
-        module_spec.loader.exec_module(module)
+        module = _load_attested_module(
+            verifier_path, verifier_record, "installed bundle verifier",
+            f"_lmctf_server_bundle_{verifier_record['sha256']}",
+        )
         state = module.verify_state_file(state_path)
     except Exception as exc:
         raise FleetError(f"installed bundle authority is invalid: {exc}") from exc
@@ -553,7 +594,7 @@ def verify_stopped_residence_evidence(
     runner_sha = _hash(Path(__file__).read_bytes())
     if set(owner) != {"format", "state", "fleet_id", "bundle_id", "runner_sha256",
                       "topmaps_sha256", "release_monotonic_ns", "processes",
-                      "clients", "inputs", "maplists", "ledger_entries",
+                      "clients", "inputs", "final_corpus", "maplists", "ledger_entries",
                       "ledger_tail_hash", "lock_path"}:
         raise FleetError("stopped fleet owner has unknown or missing fields")
     if (owner.get("format") != FORMAT_OWNER or owner.get("state") != "SAFE_STOPPED" or
@@ -594,6 +635,9 @@ def verify_stopped_residence_evidence(
         _verify_bundle_copy(alias, bundle_roles, role, "module alias")
     if aliases[0]["sha256"] != aliases[1]["sha256"]:
         raise FleetError("production module aliases differ")
+    if owner["final_corpus"] != active_bundle.get("final_corpus"):
+        raise FleetError("stopped fleet final corpus differs from installed bundle")
+    _validate_installed_final_corpus(active_bundle, bundle_roles, engine)
     processes = owner.get("processes")
     if not isinstance(processes, dict) or set(processes) != set(LANES):
         raise FleetError("stopped fleet process inventory is incomplete")
@@ -709,18 +753,21 @@ def _validate_route_only_lane_selection(
     return lane_order
 
 
-def _load_route_helpers() -> tuple[Any, Any, Any]:
-    """Load the pinned local RUNE decoder and telemetry reducers."""
-    tools = str(Path(__file__).parent)
-    if tools not in sys.path:
-        sys.path.insert(0, tools)
-    try:
-        import runeio
-        import rolestat
-        import stallcensus
-    except ImportError as exc:
-        raise FleetError(f"cannot load route-only evidence helper: {exc}") from exc
-    return runeio, rolestat, stallcensus
+def _load_route_helpers(records: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    """Load the exact helper bytes recorded before the route-only run."""
+    names = ("runeio", "rolestat", "stallcensus")
+    if not isinstance(records, Mapping) or set(records) != set(names):
+        raise FleetError("route-only helper authority is incomplete")
+    modules = []
+    for name in names:
+        record = records[name]
+        if not isinstance(record, Mapping) or not isinstance(record.get("sha256"), str):
+            raise FleetError(f"route-only {name} authority is invalid")
+        modules.append(_load_attested_module(
+            Path(__file__).with_name(f"{name}.py"), record,
+            f"route-only {name}", f"_lmctf_route_{name}_{record['sha256']}",
+        ))
+    return tuple(modules)
 
 
 def _route_helper_records() -> dict[str, dict]:
@@ -733,57 +780,38 @@ def _route_helper_records() -> dict[str, dict]:
 
 def _load_film_module(record: Any):
     path = _verify_file_record(record, "route-only film decoder")
-    module_spec = importlib.util.spec_from_file_location(
-        f"_lmctf_route_film_{record['sha256']}", path
+    module = _load_attested_module(
+        path, record, "route-only film decoder",
+        f"_lmctf_route_film_{record['sha256']}",
     )
-    if module_spec is None or module_spec.loader is None:
-        raise FleetError("cannot load route-only film decoder")
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
     if not callable(getattr(module, "walk_demo", None)):
         raise FleetError("route-only film decoder lacks walk_demo")
     return module
 
 
 def _load_route_finalizer(record: Any):
-    """Load the hash-attested final-corpus verifier beside this runner."""
+    """Load the hash-attested final-corpus binder beside this runner."""
     path = Path(__file__).with_name("rune_corpus_finalizer.py")
-    if record != _file_record(path):
-        raise FleetError("route-only finalizer bytes differ from authority")
     module_name = f"_lmctf_route_finalizer_{record['sha256']}"
-    module_spec = importlib.util.spec_from_file_location(module_name, path)
-    if module_spec is None or module_spec.loader is None:
-        raise FleetError("cannot load route-only final-corpus verifier")
-    module = importlib.util.module_from_spec(module_spec)
-    sys.modules[module_name] = module
-    try:
-        module_spec.loader.exec_module(module)
-    except Exception:
-        if sys.modules.get(module_name) is module:
-            del sys.modules[module_name]
-        raise
-    if not callable(getattr(module, "verify_final_corpus", None)):
-        raise FleetError("route-only final-corpus verifier lacks verify_final_corpus")
+    module = _load_attested_module(
+        path, record, "route-only finalizer", module_name
+    )
+    for name in (
+        "build_verified_final_corpus_binding",
+        "validate_bundle_final_corpus_binding",
+    ):
+        if not callable(getattr(module, name, None)):
+            raise FleetError(f"final-corpus binder lacks {name}")
     return module
 
 
 def _load_route_controller(record: Any):
     """Load the hash-attested corpus controller with normal module identity."""
     path = Path(__file__).with_name("rune_corpus_controller.py")
-    if record != _file_record(path):
-        raise FleetError("route-only controller bytes differ from authority")
     module_name = f"_lmctf_route_controller_{record['sha256']}"
-    module_spec = importlib.util.spec_from_file_location(module_name, path)
-    if module_spec is None or module_spec.loader is None:
-        raise FleetError("cannot load route-only controller verifier")
-    module = importlib.util.module_from_spec(module_spec)
-    sys.modules[module_name] = module
-    try:
-        module_spec.loader.exec_module(module)
-    except Exception:
-        if sys.modules.get(module_name) is module:
-            del sys.modules[module_name]
-        raise
+    module = _load_attested_module(
+        path, record, "route-only controller", module_name
+    )
     if not callable(getattr(module, "verify_snapshot", None)):
         raise FleetError("route-only controller lacks snapshot verification")
     return module
@@ -793,7 +821,7 @@ def build_route_controller_authority(
     snapshot_value: os.PathLike[str] | str,
     corpus_root_value: os.PathLike[str] | str,
 ) -> dict[str, Any]:
-    """Export the strict final-corpus object embedded in a route-only spec."""
+    """Export the verified final-corpus object for bundle construction tools."""
     snapshot = _safe_root(snapshot_value, "controller snapshot")
     corpus_root = _safe_root(corpus_root_value, "final corpus root")
     controller_record = _file_record(Path(__file__).with_name("rune_corpus_controller.py"))
@@ -801,163 +829,67 @@ def build_route_controller_authority(
     controller = _load_route_controller(controller_record)
     finalizer = _load_route_finalizer(finalizer_record)
     try:
-        verified = finalizer.verify_final_corpus(
-            controller, snapshot=snapshot, corpus_root=corpus_root
+        return finalizer.build_verified_final_corpus_binding(
+            controller,
+            snapshot=snapshot,
+            corpus_root=corpus_root,
+            controller_record=controller_record,
+            finalizer_record=finalizer_record,
         )
     except Exception as exc:
         raise FleetError(f"route-only final corpus is invalid: {exc}") from exc
-    if not isinstance(verified, Mapping):
-        raise FleetError("route-only final corpus verifier returned an invalid result")
-    required = {"corpus_id", "authority", "run_root", "port_base", "results"}
-    if set(verified) != required:
-        raise FleetError("route-only final corpus export is incomplete")
-    return {
-        "controller": controller_record,
-        "finalizer": finalizer_record,
-        "snapshot": str(snapshot),
-        "run_root": verified["run_root"],
-        "corpus_authority": verified["authority"],
-        "corpus_id": verified["corpus_id"],
-        "results": verified["results"],
-    }
+
+
+def _validate_final_corpus_binding(
+    binding: Any,
+    bundle_roles: Mapping[str, dict],
+    engine: Mapping[str, Any],
+) -> dict[str, dict]:
+    """Replay the installed final corpus before any fleet or route-only use."""
+    controller_path = Path(__file__).with_name("rune_corpus_controller.py")
+    finalizer_path = Path(__file__).with_name("rune_corpus_finalizer.py")
+    controller_record = _file_record(controller_path)
+    finalizer_record = _file_record(finalizer_path)
+    try:
+        controller = _load_route_controller(controller_record)
+        finalizer = _load_route_finalizer(finalizer_record)
+        return finalizer.validate_bundle_final_corpus_binding(
+            controller,
+            binding=binding,
+            controller_record=controller_record,
+            finalizer_record=finalizer_record,
+            bundle_roles=bundle_roles,
+            engine_record=engine,
+        )
+    except FleetError:
+        raise
+    except Exception as exc:
+        raise FleetError(f"installed final corpus is invalid: {exc}") from exc
+
+
+def _validate_installed_final_corpus(
+    active: Mapping[str, Any],
+    bundle_roles: Mapping[str, dict],
+    engine: Mapping[str, Any],
+) -> dict[str, dict]:
+    binding = active.get("final_corpus")
+    if not isinstance(binding, dict):
+        raise FleetError("installed bundle lacks final corpus authority")
+    return _validate_final_corpus_binding(binding, bundle_roles, engine)
 
 
 def _validate_route_controller_authority(
         authority: Any, bundle_roles: Mapping[str, dict], engine: Mapping[str, Any],
         aliases: Sequence[dict],
         ) -> dict[str, dict]:
-    """Bind route-only matches to one verified immutable final corpus.
-
-    The finalizer owns all corpus revalidation. This layer verifies its own
-    bytes and the published authority, then retains only approved local-only
-    maps whose RUNE and BSP still match the active installed bundle.
-    """
-    required = {
-        "controller", "finalizer", "snapshot", "run_root", "corpus_authority",
-        "corpus_id", "results",
-    }
-    if not isinstance(authority, dict) or set(authority) != required:
-        raise FleetError("route-only controller authority is incomplete")
-    controller_path = Path(__file__).with_name("rune_corpus_controller.py")
-    controller_record = _file_record(controller_path)
-    if authority["controller"] != controller_record:
-        raise FleetError("route-only controller bytes differ from authority")
-    if (not isinstance(authority["snapshot"], str) or
-            not isinstance(authority["run_root"], str) or
-            not _valid_hash(authority["corpus_id"])):
-        raise FleetError("route-only controller path or corpus ID is invalid")
-    snapshot = _safe_root(authority["snapshot"], "controller snapshot")
-    run_root = _safe_root(authority["run_root"], "controller run root")
-    corpus_authority_path = _verify_final_file_record(
-        authority["corpus_authority"], "final corpus authority"
+    """Select route-only work from one fully replayed final-corpus binding."""
+    del aliases
+    results = _validate_final_corpus_binding(authority, bundle_roles, engine)
+    return _select_route_only_results(
+        tuple(results),
+        {map_name: (str(item.get("classification")), item)
+         for map_name, item in results.items()},
     )
-    corpus_root = _safe_root(corpus_authority_path.parent, "final corpus root")
-    if corpus_root.name != authority["corpus_id"]:
-        raise FleetError("route-only final corpus root is not content-addressed")
-    expected_authority_path = _inside(
-        corpus_root / "corpus-authority.json", corpus_root, "final corpus authority"
-    )
-    if corpus_authority_path != expected_authority_path:
-        raise FleetError("route-only final corpus authority path drift")
-    corpus_authority, _corpus_authority_bytes = _read_json(corpus_authority_path)
-    if corpus_authority.get("corpus_id") != authority["corpus_id"]:
-        raise FleetError("route-only final corpus authority corpus ID drift")
-    try:
-        controller = _load_route_controller(controller_record)
-        verified_snapshot = controller.verify_snapshot(snapshot)
-    except Exception as exc:
-        raise FleetError(f"route-only controller snapshot is invalid: {exc}") from exc
-    roles = verified_snapshot.get("by_role")
-    if not isinstance(roles, dict):
-        raise FleetError("route-only controller snapshot role inventory is invalid")
-    snapshot_engine = roles.get("engine")
-    if (not isinstance(snapshot_engine, dict) or
-            engine.get("sha256") != snapshot_engine.get("sha256")):
-        raise FleetError("route-only active engine differs from controller snapshot")
-    for alias, role in zip(aliases, ("module-primary", "module-secondary"), strict=True):
-        snapshot_role = roles.get(role.replace("-", "_"))
-        if (not isinstance(snapshot_role, dict) or
-                alias.get("sha256") != snapshot_role.get("sha256")):
-            raise FleetError("route-only bundle module differs from controller snapshot")
-    map_manifest = roles.get("map_manifest")
-    if not isinstance(map_manifest, dict):
-        raise FleetError("route-only controller lacks the map manifest")
-    try:
-        maps = tuple(controller.validate_manifest(snapshot / map_manifest["path"]))
-    except Exception as exc:
-        raise FleetError(f"route-only controller map manifest is invalid: {exc}") from exc
-    if not set(ROUTE_ONLY_MAPS).issubset(maps):
-        raise FleetError("route-only controller map manifest lacks a candidate")
-    try:
-        verified_corpus = _load_route_finalizer(authority["finalizer"]).verify_final_corpus(
-            controller, snapshot=snapshot, corpus_root=corpus_root
-        )
-    except FleetError:
-        raise
-    except Exception as exc:
-        raise FleetError(f"route-only final corpus is invalid: {exc}") from exc
-    if not isinstance(verified_corpus, Mapping):
-        raise FleetError("route-only final corpus verifier returned an invalid result")
-    if verified_corpus.get("corpus_id") != authority["corpus_id"]:
-        raise FleetError("route-only final corpus verifier corpus ID drift")
-    if verified_corpus.get("authority") != authority["corpus_authority"]:
-        raise FleetError("route-only final corpus verifier authority drift")
-    verified_run_root = verified_corpus.get("run_root")
-    if not isinstance(verified_run_root, (str, os.PathLike)):
-        raise FleetError("route-only final corpus verifier run root is invalid")
-    if _safe_root(verified_run_root, "final corpus verifier run root") != run_root:
-        raise FleetError("route-only final corpus verifier run root drift")
-    port_base = verified_corpus.get("port_base")
-    if type(port_base) is not int or not (1 <= port_base <= 65535 - len(maps) + 1):
-        raise FleetError("route-only final corpus verifier port base is invalid")
-    results = verified_corpus.get("results")
-    if results != authority["results"]:
-        raise FleetError("route-only final corpus result inventory drift")
-    if not isinstance(results, list) or len(results) != len(maps):
-        raise FleetError("route-only final corpus result inventory is incomplete")
-    checked = {}
-    for index, item in enumerate(results):
-        if not isinstance(item, dict) or set(item) != {
-                "map", "stable_port", "classification", "route_contract", "attempt",
-                "attempt_result"}:
-            raise FleetError("route-only final corpus result record is invalid")
-        map_name = maps[index]
-        if (item["map"] != map_name or type(item["stable_port"]) is not int or
-                item["stable_port"] != port_base + maps.index(map_name) or
-                type(item["attempt"]) is not int or item["attempt"] < 1 or
-                item["classification"] not in {"PASS", "ROUTE_ONLY"} or
-                item["route_contract"] not in {"complete", "local_only"}):
-            raise FleetError("route-only final corpus result map or port drift")
-        expected_result_path = (
-            run_root / "runs" / map_name / f"attempt-{item['attempt']:04d}" / "result.json"
-        )
-        result_path = _verify_final_file_record(
-            item["attempt_result"], "final corpus attempt result", evidence_root=run_root
-        )
-        if result_path != _inside(expected_result_path, run_root, "final corpus attempt result"):
-            raise FleetError("route-only final corpus result path drift")
-        try:
-            result, _raw = controller._load_json_regular(result_path)
-        except Exception as exc:
-            raise FleetError(f"route-only final corpus result is invalid: {exc}") from exc
-        if (not isinstance(result, dict) or result.get("map") != map_name or
-                result.get("stable_port") != item["stable_port"] or
-                result.get("classification") != item["classification"] or
-                result.get("route_contract") != item["route_contract"] or
-                result.get("attempt") != item["attempt"]):
-            raise FleetError("route-only final corpus did not accept the final result")
-        classification = item["classification"]
-        if classification == "ROUTE_ONLY" and map_name in ROUTE_ONLY_MAPS:
-            asset_role = roles.get(f"asset:{map_name}")
-            rune_role = bundle_roles.get(f"rune:{map_name}")
-            bsp_role = bundle_roles.get(f"bsp:{map_name}")
-            if (not isinstance(asset_role, dict) or not isinstance(rune_role, dict) or
-                    not isinstance(bsp_role, dict) or
-                    result.get("artifact_sha256") != rune_role.get("sha256") or
-                    asset_role.get("sha256") != bsp_role.get("sha256")):
-                raise FleetError("route-only final corpus artifact differs from active bundle")
-        checked[map_name] = (classification, item)
-    return _select_route_only_results(maps, checked)
 
 
 def _verify_route_demo_positions(telemetry: Mapping[str, Any],
@@ -1066,8 +998,9 @@ def _verify_route_runtime_files(lane: str, map_name: str, runtime_files: Any,
 
 def _route_telemetry(lines: Sequence[str], players: Sequence[dict],
                      measurement: Mapping[str, Any], rune_path: Path,
-                     map_name: str, decoded_server: Mapping[str, Any]) -> dict:
-    runeio, rolestat, stallcensus = _load_route_helpers()
+                     map_name: str, decoded_server: Mapping[str, Any],
+                     helper_records: Mapping[str, Any]) -> dict:
+    runeio, rolestat, stallcensus = _load_route_helpers(helper_records)
     names = [str(player["name"]) for player in players]
     start = _integer(measurement.get("start_frame"), "route measurement start")
     end = _integer(measurement.get("end_frame"), "route measurement end", 1)
@@ -1204,7 +1137,8 @@ def _route_session_database(path: Path, players: Sequence[dict], map_name: str) 
 
 def _verify_route_receipt(receipt: dict, path: Path, evidence_root: Path,
                           owner: dict, bundle_roles: Mapping[str, dict], film: Any,
-                          controller_results: Mapping[str, dict], lane: str) -> None:
+                          controller_results: Mapping[str, dict], lane: str,
+                          helper_records: Mapping[str, Any]) -> None:
     required = {
         "format", "campaign_id", "bundle_id", "lane", "map", "runner_sha256",
         "engine_generation", "client_generation", "bsp_file", "rune_file",
@@ -1370,7 +1304,8 @@ def _verify_route_receipt(receipt: dict, path: Path, evidence_root: Path,
     if database != lane_root / "session.db":
         raise FleetError("route-only session database escapes its lane")
     computed = _route_telemetry(
-        lines, receipt["sg_players"], measurement, rune_path, map_name, decoded_server
+        lines, receipt["sg_players"], measurement, rune_path, map_name, decoded_server,
+        helper_records,
     )
     computed["session"] = _route_session_database(database, receipt["sg_players"], map_name)
     if receipt.get("behavior") != computed:
@@ -1391,7 +1326,7 @@ def verify_stopped_route_only_evidence(
     required = {
         "format", "state", "campaign_id", "bundle_id", "runner_sha256",
         "release_monotonic_ns", "graceful_quit", "processes", "clients", "inputs",
-        "controller_authority", "matches", "lane_runtime", "ledger_entries", "ledger_tail_hash",
+        "final_corpus", "matches", "lane_runtime", "ledger_entries", "ledger_tail_hash",
         "lock_path", "selected_lanes", "selected_count", "no_op",
     }
     runner_sha = _hash(Path(__file__).read_bytes())
@@ -1435,8 +1370,13 @@ def verify_stopped_route_only_evidence(
         _verify_bundle_copy(alias, roles, role, "route-only module alias")
     if aliases[0]["sha256"] != aliases[1]["sha256"]:
         raise FleetError("route-only module aliases differ")
-    controller_results = _validate_route_controller_authority(
-        owner["controller_authority"], roles, inputs["engine"], aliases
+    if owner["final_corpus"] != active_bundle.get("final_corpus"):
+        raise FleetError("route-only final corpus differs from installed bundle")
+    all_results = _validate_installed_final_corpus(active_bundle, roles, inputs["engine"])
+    controller_results = _select_route_only_results(
+        tuple(all_results),
+        {map_name: (str(item.get("classification")), item)
+         for map_name, item in all_results.items()},
     )
     lane_order = _selected_route_only_lanes(controller_results)
     if (owner.get("selected_lanes") != list(lane_order) or
@@ -1496,7 +1436,7 @@ def verify_stopped_route_only_evidence(
         if receipt.get("receipt_hash") != entry["receipt_hash"]:
             raise FleetError("route-only ledger receipt digest drift")
         _verify_route_receipt(receipt, receipt_path, evidence, owner, roles, film,
-                              controller_results, lane)
+                              controller_results, lane, helpers)
         receipts.append((receipt_path, receipt))
         previous = entry["entry_hash"]
     if previous != owner["ledger_tail_hash"]:
@@ -1706,7 +1646,7 @@ def _validate_route_only_run_spec(path: Path) -> tuple[dict, dict]:
     required = {
         "format", "campaign_id", "engine", "client", "route_config", "film",
         "runtime", "module_aliases", "spectator", "target", "timeout_seconds",
-        "installed_bundle", "controller_authority", "lanes",
+        "installed_bundle", "lanes",
     }
     if set(spec) != required or spec.get("format") != FORMAT_ROUTE_SPEC:
         raise FleetError("invalid route-only run specification")
@@ -1892,6 +1832,26 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_live_runtime(spec_path: Path, *, route_only: bool) -> Any:
+    """Load the exact companion runtime named by the validated run spec."""
+    validator = _validate_route_only_run_spec if route_only else _validate_run_spec
+    spec, _lanes = validator(spec_path)
+    record = spec.get("runtime")
+    path = Path(__file__).with_name("fleet_runner_live.py")
+    if (not isinstance(record, Mapping) or
+            record.get("path") != str(path.resolve()) or
+            not isinstance(record.get("sha256"), str)):
+        raise FleetError("run specification has invalid fleet runtime authority")
+    module = _load_attested_module(
+        path, record, "fleet runtime",
+        f"_lmctf_fleet_runtime_{record['sha256']}",
+    )
+    required = "run_route_only" if route_only else "run_fleet"
+    if not callable(getattr(module, required, None)):
+        raise FleetError(f"fleet runtime lacks {required}")
+    return module
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         arguments = _parser().parse_args(argv)
@@ -1910,14 +1870,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             identities = launch_persistent_engines(arguments.spec)
             print(_canonical({"engines": identities}).decode("ascii"), end="")
         elif arguments.command == "run":
-            import fleet_runner_live
-            fleet_runner_live.run_fleet(
+            live_runtime = _load_live_runtime(arguments.spec, route_only=False)
+            live_runtime.run_fleet(
                 sys.modules[__name__], arguments.spec,
                 arguments.state_root, arguments.evidence_root,
             )
         elif arguments.command == "route-only-run":
-            import fleet_runner_live
-            fleet_runner_live.run_route_only(
+            live_runtime = _load_live_runtime(arguments.spec, route_only=True)
+            live_runtime.run_route_only(
                 sys.modules[__name__], arguments.spec,
                 arguments.state_root, arguments.evidence_root,
             )

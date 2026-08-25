@@ -84,6 +84,10 @@ base, engine arguments, and controller source hash. Resume is allowed only when
 the complete stored fingerprint document is byte-for-byte equal to the newly
 computed document.
 
+The external acceptor `--contracts` metadata probe has a justified 300-second
+bound to contain a hung metadata handshake. It does not bound generation or
+review.
+
 ## Current generation and acceptance grammar
 
 Use these anchored success and failure lines:
@@ -98,9 +102,9 @@ a regular newly created artifact inside that attempt, two distinct in-range
 objective roots, no later failure line, and clean shutdown.  Parse and retain
 all six counts.
 
-Before publishing `PASS`, execute both independently built C acceptors, both
-general Python gates, and every semantic checker applicable to the map against
-the same artifact bytes:
+Before publishing an accepted result (`PASS` or `ROUTE_ONLY`), execute both
+independently built C acceptors, both general Python gates, and every semantic
+checker applicable to the map against the same artifact bytes:
 
 ```sh
 runeaccept.gnu ARTIFACT
@@ -112,22 +116,26 @@ python3 tools/lmctf58_rune_accept.py --objective-roots RED BLUE ARTIFACT  # lmct
 
 The GNU C, Make C, and Python JSON reports must agree on map name, seeds, links,
 mechanism nodes, triggers, inventory edges, plan edges, and plans. Their counts
-must also agree with the generator banner. Record every output and hash. Any
-missing required plan, controller mismatch, CRC or contract error, count
-disagreement, or nonzero gate exit is `LINT_FAIL`; it is never resumable as
-success.
+must also agree with the generator banner. Record every output and hash. Exit 1
+is a conclusive artifact rejection. Usage, process, I/O, allocation, protocol,
+identity, and malformed-success failures are infrastructure failures and do not
+authorize replacement.
 
 After those gates, copy the unchanged artifact into a second private game tree.
 The frozen `snagrepair.py` input emits an explicit RUNE-bound `repairs 0`
 bootstrap whose evidence classification is `NO_ACCEPTED_OBSERVATION`; it does
 not claim that the map was observed clean. Start a new, separately authenticated
-q2ded process against those two files. `PASS` requires exactly one ordinary
-runtime-ready banner whose counts agree with generation, with no generator
-write banner. The cold-load process identity, command hash, staged artifact,
-bootstrap sidecar, and log are immutable terminal evidence and must differ from
-the generation process identity. The cold-load timeout starts after the
-controller authenticates that second process. It is separate from the startup
-delay before the generation command and from the generation timeout.
+q2ded process against those two files. An accepted result (`PASS` or
+`ROUTE_ONLY`) requires exactly one ordinary runtime-ready banner whose counts
+agree with generation, with no generator write banner. The cold-load process
+identity, command hash, staged artifact, bootstrap sidecar, and log are
+immutable terminal evidence and must differ from the generation process
+identity. The cold-load readiness bound starts after the controller
+authenticates that second process. Production leaves the generation timeout
+unset, so generation and post-readiness review have no elapsed-time deadline.
+An optional safety override is allowed only when deliberately supplied for a
+controlled run and is included in the fingerprint. The heartbeat continues
+every five seconds while either is active.
 
 ## Durable per-map result and resume law
 
@@ -137,17 +145,32 @@ signature, exact command hash, owner-record path, server and gate-log hashes,
 artifact path/hash, objective roots, all decoded counts, applicable semantic
 gate labels, fresh cold-load owner/command/log hashes, and the exact bootstrap
 `.snag` plus its `NO_ACCEPTED_OBSERVATION` evidence record. Publish it only
-after the attempt files and directories are synced.
+after the attempt is frozen and synced, its held logs still match, and a
+separate commit record binds the result. A crash before that commit creates a
+bound abort record. Aborted adoption and missing-generation attempts retry but
+never authorize replacement. An aborted replacement consumes the sole
+replacement allowance and leaves the run incomplete.
 
-On resume, a previous `PASS` is reusable only if its fingerprint and stable port
-match, every referenced file is regular and still has the recorded hash, the
-artifact is still the exact recorded bytes, both C gates, both general Python
-gates, and all applicable semantic gates pass again, and the stored cold-load
+On resume, a previous accepted result (`PASS` or `ROUTE_ONLY`) is reusable only
+if its fingerprint and stable port match, every referenced file is regular and
+still has the recorded hash, the artifact is still the exact recorded bytes,
+both C gates, both general Python gates, and all applicable semantic gates pass
+again, and the stored cold-load
 evidence authenticates a distinct process and the same artifact. Otherwise
 create the next attempt; never overwrite prior evidence. The bootstrap evidence
 must remain canonical, bind the run fingerprint and artifact hash, and the
 retained `.snag` must still bind its exact evidence hash and declare
 `repairs 0`.
+
+The final snapshot contains exactly 156 adoption candidates. Validate each
+candidate before generating anything for that map. Preserve passing bytes.
+Retry infrastructure failures as adoption attempts. Only a committed,
+authenticated artifact rejection permits one replacement generation, and the
+replacement intent consumes that one allowance. Generate the remaining 19
+maps as missing artifacts.
+
+Full runs use `jobs > 1`. While both queues are nonempty, adoption validation
+overlaps missing-artifact generation.
 
 ## Final corpus publication
 
@@ -225,5 +248,5 @@ counts by classification, every map result/hash, start/end timestamps, and a
 First run only the controller self-tests and a dry-run that prints the 175
 stable map/port assignments and fingerprint.  Then run one approved smoke map
 with a fresh module, inspect its exact bytes through C and Python, and cold-load
-it through the runtime.  The full corpus may start only after that evidence is
-accepted by the project owner.
+it through the runtime.  The full corpus may start only after the smoke-map
+evidence satisfies the project acceptance contract.

@@ -21,9 +21,9 @@ def test_all_mechanisms_rebind_before_loader_acceptance() -> None:
         "/* --------------------------------------------------------------- fields */",
     )
     decoded = loader.index("SG_RuneFileLoad(")
-    catalog = loader.index("SG_MechCatalogMatches(")
+    catalog = loader.index("SG_MechCatalogMatchStatus(")
     indexes = loader.index("Rune_BuildOutboundIndexes(")
-    rebind = loader.index("SG_RuneMechanismBindingsReady(")
+    rebind = loader.index("SG_RuneMechanismBindingsStatus(")
     proof = loader.index("SG_RuneProofScopeBegin(")
     accepted = loader.index("accepted = true;")
     cleanup = loader.index("if (!accepted)")

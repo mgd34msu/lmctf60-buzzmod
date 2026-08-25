@@ -478,6 +478,14 @@ typedef enum sg_mech_catalog_status_e
 	SG_MECH_CATALOG_FAILED
 } sg_mech_catalog_status_t;
 
+typedef enum sg_mech_catalog_match_e
+{
+	SG_MECH_CATALOG_MATCH_READY = 0,
+	SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH,
+	SG_MECH_CATALOG_MATCH_WORLD_DRIFT,
+	SG_MECH_CATALOG_MATCH_UNAVAILABLE
+} sg_mech_catalog_match_t;
+
 typedef struct sg_mech_catalog_view_s
 {
 	const struct rune_mechanism_node_s *nodes;
@@ -516,8 +524,9 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void);
 sg_mech_catalog_status_t SG_MechCatalogSnapshot(
 	sg_mech_catalog_view_t *view_out);
 const char *SG_MechCatalogReason(void);
-int SG_MechCatalogMatches(const struct rune_mechanism_node_s *nodes,
-	uint32_t num_nodes, const struct rune_mechanism_edge_s *inventory_edges,
+sg_mech_catalog_match_t SG_MechCatalogMatchStatus(
+	const struct rune_mechanism_node_s *nodes, uint32_t num_nodes,
+	const struct rune_mechanism_edge_s *inventory_edges,
 	uint32_t num_inventory_edges, const unsigned char *strings,
 	uint32_t string_bytes);
 int SG_MechCatalogEntityMatches(uint32_t key,

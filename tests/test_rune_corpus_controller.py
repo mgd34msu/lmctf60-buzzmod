@@ -21,8 +21,10 @@ import threading
 import time
 import unittest
 from unittest import mock
+from typing import Mapping
 
 from tools import build_python_runtime
+from tools import lmctf58_rune_accept, runelint
 from tools import rune_corpus_controller as controller
 from tests.test_rune_artifact import _build_rune
 
@@ -161,6 +163,72 @@ class FakeGateRunner:
 
 
 class RuneCorpusControllerTests(unittest.TestCase):
+    def test_external_attempt_authorities_are_mutually_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary) / "run"
+            first = run_root / "runs/lmctf01/attempt-0001"
+            first.mkdir(parents=True)
+            controller.atomic_write_json(first / "intent.json", {"intent": 1})
+            controller.atomic_write_json(first / "result.json", {"result": 1})
+            controller._publish_attempt_abort(run_root, "lmctf01", first, 1)
+            with self.assertRaisesRegex(controller.CorpusError, "conflicts"):
+                controller._publish_attempt_commit(run_root, "lmctf01", first, 1)
+
+            second = run_root / "runs/lmctf01/attempt-0002"
+            second.mkdir()
+            controller.atomic_write_json(second / "intent.json", {"intent": 2})
+            controller.atomic_write_json(second / "result.json", {"result": 2})
+            controller._publish_attempt_commit(run_root, "lmctf01", second, 2)
+            with self.assertRaisesRegex(controller.CorpusError, "conflicts"):
+                controller._publish_attempt_abort(run_root, "lmctf01", second, 2)
+
+            abort = controller._attempt_abort_path(run_root, "lmctf01", 2)
+            controller.atomic_write_json(abort, {
+                "format": controller.ATTEMPT_ABORT_FORMAT,
+                "attempt": 2,
+                "intent": controller._relative_evidence_record(
+                    second / "intent.json", run_root
+                ),
+                "pending_result": controller._relative_evidence_record(
+                    second / "result.json", run_root
+                ),
+            }, mode=0o444)
+            with self.assertRaisesRegex(controller.CorpusError, "conflicts"):
+                controller._validate_attempt_commit(run_root, "lmctf01", second, 2)
+            with self.assertRaisesRegex(controller.CorpusError, "conflicts"):
+                controller._validate_attempt_abort(run_root, "lmctf01", second, 2)
+
+    def test_real_runeaccept_exit_taxonomy(self) -> None:
+        """The production C reader reserves rc 1 for bad bytes, not I/O."""
+        subprocess.run(
+            ["make", "-B", "runeaccept.gnu"], cwd=ROOT, check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            valid = work / "valid.rune"
+            valid.write_bytes(_build_rune())
+            truncated = work / "truncated.rune"
+            truncated.write_bytes(valid.read_bytes()[:-1])
+            trailing = work / "trailing.rune"
+            trailing.write_bytes(valid.read_bytes() + b"x")
+            cases = (
+                (["runeaccept.gnu", valid], 0),
+                (["runeaccept.gnu", truncated], 1),
+                (["runeaccept.gnu", trailing], 1),
+                (["runeaccept.gnu", work / "missing.rune"], 3),
+                (["runeaccept.gnu", work], 3),
+                (["runeaccept.gnu"], 2),
+            )
+            for command, expected in cases:
+                with self.subTest(command=command):
+                    completed = subprocess.run(
+                        [os.fspath(ROOT / command[0]),
+                         *map(os.fspath, command[1:])],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
+                    self.assertEqual(completed.returncode, expected)
+
     def make_snapshot(
         self,
         parent: Path,
@@ -173,6 +241,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
         actual_tools: bool = False,
         acceptor_output: bytes | None = None,
         acceptor_action_hash: bytes | None = None,
+        adopted_runes: Mapping[str, bytes] | None = None,
     ) -> Path:
         parent.mkdir(parents=True, exist_ok=True)
         sources = parent / "sources"
@@ -309,6 +378,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
         files["tools/rune-corpus-maps.txt"] = ("map_manifest", manifest_copy)
         for map_name in controller.validate_manifest():
             add(f"assets/{map_name}.bsp", f"asset:{map_name}", map_name.encode("ascii"))
+        for map_name, data in sorted((adopted_runes or {}).items()):
+            add(
+                f"adopted-runes/{map_name}.rune", f"adopted_rune:{map_name}", data
+            )
         snapshot = parent / "snapshot"
         controller.create_input_snapshot(snapshot, files)
         return snapshot
@@ -905,6 +978,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "snagrepair_sha256",
                 "acceptor_gnu_sha256", "acceptor_make_sha256",
                 "semantic_checker_manifest_sha256", "semantic_checkers",
+                "adoption_policy_version", "adopted_runes",
                 "generation_timeout_seconds",
                 "startup_timeout_seconds", "cold_load_timeout_seconds",
                 "job_count", "port_base",
@@ -923,6 +997,410 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual(33, document["cold_load_timeout_seconds"])
             self.assertEqual(controller.sha256_bytes(controller.canonical_json(document)), fingerprint)
             self.thaw(snapshot)
+
+    def test_adopted_snapshot_and_replacement_planner_are_one_shot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(
+                work, adopted_runes={"lmctf01": b"frozen candidate"}
+            )
+            verified = controller.verify_snapshot(snapshot)
+            candidate = verified["adopted_runes"]["lmctf01"]
+            self.assertEqual("adopted-runes/lmctf01.rune", candidate["path"])
+            document, _fingerprint = controller.build_fingerprint_document(
+                snapshot, startup_timeout=1, generation_timeout=None,
+                cold_load_timeout=1, jobs=1, port_base=62000,
+            )
+            self.assertEqual(1, document["adoption_policy_version"])
+            self.assertEqual([candidate], document["adopted_runes"])
+            run_root = work / "run"
+            first = controller.decide_map_work(
+                "lmctf01", [], run_root=run_root, adopted_runes=verified["adopted_runes"]
+            )
+            self.assertEqual("adopted_validation", first.kind)
+            missing = controller.decide_map_work(
+                "lmctf02", [], run_root=run_root, adopted_runes=verified["adopted_runes"]
+            )
+            self.assertEqual("generated_missing", missing.kind)
+            number, attempt = controller.next_attempt_directory(run_root, "lmctf01")
+            intent = controller.write_attempt_intent(
+                run_root, attempt, fingerprint="f" * 64, map_name="lmctf01",
+                stable_port=62000, attempt_number=number, work=first,
+            )
+            controller.atomic_write_json(attempt / "result.json", {
+                "classification": "LINT_FAIL", "disposition": "artifact_rejected",
+            })
+            controller._publish_attempt_commit(run_root, "lmctf01", attempt, number)
+            with self.assertRaises(controller.CorpusError):
+                controller.load_map_history(
+                    run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+                )
+            with mock.patch.object(controller, "_validate_terminal_schema"):
+                history = controller.load_map_history(
+                    run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+                )
+            replacement = controller.decide_map_work(
+                "lmctf01", history, run_root=run_root, adopted_runes=verified["adopted_runes"]
+            )
+            self.assertEqual("generated_replacement", replacement.kind)
+            self.assertEqual(
+                "runs/lmctf01/attempt-0001/result.json", replacement.rejection_result
+            )
+            number, attempt = controller.next_attempt_directory(run_root, "lmctf01")
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="f" * 64, map_name="lmctf01",
+                stable_port=62000, attempt_number=number, work=replacement,
+            )
+            with mock.patch.object(controller, "_validate_terminal_schema"):
+                history = controller.load_map_history(
+                    run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+                )
+            self.assertIsNone(controller.decide_map_work(
+                "lmctf01", history, run_root=run_root, adopted_runes=verified["adopted_runes"]
+            ))
+            self.thaw(snapshot)
+
+    def test_full_selection_rejects_wrong_adopted_rune_count_before_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            original = controller.verify_snapshot
+            with mock.patch.object(controller, "verify_snapshot", wraps=original) as verified:
+                with self.assertRaisesRegex(controller.CorpusError, "exactly 156 adopted"):
+                    controller.execute_selection(
+                        snapshot=snapshot, run_root=work / "run",
+                        selected_maps=controller.validate_manifest(),
+                        port_base=62000, startup_timeout=1, generation_timeout=None,
+                        cold_load_timeout=1, jobs=1,
+                        engine_arguments=controller.DEFAULT_ENGINE_ARGUMENTS,
+                    )
+            self.assertEqual(1, verified.call_count)
+            self.assertFalse((work / "run").exists())
+            self.thaw(snapshot)
+
+    def test_adopted_work_does_not_enter_the_generation_launcher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(
+                work, adopted_runes={"lmctf01": b"frozen candidate"}
+            )
+            candidate = controller.verify_snapshot(snapshot)["adopted_runes"]["lmctf01"]
+            planned = controller.MapWork("adopted_validation", candidate, None)
+            with mock.patch.object(
+                controller, "run_adopted_map", return_value={"ok": True}
+            ) as adopted, \
+                 mock.patch.object(controller.subprocess, "Popen") as launch:
+                result = controller.run_one_map(
+                    work / "run", snapshot, "lmctf01", 62000, "f" * 64,
+                    startup_timeout=1, generation_timeout=None, cold_load_timeout=1,
+                    work=planned,
+                )
+            self.assertEqual({"ok": True}, result)
+            launch.assert_not_called()
+            adopted.assert_called_once()
+            intent, _raw = controller._load_json_regular(
+                work / "run/runs/lmctf01/attempt-0001/intent.json"
+            )
+            self.assertEqual("adopted_validation", intent["kind"])
+            self.thaw(snapshot)
+
+    def test_production_gate_snapshot_failure_is_infrastructure_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "candidate.rune"
+            artifact.write_bytes(b"candidate")
+            with mock.patch.object(
+                controller, "verify_snapshot", side_effect=controller.CorpusError("drift")
+            ):
+                with self.assertRaises(controller.GateIntegrityError):
+                    controller.run_gates(
+                        artifact, "lmctf01", None,
+                        acceptor_gnu=artifact, acceptor_make=artifact.with_name("other"),
+                        python_interpreter=artifact, runeio=artifact, runelint=artifact,
+                        log_directory=None,
+                    )
+
+    def test_typed_c_gate_exits_and_malformed_success_are_not_equivalent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "lmctf01.rune"
+            artifact.write_bytes(b"candidate")
+
+            def invoke(code, output=b"{}"):
+                def runner(command, **_kwargs):
+                    return subprocess.CompletedProcess(command, code, output)
+                return runner
+
+            kwargs = dict(
+                acceptor_gnu=artifact, acceptor_make=artifact.with_name("make"),
+                python_interpreter=artifact, runeio=artifact, runelint=artifact,
+                log_directory=None,
+            )
+            with mock.patch.object(
+                controller, "verify_snapshot",
+                side_effect=controller.CorpusError("fake"),
+            ):
+                with self.assertRaises(controller.ArtifactRejectedError):
+                    controller.run_gates(
+                        artifact, "lmctf01", None, runner=invoke(1), **kwargs
+                    )
+                for code in (2, 3, -9):
+                    with self.assertRaises(controller.GateIntegrityError):
+                        controller.run_gates(
+                            artifact, "lmctf01", None,
+                            runner=invoke(code), **kwargs,
+                        )
+                with self.assertRaises(controller.GateIntegrityError):
+                    controller.run_gates(
+                        artifact, "lmctf01", None,
+                        runner=invoke(0, b"not-json\n"), **kwargs,
+                    )
+
+    def test_python_gate_typed_structural_and_io_outcomes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lmctf58.rune"
+            path.write_bytes(b"broken")
+            with mock.patch.object(runelint.runeio, "read", side_effect=ValueError("bad wire")):
+                self.assertEqual(1, runelint.main([str(path)]))
+            with mock.patch.object(runelint.runeio, "read", side_effect=OSError("EIO")):
+                self.assertEqual(3, runelint.main([str(path)]))
+            with mock.patch.object(
+                lmctf58_rune_accept.runeio, "read",
+                side_effect=ValueError("bad wire"),
+            ):
+                self.assertEqual(1, lmctf58_rune_accept.main([
+                    "--objective-roots", "1", "2", str(path),
+                ]))
+            with mock.patch.object(
+                lmctf58_rune_accept.runeio, "read",
+                side_effect=OSError("EIO"),
+            ):
+                self.assertEqual(3, lmctf58_rune_accept.main([
+                    "--objective-roots", "1", "2", str(path),
+                ]))
+
+    def test_cold_loader_rejection_requires_selected_map_path(self):
+        selected = "rune: rejected game/maps/lmctf01.rune stage=objective-core reason=bad"
+        wrong = "rune: rejected game/maps/lmctf02.rune stage=objective-core reason=bad"
+        terminal = (
+            "slipgate: rune setup terminal map=lmctf01 source=autoload "
+            "class=artifact stage=objective-core"
+        )
+        self.assertEqual(
+            selected,
+            controller.cold_loader_rejection([selected, terminal], "lmctf01"),
+        )
+        self.assertIsNone(controller.cold_loader_rejection([wrong, terminal], "lmctf01"))
+        self.assertIsNone(controller.cold_loader_rejection([selected], "lmctf01"))
+        self.assertIsNone(controller.cold_loader_rejection([
+            "rune: rejected game/maps/lmctf01.rune stage=decode reason=bad"
+        ], "lmctf01"))
+
+    def test_cold_infrastructure_receipt_precedes_rejection_in_both_orders(self):
+        rejected = (
+            "rune: rejected game/maps/lmctf01.rune "
+            "stage=objective-core reason=bad"
+        )
+        infra = "rune: infrastructure game/maps/lmctf01.rune stage=air reason=busy"
+        for lines in ((rejected, infra), (infra, rejected)):
+            with self.subTest(lines=lines):
+                self.assertEqual(infra, controller.last_cold_load_failure(lines, "lmctf01"))
+                self.assertIsNone(controller.cold_loader_rejection(lines, "lmctf01"))
+
+    def test_setup_terminal_receipts_are_source_bound(self):
+        autoload = (
+            "slipgate: rune setup terminal map=lmctf01 source=autoload "
+            "class=infra stage=missing"
+        )
+        write = (
+            "slipgate: rune setup terminal map=lmctf01 source=write "
+            "class=infra stage=fields"
+        )
+        self.assertEqual(
+            ("infra", "missing", autoload),
+            controller.setup_terminal_receipt((autoload, write), "lmctf01", "autoload"),
+        )
+        self.assertEqual(
+            ("infra", "fields", write),
+            controller.setup_terminal_receipt((autoload, write), "lmctf01", "write"),
+        )
+        with self.assertRaisesRegex(controller.CorpusError, "duplicate"):
+            controller.setup_terminal_receipt((write, write), "lmctf01", "write")
+
+    def test_cold_artifact_authority_requires_the_c_emitted_terminal_pair(self):
+        diagnostic = (
+            "rune: rejected game/maps/lmctf01.rune "
+            "stage=objective-core reason=objective contract mismatch"
+        )
+        terminal = (
+            "slipgate: rune setup terminal map=lmctf01 source=autoload "
+            "class=artifact stage=objective-core"
+        )
+        self.assertEqual(
+            diagnostic, controller.cold_loader_rejection((diagnostic, terminal), "lmctf01")
+        )
+        self.assertIsNone(controller.cold_loader_rejection((diagnostic,), "lmctf01"))
+        self.assertIsNone(controller.cold_loader_rejection((
+            diagnostic,
+            terminal.replace("objective-core", "load"),
+        ), "lmctf01"))
+
+    def test_missing_runtime_root_receipt_retries_adoption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(
+                work, adopted_runes={"lmctf01": b"frozen candidate"}
+            )
+            run_root = work / "run"
+            candidate = controller.verify_snapshot(snapshot)["adopted_runes"]["lmctf01"]
+            planned = controller.MapWork("adopted_validation", candidate, None)
+            number, attempt = controller.next_attempt_directory(run_root, "lmctf01")
+            intent = controller.write_attempt_intent(
+                run_root, attempt, fingerprint="f" * 64, map_name="lmctf01",
+                stable_port=62000, attempt_number=number, work=planned,
+            )
+            reader = {
+                "decoded_counts": {
+                    "seed_count": 1, "link_count": 1, "node_count": 1,
+                    "trigger_count": 0, "inventory_edge_count": 0,
+                    "plan_edge_count": 0, "edge_count": 0, "plan_count": 1,
+                },
+                "route_contract": "complete",
+            }
+            heartbeat = mock.Mock()
+            with mock.patch.object(controller, "preflight_python_runtime") as preflight, \
+                 mock.patch.object(controller, "run_gates", return_value=reader), \
+                 mock.patch.object(
+                     controller, "run_fresh_cold_load",
+                     side_effect=controller.CorpusError(
+                         "fresh cold-load expected one runtime objective-root line, found 0"
+                     ),
+                 ) as cold_load:
+                result = controller.run_adopted_map(
+                    run_root, snapshot, "lmctf01", 62000, "f" * 64,
+                    attempt, number, intent, planned, cold_load_timeout=1,
+                    engine_arguments=controller.DEFAULT_ENGINE_ARGUMENTS,
+                    heartbeat=heartbeat, gate_runner=subprocess.run,
+                )
+            self.assertEqual("INFRA_FAIL", result["classification"])
+            self.assertEqual("infra_failed", result["disposition"])
+            preflight_check = preflight.call_args.kwargs["heartbeat_check"]
+            cold_load_check = cold_load.call_args.kwargs["heartbeat_check"]
+            self.assertIsNotNone(preflight_check)
+            self.assertIsNotNone(cold_load_check)
+            preflight_check()
+            cold_load_check()
+            self.assertGreaterEqual(
+                heartbeat.mock_calls.count(mock.call("beat", "lmctf01", None)), 2,
+            )
+            history = controller.load_map_history(
+                run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+            )
+            self.assertEqual("adopted_validation", controller.decide_map_work(
+                "lmctf01", history, run_root=run_root,
+                adopted_runes=controller.verify_snapshot(snapshot)["adopted_runes"]
+            ).kind)
+            self.thaw(snapshot)
+
+    def test_intent_only_recovery_retries_adoption_but_exhausts_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(
+                work, adopted_runes={"lmctf01": b"frozen candidate"}
+            )
+            run_root = work / "run"
+            candidate = controller.verify_snapshot(snapshot)["adopted_runes"]["lmctf01"]
+            adopted = controller.MapWork("adopted_validation", candidate, None)
+            number, attempt = controller.next_attempt_directory(run_root, "lmctf01")
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="f" * 64, map_name="lmctf01",
+                stable_port=62000, attempt_number=number, work=adopted,
+            )
+            assignments = {"lmctf01": {"map": "lmctf01", "port": 62000}}
+            self.assertEqual(1, controller.recover_stale_attempts(
+                run_root, ["lmctf01"], "f" * 64, assignments
+            ))
+            history = controller.load_map_history(
+                run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+            )
+            self.assertEqual("adopted_validation", controller.decide_map_work(
+                "lmctf01", history, run_root=run_root,
+                adopted_runes=controller.verify_snapshot(snapshot)["adopted_runes"]
+            ).kind)
+            replacement = controller.MapWork(
+                "generated_replacement", candidate,
+                "runs/lmctf01/attempt-0001/result.json",
+            )
+            number, attempt = controller.next_attempt_directory(run_root, "lmctf01")
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="f" * 64, map_name="lmctf01",
+                stable_port=62000, attempt_number=number, work=replacement,
+            )
+            self.assertEqual(1, controller.recover_stale_attempts(
+                run_root, ["lmctf01"], "f" * 64, assignments
+            ))
+            history = controller.load_map_history(
+                run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+            )
+            self.assertIsNone(controller.decide_map_work(
+                "lmctf01", history, run_root=run_root,
+                adopted_runes=controller.verify_snapshot(snapshot)["adopted_runes"]
+            ))
+            self.thaw(snapshot)
+
+    def test_recovery_removes_only_empty_preintent_crash_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary)
+            orphan = run_root / "runs/lmctf01/attempt-0001"
+            orphan.mkdir(parents=True)
+            assignments = {"lmctf01": {"map": "lmctf01", "port": 62000}}
+            self.assertEqual(0, controller.recover_stale_attempts(
+                run_root, ["lmctf01"], "f" * 64, assignments
+            ))
+            self.assertFalse(orphan.exists())
+            number, attempt = controller.next_attempt_directory(run_root, "lmctf01")
+            self.assertEqual(1, number)
+            attempt.rmdir()
+            orphan.mkdir()
+            controller.atomic_write_bytes(orphan / "untrusted", b"data")
+            with self.assertRaisesRegex(controller.CorpusError, "lacks its immutable intent"):
+                controller.recover_stale_attempts(
+                    run_root, ["lmctf01"], "f" * 64, assignments
+                )
+
+    def test_post_intent_rename_failure_is_promoted_and_consumes_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary)
+            work = controller.MapWork("generated_missing", None, None)
+            with mock.patch.object(controller.os, "rename", side_effect=OSError("rename")):
+                with self.assertRaises(OSError):
+                    controller.create_attempt_with_intent(
+                        run_root, fingerprint="f" * 64, map_name="lmctf01",
+                        stable_port=62000, work=work,
+                    )
+            hidden = list((run_root / "runs/lmctf01").glob(".attempt-*-*"))
+            self.assertEqual(1, len(hidden))
+            controller.promote_pending_attempts(
+                run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+            )
+            self.assertTrue((run_root / "runs/lmctf01/attempt-0001/intent.json").is_file())
+
+    def test_pending_preintent_debris_is_removed_but_unexpected_content_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary)
+            root = run_root / "runs/lmctf01"
+            debris = root / ".attempt-0001-race"
+            debris.mkdir(parents=True)
+            controller.atomic_write_bytes(debris / ".intent.json.partial", b"partial")
+            controller.promote_pending_attempts(
+                run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+            )
+            self.assertFalse(debris.exists())
+            bad = root / ".attempt-0001-bad"
+            bad.mkdir()
+            controller.atomic_write_bytes(bad / "other", b"bad")
+            with self.assertRaisesRegex(controller.CorpusError, "unexpected content"):
+                controller.promote_pending_attempts(
+                    run_root, "lmctf01", fingerprint="f" * 64, stable_port=62000,
+                )
 
     def test_cold_load_timeout_changes_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -967,6 +1445,151 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 self.make_snapshot(
                     Path(temporary), action_hash=b"a", acceptor_action_hash=b"c"
                 )
+
+    def test_acceptor_contract_probe_uses_guarded_runner(self):
+        contracts = {
+            "action_contract_sha256": "a" * 64,
+            "mechanism_contract_sha256": "b" * 64,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            acceptor = Path(temporary) / "runeaccept"
+            acceptor.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' '" + json.dumps(contracts) + "'\n",
+                encoding="ascii",
+            )
+            acceptor.chmod(0o755)
+            with mock.patch.object(
+                controller,
+                "_run_guarded_gate",
+                return_value=subprocess.CompletedProcess(
+                    ("guard",), 0, controller.canonical_json(contracts),
+                ),
+            ) as guarded:
+                self.assertEqual(
+                    ("a" * 64, "b" * 64),
+                    controller._acceptor_contract_hashes(acceptor),
+                )
+            guarded.assert_called_once()
+            command = guarded.call_args.args[0]
+            self.assertEqual(
+                os.fspath(Path(os.sys.executable).resolve(strict=True)), command[0]
+            )
+            self.assertEqual(
+                [*controller.PYTHON_ISOLATION_FLAGS, "-c", controller.GUARD_BOOTSTRAP],
+                command[1:6],
+            )
+            self.assertEqual([str(os.getpid()), "--"], command[6:8])
+            self.assertRegex(command[8], r"^/proc/self/fd/[0-9]+$")
+            self.assertEqual(
+                ["--contracts"], command[9:],
+            )
+            self.assertEqual(acceptor.parent, guarded.call_args.kwargs["cwd"])
+            self.assertIsNone(guarded.call_args.kwargs["heartbeat_check"])
+            self.assertEqual(
+                (int(command[8].rpartition("/")[2]),),
+                guarded.call_args.kwargs["pass_fds"],
+            )
+            self.assertEqual(
+                controller.ACCEPTOR_CONTRACT_PROBE_TIMEOUT,
+                guarded.call_args.kwargs["deadline"],
+            )
+
+    def test_acceptor_contract_probe_bounds_output_and_tears_down_child(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            pid_record = work / "acceptor.pid"
+            acceptor = work / "runeaccept"
+            acceptor.write_text(
+                f"#!{Path(os.sys.executable).resolve(strict=True)}\n"
+                "import os\n"
+                f"with open({os.fspath(pid_record)!r}, 'w', encoding='ascii') as stream:\n"
+                "    stream.write(str(os.getpid()))\n"
+                "while True:\n"
+                "    os.write(1, b'x' * 65536)\n",
+                encoding="ascii",
+            )
+            acceptor.chmod(0o755)
+            with self.assertRaisesRegex(
+                controller.CorpusError, "cannot read acceptor contract identity"
+            ) as raised:
+                controller._acceptor_contract_hashes(acceptor)
+            self.assertIsInstance(
+                raised.exception.__cause__, controller.GateIntegrityError
+            )
+            self.assertIn("stdout exceeds bounded evidence limit", str(
+                raised.exception.__cause__
+            ))
+            pid = int(pid_record.read_text(encoding="ascii"))
+            self.assertFalse(Path(f"/proc/{pid}").exists())
+
+    def test_snapshot_rejects_acceptor_pathname_swap_after_contract_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            original_snapshot = controller.create_input_snapshot
+            original_probe = controller._acceptor_contract_hashes
+
+            def snapshot_with_swap(output, inputs):
+                swapped = False
+
+                def probe(path, *args, **kwargs):
+                    nonlocal swapped
+                    result = original_probe(path, *args, **kwargs)
+                    if path.name == "runeaccept.gnu" and not swapped:
+                        swapped = True
+                        replacement = path.with_name("runeaccept.replacement")
+                        replacement.write_text(
+                            "#!/bin/sh\nprintf '%s\\n' '{}\n",
+                            encoding="ascii",
+                        )
+                        replacement.chmod(0o755)
+                        os.replace(replacement, path)
+                    return result
+
+                with mock.patch.object(
+                        controller, "_acceptor_contract_hashes", side_effect=probe):
+                    return original_snapshot(output, inputs)
+
+            with mock.patch.object(
+                    controller, "create_input_snapshot", side_effect=snapshot_with_swap):
+                with self.assertRaisesRegex(
+                    controller.CorpusError, "input changed after contract probe"):
+                    self.make_snapshot(work)
+            self.assertFalse((work / "snapshot").exists())
+
+    def test_snapshot_rejects_contract_source_swap_after_final_acceptor_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            original_snapshot = controller.create_input_snapshot
+            original_probe = controller._acceptor_contract_hashes
+
+            def snapshot_with_swap(output, inputs):
+                swapped = False
+
+                def probe(path, *args, **kwargs):
+                    nonlocal swapped
+                    result = original_probe(path, *args, **kwargs)
+                    if path.name == "runeaccept.make" and not swapped:
+                        swapped = True
+                        contracts = path.with_name("tools_rune_contracts_generated.py")
+                        replacement = contracts.with_name("contracts.replacement")
+                        replacement.write_text("changed\n", encoding="ascii")
+                        os.replace(replacement, contracts)
+                    return result
+
+                with mock.patch.object(
+                    controller, "_acceptor_contract_hashes", side_effect=probe
+                ):
+                    return original_snapshot(output, inputs)
+
+            with mock.patch.object(
+                controller, "create_input_snapshot", side_effect=snapshot_with_swap
+            ):
+                with self.assertRaisesRegex(
+                    controller.CorpusError, "input changed after contract probe"
+                ):
+                    self.make_snapshot(work)
+            self.assertFalse((work / "snapshot").exists())
 
     def test_private_runtime_byte_change_changes_full_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1078,7 +1701,136 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 controller.require_pidfd_support()
         launch.assert_not_called()
 
-    def test_fake_engine_pass_failure_and_timeout_lifecycle(self):
+    def test_verified_python_requires_pidfd_send_before_launch(self):
+        with mock.patch.object(
+            controller, "require_pidfd_support",
+            side_effect=controller.CorpusError("pidfd open/send support is required before launch"),
+        ), mock.patch.object(
+            controller.subprocess, "Popen", side_effect=AssertionError("launch forbidden")
+        ) as launch:
+            with self.assertRaisesRegex(controller.CorpusError, "pidfd"):
+                controller.run_verified_python(
+                    Path("/not-opened"), {}, "lint", Path("/not-opened/rune"), ()
+                )
+        launch.assert_not_called()
+
+    def test_blocked_guarded_c_gate_stops_on_heartbeat_failure(self):
+        process = mock.Mock()
+        process.pid = 4242
+        process.poll.return_value = None
+        process.stdout.fileno.return_value = 7
+        with mock.patch.object(controller, "require_pidfd_support"), \
+                mock.patch.object(controller.subprocess, "Popen", return_value=process), \
+                mock.patch.object(controller, "open_pidfd", return_value=91), \
+                mock.patch.object(controller, "shutdown_spawned_child") as shutdown, \
+                mock.patch.object(controller.os, "close"), \
+                mock.patch.object(controller.os, "set_blocking"), \
+                mock.patch.object(
+                    controller.selectors, "DefaultSelector",
+                    return_value=mock.Mock(),
+                ):
+            with self.assertRaisesRegex(controller.CorpusError, "ticker write failed"):
+                controller._run_guarded_gate(
+                    ("guard", "accept"), cwd=ROOT,
+                    heartbeat_check=lambda: (_ for _ in ()).throw(
+                        controller.CorpusError("ticker write failed")
+                    ),
+                )
+        shutdown.assert_called_once_with(process, 91)
+
+    def test_contract_probe_deadline_tears_down_exact_child(self):
+        process = mock.Mock()
+        process.pid = 4242
+        process.poll.return_value = None
+        process.stdout.fileno.return_value = 7
+        selector = mock.Mock()
+        selector.get_map.return_value = {7: object()}
+        with mock.patch.object(controller, "require_pidfd_support"), \
+                mock.patch.object(controller.subprocess, "Popen", return_value=process), \
+                mock.patch.object(controller, "open_pidfd", return_value=91), \
+                mock.patch.object(controller, "shutdown_spawned_child") as shutdown, \
+                mock.patch.object(controller.os, "close"), \
+                mock.patch.object(controller.os, "set_blocking"), \
+                mock.patch.object(controller.selectors, "DefaultSelector", return_value=selector), \
+                mock.patch.object(controller.time, "monotonic", side_effect=(0.0, 300.0)):
+            with self.assertRaisesRegex(
+                    controller.GateIntegrityError, "did not exit by its deadline"):
+                controller._run_guarded_gate(
+                    ("guard", "accept"), cwd=ROOT, heartbeat_check=None,
+                    deadline=controller.ACCEPTOR_CONTRACT_PROBE_TIMEOUT,
+                )
+        shutdown.assert_called_once_with(process, 91)
+
+    def test_guarded_gate_drains_flooded_stdout_while_waiting(self):
+        completed = controller._run_guarded_gate(
+            (
+                os.fspath(Path(os.sys.executable)), "-c",
+                "import sys; sys.stdout.write('x' * 262144)",
+            ),
+            cwd=ROOT, heartbeat_check=None,
+        )
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual(262144, len(completed.stdout))
+
+    def test_preflight_forwards_ticker_failure_to_verified_child(self):
+        with mock.patch.object(
+            controller, "verify_snapshot", return_value={
+                "python_runtime": {
+                    "root": "python-runtime", "interpreter": {"path": "bin/python"},
+                }, "by_role": {"runeio": {"path": "runeio.py"}},
+            },
+        ), mock.patch.object(
+            controller, "run_verified_python",
+            side_effect=lambda *_args, **kwargs: kwargs["heartbeat_check"](),
+        ) as verified:
+            with self.assertRaisesRegex(controller.CorpusError, "ticker write failed"):
+                controller.preflight_python_runtime(
+                    Path("/snapshot"),
+                    heartbeat_check=lambda: (_ for _ in ()).throw(
+                        controller.CorpusError("ticker write failed")
+                    ),
+                )
+        self.assertIsNotNone(verified.call_args.kwargs["heartbeat_check"])
+
+    def test_recheck_pass_gates_forwards_heartbeat_to_preflight_and_gates(self):
+        heartbeat_check = mock.Mock()
+        checked = {
+            "decoded_counts": {"seed_count": 1},
+            "route_contract": "complete",
+            "gate_output_sha256": {"c_gnu": "a" * 64},
+            "semantic_gate_labels": [],
+        }
+        result = {
+            "map": "lmctf01",
+            "banner_counts": {"seeds": 1},
+            "objective_roots": {"red": 1, "blue": 2},
+            "fingerprint": "f" * 64,
+            **checked,
+        }
+        verified = {
+            "python_runtime": {"interpreter": {"path": "python-runtime/bin/python"}},
+            "by_role": {
+                "acceptor_gnu": {"path": "runeaccept.gnu"},
+                "acceptor_make": {"path": "runeaccept.make"},
+                "runeio": {"path": "tools/runeio.py"},
+                "runelint": {"path": "tools/runelint.py"},
+            },
+            "semantic_checkers": [],
+        }
+        with mock.patch.object(controller, "preflight_python_runtime") as preflight, \
+                mock.patch.object(controller, "verify_snapshot", return_value=verified), \
+                mock.patch.object(controller, "run_gates", return_value=checked) as gates:
+            controller._recheck_pass_gates(
+                result,
+                snapshot=Path("/snapshot"),
+                artifact=Path("/artifact"),
+                gate_runner=subprocess.run,
+                heartbeat_check=heartbeat_check,
+            )
+        self.assertIs(heartbeat_check, preflight.call_args.kwargs["heartbeat_check"])
+        self.assertIs(heartbeat_check, gates.call_args.kwargs["heartbeat_check"])
+
+    def test_fake_engine_pass_failure_unbounded_and_timeout_lifecycle(self):
         class FakeInput:
             def __init__(self, process, output, private, ready, deferred,
                          failure_line, exit_failure_line):
@@ -1092,6 +1844,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             def write(self, data):
                 if data == b"sv rune\n":
+                    output = self.output
+                    if self.process.generation_ready_after_polls != 0:
+                        self.output = io.BytesIO()
                     artifact = self.private / "game/maps/lmctf01.rune"
                     artifact.write_bytes(b"fresh fake artifact")
                     lines = (
@@ -1116,6 +1871,15 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         lines += self.failure_line + "\n"
                     self.output.write(lines.encode())
                     self.output.flush()
+                    if self.output is not output:
+                        buffered = self.output.getvalue()
+                        self.output = output
+
+                        def publish_generation():
+                            output.write(buffered)
+                            output.flush()
+
+                        self.process.generation_output = publish_generation
                 elif data == b"quit\n":
                     if self.exit_failure_line is not None:
                         self.output.write((self.exit_failure_line + "\n").encode())
@@ -1129,12 +1893,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
         class FakeProcess:
             def __init__(self, output, private, ready, deferred, failure_line,
                          exit_failure_line, pid, cold_output=None,
-                         cold_ready_after_polls=None):
+                         cold_ready_after_polls=None,
+                         generation_ready_after_polls=0, immediate_exit=False):
                 self.pid = pid
-                self.returncode = None
+                self.returncode = 0 if immediate_exit else None
                 self.poll_count = 0
                 self.cold_output = cold_output
                 self.cold_ready_after_polls = cold_ready_after_polls
+                self.generation_output = None
+                self.generation_poll_count = 0
+                self.generation_ready_after_polls = generation_ready_after_polls
                 self.stdin = FakeInput(
                     self, output, private, ready, deferred, failure_line,
                     exit_failure_line
@@ -1142,6 +1910,15 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             def poll(self):
                 self.poll_count += 1
+                if self.generation_output is not None:
+                    self.generation_poll_count += 1
+                    if (
+                        self.generation_ready_after_polls is not None
+                        and self.generation_poll_count >= self.generation_ready_after_polls
+                    ):
+                        output = self.generation_output
+                        self.generation_output = None
+                        output()
                 if (
                     self.cold_output is not None
                     and self.cold_ready_after_polls is not None
@@ -1165,13 +1942,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
             def run_scenario(
                 run_root: Path,
                 ready: bool,
-                generation_timeout: float,
+                generation_timeout: int | None,
                 deferred: bool = False,
                 failure_line: str | None = None,
                 exit_failure_line: str | None = None,
                 cold_load_snag_failure: bool = False,
                 cold_load_timeout: float = 0.25,
                 cold_ready_after_polls: int | None = 1,
+                generation_ready_after_polls: int | None = 0,
+                heartbeat_events: list[str] | None = None,
+                immediate_exit: bool = False,
             ):
                 descriptors: list[int] = []
                 launched_commands: list[list[str]] = []
@@ -1215,6 +1995,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                                     b"map lmctf01; fields rejected\n"
                                     b"slipgate: field setup failed (no flags?); disabled "
                                     b"until the next level\n"
+                                    b"slipgate: rune setup terminal map=lmctf01 "
+                                    b"source=autoload class=infra stage=fields\n"
                                 )
                             else:
                                 kwargs["stdout"].write(
@@ -1229,6 +2011,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
                                     b"slipgate: route contract complete\n"
                                 )
                                 kwargs["stdout"].write(
+                                    b"slipgate: objective roots red=1 blue=2\n"
+                                )
+                                kwargs["stdout"].write(
                                     b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
                                     b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
                                 )
@@ -1241,12 +2026,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         cold_ready_after_polls=(
                             cold_ready_after_polls if launch_number == 2 else None
                         ),
+                        generation_ready_after_polls=(
+                            generation_ready_after_polls if launch_number == 1 else 0
+                        ),
+                        immediate_exit=immediate_exit and launch_number == 1,
                     )
                     if launch_number == 2:
                         cold_processes.append(fake)
                     return fake
 
-                def identity_for_engine(_pid, executable, expected_argv=None):
+                def identity_for_engine(_pid, executable, expected_argv=None, timeout=None):
                     return dataclasses.replace(
                         base_identity,
                         pid=_pid,
@@ -1266,7 +2055,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     return original_cold_load(*args, **kwargs)
 
                 def bootstrap_snag(_attempt, _snapshot, _map_name,
-                                   artifact, _fingerprint):
+                                   artifact, _fingerprint, **_kwargs):
                     evidence = _attempt / "snag-bootstrap-evidence.json"
                     controller.atomic_write_json(evidence, {
                         "artifact_sha256": controller.sha256_regular(artifact),
@@ -1289,6 +2078,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         "snag": controller.regular_file_record(target),
                     }
 
+                def heartbeat(event, _map_name, _details):
+                    assert heartbeat_events is not None
+                    heartbeat_events.append(event)
+
                 with mock.patch.object(controller.subprocess, "Popen", side_effect=popen), \
                         mock.patch.object(controller, "wait_for_exec_identity", side_effect=identity_for_engine), \
                         mock.patch.object(controller, "open_pidfd", side_effect=pidfd), \
@@ -1299,12 +2092,19 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         startup_timeout=0.001,
                         generation_timeout=generation_timeout,
                         cold_load_timeout=cold_load_timeout,
+                        heartbeat=(heartbeat if heartbeat_events is not None else None),
                         gate_runner=FakeGateRunner("lmctf01"),
                     )
                 self.assertTrue(descriptors)
+                deferred_write_terminal = (
+                    deferred and failure_line == (
+                        "slipgate: rune setup terminal map=lmctf01 source=write "
+                        "class=infra stage=fields"
+                    )
+                )
                 cold_load_expected = (
                     (ready or deferred)
-                    and failure_line is None
+                    and (failure_line is None or deferred_write_terminal)
                     and exit_failure_line is None
                 )
                 self.assertEqual(
@@ -1319,7 +2119,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             pass_root = work / "pass-run"
             passed, cold_processes = run_scenario(
-                pass_root, False, 1.0, deferred=True,
+                pass_root, False, 1, deferred=True,
                 cold_ready_after_polls=3,
             )
             self.assertEqual("PASS", passed["classification"])
@@ -1354,13 +2154,55 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual(0, stat.S_IMODE(attempt.stat().st_mode) & 0o222)
             self.assertEqual(0, stat.S_IMODE((attempt / "result.json").stat().st_mode) & 0o222)
 
+            clock = [0.0]
+
+            def monotonic():
+                return clock[0]
+
+            def sleep(seconds):
+                clock[0] += 901.0 if seconds >= 0.1 else seconds
+
+            heartbeat_events: list[str] = []
+            with mock.patch.object(controller.time, "monotonic", side_effect=monotonic), \
+                    mock.patch.object(controller.time, "sleep", side_effect=sleep):
+                unbounded, _cold_processes = run_scenario(
+                    work / "unbounded-run", True, None,
+                    generation_ready_after_polls=2,
+                    heartbeat_events=heartbeat_events,
+                )
+            self.assertEqual("PASS", unbounded["classification"])
+            self.assertGreater(clock[0], 900.0)
+            self.assertGreaterEqual(heartbeat_events.count("beat"), 2)
+
+            write_infra = (
+                "slipgate: rune setup terminal map=lmctf01 source=write "
+                "class=infra stage=fields"
+            )
+            post_write_infra, _cold_processes = run_scenario(
+                work / "post-write-infra-run", False, None,
+                failure_line=write_infra,
+            )
+            self.assertEqual("INFRA_FAIL", post_write_infra["classification"])
+            self.assertEqual(write_infra, post_write_infra["detail"])
+            deferred_write_terminal, _cold_processes = run_scenario(
+                work / "deferred-write-terminal-run", False, None,
+                deferred=True, failure_line=write_infra,
+            )
+            self.assertEqual("PASS", deferred_write_terminal["classification"])
+
+            immediate, _cold_processes = run_scenario(
+                work / "immediate-exit-run", False, None, immediate_exit=True
+            )
+            self.assertEqual("GEN_FAIL", immediate["classification"])
+            self.assertIn("before accepted generation completion", immediate["detail"])
+
             rejected_line = (
                 "rune: rejected game/maps/lmctf01.rune stage=door-replay "
                 "reason=invalid live declared-door replay index=9949"
             )
             rejected_root = work / "rejected-run"
             rejected, _cold_processes = run_scenario(
-                rejected_root, False, 1.0, failure_line=rejected_line
+                rejected_root, False, 1, failure_line=rejected_line
             )
             self.assertEqual("GEN_FAIL", rejected["classification"])
             self.assertEqual(rejected_line, rejected["detail"])
@@ -1378,20 +2220,20 @@ class RuneCorpusControllerTests(unittest.TestCase):
             exit_line = "rune: generation refused fast shutdown failure"
             fast_root = work / "fast-failure-run"
             fast, _cold_processes = run_scenario(
-                fast_root, True, 1.0, exit_failure_line=exit_line
+                fast_root, True, 1, exit_failure_line=exit_line
             )
             self.assertEqual("GEN_FAIL", fast["classification"])
             self.assertEqual(exit_line, fast["detail"])
             self.assertEqual(exit_line, fast["failure_line"])
 
             timeout_root = work / "timeout-run"
-            timed_out, _cold_processes = run_scenario(timeout_root, False, 0.02)
+            timed_out, _cold_processes = run_scenario(timeout_root, False, 1)
             self.assertEqual("TIMEOUT", timed_out["classification"])
             self.assertFalse((timeout_root / "runs/lmctf01/attempt-0001/gate-c_gnu.log").exists())
 
             cold_timeout_root = work / "cold-timeout-run"
             cold_timed_out, cold_processes = run_scenario(
-                cold_timeout_root, False, 1.0, deferred=True,
+                cold_timeout_root, False, 1, deferred=True,
                 cold_load_timeout=0.02, cold_ready_after_polls=None,
             )
             self.assertEqual("LINT_FAIL", cold_timed_out["classification"])
@@ -1403,11 +2245,11 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             cold_failure_root = work / "cold-snag-failure-run"
             cold_failure, cold_processes = run_scenario(
-                cold_failure_root, False, 1.0, deferred=True,
+                cold_failure_root, False, 1, deferred=True,
                 cold_load_snag_failure=True, cold_load_timeout=5.0,
             )
-            self.assertEqual("LINT_FAIL", cold_failure["classification"])
-            self.assertIn("snag declaration missing or invalid", cold_failure["detail"])
+            self.assertEqual("INFRA_FAIL", cold_failure["classification"])
+            self.assertIn("source=autoload class=infra stage=fields", cold_failure["detail"])
             self.assertLess(cold_processes[0].poll_count, 10)
             self.thaw(snapshot)
             self.thaw(pass_root)
@@ -1416,6 +2258,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.thaw(timeout_root)
             self.thaw(cold_timeout_root)
             self.thaw(cold_failure_root)
+            self.thaw(work / "immediate-exit-run")
+            self.thaw(work / "post-write-infra-run")
 
     def test_intermediate_symlink_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1494,15 +2338,23 @@ class RuneCorpusControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             snapshot = self.make_snapshot(work)
-            output = io.StringIO()
-            with mock.patch.object(
-                controller.subprocess, "Popen", side_effect=AssertionError("launch forbidden")
-            ), contextlib.redirect_stdout(output):
-                status = controller.main(["dry-run", "--snapshot", str(snapshot)])
-            lines = output.getvalue().splitlines()
+
+            def dry_run() -> list[str]:
+                output = io.StringIO()
+                with mock.patch.object(
+                    controller.subprocess, "Popen",
+                    side_effect=AssertionError("launch forbidden"),
+                ), contextlib.redirect_stdout(output):
+                    self.assertEqual(
+                        0, controller.main(["dry-run", "--snapshot", str(snapshot)])
+                    )
+                return output.getvalue().splitlines()
+
+            lines = dry_run()
+            self.assertEqual(lines, dry_run())
             assignments = [line for line in lines if re.fullmatch(r"[0-9]{3}\t[^\t]+\t[0-9]+", line)]
-            self.assertEqual(0, status)
             self.assertTrue(lines[0].startswith("fingerprint="))
+            self.assertIsNone(json.loads(lines[1])["generation_timeout_seconds"])
             self.assertEqual(175, len(assignments))
             self.assertEqual("000\tlmctf01\t62000", assignments[0])
             self.assertEqual("174\txmap30\t62174", assignments[-1])
@@ -1517,6 +2369,53 @@ class RuneCorpusControllerTests(unittest.TestCase):
         ])
         self.assertEqual(300, default.cold_load_timeout)
         self.assertEqual(420, overridden.cold_load_timeout)
+
+    def test_generation_timeout_defaults_to_none_and_rejects_nonpositive_values(self):
+        parser = controller.build_parser()
+        defaults = (
+            parser.parse_args(["dry-run", "--snapshot", "/tmp/snapshot"]),
+            parser.parse_args([
+                "run", "--snapshot", "/tmp/snapshot",
+                "--run-root", "/tmp/run",
+            ]),
+            parser.parse_args([
+                "smoke", "--snapshot", "/tmp/snapshot",
+                "--run-root", "/tmp/run", "lmctf01",
+            ]),
+        )
+        overridden = parser.parse_args([
+            "dry-run", "--snapshot", "/tmp/snapshot",
+            "--generation-timeout", "420",
+        ])
+        self.assertTrue(all(item.generation_timeout is None for item in defaults))
+        self.assertEqual(420, overridden.generation_timeout)
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = self.make_snapshot(Path(temporary))
+            arguments = {
+                "startup_timeout": 10,
+                "cold_load_timeout": 300,
+                "jobs": 1,
+                "port_base": 62000,
+            }
+            document, fingerprint = controller.build_fingerprint_document(
+                snapshot, generation_timeout=None, **arguments
+            )
+            self.assertIsNone(document["generation_timeout_seconds"])
+            self.assertEqual(
+                fingerprint,
+                controller.verify_fingerprint_document(snapshot, document),
+            )
+            for value in (0, -1):
+                with self.subTest(generation_timeout=value):
+                    with self.assertRaisesRegex(controller.CorpusError, "generation timeout"):
+                        controller.build_fingerprint_document(
+                            snapshot, generation_timeout=value, **arguments
+                        )
+                    invalid = dict(document)
+                    invalid["generation_timeout_seconds"] = value
+                    with self.assertRaisesRegex(controller.CorpusError, "fingerprint document"):
+                        controller.verify_fingerprint_document(snapshot, invalid)
+            self.thaw(snapshot)
 
     def test_atomic_publication_syncs_temp_published_file_and_parent(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1860,12 +2759,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
     def test_cold_load_grammar_rejects_generation_and_count_drift(self):
         ready = (
+            "slipgate: objective roots red=1 blue=2\n"
             "slipgate: rune ready lmctf01, 7 seeds, 9 links, 4 mechanism "
             "nodes, 5 plans, gravity 800, all fields up\n"
         )
         counts = {"seeds": 7, "links": 9, "mechanism_nodes": 4, "plans": 5}
         self.assertEqual(
-            counts, controller.parse_cold_load_log(ready, "lmctf01", counts)
+            {"counts": counts, "objective_roots": {"red": 1, "blue": 2}},
+            controller.parse_cold_load_log(ready, "lmctf01", counts)
         )
         with self.assertRaisesRegex(controller.CorpusError, "unexpectedly generated"):
             controller.parse_cold_load_log(
@@ -1890,6 +2791,57 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 counts,
             )
 
+    def test_incremental_log_reader_rejects_replacement_and_truncation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "server.log"
+            path.write_bytes(b"one\npartial")
+            reader = controller.IncrementalLineReader(path)
+            self.assertEqual(["one"], reader.read_new())
+            with path.open("ab") as stream:
+                stream.write(b" two\n")
+            self.assertEqual(["partial two"], reader.read_new())
+            path.write_bytes(b"short\n")
+            with self.assertRaisesRegex(controller.CorpusError, "truncated"):
+                reader.read_new()
+            replacement = Path(temporary) / "replacement.log"
+            replacement.write_bytes(b"other\n")
+            replacement.replace(path)
+            with self.assertRaisesRegex(controller.CorpusError, "replaced"):
+                reader.read_new()
+
+    def test_incremental_log_reader_drains_short_reads_and_binds_final_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "server.log"
+            path.write_bytes(b"one\ntwo\n")
+            reader = controller.IncrementalLineReader(path)
+            original_read = os.read
+            with mock.patch.object(
+                controller.os, "read",
+                side_effect=lambda fd, count: original_read(fd, min(count, 1)),
+            ):
+                self.assertEqual(["one", "two"], reader.read_new())
+            record = reader.bound_record()
+            replacement = Path(temporary) / "replacement.log"
+            replacement.write_bytes(b"one\ntwo\n")
+            replacement.replace(path)
+            with self.assertRaisesRegex(controller.CorpusError, "replaced"):
+                reader.verify_named_record(record)
+            reader.close()
+
+    def test_incremental_log_reader_rejects_same_inode_rewrite_after_parse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "server.log"
+            path.write_bytes(b"one\n")
+            reader = controller.IncrementalLineReader(path)
+            self.assertEqual(["one"], reader.read_new())
+            with path.open("r+b") as stream:
+                stream.write(b"two\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            with self.assertRaisesRegex(controller.CorpusError, "changed after it was parsed"):
+                reader.bound_record()
+            reader.close()
+
     def test_cold_load_bootstrap_snag_uses_frozen_tool_and_exact_artifact(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -1900,8 +2852,11 @@ class RuneCorpusControllerTests(unittest.TestCase):
             artifact.write_bytes(b"authenticated-rune-bytes")
             before = controller.regular_file_record(artifact)
 
-            def verified(_snapshot, _layout, label, target, arguments):
+            heartbeat_check = mock.Mock()
+
+            def verified(_snapshot, _layout, label, target, arguments, **kwargs):
                 self.assertEqual(label, "snag-bootstrap")
+                self.assertIs(heartbeat_check, kwargs["heartbeat_check"])
                 roles = controller.verify_snapshot(snapshot)["by_role"]
                 self.assertEqual(
                     target, snapshot / roles["snagrepair"]["path"])
@@ -1924,7 +2879,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
             with mock.patch.object(
                     controller, "run_verified_python", side_effect=verified):
                 result = controller.stage_bootstrap_snag(
-                    attempt, snapshot, "lmctf01", artifact, "f" * 64)
+                    attempt, snapshot, "lmctf01", artifact, "f" * 64,
+                    heartbeat_check=heartbeat_check,
+                )
             self.assertEqual(controller.regular_file_record(artifact), before)
             self.assertEqual(result["snag"]["mode"], 0o444)
             self.assertEqual(result["evidence"]["mode"], 0o444)
@@ -1950,6 +2907,29 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 )
             self.thaw(snapshot)
 
+    def test_cold_load_bootstrap_snag_observes_heartbeat_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            attempt = work / "attempt"
+            artifact = attempt / "private/game/maps/lmctf01.rune"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"authenticated-rune-bytes")
+            with mock.patch.object(
+                    controller,
+                    "run_verified_python",
+                    side_effect=lambda *_args, **kwargs: kwargs["heartbeat_check"](),
+            ) as verified:
+                with self.assertRaisesRegex(controller.CorpusError, "ticker write failed"):
+                    controller.stage_bootstrap_snag(
+                        attempt, snapshot, "lmctf01", artifact, "f" * 64,
+                        heartbeat_check=lambda: (_ for _ in ()).throw(
+                            controller.CorpusError("ticker write failed")
+                        ),
+                    )
+            self.assertIsNotNone(verified.call_args.kwargs["heartbeat_check"])
+            self.thaw(snapshot)
+
     def test_cold_load_bootstrap_snag_rejects_gate_and_output_drift(self):
         scenarios = (
             ("exit", controller.CorpusError),
@@ -1968,7 +2948,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 artifact.parent.mkdir(parents=True)
                 artifact.write_bytes(b"authenticated-rune-bytes")
 
-                def verified(_snapshot, _layout, _label, _target, arguments):
+                def verified(_snapshot, _layout, _label, _target, arguments, **_kwargs):
                     output = Path(arguments[arguments.index("--output") + 1])
                     evidence = Path(
                         arguments[arguments.index("--evidence-manifest") + 1])
@@ -2122,28 +3102,26 @@ class RuneCorpusControllerTests(unittest.TestCase):
             }
             result_path = controller.publish_result(run_root, "gatecase", result, attempt)
             runner = FakeGateRunner("gatecase")
-            with self.assertRaises(controller.GateIntegrityError):
-                controller.validate_resumable_pass(
-                    result_path,
-                    run_root=run_root,
-                    fingerprint=fingerprint,
-                    fingerprint_document_bytes=document_bytes,
-                    stable_port=62000,
-                    snapshot=snapshot,
-                    gate_runner=runner,
-                )
+            self.assertFalse(controller.validate_resumable_pass(
+                result_path,
+                run_root=run_root,
+                fingerprint=fingerprint,
+                fingerprint_document_bytes=document_bytes,
+                stable_port=62000,
+                snapshot=snapshot,
+                gate_runner=runner,
+            ))
             artifact.chmod(0o600)
             artifact.write_bytes(b"contaminated")
-            with self.assertRaises(controller.GateIntegrityError):
-                controller.validate_resumable_pass(
-                    result_path,
-                    run_root=run_root,
-                    fingerprint=fingerprint,
-                    fingerprint_document_bytes=document_bytes,
-                    stable_port=62000,
-                    snapshot=snapshot,
-                    gate_runner=runner,
-                )
+            self.assertFalse(controller.validate_resumable_pass(
+                result_path,
+                run_root=run_root,
+                fingerprint=fingerprint,
+                fingerprint_document_bytes=document_bytes,
+                stable_port=62000,
+                snapshot=snapshot,
+                gate_runner=runner,
+            ))
             self.thaw(snapshot)
 
     def test_incomplete_stale_pass_is_rejected_and_next_attempt_advances(self):
@@ -2188,47 +3166,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual("attempt-0002", new_attempt.name)
             self.thaw(snapshot)
 
-    def test_guarded_exec_reaches_exact_fake_command(self):
-        completed = subprocess.run(
-            [
-                os.fspath(Path(os.sys.executable)),
-                os.fspath(ROOT / "tools/rune_corpus_controller.py"),
-                "_guard-exec",
-                str(os.getpid()),
-                "--",
-                "/bin/sh",
-                "-c",
-                "printf guarded-exec-ok",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        self.assertEqual(0, completed.returncode, completed.stderr)
-        self.assertEqual(b"guarded-exec-ok", completed.stdout)
-
-    def test_guard_scrubs_python_loader_authority_before_engine_exec(self):
-        captured = {}
-
-        def execv(path, command):
-            captured["path"] = path
-            captured["command"] = command
-            captured["env"] = dict(os.environ)
-            raise RuntimeError("captured exec")
-
-        hostile = {
-            "PATH": "/host/bin", "LD_LIBRARY_PATH": "/snapshot/python-runtime/lib",
-            "LD_PRELOAD": "/host/preload.so", "PYTHONPATH": "/host/python",
-            "MAKEFLAGS": "--eval=host",
-        }
-        with mock.patch.dict(os.environ, hostile, clear=True), mock.patch.object(
-            controller, "arm_parent_death"
-        ), mock.patch.object(controller.os, "execv", side_effect=execv):
-            with self.assertRaisesRegex(RuntimeError, "captured exec"):
-                controller._guard_exec(["123", "--", "/private/q2ded", "+map", "lmctf01"])
-        self.assertEqual("/private/q2ded", captured["path"])
-        self.assertEqual(controller.CHILD_ENVIRONMENT, captured["env"])
-
     def test_bounded_jobs_enforces_parallel_ceiling_and_serial_control(self):
         assignments = [{"map": str(index)} for index in range(8)]
 
@@ -2254,6 +3191,149 @@ class RuneCorpusControllerTests(unittest.TestCase):
         self.assertEqual(1, observed(1))
         self.assertEqual(3, observed(3))
 
+    def test_full_corpus_scheduler_stably_alternates_first_pass_work(self):
+        def assignment(map_name: str, kind: str) -> dict:
+            return {
+                "map": map_name,
+                "work": controller.MapWork(kind, None, None),
+            }
+
+        def names(items):
+            return [item["map"] for item in items]
+
+        cases = (
+            (
+                [
+                    assignment("R1", "generated_replacement"),
+                    assignment("A1", "adopted_validation"),
+                    assignment("M1", "generated_missing"),
+                    assignment("R2", "generated_replacement"),
+                    assignment("A2", "adopted_validation"),
+                    assignment("M2", "generated_missing"),
+                ],
+                ["A1", "M1", "A2", "M2", "R1", "R2"],
+            ),
+            (
+                [
+                    assignment("M1", "generated_missing"),
+                    assignment("R1", "generated_replacement"),
+                    assignment("A1", "adopted_validation"),
+                    assignment("A2", "adopted_validation"),
+                    assignment("M2", "generated_missing"),
+                    assignment("A3", "adopted_validation"),
+                ],
+                ["A1", "M1", "A2", "M2", "A3", "R1"],
+            ),
+            (
+                [
+                    assignment("A1", "adopted_validation"),
+                    assignment("M1", "generated_missing"),
+                    assignment("R1", "generated_replacement"),
+                    assignment("M2", "generated_missing"),
+                    assignment("A2", "adopted_validation"),
+                    assignment("M3", "generated_missing"),
+                ],
+                ["A1", "M1", "A2", "M2", "M3", "R1"],
+            ),
+            (
+                [
+                    assignment("R1", "generated_replacement"),
+                    assignment("A1", "adopted_validation"),
+                    assignment("R2", "generated_replacement"),
+                    assignment("A2", "adopted_validation"),
+                ],
+                ["A1", "A2", "R1", "R2"],
+            ),
+            (
+                [
+                    assignment("R1", "generated_replacement"),
+                    assignment("M1", "generated_missing"),
+                    assignment("R2", "generated_replacement"),
+                    assignment("M2", "generated_missing"),
+                ],
+                ["M1", "M2", "R1", "R2"],
+            ),
+        )
+        for source, expected in cases:
+            with self.subTest(expected=expected):
+                ordered = controller._order_full_corpus_assignments(source)
+                self.assertEqual(expected, names(ordered))
+                self.assertEqual(sorted(names(source)), sorted(names(ordered)))
+
+        for kind in (
+            "adopted_validation", "generated_missing", "generated_replacement",
+        ):
+            source = [assignment(f"{kind}-{index}", kind) for index in range(2)]
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    names(source),
+                    names(controller._order_full_corpus_assignments(source)),
+                )
+        self.assertEqual([], controller._order_full_corpus_assignments([]))
+
+    def test_full_corpus_jobs_one_fails_before_preflight_or_engine_launch(self):
+        maps = controller.validate_manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary) / "run"
+            snapshot = Path(temporary) / "snapshot"
+            adopted = {name: {} for name in maps[:controller.EXPECTED_ADOPTED_RUNE_COUNT]}
+            with mock.patch.object(
+                controller, "verify_snapshot", return_value={"adopted_runes": adopted}
+            ), mock.patch.object(
+                controller,
+                "preflight_python_runtime",
+                side_effect=AssertionError("preflight must not run"),
+            ) as preflight, mock.patch.object(
+                controller.subprocess,
+                "Popen",
+                side_effect=AssertionError("engine must not launch"),
+            ) as launch:
+                with self.assertRaisesRegex(
+                    controller.CorpusError, "full corpus run requires jobs >= 2"
+                ):
+                    controller.execute_selection(
+                        snapshot=snapshot,
+                        run_root=run_root,
+                        selected_maps=maps,
+                        port_base=62000,
+                        startup_timeout=1,
+                        generation_timeout=None,
+                        cold_load_timeout=1,
+                        jobs=1,
+                        engine_arguments=controller.DEFAULT_ENGINE_ARGUMENTS,
+                    )
+            preflight.assert_not_called()
+            launch.assert_not_called()
+
+    def test_smoke_jobs_one_reaches_preflight(self):
+        maps = controller.validate_manifest()
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary) / "run"
+            snapshot = Path(temporary) / "snapshot"
+            reached = controller.CorpusError("smoke reached preflight")
+            with mock.patch.object(
+                controller, "verify_snapshot", return_value={"adopted_runes": {}}
+            ), mock.patch.object(
+                controller,
+                "build_fingerprint_document",
+                return_value=({}, "f" * 64),
+            ), mock.patch.object(
+                controller, "preflight_python_runtime", side_effect=reached
+            ) as preflight:
+                with self.assertRaisesRegex(controller.CorpusError, "smoke reached"):
+                    controller.execute_selection(
+                        snapshot=snapshot,
+                        run_root=run_root,
+                        selected_maps=[maps[0]],
+                        port_base=62000,
+                        startup_timeout=1,
+                        generation_timeout=None,
+                        cold_load_timeout=1,
+                        jobs=1,
+                        engine_arguments=controller.DEFAULT_ENGINE_ARGUMENTS,
+                    )
+            preflight.assert_called_once()
+
     def test_live_heartbeat_is_monotonic_and_finishes_empty(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)
@@ -2275,6 +3355,25 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual([], final["active"])
             self.assertEqual(1, final["terminal"])
 
+    def test_heartbeat_ticker_advances_nonchild_reader_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary)
+            publisher = controller.HeartbeatPublisher(
+                run_root, "f" * 64, 1, ticker_interval=0.01
+            )
+            try:
+                publisher.event("active", "lmctf01", {
+                    "attempt": 1, "stage": "readers", "heartbeat_at": "old",
+                })
+                time.sleep(0.03)
+                value = json.loads((run_root / "heartbeat.json").read_text())
+                active = value["active"]
+                self.assertEqual("readers", active[0]["stage"])
+                self.assertNotEqual("old", active[0]["heartbeat_at"])
+                self.assertNotIn("process", active[0])
+            finally:
+                publisher.close()
+
     def test_stale_identity_mismatch_records_infra_without_signal(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)
@@ -2292,6 +3391,11 @@ class RuneCorpusControllerTests(unittest.TestCase):
             }
             controller.atomic_write_json(attempt / "owner.json", owner)
             controller.atomic_write_bytes(attempt / "server.log", b"partial\n")
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="fingerprint", map_name="lmctf01",
+                stable_port=62000, attempt_number=1,
+                work=controller.MapWork("generated_missing", None, None),
+            )
             assignments = {"lmctf01": {"map": "lmctf01", "port": 62000}}
             with mock.patch.object(
                 controller, "recover_stale_owned_child"
@@ -2319,6 +3423,11 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "fingerprint": "fingerprint", "map": "lmctf01", "attempt": 1,
                 "created_at": controller.utc_now(), "process": identity.as_dict(),
             })
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="fingerprint", map_name="lmctf01",
+                stable_port=62000, attempt_number=1,
+                work=controller.MapWork("generated_missing", None, None),
+            )
             assignments = {"lmctf01": {"map": "lmctf01", "port": 62000}}
             with mock.patch.object(
                 controller, "signal_owned_child"
@@ -2342,6 +3451,11 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "created_at": controller.utc_now(), "process": None,
                 "pidfd_captured": False, "command_sha256": "c" * 64,
             })
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="fingerprint", map_name="lmctf01",
+                stable_port=62000, attempt_number=1,
+                work=controller.MapWork("generated_missing", None, None),
+            )
             assignments = {"lmctf01": {"map": "lmctf01", "port": 62000}}
             with mock.patch.object(
                 controller, "signal_owned_child"
@@ -2365,6 +3479,31 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 fingerprint="fingerprint",
                 stable_port=62000,
             ))
+            self.thaw(run_root)
+
+    def test_preidentity_cold_load_owner_is_retryable_without_signal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary)
+            attempt = run_root / "runs/lmctf01/attempt-0001"
+            attempt.mkdir(parents=True)
+            controller.write_attempt_intent(
+                run_root, attempt, fingerprint="fingerprint", map_name="lmctf01",
+                stable_port=62000, attempt_number=1,
+                work=controller.MapWork("generated_missing", None, None),
+            )
+            controller.atomic_write_json(attempt / "cold-load/owner.json", {
+                "fingerprint": "fingerprint", "map": "lmctf01", "attempt": 1,
+                "created_at": controller.utc_now(), "process": None,
+                "pidfd_captured": False, "command_sha256": "c" * 64,
+            })
+            assignments = {"lmctf01": {"map": "lmctf01", "port": 62000}}
+            with mock.patch.object(controller, "recover_owned_child_to_exit") as recovery:
+                self.assertEqual(1, controller.recover_stale_attempts(
+                    run_root, ["lmctf01"], "fingerprint", assignments
+                ))
+            recovery.assert_not_called()
+            result = json.loads((run_root / "runs/lmctf01/result.json").read_text())
+            self.assertEqual("INFRA_FAIL", result["classification"])
             self.thaw(run_root)
 
     def test_summary_rejects_175_incomplete_infra_terminal_records(self):

@@ -1631,27 +1631,29 @@ static int Catalog_EdgeGroupMatchesTeam(uint32_t from_key,
 	       catalog.edges[edge_index].kind != SG_MECH_EDGE_TEAM;
 }
 
-int SG_MechCatalogMatches(const rune_mechanism_node_t *nodes,
+sg_mech_catalog_match_t SG_MechCatalogMatchStatus(
+	const rune_mechanism_node_t *nodes,
 	uint32_t num_nodes, const rune_mechanism_edge_t *inventory_edges,
 	uint32_t num_inventory_edges, const unsigned char *strings,
 	uint32_t string_bytes)
 {
 	uint32_t i;
 
-	if (catalog.status != SG_MECH_CATALOG_READY ||
-	    num_nodes != catalog.num_nodes ||
+	if (catalog.status != SG_MECH_CATALOG_READY)
+		return SG_MECH_CATALOG_MATCH_UNAVAILABLE;
+	if (num_nodes != catalog.num_nodes ||
 	    num_inventory_edges != catalog.num_edges ||
 	    string_bytes != catalog.string_bytes ||
 	    (num_nodes != 0U && !nodes) ||
 	    (num_inventory_edges != 0U && !inventory_edges) || !strings)
-		return 0;
+		return SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH;
 	if (!((num_nodes == 0U || memcmp(nodes, catalog.nodes,
 		(size_t)num_nodes * sizeof(*nodes)) == 0) &&
 	       (num_inventory_edges == 0U || memcmp(inventory_edges,
 		catalog.edges, (size_t)num_inventory_edges *
 		sizeof(*inventory_edges)) == 0) &&
 	       memcmp(strings, catalog.strings, string_bytes) == 0))
-		return 0;
+		return SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH;
 	for (i = 0U; i < num_nodes; i++)
 		/* The sealed inventory is a map-spawn fact, not a promise that every
 		 * contextual node lives forever.  Stock maps can intentionally retire a
@@ -1663,8 +1665,8 @@ int SG_MechCatalogMatches(const rune_mechanism_node_t *nodes,
 		 * mover, and closure node it actually executes. */
 		if (!SG_MechCatalogEntityMatches(nodes[i].key, &nodes[i]) &&
 		    !SG_MechCatalogEntityRetired(nodes[i].key, &nodes[i]))
-			return 0;
-	return 1;
+			return SG_MECH_CATALOG_MATCH_WORLD_DRIFT;
+	return SG_MECH_CATALOG_MATCH_READY;
 }
 
 int SG_MechCatalogEntityMatches(uint32_t key,

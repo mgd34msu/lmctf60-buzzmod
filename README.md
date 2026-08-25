@@ -3,11 +3,9 @@
 Quake II CTF mod. Fork of [QwazyWabbit's LMCTF](https://github.com/QwazyWabbitWOS/lmctf60)
 with persistent player stats and the native SLIPGATE bot platform.
 
-Tagged releases are the supported install boundary. The development branches
-remain active while the full-project completion gates in
-[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) are being closed;
-do not treat an arbitrary checkout or locally generated server bundle as a
-release.
+Tagged releases are the supported install boundary. Development branches are
+not releases. Do not deploy an arbitrary checkout or a locally generated
+server bundle.
 
 ## Install
 
@@ -35,8 +33,8 @@ Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmst
 ## SLIPGATE bots
 
 SLIPGATE is the mod's from-scratch bot system. It is built into the game module;
-there is no separate bot library. The current source is still closing the
-whole-project gates required for `v1.0.0`.
+there is no separate bot library. The current source is still under development
+for `v1.0.0`.
 
 The target is recognizable, competent LMCTF play: grapple-first movement, real
 flag-carrier escape runs, escorts that screen the carrier, and defense that
@@ -46,27 +44,13 @@ The bots navigate on a per-map graph proven by actual physics runs (runs,
 jumps, drops, swimming, grapple swings, lifts, teleports, and declared door
 traversals), price their decisions on a live
 cost surface (items, danger, duel range, cover, teammate support), and share
-one team-wide belief of where enemies and flags are. The repository includes
-demo-derived movement/combat inputs and tools for controlled comparisons. Those
-retained datasets are development inputs, not proof that the current build has
-passed its final matched trials; the completion plan names the measurements and
-runtime receipts still required.
+one team-wide belief of where enemies and flags are.
 
 Current source includes steal → carry → escort → capture play, physics-proved
 RUNE navigation, grapple movement, combat and perception controllers, team
-roles, chat, and persistent match instrumentation. Completion still requires:
+roles, chat, and persistent match instrumentation.
 
-- generate, independently accept, and cold-load RUNE artifacts for all 175
-  authoritative maps;
-- finish the measured bot outcome and visible-behavior gaps while preserving
-  the movement, combat, perception, and team-play non-regression gates;
-- run the ten-server production fleet as persistent processes over the exact
-  rotated top-20 lists and retain map-local receipts across native transitions;
-- freeze, install, and verify one hash-bound source/corpus/bundle identity,
-  then publish the supported module and static-asset release.
-
-See [`SLIPGATE.md`](SLIPGATE.md) for the design and current behavior, and the
-completion plan for the exact gates and dependency graph.
+See [`SLIPGATE.md`](SLIPGATE.md) for the design and current behavior.
 
 ### Server commands
 
@@ -84,21 +68,16 @@ SLIPGATE is administered through the game DLL's `sv` command surface:
 | `sv sg weights` | print the active weight source and values |
 | `sv sg weights reload` | reload weights, then print them |
 
-`sv rune` mutates the active game directory when generation succeeds; it is not
-the corpus acceptance command. A production RUNE must also pass both C readers,
-the Python reader, lint, applicable semantic checks, and a fresh-process load
-under the exact module/BSP/config identity.
+`sv rune` writes a RUNE to the active game directory when generation succeeds.
 
 ### Current development status
 
 | Area | Current code state |
 |-|-|
-| RUNE corpus | The tracked list/controller covers 175 distinct maps. When alphabetic variants exist, the unsuffixed base is excluded; both `lmctf02a` and `lmctf02c` remain separate identities. The controller requires GNU/Make C-reader agreement with Python and lint, runs applicable semantic checks, and requires a separate bounded cold-load process before PASS. The 175-map generation run has not yet completed. |
-| `lmctf58` | All ten required door-controller identities are retained. The accepted fresh artifact passes both C readers, Python decoding, lint, the exact semantic checker, sanitizers, and a separate fresh-process cold load. |
-| Fleet | Non-random maplists preserve file order and advance/wrap in the same `q2ded` process. The authenticated bundle installer and persistent fleet runner are implemented and test-covered; production installation and the ten-process run against the final 175-map bundle remain pending. |
-| Tool readers | `runeio.py --expected-identity` authenticates a reference RUNE and checks the artifact identity; `corpusgraph.py` has one strict loader with duplicate-key, non-finite-number, and contextual seed-weight validation. |
-| Bot outcomes | Telemetry consumers now parse the production `seed/goal/sgoal/spd` schema and fail on zero recognized rows. Exact-build matched trials for steal initiation, conversion, defense, and captures remain open. |
-| Release | The workflow builds the Linux/Windows modules and runs both Make-dialect host gates. The complete authenticated server bundle, transactional cutover, persistent-fleet cycle, and final tag are not complete. |
+| RUNE corpus | The final 175-map RUNE corpus is not complete. |
+| Fleet | Non-random maplists preserve file order and advance and wrap in the same `q2ded` process. The final production fleet run is pending. |
+| Bot outcomes | Final real-match validation is pending. |
+| Release | The release workflow builds Linux and Windows modules. A supported `v1.0.0` release is not ready. |
 
 ## What's tracked
 

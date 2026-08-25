@@ -40,6 +40,8 @@ static uint32_t execution_failure_key = SG_MECH_NO_KEY;
 static uint32_t incarnation_failure_key = SG_MECH_NO_KEY;
 static uint32_t retired_key = SG_MECH_NO_KEY;
 static int catalog_ready = 1;
+static sg_mech_catalog_match_t catalog_match_status =
+	SG_MECH_CATALOG_MATCH_READY;
 static int failures;
 
 #define CHECK(condition_) do { \
@@ -195,6 +197,7 @@ static void FixtureFinishPlanEdges(fixture_t *fixture, uint32_t entry_key,
 	incarnation_failure_key = SG_MECH_NO_KEY;
 	retired_key = SG_MECH_NO_KEY;
 	catalog_ready = 1;
+	catalog_match_status = SG_MECH_CATALOG_MATCH_READY;
 	CHECK(SG_RunePublishedShapeValid(rune));
 }
 
@@ -215,18 +218,22 @@ static int NodeIndex(const fixture_t *fixture, uint32_t key)
 	return -1;
 }
 
-int SG_MechCatalogMatches(const struct rune_mechanism_node_s *nodes,
+sg_mech_catalog_match_t SG_MechCatalogMatchStatus(
+	const struct rune_mechanism_node_s *nodes,
 	uint32_t num_nodes, const struct rune_mechanism_edge_s *inventory_edges,
 	uint32_t num_inventory_edges, const unsigned char *strings,
 	uint32_t string_bytes)
 {
+	if (catalog_match_status != SG_MECH_CATALOG_MATCH_READY)
+		return catalog_match_status;
 	return catalog_ready && active_fixture &&
 	       nodes == active_fixture->nodes &&
 	       num_nodes == active_fixture->num_nodes &&
 	       inventory_edges == active_fixture->edges &&
 	       num_inventory_edges == active_fixture->num_inventory_edges &&
 	       strings == active_fixture->strings &&
-	       string_bytes == sizeof(active_fixture->strings);
+	       string_bytes == sizeof(active_fixture->strings)
+		? SG_MECH_CATALOG_MATCH_READY : SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH;
 }
 
 int SG_MechCatalogEntityTopologyMatches(uint32_t key,
@@ -352,15 +359,31 @@ static void TestPlatform(void)
 	CHECK(binding.mover_entity == &fixture.entities[1]);
 	CheckDoorMovers(&binding, 20U, SG_MECH_NO_KEY);
 	CHECK(SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_READY);
 	CHECK(failure_index == UINT32_MAX);
 	topology_failure_key = 10U;
 	CHECK(!SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_INFRA);
 	CHECK(failure_index == 0U);
 	topology_failure_key = SG_MECH_NO_KEY;
 	incarnation_failure_key = 20U;
 	CHECK(!SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_INFRA);
 	CHECK(failure_index == 0U);
 	incarnation_failure_key = SG_MECH_NO_KEY;
+	fixture.plan.closure_crc32 ^= UINT32_C(1);
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_ARTIFACT);
+	CHECK(failure_index == 0U);
+	fixture.plan.closure_crc32 ^= UINT32_C(1);
+	catalog_match_status = SG_MECH_CATALOG_MATCH_UNAVAILABLE;
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_INFRA);
+	CHECK(failure_index == 0U);
+	catalog_match_status = SG_MECH_CATALOG_MATCH_READY;
 }
 
 static void TestStockPlatformRideWithAutomaticDoorEgress(void)
@@ -730,10 +753,14 @@ static void TestRetiredInventoryIsNeverExecutable(void)
 	retired_key = 10U;
 	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
 	CHECK(!SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_INFRA);
 	CHECK(failure_index == 0U);
 	retired_key = 20U;
 	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
 	CHECK(!SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_INFRA);
 	CHECK(failure_index == 0U);
 
 	/* A retired node in the authenticated plan closure is executable state,
@@ -744,6 +771,8 @@ static void TestRetiredInventoryIsNeverExecutable(void)
 	CHECK(!SG_RuneMechanismBindingCapture(&fixture.rune, 0U, &binding));
 	failure_index = UINT32_MAX;
 	CHECK(!SG_RuneMechanismBindingsReady(&fixture.rune, &failure_index));
+	CHECK(SG_RuneMechanismBindingsStatus(&fixture.rune, &failure_index) ==
+		SG_RUNE_MECHANISM_BINDINGS_INFRA);
 	CHECK(failure_index == 0U);
 	retired_key = SG_MECH_NO_KEY;
 }

@@ -1250,11 +1250,22 @@ def _build_teleports(
     pair_count: int = 1,
     *,
     include_custom_trigger: bool = False,
+    duplicate_target: bool = False,
+    plan_target_ordinal: int = 0,
+    omit_target: bool = False,
 ) -> bytes:
     """Build one directed pad or two independently opposing pads."""
 
     if pair_count not in (1, 2):
         raise ValueError("teleport fixture supports one or two pads")
+    if duplicate_target and pair_count != 1:
+        raise ValueError("duplicate target fixture supports one pad")
+    if duplicate_target and omit_target:
+        raise ValueError("teleport fixture cannot duplicate and omit targets")
+    if plan_target_ordinal not in (0, 1) or (
+        plan_target_ordinal and not duplicate_target
+    ):
+        raise ValueError("teleport plan target ordinal is unsupported")
     destination_names = tuple(
         f"dest_{index}".encode("ascii") for index in range(pair_count)
     )
@@ -1387,7 +1398,8 @@ def _build_teleports(
         entry_key = index * 3 + 1
         pad_key = entry_key + 1
         destination_key = entry_key + 2
-        node_rows.extend((
+        target_keys = () if omit_target else (destination_key,)
+        nodes = (
             node(
                 entry_key,
                 runeio.RUNE_NODE_TELEPORT_TRIGGER,
@@ -1412,13 +1424,25 @@ def _build_teleports(
                 b"misc_teleporter_dest",
                 targetname=destination_name,
             ),
-        ))
-        target_row = (
-            entry_key,
-            destination_key,
-            runeio.RUNE_EDGE_TARGET,
-            0,
-            0,
+        )
+        if duplicate_target:
+            target_keys += (destination_key + 1,)
+            nodes += (node(
+                destination_key + 1,
+                runeio.RUNE_NODE_TELEPORT_DEST,
+                b"misc_teleporter_dest",
+                targetname=destination_name,
+            ),)
+        node_rows.extend(nodes)
+        target_rows = tuple(
+            (
+                entry_key,
+                target_key,
+                runeio.RUNE_EDGE_TARGET,
+                ordinal,
+                0,
+            )
+            for ordinal, target_key in enumerate(target_keys)
         )
         owner_row = (
             entry_key,
@@ -1427,23 +1451,31 @@ def _build_teleports(
             0,
             0,
         )
-        pad_target_row = (
-            pad_key,
-            destination_key,
-            runeio.RUNE_EDGE_TARGET,
-            0,
-            0,
+        pad_target_rows = tuple(
+            (
+                pad_key,
+                target_key,
+                runeio.RUNE_EDGE_TARGET,
+                ordinal,
+                0,
+            )
+            for ordinal, target_key in enumerate(target_keys)
         )
-        inventory_rows.extend((target_row, owner_row, pad_target_row))
+        inventory_rows.extend(target_rows)
+        inventory_rows.append(owner_row)
+        inventory_rows.extend(pad_target_rows)
         # The materializer's controller closure invokes the owner relation
         # before the exact destination relation.  Neither relation creates a
         # reverse graph link.
-        plan_edge_rows.extend((owner_row, target_row))
+        closure_rows = (owner_row,) if omit_target else (
+            owner_row, target_rows[plan_target_ordinal]
+        )
+        plan_edge_rows.extend(closure_rows)
         plan_bindings.append((entry_key, pad_key))
 
     if include_custom_trigger:
         node_rows.append(node(
-            pair_count * 3 + 1,
+            pair_count * (4 if duplicate_target else 3) + 1,
             runeio.RUNE_NODE_OTHER_TRIGGER,
             b"trigger_custom_teleport",
             flags=(
@@ -1463,15 +1495,19 @@ def _build_teleports(
     )
     plans: list[bytes] = []
     first_edge = len(inventory)
+    plan_edge_count = 1 if omit_target else 2
     for plan_index, (entry_key, pad_key) in enumerate(plan_bindings):
         raw_edges = b"".join(
-            plan_edges[plan_index * 2:plan_index * 2 + 2]
+            plan_edges[
+                plan_index * plan_edge_count:
+                plan_index * plan_edge_count + plan_edge_count
+            ]
         )
         plans.append(runeio.RUNE_ACTIVATION_PLAN_STRUCT.pack(
             entry_key,
             pad_key,
-            first_edge + plan_index * 2,
-            2,
+            first_edge + plan_index * plan_edge_count,
+            plan_edge_count,
             runeio.RUNE_CONTROLLER_TELEPORT,
             0,
             contract.mechanism_controller_plan_flags(
@@ -2442,6 +2478,39 @@ class RuneRuneArtifactTests(unittest.TestCase):
             [(edge.from_key, edge.to_key, edge.kind) for edge in closure],
         )
 
+    def test_duplicate_teleporter_targets_keep_fanout_but_execute_first(self):
+        decoded = runeio.decode(_build_teleports(duplicate_target=True))
+        self.assertEqual(
+            [(1, 3, 0), (1, 4, 1), (2, 3, 0), (2, 4, 1)],
+            [
+                (edge.from_key, edge.to_key, edge.ordinal)
+                for edge in decoded.inventory_edges
+                if edge.kind == runeio.RUNE_EDGE_TARGET
+            ],
+        )
+        plan = decoded.activation_plans[0]
+        closure = decoded.activation_edges[
+            plan.first_edge:plan.first_edge + plan.num_edges
+        ]
+        self.assertEqual(
+            [(1, 2, runeio.RUNE_EDGE_OWNER, 0),
+             (1, 3, runeio.RUNE_EDGE_TARGET, 0)],
+            [
+                (edge.from_key, edge.to_key, edge.kind, edge.ordinal)
+                for edge in closure
+            ],
+        )
+        self.assert_wire_code(
+            runeio.RLRUNE_BAD_ACTIVATION_PLAN,
+            lambda: runeio.decode(_build_teleports(
+                duplicate_target=True, plan_target_ordinal=1
+            )),
+        )
+        self.assert_wire_code(
+            runeio.RLRUNE_BAD_ACTIVATION_PLAN,
+            lambda: runeio.decode(_build_teleports(omit_target=True)),
+        )
+
     def test_opposing_teleporters_are_two_independent_one_way_plans(self):
         decoded = runeio.decode(_build_teleports(2))
         self.assertEqual(
@@ -2685,6 +2754,34 @@ class RuneRuneArtifactTests(unittest.TestCase):
             self.assertIn('"trigger_count": 2', output.getvalue())
             self.assertIn('"plan_count": 1', output.getvalue())
 
+    def test_cli_exit_taxonomy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            valid = root / "valid.rune"
+            malformed = root / "malformed.rune"
+            missing = root / "missing.rune"
+            valid.write_bytes(self.encoded)
+            malformed.write_bytes(self.encoded[:-1])
+
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(0, runeio.main([str(valid)]))
+
+            artifact_error = io.StringIO()
+            with redirect_stderr(artifact_error):
+                self.assertEqual(1, runeio.main([str(malformed)]))
+            self.assertIn("RLW_", artifact_error.getvalue())
+
+            infrastructure_error = io.StringIO()
+            with redirect_stderr(infrastructure_error):
+                self.assertEqual(3, runeio.main([str(missing)]))
+            self.assertIn("RLW_IO_ERROR", infrastructure_error.getvalue())
+
+            usage_error = io.StringIO()
+            with redirect_stderr(usage_error):
+                with self.assertRaises(SystemExit) as raised:
+                    runeio.main([])
+            self.assertEqual(2, raised.exception.code)
+
     def test_expected_identity_gate_and_cli(self):
         identity = runeio.decode(self.encoded).header.identity
         self.assertEqual(
@@ -2747,14 +2844,13 @@ class RuneRuneArtifactTests(unittest.TestCase):
             _fix_header_crc(mismatched)
             reference.write_bytes(mismatched)
             error = io.StringIO()
-            with (
-                redirect_stderr(error),
-                self.assertRaises(SystemExit) as raised,
-            ):
-                runeio.main([
-                    "--expected-identity", str(reference), str(artifact)
-                ])
-            self.assertEqual(2, raised.exception.code)
+            with redirect_stderr(error):
+                self.assertEqual(
+                    1,
+                    runeio.main([
+                        "--expected-identity", str(reference), str(artifact)
+                    ]),
+                )
             self.assertIn("RLW_MAPNAME_MISMATCH", error.getvalue())
 
     def test_corpus_loader_and_seed_weights_are_strict(self):
@@ -2823,12 +2919,8 @@ class RuneRuneArtifactTests(unittest.TestCase):
                     path = Path(temporary) / f"{name}.rune"
                     path.write_bytes(encoded)
                     error = io.StringIO()
-                    with (
-                        redirect_stderr(error),
-                        self.assertRaises(SystemExit) as raised,
-                    ):
-                        runeio.main([str(path)])
-                    self.assertEqual(2, raised.exception.code)
+                    with redirect_stderr(error):
+                        self.assertEqual(1, runeio.main([str(path)]))
                     self.assertIn("RLRUNE_BAD_ACTIVATION_PLAN", error.getvalue())
 
     def test_production_consumers_use_rune_reader(self):

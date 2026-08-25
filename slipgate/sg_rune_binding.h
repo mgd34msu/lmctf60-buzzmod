@@ -15,6 +15,13 @@ typedef enum sg_carrier_door_stage_e
 	SG_CARRIER_DOOR_EGRESS = 1
 } sg_carrier_door_stage_t;
 
+typedef enum sg_rune_mechanism_bindings_status_e
+{
+	SG_RUNE_MECHANISM_BINDINGS_READY = 0,
+	SG_RUNE_MECHANISM_BINDINGS_ARTIFACT,
+	SG_RUNE_MECHANISM_BINDINGS_INFRA
+} sg_rune_mechanism_bindings_status_t;
+
 struct edict_s;
 
 typedef struct sg_rune_mechanism_binding_s
@@ -121,7 +128,11 @@ int SG_RuneMechanismBindingCarrierStageTriggerMatches(
 	sg_carrier_door_stage_t stage, const struct edict_s *entity);
 
 /* Fail closed unless every link governed by an admitted map mechanism can be
- * captured against the sealed live catalog before graph publication. */
+ * captured against the sealed live catalog before graph publication. Content,
+ * plan, and controller-shape defects are ARTIFACT; unavailable, retired, or
+ * drifted live entities are INFRA. */
+sg_rune_mechanism_bindings_status_t SG_RuneMechanismBindingsStatus(
+	const rune_t *rune, uint32_t *failure_index_out);
 int SG_RuneMechanismBindingsReady(const rune_t *rune,
 	uint32_t *failure_index_out);
 

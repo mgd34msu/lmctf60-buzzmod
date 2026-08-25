@@ -30,6 +30,15 @@
 #define STRING_OFFSET (PLAN_OFFSET + TEST_PLANS * \
 	SG_RUNE_CODEC_ACTIVATION_PLAN_BYTES)
 
+#define TELEPORT_TEST_SEEDS 3U
+#define TELEPORT_TEST_LINKS 3U
+#define TELEPORT_TEST_NODES 4U
+#define TELEPORT_TEST_INVENTORY_EDGES 5U
+#define TELEPORT_TEST_PLAN_EDGES 2U
+#define TELEPORT_TEST_EDGES (TELEPORT_TEST_INVENTORY_EDGES + \
+	TELEPORT_TEST_PLAN_EDGES)
+#define TELEPORT_TEST_PLANS 1U
+
 static int failures;
 
 #define CHECK(expression) do { \
@@ -84,8 +93,33 @@ typedef struct fixture_s
 	sg_rune_codec_workspace_t workspace;
 } fixture_t;
 
+typedef struct teleport_fixture_s
+{
+	sg_rune_codec_seed_t seeds[TELEPORT_TEST_SEEDS];
+	sg_rune_codec_link_t links[TELEPORT_TEST_LINKS];
+	sg_rune_codec_activation_node_t nodes[TELEPORT_TEST_NODES];
+	sg_rune_codec_activation_edge_t edges[TELEPORT_TEST_EDGES];
+	sg_rune_codec_activation_plan_t plans[TELEPORT_TEST_PLANS];
+	unsigned char strings[64];
+	uint64_t graph_link_keys[TELEPORT_TEST_LINKS];
+	uint8_t graph_source_marks[TELEPORT_TEST_SEEDS];
+	uint32_t plan_references[TELEPORT_TEST_PLANS];
+	uint32_t node_references[TELEPORT_TEST_NODES];
+	uint32_t node_heads[TELEPORT_TEST_NODES];
+	uint32_t node_indegrees[TELEPORT_TEST_NODES];
+	uint32_t node_generations[TELEPORT_TEST_NODES];
+	uint32_t node_touched[TELEPORT_TEST_NODES];
+	uint32_t node_queue[TELEPORT_TEST_NODES];
+	uint32_t edge_next[TELEPORT_TEST_EDGES];
+	uint8_t string_marks[64];
+	sg_rune_codec_workspace_t workspace;
+} teleport_fixture_t;
+
 static const unsigned char canonical_strings[TEST_STRING_BYTES] =
 	"\0Door1\0door1\0func_button\0func_door";
+
+static const unsigned char teleport_strings[] =
+	"\0dest\0misc_teleporter\0misc_teleporter_dest\0trigger_teleport";
 
 static void PutU16(unsigned char *out, uint16_t value)
 {
@@ -264,6 +298,188 @@ static void FixtureInit(fixture_t *fixture)
 		TEST_INVENTORY_EDGES, TEST_PLAN_EDGES, TEST_EDGES, &closure_crc));
 	fixture->plans[0].closure_crc32 = closure_crc;
 	memcpy(fixture->strings, canonical_strings, TEST_STRING_BYTES);
+}
+
+static uint32_t TeleportStringOffset(const teleport_fixture_t *fixture,
+	const char *value)
+{
+	uint32_t offset = 1U;
+
+	if (!value || !value[0])
+		return 0U;
+	while (offset < sizeof(teleport_strings))
+	{
+		const char *candidate = (const char *)fixture->strings + offset;
+
+		if (!strcmp(candidate, value))
+			return offset;
+		offset += (uint32_t)strlen(candidate) + 1U;
+	}
+	return 0U;
+}
+
+static void TeleportFixtureWorkspace(teleport_fixture_t *fixture)
+{
+	sg_rune_codec_workspace_t *workspace = &fixture->workspace;
+
+	memset(workspace, 0, sizeof(*workspace));
+	workspace->graph_link_keys = fixture->graph_link_keys;
+	workspace->graph_link_key_capacity = TELEPORT_TEST_LINKS;
+	workspace->graph_source_marks = fixture->graph_source_marks;
+	workspace->graph_source_mark_capacity = TELEPORT_TEST_SEEDS;
+	workspace->plan_references = fixture->plan_references;
+	workspace->plan_reference_capacity = TELEPORT_TEST_PLANS;
+	workspace->node_references = fixture->node_references;
+	workspace->node_reference_capacity = TELEPORT_TEST_NODES;
+	workspace->node_heads = fixture->node_heads;
+	workspace->node_head_capacity = TELEPORT_TEST_NODES;
+	workspace->node_indegrees = fixture->node_indegrees;
+	workspace->node_indegree_capacity = TELEPORT_TEST_NODES;
+	workspace->node_generations = fixture->node_generations;
+	workspace->node_generation_capacity = TELEPORT_TEST_NODES;
+	workspace->node_touched = fixture->node_touched;
+	workspace->node_touched_capacity = TELEPORT_TEST_NODES;
+	workspace->node_queue = fixture->node_queue;
+	workspace->node_queue_capacity = TELEPORT_TEST_NODES;
+	workspace->edge_next = fixture->edge_next;
+	workspace->edge_next_capacity = TELEPORT_TEST_EDGES;
+	workspace->string_marks = fixture->string_marks;
+	workspace->string_mark_capacity = sizeof(fixture->string_marks);
+}
+
+static void TeleportNode(teleport_fixture_t *fixture, uint32_t index,
+	uint32_t key, uint16_t kind, const char *classname,
+	uint16_t flags, uint32_t owner_key, const char *target,
+	const char *targetname, uint16_t touch_callback)
+{
+	sg_rune_codec_activation_node_t *node = &fixture->nodes[index];
+
+	memset(node, 0, sizeof(*node));
+	node->key = key;
+	node->kind = kind;
+	node->flags = flags;
+	node->classname_offset = TeleportStringOffset(fixture, classname);
+	node->target_offset = TeleportStringOffset(fixture, target);
+	node->targetname_offset = TeleportStringOffset(fixture, targetname);
+	node->owner_key = owner_key;
+	node->team_master_key = SG_RUNE_CODEC_NO_KEY;
+	node->touch_callback = touch_callback;
+}
+
+static void TeleportEdge(sg_rune_codec_activation_edge_t *edge,
+	uint32_t from_key, uint32_t to_key, uint16_t kind, uint16_t ordinal)
+{
+	memset(edge, 0, sizeof(*edge));
+	edge->from_key = from_key;
+	edge->to_key = to_key;
+	edge->kind = kind;
+	edge->ordinal = ordinal;
+}
+
+static void TeleportFixtureInit(teleport_fixture_t *fixture,
+	int later_target, int omit_target)
+{
+	uint32_t inventory_edges;
+	uint32_t plan_edges;
+	uint32_t closure_crc = 0U;
+
+	memset(fixture, 0, sizeof(*fixture));
+	memcpy(fixture->strings, teleport_strings, sizeof(teleport_strings));
+	TeleportFixtureWorkspace(fixture);
+	fixture->seeds[0].area_hint = 1;
+	fixture->seeds[1].area_hint = 2;
+	fixture->seeds[2].area_hint = 3;
+	fixture->links[0].source = 0U;
+	fixture->links[0].destination = 1U;
+	fixture->links[0].action = RL_TELEPORT;
+	fixture->links[0].provenance = RL_DECLARED;
+	fixture->links[0].cost_ms = 160U;
+	fixture->links[0].mode = RLCM_NONE;
+	fixture->links[0].activation_plan = 0U;
+	fixture->links[1].source = 1U;
+	fixture->links[1].destination = 2U;
+	fixture->links[1].action = RL_RUN;
+	fixture->links[1].provenance = RL_PROVEN;
+	fixture->links[1].cost_ms = 100U;
+	fixture->links[1].mode = RLCM_NONE;
+	fixture->links[1].activation_plan = SG_RUNE_CODEC_NO_ACTIVATION_PLAN;
+	fixture->links[2].source = 2U;
+	fixture->links[2].destination = 1U;
+	fixture->links[2].action = RL_RUN;
+	fixture->links[2].provenance = RL_PROVEN;
+	fixture->links[2].cost_ms = 100U;
+	fixture->links[2].mode = RLCM_NONE;
+	fixture->links[2].activation_plan = SG_RUNE_CODEC_NO_ACTIVATION_PLAN;
+
+	TeleportNode(fixture, 0U, 1U, SG_RUNE_CODEC_NODE_TELEPORT_TRIGGER,
+		"trigger_teleport", SG_RUNE_CODEC_NODEF_SYNTHETIC |
+		SG_RUNE_CODEC_NODEF_TOUCHABLE, 2U, "dest", NULL,
+		SG_RUNE_CODEC_CALLBACK_TELEPORTER_TOUCH);
+	TeleportNode(fixture, 1U, 2U, SG_RUNE_CODEC_NODE_TELEPORTER,
+		"misc_teleporter", 0U, SG_RUNE_CODEC_NO_KEY, "dest", NULL, 0U);
+	TeleportNode(fixture, 2U, 3U, SG_RUNE_CODEC_NODE_TELEPORT_DEST,
+		"misc_teleporter_dest", 0U, SG_RUNE_CODEC_NO_KEY, NULL, "dest", 0U);
+	TeleportNode(fixture, 3U, 4U, SG_RUNE_CODEC_NODE_TELEPORT_DEST,
+		"misc_teleporter_dest", 0U, SG_RUNE_CODEC_NO_KEY, NULL, "dest", 0U);
+
+	if (omit_target)
+	{
+		TeleportEdge(&fixture->edges[0], 1U, 2U,
+			SG_RUNE_CODEC_EDGE_OWNER, 0U);
+		inventory_edges = 1U;
+		plan_edges = 1U;
+		memcpy(&fixture->edges[1], &fixture->edges[0],
+			sizeof(fixture->edges[0]));
+	}
+	else
+	{
+		TeleportEdge(&fixture->edges[0], 1U, 3U,
+			SG_RUNE_CODEC_EDGE_TARGET, 0U);
+		TeleportEdge(&fixture->edges[1], 1U, 4U,
+			SG_RUNE_CODEC_EDGE_TARGET, 1U);
+		TeleportEdge(&fixture->edges[2], 1U, 2U,
+			SG_RUNE_CODEC_EDGE_OWNER, 0U);
+		TeleportEdge(&fixture->edges[3], 2U, 3U,
+			SG_RUNE_CODEC_EDGE_TARGET, 0U);
+		TeleportEdge(&fixture->edges[4], 2U, 4U,
+			SG_RUNE_CODEC_EDGE_TARGET, 1U);
+		inventory_edges = TELEPORT_TEST_INVENTORY_EDGES;
+		plan_edges = TELEPORT_TEST_PLAN_EDGES;
+		memcpy(&fixture->edges[inventory_edges], &fixture->edges[2],
+			sizeof(fixture->edges[0]));
+		memcpy(&fixture->edges[inventory_edges + 1U],
+			&fixture->edges[later_target ? 1U : 0U],
+			sizeof(fixture->edges[0]));
+	}
+
+	fixture->plans[0].entry_key = 1U;
+	fixture->plans[0].mover_key = 2U;
+	fixture->plans[0].first_edge = inventory_edges;
+	fixture->plans[0].num_edges = plan_edges;
+	fixture->plans[0].controller_kind =
+		SG_RUNE_CODEC_CONTROLLER_TELEPORT;
+	fixture->plans[0].flags = SG_RUNE_CODEC_PLANF_TOUCH |
+		SG_RUNE_CODEC_PLANF_ATOMIC;
+	fixture->plans[0].expected_members = 1U;
+	fixture->plans[0].cooldown_ms = 0U;
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecPlanClosureCRC32(
+		fixture->edges, inventory_edges, plan_edges,
+		inventory_edges + plan_edges, &closure_crc));
+	fixture->plans[0].closure_crc32 = closure_crc;
+}
+
+static sg_rune_codec_diagnostic_t ValidateTeleportFixture(
+	teleport_fixture_t *fixture)
+{
+	TeleportFixtureWorkspace(fixture);
+	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+		fixture->seeds, TELEPORT_TEST_SEEDS,
+		fixture->links, TELEPORT_TEST_LINKS,
+		fixture->nodes, TELEPORT_TEST_NODES,
+		fixture->edges, fixture->plans[0].first_edge +
+			fixture->plans[0].num_edges,
+		fixture->plans, TELEPORT_TEST_PLANS,
+		fixture->strings, sizeof(teleport_strings), &fixture->workspace);
 }
 
 static sg_rune_codec_diagnostic_t ValidateFixture(fixture_t *fixture)
@@ -1091,6 +1307,26 @@ static void TestGraphMalformed(void)
 		ValidateFixtureCounts(&fixture, 3U, 3U));
 }
 
+static void TestDuplicateTeleportPlanCodec(void)
+{
+	teleport_fixture_t fixture;
+
+	TeleportFixtureInit(&fixture, 0, 0);
+	CHECK_DIAGNOSTIC(RLCODEC_OK, ValidateTeleportFixture(&fixture));
+	CHECK(fixture.edges[0].to_key == 3U &&
+		fixture.edges[1].to_key == 4U &&
+		fixture.edges[5].to_key == 2U &&
+		fixture.edges[6].to_key == 3U);
+
+	TeleportFixtureInit(&fixture, 1, 0);
+	CHECK_DIAGNOSTIC(RLCODEC_BAD_ACTIVATION_PLAN,
+		ValidateTeleportFixture(&fixture));
+
+	TeleportFixtureInit(&fixture, 0, 1);
+	CHECK_DIAGNOSTIC(RLCODEC_BAD_ACTIVATION_PLAN,
+		ValidateTeleportFixture(&fixture));
+}
+
 static void TestWholeMalformed(void)
 {
 	fixture_t fixture;
@@ -1364,6 +1600,7 @@ int main(void)
 	TestPrimitiveMalformed();
 	TestChainHookSecondaryControl();
 	TestGraphMalformed();
+	TestDuplicateTeleportPlanCodec();
 	TestWholeMalformed();
 	TestEmptyMechanismCompatibility();
 	TestRocketJumpControlCodec();

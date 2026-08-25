@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import fcntl
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,7 @@ import signal
 import stat
 import subprocess
 import time
-from typing import Any
+from typing import Any, Mapping
 
 
 IDENTITY_RE = re.compile(
@@ -126,6 +125,7 @@ def _runtime_inputs(core, spec: dict) -> dict:
     for alias, role in zip(
             aliases, ("module-primary", "module-secondary"), strict=True):
         core._verify_bundle_copy(alias, roles, role, "module alias")
+    core._validate_installed_final_corpus(bundle, roles, spec["engine"])
     if (not isinstance(spec["fleet_id"], str) or not spec["fleet_id"] or
             not isinstance(spec["spectator"], str) or not spec["spectator"] or
             not isinstance(spec["target"], str) or not spec["target"].startswith("[SG]") or
@@ -136,7 +136,8 @@ def _runtime_inputs(core, spec: dict) -> dict:
             "module_aliases": aliases, "client_path": client,
             "config_path": config, "film_path": film,
             "bundle": bundle, "bundle_roles": roles,
-            "bundle_verifier": bundle_verifier}
+            "bundle_verifier": bundle_verifier,
+            "final_corpus": bundle["final_corpus"]}
 
 
 def _lane_inputs(core, spec: dict, by_lane: dict,
@@ -191,13 +192,9 @@ def _lane_inputs(core, spec: dict, by_lane: dict,
     return result
 
 
-def _load_film(path: Path):
-    module_spec = importlib.util.spec_from_file_location("fleet_film", path)
-    if module_spec is None or module_spec.loader is None:
-        raise ValueError("cannot load pinned film decoder")
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
-    return module
+def _load_film(core, record: Mapping[str, Any]):
+    """Load the decoder from the bytes authenticated by the run spec."""
+    return core._load_film_module(record)
 
 
 def _config_payload(core, path: Path) -> bytes:
@@ -575,6 +572,7 @@ def run_fleet(core, spec_path: Path, state_root: Path, evidence_root: Path) -> N
             "topmaps_sha256": core.CANONICAL_TOPMAPS_SHA256,
             "release_monotonic_ns": release_ns, "processes": owner_processes,
             "clients": owner_clients,
+            "final_corpus": inputs["final_corpus"],
             "inputs": {"engine": spec["engine"], "client": spec["client"],
                        "config": spec["config"], "film": spec["film"],
                        "module_aliases": spec["module_aliases"],
@@ -591,7 +589,7 @@ def run_fleet(core, spec_path: Path, state_root: Path, evidence_root: Path) -> N
         for lane in core.LANES:
             _write_all(runs[lane].engine.process.stdin, config_payload)
             _command(runs[lane], f"map {core.expected_map(lane, 0)}")
-        film = _load_film(inputs["film_path"])
+        film = _load_film(core, inputs["film"])
         selector = selectors.DefaultSelector()
         for lane, run in runs.items():
             selector.register(run.engine.process.stdout, selectors.EVENT_READ,
@@ -700,15 +698,20 @@ def _route_inputs(core, spec: dict) -> dict:
                              "route-only config")
     for alias, role in zip(aliases, ("module-primary", "module-secondary"), strict=True):
         core._verify_bundle_copy(alias, roles, role, "route-only module alias")
-    controller_results = core._validate_route_controller_authority(
-        spec["controller_authority"], roles, spec["engine"], aliases
+    all_results = core._validate_installed_final_corpus(bundle, roles, spec["engine"])
+    controller_results = core._select_route_only_results(
+        tuple(all_results),
+        {map_name: (str(item.get("classification")), item)
+         for map_name, item in all_results.items()},
     )
+    helpers = core._route_helper_records()
     return {
         "client": spec["client"], "client_path": client,
         "route_config": spec["route_config"], "route_config_path": config,
         "film": spec["film"], "film_path": film, "runtime": spec["runtime"],
         "module_aliases": aliases, "bundle": bundle, "bundle_roles": roles,
         "bundle_verifier": bundle_verifier, "controller_results": controller_results,
+        "final_corpus": bundle["final_corpus"], "helpers": helpers,
     }
 
 
@@ -762,7 +765,8 @@ def _start_route_match(core, spec: dict, run: LaneRun) -> None:
 def _finish_route_match(core, film, spec: dict, run: LaneRun,
                         evidence: Path, bundle_id: str,
                         controller_results: dict[str, dict],
-                        campaign_deadline: float) -> tuple[Path, dict]:
+                        campaign_deadline: float,
+                        helper_records: Mapping[str, Any]) -> tuple[Path, dict]:
     map_name = core.expected_route_only_map(run.lane)
     if (run.server_demo is None or run.pov_source is None or
             not run.route_ready or not run.rune_ready or
@@ -803,7 +807,8 @@ def _finish_route_match(core, film, spec: dict, run: LaneRun,
     except UnicodeDecodeError as exc:
         raise ValueError("route-only console is not ASCII") from exc
     behavior = core._route_telemetry(
-        lines, players, measurement, Path(artifact["rune_file"]["path"]), map_name, demo
+        lines, players, measurement, Path(artifact["rune_file"]["path"]), map_name,
+        demo, helper_records,
     )
     behavior["session"] = core._route_session_database(
         directory / "session.db", players, map_name
@@ -845,7 +850,8 @@ def _finish_route_match(core, film, spec: dict, run: LaneRun,
 def _consume_route_engine(core, film, spec: dict, run: LaneRun, line: bytes,
                           evidence: Path, receipts: list, bundle_id: str,
                           controller_results: dict[str, dict],
-                          campaign_deadline: float) -> None:
+                          campaign_deadline: float,
+                          helper_records: Mapping[str, Any]) -> None:
     run.server_log.write(line)
     stripped = line.rstrip(b"\n")
     identity = IDENTITY_RE.match(stripped)
@@ -861,7 +867,7 @@ def _consume_route_engine(core, film, spec: dict, run: LaneRun, line: bytes,
         else:
             receipts.append(_finish_route_match(
                 core, film, spec, run, evidence, bundle_id, controller_results,
-                campaign_deadline,
+                campaign_deadline, helper_records,
             ))
         return
     if run.cycle.sequence >= 0:
@@ -973,8 +979,8 @@ def run_route_only(core, spec_path: Path, state_root: Path, evidence_root: Path)
                        "runtime": spec["runtime"], "module_aliases": spec["module_aliases"],
                        "installed_bundle": spec["installed_bundle"],
                        "bundle_verifier": inputs["bundle_verifier"],
-                       **core._route_helper_records()},
-            "controller_authority": spec["controller_authority"],
+                       **inputs["helpers"]},
+            "final_corpus": inputs["final_corpus"],
             "matches": {lane: core.expected_route_only_map(lane)
                         for lane in lane_order},
             "lane_runtime": {lane: lanes[lane]["runtime_files"]
@@ -1001,7 +1007,7 @@ def run_route_only(core, spec_path: Path, state_root: Path, evidence_root: Path)
         for lane in lane_order:
             _write_all(runs[lane].engine.process.stdin, config)
             _command(runs[lane], f"map {core.expected_route_only_map(lane)}")
-        film = _load_film(inputs["film_path"])
+        film = _load_film(core, inputs["film"])
         selector = selectors.DefaultSelector()
         for lane, run in runs.items():
             selector.register(run.engine.process.stdout, selectors.EVENT_READ, (lane, "engine"))
@@ -1032,7 +1038,7 @@ def run_route_only(core, spec_path: Path, state_root: Path, evidence_root: Path)
                         _consume_route_engine(
                             core, film, spec, run, line, evidence_root, receipts,
                             inputs["bundle"]["bundle_id"], inputs["controller_results"],
-                            deadline,
+                            deadline, inputs["helpers"],
                         )
                     else:
                         _consume_client(spec, run, line)

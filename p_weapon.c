@@ -2098,7 +2098,7 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	if (tr.fraction < 1.0)
 	{
 		VectorMA(bolt->s.origin, -10, dir, bolt->s.origin);
-		bolt->touch(bolt, tr.ent, NULL, NULL);
+		bolt->touch(bolt, tr.ent, &tr.plane, NULL);
 	}
 	return bolt;
 }
@@ -2183,12 +2183,12 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 		if (SG_OwnsBot(self))
 		{
 			self->client->hook = bolt;
-			bolt->touch (bolt, tr.ent, NULL, NULL);
+			bolt->touch (bolt, tr.ent, &tr.plane, NULL);
 			if (self->client->hook != bolt)
 				return NULL;
 		}
 		else
-			bolt->touch (bolt, tr.ent, NULL, NULL);
+			bolt->touch (bolt, tr.ent, &tr.plane, NULL);
 	}
 	return bolt;
 }	

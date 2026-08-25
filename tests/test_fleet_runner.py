@@ -13,9 +13,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.test_server_bundle import BundleFixture
-from tools import server_bundle
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +24,9 @@ TOPMAPS_PATH = ROOT / "tools" / "topmaps.txt"
 
 
 def _load_runner():
+    tools = str(RUNNER.parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
     spec = importlib.util.spec_from_file_location("fleet_runner", RUNNER)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load fleet runner")
@@ -69,15 +72,20 @@ class FleetFixture:
         self.runner_sha = _sha(RUNNER.read_bytes())
         self.topmaps_sha = _sha(TOPMAPS_PATH.read_bytes())
         bundle = BundleFixture(root, "bundle", b"module\n")
-        archive = root / "bundle.tar"
-        manifest = root / "bundle.json"
-        server_bundle.build_bundle(bundle.write_spec(), archive, manifest)
-        install = root / "installed"
-        installed = server_bundle.install_bundle(
-            manifest, archive, install, expected_active=None
+        self.bundle_id = "f" * 64
+        self.final_corpus = {"fixture": "sealed-final-corpus"}
+        self.active_bundle = {
+            "bundle_id": self.bundle_id,
+            "final_corpus": self.final_corpus,
+            "files": [
+                {"role": entry["role"], "size": Path(entry["source"]).stat().st_size,
+                 "sha256": _sha(Path(entry["source"]).read_bytes())}
+                for entry in bundle.entries
+            ],
+        }
+        self.installed_bundle = _write(
+            self.inputs / "install-state.json", _json_bytes({"fixture": "installed"})
         )
-        self.bundle_id = installed["active"]["bundle_id"]
-        self.installed_bundle = runner._file_record(install / "install-state.json")
         self.bundle_verifier = runner._file_record(ROOT / "tools" / "server_bundle.py")
         self.engine = _write(self.inputs / "q2ded", b"engine\n")
         self.client = _write(self.inputs / "quake2", b"client\n")
@@ -98,6 +106,13 @@ class FleetFixture:
             name: _write(self.inputs / "maps" / f"{name}.snag", b"snag\n")
             for name in runner.CANONICAL_TOPMAPS
         }
+
+    def verify_stopped(self):
+        with mock.patch.object(
+                self.runner, "_verify_installed_bundle",
+                return_value=(self.active_bundle, self.bundle_verifier)), mock.patch.object(
+                    self.runner, "_validate_installed_final_corpus", return_value={}):
+            return self.runner.verify_stopped_residence_evidence(self.state, self.evidence)
 
     @staticmethod
     def _process(lane_index: int, engine: dict) -> dict:
@@ -228,7 +243,7 @@ class FleetFixture:
         lock_path = self.state / "fleet.lock"
         lock_path.write_bytes(b"")
         owner = {
-            "format": "lmctf-fleet-owner-v1",
+            "format": "lmctf-fleet-owner-v2",
             "state": "SAFE_STOPPED",
             "fleet_id": "fixture-fleet",
             "bundle_id": self.bundle_id,
@@ -237,6 +252,7 @@ class FleetFixture:
             "release_monotonic_ns": 123456,
             "processes": processes,
             "clients": clients,
+            "final_corpus": self.final_corpus,
             "inputs": {
                 "engine": self.engine,
                 "client": self.client,
@@ -273,6 +289,67 @@ class FleetRunnerTest(unittest.TestCase):
             ]
             self.assertEqual(got, expected)
             self.assertEqual(got[20], got[0])
+
+    def test_attested_film_module_executes_captured_bytes_after_path_swap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "film.py"
+            replacement = root / "replacement.py"
+            source.write_text('MARKER = "accepted"\ndef walk_demo(*args, **kwargs): return {}\n')
+            replacement.write_text(
+                'MARKER = "replacement-after-attestation"\n'
+                'def walk_demo(*args, **kwargs): return {}\n'
+            )
+            record = self.runner._file_record(source)
+            original = self.runner.importlib.util.spec_from_file_location
+            swapped = False
+
+            def swap_after_capture(*args, **kwargs):
+                nonlocal swapped
+                replacement.replace(source)
+                swapped = True
+                return original(*args, **kwargs)
+
+            with mock.patch.object(
+                    self.runner.importlib.util, "spec_from_file_location",
+                    side_effect=swap_after_capture):
+                module = self.runner._load_film_module(record)
+            self.assertTrue(swapped)
+            self.assertEqual(module.MARKER, "accepted")
+
+    def test_route_helpers_load_only_the_prevalidated_records(self):
+        records = {
+            name: {"sha256": str(index) * 64}
+            for index, name in enumerate(
+                ("runeio", "rolestat", "stallcensus"), start=1
+            )
+        }
+        loaded = [object(), object(), object()]
+        with mock.patch.object(
+                self.runner, "_load_attested_module",
+                side_effect=loaded) as loader:
+            self.assertEqual(
+                self.runner._load_route_helpers(records), tuple(loaded)
+            )
+        self.assertEqual(
+            [call.args[1] for call in loader.call_args_list],
+            [records["runeio"], records["rolestat"], records["stallcensus"]],
+        )
+
+    def test_live_runtime_loads_the_record_from_the_validated_spec(self):
+        runtime = ROOT / "tools" / "fleet_runner_live.py"
+        record = self.runner._file_record(runtime)
+        module = mock.Mock(run_fleet=lambda *_args: None)
+        with mock.patch.object(
+                self.runner, "_validate_run_spec",
+                return_value=({"runtime": record}, {})), mock.patch.object(
+                    self.runner, "_load_attested_module",
+                    return_value=module) as loader:
+            self.assertIs(
+                self.runner._load_live_runtime(Path("unused.json"), route_only=False),
+                module,
+            )
+        self.assertEqual(loader.call_args.args[1], record)
 
     def test_one_engine_generation_owns_complete_native_cycle(self):
         process = FleetFixture._process(0, {
@@ -349,7 +426,7 @@ int main(void) {
             fixture = FleetFixture(Path(temporary), self.runner)
             state, evidence = fixture.build()
             try:
-                receipts = self.runner.verify_stopped_residence_evidence(state, evidence)
+                receipts = fixture.verify_stopped()
                 self.assertEqual(len(receipts), 210)
                 generations = {}
                 for _path, receipt in receipts:
@@ -371,7 +448,7 @@ int main(void) {
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with self.assertRaisesRegex(ValueError, "lock"):
-                    self.runner.verify_stopped_residence_evidence(state, evidence)
+                    fixture.verify_stopped()
             finally:
                 os.close(lock)
             try:
@@ -381,7 +458,7 @@ int main(void) {
                 ledger.write_bytes(payload.replace(b'"index":1', b'"index":9', 1))
                 fixture.freeze()
                 with self.assertRaises(ValueError):
-                    self.runner.verify_stopped_residence_evidence(state, evidence)
+                    fixture.verify_stopped()
             finally:
                 fixture.thaw()
 

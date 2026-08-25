@@ -1115,8 +1115,11 @@ static void TestTeleport(void)
 		"trigger_teleport"
 	};
 	fixture_t fixture;
+	fixture_t duplicate_fixture;
 	rune_mechanism_node_t *entry;
 	rune_mechanism_node_t *destination;
+	rune_mechanism_node_t *duplicate_entry;
+	rune_mechanism_node_t *duplicate_destination;
 	rune_mechanism_plan_t valid_plan;
 	rune_mechanism_edge_t valid_edges[TEST_EDGES];
 	sg_mechanism_plan_result_t valid_result;
@@ -1145,6 +1148,52 @@ static void TestTeleport(void)
 	valid_plan = fixture.plans[0];
 	memcpy(valid_edges, fixture.edges, sizeof(valid_edges));
 	valid_result = fixture.result;
+
+	FixtureInit(&duplicate_fixture, RL_TELEPORT);
+	Strings(&duplicate_fixture, strings, 4U);
+	duplicate_entry = Node(&duplicate_fixture, 1U,
+		SG_MECH_NODE_TELEPORT_TRIGGER, "trigger_teleport");
+	duplicate_entry->flags = SG_MECH_NODEF_SYNTHETIC | SG_MECH_NODEF_TOUCHABLE;
+	duplicate_entry->owner_key = 2U;
+	duplicate_entry->touch_callback = SG_MECH_CALLBACK_TELEPORTER_TOUCH;
+	Target(duplicate_entry, &duplicate_fixture, "dest");
+	Node(&duplicate_fixture, 2U, SG_MECH_NODE_TELEPORTER,
+		"misc_teleporter");
+	duplicate_destination = Node(&duplicate_fixture, 3U,
+		SG_MECH_NODE_TELEPORT_DEST, "misc_teleporter_dest");
+	Targetname(duplicate_destination, &duplicate_fixture, "dest");
+	duplicate_destination = Node(&duplicate_fixture, 4U,
+		SG_MECH_NODE_TELEPORT_DEST, "misc_teleporter_dest");
+	Targetname(duplicate_destination, &duplicate_fixture, "dest");
+	Edge(&duplicate_fixture, 1U, 2U, SG_MECH_EDGE_OWNER, 0U);
+	Edge(&duplicate_fixture, 1U, 3U, SG_MECH_EDGE_TARGET, 0U);
+	Edge(&duplicate_fixture, 1U, 4U, SG_MECH_EDGE_TARGET, 1U);
+	duplicate_fixture.binding.entry_key = 1U;
+	duplicate_fixture.binding.mover_key = 2U;
+	duplicate_fixture.binding.destination_key = 3U;
+	duplicate_fixture.binding.controller_kind =
+		SG_MECHANISM_CONTROLLER_TELEPORT;
+	duplicate_fixture.binding.expected_members = 1U;
+	FixtureFinish(&duplicate_fixture);
+	CHECK(duplicate_fixture.catalog.num_edges == 3U);
+	CHECK(duplicate_fixture.result.num_inventory_edges == 3U);
+	CHECK(InventoryEdge(&duplicate_fixture, 1U, 4U) != NULL);
+	CHECK(duplicate_fixture.plans[0].num_edges == 2U);
+	CHECK(duplicate_fixture.edges[3].from_key == 1U &&
+		duplicate_fixture.edges[3].to_key == 2U &&
+		duplicate_fixture.edges[3].kind == SG_MECH_EDGE_OWNER);
+	CHECK(duplicate_fixture.edges[4].from_key == 1U &&
+		duplicate_fixture.edges[4].to_key == 3U &&
+		duplicate_fixture.edges[4].kind == SG_MECH_EDGE_TARGET &&
+		duplicate_fixture.edges[4].ordinal == 0U);
+
+	duplicate_fixture.binding.destination_key = 4U;
+	ExpectTeleportDestinationMaterializationFailure(&duplicate_fixture);
+	duplicate_fixture.inventory[0] = duplicate_fixture.inventory[2];
+	duplicate_fixture.num_inventory = 1U;
+	duplicate_fixture.catalog.num_edges = 1U;
+	duplicate_fixture.binding.destination_key = 3U;
+	ExpectTeleportDestinationMaterializationFailure(&duplicate_fixture);
 
 	destination->flags |= SG_MECH_NODEF_INVENTORY_ONLY;
 	CHECK(CodecValidationDiagnostic(&fixture) == RLCODEC_BAD_ACTIVATION_EDGE);

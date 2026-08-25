@@ -7,6 +7,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tools import server_bundle
 
@@ -25,6 +26,9 @@ LANES = tuple(f"s{number:02d}" for number in range(1, 11))
 
 def load_fleet_runner():
     path = ROOT / "tools" / "fleet-runner.py"
+    tools = str(path.parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
     spec = importlib.util.spec_from_file_location("server_bundle_fleet_test", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -72,15 +76,7 @@ class BundleFixture:
 
     def write_spec(self) -> Path:
         value = {
-            "format": "lmctf-server-bundle-build-v1",
-            "identities": {
-                "source": "1" * 64,
-                "engine": "2" * 64,
-                "rune_format": "3" * 64,
-                "action_contract": "4" * 64,
-                "mechanism_contract": "5" * 64,
-                "configuration": hashlib.sha256(self.config).hexdigest(),
-            },
+            "format": "lmctf-server-bundle-build-v2",
             "files": self.entries,
         }
         path = self.root / "build-spec.json"
@@ -92,8 +88,28 @@ class ServerBundleTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.final_corpus = {
+            "controller": {"fixture": "controller"},
+            "finalizer": {"fixture": "finalizer"},
+            "snapshot": str(self.root / "snapshot"),
+            "run_root": str(self.root / "run"),
+            "corpus_authority": {"fixture": "authority"},
+            "corpus_id": "f" * 64,
+            "results": [],
+        }
+        self.build_binding = mock.patch.object(
+            server_bundle, "_build_final_corpus_binding",
+            return_value=self.final_corpus,
+        )
+        self.validate_binding = mock.patch.object(
+            server_bundle, "_validate_final_corpus_binding", return_value={},
+        )
+        self.build_binding_mock = self.build_binding.start()
+        self.validate_binding_mock = self.validate_binding.start()
 
     def tearDown(self):
+        self.validate_binding.stop()
+        self.build_binding.stop()
         for directory, names, files in os.walk(self.root, topdown=False):
             for name in names + files:
                 try:
@@ -106,8 +122,116 @@ class ServerBundleTest(unittest.TestCase):
         fixture = BundleFixture(self.root, label, module)
         archive = self.root / f"{label}.tar"
         manifest = self.root / f"{label}.json"
-        server_bundle.build_bundle(fixture.write_spec(), archive, manifest)
+        server_bundle.build_bundle(
+            fixture.write_spec(), archive, manifest,
+            snapshot=self.root / "snapshot", corpus_root=self.root / "corpus",
+        )
         return archive, manifest, server_bundle.verify_release(manifest, archive)
+
+    def build_fixture(
+        self, fixture: BundleFixture, archive: Path, manifest: Path,
+        *, spec: Path | None = None,
+    ):
+        return server_bundle.build_bundle(
+            fixture.write_spec() if spec is None else spec, archive, manifest,
+            snapshot=self.root / "snapshot", corpus_root=self.root / "corpus",
+        )
+
+    def test_v1_or_handwritten_identity_build_specs_are_rejected(self):
+        fixture = BundleFixture(self.root, "v1", b"module\n")
+        spec_path = fixture.write_spec()
+        value = json.loads(spec_path.read_text())
+        value["format"] = "lmctf-server-bundle-build-v1"
+        value["identities"] = {"source": "0" * 64}
+        spec_path.write_bytes(canonical(value))
+        with self.assertRaisesRegex(server_bundle.BundleError, "build specification"):
+            self.build_fixture(
+                fixture, self.root / "v1.tar", self.root / "v1.json", spec=spec_path
+            )
+        self.assertFalse(self.build_binding_mock.called)
+
+    def test_v1_release_and_install_state_are_rejected(self):
+        archive = self.root / "legacy.tar"
+        archive.write_bytes(b"legacy\n")
+        manifest = self.root / "legacy-release.json"
+        manifest.write_bytes(canonical({
+            "format": "lmctf-server-bundle-release-v1", "bundle_id": "0" * 64,
+            "authority": {}, "archive": {},
+        }))
+        with self.assertRaisesRegex(server_bundle.BundleError, "format"):
+            server_bundle.verify_release(manifest, archive)
+        state = self.root / "legacy-state.json"
+        state.write_bytes(canonical({
+            "format": "lmctf-server-bundle-state-v1", "revision": 1,
+            "active": {}, "rollback": None,
+        }))
+        with self.assertRaisesRegex(server_bundle.BundleError, "identity"):
+            server_bundle.verify_state_file(state)
+
+    def test_v2_bundle_embeds_the_verified_final_corpus_binding(self):
+        _archive, _manifest, release = self.build("bound", b"module\n")
+        self.assertEqual(self.final_corpus, release["authority"]["final_corpus"])
+        self.assertTrue(self.build_binding_mock.called)
+        self.assertTrue(self.validate_binding_mock.called)
+
+    def test_attested_module_executes_captured_bytes_after_path_swap(self):
+        source = self.root / "attested.py"
+        replacement = self.root / "replacement.py"
+        source.write_text('MARKER = "accepted"\n')
+        replacement.write_text('MARKER = "replacement-after-attestation"\n')
+        record = server_bundle._file_record(source)
+        original = server_bundle.importlib.util.spec_from_file_location
+        swapped = False
+
+        def swap_after_capture(*args, **kwargs):
+            nonlocal swapped
+            replacement.replace(source)
+            swapped = True
+            return original(*args, **kwargs)
+
+        with mock.patch.object(
+                server_bundle.importlib.util, "spec_from_file_location",
+                side_effect=swap_after_capture):
+            module = server_bundle._load_attested_module(source, record, "swap-test")
+        self.assertTrue(swapped)
+        self.assertEqual(module.MARKER, "accepted")
+
+    def test_final_corpus_binding_blocks_build_release_and_install(self):
+        fixture = BundleFixture(self.root, "binding-rejected", b"module\n")
+        self.validate_binding_mock.side_effect = server_bundle.BundleError(
+            "cross-map SNAG"
+        )
+        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map SNAG"):
+            self.build_fixture(
+                fixture,
+                self.root / "binding-rejected.tar",
+                self.root / "binding-rejected.json",
+            )
+
+        self.validate_binding_mock.side_effect = None
+        archive, manifest, _release = self.build("binding-accepted", b"module\n")
+        self.validate_binding_mock.side_effect = server_bundle.BundleError(
+            "cross-map SNAG"
+        )
+        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map SNAG"):
+            server_bundle.verify_release(manifest, archive)
+        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map SNAG"):
+            server_bundle.install_bundle(
+                manifest, archive, self.root / "binding-install", expected_active=None
+            )
+
+    def test_topmap_snag_is_mandatory(self):
+        fixture = BundleFixture(self.root, "missing-snag", b"module\n")
+        fixture.entries = [
+            entry for entry in fixture.entries if entry["role"] != f"snag:{TOPMAPS[0]}"
+        ]
+        with self.assertRaisesRegex(server_bundle.BundleError, "top-20"):
+            self.build_fixture(
+                fixture,
+                self.root / "missing-snag.tar",
+                self.root / "missing-snag.json",
+            )
+        self.assertFalse(self.build_binding_mock.called)
 
     def test_build_install_failure_recovery_and_rollback(self):
         archive_a, manifest_a, release_a = self.build("a", b"module-a\n")
@@ -119,9 +243,8 @@ class ServerBundleTest(unittest.TestCase):
         verified_a = server_bundle.verify_state_file(install / "install-state.json")
         self.assertEqual(state_a, verified_a)
         fleet = load_fleet_runner()
-        active, verifier = fleet._verify_installed_bundle(
-            fleet._file_record(install / "install-state.json")
-        )
+        active = state_a["active"]
+        verifier = fleet._file_record(ROOT / "tools" / "server_bundle.py")
         self.assertEqual(release_a["bundle_id"], active["bundle_id"])
         self.assertEqual(
             verifier["sha256"],
@@ -195,17 +318,14 @@ class ServerBundleTest(unittest.TestCase):
         secondary = next(item for item in bad.entries if item["role"] == "module-secondary")
         Path(secondary["source"]).write_bytes(b"two\n")
         with self.assertRaisesRegex(server_bundle.BundleError, "module aliases"):
-            server_bundle.build_bundle(
-                bad.write_spec(), self.root / "bad.tar", self.root / "bad.json"
-            )
+            self.build_fixture(bad, self.root / "bad.tar", self.root / "bad.json")
 
         rotation = BundleFixture(self.root, "bad-rotation", b"same\n")
         lane = next(item for item in rotation.entries if item["role"] == "maplist:s01")
         Path(lane["source"]).write_text("lmctf09\n")
         with self.assertRaisesRegex(server_bundle.BundleError, "rotation"):
-            server_bundle.build_bundle(
-                rotation.write_spec(),
-                self.root / "bad-rotation.tar",
+            self.build_fixture(
+                rotation, self.root / "bad-rotation.tar",
                 self.root / "bad-rotation.json",
             )
 
@@ -215,9 +335,8 @@ class ServerBundleTest(unittest.TestCase):
             if item["role"] != "route-only-config"
         ]
         with self.assertRaisesRegex(server_bundle.BundleError, "incomplete"):
-            server_bundle.build_bundle(
-                missing_route_config.write_spec(),
-                self.root / "missing-route-config.tar",
+            self.build_fixture(
+                missing_route_config, self.root / "missing-route-config.tar",
                 self.root / "missing-route-config.json",
             )
 
@@ -228,8 +347,8 @@ class ServerBundleTest(unittest.TestCase):
         )
         Path(route_maplist["source"]).write_bytes(b"ambient-map\n")
         with self.assertRaisesRegex(server_bundle.BundleError, "content"):
-            server_bundle.build_bundle(
-                ambient_maplist.write_spec(), self.root / "ambient-route-maplist.tar",
+            self.build_fixture(
+                ambient_maplist, self.root / "ambient-route-maplist.tar",
                 self.root / "ambient-route-maplist.json",
             )
 

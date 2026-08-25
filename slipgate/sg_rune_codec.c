@@ -2924,8 +2924,9 @@ static sg_rune_codec_diagnostic_t Codec_ValidateProductionPlanExact(
 		        SG_RUNE_CODEC_CALLBACK_TELEPORTER_TOUCH ||
 		    (nodes[entry_index].flags & SG_RUNE_CODEC_NODEF_SYNTHETIC) == 0U ||
 		    nodes[mover_index].kind != SG_RUNE_CODEC_NODE_TELEPORTER ||
-		    owner_count != 1U || target_count != 1U ||
+		    owner_count != 1U || target_count == 0U ||
 		    owner_index == UINT32_MAX || target_index == UINT32_MAX ||
+		    edges[target_index].ordinal != 0U ||
 		    edges[owner_index].to_key != plan->mover_key ||
 		    destination_index == UINT32_MAX ||
 		    nodes[destination_index].kind !=

@@ -70,6 +70,9 @@ class HumanHookOwnershipIntegrationTest(unittest.TestCase):
         self.assertNotIn("bolt->owner = self;", human_bolt)
         self.assertIn("bolt->touch = hook_touch;", human_bolt)
         self.assertIn("bolt->clipmask = MASK_SHOT;", human_bolt)
+        self.assertIn("bolt->touch(bolt, tr.ent, &tr.plane, NULL);",
+                      human_bolt)
+        self.assertNotIn("bolt->touch(bolt, tr.ent, NULL, NULL);", human_bolt)
         self.assertNotIn("SG_BotHookTouch", human_bolt)
         self.assertNotIn("SG_Compound", human_bolt)
 

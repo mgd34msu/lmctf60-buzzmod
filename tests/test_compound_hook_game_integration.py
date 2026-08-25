@@ -67,6 +67,8 @@ def main() -> None:
     weapon = source("p_weapon.c")
     launch = between(weapon, "edict_t *fire_hook", "void Draw_Hook")
     assert "bolt->touch = SG_BotHookTouch;" in launch
+    assert "bolt->touch (bolt, tr.ent, &tr.plane, NULL);" in launch
+    assert "bolt->touch (bolt, tr.ent, NULL, NULL);" not in launch
     ordered(
         launch,
         "if (SG_OwnsBot(self))",

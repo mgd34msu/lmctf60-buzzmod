@@ -32,6 +32,9 @@ static int failures;
 	} \
 } while (0)
 
+#define SG_MechCatalogMatches(...) \
+	(SG_MechCatalogMatchStatus(__VA_ARGS__) == SG_MECH_CATALOG_MATCH_READY)
+
 #define TOUCH_CALLBACK(name_) \
 	void name_(edict_t *self, edict_t *other, cplane_t *plane, \
 		csurface_t *surface) \
@@ -338,6 +341,9 @@ static void TestSealedCatalog(void)
 	    button_node->accel_q8 == 320U && button_node->decel_q8 == 320U);
 	CHECK(SG_MechCatalogMatches(view.nodes, view.num_nodes, view.edges,
 	    view.num_edges, view.strings, view.string_bytes));
+	CHECK(SG_MechCatalogMatchStatus(view.nodes, view.num_nodes, view.edges,
+		view.num_edges, view.strings, view.string_bytes) ==
+		SG_MECH_CATALOG_MATCH_READY);
 	CHECK(SG_MechCatalogEntityTopologyMatches(1U, trigger_node));
 	CHECK(SG_MechCatalogEntityTopologyMatches(2U, master_node));
 	CHECK(SG_MechCatalogEntityTopologyMatches(3U, member_node));
@@ -466,6 +472,9 @@ static void TestSealedCatalog(void)
 		node_copy[0].spawnflags ^= 1U;
 		CHECK(!SG_MechCatalogMatches(node_copy, view.num_nodes, view.edges,
 		    view.num_edges, view.strings, view.string_bytes));
+		CHECK(SG_MechCatalogMatchStatus(node_copy, view.num_nodes, view.edges,
+			view.num_edges, view.strings, view.string_bytes) ==
+			SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH);
 		CHECK(!SG_MechCatalogEntityMatches(node_copy[0].key,
 		    &node_copy[0]));
 		edge_copy[0].delay_ms ^= 1U;
@@ -499,6 +508,9 @@ static void TestSealedCatalog(void)
 	test_edicts[4].inuse = false;
 	CHECK(!SG_MechCatalogMatches(view.nodes, view.num_nodes, view.edges,
 	    view.num_edges, view.strings, view.string_bytes));
+	CHECK(SG_MechCatalogMatchStatus(view.nodes, view.num_nodes, view.edges,
+		view.num_edges, view.strings, view.string_bytes) ==
+		SG_MECH_CATALOG_MATCH_WORLD_DRIFT);
 	test_edicts[4].inuse = true;
 	CHECK(SG_MechCatalogMatches(view.nodes, view.num_nodes, view.edges,
 	    view.num_edges, view.strings, view.string_bytes));

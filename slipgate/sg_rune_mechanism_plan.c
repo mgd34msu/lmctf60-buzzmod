@@ -1227,13 +1227,17 @@ static int Mechanism_MaterializeTeleport(mechanism_materializer_t *state,
 		binding->entry_key, SG_MECH_EDGE_OWNER);
 	mechanism_edge_group_t target = Mechanism_EdgeGroup(state,
 		binding->entry_key, SG_MECH_EDGE_TARGET);
+	const rune_mechanism_edge_t *selected_target;
 	uint32_t entry = Mechanism_FindNode(state, binding->entry_key);
 	uint32_t mover = Mechanism_FindNode(state, binding->mover_key);
 	uint32_t destination = Mechanism_FindNode(state, binding->destination_key);
 
-	return entry != UINT32_MAX && mover != UINT32_MAX &&
-	       destination != UINT32_MAX &&
-	       state->catalog->nodes[entry].kind == SG_MECH_NODE_TELEPORT_TRIGGER &&
+	if (entry == UINT32_MAX || mover == UINT32_MAX ||
+	    destination == UINT32_MAX || owner.count != 1U || target.count == 0U ||
+	    target.first >= state->catalog->num_edges)
+		return 0;
+	selected_target = &state->catalog->edges[target.first];
+	return state->catalog->nodes[entry].kind == SG_MECH_NODE_TELEPORT_TRIGGER &&
 	       state->catalog->nodes[entry].touch_callback ==
 	           SG_MECH_CALLBACK_TELEPORTER_TOUCH &&
 	       (state->catalog->nodes[entry].flags & SG_MECH_NODEF_SYNTHETIC) != 0U &&
@@ -1241,10 +1245,9 @@ static int Mechanism_MaterializeTeleport(mechanism_materializer_t *state,
 	       Mechanism_NodeExecutable(&state->catalog->nodes[destination]) &&
 	       state->catalog->nodes[destination].kind == SG_MECH_NODE_TELEPORT_DEST &&
 	       binding->expected_members == 1U && binding->cooldown_ms == 0U &&
-	       owner.count == 1U && target.count == 1U &&
 	       state->catalog->edges[owner.first].to_key == binding->mover_key &&
-	       state->catalog->edges[target.first].to_key ==
-	           binding->destination_key &&
+	       selected_target->ordinal == 0U &&
+	       selected_target->to_key == binding->destination_key &&
 	       Mechanism_AppendInventoryEdge(state, owner.first) &&
 	       Mechanism_AppendInventoryEdge(state, target.first);
 }

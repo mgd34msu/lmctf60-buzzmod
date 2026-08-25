@@ -82,6 +82,8 @@ Build and verify the final server archive and manifest:
 ```sh
 python3 -B tools/server_bundle.py build \
   --spec /freeze/server-bundle-build.json \
+  --snapshot /freeze/rune-inputs \
+  --corpus-root /archive/rune-corpora/CORPUS_ID \
   --archive /release/lmctf-server-bundle.tar \
   --manifest /release/lmctf-server-bundle.json
 python3 -B tools/server_bundle.py verify \

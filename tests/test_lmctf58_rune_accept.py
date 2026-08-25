@@ -34,7 +34,7 @@ def _node(key: int, target_offset: int) -> runeio.RuneActivationNode:
         use_callback=0, think_callback=0, blocked_callback=0,
         delay_ms=0, wait_ms=0, speed_q8=0, accel_q8=0, decel_q8=0,
         absmin_q8=(0, 0, 0), absmax_q8=(0, 0, 0),
-        path_target_offset=0,
+        path_target_offset=0, push_velocity=(0.0, 0.0, 0.0),
     )
 
 

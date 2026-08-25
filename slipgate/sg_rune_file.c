@@ -1,4 +1,8 @@
 /* sg_rune_file.c -- RUNE artifact decode and native adaptation. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "../q_shared.h"
 #include "sg_rune_file.h"
 
@@ -9,6 +13,13 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 typedef struct rune_file_sha256_s
 {
@@ -17,6 +28,31 @@ typedef struct rune_file_sha256_s
 	unsigned char block[64];
 	size_t used;
 } rune_file_sha256_t;
+
+static int RuneFile_StreamStat(FILE *file, struct stat *status)
+{
+#ifdef _WIN32
+	return _fstat(_fileno(file), status);
+#else
+	return fstat(fileno(file), status);
+#endif
+}
+
+static qboolean RuneFile_StatMatches(const struct stat *left,
+	const struct stat *right)
+{
+	if (left->st_dev != right->st_dev || left->st_ino != right->st_ino ||
+	    left->st_size != right->st_size)
+		return false;
+#ifdef _WIN32
+	return left->st_mtime == right->st_mtime;
+#else
+	return left->st_mtim.tv_sec == right->st_mtim.tv_sec &&
+		left->st_mtim.tv_nsec == right->st_mtim.tv_nsec &&
+		left->st_ctim.tv_sec == right->st_ctim.tv_sec &&
+		left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
+#endif
+}
 
 static uint32_t RuneFile_RotateRight(uint32_t value, unsigned bits)
 {
@@ -209,6 +245,24 @@ static const char *RuneFile_DiagnosticText(sg_rune_codec_diagnostic_t diagnostic
 		return "invalid route contract";
 	default:
 		return "unknown RUNE diagnostic";
+	}
+}
+
+/* These diagnostics describe the host/loader contract rather than frozen
+ * RUNE bytes.  They must never turn a retryable runtime fault into a request
+ * to replace an already authenticated candidate. */
+static int RuneFile_DiagnosticIsInfrastructure(
+	sg_rune_codec_diagnostic_t diagnostic)
+{
+	switch ((int)diagnostic)
+	{
+	case RLW_INVALID_ARGUMENT:
+	case RLW_IO_ERROR:
+	case RLW_IDENTITY_UNAVAILABLE:
+	case RLW_ALLOCATION_FAILED:
+		return 1;
+	default:
+		return 0;
 	}
 }
 
@@ -481,12 +535,14 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	size_t file_size = 0U;
 	size_t read_size;
 	long file_length;
+	struct stat file_before;
+	struct stat file_after;
 	uint32_t failure_index = UINT32_MAX;
 	const char *failure;
 
 	if (rune_out)
 		*rune_out = NULL;
-	result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "argument",
+	result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "argument",
 		"invalid RUNE loader argument", UINT32_MAX, EINVAL);
 	if (!path || !path[0] || !expected_identity || !allocate || !release ||
 	    !rune_out)
@@ -505,13 +561,15 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 		if (errno == ENOENT)
 			return RuneFile_Result(SG_RUNE_FILE_LOAD_MISSING, "open",
 				"artifact is missing", UINT32_MAX, ENOENT);
-		return RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "open",
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "open",
 			"artifact open failure", UINT32_MAX, errno ? errno : EIO);
 	}
 	read_size = fread(encoded_header, 1, sizeof(encoded_header), file);
 	if (read_size != sizeof(encoded_header) || ferror(file))
 	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "header-read",
+		result = RuneFile_Result(ferror(file)
+			? SG_RUNE_FILE_LOAD_INFRA : SG_RUNE_FILE_LOAD_REJECTED,
+			"header-read",
 			"RUNE header is incomplete", UINT32_MAX,
 			ferror(file) ? (errno ? errno : EIO) : 0);
 		goto cleanup;
@@ -541,33 +599,64 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 		goto cleanup;
 	}
 	if (fseek(file, 0, SEEK_END) != 0 ||
-	    (file_length = ftell(file)) < 0 ||
-	    (size_t)file_length != file_size || fseek(file, 0, SEEK_SET) != 0)
+	    (file_length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "file-size",
+			"artifact size inspection failed", UINT32_MAX,
+			errno ? errno : EIO);
+		goto cleanup;
+	}
+	if ((size_t)file_length != file_size)
 	{
 		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "file-size",
-			"artifact size differs from authenticated header", UINT32_MAX,
-			errno);
+			"artifact size differs from authenticated header", UINT32_MAX, 0);
+		goto cleanup;
+	}
+	if (RuneFile_StreamStat(file, &file_before) != 0)
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "file-stat",
+			"artifact identity inspection failed", UINT32_MAX,
+			errno ? errno : EIO);
 		goto cleanup;
 	}
 	snapshot = allocate((int)file_size);
 	if (!snapshot)
 	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "allocation",
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "allocation",
 			"artifact snapshot allocation failure", UINT32_MAX, 0);
 		goto cleanup;
 	}
-	if (fread(snapshot, 1, file_size, file) != file_size ||
-	    fgetc(file) != EOF || ferror(file))
+	if (fread(snapshot, 1, file_size, file) != file_size)
 	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "read",
-			"short, trailing, or failed artifact read", UINT32_MAX,
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "read",
+			ferror(file) ? "artifact read failure" : "short artifact read",
+			UINT32_MAX, ferror(file) ? (errno ? errno : EIO) : 0);
+		goto cleanup;
+	}
+	if (fgetc(file) != EOF)
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "read",
+			"artifact changed during authenticated read", UINT32_MAX, 0);
+		goto cleanup;
+	}
+	if (ferror(file))
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "read",
+			"artifact read failure", UINT32_MAX, errno ? errno : EIO);
+		goto cleanup;
+	}
+	if (RuneFile_StreamStat(file, &file_after) != 0 ||
+	    !RuneFile_StatMatches(&file_before, &file_after))
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "file-stat",
+			"artifact changed during authenticated read", UINT32_MAX,
 			errno ? errno : EIO);
 		goto cleanup;
 	}
 	if (fclose(file) != 0)
 	{
 		file = NULL;
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "close",
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "close",
 			"artifact close failure", UINT32_MAX, errno ? errno : EIO);
 		goto cleanup;
 	}
@@ -578,7 +667,7 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 		memset(rune, 0, sizeof(*rune));
 	if (!rune)
 	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "allocation",
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "allocation",
 			"native rune allocation failure", UINT32_MAX, 0);
 		goto cleanup;
 	}
@@ -647,7 +736,7 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	     (!storage.plans || !storage.plan_references)) ||
 	    !storage.source_marks || !storage.strings || !storage.string_marks)
 	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "allocation",
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "allocation",
 			"RUNE decode workspace allocation failure", UINT32_MAX, 0);
 		goto cleanup;
 	}
@@ -689,10 +778,17 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 
 	diagnostic = SG_RuneArtifactLoaderLoad(&loader, snapshot, file_size,
 		&wire_identity, &backing, &workspace);
-	if (diagnostic != RLCODEC_OK || !SG_RuneArtifactLoaderIsPublished(&loader))
+	if (diagnostic != RLCODEC_OK)
 	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "decode",
+		result = RuneFile_Result(RuneFile_DiagnosticIsInfrastructure(diagnostic)
+			? SG_RUNE_FILE_LOAD_INFRA : SG_RUNE_FILE_LOAD_REJECTED, "decode",
 			RuneFile_DiagnosticText(diagnostic), UINT32_MAX, 0);
+		goto cleanup;
+	}
+	if (!SG_RuneArtifactLoaderIsPublished(&loader))
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "decode",
+			"artifact loader publication unavailable", UINT32_MAX, 0);
 		goto cleanup;
 	}
 	failure = RuneFile_AdaptDecoded(rune, &header, &storage, &failure_index);
@@ -710,7 +806,12 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 
 cleanup:
 	if (file)
-		(void)fclose(file);
+	{
+		if (fclose(file) != 0 &&
+		    result.status != SG_RUNE_FILE_LOAD_READY)
+			result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "close",
+				"artifact close failure", UINT32_MAX, errno ? errno : EIO);
+	}
 	RuneFile_StorageFree(&storage, release);
 	if (snapshot)
 		release(snapshot);

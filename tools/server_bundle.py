@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib.abc
+import importlib.util
 import io
 import json
 import os
@@ -13,23 +15,20 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import sys
 import tarfile
 from typing import Any, Mapping, Sequence
 import uuid
 
 
-BUILD_FORMAT = "lmctf-server-bundle-build-v1"
-RELEASE_FORMAT = "lmctf-server-bundle-release-v1"
-INSTALLED_FORMAT = "lmctf-installed-server-bundle-v1"
-STATE_FORMAT = "lmctf-server-bundle-state-v1"
+BUILD_FORMAT = "lmctf-server-bundle-build-v2"
+RELEASE_FORMAT = "lmctf-server-bundle-release-v2"
+INSTALLED_FORMAT = "lmctf-installed-server-bundle-v2"
+STATE_FORMAT = "lmctf-server-bundle-state-v2"
 LANES = tuple(f"s{number:02d}" for number in range(1, 11))
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024
 SHA_RE = re.compile(r"[0-9a-f]{64}")
-IDENTITY_NAMES = {
-    "source", "engine", "rune_format", "action_contract",
-    "mechanism_contract", "configuration",
-}
 FIXED_ROLES = {
     "module-primary": "game/game.so",
     "module-secondary": "game/gamex86_64.so",
@@ -156,6 +155,21 @@ def _file_record(path: Path, *, resolved_path: Path | None = None) -> dict:
     }
 
 
+class _AttestedSourceLoader(importlib.abc.Loader):
+    """Execute the bytes authenticated before the module spec was created."""
+
+    def __init__(self, path: Path, payload: bytes):
+        self.path = path
+        self.payload = payload
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module) -> None:
+        code = compile(self.payload, str(self.path), "exec", dont_inherit=True)
+        exec(code, module.__dict__)
+
+
 def _verify_file_record(record: Any, label: str) -> Path:
     if not isinstance(record, dict) or set(record) != {
             "path", "size", "sha256", "device", "inode"}:
@@ -241,12 +255,83 @@ def _topmaps() -> tuple[str, ...]:
     return maps
 
 
-def _validate_identities(value: Any) -> dict:
-    if not isinstance(value, dict) or set(value) != IDENTITY_NAMES:
-        raise BundleError("bundle identities have unknown or missing fields")
-    if any(SHA_RE.fullmatch(str(item)) is None for item in value.values()):
-        raise BundleError("bundle identity is not a lowercase SHA-256")
-    return dict(value)
+def _load_attested_module(path: Path, record: Mapping[str, Any], label: str):
+    payload, info = _read_regular(path)
+    current = {
+        "path": str(path.absolute()),
+        "size": len(payload), "sha256": _hash(payload),
+        "device": info.st_dev, "inode": info.st_ino,
+    }
+    if record != current:
+        raise BundleError(f"{label} bytes differ from final corpus binding")
+    module_name = f"_lmctf_bundle_{label}_{record['sha256']}"
+    module_spec = importlib.util.spec_from_file_location(
+        module_name, path, loader=_AttestedSourceLoader(path, payload)
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise BundleError(f"cannot load {label} verifier")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_name] = module
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception:
+        if sys.modules.get(module_name) is module:
+            del sys.modules[module_name]
+        raise
+    return module
+
+
+def _final_corpus_modules() -> tuple[dict, dict, Any, Any]:
+    controller_path = Path(__file__).with_name("rune_corpus_controller.py")
+    finalizer_path = Path(__file__).with_name("rune_corpus_finalizer.py")
+    controller_record = _file_record(controller_path)
+    finalizer_record = _file_record(finalizer_path)
+    controller = _load_attested_module(controller_path, controller_record, "controller")
+    finalizer = _load_attested_module(finalizer_path, finalizer_record, "finalizer")
+    if not callable(getattr(controller, "verify_snapshot", None)):
+        raise BundleError("final corpus controller lacks snapshot verification")
+    for name in (
+        "build_verified_final_corpus_binding",
+        "validate_bundle_final_corpus_binding",
+    ):
+        if not callable(getattr(finalizer, name, None)):
+            raise BundleError(f"final corpus finalizer lacks {name}")
+    return controller_record, finalizer_record, controller, finalizer
+
+
+def _build_final_corpus_binding(snapshot: Path, corpus_root: Path) -> dict:
+    controller_record, finalizer_record, controller, finalizer = _final_corpus_modules()
+    try:
+        return finalizer.build_verified_final_corpus_binding(
+            controller,
+            snapshot=Path(snapshot),
+            corpus_root=Path(corpus_root),
+            controller_record=controller_record,
+            finalizer_record=finalizer_record,
+        )
+    except Exception as exc:
+        raise BundleError(f"final corpus binding is invalid: {exc}") from exc
+
+
+def _validate_final_corpus_binding(
+    binding: Any,
+    files: Sequence[Mapping[str, Any]],
+    *,
+    engine_record: Mapping[str, Any] | None = None,
+) -> dict[str, dict]:
+    controller_record, finalizer_record, controller, finalizer = _final_corpus_modules()
+    roles = {str(record.get("role")): record for record in files}
+    try:
+        return finalizer.validate_bundle_final_corpus_binding(
+            controller,
+            binding=binding,
+            controller_record=controller_record,
+            finalizer_record=finalizer_record,
+            bundle_roles=roles,
+            engine_record=engine_record,
+        )
+    except Exception as exc:
+        raise BundleError(f"final corpus binding is invalid: {exc}") from exc
 
 
 def _expected_roles() -> tuple[set[str], set[str]]:
@@ -292,9 +377,8 @@ def _role_payload(role: str) -> bytes | None:
 
 def _validate_content(authority: Any) -> dict:
     if not isinstance(authority, dict) or set(authority) != {
-            "identities", "maps", "topmaps", "files"}:
+            "final_corpus", "maps", "topmaps", "files"}:
         raise BundleError("bundle authority has unknown or missing fields")
-    identities = _validate_identities(authority["identities"])
     if authority["maps"] != list(_maps()) or authority["topmaps"] != list(_topmaps()):
         raise BundleError("bundle map authorities differ from the canonical lists")
     files = authority["files"]
@@ -327,17 +411,18 @@ def _validate_content(authority: Any) -> dict:
     by_role = {record["role"]: record for record in records}
     if by_role["module-primary"]["sha256"] != by_role["module-secondary"]["sha256"]:
         raise BundleError("production module aliases do not have identical bytes")
-    if identities["configuration"] != by_role["config"]["sha256"]:
-        raise BundleError("configuration identity differs from the production config")
-    return {"identities": identities, "maps": list(_maps()),
+    if not isinstance(authority["final_corpus"], dict):
+        raise BundleError("bundle final corpus binding is invalid")
+    return {"final_corpus": authority["final_corpus"], "maps": list(_maps()),
             "topmaps": list(_topmaps()), "files": records}
 
 
-def _read_build_spec(path: Path) -> tuple[dict, list[tuple[dict, Path]]]:
+def _read_build_spec(
+    path: Path, *, snapshot: Path, corpus_root: Path,
+) -> tuple[dict, list[tuple[dict, Path]]]:
     value, _payload = _read_json(path)
-    if set(value) != {"format", "identities", "files"} or value["format"] != BUILD_FORMAT:
+    if set(value) != {"format", "files"} or value["format"] != BUILD_FORMAT:
         raise BundleError("invalid bundle build specification")
-    identities = _validate_identities(value["identities"])
     entries = value["files"]
     if not isinstance(entries, list):
         raise BundleError("bundle build file inventory is not a list")
@@ -364,8 +449,12 @@ def _read_build_spec(path: Path) -> tuple[dict, list[tuple[dict, Path]]]:
     source_by_path = {record["path"]: (record, source) for record, source in sources}
     if len(source_by_path) != len(sources):
         raise BundleError("duplicate bundle build path")
-    authority = _validate_content({"identities": identities, "maps": list(_maps()),
-                                   "topmaps": list(_topmaps()), "files": records})
+    authority = _validate_content({
+        "final_corpus": {}, "maps": list(_maps()), "topmaps": list(_topmaps()),
+        "files": records,
+    })
+    authority["final_corpus"] = _build_final_corpus_binding(snapshot, corpus_root)
+    _validate_final_corpus_binding(authority["final_corpus"], authority["files"])
     return authority, [source_by_path[record["path"]] for record in records]
 
 
@@ -413,7 +502,14 @@ def _verify_archive(authority: Mapping[str, Any], archive: Path) -> None:
         raise BundleError("archive file inventory is incomplete")
 
 
-def build_bundle(spec_path: Path, archive: Path, manifest: Path) -> dict:
+def build_bundle(
+    spec_path: Path,
+    archive: Path,
+    manifest: Path,
+    *,
+    snapshot: Path,
+    corpus_root: Path,
+) -> dict:
     spec_path, archive, manifest = Path(spec_path), Path(archive), Path(manifest)
     if archive.exists() or archive.is_symlink() or manifest.exists() or manifest.is_symlink():
         raise BundleError("bundle outputs must not already exist")
@@ -421,7 +517,9 @@ def build_bundle(spec_path: Path, archive: Path, manifest: Path) -> dict:
         _reject_symlink_components(parent)
         if not parent.is_dir():
             raise BundleError("bundle output parent is not a directory")
-    authority, sources = _read_build_spec(spec_path)
+    authority, sources = _read_build_spec(
+        spec_path, snapshot=Path(snapshot), corpus_root=Path(corpus_root),
+    )
     temporary = archive.with_name(f".{archive.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     try:
         with tarfile.open(temporary, mode="w", format=tarfile.USTAR_FORMAT) as handle:
@@ -460,6 +558,7 @@ def verify_release(manifest: Path, archive: Path) -> dict:
     if value["format"] != RELEASE_FORMAT:
         raise BundleError("invalid release manifest format")
     authority = _validate_content(value["authority"])
+    _validate_final_corpus_binding(authority["final_corpus"], authority["files"])
     if value["bundle_id"] != _hash(_canonical(authority)):
         raise BundleError("release bundle identity drift")
     archive_record = value["archive"]
@@ -573,7 +672,7 @@ def _extract_generation(release: dict, archive: Path, root: Path) -> Path:
             "format": INSTALLED_FORMAT, "bundle_id": bundle_id,
             "generation_root": str(final.absolute()),
             "release_manifest": manifest_record,
-            "identities": authority["identities"], "files": files,
+            "final_corpus": authority["final_corpus"], "files": files,
         }
         _atomic_write(temporary / "installed-bundle.json", _canonical(installed), 0o444)
         _freeze_tree(temporary)
@@ -604,7 +703,7 @@ def _verify_generation(generation: Path, *, expected_bundle: str | None = None) 
     installed, _payload = _read_json(identity_path)
     if set(installed) != {
             "format", "bundle_id", "generation_root", "release_manifest",
-            "identities", "files"} or installed["format"] != INSTALLED_FORMAT:
+            "final_corpus", "files"} or installed["format"] != INSTALLED_FORMAT:
         raise BundleError("installed generation identity is invalid")
     bundle_id = installed["bundle_id"]
     if (SHA_RE.fullmatch(str(bundle_id)) is None or
@@ -620,8 +719,9 @@ def _verify_generation(generation: Path, *, expected_bundle: str | None = None) 
         raise BundleError("installed release authority drift")
     authority = _validate_content(release["authority"])
     if (bundle_id != _hash(_canonical(authority)) or
-            installed["identities"] != authority["identities"]):
+            installed["final_corpus"] != authority["final_corpus"]):
         raise BundleError("installed bundle content identity drift")
+    _validate_final_corpus_binding(authority["final_corpus"], authority["files"])
     records = installed["files"]
     if not isinstance(records, list) or len(records) != len(authority["files"]):
         raise BundleError("installed generation file inventory is incomplete")
@@ -669,14 +769,17 @@ def _verify_generation(generation: Path, *, expected_bundle: str | None = None) 
 
 def _state_reference(installed: dict) -> dict:
     identity_path = Path(installed["generation_root"]) / "installed-bundle.json"
+    final_corpus = installed["final_corpus"]
     return {"bundle_id": installed["bundle_id"],
+            "corpus_id": final_corpus["corpus_id"],
+            "snapshot": final_corpus["snapshot"],
             "generation_root": installed["generation_root"],
             "identity": _file_record(identity_path)}
 
 
 def _verify_state_reference(value: Any, label: str, generations: Path) -> dict:
     if not isinstance(value, dict) or set(value) != {
-            "bundle_id", "generation_root", "identity"}:
+            "bundle_id", "corpus_id", "snapshot", "generation_root", "identity"}:
         raise BundleError(f"invalid {label} bundle reference")
     generation = Path(value["generation_root"])
     if generation.parent != generations.absolute():
@@ -685,6 +788,13 @@ def _verify_state_reference(value: Any, label: str, generations: Path) -> dict:
     identity_path = _verify_file_record(value["identity"], f"{label} bundle identity")
     if identity_path != generation / "installed-bundle.json":
         raise BundleError(f"{label} bundle identity path drift")
+    final_corpus = installed.get("final_corpus")
+    if (
+        not isinstance(final_corpus, dict)
+        or value["corpus_id"] != final_corpus.get("corpus_id")
+        or value["snapshot"] != final_corpus.get("snapshot")
+    ):
+        raise BundleError(f"{label} final corpus identity drift")
     return installed
 
 
@@ -825,6 +935,8 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--spec", required=True, type=Path)
     build.add_argument("--archive", required=True, type=Path)
     build.add_argument("--manifest", required=True, type=Path)
+    build.add_argument("--snapshot", required=True, type=Path)
+    build.add_argument("--corpus-root", required=True, type=Path)
     verify = commands.add_parser("verify")
     verify.add_argument("--manifest", required=True, type=Path)
     verify.add_argument("--archive", required=True, type=Path)
@@ -846,7 +958,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "build":
-            value = build_bundle(args.spec, args.archive, args.manifest)
+            value = build_bundle(
+                args.spec, args.archive, args.manifest,
+                snapshot=args.snapshot, corpus_root=args.corpus_root,
+            )
         elif args.command == "verify":
             value = verify_release(args.manifest, args.archive)
         elif args.command == "install":
@@ -855,7 +970,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "rollback":
             if args.expect_active is None or args.to is None:
-                raise BundleError("rollback identities cannot be 'none'")
+                raise BundleError("rollback bundle IDs cannot be 'none'")
             value = rollback_bundle(
                 args.root, expected_active=args.expect_active, target_bundle=args.to
             )

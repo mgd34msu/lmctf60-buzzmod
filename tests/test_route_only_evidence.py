@@ -19,7 +19,6 @@ import unittest
 from unittest import mock
 
 from tests.test_server_bundle import BundleFixture
-from tools import server_bundle
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -142,9 +141,17 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 "corpus_id": corpus_root.name, "authority": authority_record,
                 "run_root": str(root / "run"), "port_base": 62000, "results": [],
             }
-            fake_finalizer = SimpleNamespace(
-                verify_final_corpus=lambda *_args, **_kwargs: verified
-            )
+            def build_binding(
+                _controller, *, snapshot, corpus_root, controller_record, finalizer_record,
+            ):
+                return {
+                    "controller": controller_record, "finalizer": finalizer_record,
+                    "snapshot": str(snapshot), "run_root": verified["run_root"],
+                    "corpus_authority": verified["authority"],
+                    "corpus_id": verified["corpus_id"], "results": verified["results"],
+                }
+
+            fake_finalizer = SimpleNamespace(build_verified_final_corpus_binding=build_binding)
             with (
                 mock.patch.object(
                     self.runner, "_load_route_controller", return_value=object()
@@ -259,7 +266,9 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                     "route_contract": (
                         "local_only" if classification == "ROUTE_ONLY" else "complete"
                     ),
-                    "attempt": 1,
+                    "attempt": 1, "attempt_kind": "generated_missing",
+                    "provenance": {"source_artifact": None, "rejection_result": None},
+                    "history": [],
                     "attempt_result": final_record(result_path),
                 })
             corpus_authority = {
@@ -320,22 +329,44 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 original_spec = self.runner.importlib.util.spec_from_file_location
                 original_module = self.runner.importlib.util.module_from_spec
 
-                def spec_from_file_location(name, path):
+                def spec_from_file_location(name, path, **kwargs):
                     if Path(path) == controller_path:
                         return module_spec
-                    return original_spec(name, path)
+                    return original_spec(name, path, **kwargs)
 
                 def module_from_spec(spec):
                     return fixture if spec is module_spec else original_module(spec)
 
-                finalizer = SimpleNamespace(
-                    verify_final_corpus=lambda _controller, *, snapshot, corpus_root: {
-                        "corpus_id": final_authority["corpus_id"],
-                        "authority": value["corpus_authority"],
-                        "run_root": value["run_root"],
-                        "port_base": 62000,
-                        "results": final_results,
+                def validate_binding(
+                    _controller, *, binding, controller_record, finalizer_record,
+                    bundle_roles, engine_record,
+                ):
+                    del controller_record, finalizer_record, bundle_roles, engine_record
+                    required = {
+                        "controller", "finalizer", "snapshot", "run_root",
+                        "corpus_authority", "corpus_id", "results",
                     }
+                    if not isinstance(binding, dict) or set(binding) != required:
+                        raise ValueError("incomplete")
+                    try:
+                        self.runner._verify_final_file_record(
+                            binding["corpus_authority"], "fixture authority"
+                        )
+                    except ValueError as exc:
+                        raise ValueError("identity drift") from exc
+                    if binding["corpus_id"] != final_authority["corpus_id"]:
+                        raise ValueError("content-addressed")
+                    if (
+                        not isinstance(binding["results"], list)
+                        or len(binding["results"]) != len(maps)
+                    ):
+                        raise ValueError("inventory")
+                    if binding["results"] != final_results:
+                        raise ValueError("drift")
+                    return {item["map"]: dict(item) for item in final_results}
+
+                finalizer = SimpleNamespace(
+                    validate_bundle_final_corpus_binding=validate_binding
                 )
                 with mock.patch.object(
                         self.runner.importlib.util, "spec_from_file_location",
@@ -415,7 +446,7 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 "engine": record, "client": record, "route_config": record, "film": record,
                 "runtime": record, "module_aliases": [], "spectator": "Observer",
                 "target": "[SG]Bot01", "timeout_seconds": 60, "installed_bundle": record,
-                "controller_authority": {}, "lanes": [],
+                "lanes": [],
             }
             spec = root / "spec.json"
 
@@ -424,6 +455,11 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expression):
                     self.runner._validate_route_only_run_spec(spec)
 
+            spec.write_bytes(self.runner._canonical({
+                **common, "controller_authority": {}, "lanes": [],
+            }))
+            with self.assertRaisesRegex(ValueError, "specification"):
+                self.runner._validate_route_only_run_spec(spec)
             reject([{**lane, "map": "lmctf06"}], "fixed authority")
             reject([lane, dict(lane)], "ordered subset")
             reject([{**lane, "lane": "r11", "map": "arbitrary"}], "fixed authority")
@@ -439,7 +475,7 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 "engine": record, "client": record, "route_config": record, "film": record,
                 "runtime": record, "module_aliases": [], "spectator": "Observer",
                 "target": "[SG]Bot01", "timeout_seconds": 60, "installed_bundle": record,
-                "controller_authority": {}, "lanes": [],
+                "lanes": [],
             }
 
             def lane(name, map_name, lane_root, game_root):
@@ -531,14 +567,13 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fixture = BundleFixture(root, "bundle", b"module\n")
-            archive, manifest = root / "bundle.tar", root / "bundle.json"
-            server_bundle.build_bundle(fixture.write_spec(), archive, manifest)
-            install = root / "installed"
-            server_bundle.install_bundle(manifest, archive, install, expected_active=None)
-            active, _verifier = self.runner._verify_installed_bundle(
-                self.runner._file_record(install / "install-state.json")
-            )
-            roles = self.runner._bundle_role_records(active)
+            roles = {
+                entry["role"]: {
+                    **self.runner._file_record(Path(entry["source"])),
+                    "role": entry["role"],
+                }
+                for entry in fixture.entries
+            }
             lanes = {}
             for lane in self.runner.ROUTE_ONLY_LANES:
                 map_name = self.runner.expected_route_only_map(lane)
@@ -595,18 +630,18 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 live._consume_route_engine(
                     self.runner, None, spec, run,
                     b"slipgate: rune identity committed map=lmctf01 bsp=1\n",
-                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"),
+                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"), {},
                 )
                 live._consume_route_engine(
                     self.runner, None, spec, run, b"Timelimit hit.\n",
-                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"),
+                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"), {},
                 )
                 self.assertIn(b"sv statsdb backup route-only-session.db\n",
                               command_stream.getvalue())
                 live._consume_route_engine(
                     self.runner, None, spec, run,
                     b"EXITLEVEL frame=6000 time=600.0 changemap=nextmap\n",
-                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"),
+                    root, [], "b" * 64, {"lmctf01": {}}, float("inf"), {},
                 )
                 self.assertTrue(run.cycle.pending_exit)
             finally:

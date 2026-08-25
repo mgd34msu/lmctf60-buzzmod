@@ -1005,10 +1005,12 @@ static struct edict_s *Binding_ResolveEntity(
 	return SG_MechCatalogResolveEntity(node->key, node);
 }
 
-static int Binding_Capture(const rune_t *rune, uint32_t link_index,
+static sg_rune_mechanism_bindings_status_t Binding_CaptureStatus(
+	const rune_t *rune, uint32_t link_index,
 	sg_rune_mechanism_binding_t *binding_out, int owned_execution)
 {
 	sg_rune_mechanism_binding_t candidate;
+	sg_mech_catalog_match_t catalog_match;
 	const rune_mechanism_plan_t *plan;
 	const rune_link_t *link;
 	uint32_t closure_crc;
@@ -1018,7 +1020,7 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		memset(binding_out, 0, sizeof(*binding_out));
 	if (!binding_out || !rune || !SG_RunePublishedShapeValid(rune) ||
 	    link_index >= rune->artifact.num_links)
-		return 0;
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
 	link = &rune->links[link_index];
 	plan = SG_RuneMechanismPlanForLink(rune, link_index);
 	if (!plan || !SG_ActionRuntimeSupported((int)link->action) ||
@@ -1027,12 +1029,16 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 	    !SG_ActionMechanismPlanAllowed((int)link->action,
 	        plan->controller_kind) ||
 	    !Binding_ClosureCRC(rune, plan, &closure_crc) ||
-	    closure_crc != plan->closure_crc32 ||
-	    !SG_MechCatalogMatches(rune->mechanism_nodes,
-	        rune->artifact.num_mechanism_nodes, rune->mechanism_edges,
-	        rune->artifact.num_inventory_edges, rune->mechanism_strings,
-	        rune->artifact.string_bytes))
-		return 0;
+	    closure_crc != plan->closure_crc32)
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
+	catalog_match = SG_MechCatalogMatchStatus(rune->mechanism_nodes,
+		rune->artifact.num_mechanism_nodes, rune->mechanism_edges,
+		rune->artifact.num_inventory_edges, rune->mechanism_strings,
+		rune->artifact.string_bytes);
+	if (catalog_match != SG_MECH_CATALOG_MATCH_READY)
+		return catalog_match == SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH
+			? SG_RUNE_MECHANISM_BINDINGS_ARTIFACT
+			: SG_RUNE_MECHANISM_BINDINGS_INFRA;
 	memset(&candidate, 0, sizeof(candidate));
 	candidate.rune = rune;
 	candidate.link = link;
@@ -1060,7 +1066,7 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		if (!SG_TrainStationPlanDiscover(&view, plan->entry_key,
 		        plan->mover_key, &destination_key, &companion_key,
 		        &witness))
-			return 0;
+			return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
 		candidate.destination_node = SG_RuneMechanismNodeByKey(rune,
 			destination_key);
 		candidate.egress_node = SG_RuneMechanismNodeByKey(rune,
@@ -1072,21 +1078,22 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 	    candidate.entry_node->kind == SG_MECH_NODE_BUTTON &&
 	    !Binding_TrainTerminals(rune, plan, &candidate.destination_node,
 	        &candidate.egress_node))
-		return 0;
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
 	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_RELAY_DOOR &&
 	    !Binding_RelayWallTerminals(rune, plan, &candidate.destination_node,
 	        &candidate.egress_node))
-		return 0;
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
 	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_TIMED_VAULT &&
 	    !Binding_TimedVaultTerminals(rune, plan, &candidate.destination_node,
 	        &candidate.egress_node))
-		return 0;
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
 	if (!candidate.entry_node ||
 	    (plan->controller_kind != SG_MECHANISM_CONTROLLER_PUSH &&
 	     !candidate.mover_node) ||
 	    !Binding_ControllerShape(rune, link, plan, candidate.entry_node,
-	        candidate.mover_node) ||
-	    !Binding_NodeTopologyMatches(candidate.entry_node,
+	        candidate.mover_node))
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
+	if (!Binding_NodeTopologyMatches(candidate.entry_node,
 	        plan->controller_kind, owned_execution) ||
 	    (candidate.mover_node &&
 	     !Binding_NodeTopologyMatches(candidate.mover_node,
@@ -1105,7 +1112,7 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 	        !(candidate.egress_entity = Binding_ResolveEntity(
 	            candidate.egress_node, plan->controller_kind,
 	            owned_execution))))
-		return 0;
+		return SG_RUNE_MECHANISM_BINDINGS_INFRA;
 	for (ordinal = 0U; ordinal < plan->num_edges; ordinal++)
 	{
 		const rune_mechanism_edge_t *edge =
@@ -1115,8 +1122,9 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		const rune_mechanism_node_t *to =
 			SG_RuneMechanismNodeByKey(rune, edge->to_key);
 
-		if (!Binding_EdgeAuthenticated(rune, edge) || !from || !to ||
-		    !Binding_NodeTopologyMatches(from, plan->controller_kind,
+		if (!Binding_EdgeAuthenticated(rune, edge) || !from || !to)
+			return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
+		if (!Binding_NodeTopologyMatches(from, plan->controller_kind,
 		        owned_execution) ||
 		    !Binding_NodeTopologyMatches(to, plan->controller_kind,
 		        owned_execution) ||
@@ -1124,7 +1132,7 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 		        owned_execution) ||
 		    !Binding_ResolveEntity(to, plan->controller_kind,
 		        owned_execution))
-			return 0;
+			return SG_RUNE_MECHANISM_BINDINGS_INFRA;
 	}
 	if (plan->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN_STATION)
 	{
@@ -1134,7 +1142,14 @@ static int Binding_Capture(const rune_t *rune, uint32_t link_index,
 			sizeof(candidate.station_boarding));
 	}
 	*binding_out = candidate;
-	return 1;
+	return SG_RUNE_MECHANISM_BINDINGS_READY;
+}
+
+static int Binding_Capture(const rune_t *rune, uint32_t link_index,
+	sg_rune_mechanism_binding_t *binding_out, int owned_execution)
+{
+	return Binding_CaptureStatus(rune, link_index, binding_out,
+		owned_execution) == SG_RUNE_MECHANISM_BINDINGS_READY;
 }
 
 int SG_RuneMechanismBindingCapture(const rune_t *rune, uint32_t link_index,
@@ -1155,28 +1170,43 @@ int SG_RuneMechanismStationBindingCapture(const rune_t *rune,
 	return Binding_Capture(rune, link_index, binding_out, 2);
 }
 
-static int Binding_Current(const sg_rune_mechanism_binding_t *binding,
+static sg_rune_mechanism_bindings_status_t Binding_CurrentStatus(
+	const sg_rune_mechanism_binding_t *binding,
 	int owned_execution)
 {
 	sg_rune_mechanism_binding_t current;
+	sg_rune_mechanism_bindings_status_t status;
 
-	return binding && binding->rune &&
-	       Binding_Capture(binding->rune, binding->link_index, &current,
-	           owned_execution) &&
-	       (owned_execution != 2 ||
+	if (!binding || !binding->rune)
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
+	status = Binding_CaptureStatus(binding->rune, binding->link_index,
+		&current, owned_execution);
+	if (status != SG_RUNE_MECHANISM_BINDINGS_READY)
+		return status;
+	if (current.link != binding->link || current.plan != binding->plan ||
+	    current.entry_node != binding->entry_node ||
+	    current.mover_node != binding->mover_node ||
+	    current.destination_node != binding->destination_node ||
+	    current.egress_node != binding->egress_node)
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
+	if ((owned_execution == 2 &&
 	        (memcmp(current.station_approach, binding->station_approach,
-	             sizeof(current.station_approach)) == 0 &&
+	             sizeof(current.station_approach)) != 0 ||
 	         memcmp(current.station_boarding, binding->station_boarding,
-	             sizeof(current.station_boarding)) == 0)) &&
-	       current.link == binding->link && current.plan == binding->plan &&
-	       current.entry_node == binding->entry_node &&
-	       current.mover_node == binding->mover_node &&
-	       current.destination_node == binding->destination_node &&
-	       current.egress_node == binding->egress_node &&
-	       current.entry_entity == binding->entry_entity &&
-	       current.mover_entity == binding->mover_entity &&
-	       current.destination_entity == binding->destination_entity &&
-	       current.egress_entity == binding->egress_entity;
+	             sizeof(current.station_boarding)) != 0)) ||
+	    current.entry_entity != binding->entry_entity ||
+	    current.mover_entity != binding->mover_entity ||
+	    current.destination_entity != binding->destination_entity ||
+	    current.egress_entity != binding->egress_entity)
+		return SG_RUNE_MECHANISM_BINDINGS_INFRA;
+	return SG_RUNE_MECHANISM_BINDINGS_READY;
+}
+
+static int Binding_Current(const sg_rune_mechanism_binding_t *binding,
+	int owned_execution)
+{
+	return Binding_CurrentStatus(binding, owned_execution) ==
+		SG_RUNE_MECHANISM_BINDINGS_READY;
 }
 
 int SG_RuneMechanismBindingCurrent(
@@ -1876,7 +1906,8 @@ int SG_RuneMechanismBindingCarrierStageTriggerMatches(
 	return 0;
 }
 
-int SG_RuneMechanismBindingsReady(const rune_t *rune,
+sg_rune_mechanism_bindings_status_t SG_RuneMechanismBindingsStatus(
+	const rune_t *rune,
 	uint32_t *failure_index_out)
 {
 	uint32_t index;
@@ -1884,24 +1915,36 @@ int SG_RuneMechanismBindingsReady(const rune_t *rune,
 	if (failure_index_out)
 		*failure_index_out = UINT32_MAX;
 	if (!rune || !SG_RunePublishedShapeValid(rune))
-		return 0;
+		return SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
 	for (index = 0U; index < rune->artifact.num_links; index++)
 	{
 		const rune_link_t *link = &rune->links[index];
 		sg_rune_mechanism_binding_t binding;
+		sg_rune_mechanism_bindings_status_t status;
 
 		if (!SG_ActionMechanismPlanRequired((int)link->action))
 			continue;
-		if (!SG_RuneMechanismBindingCapture(rune, index, &binding) ||
-		    binding.link != link || binding.link_index != index ||
-		    !SG_RuneMechanismBindingTopologyCurrent(&binding))
+		status = Binding_CaptureStatus(rune, index, &binding, 0);
+		if (status == SG_RUNE_MECHANISM_BINDINGS_READY &&
+		    (binding.link != link || binding.link_index != index))
+			status = SG_RUNE_MECHANISM_BINDINGS_ARTIFACT;
+		if (status == SG_RUNE_MECHANISM_BINDINGS_READY)
+			status = Binding_CurrentStatus(&binding, 0);
+		if (status != SG_RUNE_MECHANISM_BINDINGS_READY)
 		{
 			if (failure_index_out)
 				*failure_index_out = index;
-			return 0;
+			return status;
 		}
 	}
-	return 1;
+	return SG_RUNE_MECHANISM_BINDINGS_READY;
+}
+
+int SG_RuneMechanismBindingsReady(const rune_t *rune,
+	uint32_t *failure_index_out)
+{
+	return SG_RuneMechanismBindingsStatus(rune, failure_index_out) ==
+		SG_RUNE_MECHANISM_BINDINGS_READY;
 }
 
 int SG_RuneMechanismBindingDoorAction(

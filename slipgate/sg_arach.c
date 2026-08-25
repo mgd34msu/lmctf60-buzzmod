@@ -132,6 +132,7 @@ static char		sg_rune_map[64];
  * full graph/field allocation each time.  Latch that terminal setup failure
  * until the next level epoch instead. */
 static qboolean	sg_setup_failed;
+static qboolean	sg_autoload_attempted;
 
 const char *SG_RuneMapName(void)
 {
@@ -268,10 +269,43 @@ typedef enum rune_load_attempt_e
 {
 	RUNE_LOAD_MISSING = 0,
 	RUNE_LOAD_REJECTED,
+	RUNE_LOAD_INFRA,
 	RUNE_LOAD_READY
 } rune_load_attempt_t;
 
 static rune_load_attempt_t sg_last_rune_load;
+static const char *sg_last_rune_failure_stage;
+static const char *sg_setup_failure_stage;
+static qboolean sg_setup_failure_artifact;
+
+static void SG_SetupFailure(const char *stage, qboolean artifact)
+{
+	sg_setup_failure_stage = stage;
+	sg_setup_failure_artifact = artifact;
+}
+
+typedef enum rune_validation_status_e
+{
+	RUNE_VALIDATION_OK = 0,
+	RUNE_VALIDATION_REJECTED,
+	RUNE_VALIDATION_INFRA
+} rune_validation_status_t;
+
+typedef struct rune_validation_result_s
+{
+	rune_validation_status_t status;
+	const char *reason;
+} rune_validation_result_t;
+
+static rune_validation_result_t Rune_ValidationResult(
+	rune_validation_status_t status, const char *reason)
+{
+	rune_validation_result_t result;
+
+	result.status = status;
+	result.reason = reason;
+	return result;
+}
 
 void Rune_Free(rune_t *r)
 {
@@ -304,7 +338,7 @@ void Rune_Free(rune_t *r)
  * Complete artifacts require every live seed to reach both stands; the
  * authenticated local-only contract requires at least one and rejects neutral
  * geometry as well as a needlessly weakened complete graph. */
-static const char *Rune_ValidateObjectiveCore(rune_t *r)
+static rune_validation_result_t Rune_ValidateObjectiveCore(rune_t *r)
 {
 	int *first_in = NULL, *next_in = NULL, *queue = NULL;
 	byte *reach[2] = { NULL, NULL };
@@ -314,6 +348,7 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 	int i, which;
 	qboolean complete = true;
 	const char *failure = NULL;
+	rune_validation_status_t status = RUNE_VALIDATION_REJECTED;
 
 	/* The stand markers are stable even while a live flag is carried, and are
 	 * the same objective positions Fields_Setup localizes immediately after the
@@ -323,6 +358,7 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 	if (!stands[0] || !stands[1])
 	{
 		failure = "flag objective stand unavailable";
+		status = RUNE_VALIDATION_INFRA;
 		goto done;
 	}
 	for (which = 0; which < 2; which++)
@@ -356,6 +392,7 @@ static const char *Rune_ValidateObjectiveCore(rune_t *r)
 	if (!first_in || !next_in || !queue || !reach[0] || !reach[1])
 	{
 		failure = "graph-contract allocation failure";
+		status = RUNE_VALIDATION_INFRA;
 		goto done;
 	}
 	for (i = 0; i < ns; i++)
@@ -435,22 +472,25 @@ done:
 		sg_host.level_free(reach[0]);
 	if (reach[1])
 		sg_host.level_free(reach[1]);
-	return failure;
+	return Rune_ValidationResult(failure ? status : RUNE_VALIDATION_OK,
+		failure);
 }
 
-static const char *Rune_BuildOutboundIndexes(rune_t *r)
+static rune_validation_result_t Rune_BuildOutboundIndexes(rune_t *r)
 {
 	int i;
 
 	if (!r || r->hdr.num_seeds <= 0 || r->hdr.num_links < 0)
-		return "invalid native graph counts";
+		return Rune_ValidationResult(RUNE_VALIDATION_REJECTED,
+			"invalid native graph counts");
 	r->first_link = sg_host.level_alloc(sizeof(*r->first_link) *
 	    (size_t)r->hdr.num_seeds);
 	r->next_link = sg_host.level_alloc(sizeof(*r->next_link) *
 	    (size_t)(r->hdr.num_links ? r->hdr.num_links : 1));
 	r->linked_seed = sg_host.level_alloc((size_t)r->hdr.num_seeds);
 	if (!r->first_link || !r->next_link || !r->linked_seed)
-		return "outbound-index allocation failure";
+		return Rune_ValidationResult(RUNE_VALIDATION_INFRA,
+			"outbound-index allocation failure");
 	memset(r->linked_seed, 0, (size_t)r->hdr.num_seeds);
 	for (i = 0; i < r->hdr.num_seeds; i++)
 		r->first_link[i] = -1;
@@ -473,17 +513,20 @@ static const char *Rune_BuildOutboundIndexes(rune_t *r)
 
 		if ((tombstone && (r->linked_seed[i] || objective)) ||
 		    (!tombstone && !r->linked_seed[i] && !objective))
-			return "invalid route-core seed ownership";
+			return Rune_ValidationResult(RUNE_VALIDATION_REJECTED,
+				"invalid route-core seed ownership");
 	}
-	return NULL;
+	return Rune_ValidationResult(RUNE_VALIDATION_OK, NULL);
 }
 
-static const char *Rune_ReplayDoorPlans(rune_t *r, uint32_t *index_out)
+static rune_validation_result_t Rune_ReplayDoorPlans(rune_t *r,
+	uint32_t *index_out)
 {
 	int i;
 
 	if (!SG_OracleDoorEgressReplayCacheBegin())
-		return "door egress replay cache busy";
+		return Rune_ValidationResult(RUNE_VALIDATION_INFRA,
+			"door egress replay cache busy");
 	for (i = 0; i < r->hdr.num_links; i++)
 	{
 		rune_link_t *link = &r->links[i];
@@ -509,11 +552,12 @@ static const char *Rune_ReplayDoorPlans(rune_t *r, uint32_t *index_out)
 			if (index_out)
 				*index_out = (uint32_t)i;
 			SG_OracleDoorEgressReplayCacheEnd();
-			return "invalid live declared-door replay";
+			return Rune_ValidationResult(RUNE_VALIDATION_REJECTED,
+				"invalid live declared-door replay");
 		}
 	}
 	SG_OracleDoorEgressReplayCacheEnd();
-	return NULL;
+	return Rune_ValidationResult(RUNE_VALIDATION_OK, NULL);
 }
 
 rune_t *Rune_Load(const char *mapname)
@@ -524,11 +568,15 @@ rune_t *Rune_Load(const char *mapname)
 	sg_rune_authority_t active;
 	sg_rune_file_load_result_t load_result;
 	sg_compound_publication_result_t compound_result;
+	rune_validation_result_t validation;
+	sg_mech_catalog_match_t catalog_match;
+	sg_rune_mechanism_bindings_status_t binding_status;
 	const char *failure = NULL;
 	const char *failure_stage = "authority";
 	uint32_t failure_index = UINT32_MAX;
 	qboolean proof_scope_active = false;
 	qboolean accepted = false;
+	qboolean infrastructure = false;
 	cvar_t *gamedir;
 	const char *game_directory;
 
@@ -537,6 +585,7 @@ rune_t *Rune_Load(const char *mapname)
 	memset(&load_result, 0, sizeof(load_result));
 	path[0] = '\0';
 	sg_last_rune_load = RUNE_LOAD_MISSING;
+	sg_last_rune_failure_stage = "missing";
 	SG_HooksInit();
 	gamedir = sg_host.cvar("gamedir", "", 0);
 	game_directory = gamedir && gamedir->string && gamedir->string[0]
@@ -547,6 +596,7 @@ rune_t *Rune_Load(const char *mapname)
 		failure_stage = captured.identity_status == SG_IDENTITY_OK
 			? "proof-law" : "identity";
 		failure = "rune authority unavailable";
+		infrastructure = true;
 		goto cleanup;
 	}
 	if (!SG_RuneInstallDestinationPath(path, sizeof(path), game_directory,
@@ -554,6 +604,7 @@ rune_t *Rune_Load(const char *mapname)
 	{
 		failure_stage = "path";
 		failure = "path exceeds MAX_OSPATH or has invalid map identity";
+		infrastructure = true;
 		goto cleanup;
 	}
 	load_result = SG_RuneFileLoad(path, &captured.identity,
@@ -569,31 +620,43 @@ rune_t *Rune_Load(const char *mapname)
 		failure = load_result.reason ? load_result.reason
 			: "rune artifact rejected";
 		failure_index = load_result.index;
+		infrastructure = load_result.status == SG_RUNE_FILE_LOAD_INFRA;
 		goto cleanup;
 	}
-	if (!SG_MechCatalogMatches(rune->mechanism_nodes,
-	    rune->artifact.num_mechanism_nodes, rune->mechanism_edges,
-	    rune->artifact.num_inventory_edges, rune->mechanism_strings,
-	    rune->artifact.string_bytes))
+	catalog_match = SG_MechCatalogMatchStatus(rune->mechanism_nodes,
+		rune->artifact.num_mechanism_nodes, rune->mechanism_edges,
+		rune->artifact.num_inventory_edges, rune->mechanism_strings,
+		rune->artifact.string_bytes);
+	if (catalog_match != SG_MECH_CATALOG_MATCH_READY)
 	{
 		failure_stage = "live-catalog-rebind";
-		failure = "decoded mechanism inventory differs from sealed world";
+		failure = catalog_match == SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH
+			? "decoded mechanism inventory differs from sealed world"
+			: "sealed mechanism catalog is unavailable or drifted";
+		infrastructure = catalog_match != SG_MECH_CATALOG_MATCH_CONTENT_MISMATCH;
 		goto cleanup;
 	}
 	failure_stage = "outbound-index";
-	failure = Rune_BuildOutboundIndexes(rune);
+	validation = Rune_BuildOutboundIndexes(rune);
+	failure = validation.reason;
+	infrastructure = validation.status == RUNE_VALIDATION_INFRA;
 	if (failure)
 		goto cleanup;
 	failure_stage = "mechanism-rebind";
-	if (!SG_RuneMechanismBindingsReady(rune, &failure_index))
+	binding_status = SG_RuneMechanismBindingsStatus(rune, &failure_index);
+	if (binding_status != SG_RUNE_MECHANISM_BINDINGS_READY)
 	{
-		failure = "live mechanism binding rejected";
+		failure = binding_status == SG_RUNE_MECHANISM_BINDINGS_ARTIFACT
+			? "live mechanism binding rejected"
+			: "live mechanism binding unavailable or drifted";
+		infrastructure = binding_status == SG_RUNE_MECHANISM_BINDINGS_INFRA;
 		goto cleanup;
 	}
 	if (!SG_RuneProofScopeBegin(rune->artifact.identity.gravity))
 	{
 		failure_stage = "proof-scope";
 		failure = "proof scope busy or invalid";
+		infrastructure = true;
 		goto cleanup;
 	}
 	proof_scope_active = true;
@@ -605,6 +668,9 @@ rune_t *Rune_Load(const char *mapname)
 	{
 		failure = SG_CompoundPublicationStatusName(compound_result.status);
 		failure_index = compound_result.link_index;
+		infrastructure = compound_result.status ==
+			SG_COMPOUND_PUBLICATION_ALLOCATION ||
+			compound_result.status == SG_COMPOUND_PUBLICATION_WORLD_DRIFT;
 		goto cleanup;
 	}
 	failure_stage = "door-replay";
@@ -612,16 +678,21 @@ rune_t *Rune_Load(const char *mapname)
 	        rune->links, rune->hdr.num_links))
 	{
 		failure = "timed-vault water escape index unavailable";
+		infrastructure = true;
 		goto cleanup;
 	}
-	failure = Rune_ReplayDoorPlans(rune, &failure_index);
+	validation = Rune_ReplayDoorPlans(rune, &failure_index);
+	failure = validation.reason;
+	infrastructure = validation.status == RUNE_VALIDATION_INFRA;
 	SG_TimedVaultEgressScopeEnd();
 	SG_RuneProofScopeEnd();
 	proof_scope_active = false;
 	if (failure)
 		goto cleanup;
 	failure_stage = "objective-core";
-	failure = Rune_ValidateObjectiveCore(rune);
+	validation = Rune_ValidateObjectiveCore(rune);
+	failure = validation.reason;
+	infrastructure = validation.status == RUNE_VALIDATION_INFRA;
 	if (failure)
 		goto cleanup;
 	if (!SG_RuneAuthorityCapture(rune->artifact.identity.map_name, &active) ||
@@ -629,6 +700,7 @@ rune_t *Rune_Load(const char *mapname)
 	{
 		failure_stage = "authority-recheck";
 		failure = "active identity or proof law drifted during load";
+		infrastructure = true;
 		goto cleanup;
 	}
 	accepted = true;
@@ -638,20 +710,32 @@ cleanup:
 		SG_RuneProofScopeEnd();
 	if (!accepted)
 	{
-		sg_last_rune_load = RUNE_LOAD_REJECTED;
+		sg_last_rune_load = infrastructure ? RUNE_LOAD_INFRA : RUNE_LOAD_REJECTED;
+		sg_last_rune_failure_stage = failure_stage;
 		Rune_Free(rune);
 		if (failure_index == UINT32_MAX)
-			sg_host.dprint("rune: rejected %s stage=%s reason=%s\n",
+		{
+			if (infrastructure)
+				sg_host.dprint("rune: infrastructure %s stage=%s reason=%s\n",
+					path[0] ? path : "<unresolved>", failure_stage,
+					failure ? failure : "unknown");
+			else
+				sg_host.dprint("rune: rejected %s stage=%s reason=%s\n",
+					path[0] ? path : "<unresolved>", failure_stage,
+					failure ? failure : "unknown");
+		}
+		else if (infrastructure)
+			sg_host.dprint("rune: infrastructure %s stage=%s reason=%s index=%u\n",
 				path[0] ? path : "<unresolved>", failure_stage,
-				failure ? failure : "unknown");
+				failure ? failure : "unknown", (unsigned int)failure_index);
 		else
-			sg_host.dprint("rune: rejected %s stage=%s reason=%s "
-				"index=%u\n", path[0] ? path : "<unresolved>",
-				failure_stage, failure ? failure : "unknown",
-				(unsigned int)failure_index);
+			sg_host.dprint("rune: rejected %s stage=%s reason=%s index=%u\n",
+				path[0] ? path : "<unresolved>", failure_stage,
+				failure ? failure : "unknown", (unsigned int)failure_index);
 		return NULL;
 	}
 	sg_last_rune_load = RUNE_LOAD_READY;
+	sg_last_rune_failure_stage = "ready";
 	return rune;
 }
 /* --------------------------------------------------------------- fields */
@@ -1146,7 +1230,7 @@ cleanup:
 	return airnext;
 }
 
-qboolean SG_LevelSetup(void)
+static qboolean SG_LevelSetupAttempt(void)
 {
 	rune_t *candidate = NULL;
 	int *candidate_air = NULL;
@@ -1159,13 +1243,18 @@ qboolean SG_LevelSetup(void)
 	uint32_t mechanism_failure_index = UINT32_MAX;
 	qboolean fields_ready = false;
 
+	SG_SetupFailure("setup", false);
+
 	memset(&sidecars, 0, sizeof(sidecars));
 	memset(&field_inputs, 0, sizeof(field_inputs));
 	memset(&danger_load, 0, sizeof(danger_load));
 	danger_load.diagnostic = SCD_ABSENT;
 	SG_HooksInit();     /* the host table, before any module reaches out */
 	if (sg_setup_failed)
+	{
+		SG_SetupFailure("previous-failure", false);
 		return false;
+	}
 
 	if (sg_rune)
 	{
@@ -1175,10 +1264,12 @@ qboolean SG_LevelSetup(void)
 				return true;
 			sg_host.dprint("slipgate: setup held: active identity or "
 			               "physics law differs from loaded artifact\n");
+			SG_SetupFailure("active-identity", false);
 			return false;
 		}
 		sg_host.dprint("slipgate: disabled: loaded rune identity differs "
 		               "from active map case\n");
+		SG_SetupFailure("active-identity", false);
 		return false;
 	}
 	SG_StrikeAdapterReset(&sg_strike_adapter);
@@ -1211,9 +1302,14 @@ qboolean SG_LevelSetup(void)
 	candidate = Rune_Load(level.mapname);
 	if (!candidate)
 	{
+		SG_SetupFailure(sg_last_rune_failure_stage,
+			sg_last_rune_load == RUNE_LOAD_REJECTED);
 		if (sg_last_rune_load == RUNE_LOAD_MISSING)
 			sg_host.dprint("slipgate: no rune for %s -- run 'sv rune' first\n",
 			               level.mapname);
+		else if (sg_last_rune_load == RUNE_LOAD_INFRA)
+			sg_host.dprint("slipgate: disabled: rune infrastructure failure for %s; "
+				"see rune diagnostic above\n", level.mapname);
 		else
 			sg_host.dprint("slipgate: disabled: rejected rune for %s; "
 			               "see rune diagnostic above\n", level.mapname);
@@ -1299,6 +1395,7 @@ qboolean SG_LevelSetup(void)
 		sg_host.dprint("slipgate: air-index setup failed; disabled until "
 		               "the next level\n");
 		sg_setup_failed = true;
+		SG_SetupFailure("air-index", false);
 		goto fail;
 	}
 	if (!SG_TimedVaultEgressScopeBegin(candidate->seeds,
@@ -1307,6 +1404,7 @@ qboolean SG_LevelSetup(void)
 	{
 		sg_host.dprint("slipgate: timed-vault water escape setup failed\n");
 		sg_setup_failed = true;
+		SG_SetupFailure("timed-vault", false);
 		goto fail;
 	}
 	/* Fields_Setup writes sg_fields while consuming only the local candidate.
@@ -1318,6 +1416,7 @@ qboolean SG_LevelSetup(void)
 		               "disabled until the next level\n");
 		sg_host.flush();
 		sg_setup_failed = true;
+		SG_SetupFailure("fields", false);
 		goto fail;
 	}
 	fields_ready = true;
@@ -1328,6 +1427,7 @@ qboolean SG_LevelSetup(void)
 		sg_host.dprint("slipgate: field setup discarded: active identity or "
 		               "proof law drifted before publication\n");
 		sg_setup_failed = true;
+		SG_SetupFailure("authority-recheck", false);
 		goto fail;
 	}
 	{
@@ -1342,6 +1442,7 @@ qboolean SG_LevelSetup(void)
 			                   compound_result.status),
 			               (unsigned int)compound_result.link_index);
 			sg_setup_failed = true;
+			SG_SetupFailure("compound-publication", false);
 			goto fail;
 		}
 	}
@@ -1354,6 +1455,7 @@ qboolean SG_LevelSetup(void)
 		sg_host.dprint("slipgate: mechanism publication discarded: index=%u\n",
 		    (unsigned int)mechanism_failure_index);
 		sg_setup_failed = true;
+		SG_SetupFailure("mechanism-publication", false);
 		goto fail;
 	}
 
@@ -1373,6 +1475,7 @@ qboolean SG_LevelSetup(void)
 		candidate = sg_rune;
 		sg_rune = NULL;
 		sg_setup_failed = true;
+		SG_SetupFailure("danger-publication", false);
 		goto fail;
 	}
 	sg_airnext = candidate_air;
@@ -1423,6 +1526,8 @@ qboolean SG_LevelSetup(void)
 	sg_host.dprint("slipgate: route contract %s\n",
 	    sg_rune->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY
 	        ? "local-only" : "complete");
+	sg_host.dprint("slipgate: objective roots red=%d blue=%d\n",
+	               sg_fields.red_flag_seed, sg_fields.blue_flag_seed);
 	sg_host.dprint("slipgate: rune ready %s, %d seeds, %d links, "
 	               "%u mechanism nodes, %u plans, gravity %.0f, all fields "
 	               "up\n", sg_rune->artifact.identity.map_name,
@@ -1447,6 +1552,42 @@ fail:
 		memset(&sg_fields, 0, sizeof(sg_fields));
 	sg_airnext = NULL;
 	return false;
+}
+
+static qboolean SG_LevelSetupWithSource(const char *source)
+{
+	qboolean ready = SG_LevelSetupAttempt();
+
+	if (!ready)
+	{
+		sg_host.dprint("slipgate: rune setup terminal map=%s source=%s "
+			"class=%s stage=%s\n", level.mapname,
+			source, sg_setup_failure_artifact ? "artifact" : "infra",
+			sg_setup_failure_stage ? sg_setup_failure_stage : "setup");
+	}
+	if (sg_host.flush)
+		sg_host.flush();
+	return ready;
+}
+
+qboolean SG_LevelSetup(void)
+{
+	return SG_LevelSetupWithSource("autoload");
+}
+
+void SG_LevelSetupAfterRuneWrite(void)
+{
+	if (sg_rune)
+	{
+		sg_host.dprint("slipgate: rune written; active rune remains in effect "
+		               "until the next map setup\n");
+		if (sg_host.flush)
+			sg_host.flush();
+		return;
+	}
+
+	sg_autoload_attempted = true;
+	(void)SG_LevelSetupWithSource("write");
 }
 
 /* ----------------------------------------------------------------- body */
@@ -3574,6 +3715,11 @@ void SG_RunFrame(void)
 	if (SG_TimerPending(sg_last_frame_time) ||
 	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
+	if (!sg_autoload_attempted)
+	{
+		sg_autoload_attempted = true;
+		(void)SG_LevelSetup();
+	}
 	SG_CompoundGuardGameFrame();
 	SG_Mark(&sg_last_frame_time);
 	if (sg_rune && !SG_RunePhysicsCompatible(sg_rune))
@@ -3687,6 +3833,7 @@ void SG_LevelChange(void)
 	/* rune and fields were TAG_LEVEL -- the engine freed them */
 	sg_rune = NULL;
 	sg_setup_failed = false;
+	sg_autoload_attempted = false;
 	sg_physics_warned = false;
 	sg_human_use = NULL;    /* TAG_LEVEL too: freed with its rune */
 	sg_human_live = NULL;

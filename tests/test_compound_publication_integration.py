@@ -21,9 +21,9 @@ def test_loader_replay_stays_inside_proof_scope_and_precedes_doors() -> None:
         "/* --------------------------------------------------------------- fields */",
     )
     decoded = loader.index("SG_RuneFileLoad(")
-    catalog = loader.index("SG_MechCatalogMatches(")
+    catalog = loader.index("SG_MechCatalogMatchStatus(")
     indexes = loader.index("Rune_BuildOutboundIndexes(")
-    mechanisms = loader.index("SG_RuneMechanismBindingsReady(")
+    mechanisms = loader.index("SG_RuneMechanismBindingsStatus(")
     scope = loader.index("SG_RuneProofScopeBegin(")
     compound = loader.index("SG_CompoundPublicationBuild(")
     ordinary = loader.index("Rune_ReplayDoorPlans(")
@@ -36,7 +36,7 @@ def test_loader_replay_stays_inside_proof_scope_and_precedes_doors() -> None:
 
     replay = between(
         arach,
-        "static const char *Rune_ReplayDoorPlans",
+        "static rune_validation_result_t Rune_ReplayDoorPlans",
         "rune_t *Rune_Load",
     )
     capture = replay.index("SG_RuneMechanismBindingCapture(")

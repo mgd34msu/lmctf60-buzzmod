@@ -15,6 +15,7 @@ import math
 import os
 import re
 import struct
+import sys
 from typing import Iterable, Mapping
 import zlib
 
@@ -2730,7 +2731,7 @@ def _rune_validate_production_plan(
             not entry.flags & RUNE_NODEF_SYNTHETIC or
             mover.kind != RUNE_NODE_TELEPORTER or
             len(owner) != 1 or owner[0].to_key != mover.key or
-            len(targets) != 1 or
+            not targets or targets[0].ordinal != 0 or
             node_by_key[targets[0].to_key].kind != RUNE_NODE_TELEPORT_DEST or
             plan.expected_members != 1 or plan.cooldown_ms != 0
         ):
@@ -3550,17 +3551,24 @@ def main(argv: list[str] | None = None) -> int:
             read_rune(args.artifact, expected_identity=expected_identity)
         )
     except RuneWireError as exc:
-        parser.error(str(exc))
+        exit_code = 3 if exc.code == contract.RLW_IO_ERROR else 1
+        print(f"runeio: {exc}", file=sys.stderr)
+        return exit_code
+    except OSError as exc:
+        print(f"runeio: infrastructure failure: {exc}", file=sys.stderr)
+        return 3
     if args.require_mechanisms and any(
         summary[key] == 0
         for key in (
             "trigger_count", "node_count", "inventory_edge_count", "plan_count"
         )
     ):
-        parser.error(
-            "artifact lacks the required nonzero "
-            "trigger/node/inventory-edge/plan counts"
+        print(
+            "runeio: artifact lacks the required nonzero "
+            "trigger/node/inventory-edge/plan counts",
+            file=sys.stderr,
         )
+        return 1
     print(json.dumps(summary, sort_keys=True))
     return 0
 

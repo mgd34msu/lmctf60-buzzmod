@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import collections
 import os
+import sys
 
 try:
     import runeio
@@ -138,7 +139,9 @@ def _objective_reachability_flaws(artifact, objective_roots):
 def lint(path, *, objective_roots=None):
     try:
         artifact = runeio.read(path)
-    except (OSError, ValueError) as exc:
+    except OSError:
+        raise
+    except ValueError as exc:
         return [f'unreadable RUNE: {exc}']
     flaws = []
     outdegree = collections.Counter(link.source for link in artifact.links)
@@ -169,13 +172,17 @@ def main(argv=None):
     parser.add_argument('paths', nargs='+')
     args = parser.parse_args(argv)
     failed = False
-    for path in args.paths:
-        flaws = lint(path, objective_roots=args.objective_roots)
-        if flaws:
-            failed = True
-            print(f'== {os.path.basename(path)}')
-            for flaw in flaws:
-                print(f'   FLAW: {flaw}')
+    try:
+        for path in args.paths:
+            flaws = lint(path, objective_roots=args.objective_roots)
+            if flaws:
+                failed = True
+                print(f'== {os.path.basename(path)}')
+                for flaw in flaws:
+                    print(f'   FLAW: {flaw}')
+    except OSError as exc:
+        print(f'runelint: infrastructure failure: {exc}', file=sys.stderr)
+        return 3
     return int(failed)
 
 

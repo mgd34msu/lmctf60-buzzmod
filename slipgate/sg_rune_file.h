@@ -18,6 +18,7 @@ typedef enum sg_rune_file_load_status_e
 {
 	SG_RUNE_FILE_LOAD_MISSING = 0,
 	SG_RUNE_FILE_LOAD_REJECTED,
+	SG_RUNE_FILE_LOAD_INFRA,
 	SG_RUNE_FILE_LOAD_READY
 } sg_rune_file_load_status_t;
 

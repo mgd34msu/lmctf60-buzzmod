@@ -889,6 +889,7 @@ RUNE_PYTHON_TESTS = tests/test_rune_contracts.py \
 	tests/test_rune_artifact.py \
 	tests/test_sidecario.py \
 	tests/test_rune_tool_readers.py \
+	tests/test_lmctf58_rune_accept.py \
 	tests/test_rune_water_overflow_failfast.py
 RUNGEN_TEST = tests/test_runegen_gate.py
 RUNGEN_PAIR_TEST = tests/test_runegen_pair.py
@@ -3219,6 +3220,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	python3 $(RELEASE_WORKFLOW_TEST)
 	python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers \
+		tests.test_lmctf58_rune_accept \
 		tests.test_rune_water_overflow_failfast
 	python3 $(RUNGEN_TEST)
 	python3 -m unittest tests.test_runegen_pair
@@ -3481,6 +3483,7 @@ rune-naming-test: $(RUNE_NAMING_TEST)
 rune-artifact-test: $(RUNE_PYTHON_TESTS)
 	python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers \
+		tests.test_lmctf58_rune_accept \
 		tests.test_rune_water_overflow_failfast
 
 push-game-integration-test: $(PUSH_GAME_INTEGRATION_TEST)

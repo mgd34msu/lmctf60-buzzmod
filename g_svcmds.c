@@ -468,10 +468,16 @@ void	ServerCommand (void)
 		/* SLIPGATE: generation remains the default; human evidence is an
 		 * explicit, source-bound update transaction. */
 		if (gi.argc() == 2)
-			Rune_Generate(level.mapname);
+		{
+			if (Rune_Generate(level.mapname))
+				SG_LevelSetupAfterRuneWrite();
+		}
 		else if (gi.argc() == 3 &&
 		         Q_stricmp(gi.argv(2), "update") == 0)
-			Rune_Update(level.mapname);
+		{
+			if (Rune_Update(level.mapname))
+				SG_LevelSetupAfterRuneWrite();
+		}
 		else
 			gi.cprintf(NULL, PRINT_HIGH, "usage: sv rune [update]\n");
 	}

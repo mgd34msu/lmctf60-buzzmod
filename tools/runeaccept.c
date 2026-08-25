@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define ACCEPT_ARTIFACT_REJECTED 1
+#define ACCEPT_CONTRACT_ERROR 2
+#define ACCEPT_INFRA_FAILURE 3
+
 static void *Accept_Allocate(int bytes)
 {
 	if (bytes <= 0)
@@ -43,6 +47,7 @@ static int Accept_ReadIdentity(const char *path, rune_identity_t *identity)
 	sg_rune_codec_diagnostic_t diagnostic;
 	FILE *file;
 	size_t read_size;
+	int read_error;
 
 	memset(identity, 0, sizeof(*identity));
 	file = fopen(path, "rb");
@@ -50,19 +55,25 @@ static int Accept_ReadIdentity(const char *path, rune_identity_t *identity)
 	{
 		fprintf(stderr, "runeaccept: cannot open %s: %s\n", path,
 			strerror(errno));
-		return 0;
+		return -1;
 	}
 	read_size = fread(encoded, 1U, sizeof(encoded), file);
-	if (read_size != sizeof(encoded) || ferror(file))
+	if (read_size != sizeof(encoded))
 	{
-		fprintf(stderr, "runeaccept: incomplete authenticated header\n");
-		(void)fclose(file);
-		return 0;
+		read_error = ferror(file);
+		fprintf(stderr, "runeaccept: %s authenticated header\n",
+			read_error ? "cannot read" : "incomplete");
+		if (fclose(file) != 0)
+		{
+			fprintf(stderr, "runeaccept: close failed: %s\n", strerror(errno));
+			return -1;
+		}
+		return read_error ? -1 : 0;
 	}
 	if (fclose(file) != 0)
 	{
 		fprintf(stderr, "runeaccept: close failed: %s\n", strerror(errno));
-		return 0;
+		return -1;
 	}
 	diagnostic = SG_RuneCodecDecodeHeader(encoded, sizeof(encoded), &header);
 	if (diagnostic != RLCODEC_OK)
@@ -132,7 +143,7 @@ static int Accept_PlanBindings(const rune_t *rune)
 		if (!references)
 		{
 			fprintf(stderr, "runeaccept: plan-reference allocation failed\n");
-			return 0;
+			return -1;
 		}
 	}
 	for (link_index = 0U; link_index < rune->artifact.num_links; link_index++)
@@ -234,7 +245,8 @@ int main(int argc, char **argv)
 	sg_rune_file_load_result_t result;
 	uint32_t trigger_count;
 	uint32_t plan_edge_count;
-	int exit_code = 1;
+	int exit_code = ACCEPT_ARTIFACT_REJECTED;
+	int accepted;
 
 	if (argc == 2 && strcmp(argv[1], "--contracts") == 0)
 	{
@@ -257,10 +269,11 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 			"usage: runeaccept [--contracts] "
 			"[--require-mechanisms] ARTIFACT\n");
-		return 2;
+		return ACCEPT_CONTRACT_ERROR;
 	}
-	if (!Accept_ReadIdentity(path, &identity))
-		return 1;
+	accepted = Accept_ReadIdentity(path, &identity);
+	if (accepted <= 0)
+		return accepted == 0 ? ACCEPT_ARTIFACT_REJECTED : ACCEPT_INFRA_FAILURE;
 	result = SG_RuneFileLoad(path, &identity, Accept_Allocate,
 		Accept_Release, &rune);
 	if (result.status != SG_RUNE_FILE_LOAD_READY || !rune)
@@ -273,10 +286,17 @@ int main(int argc, char **argv)
 		if (result.os_error)
 			fprintf(stderr, " (os_error=%d)", result.os_error);
 		fputc('\n', stderr);
+		exit_code = result.status == SG_RUNE_FILE_LOAD_REJECTED
+			? ACCEPT_ARTIFACT_REJECTED : ACCEPT_INFRA_FAILURE;
 		goto cleanup;
 	}
-	if (!Accept_PlanBindings(rune))
+	accepted = Accept_PlanBindings(rune);
+	if (accepted <= 0)
+	{
+		exit_code = accepted == 0
+			? ACCEPT_ARTIFACT_REJECTED : ACCEPT_INFRA_FAILURE;
 		goto cleanup;
+	}
 	trigger_count = Accept_TriggerCount(rune);
 	plan_edge_count = rune->artifact.num_mechanism_edges -
 		rune->artifact.num_inventory_edges;
