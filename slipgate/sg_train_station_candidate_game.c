@@ -5,8 +5,7 @@
 #include "sg_train_station_board_path.h"
 
 #include <limits.h>
-
-#define STATION_BOARD_PROOF_CAP 32U
+#include <stdlib.h>
 
 typedef struct station_dry_candidate_s
 {
@@ -123,6 +122,16 @@ static qboolean StationCandidateBefore(const station_dry_candidate_t *left,
 	          left->dry_index < right->dry_index)));
 }
 
+static int StationCandidateCompare(const void *left_raw,
+	const void *right_raw)
+{
+	const station_dry_candidate_t *left = left_raw;
+	const station_dry_candidate_t *right = right_raw;
+
+	return StationCandidateBefore(left, right) ? -1 :
+		StationCandidateBefore(right, left) ? 1 : 0;
+}
+
 static qboolean StationBoardStage(const vec3_t source, const edict_t *train,
 	vec3_t stage)
 {
@@ -184,9 +193,9 @@ static int StationDirectionGenerate(
 	int best_cost = INT_MAX;
 	vec3_t best_anchor = { 0.0f, 0.0f, 0.0f };
 	vec3_t best_board = { 0.0f, 0.0f, 0.0f };
-	station_dry_candidate_t ranked[STATION_BOARD_PROOF_CAP];
-	uint32_t ranked_count = 0U;
 	int *best_dry_by_approach;
+	station_dry_candidate_t *ranked;
+	int ranked_count = 0;
 	int dry_index;
 	int approach;
 
@@ -199,15 +208,24 @@ static int StationDirectionGenerate(
 	source_corner = &g_edicts[direction->source_station_key];
 	if (!train->inuse || !source_corner->inuse)
 		return 0;
-	if (request->num_seeds > INT_MAX / (int)sizeof(*best_dry_by_approach))
-		return 0;
+	if (request->num_seeds > INT_MAX / (int)sizeof(*best_dry_by_approach) ||
+	    request->num_seeds > INT_MAX / (int)sizeof(*ranked))
+		return -1;
 	StationPoseBegin(train, source_corner, &saved);
 	best_dry_by_approach = sg_host.level_alloc(
 		(int)(sizeof(*best_dry_by_approach) * (size_t)request->num_seeds));
 	if (!best_dry_by_approach)
 	{
 		StationPoseEnd(&saved);
-		return 0;
+		return -1;
+	}
+	ranked = sg_host.level_alloc(
+		(int)(sizeof(*ranked) * (size_t)request->num_seeds));
+	if (!ranked)
+	{
+		sg_host.level_free(best_dry_by_approach);
+		StationPoseEnd(&saved);
+		return -1;
 	}
 	for (approach = 0; approach < request->num_seeds; approach++)
 		best_dry_by_approach[approach] = -1;
@@ -226,34 +244,25 @@ static int StationDirectionGenerate(
 		      (dry->from == request->links[prior].from && dry_index < prior))))
 			best_dry_by_approach[dry->to] = dry_index;
 	}
+	/* The dry-link index is a finite, caller-owned map of every eligible
+	 * boarding approach.  Rank the complete map for a canonical traversal,
+	 * without truncating it to an arbitrary proof frontier. */
 	for (approach = 0; approach < request->num_seeds; approach++)
 	{
-		station_dry_candidate_t ranked_candidate;
-		uint32_t position;
-
-		if (best_dry_by_approach[approach] < 0 ||
-		    !StationApproachDistance2(request->seeds[approach].origin, train,
-		        &ranked_candidate.distance2))
+		station_dry_candidate_t candidate;
+		if (best_dry_by_approach[approach] < 0)
 			continue;
-		ranked_candidate.dry_index = best_dry_by_approach[approach];
-		ranked_candidate.approach = approach;
-		if (ranked_count == STATION_BOARD_PROOF_CAP &&
-		    !StationCandidateBefore(&ranked_candidate,
-		        &ranked[ranked_count - 1U]))
+		candidate.dry_index = best_dry_by_approach[approach];
+		candidate.approach = approach;
+		if (!StationApproachDistance2(request->seeds[approach].origin, train,
+		        &candidate.distance2))
 			continue;
-		position = ranked_count < STATION_BOARD_PROOF_CAP ? ranked_count++ :
-			STATION_BOARD_PROOF_CAP - 1U;
-		while (position > 0U &&
-		       StationCandidateBefore(&ranked_candidate,
-		           &ranked[position - 1U]))
-		{
-			ranked[position] = ranked[position - 1U];
-			position--;
-		}
-		ranked[position] = ranked_candidate;
+		ranked[ranked_count++] = candidate;
 	}
 	sg_host.level_free(best_dry_by_approach);
-	for (uint32_t rank = 0U; rank < ranked_count; rank++)
+	qsort(ranked, (size_t)ranked_count, sizeof(*ranked),
+		StationCandidateCompare);
+	for (int rank = 0; rank < ranked_count; rank++)
 	{
 		int board_approach = ranked[rank].approach;
 		vec3_t stage;
@@ -338,16 +347,18 @@ static int StationDirectionGenerate(
 		if (best_source >= 0)
 			break;
 	}
+	sg_host.level_free(ranked);
 	StationPoseEnd(&saved);
-	if (best_source >= 0 && best_destination >= 0 &&
-	    *request->num_bindings < request->binding_capacity)
+	if (best_source >= 0 && best_destination >= 0)
 	{
+		if (*request->num_bindings >= request->binding_capacity)
+			return -1;
 		rune_link_t *link = request->append(request->context, best_source,
 			best_destination, best_cost);
 		sg_mechanism_plan_binding_t *binding;
 
 		if (!link)
-			return 0;
+			return -1;
 		VectorCopy(best_anchor, link->anchor);
 		VectorCopy(best_board, link->mechanism_anchor);
 		link->sweep_clear_ms = (uint16_t)best_egress_ms;
@@ -398,8 +409,17 @@ int SG_TrainStationCandidateGameGenerate(
 
 		for (direction = 0U; direction < SG_TRAIN_STATION_DIRECTIONS;
 		     direction++)
-			added += StationDirectionGenerate(request,
+		{
+			int result = StationDirectionGenerate(request,
 				&candidates[candidate_index], direction);
+
+			if (result < 0)
+			{
+				sg_host.level_free(candidates);
+				return -1;
+			}
+			added += result;
+		}
 	}
 	sg_host.level_free(candidates);
 	return added;

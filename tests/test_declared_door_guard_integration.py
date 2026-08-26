@@ -183,7 +183,7 @@ def test_generator_serializes_bounded_delayed_sound_terminals() -> None:
     cooldown = between(
         source("slipgate/sg_rune.c"),
         "static int Door_CooldownGapMs",
-        "static void Door_CandidateInsert",
+        "typedef struct door_drop_candidate_s",
     )
     assert "int64_t longest_cycle" in cooldown
     assert "nominal > 12500.0" in cooldown

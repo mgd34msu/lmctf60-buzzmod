@@ -10,15 +10,15 @@
 
 #define Q2_MASK_SHOT_GEN 0x6000003
 #define RUNE_HOOK_REACH 448.0f
-#define RUNE_CHAIN_HOOK_PAIR_LIMIT 8
-#define RUNE_CHAIN_HOOK_REPLAY_LIMIT 4096
+_Static_assert(SG_CHAIN_HOOK_ROPE_COUNT == 2,
+	"serialized chain transitions contain exactly two hooks");
 
 typedef struct rune_hook_frontier_state_s
 {
 	const sg_rune_hook_frontier_input_t *input;
-	int chain_pairs;
-	int chain_replays;
-	int chain_proofs;
+	uint64_t chain_pairs;
+	uint64_t chain_replays;
+	uint64_t chain_proofs;
 } rune_hook_frontier_state_t;
 
 static void RuneHook_CountProver(rune_hook_frontier_state_t *state)
@@ -396,8 +396,10 @@ static qboolean RuneHook_ChainEligible(rune_hook_frontier_state_t *state,
 	VectorSubtract(input->seeds[to].origin, input->seeds[from].origin,
 		delta);
 	horizontal = sqrtf(delta[0] * delta[0] + delta[1] * delta[1]);
-	return horizontal > RUNE_HOOK_REACH && horizontal <= 3200.0f &&
-	       fabsf(delta[2]) <= 1024.0f;
+	return horizontal > RUNE_HOOK_REACH &&
+	       horizontal <= (float)SG_RUNE_PROOF_CHAIN_HOOK_MAX_HORIZONTAL &&
+	       fabsf(delta[2]) <=
+	           (float)SG_RUNE_PROOF_CHAIN_HOOK_MAX_VERTICAL;
 }
 
 static qboolean RuneHook_ProveChain(rune_hook_frontier_state_t *state,
@@ -434,9 +436,6 @@ static qboolean RuneHook_ProveChain(rune_hook_frontier_state_t *state,
 				for (y1 = 0;
 					y1 < sizeof(yaw_offsets) / sizeof(yaw_offsets[0]); y1++)
 				{
-					if (state->chain_replays >=
-						RUNE_CHAIN_HOOK_REPLAY_LIMIT)
-						return false;
 					VectorSet(aim[0],
 						SHORT2ANGLE((short)ANGLE2SHORT(base_pitch +
 							pitch_offsets[p0])),
@@ -490,9 +489,7 @@ static qboolean RuneHook_PublishCandidate(rune_hook_frontier_state_t *state,
 		RuneHook_SetEnvelope(state, link, control);
 		return true;
 	}
-	if (!RuneHook_ChainEligible(state, candidate->from, candidate->to) ||
-		state->chain_pairs >= RUNE_CHAIN_HOOK_PAIR_LIMIT ||
-		state->chain_replays >= RUNE_CHAIN_HOOK_REPLAY_LIMIT)
+	if (!RuneHook_ChainEligible(state, candidate->from, candidate->to))
 		return false;
 	state->chain_pairs++;
 	if (!RuneHook_ProveChain(state, candidate->from, candidate->to,
@@ -838,7 +835,7 @@ done:
 	return proved;
 }
 
-void SG_RuneGenerateHookFrontier(
+qboolean SG_RuneGenerateHookFrontier(
 	const sg_rune_hook_frontier_input_t *input)
 {
 	sg_rune_proof_hook_seed_t *seeds = NULL;
@@ -846,18 +843,22 @@ void SG_RuneGenerateHookFrontier(
 	uint16_t *component_trials = NULL, *source_trials = NULL;
 	size_t *source_cursor = NULL, *component_source_cursor = NULL;
 	sg_rune_proof_hook_frontier_t frontier;
+	sg_rune_proof_hook_frontier_cursor_t cursor;
 	rune_hook_frontier_state_t state;
 	size_t selected = 0, trial;
-	int active_components = 0, max_component_trials = 0;
-	int active_sources = 0, max_source_trials = 0;
-	int proofs = 0, index;
-	unsigned int candidate_ranks[15] = { 0 };
-	unsigned int proof_ranks[15] = { 0 };
+	uint64_t candidates_total = 0, proofs = 0;
+	uint32_t batches = 0;
+	uint64_t active_component_batches = 0, max_component_trials = 0;
+	uint64_t active_source_batches = 0, max_source_trials = 0;
+	int index;
+	uint64_t candidate_ranks[15] = { 0 };
+	uint64_t proof_ranks[15] = { 0 };
+	qboolean complete = false;
 
 	if (!RuneHook_InputValid(input))
 	{
 		sg_host.dprint("rune: hook frontier unavailable reason=input\n");
-		return;
+		return false;
 	}
 	memset(&state, 0, sizeof(state));
 	state.input = input;
@@ -897,66 +898,110 @@ void SG_RuneGenerateHookFrontier(
 	frontier.seeds = seeds;
 	frontier.seed_count = (size_t)input->seed_count;
 	frontier.component_count = (size_t)input->component_count;
-	frontier.global_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
-	frontier.component_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
-	frontier.source_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+	frontier.global_limit = SIZE_MAX;
+	frontier.component_limit = UINT16_MAX;
+	frontier.source_limit = UINT16_MAX;
 	frontier.component_trials = component_trials;
 	frontier.source_trials = source_trials;
 	frontier.source_cursor = source_cursor;
 	frontier.component_source_cursor = component_source_cursor;
 	frontier.output = candidates;
 	frontier.output_capacity = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
-	selected = SG_RuneProofSelectHookFrontier(&frontier);
-	for (index = 0; index < input->component_count; index++)
+	SG_RuneProofHookFrontierCursorReset(&cursor);
+	frontier.cursor = &cursor;
+	for (;;)
 	{
-		if (component_trials[index] > 0)
-			active_components++;
-		if ((int)component_trials[index] > max_component_trials)
-			max_component_trials = component_trials[index];
+		selected = SG_RuneProofSelectHookFrontier(&frontier);
+		if (selected > 0)
+			batches++;
+		for (index = 0; index < input->component_count; index++)
+		{
+			if (component_trials[index] > 0)
+				active_component_batches++;
+			if (component_trials[index] > max_component_trials)
+				max_component_trials = component_trials[index];
+		}
+		for (index = 0; index < input->seed_count; index++)
+		{
+			if (source_trials[index] > 0)
+				active_source_batches++;
+			if (source_trials[index] > max_source_trials)
+				max_source_trials = source_trials[index];
+		}
+		for (trial = 0; trial < selected; trial++)
+		{
+			if (candidates[trial].rank < 15)
+				candidate_ranks[candidates[trial].rank]++;
+			if (RuneHook_PublishCandidate(&state, &candidates[trial]))
+			{
+				if (candidates[trial].rank < 15)
+					proof_ranks[candidates[trial].rank]++;
+				proofs++;
+			}
+			if (*input->link_overflow)
+				goto done;
+		}
+		candidates_total += selected;
+		if (cursor.exhausted)
+		{
+			complete = true;
+			break;
+		}
+		if (selected == 0)
+			goto done;
 	}
-	for (index = 0; index < input->seed_count; index++)
-	{
-		if (source_trials[index] > 0)
-			active_sources++;
-		if ((int)source_trials[index] > max_source_trials)
-			max_source_trials = source_trials[index];
-	}
-	for (trial = 0; trial < selected; trial++)
-	{
-		if (candidates[trial].rank < 15)
-			candidate_ranks[candidates[trial].rank]++;
-		if (!RuneHook_PublishCandidate(&state, &candidates[trial]))
-			continue;
-		if (candidates[trial].rank < 15)
-			proof_ranks[candidates[trial].rank]++;
-		proofs++;
-	}
-	sg_host.dprint("rune: hook frontier components=%d candidates=%u "
-		"prover_calls=%u links=%d global_limit=%u "
-		"schedule=rank-component-source-round-robin\n",
-		input->component_count, (unsigned int)selected,
-		(unsigned int)selected, proofs,
-		(unsigned int)SG_RUNE_PROOF_HOOK_FRONTIER_MAX);
-	sg_host.dprint("rune: chain hook pairs=%d replays=%d links=%d "
-		"pair_limit=%d replay_limit=%d\n",
-		state.chain_pairs, state.chain_replays, state.chain_proofs,
-		RUNE_CHAIN_HOOK_PAIR_LIMIT, RUNE_CHAIN_HOOK_REPLAY_LIMIT);
-	sg_host.dprint("rune: hook frontier distribution active_components=%d "
-		"max_component_trials=%d active_sources=%d "
-		"max_source_trials=%d "
-		"candidate_ranks=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u "
-		"proof_ranks=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
-		active_components, max_component_trials, active_sources,
-		max_source_trials,
-		candidate_ranks[0], candidate_ranks[1], candidate_ranks[2],
-		candidate_ranks[3], candidate_ranks[4], candidate_ranks[5],
-		candidate_ranks[6], candidate_ranks[7], candidate_ranks[8],
-		candidate_ranks[9], candidate_ranks[10], candidate_ranks[11],
-		candidate_ranks[12], candidate_ranks[13], candidate_ranks[14],
-		proof_ranks[0], proof_ranks[1], proof_ranks[2], proof_ranks[3],
-		proof_ranks[4], proof_ranks[5], proof_ranks[6], proof_ranks[7],
-		proof_ranks[8], proof_ranks[9], proof_ranks[10], proof_ranks[11],
-		proof_ranks[12], proof_ranks[13], proof_ranks[14]);
+	sg_host.dprint("rune: hook frontier components=%d candidates=%llu "
+		"proved_links=%llu batches=%u schedule=rank-component-source-round-robin "
+		"exhausted=1\n",
+		input->component_count, (unsigned long long)candidates_total,
+		(unsigned long long)proofs, batches);
+	sg_host.dprint("rune: chain hook pairs=%llu replays=%llu links=%llu "
+		"ropes=%u\n",
+		(unsigned long long)state.chain_pairs,
+		(unsigned long long)state.chain_replays,
+		(unsigned long long)state.chain_proofs,
+		(unsigned int)SG_CHAIN_HOOK_ROPE_COUNT);
+	sg_host.dprint("rune: hook frontier distribution active_component_batches=%llu "
+		"max_component_trials=%llu active_source_batches=%llu "
+		"max_source_trials=%llu "
+		"candidate_ranks=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+		"%llu,%llu,%llu,%llu,%llu,%llu,%llu "
+		"proof_ranks=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+		"%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+		(unsigned long long)active_component_batches,
+		(unsigned long long)max_component_trials,
+		(unsigned long long)active_source_batches,
+		(unsigned long long)max_source_trials,
+		(unsigned long long)candidate_ranks[0],
+		(unsigned long long)candidate_ranks[1],
+		(unsigned long long)candidate_ranks[2],
+		(unsigned long long)candidate_ranks[3],
+		(unsigned long long)candidate_ranks[4],
+		(unsigned long long)candidate_ranks[5],
+		(unsigned long long)candidate_ranks[6],
+		(unsigned long long)candidate_ranks[7],
+		(unsigned long long)candidate_ranks[8],
+		(unsigned long long)candidate_ranks[9],
+		(unsigned long long)candidate_ranks[10],
+		(unsigned long long)candidate_ranks[11],
+		(unsigned long long)candidate_ranks[12],
+		(unsigned long long)candidate_ranks[13],
+		(unsigned long long)candidate_ranks[14],
+		(unsigned long long)proof_ranks[0],
+		(unsigned long long)proof_ranks[1],
+		(unsigned long long)proof_ranks[2],
+		(unsigned long long)proof_ranks[3],
+		(unsigned long long)proof_ranks[4],
+		(unsigned long long)proof_ranks[5],
+		(unsigned long long)proof_ranks[6],
+		(unsigned long long)proof_ranks[7],
+		(unsigned long long)proof_ranks[8],
+		(unsigned long long)proof_ranks[9],
+		(unsigned long long)proof_ranks[10],
+		(unsigned long long)proof_ranks[11],
+		(unsigned long long)proof_ranks[12],
+		(unsigned long long)proof_ranks[13],
+		(unsigned long long)proof_ranks[14]);
 
 done:
 	if (seeds)
@@ -971,4 +1016,5 @@ done:
 		sg_host.level_free(source_cursor);
 	if (component_source_cursor)
 		sg_host.level_free(component_source_cursor);
+	return complete;
 }

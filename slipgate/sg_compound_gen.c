@@ -1,9 +1,10 @@
-/* sg_compound_gen.c -- allocation-free topology selection for D_SWIM. */
+/* sg_compound_gen.c -- exhaustive topology selection for D_SWIM. */
 #include "../q_shared.h"
 #include "sg_compound_gen.h"
 
 #include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct sg_compound_gen_proven_s
@@ -60,25 +61,17 @@ static int CompoundGenCandidateGroupCompare(
 	return 0;
 }
 
+static int CompoundGenCandidateCompareQsort(const void *first,
+	const void *second)
+{
+	return CompoundGenCandidateGroupCompare(first, second);
+}
+
 static void CompoundGenSortCandidates(sg_compound_gen_candidate_t *items,
 	size_t count)
 {
-	size_t index;
-
-	for (index = 1; index < count; index++)
-	{
-		sg_compound_gen_candidate_t value = items[index];
-		size_t at = index;
-
-		while (at > 0 &&
-		       CompoundGenCandidateGroupCompare(&value,
-		                                        &items[at - 1]) < 0)
-		{
-			items[at] = items[at - 1];
-			at--;
-		}
-		items[at] = value;
-	}
+	qsort(items, count, sizeof(*items),
+	      CompoundGenCandidateCompareQsort);
 }
 
 static int CompoundGenSameAnchor(const float first[3],
@@ -210,24 +203,17 @@ static int CompoundGenProvenCompare(const sg_compound_gen_proven_t *first,
 	return 0;
 }
 
+static int CompoundGenProvenCompareQsort(const void *first,
+	const void *second)
+{
+	return CompoundGenProvenCompare(first, second);
+}
+
 static void CompoundGenSortProven(sg_compound_gen_proven_t *items,
 	size_t count)
 {
-	size_t index;
-
-	for (index = 1; index < count; index++)
-	{
-		sg_compound_gen_proven_t value = items[index];
-		size_t at = index;
-
-		while (at > 0 && CompoundGenProvenCompare(&value,
-		                                                &items[at - 1]) < 0)
-		{
-			items[at] = items[at - 1];
-			at--;
-		}
-		items[at] = value;
-	}
+	qsort(items, count, sizeof(*items),
+	      CompoundGenProvenCompareQsort);
 }
 
 static sg_compound_gen_result_t CompoundGenResult(
@@ -243,8 +229,8 @@ static sg_compound_gen_result_t CompoundGenResult(
 sg_compound_gen_result_t SG_CompoundGenPlan(
 	const sg_compound_gen_request_t *request)
 {
-	sg_compound_gen_candidate_t candidates[SG_COMPOUND_GEN_MAX_CANDIDATES];
-	sg_compound_gen_proven_t proven[SG_COMPOUND_GEN_MAX_SELECTED];
+	sg_compound_gen_candidate_t *candidates = NULL;
+	sg_compound_gen_proven_t *proven = NULL;
 	sg_compound_gen_result_t result = CompoundGenResult(
 		SG_COMPOUND_GEN_INVALID);
 	size_t proven_count = 0;
@@ -260,11 +246,20 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 	    !request->prove ||
 	    (request->output_capacity > 0 && !request->output))
 		return result;
-	if (request->candidate_count > SG_COMPOUND_GEN_MAX_CANDIDATES)
-		return CompoundGenResult(SG_COMPOUND_GEN_BUDGET);
 	if (request->seed_count > RUNE_MAX_SEEDS ||
 	    request->output_capacity > RUNE_MAX_LINKS)
 		return result;
+	if (request->candidate_count > (size_t)INT_MAX / sizeof(*candidates) ||
+	    request->candidate_count > (size_t)INT_MAX /
+	        (4U * sizeof(*proven)))
+		return CompoundGenResult(SG_COMPOUND_GEN_CAPACITY);
+	candidates = malloc(request->candidate_count * sizeof(*candidates));
+	proven = malloc(request->candidate_count * 4U * sizeof(*proven));
+	if (!candidates || !proven)
+	{
+		result.status = SG_COMPOUND_GEN_CAPACITY;
+		goto done;
+	}
 	{
 		size_t seed_index;
 
@@ -277,7 +272,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 			     ~SG_COMPOUND_GEN_OBJECTIVE_MASK) != 0 ||
 			    seed->water > 1 ||
 			    seed->has_incoming > 1 || seed->has_outgoing > 1)
-				return result;
+				goto done;
 		}
 	}
 
@@ -285,10 +280,9 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 	       request->candidate_count * sizeof(candidates[0]));
 	CompoundGenSortCandidates(candidates, request->candidate_count);
 
-	/* Validate the complete bounded input before crossing the injected proof
-	 * boundary.  A malformed later group therefore cannot leave externally
-	 * visible proof work behind.  The candidate cap also bounds group count;
-	 * no smaller map-shape-dependent group cap is imposed. */
+	/* Validate the complete input before crossing the injected proof boundary.
+	 * A malformed later group therefore cannot leave externally visible proof
+	 * work behind. */
 	for (group_start = 0; group_start < request->candidate_count; )
 	{
 		const sg_compound_gen_candidate_t *first = &candidates[group_start];
@@ -304,7 +298,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 		    first->trigger_key <= 0 || first->mover_key <= 0 ||
 		    first->trigger_key == first->mover_key ||
 		    !CompoundGenAnchorValid(first->mechanism_anchor))
-			return result;
+			goto done;
 		for (index = group_start; index < group_end; index++)
 		{
 			const sg_compound_gen_candidate_t *candidate = &candidates[index];
@@ -315,18 +309,20 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 			    !CompoundGenAnchorValid(candidate->mechanism_anchor) ||
 			    !CompoundGenSameAnchor(first->mechanism_anchor,
 			                           candidate->mechanism_anchor))
-				return result;
+				goto done;
 			if (index > group_start &&
-			    candidates[index - 1].destination ==
-			        candidate->destination)
-				return CompoundGenResult(SG_COMPOUND_GEN_DUPLICATE);
+			    candidates[index - 1].destination == candidate->destination)
+			{
+				result.status = SG_COMPOUND_GEN_DUPLICATE;
+				goto done;
+			}
 			if ((request->seeds[candidate->destination].objective_mask &
 			     ~SG_COMPOUND_GEN_OBJECTIVE_MASK) != 0)
-				return result;
+				goto done;
 		}
 		if ((request->seeds[first->source].objective_mask &
 		     ~SG_COMPOUND_GEN_OBJECTIVE_MASK) != 0)
-			return result;
+			goto done;
 		group_start = group_end;
 	}
 
@@ -383,7 +379,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 			if (!CompoundGenProofValid(&proof))
 			{
 				result.status = SG_COMPOUND_GEN_BAD_PROOF;
-				return result;
+				goto done;
 			}
 			CompoundGenBuildProven(&candidate_proven, candidate, &proof);
 			if (CompoundGenProvenLocallyCheaper(&candidate_proven,
@@ -430,8 +426,6 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 						break;
 				if (prior < slot)
 					continue;
-				if (proven_count >= SG_COMPOUND_GEN_MAX_SELECTED)
-					return CompoundGenResult(SG_COMPOUND_GEN_BUDGET);
 				proven[proven_count++] = slots[slot];
 			}
 		}
@@ -442,12 +436,12 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 	if (!saw_destination)
 	{
 		result.status = SG_COMPOUND_GEN_NO_IMPROVEMENT;
-		return result;
+		goto done;
 	}
 	if (proven_count == 0)
 	{
 		result.status = SG_COMPOUND_GEN_NO_PROOF;
-		return result;
+		goto done;
 	}
 	CompoundGenSortProven(proven, proven_count);
 	{
@@ -462,7 +456,7 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 		if (unique_count > request->output_capacity)
 		{
 			result.status = SG_COMPOUND_GEN_CAPACITY;
-			return result;
+			goto done;
 		}
 		for (index = 0; index < proven_count; index++)
 		{
@@ -475,6 +469,9 @@ sg_compound_gen_result_t SG_CompoundGenPlan(
 		}
 	}
 	result.status = SG_COMPOUND_GEN_OK;
+done:
+	free(proven);
+	free(candidates);
 	return result;
 }
 
@@ -486,7 +483,6 @@ const char *SG_CompoundGenStatusName(sg_compound_gen_status_t status)
 	case SG_COMPOUND_GEN_DISABLED: return "disabled";
 	case SG_COMPOUND_GEN_INVALID: return "invalid";
 	case SG_COMPOUND_GEN_DUPLICATE: return "duplicate";
-	case SG_COMPOUND_GEN_BUDGET: return "budget";
 	case SG_COMPOUND_GEN_NO_IMPROVEMENT: return "no-improvement";
 	case SG_COMPOUND_GEN_NO_PROOF: return "no-proof";
 	case SG_COMPOUND_GEN_BAD_PROOF: return "bad-proof";

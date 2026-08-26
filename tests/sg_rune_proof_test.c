@@ -80,6 +80,102 @@ int main(void)
 	CHECK(bounded_count == 5);
 	CHECK(memcmp(first, bounded, sizeof(bounded)) == 0);
 	{
+		sg_rune_proof_hook_seed_t resume_seeds[4];
+		sg_rune_proof_hook_candidate_t expected[12], batches[12], batch[3];
+		uint16_t resume_component_trials[1], resume_source_trials[4];
+		size_t resume_source_cursor[4], resume_component_cursor[1];
+		sg_rune_proof_hook_frontier_cursor_t cursor;
+		sg_rune_proof_hook_frontier_t resume;
+		size_t expected_count, batch_count = 0, count;
+
+		memset(resume_seeds, 0, sizeof(resume_seeds));
+		for (i = 0; i < 4; i++)
+		{
+			resume_seeds[i].origin_q8[0] = i * 64 * 8;
+			resume_seeds[i].component = 0;
+			resume_seeds[i].objective_mask = 3;
+			resume_seeds[i].stable = 1;
+		}
+		memset(&resume, 0, sizeof(resume));
+		resume.seeds = resume_seeds;
+		resume.seed_count = 4;
+		resume.component_count = 1;
+		resume.global_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		resume.component_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		resume.source_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		resume.component_trials = resume_component_trials;
+		resume.source_trials = resume_source_trials;
+		resume.source_cursor = resume_source_cursor;
+		resume.component_source_cursor = resume_component_cursor;
+		resume.output = expected;
+		resume.output_capacity = 12;
+		expected_count = SG_RuneProofSelectHookFrontier(&resume);
+		CHECK(expected_count > 3);
+		SG_RuneProofHookFrontierCursorReset(&cursor);
+		resume.cursor = &cursor;
+		resume.output = batch;
+		resume.output_capacity = 3;
+		while ((count = SG_RuneProofSelectHookFrontier(&resume)) != 0)
+		{
+			CHECK(batch_count + count <= sizeof(batches) / sizeof(batches[0]));
+			memcpy(&batches[batch_count], batch, count * sizeof(*batch));
+			batch_count += count;
+		}
+		CHECK(cursor.exhausted);
+		CHECK(batch_count == expected_count);
+		CHECK(memcmp(expected, batches,
+		    expected_count * sizeof(*expected)) == 0);
+	}
+	{
+		sg_rune_proof_hook_seed_t many_seeds[92];
+		sg_rune_proof_hook_candidate_t first_batch[
+			SG_RUNE_PROOF_HOOK_FRONTIER_MAX];
+		sg_rune_proof_hook_candidate_t final_batch[180];
+		uint16_t many_component_trials[1], many_source_trials[92];
+		size_t many_source_cursor[92], many_component_cursor[1];
+		sg_rune_proof_hook_frontier_cursor_t cursor;
+		sg_rune_proof_hook_frontier_t many;
+		size_t final_count;
+
+		memset(many_seeds, 0, sizeof(many_seeds));
+		for (i = 0; i < 92; i++)
+		{
+			many_seeds[i].component = 0;
+			many_seeds[i].objective_mask = 3;
+			many_seeds[i].stable = 1;
+		}
+		memset(&many, 0, sizeof(many));
+		many.seeds = many_seeds;
+		many.seed_count = 92;
+		many.component_count = 1;
+		many.global_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		many.component_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		many.source_limit = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		many.component_trials = many_component_trials;
+		many.source_trials = many_source_trials;
+		many.source_cursor = many_source_cursor;
+		many.component_source_cursor = many_component_cursor;
+		SG_RuneProofHookFrontierCursorReset(&cursor);
+		many.cursor = &cursor;
+		many.output = first_batch;
+		many.output_capacity = SG_RUNE_PROOF_HOOK_FRONTIER_MAX;
+		CHECK(SG_RuneProofSelectHookFrontier(&many) ==
+		    SG_RUNE_PROOF_HOOK_FRONTIER_MAX);
+		CHECK(!cursor.exhausted);
+		many.output = final_batch;
+		many.output_capacity = 180;
+		final_count = SG_RuneProofSelectHookFrontier(&many);
+		CHECK(final_count == 180);
+		CHECK(!cursor.exhausted);
+		CHECK(SG_RuneProofSelectHookFrontier(&many) == 0);
+		CHECK(cursor.exhausted);
+		for (size_t tail = 0; tail < final_count; tail++)
+			for (size_t head = 0;
+			     head < SG_RUNE_PROOF_HOOK_FRONTIER_MAX; head++)
+				CHECK(final_batch[tail].from != first_batch[head].from ||
+				    final_batch[tail].to != first_batch[head].to);
+	}
+	{
 		sg_rune_proof_hook_seed_t fair_seeds[6];
 		sg_rune_proof_hook_candidate_t fair_output[4];
 		uint16_t fair_component_trials[2];
@@ -224,7 +320,10 @@ int main(void)
 		low_gravity_seeds[0].component = 0;
 		low_gravity_seeds[0].objective_mask = 1;
 		low_gravity_seeds[0].stable = 1;
-		low_gravity_seeds[1].origin_q8[0] = 1200 * 8;
+		/* This pair is outside the old one-hook nomination window but inside
+		 * the exact two-rope low-gravity envelope. */
+		low_gravity_seeds[1].origin_q8[0] = 2400 * 8;
+		low_gravity_seeds[1].origin_q8[2] = 768 * 8;
 		low_gravity_seeds[1].component = 1;
 		low_gravity_seeds[1].objective_mask = 2;
 		low_gravity_seeds[1].stable = 1;
@@ -244,6 +343,13 @@ int main(void)
 		CHECK(SG_RuneProofSelectHookFrontier(&low_gravity) == 0);
 		CHECK(SG_RuneProofScopeBegin(100.0f));
 		CHECK(SG_RuneProofSelectHookFrontier(&low_gravity) == 1);
+		low_gravity_seeds[1].origin_q8[0] =
+		    (SG_RUNE_PROOF_CHAIN_HOOK_MAX_HORIZONTAL + 1) * 8;
+		CHECK(SG_RuneProofSelectHookFrontier(&low_gravity) == 0);
+		low_gravity_seeds[1].origin_q8[0] = 2400 * 8;
+		low_gravity_seeds[1].origin_q8[2] =
+		    (SG_RUNE_PROOF_CHAIN_HOOK_MAX_VERTICAL + 1) * 8;
+		CHECK(SG_RuneProofSelectHookFrontier(&low_gravity) == 0);
 		SG_RuneProofScopeEnd();
 	}
 	CHECK(SG_RuneProofScopeBegin(800.0f));

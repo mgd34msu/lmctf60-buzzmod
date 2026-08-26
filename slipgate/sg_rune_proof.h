@@ -33,6 +33,19 @@ typedef struct sg_rune_proof_hook_candidate_s
 	uint8_t rank;
 } sg_rune_proof_hook_candidate_t;
 
+/* Exact two-rope low-gravity traversal envelope.  Frontier nomination and
+ * the chain prover share this contract so every provable pair is scheduled. */
+#define SG_RUNE_PROOF_CHAIN_HOOK_MAX_HORIZONTAL 3200
+#define SG_RUNE_PROOF_CHAIN_HOOK_MAX_VERTICAL 1024
+
+typedef struct sg_rune_proof_hook_frontier_cursor_s
+{
+	size_t rank;
+	size_t next_component;
+	int initialized;
+	int exhausted;
+} sg_rune_proof_hook_frontier_cursor_t;
+
 typedef struct sg_rune_proof_hook_frontier_s
 {
 	const sg_rune_proof_hook_seed_t *seeds;
@@ -47,13 +60,17 @@ typedef struct sg_rune_proof_hook_frontier_s
 	size_t *component_source_cursor;
 	sg_rune_proof_hook_candidate_t *output;
 	size_t output_capacity;
+	sg_rune_proof_hook_frontier_cursor_t *cursor;
 } sg_rune_proof_hook_frontier_t;
 
-/* Select a fixed, canonical set of exact-oracle trials from an ordinary
- * graph topology. The selector never claims a traversal; ProveHook remains
- * the sole authority that can turn one selected pair into RL_HOOK. */
+/* With cursor == NULL, select one fixed canonical frontier. With a cursor,
+ * select one bounded canonical batch and resume until exhausted. The selector
+ * never claims a traversal; ProveHook remains the sole authority that can
+ * turn one selected pair into RL_HOOK. */
 size_t SG_RuneProofSelectHookFrontier(
 	const sg_rune_proof_hook_frontier_t *frontier);
+void SG_RuneProofHookFrontierCursorReset(
+	sg_rune_proof_hook_frontier_cursor_t *cursor);
 
 #define SG_RUNE_PROOF_OBJECTIVE_RUN_MIN_HORIZONTAL_Q8 (192 * 8)
 #define SG_RUNE_PROOF_OBJECTIVE_RUN_MAX_HORIZONTAL_Q8 (768 * 8)

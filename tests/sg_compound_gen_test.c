@@ -64,6 +64,26 @@ static rune_reject_reason_t ProveImpossible(void *opaque,
 	return RLR_OK;
 }
 
+static rune_reject_reason_t ProveFixed(void *opaque,
+	const sg_compound_gen_candidate_t *candidate,
+	sg_compound_gen_proof_t *proof)
+{
+	proof_context_t *context = (proof_context_t *)opaque;
+
+	(void)candidate;
+	context->calls++;
+	memset(proof, 0, sizeof(*proof));
+	proof->touch_ms = 25;
+	proof->touch_frame_end_ms = 100;
+	proof->mover_top_ms = 500;
+	proof->suffix_start_ms = 400;
+	proof->total_cost_ms = 600;
+	proof->arrival_ms = 100;
+	proof->sweep_clear_ms = 100;
+	proof->exit_speed = 10;
+	return RLR_OK;
+}
+
 static rune_reject_reason_t ProveOverflow(void *opaque,
 	const sg_compound_gen_candidate_t *candidate,
 	sg_compound_gen_proof_t *proof)
@@ -338,23 +358,30 @@ static void TestDeterminismAndCompetingMechanisms(void)
 	CHECK(first_output[0].mechanism_anchor[0] == 10.0f);
 }
 
-static void TestCandidateBudget(void)
+static void TestCandidatesBeyondLegacyCapAreExhausted(void)
 {
-	sg_compound_gen_seed_t seed;
-	sg_compound_gen_candidate_t candidate;
+	sg_compound_gen_seed_t seeds[258];
+	sg_compound_gen_candidate_t candidates[257];
 	proof_context_t context;
+	rune_link_t output[4];
 	sg_compound_gen_request_t request;
 	sg_compound_gen_result_t result;
+	size_t index;
 
-	Seed(&seed, 0, 0, 1, 1, 1);
-	Candidate(&candidate, 0, 0, 1, 2, 0, 10.0f);
+	Seed(&seeds[0], 0, 0, 1, 1, 1);
+	for (index = 1U; index < 258U; index++)
+	{
+		Seed(&seeds[index], 0, 0, 1, 1, 1);
+		Candidate(&candidates[index - 1U], 0, (int)index, 1, 2,
+		          (uint32_t)index, 10.0f);
+	}
 	memset(&context, 0, sizeof(context));
-	request = Request(&seed, 1, &candidate,
-	                  SG_COMPOUND_GEN_MAX_CANDIDATES + 1U,
-	                  NULL, 0, &context);
+	request = Request(seeds, 258U, candidates, 257U, output, 4U, &context);
+	request.prove = ProveFixed;
 	result = SG_CompoundGenPlan(&request);
-	CHECK(result.status == SG_COMPOUND_GEN_BUDGET);
-	CHECK(context.calls == 0);
+	CHECK(result.status == SG_COMPOUND_GEN_OK);
+	CHECK(result.proof_calls == 257U && context.calls == 257);
+	CHECK(result.emitted == 1U && output[0].to == 1);
 }
 
 int main(void)
@@ -364,7 +391,7 @@ int main(void)
 	TestLocalShortcutAndNoProof();
 	TestMalformedAndAtomicFailures();
 	TestDeterminismAndCompetingMechanisms();
-	TestCandidateBudget();
+	TestCandidatesBeyondLegacyCapAreExhausted();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_gen_test: %d failure(s)\n", failures);

@@ -69,14 +69,14 @@ static void TestRanksNativeBoundariesBeforeOrdinaryBoundaries(void)
 	CHECK(report.ranked == 4U);
 }
 
-static void TestRanksComponentGainAndCapsOutput(void)
+static void TestRanksComponentGainAndExhaustsOutput(void)
 {
 	rune_seed_t seeds[66];
 	rune_link_t links[33];
 	int components[66];
 	uint8_t red[66], blue[66];
 	uint32_t component_sizes[66];
-	sg_rune_reverse_boundary_candidate_t ranked[SG_RUNE_REVERSE_BOUNDARY_CAP];
+	sg_rune_reverse_boundary_candidate_t ranked[33];
 	sg_rune_reverse_boundary_report_t report;
 	uint32_t count;
 
@@ -96,11 +96,12 @@ static void TestRanksComponentGainAndCapsOutput(void)
 	count = SG_RuneReverseBoundaryRank(seeds, 66U, links, 33U,
 		components, 66U, component_sizes, 66U, red, blue,
 		768.0f * 768.0f, ranked,
-		SG_RUNE_REVERSE_BOUNDARY_CAP, &report);
-	CHECK(count == SG_RUNE_REVERSE_BOUNDARY_CAP);
+		33U, &report);
+	CHECK(count == 33U);
 	CHECK(ranked[0].link_index == 0U);
-	CHECK(report.unique_ranked_pairs == SG_RUNE_REVERSE_BOUNDARY_CAP);
-	CHECK(report.ranked == SG_RUNE_REVERSE_BOUNDARY_CAP);
+	CHECK(ranked[32].link_index == 31U);
+	CHECK(report.unique_ranked_pairs == 33U);
+	CHECK(report.ranked == 33U);
 }
 
 static void TestRanksOneSidedToNeitherWithoutSharedPartition(void)
@@ -213,7 +214,7 @@ static void TestReportsProvenanceDistanceAndEndpointRejections(void)
 int main(void)
 {
 	TestRanksNativeBoundariesBeforeOrdinaryBoundaries();
-	TestRanksComponentGainAndCapsOutput();
+	TestRanksComponentGainAndExhaustsOutput();
 	TestRanksOneSidedToNeitherWithoutSharedPartition();
 	TestRanksExactProvenRunWithoutNativeBoundary();
 	TestRanksAsymmetricRocketJumpBeforeShorterRun();

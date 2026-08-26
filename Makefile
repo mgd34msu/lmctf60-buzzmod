@@ -1256,6 +1256,7 @@ OBJS := \
 	slipgate/sg_compound_hook_game_events.o \
 	slipgate/sg_rune_door_scope.o \
 	slipgate/sg_rune_door_scope_game.o \
+	slipgate/sg_rune_door_frontier.o \
 	sg_drop_live.o \
 	sg_swim_live.o \
 	sg_hook_live.o \
@@ -4378,6 +4379,18 @@ compound-hook-oracle-test: $(COMPOUND_HOOK_ORACLE_TEST_BIN)
 rune-door-scope-test: $(RUNE_DOOR_SCOPE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(RUNE_DOOR_SCOPE_TEST_BIN)
+
+rune-door-frontier-test: tests/sg_rune_door_frontier_test.c \
+		tests/test_rune_door_frontier_integration.py \
+		slipgate/sg_rune_door_frontier.c slipgate/sg_rune_door_frontier.h
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -o /tmp/sg_rune_door_frontier_test.make \
+		tests/sg_rune_door_frontier_test.c \
+		slipgate/sg_rune_door_frontier.c -lm
+	$(E) [TEST] $@
+	$(Q)/tmp/sg_rune_door_frontier_test.make
+	$(Q)python3 -B tests/test_rune_door_frontier_integration.py
 
 entfile-test: $(ENTFILE_TEST_BIN)
 	$(E) [TEST] $<

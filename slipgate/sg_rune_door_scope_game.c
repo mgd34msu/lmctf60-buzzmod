@@ -4,7 +4,22 @@
 #include "sg_hooks.h"
 #include "sg_rune_door_scope_game.h"
 
+#include <limits.h>
 #include <string.h>
+
+static void *DoorScopeAllocate(void *context, size_t size)
+{
+	(void)context;
+	if (size > (size_t)INT_MAX)
+		return NULL;
+	return sg_host.level_alloc((int)size);
+}
+
+static void DoorScopeDeallocate(void *context, void *block)
+{
+	(void)context;
+	sg_host.level_free(block);
+}
 
 static int DoorScopeTargetIdentity(void *context, void *opaque, int key)
 {
@@ -47,6 +62,8 @@ static void DoorScopeLinkEntity(void *context, void *opaque)
 }
 
 static const sg_rune_door_scope_ops_t door_scope_ops = {
+	DoorScopeAllocate,
+	DoorScopeDeallocate,
 	DoorScopeTargetIdentity,
 	DoorScopeGetSolid,
 	DoorScopeGetLinkcount,
@@ -58,9 +75,10 @@ static const sg_rune_door_scope_ops_t door_scope_ops = {
 sg_rune_door_scope_status_t SG_RuneDoorScopeGameOpen(
 	sg_rune_door_scope_t *scope)
 {
-	sg_rune_door_scope_target_t targets[SG_RUNE_DOOR_SCOPE_MAX];
+	sg_rune_door_scope_target_t *targets = NULL;
 	size_t count = 0U;
 	int index;
+	sg_rune_door_scope_status_t status;
 
 	if (!scope || !g_edicts || globals.num_edicts < 0)
 		return SG_RUNE_DOOR_SCOPE_INVALID_ARGUMENT;
@@ -70,14 +88,33 @@ sg_rune_door_scope_status_t SG_RuneDoorScopeGameOpen(
 		if (!entity->inuse || !entity->classname ||
 		    strncmp(entity->classname, "func_door", 9) != 0)
 			continue;
-		if (count >= SG_RUNE_DOOR_SCOPE_MAX)
-			return SG_RUNE_DOOR_SCOPE_CAPACITY;
-		targets[count].entity = entity;
-		targets[count].key = index;
 		count++;
 	}
-	return SG_RuneDoorScopeOpen(scope, targets, count, (int)SOLID_NOT,
+	if (count > (size_t)INT_MAX / sizeof(*targets))
+		return SG_RUNE_DOOR_SCOPE_CAPACITY;
+	if (count)
+	{
+		targets = sg_host.level_alloc((int)(count * sizeof(*targets)));
+		if (!targets)
+			return SG_RUNE_DOOR_SCOPE_CAPACITY;
+		count = 0U;
+		for (index = 0; index < globals.num_edicts; index++)
+		{
+			edict_t *entity = &g_edicts[index];
+
+			if (!entity->inuse || !entity->classname ||
+			    strncmp(entity->classname, "func_door", 9) != 0)
+				continue;
+			targets[count].entity = entity;
+			targets[count].key = index;
+			count++;
+		}
+	}
+	status = SG_RuneDoorScopeOpen(scope, targets, count, (int)SOLID_NOT,
 		&door_scope_ops, NULL);
+	if (targets)
+		sg_host.level_free(targets);
+	return status;
 }
 
 sg_rune_door_scope_status_t SG_RuneDoorScopeGameRestore(

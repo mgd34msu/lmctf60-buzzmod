@@ -395,38 +395,35 @@ static void TestIterativeRecompute(void)
 
 static void TestRejectionLedger(void)
 {
-	int from[8];
-	int to[8];
 	sg_rune_late_rejections_t rejections;
 
-	CHECK(!SG_RuneLateRejectionsInit(&rejections, from, to, 7, 3));
-	CHECK(SG_RuneLateRejectionsInit(&rejections, from, to, 8, 3));
+	CHECK(!SG_RuneLateRejectionsInit(NULL));
+	CHECK(SG_RuneLateRejectionsInit(&rejections));
 	CHECK(!SG_RuneLateRejectionsContains(&rejections, 1, 2));
 	CHECK(SG_RuneLateRejectionsRecord(&rejections, 1, 2));
 	CHECK(SG_RuneLateRejectionsContains(&rejections, 1, 2));
 	CHECK(SG_RuneLateRejectionsRecord(&rejections, 1, 2));
 	CHECK(rejections.count == 1U);
-	CHECK(SG_RuneLateRejectionsRecord(&rejections, 2, 3));
-	CHECK(SG_RuneLateRejectionsRecord(&rejections, 3, 4));
-	CHECK(!SG_RuneLateRejectionsRecord(&rejections, 4, 5));
-	CHECK(rejections.count == 3U);
+	for (int index = 2; index < 5002; index++)
+		CHECK(SG_RuneLateRejectionsRecord(&rejections, index, index + 1));
+	CHECK(rejections.count == 5001U);
+	CHECK(rejections.table_size > 1024U);
+	CHECK(SG_RuneLateRejectionsContains(&rejections, 5001, 5002));
 	CHECK(strcmp(SG_RuneLateCompletionName(
 	    SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED), "open-exhausted") == 0);
-	CHECK(strcmp(SG_RuneLateCompletionName(
-	    SG_RUNE_LATE_COMPLETION_OPEN_BUDGET), "open-budget") == 0);
+	SG_RuneLateRejectionsFree(&rejections);
+	CHECK(rejections.keys == NULL && rejections.count == 0U);
 }
 
-static void TestProductionBudgetRetainsAcceptedMerges(void)
+static void TestProductionExhaustionRetainsAcceptedMerges(void)
 {
 	int link_mark = 10;
 	int link_count = 12;
 
-	CHECK(SG_RUNE_LATE_REJECTION_LIMIT == 1024U);
-	CHECK(SG_RUNE_LATE_REJECTION_TABLE_SIZE == 2048U);
 	CHECK(SG_RuneLateCompletionKeepsMerges(
-	    SG_RUNE_LATE_COMPLETION_OPEN_BUDGET));
+	    SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED));
 	if (!SG_RuneLateCompletionKeepsMerges(
-	    SG_RUNE_LATE_COMPLETION_OPEN_BUDGET))
+	    SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED))
 		link_count = link_mark;
 	CHECK(link_count == 12);
 	CHECK(!SG_RuneLateCompletionKeepsMerges(
@@ -447,7 +444,7 @@ int main(void)
 	TestAlternativeLimitAndOrder();
 	TestIterativeRecompute();
 	TestRejectionLedger();
-	TestProductionBudgetRetainsAcceptedMerges();
+	TestProductionExhaustionRetainsAcceptedMerges();
 
 	if (failures)
 	{

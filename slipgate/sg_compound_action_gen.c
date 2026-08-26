@@ -1,8 +1,9 @@
-/* Bounded topology planner for compound door links. */
+/* Exhaustive topology planner for compound door links. */
 #include "sg_compound_action_gen.h"
 
 #include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sg_action.h"
@@ -78,24 +79,17 @@ static int ActionGenCandidateCompare(
 	return 0;
 }
 
+static int ActionGenCandidateCompareQsort(const void *first,
+	const void *second)
+{
+	return ActionGenCandidateCompare(first, second);
+}
+
 static void ActionGenSortCandidates(
 	sg_compound_action_gen_candidate_t *candidates, size_t count)
 {
-	size_t index;
-
-	for (index = 1; index < count; index++)
-	{
-		sg_compound_action_gen_candidate_t value = candidates[index];
-		size_t at = index;
-
-		while (at > 0 &&
-		       ActionGenCandidateCompare(&value, &candidates[at - 1]) < 0)
-		{
-			candidates[at] = candidates[at - 1];
-			at--;
-		}
-		candidates[at] = value;
-	}
+	qsort(candidates, count, sizeof(*candidates),
+	      ActionGenCandidateCompareQsort);
 }
 
 static int ActionGenSameGroup(
@@ -231,32 +225,23 @@ static int ActionGenProvenCompare(
 	return 0;
 }
 
+static int ActionGenProvenCompareQsort(const void *first, const void *second)
+{
+	return ActionGenProvenCompare(first, second);
+}
+
 static void ActionGenSortProven(sg_compound_action_gen_proven_t *items,
 	size_t count)
 {
-	size_t index;
-
-	for (index = 1; index < count; index++)
-	{
-		sg_compound_action_gen_proven_t value = items[index];
-		size_t at = index;
-
-		while (at > 0 && ActionGenProvenCompare(&value, &items[at - 1]) < 0)
-		{
-			items[at] = items[at - 1];
-			at--;
-		}
-		items[at] = value;
-	}
+	qsort(items, count, sizeof(*items),
+	      ActionGenProvenCompareQsort);
 }
 
 sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 	const sg_compound_action_gen_request_t *request)
 {
-	sg_compound_action_gen_candidate_t candidates[
-		SG_COMPOUND_ACTION_GEN_MAX_CANDIDATES];
-	sg_compound_action_gen_proven_t proven[
-		SG_COMPOUND_ACTION_GEN_MAX_SELECTED];
+	sg_compound_action_gen_candidate_t *candidates = NULL;
+	sg_compound_action_gen_proven_t *proven = NULL;
 	sg_compound_action_gen_result_t result =
 		ActionGenResult(SG_COMPOUND_ACTION_GEN_INVALID);
 	size_t proven_count = 0;
@@ -275,8 +260,11 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 	    request->output_capacity > RUNE_MAX_LINKS ||
 	    (request->output_capacity > 0 && !request->output))
 		return result;
-	if (request->candidate_count > SG_COMPOUND_ACTION_GEN_MAX_CANDIDATES)
-		return ActionGenResult(SG_COMPOUND_ACTION_GEN_BUDGET);
+	if (request->candidate_count > RUNE_MAX_LINKS ||
+	    request->candidate_count > (size_t)INT_MAX / sizeof(*candidates) ||
+	    request->candidate_count > (size_t)INT_MAX /
+	        (4U * sizeof(*proven)))
+		return ActionGenResult(SG_COMPOUND_ACTION_GEN_CAPACITY);
 	for (group_start = 0; group_start < request->seed_count; group_start++)
 	{
 		const sg_compound_action_gen_seed_t *seed = &request->seeds[group_start];
@@ -308,36 +296,16 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 		        request->seeds[candidate->destination].water))
 			return result;
 	}
+	candidates = malloc(request->candidate_count * sizeof(*candidates));
+	proven = malloc(request->candidate_count * 4U * sizeof(*proven));
+	if (!candidates || !proven)
+	{
+		result.status = SG_COMPOUND_ACTION_GEN_CAPACITY;
+		goto done;
+	}
 	memcpy(candidates, request->candidates,
 	       request->candidate_count * sizeof(candidates[0]));
 	ActionGenSortCandidates(candidates, request->candidate_count);
-	for (group_start = 0; group_start < request->candidate_count; )
-	{
-		const sg_compound_action_gen_candidate_t *first =
-			&candidates[group_start];
-		size_t group_end;
-		size_t index;
-
-		for (group_end = group_start + 1;
-		     group_end < request->candidate_count &&
-		     ActionGenSameGroup(first, &candidates[group_end]);
-		     group_end++)
-			;
-		for (index = group_start; index < group_end; index++)
-		{
-			const sg_compound_action_gen_candidate_t *candidate =
-				&candidates[index];
-
-			if (!ActionGenSameGroup(first, candidate) ||
-			    (index > group_start &&
-			     candidates[index - 1].destination == candidate->destination))
-				return ActionGenResult(index > group_start &&
-				    candidates[index - 1].destination == candidate->destination
-				        ? SG_COMPOUND_ACTION_GEN_DUPLICATE
-				        : SG_COMPOUND_ACTION_GEN_INVALID);
-		}
-		group_start = group_end;
-	}
 	for (group_start = 0; group_start < request->candidate_count; )
 	{
 		const sg_compound_action_gen_candidate_t *first =
@@ -390,7 +358,7 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 			                        request->seed_count))
 			{
 				result.status = SG_COMPOUND_ACTION_GEN_BAD_PROOF;
-				return result;
+				goto done;
 			}
 			item.trigger_key = candidate->trigger_key;
 			item.mover_key = candidate->mover_key;
@@ -431,10 +399,10 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 					break;
 			if (prior < index)
 				continue;
-			if (proven_count >= SG_COMPOUND_ACTION_GEN_MAX_SELECTED)
+			if (proven_count >= request->candidate_count * 4U)
 			{
-				result.status = SG_COMPOUND_ACTION_GEN_BUDGET;
-				return result;
+				result.status = SG_COMPOUND_ACTION_GEN_CAPACITY;
+				goto done;
 			}
 			proven[proven_count++] = slots[index];
 		}
@@ -444,12 +412,12 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 	if (!saw_candidate)
 	{
 		result.status = SG_COMPOUND_ACTION_GEN_NO_IMPROVEMENT;
-		return result;
+		goto done;
 	}
 	if (proven_count == 0)
 	{
 		result.status = SG_COMPOUND_ACTION_GEN_NO_PROOF;
-		return result;
+		goto done;
 	}
 	ActionGenSortProven(proven, proven_count);
 	{
@@ -464,7 +432,7 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 		if (unique_count > request->output_capacity)
 		{
 			result.status = SG_COMPOUND_ACTION_GEN_CAPACITY;
-			return result;
+			goto done;
 		}
 		for (index = 0; index < proven_count; index++)
 		{
@@ -477,6 +445,10 @@ sg_compound_action_gen_result_t SG_CompoundActionGenPlan(
 		}
 	}
 	result.status = SG_COMPOUND_ACTION_GEN_OK;
+
+done:
+	free(proven);
+	free(candidates);
 	return result;
 }
 
@@ -489,7 +461,6 @@ const char *SG_CompoundActionGenStatusName(
 	case SG_COMPOUND_ACTION_GEN_DISABLED: return "disabled";
 	case SG_COMPOUND_ACTION_GEN_INVALID: return "invalid";
 	case SG_COMPOUND_ACTION_GEN_DUPLICATE: return "duplicate";
-	case SG_COMPOUND_ACTION_GEN_BUDGET: return "budget";
 	case SG_COMPOUND_ACTION_GEN_NO_IMPROVEMENT: return "no-improvement";
 	case SG_COMPOUND_ACTION_GEN_NO_PROOF: return "no-proof";
 	case SG_COMPOUND_ACTION_GEN_BAD_PROOF: return "bad-proof";

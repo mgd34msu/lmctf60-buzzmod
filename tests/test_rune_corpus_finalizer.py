@@ -34,7 +34,6 @@ class FakeApi:
     SUCCESS_CLASSIFICATIONS = controller.SUCCESS_CLASSIFICATIONS
     APPROVED_ROUTE_ONLY_MAPS = ("map1", "map2")
     POLICY_VERSION = 1
-    EXPECTED_ADOPTED_RUNE_COUNT = 156
     ControllerLock = FakeLock
     canonical_json = staticmethod(controller.canonical_json)
     sha256_bytes = staticmethod(controller.sha256_bytes)
@@ -55,7 +54,7 @@ class FakeApi:
     def verify_snapshot(snapshot):
         return {
             "by_role": {"map_manifest": {"path": "maps.txt"}},
-            "adopted_runes": {f"adopted{index}": {} for index in range(156)},
+            "adopted_runes": {},
         }
 
     @staticmethod
@@ -194,6 +193,44 @@ class RuneCorpusFinalizerTest(unittest.TestCase):
                     adopted_runes=identity["snapshot_verified"]["adopted_runes"],
                 )
 
+    def test_finalizer_rejects_adopted_route_only_without_generation_proof(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot, run_root, _output = self.make_run(root)
+            candidate = {
+                "path": "adopted-runes/map2.rune", "mode": 0o444,
+                "size": 7, "sha256": "a" * 64, "role": "adopted_rune:map2",
+            }
+
+            class AdoptedRouteApi(FakeApi):
+                @staticmethod
+                def verify_snapshot(_snapshot):
+                    return {
+                        "by_role": {"map_manifest": {"path": "maps.txt"}},
+                        "adopted_runes": {
+                            "map2": candidate,
+                            **{f"adopted{index}": {} for index in range(155)},
+                        },
+                    }
+
+            path = run_root / "runs/map2/attempt-0001/result.json"
+            value, _raw = controller._load_json_regular(path)
+            value["attempt_kind"] = "adopted_validation"
+            value["provenance"] = {
+                "source_artifact": candidate, "rejection_result": None,
+            }
+            controller.atomic_write_json(path, value)
+            controller.atomic_write_json(run_root / "runs/map2/result.json", value)
+            identity = finalizer._identity(AdoptedRouteApi, snapshot, run_root)
+            with self.assertRaisesRegex(controller.CorpusError, "ROUTE_ONLY"):
+                finalizer._accepted_result(
+                    AdoptedRouteApi, snapshot=snapshot, run_root=run_root,
+                    map_name="map2", stable_port=62001, fingerprint="f" * 64,
+                    document_bytes=identity["document_bytes"],
+                    result_path=run_root / "runs/map2/result.json",
+                    adopted_runes=identity["snapshot_verified"]["adopted_runes"],
+                )
+
     def test_finalizer_history_requires_one_authenticated_rejection(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)
@@ -278,18 +315,18 @@ class RuneCorpusFinalizerTest(unittest.TestCase):
             finalizer._finish_review_heartbeat(publisher, ("map1",), True)
         publisher.close.assert_called_once()
 
-    def test_finalizer_rejects_wrong_adopted_count(self):
+    def test_finalizer_accepts_snapshot_defined_adoption_count(self):
         with tempfile.TemporaryDirectory() as temporary:
             snapshot, run_root, _output = self.make_run(Path(temporary))
-            class WrongCountApi(FakeApi):
+            class SnapshotDefinedApi(FakeApi):
                 @staticmethod
                 def verify_snapshot(_snapshot):
                     return {
                         "by_role": {"map_manifest": {"path": "maps.txt"}},
-                        "adopted_runes": {f"adopted{index}": {} for index in range(155)},
+                        "adopted_runes": {},
                     }
-            with self.assertRaisesRegex(controller.CorpusError, "exactly 156"):
-                finalizer._identity(WrongCountApi, snapshot, run_root)
+            identity = finalizer._identity(SnapshotDefinedApi, snapshot, run_root)
+            self.assertEqual(("map1", "map2", "map3"), identity["maps"])
 
     def test_bundle_binding_replays_each_present_snag_from_its_final_attempt(self):
         with tempfile.TemporaryDirectory() as temporary:

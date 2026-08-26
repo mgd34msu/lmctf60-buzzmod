@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chain-hook search spends its small budget only on eligible pairs."""
+"""Chain-hook search exhausts every eligible pair with two-hook transitions."""
 from pathlib import Path
 
 
@@ -15,10 +15,13 @@ def between(start: str, end: str) -> str:
 publish = between("static qboolean RuneHook_PublishCandidate",
                   "static qboolean RuneHook_InputValid")
 eligibility = publish.index("RuneHook_ChainEligible")
-budget = publish.index("state->chain_pairs >= RUNE_CHAIN_HOOK_PAIR_LIMIT")
 charge = publish.index("state->chain_pairs++")
 prove = publish.index("RuneHook_ProveChain")
-assert eligibility < budget < charge < prove
+assert eligibility < charge < prove
+assert "RUNE_CHAIN_HOOK_PAIR_LIMIT" not in SOURCE
+assert "RUNE_CHAIN_HOOK_REPLAY_LIMIT" not in SOURCE
+assert "SG_CHAIN_HOOK_ROPE_COUNT" in SOURCE
+assert "SG_CHAIN_HOOK_ROPE_COUNT == 2" in SOURCE
 
 chain = between("static qboolean RuneHook_ProveChain",
                 "static qboolean RuneHook_PublishCandidate")

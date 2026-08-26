@@ -248,12 +248,38 @@ static void TestDisabledAndFailuresAreAtomic(void)
 	CHECK(context.calls == 1 && memcmp(&output, &before, sizeof(output)) == 0);
 }
 
+static void TestExhaustsMoreThanLegacyCandidateCap(void)
+{
+	sg_compound_action_gen_seed_t seeds[2];
+	sg_compound_action_gen_candidate_t candidates[257];
+	sg_compound_action_gen_request_t request;
+	sg_compound_action_gen_result_t result;
+	proof_context_t context = { 0, 0 };
+	rune_link_t output;
+	int index;
+
+	Seed(&seeds[0], 0, 0, 0, 1, 1);
+	Seed(&seeds[1], 1, 1, 0, 1, 1);
+	for (index = 0; index < 257; index++)
+	{
+		Candidate(&candidates[index], 0, 1, RLCM_PREOPEN);
+		candidates[index].local_rank = (uint32_t)(256 - index);
+	}
+	request = Request(RL_DOOR_DROP, seeds, 2, candidates, &output, &context);
+	request.candidate_count = 257U;
+	result = SG_CompoundActionGenPlan(&request);
+	CHECK(result.status == SG_COMPOUND_ACTION_GEN_OK);
+	CHECK(result.proof_calls == 257U && context.calls == 257);
+	CHECK(result.emitted == 1U && output.to == 1);
+}
+
 int main(void)
 {
 	TestDoorDrop();
 	TestDoorHook();
 	TestLocallyCheapestSameComponent();
 	TestDisabledAndFailuresAreAtomic();
+	TestExhaustsMoreThanLegacyCandidateCap();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_action_gen_test: %d failure(s)\n",

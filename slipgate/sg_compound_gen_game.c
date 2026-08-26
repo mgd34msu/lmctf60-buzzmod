@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sg_local.h"
@@ -16,26 +17,6 @@ typedef struct sg_compound_gen_game_proof_context_s
 	size_t replay_rejections[SG_REPLAY_REASON_HOOK_TERMINAL_LOST + 1];
 } sg_compound_gen_game_proof_context_t;
 
-typedef struct sg_compound_gen_game_destination_s
-{
-	int index;
-	uint32_t rank;
-} sg_compound_gen_game_destination_t;
-
-typedef enum sg_compound_gen_game_destination_role_e
-{
-	SG_COMPOUND_GEN_GAME_DESTINATION_ANY,
-	SG_COMPOUND_GEN_GAME_DESTINATION_RED,
-	SG_COMPOUND_GEN_GAME_DESTINATION_BLUE,
-	SG_COMPOUND_GEN_GAME_DESTINATION_CROSS,
-	SG_COMPOUND_GEN_GAME_DESTINATION_ROLE_COUNT
-} sg_compound_gen_game_destination_role_t;
-
-#define SG_COMPOUND_GEN_GAME_MAX_CONTACTS 64
-#define SG_COMPOUND_GEN_GAME_MAX_ROLE_QUOTA \
-	(SG_COMPOUND_GEN_MAX_CANDIDATES / \
-	 SG_COMPOUND_GEN_GAME_DESTINATION_ROLE_COUNT)
-
 typedef struct sg_compound_gen_game_contact_s
 {
 	int source;
@@ -43,6 +24,14 @@ typedef struct sg_compound_gen_game_contact_s
 	int mover_key;
 	vec3_t anchor;
 } sg_compound_gen_game_contact_t;
+
+typedef struct sg_compound_gen_game_proven_s
+{
+	rune_link_t link;
+	int trigger_key;
+	int mover_key;
+	uint32_t local_rank;
+} sg_compound_gen_game_proven_t;
 
 static sg_compound_gen_game_result_t GameResult(
 	sg_compound_gen_status_t status, rune_reject_reason_t reason)
@@ -93,43 +82,66 @@ static uint32_t GameRank(const vec3_t source, const vec3_t mechanism,
 	return (uint32_t)total;
 }
 
-static int GameCandidateExists(
-	const sg_compound_gen_candidate_t *candidates, size_t count,
-	const sg_compound_gen_candidate_t *candidate)
+static int GameProvenCheaper(
+	const sg_compound_gen_game_proven_t *candidate,
+	const sg_compound_gen_game_proven_t *current, int current_set)
 {
-	size_t index;
-
-	for (index = 0; index < count; index++)
-		if (candidates[index].source == candidate->source &&
-		    candidates[index].destination == candidate->destination &&
-		    candidates[index].trigger_key == candidate->trigger_key &&
-		    candidates[index].mover_key == candidate->mover_key &&
-		    memcmp(candidates[index].mechanism_anchor,
-		           candidate->mechanism_anchor,
-		           sizeof(candidate->mechanism_anchor)) == 0)
-			return 1;
-	return 0;
+	return !current_set || candidate->local_rank < current->local_rank ||
+	       (candidate->local_rank == current->local_rank &&
+	        candidate->link.to < current->link.to);
 }
 
-static void GameDestinationInsert(
-	sg_compound_gen_game_destination_t *destinations,
-	size_t capacity, int destination, uint32_t rank)
+static int GameProvenSame(
+	const sg_compound_gen_game_proven_t *first,
+	const sg_compound_gen_game_proven_t *second)
 {
-	size_t position;
+	return first->link.from == second->link.from &&
+	       first->link.to == second->link.to &&
+	       first->trigger_key == second->trigger_key &&
+	       first->mover_key == second->mover_key;
+}
 
-	for (position = 0U; position < capacity; position++)
-		if (destinations[position].index < 0 ||
-		    rank < destinations[position].rank ||
-		    (rank == destinations[position].rank &&
-		     destination < destinations[position].index))
-			break;
-	if (position == capacity)
-		return;
-	memmove(&destinations[position + 1U], &destinations[position],
-	    (capacity - position - 1U) *
-	        sizeof(destinations[0]));
-	destinations[position].index = destination;
-	destinations[position].rank = rank;
+static int GameProvenBefore(
+	const sg_compound_gen_game_proven_t *first,
+	const sg_compound_gen_game_proven_t *second)
+{
+	int axis;
+
+	if (first->link.from != second->link.from)
+		return first->link.from < second->link.from;
+	if (first->link.to != second->link.to)
+		return first->link.to < second->link.to;
+	if (first->link.cost_ms != second->link.cost_ms)
+		return first->link.cost_ms < second->link.cost_ms;
+	if (first->trigger_key != second->trigger_key)
+		return first->trigger_key < second->trigger_key;
+	if (first->mover_key != second->mover_key)
+		return first->mover_key < second->mover_key;
+	for (axis = 0; axis < 3; axis++)
+		if (first->link.mechanism_anchor[axis] !=
+		    second->link.mechanism_anchor[axis])
+			return first->link.mechanism_anchor[axis] <
+			       second->link.mechanism_anchor[axis];
+	if (first->local_rank != second->local_rank)
+		return first->local_rank < second->local_rank;
+	if (first->link.sweep_clear_ms != second->link.sweep_clear_ms)
+		return first->link.sweep_clear_ms < second->link.sweep_clear_ms;
+	return first->link.exit_speed < second->link.exit_speed;
+}
+
+static int GameProvenCompare(const void *first, const void *second)
+{
+	const sg_compound_gen_game_proven_t *left = first;
+	const sg_compound_gen_game_proven_t *right = second;
+
+	if (GameProvenBefore(left, right))
+		return -1;
+	return GameProvenBefore(right, left) ? 1 : 0;
+}
+
+static void GameProvenSort(sg_compound_gen_game_proven_t *items, size_t count)
+{
+	qsort(items, count, sizeof(*items), GameProvenCompare);
 }
 
 static int GameContactCompare(const sg_compound_gen_game_contact_t *first,
@@ -149,27 +161,57 @@ static int GameContactCompare(const sg_compound_gen_game_contact_t *first,
 	return 0;
 }
 
-static int GameContactInsert(sg_compound_gen_game_contact_t *contacts,
-	size_t *count, const sg_compound_gen_game_contact_t *contact)
+static int GameReserve(void **items, size_t *capacity, size_t count,
+	size_t required, size_t item_size, sg_compound_gen_game_alloc_fn allocate,
+	sg_compound_gen_game_free_fn deallocate)
 {
-	size_t position;
+	void *expanded;
+	size_t next = *capacity ? *capacity : 64U;
+	size_t limit;
 
-	for (position = 0U; position < *count; position++)
-	{
-		int order = GameContactCompare(contact, &contacts[position]);
-
-		if (order == 0)
-			return 1;
-		if (order < 0)
-			break;
-	}
-	if (*count == SG_COMPOUND_GEN_GAME_MAX_CONTACTS)
+	if (required <= *capacity)
+		return 1;
+	limit = (size_t)INT_MAX / item_size;
+	if (required > limit)
 		return 0;
-	memmove(&contacts[position + 1U], &contacts[position],
-	    (*count - position) * sizeof(contacts[0]));
-	contacts[position] = *contact;
-	(*count)++;
+	while (next < required)
+	{
+		if (next > limit / 2U)
+		{
+			next = limit;
+			break;
+		}
+		next *= 2U;
+	}
+	expanded = allocate((int)(next * item_size));
+	if (!expanded)
+		return 0;
+	if (*items)
+	{
+		memcpy(expanded, *items, count * item_size);
+		deallocate(*items);
+	}
+	*items = expanded;
+	*capacity = next;
 	return 1;
+}
+
+static int GameContactCompareQsort(const void *first, const void *second)
+{
+	return GameContactCompare(first, second);
+}
+
+static void GameContactSortDeduplicate(sg_compound_gen_game_contact_t *contacts,
+	size_t *count)
+{
+	size_t read, write = 0U;
+
+	qsort(contacts, *count, sizeof(*contacts), GameContactCompareQsort);
+	for (read = 0U; read < *count; read++)
+		if (write == 0U ||
+		    GameContactCompare(&contacts[read], &contacts[write - 1U]) != 0)
+			contacts[write++] = contacts[read];
+	*count = write;
 }
 
 static rune_reject_reason_t GameProve(void *opaque,
@@ -236,26 +278,109 @@ static rune_reject_reason_t GameProve(void *opaque,
 	return RLR_OK;
 }
 
+static sg_compound_gen_status_t GamePlanBatch(
+	const sg_compound_gen_candidate_t *candidates, size_t candidate_count,
+	const sg_compound_gen_seed_t *seeds, size_t seed_count,
+	sg_compound_gen_game_proof_context_t *proof_context,
+	sg_compound_gen_game_proven_t slots[4], int slot_set[4],
+	sg_compound_gen_game_result_t *result)
+{
+	rune_link_t output[4];
+	sg_compound_gen_request_t request;
+	sg_compound_gen_result_t plan;
+	size_t output_index;
+
+	if (candidate_count == 0U)
+		return SG_COMPOUND_GEN_OK;
+	memset(&request, 0, sizeof(request));
+	request.seeds = seeds;
+	request.seed_count = seed_count;
+	request.candidates = candidates;
+	request.candidate_count = candidate_count;
+	request.output = output;
+	request.output_capacity = 4U;
+	request.prove = GameProve;
+	request.context = proof_context;
+	request.production_enabled = 1;
+	plan = SG_CompoundGenPlan(&request);
+	result->proof_calls += plan.proof_calls;
+	if (plan.status == SG_COMPOUND_GEN_NO_IMPROVEMENT ||
+	    plan.status == SG_COMPOUND_GEN_NO_PROOF)
+		return SG_COMPOUND_GEN_OK;
+	if (plan.status != SG_COMPOUND_GEN_OK)
+		return plan.status;
+	for (output_index = 0U; output_index < plan.emitted; output_index++)
+	{
+		sg_compound_gen_game_proven_t proven;
+		const sg_compound_gen_candidate_t *candidate = NULL;
+		uint8_t missing;
+		uint8_t new_objective;
+		int crosses;
+		int slot;
+
+		for (size_t index = 0U; index < candidate_count; index++)
+			if (candidates[index].source == output[output_index].from &&
+			    candidates[index].destination == output[output_index].to)
+			{
+				candidate = &candidates[index];
+				break;
+			}
+		if (!candidate)
+			return SG_COMPOUND_GEN_BAD_PROOF;
+		memset(&proven, 0, sizeof(proven));
+		proven.link = output[output_index];
+		proven.trigger_key = candidate->trigger_key;
+		proven.mover_key = candidate->mover_key;
+		proven.local_rank = candidate->local_rank;
+		missing = (uint8_t)(SG_COMPOUND_GEN_OBJECTIVE_MASK &
+		    ~seeds[candidate->source].objective_mask);
+		new_objective = (uint8_t)(
+		    seeds[candidate->destination].objective_mask & missing);
+		crosses = seeds[candidate->source].component >= 0 &&
+		    seeds[candidate->destination].component >= 0 &&
+		    seeds[candidate->source].component !=
+		        seeds[candidate->destination].component;
+		for (slot = 0; slot < 4; slot++)
+		{
+			int qualifies = slot == 0 ||
+			    (slot == 1 && (new_objective & 1U)) ||
+			    (slot == 2 && (new_objective & 2U)) ||
+			    (slot == 3 && crosses);
+
+			if (qualifies && GameProvenCheaper(&proven, &slots[slot],
+			        slot_set[slot]))
+			{
+				slots[slot] = proven;
+				slot_set[slot] = 1;
+			}
+		}
+	}
+	return SG_COMPOUND_GEN_OK;
+}
+
 sg_compound_gen_game_result_t SG_CompoundGenGameBuild(
 	const sg_compound_gen_game_request_t *request)
 {
 	sg_compound_world_candidate_t *mechanisms = NULL;
 	sg_compound_gen_seed_t *seeds = NULL;
-	sg_compound_gen_candidate_t candidates[SG_COMPOUND_GEN_MAX_CANDIDATES];
-	sg_compound_gen_game_contact_t contacts[SG_COMPOUND_GEN_GAME_MAX_CONTACTS];
-	rune_link_t planned[SG_COMPOUND_GEN_MAX_SELECTED];
+	sg_compound_gen_candidate_t *candidates = NULL;
+	sg_compound_gen_game_contact_t *contacts = NULL;
+	sg_compound_gen_game_proven_t *selected = NULL;
 	sg_compound_gen_game_proof_context_t proof_context;
-	sg_compound_gen_request_t plan_request;
 	sg_compound_gen_game_result_t result =
 	    GameResult(SG_COMPOUND_GEN_INVALID, RLR_BAD_CONTROL_POLICY);
-	size_t candidate_count = 0U;
+	size_t selected_count = 0U;
+	size_t selected_capacity = 0U;
 	size_t contact_count = 0U;
+	size_t contact_capacity = 0U;
+	size_t candidate_capacity = 0U;
 	size_t source_index, destination_index, link_index;
 	int mechanism_count = 0;
 	int mechanism_index;
 	rune_reject_reason_t reason;
 
 	if (!request || !request->seeds || request->seed_count == 0U ||
+	    request->seed_count > RUNE_MAX_SEEDS ||
 	    !request->links || !request->link_count ||
 	    *request->link_count > request->link_capacity ||
 	    !request->components || !request->objective_masks ||
@@ -272,13 +397,27 @@ sg_compound_gen_game_result_t SG_CompoundGenGameBuild(
 		return GameResult(SG_COMPOUND_GEN_INVALID, reason);
 	if (mechanism_count == 0)
 		return GameResult(SG_COMPOUND_GEN_OK, RLR_OK);
+	if (mechanism_count < 0 ||
+	    (size_t)mechanism_count > (size_t)INT_MAX / sizeof(*mechanisms) ||
+	    request->seed_count > (size_t)INT_MAX / sizeof(*seeds) ||
+	    request->seed_count > (size_t)INT_MAX / sizeof(*candidates))
+		return GameResult(SG_COMPOUND_GEN_CAPACITY, RLR_OK);
 	mechanisms = request->allocate((int)(sizeof(*mechanisms) *
 	    (size_t)mechanism_count));
 	seeds = request->allocate((int)(sizeof(*seeds) * request->seed_count));
-	if (!mechanisms || !seeds)
+	if (!mechanisms || !seeds ||
+	    !GameReserve((void **)&candidates, &candidate_capacity, 0U,
+	        request->seed_count, sizeof(*candidates), request->allocate,
+	        request->deallocate))
+	{
+		result.status = SG_COMPOUND_GEN_CAPACITY;
+		result.reason = RLR_OK;
 		goto done;
+	}
 	memset(mechanisms, 0, sizeof(*mechanisms) * (size_t)mechanism_count);
 	memset(seeds, 0, sizeof(*seeds) * request->seed_count);
+	memset(&proof_context, 0, sizeof(proof_context));
+	proof_context.seeds = request->seeds;
 	reason = SG_CompoundWorldEnumeratePreopen(mechanisms, mechanism_count,
 	                                         &mechanism_count);
 	if (reason != RLR_OK)
@@ -335,29 +474,29 @@ sg_compound_gen_game_result_t SG_CompoundGenGameBuild(
 				contact.source = (int)source_index;
 				contact.trigger_key = mechanism->resolved.trigger_key;
 				contact.mover_key = mechanism->resolved.mover_key;
-				if (!GameContactInsert(contacts, &contact_count, &contact))
+				if (!GameReserve((void **)&contacts, &contact_capacity,
+				    contact_count, contact_count + 1U, sizeof(*contacts),
+				    request->allocate, request->deallocate))
 				{
-					result.status = SG_COMPOUND_GEN_BUDGET;
+					result.status = SG_COMPOUND_GEN_CAPACITY;
 					result.reason = RLR_OK;
-					result.candidates =
-					    SG_COMPOUND_GEN_MAX_CANDIDATES + 1U;
 					goto done;
 				}
+				contacts[contact_count++] = contact;
 			}
 		}
 	}
+	if (contact_count)
+		GameContactSortDeduplicate(contacts, &contact_count);
 	for (source_index = 0U; source_index < contact_count; source_index++)
 	{
 		const sg_compound_gen_game_contact_t *contact =
 		    &contacts[source_index];
 		sg_compound_world_preopen_t resolved;
-		sg_compound_gen_game_destination_t destinations
-		    [SG_COMPOUND_GEN_GAME_DESTINATION_ROLE_COUNT]
-		    [SG_COMPOUND_GEN_GAME_MAX_ROLE_QUOTA];
-		size_t quota = SG_COMPOUND_GEN_MAX_CANDIDATES /
-		    (SG_COMPOUND_GEN_GAME_DESTINATION_ROLE_COUNT * contact_count);
-		int category;
-		size_t slot;
+		sg_compound_gen_game_proven_t slots[4];
+		int slot_set[4] = { 0, 0, 0, 0 };
+		size_t candidate_count = 0U;
+		int slot;
 
 		memset(&resolved, 0, sizeof(resolved));
 		if (SG_CompoundWorldResolvePreopen(contact->anchor, &resolved) !=
@@ -365,99 +504,73 @@ sg_compound_gen_game_result_t SG_CompoundGenGameBuild(
 		    resolved.trigger_key != contact->trigger_key ||
 		    resolved.mover_key != contact->mover_key)
 			continue;
-		memset(destinations, 0xff, sizeof(destinations));
+		memset(slots, 0, sizeof(slots));
 		for (destination_index = 0;
 		     destination_index < request->seed_count; destination_index++)
 		{
-			uint8_t new_objective;
-			uint32_t rank;
-			int crosses;
+			sg_compound_gen_candidate_t *candidate;
 
 			if (destination_index == (size_t)contact->source ||
 			    !seeds[destination_index].has_outgoing ||
 			    !SG_CompoundWorldCrossesSweep(&resolved, contact->anchor,
 			        request->seeds[destination_index].origin))
 				continue;
-			new_objective = (uint8_t)(
-			    seeds[destination_index].objective_mask &
-			    (SG_COMPOUND_GEN_OBJECTIVE_MASK &
-			     ~seeds[contact->source].objective_mask));
-			crosses = seeds[contact->source].component >= 0 &&
-			    seeds[destination_index].component >= 0 &&
-			    seeds[contact->source].component !=
-			        seeds[destination_index].component;
-			rank = GameRank(request->seeds[contact->source].origin,
-			    contact->anchor,
+			candidate = &candidates[candidate_count++];
+			memset(candidate, 0, sizeof(*candidate));
+			candidate->source = contact->source;
+			candidate->destination = (int)destination_index;
+			candidate->trigger_key = contact->trigger_key;
+			candidate->mover_key = contact->mover_key;
+			VectorCopy(contact->anchor, candidate->mechanism_anchor);
+			candidate->local_rank = GameRank(
+			    request->seeds[contact->source].origin, contact->anchor,
 			    request->seeds[destination_index].origin);
-			GameDestinationInsert(
-			    destinations[SG_COMPOUND_GEN_GAME_DESTINATION_ANY], quota,
-			    (int)destination_index, rank);
-			if (new_objective & 1U)
-				GameDestinationInsert(
-				    destinations[SG_COMPOUND_GEN_GAME_DESTINATION_RED], quota,
-				    (int)destination_index, rank);
-			if (new_objective & 2U)
-				GameDestinationInsert(
-				    destinations[SG_COMPOUND_GEN_GAME_DESTINATION_BLUE], quota,
-				    (int)destination_index, rank);
-			if (crosses)
-				GameDestinationInsert(
-				    destinations[SG_COMPOUND_GEN_GAME_DESTINATION_CROSS], quota,
-				    (int)destination_index, rank);
+			result.candidates++;
 		}
-		for (category = 0;
-		     category < SG_COMPOUND_GEN_GAME_DESTINATION_ROLE_COUNT;
-		     category++)
-			for (slot = 0U;
-			     slot < quota; slot++)
-			{
-				sg_compound_gen_candidate_t candidate;
-				int picked = destinations[category][slot].index;
+		{
+			sg_compound_gen_status_t status = GamePlanBatch(candidates,
+			    candidate_count, seeds, request->seed_count, &proof_context,
+			    slots, slot_set, &result);
 
-				if (picked < 0)
-					break;
-				memset(&candidate, 0, sizeof(candidate));
-				candidate.source = contact->source;
-				candidate.destination = picked;
-				candidate.trigger_key = contact->trigger_key;
-				candidate.mover_key = contact->mover_key;
-				VectorCopy(contact->anchor, candidate.mechanism_anchor);
-				candidate.local_rank =
-				    destinations[category][slot].rank;
-				if (GameCandidateExists(candidates, candidate_count,
-				                        &candidate))
-					continue;
-				candidates[candidate_count++] = candidate;
+			if (status != SG_COMPOUND_GEN_OK)
+			{
+				result.status = status;
+				goto done;
 			}
+		}
+		for (slot = 0; slot < 4; slot++)
+		{
+			int prior;
+
+			if (!slot_set[slot])
+				continue;
+			for (prior = 0; prior < slot; prior++)
+				if (slot_set[prior] &&
+				    GameProvenSame(&slots[prior], &slots[slot]))
+					break;
+			if (prior < slot)
+				continue;
+			if (!GameReserve((void **)&selected, &selected_capacity,
+			    selected_count, selected_count + 1U, sizeof(*selected),
+			    request->allocate, request->deallocate))
+			{
+				result.status = SG_COMPOUND_GEN_CAPACITY;
+				result.reason = RLR_OK;
+				goto done;
+			}
+			selected[selected_count++] = slots[slot];
+		}
 	}
-	result.candidates = candidate_count;
-	if (candidate_count == 0U)
+	result.selected = selected_count;
+	if (result.candidates == 0U)
 	{
 		result.status = SG_COMPOUND_GEN_OK;
 		result.reason = RLR_OK;
 		goto done;
 	}
-	memset(&plan_request, 0, sizeof(plan_request));
-	memset(&proof_context, 0, sizeof(proof_context));
-	proof_context.seeds = request->seeds;
-	plan_request.seeds = seeds;
-	plan_request.seed_count = request->seed_count;
-	plan_request.candidates = candidates;
-	plan_request.candidate_count = candidate_count;
-	plan_request.output = planned;
-	plan_request.output_capacity = SG_COMPOUND_GEN_MAX_SELECTED;
-	plan_request.prove = GameProve;
-	plan_request.context = &proof_context;
-	plan_request.production_enabled = 1;
-	{
-		sg_compound_gen_result_t plan = SG_CompoundGenPlan(&plan_request);
-
-		result.status = plan.status;
-		result.reason = RLR_OK;
-		result.selected = plan.selected;
-		result.proof_calls = plan.proof_calls;
-		result.emitted = plan.emitted;
-	}
+	result.reason = RLR_OK;
+	result.status = selected_count == 0U ? SG_COMPOUND_GEN_NO_PROOF :
+	    SG_COMPOUND_GEN_OK;
 	{
 		int reject;
 
@@ -477,22 +590,41 @@ sg_compound_gen_game_result_t SG_CompoundGenGameBuild(
 				    proof_context.replay_rejections[reject];
 			}
 	}
-	if (result.status == SG_COMPOUND_GEN_NO_IMPROVEMENT ||
-	    result.status == SG_COMPOUND_GEN_NO_PROOF)
-		result.status = SG_COMPOUND_GEN_OK;
 	if (result.status != SG_COMPOUND_GEN_OK)
 		goto done;
+	GameProvenSort(selected, selected_count);
+	result.emitted = 0U;
+	for (source_index = 0U; source_index < selected_count; source_index++)
+		if (source_index == 0U ||
+		    selected[source_index].link.from !=
+		        selected[source_index - 1U].link.from ||
+		    selected[source_index].link.to !=
+		        selected[source_index - 1U].link.to)
+			result.emitted++;
 	if (result.emitted > request->link_capacity - *request->link_count)
 	{
 		result.status = SG_COMPOUND_GEN_CAPACITY;
 		result.emitted = 0U;
 		goto done;
 	}
-	memcpy(&request->links[*request->link_count], planned,
-	       result.emitted * sizeof(planned[0]));
-	*request->link_count += result.emitted;
+	for (source_index = 0U; source_index < selected_count; source_index++)
+	{
+		if (source_index > 0U &&
+		    selected[source_index].link.from ==
+		        selected[source_index - 1U].link.from &&
+		    selected[source_index].link.to ==
+		        selected[source_index - 1U].link.to)
+			continue;
+		request->links[(*request->link_count)++] = selected[source_index].link;
+	}
 
 done:
+	if (selected)
+		request->deallocate(selected);
+	if (contacts)
+		request->deallocate(contacts);
+	if (candidates)
+		request->deallocate(candidates);
 	if (mechanisms)
 		request->deallocate(mechanisms);
 	if (seeds)
@@ -526,18 +658,16 @@ int SG_CompoundGenGameGenerate(const rune_seed_t *seeds, size_t seed_count,
 	request.allocate = allocate;
 	request.deallocate = deallocate;
 	result = SG_CompoundGenGameBuild(&request);
-	sg_host.dprint("rune: compound status=%s candidates=%u selected=%u "
-	               "proofs=%u emitted=%u reason=%d reject=%d rejects=%u "
-	               "replay=%d replay_rejects=%u\n",
+	sg_host.dprint("rune: compound status=%s candidates=%zu selected=%zu "
+	               "proofs=%zu emitted=%zu reason=%d reject=%d rejects=%zu "
+	               "replay=%d replay_rejects=%zu\n",
 	               SG_CompoundGenStatusName(result.status),
-	               (unsigned int)result.candidates,
-	               (unsigned int)result.selected,
-	               (unsigned int)result.proof_calls,
-	               (unsigned int)result.emitted, (int)result.reason,
+	               result.candidates, result.selected, result.proof_calls,
+	               result.emitted, (int)result.reason,
 	               (int)result.proof_rejection,
-	               (unsigned int)result.proof_rejections,
+	               result.proof_rejections,
 	               (int)result.replay_rejection,
-	               (unsigned int)result.replay_rejections);
+	               result.replay_rejections);
 	if (result.status != SG_COMPOUND_GEN_OK || count > link_capacity)
 		return 0;
 	*link_count = (int)count;

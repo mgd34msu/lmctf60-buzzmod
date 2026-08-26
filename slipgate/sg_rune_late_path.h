@@ -7,10 +7,6 @@
 #include "sg_rune.h"
 
 #define SG_RUNE_LATE_OBJECTIVE_COUNT 2
-#define SG_RUNE_LATE_REJECTION_LIMIT 1024U
-#define SG_RUNE_LATE_REJECTION_TABLE_SIZE \
-	(SG_RUNE_LATE_REJECTION_LIMIT * 2U)
-
 typedef enum sg_rune_late_status_e
 {
 	SG_RUNE_LATE_OK,
@@ -22,7 +18,6 @@ typedef enum sg_rune_late_completion_e
 {
 	SG_RUNE_LATE_COMPLETION_CLOSED,
 	SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED,
-	SG_RUNE_LATE_COMPLETION_OPEN_BUDGET,
 	SG_RUNE_LATE_COMPLETION_FATAL
 } sg_rune_late_completion_t;
 
@@ -32,15 +27,13 @@ qboolean SG_RuneLateCompletionKeepsMerges(
 
 typedef struct sg_rune_late_rejections_s
 {
-	int *from;
-	int *to;
+	uint64_t *keys;
 	uint32_t table_size;
-	uint32_t limit;
 	uint32_t count;
 } sg_rune_late_rejections_t;
 
-qboolean SG_RuneLateRejectionsInit(sg_rune_late_rejections_t *rejections,
-	int *from, int *to, uint32_t table_size, uint32_t limit);
+qboolean SG_RuneLateRejectionsInit(sg_rune_late_rejections_t *rejections);
+void SG_RuneLateRejectionsFree(sg_rune_late_rejections_t *rejections);
 qboolean SG_RuneLateRejectionsContains(
 	const sg_rune_late_rejections_t *rejections, int from, int to);
 qboolean SG_RuneLateRejectionsRecord(sg_rune_late_rejections_t *rejections,

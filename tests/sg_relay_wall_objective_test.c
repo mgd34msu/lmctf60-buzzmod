@@ -18,6 +18,10 @@ typedef struct fixture_s
 	int eligible_calls;
 	int prove_calls;
 	int reject_all;
+	int only_target;
+	uint32_t target_source;
+	uint32_t target_destination;
+	uint32_t eligible_limit;
 	int publish_calls;
 	uint32_t published_source;
 	uint32_t published_destination;
@@ -38,7 +42,16 @@ static int Eligible(void *context, uint32_t seed, int source)
 
 	(void)source;
 	fixture->eligible_calls++;
-	return seed < 4U;
+	return seed < (fixture->eligible_limit ? fixture->eligible_limit : 4U);
+}
+
+static int Linked(void *context, uint32_t source, uint32_t destination)
+{
+	fixture_t *fixture = context;
+
+	return fixture->publish_calls > 0 &&
+	       fixture->published_source == source &&
+	       fixture->published_destination == destination;
 }
 
 static int Discover(void *context, const sg_mech_catalog_view_t *catalog,
@@ -69,7 +82,11 @@ static int Prove(void *raw, const sg_relay_wall_plan_witness_t *witness,
 	fixture->prove_calls++;
 	CHECK(witness->touch_hold_ms == 200U);
 	CHECK(witness->active_window_ms == 4000U);
-	if (fixture->reject_all || source != 1U || destination != 2U)
+	if (fixture->reject_all ||
+	    (fixture->only_target
+	        ? (source != fixture->target_source ||
+	           destination != fixture->target_destination)
+	        : (source != 1U || destination != 2U)))
 		return 0;
 	proof->anchor[0] = 25.0f;
 	proof->cost_ms = 725U;
@@ -108,6 +125,8 @@ int main(void)
 	memset(&catalog, 0, sizeof(catalog));
 	memset(&request, 0, sizeof(request));
 	memset(&fixture, 0, sizeof(fixture));
+	fixture.target_source = UINT32_MAX;
+	fixture.target_destination = UINT32_MAX;
 	nodes[0].key = 10U;
 	nodes[0].kind = SG_MECH_NODE_BUTTON;
 	nodes[0].absmin_q8[0] = -8;
@@ -144,6 +163,7 @@ int main(void)
 	request.objective_masks = masks;
 	request.context = &fixture;
 	request.eligible = Eligible;
+	request.linked = Linked;
 	request.discover = Discover;
 	request.prove = Prove;
 	request.publish = Publish;
@@ -159,6 +179,40 @@ int main(void)
 	CHECK(SG_RelayWallObjectiveBridge(&request, &report) == 0);
 	CHECK(fixture.eligible_calls <= 8 && fixture.prove_calls <= 32);
 	CHECK(fixture.publish_calls == 0);
+	{
+		rune_seed_t many_seeds[40];
+		int many_components[40];
+		uint8_t many_masks[40];
+		uint32_t seed;
+
+		memset(many_seeds, 0, sizeof(many_seeds));
+		for (seed = 0U; seed < 40U; seed++)
+		{
+			many_seeds[seed].origin[0] = (float)seed;
+			many_components[seed] = (int)seed;
+			many_masks[seed] = 1U;
+		}
+		/* Both endpoints sort behind the old 32-entry frontiers. */
+		many_seeds[38].origin[0] = 10000.0f;
+		many_seeds[39].origin[0] = 10001.0f;
+		memset(&fixture, 0, sizeof(fixture));
+		fixture.only_target = 1;
+		fixture.target_source = 39U;
+		fixture.target_destination = 38U;
+		fixture.eligible_limit = 40U;
+		request.seeds = many_seeds;
+		request.seed_count = 40U;
+		request.components = many_components;
+		request.objective_masks = many_masks;
+		CHECK(SG_RelayWallObjectiveBridge(&request, &report) == 1);
+		CHECK(report.published == 1U);
+		CHECK(report.candidate_pairs > 32U * 32U);
+		CHECK(report.proof_attempts == report.candidate_pairs);
+		CHECK(fixture.published_source == 39U &&
+		    fixture.published_destination == 38U);
+		CHECK(SG_RelayWallObjectiveBridge(&request, &report) == 0);
+		CHECK(report.published == 0U && fixture.publish_calls == 1);
+	}
 	if (failures)
 		return 1;
 	puts("sg_relay_wall_objective_test: PASS");

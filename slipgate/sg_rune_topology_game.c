@@ -91,13 +91,22 @@ static sg_rune_topology_proof_result_t TopologyTryDirection(void *data,
 		SG_RUNE_TOPOLOGY_REJECTED, TOPOLOGY_OWNER_DRY, 1U
 	};
 	static const int ordinary[] = { RL_RUN, RL_JUMP };
+	int deferred_contact = contact->kind == SG_RUNE_CONTACT_DECLARED_MOVER ||
+		contact->kind == SG_RUNE_CONTACT_DYNAMIC_OR_UNKNOWN;
+	int water_contact = contact->kind == SG_RUNE_CONTACT_WATER_BOUNDARY ||
+		(deferred_contact &&
+		 ((request->graph.seeds[from].flags |
+		   request->graph.seeds[to].flags) & RSF_WATER));
 
-	if (contact->kind == SG_RUNE_CONTACT_WATER_BOUNDARY)
+	if (water_contact)
 	{
 		int proved = request->try_action(request->context, from, to,
 			RL_SWIM);
 
-		result.owner = TOPOLOGY_OWNER_WATER;
+		result.owner = contact->kind == SG_RUNE_CONTACT_DECLARED_MOVER
+			? TOPOLOGY_OWNER_MOVER
+			: contact->kind == SG_RUNE_CONTACT_DYNAMIC_OR_UNKNOWN
+				? TOPOLOGY_OWNER_UNKNOWN : TOPOLOGY_OWNER_WATER;
 		if (proved < 0)
 		{
 			result.status = SG_RUNE_TOPOLOGY_FATAL;
@@ -108,16 +117,17 @@ static sg_rune_topology_proof_result_t TopologyTryDirection(void *data,
 			result.status = SG_RUNE_TOPOLOGY_ADDED;
 			result.reason = 0U;
 		}
+		else if (deferred_contact)
+		{
+			result.status = SG_RUNE_TOPOLOGY_DEFERRED;
+			result.reason = 2U;
+		}
 		return result;
 	}
-	if (contact->kind != SG_RUNE_CONTACT_STATIC_DRY)
-	{
-		result.status = SG_RUNE_TOPOLOGY_DEFERRED;
-		result.owner = contact->kind == SG_RUNE_CONTACT_DECLARED_MOVER
-			? TOPOLOGY_OWNER_MOVER : TOPOLOGY_OWNER_UNKNOWN;
-		result.reason = 2U;
-		return result;
-	}
+	if (contact->kind == SG_RUNE_CONTACT_DECLARED_MOVER)
+		result.owner = TOPOLOGY_OWNER_MOVER;
+	else if (contact->kind == SG_RUNE_CONTACT_DYNAMIC_OR_UNKNOWN)
+		result.owner = TOPOLOGY_OWNER_UNKNOWN;
 	for (uint32_t index = 0U; index < 2U; index++)
 	{
 		int proved = request->try_action(request->context, from, to,
@@ -152,6 +162,11 @@ static sg_rune_topology_proof_result_t TopologyTryDirection(void *data,
 			result.status = SG_RUNE_TOPOLOGY_ADDED;
 			result.reason = 0U;
 		}
+	}
+	if (deferred_contact && result.status == SG_RUNE_TOPOLOGY_REJECTED)
+	{
+		result.status = SG_RUNE_TOPOLOGY_DEFERRED;
+		result.reason = 2U;
 	}
 	return result;
 }

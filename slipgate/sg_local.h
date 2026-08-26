@@ -180,6 +180,8 @@ void SG_OraclePlace(sg_phantom_t *ph, vec3_t origin);
  * valid ordinary-navigation graph points. */
 qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
 	vec3_t canonical_origin);
+qboolean SG_OracleCanonicalGroundSourcePose(const vec3_t floor_endpoint,
+	qboolean crouched, vec3_t canonical_origin);
 void SG_TeachFutility(int seed);
 void SG_TeachLinkFutility(int link);
 void SG_NoteDeath(edict_t *victim);
@@ -187,6 +189,7 @@ qboolean SG_EnemyRoomDeathKnown(int team, const vec3_t stand_origin,
 	float max_age, float max_distance);
 void SG_OracleRun(sg_phantom_t *ph, usercmd_t *cmd, int steps);
 qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps);
+qboolean SG_OracleWorldTriggerClear(sg_phantom_t *ph);
 void SG_OracleDoorBoundsCacheBegin(void);
 void SG_OracleDoorBoundsCacheEnd(void);
 qboolean SG_OracleDoorEgressReplayCacheBegin(void);

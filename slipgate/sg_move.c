@@ -62,6 +62,41 @@ static int SG_TelemetryCoordinate(float coordinate)
 	return (int)nearbyintf(coordinate);
 }
 
+/* A RUN edge may cross a player-height opening that only the crouched hull
+ * fits.  Decide from the authoritative live collision model at the command
+ * boundary: duck only when the standing sweep is blocked and the crouched
+ * sweep along the same route remains clear. */
+static qboolean RunCrouchRequired(edict_t *runner, const vec3_t direction)
+{
+	static const vec3_t mins = { -16.0f, -16.0f, -24.0f };
+	static const vec3_t standing_maxs = { 16.0f, 16.0f, 32.0f };
+	static const vec3_t crouched_maxs = { 16.0f, 16.0f, 4.0f };
+	vec3_t delta, end;
+	trace_t standing, crouched;
+	float distance, scale;
+
+	if (!runner || !direction || !sg_host.trace)
+		return false;
+	VectorCopy(direction, delta);
+	delta[2] = 0.0f;
+	distance = VectorLength(delta);
+	if (distance <= 0.01f)
+		return false;
+	scale = 80.0f / distance;
+	VectorCopy(runner->s.origin, end);
+	end[0] += delta[0] * scale;
+	end[1] += delta[1] * scale;
+	standing = sg_host.trace(runner->s.origin, (vec_t *)mins,
+	    (vec_t *)standing_maxs, end, runner, MASK_PLAYERSOLID);
+	if (!standing.startsolid && !standing.allsolid &&
+	    standing.fraction >= 1.0f)
+		return false;
+	crouched = sg_host.trace(runner->s.origin, (vec_t *)mins,
+	    (vec_t *)crouched_maxs, end, runner, MASK_PLAYERSOLID);
+	return !crouched.startsolid && !crouched.allsolid &&
+	    crouched.fraction >= 1.0f;
+}
+
 /* Sound-directed splash is admitted against the authoritative client roster,
  * not the SG controller array. Humans and bots occupy the same damage space;
  * a human teammate near the heard-only belief is therefore the same veto as
@@ -4575,7 +4610,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 
 				VectorSubtract(l->anchor, e->s.origin, wd);
 				wd[2] = 0.0f;
-				if (VectorLength(wd) > 48.0f)
+				if (VectorLength(wd) > RUNE_RUN_WAYPOINT_RADIUS)
 				{
 					VectorCopy(l->anchor, aim);
 					aim_is_anchor = true;
@@ -9155,7 +9190,19 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 						return;
 					}
 				}
-				(void)SG_TimedVaultRuntimeApplyCommand(e, cmd);
+				{
+					int timed_vault_held =
+					    SG_TimedVaultRuntimeApplyCommand(e, cmd);
+
+					if (!timed_vault_held && run_link && have_move &&
+					    !proved_control && !door_hold &&
+					    bot->hook_phase == 0 && e->waterlevel <= 1 &&
+					    bestlink >= 0 && SG_Rune() && SG_Rune()->links &&
+					    bestlink < SG_Rune()->hdr.num_links &&
+					    SG_Rune()->links[bestlink].action == RL_RUN &&
+					    RunCrouchRequired(e, move_dir))
+						cmd->upmove = -400;
+				}
 				bot->as_landing_command = as_ok && as_chain &&
 				    !proved_control && !door_hold;
 				ClientThink(e, cmd);

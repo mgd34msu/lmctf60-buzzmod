@@ -1,13 +1,24 @@
 /* sg_rune_door_scope.c -- checked temporary door-solid transaction. */
 #include "sg_rune_door_scope.h"
 
+#include <limits.h>
 #include <string.h>
 
 static int DoorScopeOpsValid(const sg_rune_door_scope_ops_t *ops)
 {
-	return ops && ops->identity_matches && ops->get_solid &&
+	return ops && ops->allocate && ops->deallocate && ops->identity_matches &&
+	       ops->get_solid &&
 	       ops->get_linkcount && ops->set_solid && ops->set_linkcount &&
 	       ops->link_entity;
+}
+
+static void DoorScopeClear(sg_rune_door_scope_t *scope,
+	const sg_rune_door_scope_ops_t *ops, void *context)
+{
+	if (scope && scope->entries && ops && ops->deallocate)
+		ops->deallocate(context, scope->entries);
+	if (scope)
+		memset(scope, 0, sizeof(*scope));
 }
 
 static int DoorScopeRestoreEntries(sg_rune_door_scope_t *scope,
@@ -50,6 +61,8 @@ static int DoorScopeRestoreEntries(sg_rune_door_scope_t *scope,
 	 * caller may repair transient identity/link state and retry without
 	 * re-touching entries that already verified. */
 	scope->active = pending;
+	if (!pending)
+		DoorScopeClear(scope, ops, context);
 	return restored;
 }
 
@@ -76,13 +89,20 @@ sg_rune_door_scope_status_t SG_RuneDoorScopeOpen(
 		return SG_RUNE_DOOR_SCOPE_INVALID_ARGUMENT;
 	if (scope->active)
 		return SG_RUNE_DOOR_SCOPE_BUSY;
-	if (target_count > SG_RUNE_DOOR_SCOPE_MAX)
+	if (target_count > (size_t)INT_MAX / sizeof(*scope->entries))
 		return SG_RUNE_DOOR_SCOPE_CAPACITY;
 
 	/* Snapshot and validate the complete target set before the first mutation.
 	 * Capacity, duplicate, or identity failure therefore leaves every door in
 	 * its original linked state. */
-	memset(scope->entries, 0, sizeof(scope->entries));
+	if (target_count)
+	{
+		scope->entries = ops->allocate(context,
+		    target_count * sizeof(*scope->entries));
+		if (!scope->entries)
+			return SG_RUNE_DOOR_SCOPE_CAPACITY;
+		memset(scope->entries, 0, target_count * sizeof(*scope->entries));
+	}
 	scope->count = 0;
 	for (index = 0; index < target_count; index++)
 	{
@@ -91,11 +111,17 @@ sg_rune_door_scope_status_t SG_RuneDoorScopeOpen(
 		if (!targets[index].entity || targets[index].key < 0 ||
 		    !ops->identity_matches(context, targets[index].entity,
 		                           targets[index].key))
+		{
+			DoorScopeClear(scope, ops, context);
 			return SG_RUNE_DOOR_SCOPE_PREFLIGHT_FAILED;
+		}
 		for (prior = 0; prior < index; prior++)
 			if (targets[prior].entity == targets[index].entity ||
 			    targets[prior].key == targets[index].key)
+			{
+				DoorScopeClear(scope, ops, context);
 				return SG_RUNE_DOOR_SCOPE_PREFLIGHT_FAILED;
+			}
 		entry->entity = targets[index].entity;
 		entry->key = targets[index].key;
 		entry->solid = ops->get_solid(context, entry->entity);

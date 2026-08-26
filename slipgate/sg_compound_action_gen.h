@@ -1,4 +1,4 @@
-/* Bounded topology planner for compound door links. */
+/* Exhaustive topology planner for compound door links. */
 #ifndef SG_COMPOUND_ACTION_GEN_H
 #define SG_COMPOUND_ACTION_GEN_H
 
@@ -10,8 +10,6 @@
 #endif
 #include "sg_rune.h"
 
-#define SG_COMPOUND_ACTION_GEN_MAX_CANDIDATES 256U
-#define SG_COMPOUND_ACTION_GEN_MAX_SELECTED 256U
 #define SG_COMPOUND_ACTION_GEN_OBJECTIVE_MASK 0x03U
 
 typedef struct sg_compound_action_gen_seed_s
@@ -35,7 +33,7 @@ typedef struct sg_compound_action_gen_candidate_s
 } sg_compound_action_gen_candidate_t;
 
 /* The exact action oracle supplies all suffix controls. The planner owns only
- * bounded topology selection and canonical native-link construction. */
+ * finite topology selection and canonical native-link construction. */
 typedef struct sg_compound_action_gen_proof_s
 {
 	float suffix_anchor[3];
@@ -61,7 +59,6 @@ typedef enum sg_compound_action_gen_status_e
 	SG_COMPOUND_ACTION_GEN_DISABLED,
 	SG_COMPOUND_ACTION_GEN_INVALID,
 	SG_COMPOUND_ACTION_GEN_DUPLICATE,
-	SG_COMPOUND_ACTION_GEN_BUDGET,
 	SG_COMPOUND_ACTION_GEN_NO_IMPROVEMENT,
 	SG_COMPOUND_ACTION_GEN_NO_PROOF,
 	SG_COMPOUND_ACTION_GEN_BAD_PROOF,

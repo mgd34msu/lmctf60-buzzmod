@@ -6,6 +6,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_rune_hook_frontier.h"
+#include "slipgate/sg_rune_proof.h"
 
 static int failures;
 static edict_t entities[1];
@@ -24,6 +25,47 @@ static int chain_exact_calls;
 		failures++; \
 	} \
 } while (0)
+
+static void *FailAllocation(int bytes)
+{
+	(void)bytes;
+	return NULL;
+}
+
+static void IgnoreDprint(const char *format, ...)
+{
+	(void)format;
+}
+
+int CTF_HookPullVelocity(const vec3_t start, const vec3_t bite,
+	vec3_t velocity)
+{
+	(void)start;
+	(void)bite;
+	VectorClear(velocity);
+	return 0;
+}
+
+int SG_RuneProofHookLateralWindow(float horizontal, float rise)
+{
+	(void)horizontal;
+	(void)rise;
+	return 0;
+}
+
+void SG_RuneProofHookFrontierCursorReset(
+	sg_rune_proof_hook_frontier_cursor_t *cursor)
+{
+	if (cursor)
+		memset(cursor, 0, sizeof(*cursor));
+}
+
+size_t SG_RuneProofSelectHookFrontier(
+	const sg_rune_proof_hook_frontier_t *frontier)
+{
+	(void)frontier;
+	return 0U;
+}
 
 static trace_t HostTrace(const vec3_t start, const vec3_t mins,
 	const vec3_t maxs, const vec3_t end, edict_t *passent, int mask)
@@ -208,7 +250,7 @@ qboolean SG_OracleChainHookTraverse(sg_phantom_t *phantom,
 	return true;
 }
 
-int SG_RuneProofGravity(void)
+short SG_RuneProofGravity(void)
 {
 	return 100;
 }
@@ -283,12 +325,39 @@ static void TestSourceControlsUseExactOracle(void)
 	CHECK(chain_exact_calls == 1 && prover_calls == 2U);
 }
 
+static void TestFrontierAllocationFailureIsFatal(void)
+{
+	rune_seed_t seeds[2];
+	rune_link_t links[1];
+	byte stable[2], waterlevel[2], objective_mask[2] = { 3U, 3U };
+	int component[2] = { 0, 0 };
+	int link_count = 0, hook_envelopes = 0;
+	uint32_t prover_calls = 0U;
+	qboolean link_overflow = false;
+	sg_rune_hook_frontier_input_t input = Fixture(seeds, stable, waterlevel,
+		&prover_calls);
+
+	input.component = component;
+	input.objective_mask = objective_mask;
+	input.component_count = 1;
+	input.links = links;
+	input.link_count = &link_count;
+	input.link_overflow = &link_overflow;
+	input.hook_envelope_count = &hook_envelopes;
+	sg_host.level_alloc = FailAllocation;
+	sg_host.dprint = IgnoreDprint;
+	CHECK(!SG_RuneGenerateHookFrontier(&input));
+	CHECK(link_count == 0 && !link_overflow && hook_envelopes == 0);
+	sg_host.level_alloc = NULL;
+}
+
 int main(void)
 {
 	memset(&sg_host, 0, sizeof(sg_host));
 	sg_host.trace = HostTrace;
 	TestWorldBitesDriveFreshProofPoses();
 	TestSourceControlsUseExactOracle();
+	TestFrontierAllocationFailureIsFatal();
 	if (failures)
 	{
 		fprintf(stderr, "sg_rune_hook_nomination_test: %d failure(s)\n",

@@ -1028,7 +1028,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 stable_port=62000, attempt_number=number, work=first,
             )
             controller.atomic_write_json(attempt / "result.json", {
-                "classification": "LINT_FAIL", "disposition": "artifact_rejected",
+                "classification": "PROOF_REQUIRED",
+                "disposition": "artifact_rejected",
             })
             controller._publish_attempt_commit(run_root, "lmctf01", attempt, number)
             with self.assertRaises(controller.CorpusError):
@@ -1060,21 +1061,18 @@ class RuneCorpusControllerTests(unittest.TestCase):
             ))
             self.thaw(snapshot)
 
-    def test_full_selection_rejects_wrong_adopted_rune_count_before_launch(self):
+    def test_full_selection_accepts_snapshot_defined_adoption_count(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             snapshot = self.make_snapshot(work)
-            original = controller.verify_snapshot
-            with mock.patch.object(controller, "verify_snapshot", wraps=original) as verified:
-                with self.assertRaisesRegex(controller.CorpusError, "exactly 156 adopted"):
-                    controller.execute_selection(
-                        snapshot=snapshot, run_root=work / "run",
-                        selected_maps=controller.validate_manifest(),
-                        port_base=62000, startup_timeout=1, generation_timeout=None,
-                        cold_load_timeout=1, jobs=1,
-                        engine_arguments=controller.DEFAULT_ENGINE_ARGUMENTS,
-                    )
-            self.assertEqual(1, verified.call_count)
+            with self.assertRaisesRegex(controller.CorpusError, "jobs >= 2"):
+                controller.execute_selection(
+                    snapshot=snapshot, run_root=work / "run",
+                    selected_maps=controller.validate_manifest(),
+                    port_base=62000, startup_timeout=1, generation_timeout=None,
+                    cold_load_timeout=1, jobs=1,
+                    engine_arguments=controller.DEFAULT_ENGINE_ARGUMENTS,
+                )
             self.assertFalse((work / "run").exists())
             self.thaw(snapshot)
 
@@ -1850,6 +1848,12 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     artifact = self.private / "game/maps/lmctf01.rune"
                     artifact.write_bytes(b"fresh fake artifact")
                     lines = (
+                        "rune: topology status=0 contacts=10 contact_overflow=0 "
+                        "initial_crossing_contacts=2 initial_crossing_directions=4 "
+                        "owner_calls=4 proved_added=2 proved_present=0 "
+                        "owner_rejected=2 owner_deferred=0 unexamined=0 "
+                        "unresolved_contacts=0 unresolved_directions=0 "
+                        "initial_sccs=3 final_sccs=1 scc_builds=2 added_links=2\n"
                         "rune: objective roots red=1 blue=2\n"
                         "rune: wrote game/maps/lmctf01.rune (7 seeds, 9 links, "
                         "4 mechanism nodes, 2 triggers, 3 inventory edges, "
@@ -2151,6 +2155,32 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     stable_port=62000,
                 ),
             )
+            forged_report = json.loads(json.dumps(pass_result))
+            forged_report["generation_report"]["topology"][
+                "unresolved_contacts"
+            ] += 1
+            with self.assertRaisesRegex(
+                controller.CorpusError, "authenticated server log"
+            ):
+                controller._validate_terminal_schema(
+                    forged_report, run_root=pass_root, attempt=attempt,
+                    map_name="lmctf01", fingerprint="fingerprint",
+                    stable_port=62000,
+                )
+            route_only_without_proof = json.loads(json.dumps(pass_result))
+            route_only_without_proof["classification"] = "ROUTE_ONLY"
+            route_only_without_proof["route_contract"] = "local_only"
+            route_only_without_proof["normalized_signature"] = (
+                controller.normalized_signature(
+                    "ROUTE_ONLY", route_only_without_proof["detail"]
+                )
+            )
+            with self.assertRaisesRegex(controller.CorpusError, "open-exhausted"):
+                controller._validate_terminal_schema(
+                    route_only_without_proof, run_root=pass_root,
+                    attempt=attempt, map_name="lmctf01",
+                    fingerprint="fingerprint", stable_port=62000,
+                )
             self.assertEqual(0, stat.S_IMODE(attempt.stat().st_mode) & 0o222)
             self.assertEqual(0, stat.S_IMODE((attempt / "result.json").stat().st_mode) & 0o222)
 
@@ -2531,6 +2561,12 @@ class RuneCorpusControllerTests(unittest.TestCase):
             artifact.parent.mkdir(parents=True)
             artifact.write_bytes(b"artifact")
             good = (
+                "rune: topology status=0 contacts=10 contact_overflow=0 "
+                "initial_crossing_contacts=2 initial_crossing_directions=4 "
+                "owner_calls=4 proved_added=2 proved_present=0 "
+                "owner_rejected=2 owner_deferred=0 unexamined=0 "
+                "unresolved_contacts=0 unresolved_directions=0 "
+                "initial_sccs=3 final_sccs=1 scc_builds=2 added_links=2\n"
                 "rune: objective roots red=1 blue=2\n"
                 "rune: wrote game/maps/gatecase.rune (7 seeds, 9 links, "
                 "4 mechanism nodes, 2 triggers, 3 inventory edges, 5 activation plans)\n"
@@ -2539,6 +2575,33 @@ class RuneCorpusControllerTests(unittest.TestCase):
             )
             parsed = controller.parse_generation_log(good, "gatecase", artifact, attempt)
             self.assertEqual(5, parsed["counts"]["plans"])
+            self.assertEqual(0, parsed["topology"]["unexamined"])
+            route_only = good.replace(
+                "rune: objective roots red=1 blue=2\n",
+                "rune: late-path status=open-exhausted selectors=9 scheduled=514 "
+                "pairs=10000 proofs=42 accepted=3 rejected=39 rebuilds=9 "
+                "max_regions=20 links=3\n"
+                "rune: objective roots red=1 blue=2\n",
+            )
+            parsed_route_only = controller.parse_generation_log(
+                route_only, "gatecase", artifact, attempt
+            )
+            self.assertEqual("open-exhausted", parsed_route_only["late_path"]["status"])
+            self.assertEqual(514, parsed_route_only["late_path"]["scheduled"])
+            route_only_lines = route_only.splitlines()
+            late_before_topology = "\n".join(
+                [route_only_lines[1], route_only_lines[0], *route_only_lines[2:]]
+            ) + "\n"
+            with self.assertRaisesRegex(controller.CorpusError, "follow topology"):
+                controller.parse_generation_log(
+                    late_before_topology,
+                    "gatecase", artifact, attempt,
+                )
+            with self.assertRaisesRegex(controller.CorpusError, "open-exhausted"):
+                controller.parse_generation_log(
+                    route_only.replace("open-exhausted", "open-budget"),
+                    "gatecase", artifact, attempt,
+                )
             deferred = good.replace(
                 "slipgate: rune ready gatecase, 7 seeds, 9 links, 4 mechanism "
                 "nodes, 5 plans, gravity 800, all fields up\n",
@@ -2605,7 +2668,13 @@ class RuneCorpusControllerTests(unittest.TestCase):
                             invalid, "gatecase", artifact, attempt
                         )
             with self.assertRaisesRegex(controller.CorpusError, "objective-root"):
-                controller.parse_generation_log("prefix " + good, "gatecase", artifact, attempt)
+                controller.parse_generation_log(
+                    good.replace(
+                        "rune: objective roots red=1 blue=2",
+                        "prefix rune: objective roots red=1 blue=2",
+                    ),
+                    "gatecase", artifact, attempt,
+                )
             bad_later = good + "rune: generation refused malformed graph\n"
             with self.assertRaisesRegex(controller.CorpusError, "failure after write"):
                 controller.parse_generation_log(bad_later, "gatecase", artifact, attempt)
@@ -3276,9 +3345,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary) / "run"
             snapshot = Path(temporary) / "snapshot"
-            adopted = {name: {} for name in maps[:controller.EXPECTED_ADOPTED_RUNE_COUNT]}
             with mock.patch.object(
-                controller, "verify_snapshot", return_value={"adopted_runes": adopted}
+                controller, "verify_snapshot", return_value={"adopted_runes": {}}
             ), mock.patch.object(
                 controller,
                 "preflight_python_runtime",

@@ -21,8 +21,11 @@ static rune_link_t links[4];
 static int link_count;
 static int failures;
 static int board_only_near;
+static int board_reject_positive_y;
 static int board_calls;
 static int trace_l_corner;
+static int allocation_calls;
+static int fail_allocation_call = -1;
 
 #define CHECK(condition_) do { \
 	if (!(condition_)) { \
@@ -39,6 +42,9 @@ static const uint32_t route[SG_TRAIN_STATION_ROUTE_CORNERS] = {
 
 static void *LevelAlloc(int size)
 {
+	allocation_calls++;
+	if (allocation_calls == fail_allocation_call)
+		return NULL;
 	return calloc(1U, (size_t)size);
 }
 
@@ -91,7 +97,8 @@ qboolean SG_OracleTrainStationBoard(const vec3_t source,
 	board_calls++;
 	if (fabsf(source[2] - expected_z) > 0.125f ||
 	    fabsf(approach[2] - expected_z) > 0.125f ||
-	    dwell_ms != 3000U || (board_only_near && source[0] > 250.0f))
+	    dwell_ms != 3000U || (board_only_near && source[0] > 250.0f) ||
+	    (board_reject_positive_y && source[1] > 0.0f))
 		return false;
 	*arrival_ms = 100;
 	VectorCopy(approach, contact_out);
@@ -433,6 +440,60 @@ int main(void)
 		CHECK(links[1].anchor[1] == 120.0f);
 	}
 
+	{
+		rune_seed_t many_seeds[40];
+		rune_link_t many_links[39];
+		byte many_stable[40];
+		byte many_waterlevel[40];
+		int i;
+
+		memset(many_seeds, 0, sizeof(many_seeds));
+		memset(many_links, 0, sizeof(many_links));
+		memset(many_stable, 1, sizeof(many_stable));
+		memset(many_waterlevel, 0, sizeof(many_waterlevel));
+		VectorSet(many_seeds[0].origin, -72.0f, -160.0f, -1287.875f);
+		for (i = 1; i < 39; i++)
+			VectorSet(many_seeds[i].origin, 216.0f, 120.0f, 120.125f);
+		VectorSet(many_seeds[39].origin, 416.0f, -384.0f, 120.125f);
+		for (i = 0; i < 39; i++)
+		{
+			many_links[i].from = 0;
+			many_links[i].to = i + 1;
+			many_links[i].action = RL_RUN;
+			many_links[i].provenance = RL_PROVEN;
+			many_links[i].cost_ms = 100;
+			many_links[i].mechanism_plan = RUNE_NO_MECHANISM_PLAN;
+		}
+		link_count = 0;
+		num_bindings = 0U;
+		memset(bindings, 0, sizeof(bindings));
+		board_only_near = 0;
+		board_reject_positive_y = 1;
+		board_calls = 0;
+		trace_l_corner = 1;
+		request.seeds = many_seeds;
+		request.num_seeds = 40;
+		request.links = many_links;
+		request.num_links = 39;
+		request.source_stable = many_stable;
+		request.source_waterlevel = many_waterlevel;
+		CHECK(SG_TrainStationCandidateGameGenerate(&request) == 1);
+		diagnostics = SG_TrainStationCandidateGameLastDiagnostics();
+		CHECK(diagnostics->board_attempts > 32U);
+		CHECK(diagnostics->board_attempts == 39U);
+		CHECK(board_calls == 39);
+		CHECK(link_count == 1);
+		CHECK(links[0].from == 39 && links[0].to == 0);
+		link_count = 0;
+		num_bindings = 0U;
+		allocation_calls = 0;
+		fail_allocation_call = 3;
+		CHECK(SG_TrainStationCandidateGameGenerate(&request) == -1);
+		CHECK(link_count == 0 && num_bindings == 0U);
+		fail_allocation_call = -1;
+		board_reject_positive_y = 0;
+	}
+
 	memset(seeds, 0, sizeof(seeds));
 	memset(dry_links, 0, sizeof(dry_links));
 	VectorSet(seeds[0].origin, 416.0f, -192.0f, 120.125f);
@@ -457,6 +518,8 @@ int main(void)
 	request.num_seeds = 4;
 	request.links = dry_links;
 	request.num_links = 2;
+	request.source_stable = stable;
+	request.source_waterlevel = waterlevel;
 	CHECK(SG_TrainStationCandidateGameGenerate(&request) == 2);
 	CHECK(board_calls == 2);
 	CHECK(link_count == 2);

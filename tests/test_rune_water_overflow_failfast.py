@@ -29,10 +29,12 @@ class WaterOverflowFailFastTests(unittest.TestCase):
         self.assertNotIn("SG_SWIM_REACH", swim)
 
     def test_only_distinct_admissible_seeds_can_overflow(self) -> None:
-        add_start = SOURCE.index("static int Seed_Add(vec3_t origin)")
+        add_start = SOURCE.index("static int Seed_AddPose(vec3_t origin")
         add_end = SOURCE.index("static qboolean Seed_Flood(", add_start)
         add = SOURCE[add_start:add_end]
-        duplicate = add.index("nearby = Seed_NearbyIndex(origin)")
+        duplicate = add.index(
+            "nearby = Seed_NearbyIndexPose(origin, true, crouched)"
+        )
         hazardous = add.index("if (submerged &&", duplicate)
         capacity = add.index("if (gen_num_seeds >= SEED_MAX)", hazardous)
         overflow = add.index("gen_seed_overflow = true;", capacity)

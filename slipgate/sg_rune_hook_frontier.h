@@ -29,7 +29,7 @@ typedef struct sg_rune_hook_nomination_proof_s
 	byte exit_speed;
 } sg_rune_hook_nomination_proof_t;
 
-void SG_RuneGenerateHookFrontier(
+qboolean SG_RuneGenerateHookFrontier(
 	const sg_rune_hook_frontier_input_t *input);
 qboolean SG_RuneProveHook(const sg_rune_hook_frontier_input_t *input,
 	int from, int to, vec3_t control_out, short *cost_ms, byte *exit_speed);

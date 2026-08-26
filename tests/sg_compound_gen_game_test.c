@@ -12,6 +12,9 @@
 static int failures;
 static int rejected_destination = -1;
 static int reject_nearest;
+static int only_provable_destination = -1;
+static int allocation_calls;
+static int fail_allocation_call = -1;
 static int crossing_min_destination;
 static int mock_mechanism_count = 1;
 static int reverse_mechanisms;
@@ -28,6 +31,9 @@ sg_host_t sg_host;
 
 static void *Allocate(int size)
 {
+	allocation_calls++;
+	if (allocation_calls == fail_allocation_call)
+		return NULL;
 	return malloc((size_t)size);
 }
 
@@ -144,7 +150,9 @@ rune_reject_reason_t SG_OracleCompoundSwimPreopen(sg_phantom_t *phantom,
 	(void)loader_replay;
 	if (nearest < 1)
 		nearest = 1;
-	if ((int)destination[0] == rejected_destination ||
+	if ((only_provable_destination >= 0 &&
+	     (int)destination[0] != only_provable_destination) ||
+	    (int)destination[0] == rejected_destination ||
 	    (reject_nearest && (int)destination[0] == nearest))
 	{
 		if (replay_reason)
@@ -193,6 +201,7 @@ static sg_compound_gen_game_result_t Build(rune_seed_t *seeds,
 {
 	sg_compound_gen_game_request_t request;
 
+	allocation_calls = 0;
 	memset(&request, 0, sizeof(request));
 	request.seeds = seeds;
 	request.seed_count = 300U;
@@ -222,8 +231,8 @@ static void TestBoundedCategoriesAndFallback(void)
 	rejected_destination = 1;
 	result = Build(seeds, components, objective_masks, links, &link_count, 320U);
 	CHECK(result.status == SG_COMPOUND_GEN_OK);
-	CHECK(result.candidates == 192U);
-	CHECK(result.proof_calls == 192U);
+	CHECK(result.candidates == 299U);
+	CHECK(result.proof_calls == 299U);
 	CHECK(result.proof_rejection == RLR_SUFFIX_REPLAY_FAILED);
 	CHECK(result.proof_rejections == 1U);
 	CHECK(result.replay_rejection == SG_REPLAY_REASON_ACTION_TIMEOUT);
@@ -257,7 +266,7 @@ static void TestLocalShortcutWithoutTopologyGain(void)
 	crossing_min_destination = 5;
 	result = Build(seeds, components, objective_masks, links, &link_count, 400U);
 	CHECK(result.status == SG_COMPOUND_GEN_OK);
-	CHECK(result.candidates == 64U && result.proof_calls == 64U);
+	CHECK(result.candidates == 295U && result.proof_calls == 295U);
 	CHECK(result.emitted == 1U && links[299].to == 5);
 	crossing_min_destination = 0;
 }
@@ -296,7 +305,7 @@ static void TestDeterministicAndAtomicCapacity(void)
 	CHECK(memcmp(first, before, sizeof(first)) == 0);
 }
 
-static void TestThirtyFiveContactsStayGloballyBounded(void)
+static void TestThirtyFiveContactsAreExhaustiveAndDeterministic(void)
 {
 	rune_seed_t seeds[300];
 	int components[300];
@@ -320,7 +329,7 @@ static void TestThirtyFiveContactsStayGloballyBounded(void)
 	    &reverse_count, 400U);
 	CHECK(forward_result.status == SG_COMPOUND_GEN_OK);
 	CHECK(reverse_result.status == SG_COMPOUND_GEN_OK);
-	CHECK(forward_result.candidates <= SG_COMPOUND_GEN_MAX_CANDIDATES);
+	CHECK(forward_result.candidates == 35U * 299U);
 	CHECK(forward_result.candidates == reverse_result.candidates);
 	CHECK(forward_result.proof_calls == forward_result.candidates);
 	CHECK(forward_result.candidates > 0U);
@@ -334,7 +343,37 @@ static void TestThirtyFiveContactsStayGloballyBounded(void)
 		    (int)(forward[index].mechanism_anchor[0] + 0.5f));
 }
 
-static void TestContactBudgetIsAtomic(void)
+static void TestProofBeyondFormerQuotaIsReached(void)
+{
+	rune_seed_t seeds[300];
+	int components[300];
+	uint8_t objective_masks[300];
+	rune_link_t links[400];
+	size_t link_count;
+	sg_compound_gen_game_result_t result;
+	size_t index;
+
+	Fixture(seeds, components, objective_masks, links, &link_count);
+	for (index = 0U; index < 300U; index++)
+	{
+		components[index] = 0;
+		objective_masks[index] = 3U;
+	}
+	mock_mechanism_count = 1;
+	reverse_mechanisms = 0;
+	rejected_destination = -1;
+	reject_nearest = 0;
+	only_provable_destination = 299;
+	result = Build(seeds, components, objective_masks, links, &link_count, 400U);
+	CHECK(result.status == SG_COMPOUND_GEN_OK);
+	CHECK(result.candidates == 299U);
+	CHECK(result.proof_calls == 299U);
+	CHECK(result.emitted == 1U && link_count == 300U);
+	CHECK(links[299].to == 299);
+	only_provable_destination = -1;
+}
+
+static void TestAllocationFailureIsAtomic(void)
 {
 	rune_seed_t seeds[300];
 	int components[300];
@@ -345,17 +384,41 @@ static void TestContactBudgetIsAtomic(void)
 
 	Fixture(seeds, components, objective_masks, links, &link_count);
 	memcpy(before, links, sizeof(before));
-	mock_mechanism_count = 65;
+	mock_mechanism_count = 1;
+	reverse_mechanisms = 0;
+	rejected_destination = -1;
+	reject_nearest = 0;
+	only_provable_destination = -1;
+	fail_allocation_call = 2;
+	result = Build(seeds, components, objective_masks, links, &link_count, 400U);
+	CHECK(result.status != SG_COMPOUND_GEN_OK);
+	CHECK(result.proof_calls == 0U && result.emitted == 0U);
+	CHECK(link_count == 299U);
+	CHECK(memcmp(links, before, sizeof(links)) == 0);
+	fail_allocation_call = -1;
+}
+
+static void TestContactsBeyondLegacyCapAreExhausted(void)
+{
+	rune_seed_t seeds[300];
+	int components[300];
+	uint8_t objective_masks[300];
+	rune_link_t links[400];
+	size_t link_count;
+	sg_compound_gen_game_result_t result;
+
+	Fixture(seeds, components, objective_masks, links, &link_count);
+	mock_mechanism_count = 90;
 	reverse_mechanisms = 0;
 	rejected_destination = -1;
 	reject_nearest = 0;
 	result = Build(seeds, components, objective_masks, links, &link_count,
 	    400U);
-	CHECK(result.status == SG_COMPOUND_GEN_BUDGET);
-	CHECK(result.candidates == SG_COMPOUND_GEN_MAX_CANDIDATES + 1U);
-	CHECK(result.proof_calls == 0U && result.emitted == 0U);
-	CHECK(link_count == 299U);
-	CHECK(memcmp(links, before, sizeof(links)) == 0);
+	CHECK(result.status == SG_COMPOUND_GEN_OK);
+	CHECK(result.candidates == 90U * 299U);
+	CHECK(result.proof_calls == result.candidates);
+	CHECK(result.selected > 256U);
+	CHECK(result.emitted > 0U && link_count > 299U);
 }
 
 static void TestProductionWrapperEnabled(void)
@@ -381,6 +444,39 @@ static void TestProductionWrapperEnabled(void)
 	CHECK(link_count > (int)fixture_count);
 }
 
+static void TestProductionWrapperPropagatesIncompleteWork(void)
+{
+	rune_seed_t seeds[300];
+	rune_link_t links[400], before[400];
+	int components[300], link_count;
+	uint8_t objective_masks[300];
+	sg_compound_gen_game_topology_t topology;
+	size_t fixture_count;
+
+	Fixture(seeds, components, objective_masks, links, &fixture_count);
+	memcpy(before, links, sizeof(before));
+	link_count = (int)fixture_count;
+	topology.component = components;
+	topology.objective_mask = objective_masks;
+	mock_mechanism_count = 1;
+	rejected_destination = -1;
+	reject_nearest = 0;
+	only_provable_destination = 999;
+	allocation_calls = 0;
+	CHECK(!SG_CompoundGenGameGenerate(seeds, 300U, links, &link_count, 400U,
+	    &topology, Allocate, Deallocate));
+	CHECK(link_count == (int)fixture_count);
+	CHECK(memcmp(links, before, sizeof(links)) == 0);
+	only_provable_destination = -1;
+	fail_allocation_call = 2;
+	allocation_calls = 0;
+	CHECK(!SG_CompoundGenGameGenerate(seeds, 300U, links, &link_count, 400U,
+	    &topology, Allocate, Deallocate));
+	CHECK(link_count == (int)fixture_count);
+	CHECK(memcmp(links, before, sizeof(links)) == 0);
+	fail_allocation_call = -1;
+}
+
 int main(void)
 {
 	memset(&mock_world, 0, sizeof(mock_world));
@@ -389,9 +485,12 @@ int main(void)
 	TestBoundedCategoriesAndFallback();
 	TestLocalShortcutWithoutTopologyGain();
 	TestDeterministicAndAtomicCapacity();
-	TestThirtyFiveContactsStayGloballyBounded();
-	TestContactBudgetIsAtomic();
+	TestThirtyFiveContactsAreExhaustiveAndDeterministic();
+	TestProofBeyondFormerQuotaIsReached();
+	TestAllocationFailureIsAtomic();
+	TestContactsBeyondLegacyCapAreExhausted();
 	TestProductionWrapperEnabled();
+	TestProductionWrapperPropagatesIncompleteWork();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_gen_game_test: %d failures\n", failures);

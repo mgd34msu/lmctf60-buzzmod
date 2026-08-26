@@ -449,6 +449,68 @@ static int TestGameWaterAndFatal(void)
 	return 0;
 }
 
+static int TestGameMoverContactTriesExactOrdinaryMovement(void)
+{
+	rune_seed_t seeds[2] = {0};
+	rune_link_t links[8] = {0};
+	sg_rune_topology_outcome_t outcomes[4];
+	sg_rune_topology_report_t report;
+	int link_count = 0;
+	game_fixture_t fixture = {
+		links, &link_count, {0}, {0}, {0}, 0,
+		{ RL_RUN, RL_JUMP }, -1, -1
+	};
+
+	CHECK(GameRepair(SG_RUNE_CONTACT_DECLARED_MOVER, seeds, links,
+		&link_count, &fixture, outcomes, &report) == SG_RUNE_TOPOLOGY_OK);
+	CHECK(link_count == 2 && fixture.call_count == 3);
+	CHECK(outcomes[0].owner == 3U && outcomes[1].owner == 3U);
+	CHECK(report.edges_added == 2U && report.deferred == 0U);
+
+	memset(links, 0, sizeof(links));
+	memset(&fixture, 0, sizeof(fixture));
+	link_count = 0;
+	fixture.links = links;
+	fixture.link_count = &link_count;
+	fixture.accept_action[0] = fixture.accept_action[1] = -1;
+	fixture.fatal_from = fixture.fatal_to = -1;
+	CHECK(GameRepair(SG_RUNE_CONTACT_DECLARED_MOVER, seeds, links,
+		&link_count, &fixture, outcomes, &report) == SG_RUNE_TOPOLOGY_OK);
+	CHECK(link_count == 0 && fixture.call_count == 4);
+	CHECK(report.deferred == 2U && report.rejected == 0U);
+
+	memset(links, 0, sizeof(links));
+	memset(&fixture, 0, sizeof(fixture));
+	link_count = 0;
+	seeds[0].flags = RSF_WATER;
+	fixture.links = links;
+	fixture.link_count = &link_count;
+	fixture.accept_action[0] = fixture.accept_action[1] = RL_SWIM;
+	fixture.fatal_from = fixture.fatal_to = -1;
+	CHECK(GameRepair(SG_RUNE_CONTACT_DECLARED_MOVER, seeds, links,
+		&link_count, &fixture, outcomes, &report) == SG_RUNE_TOPOLOGY_OK);
+	CHECK(link_count == 2 && fixture.call_count == 2);
+	CHECK(fixture.actions[0] == RL_SWIM && fixture.actions[1] == RL_SWIM);
+	CHECK(report.edges_added == 2U && report.deferred == 0U);
+
+	memset(links, 0, sizeof(links));
+	memset(&fixture, 0, sizeof(fixture));
+	link_count = 0;
+	seeds[0].flags = 0;
+	seeds[0].origin[2] = 64.0f;
+	fixture.links = links;
+	fixture.link_count = &link_count;
+	fixture.accept_action[0] = RL_DROP;
+	fixture.accept_action[1] = RL_RUN;
+	fixture.fatal_from = fixture.fatal_to = -1;
+	CHECK(GameRepair(SG_RUNE_CONTACT_DECLARED_MOVER, seeds, links,
+		&link_count, &fixture, outcomes, &report) == SG_RUNE_TOPOLOGY_OK);
+	CHECK(link_count == 2 && fixture.call_count == 4);
+	CHECK(fixture.actions[2] == RL_DROP && fixture.actions[3] == RL_RUN);
+	CHECK(report.edges_added == 2U && report.deferred == 0U);
+	return 0;
+}
+
 static char *ReadSource(const char *path)
 {
 	FILE *file = fopen(path, "rb");
@@ -484,14 +546,19 @@ static int TestGeneratorIntegrationOrder(void)
 	CHECK(source != NULL);
 	flood = strstr(source, "static qboolean Seed_Flood");
 	candidate = flood ? strstr(flood,
-		"candidate_near = Seed_NearbyIndex(cand);") : NULL;
-	ground = candidate ? strstr(candidate, "if (!Seed_Ground(cand, ground))")
+		"candidate_near = Seed_NearbyIndex(candidate);") : NULL;
+	ground = candidate ? strstr(candidate,
+		"if (!Seed_Ground(candidate, ground))")
 		: NULL;
-	meeting = ground ? strstr(ground, "contact = Seed_NearbyIndex(ground);")
+	meeting = ground ? strstr(ground,
+		"contact = Seed_NearbyIndexPose(ground, true, false);")
 		: NULL;
 	record = meeting ? strstr(meeting, "SG_RuneTopologyRecordContact") : NULL;
 	CHECK(flood && candidate && ground && meeting && record);
 	CHECK(strstr(source, "if (Seed_Nearby(cand)) continue;") == NULL);
+	CHECK(strstr(candidate, "candidate[2] += 40.0f") == NULL ||
+		strstr(candidate, "candidate[2] += 40.0f") > ground);
+	CHECK(strstr(ground, "if (!Prove(frontier, contact, false") != NULL);
 	CHECK(strstr(meeting,
 		"candidate_near >= 0 && contact != candidate_near") != NULL);
 
@@ -523,6 +590,7 @@ int main(void)
 	    (line = TestGameContactClassification()) != 0 ||
 	    (line = TestGameStaticActionRoutes()) != 0 ||
 	    (line = TestGameWaterAndFatal()) != 0 ||
+	    (line = TestGameMoverContactTriesExactOrdinaryMovement()) != 0 ||
 	    (line = TestGeneratorIntegrationOrder()) != 0)
 	{
 		fprintf(stderr, "sg_rune_topology_test: failed at line %d\n", line);

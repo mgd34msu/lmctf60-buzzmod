@@ -1,5 +1,6 @@
 /* Focused host tests for the generator's checked door-solid transaction. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "slipgate/sg_rune_door_scope.h"
@@ -27,7 +28,25 @@ typedef struct fake_context_s
 	int open_solid;
 	int transient_open_failure_key;
 	int link_calls;
+	int allocation_calls;
+	int fail_allocation_call;
 } fake_context_t;
+
+static void *FakeAllocate(void *opaque, size_t size)
+{
+	fake_context_t *context = opaque;
+
+	context->allocation_calls++;
+	if (context->allocation_calls == context->fail_allocation_call)
+		return NULL;
+	return malloc(size);
+}
+
+static void FakeDeallocate(void *opaque, void *block)
+{
+	(void)opaque;
+	free(block);
+}
 
 static int FakeIdentity(void *opaque, void *entity, int key)
 {
@@ -79,6 +98,8 @@ static void FakeLink(void *opaque, void *entity)
 }
 
 static const sg_rune_door_scope_ops_t fake_ops = {
+	FakeAllocate,
+	FakeDeallocate,
 	FakeIdentity,
 	FakeGetSolid,
 	FakeGetLinkcount,
@@ -110,27 +131,28 @@ static fake_context_t FreshContext(void)
 	memset(&context, 0, sizeof(context));
 	context.open_solid = -7;
 	context.transient_open_failure_key = -1;
+	context.fail_allocation_call = -1;
 	return context;
 }
 
-static void TestCapacityAndPreflightAreMutationFree(void)
+static void TestPreflightAndAllocationFailureAreMutationFree(void)
 {
-	fake_door_t doors[SG_RUNE_DOOR_SCOPE_MAX + 1];
-	sg_rune_door_scope_target_t targets[SG_RUNE_DOOR_SCOPE_MAX + 1];
+	fake_door_t doors[3];
+	sg_rune_door_scope_target_t targets[3];
 	sg_rune_door_scope_t scope;
 	fake_context_t context = FreshContext();
 
-	InitDoors(doors, targets, SG_RUNE_DOOR_SCOPE_MAX + 1);
+	InitDoors(doors, targets, 3);
 	SG_RuneDoorScopeInit(&scope);
+	context.fail_allocation_call = 1;
 	CHECK(SG_RuneDoorScopeOpen(&scope, targets,
-		SG_RUNE_DOOR_SCOPE_MAX + 1, context.open_solid,
+		3, context.open_solid,
 		&fake_ops, &context) == SG_RUNE_DOOR_SCOPE_CAPACITY);
 	CHECK(context.link_calls == 0);
 	CHECK(doors[0].solid == 10 && doors[0].linkcount == 100);
-	CHECK(doors[SG_RUNE_DOOR_SCOPE_MAX].solid ==
-		10 + SG_RUNE_DOOR_SCOPE_MAX);
 	CHECK(!SG_RuneDoorScopeActive(&scope));
 
+	context.fail_allocation_call = -1;
 	InitDoors(doors, targets, 3);
 	doors[2].valid = 0;
 	CHECK(SG_RuneDoorScopeOpen(&scope, targets, 3,
@@ -147,6 +169,29 @@ static void TestCapacityAndPreflightAreMutationFree(void)
 		context.open_solid, &fake_ops, &context) ==
 		SG_RUNE_DOOR_SCOPE_PREFLIGHT_FAILED);
 	CHECK(context.link_calls == 0);
+}
+
+static void TestMoreThanFormerCapRestoresExactly(void)
+{
+	fake_door_t doors[129];
+	sg_rune_door_scope_target_t targets[129];
+	sg_rune_door_scope_t scope;
+	fake_context_t context = FreshContext();
+	size_t index;
+
+	InitDoors(doors, targets, 129U);
+	SG_RuneDoorScopeInit(&scope);
+	CHECK(SG_RuneDoorScopeOpen(&scope, targets, 129U,
+		context.open_solid, &fake_ops, &context) == SG_RUNE_DOOR_SCOPE_OK);
+	CHECK(scope.count == 129U && context.link_calls == 129);
+	CHECK(SG_RuneDoorScopeRestore(&scope, &fake_ops, &context) ==
+		SG_RUNE_DOOR_SCOPE_OK);
+	CHECK(!SG_RuneDoorScopeActive(&scope) && context.link_calls == 258);
+	for (index = 0U; index < 129U; index++)
+	{
+		CHECK(doors[index].solid == 10 + (int)index);
+		CHECK(doors[index].linkcount == 100 + (int)index);
+	}
 }
 
 static void TestExactSuccessfulRestore(void)
@@ -265,7 +310,8 @@ static void TestPersistentRestoreFailureRemainsPending(void)
 
 int main(void)
 {
-	TestCapacityAndPreflightAreMutationFree();
+	TestPreflightAndAllocationFailureAreMutationFree();
+	TestMoreThanFormerCapRestoresExactly();
 	TestExactSuccessfulRestore();
 	TestOpenFailureRollsBackEveryChangedEntry();
 	TestRestoreFailureIsRetryable();

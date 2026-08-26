@@ -68,6 +68,23 @@ static int RelayWallGameEligible(void *raw, uint32_t seed, int source)
 	              : request->has_outgoing(request->context, seed);
 }
 
+static int RelayWallGameLinked(void *raw, uint32_t source,
+	uint32_t destination)
+{
+	relay_wall_game_context_t *context = raw;
+	const sg_relay_wall_objective_game_request_t *request = context->request;
+	int index;
+
+	if (!request->link_count || *request->link_count < 0 ||
+	    *request->link_count > request->link_capacity)
+		return -1;
+	for (index = 0; index < *request->link_count; index++)
+		if ((uint32_t)request->links[index].from == source &&
+		    (uint32_t)request->links[index].to == destination)
+			return 1;
+	return 0;
+}
+
 
 static int RelayWallGameDiscover(void *raw,
 	const sg_mech_catalog_view_t *catalog, uint32_t entry_key,
@@ -500,6 +517,7 @@ int SG_RelayWallObjectiveGameBridge(
 	objective.objective_masks = request->objective_masks;
 	objective.context = &context;
 	objective.eligible = RelayWallGameEligible;
+	objective.linked = RelayWallGameLinked;
 	objective.discover = RelayWallGameDiscover;
 	objective.prove = RelayWallGameProve;
 	objective.publish = RelayWallGamePublish;

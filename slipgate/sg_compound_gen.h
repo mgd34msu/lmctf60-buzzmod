@@ -1,4 +1,4 @@
-/* sg_compound_gen.h -- pure bounded planner for contracted compound links. */
+/* sg_compound_gen.h -- pure finite planner for contracted compound links. */
 #ifndef SG_COMPOUND_GEN_H
 #define SG_COMPOUND_GEN_H
 
@@ -8,10 +8,7 @@
 #include "sg_rune.h"
 
 /* The caller owns mechanism discovery and supplies only replay-exact
- * candidates.  These caps keep the planner allocation-free and keep the
- * later exact-oracle budget independent of map seed count. */
-#define SG_COMPOUND_GEN_MAX_CANDIDATES 256U
-#define SG_COMPOUND_GEN_MAX_SELECTED SG_COMPOUND_GEN_MAX_CANDIDATES
+ * candidates. The planner examines every finite supplied candidate. */
 #define SG_COMPOUND_GEN_OBJECTIVE_MASK 0x03U
 
 typedef struct sg_compound_gen_seed_s
@@ -58,7 +55,6 @@ typedef enum sg_compound_gen_status_e
 	SG_COMPOUND_GEN_DISABLED,
 	SG_COMPOUND_GEN_INVALID,
 	SG_COMPOUND_GEN_DUPLICATE,
-	SG_COMPOUND_GEN_BUDGET,
 	SG_COMPOUND_GEN_NO_IMPROVEMENT,
 	SG_COMPOUND_GEN_NO_PROOF,
 	SG_COMPOUND_GEN_BAD_PROOF,

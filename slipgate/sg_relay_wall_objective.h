@@ -20,6 +20,7 @@ typedef struct sg_relay_wall_objective_request_s
 	const uint8_t *objective_masks;
 	void *context;
 	int (*eligible)(void *context, uint32_t seed, int source);
+	int (*linked)(void *context, uint32_t source, uint32_t destination);
 	int (*discover)(void *context, const sg_mech_catalog_view_t *catalog,
 		uint32_t entry_key, sg_relay_wall_plan_witness_t *witness_out);
 	int (*prove)(void *context,
@@ -35,8 +36,8 @@ typedef struct sg_relay_wall_objective_request_s
 typedef struct sg_relay_wall_objective_report_s
 {
 	uint32_t mechanisms;
-	uint32_t candidate_pairs;
-	uint32_t proof_attempts;
+	uint64_t candidate_pairs;
+	uint64_t proof_attempts;
 	uint32_t published;
 } sg_relay_wall_objective_report_t;
 

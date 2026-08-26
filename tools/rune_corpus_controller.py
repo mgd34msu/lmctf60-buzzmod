@@ -51,11 +51,24 @@ FINALIZER_SOURCE = Path(__file__).with_name("rune_corpus_finalizer.py")
 ROUTE_ONLY_POLICY_SOURCE = Path(__file__).with_name("rune_corpus_policy.py")
 FINAL_CORPUS_SEAL = "final-corpus-seal.json"
 ADOPTION_POLICY_VERSION = 1
-EXPECTED_ADOPTED_RUNE_COUNT = 156
 ADOPTED_RUNE_ROLE_PREFIX = "adopted_rune:"
 ADOPTED_RUNE_ROOT = PurePosixPath("adopted-runes")
 MAP_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,62}\Z")
 ROOT_RE = re.compile(r"^rune: objective roots red=([0-9]+) blue=([0-9]+)$")
+TOPOLOGY_RE = re.compile(
+    r"^rune: topology status=([0-9]+) contacts=([0-9]+) contact_overflow=([0-9]+) "
+    r"initial_crossing_contacts=([0-9]+) initial_crossing_directions=([0-9]+) "
+    r"owner_calls=([0-9]+) proved_added=([0-9]+) proved_present=([0-9]+) "
+    r"owner_rejected=([0-9]+) owner_deferred=([0-9]+) unexamined=([0-9]+) "
+    r"unresolved_contacts=([0-9]+) unresolved_directions=([0-9]+) "
+    r"initial_sccs=([0-9]+) final_sccs=([0-9]+) scc_builds=([0-9]+) "
+    r"added_links=([0-9]+)$"
+)
+LATE_PATH_RE = re.compile(
+    r"^rune: late-path status=(closed|open-exhausted) selectors=([0-9]+) "
+    r"scheduled=([0-9]+) pairs=([0-9]+) proofs=([0-9]+) accepted=([0-9]+) "
+    r"rejected=([0-9]+) rebuilds=([0-9]+) max_regions=([0-9]+) links=(-?[0-9]+)$"
+)
 RUNTIME_ROOT_RE = re.compile(
     r"^slipgate: objective roots red=([0-9]+) blue=([0-9]+)$"
 )
@@ -338,7 +351,10 @@ ATTEMPT_COMMIT_FORMAT = "lmctf-rune-attempt-commit-v1"
 ATTEMPT_ABORT_FORMAT = "lmctf-rune-attempt-abort-v1"
 ATTEMPT_DISPOSITIONS = frozenset({"accepted", "artifact_rejected", "infra_failed"})
 TERMINAL_CLASSIFICATIONS = frozenset(
-    {"PASS", "ROUTE_ONLY", "LINT_FAIL", "GEN_FAIL", "TIMEOUT", "INFRA_FAIL"}
+    {
+        "PASS", "ROUTE_ONLY", "PROOF_REQUIRED", "LINT_FAIL", "GEN_FAIL",
+        "TIMEOUT", "INFRA_FAIL",
+    }
 )
 TERMINAL_RESULT_FIELDS = frozenset(
     {
@@ -2854,6 +2870,8 @@ def decide_map_work(
 def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path) -> dict[str, Any]:
     roots: list[tuple[int, int, int]] = []
     writes: list[tuple[int, re.Match[str]]] = []
+    topology: list[tuple[int, re.Match[str]]] = []
+    late_path: list[tuple[int, re.Match[str]]] = []
     failures: list[tuple[int, str]] = []
     ready: list[tuple[int, re.Match[str]]] = []
     lines = text.splitlines()
@@ -2864,6 +2882,14 @@ def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path
         write_match = WRITE_RE.fullmatch(line)
         if write_match:
             writes.append((index, write_match))
+        topology_match = TOPOLOGY_RE.fullmatch(line)
+        if topology_match:
+            topology.append((index, topology_match))
+        late_match = LATE_PATH_RE.fullmatch(line)
+        if late_match:
+            late_path.append((index, late_match))
+        elif line.startswith("rune: late-path status="):
+            raise CorpusError("late-path completion is not closed or open-exhausted")
         if FAILURE_RE.fullmatch(line):
             failures.append((index, line))
         ready_match = READY_RE.fullmatch(line)
@@ -2873,10 +2899,21 @@ def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path
         raise CorpusError(f"expected one objective-root line, found {len(roots)}")
     if len(writes) != 1:
         raise CorpusError(f"expected one final write line, found {len(writes)}")
+    if len(topology) != 1:
+        raise CorpusError(f"expected one topology completion line, found {len(topology)}")
+    if len(late_path) > 1:
+        raise CorpusError(f"expected at most one late-path completion line, found {len(late_path)}")
     write_index, match = writes[0]
     root_index, red, blue = roots[0]
-    if root_index >= write_index:
-        raise CorpusError("objective-root line does not precede write line")
+    topology_index, topology_match = topology[0]
+    if topology_index >= root_index or root_index >= write_index:
+        raise CorpusError(
+            "topology, objective-root, and write lines are out of order"
+        )
+    if late_path and not topology_index < late_path[0][0] < root_index:
+        raise CorpusError(
+            "late-path completion does not follow topology and precede objectives"
+        )
     banner_path = Path(match.group(1))
     if banner_path.is_absolute() or any(part in ("", ".", "..") for part in banner_path.parts):
         raise CorpusError("write banner path is not a safe relative attempt path")
@@ -2901,6 +2938,35 @@ def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path
     }
     if red == blue or red >= counts["seeds"] or blue >= counts["seeds"]:
         raise CorpusError("objective roots are not distinct in-range seed indexes")
+    topology_fields = (
+        "status", "contacts", "contact_overflow", "crossing_contacts",
+        "crossing_directions", "owner_calls", "proved_added", "proved_present",
+        "owner_rejected", "owner_deferred", "unexamined", "unresolved_contacts",
+        "unresolved_directions", "initial_sccs", "final_sccs", "scc_builds",
+        "added_links",
+    )
+    topology_report = {
+        field: int(topology_match.group(index + 1))
+        for index, field in enumerate(topology_fields)
+    }
+    if (
+        topology_report["status"] != 0
+        or topology_report["contact_overflow"] != 0
+        or topology_report["unexamined"] != 0
+    ):
+        raise CorpusError("topology reconciliation did not complete cleanly")
+    late_report = None
+    if late_path:
+        late_match = late_path[0][1]
+        late_fields = (
+            "selectors", "scheduled", "endpoint_pairs", "proofs", "accepted",
+            "rejected", "rebuilds", "max_regions", "links",
+        )
+        late_report = {"status": late_match.group(1)}
+        late_report.update({
+            field: int(late_match.group(index + 2))
+            for index, field in enumerate(late_fields)
+        })
     matching_ready = [
         (index, item) for index, item in ready
         if index > write_index and item.group(1) == map_name
@@ -2920,7 +2986,12 @@ def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path
             counts["seeds"], counts["links"], counts["mechanism_nodes"], counts["plans"]
         ):
             raise CorpusError("runtime-ready counts disagree with generator counts")
-    return {"objective_roots": {"red": red, "blue": blue}, "counts": counts}
+    return {
+        "objective_roots": {"red": red, "blue": blue},
+        "counts": counts,
+        "topology": topology_report,
+        "late_path": late_report,
+    }
 
 
 def _gate_report(data: bytes, label: str) -> dict[str, Any]:
@@ -3533,7 +3604,7 @@ def _validate_terminal_schema(
     if classification in SUCCESS_CLASSIFICATIONS:
         expected_disposition = "accepted"
     elif value["attempt_kind"] == "adopted_validation" and classification in {
-        "LINT_FAIL", "GEN_FAIL",
+        "PROOF_REQUIRED", "LINT_FAIL", "GEN_FAIL",
     }:
         expected_disposition = "artifact_rejected"
     else:
@@ -3670,11 +3741,65 @@ def _validate_terminal_schema(
         raise CorpusError("terminal result has invalid banner counts")
     generation_report = value["generation_report"]
     if generation_kind:
-        expected_report = (
-            None if roots is None else {"objective_roots": roots, "banner_counts": banner}
-        )
-        if generation_report != expected_report:
-            raise CorpusError("generated result has an invalid generation report")
+        if roots is None:
+            if generation_report is not None:
+                raise CorpusError("failed generation has an unexpected generation report")
+        else:
+            if not isinstance(generation_report, Mapping) or set(generation_report) != {
+                "objective_roots", "banner_counts", "topology", "late_path"
+            }:
+                raise CorpusError("generated result has an invalid generation report")
+            if (
+                generation_report["objective_roots"] != roots
+                or generation_report["banner_counts"] != banner
+            ):
+                raise CorpusError("generated report disagrees with roots or counts")
+            topology_fields = (
+                "status", "contacts", "contact_overflow", "crossing_contacts",
+                "crossing_directions", "owner_calls", "proved_added",
+                "proved_present", "owner_rejected", "owner_deferred", "unexamined",
+                "unresolved_contacts", "unresolved_directions", "initial_sccs",
+                "final_sccs", "scc_builds", "added_links",
+            )
+            topology = generation_report["topology"]
+            if (
+                not _exact_nonnegative_ints(topology, topology_fields)
+                or topology["status"] != 0
+                or topology["contact_overflow"] != 0
+                or topology["unexamined"] != 0
+            ):
+                raise CorpusError("generated result lacks completed topology evidence")
+            late_path = generation_report["late_path"]
+            late_fields = (
+                "selectors", "scheduled", "endpoint_pairs", "proofs", "accepted",
+                "rejected", "rebuilds", "max_regions", "links",
+            )
+            if late_path is not None and (
+                not isinstance(late_path, Mapping)
+                or set(late_path) != {"status", *late_fields}
+                or late_path.get("status") not in {"closed", "open-exhausted"}
+                or any(
+                    type(late_path.get(field)) is not int
+                    or late_path[field] < 0
+                    for field in late_fields
+                )
+            ):
+                raise CorpusError("generated result has invalid late-path evidence")
+            authenticated_report = parse_generation_log(
+                server_log.read_text(encoding="utf-8", errors="replace"),
+                map_name,
+                artifact,
+                attempt / "private",
+            )
+            if generation_report != {
+                "objective_roots": authenticated_report["objective_roots"],
+                "banner_counts": authenticated_report["counts"],
+                "topology": authenticated_report["topology"],
+                "late_path": authenticated_report["late_path"],
+            }:
+                raise CorpusError(
+                    "generated report disagrees with authenticated server log"
+                )
     elif generation_report is not None:
         raise CorpusError("adopted result fakes generation evidence")
 
@@ -3689,6 +3814,14 @@ def _validate_terminal_schema(
         )
         if classification != expected_classification:
             raise CorpusError("classification disagrees with route contract")
+        if classification == "ROUTE_ONLY" and (
+            not generation_kind
+            or generation_report["late_path"] is None
+            or generation_report["late_path"]["status"] != "open-exhausted"
+        ):
+            raise CorpusError(
+                "ROUTE_ONLY lacks current generated open-exhausted evidence"
+            )
         if value["failure_line"] is not None:
             raise CorpusError("successful result contains a failure line")
         if not _exact_nonnegative_ints(value["decoded_counts"], REPORT_FIELDS):
@@ -5144,9 +5277,20 @@ def run_adopted_map(
             log_directory=attempt, runner=gate_runner, fingerprint=fingerprint,
             heartbeat_check=heartbeat_check if heartbeat is not None else None,
         )
-        classification = "PASS" if gate["route_contract"] == "complete" else "ROUTE_ONLY"
-        disposition = "accepted"
-        detail = "frozen artifact, dual readers, runtime roots, gates, and fresh cold-load passed"
+        if gate["route_contract"] == "complete":
+            classification = "PASS"
+            disposition = "accepted"
+            detail = (
+                "frozen artifact, dual readers, runtime roots, gates, and "
+                "fresh cold-load passed"
+            )
+        else:
+            classification = "PROOF_REQUIRED"
+            disposition = "artifact_rejected"
+            detail = (
+                "frozen local-only artifact requires current-build topology "
+                "and exhaustive late-path generation evidence"
+            )
     except GateIntegrityError as exc:
         detail = str(exc)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -5554,6 +5698,17 @@ def run_one_map(
                             lambda: heartbeat("beat", map_name, None)
                         ) if heartbeat else None,
                     )
+                    if (
+                        gate["route_contract"] == "local_only"
+                        and (
+                            parsed["late_path"] is None
+                            or parsed["late_path"]["status"] != "open-exhausted"
+                        )
+                    ):
+                        raise CorpusError(
+                            "local-only generation lacks current open-exhausted "
+                            "late-path evidence"
+                        )
                     if heartbeat is not None:
                         heartbeat("active", map_name, {
                             "attempt": attempt_number, "stable_port": stable_port,
@@ -5644,7 +5799,12 @@ def run_one_map(
             "rejection_result": intent["rejection_result"],
         },
         "generation_report": (
-            {"objective_roots": parsed["objective_roots"], "banner_counts": parsed["counts"]}
+            {
+                "objective_roots": parsed["objective_roots"],
+                "banner_counts": parsed["counts"],
+                "topology": parsed["topology"],
+                "late_path": parsed["late_path"],
+            }
             if parsed else None
         ),
         "started_at": started_at,
@@ -5744,10 +5904,6 @@ def execute_selection(
     maps = validate_manifest()
     planning_snapshot = verify_snapshot(snapshot)
     adopted_runes = planning_snapshot["adopted_runes"]
-    if len(selected_maps) == CORPUS_SIZE and len(adopted_runes) != EXPECTED_ADOPTED_RUNE_COUNT:
-        raise CorpusError(
-            f"full corpus run requires exactly {EXPECTED_ADOPTED_RUNE_COUNT} adopted RUNEs"
-        )
     if len(selected_maps) == CORPUS_SIZE and jobs < 2:
         raise CorpusError("full corpus run requires jobs >= 2")
     assignments = stable_assignments(maps, port_base)

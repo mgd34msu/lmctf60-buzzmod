@@ -162,15 +162,16 @@ must remain canonical, bind the run fingerprint and artifact hash, and the
 retained `.snag` must still bind its exact evidence hash and declare
 `repairs 0`.
 
-The final snapshot contains exactly 156 adoption candidates. Validate each
-candidate before generating anything for that map. Preserve passing bytes.
-Retry infrastructure failures as adoption attempts. Only a committed,
-authenticated artifact rejection permits one replacement generation, and the
-replacement intent consumes that one allowance. Generate the remaining 19
-maps as missing artifacts.
+The snapshot defines the adoption set. The controller does not hardcode a
+candidate count. A snapshot with no adopted RUNEs generates every manifest map.
+If a later snapshot intentionally includes candidates, validate each candidate
+before generating anything for that map. Preserve passing bytes. Retry
+infrastructure failures as adoption attempts. Only a committed, authenticated
+artifact rejection permits one replacement generation, and the replacement
+intent consumes that one allowance.
 
-Full runs use `jobs > 1`. While both queues are nonempty, adoption validation
-overlaps missing-artifact generation.
+Full runs use `jobs > 1`. When an adoption queue exists, its validation can
+overlap missing-artifact generation.
 
 ## Final corpus publication
 

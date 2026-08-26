@@ -18,7 +18,7 @@ def between(text: str, start: str, end: str) -> str:
 def main() -> None:
     base_links = between(
         SOURCE,
-        "static void Prove_BaseLinks(",
+        "static qboolean Prove_BaseLinks(",
         "/* A field is useful",
     )
     assert "#define HOOK_PAIR_REACH\t768.0f" in SOURCE
@@ -36,9 +36,12 @@ def main() -> None:
         "static void Prove_RocketJumps(void)",
     )
     compact_hook = " ".join(hook.split())
-    assert "COMPOUND_WORLD_MAX 64" in hook
-    assert "COMPOUND_SOURCE_FAN 24" in hook
-    assert "COMPOUND_HOOK_FAN 24" in hook
+    assert "COMPOUND_WORLD_MAX" not in hook
+    assert "COMPOUND_SOURCE_FAN" not in hook
+    assert "COMPOUND_HOOK_FAN" not in hook
+    assert "SG_CompoundWorldEnumeratePreopen(NULL, 0," in hook
+    assert "for (source = 0; source < gen_num_seeds; source++)" in hook
+    assert "sg_host.level_alloc(sizeof(*mechanisms)" in hook
     assert "COMPOUND_HOOK_PRODUCTION 1" in hook
     assert "SG_OracleCompoundSwimPrepareSource(" in hook
     assert "SG_OracleCompoundSwimDiscoverContact(" in hook
@@ -82,6 +85,14 @@ def main() -> None:
     assert phase.index("Link_CompoundDrops();") < phase.index(
         "Link_CompoundHooks();"
     )
+
+    rocket = between(
+        SOURCE,
+        "static void Prove_RocketJumps(void)",
+        "static qboolean Prove_HookFrontier(void)",
+    )
+    assert "rune: rocket jumps omitted; hook owns LMCTF traversal" in rocket
+    assert rocket.index("return;") < rocket.index("SG_OracleRocketJumpCeiling()")
 
 
 if __name__ == "__main__":

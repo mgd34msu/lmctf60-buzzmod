@@ -2,17 +2,8 @@
 #include "slipgate/sg_relay_wall_objective.h"
 
 #include <float.h>
+#include <stdlib.h>
 #include <string.h>
-
-#define SG_RELAY_WALL_OBJECTIVE_CANDIDATES 32U
-#define SG_RELAY_WALL_OBJECTIVE_FRONTIER 32U
-
-typedef struct relay_wall_candidate_s
-{
-	uint32_t source;
-	uint32_t destination;
-	double score;
-} relay_wall_candidate_t;
 
 typedef struct relay_wall_seed_s
 {
@@ -99,42 +90,25 @@ double SG_RelayWallNodeDistance2(const rune_seed_t *seed,
 	return score;
 }
 
-static void RelayWallCandidateInsert(relay_wall_candidate_t *candidates,
-	uint32_t capacity, uint32_t source, uint32_t destination, double score)
+static int RelayWallSeedCompare(const void *left_raw, const void *right_raw)
 {
-	uint32_t index;
+	const relay_wall_seed_t *left = left_raw;
+	const relay_wall_seed_t *right = right_raw;
 
-	for (index = 0U; index < capacity; index++)
-		if (score < candidates[index].score)
-		{
-			uint32_t move;
-
-			for (move = capacity - 1U; move > index; move--)
-				candidates[move] = candidates[move - 1U];
-			candidates[index].source = source;
-			candidates[index].destination = destination;
-			candidates[index].score = score;
-			return;
-		}
+	return left->score < right->score ? -1 :
+		left->score > right->score ? 1 :
+		left->seed < right->seed ? -1 : left->seed > right->seed;
 }
 
-static void RelayWallSeedInsert(relay_wall_seed_t *frontier, uint32_t seed,
-	double score)
+static int RelayWallSeedAppend(relay_wall_seed_t *frontier,
+	uint32_t *count, uint32_t capacity, uint32_t seed, double score)
 {
-	uint32_t index;
-
-	for (index = 0U; index < SG_RELAY_WALL_OBJECTIVE_FRONTIER; index++)
-		if (score < frontier[index].score)
-		{
-			uint32_t move;
-
-			for (move = SG_RELAY_WALL_OBJECTIVE_FRONTIER - 1U;
-			     move > index; move--)
-				frontier[move] = frontier[move - 1U];
-			frontier[index].seed = seed;
-			frontier[index].score = score;
-			return;
-		}
+	if (!frontier || !count || *count >= capacity || score == DBL_MAX)
+		return 0;
+	frontier[*count].seed = seed;
+	frontier[*count].score = score;
+	(*count)++;
+	return 1;
 }
 
 int SG_RelayWallObjectiveBridge(
@@ -142,6 +116,8 @@ int SG_RelayWallObjectiveBridge(
 	sg_relay_wall_objective_report_t *report_out)
 {
 	sg_relay_wall_objective_report_t report;
+	relay_wall_seed_t *sources;
+	relay_wall_seed_t *destinations;
 	uint32_t node_index;
 
 	memset(&report, 0, sizeof(report));
@@ -149,10 +125,19 @@ int SG_RelayWallObjectiveBridge(
 		memset(report_out, 0, sizeof(*report_out));
 	if (!request || !report_out || !request->catalog ||
 	    !request->catalog->nodes || !request->seeds ||
-	    request->seed_count == 0U || !request->components ||
-	    !request->objective_masks || !request->eligible || !request->prove ||
-	    !request->publish)
+	    request->seed_count == 0U || request->seed_count > RUNE_MAX_SEEDS ||
+	    !request->components ||
+	    !request->objective_masks || !request->eligible || !request->linked ||
+	    !request->prove || !request->publish)
 		return -1;
+	sources = malloc((size_t)request->seed_count * sizeof(*sources));
+	destinations = malloc((size_t)request->seed_count * sizeof(*destinations));
+	if (!sources || !destinations)
+	{
+		free(sources);
+		free(destinations);
+		return -1;
+	}
 	for (node_index = 0U; node_index < request->catalog->num_nodes;
 	     node_index++)
 	{
@@ -160,11 +145,9 @@ int SG_RelayWallObjectiveBridge(
 			&request->catalog->nodes[node_index];
 		sg_relay_wall_plan_witness_t witness;
 		const rune_mechanism_node_t *wall;
-		relay_wall_candidate_t candidates[SG_RELAY_WALL_OBJECTIVE_CANDIDATES];
-		relay_wall_seed_t sources[SG_RELAY_WALL_OBJECTIVE_FRONTIER];
-		relay_wall_seed_t destinations[SG_RELAY_WALL_OBJECTIVE_FRONTIER];
-		uint32_t source;
-		uint32_t candidate_index;
+		uint32_t source_count = 0U;
+		uint32_t destination_count = 0U;
+		uint32_t source_index;
 		int discovered;
 
 		if (entry->kind != SG_MECH_NODE_BUTTON)
@@ -174,94 +157,96 @@ int SG_RelayWallObjectiveBridge(
 				entry->key, &witness)
 			: SG_RelayWallPlanDiscover(request->catalog, entry->key, &witness);
 		if (discovered < 0)
-			return -1;
+			goto fatal;
 		if (!discovered)
 			continue;
 		wall = RelayWallNode(request->catalog, witness.wall_key);
 		if (!wall)
-			return -1;
+			goto fatal;
 		report.mechanisms++;
-		for (candidate_index = 0U;
-		     candidate_index < SG_RELAY_WALL_OBJECTIVE_CANDIDATES;
-		     candidate_index++)
+		/* Distance is only a canonical traversal order.  The old fixed
+		 * frontiers silently dropped every eligible seed after rank 32; keep
+		 * all finite endpoints so a later exact proof can still be selected. */
+		for (source_index = 0U; source_index < request->seed_count;
+		     source_index++)
 		{
-			candidates[candidate_index].source = UINT32_MAX;
-			candidates[candidate_index].destination = UINT32_MAX;
-			candidates[candidate_index].score = DBL_MAX;
-		}
-		for (candidate_index = 0U;
-		     candidate_index < SG_RELAY_WALL_OBJECTIVE_FRONTIER;
-		     candidate_index++)
-		{
-			sources[candidate_index].seed = UINT32_MAX;
-			sources[candidate_index].score = DBL_MAX;
-			destinations[candidate_index].seed = UINT32_MAX;
-			destinations[candidate_index].score = DBL_MAX;
-		}
-		for (source = 0U; source < request->seed_count; source++)
-		{
-			if (request->eligible(request->context, source, 1))
-				RelayWallSeedInsert(sources, source,
-					SG_RelayWallNodeDistance2(&request->seeds[source], entry));
-			if (request->eligible(request->context, source, 0))
-				RelayWallSeedInsert(destinations, source,
-					SG_RelayWallNodeDistance2(&request->seeds[source], wall));
-		}
-		for (source = 0U; source < SG_RELAY_WALL_OBJECTIVE_FRONTIER &&
-		     sources[source].seed != UINT32_MAX; source++)
-		{
-			uint32_t destination;
+			int eligible;
 
-			for (destination = 0U;
-			     destination < SG_RELAY_WALL_OBJECTIVE_FRONTIER &&
-			     destinations[destination].seed != UINT32_MAX; destination++)
+			eligible = request->eligible(request->context, source_index, 1);
+			if (eligible < 0)
+				goto fatal;
+			if (eligible)
+				RelayWallSeedAppend(sources, &source_count,
+					request->seed_count, source_index,
+					SG_RelayWallNodeDistance2(
+						&request->seeds[source_index], entry));
+			eligible = request->eligible(request->context, source_index, 0);
+			if (eligible < 0)
+				goto fatal;
+			if (eligible)
+				RelayWallSeedAppend(destinations, &destination_count,
+					request->seed_count, source_index,
+					SG_RelayWallNodeDistance2(
+						&request->seeds[source_index], wall));
+		}
+		qsort(sources, source_count, sizeof(*sources), RelayWallSeedCompare);
+		qsort(destinations, destination_count, sizeof(*destinations),
+			RelayWallSeedCompare);
+		for (source_index = 0U; source_index < source_count; source_index++)
+		{
+			uint32_t destination_index;
+
+			for (destination_index = 0U;
+			     destination_index < destination_count; destination_index++)
 			{
-				uint32_t from = sources[source].seed;
-				uint32_t to = destinations[destination].seed;
-				double score = sources[source].score +
-					destinations[destination].score;
+				uint32_t from = sources[source_index].seed;
+				uint32_t to = destinations[destination_index].seed;
 
 				if (from == to || request->components[from] ==
 				        request->components[to])
 					continue;
-				if ((request->objective_masks[to] &
-				     ~request->objective_masks[from]) != 0U)
-					score *= 0.5;
-				RelayWallCandidateInsert(candidates,
-					SG_RELAY_WALL_OBJECTIVE_CANDIDATES, from, to, score);
-			}
-		}
-		for (candidate_index = 0U;
-		     candidate_index < SG_RELAY_WALL_OBJECTIVE_CANDIDATES &&
-		     candidates[candidate_index].source != UINT32_MAX;
-		     candidate_index++)
-		{
-			sg_relay_wall_objective_proof_t proof;
-			int proved;
+				{
+					sg_relay_wall_objective_proof_t proof;
+					int linked;
+					int proved;
 
-			report.candidate_pairs++;
-			memset(&proof, 0, sizeof(proof));
-			report.proof_attempts++;
-			proved = request->prove(request->context, &witness,
-				candidates[candidate_index].source,
-				candidates[candidate_index].destination, &proof);
-			if (proved < 0)
-				return -1;
-			if (!proved)
-				continue;
-			if (!proof.cost_ms || !proof.egress_ms ||
-			    proof.egress_ms > witness.active_window_ms ||
-			    proof.sweep_clear_ms < proof.egress_ms)
-				return -1;
-			if (request->publish(request->context, &witness,
-			        candidates[candidate_index].source,
-			        candidates[candidate_index].destination, &proof) != 1)
-				return -1;
-			report.published = 1U;
-			*report_out = report;
-			return 1;
+					linked = request->linked(request->context, from, to);
+					if (linked < 0)
+						goto fatal;
+					if (linked)
+						continue;
+					report.candidate_pairs++;
+					memset(&proof, 0, sizeof(proof));
+					report.proof_attempts++;
+					proved = request->prove(request->context, &witness,
+						from, to, &proof);
+					if (proved < 0)
+						goto fatal;
+					if (!proved)
+						continue;
+					if (!proof.cost_ms || !proof.egress_ms ||
+					    proof.egress_ms > witness.active_window_ms ||
+					    proof.sweep_clear_ms < proof.egress_ms)
+						goto fatal;
+					if (request->publish(request->context, &witness,
+					        from, to, &proof) != 1)
+						goto fatal;
+					report.published = 1U;
+					*report_out = report;
+					free(sources);
+					free(destinations);
+					return 1;
+				}
+			}
 		}
 	}
 	*report_out = report;
+	free(sources);
+	free(destinations);
 	return 0;
+
+fatal:
+	free(sources);
+	free(destinations);
+	return -1;
 }

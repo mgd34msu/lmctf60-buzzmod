@@ -4603,7 +4603,9 @@ static qboolean SG_OracleSolidOverlap(sg_phantom_t *ph)
 		if (hit != g_edicts)
 			return true;
 	}
-	return ph->door_arm_overflow || SG_OracleDoorOverlap(ph);
+	if (ph->door_arm_overflow || SG_OracleDoorOverlap(ph))
+		return true;
+	return false;
 }
 
 static trace_t SG_PhantomTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
@@ -6642,6 +6644,25 @@ qboolean SG_OracleRunWorld(sg_phantom_t *ph, usercmd_t *cmd, int steps)
 	return clean;
 }
 
+qboolean SG_OracleWorldTriggerClear(sg_phantom_t *ph)
+{
+	edict_t *previous_passent = sg_oracle_passent;
+	qboolean previous_world_only = sg_oracle_world_only;
+	qboolean previous_contaminated = sg_oracle_contaminated;
+	qboolean clear;
+
+	if (!ph || !sg_host.box_edicts)
+		return false;
+	sg_oracle_passent = NULL;
+	sg_oracle_world_only = true;
+	sg_oracle_contaminated = false;
+	clear = !SG_OracleTriggerOverlap(ph);
+	sg_oracle_passent = previous_passent;
+	sg_oracle_world_only = previous_world_only;
+	sg_oracle_contaminated = previous_contaminated;
+	return clear;
+}
+
 qboolean SG_OraclePushFlight(const vec3_t source, edict_t *trigger,
 	const float push_velocity[3], vec3_t landing, int *arrival_ms)
 {
@@ -6768,11 +6789,11 @@ done:
  * scope intentionally permits initial snap before checking the resulting
  * body for overlap; SG_OracleRunWorld would reject the raw, pre-snap endpoint
  * before Pmove gets that opportunity. */
-qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
-	vec3_t canonical_origin)
+qboolean SG_OracleCanonicalGroundSourcePose(const vec3_t floor_endpoint,
+	qboolean crouched, vec3_t canonical_origin)
 {
 	static const vec3_t player_mins = { -16.0f, -16.0f, -24.0f };
-	static const vec3_t player_maxs = { 16.0f, 16.0f, 32.0f };
+	vec3_t player_maxs = { 16.0f, 16.0f, 32.0f };
 	edict_t *old_passent = sg_oracle_passent;
 	sg_phantom_t *old_active = sg_oracle_active_phantom;
 	edict_t *old_declared_expected = sg_oracle_declared_expected;
@@ -6831,13 +6852,20 @@ qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
 	sg_oracle_loader_replay = false;
 
 	SG_OraclePlace(&phantom, (vec_t *)floor_endpoint);
+	if (crouched)
+	{
+		phantom.pms.pm_flags |= PMF_DUCKED;
+		player_maxs[2] = 4.0f;
+	}
 	/* old_pms is used only to request PM_InitialSnapPosition on this first
 	 * command.  pm.s remains the intended PM_NORMAL candidate. */
 	phantom.old_pms.pm_type = PM_FREEZE;
 	memset(&command, 0, sizeof(command));
 	command.msec = 0;
+	command.upmove = crouched ? -400 : 0;
 	SG_OracleRun(&phantom, &command, 1);
-	if (!phantom.groundentity || phantom.pms.pm_type != PM_NORMAL)
+	if (!phantom.groundentity || phantom.pms.pm_type != PM_NORMAL ||
+	    (((phantom.pms.pm_flags & PMF_DUCKED) != 0) != crouched))
 		goto done;
 	for (axis = 0; axis < 3; axis++)
 	{
@@ -6870,6 +6898,13 @@ done:
 	sg_oracle_compound_touched = old_compound_touched;
 	sg_oracle_loader_replay = old_loader_replay;
 	return ok;
+}
+
+qboolean SG_OracleCanonicalGroundSource(const vec3_t floor_endpoint,
+	vec3_t canonical_origin)
+{
+	return SG_OracleCanonicalGroundSourcePose(floor_endpoint, false,
+		canonical_origin);
 }
 
 /* Prove the exact planar controller from a static graph source until it first

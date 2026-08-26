@@ -4,8 +4,6 @@
 
 #include <stddef.h>
 
-#define SG_RUNE_DOOR_SCOPE_MAX 128
-
 typedef enum sg_rune_door_scope_status_e
 {
 	SG_RUNE_DOOR_SCOPE_OK = 0,
@@ -25,6 +23,8 @@ typedef struct sg_rune_door_scope_target_s
 
 typedef struct sg_rune_door_scope_ops_s
 {
+	void *(*allocate)(void *context, size_t size);
+	void (*deallocate)(void *context, void *block);
 	int (*identity_matches)(void *context, void *entity, int key);
 	int (*get_solid)(void *context, void *entity);
 	int (*get_linkcount)(void *context, void *entity);
@@ -44,7 +44,7 @@ typedef struct sg_rune_door_scope_entry_s
 
 typedef struct sg_rune_door_scope_s
 {
-	sg_rune_door_scope_entry_t entries[SG_RUNE_DOOR_SCOPE_MAX];
+	sg_rune_door_scope_entry_t *entries;
 	size_t count;
 	int active;
 } sg_rune_door_scope_t;

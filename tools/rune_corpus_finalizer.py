@@ -36,11 +36,6 @@ def _identity(api: Any, snapshot: Path, run_root: Path) -> dict[str, Any]:
     api.reject_symlink_components(snapshot)
     api.reject_symlink_components(run_root)
     verified = api.verify_snapshot(snapshot)
-    expected_adopted = api.EXPECTED_ADOPTED_RUNE_COUNT
-    if len(verified.get("adopted_runes", {})) != expected_adopted:
-        raise api.CorpusError(
-            f"final corpus requires exactly {expected_adopted} adopted RUNEs"
-        )
     runs = run_root / "runs"
     if runs.exists() and any(runs.glob("*/.attempt-*-*")):
         raise api.CorpusError("final corpus has an unresolved hidden intent attempt")
@@ -236,7 +231,9 @@ def _accepted_result(
     if classification == "PASS" and route_contract != "complete":
         raise api.CorpusError(f"PASS route contract changed for {map_name}")
     if classification == "ROUTE_ONLY" and (
-        route_contract != "local_only" or map_name not in api.APPROVED_ROUTE_ONLY_MAPS
+        route_contract != "local_only"
+        or map_name not in api.APPROVED_ROUTE_ONLY_MAPS
+        or result.get("attempt_kind") == "adopted_validation"
     ):
         raise api.CorpusError(f"ROUTE_ONLY is not approved for {map_name}")
     kind = result.get("attempt_kind")

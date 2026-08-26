@@ -11,6 +11,11 @@
 
 #define LATE_INF (UINT64_MAX / UINT64_C(4))
 #define LATE_NO_LINK UINT32_MAX
+#define LATE_EMPTY_REJECTION UINT64_MAX
+#define LATE_INITIAL_REJECTION_TABLE_SIZE 128U
+
+_Static_assert((uint64_t)RUNE_MAX_SEEDS * (RUNE_MAX_SEEDS - 1U) <= UINT32_MAX,
+	"ordered region-pair cursor must fit uint32_t");
 
 const char *SG_RuneLateCompletionName(sg_rune_late_completion_t completion)
 {
@@ -18,7 +23,6 @@ const char *SG_RuneLateCompletionName(sg_rune_late_completion_t completion)
 	{
 	case SG_RUNE_LATE_COMPLETION_CLOSED: return "closed";
 	case SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED: return "open-exhausted";
-	case SG_RUNE_LATE_COMPLETION_OPEN_BUDGET: return "open-budget";
 	default: return "fatal";
 	}
 }
@@ -27,29 +31,59 @@ qboolean SG_RuneLateCompletionKeepsMerges(
 	sg_rune_late_completion_t completion)
 {
 	return completion == SG_RUNE_LATE_COMPLETION_CLOSED ||
-		completion == SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED ||
-		completion == SG_RUNE_LATE_COMPLETION_OPEN_BUDGET;
+		completion == SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED;
 }
 
-static uint32_t LateRejectionHash(int from, int to)
+static uint64_t LateRejectionKey(int from, int to)
 {
-	return (uint32_t)from * UINT32_C(2654435761) ^ (uint32_t)to;
+	return ((uint64_t)(uint32_t)from << 32) | (uint32_t)to;
 }
 
-qboolean SG_RuneLateRejectionsInit(sg_rune_late_rejections_t *rejections,
-	int *from, int *to, uint32_t table_size, uint32_t limit)
+static uint32_t LateRejectionHash(uint64_t key)
 {
-	if (!rejections || !from || !to || table_size < 2U ||
-	    (table_size & (table_size - 1U)) != 0U || !limit ||
-	    limit > table_size)
+	key ^= key >> 33;
+	key *= UINT64_C(0xff51afd7ed558ccd);
+	key ^= key >> 33;
+	key *= UINT64_C(0xc4ceb9fe1a85ec53);
+	return (uint32_t)(key ^ (key >> 32));
+}
+
+static qboolean LateRejectionsAllocate(sg_rune_late_rejections_t *rejections,
+	uint32_t table_size)
+{
+	uint64_t *keys;
+
+	if (!table_size || (table_size & (table_size - 1U)) != 0U)
+		return false;
+#if SIZE_MAX < UINT64_MAX
+	if ((uint64_t)table_size * sizeof(*keys) > SIZE_MAX)
+		return false;
+#endif
+	keys = malloc((size_t)table_size * sizeof(*keys));
+	if (!keys)
+		return false;
+	for (uint32_t index = 0U; index < table_size; index++)
+		keys[index] = LATE_EMPTY_REJECTION;
+	rejections->keys = keys;
+	rejections->table_size = table_size;
+	return true;
+}
+
+qboolean SG_RuneLateRejectionsInit(sg_rune_late_rejections_t *rejections)
+{
+	if (!rejections)
 		return false;
 	memset(rejections, 0, sizeof(*rejections));
-	rejections->from = from;
-	rejections->to = to;
-	rejections->table_size = table_size;
-	rejections->limit = limit;
-	memset(from, 0xff, (size_t)table_size * sizeof(*from));
-	return true;
+	return LateRejectionsAllocate(rejections,
+		LATE_INITIAL_REJECTION_TABLE_SIZE);
+}
+
+void SG_RuneLateRejectionsFree(sg_rune_late_rejections_t *rejections)
+{
+	if (!rejections)
+		return;
+	free(rejections->keys);
+	memset(rejections, 0, sizeof(*rejections));
 }
 
 qboolean SG_RuneLateRejectionsContains(
@@ -59,45 +93,76 @@ qboolean SG_RuneLateRejectionsContains(
 	uint32_t slot;
 	uint32_t probe;
 
-	if (!rejections || !rejections->from || !rejections->to ||
+	uint64_t key = LateRejectionKey(from, to);
+
+	if (from < 0 || to < 0 || from == to ||
+	    !rejections || !rejections->keys ||
 	    !rejections->table_size)
 		return false;
 	mask = rejections->table_size - 1U;
-	slot = LateRejectionHash(from, to) & mask;
+	slot = LateRejectionHash(key) & mask;
 	for (probe = 0U; probe <= mask; probe++)
 	{
-		if (rejections->from[slot] < 0)
+		if (rejections->keys[slot] == LATE_EMPTY_REJECTION)
 			return false;
-		if (rejections->from[slot] == from && rejections->to[slot] == to)
+		if (rejections->keys[slot] == key)
 			return true;
 		slot = (slot + 1U) & mask;
 	}
 	return false;
 }
 
+static qboolean LateRejectionsGrow(sg_rune_late_rejections_t *rejections)
+{
+	sg_rune_late_rejections_t grown = {0};
+
+	if (!rejections || !rejections->keys ||
+	    rejections->table_size > UINT32_MAX / 2U ||
+	    !LateRejectionsAllocate(&grown, rejections->table_size * 2U))
+		return false;
+	for (uint32_t index = 0U; index < rejections->table_size; index++)
+	{
+		uint64_t key = rejections->keys[index];
+		uint32_t mask, slot;
+
+		if (key == LATE_EMPTY_REJECTION)
+			continue;
+		mask = grown.table_size - 1U;
+		slot = LateRejectionHash(key) & mask;
+		while (grown.keys[slot] != LATE_EMPTY_REJECTION)
+			slot = (slot + 1U) & mask;
+		grown.keys[slot] = key;
+	}
+	free(rejections->keys);
+	rejections->keys = grown.keys;
+	rejections->table_size = grown.table_size;
+	return true;
+}
+
 qboolean SG_RuneLateRejectionsRecord(sg_rune_late_rejections_t *rejections,
 	int from, int to)
 {
-	uint32_t mask;
-	uint32_t slot;
-	uint32_t probe;
+	uint64_t key = LateRejectionKey(from, to);
+	uint32_t mask, slot;
 
-	if (!rejections || !rejections->from || !rejections->to ||
-	    rejections->count >= rejections->limit)
+	if (from < 0 || to < 0 || from == to ||
+	    !rejections || !rejections->keys || !rejections->table_size)
+		return false;
+	if (SG_RuneLateRejectionsContains(rejections, from, to))
+		return true;
+	if (rejections->count >= rejections->table_size / 2U &&
+	    !LateRejectionsGrow(rejections))
 		return false;
 	mask = rejections->table_size - 1U;
-	slot = LateRejectionHash(from, to) & mask;
-	for (probe = 0U; probe <= mask; probe++)
+	slot = LateRejectionHash(key) & mask;
+	for (uint32_t probe = 0U; probe <= mask; probe++)
 	{
-		if (rejections->from[slot] < 0)
+		if (rejections->keys[slot] == LATE_EMPTY_REJECTION)
 		{
-			rejections->from[slot] = from;
-			rejections->to[slot] = to;
+			rejections->keys[slot] = key;
 			rejections->count++;
 			return true;
 		}
-		if (rejections->from[slot] == from && rejections->to[slot] == to)
-			return true;
 		slot = (slot + 1U) & mask;
 	}
 	return false;
@@ -151,6 +216,7 @@ static qboolean LateGraphValid(const sg_rune_late_graph_t *graph)
 	if (!graph || !graph->seed_count || graph->seed_count > RUNE_MAX_SEEDS ||
 		graph->link_count > RUNE_MAX_LINKS || !graph->seeds ||
 		!graph->regions || !graph->region_count ||
+		graph->region_count > graph->seed_count ||
 		(graph->link_count && !graph->links))
 		return false;
 	pair_count = (uint64_t)graph->region_count *
@@ -256,8 +322,9 @@ static qboolean LateAdjacencyBuild(const sg_rune_late_graph_t *graph,
 				from_region * (graph->region_count - 1U) +
 				(to_region < from_region ? to_region : to_region - 1U);
 	}
-	qsort(adjacency->region_pair, adjacency->region_pair_count,
-		sizeof(*adjacency->region_pair), LateUint32Compare);
+	if (adjacency->region_pair_count > 1U)
+		qsort(adjacency->region_pair, adjacency->region_pair_count,
+			sizeof(*adjacency->region_pair), LateUint32Compare);
 	{
 		uint32_t unique = 0;
 

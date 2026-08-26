@@ -37,14 +37,16 @@ class ProjectCompletionPlanTest(unittest.TestCase):
         )
 
     def test_corpus_authority_is_preserved(self) -> None:
-        section = self.section("### Corpus authority", "### Configuration roles")
+        section = self.section(
+            "### Corpus and configuration", "### RUNE generation"
+        )
         for required in (
             "175 maps",
             "180 BSPs",
             "tools/rune-corpus-maps.txt",
             "tools/topmaps.txt",
-            "no special completion or release authority",
-            "unsuffixed base is out of scope",
+            "no completion or release authority",
+            "unsuffixed bases are out of scope",
             "Build the frozen BSP set by iterating the manifest",
             "lmctf05",
             "smap31",
@@ -55,30 +57,20 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             self.assertIn(required, section)
 
     def test_route_only_is_a_provisional_fallback(self) -> None:
-        section = self.section(
-            "## Route-only candidate inventory", "## Current pre-freeze work"
-        )
-        actual = set(re.findall(r"^\| `([^`]+)` \|", section, re.MULTILINE))
-        if not actual:
-            actual = set(re.findall(r"\| `([^`]+)` \|", section))
-        self.assertEqual(ROUTE_ONLY_CANDIDATES, actual)
         manifest_path = ROOT / "tools" / "rune-corpus-maps.txt"
         manifest = {
             name for name in manifest_path.read_text(encoding="ascii").splitlines()
             if name
         }
-        self.assertTrue(actual.issubset(manifest))
-        for required in (
-            "candidates, not a fixed release class",
-            "complete-route contract before applying the route-only",
-        ):
-            self.assertIn(required, self.flat_text)
-        for required in (
-            "must identify the missing path",
-            "replay-proved complete-route update",
-            "does not block the initial release",
-        ):
-            self.assertIn(required, section)
+        self.assertTrue(ROUTE_ONLY_CANDIDATES.issubset(manifest))
+        self.assertLessEqual(len(ROUTE_ONLY_CANDIDATES), 10)
+        self.assertIn(
+            "Apply the complete-route contract first", self.flat_text
+        )
+        self.assertIn(
+            "route-only remainder, which may contain zero to ten maps",
+            self.flat_text,
+        )
 
         contract = self.section(
             "### Route-only release contract", "### Human learning"
@@ -96,7 +88,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
 
     def test_configuration_and_release_roles_are_distinct(self) -> None:
         configuration = self.section(
-            "### Configuration roles", "### Distribution scope"
+            "### Corpus and configuration", "### RUNE generation"
         )
         distribution = self.section(
             "### Distribution scope", "## RUNE acceptance rules"
@@ -111,9 +103,9 @@ class ProjectCompletionPlanTest(unittest.TestCase):
         for required in (
             "tracked `assets/lmctf6-buzzmod.pak`",
             "static scoreboard art and sounds",
-            "Defer separate downloads of generated RUNEs",
+            "Do not publish separate generated-RUNE downloads",
             "generated corpus",
-            "production server bundle",
+            "production bundle",
         ):
             self.assertIn(required, distribution)
         installation = self.section(
@@ -123,13 +115,15 @@ class ProjectCompletionPlanTest(unittest.TestCase):
         self.assertIn("Assemble the authenticated bundle", installation)
 
     def test_learning_and_match_evidence_stay_complete(self) -> None:
-        learning = self.section("### Human learning", "## Implemented systems")
+        learning = self.section(
+            "### Human learning", "## Implemented systems"
+        ).lower()
         for required in (
-            "Capture and importer tests",
-            "exact-bound SNAG",
+            "capture and importer tests",
+            "exact-bound snag",
             "cold-load the staged bundle",
-            "Install new sidecars before the RUNE commit point",
-            "must never publish mixed graph and sidecar state",
+            "install new sidecars before the rune commit point",
+            "never publish mixed graph and sidecar state",
         ):
             self.assertIn(required, learning)
         matches = self.section(
@@ -137,7 +131,8 @@ class ProjectCompletionPlanTest(unittest.TestCase):
         )
         for required in (
             "earned perception",
-            "item pursuit and commitment retirement",
+            "item pursuit",
+            "commitment retirement",
             "one terminal lifecycle",
             "spectator sound attribution",
         ):
@@ -178,7 +173,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "### 6. Tag and verify the release", "## Invalidation rules"
         ).lower()
         self.assertIn("tag the unchanged frozen commit", release)
-        self.assertIn("evidence-only plan update after the release", release)
+        self.assertIn("make only evidence updates to this plan after release", release)
         self.assertIn("do not rebuild the release", release)
         for required in (
             "synchronized `slipgate` and `main` branches",

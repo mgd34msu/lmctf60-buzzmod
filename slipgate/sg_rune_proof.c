@@ -27,7 +27,6 @@ int SG_RuneProofHookLateralWindow(float horizontal, float rise)
 
 #define SG_RUNE_PROOF_HOOK_RANKS 15
 #define SG_RUNE_PROOF_HOOK_REACH_Q8 (768 * 8)
-#define SG_RUNE_PROOF_HOOK_LOW_GRAVITY_REACH_Q8 (1600 * 8)
 #define SG_RUNE_PROOF_HOOK_LOW_GRAVITY_MAX 200
 #define SG_RUNE_PROOF_HOOK_LOCAL_Q8 (192 * 8)
 #define SG_RUNE_PROOF_HOOK_NEAR_Q8 (448 * 8)
@@ -41,6 +40,8 @@ static int SG_RuneProofHookRank(const sg_rune_proof_hook_seed_t *from,
 	int64_t dx, dy, horizontal2;
 	int32_t dz;
 	int32_t reach_q8;
+	int32_t max_rise_q8;
+	int low_gravity;
 	int category, distance;
 
 	if (!from || !to || from == to || from->component < 0 ||
@@ -51,12 +52,17 @@ static int SG_RuneProofHookRank(const sg_rune_proof_hook_seed_t *from,
 	dy = (int64_t)to->origin_q8[1] - from->origin_q8[1];
 	dz = to->origin_q8[2] - from->origin_q8[2];
 	horizontal2 = dx * dx + dy * dy;
-	reach_q8 = sg_rune_scoped_gravity <= SG_RUNE_PROOF_HOOK_LOW_GRAVITY_MAX
-	    ? SG_RUNE_PROOF_HOOK_LOW_GRAVITY_REACH_Q8
+	low_gravity =
+	    sg_rune_scoped_gravity <= SG_RUNE_PROOF_HOOK_LOW_GRAVITY_MAX;
+	reach_q8 = low_gravity
+	    ? SG_RUNE_PROOF_CHAIN_HOOK_MAX_HORIZONTAL * 8
 	    : SG_RUNE_PROOF_HOOK_REACH_Q8;
+	max_rise_q8 = low_gravity
+	    ? SG_RUNE_PROOF_CHAIN_HOOK_MAX_VERTICAL * 8
+	    : SG_RUNE_PROOF_HOOK_MAX_RISE_Q8;
 	if (horizontal2 > (int64_t)reach_q8 * reach_q8 ||
-	    dz > SG_RUNE_PROOF_HOOK_MAX_RISE_Q8 ||
-	    (dz < -SG_RUNE_PROOF_HOOK_MAX_RISE_Q8 &&
+	    dz > max_rise_q8 ||
+	    (dz < -max_rise_q8 &&
 	     (!to->water || dz < -SG_RUNE_PROOF_HOOK_MAX_FALL_Q8)))
 		return -1;
 	if ((!from->water && !from->stable) ||
@@ -86,7 +92,7 @@ static int SG_RuneProofHookRank(const sg_rune_proof_hook_seed_t *from,
 	return category * 3 + distance;
 }
 
-size_t SG_RuneProofSelectHookFrontier(
+static size_t SG_RuneProofSelectHookFrontierOneShot(
 	const sg_rune_proof_hook_frontier_t *frontier)
 {
 	size_t selected = 0;
@@ -167,6 +173,119 @@ size_t SG_RuneProofSelectHookFrontier(
 		} while (progressed);
 	}
 	return selected;
+}
+
+void SG_RuneProofHookFrontierCursorReset(
+	sg_rune_proof_hook_frontier_cursor_t *cursor)
+{
+	if (cursor)
+		memset(cursor, 0, sizeof(*cursor));
+}
+
+static size_t SG_RuneProofSelectHookFrontierBatch(
+	const sg_rune_proof_hook_frontier_t *frontier)
+{
+	sg_rune_proof_hook_frontier_cursor_t *cursor;
+	size_t selected = 0;
+
+	if (!frontier || !frontier->cursor || !frontier->seeds ||
+	    frontier->seed_count == 0 || frontier->component_count == 0 ||
+	    !frontier->component_trials || !frontier->source_trials ||
+	    !frontier->source_cursor || !frontier->component_source_cursor ||
+	    !frontier->output || frontier->output_capacity == 0 ||
+	    frontier->output_capacity > SG_RUNE_PROOF_HOOK_FRONTIER_MAX)
+		return 0;
+	cursor = frontier->cursor;
+	if (cursor->exhausted)
+		return 0;
+	if (!cursor->initialized)
+	{
+		memset(frontier->source_cursor, 0,
+		       frontier->seed_count * sizeof(*frontier->source_cursor));
+		memset(frontier->component_source_cursor, 0,
+		       frontier->component_count *
+		           sizeof(*frontier->component_source_cursor));
+		cursor->initialized = 1;
+	}
+	memset(frontier->component_trials, 0,
+	       frontier->component_count * sizeof(*frontier->component_trials));
+	memset(frontier->source_trials, 0,
+	       frontier->seed_count * sizeof(*frontier->source_trials));
+	while (cursor->rank < SG_RUNE_PROOF_HOOK_RANKS &&
+	       selected < frontier->output_capacity)
+	{
+		size_t component_offset;
+		int progressed = 0;
+
+		for (component_offset = 0;
+		     component_offset < frontier->component_count; component_offset++)
+		{
+			size_t component = (cursor->next_component + component_offset) %
+				frontier->component_count;
+			size_t first = frontier->component_source_cursor[component];
+			size_t source_offset;
+
+			for (source_offset = 0; source_offset < frontier->seed_count;
+			     source_offset++)
+			{
+				size_t from = (first + source_offset) % frontier->seed_count;
+				size_t to;
+
+				if ((size_t)frontier->seeds[from].component != component)
+					continue;
+				for (to = frontier->source_cursor[from];
+				     to < frontier->seed_count; to++)
+				{
+					sg_rune_proof_hook_candidate_t *candidate;
+
+					frontier->source_cursor[from] = to + 1;
+					if (SG_RuneProofHookRank(&frontier->seeds[from],
+					        &frontier->seeds[to],
+					        frontier->component_count) != (int)cursor->rank)
+						continue;
+					candidate = &frontier->output[selected++];
+					memset(candidate, 0, sizeof(*candidate));
+					candidate->from = (int)from;
+					candidate->to = (int)to;
+					candidate->rank = (uint8_t)cursor->rank;
+					if (frontier->component_trials[component] != UINT16_MAX)
+						frontier->component_trials[component]++;
+					if (frontier->source_trials[from] != UINT16_MAX)
+						frontier->source_trials[from]++;
+					frontier->component_source_cursor[component] =
+						(from + 1) % frontier->seed_count;
+					cursor->next_component =
+						(component + 1) % frontier->component_count;
+					progressed = 1;
+					break;
+				}
+				if (progressed)
+					break;
+			}
+			if (progressed)
+				break;
+		}
+		if (progressed)
+			continue;
+		cursor->rank++;
+		cursor->next_component = 0;
+		memset(frontier->source_cursor, 0,
+		       frontier->seed_count * sizeof(*frontier->source_cursor));
+		memset(frontier->component_source_cursor, 0,
+		       frontier->component_count *
+		           sizeof(*frontier->component_source_cursor));
+	}
+	if (cursor->rank == SG_RUNE_PROOF_HOOK_RANKS)
+		cursor->exhausted = 1;
+	return selected;
+}
+
+size_t SG_RuneProofSelectHookFrontier(
+	const sg_rune_proof_hook_frontier_t *frontier)
+{
+	return frontier && frontier->cursor
+		? SG_RuneProofSelectHookFrontierBatch(frontier)
+		: SG_RuneProofSelectHookFrontierOneShot(frontier);
 }
 
 int SG_RuneProofObjectiveRunCandidate(
