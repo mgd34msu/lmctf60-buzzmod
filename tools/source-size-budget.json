@@ -89,7 +89,7 @@
     "slipgate/sg_rune_binding.c": 1957,
     "slipgate/sg_rune_codec.c": 4181,
     "slipgate/sg_rune_file.c": 1000,
-    "slipgate/sg_rune_hook_frontier.c": 1446,
+    "slipgate/sg_rune_hook_frontier.c": 1926,
     "slipgate/sg_rune_mechanism_catalog.c": 2296,
     "slipgate/sg_rune_mechanism_plan.c": 2187,
     "slipgate/sg_strike.c": 1162,

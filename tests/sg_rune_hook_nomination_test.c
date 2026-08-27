@@ -154,6 +154,21 @@ qboolean SG_OracleRunWorld(sg_phantom_t *phantom, usercmd_t *command,
 	return true;
 }
 
+qboolean SG_OracleAirHookLaunchFrame(const vec3_t seed_origin, byte heading,
+	byte frame, sg_phantom_t *phantom)
+{
+	(void)heading;
+	(void)frame;
+	SG_OraclePlace(phantom, (vec_t *)seed_origin);
+	return true;
+}
+
+qboolean SG_OracleAirHookCoastFrame(sg_phantom_t *phantom)
+{
+	(void)phantom;
+	return true;
+}
+
 qboolean SG_OracleHookFlightClear(const vec3_t muzzle, const vec3_t bite)
 {
 	(void)muzzle;

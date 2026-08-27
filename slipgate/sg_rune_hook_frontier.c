@@ -6,6 +6,7 @@
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_util.h"
 
+#include <limits.h>
 #include <stdint.h>
 
 #define Q2_MASK_SHOT_GEN 0x6000003
@@ -611,6 +612,7 @@ typedef struct rune_air_hook_candidate_s
 	int from;
 	int to;
 	int group;
+	uint32_t pose_index;
 	float launch_yaw;
 	float hook_pitch;
 	float hook_yaw;
@@ -625,6 +627,228 @@ typedef struct rune_air_hook_candidates_s
 	size_t count;
 	size_t capacity;
 } rune_air_hook_candidates_t;
+
+typedef struct rune_air_pose_s
+{
+	sg_phantom_t state;
+	int from;
+	float launch_yaw;
+	byte launch_heading;
+	byte launch_frames;
+} rune_air_pose_t;
+
+typedef struct rune_air_poses_s
+{
+	rune_air_pose_t *items;
+	size_t count;
+	size_t capacity;
+	int *slots;
+	size_t slot_capacity;
+} rune_air_poses_t;
+
+static uint64_t RuneHook_HashBytes(uint64_t hash, const void *data,
+	size_t length)
+{
+	const byte *bytes = data;
+
+	for (size_t index = 0; index < length; index++)
+	{
+		hash ^= bytes[index];
+		hash *= UINT64_C(1099511628211);
+	}
+	return hash;
+}
+
+static uint64_t RuneHook_HashPmove(uint64_t hash,
+	const pmove_state_t *state)
+{
+	hash = RuneHook_HashBytes(hash, &state->pm_type, sizeof(state->pm_type));
+	hash = RuneHook_HashBytes(hash, state->origin, sizeof(state->origin));
+	hash = RuneHook_HashBytes(hash, state->velocity, sizeof(state->velocity));
+	hash = RuneHook_HashBytes(hash, &state->pm_flags, sizeof(state->pm_flags));
+	hash = RuneHook_HashBytes(hash, &state->pm_time, sizeof(state->pm_time));
+	hash = RuneHook_HashBytes(hash, &state->gravity, sizeof(state->gravity));
+	return RuneHook_HashBytes(hash, state->delta_angles,
+		sizeof(state->delta_angles));
+}
+
+static uint64_t RuneHook_AirPoseHash(const sg_phantom_t *state)
+{
+	uint64_t hash = UINT64_C(1469598103934665603);
+	byte authority[3];
+
+	hash = RuneHook_HashPmove(hash, &state->pms);
+	hash = RuneHook_HashPmove(hash, &state->old_pms);
+	hash = RuneHook_HashBytes(hash, &state->armed_door_count,
+		sizeof(state->armed_door_count));
+	hash = RuneHook_HashBytes(hash, state->armed_door,
+		(size_t)state->armed_door_count * sizeof(state->armed_door[0]));
+	authority[0] = state->door_arm_overflow ? 1U : 0U;
+	authority[1] = state->door_passed ? 1U : 0U;
+	authority[2] = state->groundentity ? 1U : 0U;
+	hash = RuneHook_HashBytes(hash, authority, sizeof(authority));
+	hash = RuneHook_HashBytes(hash, &state->door_wait_ms,
+		sizeof(state->door_wait_ms));
+	hash = RuneHook_HashBytes(hash, &state->door_open_ms,
+		sizeof(state->door_open_ms));
+	return hash;
+}
+
+static qboolean RuneHook_PmoveStateEqual(const pmove_state_t *left,
+	const pmove_state_t *right)
+{
+	return left->pm_type == right->pm_type &&
+		left->origin[0] == right->origin[0] &&
+		left->origin[1] == right->origin[1] &&
+		left->origin[2] == right->origin[2] &&
+		left->velocity[0] == right->velocity[0] &&
+		left->velocity[1] == right->velocity[1] &&
+		left->velocity[2] == right->velocity[2] &&
+		left->pm_flags == right->pm_flags &&
+		left->pm_time == right->pm_time &&
+		left->gravity == right->gravity &&
+		left->delta_angles[0] == right->delta_angles[0] &&
+		left->delta_angles[1] == right->delta_angles[1] &&
+		left->delta_angles[2] == right->delta_angles[2];
+}
+
+static qboolean RuneHook_AirPoseEqual(const rune_air_pose_t *pose,
+	const sg_phantom_t *state)
+{
+	if (!RuneHook_PmoveStateEqual(&pose->state.pms, &state->pms) ||
+	    !RuneHook_PmoveStateEqual(&pose->state.old_pms, &state->old_pms) ||
+	    pose->state.armed_door_count != state->armed_door_count ||
+	    pose->state.door_arm_overflow != state->door_arm_overflow ||
+	    pose->state.door_passed != state->door_passed ||
+	    pose->state.groundentity != state->groundentity ||
+	    pose->state.door_wait_ms != state->door_wait_ms ||
+	    pose->state.door_open_ms != state->door_open_ms)
+		return false;
+	return !memcmp(pose->state.armed_door, state->armed_door,
+		(size_t)state->armed_door_count * sizeof(state->armed_door[0]));
+}
+
+static qboolean RuneHook_AirPoseBetter(int from, byte heading, byte frames,
+	const rune_air_pose_t *current)
+{
+	return frames < current->launch_frames ||
+		(frames == current->launch_frames && from < current->from) ||
+		(frames == current->launch_frames && from == current->from &&
+		 heading < current->launch_heading);
+}
+
+static void RuneHook_AirPosesFree(rune_air_poses_t *set)
+{
+	if (!set)
+		return;
+	if (set->items)
+		sg_host.level_free(set->items);
+	if (set->slots)
+		sg_host.level_free(set->slots);
+	memset(set, 0, sizeof(*set));
+}
+
+static qboolean RuneHook_AirPosesRehash(rune_air_poses_t *set,
+	size_t capacity)
+{
+	int *slots;
+
+	if (!set || capacity < 1024U || (capacity & (capacity - 1U)) != 0U ||
+	    capacity > SIZE_MAX / sizeof(*slots))
+		return false;
+	slots = sg_host.level_alloc(capacity * sizeof(*slots));
+	if (!slots)
+		return false;
+	for (size_t index = 0; index < capacity; index++)
+		slots[index] = -1;
+	for (size_t index = 0; index < set->count; index++)
+	{
+		size_t slot = (size_t)RuneHook_AirPoseHash(&set->items[index].state) &
+			(capacity - 1U);
+
+		while (slots[slot] >= 0)
+			slot = (slot + 1U) & (capacity - 1U);
+		slots[slot] = (int)index;
+	}
+	if (set->slots)
+		sg_host.level_free(set->slots);
+	set->slots = slots;
+	set->slot_capacity = capacity;
+	return true;
+}
+
+static qboolean RuneHook_AirPosesGrowItems(rune_air_poses_t *set)
+{
+	rune_air_pose_t *grown;
+	size_t capacity = set->capacity ? set->capacity * 2U : 1024U;
+
+	if (capacity < set->capacity || capacity > SIZE_MAX / sizeof(*grown))
+		return false;
+	grown = sg_host.level_alloc(capacity * sizeof(*grown));
+	if (!grown)
+		return false;
+	if (set->items)
+	{
+		memcpy(grown, set->items, set->count * sizeof(*grown));
+		sg_host.level_free(set->items);
+	}
+	set->items = grown;
+	set->capacity = capacity;
+	return true;
+}
+
+static qboolean RuneHook_AirPosesInsert(rune_air_poses_t *set,
+	const sg_phantom_t *state, int from, float launch_yaw,
+	byte launch_heading, byte launch_frames, qboolean *inserted)
+{
+	uint64_t hash;
+	size_t slot;
+
+	if (inserted)
+		*inserted = false;
+	if (!set || !state || !inserted || from < 0 || launch_frames == 0)
+		return false;
+	if (!set->slot_capacity && !RuneHook_AirPosesRehash(set, 1024U))
+		return false;
+	if ((set->count + 1U) * 10U >= set->slot_capacity * 7U &&
+	    (set->slot_capacity > SIZE_MAX / 2U ||
+	     !RuneHook_AirPosesRehash(set, set->slot_capacity * 2U)))
+		return false;
+	if (set->count >= (size_t)INT_MAX)
+		return false;
+	hash = RuneHook_AirPoseHash(state);
+	slot = (size_t)hash & (set->slot_capacity - 1U);
+	for (;;)
+	{
+		int index = set->slots[slot];
+
+		if (index < 0)
+			break;
+		if (RuneHook_AirPoseEqual(&set->items[index], state))
+		{
+			if (RuneHook_AirPoseBetter(from, launch_heading, launch_frames,
+			        &set->items[index]))
+			{
+				set->items[index].from = from;
+				set->items[index].launch_yaw = launch_yaw;
+				set->items[index].launch_heading = launch_heading;
+				set->items[index].launch_frames = launch_frames;
+			}
+			return true;
+		}
+		slot = (slot + 1U) & (set->slot_capacity - 1U);
+	}
+	if (set->count == set->capacity && !RuneHook_AirPosesGrowItems(set))
+		return false;
+	set->items[set->count].state = *state;
+	set->items[set->count].from = from;
+	set->items[set->count].launch_yaw = launch_yaw;
+	set->items[set->count].launch_heading = launch_heading;
+	set->items[set->count].launch_frames = launch_frames;
+	set->slots[slot] = (int)set->count++;
+	*inserted = true;
+	return true;
+}
 
 static void RuneHook_AirCandidatesFree(rune_air_hook_candidates_t *set)
 {
@@ -686,6 +910,8 @@ static int RuneHook_AirCandidateCompare(const void *left, const void *right)
 		return a->hook_pitch < b->hook_pitch ? -1 : 1;
 	if (a->hook_yaw != b->hook_yaw)
 		return a->hook_yaw < b->hook_yaw ? -1 : 1;
+	if (a->pose_index != b->pose_index)
+		return a->pose_index < b->pose_index ? -1 : 1;
 	return 0;
 }
 
@@ -711,17 +937,35 @@ static float RuneHook_AirCandidateScore(const sg_phantom_t *airborne,
 		ray_length - (float)launch_frames * 100.0f;
 }
 
+static byte RuneHook_ReachableObjectiveMask(const byte *reachable,
+	const byte *objective_mask, int count, int component)
+{
+	byte mask = 0U;
+
+	for (int target = 0; target < count; target++)
+		if (reachable[(size_t)component * (size_t)count +
+		        (size_t)target])
+			mask |= objective_mask[target];
+	return mask;
+}
+
 static qboolean RuneHook_CollectAirCandidates(
 	const sg_rune_hook_frontier_input_t *input, int source_component,
 	const float *pitches, size_t pitch_count,
 	const float *yaws, size_t yaw_count,
 	const byte *cross_connected, rune_air_hook_candidates_t *cross_set,
-	uint64_t *pose_count, uint64_t *ray_count, uint64_t *surface_count)
+	rune_air_poses_t *poses,
+	uint64_t *pose_count, uint64_t *unique_pose_count,
+	uint64_t *duplicate_pose_count, uint64_t *ray_count,
+	uint64_t *surface_count)
 {
+	qboolean result = false;
+
 	if (!input || source_component < 0 ||
 	    source_component >= input->component_count || !pitches ||
 	    !pitch_count || !yaws || !yaw_count || !cross_connected ||
-	    !cross_set || !pose_count || !ray_count || !surface_count)
+	    !cross_set || !poses || !pose_count || !unique_pose_count ||
+	    !duplicate_pose_count || !ray_count || !surface_count)
 		return false;
 	for (int from = 0; from < input->seed_count; from++)
 	{
@@ -741,6 +985,10 @@ static qboolean RuneHook_CollectAirCandidates(
 			{
 				sg_phantom_t fire_state;
 				byte launch_frames = (byte)(frame + 1U);
+				byte launch_heading = RuneHook_Heading(
+					cosf(yaws[launch_index] * (float)M_PI / 180.0f),
+					sinf(yaws[launch_index] * (float)M_PI / 180.0f));
+				qboolean inserted;
 
 				if (!RuneHook_AirFrame(&input->seeds[from], yaws[launch_index],
 				        (byte)frame, &airborne))
@@ -762,153 +1010,218 @@ static qboolean RuneHook_CollectAirCandidates(
 				        (CONTENTS_LAVA | CONTENTS_SLIME)))
 					continue;
 				(*pose_count)++;
-				for (size_t pitch_index = 0; pitch_index < pitch_count;
-				     pitch_index++)
-				for (size_t hook_yaw_index = 0; hook_yaw_index < yaw_count;
-				     hook_yaw_index++)
-				{
-					rune_air_hook_candidate_t candidate;
-					vec3_t requested, control, bite;
-					int flight_ms;
-					int cross, local_target;
-
-					(*ray_count)++;
-					requested[PITCH] = pitches[pitch_index];
-					requested[YAW] = yaws[hook_yaw_index];
-					requested[ROLL] = 0.0f;
-					if (!RuneHook_TraceControl(&fire_state, requested, true,
-					        control, bite, &flight_ms))
-						continue;
-					(*surface_count)++;
-					RuneHook_NearestSurfaceSeeds(input, from, bite,
-					    &cross, &local_target);
-					if (cross >= 0 && cross != from &&
-					    !RuneHook_LinkExists(input, from, cross) &&
-					    !cross_connected[(size_t)source_component *
-					        (size_t)input->component_count +
-					        (size_t)input->component[cross]])
-					{
-						float launch_radians;
-
-						memset(&candidate, 0, sizeof(candidate));
-						candidate.from = from;
-						candidate.to = cross;
-						candidate.group = input->component[cross];
-						candidate.launch_yaw = yaws[launch_index];
-						candidate.hook_pitch = pitches[pitch_index];
-						candidate.hook_yaw = yaws[hook_yaw_index];
-						launch_radians = candidate.launch_yaw *
-							(float)M_PI / 180.0f;
-						candidate.launch_heading = RuneHook_Heading(
-							cosf(launch_radians), sinf(launch_radians));
-						candidate.launch_frames = launch_frames;
-						candidate.score = RuneHook_AirCandidateScore(
-							&fire_state, bite,
-							input->seeds[cross].origin, control[ROLL],
-							launch_frames);
-						if (!RuneHook_AirCandidatesAppend(cross_set,
-						        &candidate))
-							return false;
-					}
-					(void)local_target;
-				}
+				if (!RuneHook_AirPosesInsert(poses, &fire_state, from,
+				        yaws[launch_index], launch_heading, launch_frames,
+				        &inserted))
+					goto done;
+				if (inserted)
+					(*unique_pose_count)++;
+				else
+					(*duplicate_pose_count)++;
 			}
 		}
 	}
-	return true;
+	for (size_t pose_index = 0; pose_index < poses->count; pose_index++)
+	{
+		const rune_air_pose_t *pose = &poses->items[pose_index];
+
+		for (size_t pitch_index = 0; pitch_index < pitch_count; pitch_index++)
+		for (size_t hook_yaw_index = 0; hook_yaw_index < yaw_count;
+		     hook_yaw_index++)
+		{
+			rune_air_hook_candidate_t candidate;
+			vec3_t requested, control, bite;
+			int flight_ms;
+			int cross, local_target;
+
+			(*ray_count)++;
+			requested[PITCH] = pitches[pitch_index];
+			requested[YAW] = yaws[hook_yaw_index];
+			requested[ROLL] = 0.0f;
+			if (!RuneHook_TraceControl(&pose->state, requested, true,
+			        control, bite, &flight_ms))
+				continue;
+			(*surface_count)++;
+			RuneHook_NearestSurfaceSeeds(input, pose->from, bite,
+			    &cross, &local_target);
+			if (cross >= 0 && cross != pose->from &&
+			    !RuneHook_LinkExists(input, pose->from, cross) &&
+			    !cross_connected[(size_t)source_component *
+			        (size_t)input->component_count +
+			        (size_t)input->component[cross]])
+			{
+				memset(&candidate, 0, sizeof(candidate));
+				candidate.from = pose->from;
+				candidate.to = cross;
+				candidate.group = input->component[cross];
+				candidate.pose_index = (uint32_t)pose_index;
+				candidate.launch_yaw = pose->launch_yaw;
+				candidate.hook_pitch = control[PITCH];
+				candidate.hook_yaw = control[YAW];
+				candidate.launch_heading = pose->launch_heading;
+				candidate.launch_frames = pose->launch_frames;
+				candidate.score = RuneHook_AirCandidateScore(
+					&pose->state, bite, input->seeds[cross].origin,
+					control[ROLL], pose->launch_frames);
+				if (!RuneHook_AirCandidatesAppend(cross_set, &candidate))
+					goto done;
+			}
+			(void)local_target;
+		}
+	}
+	result = true;
+
+done:
+	return result;
 }
 
-static qboolean RuneHook_ReplayAirCandidate(
-	const sg_rune_hook_frontier_input_t *input,
+static qboolean RuneHook_LoadAirCandidate(const rune_air_poses_t *poses,
 	const rune_air_hook_candidate_t *candidate, sg_phantom_t *airborne)
 {
-	if (!input || !candidate || !airborne || candidate->launch_frames == 0)
+	if (!poses || !candidate || !airborne || candidate->launch_frames == 0 ||
+	    candidate->pose_index >= poses->count)
 		return false;
-	memset(airborne, 0, sizeof(*airborne));
-	for (unsigned int frame = 0; frame < candidate->launch_frames; frame++)
-		if (!RuneHook_AirFrame(&input->seeds[candidate->from],
-		        candidate->launch_yaw, (byte)frame, airborne))
-			return false;
-	return SG_OracleAirHookCoastFrame(airborne) &&
-		!airborne->groundentity && airborne->waterlevel == 0;
+	*airborne = poses->items[candidate->pose_index].state;
+	return !airborne->groundentity && airborne->waterlevel == 0;
 }
 
-static void RuneHook_CloseComponentReachability(byte *reachable, int count)
+static void RuneHook_AddComponentReachability(byte *reachable, int count,
+	int from, int to)
 {
-	if (!reachable || count <= 0)
+	if (!reachable || count <= 0 || from < 0 || from >= count || to < 0 ||
+	    to >= count)
 		return;
-	for (int through = 0; through < count; through++)
-		for (int from = 0; from < count; from++)
-		{
-			if (!reachable[(size_t)from * (size_t)count +
-			        (size_t)through])
-				continue;
-			for (int to = 0; to < count; to++)
-				if (reachable[(size_t)through * (size_t)count +
-				        (size_t)to])
-					reachable[(size_t)from * (size_t)count +
-					    (size_t)to] = 1;
-		}
+	/* The matrix is transitively closed before this edge arrives. Every new
+	 * route is therefore one predecessor of `from`, the edge, and one successor
+	 * of `to`. Updating that rectangle is the complete incremental closure; a
+	 * fresh cubic Floyd-Warshall pass after every proved movement is redundant. */
+	for (int predecessor = 0; predecessor < count; predecessor++)
+	{
+		if (!reachable[(size_t)predecessor * (size_t)count + (size_t)from])
+			continue;
+		for (int successor = 0; successor < count; successor++)
+			if (reachable[(size_t)to * (size_t)count + (size_t)successor])
+				reachable[(size_t)predecessor * (size_t)count +
+				    (size_t)successor] = 1;
+	}
 }
 
-static uint64_t RuneHook_ProveAirCandidateGroups(
+static uint64_t RuneHook_SeedComponentReachability(
+	const sg_rune_hook_frontier_input_t *input, byte *reachable)
+{
+	uint64_t pairs = 0U;
+
+	memset(reachable, 0,
+		(size_t)input->component_count * (size_t)input->component_count);
+	for (int component = 0; component < input->component_count; component++)
+		reachable[(size_t)component * (size_t)input->component_count +
+		    (size_t)component] = 1U;
+	/* The hook frontier runs after the BSP contact field and the other movement
+	 * operators. Its SCC labels describe that complete graph, but SCCs may still
+	 * have directed links between them. Preserve those known routes in the
+	 * closure instead of asking grounded and airborne hook discovery to prove
+	 * them again. */
+	for (int index = 0; index < *input->link_count; index++)
+	{
+		const rune_link_t *link = &input->links[index];
+		int from, to;
+
+		if (link->from < 0 || link->from >= input->seed_count ||
+		    link->to < 0 || link->to >= input->seed_count)
+			continue;
+		from = input->component[link->from];
+		to = input->component[link->to];
+		if (from < 0 || from >= input->component_count || to < 0 ||
+		    to >= input->component_count || from == to)
+			continue;
+		RuneHook_AddComponentReachability(reachable,
+			input->component_count, from, to);
+	}
+	for (int from = 0; from < input->component_count; from++)
+		for (int to = 0; to < input->component_count; to++)
+			if (from != to && reachable[(size_t)from *
+			        (size_t)input->component_count + (size_t)to])
+				pairs++;
+	return pairs;
+}
+
+static qboolean RuneHook_ComponentNeedsObjectiveBridge(
+	const byte *reachable, const byte *objective_mask, int count,
+	int component, byte objective_goal)
+{
+	byte reachable_objectives = 0U;
+
+	if (!reachable || !objective_mask || count <= 0 || component < 0 ||
+	    component >= count)
+		return false;
+	/* LMCTF generation is complete when this directed component can reach both
+	 * flag objectives. A hook edge may make several predecessor components
+	 * complete at once, so derive the answer from the current transitive closure
+	 * after every proved bridge. This is semantic closure, not a search budget. */
+	if (objective_goal == 3U)
+	{
+		reachable_objectives = RuneHook_ReachableObjectiveMask(reachable,
+			objective_mask, count, component);
+		return (reachable_objectives & objective_goal) != objective_goal;
+	}
+	/* Focused non-CTF fixtures have no two-flag objective contract. Preserve
+	 * exhaustive component behavior there instead of declaring empty work done. */
+	for (int target = 0; target < count; target++)
+		if (!reachable[(size_t)component * (size_t)count + (size_t)target])
+			return true;
+	return false;
+}
+
+#define RUNE_AIR_HOOK_PROOF_BATCH 4096U
+
+static uint64_t RuneHook_ProveAirCandidateBatch(
 	rune_hook_frontier_state_t *state, rune_air_hook_candidates_t *set,
-	byte *component_reachable, int component_count, uint64_t *proof_count)
+	const rune_air_poses_t *poses,
+	byte *component_reachable, int component_count, uint64_t *proof_count,
+	uint64_t *replay_frames_avoided, size_t *cursor, qboolean *exhausted,
+	uint64_t *examined_out)
 {
 	uint64_t links = 0U;
-	size_t index;
-	unsigned int reported_percent = 0U;
+	uint64_t examined = 0U;
 
-	if (!state || !set || !component_reachable || component_count <= 0 ||
-	    !proof_count)
+	if (!state || !set || !poses || !component_reachable ||
+	    component_count <= 0 || !proof_count || !replay_frames_avoided ||
+	    !cursor || !exhausted || !examined_out ||
+	    *cursor > set->count)
 		return 0U;
-	if (set->count > 1U)
+	if (*cursor == 0U && set->count > 1U)
 		qsort(set->items, set->count, sizeof(*set->items),
 		    RuneHook_AirCandidateCompare);
-	for (index = 0; index < set->count; index++)
+	while (*cursor < set->count && examined < RUNE_AIR_HOOK_PROOF_BATCH)
 	{
-		const rune_air_hook_candidate_t *candidate = &set->items[index];
+		const rune_air_hook_candidate_t *candidate = &set->items[(*cursor)++];
 		sg_phantom_t airborne;
 		int source_component = state->input->component[candidate->from];
 
+		examined++;
 		if (source_component >= 0 && source_component < component_count &&
 		    candidate->group >= 0 && candidate->group < component_count &&
 		    !component_reachable[(size_t)source_component *
 		        (size_t)component_count + (size_t)candidate->group])
 		{
 			(*proof_count)++;
-			if (RuneHook_ReplayAirCandidate(state->input, candidate,
+			*replay_frames_avoided += candidate->launch_frames;
+			if (RuneHook_LoadAirCandidate(poses, candidate,
 			        &airborne) &&
 			    RuneHook_ProveAirRay(state, candidate->from, candidate->to,
 			        &airborne, candidate->launch_heading,
 			        candidate->launch_frames, candidate->hook_pitch,
 			        candidate->hook_yaw))
 			{
-				component_reachable[(size_t)source_component *
-				    (size_t)component_count +
-				    (size_t)candidate->group] = 1;
-				RuneHook_CloseComponentReachability(component_reachable,
-				    component_count);
+				RuneHook_AddComponentReachability(component_reachable,
+				    component_count, source_component, candidate->group);
 				links++;
-			}
-		}
-		if (set->count != 0U)
-		{
-			unsigned int percent = (unsigned int)(((index + 1U) * 100U) /
-				set->count);
-
-			if (percent >= reported_percent + 5U || index + 1U == set->count)
-			{
-				reported_percent = percent;
-				sg_host.dprint("rune: airborne hook proof progress=%u%% "
-					"candidates=%llu/%llu proofs=%llu links=%llu\n",
-					percent, (unsigned long long)(index + 1U),
-					(unsigned long long)set->count,
-					(unsigned long long)*proof_count,
-					(unsigned long long)links);
+				break;
 			}
 		}
 	}
+	*examined_out = examined;
+	*exhausted = *cursor == set->count;
 	return links;
 }
 
@@ -1241,18 +1554,31 @@ qboolean SG_RuneGenerateHookFrontier(
 		180.0f, 225.0f, 270.0f, 315.0f
 	};
 	rune_hook_frontier_state_t state;
-	rune_air_hook_candidates_t air_set;
+	rune_air_hook_candidates_t *air_sets = NULL;
+	rune_air_poses_t *air_pose_sets = NULL;
+	size_t *air_cursors = NULL;
+	byte *air_exhausted = NULL;
+	byte *component_objectives = NULL;
+	byte objective_goal = 0U;
 	uint64_t rays_done = 0U;
 	uint64_t rays_total;
 	uint64_t surface_hits = 0U;
 	uint64_t candidate_proofs = 0U;
 	uint64_t links = 0U;
 	uint64_t air_poses = 0U;
+	uint64_t air_unique_poses = 0U;
+	uint64_t air_duplicate_poses = 0U;
 	uint64_t air_rays = 0U;
 	uint64_t air_surfaces = 0U;
 	uint64_t air_candidates = 0U;
 	uint64_t air_proofs = 0U;
 	uint64_t air_links = 0U;
+	uint64_t air_components_skipped = 0U;
+	uint64_t base_reachable_pairs = 0U;
+	uint64_t air_candidate_visits = 0U;
+	uint64_t air_replay_frames_avoided = 0U;
+	uint64_t air_batches = 0U;
+	uint64_t air_rounds = 0U;
 	unsigned int reported_percent = 0U;
 	byte *cross_connected = NULL;
 	byte *local_direction_link = NULL;
@@ -1271,33 +1597,61 @@ qboolean SG_RuneGenerateHookFrontier(
 			return false;
 		}
 	memset(&state, 0, sizeof(state));
-	memset(&air_set, 0, sizeof(air_set));
 	state.input = input;
 	state.retention_limit = RUNE_MAX_LINKS - input->seed_count;
 	cross_connected = sg_host.level_alloc(
 		(size_t)input->component_count * (size_t)input->component_count);
 	local_direction_link = sg_host.level_alloc(
 		(size_t)input->seed_count * (sizeof(yaws) / sizeof(yaws[0])));
-	if (!cross_connected || !local_direction_link)
+	air_sets = sg_host.level_alloc((size_t)input->component_count *
+		sizeof(*air_sets));
+	air_pose_sets = sg_host.level_alloc((size_t)input->component_count *
+		sizeof(*air_pose_sets));
+	air_cursors = sg_host.level_alloc((size_t)input->component_count *
+		sizeof(*air_cursors));
+	air_exhausted = sg_host.level_alloc((size_t)input->component_count);
+	component_objectives = sg_host.level_alloc((size_t)input->component_count);
+	if (!cross_connected || !local_direction_link || !air_sets ||
+	    !air_pose_sets ||
+	    !air_cursors || !air_exhausted || !component_objectives)
 	{
 		if (cross_connected) sg_host.level_free(cross_connected);
 		if (local_direction_link) sg_host.level_free(local_direction_link);
+		if (air_sets) sg_host.level_free(air_sets);
+		if (air_pose_sets) sg_host.level_free(air_pose_sets);
+		if (air_cursors) sg_host.level_free(air_cursors);
+		if (air_exhausted) sg_host.level_free(air_exhausted);
+		if (component_objectives) sg_host.level_free(component_objectives);
 		sg_host.dprint("rune: hook volume unavailable reason=allocation\n");
 		return false;
 	}
-	memset(cross_connected, 0,
-		(size_t)input->component_count * (size_t)input->component_count);
-	for (int component = 0; component < input->component_count; component++)
-		cross_connected[(size_t)component *
-		    (size_t)input->component_count + (size_t)component] = 1;
+	memset(air_sets, 0,
+		(size_t)input->component_count * sizeof(*air_sets));
+	memset(air_pose_sets, 0,
+		(size_t)input->component_count * sizeof(*air_pose_sets));
+	memset(air_cursors, 0,
+		(size_t)input->component_count * sizeof(*air_cursors));
+	memset(air_exhausted, 0, (size_t)input->component_count);
+	memset(component_objectives, 0, (size_t)input->component_count);
+	for (int seed = 0; seed < input->seed_count; seed++)
+	{
+		byte mask = input->objective_mask[seed] & 3U;
+
+		component_objectives[input->component[seed]] |= mask;
+		objective_goal |= mask;
+	}
+	base_reachable_pairs = RuneHook_SeedComponentReachability(input,
+		cross_connected);
 	memset(local_direction_link, 0,
 		(size_t)input->seed_count * (sizeof(yaws) / sizeof(yaws[0])));
 	rays_total = (uint64_t)input->seed_count *
 		(uint64_t)(sizeof(pitches) / sizeof(pitches[0])) *
 		(uint64_t)(sizeof(yaws) / sizeof(yaws[0]));
-	sg_host.dprint("rune: hook volume poses=%d rays=%llu gravity=%d\n",
+	sg_host.dprint("rune: hook volume poses=%d rays=%llu gravity=%d "
+		"base_reachable_pairs=%llu\n",
 		input->seed_count, (unsigned long long)rays_total,
-		(int)SG_RuneProofGravity());
+		(int)SG_RuneProofGravity(),
+		(unsigned long long)base_reachable_pairs);
 	for (int from = 0; from < input->seed_count; from++)
 	{
 		qboolean source_water =
@@ -1333,11 +1687,9 @@ qboolean SG_RuneGenerateHookFrontier(
 					if (RuneHook_ProveSurfaceRay(&state, from, cross,
 					        pitches[pitch_index], yaws[yaw_index]))
 					{
-						cross_connected[(size_t)input->component[from] *
-						    (size_t)input->component_count +
-						    (size_t)input->component[cross]] = 1;
-						RuneHook_CloseComponentReachability(cross_connected,
-						    input->component_count);
+						RuneHook_AddComponentReachability(cross_connected,
+						    input->component_count, input->component[from],
+						    input->component[cross]);
 						links++;
 					}
 				}
@@ -1380,66 +1732,194 @@ progress:
 			}
 		}
 	}
-	/* Candidate discovery uses real Pmove and exact BSP traces, but those cheap
-	 * operations run before the multi-second hook oracle.  The global sweep
-	 * ranks all candidate edges, then fully replays only until each missing
-	 * component connection proves one edge.  An unsuccessful connection still
-	 * exhausts every candidate after all better bridges have had their chance;
-	 * this changes ordering, not completeness.
+	/* Candidate discovery uses real Pmove and exact BSP traces. Canonicalize the
+	 * complete fixed-point state before casting rays: adjacent seeds and launch
+	 * frames often converge on the same physical firing pose. Retain one ranked
+	 * stream per source component and advance each stream by a finite batch or
+	 * one successful bridge. Every success updates closure before the next
+	 * component runs. Rounds continue until every stream is connected or exactly
+	 * exhausted; the batch controls fairness, never whether work is completed.
 	 * Same-component airborne flings are runtime route enrichment, not missing
 	 * topology; ordinary grounded hook discovery already retains those local
 	 * directional shortcuts. */
+	air_rounds = input->component_count > 0 ? 1U : 0U;
 	for (int component = 0; component < input->component_count; component++)
 	{
-		size_t candidates_before = air_set.count;
+		rune_air_hook_candidates_t *set = &air_sets[component];
+		rune_air_poses_t *poses = &air_pose_sets[component];
 		uint64_t component_candidates;
+		uint64_t component_links;
+		uint64_t component_examined = 0U;
+		qboolean exhausted = false;
+
+		if (!RuneHook_ComponentNeedsObjectiveBridge(cross_connected,
+		        component_objectives, input->component_count, component,
+		        objective_goal))
+		{
+			air_exhausted[component] = 1U;
+			air_components_skipped++;
+			sg_host.dprint("rune: airborne hook discovery progress=%d%% "
+				"components=%d/%d skipped=connected\n",
+				(int)(((uint64_t)(component + 1) * 100U) /
+				    (uint64_t)input->component_count), component + 1,
+				input->component_count);
+			continue;
+		}
 
 		if (!RuneHook_CollectAirCandidates(input, component, pitches,
 		        sizeof(pitches) / sizeof(pitches[0]), yaws,
-		        sizeof(yaws) / sizeof(yaws[0]), cross_connected, &air_set,
-		        &air_poses,
+		        sizeof(yaws) / sizeof(yaws[0]), cross_connected, set, poses,
+		        &air_poses, &air_unique_poses, &air_duplicate_poses,
 		        &air_rays, &air_surfaces))
 		{
-			RuneHook_AirCandidatesFree(&air_set);
+			for (int cleanup = 0; cleanup < input->component_count; cleanup++)
+			{
+				RuneHook_AirCandidatesFree(&air_sets[cleanup]);
+				RuneHook_AirPosesFree(&air_pose_sets[cleanup]);
+			}
+			sg_host.level_free(air_exhausted);
+			sg_host.level_free(component_objectives);
+			sg_host.level_free(air_cursors);
+			sg_host.level_free(air_sets);
+			sg_host.level_free(air_pose_sets);
 			sg_host.level_free(local_direction_link);
 			sg_host.level_free(cross_connected);
 			sg_host.dprint("rune: airborne hook unavailable "
 				"reason=candidate-allocation\n");
 			return false;
 		}
-		component_candidates = (uint64_t)(air_set.count - candidates_before);
+		component_candidates = (uint64_t)set->count;
 		air_candidates += component_candidates;
+		component_links = RuneHook_ProveAirCandidateBatch(&state, set, poses,
+			cross_connected, input->component_count, &air_proofs,
+			&air_replay_frames_avoided,
+			&air_cursors[component], &exhausted, &component_examined);
+		air_batches++;
+		air_candidate_visits += component_examined;
+		air_links += component_links;
+		if (exhausted || !RuneHook_ComponentNeedsObjectiveBridge(
+		        cross_connected, component_objectives,
+		        input->component_count, component, objective_goal))
+		{
+			RuneHook_AirCandidatesFree(set);
+			RuneHook_AirPosesFree(poses);
+			air_exhausted[component] = 1U;
+		}
 		sg_host.dprint("rune: airborne hook discovery progress=%d%% "
-			"components=%d/%d poses=%llu rays=%llu surfaces=%llu "
-			"candidates=%llu component_candidates=%llu\n",
+			"components=%d/%d poses=%llu unique_poses=%llu "
+			"duplicate_poses=%llu rays=%llu surfaces=%llu "
+			"candidates=%llu component_candidates=%llu "
+			"component_cursor=%llu component_examined=%llu "
+			"component_links=%llu exhausted=%d\n",
 			(int)(((uint64_t)(component + 1) * 100U) /
 			    (uint64_t)input->component_count), component + 1,
 			input->component_count, (unsigned long long)air_poses,
+			(unsigned long long)air_unique_poses,
+			(unsigned long long)air_duplicate_poses,
 			(unsigned long long)air_rays,
 			(unsigned long long)air_surfaces,
 			(unsigned long long)air_candidates,
-			(unsigned long long)component_candidates);
+			(unsigned long long)component_candidates,
+			(unsigned long long)air_cursors[component],
+			(unsigned long long)component_examined,
+			(unsigned long long)component_links,
+			(int)air_exhausted[component]);
 	}
-	air_links = RuneHook_ProveAirCandidateGroups(&state, &air_set,
-		cross_connected, input->component_count, &air_proofs);
-	RuneHook_AirCandidatesFree(&air_set);
+	for (;;)
+	{
+		uint64_t round_examined = 0U;
+		uint64_t round_links = 0U;
+		int active = 0;
+
+		for (int component = 0; component < input->component_count; component++)
+		{
+			rune_air_hook_candidates_t *set = &air_sets[component];
+			rune_air_poses_t *poses = &air_pose_sets[component];
+			uint64_t component_examined = 0U;
+			uint64_t component_links;
+			qboolean exhausted = false;
+
+			if (air_exhausted[component])
+				continue;
+			if (!RuneHook_ComponentNeedsObjectiveBridge(cross_connected,
+			        component_objectives, input->component_count, component,
+			        objective_goal))
+			{
+				RuneHook_AirCandidatesFree(set);
+				RuneHook_AirPosesFree(poses);
+				air_exhausted[component] = 1U;
+				air_components_skipped++;
+				continue;
+			}
+			active++;
+			component_links = RuneHook_ProveAirCandidateBatch(&state, set,
+				poses, cross_connected, input->component_count, &air_proofs,
+				&air_replay_frames_avoided,
+				&air_cursors[component], &exhausted, &component_examined);
+			air_batches++;
+			air_candidate_visits += component_examined;
+			round_examined += component_examined;
+			round_links += component_links;
+			air_links += component_links;
+			if (exhausted || !RuneHook_ComponentNeedsObjectiveBridge(
+			        cross_connected, component_objectives,
+			        input->component_count, component, objective_goal))
+			{
+				RuneHook_AirCandidatesFree(set);
+				RuneHook_AirPosesFree(poses);
+				air_exhausted[component] = 1U;
+			}
+		}
+		if (!active)
+			break;
+		air_rounds++;
+		sg_host.dprint("rune: airborne hook proof round=%llu "
+			"active_components=%d examined=%llu links=%llu "
+			"total_examined=%llu total_links=%llu\n",
+			(unsigned long long)air_rounds, active,
+			(unsigned long long)round_examined,
+			(unsigned long long)round_links,
+			(unsigned long long)air_candidate_visits,
+			(unsigned long long)air_links);
+	}
+	for (int component = 0; component < input->component_count; component++)
+	{
+		RuneHook_AirCandidatesFree(&air_sets[component]);
+		RuneHook_AirPosesFree(&air_pose_sets[component]);
+	}
 	sg_host.dprint("rune: hook volume complete poses=%d rays=%llu "
 		"surfaces=%llu proofs=%llu retained_links=%llu "
-		"air_poses=%llu air_rays=%llu air_surfaces=%llu "
+		"air_poses=%llu air_unique_poses=%llu "
+		"air_duplicate_poses=%llu air_rays=%llu air_surfaces=%llu "
 		"air_candidates=%llu air_proofs=%llu "
-		"air_links=%llu capacity_skips=%llu "
+		"air_links=%llu air_components_skipped=%llu "
+		"air_candidate_visits=%llu air_batches=%llu air_rounds=%llu "
+		"air_replay_frames_avoided=%llu "
+		"capacity_skips=%llu "
 		"chain_source=human-learning\n", input->seed_count,
 		(unsigned long long)rays_done,
 		(unsigned long long)surface_hits,
 		(unsigned long long)candidate_proofs,
 		(unsigned long long)links,
 		(unsigned long long)air_poses,
+		(unsigned long long)air_unique_poses,
+		(unsigned long long)air_duplicate_poses,
 		(unsigned long long)air_rays,
 		(unsigned long long)air_surfaces,
 		(unsigned long long)air_candidates,
 		(unsigned long long)air_proofs,
 		(unsigned long long)air_links,
+		(unsigned long long)air_components_skipped,
+		(unsigned long long)air_candidate_visits,
+		(unsigned long long)air_batches,
+		(unsigned long long)air_rounds,
+		(unsigned long long)air_replay_frames_avoided,
 		(unsigned long long)state.capacity_skips);
+	sg_host.level_free(air_exhausted);
+	sg_host.level_free(component_objectives);
+	sg_host.level_free(air_cursors);
+	sg_host.level_free(air_sets);
+	sg_host.level_free(air_pose_sets);
 	sg_host.level_free(local_direction_link);
 	sg_host.level_free(cross_connected);
 	return true;

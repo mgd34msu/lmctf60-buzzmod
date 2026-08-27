@@ -31,6 +31,18 @@ assert "state.retention_limit = RUNE_MAX_LINKS - input->seed_count" in frontier
 assert "RuneHook_SurfaceRay" in frontier
 assert "RuneHook_NearestSurfaceSeeds" in frontier
 assert "RuneHook_ProveSurfaceRay" in frontier
+assert "RuneHook_AirPosesInsert" in SOURCE
+assert "RuneHook_LoadAirCandidate" in SOURCE
+assert "air_replay_frames_avoided" in frontier
+assert "RuneHook_AddComponentReachability" in SOURCE
+assert "RuneHook_SeedComponentReachability" in SOURCE
+assert "RuneHook_ComponentNeedsObjectiveBridge" in SOURCE
+assert "base_reachable_pairs" in frontier
+assert "RuneHook_ProveAirCandidateBatch" in SOURCE
+assert "RUNE_AIR_HOOK_PROOF_BATCH" in SOURCE
+assert "air_duplicate_poses" in frontier
+assert "air_candidate_visits" in frontier
+assert "air_rounds" in frontier
 assert "source_crouched" in frontier
 assert "hook volume progress=%u%%" in frontier
 assert "SG_RuneProofSelectHookFrontier" not in frontier

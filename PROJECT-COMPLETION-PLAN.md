@@ -28,13 +28,13 @@ conditions:
 
 | Area | Current state |
 |---|---|
-| Code wave | The corrected constructor expands one compound navigation field over the BSP's complete 3D player-hull volume. Walk, crouch, ramp, drop, swim, hook, movers, teleports, doors, and triggers prove operators over that field. Global airborne-hook discovery keeps only component-changing candidates, recomputes directed closure after each bridge, and exhausts unresolved candidates without a work budget. Production bots replay the same launch and coast commands; player hook code remains unchanged. |
+| Code wave | The corrected constructor expands one compound navigation field over the BSP's complete 3D player-hull volume. Walk, crouch, ramp, drop, swim, hook, movers, teleports, doors, and triggers prove operators over that field. Airborne hook discovery canonicalizes exact firing poses, seeds closure from the existing movement graph, reuses discovered states during proof, and stops a component only after objective closure or finite exhaustion. Batches never end work. Player hook code remains unchanged. |
 | Route search | Dijkstra remains production-wired, but it is only the final automated fallback after the BSP overlay and every movement operator reach a no-change fixpoint. It must never substitute for missing BSP-volume reconciliation. Human playthrough evidence is the final source-bound fallback and is re-proved by the engine. |
-| Movement generation | Clean tomb05 proof completed from BSP geometry at map gravity 100: 918 seeds, 6,599 retained links, 13 airborne-hook bridges, and both objective directions complete without Dijkstra or human input. The resulting pre-contract artifact was discarded after marker 252 became part of the authenticated movement law. Rocket-jump runtime support remains, while LMCTF generation omits rocket-jump discovery because hook traversal owns it. |
+| Movement generation | Fresh corrected-build proofs are complete for `lmctf12`, `lmctf26`, and `tomb05`. All three pass the complete route contract, pair validation, installation, and cold load. `tomb05` used map gravity 100 and completed without Dijkstra or human input. Rocket-jump runtime support remains, while LMCTF generation omits rocket-jump discovery because hook traversal owns it. |
 | Corpus | `tools/rune-corpus-maps.txt` defines 175 canonical maps. The owner invalidated and purged every generated RUNE after rejecting the destination-pair constructor. The current corpus is 0/175. Human playthroughs and learning evidence are preserved. Only artifacts produced by the corrected BSP-volume constructor may enter the final corpus. |
 | Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout. Full runs use 12 workers and queue the 16 known heavy regression maps after the other 159 maps. |
-| Active generation | The accidental one-map smoke was cancelled cleanly and produced no accepted artifact. The fresh full 175-map run starts from the refreshed freeze with 12 parallel workers and the hard-last schedule. |
-| Freeze and CI | Both full GNU and Make host gates passed before the scheduling-only correction. The corrected scheduler test passes; commit alignment and freeze refresh remain. Remote CI and pushes remain excluded by owner direction. |
+| Active generation | Pre-freeze correctness and performance proofs are complete. Their development artifacts are not eligible for the final corpus. The fresh full 175-map run starts from the refreshed freeze with 12 parallel workers and the hard-last schedule. |
+| Freeze and CI | Both full GNU and Make host gates pass on the corrected source candidate. Commit alignment and freeze creation remain. Remote CI and pushes remain excluded by owner direction. |
 | Bundle, matches, release | Focused bundle and fleet tests pass. Production installation and matches have not started. `v1.0.0` is not tagged or published. |
 
 ## Fixed authority and policy
@@ -157,7 +157,7 @@ do not replace them.
 
 ## Next critical path
 
-Commit and freeze the hard-last scheduler, then generate and validate all 175
+Commit and freeze the corrected generator, then generate and validate all 175
 maps with 12 workers. Assemble the bundle, run match evidence, and build, tag,
 and verify the local release. Do not push, publish remotely, or run remote CI.
 
