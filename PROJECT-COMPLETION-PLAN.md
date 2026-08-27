@@ -34,7 +34,7 @@ conditions:
 | Corpus | `tools/rune-corpus-maps.txt` defines 175 canonical maps. The owner invalidated and purged every generated RUNE after rejecting the destination-pair constructor. The current corpus is 0/175. Human playthroughs and learning evidence are preserved. Only artifacts produced by the corrected BSP-volume constructor may enter the final corpus. |
 | Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout; the legacy batch runner no longer imposes one either. |
 | Active generation | None. All obsolete generators, proof servers, controllers, and generated RUNEs are absent. Generation restarts only from the frozen source across the full 175-map manifest. |
-| Freeze and CI | The final GNU host gate passes. The Make host gate, local source commit, local merge to `main`, and immutable freeze remain. Remote CI and pushes remain excluded by owner direction. |
+| Freeze and CI | The corrected source is committed locally and both full GNU and Make host gates pass. Local `main` alignment and the immutable freeze remain. Remote CI and pushes remain excluded by owner direction. |
 | Bundle, matches, release | Focused bundle and fleet tests pass. Production installation and matches have not started. `v1.0.0` is not tagged or published. |
 
 ## Fixed authority and policy
@@ -157,10 +157,10 @@ do not replace them.
 
 ## Next critical path
 
-Pass the Make host gate, commit locally, align local `main`, and freeze the
-corrected source. Generate and validate all 175 maps once, assemble the bundle,
-run match evidence, and build, tag, and verify the local release. Do not push,
-publish remotely, or run remote CI.
+Align local `main` to the committed source candidate and freeze it. Generate and
+validate all 175 maps once, assemble the bundle, run match evidence, and build,
+tag, and verify the local release. Do not push, publish remotely, or run remote
+CI.
 
 ## Execution plan
 
@@ -186,8 +186,9 @@ publish remotely, or run remote CI.
 5. Review comments and source size, remove accidental outputs, and update
    source-size limits only to reviewed final counts.
 6. Run warning-clean builds, focused suites, and full GNU and Make host gates.
-7. Commit the coherent wave locally on `slipgate`, merge it to local `main`, and
-   keep both refs on the same commit. Do not push or start remote CI.
+7. The coherent wave is committed locally on `slipgate`, and both full host
+   gates pass. Fast-forward local `main` and keep both refs on the same commit.
+   Do not push or start remote CI.
 
 ### 2. Create the immutable freeze
 
@@ -273,7 +274,7 @@ repeat every invalidated downstream gate.
   no-progress `open-exhausted` search without a work budget.
 - [x] Door-family exhaustion and member-overflow propagation are complete.
 - [x] The corrected generator produces and cold-loads a complete `lmctf12` RUNE.
-- [ ] The corrected source passes fresh failed-map proofs and both local host
+- [x] The corrected source passes fresh failed-map proofs and both local host
   gates. Remote CI and pushes are omitted by owner direction.
 - [ ] The new immutable final snapshot contains 175 BSPs and only accepted
   corrected-run RUNEs.
