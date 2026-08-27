@@ -1,292 +1,331 @@
 # LMCTF BuzzMod project completion plan
 
-This plan tracks work still required. Git history and immutable run records hold
-superseded experiments and detailed evidence.
+This document is the authority for remaining work. It records the target system,
+the disposition of current code, the proof required at each boundary, and the
+release sequence. Git history and retained human playthroughs hold detailed
+evidence; this file does not hold transcripts or experiment logs.
 
 ## Completion definition
 
-The project is complete when one unchanged source commit satisfies all of these
-conditions:
+The project is complete only when one unchanged local source commit satisfies
+all of these conditions:
 
-1. Local GNU and Make host gates pass on the final source commit. Local
-   `slipgate` and `main` point to that commit. Remote CI and pushes remain out
-   of scope by owner direction.
-2. One immutable snapshot binds the final source, tools, runtime, and 175
-   canonical BSPs. It contains only corrected-run RUNE candidates.
-3. Validate every corrected-run RUNE. Regenerate only a missing or rejected
-   artifact with the corrected module, then accept all 175 maps.
-4. Every accepted RUNE passes both C readers, the Python reader, lint, matching
-   SNAG validation, and a fresh-process cold load. Map-specific coverage
-   diagnostics run and remain part of the evidence.
-5. Every map is route-complete or satisfies the route-only release contract.
-6. The authenticated production bundle is installed and verified.
-7. Ordinary matches prove the required bot behavior on the installed bytes.
-8. The local release tag points to the unchanged frozen commit. Release assets
-   copied into a clean verification directory pass version and integrity checks.
+1. The RUNE is a BSP-bound, player-hull configuration and capability field. It
+   represents every valid standing, crouching, grounded, swimming, and airborne
+   position and every physically possible connection, without objective-only
+   pruning or map-specific repairs.
+2. Runtime navigation can derive a cost gradient to any valid destination.
+   Strategy selects and queues goals; tactics chooses how to execute the next
+   part of the gradient with the legal movement and combat capabilities
+   available at that moment.
+3. Runtime beliefs represent uncertain players and events over RUNE state and
+   time. Dynamic players, teammates, enemies, and match state are not serialized
+   into the RUNE.
+4. Movement, mechanism, perception, combat, learning, artifact, validation, and
+   release code have each passed a fresh contract and caller review. Existing
+   code is not exempt because it is reusable.
+5. The final source passes both local host-gate dialects and the real-BSP proof
+   matrix. Local `slipgate` and `main` point to the same commit. Remote pushes
+   and remote CI remain out of scope by owner direction.
+6. One immutable snapshot binds that commit, its tools and runtimes, and the 175
+   manifest-selected BSPs. It contains no RUNE from the superseded generator.
+7. The frozen generator creates all 175 RUNEs with 12 isolated workers and no
+   generation or review timeout. Every result passes the independent readers,
+   semantic validation, exact-bound sidecar checks, and fresh-process cold load.
+8. The authenticated production bundle is installed and rollback-tested.
+   Ordinary matches prove navigation, objectives, mechanisms, perception,
+   combat, roles, learning boundaries, and clean lifecycle behavior.
+9. The unchanged frozen commit is tagged locally as `v1.0.0`; release assets
+   copied to a clean directory pass version, content, and integrity checks.
 
 ## Current status
 
 | Area | Current state |
 |---|---|
-| Code wave | The corrected constructor expands one compound navigation field over the BSP's complete 3D player-hull volume. Walk, crouch, ramp, drop, swim, hook, movers, teleports, doors, and triggers prove operators over that field. Airborne hook discovery canonicalizes exact firing poses, seeds closure from the existing movement graph, reuses discovered states during proof, and stops a component only after objective closure or finite exhaustion. Batches never end work. Player hook code remains unchanged. |
-| Route search | Dijkstra remains production-wired, but it is only the final automated fallback after the BSP overlay and every movement operator reach a no-change fixpoint. It must never substitute for missing BSP-volume reconciliation. Human playthrough evidence is the final source-bound fallback and is re-proved by the engine. |
-| Movement generation | Fresh corrected-build proofs are complete for `lmctf12`, `lmctf26`, and `tomb05`. All three pass the complete route contract, pair validation, installation, and cold load. `tomb05` used map gravity 100 and completed without Dijkstra or human input. Rocket-jump runtime support remains, while LMCTF generation omits rocket-jump discovery because hook traversal owns it. |
-| Corpus | `tools/rune-corpus-maps.txt` defines 175 canonical maps. The owner invalidated and purged every earlier generated RUNE after rejecting the destination-pair constructor. Human playthroughs and learning evidence are preserved. The clean 175-map corrected-constructor run is active; only its accepted artifacts may enter the final corpus. |
-| Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout. Full runs use 12 workers and queue the 16 known heavy regression maps after the other 159 maps. |
-| Active generation | The fresh full 175-map run is active with 12 parallel workers, no generation timeout, zero adopted RUNEs, and the hard-last schedule. Its input fingerprint is recorded under the immutable run root. |
-| Freeze and CI | Both full GNU and Make host gates passed. Local `main` and `slipgate` align on the corrected source commit. The read-only freeze contains the current module and acceptors, the private Python runtime, and exactly 175 BSPs. Remote CI and pushes remain excluded by owner direction. |
-| Bundle, matches, release | Focused bundle and fleet tests pass. Production installation and matches have not started. `v1.0.0` is not tagged or published. |
+| Architectural state | Foundational redesign in progress. The current wire format and runtime still treat a RUNE as an objective-pruned graph of action-labelled seeds and links. That model is rejected and cannot be frozen. |
+| Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` files. Retained demos and human-derived analysis remain evidence inputs only. |
+| Source refs | Local `slipgate` and `main` point to the same commit. `slipgate` is ahead of its remote; do not push or start remote CI. |
+| Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Every one remains review-required. |
+| Invalidated work | Objective-core pruning, `complete`/`local_only` as wire validity, route-only acceptance, action-labelled route ownership, production Dijkstra repair, fixed-grid/face-anchor coverage, and old RUNE/SNAG/corpus evidence are superseded. |
+| Freeze and release | Not started. No artifact generated by the present source is eligible for the final corpus. |
 
-## Fixed authority and policy
+## Non-negotiable design and operating rules
 
-### Corpus and configuration
+- The BSP and its entities are ground truth. Construction must be generalized
+  per BSP; no map name, flag pair, recorded route, or corpus exception may
+  create geometry or connectivity.
+- The RUNE describes configuration space, connectivity, capability, and cost.
+  It does not prescribe a sequence of named movement actions.
+- Any point where the standing or crouching player hull fits must be represented.
+  Every legal connection must be represented. Physically disconnected valid
+  regions remain represented and disconnected.
+- Map physics are authoritative: gravity, air acceleration, maximum velocity,
+  frame cadence, water behavior, and host movement law come from the bound map
+  and runtime. No generation path may silently substitute gravity 800.
+- Search batching may control memory and scheduling, but a batch boundary may
+  not end work. Capacity overflow fails loudly; it may not silently downgrade
+  completeness. Production generation and review have no elapsed-time limit.
+- The ordinary human hook remains base-LMCTF behavior. Bot planning, bot hook
+  execution, proof, and telemetry must not change human fire, attach, pull,
+  release, refire, collision, or fling semantics.
+- Preserve human playthroughs. Treat them as last-resort evidence and learning
+  input, never as authority to invent a connection absent from the BSP and
+  physics.
+- Commit coherent, reversible units locally. Do not push. Do not freeze while
+  source, tests, documentation, or wire contracts are still changing.
+- `tools/rune-corpus-maps.txt` is the sole 175-map authority.
+  `tools/topmaps.txt` is only an ordinary map schedule. Of 180 durable BSPs,
+  unsuffixed `lmctf05`, `smap31`, `xmap07`, `xmap11`, and `xmap14` are excluded
+  because their suffixed variants are canonical.
 
-- `tools/rune-corpus-maps.txt` is the sole authority for the 175 maps.
-- The durable asset set has 180 BSPs. The manifest excludes unsuffixed
-  `lmctf05`, `smap31`, `xmap07`, `xmap11`, and `xmap14` because suffixed variants
-  are canonical. The unsuffixed bases are out of scope; every listed variant
-  remains in scope.
-- Build the frozen BSP set by iterating the manifest. Do not copy all 180 BSPs.
-- `tools/topmaps.txt` is an ordinary schedule list. It has no completion or
-  release authority.
-- Snapshot `tools/rune.cfg` as the generator configuration. Validation and match
-  overlays cannot replace it.
-- Use `tools/route-only-match.cfg` only for ordinary route-only matches. The
-  production bundle includes the empty `tools/route-only-maplist.txt` so LMCTF
-  cannot use an ambient map list.
-- Preserve legacy LMCTF gameplay behavior. Change it only for requested bot or
-  telemetry work.
+## Requirements and current-code catalog
 
-### RUNE generation
+Disposition terms are strict:
 
-- The generator rewrite invalidates every old candidate. Do not include old
-  RUNEs in the snapshot or adoption queue.
-- Validate every corrected-run artifact against the frozen acceptance contract.
-  Use the frozen module and tools only for missing or rejected artifacts.
-- Failed infrastructure, lifecycle, observation, or host checks retry without
-  consuming or replacing an old artifact.
-- Generation attempts may resume in the same run root after non-accepted
-  attempts.
-- Production generation and review have no elapsed-time deadline. A deliberate
-  controlled-run safety override must be fingerprinted. The acceptor's
-  `--contracts` metadata probe may use a justified 300-second handshake bound,
-  but that bound does not apply to generation or review. Other bounds cover only
-  authenticated startup/readiness or owned-child teardown.
+- **Review/keep:** candidate behavior is useful, but it is retained only after
+  its contract, implementation, callers, failure behavior, and real integration
+  proof pass under the new model.
+- **Reshape:** retain part of the implementation behind a different data model
+  or ownership boundary.
+- **Replace:** remove the implementation from production after its callers move.
+- **Delete:** remove obsolete code, tests, format fields, and documentation.
 
-### Distribution scope
+### BSP, configuration space, and movement
 
-- Publish the supported Linux and Windows modules, `VERSION`, `SHA256SUMS`, and
-  the tracked `assets/lmctf6-buzzmod.pak`.
-- The public PAK contains static scoreboard art and sounds, not generated
-  navigation data.
-- Do not publish separate generated-RUNE downloads unless the release scope
-  explicitly adds them. The generated corpus and production bundle remain
-  authenticated release evidence and install inputs.
+| ID | Required result | Current code and disposition | Required proof |
+|---|---|---|---|
+| BSP-1 | Parse the complete BSP needed for collision and semantics: planes, nodes, leaves, brushes, brush sides, models, surfaces, contents, visibility/areas, entities, and moving submodels. | `sg_rune_seed_game.c` reads selected face/model lumps and uses host traces. **Replace** its partial face-anchor authority with a complete parser; **review/keep** host collision adapters. | Compare parsed structure and contents against the host collision model on real BSPs; malformed and unsupported inputs fail closed. |
+| BSP-2 | Construct exact standing and crouching player-origin free space by expanding solids/eroding free space with the actual hull. | Current fixed-grid seeds and ground traces are sparse and floor-centric. **Replace.** Candidate hull constants and canonical Pmove pose checks in `sg_oracle.c` require review. | Boundary samples just inside/outside every cell agree with host box traces and Pmove, including low ceilings, windows, half-walls, ramps, ledges, and void boundaries. |
+| BSP-3 | Represent the full three-dimensional configuration space, including supported surfaces, water volumes, airborne volumes, and every height at which the hull fits. | `rune_seed_t` stores a point and flags. **Replace** with cells, portals, and capability metadata. | A BSP-to-RUNE overlay finds no host-valid player volume omitted from the artifact. |
+| BSP-4 | Derive adjacency from shared traversable configuration-space boundaries. A visually open gap that cannot fit the player is not connected. | Local pair traces and O(n-squared) seed overlay are incomplete. **Replace.** | Corridor, doorway, crouch, ramp, window, and half-wall fixtures match host reachability in both directions. |
+| BSP-5 | Run BSP completeness reconciliation immediately as part of construction, not as a later route repair. | `SG_RuneSeedRecordBspOverlay` is a post-sampling repair. **Replace** with construction invariants and an independent overlay audit. | Omitting any valid cell or portal makes the construction gate fail before movement capabilities run. |
+| BSP-6 | Preserve all valid components without flag-based pruning. Objectives are ordinary destinations placed on the field. | Objective-core pruning and flag-root closure in `sg_rune.c` and `sg_rune_hook_frontier.c` are **delete**. | Non-objective rooms, item pockets, disconnected valid regions, and both flag stands survive serialization. |
+| BSP-7 | Annotate cells and surfaces with static contents and semantics: water, hazards, sky, hookability, normals, cover/exposure boundaries, landmarks, items, flags, and mechanism identities. | These facts are split across BSP samples, entity scans, fields, combat traces, and mechanism catalogs. **Reshape after review.** | Static annotations agree with BSP/entity authority; live availability and actor state remain runtime-only. |
+| MOV-1 | Encode walking, crouching, ramps, steps, jumping, dropping, swimming, water exits, movers, pushes, teleports, doors, buttons, triggers, dwell waits, and hook traversal as capabilities over the same space. | Exact movement/oracle and live-controller code exists. **Reshape after full review**; remove action-link ownership. | Each capability has host-physics fixtures plus a real-BSP proof; disabling one capability does not erase geometry reachable by another. |
+| MOV-2 | Use actual map gravity and movement cvars throughout construction, cost, proof, loading, and runtime. | Identity captures these values, but legacy compatibility and fallback paths remain. **Review/reshape.** | Gravity 100 and 800 maps produce different, correctly bound costs and airborne envelopes; identity mismatch fails load. |
+| MOV-3 | Model airborne control, jump-off/coast trajectories, drops into void-accessible space, and relaunch from any legal airborne pose. | Air-hook frontier samples action states and previously stopped at objective closure. **Replace orchestration; review/keep exact physics kernels.** | `tomb05` reaches both flag entries from BSP and physics alone, using gravity 100, without Dijkstra or human input. |
+| MOV-4 | Model water as a 3D traversable volume, not a compound floor edge. | Water forests and swim replay exist around graph links. **Reshape after review.** | Submerged vertical, horizontal, entry, exit, breath, current, and dry-to-water transitions agree with host physics. |
+| MOV-5 | Separate hook-bolt visibility from player-body motion. A hook may fire from any valid 3D pose to any visible hookable surface, excluding sky; the body then follows pull, release, coast, air-control, and collision physics. | `sg_hook_oracle.c`, replay, compound hook, and live hook code provide partial kernels. **Reshape after review.** | Static, airborne, chained, fling, ceiling, wall, underside, low-gravity, occluded, pickup-obstructed, and sky cases match base LMCTF. |
+| MOV-6 | Avoid per-point brute-force rays. Partition configuration space and surface visibility into proven regions; interpolate only inside a region whose occluder boundaries are known. | Canonical airborne state deduplication is narrower than this requirement. **Replace/extend.** | Results match an exact-ray reference sample while time and memory scale with cells and visibility boundaries, not every possible pose. |
+| MOV-7 | Movement costs are directional and time-aware: acceleration, velocity, gravity, air control, hook bolt flight, pull, release, coast, swimming, falling, and mover dwell/travel all contribute. | Per-link `cost_ms` is action-specific. **Replace** with capability/cost kernels over cell state. | Analytic costs and exact Pmove timing agree within a declared tolerance on each movement family and both gravity regimes. |
+| MOV-8 | Rocket-jump code remains available where supported, but LMCTF RUNE connectivity generation does not search rocket or grenade jumps when the hook already supplies traversal. | Rocket-jump generation/runtime code exists. **Review/reshape** mode admission; no grenade-jump generator is added. | LMCTF generation logs show no rocket/grenade-jump search; non-LMCTF support and existing runtime behavior remain intact. |
+| MOV-9 | Prove connectivity to a fixed point independent of destinations. No objective closure, work budget, or hook-chain work cap may terminate valid construction; physical hook lifecycle caps remain. | Objective closure and several bounded frontiers exist. **Replace** terminal logic; **keep only justified physical/protocol caps after review.** | Repeated batching converges to the same artifact; randomized batch sizes and crash/resume points do not change content. |
 
-## RUNE acceptance rules
+### Static RUNE, fields, strategy, and tactics
 
-Every accepted artifact must:
+| ID | Required result | Current code and disposition | Required proof |
+|---|---|---|---|
+| NAV-1 | Bind the RUNE exactly to BSP content, entity semantics, module/physics ABI, movement cvars, and construction schema. | `rune_identity_t`, codec checks, and authority code are **review/reshape** candidates. | Any relevant byte or physics-law change rejects the artifact; irrelevant filesystem identity differences do not. |
+| NAV-2 | Store a compact cell/portal representation plus capability and cost kernels. Do not copy the BSP unnecessarily and do not serialize runtime actors. | Seed/link/action wire format is **replace**. | A reader can reconstruct configuration coverage and solve destinations using only the exact-bound BSP plus RUNE. |
+| NAV-3 | Support a destination at any valid point: flags, items, weapons, armor, powerups, carriers, escort/intercept positions, defensive posts, learned points, and arbitrary waypoints. | `sg_fields.c` already has flag, item, carrier, post, lane, and intercept fields. **Reshape after review.** | Every target class maps to valid configuration space and produces a finite field exactly where physically reachable. |
+| NAV-4 | Derive destination-specific directional cost gradients at runtime without regenerating the RUNE. | `Field_Flood` is reverse Dijkstra over action links. **Replace solver; review/keep registry, caching, and target mapping.** | Multiple simultaneous destinations produce correct independent fields; changing a goal does not mutate or rebuild the RUNE. |
+| NAV-5 | Use a continuous/anisotropic field method appropriate to directional costs. Structural connectedness uses cell flood/union-find/SCC, not path repair. | Production Dijkstra late-path selection is **delete**. A small independent graph reference may remain test-only if useful. | Solver results agree with analytic fixtures and an independent reference on sampled states; no production call reaches late-path repair. |
+| NAV-6 | Cache fields for static destinations and update arbitrary, dropped, displaced, or moving destinations incrementally through a coarse region hierarchy. | Static fields and projected carrier fields already exist over seeds. **Reshape after review.** | Moving a target updates only affected regions, preserves exact reachability, and converges to the same field as a clean solve. |
+| STR-1 | Represent strategy as a typed queue of goals with prerequisites, alternatives, priorities, completion, cancellation, replacement, and failure policy. | Roles, strike phases, item lead, defense supply, handoff, and special commitments are scattered. **Reshape** into one strategy-plan model. | Examples such as railgun to armor to flag, escort carrier, recover flag, and timed quad execute and replan under interruptions. |
+| STR-2 | Preserve long-term destination commitment through tactical interruptions unless strategic authority changes. | Existing commitment retirement and strike reducers contain useful laws. **Review/reshape.** | Combat, obstruction, hook opportunity, item loss, death, role change, and human order tests distinguish suspend, resume, replace, and cancel. |
+| TAC-1 | Tactics chooses legal movement execution from the live state and local gradient. The movement mechanism that discovered connectivity does not own traversal. | `Think_PickLink` and `sg_move.c` execute `link->action`; **replace this ownership boundary** while reviewing individual live reducers. | The same local transition may be executed by walk, jump, swim, hook, or another legal tactic without changing the RUNE. |
+| TAC-2 | Mechanisms remain explicit authenticated discontinuities with topology, controller identity, trigger/button/dwell timing, execution, and recovery. | Mechanism catalog, plans, bindings, timelines, and live transactions are strong **review/reshape** candidates. | Door families, delayed triggers, lifts, trains, rotating movers, buttons, teleports, and failure recovery pass caller audits and real-BSP trials. |
+| TAC-3 | Runtime localization maps the live player pose into configuration space and recovers from numerical drift or temporary absence without inventing connectivity. | Nearest-seed localization exists. **Replace/reshape** for cell/phase-space localization. | Spawn, crouch, water, airborne, mover, teleport, death, and out-of-field recovery are deterministic and bounded. |
+| TAC-4 | Threat, cover, weapon opportunity, obstruction, and teammate coordination may deform the local field temporarily but cannot create permanent minima or silently replace the strategic goal. | `sg_price.c`, danger, cover, combat, and route-purity policy contain partial terms. **Reshape after review.** | Tactical terms expire or retire explicitly; after a fight or dodge the bot resumes the committed strategy unless its authority changed. |
 
-- bind the frozen module, BSP, configuration, runtime, and tool identities;
-- contain exactly two authenticated objective roots that resolve to flag stands;
-- contain no unproved traversal link;
-- produce agreement between both C readers and the Python reader;
-- pass lint and the generic graph contract; map-specific coverage diagnostics
-  are non-blocking when the complete route contract passes;
-- load in a new q2ded process with its exact-bound SNAG, without fallback or
-  mixed sidecar state; and
-- stop generation and cold-load processes cleanly.
+### Perception, beliefs, combat, and learning
 
-### Complete
+| ID | Required result | Current code and disposition | Required proof |
+|---|---|---|---|
+| BEL-1 | Keep all players and match state out of the static RUNE. Maintain per-team, per-player runtime probability distributions over position, velocity, movement state, and future time. | `sg_belief_enemy_t` stores one seed and timestamp. **Replace data model; review/keep earned-information boundaries.** | No decision reads hidden enemy state. Beliefs normalize, age, diffuse only through valid movement, and remain isolated by team. |
+| BEL-2 | Visual evidence creates a concentrated pose/velocity belief. Lost sight propagates and diffuses it; negative visual evidence removes impossible mass. | Sight and aging hooks exist. **Reshape after review.** | Controlled visibility/occlusion sequences produce expected concentration, propagation, exclusion, and decay. |
+| BEL-3 | Sound creates diffuse or multimodal beliefs consistent with event type, direction, attenuation, PHS/occlusion, and known item locations. Damage adds directional evidence. | Sound/PHS/range, item clocks, rail/haste notes, and damage rings exist; heard enemies currently become one randomized seed. **Reshape.** | Sound-only beliefs never become unjustified exact aim; multiple plausible regions and later evidence update correctly. |
+| BEL-4 | Teammates use runtime beliefs for coordination and friendly-fire risk. They do not become RUNE content. | Some teammate state is directly available and combat has safety checks. **Review/reshape** by authority and visibility rules. | Coordination, carrier support, and friendly-fire decisions use only permitted current or believed state. |
+| BEL-5 | Store beliefs sparsely as weighted cells/particles or mixtures, including position, velocity, acceleration, orientation, movement/weapon state, confidence, and future time. Team communication may reduce uncertainty only through an authenticated runtime observation. | Carrier projection offers a small hypothesis frontier; general enemy memory is singular. **Replace/reshape.** | Sight, armor pickup, weapon fire, footsteps, hook, door, lift, water, damage, and team reports produce source-appropriate distributions without dense-map cost. |
+| COM-1 | Reuse the BSP-derived visibility and occlusion substrate for weapon affordances without duplicating the whole RUNE per weapon. | Combat currently traces live shots independently. **Reshape after review.** | Shared geometry produces weapon-specific affordance queries while exact live traces remain the irreversible fire boundary. |
+| COM-2 | Provide weapon profiles/kernels for hitscan, spread, straight projectiles, rockets and splash, grenades and bounce/fuse, hyperblaster, BFG, and special weapons. | Weapon table, muzzle traces, lead, grenade stepping, rocket splash, range, ammo, and safety logic exist. **Review/reshape.** | Each weapon matches host speed, gravity, collision, splash, self/team risk, cadence, ammo, and switch law. |
+| COM-3 | Choose aim and weapon by integrating predicted target probability and future weapon effect, minus self, teammate, ammo, and opportunity costs. | Current combat leads a visible target or a single retained seed. **Replace decision model while preserving validated physical fire code.** | Visible, sound-only, crossing, occluded, clustered, friendly-nearby, and projectile-intercept scenarios choose defensible actions. |
+| COM-4 | Preserve family-specific effects: rail penetration and lanes; automatic-weapon exposure/spread; shotgun cone occupancy; bolt arrival; rocket impact-surface and occluded splash choice; grenade arc/bounce/fuse/area denial; BFG behavior. | Several cases exist in `sg_combat.c` and host weapons. **Thoroughly review/reshape.** | Static affordance queries and live shots agree with host behavior for each family, including wall/floor shots that outperform aiming at a belief mean. |
+| LRN-1 | Human traces capture lossless command/Pmove and hook lifecycle data without changing player behavior. | `sg_human_trace.c` is a **review/keep** candidate; its current binding to `local_only` is **replace**. | Two independent playthroughs can be isolated by client/frame range, source-bound, replayed, and shown not to alter human input or hook behavior. |
+| LRN-2 | Human evidence may refine runtime tactic priors, costs, landing preferences, and strategy. It may not create geometry or bypass host proof. Post-match learning is required; live learning is optional after transactional safety is proved. | Learning currently nominates run/hook graph edges and re-proves them. **Reshape.** | A learned update is exact-bound, engine-verified, atomic, rollback-safe, and cannot connect physically disconnected cells. |
+| VIS-1 | A client visualization of cells, gradients, beliefs, visibility, or weapon affordances is optional demonstration work, never a freeze blocker. | `tools/runeview.py` may provide a starting point. **Defer and review if scheduled.** | When implemented, visualization is read-only and matches the loaded artifact; absence cannot block release. |
 
-A `complete` wire contract requires every live seed to reach both objective
-roots. The controller classifies an accepted artifact with this contract as
-`PASS`.
+### Wire format, validation, tooling, and release
 
-### Route-only release contract
+| ID | Required result | Current code and disposition | Required proof |
+|---|---|---|---|
+| ART-1 | Define a new versioned little-endian wire format for cells, portals, capabilities, mechanism references, cost metadata, identities, and checksums. | Codec/file/stream/loader/writer code is a **review/reshape** candidate; the seed/link schema is **delete**. | Truncation, overflow, unknown versions, invalid references, CRC drift, and hostile counts fail before publication. |
+| ART-2 | Publication remains fail-closed and atomic. A rejected candidate never replaces the published artifact, and mixed RUNE/sidecar state is impossible. | Artifact loader/writer, installer, sidecar store, and publication code are **review/keep** candidates. | Fault injection at every write, sync, rename, validation, and restart point converges to old-complete or new-complete state. |
+| ART-3 | Replace objective-centric `complete`/`local_only` wire validity with configuration-space completeness. Objective reachability is a gameplay diagnostic derived from destinations, not artifact truth. | `sg_rune_contract.h`, controller policy, finalizer, validators, and plan tests are **replace**. | A complete disconnected BSP remains faithfully represented; a missing valid cell/portal fails even if both flags are mutually reachable. |
+| ART-4 | Maintain independent GNU C, Make C, and Python readers, lint, semantic validation, exact-bound sidecars/SNAG where still applicable, and fresh-process cold load. | Readers and gates exist. **Thoroughly review/reshape** for schema, shared-assumption, and filesystem portability risks. | Differential malformed corpus and valid corpus produce agreement; no reader imports generation logic as its oracle. |
+| ART-5 | Review whether SNAG remains meaningful under the new field. Retain only bounded runtime cost annotations; delete any geometry-repair or obsolete route-only role. | Current SNAG adds field-cost surcharges. **Review/reshape or delete.** | A SNAG can change preferences but cannot change configuration space, physical reachability, or exact binding. |
+| ART-6 | Controller, finalizer, bundle, installer, and fleet tooling remain crash-resumable, content-addressed, and provenance-bound without generation/review deadlines. | These tools are extensive **review/reshape** candidates. | Crash/restart, stale process, partial line, duplicate worker, artifact replacement, and rollback tests pass with the new schema. |
+| ART-7 | Filesystem preflight verifies stable file identity portably. Linux `/proc` checks are conditional; ext4, XFS, Btrfs, ZFS, NTFS, and exFAT mounts are not rejected merely for inode semantics. Native Windows and macOS use supported platform checks or skip Linux-only diagnostics without blocking game execution. | Existing runtime-map identity repair is **review/reshape**. | Platform fixtures distinguish required content identity from optional OS-specific process/file diagnostics. |
+| ART-8 | Parallel generation uses 12 isolated workers with no shared writable artifact path. Hard regression maps run after the ordinary set. Worker count changes performance, not bytes. | Corpus controller already supports bounded jobs and scheduling. **Review/reshape.** | Runs with 1 test worker and 12 production workers produce byte-identical per-map output; interruption/resume is idempotent. |
+| ART-9 | Measure construction wall time, CPU time, peak memory, cell/portal counts, visibility partitions, and exact proof counts. | Existing logs expose action-generation progress. **Replace metrics.** | Simple, mechanism-heavy, ordinary-gravity, and low-gravity benchmarks have reviewed scaling; `tomb05` is no longer a pathological search and no hidden terminal budget exists. |
+| REL-1 | Build the frozen BSP set by iterating the 175-map manifest. Generate every RUNE fresh after the rewrite; do not adopt old artifacts. | Existing snapshot/controller flow can support this. **Review/reshape.** | Snapshot contains exactly 175 authoritative BSPs and zero pre-rewrite RUNEs; provenance proves every accepted artifact came from frozen bytes. |
+| REL-2 | Validate and finalize all 175, assemble and install one authenticated bundle, cold-load installed maps, run ordinary match evidence, then tag and verify the local release. | Finalizer, server bundle, fleet, and release tests exist. **Thorough review/reshape.** | Every manifest map has one accepted result and installed identity; match and clean-directory release receipts bind the unchanged commit. |
 
-`local_only` is the RUNE wire contract. `ROUTE_ONLY` is the controller result
-classification for an accepted artifact carrying that contract. Release an
-artifact under this classification only when all of these conditions hold:
+## Review standard for candidate reusable code
 
-- Every live seed reaches at least one objective root. Seeds that reach neither
-  root remain tombstoned.
-- Every live seed has a finite local-objective fallback field.
-- Combat, reachable attack, defense, escort, seedless recovery, item behavior,
-  and mechanism behavior remain active in each proved component.
-- Exactly two authenticated root markers remain, and both resolve to spawned
-  flag stands.
-- Ordinary closure, BSP comparison and repair, and the configured production
-  Dijkstra late-path search complete without a work budget.
-- The current frozen build generated the artifact, and its authenticated log
-  proves a complete no-progress search ended as `open-exhausted`. An adopted
-  `local_only` header is not enough evidence.
-- Prove every added RUN, JUMP, DROP, SWIM, or direct HOOK edge exactly.
-- The only missing behavior is an inter-flag or carried-flag return path.
-- An ordinary match proves useful play for both teams.
+Every **review/keep** or **reshape** item must complete the following before its
+phase can close:
 
-The validator rejects arbitrary terminal sinks as objective substitutes. A
-complete graph mislabeled `local_only`, an unknown route contract, or a link
-added only to change classification fails acceptance.
-
-### Human learning
-
-- Human traces nominate movement. The in-engine oracle must replay and prove
-  each nominated transition before topology changes.
-- Capture and importer tests retain the client and frame-range evidence needed
-  for replay. The server can isolate a client and frame range.
-- Post-match learning is sufficient for the initial release. Live mutation is
-  optional.
-- A learned replacement must pass the complete validator, both readers, lint,
-  exact-bound SNAG validation, and cold load. Cold-load the staged bundle before
-  acceptance.
-- Install new sidecars before the RUNE commit point. Never publish mixed graph
-  and sidecar state; partial installation fails closed.
-
-## Implemented systems and mandatory gates
-
-The source candidate includes the RUNE and SNAG formats, transactional handling,
-independent readers, root-aware fail-closed publication, mechanism handling,
-human capture and replay, local fallback, private Python runtime closure,
-authenticated bundle installation and rollback, and the persistent ten-lane
-match fleet.
-
-Focused controller, bundle, fleet, route-only match, and plan tests run under
-both build files. Full GNU and Make host gates remain mandatory. Focused tests
-do not replace them.
-
-## Next critical path
-
-Commit and freeze the corrected generator, then generate and validate all 175
-maps with 12 workers. Assemble the bundle, run match evidence, and build, tag,
-and verify the local release. Do not push, publish remotely, or run remote CI.
+1. State its target contract and identify its authority, inputs, outputs,
+   mutable state, and failure behavior.
+2. Read the implementation and every production caller. Search for old seed,
+   link, action, objective-root, route-only, fixed-gravity, and Dijkstra
+   assumptions, including generated tables and tests.
+3. Compare its behavior with the host engine or wire specification. Do not use
+   its existing tests as the sole oracle.
+4. Remove one-caller compatibility layers and obsolete state instead of
+   adapting the new model around them.
+5. Add focused tests for the contract and at least one real integration proof.
+6. Review the final diff for player-visible LMCTF regressions, hidden limits,
+   map-specific branches, shared mutable state, and silent downgrade paths.
+7. Record the result in the catalog as kept, reshaped, replaced, or deleted.
 
 ## Execution plan
 
-### 1. Land the final source candidate
+### 1. Freeze the target specification
 
-1. Finish door-family wait/fan enumeration and member-overflow propagation.
-   Keep controller and finalizer recovery, adoption, one-shot replacement,
-   provenance, heartbeat, and no-review-deadline tests green.
-2. Keep the immediate post-flood BSP reconciliation and the post-mechanism
-   connectivity snapshot green. Run late-path scheduling only after ordinary
-   objective closure fails, until closure or a complete no-progress tour proves
-   `open-exhausted`. A batching window is not a terminal budget.
-3. Audit every production generator search. Each bounded batch must resume from
-   a durable cursor until finite exhaustion. Core graph overflow fails
-   generation. Ranked hook shortcuts may compact at their reserved wire limit,
-   but candidate proof still runs to exhaustion and preserves later graph
-   capacity.
-4. Prove the corrected constructor on the full regression set before any final
-   corpus run. Overlay each result on its BSP and fail the proof when a valid
-   local movement transition is absent. Use preserved human data to confirm
-   geometry and nominate any final missing transition; the engine remains the
-   proof authority.
-5. Review comments and source size, remove accidental outputs, and update
-   source-size limits only to reviewed final counts.
-6. Run warning-clean builds, focused suites, and full GNU and Make host gates.
-7. The coherent wave is committed locally on `slipgate`, and both full host
-   gates pass. Fast-forward local `main` and keep both refs on the same commit.
-   Do not push or start remote CI.
+- [ ] Resolve the exact cell/portal/capability types, coordinate quantization,
+  identity fields, cost representation, and format limits.
+- [ ] Define the destination-field API, strategy-plan types, tactical movement
+  API, runtime belief state, and weapon profile/effect interfaces.
+- [ ] Define completeness, deterministic serialization, and error contracts.
+- [ ] Update `ARCHITECTURE.md` to distinguish current migration state from the
+  target and remove the rejected graph model as architectural guidance.
+- [ ] Make the requirements catalog and plan tests enforce every numbered item.
 
-### 2. Create the immutable freeze
+### 2. Build the BSP configuration-space foundation
 
-1. Build warning-clean GNU and Make modules from the final local commit. The
-   production module aliases must be byte-identical.
-2. Build and verify the private Python runtime.
-3. Snapshot the frozen source, tools, runtime, the 175 manifest-selected BSPs,
-   and the corrected-run RUNE candidates.
-4. Reject pre-rewrite artifacts. Adopt a corrected-run artifact only after all
-   current readers, lint, SNAG, and cold-load gates pass.
-5. Make the snapshot immutable. Do not commit source or documentation changes
-   through the release tag.
+- [ ] Add the complete BSP reader and canonical static-world model.
+- [ ] Construct standing/crouching player configuration cells and portals.
+- [ ] Represent supported, water, airborne, void-adjacent, and mover-relative
+  space. Reconcile completeness directly against BSP/host collision.
+- [ ] Add deterministic partitioning, deduplication, crash-resumable batches,
+  metrics, and explicit overflow failure.
+- [ ] Delete fixed-grid/face-anchor authority and objective pruning after all
+  callers migrate.
 
-### 3. Generate and accept all 175 RUNEs
+### 3. Add movement capabilities and time cost
 
-1. Reconcile the corrected-run corpus against all 175 manifest maps.
-2. Generate every map from the corrected frozen constructor. No earlier RUNE
-   remains eligible for adoption.
-3. Run with `jobs > 1`. Leave the production generation timeout unset.
-   Fingerprint any deliberate safety override.
-4. Apply the complete-route contract first. Require every terminal result to be
-   `PASS` or approved `ROUTE_ONLY`. Recheck every reader, generalized semantic
-   contract, SNAG, and cold-load receipt.
-5. Run `finalize` to bind all 175 accepted results and their ordered provenance
-   histories into one immutable, content-addressed corpus. Run `verify-final`
-   before bundle assembly.
+- [ ] Port and review walk, crouch, ramp, jump, drop, swim, air control, hook,
+  mover, push, teleport, door, button, trigger, and dwell behavior.
+- [ ] Build hook visibility regions and separate bolt, body, pull, release,
+  coast, and relaunch physics. Keep human hook code isolated.
+- [ ] Build directional/time-weighted cost kernels from exact map physics.
+- [ ] Remove LMCTF rocket/grenade-jump discovery and production Dijkstra repair.
+- [ ] Prove construction reaches a destination-independent fixed point.
 
-### 4. Install and test the production bundle
+### 4. Replace runtime navigation ownership
 
-1. Assemble the authenticated bundle and verify its archive and release
-   manifest.
-2. Install one content-addressed generation and verify every installed role and
-   both module aliases.
-3. Prove failure recovery and rollback.
-4. Cold-load the installed maps before match evidence begins.
+- [ ] Replace seed/link localization with configuration/phase-space localization.
+- [ ] Replace `Field_Flood` with the reviewed directional field solver.
+- [ ] Add static-field caching, incremental moving-target updates, and a coarse
+  region hierarchy without changing final field values.
+- [ ] Implement the typed, conditional strategy queue and migrate role, strike,
+  item, supply, escort, intercept, carry, recovery, and human-order callers.
+- [ ] Replace action-link descent with tactical capability selection over the
+  local gradient. Port reviewed live movement and mechanism reducers.
+- [ ] Delete superseded route-link commitment state and compatibility APIs.
 
-### 5. Collect real-match evidence
+### 5. Integrate beliefs, weapons, and learning
 
-Run the final route-only remainder, which may contain zero to ten maps. Run the
-persistent ten-process fleet over the scheduled 20-map rotations. Retain
-evidence for:
+- [ ] Replace single-seed enemy memory with per-player runtime phase-space
+  beliefs fed only by earned sight, sound, damage, item, flag, and teammate data.
+- [ ] Add propagation, diffusion, negative evidence, decay, and future-position
+  prediction over valid configuration space.
+- [ ] Build shared static visibility/occlusion queries and weapon profiles.
+- [ ] Integrate probabilistic weapon effect with exact live pre-fire validation.
+- [ ] Bound tactical threat/opportunity deformation so it cannot replace a
+  strategy or create a persistent local minimum.
+- [ ] Retarget human learning to verified costs/tactic priors and remove graph
+  edge nomination. Preserve post-match learning; keep live mutation optional.
 
-- earned perception and movement;
-- objectives, mechanisms, combat, and roles;
-- item pursuit, commitment retirement, and recovery;
-- one terminal lifecycle per hook use;
-- exact rosters, recordings, spectator sound attribution, and clean shutdown.
+### 6. Replace artifacts and audit all retained subsystems
 
-Judge behavior from play. Scores, wins, captures, schedule completion, and
-parser output do not replace observed behavior. If a match exposes a source
-defect, abandon the freeze, fix the source, rerun the local host gates, and
-repeat every invalidated downstream gate.
+- [ ] Implement the new wire format and migrate loader, writer, stream,
+  publication, sidecars, independent readers, lint, and cold load.
+- [ ] Replace route-only/objective validity throughout controller, finalizer,
+  bundle, match configuration, tests, and documentation.
+- [ ] Complete the mandatory reusable-code review for identities, mechanisms,
+  oracles, combat, perception hooks, human capture, publication, controller,
+  finalizer, bundle, fleet, and platform preflight.
+- [ ] Delete old action contracts, late-path production code, dead tests, stale
+  comments, obsolete diagnostics, and accidental generated output.
+- [ ] Run warning-clean focused and full GNU and Make host gates.
 
-### 6. Tag and verify the release
+### 7. Prove real BSPs, performance, and determinism
 
-1. Tag the unchanged frozen commit as `v1.0.0`.
-2. Build the supported modules and static release assets without publishing
-   them remotely.
-3. Copy the release into a clean directory. Verify `VERSION`,
-   `SHA256SUMS`, and every payload.
-4. Independently verify the installed production bundle. Record the final
-   source, module, corpus, match, local-gate, tag, and release identities.
-5. Make only evidence updates to this plan after release verification. Do not
-   rebuild the release or retag the frozen commit.
+- [ ] Prove a simple walk/crouch map, a mechanism/dwell map, a water map, an
+  ordinary hook map, a low-gravity map, and every preserved regression family.
+- [ ] Prove `lmctf12` from BSP construction without crossing its half-wall.
+- [ ] Prove `tomb05` from complete airborne/hook space at gravity 100 without
+  Dijkstra or human-route input; compare retained play only after generation.
+- [ ] Overlay every proof RUNE on its BSP and fail on an omitted valid cell or
+  portal, an invented connection, or a misbound mechanism.
+- [ ] Benchmark time and memory. Confirm worker-count and batch-boundary
+  determinism. Fix scaling defects before the freeze.
+- [ ] Commit the source locally, run both full host gates, fast-forward local
+  `main`, and keep `main` and `slipgate` identical. Do not push.
+
+### 8. Freeze and generate all 175 RUNEs
+
+- [ ] Build warning-clean GNU and Make modules and the private Python runtime.
+- [ ] Snapshot the final commit, tools, runtimes, configuration, and exactly 175
+  manifest-selected BSPs. Confirm no pre-rewrite RUNE is present, then make the
+  snapshot immutable.
+- [ ] Generate with 12 isolated workers, no generation or review timeout, and
+  the hard regression set scheduled after the ordinary maps. Report progress
+  when a map finishes or five minutes pass, including construction stage,
+  coverage, capability counts, time, memory, and validation state.
+- [ ] Run both C readers, Python reader, lint, semantic completeness, exact-bound
+  sidecar/SNAG checks, and fresh-process cold load for every map.
+- [ ] Finalize one immutable content-addressed 175-map corpus and independently
+  verify it before bundle assembly.
+
+### 9. Install, observe, and release
+
+- [ ] Assemble and verify the authenticated production bundle; install one
+  content-addressed generation and prove recovery and rollback.
+- [ ] Cold-load installed maps, then run ordinary matches covering navigation,
+  mechanisms, hook lifecycle, perception, combat, items, queued strategy,
+  commitment retirement, roles, recording, spectator sound, and shutdown.
+- [ ] If a match exposes a source defect, abandon the freeze, fix source, repeat
+  both host gates, and repeat every invalidated downstream step.
+- [ ] Tag the unchanged frozen commit as `v1.0.0`. Build supported Linux and
+  Windows modules plus `VERSION`, `SHA256SUMS`, and the tracked static PAK.
+- [ ] Copy the release to a clean directory and independently verify every
+  payload and installed-bundle identity. Do not publish remotely.
 
 ## Invalidation rules
 
-- A source, tool, module, configuration, engine, Python runtime, reader, linter,
-  diagnostic, or BSP change invalidates the snapshot and all downstream
+- A source, schema, tool, module, configuration, engine, Python runtime, reader,
+  linter, semantic validator, BSP, or identity-law change invalidates the
+  snapshot and every downstream artifact.
+- A RUNE change invalidates its derived fields, sidecars, SNAG, cold load,
+  bundle, and match evidence.
+- A bundle change invalidates installation, rollback, cold-load, and match
   evidence.
-- A RUNE change invalidates its SNAG, cold load, bundle, and match evidence.
-- A bundle change invalidates installed-bundle and match evidence.
-- Fake-engine tests never replace real-match evidence.
-- Development artifacts and prior freezes cannot authorize the final corpus.
+- A strategy, tactic, belief, combat, or learning change invalidates the
+  relevant ordinary-match evidence even if navigation bytes do not change.
+- Unit and fake-engine tests never replace real BSP, real engine, or ordinary
+  match evidence.
 
 ## Completion checklist
 
-- [x] Gameplay, traversal, learning, RUNE, SNAG, reader, bundle, and fleet
-  systems are implemented.
-- [x] Controller, finalizer, BSP, late-path, hook, reverse, compound-swim,
-  relay, and train repairs pass focused tests.
-- [x] Dijkstra is production-wired, and focused tests prove closure or a full
-  no-progress `open-exhausted` search without a work budget.
-- [x] Door-family exhaustion and member-overflow propagation are complete.
-- [x] The corrected generator produces and cold-loads a complete `lmctf12` RUNE.
-- [x] The corrected source passes fresh failed-map proofs and both local host
-  gates. Remote CI and pushes are omitted by owner direction.
-- [ ] The new immutable final snapshot contains 175 BSPs and only accepted
-  corrected-run RUNEs.
-- [ ] All 175 RUNEs are accepted. Only missing or rejected artifacts are
-  generated again.
-- [ ] All 175 artifacts are finalized and independently verified.
-- [ ] The production bundle is installed and rollback is verified.
-- [ ] Route-only and persistent-fleet real-match evidence is accepted.
-- [ ] Any match-exposed defect is repaired and invalidated evidence is repeated.
-- [ ] The unchanged frozen commit is tagged and the public release is verified.
+- [ ] Every catalog item is implemented and proved or explicitly deleted.
+- [ ] All candidate reusable code passed the mandatory review standard.
+- [ ] The target architecture and new wire contract are frozen.
+- [ ] The configuration-space generator passes the full real-BSP matrix.
+- [ ] Runtime fields, strategy, tactics, beliefs, combat, and learning pass.
+- [ ] Both local host gates pass on the final source commit.
+- [ ] Local `main` and `slipgate` point to the unchanged frozen commit.
+- [ ] The immutable snapshot contains exactly 175 BSPs and no old RUNE.
+- [ ] All 175 fresh RUNEs are accepted, finalized, and independently verified.
+- [ ] The production bundle, installation, recovery, and rollback pass.
+- [ ] Ordinary match evidence is accepted.
+- [ ] The unchanged commit is tagged and the clean local release is verified.
 
 ## Maintenance rule
 
-Keep this file current and compact. Update status, gates, and the checklist. Do
-not add command transcripts, temporary paths, unnecessary hashes, rejected
-hypotheses, or superseded narratives.
+Keep this file current. Change statuses and checkboxes when evidence lands.
+Do not add command transcripts, temporary paths, unnecessary hashes, rejected
+hypotheses, map-specific implementation exceptions, or superseded narratives.
