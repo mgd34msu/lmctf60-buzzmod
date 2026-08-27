@@ -46,6 +46,11 @@ EXPECTED_MANIFEST_SHA256 = (
 )
 CORPUS_SIZE = 175
 DEFAULT_PORT_BASE = 62000
+DEFERRED_FULL_CORPUS_MAPS = frozenset({
+    "bmap5", "lmctf01", "lmctf06", "lmctf11", "lmctf12", "lmctf15",
+    "lmctf19", "lmctf25", "lmctf27", "lmctf45", "tomb05", "tw2ctf2",
+    "tw2ctf4", "xmap06", "xmap13", "xmap26",
+})
 CORPUS_ENGINE_BASENAME = "q2ded-rune-corpus"
 FINALIZER_SOURCE = Path(__file__).with_name("rune_corpus_finalizer.py")
 ROUTE_ONLY_POLICY_SOURCE = Path(__file__).with_name("rune_corpus_policy.py")
@@ -4439,7 +4444,11 @@ def _order_full_corpus_assignments(
         for queue in (adopted, missing)
         if index < len(queue)
     ]
-    return ordered + queues["generated_replacement"]
+    ordered += queues["generated_replacement"]
+    return (
+        [item for item in ordered if item["map"] not in DEFERRED_FULL_CORPUS_MAPS]
+        + [item for item in ordered if item["map"] in DEFERRED_FULL_CORPUS_MAPS]
+    )
 
 
 def recover_stale_owned_child(

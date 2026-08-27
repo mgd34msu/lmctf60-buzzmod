@@ -3422,6 +3422,16 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     names(source),
                     names(controller._order_full_corpus_assignments(source)),
                 )
+        source = [
+            assignment("lmctf12", "generated_missing"),
+            assignment("M1", "generated_missing"),
+            assignment("tomb05", "generated_missing"),
+            assignment("M2", "generated_missing"),
+        ]
+        self.assertEqual(
+            ["M1", "M2", "lmctf12", "tomb05"],
+            names(controller._order_full_corpus_assignments(source)),
+        )
         self.assertEqual([], controller._order_full_corpus_assignments([]))
 
     def test_full_corpus_jobs_one_fails_before_preflight_or_engine_launch(self):

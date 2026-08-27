@@ -32,9 +32,9 @@ conditions:
 | Route search | Dijkstra remains production-wired, but it is only the final automated fallback after the BSP overlay and every movement operator reach a no-change fixpoint. It must never substitute for missing BSP-volume reconciliation. Human playthrough evidence is the final source-bound fallback and is re-proved by the engine. |
 | Movement generation | Clean tomb05 proof completed from BSP geometry at map gravity 100: 918 seeds, 6,599 retained links, 13 airborne-hook bridges, and both objective directions complete without Dijkstra or human input. The resulting pre-contract artifact was discarded after marker 252 became part of the authenticated movement law. Rocket-jump runtime support remains, while LMCTF generation omits rocket-jump discovery because hook traversal owns it. |
 | Corpus | `tools/rune-corpus-maps.txt` defines 175 canonical maps. The owner invalidated and purged every generated RUNE after rejecting the destination-pair constructor. The current corpus is 0/175. Human playthroughs and learning evidence are preserved. Only artifacts produced by the corrected BSP-volume constructor may enter the final corpus. |
-| Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout; the legacy batch runner no longer imposes one either. |
-| Active generation | None. All obsolete generators, proof servers, controllers, and generated RUNEs are absent. Generation restarts only from the frozen source across the full 175-map manifest. |
-| Freeze and CI | The corrected source is committed locally and both full GNU and Make host gates pass. Local `main` alignment and the immutable freeze remain. Remote CI and pushes remain excluded by owner direction. |
+| Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout. Full runs use 12 workers and queue the 16 known heavy regression maps after the other 159 maps. |
+| Active generation | The accidental one-map smoke was cancelled cleanly and produced no accepted artifact. The fresh full 175-map run starts from the refreshed freeze with 12 parallel workers and the hard-last schedule. |
+| Freeze and CI | Both full GNU and Make host gates passed before the scheduling-only correction. The corrected scheduler test passes; commit alignment and freeze refresh remain. Remote CI and pushes remain excluded by owner direction. |
 | Bundle, matches, release | Focused bundle and fleet tests pass. Production installation and matches have not started. `v1.0.0` is not tagged or published. |
 
 ## Fixed authority and policy
@@ -157,10 +157,9 @@ do not replace them.
 
 ## Next critical path
 
-Align local `main` to the committed source candidate and freeze it. Generate and
-validate all 175 maps once, assemble the bundle, run match evidence, and build,
-tag, and verify the local release. Do not push, publish remotely, or run remote
-CI.
+Commit and freeze the hard-last scheduler, then generate and validate all 175
+maps with 12 workers. Assemble the bundle, run match evidence, and build, tag,
+and verify the local release. Do not push, publish remotely, or run remote CI.
 
 ## Execution plan
 
