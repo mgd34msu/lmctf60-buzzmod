@@ -103,8 +103,8 @@ objective roots, no later failure line, and clean shutdown.  Parse and retain
 all six counts.
 
 Before publishing an accepted result (`PASS` or `ROUTE_ONLY`), execute both
-independently built C acceptors, both general Python gates, and every semantic
-checker applicable to the map against the same artifact bytes:
+independently built C acceptors, both general Python gates, and every
+map-specific diagnostic applicable to the map against the same artifact bytes:
 
 ```sh
 runeaccept.gnu ARTIFACT
@@ -117,9 +117,14 @@ python3 tools/lmctf58_rune_accept.py --objective-roots RED BLUE ARTIFACT  # lmct
 The GNU C, Make C, and Python JSON reports must agree on map name, seeds, links,
 mechanism nodes, triggers, inventory edges, plan edges, and plans. Their counts
 must also agree with the generator banner. Record every output and hash. Exit 1
-is a conclusive artifact rejection. Usage, process, I/O, allocation, protocol,
-identity, and malformed-success failures are infrastructure failures and do not
-authorize replacement.
+from a general gate is a conclusive artifact rejection. Record a map-specific
+diagnostic result, but do not let that result reject an artifact that passed the
+general readers, graph contract, lint, and cold load. Usage, process, I/O,
+allocation, protocol, identity, and malformed-success failures in a general
+gate are infrastructure failures and do not authorize replacement. A
+map-specific diagnostic may return either a clean or finding result, but a
+process failure, malformed report, or map-identity mismatch remains an
+infrastructure failure.
 
 After those gates, copy the unchanged artifact into a second private game tree.
 The frozen `snagrepair.py` input emits an explicit RUNE-bound `repairs 0`
@@ -154,8 +159,8 @@ replacement allowance and leaves the run incomplete.
 On resume, a previous accepted result (`PASS` or `ROUTE_ONLY`) is reusable only
 if its fingerprint and stable port match, every referenced file is regular and
 still has the recorded hash, the artifact is still the exact recorded bytes,
-both C gates, both general Python gates, and all applicable semantic gates pass
-again, and the stored cold-load
+both C gates and both general Python gates pass again, all applicable
+map-specific diagnostics run again, and the stored cold-load
 evidence authenticates a distinct process and the same artifact. Otherwise
 create the next attempt; never overwrite prior evidence. The bootstrap evidence
 must remain canonical, bind the run fingerprint and artifact hash, and the

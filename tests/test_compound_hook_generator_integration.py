@@ -16,14 +16,14 @@ def between(text: str, start: str, end: str) -> str:
 
 
 def main() -> None:
-    base_links = between(
+    pose_operators = between(
         SOURCE,
-        "static qboolean Prove_BaseLinks(",
-        "/* A field is useful",
+        "static qboolean Prove_PoseFieldOperators(",
+        "#ifndef SG_RUNE_TOPOLOGY_RUN_PROVER",
     )
-    assert "#define HOOK_PAIR_REACH\t768.0f" in SOURCE
-    assert "HOOK_PAIR_REACH * HOOK_PAIR_REACH" in base_links
-    assert "HOOK_REACH * HOOK_REACH" not in base_links
+    assert "Prove_HookFrontier()" in pose_operators
+    assert "for (i = 0; i < gen_num_seeds" not in pose_operators
+    assert "HOOK_PAIR_REACH * HOOK_PAIR_REACH" not in pose_operators
 
     publisher = between(
         SOURCE,

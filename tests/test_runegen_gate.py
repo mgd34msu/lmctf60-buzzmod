@@ -215,7 +215,7 @@ class RunegenGateTest(unittest.TestCase):
         old_snag: bytes | None = b"old-snag",
         maxclients: str = "16",
         signal_run: bool = False,
-        require_kill_after: bool = False,
+        reject_timeout_command: bool = False,
     ):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -250,17 +250,14 @@ class RunegenGateTest(unittest.TestCase):
             launch_count = work / "launch-count"
             commands = work / "commands"
             ready = work / "ready"
-            if require_kill_after:
+            if reject_timeout_command:
                 probe_bin = work / "probe-bin"
                 probe_bin.mkdir()
                 timeout_probe = probe_bin / "timeout"
                 timeout_probe.write_text(
                     "#!/usr/bin/env bash\n"
-                    "case \" $* \" in\n"
-                    "  *\" --kill-after=5s \"*) ;;\n"
-                    "  *) echo 'missing TERM-to-KILL escalation' >&2; exit 96 ;;\n"
-                    "esac\n"
-                    "exec /usr/bin/timeout \"$@\"\n",
+                    "echo 'generation invoked forbidden timeout command' >&2\n"
+                    "exit 96\n",
                     encoding="utf-8",
                 )
                 timeout_probe.chmod(0o755)
@@ -271,7 +268,7 @@ class RunegenGateTest(unittest.TestCase):
             (sentinel_root / "keep").write_bytes(b"root")
             (sentinel_engine / "keep").write_bytes(b"engine")
             environment = os.environ.copy()
-            if require_kill_after:
+            if reject_timeout_command:
                 environment["PATH"] = f"{probe_bin}:{environment['PATH']}"
             environment.update(
                 {
@@ -282,8 +279,6 @@ class RunegenGateTest(unittest.TestCase):
                     "MAXCLIENTS": maxclients,
                     "PORT_START": "58400",
                     "STARTUP_SLEEP": "0",
-                    "GEN_BUDGET": "2",
-                    "SHUTDOWN_MARGIN": "2",
                     "RUNE_LOG_DIR": str(logs),
                     "RUNE_BACKUP_DIR": str(backups),
                     "RUNE_ACCEPT": str(acceptor),
@@ -436,8 +431,8 @@ class RunegenGateTest(unittest.TestCase):
         self.assertEqual(b"old-rune", result["rune"])
         self.assertEqual(b"old-snag", result["snag"])
 
-    def test_engine_timeout_escalates_term_to_kill(self):
-        result = self.run_scenario("success", require_kill_after=True)
+    def test_engine_has_no_elapsed_timeout(self):
+        result = self.run_scenario("success", reject_timeout_command=True)
         completed = result["completed"]
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
         self.assertEqual(2, result["launches"])
@@ -448,6 +443,7 @@ class RunegenGateTest(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
         self.assertEqual(0, result["launches"])
         self.assertIn("generation launch sends only: maxclients, sv rune, quit", completed.stdout)
+        self.assertIn("no elapsed deadline", completed.stdout)
         self.assertIn("cold launch sends only: maxclients, sv sg add red, quit", completed.stdout)
         self.assertIn("omit runetest.rune and runetest.snag", completed.stdout)
         self.assertIn("repairs=0 SNAG", completed.stdout)

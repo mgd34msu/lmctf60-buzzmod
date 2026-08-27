@@ -24,6 +24,7 @@ static cvar_t trace_directory;
 static cvar_t game_directory;
 static int load_count;
 static int free_count;
+static int source_available = 1;
 
 edict_t *g_edicts = entities;
 
@@ -70,7 +71,7 @@ rune_t *Rune_Load(const char *mapname)
 	if (!mapname || strcmp(mapname, "tracehook") != 0)
 		return NULL;
 	load_count++;
-	return &source_rune;
+	return source_available ? &source_rune : NULL;
 }
 
 void Rune_Free(rune_t *rune)
@@ -143,14 +144,26 @@ int main(int argc, char **argv)
 	SG_HumanTraceHookRelease(player);
 	SG_HumanTraceMatchEnd();
 
+	/* No source RUNE must not discard the hook lifecycle.  These records stay
+	 * unbound until the exact-identity offline recovery transaction accepts
+	 * them. */
+	source_available = 0;
+	SG_HumanTraceNewLevel();
+	SG_HumanTraceHookFire(player, hook);
+	hook->hook_target = &entities[0];
+	SG_HumanTraceHookAttach(player, hook, &entities[0]);
+	player->client->hook = hook;
+	SG_HumanTraceHookRelease(player);
+	SG_HumanTraceMatchEnd();
+
 	if (snprintf(path, sizeof(path), "%s/humantrace-tracehook.jsonl",
 	    argv[1]) >= (int)sizeof(path))
 		return 3;
-	if (load_count != 1 || free_count != 1 ||
+	if (load_count != 2 || free_count != 1 ||
 	    CountRecords(path, "\"kind\":\"rune-bind\"") != 1 ||
-	    CountRecords(path, "\"kind\":\"hook-fire\"") != 1 ||
-	    CountRecords(path, "\"kind\":\"hook-attach\"") != 1 ||
-	    CountRecords(path, "\"kind\":\"hook-release\"") != 1)
+	    CountRecords(path, "\"kind\":\"hook-fire\"") != 2 ||
+	    CountRecords(path, "\"kind\":\"hook-attach\"") != 2 ||
+	    CountRecords(path, "\"kind\":\"hook-release\"") != 2)
 		return 4;
 	puts("sg_human_trace_hook_test: ok");
 	return 0;

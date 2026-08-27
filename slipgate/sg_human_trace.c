@@ -17,6 +17,7 @@ static unsigned long sg_human_trace_hook_event;
 static qboolean sg_human_trace_open_failed;
 static qboolean sg_human_trace_match_ended;
 static qboolean sg_human_trace_rune_bound;
+static qboolean sg_human_trace_rune_bind_attempted;
 
 static qboolean HumanTraceVectorQ8(const vec3_t vector, int32_t out[3])
 {
@@ -132,6 +133,9 @@ static qboolean HumanTraceBindRune(qboolean allow_transient_load)
 	rune = SG_Rune();
 	if (!rune && allow_transient_load)
 	{
+		if (sg_human_trace_rune_bind_attempted)
+			goto cleanup;
+		sg_human_trace_rune_bind_attempted = true;
 		transient_rune = Rune_Load(level.mapname);
 		rune = transient_rune;
 	}
@@ -201,6 +205,7 @@ void SG_HumanTraceNewLevel(void)
 	sg_human_trace_open_failed = false;
 	sg_human_trace_match_ended = false;
 	sg_human_trace_rune_bound = false;
+	sg_human_trace_rune_bind_attempted = false;
 }
 
 void SG_HumanTraceMatchEnd(void)
@@ -267,9 +272,11 @@ static qboolean HumanTraceHookReady(edict_t *entity)
 	if (!sg_cv.humantrace->value || !entity || !entity->client ||
 	    !entity->inuse || (entity->flags & FL_BOT))
 		return false;
-	if (!HumanTraceOpen() || !HumanTraceBindRune(true))
-		return false;
-	return sg_human_trace_rune_bound;
+	/* A missing RUNE is why human evidence may be needed.  Bind immediately
+	 * when an exact LOCAL_ONLY source exists, but still retain hook lifecycle
+	 * evidence when it does not.  The offline recovery path later requires an
+	 * exact map/BSP/entity/physics match before it may nominate any edge. */
+	return HumanTraceOpen() && HumanTraceBindRune(true);
 }
 
 static void HumanTraceHookCommit(int written)

@@ -77,6 +77,9 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->compound_drop_live.drop_link = -1;
 	bot->seed = -1;
 	bot->hook_link = -1;
+	bot->air_hook_launch_active = false;
+	bot->air_hook_launch_link = -1;
+	bot->air_hook_launch_frame = 0;
 	SG_ChainHookGameReset(bot);
 	SG_HookLiveReset(&bot->hook_replay, &bot->hook_replay_active,
 	    &bot->hook_replay_link, &bot->hook_final_guard);

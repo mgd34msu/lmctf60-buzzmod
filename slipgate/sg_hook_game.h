@@ -48,4 +48,10 @@ void SG_HookLiveEndFrame(edict_t *entity);
 /* Capability contract shared by link selection and execution. */
 qboolean SG_HookOffhandReady(edict_t *entity);
 
+/* Marker-252 graph hooks own a proved grounded run/jump prefix before the
+ * ordinary graph-hook aim, fire, pull, and settle lifecycle begins. */
+void SG_AirHookGameReset(sg_bot_t *bot);
+qboolean SG_AirHookGameStage(sg_bot_t *bot, int link_index);
+qboolean SG_AirHookGameEmit(sg_bot_t *bot, int selected_link);
+
 #endif /* SG_HOOK_GAME_H */

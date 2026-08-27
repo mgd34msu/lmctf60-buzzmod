@@ -18,6 +18,9 @@ typedef struct sg_hook_proof_s
 	int attach_watertype;
 	int attach_waterlevel;
 	qboolean fling_release;
+	sg_replay_reason_t reason;
+	int failure_phase;
+	int failure_elapsed_ms;
 } sg_hook_proof_t;
 
 typedef struct sg_chain_hook_proof_s
@@ -31,6 +34,12 @@ typedef struct sg_chain_hook_proof_s
 typedef qboolean (*sg_oracle_hook_monitor_fn)(void *context,
 	const struct sg_phantom_s *phantom, const vec3_t before,
 	const vec3_t after, int elapsed_ms);
+
+void SG_AirHookLaunchCommand(const pmove_state_t *pmove, byte heading,
+	byte frame, byte substep, usercmd_t *command);
+qboolean SG_OracleAirHookLaunchFrame(const vec3_t seed_origin, byte heading,
+	byte frame, struct sg_phantom_s *phantom);
+qboolean SG_OracleAirHookCoastFrame(struct sg_phantom_s *phantom);
 
 int SG_OracleHookStep(struct sg_phantom_s *phantom, const vec3_t bite,
 	const vec3_t view_angles, int hand);

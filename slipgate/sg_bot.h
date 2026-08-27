@@ -157,6 +157,9 @@ typedef struct sg_bot_s
 	int			hook_phase;     /* 0 none, 1 aimed+firing, 2 rope out,
 	                             * 3 released mid-air, steering to land */
 	int			hook_link;      /* which link this ride is executing */
+	qboolean	air_hook_launch_active; /* marker-252 launch prefix owns cmd */
+	int			air_hook_launch_link;
+	byte		air_hook_launch_frame; /* completed 100 ms launch frames */
 	/* Diagnostic-only paired record. It never participates in hook control. */
 	sg_hook_diagnostic_state_t hook_diagnostics;
 	qboolean	hook_bite_logged;   /* one HOOKBITE line per ride */
@@ -174,6 +177,7 @@ typedef struct sg_bot_s
 	pmove_state_t	hook_source_pms; /* post-aim state the online witness cloned */
 	pmove_state_t	hook_attach_pms; /* expected state when the bolt becomes taut */
 	qboolean	hook_source_water; /* water witness permits proved outbound drift */
+	qboolean	hook_source_air; /* marker-252 witness keeps moving during bolt flight */
 	int			hook_source_health; /* damage invalidates the cloned launch witness */
 	qboolean	hook_attach_groundentity;
 	int			hook_attach_watertype;

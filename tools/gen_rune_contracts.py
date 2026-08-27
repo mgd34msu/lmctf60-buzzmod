@@ -152,6 +152,7 @@ _PINNED_PROOF_LAW = {
     "hook_bolt_speed": 800, "hook_frame_distance": 80,
     "hook_min_ray": 1, "hook_max_ray": 8192,
     "hook_max_abs_pitch_degrees": 89, "hook_control_slack": 24,
+    "air_hook_control_marker": 252, "air_hook_runup_frames": 8,
     "water_hook_control_marker": 253, "hook_dry_settle_ms": 1000,
     "hook_water_settle_ms": 1250,
     "rocketjump_health_min": 1, "rocketjump_health_max": 100,

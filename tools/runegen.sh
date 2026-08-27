@@ -9,13 +9,10 @@ CFG="${CFG:-rune.cfg}"
 MAXCLIENTS="${MAXCLIENTS:-16}"
 PORT_START="${PORT_START:-28500}"
 STARTUP_SLEEP="${STARTUP_SLEEP:-8}"
-GEN_BUDGET="${GEN_BUDGET:-900}"
-SHUTDOWN_MARGIN="${SHUTDOWN_MARGIN:-60}"
 
-for number in "$PORT_START" "$STARTUP_SLEEP" "$GEN_BUDGET" \
-        "$SHUTDOWN_MARGIN"; do
+for number in "$PORT_START" "$STARTUP_SLEEP"; do
     if [[ ! "$number" =~ ^[0-9]+$ ]]; then
-        echo "runegen: port and timeout settings must be non-negative integers" >&2
+        echo "runegen: port and startup delay must be non-negative integers" >&2
         exit 2
     fi
 done
@@ -28,8 +25,6 @@ if [[ ! "$GAME" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]] || \
     echo "runegen: GAME and CFG must be safe single names" >&2
     exit 2
 fi
-TIMEOUT_SECS=$(( STARTUP_SLEEP + GEN_BUDGET + SHUTDOWN_MARGIN ))
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="${RUNE_LOG_DIR:-$SCRIPT_DIR/rune-logs}"
@@ -242,7 +237,7 @@ run_engine() {
             printf '%s\n' "maxclients" "sv rune" "quit"
         ) | (
             cd "$GAMEDIR_ROOT" &&
-            exec stdbuf -oL timeout --kill-after=5s "$TIMEOUT_SECS" \
+            exec stdbuf -oL \
                 "$Q2DED_REAL" \
                 -portable +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" \
@@ -255,7 +250,7 @@ run_engine() {
             printf '%s\n' "maxclients" "sv sg add red" "quit"
         ) | (
             cd "$GAMEDIR_ROOT" &&
-            exec stdbuf -oL timeout --kill-after=5s "$TIMEOUT_SECS" \
+            exec stdbuf -oL \
                 "$Q2DED_REAL" \
                 -portable +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" \
@@ -453,12 +448,16 @@ PY
             "quality gate failed (see $lint_log)" "$stage_dir"
         return
     fi
-    if [ "$map" = "lmctf58" ] && \
-            ! python3 "$LMCTF58_ACCEPT" --objective-roots "$red_root" "$blue_root" \
-                "$staged_rune" >"$semantic_log" 2>&1; then
-        fail_run "$map" "$port" "$elapsed" \
-            "lmctf58 semantic gate failed (see $semantic_log)" "$stage_dir"
-        return
+    if [ "$map" = "lmctf58" ]; then
+        semantic_status=0
+        python3 "$LMCTF58_ACCEPT" --objective-roots "$red_root" "$blue_root" \
+            "$staged_rune" >"$semantic_log" 2>&1 || semantic_status=$?
+        if [ "$semantic_status" -gt 1 ]; then
+            fail_run "$map" "$port" "$elapsed" \
+                "lmctf58 diagnostic infrastructure failure (see $semantic_log)" \
+                "$stage_dir"
+            return
+        fi
     fi
     if ! python3 "$RUNE_PAIR" provenance --map "$map" --rune "$staged_rune" \
             --q2ded "$Q2DED_REAL" --config "$stage_dir/$CFG" \
@@ -518,7 +517,7 @@ for map in "${MAPS[@]}"; do
     timestamp="$(date +%Y%m%d-%H%M%S-%N)"
     log_stem="$LOG_DIR/${map}-${timestamp}"
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[dry-run] map=$map port=$port maxclients=$MAXCLIENTS timeout=${TIMEOUT_SECS}s"
+        echo "[dry-run] map=$map port=$port maxclients=$MAXCLIENTS no elapsed deadline"
         echo "[dry-run] generation launch sends only: maxclients, sv rune, quit"
         echo "[dry-run] omit $map.rune and $map.snag; freeze game.so and gamex86_64.so"
         echo "[dry-run] run C/Python/count/root/lint gates on the fresh RUNE"

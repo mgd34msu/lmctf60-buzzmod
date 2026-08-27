@@ -53,13 +53,17 @@ class CompoundSwimGameIntegrationTest(unittest.TestCase):
     def test_generator_reuses_the_predeclaration_topology(self) -> None:
         source = (ROOT / "slipgate" / "sg_rune.c").read_text()
         base = section(
-            source, "static qboolean Prove_BaseLinks(", "/* A field is useful"
+            source,
+            "static qboolean Prove_PoseFieldOperators(",
+            "#ifndef SG_RUNE_TOPOLOGY_RUN_PROVER",
         )
-        self.assertIn("Link_Doors(topology)", base)
+        self.assertIn("Link_Doors(door_topology)", base)
         generate = section(
             source, "static qboolean Rune_GenerateMode(", "\ncleanup:"
         )
-        snapshot = generate.index("Prove_BaseLinks(&compound_topology)")
+        snapshot = generate.index(
+            "Prove_PoseFieldOperators(&compound_topology,"
+        )
         restore = generate.index("Doors_Restore(&doors)", snapshot)
         compound = generate.index(
             "SG_CompoundGenGameGenerate(gen_seeds", restore

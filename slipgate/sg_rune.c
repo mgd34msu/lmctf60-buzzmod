@@ -45,10 +45,8 @@
 #define LINK_MAX		RUNE_MAX_LINKS
 #define TOPOLOGY_CONTACT_MAX (SEED_MAX * 8U)
 #define TOPOLOGY_SLOT_MAX (TOPOLOGY_CONTACT_MAX * 2U)
-_Static_assert(SEED_MAX == RUNE_MAX_SEEDS,
-	"generator seed capacity drift");
-_Static_assert(LINK_MAX == RUNE_MAX_LINKS,
-	"generator link capacity drift");
+_Static_assert(SEED_MAX == RUNE_MAX_SEEDS, "generator seed capacity drift");
+_Static_assert(LINK_MAX == RUNE_MAX_LINKS, "generator link capacity drift");
 #define LINK_REACH		192.0f		/* run/jump pairs within this reach */
 #define HOOK_REACH		448.0f
 #define HOOK_PAIR_REACH	768.0f
@@ -77,10 +75,7 @@ static sg_mechanism_plan_binding_t *gen_mechanism_bindings;
 static uint32_t gen_num_mechanism_bindings;
 static qboolean gen_mechanism_failed;
 static qboolean gen_objective_reverse_failed;
-/* RUNE generation can be terminated by an external timeout while a prover is
- * rolling.  Keep a small, saturating progress snapshot and emit it only at
- * phase boundaries; the phase-start record is intentionally durable evidence
- * of where a terminated generation was spending its time. */
+/* Keep a saturating phase snapshot so interrupted runs expose their phase. */
 typedef struct rune_telemetry_s
 {
 	uint32_t seed_scans;
@@ -124,8 +119,7 @@ static unsigned long Rune_TelemetryWallMs(time_t value)
 }
 static void Rune_LogFlush(void)
 {
-	/* The RUNE host contract makes a complete diagnostic record visible before
-	 * this returns.  Every phase record calls this after dprint, never per item. */
+	/* Publish each complete phase record before returning. */
 	sg_host.flush();
 }
 static void Rune_TelemetryLine(const char *event, const char *phase,
@@ -167,18 +161,15 @@ static void Rune_TelemetryPhaseStart(const char *phase)
 	gen_phase_telemetry.running = true;
 	Rune_TelemetryLine("phase-start", phase, (clock_t)0, (time_t)0);
 }
-
 static void Rune_TelemetryPhaseEnd(void)
 {
 	if (!gen_phase_telemetry.running)
 		return;
 	Rune_TelemetryLine("phase-end", gen_phase_telemetry.name,
-	                  gen_phase_telemetry.cpu_start,
-	                  gen_phase_telemetry.wall_start);
+		gen_phase_telemetry.cpu_start, gen_phase_telemetry.wall_start);
 	gen_phase_telemetry.name = NULL;
 	gen_phase_telemetry.running = false;
 }
-
 /* spatial hash so the lattice dedupes at SEED_SPACING */
 #define HASH_SIZE 4096
 static int hash_head[HASH_SIZE];
@@ -187,7 +178,6 @@ static byte gen_source_stable[SEED_MAX];
 static byte gen_source_waterlevel[SEED_MAX];
 static byte gen_source_watertype[SEED_MAX];
 static byte gen_source_crouched[SEED_MAX];
-
 static qboolean Seed_Representable(const vec3_t origin)
 {
 	return isfinite(origin[0]) && isfinite(origin[1]) && isfinite(origin[2]) &&
@@ -375,16 +365,8 @@ static void Seed_Germinate(void)
 	edict_t *e;
 	int i;
 
-	/* Declared mechanisms need STATIC approach/egress seeds.  Their exact
-	 * centres are the wrong graph nodes: a teleporter pad is inside the trigger
-	 * whose side effect ordinary Pmove deliberately refuses to prove, and a
-	 * plat centre is supported by a moving BSP.  Germinate just outside those
-	 * footprints instead.  The declared controller owns the final touch/ride.
-	 *
-	 * A teleporter destination is different.  It is immutable solid geometry,
-	 * the engine authoritatively places the body on it, and the oracle admits
-	 * that pedestal just like a flag stand.  Preserve its exact arrival germ so
-	 * the declared endpoint and the ordinary egress graph share one state. */
+	/* Seed static approaches outside mechanism triggers and moving BSPs.
+	 * Teleporter destinations remain ordinary immutable arrival geometry. */
 	for (i = 0; i < globals.num_edicts; i++)
 	{
 		static const float dirs[4][2] = {
@@ -941,6 +923,7 @@ static qboolean Seed_Flood(sg_rune_contact_ledger_t *ledger)
 			short cost_ms;
 			byte exit_speed;
 			int candidate_near, contact, before;
+			qboolean bsp_contact;
 			sg_rune_contact_provenance_t provenance;
 
 			Rune_TelemetryAdd(&gen_telemetry.seed_scans, 1U);
@@ -961,11 +944,17 @@ static qboolean Seed_Flood(sg_rune_contact_ledger_t *ledger)
 			if (contact < 0 || contact == frontier)
 				continue;
 
-			/* Discovery keeps every valid BSP standing sample.  Connectivity is
-			 * separate: only exact Pmove can turn a neighboring sample into a
-			 * topology contact.  A failed proof therefore leaves useful seed
-			 * coverage without inventing a wall, window, or ramp crossing. */
-			if (!Prove(frontier, contact, false, &cost_ms, &exit_speed))
+			/* The contact ledger is the independent BSP witness.  Nominate every
+			 * adjacent standing pose whose full player hull has a clear sweep;
+			 * Rune_ReconcileFloodTopology separately runs exact Pmove before it
+			 * may publish an edge.  Requiring that same movement proof here made
+			 * reconciliation blind to precisely the missed seams it must repair. */
+			bsp_contact = SG_RuneSeedLocalContact(gen_seeds[frontier].origin,
+			        gen_source_crouched[frontier] != 0,
+			        gen_seeds[contact].origin,
+			        gen_source_crouched[contact] != 0);
+			if (!bsp_contact &&
+			    !Prove(frontier, contact, false, &cost_ms, &exit_speed))
 				continue;
 			provenance = contact >= before
 				? SG_RUNE_CONTACT_FLOOD_CHILD
@@ -989,6 +978,7 @@ static void Rune_HookInput(sg_rune_hook_frontier_input_t *input)
 	input->seed_count = gen_num_seeds;
 	input->source_stable = gen_source_stable;
 	input->source_waterlevel = gen_source_waterlevel;
+	input->source_crouched = gen_source_crouched;
 	input->links = gen_links;
 	input->link_count = &gen_num_links;
 	input->link_overflow = &gen_link_overflow;
@@ -1416,15 +1406,7 @@ static qboolean Drop_Rollout(vec3_t src, vec3_t dst, vec3_t lip, byte heading,
 	return true;
 }
 
-/*
- * Prove the whole drop, not just the ballistic suffix. The lip is discovered
- * geometrically, but one phantom then owns the complete state history: it is
- * placed once at rest on the source seed, walks toward the lip until the
- * runtime's eight-unit handoff, and holds the serialized walkoff heading until
- * it lands. No teleport and no injected velocity may bridge those phases.
- * The landing is judged by the same arrival-and-contact test as every other
- * link, and the elapsed Pmove time is the link's cost.
- */
+/* One phantom proves the complete walk-to-lip and ballistic drop history. */
 static int dd_nolip, dd_fenced, dd_flew, dd_landed, dd_won;
 
 static qboolean ProveDropPoints(const vec3_t src, const vec3_t dst,
@@ -1535,9 +1517,21 @@ static qboolean Link_Add(int from, int to, rune_action_t act,
                          short cost_ms, byte exit_speed)
 {
 	rune_link_t *l;
+	int from_water;
+	int to_water;
 
-	if (cost_ms <= 0)
+	if (from < 0 || from >= gen_num_seeds || to < 0 ||
+	    to >= gen_num_seeds || from == to || cost_ms <= 0)
 		return false;
+	from_water = (gen_seeds[from].flags & RSF_WATER) != 0;
+	to_water = (gen_seeds[to].flags & RSF_WATER) != 0;
+	if (!SG_ActionEndpointAllowed((int)act, from_water, to_water))
+	{
+		sg_host.dprint("rune: refused invalid link endpoint action=%d "
+		               "from=%d water=%d to=%d water=%d\n", (int)act,
+		               from, from_water, to, to_water);
+		return false;
+	}
 	if (gen_num_links >= LINK_MAX)
 	{
 		gen_link_overflow = true;
@@ -2309,12 +2303,7 @@ done:
 	sg_host.dprint("rune: %d exact swim links proven\n", gen_swim_links);
 }
 
-/*
- * Is this ordered pair already linked? A plain scan: the swim pass builds a
- * from-index but frees it again, and the callers here run a handful of times
- * (once per plat), not once per pair, so the scan is bought and paid for by
- * not writing a duplicate link over one the pair loop already proved.
- */
+/* Slow-path lookup for mechanism passes that examine only a few pairs. */
 static qboolean Link_Exists(int from, int to)
 {
 	int i;
@@ -2372,17 +2361,8 @@ static qboolean Gen_SeedHasOutgoing(int seed)
 	return false;
 }
 
-/* Candidate discovery is only a budget around the authoritative approach
- * replay below.  The historical 48-unit vertical budget remains exact for
- * AUTO/BUTTON and for ordinary dry DIRECT egress.  A DIRECT trigger whose
- * already-proved best egress ends in supported safe shallow water may use the
- * same 96-unit vertical discovery budget as that egress: lmctf58's four lower
- * cellar triggers have a realizable 72-unit descent from their connected dry
- * source to the only wait point that also crosses into the shallow basin.
- * Unsafe/deep water cannot enlarge this budget because it must pass the same
- * shared controller-aware liquid gate used by both egress replay call sites.
- * Discovery may inspect the best destination, but every selected destination
- * must pass this gate again immediately before its link is serialized. */
+/* Discovery only nominates controller approaches. The exact replay below
+ * rechecks dry and shallow-water egress before serializing a link. */
 static qboolean Door_ApproachEnvelopeEligible(int controller_kind,
 	int egress_destination, const vec3_t delta)
 {
@@ -5712,6 +5692,7 @@ static void Link_Doors(door_topology_t *topology)
 	qboolean have_topology;
 	int di;
 	int wait_points = 0, approach_trials = 0, egress_trials = 0;
+	int combined_trials = 0, combined_rejections = 0;
 	int drop_suffix_seen = 0, drop_suffix_geometry = 0;
 	int drop_suffix_failures_logged = 0;
 
@@ -6268,27 +6249,28 @@ static void Link_Doors(door_topology_t *topology)
 							picked[picked_count++] = choice;
 					}
 				}
-				/* If selected during DOWN, the trigger cooldown and the close
-				 * motion expire together on supported maps. Budget that remaining
-				 * close, the subsequent open, and one second of observation margin;
-				 * never serialize the mapper's minutes-long TOP hold as travel. */
+				/* Budget remaining close, reopen, egress, and observation; never
+				 * serialize the mapper's minutes-long TOP hold as travel. */
 				for (pi = 0; pi < picked_count; pi++)
 				{
 					int slot = picked[pi];
 					int contract_cost;
-
-					/* A shallow best egress may admit source discovery, but it
-					 * cannot authorize a dry or otherwise ineligible alternate. */
 					if (!Door_ApproachEnvelopeEligible(controller_kind,
 					        dests.items[slot].value, picked_approach_delta))
 						continue;
-					contract_cost = SG_DeclaredDoorContractCost(door,
-					    approach_ms, touch_ms,
+					contract_cost = SG_DeclaredDoorContractCost(door, approach_ms, touch_ms,
 					    egress_ms[mode_index][slot]);
-
-					if (contract_cost > 0 && Door_LinkInsert(source,
-					        dests.items[slot].value, (short)contract_cost,
-					        wait_point, door,
+					if (contract_cost <= 0) continue;
+					combined_trials++;
+					Rune_TelemetryAdd(&gen_telemetry.door_replays, 1U);
+					if (!SG_OracleValidateDeclaredDoorLink(
+					        gen_seeds[source].origin, wait_point,
+					        gen_seeds[dests.items[slot].value].origin, door,
+					        contract_cost)) {
+						combined_rejections++; continue;
+					}
+					if (Door_LinkInsert(source, dests.items[slot].value,
+					        (short)contract_cost, wait_point, door,
 					        door_action, button_controller
 					            ? button_displacement : NULL,
 					        support_mode, egress_ms[mode_index][slot]))
@@ -6326,11 +6308,11 @@ static void Link_Doors(door_topology_t *topology)
 	}
 	if (gen_door_links || gen_button_door_links || wait_points)
 		sg_host.dprint("rune: %d declared door links, %d button-door links "
-		               "(%d wait points, "
-		               "%d approach/%d egress trials)\n",
+		               "(%d wait points, %d approach/%d egress/%d combined "
+		               "trials, %d combined rejected)\n",
 		               gen_door_links, gen_button_door_links, wait_points,
-		               approach_trials,
-		               egress_trials);
+		               approach_trials, egress_trials, combined_trials,
+		               combined_rejections);
 	sg_host.dprint("rune: door-drop suffix discovery seen=%d geometry=%d\n",
 	               drop_suffix_seen, drop_suffix_geometry);
 }
@@ -7431,146 +7413,21 @@ static qboolean Prove_HookFrontier(void)
 	Door_TopologyFree(&topology);
 	return complete;
 }
-static qboolean Prove_BaseLinks(door_topology_t *topology)
+static qboolean Prove_PoseFieldOperators(door_topology_t *door_topology,
+	const sg_rune_topology_snapshot_t *bsp_topology)
 {
-	int i, j;
+	sg_rune_topology_graph_t graph = {
+		gen_seeds, (uint32_t)gen_num_seeds, gen_links, &gen_num_links, LINK_MAX
+	};
 
-	Drop_PrefixCacheClear();
-	drop_prefix_cache_enabled = true;
-	SG_OracleDoorBoundsCacheBegin();
-	for (i = 0; i < gen_num_seeds; i++)
-	{
-		for (j = 0; j < gen_num_seeds; j++)
-		{
-			vec3_t d;
-			short cost;
-			byte espeed;
-			qboolean water_pair;
+	if (!SG_RuneTopologySnapshotCurrent(&graph, bsp_topology))
+		return false;
 
-			if (i == j)
-				continue;
-			Rune_TelemetryAdd(&gen_telemetry.pair_scans, 1U);
-			water_pair = ((gen_seeds[i].flags | gen_seeds[j].flags) &
-			              RSF_WATER) != 0;
-			VectorSubtract(gen_seeds[j].origin, gen_seeds[i].origin, d);
-			if (d[0] * d[0] + d[1] * d[1] > HOOK_PAIR_REACH * HOOK_PAIR_REACH)
-				continue;
-			Rune_TelemetryAdd(&gen_telemetry.qualified, 1U);
-			/* beyond running reach only the hook applies */
-			if (!(gen_seeds[i].flags & RSF_WATER) &&
-			    d[0] * d[0] + d[1] * d[1] > LINK_REACH * LINK_REACH &&
-			    d[2] <= 128.0f && d[2] >= -256.0f)
-			{
-				continue;
-			}
-			/*
-			 * A plunge into water is the one deep descent the game makes
-			 * safe -- the splash cancels the fall -- and the one these
-			 * cutoffs made unprovable. lmctf05's halves connect through
-			 * water at -1984: the red base was a 367-seed component with
-			 * one hook in and NO way out, the red flag inside it, and
-			 * every attacker on the map priced at infinity because of
-			 * these two lines. Depth stays capped for dry landings.
-			 */
-			if (d[2] > 512.0f ||
-			    (d[2] < -512.0f &&
-			     !((gen_seeds[j].flags & RSF_WATER) && d[2] >= -2048.0f)))
-				continue;
-
-			/*
-			 * Dropping off an edge is the most ordinary move in the game
-			 * and was in no prover's domain: run and jump stopped at -256
-			 * and hooks aim up. The balconies over both flag rooms -- 496
-			 * units up, forty links each, no way down -- were the visible
-			 * result. Pmove cannot feel fall damage, so a deep drop proves
-			 * as traversable and carries the RL_DROP tag; what a drop
-			 * COSTS in health is the surface's business, not the graph's.
-			 */
-			if (d[2] < -160.0f) dg_pairs++;
-			if (d[2] < -160.0f &&
-			    (d[2] >= -600.0f ||
-			     ((gen_seeds[j].flags & RSF_WATER) && d[2] >= -2048.0f)))
-			{
-				vec3_t lip;
-
-				if (ProveDrop(i, j, lip, &cost, &espeed))
-				{
-					rune_link_t *l;
-
-					if (!Link_Add(i, j, RL_DROP, cost, espeed))
-						continue;
-					dg_arrived++;
-					l = &gen_links[gen_num_links - 1];
-					VectorCopy(lip, l->anchor);
-					Link_Env_Drop(l, dd_last_heading);
-					continue;
-				}
-			}
-			/* Deep traversals have exactly one walking prover: ProveDrop.
-			 * Generic Prove can fall and arrive, but it does not publish the lip
-			 * or the controller that produced that fall; labelling its result
-			 * RL_DROP creates an anchorless edge the runtime cannot execute. */
-			/* Ordinary direct motion touching a water seed belongs exclusively
-			 * to ProveSwim below. DROP and HOOK above/below remain separate only
-			 * because each has its own complete proof and runtime controller. */
-			if (!water_pair && d[2] <= 128.0f && d[2] >= -160.0f &&
-			    Prove(i, j, false, &cost, &espeed))
-			{
-				int before_wp = gen_num_links;
-
-				Link_Add(i, j, RL_RUN, cost, espeed);
-				if (gen_num_links != before_wp && gen_prove_has_wp &&
-				    gen_links[gen_num_links - 1].action == RL_RUN)
-				{
-					VectorCopy(gen_prove_wp,
-					           gen_links[gen_num_links - 1].anchor);
-					gen_waypoint_links++;
-				}
-			}
-			else if (!water_pair && d[2] <= 128.0f && d[2] >= -160.0f &&
-			         Prove(i, j, true, &cost, &espeed))
-				Link_Add(i, j, RL_JUMP, cost, espeed);
-			else
-			{
-				/* A short ledge may be too low for the deep-drop partition but
-				 * still defeat both ordinary controllers: RUN brakes at the edge
-				 * and JUMP lands back on the upper shelf. Only after both exact
-				 * proofs fail, give the serialized lip controller the downward
-				 * pair. ProveDrop remains the authority on whether a real walkoff,
-				 * landing, and bounded ground recovery reaches the destination. */
-				if (!water_pair && d[2] < 0.0f && d[2] >= -160.0f)
-				{
-					vec3_t lip;
-
-					dg_pairs++;
-					if (ProveDrop(i, j, lip, &cost, &espeed))
-					{
-						rune_link_t *l;
-
-						if (!Link_Add(i, j, RL_DROP, cost, espeed))
-							continue;
-						dg_arrived++;
-						l = &gen_links[gen_num_links - 1];
-						VectorCopy(lip, l->anchor);
-						Link_Env_Drop(l, dd_last_heading);
-						continue;
-					}
-				}
-				/* Keep only from-rest jumps until entry state is fully serialized. */
-			}
-		}
-		if ((i & 255) == 0)
-			sg_host.dprint("rune: proving %d/%d seeds, %d links\n",
-			           i, gen_num_seeds, gen_num_links);
-	}
-	drop_prefix_cache_enabled = false;
-	Drop_PrefixCacheClear();
-
-	/* Ordinary pairs touching water are reserved for Prove_Swims.  The
-	 * declared-mechanism passes consume the completed base graph so their
-	 * specialized links can be stamped with declared provenance. */
+	/* The BSP contact ledger already ran RUN, JUMP, DROP, and SWIM against
+	 * exact Pmove in both directions. Do not search arbitrary destinations a
+	 * second time. The remaining operators consume the same sampled pose field:
+	 * the water forest, mover declarations, and surface-directed hook rays. */
 	Prove_Swims();          /* swim links: water to water, water to shore */
-	SG_OracleDoorBoundsCacheEnd();
 	{
 		/* Link_Plats may append both a declared ascent and a proved drop. Stamp
 		 * only the declared action before the hook topology snapshot. */
@@ -7586,13 +7443,13 @@ static qboolean Prove_BaseLinks(door_topology_t *topology)
 		Link_Teleporters();     /* misc_teleporter pad seed -> destination seed */
 		if (!SG_TimedVaultEgressScopeBegin(gen_seeds, gen_num_seeds, gen_links,
 		    gen_num_links)) gen_mechanism_failed = true;
-		Link_Doors(topology);   /* repeatable trigger: wait, open, full egress */
+		Link_Doors(door_topology); /* repeatable trigger: wait, open, full egress */
 		SG_TimedVaultEgressScopeEnd();
 		Link_Pushes();
 		Link_Trains();
 		Link_TrainRides();
 		Link_TrainStations();
-		Link_TrainShootButtons(topology);
+		Link_TrainShootButtons(door_topology);
 		Link_Declare_Tail(declared_mark);
 	}
 	return true;
@@ -7651,19 +7508,31 @@ static void Rune_TopologyRelease(void *allocation)
 	if (allocation)
 		sg_host.level_free(allocation);
 }
+static qboolean Rune_ReconcileFloodTopology(
+	const sg_rune_contact_ledger_t *ledger,
+	sg_rune_topology_outcome_t *outcomes, sg_rune_topology_snapshot_t *snapshot)
+{
+	sg_rune_topology_game_request_t request;
+	sg_rune_topology_report_t report;
 
-/* A field is useful only on the greatest part of the directed graph from
- * which BOTH flag objectives remain reachable.  Keeping one-way sink seeds
- * lets an otherwise sound route deliberately strand a bot; keeping unlinked
- * germs bloats localization with places the runtime already refuses to use.
- *
- * Compute the greatest fixed point, not merely the intersection of two
- * reverse floods: a node can initially reach red through blue-dead nodes and
- * blue through red-dead nodes.  Removing those intermediates must trigger a
- * second pass.  Once stable, retain rejected seed coordinates as geometry
- * tombstones but remove every incident link. Localization can then identify
- * the nearest visible sample as non-routable instead of searching past it to
- * a farther live seed on the wrong side of a one-way boundary. */
+	if (!ledger || !snapshot || !snapshot->components ||
+	    snapshot->component_capacity < (uint32_t)gen_num_seeds)
+		return false;
+	memset(&request, 0, sizeof(request));
+	request.graph = (sg_rune_topology_graph_t){ gen_seeds, (uint32_t)gen_num_seeds,
+		gen_links, &gen_num_links, LINK_MAX };
+	request.ledger = ledger;
+	request.outcomes = outcomes;
+	request.outcome_capacity = ledger->contact_count * 2U;
+	request.final_snapshot = snapshot;
+	request.try_action = Rune_TopologyTryAction;
+	request.allocate = Rune_TopologyAllocate;
+	request.release = Rune_TopologyRelease;
+	request.print = sg_host.dprint;
+	return SG_RuneTopologyGameRepair(&request, &report) == SG_RUNE_TOPOLOGY_OK;
+}
+/* Retain the greatest fixed point that can reach both objectives. Preserve
+ * rejected coordinates as tombstones, but remove their incident links. */
 static int Graph_ObjectiveRoot(const vec3_t objective, const byte *has_out,
 	graph_objective_diag_t *diag)
 {
@@ -9299,6 +9168,7 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 	uint32_t *mechanism_edge_marks = NULL;
 	uint32_t *mechanism_node_marks = NULL;
 	uint32_t *mechanism_node_queue = NULL;
+	int *topology_components = NULL;
 	sg_rune_collision_contact_t *topology_contacts = NULL;
 	sg_rune_topology_outcome_t *topology_outcomes = NULL;
 	sg_rune_learning_candidate_t *learning_candidates = NULL;
@@ -9309,27 +9179,25 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 	rune_t *learning_source = NULL;
 	rune_artifact_t learning_disk_artifact;
 	uint32_t *topology_slots = NULL;
-	uint32_t surface_scans = 0U;
+	uint64_t face_scans = 0U, surface_scans = 0U, overlay_pairs = 0U;
+	uint32_t duplicate_links = 0U, overlay_contacts = 0U;
 	sg_rune_contact_ledger_t topology_ledger;
 	sg_rune_install_result_t install_result;
 	const sg_rune_install_ops_t *install_ops;
 	char game_directory[MAX_OSPATH];
 	char path[MAX_OSPATH], tmp_path[MAX_OSPATH], learning_path[MAX_OSPATH];
+	vec3_t world_mins, world_maxs;
 	sg_rune_door_scope_t doors;
 	door_topology_t compound_topology = { NULL, NULL };
 	sg_rune_topology_snapshot_t relay_topology = { NULL, 0U, 0U, 0U, 0U, 0U };
 	sg_rune_door_scope_status_t door_status;
-	int door_count = 0;
-	int directory_written;
-	qboolean scope_active = false;
-	qboolean generated = false;
+	int door_count = 0, directory_written;
+	qboolean scope_active = false, generated = false;
 	qboolean door_restore_failed = false;
-	qboolean base_links_complete;
+	qboolean pose_operators_complete;
 	rune_route_contract_t route_contract = RUNE_ROUTE_CONTRACT_COMPLETE;
 	cvar_t *game_directory_cvar;
-	const char *game_directory_source;
-	const char *canonical_mapname;
-
+	const char *game_directory_source, *canonical_mapname;
 	SG_RuneDoorScopeInit(&doors);
 	memset(&topology_ledger, 0, sizeof(topology_ledger));
 	memset(&learning_evidence, 0, sizeof(learning_evidence));
@@ -9375,12 +9243,18 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		               "reason=MAX_OSPATH\n");
 		return false;
 	}
+	if (!SG_RuneSeedReadMapWorldBounds(game_directory, canonical_mapname,
+	        world_mins, world_maxs))
+	{
+		sg_host.dprint("rune: generation refused stage=bsp-world-bounds "
+			"reason=missing-or-invalid-bsp\n");
+		return false;
+	}
 	if (update_mode)
 	{
 		int learning_path_written = snprintf(learning_path,
 			sizeof(learning_path), "%s/maps/%s.rlearn", game_directory,
 			canonical_mapname);
-
 		if (!SG_RuneUpdateSourceAcquire(canonical_mapname,
 		        &learning_source_scope))
 		{
@@ -9454,9 +9328,12 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		sizeof(*topology_contacts) * TOPOLOGY_CONTACT_MAX);
 	topology_slots = sg_host.game_alloc(
 		sizeof(*topology_slots) * TOPOLOGY_SLOT_MAX);
+	topology_components = sg_host.game_alloc(
+		sizeof(*topology_components) * SEED_MAX);
 	if (!gen_seeds || !gen_links || !gen_mechanism_bindings ||
 	    !gen_water_parents || !gen_water_ranks || !gen_water_edges ||
 	    !gen_water_edge_slots || !topology_contacts || !topology_slots ||
+	    !topology_components ||
 	    SG_RuneTopologyLedgerInit(&topology_ledger, topology_contacts,
 	        TOPOLOGY_CONTACT_MAX, topology_slots, TOPOLOGY_SLOT_MAX) !=
 	        SG_RUNE_TOPOLOGY_OK ||
@@ -9467,6 +9344,8 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		sg_host.dprint("rune: FAILED: generator allocation; graph was not written\n");
 		goto cleanup;
 	}
+	relay_topology.components = topology_components;
+	relay_topology.component_capacity = SEED_MAX;
 	gen_num_seeds = 0;
 	gen_num_links = 0;
 	gen_num_mechanism_bindings = 0U;
@@ -9523,18 +9402,34 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 	Seed_Germinate();
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("seed-volume");
-	sg_host.dprint("rune: scanning BSP walkable surfaces in 3D...\n");
-	if (!SG_RuneSeedScanWorldSurfaces(Seed_EmitWorldSurface, NULL,
-	        &surface_scans))
+	sg_host.dprint("rune: seeding actual BSP walkable faces...\n");
+	if (!SG_RuneSeedScanMapFaceAnchors(game_directory, canonical_mapname,
+	        Seed_EmitWorldSurface, NULL, &face_scans))
 	{
-		Rune_TelemetryAdd(&gen_telemetry.seed_scans, surface_scans);
+		sg_host.dprint("rune: FAILED: BSP face geometry scan; "
+		               "graph was not written\n");
+		goto cleanup;
+	}
+	Rune_TelemetryAdd(&gen_telemetry.seed_scans,
+		face_scans > UINT32_MAX ? UINT32_MAX : (uint32_t)face_scans);
+	sg_host.dprint("rune: BSP face anchors=%llu seeds=%d\n",
+		(unsigned long long)face_scans, gen_num_seeds);
+	sg_host.dprint("rune: validating full BSP volume coverage...\n");
+	if (!SG_RuneSeedScanWorldSurfaces(world_mins, world_maxs,
+	        Seed_EmitWorldSurface, NULL, &surface_scans))
+	{
+		Rune_TelemetryAdd(&gen_telemetry.seed_scans,
+			surface_scans > UINT32_MAX ? UINT32_MAX : (uint32_t)surface_scans);
 		sg_host.dprint("rune: FAILED: BSP surface scan capacity exhausted; "
 		               "graph was not written\n");
 		goto cleanup;
 	}
-	Rune_TelemetryAdd(&gen_telemetry.seed_scans, surface_scans);
-	sg_host.dprint("rune: BSP surface scan complete samples=%u seeds=%d\n",
-	               (unsigned int)surface_scans, gen_num_seeds);
+	Rune_TelemetryAdd(&gen_telemetry.seed_scans,
+		surface_scans > UINT32_MAX ? UINT32_MAX : (uint32_t)surface_scans);
+	sg_host.dprint("rune: BSP surface scan bounds=(%.0f %.0f %.0f)-"
+		"(%.0f %.0f %.0f) samples=%llu seeds=%d\n", world_mins[0],
+		world_mins[1], world_mins[2], world_maxs[0], world_maxs[1],
+		world_maxs[2], (unsigned long long)surface_scans, gen_num_seeds);
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("seed-flood");
 	sg_host.dprint("rune: %d germs; flooding...\n", gen_num_seeds);
@@ -9544,6 +9439,29 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		               "graph was not written\n");
 		goto cleanup;
 	}
+	Rune_TelemetryPhaseEnd();
+	Rune_TelemetryPhaseStart("water-seed");
+	Seed_Water();
+	Rune_TelemetryPhaseEnd();
+	if (gen_water_overflow)
+	{
+		sg_host.dprint("rune: FAILED: water seed capacity exhausted; "
+		               "graph was not written\n");
+		goto cleanup;
+	}
+	Rune_TelemetryPhaseStart("bsp-overlay");
+	if (!SG_RuneSeedRecordBspOverlay(gen_seeds, gen_source_crouched,
+	        gen_num_seeds, gen_mechanism_catalog.nodes,
+	        gen_mechanism_catalog.num_nodes, &topology_ledger,
+	        &overlay_pairs, &overlay_contacts))
+	{
+		sg_host.dprint("rune: FAILED: BSP overlay contact audit; "
+		               "graph was not written\n");
+		goto cleanup;
+	}
+	sg_host.dprint("rune: BSP overlay pairs=%llu added_contacts=%u "
+	               "total_contacts=%u\n", (unsigned long long)overlay_pairs,
+	               overlay_contacts, topology_ledger.contact_count);
 	if (topology_ledger.contact_count)
 		topology_outcomes = sg_host.game_alloc(
 			sizeof(*topology_outcomes) * topology_ledger.contact_count * 2U);
@@ -9554,17 +9472,15 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		goto cleanup;
 	}
 	Rune_TelemetryPhaseEnd();
-	Rune_TelemetryPhaseStart("water-seed");
-	/* Seed water volumes that the dry passes cannot reach before proving, so
-	 * the pair loop sees them like any other seed. */
-	Seed_Water();
-	Rune_TelemetryPhaseEnd();
-	if (gen_water_overflow)
+	Rune_TelemetryPhaseStart("topology-reconcile");
+	if (!Rune_ReconcileFloodTopology(&topology_ledger, topology_outcomes,
+	        &relay_topology))
 	{
-		sg_host.dprint("rune: FAILED: water seed capacity exhausted; "
+		sg_host.dprint("rune: FAILED: early topology reconciliation; "
 		               "graph was not written\n");
 		goto cleanup;
 	}
+	Rune_TelemetryPhaseEnd();
 	if (gen_num_seeds <= 0)
 	{
 		door_status = Doors_Restore(&doors);
@@ -9580,16 +9496,7 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		goto cleanup;
 	}
 	Rune_TelemetryPhaseStart("exposure");
-	/*
-	 * EXPOSURE, into the reserved field. area_hint has been written zero
-	 * since the format was born; it becomes the seed's exposure count --
-	 * how many of up to 24 sampled seeds within 1000 units can see it,
-	 * eye to eye, MASK_OPAQUE. The duel's cover pricing burns a runtime
-	 * trace per candidate today; with exposure in the rune it is a
-	 * lookup, and "sneak past" becomes a gradient the whole map wide.
-	 * Old runes read as exposure 0 everywhere -- honest "unknown", and
-	 * consumers treat 0 as no-opinion.
-	 */
+	/* Cache each seed's nearby visibility rate in the reserved area hint. */
 	{
 		int i, j, step, vis, sampled;
 
@@ -9630,8 +9537,9 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 	}
 	Rune_TelemetryPhaseEnd();
 	sg_host.dprint("rune: %d seeds; proving links...\n", gen_num_seeds);
-	Rune_TelemetryPhaseStart("base-links");
-	base_links_complete = Prove_BaseLinks(&compound_topology);
+	Rune_TelemetryPhaseStart("pose-field-operators");
+	pose_operators_complete = Prove_PoseFieldOperators(&compound_topology,
+	    &relay_topology);
 	door_status = Doors_Restore(&doors);
 	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
 	{
@@ -9641,9 +9549,9 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		               SG_RuneDoorScopeStatusName(door_status));
 		goto cleanup;
 	}
-	if (!base_links_complete)
+	if (!pose_operators_complete)
 	{
-		sg_host.dprint("rune: FAILED: hook frontier generation; "
+		sg_host.dprint("rune: FAILED: pose-field operator generation; "
 		               "graph was not written\n");
 		goto cleanup;
 	}
@@ -9675,9 +9583,7 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		               SG_RuneDoorScopeStatusName(door_status));
 		goto cleanup;
 	}
-	/* Last of all, as before: RJ asks whether every cheaper prover already
-	 * reaches the destination. The action is dormant today, but retaining this
-	 * call and its open-door world preserves its exact current order. */
+	/* Retain dormant rocket-jump proving after every cheaper LMCTF prover. */
 	Prove_RocketJumps();
 	door_status = Doors_Restore(&doors);
 	if (door_status != SG_RUNE_DOOR_SCOPE_OK)
@@ -9691,30 +9597,23 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 	Rune_TelemetryPhaseEnd();
 	Rune_TelemetryPhaseStart("topology-audit");
 	{
-		sg_rune_topology_game_request_t request;
-		sg_rune_topology_report_t report;
-		if (!compound_topology.component || !compound_topology.objective_mask)
-			goto cleanup;
-		memset(compound_topology.objective_mask, 0, (size_t)gen_num_seeds);
-		relay_topology.components = compound_topology.component;
-		relay_topology.component_capacity = (uint32_t)gen_num_seeds;
-		memset(&request, 0, sizeof(request));
-		request.graph = (sg_rune_topology_graph_t){ gen_seeds,
-			(uint32_t)gen_num_seeds, gen_links,
-			&gen_num_links, LINK_MAX
+		sg_rune_topology_graph_t finished_graph = {
+			gen_seeds, (uint32_t)gen_num_seeds, gen_links, &gen_num_links,
+			LINK_MAX
 		};
-		request.ledger = &topology_ledger;
-		request.outcomes = topology_outcomes;
-		request.outcome_capacity = topology_ledger.contact_count * 2U;
-		request.final_snapshot = &relay_topology;
-		request.try_action = Rune_TopologyTryAction;
-		request.allocate = Rune_TopologyAllocate;
-		request.release = Rune_TopologyRelease;
-		request.print = sg_host.dprint;
-		if (SG_RuneTopologyGameRepair(&request, &report) !=
+
+		if (!compound_topology.objective_mask)
+		{
+			sg_host.dprint("rune: FAILED: topology audit storage; "
+			               "graph was not written\n");
+			goto cleanup;
+		}
+		memset(compound_topology.objective_mask, 0, (size_t)gen_num_seeds);
+		if (SG_RuneTopologySnapshotBuild(&finished_graph, &relay_topology,
+		        Rune_TopologyAllocate, Rune_TopologyRelease) !=
 		    SG_RUNE_TOPOLOGY_OK)
 		{
-			sg_host.dprint("rune: FAILED: topology audit; "
+			sg_host.dprint("rune: FAILED: topology connectivity audit; "
 			               "graph was not written\n");
 			goto cleanup;
 		}
@@ -9822,9 +9721,19 @@ static qboolean Rune_GenerateMode(const char *mapname, qboolean update_mode)
 		               (unsigned int)mechanism_result.plan_index,
 		               (unsigned int)mechanism_result.num_inventory_edges,
 		               (unsigned int)mechanism_result.num_edges,
-		               (unsigned int)mechanism_result.num_plans);
+			       (unsigned int)mechanism_result.num_plans);
 		goto cleanup;
 	}
+	if (!SG_MechanismLinksDeduplicate(gen_links, &gen_num_links,
+	    Rune_TopologyAllocate, Rune_TopologyRelease, &duplicate_links))
+	{
+		sg_host.dprint("rune: FAILED: post-plan link deduplication; "
+			"graph was not written\n");
+		goto cleanup;
+	}
+	if (duplicate_links != 0U)
+		sg_host.dprint("rune: duplicate links collapsed=%u\n",
+			(unsigned int)duplicate_links);
 	Rune_TelemetryPhaseEnd();
 	sg_host.dprint("rune: mechanism plans materialized nodes=%u triggers=%u "
 	               "inventory_edges=%u plan_edges=%u plans=%u\n",
@@ -9950,6 +9859,7 @@ cleanup:
 	if (gen_water_edge_slots) sg_host.game_free(gen_water_edge_slots);
 	if (topology_contacts) sg_host.game_free(topology_contacts);
 	if (topology_slots) sg_host.game_free(topology_slots);
+	if (topology_components) sg_host.game_free(topology_components);
 	if (topology_outcomes) sg_host.game_free(topology_outcomes);
 	if (learning_candidates) sg_host.game_free(learning_candidates);
 	if (learning_hooks) sg_host.game_free(learning_hooks);

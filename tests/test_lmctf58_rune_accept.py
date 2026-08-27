@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
+import io
+import json
 import sys
 import unittest
 
@@ -114,6 +117,20 @@ class Lmctf58RuneAcceptTests(unittest.TestCase):
             accept.AcceptanceError, "not a live seed|not routable|tombstone"
         ):
             accept.validate(_artifact(tombstone=True), (0, 1))
+
+    def test_main_emits_structured_finding(self):
+        output = io.StringIO()
+        with mock.patch.object(accept.runeio, "read",
+                               return_value=_artifact(missing="redgate")), \
+                mock.patch("sys.stdout", output):
+            status = accept.main([
+                "--objective-roots", "0", "1", "candidate.rune",
+            ])
+        report = json.loads(output.getvalue())
+        self.assertEqual(1, status)
+        self.assertEqual("lmctf58", report["map_name"])
+        self.assertEqual("finding", report["status"])
+        self.assertIn("redgate", report["finding"])
 
 
 if __name__ == "__main__":

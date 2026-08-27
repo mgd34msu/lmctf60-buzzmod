@@ -115,8 +115,11 @@ def test_generator_serializes_bounded_delayed_sound_terminals() -> None:
     )
     admission = generator.index("SG_DeclaredDoorActivatorSafe(door)")
     travel = generator.index("Door_TravelMs(door)", admission)
+    combined_replay = generator.index(
+        "SG_OracleValidateDeclaredDoorLink(", travel
+    )
     insert_call = generator.index("Door_LinkInsert(", travel)
-    assert admission < travel < insert_call
+    assert admission < travel < combined_replay < insert_call
 
     insert = between(
         source("slipgate/sg_rune.c"),

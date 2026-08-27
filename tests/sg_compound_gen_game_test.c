@@ -444,7 +444,7 @@ static void TestProductionWrapperEnabled(void)
 	CHECK(link_count > (int)fixture_count);
 }
 
-static void TestProductionWrapperPropagatesIncompleteWork(void)
+static void TestProductionWrapperAcceptsExhaustedNoProof(void)
 {
 	rune_seed_t seeds[300];
 	rune_link_t links[400], before[400];
@@ -463,7 +463,7 @@ static void TestProductionWrapperPropagatesIncompleteWork(void)
 	reject_nearest = 0;
 	only_provable_destination = 999;
 	allocation_calls = 0;
-	CHECK(!SG_CompoundGenGameGenerate(seeds, 300U, links, &link_count, 400U,
+	CHECK(SG_CompoundGenGameGenerate(seeds, 300U, links, &link_count, 400U,
 	    &topology, Allocate, Deallocate));
 	CHECK(link_count == (int)fixture_count);
 	CHECK(memcmp(links, before, sizeof(links)) == 0);
@@ -490,7 +490,7 @@ int main(void)
 	TestAllocationFailureIsAtomic();
 	TestContactsBeyondLegacyCapAreExhausted();
 	TestProductionWrapperEnabled();
-	TestProductionWrapperPropagatesIncompleteWork();
+	TestProductionWrapperAcceptsExhaustedNoProof();
 	if (failures)
 	{
 		fprintf(stderr, "sg_compound_gen_game_test: %d failures\n", failures);

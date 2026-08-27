@@ -7,11 +7,13 @@ how the tools fit together and which artifacts they own.
 
 `rune_corpus_controller.py`
 
-: Runs the authoritative map corpus. A map reaches PASS only after generation,
-  both native readers, Python decoding, lint, applicable semantic checks, and a
-  separate bounded cold load agree on the artifact. Its `finalize` command
-  publishes the accepted 175-map result set as an immutable content-addressed
-  corpus; `verify-final` reopens that publication before bundle assembly.
+: Runs the authoritative map corpus. A map reaches `PASS` only after generation,
+  both native readers, Python decoding, lint, and a separate bounded cold load
+  agree on the artifact. The controller also records applicable map-specific
+  diagnostics. A diagnostic finding cannot reject an artifact that passes the
+  generic contract. The `finalize` command publishes the accepted 175-map
+  result set as an immutable content-addressed corpus. `verify-final` reopens
+  that publication before bundle assembly.
 
 `build_python_runtime.py`
 

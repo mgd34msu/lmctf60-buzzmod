@@ -32,8 +32,11 @@
  * use an otherwise-invalid marker because their controller is a different
  * contract: actual-state online reproof, zero-input outbound drift, exact
  * attachment state, air reserve, and a dry destination. */
-#define RUNE_HOOK_CONTROL_SLACK 24
-#define RUNE_WATER_HOOK_CONTROL_MARKER 253
+#define RUNE_HOOK_CONTROL_SLACK SG_RUNE_PROOF_HOOK_CONTROL_SLACK
+#define RUNE_AIR_HOOK_CONTROL_MARKER SG_RUNE_PROOF_AIR_HOOK_CONTROL_MARKER
+#define RUNE_AIR_HOOK_RUNUP_FRAMES SG_RUNE_PROOF_AIR_HOOK_RUNUP_FRAMES
+#define RUNE_WATER_HOOK_CONTROL_MARKER \
+	SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER
 #define RUNE_HOOK_DRY_SETTLE_MS 1000
 #define RUNE_HOOK_WATER_SETTLE_MS 1250
 #define RUNE_TELEPORT_SEED_REACH 128.0f

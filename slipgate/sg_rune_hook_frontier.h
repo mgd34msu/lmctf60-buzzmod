@@ -11,6 +11,7 @@ typedef struct sg_rune_hook_frontier_input_s
 	int seed_count;
 	const byte *source_stable;
 	const byte *source_waterlevel;
+	const byte *source_crouched;
 	const int *component;
 	const byte *objective_mask;
 	int component_count;

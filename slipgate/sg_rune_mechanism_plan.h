@@ -5,7 +5,11 @@
 #include "sg_rune.h"
 #include "sg_rune_mechanism_catalog.h"
 
+#include <stddef.h>
 #include <stdint.h>
+
+typedef void *(*sg_mechanism_link_alloc_fn)(size_t size);
+typedef void (*sg_mechanism_link_release_fn)(void *allocation);
 
 /* The generator captures the exact live mechanism identity when it creates a
  * graph link.  Objective pruning copies only bindings owned by surviving
@@ -117,6 +121,12 @@ int SG_MechanismPlansMaterialize(rune_link_t *links, uint32_t num_links,
 	const sg_mech_catalog_view_t *catalog,
 	sg_mechanism_plan_buffers_t *buffers,
 	sg_mechanism_plan_result_t *result_out);
+
+/* Collapse wire-equivalent links after provisional bindings become final plan
+ * indexes. Relative order is stable and the cheapest exact proof survives. */
+int SG_MechanismLinksDeduplicate(rune_link_t *links, int *num_links,
+	sg_mechanism_link_alloc_fn allocate,
+	sg_mechanism_link_release_fn release, uint32_t *removed_out);
 
 const char *SG_MechanismPlanDiagnosticName(
 	sg_mechanism_plan_diagnostic_t diagnostic);

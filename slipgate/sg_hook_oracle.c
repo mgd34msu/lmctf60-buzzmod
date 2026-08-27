@@ -2,9 +2,71 @@
 #include "sg_hooks.h"
 #include "sg_local.h"
 #include "sg_oracle_internal.h"
+#include "sg_rune.h"
 
 #include <math.h>
 #include <string.h>
+
+void SG_AirHookLaunchCommand(const pmove_state_t *pmove, byte heading,
+	byte frame, byte substep, usercmd_t *command)
+{
+	float yaw;
+
+	if (!pmove || !command)
+		return;
+	memset(command, 0, sizeof(*command));
+	yaw = (float)heading * (360.0f / 256.0f);
+	command->msec = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
+	command->angles[YAW] = ANGLE2SHORT(yaw) - pmove->delta_angles[YAW];
+	command->angles[PITCH] = -pmove->delta_angles[PITCH];
+	command->angles[ROLL] = -pmove->delta_angles[ROLL];
+	command->forwardmove = 400;
+	command->upmove = frame == RUNE_AIR_HOOK_RUNUP_FRAMES && substep == 0
+		? 400 : 0;
+}
+
+qboolean SG_OracleAirHookLaunchFrame(const vec3_t seed_origin, byte heading,
+	byte frame, sg_phantom_t *phantom)
+{
+	vec3_t origin;
+
+	if (!seed_origin || !phantom)
+		return false;
+	if (frame == 0)
+	{
+		VectorCopy(seed_origin, origin);
+		SG_OraclePlace(phantom, origin);
+	}
+	for (byte substep = 0; substep < 4; substep++)
+	{
+		usercmd_t command;
+
+		SG_AirHookLaunchCommand(&phantom->pms, heading, frame, substep,
+			&command);
+		if (!SG_OracleRunWorld(phantom, &command, 1))
+			return false;
+	}
+	return true;
+}
+
+qboolean SG_OracleAirHookCoastFrame(sg_phantom_t *phantom)
+{
+	if (!phantom)
+		return false;
+	for (byte substep = 0; substep < 4; substep++)
+	{
+		usercmd_t command;
+
+		memset(&command, 0, sizeof(command));
+		command.msec = SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
+		command.angles[PITCH] = -phantom->pms.delta_angles[PITCH];
+		command.angles[YAW] = -phantom->pms.delta_angles[YAW];
+		command.angles[ROLL] = -phantom->pms.delta_angles[ROLL];
+		if (!SG_OracleRunWorld(phantom, &command, 1))
+			return false;
+	}
+	return true;
+}
 
 /*
  * One production end-frame pull. The fixed view is part of a proved graph
@@ -113,6 +175,7 @@ qboolean SG_OracleHookTraverseMonitored(sg_phantom_t *ph,
 	     settle_limit_ms != 0))
 		return false;
 	memset(proof, 0, sizeof(*proof));
+	memset(&state, 0, sizeof(state));
 	/* The server is single-threaded, but keep this API scoped so every return
 	 * restores the default offline context. */
 	SG_OracleReplayScopeBegin(&scope, passent, world_only);
@@ -271,6 +334,9 @@ qboolean SG_OracleHookTraverseMonitored(sg_phantom_t *ph,
 		    ? SG_REPLAY_ARRIVED : SG_REPLAY_RELEASED);
 	}
 done:
+	proof->reason = state.progress.reason;
+	proof->failure_phase = state.phase;
+	proof->failure_elapsed_ms = state.progress.elapsed_ms;
 	if (ph->door_passed)
 		result = false;
 	SG_OracleReplayScopeEnd(&scope);

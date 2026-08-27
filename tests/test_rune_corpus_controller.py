@@ -1164,7 +1164,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 lmctf58_rune_accept.runeio, "read",
                 side_effect=ValueError("bad wire"),
             ):
-                self.assertEqual(1, lmctf58_rune_accept.main([
+                self.assertEqual(3, lmctf58_rune_accept.main([
                     "--objective-roots", "1", "2", str(path),
                 ]))
             with mock.patch.object(
@@ -2824,6 +2824,90 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 runner.commands[-1][-4:],
             )
             self.assertTrue((work / "logs/gate-semantic-lmctf58.integrity.json").is_file())
+            self.thaw(snapshot)
+
+    def test_semantic_coverage_diagnostic_cannot_reject_complete_artifact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            verified = controller.verify_snapshot(snapshot)
+            artifact = work / "lmctf58.rune"
+            artifact.write_bytes(b"artifact")
+            base_runner = FakeGateRunner("lmctf58")
+
+            def runner(command, **kwargs):
+                result = base_runner(command, **kwargs)
+                if any(str(value).endswith("lmctf58_rune_accept.py")
+                       for value in command):
+                    return subprocess.CompletedProcess(
+                        command, 1,
+                        stdout=controller.canonical_json({
+                            "map_name": "lmctf58",
+                            "missing": ["optional-door"],
+                        }),
+                    )
+                return result
+
+            result = controller.run_gates(
+                artifact, "lmctf58",
+                {"seeds": 7, "links": 9, "mechanism_nodes": 4,
+                 "triggers": 2, "inventory_edges": 3, "plans": 5},
+                acceptor_gnu=snapshot / verified["by_role"]["acceptor_gnu"]["path"],
+                acceptor_make=snapshot / verified["by_role"]["acceptor_make"]["path"],
+                python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
+                runeio=snapshot / verified["by_role"]["runeio"]["path"],
+                runelint=snapshot / verified["by_role"]["runelint"]["path"],
+                objective_roots={"red": 1, "blue": 2},
+                semantic_checkers=controller.semantic_checkers_for_map(
+                    snapshot, verified, "lmctf58"
+                ),
+                log_directory=work / "logs",
+                runner=runner,
+                fingerprint="fingerprint",
+            )
+            self.assertEqual(["semantic-lmctf58"], result["semantic_gate_labels"])
+            integrity = json.loads(
+                (work / "logs/gate-semantic-lmctf58.integrity.json").read_text()
+            )
+            self.assertEqual(1, integrity["returncode"])
+            self.thaw(snapshot)
+
+    def test_semantic_diagnostic_process_failure_remains_infrastructure_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            snapshot = self.make_snapshot(work)
+            verified = controller.verify_snapshot(snapshot)
+            artifact = work / "lmctf58.rune"
+            artifact.write_bytes(b"artifact")
+            base_runner = FakeGateRunner("lmctf58")
+
+            def runner(command, **kwargs):
+                result = base_runner(command, **kwargs)
+                if any(str(value).endswith("lmctf58_rune_accept.py")
+                       for value in command):
+                    return subprocess.CompletedProcess(command, 2, stdout=b"")
+                return result
+
+            with self.assertRaisesRegex(
+                    controller.GateIntegrityError,
+                    "semantic-lmctf58 diagnostic exited 2"):
+                controller.run_gates(
+                    artifact, "lmctf58",
+                    {"seeds": 7, "links": 9, "mechanism_nodes": 4,
+                     "triggers": 2, "inventory_edges": 3, "plans": 5},
+                    acceptor_gnu=snapshot / verified["by_role"]["acceptor_gnu"]["path"],
+                    acceptor_make=snapshot / verified["by_role"]["acceptor_make"]["path"],
+                    python_interpreter=snapshot / verified["python_runtime"]["interpreter"]["path"],
+                    runeio=snapshot / verified["by_role"]["runeio"]["path"],
+                    runelint=snapshot / verified["by_role"]["runelint"]["path"],
+                    objective_roots={"red": 1, "blue": 2},
+                    semantic_checkers=controller.semantic_checkers_for_map(
+                        snapshot, verified, "lmctf58"
+                    ),
+                    log_directory=None,
+                    runner=runner,
+                    fingerprint="fingerprint",
+                )
             self.thaw(snapshot)
 
     def test_cold_load_grammar_rejects_generation_and_count_drift(self):

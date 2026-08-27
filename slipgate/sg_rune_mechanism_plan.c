@@ -2101,6 +2101,74 @@ done:
 	return state.result.diagnostic == SG_MECHANISM_PLAN_OK;
 }
 
+static uint64_t Mechanism_LinkWireKey(const rune_link_t *link)
+{
+	uint64_t plan = link->mechanism_plan == RUNE_NO_MECHANISM_PLAN ?
+		SG_RUNE_CODEC_MAX_ACTIVATION_PLANS : link->mechanism_plan;
+
+	return ((uint64_t)(uint32_t)link->from << 42) |
+		((uint64_t)(uint32_t)link->to << 27) |
+		((uint64_t)link->action << 19) | plan;
+}
+
+static uint32_t Mechanism_LinkWireHash(uint64_t key)
+{
+	key ^= key >> 33;
+	key *= UINT64_C(0xff51afd7ed558ccd);
+	key ^= key >> 33;
+	key *= UINT64_C(0xc4ceb9fe1a85ec53);
+	return (uint32_t)(key ^ (key >> 33));
+}
+
+int SG_MechanismLinksDeduplicate(rune_link_t *links, int *num_links,
+	sg_mechanism_link_alloc_fn allocate,
+	sg_mechanism_link_release_fn release, uint32_t *removed_out)
+{
+	uint32_t *slots;
+	uint32_t capacity = 1U;
+	uint32_t count;
+	uint32_t read;
+	uint32_t write = 0U;
+
+	if (removed_out)
+		*removed_out = 0U;
+	if (!num_links || *num_links < 0 ||
+	    (uint32_t)*num_links > SG_RUNE_CODEC_MAX_LINKS ||
+	    (!links && *num_links != 0) || !allocate || !release)
+		return 0;
+	count = (uint32_t)*num_links;
+	if (count == 0U)
+		return 1;
+	while (capacity < count * 2U)
+		capacity <<= 1U;
+	slots = allocate((size_t)capacity * sizeof(slots[0]));
+	if (!slots)
+		return 0;
+	for (read = 0U; read < capacity; read++)
+		slots[read] = UINT32_MAX;
+	for (read = 0U; read < count; read++)
+	{
+		uint64_t key = Mechanism_LinkWireKey(&links[read]);
+		uint32_t slot = Mechanism_LinkWireHash(key) & (capacity - 1U);
+
+		while (slots[slot] != UINT32_MAX &&
+		       Mechanism_LinkWireKey(&links[slots[slot]]) != key)
+			slot = (slot + 1U) & (capacity - 1U);
+		if (slots[slot] == UINT32_MAX)
+		{
+			links[write] = links[read];
+			slots[slot] = write++;
+		}
+		else if (links[read].cost_ms < links[slots[slot]].cost_ms)
+			links[slots[slot]] = links[read];
+	}
+	release(slots);
+	*num_links = (int)write;
+	if (removed_out)
+		*removed_out = count - write;
+	return 1;
+}
+
 const char *SG_MechanismPlanDiagnosticName(
 	sg_mechanism_plan_diagnostic_t diagnostic)
 {

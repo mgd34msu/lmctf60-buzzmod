@@ -157,7 +157,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
         ).lower()
         self.assertIn("slipgate", landing)
         self.assertIn("main", landing)
-        self.assertIn("exact-commit ci", landing)
+        self.assertIn("do not push or start remote ci", landing)
         self.assertIn("do not commit source or documentation changes", freeze)
         self.assertLess(
             generation.index("complete-route contract first"),
@@ -176,7 +176,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
         self.assertIn("make only evidence updates to this plan after release", release)
         self.assertIn("do not rebuild the release", release)
         for required in (
-            "synchronized `slipgate` and `main` branches",
+            "local `slipgate` and `main` point to that commit",
             "one unchanged source commit",
         ):
             self.assertIn(required, self.flat_text.lower())
@@ -184,7 +184,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "python runtime",
             "reader",
             "linter",
-            "semantic checker",
+            "diagnostic",
             "bsp change",
             "a rune change invalidates its snag",
             "a bundle change invalidates installed-bundle and match evidence",

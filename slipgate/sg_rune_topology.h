@@ -9,7 +9,8 @@
 typedef enum sg_rune_contact_provenance_e
 {
 	SG_RUNE_CONTACT_FLOOD_CHILD = 1U,
-	SG_RUNE_CONTACT_FLOOD_MEETING = 2U
+	SG_RUNE_CONTACT_FLOOD_MEETING = 2U,
+	SG_RUNE_CONTACT_BSP_OVERLAY = 4U
 } sg_rune_contact_provenance_t;
 
 /* Larger values are more restrictive when observations share a seed pair. */

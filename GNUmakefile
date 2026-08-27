@@ -908,6 +908,8 @@ ROUTE_ONLY_MATCH_CONFIG_TEST = tests/test_route_only_match_config.py
 SERVER_BUNDLE_TEST = tests/test_server_bundle.py
 CHAIN_HOOK_FRONTIER_INTEGRATION_TEST = \
 	tests/test_chain_hook_frontier_integration.py
+HOOK_SURFACE_VOLUME_INTEGRATION_TEST = \
+	tests/test_hook_surface_volume_integration.py
 BSPMECHANISMS_TEST = tests/test_bspmechanisms.py
 WAVELOOP_PROCESS_TEST = tests/test_waveloop_process_scope.py
 TEMP_FLAG_DIAGNOSTIC_TEST = tests/test_no_temp_flag_diagnostics.py
@@ -1649,11 +1651,11 @@ $(RUNE_PROOF_TEST_BIN): $(RUNE_PROOF_TEST_OBJS)
 $(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN): \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS) slipgate/sg_rune_late_path.c \
 		slipgate/sg_rune_reverse_boundary.c slipgate/sg_rune_topology.c \
-		tests/sg_rune_objective_diagnostics_link_stubs.c
+		slipgate/sg_action.c tests/sg_rune_objective_diagnostics_link_stubs.c
 	$(CC) $(CFLAGS) -std=c11 -I. -Wl,--gc-sections -o $@ \
 		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS) \
 		slipgate/sg_rune_late_path.c slipgate/sg_rune_reverse_boundary.c \
-		slipgate/sg_rune_topology.c \
+		slipgate/sg_rune_topology.c slipgate/sg_action.c \
 		tests/sg_rune_objective_diagnostics_link_stubs.c $(LDFLAGS)
 $(REPLAY_TEST_BIN): $(REPLAY_TEST_OBJS)
 	$(CC) -o $@ $(REPLAY_TEST_OBJS) $(LDFLAGS)
@@ -3173,7 +3175,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(COMPOUND_HOOK_GAME_INTEGRATION_TEST) \
 		$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN) \
 		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
-		$(HOOK_INTEGRATION_TEST) \
+		$(HOOK_INTEGRATION_TEST) $(HOOK_SURFACE_VOLUME_INTEGRATION_TEST) \
 		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
 		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
 		$(COMPOUND_HOOK_ORACLE_TEST_BIN) \
@@ -3298,6 +3300,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	./$(HOOK_LIVE_TEST_BIN)
 	./$(HOOK_DISCIPLINE_TEST_BIN)
 	python3 $(HOOK_INTEGRATION_TEST)
+	python3 -B $(HOOK_SURFACE_VOLUME_INTEGRATION_TEST)
 	./$(ROTATOR_SWEEP_TEST_BIN)
 	./$(MOVER_SUBJECT_SWEEP_TEST_BIN)
 	./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
@@ -3699,7 +3702,7 @@ rune-update-test: $(CHAIN_HOOK_FRONTIER_INTEGRATION_TEST)
 		-ffunction-sections -fdata-sections -I. -Wl,--gc-sections \
 		-o sg_rune_hook_nomination_test.gnu \
 		tests/sg_rune_hook_nomination_test.c \
-		slipgate/sg_rune_hook_frontier.c q_shared.c -lm
+		slipgate/sg_rune_hook_frontier.c sg_action.c q_shared.c -lm
 	./sg_rune_hook_nomination_test.gnu
 	python3 -B -m unittest tests.test_runelearn \
 		tests.test_rune_update_integration

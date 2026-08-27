@@ -21,6 +21,173 @@ void Cmd_Hook_f(edict_t *ent);
 static int sg_hook_reproof_frame = -1;
 static int sg_hook_reproof_slot = 0;
 
+void SG_AirHookGameReset(sg_bot_t *bot)
+{
+	if (!bot)
+		return;
+	bot->air_hook_launch_active = false;
+	bot->air_hook_launch_link = -1;
+	bot->air_hook_launch_frame = 0;
+}
+
+static qboolean AirHook_Link(const rune_t *rune, int link_index,
+	rune_link_t **link_out)
+{
+	rune_link_t *link;
+
+	if (!rune || !rune->links || !rune->seeds || link_index < 0 ||
+	    link_index >= rune->hdr.num_links)
+		return false;
+	link = &rune->links[link_index];
+	if (link->action != RL_HOOK ||
+	    link->heading_slack != RUNE_AIR_HOOK_CONTROL_MARKER ||
+	    link->min_speed == 0 || link->from < 0 ||
+	    link->from >= rune->hdr.num_seeds || link->to < 0 ||
+	    link->to >= rune->hdr.num_seeds ||
+	    (rune->seeds[link->from].flags & RSF_WATER))
+		return false;
+	if (link_out)
+		*link_out = link;
+	return true;
+}
+
+static qboolean AirHook_Expected(const rune_t *rune,
+	const rune_link_t *link, unsigned int launch_frames, qboolean coast,
+	sg_phantom_t *phantom)
+{
+	unsigned int frame;
+
+	if (!rune || !link || !phantom || launch_frames > link->min_speed)
+		return false;
+	memset(phantom, 0, sizeof(*phantom));
+	for (frame = 0; frame < launch_frames; frame++)
+		if (!SG_OracleAirHookLaunchFrame(rune->seeds[link->from].origin,
+		        link->heading, (byte)frame, phantom))
+			return false;
+	return !coast || SG_OracleAirHookCoastFrame(phantom);
+}
+
+static qboolean AirHook_LiveMatches(const edict_t *entity,
+	const sg_phantom_t *expected)
+{
+	int axis;
+
+	if (!entity || !entity->client || !expected ||
+	    entity->client->ps.pmove.pm_type != expected->pms.pm_type ||
+	    entity->client->ps.pmove.pm_flags != expected->pms.pm_flags ||
+	    entity->client->ps.pmove.pm_time != expected->pms.pm_time ||
+	    entity->client->ps.pmove.gravity != expected->pms.gravity ||
+	    !!entity->groundentity != !!expected->groundentity ||
+	    entity->watertype != expected->watertype ||
+	    entity->waterlevel != expected->waterlevel)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if ((short)(entity->s.origin[axis] * 8.0f) !=
+		        expected->pms.origin[axis] ||
+		    (short)(entity->velocity[axis] * 8.0f) !=
+		        expected->pms.velocity[axis])
+			return false;
+	return true;
+}
+
+qboolean SG_AirHookGameStage(sg_bot_t *bot, int link_index)
+{
+	rune_t *rune = SG_Rune();
+	rune_link_t *link;
+	edict_t *entity;
+	sg_phantom_t fire_state;
+	vec3_t muzzle, bite;
+	int axis;
+
+	if (!bot || !(entity = bot->ent) || !entity->client ||
+	    !AirHook_Link(rune, link_index, &link) ||
+	    !SG_RunePhysicsCompatible(rune) || bot->commit_link != link_index ||
+	    entity->health <= 0 || entity->deadflag ||
+	    entity->movetype != MOVETYPE_WALK || !entity->groundentity ||
+	    (entity->groundentity != g_edicts &&
+	     !SG_ImmutableSupport(entity->groundentity)) ||
+	    entity->waterlevel != 0 ||
+	    (entity->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) ||
+	    entity->client->ps.pmove.pm_type != PM_NORMAL ||
+	    (entity->client->ps.pmove.pm_flags & ~PMF_ON_GROUND) != 0 ||
+	    entity->client->ps.pmove.pm_time != 0 ||
+	    fabsf(entity->viewheight - 22.0f) > 0.1f ||
+	    !SG_HookOffhandReady(entity) || SG_RocketJumpGameOwns(bot) ||
+	    bot->nade_phase != 0)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		if ((short)(entity->s.origin[axis] * 8.0f) !=
+		        (short)(rune->seeds[link->from].origin[axis] * 8.0f) ||
+		    (short)(entity->velocity[axis] * 8.0f) != 0)
+			return false;
+	if (!AirHook_Expected(rune, link, link->min_speed, true, &fire_state) ||
+	    fire_state.groundentity || fire_state.waterlevel != 0 ||
+	    !SG_HookControlDecode(fire_state.origin, 22.0f, RIGHT_HANDED,
+	        link->anchor, bot->hook_view, muzzle, bite))
+		return false;
+
+	SG_AirHookGameReset(bot);
+	bot->air_hook_launch_active = true;
+	bot->air_hook_launch_link = link_index;
+	bot->hook_link = link_index;
+	bot->hook_source_air = true;
+	VectorCopy(bite, bot->hook_anchor);
+	VectorCopy(rune->seeds[link->to].origin, bot->hook_dest);
+	bot->hook_bite_logged = false;
+	bot->hook_attached_validated = false;
+	SG_ChainHookGameStage(bot, -1);
+	return true;
+}
+
+qboolean SG_AirHookGameEmit(sg_bot_t *bot, int selected_link)
+{
+	rune_t *rune = SG_Rune();
+	rune_link_t *link;
+	edict_t *entity;
+	sg_phantom_t expected;
+	byte frame;
+
+	if (!bot || !bot->air_hook_launch_active)
+		return false;
+	entity = bot->ent;
+	if (!entity || !entity->client || selected_link != bot->air_hook_launch_link ||
+	    bot->commit_link != bot->air_hook_launch_link ||
+	    !AirHook_Link(rune, bot->air_hook_launch_link, &link) ||
+	    bot->hook_phase != 0 || !SG_HookOffhandReady(entity))
+	{
+		SG_HookGameFailDetail(entity, bot, 5.0f, "air-launch-owner");
+		return true;
+	}
+	frame = bot->air_hook_launch_frame;
+	if (frame >= link->min_speed)
+	{
+		SG_HookGameFailDetail(entity, bot, 5.0f, "air-launch-frame");
+		return true;
+	}
+	for (byte substep = 0; substep < 4; substep++)
+	{
+		usercmd_t command;
+
+		SG_AirHookLaunchCommand(&entity->client->ps.pmove, link->heading,
+		    frame, substep, &command);
+		ClientThink(entity, &command);
+	}
+	bot->air_hook_launch_frame++;
+	if (!AirHook_Expected(rune, link, bot->air_hook_launch_frame, false,
+	        &expected) || !AirHook_LiveMatches(entity, &expected))
+	{
+		SG_HookGameFailDetail(entity, bot, 5.0f, "air-launch-drift");
+		return true;
+	}
+	if (bot->air_hook_launch_frame == link->min_speed)
+	{
+		SG_AirHookGameReset(bot);
+		bot->hook_phase = 1;
+		SG_TimerArm(&bot->hook_deadline, 3.0f);
+	}
+	return true;
+}
+
 void SG_ChainHookGameReset(sg_bot_t *bot)
 {
 	if (!bot)
@@ -164,6 +331,7 @@ void SG_HookGameFailDetail(edict_t *e, sg_bot_t *bot,
 	SG_ChainHookGameReset(bot);
 	bot->hook_pull_ms = 0;
 	bot->hook_settle_ms = 0;
+	bot->hook_source_air = false;
 }
 
 void SG_HookGameFail(edict_t *e, sg_bot_t *bot, float shelf_seconds)
@@ -211,6 +379,7 @@ void SG_HookGameDisciplineRetire(edict_t *e, sg_bot_t *bot, int link_index,
 	bot->hook_legacy_settle = false;
 	bot->hook_legacy_arrived = false;
 	SG_ChainHookGameReset(bot);
+	bot->hook_source_air = false;
 }
 
 qboolean SG_HookOffhandReady(edict_t *e)
@@ -369,7 +538,8 @@ sg_hook_game_proof_result_t SG_HookGameOnlineProof(edict_t *e, sg_bot_t *bot,
 	trace_t muzzle_tr, shot_tr;
 	float shot_len;
 	vec3_t source_delta;
-	qboolean source_water;
+	qboolean source_water, source_air;
+	sg_phantom_t expected_air;
 	int i, flight_ms;
 	sg_hook_game_proof_result_t budget;
 
@@ -389,23 +559,33 @@ sg_hook_game_proof_result_t SG_HookGameOnlineProof(edict_t *e, sg_bot_t *bot,
 		return SG_HOOK_GAME_PROOF_FAIL;
 	source_water =
 	    (SG_Rune()->seeds[link->from].flags & RSF_WATER) != 0;
-	if ((source_water &&
+	source_air = link->heading_slack == RUNE_AIR_HOOK_CONTROL_MARKER;
+	if ((source_air &&
+	     (source_water || link->min_speed == 0 || e->groundentity ||
+	      e->waterlevel != 0 ||
+	      !AirHook_Expected(SG_Rune(), link, link->min_speed, true,
+	          &expected_air) || !AirHook_LiveMatches(e, &expected_air))) ||
+	    (!source_air && source_water &&
 	     ((SG_Rune()->seeds[link->to].flags & RSF_WATER) ||
 	      link->heading_slack != RUNE_WATER_HOOK_CONTROL_MARKER ||
 	      e->waterlevel < 2 || !(e->watertype & CONTENTS_WATER) ||
 	      (e->watertype & (CONTENTS_LAVA | CONTENTS_SLIME)))) ||
-	    (!source_water &&
+	    (!source_air && !source_water &&
 	     (link->heading_slack != RUNE_HOOK_CONTROL_SLACK ||
 	      !e->groundentity ||
 	      (e->groundentity != g_edicts &&
 	       !SG_ImmutableSupport(e->groundentity)) || e->waterlevel != 0)))
 		return SG_HOOK_GAME_PROOF_FAIL;
-	VectorSubtract(SG_Rune()->seeds[link->from].origin, e->s.origin,
-	               source_delta);
-	if (source_delta[0] * source_delta[0] + source_delta[1] * source_delta[1] >
-	        20.0f * 20.0f || fabsf(source_delta[2]) > 16.0f)
-		return SG_HOOK_GAME_PROOF_FAIL;
-	if (!source_water)
+	if (!source_air)
+	{
+		VectorSubtract(SG_Rune()->seeds[link->from].origin, e->s.origin,
+		               source_delta);
+		if (source_delta[0] * source_delta[0] +
+		        source_delta[1] * source_delta[1] > 20.0f * 20.0f ||
+		    fabsf(source_delta[2]) > 16.0f)
+			return SG_HOOK_GAME_PROOF_FAIL;
+	}
+	if (!source_air && !source_water)
 		for (i = 0; i < 3; i++)
 			if ((short)(e->velocity[i] * 8.0f) != 0)
 				return SG_HOOK_GAME_PROOF_FAIL;
@@ -492,6 +672,7 @@ sg_hook_game_proof_result_t SG_HookGameOnlineProof(edict_t *e, sg_bot_t *bot,
 	}
 	bot->hook_attach_pms = proof.attach_pms;
 	bot->hook_source_water = source_water;
+	bot->hook_source_air = source_air;
 	bot->hook_source_health = e->health;
 	bot->hook_attach_groundentity = proof.attach_groundentity;
 	bot->hook_attach_watertype = proof.attach_watertype;
@@ -600,6 +781,7 @@ sg_hook_game_proof_result_t SG_ChainHookGameOnlineProof(edict_t *e,
 		    (short)(e->velocity[i] * 8.0f);
 	}
 	bot->hook_source_water = false;
+	bot->hook_source_air = false;
 	bot->hook_source_health = e->health;
 	bot->hook_attach_pms = proof.rope[0].attach_pms;
 	bot->hook_attach_groundentity = proof.rope[0].attach_groundentity;
@@ -620,7 +802,8 @@ static qboolean Hook_AttachmentOK(edict_t *e, sg_bot_t *bot)
 
 	if (!Hook_LiveWitnessOK(e, bot) || e->client->hookstate != 2 ||
 	    !e->client->hook || e->client->hook->hook_target != g_edicts ||
-	    (!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
+	    (!bot->hook_source_water && !bot->hook_source_air &&
+	     !Hook_SourceStateOK(e, bot)) ||
 	    (!!e->groundentity != !!bot->hook_attach_groundentity) ||
 	    (e->groundentity && e->groundentity != g_edicts &&
 	     !SG_ImmutableSupport(e->groundentity)) ||
@@ -1150,8 +1333,10 @@ static qboolean Hook_LiveActiveFrame(sg_bot_t *bot, edict_t *e)
 	if (replay_phase == SG_HOOK_REPLAY_FLIGHT)
 	{
 		if (e->client->hookstate != 1 || !e->client->hook ||
-		    (!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-		    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
+		    (!bot->hook_source_water && !bot->hook_source_air &&
+		     !Hook_SourceStateOK(e, bot)) ||
+		    ((bot->hook_source_water || bot->hook_source_air) &&
+		     !Hook_LiveWitnessOK(e, bot)) ||
 		    SG_TimerReadyStrict(bot->hook_deadline))
 		{
 			SG_HookGameFail(e, bot, 15.0f);
@@ -1165,8 +1350,10 @@ static qboolean Hook_LiveActiveFrame(sg_bot_t *bot, edict_t *e)
 	if (bot->hook_replay.phase == SG_HOOK_REPLAY_WAIT_ATTACH &&
 	    e->client->hookstate == 1 && e->client->hook)
 	{
-		if ((!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-		    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
+		if ((!bot->hook_source_water && !bot->hook_source_air &&
+		     !Hook_SourceStateOK(e, bot)) ||
+		    ((bot->hook_source_water || bot->hook_source_air) &&
+		     !Hook_LiveWitnessOK(e, bot)) ||
 		    SG_TimerReadyStrict(bot->hook_deadline))
 		{
 			SG_HookGameFail(e, bot, 15.0f);
@@ -1678,8 +1865,10 @@ qboolean SG_HookActiveFrame(sg_bot_t *bot, edict_t *e)
 		 * witness, whose complete state is checked when attachment occurs. */
 		if (e->client->hookstate == 1 && e->client->hook)
 		{
-			if ((!bot->hook_source_water && !Hook_SourceStateOK(e, bot)) ||
-			    (bot->hook_source_water && !Hook_LiveWitnessOK(e, bot)) ||
+			if ((!bot->hook_source_water && !bot->hook_source_air &&
+			     !Hook_SourceStateOK(e, bot)) ||
+			    ((bot->hook_source_water || bot->hook_source_air) &&
+			     !Hook_LiveWitnessOK(e, bot)) ||
 			    SG_TimerReadyStrict(bot->hook_deadline))
 			{
 				SG_HookGameFail(e, bot, 15.0f);

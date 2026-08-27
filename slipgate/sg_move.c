@@ -4932,22 +4932,16 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					}
 				}
 			}
-
-			/*
-			 * A hook link executes the way the rune proved it: aim at the
-			 * STORED anchor, fire, ride the flat-800 pull, release near
-			 * the destination or inside the brake band (the p_weapon.c
-			 * ladder starts at 120), then steer the fall onto the landing.
-			 * The view is the aim: LMCTF's Weapon_Hook_Fire fires along
-			 * v_angle.
-			 */
 			if ((l->action == RL_HOOK || l->action == RL_CHAIN_HOOK) &&
 			    bot->hook_phase == 0 &&
+			    !bot->air_hook_launch_active &&
 			    !SG_RocketJumpGameOwns(bot) && bot->nade_phase == 0 &&
 			    SG_HookOffhandReady(e))
 			{
 				qboolean source_water =
 				    (SG_Rune()->seeds[l->from].flags & RSF_WATER) != 0;
+				qboolean air_hook = l->action == RL_HOOK &&
+				    l->heading_slack == RUNE_AIR_HOOK_CONTROL_MARKER;
 				qboolean destination_water =
 				    (SG_Rune()->seeds[l->to].flags & RSF_WATER) != 0;
 				qboolean live_hazard =
@@ -4962,34 +4956,36 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f);
 				float hspd = sqrtf(e->velocity[0] * e->velocity[0] +
 				                   e->velocity[1] * e->velocity[1]);
-
-				vec3_t fsd;
+				vec3_t fsd, source_fixed;
+				short source_pms[3];
 				float fsdist, fsz;
-
+				qboolean source_exact, source_rest;
 				if (!SG_HookStageSourceCompatible(source_water,
 				        destination_water, live_dry, live_water, air_safe))
 				{
-					/* The edge remains valid from its proved source.  This body is not
-					 * in that source state, so release the commitment, force fresh
-					 * localization, and spend no generic command toward the landing. */
 					SG_StagedTraversalCancel(bot, l->action);
 					bot->seed = -1;
 					ballistic_abort = true;
 					goto hook_stage_done;
 				}
-
 				VectorSubtract(SG_Rune()->seeds[l->from].origin,
 				               e->s.origin, fsd);
 				fsz = fsd[2];
 				fsd[2] = 0.0f;
 				fsdist = VectorLength(fsd);
-
-				/* Reach the proved source state before firing the grapple. */
-				/* The current proof approaches the source cell and brakes before taking
-				 * ownership of the exact view. The final post-Pmove fire gate then
-				 * re-proves from the actual fixed-point source; it does not pretend
-				 * every position in this cell shares the nominal seed rollout. */
+				Ballistic_SourceFixed(l, source_fixed, source_pms);
+				source_exact = Ballistic_SourceExact(e, source_pms);
+				source_rest = Ballistic_SourceRest(e);
+				if (air_hook && !source_exact && source_rest &&
+				    fsdist <= 2.0f &&
+				    fabsf(fsz) <= 2.0f &&
+				    Ballistic_CanonicalizeSource(e, source_fixed, source_pms))
+				{
+					ballistic_abort = true;
+					goto hook_stage_done;
+				}
 				if (fsdist > 20.0f || fabsf(fsz) > 16.0f ||
+				    (air_hook && !source_exact) ||
 				    (!source_water && !e->groundentity) ||
 				    (e->client->ps.pmove.pm_flags & PMF_DUCKED) ||
 				    e->client->ps.pmove.pm_time != 0 ||
@@ -5025,7 +5021,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						        ? "value-unassessed" : "value-skip",
 						    route_field[l->from], route_field[l->to]);
 					}
-					else if (SG_HookControlDecode(proof_source, 22.0f, RIGHT_HANDED,
+					else if (air_hook && SG_AirHookGameStage(bot, bestlink))
+						; /* The bot-only emitter owns the launch prefix. */
+					else if (!air_hook &&
+					         SG_HookControlDecode(proof_source, 22.0f,
+					                         RIGHT_HANDED,
 					                         l->anchor, bot->hook_view,
 					                         proof_muzzle, proof_bite))
 					{
@@ -5034,14 +5034,12 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						VectorCopy(SG_Rune()->seeds[l->to].origin,
 						           bot->hook_dest);
 						bot->hook_link = bestlink;
+						bot->hook_source_air = false;
 						SG_ChainHookGameStage(bot,
 						    l->action == RL_CHAIN_HOOK ? bestlink : -1);
 						bot->hook_bite_logged = false;
 						bot->hook_attached_validated = false;
 						bot->hook_phase = 1;
-						/* This is the aim deadline only. Successful fire replaces
-						 * it with a quantized bolt-flight deadline; attachment then
-						 * starts a fresh three-second pull budget. */
 						SG_TimerArm(&bot->hook_deadline, 3.0f);
 					}
 					else
@@ -6487,6 +6485,8 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean run_link = tc->run_link;
 	int door_hold = tc->door_hold;
 
+	if (SG_AirHookGameEmit(bot, bestlink))
+		return;
 	if (SG_CompoundSwimGameEmit(bot, bestlink))
 		return;
 	bot->beat_until = SG_SpawnBeatDeadline(bot->beat_until,

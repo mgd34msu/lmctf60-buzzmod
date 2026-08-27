@@ -17,6 +17,7 @@ static int aim_calls;
 static int hook_calls;
 static int chain_discover_calls;
 static int chain_exact_calls;
+static short proof_gravity = 100;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -252,7 +253,7 @@ qboolean SG_OracleChainHookTraverse(sg_phantom_t *phantom,
 
 short SG_RuneProofGravity(void)
 {
-	return 100;
+	return proof_gravity;
 }
 
 static sg_rune_hook_frontier_input_t Fixture(rune_seed_t seeds[2],
@@ -351,6 +352,23 @@ static void TestFrontierAllocationFailureIsFatal(void)
 	sg_host.level_alloc = NULL;
 }
 
+static void TestExactPairProofDoesNotRequireTopology(void)
+{
+	rune_seed_t seeds[2];
+	byte stable[2], waterlevel[2];
+	uint32_t prover_calls = 0U;
+	sg_rune_hook_frontier_input_t input = Fixture(seeds, stable, waterlevel,
+		&prover_calls);
+	vec3_t control;
+	short cost = 0;
+	byte speed = 0U;
+
+	proof_gravity = 800;
+	CHECK(!SG_RuneProveHook(&input, 0, 1, control, &cost, &speed));
+	CHECK(prover_calls == 1U);
+	proof_gravity = 100;
+}
+
 int main(void)
 {
 	memset(&sg_host, 0, sizeof(sg_host));
@@ -358,6 +376,7 @@ int main(void)
 	TestWorldBitesDriveFreshProofPoses();
 	TestSourceControlsUseExactOracle();
 	TestFrontierAllocationFailureIsFatal();
+	TestExactPairProofDoesNotRequireTopology();
 	if (failures)
 	{
 		fprintf(stderr, "sg_rune_hook_nomination_test: %d failure(s)\n",

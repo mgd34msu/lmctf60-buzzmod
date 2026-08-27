@@ -3055,7 +3055,7 @@ def validate_gate_agreement(
 def semantic_checkers_for_map(
     snapshot: Path, verified: Mapping[str, Any], map_name: str
 ) -> list[tuple[str, Path]]:
-    """Resolve the immutable, ordered semantic gates applicable to one map."""
+    """Resolve the immutable, ordered semantic diagnostics for one map."""
     roles = verified["by_role"]
     return [
         (str(item["name"]), snapshot / str(roles[item["role"]]["path"]))
@@ -3272,17 +3272,23 @@ def run_gates(
         write_integrity(label, lifecycle, rc, None, gate_started)
         if regular_file_record(artifact) != before:
             raise GateIntegrityError(f"artifact changed during {label} gate")
+        if label.startswith("semantic-"):
+            if rc not in {0, 1}:
+                raise GateIntegrityError(f"{label} diagnostic exited {rc}")
+            try:
+                semantic_report = json.loads(output)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise GateIntegrityError(
+                    f"{label} did not emit one JSON report"
+                ) from exc
+            if (not isinstance(semantic_report, dict) or
+                    semantic_report.get("map_name") != map_name):
+                raise GateIntegrityError(f"{label} report map mismatch")
+            continue
         if rc == 1:
             raise ArtifactRejectedError(f"{label} gate rejected the artifact")
         if rc != 0:
             raise GateIntegrityError(f"{label} gate exited {rc}")
-        if label.startswith("semantic-"):
-            try:
-                semantic_report = json.loads(output)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise GateIntegrityError(f"{label} did not emit one JSON report") from exc
-            if not isinstance(semantic_report, dict) or semantic_report.get("map_name") != map_name:
-                raise GateIntegrityError(f"{label} report map mismatch")
     try:
         decoded = validate_gate_agreement(
             outputs["c_gnu"], outputs["c_make"], outputs["python"],
@@ -5731,7 +5737,7 @@ def run_one_map(
                     )
                     detail = (
                         "generation, dual readers, graph-contract lint, "
-                        "semantic gates, and fresh cold-load passed"
+                        "semantic diagnostics, and fresh cold-load passed"
                     )
                 except GateIntegrityError as exc:
                     classification = "INFRA_FAIL"

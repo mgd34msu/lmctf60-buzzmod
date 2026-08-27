@@ -97,9 +97,12 @@ static int TestLedgerDeduplicatesAndTightens(void)
 	CHECK(SG_RuneTopologyRecordContact(&ledger, 1, 3,
 		SG_RUNE_CONTACT_FLOOD_MEETING, SG_RUNE_CONTACT_WATER_BOUNDARY) ==
 		SG_RUNE_TOPOLOGY_OK);
+	CHECK(SG_RuneTopologyRecordContact(&ledger, 3, 1,
+		SG_RUNE_CONTACT_BSP_OVERLAY, SG_RUNE_CONTACT_STATIC_DRY) ==
+		SG_RUNE_TOPOLOGY_OK);
 	CHECK(ledger.contact_count == 1U);
 	CHECK(ledger.contacts[0].low_seed == 1 && ledger.contacts[0].high_seed == 3);
-	CHECK(ledger.contacts[0].provenance == 3U);
+	CHECK(ledger.contacts[0].provenance == 7U);
 	CHECK(ledger.contacts[0].kind == SG_RUNE_CONTACT_WATER_BOUNDARY);
 	return 0;
 }
@@ -149,6 +152,30 @@ static int TestCanonicalBatchAndFinalScc(void)
 	CHECK(outcomes[2].from == 1 && outcomes[2].to == 2);
 	CHECK(outcomes[3].from == 2 && outcomes[3].to == 1);
 	CHECK(!report.unresolved);
+	return 0;
+}
+
+static int TestOverlayOnlyContactReconciles(void)
+{
+	rune_seed_t seeds[2] = {0};
+	rune_link_t links[2] = {0};
+	sg_rune_collision_contact_t contacts[1];
+	sg_rune_topology_outcome_t outcomes[2];
+	sg_rune_contact_ledger_t ledger;
+	sg_rune_topology_report_t report;
+	uint32_t slots[2];
+	int link_count = 0;
+	fixture_t fixture = {
+		{ seeds, 2U, links, &link_count, 2U }, 0, -1, -1
+	};
+
+	CHECK(InitLedger(&ledger, contacts, 1U, slots, 2U));
+	CHECK(SG_RuneTopologyRecordContact(&ledger, 0, 1,
+		SG_RUNE_CONTACT_BSP_OVERLAY, SG_RUNE_CONTACT_STATIC_DRY) ==
+		SG_RUNE_TOPOLOGY_OK);
+	CHECK(Reconcile(&ledger, &fixture, outcomes, 2U, &report));
+	CHECK(fixture.calls == 2 && link_count == 2);
+	CHECK(report.initial_sccs == 2U && report.final_sccs == 1U);
 	return 0;
 }
 
@@ -411,6 +438,29 @@ static int TestGameStaticActionRoutes(void)
 	return 0;
 }
 
+static int TestRepeatedGameRepairDoesNotDuplicateLinks(void)
+{
+	rune_seed_t seeds[2] = {0};
+	rune_link_t links[8] = {0};
+	sg_rune_topology_outcome_t outcomes[4];
+	sg_rune_topology_report_t report;
+	int link_count = 0;
+	game_fixture_t fixture = {
+		links, &link_count, {0}, {0}, {0}, 0,
+		{ RL_RUN, RL_JUMP }, -1, -1
+	};
+
+	CHECK(GameRepair(SG_RUNE_CONTACT_STATIC_DRY, seeds, links, &link_count,
+		&fixture, outcomes, &report) == SG_RUNE_TOPOLOGY_OK);
+	CHECK(link_count == 2 && report.edges_added == 2U);
+	CHECK(GameRepair(SG_RUNE_CONTACT_STATIC_DRY, seeds, links, &link_count,
+		&fixture, outcomes, &report) == SG_RUNE_TOPOLOGY_OK);
+	CHECK(link_count == 2 && report.edges_added == 0U);
+	CHECK(report.crossing_contacts == 0U && report.outcome_count == 0U &&
+		report.proof_calls == 0U);
+	return 0;
+}
+
 static int TestGameWaterAndFatal(void)
 {
 	rune_seed_t seeds[2] = {0};
@@ -540,10 +590,15 @@ static char *ReadSource(const char *path)
 static int TestGeneratorIntegrationOrder(void)
 {
 	char *source = ReadSource("slipgate/sg_rune.c");
+	char *seed_source = ReadSource("slipgate/sg_rune_seed_game.c");
 	char *flood, *candidate, *ground, *meeting, *record;
-	char *generate, *base, *compound, *rocket, *restore, *audit, *objective;
+	char *generate, *bounds, *face_scan, *surface_scan, *flood_call;
+	char *overlay, *early_audit;
+	char *water, *base, *compound, *rocket;
+	char *restore, *final_audit, *objective;
+	char *operator_definition, *operator_end, *operator_pair_loop;
 
-	CHECK(source != NULL);
+	CHECK(source != NULL && seed_source != NULL);
 	flood = strstr(source, "static qboolean Seed_Flood");
 	candidate = flood ? strstr(flood,
 		"candidate_near = Seed_NearbyIndex(candidate);") : NULL;
@@ -558,22 +613,62 @@ static int TestGeneratorIntegrationOrder(void)
 	CHECK(strstr(source, "if (Seed_Nearby(cand)) continue;") == NULL);
 	CHECK(strstr(candidate, "candidate[2] += 40.0f") == NULL ||
 		strstr(candidate, "candidate[2] += 40.0f") > ground);
-	CHECK(strstr(ground, "if (!Prove(frontier, contact, false") != NULL);
+	CHECK(strstr(ground, "bsp_contact = SG_RuneSeedLocalContact(") != NULL);
+	CHECK(strstr(ground, "!Prove(frontier, contact, false") != NULL);
+	CHECK(strstr(ground, "!bsp_contact &&") != NULL);
 	CHECK(strstr(meeting,
 		"candidate_near >= 0 && contact != candidate_near") != NULL);
 
 	generate = strstr(source, "qboolean Rune_Generate");
-	base = generate ? strstr(generate, "Prove_BaseLinks(&compound_topology)")
+	bounds = generate ? strstr(generate, "SG_RuneSeedReadMapWorldBounds")
 		: NULL;
+	face_scan = bounds ? strstr(bounds, "SG_RuneSeedScanMapFaceAnchors")
+		: NULL;
+	surface_scan = face_scan ? strstr(face_scan, "SG_RuneSeedScanWorldSurfaces")
+		: NULL;
+	flood_call = surface_scan ? strstr(surface_scan,
+		"Seed_Flood(&topology_ledger)")
+		: NULL;
+	water = flood_call ? strstr(flood_call, "Seed_Water()") : NULL;
+	overlay = water ? strstr(water, "SG_RuneSeedRecordBspOverlay") : NULL;
+	early_audit = overlay ? strstr(overlay,
+		"Rune_ReconcileFloodTopology") : NULL;
+	base = early_audit ? strstr(early_audit,
+		"Prove_PoseFieldOperators(&compound_topology,")
+		: NULL;
+	operator_definition = strstr(source,
+		"static qboolean Prove_PoseFieldOperators");
+	operator_end = operator_definition ? strstr(operator_definition,
+		"#ifndef SG_RUNE_TOPOLOGY_RUN_PROVER") : NULL;
+	operator_pair_loop = operator_definition ? strstr(operator_definition,
+		"for (i = 0; i < gen_num_seeds") : NULL;
 	compound = base ? strstr(base, "Link_CompoundDrops()") : NULL;
 	rocket = compound ? strstr(compound, "Prove_RocketJumps()") : NULL;
 	restore = rocket ? strstr(rocket, "Doors_Restore(&doors)") : NULL;
-	audit = restore ? strstr(restore, "SG_RuneTopologyGameRepair") : NULL;
-	objective = audit ? strstr(audit,
+	final_audit = restore ? strstr(restore, "SG_RuneTopologySnapshotBuild")
+		: NULL;
+	objective = final_audit ? strstr(final_audit,
 		"Graph_PruneObjectiveCoreWithClosure") : NULL;
-	CHECK(generate && base && compound && rocket && restore && audit &&
+	CHECK(generate && bounds && face_scan && surface_scan && flood_call &&
+		overlay && early_audit &&
+		water && base && compound && rocket && restore && final_audit &&
 		objective);
+	CHECK(bounds < face_scan && face_scan < surface_scan &&
+		surface_scan < flood_call &&
+		flood_call < water && water < overlay && overlay < early_audit &&
+		early_audit < base &&
+		final_audit > restore &&
+		final_audit < objective);
+	CHECK(operator_definition && operator_end);
+	CHECK(strstr(operator_definition,
+		"The BSP contact ledger already ran RUN, JUMP, DROP, and SWIM") != NULL);
+	CHECK(!operator_pair_loop || operator_pair_loop > operator_end);
+	CHECK(strstr(early_audit + 1, "Rune_ReconcileFloodTopology") == NULL);
+	CHECK(strstr(source, "const int minimum = -4064") == NULL);
+	CHECK(strstr(seed_source, "first_crouched != second_crouched") == NULL);
+	CHECK(strstr(seed_source, "first_crouched || second_crouched") != NULL);
 	free(source);
+	free(seed_source);
 	return 0;
 }
 
@@ -582,6 +677,7 @@ int main(void)
 	int line;
 
 	if ((line = TestLedgerDeduplicatesAndTightens()) != 0 ||
+	    (line = TestOverlayOnlyContactReconciles()) != 0 ||
 	    (line = TestCanonicalBatchAndFinalScc()) != 0 ||
 	    (line = TestSccSnapshotRejectsStaleGraph()) != 0 ||
 	    (line = TestExistingAndOneWayDirections()) != 0 ||
@@ -589,6 +685,7 @@ int main(void)
 	    (line = TestPermutationStable()) != 0 ||
 	    (line = TestGameContactClassification()) != 0 ||
 	    (line = TestGameStaticActionRoutes()) != 0 ||
+	    (line = TestRepeatedGameRepairDoesNotDuplicateLinks()) != 0 ||
 	    (line = TestGameWaterAndFatal()) != 0 ||
 	    (line = TestGameMoverContactTriesExactOrdinaryMovement()) != 0 ||
 	    (line = TestGeneratorIntegrationOrder()) != 0)

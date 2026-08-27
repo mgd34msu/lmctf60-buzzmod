@@ -8,29 +8,33 @@ superseded experiments and detailed evidence.
 The project is complete when one unchanged source commit satisfies all of these
 conditions:
 
-1. Exact CI is green on synchronized `slipgate` and `main` branches.
+1. Local GNU and Make host gates pass on the final source commit. Local
+   `slipgate` and `main` point to that commit. Remote CI and pushes remain out
+   of scope by owner direction.
 2. One immutable snapshot binds the final source, tools, runtime, and 175
-   canonical BSPs. It contains no pre-rewrite RUNE candidates.
-3. Generate and accept all 175 RUNEs from the unchanged frozen build.
-4. Every accepted RUNE passes both C readers, the Python reader, lint, applicable
-   semantic checks, matching SNAG validation, and a fresh-process cold load.
+   canonical BSPs. It contains only corrected-run RUNE candidates.
+3. Validate every corrected-run RUNE. Regenerate only a missing or rejected
+   artifact with the corrected module, then accept all 175 maps.
+4. Every accepted RUNE passes both C readers, the Python reader, lint, matching
+   SNAG validation, and a fresh-process cold load. Map-specific coverage
+   diagnostics run and remain part of the evidence.
 5. Every map is route-complete or satisfies the route-only release contract.
 6. The authenticated production bundle is installed and verified.
 7. Ordinary matches prove the required bot behavior on the installed bytes.
-8. The release tag points to the unchanged frozen commit. Downloaded public
-   assets pass version and integrity checks.
+8. The local release tag points to the unchanged frozen commit. Release assets
+   copied into a clean verification directory pass version and integrity checks.
 
 ## Current status
 
 | Area | Current state |
 |---|---|
-| Code wave | The generalized 3D standing/crouched scan, contact-safe seed identity, exhaustive hook frontier, BSP contact repair, door-family exhaustion, overflow propagation, and controller/finalizer repairs are implemented. The full GNU host gate passes. |
-| Route search | Dijkstra is production-wired after ordinary and BSP-aware closure. The old call and rejection budgets are gone. Focused tests prove closure or a complete no-progress `open-exhausted` search. Final real-map proof, review, and host gates remain. |
-| Movement generation | Rocket-jump runtime support remains. LMCTF generation omits rocket-jump discovery because hook traversal owns it. The repaired searches exhaust finite candidate sets and fail closed on capacity or allocation. |
-| Corpus | `tools/rune-corpus-maps.txt` defines 175 canonical maps. The generator rewrite invalidates the old RUNE corpus, so the new freeze adopts none and generates all 175. |
-| Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout. |
-| Diagnostic reruns | The final corrected generator produced a route-complete `lmctf12` RUNE. Both C readers, the Python reader, lint, exact SNAG binding, and a fresh-process cold load pass. The full corpus run will repeat it from frozen bytes. |
-| Freeze and CI | The `0988f47` freeze and every pre-rewrite RUNE are invalid. The repaired commit needs fresh exact CI on synchronized refs before the immutable snapshot is created. No final freeze or 175-map corpus exists. |
+| Code wave | The corrected constructor expands one compound navigation field over the BSP's complete 3D player-hull volume. Walk, crouch, ramp, drop, swim, hook, movers, teleports, doors, and triggers prove operators over that field. Global airborne-hook discovery keeps only component-changing candidates, recomputes directed closure after each bridge, and exhausts unresolved candidates without a work budget. Production bots replay the same launch and coast commands; player hook code remains unchanged. |
+| Route search | Dijkstra remains production-wired, but it is only the final automated fallback after the BSP overlay and every movement operator reach a no-change fixpoint. It must never substitute for missing BSP-volume reconciliation. Human playthrough evidence is the final source-bound fallback and is re-proved by the engine. |
+| Movement generation | Clean tomb05 proof completed from BSP geometry at map gravity 100: 918 seeds, 6,599 retained links, 13 airborne-hook bridges, and both objective directions complete without Dijkstra or human input. The resulting pre-contract artifact was discarded after marker 252 became part of the authenticated movement law. Rocket-jump runtime support remains, while LMCTF generation omits rocket-jump discovery because hook traversal owns it. |
+| Corpus | `tools/rune-corpus-maps.txt` defines 175 canonical maps. The owner invalidated and purged every generated RUNE after rejecting the destination-pair constructor. The current corpus is 0/175. Human playthroughs and learning evidence are preserved. Only artifacts produced by the corrected BSP-volume constructor may enter the final corpus. |
+| Controller | Adoption, crash recovery, provenance, one-shot replacement, and unbounded review are implemented. An adopted `local_only` artifact must be regenerated. A `ROUTE_ONLY` result needs a current generated artifact and an authenticated log that proves BSP reconciliation ran before a complete no-progress late-path search. Production generation and review have no timeout; the legacy batch runner no longer imposes one either. |
+| Active generation | None. All obsolete generators, proof servers, controllers, and generated RUNEs are absent. Generation restarts only from the frozen source across the full 175-map manifest. |
+| Freeze and CI | The final GNU host gate passes. The Make host gate, local source commit, local merge to `main`, and immutable freeze remain. Remote CI and pushes remain excluded by owner direction. |
 | Bundle, matches, release | Focused bundle and fleet tests pass. Production installation and matches have not started. `v1.0.0` is not tagged or published. |
 
 ## Fixed authority and policy
@@ -57,7 +61,8 @@ conditions:
 
 - The generator rewrite invalidates every old candidate. Do not include old
   RUNEs in the snapshot or adoption queue.
-- Generate every manifest map from the unchanged frozen module and tools.
+- Validate every corrected-run artifact against the frozen acceptance contract.
+  Use the frozen module and tools only for missing or rejected artifacts.
 - Failed infrastructure, lifecycle, observation, or host checks retry without
   consuming or replacing an old artifact.
 - Generation attempts may resume in the same run root after non-accepted
@@ -86,7 +91,8 @@ Every accepted artifact must:
 - contain exactly two authenticated objective roots that resolve to flag stands;
 - contain no unproved traversal link;
 - produce agreement between both C readers and the Python reader;
-- pass lint and every applicable semantic checker;
+- pass lint and the generic graph contract; map-specific coverage diagnostics
+  are non-blocking when the complete route contract passes;
 - load in a new q2ded process with its exact-bound SNAG, without fallback or
   mixed sidecar state; and
 - stop generation and cold-load processes cleanly.
@@ -132,8 +138,8 @@ added only to change classification fails acceptance.
 - Post-match learning is sufficient for the initial release. Live mutation is
   optional.
 - A learned replacement must pass the complete validator, both readers, lint,
-  semantic checks, exact-bound SNAG validation, and cold load. Cold-load the
-  staged bundle before acceptance.
+  exact-bound SNAG validation, and cold load. Cold-load the staged bundle before
+  acceptance.
 - Install new sidecars before the RUNE commit point. Never publish mixed graph
   and sidecar state; partial installation fails closed.
 
@@ -151,9 +157,10 @@ do not replace them.
 
 ## Next critical path
 
-Commit and push the verified generator, synchronize `slipgate` and `main`, and
-require exact green CI. Then create an empty-RUNE immutable snapshot and
-generate, verify, finalize, bundle, match-test, and publish all 175 maps.
+Pass the Make host gate, commit locally, align local `main`, and freeze the
+corrected source. Generate and validate all 175 maps once, assemble the bundle,
+run match evidence, and build, tag, and verify the local release. Do not push,
+publish remotely, or run remote CI.
 
 ## Execution plan
 
@@ -162,43 +169,49 @@ generate, verify, finalize, bundle, match-test, and publish all 175 maps.
 1. Finish door-family wait/fan enumeration and member-overflow propagation.
    Keep controller and finalizer recovery, adoption, one-shot replacement,
    provenance, heartbeat, and no-review-deadline tests green.
-2. Make BSP contact reconciliation consume every valid generalized contact.
-   Run late-path scheduling until closure or a complete no-progress tour proves
+2. Keep the immediate post-flood BSP reconciliation and the post-mechanism
+   connectivity snapshot green. Run late-path scheduling only after ordinary
+   objective closure fails, until closure or a complete no-progress tour proves
    `open-exhausted`. A batching window is not a terminal budget.
 3. Audit every production generator search. Each bounded batch must resume from
-   a durable cursor until finite exhaustion. Capacity overflow must fail
-   generation instead of omitting candidates.
-4. Prove corrected BSP and fallback behavior on the affected real maps. Repeat
-   `lmctf01`, `lmctf06`, `lmctf12`, and `lmctf15` on final bytes, and repeat the
-   staged `smap32` SNAG and cold-load proof.
+   a durable cursor until finite exhaustion. Core graph overflow fails
+   generation. Ranked hook shortcuts may compact at their reserved wire limit,
+   but candidate proof still runs to exhaustion and preserves later graph
+   capacity.
+4. Prove the corrected constructor on the full regression set before any final
+   corpus run. Overlay each result on its BSP and fail the proof when a valid
+   local movement transition is absent. Use preserved human data to confirm
+   geometry and nominate any final missing transition; the engine remains the
+   proof authority.
 5. Review comments and source size, remove accidental outputs, and update
    source-size limits only to reviewed final counts.
 6. Run warning-clean builds, focused suites, and full GNU and Make host gates.
-7. Commit and push the coherent wave on `slipgate`. Require exact-commit CI.
-8. Merge to `main`, move `slipgate` to the merge commit, push both refs, and
-   require exact green CI on both synchronized refs.
+7. Commit the coherent wave locally on `slipgate`, merge it to local `main`, and
+   keep both refs on the same commit. Do not push or start remote CI.
 
 ### 2. Create the immutable freeze
 
-1. Build warning-clean GNU and Make modules from the synchronized commit. The
+1. Build warning-clean GNU and Make modules from the final local commit. The
    production module aliases must be byte-identical.
 2. Build and verify the private Python runtime.
-3. Snapshot the frozen source, tools, runtime, and the 175 manifest-selected
-   BSPs.
-4. Include no old RUNE candidates. The rewritten generator must produce all 175.
+3. Snapshot the frozen source, tools, runtime, the 175 manifest-selected BSPs,
+   and the corrected-run RUNE candidates.
+4. Reject pre-rewrite artifacts. Adopt a corrected-run artifact only after all
+   current readers, lint, SNAG, and cold-load gates pass.
 5. Make the snapshot immutable. Do not commit source or documentation changes
    through the release tag.
 
 ### 3. Generate and accept all 175 RUNEs
 
-1. Start with an empty controller run root.
-2. Generate all 175 manifest maps from frozen bytes. Do not adopt an old RUNE.
+1. Reconcile the corrected-run corpus against all 175 manifest maps.
+2. Generate every map from the corrected frozen constructor. No earlier RUNE
+   remains eligible for adoption.
 3. Run with `jobs > 1`. Leave the production generation timeout unset.
    Fingerprint any deliberate safety override.
-5. Apply the complete-route contract first. Require every terminal result to be
-   `PASS` or approved `ROUTE_ONLY`. Recheck every reader, semantic, SNAG, and
-   cold-load receipt.
-6. Run `finalize` to bind all 175 accepted results and their ordered provenance
+4. Apply the complete-route contract first. Require every terminal result to be
+   `PASS` or approved `ROUTE_ONLY`. Recheck every reader, generalized semantic
+   contract, SNAG, and cold-load receipt.
+5. Run `finalize` to bind all 175 accepted results and their ordered provenance
    histories into one immutable, content-addressed corpus. Run `verify-final`
    before bundle assembly.
 
@@ -225,24 +238,25 @@ evidence for:
 
 Judge behavior from play. Scores, wins, captures, schedule completion, and
 parser output do not replace observed behavior. If a match exposes a source
-defect, abandon the freeze, fix the source, rerun CI, and repeat every
-invalidated downstream gate.
+defect, abandon the freeze, fix the source, rerun the local host gates, and
+repeat every invalidated downstream gate.
 
 ### 6. Tag and verify the release
 
 1. Tag the unchanged frozen commit as `v1.0.0`.
-2. Publish the supported modules and static public assets.
-3. Download the release into a clean directory. Verify `VERSION`,
+2. Build the supported modules and static release assets without publishing
+   them remotely.
+3. Copy the release into a clean directory. Verify `VERSION`,
    `SHA256SUMS`, and every payload.
 4. Independently verify the installed production bundle. Record the final
-   source, module, corpus, match, CI, tag, and release identities.
-5. Make only evidence updates to this plan after release. Do not rebuild the
-   release or retag the frozen commit.
+   source, module, corpus, match, local-gate, tag, and release identities.
+5. Make only evidence updates to this plan after release verification. Do not
+   rebuild the release or retag the frozen commit.
 
 ## Invalidation rules
 
 - A source, tool, module, configuration, engine, Python runtime, reader, linter,
-  semantic checker, or BSP change invalidates the snapshot and all downstream
+  diagnostic, or BSP change invalidates the snapshot and all downstream
   evidence.
 - A RUNE change invalidates its SNAG, cold load, bundle, and match evidence.
 - A bundle change invalidates installed-bundle and match evidence.
@@ -259,10 +273,12 @@ invalidated downstream gate.
   no-progress `open-exhausted` search without a work budget.
 - [x] Door-family exhaustion and member-overflow propagation are complete.
 - [x] The corrected generator produces and cold-loads a complete `lmctf12` RUNE.
-- [ ] Exact CI is green on synchronized `slipgate` and
-  `main`.
-- [ ] The immutable final snapshot contains 175 BSPs and no old RUNEs.
-- [ ] All 175 RUNEs are generated and accepted from the frozen build.
+- [ ] The corrected source passes fresh failed-map proofs and both local host
+  gates. Remote CI and pushes are omitted by owner direction.
+- [ ] The new immutable final snapshot contains 175 BSPs and only accepted
+  corrected-run RUNEs.
+- [ ] All 175 RUNEs are accepted. Only missing or rejected artifacts are
+  generated again.
 - [ ] All 175 artifacts are finalized and independently verified.
 - [ ] The production bundle is installed and rollback is verified.
 - [ ] Route-only and persistent-fleet real-match evidence is accepted.

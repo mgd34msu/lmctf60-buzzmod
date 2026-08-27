@@ -128,14 +128,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("artifact")
     args = parser.parse_args(argv)
     try:
-        evidence = validate(
-            runeio.read(args.artifact), tuple(args.objective_roots)
-        )
+        artifact = runeio.read(args.artifact)
     except OSError as exc:
         print(f"lmctf58 gate infrastructure failure: {exc}", file=sys.stderr)
         return 3
     except ValueError as exc:
-        print(f"lmctf58 gate rejected artifact: {exc}", file=sys.stderr)
+        print(f"lmctf58 gate infrastructure failure: {exc}", file=sys.stderr)
+        return 3
+    try:
+        evidence = validate(artifact, tuple(args.objective_roots))
+    except AcceptanceError as exc:
+        print(json.dumps({
+            "finding": str(exc),
+            "map_name": artifact.header.map_name,
+            "objective_roots": list(args.objective_roots),
+            "status": "finding",
+        }, sort_keys=True))
         return 1
     print(json.dumps(evidence, sort_keys=True))
     return 0

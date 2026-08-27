@@ -75,6 +75,9 @@ void SG_StagedTraversalCancel(sg_bot_t *bot, int action)
 	bot->rail_link = -1;
 	bot->rail_stage = 0;
 	bot->rail_until = 0.0f;
+	bot->air_hook_launch_active = false;
+	bot->air_hook_launch_link = -1;
+	bot->air_hook_launch_frame = 0;
 	if (bot->hook_phase == 1)
 	{
 		bot->hook_phase = 0;

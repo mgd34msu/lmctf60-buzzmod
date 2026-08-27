@@ -373,6 +373,24 @@ static sg_rune_codec_diagnostic_t Codec_ValidateLinkFields(
 	     link->cost_ms >= SG_RUNE_PROOF_DROP_TOTAL_MS ||
 	     link->cost_ms % SG_RUNE_PROOF_SERVER_FRAME_MS != 0))
 		return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
+	if (link->action == RL_HOOK)
+	{
+		if (link->heading_slack ==
+		        SG_RUNE_PROOF_AIR_HOOK_CONTROL_MARKER)
+		{
+			if (link->min_speed == 0U ||
+			    link->cost_ms <
+			        (int)(link->min_speed + 2U) *
+			            SG_RUNE_PROOF_SERVER_FRAME_MS)
+				return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
+		}
+		else if (link->min_speed != 0U ||
+		         (link->heading_slack !=
+		              SG_RUNE_PROOF_HOOK_CONTROL_SLACK &&
+		          link->heading_slack !=
+		              SG_RUNE_PROOF_WATER_HOOK_CONTROL_MARKER))
+			return Codec_Diagnostic(RLW_BAD_LINK_RECORD);
+	}
 	if (policy_action == RL_ROCKETJUMP &&
 	    (link->provenance != RL_PROVEN || link->min_speed != 0U ||
 	     link->heading_slack != SG_RUNE_PROOF_ROCKETJUMP_HEADING_SLACK ||

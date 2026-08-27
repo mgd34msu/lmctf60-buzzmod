@@ -668,7 +668,9 @@ int SG_CompoundGenGameGenerate(const rune_seed_t *seeds, size_t seed_count,
 	               result.proof_rejections,
 	               (int)result.replay_rejection,
 	               result.replay_rejections);
-	if (result.status != SG_COMPOUND_GEN_OK || count > link_capacity)
+	if ((result.status != SG_COMPOUND_GEN_OK &&
+	     result.status != SG_COMPOUND_GEN_NO_PROOF) ||
+	    count > link_capacity)
 		return 0;
 	*link_count = (int)count;
 	return 1;

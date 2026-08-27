@@ -2026,6 +2026,34 @@ static void TestPush(void)
 		&fixture.result));
 }
 
+static void TestPostMaterializationLinkDeduplication(void)
+{
+	rune_link_t links[5];
+	int count = 5;
+	uint32_t removed = 0U;
+
+	memset(links, 0, sizeof(links));
+	links[0] = (rune_link_t){ .from = 1, .to = 2, .action = RL_RUN,
+		.cost_ms = 30, .mechanism_plan = RUNE_NO_MECHANISM_PLAN };
+	links[1] = (rune_link_t){ .from = 3, .to = 4, .action = RL_RUN,
+		.cost_ms = 20, .mechanism_plan = RUNE_NO_MECHANISM_PLAN };
+	links[2] = (rune_link_t){ .from = 1, .to = 2, .action = RL_RUN,
+		.cost_ms = 10, .mechanism_plan = RUNE_NO_MECHANISM_PLAN };
+	links[3] = (rune_link_t){ .from = 1, .to = 2, .action = RL_JUMP,
+		.cost_ms = 15, .mechanism_plan = RUNE_NO_MECHANISM_PLAN };
+	links[4] = (rune_link_t){ .from = 1, .to = 2, .action = RL_RUN,
+		.cost_ms = 25, .mechanism_plan = 0U };
+	CHECK(SG_MechanismLinksDeduplicate(links, &count, malloc, free,
+		&removed));
+	CHECK(count == 4 && removed == 1U);
+	CHECK(links[0].from == 1 && links[0].to == 2 &&
+		links[0].action == RL_RUN && links[0].cost_ms == 10 &&
+		links[0].mechanism_plan == RUNE_NO_MECHANISM_PLAN);
+	CHECK(links[1].from == 3 && links[1].to == 4);
+	CHECK(links[2].action == RL_JUMP);
+	CHECK(links[3].mechanism_plan == 0U);
+}
+
 int main(void)
 {
 	TestPlatform();
@@ -2043,6 +2071,7 @@ int main(void)
 	TestDirectDoorSynchronousRelayClosure();
 	TestDelayedSoundTerminal();
 	TestOnePlanPerLink();
+	TestPostMaterializationLinkDeduplication();
 	TestPush();
 	TestTrainGate();
 	TestTrainStation();

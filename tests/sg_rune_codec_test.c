@@ -1520,6 +1520,52 @@ static void TestRocketJumpControlCodec(void)
 		ValidatePlanlessFixture(&fixture));
 }
 
+static void MakeAirHookLink(fixture_t *fixture)
+{
+	FixtureInit(fixture);
+	fixture->links[0].action = RL_HOOK;
+	fixture->links[0].provenance = RL_PROVEN;
+	fixture->links[0].cost_ms = 1500;
+	fixture->links[0].min_speed = 4U;
+	fixture->links[0].heading = 64U;
+	fixture->links[0].heading_slack =
+		SG_RUNE_PROOF_AIR_HOOK_CONTROL_MARKER;
+	fixture->links[0].exit_speed = 90U;
+	SetVector(fixture->links[0].suffix_anchor, 0.0f, 90.0f, 512.0f);
+	SetVector(fixture->links[0].mechanism_anchor, 0.0f, 0.0f, 0.0f);
+	fixture->links[0].sweep_clear_ms = 0U;
+	fixture->links[0].mode = RLCM_NONE;
+	fixture->links[0].activation_plan = SG_RUNE_CODEC_NO_ACTIVATION_PLAN;
+}
+
+static void TestAirHookControlCodec(void)
+{
+	fixture_t fixture;
+	unsigned char encoded[SG_RUNE_CODEC_LINK_BYTES];
+
+	MakeAirHookLink(&fixture);
+	CHECK_DIAGNOSTIC(RLCODEC_OK, ValidatePlanlessFixture(&fixture));
+	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncodeLink(
+		&fixture.links[0], encoded, sizeof(encoded)));
+
+	MakeAirHookLink(&fixture);
+	fixture.links[0].min_speed = 0U;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeAirHookLink(&fixture);
+	fixture.links[0].cost_ms = 500;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeAirHookLink(&fixture);
+	fixture.links[0].heading_slack = 251U;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+	MakeAirHookLink(&fixture);
+	fixture.links[0].heading_slack = SG_RUNE_PROOF_HOOK_CONTROL_SLACK;
+	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_LINK_RECORD,
+		ValidatePlanlessFixture(&fixture));
+}
+
 static void TestPushNodeCodec(void)
 {
 	fixture_t fixture;
@@ -1604,6 +1650,7 @@ int main(void)
 	TestWholeMalformed();
 	TestEmptyMechanismCompatibility();
 	TestRocketJumpControlCodec();
+	TestAirHookControlCodec();
 	TestPushNodeCodec();
 	TestTrainFindNodeCodec();
 	if (failures != 0)

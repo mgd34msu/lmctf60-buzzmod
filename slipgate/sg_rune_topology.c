@@ -70,7 +70,8 @@ sg_rune_topology_status_t SG_RuneTopologyRecordContact(
 	if (!ledger || !ledger->contacts || !ledger->slots || first < 0 ||
 	    second < 0 || first == second ||
 	    (provenance != SG_RUNE_CONTACT_FLOOD_CHILD &&
-	     provenance != SG_RUNE_CONTACT_FLOOD_MEETING) ||
+	     provenance != SG_RUNE_CONTACT_FLOOD_MEETING &&
+	     provenance != SG_RUNE_CONTACT_BSP_OVERLAY) ||
 	    kind < SG_RUNE_CONTACT_STATIC_DRY ||
 	    kind > SG_RUNE_CONTACT_DECLARED_MOVER)
 		return SG_RUNE_TOPOLOGY_INVALID;
@@ -409,9 +410,11 @@ sg_rune_topology_status_t SG_RuneTopologyReconcile(
 		    contacts[i].low_seed >= contacts[i].high_seed ||
 		    (uint32_t)contacts[i].high_seed >= graph->seed_count ||
 		    contacts[i].kind > SG_RUNE_CONTACT_DECLARED_MOVER ||
-		    !(contacts[i].provenance &
-		      (SG_RUNE_CONTACT_FLOOD_CHILD |
-		       SG_RUNE_CONTACT_FLOOD_MEETING)))
+		    !contacts[i].provenance ||
+		    (contacts[i].provenance &
+		     ~(SG_RUNE_CONTACT_FLOOD_CHILD |
+		       SG_RUNE_CONTACT_FLOOD_MEETING |
+		       SG_RUNE_CONTACT_BSP_OVERLAY)))
 			goto done;
 	report->initial_sccs = (uint32_t)TopologySccBuild(graph, &workspace,
 		initial_scc);
