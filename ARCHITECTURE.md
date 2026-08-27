@@ -5,6 +5,11 @@ reference for changing the code, not a roadmap or an experiment log. Remaining
 work and execution order live in
 [`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md).
 
+The RUNE subsystem is in a foundational migration. Sections explicitly marked
+**current** describe code that still runs; sections marked **target** define the
+replacement contract. A target contract is not evidence that its implementation
+exists.
+
 ## Shipped and server-only boundaries
 
 The project has three distinct artifact classes:
@@ -94,58 +99,147 @@ host state from an unrelated controller stage.
 
 ## RUNE navigation lifecycle
 
-A `.rune` is a map- and build-bound navigation artifact. It is not a generic
-waypoint file.
+A `.rune` is an exact-BSP-bound spatial capability artifact. It is not a generic
+waypoint file, an objective route, or a script of movement actions.
 
-### Contract generation
+### Current implementation being replaced
 
-`slipgate/rune_actions.json` is the authoring source for action identifiers and
-their controller/plan requirements. `tools/gen_rune_contracts.py` emits the C
-and Python contract tables. Tests require the generated tables to match the
-authoring JSON.
+The current `rune_seed_t`/`rune_link_t` representation is a fixed-grid graph.
+`sg_rune.c` and `sg_rune_seed_game.c` sample ground and face anchors, prove
+action-labelled links, and prune around two objective roots. `Field_Flood`
+performs reverse Dijkstra over those links, and `Think_PickLink`/`sg_move.c`
+allow the selected link action to own execution.
 
-### Map generation
+That implementation remains present only as migration input. Fixed-grid and
+face-anchor coverage, objective pruning, `complete`/`local_only` wire validity,
+action-owned traversal, and production late-path Dijkstra are not target
+architecture.
 
-`slipgate/sg_rune.c` floods fixed-grid seeds and proves links with the actual
-movement/oracle code. It adds ordinary movement, water, grapple, lift,
-teleport, declared-door, and button-controlled traversal only after their
-specific proof gates pass. The mechanism catalog captures exact entity
-topology and materializes plans for actions that need runtime controllers.
-Objective-core pruning retains only graph state that is usable with respect to
-both flag roots.
+### Target static model
 
-`sv rune` generates and atomically installs the current map's artifact in the
-active game directory. It is a generator entry point, not corpus acceptance.
+The exact BSP is immutable ground truth. The RUNE sidecar binds it rather than
+copying its bytes. Construction derives these target sections:
 
-### Wire format, loading, and publication
+1. **Configuration cells.** Convex or adaptively subdivided regions containing
+   every player origin at which the standing or crouching hull fits. Cells name
+   BSP leaf/area/cluster provenance, contents, bounds, defining half-spaces,
+   stance, support, water, hazard, and mover-relative properties.
+2. **Geometric portals.** Shared player-hull-valid boundaries between cells.
+   Portals describe continuity, directionality, polygonal extent, clearance,
+   and contents changes. They do not prescribe a movement command.
+3. **Static landmarks.** Flags, item pads, weapons, armor, health, powerups,
+   trigger volumes, mechanism entries, defensive locations, and other BSP/entity
+   facts localized into cells. Live availability remains runtime state.
+4. **Capability regions and kernels.** Directional reachability and time-cost
+   laws for ground movement, crouching, ramps, jumps, drops, water, air control,
+   hook visibility/pull/release/coast, and other supported physics. A capability
+   establishes what is possible; it does not own runtime traversal.
+5. **Mechanism discontinuities.** Exact entity topology, activation path,
+   controller identity, dwell/travel timing, entry region, and exit region for
+   doors, buttons, lifts, trains, pushes, teleporters, and related stateful
+   systems.
+6. **Shared spatial affordances.** Visibility/occlusion partitions, hookable
+   surfaces, surface normals, cover/exposure boundaries, projectile corridors,
+   blast reach, and bounce surfaces. Movement and weapon profiles query this
+   shared geometry instead of duplicating it.
 
-`sg_rune_codec.c` validates the fixed little-endian wire format, section
-arithmetic, identities, action legality, graph/mechanism shape, and CRCs.
-Artifact loading decodes into an unpublished candidate and publishes only after
-the whole candidate and its live mechanism bindings validate. A failed load
-does not replace the previously published graph.
+The position basis is three-dimensional. Directional speed, support state,
+stance, water/air state, and time form the local phase basis used by capability
+and field solvers. The wire format stores compact basis and kernel data, not a
+dense value for every point, velocity, destination, player, or weapon.
 
-`sg_rune_install.c` and the sidecar store use same-directory temporary files,
-revalidate authority, rename the accepted file, and clean owned temporary state
-on failure.
+### Target construction boundary
 
-### Independent acceptance
+Construction follows one authority order:
 
-`tools/rune_corpus_controller.py` is the 175-map conversion controller. A map
-may report PASS only when generation succeeds and the frozen GNU C reader, Make
-C reader, Python reader, linter, applicable semantic checker, and separate
-fresh-process cold load agree on the artifact. `tools/rune-corpus-maps.txt` is
-the 175-map conversion authority; `tools/topmaps.txt` is only the ordered
-20-map production fleet list.
+```text
+complete BSP and entity parse
+  -> standing/crouching player-origin configuration space
+  -> cells, geometric portals, contents, and landmarks
+  -> independent BSP/host completeness reconciliation
+  -> movement capability and mechanism kernels to a fixed point
+  -> visibility and weapon-affordance regions
+  -> deterministic wire serialization
+```
+
+Configuration-space construction expands solid brushes by the player hull, or
+equivalently erodes free space. It partitions at real geometric and visibility
+discontinuities. Interpolation is valid only inside a proven partition. Exact
+host box traces and Pmove remain independent proof oracles at boundaries and
+representative interiors.
+
+Hook construction separates two questions:
+
+- Can the actual muzzle locus see a non-sky hookable surface through the BSP?
+- Can the player hull traverse the pull, release, coast, air-control, and
+  possible relaunch envelope under the bound map physics?
+
+Map gravity, air acceleration, maximum velocity, frame cadence, contents, and
+movement law are identity-bound inputs. Batching may bound working memory but
+must resume until fixed-point exhaustion. Overflow fails construction instead
+of publishing partial coverage.
+
+### Target runtime boundary
+
+Runtime responsibilities are layered:
+
+```text
+strategy plan
+  -> current destination
+  -> destination-specific cost field over the RUNE
+  -> tactical movement/combat choice
+  -> exact mechanism or physics controller when needed
+  -> ordinary usercmd and host outcome
+```
+
+Static destinations may cache fields. Moving, dropped, displaced, or arbitrary
+destinations update fields incrementally through a coarse region hierarchy. The
+solver accounts for directional/time-weighted capability costs; structural
+connectivity comes from cells and portals, not route repair.
+
+Strategy owns typed conditional goal queues, destination commitment, priority,
+alternatives, completion, cancellation, and replacement. Tactics may dodge,
+fight, seek cover, hook, strafe, wait, or reposition without erasing the plan.
+Temporary threat and opportunity terms may deform the local field but cannot
+create permanent minima or replace strategic authority implicitly.
+
+Players are never RUNE records. Earned visual, sound, damage, pickup, and team
+observations update sparse per-player runtime beliefs over position, velocity,
+movement state, confidence, and future time. Combat combines those beliefs with
+shared static weapon affordances and weapon profiles. An exact live trace is
+the irreversible boundary for a shot or hook.
+
+### Wire, publication, and acceptance
+
+The target codec remains versioned, fixed little-endian, allocation-bounded,
+checksum-protected, and exactly bound to BSP, entity semantics, physics ABI,
+configuration schema, and map physics. It replaces seed/link/action and
+objective-route fields with cells, portals, capability kernels, affordances,
+landmarks, and mechanism references.
+
+Loading still decodes into an unpublished candidate. The candidate becomes
+visible only after structural, identity, mechanism, and semantic validation.
+Same-directory staged writes, revalidation, sync, and rename preserve atomic
+publication. Failed loading or publication does not replace the current
+artifact or expose mixed sidecar state.
+
+The frozen GNU C reader, Make C reader, Python reader, linter, semantic checker,
+and separate fresh-process cold load must independently agree. Artifact validity
+means faithful configuration-space coverage. Flag reachability is a gameplay
+query over the artifact, not the definition of whether the artifact is valid.
+`tools/rune-corpus-maps.txt` remains the 175-map conversion authority;
+`tools/topmaps.txt` remains an ordinary schedule.
 
 ## Sidecars and analysis data
 
 Binary sidecars carry optional map/RUNE-bound human movement, flag-live,
 escape, defense, and danger inputs. Their headers bind them to the exact RUNE
 identity and payload checksum. Runtime loaders reject mismatched identity or
-malformed payloads rather than adapting them to a different graph. `.snag`
+malformed payloads rather than adapting them to a different spatial model. The
+learning and SNAG schemas still require migration review. Retained `.snag`
 repairs use a separate strict text format and only add bounded field-cost
-surcharges; they do not alter RUNE graph records or proofs.
+surcharges; it must not alter configuration-space coverage or physical
+reachability.
 
 Tracked analysis JSON is not automatically runtime authority. A report used to
 accept the final build needs a capture receipt binding its demo/log, source,
