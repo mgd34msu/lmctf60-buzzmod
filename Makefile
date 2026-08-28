@@ -3825,6 +3825,9 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
 		tests/sg_bsp_world_test.c slipgate/sg_bsp_world.c \
+		tests/run_sg_host_collision_test.sh \
+		tests/sg_host_collision_test.c slipgate/sg_host_collision.c \
+		slipgate/sg_host_pmove.c \
 		tests/sg_rune_v2_codec_test.c slipgate/sg_rune_v2_codec.c \
 		tests/sg_rune_v2_artifact_loader_test.c \
 		slipgate/sg_rune_v2_artifact_loader.c \
@@ -3848,6 +3851,7 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 	$(CC) $$strict -Wcast-align -I. tests/sg_bsp_world_test.c \
 		slipgate/sg_bsp_world.c -lm -o "$$tmp/bsp"; \
 	"$$tmp/bsp"; \
+	sh tests/run_sg_host_collision_test.sh; \
 	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_test.c \
 		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
 		-o "$$tmp/codec"; \
