@@ -1,0 +1,1991 @@
+#include "sg_mechanism_capability.h"
+
+#include <limits.h>
+#include <math.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct sg_mechanism_edge_ref_s
+{
+	uint32_t edge;
+	uint32_t source;
+	uint32_t destination;
+	uint32_t kind;
+	uint32_t fanout;
+} sg_mechanism_edge_ref_t;
+
+typedef struct sg_mechanism_trace_ref_s
+{
+	uint32_t trace;
+	uint32_t mechanism;
+	uint32_t kind;
+	uint32_t controller;
+	uint32_t source_region;
+	uint32_t destination_region;
+	uint32_t source_phase;
+	uint32_t destination_phase;
+	uint32_t source_state;
+	uint32_t destination_state;
+	uint64_t identity;
+} sg_mechanism_trace_ref_t;
+
+typedef struct sg_mechanism_trace_index_s
+{
+	uint64_t identity;
+	uint32_t fact;
+} sg_mechanism_trace_index_t;
+
+typedef struct sg_mechanism_candidate_index_s
+{
+	uint64_t identity;
+	uint32_t candidate;
+	uint32_t trace;
+} sg_mechanism_candidate_index_t;
+
+typedef struct sg_mechanism_relation_ref_s
+{
+	uint32_t controller;
+	uint32_t mechanism;
+} sg_mechanism_relation_ref_t;
+
+typedef struct sg_mechanism_build_s
+{
+	const sg_mechanism_capability_source_t *source;
+	sg_mechanism_capability_set_t *output;
+	uint32_t topology_edge_capacity;
+	sg_mechanism_edge_ref_t *edge_refs;
+	uint32_t *edge_offsets;
+	uint32_t *queue;
+	uint32_t *distance;
+	uint32_t *ways;
+	uint32_t *propagated;
+	uint32_t *parent;
+	uint32_t *parent_edge;
+	uint32_t *path;
+	sg_mechanism_capability_error_t error;
+} sg_mechanism_build_t;
+
+static void SetError(sg_mechanism_build_t *build,
+	sg_mechanism_capability_error_code_t code, uint32_t source_index)
+{
+	if (build->error.code == SG_MECHANISM_CAPABILITY_ERROR_NONE)
+	{
+		build->error.code = code;
+		build->error.source_index = source_index;
+	}
+}
+
+static int AllocationFits(size_t count, size_t element_size)
+{
+	return element_size != 0U && count <= SIZE_MAX / element_size;
+}
+
+static int Finite3(const sg_rune_vec3_t *value)
+{
+	return value && isfinite(value->value[0]) && isfinite(value->value[1]) &&
+		isfinite(value->value[2]);
+}
+
+static int HullEqual(const sg_rune_hull_profile_t *left,
+	const sg_rune_hull_profile_t *right)
+{
+	return memcmp(left, right, sizeof(*left)) == 0;
+}
+
+static int PhysicsEqual(const sg_rune_physics_parameters_t *left,
+	const sg_rune_physics_parameters_t *right)
+{
+	return memcmp(left, right, sizeof(*left)) == 0;
+}
+
+static int IdentityEqual(const sg_rune_model_identity_t *left,
+	const sg_rune_model_identity_t *right)
+{
+	return left && right && left->bsp_content_id == right->bsp_content_id &&
+		left->entity_semantics_id == right->entity_semantics_id &&
+		left->physics_abi_id == right->physics_abi_id &&
+		left->source_set_identity == right->source_set_identity &&
+		left->schema_id == right->schema_id &&
+		left->producer_identity == right->producer_identity &&
+		HullEqual(&left->standing_hull, &right->standing_hull) &&
+		HullEqual(&left->crouching_hull, &right->crouching_hull) &&
+		PhysicsEqual(&left->physics, &right->physics);
+}
+
+static int HullValid(const sg_rune_hull_profile_t *hull)
+{
+	uint32_t axis;
+
+	if (!hull || !isfinite(hull->mins.value[0]) ||
+		!isfinite(hull->mins.value[1]) || !isfinite(hull->mins.value[2]) ||
+		!isfinite(hull->maxs.value[0]) || !isfinite(hull->maxs.value[1]) ||
+		!isfinite(hull->maxs.value[2]))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (hull->mins.value[axis] >= hull->maxs.value[axis])
+			return 0;
+	return 1;
+}
+
+static int IdentityValid(const sg_rune_model_identity_t *identity)
+{
+	const sg_rune_physics_parameters_t *physics;
+
+	if (!identity || identity->bsp_content_id == 0U ||
+		identity->entity_semantics_id == 0U || identity->physics_abi_id == 0U ||
+		identity->source_set_identity == 0U ||
+		identity->source_set_identity == UINT64_MAX || identity->schema_id == 0U ||
+		identity->producer_identity == 0U ||
+		!HullValid(&identity->standing_hull) ||
+		!HullValid(&identity->crouching_hull))
+		return 0;
+	physics = &identity->physics;
+	return isfinite(physics->gravity) && physics->gravity >= 0.0f &&
+		isfinite(physics->ground_acceleration) &&
+		physics->ground_acceleration >= 0.0f &&
+		isfinite(physics->air_acceleration) &&
+		physics->air_acceleration >= 0.0f &&
+		isfinite(physics->water_acceleration) &&
+		physics->water_acceleration >= 0.0f &&
+		isfinite(physics->hook_acceleration) &&
+		physics->hook_acceleration >= 0.0f &&
+		isfinite(physics->external_acceleration) &&
+		physics->external_acceleration >= 0.0f &&
+		isfinite(physics->water_drag) && physics->water_drag >= 0.0f &&
+		isfinite(physics->max_velocity) && physics->max_velocity > 0.0f &&
+		physics->gravity <= (float)SHRT_MAX &&
+		truncf(physics->gravity) == physics->gravity &&
+		physics->frame_ms != 0U && physics->substep_ms != 0U &&
+		physics->substep_ms <= UCHAR_MAX &&
+		physics->substep_ms <= physics->frame_ms &&
+		physics->frame_ms % physics->substep_ms == 0U;
+}
+
+static int StableIdEqual(const sg_rune_stable_id_t *left,
+	const sg_rune_stable_id_t *right)
+{
+	return left->source_set_identity == right->source_set_identity &&
+		left->high == right->high && left->low == right->low;
+}
+
+static int PointInRegion(const sg_configuration_semantics_t *semantics,
+	uint32_t region_index, const sg_rune_vec3_t *point)
+{
+	const sg_configuration_semantic_region_t *region =
+		&semantics->regions[region_index];
+	uint32_t face;
+
+	if (!Finite3(point))
+		return 0;
+	for (face = region->first_face;
+		face < region->first_face + region->face_count; face++)
+	{
+		const sg_configuration_semantic_face_t *plane =
+			&semantics->faces[face];
+		double dot = (double)point->value[0] * plane->normal[0] +
+			(double)point->value[1] * plane->normal[1] +
+			(double)point->value[2] * plane->normal[2];
+
+		if (dot > (double)plane->distance)
+			return 0;
+	}
+	return 1;
+}
+
+static int EdgeRefCompare(const void *left_value, const void *right_value)
+{
+	const sg_mechanism_edge_ref_t *left = left_value;
+	const sg_mechanism_edge_ref_t *right = right_value;
+
+#define COMPARE_FIELD(field) \
+	do { if (left->field != right->field) \
+		return left->field < right->field ? -1 : 1; } while (0)
+	COMPARE_FIELD(source);
+	COMPARE_FIELD(kind);
+	COMPARE_FIELD(fanout);
+	COMPARE_FIELD(destination);
+	COMPARE_FIELD(edge);
+#undef COMPARE_FIELD
+	return 0;
+}
+
+static int TraceRefCompare(const void *left_value, const void *right_value)
+{
+	const sg_mechanism_trace_ref_t *left = left_value;
+	const sg_mechanism_trace_ref_t *right = right_value;
+
+#define COMPARE_FIELD(field) \
+	do { if (left->field != right->field) \
+		return left->field < right->field ? -1 : 1; } while (0)
+	COMPARE_FIELD(mechanism);
+	COMPARE_FIELD(kind);
+	COMPARE_FIELD(controller);
+	COMPARE_FIELD(source_region);
+	COMPARE_FIELD(destination_region);
+	COMPARE_FIELD(source_phase);
+	COMPARE_FIELD(destination_phase);
+	COMPARE_FIELD(source_state);
+	COMPARE_FIELD(destination_state);
+	COMPARE_FIELD(identity);
+	COMPARE_FIELD(trace);
+#undef COMPARE_FIELD
+	return 0;
+}
+
+static int TraceIndexCompare(const void *left_value, const void *right_value)
+{
+	const sg_mechanism_trace_index_t *left = left_value;
+	const sg_mechanism_trace_index_t *right = right_value;
+
+	if (left->identity != right->identity)
+		return left->identity < right->identity ? -1 : 1;
+	if (left->fact != right->fact)
+		return left->fact < right->fact ? -1 : 1;
+	return 0;
+}
+
+static int CandidateIndexCompare(const void *left_value,
+	const void *right_value)
+{
+	const sg_mechanism_candidate_index_t *left = left_value;
+	const sg_mechanism_candidate_index_t *right = right_value;
+
+	if (left->identity != right->identity)
+		return left->identity < right->identity ? -1 : 1;
+	if (left->candidate != right->candidate)
+		return left->candidate < right->candidate ? -1 : 1;
+	return 0;
+}
+
+static int RelationRefCompare(const void *left_value,
+	const void *right_value)
+{
+	const sg_mechanism_relation_ref_t *left = left_value;
+	const sg_mechanism_relation_ref_t *right = right_value;
+
+	if (left->controller != right->controller)
+		return left->controller < right->controller ? -1 : 1;
+	if (left->mechanism != right->mechanism)
+		return left->mechanism < right->mechanism ? -1 : 1;
+	return 0;
+}
+
+static int EdgeTraversable(sg_mech_edge_kind_t kind)
+{
+	return kind == SG_MECH_EDGE_TARGET || kind == SG_MECH_EDGE_OWNER ||
+		kind == SG_MECH_EDGE_TEAM || kind == SG_MECH_EDGE_PATH_TARGET ||
+		kind == SG_MECH_EDGE_MOVE_TARGET ||
+		kind == SG_MECH_EDGE_TARGET_ENT;
+}
+
+static int BuildTopologyIndex(sg_mechanism_build_t *build)
+{
+	const sg_bsp_entity_semantics_t *semantics =
+		build->source->entity_semantics;
+	uint32_t entity_count = semantics->entity_count;
+	uint32_t edge_count = semantics->edge_count;
+	uint32_t edge;
+	uint32_t entity = 0U;
+
+	if (!AllocationFits(edge_count, sizeof(*build->edge_refs)) ||
+		!AllocationFits((size_t)entity_count + 1U,
+			sizeof(*build->edge_offsets)))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW, edge_count);
+		return 0;
+	}
+	build->edge_refs = edge_count ? calloc(edge_count,
+		sizeof(*build->edge_refs)) : NULL;
+	build->edge_offsets = calloc((size_t)entity_count + 1U,
+		sizeof(*build->edge_offsets));
+	if ((edge_count && !build->edge_refs) || !build->edge_offsets)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OUT_OF_MEMORY, 0U);
+		return 0;
+	}
+	for (edge = 0U; edge < edge_count; edge++)
+	{
+		const sg_bsp_entity_semantic_edge_t *record = &semantics->edges[edge];
+
+		if (record->source >= entity_count ||
+			record->destination >= entity_count ||
+			record->source == record->destination ||
+			record->kind < SG_MECH_EDGE_TARGET ||
+			record->kind > SG_MECH_EDGE_ROUTE_TARGET)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+				edge);
+			return 0;
+		}
+		build->edge_refs[edge].edge = edge;
+		build->edge_refs[edge].source = record->source;
+		build->edge_refs[edge].destination = record->destination;
+		build->edge_refs[edge].kind = (uint32_t)record->kind;
+		build->edge_refs[edge].fanout = record->fanout_ordinal;
+	}
+	if (edge_count)
+		qsort(build->edge_refs, edge_count, sizeof(*build->edge_refs),
+			EdgeRefCompare);
+	for (edge = 0U; edge < edge_count; edge++)
+	{
+		const sg_mechanism_edge_ref_t *record = &build->edge_refs[edge];
+
+		while (entity <= record->source)
+			build->edge_offsets[entity++] = edge;
+		if (edge != 0U)
+		{
+			const sg_mechanism_edge_ref_t *previous =
+				&build->edge_refs[edge - 1U];
+
+			if (previous->source == record->source &&
+				previous->kind == record->kind &&
+				previous->fanout == record->fanout)
+			{
+				SetError(build,
+					SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY,
+					record->edge);
+				return 0;
+			}
+		}
+	}
+	while (entity <= entity_count)
+		build->edge_offsets[entity++] = edge_count;
+	return 1;
+}
+
+static int MechanismId(const sg_mechanism_capability_source_t *source,
+	uint32_t entity_index, sg_rune_mechanism_id_t *id_out)
+{
+	const sg_bsp_entity_semantic_t *entity =
+		&source->entity_semantics->entities[entity_index];
+	sg_rune_canonical_order_input_t input;
+	sg_rune_order_key_t order;
+
+	memset(&input, 0, sizeof(input));
+	input.domain = SG_RUNE_ORDER_MECHANISM;
+	input.source_index = entity->source_entity_ordinal;
+	input.canonical_ordinal = entity->canonical_ordinal;
+	input.variant = entity->flags & SG_BSP_ENTITY_CANONICAL_MECHANISM_KIND
+		? (uint32_t)entity->mechanism_kind
+		: (uint32_t)entity->mechanism_role;
+	input.source_set_identity = source->entity_semantics->source_set_identity;
+	input.source_set_count = source->entity_semantics->entity_count;
+	input.source_set_complete = 1U;
+	if (SG_RuneModelOrderKeyDerive(&input, &order) !=
+		SG_RUNE_ORDER_DERIVATION_OK)
+		return 0;
+	id_out->value = SG_RuneModelStableIdFromOrderKey(&order);
+	return SG_RuneModelStableIdValid(&id_out->value);
+}
+
+static int SourceShapeValid(sg_mechanism_build_t *build)
+{
+	const sg_mechanism_capability_source_t *source = build->source;
+	const sg_rune_model_identity_t *identity;
+	uint32_t entity_count;
+	uint32_t edge_count;
+	uint32_t trace_count;
+	uint32_t index;
+
+	if (!source || !source->authority || !source->authority->world ||
+		!source->configuration || !source->configuration_semantics ||
+		!source->entity_semantics || !source->completeness ||
+		!source->phases || source->phase_count == 0U ||
+		!source->host_traces || !source->host_traces->candidates ||
+		!source->host_traces->traces ||
+		source->host_traces->candidate_count == 0U ||
+		source->host_traces->trace_count == 0U ||
+		source->host_traces->candidate_count !=
+			source->host_traces->trace_count ||
+		source->host_traces->candidate_verifier_identity == 0U ||
+		source->host_traces->trace_verifier_identity == 0U ||
+		source->host_traces->candidate_verifier_identity ==
+			source->host_traces->trace_verifier_identity)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_ARGUMENT, 0U);
+		return 0;
+	}
+	identity = &source->authority->identity;
+	if (!IdentityValid(identity) ||
+		!IdentityValid(&source->configuration->identity) ||
+		!IdentityValid(&source->configuration_semantics->identity) ||
+		!IdentityValid(&source->host_traces->identity) ||
+		!IdentityEqual(identity, &source->configuration->identity) ||
+		!IdentityEqual(identity, &source->configuration_semantics->identity) ||
+		!IdentityEqual(identity, &source->host_traces->identity) ||
+		identity->source_set_identity !=
+			source->entity_semantics->source_set_identity)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_IDENTITY_MISMATCH, 0U);
+		return 0;
+	}
+	entity_count = source->entity_semantics->entity_count;
+	edge_count = source->entity_semantics->edge_count;
+	trace_count = source->host_traces->trace_count;
+	if (entity_count == UINT32_MAX ||
+		!AllocationFits(edge_count, sizeof(*build->edge_refs)) ||
+		!AllocationFits((size_t)entity_count + 1U,
+			sizeof(*build->edge_offsets)) ||
+		!AllocationFits(entity_count, 2U * sizeof(*build->queue)) ||
+		!AllocationFits(entity_count, sizeof(*build->distance)) ||
+		!AllocationFits(entity_count, sizeof(*build->ways)) ||
+		!AllocationFits(entity_count, sizeof(*build->propagated)) ||
+		!AllocationFits(entity_count, sizeof(*build->parent)) ||
+		!AllocationFits(entity_count, sizeof(*build->parent_edge)) ||
+		!AllocationFits(entity_count, sizeof(*build->path)) ||
+		!AllocationFits(trace_count, sizeof(sg_mechanism_trace_ref_t)) ||
+		!AllocationFits(trace_count, sizeof(sg_mechanism_trace_index_t)) ||
+		!AllocationFits(trace_count, sizeof(sg_mechanism_candidate_index_t)) ||
+		!AllocationFits(trace_count, sizeof(sg_mechanism_relation_ref_t)) ||
+		!AllocationFits(trace_count, sizeof(*build->output->facts)) ||
+		!AllocationFits(trace_count,
+			sizeof(*build->output->topology_relations)) ||
+		!AllocationFits((size_t)entity_count + 1U,
+			sizeof(*build->output->mechanism_offsets)))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW, trace_count);
+		return 0;
+	}
+	if (source->completeness->code != SG_BSP_COMPLETENESS_OK ||
+		source->completeness->omitted_cells != 0U ||
+		source->completeness->invented_cells != 0U ||
+		source->completeness->omitted_portals != 0U ||
+		source->completeness->invented_portals != 0U ||
+		source->completeness->expected_cells !=
+			source->configuration->cell_count ||
+		source->completeness->represented_cells !=
+			source->configuration->cell_count ||
+		source->completeness->proved_cells !=
+			source->completeness->represented_cells ||
+		source->completeness->expected_portals !=
+			source->configuration->portal_count ||
+		source->completeness->represented_portals !=
+			source->configuration->portal_count ||
+		source->completeness->proved_portals !=
+			source->completeness->represented_portals)
+	{
+		SetError(build,
+			SG_MECHANISM_CAPABILITY_ERROR_INCOMPLETE_CONFIGURATION, 0U);
+		return 0;
+	}
+	if (source->entity_semantics->entity_count == 0U ||
+		!source->entity_semantics->entities ||
+		source->configuration->cell_count == 0U ||
+		!source->configuration->cells ||
+		(source->entity_semantics->edge_count != 0U &&
+		 !source->entity_semantics->edges) ||
+		source->configuration_semantics->region_count == 0U ||
+		!source->configuration_semantics->regions ||
+		!source->configuration_semantics->faces)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE, 0U);
+		return 0;
+	}
+	for (index = 0U;
+		index < source->configuration_semantics->region_count; index++)
+	{
+		const sg_configuration_semantic_region_t *region =
+			&source->configuration_semantics->regions[index];
+
+		if (region->cell >= source->configuration->cell_count ||
+			region->face_count < 4U ||
+			region->first_face >
+				source->configuration_semantics->face_count ||
+			region->face_count >
+				source->configuration_semantics->face_count -
+				region->first_face)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+				index);
+			return 0;
+		}
+	}
+	for (index = 0U;
+		index < source->configuration_semantics->face_count; index++)
+	{
+		const sg_configuration_semantic_face_t *face =
+			&source->configuration_semantics->faces[index];
+
+		if (!isfinite(face->normal[0]) || !isfinite(face->normal[1]) ||
+			!isfinite(face->normal[2]) || !isfinite(face->distance) ||
+			(face->normal[0] == 0.0f && face->normal[1] == 0.0f &&
+			 face->normal[2] == 0.0f))
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+				index);
+			return 0;
+		}
+	}
+	for (index = 0U; index < source->entity_semantics->entity_count; index++)
+	{
+		const sg_bsp_entity_semantic_t *entity =
+			&source->entity_semantics->entities[index];
+
+		if (entity->source_set_identity != identity->source_set_identity ||
+			entity->canonical_ordinal != index)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+				index);
+			return 0;
+		}
+	}
+	for (index = 0U; index < source->phase_count; index++)
+		if (!SG_RuneModelPhaseValid(&source->phases[index]) ||
+			source->phases[index].order.source_set_identity !=
+				identity->source_set_identity ||
+			(index != 0U && SG_RuneModelOrderKeyCompare(
+				&source->phases[index - 1U].order,
+				&source->phases[index].order) >= 0))
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_PHASE, index);
+			return 0;
+		}
+	return 1;
+}
+
+static int KindMatches(const sg_bsp_entity_semantic_t *entity,
+	sg_mechanism_capability_kind_t kind)
+{
+	if (kind == SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE)
+		return entity->mechanism_role == SG_MECH_NODE_AREAPORTAL;
+	if (!(entity->flags & SG_BSP_ENTITY_CANONICAL_MECHANISM_KIND))
+		return 0;
+	switch (kind)
+	{
+	case SG_MECHANISM_CAPABILITY_DOOR_CROSSING:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_DOOR;
+	case SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_BUTTON;
+	case SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_TRIGGER;
+	case SG_MECHANISM_CAPABILITY_DWELL:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_DOOR ||
+			entity->mechanism_kind == SG_RUNE_MECHANISM_BUTTON ||
+			entity->mechanism_kind == SG_RUNE_MECHANISM_TRIGGER ||
+			entity->mechanism_kind == SG_RUNE_MECHANISM_LIFT ||
+			entity->mechanism_kind == SG_RUNE_MECHANISM_TRAIN;
+	case SG_MECHANISM_CAPABILITY_LIFT_RIDE:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_LIFT;
+	case SG_MECHANISM_CAPABILITY_TRAIN_RIDE:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_TRAIN;
+	case SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_ROTATOR;
+	case SG_MECHANISM_CAPABILITY_PUSH:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_PUSH;
+	case SG_MECHANISM_CAPABILITY_TELEPORT:
+		return entity->mechanism_kind == SG_RUNE_MECHANISM_TELEPORT;
+	case SG_MECHANISM_CAPABILITY_RESET:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static int ActivationMatches(const sg_bsp_entity_semantic_t *controller,
+	sg_mechanism_activation_t activation)
+{
+	switch (activation)
+	{
+	case SG_MECHANISM_ACTIVATION_AUTOMATIC:
+		return (controller->flags & SG_BSP_ENTITY_AUTO_ACTIVATED) != 0U;
+	case SG_MECHANISM_ACTIVATION_TOUCH:
+		return (controller->flags & SG_BSP_ENTITY_TOUCH_ACTIVATED) != 0U;
+	case SG_MECHANISM_ACTIVATION_USE:
+		return (controller->flags & SG_BSP_ENTITY_USE_ACTIVATED) != 0U;
+	case SG_MECHANISM_ACTIVATION_DAMAGE:
+		return (controller->flags & SG_BSP_ENTITY_DAMAGE_ACTIVATED) != 0U;
+	case SG_MECHANISM_ACTIVATION_INVENTORY:
+		return (controller->flags & SG_BSP_ENTITY_INVENTORY_GATED) != 0U;
+	default:
+		return 0;
+	}
+}
+
+static int KindTraverses(sg_mechanism_capability_kind_t kind)
+{
+	return kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
+		kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
+		kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE ||
+		kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING ||
+		kind == SG_MECHANISM_CAPABILITY_PUSH ||
+		kind == SG_MECHANISM_CAPABILITY_TELEPORT;
+}
+
+static int KindConditional(sg_mechanism_capability_kind_t kind)
+{
+	return kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
+		kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING ||
+		kind == SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE;
+}
+
+static int TimingValid(const sg_mechanism_host_trace_t *trace)
+{
+	const float values[5] = { trace->delay_ms, trace->dwell_ms,
+		trace->travel_ms, trace->wait_ms, trace->reset_ms };
+	double total = 0.0;
+	uint32_t index;
+
+	for (index = 0U; index < 5U; index++)
+	{
+		if (!isfinite(values[index]) || values[index] < 0.0f)
+			return 0;
+		total += values[index];
+	}
+	if (total > (double)UINT32_MAX ||
+		truncf(trace->delay_ms) != trace->delay_ms ||
+		truncf(trace->dwell_ms) != trace->dwell_ms)
+		return 0;
+	if ((trace->kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
+		 trace->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
+		 trace->kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE ||
+		 trace->kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING) &&
+		trace->travel_ms <= 0.0f)
+		return 0;
+	return 1;
+}
+
+static int TransitionEvidenceValid(
+	const sg_host_collision_transition_t *transition,
+	const sg_rune_vec3_t *destination, int expect_clear)
+{
+	uint32_t axis;
+
+	if (!transition || !destination || !transition->source_valid ||
+		!transition->destination_valid ||
+		!isfinite(transition->sweep.fraction) ||
+		transition->sweep.fraction < 0.0f ||
+		transition->sweep.fraction > 1.0f)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (!isfinite(transition->sweep.end[axis]))
+			return 0;
+	if (expect_clear)
+	{
+		if (!transition->clear || transition->sweep.startsolid ||
+			transition->sweep.allsolid ||
+			transition->sweep.fraction != 1.0f)
+			return 0;
+		for (axis = 0U; axis < 3U; axis++)
+			if (transition->sweep.end[axis] != destination->value[axis])
+				return 0;
+		return 1;
+	}
+	return !transition->clear && (transition->sweep.startsolid ||
+		transition->sweep.allsolid || transition->sweep.fraction < 1.0f);
+}
+
+static int CandidateValid(const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_capability_candidate_t *candidate)
+{
+	return candidate->candidate_identity != 0U &&
+		candidate->source_set_identity ==
+			source->authority->identity.source_set_identity &&
+		candidate->controller_entity < source->entity_semantics->entity_count &&
+		candidate->mechanism_entity < source->entity_semantics->entity_count &&
+		candidate->source_region <
+			source->configuration_semantics->region_count &&
+		candidate->destination_region <
+			source->configuration_semantics->region_count &&
+		candidate->source_phase < source->phase_count &&
+		candidate->destination_phase < source->phase_count &&
+		candidate->kind >= 0 &&
+		candidate->kind < SG_MECHANISM_CAPABILITY_KIND_COUNT &&
+		candidate->source_state >= 0 &&
+		candidate->source_state < SG_MECHANISM_STATE_COUNT &&
+		candidate->destination_state >= 0 &&
+		candidate->destination_state < SG_MECHANISM_STATE_COUNT &&
+		candidate->activation >= 0 &&
+		candidate->activation < SG_MECHANISM_ACTIVATION_COUNT &&
+		candidate->recovery >= 0 &&
+		candidate->recovery < SG_MECHANISM_RECOVERY_COUNT;
+}
+
+static int CandidateMatchesTrace(
+	const sg_mechanism_capability_candidate_t *candidate,
+	const sg_mechanism_host_trace_t *trace)
+{
+	return candidate->candidate_identity == trace->candidate_identity &&
+		candidate->source_set_identity == trace->source_set_identity &&
+		candidate->controller_entity == trace->controller_entity &&
+		candidate->mechanism_entity == trace->mechanism_entity &&
+		candidate->source_region == trace->source_region &&
+		candidate->destination_region == trace->destination_region &&
+		candidate->source_phase == trace->source_phase &&
+		candidate->destination_phase == trace->destination_phase &&
+		candidate->kind == trace->kind &&
+		candidate->source_state == trace->source_state &&
+		candidate->destination_state == trace->destination_state &&
+		candidate->activation == trace->activation &&
+		candidate->recovery == trace->recovery;
+}
+
+static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
+	const sg_mechanism_capability_candidate_t *candidate)
+{
+	const sg_mechanism_capability_source_t *source = build->source;
+	const sg_mechanism_host_trace_t *trace =
+		&source->host_traces->traces[trace_index];
+	const sg_bsp_entity_semantic_t *controller;
+	const sg_bsp_entity_semantic_t *mechanism;
+	sg_rune_mechanism_id_t mechanism_id;
+	int source_relative;
+	int destination_relative;
+
+	if (!candidate || !CandidateMatchesTrace(candidate, trace) ||
+		trace->candidate_identity == 0U || trace->trace_identity == 0U ||
+		trace->source_set_identity != source->authority->identity.source_set_identity ||
+		trace->bsp_content_id != source->authority->identity.bsp_content_id ||
+		trace->physics_abi_id != source->authority->identity.physics_abi_id ||
+		trace->controller_entity >= source->entity_semantics->entity_count ||
+		trace->mechanism_entity >= source->entity_semantics->entity_count ||
+		trace->source_region >= source->configuration_semantics->region_count ||
+		trace->destination_region >=
+			source->configuration_semantics->region_count ||
+		trace->source_phase >= source->phase_count ||
+		trace->destination_phase >= source->phase_count ||
+		trace->kind < 0 || trace->kind >= SG_MECHANISM_CAPABILITY_KIND_COUNT ||
+		trace->source_state < 0 || trace->source_state >= SG_MECHANISM_STATE_COUNT ||
+		trace->destination_state < 0 ||
+		trace->destination_state >= SG_MECHANISM_STATE_COUNT ||
+		trace->activation < 0 || trace->activation >= SG_MECHANISM_ACTIVATION_COUNT ||
+		trace->recovery < 0 || trace->recovery >= SG_MECHANISM_RECOVERY_COUNT ||
+		(trace->flags &
+			~(sg_mechanism_host_trace_flags_t)
+				SG_MECHANISM_HOST_TRACE_FLAGS_KNOWN) != 0U ||
+		!Finite3(&trace->entry_witness) || !Finite3(&trace->exit_witness) ||
+		!Finite3(&trace->observed_displacement) ||
+		!Finite3(&trace->observed_velocity))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+			trace_index);
+		return 0;
+	}
+	controller = &source->entity_semantics->entities[trace->controller_entity];
+	mechanism = &source->entity_semantics->entities[trace->mechanism_entity];
+	if ((controller->flags & SG_BSP_ENTITY_HAS_MECHANISM) == 0U ||
+		(mechanism->flags & SG_BSP_ENTITY_HAS_MECHANISM) == 0U ||
+		!Finite3(&mechanism->move_direction) ||
+		!Finite3(&mechanism->move_origin) ||
+		!Finite3(&mechanism->move_angles) ||
+		!KindMatches(mechanism, trace->kind) ||
+		!ActivationMatches(controller, trace->activation))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+			trace_index);
+		return 0;
+	}
+	if (!PointInRegion(source->configuration_semantics, trace->source_region,
+			&trace->entry_witness) ||
+		!PointInRegion(source->configuration_semantics,
+			trace->destination_region, &trace->exit_witness))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			trace_index);
+		return 0;
+	}
+	if (!TimingValid(trace))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
+		return 0;
+	}
+	if ((controller->flags & SG_BSP_ENTITY_DELAY_DEFINED) &&
+		controller->delay_ms != trace->delay_ms)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
+		return 0;
+	}
+	if ((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) &&
+		controller->dwell_ms >= 0.0f && controller->dwell_ms != trace->dwell_ms)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
+		return 0;
+	}
+	if (KindTraverses(trace->kind))
+	{
+		if (!TransitionEvidenceValid(&trace->active_transition,
+			&trace->exit_witness, 1))
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+				trace_index);
+			return 0;
+		}
+	}
+	if (KindConditional(trace->kind) &&
+		!TransitionEvidenceValid(&trace->inactive_transition,
+			&trace->exit_witness, 0))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			trace_index);
+		return 0;
+	}
+	if (!MechanismId(source, trace->mechanism_entity, &mechanism_id))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+			trace_index);
+		return 0;
+	}
+	source_relative = source->phases[trace->source_phase].reference_frame ==
+		SG_RUNE_FRAME_MOVER_RELATIVE;
+	destination_relative =
+		source->phases[trace->destination_phase].reference_frame ==
+		SG_RUNE_FRAME_MOVER_RELATIVE;
+	if (source_relative && !StableIdEqual(
+			&source->phases[trace->source_phase].mover.value,
+			&mechanism_id.value))
+		source_relative = -1;
+	if (destination_relative && !StableIdEqual(
+			&source->phases[trace->destination_phase].mover.value,
+			&mechanism_id.value))
+		destination_relative = -1;
+	if (source_relative < 0 || destination_relative < 0 ||
+		((trace->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
+		  trace->kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE) &&
+		 (!source_relative || !destination_relative)))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_PHASE,
+			trace_index);
+		return 0;
+	}
+	return 1;
+}
+
+static int AllocateTraversal(sg_mechanism_build_t *build)
+{
+	uint32_t count = build->source->entity_semantics->entity_count;
+
+	if (!AllocationFits(count, 2U * sizeof(*build->queue)) ||
+		!AllocationFits(count, sizeof(*build->distance)) ||
+		!AllocationFits(count, sizeof(*build->ways)) ||
+		!AllocationFits(count, sizeof(*build->propagated)) ||
+		!AllocationFits(count, sizeof(*build->parent)) ||
+		!AllocationFits(count, sizeof(*build->parent_edge)) ||
+		!AllocationFits(count, sizeof(*build->path)))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW, count);
+		return 0;
+	}
+	build->queue = malloc((size_t)count * 2U * sizeof(*build->queue));
+	build->distance = malloc((size_t)count * sizeof(*build->distance));
+	build->ways = malloc((size_t)count * sizeof(*build->ways));
+	build->propagated = malloc((size_t)count * sizeof(*build->propagated));
+	build->parent = malloc((size_t)count * sizeof(*build->parent));
+	build->parent_edge = malloc((size_t)count * sizeof(*build->parent_edge));
+	build->path = malloc((size_t)count * sizeof(*build->path));
+	if (!build->queue || !build->distance || !build->ways ||
+		!build->propagated || !build->parent || !build->parent_edge ||
+		!build->path)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OUT_OF_MEMORY, 0U);
+		return 0;
+	}
+	return 1;
+}
+
+static int PrepareTopologyPaths(sg_mechanism_build_t *build,
+	uint32_t controller)
+{
+	uint32_t entity_count = build->source->entity_semantics->entity_count;
+	uint32_t edge_count = build->source->entity_semantics->edge_count;
+	size_t head = 0U;
+	size_t tail = 0U;
+	size_t queue_capacity = (size_t)entity_count * 2U;
+	uint32_t entity;
+
+	if (!build->edge_offsets || (edge_count != 0U && !build->edge_refs) ||
+		!build->queue || !build->distance || !build->ways ||
+		!build->propagated || !build->parent || !build->parent_edge ||
+		controller >= entity_count)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+			controller);
+		return 0;
+	}
+	for (entity = 0U; entity < entity_count; entity++)
+	{
+		build->distance[entity] = UINT32_MAX;
+		build->ways[entity] = 0U;
+		build->propagated[entity] = 0U;
+		build->parent[entity] = UINT32_MAX;
+		build->parent_edge[entity] = UINT32_MAX;
+	}
+	build->distance[controller] = 0U;
+	build->ways[controller] = 1U;
+	build->queue[tail++] = controller;
+	while (head < tail)
+	{
+		uint32_t current = build->queue[head++];
+		uint32_t delta = build->ways[current] - build->propagated[current];
+		uint32_t edge;
+
+		build->propagated[current] = build->ways[current];
+		if (delta == 0U)
+			continue;
+		for (edge = build->edge_offsets[current];
+			edge < build->edge_offsets[current + 1U]; edge++)
+		{
+			const sg_mechanism_edge_ref_t *reference;
+			uint32_t destination;
+			uint32_t next_ways;
+
+			if (edge >= edge_count)
+			{
+				SetError(build,
+					SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY, edge);
+				return 0;
+			}
+			reference = &build->edge_refs[edge];
+			destination = reference->destination;
+			if (!EdgeTraversable((sg_mech_edge_kind_t)reference->kind))
+				continue;
+			build->output->topology_edge_visits++;
+			next_ways = build->ways[destination] + delta;
+			if (next_ways > 1U)
+				next_ways = 2U;
+			if (next_ways != build->ways[destination])
+			{
+				if (build->ways[destination] == 0U)
+				{
+					build->distance[destination] =
+						build->distance[current] + 1U;
+					build->parent[destination] = current;
+					build->parent_edge[destination] = reference->edge;
+				}
+				build->ways[destination] = next_ways;
+				if (tail >= queue_capacity)
+				{
+					SetError(build,
+						SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW, destination);
+					return 0;
+				}
+				build->queue[tail++] = destination;
+			}
+		}
+	}
+	return 1;
+}
+
+static int AppendPreparedTopologyPath(sg_mechanism_build_t *build,
+	uint32_t controller, uint32_t mechanism, uint32_t *first_out,
+	uint32_t *count_out)
+{
+	uint32_t entity_count = build->source->entity_semantics->entity_count;
+	uint32_t entity;
+	uint32_t path_count = 0U;
+
+	*first_out = build->output->topology_edge_count;
+	*count_out = 0U;
+	if (controller == mechanism)
+		return 1;
+	if (build->distance[mechanism] == UINT32_MAX)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+			mechanism);
+		return 0;
+	}
+	if (build->ways[mechanism] != 1U)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY,
+			mechanism);
+		return 0;
+	}
+	entity = mechanism;
+	while (entity != controller)
+	{
+		if (path_count >= entity_count ||
+			build->parent[entity] == UINT32_MAX ||
+			build->parent_edge[entity] == UINT32_MAX)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+				mechanism);
+			return 0;
+		}
+		build->path[path_count++] = build->parent_edge[entity];
+		entity = build->parent[entity];
+	}
+	if (build->output->topology_edge_count > build->topology_edge_capacity ||
+		path_count > build->topology_edge_capacity -
+		build->output->topology_edge_count)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW,
+			mechanism);
+		return 0;
+	}
+	while (path_count != 0U)
+		build->output->topology_edges[
+			build->output->topology_edge_count++] = build->path[--path_count];
+	*count_out = build->output->topology_edge_count - *first_out;
+	return 1;
+}
+
+static int PreparedTopologyPathCount(sg_mechanism_build_t *build,
+	uint32_t controller, uint32_t mechanism, uint32_t *count_out)
+{
+	if (controller == mechanism)
+	{
+		*count_out = 0U;
+		return 1;
+	}
+	if (build->distance[mechanism] == UINT32_MAX)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+			mechanism);
+		return 0;
+	}
+	if (build->ways[mechanism] != 1U)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY,
+			mechanism);
+		return 0;
+	}
+	*count_out = build->distance[mechanism];
+	return 1;
+}
+
+static void ExactInterval(sg_rune_interval_t *interval, float value)
+{
+	interval->min_value = value;
+	interval->max_value = value;
+}
+
+static void FillParameters(const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_host_trace_t *trace,
+	sg_rune_kernel_parameters_t *parameters)
+{
+	float speed = sqrtf(trace->observed_velocity.value[0] *
+		trace->observed_velocity.value[0] +
+		trace->observed_velocity.value[1] *
+		trace->observed_velocity.value[1] +
+		trace->observed_velocity.value[2] *
+		trace->observed_velocity.value[2]);
+
+	memset(parameters, 0, sizeof(*parameters));
+	ExactInterval(&parameters->displacement.x,
+		trace->observed_displacement.value[0]);
+	ExactInterval(&parameters->displacement.y,
+		trace->observed_displacement.value[1]);
+	ExactInterval(&parameters->displacement.z,
+		trace->observed_displacement.value[2]);
+	ExactInterval(&parameters->duration_ms,
+		trace->delay_ms + trace->dwell_ms + trace->travel_ms);
+	ExactInterval(&parameters->speed, speed);
+	parameters->gravity = source->authority->identity.physics.gravity;
+	parameters->physics_abi_id = source->authority->identity.physics_abi_id;
+	parameters->fixed_latency_ms = (uint32_t)trace->delay_ms;
+	parameters->dwell_ms = (uint32_t)trace->dwell_ms;
+}
+
+static sg_mechanism_capability_flags_t FactFlags(
+	const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_host_trace_t *trace)
+{
+	sg_mechanism_capability_flags_t flags =
+		SG_MECHANISM_CAPABILITY_HOST_PROVEN;
+
+	if (KindConditional(trace->kind))
+		flags |= SG_MECHANISM_CAPABILITY_CONDITIONAL;
+	if (source->phases[trace->source_phase].reference_frame ==
+			SG_RUNE_FRAME_MOVER_RELATIVE ||
+		source->phases[trace->destination_phase].reference_frame ==
+			SG_RUNE_FRAME_MOVER_RELATIVE)
+		flags |= SG_MECHANISM_CAPABILITY_MOVER_RELATIVE;
+	if (trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT)
+		flags |= SG_MECHANISM_CAPABILITY_ONE_SHOT;
+	if (trace->reset_ms > 0.0f || trace->recovery != SG_MECHANISM_RECOVERY_NONE)
+		flags |= SG_MECHANISM_CAPABILITY_RESETS;
+	return flags;
+}
+
+static const sg_mechanism_topology_relation_t *FindTopologyRelation(
+	const sg_mechanism_capability_set_t *set, uint32_t controller,
+	uint32_t mechanism)
+{
+	uint32_t low = 0U;
+	uint32_t high = set->topology_relation_count;
+
+	while (low < high)
+	{
+		uint32_t middle = low + (high - low) / 2U;
+		const sg_mechanism_topology_relation_t *relation =
+			&set->topology_relations[middle];
+
+		if (relation->controller_entity < controller ||
+			(relation->controller_entity == controller &&
+			 relation->mechanism_entity < mechanism))
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	if (low >= set->topology_relation_count ||
+		set->topology_relations[low].controller_entity != controller ||
+		set->topology_relations[low].mechanism_entity != mechanism)
+		return NULL;
+	return &set->topology_relations[low];
+}
+
+static int BuildFacts(sg_mechanism_build_t *build)
+{
+	const sg_mechanism_host_trace_catalog_t *catalog =
+		build->source->host_traces;
+	sg_mechanism_trace_ref_t *refs = NULL;
+	sg_mechanism_trace_index_t *trace_index = NULL;
+	sg_mechanism_candidate_index_t *candidates = NULL;
+	sg_mechanism_candidate_index_t *trace_candidates = NULL;
+	sg_mechanism_relation_ref_t *relation_refs = NULL;
+	uint32_t fact;
+	uint32_t entity = 0U;
+
+	refs = calloc(catalog->trace_count, sizeof(*refs));
+	trace_index = calloc(catalog->trace_count, sizeof(*trace_index));
+	candidates = calloc(catalog->candidate_count, sizeof(*candidates));
+	trace_candidates = calloc(catalog->trace_count,
+		sizeof(*trace_candidates));
+	relation_refs = calloc(catalog->trace_count, sizeof(*relation_refs));
+	build->output->facts = calloc(catalog->trace_count,
+		sizeof(*build->output->facts));
+	build->output->topology_relations = calloc(catalog->trace_count,
+		sizeof(*build->output->topology_relations));
+	build->output->mechanism_offsets = calloc(
+		(size_t)build->source->entity_semantics->entity_count + 1U,
+		sizeof(*build->output->mechanism_offsets));
+	build->output->facts_by_trace = calloc(catalog->trace_count,
+		sizeof(*build->output->facts_by_trace));
+	if (!refs || !trace_index || !candidates || !trace_candidates ||
+		!relation_refs || !build->output->facts ||
+		!build->output->topology_relations ||
+		!build->output->mechanism_offsets || !build->output->facts_by_trace)
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OUT_OF_MEMORY, 0U);
+		goto failure;
+	}
+	for (fact = 0U; fact < catalog->trace_count; fact++)
+	{
+		const sg_mechanism_capability_candidate_t *candidate =
+			&catalog->candidates[fact];
+		const sg_mechanism_host_trace_t *trace = &catalog->traces[fact];
+
+		if (!CandidateValid(build->source, candidate))
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+				fact);
+			goto failure;
+		}
+		candidates[fact].identity = candidate->candidate_identity;
+		candidates[fact].candidate = fact;
+		trace_candidates[fact].identity = trace->candidate_identity;
+		trace_candidates[fact].trace = fact;
+	}
+	qsort(candidates, catalog->candidate_count, sizeof(*candidates),
+		CandidateIndexCompare);
+	qsort(trace_candidates, catalog->trace_count, sizeof(*trace_candidates),
+		CandidateIndexCompare);
+	for (fact = 0U; fact < catalog->trace_count; fact++)
+	{
+		uint32_t candidate_index = candidates[fact].candidate;
+		uint32_t trace_number = trace_candidates[fact].trace;
+		const sg_mechanism_host_trace_t *trace =
+			&catalog->traces[trace_number];
+
+		if ((fact != 0U && candidates[fact - 1U].identity ==
+				candidates[fact].identity) ||
+			(fact != 0U && trace_candidates[fact - 1U].identity ==
+				trace_candidates[fact].identity) ||
+			candidates[fact].identity != trace_candidates[fact].identity ||
+			!TraceValid(build, trace_number,
+				&catalog->candidates[candidate_index]))
+		{
+			if (build->error.code == SG_MECHANISM_CAPABILITY_ERROR_NONE)
+				SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+					trace_number);
+			goto failure;
+		}
+		refs[fact].trace = trace_number;
+		refs[fact].mechanism = trace->mechanism_entity;
+		refs[fact].kind = (uint32_t)trace->kind;
+		refs[fact].controller = trace->controller_entity;
+		refs[fact].source_region = trace->source_region;
+		refs[fact].destination_region = trace->destination_region;
+		refs[fact].source_phase = trace->source_phase;
+		refs[fact].destination_phase = trace->destination_phase;
+		refs[fact].source_state = (uint32_t)trace->source_state;
+		refs[fact].destination_state = (uint32_t)trace->destination_state;
+		refs[fact].identity = trace->trace_identity;
+		relation_refs[fact].controller = trace->controller_entity;
+		relation_refs[fact].mechanism = trace->mechanism_entity;
+	}
+	qsort(relation_refs, catalog->trace_count, sizeof(*relation_refs),
+		RelationRefCompare);
+	for (fact = 0U; fact < catalog->trace_count; fact++)
+	{
+		const sg_mechanism_relation_ref_t *reference = &relation_refs[fact];
+		sg_mechanism_topology_relation_t *relation;
+
+		if (fact != 0U && relation_refs[fact - 1U].controller ==
+			reference->controller && relation_refs[fact - 1U].mechanism ==
+			reference->mechanism)
+			continue;
+		if (fact == 0U || relation_refs[fact - 1U].controller !=
+			reference->controller)
+		{
+			if (!PrepareTopologyPaths(build, reference->controller))
+				goto failure;
+		}
+		relation = &build->output->topology_relations[
+			build->output->topology_relation_count++];
+		relation->controller_entity = reference->controller;
+		relation->mechanism_entity = reference->mechanism;
+		relation->first_edge = build->topology_edge_capacity;
+		if (!PreparedTopologyPathCount(build, reference->controller,
+			reference->mechanism, &relation->edge_count))
+			goto failure;
+		if (relation->edge_count > UINT32_MAX -
+			build->topology_edge_capacity)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW, fact);
+			goto failure;
+		}
+		build->topology_edge_capacity += relation->edge_count;
+	}
+	if (!AllocationFits(build->topology_edge_capacity,
+		sizeof(*build->output->topology_edges)))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW,
+			build->topology_edge_capacity);
+		goto failure;
+	}
+	if (build->topology_edge_capacity != 0U)
+	{
+		build->output->topology_edges = calloc(build->topology_edge_capacity,
+			sizeof(*build->output->topology_edges));
+		if (!build->output->topology_edges)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OUT_OF_MEMORY, 0U);
+			goto failure;
+		}
+	}
+	for (fact = 0U; fact < build->output->topology_relation_count; fact++)
+	{
+		const sg_mechanism_topology_relation_t *relation =
+			&build->output->topology_relations[fact];
+		uint32_t first;
+		uint32_t count;
+
+		if (fact == 0U || build->output->topology_relations[fact - 1U].
+			controller_entity != relation->controller_entity)
+		{
+			if (!PrepareTopologyPaths(build, relation->controller_entity))
+				goto failure;
+		}
+		if (!AppendPreparedTopologyPath(build, relation->controller_entity,
+			relation->mechanism_entity, &first, &count) ||
+			first != relation->first_edge || count != relation->edge_count)
+		{
+			if (build->error.code == SG_MECHANISM_CAPABILITY_ERROR_NONE)
+				SetError(build,
+					SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY, fact);
+			goto failure;
+		}
+	}
+	qsort(refs, catalog->trace_count, sizeof(*refs), TraceRefCompare);
+	for (fact = 0U; fact < catalog->trace_count; fact++)
+	{
+		const sg_mechanism_host_trace_t *trace =
+			&catalog->traces[refs[fact].trace];
+		const sg_mechanism_topology_relation_t *relation =
+			FindTopologyRelation(build->output, trace->controller_entity,
+				trace->mechanism_entity);
+		sg_mechanism_capability_fact_t *record = &build->output->facts[fact];
+
+		if (!relation)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+				refs[fact].trace);
+			goto failure;
+		}
+		while (entity <= trace->mechanism_entity)
+			build->output->mechanism_offsets[entity++] = fact;
+		record->order = fact;
+		record->trace_identity = trace->trace_identity;
+		record->controller_entity = trace->controller_entity;
+		record->mechanism_entity = trace->mechanism_entity;
+		record->source_region = trace->source_region;
+		record->destination_region = trace->destination_region;
+		record->source_phase = trace->source_phase;
+		record->destination_phase = trace->destination_phase;
+		record->first_topology_edge = relation->first_edge;
+		record->topology_edge_count = relation->edge_count;
+		record->kind = trace->kind;
+		record->source_state = trace->source_state;
+		record->destination_state = trace->destination_state;
+		record->activation = trace->activation;
+		record->recovery = trace->recovery;
+		record->entry_witness = trace->entry_witness;
+		record->exit_witness = trace->exit_witness;
+		record->observed_displacement = trace->observed_displacement;
+		record->observed_velocity = trace->observed_velocity;
+		record->mechanism_direction = build->source->entity_semantics->
+			entities[trace->mechanism_entity].move_direction;
+		record->mechanism_origin = build->source->entity_semantics->
+			entities[trace->mechanism_entity].move_origin;
+		record->mechanism_angles = build->source->entity_semantics->
+			entities[trace->mechanism_entity].move_angles;
+		record->delay_ms = trace->delay_ms;
+		record->dwell_ms = trace->dwell_ms;
+		record->travel_ms = trace->travel_ms;
+		record->wait_ms = trace->wait_ms;
+		record->reset_ms = trace->reset_ms;
+		record->flags = FactFlags(build->source, trace);
+		FillParameters(build->source, trace, &record->parameters);
+		if (!MechanismId(build->source, trace->controller_entity,
+				&record->controller_id) ||
+			!MechanismId(build->source, trace->mechanism_entity,
+				&record->mechanism_id))
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+				refs[fact].trace);
+			goto failure;
+		}
+		trace_index[fact].identity = trace->trace_identity;
+		trace_index[fact].fact = fact;
+	}
+	while (entity <= build->source->entity_semantics->entity_count)
+		build->output->mechanism_offsets[entity++] = catalog->trace_count;
+	qsort(trace_index, catalog->trace_count, sizeof(*trace_index),
+		TraceIndexCompare);
+	for (fact = 0U; fact < catalog->trace_count; fact++)
+	{
+		if (fact != 0U && trace_index[fact - 1U].identity ==
+			trace_index[fact].identity)
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+				trace_index[fact].fact);
+			goto failure;
+		}
+		build->output->facts_by_trace[fact] = trace_index[fact].fact;
+	}
+	build->output->fact_count = catalog->trace_count;
+	build->output->mechanism_offset_count =
+		build->source->entity_semantics->entity_count + 1U;
+	free(refs);
+	free(trace_index);
+	free(candidates);
+	free(trace_candidates);
+	free(relation_refs);
+	return 1;
+
+failure:
+	free(refs);
+	free(trace_index);
+	free(candidates);
+	free(trace_candidates);
+	free(relation_refs);
+	return 0;
+}
+
+static void BuildScratchDestroy(sg_mechanism_build_t *build)
+{
+	free(build->edge_refs);
+	free(build->edge_offsets);
+	free(build->queue);
+	free(build->distance);
+	free(build->ways);
+	free(build->propagated);
+	free(build->parent);
+	free(build->parent_edge);
+	free(build->path);
+}
+
+int SG_MechanismCapabilityBuild(
+	const sg_mechanism_capability_source_t *source,
+	sg_mechanism_capability_set_t **capabilities_out,
+	sg_mechanism_capability_error_t *error_out)
+{
+	sg_mechanism_build_t build;
+	int success;
+
+	if (capabilities_out)
+		*capabilities_out = NULL;
+	if (error_out)
+	{
+		error_out->code = SG_MECHANISM_CAPABILITY_ERROR_NONE;
+		error_out->source_index = SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	}
+	memset(&build, 0, sizeof(build));
+	build.source = source;
+	build.error.source_index = SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	if (!capabilities_out || !SourceShapeValid(&build))
+	{
+		if (error_out)
+			*error_out = build.error;
+		return 0;
+	}
+	build.output = calloc(1U, sizeof(*build.output));
+	if (!build.output)
+	{
+		SetError(&build, SG_MECHANISM_CAPABILITY_ERROR_OUT_OF_MEMORY, 0U);
+		if (error_out)
+			*error_out = build.error;
+		return 0;
+	}
+	build.output->identity = source->authority->identity;
+	build.output->candidate_verifier_identity =
+		source->host_traces->candidate_verifier_identity;
+	build.output->trace_verifier_identity =
+		source->host_traces->trace_verifier_identity;
+	success = BuildTopologyIndex(&build) && AllocateTraversal(&build) &&
+		BuildFacts(&build);
+	BuildScratchDestroy(&build);
+	if (!success)
+	{
+		SG_MechanismCapabilityDestroy(build.output);
+		if (error_out)
+			*error_out = build.error;
+		return 0;
+	}
+	*capabilities_out = build.output;
+	return 1;
+}
+
+static uint32_t FindFactByTrace(const sg_mechanism_capability_set_t *set,
+	uint64_t identity, uint64_t *comparisons)
+{
+	uint32_t low = 0U;
+	uint32_t high = set->fact_count;
+
+	while (low < high)
+	{
+		uint32_t middle = low + (high - low) / 2U;
+		uint32_t fact = set->facts_by_trace[middle];
+		uint64_t found;
+
+		(*comparisons)++;
+		if (fact >= set->fact_count)
+			return SG_MECHANISM_CAPABILITY_INDEX_NONE;
+		found = set->facts[fact].trace_identity;
+		if (found < identity)
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	if (low >= set->fact_count)
+		return SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	(*comparisons)++;
+	if (set->facts_by_trace[low] >= set->fact_count ||
+		set->facts[set->facts_by_trace[low]].trace_identity != identity)
+		return SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	return set->facts_by_trace[low];
+}
+
+static int CatalogEvidenceAuthentic(
+	const sg_mechanism_capability_source_t *source)
+{
+	const sg_mechanism_host_trace_catalog_t *catalog;
+	sg_mechanism_candidate_index_t *candidates = NULL;
+	sg_mechanism_candidate_index_t *traces = NULL;
+	sg_mechanism_build_t build;
+	uint32_t index;
+	int valid = 0;
+
+	memset(&build, 0, sizeof(build));
+	build.source = source;
+	build.error.source_index = SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	if (!SourceShapeValid(&build))
+		return 0;
+	catalog = source->host_traces;
+	candidates = calloc(catalog->candidate_count, sizeof(*candidates));
+	traces = calloc(catalog->trace_count, sizeof(*traces));
+	if (!candidates || !traces)
+		goto done;
+	for (index = 0U; index < catalog->trace_count; index++)
+	{
+		if (!CandidateValid(source, &catalog->candidates[index]))
+			goto done;
+		candidates[index].identity =
+			catalog->candidates[index].candidate_identity;
+		candidates[index].candidate = index;
+		traces[index].identity = catalog->traces[index].candidate_identity;
+		traces[index].trace = index;
+	}
+	qsort(candidates, catalog->candidate_count, sizeof(*candidates),
+		CandidateIndexCompare);
+	qsort(traces, catalog->trace_count, sizeof(*traces),
+		CandidateIndexCompare);
+	for (index = 0U; index < catalog->trace_count; index++)
+	{
+		if ((index != 0U && candidates[index - 1U].identity ==
+				candidates[index].identity) ||
+			(index != 0U && traces[index - 1U].identity ==
+				traces[index].identity) ||
+			candidates[index].identity != traces[index].identity ||
+			!TraceValid(&build, traces[index].trace,
+				&catalog->candidates[candidates[index].candidate]))
+			goto done;
+	}
+	valid = 1;
+
+done:
+	free(candidates);
+	free(traces);
+	return valid;
+}
+
+static int TopologyAuthentic(
+	const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_capability_set_t *capabilities)
+{
+	sg_mechanism_capability_set_t metrics;
+	sg_mechanism_build_t build;
+	uint32_t relation_index;
+	int valid = 0;
+
+	memset(&metrics, 0, sizeof(metrics));
+	memset(&build, 0, sizeof(build));
+	build.source = source;
+	build.output = &metrics;
+	if (!BuildTopologyIndex(&build) || !AllocateTraversal(&build))
+		goto done;
+	for (relation_index = 0U;
+		relation_index < capabilities->topology_relation_count;
+		relation_index++)
+	{
+		const sg_mechanism_topology_relation_t *relation =
+			&capabilities->topology_relations[relation_index];
+		uint32_t current;
+		uint32_t remaining;
+
+		if (relation_index == 0U ||
+			capabilities->topology_relations[relation_index - 1U].
+				controller_entity != relation->controller_entity)
+		{
+			if (!PrepareTopologyPaths(&build, relation->controller_entity))
+				goto done;
+		}
+		if (relation->controller_entity == relation->mechanism_entity)
+		{
+			if (relation->edge_count != 0U)
+				goto done;
+			continue;
+		}
+		if (build.distance[relation->mechanism_entity] !=
+			relation->edge_count || build.ways[relation->mechanism_entity] != 1U)
+			goto done;
+		current = relation->mechanism_entity;
+		remaining = relation->edge_count;
+		while (current != relation->controller_entity)
+		{
+			if (remaining == 0U || build.parent[current] == UINT32_MAX ||
+				build.parent_edge[current] == UINT32_MAX)
+				goto done;
+			remaining--;
+			if (capabilities->topology_edges[relation->first_edge +
+				remaining] != build.parent_edge[current])
+				goto done;
+			current = build.parent[current];
+		}
+		if (remaining != 0U)
+			goto done;
+	}
+	valid = 1;
+
+done:
+	BuildScratchDestroy(&build);
+	return valid;
+}
+
+static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_capability_fact_t *fact,
+	const sg_mechanism_host_trace_t *trace)
+{
+	sg_rune_mechanism_id_t controller_id;
+	sg_rune_mechanism_id_t mechanism_id;
+	sg_rune_kernel_parameters_t parameters;
+
+	if (!MechanismId(source, trace->controller_entity, &controller_id) ||
+		!MechanismId(source, trace->mechanism_entity, &mechanism_id))
+		return 0;
+	FillParameters(source, trace, &parameters);
+	return fact->trace_identity == trace->trace_identity &&
+		StableIdEqual(&fact->controller_id.value, &controller_id.value) &&
+		StableIdEqual(&fact->mechanism_id.value, &mechanism_id.value) &&
+		fact->controller_entity == trace->controller_entity &&
+		fact->mechanism_entity == trace->mechanism_entity &&
+		fact->source_region == trace->source_region &&
+		fact->destination_region == trace->destination_region &&
+		fact->source_phase == trace->source_phase &&
+		fact->destination_phase == trace->destination_phase &&
+		fact->kind == trace->kind && fact->source_state == trace->source_state &&
+		fact->destination_state == trace->destination_state &&
+		fact->activation == trace->activation &&
+		fact->recovery == trace->recovery &&
+		memcmp(&fact->entry_witness, &trace->entry_witness,
+			sizeof(fact->entry_witness)) == 0 &&
+		memcmp(&fact->exit_witness, &trace->exit_witness,
+			sizeof(fact->exit_witness)) == 0 &&
+		memcmp(&fact->observed_displacement, &trace->observed_displacement,
+			sizeof(fact->observed_displacement)) == 0 &&
+		memcmp(&fact->observed_velocity, &trace->observed_velocity,
+			sizeof(fact->observed_velocity)) == 0 &&
+		memcmp(&fact->mechanism_direction,
+			&source->entity_semantics->entities[trace->mechanism_entity].
+				move_direction, sizeof(fact->mechanism_direction)) == 0 &&
+		memcmp(&fact->mechanism_origin,
+			&source->entity_semantics->entities[trace->mechanism_entity].
+				move_origin, sizeof(fact->mechanism_origin)) == 0 &&
+		memcmp(&fact->mechanism_angles,
+			&source->entity_semantics->entities[trace->mechanism_entity].
+				move_angles, sizeof(fact->mechanism_angles)) == 0 &&
+		fact->delay_ms == trace->delay_ms &&
+		fact->dwell_ms == trace->dwell_ms &&
+		fact->travel_ms == trace->travel_ms &&
+		fact->wait_ms == trace->wait_ms && fact->reset_ms == trace->reset_ms &&
+		fact->flags == FactFlags(source, trace) &&
+		memcmp(&fact->parameters, &parameters, sizeof(parameters)) == 0;
+}
+
+static int FactsOrdered(const sg_mechanism_capability_fact_t *left,
+	const sg_mechanism_capability_fact_t *right)
+{
+	sg_mechanism_trace_ref_t left_ref;
+	sg_mechanism_trace_ref_t right_ref;
+
+	memset(&left_ref, 0, sizeof(left_ref));
+	memset(&right_ref, 0, sizeof(right_ref));
+	left_ref.mechanism = left->mechanism_entity;
+	left_ref.kind = (uint32_t)left->kind;
+	left_ref.controller = left->controller_entity;
+	left_ref.source_region = left->source_region;
+	left_ref.destination_region = left->destination_region;
+	left_ref.source_phase = left->source_phase;
+	left_ref.destination_phase = left->destination_phase;
+	left_ref.source_state = (uint32_t)left->source_state;
+	left_ref.destination_state = (uint32_t)left->destination_state;
+	left_ref.identity = left->trace_identity;
+	right_ref.mechanism = right->mechanism_entity;
+	right_ref.kind = (uint32_t)right->kind;
+	right_ref.controller = right->controller_entity;
+	right_ref.source_region = right->source_region;
+	right_ref.destination_region = right->destination_region;
+	right_ref.source_phase = right->source_phase;
+	right_ref.destination_phase = right->destination_phase;
+	right_ref.source_state = (uint32_t)right->source_state;
+	right_ref.destination_state = (uint32_t)right->destination_state;
+	right_ref.identity = right->trace_identity;
+	return TraceRefCompare(&left_ref, &right_ref) < 0;
+}
+
+static int AuditTopologyRelation(
+	const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_topology_relation_t *relation)
+{
+	uint32_t current = relation->controller_entity;
+	uint32_t offset;
+
+	if ((current == relation->mechanism_entity) !=
+		(relation->edge_count == 0U))
+		return 0;
+	for (offset = 0U; offset < relation->edge_count; offset++)
+	{
+		uint32_t edge_index = capabilities->topology_edges[
+			relation->first_edge + offset];
+		const sg_bsp_entity_semantic_edge_t *edge;
+
+		if (edge_index >= source->entity_semantics->edge_count)
+			return 0;
+		edge = &source->entity_semantics->edges[edge_index];
+		if (edge->source != current || !EdgeTraversable(edge->kind))
+			return 0;
+		current = edge->destination;
+	}
+	return current == relation->mechanism_entity;
+}
+
+int SG_MechanismCapabilityAudit(
+	const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_capability_set_t *capabilities,
+	sg_mechanism_capability_audit_result_t *result_out)
+{
+	sg_mechanism_capability_audit_result_t result;
+	uint8_t *seen = NULL;
+	uint8_t *relation_seen = NULL;
+	uint32_t trace;
+	uint32_t cursor = 0U;
+	uint32_t expected_topology_first = 0U;
+
+	memset(&result, 0, sizeof(result));
+	result.code = SG_MECHANISM_CAPABILITY_AUDIT_INVALID_ARGUMENT;
+	result.record = SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	if (!result_out)
+		return 0;
+	*result_out = result;
+	if (!source || !capabilities || !source->authority ||
+		!source->entity_semantics || !source->host_traces ||
+		!IdentityEqual(&source->authority->identity, &capabilities->identity) ||
+		capabilities->candidate_verifier_identity !=
+			source->host_traces->candidate_verifier_identity ||
+		capabilities->trace_verifier_identity !=
+			source->host_traces->trace_verifier_identity)
+	{
+		result.code = source && capabilities && source->authority
+			? SG_MECHANISM_CAPABILITY_AUDIT_IDENTITY_MISMATCH
+			: SG_MECHANISM_CAPABILITY_AUDIT_INVALID_ARGUMENT;
+		*result_out = result;
+		return 0;
+	}
+	if (!IdentityValid(&capabilities->identity))
+	{
+		result.code = SG_MECHANISM_CAPABILITY_AUDIT_IDENTITY_MISMATCH;
+		*result_out = result;
+		return 0;
+	}
+	if (!CatalogEvidenceAuthentic(source))
+	{
+		result.code = SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT;
+		*result_out = result;
+		return 0;
+	}
+	if (capabilities->fact_count != source->host_traces->trace_count)
+	{
+		result.code = capabilities->fact_count < source->host_traces->trace_count
+			? SG_MECHANISM_CAPABILITY_AUDIT_OMITTED_FACT
+			: SG_MECHANISM_CAPABILITY_AUDIT_INVENTED_FACT;
+		result.omitted_facts = source->host_traces->trace_count >
+			capabilities->fact_count ? source->host_traces->trace_count -
+			capabilities->fact_count : 0U;
+		result.invented_facts = capabilities->fact_count >
+			source->host_traces->trace_count ? capabilities->fact_count -
+			source->host_traces->trace_count : 0U;
+		*result_out = result;
+		return 0;
+	}
+	if ((capabilities->fact_count && (!capabilities->facts ||
+		 !capabilities->facts_by_trace)) ||
+		(capabilities->topology_relation_count &&
+		 !capabilities->topology_relations) ||
+		capabilities->topology_relation_count > capabilities->fact_count ||
+		capabilities->mechanism_offset_count !=
+			source->entity_semantics->entity_count + 1U ||
+		!capabilities->mechanism_offsets ||
+		(capabilities->topology_edge_count && !capabilities->topology_edges))
+	{
+		result.code = SG_MECHANISM_CAPABILITY_AUDIT_INVALID_INDEX;
+		*result_out = result;
+		return 0;
+	}
+	for (trace = 0U; trace < capabilities->fact_count; trace++)
+	{
+		const sg_mechanism_capability_fact_t *fact =
+			&capabilities->facts[trace];
+
+		if (fact->order != trace ||
+			fact->mechanism_entity >= source->entity_semantics->entity_count ||
+			(trace != 0U && !FactsOrdered(&capabilities->facts[trace - 1U],
+				fact)))
+		{
+			result.code =
+				SG_MECHANISM_CAPABILITY_AUDIT_NONDETERMINISTIC_ORDER;
+			result.record = trace;
+			*result_out = result;
+			return 0;
+		}
+	}
+	for (trace = 0U;
+		trace <= source->entity_semantics->entity_count; trace++)
+	{
+		while (cursor < capabilities->fact_count &&
+			capabilities->facts[cursor].mechanism_entity < trace)
+			cursor++;
+		if (capabilities->mechanism_offsets[trace] != cursor)
+		{
+			result.code = SG_MECHANISM_CAPABILITY_AUDIT_INVALID_INDEX;
+			result.record = trace;
+			*result_out = result;
+			return 0;
+		}
+	}
+	seen = calloc(capabilities->fact_count, sizeof(*seen));
+	relation_seen = calloc(capabilities->topology_relation_count,
+		sizeof(*relation_seen));
+	if (!seen || !relation_seen)
+	{
+		free(seen);
+		free(relation_seen);
+		*result_out = result;
+		return 0;
+	}
+	for (trace = 0U; trace < capabilities->topology_relation_count; trace++)
+	{
+		const sg_mechanism_topology_relation_t *relation =
+			&capabilities->topology_relations[trace];
+
+		if ((trace != 0U &&
+			 (capabilities->topology_relations[trace - 1U].controller_entity >
+				relation->controller_entity ||
+			  (capabilities->topology_relations[trace - 1U].controller_entity ==
+				relation->controller_entity &&
+			   capabilities->topology_relations[trace - 1U].mechanism_entity >=
+				relation->mechanism_entity))) ||
+			relation->controller_entity >=
+				source->entity_semantics->entity_count ||
+			relation->mechanism_entity >=
+				source->entity_semantics->entity_count ||
+			relation->first_edge != expected_topology_first ||
+			relation->first_edge > capabilities->topology_edge_count ||
+			relation->edge_count > capabilities->topology_edge_count -
+				relation->first_edge ||
+			!AuditTopologyRelation(source, capabilities, relation))
+		{
+			result.code =
+				SG_MECHANISM_CAPABILITY_AUDIT_TOPOLOGY_DISAGREEMENT;
+			result.record = trace;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+		expected_topology_first += relation->edge_count;
+	}
+	if (expected_topology_first != capabilities->topology_edge_count)
+	{
+		result.code = SG_MECHANISM_CAPABILITY_AUDIT_TOPOLOGY_DISAGREEMENT;
+		result.record = expected_topology_first;
+		free(seen);
+		free(relation_seen);
+		*result_out = result;
+		return 0;
+	}
+	if (!TopologyAuthentic(source, capabilities))
+	{
+		result.code = SG_MECHANISM_CAPABILITY_AUDIT_TOPOLOGY_DISAGREEMENT;
+		free(seen);
+		free(relation_seen);
+		*result_out = result;
+		return 0;
+	}
+	for (trace = 0U; trace < source->host_traces->trace_count; trace++)
+	{
+		const sg_mechanism_host_trace_t *host =
+			&source->host_traces->traces[trace];
+		uint32_t fact_index = FindFactByTrace(capabilities,
+			host->trace_identity, &result.lookup_comparisons);
+		const sg_mechanism_capability_fact_t *fact;
+		const sg_mechanism_topology_relation_t *relation;
+
+		if (fact_index == SG_MECHANISM_CAPABILITY_INDEX_NONE)
+		{
+			result.code = SG_MECHANISM_CAPABILITY_AUDIT_OMITTED_FACT;
+			result.record = trace;
+			result.omitted_facts = 1U;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+		if (seen[fact_index])
+		{
+			result.code = SG_MECHANISM_CAPABILITY_AUDIT_INVENTED_FACT;
+			result.record = fact_index;
+			result.invented_facts = 1U;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+		seen[fact_index] = 1U;
+		fact = &capabilities->facts[fact_index];
+		if (fact->order != fact_index || !FactMatchesTrace(source, fact, host))
+		{
+			result.code = fact->order != fact_index
+				? SG_MECHANISM_CAPABILITY_AUDIT_NONDETERMINISTIC_ORDER
+				: SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT;
+			result.record = fact_index;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+		relation = FindTopologyRelation(capabilities,
+			fact->controller_entity, fact->mechanism_entity);
+		if (!relation || fact->first_topology_edge != relation->first_edge ||
+			fact->topology_edge_count != relation->edge_count)
+		{
+			result.code = SG_MECHANISM_CAPABILITY_AUDIT_TOPOLOGY_DISAGREEMENT;
+			result.record = fact_index;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+		relation_seen[(uint32_t)(relation - capabilities->topology_relations)] = 1U;
+		result.proved_facts++;
+	}
+	for (trace = 0U; trace < capabilities->fact_count; trace++)
+		if (!seen[trace])
+		{
+			result.code = SG_MECHANISM_CAPABILITY_AUDIT_INVENTED_FACT;
+			result.record = trace;
+			result.invented_facts = 1U;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+	for (trace = 0U; trace < capabilities->topology_relation_count; trace++)
+		if (!relation_seen[trace])
+		{
+			result.code =
+				SG_MECHANISM_CAPABILITY_AUDIT_TOPOLOGY_DISAGREEMENT;
+			result.record = trace;
+			free(seen);
+			free(relation_seen);
+			*result_out = result;
+			return 0;
+		}
+	free(seen);
+	free(relation_seen);
+	result.code = SG_MECHANISM_CAPABILITY_AUDIT_OK;
+	*result_out = result;
+	return 1;
+}
+
+void SG_MechanismCapabilityDestroy(
+	sg_mechanism_capability_set_t *capabilities)
+{
+	if (!capabilities)
+		return;
+	free(capabilities->facts);
+	free(capabilities->topology_edges);
+	free(capabilities->topology_relations);
+	free(capabilities->mechanism_offsets);
+	free(capabilities->facts_by_trace);
+	free(capabilities);
+}
+
+const char *SG_MechanismCapabilityErrorString(
+	sg_mechanism_capability_error_code_t code)
+{
+	static const char *const names[] = {
+		"none", "invalid argument", "identity mismatch",
+		"incomplete configuration", "invalid source", "invalid topology",
+		"ambiguous topology", "invalid phase", "host disagreement",
+		"timing", "overflow", "out of memory"
+	};
+
+	if (code < 0 || (size_t)code >= sizeof(names) / sizeof(names[0]))
+		return "unknown";
+	return names[code];
+}
+
+const char *SG_MechanismCapabilityAuditCodeString(
+	sg_mechanism_capability_audit_code_t code)
+{
+	static const char *const names[] = {
+		"ok", "invalid argument", "identity mismatch", "invalid index",
+		"omitted fact", "invented fact", "fact disagreement",
+		"topology disagreement", "nondeterministic order"
+	};
+
+	if (code < 0 || (size_t)code >= sizeof(names) / sizeof(names[0]))
+		return "unknown";
+	return names[code];
+}
