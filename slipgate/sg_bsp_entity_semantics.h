@@ -1,0 +1,169 @@
+#ifndef SG_BSP_ENTITY_SEMANTICS_H
+#define SG_BSP_ENTITY_SEMANTICS_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "sg_bsp_world.h"
+#include "sg_rune_mechanism_catalog.h"
+#include "sg_rune_model.h"
+
+#define SG_BSP_ENTITY_STRING_NONE UINT32_MAX
+#define SG_BSP_ENTITY_MODEL_NONE UINT32_MAX
+
+typedef enum sg_bsp_entity_semantics_error_code_e
+{
+	SG_BSP_ENTITY_SEMANTICS_ERROR_NONE = 0,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_ARGUMENT,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_MALFORMED_TEXT,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_DUPLICATE_KEY,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_VALUE,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_MODEL,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_DUPLICATE_MODEL,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_AMBIGUOUS_IDENTITY,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY
+} sg_bsp_entity_semantics_error_code_t;
+
+typedef struct sg_bsp_entity_semantics_error_s
+{
+	sg_bsp_entity_semantics_error_code_t code;
+	uint32_t entity_ordinal;
+	uint32_t detail_ordinal;
+} sg_bsp_entity_semantics_error_t;
+
+typedef uint32_t sg_bsp_entity_semantic_flags_t;
+enum
+{
+	SG_BSP_ENTITY_HAS_LANDMARK = UINT32_C(1) << 0,
+	SG_BSP_ENTITY_HAS_MECHANISM = UINT32_C(1) << 1,
+	SG_BSP_ENTITY_HAS_BRUSH_MODEL = UINT32_C(1) << 2,
+	SG_BSP_ENTITY_HAS_BOUNDS = UINT32_C(1) << 3,
+	SG_BSP_ENTITY_FLAG_RED = UINT32_C(1) << 4,
+	SG_BSP_ENTITY_FLAG_BLUE = UINT32_C(1) << 5,
+	SG_BSP_ENTITY_TOUCH_ACTIVATED = UINT32_C(1) << 6,
+	SG_BSP_ENTITY_USE_ACTIVATED = UINT32_C(1) << 7,
+	SG_BSP_ENTITY_DWELL_DEFINED = UINT32_C(1) << 8,
+	SG_BSP_ENTITY_DELAY_DEFINED = UINT32_C(1) << 9,
+	SG_BSP_ENTITY_ANGLES_DEFINED = UINT32_C(1) << 10,
+	SG_BSP_ENTITY_LIP_DEFINED = UINT32_C(1) << 11,
+	SG_BSP_ENTITY_HEIGHT_DEFINED = UINT32_C(1) << 12,
+	SG_BSP_ENTITY_DISTANCE_DEFINED = UINT32_C(1) << 13,
+	SG_BSP_ENTITY_CANONICAL_MECHANISM_KIND = UINT32_C(1) << 14,
+	SG_BSP_ENTITY_GRAVITY_DEFINED = UINT32_C(1) << 15,
+	SG_BSP_ENTITY_DAMAGE_DEFINED = UINT32_C(1) << 16,
+	SG_BSP_ENTITY_COUNT_DEFINED = UINT32_C(1) << 17,
+	SG_BSP_ENTITY_HEALTH_DEFINED = UINT32_C(1) << 18,
+	SG_BSP_ENTITY_RANDOM_DEFINED = UINT32_C(1) << 19,
+	SG_BSP_ENTITY_MOVE_ORIGIN_DEFINED = UINT32_C(1) << 20,
+	SG_BSP_ENTITY_MOVE_ANGLES_DEFINED = UINT32_C(1) << 21,
+	SG_BSP_ENTITY_STYLE_DEFINED = UINT32_C(1) << 22,
+	SG_BSP_ENTITY_SPEED_DEFINED = UINT32_C(1) << 23,
+	SG_BSP_ENTITY_ACCELERATION_DEFINED = UINT32_C(1) << 24,
+	SG_BSP_ENTITY_DECELERATION_DEFINED = UINT32_C(1) << 25,
+	SG_BSP_ENTITY_SPAWNFLAGS_DEFINED = UINT32_C(1) << 26,
+	SG_BSP_ENTITY_PAUSE_DEFINED = UINT32_C(1) << 27,
+	SG_BSP_ENTITY_AUTO_ACTIVATED = UINT32_C(1) << 28,
+	SG_BSP_ENTITY_DAMAGE_ACTIVATED = UINT32_C(1) << 29,
+	SG_BSP_ENTITY_INVENTORY_GATED = UINT32_C(1) << 30
+};
+#define SG_BSP_ENTITY_INITIALLY_ACTIVE (UINT32_C(1) << 31)
+
+typedef uint32_t sg_bsp_world_semantic_flags_t;
+enum
+{
+	SG_BSP_WORLD_GRAVITY_EXPLICIT = UINT32_C(1) << 0
+};
+
+typedef enum sg_bsp_entity_physics_kind_e
+{
+	SG_BSP_ENTITY_PHYSICS_NONE = 0,
+	SG_BSP_ENTITY_PHYSICS_PUSH,
+	SG_BSP_ENTITY_PHYSICS_MONSTER_JUMP,
+	SG_BSP_ENTITY_PHYSICS_GRAVITY,
+	SG_BSP_ENTITY_PHYSICS_CONVEYOR,
+	SG_BSP_ENTITY_PHYSICS_DAMAGE_VOLUME,
+	SG_BSP_ENTITY_PHYSICS_DAMAGE_BEAM
+} sg_bsp_entity_physics_kind_t;
+
+typedef struct sg_bsp_world_entity_semantics_s
+{
+	uint64_t source_set_identity;
+	uint32_t source_entity_ordinal;
+	sg_bsp_world_semantic_flags_t flags;
+	float gravity;
+} sg_bsp_world_entity_semantics_t;
+
+typedef struct sg_bsp_entity_semantic_s
+{
+	uint64_t source_set_identity;
+	uint32_t source_entity_ordinal;
+	uint32_t canonical_ordinal;
+	uint32_t classname;
+	uint32_t targetname;
+	uint32_t required_item;
+	uint32_t spawned_classname;
+	uint32_t destination_map;
+	uint32_t bsp_model;
+	sg_bsp_entity_semantic_flags_t flags;
+	sg_rune_landmark_kind_t landmark_kind;
+	sg_rune_mechanism_kind_t mechanism_kind;
+	sg_mech_node_kind_t mechanism_role;
+	sg_bsp_entity_physics_kind_t physics_kind;
+	sg_rune_vec3_t origin;
+	sg_rune_vec3_t angles;
+	sg_rune_vec3_t move_direction;
+	sg_rune_vec3_t move_origin;
+	sg_rune_vec3_t move_angles;
+	sg_rune_bounds_t bounds;
+	float delay_ms;
+	float dwell_ms;
+	float pause_ms;
+	float speed;
+	float acceleration;
+	float deceleration;
+	float lip;
+	float height;
+	float distance;
+	float gravity;
+	float random;
+	int32_t damage;
+	int32_t count;
+	int32_t health;
+	int32_t style;
+	uint32_t spawnflags;
+} sg_bsp_entity_semantic_t;
+
+typedef struct sg_bsp_entity_semantic_edge_s
+{
+	uint32_t source;
+	uint32_t destination;
+	sg_mech_edge_kind_t kind;
+	uint32_t name;
+	uint32_t fanout_ordinal;
+} sg_bsp_entity_semantic_edge_t;
+
+typedef struct sg_bsp_entity_semantics_s
+{
+	uint64_t source_set_identity;
+	sg_bsp_world_entity_semantics_t world;
+	sg_bsp_entity_semantic_t *entities;
+	uint32_t entity_count;
+	sg_bsp_entity_semantic_edge_t *edges;
+	uint32_t edge_count;
+	char *strings;
+	uint32_t string_bytes;
+} sg_bsp_entity_semantics_t;
+
+int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
+	uint64_t source_set_identity, sg_bsp_entity_semantics_t **semantics_out,
+	sg_bsp_entity_semantics_error_t *error_out);
+void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics);
+const char *SG_BspEntitySemanticsString(
+	const sg_bsp_entity_semantics_t *semantics, uint32_t offset);
+int SG_BspEntitySemanticsCountsRepresentable(size_t entity_count,
+	size_t edge_count, size_t string_bytes);
+const char *SG_BspEntitySemanticsErrorString(
+	sg_bsp_entity_semantics_error_code_t code);
+
+#endif
