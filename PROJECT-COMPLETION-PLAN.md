@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | The static-model contract is frozen. Artifact-wire reconciliation is open because the first codec could not represent the canonical model losslessly. Runtime-field reconciliation is open because the first solver omitted phase transitions and exact-pose terminal costs. BSP, artifact, and runtime foundations are in progress in isolated lanes. |
+| Architectural state | The static-model contract is frozen. BSP, artifact, and runtime-field foundations exist in isolated lanes but remain outside `slipgate` while correction passes close host-parity, transactional-decode, capability-domain, terminal-physics, and API-version findings. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` and zero `.snag` files. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Every one remains review-required. |
