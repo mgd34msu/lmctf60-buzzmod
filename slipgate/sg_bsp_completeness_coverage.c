@@ -242,11 +242,20 @@ static int PointInRegion(const sg_bsp_proof_region_t *region,
 	{
 		const sg_bsp_proof_halfspace_t *halfspace =
 			&region->halfspaces[constraint];
-		float distance = SG_BspProofDot(point, halfspace->normal) -
-			halfspace->distance;
+		sg_configuration_plane_t plane = { 0 };
+		double normal[3], plane_distance;
+		double distance;
 
-		if ((halfspace->open && distance >= 0.0f) ||
-			(!halfspace->open && distance > 0.0001f))
+		memcpy(plane.normal, halfspace->normal, sizeof(plane.normal));
+		plane.distance = halfspace->distance;
+		if (!SG_BspProofOrientedPlane(&plane, normal, &plane_distance))
+			return 0;
+		distance = (double)point[0] * normal[0] +
+			(double)point[1] * normal[1] +
+			(double)point[2] * normal[2] - plane_distance;
+
+		if ((halfspace->open && distance >= 0.0) ||
+			(!halfspace->open && distance > 0.0001))
 			return 0;
 	}
 	return 1;

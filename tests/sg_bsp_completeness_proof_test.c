@@ -531,6 +531,7 @@ static void TestCellCoveragePlaneScaleInvariance(void)
 	{
 		uint32_t cell;
 		uint32_t face = UINT32_MAX;
+		uint32_t target_cell = UINT32_MAX;
 
 		for (cell = 0; cell < space->cell_count && face == UINT32_MAX; cell++)
 		{
@@ -548,16 +549,15 @@ static void TestCellCoveragePlaneScaleInvariance(void)
 					plane->source_index == 0U && plane->reversed == 0U)
 				{
 					face = candidate;
+					target_cell = cell;
 					break;
 				}
 			}
 		}
-		CHECK(cell <= space->cell_count);
 		CHECK(face != UINT32_MAX);
-		if (cell <= space->cell_count && face != UINT32_MAX)
+		CHECK(target_cell != UINT32_MAX);
+		if (face != UINT32_MAX && target_cell != UINT32_MAX)
 		{
-			uint32_t target_cell = cell - 1U;
-
 			space->cells[target_cell].interior_witness.value[0] = 4096.0f;
 			for (scale = 0; scale < sizeof(scales) / sizeof(scales[0]); scale++)
 			{
