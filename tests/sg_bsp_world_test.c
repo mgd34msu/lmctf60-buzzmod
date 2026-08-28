@@ -534,6 +534,33 @@ static void TestTreeOwnershipFailures(void)
 	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_FACES);
 }
 
+static void TestWorldModelFaceMetadataHostSemantics(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+	uint8_t *models = fixture.bytes + fixture.offsets[SG_BSP_LUMP_MODELS];
+
+	WriteU32(models + 40U, UINT32_MAX);
+	WriteU32(models + 44U, 1U);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+	{
+		CHECK(world->models[0].first_face == 0U);
+		CHECK(world->models[0].face_count == 0U);
+	}
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+
+	fixture = ValidFixture();
+	models = fixture.bytes + fixture.offsets[SG_BSP_LUMP_MODELS];
+	WriteU32(models + 48U + 40U, UINT32_MAX);
+	WriteU32(models + 48U + 44U, 1U);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE,
+		SG_BSP_LUMP_MODELS);
+}
+
 static void TestOrphanNodesMatchHostScope(void)
 {
 	fixture_t fixture = ValidFixture();
@@ -901,6 +928,7 @@ int main(int argc, char **argv)
 	TestHeaderFailures();
 	TestReferenceFailures();
 	TestTreeOwnershipFailures();
+	TestWorldModelFaceMetadataHostSemantics();
 	TestOrphanNodesMatchHostScope();
 	TestGeometryAndVisibilityFailures();
 	TestMapWithoutVisibility();

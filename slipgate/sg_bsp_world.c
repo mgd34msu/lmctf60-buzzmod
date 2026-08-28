@@ -627,8 +627,12 @@ static int BspLoadModels(sg_bsp_world_t *world,
 			world->models[index].origin.value[axis] = origin;
 		}
 		world->models[index].headnode = BspReadI32(record + 36U);
-		world->models[index].first_face = (uint32_t)BspReadI32(record + 40U);
-		world->models[index].face_count = (uint32_t)BspReadI32(record + 44U);
+		/* The host owns world faces through model 0's node tree. */
+		if (index != 0U)
+		{
+			world->models[index].first_face = BspReadU32(record + 40U);
+			world->models[index].face_count = BspReadU32(record + 44U);
+		}
 	}
 	return 1;
 }
