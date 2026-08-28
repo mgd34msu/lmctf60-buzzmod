@@ -14,6 +14,36 @@ static int BeliefSizeAdd(size_t left, size_t right, size_t *out)
 	return 1;
 }
 
+typedef struct belief_byte_range_s
+{
+	uintptr_t begin;
+	uintptr_t end;
+} belief_byte_range_t;
+
+static int BeliefByteRange(const void *pointer, size_t count,
+	size_t element_size, belief_byte_range_t *range)
+{
+	size_t bytes;
+	uintptr_t begin;
+
+	if (!pointer || !range || count == 0U || element_size == 0U ||
+	    count > SIZE_MAX / element_size)
+		return 0;
+	bytes = count * element_size;
+	begin = (uintptr_t)pointer;
+	if (bytes > UINTPTR_MAX - begin)
+		return 0;
+	range->begin = begin;
+	range->end = begin + bytes;
+	return 1;
+}
+
+static int BeliefRangesOverlap(const belief_byte_range_t *left,
+	const belief_byte_range_t *right)
+{
+	return left->begin < right->end && right->begin < left->end;
+}
+
 static int BeliefPolicyValid(const sg_belief_policy_t *policy)
 {
 	return policy && policy->confidence_decay_ms != 0U &&
@@ -28,8 +58,22 @@ typedef struct belief_work_counters_s
 {
 	size_t validated_phase_spans;
 	size_t validated_horizon_entries;
+	size_t validated_horizon_steps;
 	size_t evaluated_outcomes;
+	int overflowed;
 } belief_work_counters_t;
+
+static int BeliefCounterIncrement(size_t *counter,
+	belief_work_counters_t *counters)
+{
+	if (*counter == SIZE_MAX)
+	{
+		counters->overflowed = 1;
+		return 0;
+	}
+	(*counter)++;
+	return 1;
+}
 
 static void BeliefReportCounters(sg_belief_reduction_t *reduction,
 	const belief_work_counters_t *counters)
@@ -37,6 +81,7 @@ static void BeliefReportCounters(sg_belief_reduction_t *reduction,
 	reduction->validated_phase_spans = counters->validated_phase_spans;
 	reduction->validated_horizon_entries =
 		counters->validated_horizon_entries;
+	reduction->validated_horizon_steps = counters->validated_horizon_steps;
 	reduction->evaluated_outcomes = counters->evaluated_outcomes;
 }
 
@@ -44,14 +89,20 @@ static int BeliefStateBoundToSnapshot(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state)
 {
+	belief_byte_range_t storage_range;
 	size_t index;
 
 	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !SG_BeliefStateValid(state) ||
 	    state->rune_identity != snapshot->identity ||
-	    state->topology_revision != snapshot->topology_revision)
+	    state->topology_revision != snapshot->topology_revision ||
+	    !BeliefByteRange(state->particles, state->particle_capacity,
+		sizeof(*state->particles), &storage_range))
 		return 0;
 	for (index = 0U; index < state->particle_count; index++)
-		if (!SG_PhaseCoordinateValid(snapshot, &state->particles[index].phase))
+		if (!SG_PhaseCoordinateValid(snapshot, &state->particles[index].phase) ||
+		    !SG_BeliefMotionStateCompatible(snapshot,
+			&state->particles[index].phase,
+			state->particles[index].movement_state))
 			return 0;
 	return 1;
 }
@@ -66,6 +117,8 @@ static int BeliefSupportValid(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_evidence_support_t *support)
 {
 	return support && SG_PhaseCoordinateValid(snapshot, &support->phase) &&
+		SG_BeliefMotionStateCompatible(snapshot, &support->phase,
+			support->movement_state) &&
 		support->movement_state >= SG_BELIEF_MOTION_UNKNOWN &&
 		support->movement_state < SG_BELIEF_MOTION_COUNT &&
 		support->reserved[0] == 0U && support->reserved[1] == 0U &&
@@ -79,16 +132,60 @@ static int BeliefSupportValid(const sg_rune_runtime_snapshot_t *snapshot,
 		SG_BeliefFloatValid(support->likelihood) && support->likelihood > 0.0f;
 }
 
+static int BeliefSupportLocationsDiffer(
+	const sg_belief_evidence_support_t *left,
+	const sg_belief_evidence_support_t *right)
+{
+	uint8_t axis;
+
+	if (left->phase.phase_id != right->phase.phase_id ||
+	    left->phase.cell_id != right->phase.cell_id)
+		return 1;
+	for (axis = 0U; axis < 3U; axis++)
+		if (left->position[axis] != right->position[axis])
+			return 1;
+	return 0;
+}
+
+static int BeliefEvidenceShapeValid(const sg_belief_evidence_t *evidence)
+{
+	size_t index;
+	int all_diffuse = 1;
+	int distinct = 0;
+
+	if (evidence->kind == SG_BELIEF_EVIDENCE_NEGATIVE)
+		return evidence->source == SG_BELIEF_SOURCE_SIGHT ||
+			evidence->source == SG_BELIEF_SOURCE_TEAMMATE;
+	if (evidence->source == SG_BELIEF_SOURCE_SIGHT)
+		return evidence->support_count == 1U &&
+			evidence->supports[0].spread_radius == 0.0f;
+	if (evidence->source != SG_BELIEF_SOURCE_SOUND &&
+	    evidence->source != SG_BELIEF_SOURCE_DAMAGE)
+		return 1;
+	for (index = 0U; index < evidence->support_count; index++)
+	{
+		if (evidence->supports[index].spread_radius == 0.0f)
+			all_diffuse = 0;
+		if (index != 0U && BeliefSupportLocationsDiffer(
+		    &evidence->supports[0], &evidence->supports[index]))
+			distinct = 1;
+	}
+	return all_diffuse || distinct;
+}
+
 static sg_belief_reduce_result_t BeliefEvidenceValid(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state, const sg_belief_evidence_t *evidence,
 	uint64_t at_ms)
 {
 	const sg_belief_provenance_t *provenance;
+	belief_byte_range_t support_range;
 	size_t index;
 
 	if (!evidence)
 		return SG_BELIEF_REDUCE_REJECTED_INVALID;
+	if (evidence->support_count > SIZE_MAX / sizeof(*evidence->supports))
+		return SG_BELIEF_REDUCE_OVERFLOW;
 	provenance = &evidence->provenance;
 	if (provenance->authenticated != 1U ||
 	    provenance->issuer_kind < SG_BELIEF_ISSUER_LOCAL_SENSOR ||
@@ -99,6 +196,8 @@ static sg_belief_reduce_result_t BeliefEvidenceValid(
 	    provenance->reserved != 0U || provenance->evidence_id == 0U ||
 	    provenance->evidence_sequence == 0U ||
 	    provenance->authenticated_at_ms == 0U ||
+	    provenance->rune_identity != snapshot->identity ||
+	    provenance->topology_revision != snapshot->topology_revision ||
 	    provenance->authenticated_at_ms < evidence->observed_at_ms ||
 	    provenance->authenticated_at_ms > at_ms ||
 	    (evidence->source == SG_BELIEF_SOURCE_TEAMMATE &&
@@ -118,9 +217,9 @@ static sg_belief_reduce_result_t BeliefEvidenceValid(
 	    evidence->confidence > 1.0f ||
 	    !SG_BeliefFloatValid(evidence->confidence) ||
 	    evidence->support_count == 0U || !evidence->supports ||
-	    (evidence->kind == SG_BELIEF_EVIDENCE_POSITIVE &&
-	     evidence->source == SG_BELIEF_SOURCE_SIGHT &&
-	     evidence->support_count != 1U))
+	    !BeliefByteRange(evidence->supports, evidence->support_count,
+		sizeof(*evidence->supports), &support_range) ||
+	    !BeliefEvidenceShapeValid(evidence))
 		return SG_BELIEF_REDUCE_REJECTED_INVALID;
 	if (evidence->valid_until_ms < at_ms)
 		return SG_BELIEF_REDUCE_REJECTED_STALE;
@@ -129,23 +228,90 @@ static sg_belief_reduce_result_t BeliefEvidenceValid(
 		    (evidence->kind == SG_BELIEF_EVIDENCE_NEGATIVE &&
 		     evidence->supports[index].likelihood > 1.0f))
 			return SG_BELIEF_REDUCE_REJECTED_INVALID;
-	if (evidence->kind == SG_BELIEF_EVIDENCE_POSITIVE &&
-	    (evidence->source == SG_BELIEF_SOURCE_SOUND ||
-	     evidence->source == SG_BELIEF_SOURCE_DAMAGE) &&
-	    evidence->support_count == 1U &&
-	    evidence->supports[0].spread_radius == 0.0f)
-		return SG_BELIEF_REDUCE_REJECTED_INVALID;
 	return SG_BELIEF_REDUCE_APPLIED;
 }
 
+static int BeliefStableIdEqual(const sg_rune_stable_id_t *left,
+	const sg_rune_stable_id_t *right)
+{
+	return left->source_set_identity == right->source_set_identity &&
+		left->high == right->high && left->low == right->low;
+}
+
+static int BeliefRuneRecordMatches(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	sg_belief_horizon_step_kind_t kind, uint32_t record_index,
+	const sg_phase_coordinate_t *from, const sg_phase_coordinate_t *to)
+{
+	const sg_rune_model_t *model = snapshot->model;
+	const sg_rune_stable_id_t *from_id =
+		&model->phases[from->phase_id].id.value;
+	const sg_rune_stable_id_t *to_id = &model->phases[to->phase_id].id.value;
+
+	if (kind == SG_BELIEF_HORIZON_PHASE_TRANSITION)
+	{
+		const sg_rune_phase_transition_t *transition;
+		if (record_index >= model->phase_transition_count ||
+		    !model->phase_transitions)
+			return 0;
+		transition = &model->phase_transitions[record_index];
+		return transition->kind > SG_RUNE_PHASE_TRANSITION_NONE &&
+			transition->kind < SG_RUNE_PHASE_TRANSITION_KIND_COUNT &&
+			BeliefStableIdEqual(&transition->source_phase.value, from_id) &&
+			BeliefStableIdEqual(&transition->destination_phase.value, to_id);
+	}
+	if (kind == SG_BELIEF_HORIZON_CAPABILITY_KERNEL)
+	{
+		const sg_rune_capability_kernel_t *capability;
+		if (record_index >= model->kernel_count || !model->kernels)
+			return 0;
+		capability = &model->kernels[record_index];
+		return capability->family >= SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT &&
+			capability->family < SG_RUNE_CAPABILITY_FAMILY_COUNT &&
+			(capability->flags & (SG_RUNE_KERNEL_DIRECTIONAL |
+			 SG_RUNE_KERNEL_PHASE_AWARE | SG_RUNE_KERNEL_PROVEN)) ==
+			(SG_RUNE_KERNEL_DIRECTIONAL | SG_RUNE_KERNEL_PHASE_AWARE |
+			 SG_RUNE_KERNEL_PROVEN) &&
+			BeliefStableIdEqual(&capability->source_phase.value, from_id) &&
+			BeliefStableIdEqual(&capability->destination_phase.value, to_id);
+	}
+	return 0;
+}
+
 static int BeliefHorizonEntryValid(const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_horizon_kernel_t *kernel,
 	const sg_belief_horizon_entry_t *entry)
 {
-	return entry && SG_PhaseCoordinateValid(snapshot, &entry->from) &&
-		SG_PhaseCoordinateValid(snapshot, &entry->to) &&
-		BeliefVectorValid(entry->displacement) &&
-		SG_BeliefFloatValid(entry->likelihood) && entry->likelihood > 0.0f &&
-		entry->likelihood <= 1.0f;
+	sg_phase_coordinate_t cursor;
+	size_t index;
+	size_t end;
+
+	if (!entry || !SG_PhaseCoordinateValid(snapshot, &entry->from) ||
+	    !SG_PhaseCoordinateValid(snapshot, &entry->to) ||
+	    !BeliefVectorValid(entry->displacement) ||
+	    !SG_BeliefFloatValid(entry->likelihood) || entry->likelihood <= 0.0f ||
+	    entry->likelihood > 1.0f ||
+	    !BeliefSizeAdd(entry->first_step, entry->step_count, &end) ||
+	    end > kernel->step_count ||
+	    (entry->step_count == 0U && entry->first_step != 0U))
+		return 0;
+	if (entry->step_count == 0U)
+		return entry->from.phase_id == entry->to.phase_id &&
+			entry->from.cell_id == entry->to.cell_id;
+	cursor = entry->from;
+	for (index = entry->first_step; index < end; index++)
+	{
+		const sg_belief_horizon_step_t *step = &kernel->steps[index];
+		if (step->from.phase_id != cursor.phase_id ||
+		    step->from.cell_id != cursor.cell_id ||
+		    !SG_PhaseCoordinateValid(snapshot, &step->to) ||
+		    !BeliefRuneRecordMatches(snapshot, step->kind,
+			step->record_index, &step->from, &step->to))
+			return 0;
+		cursor = step->to;
+	}
+	return cursor.phase_id == entry->to.phase_id &&
+		cursor.cell_id == entry->to.cell_id;
 }
 
 static int BeliefHorizonKernelValid(
@@ -153,8 +319,19 @@ static int BeliefHorizonKernelValid(
 	const sg_belief_horizon_kernel_t *kernel,
 	belief_work_counters_t *counters)
 {
+	belief_byte_range_t span_range;
+	belief_byte_range_t entry_range;
+	belief_byte_range_t step_range;
 	size_t phase;
 	size_t cursor = 0U;
+	if (kernel &&
+	    (kernel->origin_span_count > SIZE_MAX / sizeof(*kernel->origin_spans) ||
+	     kernel->entry_count > SIZE_MAX / sizeof(*kernel->entries) ||
+	     kernel->step_count > SIZE_MAX / sizeof(*kernel->steps)))
+	{
+		counters->overflowed = 1;
+		return 0;
+	}
 
 	if (!kernel || kernel->rune_identity != snapshot->identity ||
 	    kernel->topology_revision != snapshot->topology_revision ||
@@ -165,8 +342,27 @@ static int BeliefHorizonKernelValid(
 	    kernel->reserved[3] != 0U || kernel->reserved[4] != 0U ||
 	    kernel->reserved[5] != 0U || kernel->reserved[6] != 0U ||
 	    kernel->origin_span_count != (size_t)snapshot->phase_count ||
-	    !kernel->origin_spans || kernel->entry_count == 0U || !kernel->entries)
+	    !kernel->origin_spans || kernel->entry_count == 0U || !kernel->entries ||
+	    (kernel->step_count != 0U && !kernel->steps) ||
+	    !BeliefByteRange(kernel->origin_spans, kernel->origin_span_count,
+		sizeof(*kernel->origin_spans), &span_range) ||
+	    !BeliefByteRange(kernel->entries, kernel->entry_count,
+		sizeof(*kernel->entries), &entry_range) ||
+	    (kernel->step_count != 0U &&
+	     !BeliefByteRange(kernel->steps, kernel->step_count,
+		sizeof(*kernel->steps), &step_range)))
 		return 0;
+	for (phase = 0U; phase < kernel->step_count; phase++)
+	{
+		const sg_belief_horizon_step_t *step = &kernel->steps[phase];
+		if (!SG_PhaseCoordinateValid(snapshot, &step->from) ||
+		    !SG_PhaseCoordinateValid(snapshot, &step->to) ||
+		    !BeliefRuneRecordMatches(snapshot, step->kind,
+			step->record_index, &step->from, &step->to) ||
+		    !BeliefCounterIncrement(&counters->validated_horizon_steps,
+			counters))
+			return 0;
+	}
 	for (phase = 0U; phase < snapshot->phase_count; phase++)
 	{
 		const sg_belief_horizon_span_t *span =
@@ -180,20 +376,22 @@ static int BeliefHorizonKernelValid(
 		{
 			const sg_belief_horizon_entry_t *entry =
 				&kernel->entries[cursor + offset];
-			if (!BeliefHorizonEntryValid(snapshot, entry) ||
+			if (!BeliefHorizonEntryValid(snapshot, kernel, entry) ||
 			    entry->from.phase_id != phase ||
 			    entry->from.cell_id != snapshot->phases[phase].cell_id)
 				return 0;
 			total += (double)entry->likelihood;
-			if (counters->validated_horizon_entries != SIZE_MAX)
-				counters->validated_horizon_entries++;
+			if (!BeliefCounterIncrement(
+			    &counters->validated_horizon_entries, counters))
+				return 0;
 		}
 		if (fabs(total - 1.0) > (double)SG_BELIEF_WEIGHT_EPSILON)
 			return 0;
 		if (!BeliefSizeAdd(cursor, span->entry_count, &cursor))
 			return 0;
-		if (counters->validated_phase_spans != SIZE_MAX)
-			counters->validated_phase_spans++;
+		if (!BeliefCounterIncrement(&counters->validated_phase_spans,
+		    counters))
+			return 0;
 		if (cursor > kernel->entry_count)
 			return 0;
 	}
@@ -234,22 +432,133 @@ static const sg_belief_horizon_span_t *BeliefHorizonSpan(
 	return &kernel->origin_spans[phase->phase_id];
 }
 
+static int BeliefRangeDisjointFromAll(const belief_byte_range_t *range,
+	const belief_byte_range_t *others, size_t other_count)
+{
+	size_t index;
+
+	for (index = 0U; index < other_count; index++)
+		if (BeliefRangesOverlap(range, &others[index]))
+			return 0;
+	return 1;
+}
+
+static int BeliefFrameMemoryValid(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state, const sg_belief_frame_t *frame,
+	const sg_belief_reduction_t *out)
+{
+	belief_byte_range_t writable[6];
+	belief_byte_range_t read_range;
+	size_t writable_count = 0U;
+	size_t left;
+	size_t right;
+
+	if (!BeliefByteRange(state, 1U, sizeof(*state),
+	    &writable[writable_count++]) ||
+	    !BeliefByteRange(state->particles, state->particle_capacity,
+		sizeof(*state->particles), &writable[writable_count++]))
+		return 0;
+	if (frame->scratch_capacity == 0U)
+	{
+		if (frame->scratch_first || frame->scratch_second)
+			return 0;
+	}
+	else if (!BeliefByteRange(frame->scratch_first, frame->scratch_capacity,
+	    sizeof(*frame->scratch_first), &writable[writable_count++]) ||
+	    !BeliefByteRange(frame->scratch_second, frame->scratch_capacity,
+		sizeof(*frame->scratch_second), &writable[writable_count++]))
+		return 0;
+	if (frame->commit_storage &&
+	    !BeliefByteRange(frame->commit_storage, frame->commit_capacity,
+		sizeof(*frame->commit_storage), &writable[writable_count++]))
+		return 0;
+	if (!BeliefByteRange(out, 1U, sizeof(*out),
+	    &writable[writable_count++]))
+		return 0;
+	for (left = 0U; left < writable_count; left++)
+		for (right = left + 1U; right < writable_count; right++)
+			if (BeliefRangesOverlap(&writable[left], &writable[right]))
+				return 0;
+	if (!BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count) ||
+	    !BeliefByteRange(frame, 1U, sizeof(*frame), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count))
+		return 0;
+	if (frame->evidence_count != 0U)
+	{
+		if (!BeliefByteRange(frame->evidence, frame->evidence_count,
+		    sizeof(*frame->evidence), &read_range) ||
+		    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count))
+			return 0;
+		for (left = 0U; left < frame->evidence_count; left++)
+			if (!BeliefByteRange(frame->evidence[left].supports,
+			    frame->evidence[left].support_count,
+			    sizeof(*frame->evidence[left].supports), &read_range) ||
+			    !BeliefRangeDisjointFromAll(&read_range, writable,
+				writable_count))
+				return 0;
+	}
+	if (frame->kernel_count != 0U)
+	{
+		if (!BeliefByteRange(frame->kernels, frame->kernel_count,
+		    sizeof(*frame->kernels), &read_range) ||
+		    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count))
+			return 0;
+		for (left = 0U; left < frame->kernel_count; left++)
+		{
+			const sg_belief_horizon_kernel_t *kernel = &frame->kernels[left];
+			if (!BeliefByteRange(kernel->origin_spans,
+			    kernel->origin_span_count, sizeof(*kernel->origin_spans),
+			    &read_range) ||
+			    !BeliefRangeDisjointFromAll(&read_range, writable,
+				writable_count) ||
+			    !BeliefByteRange(kernel->entries, kernel->entry_count,
+				sizeof(*kernel->entries), &read_range) ||
+			    !BeliefRangeDisjointFromAll(&read_range, writable,
+				writable_count))
+				return 0;
+			if (kernel->step_count != 0U &&
+			    (!BeliefByteRange(kernel->steps, kernel->step_count,
+				sizeof(*kernel->steps), &read_range) ||
+			     !BeliefRangeDisjointFromAll(&read_range, writable,
+				writable_count)))
+				return 0;
+		}
+	}
+	return 1;
+}
+
 static sg_belief_reduce_result_t BeliefPreflight(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state, const sg_belief_frame_t *frame,
 	size_t *required_scratch, belief_work_counters_t *counters)
 {
+	belief_byte_range_t kernel_range;
+	belief_byte_range_t evidence_range;
 	size_t index;
 	size_t required;
 	size_t advance_extra = 0U;
 	uint64_t prior_evidence_sequence;
+	if (frame &&
+	    (frame->kernel_count > SIZE_MAX / sizeof(*frame->kernels) ||
+	     frame->evidence_count > SIZE_MAX / sizeof(*frame->evidence)))
+		return SG_BELIEF_REDUCE_OVERFLOW;
 
 	if (!frame || !required_scratch || !counters || frame->sequence == 0U ||
-	    frame->expected_revision == 0U || frame->at_ms == 0U ||
+	    frame->expected_revision == 0U || frame->expected_generation == 0U ||
+	    frame->at_ms == 0U ||
 	    frame->expected_revision != state->revision ||
+	    frame->expected_generation != state->generation ||
 	    frame->at_ms < state->updated_at_ms ||
 	    (frame->kernel_count != 0U && !frame->kernels) ||
 	    (frame->evidence_count != 0U && !frame->evidence) ||
+	    (frame->kernel_count != 0U &&
+	     !BeliefByteRange(frame->kernels, frame->kernel_count,
+		sizeof(*frame->kernels), &kernel_range)) ||
+	    (frame->evidence_count != 0U &&
+	     !BeliefByteRange(frame->evidence, frame->evidence_count,
+		sizeof(*frame->evidence), &evidence_range)) ||
 	    (!frame->commit_storage && frame->commit_capacity != 0U) ||
 	    (frame->commit_storage && frame->commit_capacity == 0U) ||
 	    frame->commit_storage == state->particles ||
@@ -262,7 +571,14 @@ static sg_belief_reduce_result_t BeliefPreflight(
 	{
 		if (!BeliefHorizonKernelValid(snapshot, &frame->kernels[index],
 		    counters))
+		{
+			if (counters->overflowed)
+			{
+				*required_scratch = SIZE_MAX;
+				return SG_BELIEF_REDUCE_OVERFLOW;
+			}
 			return SG_BELIEF_REDUCE_REJECTED_INVALID;
+		}
 		if (index != 0U &&
 		    (frame->kernels[index - 1U].from_time_ms >
 		     frame->kernels[index].from_time_ms ||
@@ -300,12 +616,12 @@ static sg_belief_reduce_result_t BeliefPreflight(
 				    &advance_extra))
 				{
 					*required_scratch = SIZE_MAX;
-					return SG_BELIEF_REDUCE_CAPACITY;
+					return SG_BELIEF_REDUCE_OVERFLOW;
 				}
 		if (!BeliefSizeAdd(required, advance_extra, &required))
 		{
 			*required_scratch = SIZE_MAX;
-			return SG_BELIEF_REDUCE_CAPACITY;
+			return SG_BELIEF_REDUCE_OVERFLOW;
 		}
 	}
 	for (index = 0U; index < frame->evidence_count; index++)
@@ -330,13 +646,13 @@ static sg_belief_reduce_result_t BeliefPreflight(
 						    &advance_extra))
 						{
 							*required_scratch = SIZE_MAX;
-							return SG_BELIEF_REDUCE_CAPACITY;
+							return SG_BELIEF_REDUCE_OVERFLOW;
 						}
 			}
 			if (!BeliefSizeAdd(required, advance_extra, &required))
 			{
 				*required_scratch = SIZE_MAX;
-				return SG_BELIEF_REDUCE_CAPACITY;
+				return SG_BELIEF_REDUCE_OVERFLOW;
 			}
 		}
 	*required_scratch = required;
@@ -446,11 +762,31 @@ static int BeliefIntegrateParticle(sg_belief_particle_t *particle,
 	return 1;
 }
 
+static sg_belief_motion_state_t BeliefMovementAtPhase(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *phase,
+	sg_belief_motion_state_t prior)
+{
+	const sg_rune_phase_basis_t *basis = &snapshot->model->phases[phase->phase_id];
+
+	if (basis->motion == SG_RUNE_MOTION_SWIMMING)
+		return SG_BELIEF_MOTION_WATER;
+	if (basis->motion == SG_RUNE_MOTION_AIRBORNE)
+		return prior == SG_BELIEF_MOTION_HOOK ?
+			SG_BELIEF_MOTION_HOOK : SG_BELIEF_MOTION_AIR;
+	if (basis->support == SG_RUNE_SUPPORT_MOVER ||
+	    basis->reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE)
+		return SG_BELIEF_MOTION_MOVER;
+	return SG_BELIEF_MOTION_GROUND;
+}
+
 static int BeliefNormalize(sg_belief_particle_t *particles, size_t *count)
 {
 	size_t index;
 	size_t write = 0U;
+	size_t largest = 0U;
 	double total = 0.0;
+	double normalized_total = 0.0;
 	float divisor;
 
 	for (index = 0U; index < *count; index++)
@@ -472,11 +808,24 @@ static int BeliefNormalize(sg_belief_particle_t *particles, size_t *count)
 		return 0;
 	divisor = (float)total;
 	for (index = 0U; index < write; index++)
+	{
 		particles[index].weight /= divisor;
+		if (!SG_BeliefFloatValid(particles[index].weight) ||
+		    particles[index].weight <= 0.0f)
+			return 0;
+		if (particles[index].weight > particles[largest].weight)
+			largest = index;
+		normalized_total += (double)particles[index].weight;
+	}
+	particles[largest].weight += (float)(1.0 - normalized_total);
+	if (!SG_BeliefFloatValid(particles[largest].weight) ||
+	    particles[largest].weight <= 0.0f || particles[largest].weight > 1.0f)
+		return 0;
 	return 1;
 }
 
-static int BeliefAdvance(sg_belief_state_t *candidate,
+static int BeliefAdvance(const sg_rune_runtime_snapshot_t *snapshot,
+	sg_belief_state_t *candidate,
 	const sg_belief_frame_t *frame, sg_belief_particle_t **current,
 	sg_belief_particle_t **next, size_t *count,
 	belief_work_counters_t *counters)
@@ -532,14 +881,17 @@ static int BeliefAdvance(sg_belief_state_t *candidate,
 					    candidate->policy.spread_growth_per_ms))
 						return 0;
 					moved.phase = entry->to;
+					moved.movement_state = BeliefMovementAtPhase(
+						snapshot, &moved.phase, moved.movement_state);
 					for (axis = 0U; axis < 3U; axis++)
 						moved.position[axis] +=
 							entry->displacement[axis];
 					moved.weight *=
 						candidate->policy.diffusion_fraction *
 						entry->likelihood;
-					if (counters->evaluated_outcomes != SIZE_MAX)
-						counters->evaluated_outcomes++;
+					if (!BeliefCounterIncrement(&counters->evaluated_outcomes,
+					    counters))
+						return 0;
 					if (!BeliefAppendParticle(*next, &write, &moved))
 						return 0;
 				}
@@ -655,8 +1007,9 @@ static float BeliefNegativeOverlap(const sg_belief_state_t *candidate,
 					return -1.0f;
 				total += candidate->policy.diffusion_fraction *
 					entry->likelihood * moved_overlap;
-				if (counters->evaluated_outcomes != SIZE_MAX)
-					counters->evaluated_outcomes++;
+				if (!BeliefCounterIncrement(&counters->evaluated_outcomes,
+				    counters))
+					return -1.0f;
 			}
 	}
 	if (!SG_BeliefFloatValid(total))
@@ -664,7 +1017,8 @@ static float BeliefNegativeOverlap(const sg_belief_state_t *candidate,
 	return total > 1.0f ? 1.0f : total;
 }
 
-static int BeliefApplyPositive(sg_belief_state_t *candidate,
+static int BeliefApplyPositive(const sg_rune_runtime_snapshot_t *snapshot,
+	sg_belief_state_t *candidate,
 	const sg_belief_evidence_t *evidence, const sg_belief_frame_t *frame,
 	sg_belief_particle_t **current, sg_belief_particle_t **next, size_t *count,
 	belief_work_counters_t *counters)
@@ -729,13 +1083,16 @@ static int BeliefApplyPositive(sg_belief_state_t *candidate,
 					    candidate->policy.spread_growth_per_ms))
 						return 0;
 					moved.phase = entry->to;
+					moved.movement_state = BeliefMovementAtPhase(
+						snapshot, &moved.phase, moved.movement_state);
 					for (axis = 0U; axis < 3U; axis++)
 						moved.position[axis] +=
 							entry->displacement[axis];
 					moved.weight *= candidate->policy.diffusion_fraction *
 						entry->likelihood;
-					if (counters->evaluated_outcomes != SIZE_MAX)
-						counters->evaluated_outcomes++;
+					if (!BeliefCounterIncrement(&counters->evaluated_outcomes,
+					    counters))
+						return 0;
 					if (!BeliefAppendParticle(*next, &write, &moved))
 						return 0;
 				}
@@ -767,7 +1124,7 @@ static int BeliefApplyNegative(sg_belief_state_t *candidate,
 	for (index = 0U; index < *count; index++)
 	{
 		size_t support;
-		float factor = 1.0f;
+		float excluded = 0.0f;
 		for (support = 0U; support < evidence->support_count; support++)
 		{
 			float overlap = BeliefNegativeOverlap(candidate, evidence,
@@ -775,21 +1132,25 @@ static int BeliefApplyNegative(sg_belief_state_t *candidate,
 				&(*current)[index], counters);
 			if (overlap < 0.0f)
 				return 0;
-			factor *= 1.0f - confidence *
-				evidence->supports[support].likelihood * overlap;
+			overlap *= evidence->supports[support].likelihood;
+			if (overlap > excluded)
+				excluded = overlap;
 		}
-		if ((*current)[index].weight * factor > 0.0f)
 		{
-			sg_belief_particle_t retained;
-			BeliefCopyParticle(&retained, &(*current)[index]);
-			retained.weight *= factor;
-			retained.source_mask |=
-				(uint16_t)(UINT16_C(1) << evidence->source);
-			retained.latest_evidence_id =
-				evidence->provenance.evidence_id;
-			retained.latest_evidence_at_ms = evidence->observed_at_ms;
-			if (!BeliefAppendParticle(*next, &write, &retained))
-				return 0;
+			float factor = 1.0f - confidence * excluded;
+			if ((*current)[index].weight * factor > 0.0f)
+			{
+				sg_belief_particle_t retained;
+				BeliefCopyParticle(&retained, &(*current)[index]);
+				retained.weight *= factor;
+				retained.source_mask |=
+					(uint16_t)(UINT16_C(1) << evidence->source);
+				retained.latest_evidence_id =
+					evidence->provenance.evidence_id;
+				retained.latest_evidence_at_ms = evidence->observed_at_ms;
+				if (!BeliefAppendParticle(*next, &write, &retained))
+					return 0;
+			}
 		}
 	}
 	if (!BeliefNormalize(*next, &write))
@@ -810,12 +1171,23 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 	sg_belief_particle_t *storage, size_t capacity)
 {
 	sg_belief_state_t candidate;
+	belief_byte_range_t state_range;
+	belief_byte_range_t config_range;
+	belief_byte_range_t snapshot_range;
+	belief_byte_range_t storage_range;
 
 	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !state || !config || !storage ||
 	    capacity == 0U || !SG_BeliefTeamValid(config->audience_team) ||
 	    !SG_BeliefTeamValid(config->target_team) ||
 	    config->target_client >= SG_BELIEF_MAX_CLIENTS ||
-	    config->initialized_at_ms == 0U || !BeliefPolicyValid(&config->policy))
+	    config->initialized_at_ms == 0U || !BeliefPolicyValid(&config->policy) ||
+	    !BeliefByteRange(state, 1U, sizeof(*state), &state_range) ||
+	    !BeliefByteRange(config, 1U, sizeof(*config), &config_range) ||
+	    !BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &snapshot_range) ||
+	    !BeliefByteRange(storage, capacity, sizeof(*storage), &storage_range) ||
+	    BeliefRangesOverlap(&state_range, &config_range) ||
+	    BeliefRangesOverlap(&state_range, &snapshot_range) ||
+	    BeliefRangesOverlap(&state_range, &storage_range))
 		return 0;
 	memset(&candidate, 0, sizeof(candidate));
 	candidate.audience_team = config->audience_team;
@@ -846,18 +1218,46 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 	size_t required_scratch = 0U;
 	size_t index;
 	belief_work_counters_t counters;
+	belief_byte_range_t out_range;
+	belief_byte_range_t state_range;
+	belief_byte_range_t state_storage_range;
+	belief_byte_range_t frame_range;
+	belief_byte_range_t snapshot_range;
 
 	if (!snapshot || !state || !frame || !out ||
-	    !BeliefStateBoundToSnapshot(snapshot, state))
+	    !BeliefByteRange(out, 1U, sizeof(*out), &out_range) ||
+	    !BeliefByteRange(state, 1U, sizeof(*state), &state_range) ||
+	    !BeliefByteRange(frame, 1U, sizeof(*frame), &frame_range) ||
+	    !BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &snapshot_range) ||
+	    BeliefRangesOverlap(&out_range, &state_range) ||
+	    BeliefRangesOverlap(&out_range, &frame_range) ||
+	    BeliefRangesOverlap(&out_range, &snapshot_range) ||
+	    !BeliefStateBoundToSnapshot(snapshot, state) ||
+	    !BeliefByteRange(state->particles, state->particle_capacity,
+		sizeof(*state->particles), &state_storage_range) ||
+	    BeliefRangesOverlap(&out_range, &state_storage_range))
 		return SG_BELIEF_REDUCE_REJECTED_INVALID;
 	memset(&reduction, 0, sizeof(reduction));
 	memset(&counters, 0, sizeof(counters));
 	reduction.committed_revision = state->revision;
 	reduction.particle_count = state->particle_count;
 	reduction.confidence = state->confidence;
+	if (frame->kernel_count > SIZE_MAX / sizeof(*frame->kernels) ||
+	    frame->evidence_count > SIZE_MAX / sizeof(*frame->evidence))
+	{
+		reduction.result = SG_BELIEF_REDUCE_OVERFLOW;
+		*out = reduction;
+		return reduction.result;
+	}
 	if (state->last_frame_sequence != 0U &&
 	    frame->sequence == state->last_frame_sequence)
 	{
+		if (frame->expected_revision == UINT64_MAX ||
+		    frame->expected_generation == UINT64_MAX ||
+		    frame->expected_revision + 1U != state->revision ||
+		    frame->expected_generation + 1U != state->generation ||
+		    frame->at_ms != state->updated_at_ms)
+			return SG_BELIEF_REDUCE_REJECTED_INVALID;
 		reduction.result = SG_BELIEF_REDUCE_DUPLICATE;
 		*out = reduction;
 		return reduction.result;
@@ -867,12 +1267,15 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 	if (preflight != SG_BELIEF_REDUCE_APPLIED)
 	{
 		reduction.result = preflight;
-		if (preflight == SG_BELIEF_REDUCE_CAPACITY)
+		if (preflight == SG_BELIEF_REDUCE_CAPACITY ||
+		    preflight == SG_BELIEF_REDUCE_OVERFLOW)
 			reduction.required_scratch_capacity = required_scratch;
 		BeliefReportCounters(&reduction, &counters);
 		*out = reduction;
 		return reduction.result;
 	}
+	if (!BeliefFrameMemoryValid(snapshot, state, frame, out))
+		return SG_BELIEF_REDUCE_REJECTED_INVALID;
 	current = frame->scratch_first;
 	next = frame->scratch_second;
 	count = state->particle_count;
@@ -880,10 +1283,11 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 		BeliefCopyParticle(&current[index], &state->particles[index]);
 	candidate = *state;
 	candidate.particles = current;
-	if (!BeliefAdvance(&candidate, frame, &current, &next, &count,
+	if (!BeliefAdvance(snapshot, &candidate, frame, &current, &next, &count,
 	    &counters))
 	{
-		reduction.result = SG_BELIEF_REDUCE_REJECTED_INVALID;
+		reduction.result = counters.overflowed ?
+			SG_BELIEF_REDUCE_OVERFLOW : SG_BELIEF_REDUCE_REJECTED_INVALID;
 		BeliefReportCounters(&reduction, &counters);
 		*out = reduction;
 		return reduction.result;
@@ -893,14 +1297,16 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 		const sg_belief_evidence_t *evidence = &frame->evidence[index];
 		int applied;
 		if (evidence->kind == SG_BELIEF_EVIDENCE_POSITIVE)
-			applied = BeliefApplyPositive(&candidate, evidence, frame, &current,
-				&next, &count, &counters);
+			applied = BeliefApplyPositive(snapshot, &candidate, evidence, frame,
+				&current, &next, &count, &counters);
 		else
 			applied = BeliefApplyNegative(&candidate, evidence, frame, &current,
 				&next, &count, &counters);
 		if (!applied)
 		{
-			reduction.result = SG_BELIEF_REDUCE_REJECTED_INVALID;
+			reduction.result = counters.overflowed ?
+				SG_BELIEF_REDUCE_OVERFLOW :
+				SG_BELIEF_REDUCE_REJECTED_INVALID;
 			BeliefReportCounters(&reduction, &counters);
 			*out = reduction;
 			return reduction.result;
@@ -925,6 +1331,10 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 			evidence->provenance.evidence_sequence;
 		candidate.latest_provenance.authenticated_at_ms =
 			evidence->provenance.authenticated_at_ms;
+		candidate.latest_provenance.rune_identity =
+			evidence->provenance.rune_identity;
+		candidate.latest_provenance.topology_revision =
+			evidence->provenance.topology_revision;
 		candidate.latest_source = evidence->source;
 		candidate.latest_observed_at_ms = evidence->observed_at_ms;
 		candidate.latest_valid_until_ms = evidence->valid_until_ms;
@@ -947,7 +1357,7 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 		if (candidate.revision == UINT64_MAX ||
 		    candidate.generation == UINT64_MAX)
 		{
-			reduction.result = SG_BELIEF_REDUCE_CAPACITY;
+			reduction.result = SG_BELIEF_REDUCE_OVERFLOW;
 			BeliefReportCounters(&reduction, &counters);
 			*out = reduction;
 			return reduction.result;
@@ -992,13 +1402,29 @@ int SG_BeliefPredict(const sg_rune_runtime_snapshot_t *snapshot,
 	sg_belief_prediction_t *out)
 {
 	sg_belief_prediction_t candidate;
+	belief_byte_range_t out_range;
+	belief_byte_range_t state_range;
+	belief_byte_range_t state_storage_range;
+	belief_byte_range_t output_storage_range;
 	uint64_t elapsed_ms;
 	float confidence;
 	size_t required;
 	size_t index;
 
 	if (!out || !storage || !BeliefStateBoundToSnapshot(snapshot, state) ||
-	    at_time_ms < state->updated_at_ms || storage == state->particles)
+	    at_time_ms < state->updated_at_ms ||
+	    !BeliefByteRange(out, 1U, sizeof(*out), &out_range) ||
+	    !BeliefByteRange(state, 1U, sizeof(*state), &state_range) ||
+	    !BeliefByteRange(state->particles, state->particle_capacity,
+		sizeof(*state->particles), &state_storage_range) ||
+	    BeliefRangesOverlap(&out_range, &state_range) ||
+	    BeliefRangesOverlap(&out_range, &state_storage_range) ||
+	    (capacity != 0U &&
+	     (!BeliefByteRange(storage, capacity, sizeof(*storage),
+		&output_storage_range) ||
+	      BeliefRangesOverlap(&output_storage_range, &state_range) ||
+	      BeliefRangesOverlap(&output_storage_range, &state_storage_range) ||
+	      BeliefRangesOverlap(&output_storage_range, &out_range))))
 		return 0;
 	elapsed_ms = at_time_ms - state->updated_at_ms;
 	confidence = state->confidence * expf(-(float)elapsed_ms /

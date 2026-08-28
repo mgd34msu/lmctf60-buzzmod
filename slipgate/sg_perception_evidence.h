@@ -176,7 +176,8 @@ typedef enum sg_perception_adapt_result_e
 	SG_PERCEPTION_ADAPT_APPLIED = 0,
 	SG_PERCEPTION_ADAPT_REJECTED_INVALID,
 	SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY,
-	SG_PERCEPTION_ADAPT_CAPACITY
+	SG_PERCEPTION_ADAPT_CAPACITY,
+	SG_PERCEPTION_ADAPT_OVERFLOW
 } sg_perception_adapt_result_t;
 
 /* evidence.supports points at caller-owned support_storage after APPLIED and

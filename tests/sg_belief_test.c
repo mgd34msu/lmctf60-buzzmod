@@ -237,6 +237,56 @@ static void TestStateInitIsTransactional(void)
 	CHECK(!SG_BeliefStateInit(&fixture.snapshot, &state, &config, storage, 4U));
 	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
 	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	config.policy = Config(1U, 2U, 3U).policy;
+	CHECK(!SG_BeliefStateInit(&fixture.snapshot, &state, &config, storage,
+		SIZE_MAX));
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+}
+
+static void TestStorageAliasingAndCountOverflow(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch[8];
+	sg_belief_state_t state;
+	sg_belief_state_t before;
+	sg_belief_evidence_support_t support = Support(0U, 0U, 1.0f);
+	sg_belief_evidence_t evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U,
+		100U, &support, 1U);
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+	sg_belief_prediction_t prediction;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	frame = Frame(1U, state.revision, 100U, &storage[1], scratch, 7U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	frame = Frame(1U, state.revision, 100U, scratch, &scratch[4], 4U);
+	frame.evidence = &evidence;
+	frame.evidence_count = SIZE_MAX;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_OVERFLOW);
+	state.generation = UINT64_MAX;
+	before = state;
+	frame.evidence_count = 0U;
+	frame.expected_generation = state.generation;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_OVERFLOW);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	memset(&prediction, 0, sizeof(prediction));
+	CHECK(!SG_BeliefPredict(&fixture.snapshot, &state, 100U, &storage[1], 7U,
+		&prediction));
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
 }
 
 static void TestSightConcentrates(void)
@@ -485,9 +535,24 @@ static sg_belief_horizon_entry_t HorizonEntry(uint32_t from_phase,
 	return entry;
 }
 
+static sg_belief_horizon_step_t HorizonCapabilityStep(uint32_t from_phase,
+	uint32_t from_cell, uint32_t to_phase, uint32_t to_cell,
+	uint32_t record_index)
+{
+	sg_belief_horizon_step_t step;
+
+	memset(&step, 0, sizeof(step));
+	step.from = (sg_phase_coordinate_t){ from_phase, from_cell };
+	step.to = (sg_phase_coordinate_t){ to_phase, to_cell };
+	step.kind = SG_BELIEF_HORIZON_CAPABILITY_KERNEL;
+	step.record_index = record_index;
+	return step;
+}
+
 static sg_belief_horizon_kernel_t HorizonKernel(uint64_t from_time_ms,
 	uint64_t to_time_ms, const sg_belief_horizon_entry_t *entries,
-	size_t entry_count, sg_belief_horizon_span_t *spans, size_t phase_count)
+	size_t entry_count, sg_belief_horizon_span_t *spans, size_t phase_count,
+	const sg_belief_horizon_step_t *steps, size_t step_count)
 {
 	sg_belief_horizon_kernel_t kernel;
 	size_t phase;
@@ -511,6 +576,8 @@ static sg_belief_horizon_kernel_t HorizonKernel(uint64_t from_time_ms,
 	kernel.origin_span_count = phase_count;
 	kernel.entries = entries;
 	kernel.entry_count = entry_count;
+	kernel.steps = steps;
+	kernel.step_count = step_count;
 	return kernel;
 }
 
@@ -679,7 +746,7 @@ static void TestHorizonCannotInventConnectivity(void)
 	entries[0] = HorizonEntry(0U, 0U, 0U, 0U, 0.0f, 1.0f);
 	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
 	entries[2] = HorizonEntry(2U, 1U, 0U, 0U, 0.0f, 1.0f);
-	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, NULL, 0U);
 	frame = Frame(1U, state.revision, 200U, scratch_first, scratch_second, 8U);
 	frame.kernels = &kernel;
 	frame.kernel_count = 1U;
@@ -703,6 +770,8 @@ static void TestCompleteHorizonMultiHopAndTimeBound(void)
 	sg_belief_horizon_entry_t long_entries[3];
 	sg_belief_horizon_span_t short_spans[3];
 	sg_belief_horizon_span_t long_spans[3];
+	sg_belief_horizon_step_t short_steps[1];
+	sg_belief_horizon_step_t long_steps[2];
 	sg_belief_horizon_kernel_t kernel;
 	sg_belief_frame_t frame;
 	sg_belief_reduction_t reduction;
@@ -725,9 +794,12 @@ static void TestCompleteHorizonMultiHopAndTimeBound(void)
 		&reduction) == SG_BELIEF_REDUCE_APPLIED);
 
 	short_entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
+	short_entries[0].step_count = 1U;
 	short_entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
 	short_entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
-	kernel = HorizonKernel(100U, 150U, short_entries, 3U, short_spans, 3U);
+	short_steps[0] = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	kernel = HorizonKernel(100U, 150U, short_entries, 3U, short_spans, 3U,
+		short_steps, 1U);
 	frame = Frame(2U, short_state.revision, 150U, scratch_first,
 		scratch_second, 8U);
 	frame.kernels = &kernel;
@@ -739,9 +811,15 @@ static void TestCompleteHorizonMultiHopAndTimeBound(void)
 		CHECK(short_state.particles[index].phase.phase_id != 2U);
 
 	long_entries[0] = HorizonEntry(0U, 0U, 2U, 1U, 20.0f, 1.0f);
+	long_entries[0].step_count = 1U;
 	long_entries[1] = HorizonEntry(1U, 0U, 2U, 1U, 10.0f, 1.0f);
+	long_entries[1].first_step = 1U;
+	long_entries[1].step_count = 1U;
 	long_entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
-	kernel = HorizonKernel(100U, 200U, long_entries, 3U, long_spans, 3U);
+	long_steps[0] = HorizonCapabilityStep(0U, 0U, 2U, 1U, 1U);
+	long_steps[1] = HorizonCapabilityStep(1U, 0U, 2U, 1U, 2U);
+	kernel = HorizonKernel(100U, 200U, long_entries, 3U, long_spans, 3U,
+		long_steps, 2U);
 	frame = Frame(2U, long_state.revision, 200U, scratch_first,
 		scratch_second, 8U);
 	frame.kernels = &kernel;
@@ -751,7 +829,8 @@ static void TestCompleteHorizonMultiHopAndTimeBound(void)
 	CHECK(long_state.particle_count == 2U);
 	CHECK(long_state.particles[1].phase.phase_id == 2U);
 
-	kernel = HorizonKernel(200U, 210U, long_entries, 2U, long_spans, 3U);
+	kernel = HorizonKernel(200U, 210U, long_entries, 2U, long_spans, 3U,
+		long_steps, 2U);
 	frame = Frame(3U, long_state.revision, 210U, scratch_first,
 		scratch_second, 8U);
 	frame.kernels = &kernel;
@@ -787,6 +866,7 @@ static void TestCsrKernelScalingCounters(void)
 	sg_belief_evidence_t evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U,
 		100U, &support, 1U);
 	sg_belief_horizon_kernel_t kernel;
+	sg_belief_horizon_step_t step;
 	sg_belief_frame_t frame;
 	sg_belief_reduction_t reduction;
 	size_t phase;
@@ -831,12 +911,14 @@ static void TestCsrKernelScalingCounters(void)
 		SG_BELIEF_REDUCE_APPLIED);
 	entries[cursor++] = HorizonEntry(0U, 0U, 0U, 0U, 1.0f, 0.5f);
 	entries[cursor++] = HorizonEntry(0U, 0U, 1U, 0U, 2.0f, 0.5f);
+	entries[1].step_count = 1U;
 	for (phase = 1U; phase < phase_count; phase++)
 		entries[cursor++] = HorizonEntry((uint32_t)phase, 0U,
 			(uint32_t)phase, 0U, 0.0f, 1.0f);
 	CHECK(cursor == entry_count);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
 	kernel = HorizonKernel(100U, 200U, entries, entry_count, spans,
-		phase_count);
+		phase_count, &step, 1U);
 	frame = Frame(2U, state.revision, 200U, scratch_first, scratch_second, 4U);
 	frame.kernels = &kernel;
 	frame.kernel_count = 1U;
@@ -844,6 +926,7 @@ static void TestCsrKernelScalingCounters(void)
 		SG_BELIEF_REDUCE_APPLIED);
 	CHECK(reduction.validated_phase_spans == phase_count);
 	CHECK(reduction.validated_horizon_entries == entry_count);
+	CHECK(reduction.validated_horizon_steps == 1U);
 	CHECK(reduction.evaluated_outcomes == 2U);
 	CHECK(state.particle_count == 3U);
 
@@ -872,6 +955,7 @@ static void TestPropagationDecayPredictionAndRuneImmutability(void)
 		100U, &support, 1U);
 	sg_belief_horizon_entry_t entries[3];
 	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t steps[2];
 	sg_belief_horizon_kernel_t kernel;
 	sg_belief_frame_t frame;
 	sg_belief_reduction_t reduction;
@@ -886,9 +970,14 @@ static void TestPropagationDecayPredictionAndRuneImmutability(void)
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
 		SG_BELIEF_REDUCE_APPLIED);
 	entries[0] = HorizonEntry(0U, 0U, 2U, 1U, 20.0f, 1.0f);
+	entries[0].step_count = 1U;
 	entries[1] = HorizonEntry(1U, 0U, 2U, 1U, 10.0f, 1.0f);
+	entries[1].first_step = 1U;
+	entries[1].step_count = 1U;
 	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
-	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U);
+	steps[0] = HorizonCapabilityStep(0U, 0U, 2U, 1U, 1U);
+	steps[1] = HorizonCapabilityStep(1U, 0U, 2U, 1U, 2U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, steps, 2U);
 	frame = Frame(2U, state.revision, 200U, scratch_first, scratch_second, 8U);
 	frame.kernels = &kernel;
 	frame.kernel_count = 1U;
@@ -964,10 +1053,13 @@ static void TestTransactionalRejectDuplicateAndStale(void)
 	memcpy(particles_before, storage, sizeof(storage));
 	memset(&frame, 0, sizeof(frame));
 	frame.sequence = 2U;
+	frame.expected_revision = state.revision - 1U;
+	frame.expected_generation = state.generation - 1U;
+	frame.at_ms = state.updated_at_ms;
 	frame.evidence_count = SIZE_MAX;
 	frame.evidence = (const sg_belief_evidence_t *)(uintptr_t)1U;
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
-		SG_BELIEF_REDUCE_DUPLICATE);
+		SG_BELIEF_REDUCE_OVERFLOW);
 	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
 	CHECK(memcmp(storage, particles_before, sizeof(storage)) == 0);
 
@@ -1011,6 +1103,7 @@ static void TestDelayedTeammateEvidenceIsAgedAndPropagated(void)
 		100U, &support, 1U);
 	sg_belief_horizon_entry_t entries[3];
 	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t step;
 	sg_belief_horizon_kernel_t kernel;
 	sg_belief_frame_t frame;
 	sg_belief_reduction_t reduction;
@@ -1022,9 +1115,11 @@ static void TestDelayedTeammateEvidenceIsAgedAndPropagated(void)
 	evidence.provenance.authenticated_at_ms = 150U;
 	evidence.valid_until_ms = 250U;
 	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
+	entries[0].step_count = 1U;
 	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
 	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
-	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, &step, 1U);
 	frame = Frame(1U, state.revision, 200U, scratch_first, scratch_second, 8U);
 	frame.evidence = &evidence;
 	frame.evidence_count = 1U;
@@ -1079,6 +1174,7 @@ static void TestCapacityRetryBeyondOldThresholds(void)
 	sg_belief_horizon_entry_t horizon_entries[260];
 	sg_belief_horizon_span_t horizon_spans[3];
 	sg_belief_horizon_kernel_t kernel;
+	sg_belief_horizon_step_t step;
 	sg_belief_particle_t evidence_storage[32];
 	sg_belief_state_t evidence_state;
 	sg_belief_particle_t transition_scratch_first[300];
@@ -1152,11 +1248,13 @@ static void TestCapacityRetryBeyondOldThresholds(void)
 	{
 		horizon_entries[index] = HorizonEntry(0U, 0U, 1U, 0U,
 			(float)index, 1.0f / 258.0f);
+		horizon_entries[index].step_count = 1U;
 	}
 	horizon_entries[258] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
 	horizon_entries[259] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
 	kernel = HorizonKernel(100U, 200U, horizon_entries, 260U,
-		horizon_spans, 3U);
+		horizon_spans, 3U, &step, 1U);
 	frame = Frame(2U, transition_state.revision, 200U,
 		transition_scratch_first, transition_scratch_second, 300U);
 	frame.kernels = &kernel;
@@ -1171,6 +1269,7 @@ static void TestCapacityRetryBeyondOldThresholds(void)
 int main(void)
 {
 	TestStateInitIsTransactional();
+	TestStorageAliasingAndCountOverflow();
 	TestSightConcentrates();
 	TestCanonicalModeMerge();
 	TestAllEarnedSourcesAndTeamAuthority();

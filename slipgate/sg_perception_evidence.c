@@ -94,6 +94,8 @@ static int PerceptionHypothesisValid(
 	sg_belief_evidence_kind_t evidence_kind)
 {
 	if (!hypothesis || !SG_PhaseCoordinateValid(snapshot, &hypothesis->phase) ||
+	    !SG_BeliefMotionStateCompatible(snapshot, &hypothesis->phase,
+		hypothesis->movement_state) ||
 	    hypothesis->location_basis < SG_PERCEPTION_LOCATION_EARNED_RUNTIME ||
 	    hypothesis->location_basis >= SG_PERCEPTION_LOCATION_BASIS_COUNT ||
 	    (hypothesis->location_basis == SG_PERCEPTION_LOCATION_RUNE_STATIC &&
@@ -402,6 +404,9 @@ static void PerceptionBuildEvidence(sg_belief_evidence_t *evidence,
 		authentication->evidence_sequence;
 	evidence->provenance.authenticated_at_ms =
 		authentication->authenticated_at_ms;
+	evidence->provenance.rune_identity = authentication->rune_identity;
+	evidence->provenance.topology_revision =
+		authentication->topology_revision;
 	evidence->source = PerceptionBeliefSource(observation->source);
 	evidence->kind = observation->evidence_kind;
 	evidence->target_team = observation->target_team;
@@ -460,17 +465,18 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 		*out = adaptation;
 		return adaptation.result;
 	}
+	if (span.external && !PerceptionByteCount(span.count,
+	    sizeof(*span.values), &hypothesis_bytes))
+		return SG_PERCEPTION_ADAPT_OVERFLOW;
 	if (span.external &&
-	    (!PerceptionByteCount(span.count, sizeof(*span.values),
-		&hypothesis_bytes) ||
-	     !PerceptionByteRange(span.values, hypothesis_bytes,
+	    (!PerceptionByteRange(span.values, hypothesis_bytes,
 		&hypothesis_range) ||
 	     PerceptionRangesOverlap(&hypothesis_range, &observation_range) ||
 	     PerceptionRangesOverlap(&hypothesis_range, &output_range)))
 		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
 	if (!PerceptionByteCount(span.count, sizeof(*support_storage),
 	    &support_bytes))
-		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
+		return SG_PERCEPTION_ADAPT_OVERFLOW;
 	support_span_count = support_capacity < span.count ? support_capacity :
 		span.count;
 	if (support_storage && support_span_count != 0U &&

@@ -599,7 +599,7 @@ static void TestAliasAndRangeRejection(void)
 	observation.data.sound.hypothesis_count =
 		SIZE_MAX / sizeof(*overlapping_support) + 1U;
 	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
-		2U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+		2U, &adaptation) == SG_PERCEPTION_ADAPT_OVERFLOW);
 	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
 	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
 }
@@ -691,7 +691,7 @@ static void TestNestedHypothesisSpanAliasing(void)
 	SoundPayload(&observation, hypotheses,
 		SIZE_MAX / sizeof(*hypotheses) + 1U);
 	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
-		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_OVERFLOW);
 	CHECK(memcmp(hypotheses, hypotheses_before, sizeof(hypotheses)) == 0);
 	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
 	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);

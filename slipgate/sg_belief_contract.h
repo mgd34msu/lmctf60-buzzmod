@@ -241,7 +241,8 @@ typedef enum sg_belief_reduce_result_e
 	SG_BELIEF_REDUCE_REJECTED_INVALID,
 	SG_BELIEF_REDUCE_REJECTED_STALE,
 	SG_BELIEF_REDUCE_REJECTED_AUTHORITY,
-	SG_BELIEF_REDUCE_CAPACITY
+	SG_BELIEF_REDUCE_CAPACITY,
+	SG_BELIEF_REDUCE_OVERFLOW
 } sg_belief_reduce_result_t;
 
 typedef struct sg_belief_reduction_s
@@ -278,6 +279,49 @@ static inline int SG_BeliefTeamValid(uint8_t team)
 static inline int SG_BeliefFloatValid(float value)
 {
 	return isfinite(value) != 0;
+}
+
+static inline int SG_BeliefMotionStateCompatible(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *phase,
+	sg_belief_motion_state_t movement_state)
+{
+	const sg_rune_phase_basis_t *basis;
+	int mover_relative;
+
+	if (!snapshot || !snapshot->model || !snapshot->model->phases ||
+	    !SG_PhaseCoordinateValid(snapshot, phase) ||
+	    movement_state < SG_BELIEF_MOTION_UNKNOWN ||
+	    movement_state >= SG_BELIEF_MOTION_COUNT)
+		return 0;
+	basis = &snapshot->model->phases[phase->phase_id];
+	if (basis->motion < SG_RUNE_MOTION_SUPPORTED ||
+	    basis->motion >= SG_RUNE_MOTION_COUNT ||
+	    basis->support < SG_RUNE_SUPPORT_NONE ||
+	    basis->support >= SG_RUNE_SUPPORT_COUNT ||
+	    basis->reference_frame < SG_RUNE_FRAME_WORLD ||
+	    basis->reference_frame >= SG_RUNE_FRAME_COUNT)
+		return 0;
+	if (movement_state == SG_BELIEF_MOTION_UNKNOWN)
+		return 1;
+	mover_relative = basis->support == SG_RUNE_SUPPORT_MOVER ||
+		basis->reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE;
+	switch (movement_state)
+	{
+	case SG_BELIEF_MOTION_GROUND:
+		return basis->motion == SG_RUNE_MOTION_SUPPORTED && !mover_relative;
+	case SG_BELIEF_MOTION_AIR:
+	case SG_BELIEF_MOTION_HOOK:
+		return basis->motion == SG_RUNE_MOTION_AIRBORNE;
+	case SG_BELIEF_MOTION_WATER:
+		return basis->motion == SG_RUNE_MOTION_SWIMMING;
+	case SG_BELIEF_MOTION_MOVER:
+		return basis->motion == SG_RUNE_MOTION_SUPPORTED && mover_relative;
+	case SG_BELIEF_MOTION_UNKNOWN:
+	case SG_BELIEF_MOTION_COUNT:
+		break;
+	}
+	return 0;
 }
 
 static inline int SG_BeliefParticleValid(const sg_belief_particle_t *particle)
@@ -330,6 +374,8 @@ static inline int SG_BeliefStateValid(const sg_belief_state_t *state)
 		return 0;
 	if ((state->last_evidence_sequence == 0U &&
 	     (state->latest_provenance.evidence_id != 0U ||
+	      state->latest_provenance.rune_identity != 0U ||
+	      state->latest_provenance.topology_revision != 0U ||
 	      state->latest_observed_at_ms != 0U ||
 	      state->latest_valid_until_ms != 0U ||
 	      state->latest_evidence_confidence != 0.0f)) ||
@@ -338,6 +384,9 @@ static inline int SG_BeliefStateValid(const sg_belief_state_t *state)
 	      state->latest_provenance.evidence_sequence !=
 		state->last_evidence_sequence ||
 	      state->latest_provenance.audience_team != state->audience_team ||
+	      state->latest_provenance.rune_identity != state->rune_identity ||
+	      state->latest_provenance.topology_revision !=
+		state->topology_revision ||
 	      state->latest_source < SG_BELIEF_SOURCE_SIGHT ||
 	      state->latest_source >= SG_BELIEF_SOURCE_COUNT ||
 	      state->latest_observed_at_ms == 0U ||
