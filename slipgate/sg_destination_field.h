@@ -383,4 +383,28 @@ int SG_DestinationFieldSolve(const sg_rune_runtime_snapshot_t *snapshot,
 	sg_field_sample_t *samples, uint32_t sample_capacity,
 	sg_destination_field_t *out);
 
+/* Exact reverse dependency closure for changing the terminal phase. The mask
+ * has one byte per phase and is filled with zero or one. It uses the same
+ * admitted edge set as the solver, including transition suppression. */
+int SG_DestinationFieldDependencyClosure(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *before,
+	const sg_phase_coordinate_t *after,
+	uint8_t *affected_phases,
+	uint32_t affected_capacity);
+
+/* Re-solve only the supplied reverse-closed phase set. Samples outside the
+ * set are copied from before_field. This is exact only for a mask produced by
+ * SG_DestinationFieldDependencyClosure for the old and new terminal phases. */
+int SG_DestinationFieldSolveAffected(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_destination_field_t *before_field,
+	const sg_destination_handle_t *destination,
+	uint64_t computed_at_ms,
+	const uint8_t *affected_phases,
+	uint32_t affected_phase_count,
+	sg_field_sample_t *samples,
+	uint32_t sample_capacity,
+	sg_destination_field_t *out);
+
 #endif /* SG_DESTINATION_FIELD_H */

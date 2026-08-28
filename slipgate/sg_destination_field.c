@@ -559,14 +559,25 @@ int SG_FieldQuery(const sg_rune_runtime_snapshot_t *snapshot,
 	return 1;
 }
 
-static void InitializeSamples(const sg_rune_runtime_snapshot_t *snapshot,
+static int InitializeSamples(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_handle_t *destination, sg_field_sample_t *samples,
-	sg_field_work_t *work)
+	sg_field_work_t *work, const uint8_t *affected_phases)
 {
 	uint32_t index;
 	uint32_t destination_index = destination->pose.phase.phase_id;
 
+	if (affected_phases)
+		for (index = 0U; index < snapshot->phase_count; index++)
+			if (affected_phases[index] == 0U &&
+				(!SG_FieldSampleShapeValid(snapshot, &samples[index]) ||
+				 !CoordinateEqual(&samples[index].phase,
+					&snapshot->phases[index])))
+				return 0;
 	for (index = 0U; index < snapshot->phase_count; index++) {
+		if (affected_phases && affected_phases[index] == 0U) {
+			work->selected_edge[index] = SG_FIELD_NO_INDEX;
+			continue;
+		}
 		memset(&samples[index], 0, sizeof(samples[index]));
 		samples[index].phase = snapshot->phases[index];
 		samples[index].next_phase.phase_id = SG_DESTINATION_FIELD_NO_PHASE;
@@ -577,6 +588,7 @@ static void InitializeSamples(const sg_rune_runtime_snapshot_t *snapshot,
 	samples[destination_index].next_phase = destination->pose.phase;
 	samples[destination_index].cost_ms = 0U;
 	samples[destination_index].finite = 1U;
+	return 1;
 }
 
 static void SelectEdge(const sg_rune_runtime_snapshot_t *snapshot,
@@ -610,7 +622,8 @@ static void SelectEdge(const sg_rune_runtime_snapshot_t *snapshot,
 }
 
 static void SolveFixedPoint(const sg_rune_runtime_snapshot_t *snapshot,
-	sg_field_sample_t *samples, sg_field_work_t *work, uint32_t destination)
+	sg_field_sample_t *samples, sg_field_work_t *work, uint32_t destination,
+	const uint8_t *affected_phases)
 {
 	uint32_t head = 0U;
 	uint32_t tail = 0U;
@@ -635,7 +648,8 @@ static void SolveFixedPoint(const sg_rune_runtime_snapshot_t *snapshot,
 			uint32_t candidate;
 			int lower_cost;
 
-			if (samples[current].cost_ms >= SG_DESTINATION_FIELD_INF -
+			if ((affected_phases && affected_phases[source] == 0U) ||
+				samples[current].cost_ms >= SG_DESTINATION_FIELD_INF -
 				work->edge_cost[edge])
 				continue;
 			candidate = samples[current].cost_ms + work->edge_cost[edge];
@@ -658,8 +672,10 @@ static void SolveFixedPoint(const sg_rune_runtime_snapshot_t *snapshot,
 	}
 }
 
-int SG_DestinationFieldSolve(const sg_rune_runtime_snapshot_t *snapshot,
+static int SolveInternal(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_handle_t *destination, uint64_t computed_at_ms,
+	const sg_destination_field_t *before_field,
+	const uint8_t *affected_phases, uint32_t affected_phase_count,
 	sg_field_sample_t *samples, uint32_t sample_capacity,
 	sg_destination_field_t *out)
 {
@@ -676,8 +692,24 @@ int SG_DestinationFieldSolve(const sg_rune_runtime_snapshot_t *snapshot,
 		computed_at_ms == 0U ||
 		(destination->motion == SG_DESTINATION_MOVING &&
 		 computed_at_ms < destination->pose.sample_time_ms) || !samples ||
-		sample_capacity < snapshot->phase_count || !SnapshotMatchesModel(snapshot))
+		sample_capacity < snapshot->phase_count ||
+		(affected_phases && affected_phase_count != snapshot->phase_count) ||
+		(affected_phases &&
+		 !SG_DestinationFieldValid(snapshot, before_field)) ||
+		!SnapshotMatchesModel(snapshot))
 		return 0;
+	if (affected_phases) {
+		uint32_t index;
+
+		if (affected_phases[destination->pose.phase.phase_id] != 1U)
+			return 0;
+		for (index = 0U; index < snapshot->phase_count; index++)
+			if (affected_phases[index] > 1U ||
+				(before_field->samples[index].finite == 1U &&
+				 before_field->samples[index].cost_ms == 0U &&
+				 affected_phases[index] == 0U))
+				return 0;
+	}
 	model = snapshot->model;
 	memset(&work, 0, sizeof(work));
 	if (model->kernel_count > SG_RUNE_MODEL_MAX_KERNELS ||
@@ -694,23 +726,147 @@ int SG_DestinationFieldSolve(const sg_rune_runtime_snapshot_t *snapshot,
 		return 0;
 	}
 	if (BuildReverseEdges(model, &work)) {
-		InitializeSamples(snapshot, destination, samples, &work);
-		SolveFixedPoint(snapshot, samples, &work,
-			destination->pose.phase.phase_id);
-		*out = (sg_destination_field_t){
-			.rune_identity = snapshot->identity,
-			.topology_revision = snapshot->topology_revision,
-			.generation = destination->generation,
-			.computed_at_ms = computed_at_ms,
-			.destination = *destination,
-			.samples = samples,
-			.sample_count = snapshot->phase_count,
-			.complete = 1U
-		};
-		success = 1;
+		uint32_t edge;
+		int reverse_closed = 1;
+
+		if (affected_phases) {
+			uint32_t destination_index;
+
+			for (destination_index = 0U;
+				destination_index < snapshot->phase_count;
+				destination_index++)
+				if (affected_phases[destination_index] != 0U)
+					for (edge = work.first_incoming[destination_index];
+						edge != SG_FIELD_NO_INDEX;
+						edge = work.next_incoming[edge])
+						if (affected_phases[work.source_phase[edge]] == 0U)
+							reverse_closed = 0;
+		}
+		if (reverse_closed && affected_phases)
+			memcpy(samples, before_field->samples,
+				(size_t)snapshot->phase_count * sizeof(*samples));
+		if (reverse_closed && InitializeSamples(snapshot, destination, samples,
+			&work, affected_phases)) {
+			SolveFixedPoint(snapshot, samples, &work,
+				destination->pose.phase.phase_id, affected_phases);
+			*out = (sg_destination_field_t){
+				.rune_identity = snapshot->identity,
+				.topology_revision = snapshot->topology_revision,
+				.generation = destination->generation,
+				.computed_at_ms = computed_at_ms,
+				.destination = *destination,
+				.samples = samples,
+				.sample_count = snapshot->phase_count,
+				.complete = 1U
+			};
+			success = 1;
+		}
 	}
 	FreeWork(&work);
 	if (!success)
 		memset(out, 0, sizeof(*out));
+	return success;
+}
+
+int SG_DestinationFieldSolve(const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_destination_handle_t *destination, uint64_t computed_at_ms,
+	sg_field_sample_t *samples, uint32_t sample_capacity,
+	sg_destination_field_t *out)
+{
+	return SolveInternal(snapshot, destination, computed_at_ms, NULL, NULL, 0U,
+		samples, sample_capacity, out);
+}
+
+int SG_DestinationFieldSolveAffected(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_destination_field_t *before_field,
+	const sg_destination_handle_t *destination, uint64_t computed_at_ms,
+	const uint8_t *affected_phases, uint32_t affected_phase_count,
+	sg_field_sample_t *samples, uint32_t sample_capacity,
+	sg_destination_field_t *out)
+{
+	if (!affected_phases) {
+		if (out)
+			memset(out, 0, sizeof(*out));
+		return 0;
+	}
+	return SolveInternal(snapshot, destination, computed_at_ms, before_field,
+		affected_phases, affected_phase_count, samples, sample_capacity, out);
+}
+
+int SG_DestinationFieldDependencyClosure(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *before,
+	const sg_phase_coordinate_t *after, uint8_t *affected_phases,
+	uint32_t affected_capacity)
+{
+	sg_field_work_t work;
+	const sg_rune_model_t *model;
+	uint32_t edge_capacity;
+	uint32_t head = 0U;
+	uint32_t tail = 0U;
+	uint32_t queued_count = 0U;
+	uint32_t seed;
+	int success = 0;
+
+	if (affected_phases && affected_capacity != 0U)
+		memset(affected_phases, 0,
+			(size_t)affected_capacity * sizeof(*affected_phases));
+	if (!SG_RuneRuntimeSnapshotValid(snapshot) ||
+		!SG_PhaseCoordinateValid(snapshot, before) ||
+		!SG_PhaseCoordinateValid(snapshot, after) || !affected_phases ||
+		affected_capacity < snapshot->phase_count ||
+		!SnapshotMatchesModel(snapshot))
+		return 0;
+	model = snapshot->model;
+	if (model->kernel_count > SG_RUNE_MODEL_MAX_KERNELS ||
+		model->phase_transition_count > SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS ||
+		(model->kernel_count != 0U && !model->kernels) ||
+		(model->phase_transition_count != 0U && !model->phase_transitions) ||
+		model->kernel_count > UINT32_MAX - model->phase_transition_count)
+		return 0;
+	edge_capacity = model->kernel_count + model->phase_transition_count;
+	memset(&work, 0, sizeof(work));
+	if (!AllocateWork(snapshot->phase_count, edge_capacity,
+		model->phase_transition_count, &work)) {
+		FreeWork(&work);
+		return 0;
+	}
+	if (!BuildReverseEdges(model, &work))
+		goto done;
+	for (seed = 0U; seed < 2U; seed++) {
+		uint32_t phase = seed == 0U ? before->phase_id : after->phase_id;
+
+		if (affected_phases[phase] != 0U)
+			continue;
+		affected_phases[phase] = 1U;
+		work.queue[tail] = phase;
+		tail = (tail + 1U) % snapshot->phase_count;
+		queued_count++;
+	}
+	while (queued_count != 0U) {
+		uint32_t current = work.queue[head];
+		uint32_t edge;
+
+		head = (head + 1U) % snapshot->phase_count;
+		queued_count--;
+		for (edge = work.first_incoming[current]; edge != SG_FIELD_NO_INDEX;
+			edge = work.next_incoming[edge]) {
+			uint32_t source = work.source_phase[edge];
+
+			if (affected_phases[source] != 0U)
+				continue;
+			affected_phases[source] = 1U;
+			work.queue[tail] = source;
+			tail = (tail + 1U) % snapshot->phase_count;
+			queued_count++;
+		}
+	}
+	success = 1;
+done:
+	FreeWork(&work);
+	if (!success)
+		memset(affected_phases, 0,
+			(size_t)snapshot->phase_count * sizeof(*affected_phases));
 	return success;
 }
