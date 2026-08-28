@@ -3826,6 +3826,8 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
 		tests/sg_bsp_world_test.c slipgate/sg_bsp_world.c \
 		tests/sg_rune_v2_codec_test.c slipgate/sg_rune_v2_codec.c \
+		tests/sg_rune_v2_artifact_loader_test.c \
+		slipgate/sg_rune_v2_artifact_loader.c \
 		tests/sg_destination_field_test.c slipgate/sg_destination_field.c \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
@@ -3847,6 +3849,12 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
 		-o "$$tmp/codec"; \
 	"$$tmp/codec"; \
+	$(CC) $$strict -Wcast-align -I. \
+		tests/sg_rune_v2_artifact_loader_test.c \
+		slipgate/sg_rune_v2_artifact_loader.c \
+		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
+		-o "$$tmp/loader"; \
+	"$$tmp/loader"; \
 	$(CC) $$strict -Wcast-align -I. -c tests/sg_destination_field_test.c \
 		-o "$$tmp/field-test.o"; \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination_field.c \
