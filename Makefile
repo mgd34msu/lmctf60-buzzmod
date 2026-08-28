@@ -1369,7 +1369,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
-	rune-v2-contract-test project-completion-plan-test \
+	rune-v2-contract-test rune-v2-independent-reader-test \
+	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
 	deslop-test \
@@ -3935,6 +3936,42 @@ $(POV_SUPERVISOR_TEST_BIN): tests/pov_supervisor_unit.c tools/pov-spawn-linux.c 
 rune-naming-test: $(RUNE_NAMING_TEST)
 	$(E) [TEST] $<
 	$(Q)python3 $(RUNE_NAMING_TEST)
+
+rune-v2-independent-reader-test: tools/runev2read.c tools/runev2read.py \
+		tests/sg_rune_v2_codec_probe.c tests/sg_rune_v2_fixture_writer.c \
+		tests/test_rune_v2_independent_readers.py \
+		tests/support/sg_rune_v2_fixture.h \
+		slipgate/sg_rune_v2_artifact_loader.c slipgate/sg_rune_v2_codec.c \
+		slipgate/sg_rune_model.c
+	$(E) [TEST] RUNE v2 independent readers
+	$(Q)set -e; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -r "$$tmp"' EXIT HUP INT TERM; \
+	strict='-std=c11 -Wall -Wextra -Werror -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes'; \
+	$(CC) $$strict tools/runev2read.c -lm -o "$$tmp/reader"; \
+	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_probe.c \
+		slipgate/sg_rune_v2_artifact_loader.c slipgate/sg_rune_v2_codec.c \
+		slipgate/sg_rune_model.c -lm -o "$$tmp/probe"; \
+	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_fixture_writer.c \
+		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
+		-o "$$tmp/writer"; \
+	RUNE_V2_C_READER="$$tmp/reader" RUNE_V2_CODEC_PROBE="$$tmp/probe" \
+		RUNE_V2_FIXTURE_WRITER="$$tmp/writer" \
+		python3 -B tests/test_rune_v2_independent_readers.py; \
+	sanitize="$$strict -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined"; \
+	clang $$sanitize tools/runev2read.c -lm -o "$$tmp/reader-san"; \
+	clang $$sanitize -Wcast-align -I. tests/sg_rune_v2_codec_probe.c \
+		slipgate/sg_rune_v2_artifact_loader.c slipgate/sg_rune_v2_codec.c \
+		slipgate/sg_rune_model.c -lm -o "$$tmp/probe-san"; \
+	clang $$sanitize -Wcast-align -I. tests/sg_rune_v2_fixture_writer.c \
+		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
+		-o "$$tmp/writer-san"; \
+	ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
+	UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1' \
+	RUNE_V2_C_READER="$$tmp/reader-san" \
+	RUNE_V2_CODEC_PROBE="$$tmp/probe-san" \
+	RUNE_V2_FIXTURE_WRITER="$$tmp/writer-san" \
+		python3 -B tests/test_rune_v2_independent_readers.py
 
 rune-artifact-test: $(RUNE_PYTHON_TESTS)
 	$(E) [TEST] rune artifact

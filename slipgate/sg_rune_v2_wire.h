@@ -551,7 +551,13 @@ static inline sg_rune_v2_wire_diagnostic_t SG_RuneV2WireInspect(
 			(size_t)index * SG_RUNE_V2_SECTION_ENTRY_BYTES;
 		sg_rune_v2_wire_section_t *section = &view.section[index];
 		uint64_t expected_bytes;
+		uint64_t expected_offset;
 		uint64_t end;
+
+		if (!SG_RuneV2WireCheckedAdd(previous_end,
+			SG_RUNE_V2_SECTION_ALIGNMENT - 1U, &expected_offset))
+			return SG_RUNE_V2_WIRE_BAD_SECTION;
+		expected_offset &= ~(SG_RUNE_V2_SECTION_ALIGNMENT - 1U);
 
 		section->type = SG_RuneV2WireGetU16(entry +
 			SG_RUNE_V2_SECTION_TYPE_OFFSET);
@@ -575,7 +581,7 @@ static inline sg_rune_v2_wire_diagnostic_t SG_RuneV2WireInspect(
 				? SG_RUNE_V2_WIRE_HOSTILE_COUNT : SG_RUNE_V2_WIRE_BAD_SECTION;
 		if (!SG_RuneV2WireCheckedMul(section->element_bytes, section->count,
 			&expected_bytes) || expected_bytes != section->bytes ||
-			section->offset < previous_end ||
+			section->offset != expected_offset ||
 			(section->offset & (SG_RUNE_V2_SECTION_ALIGNMENT - 1U)) != 0U ||
 			!SG_RuneV2WireCheckedAdd(section->offset, section->bytes, &end) ||
 			end > view.header.total_bytes)
@@ -588,6 +594,16 @@ static inline sg_rune_v2_wire_diagnostic_t SG_RuneV2WireInspect(
 			SG_RUNE_V2_SECTION_CRC_OFFSET))
 			return SG_RUNE_V2_WIRE_BAD_SECTION_CRC;
 		previous_end = end;
+	}
+	{
+		uint64_t expected_total;
+
+		if (!SG_RuneV2WireCheckedAdd(previous_end,
+			SG_RUNE_V2_SECTION_ALIGNMENT - 1U, &expected_total))
+			return SG_RUNE_V2_WIRE_BAD_SIZE;
+		expected_total &= ~(SG_RUNE_V2_SECTION_ALIGNMENT - 1U);
+		if (view.header.total_bytes != expected_total)
+			return SG_RUNE_V2_WIRE_BAD_SIZE;
 	}
 	while (previous_end < view.header.total_bytes)
 		if (encoded[(size_t)previous_end++] != 0U)
