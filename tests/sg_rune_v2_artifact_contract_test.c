@@ -303,6 +303,12 @@ static void TestAcceptanceBindings(void)
 	evidence.sidecar_set_identity = Identity(200U);
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_OK,
 		SG_RuneV2Accept(image, image_size, &evidence, &accepted));
+	sidecar.sidecar_identity = (sg_rune_v2_content_id_t){ { 0 } };
+	exact_sidecar_identity = (sg_rune_v2_content_id_t){ { 0 } };
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_SIDECAR,
+		SG_RuneV2Accept(image, image_size, &evidence, &accepted));
+	exact_sidecar_identity = Identity(160U);
+	sidecar.sidecar_identity = exact_sidecar_identity;
 	exact_sidecar_identity.bytes[0] ^= 1U;
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_SIDECAR,
 		SG_RuneV2Accept(image, image_size, &evidence, &accepted));

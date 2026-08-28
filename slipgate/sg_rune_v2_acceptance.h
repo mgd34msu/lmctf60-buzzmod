@@ -169,6 +169,8 @@ static inline int SG_RuneV2SidecarBindingAccepts(
 		(sidecar->flags & ~SG_RUNE_V2_SIDECAR_COST_ONLY) == 0U &&
 		sidecar->generation == artifact->generation &&
 		sidecar->geometry_changes == 0U && sidecar->connectivity_changes == 0U &&
+		SG_RuneV2ContentIdValid(&sidecar->sidecar_identity) &&
+		SG_RuneV2ContentIdValid(exact_sidecar_identity) &&
 		((sidecar->flags & SG_RUNE_V2_SIDECAR_COST_ONLY) == 0U ||
 		 (sidecar->maximum_cost_ms > 0U &&
 		  sidecar->maximum_cost_ms <= SG_RUNE_V2_MAX_SIDECAR_COST_MS)) &&
