@@ -10,6 +10,7 @@ typedef struct perception_hypothesis_span_s
 	const sg_perception_hypothesis_t *values;
 	size_t count;
 	sg_perception_source_t shape_source;
+	uint8_t external;
 } perception_hypothesis_span_t;
 
 typedef struct perception_byte_range_s
@@ -89,17 +90,14 @@ static sg_perception_adapt_result_t PerceptionAuthenticationValid(
 static int PerceptionHypothesisValid(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_perception_hypothesis_t *hypothesis,
-	sg_perception_source_t shape_source,
+	int static_location_allowed,
 	sg_belief_evidence_kind_t evidence_kind)
 {
-	int static_allowed = shape_source == SG_PERCEPTION_SOURCE_ITEM ||
-		shape_source == SG_PERCEPTION_SOURCE_FLAG;
-
 	if (!hypothesis || !SG_PhaseCoordinateValid(snapshot, &hypothesis->phase) ||
 	    hypothesis->location_basis < SG_PERCEPTION_LOCATION_EARNED_RUNTIME ||
 	    hypothesis->location_basis >= SG_PERCEPTION_LOCATION_BASIS_COUNT ||
 	    (hypothesis->location_basis == SG_PERCEPTION_LOCATION_RUNE_STATIC &&
-	     !static_allowed) ||
+	     !static_location_allowed) ||
 	    hypothesis->movement_state < SG_BELIEF_MOTION_UNKNOWN ||
 	    hypothesis->movement_state >= SG_BELIEF_MOTION_COUNT ||
 	    hypothesis->reserved[0] != 0U || hypothesis->reserved[1] != 0U ||
@@ -144,6 +142,18 @@ static int PerceptionHasDistinctModes(
 	return 0;
 }
 
+static int PerceptionSetDiffuseOrMultimodal(
+	const sg_perception_hypothesis_t *hypotheses, size_t count)
+{
+	size_t index;
+	int all_diffuse = 1;
+
+	for (index = 0U; index < count; index++)
+		if (hypotheses[index].spread_radius == 0.0f)
+			all_diffuse = 0;
+	return all_diffuse || PerceptionHasDistinctModes(hypotheses, count);
+}
+
 static int PerceptionShapeValid(sg_perception_source_t source,
 	sg_belief_evidence_kind_t evidence_kind,
 	const sg_perception_hypothesis_t *hypotheses, size_t count)
@@ -158,8 +168,7 @@ static int PerceptionShapeValid(sg_perception_source_t source,
 	case SG_PERCEPTION_SOURCE_SOUND:
 	case SG_PERCEPTION_SOURCE_DAMAGE:
 		return evidence_kind == SG_BELIEF_EVIDENCE_POSITIVE &&
-			(hypotheses[0].spread_radius > 0.0f ||
-			 (count > 1U && PerceptionHasDistinctModes(hypotheses, count)));
+			PerceptionSetDiffuseOrMultimodal(hypotheses, count);
 	case SG_PERCEPTION_SOURCE_ITEM:
 	case SG_PERCEPTION_SOURCE_FLAG:
 		return evidence_kind == SG_BELIEF_EVIDENCE_POSITIVE;
@@ -232,12 +241,14 @@ static int PerceptionPayloadSpan(const sg_perception_observation_t *observation,
 			return 0;
 		span->values = observation->data.sound.hypotheses;
 		span->count = observation->data.sound.hypothesis_count;
+		span->external = 1U;
 		return 1;
 	case SG_PERCEPTION_SOURCE_DAMAGE:
 		if (!PerceptionDamageMetadataValid(&observation->data.damage))
 			return 0;
 		span->values = observation->data.damage.hypotheses;
 		span->count = observation->data.damage.hypothesis_count;
+		span->external = 1U;
 		return 1;
 	case SG_PERCEPTION_SOURCE_ITEM:
 		if (observation->data.item.occurrence <
@@ -249,6 +260,7 @@ static int PerceptionPayloadSpan(const sg_perception_observation_t *observation,
 			return 0;
 		span->values = observation->data.item.hypotheses;
 		span->count = observation->data.item.hypothesis_count;
+		span->external = 1U;
 		return 1;
 	case SG_PERCEPTION_SOURCE_FLAG:
 		if (observation->data.flag.occurrence <
@@ -260,6 +272,7 @@ static int PerceptionPayloadSpan(const sg_perception_observation_t *observation,
 			return 0;
 		span->values = observation->data.flag.hypotheses;
 		span->count = observation->data.flag.hypothesis_count;
+		span->external = 1U;
 		return 1;
 	case SG_PERCEPTION_SOURCE_TEAMMATE:
 		if (observation->data.teammate.reported_source <
@@ -281,6 +294,7 @@ static int PerceptionPayloadSpan(const sg_perception_observation_t *observation,
 		span->shape_source = observation->data.teammate.reported_source;
 		span->values = observation->data.teammate.hypotheses;
 		span->count = observation->data.teammate.hypothesis_count;
+		span->external = 1U;
 		return 1;
 	case SG_PERCEPTION_SOURCE_COUNT:
 		return 0;
@@ -311,6 +325,18 @@ static int PerceptionOccurrenceLocationValid(
 		    SG_PERCEPTION_LOCATION_EARNED_RUNTIME)
 			return 0;
 	return 1;
+}
+
+static int PerceptionStaticLocationAllowed(
+	const sg_perception_observation_t *observation)
+{
+	if (observation->source == SG_PERCEPTION_SOURCE_ITEM)
+		return 1;
+	return observation->source == SG_PERCEPTION_SOURCE_FLAG &&
+		observation->data.flag.occurrence ==
+			SG_PERCEPTION_FLAG_TARGET_PICKUP &&
+		observation->data.flag.destination.value.flag.location ==
+			SG_DESTINATION_FLAG_HOME;
 }
 
 static sg_belief_evidence_source_t PerceptionBeliefSource(
@@ -398,9 +424,12 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 	perception_byte_range_t observation_range;
 	perception_byte_range_t output_range;
 	perception_byte_range_t support_range;
+	perception_byte_range_t hypothesis_range;
 	sg_perception_adapt_result_t authentication_result;
 	size_t support_bytes;
 	size_t support_span_count;
+	size_t hypothesis_bytes;
+	int static_location_allowed;
 	size_t index;
 
 	if (!out)
@@ -431,6 +460,14 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 		*out = adaptation;
 		return adaptation.result;
 	}
+	if (span.external &&
+	    (!PerceptionByteCount(span.count, sizeof(*span.values),
+		&hypothesis_bytes) ||
+	     !PerceptionByteRange(span.values, hypothesis_bytes,
+		&hypothesis_range) ||
+	     PerceptionRangesOverlap(&hypothesis_range, &observation_range) ||
+	     PerceptionRangesOverlap(&hypothesis_range, &output_range)))
+		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
 	if (!PerceptionByteCount(span.count, sizeof(*support_storage),
 	    &support_bytes))
 		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
@@ -442,6 +479,9 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 	     !PerceptionByteRange(support_storage, support_bytes, &support_range) ||
 	     PerceptionRangesOverlap(&support_range, &observation_range) ||
 	     PerceptionRangesOverlap(&support_range, &output_range)))
+		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
+	if (span.external && support_storage && support_span_count != 0U &&
+	    PerceptionRangesOverlap(&hypothesis_range, &support_range))
 		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
 	authentication_result = PerceptionAuthenticationValid(snapshot,
 		observation);
@@ -458,9 +498,10 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 		*out = adaptation;
 		return adaptation.result;
 	}
+	static_location_allowed = PerceptionStaticLocationAllowed(observation);
 	for (index = 0U; index < span.count; index++)
 		if (!PerceptionHypothesisValid(snapshot, &span.values[index],
-		    span.shape_source, observation->evidence_kind))
+		    static_location_allowed, observation->evidence_kind))
 		{
 			*out = adaptation;
 			return adaptation.result;

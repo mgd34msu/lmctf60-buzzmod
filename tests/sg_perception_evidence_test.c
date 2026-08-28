@@ -25,6 +25,11 @@ typedef struct perception_fixture_s
 	sg_rune_runtime_snapshot_t snapshot;
 } perception_fixture_t;
 
+_Static_assert(sizeof(sg_perception_hypothesis_t) == 76U,
+	"hypothesis range regression assumes the public 76-byte layout");
+_Static_assert(sizeof(sg_belief_evidence_support_t) == 72U,
+	"support range regression assumes the public 72-byte layout");
+
 static void FixtureInit(perception_fixture_t *fixture)
 {
 	memset(fixture, 0, sizeof(*fixture));
@@ -119,6 +124,28 @@ static void SoundPayload(sg_perception_observation_t *observation,
 	observation->data.sound.audible_radius = 800.0f;
 	observation->data.sound.hypotheses = hypotheses;
 	observation->data.sound.hypothesis_count = count;
+}
+
+static void DamagePayload(sg_perception_observation_t *observation,
+	const sg_perception_hypothesis_t *hypotheses, size_t count)
+{
+	observation->data.damage.landed = 1U;
+	observation->data.damage.damage = 40U;
+	observation->data.damage.means_of_death = 7U;
+	observation->data.damage.incoming_direction[0] = 1.0f;
+	observation->data.damage.hypotheses = hypotheses;
+	observation->data.damage.hypothesis_count = count;
+}
+
+static void UncertainPayload(sg_perception_observation_t *observation,
+	sg_perception_source_t source,
+	const sg_perception_hypothesis_t *hypotheses, size_t count)
+{
+	*observation = Observation(source);
+	if (source == SG_PERCEPTION_SOURCE_SOUND)
+		SoundPayload(observation, hypotheses, count);
+	else
+		DamagePayload(observation, hypotheses, count);
 }
 
 static void TestSightAndBorrowedLifetime(void)
@@ -216,14 +243,86 @@ static void TestSoundAndDamageShape(void)
 		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
 }
 
+static void TestSoundDamageShapePermutationInvariant(void)
+{
+	static const sg_perception_source_t sources[] = {
+		SG_PERCEPTION_SOURCE_SOUND,
+		SG_PERCEPTION_SOURCE_DAMAGE
+	};
+	perception_fixture_t fixture;
+	sg_perception_hypothesis_t hypotheses[2];
+	sg_perception_hypothesis_t swap;
+	sg_belief_evidence_support_t storage[2];
+	sg_perception_observation_t observation;
+	sg_perception_adaptation_t adaptation;
+	size_t source_index;
+	uint8_t ordering;
+
+	FixtureInit(&fixture);
+	for (source_index = 0U; source_index < sizeof(sources) /
+	    sizeof(sources[0]); source_index++)
+	{
+		hypotheses[0] = Hypothesis(0U, 0U,
+			SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 0.5f);
+		hypotheses[1] = Hypothesis(0U, 0U,
+			SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 64.0f, 0.5f);
+		for (ordering = 0U; ordering < 2U; ordering++)
+		{
+			UncertainPayload(&observation, sources[source_index],
+				hypotheses, 2U);
+			CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot,
+				&observation, storage, 2U, &adaptation) ==
+				SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+			swap = hypotheses[0];
+			hypotheses[0] = hypotheses[1];
+			hypotheses[1] = swap;
+		}
+
+		hypotheses[0] = Hypothesis(0U, 0U,
+			SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 0.5f);
+		hypotheses[1] = Hypothesis(1U, 0U,
+			SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 0.5f);
+		for (ordering = 0U; ordering < 2U; ordering++)
+		{
+			UncertainPayload(&observation, sources[source_index],
+				hypotheses, 2U);
+			CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot,
+				&observation, storage, 2U, &adaptation) ==
+				SG_PERCEPTION_ADAPT_APPLIED);
+			swap = hypotheses[0];
+			hypotheses[0] = hypotheses[1];
+			hypotheses[1] = swap;
+		}
+	}
+}
+
 static void TestItemAndFlagStaticRuneLocations(void)
 {
+	static const struct
+	{
+		sg_perception_flag_occurrence_t occurrence;
+		sg_destination_flag_location_t location;
+		int accepted;
+	} flag_cases[] = {
+		{ SG_PERCEPTION_FLAG_TARGET_PICKUP,
+			SG_DESTINATION_FLAG_HOME, 1 },
+		{ SG_PERCEPTION_FLAG_TARGET_PICKUP,
+			SG_DESTINATION_FLAG_CURRENT, 0 },
+		{ SG_PERCEPTION_FLAG_TARGET_DROP,
+			SG_DESTINATION_FLAG_CURRENT, 0 },
+		{ SG_PERCEPTION_FLAG_TARGET_DROP,
+			SG_DESTINATION_FLAG_HOME, 0 },
+		{ SG_PERCEPTION_FLAG_TARGET_CARRY_SIGHTED,
+			SG_DESTINATION_FLAG_CURRENT, 0 }
+	};
 	perception_fixture_t fixture;
 	sg_perception_hypothesis_t static_location = Hypothesis(2U, 1U,
 		SG_PERCEPTION_LOCATION_RUNE_STATIC, 0.0f, 1.0f);
 	sg_belief_evidence_support_t storage[2];
+	sg_belief_evidence_support_t storage_before[2];
 	sg_perception_observation_t observation;
 	sg_perception_adaptation_t adaptation;
+	size_t index;
 
 	FixtureInit(&fixture);
 	observation = Observation(SG_PERCEPTION_SOURCE_ITEM);
@@ -241,21 +340,32 @@ static void TestItemAndFlagStaticRuneLocations(void)
 		2U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
 
 	observation = Observation(SG_PERCEPTION_SOURCE_FLAG);
-	observation.data.flag.occurrence = SG_PERCEPTION_FLAG_TARGET_PICKUP;
 	observation.data.flag.destination.kind = SG_DESTINATION_FLAG;
 	observation.data.flag.destination.value.flag.team = 1U;
-	observation.data.flag.destination.value.flag.location =
-		SG_DESTINATION_FLAG_HOME;
 	observation.data.flag.hypotheses = &static_location;
 	observation.data.flag.hypothesis_count = 1U;
-	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
-		2U, &adaptation) == SG_PERCEPTION_ADAPT_APPLIED);
-	CHECK(adaptation.evidence.source == SG_BELIEF_SOURCE_FLAG);
+	for (index = 0U; index < sizeof(flag_cases) / sizeof(flag_cases[0]);
+	    index++)
+	{
+		observation.data.flag.occurrence = flag_cases[index].occurrence;
+		observation.data.flag.destination.value.flag.location =
+			(uint8_t)flag_cases[index].location;
+		memset(storage, 0xb4, sizeof(storage));
+		memcpy(storage_before, storage, sizeof(storage));
+		CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+			storage, 2U, &adaptation) ==
+			(flag_cases[index].accepted ? SG_PERCEPTION_ADAPT_APPLIED :
+			 SG_PERCEPTION_ADAPT_REJECTED_INVALID));
+		if (flag_cases[index].accepted)
+			CHECK(adaptation.evidence.source == SG_BELIEF_SOURCE_FLAG);
+		else
+			CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	}
+	static_location.location_basis = SG_PERCEPTION_LOCATION_EARNED_RUNTIME;
 	observation.data.flag.occurrence =
 		SG_PERCEPTION_FLAG_TARGET_CARRY_SIGHTED;
-	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
-		2U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
-	static_location.location_basis = SG_PERCEPTION_LOCATION_EARNED_RUNTIME;
+	observation.data.flag.destination.value.flag.location =
+		SG_DESTINATION_FLAG_CURRENT;
 	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
 		2U, &adaptation) == SG_PERCEPTION_ADAPT_APPLIED);
 }
@@ -490,6 +600,99 @@ static void TestAliasAndRangeRejection(void)
 	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
 }
 
+static void TestNestedHypothesisSpanAliasing(void)
+{
+	perception_fixture_t fixture;
+	sg_perception_hypothesis_t hypotheses[3];
+	sg_perception_hypothesis_t hypotheses_before[3];
+	sg_perception_observation_t observation =
+		Observation(SG_PERCEPTION_SOURCE_SOUND);
+	sg_perception_observation_t observation_before;
+	sg_belief_evidence_support_t storage[3];
+	sg_belief_evidence_support_t storage_before[3];
+	sg_perception_adaptation_t adaptation;
+	sg_perception_adaptation_t adaptation_before;
+	sg_belief_evidence_support_t *overlapping_support;
+	const sg_perception_hypothesis_t *overlapping_hypotheses;
+	size_t index;
+
+	FixtureInit(&fixture);
+	for (index = 0U; index < 3U; index++)
+		hypotheses[index] = Hypothesis((uint32_t)index,
+			index == 2U ? 1U : 0U,
+			SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 32.0f, 1.0f);
+	SoundPayload(&observation, hypotheses, 3U);
+	memset(&adaptation, 0x2d, sizeof(adaptation));
+	adaptation_before = adaptation;
+	memcpy(hypotheses_before, hypotheses, sizeof(hypotheses));
+	overlapping_support =
+		(sg_belief_evidence_support_t *)(void *)hypotheses;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		overlapping_support, 3U, &adaptation) ==
+		SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(hypotheses, hypotheses_before, sizeof(hypotheses)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	overlapping_support =
+		(sg_belief_evidence_support_t *)(void *)&hypotheses[1];
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		overlapping_support, 2U, &adaptation) ==
+		SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(hypotheses, hypotheses_before, sizeof(hypotheses)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	memset(storage, 0x81, sizeof(storage));
+	memcpy(storage_before, storage, sizeof(storage));
+	SoundPayload(&observation,
+		(const sg_perception_hypothesis_t *)(void *)&adaptation, 1U);
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	SoundPayload(&observation,
+		(const sg_perception_hypothesis_t *)(void *)&adaptation.evidence, 1U);
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	SoundPayload(&observation,
+		(const sg_perception_hypothesis_t *)(void *)&observation, 1U);
+	observation_before = observation;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(&observation, &observation_before, sizeof(observation)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	SoundPayload(&observation,
+		(const sg_perception_hypothesis_t *)(void *)&observation.data, 1U);
+	observation_before = observation;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(&observation, &observation_before, sizeof(observation)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	overlapping_hypotheses =
+		(const sg_perception_hypothesis_t *)(void *)(UINTPTR_MAX -
+		 sizeof(*overlapping_hypotheses) + 2U);
+	SoundPayload(&observation, overlapping_hypotheses, 1U);
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+
+	SoundPayload(&observation, hypotheses,
+		SIZE_MAX / sizeof(*hypotheses) + 1U);
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		3U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(hypotheses, hypotheses_before, sizeof(hypotheses)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&adaptation, &adaptation_before, sizeof(adaptation)) == 0);
+}
+
 static void TestAuthorityValidationAndTransactionalFinalElement(void)
 {
 	perception_fixture_t fixture;
@@ -641,10 +844,12 @@ int main(void)
 {
 	TestSightAndBorrowedLifetime();
 	TestSoundAndDamageShape();
+	TestSoundDamageShapePermutationInvariant();
 	TestItemAndFlagStaticRuneLocations();
 	TestDelayedTeammateFeedsReducer();
 	TestTeammateStaticLocationLaundering();
 	TestAliasAndRangeRejection();
+	TestNestedHypothesisSpanAliasing();
 	TestAuthorityValidationAndTransactionalFinalElement();
 	TestUnboundedCapacityRetry();
 	TestCanonicalOutputIgnoresInactiveUnionBytes();

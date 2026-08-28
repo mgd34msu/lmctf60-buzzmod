@@ -181,10 +181,10 @@ typedef enum sg_perception_adapt_result_e
 
 /* evidence.supports points at caller-owned support_storage after APPLIED and
  * stays valid only while that storage remains alive and unchanged. The
- * adapter never retains observation pointers. observation, support_storage,
- * and out must not overlap. Non-APPLIED results leave support_storage
- * byte-identical. Alias or byte-range overflow rejection writes neither
- * support_storage nor out. */
+ * adapter never retains observation pointers. The observation object, every
+ * external hypothesis span, the actual support_storage span, and out must not
+ * overlap. Non-APPLIED results leave support_storage byte-identical. Alias or
+ * byte-range overflow rejection writes none of those caller-owned objects. */
 typedef struct sg_perception_adaptation_s
 {
 	sg_perception_adapt_result_t result;
