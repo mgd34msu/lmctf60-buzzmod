@@ -1,4 +1,4 @@
-/* Typed strategy ownership and parameter-learning contracts. */
+/* Immutable strategy plans and their transactional execution reducer. */
 #ifndef SG_STRATEGY_CONTRACT_H
 #define SG_STRATEGY_CONTRACT_H
 
@@ -6,791 +6,562 @@
 
 #include "sg_destination_field.h"
 
-#define SG_STRATEGY_MAX_PREREQUISITES 8U
-#define SG_STRATEGY_MAX_ALTERNATIVES 4U
-#define SG_STRATEGY_MAX_GOAL_KINDS 16U
 #define SG_STRATEGY_MAX_GOALS 64U
-#define SG_LEARNING_MAX_CAPABILITIES 32U
-#define SG_LEARNING_MAX_TACTICS 32U
-#define SG_LEARNING_MAX_REGIONS 128U
-#define SG_STRATEGY_MAX_CLIENTS 256U
+#define SG_STRATEGY_MAX_DEPENDENCIES 8U
+#define SG_STRATEGY_MAX_CONDITIONS 8U
+#define SG_STRATEGY_MAX_CHOICES 5U
+#define SG_STRATEGY_MAX_FACTS 64U
+/* A frame can emit one directive effect, one effect per goal while settling a
+ * fixed point, and one plan-completed effect. */
+#define SG_STRATEGY_MAX_EFFECTS (SG_STRATEGY_MAX_GOALS + 2U)
+#define SG_STRATEGY_NO_INDEX UINT16_MAX
+#define SG_STRATEGY_NO_CHOICE UINT8_MAX
+#define SG_STRATEGY_PLAN_COMPILED_TAG UINT32_C(0x53504731)
+
+typedef uint32_t sg_strategy_goal_id_t;
+typedef uint32_t sg_strategy_target_id_t;
 
 typedef enum sg_strategy_goal_kind_e
 {
 	SG_STRATEGY_GOAL_DESTINATION = 0,
-	SG_STRATEGY_GOAL_CAPTURE_FLAG = 1,
-	SG_STRATEGY_GOAL_CARRY_FLAG = 2,
-	SG_STRATEGY_GOAL_RECOVER_FLAG = 3,
-	SG_STRATEGY_GOAL_COLLECT_ITEM = 4,
-	SG_STRATEGY_GOAL_ESCORT_CARRIER = 5,
-	SG_STRATEGY_GOAL_INTERCEPT_CARRIER = 6,
-	SG_STRATEGY_GOAL_DEFEND_POST = 7,
-	SG_STRATEGY_GOAL_WAIT_WINDOW = 8,
-	SG_STRATEGY_GOAL_ARBITRARY_WAYPOINT = 9,
-	SG_STRATEGY_GOAL_KIND_COUNT = 10
+	SG_STRATEGY_GOAL_CAPTURE_FLAG,
+	SG_STRATEGY_GOAL_CARRY_FLAG,
+	SG_STRATEGY_GOAL_RECOVER_FLAG,
+	SG_STRATEGY_GOAL_COLLECT_ITEM,
+	SG_STRATEGY_GOAL_ESCORT_CARRIER,
+	SG_STRATEGY_GOAL_INTERCEPT_CARRIER,
+	SG_STRATEGY_GOAL_DEFEND_POST,
+	SG_STRATEGY_GOAL_WAIT,
+	SG_STRATEGY_GOAL_KIND_COUNT
 } sg_strategy_goal_kind_t;
 
-typedef enum sg_strategy_prerequisite_kind_e
+typedef enum sg_strategy_dependency_accept_e
 {
-	SG_STRATEGY_PREREQUISITE_NONE = 0,
-	SG_STRATEGY_PREREQUISITE_GOAL_COMPLETE = 1,
-	SG_STRATEGY_PREREQUISITE_DESTINATION_AVAILABLE = 2,
-	SG_STRATEGY_PREREQUISITE_FLAG_HOME = 3,
-	SG_STRATEGY_PREREQUISITE_CARRIER_PRESENT = 4,
-	SG_STRATEGY_PREREQUISITE_TIME_WINDOW = 5,
-	SG_STRATEGY_PREREQUISITE_KIND_COUNT = 6
-} sg_strategy_prerequisite_kind_t;
+	SG_STRATEGY_DEPENDENCY_SUCCESS = 0,
+	SG_STRATEGY_DEPENDENCY_SETTLED,
+	SG_STRATEGY_DEPENDENCY_ACCEPT_COUNT
+} sg_strategy_dependency_accept_t;
 
-typedef enum sg_strategy_failure_policy_e
+typedef enum sg_strategy_condition_kind_e
 {
-	SG_STRATEGY_FAILURE_ABORT = 0,
-	SG_STRATEGY_FAILURE_TRY_ALTERNATIVES = 1,
-	SG_STRATEGY_FAILURE_SKIP = 2,
-	SG_STRATEGY_FAILURE_SUSPEND = 3,
-	SG_STRATEGY_FAILURE_POLICY_COUNT = 4
-} sg_strategy_failure_policy_t;
+	SG_STRATEGY_CONDITION_FACT_EQUALS = 0,
+	SG_STRATEGY_CONDITION_TIME_WINDOW,
+	SG_STRATEGY_CONDITION_KIND_COUNT
+} sg_strategy_condition_kind_t;
 
-typedef enum sg_strategy_authority_e
+typedef enum sg_strategy_condition_scope_e
 {
-	SG_STRATEGY_AUTHORITY_AUTONOMOUS = 1,
-	SG_STRATEGY_AUTHORITY_TEAM_ORDER = 2,
-	SG_STRATEGY_AUTHORITY_HUMAN_ORDER = 3,
-	SG_STRATEGY_AUTHORITY_EMERGENCY = 4
-} sg_strategy_authority_t;
+	SG_STRATEGY_CONDITION_START_ONLY = 0,
+	SG_STRATEGY_CONDITION_WHILE_ACTIVE,
+	SG_STRATEGY_CONDITION_SCOPE_COUNT
+} sg_strategy_condition_scope_t;
 
-typedef enum sg_strategy_actor_e
+typedef enum sg_strategy_fact_kind_e
 {
-	SG_STRATEGY_ACTOR_STRATEGY = 0,
-	SG_STRATEGY_ACTOR_CONTROLLER = 1,
-	SG_STRATEGY_ACTOR_TACTICS = 2,
-	SG_STRATEGY_ACTOR_HUMAN = 3,
-	SG_STRATEGY_ACTOR_HOST = 4,
-	SG_STRATEGY_ACTOR_COUNT = 5
-} sg_strategy_actor_t;
+	SG_STRATEGY_FACT_ALIVE = 0,
+	SG_STRATEGY_FACT_ROLE,
+	SG_STRATEGY_FACT_CARRYING_FLAG,
+	SG_STRATEGY_FACT_FLAG_HOME,
+	SG_STRATEGY_FACT_CARRIER_PRESENT,
+	SG_STRATEGY_FACT_COMBAT_ACTIVE,
+	SG_STRATEGY_FACT_ITEM_OWNED,
+	SG_STRATEGY_FACT_CUSTOM,
+	SG_STRATEGY_FACT_KIND_COUNT
+} sg_strategy_fact_kind_t;
 
-typedef enum sg_strategy_lifecycle_e
+typedef struct sg_strategy_fact_key_s
 {
-	SG_STRATEGY_EMPTY = 0,
-	SG_STRATEGY_READY = 1,
-	SG_STRATEGY_RUNNING = 2,
-	SG_STRATEGY_SUSPENDED = 3,
-	SG_STRATEGY_COMPLETED = 4,
-	SG_STRATEGY_FAILED = 5,
-	SG_STRATEGY_CANCELLED = 6
-} sg_strategy_lifecycle_t;
-
-typedef enum sg_strategy_event_kind_e
-{
-	SG_STRATEGY_EVENT_START = 0,
-	SG_STRATEGY_EVENT_SUSPEND = 1,
-	SG_STRATEGY_EVENT_RESUME = 2,
-	SG_STRATEGY_EVENT_CANCELLED = 3,
-	SG_STRATEGY_EVENT_REPLACED = 4,
-	SG_STRATEGY_EVENT_COMPLETED = 5,
-	SG_STRATEGY_EVENT_FAILED = 6,
-	SG_STRATEGY_EVENT_ALTERNATIVE_SELECTED = 7,
-	SG_STRATEGY_EVENT_KIND_COUNT = 8
-} sg_strategy_event_kind_t;
-
-typedef enum sg_strategy_failure_reason_e
-{
-	SG_STRATEGY_FAILURE_UNKNOWN = 0,
-	SG_STRATEGY_FAILURE_UNAVAILABLE = 1,
-	SG_STRATEGY_FAILURE_OBSTRUCTED = 2,
-	SG_STRATEGY_FAILURE_TIMEOUT = 3,
-	SG_STRATEGY_FAILURE_DEAD = 4,
-	SG_STRATEGY_FAILURE_AUTHORITY = 5
-} sg_strategy_failure_reason_t;
-
-typedef struct sg_strategy_prerequisite_s
-{
-	sg_strategy_prerequisite_kind_t kind;
-	uint8_t required;
+	sg_strategy_fact_kind_t kind;
+	uint32_t subject_id;
+	uint8_t team;
 	uint8_t reserved[3];
-	union
-	{
-		uint32_t goal_id;
-		sg_destination_handle_t destination;
-		struct
-		{
-			uint64_t not_before_ms;
-			uint64_t not_after_ms;
-		} window;
-	} value;
-} sg_strategy_prerequisite_t;
+} sg_strategy_fact_key_t;
 
-typedef struct sg_strategy_alternative_s
+typedef struct sg_strategy_fact_predicate_s
 {
-	sg_destination_handle_t destination;
-	uint32_t priority;
-	uint16_t flags;
-	uint16_t reserved;
-} sg_strategy_alternative_t;
+	sg_strategy_fact_key_t key;
+	int64_t expected_value;
+} sg_strategy_fact_predicate_t;
 
-typedef struct sg_strategy_flag_target_s
-{
-	uint8_t team;
-	uint8_t require_home;
-	uint16_t reserved;
-} sg_strategy_flag_target_t;
-
-typedef struct sg_strategy_item_target_s
-{
-	uint64_t item_id;
-} sg_strategy_item_target_t;
-
-typedef struct sg_strategy_carrier_target_s
-{
-	uint16_t client_id;
-	uint8_t team;
-	uint8_t reserved;
-} sg_strategy_carrier_target_t;
-
-typedef struct sg_strategy_post_target_s
-{
-	uint32_t region_id;
-	float heading;
-} sg_strategy_post_target_t;
-
-typedef struct sg_strategy_window_target_s
+typedef struct sg_strategy_time_window_s
 {
 	uint64_t not_before_ms;
 	uint64_t not_after_ms;
-} sg_strategy_window_target_t;
+} sg_strategy_time_window_t;
 
-/* Goal kind selects target. The destination handle remains a point-in-space
- * commitment when this goal has one, while the union carries semantic state
- * that a field query must not infer from a route link. */
+typedef struct sg_strategy_condition_s
+{
+	sg_strategy_condition_kind_t kind;
+	sg_strategy_condition_scope_t scope;
+	union
+	{
+		sg_strategy_fact_predicate_t fact;
+		sg_strategy_time_window_t time;
+	} value;
+} sg_strategy_condition_t;
+
+typedef enum sg_strategy_unavailable_action_e
+{
+	SG_STRATEGY_UNAVAILABLE_WAIT = 0,
+	SG_STRATEGY_UNAVAILABLE_APPLY_FAILURE,
+	SG_STRATEGY_UNAVAILABLE_ACTION_COUNT
+} sg_strategy_unavailable_action_t;
+
+typedef enum sg_strategy_retry_wake_kind_e
+{
+	SG_STRATEGY_RETRY_NONE = 0,
+	SG_STRATEGY_RETRY_NEXT_FRAME,
+	SG_STRATEGY_RETRY_TARGET_REVISION,
+	SG_STRATEGY_RETRY_FACT_REVISION,
+	SG_STRATEGY_RETRY_NOT_BEFORE,
+	SG_STRATEGY_RETRY_WAKE_COUNT
+} sg_strategy_retry_wake_kind_t;
+
+typedef struct sg_strategy_retry_wake_s
+{
+	sg_strategy_retry_wake_kind_t kind;
+	sg_strategy_fact_key_t fact;
+	uint64_t delay_ms;
+} sg_strategy_retry_wake_t;
+
+typedef enum sg_strategy_failure_terminal_e
+{
+	SG_STRATEGY_FAILURE_SKIP_GOAL = 0,
+	SG_STRATEGY_FAILURE_FAIL_PLAN,
+	SG_STRATEGY_FAILURE_TERMINAL_COUNT
+} sg_strategy_failure_terminal_t;
+
+typedef struct sg_strategy_failure_rule_s
+{
+	uint8_t try_alternatives;
+	uint8_t max_attempts_per_choice;
+	uint16_t reserved;
+	sg_strategy_retry_wake_t retry_wake;
+	sg_strategy_failure_terminal_t exhausted;
+} sg_strategy_failure_rule_t;
+
+typedef struct sg_strategy_dependency_spec_s
+{
+	sg_strategy_goal_id_t goal_id;
+	sg_strategy_dependency_accept_t accept;
+} sg_strategy_dependency_spec_t;
+
+typedef struct sg_strategy_dependency_s
+{
+	uint16_t goal_index;
+	sg_strategy_dependency_accept_t accept;
+} sg_strategy_dependency_t;
+
+typedef struct sg_strategy_target_choice_s
+{
+	sg_strategy_target_id_t id;
+	sg_destination_ref_t destination;
+} sg_strategy_target_choice_t;
+
+typedef struct sg_strategy_goal_spec_s
+{
+	sg_strategy_goal_id_t id;
+	sg_strategy_goal_kind_t kind;
+	int16_t priority;
+	uint8_t dependency_count;
+	uint8_t condition_count;
+	uint8_t choice_count;
+	uint8_t reserved;
+	sg_strategy_unavailable_action_t unavailable;
+	sg_strategy_dependency_spec_t dependencies[SG_STRATEGY_MAX_DEPENDENCIES];
+	sg_strategy_condition_t conditions[SG_STRATEGY_MAX_CONDITIONS];
+	sg_strategy_target_choice_t choices[SG_STRATEGY_MAX_CHOICES];
+	sg_strategy_failure_rule_t failure;
+} sg_strategy_goal_spec_t;
+
 typedef struct sg_strategy_goal_s
 {
-	uint32_t id;
+	sg_strategy_goal_id_t id;
 	sg_strategy_goal_kind_t kind;
-	sg_strategy_failure_policy_t failure_policy;
-	uint8_t priority;
-	uint8_t alternative_count;
-	/* Zero selects the primary destination. A fallback is one-based. */
-	uint8_t selected_alternative;
-	uint8_t prerequisite_count;
-	uint16_t flags;
-	uint16_t reserved;
-	uint64_t authority_generation;
-	sg_destination_handle_t destination;
-	sg_strategy_prerequisite_t prerequisites[SG_STRATEGY_MAX_PREREQUISITES];
-	sg_strategy_alternative_t alternatives[SG_STRATEGY_MAX_ALTERNATIVES];
-	union
-	{
-		sg_strategy_flag_target_t flag;
-		sg_strategy_item_target_t item;
-		sg_strategy_carrier_target_t carrier;
-		sg_strategy_post_target_t post;
-		sg_strategy_window_target_t window;
-	} target;
+	int16_t priority;
+	uint16_t queue_order;
+	uint8_t dependency_count;
+	uint8_t condition_count;
+	uint8_t choice_count;
+	uint8_t reserved;
+	sg_strategy_unavailable_action_t unavailable;
+	sg_strategy_dependency_t dependencies[SG_STRATEGY_MAX_DEPENDENCIES];
+	sg_strategy_condition_t conditions[SG_STRATEGY_MAX_CONDITIONS];
+	sg_strategy_target_choice_t choices[SG_STRATEGY_MAX_CHOICES];
+	sg_strategy_failure_rule_t failure;
 } sg_strategy_goal_t;
 
-typedef struct sg_strategy_queue_s
+typedef struct sg_strategy_plan_spec_s
 {
-	sg_strategy_goal_t *items;
-	uint32_t count;
-	uint32_t capacity;
 	uint64_t plan_id;
-	uint64_t generation;
-} sg_strategy_queue_t;
+	uint16_t goal_count;
+	uint16_t reserved;
+	sg_strategy_goal_spec_t goals[SG_STRATEGY_MAX_GOALS];
+} sg_strategy_plan_spec_t;
 
-typedef struct sg_strategy_readiness_s
+typedef struct sg_strategy_plan_s
 {
-	const uint32_t *completed_goal_ids;
-	uint32_t completed_goal_count;
-	uint64_t now_ms;
-	uint8_t destination_available;
-	uint8_t flag_home;
-	uint8_t carrier_present;
-	uint8_t reserved;
-} sg_strategy_readiness_t;
+	uint64_t plan_id;
+	uint32_t compiled_tag;
+	uint16_t goal_count;
+	uint16_t topological_order[SG_STRATEGY_MAX_GOALS];
+	sg_strategy_goal_t goals[SG_STRATEGY_MAX_GOALS];
+} sg_strategy_plan_t;
 
-typedef struct sg_strategy_queue_replacement_s
+typedef enum sg_strategy_compile_error_code_e
 {
-	const sg_strategy_queue_t *queue;
-} sg_strategy_queue_replacement_t;
+	SG_STRATEGY_COMPILE_OK = 0,
+	SG_STRATEGY_COMPILE_INVALID_ARGUMENT,
+	SG_STRATEGY_COMPILE_CAPACITY,
+	SG_STRATEGY_COMPILE_INVALID_GOAL,
+	SG_STRATEGY_COMPILE_DUPLICATE_GOAL_ID,
+	SG_STRATEGY_COMPILE_DUPLICATE_TARGET_ID,
+	SG_STRATEGY_COMPILE_MISSING_DEPENDENCY,
+	SG_STRATEGY_COMPILE_SELF_DEPENDENCY,
+	SG_STRATEGY_COMPILE_CYCLE
+} sg_strategy_compile_error_code_t;
 
-typedef struct sg_strategy_event_s
+typedef struct sg_strategy_compile_error_s
 {
-	sg_strategy_event_kind_t kind;
-	sg_strategy_actor_t actor;
-	sg_strategy_authority_t authority;
-	uint32_t goal_id;
-	uint64_t expected_revision;
-	uint64_t expected_authority_generation;
-	uint64_t at_ms;
+	sg_strategy_compile_error_code_t code;
+	uint16_t goal_index;
+	uint16_t dependency_index;
+} sg_strategy_compile_error_t;
+
+typedef enum sg_strategy_authority_rank_e
+{
+	SG_STRATEGY_AUTHORITY_AUTONOMOUS = 1,
+	SG_STRATEGY_AUTHORITY_TEAM = 2,
+	SG_STRATEGY_AUTHORITY_HUMAN = 3,
+	SG_STRATEGY_AUTHORITY_EMERGENCY = 4
+} sg_strategy_authority_rank_t;
+
+typedef enum sg_strategy_principal_kind_e
+{
+	SG_STRATEGY_PRINCIPAL_NONE = 0,
+	SG_STRATEGY_PRINCIPAL_AUTONOMOUS,
+	SG_STRATEGY_PRINCIPAL_TEAM,
+	SG_STRATEGY_PRINCIPAL_HUMAN,
+	SG_STRATEGY_PRINCIPAL_EMERGENCY,
+	SG_STRATEGY_PRINCIPAL_KIND_COUNT
+} sg_strategy_principal_kind_t;
+
+typedef struct sg_strategy_principal_s
+{
+	sg_strategy_principal_kind_t kind;
+	uint32_t id;
+} sg_strategy_principal_t;
+
+typedef struct sg_strategy_authority_stamp_s
+{
+	sg_strategy_authority_rank_t rank;
+	sg_strategy_principal_t principal;
+	uint64_t epoch;
+} sg_strategy_authority_stamp_t;
+
+typedef struct sg_strategy_activation_s
+{
+	uint64_t plan_id;
+	uint64_t activation_id;
+	sg_strategy_goal_id_t goal_id;
+} sg_strategy_activation_t;
+
+typedef enum sg_strategy_destination_status_e
+{
+	SG_STRATEGY_DESTINATION_UNOBSERVED = 0,
+	SG_STRATEGY_DESTINATION_UNREACHABLE,
+	SG_STRATEGY_DESTINATION_REACHABLE,
+	SG_STRATEGY_DESTINATION_STATUS_COUNT
+} sg_strategy_destination_status_t;
+
+typedef struct sg_strategy_destination_observation_s
+{
+	uint64_t plan_id;
+	sg_strategy_goal_id_t goal_id;
+	sg_strategy_target_id_t target_id;
+	uint64_t observation_revision;
+	uint64_t pose_revision;
+	uint64_t observed_at_ms;
 	uint64_t valid_until_ms;
-	union
-	{
-		sg_strategy_queue_replacement_t replacement;
-		sg_strategy_failure_reason_t failure;
-		uint8_t alternative_index;
-		uint32_t reason_code;
-	} detail;
-} sg_strategy_event_t;
+	sg_strategy_destination_status_t status;
+	uint32_t cost_ms;
+	sg_destination_handle_t handle;
+} sg_strategy_destination_observation_t;
+
+typedef struct sg_strategy_fact_observation_s
+{
+	sg_strategy_fact_key_t key;
+	int64_t value;
+	uint64_t observation_revision;
+	uint64_t observed_at_ms;
+	uint64_t valid_until_ms;
+} sg_strategy_fact_observation_t;
+
+typedef enum sg_strategy_goal_phase_e
+{
+	SG_STRATEGY_GOAL_PENDING = 0,
+	SG_STRATEGY_GOAL_ACTIVE,
+	SG_STRATEGY_GOAL_RETRY_WAIT,
+	SG_STRATEGY_GOAL_SUCCEEDED,
+	SG_STRATEGY_GOAL_SKIPPED,
+	SG_STRATEGY_GOAL_FAILED,
+	SG_STRATEGY_GOAL_CANCELLED,
+	SG_STRATEGY_GOAL_PHASE_COUNT
+} sg_strategy_goal_phase_t;
+
+typedef enum sg_strategy_goal_outcome_kind_e
+{
+	SG_STRATEGY_OUTCOME_NONE = 0,
+	SG_STRATEGY_OUTCOME_COMPLETED,
+	SG_STRATEGY_OUTCOME_FAILED,
+	SG_STRATEGY_OUTCOME_KIND_COUNT
+} sg_strategy_goal_outcome_kind_t;
+
+typedef enum sg_strategy_failure_reason_e
+{
+	SG_STRATEGY_FAILURE_NONE = 0,
+	SG_STRATEGY_FAILURE_UNAVAILABLE,
+	SG_STRATEGY_FAILURE_OBSTRUCTED,
+	SG_STRATEGY_FAILURE_TACTICAL_BLOCK_EXPIRED,
+	SG_STRATEGY_FAILURE_CONDITION_LOST,
+	SG_STRATEGY_FAILURE_DEPENDENCY,
+	SG_STRATEGY_FAILURE_REASON_COUNT
+} sg_strategy_failure_reason_t;
+
+typedef struct sg_strategy_goal_outcome_observation_s
+{
+	uint8_t present;
+	uint8_t reserved[3];
+	sg_strategy_activation_t activation;
+	sg_strategy_goal_outcome_kind_t kind;
+	sg_strategy_failure_reason_t failure;
+} sg_strategy_goal_outcome_observation_t;
+
+typedef enum sg_strategy_tactical_block_reason_e
+{
+	SG_STRATEGY_BLOCK_NONE = 0,
+	SG_STRATEGY_BLOCK_COMBAT,
+	SG_STRATEGY_BLOCK_OBSTRUCTION,
+	SG_STRATEGY_BLOCK_HOOK_OPPORTUNITY,
+	SG_STRATEGY_BLOCK_CONTROLLER,
+	SG_STRATEGY_BLOCK_REASON_COUNT
+} sg_strategy_tactical_block_reason_t;
+
+typedef struct sg_strategy_tactical_snapshot_s
+{
+	uint8_t present;
+	uint8_t blocked;
+	uint16_t reserved;
+	uint64_t observation_revision;
+	sg_strategy_activation_t activation;
+	sg_strategy_tactical_block_reason_t reason;
+} sg_strategy_tactical_snapshot_t;
+
+typedef struct sg_strategy_life_snapshot_s
+{
+	uint8_t present;
+	uint8_t alive;
+	uint16_t reserved;
+	uint64_t observation_revision;
+	uint64_t life_id;
+} sg_strategy_life_snapshot_t;
+
+typedef enum sg_strategy_directive_kind_e
+{
+	SG_STRATEGY_DIRECTIVE_NONE = 0,
+	SG_STRATEGY_DIRECTIVE_REPLACE,
+	SG_STRATEGY_DIRECTIVE_CANCEL,
+	SG_STRATEGY_DIRECTIVE_RELEASE,
+	SG_STRATEGY_DIRECTIVE_KIND_COUNT
+} sg_strategy_directive_kind_t;
+
+typedef struct sg_strategy_directive_s
+{
+	sg_strategy_directive_kind_t kind;
+	sg_strategy_authority_stamp_t stamp;
+	const sg_strategy_plan_t *replacement;
+} sg_strategy_directive_t;
+
+typedef struct sg_strategy_frame_s
+{
+	uint64_t sequence;
+	uint64_t expected_revision;
+	uint64_t at_ms;
+	sg_strategy_directive_t directive;
+	sg_strategy_life_snapshot_t life;
+	sg_strategy_goal_outcome_observation_t goal_outcome;
+	sg_strategy_tactical_snapshot_t tactical;
+	const sg_strategy_fact_observation_t *facts;
+	uint16_t fact_count;
+	const sg_strategy_destination_observation_t *destinations;
+	uint16_t destination_count;
+} sg_strategy_frame_t;
+
+typedef struct sg_strategy_retry_record_s
+{
+	uint64_t after_sequence;
+	uint64_t baseline_revision;
+	uint64_t not_before_ms;
+	sg_strategy_retry_wake_t wake;
+} sg_strategy_retry_record_t;
+
+typedef struct sg_strategy_choice_runtime_s
+{
+	uint8_t observed;
+	uint8_t attempts;
+	uint16_t reserved;
+	uint64_t observation_revision;
+	uint64_t pose_revision;
+	uint64_t observed_at_ms;
+	uint64_t valid_until_ms;
+	sg_strategy_destination_status_t status;
+	uint32_t cost_ms;
+	sg_destination_handle_t handle;
+} sg_strategy_choice_runtime_t;
+
+typedef struct sg_strategy_goal_runtime_s
+{
+	sg_strategy_goal_phase_t phase;
+	uint8_t selected_choice;
+	uint8_t resume_after_life;
+	uint16_t attempt_count;
+	uint16_t retry_count;
+	uint16_t suspension_count;
+	sg_strategy_goal_outcome_kind_t last_outcome;
+	sg_strategy_failure_reason_t last_failure;
+	uint64_t activated_at_ms;
+	uint64_t completed_at_ms;
+	uint64_t last_transition_at_ms;
+	uint64_t suspended_total_ms;
+	sg_strategy_retry_record_t retry;
+	sg_strategy_choice_runtime_t choices[SG_STRATEGY_MAX_CHOICES];
+} sg_strategy_goal_runtime_t;
+
+typedef struct sg_strategy_fact_record_s
+{
+	uint8_t occupied;
+	uint8_t reserved[7];
+	sg_strategy_fact_observation_t observation;
+} sg_strategy_fact_record_t;
+
+typedef struct sg_strategy_suspend_record_s
+{
+	uint8_t active;
+	uint8_t reserved[7];
+	uint64_t suspended_at_ms;
+	uint64_t observation_revision;
+	sg_strategy_activation_t activation;
+	sg_strategy_tactical_block_reason_t reason;
+} sg_strategy_suspend_record_t;
+
+typedef struct sg_strategy_policy_s
+{
+	uint64_t tactical_suspend_limit_ms;
+} sg_strategy_policy_t;
+
+typedef enum sg_strategy_instruction_kind_e
+{
+	SG_STRATEGY_INSTRUCTION_EMPTY = 0,
+	SG_STRATEGY_INSTRUCTION_WAIT_LIFE,
+	SG_STRATEGY_INSTRUCTION_WAIT_CONDITION,
+	SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION,
+	SG_STRATEGY_INSTRUCTION_EXECUTE,
+	SG_STRATEGY_INSTRUCTION_SUSPENDED,
+	SG_STRATEGY_INSTRUCTION_COMPLETED,
+	SG_STRATEGY_INSTRUCTION_FAILED,
+	SG_STRATEGY_INSTRUCTION_CANCELLED,
+	SG_STRATEGY_INSTRUCTION_KIND_COUNT
+} sg_strategy_instruction_kind_t;
+
+typedef struct sg_strategy_instruction_s
+{
+	sg_strategy_instruction_kind_t kind;
+	uint64_t plan_id;
+	sg_strategy_goal_id_t goal_id;
+	uint8_t choice_index;
+	uint8_t reserved[3];
+	sg_strategy_activation_t activation;
+	sg_destination_ref_t destination;
+	sg_destination_handle_t handle;
+	uint32_t cost_ms;
+	sg_strategy_tactical_block_reason_t block_reason;
+} sg_strategy_instruction_t;
+
+typedef enum sg_strategy_effect_kind_e
+{
+	SG_STRATEGY_EFFECT_PLAN_REPLACED = 0,
+	SG_STRATEGY_EFFECT_PLAN_CANCELLED,
+	SG_STRATEGY_EFFECT_AUTHORITY_RELEASED,
+	SG_STRATEGY_EFFECT_GOAL_ACTIVATED,
+	SG_STRATEGY_EFFECT_GOAL_COMPLETED,
+	SG_STRATEGY_EFFECT_GOAL_RETRY_WAIT,
+	SG_STRATEGY_EFFECT_GOAL_SKIPPED,
+	SG_STRATEGY_EFFECT_GOAL_FAILED,
+	SG_STRATEGY_EFFECT_TACTICAL_SUSPENDED,
+	SG_STRATEGY_EFFECT_TACTICAL_RESUMED,
+	SG_STRATEGY_EFFECT_LIFE_RETIRED,
+	SG_STRATEGY_EFFECT_PLAN_COMPLETED
+} sg_strategy_effect_kind_t;
+
+typedef struct sg_strategy_history_effect_s
+{
+	uint64_t sequence;
+	uint64_t at_ms;
+	sg_strategy_effect_kind_t kind;
+	sg_strategy_goal_id_t goal_id;
+	uint8_t choice_index;
+	uint8_t reserved[3];
+	sg_strategy_failure_reason_t failure;
+} sg_strategy_history_effect_t;
 
 typedef struct sg_strategy_state_s
 {
-	sg_strategy_queue_t queue;
-	/* State owns its plan. Queue builders and replacement events may disappear
-	 * or mutate immediately after the state accepts them. */
-	sg_strategy_goal_t owned_items[SG_STRATEGY_MAX_GOALS];
-	sg_strategy_lifecycle_t lifecycle;
-	sg_strategy_event_kind_t last_event;
-	sg_strategy_failure_reason_t last_failure;
-	sg_strategy_authority_t authority;
-	uint32_t active_index;
+	sg_strategy_policy_t policy;
 	uint64_t revision;
-	uint64_t authority_generation;
-	uint64_t last_event_at_ms;
+	uint64_t last_frame_sequence;
+	uint64_t last_frame_at_ms;
+	uint64_t history_sequence;
+	uint8_t has_plan;
+	uint8_t cancelled;
+	uint8_t life_known;
+	uint8_t life_alive;
+	uint64_t life_observation_revision;
+	uint64_t life_id;
+	sg_strategy_plan_t plan;
+	sg_strategy_authority_stamp_t authority;
+	sg_strategy_goal_runtime_t goals[SG_STRATEGY_MAX_GOALS];
+	uint16_t fact_count;
+	sg_strategy_fact_record_t facts[SG_STRATEGY_MAX_FACTS];
+	uint64_t next_activation_id;
+	sg_strategy_activation_t activation;
+	sg_strategy_suspend_record_t suspension;
+	sg_strategy_instruction_t current_instruction;
 } sg_strategy_state_t;
 
-static inline int SG_StrategyGoalKindValid(sg_strategy_goal_kind_t kind)
+typedef enum sg_strategy_reduce_result_e
 {
-	return kind >= SG_STRATEGY_GOAL_DESTINATION &&
-	       kind < SG_STRATEGY_GOAL_KIND_COUNT;
-}
+	SG_STRATEGY_REDUCE_APPLIED = 0,
+	SG_STRATEGY_REDUCE_DUPLICATE,
+	SG_STRATEGY_REDUCE_REJECTED_INVALID,
+	SG_STRATEGY_REDUCE_REJECTED_STALE,
+	SG_STRATEGY_REDUCE_REJECTED_AUTHORITY,
+	SG_STRATEGY_REDUCE_INTERNAL_CAPACITY
+} sg_strategy_reduce_result_t;
 
-static inline int SG_StrategyPrerequisiteKindValid(
-	sg_strategy_prerequisite_kind_t kind)
+typedef struct sg_strategy_reduction_s
 {
-	return kind >= SG_STRATEGY_PREREQUISITE_NONE &&
-	       kind < SG_STRATEGY_PREREQUISITE_KIND_COUNT;
-}
+	sg_strategy_reduce_result_t result;
+	uint64_t committed_revision;
+	uint16_t effect_count;
+	sg_strategy_history_effect_t effects[SG_STRATEGY_MAX_EFFECTS];
+	sg_strategy_instruction_t instruction;
+} sg_strategy_reduction_t;
 
-static inline int SG_StrategyFailureReasonValid(
-	sg_strategy_failure_reason_t reason)
-{
-	return reason >= SG_STRATEGY_FAILURE_UNKNOWN &&
-	       reason <= SG_STRATEGY_FAILURE_AUTHORITY;
-}
-
-static inline int SG_StrategyActorValid(sg_strategy_actor_t actor)
-{
-	return actor >= SG_STRATEGY_ACTOR_STRATEGY &&
-	       actor < SG_STRATEGY_ACTOR_COUNT;
-}
-
-static inline int SG_StrategyTeamValid(uint8_t team)
-{
-	return team == 1U || team == 2U;
-}
-
-static inline int SG_StrategyFlagTargetValid(
-	const sg_strategy_flag_target_t *target)
-{
-	return target && SG_StrategyTeamValid(target->team) &&
-	       target->require_home <= 1U;
-}
-
-static inline int SG_StrategyCarrierTargetValid(
-	const sg_strategy_carrier_target_t *target)
-{
-	return target && SG_StrategyTeamValid(target->team) &&
-	       target->client_id < SG_STRATEGY_MAX_CLIENTS;
-}
-
-static inline int SG_StrategyWindowValid(uint64_t not_before_ms,
-	uint64_t not_after_ms)
-{
-	return not_after_ms == 0U || not_after_ms >= not_before_ms;
-}
-
-static inline int SG_StrategyPrerequisiteValid(
-	const sg_strategy_prerequisite_t *prerequisite)
-{
-	if (!prerequisite || !SG_StrategyPrerequisiteKindValid(prerequisite->kind) ||
-	    prerequisite->required > 1U)
-		return 0;
-	switch (prerequisite->kind)
-	{
-	case SG_STRATEGY_PREREQUISITE_NONE:
-		return prerequisite->required == 0U;
-	case SG_STRATEGY_PREREQUISITE_GOAL_COMPLETE:
-		return prerequisite->value.goal_id != 0U;
-	case SG_STRATEGY_PREREQUISITE_DESTINATION_AVAILABLE:
-		return SG_DestinationHandleValid(&prerequisite->value.destination);
-	case SG_STRATEGY_PREREQUISITE_FLAG_HOME:
-	case SG_STRATEGY_PREREQUISITE_CARRIER_PRESENT:
-		return 1;
-	case SG_STRATEGY_PREREQUISITE_TIME_WINDOW:
-		return SG_StrategyWindowValid(prerequisite->value.window.not_before_ms,
-			prerequisite->value.window.not_after_ms);
-	default:
-		return 0;
-	}
-}
-
-static inline int SG_StrategyAuthorityValid(sg_strategy_authority_t authority)
-{
-	return authority >= SG_STRATEGY_AUTHORITY_AUTONOMOUS &&
-	       authority <= SG_STRATEGY_AUTHORITY_EMERGENCY;
-}
-
-static inline int SG_StrategyGoalValid(const sg_strategy_goal_t *goal)
-{
-	uint32_t index;
-
-	if (!goal || goal->id == 0U || !SG_StrategyGoalKindValid(goal->kind) ||
-	    goal->failure_policy < SG_STRATEGY_FAILURE_ABORT ||
-	    goal->failure_policy >= SG_STRATEGY_FAILURE_POLICY_COUNT ||
-	    goal->alternative_count > SG_STRATEGY_MAX_ALTERNATIVES ||
-	    goal->prerequisite_count > SG_STRATEGY_MAX_PREREQUISITES ||
-	    goal->selected_alternative > goal->alternative_count ||
-	    goal->authority_generation == 0U)
-		return 0;
-	if (goal->kind == SG_STRATEGY_GOAL_DESTINATION ||
-	    goal->kind == SG_STRATEGY_GOAL_COLLECT_ITEM ||
-	    goal->kind == SG_STRATEGY_GOAL_DEFEND_POST ||
-	    goal->kind == SG_STRATEGY_GOAL_ARBITRARY_WAYPOINT)
-		if (!SG_DestinationHandleValid(&goal->destination))
-			return 0;
-	for (index = 0U; index < goal->prerequisite_count; index++)
-		if (!SG_StrategyPrerequisiteValid(&goal->prerequisites[index]))
-			return 0;
-	for (index = 0U; index < goal->alternative_count; index++)
-		if (!SG_DestinationHandleValid(&goal->alternatives[index].destination))
-			return 0;
-	if (goal->selected_alternative != 0U &&
-	    !SG_DestinationSameTarget(&goal->destination,
-			&goal->alternatives[goal->selected_alternative - 1U].destination))
-		return 0;
-	switch (goal->kind)
-	{
-	case SG_STRATEGY_GOAL_CAPTURE_FLAG:
-	case SG_STRATEGY_GOAL_CARRY_FLAG:
-	case SG_STRATEGY_GOAL_RECOVER_FLAG:
-		if (!SG_StrategyFlagTargetValid(&goal->target.flag))
-			return 0;
-		break;
-	case SG_STRATEGY_GOAL_COLLECT_ITEM:
-		if (goal->target.item.item_id == 0U)
-			return 0;
-		break;
-	case SG_STRATEGY_GOAL_ESCORT_CARRIER:
-	case SG_STRATEGY_GOAL_INTERCEPT_CARRIER:
-		if (!SG_StrategyCarrierTargetValid(&goal->target.carrier))
-			return 0;
-		break;
-	case SG_STRATEGY_GOAL_DEFEND_POST:
-		if (!SG_DestinationFloatValid(goal->target.post.heading))
-			return 0;
-		break;
-	case SG_STRATEGY_GOAL_WAIT_WINDOW:
-		if (!SG_StrategyWindowValid(goal->target.window.not_before_ms,
-			goal->target.window.not_after_ms))
-			return 0;
-		break;
-	case SG_STRATEGY_GOAL_DESTINATION:
-	case SG_STRATEGY_GOAL_ARBITRARY_WAYPOINT:
-	case SG_STRATEGY_GOAL_KIND_COUNT:
-		break;
-	default:
-		return 0;
-	}
-	return 1;
-}
-
-static inline int SG_StrategyQueueValid(const sg_strategy_queue_t *queue)
-{
-	uint32_t index;
-	uint32_t other;
-
-	if (!queue || queue->capacity == 0U || queue->count > queue->capacity ||
-	    queue->capacity > SG_STRATEGY_MAX_GOALS ||
-	    queue->plan_id == 0U || queue->generation == 0U ||
-	    !queue->items)
-		return 0;
-	for (index = 0U; index < queue->count; index++)
-		if (!SG_StrategyGoalValid(&queue->items[index]))
-			return 0;
-	for (index = 0U; index < queue->count; index++)
-		for (other = index + 1U; other < queue->count; other++)
-			if (queue->items[index].id == queue->items[other].id)
-				return 0;
-	return 1;
-}
-
-static inline int SG_StrategyReadinessValid(
-	const sg_strategy_readiness_t *ready)
-{
-	return ready &&
-	       (ready->completed_goal_count == 0U ||
-		ready->completed_goal_ids != NULL) &&
-	       ready->destination_available <= 1U && ready->flag_home <= 1U &&
-	       ready->carrier_present <= 1U;
-}
-
-static inline int SG_StrategyStateValid(const sg_strategy_state_t *state)
-{
-	uint32_t index;
-
-	if (!state || !SG_StrategyQueueValid(&state->queue) ||
-	    state->queue.items != state->owned_items ||
-	    state->lifecycle < SG_STRATEGY_READY ||
-	    state->lifecycle > SG_STRATEGY_CANCELLED ||
-	    state->last_event < SG_STRATEGY_EVENT_START ||
-	    state->last_event >= SG_STRATEGY_EVENT_KIND_COUNT ||
-	    !SG_StrategyFailureReasonValid(state->last_failure) ||
-	    !SG_StrategyAuthorityValid(state->authority) || state->revision == 0U ||
-	    state->authority_generation == 0U || state->last_event_at_ms == 0U ||
-	    state->active_index > state->queue.count)
-		return 0;
-	for (index = 0U; index < state->queue.count; index++)
-		if (state->queue.items[index].authority_generation !=
-		    state->authority_generation)
-			return 0;
-	return 1;
-}
-
-static inline int SG_StrategyEventValid(const sg_strategy_event_t *event)
-{
-	return event && event->kind >= SG_STRATEGY_EVENT_START &&
-	       event->kind < SG_STRATEGY_EVENT_KIND_COUNT &&
-	       SG_StrategyActorValid(event->actor) &&
-	       SG_StrategyAuthorityValid(event->authority) &&
-	       event->expected_revision != 0U &&
-	       event->expected_authority_generation != 0U && event->at_ms != 0U &&
-	       event->valid_until_ms >= event->at_ms &&
-	       ((event->kind != SG_STRATEGY_EVENT_FAILED) ||
-		SG_StrategyFailureReasonValid(event->detail.failure));
-}
-
-static inline int SG_StrategyEventChangesAuthority(
-	const sg_strategy_event_t *event)
-{
-	if (!SG_StrategyEventValid(event))
-		return 0;
-	return event->kind == SG_STRATEGY_EVENT_CANCELLED ||
-	       event->kind == SG_STRATEGY_EVENT_REPLACED;
-}
-
-static inline int SG_StrategyQueueAuthorityValid(
-	const sg_strategy_queue_t *queue, uint64_t authority_generation)
-{
-	uint32_t index;
-
-	if (!SG_StrategyQueueValid(queue) || authority_generation == 0U)
-		return 0;
-	for (index = 0U; index < queue->count; index++)
-		if (queue->items[index].authority_generation != authority_generation)
-			return 0;
-	return 1;
-}
-
-static inline int SG_StrategyEventBoundToState(
-	const sg_strategy_state_t *state, const sg_strategy_event_t *event,
-	uint64_t now_ms)
-{
-	if (!SG_StrategyStateValid(state) || !SG_StrategyEventValid(event) ||
-	    event->expected_revision != state->revision ||
-	    event->expected_authority_generation != state->authority_generation ||
-	    event->at_ms < state->last_event_at_ms || now_ms < event->at_ms ||
-	    now_ms > event->valid_until_ms || event->actor == SG_STRATEGY_ACTOR_TACTICS)
-		return 0;
-	if (SG_StrategyEventChangesAuthority(event))
-	{
-		if (event->actor == SG_STRATEGY_ACTOR_CONTROLLER ||
-		    event->authority < state->authority ||
-		    state->authority_generation == UINT64_MAX)
-			return 0;
-		if (event->kind == SG_STRATEGY_EVENT_REPLACED)
-			return event->detail.replacement.queue &&
-			       event->detail.replacement.queue->count != 0U &&
-			       SG_StrategyQueueAuthorityValid(
-				event->detail.replacement.queue,
-				state->authority_generation + 1U);
-		return 1;
-	}
-	return event->authority == state->authority;
-}
-
-/* Downstream strategy nodes own queue mutation and lifecycle reduction. */
-int SG_StrategyQueueInit(sg_strategy_queue_t *queue,
-	sg_strategy_goal_t *storage, uint32_t capacity, uint64_t plan_id);
-int SG_StrategyQueueAppend(sg_strategy_queue_t *queue,
-	const sg_strategy_goal_t *goal);
-int SG_StrategyGoalReady(const sg_strategy_goal_t *goal,
-	const sg_strategy_readiness_t *ready);
+int SG_StrategyPlanCompile(const sg_strategy_plan_spec_t *spec,
+	sg_strategy_plan_t *out, sg_strategy_compile_error_t *error);
 int SG_StrategyStateInit(sg_strategy_state_t *state,
-	const sg_strategy_queue_t *queue, sg_strategy_authority_t authority,
-	uint64_t initialized_at_ms);
-int SG_StrategyAdvance(sg_strategy_state_t *state, uint64_t at_ms);
-int SG_StrategyApplyEvent(sg_strategy_state_t *state,
-	const sg_strategy_event_t *event, uint64_t now_ms);
-
-typedef enum sg_learning_update_kind_e
-{
-	SG_LEARNING_UPDATE_COST = 0,
-	SG_LEARNING_UPDATE_TACTIC_PRIOR = 1,
-	SG_LEARNING_UPDATE_LANDING_PREFERENCE = 2,
-	SG_LEARNING_UPDATE_STRATEGY = 3,
-	SG_LEARNING_UPDATE_KIND_COUNT = 4
-} sg_learning_update_kind_t;
-
-typedef enum sg_learning_transaction_state_e
-{
-	SG_LEARNING_TRANSACTION_EMPTY = 0,
-	SG_LEARNING_TRANSACTION_PREPARED = 1,
-	SG_LEARNING_TRANSACTION_APPLIED = 2,
-	SG_LEARNING_TRANSACTION_COMMITTED = 3,
-	SG_LEARNING_TRANSACTION_ROLLED_BACK = 4
-} sg_learning_transaction_state_t;
-
-typedef struct sg_learning_evidence_s
-{
-	uint64_t evidence_id;
-	uint64_t rune_identity;
-	uint64_t topology_revision;
-	uint64_t bsp_identity;
-	uint64_t physics_identity;
-	uint64_t trace_identity;
-	uint64_t captured_at_ms;
-	uint64_t authenticated_at_ms;
-	uint8_t authenticated;
-	uint8_t exact_bound;
-	uint8_t host_verified;
-	uint8_t post_match;
-} sg_learning_evidence_t;
-
-typedef struct sg_learning_update_s
-{
-	sg_learning_evidence_t evidence;
-	sg_learning_update_kind_t kind;
-	union
-	{
-		struct
-		{
-			uint32_t capability_id;
-			int32_t delta_ms;
-		} cost;
-		struct
-		{
-			uint32_t tactic_id;
-			float prior;
-		} tactic;
-		struct
-		{
-			uint32_t region_id;
-			float preference;
-		} landing;
-		struct
-		{
-			uint32_t goal_kind;
-			int16_t priority_delta;
-		} strategy;
-	} value;
-} sg_learning_update_t;
-
-typedef struct sg_learning_parameters_s
-{
-	uint64_t rune_identity;
-	uint64_t topology_revision;
-	uint64_t bsp_identity;
-	uint64_t physics_identity;
-	uint64_t generation;
-	int32_t cost_delta_ms[SG_LEARNING_MAX_CAPABILITIES];
-	float tactic_prior[SG_LEARNING_MAX_TACTICS];
-	float landing_preference[SG_LEARNING_MAX_REGIONS];
-	int16_t strategy_priority_delta[SG_STRATEGY_MAX_GOAL_KINDS];
-} sg_learning_parameters_t;
-
-typedef struct sg_learning_transaction_s
-{
-	uint64_t transaction_id;
-	uint64_t expected_generation;
-	uint64_t applied_generation;
-	uint64_t evidence_id;
-	sg_learning_transaction_state_t state;
-	sg_learning_parameters_t before;
-	sg_learning_update_t authorized_update;
-} sg_learning_transaction_t;
-
-static inline int SG_LearningParametersValid(
-	const sg_learning_parameters_t *parameters)
-{
-	return parameters && parameters->rune_identity != 0U &&
-	       parameters->topology_revision != 0U &&
-	       parameters->bsp_identity != 0U && parameters->physics_identity != 0U &&
-	       parameters->generation != 0U;
-}
-
-static inline int SG_LearningEvidenceValid(
-	const sg_learning_evidence_t *evidence)
-{
-	return evidence && evidence->evidence_id != 0U &&
-	       evidence->rune_identity != 0U && evidence->topology_revision != 0U &&
-	       evidence->bsp_identity != 0U && evidence->physics_identity != 0U &&
-	       evidence->trace_identity != 0U && evidence->captured_at_ms != 0U &&
-	       evidence->authenticated_at_ms >= evidence->captured_at_ms &&
-	       evidence->authenticated == 1U && evidence->exact_bound == 1U &&
-	       evidence->host_verified == 1U && evidence->post_match == 1U;
-}
-
-static inline int SG_LearningEvidenceMatches(
-	const sg_learning_parameters_t *parameters,
-	const sg_learning_evidence_t *evidence)
-{
-	return SG_LearningParametersValid(parameters) &&
-	       SG_LearningEvidenceValid(evidence) &&
-	       parameters->rune_identity == evidence->rune_identity &&
-	       parameters->topology_revision == evidence->topology_revision &&
-	       parameters->bsp_identity == evidence->bsp_identity &&
-	       parameters->physics_identity == evidence->physics_identity;
-}
-
-static inline int SG_LearningBoundedFloat(float value)
-{
-	return value == value && value >= 0.0f && value <= 1.0f;
-}
-
-static inline int SG_LearningUpdateValid(const sg_learning_update_t *update)
-{
-	if (!update || !SG_LearningEvidenceValid(&update->evidence) ||
-	    update->kind < SG_LEARNING_UPDATE_COST ||
-	    update->kind >= SG_LEARNING_UPDATE_KIND_COUNT)
-		return 0;
-	switch (update->kind)
-	{
-	case SG_LEARNING_UPDATE_COST:
-		return update->value.cost.capability_id < SG_LEARNING_MAX_CAPABILITIES &&
-		       update->value.cost.delta_ms >= -30000 &&
-		       update->value.cost.delta_ms <= 30000;
-	case SG_LEARNING_UPDATE_TACTIC_PRIOR:
-		return update->value.tactic.tactic_id < SG_LEARNING_MAX_TACTICS &&
-		       SG_LearningBoundedFloat(update->value.tactic.prior);
-	case SG_LEARNING_UPDATE_LANDING_PREFERENCE:
-		return update->value.landing.region_id < SG_LEARNING_MAX_REGIONS &&
-		       SG_LearningBoundedFloat(update->value.landing.preference);
-	case SG_LEARNING_UPDATE_STRATEGY:
-		return update->value.strategy.goal_kind < SG_STRATEGY_MAX_GOAL_KINDS;
-	default:
-		return 0;
-	}
-}
-
-static inline int SG_LearningUpdateTouchesGeometry(
-	const sg_learning_update_t *update)
-{
-	(void)update;
-	return 0;
-}
-
-static inline int SG_LearningUpdateSame(const sg_learning_update_t *left,
-	const sg_learning_update_t *right)
-{
-	if (!SG_LearningUpdateValid(left) || !SG_LearningUpdateValid(right) ||
-	    left->kind != right->kind ||
-	    left->evidence.evidence_id != right->evidence.evidence_id ||
-	    left->evidence.rune_identity != right->evidence.rune_identity ||
-	    left->evidence.topology_revision != right->evidence.topology_revision ||
-	    left->evidence.bsp_identity != right->evidence.bsp_identity ||
-	    left->evidence.physics_identity != right->evidence.physics_identity ||
-	    left->evidence.trace_identity != right->evidence.trace_identity ||
-	    left->evidence.captured_at_ms != right->evidence.captured_at_ms ||
-	    left->evidence.authenticated_at_ms !=
-		right->evidence.authenticated_at_ms)
-		return 0;
-	switch (left->kind)
-	{
-	case SG_LEARNING_UPDATE_COST:
-		return left->value.cost.capability_id ==
-			right->value.cost.capability_id &&
-		       left->value.cost.delta_ms == right->value.cost.delta_ms;
-	case SG_LEARNING_UPDATE_TACTIC_PRIOR:
-		return left->value.tactic.tactic_id == right->value.tactic.tactic_id &&
-		       left->value.tactic.prior == right->value.tactic.prior;
-	case SG_LEARNING_UPDATE_LANDING_PREFERENCE:
-		return left->value.landing.region_id == right->value.landing.region_id &&
-		       left->value.landing.preference == right->value.landing.preference;
-	case SG_LEARNING_UPDATE_STRATEGY:
-		return left->value.strategy.goal_kind == right->value.strategy.goal_kind &&
-		       left->value.strategy.priority_delta ==
-			right->value.strategy.priority_delta;
-	default:
-		return 0;
-	}
-}
-
-static inline int SG_LearningParametersSameIdentity(
-	const sg_learning_parameters_t *left,
-	const sg_learning_parameters_t *right)
-{
-	return SG_LearningParametersValid(left) &&
-	       SG_LearningParametersValid(right) &&
-	       left->rune_identity == right->rune_identity &&
-	       left->topology_revision == right->topology_revision &&
-	       left->bsp_identity == right->bsp_identity &&
-	       left->physics_identity == right->physics_identity;
-}
-
-static inline int SG_LearningTransactionValid(
-	const sg_learning_transaction_t *transaction)
-{
-	if (!transaction || transaction->transaction_id == 0U ||
-	    transaction->evidence_id == 0U ||
-	    transaction->state < SG_LEARNING_TRANSACTION_PREPARED ||
-	    transaction->state > SG_LEARNING_TRANSACTION_ROLLED_BACK ||
-	    !SG_LearningParametersValid(&transaction->before) ||
-	    !SG_LearningUpdateValid(&transaction->authorized_update) ||
-	    !SG_LearningEvidenceMatches(&transaction->before,
-		&transaction->authorized_update.evidence) ||
-	    transaction->expected_generation != transaction->before.generation ||
-	    transaction->evidence_id !=
-		transaction->authorized_update.evidence.evidence_id)
-		return 0;
-	if (transaction->state == SG_LEARNING_TRANSACTION_PREPARED)
-		return transaction->applied_generation == 0U;
-	return transaction->expected_generation != UINT64_MAX &&
-	       transaction->applied_generation ==
-		transaction->expected_generation + 1U;
-}
-
-static inline int SG_LearningTransactionBoundToParameters(
-	const sg_learning_parameters_t *parameters,
-	const sg_learning_transaction_t *transaction)
-{
-	if (!SG_LearningParametersValid(parameters) ||
-	    !SG_LearningTransactionValid(transaction) ||
-	    !SG_LearningParametersSameIdentity(parameters, &transaction->before))
-		return 0;
-	if (transaction->state == SG_LEARNING_TRANSACTION_PREPARED ||
-	    transaction->state == SG_LEARNING_TRANSACTION_ROLLED_BACK)
-		return parameters->generation == transaction->expected_generation;
-	return parameters->generation == transaction->applied_generation;
-}
-
-static inline int SG_LearningTransactionMayCommit(
-	const sg_learning_parameters_t *parameters,
-	const sg_learning_transaction_t *transaction)
-{
-	return transaction && transaction->state == SG_LEARNING_TRANSACTION_APPLIED &&
-	       SG_LearningTransactionBoundToParameters(parameters, transaction);
-}
-
-static inline int SG_LearningTransactionMayRollback(
-	const sg_learning_parameters_t *parameters,
-	const sg_learning_transaction_t *transaction)
-{
-	return transaction && transaction->state == SG_LEARNING_TRANSACTION_APPLIED &&
-	       SG_LearningTransactionBoundToParameters(parameters, transaction);
-}
-
-/* Downstream learning nodes own all parameter and transaction mutation. */
-int SG_LearningParametersInit(sg_learning_parameters_t *parameters,
-	uint64_t rune_identity, uint64_t topology_revision,
-	uint64_t bsp_identity, uint64_t physics_identity);
-int SG_LearningTransactionBegin(const sg_learning_parameters_t *parameters,
-	const sg_learning_update_t *update, uint64_t transaction_id,
-	sg_learning_transaction_t *transaction);
-int SG_LearningApplyUpdate(sg_learning_parameters_t *parameters,
-	const sg_learning_update_t *update,
-	sg_learning_transaction_t *transaction);
-int SG_LearningTransactionCommit(const sg_learning_parameters_t *parameters,
-	sg_learning_transaction_t *transaction);
-int SG_LearningTransactionRollback(sg_learning_parameters_t *parameters,
-	sg_learning_transaction_t *transaction);
+	const sg_strategy_policy_t *policy);
+sg_strategy_reduce_result_t SG_StrategyReduce(sg_strategy_state_t *state,
+	const sg_strategy_frame_t *frame, sg_strategy_reduction_t *out);
 
 #endif /* SG_STRATEGY_CONTRACT_H */

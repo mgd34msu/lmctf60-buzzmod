@@ -196,7 +196,6 @@ typedef struct sg_tactic_result_s
 	sg_tactic_mechanism_request_t mechanism_handoff;
 	float progress;
 	uint8_t exact_live_validation_required;
-	uint8_t strategy_mutated;
 	uint8_t mechanism_handoff_valid;
 	uint8_t reserved;
 } sg_tactic_result_t;
@@ -390,7 +389,7 @@ static inline int SG_TacticResultValid(const sg_tactic_result_t *result)
 	    result->progress < 0.0f || result->progress > 1.0f ||
 	    !SG_DestinationFloatValid(result->progress) ||
 	    result->exact_live_validation_required > 1U ||
-	    result->strategy_mutated != 0U || result->mechanism_handoff_valid > 1U)
+	    result->mechanism_handoff_valid > 1U)
 		return 0;
 	switch (result->status)
 	{

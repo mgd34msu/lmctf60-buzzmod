@@ -36,6 +36,64 @@ typedef enum sg_destination_motion_e
 	SG_DESTINATION_MOVING = 1
 } sg_destination_motion_t;
 
+typedef enum sg_destination_flag_location_e
+{
+	SG_DESTINATION_FLAG_HOME = 0,
+	SG_DESTINATION_FLAG_CURRENT,
+	SG_DESTINATION_FLAG_LOCATION_COUNT
+} sg_destination_flag_location_t;
+
+typedef enum sg_destination_carrier_selector_e
+{
+	SG_DESTINATION_CARRIER_ANY = 0,
+	SG_DESTINATION_CARRIER_EXACT,
+	SG_DESTINATION_CARRIER_SELECTOR_COUNT
+} sg_destination_carrier_selector_t;
+
+typedef struct sg_destination_flag_ref_s
+{
+	uint8_t team;
+	uint8_t location;
+	uint16_t reserved;
+} sg_destination_flag_ref_t;
+
+typedef struct sg_destination_item_ref_s
+{
+	uint64_t item_id;
+} sg_destination_item_ref_t;
+
+typedef struct sg_destination_carrier_ref_s
+{
+	uint16_t client_id;
+	uint8_t team;
+	uint8_t selector;
+} sg_destination_carrier_ref_t;
+
+typedef struct sg_destination_post_ref_s
+{
+	uint32_t region_id;
+} sg_destination_post_ref_t;
+
+typedef struct sg_destination_point_ref_s
+{
+	uint64_t point_id;
+} sg_destination_point_ref_t;
+
+/* Stable semantic identity. Runtime pose and generation belong to the resolved
+ * handle, so moving destinations never mutate strategy plan content. */
+typedef struct sg_destination_ref_s
+{
+	sg_destination_kind_t kind;
+	union
+	{
+		sg_destination_flag_ref_t flag;
+		sg_destination_item_ref_t item;
+		sg_destination_carrier_ref_t carrier;
+		sg_destination_post_ref_t post;
+		sg_destination_point_ref_t point;
+	} value;
+} sg_destination_ref_t;
+
 /* A phase is a configuration-space state, not merely a containing cell. */
 typedef struct sg_phase_coordinate_s
 {
@@ -153,6 +211,44 @@ typedef struct sg_field_update_s
 static inline int SG_DestinationKindValid(sg_destination_kind_t kind)
 {
 	return kind >= SG_DESTINATION_FLAG && kind < SG_DESTINATION_KIND_COUNT;
+}
+
+static inline int SG_DestinationRefValid(const sg_destination_ref_t *ref)
+{
+	if (!ref || !SG_DestinationKindValid(ref->kind))
+		return 0;
+	switch (ref->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		return (ref->value.flag.team == 1U ||
+			ref->value.flag.team == 2U) &&
+			ref->value.flag.location < SG_DESTINATION_FLAG_LOCATION_COUNT &&
+			ref->value.flag.reserved == 0U;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+		return ref->value.item.item_id != 0U;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		return (ref->value.carrier.team == 1U ||
+			ref->value.carrier.team == 2U) &&
+			ref->value.carrier.selector <
+				SG_DESTINATION_CARRIER_SELECTOR_COUNT &&
+			((ref->value.carrier.selector == SG_DESTINATION_CARRIER_ANY &&
+			  ref->value.carrier.client_id == UINT16_MAX) ||
+			 (ref->value.carrier.selector == SG_DESTINATION_CARRIER_EXACT &&
+			  ref->value.carrier.client_id < UINT16_MAX));
+	case SG_DESTINATION_DEFENSIVE_POST:
+		return ref->value.post.region_id != UINT32_MAX;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		return ref->value.point.point_id != 0U;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
 }
 
 static inline int SG_DestinationMotionValid(sg_destination_motion_t motion)

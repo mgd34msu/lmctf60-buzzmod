@@ -4,7 +4,7 @@
 
 #include "slipgate/sg_belief_contract.h"
 #include "slipgate/sg_destination_field.h"
-#include "slipgate/sg_strategy_contract.h"
+#include "slipgate/sg_learning_contract.h"
 #include "slipgate/sg_tactic_contract.h"
 #include "slipgate/sg_weapon_contract.h"
 
@@ -138,92 +138,6 @@ static void TestPhaseSpaceFieldContract(void)
 	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
 }
 
-static sg_strategy_goal_t StrategyGoal(uint32_t id,
-	uint64_t authority_generation)
-{
-	sg_strategy_goal_t goal;
-
-	memset(&goal, 0, sizeof(goal));
-	goal.id = id;
-	goal.kind = SG_STRATEGY_GOAL_DESTINATION;
-	goal.failure_policy = SG_STRATEGY_FAILURE_ABORT;
-	goal.authority_generation = authority_generation;
-	goal.destination = Destination(SG_DESTINATION_WAYPOINT, id, 0U, 0U);
-	return goal;
-}
-
-static void StrategyState(sg_strategy_state_t *state)
-{
-	memset(state, 0, sizeof(*state));
-	state->owned_items[0] = StrategyGoal(1U, 1U);
-	state->queue = (sg_strategy_queue_t){
-		.items = state->owned_items,
-		.count = 1U,
-		.capacity = SG_STRATEGY_MAX_GOALS,
-		.plan_id = 10U,
-		.generation = 1U
-	};
-	state->lifecycle = SG_STRATEGY_READY;
-	state->last_event = SG_STRATEGY_EVENT_START;
-	state->last_failure = SG_STRATEGY_FAILURE_UNKNOWN;
-	state->authority = SG_STRATEGY_AUTHORITY_AUTONOMOUS;
-	state->revision = 5U;
-	state->authority_generation = 1U;
-	state->last_event_at_ms = 100U;
-}
-
-static sg_strategy_event_t StrategyEvent(sg_strategy_event_kind_t kind)
-{
-	return (sg_strategy_event_t){
-		.kind = kind,
-		.actor = SG_STRATEGY_ACTOR_STRATEGY,
-		.authority = SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		.expected_revision = 5U,
-		.expected_authority_generation = 1U,
-		.at_ms = 110U,
-		.valid_until_ms = 120U
-	};
-}
-
-static void TestStrategyBindings(void)
-{
-	sg_strategy_state_t state;
-	sg_strategy_event_t event = StrategyEvent(SG_STRATEGY_EVENT_START);
-	sg_strategy_goal_t replacement_goal = StrategyGoal(2U, 1U);
-	sg_strategy_queue_t replacement = {
-		.items = &replacement_goal,
-		.count = 1U,
-		.capacity = 1U,
-		.plan_id = 11U,
-		.generation = 1U
-	};
-
-	StrategyState(&state);
-	CHECK(SG_StrategyStateValid(&state));
-	CHECK(SG_StrategyEventBoundToState(&state, &event, 115U));
-	event.expected_revision = 0U;
-	CHECK(!SG_StrategyEventValid(&event));
-	event.expected_revision = state.revision;
-	event.expected_authority_generation = 2U;
-	CHECK(!SG_StrategyEventBoundToState(&state, &event, 115U));
-	event.expected_authority_generation = state.authority_generation;
-	CHECK(!SG_StrategyEventBoundToState(&state, &event, 121U));
-	event.at_ms = 90U;
-	event.valid_until_ms = 120U;
-	CHECK(!SG_StrategyEventBoundToState(&state, &event, 100U));
-	event.at_ms = 110U;
-	event.valid_until_ms = 120U;
-	state.owned_items[0].authority_generation = 2U;
-	CHECK(!SG_StrategyStateValid(&state));
-	state.owned_items[0].authority_generation = 1U;
-	event.kind = SG_STRATEGY_EVENT_REPLACED;
-	event.actor = SG_STRATEGY_ACTOR_HUMAN;
-	event.authority = SG_STRATEGY_AUTHORITY_HUMAN_ORDER;
-	event.detail.replacement.queue = &replacement;
-	CHECK(!SG_StrategyEventBoundToState(&state, &event, 115U));
-	replacement_goal.authority_generation = 2U;
-	CHECK(SG_StrategyEventBoundToState(&state, &event, 115U));
-}
 
 static sg_learning_parameters_t LearningParameters(uint64_t generation)
 {
@@ -602,7 +516,6 @@ static void TestWeaponObservationAndClientBindings(void)
 int main(void)
 {
 	TestPhaseSpaceFieldContract();
-	TestStrategyBindings();
 	TestLearningTransactionIdentity();
 	TestTacticBindingsAndResults();
 	TestFieldTacticDomainCompatibility();
