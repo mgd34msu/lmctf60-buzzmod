@@ -5,12 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FACE_KEY_EPSILON 0.000001f
+#define FACE_KEY_EPSILON 0.000001
 #define FACE_PLANE_BUCKET_SIZE 0.00001
 
 typedef struct point2_s
 {
-	float value[2];
+	double value[2];
 } point2_t;
 
 static uint32_t DominantAxis(const float normal[3])
@@ -25,7 +25,7 @@ static uint32_t DominantAxis(const float normal[3])
 }
 
 static int AppendPoint(point2_t **points, uint32_t *count,
-	const float point[2])
+	const double point[2])
 {
 	point2_t *grown;
 
@@ -42,13 +42,13 @@ static int AppendPoint(point2_t **points, uint32_t *count,
 }
 
 static int ClipHalfspace(point2_t **polygon, uint32_t *count,
-	float coefficient_u, float coefficient_v, float distance)
+	double coefficient_u, double coefficient_v, double distance)
 {
 	point2_t *next = NULL;
 	uint32_t next_count = 0U;
 	uint32_t index;
 
-	if (fabsf(coefficient_u) + fabsf(coefficient_v) <= FACE_KEY_EPSILON)
+	if (fabs(coefficient_u) + fabs(coefficient_v) <= FACE_KEY_EPSILON)
 	{
 		if (distance >= -FACE_KEY_EPSILON)
 			return 1;
@@ -61,9 +61,9 @@ static int ClipHalfspace(point2_t **polygon, uint32_t *count,
 	{
 		const point2_t *start = &(*polygon)[index];
 		const point2_t *end = &(*polygon)[(index + 1U) % *count];
-		float start_distance = coefficient_u * start->value[0] +
+		double start_distance = coefficient_u * start->value[0] +
 			coefficient_v * start->value[1] - distance;
-		float end_distance = coefficient_u * end->value[0] +
+		double end_distance = coefficient_u * end->value[0] +
 			coefficient_v * end->value[1] - distance;
 		int start_inside = start_distance <= 0.0f;
 		int end_inside = end_distance <= 0.0f;
@@ -72,8 +72,8 @@ static int ClipHalfspace(point2_t **polygon, uint32_t *count,
 			goto failure;
 		if (start_inside != end_inside)
 		{
-			float denominator = start_distance - end_distance;
-			float point[2];
+			double denominator = start_distance - end_distance;
+			double point[2];
 
 			if (denominator == 0.0f)
 				goto failure;
@@ -106,7 +106,8 @@ static int CellFacePolygon(sg_bsp_proof_context_t *proof,
 	uint32_t u = (drop + 1U) % 3U;
 	uint32_t v = (drop + 2U) % 3U;
 	uint32_t index;
-	float initial[4][2] = {
+	double boundary_normal[3], boundary_distance;
+	double initial[4][2] = {
 		{ SG_CONFIGURATION_PMOVE_ORIGIN_MIN,
 			SG_CONFIGURATION_PMOVE_ORIGIN_MIN },
 		{ SG_CONFIGURATION_PMOVE_ORIGIN_MAX,
@@ -119,6 +120,9 @@ static int CellFacePolygon(sg_bsp_proof_context_t *proof,
 
 	*vertices_out = NULL;
 	*count_out = 0U;
+	if (!SG_BspProofOrientedPlane(&boundary->plane, boundary_normal,
+			&boundary_distance))
+		goto invalid;
 	for (index = 0; index < 4U; index++)
 		if (!AppendPoint(&polygon, &count, initial[index]))
 			goto failure;
@@ -126,12 +130,15 @@ static int CellFacePolygon(sg_bsp_proof_context_t *proof,
 	{
 		const sg_configuration_plane_t *clip =
 			&proof->space->faces[cell->first_face + index].plane;
-		float ratio = clip->normal[drop] / boundary->plane.normal[drop];
-		float coefficient_u = clip->normal[u] -
-			ratio * boundary->plane.normal[u];
-		float coefficient_v = clip->normal[v] -
-			ratio * boundary->plane.normal[v];
-		float distance = clip->distance - ratio * boundary->plane.distance;
+		double clip_normal[3], clip_distance;
+		double ratio, coefficient_u, coefficient_v, distance;
+
+		if (!SG_BspProofOrientedPlane(clip, clip_normal, &clip_distance))
+			goto invalid;
+		ratio = clip_normal[drop] / boundary_normal[drop];
+		coefficient_u = clip_normal[u] - ratio * boundary_normal[u];
+		coefficient_v = clip_normal[v] - ratio * boundary_normal[v];
+		distance = clip_distance - ratio * boundary_distance;
 
 		if (!ClipHalfspace(&polygon, &count, coefficient_u, coefficient_v,
 				distance))
@@ -145,12 +152,12 @@ static int CellFacePolygon(sg_bsp_proof_context_t *proof,
 			goto failure;
 		for (index = 0; index < count; index++)
 		{
-			vertices[index].value[u] = polygon[index].value[0];
-			vertices[index].value[v] = polygon[index].value[1];
-			vertices[index].value[drop] = (boundary->plane.distance -
-				boundary->plane.normal[u] * vertices[index].value[u] -
-				boundary->plane.normal[v] * vertices[index].value[v]) /
-				boundary->plane.normal[drop];
+			vertices[index].value[u] = (float)polygon[index].value[0];
+			vertices[index].value[v] = (float)polygon[index].value[1];
+			vertices[index].value[drop] = (float)((boundary_distance -
+				boundary_normal[u] * polygon[index].value[0] -
+				boundary_normal[v] * polygon[index].value[1]) /
+				boundary_normal[drop]);
 		}
 		*vertices_out = vertices;
 		*count_out = count;
@@ -161,6 +168,11 @@ static int CellFacePolygon(sg_bsp_proof_context_t *proof,
 failure:
 	free(polygon);
 	SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OUT_OF_MEMORY, cell_index);
+	return 0;
+
+invalid:
+	free(polygon);
+	SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_CELL, cell_index);
 	return 0;
 }
 

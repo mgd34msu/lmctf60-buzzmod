@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PORTAL_PLANE_EPSILON 0.000001f
 #define PORTAL_AREA_EPSILON 0.000001f
 #define PORTAL_MATCH_EPSILON 0.001f
 #define PORTAL_MATCH_ROUNDING_ULPS 32.0f
@@ -15,7 +14,7 @@
 
 typedef struct portal_point2_s
 {
-	float value[2];
+	double value[2];
 } portal_point2_t;
 
 static uint32_t DominantAxis(const float normal[3])
@@ -29,40 +28,17 @@ static uint32_t DominantAxis(const float normal[3])
 	return axis;
 }
 
-static void Project(const float point[3], uint32_t drop, float projected[2])
+static void Project(const float point[3], uint32_t drop, double projected[2])
 {
 	projected[0] = point[(drop + 1U) % 3U];
 	projected[1] = point[(drop + 2U) % 3U];
 }
 
-static float Cross2(const float a[2], const float b[2], const float c[2])
+static double Cross2(const double a[2], const double b[2],
+	const double c[2])
 {
 	return (b[0] - a[0]) * (c[1] - a[1]) -
 		(b[1] - a[1]) * (c[0] - a[0]);
-}
-
-static int Coplanar(const sg_configuration_plane_t *left,
-	const sg_configuration_plane_t *right)
-{
-	sg_bsp_proof_canonical_plane_t left_plane, right_plane;
-
-	return SG_BspProofCanonicalPlane(left, &left_plane) &&
-		SG_BspProofCanonicalPlane(right, &right_plane) &&
-		fabs(left_plane.normal[0] - right_plane.normal[0]) <=
-			(double)PORTAL_PLANE_EPSILON &&
-		fabs(left_plane.normal[1] - right_plane.normal[1]) <=
-			(double)PORTAL_PLANE_EPSILON &&
-		fabs(left_plane.normal[2] - right_plane.normal[2]) <=
-			(double)PORTAL_PLANE_EPSILON &&
-		fabs(left_plane.distance - right_plane.distance) <=
-			(double)PORTAL_PLANE_EPSILON;
-}
-
-static int OpposingPlanes(const sg_configuration_plane_t *left,
-	const sg_configuration_plane_t *right)
-{
-	return SG_BspProofDot(left->normal, right->normal) < 0.0f &&
-		Coplanar(left, right);
 }
 
 static int PortalRecordValid(const sg_bsp_proof_context_t *proof,
@@ -70,6 +46,7 @@ static int PortalRecordValid(const sg_bsp_proof_context_t *proof,
 {
 	const sg_configuration_portal_t *portal =
 		&proof->space->portals[portal_index];
+	double normal[3], distance;
 	uint32_t vertex;
 
 	if (portal->from_cell >= proof->space->cell_count ||
@@ -84,34 +61,37 @@ static int PortalRecordValid(const sg_bsp_proof_context_t *proof,
 		portal->first_vertex > proof->space->vertex_count ||
 		portal->vertex_count < 3U ||
 		portal->vertex_count > proof->space->vertex_count -
-			portal->first_vertex)
+			portal->first_vertex ||
+		!SG_BspProofOrientedPlane(&portal->plane, normal, &distance))
 		return 0;
 	for (vertex = 0; vertex < portal->vertex_count; vertex++)
 	{
 		const float *point = proof->space->vertices[
 			portal->first_vertex + vertex].value;
-		float coordinate_scale;
-		float scale;
-		float residual;
+		double coordinate_scale;
+		double scale;
+		double residual;
 
 		if (!SG_BspProofFiniteVector(point))
 			return 0;
-		coordinate_scale = fmaxf(fabsf(point[0]),
-			fmaxf(fabsf(point[1]), fabsf(point[2])));
-		scale = fabsf(portal->plane.distance) + coordinate_scale + 1.0f +
-			fabsf(portal->plane.normal[0] * point[0]) +
-			fabsf(portal->plane.normal[1] * point[1]) +
-			fabsf(portal->plane.normal[2] * point[2]);
-		residual = fabsf(SG_BspProofDot(portal->plane.normal, point) -
-			portal->plane.distance);
-		if (residual > scale * FLT_EPSILON * PORTAL_COPLANAR_ROUNDING_ULPS)
+		coordinate_scale = fmax(fabs((double)point[0]),
+			fmax(fabs((double)point[1]), fabs((double)point[2])));
+		scale = fabs(distance) + coordinate_scale + 1.0 +
+			fabs(normal[0] * (double)point[0]) +
+			fabs(normal[1] * (double)point[1]) +
+			fabs(normal[2] * (double)point[2]);
+		residual = fabs(normal[0] * (double)point[0] +
+			normal[1] * (double)point[1] + normal[2] * (double)point[2] -
+			distance);
+		if (residual > scale * (double)FLT_EPSILON *
+				(double)PORTAL_COPLANAR_ROUNDING_ULPS)
 			return 0;
 	}
 	return 1;
 }
 
 static int AppendPoint2(portal_point2_t **points, uint32_t *count,
-	const float point[2])
+	const double point[2])
 {
 	portal_point2_t *grown;
 
@@ -127,10 +107,10 @@ static int AppendPoint2(portal_point2_t **points, uint32_t *count,
 	return 1;
 }
 
-static float PolygonSignedArea2(const portal_point2_t *polygon,
+static double PolygonSignedArea2(const portal_point2_t *polygon,
 	uint32_t count)
 {
-	float area = 0.0f;
+	double area = 0.0;
 	uint32_t index;
 
 	for (index = 0; index < count; index++)
@@ -155,16 +135,19 @@ static int OverlapPolygon(const sg_rune_vec3_t *subject,
 	portal_point2_t *polygon = NULL;
 	uint32_t count = 0U;
 	uint32_t drop = DominantAxis(plane->normal);
-	float clip_orientation;
+	double normal[3], distance;
+	double clip_orientation;
 	uint32_t edge;
 
 	*polygon_out = NULL;
 	*count_out = 0U;
 	*area_out = 0.0f;
 	memset(center_out, 0, 3U * sizeof(*center_out));
+	if (!SG_BspProofOrientedPlane(plane, normal, &distance))
+		return 0;
 	for (edge = 0; edge < subject_count; edge++)
 	{
-		float projected[2];
+		double projected[2];
 
 		Project(subject[edge].value, drop, projected);
 		if (!AppendPoint2(&polygon, &count, projected))
@@ -176,7 +159,7 @@ static int OverlapPolygon(const sg_rune_vec3_t *subject,
 
 		for (edge = 0; edge < clip_count; edge++)
 		{
-			float projected[2];
+			double projected[2];
 
 			Project(clip[edge].value, drop, projected);
 			if (!AppendPoint2(&clip_projected, &clip_projected_count,
@@ -194,7 +177,7 @@ static int OverlapPolygon(const sg_rune_vec3_t *subject,
 	{
 		portal_point2_t *next = NULL;
 		uint32_t next_count = 0U;
-		float clip_a[2], clip_b[2];
+		double clip_a[2], clip_b[2];
 		uint32_t index;
 
 		Project(clip[edge].value, drop, clip_a);
@@ -203,8 +186,8 @@ static int OverlapPolygon(const sg_rune_vec3_t *subject,
 		{
 			const portal_point2_t *start = &polygon[index];
 			const portal_point2_t *end = &polygon[(index + 1U) % count];
-			float start_distance = Cross2(clip_a, clip_b, start->value);
-			float end_distance = Cross2(clip_a, clip_b, end->value);
+			double start_distance = Cross2(clip_a, clip_b, start->value);
+			double end_distance = Cross2(clip_a, clip_b, end->value);
 			int start_inside = clip_orientation >= 0.0f ?
 				start_distance >= 0.0f : start_distance <= 0.0f;
 			int end_inside = clip_orientation >= 0.0f ?
@@ -218,8 +201,8 @@ static int OverlapPolygon(const sg_rune_vec3_t *subject,
 			}
 			if (start_inside != end_inside)
 			{
-				float denominator = start_distance - end_distance;
-				float point[2];
+				double denominator = start_distance - end_distance;
+				double point[2];
 
 				if (denominator == 0.0f)
 				{
@@ -241,41 +224,49 @@ static int OverlapPolygon(const sg_rune_vec3_t *subject,
 		polygon = next;
 		count = next_count;
 	}
-	if (count >= 3U && fabsf(plane->normal[drop]) > PORTAL_AREA_EPSILON)
+	if (count >= 3U && fabs(normal[drop]) > (double)PORTAL_AREA_EPSILON)
 	{
-		float projected_area = fabsf(PolygonSignedArea2(polygon, count)) * 0.5f;
-		float normal_length = sqrtf(SG_BspProofDot(plane->normal,
-			plane->normal));
-		float perimeter = 0.0f;
-		float coordinate_scale = 1.0f;
+		double projected_area = fabs(PolygonSignedArea2(polygon, count)) * 0.5;
+		double normal_length = sqrt(normal[0] * normal[0] +
+			normal[1] * normal[1] + normal[2] * normal[2]);
+		double area = projected_area * normal_length / fabs(normal[drop]);
+		double perimeter = 0.0;
+		double coordinate_scale = 1.0;
+		double center[3] = { 0.0, 0.0, 0.0 };
 		uint32_t index;
 		uint32_t u = (drop + 1U) % 3U;
 		uint32_t v = (drop + 2U) % 3U;
 
-		*area_out = projected_area * normal_length /
-			fabsf(plane->normal[drop]);
 		for (index = 0; index < count; index++)
 		{
-			float dx = polygon[(index + 1U) % count].value[0] -
+			double dx = polygon[(index + 1U) % count].value[0] -
 				polygon[index].value[0];
-			float dy = polygon[(index + 1U) % count].value[1] -
+			double dy = polygon[(index + 1U) % count].value[1] -
 				polygon[index].value[1];
 
-			center_out[u] += polygon[index].value[0];
-			center_out[v] += polygon[index].value[1];
-			perimeter += sqrtf(dx * dx + dy * dy);
-			coordinate_scale = fmaxf(coordinate_scale,
-				fabsf(polygon[index].value[0]));
-			coordinate_scale = fmaxf(coordinate_scale,
-				fabsf(polygon[index].value[1]));
+			center[u] += polygon[index].value[0];
+			center[v] += polygon[index].value[1];
+			perimeter += sqrt(dx * dx + dy * dy);
+			coordinate_scale = fmax(coordinate_scale,
+				fabs(polygon[index].value[0]));
+			coordinate_scale = fmax(coordinate_scale,
+				fabs(polygon[index].value[1]));
 		}
-		if (projected_area <= perimeter * coordinate_scale * FLT_EPSILON *
-				16.0f)
-			*area_out = 0.0f;
-		center_out[u] /= (float)count;
-		center_out[v] /= (float)count;
-		center_out[drop] = (plane->distance - plane->normal[u] * center_out[u] -
-			plane->normal[v] * center_out[v]) / plane->normal[drop];
+		if (projected_area <= perimeter * coordinate_scale *
+				(double)FLT_EPSILON * 16.0)
+			area = 0.0;
+		center[u] /= (double)count;
+		center[v] /= (double)count;
+		center[drop] = (distance - normal[u] * center[u] -
+			normal[v] * center[v]) / normal[drop];
+		if (!isfinite(area) || area > (double)FLT_MAX ||
+			!isfinite(center[0]) || !isfinite(center[1]) ||
+			!isfinite(center[2]))
+			goto failure;
+		*area_out = (float)area;
+		center_out[0] = (float)center[0];
+		center_out[1] = (float)center[1];
+		center_out[2] = (float)center[2];
 	}
 	if (*area_out <= PORTAL_AREA_EPSILON)
 	{
@@ -304,10 +295,17 @@ static int PortalSideWitness(sg_bsp_proof_context_t *proof,
 	uint32_t drop = DominantAxis(boundary->plane.normal);
 	uint32_t constraint_count = cell->face_count;
 	uint32_t offset, edge, axis;
+	double boundary_normal[3], boundary_distance;
+	float objective[3];
 	int positive_margin = 0;
 	int solved;
 	sg_host_collision_pose_t pose;
 
+	if (!SG_BspProofOrientedPlane(&boundary->plane, boundary_normal,
+			&boundary_distance))
+		return -1;
+	for (axis = 0; axis < 3U; axis++)
+		objective[axis] = (float)boundary_normal[axis];
 	halfspaces = calloc((size_t)cell->face_count + polygon_count,
 		sizeof(*halfspaces));
 	clearance = calloc((size_t)cell->face_count + polygon_count,
@@ -322,24 +320,32 @@ static int PortalSideWitness(sg_bsp_proof_context_t *proof,
 	{
 		const sg_configuration_plane_t *plane =
 			&proof->space->faces[cell->first_face + offset].plane;
+		double normal[3], distance;
 
-		memcpy(halfspaces[offset].normal, plane->normal,
-			sizeof(halfspaces[offset].normal));
-		halfspaces[offset].distance = plane->distance;
+		if (!SG_BspProofOrientedPlane(plane, normal, &distance))
+		{
+			free(halfspaces);
+			free(clearance);
+			return -1;
+		}
+		for (axis = 0; axis < 3U; axis++)
+			halfspaces[offset].normal[axis] = (float)normal[axis];
+		halfspaces[offset].distance = (float)distance;
 		halfspaces[offset].open =
 			(plane->source_kind == SG_CONFIGURATION_PLANE_BSP &&
 			 plane->reversed == 0U) ||
 			(plane->source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
 			 plane->reversed != 0U);
-		clearance[offset] = (uint8_t)!Coplanar(plane, &boundary->plane);
+		clearance[offset] =
+			(uint8_t)!SG_BspProofPlanesCoplanar(plane, &boundary->plane);
 	}
 	for (edge = 0; edge < polygon_count; edge++)
 	{
-		const float *a = polygon[edge].value;
-		const float *b = polygon[(edge + 1U) % polygon_count].value;
-		float a3[3] = { 0.0f, 0.0f, 0.0f };
-		float b3[3] = { 0.0f, 0.0f, 0.0f };
-		float direction[3];
+		const double *a = polygon[edge].value;
+		const double *b = polygon[(edge + 1U) % polygon_count].value;
+		double a3[3] = { 0.0, 0.0, 0.0 };
+		double b3[3] = { 0.0, 0.0, 0.0 };
+		double direction[3], side_normal[3], side_distance, side_scale;
 		sg_configuration_lattice_halfspace_t *side =
 			&halfspaces[constraint_count];
 		uint32_t u = (drop + 1U) % 3U;
@@ -347,36 +353,41 @@ static int PortalSideWitness(sg_bsp_proof_context_t *proof,
 
 		a3[u] = a[0]; a3[v] = a[1];
 		b3[u] = b[0]; b3[v] = b[1];
-		a3[drop] = (boundary->plane.distance -
-			boundary->plane.normal[u] * a3[u] -
-			boundary->plane.normal[v] * a3[v]) /
-			boundary->plane.normal[drop];
-		b3[drop] = (boundary->plane.distance -
-			boundary->plane.normal[u] * b3[u] -
-			boundary->plane.normal[v] * b3[v]) /
-			boundary->plane.normal[drop];
+		a3[drop] = (boundary_distance - boundary_normal[u] * a3[u] -
+			boundary_normal[v] * a3[v]) / boundary_normal[drop];
+		b3[drop] = (boundary_distance - boundary_normal[u] * b3[u] -
+			boundary_normal[v] * b3[v]) / boundary_normal[drop];
 		for (axis = 0; axis < 3U; axis++)
 			direction[axis] = b3[axis] - a3[axis];
-		side->normal[0] = direction[1] * boundary->plane.normal[2] -
-			direction[2] * boundary->plane.normal[1];
-		side->normal[1] = direction[2] * boundary->plane.normal[0] -
-			direction[0] * boundary->plane.normal[2];
-		side->normal[2] = direction[0] * boundary->plane.normal[1] -
-			direction[1] * boundary->plane.normal[0];
-		if (side->normal[0] == 0.0f && side->normal[1] == 0.0f &&
-			side->normal[2] == 0.0f)
+		side_normal[0] = direction[1] * boundary_normal[2] -
+			direction[2] * boundary_normal[1];
+		side_normal[1] = direction[2] * boundary_normal[0] -
+			direction[0] * boundary_normal[2];
+		side_normal[2] = direction[0] * boundary_normal[1] -
+			direction[1] * boundary_normal[0];
+		side_scale = fmax(fabs(side_normal[0]),
+			fmax(fabs(side_normal[1]), fabs(side_normal[2])));
+		if (side_scale == 0.0)
 			continue;
-		side->distance = SG_BspProofDot(side->normal, a3);
-		if (SG_BspProofDot(side->normal, center) > side->distance)
+		for (axis = 0; axis < 3U; axis++)
+			side_normal[axis] /= side_scale;
+		side_distance = side_normal[0] * a3[0] + side_normal[1] * a3[1] +
+			side_normal[2] * a3[2];
+		if (side_normal[0] * (double)center[0] +
+			side_normal[1] * (double)center[1] +
+			side_normal[2] * (double)center[2] > side_distance)
 		{
 			for (axis = 0; axis < 3U; axis++)
-				side->normal[axis] = -side->normal[axis];
-			side->distance = -side->distance;
+				side_normal[axis] = -side_normal[axis];
+			side_distance = -side_distance;
 		}
+		for (axis = 0; axis < 3U; axis++)
+			side->normal[axis] = (float)side_normal[axis];
+		side->distance = (float)side_distance;
 		clearance[constraint_count++] = 1U;
 	}
 	solved = SG_ConfigurationLatticeFindMaxClearance(halfspaces, clearance,
-		constraint_count, boundary->plane.normal, point, &positive_margin,
+		constraint_count, objective, point, &positive_margin,
 		&stats);
 	free(halfspaces);
 	free(clearance);
@@ -407,7 +418,7 @@ static int PortalMatches(sg_bsp_proof_context_t *proof, uint32_t portal_index,
 	portal_point2_t *portal_polygon = NULL;
 	uint32_t portal_count = 0U;
 	sg_rune_vec3_t *expected3 = NULL;
-	sg_configuration_plane_t expected_plane = face->plane;
+	double expected_normal[3], expected_distance;
 	uint32_t index;
 	uint32_t drop = DominantAxis(face->plane.normal);
 	uint32_t u = (drop + 1U) % 3U;
@@ -420,7 +431,10 @@ static int PortalMatches(sg_bsp_proof_context_t *proof, uint32_t portal_index,
 		portal->first_vertex > proof->space->vertex_count ||
 		portal->vertex_count < 3U ||
 		portal->vertex_count > proof->space->vertex_count - portal->first_vertex ||
-		!Coplanar(&portal->plane, &face->plane))
+			!SG_BspProofPlanesCoplanar(&portal->plane, &face->plane))
+		return 0;
+	if (!SG_BspProofOrientedPlane(&face->plane, expected_normal,
+			&expected_distance))
 		return 0;
 	expected3 = calloc(expected_count, sizeof(*expected3));
 	if (!expected3)
@@ -431,12 +445,12 @@ static int PortalMatches(sg_bsp_proof_context_t *proof, uint32_t portal_index,
 	}
 	for (index = 0; index < expected_count; index++)
 	{
-		expected3[index].value[u] = expected_polygon[index].value[0];
-		expected3[index].value[v] = expected_polygon[index].value[1];
-		expected3[index].value[drop] = (expected_plane.distance -
-			expected_plane.normal[u] * expected3[index].value[u] -
-			expected_plane.normal[v] * expected3[index].value[v]) /
-			expected_plane.normal[drop];
+		expected3[index].value[u] = (float)expected_polygon[index].value[0];
+		expected3[index].value[v] = (float)expected_polygon[index].value[1];
+		expected3[index].value[drop] = (float)((expected_distance -
+			expected_normal[u] * expected_polygon[index].value[0] -
+			expected_normal[v] * expected_polygon[index].value[1]) /
+			expected_normal[drop]);
 	}
 	if (!OverlapPolygon(&proof->space->vertices[portal->first_vertex],
 			portal->vertex_count, &proof->space->vertices[portal->first_vertex],
@@ -532,7 +546,7 @@ static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 			right_ref->bounds_maxs[axis] < left_ref->bounds_mins[axis])
 			return 1;
 	proof->result.portal_face_candidates++;
-	if (!OpposingPlanes(&left->plane, &right->plane))
+	if (!SG_BspProofPlanesOppose(&left->plane, &right->plane))
 		return 1;
 	if (!OverlapPolygon(left_ref->vertices, left_ref->vertex_count,
 			right_ref->vertices, right_ref->vertex_count, &left->plane,

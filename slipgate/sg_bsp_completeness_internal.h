@@ -3,6 +3,8 @@
 
 #include "sg_bsp_completeness_proof.h"
 
+#define SG_BSP_PROOF_PLANE_EPSILON 0.000001
+
 typedef struct sg_bsp_proof_halfspace_s
 {
 	float normal[3];
@@ -82,6 +84,12 @@ float SG_BspProofDot(const float left[3], const float right[3]);
 int SG_BspProofFiniteVector(const float value[3]);
 int SG_BspProofCanonicalPlane(const sg_configuration_plane_t *plane,
 	sg_bsp_proof_canonical_plane_t *canonical_out);
+int SG_BspProofOrientedPlane(const sg_configuration_plane_t *plane,
+	double normal_out[3], double *distance_out);
+int SG_BspProofPlanesCoplanar(const sg_configuration_plane_t *left,
+	const sg_configuration_plane_t *right);
+int SG_BspProofPlanesOppose(const sg_configuration_plane_t *left,
+	const sg_configuration_plane_t *right);
 void SG_BspProofFreeRegion(sg_bsp_proof_region_t *region);
 void SG_BspProofFreeRegions(sg_bsp_proof_regions_t *regions);
 int SG_BspProofCopyRegion(const sg_bsp_proof_region_t *source,
@@ -103,6 +111,12 @@ int SG_BspProofAppendOwnedRegion(sg_bsp_proof_context_t *proof,
 	sg_bsp_proof_regions_t *regions, sg_bsp_proof_region_t *region);
 int SG_BspProofCellRegion(const sg_configuration_space_t *space,
 	uint32_t cell_index, sg_bsp_proof_region_t *region_out);
+int SG_BspProofAppendExpectedLeaf(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *region);
+int SG_BspProofReplayCollisionBsp(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *region, int32_t child);
+int SG_BspProofReplayBsp(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *region, int32_t child);
 int SG_BspProofBuildExpected(sg_bsp_proof_context_t *proof);
 int SG_BspProofAuditStates(sg_bsp_proof_context_t *proof);
 int SG_BspProofRegionOutsideUnion(sg_bsp_proof_context_t *proof,

@@ -485,34 +485,27 @@ static void TestEquivalentPlanePortalIndex(void)
 	sg_host_collision_authority_t authority;
 	sg_configuration_space_t *space = NULL;
 	sg_bsp_completeness_result_t result;
-	uint8_t scaled[SG_RUNE_STANCE_COUNT] = { 0 };
-	uint32_t cell;
-	SetPlane(&fixture.planes[0], 0.6f, 0.8f, 0.0f, 0.13f);
+	uint32_t face, axis;
+
 	CHECK(Build(&fixture, &authority, &space));
 	if (space)
 	{
-		for (cell = 0; cell < space->cell_count; cell++)
-		{
-			uint32_t offset;
-			sg_rune_stance_t stance = space->cells[cell].stance;
-			if (scaled[stance])
-				continue;
-			for (offset = 0; offset < space->cells[cell].face_count; offset++)
+		for (face = 0; face < space->face_count; face++)
+			if (space->faces[face].plane.source_kind ==
+					SG_CONFIGURATION_PLANE_BSP)
 			{
-				sg_configuration_plane_t *plane = &space->faces[
-					space->cells[cell].first_face + offset].plane;
-				uint32_t axis;
-				if (plane->source_kind != SG_CONFIGURATION_PLANE_BSP)
-					continue;
 				for (axis = 0; axis < 3U; axis++)
-					plane->normal[axis] *= 1.3f;
-				plane->distance *= 1.3f;
-				scaled[stance] = 1U;
-				break;
+					space->faces[face].plane.normal[axis] *= 1e20f;
+				space->faces[face].plane.distance *= 1e20f;
 			}
+		CHECK(Prove(&authority, space, &result));
+		for (face = 0; face < space->portal_count; face++)
+		{
+			for (axis = 0; axis < 3U; axis++)
+				space->portals[face].plane.normal[axis] *= 1e20f;
+			space->portals[face].plane.distance *= 1e20f;
 		}
-		CHECK(scaled[SG_RUNE_STANCE_STANDING]);
-		CHECK(scaled[SG_RUNE_STANCE_CROUCHING]);
+		CHECK(Prove(&authority, space, &result));
 		space->portal_count = 0U;
 		CHECK(!SG_BspCompletenessProve(&authority, space, &result));
 		CHECK(result.code == SG_BSP_COMPLETENESS_OMITTED_PORTAL);

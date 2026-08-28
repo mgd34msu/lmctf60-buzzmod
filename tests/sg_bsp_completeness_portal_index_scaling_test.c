@@ -1,5 +1,6 @@
 #include "../slipgate/sg_bsp_completeness_internal.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -168,6 +169,24 @@ static void TestReviewerNearTieMatrix(void)
 	CheckEquivalentPlaneKeys(&left, &scaled_left, 0);
 }
 
+static void TestMaximumScaleMatrix(void)
+{
+	sg_configuration_plane_t left, right, scaled_left, scaled_right;
+
+	memset(&left, 0, sizeof(left));
+	memset(&right, 0, sizeof(right));
+	left.normal[0] = FLT_MAX;
+	left.normal[1] = 1e30f;
+	right.normal[0] = -FLT_MAX;
+	right.normal[1] = 1e30f;
+	CHECK(SG_BspProofPlanesOppose(&left, &right));
+	CheckEquivalentPlaneKeys(&left, &right, 1);
+	scaled_left = ScaledPlane(left, 0.5f);
+	scaled_right = ScaledPlane(right, 0.25f);
+	CHECK(SG_BspProofPlanesOppose(&scaled_left, &scaled_right));
+	CheckEquivalentPlaneKeys(&scaled_left, &scaled_right, 1);
+}
+
 static void TestDominantTieKey(void)
 {
 	sg_configuration_cell_t cells[2];
@@ -253,6 +272,7 @@ int main(void)
 	TestDominantTieKey();
 	TestNearTieCompatibility();
 	TestReviewerNearTieMatrix();
+	TestMaximumScaleMatrix();
 	if (failures)
 	{
 		fprintf(stderr, "%d portal index scaling checks failed\n", failures);

@@ -74,6 +74,58 @@ int SG_BspProofCanonicalPlane(const sg_configuration_plane_t *plane,
 	return 1;
 }
 
+int SG_BspProofOrientedPlane(const sg_configuration_plane_t *plane,
+	double normal_out[3], double *distance_out)
+{
+	sg_bsp_proof_canonical_plane_t canonical;
+	double sign;
+	uint32_t axis;
+
+	if (!normal_out || !distance_out ||
+		!SG_BspProofCanonicalPlane(plane, &canonical))
+		return 0;
+	sign = canonical.orientation ? -1.0 : 1.0;
+	for (axis = 0; axis < 3U; axis++)
+		normal_out[axis] = sign * canonical.normal[axis];
+	*distance_out = sign * canonical.distance;
+	return 1;
+}
+
+static int CanonicalPlanesEquivalent(
+	const sg_bsp_proof_canonical_plane_t *left,
+	const sg_bsp_proof_canonical_plane_t *right)
+{
+	return fabs(left->normal[0] - right->normal[0]) <=
+			SG_BSP_PROOF_PLANE_EPSILON &&
+		fabs(left->normal[1] - right->normal[1]) <=
+			SG_BSP_PROOF_PLANE_EPSILON &&
+		fabs(left->normal[2] - right->normal[2]) <=
+			SG_BSP_PROOF_PLANE_EPSILON &&
+		fabs(left->distance - right->distance) <=
+			SG_BSP_PROOF_PLANE_EPSILON;
+}
+
+int SG_BspProofPlanesCoplanar(const sg_configuration_plane_t *left,
+	const sg_configuration_plane_t *right)
+{
+	sg_bsp_proof_canonical_plane_t left_plane, right_plane;
+
+	return SG_BspProofCanonicalPlane(left, &left_plane) &&
+		SG_BspProofCanonicalPlane(right, &right_plane) &&
+		CanonicalPlanesEquivalent(&left_plane, &right_plane);
+}
+
+int SG_BspProofPlanesOppose(const sg_configuration_plane_t *left,
+	const sg_configuration_plane_t *right)
+{
+	sg_bsp_proof_canonical_plane_t left_plane, right_plane;
+
+	return SG_BspProofCanonicalPlane(left, &left_plane) &&
+		SG_BspProofCanonicalPlane(right, &right_plane) &&
+		left_plane.orientation != right_plane.orientation &&
+		CanonicalPlanesEquivalent(&left_plane, &right_plane);
+}
+
 void SG_BspProofFreeRegion(sg_bsp_proof_region_t *region)
 {
 	if (!region)
