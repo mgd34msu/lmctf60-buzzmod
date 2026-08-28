@@ -1855,6 +1855,9 @@ int SG_MechanismCapabilityBuild(
 	memset(&build, 0, sizeof(build));
 	build.source = source;
 	build.error.source_index = SG_MECHANISM_CAPABILITY_INDEX_NONE;
+	if (!capabilities_out)
+		SetError(&build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_ARGUMENT,
+			SG_MECHANISM_CAPABILITY_INDEX_NONE);
 	if (!capabilities_out || !SourceShapeValid(&build))
 	{
 		if (error_out)

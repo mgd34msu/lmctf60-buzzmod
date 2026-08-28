@@ -846,6 +846,13 @@ static void TestCompleteModel(void)
 static void TestIdentityAndLimits(void)
 {
 	mechanism_fixture_t fixture;
+	sg_mechanism_capability_error_t error;
+
+	CHECK(FixtureInit(&fixture));
+	CHECK(!SG_MechanismCapabilityBuild(&fixture.source, NULL, &error));
+	CHECK(error.code == SG_MECHANISM_CAPABILITY_ERROR_INVALID_ARGUMENT);
+	CHECK(error.source_index == SG_MECHANISM_CAPABILITY_INDEX_NONE);
+	FixtureDestroy(&fixture);
 	CHECK(FixtureInit(&fixture));
 	fixture.authority.identity.schema_id = 0U;
 	fixture.configuration->identity.schema_id = 0U;
