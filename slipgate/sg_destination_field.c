@@ -7,8 +7,6 @@
 #include <string.h>
 
 #define SG_FIELD_NO_INDEX UINT32_MAX
-#define SG_FIELD_EDGE_TRANSITION (UINT32_C(1) << 31)
-#define SG_FIELD_EDGE_RECORD_MASK (~SG_FIELD_EDGE_TRANSITION)
 
 typedef struct sg_field_work_s
 {
@@ -17,6 +15,8 @@ typedef struct sg_field_work_s
 	uint32_t *source_phase;
 	uint32_t *edge_cost;
 	uint32_t *edge_record;
+	sg_rune_phase_transition_kind_t *edge_transition_kind;
+	uint8_t *edge_is_transition;
 	uint32_t *queue;
 	uint32_t *selected_edge;
 	uint8_t *queued;
@@ -76,34 +76,6 @@ static int FieldShapeCurrent(const sg_rune_runtime_snapshot_t *snapshot,
 		 field->computed_at_ms >= field->destination.pose.sample_time_ms) &&
 		field->complete == 1U && field->sample_count == snapshot->phase_count &&
 		field->samples;
-}
-
-static int SampleWellFormed(const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_field_sample_t *sample)
-{
-	uint32_t axis;
-
-	if (!sample || !SG_PhaseCoordinateValid(snapshot, &sample->phase) ||
-		(sample->finite != 0U && sample->finite != 1U))
-		return 0;
-	if (sample->finite) {
-		if (!SG_PhaseCoordinateValid(snapshot, &sample->next_phase) ||
-			sample->cost_ms == SG_DESTINATION_FIELD_INF ||
-			sample->capability_mask == 0U)
-			return 0;
-	} else if (sample->next_phase.phase_id != SG_DESTINATION_FIELD_NO_PHASE ||
-		sample->next_phase.cell_id != SG_DESTINATION_FIELD_NO_CELL ||
-		sample->cost_ms != SG_DESTINATION_FIELD_INF ||
-		sample->capability_mask != 0U) {
-		return 0;
-	}
-	for (axis = 0U; axis < 3U; axis++)
-		if (!isfinite(sample->direction[axis]) ||
-			!isfinite(sample->velocity_direction[axis]) ||
-			(!sample->finite && (sample->direction[axis] != 0.0f ||
-			 sample->velocity_direction[axis] != 0.0f)))
-			return 0;
-	return 1;
 }
 
 int SG_FieldNeedsUpdate(const sg_rune_runtime_snapshot_t *snapshot,
@@ -294,6 +266,10 @@ static int AllocateWork(uint32_t phase_count, uint32_t edge_capacity,
 		work->source_phase = malloc((size_t)edge_capacity * sizeof(uint32_t));
 		work->edge_cost = malloc((size_t)edge_capacity * sizeof(uint32_t));
 		work->edge_record = malloc((size_t)edge_capacity * sizeof(uint32_t));
+		work->edge_transition_kind = malloc((size_t)edge_capacity *
+			sizeof(sg_rune_phase_transition_kind_t));
+		work->edge_is_transition = malloc((size_t)edge_capacity *
+			sizeof(uint8_t));
 	}
 	if (transition_count != 0U)
 		work->transition_claimed = calloc((size_t)transition_count,
@@ -301,7 +277,8 @@ static int AllocateWork(uint32_t phase_count, uint32_t edge_capacity,
 	return work->first_incoming && work->queue && work->selected_edge &&
 		work->queued && (edge_capacity == 0U ||
 		(work->next_incoming && work->source_phase && work->edge_cost &&
-		 work->edge_record)) &&
+		 work->edge_record && work->edge_transition_kind &&
+		 work->edge_is_transition)) &&
 		(transition_count == 0U || work->transition_claimed);
 }
 
@@ -312,6 +289,8 @@ static void FreeWork(sg_field_work_t *work)
 	free(work->source_phase);
 	free(work->edge_cost);
 	free(work->edge_record);
+	free(work->edge_transition_kind);
+	free(work->edge_is_transition);
 	free(work->queue);
 	free(work->selected_edge);
 	free(work->queued);
@@ -366,27 +345,31 @@ static int TransitionCost(const sg_rune_phase_transition_t *transition,
 }
 
 static const sg_rune_order_key_t *EdgeOrder(const sg_rune_model_t *model,
-	uint32_t record)
+	uint32_t record, uint8_t is_transition)
 {
-	uint32_t index = record & SG_FIELD_EDGE_RECORD_MASK;
-
-	if ((record & SG_FIELD_EDGE_TRANSITION) != 0U)
-		return &model->phase_transitions[index].order;
-	return &model->kernels[index].order;
+	if (is_transition)
+		return &model->phase_transitions[record].order;
+	return &model->kernels[record].order;
 }
 
-static int EdgeRecordCompare(const sg_rune_model_t *model, uint32_t left,
-	uint32_t right)
+static int EdgeRecordCompare(const sg_rune_model_t *model,
+	const sg_field_work_t *work, uint32_t left, uint32_t right)
 {
-	return OrderKeyCompare(EdgeOrder(model, left), EdgeOrder(model, right));
+	return OrderKeyCompare(EdgeOrder(model, work->edge_record[left],
+		work->edge_is_transition[left]),
+		EdgeOrder(model, work->edge_record[right],
+		work->edge_is_transition[right]));
 }
 
 static void AddReverseEdge(sg_field_work_t *work, uint32_t edge,
-	uint32_t record, uint32_t source, uint32_t destination, uint32_t cost)
+	uint32_t record, uint32_t source, uint32_t destination, uint32_t cost,
+	sg_rune_phase_transition_kind_t transition_kind, uint8_t is_transition)
 {
 	work->edge_record[edge] = record;
 	work->source_phase[edge] = source;
 	work->edge_cost[edge] = cost;
+	work->edge_transition_kind[edge] = transition_kind;
+	work->edge_is_transition[edge] = is_transition;
 	work->next_incoming[edge] = work->first_incoming[destination];
 	work->first_incoming[destination] = edge;
 }
@@ -436,7 +419,7 @@ static int BuildReverseEdges(const sg_rune_model_t *model,
 			return 0;
 		if (!work->transition_claimed[index]) {
 			AddReverseEdge(work, edge_count,
-				index | SG_FIELD_EDGE_TRANSITION, source, destination, cost);
+				index, source, destination, cost, transition->kind, 1U);
 			edge_count++;
 		}
 	}
@@ -447,6 +430,8 @@ static int BuildReverseEdges(const sg_rune_model_t *model,
 		uint32_t source_cell;
 		uint32_t destination_cell;
 		uint32_t cost;
+		sg_rune_phase_transition_kind_t transition_kind =
+			SG_RUNE_PHASE_TRANSITION_NONE;
 
 		if (!FindPhase(model, &kernel->source_phase, &source) ||
 			!FindPhase(model, &kernel->destination_phase, &destination) ||
@@ -460,7 +445,15 @@ static int BuildReverseEdges(const sg_rune_model_t *model,
 				model->cells[destination_cell].phases.count ||
 			!KernelCost(kernel, &cost))
 			return 0;
-		AddReverseEdge(work, edge_count, index, source, destination, cost);
+		if (!StableIdNone(&kernel->transition.value)) {
+			uint32_t transition_index;
+
+			if (!FindTransition(model, &kernel->transition, &transition_index))
+				return 0;
+			transition_kind = model->phase_transitions[transition_index].kind;
+		}
+		AddReverseEdge(work, edge_count, index, source, destination, cost,
+			transition_kind, 0U);
 		edge_count++;
 	}
 	return 1;
@@ -511,62 +504,26 @@ static double NormalizeDelta(const float destination[3], const float source[3],
 	return length;
 }
 
-static float PhaseAcceleration(const sg_rune_runtime_snapshot_t *snapshot,
-	uint32_t phase_index)
+static void ApplyTerminalPose(const sg_destination_field_t *field,
+	const sg_destination_pose_t *source, sg_field_query_result_t *result)
 {
-	const sg_rune_phase_basis_t *phase = &snapshot->model->phases[phase_index];
-
-	switch (phase->motion) {
-	case SG_RUNE_MOTION_SUPPORTED:
-		return snapshot->model->identity.physics.ground_acceleration;
-	case SG_RUNE_MOTION_AIRBORNE:
-		return snapshot->model->identity.physics.air_acceleration;
-	case SG_RUNE_MOTION_SWIMMING:
-		return snapshot->model->identity.physics.water_acceleration;
-	case SG_RUNE_MOTION_COUNT:
-		break;
-	}
-	return 0.0f;
-}
-
-static int ApplyTerminalPose(const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_destination_field_t *field, const sg_destination_pose_t *source,
-	sg_field_sample_t *sample)
-{
-	const sg_rune_physics_parameters_t *physics =
-		&snapshot->model->identity.physics;
 	double distance;
 	double velocity_delta;
-	double travel_ms;
-	double velocity_frames;
-	double velocity_ms;
-	double total;
-	float acceleration = PhaseAcceleration(snapshot, source->phase.phase_id);
 
 	distance = NormalizeDelta(field->destination.pose.position, source->position,
-		sample->direction);
+		result->sample.direction);
 	velocity_delta = NormalizeDelta(field->destination.pose.velocity,
-		source->velocity, sample->velocity_direction);
-	if (!isfinite(distance) || !isfinite(velocity_delta) ||
-		!isfinite(physics->max_velocity) || physics->max_velocity <= 0.0f ||
-		!isfinite(acceleration) || acceleration <= 0.0f ||
-		physics->frame_ms == 0U)
-		return 0;
-	travel_ms = ceil(distance * 1000.0 / physics->max_velocity);
-	velocity_frames = ceil(velocity_delta / acceleration);
-	velocity_ms = velocity_frames * physics->frame_ms;
-	total = travel_ms + velocity_ms;
-	if (!isfinite(total) || total < 0.0 ||
-		total >= (double)SG_DESTINATION_FIELD_INF)
-		return 0;
-	sample->next_phase = field->destination.pose.phase;
-	sample->cost_ms = (uint32_t)total;
-	return 1;
+		source->velocity, result->sample.velocity_direction);
+	result->sample.next_phase = field->destination.pose.phase;
+	if (distance == 0.0 && velocity_delta == 0.0) {
+		result->terminal_residual.status = SG_FIELD_TERMINAL_RESIDUAL_EXACT;
+		result->terminal_residual.upper_ms = 0U;
+	}
 }
 
 int SG_FieldQuery(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_field_t *field, const sg_destination_pose_t *source,
-	sg_field_sample_t *out)
+	sg_field_query_result_t *out)
 {
 	uint32_t index;
 
@@ -579,14 +536,16 @@ int SG_FieldQuery(const sg_rune_runtime_snapshot_t *snapshot,
 	index = source->phase.phase_id;
 	if (!CoordinateEqual(&field->samples[index].phase,
 		&snapshot->phases[index]) ||
-		!SampleWellFormed(snapshot, &field->samples[index]))
+		!SG_FieldSampleShapeValid(snapshot, &field->samples[index]))
 		return 0;
-	*out = field->samples[index];
-	if (CoordinateEqual(&source->phase, &field->destination.pose.phase) &&
-		!ApplyTerminalPose(snapshot, field, source, out)) {
-		memset(out, 0, sizeof(*out));
-		return 0;
-	}
+	out->sample = field->samples[index];
+	out->terminal_residual.status = out->sample.finite ?
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN :
+		SG_FIELD_TERMINAL_RESIDUAL_NOT_APPLICABLE;
+	out->terminal_residual.upper_ms = SG_DESTINATION_FIELD_INF;
+	if (out->sample.finite &&
+		CoordinateEqual(&source->phase, &field->destination.pose.phase))
+		ApplyTerminalPose(field, source, out);
 	return 1;
 }
 
@@ -607,8 +566,6 @@ static void InitializeSamples(const sg_rune_runtime_snapshot_t *snapshot,
 	}
 	samples[destination_index].next_phase = destination->pose.phase;
 	samples[destination_index].cost_ms = 0U;
-	samples[destination_index].capability_mask =
-		UINT32_C(1) << SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT;
 	samples[destination_index].finite = 1U;
 }
 
@@ -621,9 +578,10 @@ static void SelectEdge(const sg_rune_runtime_snapshot_t *snapshot,
 
 	samples[source].next_phase = snapshot->phases[destination];
 	samples[source].cost_ms = cost;
-	if ((record & SG_FIELD_EDGE_TRANSITION) != 0U) {
-		samples[source].capability_mask =
-			SG_DESTINATION_FIELD_CAPABILITY_TRANSITION;
+	samples[source].capability_families.bits = 0U;
+	samples[source].phase_transition_kind =
+		work->edge_transition_kind[edge];
+	if (work->edge_is_transition[edge]) {
 		samples[source].direction[0] = 0.0f;
 		samples[source].direction[1] = 0.0f;
 		samples[source].direction[2] = 0.0f;
@@ -631,7 +589,8 @@ static void SelectEdge(const sg_rune_runtime_snapshot_t *snapshot,
 		const sg_rune_capability_kernel_t *kernel =
 			&snapshot->model->kernels[record];
 
-		samples[source].capability_mask = UINT32_C(1) << kernel->family;
+		samples[source].capability_families =
+			SG_FIELD_CAPABILITY_FAMILY_BIT(kernel->family);
 		NormalizeMidpoint(&kernel->parameters.displacement,
 			samples[source].direction);
 	}
@@ -674,8 +633,8 @@ static void SolveFixedPoint(const sg_rune_runtime_snapshot_t *snapshot,
 			if (!lower_cost &&
 				(candidate != samples[source].cost_ms ||
 				 (work->selected_edge[source] != SG_FIELD_NO_INDEX &&
-				  EdgeRecordCompare(snapshot->model, work->edge_record[edge],
-					work->edge_record[work->selected_edge[source]]) >= 0)))
+				  EdgeRecordCompare(snapshot->model, work, edge,
+					work->selected_edge[source]) >= 0)))
 				continue;
 			SelectEdge(snapshot, work, source, current, edge, candidate, samples);
 			work->selected_edge[source] = edge;

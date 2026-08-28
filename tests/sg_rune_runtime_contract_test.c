@@ -8,6 +8,9 @@
 #include "slipgate/sg_tactic_contract.h"
 #include "slipgate/sg_weapon_contract.h"
 
+_Static_assert(SG_RUNTIME_CONTRACT_VERSION == UINT16_C(3),
+	"runtime field ABI is version 3");
+
 static int failures;
 
 #define CHECK(expression) do { \
@@ -69,7 +72,8 @@ static void TestPhaseSpaceFieldContract(void)
 			.phase = { 0U, 0U },
 			.next_phase = { 1U, 0U },
 			.cost_ms = 200U,
-			.capability_mask = 1U,
+			.capability_families = { 1U },
+			.phase_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE,
 			.direction = { 1.0f, 0.0f, 0.0f },
 			.velocity_direction = { 0.0f, 1.0f, 0.0f },
 			.finite = 1U
@@ -78,7 +82,8 @@ static void TestPhaseSpaceFieldContract(void)
 			.phase = { 1U, 0U },
 			.next_phase = { 2U, 1U },
 			.cost_ms = 100U,
-			.capability_mask = 2U,
+			.capability_families = { 0U },
+			.phase_transition_kind = SG_RUNE_PHASE_TRANSITION_STANCE,
 			.direction = { 1.0f, 0.0f, 0.0f },
 			.velocity_direction = { 0.0f, 0.5f, 0.0f },
 			.finite = 1U
@@ -87,7 +92,8 @@ static void TestPhaseSpaceFieldContract(void)
 			.phase = { 2U, 1U },
 			.next_phase = { 2U, 1U },
 			.cost_ms = 0U,
-			.capability_mask = 1U,
+			.capability_families = { 0U },
+			.phase_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE,
 			.finite = 1U
 		}
 	};
@@ -103,6 +109,14 @@ static void TestPhaseSpaceFieldContract(void)
 	};
 
 	CHECK(SG_DestinationFieldValid(&snapshot, &field));
+	samples[0].capability_families.bits =
+		SG_FIELD_CAPABILITY_FAMILY_MASK + 1U;
+	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
+	samples[0].capability_families = SG_FIELD_CAPABILITY_FAMILY_BIT(
+		SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT);
+	samples[0].phase_transition_kind = SG_RUNE_PHASE_TRANSITION_KIND_COUNT;
+	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
+	samples[0].phase_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE;
 	model.flags &= ~(sg_rune_model_flags_t)SG_RUNE_MODEL_EXACT_BOUND;
 	CHECK(!SG_RuneRuntimeSnapshotValid(&snapshot));
 	model.flags |= SG_RUNE_MODEL_EXACT_BOUND;
@@ -294,6 +308,11 @@ static sg_tactic_request_t TacticRequest(void)
 			.next_phase_coordinate = { 2U, 1U },
 			.phase = SG_TACTIC_PHASE_GROUND,
 			.cost_ms = 50U,
+			.field_capability_families = {
+				SG_FIELD_CAPABILITY_FAMILY_BIT(
+					SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT).bits
+			},
+			.field_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE,
 			.capability_mask = SG_TACTIC_CAPABILITY_BIT(
 				SG_TACTIC_CAPABILITY_WALK),
 			.direction = { 1.0f, 0.0f, 0.0f },
@@ -329,6 +348,10 @@ static void TestTacticBindingsAndResults(void)
 	request = TacticRequest();
 	request.gradient.phase_coordinate.phase_id++;
 	CHECK(!SG_TacticRequestValid(&request));
+	request = TacticRequest();
+	request.gradient.field_capability_families.bits =
+		SG_FIELD_CAPABILITY_FAMILY_MASK + 1U;
+	CHECK(!SG_TacticRequestValid(&request));
 	CHECK(SG_TacticResultValid(&result));
 	result.failure = SG_TACTIC_FAILURE_LIVE_STATE;
 	CHECK(!SG_TacticResultValid(&result));
@@ -341,6 +364,76 @@ static void TestTacticBindingsAndResults(void)
 	result.failure = SG_TACTIC_FAILURE_LIVE_STATE;
 	result.expected_cost_ms = 10U;
 	CHECK(!SG_TacticResultValid(&result));
+}
+
+static void TestFieldTacticDomainCompatibility(void)
+{
+	sg_tactic_request_t request = TacticRequest();
+	sg_field_query_result_t query = {
+		.sample = {
+			.phase = { 1U, 0U },
+			.next_phase = { 2U, 1U },
+			.cost_ms = 50U,
+			.capability_families = {
+				SG_FIELD_CAPABILITY_FAMILY_BIT(
+					SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT).bits
+			},
+			.phase_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE,
+			.direction = { 1.0f, 0.0f, 0.0f },
+			.velocity_direction = { 0.0f, 1.0f, 0.0f },
+			.finite = 1U
+		},
+		.terminal_residual = {
+			.status = SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN,
+			.upper_ms = SG_DESTINATION_FIELD_INF
+		}
+	};
+	sg_rune_capability_family_t family;
+	sg_rune_phase_transition_kind_t transition;
+
+	CHECK(SG_TacticGradientMatchesFieldQuery(&request.gradient, &query));
+	for (family = SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT;
+		family < SG_RUNE_CAPABILITY_FAMILY_COUNT;
+		family = (sg_rune_capability_family_t)(family + 1)) {
+		query.sample.capability_families =
+			SG_FIELD_CAPABILITY_FAMILY_BIT(family);
+		query.sample.phase_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE;
+		request.gradient.field_capability_families =
+			query.sample.capability_families;
+		request.gradient.field_transition_kind =
+			query.sample.phase_transition_kind;
+		CHECK(SG_TacticGradientMatchesFieldQuery(&request.gradient, &query));
+	}
+	query.sample.capability_families.bits = 0U;
+	request.gradient.field_capability_families.bits = 0U;
+	for (transition = SG_RUNE_PHASE_TRANSITION_STANCE;
+		transition < SG_RUNE_PHASE_TRANSITION_KIND_COUNT;
+		transition = (sg_rune_phase_transition_kind_t)(transition + 1)) {
+		query.sample.phase_transition_kind = transition;
+		request.gradient.field_transition_kind = transition;
+		CHECK(SG_TacticGradientMatchesFieldQuery(&request.gradient, &query));
+	}
+	request.gradient.field_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE;
+	CHECK(!SG_TacticGradientMatchesFieldQuery(&request.gradient, &query));
+	query.sample.next_phase = query.sample.phase;
+	query.sample.cost_ms = 0U;
+	query.sample.capability_families.bits = 0U;
+	query.sample.phase_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE;
+	memset(query.sample.direction, 0, sizeof(query.sample.direction));
+	memset(query.sample.velocity_direction, 0,
+		sizeof(query.sample.velocity_direction));
+	query.terminal_residual.status = SG_FIELD_TERMINAL_RESIDUAL_EXACT;
+	query.terminal_residual.upper_ms = 0U;
+	request.gradient.next_phase_coordinate = query.sample.next_phase;
+	request.gradient.cost_ms = query.sample.cost_ms;
+	request.gradient.field_capability_families =
+		query.sample.capability_families;
+	request.gradient.field_transition_kind = query.sample.phase_transition_kind;
+	memset(request.gradient.direction, 0, sizeof(request.gradient.direction));
+	memset(request.gradient.velocity_direction, 0,
+		sizeof(request.gradient.velocity_direction));
+	CHECK(SG_TacticGradientMatchesFieldQuery(&request.gradient, &query));
+	CHECK(!SG_TacticGradientValid(&request.gradient, &request.live));
 }
 
 static sg_belief_observation_t NegativeObservation(void)
@@ -512,6 +605,7 @@ int main(void)
 	TestStrategyBindings();
 	TestLearningTransactionIdentity();
 	TestTacticBindingsAndResults();
+	TestFieldTacticDomainCompatibility();
 	TestNegativeEvidenceSupport();
 	TestWeaponObservationAndClientBindings();
 	if (failures != 0)

@@ -1,9 +1,15 @@
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "q_shared.h"
 #include "slipgate/sg_destination_field.h"
+
+void Pmove(pmove_t *pmove);
+void Com_DPrintf(const char *format, ...);
+void Com_Printf(char *format, ...);
 
 #define TEST_SOURCE_SET UINT64_C(0x5352435345543031)
 #define TEST_PHASE_COUNT 3U
@@ -11,11 +17,13 @@
 #define TEST_TRANSITION_COUNT 2U
 #define TEST_KERNEL_COUNT 2U
 
-_Static_assert((SG_DESTINATION_FIELD_CAPABILITY_TRANSITION &
-	((UINT32_C(1) << SG_RUNE_CAPABILITY_FAMILY_COUNT) - 1U)) == 0U,
-	"transition capability does not collide with kernel families");
+_Static_assert(SG_RUNTIME_CONTRACT_VERSION == UINT16_C(3),
+	"pose-aware field query requires runtime contract v3");
 
 static int failures;
+static float pmove_floor_z;
+static max_align_t pmove_world_token;
+static csurface_t pmove_floor_surface;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -24,6 +32,93 @@ static int failures;
 		failures++; \
 	} \
 } while (0)
+
+void Com_DPrintf(const char *format, ...)
+{
+	(void)format;
+}
+
+void Com_Printf(char *format, ...)
+{
+	(void)format;
+}
+
+static trace_t FlatFloorTrace(vec3_t start, vec3_t mins, vec3_t maxs,
+	vec3_t end)
+{
+	trace_t trace;
+	float start_bottom = start[2] + mins[2];
+	float end_bottom = end[2] + mins[2];
+
+	(void)maxs;
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = 1.0f;
+	VectorCopy(end, trace.endpos);
+	if (start_bottom < pmove_floor_z) {
+		trace.startsolid = true;
+		trace.allsolid = end_bottom < pmove_floor_z;
+		trace.fraction = 0.0f;
+		VectorCopy(start, trace.endpos);
+	} else if (end_bottom < pmove_floor_z) {
+		float distance = start_bottom - end_bottom;
+		float fraction = (start_bottom - pmove_floor_z - 0.03125f) /
+			distance;
+
+		if (fraction < 0.0f)
+			fraction = 0.0f;
+		if (fraction > 1.0f)
+			fraction = 1.0f;
+		trace.fraction = fraction;
+		trace.endpos[0] = start[0] + fraction * (end[0] - start[0]);
+		trace.endpos[1] = start[1] + fraction * (end[1] - start[1]);
+		trace.endpos[2] = start[2] + fraction * (end[2] - start[2]);
+	}
+	if (trace.fraction < 1.0f) {
+		trace.ent = (struct edict_s *)&pmove_world_token;
+		trace.contents = CONTENTS_SOLID;
+		trace.surface = &pmove_floor_surface;
+		trace.plane.normal[2] = 1.0f;
+		trace.plane.dist = pmove_floor_z;
+	}
+	return trace;
+}
+
+static int DryPointContents(vec3_t point)
+{
+	(void)point;
+	return 0;
+}
+
+static uint32_t PmoveTravelTime(float destination_x)
+{
+	static const uint8_t cadence[8] = { 13U, 13U, 13U, 13U,
+		12U, 12U, 12U, 12U };
+	pmove_state_t state;
+	uint32_t elapsed = 0U;
+	uint32_t step;
+
+	memset(&state, 0, sizeof(state));
+	state.pm_type = PM_NORMAL;
+	state.origin[2] = 24 * 8;
+	state.pm_flags = PMF_ON_GROUND;
+	state.gravity = 800;
+	for (step = 0U; step < 32U; step++) {
+		pmove_t pmove;
+
+		memset(&pmove, 0, sizeof(pmove));
+		pmove.s = state;
+		pmove.cmd.msec = cadence[step & 7U];
+		pmove.cmd.forwardmove = 400;
+		pmove.trace = FlatFloorTrace;
+		pmove.pointcontents = DryPointContents;
+		Pmove(&pmove);
+		state = pmove.s;
+		elapsed += pmove.cmd.msec;
+		if ((float)state.origin[0] * 0.125f >= destination_x)
+			return elapsed;
+	}
+	return SG_DESTINATION_FIELD_INF;
+}
 
 typedef struct field_fixture_s
 {
@@ -405,14 +500,18 @@ static void TestCanonicalModelAndTransitions(void)
 	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination, 100U,
 		samples, TEST_PHASE_COUNT, &field));
 	CHECK(samples[1].cost_ms == 100U);
-	CHECK(samples[1].capability_mask ==
-		SG_DESTINATION_FIELD_CAPABILITY_TRANSITION);
+	CHECK(samples[1].capability_families.bits == 0U);
+	CHECK(samples[1].phase_transition_kind ==
+		SG_RUNE_PHASE_TRANSITION_STANCE);
 	destination = Destination(1U, 1U, 0U);
 	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination, 100U,
 		samples, TEST_PHASE_COUNT, &field));
 	CHECK(samples[0].cost_ms == 300U);
-	CHECK(samples[0].capability_mask ==
-		(UINT32_C(1) << SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT));
+	CHECK(samples[0].capability_families.bits ==
+		SG_FIELD_CAPABILITY_FAMILY_BIT(
+			SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT).bits);
+	CHECK(samples[0].phase_transition_kind ==
+		SG_RUNE_PHASE_TRANSITION_STANCE);
 }
 
 static void TestDeterminismAndImmutability(void)
@@ -445,7 +544,7 @@ static void TestQueryAndUpdatePolicy(void)
 	sg_destination_handle_t destination;
 	sg_destination_handle_t changed;
 	sg_destination_pose_t query;
-	sg_field_sample_t result;
+	sg_field_query_result_t result;
 	sg_field_sample_t temporary;
 
 	InitFixture(&fixture);
@@ -456,7 +555,10 @@ static void TestQueryAndUpdatePolicy(void)
 	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination, 100U,
 		samples, TEST_PHASE_COUNT, &field));
 	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &query, &result));
-	CHECK(result.cost_ms == 100U);
+	CHECK(SG_FieldQueryResultValid(&fixture.snapshot, &result));
+	CHECK(result.sample.cost_ms == 100U);
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
 	temporary = samples[0];
 	samples[0] = samples[1];
 	samples[1] = temporary;
@@ -482,8 +584,9 @@ static void TestExactTerminalPose(void)
 	sg_destination_handle_t first_destination;
 	sg_destination_handle_t second_destination;
 	sg_destination_pose_t source;
-	sg_field_sample_t first_result;
-	sg_field_sample_t second_result;
+	sg_field_query_result_t first_result;
+	sg_field_query_result_t second_result;
+	sg_field_query_result_t exact_result;
 
 	InitFixture(&fixture);
 	CHECK(SG_RuneModelValidate(&fixture.model, &fixture.evidence) ==
@@ -509,20 +612,79 @@ static void TestExactTerminalPose(void)
 	CHECK(memcmp(first_samples, second_samples, sizeof(first_samples)) == 0);
 	CHECK(SG_FieldQuery(&fixture.snapshot, &first_field, &source, &first_result));
 	CHECK(SG_FieldQuery(&fixture.snapshot, &second_field, &source, &second_result));
-	CHECK(first_result.cost_ms == 56U);
-	CHECK(second_result.cost_ms == 48U);
-	CHECK(first_result.direction[0] == 1.0f && first_result.direction[1] == 0.0f);
-	CHECK(second_result.direction[0] == 0.0f && second_result.direction[1] == 1.0f);
-	CHECK(first_result.velocity_direction[0] == 1.0f);
-	CHECK(second_result.velocity_direction[1] == 1.0f);
+	CHECK(SG_FieldQueryResultValid(&fixture.snapshot, &first_result));
+	CHECK(SG_FieldQueryResultValid(&fixture.snapshot, &second_result));
+	CHECK(first_result.sample.cost_ms == 0U);
+	CHECK(second_result.sample.cost_ms == 0U);
+	CHECK(first_result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
+	CHECK(second_result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
+	CHECK(first_result.terminal_residual.upper_ms ==
+		SG_DESTINATION_FIELD_INF);
+	CHECK(second_result.terminal_residual.upper_ms ==
+		SG_DESTINATION_FIELD_INF);
+	CHECK(first_result.sample.direction[0] == 1.0f &&
+		first_result.sample.direction[1] == 0.0f);
+	CHECK(second_result.sample.direction[0] == 0.0f &&
+		second_result.sample.direction[1] == 1.0f);
+	CHECK(first_result.sample.velocity_direction[0] == 1.0f);
+	CHECK(second_result.sample.velocity_direction[1] == 1.0f);
+	CHECK(memcmp(&first_result, &second_result, sizeof(first_result)) != 0);
+	CHECK(SG_FieldQuery(&fixture.snapshot, &first_field,
+		&first_destination.pose, &exact_result));
+	CHECK(SG_FieldQueryResultValid(&fixture.snapshot, &exact_result));
+	CHECK(exact_result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_EXACT);
+	CHECK(exact_result.terminal_residual.upper_ms == 0U);
+}
+
+static void TestTerminalResidualAgainstPmove(void)
+{
+	field_fixture_t fixture;
+	sg_field_sample_t samples[TEST_PHASE_COUNT];
+	sg_destination_field_t field;
+	sg_destination_handle_t destination;
+	sg_destination_pose_t source;
+	sg_field_query_result_t result;
+	uint32_t host_travel_ms;
+	uint32_t velocity_only_ms;
+
+	InitFixture(&fixture);
+	CHECK(SG_RuneModelValidate(&fixture.model, &fixture.evidence) ==
+		SG_RUNE_FAILURE_NONE);
+	destination = Destination(1U, 1U, 0U);
+	destination.pose.position[0] = 32.0f;
+	destination.pose.position[1] = 0.0f;
+	destination.pose.position[2] = 24.0f;
+	destination.pose.velocity[0] = 0.0f;
+	source = destination.pose;
+	source.position[0] = 0.0f;
+	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination, 100U,
+		samples, TEST_PHASE_COUNT, &field));
+	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &source, &result));
+	CHECK(SG_FieldQueryResultValid(&fixture.snapshot, &result));
+	host_travel_ms = PmoveTravelTime(destination.pose.position[0]);
+	velocity_only_ms = (uint32_t)ceil(32.0 * 1000.0 /
+		fixture.model.identity.physics.max_velocity);
+	CHECK(host_travel_ms != SG_DESTINATION_FIELD_INF);
+	CHECK(host_travel_ms == 176U);
+	CHECK(host_travel_ms > velocity_only_ms);
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
+	CHECK(result.terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF);
 }
 
 int main(void)
 {
+	memset(&pmove_world_token, 0, sizeof(pmove_world_token));
+	memset(&pmove_floor_surface, 0, sizeof(pmove_floor_surface));
+	pmove_floor_z = 0.0f;
 	TestCanonicalModelAndTransitions();
 	TestDeterminismAndImmutability();
 	TestQueryAndUpdatePolicy();
 	TestExactTerminalPose();
+	TestTerminalResidualAgainstPmove();
 	if (failures != 0) {
 		fprintf(stderr, "%d destination-field checks failed\n", failures);
 		return 1;

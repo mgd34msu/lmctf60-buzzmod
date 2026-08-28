@@ -8,13 +8,11 @@
 
 #include "sg_rune_model.h"
 
-#define SG_RUNTIME_CONTRACT_VERSION UINT16_C(2)
+#define SG_RUNTIME_CONTRACT_VERSION UINT16_C(3)
 #define SG_DESTINATION_FIELD_INF UINT32_MAX
 #define SG_DESTINATION_FIELD_NO_CELL UINT32_MAX
 #define SG_DESTINATION_FIELD_NO_PHASE UINT32_MAX
 #define SG_DESTINATION_FIELD_MAX_REGION_LEVEL 8U
-/* Phase-only transitions occupy a bit outside every kernel family bit. */
-#define SG_DESTINATION_FIELD_CAPABILITY_TRANSITION (UINT32_C(1) << 31)
 
 typedef enum sg_destination_kind_e
 {
@@ -44,6 +42,18 @@ typedef struct sg_phase_coordinate_s
 	uint32_t phase_id;
 	uint32_t cell_id;
 } sg_phase_coordinate_t;
+
+/* RUNE capability families are not tactical action capabilities. Keeping the
+ * bits in a distinct type prevents direct assignment to a tactical mask. */
+typedef struct sg_field_capability_family_mask_s
+{
+	uint32_t bits;
+} sg_field_capability_family_mask_t;
+
+#define SG_FIELD_CAPABILITY_FAMILY_BIT(family) \
+	((sg_field_capability_family_mask_t){ UINT32_C(1) << (family) })
+#define SG_FIELD_CAPABILITY_FAMILY_MASK \
+	((UINT32_C(1) << SG_RUNE_CAPABILITY_FAMILY_COUNT) - UINT32_C(1))
 
 typedef struct sg_destination_pose_s
 {
@@ -82,13 +92,37 @@ typedef struct sg_field_sample_s
 {
 	sg_phase_coordinate_t phase;
 	sg_phase_coordinate_t next_phase;
+	/* cost_ms is the total static RUNE-edge cost from phase, through
+	 * next_phase, to the destination phase. It excludes the host-validated
+	 * residual from that phase to the exact pose. */
 	uint32_t cost_ms;
-	uint32_t capability_mask;
+	sg_field_capability_family_mask_t capability_families;
+	sg_rune_phase_transition_kind_t phase_transition_kind;
 	float direction[3];
 	float velocity_direction[3];
 	uint8_t finite;
 	uint8_t reserved[3];
 } sg_field_sample_t;
+
+typedef enum sg_field_terminal_residual_status_e
+{
+	SG_FIELD_TERMINAL_RESIDUAL_NOT_APPLICABLE = 0,
+	SG_FIELD_TERMINAL_RESIDUAL_EXACT,
+	SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN,
+	SG_FIELD_TERMINAL_RESIDUAL_STATUS_COUNT
+} sg_field_terminal_residual_status_t;
+
+typedef struct sg_field_terminal_residual_s
+{
+	sg_field_terminal_residual_status_t status;
+	uint32_t upper_ms;
+} sg_field_terminal_residual_t;
+
+typedef struct sg_field_query_result_s
+{
+	sg_field_sample_t sample;
+	sg_field_terminal_residual_t terminal_residual;
+} sg_field_query_result_t;
 
 typedef struct sg_destination_field_s
 {
@@ -211,16 +245,26 @@ static inline int SG_FieldSampleShapeValid(
 
 	if (!snapshot || !sample ||
 	    !SG_PhaseCoordinateValid(snapshot, &sample->phase) ||
+	    (sample->capability_families.bits &
+	     ~SG_FIELD_CAPABILITY_FAMILY_MASK) != 0U ||
+	    sample->phase_transition_kind < SG_RUNE_PHASE_TRANSITION_NONE ||
+	    sample->phase_transition_kind >= SG_RUNE_PHASE_TRANSITION_KIND_COUNT ||
 	    (sample->finite != 0U && sample->finite != 1U) ||
 	    (sample->finite == 1U &&
 	     (!SG_PhaseCoordinateValid(snapshot, &sample->next_phase) ||
 	      sample->cost_ms >= SG_DESTINATION_FIELD_INF ||
-	      sample->capability_mask == 0U)) ||
+	      (sample->cost_ms == 0U &&
+	       (sample->capability_families.bits != 0U ||
+	        sample->phase_transition_kind != SG_RUNE_PHASE_TRANSITION_NONE)) ||
+	      (sample->cost_ms != 0U &&
+	       sample->capability_families.bits == 0U &&
+	       sample->phase_transition_kind == SG_RUNE_PHASE_TRANSITION_NONE))) ||
 	    (sample->finite == 0U &&
 	     (sample->next_phase.phase_id != SG_DESTINATION_FIELD_NO_PHASE ||
 	      sample->next_phase.cell_id != SG_DESTINATION_FIELD_NO_CELL ||
 	      sample->cost_ms != SG_DESTINATION_FIELD_INF ||
-	      sample->capability_mask != 0U)))
+	      sample->capability_families.bits != 0U ||
+	      sample->phase_transition_kind != SG_RUNE_PHASE_TRANSITION_NONE)))
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 		if (!SG_DestinationFloatValid(sample->direction[axis]) ||
@@ -238,6 +282,28 @@ static inline int SG_FieldSampleValid(
 {
 	return SG_RuneRuntimeSnapshotValid(snapshot) &&
 	       SG_FieldSampleShapeValid(snapshot, sample);
+}
+
+static inline int SG_FieldQueryResultValid(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_field_query_result_t *result)
+{
+	if (!result || !SG_FieldSampleValid(snapshot, &result->sample) ||
+	    result->terminal_residual.status <
+		SG_FIELD_TERMINAL_RESIDUAL_NOT_APPLICABLE ||
+	    result->terminal_residual.status >=
+		SG_FIELD_TERMINAL_RESIDUAL_STATUS_COUNT)
+		return 0;
+	if (result->sample.finite == 0U)
+		return result->terminal_residual.status ==
+			SG_FIELD_TERMINAL_RESIDUAL_NOT_APPLICABLE &&
+			result->terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF;
+	if (result->terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_EXACT)
+		return result->terminal_residual.upper_ms < SG_DESTINATION_FIELD_INF;
+	return result->terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN &&
+		result->terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF;
 }
 
 static inline int SG_DestinationFieldValid(
@@ -298,10 +364,11 @@ static inline int SG_FieldUpdateValid(
 }
 
 /* Query uses the exact live source pose. Inside the destination phase it
- * resolves terminal direction and residual time against destination.pose. */
+ * resolves terminal directions against destination.pose. A nontrivial
+ * residual stays UNKNOWN until host movement supplies a conservative bound. */
 int SG_FieldQuery(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_field_t *field,
-	const sg_destination_pose_t *source, sg_field_sample_t *out);
+	const sg_destination_pose_t *source, sg_field_query_result_t *out);
 int SG_FieldNeedsUpdate(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_field_t *field,
 	const sg_destination_handle_t *destination);

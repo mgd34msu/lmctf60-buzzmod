@@ -101,7 +101,9 @@ typedef struct sg_tactic_live_phase_s
 	float velocity[3];
 } sg_tactic_live_phase_t;
 
-/* A gradient is usable only for the exact live pose, phase, and sample time. */
+/* A gradient is usable only for the exact live pose, phase, and sample time.
+ * A zero-cost terminal field sample has no RUNE edge provenance: strategy
+ * completes that goal before constructing a tactical gradient. */
 typedef struct sg_tactic_gradient_s
 {
 	uint64_t rune_identity;
@@ -112,6 +114,10 @@ typedef struct sg_tactic_gradient_s
 	sg_phase_coordinate_t next_phase_coordinate;
 	sg_tactic_phase_t phase;
 	uint32_t cost_ms;
+	/* The adapter retains RUNE provenance while choosing a separate tactical
+	 * capability_mask from exact live state. */
+	sg_field_capability_family_mask_t field_capability_families;
+	sg_rune_phase_transition_kind_t field_transition_kind;
 	uint32_t capability_mask;
 	float direction[3];
 	float velocity_direction[3];
@@ -243,6 +249,13 @@ static inline int SG_TacticGradientValid(
 	    gradient->next_phase_coordinate.phase_id ==
 		SG_DESTINATION_FIELD_NO_PHASE ||
 	    gradient->next_phase_coordinate.cell_id == SG_DESTINATION_FIELD_NO_CELL ||
+	    (gradient->field_capability_families.bits &
+	     ~SG_FIELD_CAPABILITY_FAMILY_MASK) != 0U ||
+	    (gradient->field_capability_families.bits == 0U &&
+	     gradient->field_transition_kind == SG_RUNE_PHASE_TRANSITION_NONE) ||
+	    gradient->field_transition_kind < SG_RUNE_PHASE_TRANSITION_NONE ||
+	    gradient->field_transition_kind >=
+		SG_RUNE_PHASE_TRANSITION_KIND_COUNT ||
 	    (gradient->capability_mask & ~SG_TACTIC_CAPABILITY_MASK) != 0U ||
 	    gradient->capability_mask == 0U || gradient->finite != 1U ||
 	    gradient->cost_ms >= SG_DESTINATION_FIELD_INF)
@@ -250,6 +263,35 @@ static inline int SG_TacticGradientValid(
 	for (axis = 0U; axis < 3U; axis++)
 		if (!SG_DestinationFloatValid(gradient->direction[axis]) ||
 		    !SG_DestinationFloatValid(gradient->velocity_direction[axis]))
+			return 0;
+	return 1;
+}
+
+/* This checks field provenance only. Tactical action selection remains a
+ * later live-state decision and is intentionally absent from this adapter. */
+static inline int SG_TacticGradientMatchesFieldQuery(
+	const sg_tactic_gradient_t *gradient,
+	const sg_field_query_result_t *query)
+{
+	uint32_t axis;
+
+	if (!gradient || !query || gradient->finite != query->sample.finite ||
+	    gradient->phase_coordinate.phase_id != query->sample.phase.phase_id ||
+	    gradient->phase_coordinate.cell_id != query->sample.phase.cell_id ||
+	    gradient->next_phase_coordinate.phase_id !=
+		query->sample.next_phase.phase_id ||
+	    gradient->next_phase_coordinate.cell_id !=
+		query->sample.next_phase.cell_id ||
+	    gradient->cost_ms != query->sample.cost_ms ||
+	    gradient->field_capability_families.bits !=
+		query->sample.capability_families.bits ||
+	    gradient->field_transition_kind !=
+		query->sample.phase_transition_kind)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (gradient->direction[axis] != query->sample.direction[axis] ||
+		    gradient->velocity_direction[axis] !=
+			query->sample.velocity_direction[axis])
 			return 0;
 	return 1;
 }
