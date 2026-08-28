@@ -241,6 +241,7 @@ static sg_tactic_request_t TacticRequest(void)
 static void TestTacticBindingsAndResults(void)
 {
 	sg_tactic_request_t request = TacticRequest();
+	sg_tactic_modifier_t modifiers[17];
 	sg_tactic_result_t result = {
 		.status = SG_TACTIC_RESULT_PROGRESS,
 		.failure = SG_TACTIC_FAILURE_NONE,
@@ -249,8 +250,23 @@ static void TestTacticBindingsAndResults(void)
 		.expected_cost_ms = 60U,
 		.progress = 0.5f
 	};
+	size_t modifier;
 
 	CHECK(SG_TacticRequestValid(&request));
+	memset(modifiers, 0, sizeof(modifiers));
+	for (modifier = 0U; modifier < 17U; modifier++)
+	{
+		modifiers[modifier].kind = (sg_tactic_modifier_kind_t)
+			(modifier % (size_t)SG_TACTIC_MODIFIER_KIND_COUNT);
+		modifiers[modifier].source_id = (uint32_t)modifier + 1U;
+		modifiers[modifier].expires_at_ms = 501U;
+		modifiers[modifier].active = 1U;
+	}
+	request.modifiers = modifiers;
+	request.modifier_count = 17U;
+	CHECK(SG_TacticRequestValid(&request));
+	modifiers[16] = modifiers[0];
+	CHECK(!SG_TacticRequestValid(&request));
 	request.gradient.pose_revision++;
 	CHECK(!SG_TacticRequestValid(&request));
 	request = TacticRequest();

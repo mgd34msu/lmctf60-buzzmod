@@ -2,6 +2,7 @@
 #ifndef SG_TACTIC_CONTRACT_H
 #define SG_TACTIC_CONTRACT_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "sg_destination_field.h"
@@ -9,7 +10,6 @@
 #define SG_TACTIC_CAPABILITY_BIT(capability) (UINT32_C(1) << (capability))
 #define SG_TACTIC_CAPABILITY_MASK \
 	((UINT32_C(1) << SG_TACTIC_CAPABILITY_COUNT) - UINT32_C(1))
-#define SG_TACTIC_MAX_MODIFIERS 16U
 
 typedef enum sg_tactic_phase_e
 {
@@ -171,8 +171,7 @@ typedef struct sg_tactic_request_s
 	sg_tactic_gradient_t gradient;
 	uint32_t legal_capability_mask;
 	const sg_tactic_modifier_t *modifiers;
-	uint16_t modifier_count;
-	uint16_t reserved;
+	size_t modifier_count;
 	const sg_tactic_mechanism_request_t *mechanism;
 } sg_tactic_request_t;
 
@@ -318,13 +317,12 @@ static inline int SG_TacticModifierValid(const sg_tactic_modifier_t *modifier)
 
 static inline int SG_TacticRequestValid(const sg_tactic_request_t *request)
 {
-	uint16_t index;
+	size_t index;
 
 	if (!request || !SG_TacticLivePhaseValid(&request->live) ||
 	    !SG_TacticGradientValid(&request->gradient, &request->live) ||
 	    request->legal_capability_mask == 0U ||
 	    (request->legal_capability_mask & ~SG_TACTIC_CAPABILITY_MASK) != 0U ||
-	    request->modifier_count > SG_TACTIC_MAX_MODIFIERS ||
 	    (request->modifier_count != 0U && !request->modifiers) ||
 	    (request->mechanism &&
 	     (!SG_TacticMechanismRequestValid(request->mechanism) ||
@@ -332,11 +330,11 @@ static inline int SG_TacticRequestValid(const sg_tactic_request_t *request)
 		return 0;
 	for (index = 0U; index < request->modifier_count; index++)
 	{
-		uint16_t other;
+		size_t other;
 
 		if (!SG_TacticModifierValid(&request->modifiers[index]))
 			return 0;
-		for (other = (uint16_t)(index + 1U);
+		for (other = index + 1U;
 		     other < request->modifier_count; other++)
 			if (request->modifiers[index].kind ==
 			    request->modifiers[other].kind &&
