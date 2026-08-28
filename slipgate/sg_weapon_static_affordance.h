@@ -4,10 +4,11 @@
 
 #include <stdint.h>
 
+#include "sg_configuration_audit.h"
 #include "sg_static_visibility.h"
 #include "sg_weapon_effect_profile.h"
 
-#define SG_WEAPON_STATIC_RELATION_COUNT UINT32_C(5)
+#define SG_WEAPON_STATIC_RELATION_COUNT UINT32_C(7)
 
 typedef enum sg_weapon_static_status_e
 {
@@ -25,7 +26,9 @@ typedef enum sg_weapon_static_reason_e
 	SG_WEAPON_STATIC_REASON_TARGET_NOT_SURFACE,
 	SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH,
 	SG_WEAPON_STATIC_REASON_PROJECTILE_CLEARANCE,
-	SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE
+	SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE,
+	SG_WEAPON_STATIC_REASON_RUNTIME_PROJECTILE_ORIGIN,
+	SG_WEAPON_STATIC_REASON_OWNER_DAMAGE_VISIBILITY
 } sg_weapon_static_reason_t;
 
 typedef struct sg_weapon_static_relation_result_s
@@ -54,6 +57,10 @@ typedef struct sg_weapon_static_affordance_s
 	sg_weapon_static_relation_t conditional_relations;
 	uint8_t exact_authenticated_live_prefire_trace_required;
 	uint8_t reserved[3];
+	uint32_t spatial_nodes_visited;
+	uint32_t candidate_surfaces_visited;
+	uint32_t candidate_points_queried;
+	uint32_t pose_partition_faces_tested;
 	sg_weapon_static_relation_result_t
 		relations[SG_WEAPON_STATIC_RELATION_COUNT];
 } sg_weapon_static_affordance_t;
@@ -75,24 +82,31 @@ typedef struct sg_weapon_static_affordance_error_s
 	sg_static_visibility_error_t visibility;
 } sg_weapon_static_affordance_error_t;
 
-/* The accepted boundary records these counts after static visibility audit.
- * The model is accepted only after SG_RuneModelValidate succeeds; that
- * contract supplies the canonical order required by bounded lookup. */
-typedef struct sg_weapon_static_source_audit_s
+typedef enum sg_weapon_static_prepare_error_code_e
 {
-	sg_weapon_static_binding_t binding;
-	sg_static_visibility_audit_result_t visibility;
-	uint32_t configuration_cells;
-	uint32_t semantic_regions;
-	uint32_t semantic_surfaces;
-	uint32_t semantic_surface_vertices;
-	uint32_t model_cells;
-	uint32_t model_phases;
-} sg_weapon_static_source_audit_t;
+	SG_WEAPON_STATIC_PREPARE_ERROR_NONE = 0,
+	SG_WEAPON_STATIC_PREPARE_ERROR_INVALID_ARGUMENT,
+	SG_WEAPON_STATIC_PREPARE_ERROR_BINDING,
+	SG_WEAPON_STATIC_PREPARE_ERROR_CONFIGURATION_AUDIT,
+	SG_WEAPON_STATIC_PREPARE_ERROR_SEMANTICS_AUDIT,
+	SG_WEAPON_STATIC_PREPARE_ERROR_VISIBILITY_AUDIT,
+	SG_WEAPON_STATIC_PREPARE_ERROR_MODEL_VALIDATION,
+	SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH,
+	SG_WEAPON_STATIC_PREPARE_ERROR_OVERFLOW,
+	SG_WEAPON_STATIC_PREPARE_ERROR_OUT_OF_MEMORY
+} sg_weapon_static_prepare_error_code_t;
 
-/* The accepted-artifact boundary constructs this bundle. Its binding applies
- * to every borrowed object for the full duration of one resolver call. */
-typedef struct sg_weapon_static_sources_s
+typedef struct sg_weapon_static_prepare_error_s
+{
+	sg_weapon_static_prepare_error_code_t code;
+	sg_configuration_audit_code_t configuration;
+	sg_configuration_semantics_audit_code_t semantics;
+	sg_static_visibility_audit_code_t visibility;
+	sg_rune_failure_reason_t model;
+	uint32_t record;
+} sg_weapon_static_prepare_error_t;
+
+typedef struct sg_weapon_static_prepare_input_s
 {
 	sg_weapon_static_binding_t binding;
 	const sg_host_collision_authority_t *authority;
@@ -100,11 +114,21 @@ typedef struct sg_weapon_static_sources_s
 	const sg_configuration_semantics_t *semantics;
 	const sg_static_visibility_t *visibility;
 	const sg_rune_model_t *model;
-	const sg_weapon_static_source_audit_t *audit;
-} sg_weapon_static_sources_t;
+	const sg_rune_validation_evidence_t *model_evidence;
+} sg_weapon_static_prepare_input_t;
+
+/* Preparation validates every borrowed source and builds the owned lookup
+ * indices. The borrowed sources must remain immutable and live until destroy. */
+typedef struct sg_weapon_static_context_s sg_weapon_static_context_t;
+
+int SG_WeaponStaticContextPrepare(
+	const sg_weapon_static_prepare_input_t *input,
+	sg_weapon_static_context_t **context_out,
+	sg_weapon_static_prepare_error_t *error_out);
+void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context);
 
 int SG_WeaponStaticAffordanceResolve(
-	const sg_weapon_static_sources_t *sources,
+	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,
 	const sg_weapon_static_query_t *query,
 	const sg_weapon_profile_t *profile,

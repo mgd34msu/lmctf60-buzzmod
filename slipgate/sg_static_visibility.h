@@ -157,6 +157,19 @@ int SG_StaticVisibilityQueryPoints(
 	const sg_static_visibility_t *visibility, const float source[3],
 	const float destination[3], sg_static_visibility_result_t *result_out,
 	sg_static_visibility_error_t *error_out);
+int SG_StaticVisibilityPointInPartition(
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, uint32_t partition_index,
+	const float point[3], uint32_t *face_tests_out);
+int SG_StaticVisibilityQueryBoundPoints(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, uint32_t source_partition,
+	uint32_t destination_partition, const float source[3],
+	const float destination[3], sg_static_visibility_result_t *result_out,
+	sg_static_visibility_error_t *error_out);
 int SG_StaticVisibilityQuerySurface(
 	const sg_host_collision_authority_t *authority,
 	const sg_host_collision_scene_t *scene,
@@ -164,6 +177,15 @@ int SG_StaticVisibilityQuerySurface(
 	const sg_configuration_semantics_t *semantics,
 	const sg_static_visibility_t *visibility, const float source[3],
 	uint32_t surface, const float target[3],
+	sg_static_visibility_result_t *result_out,
+	sg_static_visibility_error_t *error_out);
+int SG_StaticVisibilityQueryBoundSurface(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, uint32_t source_partition,
+	const float source[3], uint32_t surface_index, const float target[3],
 	sg_static_visibility_result_t *result_out,
 	sg_static_visibility_error_t *error_out);
 void SG_StaticVisibilityDestroy(sg_static_visibility_t *visibility);

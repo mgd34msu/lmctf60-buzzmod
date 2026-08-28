@@ -2,22 +2,64 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* These are RUNE representation limits, not work-ending budgets. */
-#define SG_WEAPON_STATIC_MAX_PARTITIONS SG_RUNE_MODEL_MAX_CELLS
-#define SG_WEAPON_STATIC_MAX_SURFACES SG_RUNE_MODEL_MAX_SURFACES
-#define SG_WEAPON_STATIC_MAX_SURFACE_VERTICES \
-	SG_RUNE_MODEL_MAX_PORTAL_VERTICES
 #define SG_WEAPON_SURFACE_EPSILON 0.03125f
+
+typedef struct sg_weapon_static_cell_binding_s
+{
+	sg_rune_stable_id_t id;
+	uint32_t model_cell;
+	uint32_t configuration_cell;
+	uint32_t first_partition;
+	uint32_t partition_count;
+} sg_weapon_static_cell_binding_t;
+
+typedef struct sg_weapon_static_surface_ref_s
+{
+	uint32_t surface;
+	sg_rune_bounds_t bounds;
+} sg_weapon_static_surface_ref_t;
+
+typedef struct sg_weapon_static_bvh_node_s
+{
+	sg_rune_bounds_t bounds;
+	uint32_t left;
+	uint32_t right;
+	uint32_t surface;
+} sg_weapon_static_bvh_node_t;
+
+struct sg_weapon_static_context_s
+{
+	sg_weapon_static_binding_t binding;
+	const sg_host_collision_authority_t *authority;
+	const sg_configuration_space_t *configuration;
+	const sg_configuration_semantics_t *semantics;
+	const sg_static_visibility_t *visibility;
+	const sg_rune_model_t *model;
+	sg_weapon_static_cell_binding_t *cells;
+	uint32_t cell_count;
+	uint32_t *partition_indices;
+	uint32_t partition_count;
+	sg_weapon_static_surface_ref_t *surface_refs;
+	sg_weapon_static_bvh_node_t *bvh_nodes;
+	uint32_t bvh_node_count;
+	uint32_t bvh_root;
+};
 
 static const sg_weapon_static_relation_t relation_order[] = {
 	SG_WEAPON_STATIC_DIRECT_VISIBILITY,
 	SG_WEAPON_STATIC_PROJECTILE_CORRIDOR,
 	SG_WEAPON_STATIC_IMPACT_SURFACE,
 	SG_WEAPON_STATIC_BLAST_REACH,
-	SG_WEAPON_STATIC_BOUNCE_SURFACE
+	SG_WEAPON_STATIC_BOUNCE_SURFACE,
+	SG_WEAPON_STATIC_SECONDARY_BLAST_REACH,
+	SG_WEAPON_STATIC_PERIODIC_PROJECTILE_RAY
 };
+
+_Static_assert(sizeof(relation_order) / sizeof(relation_order[0]) ==
+	SG_WEAPON_STATIC_RELATION_COUNT, "relation table must cover every result");
 
 static void SetError(sg_weapon_static_affordance_error_t *error,
 	sg_weapon_static_affordance_error_code_t code,
@@ -102,33 +144,6 @@ static int StableIdCompare(const sg_rune_stable_id_t *left,
 	return 0;
 }
 
-static int FindModelCell(const sg_rune_model_t *model,
-	const sg_rune_cell_ref_t *reference, uint32_t *index_out)
-{
-	/* SG_RuneModelValidate requires strictly increasing canonical order and
-	 * derives these IDs directly from that order. Accepted models therefore
-	 * have the exact lexicographic stable-ID order used here. */
-	uint32_t low = 0U;
-	uint32_t high = model->cell_count;
-
-	while (low < high)
-	{
-		uint32_t middle = low + (high - low) / 2U;
-		int comparison = StableIdCompare(&model->cells[middle].id.value,
-			&reference->value);
-
-		if (comparison < 0)
-			low = middle + 1U;
-		else
-			high = middle;
-	}
-	if (low >= model->cell_count ||
-		StableIdCompare(&model->cells[low].id.value, &reference->value) != 0)
-		return 0;
-	*index_out = low;
-	return 1;
-}
-
 static int FindModelPhase(const sg_rune_model_t *model,
 	const sg_rune_phase_ref_t *reference, uint32_t *index_out)
 {
@@ -153,110 +168,412 @@ static int FindModelPhase(const sg_rune_model_t *model,
 	return 1;
 }
 
-static int SourcesBound(const sg_weapon_static_sources_t *sources,
-	const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile)
+static int SurfaceRefLess(const sg_weapon_static_surface_ref_t *left,
+	const sg_weapon_static_surface_ref_t *right, uint32_t axis)
 {
-	const sg_host_collision_authority_t *authority = sources->authority;
-	const sg_configuration_space_t *configuration = sources->configuration;
-	const sg_configuration_semantics_t *semantics = sources->semantics;
-	const sg_static_visibility_t *visibility = sources->visibility;
-	const sg_rune_model_t *model = sources->model;
-	const sg_weapon_static_source_audit_t *audit = sources->audit;
-	sg_rune_model_flags_t required_flags = SG_RUNE_MODEL_IMMUTABLE |
-		SG_RUNE_MODEL_EXACT_BOUND | SG_RUNE_MODEL_NO_RUNTIME_ACTORS;
+	double left_center = (double)left->bounds.mins.value[axis] +
+		left->bounds.maxs.value[axis];
+	double right_center = (double)right->bounds.mins.value[axis] +
+		right->bounds.maxs.value[axis];
 
-	if (!authority->world || !configuration->cells || !semantics->regions ||
-		!visibility->partitions || !model || !audit || !model->cells ||
-		!model->phases ||
-		configuration->cell_count == 0U ||
-		configuration->cell_count > SG_CONFIGURATION_DEFAULT_MAX_CELLS ||
-		semantics->region_count == 0U ||
-		semantics->region_count > SG_WEAPON_STATIC_MAX_PARTITIONS ||
-		semantics->hook_surface_count > SG_WEAPON_STATIC_MAX_SURFACES ||
-		semantics->hook_vertex_count >
-			SG_WEAPON_STATIC_MAX_SURFACE_VERTICES ||
-		(semantics->hook_surface_count != 0U &&
-		 !semantics->hook_surfaces) ||
-		(semantics->hook_vertex_count != 0U && !semantics->hook_vertices) ||
-		model->cell_count == 0U || model->phase_count == 0U ||
-		model->cell_count > SG_RUNE_MODEL_MAX_CELLS ||
-		model->phase_count > SG_RUNE_MODEL_MAX_PHASES ||
-		!SG_WeaponStaticBindingValid(&sources->binding) ||
-		!BindingEqual(&sources->binding, &query->binding) ||
-		!BindingEqual(&sources->binding, &audit->binding) ||
-		audit->visibility.code != SG_STATIC_VISIBILITY_AUDIT_OK ||
-		audit->visibility.record != SG_STATIC_VISIBILITY_INDEX_NONE ||
-		audit->configuration_cells != configuration->cell_count ||
-		audit->semantic_regions != semantics->region_count ||
-		audit->semantic_surfaces != semantics->hook_surface_count ||
-		audit->semantic_surface_vertices != semantics->hook_vertex_count ||
-		audit->model_cells != model->cell_count ||
-		audit->model_phases != model->phase_count ||
-		audit->visibility.reconstructed_partitions !=
-			visibility->partition_count ||
-		audit->visibility.reconstructed_areas != visibility->area_count ||
-		audit->visibility.reconstructed_occluders !=
-			visibility->occluder_count ||
-		audit->visibility.reconstructed_surfaces !=
-			visibility->surface_count ||
-		visibility->partition_count != semantics->region_count ||
-		visibility->surface_count != semantics->hook_surface_count ||
-		configuration->cell_count != model->cell_count ||
-		model->version != SG_RUNE_MODEL_VERSION ||
-		model->schema_tag != SG_RUNE_MODEL_SCHEMA_TAG || model->reserved != 0U ||
-		(model->flags & required_flags) != required_flags ||
-		!SG_RuneModelCompletenessValid(&model->completeness) ||
-		model->completeness.state != SG_RUNE_COMPLETENESS_COMPLETE ||
-		model->completeness.covered_cells != model->cell_count ||
-		!IdentityEqual(&authority->identity, &configuration->identity) ||
-		!IdentityEqual(&authority->identity, &semantics->identity) ||
-		!IdentityEqual(&authority->identity, &visibility->identity) ||
-		!IdentityEqual(&authority->identity, &model->identity) ||
-		query->binding.source_set_identity !=
-			authority->identity.source_set_identity ||
-		profile->build_identity != authority->identity.producer_identity ||
-		profile->physics_abi_id != authority->identity.physics_abi_id)
+	if (left_center != right_center)
+		return left_center < right_center;
+	return left->surface < right->surface;
+}
+
+static void SurfaceRefSift(sg_weapon_static_surface_ref_t *items,
+	uint32_t count, uint32_t root, uint32_t axis)
+{
+	for (;;)
+	{
+		uint32_t child = root * 2U + 1U;
+		uint32_t selected = root;
+		sg_weapon_static_surface_ref_t swap;
+
+		if (child < count && SurfaceRefLess(&items[selected], &items[child], axis))
+			selected = child;
+		if (child + 1U < count &&
+			SurfaceRefLess(&items[selected], &items[child + 1U], axis))
+			selected = child + 1U;
+		if (selected == root)
+			return;
+		swap = items[root];
+		items[root] = items[selected];
+		items[selected] = swap;
+		root = selected;
+	}
+}
+
+static void SurfaceRefSort(sg_weapon_static_surface_ref_t *items,
+	uint32_t count, uint32_t axis)
+{
+	uint32_t index;
+
+	for (index = count / 2U; index > 0U; index--)
+		SurfaceRefSift(items, count, index - 1U, axis);
+	for (index = count; index > 1U; index--)
+	{
+		sg_weapon_static_surface_ref_t swap = items[0];
+
+		items[0] = items[index - 1U];
+		items[index - 1U] = swap;
+		SurfaceRefSift(items, index - 1U, 0U, axis);
+	}
+}
+
+static void BoundsInclude(sg_rune_bounds_t *bounds,
+	const sg_rune_bounds_t *other)
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		if (other->mins.value[axis] < bounds->mins.value[axis])
+			bounds->mins.value[axis] = other->mins.value[axis];
+		if (other->maxs.value[axis] > bounds->maxs.value[axis])
+			bounds->maxs.value[axis] = other->maxs.value[axis];
+	}
+}
+
+static uint32_t BuildBvhNode(sg_weapon_static_context_t *context,
+	uint32_t first, uint32_t count)
+{
+	uint32_t node_index = context->bvh_node_count++;
+	sg_weapon_static_bvh_node_t *node = &context->bvh_nodes[node_index];
+	uint32_t index, axis = 0U;
+	float longest;
+
+	node->left = SG_STATIC_VISIBILITY_INDEX_NONE;
+	node->right = SG_STATIC_VISIBILITY_INDEX_NONE;
+	node->surface = SG_STATIC_VISIBILITY_INDEX_NONE;
+	node->bounds = context->surface_refs[first].bounds;
+	for (index = 1U; index < count; index++)
+		BoundsInclude(&node->bounds, &context->surface_refs[first + index].bounds);
+	if (count == 1U)
+	{
+		node->surface = context->surface_refs[first].surface;
+		return node_index;
+	}
+	longest = node->bounds.maxs.value[0] - node->bounds.mins.value[0];
+	for (index = 1U; index < 3U; index++)
+	{
+		float extent = node->bounds.maxs.value[index] -
+			node->bounds.mins.value[index];
+
+		if (extent > longest)
+		{
+			longest = extent;
+			axis = index;
+		}
+	}
+	SurfaceRefSort(&context->surface_refs[first], count, axis);
+	index = count / 2U;
+	node->left = BuildBvhNode(context, first, index);
+	node->right = BuildBvhNode(context, first + index, count - index);
+	return node_index;
+}
+
+static void SetPrepareError(sg_weapon_static_prepare_error_t *error,
+	sg_weapon_static_prepare_error_code_t code)
+{
+	if (!error)
+		return;
+	memset(error, 0, sizeof(*error));
+	error->code = code;
+	error->record = SG_STATIC_VISIBILITY_INDEX_NONE;
+}
+
+void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context)
+{
+	if (!context)
+		return;
+	free(context->bvh_nodes);
+	free(context->surface_refs);
+	free(context->partition_indices);
+	free(context->cells);
+	free(context);
+}
+
+int SG_WeaponStaticContextPrepare(
+	const sg_weapon_static_prepare_input_t *input,
+	sg_weapon_static_context_t **context_out,
+	sg_weapon_static_prepare_error_t *error_out)
+{
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_semantics_audit_result_t semantics_audit;
+	sg_static_visibility_audit_result_t visibility_audit;
+	sg_rune_failure_reason_t model_reason;
+	sg_weapon_static_context_t *context = NULL;
+	uint32_t *counts = NULL, *positions = NULL, *binding_by_configuration = NULL;
+	uint32_t index, total = 0U;
+
+	SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_NONE);
+	if (context_out)
+		*context_out = NULL;
+	if (!input || !context_out || !input->authority || !input->configuration ||
+		!input->semantics || !input->visibility || !input->model ||
+		!input->model_evidence)
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_INVALID_ARGUMENT);
 		return 0;
+	}
+	if (!SG_WeaponStaticBindingValid(&input->binding) ||
+		input->binding.source_set_identity !=
+			input->authority->identity.source_set_identity)
+	{
+		SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_BINDING);
+		return 0;
+	}
+	if (!IdentityEqual(&input->authority->identity,
+			&input->configuration->identity) ||
+		!IdentityEqual(&input->authority->identity, &input->semantics->identity) ||
+		!IdentityEqual(&input->authority->identity, &input->visibility->identity) ||
+		!IdentityEqual(&input->authority->identity, &input->model->identity))
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+		return 0;
+	}
+	model_reason = SG_RuneModelValidate(input->model, input->model_evidence);
+	if (model_reason != SG_RUNE_FAILURE_NONE)
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_MODEL_VALIDATION);
+		if (error_out)
+			error_out->model = model_reason;
+		return 0;
+	}
+	if (!SG_ConfigurationAudit(input->authority, input->configuration,
+			&configuration_audit))
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_CONFIGURATION_AUDIT);
+		if (error_out)
+		{
+			error_out->configuration = configuration_audit.code;
+			error_out->record = configuration_audit.record;
+		}
+		return 0;
+	}
+	if (!SG_ConfigurationSemanticsAudit(input->authority, input->configuration,
+			input->semantics, &semantics_audit))
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_SEMANTICS_AUDIT);
+		if (error_out)
+		{
+			error_out->semantics = semantics_audit.code;
+			error_out->record = semantics_audit.record;
+		}
+		return 0;
+	}
+	if (!SG_StaticVisibilityAudit(input->authority, input->configuration,
+			input->semantics, input->visibility, &visibility_audit))
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_VISIBILITY_AUDIT);
+		if (error_out)
+		{
+			error_out->visibility = visibility_audit.code;
+			error_out->record = visibility_audit.record;
+		}
+		return 0;
+	}
+	if (input->model->cell_count == 0U ||
+		input->visibility->partition_count == 0U ||
+		input->visibility->surface_count > (UINT32_MAX + UINT64_C(1)) / 2U)
+	{
+		SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_OVERFLOW);
+		return 0;
+	}
+	context = calloc(1U, sizeof(*context));
+	if (!context)
+		goto out_of_memory;
+	context->binding = input->binding;
+	context->authority = input->authority;
+	context->configuration = input->configuration;
+	context->semantics = input->semantics;
+	context->visibility = input->visibility;
+	context->model = input->model;
+	context->cell_count = input->model->cell_count;
+	context->partition_count = input->visibility->partition_count;
+	context->cells = calloc(context->cell_count, sizeof(*context->cells));
+	context->partition_indices = calloc(context->partition_count,
+		sizeof(*context->partition_indices));
+	counts = calloc(input->configuration->cell_count, sizeof(*counts));
+	positions = calloc(input->configuration->cell_count, sizeof(*positions));
+	binding_by_configuration = calloc(input->configuration->cell_count,
+		sizeof(*binding_by_configuration));
+	if (!context->cells || !context->partition_indices || !counts ||
+		!positions || !binding_by_configuration)
+		goto out_of_memory;
+	for (index = 0U; index < input->configuration->cell_count; index++)
+		binding_by_configuration[index] = UINT32_MAX;
+	for (index = 0U; index < context->cell_count; index++)
+	{
+		uint32_t configuration_cell;
+
+		context->cells[index].id = input->model->cells[index].id.value;
+		context->cells[index].model_cell = index;
+		for (configuration_cell = 0U;
+			configuration_cell < input->configuration->cell_count;
+			configuration_cell++)
+			if (SG_RuneModelStableIdEqual(
+					&input->configuration->cells[configuration_cell].id.value,
+					&context->cells[index].id))
+				break;
+		if (configuration_cell >= input->configuration->cell_count ||
+			!SG_RuneModelStableIdEqual(
+				&input->configuration->cells[configuration_cell].id.value,
+				&context->cells[index].id))
+		{
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
+		}
+		context->cells[index].configuration_cell = configuration_cell;
+		binding_by_configuration[configuration_cell] = index;
+	}
+	for (index = 0U; index < context->partition_count; index++)
+	{
+		uint32_t cell = input->visibility->partitions[index].configuration_cell;
+
+		if (cell >= input->configuration->cell_count)
+		{
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
+		}
+		if (binding_by_configuration[cell] != UINT32_MAX)
+		{
+			if (counts[cell] == UINT32_MAX)
+			{
+				SetPrepareError(error_out,
+					SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+				goto failure;
+			}
+			counts[cell]++;
+		}
+	}
+	for (index = 0U; index < input->configuration->cell_count; index++)
+	{
+		uint32_t binding = binding_by_configuration[index];
+
+		if (binding == UINT32_MAX)
+			continue;
+		if (counts[index] == 0U || total > UINT32_MAX - counts[index])
+		{
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
+		}
+		context->cells[binding].first_partition = total;
+		context->cells[binding].partition_count = counts[index];
+		positions[index] = total;
+		total += counts[index];
+	}
+	for (index = 0U; index < context->partition_count; index++)
+	{
+		uint32_t cell = input->visibility->partitions[index].configuration_cell;
+
+		if (binding_by_configuration[cell] != UINT32_MAX)
+			context->partition_indices[positions[cell]++] = index;
+	}
+	context->partition_count = total;
+	if (input->visibility->surface_count != 0U)
+	{
+		uint64_t nodes = (uint64_t)input->visibility->surface_count * 2U - 1U;
+
+		context->surface_refs = calloc(input->visibility->surface_count,
+			sizeof(*context->surface_refs));
+		context->bvh_nodes = calloc((size_t)nodes,
+			sizeof(*context->bvh_nodes));
+		if (!context->surface_refs || !context->bvh_nodes)
+			goto out_of_memory;
+		for (index = 0U; index < input->visibility->surface_count; index++)
+		{
+			context->surface_refs[index].surface = index;
+			context->surface_refs[index].bounds =
+				input->semantics->hook_surfaces[index].bounds;
+		}
+		context->bvh_root = BuildBvhNode(context, 0U,
+			input->visibility->surface_count);
+	}
+	else
+		context->bvh_root = SG_STATIC_VISIBILITY_INDEX_NONE;
+	free(binding_by_configuration);
+	free(positions);
+	free(counts);
+	*context_out = context;
 	return 1;
+
+out_of_memory:
+	SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_OUT_OF_MEMORY);
+failure:
+	free(binding_by_configuration);
+	free(positions);
+	free(counts);
+	SG_WeaponStaticContextDestroy(context);
+	return 0;
 }
 
-static int PoseBindingValid(const sg_weapon_static_sources_t *sources,
-	uint32_t partition_index, const sg_rune_cell_ref_t *cell_reference,
-	const sg_rune_phase_ref_t *phase_reference)
+static const sg_weapon_static_cell_binding_t *FindCellBinding(
+	const sg_weapon_static_context_t *context,
+	const sg_rune_cell_ref_t *reference)
 {
-	const sg_static_visibility_t *visibility = sources->visibility;
-	const sg_configuration_space_t *configuration = sources->configuration;
-	const sg_rune_model_t *model = sources->model;
+	uint32_t low = 0U, high = context->cell_count;
+
+	while (low < high)
+	{
+		uint32_t middle = low + (high - low) / 2U;
+		int comparison = StableIdCompare(&context->cells[middle].id,
+			&reference->value);
+
+		if (comparison < 0)
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	if (low >= context->cell_count ||
+		StableIdCompare(&context->cells[low].id, &reference->value) != 0)
+		return NULL;
+	return &context->cells[low];
+}
+
+static int LocatePose(const sg_weapon_static_context_t *context,
+	const sg_rune_cell_ref_t *cell_reference,
+	const sg_rune_phase_ref_t *phase_reference, const float point[3],
+	uint32_t *partition_out, uint32_t *face_tests_out)
+{
+	const sg_weapon_static_cell_binding_t *binding =
+		FindCellBinding(context, cell_reference);
 	const sg_rune_phase_span_t *span;
-	uint32_t configuration_cell, model_cell, model_phase;
+	uint32_t phase, local;
 
-	if (partition_index >= visibility->partition_count)
+	if (!binding || !FindModelPhase(context->model, phase_reference, &phase))
 		return 0;
-	configuration_cell = visibility->partitions[
-		partition_index].configuration_cell;
-	if (configuration_cell >= configuration->cell_count ||
-		!SG_RuneModelStableIdEqual(
-			&configuration->cells[configuration_cell].id.value,
-			&cell_reference->value) ||
-		!FindModelCell(model, cell_reference, &model_cell) ||
-		!FindModelPhase(model, phase_reference, &model_phase) ||
-		!SG_RuneModelPhaseValid(&model->phases[model_phase]))
+	span = &context->model->cells[binding->model_cell].phases;
+	if (span->first > context->model->phase_count ||
+		span->count > context->model->phase_count - span->first ||
+		phase < span->first || phase - span->first >= span->count)
 		return 0;
-	span = &model->cells[model_cell].phases;
-	return span->first <= model->phase_count &&
-		span->count <= model->phase_count - span->first &&
-		model_phase >= span->first && model_phase - span->first < span->count;
-}
+	for (local = 0U; local < binding->partition_count; local++)
+	{
+		uint32_t tested = 0U;
+		uint32_t partition = context->partition_indices[
+			binding->first_partition + local];
 
-static int QueryPosesBound(const sg_weapon_static_sources_t *sources,
-	const sg_weapon_static_query_t *query,
-	const sg_static_visibility_result_t *visibility)
-{
-	return PoseBindingValid(sources, visibility->source_partition,
-			&query->source_cell, &query->source_phase) &&
-		PoseBindingValid(sources, visibility->destination_partition,
-			&query->target_cell, &query->target_phase);
+		if (SG_StaticVisibilityPointInPartition(context->semantics,
+				context->visibility, partition, point, &tested))
+		{
+			*partition_out = partition;
+			*face_tests_out += tested;
+			return 1;
+		}
+		*face_tests_out += tested;
+	}
+	return 0;
 }
 
 static sg_weapon_static_relation_t AllowedRelations(
@@ -264,19 +581,20 @@ static sg_weapon_static_relation_t AllowedRelations(
 {
 	sg_weapon_static_relation_t allowed = 0U;
 
-	if ((profile->effects & (SG_WEAPON_EFFECT_HITSCAN |
-			SG_WEAPON_EFFECT_PERIODIC_RAY)) != 0U)
+	if ((profile->effects & SG_WEAPON_EFFECT_HITSCAN) != 0U)
 		allowed |= SG_WEAPON_STATIC_DIRECT_VISIBILITY;
 	if ((profile->effects & SG_WEAPON_EFFECT_PROJECTILE) != 0U)
 		allowed |= SG_WEAPON_STATIC_PROJECTILE_CORRIDOR;
-	if (profile->supports_occluded_impact != 0U ||
-		(profile->effects & SG_WEAPON_EFFECT_SPECIAL) != 0U)
+	if (profile->supports_occluded_impact != 0U)
 		allowed |= SG_WEAPON_STATIC_IMPACT_SURFACE;
-	if ((profile->effects & (SG_WEAPON_EFFECT_SPLASH |
-			SG_WEAPON_EFFECT_SECONDARY_AREA)) != 0U)
+	if ((profile->effects & SG_WEAPON_EFFECT_SPLASH) != 0U)
 		allowed |= SG_WEAPON_STATIC_BLAST_REACH;
+	if ((profile->effects & SG_WEAPON_EFFECT_SECONDARY_AREA) != 0U)
+		allowed |= SG_WEAPON_STATIC_SECONDARY_BLAST_REACH;
 	if ((profile->effects & SG_WEAPON_EFFECT_BOUNCE) != 0U)
 		allowed |= SG_WEAPON_STATIC_BOUNCE_SURFACE;
+	if ((profile->effects & SG_WEAPON_EFFECT_PERIODIC_RAY) != 0U)
+		allowed |= SG_WEAPON_STATIC_PERIODIC_PROJECTILE_RAY;
 	return allowed;
 }
 
@@ -325,6 +643,14 @@ static void InitAffordance(sg_weapon_static_affordance_t *affordance,
 		{
 			relation->status = SG_WEAPON_STATIC_REJECTED;
 			relation->reason = SG_WEAPON_STATIC_REASON_PROFILE_UNSUPPORTED;
+		}
+		else if (relation->relation ==
+				SG_WEAPON_STATIC_PERIODIC_PROJECTILE_RAY &&
+			(query->requested_relations & relation->relation) != 0U)
+		{
+			relation->status = SG_WEAPON_STATIC_CONDITIONAL;
+			relation->reason =
+				SG_WEAPON_STATIC_REASON_RUNTIME_PROJECTILE_ORIGIN;
 		}
 	}
 }
@@ -398,7 +724,7 @@ static int RefineProjectileClearance(
 	return 1;
 }
 
-static float SplashRadius(const sg_weapon_profile_t *profile)
+static float EffectRadius(const sg_weapon_profile_t *profile)
 {
 	return profile->secondary_splash_radius > profile->splash_radius ?
 		profile->secondary_splash_radius : profile->splash_radius;
@@ -516,11 +842,10 @@ static int ClosestPointOnSurface(
 	return have_best;
 }
 
-static int WithinSplashReach(const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile, const float impact[3], float closest[3])
+static int WithinRadius(const sg_weapon_static_query_t *query, float radius,
+	const float impact[3], float closest[3])
 {
 	float distance_squared = 0.0f;
-	float radius = SplashRadius(profile);
 	uint32_t axis;
 
 	for (axis = 0U; axis < 3U; axis++)
@@ -554,8 +879,12 @@ static void PreferSurfaceEvidence(
 	if (relation->status == SG_WEAPON_STATIC_NOT_REQUESTED ||
 		status > relation->status ||
 		(status == SG_WEAPON_STATIC_CONDITIONAL &&
-		 relation->reason == SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE &&
-		 reason == SG_WEAPON_STATIC_REASON_VISIBILITY))
+		 ((relation->reason ==
+			SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE &&
+		   reason == SG_WEAPON_STATIC_REASON_VISIBILITY) ||
+		  (reason == SG_WEAPON_STATIC_REASON_OWNER_DAMAGE_VISIBILITY &&
+		   relation->reason !=
+			SG_WEAPON_STATIC_REASON_OWNER_DAMAGE_VISIBILITY))))
 	{
 		SetRelation(relation, status, reason, visibility);
 		if (witness)
@@ -569,11 +898,9 @@ static void PreferSurfaceEvidence(
 
 static int SurfaceBoundsOutsideSplash(
 	const sg_configuration_hook_surface_t *surface,
-	const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile)
+	const sg_weapon_static_query_t *query, float radius)
 {
 	float distance_squared = 0.0f;
-	float radius = SplashRadius(profile);
 	uint32_t axis;
 
 	for (axis = 0U; axis < 3U; axis++)
@@ -610,14 +937,230 @@ static sg_weapon_static_status_t CandidateStatus(
 	return status;
 }
 
-static int EvaluateSurfaceCandidate(
-	const sg_host_collision_authority_t *authority,
+static int TraceClear(const sg_host_collision_trace_t *trace)
+{
+	return !trace->startsolid && !trace->allsolid && trace->fraction == 1.0f;
+}
+
+static int OwnerDamageVisibility(
+	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	const sg_static_visibility_t *visibility,
 	const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile,
+	const sg_weapon_static_cell_binding_t *target_binding,
+	uint32_t source_partition, sg_weapon_static_status_t *status_out,
+	sg_static_visibility_result_t *evidence, uint32_t *face_tests)
+{
+	static const float offsets[5][2] = {
+		{ 0.0f, 0.0f }, { 15.0f, 15.0f }, { 15.0f, -15.0f },
+		{ -15.0f, 15.0f }, { -15.0f, -15.0f }
+	};
+	static const float zero[3] = { 0.0f, 0.0f, 0.0f };
+	sg_weapon_static_status_t best = SG_WEAPON_STATIC_REJECTED;
+	uint32_t sample;
+
+	memset(evidence, 0, sizeof(*evidence));
+	evidence->source_partition = source_partition;
+	evidence->destination_partition = SG_STATIC_VISIBILITY_INDEX_NONE;
+	evidence->surface = SG_STATIC_VISIBILITY_INDEX_NONE;
+	for (sample = 0U; sample < 5U; sample++)
+	{
+		float destination[3] = {
+			query->target_origin.value[0] + offsets[sample][0],
+			query->target_origin.value[1] + offsets[sample][1],
+			query->target_origin.value[2]
+		};
+		sg_host_collision_trace_t world_trace, scene_trace;
+		uint32_t local, destination_partition = SG_STATIC_VISIBILITY_INDEX_NONE;
+
+		for (local = 0U; local < target_binding->partition_count; local++)
+		{
+			uint32_t tested = 0U;
+			uint32_t partition = context->partition_indices[
+				target_binding->first_partition + local];
+
+			if (SG_StaticVisibilityPointInPartition(context->semantics,
+					context->visibility, partition, destination, &tested))
+			{
+				destination_partition = partition;
+				*face_tests += tested;
+				break;
+			}
+			*face_tests += tested;
+		}
+		if (destination_partition == SG_STATIC_VISIBILITY_INDEX_NONE)
+			continue;
+		if (!SG_HostCollisionTraceModel(context->authority,
+				SG_HOST_COLLISION_MODEL_WORLD, NULL,
+				query->source_origin.value, zero, zero, destination,
+				SG_HOST_CONTENTS_SOLID | SG_HOST_CONTENTS_WINDOW, &world_trace))
+			return 0;
+		if (!TraceClear(&world_trace))
+		{
+			evidence->trace = world_trace;
+			continue;
+		}
+		if (scene->instance_count != 0U)
+		{
+			if (!SG_HostCollisionTrace(context->authority, scene,
+					query->source_origin.value, zero, zero, destination,
+					SG_HOST_CONTENTS_SOLID | SG_HOST_CONTENTS_WINDOW,
+					&scene_trace))
+				return 0;
+			if (!TraceClear(&scene_trace))
+			{
+				best = SG_WEAPON_STATIC_CONDITIONAL;
+				evidence->classification = SG_STATIC_VISIBILITY_CONDITIONAL;
+				evidence->reason =
+					SG_STATIC_VISIBILITY_REASON_MOVING_SUBMODEL;
+				evidence->destination_partition = destination_partition;
+				evidence->trace = scene_trace;
+				continue;
+			}
+		}
+		evidence->classification = SG_STATIC_VISIBILITY_VISIBLE;
+		evidence->reason = SG_STATIC_VISIBILITY_REASON_NONE;
+		evidence->destination_partition = destination_partition;
+		evidence->trace = world_trace;
+		*status_out = SG_WEAPON_STATIC_PROVEN;
+		return 1;
+	}
+	if (best == SG_WEAPON_STATIC_REJECTED)
+	{
+		evidence->classification = SG_STATIC_VISIBILITY_OCCLUDED;
+		evidence->reason = SG_STATIC_VISIBILITY_REASON_STATIC_WORLD;
+	}
+	*status_out = best;
+	return 1;
+}
+
+static int ImpactDamageVisibility(
+	const sg_weapon_static_context_t *context,
+	const sg_host_collision_scene_t *scene,
+	const sg_weapon_static_query_t *query,
+	const sg_weapon_static_cell_binding_t *target_binding, uint32_t surface,
+	const float impact_point[3], sg_weapon_static_status_t *status_out,
+	sg_static_visibility_result_t *evidence_out,
+	sg_weapon_static_affordance_error_t *error)
+{
+	static const float offsets[5][2] = {
+		{ 0.0f, 0.0f }, { 15.0f, 15.0f }, { 15.0f, -15.0f },
+		{ -15.0f, 15.0f }, { -15.0f, -15.0f }
+	};
+	sg_weapon_static_status_t best = SG_WEAPON_STATIC_REJECTED;
+	uint32_t sample;
+
+	memset(evidence_out, 0, sizeof(*evidence_out));
+	evidence_out->surface = surface;
+	evidence_out->source_partition = SG_STATIC_VISIBILITY_INDEX_NONE;
+	evidence_out->destination_partition = SG_STATIC_VISIBILITY_INDEX_NONE;
+	for (sample = 0U; sample < 5U; sample++)
+	{
+		float target[3] = {
+			query->target_origin.value[0] + offsets[sample][0],
+			query->target_origin.value[1] + offsets[sample][1],
+			query->target_origin.value[2]
+		};
+		sg_static_visibility_result_t visibility;
+		sg_static_visibility_error_t visibility_error;
+		uint32_t local;
+
+		for (local = 0U; local < target_binding->partition_count; local++)
+		{
+			uint32_t partition = context->partition_indices[
+				target_binding->first_partition + local];
+
+			if (!SG_StaticVisibilityPointInPartition(context->semantics,
+					context->visibility, partition, target, NULL))
+				continue;
+			if (!SG_StaticVisibilityQueryBoundSurface(context->authority, scene,
+					context->configuration, context->semantics,
+					context->visibility, partition, target, surface, impact_point,
+					&visibility, &visibility_error))
+			{
+				if (visibility_error.code ==
+						SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY ||
+					visibility_error.code ==
+						SG_STATIC_VISIBILITY_ERROR_SOURCE_MISMATCH)
+					break;
+				SetError(error, SG_WEAPON_STATIC_AFFORDANCE_ERROR_VISIBILITY,
+					&visibility_error);
+				return 0;
+			}
+			if (VisibilityStatus(&visibility) > best)
+			{
+				best = VisibilityStatus(&visibility);
+				*evidence_out = visibility;
+			}
+			break;
+		}
+		if (best == SG_WEAPON_STATIC_PROVEN)
+			break;
+	}
+	if (best == SG_WEAPON_STATIC_REJECTED)
+	{
+		evidence_out->classification = SG_STATIC_VISIBILITY_OCCLUDED;
+		evidence_out->reason = SG_STATIC_VISIBILITY_REASON_STATIC_WORLD;
+	}
+	*status_out = best;
+	return 1;
+}
+
+static int ResolveBlastCandidate(
+	const sg_weapon_static_context_t *context,
+	const sg_host_collision_scene_t *scene,
+	const sg_weapon_static_query_t *query,
+	const sg_weapon_static_cell_binding_t *target_binding,
+	uint32_t surface, const float impact_point[3], float radius,
+	sg_weapon_static_status_t source_status,
+	sg_weapon_static_reason_t source_reason,
+	const sg_static_visibility_result_t *source_visibility,
+	sg_weapon_static_status_t owner_status,
+	const sg_static_visibility_result_t *owner_visibility,
+	int require_owner, sg_weapon_static_relation_result_t *relation,
+	sg_weapon_static_affordance_error_t *error)
+{
+	float closest[3];
+	sg_static_visibility_result_t target_visibility;
+	sg_weapon_static_status_t target_status;
+	sg_weapon_static_status_t combined = source_status;
+	sg_weapon_static_reason_t reason = source_reason;
+	const sg_static_visibility_result_t *evidence = source_visibility;
+
+	if (!WithinRadius(query, radius, impact_point, closest))
+		return 1;
+	if (source_status != SG_WEAPON_STATIC_REJECTED)
+	{
+		sg_weapon_static_reason_t target_reason;
+
+		if (!ImpactDamageVisibility(context, scene, query, target_binding,
+				surface, impact_point, &target_status, &target_visibility, error))
+			return 0;
+		target_status = CandidateStatus(&target_visibility, &target_reason);
+		if (target_status < combined)
+		{
+			combined = target_status;
+			reason = target_reason;
+			evidence = &target_visibility;
+		}
+	}
+	if (require_owner && owner_status < combined)
+	{
+		combined = owner_status;
+		reason = SG_WEAPON_STATIC_REASON_OWNER_DAMAGE_VISIBILITY;
+		evidence = owner_visibility;
+	}
+	PreferSurfaceEvidence(relation, combined, reason, evidence, impact_point);
+	return 1;
+}
+
+static int EvaluateSurfaceCandidate(
+	const sg_weapon_static_context_t *context,
+	const sg_host_collision_scene_t *scene,
+	const sg_weapon_static_query_t *query,
+	const sg_weapon_profile_t *profile, uint32_t source_partition,
+	const sg_weapon_static_cell_binding_t *target_binding,
+	sg_weapon_static_status_t owner_status,
+	const sg_static_visibility_result_t *owner_visibility,
 	sg_weapon_static_relation_t requested, uint32_t surface,
 	const float impact_point[3], sg_weapon_static_affordance_t *affordance,
 	sg_weapon_static_affordance_error_t *error)
@@ -627,9 +1170,11 @@ static int EvaluateSurfaceCandidate(
 	sg_weapon_static_reason_t reason;
 	sg_weapon_static_status_t status;
 
-	if (!SG_StaticVisibilityQuerySurface(authority, scene, configuration,
-			semantics, visibility, query->source_origin.value, surface,
-			impact_point, &surface_visibility, &visibility_error))
+	affordance->candidate_points_queried++;
+	if (!SG_StaticVisibilityQueryBoundSurface(context->authority, scene,
+			context->configuration, context->semantics, context->visibility,
+			source_partition, query->source_origin.value, surface, impact_point,
+			&surface_visibility, &visibility_error))
 	{
 		if (visibility_error.code ==
 				SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY ||
@@ -644,218 +1189,253 @@ static int EvaluateSurfaceCandidate(
 	if ((requested & SG_WEAPON_STATIC_IMPACT_SURFACE) != 0U)
 		PreferSurfaceEvidence(&affordance->relations[2], status, reason,
 			&surface_visibility, impact_point);
-	if ((requested & SG_WEAPON_STATIC_BLAST_REACH) != 0U)
-	{
-		sg_weapon_static_relation_result_t *blast = &affordance->relations[3];
-		float closest[3];
-
-		if (WithinSplashReach(query, profile, impact_point, closest))
-		{
-			if (status == SG_WEAPON_STATIC_REJECTED ||
-				(closest[0] == impact_point[0] &&
-				 closest[1] == impact_point[1] &&
-				 closest[2] == impact_point[2]))
-				PreferSurfaceEvidence(blast, status, reason,
-					&surface_visibility, impact_point);
-			else
-			{
-				sg_static_visibility_result_t target_visibility;
-				sg_weapon_static_reason_t target_reason;
-				sg_weapon_static_status_t target_status;
-				sg_weapon_static_status_t combined_status;
-
-				if (!SG_StaticVisibilityQuerySurface(authority, scene,
-						configuration, semantics, visibility, closest, surface,
-						impact_point, &target_visibility, &visibility_error))
-				{
-					if (visibility_error.code ==
-							SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY ||
-						visibility_error.code ==
-							SG_STATIC_VISIBILITY_ERROR_SOURCE_MISMATCH)
-					{
-						PreferSurfaceEvidence(blast,
-							SG_WEAPON_STATIC_CONDITIONAL,
-							SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE,
-							&surface_visibility, impact_point);
-						return 1;
-					}
-					SetError(error,
-						SG_WEAPON_STATIC_AFFORDANCE_ERROR_VISIBILITY,
-						&visibility_error);
-					return 0;
-				}
-				target_status = CandidateStatus(&target_visibility,
-					&target_reason);
-				combined_status = target_status < status ? target_status : status;
-				PreferSurfaceEvidence(blast, combined_status,
-					target_status < status ? target_reason : reason,
-					target_status < status ? &target_visibility :
-						&surface_visibility, impact_point);
-			}
-		}
-	}
+	if ((requested & SG_WEAPON_STATIC_BLAST_REACH) != 0U &&
+		!ResolveBlastCandidate(context, scene, query, target_binding, surface,
+			impact_point, profile->splash_radius, status, reason,
+			&surface_visibility, owner_status, owner_visibility, 0,
+			&affordance->relations[3], error))
+		return 0;
 	if ((requested & SG_WEAPON_STATIC_BOUNCE_SURFACE) != 0U)
 		PreferSurfaceEvidence(&affordance->relations[4], status, reason,
 			&surface_visibility, impact_point);
+	if ((requested & SG_WEAPON_STATIC_SECONDARY_BLAST_REACH) != 0U &&
+		!ResolveBlastCandidate(context, scene, query, target_binding, surface,
+			impact_point, profile->secondary_splash_radius, status, reason,
+			&surface_visibility, owner_status, owner_visibility, 1,
+			&affordance->relations[5], error))
+		return 0;
 	return 1;
 }
 
+typedef struct sg_weapon_surface_query_state_s
+{
+	const sg_weapon_static_context_t *context;
+	const sg_host_collision_scene_t *scene;
+	const sg_weapon_static_query_t *query;
+	const sg_weapon_profile_t *profile;
+	sg_weapon_static_relation_t requested;
+	uint32_t source_partition;
+	const sg_weapon_static_cell_binding_t *target_binding;
+	sg_weapon_static_status_t owner_status;
+	const sg_static_visibility_result_t *owner_visibility;
+	float effect_radius;
+	uint8_t found_surface;
+	uint8_t found_core_surface;
+	uint8_t found_secondary_surface;
+	sg_weapon_static_affordance_t *affordance;
+	sg_weapon_static_affordance_error_t *error;
+} sg_weapon_surface_query_state_t;
+
+static int BoundsOutsideTargetRadius(const sg_rune_bounds_t *bounds,
+	const sg_weapon_static_query_t *query, float radius)
+{
+	float distance_squared = 0.0f;
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float delta = 0.0f;
+
+		if (bounds->maxs.value[axis] < query->target_bounds.mins.value[axis])
+			delta = query->target_bounds.mins.value[axis] -
+				bounds->maxs.value[axis];
+		else if (bounds->mins.value[axis] > query->target_bounds.maxs.value[axis])
+			delta = bounds->mins.value[axis] -
+				query->target_bounds.maxs.value[axis];
+		distance_squared += delta * delta;
+	}
+	return !isfinite(distance_squared) || distance_squared > radius * radius;
+}
+
+static int ProcessSurface(sg_weapon_surface_query_state_t *state,
+	uint32_t surface)
+{
+	const sg_configuration_hook_surface_t *surface_record =
+		&state->context->semantics->hook_surfaces[surface];
+	uint32_t candidate_count, candidate;
+	float nearest[3];
+
+	if (SurfaceBoundsOutsideSplash(surface_record, state->query,
+			state->effect_radius))
+		return 1;
+	state->affordance->candidate_surfaces_visited++;
+	state->found_surface = 1U;
+	if (!SurfaceBoundsOutsideSplash(surface_record, state->query,
+			state->profile->splash_radius))
+		state->found_core_surface = 1U;
+	if (!SurfaceBoundsOutsideSplash(surface_record, state->query,
+			state->profile->secondary_splash_radius))
+		state->found_secondary_surface = 1U;
+	if (!ClosestPointOnSurface(state->context->semantics, surface_record,
+			state->query->target_origin.value, nearest))
+	{
+		SetError(state->error,
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
+		return 0;
+	}
+	if (surface_record->vertex_count > (UINT32_MAX - 9U) / 3U)
+	{
+		SetError(state->error,
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
+		return 0;
+	}
+	candidate_count = 1U + 3U * surface_record->vertex_count + 8U;
+	for (candidate = 0U; candidate < candidate_count; candidate++)
+	{
+		float impact_point[3], seed[3], closest[3];
+		int evaluated;
+
+		if (candidate == 0U)
+			memcpy(impact_point, nearest, sizeof(impact_point));
+		else if (candidate <= surface_record->vertex_count)
+		{
+			memcpy(seed, state->context->semantics->hook_vertices[
+				surface_record->first_vertex + candidate - 1U].value,
+				sizeof(seed));
+			if (!ClosestPointOnSurface(state->context->semantics,
+					surface_record, seed, impact_point))
+				goto invalid_surface;
+		}
+		else if (candidate <= 2U * surface_record->vertex_count)
+		{
+			uint32_t edge = candidate - surface_record->vertex_count - 1U;
+			const float *start = state->context->semantics->hook_vertices[
+				surface_record->first_vertex + edge].value;
+			const float *end = state->context->semantics->hook_vertices[
+				surface_record->first_vertex +
+				(edge + 1U) % surface_record->vertex_count].value;
+			uint32_t axis;
+
+			for (axis = 0U; axis < 3U; axis++)
+				seed[axis] = (start[axis] + end[axis]) * 0.5f;
+			if (!ClosestPointOnSurface(state->context->semantics,
+					surface_record, seed, impact_point))
+				goto invalid_surface;
+		}
+		else if (candidate <= 3U * surface_record->vertex_count)
+		{
+			uint32_t vertex = candidate -
+				2U * surface_record->vertex_count - 1U;
+			const float *point = state->context->semantics->hook_vertices[
+				surface_record->first_vertex + vertex].value;
+			uint32_t axis;
+
+			for (axis = 0U; axis < 3U; axis++)
+				seed[axis] = (nearest[axis] + point[axis]) * 0.5f;
+			if (!ClosestPointOnSurface(state->context->semantics,
+					surface_record, seed, impact_point))
+				goto invalid_surface;
+		}
+		else
+		{
+			float corner[3];
+			uint32_t corner_index = candidate -
+				3U * surface_record->vertex_count - 1U;
+			uint32_t axis;
+
+			for (axis = 0U; axis < 3U; axis++)
+				corner[axis] = (corner_index & (1U << axis)) != 0U ?
+					state->query->target_bounds.maxs.value[axis] :
+					state->query->target_bounds.mins.value[axis];
+			if (!ClosestPointOnSurface(state->context->semantics,
+					surface_record, corner, impact_point))
+				goto invalid_surface;
+		}
+		if (!WithinRadius(state->query, state->effect_radius,
+				impact_point, closest))
+			continue;
+		evaluated = EvaluateSurfaceCandidate(state->context, state->scene,
+			state->query, state->profile, state->source_partition,
+			state->target_binding, state->owner_status,
+			state->owner_visibility, state->requested, surface, impact_point,
+			state->affordance, state->error);
+		if (evaluated == 0)
+			return 0;
+	}
+	return 1;
+
+invalid_surface:
+	SetError(state->error, SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE,
+		NULL);
+	return 0;
+}
+
+static int VisitSurfaceBvh(sg_weapon_surface_query_state_t *state,
+	uint32_t node_index)
+{
+	const sg_weapon_static_bvh_node_t *node;
+
+	if (node_index == SG_STATIC_VISIBILITY_INDEX_NONE)
+		return 1;
+	state->affordance->spatial_nodes_visited++;
+	node = &state->context->bvh_nodes[node_index];
+	if (BoundsOutsideTargetRadius(&node->bounds, state->query,
+			state->effect_radius))
+		return 1;
+	if (node->surface != SG_STATIC_VISIBILITY_INDEX_NONE)
+		return ProcessSurface(state, node->surface);
+	return VisitSurfaceBvh(state, node->left) &&
+		VisitSurfaceBvh(state, node->right);
+}
+
 static int ResolveSurfaceRelations(
-	const sg_host_collision_authority_t *authority,
+	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	const sg_static_visibility_t *visibility,
 	const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile,
+	const sg_weapon_profile_t *profile, uint32_t source_partition,
+	const sg_weapon_static_cell_binding_t *target_binding,
+	sg_weapon_static_status_t owner_status,
+	const sg_static_visibility_result_t *owner_visibility,
 	sg_weapon_static_affordance_t *affordance,
 	sg_weapon_static_affordance_error_t *error)
 {
-	sg_weapon_static_relation_t requested = query->requested_relations &
+	sg_weapon_surface_query_state_t state;
+	size_t index;
+
+	memset(&state, 0, sizeof(state));
+	state.context = context;
+	state.scene = scene;
+	state.query = query;
+	state.profile = profile;
+	state.requested = query->requested_relations &
 		affordance->allowed_relations &
 		(SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH |
-		 SG_WEAPON_STATIC_BOUNCE_SURFACE);
-	uint32_t surface;
-	int matched = 0;
-
-	if (requested == 0U)
+		 SG_WEAPON_STATIC_BOUNCE_SURFACE |
+		 SG_WEAPON_STATIC_SECONDARY_BLAST_REACH);
+	if (state.requested == 0U)
 		return 1;
-	for (surface = 0U; surface < visibility->surface_count; surface++)
+	state.source_partition = source_partition;
+	state.target_binding = target_binding;
+	state.owner_status = owner_status;
+	state.owner_visibility = owner_visibility;
+	state.effect_radius = EffectRadius(profile);
+	state.affordance = affordance;
+	state.error = error;
+	if (!VisitSurfaceBvh(&state, context->bvh_root))
+		return 0;
+	for (index = 2U; index <= 5U; index++)
 	{
-		const sg_configuration_hook_surface_t *surface_record =
-			&semantics->hook_surfaces[surface];
-		uint32_t candidate;
-		uint32_t candidate_count = 1U + 3U * surface_record->vertex_count + 8U;
-		float nearest[3];
+		sg_weapon_static_relation_t relation = relation_order[index];
+		sg_weapon_static_reason_t reason;
 
-		if (!ClosestPointOnSurface(semantics, surface_record,
-				query->target_origin.value, nearest))
-		{
-			SetError(error, SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE,
-				NULL);
-			return 0;
-		}
-		matched = 1;
-		if ((requested & SG_WEAPON_STATIC_BLAST_REACH) != 0U &&
-			SurfaceBoundsOutsideSplash(surface_record, query, profile))
-			PreferSurfaceEvidence(&affordance->relations[3],
-				SG_WEAPON_STATIC_REJECTED,
-				SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH, NULL, nearest);
-		for (candidate = 0U; candidate < candidate_count; candidate++)
-		{
-			float impact_point[3];
-			float seed[3];
-			int evaluated;
-
-			if (candidate == 0U)
-				memcpy(impact_point, nearest, sizeof(impact_point));
-			else if (candidate <= surface_record->vertex_count)
-			{
-				memcpy(seed, semantics->hook_vertices[
-					surface_record->first_vertex + candidate - 1U].value,
-					sizeof(seed));
-				if (!ClosestPointOnSurface(semantics, surface_record, seed,
-						impact_point))
-				{
-					SetError(error,
-						SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
-					return 0;
-				}
-			}
-			else if (candidate <= 2U * surface_record->vertex_count)
-			{
-				uint32_t edge = candidate - surface_record->vertex_count - 1U;
-				const float *start = semantics->hook_vertices[
-					surface_record->first_vertex + edge].value;
-				const float *end = semantics->hook_vertices[
-					surface_record->first_vertex +
-					(edge + 1U) % surface_record->vertex_count].value;
-				uint32_t axis;
-
-				for (axis = 0U; axis < 3U; axis++)
-					seed[axis] = (start[axis] + end[axis]) * 0.5f;
-				if (!ClosestPointOnSurface(semantics, surface_record, seed,
-						impact_point))
-				{
-					SetError(error,
-						SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
-					return 0;
-				}
-			}
-			else if (candidate <= 3U * surface_record->vertex_count)
-			{
-				uint32_t vertex = candidate -
-					2U * surface_record->vertex_count - 1U;
-				const float *point = semantics->hook_vertices[
-					surface_record->first_vertex + vertex].value;
-				uint32_t axis;
-
-				for (axis = 0U; axis < 3U; axis++)
-					seed[axis] = (nearest[axis] + point[axis]) * 0.5f;
-				if (!ClosestPointOnSurface(semantics, surface_record, seed,
-						impact_point))
-				{
-					SetError(error,
-						SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
-					return 0;
-				}
-			}
-			else
-			{
-				float corner[3];
-				uint32_t corner_index = candidate -
-					3U * surface_record->vertex_count - 1U;
-				uint32_t axis;
-
-				for (axis = 0U; axis < 3U; axis++)
-					corner[axis] = (corner_index & (1U << axis)) != 0U ?
-						query->target_bounds.maxs.value[axis] :
-						query->target_bounds.mins.value[axis];
-				if (!ClosestPointOnSurface(semantics, surface_record, corner,
-						impact_point))
-				{
-					SetError(error,
-						SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
-					return 0;
-				}
-			}
-			evaluated = EvaluateSurfaceCandidate(authority, scene, configuration,
-					semantics, visibility, query, profile, requested, surface,
-					impact_point, affordance, error);
-			if (evaluated == 0)
-				return 0;
-		}
-		if ((requested & SG_WEAPON_STATIC_BLAST_REACH) != 0U &&
-			!SurfaceBoundsOutsideSplash(surface_record, query, profile) &&
-			(affordance->relations[3].status ==
-				SG_WEAPON_STATIC_NOT_REQUESTED ||
-			 affordance->relations[3].reason ==
-				SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH))
-			PreferSurfaceEvidence(&affordance->relations[3],
-				SG_WEAPON_STATIC_CONDITIONAL,
-				SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE, NULL,
-				nearest);
-	}
-	if (matched)
-	{
-		size_t index;
-
-		for (index = 2U; index < SG_WEAPON_STATIC_RELATION_COUNT; index++)
-			if ((requested & relation_order[index]) != 0U &&
-				affordance->relations[index].status ==
-					SG_WEAPON_STATIC_NOT_REQUESTED)
-				SetRelation(&affordance->relations[index],
-					SG_WEAPON_STATIC_CONDITIONAL,
-					SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE, NULL);
-	}
-	if (!matched)
-	{
-		size_t index;
-		for (index = 2U; index < SG_WEAPON_STATIC_RELATION_COUNT; index++)
-			if ((requested & relation_order[index]) != 0U)
-				SetRelation(&affordance->relations[index],
-					SG_WEAPON_STATIC_REJECTED,
-					SG_WEAPON_STATIC_REASON_TARGET_NOT_SURFACE, NULL);
+		if ((state.requested & relation) == 0U ||
+			affordance->relations[index].status !=
+				SG_WEAPON_STATIC_NOT_REQUESTED)
+			continue;
+		if (relation == SG_WEAPON_STATIC_BLAST_REACH &&
+			!state.found_core_surface)
+			reason = SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH;
+		else if (relation == SG_WEAPON_STATIC_SECONDARY_BLAST_REACH &&
+			!state.found_secondary_surface)
+			reason = SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH;
+		else if (!state.found_surface)
+			reason = SG_WEAPON_STATIC_REASON_TARGET_NOT_SURFACE;
+		else
+			reason = SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE;
+		SetRelation(&affordance->relations[index],
+			reason == SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE ?
+				SG_WEAPON_STATIC_CONDITIONAL : SG_WEAPON_STATIC_REJECTED,
+			reason, NULL);
 	}
 	return 1;
 }
@@ -887,7 +1467,7 @@ static void FinalizeMasks(sg_weapon_static_affordance_t *affordance)
 }
 
 int SG_WeaponStaticAffordanceResolve(
-	const sg_weapon_static_sources_t *sources,
+	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,
 	const sg_weapon_static_query_t *query,
 	const sg_weapon_profile_t *profile,
@@ -896,26 +1476,27 @@ int SG_WeaponStaticAffordanceResolve(
 {
 	sg_weapon_static_affordance_t affordance;
 	sg_static_visibility_result_t point_visibility;
+	sg_static_visibility_result_t owner_visibility;
 	sg_static_visibility_error_t visibility_error;
 	sg_weapon_static_relation_t point_relations;
-	const sg_host_collision_authority_t *authority;
-	const sg_configuration_space_t *configuration;
-	const sg_configuration_semantics_t *semantics;
-	const sg_static_visibility_t *visibility;
+	sg_weapon_static_status_t owner_status = SG_WEAPON_STATIC_REJECTED;
+	const sg_weapon_static_cell_binding_t *target_binding;
+	uint32_t source_partition, target_partition;
+	uint32_t pose_face_tests = 0U;
 
 	SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_NONE, NULL);
-	if (!sources || !sources->authority || !sources->configuration ||
-		!sources->semantics || !sources->visibility || !sources->model ||
-		!sources->audit || !scene || !query || !profile || !affordance_out)
+	if (!context || !scene || !query || !profile || !affordance_out)
 	{
 		SetError(error_out,
 			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_ARGUMENT, NULL);
 		return 0;
 	}
-	authority = sources->authority;
-	configuration = sources->configuration;
-	semantics = sources->semantics;
-	visibility = sources->visibility;
+	if (!BindingEqual(&context->binding, &query->binding))
+	{
+		SetError(error_out,
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH, NULL);
+		return 0;
+	}
 	if (!PreparedQueryValid(query))
 	{
 		SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_QUERY,
@@ -928,24 +1509,29 @@ int SG_WeaponStaticAffordanceResolve(
 			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_PROFILE, NULL);
 		return 0;
 	}
-	if (!SourcesBound(sources, query, profile))
+	if (profile->build_identity != context->model->identity.producer_identity ||
+		profile->physics_abi_id != context->model->identity.physics_abi_id)
 	{
 		SetError(error_out,
 			SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH, NULL);
 		return 0;
 	}
-	if (!SG_StaticVisibilityQueryPoints(authority, scene, configuration,
-			semantics, visibility, query->source_origin.value,
+	if (!LocatePose(context, &query->source_cell, &query->source_phase,
+			query->source_origin.value, &source_partition, &pose_face_tests) ||
+		!LocatePose(context, &query->target_cell, &query->target_phase,
+			query->target_origin.value, &target_partition, &pose_face_tests))
+	{
+		SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE,
+			NULL);
+		return 0;
+	}
+	if (!SG_StaticVisibilityQueryBoundPoints(context->authority, scene,
+			context->configuration, context->semantics, context->visibility,
+			source_partition, target_partition, query->source_origin.value,
 			query->target_origin.value, &point_visibility, &visibility_error))
 	{
 		SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_VISIBILITY,
 			&visibility_error);
-		return 0;
-	}
-	if (!QueryPosesBound(sources, query, &point_visibility))
-	{
-		SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE,
-			NULL);
 		return 0;
 	}
 
@@ -966,7 +1552,8 @@ int SG_WeaponStaticAffordanceResolve(
 		{
 			SetRelation(&affordance.relations[1], status,
 				SG_WEAPON_STATIC_REASON_VISIBILITY, &point_visibility);
-			if (!RefineProjectileClearance(authority, scene, query, profile,
+			if (!RefineProjectileClearance(context->authority, scene, query,
+					profile,
 					&affordance.relations[1]))
 			{
 				SetError(error_out,
@@ -975,8 +1562,25 @@ int SG_WeaponStaticAffordanceResolve(
 			}
 		}
 	}
-	if (!ResolveSurfaceRelations(authority, scene, configuration, semantics,
-			visibility, query, profile, &affordance, error_out))
+	affordance.pose_partition_faces_tested = pose_face_tests;
+	target_binding = FindCellBinding(context, &query->target_cell);
+	if ((query->requested_relations & affordance.allowed_relations &
+			SG_WEAPON_STATIC_SECONDARY_BLAST_REACH) != 0U)
+	{
+		if (!OwnerDamageVisibility(context, scene, query, target_binding,
+				source_partition, &owner_status, &owner_visibility,
+				&affordance.pose_partition_faces_tested))
+		{
+			SetError(error_out,
+				SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE, NULL);
+			return 0;
+		}
+	}
+	else
+		memset(&owner_visibility, 0, sizeof(owner_visibility));
+	if (!ResolveSurfaceRelations(context, scene, query, profile,
+			source_partition, target_binding, owner_status, &owner_visibility,
+			&affordance, error_out))
 		return 0;
 	FinalizeMasks(&affordance);
 	*affordance_out = affordance;

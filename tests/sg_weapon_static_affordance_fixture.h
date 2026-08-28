@@ -45,6 +45,8 @@ void *__wrap_realloc(void *pointer, size_t size)
 static int failures;
 static const sg_host_collision_scene_t empty_scene;
 
+#define SG_WEAPON_FIXTURE_EXTRA_MODELS UINT32_C(64)
+
 #define CHECK(expression) do { \
 	if (!(expression)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", \
@@ -56,13 +58,13 @@ static const sg_host_collision_scene_t empty_scene;
 typedef struct fixture_s
 {
 	sg_bsp_world_t world;
-	sg_bsp_plane_t planes[8];
+	sg_bsp_plane_t planes[8U + 6U * SG_WEAPON_FIXTURE_EXTRA_MODELS];
 	sg_bsp_node_t nodes[3];
-	sg_bsp_leaf_t leaves[5];
-	uint32_t leaf_brushes[2];
-	sg_bsp_model_t models[2];
-	sg_bsp_brush_t brushes[2];
-	sg_bsp_brush_side_t sides[12];
+	sg_bsp_leaf_t leaves[5U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
+	uint32_t leaf_brushes[2U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
+	sg_bsp_model_t models[2U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
+	sg_bsp_brush_t brushes[2U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
+	sg_bsp_brush_side_t sides[12U + 6U * SG_WEAPON_FIXTURE_EXTRA_MODELS];
 	sg_bsp_texinfo_t texinfos[2];
 	uint32_t visibility_offsets[9][SG_BSP_VISIBILITY_SET_COUNT];
 	uint8_t visibility_bytes[79];
@@ -79,10 +81,12 @@ typedef struct built_fixture_s
 	sg_configuration_semantics_t *semantics;
 	sg_static_visibility_t *visibility;
 	sg_rune_model_t model;
+	sg_rune_plane_t *model_planes;
 	sg_rune_cell_t *model_cells;
 	sg_rune_phase_basis_t *model_phases;
+	sg_rune_validation_evidence_t model_evidence;
 	sg_weapon_static_binding_t binding;
-	sg_weapon_static_source_audit_t source_audit;
+	sg_weapon_static_context_t *context;
 } built_fixture_t;
 
 static void Set3(float value[3], float x, float y, float z)
@@ -133,32 +137,61 @@ static int FixtureCellCompare(const void *left_pointer,
 	return 0;
 }
 
-static int BuildFixtureModelAndAudit(built_fixture_t *built)
+static void SetModelPlane(sg_rune_plane_t *plane, uint64_t source_set,
+	uint32_t ordinal, float x, float y, float z, float distance)
 {
-	uint32_t index;
+	sg_rune_order_key_t order = {
+		.source_set_identity = source_set,
+		.domain = SG_RUNE_ORDER_PLANE,
+		.source_index = ordinal,
+		.local_ordinal = 0U,
+		.variant = 0U
+	};
 
+	memset(plane, 0, sizeof(*plane));
+	plane->order = order;
+	plane->id.value = SG_RuneModelStableIdFromOrderKey(&order);
+	Set3(plane->normal.value, x, y, z);
+	plane->distance = distance;
+}
+
+static int BuildFixtureModelAndContext(built_fixture_t *built)
+{
+	sg_weapon_static_prepare_input_t prepare;
+	sg_weapon_static_prepare_error_t prepare_error;
+	sg_rune_failure_reason_t reason;
+	uint32_t index, model_count = 0U;
+
+	built->model_planes = calloc((size_t)built->configuration->cell_count * 6U,
+		sizeof(*built->model_planes));
 	built->model_cells = calloc(built->configuration->cell_count,
 		sizeof(*built->model_cells));
 	built->model_phases = calloc(built->configuration->cell_count,
 		sizeof(*built->model_phases));
-	if (!built->model_cells || !built->model_phases)
+	if (!built->model_planes || !built->model_cells || !built->model_phases)
 	{
 		fprintf(stderr, "model allocation failed\n");
 		return 0;
 	}
 	for (index = 0U; index < built->configuration->cell_count; index++)
 	{
-		sg_rune_cell_t *cell = &built->model_cells[index];
-		sg_rune_phase_basis_t *phase = &built->model_phases[index];
+		sg_rune_cell_t *cell;
+		sg_rune_phase_basis_t *phase;
 		sg_rune_order_key_t phase_order = {
 			.source_set_identity =
 				built->fixture.identity.source_set_identity,
 			.domain = SG_RUNE_ORDER_PHASE,
-			.source_index = index,
-			.local_ordinal = index,
+			.source_index = model_count,
+			.local_ordinal = model_count,
 			.variant = 0U
 		};
 
+		if (built->configuration->cells[index].bsp_cluster.index == UINT32_MAX ||
+			(built->configuration->cells[index].contents &
+				SG_RUNE_CONTENTS_SOLID) != 0U)
+			continue;
+		cell = &built->model_cells[model_count];
+		phase = &built->model_phases[model_count];
 		cell->id = built->configuration->cells[index].id;
 		if (!SG_RuneModelStableIdToOrderKey(&cell->id.value, &cell->order))
 		{
@@ -166,8 +199,36 @@ static int BuildFixtureModelAndAudit(built_fixture_t *built)
 			return 0;
 		}
 		cell->bounds = built->configuration->cells[index].bounds;
-		cell->phases.first = index;
+		cell->geometry.source_set_identity =
+			built->fixture.identity.source_set_identity;
+		cell->geometry.source_index = index;
+		cell->geometry.source_ordinal = 0U;
+		cell->boundary_planes.first = model_count * 6U;
+		cell->boundary_planes.count = 6U;
+		cell->phases.first = model_count;
 		cell->phases.count = 1U;
+		cell->bsp_leaf = built->configuration->cells[index].bsp_leaf;
+		cell->bsp_area = built->configuration->cells[index].bsp_area;
+		cell->bsp_cluster = built->configuration->cells[index].bsp_cluster;
+		cell->contents = built->configuration->cells[index].contents;
+		SetModelPlane(&built->model_planes[model_count * 6U + 0U],
+			built->fixture.identity.source_set_identity, model_count * 6U + 0U,
+			1.0f, 0.0f, 0.0f, cell->bounds.maxs.value[0]);
+		SetModelPlane(&built->model_planes[model_count * 6U + 1U],
+			built->fixture.identity.source_set_identity, model_count * 6U + 1U,
+			-1.0f, 0.0f, 0.0f, -cell->bounds.mins.value[0]);
+		SetModelPlane(&built->model_planes[model_count * 6U + 2U],
+			built->fixture.identity.source_set_identity, model_count * 6U + 2U,
+			0.0f, 1.0f, 0.0f, cell->bounds.maxs.value[1]);
+		SetModelPlane(&built->model_planes[model_count * 6U + 3U],
+			built->fixture.identity.source_set_identity, model_count * 6U + 3U,
+			0.0f, -1.0f, 0.0f, -cell->bounds.mins.value[1]);
+		SetModelPlane(&built->model_planes[model_count * 6U + 4U],
+			built->fixture.identity.source_set_identity, model_count * 6U + 4U,
+			0.0f, 0.0f, 1.0f, cell->bounds.maxs.value[2]);
+		SetModelPlane(&built->model_planes[model_count * 6U + 5U],
+			built->fixture.identity.source_set_identity, model_count * 6U + 5U,
+			0.0f, 0.0f, -1.0f, -cell->bounds.mins.value[2]);
 		phase->order = phase_order;
 		phase->id.value = SG_RuneModelStableIdFromOrderKey(&phase_order);
 		phase->stance = SG_RUNE_STANCE_STANDING;
@@ -184,8 +245,9 @@ static int BuildFixtureModelAndAudit(built_fixture_t *built)
 			fprintf(stderr, "phase invalid %u\n", index);
 			return 0;
 		}
+		model_count++;
 	}
-	qsort(built->model_cells, built->configuration->cell_count,
+	qsort(built->model_cells, model_count,
 		sizeof(*built->model_cells), FixtureCellCompare);
 	built->model.version = SG_RUNE_MODEL_VERSION;
 	built->model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
@@ -196,37 +258,56 @@ static int BuildFixtureModelAndAudit(built_fixture_t *built)
 	built->model.completeness.reason = SG_RUNE_FAILURE_NONE;
 	built->model.completeness.failure_record = UINT32_MAX;
 	built->model.completeness.expected_cells =
-		built->configuration->cell_count;
+		model_count;
 	built->model.completeness.covered_cells =
-		built->configuration->cell_count;
+		model_count;
+	built->model.completeness.expected_portals = 0U;
+	built->model.completeness.covered_portals = 0U;
+	built->model.planes = built->model_planes;
+	built->model.plane_count = model_count * 6U;
 	built->model.cells = built->model_cells;
-	built->model.cell_count = built->configuration->cell_count;
+	built->model.cell_count = model_count;
 	built->model.phases = built->model_phases;
-	built->model.phase_count = built->configuration->cell_count;
+	built->model.phase_count = model_count;
 	FixtureFillContentIdentity(&built->binding.artifact_identity, 1U);
 	FixtureFillContentIdentity(&built->binding.bsp_identity, 33U);
 	FixtureFillContentIdentity(&built->binding.schema_identity, 65U);
 	built->binding.source_set_identity =
 		built->fixture.identity.source_set_identity;
 	built->binding.visibility_revision = 9U;
-	built->source_audit.binding = built->binding;
-	if (!SG_StaticVisibilityAudit(&built->fixture.authority,
-			built->configuration, built->semantics, built->visibility,
-			&built->source_audit.visibility))
+	built->model_evidence.version = SG_RUNE_VALIDATION_EVIDENCE_VERSION;
+	built->model_evidence.verifier_identity = UINT64_C(0x5645524946494552);
+	built->model_evidence.bsp_content_id = built->model.identity.bsp_content_id;
+	built->model_evidence.source_set_identity =
+		built->model.identity.source_set_identity;
+	built->model_evidence.fixed_point_identity =
+		UINT64_C(0x4649584544504f49);
+	built->model_evidence.fixed_point_rounds = 3U;
+	built->model_evidence.proved_cells = built->model.cell_count;
+	built->model_evidence.proved_portals = built->model.portal_count;
+	reason = SG_RuneModelValidate(&built->model, &built->model_evidence);
+	if (reason != SG_RUNE_FAILURE_NONE)
 	{
-		fprintf(stderr, "visibility audit failed %u/%u\n",
-			(unsigned int)built->source_audit.visibility.code,
-			built->source_audit.visibility.record);
+		fprintf(stderr, "model validation failed: %s\n",
+			SG_RuneModelFailureReasonString(reason));
 		return 0;
 	}
-	built->source_audit.configuration_cells = built->configuration->cell_count;
-	built->source_audit.semantic_regions = built->semantics->region_count;
-	built->source_audit.semantic_surfaces =
-		built->semantics->hook_surface_count;
-	built->source_audit.semantic_surface_vertices =
-		built->semantics->hook_vertex_count;
-	built->source_audit.model_cells = built->model.cell_count;
-	built->source_audit.model_phases = built->model.phase_count;
+	memset(&prepare, 0, sizeof(prepare));
+	prepare.binding = built->binding;
+	prepare.authority = &built->fixture.authority;
+	prepare.configuration = built->configuration;
+	prepare.semantics = built->semantics;
+	prepare.visibility = built->visibility;
+	prepare.model = &built->model;
+	prepare.model_evidence = &built->model_evidence;
+	if (!SG_WeaponStaticContextPrepare(&prepare, &built->context,
+			&prepare_error))
+	{
+		fprintf(stderr, "context prepare failed: %u record=%u model=%u\n",
+			(unsigned int)prepare_error.code, prepare_error.record,
+			(unsigned int)prepare_error.model);
+		return 0;
+	}
 	return 1;
 }
 
@@ -359,6 +440,61 @@ static fixture_t Fixture(int wall, int separate_areas, int connect_areas,
 	return fixture;
 }
 
+static fixture_t ScalingFixture(uint32_t extra_models)
+{
+	fixture_t fixture = Fixture(1, 0, 0, 1, 0, 0.0f);
+	uint32_t extra;
+
+	CHECK(extra_models <= SG_WEAPON_FIXTURE_EXTRA_MODELS);
+	if (extra_models > SG_WEAPON_FIXTURE_EXTRA_MODELS)
+		extra_models = SG_WEAPON_FIXTURE_EXTRA_MODELS;
+	for (extra = 0U; extra < extra_models; extra++)
+	{
+		uint32_t plane = 7U + extra * 6U;
+		uint32_t leaf = 4U + extra;
+		uint32_t brush = 2U + extra;
+		uint32_t model = 2U + extra;
+		uint32_t side = 12U + extra * 6U;
+		float center = 2048.0f + 256.0f * (float)extra;
+		uint32_t local;
+
+		SetPlane(&fixture.planes[plane + 0U], 1.0f, 0.0f, 0.0f,
+			center + 16.0f);
+		SetPlane(&fixture.planes[plane + 1U], -1.0f, 0.0f, 0.0f,
+			-center + 16.0f);
+		SetPlane(&fixture.planes[plane + 2U], 0.0f, 1.0f, 0.0f, 16.0f);
+		SetPlane(&fixture.planes[plane + 3U], 0.0f, -1.0f, 0.0f, 16.0f);
+		SetPlane(&fixture.planes[plane + 4U], 0.0f, 0.0f, 1.0f, 16.0f);
+		SetPlane(&fixture.planes[plane + 5U], 0.0f, 0.0f, -1.0f, 16.0f);
+		fixture.leaves[leaf].contents = SG_HOST_CONTENTS_SOLID;
+		fixture.leaves[leaf].cluster = -1;
+		fixture.leaves[leaf].area = 1U;
+		fixture.leaves[leaf].first_leaf_brush = 2U + extra;
+		fixture.leaves[leaf].leaf_brush_count = 1U;
+		fixture.leaf_brushes[2U + extra] = brush;
+		fixture.brushes[brush].first_side = side;
+		fixture.brushes[brush].side_count = 6U;
+		fixture.brushes[brush].contents = SG_HOST_CONTENTS_SOLID;
+		for (local = 0U; local < 6U; local++)
+		{
+			fixture.sides[side + local].plane = plane + local;
+			fixture.sides[side + local].texinfo = 0U;
+		}
+		fixture.models[model].headnode = -1 - (int32_t)leaf;
+		Set3(fixture.models[model].mins.value, center - 16.0f,
+			-16.0f, -16.0f);
+		Set3(fixture.models[model].maxs.value, center + 16.0f,
+			16.0f, 16.0f);
+	}
+	fixture.world.plane_count = 7U + extra_models * 6U;
+	fixture.world.leaf_count = 4U + extra_models;
+	fixture.world.leaf_brush_count = 2U + extra_models;
+	fixture.world.model_count = 2U + extra_models;
+	fixture.world.brush_count = 2U + extra_models;
+	fixture.world.brush_side_count = 12U + extra_models * 6U;
+	return fixture;
+}
+
 static void Rebind(fixture_t *fixture)
 {
 	sg_host_collision_error_t error;
@@ -419,7 +555,7 @@ static int BuildPreparedFixture(built_fixture_t *built, fixture_t fixture)
 			visibility_error.source_index);
 		return 0;
 	}
-	if (!BuildFixtureModelAndAudit(built))
+	if (!BuildFixtureModelAndContext(built))
 	{
 		fprintf(stderr, "fixture model/audit build failed\n");
 		return 0;
@@ -436,8 +572,10 @@ static int BuildFixture(built_fixture_t *built, int wall, int separate_areas,
 
 static void DestroyFixture(built_fixture_t *built)
 {
+	SG_WeaponStaticContextDestroy(built->context);
 	free(built->model_phases);
 	free(built->model_cells);
+	free(built->model_planes);
 	SG_StaticVisibilityDestroy(built->visibility);
 	SG_ConfigurationSemanticsDestroy(built->semantics);
 	SG_ConfigurationDestroy(built->configuration);

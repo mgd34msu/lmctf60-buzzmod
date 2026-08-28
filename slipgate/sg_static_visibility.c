@@ -1048,6 +1048,28 @@ static int PartitionAt(const sg_configuration_semantics_t *semantics,
 	return 0;
 }
 
+int SG_StaticVisibilityPointInPartition(
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, uint32_t partition_index,
+	const float point[3], uint32_t *face_tests_out)
+{
+	const sg_static_visibility_partition_t *partition;
+	const sg_configuration_semantic_region_t *region;
+
+	if (face_tests_out)
+		*face_tests_out = 0U;
+	if (!semantics || !visibility || !point ||
+		partition_index >= visibility->partition_count)
+		return 0;
+	partition = &visibility->partitions[partition_index];
+	if (partition->configuration_region >= semantics->region_count)
+		return 0;
+	region = &semantics->regions[partition->configuration_region];
+	if (face_tests_out)
+		*face_tests_out = region->face_count;
+	return Finite3(point) && PointInRegion(semantics, region, point);
+}
+
 static int TraceBlocked(const sg_host_collision_trace_t *trace)
 {
 	return trace->startsolid || trace->allsolid || trace->fraction < 1.0f;
@@ -1161,6 +1183,54 @@ int SG_StaticVisibilityQueryPoints(
 		error_out);
 }
 
+int SG_StaticVisibilityQueryBoundPoints(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, uint32_t source_partition,
+	uint32_t destination_partition, const float source[3],
+	const float destination[3], sg_static_visibility_result_t *result_out,
+	sg_static_visibility_error_t *error_out)
+{
+	if (error_out)
+		memset(error_out, 0, sizeof(*error_out));
+	if (!scene || !source || !destination || !result_out || !visibility ||
+		source_partition >= visibility->partition_count ||
+		destination_partition >= visibility->partition_count)
+	{
+		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_INVALID_ARGUMENT,
+			SG_STATIC_VISIBILITY_INDEX_NONE);
+		return 0;
+	}
+	if (!BindingValidForQuery(authority, configuration, semantics, visibility,
+			error_out))
+		return 0;
+	if (!SG_StaticVisibilityPointInPartition(semantics, visibility,
+			source_partition, source, NULL) ||
+		!SG_StaticVisibilityPointInPartition(semantics, visibility,
+			destination_partition, destination, NULL))
+	{
+		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY,
+			SG_STATIC_VISIBILITY_INDEX_NONE);
+		return 0;
+	}
+	if (!PartitionValidForQuery(authority->world, configuration, semantics,
+			visibility, source_partition, error_out) ||
+		!PartitionValidForQuery(authority->world, configuration, semantics,
+			visibility, destination_partition, error_out))
+		return 0;
+	if (!ClassifyRegions(authority->world, visibility, source_partition,
+			destination_partition, result_out))
+		return 0;
+	if (!result_out->requires_exact_ray &&
+		(result_out->classification != SG_STATIC_VISIBILITY_VISIBLE ||
+		 scene->instance_count == 0U))
+		return 1;
+	return ExactPointRay(authority, scene, source, destination, result_out,
+		error_out);
+}
+
 static int PointOnSurface(const sg_configuration_semantics_t *semantics,
 	const sg_configuration_hook_surface_t *surface, const float point[3])
 {
@@ -1216,13 +1286,13 @@ static int TraceReachedSurface(const sg_host_collision_trace_t *trace,
 		Dot3(delta, delta) <= 0.01f;
 }
 
-int SG_StaticVisibilityQuerySurface(
+static int QuerySurfaceFromPartition(
 	const sg_host_collision_authority_t *authority,
 	const sg_host_collision_scene_t *scene,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,
-	const sg_static_visibility_t *visibility, const float source[3],
-	uint32_t surface_index, const float target[3],
+	const sg_static_visibility_t *visibility, uint32_t source_partition,
+	const float source[3], uint32_t surface_index, const float target[3],
 	sg_static_visibility_result_t *result_out,
 	sg_static_visibility_error_t *error_out)
 {
@@ -1230,26 +1300,13 @@ int SG_StaticVisibilityQuerySurface(
 	const sg_configuration_hook_surface_t *surface;
 	const sg_static_visibility_partition_t *source_record;
 	sg_host_collision_trace_t world_trace, scene_trace;
-	uint32_t source_partition, target_leaf, target_area, target_cluster;
+	uint32_t target_leaf, target_area, target_cluster;
 	int area_relation;
 
-	if (error_out)
-		memset(error_out, 0, sizeof(*error_out));
-	if (!scene || !source || !target || !result_out || !visibility ||
-		surface_index >= visibility->surface_count)
-	{
-		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_INVALID_ARGUMENT,
-			SG_STATIC_VISIBILITY_INDEX_NONE);
-		return 0;
-	}
-	if (!BindingValidForQuery(authority, configuration, semantics, visibility,
-			error_out))
-		return 0;
 	if (!SurfaceValidForQuery(semantics, visibility, surface_index, error_out))
 		return 0;
 	surface = &semantics->hook_surfaces[surface_index];
-	if (!PartitionAt(semantics, source, &source_partition) ||
-		!PointOnSurface(semantics, surface, target))
+	if (!PointOnSurface(semantics, surface, target))
 	{
 		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY,
 			surface_index);
@@ -1344,6 +1401,76 @@ int SG_StaticVisibilityQuerySurface(
 	else
 		result_out->classification = SG_STATIC_VISIBILITY_VISIBLE;
 	return 1;
+}
+
+int SG_StaticVisibilityQuerySurface(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, const float source[3],
+	uint32_t surface_index, const float target[3],
+	sg_static_visibility_result_t *result_out,
+	sg_static_visibility_error_t *error_out)
+{
+	uint32_t source_partition;
+
+	if (error_out)
+		memset(error_out, 0, sizeof(*error_out));
+	if (!scene || !source || !target || !result_out || !visibility ||
+		surface_index >= visibility->surface_count)
+	{
+		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_INVALID_ARGUMENT,
+			SG_STATIC_VISIBILITY_INDEX_NONE);
+		return 0;
+	}
+	if (!BindingValidForQuery(authority, configuration, semantics, visibility,
+			error_out))
+		return 0;
+	if (!PartitionAt(semantics, source, &source_partition))
+	{
+		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY,
+			surface_index);
+		return 0;
+	}
+	return QuerySurfaceFromPartition(authority, scene, configuration,
+		semantics, visibility, source_partition, source, surface_index, target,
+		result_out, error_out);
+}
+
+int SG_StaticVisibilityQueryBoundSurface(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	const sg_static_visibility_t *visibility, uint32_t source_partition,
+	const float source[3], uint32_t surface_index, const float target[3],
+	sg_static_visibility_result_t *result_out,
+	sg_static_visibility_error_t *error_out)
+{
+	if (error_out)
+		memset(error_out, 0, sizeof(*error_out));
+	if (!scene || !source || !target || !result_out || !visibility ||
+		source_partition >= visibility->partition_count ||
+		surface_index >= visibility->surface_count)
+	{
+		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_INVALID_ARGUMENT,
+			SG_STATIC_VISIBILITY_INDEX_NONE);
+		return 0;
+	}
+	if (!BindingValidForQuery(authority, configuration, semantics, visibility,
+			error_out))
+		return 0;
+	if (!SG_StaticVisibilityPointInPartition(semantics, visibility,
+			source_partition, source, NULL))
+	{
+		SetError(error_out, SG_STATIC_VISIBILITY_ERROR_NONFINITE_GEOMETRY,
+			surface_index);
+		return 0;
+	}
+	return QuerySurfaceFromPartition(authority, scene, configuration,
+		semantics, visibility, source_partition, source, surface_index, target,
+		result_out, error_out);
 }
 
 void SG_StaticVisibilityDestroy(sg_static_visibility_t *visibility)
