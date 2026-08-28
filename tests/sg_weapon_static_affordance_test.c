@@ -635,6 +635,8 @@ static void TestPreparedBoundaryRejectsUnvalidatedSources(void)
 	sg_rune_cell_t *invalid_cells;
 	sg_configuration_semantics_t hostile_semantics;
 	sg_static_visibility_t hostile_visibility;
+	sg_configuration_space_t invalid_configuration;
+	sg_configuration_cell_t *invalid_configuration_cells;
 
 	CHECK(BuildFixture(&built, 1, 0, 0, 1, 0, 0.0f));
 	if (!built.context)
@@ -686,6 +688,173 @@ static void TestPreparedBoundaryRejectsUnvalidatedSources(void)
 	CHECK(context == NULL);
 	CHECK(error.code == SG_WEAPON_STATIC_PREPARE_ERROR_SEMANTICS_AUDIT ||
 		error.code == SG_WEAPON_STATIC_PREPARE_ERROR_VISIBILITY_AUDIT);
+	input.semantics = built.semantics;
+	input.visibility = built.visibility;
+	invalid_configuration = *built.configuration;
+	invalid_configuration_cells = malloc(
+		(size_t)invalid_configuration.cell_count *
+			sizeof(*invalid_configuration_cells));
+	CHECK(invalid_configuration_cells != NULL);
+	if (invalid_configuration_cells && invalid_configuration.cell_count > 1U)
+	{
+		memcpy(invalid_configuration_cells, invalid_configuration.cells,
+			(size_t)invalid_configuration.cell_count *
+				sizeof(*invalid_configuration_cells));
+		invalid_configuration.cells = invalid_configuration_cells;
+		invalid_configuration_cells[1].id =
+			invalid_configuration_cells[0].id;
+		input.configuration = &invalid_configuration;
+		CHECK(!SG_WeaponStaticContextPrepare(&input, &context, &error));
+		CHECK(context == NULL);
+		CHECK(error.code ==
+			SG_WEAPON_STATIC_PREPARE_ERROR_CONFIGURATION_AUDIT ||
+			error.code == SG_WEAPON_STATIC_PREPARE_ERROR_SEMANTICS_AUDIT ||
+			error.code == SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+		memcpy(invalid_configuration_cells, built.configuration->cells,
+			(size_t)invalid_configuration.cell_count *
+				sizeof(*invalid_configuration_cells));
+		{
+			sg_configuration_cell_t swap = invalid_configuration_cells[0];
+
+			invalid_configuration_cells[0] = invalid_configuration_cells[1];
+			invalid_configuration_cells[1] = swap;
+		}
+		CHECK(!SG_WeaponStaticContextPrepare(&input, &context, &error));
+		CHECK(context == NULL);
+		CHECK(error.code ==
+			SG_WEAPON_STATIC_PREPARE_ERROR_CONFIGURATION_AUDIT ||
+			error.code == SG_WEAPON_STATIC_PREPARE_ERROR_SEMANTICS_AUDIT ||
+			error.code == SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+	}
+	free(invalid_configuration_cells);
+	input.configuration = built.configuration;
+	invalid_model = built.model;
+	if (invalid_model.cell_count > 1U)
+	{
+		sg_rune_validation_evidence_t subset_evidence = built.model_evidence;
+
+		SG_WeaponStaticContextDestroy(built.context);
+		built.context = NULL;
+		invalid_model.cell_count--;
+		invalid_model.completeness.expected_cells = invalid_model.cell_count;
+		invalid_model.completeness.covered_cells = invalid_model.cell_count;
+		subset_evidence.proved_cells = invalid_model.cell_count;
+		CHECK(SG_RuneModelValidate(&invalid_model, &subset_evidence) ==
+			SG_RUNE_FAILURE_NONE);
+		input.model = &invalid_model;
+		input.model_evidence = &subset_evidence;
+		CHECK(!SG_WeaponStaticContextPrepare(&input, &context, &error));
+		CHECK(context == NULL);
+		CHECK(error.code ==
+			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+	}
+	DestroyFixture(&built);
+}
+
+static uint32_t CeilLog2(uint32_t value)
+{
+	uint32_t result = 0U;
+	uint32_t power = 1U;
+
+	while (power < value)
+	{
+		power *= 2U;
+		result++;
+	}
+	return result;
+}
+
+static void TestNoPvsAndSolidCellCoverage(void)
+{
+	built_fixture_t built;
+	uint32_t configuration_cell, no_cluster = 0U, solid = 0U;
+
+	CHECK(BuildFixture(&built, 1, 0, 0, 1, 0, 0.0f));
+	if (!built.context)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	CHECK(built.model.cell_count == built.configuration->cell_count);
+	for (configuration_cell = 0U;
+		configuration_cell < built.configuration->cell_count;
+		configuration_cell++)
+	{
+		const sg_configuration_cell_t *configuration =
+			&built.configuration->cells[configuration_cell];
+		uint32_t model_cell;
+
+		if (configuration->bsp_cluster.index == UINT32_MAX)
+			no_cluster++;
+		if ((configuration->contents & SG_RUNE_CONTENTS_SOLID) != 0U)
+			solid++;
+		for (model_cell = 0U; model_cell < built.model.cell_count;
+			model_cell++)
+			if (SG_RuneModelStableIdEqual(&configuration->id.value,
+				&built.model.cells[model_cell].id.value))
+				break;
+		CHECK(model_cell < built.model.cell_count);
+		if (model_cell < built.model.cell_count)
+		{
+			CHECK(built.model.cells[model_cell].bsp_cluster.index ==
+				configuration->bsp_cluster.index);
+			CHECK(built.model.cells[model_cell].contents ==
+				configuration->contents);
+		}
+	}
+	CHECK(no_cluster > 0U);
+	CHECK(solid > 0U);
+	DestroyFixture(&built);
+}
+
+static void TestCellBindingScalingAndFullCoverage(void)
+{
+	built_fixture_t built;
+	uint32_t small_configuration_cells, small_model_cells;
+	uint64_t small_comparisons, large_comparisons, large_bound;
+	uint64_t rejected_linear_scan_comparisons;
+	uint32_t large_configuration_cells, large_model_cells, logarithm;
+
+	CHECK(BuildPreparedFixture(&built, CellScalingFixture(4U)));
+	if (!built.context)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	small_configuration_cells = built.configuration->cell_count;
+	small_model_cells = built.model.cell_count;
+	small_comparisons =
+		SG_WeaponStaticContextBindingComparisons(built.context);
+	CHECK(small_comparisons > 0U);
+	DestroyFixture(&built);
+
+	CHECK(BuildPreparedFixture(&built,
+		CellScalingFixture(SG_WEAPON_FIXTURE_CELL_SPLITS)));
+	if (!built.context)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	large_configuration_cells = built.configuration->cell_count;
+	large_model_cells = built.model.cell_count;
+	large_comparisons =
+		SG_WeaponStaticContextBindingComparisons(built.context);
+	CHECK(large_configuration_cells > small_configuration_cells * 4U);
+	CHECK(large_model_cells > small_model_cells * 4U);
+	CHECK(large_comparisons > small_comparisons);
+	logarithm = CeilLog2(large_configuration_cells);
+	large_bound = (uint64_t)large_configuration_cells *
+		(4U * logarithm + 4U);
+	/* The rejected nested scan visits 1 + ... + n entries when both audited
+	 * sources have their canonical stable-ID order. */
+	rejected_linear_scan_comparisons =
+		(uint64_t)large_configuration_cells *
+		(large_configuration_cells + 1U) / 2U;
+	CHECK(rejected_linear_scan_comparisons > large_bound);
+	CHECK(large_comparisons <= large_bound);
+	CHECK(large_comparisons * small_configuration_cells *
+		small_configuration_cells < small_comparisons *
+		large_configuration_cells * large_configuration_cells);
 	DestroyFixture(&built);
 }
 
@@ -1078,6 +1247,8 @@ int main(void)
 	TestAlternateVisibleSurfaceCandidate();
 	TestBfgOwnerVisibilityAndProjectileOrigin();
 	TestPreparedBoundaryRejectsUnvalidatedSources();
+	TestNoPvsAndSolidCellCoverage();
+	TestCellBindingScalingAndFullCoverage();
 	TestIndexedScaling();
 	TestIdentityDriftHostileInputsAndImmutability();
 	TestErrorStrings();

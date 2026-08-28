@@ -127,6 +127,11 @@ int SG_WeaponStaticContextPrepare(
 	sg_weapon_static_prepare_error_t *error_out);
 void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context);
 
+/* Preparation work evidence. This counts stable-ID comparisons used to build
+ * the accepted configuration/model binding; resolver queries do not change it. */
+uint64_t SG_WeaponStaticContextBindingComparisons(
+	const sg_weapon_static_context_t *context);
+
 int SG_WeaponStaticAffordanceResolve(
 	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,

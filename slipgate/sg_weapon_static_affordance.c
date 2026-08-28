@@ -22,6 +22,12 @@ typedef struct sg_weapon_static_surface_ref_s
 	sg_rune_bounds_t bounds;
 } sg_weapon_static_surface_ref_t;
 
+typedef struct sg_weapon_static_configuration_ref_s
+{
+	sg_rune_stable_id_t id;
+	uint32_t configuration_cell;
+} sg_weapon_static_configuration_ref_t;
+
 typedef struct sg_weapon_static_bvh_node_s
 {
 	sg_rune_bounds_t bounds;
@@ -46,6 +52,7 @@ struct sg_weapon_static_context_s
 	sg_weapon_static_bvh_node_t *bvh_nodes;
 	uint32_t bvh_node_count;
 	uint32_t bvh_root;
+	uint64_t binding_comparisons;
 };
 
 static const sg_weapon_static_relation_t relation_order[] = {
@@ -142,6 +149,103 @@ static int StableIdCompare(const sg_rune_stable_id_t *left,
 	if (left->low != right->low)
 		return left->low < right->low ? -1 : 1;
 	return 0;
+}
+
+static int ConfigurationRefLess(
+	const sg_weapon_static_configuration_ref_t *left,
+	const sg_weapon_static_configuration_ref_t *right,
+	uint64_t *comparisons)
+{
+	int comparison;
+
+	(*comparisons)++;
+	comparison = StableIdCompare(&left->id, &right->id);
+	if (comparison != 0)
+		return comparison < 0;
+	return left->configuration_cell < right->configuration_cell;
+}
+
+static void ConfigurationRefSift(
+	sg_weapon_static_configuration_ref_t *items, uint32_t count,
+	uint32_t root, uint64_t *comparisons)
+{
+	for (;;)
+	{
+		uint32_t child = root * 2U + 1U;
+		uint32_t selected = root;
+		sg_weapon_static_configuration_ref_t swap;
+
+		if (child < count && ConfigurationRefLess(&items[selected],
+			&items[child], comparisons))
+			selected = child;
+		if (child + 1U < count && ConfigurationRefLess(&items[selected],
+			&items[child + 1U], comparisons))
+			selected = child + 1U;
+		if (selected == root)
+			return;
+		swap = items[root];
+		items[root] = items[selected];
+		items[selected] = swap;
+		root = selected;
+	}
+}
+
+static void ConfigurationRefSort(
+	sg_weapon_static_configuration_ref_t *items, uint32_t count,
+	uint64_t *comparisons)
+{
+	uint32_t index;
+
+	for (index = count / 2U; index > 0U; index--)
+		ConfigurationRefSift(items, count, index - 1U, comparisons);
+	for (index = count; index > 1U; index--)
+	{
+		sg_weapon_static_configuration_ref_t swap = items[0];
+
+		items[0] = items[index - 1U];
+		items[index - 1U] = swap;
+		ConfigurationRefSift(items, index - 1U, 0U, comparisons);
+	}
+}
+
+static int FindConfigurationRef(
+	const sg_weapon_static_configuration_ref_t *items, uint32_t count,
+	const sg_rune_stable_id_t *id, uint64_t *comparisons,
+	uint32_t *configuration_cell_out)
+{
+	uint32_t low = 0U, high = count;
+
+	while (low < high)
+	{
+		uint32_t middle = low + (high - low) / 2U;
+		int comparison;
+
+		(*comparisons)++;
+		comparison = StableIdCompare(&items[middle].id, id);
+		if (comparison < 0)
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	if (low >= count)
+		return 0;
+	(*comparisons)++;
+	if (StableIdCompare(&items[low].id, id) != 0)
+		return 0;
+	*configuration_cell_out = items[low].configuration_cell;
+	return 1;
+}
+
+static int ConfigurationModelCellEqual(
+	const sg_configuration_cell_t *configuration,
+	const sg_rune_cell_t *model)
+{
+	return configuration->bsp_leaf.index == model->bsp_leaf.index &&
+		configuration->bsp_area.index == model->bsp_area.index &&
+		configuration->bsp_cluster.index == model->bsp_cluster.index &&
+		configuration->contents == model->contents &&
+		memcmp(&configuration->bounds, &model->bounds,
+			sizeof(configuration->bounds)) == 0;
 }
 
 static int FindModelPhase(const sg_rune_model_t *model,
@@ -294,6 +398,12 @@ void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context)
 	free(context);
 }
 
+uint64_t SG_WeaponStaticContextBindingComparisons(
+	const sg_weapon_static_context_t *context)
+{
+	return context ? context->binding_comparisons : 0U;
+}
+
 int SG_WeaponStaticContextPrepare(
 	const sg_weapon_static_prepare_input_t *input,
 	sg_weapon_static_context_t **context_out,
@@ -304,6 +414,7 @@ int SG_WeaponStaticContextPrepare(
 	sg_static_visibility_audit_result_t visibility_audit;
 	sg_rune_failure_reason_t model_reason;
 	sg_weapon_static_context_t *context = NULL;
+	sg_weapon_static_configuration_ref_t *configuration_refs = NULL;
 	uint32_t *counts = NULL, *positions = NULL, *binding_by_configuration = NULL;
 	uint32_t index, total = 0U;
 
@@ -401,32 +512,68 @@ int SG_WeaponStaticContextPrepare(
 	context->cells = calloc(context->cell_count, sizeof(*context->cells));
 	context->partition_indices = calloc(context->partition_count,
 		sizeof(*context->partition_indices));
+	configuration_refs = calloc(input->configuration->cell_count,
+		sizeof(*configuration_refs));
 	counts = calloc(input->configuration->cell_count, sizeof(*counts));
 	positions = calloc(input->configuration->cell_count, sizeof(*positions));
 	binding_by_configuration = calloc(input->configuration->cell_count,
 		sizeof(*binding_by_configuration));
-	if (!context->cells || !context->partition_indices || !counts ||
-		!positions || !binding_by_configuration)
+	if (!context->cells || !context->partition_indices ||
+		!configuration_refs || !counts || !positions ||
+		!binding_by_configuration)
 		goto out_of_memory;
 	for (index = 0U; index < input->configuration->cell_count; index++)
+	{
 		binding_by_configuration[index] = UINT32_MAX;
+		configuration_refs[index].id =
+			input->configuration->cells[index].id.value;
+		configuration_refs[index].configuration_cell = index;
+	}
+	ConfigurationRefSort(configuration_refs, input->configuration->cell_count,
+		&context->binding_comparisons);
+	for (index = 1U; index < input->configuration->cell_count; index++)
+	{
+		context->binding_comparisons++;
+		if (StableIdCompare(&configuration_refs[index - 1U].id,
+			&configuration_refs[index].id) == 0)
+		{
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
+		}
+	}
+	for (index = 0U; index < context->partition_count; index++)
+	{
+		uint32_t cell = input->visibility->partitions[index].configuration_cell;
+
+		if (cell >= input->configuration->cell_count || counts[cell] == UINT32_MAX)
+		{
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
+		}
+		counts[cell]++;
+	}
+	if (input->configuration->cell_count != context->cell_count)
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+		goto failure;
+	}
 	for (index = 0U; index < context->cell_count; index++)
 	{
 		uint32_t configuration_cell;
 
 		context->cells[index].id = input->model->cells[index].id.value;
 		context->cells[index].model_cell = index;
-		for (configuration_cell = 0U;
-			configuration_cell < input->configuration->cell_count;
-			configuration_cell++)
-			if (SG_RuneModelStableIdEqual(
-					&input->configuration->cells[configuration_cell].id.value,
-					&context->cells[index].id))
-				break;
-		if (configuration_cell >= input->configuration->cell_count ||
-			!SG_RuneModelStableIdEqual(
-				&input->configuration->cells[configuration_cell].id.value,
-				&context->cells[index].id))
+		if (!FindConfigurationRef(configuration_refs,
+			input->configuration->cell_count, &context->cells[index].id,
+			&context->binding_comparisons, &configuration_cell) ||
+			counts[configuration_cell] == 0U ||
+			binding_by_configuration[configuration_cell] != UINT32_MAX ||
+			!ConfigurationModelCellEqual(
+				&input->configuration->cells[configuration_cell],
+				&input->model->cells[index]))
 		{
 			SetPrepareError(error_out,
 				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
@@ -435,25 +582,19 @@ int SG_WeaponStaticContextPrepare(
 		context->cells[index].configuration_cell = configuration_cell;
 		binding_by_configuration[configuration_cell] = index;
 	}
-	for (index = 0U; index < context->partition_count; index++)
+	for (index = 0U; index < input->configuration->cell_count; index++)
 	{
-		uint32_t cell = input->visibility->partitions[index].configuration_cell;
-
-		if (cell >= input->configuration->cell_count)
+		if (counts[index] == 0U)
 		{
 			SetPrepareError(error_out,
 				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
 			goto failure;
 		}
-		if (binding_by_configuration[cell] != UINT32_MAX)
+		if (binding_by_configuration[index] == UINT32_MAX)
 		{
-			if (counts[cell] == UINT32_MAX)
-			{
-				SetPrepareError(error_out,
-					SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
-				goto failure;
-			}
-			counts[cell]++;
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
 		}
 	}
 	for (index = 0U; index < input->configuration->cell_count; index++)
@@ -477,8 +618,13 @@ int SG_WeaponStaticContextPrepare(
 	{
 		uint32_t cell = input->visibility->partitions[index].configuration_cell;
 
-		if (binding_by_configuration[cell] != UINT32_MAX)
-			context->partition_indices[positions[cell]++] = index;
+		context->partition_indices[positions[cell]++] = index;
+	}
+	if (total != input->visibility->partition_count)
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+		goto failure;
 	}
 	context->partition_count = total;
 	if (input->visibility->surface_count != 0U)
@@ -505,6 +651,7 @@ int SG_WeaponStaticContextPrepare(
 	free(binding_by_configuration);
 	free(positions);
 	free(counts);
+	free(configuration_refs);
 	*context_out = context;
 	return 1;
 
@@ -514,6 +661,7 @@ failure:
 	free(binding_by_configuration);
 	free(positions);
 	free(counts);
+	free(configuration_refs);
 	SG_WeaponStaticContextDestroy(context);
 	return 0;
 }

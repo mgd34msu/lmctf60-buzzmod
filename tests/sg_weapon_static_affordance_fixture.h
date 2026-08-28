@@ -46,6 +46,7 @@ static int failures;
 static const sg_host_collision_scene_t empty_scene;
 
 #define SG_WEAPON_FIXTURE_EXTRA_MODELS UINT32_C(64)
+#define SG_WEAPON_FIXTURE_CELL_SPLITS UINT32_C(128)
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -59,8 +60,9 @@ typedef struct fixture_s
 {
 	sg_bsp_world_t world;
 	sg_bsp_plane_t planes[8U + 6U * SG_WEAPON_FIXTURE_EXTRA_MODELS];
-	sg_bsp_node_t nodes[3];
-	sg_bsp_leaf_t leaves[5U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
+	sg_bsp_node_t nodes[SG_WEAPON_FIXTURE_CELL_SPLITS];
+	sg_bsp_leaf_t leaves[5U + SG_WEAPON_FIXTURE_EXTRA_MODELS +
+		SG_WEAPON_FIXTURE_CELL_SPLITS];
 	uint32_t leaf_brushes[2U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
 	sg_bsp_model_t models[2U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
 	sg_bsp_brush_t brushes[2U + SG_WEAPON_FIXTURE_EXTRA_MODELS];
@@ -186,10 +188,6 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 			.variant = 0U
 		};
 
-		if (built->configuration->cells[index].bsp_cluster.index == UINT32_MAX ||
-			(built->configuration->cells[index].contents &
-				SG_RUNE_CONTENTS_SOLID) != 0U)
-			continue;
 		cell = &built->model_cells[model_count];
 		phase = &built->model_phases[model_count];
 		cell->id = built->configuration->cells[index].id;
@@ -492,6 +490,56 @@ static fixture_t ScalingFixture(uint32_t extra_models)
 	fixture.world.model_count = 2U + extra_models;
 	fixture.world.brush_count = 2U + extra_models;
 	fixture.world.brush_side_count = 12U + extra_models * 6U;
+	return fixture;
+}
+
+static fixture_t CellScalingFixture(uint32_t split_count)
+{
+	fixture_t fixture = Fixture(0, 0, 0, 1, 0, 0.0f);
+	uint32_t split;
+
+	CHECK(split_count > 0U && split_count <= SG_WEAPON_FIXTURE_CELL_SPLITS);
+	if (split_count == 0U)
+		split_count = 1U;
+	if (split_count > SG_WEAPON_FIXTURE_CELL_SPLITS)
+		split_count = SG_WEAPON_FIXTURE_CELL_SPLITS;
+	memset(fixture.nodes, 0, sizeof(fixture.nodes));
+	memset(fixture.leaves, 0, sizeof(fixture.leaves));
+	for (split = 0U; split < split_count; split++)
+	{
+		float distance = 2048.0f - 64.0f * (float)(split + 1U);
+
+		SetPlane(&fixture.planes[split], 1.0f, 0.0f, 0.0f, distance);
+		fixture.nodes[split].plane = split;
+		fixture.nodes[split].children[0] = -1 - (int32_t)split;
+		fixture.nodes[split].children[1] = split + 1U < split_count ?
+			(int32_t)(split + 1U) : -1 - (int32_t)split_count;
+		fixture.leaves[split].cluster = 0;
+		fixture.leaves[split].area = 1U;
+	}
+	fixture.leaves[split_count].cluster = 0;
+	fixture.leaves[split_count].area = 1U;
+	fixture.models[0].headnode = 0;
+	Set3(fixture.models[0].mins.value, -4096.0f, -4096.0f, -4096.0f);
+	Set3(fixture.models[0].maxs.value, 4095.875f, 4095.875f, 4095.875f);
+	WriteU32(fixture.visibility_bytes, 1U);
+	WriteU32(fixture.visibility_bytes + 4U, 12U);
+	WriteU32(fixture.visibility_bytes + 8U, 12U);
+	fixture.visibility_bytes[12] = 1U;
+	fixture.visibility_offsets[0][0] = 12U;
+	fixture.visibility_offsets[0][1] = 12U;
+	fixture.world.plane_count = split_count;
+	fixture.world.node_count = split_count;
+	fixture.world.leaf_count = split_count + 1U;
+	fixture.world.leaf_brush_count = 0U;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = 0U;
+	fixture.world.brush_side_count = 0U;
+	fixture.world.texinfo_count = 0U;
+	fixture.world.visibility.cluster_count = 1U;
+	fixture.world.visibility.byte_count = 13U;
+	fixture.world.area_count = 2U;
+	fixture.world.areaportal_count = 0U;
 	return fixture;
 }
 
