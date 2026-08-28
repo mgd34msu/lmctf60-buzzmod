@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | The static-model contract is frozen. BSP, artifact, and runtime-field foundations exist in isolated lanes but remain outside `slipgate` while correction passes close host-parity, transactional-decode, capability-domain, terminal-physics, and API-version findings. |
+| Architectural state | The static-model contract, complete BSP reader, canonical artifact codec, and directional destination-field solver are integrated on `slipgate`. Independent correction passes closed host-parity, transactional-decode, capability-domain, terminal-physics, moving-target freshness, and API-version defects. Configuration-space construction, artifact consumers/publication, and runtime field integration remain open. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` and zero `.snag` files. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Every one remains review-required. |
@@ -195,7 +195,7 @@ phase can close:
 
 ### 2. Build the BSP configuration-space foundation
 
-- [ ] Add the complete BSP reader and canonical static-world model.
+- [x] Add the complete BSP reader and canonical static-world model.
 - [ ] Construct standing/crouching player configuration cells and portals.
 - [ ] Represent supported, water, airborne, void-adjacent, and mover-relative
   space. Reconcile completeness directly against BSP/host collision.

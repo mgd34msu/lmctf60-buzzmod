@@ -3326,7 +3326,11 @@ project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
 
 rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
-		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c
+		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
+		tests/sg_bsp_world_test.c slipgate/sg_bsp_world.c \
+		tests/sg_rune_v2_codec_test.c slipgate/sg_rune_v2_codec.c \
+		tests/sg_destination_field_test.c slipgate/sg_destination_field.c \
+		tests/support/yq2_pmove.c q_shared.c
 	@set -e; \
 	tmp=$$(mktemp -d); \
 	trap 'rm -r "$$tmp"' EXIT HUP INT TERM; \
@@ -3337,7 +3341,30 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 	"$$tmp/runtime"; \
 	$(CC) $$strict -Wcast-align -I. tests/sg_rune_model_contract_test.c \
 		slipgate/sg_rune_model.c -lm -o "$$tmp/model"; \
-	"$$tmp/model"
+	"$$tmp/model"; \
+	$(CC) $$strict -Wcast-align -I. tests/sg_bsp_world_test.c \
+		slipgate/sg_bsp_world.c -lm -o "$$tmp/bsp"; \
+	"$$tmp/bsp"; \
+	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_test.c \
+		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
+		-o "$$tmp/codec"; \
+	"$$tmp/codec"; \
+	$(CC) $$strict -Wcast-align -I. -c tests/sg_destination_field_test.c \
+		-o "$$tmp/field-test.o"; \
+	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination_field.c \
+		-o "$$tmp/field.o"; \
+	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_rune_model.c \
+		-o "$$tmp/field-model.o"; \
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-Wno-strict-prototypes -DDEDICATED_ONLY -I. \
+		-c tests/support/yq2_pmove.c -o "$$tmp/field-pmove.o"; \
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-Wno-strict-prototypes -I. -c q_shared.c \
+		-o "$$tmp/field-q-shared.o"; \
+	$(CC) "$$tmp/field-test.o" "$$tmp/field.o" "$$tmp/field-model.o" \
+		"$$tmp/field-pmove.o" "$$tmp/field-q-shared.o" -lm \
+		-o "$$tmp/field"; \
+	"$$tmp/field"
 
 deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 		$(SOURCE_SIZE_BUDGET)
