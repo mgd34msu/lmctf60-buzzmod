@@ -58,6 +58,8 @@ typedef struct sg_belief_provenance_s
 	uint64_t evidence_id;
 	uint64_t evidence_sequence;
 	uint64_t authenticated_at_ms;
+	uint64_t rune_identity;
+	uint64_t topology_revision;
 } sg_belief_provenance_t;
 
 typedef struct sg_belief_evidence_support_s
@@ -151,14 +153,32 @@ typedef struct sg_belief_state_s
 	sg_belief_particle_t *particles;
 } sg_belief_state_t;
 
-/* One weighted outcome in a host-certified complete horizon kernel. An entry
- * may summarize any number of valid movements during the kernel interval. */
+typedef enum sg_belief_horizon_step_kind_e
+{
+	SG_BELIEF_HORIZON_PHASE_TRANSITION = 0,
+	SG_BELIEF_HORIZON_CAPABILITY_KERNEL,
+	SG_BELIEF_HORIZON_STEP_KIND_COUNT
+} sg_belief_horizon_step_kind_t;
+
+/* One topology witness step through an accepted immutable RUNE record. */
+typedef struct sg_belief_horizon_step_s
+{
+	sg_phase_coordinate_t from;
+	sg_phase_coordinate_t to;
+	sg_belief_horizon_step_kind_t kind;
+	uint32_t record_index;
+} sg_belief_horizon_step_t;
+
+/* One weighted outcome in a host-certified complete horizon kernel. The step
+ * span proves every summarized movement against accepted RUNE structure. */
 typedef struct sg_belief_horizon_entry_s
 {
 	sg_phase_coordinate_t from;
 	sg_phase_coordinate_t to;
 	float displacement[3];
 	float likelihood;
+	size_t first_step;
+	size_t step_count;
 } sg_belief_horizon_entry_t;
 
 typedef struct sg_belief_horizon_span_s
@@ -185,12 +205,15 @@ typedef struct sg_belief_horizon_kernel_s
 	size_t origin_span_count;
 	const sg_belief_horizon_entry_t *entries;
 	size_t entry_count;
+	const sg_belief_horizon_step_t *steps;
+	size_t step_count;
 } sg_belief_horizon_kernel_t;
 
 typedef struct sg_belief_frame_s
 {
 	uint64_t sequence;
 	uint64_t expected_revision;
+	uint64_t expected_generation;
 	uint64_t at_ms;
 	/* Kernels are borrowed and sorted by (from_time_ms, to_time_ms). If no exact
 	 * interval kernel is present, the reducer performs only same-phase
@@ -230,6 +253,7 @@ typedef struct sg_belief_reduction_s
 	size_t required_scratch_capacity;
 	size_t validated_phase_spans;
 	size_t validated_horizon_entries;
+	size_t validated_horizon_steps;
 	size_t evaluated_outcomes;
 	float confidence;
 } sg_belief_reduction_t;

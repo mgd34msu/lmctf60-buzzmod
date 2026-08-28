@@ -175,6 +175,9 @@ static void TestSightAndBorrowedLifetime(void)
 	observation.authentication.event_id = 999U;
 	CHECK(storage[0].position[0] == 0.0f);
 	CHECK(adaptation.evidence.provenance.evidence_id == 1001U);
+	CHECK(adaptation.evidence.provenance.rune_identity == fixture.snapshot.identity);
+	CHECK(adaptation.evidence.provenance.topology_revision ==
+		fixture.snapshot.topology_revision);
 
 	*hypothesis = Hypothesis(0U, 0U,
 		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 4.0f, 1.0f);
@@ -416,6 +419,7 @@ static void TestDelayedTeammateFeedsReducer(void)
 	memset(&frame, 0, sizeof(frame));
 	frame.sequence = 1U;
 	frame.expected_revision = state.revision;
+	frame.expected_generation = state.generation;
 	frame.at_ms = 200U;
 	frame.evidence = &adaptation.evidence;
 	frame.evidence_count = 1U;
@@ -746,11 +750,23 @@ static void TestAuthorityValidationAndTransactionalFinalElement(void)
 		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY);
 	observation.authentication = Authentication(
 		SG_PERCEPTION_AUTHORITY_HOST_SENSOR, 100U, 100U);
+	observation.authentication.topology_revision = 8U;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY);
+	observation.authentication = Authentication(
+		SG_PERCEPTION_AUTHORITY_HOST_SENSOR, 100U, 100U);
 	hypotheses[0] = Hypothesis(0U, 0U,
 		SG_PERCEPTION_LOCATION_RUNE_STATIC, 32.0f, 1.0f);
 	hypotheses[1] = Hypothesis(1U, 0U,
 		SG_PERCEPTION_LOCATION_RUNE_STATIC, 32.0f, 1.0f);
 	SoundPayload(&observation, hypotheses, 2U);
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	fixture.model_phases[2].motion = SG_RUNE_MOTION_AIRBORNE;
+	observation = Observation(SG_PERCEPTION_SOURCE_SOUND);
+	hypotheses[0] = Hypothesis(2U, 1U,
+		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 32.0f, 1.0f);
+	SoundPayload(&observation, hypotheses, 1U);
 	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
 		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
 }
