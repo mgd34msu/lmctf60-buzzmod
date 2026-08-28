@@ -11,8 +11,8 @@
 #define SG_STRATEGY_MAX_CONDITIONS 8U
 #define SG_STRATEGY_MAX_CHOICES 5U
 #define SG_STRATEGY_MAX_FACTS 64U
-/* A frame can emit one directive effect, one effect per goal while settling a
- * fixed point, and one plan-completed effect. */
+/* A frame can emit one directive effect, one effect per goal while settling
+ * or cancelling, and one plan-completed effect. */
 #define SG_STRATEGY_MAX_EFFECTS (SG_STRATEGY_MAX_GOALS + 2U)
 #define SG_STRATEGY_NO_INDEX UINT16_MAX
 #define SG_STRATEGY_NO_CHOICE UINT8_MAX
@@ -322,7 +322,6 @@ typedef enum sg_strategy_failure_reason_e
 	SG_STRATEGY_FAILURE_NONE = 0,
 	SG_STRATEGY_FAILURE_UNAVAILABLE,
 	SG_STRATEGY_FAILURE_OBSTRUCTED,
-	SG_STRATEGY_FAILURE_TACTICAL_BLOCK_EXPIRED,
 	SG_STRATEGY_FAILURE_CONDITION_LOST,
 	SG_STRATEGY_FAILURE_DEPENDENCY,
 	SG_STRATEGY_FAILURE_REASON_COUNT
@@ -426,13 +425,11 @@ typedef struct sg_strategy_goal_runtime_s
 	uint8_t resume_after_life;
 	uint16_t attempt_count;
 	uint16_t retry_count;
-	uint16_t suspension_count;
 	sg_strategy_goal_outcome_kind_t last_outcome;
 	sg_strategy_failure_reason_t last_failure;
 	uint64_t activated_at_ms;
 	uint64_t completed_at_ms;
 	uint64_t last_transition_at_ms;
-	uint64_t suspended_total_ms;
 	sg_strategy_retry_record_t retry;
 	sg_strategy_choice_runtime_t choices[SG_STRATEGY_MAX_CHOICES];
 } sg_strategy_goal_runtime_t;
@@ -448,16 +445,10 @@ typedef struct sg_strategy_suspend_record_s
 {
 	uint8_t active;
 	uint8_t reserved[7];
-	uint64_t suspended_at_ms;
 	uint64_t observation_revision;
 	sg_strategy_activation_t activation;
 	sg_strategy_tactical_block_reason_t reason;
 } sg_strategy_suspend_record_t;
-
-typedef struct sg_strategy_policy_s
-{
-	uint64_t tactical_suspend_limit_ms;
-} sg_strategy_policy_t;
 
 typedef enum sg_strategy_instruction_kind_e
 {
@@ -473,6 +464,15 @@ typedef enum sg_strategy_instruction_kind_e
 	SG_STRATEGY_INSTRUCTION_KIND_COUNT
 } sg_strategy_instruction_kind_t;
 
+typedef enum sg_strategy_destination_wait_reason_e
+{
+	SG_STRATEGY_DESTINATION_WAIT_NONE = 0,
+	SG_STRATEGY_DESTINATION_WAIT_UNOBSERVED,
+	SG_STRATEGY_DESTINATION_WAIT_UNREACHABLE,
+	SG_STRATEGY_DESTINATION_WAIT_STALE,
+	SG_STRATEGY_DESTINATION_WAIT_REASON_COUNT
+} sg_strategy_destination_wait_reason_t;
+
 typedef struct sg_strategy_instruction_s
 {
 	sg_strategy_instruction_kind_t kind;
@@ -485,6 +485,7 @@ typedef struct sg_strategy_instruction_s
 	sg_destination_handle_t handle;
 	uint32_t cost_ms;
 	sg_strategy_tactical_block_reason_t block_reason;
+	sg_strategy_destination_wait_reason_t destination_wait_reason;
 } sg_strategy_instruction_t;
 
 typedef enum sg_strategy_effect_kind_e
@@ -497,6 +498,7 @@ typedef enum sg_strategy_effect_kind_e
 	SG_STRATEGY_EFFECT_GOAL_RETRY_WAIT,
 	SG_STRATEGY_EFFECT_GOAL_SKIPPED,
 	SG_STRATEGY_EFFECT_GOAL_FAILED,
+	SG_STRATEGY_EFFECT_GOAL_CANCELLED,
 	SG_STRATEGY_EFFECT_TACTICAL_SUSPENDED,
 	SG_STRATEGY_EFFECT_TACTICAL_RESUMED,
 	SG_STRATEGY_EFFECT_LIFE_RETIRED,
@@ -516,7 +518,6 @@ typedef struct sg_strategy_history_effect_s
 
 typedef struct sg_strategy_state_s
 {
-	sg_strategy_policy_t policy;
 	uint64_t revision;
 	uint64_t last_frame_sequence;
 	uint64_t last_frame_at_ms;
@@ -559,8 +560,7 @@ typedef struct sg_strategy_reduction_s
 
 int SG_StrategyPlanCompile(const sg_strategy_plan_spec_t *spec,
 	sg_strategy_plan_t *out, sg_strategy_compile_error_t *error);
-int SG_StrategyStateInit(sg_strategy_state_t *state,
-	const sg_strategy_policy_t *policy);
+int SG_StrategyStateInit(sg_strategy_state_t *state);
 sg_strategy_reduce_result_t SG_StrategyReduce(sg_strategy_state_t *state,
 	const sg_strategy_frame_t *frame, sg_strategy_reduction_t *out);
 

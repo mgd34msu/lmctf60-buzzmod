@@ -122,14 +122,24 @@ static int Compile(const sg_strategy_plan_spec_t *spec,
 	return SG_StrategyPlanCompile(spec, plan, &error);
 }
 
+static int HasEffect(const sg_strategy_reduction_t *reduction,
+	sg_strategy_effect_kind_t kind)
+{
+	uint16_t index;
+
+	for (index = 0U; index < reduction->effect_count; index++)
+		if (reduction->effects[index].kind == kind)
+			return 1;
+	return 0;
+}
+
 static void Begin(sg_strategy_state_t *state, const sg_strategy_plan_t *plan,
 	const sg_strategy_destination_observation_t *observations,
 	uint16_t observation_count, sg_strategy_reduction_t *reduction)
 {
-	sg_strategy_policy_t policy = { 100U };
 	sg_strategy_frame_t frame;
 
-	CHECK(SG_StrategyStateInit(state, &policy));
+	CHECK(SG_StrategyStateInit(state));
 	frame = Frame(1U, state->revision, 100U);
 	frame.directive.kind = SG_STRATEGY_DIRECTIVE_REPLACE;
 	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_HUMAN,
@@ -268,9 +278,8 @@ static void TestCompilerFailuresAndCanonicalBytes(void)
 	CHECK(!SG_StrategyPlanCompile(&spec, &first, &error));
 }
 
-static void TestPolicyAndTieBreak(void)
+static void TestInitPriorityAndTieBreak(void)
 {
-	sg_strategy_policy_t policy = { 0U };
 	sg_strategy_state_t state;
 	sg_strategy_plan_spec_t spec;
 	sg_strategy_plan_t plan;
@@ -278,7 +287,7 @@ static void TestPolicyAndTieBreak(void)
 	sg_strategy_destination_observation_t observations[2];
 
 	memset(&state, 0xa5, sizeof(state));
-	CHECK(!SG_StrategyStateInit(&state, &policy));
+	CHECK(!SG_StrategyStateInit(NULL));
 	memset(&spec, 0, sizeof(spec));
 	spec.plan_id = 15U;
 	spec.goal_count = 1U;
@@ -294,6 +303,20 @@ static void TestPolicyAndTieBreak(void)
 		SG_STRATEGY_DESTINATION_REACHABLE, 40U, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(reduction.instruction.choice_index == 0U);
+
+	spec.plan_id = 16U;
+	spec.goal_count = 2U;
+	spec.goals[0] = DestinationGoal(1U, 20U, 200U);
+	spec.goals[0].priority = 1;
+	spec.goals[1] = DestinationGoal(2U, 21U, 201U);
+	spec.goals[1].priority = 20;
+	CHECK(Compile(&spec, &plan));
+	observations[0] = Observation(16U, 1U, 20U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 2000U);
+	observations[1] = Observation(16U, 2U, 21U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 20U, 2001U);
+	Begin(&state, &plan, observations, 2U, &reduction);
+	CHECK(state.activation.goal_id == 2U);
 }
 
 static void TestFixedPoint64AndOwnedPlan(void)
@@ -417,7 +440,6 @@ static void TestSuspensionDeathAndRespawn(void)
 	sg_strategy_destination_observation_t observation;
 	sg_strategy_frame_t frame;
 	uint64_t first_activation;
-	uint64_t suspended_at;
 
 	memset(&spec, 0, sizeof(spec));
 	spec.plan_id = 40U;
@@ -433,23 +455,34 @@ static void TestSuspensionDeathAndRespawn(void)
 	BindTactical(&frame, &state, 1U, 1U, SG_STRATEGY_BLOCK_COMBAT);
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
-	suspended_at = state.suspension.suspended_at_ms;
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_SUSPENDED);
+	CHECK(state.suspension.active == 1U);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_TACTICAL_SUSPENDED));
 
 	frame = Frame(3U, state.revision, 150U);
 	BindTactical(&frame, &state, 2U, 1U, SG_STRATEGY_BLOCK_OBSTRUCTION);
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
-	CHECK(state.suspension.suspended_at_ms == suspended_at);
+	CHECK(state.suspension.active == 1U);
+	CHECK(state.suspension.reason == SG_STRATEGY_BLOCK_OBSTRUCTION);
 
 	frame = Frame(4U, state.revision, 160U);
-	BindTactical(&frame, &state, 3U, 0U, SG_STRATEGY_BLOCK_NONE);
+	BindTactical(&frame, &state, 3U, 1U,
+		SG_STRATEGY_BLOCK_HOOK_OPPORTUNITY);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_SUSPENDED);
+	CHECK(state.suspension.reason == SG_STRATEGY_BLOCK_HOOK_OPPORTUNITY);
+
+	frame = Frame(5U, state.revision, 165U);
+	BindTactical(&frame, &state, 4U, 0U, SG_STRATEGY_BLOCK_NONE);
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_TACTICAL_RESUMED));
 
-	frame = Frame(5U, state.revision, 170U);
-	BindTactical(&frame, &state, 4U, 0U, SG_STRATEGY_BLOCK_NONE);
+	frame = Frame(6U, state.revision, 170U);
+	BindTactical(&frame, &state, 5U, 0U, SG_STRATEGY_BLOCK_NONE);
 	frame.life.present = 1U;
 	frame.life.alive = 0U;
 	frame.life.observation_revision = 2U;
@@ -459,8 +492,9 @@ static void TestSuspensionDeathAndRespawn(void)
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_LIFE);
 	CHECK(state.activation.activation_id == 0U);
 	CHECK(state.goals[0].attempt_count == 1U);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_LIFE_RETIRED));
 
-	frame = Frame(6U, state.revision, 180U);
+	frame = Frame(7U, state.revision, 180U);
 	frame.life.present = 1U;
 	frame.life.alive = 1U;
 	frame.life.observation_revision = 3U;
@@ -471,7 +505,7 @@ static void TestSuspensionDeathAndRespawn(void)
 	CHECK(state.goals[0].attempt_count == 1U);
 }
 
-static void TestSuspensionExpiry(void)
+static void TestSuspensionPersistsUntilTacticsResume(void)
 {
 	sg_strategy_plan_spec_t spec;
 	sg_strategy_plan_t plan;
@@ -487,6 +521,7 @@ static void TestSuspensionExpiry(void)
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(41U, 1U, 10U, 1U, 100U,
 		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	observation.valid_until_ms = UINT64_MAX;
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	frame = Frame(2U, state.revision, 110U);
 	BindTactical(&frame, &state, 1U, 1U, SG_STRATEGY_BLOCK_COMBAT);
@@ -496,9 +531,82 @@ static void TestSuspensionExpiry(void)
 	BindTactical(&frame, &state, 2U, 1U, SG_STRATEGY_BLOCK_COMBAT);
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
-	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_FAILED);
-	CHECK(state.goals[0].last_failure ==
-		SG_STRATEGY_FAILURE_TACTICAL_BLOCK_EXPIRED);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_SUSPENDED);
+	CHECK(state.activation.goal_id == 1U);
+
+	frame = Frame(4U, state.revision, 1000000U);
+	BindTactical(&frame, &state, 3U, 0U, SG_STRATEGY_BLOCK_NONE);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
+	CHECK(state.activation.goal_id == 1U);
+}
+
+static void TestCancelSettlesEveryOpenGoal(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 42U;
+	spec.goal_count = 2U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[1] = DestinationGoal(2U, 11U, 101U);
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(42U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	Begin(&state, &plan, &observation, 1U, &reduction);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_ACTIVE);
+	CHECK(state.goals[1].phase == SG_STRATEGY_GOAL_PENDING);
+
+	frame = Frame(2U, state.revision, 110U);
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_CANCEL;
+	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_EMERGENCY,
+		SG_STRATEGY_PRINCIPAL_EMERGENCY, 3U, 2U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_CANCELLED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_CANCELLED);
+	CHECK(state.goals[1].phase == SG_STRATEGY_GOAL_CANCELLED);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_PLAN_CANCELLED));
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_GOAL_CANCELLED));
+}
+
+static void TestCancelAtGoalCapacity(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+	uint16_t index;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 43U;
+	spec.goal_count = SG_STRATEGY_MAX_GOALS;
+	for (index = 0U; index < spec.goal_count; index++)
+		spec.goals[index] = DestinationGoal((uint32_t)index + 1U,
+			(uint32_t)index + 100U, (uint64_t)index + 1000U);
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(43U, 1U, 100U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	Begin(&state, &plan, &observation, 1U, &reduction);
+
+	frame = Frame(2U, state.revision, 110U);
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_CANCEL;
+	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_EMERGENCY,
+		SG_STRATEGY_PRINCIPAL_EMERGENCY, 3U, 2U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.effect_count == SG_STRATEGY_MAX_GOALS + 1U);
+	CHECK(reduction.effect_count <= SG_STRATEGY_MAX_EFFECTS);
+	for (index = 0U; index < spec.goal_count; index++)
+		CHECK(state.goals[index].phase == SG_STRATEGY_GOAL_CANCELLED);
 }
 
 static void TestUnavailableAlternativeRetry(void)
@@ -583,6 +691,94 @@ static void TestOutcomeAlternativeExhaustion(void)
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_FAILED);
+}
+
+static void TestRetryWakeGatesRepeatedChoice(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observations[2];
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 52U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].failure.try_alternatives = 1U;
+	spec.goals[0].failure.max_attempts_per_choice = 2U;
+	spec.goals[0].failure.retry_wake.kind = SG_STRATEGY_RETRY_NEXT_FRAME;
+	spec.goals[0].choice_count = 2U;
+	spec.goals[0].choices[1].id = 11U;
+	spec.goals[0].choices[1].destination = Waypoint(101U);
+	CHECK(Compile(&spec, &plan));
+	observations[0] = Observation(52U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	observations[1] = Observation(52U, 1U, 11U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1001U);
+	Begin(&state, &plan, observations, 2U, &reduction);
+	CHECK(state.goals[0].choices[0].attempts == 1U);
+
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 0U, SG_STRATEGY_BLOCK_NONE);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_FAILED;
+	frame.goal_outcome.failure = SG_STRATEGY_FAILURE_OBSTRUCTED;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
+	CHECK(state.goals[0].choices[0].attempts == 1U);
+	CHECK(state.activation.activation_id == 0U);
+}
+
+static void TestStaleTargetIsNotReissued(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 53U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(53U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	observation.valid_until_ms = 105U;
+	Begin(&state, &plan, &observation, 1U, &reduction);
+
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 0U, SG_STRATEGY_BLOCK_NONE);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.instruction.kind ==
+		SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION);
+	CHECK(reduction.instruction.handle.valid == 0U);
+	CHECK(reduction.instruction.cost_ms == SG_DESTINATION_FIELD_INF);
+	CHECK(reduction.instruction.destination_wait_reason ==
+		SG_STRATEGY_DESTINATION_WAIT_STALE);
+	CHECK(state.activation.goal_id == 1U);
+}
+
+static void TestGoalKindRejectsWrongDestinationType(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 54U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].kind = SG_STRATEGY_GOAL_ESCORT_CARRIER;
+	CHECK(!Compile(&spec, &plan));
+
+	spec.goals[0].kind = SG_STRATEGY_GOAL_COLLECT_ITEM;
+	CHECK(!Compile(&spec, &plan));
 }
 
 static void TestAuthorityCancelReleaseAndFactBoundary(void)
@@ -892,23 +1088,264 @@ static void TestSemanticObservationReplayIgnoresReservedBytes(void)
 	CHECK(state.goals[0].choices[0].handle.reserved[0] == 0U);
 }
 
+static void TestEscortRecoveryAndTimedPowerupPlan(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observations[3];
+	sg_strategy_frame_t frame;
+	uint16_t index;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 93U;
+	spec.goal_count = 3U;
+	for (index = 0U; index < spec.goal_count; index++)
+	{
+		spec.goals[index] = DestinationGoal((uint32_t)index + 1U,
+			(uint32_t)index + 10U, (uint64_t)index + 100U);
+		spec.goals[index].priority = (int16_t)(30 - (int16_t)index * 10);
+		if (index != 0U)
+		{
+			spec.goals[index].dependency_count = 1U;
+			spec.goals[index].dependencies[0].goal_id = (uint32_t)index;
+			spec.goals[index].dependencies[0].accept =
+				SG_STRATEGY_DEPENDENCY_SUCCESS;
+		}
+	}
+	spec.goals[0].kind = SG_STRATEGY_GOAL_COLLECT_ITEM;
+	spec.goals[0].choices[0].destination.kind = SG_DESTINATION_POWERUP;
+	spec.goals[0].choices[0].destination.value.item.item_id = 100U;
+	spec.goals[0].condition_count = 1U;
+	spec.goals[0].conditions[0].kind = SG_STRATEGY_CONDITION_TIME_WINDOW;
+	spec.goals[0].conditions[0].scope = SG_STRATEGY_CONDITION_START_ONLY;
+	spec.goals[0].conditions[0].value.time.not_before_ms = 200U;
+	spec.goals[0].conditions[0].value.time.not_after_ms = 250U;
+	spec.goals[1].kind = SG_STRATEGY_GOAL_RECOVER_FLAG;
+	memset(&spec.goals[1].choices[0].destination, 0,
+		sizeof(spec.goals[1].choices[0].destination));
+	spec.goals[1].choices[0].destination.kind = SG_DESTINATION_FLAG;
+	spec.goals[1].choices[0].destination.value.flag.team = 1U;
+	spec.goals[1].choices[0].destination.value.flag.location =
+		SG_DESTINATION_FLAG_CURRENT;
+	spec.goals[2].kind = SG_STRATEGY_GOAL_ESCORT_CARRIER;
+	memset(&spec.goals[2].choices[0].destination, 0,
+		sizeof(spec.goals[2].choices[0].destination));
+	spec.goals[2].choices[0].destination.kind = SG_DESTINATION_ESCORT;
+	spec.goals[2].choices[0].destination.value.carrier.client_id = 7U;
+	spec.goals[2].choices[0].destination.value.carrier.team = 1U;
+	spec.goals[2].choices[0].destination.value.carrier.selector =
+		SG_DESTINATION_CARRIER_EXACT;
+	CHECK(Compile(&spec, &plan));
+	for (index = 0U; index < spec.goal_count; index++)
+	{
+		observations[index] = Observation(93U, (uint32_t)index + 1U,
+			(uint32_t)index + 10U, 1U, 100U,
+			SG_STRATEGY_DESTINATION_REACHABLE,
+			10U + (uint32_t)index, 1000U + (uint64_t)index);
+		observations[index].handle.kind =
+			spec.goals[index].choices[0].destination.kind;
+	}
+	Begin(&state, &plan, observations, 3U, &reduction);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
+
+	frame = Frame(2U, state.revision, 200U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.activation.goal_id == 1U);
+	for (index = 0U; index < spec.goal_count; index++)
+	{
+		frame = Frame((uint64_t)index + 3U, state.revision,
+			210U + (uint64_t)index);
+		BindTactical(&frame, &state, (uint64_t)index + 1U, 0U,
+			SG_STRATEGY_BLOCK_NONE);
+		frame.goal_outcome.present = 1U;
+		frame.goal_outcome.activation = state.activation;
+		frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+		CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+			SG_STRATEGY_REDUCE_APPLIED);
+	}
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_COMPLETED);
+}
+
+static void TestRoleChangeAndHumanOrderAuthority(void)
+{
+	sg_strategy_plan_spec_t first_spec;
+	sg_strategy_plan_spec_t second_spec;
+	sg_strategy_plan_t first;
+	sg_strategy_plan_t second;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+
+	memset(&first_spec, 0, sizeof(first_spec));
+	first_spec.plan_id = 94U;
+	first_spec.goal_count = 1U;
+	first_spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	CHECK(Compile(&first_spec, &first));
+	CHECK(SG_StrategyStateInit(&state));
+	observation = Observation(94U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	frame = Frame(1U, state.revision, 100U);
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_REPLACE;
+	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U, 1U);
+	frame.directive.replacement = &first;
+	frame.life.present = 1U;
+	frame.life.alive = 1U;
+	frame.life.observation_revision = 1U;
+	frame.life.life_id = 1U;
+	frame.destinations = &observation;
+	frame.destination_count = 1U;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+
+	memset(&second_spec, 0, sizeof(second_spec));
+	second_spec.plan_id = 95U;
+	second_spec.goal_count = 1U;
+	second_spec.goals[0] = DestinationGoal(2U, 20U, 200U);
+	CHECK(Compile(&second_spec, &second));
+	observation = Observation(95U, 2U, 20U, 1U, 110U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 20U, 2000U);
+	frame = Frame(2U, state.revision, 110U);
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_REPLACE;
+	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_TEAM,
+		SG_STRATEGY_PRINCIPAL_TEAM, 2U, 2U);
+	frame.directive.replacement = &second;
+	frame.destinations = &observation;
+	frame.destination_count = 1U;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.plan.plan_id == 95U);
+	CHECK(state.authority.principal.kind == SG_STRATEGY_PRINCIPAL_TEAM);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_PLAN_REPLACED));
+
+	frame = Frame(3U, state.revision, 120U);
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_CANCEL;
+	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_HUMAN,
+		SG_STRATEGY_PRINCIPAL_HUMAN, 9U, 3U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_CANCELLED);
+	CHECK(state.authority.principal.kind == SG_STRATEGY_PRINCIPAL_HUMAN);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_PLAN_CANCELLED));
+}
+
+static void TestUnavailablePrerequisiteFailsDependentGoal(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observations[2];
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 96U;
+	spec.goal_count = 2U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].unavailable = SG_STRATEGY_UNAVAILABLE_APPLY_FAILURE;
+	spec.goals[0].failure.exhausted = SG_STRATEGY_FAILURE_SKIP_GOAL;
+	spec.goals[1] = DestinationGoal(2U, 11U, 101U);
+	spec.goals[1].dependency_count = 1U;
+	spec.goals[1].dependencies[0].goal_id = 1U;
+	spec.goals[1].dependencies[0].accept = SG_STRATEGY_DEPENDENCY_SUCCESS;
+	CHECK(Compile(&spec, &plan));
+	observations[0] = Observation(96U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1000U);
+	observations[1] = Observation(96U, 2U, 11U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1001U);
+	Begin(&state, &plan, observations, 2U, &reduction);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_SKIPPED);
+	CHECK(state.goals[0].last_failure == SG_STRATEGY_FAILURE_UNAVAILABLE);
+	CHECK(state.goals[1].phase == SG_STRATEGY_GOAL_FAILED);
+	CHECK(state.goals[1].last_failure == SG_STRATEGY_FAILURE_DEPENDENCY);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_FAILED);
+}
+
+static void TestItemLossRetiresActiveGoal(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_fact_observation_t fact;
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 97U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].condition_count = 1U;
+	spec.goals[0].conditions[0].kind = SG_STRATEGY_CONDITION_FACT_EQUALS;
+	spec.goals[0].conditions[0].scope = SG_STRATEGY_CONDITION_WHILE_ACTIVE;
+	spec.goals[0].conditions[0].value.fact.key.kind =
+		SG_STRATEGY_FACT_ITEM_OWNED;
+	spec.goals[0].conditions[0].value.fact.key.subject_id = 100U;
+	spec.goals[0].conditions[0].value.fact.expected_value = 1;
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(97U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	Begin(&state, &plan, &observation, 1U, &reduction);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
+
+	memset(&fact, 0, sizeof(fact));
+	fact.key.kind = SG_STRATEGY_FACT_ITEM_OWNED;
+	fact.key.subject_id = 100U;
+	fact.value = 1;
+	fact.observation_revision = 1U;
+	fact.observed_at_ms = 110U;
+	fact.valid_until_ms = 200U;
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 0U, SG_STRATEGY_BLOCK_NONE);
+	frame.facts = &fact;
+	frame.fact_count = 1U;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
+
+	fact.value = 0;
+	fact.observation_revision = 2U;
+	fact.observed_at_ms = 120U;
+	frame = Frame(3U, state.revision, 120U);
+	BindTactical(&frame, &state, 2U, 0U, SG_STRATEGY_BLOCK_NONE);
+	frame.facts = &fact;
+	frame.fact_count = 1U;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_FAILED);
+	CHECK(state.goals[0].last_failure ==
+		SG_STRATEGY_FAILURE_CONDITION_LOST);
+}
+
 int main(void)
 {
 	TestForwardDag();
 	TestCycleRejected();
 	TestCompilerFailuresAndCanonicalBytes();
-	TestPolicyAndTieBreak();
+	TestInitPriorityAndTieBreak();
 	TestFixedPoint64AndOwnedPlan();
 	TestCheapestMovingAndDuplicateRejects();
 	TestSuspensionDeathAndRespawn();
-	TestSuspensionExpiry();
+	TestSuspensionPersistsUntilTacticsResume();
+	TestCancelSettlesEveryOpenGoal();
+	TestCancelAtGoalCapacity();
 	TestUnavailableAlternativeRetry();
 	TestOutcomeAlternativeExhaustion();
+	TestRetryWakeGatesRepeatedChoice();
+	TestStaleTargetIsNotReissued();
+	TestGoalKindRejectsWrongDestinationType();
 	TestAuthorityCancelReleaseAndFactBoundary();
 	TestWeaponArmorFlagChain();
 	TestUnavailableWaitAndTimeWindow();
 	TestFactsSurviveReplacement();
 	TestSemanticObservationReplayIgnoresReservedBytes();
+	TestEscortRecoveryAndTimedPowerupPlan();
+	TestRoleChangeAndHumanOrderAuthority();
+	TestUnavailablePrerequisiteFailsDependentGoal();
+	TestItemLossRetiresActiveGoal();
 	if (failures != 0) {
 		fprintf(stderr, "sg_strategy_test: %d failure(s)\n", failures);
 		return 1;

@@ -16,6 +16,16 @@ gcc $strict -I. $sources -o "$tmp_dir/strategy-gcc"
 clang $strict -I. $sources -o "$tmp_dir/strategy-clang"
 "$tmp_dir/strategy-clang"
 
+clang $strict -I. -c slipgate/sg_strategy.c -o "$tmp_dir/strategy-reducer.o"
+if nm -u "$tmp_dir/strategy-reducer.o" | \
+	grep -Eq '[[:space:]](malloc|calloc|realloc|free)$'; then
+	echo "sg_strategy_test: reducer references dynamic allocation" >&2
+	exit 1
+fi
+
+scan-build --status-bugs -o "$tmp_dir/scan-build" \
+	clang $strict -I. $sources -o "$tmp_dir/strategy-static"
+
 clang $strict -fno-omit-frame-pointer -fsanitize=address,undefined -I. \
 	$sources -o "$tmp_dir/strategy-sanitize"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \

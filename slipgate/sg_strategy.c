@@ -80,6 +80,35 @@ static int StrategyFailureRuleValid(const sg_strategy_failure_rule_t *rule)
 	return 1;
 }
 
+static int StrategyGoalDestinationKindValid(sg_strategy_goal_kind_t goal_kind,
+	sg_destination_kind_t destination_kind)
+{
+	switch (goal_kind)
+	{
+	case SG_STRATEGY_GOAL_DESTINATION:
+		return SG_DestinationKindValid(destination_kind);
+	case SG_STRATEGY_GOAL_CAPTURE_FLAG:
+	case SG_STRATEGY_GOAL_CARRY_FLAG:
+	case SG_STRATEGY_GOAL_RECOVER_FLAG:
+		return destination_kind == SG_DESTINATION_FLAG;
+	case SG_STRATEGY_GOAL_COLLECT_ITEM:
+		return destination_kind == SG_DESTINATION_ITEM ||
+			destination_kind == SG_DESTINATION_WEAPON ||
+			destination_kind == SG_DESTINATION_ARMOR ||
+			destination_kind == SG_DESTINATION_POWERUP;
+	case SG_STRATEGY_GOAL_ESCORT_CARRIER:
+		return destination_kind == SG_DESTINATION_ESCORT;
+	case SG_STRATEGY_GOAL_INTERCEPT_CARRIER:
+		return destination_kind == SG_DESTINATION_INTERCEPT;
+	case SG_STRATEGY_GOAL_DEFEND_POST:
+		return destination_kind == SG_DESTINATION_DEFENSIVE_POST;
+	case SG_STRATEGY_GOAL_WAIT:
+	case SG_STRATEGY_GOAL_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
 static int StrategyGoalSpecValid(const sg_strategy_goal_spec_t *goal)
 {
 	uint8_t index;
@@ -108,7 +137,9 @@ static int StrategyGoalSpecValid(const sg_strategy_goal_spec_t *goal)
 			return 0;
 	for (index = 0U; index < goal->choice_count; index++)
 		if (goal->choices[index].id == 0U ||
-		    !SG_DestinationRefValid(&goal->choices[index].destination))
+		    !SG_DestinationRefValid(&goal->choices[index].destination) ||
+		    !StrategyGoalDestinationKindValid(goal->kind,
+			goal->choices[index].destination.kind))
 			return 0;
 	return 1;
 }
@@ -416,7 +447,9 @@ static int StrategyPlanValid(const sg_strategy_plan_t *plan)
 		{
 			uint16_t prior_goal;
 			if (goal->choices[choice].id == 0U ||
-			    !SG_DestinationRefValid(&goal->choices[choice].destination))
+			    !SG_DestinationRefValid(&goal->choices[choice].destination) ||
+			    !StrategyGoalDestinationKindValid(goal->kind,
+				goal->choices[choice].destination.kind))
 				return 0;
 			for (prior_goal = 0U; prior_goal <= index; prior_goal++)
 			{
@@ -506,13 +539,11 @@ static void StrategyCopyPlan(sg_strategy_plan_t *out,
 	}
 }
 
-int SG_StrategyStateInit(sg_strategy_state_t *state,
-	const sg_strategy_policy_t *policy)
+int SG_StrategyStateInit(sg_strategy_state_t *state)
 {
-	if (!state || !policy || policy->tactical_suspend_limit_ms == 0U)
+	if (!state)
 		return 0;
 	memset(state, 0, sizeof(*state));
-	state->policy = *policy;
 	state->revision = 1U;
 	state->authority.rank = SG_STRATEGY_AUTHORITY_AUTONOMOUS;
 	state->authority.principal.kind = SG_STRATEGY_PRINCIPAL_NONE;
@@ -724,8 +755,7 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 	const sg_strategy_plan_t *plan;
 	uint16_t index;
 
-	if (!state || !frame || state->policy.tactical_suspend_limit_ms == 0U ||
-	    state->revision == 0U || frame->sequence == 0U ||
+	if (!state || !frame || state->revision == 0U || frame->sequence == 0U ||
 	    frame->expected_revision == 0U || frame->at_ms == 0U)
 		return SG_STRATEGY_REDUCE_REJECTED_INVALID;
 	plan = state->has_plan ? &state->plan : NULL;
@@ -884,10 +914,6 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
 		if (frame->tactical.present && frame->tactical.blocked)
 			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
-		if (state->suspension.active &&
-		    frame->at_ms - state->suspension.suspended_at_ms >=
-		    state->policy.tactical_suspend_limit_ms)
-			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
 	}
 	if (!StrategyActivationEmpty(&state->activation) &&
 	    frame->directive.kind == SG_STRATEGY_DIRECTIVE_NONE)
@@ -992,9 +1018,31 @@ static int StrategyApplyDirective(sg_strategy_state_t *state,
 		state->authority.epoch = frame->directive.stamp.epoch;
 		state->cancelled = 1U;
 		StrategyClearActivation(state);
-		return StrategyEffect(state, out, frame->at_ms,
+		if (!StrategyEffect(state, out, frame->at_ms,
 			SG_STRATEGY_EFFECT_PLAN_CANCELLED, 0U,
-			SG_STRATEGY_NO_CHOICE, SG_STRATEGY_FAILURE_NONE);
+			SG_STRATEGY_NO_CHOICE, SG_STRATEGY_FAILURE_NONE))
+			return 0;
+		for (index = 0U; index < state->plan.goal_count; index++)
+		{
+			sg_strategy_goal_runtime_t *runtime = &state->goals[index];
+			uint8_t selected = runtime->selected_choice;
+
+			if (runtime->phase != SG_STRATEGY_GOAL_PENDING &&
+			    runtime->phase != SG_STRATEGY_GOAL_ACTIVE &&
+			    runtime->phase != SG_STRATEGY_GOAL_RETRY_WAIT)
+				continue;
+			runtime->phase = SG_STRATEGY_GOAL_CANCELLED;
+			runtime->selected_choice = SG_STRATEGY_NO_CHOICE;
+			runtime->resume_after_life = 0U;
+			runtime->last_transition_at_ms = frame->at_ms;
+			memset(&runtime->retry, 0, sizeof(runtime->retry));
+			if (!StrategyEffect(state, out, frame->at_ms,
+			    SG_STRATEGY_EFFECT_GOAL_CANCELLED,
+			    state->plan.goals[index].id, selected,
+			    SG_STRATEGY_FAILURE_NONE))
+				return 0;
+		}
+		return 1;
 	case SG_STRATEGY_DIRECTIVE_RELEASE:
 		state->authority.rank = SG_STRATEGY_AUTHORITY_AUTONOMOUS;
 		state->authority.principal.kind = SG_STRATEGY_PRINCIPAL_NONE;
@@ -1218,8 +1266,17 @@ static int StrategyAnyChoiceCapacity(const sg_strategy_goal_t *goal,
 	return 0;
 }
 
+static int StrategyChoiceUsable(const sg_strategy_choice_runtime_t *choice,
+	uint64_t at_ms)
+{
+	return choice->observed &&
+		choice->status == SG_STRATEGY_DESTINATION_REACHABLE &&
+		choice->observed_at_ms <= at_ms && choice->valid_until_ms >= at_ms;
+}
+
 static int StrategyHasFreshAlternative(const sg_strategy_goal_t *goal,
-	const sg_strategy_goal_runtime_t *runtime, uint8_t failed_choice)
+	const sg_strategy_goal_runtime_t *runtime, uint8_t failed_choice,
+	uint64_t at_ms, int require_reachable)
 {
 	uint8_t index;
 	if (!goal->failure.try_alternatives)
@@ -1227,6 +1284,8 @@ static int StrategyHasFreshAlternative(const sg_strategy_goal_t *goal,
 	for (index = 0U; index < goal->choice_count; index++)
 		if (index != failed_choice && runtime->choices[index].attempts <
 		    goal->failure.max_attempts_per_choice &&
+		    (!require_reachable ||
+		     StrategyChoiceUsable(&runtime->choices[index], at_ms)) &&
 		    (failed_choice >= goal->choice_count ||
 		     runtime->choices[index].attempts <
 		     runtime->choices[failed_choice].attempts))
@@ -1246,7 +1305,8 @@ static int StrategyFinishFailure(sg_strategy_state_t *state,
 	runtime->last_outcome = SG_STRATEGY_OUTCOME_FAILED;
 	runtime->last_failure = reason;
 	runtime->last_transition_at_ms = frame->at_ms;
-	if (StrategyHasFreshAlternative(goal, runtime, failed_choice))
+	if (StrategyHasFreshAlternative(goal, runtime, failed_choice,
+	    frame->at_ms, reason != SG_STRATEGY_FAILURE_UNAVAILABLE))
 	{
 		runtime->phase = SG_STRATEGY_GOAL_PENDING;
 		runtime->selected_choice = SG_STRATEGY_NO_CHOICE;
@@ -1348,10 +1408,8 @@ static int StrategyApplyTactical(sg_strategy_state_t *state,
 		if (!state->suspension.active)
 		{
 			state->suspension.active = 1U;
-			state->suspension.suspended_at_ms = frame->at_ms;
 			state->suspension.activation = state->activation;
 			state->suspension.reason = frame->tactical.reason;
-			runtime->suspension_count++;
 			return StrategyEffect(state, out, frame->at_ms,
 				SG_STRATEGY_EFFECT_TACTICAL_SUSPENDED,
 				state->activation.goal_id, runtime->selected_choice,
@@ -1362,15 +1420,7 @@ static int StrategyApplyTactical(sg_strategy_state_t *state,
 	}
 	if (state->suspension.active)
 	{
-		if (frame->at_ms < state->suspension.suspended_at_ms)
-			return 0;
-		if (frame->at_ms - state->suspension.suspended_at_ms >=
-		    state->policy.tactical_suspend_limit_ms)
-			return 1;
-		runtime->suspended_total_ms +=
-			frame->at_ms - state->suspension.suspended_at_ms;
 		state->suspension.active = 0U;
-		state->suspension.suspended_at_ms = 0U;
 		memset(&state->suspension.activation, 0,
 			sizeof(state->suspension.activation));
 		state->suspension.reason = SG_STRATEGY_BLOCK_NONE;
@@ -1445,13 +1495,6 @@ static int StrategyApplyLife(sg_strategy_state_t *state,
 			SG_STRATEGY_FAILURE_NONE);
 	}
 	return 1;
-}
-
-static int StrategyChoiceUsable(const sg_strategy_choice_runtime_t *choice,
-	uint64_t at_ms)
-{
-	return choice->observed && choice->status == SG_STRATEGY_DESTINATION_REACHABLE &&
-		choice->observed_at_ms <= at_ms && choice->valid_until_ms >= at_ms;
 }
 
 static int StrategySelectReachable(const sg_strategy_goal_t *goal,
@@ -1556,8 +1599,45 @@ static void StrategyInstructionBase(sg_strategy_instruction_t *instruction,
 	instruction->choice_index = SG_STRATEGY_NO_CHOICE;
 }
 
+static sg_strategy_destination_wait_reason_t StrategyChoiceWaitReason(
+	const sg_strategy_choice_runtime_t *choice, uint64_t at_ms)
+{
+	if (!choice->observed ||
+	    choice->status == SG_STRATEGY_DESTINATION_UNOBSERVED)
+		return SG_STRATEGY_DESTINATION_WAIT_UNOBSERVED;
+	if (choice->observed_at_ms > at_ms || choice->valid_until_ms < at_ms)
+		return SG_STRATEGY_DESTINATION_WAIT_STALE;
+	if (choice->status == SG_STRATEGY_DESTINATION_UNREACHABLE)
+		return SG_STRATEGY_DESTINATION_WAIT_UNREACHABLE;
+	return SG_STRATEGY_DESTINATION_WAIT_NONE;
+}
+
+static sg_strategy_destination_wait_reason_t StrategyGoalWaitReason(
+	const sg_strategy_goal_t *goal,
+	const sg_strategy_goal_runtime_t *runtime, uint64_t at_ms)
+{
+	uint8_t index;
+	uint8_t limit = goal->failure.try_alternatives ? goal->choice_count : 1U;
+	sg_strategy_destination_wait_reason_t result =
+		SG_STRATEGY_DESTINATION_WAIT_UNREACHABLE;
+
+	for (index = 0U; index < limit; index++)
+	{
+		sg_strategy_destination_wait_reason_t reason;
+		if (runtime->choices[index].attempts >=
+		    goal->failure.max_attempts_per_choice)
+			continue;
+		reason = StrategyChoiceWaitReason(&runtime->choices[index], at_ms);
+		if (reason == SG_STRATEGY_DESTINATION_WAIT_STALE)
+			return reason;
+		if (reason == SG_STRATEGY_DESTINATION_WAIT_UNOBSERVED)
+			result = reason;
+	}
+	return result;
+}
+
 static void StrategyInstructionForActive(sg_strategy_state_t *state,
-	sg_strategy_instruction_kind_t kind)
+	sg_strategy_instruction_kind_t kind, uint64_t at_ms)
 {
 	int found = StrategyFindPlanGoal(&state->plan, state->activation.goal_id);
 	sg_strategy_goal_runtime_t *runtime;
@@ -1576,8 +1656,18 @@ static void StrategyInstructionForActive(sg_strategy_state_t *state,
 	if (choice < goal->choice_count)
 	{
 		state->current_instruction.destination = goal->choices[choice].destination;
-		state->current_instruction.handle = runtime->choices[choice].handle;
-		state->current_instruction.cost_ms = runtime->choices[choice].cost_ms;
+		if (kind == SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION)
+		{
+			state->current_instruction.cost_ms = SG_DESTINATION_FIELD_INF;
+			state->current_instruction.destination_wait_reason =
+				StrategyChoiceWaitReason(&runtime->choices[choice],
+					at_ms);
+		}
+		else
+		{
+			state->current_instruction.handle = runtime->choices[choice].handle;
+			state->current_instruction.cost_ms = runtime->choices[choice].cost_ms;
+		}
 	}
 	if (kind == SG_STRATEGY_INSTRUCTION_SUSPENDED)
 		state->current_instruction.block_reason = state->suspension.reason;
@@ -1654,17 +1744,8 @@ static int StrategyFixedPoint(sg_strategy_state_t *state,
 			runtime = &state->goals[(uint16_t)active];
 			if (state->suspension.active)
 			{
-				if (frame->at_ms - state->suspension.suspended_at_ms >=
-				    state->policy.tactical_suspend_limit_ms)
-				{
-					if (!StrategyFinishFailure(state, (uint16_t)active,
-					    SG_STRATEGY_FAILURE_TACTICAL_BLOCK_EXPIRED,
-					    frame, out))
-						return 0;
-					continue;
-				}
 				StrategyInstructionForActive(state,
-					SG_STRATEGY_INSTRUCTION_SUSPENDED);
+					SG_STRATEGY_INSTRUCTION_SUSPENDED, frame->at_ms);
 				return 1;
 			}
 			condition = StrategyEvaluateConditions(state, goal,
@@ -1680,7 +1761,8 @@ static int StrategyFixedPoint(sg_strategy_state_t *state,
 			if (condition == STRATEGY_CONDITION_WAIT)
 			{
 				StrategyInstructionForActive(state,
-					SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
+					SG_STRATEGY_INSTRUCTION_WAIT_CONDITION,
+					frame->at_ms);
 				return 1;
 			}
 			if (runtime->selected_choice >= goal->choice_count)
@@ -1689,13 +1771,14 @@ static int StrategyFixedPoint(sg_strategy_state_t *state,
 			    &runtime->choices[runtime->selected_choice], frame->at_ms))
 			{
 				StrategyInstructionForActive(state,
-					SG_STRATEGY_INSTRUCTION_EXECUTE);
+					SG_STRATEGY_INSTRUCTION_EXECUTE, frame->at_ms);
 				return 1;
 			}
 			if (goal->unavailable == SG_STRATEGY_UNAVAILABLE_WAIT)
 			{
 				StrategyInstructionForActive(state,
-					SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION);
+					SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION,
+					frame->at_ms);
 				return 1;
 			}
 			if (!StrategyFinishFailure(state, (uint16_t)active,
@@ -1811,6 +1894,8 @@ static int StrategyFixedPoint(sg_strategy_state_t *state,
 			StrategyInstructionBase(&state->current_instruction,
 				SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION, state);
 			state->current_instruction.goal_id = goal->id;
+			state->current_instruction.destination_wait_reason =
+				StrategyGoalWaitReason(goal, runtime, frame->at_ms);
 			return 1;
 		}
 		StrategyInstructionBase(&state->current_instruction,
