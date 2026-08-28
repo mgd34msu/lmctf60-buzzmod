@@ -379,6 +379,36 @@ static int MechanismId(const sg_mechanism_capability_source_t *source,
 	return SG_RuneModelStableIdValid(&id_out->value);
 }
 
+static int StaticAuthorityReplays(
+	const sg_mechanism_capability_source_t *source)
+{
+	sg_host_collision_authority_t replay;
+	sg_host_collision_error_t host_error;
+	sg_bsp_completeness_result_t completeness;
+	sg_configuration_semantics_audit_result_t semantics_audit;
+
+	if (!SG_HostCollisionInit(&replay, source->authority->world,
+		&source->authority->identity, &host_error) ||
+		!SG_BspCompletenessProve(&replay, source->configuration,
+			&completeness) || completeness.code != SG_BSP_COMPLETENESS_OK ||
+		completeness.omitted_cells != 0U ||
+		completeness.invented_cells != 0U ||
+		completeness.omitted_portals != 0U ||
+		completeness.invented_portals != 0U ||
+		completeness.expected_cells != source->configuration->cell_count ||
+		completeness.represented_cells != source->configuration->cell_count ||
+		completeness.proved_cells != source->configuration->cell_count ||
+		completeness.expected_portals != source->configuration->portal_count ||
+		completeness.represented_portals !=
+			source->configuration->portal_count ||
+		completeness.proved_portals != source->configuration->portal_count ||
+		!SG_ConfigurationSemanticsAudit(&replay, source->configuration,
+			source->configuration_semantics, &semantics_audit) ||
+		semantics_audit.code != SG_CONFIGURATION_SEMANTICS_AUDIT_OK)
+		return 0;
+	return 1;
+}
+
 static int SourceShapeValid(sg_mechanism_build_t *build)
 {
 	const sg_mechanism_capability_source_t *source = build->source;
@@ -390,7 +420,7 @@ static int SourceShapeValid(sg_mechanism_build_t *build)
 
 	if (!source || !source->authority || !source->authority->world ||
 		!source->configuration || !source->configuration_semantics ||
-		!source->entity_semantics || !source->completeness ||
+		!source->entity_semantics ||
 		!source->phases || source->phase_count == 0U ||
 		!source->host_traces || !source->host_traces->candidates ||
 		!source->host_traces->traces ||
@@ -447,23 +477,7 @@ static int SourceShapeValid(sg_mechanism_build_t *build)
 		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW, trace_count);
 		return 0;
 	}
-	if (source->completeness->code != SG_BSP_COMPLETENESS_OK ||
-		source->completeness->omitted_cells != 0U ||
-		source->completeness->invented_cells != 0U ||
-		source->completeness->omitted_portals != 0U ||
-		source->completeness->invented_portals != 0U ||
-		source->completeness->expected_cells !=
-			source->configuration->cell_count ||
-		source->completeness->represented_cells !=
-			source->configuration->cell_count ||
-		source->completeness->proved_cells !=
-			source->completeness->represented_cells ||
-		source->completeness->expected_portals !=
-			source->configuration->portal_count ||
-		source->completeness->represented_portals !=
-			source->configuration->portal_count ||
-		source->completeness->proved_portals !=
-			source->completeness->represented_portals)
+	if (!StaticAuthorityReplays(source))
 	{
 		SetError(build,
 			SG_MECHANISM_CAPABILITY_ERROR_INCOMPLETE_CONFIGURATION, 0U);
@@ -619,10 +633,31 @@ static int KindConditional(sg_mechanism_capability_kind_t kind)
 		kind == SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE;
 }
 
-static int TimingValid(const sg_mechanism_host_trace_t *trace)
+static int KindCollisionConditional(sg_mechanism_capability_kind_t kind)
+{
+	return kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
+		kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING;
+}
+
+typedef struct sg_mechanism_derived_timing_s
+{
+	float delay_ms;
+	float dwell_ms;
+	float travel_ms;
+	float wait_ms;
+	float reset_ms;
+} sg_mechanism_derived_timing_t;
+
+static int DeriveTiming(const sg_mechanism_host_trace_t *trace,
+	const sg_bsp_entity_semantic_t *controller,
+	const sg_bsp_entity_semantic_t *mechanism,
+	sg_mechanism_derived_timing_t *timing)
 {
 	const float values[5] = { trace->delay_ms, trace->dwell_ms,
 		trace->travel_ms, trace->wait_ms, trace->reset_ms };
+	uint64_t activation_delta;
+	uint64_t active_delta;
+	uint64_t reset_delta;
 	double total = 0.0;
 	uint32_t index;
 
@@ -632,9 +667,44 @@ static int TimingValid(const sg_mechanism_host_trace_t *trace)
 			return 0;
 		total += values[index];
 	}
-	if (total > (double)UINT32_MAX ||
+	if (total > (double)UINT32_MAX || !timing ||
 		truncf(trace->delay_ms) != trace->delay_ms ||
-		truncf(trace->dwell_ms) != trace->dwell_ms)
+		truncf(trace->dwell_ms) != trace->dwell_ms ||
+		truncf(trace->travel_ms) != trace->travel_ms ||
+		truncf(trace->wait_ms) != trace->wait_ms ||
+		truncf(trace->reset_ms) != trace->reset_ms ||
+		trace->active_time_ms < trace->activation_time_ms ||
+		trace->exit_time_ms < trace->active_time_ms ||
+		trace->reset_time_ms < trace->exit_time_ms ||
+		trace->active_time_ms - trace->activation_time_ms > UINT32_MAX ||
+		trace->exit_time_ms - trace->active_time_ms > UINT32_MAX ||
+		trace->reset_time_ms - trace->exit_time_ms > UINT32_MAX)
+		return 0;
+	activation_delta = trace->active_time_ms - trace->activation_time_ms;
+	active_delta = trace->exit_time_ms - trace->active_time_ms;
+	reset_delta = trace->reset_time_ms - trace->exit_time_ms;
+	timing->delay_ms = (float)activation_delta;
+	timing->dwell_ms = 0.0f;
+	if ((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) != 0U &&
+		controller->dwell_ms >= 0.0f)
+		timing->dwell_ms = controller->dwell_ms;
+	else if (trace->kind == SG_MECHANISM_CAPABILITY_DWELL)
+		timing->dwell_ms = mechanism->dwell_ms;
+	timing->wait_ms = trace->kind == SG_MECHANISM_CAPABILITY_RESET
+		? mechanism->dwell_ms : 0.0f;
+	if (!isfinite(timing->dwell_ms) || timing->dwell_ms < 0.0f ||
+		!isfinite(timing->wait_ms) || timing->wait_ms < 0.0f ||
+		(double)timing->dwell_ms > (double)active_delta ||
+		(double)timing->wait_ms > (double)reset_delta)
+		return 0;
+	timing->travel_ms = (float)(active_delta -
+		(uint64_t)timing->dwell_ms);
+	timing->reset_ms = (float)(reset_delta - (uint64_t)timing->wait_ms);
+	if (trace->delay_ms != timing->delay_ms ||
+		trace->dwell_ms != timing->dwell_ms ||
+		trace->travel_ms != timing->travel_ms ||
+		trace->wait_ms != timing->wait_ms ||
+		trace->reset_ms != timing->reset_ms)
 		return 0;
 	if ((trace->kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
 		 trace->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
@@ -645,34 +715,240 @@ static int TimingValid(const sg_mechanism_host_trace_t *trace)
 	return 1;
 }
 
-static int TransitionEvidenceValid(
-	const sg_host_collision_transition_t *transition,
-	const sg_rune_vec3_t *destination, int expect_clear)
+static const sg_host_collision_instance_t *FindSceneInstance(
+	const sg_host_collision_scene_t *scene, uint64_t identity,
+	uint32_t model_index)
+{
+	size_t index;
+
+	if (!scene || !identity)
+		return NULL;
+	for (index = 0U; index < scene->instance_count; index++)
+		if (scene->instances[index].instance_id == identity &&
+			scene->instances[index].model_index == model_index)
+			return &scene->instances[index];
+	return NULL;
+}
+
+static int VectorDifferenceEqual(const float destination[3],
+	const float source[3], const sg_rune_vec3_t *difference)
 {
 	uint32_t axis;
 
-	if (!transition || !destination || !transition->source_valid ||
-		!transition->destination_valid ||
-		!isfinite(transition->sweep.fraction) ||
-		transition->sweep.fraction < 0.0f ||
-		transition->sweep.fraction > 1.0f)
-		return 0;
 	for (axis = 0U; axis < 3U; axis++)
-		if (!isfinite(transition->sweep.end[axis]))
+		if (destination[axis] - source[axis] != difference->value[axis])
 			return 0;
-	if (expect_clear)
+	return 1;
+}
+
+static int DeriveState(sg_mechanism_capability_kind_t kind,
+	sg_mechanism_state_t *source, sg_mechanism_state_t *destination,
+	sg_mechanism_recovery_t *recovery)
+{
+	*recovery = SG_MECHANISM_RECOVERY_NONE;
+	switch (kind)
 	{
-		if (!transition->clear || transition->sweep.startsolid ||
-			transition->sweep.allsolid ||
-			transition->sweep.fraction != 1.0f)
-			return 0;
-		for (axis = 0U; axis < 3U; axis++)
-			if (transition->sweep.end[axis] != destination->value[axis])
-				return 0;
+	case SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION:
+	case SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION:
+		*source = SG_MECHANISM_STATE_INACTIVE;
+		*destination = SG_MECHANISM_STATE_ACTIVATING;
 		return 1;
+	case SG_MECHANISM_CAPABILITY_DWELL:
+		*source = SG_MECHANISM_STATE_ACTIVE;
+		*destination = SG_MECHANISM_STATE_DWELLING;
+		*recovery = SG_MECHANISM_RECOVERY_WAIT_FOR_CYCLE;
+		return 1;
+	case SG_MECHANISM_CAPABILITY_RESET:
+		*source = SG_MECHANISM_STATE_RETURNING;
+		*destination = SG_MECHANISM_STATE_RESET;
+		*recovery = SG_MECHANISM_RECOVERY_WAIT_FOR_RESET;
+		return 1;
+	case SG_MECHANISM_CAPABILITY_DOOR_CROSSING:
+	case SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING:
+	case SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE:
+		*source = SG_MECHANISM_STATE_INACTIVE;
+		*destination = SG_MECHANISM_STATE_ACTIVE;
+		return 1;
+	case SG_MECHANISM_CAPABILITY_LIFT_RIDE:
+	case SG_MECHANISM_CAPABILITY_TRAIN_RIDE:
+	case SG_MECHANISM_CAPABILITY_PUSH:
+	case SG_MECHANISM_CAPABILITY_TELEPORT:
+		*source = SG_MECHANISM_STATE_ACTIVE;
+		*destination = SG_MECHANISM_STATE_ACTIVE;
+		return 1;
+	case SG_MECHANISM_CAPABILITY_KIND_COUNT:
+		break;
 	}
-	return !transition->clear && (transition->sweep.startsolid ||
-		transition->sweep.allsolid || transition->sweep.fraction < 1.0f);
+	return 0;
+}
+
+static int StateLawValid(const sg_mechanism_host_trace_t *trace)
+{
+	sg_mechanism_state_t source;
+	sg_mechanism_state_t destination;
+	sg_mechanism_recovery_t recovery;
+
+	if ((trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT) != 0U &&
+		(trace->recovery != SG_MECHANISM_RECOVERY_NONE ||
+		 trace->wait_ms != 0.0f || trace->reset_ms != 0.0f))
+		return 0;
+	if ((trace->wait_ms > 0.0f || trace->reset_ms > 0.0f) &&
+		trace->recovery == SG_MECHANISM_RECOVERY_NONE)
+		return 0;
+	return DeriveState(trace->kind, &source, &destination, &recovery) &&
+		trace->source_state == source &&
+		trace->destination_state == destination &&
+		trace->recovery == recovery &&
+		((trace->kind != SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION &&
+		  trace->kind != SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION) ||
+		 trace->controller_entity == trace->mechanism_entity) &&
+		(trace->kind != SG_MECHANISM_CAPABILITY_DWELL ||
+		 trace->dwell_ms > 0.0f) &&
+		(trace->kind != SG_MECHANISM_CAPABILITY_RESET ||
+		 trace->reset_ms > 0.0f);
+}
+
+static int ExecutionTransitionValid(
+	const sg_mechanism_host_trace_t *trace)
+{
+	const sg_mech_execution_state_t *source = &trace->source_execution;
+	const sg_mech_execution_state_t *destination =
+		&trace->destination_execution;
+
+	if (!SG_MechExecutionStateValid(source) ||
+		!SG_MechExecutionStateValid(destination) ||
+		source->controller_kind != destination->controller_kind ||
+		source->node_kind != destination->node_kind ||
+		source->touch_matches != destination->touch_matches ||
+		source->touch_cleared != destination->touch_cleared)
+		return 0;
+	switch (trace->kind)
+	{
+	case SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION:
+		return source->node_kind == SG_MECH_NODE_BUTTON &&
+			source->controller_kind ==
+				SG_MECHANISM_CONTROLLER_BUTTON_DOOR &&
+			source->think_role == SG_MECH_EXEC_THINK_SEALED &&
+			source->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
+			destination->think_role == SG_MECH_EXEC_THINK_LINEAR_DONE &&
+			destination->end_role ==
+				SG_MECH_EXEC_END_BUTTON_DESTINATION &&
+			destination->motion_state ==
+				SG_MECH_MOTION_AT_DESTINATION;
+	case SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION:
+		return source->node_kind == SG_MECH_NODE_TRIGGER &&
+			source->controller_kind ==
+				SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR &&
+			source->think_role == SG_MECH_EXEC_THINK_SEALED &&
+			destination->think_role ==
+				SG_MECH_EXEC_THINK_MULTI_WAIT &&
+			destination->nextthink_pending;
+	case SG_MECHANISM_CAPABILITY_DOOR_CROSSING:
+		return source->node_kind == SG_MECH_NODE_DOOR_MASTER &&
+			source->think_role == SG_MECH_EXEC_THINK_SEALED &&
+			source->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
+			destination->think_role == SG_MECH_EXEC_THINK_LINEAR_DONE &&
+			destination->end_role ==
+				SG_MECH_EXEC_END_DOOR_DESTINATION &&
+			destination->motion_state ==
+				SG_MECH_MOTION_AT_DESTINATION;
+	case SG_MECHANISM_CAPABILITY_DWELL:
+		return source->node_kind == SG_MECH_NODE_DOOR_MASTER &&
+			source->motion_state == SG_MECH_MOTION_AT_DESTINATION &&
+			destination->think_role == SG_MECH_EXEC_THINK_DOOR_RETURN &&
+			destination->nextthink_pending && destination->stopped;
+	case SG_MECHANISM_CAPABILITY_RESET:
+		return source->node_kind == SG_MECH_NODE_DOOR_MASTER &&
+			source->motion_state == SG_MECH_MOTION_TO_ORIGIN &&
+			source->end_role == SG_MECH_EXEC_END_DOOR_ORIGIN &&
+			destination->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
+			destination->end_role == SG_MECH_EXEC_END_DOOR_ORIGIN;
+	case SG_MECHANISM_CAPABILITY_LIFT_RIDE:
+		return source->controller_kind == SG_MECHANISM_CONTROLLER_PLATFORM &&
+			source->node_kind == SG_MECH_NODE_PLATFORM &&
+			source->motion_state == SG_MECH_MOTION_AT_ORIGIN &&
+			destination->motion_state ==
+				SG_MECH_MOTION_AT_DESTINATION;
+	case SG_MECHANISM_CAPABILITY_TRAIN_RIDE:
+		return source->controller_kind == SG_MECHANISM_CONTROLLER_TRAIN &&
+			source->node_kind == SG_MECH_NODE_TRAIN;
+	case SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING:
+		return source->node_kind == SG_MECH_NODE_OTHER_MOVER;
+	case SG_MECHANISM_CAPABILITY_PUSH:
+		return source->controller_kind == SG_MECHANISM_CONTROLLER_PUSH &&
+			source->node_kind == SG_MECH_NODE_PUSH;
+	case SG_MECHANISM_CAPABILITY_TELEPORT:
+		return source->controller_kind == SG_MECHANISM_CONTROLLER_TELEPORT &&
+			source->node_kind == SG_MECH_NODE_TELEPORTER;
+	case SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE:
+		return source->node_kind == SG_MECH_NODE_AREAPORTAL;
+	case SG_MECHANISM_CAPABILITY_KIND_COUNT:
+		break;
+	}
+	return 0;
+}
+
+static int ReplayHostTrace(const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_host_trace_t *trace,
+	sg_host_collision_transition_t *inactive_out,
+	sg_host_collision_transition_t *active_out,
+	sg_host_collision_transform_t *inactive_transform_out,
+	sg_host_collision_transform_t *active_transform_out)
+{
+	const sg_bsp_entity_semantic_t *mechanism =
+		&source->entity_semantics->entities[trace->mechanism_entity];
+	const sg_host_collision_instance_t *inactive_instance = NULL;
+	const sg_host_collision_instance_t *active_instance = NULL;
+	sg_rune_stance_t stance = source->phases[trace->source_phase].stance;
+	int has_model = (mechanism->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL) != 0U;
+
+	memset(inactive_transform_out, 0, sizeof(*inactive_transform_out));
+	memset(active_transform_out, 0, sizeof(*active_transform_out));
+	if (source->phases[trace->destination_phase].stance != stance ||
+		!SG_HostCollisionTransition(source->authority, &trace->inactive_scene,
+			trace->entry_witness.value, trace->exit_witness.value, stance,
+			inactive_out) ||
+		!SG_HostCollisionTransition(source->authority, &trace->active_scene,
+			trace->entry_witness.value, trace->exit_witness.value, stance,
+			active_out) || !inactive_out->source_valid ||
+		!inactive_out->destination_valid || !active_out->source_valid ||
+		!active_out->destination_valid)
+		return 0;
+	if (has_model)
+	{
+		if (mechanism->bsp_model == SG_BSP_ENTITY_MODEL_NONE ||
+			mechanism->bsp_model == 0U || trace->mechanism_instance_id == 0U ||
+			!(inactive_instance = FindSceneInstance(&trace->inactive_scene,
+				trace->mechanism_instance_id, mechanism->bsp_model)) ||
+			!(active_instance = FindSceneInstance(&trace->active_scene,
+				trace->mechanism_instance_id, mechanism->bsp_model)))
+			return 0;
+		*inactive_transform_out = inactive_instance->transform;
+		*active_transform_out = active_instance->transform;
+	}
+	else if (trace->mechanism_instance_id != 0U)
+		return 0;
+	if (KindCollisionConditional(trace->kind) &&
+		(inactive_out->clear || !active_out->clear || !has_model ||
+		 inactive_out->sweep.model_index != mechanism->bsp_model ||
+		 inactive_out->sweep.instance_id != trace->mechanism_instance_id))
+		return 0;
+	if (KindTraverses(trace->kind) &&
+		trace->kind != SG_MECHANISM_CAPABILITY_TELEPORT && !active_out->clear)
+		return 0;
+	if (!KindTraverses(trace->kind) && !active_out->clear)
+		return 0;
+	if ((trace->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
+		 trace->kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE) &&
+		(!has_model || !VectorDifferenceEqual(active_instance->transform.origin,
+			inactive_instance->transform.origin,
+			&trace->observed_displacement)))
+		return 0;
+	if (trace->kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING &&
+		(!has_model || !VectorDifferenceEqual(active_instance->transform.angles,
+			inactive_instance->transform.angles, &mechanism->move_angles)))
+		return 0;
+	return 1;
 }
 
 static int CandidateValid(const sg_mechanism_capability_source_t *source,
@@ -729,6 +1005,11 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 	const sg_bsp_entity_semantic_t *controller;
 	const sg_bsp_entity_semantic_t *mechanism;
 	sg_rune_mechanism_id_t mechanism_id;
+	sg_host_collision_transition_t inactive_transition;
+	sg_host_collision_transition_t active_transition;
+	sg_host_collision_transform_t inactive_transform;
+	sg_host_collision_transform_t active_transform;
+	sg_mechanism_derived_timing_t timing;
 	int source_relative;
 	int destination_relative;
 
@@ -784,7 +1065,44 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 			trace_index);
 		return 0;
 	}
-	if (!TimingValid(trace))
+	if (!DeriveTiming(trace, controller, mechanism, &timing))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
+		return 0;
+	}
+	if ((((trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT) != 0U) !=
+		 (((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) != 0U) &&
+		  controller->dwell_ms < 0.0f)))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			trace_index);
+		return 0;
+	}
+	if (!StateLawValid(trace) || !ExecutionTransitionValid(trace) ||
+		!VectorDifferenceEqual(trace->exit_witness.value,
+			trace->entry_witness.value, &trace->observed_displacement))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			trace_index);
+		return 0;
+	}
+	if ((trace->kind == SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION &&
+		 mechanism->mechanism_role != SG_MECH_NODE_BUTTON) ||
+		(trace->kind == SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION &&
+		 mechanism->mechanism_role != SG_MECH_NODE_TRIGGER) ||
+		(trace->kind == SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE &&
+		 mechanism->mechanism_role != SG_MECH_NODE_AREAPORTAL))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
+			trace_index);
+		return 0;
+	}
+	if ((trace->kind == SG_MECHANISM_CAPABILITY_DWELL &&
+		 ((mechanism->flags & SG_BSP_ENTITY_DWELL_DEFINED) == 0U ||
+		  mechanism->dwell_ms != trace->dwell_ms)) ||
+		(trace->kind == SG_MECHANISM_CAPABILITY_RESET &&
+		 ((mechanism->flags & SG_BSP_ENTITY_DWELL_DEFINED) == 0U ||
+		  mechanism->dwell_ms != trace->wait_ms)))
 	{
 		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
 		return 0;
@@ -801,19 +1119,31 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
 		return 0;
 	}
-	if (KindTraverses(trace->kind))
+	if (!ReplayHostTrace(source, trace, &inactive_transition,
+		&active_transition, &inactive_transform, &active_transform))
 	{
-		if (!TransitionEvidenceValid(&trace->active_transition,
-			&trace->exit_witness, 1))
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			trace_index);
+		return 0;
+	}
+	if (trace->kind == SG_MECHANISM_CAPABILITY_PUSH)
+	{
+		double dot = (double)trace->observed_displacement.value[0] *
+			mechanism->move_direction.value[0] +
+			(double)trace->observed_displacement.value[1] *
+			mechanism->move_direction.value[1] +
+			(double)trace->observed_displacement.value[2] *
+			mechanism->move_direction.value[2];
+
+		if (!(dot > 0.0))
 		{
 			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 				trace_index);
 			return 0;
 		}
 	}
-	if (KindConditional(trace->kind) &&
-		!TransitionEvidenceValid(&trace->inactive_transition,
-			&trace->exit_witness, 0))
+	if (trace->kind == SG_MECHANISM_CAPABILITY_TELEPORT &&
+		trace->source_region == trace->destination_region)
 	{
 		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 			trace_index);
@@ -1295,10 +1625,32 @@ static int BuildFacts(sg_mechanism_build_t *build)
 			FindTopologyRelation(build->output, trace->controller_entity,
 				trace->mechanism_entity);
 		sg_mechanism_capability_fact_t *record = &build->output->facts[fact];
+		sg_host_collision_transition_t inactive_transition;
+		sg_host_collision_transition_t active_transition;
+		sg_host_collision_transform_t inactive_transform;
+		sg_host_collision_transform_t active_transform;
+		sg_mechanism_derived_timing_t timing;
+		sg_mechanism_state_t source_state;
+		sg_mechanism_state_t destination_state;
+		sg_mechanism_recovery_t recovery;
 
 		if (!relation)
 		{
 			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_TOPOLOGY,
+				refs[fact].trace);
+			goto failure;
+		}
+		if (!ReplayHostTrace(build->source, trace, &inactive_transition,
+			&active_transition, &inactive_transform, &active_transform) ||
+			!DeriveTiming(trace,
+				&build->source->entity_semantics->
+					entities[trace->controller_entity],
+				&build->source->entity_semantics->
+					entities[trace->mechanism_entity], &timing) ||
+			!DeriveState(trace->kind, &source_state, &destination_state,
+				&recovery))
+		{
+			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 				refs[fact].trace);
 			goto failure;
 		}
@@ -1315,10 +1667,10 @@ static int BuildFacts(sg_mechanism_build_t *build)
 		record->first_topology_edge = relation->first_edge;
 		record->topology_edge_count = relation->edge_count;
 		record->kind = trace->kind;
-		record->source_state = trace->source_state;
-		record->destination_state = trace->destination_state;
+		record->source_state = source_state;
+		record->destination_state = destination_state;
 		record->activation = trace->activation;
-		record->recovery = trace->recovery;
+		record->recovery = recovery;
 		record->entry_witness = trace->entry_witness;
 		record->exit_witness = trace->exit_witness;
 		record->observed_displacement = trace->observed_displacement;
@@ -1329,11 +1681,22 @@ static int BuildFacts(sg_mechanism_build_t *build)
 			entities[trace->mechanism_entity].move_origin;
 		record->mechanism_angles = build->source->entity_semantics->
 			entities[trace->mechanism_entity].move_angles;
-		record->delay_ms = trace->delay_ms;
-		record->dwell_ms = trace->dwell_ms;
-		record->travel_ms = trace->travel_ms;
-		record->wait_ms = trace->wait_ms;
-		record->reset_ms = trace->reset_ms;
+		record->inactive_transition = inactive_transition;
+		record->active_transition = active_transition;
+		record->inactive_mechanism_transform = inactive_transform;
+		record->active_mechanism_transform = active_transform;
+		record->source_execution = trace->source_execution;
+		record->destination_execution = trace->destination_execution;
+		record->mechanism_instance_id = trace->mechanism_instance_id;
+		record->delay_ms = timing.delay_ms;
+		record->dwell_ms = timing.dwell_ms;
+		record->travel_ms = timing.travel_ms;
+		record->wait_ms = timing.wait_ms;
+		record->reset_ms = timing.reset_ms;
+		record->activation_time_ms = trace->activation_time_ms;
+		record->active_time_ms = trace->active_time_ms;
+		record->exit_time_ms = trace->exit_time_ms;
+		record->reset_time_ms = trace->reset_time_ms;
 		record->flags = FactFlags(build->source, trace);
 		FillParameters(build->source, trace, &record->parameters);
 		if (!MechanismId(build->source, trace->controller_entity,
@@ -1599,9 +1962,24 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 	sg_rune_mechanism_id_t controller_id;
 	sg_rune_mechanism_id_t mechanism_id;
 	sg_rune_kernel_parameters_t parameters;
+	sg_host_collision_transition_t inactive_transition;
+	sg_host_collision_transition_t active_transition;
+	sg_host_collision_transform_t inactive_transform;
+	sg_host_collision_transform_t active_transform;
+	sg_mechanism_derived_timing_t timing;
+	sg_mechanism_state_t source_state;
+	sg_mechanism_state_t destination_state;
+	sg_mechanism_recovery_t recovery;
 
 	if (!MechanismId(source, trace->controller_entity, &controller_id) ||
-		!MechanismId(source, trace->mechanism_entity, &mechanism_id))
+		!MechanismId(source, trace->mechanism_entity, &mechanism_id) ||
+		!ReplayHostTrace(source, trace, &inactive_transition,
+			&active_transition, &inactive_transform, &active_transform) ||
+		!DeriveTiming(trace,
+			&source->entity_semantics->entities[trace->controller_entity],
+			&source->entity_semantics->entities[trace->mechanism_entity],
+			&timing) ||
+		!DeriveState(trace->kind, &source_state, &destination_state, &recovery))
 		return 0;
 	FillParameters(source, trace, &parameters);
 	return fact->trace_identity == trace->trace_identity &&
@@ -1613,10 +1991,10 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 		fact->destination_region == trace->destination_region &&
 		fact->source_phase == trace->source_phase &&
 		fact->destination_phase == trace->destination_phase &&
-		fact->kind == trace->kind && fact->source_state == trace->source_state &&
-		fact->destination_state == trace->destination_state &&
+		fact->kind == trace->kind && fact->source_state == source_state &&
+		fact->destination_state == destination_state &&
 		fact->activation == trace->activation &&
-		fact->recovery == trace->recovery &&
+		fact->recovery == recovery &&
 		memcmp(&fact->entry_witness, &trace->entry_witness,
 			sizeof(fact->entry_witness)) == 0 &&
 		memcmp(&fact->exit_witness, &trace->exit_witness,
@@ -1634,10 +2012,28 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 		memcmp(&fact->mechanism_angles,
 			&source->entity_semantics->entities[trace->mechanism_entity].
 				move_angles, sizeof(fact->mechanism_angles)) == 0 &&
-		fact->delay_ms == trace->delay_ms &&
-		fact->dwell_ms == trace->dwell_ms &&
-		fact->travel_ms == trace->travel_ms &&
-		fact->wait_ms == trace->wait_ms && fact->reset_ms == trace->reset_ms &&
+		memcmp(&fact->inactive_transition, &inactive_transition,
+			sizeof(inactive_transition)) == 0 &&
+		memcmp(&fact->active_transition, &active_transition,
+			sizeof(active_transition)) == 0 &&
+		memcmp(&fact->inactive_mechanism_transform, &inactive_transform,
+			sizeof(inactive_transform)) == 0 &&
+		memcmp(&fact->active_mechanism_transform, &active_transform,
+			sizeof(active_transform)) == 0 &&
+		memcmp(&fact->source_execution, &trace->source_execution,
+			sizeof(fact->source_execution)) == 0 &&
+		memcmp(&fact->destination_execution, &trace->destination_execution,
+			sizeof(fact->destination_execution)) == 0 &&
+		fact->mechanism_instance_id == trace->mechanism_instance_id &&
+		fact->delay_ms == timing.delay_ms &&
+		fact->dwell_ms == timing.dwell_ms &&
+		fact->travel_ms == timing.travel_ms &&
+		fact->wait_ms == timing.wait_ms &&
+		fact->reset_ms == timing.reset_ms &&
+		fact->activation_time_ms == trace->activation_time_ms &&
+		fact->active_time_ms == trace->active_time_ms &&
+		fact->exit_time_ms == trace->exit_time_ms &&
+		fact->reset_time_ms == trace->reset_time_ms &&
 		fact->flags == FactFlags(source, trace) &&
 		memcmp(&fact->parameters, &parameters, sizeof(parameters)) == 0;
 }

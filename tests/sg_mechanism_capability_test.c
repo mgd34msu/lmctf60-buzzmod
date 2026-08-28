@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "slipgate/sg_mechanism_capability.h"
@@ -12,17 +13,22 @@
 typedef struct mechanism_fixture_s
 {
 	sg_bsp_world_t world;
+	sg_bsp_plane_t planes[7];
+	sg_bsp_node_t node;
+	sg_bsp_leaf_t leaves[3];
+	uint32_t leaf_brush;
+	sg_bsp_model_t models[2];
+	sg_bsp_brush_t brush;
+	sg_bsp_brush_side_t brush_sides[6];
 	sg_host_collision_authority_t authority;
-	sg_configuration_cell_t cells[2];
-	sg_configuration_space_t configuration;
-	sg_configuration_semantic_region_t regions[2];
-	sg_configuration_semantic_face_t faces[12];
-	sg_configuration_semantics_t configuration_semantics;
+	sg_configuration_space_t *configuration;
+	sg_configuration_semantics_t *configuration_semantics;
 	sg_bsp_entity_semantic_t entities[ENTITY_COUNT];
 	sg_bsp_entity_semantic_edge_t edges[4];
 	sg_bsp_entity_semantics_t entity_semantics;
-	sg_bsp_completeness_result_t completeness;
 	sg_rune_phase_basis_t phases[PHASE_COUNT];
+	sg_host_collision_instance_t inactive_instance;
+	sg_host_collision_instance_t active_instance;
 	sg_mechanism_capability_candidate_t candidates[TRACE_COUNT];
 	sg_mechanism_host_trace_t traces[TRACE_COUNT];
 	sg_mechanism_host_trace_catalog_t catalog;
@@ -30,6 +36,8 @@ typedef struct mechanism_fixture_s
 } mechanism_fixture_t;
 
 static int failures;
+
+static void FixtureDestroy(mechanism_fixture_t *fixture);
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -73,6 +81,85 @@ static sg_rune_model_identity_t MakeIdentity(float gravity)
 	identity.physics.frame_ms = 100U;
 	identity.physics.substep_ms = 10U;
 	return identity;
+}
+
+static void Set3(float value[3], float x, float y, float z)
+{
+	value[0] = x;
+	value[1] = y;
+	value[2] = z;
+}
+
+static void SetPlane(sg_bsp_plane_t *plane, float x, float y, float z,
+	float distance)
+{
+	Set3(plane->normal.value, x, y, z);
+	plane->distance = distance;
+	if (x == 1.0f)
+		plane->type = 0;
+	else if (y == 1.0f)
+		plane->type = 1;
+	else if (z == 1.0f)
+		plane->type = 2;
+	else if (x == -1.0f)
+		plane->type = 3;
+	else if (y == -1.0f)
+		plane->type = 4;
+	else
+		plane->type = 5;
+}
+
+static void InitWorld(mechanism_fixture_t *fixture)
+{
+	uint32_t side;
+
+	SetPlane(&fixture->planes[0], 1.0f, 0.0f, 0.0f, 0.0f);
+	SetPlane(&fixture->planes[1], 1.0f, 0.0f, 0.0f, 2.0f);
+	SetPlane(&fixture->planes[2], -1.0f, 0.0f, 0.0f, 2.0f);
+	SetPlane(&fixture->planes[3], 0.0f, 1.0f, 0.0f, 64.0f);
+	SetPlane(&fixture->planes[4], 0.0f, -1.0f, 0.0f, 64.0f);
+	SetPlane(&fixture->planes[5], 0.0f, 0.0f, 1.0f, 64.0f);
+	SetPlane(&fixture->planes[6], 0.0f, 0.0f, -1.0f, 64.0f);
+	fixture->node.plane = 0U;
+	fixture->node.children[0] = -1;
+	fixture->node.children[1] = -2;
+	fixture->leaves[0].cluster = 0;
+	fixture->leaves[0].area = 1U;
+	fixture->leaves[1].cluster = 1;
+	fixture->leaves[1].area = 2U;
+	fixture->leaves[2].contents = SG_HOST_CONTENTS_SOLID;
+	fixture->leaves[2].cluster = -1;
+	fixture->leaves[2].first_leaf_brush = 0U;
+	fixture->leaves[2].leaf_brush_count = 1U;
+	fixture->leaf_brush = 0U;
+	fixture->brush.first_side = 0U;
+	fixture->brush.side_count = 6U;
+	fixture->brush.contents = SG_HOST_CONTENTS_SOLID;
+	for (side = 0U; side < 6U; side++)
+	{
+		fixture->brush_sides[side].plane = side + 1U;
+		fixture->brush_sides[side].texinfo = -1;
+	}
+	fixture->models[0].headnode = 0;
+	Set3(fixture->models[0].mins.value, -4096.0f, -4096.0f, -4096.0f);
+	Set3(fixture->models[0].maxs.value, 4095.875f, 4095.875f, 4095.875f);
+	fixture->models[1].headnode = -3;
+	Set3(fixture->models[1].mins.value, -2.0f, -64.0f, -64.0f);
+	Set3(fixture->models[1].maxs.value, 2.0f, 64.0f, 64.0f);
+	fixture->world.planes = fixture->planes;
+	fixture->world.plane_count = 7U;
+	fixture->world.nodes = &fixture->node;
+	fixture->world.node_count = 1U;
+	fixture->world.leaves = fixture->leaves;
+	fixture->world.leaf_count = 3U;
+	fixture->world.leaf_brushes = &fixture->leaf_brush;
+	fixture->world.leaf_brush_count = 1U;
+	fixture->world.models = fixture->models;
+	fixture->world.model_count = 2U;
+	fixture->world.brushes = &fixture->brush;
+	fixture->world.brush_count = 1U;
+	fixture->world.brush_sides = fixture->brush_sides;
+	fixture->world.brush_side_count = 6U;
 }
 
 static sg_rune_mechanism_ref_t MechanismRef(const mechanism_fixture_t *fixture,
@@ -124,24 +211,40 @@ static void SetPhase(mechanism_fixture_t *fixture, uint32_t phase_index,
 	phase->time_horizon_ms = 1000U;
 }
 
-static void SetCubeFaces(sg_configuration_semantic_face_t *faces,
-	float minimum_x, float maximum_x)
+static int RegionContains(const mechanism_fixture_t *fixture,
+	uint32_t region_index, const float point[3])
 {
-	static const float normals[6][3] = {
-		{ 1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f },
-		{ 0.0f, 1.0f, 0.0f }, { 0.0f, -1.0f, 0.0f },
-		{ 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, -1.0f }
-	};
+	const sg_configuration_semantic_region_t *region =
+		&fixture->configuration_semantics->regions[region_index];
 	uint32_t face;
 
-	for (face = 0U; face < 6U; face++)
-		memcpy(faces[face].normal, normals[face], sizeof(normals[face]));
-	faces[0].distance = maximum_x;
-	faces[1].distance = -minimum_x;
-	faces[2].distance = 10.0f;
-	faces[3].distance = 10.0f;
-	faces[4].distance = 10.0f;
-	faces[5].distance = 10.0f;
+	if (fixture->configuration->cells[region->cell].stance !=
+		SG_RUNE_STANCE_STANDING)
+		return 0;
+	for (face = region->first_face;
+		face < region->first_face + region->face_count; face++)
+	{
+		const sg_configuration_semantic_face_t *plane =
+			&fixture->configuration_semantics->faces[face];
+		float dot = point[0] * plane->normal[0] +
+			point[1] * plane->normal[1] + point[2] * plane->normal[2];
+
+		if (dot > plane->distance)
+			return 0;
+	}
+	return 1;
+}
+
+static uint32_t FindRegion(const mechanism_fixture_t *fixture,
+	const float point[3])
+{
+	uint32_t region;
+
+	for (region = 0U;
+		region < fixture->configuration_semantics->region_count; region++)
+		if (RegionContains(fixture, region, point))
+			return region;
+	return UINT32_MAX;
 }
 
 static int Traverses(sg_mechanism_capability_kind_t kind)
@@ -154,11 +257,159 @@ static int Traverses(sg_mechanism_capability_kind_t kind)
 		kind == SG_MECHANISM_CAPABILITY_TELEPORT;
 }
 
-static int Conditional(sg_mechanism_capability_kind_t kind)
+static void UpdateTimeline(sg_mechanism_host_trace_t *trace)
 {
-	return kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
-		kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING ||
-		kind == SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE;
+	trace->active_time_ms = trace->activation_time_ms +
+		(uint64_t)trace->delay_ms;
+	trace->exit_time_ms = trace->active_time_ms +
+		(uint64_t)trace->travel_ms + (uint64_t)trace->dwell_ms;
+	trace->reset_time_ms = trace->exit_time_ms +
+		(uint64_t)trace->wait_ms + (uint64_t)trace->reset_ms;
+}
+
+static void SetExecutionState(sg_mech_execution_state_t *state,
+	uint16_t controller_kind, uint16_t node_kind)
+{
+	memset(state, 0, sizeof(*state));
+	state->controller_kind = controller_kind;
+	state->node_kind = node_kind;
+	state->think_role = SG_MECH_EXEC_THINK_SEALED;
+	state->end_role = SG_MECH_EXEC_END_NONE;
+	state->motion_state = SG_MECH_MOTION_AT_ORIGIN;
+	state->fixed_callbacks_match = 1;
+	state->touch_matches = 1;
+	state->stopped = 1;
+}
+
+static uint16_t DoorController(const mechanism_fixture_t *fixture,
+	uint32_t controller, uint32_t mechanism)
+{
+	if (controller == mechanism)
+		return SG_MECHANISM_CONTROLLER_AUTO_DOOR;
+	if (fixture->entities[controller].mechanism_role == SG_MECH_NODE_TRIGGER)
+		return SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+	return SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+}
+
+static void SetExecutionTransition(const mechanism_fixture_t *fixture,
+	sg_mechanism_host_trace_t *trace)
+{
+	uint16_t controller = SG_MECHANISM_CONTROLLER_NONE;
+	uint16_t node = SG_MECH_NODE_OTHER_MOVER;
+
+	switch (trace->kind)
+	{
+	case SG_MECHANISM_CAPABILITY_DOOR_CROSSING:
+	case SG_MECHANISM_CAPABILITY_DWELL:
+	case SG_MECHANISM_CAPABILITY_RESET:
+		controller = DoorController(fixture, trace->controller_entity,
+			trace->mechanism_entity);
+		node = SG_MECH_NODE_DOOR_MASTER;
+		break;
+	case SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION:
+		controller = SG_MECHANISM_CONTROLLER_BUTTON_DOOR;
+		node = SG_MECH_NODE_BUTTON;
+		break;
+	case SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION:
+		controller = SG_MECHANISM_CONTROLLER_DIRECT_TRIGGER_DOOR;
+		node = SG_MECH_NODE_TRIGGER;
+		break;
+	case SG_MECHANISM_CAPABILITY_LIFT_RIDE:
+		controller = SG_MECHANISM_CONTROLLER_PLATFORM;
+		node = SG_MECH_NODE_PLATFORM;
+		break;
+	case SG_MECHANISM_CAPABILITY_TRAIN_RIDE:
+		controller = SG_MECHANISM_CONTROLLER_TRAIN;
+		node = SG_MECH_NODE_TRAIN;
+		break;
+	case SG_MECHANISM_CAPABILITY_PUSH:
+		controller = SG_MECHANISM_CONTROLLER_PUSH;
+		node = SG_MECH_NODE_PUSH;
+		break;
+	case SG_MECHANISM_CAPABILITY_TELEPORT:
+		controller = SG_MECHANISM_CONTROLLER_TELEPORT;
+		node = SG_MECH_NODE_TELEPORTER;
+		break;
+	case SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE:
+		node = SG_MECH_NODE_AREAPORTAL;
+		break;
+	case SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING:
+		node = SG_MECH_NODE_OTHER_MOVER;
+		break;
+	case SG_MECHANISM_CAPABILITY_KIND_COUNT:
+		break;
+	}
+	SetExecutionState(&trace->source_execution, controller, node);
+	SetExecutionState(&trace->destination_execution, controller, node);
+	if (trace->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE)
+	{
+		trace->source_execution.platform_profile =
+			SG_MECH_PLATFORM_PROFILE_STOCK;
+		trace->destination_execution.platform_profile =
+			SG_MECH_PLATFORM_PROFILE_STOCK;
+	}
+	switch (trace->kind)
+	{
+	case SG_MECHANISM_CAPABILITY_DOOR_CROSSING:
+		trace->destination_execution.think_role =
+			SG_MECH_EXEC_THINK_LINEAR_DONE;
+		trace->destination_execution.end_role =
+			SG_MECH_EXEC_END_DOOR_DESTINATION;
+		trace->destination_execution.motion_state =
+			SG_MECH_MOTION_AT_DESTINATION;
+		break;
+	case SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION:
+		trace->destination_execution.think_role =
+			SG_MECH_EXEC_THINK_LINEAR_DONE;
+		trace->destination_execution.end_role =
+			SG_MECH_EXEC_END_BUTTON_DESTINATION;
+		trace->destination_execution.motion_state =
+			SG_MECH_MOTION_AT_DESTINATION;
+		break;
+	case SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION:
+		trace->destination_execution.think_role =
+			SG_MECH_EXEC_THINK_MULTI_WAIT;
+		trace->destination_execution.nextthink_pending = 1;
+		break;
+	case SG_MECHANISM_CAPABILITY_DWELL:
+		trace->source_execution.think_role = SG_MECH_EXEC_THINK_LINEAR_DONE;
+		trace->source_execution.end_role =
+			SG_MECH_EXEC_END_DOOR_DESTINATION;
+		trace->source_execution.motion_state =
+			SG_MECH_MOTION_AT_DESTINATION;
+		trace->destination_execution.think_role =
+			SG_MECH_EXEC_THINK_DOOR_RETURN;
+		trace->destination_execution.end_role =
+			SG_MECH_EXEC_END_DOOR_DESTINATION;
+		trace->destination_execution.motion_state =
+			SG_MECH_MOTION_AT_DESTINATION;
+		trace->destination_execution.nextthink_pending = 1;
+		break;
+	case SG_MECHANISM_CAPABILITY_RESET:
+		trace->source_execution.think_role = SG_MECH_EXEC_THINK_LINEAR_BEGIN;
+		trace->source_execution.end_role = SG_MECH_EXEC_END_DOOR_ORIGIN;
+		trace->source_execution.motion_state = SG_MECH_MOTION_TO_ORIGIN;
+		trace->source_execution.stopped = 0;
+		trace->destination_execution.think_role =
+			SG_MECH_EXEC_THINK_LINEAR_DONE;
+		trace->destination_execution.end_role = SG_MECH_EXEC_END_DOOR_ORIGIN;
+		break;
+	case SG_MECHANISM_CAPABILITY_LIFT_RIDE:
+		trace->destination_execution.think_role =
+			SG_MECH_EXEC_THINK_LINEAR_DONE;
+		trace->destination_execution.end_role =
+			SG_MECH_EXEC_END_PLATFORM_DESTINATION;
+		trace->destination_execution.motion_state =
+			SG_MECH_MOTION_AT_DESTINATION;
+		break;
+	case SG_MECHANISM_CAPABILITY_TRAIN_RIDE:
+	case SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING:
+	case SG_MECHANISM_CAPABILITY_PUSH:
+	case SG_MECHANISM_CAPABILITY_TELEPORT:
+	case SG_MECHANISM_CAPABILITY_AREA_PORTAL_STATE:
+	case SG_MECHANISM_CAPABILITY_KIND_COUNT:
+		break;
+	}
 }
 
 static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
@@ -179,8 +430,10 @@ static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
 	trace->physics_abi_id = fixture->authority.identity.physics_abi_id;
 	trace->controller_entity = controller;
 	trace->mechanism_entity = mechanism;
-	trace->source_region = 0U;
-	trace->destination_region = 1U;
+	trace->source_region = FindRegion(fixture,
+		(const float[3]){ -25.0f, 0.0f, 0.0f });
+	trace->destination_region = FindRegion(fixture,
+		(const float[3]){ 25.0f, 0.0f, 0.0f });
 	trace->source_phase = 0U;
 	trace->destination_phase = 0U;
 	trace->kind = kind;
@@ -188,30 +441,46 @@ static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
 	trace->destination_state = SG_MECHANISM_STATE_ACTIVE;
 	trace->activation = activation;
 	trace->recovery = SG_MECHANISM_RECOVERY_NONE;
-	trace->entry_witness.value[0] = -5.0f;
-	trace->exit_witness.value[0] = 5.0f;
-	trace->observed_displacement.value[0] = 10.0f;
+	trace->entry_witness.value[0] = -25.0f;
+	trace->exit_witness.value[0] = 25.0f;
+	trace->observed_displacement.value[0] = 50.0f;
 	trace->observed_velocity.value[0] = 100.0f;
+	trace->inactive_scene.instances = &fixture->inactive_instance;
+	trace->inactive_scene.instance_count = 1U;
+	trace->active_scene.instances = &fixture->active_instance;
+	trace->active_scene.instance_count = 1U;
+	if (fixture->entities[mechanism].flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL)
+		trace->mechanism_instance_id = UINT64_C(77);
 	if (Traverses(kind))
-	{
 		trace->travel_ms = 100.0f;
-		trace->active_transition.source_valid = 1;
-		trace->active_transition.destination_valid = 1;
-		trace->active_transition.clear = 1;
-		trace->active_transition.sweep.fraction = 1.0f;
-		trace->active_transition.sweep.end[0] = 5.0f;
-	}
-	if (Conditional(kind))
+	if (kind == SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION ||
+		kind == SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION)
+		trace->destination_state = SG_MECHANISM_STATE_ACTIVATING;
+	if (kind == SG_MECHANISM_CAPABILITY_DWELL)
 	{
-		trace->inactive_transition.source_valid = 1;
-		trace->inactive_transition.destination_valid = 1;
-		trace->inactive_transition.sweep.fraction = 0.5f;
+		trace->source_state = SG_MECHANISM_STATE_ACTIVE;
+		trace->destination_state = SG_MECHANISM_STATE_DWELLING;
+		trace->dwell_ms = 300.0f;
+		trace->recovery = SG_MECHANISM_RECOVERY_WAIT_FOR_CYCLE;
 	}
-	if (controller == 2U)
+	if (kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
+		kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE ||
+		kind == SG_MECHANISM_CAPABILITY_PUSH ||
+		kind == SG_MECHANISM_CAPABILITY_TELEPORT)
 	{
-		trace->delay_ms = 250.0f;
-		trace->dwell_ms = 500.0f;
+		trace->source_state = SG_MECHANISM_STATE_ACTIVE;
+		trace->destination_state = SG_MECHANISM_STATE_ACTIVE;
 	}
+	if ((fixture->entities[controller].flags &
+		SG_BSP_ENTITY_DELAY_DEFINED) != 0U)
+		trace->delay_ms = fixture->entities[controller].delay_ms;
+	if ((fixture->entities[controller].flags &
+		SG_BSP_ENTITY_DWELL_DEFINED) != 0U)
+		trace->dwell_ms = fixture->entities[controller].dwell_ms;
+	SetExecutionTransition(fixture, trace);
+	trace->activation_time_ms = UINT64_C(1000) + (uint64_t)index *
+		UINT64_C(10000);
+	UpdateTimeline(trace);
 	candidate->candidate_identity = trace->candidate_identity;
 	candidate->source_set_identity = trace->source_set_identity;
 	candidate->controller_entity = trace->controller_entity;
@@ -240,7 +509,7 @@ static void SetMoverTrace(mechanism_fixture_t *fixture, uint32_t trace_index,
 	candidate->destination_phase = phase_index;
 }
 
-static void FixtureInit(mechanism_fixture_t *fixture)
+static int FixtureInit(mechanism_fixture_t *fixture)
 {
 	static const sg_rune_mechanism_kind_t kinds[8] = {
 		SG_RUNE_MECHANISM_DOOR, SG_RUNE_MECHANISM_BUTTON,
@@ -248,25 +517,33 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 		SG_RUNE_MECHANISM_TRAIN, SG_RUNE_MECHANISM_ROTATOR,
 		SG_RUNE_MECHANISM_PUSH, SG_RUNE_MECHANISM_TELEPORT
 	};
+	sg_rune_model_identity_t identity = MakeIdentity(800.0f);
+	sg_host_collision_error_t host_error;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_limits_t semantics_limits;
 	uint32_t entity;
 
 	memset(fixture, 0, sizeof(*fixture));
-	fixture->authority.world = &fixture->world;
-	fixture->authority.identity = MakeIdentity(800.0f);
-	fixture->configuration.identity = fixture->authority.identity;
-	fixture->configuration.cells = fixture->cells;
-	fixture->configuration.cell_count = 2U;
-	fixture->configuration_semantics.identity = fixture->authority.identity;
-	fixture->configuration_semantics.regions = fixture->regions;
-	fixture->configuration_semantics.region_count = 2U;
-	fixture->configuration_semantics.faces = fixture->faces;
-	fixture->configuration_semantics.face_count = 12U;
-	fixture->regions[0].first_face = 0U;
-	fixture->regions[0].face_count = 6U;
-	fixture->regions[1].first_face = 6U;
-	fixture->regions[1].face_count = 6U;
-	SetCubeFaces(&fixture->faces[0], -10.0f, 0.0f);
-	SetCubeFaces(&fixture->faces[6], 0.0f, 10.0f);
+	InitWorld(fixture);
+	if (!SG_HostCollisionInit(&fixture->authority, &fixture->world, &identity,
+			&host_error) ||
+		!SG_ConfigurationBuild(&fixture->authority, NULL,
+			&fixture->configuration, &configuration_error))
+	{
+		fprintf(stderr, "fixture configuration construction failed\n");
+		exit(1);
+	}
+	SG_ConfigurationSemanticsDefaultLimits(&semantics_limits);
+	if (!SG_ConfigurationSemanticsBuild(&fixture->authority,
+		fixture->configuration, &semantics_limits,
+		&fixture->configuration_semantics, &semantics_error))
+	{
+		SG_ConfigurationDestroy(fixture->configuration);
+		fixture->configuration = NULL;
+		fprintf(stderr, "fixture semantic construction failed\n");
+		exit(1);
+	}
 	fixture->entity_semantics.source_set_identity =
 		fixture->authority.identity.source_set_identity;
 	fixture->entity_semantics.entities = fixture->entities;
@@ -281,6 +558,7 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 		fixture->entities[entity].canonical_ordinal = entity;
 		fixture->entities[entity].flags = SG_BSP_ENTITY_HAS_MECHANISM |
 			SG_BSP_ENTITY_USE_ACTIVATED;
+		fixture->entities[entity].bsp_model = SG_BSP_ENTITY_MODEL_NONE;
 		if (entity < 8U)
 		{
 			fixture->entities[entity].flags |=
@@ -288,7 +566,14 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 			fixture->entities[entity].mechanism_kind = kinds[entity];
 		}
 	}
-	fixture->entities[0].flags |= SG_BSP_ENTITY_TOUCH_ACTIVATED;
+	fixture->entities[0].flags |= SG_BSP_ENTITY_TOUCH_ACTIVATED |
+		SG_BSP_ENTITY_DWELL_DEFINED;
+	fixture->entities[0].dwell_ms = 300.0f;
+	for (entity = 0U; entity < 8U; entity++)
+	{
+		fixture->entities[entity].flags |= SG_BSP_ENTITY_HAS_BRUSH_MODEL;
+		fixture->entities[entity].bsp_model = 1U;
+	}
 	fixture->entities[1].mechanism_role = SG_MECH_NODE_BUTTON;
 	fixture->entities[2].mechanism_role = SG_MECH_NODE_TRIGGER;
 	fixture->entities[2].flags |= SG_BSP_ENTITY_TOUCH_ACTIVATED |
@@ -299,8 +584,9 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 	fixture->entities[5].move_angles.value[2] = 90.0f;
 	fixture->entities[6].move_direction.value[0] = 1.0f;
 	fixture->entities[9].flags |= SG_BSP_ENTITY_CANONICAL_MECHANISM_KIND |
-		SG_BSP_ENTITY_TOUCH_ACTIVATED;
+		SG_BSP_ENTITY_TOUCH_ACTIVATED | SG_BSP_ENTITY_HAS_BRUSH_MODEL;
 	fixture->entities[9].mechanism_kind = SG_RUNE_MECHANISM_DOOR;
+	fixture->entities[9].bsp_model = 1U;
 	fixture->edges[0].source = 1U;
 	fixture->edges[0].destination = 0U;
 	fixture->edges[0].kind = SG_MECH_EDGE_TARGET;
@@ -313,10 +599,12 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 	fixture->edges[2].destination = 9U;
 	fixture->edges[2].kind = SG_MECH_EDGE_TEAM;
 	fixture->edges[2].fanout_ordinal = 0U;
-	fixture->completeness.code = SG_BSP_COMPLETENESS_OK;
-	fixture->completeness.expected_cells = 2U;
-	fixture->completeness.represented_cells = 2U;
-	fixture->completeness.proved_cells = 2U;
+	fixture->inactive_instance.instance_id = UINT64_C(77);
+	fixture->inactive_instance.model_index = 1U;
+	fixture->active_instance.instance_id = UINT64_C(77);
+	fixture->active_instance.model_index = 1U;
+	fixture->active_instance.transform.origin[0] = 50.0f;
+	fixture->active_instance.transform.angles[2] = 90.0f;
 	SetPhase(fixture, 0U, UINT32_MAX);
 	SetPhase(fixture, 1U, 3U);
 	SetPhase(fixture, 2U, 4U);
@@ -350,9 +638,15 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 	SetTrace(fixture, 10U, 1U, 0U, SG_MECHANISM_CAPABILITY_RESET,
 		SG_MECHANISM_ACTIVATION_USE);
 	fixture->traces[10].recovery = SG_MECHANISM_RECOVERY_WAIT_FOR_RESET;
+	fixture->traces[10].source_state = SG_MECHANISM_STATE_RETURNING;
+	fixture->traces[10].destination_state = SG_MECHANISM_STATE_RESET;
 	fixture->traces[10].reset_ms = 700.0f;
+	fixture->traces[10].wait_ms = 300.0f;
 	fixture->candidates[10].recovery =
 		SG_MECHANISM_RECOVERY_WAIT_FOR_RESET;
+	fixture->candidates[10].source_state = SG_MECHANISM_STATE_RETURNING;
+	fixture->candidates[10].destination_state = SG_MECHANISM_STATE_RESET;
+	UpdateTimeline(&fixture->traces[10]);
 	SetTrace(fixture, 11U, 2U, 0U,
 		SG_MECHANISM_CAPABILITY_DOOR_CROSSING,
 		SG_MECHANISM_ACTIVATION_TOUCH);
@@ -367,14 +661,29 @@ static void FixtureInit(mechanism_fixture_t *fixture)
 	fixture->catalog.candidate_verifier_identity = UINT64_C(0xcafe);
 	fixture->catalog.trace_verifier_identity = UINT64_C(0xbeef);
 	fixture->source.authority = &fixture->authority;
-	fixture->source.configuration = &fixture->configuration;
+	fixture->source.configuration = fixture->configuration;
 	fixture->source.configuration_semantics =
-		&fixture->configuration_semantics;
+		fixture->configuration_semantics;
 	fixture->source.entity_semantics = &fixture->entity_semantics;
-	fixture->source.completeness = &fixture->completeness;
 	fixture->source.phases = fixture->phases;
 	fixture->source.phase_count = PHASE_COUNT;
 	fixture->source.host_traces = &fixture->catalog;
+	if (fixture->traces[0].source_region == UINT32_MAX ||
+		fixture->traces[0].destination_region == UINT32_MAX)
+	{
+		FixtureDestroy(fixture);
+		fprintf(stderr, "fixture regions were not reconstructed\n");
+		exit(1);
+	}
+	return 1;
+}
+
+static void FixtureDestroy(mechanism_fixture_t *fixture)
+{
+	SG_ConfigurationSemanticsDestroy(fixture->configuration_semantics);
+	SG_ConfigurationDestroy(fixture->configuration);
+	fixture->configuration_semantics = NULL;
+	fixture->configuration = NULL;
 }
 
 static int Build(mechanism_fixture_t *fixture,
@@ -393,6 +702,9 @@ static void ExpectFailure(mechanism_fixture_t *fixture,
 
 	CHECK(!Build(fixture, &set, &error));
 	CHECK(set == NULL);
+	if (error.code != expected)
+		fprintf(stderr, "expected error %d, got %d at %u\n", (int)expected,
+			(int)error.code, error.source_index);
 	CHECK(error.code == expected);
 }
 
@@ -412,13 +724,21 @@ static void TestCompleteModel(void)
 	uint32_t shared_count = UINT32_MAX;
 	uint32_t shared_relations = 0U;
 
-	FixtureInit(&fixture);
+	CHECK(FixtureInit(&fixture));
+	if (!fixture.configuration)
+		return;
 	snapshot = fixture;
 	CHECK(Build(&fixture, &first, &error));
+	if (!first)
+		fprintf(stderr, "complete build error %d at %u\n", (int)error.code,
+			error.source_index);
 	CHECK(error.code == SG_MECHANISM_CAPABILITY_ERROR_NONE);
 	CHECK(first != NULL && first->fact_count == TRACE_COUNT);
 	if (!first)
+	{
+		FixtureDestroy(&fixture);
 		return;
+	}
 	CHECK(first->topology_edge_count == 3U);
 	CHECK(first->topology_edge_visits == 10U);
 	CHECK(first->topology_relation_count == 12U);
@@ -460,23 +780,25 @@ static void TestCompleteModel(void)
 	CHECK(audit.proved_facts == TRACE_COUNT);
 	CHECK(audit.lookup_comparisons <= (uint64_t)TRACE_COUNT * UINT64_C(6));
 	CHECK(memcmp(&fixture, &snapshot, sizeof(fixture)) == 0);
-	reordered = fixture;
+	CHECK(FixtureInit(&reordered));
+	if (!reordered.configuration)
+	{
+		SG_MechanismCapabilityDestroy(first);
+		FixtureDestroy(&fixture);
+		return;
+	}
 	for (index = 0U; index < TRACE_COUNT; index++)
 	{
 		reordered.traces[index] = fixture.traces[TRACE_COUNT - 1U - index];
+		reordered.traces[index].inactive_scene.instances =
+			&reordered.inactive_instance;
+		reordered.traces[index].active_scene.instances =
+			&reordered.active_instance;
 		reordered.candidates[index] =
 			fixture.candidates[TRACE_COUNT - 1U - index];
 	}
 	reordered.catalog.traces = reordered.traces;
 	reordered.catalog.candidates = reordered.candidates;
-	reordered.source.authority = &reordered.authority;
-	reordered.source.configuration = &reordered.configuration;
-	reordered.source.configuration_semantics =
-		&reordered.configuration_semantics;
-	reordered.source.entity_semantics = &reordered.entity_semantics;
-	reordered.source.completeness = &reordered.completeness;
-	reordered.source.phases = reordered.phases;
-	reordered.source.host_traces = &reordered.catalog;
 	CHECK(Build(&reordered, &second, &error));
 	CHECK(second != NULL && second->fact_count == first->fact_count);
 	if (second)
@@ -492,79 +814,112 @@ static void TestCompleteModel(void)
 	}
 	SG_MechanismCapabilityDestroy(first);
 	SG_MechanismCapabilityDestroy(second);
+	FixtureDestroy(&reordered);
+	FixtureDestroy(&fixture);
 }
 
 static void TestIdentityAndLimits(void)
 {
 	mechanism_fixture_t fixture;
-	FixtureInit(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.authority.identity.schema_id = 0U;
-	fixture.configuration.identity.schema_id = 0U;
-	fixture.configuration_semantics.identity.schema_id = 0U;
+	fixture.configuration->identity.schema_id = 0U;
+	fixture.configuration_semantics->identity.schema_id = 0U;
 	fixture.catalog.identity.schema_id = 0U;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_IDENTITY_MISMATCH);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.authority.identity.physics.gravity = NAN;
-	fixture.configuration.identity.physics.gravity = NAN;
-	fixture.configuration_semantics.identity.physics.gravity = NAN;
+	fixture.configuration->identity.physics.gravity = NAN;
+	fixture.configuration_semantics->identity.physics.gravity = NAN;
 	fixture.catalog.identity.physics.gravity = NAN;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_IDENTITY_MISMATCH);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.authority.identity.standing_hull.maxs.value[0] = -16.0f;
-	fixture.configuration.identity = fixture.authority.identity;
-	fixture.configuration_semantics.identity = fixture.authority.identity;
+	fixture.configuration->identity = fixture.authority.identity;
+	fixture.configuration_semantics->identity = fixture.authority.identity;
 	fixture.catalog.identity = fixture.authority.identity;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_IDENTITY_MISMATCH);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.entity_semantics.entity_count = UINT32_MAX;
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW);
+	FixtureDestroy(&fixture);
 }
 
 static void TestAuthenticatedEvidence(void)
 {
 	mechanism_fixture_t fixture;
 
-	FixtureInit(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.catalog.trace_verifier_identity =
 		fixture.catalog.candidate_verifier_identity;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_INVALID_ARGUMENT);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.traces[0].candidate_identity = UINT64_C(99999);
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.candidates[1].candidate_identity =
 		fixture.candidates[0].candidate_identity;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE);
-	FixtureInit(&fixture);
-	fixture.candidates[0].destination_region = 0U;
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.candidates[0].destination_region = UINT32_MAX;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE);
-	FixtureInit(&fixture);
-	fixture.traces[0].active_transition.sweep.fraction = 0.5f;
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.inactive_instance.transform.origin[0] = 50.0f;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.active_instance.transform.origin[0] = 0.0f;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[0].mechanism_instance_id = UINT64_C(88);
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.traces[0].exit_witness.value[0] = 50.0f;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[0].observed_displacement.value[0] = 9.0f;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[2].destination_execution.nextthink_pending = 0;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
 }
 
 static void TestTopologyTimingPhaseAndCompleteness(void)
 {
 	mechanism_fixture_t fixture;
 
-	FixtureInit(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.edges[3] = fixture.edges[0];
 	fixture.entity_semantics.edge_count = 4U;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.edges[3].source = 0U;
 	fixture.edges[3].destination = 1U;
 	fixture.edges[3].kind = SG_MECH_EDGE_OWNER;
@@ -572,7 +927,8 @@ static void TestTopologyTimingPhaseAndCompleteness(void)
 	fixture.entity_semantics.edge_count = 4U;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.edges[3].source = 1U;
 	fixture.edges[3].destination = 2U;
 	fixture.edges[3].kind = SG_MECH_EDGE_OWNER;
@@ -580,23 +936,60 @@ static void TestTopologyTimingPhaseAndCompleteness(void)
 	fixture.entity_semantics.edge_count = 4U;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.traces[0].travel_ms = -1.0f;
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.traces[0].delay_ms = 1000000000.0f;
 	fixture.traces[0].dwell_ms = 1000000000.0f;
 	fixture.traces[0].travel_ms = 1000000000.0f;
 	fixture.traces[0].wait_ms = 1000000000.0f;
 	fixture.traces[0].reset_ms = 1000000000.0f;
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
-	FixtureInit(&fixture);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[0].active_time_ms++;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[1].destination_state = SG_MECHANISM_STATE_DWELLING;
+	fixture.candidates[1].destination_state = SG_MECHANISM_STATE_DWELLING;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[10].recovery = SG_MECHANISM_RECOVERY_NONE;
+	fixture.candidates[10].recovery = SG_MECHANISM_RECOVERY_NONE;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[10].flags = SG_MECHANISM_HOST_TRACE_ONE_SHOT;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
 	fixture.phases[1].mover = MechanismRef(&fixture, 4U);
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_INVALID_PHASE);
-	FixtureInit(&fixture);
-	fixture.completeness.omitted_cells = 1U;
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.configuration->cell_count--;
 	ExpectFailure(&fixture,
 		SG_MECHANISM_CAPABILITY_ERROR_INCOMPLETE_CONFIGURATION);
+	fixture.configuration->cell_count++;
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	{
+		sg_bsp_world_t empty_world;
+
+		memset(&empty_world, 0, sizeof(empty_world));
+		fixture.authority.world = &empty_world;
+		ExpectFailure(&fixture,
+			SG_MECHANISM_CAPABILITY_ERROR_INCOMPLETE_CONFIGURATION);
+	}
+	FixtureDestroy(&fixture);
 }
 
 static void TestGravityAndAudit(void)
@@ -609,16 +1002,23 @@ static void TestGravityAndAudit(void)
 	uint64_t saved_trace;
 	uint64_t saved_verifier;
 	uint32_t saved_region;
+	float saved_active_origin;
+	float saved_fact_timing;
+	float saved_fact_transform;
+	sg_mechanism_state_t saved_fact_state;
+	int saved_callbacks_match;
 
-	FixtureInit(&fixture);
-	fixture.authority.identity.physics.gravity = 321.0f;
-	fixture.configuration.identity = fixture.authority.identity;
-	fixture.configuration_semantics.identity = fixture.authority.identity;
-	fixture.catalog.identity = fixture.authority.identity;
+	CHECK(FixtureInit(&fixture));
 	CHECK(Build(&fixture, &set, &error));
 	if (!set)
+		fprintf(stderr, "audit build error %d at %u\n", (int)error.code,
+			error.source_index);
+	if (!set)
+	{
+		FixtureDestroy(&fixture);
 		return;
-	CHECK(set->facts[0].parameters.gravity == 321.0f);
+	}
+	CHECK(set->facts[0].parameters.gravity == 800.0f);
 	saved_trace = set->facts[0].trace_identity;
 	set->facts[0].trace_identity++;
 	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
@@ -635,19 +1035,77 @@ static void TestGravityAndAudit(void)
 	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
 	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_IDENTITY_MISMATCH);
 	set->candidate_verifier_identity = saved_verifier;
+	saved_fact_timing = set->facts[0].dwell_ms;
+	set->facts[0].dwell_ms++;
+	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	set->facts[0].dwell_ms = saved_fact_timing;
+	saved_fact_state = set->facts[0].destination_state;
+	set->facts[0].destination_state = SG_MECHANISM_STATE_RESET;
+	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	set->facts[0].destination_state = saved_fact_state;
+	saved_fact_transform =
+		set->facts[0].active_mechanism_transform.origin[0];
+	set->facts[0].active_mechanism_transform.origin[0]++;
+	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	set->facts[0].active_mechanism_transform.origin[0] =
+		saved_fact_transform;
 	saved_region = fixture.candidates[0].destination_region;
-	fixture.candidates[0].destination_region = 0U;
+	fixture.candidates[0].destination_region = UINT32_MAX;
 	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
 	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
 	fixture.candidates[0].destination_region = saved_region;
+	saved_active_origin = fixture.active_instance.transform.origin[0];
+	fixture.active_instance.transform.origin[0] = 0.0f;
+	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	fixture.active_instance.transform.origin[0] = saved_active_origin;
+	saved_callbacks_match =
+		fixture.traces[1].destination_execution.fixed_callbacks_match;
+	fixture.traces[1].destination_execution.fixed_callbacks_match = 0;
+	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	fixture.traces[1].destination_execution.fixed_callbacks_match =
+		saved_callbacks_match;
 	fixture.authority.identity.schema_id = 0U;
-	fixture.configuration.identity.schema_id = 0U;
-	fixture.configuration_semantics.identity.schema_id = 0U;
+	fixture.configuration->identity.schema_id = 0U;
+	fixture.configuration_semantics->identity.schema_id = 0U;
 	fixture.catalog.identity.schema_id = 0U;
 	set->identity.schema_id = 0U;
 	CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
 	CHECK(audit.code == SG_MECHANISM_CAPABILITY_AUDIT_IDENTITY_MISMATCH);
 	SG_MechanismCapabilityDestroy(set);
+	FixtureDestroy(&fixture);
+}
+
+static void TestOneShotTransaction(void)
+{
+	mechanism_fixture_t fixture;
+	sg_mechanism_capability_set_t *set = NULL;
+	sg_mechanism_capability_error_t error;
+	sg_mechanism_capability_audit_result_t audit;
+	const uint32_t traces[2] = { 2U, 11U };
+	uint32_t index;
+
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].dwell_ms = -1000.0f;
+	for (index = 0U; index < 2U; index++)
+	{
+		fixture.traces[traces[index]].dwell_ms = 0.0f;
+		fixture.traces[traces[index]].flags =
+			SG_MECHANISM_HOST_TRACE_ONE_SHOT;
+		UpdateTimeline(&fixture.traces[traces[index]]);
+	}
+	CHECK(Build(&fixture, &set, &error));
+	CHECK(set != NULL);
+	if (set)
+	{
+		CHECK(SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+		SG_MechanismCapabilityDestroy(set);
+	}
+	FixtureDestroy(&fixture);
 }
 
 int main(void)
@@ -657,6 +1115,7 @@ int main(void)
 	TestAuthenticatedEvidence();
 	TestTopologyTimingPhaseAndCompleteness();
 	TestGravityAndAudit();
+	TestOneShotTransaction();
 	if (failures != 0)
 	{
 		fprintf(stderr, "mechanism capability failures: %d\n", failures);

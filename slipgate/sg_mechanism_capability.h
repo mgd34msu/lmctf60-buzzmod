@@ -7,6 +7,7 @@
 #include "sg_bsp_completeness_proof.h"
 #include "sg_bsp_entity_semantics.h"
 #include "sg_configuration_semantics.h"
+#include "sg_rune_mechanism_catalog.h"
 
 #define SG_MECHANISM_CAPABILITY_INDEX_NONE UINT32_MAX
 
@@ -112,8 +113,15 @@ typedef struct sg_mechanism_host_trace_s
 	sg_rune_vec3_t exit_witness;
 	sg_rune_vec3_t observed_displacement;
 	sg_rune_vec3_t observed_velocity;
-	sg_host_collision_transition_t inactive_transition;
-	sg_host_collision_transition_t active_transition;
+	sg_host_collision_scene_t inactive_scene;
+	sg_host_collision_scene_t active_scene;
+	sg_mech_execution_state_t source_execution;
+	sg_mech_execution_state_t destination_execution;
+	uint64_t mechanism_instance_id;
+	uint64_t activation_time_ms;
+	uint64_t active_time_ms;
+	uint64_t exit_time_ms;
+	uint64_t reset_time_ms;
 	float delay_ms;
 	float dwell_ms;
 	float travel_ms;
@@ -188,11 +196,22 @@ typedef struct sg_mechanism_capability_fact_s
 	sg_rune_vec3_t mechanism_direction;
 	sg_rune_vec3_t mechanism_origin;
 	sg_rune_vec3_t mechanism_angles;
+	sg_host_collision_transition_t inactive_transition;
+	sg_host_collision_transition_t active_transition;
+	sg_host_collision_transform_t inactive_mechanism_transform;
+	sg_host_collision_transform_t active_mechanism_transform;
+	sg_mech_execution_state_t source_execution;
+	sg_mech_execution_state_t destination_execution;
+	uint64_t mechanism_instance_id;
 	float delay_ms;
 	float dwell_ms;
 	float travel_ms;
 	float wait_ms;
 	float reset_ms;
+	uint64_t activation_time_ms;
+	uint64_t active_time_ms;
+	uint64_t exit_time_ms;
+	uint64_t reset_time_ms;
 	sg_rune_kernel_parameters_t parameters;
 	sg_mechanism_capability_flags_t flags;
 } sg_mechanism_capability_fact_t;
@@ -230,7 +249,6 @@ typedef struct sg_mechanism_capability_source_s
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *configuration_semantics;
 	const sg_bsp_entity_semantics_t *entity_semantics;
-	const sg_bsp_completeness_result_t *completeness;
 	const sg_rune_phase_basis_t *phases;
 	uint32_t phase_count;
 	const sg_mechanism_host_trace_catalog_t *host_traces;
