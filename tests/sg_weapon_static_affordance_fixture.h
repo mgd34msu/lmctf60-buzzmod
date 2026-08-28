@@ -78,6 +78,11 @@ typedef struct built_fixture_s
 	sg_configuration_space_t *configuration;
 	sg_configuration_semantics_t *semantics;
 	sg_static_visibility_t *visibility;
+	sg_rune_model_t model;
+	sg_rune_cell_t *model_cells;
+	sg_rune_phase_basis_t *model_phases;
+	sg_weapon_static_binding_t binding;
+	sg_weapon_static_source_audit_t source_audit;
 } built_fixture_t;
 
 static void Set3(float value[3], float x, float y, float z)
@@ -100,6 +105,129 @@ static void WriteU32(uint8_t *bytes, uint32_t value)
 	bytes[1] = (uint8_t)(value >> 8);
 	bytes[2] = (uint8_t)(value >> 16);
 	bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void FixtureFillContentIdentity(sg_rune_v2_content_id_t *identity,
+	uint8_t seed)
+{
+	uint32_t index;
+
+	for (index = 0U; index < SG_RUNE_V2_CONTENT_ID_BYTES; index++)
+		identity->bytes[index] = (uint8_t)(seed + (uint8_t)index);
+}
+
+static int FixtureCellCompare(const void *left_pointer,
+	const void *right_pointer)
+{
+	const sg_rune_cell_t *left = left_pointer;
+	const sg_rune_cell_t *right = right_pointer;
+
+	if (left->id.value.source_set_identity !=
+		right->id.value.source_set_identity)
+		return left->id.value.source_set_identity <
+			right->id.value.source_set_identity ? -1 : 1;
+	if (left->id.value.high != right->id.value.high)
+		return left->id.value.high < right->id.value.high ? -1 : 1;
+	if (left->id.value.low != right->id.value.low)
+		return left->id.value.low < right->id.value.low ? -1 : 1;
+	return 0;
+}
+
+static int BuildFixtureModelAndAudit(built_fixture_t *built)
+{
+	uint32_t index;
+
+	built->model_cells = calloc(built->configuration->cell_count,
+		sizeof(*built->model_cells));
+	built->model_phases = calloc(built->configuration->cell_count,
+		sizeof(*built->model_phases));
+	if (!built->model_cells || !built->model_phases)
+	{
+		fprintf(stderr, "model allocation failed\n");
+		return 0;
+	}
+	for (index = 0U; index < built->configuration->cell_count; index++)
+	{
+		sg_rune_cell_t *cell = &built->model_cells[index];
+		sg_rune_phase_basis_t *phase = &built->model_phases[index];
+		sg_rune_order_key_t phase_order = {
+			.source_set_identity =
+				built->fixture.identity.source_set_identity,
+			.domain = SG_RUNE_ORDER_PHASE,
+			.source_index = index,
+			.local_ordinal = index,
+			.variant = 0U
+		};
+
+		cell->id = built->configuration->cells[index].id;
+		if (!SG_RuneModelStableIdToOrderKey(&cell->id.value, &cell->order))
+		{
+			fprintf(stderr, "cell order failed %u\n", index);
+			return 0;
+		}
+		cell->bounds = built->configuration->cells[index].bounds;
+		cell->phases.first = index;
+		cell->phases.count = 1U;
+		phase->order = phase_order;
+		phase->id.value = SG_RuneModelStableIdFromOrderKey(&phase_order);
+		phase->stance = SG_RUNE_STANCE_STANDING;
+		phase->motion = SG_RUNE_MOTION_SUPPORTED;
+		phase->support = SG_RUNE_SUPPORT_SUPPORTED;
+		phase->medium = SG_RUNE_MEDIUM_DRY;
+		phase->void_relation = SG_RUNE_VOID_CLEAR;
+		phase->reference_frame = SG_RUNE_FRAME_WORLD;
+		phase->mover.value = SG_RUNE_STABLE_ID_NONE;
+		phase->time_quantum_ms = 8U;
+		phase->time_horizon_ms = 8U;
+		if (!SG_RuneModelPhaseValid(phase))
+		{
+			fprintf(stderr, "phase invalid %u\n", index);
+			return 0;
+		}
+	}
+	qsort(built->model_cells, built->configuration->cell_count,
+		sizeof(*built->model_cells), FixtureCellCompare);
+	built->model.version = SG_RUNE_MODEL_VERSION;
+	built->model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
+	built->model.flags = SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
+		SG_RUNE_MODEL_NO_RUNTIME_ACTORS;
+	built->model.identity = built->fixture.identity;
+	built->model.completeness.state = SG_RUNE_COMPLETENESS_COMPLETE;
+	built->model.completeness.reason = SG_RUNE_FAILURE_NONE;
+	built->model.completeness.failure_record = UINT32_MAX;
+	built->model.completeness.expected_cells =
+		built->configuration->cell_count;
+	built->model.completeness.covered_cells =
+		built->configuration->cell_count;
+	built->model.cells = built->model_cells;
+	built->model.cell_count = built->configuration->cell_count;
+	built->model.phases = built->model_phases;
+	built->model.phase_count = built->configuration->cell_count;
+	FixtureFillContentIdentity(&built->binding.artifact_identity, 1U);
+	FixtureFillContentIdentity(&built->binding.bsp_identity, 33U);
+	FixtureFillContentIdentity(&built->binding.schema_identity, 65U);
+	built->binding.source_set_identity =
+		built->fixture.identity.source_set_identity;
+	built->binding.visibility_revision = 9U;
+	built->source_audit.binding = built->binding;
+	if (!SG_StaticVisibilityAudit(&built->fixture.authority,
+			built->configuration, built->semantics, built->visibility,
+			&built->source_audit.visibility))
+	{
+		fprintf(stderr, "visibility audit failed %u/%u\n",
+			(unsigned int)built->source_audit.visibility.code,
+			built->source_audit.visibility.record);
+		return 0;
+	}
+	built->source_audit.configuration_cells = built->configuration->cell_count;
+	built->source_audit.semantic_regions = built->semantics->region_count;
+	built->source_audit.semantic_surfaces =
+		built->semantics->hook_surface_count;
+	built->source_audit.semantic_surface_vertices =
+		built->semantics->hook_vertex_count;
+	built->source_audit.model_cells = built->model.cell_count;
+	built->source_audit.model_phases = built->model.phase_count;
+	return 1;
 }
 
 static fixture_t Fixture(int wall, int separate_areas, int connect_areas,
@@ -291,6 +419,11 @@ static int BuildPreparedFixture(built_fixture_t *built, fixture_t fixture)
 			visibility_error.source_index);
 		return 0;
 	}
+	if (!BuildFixtureModelAndAudit(built))
+	{
+		fprintf(stderr, "fixture model/audit build failed\n");
+		return 0;
+	}
 	return 1;
 }
 
@@ -303,6 +436,8 @@ static int BuildFixture(built_fixture_t *built, int wall, int separate_areas,
 
 static void DestroyFixture(built_fixture_t *built)
 {
+	free(built->model_phases);
+	free(built->model_cells);
 	SG_StaticVisibilityDestroy(built->visibility);
 	SG_ConfigurationSemanticsDestroy(built->semantics);
 	SG_ConfigurationDestroy(built->configuration);

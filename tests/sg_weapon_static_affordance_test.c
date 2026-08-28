@@ -6,15 +6,6 @@
 #include "../slipgate/sg_weapon_static_affordance.h"
 #include "sg_weapon_static_affordance_fixture.h"
 
-static void FillContentIdentity(sg_rune_v2_content_id_t *identity,
-	uint8_t seed)
-{
-	uint32_t index;
-
-	for (index = 0U; index < SG_RUNE_V2_CONTENT_ID_BYTES; index++)
-		identity->bytes[index] = (uint8_t)(seed + (uint8_t)index);
-}
-
 static sg_rune_phase_ref_t PhaseRef(uint64_t source_set_identity,
 	uint32_t source_index)
 {
@@ -49,7 +40,8 @@ static sg_weapon_profile_t ResolveProfile(const built_fixture_t *built,
 
 static void CellsAtPoints(const built_fixture_t *built,
 	const float source[3], const float target[3],
-	sg_rune_cell_ref_t *source_cell, sg_rune_cell_ref_t *target_cell)
+	sg_rune_cell_ref_t *source_cell, sg_rune_cell_ref_t *target_cell,
+	sg_rune_phase_ref_t *source_phase, sg_rune_phase_ref_t *target_phase)
 {
 	sg_static_visibility_result_t visibility;
 	sg_static_visibility_error_t error;
@@ -64,6 +56,8 @@ static void CellsAtPoints(const built_fixture_t *built,
 	{
 		memset(source_cell, 0, sizeof(*source_cell));
 		memset(target_cell, 0, sizeof(*target_cell));
+		memset(source_phase, 0, sizeof(*source_phase));
+		memset(target_phase, 0, sizeof(*target_phase));
 		return;
 	}
 	source_index = built->visibility->partitions[
@@ -72,30 +66,29 @@ static void CellsAtPoints(const built_fixture_t *built,
 		visibility.destination_partition].configuration_cell;
 	*source_cell = built->configuration->cells[source_index].id;
 	*target_cell = built->configuration->cells[target_index].id;
+	*source_phase = built->model_phases[source_index].id;
+	*target_phase = built->model_phases[target_index].id;
 }
 
 static sg_weapon_static_query_t Query(const built_fixture_t *built,
-	const float source[3], const float target[3], const float cell_target[3],
+	const float source[3], const float target[3],
 	const sg_rune_bounds_t *target_bounds,
 	sg_weapon_static_relation_t requested)
 {
 	sg_weapon_static_query_input_t input;
 	sg_weapon_static_query_t query;
 	sg_rune_cell_ref_t source_cell, target_cell;
+	sg_rune_phase_ref_t source_phase, target_phase;
 	uint32_t axis;
 
 	memset(&input, 0, sizeof(input));
-	FillContentIdentity(&input.binding.artifact_identity, 1U);
-	FillContentIdentity(&input.binding.bsp_identity, 33U);
-	FillContentIdentity(&input.binding.schema_identity, 65U);
-	input.binding.source_set_identity =
-		built->fixture.identity.source_set_identity;
-	input.binding.visibility_revision = 9U;
-	CellsAtPoints(built, source, cell_target, &source_cell, &target_cell);
+	input.binding = built->binding;
+	CellsAtPoints(built, source, target, &source_cell, &target_cell,
+		&source_phase, &target_phase);
 	input.source_cell = source_cell;
 	input.target_cell = target_cell;
-	input.source_phase = PhaseRef(input.binding.source_set_identity, 1U);
-	input.target_phase = PhaseRef(input.binding.source_set_identity, 2U);
+	input.source_phase = source_phase;
+	input.target_phase = target_phase;
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		input.source_origin.value[axis] = source[axis];
@@ -154,7 +147,9 @@ static int ResolveAffordance(const built_fixture_t *built,
 		.authority = &built->fixture.authority,
 		.configuration = built->configuration,
 		.semantics = built->semantics,
-		.visibility = built->visibility
+		.visibility = built->visibility,
+		.model = &built->model,
+		.audit = &built->source_audit
 	};
 
 	return SG_WeaponStaticAffordanceResolve(&sources, scene, query, profile,
@@ -188,6 +183,50 @@ static int FindWorldWallSurface(const built_fixture_t *built,
 	return 0;
 }
 
+static fixture_t FloorFixture(void)
+{
+	fixture_t fixture = Fixture(1, 0, 0, 1, 0, 0.0f);
+	uint32_t plane;
+
+	for (plane = 0U; plane < fixture.world.plane_count; plane++)
+	{
+		float x = fixture.planes[plane].normal.value[0];
+
+		fixture.planes[plane].normal.value[0] =
+			fixture.planes[plane].normal.value[2];
+		fixture.planes[plane].normal.value[2] = x;
+	}
+	return fixture;
+}
+
+static fixture_t PartialMoverFixture(void)
+{
+	fixture_t fixture = Fixture(1, 0, 0, 1, 0, 0.0f);
+
+	SetPlane(&fixture.planes[7], 0.0f, 1.0f, 0.0f, 0.5f);
+	fixture.sides[8].plane = 7U;
+	fixture.world.plane_count = 8U;
+	return fixture;
+}
+
+static void CheckWitnessOnSelectedSurface(const built_fixture_t *built,
+	const sg_weapon_static_relation_result_t *relation)
+{
+	const sg_configuration_hook_surface_t *surface;
+	float distance;
+
+	CHECK(relation->has_witness_point == 1U);
+	CHECK(relation->visibility.surface < built->semantics->hook_surface_count);
+	if (relation->visibility.surface >= built->semantics->hook_surface_count)
+		return;
+	surface = &built->semantics->hook_surfaces[relation->visibility.surface];
+	distance = relation->witness_point.value[0] * surface->normal[0] +
+		relation->witness_point.value[1] * surface->normal[1] +
+		relation->witness_point.value[2] * surface->normal[2] -
+		surface->distance;
+	CHECK(fabsf(distance) <= 0.03125f);
+}
+
 static void TestEveryProfileFamilyAndEffect(void)
 {
 	built_fixture_t built;
@@ -198,10 +237,13 @@ static void TestEveryProfileFamilyAndEffect(void)
 
 	CHECK(BuildFixture(&built, 0, 0, 0, 1, 0, 0.0f));
 	if (!built.visibility)
+	{
+		DestroyFixture(&built);
 		return;
+	}
 	SidePoints(0, 0.0f, source, target);
 	bounds = BoundsAt(target, 16.0f);
-	query = Query(&built, source, target, target, &bounds,
+	query = Query(&built, source, target, &bounds,
 		SG_WEAPON_STATIC_RELATION_MASK);
 	for (id = 1U; id < (uint32_t)SG_WEAPON_PROFILE_COUNT; id++)
 	{
@@ -243,15 +285,19 @@ static void TestOcclusionImpactSplashBounceAndSky(void)
 	sg_weapon_static_affordance_t affordance;
 	sg_weapon_static_affordance_error_t error;
 	sg_weapon_profile_t rocket, grenade, hook;
-	uint32_t surface = 0U, sky_surface;
+	uint32_t surface = 0U, side;
 
 	CHECK(BuildFixture(&built, 1, 0, 0, 1, 0, 0.0f));
 	if (!built.visibility)
+	{
+		DestroyFixture(&built);
 		return;
+	}
 	SidePoints(0, 0.0f, source, cell_target);
 	CHECK(FindWorldWallSurface(&built, impact, &surface));
 	rocket = ResolveProfile(&built, SG_WEAPON_PROFILE_ROCKET_LAUNCHER);
-	query = Query(&built, source, cell_target, cell_target, &bounds,
+	bounds = BoundsAt(cell_target, 8.0f);
+	query = Query(&built, source, cell_target, &bounds,
 		SG_WEAPON_STATIC_PROJECTILE_CORRIDOR);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &rocket,
 		&affordance, &error));
@@ -259,7 +305,8 @@ static void TestOcclusionImpactSplashBounceAndSky(void)
 		SG_WEAPON_STATIC_PROJECTILE_CORRIDOR) != 0U);
 	CHECK(affordance.relations[1].visibility.reason ==
 		SG_STATIC_VISIBILITY_REASON_STATIC_WORLD);
-	query = Query(&built, source, impact, cell_target, &bounds,
+	bounds = BoundsAt(victim, 8.0f);
+	query = Query(&built, source, victim, &bounds,
 		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH |
 		SG_WEAPON_STATIC_BOUNCE_SURFACE);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &rocket,
@@ -267,6 +314,9 @@ static void TestOcclusionImpactSplashBounceAndSky(void)
 	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_IMPACT_SURFACE) != 0U);
 	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_BLAST_REACH) != 0U);
 	CHECK(affordance.relations[2].visibility.surface == surface);
+	CHECK(affordance.relations[2].has_witness_point == 1U);
+	CHECK(memcmp(affordance.relations[2].witness_point.value, victim,
+		sizeof(victim)) != 0);
 
 	grenade = ResolveProfile(&built, SG_WEAPON_PROFILE_GRENADE_LAUNCHER);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &grenade,
@@ -279,14 +329,25 @@ static void TestOcclusionImpactSplashBounceAndSky(void)
 	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_IMPACT_SURFACE) != 0U);
 	CHECK((affordance.rejected_relations & SG_WEAPON_STATIC_BLAST_REACH) != 0U);
 
-	for (sky_surface = 0U;
-		sky_surface < built.semantics->hook_surface_count; sky_surface++)
+	DestroyFixture(&built);
 	{
-		built.semantics->hook_surfaces[sky_surface].flags |=
-			SG_CONFIGURATION_HOOK_SURFACE_SKY;
-		built.visibility->surfaces[sky_surface].flags |=
-			SG_CONFIGURATION_HOOK_SURFACE_SKY;
+		fixture_t sky = Fixture(1, 0, 0, 1, 0, 0.0f);
+
+		for (side = 0U; side < sky.world.brush_side_count; side++)
+			sky.sides[side].texinfo = 1U;
+		CHECK(BuildPreparedFixture(&built, sky));
 	}
+	if (!built.visibility)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	SidePoints(0, 0.0f, source, cell_target);
+	bounds = BoundsAt(victim, 8.0f);
+	query = Query(&built, source, victim, &bounds,
+		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH |
+		SG_WEAPON_STATIC_BOUNCE_SURFACE);
+	grenade = ResolveProfile(&built, SG_WEAPON_PROFILE_GRENADE_LAUNCHER);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &grenade,
 		&affordance, &error));
 	CHECK((affordance.rejected_relations & SG_WEAPON_STATIC_IMPACT_SURFACE) != 0U);
@@ -311,10 +372,13 @@ static void TestConditionalMoverAndAreaPortal(void)
 
 	CHECK(BuildFixture(&built, 0, 0, 0, 1, 0, 0.0f));
 	if (!built.visibility)
+	{
+		DestroyFixture(&built);
 		return;
+	}
 	SidePoints(0, 0.0f, source, target);
 	bounds = BoundsAt(target, 16.0f);
-	query = Query(&built, source, target, target, &bounds,
+	query = Query(&built, source, target, &bounds,
 		SG_WEAPON_STATIC_DIRECT_VISIBILITY |
 		SG_WEAPON_STATIC_PROJECTILE_CORRIDOR);
 	rail = ResolveProfile(&built, SG_WEAPON_PROFILE_RAILGUN);
@@ -339,10 +403,13 @@ static void TestConditionalMoverAndAreaPortal(void)
 
 	CHECK(BuildFixture(&built, 0, 1, 1, 1, 0, 0.0f));
 	if (!built.visibility)
+	{
+		DestroyFixture(&built);
 		return;
+	}
 	SidePoints(0, 0.0f, source, target);
 	bounds = BoundsAt(target, 16.0f);
-	query = Query(&built, source, target, target, &bounds,
+	query = Query(&built, source, target, &bounds,
 		SG_WEAPON_STATIC_DIRECT_VISIBILITY);
 	rail = ResolveProfile(&built, SG_WEAPON_PROFILE_RAILGUN);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &rail,
@@ -372,11 +439,14 @@ static void TestConditionalSurfaceAndSplashRange(void)
 
 	CHECK(BuildFixture(&built, 1, 0, 0, 1, 0, 0.0f));
 	if (!built.visibility)
+	{
+		DestroyFixture(&built);
 		return;
+	}
 	SidePoints(0, 0.0f, source, cell_target);
 	CHECK(FindWorldWallSurface(&built, impact, &surface));
 	bounds = BoundsAt(near_victim, 8.0f);
-	query = Query(&built, source, impact, cell_target, &bounds,
+	query = Query(&built, source, near_victim, &bounds,
 		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH);
 	rocket = ResolveProfile(&built, SG_WEAPON_PROFILE_ROCKET_LAUNCHER);
 	memset(&instance, 0, sizeof(instance));
@@ -395,7 +465,7 @@ static void TestConditionalSurfaceAndSplashRange(void)
 		SG_STATIC_VISIBILITY_REASON_MOVING_SUBMODEL);
 
 	bounds = BoundsAt(occluded_victim, 8.0f);
-	query = Query(&built, source, impact, cell_target, &bounds,
+	query = Query(&built, source, occluded_victim, &bounds,
 		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &rocket,
 		&affordance, &error));
@@ -406,7 +476,7 @@ static void TestConditionalSurfaceAndSplashRange(void)
 		SG_STATIC_VISIBILITY_REASON_MOVING_SUBMODEL);
 
 	bounds = BoundsAt(far_victim, 8.0f);
-	query = Query(&built, source, impact, cell_target, &bounds,
+	query = Query(&built, source, far_victim, &bounds,
 		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH);
 	CHECK(ResolveAffordance(&built, &empty_scene, &query, &rocket,
 		&affordance, &error));
@@ -414,6 +484,74 @@ static void TestConditionalSurfaceAndSplashRange(void)
 	CHECK((affordance.rejected_relations & SG_WEAPON_STATIC_BLAST_REACH) != 0U);
 	CHECK(affordance.relations[3].reason ==
 		SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH);
+	DestroyFixture(&built);
+}
+
+static void TestNearbyFloorImpactUsesPolygonPoint(void)
+{
+	built_fixture_t built;
+	const float source[3] = { 0.0f, 0.0f, 100.0f };
+	const float actor[3] = { 0.0f, 0.0f, 80.0f };
+	sg_rune_bounds_t bounds = BoundsAt(actor, 8.0f);
+	sg_weapon_static_query_t query;
+	sg_weapon_static_affordance_t affordance;
+	sg_weapon_static_affordance_error_t error;
+	sg_weapon_profile_t rocket;
+
+	CHECK(BuildPreparedFixture(&built, FloorFixture()));
+	if (!built.visibility)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	rocket = ResolveProfile(&built, SG_WEAPON_PROFILE_ROCKET_LAUNCHER);
+	query = Query(&built, source, actor, &bounds,
+		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH);
+	CHECK(ResolveAffordance(&built, &empty_scene, &query, &rocket,
+		&affordance, &error));
+	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_IMPACT_SURFACE) != 0U);
+	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_BLAST_REACH) != 0U);
+	CheckWitnessOnSelectedSurface(&built, &affordance.relations[2]);
+	CheckWitnessOnSelectedSurface(&built, &affordance.relations[3]);
+	CHECK(memcmp(affordance.relations[2].witness_point.value, actor,
+		sizeof(actor)) != 0);
+	DestroyFixture(&built);
+}
+
+static void TestAlternateVisibleSurfaceCandidate(void)
+{
+	built_fixture_t built;
+	const float source[3] = { -100.0f, 0.0f, 0.0f };
+	const float actor[3] = { -80.0f, 0.0f, 0.0f };
+	sg_rune_bounds_t bounds = BoundsAt(actor, 8.0f);
+	sg_weapon_static_query_t query;
+	sg_weapon_static_affordance_t affordance;
+	sg_weapon_static_affordance_error_t error;
+	sg_weapon_profile_t rocket;
+	sg_host_collision_instance_t instance;
+	sg_host_collision_scene_t scene;
+
+	CHECK(BuildPreparedFixture(&built, PartialMoverFixture()));
+	if (!built.visibility)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	rocket = ResolveProfile(&built, SG_WEAPON_PROFILE_ROCKET_LAUNCHER);
+	query = Query(&built, source, actor, &bounds,
+		SG_WEAPON_STATIC_IMPACT_SURFACE | SG_WEAPON_STATIC_BLAST_REACH);
+	memset(&instance, 0, sizeof(instance));
+	instance.instance_id = 23U;
+	instance.model_index = 1U;
+	instance.transform.origin[0] = -50.0f;
+	scene.instances = &instance;
+	scene.instance_count = 1U;
+	CHECK(ResolveAffordance(&built, &scene, &query, &rocket, &affordance,
+		&error));
+	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_IMPACT_SURFACE) != 0U);
+	CHECK((affordance.proven_relations & SG_WEAPON_STATIC_BLAST_REACH) != 0U);
+	CheckWitnessOnSelectedSurface(&built, &affordance.relations[3]);
+	CHECK(fabsf(affordance.relations[3].witness_point.value[1]) > 0.5f);
 	DestroyFixture(&built);
 }
 
@@ -444,7 +582,9 @@ static void CheckBindingRejected(const built_fixture_t *built,
 		.authority = &built->fixture.authority,
 		.configuration = built->configuration,
 		.semantics = built->semantics,
-		.visibility = built->visibility
+		.visibility = built->visibility,
+		.model = &built->model,
+		.audit = &built->source_audit
 	};
 	sg_weapon_static_affordance_t before, output;
 	sg_weapon_static_affordance_error_t error;
@@ -454,6 +594,21 @@ static void CheckBindingRejected(const built_fixture_t *built,
 	CHECK(!SG_WeaponStaticAffordanceResolve(&sources, &empty_scene, query,
 		profile, &output, &error));
 	CHECK(error.code == SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH);
+	CHECK(memcmp(&output, &before, sizeof(output)) == 0);
+}
+
+static void CheckSourcesRejected(const sg_weapon_static_sources_t *sources,
+	const sg_weapon_static_query_t *query, const sg_weapon_profile_t *profile,
+	sg_weapon_static_affordance_error_code_t expected)
+{
+	sg_weapon_static_affordance_t before, output;
+	sg_weapon_static_affordance_error_t error;
+
+	memset(&before, 0xa5, sizeof(before));
+	output = before;
+	CHECK(!SG_WeaponStaticAffordanceResolve(sources, &empty_scene, query,
+		profile, &output, &error));
+	CHECK(error.code == expected);
 	CHECK(memcmp(&output, &before, sizeof(output)) == 0);
 }
 
@@ -516,20 +671,27 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 	sg_rune_model_identity_t configuration_identity_before;
 	sg_rune_model_identity_t semantics_identity_before;
 	sg_rune_model_identity_t visibility_identity_before;
+	sg_rune_model_identity_t model_identity_before;
 	fixture_t fixture_before;
 	sg_configuration_space_t configuration_before;
 	sg_configuration_semantics_t semantics_before;
 	sg_static_visibility_t visibility_before;
-	source_snapshot_t snapshots[17];
+	sg_rune_model_t model_before;
+	sg_weapon_static_source_audit_t source_audit_before;
+	source_snapshot_t snapshots[20];
 	size_t snapshot_count = sizeof(snapshots) / sizeof(snapshots[0]);
 	uint32_t saved_surface_count;
+	uint32_t model_cell_index;
 
 	CHECK(BuildFixture(&built, 0, 0, 0, 1, 0, 0.0f));
 	if (!built.visibility)
+	{
+		DestroyFixture(&built);
 		return;
+	}
 	SidePoints(0, 0.0f, source, target);
 	bounds = BoundsAt(target, 16.0f);
-	query = Query(&built, source, target, target, &bounds,
+	query = Query(&built, source, target, &bounds,
 		SG_WEAPON_STATIC_RELATION_MASK);
 	profile = ResolveProfile(&built, SG_WEAPON_PROFILE_PLASMA_REFLECT);
 	query_before = query;
@@ -538,10 +700,13 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 	configuration_identity_before = built.configuration->identity;
 	semantics_identity_before = built.semantics->identity;
 	visibility_identity_before = built.visibility->identity;
+	model_identity_before = built.model.identity;
 	fixture_before = built.fixture;
 	configuration_before = *built.configuration;
 	semantics_before = *built.semantics;
 	visibility_before = *built.visibility;
+	model_before = built.model;
+	source_audit_before = built.source_audit;
 	memset(snapshots, 0, sizeof(snapshots));
 	snapshots[0] = (source_snapshot_t){ built.configuration->cells,
 		(size_t)built.configuration->cell_count *
@@ -591,7 +756,13 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 	snapshots[15] = (source_snapshot_t){ built.visibility->surfaces,
 		(size_t)built.visibility->surface_count *
 			sizeof(*built.visibility->surfaces), NULL };
-	snapshots[16] = (source_snapshot_t){ &empty_scene,
+	snapshots[16] = (source_snapshot_t){ built.model.cells,
+		(size_t)built.model.cell_count * sizeof(*built.model.cells), NULL };
+	snapshots[17] = (source_snapshot_t){ built.model.phases,
+		(size_t)built.model.phase_count * sizeof(*built.model.phases), NULL };
+	snapshots[18] = (source_snapshot_t){ &built.source_audit,
+		sizeof(built.source_audit), NULL };
+	snapshots[19] = (source_snapshot_t){ &empty_scene,
 		sizeof(empty_scene), NULL };
 	if (!CaptureSources(snapshots, snapshot_count))
 	{
@@ -622,6 +793,8 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 		sizeof(semantics_identity_before)) == 0);
 	CHECK(memcmp(&built.visibility->identity, &visibility_identity_before,
 		sizeof(visibility_identity_before)) == 0);
+	CHECK(memcmp(&built.model.identity, &model_identity_before,
+		sizeof(model_identity_before)) == 0);
 	CHECK(memcmp(&built.fixture, &fixture_before, sizeof(fixture_before)) == 0);
 	CHECK(memcmp(built.configuration, &configuration_before,
 		sizeof(configuration_before)) == 0);
@@ -629,6 +802,9 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 		sizeof(semantics_before)) == 0);
 	CHECK(memcmp(built.visibility, &visibility_before,
 		sizeof(visibility_before)) == 0);
+	CHECK(memcmp(&built.model, &model_before, sizeof(model_before)) == 0);
+	CHECK(memcmp(&built.source_audit, &source_audit_before,
+		sizeof(source_audit_before)) == 0);
 	CheckAndReleaseSources(snapshots, snapshot_count);
 
 	invalid_profile = profile;
@@ -657,6 +833,38 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 	invalid_query.source_cell.value.low++;
 	CheckRejectedTransaction(&built, &invalid_query, &profile,
 		SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+	invalid_query = query;
+	invalid_query.source_cell = query.target_cell;
+	invalid_query.target_cell = query.source_cell;
+	CheckRejectedTransaction(&built, &invalid_query, &profile,
+		SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+	invalid_query = query;
+	invalid_query.source_phase = query.target_phase;
+	invalid_query.target_phase = query.source_phase;
+	CheckRejectedTransaction(&built, &invalid_query, &profile,
+		SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+	invalid_query = query;
+	invalid_query.source_phase = PhaseRef(query.binding.source_set_identity,
+		built.model.phase_count + 7U);
+	CheckRejectedTransaction(&built, &invalid_query, &profile,
+		SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+	for (model_cell_index = 0U; model_cell_index < built.model.cell_count;
+		model_cell_index++)
+		if (SG_RuneModelStableIdEqual(
+				&built.model_cells[model_cell_index].id.value,
+				&query.source_cell.value))
+		{
+			sg_rune_phase_span_t saved_span =
+				built.model_cells[model_cell_index].phases;
+
+			built.model_cells[model_cell_index].phases.first = UINT32_MAX;
+			built.model_cells[model_cell_index].phases.count = UINT32_MAX;
+			CheckRejectedTransaction(&built, &query, &profile,
+				SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+			built.model_cells[model_cell_index].phases = saved_span;
+			break;
+		}
+	CHECK(model_cell_index < built.model.cell_count);
 	invalid_binding = query.binding;
 	invalid_binding.artifact_identity.bytes[0]++;
 	CheckBindingRejected(&built, &query, &profile, &invalid_binding);
@@ -676,8 +884,29 @@ static void TestIdentityDriftHostileInputsAndImmutability(void)
 	saved_surface_count = built.visibility->surface_count;
 	built.visibility->surface_count = UINT32_MAX;
 	CheckRejectedTransaction(&built, &query, &profile,
-		SG_WEAPON_STATIC_AFFORDANCE_ERROR_VISIBILITY);
+		SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH);
 	built.visibility->surface_count = saved_surface_count;
+	{
+		sg_configuration_semantics_t hostile_semantics = *built.semantics;
+		sg_static_visibility_t hostile_visibility = *built.visibility;
+		sg_weapon_static_source_audit_t hostile_audit = built.source_audit;
+		const sg_weapon_static_sources_t hostile_sources = {
+			.binding = query.binding,
+			.authority = &built.fixture.authority,
+			.configuration = built.configuration,
+			.semantics = &hostile_semantics,
+			.visibility = &hostile_visibility,
+			.model = &built.model,
+			.audit = &hostile_audit
+		};
+
+		hostile_semantics.hook_surface_count = UINT32_MAX;
+		hostile_visibility.surface_count = UINT32_MAX;
+		hostile_audit.semantic_surfaces = UINT32_MAX;
+		hostile_audit.visibility.reconstructed_surfaces = UINT32_MAX;
+		CheckSourcesRejected(&hostile_sources, &query, &profile,
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH);
+	}
 
 	built.semantics->identity.schema_id++;
 	CheckRejectedTransaction(&built, &query, &profile,
@@ -709,6 +938,8 @@ int main(void)
 	TestOcclusionImpactSplashBounceAndSky();
 	TestConditionalMoverAndAreaPortal();
 	TestConditionalSurfaceAndSplashRange();
+	TestNearbyFloorImpactUsesPolygonPoint();
+	TestAlternateVisibleSurfaceCandidate();
 	TestIdentityDriftHostileInputsAndImmutability();
 	TestErrorStrings();
 	if (failures)

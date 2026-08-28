@@ -23,9 +23,9 @@ typedef enum sg_weapon_static_reason_e
 	SG_WEAPON_STATIC_REASON_PROFILE_UNSUPPORTED,
 	SG_WEAPON_STATIC_REASON_VISIBILITY,
 	SG_WEAPON_STATIC_REASON_TARGET_NOT_SURFACE,
-	SG_WEAPON_STATIC_REASON_TARGET_SURFACE_UNSUPPORTED,
 	SG_WEAPON_STATIC_REASON_OUTSIDE_SPLASH_REACH,
-	SG_WEAPON_STATIC_REASON_PROJECTILE_CLEARANCE
+	SG_WEAPON_STATIC_REASON_PROJECTILE_CLEARANCE,
+	SG_WEAPON_STATIC_REASON_UNPROVEN_SURFACE_COVERAGE
 } sg_weapon_static_reason_t;
 
 typedef struct sg_weapon_static_relation_result_s
@@ -34,6 +34,9 @@ typedef struct sg_weapon_static_relation_result_s
 	sg_weapon_static_status_t status;
 	sg_weapon_static_reason_t reason;
 	sg_static_visibility_result_t visibility;
+	sg_rune_vec3_t witness_point;
+	uint8_t has_witness_point;
+	uint8_t reserved[3];
 } sg_weapon_static_relation_result_t;
 
 /* This value is static evidence only. It deliberately has no shot-authority
@@ -72,6 +75,21 @@ typedef struct sg_weapon_static_affordance_error_s
 	sg_static_visibility_error_t visibility;
 } sg_weapon_static_affordance_error_t;
 
+/* The accepted boundary records these counts after static visibility audit.
+ * The model is accepted only after SG_RuneModelValidate succeeds; that
+ * contract supplies the canonical order required by bounded lookup. */
+typedef struct sg_weapon_static_source_audit_s
+{
+	sg_weapon_static_binding_t binding;
+	sg_static_visibility_audit_result_t visibility;
+	uint32_t configuration_cells;
+	uint32_t semantic_regions;
+	uint32_t semantic_surfaces;
+	uint32_t semantic_surface_vertices;
+	uint32_t model_cells;
+	uint32_t model_phases;
+} sg_weapon_static_source_audit_t;
+
 /* The accepted-artifact boundary constructs this bundle. Its binding applies
  * to every borrowed object for the full duration of one resolver call. */
 typedef struct sg_weapon_static_sources_s
@@ -81,6 +99,8 @@ typedef struct sg_weapon_static_sources_s
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	const sg_static_visibility_t *visibility;
+	const sg_rune_model_t *model;
+	const sg_weapon_static_source_audit_t *audit;
 } sg_weapon_static_sources_t;
 
 int SG_WeaponStaticAffordanceResolve(
