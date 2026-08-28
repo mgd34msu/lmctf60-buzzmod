@@ -20,6 +20,7 @@ void Com_Printf(char *format, ...);
 static void EmptyPmove(pmove_t *pmove);
 static void WrongHullPmove(pmove_t *pmove);
 static void NoJumpPmove(pmove_t *pmove);
+static void ForwardOnlyPmove(pmove_t *pmove);
 static void UngroundedPmove(pmove_t *pmove);
 static void PortalBoundaryPmove(pmove_t *pmove);
 static int portal_boundary_vertex;
@@ -50,6 +51,13 @@ static void NoJumpPmove(pmove_t *pmove)
 	if (pmove->cmd.upmove > 0)
 		pmove->cmd.upmove = 0;
 	Pmove(pmove);
+}
+
+static void ForwardOnlyPmove(pmove_t *pmove)
+{
+	if (pmove->cmd.angles[YAW] != 0)
+		pmove->cmd.forwardmove = 0;
+	NoJumpPmove(pmove);
 }
 
 static void UngroundedPmove(pmove_t *pmove)
@@ -1121,6 +1129,187 @@ static void TestDestinationLocalizationIsUniqueAndGrounded(void)
 	GroundFixtureDestroy(&fixture);
 }
 
+static void TestSourceRegionLocalizationIsUnique(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	ground_fixture_t saved_fixture;
+	sg_configuration_semantic_region_t regions[5];
+	sg_configuration_semantic_region_t saved_regions[5];
+	sg_configuration_space_t saved_configuration;
+	sg_configuration_semantics_t saved_semantics;
+	sg_configuration_cell_t saved_cells[2];
+	sg_rune_phase_basis_t saved_phases[4];
+	sg_ground_phase_binding_t saved_bindings[4];
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	uint32_t index;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	regions[0] = fixture.regions[0];
+	regions[1] = fixture.regions[0];
+	regions[2] = fixture.regions[1];
+	regions[3] = fixture.regions[2];
+	regions[4] = fixture.regions[3];
+	for (index = 0U; index < 5U; index++)
+		regions[index].id = (uint64_t)index + 1U;
+	fixture.semantics.regions = regions;
+	fixture.semantics.region_count = 5U;
+	fixture.phases[1].velocity.z.min_value = 100.0f;
+	fixture.phases[1].velocity.z.max_value = 100.0f;
+	fixture.phases[3].velocity.z.min_value = 100.0f;
+	fixture.phases[3].velocity.z.max_value = 100.0f;
+	memcpy(saved_regions, regions, sizeof(saved_regions));
+	memcpy(saved_cells, fixture.cells, sizeof(saved_cells));
+	memcpy(saved_phases, fixture.phases, sizeof(saved_phases));
+	memcpy(saved_bindings, fixture.bindings, sizeof(saved_bindings));
+	saved_configuration = fixture.configuration;
+	saved_semantics = fixture.semantics;
+	saved_fixture = fixture;
+	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
+		fixture.bindings, 4U, ForwardOnlyPmove, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
+	CHECK(memcmp(saved_regions, regions, sizeof(saved_regions)) == 0);
+	CHECK(memcmp(saved_cells, fixture.cells, sizeof(saved_cells)) == 0);
+	CHECK(memcmp(saved_phases, fixture.phases, sizeof(saved_phases)) == 0);
+	CHECK(memcmp(saved_bindings, fixture.bindings, sizeof(saved_bindings)) == 0);
+	CHECK(memcmp(&saved_configuration, &fixture.configuration,
+		sizeof(saved_configuration)) == 0);
+	CHECK(memcmp(&saved_semantics, &fixture.semantics,
+		sizeof(saved_semantics)) == 0);
+	CHECK(memcmp(&saved_fixture, &fixture, sizeof(saved_fixture)) == 0);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestSourceCellLocalizationIsUnique(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	ground_fixture_t saved_fixture;
+	sg_configuration_cell_t cells[3];
+	sg_configuration_cell_t saved_cells[3];
+	sg_configuration_semantic_region_t regions[6];
+	sg_configuration_semantic_region_t saved_regions[6];
+	sg_rune_phase_basis_t phases[6];
+	sg_rune_phase_basis_t saved_phases[6];
+	sg_ground_phase_binding_t bindings[6] = {
+		{ 0U, 0U }, { 0U, 1U }, { 1U, 2U }, { 1U, 3U },
+		{ 2U, 4U }, { 2U, 5U }
+	};
+	sg_ground_phase_binding_t saved_bindings[6];
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	uint32_t index;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	cells[0] = fixture.cells[0];
+	cells[1] = fixture.cells[0];
+	cells[2] = fixture.cells[1];
+	for (index = 0U; index < 3U; index++)
+	{
+		cells[index].order.source_index = index;
+		cells[index].order.local_ordinal = index;
+		cells[index].id.value =
+			SG_RuneModelStableIdFromOrderKey(&cells[index].order);
+	}
+	regions[0] = fixture.regions[0];
+	regions[1] = fixture.regions[1];
+	regions[2] = fixture.regions[0];
+	regions[3] = fixture.regions[1];
+	regions[4] = fixture.regions[2];
+	regions[5] = fixture.regions[3];
+	for (index = 0U; index < 6U; index++)
+	{
+		regions[index].id = (uint64_t)index + 1U;
+		regions[index].cell = index / 2U;
+	}
+	for (index = 0U; index < 6U; index++)
+		phases[index] = GroundPhase(&fixture.configuration.identity, index,
+			SG_RUNE_STANCE_STANDING,
+			(index & 1U) == 0U ? SG_RUNE_MOTION_SUPPORTED :
+				SG_RUNE_MOTION_AIRBORNE);
+	phases[1].velocity.z.min_value = 100.0f;
+	phases[1].velocity.z.max_value = 100.0f;
+	phases[3].velocity.z.min_value = 100.0f;
+	phases[3].velocity.z.max_value = 100.0f;
+	phases[5].velocity.z.min_value = 100.0f;
+	phases[5].velocity.z.max_value = 100.0f;
+	fixture.configuration.cells = cells;
+	fixture.configuration.cell_count = 3U;
+	fixture.portal.to_cell = 2U;
+	fixture.semantics.regions = regions;
+	fixture.semantics.region_count = 6U;
+	saved_fixture = fixture;
+	memcpy(saved_cells, cells, sizeof(saved_cells));
+	memcpy(saved_regions, regions, sizeof(saved_regions));
+	memcpy(saved_phases, phases, sizeof(saved_phases));
+	memcpy(saved_bindings, bindings, sizeof(saved_bindings));
+	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, phases, 6U, bindings, 6U,
+		ForwardOnlyPmove, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
+	CHECK(memcmp(&saved_fixture, &fixture, sizeof(saved_fixture)) == 0);
+	CHECK(memcmp(saved_cells, cells, sizeof(saved_cells)) == 0);
+	CHECK(memcmp(saved_regions, regions, sizeof(saved_regions)) == 0);
+	CHECK(memcmp(saved_phases, phases, sizeof(saved_phases)) == 0);
+	CHECK(memcmp(saved_bindings, bindings, sizeof(saved_bindings)) == 0);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestSourcePhaseLocalizationIsUnique(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	ground_fixture_t saved_fixture;
+	sg_rune_phase_basis_t phases[5];
+	sg_rune_phase_basis_t saved_phases[5];
+	sg_ground_phase_binding_t bindings[5] = {
+		{ 0U, 0U }, { 0U, 1U }, { 0U, 4U }, { 1U, 2U }, { 1U, 3U }
+	};
+	sg_ground_phase_binding_t saved_bindings[5];
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	memcpy(phases, fixture.phases, sizeof(fixture.phases));
+	phases[4] = GroundPhase(&fixture.configuration.identity, 4U,
+		SG_RUNE_STANCE_STANDING, SG_RUNE_MOTION_SUPPORTED);
+	phases[1].velocity.z.min_value = 100.0f;
+	phases[1].velocity.z.max_value = 100.0f;
+	phases[3].velocity.z.min_value = 100.0f;
+	phases[3].velocity.z.max_value = 100.0f;
+	saved_fixture = fixture;
+	memcpy(saved_phases, phases, sizeof(saved_phases));
+	memcpy(saved_bindings, bindings, sizeof(saved_bindings));
+	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, phases, 5U, bindings, 5U,
+		ForwardOnlyPmove, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
+	CHECK(memcmp(&saved_fixture, &fixture, sizeof(saved_fixture)) == 0);
+	CHECK(memcmp(saved_phases, phases, sizeof(saved_phases)) == 0);
+	CHECK(memcmp(saved_bindings, bindings, sizeof(saved_bindings)) == 0);
+	GroundFixtureDestroy(&fixture);
+}
+
 static void TestPortalBoundaryContactsReject(void)
 {
 	const test_box_t floor = {
@@ -1659,6 +1848,9 @@ int main(void)
 	TestDiscontinuousLowerLanding();
 	TestAirborneStanceDoesNotRequireSupport();
 	TestDestinationLocalizationIsUniqueAndGrounded();
+	TestSourceRegionLocalizationIsUnique();
+	TestSourceCellLocalizationIsUnique();
+	TestSourcePhaseLocalizationIsUnique();
 	TestPortalBoundaryContactsReject();
 	TestOnlyShallowWaterUsesGroundLane();
 	TestPhysicsValidationAndLandingLaw();

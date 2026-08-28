@@ -1349,6 +1349,33 @@ static void FillCapability(const sg_ground_build_t *build,
 		capability->flags |= SG_GROUND_CAPABILITY_VOID_ADJACENT;
 }
 
+static int FindUniqueCellRegionAtPose(sg_ground_build_t *build,
+	const float point[3], sg_rune_stance_t stance,
+	const sg_host_collision_pose_t *pose, uint32_t *cell_out,
+	uint32_t *region_out);
+
+static int FindUniquePhaseAtPose(const sg_ground_build_t *build,
+	uint32_t cell, uint32_t region, const sg_host_collision_pose_t *pose,
+	const float velocity[3], uint32_t *phase_out)
+{
+	uint32_t binding;
+	uint32_t matches = 0U;
+
+	for (binding = build->cell_phase_offsets[cell];
+		binding < build->cell_phase_offsets[cell + 1U]; binding++)
+	{
+		uint32_t phase = build->bindings[binding].phase;
+
+		if (!PhaseMatchesRegionPose(&build->phases[phase],
+				&build->semantics->regions[region], pose) ||
+			!PhaseContainsVelocity(&build->phases[phase], velocity))
+			continue;
+		*phase_out = phase;
+		matches++;
+	}
+	return matches == 1U ? 1 : matches == 0U ? 0 : -1;
+}
+
 static int EmitForObservation(sg_ground_build_t *build,
 	sg_ground_capability_kind_t kind, uint32_t source_cell,
 	uint32_t destination_cell, uint32_t source_region,
@@ -1359,10 +1386,14 @@ static int EmitForObservation(sg_ground_build_t *build,
 	const sg_host_pmove_result_t *result,
 	const float start[3], const float end[3])
 {
-	uint32_t destination_binding;
+	uint32_t localized_source_cell;
+	uint32_t localized_destination_cell;
+	uint32_t localized_source_region;
+	uint32_t localized_destination_region;
+	uint32_t localized_source_phase;
 	uint32_t destination_phase = SG_GROUND_CAPABILITY_INDEX_NONE;
-	uint32_t matches = 0U;
 	sg_ground_capability_t capability;
+	int localization;
 
 	if (ResultStance(result) != destination_pose->stance ||
 		result->grounded != destination_pose->supported ||
@@ -1373,26 +1404,41 @@ static int EmitForObservation(sg_ground_build_t *build,
 			destination_cell);
 		return -1;
 	}
-	if (!GroundRegionEligible(&build->semantics->regions[destination_region],
-		destination_pose))
-		return 0;
-
-	for (destination_binding = build->cell_phase_offsets[destination_cell];
-		destination_binding < build->cell_phase_offsets[destination_cell + 1U];
-		destination_binding++)
+	localization = FindUniqueCellRegionAtPose(build, start,
+		source_pose->stance, source_pose, &localized_source_cell,
+		&localized_source_region);
+	if (localization != 1 || localized_source_cell != source_cell ||
+		localized_source_region != source_region)
 	{
-		uint32_t candidate_phase =
-			build->bindings[destination_binding].phase;
-
-		if (!PhaseMatchesRegionPose(&build->phases[candidate_phase],
-				&build->semantics->regions[destination_region], destination_pose) ||
-			!PhaseContainsVelocity(&build->phases[candidate_phase],
-				result->velocity))
-			continue;
-		destination_phase = candidate_phase;
-		matches++;
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+			source_cell);
+		return -1;
 	}
-	if (matches != 1U)
+	localization = FindUniqueCellRegionAtPose(build, end,
+		destination_pose->stance, destination_pose,
+		&localized_destination_cell, &localized_destination_region);
+	if (localization != 1 || localized_destination_cell != destination_cell ||
+		localized_destination_region != destination_region)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+			destination_cell);
+		return -1;
+	}
+	if (!GroundRegionEligible(&build->semantics->regions[source_region],
+			source_pose) ||
+		!GroundRegionEligible(&build->semantics->regions[destination_region],
+			destination_pose))
+		return 0;
+	if (FindUniquePhaseAtPose(build, source_cell, source_region, source_pose,
+			initial_velocity, &localized_source_phase) != 1 ||
+		localized_source_phase != source_phase)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+			source_cell);
+		return -1;
+	}
+	if (FindUniquePhaseAtPose(build, destination_cell, destination_region,
+		destination_pose, result->velocity, &destination_phase) != 1)
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
 			destination_cell);
