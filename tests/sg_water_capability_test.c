@@ -164,7 +164,7 @@ static void TestVolumeMediumAndGravity(uint32_t contents,
 	uint32_t fact;
 
 	CHECK(WaterFixtureInit(&fixture, contents, gravity, 0, 0));
-	CHECK(WaterFixtureBuild(&fixture, NULL, &first, &error));
+	CHECK(WaterFixtureBuild(&fixture, &first, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_NONE);
 	CHECK(first != NULL && first->wet_region_count == 1U);
 	if (!first)
@@ -227,7 +227,7 @@ static void TestVolumeMediumAndGravity(uint32_t contents,
 		SG_WATER_DIRECTION_POSITIVE_Z) != NULL);
 	for (fact = 0U; fact < first->fact_count; fact++)
 		CHECK(first->facts[fact].order == fact);
-	CHECK(WaterFixtureBuild(&fixture, NULL, &second, &error));
+	CHECK(WaterFixtureBuild(&fixture, &second, &error));
 	CHECK(second != NULL && second->fact_count == first->fact_count);
 	if (second && second->fact_count == first->fact_count)
 		CHECK(memcmp(second->facts, first->facts,
@@ -249,7 +249,7 @@ static void TestSinkReplayCommand(void)
 	sink_commands_exact = 1;
 	CHECK(SG_WaterCapabilityBuild(&fixture.authority, SinkRecordingPmove,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 2U,
-		fixture.bindings, 2U, NULL, &capabilities, &error));
+		fixture.bindings, 2U, &capabilities, &error));
 	if (!capabilities)
 		return;
 	sink = FindFact(capabilities, SG_WATER_CAPABILITY_SINK, 1U, 1U,
@@ -296,7 +296,7 @@ static void TestCurrents(void)
 
 		CHECK(WaterFixtureInit(&fixture,
 			SG_HOST_CONTENTS_WATER | host_bits[direction], 800.0f, 0, 0));
-		CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+		CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 		if (!capabilities)
 			continue;
 		for (fact = 0U; fact < capabilities->fact_count; fact++)
@@ -325,7 +325,7 @@ static void TestCurrents(void)
 		CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER |
 			SG_HOST_CONTENTS_CURRENT_0 | SG_HOST_CONTENTS_CURRENT_90,
 			800.0f, 0, 0));
-		CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+		CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 		if (capabilities)
 		{
 			current = FindFact(capabilities, SG_WATER_CAPABILITY_CURRENT,
@@ -349,7 +349,7 @@ static void TestCurrents(void)
 			SG_HOST_CONTENTS_CURRENT_0 | SG_HOST_CONTENTS_CURRENT_180,
 			800.0f, 0, 0));
 		capabilities = NULL;
-		CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+		CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 		if (capabilities)
 		{
 			current = FindFact(capabilities, SG_WATER_CAPABILITY_CURRENT,
@@ -366,7 +366,7 @@ static void TestCurrents(void)
 		CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER |
 			SG_HOST_CONTENTS_CURRENT_0, 800.0f, 0, 0));
 		capabilities = NULL;
-		CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+		CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 		if (capabilities)
 		{
 			current = FindFact(capabilities, SG_WATER_CAPABILITY_CURRENT,
@@ -383,8 +383,7 @@ static void TestCurrents(void)
 		capabilities = NULL;
 		CHECK(SG_WaterCapabilityBuild(&fixture.authority,
 			ShallowGroundedPmove, &fixture.configuration, &fixture.semantics,
-			fixture.phases, 2U, fixture.bindings, 2U, NULL,
-			&capabilities, &error));
+			fixture.phases, 2U, fixture.bindings, 2U, &capabilities, &error));
 		if (capabilities)
 		{
 			CHECK(FindFact(capabilities, SG_WATER_CAPABILITY_CURRENT,
@@ -401,8 +400,7 @@ static void TestCurrents(void)
 		capabilities = NULL;
 		CHECK(SG_WaterCapabilityBuild(&fixture.authority,
 			ShallowGroundedPmove, &fixture.configuration, &fixture.semantics,
-			fixture.phases, 2U, fixture.bindings, 2U, NULL,
-			&capabilities, &error));
+			fixture.phases, 2U, fixture.bindings, 2U, &capabilities, &error));
 		if (capabilities)
 		{
 			current = FindFact(capabilities, SG_WATER_CAPABILITY_CURRENT,
@@ -433,7 +431,7 @@ static void TestPortalAndSubmergedCorridor(void)
 	const sg_water_capability_fact_t *entry;
 
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (!capabilities)
 		return;
 	entry = FindFact(capabilities, SG_WATER_CAPABILITY_ENTRY, 0U, 1U,
@@ -450,7 +448,7 @@ static void TestPortalAndSubmergedCorridor(void)
 	fixture.faces[0].normal[0] /= 16384.0f;
 	fixture.faces[7].normal[0] /= 16384.0f;
 	capabilities = NULL;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (capabilities)
 	{
 		entry = FindFact(capabilities, SG_WATER_CAPABILITY_ENTRY, 0U, 1U,
@@ -465,7 +463,7 @@ static void TestPortalAndSubmergedCorridor(void)
 	fixture.portal_vertices[2].value[1] = 40.0f;
 	fixture.portal_vertices[3].value[1] = 24.0f;
 	capabilities = NULL;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (capabilities)
 	{
 		entry = FindFact(capabilities, SG_WATER_CAPABILITY_ENTRY, 0U, 1U,
@@ -482,7 +480,7 @@ static void TestPortalAndSubmergedCorridor(void)
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
 	SetAllWet(&fixture, SG_HOST_CONTENTS_WATER);
 	capabilities = NULL;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (capabilities)
 	{
 		CHECK(FindFact(capabilities, SG_WATER_CAPABILITY_VOLUME_CROSSING,
@@ -514,7 +512,7 @@ static void TestResultStanceAndMedium(void)
 	fixture.phases[1] = WaterFixturePhase(&fixture, 1U, 1U);
 	CHECK(SG_WaterCapabilityBuild(&fixture.authority, StandingPmove,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 2U,
-		fixture.bindings, 2U, NULL, &capabilities, &error));
+		fixture.bindings, 2U, &capabilities, &error));
 	if (capabilities)
 	{
 		exit = FindFact(capabilities, SG_WATER_CAPABILITY_EXIT, 0U, 1U,
@@ -539,7 +537,7 @@ static void TestResultStanceAndMedium(void)
 	capabilities = NULL;
 	CHECK(SG_WaterCapabilityBuild(&fixture.authority, WrongMediumPmove,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 2U,
-		fixture.bindings, 2U, NULL, &capabilities, &error));
+		fixture.bindings, 2U, &capabilities, &error));
 	if (capabilities)
 	{
 		CHECK(FindFact(capabilities, SG_WATER_CAPABILITY_ENTRY, 0U, 1U,
@@ -563,7 +561,7 @@ static void TestPartialBoundaryOverlap(void)
 	fixture.faces[2].distance = 16.0f;
 	fixture.regions[1].bounds.mins.value[1] = -16.0f;
 	fixture.faces[9].distance = 16.0f;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (!capabilities)
 		return;
 	entry = FindFact(capabilities, SG_WATER_CAPABILITY_ENTRY, 0U, 1U,
@@ -636,7 +634,7 @@ static void TestHostileFaceMultiplicity(void)
 	fixture.semantics.face_count = FACES;
 	CHECK(SG_WaterCapabilityBuild(&fixture.authority, WaterFixturePmove,
 		&fixture.configuration, &fixture.semantics, phases, REGIONS,
-		bindings, REGIONS, NULL, &capabilities, &error));
+		bindings, REGIONS, &capabilities, &error));
 	if (capabilities)
 	{
 		uint64_t rejected_all_pairs = (uint64_t)STRIPES * STRIPES;
@@ -664,7 +662,7 @@ static void TestBlockedExit(void)
 	sg_water_capability_error_t error;
 
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 1, 0));
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (capabilities)
 	{
 		CHECK(capabilities->boundary_count == 0U);
@@ -689,7 +687,7 @@ static void TestPhaseVelocityAndNarrowVolume(void)
 	fixture.phases[1].velocity.y.max_value = 0.0f;
 	fixture.phases[1].velocity.z.min_value = 0.0f;
 	fixture.phases[1].velocity.z.max_value = 0.0f;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (capabilities)
 	{
 		positive_x = FindFact(capabilities,
@@ -710,7 +708,7 @@ static void TestPhaseVelocityAndNarrowVolume(void)
 	fixture.regions[1].interior_witness.value[0] = 0.25f;
 	fixture.faces[6].distance = 0.5f;
 	capabilities = NULL;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	if (capabilities)
 	{
 		CHECK(FindFact(capabilities, SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
@@ -757,7 +755,7 @@ static void TestDestinationPhaseSelection(void)
 	bindings[2].phase = 2U;
 	CHECK(SG_WaterCapabilityBuild(&fixture.authority, WaterFixturePmove,
 		&fixture.configuration, &fixture.semantics, phases, 3U,
-		bindings, 3U, NULL, &capabilities, &error));
+		bindings, 3U, &capabilities, &error));
 	if (!capabilities)
 		return;
 	for (fact = 0U; fact < capabilities->fact_count; fact++)
@@ -804,7 +802,7 @@ static void TestSameRegionPhaseSelection(void)
 	bindings[2].phase = 2U;
 	CHECK(SG_WaterCapabilityBuild(&fixture.authority, WaterFixturePmove,
 		&fixture.configuration, &fixture.semantics, phases, 3U,
-		bindings, 3U, NULL, &capabilities, &error));
+		bindings, 3U, &capabilities, &error));
 	if (!capabilities)
 		return;
 	for (fact = 0U; fact < capabilities->fact_count; fact++)
@@ -857,7 +855,7 @@ static void TestAmbiguousLocalDestinationPhase(void)
 	bindings[2].phase = 2U;
 	CHECK(!SG_WaterCapabilityBuild(&fixture.authority, WaterFixturePmove,
 		&fixture.configuration, &fixture.semantics, phases, 3U,
-		bindings, 3U, NULL, &capabilities, &error));
+		bindings, 3U, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_PHASE);
 	CHECK(capabilities == NULL);
 }
@@ -880,7 +878,7 @@ static void TestAmbiguousBoundaryDestinationPhase(void)
 	bindings[2] = fixture.bindings[1];
 	CHECK(!SG_WaterCapabilityBuild(&fixture.authority, WaterFixturePmove,
 		&fixture.configuration, &fixture.semantics, phases, 3U,
-		bindings, 3U, NULL, &capabilities, &error));
+		bindings, 3U, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_PHASE);
 	CHECK(capabilities == NULL);
 }
@@ -898,7 +896,7 @@ static sg_water_capability_set_t *BuildNarrowPlane(float normal_x,
 	fixture.faces[6].normal[0] = normal_x;
 	fixture.faces[6].normal[1] = normal_y;
 	fixture.faces[6].distance = distance;
-	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
 	return capabilities;
 }
 
@@ -961,16 +959,12 @@ static void TestFailureTransactionAndImmutability(void)
 	water_fixture_t fixture;
 	water_fixture_t before;
 	sg_water_capability_set_t *capabilities = NULL;
-	sg_water_capability_limits_t limits;
 	sg_water_capability_error_t error;
 
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 0));
 	memcpy(&before, &fixture, sizeof(before));
-	SG_WaterCapabilityDefaultLimits(&limits);
-	limits.max_facts = 1U;
-	CHECK(!WaterFixtureBuild(&fixture, &limits, &capabilities, &error));
-	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_OVERFLOW);
-	CHECK(capabilities == NULL);
+	CHECK(WaterFixtureBuild(&fixture, &capabilities, &error));
+	CHECK(capabilities != NULL);
 	CHECK(memcmp(&before.configuration, &fixture.configuration,
 		sizeof(fixture.configuration)) == 0);
 	CHECK(memcmp(before.cells, fixture.cells, sizeof(fixture.cells)) == 0);
@@ -981,8 +975,10 @@ static void TestFailureTransactionAndImmutability(void)
 	CHECK(memcmp(before.phases, fixture.phases, sizeof(fixture.phases)) == 0);
 	CHECK(memcmp(before.bindings, fixture.bindings,
 		sizeof(fixture.bindings)) == 0);
+	SG_WaterCapabilityDestroy(capabilities);
+	capabilities = NULL;
 	fixture.configuration.identity.physics.gravity = 100.0f;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 	CHECK(capabilities == NULL);
 	fixture.configuration.identity = fixture.authority.identity;
@@ -990,13 +986,13 @@ static void TestFailureTransactionAndImmutability(void)
 	fixture.authority.identity.physics.gravity = 32768.0f;
 	fixture.configuration.identity.physics.gravity = 32768.0f;
 	fixture.semantics.identity.physics.gravity = 32768.0f;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 	CHECK(capabilities == NULL);
 	fixture.authority.identity.physics.gravity = 100.5f;
 	fixture.configuration.identity.physics.gravity = 100.5f;
 	fixture.semantics.identity.physics.gravity = 100.5f;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 	CHECK(capabilities == NULL);
 }
@@ -1009,12 +1005,12 @@ static void TestMediaMismatch(void)
 
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 0));
 	fixture.regions[1].water_type = SG_HOST_CONTENTS_LAVA;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 	CHECK(capabilities == NULL);
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 0));
 	fixture.phases[1].medium = SG_RUNE_MEDIUM_LAVA;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_PHASE);
 	CHECK(capabilities == NULL);
 }
@@ -1060,7 +1056,7 @@ static void TestPhysicsIdentityValidation(void)
 			host_probe_calls = 0U;
 			CHECK(!SG_WaterCapabilityBuild(&fixture.authority, CountingPmove,
 				&fixture.configuration, &fixture.semantics, fixture.phases, 2U,
-				fixture.bindings, 2U, NULL, &capabilities, &error));
+				fixture.bindings, 2U, &capabilities, &error));
 			CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 			CHECK(capabilities == NULL);
 			CHECK(host_probe_calls == 0U);
@@ -1080,7 +1076,7 @@ static void TestSubstepByteBound(void)
 	fixture.configuration.identity.physics.substep_ms = 256U;
 	fixture.semantics.identity.physics.frame_ms = 512U;
 	fixture.semantics.identity.physics.substep_ms = 256U;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 	CHECK(capabilities == NULL);
 
@@ -1091,17 +1087,13 @@ static void TestSubstepByteBound(void)
 	fixture.configuration.identity.physics.substep_ms = 256U;
 	fixture.semantics.identity.physics.frame_ms = 512U;
 	fixture.semantics.identity.physics.substep_ms = 256U;
-	CHECK(!WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	CHECK(!WaterFixtureBuild(&fixture, &capabilities, &error));
 	CHECK(error.code == SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE);
 	CHECK(capabilities == NULL);
 }
 
 int main(void)
 {
-	sg_water_capability_limits_t limits;
-
-	SG_WaterCapabilityDefaultLimits(&limits);
-	CHECK(limits.max_facts == SG_RUNE_MODEL_MAX_KERNELS);
 	TestVolumeMediumAndGravity(SG_HOST_CONTENTS_WATER,
 		SG_RUNE_MEDIUM_WATER, 100.0f);
 	TestVolumeMediumAndGravity(SG_HOST_CONTENTS_WATER,

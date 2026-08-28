@@ -23,7 +23,6 @@ typedef struct sg_water_build_s
 	uint32_t phase_count;
 	const sg_water_phase_binding_t *bindings;
 	uint32_t binding_count;
-	const sg_water_capability_limits_t *limits;
 	sg_water_capability_set_t *output;
 	uint32_t fact_capacity;
 	uint32_t *binding_offsets;
@@ -326,8 +325,7 @@ static int SourceValid(sg_water_build_t *build)
 	if (!build->authority || !build->authority->world || !build->host_pmove ||
 		!build->configuration || !build->semantics || !build->phases ||
 		build->phase_count == 0U || !build->bindings ||
-		build->binding_count == 0U || !build->limits ||
-		build->limits->max_facts == 0U ||
+		build->binding_count == 0U ||
 		!IdentityValid(&build->authority->identity) ||
 		!IdentityEqual(&build->authority->identity,
 			&build->configuration->identity) ||
@@ -1919,7 +1917,7 @@ static int FinalizeFacts(sg_water_build_t *build)
 			FactCompare(&output->facts[write - 1U], &output->facts[fact]) != 0)
 			output->facts[write++] = output->facts[fact];
 	output->fact_count = write;
-	if (output->fact_count > build->limits->max_facts)
+	if (output->fact_count > SG_RUNE_MODEL_MAX_KERNELS)
 	{
 		SetError(build, SG_WATER_CAPABILITY_ERROR_OVERFLOW,
 			output->fact_count);
@@ -1969,13 +1967,6 @@ static int FinalizeFacts(sg_water_build_t *build)
 	return 1;
 }
 
-void SG_WaterCapabilityDefaultLimits(
-	sg_water_capability_limits_t *limits_out)
-{
-	if (limits_out)
-		limits_out->max_facts = SG_RUNE_MODEL_MAX_KERNELS;
-}
-
 int SG_WaterCapabilityBuild(
 	const sg_host_collision_authority_t *authority,
 	sg_host_pmove_function_t host_pmove,
@@ -1983,22 +1974,15 @@ int SG_WaterCapabilityBuild(
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_phase_basis_t *phases, uint32_t phase_count,
 	const sg_water_phase_binding_t *bindings, uint32_t binding_count,
-	const sg_water_capability_limits_t *limits,
 	sg_water_capability_set_t **capabilities_out,
 	sg_water_capability_error_t *error_out)
 {
-	sg_water_capability_limits_t defaults;
 	sg_water_build_t build;
 	uint32_t region;
 	int success = 0;
 
 	memset(&build, 0, sizeof(build));
 	build.error.source_index = SG_WATER_CAPABILITY_INDEX_NONE;
-	if (!limits)
-	{
-		SG_WaterCapabilityDefaultLimits(&defaults);
-		limits = &defaults;
-	}
 	build.authority = authority;
 	build.host_pmove = host_pmove;
 	build.configuration = configuration;
@@ -2007,7 +1991,6 @@ int SG_WaterCapabilityBuild(
 	build.phase_count = phase_count;
 	build.bindings = bindings;
 	build.binding_count = binding_count;
-	build.limits = limits;
 	if (!capabilities_out || *capabilities_out)
 	{
 		build.error.code = SG_WATER_CAPABILITY_ERROR_INVALID_ARGUMENT;

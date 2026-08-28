@@ -28,7 +28,6 @@ typedef struct water_fixture_s
 int WaterFixtureInit(water_fixture_t *fixture, uint32_t wet_contents,
 	float gravity, int blocked, int portal);
 int WaterFixtureBuild(water_fixture_t *fixture,
-	const sg_water_capability_limits_t *limits,
 	sg_water_capability_set_t **capabilities,
 	sg_water_capability_error_t *error);
 sg_rune_phase_basis_t WaterFixturePhase(const water_fixture_t *fixture,

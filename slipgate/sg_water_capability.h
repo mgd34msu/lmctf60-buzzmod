@@ -28,13 +28,6 @@ typedef struct sg_water_capability_error_s
 	uint32_t source_index;
 } sg_water_capability_error_t;
 
-/* This limit protects the serialized kernel representation. It does not
- * truncate capability discovery. */
-typedef struct sg_water_capability_limits_s
-{
-	uint32_t max_facts;
-} sg_water_capability_limits_t;
-
 typedef struct sg_water_phase_binding_s
 {
 	uint64_t semantic_region_id;
@@ -131,8 +124,6 @@ typedef struct sg_water_capability_set_s
 	uint32_t lattice_maximum_binary_shift;
 } sg_water_capability_set_t;
 
-void SG_WaterCapabilityDefaultLimits(
-	sg_water_capability_limits_t *limits_out);
 int SG_WaterCapabilityBuild(
 	const sg_host_collision_authority_t *authority,
 	sg_host_pmove_function_t host_pmove,
@@ -140,7 +131,6 @@ int SG_WaterCapabilityBuild(
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_phase_basis_t *phases, uint32_t phase_count,
 	const sg_water_phase_binding_t *bindings, uint32_t binding_count,
-	const sg_water_capability_limits_t *limits,
 	sg_water_capability_set_t **capabilities_out,
 	sg_water_capability_error_t *error_out);
 void SG_WaterCapabilityDestroy(sg_water_capability_set_t *capabilities);

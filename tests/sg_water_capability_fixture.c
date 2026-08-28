@@ -330,11 +330,10 @@ int WaterFixtureInit(water_fixture_t *fixture, uint32_t wet_contents,
 }
 
 int WaterFixtureBuild(water_fixture_t *fixture,
-	const sg_water_capability_limits_t *limits,
 	sg_water_capability_set_t **capabilities,
 	sg_water_capability_error_t *error)
 {
 	return SG_WaterCapabilityBuild(&fixture->authority, WaterFixturePmove,
 		&fixture->configuration, &fixture->semantics, fixture->phases, 2U,
-		fixture->bindings, 2U, limits, capabilities, error);
+		fixture->bindings, 2U, capabilities, error);
 }
