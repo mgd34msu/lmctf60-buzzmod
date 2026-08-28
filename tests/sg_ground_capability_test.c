@@ -17,6 +17,9 @@ extern void Pmove(pmove_t *pmove);
 void Com_DPrintf(const char *format, ...);
 void Com_Printf(char *format, ...);
 
+static void EmptyPmove(pmove_t *pmove);
+static void WrongHullPmove(pmove_t *pmove);
+
 void Com_DPrintf(const char *format, ...)
 {
 	(void)format;
@@ -25,6 +28,17 @@ void Com_DPrintf(const char *format, ...)
 void Com_Printf(char *format, ...)
 {
 	(void)format;
+}
+
+static void EmptyPmove(pmove_t *pmove)
+{
+	(void)pmove;
+}
+
+static void WrongHullPmove(pmove_t *pmove)
+{
+	Pmove(pmove);
+	pmove->mins[0] += 1.0f;
 }
 
 static int failures;
@@ -165,8 +179,8 @@ static void GroundFixtureInit(ground_fixture_t *fixture,
 	SetVector(fixture->portal.plane.normal, 1.0f, 0.0f, 0.0f);
 	fixture->portal.vertex_count = 4U;
 	fixture->portal.clearance = 80.0f;
-	SetRune3(&fixture->vertices[0], 0.0f, -32.0f, 0.0f);
-	SetRune3(&fixture->vertices[1], 0.0f, 32.0f, 0.0f);
+	SetRune3(&fixture->vertices[0], 0.0f, -32.0f, -8.0f);
+	SetRune3(&fixture->vertices[1], 0.0f, 32.0f, -8.0f);
 	SetRune3(&fixture->vertices[2], 0.0f, 32.0f, 48.0f);
 	SetRune3(&fixture->vertices[3], 0.0f, -32.0f, 48.0f);
 	fixture->semantics.identity = identity;
@@ -263,6 +277,26 @@ static int HasPortalSourcePhase(const sg_ground_capability_set_t *set,
 			set->capabilities[index].source_phase == source_phase)
 			return 1;
 	return 0;
+}
+
+static int IsQ8(float value)
+{
+	return isfinite(value) && nearbyintf(value * 8.0f) == value * 8.0f;
+}
+
+static int TestPhaseContainsVelocity(const sg_rune_phase_basis_t *phase,
+	const float velocity[3])
+{
+	const sg_rune_interval_t *intervals[3] = {
+		&phase->velocity.x, &phase->velocity.y, &phase->velocity.z
+	};
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+		if (velocity[axis] < intervals[axis]->min_value ||
+			velocity[axis] > intervals[axis]->max_value)
+			return 0;
+	return 1;
 }
 
 static void TestFlatAndGravity(float gravity)
@@ -487,6 +521,9 @@ static void TestDirectedDrop(void)
 	CHECK(GroundBuild(&fixture, NULL, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_DROP));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
+	CHECK(set && set->proved_portals == 1U);
+	CHECK(set && set->proved_directions == 1U);
+	CHECK(set && set->rejected_directions == 1U);
 	if (set)
 	{
 		uint32_t index;
@@ -629,6 +666,283 @@ static void TestPhaseVelocityAuthority(void)
 	GroundFixtureDestroy(&fixture);
 }
 
+static void TestFatalOracleAndUnrepresentablePhase(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
+		fixture.bindings, 4U, EmptyPmove, NULL, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
+		fixture.bindings, 4U, WrongHullPmove, NULL, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	fixture.phases[0].velocity.x.min_value = 0.01f;
+	fixture.phases[0].velocity.x.max_value = 0.02f;
+	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestExactSkewPortalAndZeroMargin(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	uint32_t index;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	SetVector(fixture.portal.plane.normal, 1.0f, 2.0f, 0.0f);
+	fixture.portal.plane.distance = 0.125f;
+	SetRune3(&fixture.vertices[0], 32.125f, -16.0f, -8.0f);
+	SetRune3(&fixture.vertices[1], -31.875f, 16.0f, -8.0f);
+	SetRune3(&fixture.vertices[2], -31.875f, 16.0f, 48.0f);
+	SetRune3(&fixture.vertices[3], 32.125f, -16.0f, 48.0f);
+	fixture.regions[0].bounds.mins.value[1] = -0.25f;
+	fixture.regions[0].bounds.maxs.value[1] = 0.25f;
+	fixture.regions[2].bounds.mins.value[1] = -0.25f;
+	fixture.regions[2].bounds.maxs.value[1] = 0.25f;
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_WALK));
+	if (set)
+		for (index = 0U; index < set->capability_count; index++)
+		{
+			const sg_ground_capability_t *fact = &set->capabilities[index];
+			uint32_t axis;
+
+			for (axis = 0U; axis < 3U; axis++)
+			{
+				CHECK(IsQ8(fact->source_witness.value[axis]));
+				CHECK(IsQ8(fact->destination_witness.value[axis]));
+				CHECK(IsQ8(fact->initial_velocity.value[axis]));
+				CHECK(IsQ8(fact->observed_velocity.value[axis]));
+			}
+			CHECK(fact->source_phase < 4U);
+			CHECK(fact->destination_phase < 4U);
+			if (fact->source_phase < 4U)
+				CHECK(TestPhaseContainsVelocity(
+					&fixture.phases[fact->source_phase],
+					fact->initial_velocity.value));
+			if (fact->destination_phase < 4U)
+				CHECK(TestPhaseContainsVelocity(
+					&fixture.phases[fact->destination_phase],
+					fact->observed_velocity.value));
+		}
+	SG_GroundCapabilityDestroy(set);
+	set = NULL;
+	SetVector(fixture.portal.plane.normal, 1.0f, 0.0f, 0.0f);
+	fixture.portal.plane.distance = 0.0f;
+	SetRune3(&fixture.vertices[0], 0.0f, -32.0f, 0.0f);
+	SetRune3(&fixture.vertices[1], 0.0f, 32.0f, 0.0f);
+	SetRune3(&fixture.vertices[2], 0.0f, 32.0f, 48.0f);
+	SetRune3(&fixture.vertices[3], 0.0f, -32.0f, 48.0f);
+	fixture.regions[0].bounds.mins.value[2] = 0.0f;
+	fixture.regions[0].bounds.maxs.value[2] = 0.0f;
+	fixture.regions[2].bounds.mins.value[2] = 0.0f;
+	fixture.regions[2].bounds.maxs.value[2] = 0.0f;
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
+	CHECK(set && set->proved_directions == 0U);
+	CHECK(set && set->rejected_directions == 2U);
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestCrouchedTakeoffAndBlockedStanding(void)
+{
+	const test_box_t clearance[2] = {
+		{ { -4096.0f, -4096.0f, -4096.0f },
+			{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID },
+		{ { -4096.0f, -4096.0f, 30.0f },
+			{ 4095.0f, 4095.0f, 4095.0f }, SG_HOST_CONTENTS_SOLID }
+	};
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	uint32_t index;
+
+	GroundFixtureInit(&fixture, clearance, 2U, 800.0f,
+		SG_RUNE_STANCE_CROUCHING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_JUMP_TAKEOFF));
+	if (set)
+		for (index = 0U; index < set->capability_count; index++)
+			if (set->capabilities[index].kind ==
+				SG_GROUND_CAPABILITY_JUMP_TAKEOFF)
+				CHECK(fixture.phases[set->capabilities[index].destination_phase].
+					stance == SG_RUNE_STANCE_CROUCHING);
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+
+	GroundFixtureInit(&fixture, clearance, 2U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	set = NULL;
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_JUMP_TAKEOFF));
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestShallowWaterAndVoidPhaseMatching(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	SetPlane(&fixture.world.planes[0], 0.0f, 0.0f, 1.0f, -12.0f);
+	fixture.world.leaves[1].contents = SG_HOST_CONTENTS_WATER;
+	GroundFixtureRebind(&fixture);
+	set = NULL;
+	fixture.regions[0].flags |= SG_CONFIGURATION_SEMANTIC_REGION_WATER;
+	fixture.regions[2].flags |= SG_CONFIGURATION_SEMANTIC_REGION_WATER;
+	fixture.regions[0].water_level = 1U;
+	fixture.regions[2].water_level = 1U;
+	fixture.regions[0].water_type = SG_HOST_CONTENTS_WATER;
+	fixture.regions[2].water_type = SG_HOST_CONTENTS_WATER;
+	fixture.phases[0].medium = SG_RUNE_MEDIUM_WATER;
+	fixture.phases[2].medium = SG_RUNE_MEDIUM_WATER;
+	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
+		fixture.bindings, 4U, Pmove, NULL, &set, &error));
+	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_WALK));
+	SG_GroundCapabilityDestroy(set);
+	set = NULL;
+	fixture.regions[0].water_level = 2U;
+	fixture.regions[2].water_level = 2U;
+	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
+		fixture.bindings, 4U, Pmove, NULL, &set, &error));
+	CHECK(set && !HasPortalSourcePhase(set, 0U, 1U, 0U));
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	set = NULL;
+	fixture.regions[0].flags |=
+		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT;
+	fixture.regions[2].flags |=
+		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT;
+	fixture.phases[0].void_relation = SG_RUNE_VOID_ADJACENT;
+	fixture.phases[2].void_relation = SG_RUNE_VOID_ADJACENT;
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && HasPortalSourcePhase(set, 0U, 1U, 0U));
+	SG_GroundCapabilityDestroy(set);
+	set = NULL;
+	fixture.phases[2].void_relation = SG_RUNE_VOID_CLEAR;
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && !HasPortalSourcePhase(set, 0U, 1U, 0U));
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestDiscontinuousLowerLanding(void)
+{
+	const test_box_t ledges[2] = {
+		{ { -4096.0f, -4096.0f, -4096.0f },
+			{ -16.1f, 4095.0f, -20.1f }, SG_HOST_CONTENTS_SOLID },
+		{ { 16.1f, -4096.0f, -4096.0f },
+			{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID }
+	};
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	uint32_t index;
+
+	GroundFixtureInit(&fixture, ledges, 2U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 4.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_STEP));
+	if (set)
+		for (index = 0U; index < set->capability_count; index++)
+			if (set->capabilities[index].kind == SG_GROUND_CAPABILITY_DROP)
+			{
+				CHECK((fixture.regions[
+					set->capabilities[index].destination_region].flags &
+					SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) == 0U);
+			}
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestAirborneStanceDoesNotRequireSupport(void)
+{
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	uint32_t region;
+	uint32_t phase;
+	uint32_t index;
+
+	GroundFixtureInit(&fixture, NULL, 0U, 100.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	fixture.configuration.portal_count = 0U;
+	fixture.configuration.vertex_count = 0U;
+	fixture.configuration.stance_overlap_count = 1U;
+	fixture.cells[1].stance = SG_RUNE_STANCE_CROUCHING;
+	SetRune3(&fixture.cells[1].bounds.mins, -64.0f, -64.0f, -64.0f);
+	SetRune3(&fixture.cells[1].bounds.maxs, 64.0f, 64.0f, 64.0f);
+	SetRune3(&fixture.cells[1].interior_witness, 0.0f, 0.0f, 24.0f);
+	fixture.stance_overlap.standing_cell = 0U;
+	fixture.stance_overlap.crouching_cell = 1U;
+	SetRune3(&fixture.stance_overlap.interior_witness, 0.0f, 0.0f, 24.0f);
+	for (region = 0U; region < 4U; region++)
+	{
+		fixture.regions[region].flags =
+			SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE;
+		SetRune3(&fixture.regions[region].bounds.mins, -64.0f, -64.0f,
+			-64.0f);
+		SetRune3(&fixture.regions[region].bounds.maxs, 64.0f, 64.0f, 64.0f);
+		SetRune3(&fixture.regions[region].interior_witness, 0.0f, 0.0f, 24.0f);
+	}
+	for (phase = 0U; phase < 4U; phase++)
+	{
+		fixture.phases[phase].motion = SG_RUNE_MOTION_AIRBORNE;
+		fixture.phases[phase].support = SG_RUNE_SUPPORT_NONE;
+	}
+	fixture.phases[2].stance = SG_RUNE_STANCE_CROUCHING;
+	fixture.phases[3].stance = SG_RUNE_STANCE_CROUCHING;
+	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_STANCE));
+	if (set)
+		for (index = 0U; index < set->capability_count; index++)
+			if (set->capabilities[index].kind == SG_GROUND_CAPABILITY_STANCE)
+				CHECK((set->capabilities[index].flags &
+					SG_GROUND_CAPABILITY_REQUIRES_SUPPORT) == 0U);
+	SG_GroundCapabilityDestroy(set);
+	GroundFixtureDestroy(&fixture);
+}
+
 static void TestAtomicityIdentityAndHostileCounts(void)
 {
 	const test_box_t floor = {
@@ -721,6 +1035,12 @@ int main(void)
 	TestStanceOverlap();
 	TestPortalPlaneScalingAndSubsetBindings();
 	TestPhaseVelocityAuthority();
+	TestFatalOracleAndUnrepresentablePhase();
+	TestExactSkewPortalAndZeroMargin();
+	TestCrouchedTakeoffAndBlockedStanding();
+	TestShallowWaterAndVoidPhaseMatching();
+	TestDiscontinuousLowerLanding();
+	TestAirborneStanceDoesNotRequireSupport();
 	TestAtomicityIdentityAndHostileCounts();
 	if (failures)
 	{

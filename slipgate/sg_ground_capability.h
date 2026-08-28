@@ -64,6 +64,7 @@ enum
 
 typedef struct sg_ground_capability_s
 {
+	/* One exact replay observation inside the named source/destination phases. */
 	uint32_t source_cell;
 	uint32_t destination_cell;
 	uint32_t source_region;
@@ -74,6 +75,8 @@ typedef struct sg_ground_capability_s
 	sg_ground_capability_kind_t kind;
 	sg_rune_vec3_t source_witness;
 	sg_rune_vec3_t destination_witness;
+	sg_rune_vec3_t initial_velocity;
+	sg_rune_vec3_t observed_velocity;
 	sg_rune_interval3_t displacement;
 	sg_rune_interval_t duration_ms;
 	float acceleration;
@@ -89,6 +92,8 @@ typedef struct sg_ground_capability_set_s
 	uint32_t capability_count;
 	uint32_t proved_portals;
 	uint32_t rejected_crossings;
+	uint32_t proved_directions;
+	uint32_t rejected_directions;
 	uint64_t pmove_frames;
 } sg_ground_capability_set_t;
 
