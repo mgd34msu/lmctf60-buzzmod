@@ -82,6 +82,8 @@ void SG_HookVisibilityFeasibilityAngleBits(uint16_t code,
 	uint32_t *sine_bits_out, uint32_t *cosine_bits_out);
 void SG_HookVisibilityFeasibilityShortSinCos(int16_t code,
 	float *sine_out, float *cosine_out);
+void SG_HookVisibilityFeasibilityDirection(int16_t pitch, int16_t yaw,
+	float forward[3], float right[3]);
 void SG_HookVisibilityFeasibilitySetError(
 	sg_hook_visibility_build_context_t *build,
 	sg_hook_visibility_feasibility_error_code_t code, uint32_t source_index);
@@ -91,8 +93,26 @@ uint64_t SG_HookVisibilityFeasibilityVerifierSourceDigest(
 	const sg_hook_visibility_feasibility_sources_t *sources);
 int SG_HookVisibilityFeasibilityConstruct(
 	sg_hook_visibility_build_context_t *build);
+int SG_HookVisibilityFeasibilityFamilyValid(
+	sg_hook_visibility_build_context_t *build);
 int SG_HookVisibilityFeasibilityAxisSpans(
-	sg_hook_visibility_build_context_t *build, uint32_t axis,
+	sg_hook_visibility_build_context_t *build, uint32_t axis, int16_t pitch,
+	int16_t yaw, sg_hook_visibility_hand_t hand,
+	const sg_hook_visibility_i16_span_t *x_span,
 	sg_hook_visibility_i16_span_t **spans_out, uint32_t *count_out);
+int SG_HookVisibilityFeasibilityEventCuts(
+	sg_hook_visibility_build_context_t *build, uint32_t axis, int16_t pitch,
+	int16_t yaw, sg_hook_visibility_hand_t hand,
+	const sg_hook_visibility_i16_span_t *x_span,
+	int16_t **cuts_out, uint32_t *count_out);
+int SG_HookVisibilityFeasibilityAuditTiling(
+	const sg_hook_visibility_feasibility_sources_t *sources,
+	const sg_hook_visibility_feasibility_catalog_t *catalog,
+	uint64_t *cardinality_out);
+int SG_HookVisibilityFeasibilityAuditDomainUniform(
+	const sg_hook_visibility_feasibility_sources_t *sources,
+	const sg_hook_visibility_domain_term_t *domain);
+int SG_HookVisibilityFeasibilityAuditFamilyValid(
+	const sg_hook_visibility_feasibility_sources_t *sources);
 
 #endif

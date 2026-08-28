@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SetError SG_HookVisibilityFeasibilitySetError
 
@@ -159,10 +160,11 @@ overflow:
 }
 
 static int AxisCuts(hook_build_t *build, uint32_t axis, int16_t **cuts_out,
-	uint32_t *count_out)
+	int16_t pitch, int16_t yaw, sg_hook_visibility_hand_t hand,
+	const sg_hook_visibility_i16_span_t *x_span, uint32_t *count_out)
 {
-	uint32_t capacity, count;
-	int16_t *cuts;
+	uint32_t capacity, count, event_count, combined;
+	int16_t *cuts, *event_cuts = NULL, *resized;
 
 	if (!CountAxisCuts(build, axis, &capacity) ||
 		!AllocationSize(build, capacity ? capacity : 1U, sizeof(*cuts)))
@@ -178,6 +180,39 @@ static int AxisCuts(hook_build_t *build, uint32_t axis, int16_t **cuts_out,
 		free(cuts);
 		return 0;
 	}
+	if (!SG_HookVisibilityFeasibilityEventCuts(build, axis, pitch, yaw, hand,
+			x_span, &event_cuts, &event_count))
+	{
+		free(cuts);
+		return 0;
+	}
+	if (count > UINT32_MAX - event_count)
+	{
+		free(event_cuts);
+		free(cuts);
+		SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_OVERFLOW, 0U);
+		return 0;
+	}
+	combined = count + event_count;
+	if (!AllocationSize(build, combined ? combined : 1U, sizeof(*cuts)))
+	{
+		free(event_cuts);
+		free(cuts);
+		return 0;
+	}
+	resized = realloc(cuts, (size_t)(combined ? combined : 1U) *
+		sizeof(*cuts));
+	if (!resized)
+	{
+		free(event_cuts);
+		free(cuts);
+		SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_OUT_OF_MEMORY, 0U);
+		return 0;
+	}
+	cuts = resized;
+	memcpy(&cuts[count], event_cuts, (size_t)event_count * sizeof(*cuts));
+	count = combined;
+	free(event_cuts);
 	qsort(cuts, count, sizeof(*cuts), CompareI16);
 	if (count)
 	{
@@ -239,14 +274,16 @@ static int MakeSpans(hook_build_t *build, int16_t minimum, int16_t maximum,
 }
 
 int SG_HookVisibilityFeasibilityAxisSpans(
-	sg_hook_visibility_build_context_t *build, uint32_t axis,
+	sg_hook_visibility_build_context_t *build, uint32_t axis, int16_t pitch,
+	int16_t yaw, sg_hook_visibility_hand_t hand,
+	const sg_hook_visibility_i16_span_t *x_span,
 	sg_hook_visibility_i16_span_t **spans_out, uint32_t *count_out)
 {
 	int16_t *cuts = NULL;
 	uint32_t cut_count = 0U;
 	int result;
 
-	if (!AxisCuts(build, axis, &cuts, &cut_count))
+	if (!AxisCuts(build, axis, &cuts, pitch, yaw, hand, x_span, &cut_count))
 		return 0;
 	result = MakeSpans(build, build->sources->origins.mins[axis],
 		build->sources->origins.maxs[axis], cuts, cut_count, spans_out,

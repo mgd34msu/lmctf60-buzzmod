@@ -51,13 +51,14 @@ static sg_rune_model_identity_t Identity(void)
 }
 
 static void AddBox(hook_visibility_fixture_t *fixture, uint32_t brush,
-	float min_y, float max_y, float min_z, float max_z)
+	float min_x, float max_x, float min_y, float max_y, float min_z,
+	float max_z)
 {
 	uint32_t first_plane = 1U + brush * 6U;
 	uint32_t side;
 
-	SetPlane(&fixture->planes[first_plane], 1.0f, 0.0f, 0.0f, 1.0f);
-	SetPlane(&fixture->planes[first_plane + 1U], -1.0f, 0.0f, 0.0f, 0.0f);
+	SetPlane(&fixture->planes[first_plane], 1.0f, 0.0f, 0.0f, max_x);
+	SetPlane(&fixture->planes[first_plane + 1U], -1.0f, 0.0f, 0.0f, -min_x);
 	SetPlane(&fixture->planes[first_plane + 2U], 0.0f, 1.0f, 0.0f, max_y);
 	SetPlane(&fixture->planes[first_plane + 3U], 0.0f, -1.0f, 0.0f, -min_y);
 	SetPlane(&fixture->planes[first_plane + 4U], 0.0f, 0.0f, 1.0f, max_z);
@@ -88,40 +89,41 @@ int HookVisibilityFixtureInit(hook_visibility_fixture_t *fixture)
 	for (leaf = 0U; leaf < 2U; leaf++)
 	{
 		fixture->leaves[leaf].contents = SG_HOST_CONTENTS_SOLID;
-		fixture->leaves[leaf].first_leaf_brush = leaf * 4U;
-		fixture->leaves[leaf].leaf_brush_count = 4U;
-		for (brush = 0U; brush < 4U; brush++)
-			fixture->leaf_brushes[leaf * 4U + brush] = brush;
+		fixture->leaves[leaf].first_leaf_brush = leaf * 5U;
+		fixture->leaves[leaf].leaf_brush_count = 5U;
+		for (brush = 0U; brush < 5U; brush++)
+			fixture->leaf_brushes[leaf * 5U + brush] = brush;
 	}
-	AddBox(fixture, 0U, -64.0f, 0.0f, -64.0f, 14.0f);
-	AddBox(fixture, 1U, 0.0f, 64.0f, -64.0f, 14.0f);
-	AddBox(fixture, 2U, -64.0f, 0.0f, 14.0f, 64.0f);
-	AddBox(fixture, 3U, 0.0f, 64.0f, 14.0f, 64.0f);
+	AddBox(fixture, 0U, 0.0f, 1.0f, -64.0f, 0.0f, -64.0f, 14.0f);
+	AddBox(fixture, 1U, 0.0f, 1.0f, 0.0f, 64.0f, -64.0f, 14.0f);
+	AddBox(fixture, 2U, 0.0f, 1.0f, -64.0f, 0.0f, 14.0f, 64.0f);
+	AddBox(fixture, 3U, 0.0f, 1.0f, 0.0f, 64.0f, 14.0f, 64.0f);
+	AddBox(fixture, 4U, -4096.0f, -4095.0f, -1.0f, 1.0f, -1.0f, 1.0f);
 	fixture->texinfos[1].flags = SG_HOST_SURFACE_SKY;
 	fixture->model.headnode = 0;
-	Set3(fixture->model.mins.value, -1024.0f, -128.0f, -128.0f);
+	Set3(fixture->model.mins.value, -8192.0f, -128.0f, -128.0f);
 	Set3(fixture->model.maxs.value, 128.0f, 128.0f, 128.0f);
 	fixture->world.planes = fixture->planes;
-	fixture->world.plane_count = 25U;
+	fixture->world.plane_count = 31U;
 	fixture->world.nodes = &fixture->node;
 	fixture->world.node_count = 1U;
 	fixture->world.leaves = fixture->leaves;
 	fixture->world.leaf_count = 2U;
 	fixture->world.leaf_brushes = fixture->leaf_brushes;
-	fixture->world.leaf_brush_count = 8U;
+	fixture->world.leaf_brush_count = 10U;
 	fixture->world.models = &fixture->model;
 	fixture->world.model_count = 1U;
 	fixture->world.brushes = fixture->brushes;
-	fixture->world.brush_count = 4U;
+	fixture->world.brush_count = 5U;
 	fixture->world.brush_sides = fixture->brush_sides;
-	fixture->world.brush_side_count = 24U;
+	fixture->world.brush_side_count = 30U;
 	fixture->world.texinfos = fixture->texinfos;
-	fixture->world.texinfo_count = 4U;
+	fixture->world.texinfo_count = 5U;
 	if (!SG_HostCollisionInit(&fixture->authority, &fixture->world, &identity,
 		&error))
 		return 0;
-	fixture->controls[0].pitch_min = -1;
-	fixture->controls[0].pitch_max = 1;
+	fixture->controls[0].pitch_min = 0;
+	fixture->controls[0].pitch_max = 0;
 	fixture->controls[0].yaw_min = -1;
 	fixture->controls[0].yaw_max = 1;
 	fixture->controls[1].pitch_min = -1;
@@ -145,17 +147,22 @@ int HookVisibilityFixtureInit(hook_visibility_fixture_t *fixture)
 	fixture->rules[3].brush_index = 3U;
 	fixture->rules[3].texinfo = 3U;
 	fixture->rules[3].classification = SG_HOOK_VISIBILITY_SURFACE_HOOKABLE;
+	fixture->rules[4].surface_id = UINT64_C(0x500);
+	fixture->rules[4].brush_index = 4U;
+	fixture->rules[4].texinfo = 4U;
+	fixture->rules[4].classification =
+		SG_HOOK_VISIBILITY_SURFACE_NONHOOKABLE;
 	fixture->sources.collision = &fixture->authority;
 	fixture->sources.controls = fixture->controls;
-	fixture->sources.control_count = 2U;
+	fixture->sources.control_count = 1U;
 	fixture->sources.surface_rules = fixture->rules;
-	fixture->sources.surface_rule_count = 4U;
-	fixture->sources.origins.mins[0] = -640;
+	fixture->sources.surface_rule_count = 5U;
+	fixture->sources.origins.mins[0] = INT16_MIN;
 	fixture->sources.origins.maxs[0] = -72;
-	fixture->sources.origins.mins[1] = -520;
-	fixture->sources.origins.maxs[1] = 520;
-	fixture->sources.origins.mins[2] = -520;
-	fixture->sources.origins.maxs[2] = 408;
+	fixture->sources.origins.mins[1] = -80;
+	fixture->sources.origins.maxs[1] = 80;
+	fixture->sources.origins.mins[2] = -80;
+	fixture->sources.origins.maxs[2] = 80;
 	fixture->sources.stance = SG_RUNE_STANCE_STANDING;
 	fixture->sources.fire_law.identity = UINT64_C(0x4856461001);
 	fixture->sources.fire_law.angle_authority_id =

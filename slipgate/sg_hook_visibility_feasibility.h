@@ -1,6 +1,8 @@
 /*
- * Non-enumerative synthetic gate for stationary, q8, six-plane box worlds.
- * It is not the production hook or air-capability constructor.
+ * Non-enumerative synthetic gate for a stationary two-leaf brush program:
+ * exact q8 six-plane boxes, one facing target slab with away-side source
+ * guards, and bounded one-dimensional short-angle fibers. It is not the
+ * production hook or air-capability constructor.
  */
 #ifndef SG_HOOK_VISIBILITY_FEASIBILITY_H
 #define SG_HOOK_VISIBILITY_FEASIBILITY_H
@@ -155,6 +157,7 @@ typedef enum sg_hook_visibility_feasibility_audit_code_e
 	SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_ROOT_DISAGREEMENT,
 	SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_TERMINAL_DISAGREEMENT,
 	SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_RELATION_DISAGREEMENT,
+	SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_METRIC_DISAGREEMENT,
 	SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_HOST_DISAGREEMENT,
 	SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_OUT_OF_MEMORY
 } sg_hook_visibility_feasibility_audit_code_t;

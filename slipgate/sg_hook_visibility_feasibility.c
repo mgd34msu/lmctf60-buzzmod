@@ -58,51 +58,6 @@ static uint64_t HashFloat(uint64_t hash, float value)
 	return HashU32(hash, bits);
 }
 
-static uint64_t HashMemory(uint64_t hash, const void *memory, size_t size)
-{
-	const uint8_t *bytes = memory;
-	size_t index;
-
-	for (index = 0U; index < size; index++)
-		hash = HashByte(hash, bytes[index]);
-	return hash;
-}
-
-uint64_t SG_HookVisibilityFeasibilityVerifierSourceDigest(
-	const sg_hook_visibility_feasibility_sources_t *sources)
-{
-	const sg_bsp_world_t *world = sources->collision->world;
-	uint64_t hash = HashMemory(HOOK_FNV_OFFSET,
-		&sources->collision->identity, sizeof(sources->collision->identity));
-
-	hash = HashMemory(hash, world->planes,
-		(size_t)world->plane_count * sizeof(*world->planes));
-	hash = HashMemory(hash, world->nodes,
-		(size_t)world->node_count * sizeof(*world->nodes));
-	hash = HashMemory(hash, world->leaves,
-		(size_t)world->leaf_count * sizeof(*world->leaves));
-	hash = HashMemory(hash, world->leaf_brushes,
-		(size_t)world->leaf_brush_count * sizeof(*world->leaf_brushes));
-	hash = HashMemory(hash, world->models,
-		(size_t)world->model_count * sizeof(*world->models));
-	hash = HashMemory(hash, world->brushes,
-		(size_t)world->brush_count * sizeof(*world->brushes));
-	hash = HashMemory(hash, world->brush_sides,
-		(size_t)world->brush_side_count * sizeof(*world->brush_sides));
-	hash = HashMemory(hash, world->texinfos,
-		(size_t)world->texinfo_count * sizeof(*world->texinfos));
-	hash = HashMemory(hash, &sources->origins, sizeof(sources->origins));
-	hash = HashMemory(hash, &sources->stance, sizeof(sources->stance));
-	hash = HashMemory(hash, sources->controls,
-		(size_t)sources->control_count * sizeof(*sources->controls));
-	hash = HashMemory(hash, sources->surface_rules,
-		(size_t)sources->surface_rule_count * sizeof(*sources->surface_rules));
-	hash = HashMemory(hash, &sources->fire_law, sizeof(sources->fire_law));
-	hash = HashU64(hash, sources->producer_identity);
-	hash = HashU64(hash, sources->verifier_identity);
-	return hash;
-}
-
 static uint64_t HashIdentity(uint64_t hash,
 	const sg_rune_model_identity_t *identity)
 {
@@ -317,8 +272,11 @@ static int ControlSupported(const sg_hook_visibility_control_root_t *control)
 	int forward;
 	int reverse;
 
+	/* This is the synthetic gate's bounded fiber, not a production limit. */
 	if (control->pitch_min > control->pitch_max ||
-		control->yaw_min > control->yaw_max)
+		control->yaw_min > control->yaw_max ||
+		(control->pitch_min != control->pitch_max &&
+		 control->yaw_min != control->yaw_max))
 		return 0;
 	forward = control->pitch_min >= -1 && control->pitch_max <= 1 &&
 		control->yaw_min >= -1 && control->yaw_max <= 1;
@@ -389,21 +347,12 @@ static int SourcesValid(sg_hook_visibility_build_context_t *build)
 			4U);
 		return 0;
 	}
+	if (law->maximum_range * 8.0f > (float)INT32_MAX ||
+		law->maximum_range * 8.0f !=
+			(float)(int32_t)(law->maximum_range * 8.0f))
 	{
-		float sine_one, cosine_one;
-		float range_q8 = law->maximum_range * 8.0f;
-
-		SG_HookVisibilityFeasibilityShortSinCos(1, &sine_one, &cosine_one);
-		(void)cosine_one;
-		if (range_q8 > (float)INT32_MAX ||
-			range_q8 != (float)(int32_t)range_q8 ||
-			(law->maximum_range + law->muzzle_forward +
-			 law->muzzle_lateral) * fabsf(sine_one) >= 0.125f)
-		{
-			SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED,
-				6U);
-			return 0;
-		}
+		SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED, 6U);
+		return 0;
 	}
 	if (law->moving_model_count && !law->mover_domain_identity)
 	{
@@ -463,8 +412,13 @@ static int SourcesValid(sg_hook_visibility_build_context_t *build)
 			uint32_t negative_axes[3] = {0U, 0U, 0U};
 			uint32_t side_offset;
 
-			if (brush->side_count != 6U ||
-				brush->first_side > world->brush_side_count ||
+			if (brush->side_count != 6U)
+			{
+				SetError(build,
+					SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED, first);
+				return 0;
+			}
+			if (brush->first_side > world->brush_side_count ||
 				brush->side_count >
 					world->brush_side_count - brush->first_side)
 			{
@@ -557,6 +511,7 @@ int SG_HookVisibilityFeasibilityBuild(
 	sg_hook_visibility_feasibility_error_t *error_out)
 {
 	hook_build_t build;
+	sg_hook_visibility_feasibility_audit_report_t audit;
 	int success = 0;
 
 	memset(&build, 0, sizeof(build));
@@ -580,6 +535,8 @@ int SG_HookVisibilityFeasibilityBuild(
 	}
 	if (!SourcesValid(&build))
 		goto done;
+	if (!SG_HookVisibilityFeasibilityFamilyValid(&build))
+		goto done;
 	if (AngleAuthorityId() != SG_HOOK_VISIBILITY_ANGLE_AUTHORITY_ID)
 	{
 		SetError(&build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_ANGLE_AUTHORITY,
@@ -589,6 +546,12 @@ int SG_HookVisibilityFeasibilityBuild(
 	build.catalog->metrics.angle_authority_entries = UINT16_MAX + UINT64_C(1);
 	if (!SG_HookVisibilityFeasibilityConstruct(&build))
 		goto done;
+	if (!SG_HookVisibilityFeasibilityAudit(sources, build.catalog, &audit))
+	{
+		SetError(&build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_HOST_DISAGREEMENT,
+			audit.record);
+		goto done;
+	}
 	*catalog_out = build.catalog;
 	build.catalog = NULL;
 	success = 1;
@@ -791,6 +754,8 @@ const char *SG_HookVisibilityFeasibilityAuditCodeString(
 		return "terminal disagreement";
 	case SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_RELATION_DISAGREEMENT:
 		return "relation disagreement";
+	case SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_METRIC_DISAGREEMENT:
+		return "metric disagreement";
 	case SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_HOST_DISAGREEMENT:
 		return "host disagreement";
 	case SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_OUT_OF_MEMORY:

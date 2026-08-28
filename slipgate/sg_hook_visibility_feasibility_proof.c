@@ -23,43 +23,23 @@ static int AllocationSize(hook_build_t *build, size_t count,
 	return 1;
 }
 
-static int MakeControlSpans(int16_t minimum, int16_t maximum, int yaw,
-	sg_hook_visibility_i16_span_t spans[3], uint32_t *count_out)
-{
-	uint32_t count = 0U;
-	int32_t value;
-
-	if (yaw && minimum >= 32766)
-	{
-		spans[0].minimum = minimum;
-		spans[0].maximum = maximum;
-		*count_out = 1U;
-		return 1;
-	}
-	for (value = minimum; value <= maximum; value++)
-	{
-		if (count >= 3U)
-			return 0;
-		spans[count].minimum = (int16_t)value;
-		spans[count++].maximum = (int16_t)value;
-	}
-	*count_out = count;
-	return 1;
-}
-
-static void Direction(int16_t pitch, int16_t yaw, float forward[3],
-	float right[3])
+void SG_HookVisibilityFeasibilityDirection(int16_t pitch, int16_t yaw,
+	float forward[3], float right[3])
 {
 	float sine_pitch, cosine_pitch, sine_yaw, cosine_yaw;
+	float sine_roll, cosine_roll;
 
 	ShortSinCos(pitch, &sine_pitch, &cosine_pitch);
 	ShortSinCos(yaw, &sine_yaw, &cosine_yaw);
+	ShortSinCos(0, &sine_roll, &cosine_roll);
 	forward[0] = cosine_pitch * cosine_yaw;
 	forward[1] = cosine_pitch * sine_yaw;
 	forward[2] = -sine_pitch;
-	right[0] = sine_yaw;
-	right[1] = -cosine_yaw;
-	right[2] = 0.0f;
+	right[0] = (-1.0f * sine_roll * sine_pitch * cosine_yaw +
+		-1.0f * cosine_roll * -sine_yaw);
+	right[1] = (-1.0f * sine_roll * sine_pitch * sine_yaw +
+		-1.0f * cosine_roll * cosine_yaw);
+	right[2] = -1.0f * sine_roll * cosine_pitch;
 }
 
 static void Muzzle(const hook_build_t *build, const float origin[3],
@@ -172,7 +152,7 @@ static int EvaluateTerminal(hook_build_t *build,
 	while ((terminal->domain.hand_mask &
 		SG_HOOK_VISIBILITY_HAND_BIT(hand)) == 0U)
 		hand++;
-	Direction(pitch, yaw, forward, right);
+	SG_HookVisibilityFeasibilityDirection(pitch, yaw, forward, right);
 	Muzzle(build, origin, (sg_hook_visibility_hand_t)hand, forward, right,
 		muzzle);
 	if (!SG_HostCollisionTrace(build->sources->collision, build->sources->scene,
@@ -281,86 +261,89 @@ static int AppendTerminal(hook_build_t *build,
 	return 1;
 }
 
-static int ConstructTerminals(hook_build_t *build)
+static int ConstructControlHand(hook_build_t *build, int16_t pitch,
+	int16_t yaw, sg_hook_visibility_hand_t hand)
 {
 	sg_hook_visibility_i16_span_t *x_spans = NULL;
-	sg_hook_visibility_i16_span_t *y_spans = NULL;
-	sg_hook_visibility_i16_span_t *z_spans = NULL;
-	uint32_t x_count = 0U, y_count = 0U, z_count = 0U;
-	uint32_t control, x, y, z, pitch, yaw, hand;
+	uint32_t x_count = 0U, x;
 	int result = 0;
 
-	if (!SG_HookVisibilityFeasibilityAxisSpans(build, 0U, &x_spans,
-			&x_count) ||
-		!SG_HookVisibilityFeasibilityAxisSpans(build, 1U, &y_spans,
-			&y_count) ||
-		!SG_HookVisibilityFeasibilityAxisSpans(build, 2U, &z_spans,
-			&z_count))
+	if (!SG_HookVisibilityFeasibilityAxisSpans(build, 0U, pitch, yaw, hand,
+			NULL, &x_spans, &x_count))
 	{
 		SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_OUT_OF_MEMORY, 0U);
 		goto done;
 	}
-	for (control = 0U; control < build->sources->control_count; control++)
+	for (x = 0U; x < x_count; x++)
 	{
-		sg_hook_visibility_i16_span_t pitch_spans[3], yaw_spans[3];
-		uint32_t pitch_count, yaw_count;
-		const sg_hook_visibility_control_root_t *root =
-			&build->sources->controls[control];
+		sg_hook_visibility_i16_span_t *y_spans = NULL, *z_spans = NULL;
+		uint32_t y_count = 0U, z_count = 0U, y, z;
 
-		if (!MakeControlSpans(root->pitch_min, root->pitch_max, 0,
-				pitch_spans, &pitch_count) ||
-			!MakeControlSpans(root->yaw_min, root->yaw_max, 1, yaw_spans,
-				&yaw_count))
+		if (!SG_HookVisibilityFeasibilityAxisSpans(build, 1U, pitch, yaw,
+				hand, &x_spans[x], &y_spans, &y_count) ||
+			!SG_HookVisibilityFeasibilityAxisSpans(build, 2U, pitch, yaw,
+				hand, &x_spans[x], &z_spans, &z_count))
 		{
-			SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED,
-				control);
+			free(z_spans);
+			free(y_spans);
 			goto done;
 		}
-		for (x = 0U; x < x_count; x++)
-			for (y = 0U; y < y_count; y++)
-				for (z = 0U; z < z_count; z++)
-				for (pitch = 0U; pitch < pitch_count; pitch++)
-					for (yaw = 0U; yaw < yaw_count; yaw++)
-						for (hand = 0U;
-							hand < SG_HOOK_VISIBILITY_HAND_COUNT;
-							hand++)
-						{
-							sg_hook_visibility_domain_term_t domain;
+		for (y = 0U; y < y_count; y++)
+			for (z = 0U; z < z_count; z++)
+			{
+				sg_hook_visibility_domain_term_t domain;
 
-							memset(&domain, 0, sizeof(domain));
-							domain.origins.mins[0] =
-								x_spans[x].minimum;
-							domain.origins.maxs[0] =
-								x_spans[x].maximum;
-							domain.origins.mins[1] =
-								y_spans[y].minimum;
-							domain.origins.maxs[1] =
-								y_spans[y].maximum;
-							domain.origins.mins[2] =
-								z_spans[z].minimum;
-							domain.origins.maxs[2] =
-								z_spans[z].maximum;
-							domain.pitch_min =
-								pitch_spans[pitch].minimum;
-							domain.pitch_max =
-								pitch_spans[pitch].maximum;
-							domain.yaw_min =
-								yaw_spans[yaw].minimum;
-							domain.yaw_max =
-								yaw_spans[yaw].maximum;
-							domain.hand_mask =
-								SG_HOOK_VISIBILITY_HAND_BIT(hand);
-							if (!AppendTerminal(build, &domain))
-								goto done;
-						}
+				memset(&domain, 0, sizeof(domain));
+				domain.origins.mins[0] = x_spans[x].minimum;
+				domain.origins.maxs[0] = x_spans[x].maximum;
+				domain.origins.mins[1] = y_spans[y].minimum;
+				domain.origins.maxs[1] = y_spans[y].maximum;
+				domain.origins.mins[2] = z_spans[z].minimum;
+				domain.origins.maxs[2] = z_spans[z].maximum;
+				domain.pitch_min = pitch;
+				domain.pitch_max = pitch;
+				domain.yaw_min = yaw;
+				domain.yaw_max = yaw;
+				domain.hand_mask = SG_HOOK_VISIBILITY_HAND_BIT(hand);
+				if (!AppendTerminal(build, &domain))
+				{
+					free(z_spans);
+					free(y_spans);
+					goto done;
+				}
+			}
+		free(z_spans);
+		free(y_spans);
 	}
 	result = 1;
 
 done:
-	free(z_spans);
-	free(y_spans);
 	free(x_spans);
 	return result;
+}
+
+static int ConstructTerminals(hook_build_t *build)
+{
+	uint32_t control, hand;
+
+	for (control = 0U; control < build->sources->control_count; control++)
+	{
+		const sg_hook_visibility_control_root_t *root =
+			&build->sources->controls[control];
+		int pitch_varies = root->pitch_min != root->pitch_max;
+		int32_t minimum = pitch_varies ? root->pitch_min : root->yaw_min;
+		int32_t maximum = pitch_varies ? root->pitch_max : root->yaw_max;
+		int32_t code;
+
+		for (code = minimum; code <= maximum; code++)
+			for (hand = 0U; hand < SG_HOOK_VISIBILITY_HAND_COUNT; hand++)
+				if (!ConstructControlHand(build,
+						pitch_varies ? (int16_t)code : root->pitch_min,
+						pitch_varies ? root->yaw_min : (int16_t)code,
+						(sg_hook_visibility_hand_t)hand))
+					return 0;
+	}
+	return 1;
 }
 
 static int RelationCompare(const void *left, const void *right)

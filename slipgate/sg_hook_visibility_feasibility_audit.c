@@ -235,19 +235,6 @@ static int RootCardinality(
 		Multiply(product, SG_HOOK_VISIBILITY_HAND_COUNT, cardinality_out);
 }
 
-static int EventStraddled(const sg_hook_visibility_domain_term_t *domain,
-	uint32_t axis, float coordinate)
-{
-	float q8 = coordinate * 8.0f;
-	int32_t event = (int32_t)q8;
-
-	if (q8 != (float)event || event < domain->origins.mins[axis] ||
-		event > domain->origins.maxs[axis])
-		return 0;
-	return domain->origins.mins[axis] != event ||
-		domain->origins.maxs[axis] != event;
-}
-
 static sg_hook_visibility_hand_t DomainHand(
 	const sg_hook_visibility_domain_term_t *domain)
 {
@@ -259,91 +246,23 @@ static sg_hook_visibility_hand_t DomainHand(
 	return SG_HOOK_VISIBILITY_HAND_COUNT;
 }
 
-static int DomainRespectsEvents(
-	const sg_hook_visibility_feasibility_sources_t *sources,
-	const sg_hook_visibility_domain_term_t *domain)
-{
-	const sg_bsp_world_t *world = sources->collision->world;
-	float view_height = sources->stance == SG_RUNE_STANCE_STANDING ?
-		sources->fire_law.standing_view_height :
-		sources->fire_law.crouching_view_height;
-	sg_hook_visibility_hand_t hand = DomainHand(domain);
-	float hand_shift = hand == SG_HOOK_VISIBILITY_HAND_LEFT ?
-		sources->fire_law.muzzle_lateral :
-		(hand == SG_HOOK_VISIBILITY_HAND_RIGHT ?
-		-sources->fire_law.muzzle_lateral : 0.0f);
-	uint32_t rule_index;
-
-	if (domain->pitch_min != domain->pitch_max ||
-		(domain->yaw_min != domain->yaw_max &&
-		 !(domain->yaw_min >= 32766)))
-		return 0;
-	for (rule_index = 0U; rule_index < sources->surface_rule_count;
-		rule_index++)
-	{
-		const sg_bsp_brush_t *brush = &world->brushes[
-			sources->surface_rules[rule_index].brush_index];
-		uint32_t side_offset;
-
-		for (side_offset = 0U; side_offset < brush->side_count; side_offset++)
-		{
-			const sg_bsp_brush_side_t *side =
-				&world->brush_sides[brush->first_side + side_offset];
-			const sg_bsp_plane_t *plane = &world->planes[side->plane];
-			uint32_t axis;
-
-			for (axis = 0U; axis < 3U; axis++)
-				if (fabsf(plane->normal.value[axis]) == 1.0f)
-				{
-					float coordinate = plane->distance /
-						plane->normal.value[axis];
-
-					if (axis == 0U)
-					{
-						float events[5];
-						uint32_t event;
-
-						events[0] = coordinate;
-						events[1] = coordinate -
-							sources->fire_law.muzzle_forward;
-						events[2] = events[1] -
-							sources->fire_law.maximum_range;
-						events[3] = coordinate +
-							sources->fire_law.muzzle_forward;
-						events[4] = events[3] +
-							sources->fire_law.maximum_range;
-						for (event = 0U; event < 5U; event++)
-							if (EventStraddled(domain, axis,
-									events[event]))
-								return 0;
-					}
-					else if (axis == 1U && EventStraddled(domain, axis,
-						coordinate - hand_shift))
-						return 0;
-					else if (axis == 2U && EventStraddled(domain, axis,
-						coordinate - (view_height -
-							sources->fire_law.muzzle_forward)))
-						return 0;
-					break;
-				}
-		}
-	}
-	return 1;
-}
-
 static void AuditDirection(int16_t pitch, int16_t yaw, float forward[3],
 	float right[3])
 {
 	float sine_pitch, cosine_pitch, sine_yaw, cosine_yaw;
+	float sine_roll, cosine_roll;
 
 	AuditShortSinCos(pitch, &sine_pitch, &cosine_pitch);
 	AuditShortSinCos(yaw, &sine_yaw, &cosine_yaw);
+	AuditShortSinCos(0, &sine_roll, &cosine_roll);
 	forward[0] = cosine_pitch * cosine_yaw;
 	forward[1] = cosine_pitch * sine_yaw;
 	forward[2] = -sine_pitch;
-	right[0] = sine_yaw;
-	right[1] = -cosine_yaw;
-	right[2] = 0.0f;
+	right[0] = (-1.0f * sine_roll * sine_pitch * cosine_yaw +
+		-1.0f * cosine_roll * -sine_yaw);
+	right[1] = (-1.0f * sine_roll * sine_pitch * sine_yaw +
+		-1.0f * cosine_roll * cosine_yaw);
+	right[2] = -1.0f * sine_roll * cosine_pitch;
 }
 
 static void AuditMuzzle(
@@ -645,7 +564,8 @@ int SG_HookVisibilityFeasibilityAudit(
 	sg_hook_visibility_feasibility_audit_report_t report;
 	const sg_bsp_world_t *world;
 	uint64_t root_cardinality, terminal_cardinality = 0U;
-	uint32_t terminal, other;
+	uint32_t terminal, relation_terms = 0U, relation;
+	int tiling;
 
 	memset(&report, 0, sizeof(report));
 	report.code = SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_INVALID_ARGUMENT;
@@ -674,6 +594,7 @@ int SG_HookVisibilityFeasibilityAudit(
 			SG_HOOK_VISIBILITY_FEASIBILITY_MAX_CONTROL_ROOTS ||
 		sources->surface_rule_count >
 			SG_HOOK_VISIBILITY_FEASIBILITY_MAX_SURFACE_RULES ||
+		!SG_HookVisibilityFeasibilityAuditFamilyValid(sources) ||
 		catalog->control_count != sources->control_count ||
 		catalog->surface_rule_count != sources->surface_rule_count ||
 		catalog->world_counts[0] != world->plane_count ||
@@ -701,38 +622,31 @@ int SG_HookVisibilityFeasibilityAudit(
 		return 0;
 	}
 	report.reconstructed_action_tuples = root_cardinality;
+	tiling = SG_HookVisibilityFeasibilityAuditTiling(sources, catalog,
+		&terminal_cardinality);
+	if (tiling <= 0)
+	{
+		report.code = tiling < 0 ?
+			SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_OUT_OF_MEMORY :
+			SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_ROOT_DISAGREEMENT;
+		*report_out = report;
+		return 0;
+	}
 	for (terminal = 0U; terminal < catalog->terminal_count; terminal++)
 	{
 		const sg_hook_visibility_terminal_t *record =
 			&catalog->terminals[terminal];
 		audit_evaluation_t evaluation;
-		uint64_t cardinality;
 
 		if (!DomainValid(sources, &record->domain) ||
-			!DomainRespectsEvents(sources, &record->domain) ||
-			!DomainCardinality(&record->domain, &cardinality) ||
-			terminal_cardinality > UINT64_MAX - cardinality)
+			!SG_HookVisibilityFeasibilityAuditDomainUniform(sources,
+				&record->domain))
 		{
 			report.code =
 				SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_ROOT_DISAGREEMENT;
 			report.record = terminal;
 			*report_out = report;
 			return 0;
-		}
-		terminal_cardinality += cardinality;
-		for (other = 0U; other < terminal; other++)
-		{
-			sg_hook_visibility_domain_term_t intersection;
-
-			if (IntersectDomain(&record->domain,
-					&catalog->terminals[other].domain, &intersection))
-			{
-				report.code =
-					SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_ROOT_DISAGREEMENT;
-				report.record = terminal;
-				*report_out = report;
-				return 0;
-			}
 		}
 		if (!AuditEvaluate(sources, &record->domain, &evaluation))
 		{
@@ -791,6 +705,30 @@ int SG_HookVisibilityFeasibilityAudit(
 	{
 		report.code =
 			SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_RELATION_DISAGREEMENT;
+		*report_out = report;
+		return 0;
+	}
+	for (relation = 0U; relation < catalog->relation_count; relation++)
+	{
+		if (relation_terms > UINT32_MAX -
+			catalog->relations[relation].term_count)
+		{
+			report.code = SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_METRIC_DISAGREEMENT;
+			*report_out = report;
+			return 0;
+		}
+		relation_terms += catalog->relations[relation].term_count;
+	}
+	if (catalog->metrics.angle_authority_entries != UINT64_C(65536) ||
+		catalog->metrics.muzzle_clearance_traces != catalog->terminal_count ||
+		catalog->metrics.first_hit_traces != catalog->terminal_count -
+			report.clearance_blocked_terms ||
+		catalog->metrics.relation_count != catalog->relation_count ||
+		catalog->metrics.relation_term_count != relation_terms ||
+		catalog->metrics.complement_term_count != catalog->terminal_count -
+			report.hookable_terms)
+	{
+		report.code = SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_METRIC_DISAGREEMENT;
 		*report_out = report;
 		return 0;
 	}

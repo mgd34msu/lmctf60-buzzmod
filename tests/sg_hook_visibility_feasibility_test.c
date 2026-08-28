@@ -129,8 +129,10 @@ static void CheckTamperDetection(hook_visibility_fixture_t *fixture,
 	sg_hook_visibility_feasibility_catalog_t *catalog)
 {
 	sg_hook_visibility_feasibility_audit_report_t report;
+	sg_hook_visibility_feasibility_metrics_t saved_metrics;
 	sg_hook_visibility_terminal_outcome_t saved_outcome;
-	float saved_range;
+	uint32_t saved_count;
+	float saved_range, saved_plane_distance;
 
 	saved_outcome = catalog->terminals[0].outcome;
 	catalog->terminals[0].outcome = saved_outcome ==
@@ -149,12 +151,42 @@ static void CheckTamperDetection(hook_visibility_fixture_t *fixture,
 	fixture->sources.fire_law.maximum_range = saved_range;
 	CHECK(SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
 		&report));
+	saved_plane_distance = fixture->planes[1].distance;
+	fixture->planes[1].distance = saved_plane_distance + 0.125f;
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	CHECK(report.code == SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_SOURCE_MISMATCH);
+	fixture->planes[1].distance = saved_plane_distance;
+	CHECK(SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
 	fixture->sources.control_count =
 		SG_HOOK_VISIBILITY_FEASIBILITY_MAX_CONTROL_ROOTS + 1U;
 	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
 		&report));
 	CHECK(report.code == SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_SOURCE_MISMATCH);
-	fixture->sources.control_count = 2U;
+	fixture->sources.control_count = 1U;
+	saved_count = catalog->terminal_count;
+	catalog->terminal_count--;
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	catalog->terminal_count = saved_count;
+	saved_count = catalog->relations[0].term_count;
+	catalog->relations[0].term_count--;
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	catalog->relations[0].term_count = saved_count;
+	saved_count = catalog->relation_count;
+	catalog->relation_count--;
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	catalog->relation_count = saved_count;
+	saved_metrics = catalog->metrics;
+	memset(&catalog->metrics, 0, sizeof(catalog->metrics));
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	catalog->metrics = saved_metrics;
+	CHECK(SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
 }
 
 static void CheckFailClosed(hook_visibility_fixture_t *fixture)
@@ -163,6 +195,8 @@ static void CheckFailClosed(hook_visibility_fixture_t *fixture)
 	sg_hook_visibility_control_root_t controls[2];
 	sg_hook_visibility_feasibility_catalog_t *catalog = NULL;
 	sg_hook_visibility_feasibility_error_t error;
+	sg_host_collision_instance_t instance;
+	sg_host_collision_scene_t scene;
 
 	sources.fire_law.moving_model_count = 1U;
 	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
@@ -179,6 +213,25 @@ static void CheckFailClosed(hook_visibility_fixture_t *fixture)
 	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
 	CHECK(error.code == SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED);
 	sources = fixture->sources;
+	memcpy(controls, fixture->controls, sizeof(controls));
+	controls[0].pitch_min = 0;
+	controls[0].pitch_max = 0;
+	controls[0].yaw_min = 2;
+	controls[0].yaw_max = 2;
+	sources.controls = controls;
+	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
+	CHECK(error.code == SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED);
+	CHECK(!SG_HookVisibilityFeasibilityAuditFamilyValid(&sources));
+	sources = fixture->sources;
+	memcpy(controls, fixture->controls, sizeof(controls));
+	controls[0].pitch_min = -1;
+	controls[0].pitch_max = 1;
+	controls[0].yaw_min = -1;
+	controls[0].yaw_max = 1;
+	sources.controls = controls;
+	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
+	CHECK(error.code == SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED);
+	sources = fixture->sources;
 	sources.control_count =
 		SG_HOOK_VISIBILITY_FEASIBILITY_MAX_CONTROL_ROOTS + 1U;
 	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
@@ -188,6 +241,31 @@ static void CheckFailClosed(hook_visibility_fixture_t *fixture)
 		SG_HOOK_VISIBILITY_FEASIBILITY_MAX_SURFACE_RULES + 1U;
 	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
 	CHECK(error.code == SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_OVERFLOW);
+	sources = fixture->sources;
+	memset(&instance, 0, sizeof(instance));
+	instance.instance_id = 1U;
+	instance.model_index = 0U;
+	scene.instances = &instance;
+	scene.instance_count = 1U;
+	sources.scene = &scene;
+	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
+	CHECK(error.code == SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED);
+	sources = fixture->sources;
+	fixture->planes[31].normal.value[0] = 0.70710677f;
+	fixture->planes[31].normal.value[1] = 0.70710677f;
+	fixture->planes[31].normal.value[2] = 0.0f;
+	fixture->planes[31].distance = -4095.0f;
+	fixture->planes[31].type = 3;
+	fixture->brush_sides[30].plane = 31U;
+	fixture->brush_sides[30].texinfo = 4;
+	fixture->brushes[4].side_count = 7U;
+	fixture->world.plane_count = 32U;
+	fixture->world.brush_side_count = 31U;
+	CHECK(!SG_HookVisibilityFeasibilityBuild(&sources, &catalog, &error));
+	CHECK(error.code == SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_UNSUPPORTED);
+	fixture->brushes[4].side_count = 6U;
+	fixture->world.plane_count = 31U;
+	fixture->world.brush_side_count = 30U;
 }
 
 int main(void)
@@ -219,11 +297,13 @@ int main(void)
 	CHECK(metrics.legal_action_tuples >
 		metrics.predicate_domains * UINT64_C(100000));
 	CHECK(metrics.muzzle_clearance_traces == metrics.predicate_domains);
-	CHECK(metrics.first_hit_traces == metrics.predicate_domains);
+	CHECK(metrics.first_hit_traces == metrics.predicate_domains -
+		audit.clearance_blocked_terms);
 	CHECK(audit.hookable_terms > 0U);
 	CHECK(audit.sky_terms > 0U);
 	CHECK(audit.nonhookable_terms > 0U);
 	CHECK(audit.no_hit_terms > 0U);
+	CHECK(audit.clearance_blocked_terms > 0U);
 	CHECK(audit.lower_dimensional_terms > 0U);
 	CHECK(audit.edge_terms > 0U);
 	CHECK(audit.vertex_terms > 0U);
