@@ -3581,6 +3581,11 @@ rune-v2-independent-reader-test: tools/runev2read.c tools/runev2read.py \
 	clang $$sanitize -Wcast-align -I. tests/sg_rune_v2_fixture_writer.c \
 		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
 		-o "$$tmp/writer-san"; \
+	clang --analyze $$strict tools/runev2read.c -o "$$tmp/analyzer.plist"; \
+	if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then \
+		x86_64-w64-mingw32-gcc $$strict -c tools/runev2read.c \
+			-o "$$tmp/reader-windows.o"; \
+	fi; \
 	ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
 	UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1' \
 	RUNE_V2_C_READER="$$tmp/reader-san" \

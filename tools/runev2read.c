@@ -1,4 +1,9 @@
 /* Standalone little-endian RUNE v2 reader. No production codec dependency. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#define _FILE_OFFSET_BITS 64
+#endif
+
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -7,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/types.h>
+#endif
 
 #define RV2_MAGIC UINT32_C(0x324e5552)
 #define RV2_VERSION UINT16_C(2)
@@ -60,6 +68,7 @@ typedef struct rv2_context_s
 	uint64_t generation;
 	uint64_t source;
 	uint64_t physics_id;
+	uint64_t lookup_comparisons;
 	float physics[8];
 	rv2_section_t section[RV2_SECTION_COUNT];
 } rv2_context_t;
@@ -72,6 +81,35 @@ typedef struct rv2_expected_s
 	unsigned char artifact[RV2_ID_BYTES];
 	unsigned char exact_artifact[RV2_ID_BYTES];
 } rv2_expected_t;
+
+#ifdef _WIN32
+typedef int64_t rv2_file_offset_t;
+
+static int FileSeek(FILE *file, rv2_file_offset_t offset, int origin)
+{
+	return _fseeki64(file, offset, origin);
+}
+
+static rv2_file_offset_t FileTell(FILE *file)
+{
+	return _ftelli64(file);
+}
+#else
+typedef off_t rv2_file_offset_t;
+
+static int FileSeek(FILE *file, rv2_file_offset_t offset, int origin)
+{
+	return fseeko(file, offset, origin);
+}
+
+static rv2_file_offset_t FileTell(FILE *file)
+{
+	return ftello(file);
+}
+#endif
+
+_Static_assert(sizeof(rv2_file_offset_t) >= sizeof(uint64_t),
+	"RUNE v2 file offsets require at least 64 bits");
 
 static const uint32_t rv2_record_bytes[RV2_SECTION_COUNT] = {
 	256U, 64U, 12U, 136U, 136U, 164U, 172U, 132U, 104U, 332U,
@@ -154,6 +192,17 @@ static int IdEqual(rv2_id_t left, rv2_id_t right)
 {
 	return left.source == right.source && left.high == right.high &&
 		left.low == right.low;
+}
+
+static int IdCompare(rv2_id_t left, rv2_id_t right)
+{
+	if (left.source != right.source)
+		return left.source < right.source ? -1 : 1;
+	if (left.high != right.high)
+		return left.high < right.high ? -1 : 1;
+	if (left.low != right.low)
+		return left.low < right.low ? -1 : 1;
+	return 0;
 }
 
 static int IdNone(rv2_id_t id)
@@ -281,24 +330,38 @@ static int SpanValid(const unsigned char *bytes, uint32_t total,
 		count <= total - first;
 }
 
-static int FindId(const rv2_context_t *context, uint32_t section_index,
+static int FindId(rv2_context_t *context, uint32_t section_index,
 	rv2_id_t target, uint32_t *index_out)
 {
-	uint32_t index;
+	/* ValidateIdentityArrays proves this stable-ID order before lookups run. */
+	uint32_t first = 0U;
+	uint32_t last = context->section[section_index].count;
 
 	if (!IdValid(target))
 		return 0;
-	for (index = 0U; index < context->section[section_index].count; index++)
-		if (IdEqual(ReadId(Record(context, section_index, index)), target))
+	while (first < last)
+	{
+		uint32_t middle = first + (last - first) / 2U;
+		int comparison;
+
+		context->lookup_comparisons++;
+		comparison = IdCompare(ReadId(Record(context, section_index, middle)),
+			target);
+		if (comparison == 0)
 		{
 			if (index_out)
-				*index_out = index;
+				*index_out = middle;
 			return 1;
 		}
+		if (comparison < 0)
+			first = middle + 1U;
+		else
+			last = middle;
+	}
 	return 0;
 }
 
-static int RefValid(const rv2_context_t *context, uint32_t section_index,
+static int RefValid(rv2_context_t *context, uint32_t section_index,
 	rv2_id_t target, int optional)
 {
 	return (optional && IdNone(target)) || FindId(context, section_index,
@@ -646,7 +709,7 @@ static int TransitionSemanticsValid(uint32_t kind,
 	}
 }
 
-static int ValidateTransitions(const rv2_context_t *context)
+static int ValidateTransitions(rv2_context_t *context)
 {
 	uint32_t index;
 
@@ -674,7 +737,7 @@ static int ValidateTransitions(const rv2_context_t *context)
 	return 1;
 }
 
-static int ValidatePortals(const rv2_context_t *context)
+static int ValidatePortals(rv2_context_t *context)
 {
 	uint32_t index;
 
@@ -714,7 +777,7 @@ static int EntityValid(const unsigned char *bytes)
 		(ReadU32(bytes + 4U) == UINT32_MAX);
 }
 
-static int ValidateSurfacesAndAffordances(const rv2_context_t *context)
+static int ValidateSurfacesAndAffordances(rv2_context_t *context)
 {
 	uint32_t index;
 
@@ -743,7 +806,7 @@ static int ValidateSurfacesAndAffordances(const rv2_context_t *context)
 	return 1;
 }
 
-static int ValidateMechanisms(const rv2_context_t *context)
+static int ValidateMechanisms(rv2_context_t *context)
 {
 	uint32_t index;
 
@@ -767,7 +830,7 @@ static int ValidateMechanisms(const rv2_context_t *context)
 	return 1;
 }
 
-static int ValidatePhaseMovers(const rv2_context_t *context)
+static int ValidatePhaseMovers(rv2_context_t *context)
 {
 	uint32_t phase_index;
 
@@ -809,7 +872,7 @@ static int PointInside(const unsigned char *point, const unsigned char *bounds)
 	return 1;
 }
 
-static int ValidateLandmarks(const rv2_context_t *context)
+static int ValidateLandmarks(rv2_context_t *context)
 {
 	uint32_t index;
 
@@ -853,7 +916,7 @@ static int PortalAllows(const rv2_context_t *context, uint32_t portal_index,
 		(direction != 2U || reverse);
 }
 
-static int ValidateKernels(const rv2_context_t *context)
+static int ValidateKernels(rv2_context_t *context)
 {
 	uint32_t index;
 
@@ -949,7 +1012,7 @@ static int SpanContains(const unsigned char *span, uint32_t index)
 	return index >= first && index - first < count;
 }
 
-static int ValidateOwnership(const rv2_context_t *context)
+static int ValidateOwnership(rv2_context_t *context)
 {
 	uint32_t cell_index;
 	uint32_t record_index;
@@ -1113,20 +1176,28 @@ static int ReadFile(const char *path, unsigned char **bytes_out,
 	size_t *size_out)
 {
 	FILE *file;
-	long length;
+	rv2_file_offset_t length;
+	uintmax_t unsigned_length;
 	unsigned char *bytes;
 	size_t size;
 
 	file = fopen(path, "rb");
 	if (!file)
 		return 0;
-	if (fseek(file, 0L, SEEK_END) != 0 || (length = ftell(file)) < 0L ||
-		(uint64_t)length > RV2_MAX_BYTES || fseek(file, 0L, SEEK_SET) != 0)
+	if (FileSeek(file, (rv2_file_offset_t)0, SEEK_END) != 0 ||
+		(length = FileTell(file)) < (rv2_file_offset_t)0)
 	{
 		(void)fclose(file);
 		return 0;
 	}
-	size = (size_t)length;
+	unsigned_length = (uintmax_t)length;
+	if (unsigned_length > RV2_MAX_BYTES || unsigned_length > SIZE_MAX ||
+		FileSeek(file, (rv2_file_offset_t)0, SEEK_SET) != 0)
+	{
+		(void)fclose(file);
+		return 0;
+	}
+	size = (size_t)unsigned_length;
 	bytes = size != 0U ? malloc(size) : NULL;
 	if (size != 0U && !bytes)
 	{
@@ -1186,17 +1257,22 @@ int main(int argc, char **argv)
 	unsigned char *data = NULL;
 	size_t size = 0U;
 	const char *path;
+	int report_comparisons;
 
-	if (argc != 12 || strcmp(argv[1], "--generation") != 0 ||
+	report_comparisons = argc == 13 &&
+		strcmp(argv[11], "--comparison-count") == 0;
+	if ((argc != 12 && !report_comparisons) ||
+		strcmp(argv[1], "--generation") != 0 ||
 		strcmp(argv[3], "--bsp-id") != 0 || strcmp(argv[5], "--schema-id") != 0 ||
 		strcmp(argv[7], "--artifact-id") != 0 ||
 		strcmp(argv[9], "--exact-artifact-id") != 0)
 	{
 		(void)fprintf(stderr, "usage: runev2read --generation N --bsp-id HEX "
-			"--schema-id HEX --artifact-id HEX --exact-artifact-id HEX FILE\n");
+			"--schema-id HEX --artifact-id HEX --exact-artifact-id HEX "
+			"[--comparison-count] FILE\n");
 		return 2;
 	}
-	path = argv[11];
+	path = argv[report_comparisons ? 12 : 11];
 	if (!ParseU64(argv[2], &expected.generation) ||
 		!ParseIdentity(argv[4], expected.bsp) ||
 		!ParseIdentity(argv[6], expected.schema) ||
@@ -1218,6 +1294,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	PrintSummary(&context);
+	if (report_comparisons)
+		(void)fprintf(stderr, "lookup_comparisons=%" PRIu64 "\n",
+			context.lookup_comparisons);
 	free(data);
 	return 0;
 }

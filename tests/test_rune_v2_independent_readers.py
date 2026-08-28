@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import binascii
 import json
+import math
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -20,6 +22,7 @@ SCHEMA_ID = bytes(range(65, 97))
 ARTIFACT_ID = bytes(range(129, 161))
 OTHER_ID = bytes(range(161, 193))
 GENERATION = 0xB0B1B2B3B4B5B6B7
+SOURCE_SET_ID = 0x5352435345543031
 HEADER_BYTES = 64
 ENTRY_BYTES = 32
 SECTION_COUNT = 13
@@ -73,6 +76,75 @@ def _mutate_record(data: bytes, section: int, relative_offset: int,
     malformed[offset + relative_offset:offset + relative_offset + len(encoded)] = encoded
     _fix_checksums(malformed)
     return bytes(malformed)
+
+
+def _stable_id(domain: int, ordinal: int) -> bytes:
+    return struct.pack("<QQQ", SOURCE_SET_ID, (domain << 32) | 7,
+                       (ordinal << 32) | (ordinal + 11))
+
+
+def _order(domain: int, ordinal: int) -> bytes:
+    return struct.pack("<QIIII", SOURCE_SET_ID, domain, 7, ordinal,
+                       ordinal + 11)
+
+
+def _build_scale_fixture(base: bytes, cell_count: int) -> bytes:
+    sections = [base[offset:offset + size]
+                for offset, size in (_section(base, index)
+                                     for index in range(SECTION_COUNT))]
+    model = bytearray(sections[0])
+    for offset, value in ((160, cell_count), (164, 0), (168, cell_count),
+                          (172, 0), (228, cell_count), (232, 0)):
+        struct.pack_into("<I", model, offset, value)
+
+    cell_template = sections[5][:164]
+    surface_template = sections[7][:132]
+    cells = bytearray()
+    surfaces = bytearray()
+    for index in range(cell_count):
+        cell = bytearray(cell_template)
+        cell[0:24] = _stable_id(1, index)
+        cell[24:48] = _order(1, index)
+        struct.pack_into("<II", cell, 56, index, index)
+        minimum = float(index * 2)
+        struct.pack_into("<6f", cell, 64, minimum, 0.0, 0.0,
+                         minimum + 1.0, 1.0, 1.0)
+        for offset, first, count in (
+                (88, 0, 4), (96, 0, 1), (104, index, 1),
+                (112, 0, 0), (120, 0, 0), (128, 0, 0), (136, 0, 0)):
+            struct.pack_into("<II", cell, offset, first, count)
+        struct.pack_into("<III", cell, 144, index, index, index)
+        cells.extend(cell)
+
+        surface = bytearray(surface_template)
+        surface[0:24] = _stable_id(6, index)
+        surface[24:48] = _order(6, index)
+        struct.pack_into("<II", surface, 56, index, index)
+        surface[64:88] = _stable_id(1, index)
+        surfaces.extend(surface)
+
+    payloads = [bytes(model), sections[1], b"", sections[3][:136], b"",
+                bytes(cells), b"", bytes(surfaces), b"", b"", b"", b"",
+                sections[12]]
+    record_bytes = (256, 64, 12, 136, 136, 164, 172, 132, 104, 332,
+                    188, 160, 64)
+    output = bytearray(HEADER_BYTES + SECTION_COUNT * ENTRY_BYTES)
+    for index, payload in enumerate(payloads):
+        while len(output) % 8:
+            output.append(0)
+        offset = len(output)
+        output.extend(payload)
+        entry = _entry(index)
+        struct.pack_into("<HHIIIQQ", output, entry, index + 1, 1,
+                         record_bytes[index], len(payload) // record_bytes[index],
+                         _crc32(payload), offset, len(payload))
+    while len(output) % 8:
+        output.append(0)
+    struct.pack_into("<IHHHHIIIQQII", output, 0, 0x324E5552, 2, 0x0102,
+                     HEADER_BYTES, ENTRY_BYTES, SECTION_COUNT, 0, 3,
+                     GENERATION, len(output), _crc32(output[HEADER_BYTES:]), 0)
+    struct.pack_into("<I", output, 44, _crc32(output[:HEADER_BYTES]))
+    return bytes(output)
 
 
 class RuneV2IndependentReaderTests(unittest.TestCase):
@@ -141,6 +213,49 @@ class RuneV2IndependentReaderTests(unittest.TestCase):
         self.assertEqual([result.stdout for result in first],
                          [result.stdout for result in second])
         self.assertTrue(all(result.returncode == 0 for result in first + second))
+
+    def test_c_lookup_comparisons_scale_logarithmically(self) -> None:
+        counts = {}
+        for cell_count in (1024, 8192):
+            artifact = Path(self.directory.name) / f"scale-{cell_count}.rune"
+            artifact.write_bytes(_build_scale_fixture(self.valid, cell_count))
+            if cell_count == 1024:
+                for reader in (self.codec_probe, PYTHON_READER):
+                    validation = subprocess.run(self._command(reader, artifact),
+                                                text=True, capture_output=True,
+                                                check=False)
+                    self.assertEqual(0, validation.returncode,
+                                     validation.stderr)
+            command = self._command(self.c_reader, artifact)
+            command.insert(-1, "--comparison-count")
+            result = subprocess.run(command, text=True, capture_output=True,
+                                    check=False)
+            self.assertEqual(0, result.returncode, result.stderr)
+            match = re.fullmatch(r"lookup_comparisons=(\d+)\n", result.stderr)
+            self.assertIsNotNone(match, result.stderr)
+            comparisons = int(match.group(1))
+            cell_lookup_bound = math.ceil(math.log2(cell_count)) + 1
+            plane_lookup_bound = math.ceil(math.log2(8)) + 1
+            maximum = cell_count * (2 * cell_lookup_bound +
+                                    plane_lookup_bound)
+            self.assertLessEqual(comparisons, maximum)
+            counts[cell_count] = comparisons
+        self.assertGreater(counts[8192], counts[1024])
+
+    def test_sparse_file_over_wire_limit_is_rejected_before_allocation(
+            self) -> None:
+        artifact = Path(self.directory.name) / "oversize-sparse.rune"
+        with artifact.open("wb") as output:
+            output.truncate((1 << 32) + 1)
+        for reader, expected_status in ((self.codec_probe, 1),
+                                        (self.c_reader, 2),
+                                        (PYTHON_READER, 1)):
+            with self.subTest(reader=reader):
+                result = subprocess.run(self._command(reader, artifact),
+                                        text=True, capture_output=True,
+                                        check=False)
+                self.assertEqual(expected_status, result.returncode,
+                                 result.stderr)
 
     def test_truncation(self) -> None:
         self.assert_rejected_by_all(self.valid[:-1])
@@ -213,6 +328,11 @@ class RuneV2IndependentReaderTests(unittest.TestCase):
     def test_phase_transition_domain(self) -> None:
         self.assert_rejected_by_all(_mutate_record(
             self.valid, 4, 120, struct.pack("<I", 2)))
+
+    def test_stance_transition_requires_equal_elapsed_interval(self) -> None:
+        second_phase_elapsed = 136 + 120
+        self.assert_rejected_by_all(_mutate_record(
+            self.valid, 3, second_phase_elapsed, struct.pack("<f", 1.25)))
 
     def test_incomplete_evidence(self) -> None:
         self.assert_rejected_by_all(_mutate_record(
