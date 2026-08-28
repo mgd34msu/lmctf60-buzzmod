@@ -3829,6 +3829,9 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_v2_artifact_loader_test.c \
 		slipgate/sg_rune_v2_artifact_loader.c \
 		tests/sg_destination_field_test.c slipgate/sg_destination_field.c \
+		tests/run_sg_destination_field_cache_test.sh \
+		tests/sg_destination_field_cache_test.c \
+		slipgate/sg_destination_field_cache.c \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
 	$(Q)set -e; \
@@ -3870,7 +3873,8 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 	$(CC) "$$tmp/field-test.o" "$$tmp/field.o" "$$tmp/field-model.o" \
 		"$$tmp/field-pmove.o" "$$tmp/field-q-shared.o" -lm \
 		-o "$$tmp/field"; \
-	"$$tmp/field"
+	"$$tmp/field"; \
+	sh tests/run_sg_destination_field_cache_test.sh
 
 deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 		$(SOURCE_SIZE_BUDGET)
