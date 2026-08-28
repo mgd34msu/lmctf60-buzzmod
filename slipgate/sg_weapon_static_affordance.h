@@ -5,7 +5,9 @@
 #include <stdint.h>
 
 #include "sg_configuration_audit.h"
+#include "sg_rune_v2_artifact_loader.h"
 #include "sg_static_visibility.h"
+#include "sg_static_visibility_publication.h"
 #include "sg_weapon_effect_profile.h"
 
 #define SG_WEAPON_STATIC_RELATION_COUNT UINT32_C(7)
@@ -60,6 +62,8 @@ typedef struct sg_weapon_static_affordance_s
 	uint32_t spatial_nodes_visited;
 	uint32_t candidate_surfaces_visited;
 	uint32_t candidate_points_queried;
+	uint32_t pose_partition_nodes_visited;
+	uint32_t pose_partition_bounds_overlaps;
 	uint32_t pose_partition_faces_tested;
 	sg_weapon_static_relation_result_t
 		relations[SG_WEAPON_STATIC_RELATION_COUNT];
@@ -106,15 +110,20 @@ typedef struct sg_weapon_static_prepare_error_s
 	uint32_t record;
 } sg_weapon_static_prepare_error_t;
 
+/* Transitional exact-byte loader bridge. This authenticates ownership of the
+ * immutable decoded snapshot; it is not the future semantic-acceptance
+ * publication. Keeping it as one replaceable input leaves resolver geometry
+ * and query logic independent of that production integration. */
+typedef struct sg_weapon_static_artifact_loader_bridge_s
+{
+	const sg_rune_v2_artifact_loader_t *loader;
+	const sg_rune_v2_artifact_snapshot_t *snapshot;
+} sg_weapon_static_artifact_loader_bridge_t;
+
 typedef struct sg_weapon_static_prepare_input_s
 {
-	sg_weapon_static_binding_t binding;
-	const sg_host_collision_authority_t *authority;
-	const sg_configuration_space_t *configuration;
-	const sg_configuration_semantics_t *semantics;
-	const sg_static_visibility_t *visibility;
-	const sg_rune_model_t *model;
-	const sg_rune_validation_evidence_t *model_evidence;
+	sg_weapon_static_artifact_loader_bridge_t artifact;
+	const sg_static_visibility_publication_t *visibility_publication;
 } sg_weapon_static_prepare_input_t;
 
 /* Preparation validates every borrowed source and builds the owned lookup
@@ -131,12 +140,17 @@ void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context);
  * the accepted configuration/model binding; resolver queries do not change it. */
 uint64_t SG_WeaponStaticContextBindingComparisons(
 	const sg_weapon_static_context_t *context);
+uint64_t SG_WeaponStaticContextPartitionPreparationWork(
+	const sg_weapon_static_context_t *context);
+uint64_t SG_WeaponStaticContextSurfacePreparationWork(
+	const sg_weapon_static_context_t *context);
 
 int SG_WeaponStaticAffordanceResolve(
 	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,
 	const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile,
+	const sg_weapon_law_input_t *law,
+	sg_weapon_profile_id_t profile_id,
 	sg_weapon_static_affordance_t *affordance_out,
 	sg_weapon_static_affordance_error_t *error_out);
 

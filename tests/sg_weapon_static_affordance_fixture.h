@@ -46,7 +46,8 @@ static int failures;
 static const sg_host_collision_scene_t empty_scene;
 
 #define SG_WEAPON_FIXTURE_EXTRA_MODELS UINT32_C(64)
-#define SG_WEAPON_FIXTURE_CELL_SPLITS UINT32_C(128)
+#define SG_WEAPON_FIXTURE_CELL_SPLITS UINT32_C(64)
+#define SG_WEAPON_FIXTURE_PARTITION_BRUSHES UINT32_C(8)
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -87,6 +88,9 @@ typedef struct built_fixture_s
 	sg_rune_cell_t *model_cells;
 	sg_rune_phase_basis_t *model_phases;
 	sg_rune_validation_evidence_t model_evidence;
+	sg_rune_v2_artifact_loader_t artifact_loader;
+	const sg_rune_v2_artifact_snapshot_t *artifact_snapshot;
+	sg_static_visibility_publication_t *visibility_publication;
 	sg_weapon_static_binding_t binding;
 	sg_weapon_static_context_t *context;
 } built_fixture_t;
@@ -155,6 +159,50 @@ static void SetModelPlane(sg_rune_plane_t *plane, uint64_t source_set,
 	plane->id.value = SG_RuneModelStableIdFromOrderKey(&order);
 	Set3(plane->normal.value, x, y, z);
 	plane->distance = distance;
+}
+
+static int LoadFixtureModel(const built_fixture_t *built,
+	const sg_rune_model_t *model,
+	const sg_rune_validation_evidence_t *evidence,
+	sg_rune_v2_artifact_loader_t *loader,
+	const sg_rune_v2_artifact_snapshot_t **snapshot_out)
+{
+	sg_rune_v2_wire_binding_t wire_binding;
+	sg_rune_v2_artifact_binding_t artifact_binding;
+	sg_rune_v2_artifact_load_result_t load_result;
+	unsigned char *encoded = NULL;
+	size_t encoded_size = 0U;
+
+	memset(&wire_binding, 0, sizeof(wire_binding));
+	wire_binding.generation = built->binding.visibility_revision;
+	wire_binding.bsp_identity = built->binding.bsp_identity;
+	wire_binding.schema_identity = built->binding.schema_identity;
+	if (SG_RuneV2CodecEncodedSize(model, evidence, &encoded_size) !=
+		SG_RUNE_V2_WIRE_OK)
+		return 0;
+	encoded = malloc(encoded_size);
+	if (!encoded || SG_RuneV2CodecEncode(&wire_binding, model, evidence,
+			encoded, encoded_size, &encoded_size) != SG_RUNE_V2_WIRE_OK)
+	{
+		free(encoded);
+		return 0;
+	}
+	artifact_binding.generation = wire_binding.generation;
+	artifact_binding.bsp_identity = wire_binding.bsp_identity;
+	artifact_binding.schema_identity = wire_binding.schema_identity;
+	artifact_binding.artifact_identity = built->binding.artifact_identity;
+	if (!SG_RuneV2ArtifactLoaderInit(loader, NULL))
+	{
+		free(encoded);
+		return 0;
+	}
+	load_result = SG_RuneV2ArtifactLoaderLoadBytes(loader, encoded,
+		encoded_size, &artifact_binding, &artifact_binding.artifact_identity);
+	free(encoded);
+	if (load_result.diagnostic != SG_RUNE_V2_LOADER_OK)
+		return 0;
+	*snapshot_out = SG_RuneV2ArtifactLoaderSnapshot(loader);
+	return *snapshot_out != NULL;
 }
 
 static int BuildFixtureModelAndContext(built_fixture_t *built)
@@ -290,14 +338,24 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 			SG_RuneModelFailureReasonString(reason));
 		return 0;
 	}
+	if (!LoadFixtureModel(built, &built->model, &built->model_evidence,
+			&built->artifact_loader, &built->artifact_snapshot))
+	{
+		fprintf(stderr, "artifact load failed\n");
+		return 0;
+	}
+	if (!SG_StaticVisibilityPublicationIssue(&built->fixture.authority,
+			built->configuration, built->semantics, built->visibility,
+			built->binding.visibility_revision,
+			&built->visibility_publication))
+	{
+		fprintf(stderr, "visibility publication failed\n");
+		return 0;
+	}
 	memset(&prepare, 0, sizeof(prepare));
-	prepare.binding = built->binding;
-	prepare.authority = &built->fixture.authority;
-	prepare.configuration = built->configuration;
-	prepare.semantics = built->semantics;
-	prepare.visibility = built->visibility;
-	prepare.model = &built->model;
-	prepare.model_evidence = &built->model_evidence;
+	prepare.artifact.loader = &built->artifact_loader;
+	prepare.artifact.snapshot = built->artifact_snapshot;
+	prepare.visibility_publication = built->visibility_publication;
 	if (!SG_WeaponStaticContextPrepare(&prepare, &built->context,
 			&prepare_error))
 	{
@@ -504,6 +562,7 @@ static fixture_t CellScalingFixture(uint32_t split_count)
 	if (split_count > SG_WEAPON_FIXTURE_CELL_SPLITS)
 		split_count = SG_WEAPON_FIXTURE_CELL_SPLITS;
 	memset(fixture.nodes, 0, sizeof(fixture.nodes));
+	memset(fixture.nodes, 0, sizeof(fixture.nodes));
 	memset(fixture.leaves, 0, sizeof(fixture.leaves));
 	for (split = 0U; split < split_count; split++)
 	{
@@ -536,6 +595,85 @@ static fixture_t CellScalingFixture(uint32_t split_count)
 	fixture.world.brush_count = 0U;
 	fixture.world.brush_side_count = 0U;
 	fixture.world.texinfo_count = 0U;
+	fixture.world.visibility.cluster_count = 1U;
+	fixture.world.visibility.byte_count = 13U;
+	fixture.world.area_count = 2U;
+	fixture.world.areaportal_count = 0U;
+	return fixture;
+}
+
+static fixture_t PartitionScalingFixture(uint32_t brush_count)
+{
+	fixture_t fixture = Fixture(0, 0, 0, 1, 0, 0.0f);
+	uint32_t brush;
+
+	CHECK(brush_count > 0U &&
+		brush_count <= SG_WEAPON_FIXTURE_PARTITION_BRUSHES);
+	if (brush_count == 0U)
+		brush_count = 1U;
+	if (brush_count > SG_WEAPON_FIXTURE_PARTITION_BRUSHES)
+		brush_count = SG_WEAPON_FIXTURE_PARTITION_BRUSHES;
+	memset(fixture.planes, 0, sizeof(fixture.planes));
+	memset(fixture.leaves, 0, sizeof(fixture.leaves));
+	memset(fixture.leaf_brushes, 0, sizeof(fixture.leaf_brushes));
+	memset(fixture.brushes, 0, sizeof(fixture.brushes));
+	memset(fixture.sides, 0, sizeof(fixture.sides));
+	SetPlane(&fixture.planes[0], 1.0f, 0.0f, 0.0f, -4000.0f);
+	fixture.nodes[0].plane = 0U;
+	fixture.nodes[0].children[0] = -2;
+	fixture.nodes[0].children[1] = -1;
+	fixture.leaves[0].contents = SG_HOST_CONTENTS_SOLID;
+	fixture.leaves[0].cluster = -1;
+	fixture.leaves[0].area = 1U;
+	fixture.leaves[1].cluster = 0;
+	fixture.leaves[1].area = 1U;
+	fixture.leaves[1].first_leaf_brush = 0U;
+	fixture.leaves[1].leaf_brush_count = brush_count;
+	for (brush = 0U; brush < brush_count; brush++)
+	{
+		uint32_t plane = 1U + brush * 6U;
+		uint32_t first_side = brush * 6U;
+		float center = -112.0f + 32.0f * (float)brush;
+		float top = -64.0f + 2.0f * (float)brush;
+		uint32_t side;
+
+		SetPlane(&fixture.planes[plane + 0U], 1.0f, 0.0f, 0.0f,
+			center + 24.0f);
+		SetPlane(&fixture.planes[plane + 1U], -1.0f, 0.0f, 0.0f,
+			-center + 24.0f);
+		SetPlane(&fixture.planes[plane + 2U], 0.0f, 1.0f, 0.0f,
+			center + 24.0f);
+		SetPlane(&fixture.planes[plane + 3U], 0.0f, -1.0f, 0.0f,
+			-center + 24.0f);
+		SetPlane(&fixture.planes[plane + 4U], 0.0f, 0.0f, 1.0f, top);
+		SetPlane(&fixture.planes[plane + 5U], 0.0f, 0.0f, -1.0f, 96.0f);
+		fixture.leaf_brushes[brush] = brush;
+		fixture.brushes[brush].first_side = first_side;
+		fixture.brushes[brush].side_count = 6U;
+		fixture.brushes[brush].contents = SG_HOST_CONTENTS_SOLID;
+		for (side = 0U; side < 6U; side++)
+		{
+			fixture.sides[first_side + side].plane = plane + side;
+			fixture.sides[first_side + side].texinfo = 0U;
+		}
+	}
+	fixture.models[0].headnode = 0;
+	Set3(fixture.models[0].mins.value, -4096.0f, -4096.0f, -4096.0f);
+	Set3(fixture.models[0].maxs.value, 4095.875f, 4095.875f, 4095.875f);
+	WriteU32(fixture.visibility_bytes, 1U);
+	WriteU32(fixture.visibility_bytes + 4U, 12U);
+	WriteU32(fixture.visibility_bytes + 8U, 12U);
+	fixture.visibility_bytes[12] = 1U;
+	fixture.visibility_offsets[0][0] = 12U;
+	fixture.visibility_offsets[0][1] = 12U;
+	fixture.world.plane_count = 1U + brush_count * 6U;
+	fixture.world.node_count = 1U;
+	fixture.world.leaf_count = 2U;
+	fixture.world.leaf_brush_count = brush_count;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = brush_count;
+	fixture.world.brush_side_count = brush_count * 6U;
+	fixture.world.texinfo_count = 1U;
 	fixture.world.visibility.cluster_count = 1U;
 	fixture.world.visibility.byte_count = 13U;
 	fixture.world.area_count = 2U;
@@ -621,6 +759,8 @@ static int BuildFixture(built_fixture_t *built, int wall, int separate_areas,
 static void DestroyFixture(built_fixture_t *built)
 {
 	SG_WeaponStaticContextDestroy(built->context);
+	SG_StaticVisibilityPublicationDestroy(built->visibility_publication);
+	SG_RuneV2ArtifactLoaderDestroy(&built->artifact_loader);
 	free(built->model_phases);
 	free(built->model_cells);
 	free(built->model_planes);

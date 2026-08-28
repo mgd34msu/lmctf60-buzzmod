@@ -14,7 +14,22 @@ typedef struct sg_weapon_static_cell_binding_s
 	uint32_t configuration_cell;
 	uint32_t first_partition;
 	uint32_t partition_count;
+	uint32_t partition_root;
 } sg_weapon_static_cell_binding_t;
+
+typedef struct sg_weapon_static_partition_ref_s
+{
+	uint32_t partition;
+	sg_rune_bounds_t bounds;
+} sg_weapon_static_partition_ref_t;
+
+typedef struct sg_weapon_static_partition_node_s
+{
+	sg_rune_bounds_t bounds;
+	uint32_t left;
+	uint32_t right;
+	uint32_t partition;
+} sg_weapon_static_partition_node_t;
 
 typedef struct sg_weapon_static_surface_ref_s
 {
@@ -44,15 +59,24 @@ struct sg_weapon_static_context_s
 	const sg_configuration_semantics_t *semantics;
 	const sg_static_visibility_t *visibility;
 	const sg_rune_model_t *model;
+	/* Provisional bridge lifetime/authenticity state only. */
+	const sg_rune_v2_artifact_loader_t *artifact_loader;
+	const sg_rune_v2_artifact_snapshot_t *artifact_snapshot;
+	const sg_static_visibility_publication_t *visibility_publication;
 	sg_weapon_static_cell_binding_t *cells;
 	uint32_t cell_count;
 	uint32_t *partition_indices;
 	uint32_t partition_count;
+	sg_weapon_static_partition_ref_t *partition_refs;
+	sg_weapon_static_partition_node_t *partition_nodes;
+	uint32_t partition_node_count;
 	sg_weapon_static_surface_ref_t *surface_refs;
 	sg_weapon_static_bvh_node_t *bvh_nodes;
 	uint32_t bvh_node_count;
 	uint32_t bvh_root;
 	uint64_t binding_comparisons;
+	uint64_t partition_preparation_work;
+	uint64_t surface_preparation_work;
 };
 
 static const sg_weapon_static_relation_t relation_order[] = {
@@ -272,21 +296,35 @@ static int FindModelPhase(const sg_rune_model_t *model,
 	return 1;
 }
 
-static int SurfaceRefLess(const sg_weapon_static_surface_ref_t *left,
-	const sg_weapon_static_surface_ref_t *right, uint32_t axis)
+static int BoundsCenterLess(const sg_rune_bounds_t *left,
+	const sg_rune_bounds_t *right, uint32_t left_index,
+	uint32_t right_index)
 {
-	double left_center = (double)left->bounds.mins.value[axis] +
-		left->bounds.maxs.value[axis];
-	double right_center = (double)right->bounds.mins.value[axis] +
-		right->bounds.maxs.value[axis];
+	uint32_t axis;
 
-	if (left_center != right_center)
-		return left_center < right_center;
-	return left->surface < right->surface;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		double left_center = (double)left->mins.value[axis] +
+			left->maxs.value[axis];
+		double right_center = (double)right->mins.value[axis] +
+			right->maxs.value[axis];
+
+		if (left_center != right_center)
+			return left_center < right_center;
+	}
+	return left_index < right_index;
+}
+
+static int SurfaceRefLess(const sg_weapon_static_surface_ref_t *left,
+	const sg_weapon_static_surface_ref_t *right, uint64_t *work)
+{
+	(*work)++;
+	return BoundsCenterLess(&left->bounds, &right->bounds, left->surface,
+		right->surface);
 }
 
 static void SurfaceRefSift(sg_weapon_static_surface_ref_t *items,
-	uint32_t count, uint32_t root, uint32_t axis)
+	uint32_t count, uint32_t root, uint64_t *work)
 {
 	for (;;)
 	{
@@ -294,10 +332,11 @@ static void SurfaceRefSift(sg_weapon_static_surface_ref_t *items,
 		uint32_t selected = root;
 		sg_weapon_static_surface_ref_t swap;
 
-		if (child < count && SurfaceRefLess(&items[selected], &items[child], axis))
+		if (child < count && SurfaceRefLess(&items[selected], &items[child],
+			work))
 			selected = child;
 		if (child + 1U < count &&
-			SurfaceRefLess(&items[selected], &items[child + 1U], axis))
+			SurfaceRefLess(&items[selected], &items[child + 1U], work))
 			selected = child + 1U;
 		if (selected == root)
 			return;
@@ -309,19 +348,68 @@ static void SurfaceRefSift(sg_weapon_static_surface_ref_t *items,
 }
 
 static void SurfaceRefSort(sg_weapon_static_surface_ref_t *items,
-	uint32_t count, uint32_t axis)
+	uint32_t count, uint64_t *work)
 {
 	uint32_t index;
 
 	for (index = count / 2U; index > 0U; index--)
-		SurfaceRefSift(items, count, index - 1U, axis);
+		SurfaceRefSift(items, count, index - 1U, work);
 	for (index = count; index > 1U; index--)
 	{
 		sg_weapon_static_surface_ref_t swap = items[0];
 
 		items[0] = items[index - 1U];
 		items[index - 1U] = swap;
-		SurfaceRefSift(items, index - 1U, 0U, axis);
+		SurfaceRefSift(items, index - 1U, 0U, work);
+	}
+}
+
+static int PartitionRefLess(const sg_weapon_static_partition_ref_t *left,
+	const sg_weapon_static_partition_ref_t *right, uint64_t *work)
+{
+	(*work)++;
+	return BoundsCenterLess(&left->bounds, &right->bounds, left->partition,
+		right->partition);
+}
+
+static void PartitionRefSift(sg_weapon_static_partition_ref_t *items,
+	uint32_t count, uint32_t root, uint64_t *work)
+{
+	for (;;)
+	{
+		uint32_t child = root * 2U + 1U;
+		uint32_t selected = root;
+		sg_weapon_static_partition_ref_t swap;
+
+		if (child < count && PartitionRefLess(&items[selected], &items[child],
+			work))
+			selected = child;
+		if (child + 1U < count && PartitionRefLess(&items[selected],
+			&items[child + 1U], work))
+			selected = child + 1U;
+		if (selected == root)
+			return;
+		swap = items[root];
+		items[root] = items[selected];
+		items[selected] = swap;
+		root = selected;
+	}
+}
+
+static void PartitionRefSort(sg_weapon_static_partition_ref_t *items,
+	uint32_t count, uint64_t *work)
+{
+	uint32_t index;
+
+	for (index = count / 2U; index > 0U; index--)
+		PartitionRefSift(items, count, index - 1U, work);
+	for (index = count; index > 1U; index--)
+	{
+		sg_weapon_static_partition_ref_t swap = items[0];
+
+		items[0] = items[index - 1U];
+		items[index - 1U] = swap;
+		PartitionRefSift(items, index - 1U, 0U, work);
 	}
 }
 
@@ -344,36 +432,56 @@ static uint32_t BuildBvhNode(sg_weapon_static_context_t *context,
 {
 	uint32_t node_index = context->bvh_node_count++;
 	sg_weapon_static_bvh_node_t *node = &context->bvh_nodes[node_index];
-	uint32_t index, axis = 0U;
-	float longest;
+	uint32_t index;
 
+	context->surface_preparation_work++;
 	node->left = SG_STATIC_VISIBILITY_INDEX_NONE;
 	node->right = SG_STATIC_VISIBILITY_INDEX_NONE;
 	node->surface = SG_STATIC_VISIBILITY_INDEX_NONE;
 	node->bounds = context->surface_refs[first].bounds;
 	for (index = 1U; index < count; index++)
+	{
 		BoundsInclude(&node->bounds, &context->surface_refs[first + index].bounds);
+		context->surface_preparation_work++;
+	}
 	if (count == 1U)
 	{
 		node->surface = context->surface_refs[first].surface;
 		return node_index;
 	}
-	longest = node->bounds.maxs.value[0] - node->bounds.mins.value[0];
-	for (index = 1U; index < 3U; index++)
-	{
-		float extent = node->bounds.maxs.value[index] -
-			node->bounds.mins.value[index];
-
-		if (extent > longest)
-		{
-			longest = extent;
-			axis = index;
-		}
-	}
-	SurfaceRefSort(&context->surface_refs[first], count, axis);
 	index = count / 2U;
 	node->left = BuildBvhNode(context, first, index);
 	node->right = BuildBvhNode(context, first + index, count - index);
+	return node_index;
+}
+
+static uint32_t BuildPartitionNode(sg_weapon_static_context_t *context,
+	uint32_t first, uint32_t count)
+{
+	uint32_t node_index = context->partition_node_count++;
+	sg_weapon_static_partition_node_t *node =
+		&context->partition_nodes[node_index];
+	uint32_t index;
+
+	context->partition_preparation_work++;
+	node->left = SG_STATIC_VISIBILITY_INDEX_NONE;
+	node->right = SG_STATIC_VISIBILITY_INDEX_NONE;
+	node->partition = SG_STATIC_VISIBILITY_INDEX_NONE;
+	node->bounds = context->partition_refs[first].bounds;
+	for (index = 1U; index < count; index++)
+	{
+		BoundsInclude(&node->bounds,
+			&context->partition_refs[first + index].bounds);
+		context->partition_preparation_work++;
+	}
+	if (count == 1U)
+	{
+		node->partition = context->partition_refs[first].partition;
+		return node_index;
+	}
+	index = count / 2U;
+	node->left = BuildPartitionNode(context, first, index);
+	node->right = BuildPartitionNode(context, first + index, count - index);
 	return node_index;
 }
 
@@ -387,12 +495,25 @@ static void SetPrepareError(sg_weapon_static_prepare_error_t *error,
 	error->record = SG_STATIC_VISIBILITY_INDEX_NONE;
 }
 
+static const sg_rune_v2_artifact_snapshot_t *ReadArtifactLoaderBridge(
+	const sg_weapon_static_artifact_loader_bridge_t *bridge)
+{
+	const sg_rune_v2_artifact_snapshot_t *snapshot;
+
+	if (!bridge || !bridge->loader || !bridge->snapshot)
+		return NULL;
+	snapshot = SG_RuneV2ArtifactLoaderSnapshot(bridge->loader);
+	return snapshot == bridge->snapshot ? snapshot : NULL;
+}
+
 void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context)
 {
 	if (!context)
 		return;
 	free(context->bvh_nodes);
 	free(context->surface_refs);
+	free(context->partition_nodes);
+	free(context->partition_refs);
 	free(context->partition_indices);
 	free(context->cells);
 	free(context);
@@ -402,6 +523,18 @@ uint64_t SG_WeaponStaticContextBindingComparisons(
 	const sg_weapon_static_context_t *context)
 {
 	return context ? context->binding_comparisons : 0U;
+}
+
+uint64_t SG_WeaponStaticContextPartitionPreparationWork(
+	const sg_weapon_static_context_t *context)
+{
+	return context ? context->partition_preparation_work : 0U;
+}
+
+uint64_t SG_WeaponStaticContextSurfacePreparationWork(
+	const sg_weapon_static_context_t *context)
+{
+	return context ? context->surface_preparation_work : 0U;
 }
 
 int SG_WeaponStaticContextPrepare(
@@ -414,6 +547,15 @@ int SG_WeaponStaticContextPrepare(
 	sg_static_visibility_audit_result_t visibility_audit;
 	sg_rune_failure_reason_t model_reason;
 	sg_weapon_static_context_t *context = NULL;
+	const sg_rune_v2_artifact_snapshot_t *artifact_snapshot;
+	const sg_host_collision_authority_t *authority;
+	const sg_configuration_space_t *configuration;
+	const sg_configuration_semantics_t *semantics;
+	const sg_static_visibility_t *visibility;
+	const sg_rune_model_t *model;
+	const sg_rune_validation_evidence_t *model_evidence;
+	sg_weapon_static_binding_t binding;
+	uint64_t visibility_revision;
 	sg_weapon_static_configuration_ref_t *configuration_refs = NULL;
 	uint32_t *counts = NULL, *positions = NULL, *binding_by_configuration = NULL;
 	uint32_t index, total = 0U;
@@ -421,32 +563,53 @@ int SG_WeaponStaticContextPrepare(
 	SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_NONE);
 	if (context_out)
 		*context_out = NULL;
-	if (!input || !context_out || !input->authority || !input->configuration ||
-		!input->semantics || !input->visibility || !input->model ||
-		!input->model_evidence)
+	if (!input || !context_out || !input->visibility_publication)
 	{
 		SetPrepareError(error_out,
 			SG_WEAPON_STATIC_PREPARE_ERROR_INVALID_ARGUMENT);
 		return 0;
 	}
-	if (!SG_WeaponStaticBindingValid(&input->binding) ||
-		input->binding.source_set_identity !=
-			input->authority->identity.source_set_identity)
-	{
-		SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_BINDING);
-		return 0;
-	}
-	if (!IdentityEqual(&input->authority->identity,
-			&input->configuration->identity) ||
-		!IdentityEqual(&input->authority->identity, &input->semantics->identity) ||
-		!IdentityEqual(&input->authority->identity, &input->visibility->identity) ||
-		!IdentityEqual(&input->authority->identity, &input->model->identity))
+	artifact_snapshot = ReadArtifactLoaderBridge(&input->artifact);
+	if (!artifact_snapshot ||
+		!SG_StaticVisibilityPublicationRead(input->visibility_publication,
+			&authority, &configuration, &semantics, &visibility,
+			&visibility_revision))
 	{
 		SetPrepareError(error_out,
 			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
 		return 0;
 	}
-	model_reason = SG_RuneModelValidate(input->model, input->model_evidence);
+	model = &artifact_snapshot->model;
+	model_evidence = &artifact_snapshot->evidence;
+	if (visibility_revision != artifact_snapshot->binding.generation)
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+		return 0;
+	}
+	memset(&binding, 0, sizeof(binding));
+	binding.artifact_identity = artifact_snapshot->binding.artifact_identity;
+	binding.bsp_identity = artifact_snapshot->binding.bsp_identity;
+	binding.schema_identity = artifact_snapshot->binding.schema_identity;
+	binding.source_set_identity = model->identity.source_set_identity;
+	binding.visibility_revision = visibility_revision;
+	if (!SG_WeaponStaticBindingValid(&binding) ||
+		binding.source_set_identity != authority->identity.source_set_identity)
+	{
+		SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_BINDING);
+		return 0;
+	}
+	if (!IdentityEqual(&authority->identity,
+			&configuration->identity) ||
+		!IdentityEqual(&authority->identity, &semantics->identity) ||
+		!IdentityEqual(&authority->identity, &visibility->identity) ||
+		!IdentityEqual(&authority->identity, &model->identity))
+	{
+		SetPrepareError(error_out,
+			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+		return 0;
+	}
+	model_reason = SG_RuneModelValidate(model, model_evidence);
 	if (model_reason != SG_RUNE_FAILURE_NONE)
 	{
 		SetPrepareError(error_out,
@@ -455,7 +618,7 @@ int SG_WeaponStaticContextPrepare(
 			error_out->model = model_reason;
 		return 0;
 	}
-	if (!SG_ConfigurationAudit(input->authority, input->configuration,
+	if (!SG_ConfigurationAudit(authority, configuration,
 			&configuration_audit))
 	{
 		SetPrepareError(error_out,
@@ -467,8 +630,8 @@ int SG_WeaponStaticContextPrepare(
 		}
 		return 0;
 	}
-	if (!SG_ConfigurationSemanticsAudit(input->authority, input->configuration,
-			input->semantics, &semantics_audit))
+	if (!SG_ConfigurationSemanticsAudit(authority, configuration,
+			semantics, &semantics_audit))
 	{
 		SetPrepareError(error_out,
 			SG_WEAPON_STATIC_PREPARE_ERROR_SEMANTICS_AUDIT);
@@ -479,8 +642,8 @@ int SG_WeaponStaticContextPrepare(
 		}
 		return 0;
 	}
-	if (!SG_StaticVisibilityAudit(input->authority, input->configuration,
-			input->semantics, input->visibility, &visibility_audit))
+	if (!SG_StaticVisibilityAudit(authority, configuration,
+			semantics, visibility, &visibility_audit))
 	{
 		SetPrepareError(error_out,
 			SG_WEAPON_STATIC_PREPARE_ERROR_VISIBILITY_AUDIT);
@@ -491,9 +654,11 @@ int SG_WeaponStaticContextPrepare(
 		}
 		return 0;
 	}
-	if (input->model->cell_count == 0U ||
-		input->visibility->partition_count == 0U ||
-		input->visibility->surface_count > (UINT32_MAX + UINT64_C(1)) / 2U)
+	if (model->cell_count == 0U ||
+		visibility->partition_count == 0U ||
+		(uint64_t)visibility->partition_count * 2U - model->cell_count >
+			UINT32_MAX ||
+		visibility->surface_count > (UINT32_MAX + UINT64_C(1)) / 2U)
 	{
 		SetPrepareError(error_out, SG_WEAPON_STATIC_PREPARE_ERROR_OVERFLOW);
 		return 0;
@@ -501,37 +666,40 @@ int SG_WeaponStaticContextPrepare(
 	context = calloc(1U, sizeof(*context));
 	if (!context)
 		goto out_of_memory;
-	context->binding = input->binding;
-	context->authority = input->authority;
-	context->configuration = input->configuration;
-	context->semantics = input->semantics;
-	context->visibility = input->visibility;
-	context->model = input->model;
-	context->cell_count = input->model->cell_count;
-	context->partition_count = input->visibility->partition_count;
+	context->binding = binding;
+	context->authority = authority;
+	context->configuration = configuration;
+	context->semantics = semantics;
+	context->visibility = visibility;
+	context->model = model;
+	context->artifact_loader = input->artifact.loader;
+	context->artifact_snapshot = artifact_snapshot;
+	context->visibility_publication = input->visibility_publication;
+	context->cell_count = model->cell_count;
+	context->partition_count = visibility->partition_count;
 	context->cells = calloc(context->cell_count, sizeof(*context->cells));
 	context->partition_indices = calloc(context->partition_count,
 		sizeof(*context->partition_indices));
-	configuration_refs = calloc(input->configuration->cell_count,
+	configuration_refs = calloc(configuration->cell_count,
 		sizeof(*configuration_refs));
-	counts = calloc(input->configuration->cell_count, sizeof(*counts));
-	positions = calloc(input->configuration->cell_count, sizeof(*positions));
-	binding_by_configuration = calloc(input->configuration->cell_count,
+	counts = calloc(configuration->cell_count, sizeof(*counts));
+	positions = calloc(configuration->cell_count, sizeof(*positions));
+	binding_by_configuration = calloc(configuration->cell_count,
 		sizeof(*binding_by_configuration));
 	if (!context->cells || !context->partition_indices ||
 		!configuration_refs || !counts || !positions ||
 		!binding_by_configuration)
 		goto out_of_memory;
-	for (index = 0U; index < input->configuration->cell_count; index++)
+	for (index = 0U; index < configuration->cell_count; index++)
 	{
 		binding_by_configuration[index] = UINT32_MAX;
 		configuration_refs[index].id =
-			input->configuration->cells[index].id.value;
+			configuration->cells[index].id.value;
 		configuration_refs[index].configuration_cell = index;
 	}
-	ConfigurationRefSort(configuration_refs, input->configuration->cell_count,
+	ConfigurationRefSort(configuration_refs, configuration->cell_count,
 		&context->binding_comparisons);
-	for (index = 1U; index < input->configuration->cell_count; index++)
+	for (index = 1U; index < configuration->cell_count; index++)
 	{
 		context->binding_comparisons++;
 		if (StableIdCompare(&configuration_refs[index - 1U].id,
@@ -544,9 +712,9 @@ int SG_WeaponStaticContextPrepare(
 	}
 	for (index = 0U; index < context->partition_count; index++)
 	{
-		uint32_t cell = input->visibility->partitions[index].configuration_cell;
+		uint32_t cell = visibility->partitions[index].configuration_cell;
 
-		if (cell >= input->configuration->cell_count || counts[cell] == UINT32_MAX)
+		if (cell >= configuration->cell_count || counts[cell] == UINT32_MAX)
 		{
 			SetPrepareError(error_out,
 				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
@@ -554,7 +722,7 @@ int SG_WeaponStaticContextPrepare(
 		}
 		counts[cell]++;
 	}
-	if (input->configuration->cell_count != context->cell_count)
+	if (configuration->cell_count != context->cell_count)
 	{
 		SetPrepareError(error_out,
 			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
@@ -564,16 +732,16 @@ int SG_WeaponStaticContextPrepare(
 	{
 		uint32_t configuration_cell;
 
-		context->cells[index].id = input->model->cells[index].id.value;
+		context->cells[index].id = model->cells[index].id.value;
 		context->cells[index].model_cell = index;
 		if (!FindConfigurationRef(configuration_refs,
-			input->configuration->cell_count, &context->cells[index].id,
+			configuration->cell_count, &context->cells[index].id,
 			&context->binding_comparisons, &configuration_cell) ||
 			counts[configuration_cell] == 0U ||
 			binding_by_configuration[configuration_cell] != UINT32_MAX ||
 			!ConfigurationModelCellEqual(
-				&input->configuration->cells[configuration_cell],
-				&input->model->cells[index]))
+				&configuration->cells[configuration_cell],
+				&model->cells[index]))
 		{
 			SetPrepareError(error_out,
 				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
@@ -582,7 +750,7 @@ int SG_WeaponStaticContextPrepare(
 		context->cells[index].configuration_cell = configuration_cell;
 		binding_by_configuration[configuration_cell] = index;
 	}
-	for (index = 0U; index < input->configuration->cell_count; index++)
+	for (index = 0U; index < configuration->cell_count; index++)
 	{
 		if (counts[index] == 0U)
 		{
@@ -597,11 +765,11 @@ int SG_WeaponStaticContextPrepare(
 			goto failure;
 		}
 	}
-	for (index = 0U; index < input->configuration->cell_count; index++)
+	for (index = 0U; index < configuration->cell_count; index++)
 	{
-		uint32_t binding = binding_by_configuration[index];
+		uint32_t cell_binding = binding_by_configuration[index];
 
-		if (binding == UINT32_MAX)
+		if (cell_binding == UINT32_MAX)
 			continue;
 		if (counts[index] == 0U || total > UINT32_MAX - counts[index])
 		{
@@ -609,42 +777,84 @@ int SG_WeaponStaticContextPrepare(
 				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
 			goto failure;
 		}
-		context->cells[binding].first_partition = total;
-		context->cells[binding].partition_count = counts[index];
+		context->cells[cell_binding].first_partition = total;
+		context->cells[cell_binding].partition_count = counts[index];
 		positions[index] = total;
 		total += counts[index];
 	}
 	for (index = 0U; index < context->partition_count; index++)
 	{
-		uint32_t cell = input->visibility->partitions[index].configuration_cell;
+		uint32_t cell = visibility->partitions[index].configuration_cell;
 
 		context->partition_indices[positions[cell]++] = index;
 	}
-	if (total != input->visibility->partition_count)
+	if (total != visibility->partition_count)
 	{
 		SetPrepareError(error_out,
 			SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
 		goto failure;
 	}
 	context->partition_count = total;
-	if (input->visibility->surface_count != 0U)
 	{
-		uint64_t nodes = (uint64_t)input->visibility->surface_count * 2U - 1U;
+		uint64_t partition_nodes = (uint64_t)total * 2U -
+			context->cell_count;
 
-		context->surface_refs = calloc(input->visibility->surface_count,
+		context->partition_refs = calloc(total,
+			sizeof(*context->partition_refs));
+		context->partition_nodes = calloc((size_t)partition_nodes,
+			sizeof(*context->partition_nodes));
+		if (!context->partition_refs || !context->partition_nodes)
+			goto out_of_memory;
+		for (index = 0U; index < context->cell_count; index++)
+		{
+			sg_weapon_static_cell_binding_t *cell = &context->cells[index];
+			uint32_t local;
+
+			for (local = 0U; local < cell->partition_count; local++)
+			{
+				uint32_t offset = cell->first_partition + local;
+				uint32_t partition = context->partition_indices[offset];
+				uint32_t region = visibility->partitions[
+					partition].configuration_region;
+
+				context->partition_refs[offset].partition = partition;
+				context->partition_refs[offset].bounds =
+					semantics->regions[region].bounds;
+				context->partition_preparation_work++;
+			}
+			PartitionRefSort(&context->partition_refs[cell->first_partition],
+				cell->partition_count, &context->partition_preparation_work);
+			cell->partition_root = BuildPartitionNode(context,
+				cell->first_partition, cell->partition_count);
+		}
+		if (context->partition_node_count != (uint32_t)partition_nodes)
+		{
+			SetPrepareError(error_out,
+				SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+			goto failure;
+		}
+	}
+	if (visibility->surface_count != 0U)
+	{
+		uint64_t nodes = (uint64_t)visibility->surface_count * 2U - 1U;
+
+		context->surface_refs = calloc(visibility->surface_count,
 			sizeof(*context->surface_refs));
 		context->bvh_nodes = calloc((size_t)nodes,
 			sizeof(*context->bvh_nodes));
 		if (!context->surface_refs || !context->bvh_nodes)
 			goto out_of_memory;
-		for (index = 0U; index < input->visibility->surface_count; index++)
+		for (index = 0U; index < visibility->surface_count; index++)
 		{
 			context->surface_refs[index].surface = index;
 			context->surface_refs[index].bounds =
-				input->semantics->hook_surfaces[index].bounds;
+				semantics->hook_surfaces[index].bounds;
+			context->surface_preparation_work++;
 		}
+		SurfaceRefSort(context->surface_refs, visibility->surface_count,
+			&context->surface_preparation_work);
 		context->bvh_root = BuildBvhNode(context, 0U,
-			input->visibility->surface_count);
+			visibility->surface_count);
 	}
 	else
 		context->bvh_root = SG_STATIC_VISIBILITY_INDEX_NONE;
@@ -689,15 +899,75 @@ static const sg_weapon_static_cell_binding_t *FindCellBinding(
 	return &context->cells[low];
 }
 
+static int PointInsideBounds(const sg_rune_bounds_t *bounds,
+	const float point[3])
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+		if (point[axis] < bounds->mins.value[axis] -
+				SG_WEAPON_SURFACE_EPSILON ||
+			point[axis] > bounds->maxs.value[axis] +
+				SG_WEAPON_SURFACE_EPSILON)
+			return 0;
+	return 1;
+}
+
+static void FindPointPartitionNode(
+	const sg_weapon_static_context_t *context, uint32_t node_index,
+	const float point[3], uint32_t *best_partition,
+	uint32_t *nodes_visited, uint32_t *bounds_overlaps,
+	uint32_t *face_tests)
+{
+	const sg_weapon_static_partition_node_t *node;
+
+	(*nodes_visited)++;
+	node = &context->partition_nodes[node_index];
+	if (!PointInsideBounds(&node->bounds, point))
+		return;
+	(*bounds_overlaps)++;
+	if (node->partition != SG_STATIC_VISIBILITY_INDEX_NONE)
+	{
+		uint32_t tested = 0U;
+
+		if (SG_StaticVisibilityPointInPartition(context->semantics,
+				context->visibility, node->partition, point, &tested) &&
+			node->partition < *best_partition)
+			*best_partition = node->partition;
+		*face_tests += tested;
+		return;
+	}
+	FindPointPartitionNode(context, node->left, point, best_partition,
+		nodes_visited, bounds_overlaps, face_tests);
+	FindPointPartitionNode(context, node->right, point, best_partition,
+		nodes_visited, bounds_overlaps, face_tests);
+}
+
+static int FindPointPartition(const sg_weapon_static_context_t *context,
+	const sg_weapon_static_cell_binding_t *binding, const float point[3],
+	uint32_t *partition_out, uint32_t *nodes_visited,
+	uint32_t *bounds_overlaps, uint32_t *face_tests)
+{
+	uint32_t best = SG_STATIC_VISIBILITY_INDEX_NONE;
+
+	FindPointPartitionNode(context, binding->partition_root, point, &best,
+		nodes_visited, bounds_overlaps, face_tests);
+	if (best == SG_STATIC_VISIBILITY_INDEX_NONE)
+		return 0;
+	*partition_out = best;
+	return 1;
+}
+
 static int LocatePose(const sg_weapon_static_context_t *context,
 	const sg_rune_cell_ref_t *cell_reference,
 	const sg_rune_phase_ref_t *phase_reference, const float point[3],
-	uint32_t *partition_out, uint32_t *face_tests_out)
+	uint32_t *partition_out, uint32_t *nodes_visited_out,
+	uint32_t *bounds_overlaps_out, uint32_t *face_tests_out)
 {
 	const sg_weapon_static_cell_binding_t *binding =
 		FindCellBinding(context, cell_reference);
 	const sg_rune_phase_span_t *span;
-	uint32_t phase, local;
+	uint32_t phase;
 
 	if (!binding || !FindModelPhase(context->model, phase_reference, &phase))
 		return 0;
@@ -706,22 +976,8 @@ static int LocatePose(const sg_weapon_static_context_t *context,
 		span->count > context->model->phase_count - span->first ||
 		phase < span->first || phase - span->first >= span->count)
 		return 0;
-	for (local = 0U; local < binding->partition_count; local++)
-	{
-		uint32_t tested = 0U;
-		uint32_t partition = context->partition_indices[
-			binding->first_partition + local];
-
-		if (SG_StaticVisibilityPointInPartition(context->semantics,
-				context->visibility, partition, point, &tested))
-		{
-			*partition_out = partition;
-			*face_tests_out += tested;
-			return 1;
-		}
-		*face_tests_out += tested;
-	}
-	return 0;
+	return FindPointPartition(context, binding, point, partition_out,
+		nodes_visited_out, bounds_overlaps_out, face_tests_out);
 }
 
 static sg_weapon_static_relation_t AllowedRelations(
@@ -1096,7 +1352,8 @@ static int OwnerDamageVisibility(
 	const sg_weapon_static_query_t *query,
 	const sg_weapon_static_cell_binding_t *target_binding,
 	uint32_t source_partition, sg_weapon_static_status_t *status_out,
-	sg_static_visibility_result_t *evidence, uint32_t *face_tests)
+	sg_static_visibility_result_t *evidence, uint32_t *nodes_visited,
+	uint32_t *bounds_overlaps, uint32_t *face_tests)
 {
 	static const float offsets[5][2] = {
 		{ 0.0f, 0.0f }, { 15.0f, 15.0f }, { 15.0f, -15.0f },
@@ -1118,24 +1375,11 @@ static int OwnerDamageVisibility(
 			query->target_origin.value[2]
 		};
 		sg_host_collision_trace_t world_trace, scene_trace;
-		uint32_t local, destination_partition = SG_STATIC_VISIBILITY_INDEX_NONE;
+		uint32_t destination_partition;
 
-		for (local = 0U; local < target_binding->partition_count; local++)
-		{
-			uint32_t tested = 0U;
-			uint32_t partition = context->partition_indices[
-				target_binding->first_partition + local];
-
-			if (SG_StaticVisibilityPointInPartition(context->semantics,
-					context->visibility, partition, destination, &tested))
-			{
-				destination_partition = partition;
-				*face_tests += tested;
-				break;
-			}
-			*face_tests += tested;
-		}
-		if (destination_partition == SG_STATIC_VISIBILITY_INDEX_NONE)
+		if (!FindPointPartition(context, target_binding, destination,
+				&destination_partition, nodes_visited, bounds_overlaps,
+				face_tests))
 			continue;
 		if (!SG_HostCollisionTraceModel(context->authority,
 				SG_HOST_COLLISION_MODEL_WORLD, NULL,
@@ -1188,6 +1432,7 @@ static int ImpactDamageVisibility(
 	const sg_weapon_static_cell_binding_t *target_binding, uint32_t surface,
 	const float impact_point[3], sg_weapon_static_status_t *status_out,
 	sg_static_visibility_result_t *evidence_out,
+	uint32_t *nodes_visited, uint32_t *bounds_overlaps, uint32_t *face_tests,
 	sg_weapon_static_affordance_error_t *error)
 {
 	static const float offsets[5][2] = {
@@ -1210,16 +1455,11 @@ static int ImpactDamageVisibility(
 		};
 		sg_static_visibility_result_t visibility;
 		sg_static_visibility_error_t visibility_error;
-		uint32_t local;
+		uint32_t partition;
 
-		for (local = 0U; local < target_binding->partition_count; local++)
+		if (FindPointPartition(context, target_binding, target, &partition,
+				nodes_visited, bounds_overlaps, face_tests))
 		{
-			uint32_t partition = context->partition_indices[
-				target_binding->first_partition + local];
-
-			if (!SG_StaticVisibilityPointInPartition(context->semantics,
-					context->visibility, partition, target, NULL))
-				continue;
 			if (!SG_StaticVisibilityQueryBoundSurface(context->authority, scene,
 					context->configuration, context->semantics,
 					context->visibility, partition, target, surface, impact_point,
@@ -1239,7 +1479,6 @@ static int ImpactDamageVisibility(
 				best = VisibilityStatus(&visibility);
 				*evidence_out = visibility;
 			}
-			break;
 		}
 		if (best == SG_WEAPON_STATIC_PROVEN)
 			break;
@@ -1265,6 +1504,7 @@ static int ResolveBlastCandidate(
 	sg_weapon_static_status_t owner_status,
 	const sg_static_visibility_result_t *owner_visibility,
 	int require_owner, sg_weapon_static_relation_result_t *relation,
+	sg_weapon_static_affordance_t *affordance,
 	sg_weapon_static_affordance_error_t *error)
 {
 	float closest[3];
@@ -1281,7 +1521,10 @@ static int ResolveBlastCandidate(
 		sg_weapon_static_reason_t target_reason;
 
 		if (!ImpactDamageVisibility(context, scene, query, target_binding,
-				surface, impact_point, &target_status, &target_visibility, error))
+				surface, impact_point, &target_status, &target_visibility,
+				&affordance->pose_partition_nodes_visited,
+				&affordance->pose_partition_bounds_overlaps,
+				&affordance->pose_partition_faces_tested, error))
 			return 0;
 		target_status = CandidateStatus(&target_visibility, &target_reason);
 		if (target_status < combined)
@@ -1341,7 +1584,7 @@ static int EvaluateSurfaceCandidate(
 		!ResolveBlastCandidate(context, scene, query, target_binding, surface,
 			impact_point, profile->splash_radius, status, reason,
 			&surface_visibility, owner_status, owner_visibility, 0,
-			&affordance->relations[3], error))
+			&affordance->relations[3], affordance, error))
 		return 0;
 	if ((requested & SG_WEAPON_STATIC_BOUNCE_SURFACE) != 0U)
 		PreferSurfaceEvidence(&affordance->relations[4], status, reason,
@@ -1350,7 +1593,7 @@ static int EvaluateSurfaceCandidate(
 		!ResolveBlastCandidate(context, scene, query, target_binding, surface,
 			impact_point, profile->secondary_splash_radius, status, reason,
 			&surface_visibility, owner_status, owner_visibility, 1,
-			&affordance->relations[5], error))
+			&affordance->relations[5], affordance, error))
 		return 0;
 	return 1;
 }
@@ -1618,11 +1861,18 @@ int SG_WeaponStaticAffordanceResolve(
 	const sg_weapon_static_context_t *context,
 	const sg_host_collision_scene_t *scene,
 	const sg_weapon_static_query_t *query,
-	const sg_weapon_profile_t *profile,
+	const sg_weapon_law_input_t *law, sg_weapon_profile_id_t profile_id,
 	sg_weapon_static_affordance_t *affordance_out,
 	sg_weapon_static_affordance_error_t *error_out)
 {
 	sg_weapon_static_affordance_t affordance;
+	sg_weapon_profile_t profile_storage;
+	const sg_weapon_profile_t *profile = &profile_storage;
+	const sg_host_collision_authority_t *published_authority;
+	const sg_configuration_space_t *published_configuration;
+	const sg_configuration_semantics_t *published_semantics;
+	const sg_static_visibility_t *published_visibility;
+	uint64_t published_revision;
 	sg_static_visibility_result_t point_visibility;
 	sg_static_visibility_result_t owner_visibility;
 	sg_static_visibility_error_t visibility_error;
@@ -1630,13 +1880,30 @@ int SG_WeaponStaticAffordanceResolve(
 	sg_weapon_static_status_t owner_status = SG_WEAPON_STATIC_REJECTED;
 	const sg_weapon_static_cell_binding_t *target_binding;
 	uint32_t source_partition, target_partition;
+	uint32_t pose_nodes_visited = 0U, pose_bounds_overlaps = 0U;
 	uint32_t pose_face_tests = 0U;
 
 	SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_NONE, NULL);
-	if (!context || !scene || !query || !profile || !affordance_out)
+	if (!context || !scene || !query || !law || !affordance_out)
 	{
 		SetError(error_out,
 			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_ARGUMENT, NULL);
+		return 0;
+	}
+	if (SG_RuneV2ArtifactLoaderSnapshot(context->artifact_loader) !=
+			context->artifact_snapshot ||
+		!SG_StaticVisibilityPublicationRead(
+			context->visibility_publication, &published_authority,
+			&published_configuration, &published_semantics,
+			&published_visibility, &published_revision) ||
+		published_authority != context->authority ||
+		published_configuration != context->configuration ||
+		published_semantics != context->semantics ||
+		published_visibility != context->visibility ||
+		published_revision != context->binding.visibility_revision)
+	{
+		SetError(error_out,
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH, NULL);
 		return 0;
 	}
 	if (!BindingEqual(&context->binding, &query->binding))
@@ -1651,23 +1918,25 @@ int SG_WeaponStaticAffordanceResolve(
 			NULL);
 		return 0;
 	}
-	if (!SG_WeaponProfileValid(profile) || profile->resolved != 1U)
+	if (law->build_identity != context->model->identity.producer_identity ||
+		law->physics_abi_id != context->model->identity.physics_abi_id)
+	{
+		SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH,
+			NULL);
+		return 0;
+	}
+	if (!SG_WeaponProfileResolve(profile_id, law, &profile_storage))
 	{
 		SetError(error_out,
 			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_PROFILE, NULL);
 		return 0;
 	}
-	if (profile->build_identity != context->model->identity.producer_identity ||
-		profile->physics_abi_id != context->model->identity.physics_abi_id)
-	{
-		SetError(error_out,
-			SG_WEAPON_STATIC_AFFORDANCE_ERROR_IDENTITY_MISMATCH, NULL);
-		return 0;
-	}
 	if (!LocatePose(context, &query->source_cell, &query->source_phase,
-			query->source_origin.value, &source_partition, &pose_face_tests) ||
+			query->source_origin.value, &source_partition,
+			&pose_nodes_visited, &pose_bounds_overlaps, &pose_face_tests) ||
 		!LocatePose(context, &query->target_cell, &query->target_phase,
-			query->target_origin.value, &target_partition, &pose_face_tests))
+			query->target_origin.value, &target_partition,
+			&pose_nodes_visited, &pose_bounds_overlaps, &pose_face_tests))
 	{
 		SetError(error_out, SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE,
 			NULL);
@@ -1710,6 +1979,8 @@ int SG_WeaponStaticAffordanceResolve(
 			}
 		}
 	}
+	affordance.pose_partition_nodes_visited = pose_nodes_visited;
+	affordance.pose_partition_bounds_overlaps = pose_bounds_overlaps;
 	affordance.pose_partition_faces_tested = pose_face_tests;
 	target_binding = FindCellBinding(context, &query->target_cell);
 	if ((query->requested_relations & affordance.allowed_relations &
@@ -1717,6 +1988,8 @@ int SG_WeaponStaticAffordanceResolve(
 	{
 		if (!OwnerDamageVisibility(context, scene, query, target_binding,
 				source_partition, &owner_status, &owner_visibility,
+				&affordance.pose_partition_nodes_visited,
+				&affordance.pose_partition_bounds_overlaps,
 				&affordance.pose_partition_faces_tested))
 		{
 			SetError(error_out,
