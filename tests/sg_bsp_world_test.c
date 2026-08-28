@@ -7,7 +7,7 @@
 #include "../slipgate/sg_bsp_world.h"
 
 #define HEADER_BYTES (8U + SG_BSP_LUMP_COUNT * 8U)
-#define FIXTURE_CAPACITY 600000U
+#define FIXTURE_CAPACITY 3000000U
 #define HOST_MAX_CLUSTERS UINT32_C(65536)
 #define HOST_MAX_AREAS UINT32_C(256)
 #define HOST_MAX_MODELS UINT32_C(8190)
@@ -187,7 +187,7 @@ static fixture_t ValidFixture(void)
 	record = AddLump(&fixture, SG_BSP_LUMP_NODES, 28);
 	WriteU32(record, 0);
 	WriteI32(record + 4, -1);
-	WriteI32(record + 8, -1);
+	WriteI32(record + 8, -2);
 	WriteI16(record + 12, -16);
 	WriteI16(record + 14, -16);
 	WriteI16(record + 16, -16);
@@ -220,9 +220,9 @@ static fixture_t ValidFixture(void)
 	record[1] = 20;
 	record[2] = 30;
 
-	record = AddLump(&fixture, SG_BSP_LUMP_LEAVES, 28);
+	record = AddLump(&fixture, SG_BSP_LUMP_LEAVES, 56);
 	WriteI32(record, 1);
-	WriteI16(record + 4, 0);
+	WriteU16(record + 4, UINT16_MAX);
 	WriteI16(record + 6, 0);
 	WriteI16(record + 8, -16);
 	WriteI16(record + 10, -16);
@@ -234,6 +234,15 @@ static fixture_t ValidFixture(void)
 	WriteU16(record + 22, 1);
 	WriteU16(record + 24, 0);
 	WriteU16(record + 26, 1);
+	WriteI32(record + 28, 0);
+	WriteU16(record + 32, 0);
+	WriteU16(record + 34, 0);
+	WriteI16(record + 36, -16);
+	WriteI16(record + 38, -16);
+	WriteI16(record + 40, -16);
+	WriteI16(record + 42, 16);
+	WriteI16(record + 44, 16);
+	WriteI16(record + 46, 16);
 
 	record = AddLump(&fixture, SG_BSP_LUMP_LEAF_FACES, 2);
 	WriteU16(record, 0);
@@ -272,7 +281,7 @@ static fixture_t ValidFixture(void)
 	WriteFloat(record + 72, 32.0f);
 	WriteI32(record + 84, -1);
 	WriteI32(record + 88, 0);
-	WriteI32(record + 92, 1);
+	WriteI32(record + 92, 0);
 
 	record = AddLump(&fixture, SG_BSP_LUMP_BRUSHES, 12);
 	WriteI32(record, 0);
@@ -344,7 +353,7 @@ static void TestValidFixture(void)
 	CHECK(world->texinfo_count == 1);
 	CHECK(world->face_count == 1);
 	CHECK(world->lighting_byte_count == 3);
-	CHECK(world->leaf_count == 1);
+	CHECK(world->leaf_count == 2);
 	CHECK(world->leaf_face_count == 1);
 	CHECK(world->leaf_brush_count == 1);
 	CHECK(world->edge_count == 3);
@@ -359,8 +368,10 @@ static void TestValidFixture(void)
 	CHECK(world->faces[0].light_offset == 0);
 	CHECK(world->leaves[0].contents == 1);
 	CHECK(world->brushes[0].contents == 1);
-	CHECK(world->models[0].mins.value[0] == -16.0f);
-	CHECK(world->models[0].maxs.value[2] == 16.0f);
+	CHECK(world->models[0].mins.value[0] == -17.0f);
+	CHECK(world->models[0].maxs.value[2] == 17.0f);
+	CHECK(world->models[1].mins.value[1] == -9.0f);
+	CHECK(world->models[1].maxs.value[1] == 9.0f);
 	CHECK(world->models[1].headnode == -1);
 	CHECK(world->models[1].origin.value[0] == 32.0f);
 	CHECK(world->areas[1].first_areaportal == 1);
@@ -444,7 +455,7 @@ static void TestReferenceFailures(void)
 	uint8_t *record;
 
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
-	WriteI32(record + 4, -2);
+	WriteI32(record + 4, -3);
 	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_NODES);
 
 	fixture = ValidFixture();
@@ -478,7 +489,68 @@ static void TestReferenceFailures(void)
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
 	WriteI32(record + 4, 0);
+	WriteU16(record + 26, 0);
 	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_NODES);
+}
+
+static void TestTreeOwnershipFailures(void)
+{
+	fixture_t fixture = ValidFixture();
+	uint8_t *nodes;
+	uint8_t *leaves;
+	uint8_t *models;
+
+	nodes = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
+	WriteI32(nodes + 8U, -1);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_LEAVES);
+
+	fixture = ValidFixture();
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_NODES, 56U));
+	nodes = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
+	memcpy(nodes + 28U, nodes, 28U);
+	WriteI32(nodes + 4U, 1);
+	WriteI32(nodes + 8U, 1);
+	WriteI32(nodes + 28U + 4U, -1);
+	WriteI32(nodes + 28U + 8U, -2);
+	WriteU16(nodes + 28U + 26U, 0);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_NODES);
+
+	fixture = ValidFixture();
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_LEAVES, 84U));
+	leaves = fixture.bytes + fixture.offsets[SG_BSP_LUMP_LEAVES];
+	memcpy(leaves + 56U, leaves + 28U, 28U);
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_NODES, 56U));
+	nodes = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
+	memcpy(nodes + 28U, nodes, 28U);
+	WriteI32(nodes + 4U, 1);
+	WriteI32(nodes + 8U, -1);
+	WriteI32(nodes + 28U + 4U, -2);
+	WriteI32(nodes + 28U + 8U, -3);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_FACES);
+
+	fixture = ValidFixture();
+	models = fixture.bytes + fixture.offsets[SG_BSP_LUMP_MODELS];
+	WriteI32(models + 92U, 1);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_FACES);
+}
+
+static void TestOrphanNodesMatchHostScope(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+	uint8_t *nodes;
+
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_NODES, 56U));
+	nodes = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
+	memcpy(nodes + 28U, nodes, 28U);
+	WriteI32(nodes + 28U + 4U, 1);
+	WriteI32(nodes + 28U + 8U, 1);
+	WriteU16(nodes + 28U + 26U, 0);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
 }
 
 static void TestGeometryAndVisibilityFailures(void)
@@ -523,13 +595,16 @@ static void TestMapWithoutVisibility(void)
 	sg_bsp_error_t error;
 
 	WriteU32(fixture.bytes + 12U + SG_BSP_LUMP_VISIBILITY * 8U, 0);
+	WriteU16(fixture.bytes + fixture.offsets[SG_BSP_LUMP_LEAVES] + 32U,
+		UINT16_C(0xfffe));
 	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
 	CHECK(world != NULL);
 	if (world)
 	{
 		CHECK(world->visibility.byte_count == 0);
 		CHECK(world->visibility.cluster_count == 0);
-		CHECK(world->leaves[0].cluster == 0);
+		CHECK(world->leaves[0].cluster == -1);
+		CHECK(world->leaves[1].cluster == 0);
 	}
 	SG_BspWorldDestroy(world);
 	DestroyFixture(&fixture);
@@ -579,10 +654,11 @@ static void TestEmptyLightingIgnoresStaleOffset(void)
 	DestroyFixture(&fixture);
 }
 
-static void SetVisibilityClusterLimit(fixture_t *fixture)
+static void SetVisibilityClusterCount(fixture_t *fixture,
+	uint32_t cluster_count)
 {
-	uint32_t table_bytes = 4U + HOST_MAX_CLUSTERS * 8U;
-	uint32_t row_bytes = HOST_MAX_CLUSTERS / 8U;
+	uint32_t table_bytes = 4U + cluster_count * 8U;
+	uint32_t row_bytes = (cluster_count + 7U) / 8U;
 	uint32_t stream_bytes = ((row_bytes + 254U) / 255U) * 2U;
 	uint8_t *visibility;
 	uint32_t cluster, set, position, remaining;
@@ -590,8 +666,8 @@ static void SetVisibilityClusterLimit(fixture_t *fixture)
 	CHECK(ResizeLump(fixture, SG_BSP_LUMP_VISIBILITY,
 		table_bytes + stream_bytes));
 	visibility = fixture->bytes + fixture->offsets[SG_BSP_LUMP_VISIBILITY];
-	WriteU32(visibility, HOST_MAX_CLUSTERS);
-	for (cluster = 0; cluster < HOST_MAX_CLUSTERS; cluster++)
+	WriteU32(visibility, cluster_count);
+	for (cluster = 0; cluster < cluster_count; cluster++)
 		for (set = 0; set < SG_BSP_VISIBILITY_SET_COUNT; set++)
 			WriteU32(visibility + 4U + cluster * 8U + set * 4U,
 				table_bytes);
@@ -607,6 +683,37 @@ static void SetVisibilityClusterLimit(fixture_t *fixture)
 	}
 }
 
+static void TestUnsignedExtendedIndices(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+	uint8_t *records;
+
+	SetVisibilityClusterCount(&fixture, UINT32_C(32769));
+	records = fixture.bytes + fixture.offsets[SG_BSP_LUMP_LEAVES];
+	WriteU16(records + 32U, UINT16_C(0x8000));
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->leaves[1].cluster == 32768);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+
+	fixture = ValidFixture();
+	world = NULL;
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_TEXINFO,
+		UINT32_C(32769) * 76U));
+	records = fixture.bytes + fixture.offsets[SG_BSP_LUMP_BRUSH_SIDES];
+	WriteU16(records + 2U, UINT16_C(0x8000));
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->brush_sides[0].texinfo == 32768);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+}
+
 static void TestHostFormatCaps(void)
 {
 	fixture_t fixture = ValidFixture();
@@ -615,11 +722,16 @@ static void TestHostFormatCaps(void)
 	uint8_t *records;
 	uint32_t index;
 
-	SetVisibilityClusterLimit(&fixture);
+	SetVisibilityClusterCount(&fixture, HOST_MAX_CLUSTERS);
+	records = fixture.bytes + fixture.offsets[SG_BSP_LUMP_LEAVES];
+	WriteU16(records + 32U, UINT16_C(0xfffe));
 	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
 	CHECK(world != NULL);
 	if (world)
+	{
 		CHECK(world->visibility.cluster_count == HOST_MAX_CLUSTERS);
+		CHECK(world->leaves[1].cluster == 65534);
+	}
 	SG_BspWorldDestroy(world);
 	world = NULL;
 	WriteU32(fixture.bytes + fixture.offsets[SG_BSP_LUMP_VISIBILITY],
@@ -753,9 +865,10 @@ static int CompareRealBsp(const char *path)
 	CHECK(world->model_count ==
 		ReadU32(bytes + 12U + SG_BSP_LUMP_MODELS * 8U) / 48U);
 	model_offset = ReadU32(bytes + 8U + SG_BSP_LUMP_MODELS * 8U);
-	CHECK(world->models[0].mins.value[0] == ReadFloat(bytes + model_offset));
+	CHECK(world->models[0].mins.value[0] ==
+		ReadFloat(bytes + model_offset) - 1.0f);
 	CHECK(world->models[0].maxs.value[2] ==
-		ReadFloat(bytes + model_offset + 20U));
+		ReadFloat(bytes + model_offset + 20U) + 1.0f);
 	leaf_offset = ReadU32(bytes + 8U + SG_BSP_LUMP_LEAVES * 8U);
 	CHECK(world->leaves[0].contents == ReadI32(bytes + leaf_offset));
 	brush_offset = ReadU32(bytes + 8U + SG_BSP_LUMP_BRUSHES * 8U);
@@ -787,10 +900,13 @@ int main(int argc, char **argv)
 	TestDerivedPlaneType();
 	TestHeaderFailures();
 	TestReferenceFailures();
+	TestTreeOwnershipFailures();
+	TestOrphanNodesMatchHostScope();
 	TestGeometryAndVisibilityFailures();
 	TestMapWithoutVisibility();
 	TestTexinfoHostSemantics();
 	TestEmptyLightingIgnoresStaleOffset();
+	TestUnsignedExtendedIndices();
 	TestHostFormatCaps();
 	TestOutputOwnershipContract();
 	if (argc > 1)

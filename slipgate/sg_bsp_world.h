@@ -144,6 +144,7 @@ typedef struct sg_bsp_edge_s
 
 typedef struct sg_bsp_model_s
 {
+	/* Collision bounds match the host: disk mins - 1, disk maxs + 1. */
 	sg_bsp_vec3_t mins;
 	sg_bsp_vec3_t maxs;
 	sg_bsp_vec3_t origin;

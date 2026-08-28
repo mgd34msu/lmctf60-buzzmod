@@ -520,11 +520,16 @@ static int BspLoadLeaves(sg_bsp_world_t *world,
 	for (index = 0; index < lump->count; index++)
 	{
 		const uint8_t *record = lump->data + (size_t)index * BSP_LEAF_BYTES;
-		int16_t area = BspReadI16(record + 6U);
+		uint16_t cluster = BspReadU16(record + 4U);
 
 		world->leaves[index].contents = BspReadI32(record);
-		world->leaves[index].cluster = BspReadI16(record + 4U);
-		world->leaves[index].area = (uint32_t)(uint16_t)area;
+		if (cluster == UINT16_MAX)
+			world->leaves[index].cluster = -1;
+		else if (!world->visibility.byte_count)
+			world->leaves[index].cluster = 0;
+		else
+			world->leaves[index].cluster = (int32_t)cluster;
+		world->leaves[index].area = BspReadU16(record + 6U);
 		BspReadShortBounds(record + 8U, &world->leaves[index].bounds);
 		world->leaves[index].first_leaf_face = BspReadU16(record + 20U);
 		world->leaves[index].leaf_face_count = BspReadU16(record + 22U);
@@ -600,12 +605,26 @@ static int BspLoadModels(sg_bsp_world_t *world,
 
 		for (axis = 0; axis < 3; axis++)
 		{
-			world->models[index].mins.value[axis] =
-				BspReadFloat(record + axis * 4U);
-			world->models[index].maxs.value[axis] =
-				BspReadFloat(record + 12U + axis * 4U);
-			world->models[index].origin.value[axis] =
-				BspReadFloat(record + 24U + axis * 4U);
+			float raw_min = BspReadFloat(record + axis * 4U);
+			float raw_max = BspReadFloat(record + 12U + axis * 4U);
+			float origin = BspReadFloat(record + 24U + axis * 4U);
+
+			if (!isfinite(raw_min) || !isfinite(raw_max) ||
+				!isfinite(origin))
+			{
+				BspSetError(error, SG_BSP_ERROR_NONFINITE_GEOMETRY,
+					SG_BSP_LUMP_MODELS, index);
+				return 0;
+			}
+			if (raw_min > raw_max)
+			{
+				BspSetError(error, SG_BSP_ERROR_INVALID_GEOMETRY,
+					SG_BSP_LUMP_MODELS, index);
+				return 0;
+			}
+			world->models[index].mins.value[axis] = raw_min - 1.0f;
+			world->models[index].maxs.value[axis] = raw_max + 1.0f;
+			world->models[index].origin.value[axis] = origin;
 		}
 		world->models[index].headnode = BspReadI32(record + 36U);
 		world->models[index].first_face = (uint32_t)BspReadI32(record + 40U);
@@ -647,10 +666,14 @@ static int BspLoadBrushSides(sg_bsp_world_t *world,
 		return 0;
 	for (index = 0; index < lump->count; index++)
 	{
+		uint16_t texinfo;
+
 		world->brush_sides[index].plane = BspReadU16(
 			lump->data + (size_t)index * BSP_BRUSH_SIDE_BYTES);
-		world->brush_sides[index].texinfo = BspReadI16(
-			lump->data + (size_t)index * BSP_BRUSH_SIDE_BYTES + 2U);
+		texinfo = BspReadU16(lump->data +
+			(size_t)index * BSP_BRUSH_SIDE_BYTES + 2U);
+		world->brush_sides[index].texinfo = texinfo == UINT16_MAX
+			? -1 : (int32_t)texinfo;
 	}
 	return 1;
 }
@@ -962,73 +985,156 @@ static int BspValidateTexinfoAnimations(const sg_bsp_world_t *world,
 	return 1;
 }
 
+static int BspClaimNodeFaces(const sg_bsp_world_t *world, uint32_t node,
+	uint32_t owner, uint32_t *face_owner, sg_bsp_error_t *error)
+{
+	const sg_bsp_node_t *record = &world->nodes[node];
+	uint32_t offset;
+
+	for (offset = 0; offset < record->face_count; offset++)
+	{
+		uint32_t face = record->first_face + offset;
+
+		if (face_owner[face])
+		{
+			BspSetError(error, SG_BSP_ERROR_INVALID_TREE,
+				SG_BSP_LUMP_FACES, face);
+			return 0;
+		}
+		face_owner[face] = owner;
+	}
+	return 1;
+}
+
+static int BspWalkTree(const sg_bsp_world_t *world, int32_t headnode,
+	uint32_t owner, uint8_t *node_parent, uint8_t *leaf_parent,
+	uint32_t *face_owner, uint32_t *stack, uint8_t *next_side,
+	sg_bsp_error_t *error)
+{
+	uint32_t depth;
+
+	if (headnode < 0)
+		return 1;
+	if (!BspClaimNodeFaces(world, (uint32_t)headnode, owner, face_owner,
+			error))
+		return 0;
+	depth = 1;
+	stack[0] = (uint32_t)headnode;
+	next_side[0] = 0;
+	while (depth)
+	{
+		uint32_t node = stack[depth - 1U];
+		uint8_t side = next_side[depth - 1U];
+		int32_t child;
+
+		if (side == 2U)
+		{
+			depth--;
+			continue;
+		}
+		next_side[depth - 1U]++;
+		child = world->nodes[node].children[side];
+		if (child < 0)
+		{
+			uint32_t leaf = (uint32_t)(-1 - child);
+
+			if (leaf_parent[leaf])
+			{
+				BspSetError(error, SG_BSP_ERROR_INVALID_TREE,
+					SG_BSP_LUMP_LEAVES, leaf);
+				return 0;
+			}
+			leaf_parent[leaf] = 1;
+			continue;
+		}
+		if (node_parent[(uint32_t)child])
+		{
+			BspSetError(error, SG_BSP_ERROR_INVALID_TREE,
+				SG_BSP_LUMP_NODES, (uint32_t)child);
+			return 0;
+		}
+		node_parent[(uint32_t)child] = 1;
+		if (depth == world->node_count)
+		{
+			BspSetError(error, SG_BSP_ERROR_INVALID_TREE,
+				SG_BSP_LUMP_NODES, (uint32_t)child);
+			return 0;
+		}
+		if (!BspClaimNodeFaces(world, (uint32_t)child, owner,
+				face_owner, error))
+			return 0;
+		stack[depth] = (uint32_t)child;
+		next_side[depth] = 0;
+		depth++;
+	}
+	return 1;
+}
+
 static int BspValidateTrees(const sg_bsp_world_t *world,
 	sg_bsp_error_t *error)
 {
-	uint8_t *state, *next_side;
-	uint32_t *stack;
-	uint32_t root;
+	uint8_t *node_parent = NULL, *leaf_parent = NULL;
+	uint8_t *next_side = NULL;
+	uint32_t empty_face_owner = 0;
+	uint32_t *face_owner = &empty_face_owner, *stack = NULL;
+	uint32_t model;
+	int valid = 0;
 
-	state = BspAllocate(world->node_count, sizeof(*state), error,
+	node_parent = BspAllocate(world->node_count, sizeof(*node_parent), error,
 		SG_BSP_LUMP_NODES);
-	if (!state)
-		return 0;
+	if (!node_parent)
+		goto done;
+	leaf_parent = BspAllocate(world->leaf_count, sizeof(*leaf_parent), error,
+		SG_BSP_LUMP_LEAVES);
+	if (!leaf_parent)
+		goto done;
 	stack = BspAllocate(world->node_count, sizeof(*stack), error,
 		SG_BSP_LUMP_NODES);
+	if (!stack)
+		goto done;
 	next_side = BspAllocate(world->node_count, sizeof(*next_side), error,
 		SG_BSP_LUMP_NODES);
-	if (!stack || !next_side)
+	if (!next_side)
+		goto done;
+	if (world->face_count)
 	{
-		free(next_side);
-		free(stack);
-		free(state);
-		return 0;
+		face_owner = BspAllocate(world->face_count, sizeof(*face_owner), error,
+			SG_BSP_LUMP_FACES);
+		if (!face_owner)
+			goto done;
 	}
-	for (root = 0; root < world->node_count; root++)
+	for (model = 0; model < world->model_count; model++)
 	{
-		uint32_t depth;
+		const sg_bsp_model_t *record = &world->models[model];
+		uint32_t owner = model + 1U;
+		uint32_t offset;
 
-		if (state[root])
-			continue;
-		depth = 1;
-		stack[0] = root;
-		next_side[0] = 0;
-		state[root] = 1;
-		while (depth)
+		if (!BspWalkTree(world, record->headnode, owner, node_parent,
+				leaf_parent, face_owner, stack, next_side, error))
+			goto done;
+		for (offset = 0; offset < record->face_count; offset++)
 		{
-			uint32_t node = stack[depth - 1U];
-			uint8_t side = next_side[depth - 1U];
-			int32_t child;
+			uint32_t face = record->first_face + offset;
 
-			if (side == 2U)
-			{
-				state[node] = 2;
-				depth--;
-				continue;
-			}
-			next_side[depth - 1U]++;
-			child = world->nodes[node].children[side];
-			if (child < 0 || state[(uint32_t)child] == 2U)
-				continue;
-			if (state[(uint32_t)child] == 1U)
+			if (face_owner[face] && face_owner[face] != owner)
 			{
 				BspSetError(error, SG_BSP_ERROR_INVALID_TREE,
-					SG_BSP_LUMP_NODES, (uint32_t)child);
-				free(next_side);
-				free(stack);
-				free(state);
-				return 0;
+					SG_BSP_LUMP_FACES, face);
+				goto done;
 			}
-			stack[depth] = (uint32_t)child;
-			next_side[depth] = 0;
-			state[(uint32_t)child] = 1;
-			depth++;
+			face_owner[face] = owner;
 		}
 	}
+	valid = 1;
+
+done:
+	if (face_owner != &empty_face_owner)
+		free(face_owner);
 	free(next_side);
 	free(stack);
-	free(state);
-	return 1;
+	free(leaf_parent);
+	free(node_parent);
+	return valid;
 }
 
 int SG_BspWorldLoadMemory(const void *data_value, size_t size,
