@@ -675,6 +675,59 @@ static void TestTerminalResidualAgainstPmove(void)
 	CHECK(result.terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF);
 }
 
+static void TestTerminalExactnessDomain(void)
+{
+	field_fixture_t fixture;
+	sg_field_sample_t samples[TEST_PHASE_COUNT];
+	sg_destination_field_t field;
+	sg_destination_handle_t destination;
+	sg_destination_pose_t source;
+	sg_field_query_result_t result;
+
+	InitFixture(&fixture);
+	CHECK(SG_RuneModelValidate(&fixture.model, &fixture.evidence) ==
+		SG_RUNE_FAILURE_NONE);
+	destination = Destination(1U, 1U, 0U);
+	destination.motion = SG_DESTINATION_MOVING;
+	destination.pose.sample_time_ms = 100U;
+	destination.pose.velocity[0] = 100.0f;
+	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination, 200U,
+		samples, TEST_PHASE_COUNT, &field));
+	source = destination.pose;
+	source.sample_time_ms = 200U;
+	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &source, &result));
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
+	CHECK(result.terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF);
+	source.sample_time_ms = destination.pose.sample_time_ms;
+	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &source, &result));
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
+	CHECK(result.terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF);
+	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination,
+		destination.pose.sample_time_ms, samples, TEST_PHASE_COUNT, &field));
+	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &source, &result));
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_EXACT);
+	CHECK(result.terminal_residual.upper_ms == 0U);
+
+	destination = Destination(2U, 1U, 0U);
+	CHECK(SG_DestinationFieldSolve(&fixture.snapshot, &destination, 200U,
+		samples, TEST_PHASE_COUNT, &field));
+	source = destination.pose;
+	source.sample_time_ms = 200U;
+	source.region_id++;
+	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &source, &result));
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_UNKNOWN);
+	CHECK(result.terminal_residual.upper_ms == SG_DESTINATION_FIELD_INF);
+	source.region_id = destination.pose.region_id;
+	CHECK(SG_FieldQuery(&fixture.snapshot, &field, &source, &result));
+	CHECK(result.terminal_residual.status ==
+		SG_FIELD_TERMINAL_RESIDUAL_EXACT);
+	CHECK(result.terminal_residual.upper_ms == 0U);
+}
+
 int main(void)
 {
 	memset(&pmove_world_token, 0, sizeof(pmove_world_token));
@@ -685,6 +738,7 @@ int main(void)
 	TestQueryAndUpdatePolicy();
 	TestExactTerminalPose();
 	TestTerminalResidualAgainstPmove();
+	TestTerminalExactnessDomain();
 	if (failures != 0) {
 		fprintf(stderr, "%d destination-field checks failed\n", failures);
 		return 1;

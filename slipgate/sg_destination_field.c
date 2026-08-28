@@ -45,6 +45,19 @@ static int PoseEqual(const sg_destination_pose_t *left,
 	return 1;
 }
 
+static int TerminalPoseExactAtFieldTime(
+	const sg_destination_field_t *field,
+	const sg_destination_pose_t *source)
+{
+	sg_destination_pose_t destination = field->destination.pose;
+
+	if (field->destination.motion == SG_DESTINATION_STATIC)
+		destination.sample_time_ms = source->sample_time_ms;
+	else if (field->computed_at_ms != destination.sample_time_ms)
+		return 0;
+	return PoseEqual(&destination, source);
+}
+
 static int SnapshotShapeCurrent(const sg_rune_runtime_snapshot_t *snapshot)
 {
 	return snapshot && snapshot->identity != 0U &&
@@ -507,15 +520,12 @@ static double NormalizeDelta(const float destination[3], const float source[3],
 static void ApplyTerminalPose(const sg_destination_field_t *field,
 	const sg_destination_pose_t *source, sg_field_query_result_t *result)
 {
-	double distance;
-	double velocity_delta;
-
-	distance = NormalizeDelta(field->destination.pose.position, source->position,
+	(void)NormalizeDelta(field->destination.pose.position, source->position,
 		result->sample.direction);
-	velocity_delta = NormalizeDelta(field->destination.pose.velocity,
-		source->velocity, result->sample.velocity_direction);
+	(void)NormalizeDelta(field->destination.pose.velocity, source->velocity,
+		result->sample.velocity_direction);
 	result->sample.next_phase = field->destination.pose.phase;
-	if (distance == 0.0 && velocity_delta == 0.0) {
+	if (TerminalPoseExactAtFieldTime(field, source)) {
 		result->terminal_residual.status = SG_FIELD_TERMINAL_RESIDUAL_EXACT;
 		result->terminal_residual.upper_ms = 0U;
 	}
