@@ -1285,10 +1285,11 @@ static int CodecStorageFits(const sg_rune_v2_codec_storage_t *storage,
 static int CodecDecodeRangesDisjoint(const unsigned char *encoded,
 	size_t encoded_size, const sg_rune_v2_codec_storage_t *scratch,
 	const sg_rune_v2_codec_storage_t *published,
+	int *accepted_out,
 	sg_rune_v2_wire_binding_t *binding_out, sg_rune_model_t *model_out,
 	sg_rune_validation_evidence_t *evidence_out)
 {
-	codec_range_t ranges[28];
+	codec_range_t ranges[29];
 	const void *pointers[22];
 	size_t capacities[22];
 	size_t sizes[11];
@@ -1346,16 +1347,17 @@ static int CodecDecodeRangesDisjoint(const unsigned char *encoded,
 	if (!CodecRange(encoded, encoded_size, 1U, &ranges[0]) ||
 		!CodecRange(scratch, 1U, sizeof(*scratch), &ranges[1]) ||
 		!CodecRange(published, 1U, sizeof(*published), &ranges[2]) ||
-		!CodecRange(binding_out, 1U, sizeof(*binding_out), &ranges[3]) ||
-		!CodecRange(model_out, 1U, sizeof(*model_out), &ranges[4]) ||
-		!CodecRange(evidence_out, 1U, sizeof(*evidence_out), &ranges[5]))
+		!CodecRange(accepted_out, 1U, sizeof(*accepted_out), &ranges[3]) ||
+		!CodecRange(binding_out, 1U, sizeof(*binding_out), &ranges[4]) ||
+		!CodecRange(model_out, 1U, sizeof(*model_out), &ranges[5]) ||
+		!CodecRange(evidence_out, 1U, sizeof(*evidence_out), &ranges[6]))
 		return 0;
 	for (index = 0U; index < 22U; index++)
 		if (!CodecRange(pointers[index], capacities[index],
-			sizes[index % 11U], &ranges[index + 6U]))
+			sizes[index % 11U], &ranges[index + 7U]))
 			return 0;
-	for (index = 0U; index < 28U; index++)
-		for (other = index + 1U; other < 28U; other++)
+	for (index = 0U; index < 29U; index++)
+		for (other = index + 1U; other < 29U; other++)
 			if (CodecRangesOverlap(&ranges[index], &ranges[other]))
 				return 0;
 	return 1;
@@ -1518,10 +1520,12 @@ static void CodecAttachArrays(sg_rune_model_t *model,
 		view->section[SG_RUNE_V2_SECTION_MECHANISMS - 1U].count;
 }
 
-sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
+static sg_rune_v2_wire_diagnostic_t CodecDecodeValidated(
 	const unsigned char *encoded, size_t encoded_size,
 	const sg_rune_v2_codec_storage_t *scratch,
 	const sg_rune_v2_codec_storage_t *published,
+	sg_rune_v2_codec_candidate_accept_fn accept_candidate,
+	void *context, int *accepted_out,
 	sg_rune_v2_wire_binding_t *binding_out,
 	sg_rune_model_t *model_out,
 	sg_rune_validation_evidence_t *evidence_out)
@@ -1532,8 +1536,8 @@ sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
 	sg_rune_v2_wire_diagnostic_t diagnostic;
 	const unsigned char *model_record;
 
-	if (!encoded || !scratch || !published || !binding_out || !model_out ||
-		!evidence_out)
+	if (!encoded || !scratch || !published || !accepted_out || !binding_out ||
+		!model_out || !evidence_out)
 		return SG_RUNE_V2_WIRE_INVALID_ARGUMENT;
 	diagnostic = SG_RuneV2WireInspect(encoded, encoded_size, &view);
 	if (diagnostic != SG_RUNE_V2_WIRE_OK)
@@ -1541,7 +1545,7 @@ sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
 	if (!CodecStorageFits(scratch, &view) || !CodecStorageFits(published, &view))
 		return SG_RUNE_V2_WIRE_BAD_SIZE;
 	if (!CodecDecodeRangesDisjoint(encoded, encoded_size, scratch, published,
-		binding_out, model_out, evidence_out))
+		accepted_out, binding_out, model_out, evidence_out))
 		return SG_RUNE_V2_WIRE_INVALID_ARGUMENT;
 	memset(&model, 0, sizeof(model));
 	memset(&evidence, 0, sizeof(evidence));
@@ -1553,10 +1557,48 @@ sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
 	diagnostic = CodecFailureDiagnostic(SG_RuneModelValidate(&model, &evidence));
 	if (diagnostic != SG_RUNE_V2_WIRE_OK)
 		return diagnostic;
+	if (accept_candidate &&
+		!accept_candidate(&view.binding, &model, &evidence, context))
+	{
+		*accepted_out = 0;
+		return SG_RUNE_V2_WIRE_OK;
+	}
 	CodecPublishArrays(scratch, published, &view);
 	CodecAttachArrays(&model, published, &view);
 	*binding_out = view.binding;
 	*model_out = model;
 	*evidence_out = evidence;
+	*accepted_out = 1;
 	return SG_RUNE_V2_WIRE_OK;
+}
+
+sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
+	const unsigned char *encoded, size_t encoded_size,
+	const sg_rune_v2_codec_storage_t *scratch,
+	const sg_rune_v2_codec_storage_t *published,
+	sg_rune_v2_wire_binding_t *binding_out,
+	sg_rune_model_t *model_out,
+	sg_rune_validation_evidence_t *evidence_out)
+{
+	int accepted;
+
+	return CodecDecodeValidated(encoded, encoded_size, scratch, published,
+		NULL, NULL, &accepted, binding_out, model_out, evidence_out);
+}
+
+sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecodeValidated(
+	const unsigned char *encoded, size_t encoded_size,
+	const sg_rune_v2_codec_storage_t *scratch,
+	const sg_rune_v2_codec_storage_t *published,
+	sg_rune_v2_codec_candidate_accept_fn accept_candidate,
+	void *context, int *accepted_out,
+	sg_rune_v2_wire_binding_t *binding_out,
+	sg_rune_model_t *model_out,
+	sg_rune_validation_evidence_t *evidence_out)
+{
+	if (!accept_candidate)
+		return SG_RUNE_V2_WIRE_INVALID_ARGUMENT;
+	return CodecDecodeValidated(encoded, encoded_size, scratch, published,
+		accept_candidate, context, accepted_out, binding_out, model_out,
+		evidence_out);
 }

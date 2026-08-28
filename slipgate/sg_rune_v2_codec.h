@@ -34,6 +34,14 @@ typedef struct sg_rune_v2_codec_storage_s
 	size_t mechanism_capacity;
 } sg_rune_v2_codec_storage_t;
 
+/* Called after canonical decode and model validation while candidate arrays
+ * still reside only in inactive scratch storage. */
+typedef int (*sg_rune_v2_codec_candidate_accept_fn)(
+	const sg_rune_v2_wire_binding_t *binding,
+	const sg_rune_model_t *candidate,
+	const sg_rune_validation_evidence_t *evidence,
+	void *context);
+
 sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecEncodedSize(
 	const sg_rune_model_t *model,
 	const sg_rune_validation_evidence_t *evidence,
@@ -53,6 +61,21 @@ sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
 	const unsigned char *encoded, size_t encoded_size,
 	const sg_rune_v2_codec_storage_t *scratch,
 	const sg_rune_v2_codec_storage_t *published,
+	sg_rune_v2_wire_binding_t *binding_out,
+	sg_rune_model_t *model_out,
+	sg_rune_validation_evidence_t *evidence_out);
+
+/* One transactional decode/validation/publication boundary for codec-owned
+ * writes. Before a true callback result, the codec writes only scratch and
+ * accepted_out; it does not write published storage or scalar outputs. The
+ * callback owns its own effects and must be non-mutating when its caller needs
+ * rejection to preserve external state. */
+sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecodeValidated(
+	const unsigned char *encoded, size_t encoded_size,
+	const sg_rune_v2_codec_storage_t *scratch,
+	const sg_rune_v2_codec_storage_t *published,
+	sg_rune_v2_codec_candidate_accept_fn accept_candidate,
+	void *context, int *accepted_out,
 	sg_rune_v2_wire_binding_t *binding_out,
 	sg_rune_model_t *model_out,
 	sg_rune_validation_evidence_t *evidence_out);

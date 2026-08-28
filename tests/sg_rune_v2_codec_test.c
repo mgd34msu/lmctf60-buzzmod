@@ -156,12 +156,54 @@ static void CheckExactModel(const sg_rune_v2_test_model_fixture_t *expected,
 	CHECK_ARRAY(mechanisms, expected->model.mechanism_count);
 }
 
+static int RejectDecodedCandidate(
+	const sg_rune_v2_wire_binding_t *binding,
+	const sg_rune_model_t *candidate,
+	const sg_rune_validation_evidence_t *evidence,
+	void *context)
+{
+	unsigned int *calls = (unsigned int *)context;
+
+	CHECK(binding != NULL);
+	CHECK(candidate != NULL);
+	CHECK(evidence != NULL);
+	(*calls)++;
+	return 0;
+}
+
+static void TestValidatedRejectionIsTransactional(void)
+{
+	sg_rune_v2_test_model_fixture_t fixture;
+	decode_fixture_t scratch;
+	decode_fixture_t published;
+	decode_fixture_t published_before;
+	unsigned char encoded[TEST_IMAGE_CAPACITY];
+	size_t encoded_size = 0U;
+	unsigned int calls = 0U;
+	int accepted = 1;
+
+	SG_RuneV2TestFixtureInit(&fixture);
+	DecodeFixtureInit(&scratch);
+	DecodeFixturePoison(&published);
+	published_before = published;
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_OK,
+		SG_RuneV2CodecEncode(&fixture.binding, &fixture.model,
+			&fixture.evidence, encoded, sizeof(encoded), &encoded_size));
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_OK,
+		SG_RuneV2CodecDecodeValidated(encoded, encoded_size, &scratch.storage,
+			&published.storage, RejectDecodedCandidate, &calls, &accepted,
+			&published.binding, &published.model, &published.evidence));
+	CHECK(calls == 1U);
+	CHECK(accepted == 0);
+	CheckDecodeUnchanged(&published, &published_before);
+}
+
 static void TestCanonicalRoundTrip(void)
 {
 	sg_rune_v2_test_model_fixture_t fixture;
 	decode_fixture_t scratch;
 	decode_fixture_t decoded;
-	sg_rune_v2_wire_view_t view;
+	sg_rune_v2_wire_view_t view = { 0 };
 	unsigned char first[TEST_IMAGE_CAPACITY];
 	unsigned char second[TEST_IMAGE_CAPACITY];
 	size_t expected_size = 0U;
@@ -505,6 +547,7 @@ static void TestRepairedSemanticBitMutations(void)
 
 int main(void)
 {
+	TestValidatedRejectionIsTransactional();
 	TestCanonicalRoundTrip();
 	TestMalformedInputs();
 	TestPublishedTailOverlapRejected();

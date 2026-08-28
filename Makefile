@@ -3852,6 +3852,10 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 		tests/sg_static_visibility_test.c \
 		slipgate/sg_static_visibility.c \
 		slipgate/sg_static_visibility.h \
+		tests/run_sg_rune_v2_artifact_semantic_test.sh \
+		tests/sg_rune_v2_artifact_semantic_test.c \
+		slipgate/sg_rune_v2_artifact_semantic.c \
+		slipgate/sg_rune_v2_artifact_semantic.h \
 		tests/run_sg_cell_phase_localization_test.sh \
 		tests/sg_cell_phase_localization_test.c \
 		slipgate/sg_cell_phase_localization.c \
@@ -3894,6 +3898,7 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 	"$$tmp/bsp"; \
 	sh tests/run_sg_bsp_entity_semantics_test.sh; \
 	sh tests/run_sg_static_visibility_test.sh; \
+	sh tests/run_sg_rune_v2_artifact_semantic_test.sh; \
 	sh tests/run_sg_cell_phase_localization_test.sh; \
 	sh tests/run_sg_host_collision_test.sh; \
 	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_test.c \
