@@ -257,14 +257,16 @@ static int Traverses(sg_mechanism_capability_kind_t kind)
 		kind == SG_MECHANISM_CAPABILITY_TELEPORT;
 }
 
-static void UpdateTimeline(sg_mechanism_host_trace_t *trace)
+static void SetTimeline(sg_mechanism_host_trace_t *trace,
+	uint32_t delay_ms, uint32_t dwell_ms, uint32_t travel_ms,
+	uint32_t wait_ms, uint32_t reset_ms)
 {
 	trace->active_time_ms = trace->activation_time_ms +
-		(uint64_t)trace->delay_ms;
+		(uint64_t)delay_ms;
 	trace->exit_time_ms = trace->active_time_ms +
-		(uint64_t)trace->travel_ms + (uint64_t)trace->dwell_ms;
+		(uint64_t)travel_ms + (uint64_t)dwell_ms;
 	trace->reset_time_ms = trace->exit_time_ms +
-		(uint64_t)trace->wait_ms + (uint64_t)trace->reset_ms;
+		(uint64_t)wait_ms + (uint64_t)reset_ms;
 }
 
 static void SetExecutionState(sg_mech_execution_state_t *state,
@@ -420,6 +422,9 @@ static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
 	sg_mechanism_host_trace_t *trace = &fixture->traces[index];
 	sg_mechanism_capability_candidate_t *candidate =
 		&fixture->candidates[index];
+	uint32_t delay_ms = 0U;
+	uint32_t dwell_ms = 0U;
+	uint32_t travel_ms = Traverses(kind) ? 100U : 0U;
 
 	memset(trace, 0, sizeof(*trace));
 	trace->candidate_identity = UINT64_C(100) + index;
@@ -451,8 +456,6 @@ static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
 	trace->active_scene.instance_count = 1U;
 	if (fixture->entities[mechanism].flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL)
 		trace->mechanism_instance_id = UINT64_C(77);
-	if (Traverses(kind))
-		trace->travel_ms = 100.0f;
 	if (kind == SG_MECHANISM_CAPABILITY_BUTTON_ACTIVATION ||
 		kind == SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION)
 		trace->destination_state = SG_MECHANISM_STATE_ACTIVATING;
@@ -460,7 +463,7 @@ static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
 	{
 		trace->source_state = SG_MECHANISM_STATE_ACTIVE;
 		trace->destination_state = SG_MECHANISM_STATE_DWELLING;
-		trace->dwell_ms = 300.0f;
+		dwell_ms = 300U;
 		trace->recovery = SG_MECHANISM_RECOVERY_WAIT_FOR_CYCLE;
 	}
 	if (kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
@@ -473,14 +476,15 @@ static void SetTrace(mechanism_fixture_t *fixture, uint32_t index,
 	}
 	if ((fixture->entities[controller].flags &
 		SG_BSP_ENTITY_DELAY_DEFINED) != 0U)
-		trace->delay_ms = fixture->entities[controller].delay_ms;
+		delay_ms = (uint32_t)fixture->entities[controller].delay_ms;
 	if ((fixture->entities[controller].flags &
-		SG_BSP_ENTITY_DWELL_DEFINED) != 0U)
-		trace->dwell_ms = fixture->entities[controller].dwell_ms;
+		SG_BSP_ENTITY_DWELL_DEFINED) != 0U &&
+		fixture->entities[controller].dwell_ms >= 0.0f)
+		dwell_ms = (uint32_t)fixture->entities[controller].dwell_ms;
 	SetExecutionTransition(fixture, trace);
 	trace->activation_time_ms = UINT64_C(1000) + (uint64_t)index *
 		UINT64_C(10000);
-	UpdateTimeline(trace);
+	SetTimeline(trace, delay_ms, dwell_ms, travel_ms, 0U, 0U);
 	candidate->candidate_identity = trace->candidate_identity;
 	candidate->source_set_identity = trace->source_set_identity;
 	candidate->controller_entity = trace->controller_entity;
@@ -640,13 +644,11 @@ static int FixtureInit(mechanism_fixture_t *fixture)
 	fixture->traces[10].recovery = SG_MECHANISM_RECOVERY_WAIT_FOR_RESET;
 	fixture->traces[10].source_state = SG_MECHANISM_STATE_RETURNING;
 	fixture->traces[10].destination_state = SG_MECHANISM_STATE_RESET;
-	fixture->traces[10].reset_ms = 700.0f;
-	fixture->traces[10].wait_ms = 300.0f;
 	fixture->candidates[10].recovery =
 		SG_MECHANISM_RECOVERY_WAIT_FOR_RESET;
 	fixture->candidates[10].source_state = SG_MECHANISM_STATE_RETURNING;
 	fixture->candidates[10].destination_state = SG_MECHANISM_STATE_RESET;
-	UpdateTimeline(&fixture->traces[10]);
+	SetTimeline(&fixture->traces[10], 0U, 0U, 0U, 300U, 700U);
 	SetTrace(fixture, 11U, 2U, 0U,
 		SG_MECHANISM_CAPABILITY_DOOR_CROSSING,
 		SG_MECHANISM_ACTIVATION_TOUCH);
@@ -749,6 +751,22 @@ static void TestCompleteModel(void)
 		kind_mask |= UINT32_C(1) << (uint32_t)first->facts[index].kind;
 		CHECK(first->facts[index].order == index);
 		CHECK(first->facts[index].parameters.gravity == 800.0f);
+		CHECK(first->facts[index].parameters.fixed_latency_ms ==
+			first->facts[index].delay_ms);
+		CHECK(first->facts[index].parameters.dwell_ms ==
+			first->facts[index].dwell_ms);
+		CHECK(first->facts[index].parameters.duration_ms ==
+			first->facts[index].travel_ms);
+		CHECK(first->facts[index].parameters.wait_ms ==
+			first->facts[index].wait_ms);
+		CHECK(first->facts[index].parameters.reset_ms ==
+			first->facts[index].reset_ms);
+		CHECK(first->facts[index].parameters.total_ms ==
+			(uint64_t)first->facts[index].delay_ms +
+			(uint64_t)first->facts[index].dwell_ms +
+			(uint64_t)first->facts[index].travel_ms +
+			(uint64_t)first->facts[index].wait_ms +
+			(uint64_t)first->facts[index].reset_ms);
 		if (first->facts[index].kind == SG_MECHANISM_CAPABILITY_PUSH)
 			CHECK(first->facts[index].mechanism_direction.value[0] == 1.0f);
 		if (first->facts[index].kind ==
@@ -938,19 +956,25 @@ static void TestTopologyTimingPhaseAndCompleteness(void)
 		SG_MECHANISM_CAPABILITY_ERROR_AMBIGUOUS_TOPOLOGY);
 	FixtureDestroy(&fixture);
 	CHECK(FixtureInit(&fixture));
-	fixture.traces[0].travel_ms = -1.0f;
+	fixture.traces[0].exit_time_ms = fixture.traces[0].active_time_ms - 1U;
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
 	FixtureDestroy(&fixture);
 	CHECK(FixtureInit(&fixture));
-	fixture.traces[0].delay_ms = 1000000000.0f;
-	fixture.traces[0].dwell_ms = 1000000000.0f;
-	fixture.traces[0].travel_ms = 1000000000.0f;
-	fixture.traces[0].wait_ms = 1000000000.0f;
-	fixture.traces[0].reset_ms = 1000000000.0f;
+	fixture.traces[1].active_time_ms = fixture.traces[1].activation_time_ms +
+		(uint64_t)UINT32_MAX + UINT64_C(1);
+	fixture.traces[1].exit_time_ms = fixture.traces[1].active_time_ms;
+	fixture.traces[1].reset_time_ms = fixture.traces[1].exit_time_ms;
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
 	FixtureDestroy(&fixture);
 	CHECK(FixtureInit(&fixture));
-	fixture.traces[0].active_time_ms++;
+	fixture.traces[1].activation_time_ms = UINT64_MAX - UINT64_C(3);
+	fixture.traces[1].active_time_ms = UINT64_C(2);
+	fixture.traces[1].exit_time_ms = UINT64_C(2);
+	fixture.traces[1].reset_time_ms = UINT64_C(2);
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[2].active_time_ms++;
 	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
 	FixtureDestroy(&fixture);
 	CHECK(FixtureInit(&fixture));
@@ -968,7 +992,7 @@ static void TestTopologyTimingPhaseAndCompleteness(void)
 	CHECK(FixtureInit(&fixture));
 	fixture.traces[10].flags = SG_MECHANISM_HOST_TRACE_ONE_SHOT;
 	ExpectFailure(&fixture,
-		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+		SG_MECHANISM_CAPABILITY_ERROR_TIMING);
 	FixtureDestroy(&fixture);
 	CHECK(FixtureInit(&fixture));
 	fixture.phases[1].mover = MechanismRef(&fixture, 4U);
@@ -1003,7 +1027,7 @@ static void TestGravityAndAudit(void)
 	uint64_t saved_verifier;
 	uint32_t saved_region;
 	float saved_active_origin;
-	float saved_fact_timing;
+	uint32_t saved_fact_timing;
 	float saved_fact_transform;
 	sg_mechanism_state_t saved_fact_state;
 	int saved_callbacks_match;
@@ -1093,11 +1117,11 @@ static void TestOneShotTransaction(void)
 	fixture.entities[2].dwell_ms = -1000.0f;
 	for (index = 0U; index < 2U; index++)
 	{
-		fixture.traces[traces[index]].dwell_ms = 0.0f;
 		fixture.traces[traces[index]].flags =
 			SG_MECHANISM_HOST_TRACE_ONE_SHOT;
-		UpdateTimeline(&fixture.traces[traces[index]]);
 	}
+	SetTimeline(&fixture.traces[2], 250U, 0U, 0U, 0U, 0U);
+	SetTimeline(&fixture.traces[11], 250U, 0U, 100U, 0U, 0U);
 	CHECK(Build(&fixture, &set, &error));
 	CHECK(set != NULL);
 	if (set)
@@ -1105,6 +1129,113 @@ static void TestOneShotTransaction(void)
 		CHECK(SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
 		SG_MechanismCapabilityDestroy(set);
 	}
+	FixtureDestroy(&fixture);
+}
+
+static void TestEntityTimingValidation(void)
+{
+	mechanism_fixture_t fixture;
+	sg_mechanism_capability_set_t *set = NULL;
+	sg_mechanism_capability_error_t error;
+	sg_mechanism_capability_audit_result_t audit;
+	const uint32_t exact_delay = UINT32_C(16777218);
+	uint32_t index;
+	uint32_t matched = 0U;
+
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].delay_ms = 250.5f;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[0].dwell_ms = 300.5f;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].delay_ms = NAN;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].dwell_ms = NAN;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].delay_ms = 4294967296.0f;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].dwell_ms = -500.0f;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_TIMING);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.entities[2].delay_ms = (float)exact_delay;
+	SetTimeline(&fixture.traces[2], exact_delay, 500U, 0U, 0U, 0U);
+	SetTimeline(&fixture.traces[11], exact_delay, 500U, 100U, 0U, 0U);
+	CHECK(Build(&fixture, &set, &error));
+	CHECK(set != NULL);
+	if (set)
+	{
+		for (index = 0U; index < set->fact_count; index++)
+			if (set->facts[index].controller_entity == 2U)
+			{
+				matched++;
+				CHECK(set->facts[index].delay_ms == exact_delay);
+				CHECK(set->facts[index].parameters.fixed_latency_ms ==
+					exact_delay);
+			}
+		CHECK(matched == 2U);
+		CHECK(SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+	}
+	SG_MechanismCapabilityDestroy(set);
+	FixtureDestroy(&fixture);
+}
+
+static void TestExactMillisecondTiming(void)
+{
+	mechanism_fixture_t fixture;
+	sg_mechanism_capability_set_t *set = NULL;
+	sg_mechanism_capability_error_t error;
+	sg_mechanism_capability_audit_result_t audit;
+	const uint32_t exact_delta = UINT32_C(16777217);
+	uint32_t index;
+	uint32_t found = UINT32_MAX;
+
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[1].activation_time_ms = UINT64_C(1000);
+	fixture.traces[1].active_time_ms =
+		fixture.traces[1].activation_time_ms + exact_delta;
+	fixture.traces[1].exit_time_ms = fixture.traces[1].active_time_ms;
+	fixture.traces[1].reset_time_ms = fixture.traces[1].exit_time_ms;
+	CHECK(Build(&fixture, &set, &error));
+	CHECK(set != NULL);
+	if (set)
+	{
+		for (index = 0U; index < set->fact_count; index++)
+			if (set->facts[index].trace_identity ==
+				fixture.traces[1].trace_identity)
+			{
+				found = index;
+				CHECK(set->facts[index].delay_ms == exact_delta);
+				CHECK(set->facts[index].parameters.fixed_latency_ms ==
+					exact_delta);
+				CHECK(set->facts[index].parameters.duration_ms == 0U);
+				CHECK(set->facts[index].parameters.total_ms == exact_delta);
+			}
+		CHECK(found != UINT32_MAX);
+		CHECK(SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+		if (found != UINT32_MAX)
+		{
+			set->facts[found].parameters.fixed_latency_ms--;
+			CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+			CHECK(audit.code ==
+				SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+			set->facts[found].parameters.fixed_latency_ms++;
+			fixture.traces[1].active_time_ms++;
+			CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+			CHECK(audit.code ==
+				SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+		}
+	}
+	SG_MechanismCapabilityDestroy(set);
 	FixtureDestroy(&fixture);
 }
 
@@ -1116,6 +1247,8 @@ int main(void)
 	TestTopologyTimingPhaseAndCompleteness();
 	TestGravityAndAudit();
 	TestOneShotTransaction();
+	TestEntityTimingValidation();
+	TestExactMillisecondTiming();
 	if (failures != 0)
 	{
 		fprintf(stderr, "mechanism capability failures: %d\n", failures);

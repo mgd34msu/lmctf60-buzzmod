@@ -89,8 +89,8 @@ enum
 
 #define SG_MECHANISM_HOST_TRACE_FLAGS_KNOWN SG_MECHANISM_HOST_TRACE_ONE_SHOT
 
-/* One complete host observation. Timings are measured from the selected host
- * callbacks and movement frames. They are not construction deadlines. */
+/* One complete host observation. Absolute timestamps name the selected host
+ * callbacks and movement frames; derived durations are never caller evidence. */
 typedef struct sg_mechanism_host_trace_s
 {
 	uint64_t candidate_identity;
@@ -122,11 +122,6 @@ typedef struct sg_mechanism_host_trace_s
 	uint64_t active_time_ms;
 	uint64_t exit_time_ms;
 	uint64_t reset_time_ms;
-	float delay_ms;
-	float dwell_ms;
-	float travel_ms;
-	float wait_ms;
-	float reset_ms;
 	sg_mechanism_host_trace_flags_t flags;
 } sg_mechanism_host_trace_t;
 
@@ -170,6 +165,24 @@ enum
 	SG_MECHANISM_CAPABILITY_RESETS = UINT32_C(1) << 4
 };
 
+/* Exact scheduled inputs retained until later kernel assembly. */
+typedef struct sg_mechanism_kernel_parameters_s
+{
+	sg_rune_interval3_t displacement;
+	sg_rune_interval_t speed;
+	sg_rune_interval_t acceleration;
+	sg_rune_interval_t vertical_acceleration;
+	float gravity;
+	float drag;
+	uint64_t physics_abi_id;
+	uint32_t duration_ms;
+	uint32_t fixed_latency_ms;
+	uint32_t dwell_ms;
+	uint32_t wait_ms;
+	uint32_t reset_ms;
+	uint64_t total_ms;
+} sg_mechanism_kernel_parameters_t;
+
 typedef struct sg_mechanism_capability_fact_s
 {
 	uint32_t order;
@@ -203,16 +216,16 @@ typedef struct sg_mechanism_capability_fact_s
 	sg_mech_execution_state_t source_execution;
 	sg_mech_execution_state_t destination_execution;
 	uint64_t mechanism_instance_id;
-	float delay_ms;
-	float dwell_ms;
-	float travel_ms;
-	float wait_ms;
-	float reset_ms;
+	uint32_t delay_ms;
+	uint32_t dwell_ms;
+	uint32_t travel_ms;
+	uint32_t wait_ms;
+	uint32_t reset_ms;
 	uint64_t activation_time_ms;
 	uint64_t active_time_ms;
 	uint64_t exit_time_ms;
 	uint64_t reset_time_ms;
-	sg_rune_kernel_parameters_t parameters;
+	sg_mechanism_kernel_parameters_t parameters;
 	sg_mechanism_capability_flags_t flags;
 } sg_mechanism_capability_fact_t;
 

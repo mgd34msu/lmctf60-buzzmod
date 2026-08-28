@@ -641,39 +641,37 @@ static int KindCollisionConditional(sg_mechanism_capability_kind_t kind)
 
 typedef struct sg_mechanism_derived_timing_s
 {
-	float delay_ms;
-	float dwell_ms;
-	float travel_ms;
-	float wait_ms;
-	float reset_ms;
+	uint32_t delay_ms;
+	uint32_t dwell_ms;
+	uint32_t travel_ms;
+	uint32_t wait_ms;
+	uint32_t reset_ms;
 } sg_mechanism_derived_timing_t;
+
+static int EntityMilliseconds(float value, uint32_t *milliseconds)
+{
+	uint32_t converted;
+
+	if (!milliseconds || !isfinite(value) || value < 0.0f ||
+		(double)value > (double)UINT32_MAX || truncf(value) != value)
+		return 0;
+	converted = (uint32_t)value;
+	if ((float)converted != value)
+		return 0;
+	*milliseconds = converted;
+	return 1;
+}
 
 static int DeriveTiming(const sg_mechanism_host_trace_t *trace,
 	const sg_bsp_entity_semantic_t *controller,
 	const sg_bsp_entity_semantic_t *mechanism,
 	sg_mechanism_derived_timing_t *timing)
 {
-	const float values[5] = { trace->delay_ms, trace->dwell_ms,
-		trace->travel_ms, trace->wait_ms, trace->reset_ms };
 	uint64_t activation_delta;
 	uint64_t active_delta;
 	uint64_t reset_delta;
-	double total = 0.0;
-	uint32_t index;
 
-	for (index = 0U; index < 5U; index++)
-	{
-		if (!isfinite(values[index]) || values[index] < 0.0f)
-			return 0;
-		total += values[index];
-	}
-	if (total > (double)UINT32_MAX || !timing ||
-		truncf(trace->delay_ms) != trace->delay_ms ||
-		truncf(trace->dwell_ms) != trace->dwell_ms ||
-		truncf(trace->travel_ms) != trace->travel_ms ||
-		truncf(trace->wait_ms) != trace->wait_ms ||
-		truncf(trace->reset_ms) != trace->reset_ms ||
-		trace->active_time_ms < trace->activation_time_ms ||
+	if (!timing || trace->active_time_ms < trace->activation_time_ms ||
 		trace->exit_time_ms < trace->active_time_ms ||
 		trace->reset_time_ms < trace->exit_time_ms ||
 		trace->active_time_ms - trace->activation_time_ms > UINT32_MAX ||
@@ -683,34 +681,39 @@ static int DeriveTiming(const sg_mechanism_host_trace_t *trace,
 	activation_delta = trace->active_time_ms - trace->activation_time_ms;
 	active_delta = trace->exit_time_ms - trace->active_time_ms;
 	reset_delta = trace->reset_time_ms - trace->exit_time_ms;
-	timing->delay_ms = (float)activation_delta;
-	timing->dwell_ms = 0.0f;
-	if ((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) != 0U &&
-		controller->dwell_ms >= 0.0f)
-		timing->dwell_ms = controller->dwell_ms;
-	else if (trace->kind == SG_MECHANISM_CAPABILITY_DWELL)
-		timing->dwell_ms = mechanism->dwell_ms;
-	timing->wait_ms = trace->kind == SG_MECHANISM_CAPABILITY_RESET
-		? mechanism->dwell_ms : 0.0f;
-	if (!isfinite(timing->dwell_ms) || timing->dwell_ms < 0.0f ||
-		!isfinite(timing->wait_ms) || timing->wait_ms < 0.0f ||
-		(double)timing->dwell_ms > (double)active_delta ||
-		(double)timing->wait_ms > (double)reset_delta)
+	timing->delay_ms = (uint32_t)activation_delta;
+	if ((controller->flags & SG_BSP_ENTITY_DELAY_DEFINED) != 0U)
+	{
+		uint32_t entity_delay;
+
+		if (!EntityMilliseconds(controller->delay_ms, &entity_delay) ||
+			entity_delay != timing->delay_ms)
+			return 0;
+	}
+	timing->dwell_ms = 0U;
+	if ((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) != 0U)
+	{
+		if (controller->dwell_ms != -1000.0f &&
+			!EntityMilliseconds(controller->dwell_ms, &timing->dwell_ms))
+			return 0;
+	}
+	else if (trace->kind == SG_MECHANISM_CAPABILITY_DWELL &&
+		!EntityMilliseconds(mechanism->dwell_ms, &timing->dwell_ms))
 		return 0;
-	timing->travel_ms = (float)(active_delta -
-		(uint64_t)timing->dwell_ms);
-	timing->reset_ms = (float)(reset_delta - (uint64_t)timing->wait_ms);
-	if (trace->delay_ms != timing->delay_ms ||
-		trace->dwell_ms != timing->dwell_ms ||
-		trace->travel_ms != timing->travel_ms ||
-		trace->wait_ms != timing->wait_ms ||
-		trace->reset_ms != timing->reset_ms)
+	timing->wait_ms = 0U;
+	if (trace->kind == SG_MECHANISM_CAPABILITY_RESET &&
+		!EntityMilliseconds(mechanism->dwell_ms, &timing->wait_ms))
 		return 0;
+	if ((uint64_t)timing->dwell_ms > active_delta ||
+		(uint64_t)timing->wait_ms > reset_delta)
+		return 0;
+	timing->travel_ms = (uint32_t)(active_delta - timing->dwell_ms);
+	timing->reset_ms = (uint32_t)(reset_delta - timing->wait_ms);
 	if ((trace->kind == SG_MECHANISM_CAPABILITY_DOOR_CROSSING ||
 		 trace->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
 		 trace->kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE ||
 		 trace->kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING) &&
-		trace->travel_ms <= 0.0f)
+		timing->travel_ms == 0U)
 		return 0;
 	return 1;
 }
@@ -782,7 +785,8 @@ static int DeriveState(sg_mechanism_capability_kind_t kind,
 	return 0;
 }
 
-static int StateLawValid(const sg_mechanism_host_trace_t *trace)
+static int StateLawValid(const sg_mechanism_host_trace_t *trace,
+	const sg_mechanism_derived_timing_t *timing)
 {
 	sg_mechanism_state_t source;
 	sg_mechanism_state_t destination;
@@ -790,9 +794,9 @@ static int StateLawValid(const sg_mechanism_host_trace_t *trace)
 
 	if ((trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT) != 0U &&
 		(trace->recovery != SG_MECHANISM_RECOVERY_NONE ||
-		 trace->wait_ms != 0.0f || trace->reset_ms != 0.0f))
+		 timing->wait_ms != 0U || timing->reset_ms != 0U))
 		return 0;
-	if ((trace->wait_ms > 0.0f || trace->reset_ms > 0.0f) &&
+	if ((timing->wait_ms > 0U || timing->reset_ms > 0U) &&
 		trace->recovery == SG_MECHANISM_RECOVERY_NONE)
 		return 0;
 	return DeriveState(trace->kind, &source, &destination, &recovery) &&
@@ -803,9 +807,9 @@ static int StateLawValid(const sg_mechanism_host_trace_t *trace)
 		  trace->kind != SG_MECHANISM_CAPABILITY_TRIGGER_ACTIVATION) ||
 		 trace->controller_entity == trace->mechanism_entity) &&
 		(trace->kind != SG_MECHANISM_CAPABILITY_DWELL ||
-		 trace->dwell_ms > 0.0f) &&
+		 timing->dwell_ms > 0U) &&
 		(trace->kind != SG_MECHANISM_CAPABILITY_RESET ||
-		 trace->reset_ms > 0.0f);
+		 timing->reset_ms > 0U);
 }
 
 static int ExecutionTransitionValid(
@@ -1072,13 +1076,13 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 	}
 	if ((((trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT) != 0U) !=
 		 (((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) != 0U) &&
-		  controller->dwell_ms < 0.0f)))
+		  controller->dwell_ms == -1000.0f)))
 	{
-		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING,
 			trace_index);
 		return 0;
 	}
-	if (!StateLawValid(trace) || !ExecutionTransitionValid(trace) ||
+	if (!StateLawValid(trace, &timing) || !ExecutionTransitionValid(trace) ||
 		!VectorDifferenceEqual(trace->exit_witness.value,
 			trace->entry_witness.value, &trace->observed_displacement))
 	{
@@ -1097,24 +1101,9 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 			trace_index);
 		return 0;
 	}
-	if ((trace->kind == SG_MECHANISM_CAPABILITY_DWELL &&
-		 ((mechanism->flags & SG_BSP_ENTITY_DWELL_DEFINED) == 0U ||
-		  mechanism->dwell_ms != trace->dwell_ms)) ||
-		(trace->kind == SG_MECHANISM_CAPABILITY_RESET &&
-		 ((mechanism->flags & SG_BSP_ENTITY_DWELL_DEFINED) == 0U ||
-		  mechanism->dwell_ms != trace->wait_ms)))
-	{
-		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
-		return 0;
-	}
-	if ((controller->flags & SG_BSP_ENTITY_DELAY_DEFINED) &&
-		controller->delay_ms != trace->delay_ms)
-	{
-		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
-		return 0;
-	}
-	if ((controller->flags & SG_BSP_ENTITY_DWELL_DEFINED) &&
-		controller->dwell_ms >= 0.0f && controller->dwell_ms != trace->dwell_ms)
+	if ((trace->kind == SG_MECHANISM_CAPABILITY_DWELL ||
+		 trace->kind == SG_MECHANISM_CAPABILITY_RESET) &&
+		(mechanism->flags & SG_BSP_ENTITY_DWELL_DEFINED) == 0U)
 	{
 		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
 		return 0;
@@ -1380,7 +1369,8 @@ static void ExactInterval(sg_rune_interval_t *interval, float value)
 
 static void FillParameters(const sg_mechanism_capability_source_t *source,
 	const sg_mechanism_host_trace_t *trace,
-	sg_rune_kernel_parameters_t *parameters)
+	const sg_mechanism_derived_timing_t *timing,
+	sg_mechanism_kernel_parameters_t *parameters)
 {
 	float speed = sqrtf(trace->observed_velocity.value[0] *
 		trace->observed_velocity.value[0] +
@@ -1396,18 +1386,23 @@ static void FillParameters(const sg_mechanism_capability_source_t *source,
 		trace->observed_displacement.value[1]);
 	ExactInterval(&parameters->displacement.z,
 		trace->observed_displacement.value[2]);
-	ExactInterval(&parameters->duration_ms,
-		trace->delay_ms + trace->dwell_ms + trace->travel_ms);
 	ExactInterval(&parameters->speed, speed);
 	parameters->gravity = source->authority->identity.physics.gravity;
 	parameters->physics_abi_id = source->authority->identity.physics_abi_id;
-	parameters->fixed_latency_ms = (uint32_t)trace->delay_ms;
-	parameters->dwell_ms = (uint32_t)trace->dwell_ms;
+	parameters->duration_ms = timing->travel_ms;
+	parameters->fixed_latency_ms = timing->delay_ms;
+	parameters->dwell_ms = timing->dwell_ms;
+	parameters->wait_ms = timing->wait_ms;
+	parameters->reset_ms = timing->reset_ms;
+	parameters->total_ms = (uint64_t)timing->delay_ms +
+		(uint64_t)timing->dwell_ms + (uint64_t)timing->travel_ms +
+		(uint64_t)timing->wait_ms + (uint64_t)timing->reset_ms;
 }
 
 static sg_mechanism_capability_flags_t FactFlags(
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_host_trace_t *trace)
+	const sg_mechanism_host_trace_t *trace,
+	const sg_mechanism_derived_timing_t *timing)
 {
 	sg_mechanism_capability_flags_t flags =
 		SG_MECHANISM_CAPABILITY_HOST_PROVEN;
@@ -1421,7 +1416,8 @@ static sg_mechanism_capability_flags_t FactFlags(
 		flags |= SG_MECHANISM_CAPABILITY_MOVER_RELATIVE;
 	if (trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT)
 		flags |= SG_MECHANISM_CAPABILITY_ONE_SHOT;
-	if (trace->reset_ms > 0.0f || trace->recovery != SG_MECHANISM_RECOVERY_NONE)
+	if (timing->reset_ms > 0U ||
+		trace->recovery != SG_MECHANISM_RECOVERY_NONE)
 		flags |= SG_MECHANISM_CAPABILITY_RESETS;
 	return flags;
 }
@@ -1697,8 +1693,8 @@ static int BuildFacts(sg_mechanism_build_t *build)
 		record->active_time_ms = trace->active_time_ms;
 		record->exit_time_ms = trace->exit_time_ms;
 		record->reset_time_ms = trace->reset_time_ms;
-		record->flags = FactFlags(build->source, trace);
-		FillParameters(build->source, trace, &record->parameters);
+		record->flags = FactFlags(build->source, trace, &timing);
+		FillParameters(build->source, trace, &timing, &record->parameters);
 		if (!MechanismId(build->source, trace->controller_entity,
 				&record->controller_id) ||
 			!MechanismId(build->source, trace->mechanism_entity,
@@ -1961,7 +1957,7 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 {
 	sg_rune_mechanism_id_t controller_id;
 	sg_rune_mechanism_id_t mechanism_id;
-	sg_rune_kernel_parameters_t parameters;
+	sg_mechanism_kernel_parameters_t parameters;
 	sg_host_collision_transition_t inactive_transition;
 	sg_host_collision_transition_t active_transition;
 	sg_host_collision_transform_t inactive_transform;
@@ -1981,7 +1977,7 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 			&timing) ||
 		!DeriveState(trace->kind, &source_state, &destination_state, &recovery))
 		return 0;
-	FillParameters(source, trace, &parameters);
+	FillParameters(source, trace, &timing, &parameters);
 	return fact->trace_identity == trace->trace_identity &&
 		StableIdEqual(&fact->controller_id.value, &controller_id.value) &&
 		StableIdEqual(&fact->mechanism_id.value, &mechanism_id.value) &&
@@ -2034,7 +2030,7 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 		fact->active_time_ms == trace->active_time_ms &&
 		fact->exit_time_ms == trace->exit_time_ms &&
 		fact->reset_time_ms == trace->reset_time_ms &&
-		fact->flags == FactFlags(source, trace) &&
+		fact->flags == FactFlags(source, trace, &timing) &&
 		memcmp(&fact->parameters, &parameters, sizeof(parameters)) == 0;
 }
 
