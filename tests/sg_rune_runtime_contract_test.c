@@ -113,6 +113,11 @@ static void TestPhaseSpaceFieldContract(void)
 	samples[1].phase.phase_id = samples[0].phase.phase_id;
 	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
 	samples[1].phase.phase_id = 1U;
+	samples[0].phase = phases[1];
+	samples[1].phase = phases[0];
+	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
+	samples[0].phase = phases[0];
+	samples[1].phase = phases[1];
 	field.destination.pose.phase.phase_id = 3U;
 	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
 	field.destination.pose.phase = (sg_phase_coordinate_t){ 1U, 1U };

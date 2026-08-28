@@ -13,6 +13,8 @@
 #define SG_DESTINATION_FIELD_NO_CELL UINT32_MAX
 #define SG_DESTINATION_FIELD_NO_PHASE UINT32_MAX
 #define SG_DESTINATION_FIELD_MAX_REGION_LEVEL 8U
+/* Phase-only transitions occupy a bit outside every kernel family bit. */
+#define SG_DESTINATION_FIELD_CAPABILITY_TRANSITION (UINT32_C(1) << 31)
 
 typedef enum sg_destination_kind_e
 {
@@ -201,13 +203,13 @@ static inline int SG_RuneRuntimeSnapshotValid(
 	return 1;
 }
 
-static inline int SG_FieldSampleValid(
+static inline int SG_FieldSampleShapeValid(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_field_sample_t *sample)
 {
 	uint32_t axis;
 
-	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !sample ||
+	if (!snapshot || !sample ||
 	    !SG_PhaseCoordinateValid(snapshot, &sample->phase) ||
 	    (sample->finite != 0U && sample->finite != 1U) ||
 	    (sample->finite == 1U &&
@@ -228,6 +230,14 @@ static inline int SG_FieldSampleValid(
 		      sample->velocity_direction[axis] != 0.0f)))
 			return 0;
 	return 1;
+}
+
+static inline int SG_FieldSampleValid(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_field_sample_t *sample)
+{
+	return SG_RuneRuntimeSnapshotValid(snapshot) &&
+	       SG_FieldSampleShapeValid(snapshot, sample);
 }
 
 static inline int SG_DestinationFieldValid(
@@ -251,16 +261,12 @@ static inline int SG_DestinationFieldValid(
 	    (field->complete != 0U && field->complete != 1U))
 		return 0;
 	for (index = 0U; index < field->sample_count; index++)
-	{
-		uint32_t other;
-
-		if (!SG_FieldSampleValid(snapshot, &field->samples[index]))
+		if (!SG_FieldSampleShapeValid(snapshot, &field->samples[index]) ||
+		    field->samples[index].phase.phase_id !=
+			snapshot->phases[index].phase_id ||
+		    field->samples[index].phase.cell_id !=
+			snapshot->phases[index].cell_id)
 			return 0;
-		for (other = index + 1U; other < field->sample_count; other++)
-			if (field->samples[index].phase.phase_id ==
-			    field->samples[other].phase.phase_id)
-				return 0;
-	}
 	return 1;
 }
 
@@ -291,10 +297,11 @@ static inline int SG_FieldUpdateValid(
 	return 1;
 }
 
-/* Downstream runtime nodes own these implementations. */
+/* Query uses the exact live source pose. Inside the destination phase it
+ * resolves terminal direction and residual time against destination.pose. */
 int SG_FieldQuery(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_field_t *field,
-	const sg_phase_coordinate_t *phase, sg_field_sample_t *out);
+	const sg_destination_pose_t *source, sg_field_sample_t *out);
 int SG_FieldNeedsUpdate(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_field_t *field,
 	const sg_destination_handle_t *destination);
