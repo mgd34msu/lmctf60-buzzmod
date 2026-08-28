@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -212,14 +213,14 @@ static void SetPhase(mechanism_fixture_t *fixture, uint32_t phase_index,
 }
 
 static int RegionContains(const mechanism_fixture_t *fixture,
-	uint32_t region_index, const float point[3])
+	uint32_t region_index, const float point[3], sg_rune_stance_t stance)
 {
 	const sg_configuration_semantic_region_t *region =
 		&fixture->configuration_semantics->regions[region_index];
 	uint32_t face;
 
 	if (fixture->configuration->cells[region->cell].stance !=
-		SG_RUNE_STANCE_STANDING)
+		stance)
 		return 0;
 	for (face = region->first_face;
 		face < region->first_face + region->face_count; face++)
@@ -235,16 +236,22 @@ static int RegionContains(const mechanism_fixture_t *fixture,
 	return 1;
 }
 
-static uint32_t FindRegion(const mechanism_fixture_t *fixture,
-	const float point[3])
+static uint32_t FindRegionForStance(const mechanism_fixture_t *fixture,
+	const float point[3], sg_rune_stance_t stance)
 {
 	uint32_t region;
 
 	for (region = 0U;
 		region < fixture->configuration_semantics->region_count; region++)
-		if (RegionContains(fixture, region, point))
+		if (RegionContains(fixture, region, point, stance))
 			return region;
 	return UINT32_MAX;
+}
+
+static uint32_t FindRegion(const mechanism_fixture_t *fixture,
+	const float point[3])
+{
+	return FindRegionForStance(fixture, point, SG_RUNE_STANCE_STANDING);
 }
 
 static int Traverses(sg_mechanism_capability_kind_t kind)
@@ -1239,6 +1246,98 @@ static void TestExactMillisecondTiming(void)
 	FixtureDestroy(&fixture);
 }
 
+static void TestPhaseStanceBinding(void)
+{
+	mechanism_fixture_t fixture;
+	sg_mechanism_capability_set_t *set = NULL;
+	sg_mechanism_capability_error_t error;
+	sg_mechanism_capability_audit_result_t audit;
+	uint32_t crouching_region;
+
+	CHECK(FixtureInit(&fixture));
+	fixture.phases[0].stance = SG_RUNE_STANCE_CROUCHING;
+	ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_INVALID_PHASE);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	crouching_region = FindRegionForStance(&fixture,
+		fixture.traces[0].exit_witness.value, SG_RUNE_STANCE_CROUCHING);
+	CHECK(crouching_region != UINT32_MAX);
+	if (crouching_region != UINT32_MAX)
+	{
+		fixture.traces[0].destination_region = crouching_region;
+		fixture.candidates[0].destination_region = crouching_region;
+		ExpectFailure(&fixture, SG_MECHANISM_CAPABILITY_ERROR_INVALID_PHASE);
+	}
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	CHECK(Build(&fixture, &set, &error));
+	CHECK(set != NULL);
+	if (set)
+	{
+		fixture.phases[0].stance = SG_RUNE_STANCE_CROUCHING;
+		CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+		CHECK(audit.code ==
+			SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	}
+	SG_MechanismCapabilityDestroy(set);
+	FixtureDestroy(&fixture);
+}
+
+static void TestScheduledParameterValidation(void)
+{
+	mechanism_fixture_t fixture;
+	sg_mechanism_capability_set_t *set = NULL;
+	sg_mechanism_capability_error_t error;
+	sg_mechanism_capability_audit_result_t audit;
+	sg_rune_interval_t saved_speed;
+
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[1].observed_velocity.value[0] = FLT_MAX;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.traces[1].observed_velocity.value[0] = 1500.0f;
+	fixture.traces[1].observed_velocity.value[1] = 1500.0f;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	fixture.authority.identity.physics.max_velocity = FLT_MAX;
+	fixture.configuration->identity.physics.max_velocity = FLT_MAX;
+	fixture.configuration_semantics->identity.physics.max_velocity = FLT_MAX;
+	fixture.catalog.identity.physics.max_velocity = FLT_MAX;
+	fixture.traces[1].observed_velocity.value[0] = FLT_MAX;
+	fixture.traces[1].observed_velocity.value[1] = FLT_MAX;
+	ExpectFailure(&fixture,
+		SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT);
+	FixtureDestroy(&fixture);
+	CHECK(FixtureInit(&fixture));
+	CHECK(Build(&fixture, &set, &error));
+	CHECK(set != NULL);
+	if (set)
+	{
+		saved_speed = set->facts[0].parameters.speed;
+		set->facts[0].parameters.speed.min_value = INFINITY;
+		CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+		CHECK(audit.code ==
+			SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+		set->facts[0].parameters.speed = saved_speed;
+		set->facts[0].parameters.speed.min_value =
+			set->facts[0].parameters.speed.max_value + 1.0f;
+		CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+		CHECK(audit.code ==
+			SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+		set->facts[0].parameters.speed = saved_speed;
+		fixture.traces[1].observed_velocity.value[0] = FLT_MAX;
+		CHECK(!SG_MechanismCapabilityAudit(&fixture.source, set, &audit));
+		CHECK(audit.code ==
+			SG_MECHANISM_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
+	}
+	SG_MechanismCapabilityDestroy(set);
+	FixtureDestroy(&fixture);
+}
+
 int main(void)
 {
 	TestCompleteModel();
@@ -1249,6 +1348,8 @@ int main(void)
 	TestOneShotTransaction();
 	TestEntityTimingValidation();
 	TestExactMillisecondTiming();
+	TestPhaseStanceBinding();
+	TestScheduledParameterValidation();
 	if (failures != 0)
 	{
 		fprintf(stderr, "mechanism capability failures: %d\n", failures);

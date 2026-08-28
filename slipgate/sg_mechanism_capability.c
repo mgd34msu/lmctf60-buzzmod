@@ -1,5 +1,6 @@
 #include "sg_mechanism_capability.h"
 
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
@@ -648,6 +649,11 @@ typedef struct sg_mechanism_derived_timing_s
 	uint32_t reset_ms;
 } sg_mechanism_derived_timing_t;
 
+static int FillParameters(const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_host_trace_t *trace,
+	const sg_mechanism_derived_timing_t *timing,
+	sg_mechanism_kernel_parameters_t *parameters);
+
 static int EntityMilliseconds(float value, uint32_t *milliseconds)
 {
 	uint32_t converted;
@@ -731,6 +737,23 @@ static const sg_host_collision_instance_t *FindSceneInstance(
 			scene->instances[index].model_index == model_index)
 			return &scene->instances[index];
 	return NULL;
+}
+
+static int EndpointStancesValid(
+	const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_host_trace_t *trace)
+{
+	const sg_configuration_semantic_region_t *source_region =
+		&source->configuration_semantics->regions[trace->source_region];
+	const sg_configuration_semantic_region_t *destination_region =
+		&source->configuration_semantics->regions[trace->destination_region];
+
+	return source_region->cell < source->configuration->cell_count &&
+		destination_region->cell < source->configuration->cell_count &&
+		source->phases[trace->source_phase].stance ==
+			source->configuration->cells[source_region->cell].stance &&
+		source->phases[trace->destination_phase].stance ==
+			source->configuration->cells[destination_region->cell].stance;
 }
 
 static int VectorDifferenceEqual(const float destination[3],
@@ -1014,6 +1037,7 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 	sg_host_collision_transform_t inactive_transform;
 	sg_host_collision_transform_t active_transform;
 	sg_mechanism_derived_timing_t timing;
+	sg_mechanism_kernel_parameters_t parameters;
 	int source_relative;
 	int destination_relative;
 
@@ -1069,9 +1093,21 @@ static int TraceValid(sg_mechanism_build_t *build, uint32_t trace_index,
 			trace_index);
 		return 0;
 	}
+	if (!EndpointStancesValid(source, trace))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_PHASE,
+			trace_index);
+		return 0;
+	}
 	if (!DeriveTiming(trace, controller, mechanism, &timing))
 	{
 		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_TIMING, trace_index);
+		return 0;
+	}
+	if (!FillParameters(source, trace, &timing, &parameters))
+	{
+		SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			trace_index);
 		return 0;
 	}
 	if ((((trace->flags & SG_MECHANISM_HOST_TRACE_ONE_SHOT) != 0U) !=
@@ -1367,17 +1403,62 @@ static void ExactInterval(sg_rune_interval_t *interval, float value)
 	interval->max_value = value;
 }
 
-static void FillParameters(const sg_mechanism_capability_source_t *source,
+static int IntervalFiniteOrdered(const sg_rune_interval_t *interval)
+{
+	return isfinite(interval->min_value) && isfinite(interval->max_value) &&
+		interval->min_value <= interval->max_value;
+}
+
+static int Interval3FiniteOrdered(const sg_rune_interval3_t *interval)
+{
+	return IntervalFiniteOrdered(&interval->x) &&
+		IntervalFiniteOrdered(&interval->y) &&
+		IntervalFiniteOrdered(&interval->z);
+}
+
+static int ParametersValid(const sg_mechanism_capability_source_t *source,
+	const sg_mechanism_derived_timing_t *timing,
+	const sg_mechanism_kernel_parameters_t *parameters)
+{
+	uint64_t total = (uint64_t)timing->delay_ms +
+		(uint64_t)timing->dwell_ms + (uint64_t)timing->travel_ms +
+		(uint64_t)timing->wait_ms + (uint64_t)timing->reset_ms;
+
+	return Interval3FiniteOrdered(&parameters->displacement) &&
+		IntervalFiniteOrdered(&parameters->speed) &&
+		parameters->speed.min_value >= 0.0f &&
+		parameters->speed.max_value <=
+			source->authority->identity.physics.max_velocity &&
+		IntervalFiniteOrdered(&parameters->acceleration) &&
+		IntervalFiniteOrdered(&parameters->vertical_acceleration) &&
+		isfinite(parameters->gravity) && parameters->gravity >= 0.0f &&
+		isfinite(parameters->drag) && parameters->drag >= 0.0f &&
+		parameters->physics_abi_id ==
+			source->authority->identity.physics_abi_id &&
+		parameters->duration_ms == timing->travel_ms &&
+		parameters->fixed_latency_ms == timing->delay_ms &&
+		parameters->dwell_ms == timing->dwell_ms &&
+		parameters->wait_ms == timing->wait_ms &&
+		parameters->reset_ms == timing->reset_ms &&
+		parameters->total_ms == total;
+}
+
+static int FillParameters(const sg_mechanism_capability_source_t *source,
 	const sg_mechanism_host_trace_t *trace,
 	const sg_mechanism_derived_timing_t *timing,
 	sg_mechanism_kernel_parameters_t *parameters)
 {
-	float speed = sqrtf(trace->observed_velocity.value[0] *
-		trace->observed_velocity.value[0] +
-		trace->observed_velocity.value[1] *
-		trace->observed_velocity.value[1] +
-		trace->observed_velocity.value[2] *
-		trace->observed_velocity.value[2]);
+	double speed = hypot(hypot((double)trace->observed_velocity.value[0],
+		(double)trace->observed_velocity.value[1]),
+		(double)trace->observed_velocity.value[2]);
+	float represented_speed;
+
+	if (!parameters || !isfinite(speed) || speed > (double)FLT_MAX ||
+		speed > (double)source->authority->identity.physics.max_velocity)
+		return 0;
+	represented_speed = (float)speed;
+	if (!isfinite(represented_speed))
+		return 0;
 
 	memset(parameters, 0, sizeof(*parameters));
 	ExactInterval(&parameters->displacement.x,
@@ -1386,7 +1467,7 @@ static void FillParameters(const sg_mechanism_capability_source_t *source,
 		trace->observed_displacement.value[1]);
 	ExactInterval(&parameters->displacement.z,
 		trace->observed_displacement.value[2]);
-	ExactInterval(&parameters->speed, speed);
+	ExactInterval(&parameters->speed, represented_speed);
 	parameters->gravity = source->authority->identity.physics.gravity;
 	parameters->physics_abi_id = source->authority->identity.physics_abi_id;
 	parameters->duration_ms = timing->travel_ms;
@@ -1397,6 +1478,7 @@ static void FillParameters(const sg_mechanism_capability_source_t *source,
 	parameters->total_ms = (uint64_t)timing->delay_ms +
 		(uint64_t)timing->dwell_ms + (uint64_t)timing->travel_ms +
 		(uint64_t)timing->wait_ms + (uint64_t)timing->reset_ms;
+	return ParametersValid(source, timing, parameters);
 }
 
 static sg_mechanism_capability_flags_t FactFlags(
@@ -1644,7 +1726,9 @@ static int BuildFacts(sg_mechanism_build_t *build)
 				&build->source->entity_semantics->
 					entities[trace->mechanism_entity], &timing) ||
 			!DeriveState(trace->kind, &source_state, &destination_state,
-				&recovery))
+				&recovery) ||
+			!FillParameters(build->source, trace, &timing,
+				&record->parameters))
 		{
 			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 				refs[fact].trace);
@@ -1694,7 +1778,6 @@ static int BuildFacts(sg_mechanism_build_t *build)
 		record->exit_time_ms = trace->exit_time_ms;
 		record->reset_time_ms = trace->reset_time_ms;
 		record->flags = FactFlags(build->source, trace, &timing);
-		FillParameters(build->source, trace, &timing, &record->parameters);
 		if (!MechanismId(build->source, trace->controller_entity,
 				&record->controller_id) ||
 			!MechanismId(build->source, trace->mechanism_entity,
@@ -1969,15 +2052,16 @@ static int FactMatchesTrace(const sg_mechanism_capability_source_t *source,
 
 	if (!MechanismId(source, trace->controller_entity, &controller_id) ||
 		!MechanismId(source, trace->mechanism_entity, &mechanism_id) ||
+		!EndpointStancesValid(source, trace) ||
 		!ReplayHostTrace(source, trace, &inactive_transition,
 			&active_transition, &inactive_transform, &active_transform) ||
 		!DeriveTiming(trace,
 			&source->entity_semantics->entities[trace->controller_entity],
 			&source->entity_semantics->entities[trace->mechanism_entity],
 			&timing) ||
-		!DeriveState(trace->kind, &source_state, &destination_state, &recovery))
+		!DeriveState(trace->kind, &source_state, &destination_state, &recovery) ||
+		!FillParameters(source, trace, &timing, &parameters))
 		return 0;
-	FillParameters(source, trace, &timing, &parameters);
 	return fact->trace_identity == trace->trace_identity &&
 		StableIdEqual(&fact->controller_id.value, &controller_id.value) &&
 		StableIdEqual(&fact->mechanism_id.value, &mechanism_id.value) &&
