@@ -41,14 +41,19 @@ BSP and configuration work                 Parallel foundation work
       |
   independent BSP completeness proof
       |
-      +----------------+----------------+----------------+
-      |                |                |                |
-      v                v                v                v
- ground movement     water movement   hook and air     mechanisms
- walk/crouch/ramp    full 3D volume   bolt and body   doors/lifts/etc.
- jump/drop                            pull/release
-      |                |                |                |
-      +----------------+----------------+----------------+
+      +----------------+------------------------+----------------+
+      |                |                        |                |
+      v                v                        v                v
+ ground movement     water movement      hook visibility      mechanisms
+ walk/crouch/ramp    full 3D volume      relation refinement  doors/lifts/etc.
+ jump/drop                               and coverage audit
+                                                 |
+                                                 v
+                                           hook and air
+                                           bolt and body
+                                           pull/release
+      |                |                        |                |
+      +----------------+------------------------+----------------+
                                |
                                v
                     directional time-cost kernels
@@ -62,6 +67,13 @@ BSP and configuration work                 Parallel foundation work
 The independent BSP completeness proof is a hard barrier before movement
 capability generation. It must prove that all valid cells and portals exist and
 that the generator invented no connection.
+
+Hook/air construction also depends on a complete hook-visibility relation
+catalog. The base static-visibility API proves exact point rays and coarse
+PVS/area exclusions; it does not prove continuous player-origin to surface
+coverage. The refinement must partition that coupled domain at occluder
+boundaries and carry an independently auditable no-omission/no-invention
+certificate. Finite point sampling is not a substitute.
 
 ## Runtime graph
 
