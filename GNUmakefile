@@ -3348,6 +3348,10 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 		tests/sg_bsp_entity_semantics_test.c \
 		slipgate/sg_bsp_entity_semantics.c \
 		slipgate/sg_bsp_entity_semantics.h \
+		tests/run_sg_static_visibility_test.sh \
+		tests/sg_static_visibility_test.c \
+		slipgate/sg_static_visibility.c \
+		slipgate/sg_static_visibility.h \
 		tests/run_sg_host_collision_test.sh \
 		tests/sg_host_collision_test.c slipgate/sg_host_collision.c \
 		slipgate/sg_host_pmove.c \
@@ -3384,6 +3388,7 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 		slipgate/sg_bsp_world.c -lm -o "$$tmp/bsp"; \
 	"$$tmp/bsp"; \
 	sh tests/run_sg_bsp_entity_semantics_test.sh; \
+	sh tests/run_sg_static_visibility_test.sh; \
 	sh tests/run_sg_host_collision_test.sh; \
 	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_test.c \
 		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
