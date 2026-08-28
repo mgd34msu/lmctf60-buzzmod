@@ -303,6 +303,36 @@ static void TestAcceptanceBindings(void)
 	evidence.sidecar_set_identity = Identity(200U);
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_OK,
 		SG_RuneV2Accept(image, image_size, &evidence, &accepted));
+	CHECK(accepted.sidecar_count == 1U);
+	CHECK(accepted.sidecars[0].kind == 1U);
+	CHECK(SG_RuneV2ContentIdEqual(&accepted.sidecars[0].exact_identity,
+		&exact_sidecar_identity));
+	{
+		sg_rune_v2_sidecar_binding_t bindings[2] = { sidecar, sidecar };
+		sg_rune_v2_content_id_t identities[2] = {
+			Identity(170U), exact_sidecar_identity
+		};
+
+		bindings[0].kind = 3U;
+		bindings[0].sidecar_identity = identities[0];
+		bindings[1].kind = 1U;
+		bindings[1].sidecar_identity = identities[1];
+		evidence.sidecars = bindings;
+		evidence.exact_sidecar_identities = identities;
+		evidence.sidecar_count = 2U;
+		CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_OK,
+			SG_RuneV2Accept(image, image_size, &evidence, &accepted));
+		CHECK(accepted.sidecar_count == 2U);
+		CHECK(accepted.sidecars[0].kind == 1U);
+		CHECK(accepted.sidecars[1].kind == 3U);
+		CHECK(SG_RuneV2ContentIdEqual(
+			&accepted.sidecars[0].exact_identity, &identities[1]));
+		CHECK(SG_RuneV2ContentIdEqual(
+			&accepted.sidecars[1].exact_identity, &identities[0]));
+	}
+	evidence.sidecars = &sidecar;
+	evidence.exact_sidecar_identities = &exact_sidecar_identity;
+	evidence.sidecar_count = 1U;
 	sidecar.sidecar_identity = (sg_rune_v2_content_id_t){ { 0 } };
 	exact_sidecar_identity = (sg_rune_v2_content_id_t){ { 0 } };
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_SIDECAR,
@@ -313,6 +343,13 @@ static void TestAcceptanceBindings(void)
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_SIDECAR,
 		SG_RuneV2Accept(image, image_size, &evidence, &accepted));
 	exact_sidecar_identity.bytes[0] ^= 1U;
+	memset(exact_sidecar_identity.bytes, 0,
+		sizeof(exact_sidecar_identity.bytes));
+	sidecar.sidecar_identity = exact_sidecar_identity;
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_SIDECAR,
+		SG_RuneV2Accept(image, image_size, &evidence, &accepted));
+	exact_sidecar_identity = Identity(160U);
+	sidecar.sidecar_identity = exact_sidecar_identity;
 	sidecar.kind = 0U;
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_ACCEPT_SIDECAR,
 		SG_RuneV2Accept(image, image_size, &evidence, &accepted));

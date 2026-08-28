@@ -82,16 +82,24 @@ typedef struct sg_rune_v2_acceptance_evidence_s
 	sg_rune_v2_content_id_t sidecar_set_identity;
 } sg_rune_v2_acceptance_evidence_t;
 
+typedef struct sg_rune_v2_accepted_sidecar_s
+{
+	uint32_t kind;
+	sg_rune_v2_content_id_t exact_identity;
+} sg_rune_v2_accepted_sidecar_t;
+
 typedef struct sg_rune_v2_accepted_artifact_s
 {
 	uint64_t generation;
 	uint32_t reader_mask;
 	uint32_t sidecar_mask;
+	uint32_t sidecar_count;
 	sg_rune_v2_content_id_t bsp_identity;
 	sg_rune_v2_content_id_t schema_identity;
 	sg_rune_v2_content_id_t artifact_identity;
 	sg_rune_v2_content_id_t proof_identity;
 	sg_rune_v2_content_id_t sidecar_set_identity;
+	sg_rune_v2_accepted_sidecar_t sidecars[SG_RUNE_V2_MAX_SIDECARS];
 } sg_rune_v2_accepted_artifact_t;
 
 typedef enum sg_rune_v2_acceptance_diagnostic_e
@@ -188,6 +196,7 @@ static inline sg_rune_v2_acceptance_diagnostic_t SG_RuneV2Accept(
 	sg_rune_v2_wire_view_t wire;
 	uint32_t sidecar_mask = 0U;
 	uint32_t index;
+	uint32_t accepted_index = 0U;
 
 	if (!encoded || !evidence || !accepted_out || !evidence->artifact ||
 		!evidence->exact_artifact_identity || !evidence->proof ||
@@ -229,11 +238,30 @@ static inline sg_rune_v2_acceptance_diagnostic_t SG_RuneV2Accept(
 	accepted_out->generation = evidence->artifact->generation;
 	accepted_out->reader_mask = SG_RUNE_V2_REQUIRED_READER_MASK;
 	accepted_out->sidecar_mask = sidecar_mask;
+	accepted_out->sidecar_count = evidence->sidecar_count;
 	accepted_out->bsp_identity = evidence->artifact->bsp_identity;
 	accepted_out->schema_identity = evidence->artifact->schema_identity;
 	accepted_out->artifact_identity = evidence->artifact->artifact_identity;
 	accepted_out->proof_identity = evidence->proof->proof_identity;
 	accepted_out->sidecar_set_identity = evidence->sidecar_set_identity;
+	for (index = 0U; index < SG_RUNE_V2_MAX_SIDECARS; index++)
+		accepted_out->sidecars[index] = (sg_rune_v2_accepted_sidecar_t){ 0 };
+	for (index = 1U; index <= SG_RUNE_V2_MAX_SIDECARS; index++)
+	{
+		uint32_t source;
+
+		if ((sidecar_mask & (UINT32_C(1) << (index - 1U))) == 0U)
+			continue;
+		for (source = 0U; source < evidence->sidecar_count; source++)
+			if (evidence->sidecars[source].kind == index)
+			{
+				accepted_out->sidecars[accepted_index].kind = index;
+				accepted_out->sidecars[accepted_index].exact_identity =
+					evidence->exact_sidecar_identities[source];
+				accepted_index++;
+				break;
+			}
+	}
 	return SG_RUNE_V2_ACCEPT_OK;
 }
 
