@@ -866,8 +866,31 @@ static void TestCanonicalOutputIgnoresInactiveUnionBytes(void)
 	CHECK(memcmp(&storage[0], &support_before, sizeof(storage[0])) == 0);
 }
 
+static void ReviewTestOutputCannotAliasRuneStorage(void)
+{
+	perception_fixture_t fixture;
+	perception_fixture_t before;
+	sg_perception_observation_t observation =
+		Observation(SG_PERCEPTION_SOURCE_SIGHT);
+	sg_perception_adaptation_t adaptation;
+	sg_belief_evidence_support_t *rune_storage;
+
+	FixtureInit(&fixture);
+	observation.data.sight.in_pvs = 1U;
+	observation.data.sight.line_of_sight_proved = 1U;
+	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
+		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 1.0f);
+	before = fixture;
+	rune_storage = (sg_belief_evidence_support_t *)(void *)fixture.model_phases;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		rune_storage, 1U, &adaptation) ==
+		SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(&fixture, &before, sizeof(fixture)) == 0);
+}
+
 int main(void)
 {
+	ReviewTestOutputCannotAliasRuneStorage();
 	TestSightAndBorrowedLifetime();
 	TestSoundAndDamageShape();
 	TestSoundDamageShapePermutationInvariant();

@@ -1427,8 +1427,107 @@ static void TestCapacityRetryBeyondOldThresholds(void)
 	CHECK(SG_BeliefStateValid(&transition_state));
 }
 
+static void ReviewTestWitnessCannotHideUnboundedKinematics(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_config_t config = Config(1U, 2U, 3U);
+	sg_belief_evidence_support_t support = Support(0U, 0U, 1.0f);
+	sg_belief_evidence_t evidence;
+	sg_belief_horizon_entry_t entries[3];
+	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t step;
+	sg_belief_horizon_kernel_t kernel;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	BeliefFixtureInit(&fixture);
+	config.policy.diffusion_fraction = 1.0f;
+	CHECK(SG_BeliefStateInit(&fixture.snapshot, &state, &config, storage, 8U));
+	support.velocity[0] = 10000.0f;
+	evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U, 100U, &support, 1U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
+	entries[0].step_count = 1U;
+	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0U, 1.0f);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, &step, 1U);
+	frame = Frame(2U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	frame.kernels = &kernel;
+	frame.kernel_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+}
+
+static void ReviewTestSoundCannotCollapseNumerically(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_evidence_support_t supports[2];
+	sg_belief_evidence_t evidence;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	supports[0] = Support(0U, 0U, FLT_MAX);
+	supports[1] = Support(0U, 0U, FLT_TRUE_MIN);
+	supports[1].position[0] = 10.0f;
+	evidence = Evidence(SG_BELIEF_SOURCE_SOUND, 1U, 100U, supports, 2U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	CHECK(state.particle_count == 2U);
+}
+
+static void ReviewTestKernelCsrRejectsOrphanStep(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_horizon_entry_t entries[3];
+	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t steps[2];
+	sg_belief_horizon_kernel_t kernel;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
+	entries[0].step_count = 1U;
+	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	steps[0] = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	steps[1] = steps[0];
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, steps, 2U);
+	frame = Frame(1U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	frame.kernels = &kernel;
+	frame.kernel_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+}
+
 int main(void)
 {
+	ReviewTestWitnessCannotHideUnboundedKinematics();
+	ReviewTestSoundCannotCollapseNumerically();
+	ReviewTestKernelCsrRejectsOrphanStep();
 	TestStateInitIsTransactional();
 	TestStorageAliasingAndCountOverflow();
 	TestSightConcentrates();
