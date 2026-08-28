@@ -858,7 +858,6 @@ static sg_rune_failure_reason_t ValidateRecords(const sg_rune_model_t *model)
 			return SG_RUNE_FAILURE_INVALID_REFERENCE;
 		if (record->bsp_leaf.index == UINT32_MAX ||
 			record->bsp_area.index == UINT32_MAX ||
-			record->bsp_cluster.index == UINT32_MAX ||
 			!ContentsValid(record->contents) ||
 			(record->semantics &
 			 ~(sg_rune_cell_semantics_t)SG_RUNE_CELL_SEMANTICS_KNOWN) != 0)

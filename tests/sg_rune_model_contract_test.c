@@ -445,6 +445,24 @@ static void TestLiquidsAndCurrents(void)
 		SG_RUNE_FAILURE_INVALID_SEMANTICS);
 }
 
+static void TestNoPvsClusterCell(void)
+{
+	model_fixture_t fixture;
+
+	InitFixture(&fixture);
+	fixture.cells[0].bsp_cluster = SG_RUNE_BSP_CLUSTER_REF_NONE;
+	SetEvidence(&fixture.model, &fixture.evidence);
+	CHECK(SG_RuneModelValidate(&fixture.model, &fixture.evidence) ==
+		SG_RUNE_FAILURE_NONE);
+	fixture.cells[0].bsp_leaf = SG_RUNE_BSP_LEAF_REF_NONE;
+	CHECK(SG_RuneModelValidate(&fixture.model, &fixture.evidence) ==
+		SG_RUNE_FAILURE_INVALID_SEMANTICS);
+	fixture.cells[0].bsp_leaf.index = 0U;
+	fixture.cells[0].bsp_area = SG_RUNE_BSP_AREA_REF_NONE;
+	CHECK(SG_RuneModelValidate(&fixture.model, &fixture.evidence) ==
+		SG_RUNE_FAILURE_INVALID_SEMANTICS);
+}
+
 static void TestSameCellTransition(void)
 {
 	model_fixture_t fixture;
@@ -741,6 +759,7 @@ int main(void)
 {
 	TestStableOrdering();
 	TestLiquidsAndCurrents();
+	TestNoPvsClusterCell();
 	TestSameCellTransition();
 	TestGeometryBinding();
 	TestCompletenessBinding();
