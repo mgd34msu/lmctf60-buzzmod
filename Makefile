@@ -1370,6 +1370,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
 	rune-v2-contract-test rune-v2-independent-reader-test rune-v2-belief-test \
+	rune-v2-configuration-space-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -3823,6 +3824,7 @@ project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
 	$(Q)python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
 
 rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
+		rune-v2-configuration-space-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
@@ -3896,6 +3898,14 @@ rune-v2-belief-test: tests/run_sg_belief_test.sh tests/sg_belief_test.c \
 		slipgate/sg_belief.c slipgate/sg_belief_contract.h
 	$(E) [TEST] RUNE v2 phase-space beliefs
 	$(Q)sh tests/run_sg_belief_test.sh
+
+rune-v2-configuration-space-test: tests/run_sg_configuration_space_test.sh \
+		tests/sg_configuration_space_test.c \
+		slipgate/sg_configuration_lattice.c \
+		slipgate/sg_configuration_space.c \
+		slipgate/sg_configuration_audit.c
+	$(E) [TEST] RUNE v2 positive-volume configuration space
+	$(Q)sh tests/run_sg_configuration_space_test.sh
 
 deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 		$(SOURCE_SIZE_BUDGET)

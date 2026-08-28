@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | The static-model contract, complete BSP reader, authoritative BSP collision and Pmove adapter, canonical artifact codec, fail-closed artifact loader, atomic joint artifact publication, independent C and Python artifact readers, directional destination-field solver with generational cache, typed strategy compiler/reducer, and transactional phase-space belief reducer are integrated on `slipgate`. Independent correction passes closed host-parity, transactional-decode, capability-domain, terminal-physics, moving-target freshness, API-version, exact-sidecar-identity, publication-restart, reader-scaling, large-file-portability, strategy-authority, fixed-point-capacity, evidence-authority, and belief-scaling defects. Configuration-space construction and production navigation, strategy, and perception adapters remain open. |
+| Architectural state | The static-model contract, complete BSP reader, authoritative BSP collision and Pmove adapter, positive-volume standing/crouching BSP configuration space with an independent construction audit, canonical artifact codec, fail-closed artifact loader, atomic joint artifact publication, independent C and Python artifact readers, directional destination-field solver with generational cache, typed strategy compiler/reducer, and transactional phase-space belief reducer are integrated on `slipgate`. Independent correction passes closed host-parity, transactional-decode, capability-domain, terminal-physics, moving-target freshness, API-version, exact-sidecar-identity, publication-restart, reader-scaling, large-file-portability, strategy-authority, fixed-point-capacity, evidence-authority, belief-scaling, plane-scale, and zero-volume host-rounding defects. Static semantics, movement construction, and production navigation, strategy, and perception adapters remain open. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` and zero `.snag` files. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Every one remains review-required. |
@@ -196,7 +196,7 @@ phase can close:
 ### 2. Build the BSP configuration-space foundation
 
 - [x] Add the complete BSP reader and canonical static-world model.
-- [ ] Construct standing/crouching player configuration cells and portals.
+- [x] Construct standing/crouching player configuration cells and portals.
 - [ ] Represent supported, water, airborne, void-adjacent, and mover-relative
   space. Reconcile completeness directly against BSP/host collision.
 - [ ] Add deterministic partitioning, deduplication, crash-resumable batches,
