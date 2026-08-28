@@ -3852,6 +3852,22 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 		tests/sg_static_visibility_test.c \
 		slipgate/sg_static_visibility.c \
 		slipgate/sg_static_visibility.h \
+		tests/run_sg_bsp_completeness_proof_test.sh \
+		tests/sg_bsp_completeness_proof_test.c \
+		tests/sg_bsp_completeness_portal_index_scaling_test.c \
+		tests/sg_bsp_completeness_world_guard_test.c \
+		tests/sg_bsp_completeness_deep_traversal_test.c \
+		slipgate/sg_bsp_completeness_proof.c \
+		slipgate/sg_bsp_completeness_proof.h \
+		slipgate/sg_bsp_completeness_internal.h \
+		slipgate/sg_bsp_completeness_core.c \
+		slipgate/sg_bsp_completeness_coverage.c \
+		slipgate/sg_bsp_completeness_lattice.c \
+		slipgate/sg_bsp_completeness_portal.c \
+		slipgate/sg_bsp_completeness_portal_index.c \
+		slipgate/sg_bsp_completeness_region.c \
+		slipgate/sg_bsp_completeness_state.c \
+		slipgate/sg_bsp_completeness_traversal.c \
 		tests/run_sg_rune_v2_artifact_semantic_test.sh \
 		tests/sg_rune_v2_artifact_semantic_test.c \
 		slipgate/sg_rune_v2_artifact_semantic.c \
@@ -3898,6 +3914,7 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 	"$$tmp/bsp"; \
 	sh tests/run_sg_bsp_entity_semantics_test.sh; \
 	sh tests/run_sg_static_visibility_test.sh; \
+	sh tests/run_sg_bsp_completeness_proof_test.sh; \
 	sh tests/run_sg_rune_v2_artifact_semantic_test.sh; \
 	sh tests/run_sg_cell_phase_localization_test.sh; \
 	sh tests/run_sg_host_collision_test.sh; \
