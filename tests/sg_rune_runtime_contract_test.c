@@ -350,44 +350,6 @@ static void TestFieldTacticDomainCompatibility(void)
 	CHECK(!SG_TacticGradientValid(&request.gradient, &request.live));
 }
 
-static sg_belief_observation_t NegativeObservation(void)
-{
-	return (sg_belief_observation_t){
-		.auth = {
-			.authenticated = 1U,
-			.issuer_kind = SG_BELIEF_ISSUER_BOT,
-			.issuer_team = 1U,
-			.audience_team = 1U,
-			.issuer_client = 1U,
-			.observation_id = 1U,
-			.authenticated_at_ms = 99U
-		},
-		.source = SG_BELIEF_SOURCE_VISUAL,
-		.shape = SG_BELIEF_SHAPE_NEGATIVE,
-		.target_team = 2U,
-		.target_client = 3U,
-		.movement_state = SG_BELIEF_MOTION_GROUND,
-		.observed_at_ms = 100U,
-		.valid_until_ms = 200U,
-		.cell_id = 3U,
-		.position = { 10.0f, 20.0f, 30.0f },
-		.spread_radius = 64.0f,
-		.confidence = 0.8f
-	};
-}
-
-static void TestNegativeEvidenceSupport(void)
-{
-	sg_belief_observation_t observation = NegativeObservation();
-
-	CHECK(SG_BeliefObservationValidForTeam(&observation, 1U));
-	observation.confidence = 0.0f;
-	CHECK(!SG_BeliefObservationValidForTeam(&observation, 1U));
-	observation = NegativeObservation();
-	observation.spread_radius = 0.0f;
-	CHECK(!SG_BeliefObservationValidForTeam(&observation, 1U));
-}
-
 static sg_weapon_effect_query_t WeaponQuery(sg_belief_state_t *target)
 {
 	static const sg_weapon_profile_t profile = {
@@ -433,9 +395,12 @@ static sg_weapon_effect_query_t WeaponQuery(sg_belief_state_t *target)
 static void TestWeaponObservationAndClientBindings(void)
 {
 	sg_belief_particle_t particle = {
-		.cell_id = 3U,
+		.phase = { 2U, 1U },
 		.movement_state = SG_BELIEF_MOTION_GROUND,
+		.source_mask = UINT16_C(1),
 		.future_time_ms = 500U,
+		.latest_evidence_id = 1U,
+		.latest_evidence_at_ms = 500U,
 		.position = { 100.0f, 0.0f, 0.0f },
 		.weight = 1.0f
 	};
@@ -446,8 +411,13 @@ static void TestWeaponObservationAndClientBindings(void)
 		.particle_count = 1U,
 		.particle_capacity = 1U,
 		.generation = 1U,
+		.revision = 1U,
+		.rune_identity = 99U,
+		.topology_revision = 7U,
 		.updated_at_ms = 500U,
+		.confidence = 1.0f,
 		.total_weight = 1.0f,
+		.policy = { 1000U, 0.5f, 0.01f },
 		.particles = &particle
 	};
 	sg_weapon_effect_query_t query = WeaponQuery(&target);
@@ -519,7 +489,6 @@ int main(void)
 	TestLearningTransactionIdentity();
 	TestTacticBindingsAndResults();
 	TestFieldTacticDomainCompatibility();
-	TestNegativeEvidenceSupport();
 	TestWeaponObservationAndClientBindings();
 	if (failures != 0)
 	{
