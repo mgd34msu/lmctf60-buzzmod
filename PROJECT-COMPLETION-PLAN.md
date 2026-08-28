@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | RUNE v2 contracts are frozen. BSP, artifact, and runtime foundations are in progress in isolated lanes. The legacy objective-pruned seed/link runtime remains migration input and cannot be released. |
+| Architectural state | Static-model and runtime contracts are frozen. Artifact-wire reconciliation is open because the first codec could not represent the canonical model losslessly. BSP, artifact, and runtime foundations are in progress in isolated lanes. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` and zero `.snag` files. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Every one remains review-required. |
@@ -188,7 +188,7 @@ phase can close:
   identity fields, cost representation, and format limits.
 - [x] Define the destination-field API, strategy-plan types, tactical movement
   API, runtime belief state, and weapon profile/effect interfaces.
-- [x] Define completeness, deterministic serialization, and error contracts.
+- [ ] Define completeness, deterministic serialization, and error contracts.
 - [x] Update `ARCHITECTURE.md` to distinguish current migration state from the
   target and remove the rejected graph model as architectural guidance.
 - [x] Make the requirements catalog and plan tests enforce every numbered item.
