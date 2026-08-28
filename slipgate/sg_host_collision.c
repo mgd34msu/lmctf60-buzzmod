@@ -1,5 +1,6 @@
 #include "sg_host_collision.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -831,7 +832,13 @@ int SG_HostCollisionClassifyPose(
 		pose_out->support.instance_id != 0;
 	view_height = stance == SG_RUNE_STANCE_STANDING ?
 		SG_HOST_STANDING_VIEW_HEIGHT : SG_HOST_CROUCHING_VIEW_HEIGHT;
-	sample2 = (int)(view_height - hull->mins.value[2]);
+	{
+		float sample_height = view_height - hull->mins.value[2];
+
+		if (sample_height < (float)INT_MIN || sample_height >= (float)INT_MAX)
+			return 0;
+		sample2 = (int)sample_height;
+	}
 	sample1 = sample2 / 2;
 	CopyVector(sample, origin);
 	sample[2] = origin[2] + hull->mins.value[2] + 1.0f;
@@ -840,12 +847,12 @@ int SG_HostCollisionClassifyPose(
 	{
 		pose_out->water_type = contents;
 		pose_out->water_level = 1;
-		sample[2] = origin[2] + hull->mins.value[2] + sample1;
+		sample[2] = origin[2] + hull->mins.value[2] + (float)sample1;
 		contents = SG_HostCollisionPointContents(authority, scene, sample);
 		if (contents & SG_HOST_MASK_WATER)
 		{
 			pose_out->water_level = 2;
-			sample[2] = origin[2] + hull->mins.value[2] + sample2;
+			sample[2] = origin[2] + hull->mins.value[2] + (float)sample2;
 			contents = SG_HostCollisionPointContents(authority, scene, sample);
 			if (contents & SG_HOST_MASK_WATER)
 				pose_out->water_level = 3;

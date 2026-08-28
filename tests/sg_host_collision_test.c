@@ -13,8 +13,16 @@ static byte fake_pmove_msec;
 static int fake_many_traces;
 
 #ifdef SG_HOST_REAL_PMOVE_TEST
-/* Linked from the selected Yamagi host's src/common/pmove.c. */
+/* Linked from the repository's selected Yamagi Pmove oracle. */
 extern void Pmove(pmove_t *pmove);
+void Com_DPrintf(const char *format, ...)
+{
+	(void)format;
+}
+void Com_Printf(char *format, ...)
+{
+	(void)format;
+}
 #endif
 
 #define CHECK(expression) do { \

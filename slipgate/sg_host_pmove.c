@@ -54,8 +54,8 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 		host_trace.ent = (struct edict_s *)(void *)scope;
 		return host_trace;
 	}
-	host_trace.allsolid = trace.allsolid;
-	host_trace.startsolid = trace.startsolid;
+	host_trace.allsolid = trace.allsolid ? true : false;
+	host_trace.startsolid = trace.startsolid ? true : false;
 	host_trace.fraction = trace.fraction;
 	VectorCopy(trace.end, host_trace.endpos);
 	VectorCopy(trace.plane.normal, host_trace.plane.normal);
