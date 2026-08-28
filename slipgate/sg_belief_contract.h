@@ -10,6 +10,7 @@
 
 #define SG_BELIEF_MAX_CLIENTS 256U
 #define SG_BELIEF_WEIGHT_EPSILON 0.000001f
+#define SG_BELIEF_ORIENTATION_LIMIT_DEGREES 360.0f
 
 typedef enum sg_belief_evidence_source_e
 {
@@ -279,6 +280,244 @@ static inline int SG_BeliefTeamValid(uint8_t team)
 static inline int SG_BeliefFloatValid(float value)
 {
 	return isfinite(value) != 0;
+}
+
+static inline int SG_BeliefRangeBounds(const void *pointer, size_t count,
+	size_t element_size, uintptr_t *begin, uintptr_t *end)
+{
+	size_t bytes;
+	uintptr_t first;
+
+	if (!pointer || !begin || !end || count == 0U || element_size == 0U ||
+	    count > SIZE_MAX / element_size)
+		return 0;
+	bytes = count * element_size;
+	first = (uintptr_t)pointer;
+	if (bytes > UINTPTR_MAX - first)
+		return 0;
+	*begin = first;
+	*end = first + bytes;
+	return 1;
+}
+
+static inline int SG_BeliefRangeDisjointFromArray(uintptr_t mutable_begin,
+	uintptr_t mutable_end, const void *array, size_t count,
+	size_t element_size)
+{
+	uintptr_t array_begin;
+	uintptr_t array_end;
+
+	if (count == 0U)
+		return 1;
+	if (!SG_BeliefRangeBounds(array, count, element_size, &array_begin,
+	    &array_end))
+		return 0;
+	return mutable_begin >= array_end || array_begin >= mutable_end;
+}
+
+/* Mutable belief buffers must never alias the immutable RUNE binding. */
+static inline int SG_BeliefMutableRangeDisjointFromRune(
+	const sg_rune_runtime_snapshot_t *snapshot, const void *storage,
+	size_t byte_count)
+{
+	const sg_rune_model_t *model;
+	uintptr_t mutable_begin;
+	uintptr_t mutable_end;
+
+	if (!snapshot || !snapshot->model || !storage || byte_count == 0U ||
+	    !SG_BeliefRangeBounds(storage, byte_count, 1U, &mutable_begin,
+		&mutable_end))
+		return 0;
+	model = snapshot->model;
+#define SG_BELIEF_DISJOINT(array, count) \
+	SG_BeliefRangeDisjointFromArray(mutable_begin, mutable_end, (array), \
+		(size_t)(count), sizeof(*(array)))
+	if (!SG_BELIEF_DISJOINT(snapshot, 1U) ||
+	    !SG_BELIEF_DISJOINT(model, 1U) ||
+	    !SG_BELIEF_DISJOINT(snapshot->phases, snapshot->phase_count) ||
+	    !SG_BELIEF_DISJOINT(model->planes, model->plane_count) ||
+	    !SG_BELIEF_DISJOINT(model->portal_vertices,
+		model->portal_vertex_count) ||
+	    !SG_BELIEF_DISJOINT(model->phases, model->phase_count) ||
+	    !SG_BELIEF_DISJOINT(model->phase_transitions,
+		model->phase_transition_count) ||
+	    !SG_BELIEF_DISJOINT(model->cells, model->cell_count) ||
+	    !SG_BELIEF_DISJOINT(model->portals, model->portal_count) ||
+	    !SG_BELIEF_DISJOINT(model->surfaces, model->surface_count) ||
+	    !SG_BELIEF_DISJOINT(model->affordances, model->affordance_count) ||
+	    !SG_BELIEF_DISJOINT(model->kernels, model->kernel_count) ||
+	    !SG_BELIEF_DISJOINT(model->landmarks, model->landmark_count) ||
+	    !SG_BELIEF_DISJOINT(model->mechanisms, model->mechanism_count))
+	{
+#undef SG_BELIEF_DISJOINT
+		return 0;
+	}
+#undef SG_BELIEF_DISJOINT
+	return 1;
+}
+
+static inline int SG_BeliefIntervalContains(
+	const sg_rune_interval_t *interval, float value)
+{
+	return interval && SG_BeliefFloatValid(interval->min_value) &&
+		SG_BeliefFloatValid(interval->max_value) &&
+		interval->min_value <= interval->max_value &&
+		value >= interval->min_value && value <= interval->max_value;
+}
+
+static inline int SG_BeliefPositionInsidePhaseCell(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *phase, const float position[3])
+{
+	const sg_rune_model_t *model;
+	const sg_rune_cell_t *cell;
+	size_t plane_index;
+	size_t plane_end;
+	size_t axis;
+
+	if (!snapshot || !snapshot->model || !position ||
+	    !SG_PhaseCoordinateValid(snapshot, phase))
+		return 0;
+	model = snapshot->model;
+	cell = &model->cells[phase->cell_id];
+	for (axis = 0U; axis < 3U; axis++)
+		if (!SG_BeliefFloatValid(position[axis]) ||
+		    !SG_BeliefFloatValid(cell->bounds.mins.value[axis]) ||
+		    !SG_BeliefFloatValid(cell->bounds.maxs.value[axis]) ||
+		    cell->bounds.mins.value[axis] >=
+			cell->bounds.maxs.value[axis] ||
+		    position[axis] < cell->bounds.mins.value[axis] ||
+		    position[axis] > cell->bounds.maxs.value[axis])
+			return 0;
+	if (!model->planes || cell->boundary_planes.count < 4U ||
+	    cell->boundary_planes.count > SG_RUNE_MODEL_MAX_CELL_PLANES ||
+	    cell->boundary_planes.first > model->plane_count ||
+	    cell->boundary_planes.count >
+		model->plane_count - cell->boundary_planes.first)
+		return 0;
+	plane_index = cell->boundary_planes.first;
+	plane_end = plane_index + cell->boundary_planes.count;
+	for (; plane_index < plane_end; plane_index++)
+	{
+		const sg_rune_plane_t *plane = &model->planes[plane_index];
+		double distance = 0.0;
+		double normal_squared = 0.0;
+
+		if (!SG_BeliefFloatValid(plane->distance))
+			return 0;
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			if (!SG_BeliefFloatValid(plane->normal.value[axis]))
+				return 0;
+			distance += (double)position[axis] *
+				(double)plane->normal.value[axis];
+			normal_squared += (double)plane->normal.value[axis] *
+				(double)plane->normal.value[axis];
+		}
+		if (!isfinite(distance) || !isfinite(normal_squared) ||
+		    normal_squared <= 0.0 || distance > (double)plane->distance)
+			return 0;
+	}
+	return 1;
+}
+
+static inline float SG_BeliefAccelerationLimit(
+	const sg_rune_physics_parameters_t *physics,
+	sg_belief_motion_state_t movement_state)
+{
+	float limit;
+
+	switch (movement_state)
+	{
+	case SG_BELIEF_MOTION_GROUND:
+		return physics->ground_acceleration;
+	case SG_BELIEF_MOTION_AIR:
+		return physics->air_acceleration;
+	case SG_BELIEF_MOTION_WATER:
+		return physics->water_acceleration;
+	case SG_BELIEF_MOTION_HOOK:
+		return physics->hook_acceleration;
+	case SG_BELIEF_MOTION_MOVER:
+		return physics->external_acceleration;
+	case SG_BELIEF_MOTION_UNKNOWN:
+		limit = physics->ground_acceleration;
+		if (physics->air_acceleration > limit)
+			limit = physics->air_acceleration;
+		if (physics->water_acceleration > limit)
+			limit = physics->water_acceleration;
+		if (physics->hook_acceleration > limit)
+			limit = physics->hook_acceleration;
+		if (physics->external_acceleration > limit)
+			limit = physics->external_acceleration;
+		return limit;
+	case SG_BELIEF_MOTION_COUNT:
+		break;
+	}
+	return -1.0f;
+}
+
+static inline int SG_BeliefMotionStateCompatible(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *phase,
+	sg_belief_motion_state_t movement_state);
+
+static inline int SG_BeliefKinematicsCompatible(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *phase,
+	sg_belief_motion_state_t movement_state, const float velocity[3],
+	const float acceleration[3], const float orientation[3])
+{
+	const sg_rune_phase_basis_t *basis;
+	const sg_rune_physics_parameters_t *physics;
+	const sg_rune_interval_t *velocity_axes[3];
+	float acceleration_limit;
+	float vertical_limit;
+	double speed_squared = 0.0;
+	size_t axis;
+
+	if (!SG_BeliefMotionStateCompatible(snapshot, phase, movement_state) ||
+	    !velocity || !acceleration || !orientation)
+		return 0;
+	basis = &snapshot->model->phases[phase->phase_id];
+	physics = &snapshot->model->identity.physics;
+	if (!SG_BeliefFloatValid(physics->gravity) || physics->gravity < 0.0f ||
+	    !SG_BeliefFloatValid(physics->ground_acceleration) ||
+	    physics->ground_acceleration < 0.0f ||
+	    !SG_BeliefFloatValid(physics->air_acceleration) ||
+	    physics->air_acceleration < 0.0f ||
+	    !SG_BeliefFloatValid(physics->water_acceleration) ||
+	    physics->water_acceleration < 0.0f ||
+	    !SG_BeliefFloatValid(physics->hook_acceleration) ||
+	    physics->hook_acceleration < 0.0f ||
+	    !SG_BeliefFloatValid(physics->external_acceleration) ||
+	    physics->external_acceleration < 0.0f ||
+	    !SG_BeliefFloatValid(physics->max_velocity) ||
+	    physics->max_velocity <= 0.0f)
+		return 0;
+	acceleration_limit = SG_BeliefAccelerationLimit(physics, movement_state);
+	if (!SG_BeliefFloatValid(acceleration_limit) || acceleration_limit < 0.0f)
+		return 0;
+	vertical_limit = physics->gravity > acceleration_limit ?
+		physics->gravity : acceleration_limit;
+	velocity_axes[0] = &basis->velocity.x;
+	velocity_axes[1] = &basis->velocity.y;
+	velocity_axes[2] = &basis->velocity.z;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		if (!SG_BeliefFloatValid(velocity[axis]) ||
+		    !SG_BeliefFloatValid(acceleration[axis]) ||
+		    !SG_BeliefFloatValid(orientation[axis]) ||
+		    !SG_BeliefIntervalContains(velocity_axes[axis], velocity[axis]) ||
+		    fabsf(acceleration[axis]) >
+			(axis == 2U ? vertical_limit : acceleration_limit) ||
+		    fabsf(orientation[axis]) >
+			SG_BELIEF_ORIENTATION_LIMIT_DEGREES)
+			return 0;
+		speed_squared += (double)velocity[axis] * (double)velocity[axis];
+	}
+	return isfinite(speed_squared) &&
+		speed_squared <= (double)physics->max_velocity *
+			(double)physics->max_velocity;
 }
 
 static inline int SG_BeliefMotionStateCompatible(

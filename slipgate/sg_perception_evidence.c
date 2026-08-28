@@ -94,8 +94,11 @@ static int PerceptionHypothesisValid(
 	sg_belief_evidence_kind_t evidence_kind)
 {
 	if (!hypothesis || !SG_PhaseCoordinateValid(snapshot, &hypothesis->phase) ||
-	    !SG_BeliefMotionStateCompatible(snapshot, &hypothesis->phase,
-		hypothesis->movement_state) ||
+	    !SG_BeliefPositionInsidePhaseCell(snapshot, &hypothesis->phase,
+		hypothesis->position) ||
+	    !SG_BeliefKinematicsCompatible(snapshot, &hypothesis->phase,
+		hypothesis->movement_state, hypothesis->velocity,
+		hypothesis->acceleration, hypothesis->orientation) ||
 	    hypothesis->location_basis < SG_PERCEPTION_LOCATION_EARNED_RUNTIME ||
 	    hypothesis->location_basis >= SG_PERCEPTION_LOCATION_BASIS_COUNT ||
 	    (hypothesis->location_basis == SG_PERCEPTION_LOCATION_RUNE_STATIC &&
@@ -444,9 +447,12 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 	    !PerceptionByteRange(out, sizeof(*out), &output_range) ||
 	    PerceptionRangesOverlap(&observation_range, &output_range))
 		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
+	if (!SG_RuneRuntimeSnapshotValid(snapshot) ||
+	    !SG_BeliefMutableRangeDisjointFromRune(snapshot, out, sizeof(*out)))
+		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
 	memset(&adaptation, 0, sizeof(adaptation));
 	adaptation.result = SG_PERCEPTION_ADAPT_REJECTED_INVALID;
-	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !observation ||
+	if (!observation ||
 	    observation->source < SG_PERCEPTION_SOURCE_SIGHT ||
 	    observation->source >= SG_PERCEPTION_SOURCE_COUNT ||
 	    observation->evidence_kind < SG_BELIEF_EVIDENCE_POSITIVE ||
@@ -483,6 +489,8 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 	    (!PerceptionByteCount(support_span_count, sizeof(*support_storage),
 		&support_bytes) ||
 	     !PerceptionByteRange(support_storage, support_bytes, &support_range) ||
+	     !SG_BeliefMutableRangeDisjointFromRune(snapshot, support_storage,
+		support_bytes) ||
 	     PerceptionRangesOverlap(&support_range, &observation_range) ||
 	     PerceptionRangesOverlap(&support_range, &output_range)))
 		return SG_PERCEPTION_ADAPT_REJECTED_INVALID;
