@@ -10,19 +10,25 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wformat=2 -Wcast-qual -Wcast-align'
 sources='tests/sg_bsp_completeness_proof_test.c
 slipgate/sg_bsp_completeness_proof.c
+slipgate/sg_bsp_completeness_core.c
 slipgate/sg_bsp_completeness_region.c
+slipgate/sg_bsp_completeness_lattice.c
 slipgate/sg_bsp_completeness_coverage.c
 slipgate/sg_bsp_completeness_state.c
 slipgate/sg_bsp_completeness_portal.c
+slipgate/sg_bsp_completeness_portal_index.c
 slipgate/sg_configuration_lattice.c slipgate/sg_configuration_space.c
 slipgate/sg_host_collision.c slipgate/sg_bsp_world.c
 slipgate/sg_rune_model.c'
 owned='tests/sg_bsp_completeness_proof_test.c
 slipgate/sg_bsp_completeness_proof.c
+slipgate/sg_bsp_completeness_core.c
 slipgate/sg_bsp_completeness_region.c
+slipgate/sg_bsp_completeness_lattice.c
 slipgate/sg_bsp_completeness_coverage.c
 slipgate/sg_bsp_completeness_state.c
-slipgate/sg_bsp_completeness_portal.c'
+slipgate/sg_bsp_completeness_portal.c
+slipgate/sg_bsp_completeness_portal_index.c'
 isl_cflags=$(pkg-config --cflags isl)
 isl_libs=$(pkg-config --libs isl)
 

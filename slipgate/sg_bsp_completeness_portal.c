@@ -11,6 +11,7 @@
 #define PORTAL_AREA_EPSILON 0.000001f
 #define PORTAL_MATCH_EPSILON 0.001f
 #define PORTAL_MATCH_ROUNDING_ULPS 32.0f
+#define PORTAL_COPLANAR_ROUNDING_ULPS 2.0f
 
 typedef struct portal_point2_s
 {
@@ -86,6 +87,51 @@ static int OpposingPlanes(const sg_configuration_plane_t *left,
 		Coplanar(left, right);
 }
 
+static int PortalRecordValid(const sg_bsp_proof_context_t *proof,
+	uint32_t portal_index)
+{
+	const sg_configuration_portal_t *portal =
+		&proof->space->portals[portal_index];
+	uint32_t vertex;
+
+	if (portal->from_cell >= proof->space->cell_count ||
+		portal->to_cell >= proof->space->cell_count ||
+		portal->from_cell == portal->to_cell ||
+		portal->stance >= SG_RUNE_STANCE_COUNT ||
+		!SG_BspProofFiniteVector(portal->plane.normal) ||
+		!isfinite(portal->plane.distance) ||
+		(portal->plane.normal[0] == 0.0f &&
+		 portal->plane.normal[1] == 0.0f &&
+		 portal->plane.normal[2] == 0.0f) ||
+		portal->first_vertex > proof->space->vertex_count ||
+		portal->vertex_count < 3U ||
+		portal->vertex_count > proof->space->vertex_count -
+			portal->first_vertex)
+		return 0;
+	for (vertex = 0; vertex < portal->vertex_count; vertex++)
+	{
+		const float *point = proof->space->vertices[
+			portal->first_vertex + vertex].value;
+		float coordinate_scale;
+		float scale;
+		float residual;
+
+		if (!SG_BspProofFiniteVector(point))
+			return 0;
+		coordinate_scale = fmaxf(fabsf(point[0]),
+			fmaxf(fabsf(point[1]), fabsf(point[2])));
+		scale = fabsf(portal->plane.distance) + coordinate_scale + 1.0f +
+			fabsf(portal->plane.normal[0] * point[0]) +
+			fabsf(portal->plane.normal[1] * point[1]) +
+			fabsf(portal->plane.normal[2] * point[2]);
+		residual = fabsf(SG_BspProofDot(portal->plane.normal, point) -
+			portal->plane.distance);
+		if (residual > scale * FLT_EPSILON * PORTAL_COPLANAR_ROUNDING_ULPS)
+			return 0;
+	}
+	return 1;
+}
+
 static int AppendPoint2(portal_point2_t **points, uint32_t *count,
 	const float point[2])
 {
@@ -121,130 +167,6 @@ static float MatchTolerance(float magnitude)
 {
 	return fmaxf(PORTAL_MATCH_EPSILON,
 		fabsf(magnitude) * FLT_EPSILON * PORTAL_MATCH_ROUNDING_ULPS);
-}
-
-static int ClipHalfspace2(portal_point2_t **polygon, uint32_t *count,
-	float coefficient_u, float coefficient_v, float distance)
-{
-	portal_point2_t *next = NULL;
-	uint32_t next_count = 0U;
-	uint32_t index;
-
-	if (fabsf(coefficient_u) + fabsf(coefficient_v) <=
-		PORTAL_PLANE_EPSILON)
-	{
-		if (distance >= -PORTAL_PLANE_EPSILON)
-			return 1;
-		free(*polygon);
-		*polygon = NULL;
-		*count = 0U;
-		return 1;
-	}
-	for (index = 0; index < *count; index++)
-	{
-		const portal_point2_t *start = &(*polygon)[index];
-		const portal_point2_t *end = &(*polygon)[(index + 1U) % *count];
-		float start_distance = coefficient_u * start->value[0] +
-			coefficient_v * start->value[1] - distance;
-		float end_distance = coefficient_u * end->value[0] +
-			coefficient_v * end->value[1] - distance;
-		int start_inside = start_distance <= 0.0f;
-		int end_inside = end_distance <= 0.0f;
-
-		if (start_inside && !AppendPoint2(&next, &next_count, start->value))
-			goto failure;
-		if (start_inside != end_inside)
-		{
-			float denominator = start_distance - end_distance;
-			float point[2];
-
-			if (denominator == 0.0f)
-				goto failure;
-			point[0] = start->value[0] + start_distance / denominator *
-				(end->value[0] - start->value[0]);
-			point[1] = start->value[1] + start_distance / denominator *
-				(end->value[1] - start->value[1]);
-			if (!AppendPoint2(&next, &next_count, point))
-				goto failure;
-		}
-	}
-	free(*polygon);
-	*polygon = next;
-	*count = next_count;
-	return 1;
-
-failure:
-	free(next);
-	return 0;
-}
-
-static int CellFacePolygon(sg_bsp_proof_context_t *proof,
-	uint32_t cell_index, const sg_configuration_face_t *boundary,
-	sg_rune_vec3_t **vertices_out, uint32_t *count_out)
-{
-	const sg_configuration_cell_t *cell = &proof->space->cells[cell_index];
-	portal_point2_t *polygon = NULL;
-	uint32_t count = 0U;
-	uint32_t drop = DominantAxis(boundary->plane.normal);
-	uint32_t u = (drop + 1U) % 3U;
-	uint32_t v = (drop + 2U) % 3U;
-	uint32_t index;
-	float initial[4][2] = {
-		{ SG_CONFIGURATION_PMOVE_ORIGIN_MIN,
-			SG_CONFIGURATION_PMOVE_ORIGIN_MIN },
-		{ SG_CONFIGURATION_PMOVE_ORIGIN_MAX,
-			SG_CONFIGURATION_PMOVE_ORIGIN_MIN },
-		{ SG_CONFIGURATION_PMOVE_ORIGIN_MAX,
-			SG_CONFIGURATION_PMOVE_ORIGIN_MAX },
-		{ SG_CONFIGURATION_PMOVE_ORIGIN_MIN,
-			SG_CONFIGURATION_PMOVE_ORIGIN_MAX }
-	};
-
-	*vertices_out = NULL;
-	*count_out = 0U;
-	for (index = 0; index < 4U; index++)
-		if (!AppendPoint2(&polygon, &count, initial[index]))
-			goto failure;
-	for (index = 0; index < cell->face_count && count >= 3U; index++)
-	{
-		const sg_configuration_plane_t *clip =
-			&proof->space->faces[cell->first_face + index].plane;
-		float ratio = clip->normal[drop] / boundary->plane.normal[drop];
-		float coefficient_u = clip->normal[u] -
-			ratio * boundary->plane.normal[u];
-		float coefficient_v = clip->normal[v] -
-			ratio * boundary->plane.normal[v];
-		float distance = clip->distance - ratio * boundary->plane.distance;
-
-		if (!ClipHalfspace2(&polygon, &count, coefficient_u, coefficient_v,
-				distance))
-			goto failure;
-	}
-	if (count >= 3U)
-	{
-		sg_rune_vec3_t *vertices = calloc(count, sizeof(*vertices));
-
-		if (!vertices)
-			goto failure;
-		for (index = 0; index < count; index++)
-		{
-			vertices[index].value[u] = polygon[index].value[0];
-			vertices[index].value[v] = polygon[index].value[1];
-			vertices[index].value[drop] = (boundary->plane.distance -
-				boundary->plane.normal[u] * vertices[index].value[u] -
-				boundary->plane.normal[v] * vertices[index].value[v]) /
-				boundary->plane.normal[drop];
-		}
-		*vertices_out = vertices;
-		*count_out = count;
-	}
-	free(polygon);
-	return 1;
-
-failure:
-	free(polygon);
-	SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OUT_OF_MEMORY, cell_index);
-	return 0;
 }
 
 static int OverlapPolygon(const sg_rune_vec3_t *subject,
@@ -427,8 +349,10 @@ static int PortalSideWitness(sg_bsp_proof_context_t *proof,
 			sizeof(halfspaces[offset].normal));
 		halfspaces[offset].distance = plane->distance;
 		halfspaces[offset].open =
-			plane->source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
-			plane->reversed != 0U;
+			(plane->source_kind == SG_CONFIGURATION_PLANE_BSP &&
+			 plane->reversed == 0U) ||
+			(plane->source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
+			 plane->reversed != 0U);
 		clearance[offset] = (uint8_t)!Coplanar(plane, &boundary->plane);
 	}
 	for (edge = 0; edge < polygon_count; edge++)
@@ -564,12 +488,26 @@ done:
 }
 
 static int FindPortal(sg_bsp_proof_context_t *proof, uint8_t *seen,
-	uint32_t cell_a, uint32_t cell_b, const sg_configuration_face_t *face,
-	const portal_point2_t *polygon, uint32_t polygon_count, float area)
+	const sg_bsp_proof_portal_ref_t *refs, uint32_t cell_a, uint32_t cell_b,
+	const sg_configuration_face_t *face, const portal_point2_t *polygon,
+	uint32_t polygon_count, float area)
 {
-	uint32_t portal;
+	uint32_t low_cell = cell_a < cell_b ? cell_a : cell_b;
+	uint32_t high_cell = cell_a < cell_b ? cell_b : cell_a;
+	uint32_t stance = (uint32_t)proof->space->cells[cell_a].stance;
+	uint32_t cursor = SG_BspProofPortalLowerBound(refs,
+		proof->space->portal_count, low_cell, high_cell, stance);
 
-	for (portal = 0; portal < proof->space->portal_count; portal++)
+	proof->result.portal_endpoint_lookups++;
+	for (; cursor < proof->space->portal_count; cursor++)
+	{
+		uint32_t portal = refs[cursor].portal;
+
+		if (refs[cursor].low_cell != low_cell ||
+			refs[cursor].high_cell != high_cell ||
+			refs[cursor].stance != stance)
+			break;
+		proof->result.portal_lookup_candidates++;
 		if (!seen[portal])
 		{
 			int matches = PortalMatches(proof, portal, cell_a, cell_b, face,
@@ -583,129 +521,148 @@ static int FindPortal(sg_bsp_proof_context_t *proof, uint8_t *seen,
 				return 1;
 			}
 		}
+	}
 	return 0;
+}
+
+static int SameFaceGroup(const sg_bsp_proof_face_ref_t *left,
+	const sg_bsp_proof_face_ref_t *right)
+{
+	return left->stance == right->stance &&
+		left->dominant == right->dominant &&
+		left->plane_bucket == right->plane_bucket;
+}
+
+static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
+	const sg_bsp_proof_portal_ref_t *portals,
+	const sg_bsp_proof_face_ref_t *left_ref,
+	const sg_bsp_proof_face_ref_t *right_ref)
+{
+	uint32_t left_cell = left_ref->cell;
+	uint32_t right_cell = right_ref->cell;
+	const sg_configuration_cell_t *a = &proof->space->cells[left_cell];
+	const sg_configuration_face_t *left =
+		&proof->space->faces[left_ref->face];
+	const sg_configuration_face_t *right =
+		&proof->space->faces[right_ref->face];
+	portal_point2_t *polygon = NULL;
+	uint32_t polygon_count = 0U;
+	float center[3], area;
+	float from[3], to[3];
+	sg_host_collision_transition_t transition;
+	int from_result, to_result, found;
+
+	if (left_cell == right_cell ||
+		left_ref->orientation == right_ref->orientation ||
+		left_ref->other_max < right_ref->other_min ||
+		right_ref->other_max < left_ref->other_min)
+		return 1;
+	proof->result.portal_face_candidates++;
+	if (!OpposingPlanes(&left->plane, &right->plane))
+		return 1;
+	if (!OverlapPolygon(left_ref->vertices, left_ref->vertex_count,
+			right_ref->vertices, right_ref->vertex_count, &left->plane,
+			&polygon, &polygon_count, center, &area))
+		return 0;
+	if (!polygon_count)
+		return 1;
+	from_result = PortalSideWitness(proof, left_cell, left, polygon,
+		polygon_count, center, from);
+	to_result = PortalSideWitness(proof, right_cell, right, polygon,
+		polygon_count, center, to);
+	if (from_result < 0 || to_result < 0)
+	{
+		free(polygon);
+		return 0;
+	}
+	if (!from_result || !to_result ||
+		!SG_HostCollisionTransition(proof->authority, NULL, from, to,
+			a->stance, &transition) || !transition.clear)
+	{
+		free(polygon);
+		return 1;
+	}
+	proof->result.expected_portals++;
+	found = FindPortal(proof, seen, portals, left_cell, right_cell, left,
+		polygon, polygon_count, area);
+	free(polygon);
+	if (found < 0)
+		return 0;
+	if (!found)
+	{
+		proof->result.omitted_portals++;
+		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OMITTED_PORTAL,
+			proof->result.expected_portals - 1U);
+		return 0;
+	}
+	proof->result.proved_portals++;
+	return 1;
 }
 
 int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof)
 {
-	uint8_t *seen;
-	uint32_t cell_a, cell_b;
+	uint8_t *seen = NULL;
+	sg_bsp_proof_face_ref_t *faces = NULL;
+	sg_bsp_proof_portal_ref_t *portals = NULL;
+	uint32_t face_count = 0U;
+	uint32_t cell_a;
 
 	seen = calloc(proof->space->portal_count ? proof->space->portal_count : 1U,
 		sizeof(*seen));
 	if (!seen)
 		return 0;
 	for (cell_a = 0; cell_a < proof->space->portal_count; cell_a++)
-		for (cell_b = cell_a + 1U; cell_b < proof->space->portal_count; cell_b++)
+		if (!PortalRecordValid(proof, cell_a))
 		{
-			const sg_configuration_portal_t *left =
-				&proof->space->portals[cell_a];
-			const sg_configuration_portal_t *right =
-				&proof->space->portals[cell_b];
-			int same_endpoints =
-				(left->from_cell == right->from_cell &&
-				 left->to_cell == right->to_cell) ||
-				(left->from_cell == right->to_cell &&
-				 left->to_cell == right->from_cell);
+			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_PORTAL,
+				cell_a);
+			goto failure;
+		}
+	if (!SG_BspProofBuildPortalRefs(proof, &portals) ||
+		!SG_BspProofBuildFaceRefs(proof, &faces, &face_count))
+		goto failure;
+	for (cell_a = 1U; cell_a < proof->space->portal_count; cell_a++)
+		if (portals[cell_a - 1U].low_cell == portals[cell_a].low_cell &&
+			portals[cell_a - 1U].high_cell == portals[cell_a].high_cell &&
+			portals[cell_a - 1U].stance == portals[cell_a].stance)
+		{
+			proof->result.invented_portals++;
+			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVENTED_PORTAL,
+				portals[cell_a].portal);
+			goto failure;
+		}
+	for (cell_a = 0; cell_a < face_count; cell_a++)
+	{
+		uint32_t group_end = cell_a + 1U;
+		uint32_t cell_b;
 
-			if (same_endpoints && left->stance == right->stance)
-			{
-				proof->result.invented_portals++;
-				SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVENTED_PORTAL,
-					cell_b);
+		while (group_end < face_count &&
+			SameFaceGroup(&faces[cell_a], &faces[group_end]))
+			group_end++;
+		for (cell_b = cell_a + 1U; cell_b < group_end &&
+			faces[cell_b].sweep_min <= faces[cell_a].sweep_max; cell_b++)
+			if (!AuditFacePair(proof, seen, portals, &faces[cell_a],
+					&faces[cell_b]))
 				goto failure;
-			}
-		}
-	for (cell_a = 0; cell_a < proof->space->cell_count; cell_a++)
-		for (cell_b = cell_a + 1U; cell_b < proof->space->cell_count; cell_b++)
+		if (group_end < face_count &&
+			faces[cell_a].plane_bucket != INT64_MAX &&
+			faces[group_end].stance == faces[cell_a].stance &&
+			faces[group_end].dominant == faces[cell_a].dominant &&
+			faces[group_end].plane_bucket ==
+				faces[cell_a].plane_bucket + 1)
 		{
-			const sg_configuration_cell_t *a = &proof->space->cells[cell_a];
-			const sg_configuration_cell_t *b = &proof->space->cells[cell_b];
-			uint32_t face_a, face_b;
+			uint32_t next_end = group_end + 1U;
 
-			if (a->stance != b->stance)
-				continue;
-			for (face_a = 0; face_a < a->face_count; face_a++)
-				for (face_b = 0; face_b < b->face_count; face_b++)
-				{
-					const sg_configuration_face_t *left =
-						&proof->space->faces[a->first_face + face_a];
-					const sg_configuration_face_t *right =
-						&proof->space->faces[b->first_face + face_b];
-					sg_rune_vec3_t *left_vertices = NULL;
-					sg_rune_vec3_t *right_vertices = NULL;
-					uint32_t left_count = 0U, right_count = 0U;
-					portal_point2_t *polygon = NULL;
-					uint32_t polygon_count = 0U;
-					float center[3], area;
-					float from[3], to[3];
-					sg_host_collision_transition_t transition;
-					int from_result, to_result, found;
-
-					if (!OpposingPlanes(&left->plane, &right->plane))
-						continue;
-					if (!CellFacePolygon(proof, cell_a, left, &left_vertices,
-							&left_count) ||
-						!CellFacePolygon(proof, cell_b, right,
-							&right_vertices, &right_count))
-					{
-						free(left_vertices);
-						free(right_vertices);
-						goto failure;
-					}
-					if (!left_count || !right_count)
-					{
-						free(left_vertices);
-						free(right_vertices);
-						continue;
-					}
-					if (!OverlapPolygon(left_vertices, left_count,
-							right_vertices, right_count, &left->plane,
-							&polygon,
-							&polygon_count, center, &area))
-					{
-						free(left_vertices);
-						free(right_vertices);
-						goto failure;
-					}
-					free(left_vertices);
-					free(right_vertices);
-					if (!polygon_count)
-						continue;
-					from_result = PortalSideWitness(proof, cell_a, left,
-						polygon, polygon_count, center, from);
-					to_result = PortalSideWitness(proof, cell_b, right,
-						polygon, polygon_count, center, to);
-					if (from_result < 0 || to_result < 0)
-					{
-						free(polygon);
-						goto failure;
-					}
-					if (!from_result || !to_result ||
-						!SG_HostCollisionTransition(proof->authority, NULL,
-							from, to, a->stance, &transition) ||
-						!transition.clear)
-					{
-						free(polygon);
-						continue;
-					}
-					proof->result.expected_portals++;
-					found = FindPortal(proof, seen, cell_a, cell_b, left,
-						polygon, polygon_count, area);
-					free(polygon);
-					if (found < 0)
-						goto failure;
-					if (!found)
-					{
-						proof->result.omitted_portals++;
-						SG_BspProofFail(proof,
-							SG_BSP_COMPLETENESS_OMITTED_PORTAL,
-							proof->result.expected_portals - 1U);
-						goto failure;
-					}
-					proof->result.proved_portals++;
-				}
+			while (next_end < face_count &&
+				SameFaceGroup(&faces[group_end], &faces[next_end]))
+				next_end++;
+			for (cell_b = group_end; cell_b < next_end &&
+				faces[cell_b].sweep_min <= faces[cell_a].sweep_max; cell_b++)
+				if (!AuditFacePair(proof, seen, portals, &faces[cell_a],
+						&faces[cell_b]))
+					goto failure;
 		}
+	}
 	for (cell_a = 0; cell_a < proof->space->portal_count; cell_a++)
 		if (!seen[cell_a])
 		{
@@ -714,10 +671,14 @@ int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof)
 				cell_a);
 			goto failure;
 		}
+	SG_BspProofFreeFaceRefs(faces, face_count);
+	free(portals);
 	free(seen);
 	return 1;
 
 failure:
+	SG_BspProofFreeFaceRefs(faces, face_count);
+	free(portals);
 	free(seen);
 	return 0;
 }

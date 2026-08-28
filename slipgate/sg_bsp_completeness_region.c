@@ -1,220 +1,11 @@
 #include "sg_bsp_completeness_internal.h"
 #include "sg_configuration_lattice.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-
-static int AllocationFits(uint32_t count, size_t element_size)
-{
-	size_t maximum;
-
-	if (!element_size)
-		return 1;
-	maximum = SIZE_MAX / element_size;
-	return maximum >= UINT32_MAX || count <= (uint32_t)maximum;
-}
-
-void SG_BspProofFail(sg_bsp_proof_context_t *proof,
-	sg_bsp_completeness_code_t code, uint32_t record)
-{
-	if (proof->result.code == SG_BSP_COMPLETENESS_OK)
-	{
-		proof->result.code = code;
-		proof->result.record = record;
-	}
-}
-
-float SG_BspProofDot(const float left[3], const float right[3])
-{
-	return left[0] * right[0] + left[1] * right[1] +
-		left[2] * right[2];
-}
-
-int SG_BspProofFiniteVector(const float value[3])
-{
-	return isfinite(value[0]) && isfinite(value[1]) && isfinite(value[2]);
-}
-
-void SG_BspProofFreeRegion(sg_bsp_proof_region_t *region)
-{
-	if (!region)
-		return;
-	free(region->halfspaces);
-	memset(region, 0, sizeof(*region));
-}
-
-void SG_BspProofFreeRegions(sg_bsp_proof_regions_t *regions)
-{
-	uint32_t index;
-
-	if (!regions)
-		return;
-	for (index = 0; index < regions->count; index++)
-		SG_BspProofFreeRegion(&regions->values[index]);
-	free(regions->values);
-	memset(regions, 0, sizeof(*regions));
-}
-
-int SG_BspProofCopyRegion(const sg_bsp_proof_region_t *source,
-	sg_bsp_proof_region_t *destination)
-{
-	memset(destination, 0, sizeof(*destination));
-	if (source->halfspace_count)
-	{
-		if (!AllocationFits(source->halfspace_count,
-				sizeof(*destination->halfspaces)))
-			return 0;
-		destination->halfspaces = malloc((size_t)source->halfspace_count *
-			sizeof(*destination->halfspaces));
-		if (!destination->halfspaces)
-			return 0;
-		memcpy(destination->halfspaces, source->halfspaces,
-			(size_t)source->halfspace_count * sizeof(*destination->halfspaces));
-	}
-	destination->halfspace_count = source->halfspace_count;
-	destination->leaf = source->leaf;
-	destination->stance = source->stance;
-	memcpy(destination->witness, source->witness,
-		sizeof(destination->witness));
-	return 1;
-}
-
-int SG_BspProofAppendConstraint(const sg_bsp_proof_region_t *source,
-	const sg_bsp_proof_halfspace_t *constraint,
-	sg_bsp_proof_region_t *destination)
-{
-	size_t bytes;
-
-	if (source->halfspace_count == UINT32_MAX)
-		return 0;
-	if (!AllocationFits(source->halfspace_count + 1U,
-			sizeof(*destination->halfspaces)))
-		return 0;
-	bytes = (size_t)(source->halfspace_count + 1U) *
-		sizeof(*destination->halfspaces);
-	memset(destination, 0, sizeof(*destination));
-	destination->halfspaces = malloc(bytes);
-	if (!destination->halfspaces)
-		return 0;
-	if (source->halfspace_count)
-		memcpy(destination->halfspaces, source->halfspaces,
-			(size_t)source->halfspace_count * sizeof(*destination->halfspaces));
-	destination->halfspaces[source->halfspace_count] = *constraint;
-	destination->halfspace_count = source->halfspace_count + 1U;
-	destination->leaf = source->leaf;
-	destination->stance = source->stance;
-	return 1;
-}
-
-static void MergeStats(sg_bsp_proof_context_t *proof,
-	const sg_configuration_lattice_stats_t *stats)
-{
-	proof->result.lattice_solve_calls += stats->solve_calls;
-	proof->result.lattice_constraints += stats->constraints;
-	if (stats->maximum_binary_shift >
-		proof->result.lattice_maximum_binary_shift)
-		proof->result.lattice_maximum_binary_shift =
-			stats->maximum_binary_shift;
-}
-
-int SG_BspProofRegionWitness(sg_bsp_proof_context_t *proof,
-	const sg_bsp_proof_region_t *region, float witness[3])
-{
-	sg_configuration_lattice_halfspace_t *constraints;
-	uint8_t *clearance;
-	sg_configuration_lattice_stats_t stats = { 0 };
-	int32_t point[3];
-	int positive_margin = 0;
-	uint32_t index;
-	int solved;
-
-	if (!AllocationFits(region->halfspace_count, sizeof(*constraints)) ||
-		!AllocationFits(region->halfspace_count, sizeof(*clearance)))
-	{
-		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OVERFLOW, 0);
-		return -1;
-	}
-	constraints = malloc((size_t)region->halfspace_count *
-		sizeof(*constraints));
-	clearance = malloc((size_t)region->halfspace_count * sizeof(*clearance));
-	if ((!constraints || !clearance) && region->halfspace_count)
-	{
-		free(constraints);
-		free(clearance);
-		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OUT_OF_MEMORY, 0);
-		return -1;
-	}
-	for (index = 0; index < region->halfspace_count; index++)
-	{
-		memcpy(constraints[index].normal, region->halfspaces[index].normal,
-			sizeof(constraints[index].normal));
-		constraints[index].distance = region->halfspaces[index].distance;
-		constraints[index].open = region->halfspaces[index].open;
-		clearance[index] = 1U;
-	}
-	solved = SG_ConfigurationLatticeFindMaxClearance(constraints, clearance,
-		region->halfspace_count, NULL, point, &positive_margin, &stats);
-	free(constraints);
-	free(clearance);
-	MergeStats(proof, &stats);
-	if (solved < 0)
-	{
-		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_HOST_DISAGREEMENT, 0);
-		return -1;
-	}
-	if (!solved || !positive_margin)
-		return 0;
-	for (index = 0; index < 3U; index++)
-		witness[index] = (float)point[index] * 0.125f;
-	return 1;
-}
-
-int SG_BspProofRegionHasProtocolVolume(sg_bsp_proof_context_t *proof,
-	const sg_bsp_proof_region_t *region)
-{
-	float witness[3];
-
-	return SG_BspProofRegionWitness(proof, region, witness);
-}
-
-static int AppendOwnedRegion(sg_bsp_proof_context_t *proof,
-	sg_bsp_proof_regions_t *regions, sg_bsp_proof_region_t *region)
-{
-	sg_bsp_proof_region_t *grown;
-	uint32_t capacity;
-
-	if (regions->count == UINT32_MAX)
-	{
-		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OVERFLOW, regions->count);
-		return 0;
-	}
-	if (regions->count == regions->capacity)
-	{
-		capacity = regions->capacity ? regions->capacity * 2U : 64U;
-		if (capacity < regions->capacity || capacity < regions->count + 1U)
-			capacity = regions->count + 1U;
-		if (!AllocationFits(capacity, sizeof(*grown)))
-		{
-			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OVERFLOW,
-				regions->count);
-			return 0;
-		}
-		grown = realloc(regions->values, (size_t)capacity * sizeof(*grown));
-		if (!grown)
-		{
-			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OUT_OF_MEMORY,
-				regions->count);
-			return 0;
-		}
-		regions->values = grown;
-		regions->capacity = capacity;
-	}
-	regions->values[regions->count++] = *region;
-	memset(region, 0, sizeof(*region));
-	return 1;
-}
 
 static sg_bsp_proof_halfspace_t DomainPlane(uint32_t axis, int minimum)
 {
@@ -238,6 +29,7 @@ static sg_bsp_proof_halfspace_t BspPlane(const sg_bsp_plane_t *source,
 		plane.normal[axis] = front ? -source->normal.value[axis] :
 			source->normal.value[axis];
 	plane.distance = front ? -source->distance : source->distance;
+	plane.open = (uint8_t)!front;
 	return plane;
 }
 
@@ -292,82 +84,6 @@ static sg_bsp_proof_halfspace_t Complement(
 	return source;
 }
 
-static int MarkWorldBrushes(sg_bsp_proof_context_t *proof)
-{
-	const sg_bsp_world_t *world = proof->authority->world;
-	int32_t *stack;
-	size_t stack_capacity;
-	size_t count = 0;
-
-	if (!world->model_count)
-		return 0;
-	if ((uint64_t)world->node_count + (uint64_t)world->leaf_count >
-		(uint64_t)SIZE_MAX)
-		return 0;
-	stack_capacity = (size_t)world->node_count + (size_t)world->leaf_count;
-	if (stack_capacity < 2U)
-		stack_capacity = 2U;
-	if (stack_capacity > SIZE_MAX / sizeof(*stack))
-		return 0;
-	stack = malloc(stack_capacity * sizeof(*stack));
-	if (!stack)
-		return 0;
-	stack[count++] = world->models[0].headnode;
-	while (count)
-	{
-		int32_t child = stack[--count];
-
-		if (child >= 0)
-		{
-			const sg_bsp_node_t *node;
-
-			if ((uint32_t)child >= world->node_count ||
-				count > stack_capacity - 2U)
-			{
-				free(stack);
-				return 0;
-			}
-			node = &world->nodes[(uint32_t)child];
-			stack[count++] = node->children[0];
-			stack[count++] = node->children[1];
-		}
-		else
-		{
-			uint32_t leaf_index = ~(uint32_t)child;
-			const sg_bsp_leaf_t *leaf;
-			uint32_t offset;
-
-			if (leaf_index >= world->leaf_count)
-			{
-				free(stack);
-				return 0;
-			}
-			leaf = &world->leaves[leaf_index];
-			if (leaf->first_leaf_brush > world->leaf_brush_count ||
-				leaf->leaf_brush_count > world->leaf_brush_count -
-					leaf->first_leaf_brush)
-			{
-				free(stack);
-				return 0;
-			}
-			for (offset = 0; offset < leaf->leaf_brush_count; offset++)
-			{
-				uint32_t brush = world->leaf_brushes[
-					leaf->first_leaf_brush + offset];
-
-				if (brush >= world->brush_count)
-				{
-					free(stack);
-					return 0;
-				}
-				proof->world_brushes[brush] = 1U;
-			}
-		}
-	}
-	free(stack);
-	return 1;
-}
-
 static int BlockingBrush(const sg_bsp_brush_t *brush)
 {
 	return brush->side_count != 0U &&
@@ -402,88 +118,337 @@ static int AppendAllBrushPlanes(sg_bsp_proof_context_t *proof,
 	return 1;
 }
 
-static int ReplayBrushes(sg_bsp_proof_context_t *proof,
-	const sg_bsp_proof_region_t *region, uint32_t first_brush);
+static int SubtractConvex(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *source,
+	const sg_bsp_proof_region_t *subtract,
+	sg_bsp_proof_regions_t *outside, int exact_output);
 
-static int ReplayBrushSide(sg_bsp_proof_context_t *proof,
-	const sg_bsp_proof_region_t *region, uint32_t brush, uint32_t side,
-	uint32_t next_brush)
+static int BoundsOverlap(const sg_bsp_proof_region_t *left,
+	const sg_bsp_proof_region_t *right)
 {
-	const sg_bsp_brush_t *record = &proof->authority->world->brushes[brush];
-	sg_bsp_proof_halfspace_t inside_plane;
-	sg_bsp_proof_halfspace_t outside_plane;
-	sg_bsp_proof_region_t outside;
-	sg_bsp_proof_region_t inside;
-	int volume;
+	uint32_t axis;
 
-	if (side == record->side_count)
-		return 1;
-	if (!BrushPlane(proof, brush, side, region->stance, &inside_plane))
-		return 0;
-	outside_plane = Complement(inside_plane);
-	if (!SG_BspProofAppendConstraint(region, &outside_plane, &outside))
-		return 0;
-	volume = SG_BspProofRegionHasProtocolVolume(proof, &outside);
-	if (volume < 0 || (volume && !ReplayBrushes(proof, &outside, next_brush)))
-	{
-		SG_BspProofFreeRegion(&outside);
-		return 0;
-	}
-	SG_BspProofFreeRegion(&outside);
-	if (!SG_BspProofAppendConstraint(region, &inside_plane, &inside))
-		return 0;
-	volume = SG_BspProofRegionHasProtocolVolume(proof, &inside);
-	if (volume < 0 || (volume && !ReplayBrushSide(proof, &inside, brush,
-			side + 1U, next_brush)))
-	{
-		SG_BspProofFreeRegion(&inside);
-		return 0;
-	}
-	SG_BspProofFreeRegion(&inside);
+	for (axis = 0; axis < 3U; axis++)
+		if (left->lattice_maxs[axis] < right->lattice_mins[axis] ||
+			right->lattice_maxs[axis] < left->lattice_mins[axis])
+			return 0;
 	return 1;
 }
 
-static int ReplayBrushes(sg_bsp_proof_context_t *proof,
-	const sg_bsp_proof_region_t *region, uint32_t first_brush)
+static float CollisionRoundingAllowance(const sg_bsp_plane_t *plane,
+	const sg_rune_hull_profile_t *hull)
+{
+	float scale = fabsf(plane->distance) + 1.0f;
+	uint32_t axis;
+
+	for (axis = 0; axis < 3U; axis++)
+	{
+		float hull_extent = fmaxf(fabsf(hull->mins.value[axis]),
+			fabsf(hull->maxs.value[axis]));
+		float origin_extent = fmaxf(-SG_CONFIGURATION_PMOVE_ORIGIN_MIN,
+			SG_CONFIGURATION_PMOVE_ORIGIN_MAX);
+
+		scale += fabsf(plane->normal.value[axis]) *
+			(origin_extent + hull_extent + 1.0f);
+	}
+	return scale * FLT_EPSILON * 16.0f;
+}
+
+static sg_bsp_proof_halfspace_t CollisionBspPlane(
+	const sg_bsp_plane_t *source, const sg_rune_hull_profile_t *hull,
+	uint32_t branch)
+{
+	sg_bsp_proof_halfspace_t plane;
+	float corner[3];
+	float corner_distance;
+	float allowance = CollisionRoundingAllowance(source, hull);
+	uint32_t axis;
+
+	memset(&plane, 0, sizeof(plane));
+	if (branch == 0U)
+	{
+		for (axis = 0; axis < 3U; axis++)
+		{
+			plane.normal[axis] = -source->normal.value[axis];
+			corner[axis] = source->normal.value[axis] < 0.0f ?
+				hull->mins.value[axis] - 1.0f :
+				hull->maxs.value[axis] + 1.0f;
+		}
+		corner_distance = SG_BspProofDot(corner, source->normal.value);
+		plane.distance = corner_distance - source->distance;
+	}
+	else
+	{
+		memcpy(plane.normal, source->normal.value, sizeof(plane.normal));
+		for (axis = 0; axis < 3U; axis++)
+			corner[axis] = source->normal.value[axis] < 0.0f ?
+				hull->maxs.value[axis] + 1.0f :
+				hull->mins.value[axis] - 1.0f;
+		corner_distance = SG_BspProofDot(corner, source->normal.value);
+		plane.distance = source->distance - corner_distance;
+		plane.open = 1U;
+	}
+	plane.distance += allowance;
+	return plane;
+}
+
+static int BucketBlocker(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *region, int32_t child)
 {
 	const sg_bsp_world_t *world = proof->authority->world;
-	uint32_t brush;
+	uint32_t branch;
 
-	for (brush = first_brush; brush < world->brush_count; brush++)
-		if (proof->world_brushes[brush] && BlockingBrush(&world->brushes[brush]))
-		{
-			sg_bsp_proof_region_t intersection;
-			int volume;
-
-			if (world->brushes[brush].first_side > world->brush_side_count ||
-				world->brushes[brush].side_count > world->brush_side_count -
-					world->brushes[brush].first_side ||
-				!AppendAllBrushPlanes(proof, region, brush, &intersection))
-				return 0;
-			volume = SG_BspProofRegionHasProtocolVolume(proof, &intersection);
-			SG_BspProofFreeRegion(&intersection);
-			if (volume < 0)
-				return 0;
-			if (volume)
-				return ReplayBrushSide(proof, region, brush, 0U, brush + 1U);
-		}
+	if (child < 0)
 	{
-		sg_bsp_proof_region_t expected;
+		sg_bsp_proof_region_t blocker;
+		uint32_t leaf = ~(uint32_t)child;
+		uint32_t bucket;
+		int bounded;
+
+		if (leaf >= world->leaf_count ||
+			!SG_BspProofCopyRegion(region, &blocker))
+			return 0;
+		blocker.leaf = leaf;
+		bounded = SG_BspProofRegionBounds(proof, &blocker);
+		if (bounded < 0)
+		{
+			SG_BspProofFreeRegion(&blocker);
+			return 0;
+		}
+		if (!bounded)
+		{
+			SG_BspProofFreeRegion(&blocker);
+			return 1;
+		}
+		bucket = (uint32_t)region->stance * world->leaf_count + leaf;
+		proof->result.blocker_cell_candidates++;
+		if (!SG_BspProofAppendOwnedRegion(proof, &proof->blockers[bucket],
+				&blocker))
+		{
+			SG_BspProofFreeRegion(&blocker);
+			return 0;
+		}
+		return 1;
+	}
+	if ((uint32_t)child >= world->node_count ||
+		world->nodes[(uint32_t)child].plane >= world->plane_count)
+		return 0;
+	for (branch = 0; branch < 2U; branch++)
+	{
+		sg_bsp_proof_halfspace_t plane = BspPlane(
+			&world->planes[world->nodes[(uint32_t)child].plane], branch == 0U);
+		sg_bsp_proof_region_t split;
+		int present;
+
+		if (!SG_BspProofAppendConstraint(region, &plane, &split))
+			return 0;
+		present = SG_BspProofRegionHasProtocolPoint(proof, &split);
+		if (present < 0 || (present && !BucketBlocker(proof, &split,
+				world->nodes[(uint32_t)child].children[branch])))
+		{
+			SG_BspProofFreeRegion(&split);
+			return 0;
+		}
+		SG_BspProofFreeRegion(&split);
+	}
+	return 1;
+}
+
+static int ReplayCollisionBsp(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *region, int32_t child)
+{
+	const sg_bsp_world_t *world = proof->authority->world;
+	const sg_rune_hull_profile_t *hull =
+		region->stance == SG_RUNE_STANCE_STANDING ?
+		&proof->authority->identity.standing_hull :
+		&proof->authority->identity.crouching_hull;
+	uint32_t branch;
+
+	if (child < 0)
+	{
+		uint32_t leaf_index = ~(uint32_t)child;
+		const sg_bsp_leaf_t *leaf;
+		uint32_t offset;
+
+		if (leaf_index >= world->leaf_count)
+			return 0;
+		proof->result.collision_leaf_visits++;
+		leaf = &world->leaves[leaf_index];
+		if (!((uint32_t)leaf->contents & SG_HOST_MASK_PLAYER_SOLID))
+			return 1;
+		if (leaf->first_leaf_brush > world->leaf_brush_count ||
+			leaf->leaf_brush_count > world->leaf_brush_count -
+				leaf->first_leaf_brush)
+			return 0;
+		for (offset = 0; offset < leaf->leaf_brush_count; offset++)
+		{
+			uint32_t brush_index = world->leaf_brushes[
+				leaf->first_leaf_brush + offset];
+			sg_bsp_proof_region_t blocker;
+			int present;
+
+			proof->result.leaf_brush_candidates++;
+			if (brush_index >= world->brush_count)
+				return 0;
+			if (!BlockingBrush(&world->brushes[brush_index]))
+				continue;
+			if (world->brushes[brush_index].first_side >
+					world->brush_side_count ||
+				world->brushes[brush_index].side_count >
+					world->brush_side_count -
+					world->brushes[brush_index].first_side ||
+				!AppendAllBrushPlanes(proof, region, brush_index, &blocker))
+				return 0;
+			present = SG_BspProofRegionHasProtocolPoint(proof, &blocker);
+			if (present < 0 || (present && !BucketBlocker(proof, &blocker,
+					world->models[0].headnode)))
+			{
+				SG_BspProofFreeRegion(&blocker);
+				return 0;
+			}
+			SG_BspProofFreeRegion(&blocker);
+		}
+		return 1;
+	}
+	if ((uint32_t)child >= world->node_count ||
+		world->nodes[(uint32_t)child].plane >= world->plane_count)
+		return 0;
+	for (branch = 0; branch < 2U; branch++)
+	{
+		sg_bsp_proof_halfspace_t plane = CollisionBspPlane(
+			&world->planes[world->nodes[(uint32_t)child].plane], hull, branch);
+		sg_bsp_proof_region_t split;
+		int present;
+
+		if (!SG_BspProofAppendConstraint(region, &plane, &split))
+			return 0;
+		present = SG_BspProofRegionHasProtocolPoint(proof, &split);
+		if (present < 0 || (present && !ReplayCollisionBsp(proof, &split,
+				world->nodes[(uint32_t)child].children[branch])))
+		{
+			SG_BspProofFreeRegion(&split);
+			return 0;
+		}
+		SG_BspProofFreeRegion(&split);
+	}
+	return 1;
+}
+
+static int AuditRemovedRegion(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *source,
+	const sg_bsp_proof_region_t *blocker)
+{
+	sg_bsp_proof_region_t intersection;
+	int32_t point[3];
+	uint32_t constraint;
+	int present;
+
+	if (!SG_BspProofCopyRegion(source, &intersection))
+		return 0;
+	for (constraint = 0; constraint < blocker->halfspace_count; constraint++)
+	{
+		sg_bsp_proof_region_t next;
+
+		if (!SG_BspProofAppendConstraint(&intersection,
+				&blocker->halfspaces[constraint], &next))
+		{
+			SG_BspProofFreeRegion(&intersection);
+			return 0;
+		}
+		SG_BspProofFreeRegion(&intersection);
+		intersection = next;
+	}
+	present = SG_BspProofRegionPointWitness(proof, &intersection, point);
+	SG_BspProofFreeRegion(&intersection);
+	if (present > 0)
+	{
+		float origin[3];
+		sg_host_collision_pose_t pose;
+
+		for (constraint = 0; constraint < 3U; constraint++)
+			origin[constraint] = (float)point[constraint] * 0.125f;
+		proof->result.analytically_removed_pieces++;
+		if (!SG_HostCollisionClassifyPose(proof->authority, NULL, origin,
+				source->stance, &pose) || pose.valid)
+		{
+			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_HOST_DISAGREEMENT,
+				source->leaf);
+			return 0;
+		}
+	}
+	return present >= 0;
+}
+
+static int AppendExpectedLeaf(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *region)
+{
+	const sg_bsp_world_t *world = proof->authority->world;
+	uint32_t bucket = (uint32_t)region->stance * world->leaf_count +
+		region->leaf;
+	sg_bsp_proof_regions_t fragments = { 0 };
+	uint32_t blocker_index;
+	sg_bsp_proof_region_t initial;
+
+	if (!SG_BspProofCopyRegion(region, &initial) ||
+		!SG_BspProofAppendOwnedRegion(proof, &fragments, &initial))
+	{
+		SG_BspProofFreeRegion(&initial);
+		return 0;
+	}
+	for (blocker_index = 0;
+		blocker_index < proof->blockers[bucket].count && fragments.count;
+		blocker_index++)
+	{
+		const sg_bsp_proof_region_t *blocker =
+			&proof->blockers[bucket].values[blocker_index];
+		sg_bsp_proof_regions_t next = { 0 };
+		uint32_t fragment;
+
+		for (fragment = 0; fragment < fragments.count; fragment++)
+		{
+			sg_bsp_proof_region_t *candidate = &fragments.values[fragment];
+			int bounded = SG_BspProofRegionBounds(proof, candidate);
+
+			if (bounded < 0)
+				goto failure;
+			if (!bounded || !BoundsOverlap(candidate, blocker))
+			{
+				sg_bsp_proof_region_t copy;
+
+				if (!SG_BspProofCopyRegion(candidate, &copy) ||
+					!SG_BspProofAppendOwnedRegion(proof, &next, &copy))
+				{
+					SG_BspProofFreeRegion(&copy);
+					goto failure;
+				}
+				continue;
+			}
+			proof->result.blocker_subtraction_candidates++;
+			if (!AuditRemovedRegion(proof, candidate, blocker) ||
+				!SubtractConvex(proof, candidate, blocker, &next, 0))
+				goto failure;
+		}
+		SG_BspProofFreeRegions(&fragments);
+		fragments = next;
+	}
+	for (blocker_index = 0; blocker_index < fragments.count; blocker_index++)
+	{
+		sg_bsp_proof_region_t expected = fragments.values[blocker_index];
 		sg_host_collision_pose_t pose;
 		int volume;
 
-		if (!SG_BspProofCopyRegion(region, &expected))
-			return 0;
+		memset(&fragments.values[blocker_index], 0,
+			sizeof(fragments.values[blocker_index]));
 		volume = SG_BspProofRegionWitness(proof, &expected, expected.witness);
 		if (volume < 0)
 		{
 			SG_BspProofFreeRegion(&expected);
-			return 0;
+			goto failure;
 		}
 		if (!volume)
 		{
 			SG_BspProofFreeRegion(&expected);
-			return 1;
+			continue;
 		}
 		if (!SG_HostCollisionClassifyPose(proof->authority, NULL,
 				expected.witness, expected.stance, &pose) || !pose.valid)
@@ -491,15 +456,21 @@ static int ReplayBrushes(sg_bsp_proof_context_t *proof,
 			SG_BspProofFreeRegion(&expected);
 			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_HOST_DISAGREEMENT,
 				expected.leaf);
-			return 0;
+			goto failure;
 		}
-		if (!AppendOwnedRegion(proof, &proof->expected, &expected))
+		if (SG_BspProofRegionBounds(proof, &expected) <= 0 ||
+			!SG_BspProofAppendOwnedRegion(proof, &proof->expected, &expected))
 		{
 			SG_BspProofFreeRegion(&expected);
-			return 0;
+			goto failure;
 		}
 	}
+	SG_BspProofFreeRegions(&fragments);
 	return 1;
+
+failure:
+	SG_BspProofFreeRegions(&fragments);
+	return 0;
 }
 
 static int ReplayBsp(sg_bsp_proof_context_t *proof,
@@ -521,7 +492,7 @@ static int ReplayBsp(sg_bsp_proof_context_t *proof,
 				&terminal))
 			return 0;
 		terminal.leaf = leaf;
-		result = ReplayBrushes(proof, &terminal, 0U);
+		result = AppendExpectedLeaf(proof, &terminal);
 		SG_BspProofFreeRegion(&terminal);
 		return result;
 	}
@@ -552,11 +523,41 @@ int SG_BspProofBuildExpected(sg_bsp_proof_context_t *proof)
 	sg_rune_stance_t stance;
 	uint32_t axis;
 
-	proof->world_brushes = calloc(proof->authority->world->brush_count ?
-		proof->authority->world->brush_count : 1U,
-		sizeof(*proof->world_brushes));
-	if (!proof->world_brushes || !MarkWorldBrushes(proof))
+	if (proof->authority->world->leaf_count >
+		UINT32_MAX / (uint32_t)SG_RUNE_STANCE_COUNT)
 		return 0;
+	proof->blocker_bucket_count = proof->authority->world->leaf_count *
+		(uint32_t)SG_RUNE_STANCE_COUNT;
+	proof->blockers = calloc(proof->blocker_bucket_count ?
+		proof->blocker_bucket_count : 1U, sizeof(*proof->blockers));
+	if (!proof->blockers)
+		return 0;
+	for (stance = SG_RUNE_STANCE_STANDING;
+		stance < SG_RUNE_STANCE_COUNT; stance++)
+	{
+		memset(&domain, 0, sizeof(domain));
+		domain.leaf = SG_CONFIGURATION_INDEX_NONE;
+		domain.stance = stance;
+		for (axis = 0; axis < 3U; axis++)
+		{
+			sg_bsp_proof_halfspace_t maximum = DomainPlane(axis, 0);
+			sg_bsp_proof_halfspace_t minimum = DomainPlane(axis, 1);
+			sg_bsp_proof_region_t next;
+
+			if (!SG_BspProofAppendConstraint(&domain, &maximum, &next))
+				goto failure;
+			SG_BspProofFreeRegion(&domain);
+			domain = next;
+			if (!SG_BspProofAppendConstraint(&domain, &minimum, &next))
+				goto failure;
+			SG_BspProofFreeRegion(&domain);
+			domain = next;
+		}
+		if (!ReplayCollisionBsp(proof, &domain,
+				proof->authority->world->models[0].headnode))
+			goto failure;
+		SG_BspProofFreeRegion(&domain);
+	}
 	for (stance = SG_RUNE_STANCE_STANDING;
 		stance < SG_RUNE_STANCE_COUNT; stance++)
 	{
@@ -591,30 +592,32 @@ failure:
 	return 0;
 }
 
-static int AppendIfVolume(sg_bsp_proof_context_t *proof,
-	sg_bsp_proof_regions_t *regions, sg_bsp_proof_region_t *region)
+static int AppendIfPresent(sg_bsp_proof_context_t *proof,
+	sg_bsp_proof_regions_t *regions, sg_bsp_proof_region_t *region,
+	int exact)
 {
-	int volume = SG_BspProofRegionHasProtocolVolume(proof, region);
+	int present = exact ? SG_BspProofRegionHasProtocolPoint(proof, region) :
+		SG_BspProofRegionHasProtocolVolume(proof, region);
 
-	if (volume < 0)
+	if (present < 0)
 		return 0;
-	if (!volume)
+	if (!present)
 	{
 		SG_BspProofFreeRegion(region);
 		return 1;
 	}
-	return AppendOwnedRegion(proof, regions, region);
+	return SG_BspProofAppendOwnedRegion(proof, regions, region);
 }
 
 static int SubtractConvex(sg_bsp_proof_context_t *proof,
 	const sg_bsp_proof_region_t *source,
 	const sg_bsp_proof_region_t *subtract,
-	sg_bsp_proof_regions_t *outside)
+	sg_bsp_proof_regions_t *outside, int exact_output)
 {
 	sg_bsp_proof_region_t inside;
 	uint32_t constraint;
 	int subset = 1;
-	int volume;
+	int present;
 
 	if (!SG_BspProofCopyRegion(source, &inside))
 		return 0;
@@ -628,16 +631,16 @@ static int SubtractConvex(sg_bsp_proof_context_t *proof,
 		SG_BspProofFreeRegion(&inside);
 		inside = next;
 	}
-	volume = SG_BspProofRegionHasProtocolVolume(proof, &inside);
+	present = SG_BspProofRegionHasProtocolPoint(proof, &inside);
 	SG_BspProofFreeRegion(&inside);
-	if (volume < 0)
+	if (present < 0)
 		return 0;
-	if (!volume)
+	if (!present)
 	{
 		sg_bsp_proof_region_t copy;
 
 		if (!SG_BspProofCopyRegion(source, &copy) ||
-			!AppendOwnedRegion(proof, outside, &copy))
+			!SG_BspProofAppendOwnedRegion(proof, outside, &copy))
 		{
 			SG_BspProofFreeRegion(&copy);
 			return 0;
@@ -652,11 +655,11 @@ static int SubtractConvex(sg_bsp_proof_context_t *proof,
 
 		if (!SG_BspProofAppendConstraint(source, &complement, &difference))
 			return 0;
-		volume = SG_BspProofRegionHasProtocolVolume(proof, &difference);
+		present = SG_BspProofRegionHasProtocolPoint(proof, &difference);
 		SG_BspProofFreeRegion(&difference);
-		if (volume < 0)
+		if (present < 0)
 			return 0;
-		if (volume)
+		if (present)
 		{
 			subset = 0;
 			break;
@@ -672,11 +675,11 @@ static int SubtractConvex(sg_bsp_proof_context_t *proof,
 			Complement(subtract->halfspaces[constraint]);
 		sg_bsp_proof_region_t fragment;
 		sg_bsp_proof_region_t next;
-		int fragment_volume;
+		int inside_present;
 
 		if (!SG_BspProofAppendConstraint(&inside, &complement, &fragment))
 			goto failure;
-		if (!AppendIfVolume(proof, outside, &fragment))
+		if (!AppendIfPresent(proof, outside, &fragment, exact_output))
 		{
 			SG_BspProofFreeRegion(&fragment);
 			goto failure;
@@ -686,10 +689,10 @@ static int SubtractConvex(sg_bsp_proof_context_t *proof,
 			goto failure;
 		SG_BspProofFreeRegion(&inside);
 		inside = next;
-		fragment_volume = SG_BspProofRegionHasProtocolVolume(proof, &inside);
-		if (fragment_volume < 0)
+		inside_present = SG_BspProofRegionHasProtocolPoint(proof, &inside);
+		if (inside_present < 0)
 			goto failure;
-		if (!fragment_volume)
+		if (!inside_present)
 		{
 			SG_BspProofFreeRegion(&inside);
 			return 1;
@@ -703,16 +706,17 @@ failure:
 	return 0;
 }
 
-int SG_BspProofRegionOutsideUnion(sg_bsp_proof_context_t *proof,
+static int RegionOutsideUnion(sg_bsp_proof_context_t *proof,
 	const sg_bsp_proof_region_t *source,
-	const sg_bsp_proof_region_t *subtractors, uint32_t subtractor_count)
+	const sg_bsp_proof_region_t *subtractors, uint32_t subtractor_count,
+	int exact)
 {
 	sg_bsp_proof_regions_t fragments = { 0 };
 	uint32_t subtractor;
 	sg_bsp_proof_region_t initial;
 
 	if (!SG_BspProofCopyRegion(source, &initial) ||
-		!AppendOwnedRegion(proof, &fragments, &initial))
+		!SG_BspProofAppendOwnedRegion(proof, &fragments, &initial))
 	{
 		SG_BspProofFreeRegion(&initial);
 		return -1;
@@ -729,7 +733,7 @@ int SG_BspProofRegionOutsideUnion(sg_bsp_proof_context_t *proof,
 			continue;
 		for (fragment = 0; fragment < fragments.count; fragment++)
 			if (!SubtractConvex(proof, &fragments.values[fragment], candidate,
-					&next))
+					&next, exact))
 			{
 				SG_BspProofFreeRegions(&next);
 				SG_BspProofFreeRegions(&fragments);
@@ -741,6 +745,20 @@ int SG_BspProofRegionOutsideUnion(sg_bsp_proof_context_t *proof,
 	subtractor = fragments.count;
 	SG_BspProofFreeRegions(&fragments);
 	return subtractor != 0U;
+}
+
+int SG_BspProofRegionOutsideUnion(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *source,
+	const sg_bsp_proof_region_t *subtractors, uint32_t subtractor_count)
+{
+	return RegionOutsideUnion(proof, source, subtractors, subtractor_count, 0);
+}
+
+int SG_BspProofRegionOutsideUnionExact(sg_bsp_proof_context_t *proof,
+	const sg_bsp_proof_region_t *source,
+	const sg_bsp_proof_region_t *subtractors, uint32_t subtractor_count)
+{
+	return RegionOutsideUnion(proof, source, subtractors, subtractor_count, 1);
 }
 
 int SG_BspProofRegionsIntersect(sg_bsp_proof_context_t *proof,

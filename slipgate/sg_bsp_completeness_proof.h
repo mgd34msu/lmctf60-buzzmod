@@ -1,4 +1,5 @@
-/* Certificate-independent BSP/host proof of configuration-space coverage. */
+/* Certificate-independent proof of static world-model-0 BSP configuration
+ * coverage. Transformed mover instances are outside this proof's scope. */
 #ifndef SG_BSP_COMPLETENESS_PROOF_H
 #define SG_BSP_COMPLETENESS_PROOF_H
 
@@ -10,6 +11,7 @@ typedef enum sg_bsp_completeness_code_e
 	SG_BSP_COMPLETENESS_INVALID_ARGUMENT,
 	SG_BSP_COMPLETENESS_INVALID_WORLD,
 	SG_BSP_COMPLETENESS_INVALID_CELL,
+	SG_BSP_COMPLETENESS_INVALID_PORTAL,
 	SG_BSP_COMPLETENESS_OMITTED_CELL,
 	SG_BSP_COMPLETENESS_INVENTED_CELL,
 	SG_BSP_COMPLETENESS_OMITTED_PORTAL,
@@ -39,6 +41,18 @@ typedef struct sg_bsp_completeness_result_s
 	uint32_t airborne_witnesses;
 	uint32_t water_witnesses;
 	uint32_t void_witnesses;
+	/* State witness counts are diagnostics, not semantic partition proofs. */
+	uint64_t collision_leaf_visits;
+	uint64_t leaf_brush_candidates;
+	uint64_t blocker_cell_candidates;
+	uint64_t blocker_subtraction_candidates;
+	uint64_t analytically_removed_pieces;
+	uint64_t coverage_region_examined;
+	uint64_t coverage_region_candidates;
+	uint64_t cell_overlap_candidates;
+	uint64_t portal_face_candidates;
+	uint64_t portal_endpoint_lookups;
+	uint64_t portal_lookup_candidates;
 	uint64_t lattice_solve_calls;
 	uint64_t lattice_constraints;
 	uint32_t lattice_maximum_binary_shift;

@@ -130,7 +130,14 @@ int SG_BspCompletenessProve(const sg_host_collision_authority_t *authority,
 	success = 1;
 
 done:
-	free(proof.world_brushes);
+	if (proof.blockers)
+	{
+		uint32_t bucket;
+
+		for (bucket = 0; bucket < proof.blocker_bucket_count; bucket++)
+			SG_BspProofFreeRegions(&proof.blockers[bucket]);
+		free(proof.blockers);
+	}
 	SG_BspProofFreeRegions(&proof.expected);
 	*result_out = proof.result;
 	return success;
@@ -144,6 +151,8 @@ const char *SG_BspCompletenessCodeString(sg_bsp_completeness_code_t code)
 	case SG_BSP_COMPLETENESS_INVALID_ARGUMENT: return "invalid argument";
 	case SG_BSP_COMPLETENESS_INVALID_WORLD: return "invalid BSP world";
 	case SG_BSP_COMPLETENESS_INVALID_CELL: return "invalid represented cell";
+	case SG_BSP_COMPLETENESS_INVALID_PORTAL:
+		return "invalid represented portal";
 	case SG_BSP_COMPLETENESS_OMITTED_CELL: return "omitted valid cell volume";
 	case SG_BSP_COMPLETENESS_INVENTED_CELL:
 		return "invented player-origin volume";
