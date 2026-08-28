@@ -10,7 +10,8 @@
 #include "sg_configuration_lattice.h"
 
 #define SG_WATER_COMMAND_MAGNITUDE INT16_C(400)
-#define SG_WATER_PLANE_EPSILON 0.0001f
+#define SG_WATER_PLANE_DISTANCE_EPSILON 0.0001
+#define SG_WATER_BOUNDS_EPSILON 0.0001f
 
 typedef struct sg_water_build_s
 {
@@ -79,6 +80,18 @@ static float Dot3(const float left[3], const float right[3])
 {
 	return left[0] * right[0] + left[1] * right[1] +
 		left[2] * right[2];
+}
+
+static double PlaneSignedDistance(const float point[3], const float normal[3],
+	float distance)
+{
+	double x = normal[0];
+	double y = normal[1];
+	double z = normal[2];
+	double length = sqrt(x * x + y * y + z * z);
+
+	return ((double)point[0] * x + (double)point[1] * y +
+		(double)point[2] * z - (double)distance) / length;
 }
 
 static int AllocationFits(size_t count, size_t element_size)
@@ -317,7 +330,10 @@ static int SourceValid(sg_water_build_t *build)
 			record->vertex_count >
 				build->configuration->vertex_count - record->first_vertex ||
 			!Finite3(record->plane.normal) ||
-			!isfinite(record->plane.distance))
+			!isfinite(record->plane.distance) ||
+			(record->plane.normal[0] == 0.0f &&
+			 record->plane.normal[1] == 0.0f &&
+			 record->plane.normal[2] == 0.0f))
 			return 0;
 	}
 	for (portal = 0U; portal < build->configuration->vertex_count; portal++)
@@ -662,16 +678,27 @@ static int ProbeLocalFact(sg_water_build_t *build, uint32_t region,
 	const float direction[3], sg_water_capability_fact_t *fact)
 {
 	sg_host_pmove_result_t result;
+	uint32_t destination_binding;
 
 	if (!Probe(build, region, fact->source_witness.value, direction, fact,
 		&result))
 		return 0;
 	if (!PointInRegion(build, region, result.origin))
 		return 1;
-	if (!PhaseContainsVelocity(&build->phases[fact->destination_phase],
-		result.velocity))
-		return 1;
-	return AppendFact(build, fact);
+	for (destination_binding = build->binding_offsets[region];
+		destination_binding < build->binding_offsets[region + 1U];
+		destination_binding++)
+	{
+		sg_water_capability_fact_t emitted = *fact;
+
+		emitted.destination_phase =
+			build->bindings[destination_binding].phase;
+		if (PhaseContainsVelocity(
+			&build->phases[emitted.destination_phase], result.velocity) &&
+			!AppendFact(build, &emitted))
+			return 0;
+	}
+	return 1;
 }
 
 static void FillRegionFact(const sg_water_build_t *build, uint32_t region,
@@ -860,10 +887,14 @@ static int SemanticPlaneCoplanar(
 
 	CanonicalSemanticPlane(face, left_normal, &left_distance);
 	CanonicalConfigurationPlane(plane, right_normal, &right_distance);
-	return fabsf(left_normal[0] - right_normal[0]) <= SG_WATER_PLANE_EPSILON &&
-		fabsf(left_normal[1] - right_normal[1]) <= SG_WATER_PLANE_EPSILON &&
-		fabsf(left_normal[2] - right_normal[2]) <= SG_WATER_PLANE_EPSILON &&
-		fabsf(left_distance - right_distance) <= SG_WATER_PLANE_EPSILON;
+	return fabsf(left_normal[0] - right_normal[0]) <=
+		SG_WATER_PLANE_DISTANCE_EPSILON &&
+		fabsf(left_normal[1] - right_normal[1]) <=
+		SG_WATER_PLANE_DISTANCE_EPSILON &&
+		fabsf(left_normal[2] - right_normal[2]) <=
+		SG_WATER_PLANE_DISTANCE_EPSILON &&
+		fabsf(left_distance - right_distance) <=
+		SG_WATER_PLANE_DISTANCE_EPSILON;
 }
 
 static int SharedBoundaryWitness(sg_water_build_t *build,
@@ -1019,9 +1050,11 @@ static int RegionSideWitness(sg_water_build_t *build, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&build->semantics->faces[region->first_face + local];
 
-		if (Dot3(witness, record->normal) > record->distance ||
+		if (PlaneSignedDistance(witness, record->normal, record->distance) >
+				0.0 ||
 			(local + region->first_face == boundary_face &&
-			 Dot3(witness, record->normal) >= record->distance))
+			 PlaneSignedDistance(witness, record->normal,
+				record->distance) >= 0.0))
 			direct = 0;
 	}
 	if (direct)
@@ -1078,14 +1111,16 @@ static int RegionSideWitness(sg_water_build_t *build, uint32_t region_index,
 		return 0;
 	for (local = 0U; local < 3U; local++)
 		witness[local] = (float)point[local] * 0.125f;
-	if (Dot3(witness, boundary->normal) >= boundary->distance)
+	if (PlaneSignedDistance(witness, boundary->normal,
+		boundary->distance) >= 0.0)
 		return 0;
 	for (local = 0U; local < region->face_count; local++)
 	{
 		const sg_configuration_semantic_face_t *record =
 			&build->semantics->faces[region->first_face + local];
 
-		if (Dot3(witness, record->normal) > record->distance)
+		if (PlaneSignedDistance(witness, record->normal,
+			record->distance) > 0.0)
 			return 0;
 	}
 	return 1;
@@ -1104,8 +1139,8 @@ static int PointInRegion(const sg_water_build_t *build, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&build->semantics->faces[face];
 
-		if (Dot3(point, record->normal) - record->distance >
-			SG_WATER_PLANE_EPSILON)
+		if (PlaneSignedDistance(point, record->normal, record->distance) >
+			SG_WATER_PLANE_DISTANCE_EPSILON)
 			return 0;
 	}
 	return 1;
@@ -1222,7 +1257,7 @@ static int AppendBoundaryPair(sg_water_build_t *build, uint32_t first_region,
 		if (fmaxf(first->bounds.mins.value[axis],
 				second->bounds.mins.value[axis]) >
 			fminf(first->bounds.maxs.value[axis],
-				second->bounds.maxs.value[axis]) + SG_WATER_PLANE_EPSILON)
+				second->bounds.maxs.value[axis]) + SG_WATER_BOUNDS_EPSILON)
 			return 1;
 	shared = SharedBoundaryWitness(build, first_region, first_face,
 		second_region, second_face, portal, witness);

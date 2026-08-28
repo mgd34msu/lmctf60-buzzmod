@@ -225,6 +225,19 @@ static void TestPortalAndSubmergedCorridor(void)
 	SG_WaterCapabilityDestroy(capabilities);
 
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
+	fixture.faces[0].normal[0] /= 16384.0f;
+	fixture.faces[7].normal[0] /= 16384.0f;
+	capabilities = NULL;
+	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	if (capabilities)
+	{
+		entry = FindFact(capabilities, SG_WATER_CAPABILITY_ENTRY, 0U, 1U,
+			SG_WATER_DIRECTION_BOUNDARY);
+		CHECK(entry != NULL && entry->portal == 0U);
+		SG_WaterCapabilityDestroy(capabilities);
+	}
+
+	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
 	fixture.portal_vertices[0].value[1] = 24.0f;
 	fixture.portal_vertices[1].value[1] = 40.0f;
 	fixture.portal_vertices[2].value[1] = 40.0f;
@@ -467,6 +480,127 @@ static void TestDestinationPhaseSelection(void)
 	SG_WaterCapabilityDestroy(capabilities);
 }
 
+static void TestSameRegionPhaseSelection(void)
+{
+	water_fixture_t fixture;
+	sg_rune_phase_basis_t phases[3];
+	sg_water_phase_binding_t bindings[3];
+	sg_water_capability_set_t *capabilities = NULL;
+	sg_water_capability_error_t error;
+	uint32_t fact;
+	uint32_t transitions = 0U;
+
+	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 0));
+	phases[0] = fixture.phases[0];
+	phases[1] = fixture.phases[1];
+	phases[1].velocity.x.min_value = 0.0f;
+	phases[1].velocity.x.max_value = 0.0f;
+	phases[2] = fixture.phases[1];
+	phases[2].order.source_index = 2U;
+	phases[2].order.local_ordinal = 2U;
+	phases[2].order.variant = 2U;
+	phases[2].id.value =
+		SG_RuneModelStableIdFromOrderKey(&phases[2].order);
+	phases[2].velocity.x.min_value = 12.0f;
+	phases[2].velocity.x.max_value = 13.0f;
+	bindings[0] = fixture.bindings[0];
+	bindings[1] = fixture.bindings[1];
+	bindings[2] = fixture.bindings[1];
+	bindings[2].phase = 2U;
+	CHECK(SG_WaterCapabilityBuild(&fixture.authority, WaterFixturePmove,
+		&fixture.configuration, &fixture.semantics, phases, 3U,
+		bindings, 3U, NULL, &capabilities, &error));
+	if (!capabilities)
+		return;
+	for (fact = 0U; fact < capabilities->fact_count; fact++)
+		if (capabilities->facts[fact].kind ==
+				SG_WATER_CAPABILITY_DIRECTIONAL_SWIM &&
+			capabilities->facts[fact].source_region == 1U &&
+			capabilities->facts[fact].destination_region == 1U &&
+			capabilities->facts[fact].direction ==
+				SG_WATER_DIRECTION_POSITIVE_X &&
+			capabilities->facts[fact].source_phase == 1U)
+		{
+			transitions++;
+			CHECK(capabilities->facts[fact].destination_phase == 2U);
+			CHECK(capabilities->facts[fact].observed_velocity.value[0] ==
+				12.5f);
+		}
+	CHECK(transitions == 1U);
+	SG_WaterCapabilityDestroy(capabilities);
+}
+
+static sg_water_capability_set_t *BuildNarrowPlane(float normal_x,
+	float normal_y, float distance)
+{
+	water_fixture_t fixture;
+	sg_water_capability_set_t *capabilities = NULL;
+	sg_water_capability_error_t error;
+
+	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 0));
+	fixture.regions[1].bounds.maxs.value[0] = 0.5f;
+	fixture.regions[1].interior_witness.value[0] = 0.25f;
+	fixture.faces[6].normal[0] = normal_x;
+	fixture.faces[6].normal[1] = normal_y;
+	fixture.faces[6].distance = distance;
+	CHECK(WaterFixtureBuild(&fixture, NULL, &capabilities, &error));
+	return capabilities;
+}
+
+static void CheckEquivalentFacts(const sg_water_capability_set_t *first,
+	const sg_water_capability_set_t *second)
+{
+	CHECK(first != NULL && second != NULL);
+	if (!first || !second)
+		return;
+	CHECK(first->fact_count == second->fact_count);
+	CHECK(first->boundary_count == second->boundary_count);
+	CHECK(first->host_pmove_frames == second->host_pmove_frames);
+	if (first->fact_count == second->fact_count)
+		CHECK(memcmp(first->facts, second->facts,
+			(size_t)first->fact_count * sizeof(*first->facts)) == 0);
+}
+
+static void TestPlaneScaleInvariantContainment(void)
+{
+	const float small = 1.0f / 16384.0f;
+	sg_water_capability_set_t *axis = BuildNarrowPlane(1.0f, 0.0f, 0.5f);
+	sg_water_capability_set_t *scaled_axis =
+		BuildNarrowPlane(small, 0.0f, 0.5f * small);
+	sg_water_capability_set_t *oblique = BuildNarrowPlane(1.0f, 1.0f, 0.5f);
+	sg_water_capability_set_t *scaled_oblique =
+		BuildNarrowPlane(small, small, 0.5f * small);
+
+	CheckEquivalentFacts(axis, scaled_axis);
+	CheckEquivalentFacts(oblique, scaled_oblique);
+	if (axis)
+		CHECK(FindFact(axis, SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
+			1U, 1U, SG_WATER_DIRECTION_POSITIVE_X) == NULL);
+	if (scaled_axis)
+		CHECK(FindFact(scaled_axis, SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
+			1U, 1U, SG_WATER_DIRECTION_POSITIVE_X) == NULL);
+	if (oblique)
+	{
+		CHECK(FindFact(oblique, SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
+			1U, 1U, SG_WATER_DIRECTION_POSITIVE_X) == NULL);
+		CHECK(FindFact(oblique, SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
+			1U, 1U, SG_WATER_DIRECTION_POSITIVE_Y) == NULL);
+	}
+	if (scaled_oblique)
+	{
+		CHECK(FindFact(scaled_oblique,
+			SG_WATER_CAPABILITY_DIRECTIONAL_SWIM, 1U, 1U,
+			SG_WATER_DIRECTION_POSITIVE_X) == NULL);
+		CHECK(FindFact(scaled_oblique,
+			SG_WATER_CAPABILITY_DIRECTIONAL_SWIM, 1U, 1U,
+			SG_WATER_DIRECTION_POSITIVE_Y) == NULL);
+	}
+	SG_WaterCapabilityDestroy(axis);
+	SG_WaterCapabilityDestroy(scaled_axis);
+	SG_WaterCapabilityDestroy(oblique);
+	SG_WaterCapabilityDestroy(scaled_oblique);
+}
+
 static void TestFailureTransactionAndImmutability(void)
 {
 	water_fixture_t fixture;
@@ -551,6 +685,8 @@ int main(void)
 	TestBlockedExit();
 	TestPhaseVelocityAndNarrowVolume();
 	TestDestinationPhaseSelection();
+	TestSameRegionPhaseSelection();
+	TestPlaneScaleInvariantContainment();
 	TestFailureTransactionAndImmutability();
 	TestMediaMismatch();
 	if (failures)
