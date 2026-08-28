@@ -20,6 +20,7 @@ _Static_assert(SG_BELIEF_SOURCE_COUNT == 6,
 
 typedef struct belief_fixture_s
 {
+	sg_rune_plane_t planes[6];
 	sg_rune_phase_basis_t model_phases[3];
 	sg_rune_phase_transition_t model_transitions[1];
 	sg_rune_capability_kernel_t model_kernels[3];
@@ -33,6 +34,7 @@ typedef struct belief_fixture_s
 
 typedef struct large_belief_fixture_s
 {
+	sg_rune_plane_t planes[6];
 	sg_rune_phase_basis_t model_phases[TEST_LARGE_PHASE_COUNT];
 	sg_rune_capability_kernel_t model_kernels[1];
 	sg_rune_cell_t cells[2];
@@ -51,6 +53,56 @@ static sg_rune_interval_t Interval(float min_value, float max_value)
 	return (sg_rune_interval_t){ min_value, max_value };
 }
 
+static void SetModelKinematics(sg_rune_model_t *model,
+	sg_rune_phase_basis_t *phases, size_t phase_count)
+{
+	size_t index;
+
+	model->identity.physics.gravity = 800.0f;
+	model->identity.physics.ground_acceleration = 1000.0f;
+	model->identity.physics.air_acceleration = 1000.0f;
+	model->identity.physics.water_acceleration = 1000.0f;
+	model->identity.physics.hook_acceleration = 1000.0f;
+	model->identity.physics.external_acceleration = 1000.0f;
+	model->identity.physics.max_velocity = 20000.0f;
+	for (index = 0U; index < phase_count; index++)
+	{
+		phases[index].velocity.x = Interval(-20000.0f, 20000.0f);
+		phases[index].velocity.y = Interval(-20000.0f, 20000.0f);
+		phases[index].velocity.z = Interval(-20000.0f, 20000.0f);
+	}
+}
+
+static void SetContainmentGeometry(sg_rune_model_t *model,
+	sg_rune_plane_t planes[6], sg_rune_cell_t *cells, size_t cell_count)
+{
+	size_t index;
+
+	model->planes = planes;
+	model->plane_count = 6U;
+	planes[0].normal.value[0] = 1.0f;
+	planes[0].distance = 1000.0f;
+	planes[1].normal.value[0] = -1.0f;
+	planes[1].distance = 1000.0f;
+	planes[2].normal.value[1] = 1.0f;
+	planes[2].distance = 1000.0f;
+	planes[3].normal.value[1] = -1.0f;
+	planes[3].distance = 1000.0f;
+	planes[4].normal.value[2] = 1.0f;
+	planes[4].distance = 1000.0f;
+	planes[5].normal.value[2] = -1.0f;
+	planes[5].distance = 1000.0f;
+	for (index = 0U; index < cell_count; index++)
+	{
+		cells[index].bounds.mins =
+			(sg_rune_vec3_t){ { -1000.0f, -1000.0f, -1000.0f } };
+		cells[index].bounds.maxs =
+			(sg_rune_vec3_t){ { 1000.0f, 1000.0f, 1000.0f } };
+		cells[index].boundary_planes =
+			(sg_rune_plane_span_t){ 0U, 6U };
+	}
+}
+
 static void SetKernel(sg_rune_capability_kernel_t *kernel,
 	const sg_rune_cell_t *from_cell, const sg_rune_phase_basis_t *from,
 	const sg_rune_cell_t *to_cell, const sg_rune_phase_basis_t *to)
@@ -65,6 +117,10 @@ static void SetKernel(sg_rune_capability_kernel_t *kernel,
 	kernel->parameters.displacement.y = Interval(0.0f, 0.0f);
 	kernel->parameters.displacement.z = Interval(0.0f, 0.0f);
 	kernel->parameters.duration_ms = Interval(50.0f, 100.0f);
+	kernel->parameters.speed = Interval(0.0f, 100.0f);
+	kernel->parameters.acceleration = Interval(0.0f, 1000.0f);
+	kernel->parameters.vertical_acceleration = Interval(0.0f, 1000.0f);
+	kernel->parameters.gravity = 800.0f;
 	kernel->flags = SG_RUNE_KERNEL_DIRECTIONAL | SG_RUNE_KERNEL_PHASE_AWARE |
 		SG_RUNE_KERNEL_PROVEN;
 }
@@ -85,9 +141,12 @@ static void BeliefFixtureInit(belief_fixture_t *fixture)
 	fixture->model.kernels = fixture->model_kernels;
 	fixture->cells[0].id.value = StableId(10U);
 	fixture->cells[1].id.value = StableId(11U);
+	SetContainmentGeometry(&fixture->model, fixture->planes, fixture->cells,
+		2U);
 	fixture->model_phases[0].id.value = StableId(1U);
 	fixture->model_phases[1].id.value = StableId(2U);
 	fixture->model_phases[2].id.value = StableId(3U);
+	SetModelKinematics(&fixture->model, fixture->model_phases, 3U);
 	SetKernel(&fixture->model_kernels[0], &fixture->cells[0],
 		&fixture->model_phases[0], &fixture->cells[0],
 		&fixture->model_phases[1]);
@@ -129,6 +188,8 @@ static void LargeBeliefFixtureInit(large_belief_fixture_t *fixture)
 	fixture->model.kernels = fixture->model_kernels;
 	fixture->cells[0].id.value = StableId(10U);
 	fixture->cells[1].id.value = StableId(11U);
+	SetContainmentGeometry(&fixture->model, fixture->planes, fixture->cells,
+		2U);
 	for (index = 0U; index < TEST_LARGE_PHASE_COUNT; index++)
 	{
 		fixture->model_phases[index].id.value = StableId(index + 1U);
@@ -136,6 +197,8 @@ static void LargeBeliefFixtureInit(large_belief_fixture_t *fixture)
 			(uint32_t)index, (uint32_t)(index % 2U)
 		};
 	}
+	SetModelKinematics(&fixture->model, fixture->model_phases,
+		TEST_LARGE_PHASE_COUNT);
 	SetKernel(&fixture->model_kernels[0], &fixture->cells[0],
 		&fixture->model_phases[0], &fixture->cells[0],
 		&fixture->model_phases[1]);
@@ -309,6 +372,67 @@ static void TestStorageAliasingAndCountOverflow(void)
 		&prediction));
 	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
 	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+}
+
+static void TestRuneStorageAliasingRejected(void)
+{
+	belief_fixture_t fixture;
+	belief_fixture_t fixture_before;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_t state_before;
+	sg_belief_state_t uninitialized;
+	sg_belief_state_t uninitialized_before;
+	sg_belief_state_config_t config = Config(1U, 2U, 3U);
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+	sg_belief_prediction_t prediction;
+
+	BeliefFixtureInit(&fixture);
+	fixture_before = fixture;
+	InitState(&fixture, &state, storage, 8U);
+	state_before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	frame = Frame(1U, state.revision, 100U,
+		(sg_belief_particle_t *)(void *)fixture.model_phases,
+		scratch_second, 1U);
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
+
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.commit_storage =
+		(sg_belief_particle_t *)(void *)fixture.model_kernels;
+	frame.commit_capacity = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
+
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame,
+		(sg_belief_reduction_t *)(void *)fixture.cells) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
+
+	memset(&uninitialized, 0xa5, sizeof(uninitialized));
+	uninitialized_before = uninitialized;
+	CHECK(!SG_BeliefStateInit(&fixture.snapshot, &uninitialized, &config,
+		(sg_belief_particle_t *)(void *)fixture.model_phases, 1U));
+	CHECK(memcmp(&uninitialized, &uninitialized_before,
+		sizeof(uninitialized)) == 0);
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
+
+	memset(&prediction, 0, sizeof(prediction));
+	CHECK(!SG_BeliefPredict(&fixture.snapshot, &state, 100U,
+		(sg_belief_particle_t *)(void *)fixture.model_phases, 1U,
+		&prediction));
+	CHECK(!SG_BeliefPredict(&fixture.snapshot, &state, 100U, storage, 8U,
+		(sg_belief_prediction_t *)(void *)fixture.cells));
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
 }
 
 static void TestSightConcentrates(void)
@@ -572,15 +696,22 @@ static sg_belief_horizon_step_t HorizonCapabilityStep(uint32_t from_phase,
 }
 
 static sg_belief_horizon_kernel_t HorizonKernel(uint64_t from_time_ms,
-	uint64_t to_time_ms, const sg_belief_horizon_entry_t *entries,
+	uint64_t to_time_ms, sg_belief_horizon_entry_t *entries,
 	size_t entry_count, sg_belief_horizon_span_t *spans, size_t phase_count,
 	const sg_belief_horizon_step_t *steps, size_t step_count)
 {
 	sg_belief_horizon_kernel_t kernel;
 	size_t phase;
 	size_t cursor = 0U;
+	size_t step_cursor = 0U;
 
 	memset(&kernel, 0, sizeof(kernel));
+	for (cursor = 0U; cursor < entry_count; cursor++)
+	{
+		entries[cursor].first_step = step_cursor;
+		step_cursor += entries[cursor].step_count;
+	}
+	cursor = 0U;
 	for (phase = 0U; phase < phase_count; phase++)
 	{
 		spans[phase].first_entry = cursor;
@@ -786,6 +917,87 @@ static void TestHorizonCannotInventConnectivity(void)
 	frame.kernel_count = 1U;
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
 		SG_BELIEF_REDUCE_REJECTED_INVALID);
+}
+
+static void TestCellContainmentFailsClosed(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_t before;
+	sg_belief_evidence_support_t support;
+	sg_belief_evidence_t evidence;
+	sg_belief_horizon_entry_t entries[3];
+	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t step;
+	sg_belief_horizon_kernel_t kernel;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+	size_t axis;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	support = Support(0U, 0U, 1.0f);
+	support.position[0] = 1001.0f;
+	evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U, 100U, &support, 1U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+
+	support.position[0] = 999.0f;
+	support.velocity[0] = 20.0f;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	frame = Frame(2U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+
+	BeliefFixtureInit(&fixture);
+	for (axis = 0U; axis < 2U; axis++)
+	{
+		fixture.cells[axis].bounds.mins =
+			(sg_rune_vec3_t){ { -100.0f, -100.0f, -100.0f } };
+		fixture.cells[axis].bounds.maxs =
+			(sg_rune_vec3_t){ { 100.0f, 100.0f, 100.0f } };
+	}
+	for (axis = 0U; axis < 6U; axis++)
+		fixture.planes[axis].distance = 100.0f;
+	InitState(&fixture, &state, storage, 8U);
+	support = Support(0U, 0U, 1.0f);
+	evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U, 100U, &support, 1U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 200.0f, 1.0f);
+	entries[0].step_count = 1U;
+	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, &step, 1U);
+	frame = Frame(2U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	frame.kernels = &kernel;
+	frame.kernel_count = 1U;
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
 }
 
 static void TestHorizonWitnessBoundsAndCells(void)
@@ -1013,6 +1225,7 @@ static void TestCsrKernelScalingCounters(void)
 	sg_belief_horizon_span_t *spans = calloc(phase_count, sizeof(*spans));
 	sg_belief_horizon_entry_t *entries = calloc(entry_count,
 		sizeof(*entries));
+	sg_rune_plane_t planes[6];
 	sg_rune_cell_t cell;
 	sg_rune_model_t model;
 	sg_rune_capability_kernel_t model_kernel;
@@ -1036,6 +1249,7 @@ static void TestCsrKernelScalingCounters(void)
 	if (!model_phases || !phases || !spans || !entries)
 		goto cleanup;
 	memset(&cell, 0, sizeof(cell));
+	memset(planes, 0, sizeof(planes));
 	memset(&model, 0, sizeof(model));
 	memset(&snapshot, 0, sizeof(snapshot));
 	model.version = SG_RUNE_MODEL_VERSION;
@@ -1047,11 +1261,13 @@ static void TestCsrKernelScalingCounters(void)
 	model.phase_count = (uint32_t)phase_count;
 	model.cells = &cell;
 	model.phases = model_phases;
+	SetContainmentGeometry(&model, planes, &cell, 1U);
 	for (phase = 0U; phase < phase_count; phase++)
 	{
 		model_phases[phase].id.value = StableId(phase + 1U);
 		phases[phase] = (sg_phase_coordinate_t){ (uint32_t)phase, 0U };
 	}
+	SetModelKinematics(&model, model_phases, phase_count);
 	SetKernel(&model_kernel, &cell, &model_phases[0], &cell,
 		&model_phases[1]);
 	model.kernel_count = 1U;
@@ -1089,7 +1305,7 @@ static void TestCsrKernelScalingCounters(void)
 	CHECK(reduction.validated_horizon_entries == entry_count);
 	CHECK(reduction.validated_horizon_steps == 1U);
 	CHECK(reduction.evaluated_outcomes == 2U);
-	CHECK(state.particle_count == 2U);
+	CHECK(state.particle_count == 3U);
 
 cleanup:
 	free(entries);
@@ -1150,7 +1366,7 @@ static void TestPropagationDecayPredictionAndRuneImmutability(void)
 	CHECK(state.particles[0].phase.phase_id == 0U);
 	CHECK(state.particles[1].phase.phase_id == 2U);
 	CHECK(Near(state.particles[0].position[0], 0.1f, 0.0001f));
-	CHECK(Near(state.particles[1].position[0], 20.1f, 0.0001f));
+	CHECK(Near(state.particles[1].position[0], 20.0f, 0.0001f));
 	CHECK(Near(state.particles[0].spread_radius, 1.0f, 0.0001f));
 	CHECK(Near(state.confidence, expf(-0.1f), 0.0001f));
 	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
@@ -1292,7 +1508,7 @@ static void TestDelayedTeammateEvidenceIsAgedAndPropagated(void)
 	CHECK(state.particles[0].future_time_ms == 200U);
 	CHECK(state.particles[1].future_time_ms == 200U);
 	CHECK(Near(state.particles[0].position[0], 0.1f, 0.0001f));
-	CHECK(Near(state.particles[1].position[0], 10.1f, 0.0001f));
+	CHECK(Near(state.particles[1].position[0], 10.0f, 0.0001f));
 	CHECK(Near(state.confidence, expf(-0.1f), 0.0001f));
 	CHECK(state.latest_provenance.authenticated_at_ms == 150U);
 	CHECK(state.latest_observed_at_ms == 100U);
@@ -1335,7 +1551,7 @@ static void TestCapacityRetryBeyondOldThresholds(void)
 	sg_belief_horizon_entry_t horizon_entries[260];
 	sg_belief_horizon_span_t horizon_spans[3];
 	sg_belief_horizon_kernel_t kernel;
-	sg_belief_horizon_step_t step;
+	sg_belief_horizon_step_t steps[258];
 	sg_belief_particle_t evidence_storage[32];
 	sg_belief_state_t evidence_state;
 	sg_belief_particle_t transition_scratch_first[300];
@@ -1410,12 +1626,12 @@ static void TestCapacityRetryBeyondOldThresholds(void)
 		horizon_entries[index] = HorizonEntry(0U, 0U, 1U, 0U,
 			(float)index, 1.0f / 258.0f);
 		horizon_entries[index].step_count = 1U;
+		steps[index] = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
 	}
 	horizon_entries[258] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
 	horizon_entries[259] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
-	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
 	kernel = HorizonKernel(100U, 200U, horizon_entries, 260U,
-		horizon_spans, 3U, &step, 1U);
+		horizon_spans, 3U, steps, 258U);
 	frame = Frame(2U, transition_state.revision, 200U,
 		transition_scratch_first, transition_scratch_second, 300U);
 	frame.kernels = &kernel;
@@ -1491,6 +1707,9 @@ static void ReviewTestSoundCannotCollapseNumerically(void)
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
 		SG_BELIEF_REDUCE_APPLIED);
 	CHECK(state.particle_count == 2U);
+	CHECK(state.particles[0].weight > 0.0f);
+	CHECK(state.particles[1].weight > 0.0f);
+	CHECK(SG_BeliefStateValid(&state));
 }
 
 static void ReviewTestKernelCsrRejectsOrphanStep(void)
@@ -1523,13 +1742,53 @@ static void ReviewTestKernelCsrRejectsOrphanStep(void)
 		SG_BELIEF_REDUCE_REJECTED_INVALID);
 }
 
+static void TestKernelCsrRejectsSharedStep(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_t before;
+	sg_belief_horizon_entry_t entries[4];
+	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t step;
+	sg_belief_horizon_kernel_t kernel;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 0.5f);
+	entries[0].step_count = 1U;
+	entries[1] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 0.5f);
+	entries[1].step_count = 1U;
+	entries[2] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	entries[3] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	kernel = HorizonKernel(100U, 200U, entries, 4U, spans, 3U, &step, 1U);
+	entries[1].first_step = 0U;
+	frame = Frame(1U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	frame.kernels = &kernel;
+	frame.kernel_count = 1U;
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+}
+
 int main(void)
 {
 	ReviewTestWitnessCannotHideUnboundedKinematics();
 	ReviewTestSoundCannotCollapseNumerically();
 	ReviewTestKernelCsrRejectsOrphanStep();
+	TestKernelCsrRejectsSharedStep();
 	TestStateInitIsTransactional();
 	TestStorageAliasingAndCountOverflow();
+	TestRuneStorageAliasingRejected();
 	TestSightConcentrates();
 	TestCanonicalModeMerge();
 	TestAllEarnedSourcesAndTeamAuthority();
@@ -1540,6 +1799,7 @@ int main(void)
 	TestNegativeVisibilityUsesRegionUnion();
 	TestIdentityGenerationAndMotionFailClosed();
 	TestHorizonCannotInventConnectivity();
+	TestCellContainmentFailsClosed();
 	TestHorizonWitnessBoundsAndCells();
 	TestHorizonMultiStepMinkowskiBounds();
 	TestCompleteHorizonMultiHopAndTimeBound();

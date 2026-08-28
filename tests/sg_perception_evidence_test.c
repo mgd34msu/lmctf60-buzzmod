@@ -18,8 +18,17 @@ static int failures;
 
 typedef struct perception_fixture_s
 {
+	sg_rune_plane_t planes[6];
+	sg_rune_vec3_t portal_vertices[1];
 	sg_rune_phase_basis_t model_phases[3];
+	sg_rune_phase_transition_t transitions[1];
 	sg_rune_cell_t cells[2];
+	sg_rune_portal_t portals[1];
+	sg_rune_surface_t surfaces[1];
+	sg_rune_affordance_t affordances[1];
+	sg_rune_capability_kernel_t kernels[1];
+	sg_rune_landmark_t landmarks[1];
+	sg_rune_mechanism_t mechanisms[1];
 	sg_rune_model_t model;
 	sg_phase_coordinate_t phases[3];
 	sg_rune_runtime_snapshot_t snapshot;
@@ -30,18 +39,80 @@ _Static_assert(sizeof(sg_perception_hypothesis_t) == 76U,
 _Static_assert(sizeof(sg_belief_evidence_support_t) == 72U,
 	"support range regression assumes the public 72-byte layout");
 
+static sg_rune_interval_t TestInterval(float min_value, float max_value)
+{
+	return (sg_rune_interval_t){ min_value, max_value };
+}
+
 static void FixtureInit(perception_fixture_t *fixture)
 {
+	size_t index;
+
 	memset(fixture, 0, sizeof(*fixture));
 	fixture->model.version = SG_RUNE_MODEL_VERSION;
 	fixture->model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
 	fixture->model.flags = SG_RUNE_MODEL_IMMUTABLE |
 		SG_RUNE_MODEL_EXACT_BOUND | SG_RUNE_MODEL_NO_RUNTIME_ACTORS;
 	fixture->model.completeness.state = SG_RUNE_COMPLETENESS_COMPLETE;
+	fixture->model.plane_count = 6U;
+	fixture->model.planes = fixture->planes;
+	fixture->model.portal_vertex_count = 1U;
+	fixture->model.portal_vertices = fixture->portal_vertices;
 	fixture->model.cell_count = 2U;
 	fixture->model.phase_count = 3U;
 	fixture->model.cells = fixture->cells;
 	fixture->model.phases = fixture->model_phases;
+	fixture->model.phase_transition_count = 1U;
+	fixture->model.phase_transitions = fixture->transitions;
+	fixture->model.portal_count = 1U;
+	fixture->model.portals = fixture->portals;
+	fixture->model.surface_count = 1U;
+	fixture->model.surfaces = fixture->surfaces;
+	fixture->model.affordance_count = 1U;
+	fixture->model.affordances = fixture->affordances;
+	fixture->model.kernel_count = 1U;
+	fixture->model.kernels = fixture->kernels;
+	fixture->model.landmark_count = 1U;
+	fixture->model.landmarks = fixture->landmarks;
+	fixture->model.mechanism_count = 1U;
+	fixture->model.mechanisms = fixture->mechanisms;
+	fixture->model.identity.physics.gravity = 800.0f;
+	fixture->model.identity.physics.ground_acceleration = 1000.0f;
+	fixture->model.identity.physics.air_acceleration = 1000.0f;
+	fixture->model.identity.physics.water_acceleration = 1000.0f;
+	fixture->model.identity.physics.hook_acceleration = 1000.0f;
+	fixture->model.identity.physics.external_acceleration = 1000.0f;
+	fixture->model.identity.physics.max_velocity = 20000.0f;
+	for (index = 0U; index < 3U; index++)
+	{
+		fixture->model_phases[index].velocity.x =
+			TestInterval(-20000.0f, 20000.0f);
+		fixture->model_phases[index].velocity.y =
+			TestInterval(-20000.0f, 20000.0f);
+		fixture->model_phases[index].velocity.z =
+			TestInterval(-20000.0f, 20000.0f);
+	}
+	fixture->planes[0].normal.value[0] = 1.0f;
+	fixture->planes[0].distance = 1000.0f;
+	fixture->planes[1].normal.value[0] = -1.0f;
+	fixture->planes[1].distance = 1000.0f;
+	fixture->planes[2].normal.value[1] = 1.0f;
+	fixture->planes[2].distance = 1000.0f;
+	fixture->planes[3].normal.value[1] = -1.0f;
+	fixture->planes[3].distance = 1000.0f;
+	fixture->planes[4].normal.value[2] = 1.0f;
+	fixture->planes[4].distance = 1000.0f;
+	fixture->planes[5].normal.value[2] = -1.0f;
+	fixture->planes[5].distance = 1000.0f;
+	for (index = 0U; index < 2U; index++)
+	{
+		fixture->cells[index].bounds.mins =
+			(sg_rune_vec3_t){ { -1000.0f, -1000.0f, -1000.0f } };
+		fixture->cells[index].bounds.maxs =
+			(sg_rune_vec3_t){ { 1000.0f, 1000.0f, 1000.0f } };
+		fixture->cells[index].boundary_planes =
+			(sg_rune_plane_span_t){ 0U, 6U };
+	}
 	fixture->phases[0] = (sg_phase_coordinate_t){ 0U, 0U };
 	fixture->phases[1] = (sg_phase_coordinate_t){ 1U, 0U };
 	fixture->phases[2] = (sg_phase_coordinate_t){ 2U, 1U };
@@ -873,7 +944,9 @@ static void ReviewTestOutputCannotAliasRuneStorage(void)
 	sg_perception_observation_t observation =
 		Observation(SG_PERCEPTION_SOURCE_SIGHT);
 	sg_perception_adaptation_t adaptation;
-	sg_belief_evidence_support_t *rune_storage;
+	void *rune_arrays[16];
+	size_t rune_array_count = 0U;
+	size_t index;
 
 	FixtureInit(&fixture);
 	observation.data.sight.in_pvs = 1U;
@@ -881,16 +954,65 @@ static void ReviewTestOutputCannotAliasRuneStorage(void)
 	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
 		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 1.0f);
 	before = fixture;
-	rune_storage = (sg_belief_evidence_support_t *)(void *)fixture.model_phases;
-	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
-		rune_storage, 1U, &adaptation) ==
-		SG_PERCEPTION_ADAPT_REJECTED_INVALID);
-	CHECK(memcmp(&fixture, &before, sizeof(fixture)) == 0);
+	rune_arrays[rune_array_count++] = &fixture.snapshot;
+	rune_arrays[rune_array_count++] = &fixture.model;
+	rune_arrays[rune_array_count++] = fixture.phases;
+	rune_arrays[rune_array_count++] = fixture.planes;
+	rune_arrays[rune_array_count++] = fixture.portal_vertices;
+	rune_arrays[rune_array_count++] = fixture.model_phases;
+	rune_arrays[rune_array_count++] = fixture.transitions;
+	rune_arrays[rune_array_count++] = fixture.cells;
+	rune_arrays[rune_array_count++] = fixture.portals;
+	rune_arrays[rune_array_count++] = fixture.surfaces;
+	rune_arrays[rune_array_count++] = fixture.affordances;
+	rune_arrays[rune_array_count++] = fixture.kernels;
+	rune_arrays[rune_array_count++] = fixture.landmarks;
+	rune_arrays[rune_array_count++] = fixture.mechanisms;
+	for (index = 0U; index < rune_array_count; index++)
+	{
+		CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+			(sg_belief_evidence_support_t *)rune_arrays[index], 1U,
+			&adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+		CHECK(memcmp(&fixture, &before, sizeof(fixture)) == 0);
+		CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+			NULL, 0U,
+			(sg_perception_adaptation_t *)rune_arrays[index]) ==
+			SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+		CHECK(memcmp(&fixture, &before, sizeof(fixture)) == 0);
+	}
+}
+
+static void TestHypothesisCellContainment(void)
+{
+	perception_fixture_t fixture;
+	sg_perception_observation_t observation =
+		Observation(SG_PERCEPTION_SOURCE_SIGHT);
+	sg_belief_evidence_support_t storage[1];
+	sg_belief_evidence_support_t before[1];
+	sg_perception_adaptation_t adaptation;
+
+	FixtureInit(&fixture);
+	observation.data.sight.in_pvs = 1U;
+	observation.data.sight.line_of_sight_proved = 1U;
+	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
+		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 1.0f);
+	memset(storage, 0xa7, sizeof(storage));
+	memcpy(before, storage, sizeof(storage));
+	observation.data.sight.hypothesis.position[0] = 1001.0f;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		1U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(storage, before, sizeof(storage)) == 0);
+	observation.data.sight.hypothesis.position[0] = 900.0f;
+	fixture.planes[0].distance = 800.0f;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		1U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
+	CHECK(memcmp(storage, before, sizeof(storage)) == 0);
 }
 
 int main(void)
 {
 	ReviewTestOutputCannotAliasRuneStorage();
+	TestHypothesisCellContainment();
 	TestSightAndBorrowedLifetime();
 	TestSoundAndDamageShape();
 	TestSoundDamageShapePermutationInvariant();
