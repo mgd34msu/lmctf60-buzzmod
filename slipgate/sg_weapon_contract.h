@@ -3,43 +3,12 @@
 #define SG_WEAPON_CONTRACT_H
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "sg_belief_contract.h"
 #include "sg_destination_field.h"
-
-#define SG_WEAPON_MAX_TEAMMATE_BELIEFS 16U
-
-typedef enum sg_weapon_family_e
-{
-	SG_WEAPON_FAMILY_HITSCAN = 0,
-	SG_WEAPON_FAMILY_SPREAD,
-	SG_WEAPON_FAMILY_STRAIGHT_PROJECTILE,
-	SG_WEAPON_FAMILY_ROCKET_SPLASH,
-	SG_WEAPON_FAMILY_GRENADE_BOUNCE,
-	SG_WEAPON_FAMILY_HYPERBLASTER,
-	SG_WEAPON_FAMILY_BFG,
-	SG_WEAPON_FAMILY_SPECIAL,
-	SG_WEAPON_FAMILY_COUNT
-} sg_weapon_family_t;
-
-typedef enum sg_weapon_effect_flag_e
-{
-	SG_WEAPON_EFFECT_HITSCAN = 1,
-	SG_WEAPON_EFFECT_SPREAD = 2,
-	SG_WEAPON_EFFECT_PROJECTILE = 4,
-	SG_WEAPON_EFFECT_SPLASH = 8,
-	SG_WEAPON_EFFECT_BOUNCE = 16,
-	SG_WEAPON_EFFECT_PENETRATION = 32,
-	SG_WEAPON_EFFECT_AREA_DENIAL = 64,
-	SG_WEAPON_EFFECT_SPECIAL = 128
-} sg_weapon_effect_flag_t;
-
-#define SG_WEAPON_EFFECT_MASK (SG_WEAPON_EFFECT_HITSCAN | \
-	SG_WEAPON_EFFECT_SPREAD | SG_WEAPON_EFFECT_PROJECTILE | \
-	SG_WEAPON_EFFECT_SPLASH | SG_WEAPON_EFFECT_BOUNCE | \
-	SG_WEAPON_EFFECT_PENETRATION | SG_WEAPON_EFFECT_AREA_DENIAL | \
-	SG_WEAPON_EFFECT_SPECIAL)
+#include "sg_weapon_effect_profile.h"
 
 typedef enum sg_weapon_trace_status_e
 {
@@ -47,27 +16,6 @@ typedef enum sg_weapon_trace_status_e
 	SG_WEAPON_TRACE_ACCEPTED,
 	SG_WEAPON_TRACE_REJECTED
 } sg_weapon_trace_status_t;
-
-typedef struct sg_weapon_profile_s
-{
-	uint16_t id;
-	sg_weapon_family_t family;
-	uint32_t effects;
-	float projectile_speed;
-	float gravity_scale;
-	float spread_radius;
-	float splash_radius;
-	float max_range;
-	float direct_damage;
-	float splash_damage;
-	uint32_t fuse_ms;
-	uint32_t cadence_ms;
-	uint16_t ammo_cost;
-	uint16_t switch_ms;
-	uint8_t requires_live_trace;
-	uint8_t supports_occluded_impact;
-	uint8_t reserved[2];
-} sg_weapon_profile_t;
 
 typedef struct sg_weapon_affordance_s
 {
@@ -90,7 +38,7 @@ typedef struct sg_weapon_effect_query_s
 	const sg_weapon_affordance_t *affordance;
 	const sg_belief_state_t *target_belief;
 	const sg_belief_state_t *teammate_beliefs;
-	uint16_t teammate_belief_count;
+	size_t teammate_belief_count;
 	uint16_t ammo_available;
 	uint16_t shooter_client;
 	uint16_t target_client;
@@ -105,6 +53,8 @@ typedef struct sg_weapon_effect_query_s
 	uint64_t now_ms;
 	uint64_t prediction_time_ms;
 	uint64_t teammate_snapshot_revision;
+	uint64_t build_identity;
+	uint64_t physics_abi_id;
 	uint8_t teammate_evidence_complete;
 	uint8_t reserved2[7];
 	float shooter_origin[3];
@@ -188,63 +138,6 @@ typedef struct sg_weapon_prefire_validation_s
 	float intended_impact[3];
 } sg_weapon_prefire_validation_t;
 
-static inline int SG_WeaponFamilyValid(sg_weapon_family_t family)
-{
-	return family >= SG_WEAPON_FAMILY_HITSCAN && family < SG_WEAPON_FAMILY_COUNT;
-}
-
-static inline int SG_WeaponFloatValid(float value)
-{
-	return isfinite(value) != 0;
-}
-
-static inline int SG_WeaponProfileValid(const sg_weapon_profile_t *profile)
-{
-	if (!profile || profile->id == 0U || !SG_WeaponFamilyValid(profile->family) ||
-	    profile->effects == 0U ||
-	    (profile->effects & ~(uint32_t)SG_WEAPON_EFFECT_MASK) != 0U ||
-	    profile->requires_live_trace > 1U ||
-	    profile->supports_occluded_impact > 1U ||
-	    profile->projectile_speed < 0.0f || profile->gravity_scale < 0.0f ||
-	    profile->spread_radius < 0.0f || profile->splash_radius < 0.0f ||
-	    profile->max_range < 0.0f || profile->direct_damage < 0.0f ||
-	    profile->splash_damage < 0.0f ||
-	    !SG_WeaponFloatValid(profile->projectile_speed) ||
-	    !SG_WeaponFloatValid(profile->gravity_scale) ||
-	    !SG_WeaponFloatValid(profile->spread_radius) ||
-	    !SG_WeaponFloatValid(profile->splash_radius) ||
-	    !SG_WeaponFloatValid(profile->max_range) ||
-	    !SG_WeaponFloatValid(profile->direct_damage) ||
-	    !SG_WeaponFloatValid(profile->splash_damage))
-		return 0;
-	if ((profile->effects & SG_WEAPON_EFFECT_PROJECTILE) != 0U &&
-	    profile->projectile_speed <= 0.0f)
-		return 0;
-	if ((profile->effects & SG_WEAPON_EFFECT_SPLASH) != 0U &&
-	    (profile->splash_radius <= 0.0f || profile->splash_damage <= 0.0f))
-		return 0;
-	if (profile->family == SG_WEAPON_FAMILY_HITSCAN &&
-	    (profile->effects & SG_WEAPON_EFFECT_HITSCAN) == 0U)
-		return 0;
-	if (profile->family == SG_WEAPON_FAMILY_SPREAD &&
-	    (profile->effects & SG_WEAPON_EFFECT_SPREAD) == 0U)
-		return 0;
-	if ((profile->family == SG_WEAPON_FAMILY_STRAIGHT_PROJECTILE ||
-	     profile->family == SG_WEAPON_FAMILY_HYPERBLASTER) &&
-	    (profile->effects & SG_WEAPON_EFFECT_PROJECTILE) == 0U)
-		return 0;
-	if ((profile->family == SG_WEAPON_FAMILY_ROCKET_SPLASH ||
-	     profile->family == SG_WEAPON_FAMILY_BFG) &&
-	    ((profile->effects & SG_WEAPON_EFFECT_PROJECTILE) == 0U ||
-	     (profile->effects & SG_WEAPON_EFFECT_SPLASH) == 0U))
-		return 0;
-	if (profile->family == SG_WEAPON_FAMILY_GRENADE_BOUNCE &&
-	    ((profile->effects & SG_WEAPON_EFFECT_PROJECTILE) == 0U ||
-	     (profile->effects & SG_WEAPON_EFFECT_BOUNCE) == 0U))
-		return 0;
-	return 1;
-}
-
 static inline int SG_WeaponAffordanceValid(
 	const sg_weapon_affordance_t *affordance)
 {
@@ -280,10 +173,15 @@ static inline int SG_WeaponBeliefBoundToQuery(
 static inline int SG_WeaponEffectQueryValid(
 	const sg_weapon_effect_query_t *query)
 {
-	uint16_t index;
+	size_t index;
 	uint32_t axis;
+	uint8_t teammate_seen[SG_BELIEF_MAX_CLIENTS] = {0};
 
 	if (!query || !SG_WeaponProfileValid(query->profile) ||
+	    query->profile->resolved != 1U || query->build_identity == 0U ||
+	    query->physics_abi_id == 0U ||
+	    query->build_identity != query->profile->build_identity ||
+	    query->physics_abi_id != query->profile->physics_abi_id ||
 	    !SG_WeaponAffordanceValid(query->affordance) ||
 	    query->rune_identity != query->affordance->rune_identity ||
 	    !SG_BeliefTeamValid(query->audience_team) ||
@@ -302,9 +200,9 @@ static inline int SG_WeaponEffectQueryValid(
 	    !SG_WeaponBeliefBoundToQuery(query->target_belief,
 		query->audience_team, query->target_team, query->target_client,
 		query->now_ms, query->prediction_time_ms) ||
-	    query->teammate_belief_count > SG_WEAPON_MAX_TEAMMATE_BELIEFS ||
+	    query->teammate_belief_count > SG_BELIEF_MAX_CLIENTS ||
 	    (query->teammate_belief_count != 0U && !query->teammate_beliefs) ||
-	    query->ammo_available < query->profile->ammo_cost ||
+	    query->ammo_available < query->profile->ammo.live_fire_minimum ||
 	    (query->affordance->allowed_effects & query->profile->effects) == 0U ||
 	    !SG_WeaponFloatValid(query->shooter_health) ||
 	    query->shooter_health < 0.0f ||
@@ -314,13 +212,20 @@ static inline int SG_WeaponEffectQueryValid(
 		if (!SG_WeaponFloatValid(query->shooter_origin[axis]))
 			return 0;
 	for (index = 0U; index < query->teammate_belief_count; index++)
+	{
+		const uint16_t teammate_client =
+			query->teammate_beliefs[index].target_client;
+
 		if (!SG_WeaponBeliefBoundToQuery(&query->teammate_beliefs[index],
 			query->audience_team, query->shooter_team,
-		    query->teammate_beliefs[index].target_client, query->now_ms,
+		    teammate_client, query->now_ms,
 		    query->prediction_time_ms) ||
-		    query->teammate_beliefs[index].target_client == query->shooter_client ||
-		    query->teammate_beliefs[index].target_client == query->target_client)
+		    teammate_client == query->shooter_client ||
+		    teammate_client == query->target_client ||
+		    teammate_seen[teammate_client] != 0U)
 			return 0;
+		teammate_seen[teammate_client] = 1U;
+	}
 	return 1;
 }
 
@@ -343,7 +248,8 @@ static inline int SG_WeaponPrefireRequestValid(
 	    !SG_BeliefTeamValid(request->target_team) ||
 	    request->target_team == request->shooter_team ||
 	    request->audience_team != request->shooter_team ||
-	    request->profile_id == 0U || request->exact_required != 1U)
+	    !SG_WeaponProfileIdValid(request->profile_id) ||
+	    request->exact_required != 1U)
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 	{
@@ -364,6 +270,7 @@ static inline int SG_WeaponPrefireShotMatches(
 	uint32_t axis;
 
 	if (!SG_WeaponPrefireRequestValid(request) || !validation ||
+	    !SG_WeaponProfileIdValid(validation->profile_id) ||
 	    validation->shot_id != request->shot_id ||
 	    validation->shot_revision != request->shot_revision ||
 	    validation->rune_identity != request->rune_identity ||

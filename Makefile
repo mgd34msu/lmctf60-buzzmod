@@ -1305,6 +1305,8 @@ OBJS := \
 	sg_price.o \
 	sg_descend.o slipgate/sg_traversal_transition.o \
 	sg_goal.o \
+	slipgate/sg_rune_model.o \
+	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
 	sg_net.o \
 	sg_persona.o \
@@ -1371,6 +1373,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-generator-config-test \
 	rune-v2-contract-test rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+	weapon-effect-profile-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -3823,8 +3826,20 @@ project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
 	$(E) [TEST] project completion plan
 	$(Q)python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
 
+weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
+		tests/sg_weapon_effect_profile_test.c \
+		tests/sg_weapon_effect_profile_correction_test.c \
+		tests/test_weapon_effect_profile_source_parity.py \
+		slipgate/sg_weapon_effect_profile.c \
+		slipgate/sg_weapon_effect_profile.h slipgate/sg_weapon_contract.h \
+		slipgate/sg_weapon_host_constants.h slipgate/sg_rune_model.c \
+		g_combat.c g_weapon.c p_weapon.c plasma.c plasma.h
+	$(E) [TEST] weapon effect profiles
+	$(Q)sh tests/run_sg_weapon_effect_profile_test.sh
+
 rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+		weapon-effect-profile-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
@@ -3855,7 +3870,9 @@ rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
 	strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes'; \
 	$(CC) $$strict -I. tests/sg_rune_v2_artifact_contract_test.c -o "$$tmp/artifact"; \
 	"$$tmp/artifact"; \
-	$(CC) $$strict -I. tests/sg_rune_runtime_contract_test.c -o "$$tmp/runtime"; \
+	$(CC) $$strict -I. tests/sg_rune_runtime_contract_test.c \
+		slipgate/sg_weapon_effect_profile.c slipgate/sg_rune_model.c -lm \
+		-o "$$tmp/runtime"; \
 	"$$tmp/runtime"; \
 	$(CC) $$strict -Wcast-align -I. tests/sg_rune_model_contract_test.c \
 		slipgate/sg_rune_model.c -lm -o "$$tmp/model"; \

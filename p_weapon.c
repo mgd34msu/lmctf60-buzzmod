@@ -19,9 +19,9 @@ extern void Weapon_PLASMA_Generic (edict_t *,int,int,int,int,int *,int *,void(*f
 
 void SG_NoteRailShot(edict_t *shooter);
 
-#define GRAPPLE_FIRE_HOOK_SPEED        800
-#define GRAPPLE_PULL_SPEED             800
-#define GRAPPLE_PULL_BALANCED_SPEED    800
+#define GRAPPLE_FIRE_HOOK_SPEED        SG_HOST_HOOK_FIRE_SPEED
+#define GRAPPLE_PULL_SPEED             SG_HOST_HOOK_PULL_SPEED
+#define GRAPPLE_PULL_BALANCED_SPEED    SG_HOST_HOOK_PULL_SPEED
 
 static qboolean	is_quad;
 static byte		is_silenced;
@@ -630,23 +630,23 @@ GRENADE
 ======================================================================
 */
 
-#define GRENADE_TIMER		3.0f
-#define GRENADE_MINSPEED	400.0f
-#define GRENADE_MAXSPEED	800.0f
+#define GRENADE_TIMER		(SG_HOST_HAND_GRENADE_COOK_MS / 1000.0f)
+#define GRENADE_MINSPEED	((float)SG_HOST_HAND_GRENADE_MIN_SPEED)
+#define GRENADE_MAXSPEED	((float)SG_HOST_HAND_GRENADE_MAX_SPEED)
 
 void weapon_grenade_fire (edict_t *ent, qboolean held)
 {
 	vec3_t	offset;
 	vec3_t	forward, right;
 	vec3_t	start;
-	int		damage = 125;
+	int		damage = SG_HOST_HAND_GRENADE_DAMAGE;
 	float	timer;
 	int		speed;
 	float	radius;
 
 	radius = damage+40;
 	if (is_quad)
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 
 	VectorSet(offset, 8, 8, ent->viewheight-8);
 	AngleVectors (ent->client->v_angle, forward, right, NULL);
@@ -803,19 +803,19 @@ void weapon_grenadelauncher_fire (edict_t *ent)
 	vec3_t	offset;
 	vec3_t	forward, right;
 	vec3_t	start;
-	int		damage = 120;
+	int		damage = SG_HOST_GRENADE_DAMAGE;
 	float	radius;
 
-	radius = damage+40;
+	radius = damage + SG_HOST_GRENADE_RADIUS_BONUS;
 	if (is_quad)
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 
 #ifdef WEAP_BALANCE_OK	
 
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
 	{
-		radius*=1.5;
-		damage-=10;
+		radius *= SG_HOST_GRENADE_BALANCED_RADIUS_SCALE;
+		damage -= SG_HOST_GRENADE_BALANCED_DAMAGE_DELTA;
 	}
 #endif
 
@@ -827,7 +827,8 @@ void weapon_grenadelauncher_fire (edict_t *ent)
 	VectorScale (forward, -2, ent->client->kick_origin);
 	ent->client->kick_angles[0] = -1;
 
-	fire_grenade (ent, start, forward, damage, 600, 2.5, radius);
+	fire_grenade (ent, start, forward, damage, SG_HOST_GRENADE_SPEED,
+		SG_HOST_GRENADE_FUSE_SECONDS, radius);
 
 	gi.WriteByte (svc_muzzleflash);
 	gi.WriteShort (ent-g_edicts);
@@ -866,13 +867,14 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 	float	damage_radius;
 	int		radius_damage;
 
-	damage = 100 + (int)(random() * 20.0);
+	damage = SG_HOST_ROCKET_DAMAGE_BASE +
+		(int)(random() * SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN);
 
 #ifdef WEAP_BALANCE_OK
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
 	{
-		radius_damage = 75; //SURT was 120
-		damage_radius = 240; //LM_JORM was 360 //SURT was 120
+		radius_damage = SG_HOST_ROCKET_BALANCED_SPLASH_DAMAGE;
+		damage_radius = SG_HOST_ROCKET_BALANCED_SPLASH_RADIUS;
 	}
 	else
 	{
@@ -886,8 +888,8 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 	
 	if (is_quad)
 	{
-		damage *= 4;
-		radius_damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
+		radius_damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 	}
 
 	AngleVectors (ent->client->v_angle, forward, right, NULL);
@@ -900,7 +902,8 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
-		fire_rocket (ent, start, forward, damage, 750, damage_radius, radius_damage); //SURT 750 was 550 then 650 by id
+		fire_rocket (ent, start, forward, damage,
+			SG_HOST_ROCKET_BALANCED_SPEED, damage_radius, radius_damage);
 	else
 		fire_rocket (ent, start, forward, damage,
 			SG_RUNE_PROOF_ROCKETJUMP_ROCKET_SPEED, damage_radius,
@@ -949,7 +952,7 @@ void Blaster_Fire (edict_t *ent, vec3_t g_offset, int damage, qboolean hyper, in
 	vec3_t	offset;
 
 	if (is_quad)
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 	AngleVectors (ent->client->v_angle, forward, right, NULL);
 	VectorSet(offset, 24, 8, ent->viewheight-8);
 	VectorAdd (offset, g_offset, offset);
@@ -958,7 +961,8 @@ void Blaster_Fire (edict_t *ent, vec3_t g_offset, int damage, qboolean hyper, in
 	VectorScale (forward, -2, ent->client->kick_origin);
 	ent->client->kick_angles[0] = -1;
 
-	fire_blaster (ent, start, forward, damage, 1000, effect, hyper);
+	fire_blaster (ent, start, forward, damage, SG_HOST_BLASTER_SPEED,
+		effect, hyper);
 
 	// send muzzle flash
 	gi.WriteByte (svc_muzzleflash);
@@ -978,9 +982,9 @@ void Weapon_Blaster_Fire (edict_t *ent)
 	int		damage;
 
 	if (deathmatch->value)
-		damage = 15;
+		damage = SG_HOST_BLASTER_DM_DAMAGE;
 	else
-		damage = 10;
+		damage = SG_HOST_BLASTER_NON_DM_DAMAGE;
 	Blaster_Fire (ent, vec3_origin, damage, false, EF_BLASTER);
 
 #ifdef WEAP_BALANCE_OK	
@@ -1048,13 +1052,13 @@ void Weapon_HyperBlaster_Fire (edict_t *ent)
 			else
 				effect = 0;
 			if (deathmatch->value)
-				damage = 15;
+				damage = SG_HOST_HYPERBLASTER_DM_DAMAGE;
 			else
-				damage = 20;
+				damage = SG_HOST_HYPERBLASTER_NON_DM_DAMAGE;
 
 #ifdef WEAP_BALANCE_OK	
 			if ((int)ctfflags->value & CTF_WEAP_BALANCE) //surt, a little less damage
-				damage = 12; //these things come out pretty fast
+				damage = SG_HOST_HYPERBLASTER_BALANCED_DAMAGE;
 #endif
 
 			Blaster_Fire (ent, offset, damage, true, effect);
@@ -1109,14 +1113,14 @@ void Machinegun_Fire (edict_t *ent)
 	vec3_t		start;
 	vec3_t		forward, right;
 	vec3_t		angles;
-	int			damage = 8;
+	int			damage = SG_HOST_MACHINEGUN_DAMAGE;
 	int			kick = 2;
 	vec3_t		offset;
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
 	{
-		damage = 9; // 9/8 = 12.5% additional damage per bullet
+		damage = SG_HOST_MACHINEGUN_BALANCED_DAMAGE;
 		//we'll lose accuracy for our mod however (extra spread)
 	}
 #endif
@@ -1147,7 +1151,7 @@ void Machinegun_Fire (edict_t *ent)
 
 	if (is_quad)
 	{
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 		kick *= 4;
 	}
 
@@ -1175,7 +1179,10 @@ void Machinegun_Fire (edict_t *ent)
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE) //loss of accuracy
-		fire_bullet (ent, start, forward, damage, kick, DEFAULT_BULLET_HSPREAD + 100, DEFAULT_BULLET_VSPREAD + 100, MOD_MACHINEGUN);
+		fire_bullet (ent, start, forward, damage, kick,
+			DEFAULT_BULLET_HSPREAD + SG_HOST_MACHINEGUN_BALANCED_SPREAD_DELTA,
+			DEFAULT_BULLET_VSPREAD + SG_HOST_MACHINEGUN_BALANCED_SPREAD_DELTA,
+			MOD_MACHINEGUN);
 	else //id original code
 		fire_bullet (ent, start, forward, damage, kick, DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD, MOD_MACHINEGUN);
 #else
@@ -1225,9 +1232,9 @@ void Chaingun_Fire (edict_t *ent)
 	int			kick = 2;
 
 	if (deathmatch->value)
-		damage = 6;
+		damage = SG_HOST_CHAINGUN_DM_DAMAGE;
 	else
-		damage = 8;
+		damage = SG_HOST_CHAINGUN_NON_DM_DAMAGE;
 
 	if (ent->client->ps.gunframe == 5)
 		gi.sound(ent, CHAN_AUTO, gi.soundindex("weapons/chngnu1a.wav"), 1, ATTN_IDLE, 0);
@@ -1298,7 +1305,7 @@ void Chaingun_Fire (edict_t *ent)
 
 	if (is_quad)
 	{
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 		kick *= 4;
 	}
 
@@ -1355,7 +1362,7 @@ void weapon_shotgun_fire (edict_t *ent)
 	vec3_t		start;
 	vec3_t		forward, right;
 	vec3_t		offset;
-	int			damage = 4;
+	int			damage = SG_HOST_SHOTGUN_DAMAGE;
 	int			kick = 8;
 	int			count = 0; //surt weapon balance
 
@@ -1375,22 +1382,28 @@ void weapon_shotgun_fire (edict_t *ent)
 
 	if (is_quad)
 	{
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 		kick *= 4;
 	}
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE) //surt
 	{
-		damage+=1; //slightly more damage, except with quad
-		count = 2; //more pellets 
+		damage += SG_HOST_SHOTGUN_BALANCED_DAMAGE_DELTA;
+		count = SG_HOST_SHOTGUN_BALANCED_PELLET_DELTA;
 	}
 #endif
 
 	if (deathmatch->value)
-		fire_shotgun (ent, start, forward, damage, kick, 500, 500, DEFAULT_DEATHMATCH_SHOTGUN_COUNT + count, MOD_SHOTGUN); //surt balance
+		fire_shotgun (ent, start, forward, damage, kick,
+			SG_HOST_SHOTGUN_LIVE_HORIZONTAL_SPREAD,
+			SG_HOST_SHOTGUN_LIVE_VERTICAL_SPREAD,
+			DEFAULT_DEATHMATCH_SHOTGUN_COUNT + count, MOD_SHOTGUN);
 	else
-		fire_shotgun (ent, start, forward, damage, kick, 500, 500, DEFAULT_SHOTGUN_COUNT + count, MOD_SHOTGUN); //surt balance
+		fire_shotgun (ent, start, forward, damage, kick,
+			SG_HOST_SHOTGUN_LIVE_HORIZONTAL_SPREAD,
+			SG_HOST_SHOTGUN_LIVE_VERTICAL_SPREAD,
+			DEFAULT_SHOTGUN_COUNT + count, MOD_SHOTGUN);
 
 	// send muzzle flash
 	gi.WriteByte (svc_muzzleflash);
@@ -1494,7 +1507,7 @@ void weapon_fieldgun_fire (edict_t *ent)
 
 	if (is_quad)
 	{
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 		kick *= 4;
 	}
 
@@ -1544,7 +1557,7 @@ void weapon_supershotgun_fire (edict_t *ent)
 	vec3_t		forward, right;
 	vec3_t		offset;
 	vec3_t		v;
-	int			damage = 6;
+	int			damage = SG_HOST_SUPER_SHOTGUN_DAMAGE;
 	int			kick = 12;
 	int			count = 0; //for damage balance
 
@@ -1558,24 +1571,26 @@ void weapon_supershotgun_fire (edict_t *ent)
 
 	if (is_quad)
 	{
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 		kick *= 4;
 	}
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE) //surt
 	{
-		count = 12;
-		damage-=3; //slightly less damage, except with quad
+		count = SG_HOST_SUPER_SHOTGUN_BALANCED_PELLET_DELTA;
+		damage -= SG_HOST_SUPER_SHOTGUN_BALANCED_DAMAGE_DELTA;
 	}
 #endif
 
 	v[PITCH] = ent->client->v_angle[PITCH];
-	v[YAW]   = ent->client->v_angle[YAW] - 5;
+	v[YAW] = ent->client->v_angle[YAW] -
+		SG_HOST_SUPER_SHOTGUN_YAW_DEGREES;
 	v[ROLL]  = ent->client->v_angle[ROLL];
 	AngleVectors (v, forward, NULL, NULL);
 	fire_shotgun (ent, start, forward, damage, kick, DEFAULT_SHOTGUN_HSPREAD, DEFAULT_SHOTGUN_VSPREAD, DEFAULT_SSHOTGUN_COUNT/2 + count/2, MOD_SSHOTGUN); //surt, balance
-	v[YAW]   = ent->client->v_angle[YAW] + 5;
+	v[YAW] = ent->client->v_angle[YAW] +
+		SG_HOST_SUPER_SHOTGUN_YAW_DEGREES;
 	AngleVectors (v, forward, NULL, NULL);
 	fire_shotgun (ent, start, forward, damage, kick, DEFAULT_SHOTGUN_HSPREAD, DEFAULT_SHOTGUN_VSPREAD, DEFAULT_SSHOTGUN_COUNT/2 + count/2, MOD_SSHOTGUN); //surt balance
 
@@ -1620,7 +1635,7 @@ void weapon_railgun_fire (edict_t *ent)
 
 	if(matchstate == MATCH_RAILGUN_INPLAY)
 	{
-	 	damage = 5000;
+		damage = SG_HOST_RAILGUN_MATCH_DAMAGE;
 	 	kick = 5000;
 	}
 	else if (deathmatch->value)
@@ -1629,12 +1644,12 @@ void weapon_railgun_fire (edict_t *ent)
 		// normal damage is too extreme in dm
 		if ((int)ctfflags->value & CTF_WEAP_BALANCE)
 		{
-			damage = 82; //SURT was 100, we have a little formula to compensate later
+			damage = SG_HOST_RAILGUN_BALANCED_DAMAGE;
 			kick = 125; //make it a little less irritating to use
 		}
 		else
 		{
-			damage = 100;
+			damage = SG_HOST_RAILGUN_DM_DAMAGE;
 			kick = 200;
 		}
 #else
@@ -1645,13 +1660,13 @@ void weapon_railgun_fire (edict_t *ent)
 	}
 	else
 	{
-		damage = 150;
+		damage = SG_HOST_RAILGUN_NON_DM_DAMAGE;
 		kick = 250;
 	}
 
 	if (is_quad)
 	{
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 		kick *= 4;
 	}
 
@@ -1706,21 +1721,21 @@ void weapon_bfg_fire (edict_t *ent)
 	vec3_t	offset, start;
 	vec3_t	forward, right;
 	int		damage;
-	float	damage_radius = 1000;
+	float	damage_radius = SG_HOST_BFG_EFFECT_RADIUS;
 	
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
-		damage_radius = 1200; //SURT was 1000
+		damage_radius = SG_HOST_BFG_BALANCED_EFFECT_RADIUS;
 #endif
 
 	if (deathmatch->value)
-		damage = 200;
+		damage = SG_HOST_BFG_DAMAGE;
 	else
-		damage = 500;
+		damage = SG_HOST_BFG_NON_DM_DAMAGE;
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
-		damage = 180; //SURT was 200
+		damage = SG_HOST_BFG_BALANCED_DAMAGE;
 #endif
 
 	if (ent->client->ps.gunframe == 9)
@@ -1739,14 +1754,15 @@ void weapon_bfg_fire (edict_t *ent)
 
 	// cells can go down during windup (from power armor hits), so
 	// check again and abort firing if we don't have enough now
-	if (ent->client->pers.inventory[ent->client->ammo_index] < 50)
+	if (ent->client->pers.inventory[ent->client->ammo_index] <
+	    SG_HOST_BFG_AMMO_COST)
 	{
 		ent->client->ps.gunframe++;
 		return;
 	}
 
 	if (is_quad)
-		damage *= 4;
+		damage *= SG_HOST_DAMAGE_QUAD_SCALE;
 
 	AngleVectors (ent->client->v_angle, forward, right, NULL);
 
@@ -1762,11 +1778,14 @@ void weapon_bfg_fire (edict_t *ent)
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
-		fire_bfg (ent, start, forward, damage, 180, damage_radius); //SURT 180 was 400
+		fire_bfg (ent, start, forward, damage,
+			SG_HOST_BFG_BALANCED_SPEED, damage_radius);
 	else
-		fire_bfg (ent, start, forward, damage, 400, damage_radius); //SURT
+		fire_bfg (ent, start, forward, damage, SG_HOST_BFG_SPEED,
+			damage_radius);
 #else
-	fire_bfg (ent, start, forward, damage, 400, damage_radius); //SURT
+	fire_bfg (ent, start, forward, damage, SG_HOST_BFG_SPEED,
+		damage_radius);
 #endif
 
 	ent->client->ps.gunframe++;
@@ -1774,13 +1793,16 @@ void weapon_bfg_fire (edict_t *ent)
 	PlayerNoise(ent, start, PNOISE_WEAPON);
 
 	if (! ( (int)dmflags->value & DF_INFINITE_AMMO ) )
-		ent->client->pers.inventory[ent->client->ammo_index] -= 50;
+		ent->client->pers.inventory[ent->client->ammo_index] -=
+			SG_HOST_BFG_AMMO_COST;
 }
 
 void Weapon_BFG (edict_t *ent)
 {
 	static int	pause_frames[]	= {39, 45, 50, 55, 0};
-	static int	fire_frames[]	= {9, 17, 0};
+	static int	fire_frames[]	= {
+		SG_HOST_BFG_FLASH_FRAME, SG_HOST_BFG_FIRE_FRAME, 0
+	};
 
 	Weapon_Generic (ent, 8, 32, 55, 58, pause_frames, fire_frames, weapon_bfg_fire);
 }
@@ -1886,7 +1908,7 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 				if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM)) //noise for hitting players
 					gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/gkilling.wav"), 1, ATTN_NORM, 0);
 				//every 1.5 seconds
-				T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 1, 1, DAMAGE_ENERGY, MOD_CTF_GRAPPLE); //damage, knockback
+				T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, SG_HOST_HOOK_ATTACHED_DAMAGE, SG_HOST_HOOK_ATTACHED_DAMAGE, DAMAGE_ENERGY, MOD_CTF_GRAPPLE); //damage, knockback
 				self->hook_lastframe = level.framenum;
 			}
 		}
@@ -1898,7 +1920,7 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8f, ATTN_NORM, 0);
 			
 			// Bonus damage for first hit
-			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 8, 8, DAMAGE_ENERGY, MOD_CTF_GRAPPLE); //damage, knockback
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, SG_HOST_HOOK_INITIAL_DAMAGE, SG_HOST_HOOK_INITIAL_DAMAGE, DAMAGE_ENERGY, MOD_CTF_GRAPPLE); //damage, knockback
 		}
 	}
 	
@@ -1991,7 +2013,7 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 			{
 				if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM))
 					gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/gkilling.wav"), 1, ATTN_NORM, 0);
-				T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 1, 1, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+				T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, SG_HOST_HOOK_ATTACHED_DAMAGE, SG_HOST_HOOK_ATTACHED_DAMAGE, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
 				self->hook_lastframe = level.framenum;
 			}
 		}
@@ -2001,7 +2023,7 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghit.wav"), 1, ATTN_NORM, 0);
 			else
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8f, ATTN_NORM, 0);
-			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, 8, 8, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, SG_HOST_HOOK_INITIAL_DAMAGE, SG_HOST_HOOK_INITIAL_DAMAGE, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
 		}
 	}
 
@@ -2088,7 +2110,7 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	bolt->think = Grapple_Bolt_Think;
 	bolt->dmg = 2;
 	bolt->takedamage = DAMAGE_YES;
-	bolt->health = 59;
+	bolt->health = SG_HOST_HOOK_HEALTH;
 	gi.linkentity(bolt);
 	SG_HumanTraceHookFire(self, bolt);
 	gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/grfire.wav"),
@@ -2131,7 +2153,7 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	bolt->think = Grapple_Bolt_Think;
 	bolt->dmg = 2;
 	bolt->takedamage = DAMAGE_YES;
-	bolt->health = 59;	 // after 59 damage, hook destoyed
+	bolt->health = SG_HOST_HOOK_HEALTH;	 // after 59 damage, hook destoyed
 	gi.linkentity (bolt);
 	if (SG_OwnsBot(self))
 	{

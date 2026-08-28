@@ -16,6 +16,10 @@
 
 // Plasma Spread Range (max angle off line of sight) 
 #define	PLASMA_SPREAD_RANGE	0.1745	// 10 degrees (radians)
+#define PLASMA_SPREAD_YAW_DEGREES 10
+#define PLASMA_REFLECT_LIFETIME_SECONDS 1.5
+#define PLASMA_SPREAD_LIFETIME_SECONDS 3.0
+#define PLASMA_REFLECT_HALF_EXTENT 12
 
 // Plasma Projectile Speeds
 //#define	PLASMA_REFLECT_SPEED	650
@@ -59,6 +63,3 @@
 				PLASMA_SOUND_VENT			\
 				PLASMA_MODEL_VIEW PLASMA_MODEL_WORLD	\
 				PLASMA_SPRITE_FLY PLASMA_SPRITE_HIT 
-
-
-

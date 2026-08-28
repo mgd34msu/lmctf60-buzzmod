@@ -2208,7 +2208,7 @@ always owned, never in the world
 			/* icon */		"w_bfg",
 			/* pickup */	"BFG10K",
 					0,
-					50,
+					SG_HOST_BFG_AMMO_COST,
 					"Cells",
 					IT_WEAPON | IT_STAY_COOP,
 					WEAP_BFG,

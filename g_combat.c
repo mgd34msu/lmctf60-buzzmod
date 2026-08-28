@@ -822,7 +822,7 @@ void T_RadiusDamage (edict_t *inflictor, edict_t *attacker, float damage, edict_
 #endif
 
 		if (ent == attacker)
-			points = points * 0.5;
+			points = points * SG_HOST_RADIUS_SELF_SCALE;
 		if (points > 0)
 		{
 			if (CanDamage (ent, inflictor))

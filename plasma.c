@@ -49,7 +49,7 @@ int damage;
 
 	//bat
 	if(quadmeister)
-		damage = PLASMA_BOUNCE_DAMAGE * 4;
+		damage = PLASMA_BOUNCE_DAMAGE * SG_HOST_DAMAGE_QUAD_SCALE;
 	else
 		damage = PLASMA_BOUNCE_DAMAGE;
 
@@ -122,7 +122,7 @@ int damage;
 	
 	//bat
 	if(quadmeister)
-		damage = PLASMA_SPREAD_DAMAGE * 4;
+		damage = PLASMA_SPREAD_DAMAGE * SG_HOST_DAMAGE_QUAD_SCALE;
 	else
 		damage = PLASMA_SPREAD_DAMAGE;
 
@@ -230,7 +230,7 @@ fire_plasma_reflect
 	
 	self->think = G_FreeEdict;			// change this to handle
 	//self->nextthink = level.time + 3.0;		//  sprite animation?
-	self->nextthink = level.time + 1.5;
+	self->nextthink = level.time + PLASMA_REFLECT_LIFETIME_SECONDS;
 
 	gi.linkentity(self);
 }
@@ -283,12 +283,12 @@ fire_plasma_spread
 	vectoangles(dir,angles);
 
 	// right spread, has 10+ in yaw
-	angles[YAW] -= 10;
+	angles[YAW] -= PLASMA_SPREAD_YAW_DEGREES;
 	AngleVectors( angles, dir, NULL, NULL );
 	VectorScale(dir, PLASMA_SPREAD_SPEED, goop_r->velocity);
 
 	// left spread, has 10- in yaw
-	angles[YAW] += 20;
+	angles[YAW] += 2 * PLASMA_SPREAD_YAW_DEGREES;
 	AngleVectors( angles, dir, NULL, NULL );
 	VectorScale(dir, PLASMA_SPREAD_SPEED, goop_l->velocity);
 
@@ -299,9 +299,9 @@ fire_plasma_spread
 	goop_l->think = G_FreeEdict;
 	goop_c->think = G_FreeEdict;
 	goop_r->think = G_FreeEdict;
-	goop_l->nextthink = level.time + 3.0;
-	goop_c->nextthink = level.time + 3.0;
-	goop_r->nextthink = level.time + 3.0;
+	goop_l->nextthink = level.time + PLASMA_SPREAD_LIFETIME_SECONDS;
+	goop_c->nextthink = level.time + PLASMA_SPREAD_LIFETIME_SECONDS;
+	goop_r->nextthink = level.time + PLASMA_SPREAD_LIFETIME_SECONDS;
 
 	gi.linkentity(goop_l);
 	gi.linkentity(goop_c);
@@ -324,8 +324,10 @@ fire_plasma
 
 
 	// give it some thickness for the bounce
-	VectorSet (goop->mins, -12,-12,-12);
-	VectorSet (goop->maxs, 12,12,12);
+	VectorSet (goop->mins, -PLASMA_REFLECT_HALF_EXTENT,
+		-PLASMA_REFLECT_HALF_EXTENT, -PLASMA_REFLECT_HALF_EXTENT);
+	VectorSet (goop->maxs, PLASMA_REFLECT_HALF_EXTENT,
+		PLASMA_REFLECT_HALF_EXTENT, PLASMA_REFLECT_HALF_EXTENT);
 
 	if(reflect)
 	{
