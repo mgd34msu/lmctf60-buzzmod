@@ -80,8 +80,8 @@ enum
 
 typedef struct sg_water_capability_fact_s
 {
-	/* Region-scoped facts cover the full audited convex semantic volume.
-	 * Witnesses validate host law; they do not narrow that scope. */
+	/* Exact host replay observation at source_witness, using source_velocity and
+	 * command_vector. Region references identify semantic ownership. */
 	uint32_t order;
 	uint32_t source_region;
 	uint32_t destination_region;
@@ -127,6 +127,7 @@ typedef struct sg_water_capability_set_s
 	uint64_t host_pmove_frames;
 	uint64_t lattice_solve_calls;
 	uint64_t lattice_constraints;
+	uint64_t same_cell_candidate_pairs;
 	uint32_t lattice_maximum_binary_shift;
 } sg_water_capability_set_t;
 

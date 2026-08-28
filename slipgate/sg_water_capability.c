@@ -50,6 +50,24 @@ typedef struct sg_water_boundary_key_s
 	uint32_t portal;
 } sg_water_boundary_key_t;
 
+typedef struct sg_water_sweep_event_s
+{
+	float coordinate;
+	uint32_t reference;
+	uint8_t starts;
+} sg_water_sweep_event_t;
+
+typedef struct sg_water_interval_node_s
+{
+	float low;
+	float high;
+	float subtree_high;
+	uint32_t reference;
+	uint32_t left;
+	uint32_t right;
+	uint32_t height;
+} sg_water_interval_node_t;
+
 static int PointInRegion(const sg_water_build_t *build, uint32_t region_index,
 	const float point[3]);
 
@@ -184,8 +202,16 @@ static int IdentityValid(const sg_rune_model_identity_t *identity)
 		return 0;
 	physics = &identity->physics;
 	return isfinite(physics->gravity) && physics->gravity >= 0.0f &&
+		isfinite(physics->ground_acceleration) &&
+		physics->ground_acceleration >= 0.0f &&
+		isfinite(physics->air_acceleration) &&
+		physics->air_acceleration >= 0.0f &&
 		isfinite(physics->water_acceleration) &&
 		physics->water_acceleration >= 0.0f &&
+		isfinite(physics->hook_acceleration) &&
+		physics->hook_acceleration >= 0.0f &&
+		isfinite(physics->external_acceleration) &&
+		physics->external_acceleration >= 0.0f &&
 		isfinite(physics->water_drag) && physics->water_drag >= 0.0f &&
 		isfinite(physics->max_velocity) && physics->max_velocity > 0.0f &&
 		physics->gravity <= (float)SHRT_MAX &&
@@ -672,6 +698,7 @@ static int Probe(sg_water_build_t *build, uint32_t source_region,
 	request.state.gravity = (short)build->authority->identity.physics.gravity;
 	request.previous_state = request.state;
 	CommandForDirection(direction, &request.command);
+	Copy3(fact->command_vector.value, direction);
 	if (!SG_HostPmoveEvaluateFrame(build->authority, NULL, build->host_pmove,
 		&request, &result, &error))
 	{
@@ -779,31 +806,52 @@ static int AppendFact(sg_water_build_t *build,
 	return 1;
 }
 
+static int ResolveDestinationPhase(sg_water_build_t *build, uint32_t region,
+	const sg_host_pmove_result_t *result, uint32_t *phase_out)
+{
+	uint32_t binding;
+	uint32_t matches = 0U;
+	uint32_t matched_phase = 0U;
+
+	for (binding = build->binding_offsets[region];
+		binding < build->binding_offsets[region + 1U]; binding++)
+	{
+		uint32_t phase = build->bindings[binding].phase;
+
+		if (!ResultMatchesDestination(build, region, phase, result))
+			continue;
+		matched_phase = phase;
+		matches++;
+		if (matches > 1U)
+		{
+			SetError(build, SG_WATER_CAPABILITY_ERROR_INVALID_PHASE, region);
+			return -1;
+		}
+	}
+	if (matches == 0U)
+		return 0;
+	*phase_out = matched_phase;
+	return 1;
+}
+
 static int ProbeLocalFact(sg_water_build_t *build, uint32_t region,
 	const float direction[3], sg_water_capability_fact_t *fact)
 {
 	sg_host_pmove_result_t result;
-	uint32_t destination_binding;
+	uint32_t destination_phase;
+	int resolved;
 
 	if (!Probe(build, region, fact->source_witness.value, direction, fact,
 		&result))
 		return 0;
 	if (!PointInRegion(build, region, result.origin))
 		return 1;
-	for (destination_binding = build->binding_offsets[region];
-		destination_binding < build->binding_offsets[region + 1U];
-		destination_binding++)
-	{
-		sg_water_capability_fact_t emitted = *fact;
-
-		emitted.destination_phase =
-			build->bindings[destination_binding].phase;
-		if (ResultMatchesDestination(build, region,
-			emitted.destination_phase, &result) &&
-			!AppendFact(build, &emitted))
-			return 0;
-	}
-	return 1;
+	resolved = ResolveDestinationPhase(build, region, &result,
+		&destination_phase);
+	if (resolved <= 0)
+		return resolved == 0;
+	fact->destination_phase = destination_phase;
+	return AppendFact(build, fact);
 }
 
 static void FillRegionFact(const sg_water_build_t *build, uint32_t region,
@@ -832,7 +880,6 @@ static void FillRegionFact(const sg_water_build_t *build, uint32_t region,
 	fact->boundary_witness = record->interior_witness;
 	fact->destination_witness = record->interior_witness;
 	DirectionVector(direction, fact->direction_vector.value);
-	fact->command_vector = fact->direction_vector;
 	fact->flags = SG_WATER_CAPABILITY_DIRECTIONAL;
 }
 
@@ -1290,7 +1337,8 @@ static int AppendBoundaryDirection(sg_water_build_t *build,
 		source_binding++)
 	{
 		sg_water_capability_fact_t fact;
-		uint32_t destination_binding;
+		uint32_t destination_phase;
+		int resolved;
 
 		memset(&fact, 0, sizeof(fact));
 		fact.source_region = source_region;
@@ -1311,7 +1359,6 @@ static int AppendBoundaryDirection(sg_water_build_t *build,
 		Copy3(fact.boundary_witness.value, boundary_witness);
 		Copy3(fact.destination_witness.value, destination_witness);
 		Copy3(fact.direction_vector.value, direction);
-		Copy3(fact.command_vector.value, direction);
 		fact.flags = SG_WATER_CAPABILITY_DIRECTIONAL;
 		if (fact.source_medium != fact.destination_medium)
 			fact.flags |= SG_WATER_CAPABILITY_CHANGES_MEDIUM;
@@ -1322,18 +1369,15 @@ static int AppendBoundaryDirection(sg_water_build_t *build,
 			return 0;
 		if (!PointInRegion(build, destination_region, result.origin))
 			continue;
-		for (destination_binding = build->binding_offsets[destination_region];
-			destination_binding <
-				build->binding_offsets[destination_region + 1U];
-			destination_binding++)
-		{
-			fact.destination_phase = build->bindings[destination_binding].phase;
-			if (!ResultMatchesDestination(build, destination_region,
-				fact.destination_phase, &result))
-				continue;
-			if (!AppendFact(build, &fact))
-				return 0;
-		}
+		resolved = ResolveDestinationPhase(build, destination_region,
+			&result, &destination_phase);
+		if (resolved < 0)
+			return 0;
+		if (resolved == 0)
+			continue;
+		fact.destination_phase = destination_phase;
+		if (!AppendFact(build, &fact))
+			return 0;
 	}
 	return 1;
 }
@@ -1378,6 +1422,322 @@ static int AppendBoundaryPair(sg_water_build_t *build, uint32_t first_region,
 			second_witness, witness, first_witness))
 		return 0;
 	return 1;
+}
+
+static int SweepEventCompare(const void *left_value, const void *right_value)
+{
+	const sg_water_sweep_event_t *left = left_value;
+	const sg_water_sweep_event_t *right = right_value;
+
+	if (left->coordinate < right->coordinate) return -1;
+	if (left->coordinate > right->coordinate) return 1;
+	if (left->starts > right->starts) return -1;
+	if (left->starts < right->starts) return 1;
+	if (left->reference < right->reference) return -1;
+	if (left->reference > right->reference) return 1;
+	return 0;
+}
+
+static uint32_t IntervalHeight(const sg_water_interval_node_t *nodes,
+	uint32_t node)
+{
+	return node == UINT32_MAX ? 0U : nodes[node].height;
+}
+
+static void UpdateIntervalNode(sg_water_interval_node_t *nodes, uint32_t node)
+{
+	uint32_t left_height = IntervalHeight(nodes, nodes[node].left);
+	uint32_t right_height = IntervalHeight(nodes, nodes[node].right);
+	float high = nodes[node].high;
+
+	if (nodes[node].left != UINT32_MAX)
+		high = fmaxf(high, nodes[nodes[node].left].subtree_high);
+	if (nodes[node].right != UINT32_MAX)
+		high = fmaxf(high, nodes[nodes[node].right].subtree_high);
+	nodes[node].height = 1U + (left_height > right_height ?
+		left_height : right_height);
+	nodes[node].subtree_high = high;
+}
+
+static int IntervalKeyCompare(const sg_water_interval_node_t *left,
+	const sg_water_interval_node_t *right)
+{
+	if (left->low < right->low) return -1;
+	if (left->low > right->low) return 1;
+	if (left->high < right->high) return -1;
+	if (left->high > right->high) return 1;
+	if (left->reference < right->reference) return -1;
+	if (left->reference > right->reference) return 1;
+	return 0;
+}
+
+static uint32_t RotateIntervalLeft(sg_water_interval_node_t *nodes,
+	uint32_t root)
+{
+	uint32_t replacement = nodes[root].right;
+
+	nodes[root].right = nodes[replacement].left;
+	nodes[replacement].left = root;
+	UpdateIntervalNode(nodes, root);
+	UpdateIntervalNode(nodes, replacement);
+	return replacement;
+}
+
+static uint32_t RotateIntervalRight(sg_water_interval_node_t *nodes,
+	uint32_t root)
+{
+	uint32_t replacement = nodes[root].left;
+
+	nodes[root].left = nodes[replacement].right;
+	nodes[replacement].right = root;
+	UpdateIntervalNode(nodes, root);
+	UpdateIntervalNode(nodes, replacement);
+	return replacement;
+}
+
+static uint32_t BalanceIntervalNode(sg_water_interval_node_t *nodes,
+	uint32_t root)
+{
+	int balance;
+
+	UpdateIntervalNode(nodes, root);
+	balance = (int)IntervalHeight(nodes, nodes[root].left) -
+		(int)IntervalHeight(nodes, nodes[root].right);
+	if (balance > 1)
+	{
+		uint32_t left = nodes[root].left;
+
+		if (IntervalHeight(nodes, nodes[left].right) >
+			IntervalHeight(nodes, nodes[left].left))
+			nodes[root].left = RotateIntervalLeft(nodes, left);
+		return RotateIntervalRight(nodes, root);
+	}
+	if (balance < -1)
+	{
+		uint32_t right = nodes[root].right;
+
+		if (IntervalHeight(nodes, nodes[right].left) >
+			IntervalHeight(nodes, nodes[right].right))
+			nodes[root].right = RotateIntervalRight(nodes, right);
+		return RotateIntervalLeft(nodes, root);
+	}
+	return root;
+}
+
+static uint32_t InsertIntervalNode(sg_water_interval_node_t *nodes,
+	uint32_t root, uint32_t inserted)
+{
+	if (root == UINT32_MAX)
+		return inserted;
+	if (IntervalKeyCompare(&nodes[inserted], &nodes[root]) < 0)
+		nodes[root].left = InsertIntervalNode(nodes, nodes[root].left, inserted);
+	else
+		nodes[root].right = InsertIntervalNode(nodes, nodes[root].right, inserted);
+	return BalanceIntervalNode(nodes, root);
+}
+
+static uint32_t RemoveIntervalNode(sg_water_interval_node_t *nodes,
+	uint32_t root, const sg_water_interval_node_t *removed)
+{
+	int comparison;
+
+	if (root == UINT32_MAX)
+		return root;
+	comparison = IntervalKeyCompare(removed, &nodes[root]);
+	if (comparison < 0)
+		nodes[root].left = RemoveIntervalNode(nodes, nodes[root].left, removed);
+	else if (comparison > 0)
+		nodes[root].right = RemoveIntervalNode(nodes, nodes[root].right, removed);
+	else if (nodes[root].left == UINT32_MAX ||
+		nodes[root].right == UINT32_MAX)
+		return nodes[root].left != UINT32_MAX ?
+			nodes[root].left : nodes[root].right;
+	else
+	{
+		uint32_t successor = nodes[root].right;
+		sg_water_interval_node_t key;
+
+		while (nodes[successor].left != UINT32_MAX)
+			successor = nodes[successor].left;
+		key = nodes[successor];
+		nodes[root].low = key.low;
+		nodes[root].high = key.high;
+		nodes[root].reference = key.reference;
+		nodes[root].right = RemoveIntervalNode(nodes, nodes[root].right, &key);
+	}
+	return BalanceIntervalNode(nodes, root);
+}
+
+static int PositiveBoundsOverlap(const sg_water_build_t *build,
+	const sg_water_face_ref_t *first, const sg_water_face_ref_t *second,
+	uint32_t first_axis, uint32_t second_axis)
+{
+	const sg_rune_bounds_t *left =
+		&build->semantics->regions[first->region].bounds;
+	const sg_rune_bounds_t *right =
+		&build->semantics->regions[second->region].bounds;
+
+	return fmaxf(left->mins.value[first_axis],
+			right->mins.value[first_axis]) <
+		fminf(left->maxs.value[first_axis], right->maxs.value[first_axis]) &&
+		fmaxf(left->mins.value[second_axis],
+			right->mins.value[second_axis]) <
+		fminf(left->maxs.value[second_axis], right->maxs.value[second_axis]);
+}
+
+static int QueryIntervalTree(sg_water_build_t *build,
+	const sg_water_face_ref_t *references,
+	const sg_water_interval_node_t *nodes, uint32_t root,
+	uint32_t query_reference, uint32_t sweep_axis, uint32_t interval_axis)
+{
+	const sg_water_face_ref_t *query = &references[query_reference];
+	const sg_rune_bounds_t *query_bounds =
+		&build->semantics->regions[query->region].bounds;
+	float low = query_bounds->mins.value[interval_axis];
+	float high = query_bounds->maxs.value[interval_axis];
+	const sg_water_interval_node_t *node;
+
+	if (root == UINT32_MAX)
+		return 1;
+	node = &nodes[root];
+	if (node->left != UINT32_MAX &&
+		nodes[node->left].subtree_high > low &&
+		!QueryIntervalTree(build, references, nodes, node->left,
+			query_reference, sweep_axis, interval_axis))
+		return 0;
+	if (node->low < high && node->high > low)
+	{
+		const sg_water_face_ref_t *candidate =
+			&references[node->reference];
+
+		if (candidate->region != query->region &&
+			PositiveBoundsOverlap(build, candidate, query,
+				sweep_axis, interval_axis))
+		{
+			build->output->same_cell_candidate_pairs++;
+			if (!AppendBoundaryPair(build, candidate->region, candidate->face,
+				query->region, query->face,
+				SG_WATER_CAPABILITY_INDEX_NONE))
+				return 0;
+		}
+	}
+	if (node->low < high &&
+		!QueryIntervalTree(build, references, nodes, node->right,
+			query_reference, sweep_axis, interval_axis))
+		return 0;
+	return 1;
+}
+
+static int BuildSameCellBoundaryGroup(sg_water_build_t *build,
+	const sg_water_face_ref_t *references, uint32_t group_start,
+	uint32_t group_end)
+{
+	sg_water_sweep_event_t *events = NULL;
+	sg_water_interval_node_t *nodes = NULL;
+	uint32_t roots[2] = { UINT32_MAX, UINT32_MAX };
+	uint32_t unique_count = 0U;
+	uint32_t event_count;
+	uint32_t reference;
+	uint32_t event;
+	uint32_t dominant = 0U;
+	uint32_t tangents[2];
+	uint32_t sweep_axis;
+	uint32_t interval_axis;
+	float center_span[2];
+	int result = 0;
+
+	for (reference = group_start; reference < group_end; reference++)
+		if (reference == group_start ||
+			!SameRegionSide(&references[reference - 1U],
+				&references[reference]))
+			unique_count++;
+	if (unique_count > UINT32_MAX / 2U ||
+		!AllocationFits((size_t)unique_count * 2U, sizeof(*events)) ||
+		!AllocationFits((size_t)unique_count, sizeof(*nodes)))
+	{
+		SetError(build, SG_WATER_CAPABILITY_ERROR_OVERFLOW, unique_count);
+		return 0;
+	}
+	events = malloc((size_t)unique_count * 2U * sizeof(*events));
+	nodes = calloc(unique_count, sizeof(*nodes));
+	if ((!events || !nodes) && unique_count != 0U)
+	{
+		SetError(build, SG_WATER_CAPABILITY_ERROR_OUT_OF_MEMORY, group_start);
+		goto done;
+	}
+	for (reference = 1U; reference < 3U; reference++)
+		if (fabsf(build->semantics->faces[references[group_start].face].normal[
+			reference]) > fabsf(build->semantics->faces[
+				references[group_start].face].normal[dominant]))
+			dominant = reference;
+	tangents[0] = (dominant + 1U) % 3U;
+	tangents[1] = (dominant + 2U) % 3U;
+	for (reference = 0U; reference < 2U; reference++)
+	{
+		float minimum = FLT_MAX;
+		float maximum = -FLT_MAX;
+		uint32_t source;
+
+		for (source = group_start; source < group_end; source++)
+		{
+			const sg_rune_bounds_t *bounds =
+				&build->semantics->regions[references[source].region].bounds;
+			float center = (bounds->mins.value[tangents[reference]] +
+				bounds->maxs.value[tangents[reference]]) * 0.5f;
+
+			minimum = fminf(minimum, center);
+			maximum = fmaxf(maximum, center);
+		}
+		center_span[reference] = maximum - minimum;
+	}
+	sweep_axis = center_span[1] > center_span[0] ? tangents[1] : tangents[0];
+	interval_axis = sweep_axis == tangents[0] ? tangents[1] : tangents[0];
+	event_count = 0U;
+	for (reference = group_start; reference < group_end; reference++)
+	{
+		const sg_rune_bounds_t *bounds;
+		uint32_t node;
+
+		if (reference != group_start &&
+			SameRegionSide(&references[reference - 1U], &references[reference]))
+			continue;
+		node = event_count / 2U;
+		bounds = &build->semantics->regions[references[reference].region].bounds;
+		nodes[node].low = bounds->mins.value[interval_axis];
+		nodes[node].high = bounds->maxs.value[interval_axis];
+		nodes[node].subtree_high = nodes[node].high;
+		nodes[node].reference = reference;
+		nodes[node].left = UINT32_MAX;
+		nodes[node].right = UINT32_MAX;
+		nodes[node].height = 1U;
+		events[event_count].coordinate = bounds->mins.value[sweep_axis];
+		events[event_count].reference = node;
+		events[event_count++].starts = 1U;
+		events[event_count].coordinate = bounds->maxs.value[sweep_axis];
+		events[event_count].reference = node;
+		events[event_count++].starts = 0U;
+	}
+	qsort(events, event_count, sizeof(*events), SweepEventCompare);
+	for (event = 0U; event < event_count; event++)
+	{
+		uint32_t node = events[event].reference;
+		uint32_t side = references[nodes[node].reference].reversed ? 1U : 0U;
+
+		if (events[event].starts)
+		{
+			if (!QueryIntervalTree(build, references, nodes, roots[1U - side],
+				nodes[node].reference, sweep_axis, interval_axis))
+				goto done;
+			roots[side] = InsertIntervalNode(nodes, roots[side], node);
+		}
+		else
+			roots[side] = RemoveIntervalNode(nodes, roots[side], &nodes[node]);
+	}
+	result = 1;
+done:
+	free(events);
+	free(nodes);
+	return result;
 }
 
 static int BuildSameCellBoundaries(sg_water_build_t *build)
@@ -1431,33 +1791,15 @@ static int BuildSameCellBoundaries(sg_water_build_t *build)
 	for (group_start = 0U; group_start < reference_count; )
 	{
 		uint32_t group_end = group_start + 1U;
-		uint32_t left;
-		uint32_t right;
 
 		while (group_end < reference_count &&
 			SameSemanticSource(&references[group_start], &references[group_end]))
 			group_end++;
-		for (left = group_start; left < group_end; left++)
+		if (!BuildSameCellBoundaryGroup(build, references, group_start,
+			group_end))
 		{
-			if (left != group_start &&
-				SameRegionSide(&references[left - 1U], &references[left]))
-				continue;
-			for (right = left + 1U; right < group_end; right++)
-			{
-				if (right != left + 1U &&
-					SameRegionSide(&references[right - 1U], &references[right]))
-					continue;
-				if (references[left].reversed != references[right].reversed &&
-					references[left].region != references[right].region &&
-					!AppendBoundaryPair(build, references[left].region,
-						references[left].face, references[right].region,
-						references[right].face,
-						SG_WATER_CAPABILITY_INDEX_NONE))
-				{
-					free(references);
-					return 0;
-				}
-			}
+			free(references);
+			return 0;
 		}
 		group_start = group_end;
 	}
