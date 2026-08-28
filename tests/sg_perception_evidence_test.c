@@ -755,6 +755,16 @@ static void TestAuthorityValidationAndTransactionalFinalElement(void)
 		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY);
 	observation.authentication = Authentication(
 		SG_PERCEPTION_AUTHORITY_HOST_SENSOR, 100U, 100U);
+	observation.authentication.issuer_team = 2U;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY);
+	observation.authentication = Authentication(
+		SG_PERCEPTION_AUTHORITY_HOST_SENSOR, 100U, 100U);
+	observation.authentication.audience_team = 2U;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation, storage,
+		4U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY);
+	observation.authentication = Authentication(
+		SG_PERCEPTION_AUTHORITY_HOST_SENSOR, 100U, 100U);
 	hypotheses[0] = Hypothesis(0U, 0U,
 		SG_PERCEPTION_LOCATION_RUNE_STATIC, 32.0f, 1.0f);
 	hypotheses[1] = Hypothesis(1U, 0U,

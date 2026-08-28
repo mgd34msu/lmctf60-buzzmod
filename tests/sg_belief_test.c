@@ -714,6 +714,18 @@ static void TestIdentityGenerationAndMotionFailClosed(void)
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
 		SG_BELIEF_REDUCE_REJECTED_AUTHORITY);
 	evidence.provenance.topology_revision = fixture.snapshot.topology_revision;
+	evidence.provenance.issuer_team = 2U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_AUTHORITY);
+	evidence.provenance.issuer_team = 1U;
+	evidence.provenance.audience_team = 2U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_AUTHORITY);
+	evidence.provenance.audience_team = 1U;
+	evidence.target_team = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	evidence.target_team = 2U;
 	frame.evidence_count = 0U;
 	frame.expected_generation++;
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
