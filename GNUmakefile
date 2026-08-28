@@ -3340,6 +3340,8 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		slipgate/sg_rune_v2_artifact_publication.c \
 		slipgate/sg_rune_v2_artifact_publication_manifest.c \
 		slipgate/sg_rune_v2_artifact_publication_io.c \
+		tests/run_sg_strategy_test.sh tests/sg_strategy_test.c \
+		slipgate/sg_strategy.c slipgate/sg_strategy_contract.h \
 		tests/sg_destination_field_test.c slipgate/sg_destination_field.c \
 		tests/run_sg_destination_field_cache_test.sh \
 		tests/sg_destination_field_cache_test.c \
@@ -3371,6 +3373,7 @@ rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
 		-o "$$tmp/loader"; \
 	"$$tmp/loader"; \
 	sh tests/run_sg_rune_v2_artifact_publication_test.sh; \
+	sh tests/run_sg_strategy_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c tests/sg_destination_field_test.c \
 		-o "$$tmp/field-test.o"; \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination_field.c \

@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | The static-model contract, complete BSP reader, authoritative BSP collision and Pmove adapter, canonical artifact codec, fail-closed artifact loader, atomic joint artifact publication, and directional destination-field solver with generational cache are integrated on `slipgate`. Independent correction passes closed host-parity, transactional-decode, capability-domain, terminal-physics, moving-target freshness, API-version, exact-sidecar-identity, and publication-restart defects. Configuration-space construction, independent artifact readers, and production navigation integration remain open. |
+| Architectural state | The static-model contract, complete BSP reader, authoritative BSP collision and Pmove adapter, canonical artifact codec, fail-closed artifact loader, atomic joint artifact publication, directional destination-field solver with generational cache, and typed strategy compiler/reducer are integrated on `slipgate`. Independent correction passes closed host-parity, transactional-decode, capability-domain, terminal-physics, moving-target freshness, API-version, exact-sidecar-identity, publication-restart, strategy-authority, and fixed-point-capacity defects. Configuration-space construction, independent artifact readers, and production navigation/strategy integration remain open. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` and zero `.snag` files. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Every one remains review-required. |
@@ -186,7 +186,7 @@ phase can close:
 
 - [x] Resolve the exact cell/portal/capability types, coordinate quantization,
   identity fields, cost representation, and format limits.
-- [ ] Define the destination-field API, strategy-plan types, tactical movement
+- [x] Define the destination-field API, strategy-plan types, tactical movement
   API, runtime belief state, and weapon profile/effect interfaces.
 - [ ] Define completeness, deterministic serialization, and error contracts.
 - [x] Update `ARCHITECTURE.md` to distinguish current migration state from the
