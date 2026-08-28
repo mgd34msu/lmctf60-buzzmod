@@ -1369,7 +1369,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
-	project-completion-plan-test \
+	rune-v2-contract-test project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
 	deslop-test \
@@ -3590,6 +3590,7 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
+		rune-v2-contract-test \
 		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
 		train-station-candidate-test train-station-candidate-game-test \
 		train-station-board-path-test \
@@ -3819,6 +3820,22 @@ project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
 		PROJECT-COMPLETION-PLAN.md
 	$(E) [TEST] project completion plan
 	$(Q)python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
+
+rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
+		tests/sg_rune_runtime_contract_test.c \
+		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c
+	$(E) [TEST] RUNE v2 contracts
+	$(Q)set -e; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -r "$$tmp"' EXIT HUP INT TERM; \
+	strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes'; \
+	$(CC) $$strict -I. tests/sg_rune_v2_artifact_contract_test.c -o "$$tmp/artifact"; \
+	"$$tmp/artifact"; \
+	$(CC) $$strict -I. tests/sg_rune_runtime_contract_test.c -o "$$tmp/runtime"; \
+	"$$tmp/runtime"; \
+	$(CC) $$strict -Wcast-align -I. tests/sg_rune_model_contract_test.c \
+		slipgate/sg_rune_model.c -lm -o "$$tmp/model"; \
+	"$$tmp/model"
 
 deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 		$(SOURCE_SIZE_BUDGET)

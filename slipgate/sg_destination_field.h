@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sg_rune_model.h"
+
 #define SG_RUNTIME_CONTRACT_VERSION UINT16_C(2)
 #define SG_DESTINATION_FIELD_INF UINT32_MAX
 #define SG_DESTINATION_FIELD_NO_CELL UINT32_MAX
@@ -63,14 +65,15 @@ typedef struct sg_destination_handle_s
 
 typedef struct sg_rune_runtime_snapshot_s
 {
+	/* identity is a process-local handle. Exact content authority remains in
+	 * the immutable model and its loader-owned artifact binding. */
 	uint64_t identity;
 	uint64_t topology_revision;
 	uint32_t cell_count;
 	uint32_t phase_count;
 	uint32_t region_count;
-	const void *cells;
+	const sg_rune_model_t *model;
 	const sg_phase_coordinate_t *phases;
-	const void *portals;
 } sg_rune_runtime_snapshot_t;
 
 typedef struct sg_field_sample_s
@@ -177,10 +180,19 @@ static inline int SG_RuneRuntimeSnapshotValid(
 {
 	uint32_t index;
 
-	if (!snapshot || snapshot->identity == 0U ||
+	if (!snapshot || snapshot->identity == 0U || !snapshot->model ||
 	    snapshot->topology_revision == 0U || snapshot->cell_count == 0U ||
-	    snapshot->phase_count == 0U || !snapshot->cells || !snapshot->phases ||
-	    (snapshot->region_count != 0U && !snapshot->portals))
+	    snapshot->phase_count == 0U || !snapshot->phases ||
+	    snapshot->model->version != SG_RUNE_MODEL_VERSION ||
+	    snapshot->model->schema_tag != SG_RUNE_MODEL_SCHEMA_TAG ||
+	    (snapshot->model->flags & (SG_RUNE_MODEL_IMMUTABLE |
+	      SG_RUNE_MODEL_EXACT_BOUND | SG_RUNE_MODEL_NO_RUNTIME_ACTORS)) !=
+	     (SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
+	      SG_RUNE_MODEL_NO_RUNTIME_ACTORS) ||
+	    snapshot->model->completeness.state != SG_RUNE_COMPLETENESS_COMPLETE ||
+	    snapshot->model->cell_count != snapshot->cell_count ||
+	    snapshot->model->phase_count != snapshot->phase_count ||
+	    !snapshot->model->cells || !snapshot->model->phases)
 		return 0;
 	for (index = 0U; index < snapshot->phase_count; index++)
 		if (snapshot->phases[index].phase_id != index ||
@@ -289,5 +301,12 @@ int SG_FieldNeedsUpdate(const sg_rune_runtime_snapshot_t *snapshot,
 int SG_FieldCanReuseStatic(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_destination_field_t *field,
 	const sg_destination_handle_t *destination);
+/* Inputs are borrowed and immutable. The caller owns samples and keeps them
+ * alive with out. Temporary solver storage never escapes this call. On
+ * failure, out is zeroed and the caller must ignore samples. */
+int SG_DestinationFieldSolve(const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_destination_handle_t *destination, uint64_t computed_at_ms,
+	sg_field_sample_t *samples, uint32_t sample_capacity,
+	sg_destination_field_t *out);
 
 #endif /* SG_DESTINATION_FIELD_H */

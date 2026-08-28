@@ -36,16 +36,32 @@ static sg_destination_handle_t Destination(sg_destination_kind_t kind,
 
 static void TestPhaseSpaceFieldContract(void)
 {
-	int cells;
+	sg_rune_cell_t cells[2] = { 0 };
+	sg_rune_phase_basis_t model_phases[3] = { 0 };
 	sg_phase_coordinate_t phases[3] = {
 		{ 0U, 0U }, { 1U, 0U }, { 2U, 1U }
+	};
+	sg_rune_model_t model = {
+		.version = SG_RUNE_MODEL_VERSION,
+		.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG,
+		.flags = SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
+			SG_RUNE_MODEL_NO_RUNTIME_ACTORS,
+		.completeness = {
+			.state = SG_RUNE_COMPLETENESS_COMPLETE,
+			.expected_cells = 2U,
+			.covered_cells = 2U
+		},
+		.phases = model_phases,
+		.phase_count = 3U,
+		.cells = cells,
+		.cell_count = 2U
 	};
 	sg_rune_runtime_snapshot_t snapshot = {
 		.identity = 99U,
 		.topology_revision = 7U,
 		.cell_count = 2U,
 		.phase_count = 3U,
-		.cells = &cells,
+		.model = &model,
 		.phases = phases
 	};
 	sg_field_sample_t samples[3] = {
@@ -87,6 +103,9 @@ static void TestPhaseSpaceFieldContract(void)
 	};
 
 	CHECK(SG_DestinationFieldValid(&snapshot, &field));
+	model.flags &= ~(sg_rune_model_flags_t)SG_RUNE_MODEL_EXACT_BOUND;
+	CHECK(!SG_RuneRuntimeSnapshotValid(&snapshot));
+	model.flags |= SG_RUNE_MODEL_EXACT_BOUND;
 	CHECK(samples[0].phase.cell_id == samples[1].phase.cell_id);
 	field.sample_count = snapshot.cell_count;
 	CHECK(!SG_DestinationFieldValid(&snapshot, &field));
