@@ -734,6 +734,62 @@ static void TestMalformedInputs(void)
 	CheckDecodeUnchanged(&decoded, &before);
 }
 
+static void TestPublishedTailOverlapRejected(void)
+{
+	model_fixture_t fixture;
+	decode_fixture_t scratch;
+	decode_fixture_t scratch_before;
+	decode_fixture_t published;
+	decode_fixture_t published_before;
+	sg_rune_capability_kernel_t published_kernels[2];
+	sg_rune_capability_kernel_t kernels_before[2];
+	unsigned char valid[TEST_IMAGE_CAPACITY];
+	unsigned char bad[TEST_IMAGE_CAPACITY];
+	size_t encoded_size = 0U;
+	uint64_t kernel_offset;
+
+	FixtureInit(&fixture);
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_OK,
+		SG_RuneV2CodecEncode(&fixture.binding, &fixture.model,
+			&fixture.evidence, valid, sizeof(valid), &encoded_size));
+	memcpy(bad, valid, encoded_size);
+	kernel_offset = SG_RuneV2WireGetU64(SectionEntry(bad,
+		SG_RUNE_V2_SECTION_KERNELS - 1U) + SG_RUNE_V2_SECTION_OFFSET_OFFSET);
+	memset(bad + (size_t)kernel_offset + SG_RUNE_V2_KERNEL_SOURCE_CELL_OFFSET,
+		0xff, SG_RUNE_V2_STABLE_ID_BYTES);
+	FixChecksums(bad, encoded_size);
+
+	DecodeFixturePoison(&scratch);
+	DecodeFixturePoison(&published);
+	memset(published_kernels, 0x5a, sizeof(published_kernels));
+	published.storage.kernels = published_kernels;
+	published.storage.kernel_capacity = 2U;
+	published.model.kernels = published_kernels;
+	published.model.kernel_count = 2U;
+	scratch.storage.kernels = published_kernels + 1;
+	scratch.storage.kernel_capacity = 1U;
+	scratch_before = scratch;
+	published_before = published;
+	memcpy(kernels_before, published_kernels, sizeof(kernels_before));
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_INVALID_ARGUMENT,
+		SG_RuneV2CodecDecode(bad, encoded_size, &scratch.storage,
+			&published.storage, &published.binding, &published.model,
+			&published.evidence));
+	CheckDecodeUnchanged(&scratch, &scratch_before);
+	CheckDecodeUnchanged(&published, &published_before);
+	CHECK(memcmp(published_kernels, kernels_before,
+		sizeof(published_kernels)) == 0);
+
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_INVALID_ARGUMENT,
+		SG_RuneV2CodecDecode(valid, encoded_size, &scratch.storage,
+			&published.storage, &published.binding, &published.model,
+			&published.evidence));
+	CheckDecodeUnchanged(&scratch, &scratch_before);
+	CheckDecodeUnchanged(&published, &published_before);
+	CHECK(memcmp(published_kernels, kernels_before,
+		sizeof(published_kernels)) == 0);
+}
+
 static void TestSingleBitCorruption(void)
 {
 	model_fixture_t fixture;
@@ -831,6 +887,7 @@ int main(void)
 {
 	TestCanonicalRoundTrip();
 	TestMalformedInputs();
+	TestPublishedTailOverlapRejected();
 	TestSingleBitCorruption();
 	TestRepairedSemanticBitMutations();
 	if (failures != 0)

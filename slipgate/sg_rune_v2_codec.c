@@ -1285,42 +1285,64 @@ static int CodecStorageFits(const sg_rune_v2_codec_storage_t *storage,
 static int CodecDecodeRangesDisjoint(const unsigned char *encoded,
 	size_t encoded_size, const sg_rune_v2_codec_storage_t *scratch,
 	const sg_rune_v2_codec_storage_t *published,
-	const sg_rune_v2_wire_view_t *view,
 	sg_rune_v2_wire_binding_t *binding_out, sg_rune_model_t *model_out,
 	sg_rune_validation_evidence_t *evidence_out)
 {
 	codec_range_t ranges[28];
 	const void *pointers[22];
+	size_t capacities[22];
 	size_t sizes[11];
 	size_t index;
 	size_t other;
 
-	pointers[0] = scratch->planes; sizes[0] = sizeof(scratch->planes[0]);
+	pointers[0] = scratch->planes; capacities[0] = scratch->plane_capacity;
+	sizes[0] = sizeof(scratch->planes[0]);
 	pointers[1] = scratch->portal_vertices;
+	capacities[1] = scratch->portal_vertex_capacity;
 	sizes[1] = sizeof(scratch->portal_vertices[0]);
-	pointers[2] = scratch->phases; sizes[2] = sizeof(scratch->phases[0]);
+	pointers[2] = scratch->phases; capacities[2] = scratch->phase_capacity;
+	sizes[2] = sizeof(scratch->phases[0]);
 	pointers[3] = scratch->phase_transitions;
+	capacities[3] = scratch->phase_transition_capacity;
 	sizes[3] = sizeof(scratch->phase_transitions[0]);
-	pointers[4] = scratch->cells; sizes[4] = sizeof(scratch->cells[0]);
-	pointers[5] = scratch->portals; sizes[5] = sizeof(scratch->portals[0]);
-	pointers[6] = scratch->surfaces; sizes[6] = sizeof(scratch->surfaces[0]);
+	pointers[4] = scratch->cells; capacities[4] = scratch->cell_capacity;
+	sizes[4] = sizeof(scratch->cells[0]);
+	pointers[5] = scratch->portals; capacities[5] = scratch->portal_capacity;
+	sizes[5] = sizeof(scratch->portals[0]);
+	pointers[6] = scratch->surfaces; capacities[6] = scratch->surface_capacity;
+	sizes[6] = sizeof(scratch->surfaces[0]);
 	pointers[7] = scratch->affordances;
+	capacities[7] = scratch->affordance_capacity;
 	sizes[7] = sizeof(scratch->affordances[0]);
-	pointers[8] = scratch->kernels; sizes[8] = sizeof(scratch->kernels[0]);
-	pointers[9] = scratch->landmarks; sizes[9] = sizeof(scratch->landmarks[0]);
+	pointers[8] = scratch->kernels; capacities[8] = scratch->kernel_capacity;
+	sizes[8] = sizeof(scratch->kernels[0]);
+	pointers[9] = scratch->landmarks; capacities[9] = scratch->landmark_capacity;
+	sizes[9] = sizeof(scratch->landmarks[0]);
 	pointers[10] = scratch->mechanisms;
+	capacities[10] = scratch->mechanism_capacity;
 	sizes[10] = sizeof(scratch->mechanisms[0]);
 	pointers[11] = published->planes;
+	capacities[11] = published->plane_capacity;
 	pointers[12] = published->portal_vertices;
+	capacities[12] = published->portal_vertex_capacity;
 	pointers[13] = published->phases;
+	capacities[13] = published->phase_capacity;
 	pointers[14] = published->phase_transitions;
+	capacities[14] = published->phase_transition_capacity;
 	pointers[15] = published->cells;
+	capacities[15] = published->cell_capacity;
 	pointers[16] = published->portals;
+	capacities[16] = published->portal_capacity;
 	pointers[17] = published->surfaces;
+	capacities[17] = published->surface_capacity;
 	pointers[18] = published->affordances;
+	capacities[18] = published->affordance_capacity;
 	pointers[19] = published->kernels;
+	capacities[19] = published->kernel_capacity;
 	pointers[20] = published->landmarks;
+	capacities[20] = published->landmark_capacity;
 	pointers[21] = published->mechanisms;
+	capacities[21] = published->mechanism_capacity;
 	if (!CodecRange(encoded, encoded_size, 1U, &ranges[0]) ||
 		!CodecRange(scratch, 1U, sizeof(*scratch), &ranges[1]) ||
 		!CodecRange(published, 1U, sizeof(*published), &ranges[2]) ||
@@ -1329,9 +1351,7 @@ static int CodecDecodeRangesDisjoint(const unsigned char *encoded,
 		!CodecRange(evidence_out, 1U, sizeof(*evidence_out), &ranges[5]))
 		return 0;
 	for (index = 0U; index < 22U; index++)
-		if (!CodecRange(pointers[index],
-			view->section[index % 11U +
-				SG_RUNE_V2_SECTION_PLANES - 1U].count,
+		if (!CodecRange(pointers[index], capacities[index],
 			sizes[index % 11U], &ranges[index + 6U]))
 			return 0;
 	for (index = 0U; index < 28U; index++)
@@ -1521,7 +1541,7 @@ sg_rune_v2_wire_diagnostic_t SG_RuneV2CodecDecode(
 	if (!CodecStorageFits(scratch, &view) || !CodecStorageFits(published, &view))
 		return SG_RUNE_V2_WIRE_BAD_SIZE;
 	if (!CodecDecodeRangesDisjoint(encoded, encoded_size, scratch, published,
-		&view, binding_out, model_out, evidence_out))
+		binding_out, model_out, evidence_out))
 		return SG_RUNE_V2_WIRE_INVALID_ARGUMENT;
 	memset(&model, 0, sizeof(model));
 	memset(&evidence, 0, sizeof(evidence));
