@@ -514,6 +514,65 @@ static void TestEquivalentPlanePortalIndex(void)
 	DestroyFixture(&fixture);
 }
 
+static void TestCellCoveragePlaneScaleInvariance(void)
+{
+	static const float scales[] = {
+		0x1p-40f, 0x1p-11f, 1.0f, 0x1p40f
+	};
+	fixture_t fixture = Fixture(NULL, 0U, SG_HOST_CONTENTS_WATER,
+		SG_HOST_CONTENTS_WATER);
+	sg_host_collision_authority_t authority;
+	sg_configuration_space_t *space = NULL;
+	sg_bsp_completeness_result_t result;
+	uint32_t scale;
+
+	CHECK(Build(&fixture, &authority, &space));
+	if (space)
+	{
+		uint32_t cell;
+		uint32_t face = UINT32_MAX;
+
+		for (cell = 0; cell < space->cell_count && face == UINT32_MAX; cell++)
+		{
+			uint32_t offset;
+
+			if (space->cells[cell].bsp_leaf.index != 0U)
+				continue;
+			for (offset = 0; offset < space->cells[cell].face_count; offset++)
+			{
+				uint32_t candidate = space->cells[cell].first_face + offset;
+				const sg_configuration_plane_t *plane =
+					&space->faces[candidate].plane;
+
+				if (plane->source_kind == SG_CONFIGURATION_PLANE_DOMAIN &&
+					plane->source_index == 0U && plane->reversed == 0U)
+				{
+					face = candidate;
+					break;
+				}
+			}
+		}
+		CHECK(cell <= space->cell_count);
+		CHECK(face != UINT32_MAX);
+		if (cell <= space->cell_count && face != UINT32_MAX)
+		{
+			uint32_t target_cell = cell - 1U;
+
+			space->cells[target_cell].interior_witness.value[0] = 4096.0f;
+			for (scale = 0; scale < sizeof(scales) / sizeof(scales[0]); scale++)
+			{
+				space->faces[face].plane.normal[0] = scales[scale];
+				space->faces[face].plane.distance = 4095.875f * scales[scale];
+				CHECK(!SG_BspCompletenessProve(&authority, space, &result));
+				CHECK(result.code == SG_BSP_COMPLETENESS_INVALID_CELL);
+				CHECK(result.record == target_cell);
+			}
+		}
+	}
+	SG_ConfigurationDestroy(space);
+	DestroyFixture(&fixture);
+}
+
 static void TestTranslatedCornerRounding(void)
 {
 	const float origin[3] = { -3265.625f, 979.625f, -1701.125f };
@@ -776,6 +835,7 @@ int main(void)
 	TestEmptyWaterVoidAndAdversarialRecords();
 	TestHostLeafGatingAndExactBrushBoundary();
 	TestEquivalentPlanePortalIndex();
+	TestCellCoveragePlaneScaleInvariance();
 	TestTranslatedCornerRounding();
 	TestLowCeilingWindowAndHalfWall();
 	TestRampMultiHeightAndLargeCoordinates();
