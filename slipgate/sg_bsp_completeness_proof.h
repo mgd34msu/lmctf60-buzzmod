@@ -50,6 +50,7 @@ typedef struct sg_bsp_completeness_result_s
 	uint64_t coverage_region_examined;
 	uint64_t coverage_region_candidates;
 	uint64_t cell_overlap_candidates;
+	uint64_t portal_face_pair_visits;
 	uint64_t portal_face_candidates;
 	uint64_t portal_endpoint_lookups;
 	uint64_t portal_lookup_candidates;

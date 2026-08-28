@@ -165,14 +165,27 @@ failure:
 }
 
 static int PlaneKey(const sg_configuration_plane_t *plane,
-	uint32_t *dominant_out, int64_t *bucket_out, uint8_t *orientation)
+	uint32_t *dominant_out, int64_t normal_buckets[3],
+	int64_t *bucket_out, uint8_t *orientation)
 {
 	uint32_t dominant = DominantAxis(plane->normal);
 	float scale = fabsf(plane->normal[dominant]);
 	double distance;
 	double bucket;
+	uint32_t axis;
 	int flip = plane->normal[dominant] < 0.0f;
 
+	for (axis = 0; axis < 3U; axis++)
+	{
+		double value = (double)(flip ? -plane->normal[axis] :
+			plane->normal[axis]) / (double)scale;
+		double normal_bucket = floor(value / FACE_PLANE_BUCKET_SIZE);
+
+		if (!isfinite(value) || normal_bucket < (double)INT64_MIN ||
+			normal_bucket > (double)INT64_MAX)
+			return 0;
+		normal_buckets[axis] = (int64_t)normal_bucket;
+	}
 	distance = (double)(flip ? -plane->distance : plane->distance) /
 		(double)scale;
 	bucket = floor(distance / FACE_PLANE_BUCKET_SIZE);
@@ -195,6 +208,12 @@ static int CompareFaceRef(const void *left_pointer,
 		return left->stance < right->stance ? -1 : 1;
 	if (left->dominant != right->dominant)
 		return left->dominant < right->dominant ? -1 : 1;
+	if (left->normal_buckets[0] != right->normal_buckets[0])
+		return left->normal_buckets[0] < right->normal_buckets[0] ? -1 : 1;
+	if (left->normal_buckets[1] != right->normal_buckets[1])
+		return left->normal_buckets[1] < right->normal_buckets[1] ? -1 : 1;
+	if (left->normal_buckets[2] != right->normal_buckets[2])
+		return left->normal_buckets[2] < right->normal_buckets[2] ? -1 : 1;
 	if (left->plane_bucket != right->plane_bucket)
 		return left->plane_bucket < right->plane_bucket ? -1 : 1;
 	if (left->sweep_min != right->sweep_min)
@@ -202,6 +221,39 @@ static int CompareFaceRef(const void *left_pointer,
 	if (left->cell != right->cell)
 		return left->cell < right->cell ? -1 : 1;
 	return left->face == right->face ? 0 : (left->face < right->face ? -1 : 1);
+}
+
+static int SameFaceGroup(const sg_bsp_proof_face_ref_t *left,
+	const sg_bsp_proof_face_ref_t *right)
+{
+	return left->stance == right->stance &&
+		left->dominant == right->dominant &&
+		left->normal_buckets[0] == right->normal_buckets[0] &&
+		left->normal_buckets[1] == right->normal_buckets[1] &&
+		left->normal_buckets[2] == right->normal_buckets[2] &&
+		left->plane_bucket == right->plane_bucket;
+}
+
+static float BuildFaceIntervalMax(sg_bsp_proof_face_ref_t *refs,
+	uint32_t first, uint32_t count)
+{
+	uint32_t left_count;
+	uint32_t middle;
+	float maximum;
+
+	if (!count)
+		return -INFINITY;
+	left_count = count / 2U;
+	middle = first + left_count;
+	maximum = refs[middle].sweep_max;
+	if (left_count)
+		maximum = fmaxf(maximum,
+			BuildFaceIntervalMax(refs, first, left_count));
+	if (count - left_count - 1U)
+		maximum = fmaxf(maximum, BuildFaceIntervalMax(refs, middle + 1U,
+			count - left_count - 1U));
+	refs[middle].subtree_sweep_max = maximum;
+	return maximum;
 }
 
 int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
@@ -240,15 +292,22 @@ int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 			ref->face = face;
 			ref->stance = (uint32_t)proof->space->cells[cell].stance;
 			if (!PlaneKey(&boundary->plane, &ref->dominant,
-					&ref->plane_bucket, &ref->orientation))
+					ref->normal_buckets, &ref->plane_bucket,
+					&ref->orientation))
 			{
 				SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_CELL, cell);
 				goto failure;
 			}
 			ref->sweep_min = ref->sweep_max = ref->vertices[0].value[u];
 			ref->other_min = ref->other_max = ref->vertices[0].value[v];
+			memcpy(ref->bounds_mins, ref->vertices[0].value,
+				sizeof(ref->bounds_mins));
+			memcpy(ref->bounds_maxs, ref->vertices[0].value,
+				sizeof(ref->bounds_maxs));
 			for (vertex = 1U; vertex < ref->vertex_count; vertex++)
 			{
+				uint32_t axis;
+
 				ref->sweep_min = fminf(ref->sweep_min,
 					ref->vertices[vertex].value[u]);
 				ref->sweep_max = fmaxf(ref->sweep_max,
@@ -257,10 +316,26 @@ int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 					ref->vertices[vertex].value[v]);
 				ref->other_max = fmaxf(ref->other_max,
 					ref->vertices[vertex].value[v]);
+				for (axis = 0; axis < 3U; axis++)
+				{
+					ref->bounds_mins[axis] = fminf(ref->bounds_mins[axis],
+						ref->vertices[vertex].value[axis]);
+					ref->bounds_maxs[axis] = fmaxf(ref->bounds_maxs[axis],
+						ref->vertices[vertex].value[axis]);
+				}
 			}
 			count++;
 		}
 	qsort(refs, count, sizeof(*refs), CompareFaceRef);
+	for (cell = 0; cell < count; )
+	{
+		uint32_t end = cell + 1U;
+
+		while (end < count && SameFaceGroup(&refs[cell], &refs[end]))
+			end++;
+		(void)BuildFaceIntervalMax(refs, cell, end - cell);
+		cell = end;
+	}
 	*refs_out = refs;
 	*count_out = count;
 	return 1;

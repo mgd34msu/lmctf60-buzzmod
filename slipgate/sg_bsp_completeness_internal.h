@@ -46,6 +46,7 @@ typedef struct sg_bsp_proof_face_ref_s
 	uint32_t face;
 	uint32_t stance;
 	uint32_t dominant;
+	int64_t normal_buckets[3];
 	int64_t plane_bucket;
 	uint8_t orientation;
 	uint8_t reserved[3];
@@ -53,6 +54,9 @@ typedef struct sg_bsp_proof_face_ref_s
 	float sweep_max;
 	float other_min;
 	float other_max;
+	float bounds_mins[3];
+	float bounds_maxs[3];
+	float subtree_sweep_max;
 	sg_rune_vec3_t *vertices;
 	uint32_t vertex_count;
 } sg_bsp_proof_face_ref_t;

@@ -525,14 +525,6 @@ static int FindPortal(sg_bsp_proof_context_t *proof, uint8_t *seen,
 	return 0;
 }
 
-static int SameFaceGroup(const sg_bsp_proof_face_ref_t *left,
-	const sg_bsp_proof_face_ref_t *right)
-{
-	return left->stance == right->stance &&
-		left->dominant == right->dominant &&
-		left->plane_bucket == right->plane_bucket;
-}
-
 static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 	const sg_bsp_proof_portal_ref_t *portals,
 	const sg_bsp_proof_face_ref_t *left_ref,
@@ -551,12 +543,16 @@ static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 	float from[3], to[3];
 	sg_host_collision_transition_t transition;
 	int from_result, to_result, found;
+	uint32_t axis;
 
+	proof->result.portal_face_pair_visits++;
 	if (left_cell == right_cell ||
-		left_ref->orientation == right_ref->orientation ||
-		left_ref->other_max < right_ref->other_min ||
-		right_ref->other_max < left_ref->other_min)
+		left_ref->orientation == right_ref->orientation)
 		return 1;
+	for (axis = 0; axis < 3U; axis++)
+		if (left_ref->bounds_maxs[axis] < right_ref->bounds_mins[axis] ||
+			right_ref->bounds_maxs[axis] < left_ref->bounds_mins[axis])
+			return 1;
 	proof->result.portal_face_candidates++;
 	if (!OpposingPlanes(&left->plane, &right->plane))
 		return 1;
@@ -599,6 +595,94 @@ static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 	return 1;
 }
 
+static int CompareFaceGroup(const sg_bsp_proof_face_ref_t *face,
+	uint32_t stance, uint32_t dominant, int64_t normal_bucket_0,
+	int64_t normal_bucket_1, int64_t normal_bucket_2,
+	int64_t plane_bucket)
+{
+	if (face->stance != stance)
+		return face->stance < stance ? -1 : 1;
+	if (face->dominant != dominant)
+		return face->dominant < dominant ? -1 : 1;
+	if (face->normal_buckets[0] != normal_bucket_0)
+		return face->normal_buckets[0] < normal_bucket_0 ? -1 : 1;
+	if (face->normal_buckets[1] != normal_bucket_1)
+		return face->normal_buckets[1] < normal_bucket_1 ? -1 : 1;
+	if (face->normal_buckets[2] != normal_bucket_2)
+		return face->normal_buckets[2] < normal_bucket_2 ? -1 : 1;
+	if (face->plane_bucket != plane_bucket)
+		return face->plane_bucket < plane_bucket ? -1 : 1;
+	return 0;
+}
+
+static uint32_t FaceGroupBound(const sg_bsp_proof_face_ref_t *faces,
+	uint32_t count, uint32_t stance, uint32_t dominant,
+	int64_t normal_bucket_0, int64_t normal_bucket_1,
+	int64_t normal_bucket_2, int64_t plane_bucket, int upper)
+{
+	uint32_t first = 0U;
+	uint32_t length = count;
+
+	while (length)
+	{
+		uint32_t half = length / 2U;
+		uint32_t middle = first + half;
+		int comparison = CompareFaceGroup(&faces[middle], stance, dominant,
+			normal_bucket_0, normal_bucket_1, normal_bucket_2, plane_bucket);
+
+		if (comparison < 0 || (upper && comparison == 0))
+		{
+			first = middle + 1U;
+			length -= half + 1U;
+		}
+		else
+			length = half;
+	}
+	return first;
+}
+
+static int OffsetBucket(int64_t source, int delta, int64_t *result)
+{
+	if ((delta < 0 && source == INT64_MIN) ||
+		(delta > 0 && source == INT64_MAX))
+		return 0;
+	*result = source + (int64_t)delta;
+	return 1;
+}
+
+static int QueryFaceGroup(sg_bsp_proof_context_t *proof, uint8_t *seen,
+	const sg_bsp_proof_portal_ref_t *portals,
+	const sg_bsp_proof_face_ref_t *faces, uint32_t left_index,
+	uint32_t first, uint32_t count)
+{
+	const sg_bsp_proof_face_ref_t *left = &faces[left_index];
+	uint32_t sweep_axis;
+	uint32_t left_count;
+	uint32_t middle;
+
+	if (!count)
+		return 1;
+	sweep_axis = (faces[first].dominant + 1U) % 3U;
+	left_count = count / 2U;
+	middle = first + left_count;
+	if (left_count && faces[first + left_count / 2U].subtree_sweep_max >=
+			left->bounds_mins[sweep_axis] &&
+		!QueryFaceGroup(proof, seen, portals, faces,
+			left_index, first, left_count))
+		return 0;
+	if (middle > left_index && faces[middle].sweep_min <=
+			left->bounds_maxs[sweep_axis] && faces[middle].sweep_max >=
+			left->bounds_mins[sweep_axis] &&
+		!AuditFacePair(proof, seen, portals, left, &faces[middle]))
+		return 0;
+	if (count - left_count - 1U &&
+		faces[middle + 1U].sweep_min <= left->bounds_maxs[sweep_axis] &&
+		!QueryFaceGroup(proof, seen, portals, faces, left_index, middle + 1U,
+			count - left_count - 1U))
+		return 0;
+	return 1;
+}
+
 int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof)
 {
 	uint8_t *seen = NULL;
@@ -633,35 +717,42 @@ int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof)
 		}
 	for (cell_a = 0; cell_a < face_count; cell_a++)
 	{
-		uint32_t group_end = cell_a + 1U;
-		uint32_t cell_b;
+		const sg_bsp_proof_face_ref_t *left = &faces[cell_a];
+		int delta_0, delta_1, delta_2, delta_distance;
+		uint32_t target_dominant;
 
-		while (group_end < face_count &&
-			SameFaceGroup(&faces[cell_a], &faces[group_end]))
-			group_end++;
-		for (cell_b = cell_a + 1U; cell_b < group_end &&
-			faces[cell_b].sweep_min <= faces[cell_a].sweep_max; cell_b++)
-			if (!AuditFacePair(proof, seen, portals, &faces[cell_a],
-					&faces[cell_b]))
-				goto failure;
-		if (group_end < face_count &&
-			faces[cell_a].plane_bucket != INT64_MAX &&
-			faces[group_end].stance == faces[cell_a].stance &&
-			faces[group_end].dominant == faces[cell_a].dominant &&
-			faces[group_end].plane_bucket ==
-				faces[cell_a].plane_bucket + 1)
-		{
-			uint32_t next_end = group_end + 1U;
+		for (target_dominant = 0; target_dominant < 3U; target_dominant++)
+			for (delta_0 = -1; delta_0 <= 1; delta_0++)
+				for (delta_1 = -1; delta_1 <= 1; delta_1++)
+					for (delta_2 = -1; delta_2 <= 1; delta_2++)
+						for (delta_distance = -1; delta_distance <= 1;
+							delta_distance++)
+				{
+					int64_t normal_bucket_0, normal_bucket_1;
+					int64_t normal_bucket_2, plane_bucket;
+					uint32_t first, end;
 
-			while (next_end < face_count &&
-				SameFaceGroup(&faces[group_end], &faces[next_end]))
-				next_end++;
-			for (cell_b = group_end; cell_b < next_end &&
-				faces[cell_b].sweep_min <= faces[cell_a].sweep_max; cell_b++)
-				if (!AuditFacePair(proof, seen, portals, &faces[cell_a],
-						&faces[cell_b]))
-					goto failure;
-		}
+					if (!OffsetBucket(left->normal_buckets[0], delta_0,
+							&normal_bucket_0) ||
+						!OffsetBucket(left->normal_buckets[1], delta_1,
+							&normal_bucket_1) ||
+						!OffsetBucket(left->normal_buckets[2], delta_2,
+							&normal_bucket_2) ||
+						!OffsetBucket(left->plane_bucket, delta_distance,
+							&plane_bucket))
+						continue;
+					first = FaceGroupBound(faces, face_count,
+						left->stance, target_dominant,
+						normal_bucket_0, normal_bucket_1, normal_bucket_2,
+						plane_bucket, 0);
+					end = FaceGroupBound(faces, face_count,
+						left->stance, target_dominant,
+						normal_bucket_0, normal_bucket_1, normal_bucket_2,
+						plane_bucket, 1);
+					if (!QueryFaceGroup(proof, seen, portals, faces, cell_a,
+							first, end - first))
+						goto failure;
+				}
 	}
 	for (cell_a = 0; cell_a < proof->space->portal_count; cell_a++)
 		if (!seen[cell_a])
