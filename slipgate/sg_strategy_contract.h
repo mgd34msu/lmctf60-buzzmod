@@ -399,8 +399,9 @@ typedef struct sg_strategy_frame_s
 typedef struct sg_strategy_retry_record_s
 {
 	uint64_t after_sequence;
-	uint64_t baseline_revision;
 	uint64_t not_before_ms;
+	uint64_t fact_baseline_revision;
+	uint64_t target_baseline_revisions[SG_STRATEGY_MAX_CHOICES];
 	sg_strategy_retry_wake_t wake;
 } sg_strategy_retry_record_t;
 

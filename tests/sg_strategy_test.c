@@ -637,9 +637,23 @@ static void TestUnavailableAlternativeRetry(void)
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
-	CHECK(state.goals[0].choices[1].attempts == 1U);
+	CHECK(state.goals[0].choices[1].attempts == 0U);
 
 	frame = Frame(2U, state.revision, 110U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
+	CHECK(state.goals[0].choices[0].attempts == 1U);
+	CHECK(state.goals[0].choices[1].attempts == 1U);
+
+	frame = Frame(3U, state.revision, 120U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
+	CHECK(state.goals[0].choices[0].attempts == 2U);
+	CHECK(state.goals[0].choices[1].attempts == 1U);
+
+	frame = Frame(4U, state.revision, 130U);
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_FAILED);
@@ -731,6 +745,121 @@ static void TestRetryWakeGatesRepeatedChoice(void)
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
 	CHECK(state.activation.activation_id == 0U);
+}
+
+static void TestZeroDelayNotBeforeRejected(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_plan_t before;
+	sg_strategy_compile_error_t error;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 54U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].failure.max_attempts_per_choice = 2U;
+	spec.goals[0].failure.retry_wake.kind =
+		SG_STRATEGY_RETRY_NOT_BEFORE;
+	memset(&plan, 0xa5, sizeof(plan));
+	before = plan;
+	CHECK(!SG_StrategyPlanCompile(&spec, &plan, &error));
+	CHECK(error.code == SG_STRATEGY_COMPILE_INVALID_GOAL);
+	CHECK(memcmp(&plan, &before, sizeof(plan)) == 0);
+}
+
+static void TestTargetRevisionWakeIsPerChoice(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observations[2];
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 55U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].unavailable = SG_STRATEGY_UNAVAILABLE_APPLY_FAILURE;
+	spec.goals[0].failure.try_alternatives = 1U;
+	spec.goals[0].failure.max_attempts_per_choice = 2U;
+	spec.goals[0].failure.retry_wake.kind =
+		SG_STRATEGY_RETRY_TARGET_REVISION;
+	spec.goals[0].choice_count = 2U;
+	spec.goals[0].choices[1].id = 11U;
+	spec.goals[0].choices[1].destination = Waypoint(101U);
+	CHECK(Compile(&spec, &plan));
+	observations[0] = Observation(55U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF,
+		1000U);
+	observations[1] = Observation(55U, 1U, 11U, 100U, 100U,
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF,
+		1001U);
+	Begin(&state, &plan, observations, 2U, &reduction);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
+	CHECK(state.goals[0].retry.target_baseline_revisions[0] == 1U);
+	CHECK(state.goals[0].retry.target_baseline_revisions[1] == 100U);
+
+	observations[0] = Observation(55U, 1U, 10U, 2U, 110U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	frame = Frame(2U, state.revision, 110U);
+	frame.destinations = observations;
+	frame.destination_count = 1U;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_ACTIVE);
+	CHECK(state.goals[0].selected_choice == 0U);
+	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
+}
+
+static void TestUnobservedAlternativeCannotBypassRetry(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 56U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].unavailable = SG_STRATEGY_UNAVAILABLE_APPLY_FAILURE;
+	spec.goals[0].failure.try_alternatives = 1U;
+	spec.goals[0].failure.max_attempts_per_choice = 2U;
+	spec.goals[0].failure.retry_wake.kind = SG_STRATEGY_RETRY_NEXT_FRAME;
+	spec.goals[0].choice_count = 2U;
+	spec.goals[0].choices[1].id = 11U;
+	spec.goals[0].choices[1].destination = Waypoint(101U);
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(56U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	Begin(&state, &plan, &observation, 1U, &reduction);
+	CHECK(state.goals[0].selected_choice == 0U);
+	CHECK(state.goals[0].choices[0].attempts == 1U);
+	CHECK(state.goals[0].choices[1].attempts == 0U);
+
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 0U, SG_STRATEGY_BLOCK_NONE);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_FAILED;
+	frame.goal_outcome.failure = SG_STRATEGY_FAILURE_UNAVAILABLE;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
+	CHECK(state.activation.activation_id == 0U);
+	CHECK(state.goals[0].choices[0].attempts == 1U);
+	CHECK(state.goals[0].choices[1].attempts == 0U);
+
+	frame = Frame(3U, state.revision, 120U);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_ACTIVE);
+	CHECK(state.goals[0].selected_choice == 0U);
+	CHECK(state.goals[0].choices[0].attempts == 2U);
 }
 
 static void TestStaleTargetIsNotReissued(void)
@@ -1335,6 +1464,9 @@ int main(void)
 	TestUnavailableAlternativeRetry();
 	TestOutcomeAlternativeExhaustion();
 	TestRetryWakeGatesRepeatedChoice();
+	TestZeroDelayNotBeforeRejected();
+	TestTargetRevisionWakeIsPerChoice();
+	TestUnobservedAlternativeCannotBypassRetry();
 	TestStaleTargetIsNotReissued();
 	TestGoalKindRejectsWrongDestinationType();
 	TestAuthorityCancelReleaseAndFactBoundary();

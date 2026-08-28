@@ -74,8 +74,9 @@ static int StrategyFailureRuleValid(const sg_strategy_failure_rule_t *rule)
 	if (rule->retry_wake.kind == SG_STRATEGY_RETRY_FACT_REVISION &&
 	    !StrategyFactKeyValid(&rule->retry_wake.fact))
 		return 0;
-	if (rule->retry_wake.kind != SG_STRATEGY_RETRY_NOT_BEFORE &&
-	    rule->retry_wake.delay_ms != 0U)
+	if (rule->retry_wake.kind == SG_STRATEGY_RETRY_NOT_BEFORE)
+		return rule->retry_wake.delay_ms != 0U;
+	if (rule->retry_wake.delay_ms != 0U)
 		return 0;
 	return 1;
 }
@@ -1213,17 +1214,6 @@ static int StrategyDependenciesReady(const sg_strategy_state_t *state,
 	return 1;
 }
 
-static uint64_t StrategyTargetRevision(const sg_strategy_goal_runtime_t *runtime,
-	uint8_t choice_count)
-{
-	uint8_t index;
-	uint64_t revision = 0U;
-	for (index = 0U; index < choice_count; index++)
-		if (runtime->choices[index].observation_revision > revision)
-			revision = runtime->choices[index].observation_revision;
-	return revision;
-}
-
 static int StrategyRetryReady(const sg_strategy_state_t *state,
 	uint16_t goal_index, const sg_strategy_frame_t *frame)
 {
@@ -1236,13 +1226,25 @@ static int StrategyRetryReady(const sg_strategy_state_t *state,
 	case SG_STRATEGY_RETRY_NEXT_FRAME:
 		return frame->sequence > retry->after_sequence;
 	case SG_STRATEGY_RETRY_TARGET_REVISION:
-		return StrategyTargetRevision(runtime, goal->choice_count) >
-			retry->baseline_revision;
+	{
+		uint8_t index;
+		uint8_t limit = goal->failure.try_alternatives ?
+			goal->choice_count : 1U;
+
+		for (index = 0U; index < limit; index++)
+			if (runtime->choices[index].attempts <
+			    goal->failure.max_attempts_per_choice &&
+			    runtime->choices[index].observation_revision >
+			    retry->target_baseline_revisions[index])
+				return 1;
+		return 0;
+	}
 	case SG_STRATEGY_RETRY_FACT_REVISION:
 	{
 		int found = StrategyFindFactRecord(state, &retry->wake.fact);
 		return found >= 0 && state->facts[(uint16_t)found]
-			.observation.observation_revision > retry->baseline_revision;
+			.observation.observation_revision >
+			retry->fact_baseline_revision;
 	}
 	case SG_STRATEGY_RETRY_NOT_BEFORE:
 		return frame->at_ms >= retry->not_before_ms;
@@ -1276,7 +1278,7 @@ static int StrategyChoiceUsable(const sg_strategy_choice_runtime_t *choice,
 
 static int StrategyHasFreshAlternative(const sg_strategy_goal_t *goal,
 	const sg_strategy_goal_runtime_t *runtime, uint8_t failed_choice,
-	uint64_t at_ms, int require_reachable)
+	uint64_t at_ms)
 {
 	uint8_t index;
 	if (!goal->failure.try_alternatives)
@@ -1284,8 +1286,7 @@ static int StrategyHasFreshAlternative(const sg_strategy_goal_t *goal,
 	for (index = 0U; index < goal->choice_count; index++)
 		if (index != failed_choice && runtime->choices[index].attempts <
 		    goal->failure.max_attempts_per_choice &&
-		    (!require_reachable ||
-		     StrategyChoiceUsable(&runtime->choices[index], at_ms)) &&
+		    StrategyChoiceUsable(&runtime->choices[index], at_ms) &&
 		    (failed_choice >= goal->choice_count ||
 		     runtime->choices[index].attempts <
 		     runtime->choices[failed_choice].attempts))
@@ -1306,7 +1307,7 @@ static int StrategyFinishFailure(sg_strategy_state_t *state,
 	runtime->last_failure = reason;
 	runtime->last_transition_at_ms = frame->at_ms;
 	if (StrategyHasFreshAlternative(goal, runtime, failed_choice,
-	    frame->at_ms, reason != SG_STRATEGY_FAILURE_UNAVAILABLE))
+	    frame->at_ms))
 	{
 		runtime->phase = SG_STRATEGY_GOAL_PENDING;
 		runtime->selected_choice = SG_STRATEGY_NO_CHOICE;
@@ -1324,15 +1325,20 @@ static int StrategyFinishFailure(sg_strategy_state_t *state,
 		runtime->retry.after_sequence = frame->sequence;
 		if (goal->failure.retry_wake.kind ==
 		    SG_STRATEGY_RETRY_TARGET_REVISION)
-			runtime->retry.baseline_revision = StrategyTargetRevision(runtime,
-				goal->choice_count);
+		{
+			uint8_t index;
+
+			for (index = 0U; index < goal->choice_count; index++)
+				runtime->retry.target_baseline_revisions[index] =
+					runtime->choices[index].observation_revision;
+		}
 		else if (goal->failure.retry_wake.kind ==
 		    SG_STRATEGY_RETRY_FACT_REVISION)
 		{
 			fact = StrategyFindFactRecord(state,
 				&goal->failure.retry_wake.fact);
 			if (fact >= 0)
-				runtime->retry.baseline_revision =
+				runtime->retry.fact_baseline_revision =
 					state->facts[(uint16_t)fact]
 					.observation.observation_revision;
 		}
