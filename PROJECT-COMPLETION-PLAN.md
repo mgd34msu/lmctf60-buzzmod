@@ -188,7 +188,7 @@ phase can close:
   identity fields, cost representation, and format limits.
 - [x] Define the destination-field API, strategy-plan types, tactical movement
   API, runtime belief state, and weapon profile/effect interfaces.
-- [ ] Define completeness, deterministic serialization, and error contracts.
+- [x] Define completeness, deterministic serialization, and error contracts.
 - [x] Update `ARCHITECTURE.md` to distinguish current migration state from the
   target and remove the rejected graph model as architectural guidance.
 - [x] Make the requirements catalog and plan tests enforce every numbered item.
