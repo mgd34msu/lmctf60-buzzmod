@@ -41,43 +41,21 @@ static float Cross2(const float a[2], const float b[2], const float c[2])
 		(b[1] - a[1]) * (c[0] - a[0]);
 }
 
-static void CanonicalPlane(const sg_configuration_plane_t *plane,
-	float normal[3], float *distance)
-{
-	uint32_t axis;
-	uint32_t dominant = 2U;
-	float scale;
-	int flip;
-
-	for (axis = 2U; axis-- > 0U; )
-		if (fabsf(plane->normal[axis]) >= fabsf(plane->normal[dominant]))
-			dominant = axis;
-	scale = fabsf(plane->normal[dominant]);
-	flip = plane->normal[dominant] < 0.0f;
-	for (axis = 0; axis < 3U; axis++)
-	{
-		normal[axis] = (flip ? -plane->normal[axis] : plane->normal[axis]) /
-			scale;
-		if (normal[axis] == 0.0f)
-			normal[axis] = 0.0f;
-	}
-	*distance = (flip ? -plane->distance : plane->distance) / scale;
-	if (*distance == 0.0f)
-		*distance = 0.0f;
-}
-
 static int Coplanar(const sg_configuration_plane_t *left,
 	const sg_configuration_plane_t *right)
 {
-	float left_normal[3], right_normal[3];
-	float left_distance, right_distance;
+	sg_bsp_proof_canonical_plane_t left_plane, right_plane;
 
-	CanonicalPlane(left, left_normal, &left_distance);
-	CanonicalPlane(right, right_normal, &right_distance);
-	return fabsf(left_normal[0] - right_normal[0]) <= PORTAL_PLANE_EPSILON &&
-		fabsf(left_normal[1] - right_normal[1]) <= PORTAL_PLANE_EPSILON &&
-		fabsf(left_normal[2] - right_normal[2]) <= PORTAL_PLANE_EPSILON &&
-		fabsf(left_distance - right_distance) <= PORTAL_PLANE_EPSILON;
+	return SG_BspProofCanonicalPlane(left, &left_plane) &&
+		SG_BspProofCanonicalPlane(right, &right_plane) &&
+		fabs(left_plane.normal[0] - right_plane.normal[0]) <=
+			(double)PORTAL_PLANE_EPSILON &&
+		fabs(left_plane.normal[1] - right_plane.normal[1]) <=
+			(double)PORTAL_PLANE_EPSILON &&
+		fabs(left_plane.normal[2] - right_plane.normal[2]) <=
+			(double)PORTAL_PLANE_EPSILON &&
+		fabs(left_plane.distance - right_plane.distance) <=
+			(double)PORTAL_PLANE_EPSILON;
 }
 
 static int OpposingPlanes(const sg_configuration_plane_t *left,
@@ -598,7 +576,7 @@ static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 static int CompareFaceGroup(const sg_bsp_proof_face_ref_t *face,
 	uint32_t stance, uint32_t dominant, int64_t normal_bucket_0,
 	int64_t normal_bucket_1, int64_t normal_bucket_2,
-	int64_t plane_bucket)
+	int64_t plane_bucket, uint8_t orientation)
 {
 	if (face->stance != stance)
 		return face->stance < stance ? -1 : 1;
@@ -612,13 +590,16 @@ static int CompareFaceGroup(const sg_bsp_proof_face_ref_t *face,
 		return face->normal_buckets[2] < normal_bucket_2 ? -1 : 1;
 	if (face->plane_bucket != plane_bucket)
 		return face->plane_bucket < plane_bucket ? -1 : 1;
+	if (face->orientation != orientation)
+		return face->orientation < orientation ? -1 : 1;
 	return 0;
 }
 
 static uint32_t FaceGroupBound(const sg_bsp_proof_face_ref_t *faces,
 	uint32_t count, uint32_t stance, uint32_t dominant,
 	int64_t normal_bucket_0, int64_t normal_bucket_1,
-	int64_t normal_bucket_2, int64_t plane_bucket, int upper)
+	int64_t normal_bucket_2, int64_t plane_bucket, uint8_t orientation,
+	int upper)
 {
 	uint32_t first = 0U;
 	uint32_t length = count;
@@ -628,7 +609,8 @@ static uint32_t FaceGroupBound(const sg_bsp_proof_face_ref_t *faces,
 		uint32_t half = length / 2U;
 		uint32_t middle = first + half;
 		int comparison = CompareFaceGroup(&faces[middle], stance, dominant,
-			normal_bucket_0, normal_bucket_1, normal_bucket_2, plane_bucket);
+			normal_bucket_0, normal_bucket_1, normal_bucket_2, plane_bucket,
+			orientation);
 
 		if (comparison < 0 || (upper && comparison == 0))
 		{
@@ -718,6 +700,7 @@ int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof)
 	for (cell_a = 0; cell_a < face_count; cell_a++)
 	{
 		const sg_bsp_proof_face_ref_t *left = &faces[cell_a];
+		uint8_t target_orientation = (uint8_t)!left->orientation;
 		int delta_0, delta_1, delta_2, delta_distance;
 		uint32_t target_dominant;
 
@@ -744,11 +727,11 @@ int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof)
 					first = FaceGroupBound(faces, face_count,
 						left->stance, target_dominant,
 						normal_bucket_0, normal_bucket_1, normal_bucket_2,
-						plane_bucket, 0);
+						plane_bucket, target_orientation, 0);
 					end = FaceGroupBound(faces, face_count,
 						left->stance, target_dominant,
 						normal_bucket_0, normal_bucket_1, normal_bucket_2,
-						plane_bucket, 1);
+						plane_bucket, target_orientation, 1);
 					if (!QueryFaceGroup(proof, seen, portals, faces, cell_a,
 							first, end - first))
 						goto failure;

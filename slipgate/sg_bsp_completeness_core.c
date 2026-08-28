@@ -37,6 +37,43 @@ int SG_BspProofFiniteVector(const float value[3])
 	return isfinite(value[0]) && isfinite(value[1]) && isfinite(value[2]);
 }
 
+int SG_BspProofCanonicalPlane(const sg_configuration_plane_t *plane,
+	sg_bsp_proof_canonical_plane_t *canonical_out)
+{
+	float scale;
+	uint32_t axis;
+	int flip = 0;
+
+	if (!plane || !canonical_out ||
+		!SG_BspProofFiniteVector(plane->normal) ||
+		!isfinite(plane->distance))
+		return 0;
+	scale = fmaxf(fabsf(plane->normal[0]),
+		fmaxf(fabsf(plane->normal[1]), fabsf(plane->normal[2])));
+	if (scale == 0.0f || !isfinite(scale))
+		return 0;
+	for (axis = 0; axis < 3U; axis++)
+		if (plane->normal[axis] != 0.0f)
+		{
+			flip = plane->normal[axis] < 0.0f;
+			break;
+		}
+	for (axis = 0; axis < 3U; axis++)
+	{
+		canonical_out->normal[axis] =
+			(double)(flip ? -plane->normal[axis] : plane->normal[axis]) /
+			(double)scale;
+		if (canonical_out->normal[axis] == 0.0)
+			canonical_out->normal[axis] = 0.0;
+	}
+	canonical_out->distance =
+		(double)(flip ? -plane->distance : plane->distance) / (double)scale;
+	if (canonical_out->distance == 0.0)
+		canonical_out->distance = 0.0;
+	canonical_out->orientation = (uint8_t)flip;
+	return 1;
+}
+
 void SG_BspProofFreeRegion(sg_bsp_proof_region_t *region)
 {
 	if (!region)

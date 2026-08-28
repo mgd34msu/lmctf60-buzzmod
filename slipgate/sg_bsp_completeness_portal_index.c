@@ -168,33 +168,32 @@ static int PlaneKey(const sg_configuration_plane_t *plane,
 	uint32_t *dominant_out, int64_t normal_buckets[3],
 	int64_t *bucket_out, uint8_t *orientation)
 {
+	sg_bsp_proof_canonical_plane_t canonical;
 	uint32_t dominant = DominantAxis(plane->normal);
-	float scale = fabsf(plane->normal[dominant]);
-	double distance;
 	double bucket;
 	uint32_t axis;
-	int flip = plane->normal[dominant] < 0.0f;
+
+	if (!SG_BspProofCanonicalPlane(plane, &canonical))
+		return 0;
 
 	for (axis = 0; axis < 3U; axis++)
 	{
-		double value = (double)(flip ? -plane->normal[axis] :
-			plane->normal[axis]) / (double)scale;
-		double normal_bucket = floor(value / FACE_PLANE_BUCKET_SIZE);
+		double normal_bucket = floor(canonical.normal[axis] /
+			FACE_PLANE_BUCKET_SIZE);
 
-		if (!isfinite(value) || normal_bucket < (double)INT64_MIN ||
+		if (!isfinite(canonical.normal[axis]) ||
+			normal_bucket < (double)INT64_MIN ||
 			normal_bucket > (double)INT64_MAX)
 			return 0;
 		normal_buckets[axis] = (int64_t)normal_bucket;
 	}
-	distance = (double)(flip ? -plane->distance : plane->distance) /
-		(double)scale;
-	bucket = floor(distance / FACE_PLANE_BUCKET_SIZE);
-	if (!isfinite(distance) || bucket < (double)INT64_MIN ||
+	bucket = floor(canonical.distance / FACE_PLANE_BUCKET_SIZE);
+	if (!isfinite(canonical.distance) || bucket < (double)INT64_MIN ||
 		bucket > (double)INT64_MAX)
 		return 0;
 	*dominant_out = dominant;
 	*bucket_out = (int64_t)bucket;
-	*orientation = (uint8_t)flip;
+	*orientation = canonical.orientation;
 	return 1;
 }
 
@@ -216,6 +215,8 @@ static int CompareFaceRef(const void *left_pointer,
 		return left->normal_buckets[2] < right->normal_buckets[2] ? -1 : 1;
 	if (left->plane_bucket != right->plane_bucket)
 		return left->plane_bucket < right->plane_bucket ? -1 : 1;
+	if (left->orientation != right->orientation)
+		return left->orientation < right->orientation ? -1 : 1;
 	if (left->sweep_min != right->sweep_min)
 		return left->sweep_min < right->sweep_min ? -1 : 1;
 	if (left->cell != right->cell)
@@ -231,7 +232,8 @@ static int SameFaceGroup(const sg_bsp_proof_face_ref_t *left,
 		left->normal_buckets[0] == right->normal_buckets[0] &&
 		left->normal_buckets[1] == right->normal_buckets[1] &&
 		left->normal_buckets[2] == right->normal_buckets[2] &&
-		left->plane_bucket == right->plane_bucket;
+		left->plane_bucket == right->plane_bucket &&
+		left->orientation == right->orientation;
 }
 
 static float BuildFaceIntervalMax(sg_bsp_proof_face_ref_t *refs,

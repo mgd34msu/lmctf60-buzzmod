@@ -1,5 +1,6 @@
 #include "../slipgate/sg_bsp_completeness_internal.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,8 +40,8 @@ static uint64_t AuditFan(uint32_t count, int alternating,
 		uint32_t pair = index / 2U;
 		float base = -0.75f + (float)pair * 1.5f /
 			(float)(count / 2U);
-		float slope = base + ((alternating && (index & 1U)) ?
-			0.000005f : 0.0f);
+		float slope = alternating ? base + ((index & 1U) ?
+			0.000005f : 0.0f) : 0.0f;
 		float sign = alternating && (index & 1U) ? -1.0f : 1.0f;
 
 		cells[index].stance = SG_RUNE_STANCE_STANDING;
@@ -76,7 +77,7 @@ static void TestFanScaling(void)
 		uint64_t alternating_visits = AuditFan(counts[scale], 1,
 			&alternating_candidates);
 
-		CHECK(same_visits == counts[scale] / 2U);
+		CHECK(same_visits == 0U);
 		CHECK(alternating_visits == counts[scale] / 2U);
 		CHECK(same_candidates == 0U);
 		CHECK(alternating_candidates == alternating_visits);
@@ -84,6 +85,87 @@ static void TestFanScaling(void)
 			(unsigned long long)same_visits,
 			(unsigned long long)alternating_visits);
 	}
+}
+
+static void CheckEquivalentPlaneKeys(const sg_configuration_plane_t *left,
+	const sg_configuration_plane_t *right, int opposing)
+{
+	sg_configuration_cell_t cells[2];
+	sg_configuration_face_t faces[2];
+	sg_configuration_space_t space;
+	sg_bsp_proof_context_t proof;
+	sg_bsp_proof_canonical_plane_t left_canonical, right_canonical;
+	sg_bsp_proof_face_ref_t *refs = NULL;
+	uint32_t ref_count = 0U;
+	uint32_t axis;
+
+	memset(cells, 0, sizeof(cells));
+	memset(faces, 0, sizeof(faces));
+	memset(&space, 0, sizeof(space));
+	memset(&proof, 0, sizeof(proof));
+	cells[0].face_count = 1U;
+	cells[1].first_face = 1U;
+	cells[1].face_count = 1U;
+	faces[0].plane = *left;
+	faces[1].plane = *right;
+	space.cells = cells;
+	space.cell_count = 2U;
+	space.faces = faces;
+	space.face_count = 2U;
+	proof.space = &space;
+	CHECK(SG_BspProofCanonicalPlane(left, &left_canonical));
+	CHECK(SG_BspProofCanonicalPlane(right, &right_canonical));
+	for (axis = 0; axis < 3U; axis++)
+		CHECK(fabs(left_canonical.normal[axis] -
+			right_canonical.normal[axis]) <= 0.000001);
+	CHECK(fabs(left_canonical.distance - right_canonical.distance) <=
+		0.000001);
+	CHECK((left_canonical.orientation != right_canonical.orientation) ==
+		opposing);
+	CHECK(SG_BspProofBuildFaceRefs(&proof, &refs, &ref_count));
+	CHECK(ref_count == 2U);
+	if (ref_count == 2U)
+	{
+		for (axis = 0; axis < 3U; axis++)
+			CHECK(llabs(refs[0].normal_buckets[axis] -
+				refs[1].normal_buckets[axis]) <= 1);
+		CHECK(llabs(refs[0].plane_bucket - refs[1].plane_bucket) <= 1);
+		CHECK((refs[0].orientation != refs[1].orientation) == opposing);
+	}
+	SG_BspProofFreeFaceRefs(refs, ref_count);
+}
+
+static sg_configuration_plane_t ScaledPlane(sg_configuration_plane_t plane,
+	float scale)
+{
+	uint32_t axis;
+
+	for (axis = 0; axis < 3U; axis++)
+		plane.normal[axis] *= scale;
+	plane.distance *= scale;
+	return plane;
+}
+
+static void TestReviewerNearTieMatrix(void)
+{
+	sg_configuration_plane_t left, right;
+	sg_configuration_plane_t scaled_left, reversed_left, reversed_right;
+
+	memset(&left, 0, sizeof(left));
+	memset(&right, 0, sizeof(right));
+	left.normal[0] = 0.9999982119f;
+	left.normal[1] = -0.9999982715f;
+	left.distance = 0.25f;
+	right.normal[0] = -0.1012998223f;
+	right.normal[1] = 0.1012998223f;
+	right.distance = -0.0253250003f;
+	CheckEquivalentPlaneKeys(&left, &right, 1);
+	scaled_left = ScaledPlane(left, 3.25f);
+	CheckEquivalentPlaneKeys(&scaled_left, &right, 1);
+	reversed_left = ScaledPlane(left, -1.0f);
+	reversed_right = ScaledPlane(right, -2.0f);
+	CheckEquivalentPlaneKeys(&reversed_left, &reversed_right, 1);
+	CheckEquivalentPlaneKeys(&left, &scaled_left, 0);
 }
 
 static void TestDominantTieKey(void)
@@ -170,6 +252,7 @@ int main(void)
 	TestFanScaling();
 	TestDominantTieKey();
 	TestNearTieCompatibility();
+	TestReviewerNearTieMatrix();
 	if (failures)
 	{
 		fprintf(stderr, "%d portal index scaling checks failed\n", failures);

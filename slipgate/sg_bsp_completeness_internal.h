@@ -40,6 +40,13 @@ typedef struct sg_bsp_proof_context_s
 	uint32_t blocker_bucket_count;
 } sg_bsp_proof_context_t;
 
+typedef struct sg_bsp_proof_canonical_plane_s
+{
+	double normal[3];
+	double distance;
+	uint8_t orientation;
+} sg_bsp_proof_canonical_plane_t;
+
 typedef struct sg_bsp_proof_face_ref_s
 {
 	uint32_t cell;
@@ -73,6 +80,8 @@ void SG_BspProofFail(sg_bsp_proof_context_t *proof,
 	sg_bsp_completeness_code_t code, uint32_t record);
 float SG_BspProofDot(const float left[3], const float right[3]);
 int SG_BspProofFiniteVector(const float value[3]);
+int SG_BspProofCanonicalPlane(const sg_configuration_plane_t *plane,
+	sg_bsp_proof_canonical_plane_t *canonical_out);
 void SG_BspProofFreeRegion(sg_bsp_proof_region_t *region);
 void SG_BspProofFreeRegions(sg_bsp_proof_regions_t *regions);
 int SG_BspProofCopyRegion(const sg_bsp_proof_region_t *source,

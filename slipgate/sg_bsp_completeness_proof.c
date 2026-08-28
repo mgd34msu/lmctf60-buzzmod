@@ -73,6 +73,105 @@ static int WorldPointersPresent(const sg_bsp_world_t *world)
 		(world->brush_side_count == 0U || world->brush_sides);
 }
 
+typedef struct bsp_graph_frame_s
+{
+	uint32_t node;
+	uint8_t next_child;
+} bsp_graph_frame_t;
+
+static int BspChildValid(const sg_bsp_world_t *world, int32_t child)
+{
+	if (child >= 0)
+		return (uint32_t)child < world->node_count;
+	return ~(uint32_t)child < world->leaf_count;
+}
+
+static int ValidateBspGraph(sg_bsp_proof_context_t *proof)
+{
+	const sg_bsp_world_t *world = proof->authority->world;
+	bsp_graph_frame_t *stack = NULL;
+	uint8_t *colors = NULL;
+	size_t maximum_frames = SIZE_MAX / sizeof(*stack);
+	uint32_t root;
+
+	if (!BspChildValid(world, world->models[0].headnode))
+	{
+		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_WORLD, 0U);
+		return 0;
+	}
+	for (root = 0; root < world->node_count; root++)
+		if (world->nodes[root].plane >= world->plane_count ||
+			!BspChildValid(world, world->nodes[root].children[0]) ||
+			!BspChildValid(world, world->nodes[root].children[1]))
+		{
+			SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_WORLD, root);
+			return 0;
+		}
+	if (!world->node_count)
+		return 1;
+	if (maximum_frames < UINT32_MAX &&
+		world->node_count > (uint32_t)maximum_frames)
+	{
+		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OVERFLOW,
+			world->node_count);
+		return 0;
+	}
+	colors = calloc(world->node_count, sizeof(*colors));
+	stack = malloc((size_t)world->node_count * sizeof(*stack));
+	if (!colors || !stack)
+	{
+		free(colors);
+		free(stack);
+		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OUT_OF_MEMORY,
+			world->node_count);
+		return 0;
+	}
+	for (root = 0; root < world->node_count; root++)
+	{
+		uint32_t stack_count = 0U;
+
+		if (colors[root])
+			continue;
+		colors[root] = 1U;
+		stack[stack_count].node = root;
+		stack[stack_count++].next_child = 0U;
+		while (stack_count)
+		{
+			bsp_graph_frame_t *frame = &stack[stack_count - 1U];
+			int32_t child;
+			uint32_t child_node;
+
+			if (frame->next_child == 2U)
+			{
+				colors[frame->node] = 2U;
+				stack_count--;
+				continue;
+			}
+			child = world->nodes[frame->node].children[frame->next_child++];
+			if (child < 0)
+				continue;
+			child_node = (uint32_t)child;
+			if (colors[child_node] == 1U)
+			{
+				SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_WORLD,
+					child_node);
+				free(colors);
+				free(stack);
+				return 0;
+			}
+			if (!colors[child_node])
+			{
+				colors[child_node] = 1U;
+				stack[stack_count].node = child_node;
+				stack[stack_count++].next_child = 0U;
+			}
+		}
+	}
+	free(colors);
+	free(stack);
+	return 1;
+}
+
 int SG_BspCompletenessProve(const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *space,
 	sg_bsp_completeness_result_t *result_out)
@@ -103,6 +202,8 @@ int SG_BspCompletenessProve(const sg_host_collision_authority_t *authority,
 	proof.space = space;
 	proof.result.represented_cells = space->cell_count;
 	proof.result.represented_portals = space->portal_count;
+	if (!ValidateBspGraph(&proof))
+		goto done;
 	if (!SG_BspProofBuildExpected(&proof))
 	{
 		if (proof.result.code == SG_BSP_COMPLETENESS_OK)

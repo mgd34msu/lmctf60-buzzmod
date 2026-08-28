@@ -525,7 +525,11 @@ int SG_BspProofBuildExpected(sg_bsp_proof_context_t *proof)
 
 	if (proof->authority->world->leaf_count >
 		UINT32_MAX / (uint32_t)SG_RUNE_STANCE_COUNT)
+	{
+		SG_BspProofFail(proof, SG_BSP_COMPLETENESS_OVERFLOW,
+			proof->authority->world->leaf_count);
 		return 0;
+	}
 	proof->blocker_bucket_count = proof->authority->world->leaf_count *
 		(uint32_t)SG_RUNE_STANCE_COUNT;
 	proof->blockers = calloc(proof->blocker_bucket_count ?
