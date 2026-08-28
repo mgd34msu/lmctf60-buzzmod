@@ -26,6 +26,10 @@
 #define BSP_AREAPORTAL_BYTES 8U
 #define BSP_CONTENTS_SOLID INT32_C(1)
 #define BSP_MAX_FACE_EDGES UINT32_C(4096)
+#define BSP_PLANE_X INT32_C(0)
+#define BSP_PLANE_Y INT32_C(1)
+#define BSP_PLANE_Z INT32_C(2)
+#define BSP_PLANE_NON_AXIAL INT32_C(6)
 
 _Static_assert(CHAR_BIT == 8, "IBSP decoding requires eight-bit bytes");
 _Static_assert(sizeof(float) == 4 && FLT_RADIX == 2 && FLT_MANT_DIG == 24 &&
@@ -190,6 +194,32 @@ static int BspReadLumps(const uint8_t *data, size_t size,
 	return 1;
 }
 
+static int BspValidateHostLimits(
+	const bsp_lump_view_t lumps[SG_BSP_LUMP_COUNT], sg_bsp_error_t *error)
+{
+	if (lumps[SG_BSP_LUMP_AREAS].count > SG_BSP_MAX_AREAS)
+	{
+		BspSetError(error, SG_BSP_ERROR_LIMIT_EXCEEDED,
+			SG_BSP_LUMP_AREAS, SG_BSP_MAX_AREAS);
+		return 0;
+	}
+	if (lumps[SG_BSP_LUMP_MODELS].count > SG_BSP_MAX_MODELS)
+	{
+		BspSetError(error, SG_BSP_ERROR_LIMIT_EXCEEDED,
+			SG_BSP_LUMP_MODELS, SG_BSP_MAX_MODELS);
+		return 0;
+	}
+	if (lumps[SG_BSP_LUMP_VISIBILITY].length >= 4U &&
+		BspReadU32(lumps[SG_BSP_LUMP_VISIBILITY].data) >
+			SG_BSP_MAX_CLUSTERS)
+	{
+		BspSetError(error, SG_BSP_ERROR_LIMIT_EXCEEDED,
+			SG_BSP_LUMP_VISIBILITY, SG_BSP_MAX_CLUSTERS);
+		return 0;
+	}
+	return 1;
+}
+
 static int BspLoadEntities(sg_bsp_world_t *world,
 	const bsp_lump_view_t *lump, sg_bsp_error_t *error)
 {
@@ -221,7 +251,6 @@ static int BspLoadPlanes(sg_bsp_world_t *world,
 				goto nonfinite;
 		}
 		world->planes[index].distance = BspReadFloat(record + 12U);
-		world->planes[index].type = BspReadI32(record + 16U);
 		if (!isfinite(world->planes[index].distance))
 			goto nonfinite;
 		{
@@ -242,6 +271,14 @@ static int BspLoadPlanes(sg_bsp_world_t *world,
 				return 0;
 			}
 		}
+		if (world->planes[index].normal.value[0] == 1.0f)
+			world->planes[index].type = BSP_PLANE_X;
+		else if (world->planes[index].normal.value[1] == 1.0f)
+			world->planes[index].type = BSP_PLANE_Y;
+		else if (world->planes[index].normal.value[2] == 1.0f)
+			world->planes[index].type = BSP_PLANE_Z;
+		else
+			world->planes[index].type = BSP_PLANE_NON_AXIAL;
 	}
 	return 1;
 
@@ -424,6 +461,8 @@ static int BspLoadTexinfos(sg_bsp_world_t *world,
 		memcpy(world->texinfos[index].texture, record + 40U,
 			SG_BSP_TEXTURE_NAME_BYTES);
 		world->texinfos[index].next_texinfo = BspReadI32(record + 72U);
+		if (world->texinfos[index].next_texinfo <= 0)
+			world->texinfos[index].next_texinfo = -1;
 	}
 	return 1;
 }
@@ -452,7 +491,8 @@ static int BspLoadFaces(sg_bsp_world_t *world,
 		world->faces[index].texinfo = (uint32_t)(uint16_t)texinfo;
 		memcpy(world->faces[index].light_styles, record + 12U,
 			SG_BSP_LIGHT_STYLE_COUNT);
-		world->faces[index].light_offset = BspReadI32(record + 16U);
+		world->faces[index].light_offset = world->lighting_byte_count
+			? BspReadI32(record + 16U) : -1;
 	}
 	return 1;
 }
@@ -729,10 +769,9 @@ static int BspValidateReferences(const sg_bsp_world_t *world,
 			goto bad_node;
 	}
 	for (index = 0; index < world->texinfo_count; index++)
-		if (world->texinfos[index].next_texinfo < -1 ||
-			(world->texinfos[index].next_texinfo >= 0 &&
+		if (world->texinfos[index].next_texinfo > 0 &&
 			(uint32_t)world->texinfos[index].next_texinfo >=
-				world->texinfo_count))
+				world->texinfo_count)
 			goto bad_texinfo;
 	for (index = 0; index < world->face_count; index++)
 	{
@@ -874,6 +913,55 @@ bad_areaportal:
 		SG_BSP_LUMP_AREAPORTALS, index); return 0;
 }
 
+static int BspValidateTexinfoAnimations(const sg_bsp_world_t *world,
+	sg_bsp_error_t *error)
+{
+	uint32_t *indegree, *queue;
+	uint32_t index, first = 0, count = 0;
+
+	if (!world->texinfo_count)
+		return 1;
+	indegree = BspAllocate(world->texinfo_count, sizeof(*indegree), error,
+		SG_BSP_LUMP_TEXINFO);
+	queue = BspAllocate(world->texinfo_count, sizeof(*queue), error,
+		SG_BSP_LUMP_TEXINFO);
+	if (!indegree || !queue)
+	{
+		free(queue);
+		free(indegree);
+		return 0;
+	}
+	for (index = 0; index < world->texinfo_count; index++)
+		if (world->texinfos[index].next_texinfo > 0)
+			indegree[(uint32_t)world->texinfos[index].next_texinfo]++;
+	for (index = 0; index < world->texinfo_count; index++)
+		if (!indegree[index])
+			queue[count++] = index;
+	while (first < count)
+	{
+		int32_t next = world->texinfos[queue[first++]].next_texinfo;
+
+		if (next > 0 && --indegree[(uint32_t)next] == 0U)
+			queue[count++] = (uint32_t)next;
+	}
+	for (index = 0; index < world->texinfo_count; index++)
+	{
+		int32_t next = world->texinfos[index].next_texinfo;
+
+		if (!indegree[index] && next > 0 && indegree[(uint32_t)next])
+		{
+			BspSetError(error, SG_BSP_ERROR_INVALID_ANIMATION,
+				SG_BSP_LUMP_TEXINFO, index);
+			free(queue);
+			free(indegree);
+			return 0;
+		}
+	}
+	free(queue);
+	free(indegree);
+	return 1;
+}
+
 static int BspValidateTrees(const sg_bsp_world_t *world,
 	sg_bsp_error_t *error)
 {
@@ -975,7 +1063,8 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 			SG_BSP_LUMP_ENTITIES, 0);
 		return 0;
 	}
-	if (!BspReadLumps(data, size, lumps, error_out))
+	if (!BspReadLumps(data, size, lumps, error_out) ||
+		!BspValidateHostLimits(lumps, error_out))
 		return 0;
 	world = calloc(1, sizeof(*world));
 	if (!world)
@@ -990,9 +1079,9 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 		!BspLoadVisibility(world, &lumps[SG_BSP_LUMP_VISIBILITY], error_out) ||
 		!BspLoadNodes(world, &lumps[SG_BSP_LUMP_NODES], error_out) ||
 		!BspLoadTexinfos(world, &lumps[SG_BSP_LUMP_TEXINFO], error_out) ||
-		!BspLoadFaces(world, &lumps[SG_BSP_LUMP_FACES], error_out) ||
 		!BspLoadBytes(&world->lighting, &world->lighting_byte_count,
 			&lumps[SG_BSP_LUMP_LIGHTING], error_out, SG_BSP_LUMP_LIGHTING) ||
+		!BspLoadFaces(world, &lumps[SG_BSP_LUMP_FACES], error_out) ||
 		!BspLoadLeaves(world, &lumps[SG_BSP_LUMP_LEAVES], error_out) ||
 		!BspLoadU16Indices(&world->leaf_faces, &world->leaf_face_count,
 			&lumps[SG_BSP_LUMP_LEAF_FACES], error_out,
@@ -1007,7 +1096,8 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 		!BspLoadBrushSides(world, &lumps[SG_BSP_LUMP_BRUSH_SIDES], error_out) ||
 		!BspLoadAreas(world, &lumps[SG_BSP_LUMP_AREAS], error_out) ||
 		!BspLoadAreaportals(world, &lumps[SG_BSP_LUMP_AREAPORTALS],
-			error_out) || !BspValidateReferences(world, error_out) ||
+		error_out) || !BspValidateReferences(world, error_out) ||
+		!BspValidateTexinfoAnimations(world, error_out) ||
 		!BspValidateTrees(world, error_out))
 	{
 		SG_BspWorldDestroy(world);
@@ -1103,12 +1193,14 @@ const char *SG_BspWorldErrorString(sg_bsp_error_code_t code)
 	case SG_BSP_ERROR_UNSUPPORTED_VERSION: return "unsupported BSP version";
 	case SG_BSP_ERROR_BAD_LUMP: return "invalid BSP lump";
 	case SG_BSP_ERROR_SIZE_OVERFLOW: return "BSP size overflow";
+	case SG_BSP_ERROR_LIMIT_EXCEEDED: return "BSP host limit exceeded";
 	case SG_BSP_ERROR_OUT_OF_MEMORY: return "out of memory";
 	case SG_BSP_ERROR_NONFINITE_GEOMETRY: return "non-finite BSP geometry";
 	case SG_BSP_ERROR_INVALID_GEOMETRY: return "invalid BSP geometry";
 	case SG_BSP_ERROR_INVALID_REFERENCE: return "invalid BSP reference";
 	case SG_BSP_ERROR_INVALID_VISIBILITY: return "invalid BSP visibility";
 	case SG_BSP_ERROR_INVALID_TREE: return "invalid BSP tree";
+	case SG_BSP_ERROR_INVALID_ANIMATION: return "invalid BSP animation chain";
 	default: return "unknown BSP error";
 	}
 }

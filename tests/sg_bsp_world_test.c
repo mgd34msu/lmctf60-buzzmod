@@ -7,7 +7,17 @@
 #include "../slipgate/sg_bsp_world.h"
 
 #define HEADER_BYTES (8U + SG_BSP_LUMP_COUNT * 8U)
-#define FIXTURE_CAPACITY 4096U
+#define FIXTURE_CAPACITY 600000U
+#define HOST_MAX_CLUSTERS UINT32_C(65536)
+#define HOST_MAX_AREAS UINT32_C(256)
+#define HOST_MAX_MODELS UINT32_C(8190)
+
+_Static_assert(SG_BSP_MAX_CLUSTERS == HOST_MAX_CLUSTERS,
+	"BSP cluster cap must match the selected host");
+_Static_assert(SG_BSP_MAX_AREAS == HOST_MAX_AREAS,
+	"BSP area cap must match the selected host");
+_Static_assert(SG_BSP_MAX_MODELS == HOST_MAX_MODELS,
+	"BSP model cap must match the selected host");
 
 static int failures;
 
@@ -21,11 +31,13 @@ static int failures;
 
 typedef struct fixture_s
 {
-	uint8_t bytes[FIXTURE_CAPACITY];
+	uint8_t *bytes;
 	uint32_t size;
 	uint32_t offsets[SG_BSP_LUMP_COUNT];
 	uint32_t lengths[SG_BSP_LUMP_COUNT];
 } fixture_t;
+
+static void FinishHeader(fixture_t *fixture);
 
 static uint32_t ReadU32(const uint8_t *bytes)
 {
@@ -93,6 +105,32 @@ static uint8_t *AddLump(fixture_t *fixture, sg_bsp_lump_t lump,
 	return result;
 }
 
+static int ResizeLump(fixture_t *fixture, sg_bsp_lump_t lump,
+	uint32_t length)
+{
+	uint32_t old_length = fixture->lengths[lump];
+	uint32_t old_end = fixture->offsets[lump] + old_length;
+	uint32_t tail_length = fixture->size - old_end;
+	int64_t delta = (int64_t)length - old_length;
+	uint32_t index;
+
+	if (delta > 0 && (uint64_t)fixture->size + (uint64_t)delta >
+		FIXTURE_CAPACITY)
+		return 0;
+	memmove(fixture->bytes + fixture->offsets[lump] + length,
+		fixture->bytes + old_end, tail_length);
+	if (delta > 0)
+		memset(fixture->bytes + old_end, 0, (size_t)delta);
+	for (index = 0; index < SG_BSP_LUMP_COUNT; index++)
+		if (index != (uint32_t)lump && fixture->offsets[index] >= old_end)
+			fixture->offsets[index] =
+				(uint32_t)((int64_t)fixture->offsets[index] + delta);
+	fixture->lengths[lump] = length;
+	fixture->size = (uint32_t)((int64_t)fixture->size + delta);
+	FinishHeader(fixture);
+	return 1;
+}
+
 static void FinishHeader(fixture_t *fixture)
 {
 	uint32_t lump;
@@ -115,6 +153,12 @@ static fixture_t ValidFixture(void)
 	uint32_t lump;
 
 	memset(&fixture, 0, sizeof(fixture));
+	fixture.bytes = calloc(1, FIXTURE_CAPACITY);
+	if (!fixture.bytes)
+	{
+		fputs("could not allocate BSP test fixture\n", stderr);
+		exit(2);
+	}
 	fixture.size = HEADER_BYTES;
 	for (lump = 0; lump < SG_BSP_LUMP_COUNT; lump++)
 		fixture.offsets[lump] = HEADER_BYTES;
@@ -254,16 +298,28 @@ static fixture_t ValidFixture(void)
 	return fixture;
 }
 
-static void ExpectFailure(fixture_t fixture, sg_bsp_error_code_t code,
+static void DestroyFixture(fixture_t *fixture)
+{
+	free(fixture->bytes);
+	memset(fixture, 0, sizeof(*fixture));
+}
+
+static void ExpectFailure(fixture_t *fixture, sg_bsp_error_code_t code,
 	sg_bsp_lump_t lump)
 {
 	sg_bsp_world_t *world = NULL;
 	sg_bsp_error_t error = { SG_BSP_ERROR_NONE, SG_BSP_LUMP_ENTITIES, 0 };
 
-	CHECK(!SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(!SG_BspWorldLoadMemory(fixture->bytes, fixture->size, &world, &error));
 	CHECK(world == NULL);
+	if (error.code != code || error.lump != lump)
+		fprintf(stderr, "expected error code=%u lump=%u, got code=%u lump=%u\n",
+			(unsigned)code, (unsigned)lump, (unsigned)error.code,
+			(unsigned)error.lump);
 	CHECK(error.code == code);
 	CHECK(error.lump == lump);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(fixture);
 }
 
 static void TestValidFixture(void)
@@ -315,6 +371,35 @@ static void TestValidFixture(void)
 	CHECK(world->visibility.bytes[12] == 1);
 	CHECK(world->vertices[1].point.value[0] == 16.0f);
 	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+}
+
+static void TestDerivedPlaneType(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+	uint8_t *plane = fixture.bytes + fixture.offsets[SG_BSP_LUMP_PLANES];
+
+	WriteI32(plane + 16, 0);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->planes[0].type == 2);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+
+	fixture = ValidFixture();
+	world = NULL;
+	plane = fixture.bytes + fixture.offsets[SG_BSP_LUMP_PLANES];
+	WriteFloat(plane + 8, -1.0f);
+	WriteI32(plane + 16, 2);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->planes[0].type == 6);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
 }
 
 static void TestHeaderFailures(void)
@@ -333,23 +418,24 @@ static void TestHeaderFailures(void)
 	CHECK(!SG_BspWorldLoadMemory(fixture.bytes, HEADER_BYTES - 1,
 		&world, &error));
 	CHECK(error.code == SG_BSP_ERROR_TRUNCATED_HEADER);
+	DestroyFixture(&fixture);
 	fixture = ValidFixture();
 	fixture.bytes[0] = 'X';
-	ExpectFailure(fixture, SG_BSP_ERROR_BAD_MAGIC, SG_BSP_LUMP_ENTITIES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_BAD_MAGIC, SG_BSP_LUMP_ENTITIES);
 	fixture = ValidFixture();
 	WriteU32(fixture.bytes + 4, 39);
-	ExpectFailure(fixture, SG_BSP_ERROR_UNSUPPORTED_VERSION,
+	ExpectFailure(&fixture, SG_BSP_ERROR_UNSUPPORTED_VERSION,
 		SG_BSP_LUMP_ENTITIES);
 	fixture = ValidFixture();
 	WriteU32(fixture.bytes + 8U + SG_BSP_LUMP_PLANES * 8U, UINT32_MAX);
-	ExpectFailure(fixture, SG_BSP_ERROR_BAD_LUMP, SG_BSP_LUMP_PLANES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_BAD_LUMP, SG_BSP_LUMP_PLANES);
 	fixture = ValidFixture();
 	WriteU32(fixture.bytes + 12U + SG_BSP_LUMP_PLANES * 8U, 19);
-	ExpectFailure(fixture, SG_BSP_ERROR_BAD_LUMP, SG_BSP_LUMP_PLANES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_BAD_LUMP, SG_BSP_LUMP_PLANES);
 	fixture = ValidFixture();
 	WriteU32(fixture.bytes + 8U + SG_BSP_LUMP_VERTICES * 8U,
 		fixture.offsets[SG_BSP_LUMP_PLANES]);
-	ExpectFailure(fixture, SG_BSP_ERROR_BAD_LUMP, SG_BSP_LUMP_VERTICES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_BAD_LUMP, SG_BSP_LUMP_VERTICES);
 }
 
 static void TestReferenceFailures(void)
@@ -359,40 +445,40 @@ static void TestReferenceFailures(void)
 
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
 	WriteI32(record + 4, -2);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_NODES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_NODES);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_FACES];
 	WriteI32(record + 4, 2);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_FACES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_FACES);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_SURFEDGES];
 	WriteI32(record, INT32_MIN);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_REFERENCE,
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE,
 		SG_BSP_LUMP_SURFEDGES);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_LEAF_BRUSHES];
 	WriteU16(record, 1);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_REFERENCE,
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE,
 		SG_BSP_LUMP_LEAF_BRUSHES);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_FACES];
 	WriteI32(record + 16, 3);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_FACES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE, SG_BSP_LUMP_FACES);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_AREAPORTALS];
 	WriteI32(record + 4, 2);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_REFERENCE,
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_REFERENCE,
 		SG_BSP_LUMP_AREAPORTALS);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_NODES];
 	WriteI32(record + 4, 0);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_NODES);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_TREE, SG_BSP_LUMP_NODES);
 }
 
 static void TestGeometryAndVisibilityFailures(void)
@@ -402,31 +488,31 @@ static void TestGeometryAndVisibilityFailures(void)
 
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_VERTICES];
 	WriteU32(record, UINT32_C(0x7fc00000));
-	ExpectFailure(fixture, SG_BSP_ERROR_NONFINITE_GEOMETRY,
+	ExpectFailure(&fixture, SG_BSP_ERROR_NONFINITE_GEOMETRY,
 		SG_BSP_LUMP_VERTICES);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_VISIBILITY];
 	record[12] = 0;
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_VISIBILITY,
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_VISIBILITY,
 		SG_BSP_LUMP_VISIBILITY);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_VISIBILITY];
 	WriteU32(record, UINT32_MAX);
-	ExpectFailure(fixture, SG_BSP_ERROR_SIZE_OVERFLOW,
+	ExpectFailure(&fixture, SG_BSP_ERROR_LIMIT_EXCEEDED,
 		SG_BSP_LUMP_VISIBILITY);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_MODELS];
 	WriteFloat(record, 17.0f);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_GEOMETRY,
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_GEOMETRY,
 		SG_BSP_LUMP_MODELS);
 
 	fixture = ValidFixture();
 	record = fixture.bytes + fixture.offsets[SG_BSP_LUMP_PLANES];
 	WriteFloat(record + 8, 0.0f);
-	ExpectFailure(fixture, SG_BSP_ERROR_INVALID_GEOMETRY,
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_GEOMETRY,
 		SG_BSP_LUMP_PLANES);
 }
 
@@ -446,6 +532,149 @@ static void TestMapWithoutVisibility(void)
 		CHECK(world->leaves[0].cluster == 0);
 	}
 	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+}
+
+static void TestTexinfoHostSemantics(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+	uint8_t *texinfos;
+
+	texinfos = fixture.bytes + fixture.offsets[SG_BSP_LUMP_TEXINFO];
+	WriteI32(texinfos + 72U, 0);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->texinfos[0].next_texinfo == -1);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+
+	fixture = ValidFixture();
+	world = NULL;
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_TEXINFO, 3U * 76U));
+	texinfos = fixture.bytes + fixture.offsets[SG_BSP_LUMP_TEXINFO];
+	memcpy(texinfos + 76U, texinfos, 76U);
+	memcpy(texinfos + 152U, texinfos, 76U);
+	WriteI32(texinfos + 72U, 1);
+	WriteI32(texinfos + 76U + 72U, 2);
+	WriteI32(texinfos + 152U + 72U, 1);
+	ExpectFailure(&fixture, SG_BSP_ERROR_INVALID_ANIMATION,
+		SG_BSP_LUMP_TEXINFO);
+}
+
+static void TestEmptyLightingIgnoresStaleOffset(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+
+	WriteU32(fixture.bytes + 12U + SG_BSP_LUMP_LIGHTING * 8U, 0);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->faces[0].light_offset == -1);
+	SG_BspWorldDestroy(world);
+	DestroyFixture(&fixture);
+}
+
+static void SetVisibilityClusterLimit(fixture_t *fixture)
+{
+	uint32_t table_bytes = 4U + HOST_MAX_CLUSTERS * 8U;
+	uint32_t row_bytes = HOST_MAX_CLUSTERS / 8U;
+	uint32_t stream_bytes = ((row_bytes + 254U) / 255U) * 2U;
+	uint8_t *visibility;
+	uint32_t cluster, set, position, remaining;
+
+	CHECK(ResizeLump(fixture, SG_BSP_LUMP_VISIBILITY,
+		table_bytes + stream_bytes));
+	visibility = fixture->bytes + fixture->offsets[SG_BSP_LUMP_VISIBILITY];
+	WriteU32(visibility, HOST_MAX_CLUSTERS);
+	for (cluster = 0; cluster < HOST_MAX_CLUSTERS; cluster++)
+		for (set = 0; set < SG_BSP_VISIBILITY_SET_COUNT; set++)
+			WriteU32(visibility + 4U + cluster * 8U + set * 4U,
+				table_bytes);
+	position = table_bytes;
+	remaining = row_bytes;
+	while (remaining)
+	{
+		uint32_t run = remaining > 255U ? 255U : remaining;
+
+		visibility[position++] = 0;
+		visibility[position++] = (uint8_t)run;
+		remaining -= run;
+	}
+}
+
+static void TestHostFormatCaps(void)
+{
+	fixture_t fixture = ValidFixture();
+	sg_bsp_world_t *world = NULL;
+	sg_bsp_error_t error;
+	uint8_t *records;
+	uint32_t index;
+
+	SetVisibilityClusterLimit(&fixture);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->visibility.cluster_count == HOST_MAX_CLUSTERS);
+	SG_BspWorldDestroy(world);
+	world = NULL;
+	WriteU32(fixture.bytes + fixture.offsets[SG_BSP_LUMP_VISIBILITY],
+		HOST_MAX_CLUSTERS + 1U);
+	CHECK(!SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world == NULL);
+	CHECK(error.code == SG_BSP_ERROR_LIMIT_EXCEEDED);
+	CHECK(error.lump == SG_BSP_LUMP_VISIBILITY);
+	CHECK(error.record == HOST_MAX_CLUSTERS);
+	DestroyFixture(&fixture);
+
+	fixture = ValidFixture();
+	world = NULL;
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_AREAS,
+		HOST_MAX_AREAS * 8U));
+	records = fixture.bytes + fixture.offsets[SG_BSP_LUMP_AREAS];
+	memset(records, 0, HOST_MAX_AREAS * 8U);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->area_count == HOST_MAX_AREAS);
+	SG_BspWorldDestroy(world);
+	world = NULL;
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_AREAS,
+		(HOST_MAX_AREAS + 1U) * 8U));
+	CHECK(!SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world == NULL);
+	CHECK(error.code == SG_BSP_ERROR_LIMIT_EXCEEDED);
+	CHECK(error.lump == SG_BSP_LUMP_AREAS);
+	CHECK(error.record == HOST_MAX_AREAS);
+	DestroyFixture(&fixture);
+
+	fixture = ValidFixture();
+	world = NULL;
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_MODELS,
+		HOST_MAX_MODELS * 48U));
+	records = fixture.bytes + fixture.offsets[SG_BSP_LUMP_MODELS];
+	for (index = 2; index < HOST_MAX_MODELS; index++)
+		WriteI32(records + index * 48U + 36U, -1);
+	CHECK(SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world != NULL);
+	if (world)
+		CHECK(world->model_count == HOST_MAX_MODELS);
+	SG_BspWorldDestroy(world);
+	world = NULL;
+	CHECK(ResizeLump(&fixture, SG_BSP_LUMP_MODELS,
+		(HOST_MAX_MODELS + 1U) * 48U));
+	records = fixture.bytes + fixture.offsets[SG_BSP_LUMP_MODELS];
+	WriteI32(records + HOST_MAX_MODELS * 48U + 36U, -1);
+	CHECK(!SG_BspWorldLoadMemory(fixture.bytes, fixture.size, &world, &error));
+	CHECK(world == NULL);
+	CHECK(error.code == SG_BSP_ERROR_LIMIT_EXCEEDED);
+	CHECK(error.lump == SG_BSP_LUMP_MODELS);
+	CHECK(error.record == HOST_MAX_MODELS);
+	DestroyFixture(&fixture);
 }
 
 static void TestOutputOwnershipContract(void)
@@ -468,6 +697,7 @@ static void TestOutputOwnershipContract(void)
 	CHECK(!SG_BspWorldLoadMemory(fixture.bytes, fixture.size, NULL, &error));
 	CHECK(error.code == SG_BSP_ERROR_INVALID_ARGUMENT);
 	SG_BspWorldDestroy(NULL);
+	DestroyFixture(&fixture);
 }
 
 static int CompareRealBsp(const char *path)
@@ -554,10 +784,14 @@ done:
 int main(int argc, char **argv)
 {
 	TestValidFixture();
+	TestDerivedPlaneType();
 	TestHeaderFailures();
 	TestReferenceFailures();
 	TestGeometryAndVisibilityFailures();
 	TestMapWithoutVisibility();
+	TestTexinfoHostSemantics();
+	TestEmptyLightingIgnoresStaleOffset();
+	TestHostFormatCaps();
 	TestOutputOwnershipContract();
 	if (argc > 1)
 		CHECK(CompareRealBsp(argv[1]));
