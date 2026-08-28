@@ -27,11 +27,6 @@ typedef struct sg_ground_capability_error_s
 	uint32_t source_index;
 } sg_ground_capability_error_t;
 
-typedef struct sg_ground_capability_limits_s
-{
-	uint32_t max_capabilities;
-} sg_ground_capability_limits_t;
-
 typedef struct sg_ground_phase_binding_s
 {
 	uint32_t cell;
@@ -99,10 +94,13 @@ typedef struct sg_ground_capability_set_s
 	uint64_t localization_prepare_nodes;
 	uint64_t localization_queries;
 	uint64_t localization_nodes_examined;
+	uint64_t localization_region_prepare_comparisons;
+	uint64_t localization_region_prepare_nodes;
+	uint64_t localization_region_queries;
+	uint64_t localization_region_nodes_examined;
+	uint64_t localization_region_comparisons;
 } sg_ground_capability_set_t;
 
-void SG_GroundCapabilityDefaultLimits(
-	sg_ground_capability_limits_t *limits_out);
 int SG_GroundCapabilityBuild(
 	const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
@@ -110,7 +108,6 @@ int SG_GroundCapabilityBuild(
 	const sg_rune_phase_basis_t *phases, size_t phase_count,
 	const sg_ground_phase_binding_t *bindings, size_t binding_count,
 	sg_host_pmove_function_t host_pmove,
-	const sg_ground_capability_limits_t *limits,
 	sg_ground_capability_set_t **set_out,
 	sg_ground_capability_error_t *error_out);
 void SG_GroundCapabilityDestroy(sg_ground_capability_set_t *set);

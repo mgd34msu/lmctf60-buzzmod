@@ -136,6 +136,16 @@ static sg_rune_phase_basis_t GroundPhase(
 	return phase;
 }
 
+static sg_rune_model_identity_t GroundIdentity(void)
+{
+	sg_rune_model_identity_t identity = Identity();
+
+	identity.entity_semantics_id = UINT64_C(0x102);
+	identity.schema_id = UINT64_C(0x105);
+	identity.producer_identity = UINT64_C(0x106);
+	return identity;
+}
+
 static void GroundCell(ground_fixture_t *fixture, uint32_t cell,
 	float minimum_x, float maximum_x, sg_rune_stance_t stance)
 {
@@ -181,7 +191,7 @@ static void GroundFixtureInit(ground_fixture_t *fixture,
 	uint32_t box_count, float gravity, sg_rune_stance_t stance,
 	float source_support_z, float destination_support_z)
 {
-	sg_rune_model_identity_t identity = Identity();
+	sg_rune_model_identity_t identity = GroundIdentity();
 	sg_host_collision_error_t error;
 	uint32_t cell;
 
@@ -266,24 +276,22 @@ static void GroundFixtureRebind(ground_fixture_t *fixture)
 }
 
 static int GroundBuild(ground_fixture_t *fixture,
-	const sg_ground_capability_limits_t *limits,
 	sg_ground_capability_set_t **set_out,
 	sg_ground_capability_error_t *error_out)
 {
 	return SG_GroundCapabilityBuild(&fixture->authority,
 		&fixture->configuration, &fixture->semantics, fixture->phases, 4U,
-		fixture->bindings, 4U, Pmove, limits, set_out, error_out);
+		fixture->bindings, 4U, Pmove, set_out, error_out);
 }
 
 static int GroundBuildWithPmove(ground_fixture_t *fixture,
 	sg_host_pmove_function_t pmove,
-	const sg_ground_capability_limits_t *limits,
 	sg_ground_capability_set_t **set_out,
 	sg_ground_capability_error_t *error_out)
 {
 	return SG_GroundCapabilityBuild(&fixture->authority,
 		&fixture->configuration, &fixture->semantics, fixture->phases, 4U,
-		fixture->bindings, 4U, pmove, limits, set_out, error_out);
+		fixture->bindings, 4U, pmove, set_out, error_out);
 }
 
 static int HasKind(const sg_ground_capability_set_t *set,
@@ -358,14 +366,14 @@ static void TestFlatAndGravity(float gravity)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 
-	CHECK(GroundBuild(&fixture, NULL, &first, &error));
+	CHECK(GroundBuild(&fixture, &first, &error));
 	CHECK(first != NULL);
 	if (first)
 	{
 		CHECK(HasKind(first, SG_GROUND_CAPABILITY_WALK));
 		CHECK(HasKind(first, SG_GROUND_CAPABILITY_JUMP_TAKEOFF));
 		CHECK(first->identity.physics.gravity == gravity);
-		CHECK(GroundBuild(&fixture, NULL, &second, &error));
+		CHECK(GroundBuild(&fixture, &second, &error));
 		CHECK(second != NULL);
 		if (second)
 		{
@@ -411,7 +419,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_CROUCHING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 
-	CHECK(GroundBuildWithPmove(&fixture, NoJumpPmove, NULL, &set, &error));
+	CHECK(GroundBuildWithPmove(&fixture, NoJumpPmove, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_CROUCH));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -419,7 +427,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_CROUCHING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_CROUCH));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -427,7 +435,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -436,7 +444,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	CHECK(set && set->rejected_crossings == 1U);
 	SG_GroundCapabilityDestroy(set);
@@ -447,7 +455,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -456,7 +464,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -465,7 +473,7 @@ static void TestCrouchWallWindowAndGap(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -492,7 +500,7 @@ static void TestOrdinaryAndTallStep(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 16.0f);
 	GroundFixtureRebind(&fixture);
 
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_STEP));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -501,7 +509,7 @@ static void TestOrdinaryAndTallStep(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 24.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_STEP));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(set);
@@ -541,7 +549,7 @@ static void TestRamp(void)
 	SetRune3(&fixture.vertices[2], 0.0f, 32.0f, 48.0f);
 	SetRune3(&fixture.vertices[3], 0.0f, -32.0f, 48.0f);
 	GroundFixtureRebind(&fixture);
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_RAMP));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -563,7 +571,7 @@ static void TestDirectedDrop(void)
 	SetRune3(&fixture.regions[3].bounds.mins, 0.0f, -64.0f, -64.0f);
 	SetRune3(&fixture.regions[3].bounds.maxs, 64.0f, 64.0f, 64.0f);
 	SetRune3(&fixture.regions[3].interior_witness, 1.0f, 0.0f, -4.0f);
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_DROP));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	CHECK(set && set->proved_portals == 1U);
@@ -595,7 +603,6 @@ static void TestStanceOverlap(void)
 	sg_ground_phase_binding_t supported_bindings[2] = {
 		{ 0U, 0U }, { 1U, 2U }
 	};
-	sg_ground_capability_limits_t limits = { 2U };
 	uint32_t region;
 	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
@@ -619,7 +626,7 @@ static void TestStanceOverlap(void)
 	}
 	fixture.phases[2].stance = SG_RUNE_STANCE_CROUCHING;
 	fixture.phases[3].stance = SG_RUNE_STANCE_CROUCHING;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && CountKind(set, SG_GROUND_CAPABILITY_STANCE) == 2U);
 	SG_GroundCapabilityDestroy(set);
 	set = NULL;
@@ -629,16 +636,9 @@ static void TestStanceOverlap(void)
 	fixture.configuration.stance_overlap_count = 2U;
 	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		supported_bindings, 2U, NoJumpPmove, &limits, &set, &error));
+		supported_bindings, 2U, NoJumpPmove, &set, &error));
 	CHECK(set && set->capability_count == 2U);
 	SG_GroundCapabilityDestroy(set);
-	set = NULL;
-	limits.max_capabilities = 1U;
-	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
-		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		supported_bindings, 2U, NoJumpPmove, &limits, &set, &error));
-	CHECK(set == NULL);
-	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_OVERFLOW);
 	GroundFixtureDestroy(&fixture);
 }
 
@@ -658,10 +658,10 @@ static void TestPortalPlaneScalingAndSubsetBindings(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 
-	CHECK(GroundBuild(&fixture, NULL, &unscaled, &error));
+	CHECK(GroundBuild(&fixture, &unscaled, &error));
 	fixture.portal.plane.normal[0] *= 1024.0f;
 	fixture.portal.plane.distance *= 1024.0f;
-	CHECK(GroundBuild(&fixture, NULL, &scaled, &error));
+	CHECK(GroundBuild(&fixture, &scaled, &error));
 	CHECK(unscaled && scaled &&
 		unscaled->capability_count == scaled->capability_count);
 	if (unscaled && scaled &&
@@ -671,11 +671,35 @@ static void TestPortalPlaneScalingAndSubsetBindings(void)
 				sizeof(*unscaled->capabilities)) == 0);
 	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		subset_bindings, 2U, NoJumpPmove, NULL, &subset, &error));
+		subset_bindings, 2U, NoJumpPmove, &subset, &error));
 	CHECK(subset && HasKind(subset, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(unscaled);
 	SG_GroundCapabilityDestroy(scaled);
 	SG_GroundCapabilityDestroy(subset);
+	GroundFixtureDestroy(&fixture);
+}
+
+static void TestTwistedPortalRejects(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t fixture;
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+
+	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&fixture);
+	CHECK(GroundBuild(&fixture, &set, &error));
+	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_WALK));
+	SG_GroundCapabilityDestroy(set);
+	set = NULL;
+	fixture.vertices[2].value[0] = 8.0f;
+	CHECK(!GroundBuild(&fixture, &set, &error));
+	CHECK(set == NULL);
+	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_SOURCE);
 	GroundFixtureDestroy(&fixture);
 }
 
@@ -694,7 +718,7 @@ static void TestPhaseVelocityAuthority(void)
 	GroundFixtureRebind(&fixture);
 	fixture.phases[0].velocity.x.min_value = -2000.0f;
 	fixture.phases[0].velocity.x.max_value = -2000.0f;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	set = NULL;
@@ -703,7 +727,7 @@ static void TestPhaseVelocityAuthority(void)
 	fixture.phases[0].velocity.x.max_value = 100.0f;
 	fixture.phases[2].velocity.x.min_value = 1000.0f;
 	fixture.phases[2].velocity.x.max_value = 2000.0f;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	GroundFixtureDestroy(&fixture);
@@ -724,17 +748,17 @@ static void TestFatalOracleAndUnrepresentablePhase(void)
 	GroundFixtureRebind(&fixture);
 	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		fixture.bindings, 4U, EmptyPmove, NULL, &set, &error));
+		fixture.bindings, 4U, EmptyPmove, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT);
 	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		fixture.bindings, 4U, WrongHullPmove, NULL, &set, &error));
+		fixture.bindings, 4U, WrongHullPmove, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT);
 	fixture.phases[0].velocity.x.min_value = 0.01f;
 	fixture.phases[0].velocity.x.max_value = 0.02f;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	GroundFixtureDestroy(&fixture);
@@ -781,7 +805,7 @@ static void TestExactSkewPortalAndZeroMargin(void)
 	fixture.regions[1].bounds.maxs.value[0] = 64.0f;
 	fixture.regions[2].bounds.mins.value[0] = -64.0f;
 	fixture.regions[3].bounds.mins.value[0] = -64.0f;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	if (set)
 		for (index = 0U; index < set->capability_count; index++)
@@ -819,7 +843,7 @@ static void TestExactSkewPortalAndZeroMargin(void)
 	fixture.regions[0].bounds.maxs.value[2] = 0.0f;
 	fixture.regions[2].bounds.mins.value[2] = 0.0f;
 	fixture.regions[2].bounds.maxs.value[2] = 0.0f;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	CHECK(set && set->proved_directions == 0U);
 	CHECK(set && set->rejected_directions == 2U);
@@ -843,7 +867,7 @@ static void TestCrouchedTakeoffAndBlockedStanding(void)
 	GroundFixtureInit(&fixture, clearance, 2U, 800.0f,
 		SG_RUNE_STANCE_CROUCHING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_JUMP_TAKEOFF));
 	if (set)
 		for (index = 0U; index < set->capability_count; index++)
@@ -858,7 +882,7 @@ static void TestCrouchedTakeoffAndBlockedStanding(void)
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
 	set = NULL;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_JUMP_TAKEOFF));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -888,7 +912,7 @@ static void TestShallowWaterAndVoidPhaseMatching(void)
 	fixture.regions[2].water_type = SG_HOST_CONTENTS_WATER;
 	fixture.phases[0].medium = SG_RUNE_MEDIUM_WATER;
 	fixture.phases[2].medium = SG_RUNE_MEDIUM_WATER;
-	CHECK(GroundBuildWithPmove(&fixture, NoJumpPmove, NULL, &set, &error));
+	CHECK(GroundBuildWithPmove(&fixture, NoJumpPmove, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	SG_GroundCapabilityDestroy(set);
 	set = NULL;
@@ -896,7 +920,7 @@ static void TestShallowWaterAndVoidPhaseMatching(void)
 	GroundFixtureRebind(&fixture);
 	fixture.regions[0].water_level = 2U;
 	fixture.regions[2].water_level = 2U;
-	CHECK(GroundBuildWithPmove(&fixture, NoJumpPmove, NULL, &set, &error));
+	CHECK(GroundBuildWithPmove(&fixture, NoJumpPmove, &set, &error));
 	CHECK(set && !HasPortalSourcePhase(set, 0U, 1U, 0U));
 	SG_GroundCapabilityDestroy(set);
 	GroundFixtureDestroy(&fixture);
@@ -911,12 +935,12 @@ static void TestShallowWaterAndVoidPhaseMatching(void)
 		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT;
 	fixture.phases[0].void_relation = SG_RUNE_VOID_ADJACENT;
 	fixture.phases[2].void_relation = SG_RUNE_VOID_ADJACENT;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && HasPortalSourcePhase(set, 0U, 1U, 0U));
 	SG_GroundCapabilityDestroy(set);
 	set = NULL;
 	fixture.phases[2].void_relation = SG_RUNE_VOID_CLEAR;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	GroundFixtureDestroy(&fixture);
@@ -938,7 +962,7 @@ static void TestDiscontinuousLowerLanding(void)
 	GroundFixtureInit(&fixture, ledges, 2U, 800.0f,
 		SG_RUNE_STANCE_STANDING, 4.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_STEP));
 	if (set)
 		for (index = 0U; index < set->capability_count; index++)
@@ -999,7 +1023,7 @@ static void TestAirborneStanceDoesNotRequireSupport(void)
 	fixture.phases[3].stance = SG_RUNE_STANCE_CROUCHING;
 	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		unique_bindings, 2U, Pmove, NULL, &set, &error));
+		unique_bindings, 2U, Pmove, &set, &error));
 	CHECK(set && HasKind(set, SG_GROUND_CAPABILITY_STANCE));
 	if (set)
 		for (index = 0U; index < set->capability_count; index++)
@@ -1041,7 +1065,7 @@ static void TestDestinationLocalizationIsUniqueAndGrounded(void)
 		SG_RUNE_STANCE_STANDING, SG_RUNE_MOTION_SUPPORTED);
 	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, phases, 5U, bindings, 5U,
-		Pmove, NULL, &set, &error));
+		Pmove, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 
@@ -1053,7 +1077,7 @@ static void TestDestinationLocalizationIsUniqueAndGrounded(void)
 		regions[index].id = (uint64_t)index + 1U;
 	fixture.semantics.regions = regions;
 	fixture.semantics.region_count = 5U;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	fixture.semantics.regions = fixture.regions;
@@ -1081,7 +1105,7 @@ static void TestDestinationLocalizationIsUniqueAndGrounded(void)
 	fixture.semantics.region_count = 6U;
 	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, cell_phases, 6U,
-		cell_bindings, 6U, Pmove, NULL, &set, &error));
+		cell_bindings, 6U, Pmove, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	fixture.configuration.cells = fixture.cells;
@@ -1091,7 +1115,7 @@ static void TestDestinationLocalizationIsUniqueAndGrounded(void)
 
 	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		fixture.bindings, 4U, UngroundedPmove, NULL, &set, &error));
+		fixture.bindings, 4U, UngroundedPmove, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	GroundFixtureDestroy(&fixture);
@@ -1116,7 +1140,7 @@ static void TestPortalBoundaryContactsReject(void)
 	portal_boundary_vertex = 0;
 	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		fixture.bindings, 4U, PortalBoundaryPmove, NULL, &set, &error));
+		fixture.bindings, 4U, PortalBoundaryPmove, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	CHECK(set && set->proved_directions == 0U);
 	SG_GroundCapabilityDestroy(set);
@@ -1126,7 +1150,7 @@ static void TestPortalBoundaryContactsReject(void)
 	portal_boundary_vertex = 1;
 	CHECK(SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases, 4U,
-		fixture.bindings, 4U, PortalBoundaryPmove, NULL, &set, &error));
+		fixture.bindings, 4U, PortalBoundaryPmove, &set, &error));
 	CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 	CHECK(set && set->proved_directions == 0U);
 	SG_GroundCapabilityDestroy(set);
@@ -1171,7 +1195,7 @@ static void TestOnlyShallowWaterUsesGroundLane(void)
 		}
 		fixture.phases[0].medium = phase_media[medium];
 		fixture.phases[2].medium = phase_media[medium];
-		CHECK(GroundBuild(&fixture, NULL, &set, &error));
+		CHECK(GroundBuild(&fixture, &set, &error));
 		CHECK(set && !HasKind(set, SG_GROUND_CAPABILITY_WALK));
 		SG_GroundCapabilityDestroy(set);
 		GroundFixtureDestroy(&fixture);
@@ -1186,7 +1210,7 @@ static void SetAllPhysics(sg_ground_capability_set_t **set,
 	*field = invalid;
 	fixture->semantics.identity = fixture->configuration.identity;
 	fixture->authority.identity = fixture->configuration.identity;
-	CHECK(!GroundBuild(fixture, NULL, set, &error));
+	CHECK(!GroundBuild(fixture, set, &error));
 	CHECK(*set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_SOURCE);
 }
@@ -1209,7 +1233,7 @@ static void TestPhysicsValidationAndLandingLaw(void)
 	fixture.configuration.identity.physics.air_acceleration = 2.0f;
 	fixture.semantics.identity = fixture.configuration.identity;
 	GroundFixtureRebind(&fixture);
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	CHECK(set && memcmp(&set->identity, &fixture.authority.identity,
 		sizeof(set->identity)) == 0);
 	if (set)
@@ -1246,7 +1270,7 @@ static void TestPhysicsValidationAndLandingLaw(void)
 	fixture.configuration.identity.physics.frame_ms = 0U;
 	fixture.semantics.identity = fixture.configuration.identity;
 	fixture.authority.identity = fixture.configuration.identity;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_SOURCE);
 	GroundFixtureDestroy(&fixture);
@@ -1255,7 +1279,7 @@ static void TestPhysicsValidationAndLandingLaw(void)
 	fixture.configuration.identity.physics.substep_ms = 0U;
 	fixture.semantics.identity = fixture.configuration.identity;
 	fixture.authority.identity = fixture.configuration.identity;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(set == NULL);
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_SOURCE);
 	GroundFixtureDestroy(&fixture);
@@ -1267,6 +1291,7 @@ typedef struct localization_scale_s
 	uint64_t prepare_nodes;
 	uint64_t queries;
 	uint64_t query_nodes;
+	uint64_t region_comparisons;
 } localization_scale_t;
 
 static localization_scale_t RunLocalizationScale(uint32_t cell_count)
@@ -1277,7 +1302,7 @@ static localization_scale_t RunLocalizationScale(uint32_t cell_count)
 	};
 	fixture_t world = Fixture(&floor, 1U, SG_HOST_CONTENTS_SOLID,
 		SG_HOST_CONTENTS_SOLID);
-	sg_rune_model_identity_t identity = Identity();
+	sg_rune_model_identity_t identity = GroundIdentity();
 	sg_host_collision_authority_t authority;
 	sg_host_collision_error_t host_error;
 	sg_configuration_space_t configuration;
@@ -1291,7 +1316,7 @@ static localization_scale_t RunLocalizationScale(uint32_t cell_count)
 		sizeof(*bindings));
 	sg_ground_capability_set_t *set = NULL;
 	sg_ground_capability_error_t error;
-	localization_scale_t measured = { 0U, 0U, 0U, 0U };
+	localization_scale_t measured = { 0U, 0U, 0U, 0U, 0U };
 	uint32_t cell;
 
 	CHECK(cells && regions && phases && bindings);
@@ -1356,13 +1381,14 @@ static localization_scale_t RunLocalizationScale(uint32_t cell_count)
 	}
 	CHECK(SG_GroundCapabilityBuild(&authority, &configuration, &semantics,
 		phases, (size_t)cell_count * 2U, bindings, (size_t)cell_count * 2U,
-		Pmove, NULL, &set, &error));
+		Pmove, &set, &error));
 	if (set)
 	{
 		measured.prepare_comparisons = set->localization_prepare_comparisons;
 		measured.prepare_nodes = set->localization_prepare_nodes;
 		measured.queries = set->localization_queries;
 		measured.query_nodes = set->localization_nodes_examined;
+		measured.region_comparisons = set->localization_region_comparisons;
 		CHECK(measured.prepare_nodes == (uint64_t)cell_count * 2U - 1U);
 		CHECK(measured.queries >= cell_count);
 		CHECK(measured.query_nodes / measured.queries < 64U);
@@ -1378,17 +1404,177 @@ done:
 	return measured;
 }
 
+static localization_scale_t RunManyRegionScale(uint32_t slice_count)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	fixture_t world = Fixture(&floor, 1U, SG_HOST_CONTENTS_SOLID,
+		SG_HOST_CONTENTS_SOLID);
+	sg_rune_model_identity_t identity = GroundIdentity();
+	sg_host_collision_authority_t authority;
+	sg_host_collision_error_t host_error;
+	sg_configuration_space_t configuration;
+	sg_configuration_semantics_t semantics;
+	sg_configuration_cell_t cell;
+	sg_configuration_semantic_region_t *regions = calloc(
+		(size_t)slice_count * 2U, sizeof(*regions));
+	sg_rune_phase_basis_t phases[2];
+	sg_ground_phase_binding_t bindings[2] = { { 0U, 0U }, { 0U, 1U } };
+	sg_ground_capability_set_t *set = NULL;
+	sg_ground_capability_error_t error;
+	localization_scale_t measured = { 0U, 0U, 0U, 0U, 0U };
+	uint32_t slice;
+
+	CHECK(regions != NULL);
+	if (!regions)
+		goto done;
+	identity.physics.frame_ms = identity.physics.substep_ms;
+	CHECK(SG_HostCollisionInit(&authority, &world.world, &identity,
+		&host_error));
+	memset(&configuration, 0, sizeof(configuration));
+	memset(&semantics, 0, sizeof(semantics));
+	memset(&cell, 0, sizeof(cell));
+	configuration.identity = identity;
+	configuration.cells = &cell;
+	configuration.cell_count = 1U;
+	cell.order.source_set_identity = identity.source_set_identity;
+	cell.order.domain = SG_RUNE_ORDER_CELL;
+	cell.id.value = SG_RuneModelStableIdFromOrderKey(&cell.order);
+	cell.stance = SG_RUNE_STANCE_STANDING;
+	SetRune3(&cell.bounds.mins, -2048.0f, -64.0f, -64.0f);
+	SetRune3(&cell.bounds.maxs, 2048.0f, 64.0f, 64.0f);
+	SetRune3(&cell.interior_witness, 0.0f, 0.0f, 0.0f);
+	cell.bsp_leaf.index = 0U;
+	cell.bsp_area.index = 1U;
+	cell.bsp_cluster = SG_RUNE_BSP_CLUSTER_REF_NONE;
+	semantics.identity = identity;
+	semantics.regions = regions;
+	semantics.region_count = slice_count * 2U;
+	for (slice = 0U; slice < slice_count; slice++)
+	{
+		uint32_t supported = slice * 2U;
+		uint32_t airborne = supported + 1U;
+		float minimum_x = -1024.0f + (float)slice;
+		float maximum_x = minimum_x + 0.875f;
+		float center_x = minimum_x + 0.5f;
+
+		regions[supported].id = (uint64_t)supported + 1U;
+		regions[supported].cell = 0U;
+		SetRune3(&regions[supported].bounds.mins, minimum_x, -64.0f, -0.25f);
+		SetRune3(&regions[supported].bounds.maxs, maximum_x, 64.0f, 0.25f);
+		SetRune3(&regions[supported].interior_witness, center_x, 0.0f, 0.0f);
+		regions[supported].flags = SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED;
+		regions[airborne].id = (uint64_t)airborne + 1U;
+		regions[airborne].cell = 0U;
+		SetRune3(&regions[airborne].bounds.mins, minimum_x, -64.0f, 0.375f);
+		SetRune3(&regions[airborne].bounds.maxs, maximum_x, 64.0f, 64.0f);
+		SetRune3(&regions[airborne].interior_witness, center_x, 0.0f, 24.0f);
+		regions[airborne].flags = SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE;
+	}
+	phases[0] = GroundPhase(&identity, 0U, SG_RUNE_STANCE_STANDING,
+		SG_RUNE_MOTION_SUPPORTED);
+	phases[1] = GroundPhase(&identity, 1U, SG_RUNE_STANCE_STANDING,
+		SG_RUNE_MOTION_AIRBORNE);
+	CHECK(SG_GroundCapabilityBuild(&authority, &configuration, &semantics,
+		phases, 2U, bindings, 2U, Pmove, &set, &error));
+	if (set)
+	{
+		measured.prepare_comparisons = set->localization_prepare_comparisons;
+		measured.prepare_nodes = set->localization_prepare_nodes;
+		measured.queries = set->localization_queries;
+		measured.query_nodes = set->localization_nodes_examined;
+		measured.region_comparisons = set->localization_region_comparisons;
+		CHECK(measured.queries >= slice_count);
+		CHECK(measured.region_comparisons >= measured.queries);
+		CHECK(measured.region_comparisons / measured.queries < 64U);
+	}
+
+done:
+	SG_GroundCapabilityDestroy(set);
+	free(regions);
+	DestroyFixture(&world);
+	return measured;
+}
+
 static void TestLocalizationIndexScaling(void)
 {
 	localization_scale_t two = RunLocalizationScale(2048U);
 	localization_scale_t four = RunLocalizationScale(4096U);
 	localization_scale_t eight = RunLocalizationScale(8192U);
+	localization_scale_t many_two = RunManyRegionScale(512U);
+	localization_scale_t many_four = RunManyRegionScale(1024U);
+	localization_scale_t many_eight = RunManyRegionScale(2048U);
 
 	CHECK(two.prepare_comparisons > 0U && two.query_nodes > 0U);
 	CHECK(four.prepare_comparisons <= two.prepare_comparisons * 3U);
 	CHECK(eight.prepare_comparisons <= four.prepare_comparisons * 3U);
 	CHECK(four.query_nodes <= two.query_nodes * 3U);
 	CHECK(eight.query_nodes <= four.query_nodes * 3U);
+	CHECK(many_two.region_comparisons > 0U);
+	CHECK(many_four.region_comparisons <= many_two.region_comparisons * 3U);
+	CHECK(many_eight.region_comparisons <= many_four.region_comparisons * 3U);
+}
+
+static void TestFullIdentityAndNoPvs(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	uint32_t invalid_case;
+
+	for (invalid_case = 0U; invalid_case < 9U; invalid_case++)
+	{
+		ground_fixture_t fixture;
+		sg_ground_capability_set_t *set = NULL;
+		sg_ground_capability_error_t error;
+
+		GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+			SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+		GroundFixtureRebind(&fixture);
+		if (invalid_case == 0U)
+			fixture.configuration.identity.bsp_content_id = 0U;
+		else if (invalid_case == 1U)
+			fixture.configuration.identity.entity_semantics_id = 0U;
+		else if (invalid_case == 2U)
+			fixture.configuration.identity.physics_abi_id = 0U;
+		else if (invalid_case == 3U)
+			fixture.configuration.identity.source_set_identity = 0U;
+		else if (invalid_case == 4U)
+			fixture.configuration.identity.source_set_identity = UINT64_MAX;
+		else if (invalid_case == 5U)
+			fixture.configuration.identity.schema_id = 0U;
+		else if (invalid_case == 6U)
+			fixture.configuration.identity.producer_identity = 0U;
+		else if (invalid_case == 7U)
+			fixture.configuration.identity.standing_hull.maxs.value[0] =
+				fixture.configuration.identity.standing_hull.mins.value[0];
+		else
+			fixture.configuration.identity.crouching_hull.mins.value[1] = NAN;
+		fixture.semantics.identity = fixture.configuration.identity;
+		fixture.authority.identity = fixture.configuration.identity;
+		CHECK(!GroundBuild(&fixture, &set, &error));
+		CHECK(set == NULL);
+		CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_SOURCE);
+		GroundFixtureDestroy(&fixture);
+	}
+	{
+		ground_fixture_t fixture;
+		sg_ground_capability_set_t *set = NULL;
+		sg_ground_capability_error_t error;
+
+		GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
+			SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+		GroundFixtureRebind(&fixture);
+		CHECK(fixture.cells[0].bsp_cluster.index == UINT32_MAX);
+		CHECK(fixture.cells[1].bsp_cluster.index == UINT32_MAX);
+		CHECK(GroundBuild(&fixture, &set, &error));
+		CHECK(set != NULL);
+		SG_GroundCapabilityDestroy(set);
+		GroundFixtureDestroy(&fixture);
+	}
 }
 
 static void TestAtomicityIdentityAndHostileCounts(void)
@@ -1400,7 +1586,6 @@ static void TestAtomicityIdentityAndHostileCounts(void)
 	ground_fixture_t fixture;
 	sg_ground_capability_set_t *set = NULL;
 	sg_ground_capability_error_t error;
-	sg_ground_capability_limits_t limits = { 1U };
 	sg_configuration_cell_t saved_cells[2];
 	sg_configuration_semantic_region_t saved_regions[4];
 	sg_configuration_portal_t saved_portal;
@@ -1426,7 +1611,7 @@ static void TestAtomicityIdentityAndHostileCounts(void)
 	memcpy(saved_bindings, fixture.bindings, sizeof(saved_bindings));
 	saved_configuration = fixture.configuration;
 	saved_semantics = fixture.semantics;
-	CHECK(GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(GroundBuild(&fixture, &set, &error));
 	SG_GroundCapabilityDestroy(set);
 	set = NULL;
 	CHECK(memcmp(saved_cells, fixture.cells, sizeof(saved_cells)) == 0);
@@ -1443,30 +1628,13 @@ static void TestAtomicityIdentityAndHostileCounts(void)
 		sizeof(saved_configuration)) == 0);
 	CHECK(memcmp(&saved_semantics, &fixture.semantics,
 		sizeof(saved_semantics)) == 0);
-	CHECK(!GroundBuild(&fixture, &limits, &set, &error));
-	CHECK(set == NULL);
-	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_OVERFLOW);
-	CHECK(memcmp(saved_cells, fixture.cells, sizeof(saved_cells)) == 0);
-	CHECK(memcmp(saved_regions, fixture.regions, sizeof(saved_regions)) == 0);
-	CHECK(memcmp(&saved_portal, &fixture.portal, sizeof(saved_portal)) == 0);
-	CHECK(memcmp(&saved_stance_overlap, &fixture.stance_overlap,
-		sizeof(saved_stance_overlap)) == 0);
-	CHECK(memcmp(saved_vertices, fixture.vertices, sizeof(saved_vertices)) == 0);
-	CHECK(memcmp(saved_semantic_faces, fixture.semantic_faces,
-		sizeof(saved_semantic_faces)) == 0);
-	CHECK(memcmp(saved_phases, fixture.phases, sizeof(saved_phases)) == 0);
-	CHECK(memcmp(saved_bindings, fixture.bindings, sizeof(saved_bindings)) == 0);
-	CHECK(memcmp(&saved_configuration, &fixture.configuration,
-		sizeof(saved_configuration)) == 0);
-	CHECK(memcmp(&saved_semantics, &fixture.semantics,
-		sizeof(saved_semantics)) == 0);
 	fixture.semantics.identity.physics_abi_id++;
-	CHECK(!GroundBuild(&fixture, NULL, &set, &error));
+	CHECK(!GroundBuild(&fixture, &set, &error));
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_IDENTITY_MISMATCH);
 	fixture.semantics.identity.physics_abi_id--;
 	CHECK(!SG_GroundCapabilityBuild(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, fixture.phases,
-		(size_t)UINT32_MAX + 1U, fixture.bindings, 4U, Pmove, NULL,
+		(size_t)UINT32_MAX + 1U, fixture.bindings, 4U, Pmove,
 		&set, &error));
 	CHECK(error.code == SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE);
 	GroundFixtureDestroy(&fixture);
@@ -1482,6 +1650,7 @@ int main(void)
 	TestDirectedDrop();
 	TestStanceOverlap();
 	TestPortalPlaneScalingAndSubsetBindings();
+	TestTwistedPortalRejects();
 	TestPhaseVelocityAuthority();
 	TestFatalOracleAndUnrepresentablePhase();
 	TestExactSkewPortalAndZeroMargin();
@@ -1494,6 +1663,7 @@ int main(void)
 	TestOnlyShallowWaterUsesGroundLane();
 	TestPhysicsValidationAndLandingLaw();
 	TestLocalizationIndexScaling();
+	TestFullIdentityAndNoPvs();
 	TestAtomicityIdentityAndHostileCounts();
 	if (failures)
 	{

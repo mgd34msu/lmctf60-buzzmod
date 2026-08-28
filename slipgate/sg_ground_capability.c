@@ -10,6 +10,7 @@
 #define SG_GROUND_LEVEL_EPSILON 0.25f
 #define SG_GROUND_NORMAL_FLAT 0.999f
 #define SG_GROUND_COMMAND_SPEED 400
+#define SG_GROUND_PLANE_EPSILON 0.00004
 
 typedef struct sg_ground_build_s
 {
@@ -21,7 +22,6 @@ typedef struct sg_ground_build_s
 	sg_host_pmove_function_t host_pmove;
 	sg_ground_capability_set_t *output;
 	uint32_t capacity;
-	uint32_t max_capabilities;
 	uint32_t *cell_phase_offsets;
 	uint32_t *cell_region_offsets;
 	uint32_t *cell_order;
@@ -29,6 +29,12 @@ typedef struct sg_ground_build_s
 	uint64_t *cell_keys;
 	struct sg_ground_cell_index_node_s *cell_index;
 	uint32_t cell_index_count;
+	uint32_t *region_order;
+	uint32_t *region_order_scratch;
+	uint64_t *region_keys;
+	uint32_t *cell_region_roots;
+	struct sg_ground_region_index_node_s *region_index;
+	uint32_t region_index_count;
 	sg_ground_capability_error_t *error;
 } sg_ground_build_t;
 
@@ -39,6 +45,14 @@ typedef struct sg_ground_cell_index_node_s
 	uint32_t right;
 	uint32_t cell;
 } sg_ground_cell_index_node_t;
+
+typedef struct sg_ground_region_index_node_s
+{
+	sg_rune_bounds_t bounds;
+	uint32_t left;
+	uint32_t right;
+	uint32_t region;
+} sg_ground_region_index_node_t;
 
 static void SetError(sg_ground_capability_error_t *error,
 	sg_ground_capability_error_code_t code, uint32_t source_index)
@@ -53,6 +67,52 @@ static int Finite3(const float value[3])
 {
 	return value && isfinite(value[0]) && isfinite(value[1]) &&
 		isfinite(value[2]);
+}
+
+static int HullValid(const sg_rune_hull_profile_t *hull)
+{
+	uint32_t axis;
+
+	if (!hull || !Finite3(hull->mins.value) || !Finite3(hull->maxs.value))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (hull->mins.value[axis] >= hull->maxs.value[axis])
+			return 0;
+	return 1;
+}
+
+static int IdentityValid(const sg_rune_model_identity_t *identity)
+{
+	const sg_rune_physics_parameters_t *physics;
+
+	if (!identity || identity->bsp_content_id == 0U ||
+		identity->entity_semantics_id == 0U || identity->physics_abi_id == 0U ||
+		identity->source_set_identity == 0U ||
+		identity->source_set_identity == UINT64_MAX || identity->schema_id == 0U ||
+		identity->producer_identity == 0U ||
+		!HullValid(&identity->standing_hull) ||
+		!HullValid(&identity->crouching_hull))
+		return 0;
+	physics = &identity->physics;
+	return isfinite(physics->gravity) && physics->gravity >= 0.0f &&
+		physics->gravity <= (float)SHRT_MAX &&
+		truncf(physics->gravity) == physics->gravity &&
+		isfinite(physics->ground_acceleration) &&
+		physics->ground_acceleration >= 0.0f &&
+		isfinite(physics->air_acceleration) &&
+		physics->air_acceleration >= 0.0f &&
+		isfinite(physics->water_acceleration) &&
+		physics->water_acceleration >= 0.0f &&
+		isfinite(physics->hook_acceleration) &&
+		physics->hook_acceleration >= 0.0f &&
+		isfinite(physics->external_acceleration) &&
+		physics->external_acceleration >= 0.0f &&
+		isfinite(physics->water_drag) && physics->water_drag >= 0.0f &&
+		isfinite(physics->max_velocity) && physics->max_velocity > 0.0f &&
+		physics->frame_ms != 0U && physics->substep_ms != 0U &&
+		physics->substep_ms <= UCHAR_MAX &&
+		physics->substep_ms <= physics->frame_ms &&
+		physics->frame_ms % physics->substep_ms == 0U;
 }
 
 static int IdentityEqual(const sg_rune_model_identity_t *left,
@@ -137,6 +197,19 @@ static double Dot3(const float left[3], const float right[3])
 		(double)left[2] * right[2];
 }
 
+static int PointOnPlane(const float point[3],
+	const sg_configuration_plane_t *plane)
+{
+	double length = sqrt(Dot3(plane->normal, plane->normal));
+	double residual;
+
+	if (!(length > 0.0) || !isfinite(length))
+		return 0;
+	residual = fabs(Dot3(point, plane->normal) -
+		(double)plane->distance) / length;
+	return isfinite(residual) && residual <= SG_GROUND_PLANE_EPSILON;
+}
+
 static int PortalContainsCrossing(const sg_configuration_space_t *space,
 	const sg_configuration_portal_t *portal, const float start[3],
 	const float end[3])
@@ -209,6 +282,7 @@ static int SourcesValid(const sg_host_collision_authority_t *authority,
 	uint32_t overlap;
 
 	if (!authority || !authority->world || !configuration || !semantics ||
+		!IdentityValid(&authority->identity) ||
 		!IdentityEqual(&authority->identity, &configuration->identity) ||
 		!IdentityEqual(&authority->identity, &semantics->identity) ||
 		configuration->cell_count == 0U || !configuration->cells ||
@@ -289,7 +363,9 @@ static int SourcesValid(const sg_host_collision_authority_t *authority,
 
 			for (vertex = 0U; vertex < record->vertex_count; vertex++)
 				if (!Finite3(configuration->vertices[
-					record->first_vertex + vertex].value))
+						record->first_vertex + vertex].value) ||
+					!PointOnPlane(configuration->vertices[
+						record->first_vertex + vertex].value, &record->plane))
 					return 0;
 		}
 	}
@@ -334,30 +410,7 @@ static int SourcesValid(const sg_host_collision_authority_t *authority,
 				semantics->face_count))
 			return 0;
 	}
-	return isfinite(authority->identity.physics.gravity) &&
-		authority->identity.physics.gravity >= 0.0f &&
-		authority->identity.physics.gravity <= (float)SHRT_MAX &&
-		truncf(authority->identity.physics.gravity) ==
-			authority->identity.physics.gravity &&
-		isfinite(authority->identity.physics.ground_acceleration) &&
-		authority->identity.physics.ground_acceleration >= 0.0f &&
-		isfinite(authority->identity.physics.air_acceleration) &&
-		authority->identity.physics.air_acceleration >= 0.0f &&
-		isfinite(authority->identity.physics.water_acceleration) &&
-		authority->identity.physics.water_acceleration >= 0.0f &&
-		isfinite(authority->identity.physics.hook_acceleration) &&
-		authority->identity.physics.hook_acceleration >= 0.0f &&
-		isfinite(authority->identity.physics.external_acceleration) &&
-		authority->identity.physics.external_acceleration >= 0.0f &&
-		isfinite(authority->identity.physics.water_drag) &&
-		authority->identity.physics.water_drag >= 0.0f &&
-		isfinite(authority->identity.physics.max_velocity) &&
-		authority->identity.physics.max_velocity > 0.0f &&
-		authority->identity.physics.frame_ms != 0U &&
-		authority->identity.physics.substep_ms != 0U &&
-		authority->identity.physics.substep_ms <= UCHAR_MAX &&
-		authority->identity.physics.frame_ms %
-			authority->identity.physics.substep_ms == 0U;
+	return 1;
 }
 
 static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
@@ -517,7 +570,7 @@ static uint32_t SpreadMortonBits(uint32_t value)
 	return value;
 }
 
-static uint64_t CellMortonKey(const sg_configuration_cell_t *cell,
+static uint64_t BoundsMortonKey(const sg_rune_bounds_t *bounds,
 	const double minimum[3], const double maximum[3])
 {
 	uint32_t encoded[3];
@@ -525,8 +578,8 @@ static uint64_t CellMortonKey(const sg_configuration_cell_t *cell,
 
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		double center = ((double)cell->bounds.mins.value[axis] +
-			cell->bounds.maxs.value[axis]) * 0.5;
+		double center = ((double)bounds->mins.value[axis] +
+			bounds->maxs.value[axis]) * 0.5;
 		double scale = maximum[axis] > minimum[axis] ?
 			(center - minimum[axis]) / (maximum[axis] - minimum[axis]) : 0.0;
 
@@ -586,8 +639,8 @@ static int BuildCellSpatialIndex(sg_ground_build_t *build)
 	for (cell = 0U; cell < cell_count; cell++)
 	{
 		build->cell_order[cell] = cell;
-		build->cell_keys[cell] = CellMortonKey(
-			&build->configuration->cells[cell], minimum, maximum);
+		build->cell_keys[cell] = BoundsMortonKey(
+			&build->configuration->cells[cell].bounds, minimum, maximum);
 	}
 	SortCellRange(build, 0U, cell_count);
 	build->cell_index_count = 0U;
@@ -599,6 +652,148 @@ static int BuildCellSpatialIndex(sg_ground_build_t *build)
 	build->cell_order_scratch = NULL;
 	build->cell_keys = NULL;
 	return build->cell_index_count == (uint32_t)node_count;
+}
+
+static int RegionOrderLess(sg_ground_build_t *build, uint32_t left,
+	uint32_t right)
+{
+	build->output->localization_region_prepare_comparisons++;
+	return build->region_keys[left] < build->region_keys[right] ||
+		(build->region_keys[left] == build->region_keys[right] && left < right);
+}
+
+static void SortRegionRange(sg_ground_build_t *build, uint32_t begin,
+	uint32_t end)
+{
+	uint32_t middle;
+	uint32_t left;
+	uint32_t right;
+	uint32_t output;
+
+	if (end - begin < 2U)
+		return;
+	middle = begin + (end - begin) / 2U;
+	SortRegionRange(build, begin, middle);
+	SortRegionRange(build, middle, end);
+	left = begin;
+	right = middle;
+	for (output = begin; output < end; output++)
+	{
+		if (right == end || (left < middle && RegionOrderLess(build,
+			build->region_order[left], build->region_order[right])))
+			build->region_order_scratch[output] = build->region_order[left++];
+		else
+			build->region_order_scratch[output] = build->region_order[right++];
+	}
+	memcpy(&build->region_order[begin], &build->region_order_scratch[begin],
+		(size_t)(end - begin) * sizeof(*build->region_order));
+}
+
+static uint32_t BuildRegionIndexNode(sg_ground_build_t *build, uint32_t begin,
+	uint32_t end)
+{
+	uint32_t node_index = build->region_index_count++;
+	sg_ground_region_index_node_t *node = &build->region_index[node_index];
+	uint32_t axis;
+
+	memset(node, 0, sizeof(*node));
+	build->output->localization_region_prepare_nodes++;
+	node->left = SG_GROUND_CAPABILITY_INDEX_NONE;
+	node->right = SG_GROUND_CAPABILITY_INDEX_NONE;
+	node->region = SG_GROUND_CAPABILITY_INDEX_NONE;
+	if (end - begin == 1U)
+	{
+		node->region = build->region_order[begin];
+		node->bounds = build->semantics->regions[node->region].bounds;
+		return node_index;
+	}
+	{
+		uint32_t middle = begin + (end - begin) / 2U;
+		const sg_ground_region_index_node_t *left;
+		const sg_ground_region_index_node_t *right;
+
+		node->left = BuildRegionIndexNode(build, begin, middle);
+		node->right = BuildRegionIndexNode(build, middle, end);
+		left = &build->region_index[node->left];
+		right = &build->region_index[node->right];
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			node->bounds.mins.value[axis] = fminf(
+				left->bounds.mins.value[axis], right->bounds.mins.value[axis]);
+			node->bounds.maxs.value[axis] = fmaxf(
+				left->bounds.maxs.value[axis], right->bounds.maxs.value[axis]);
+		}
+	}
+	return node_index;
+}
+
+static int BuildRegionSpatialIndex(sg_ground_build_t *build)
+{
+	uint32_t cell_count = build->configuration->cell_count;
+	uint32_t region_count = build->semantics->region_count;
+	uint64_t node_count = (uint64_t)region_count * 2U - cell_count;
+	uint32_t cell;
+	uint32_t region;
+
+	if (node_count > UINT32_MAX ||
+		node_count > SIZE_MAX / sizeof(*build->region_index))
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
+			region_count);
+		return 0;
+	}
+	build->region_order = malloc((size_t)region_count *
+		sizeof(*build->region_order));
+	build->region_order_scratch = malloc((size_t)region_count *
+		sizeof(*build->region_order_scratch));
+	build->region_keys = malloc((size_t)region_count *
+		sizeof(*build->region_keys));
+	build->cell_region_roots = malloc((size_t)cell_count *
+		sizeof(*build->cell_region_roots));
+	build->region_index = calloc((size_t)node_count,
+		sizeof(*build->region_index));
+	if (!build->region_order || !build->region_order_scratch ||
+		!build->region_keys || !build->cell_region_roots || !build->region_index)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OUT_OF_MEMORY,
+			region_count);
+		return 0;
+	}
+	for (region = 0U; region < region_count; region++)
+	{
+		const sg_configuration_semantic_region_t *record =
+			&build->semantics->regions[region];
+		const sg_rune_bounds_t *cell_bounds =
+			&build->configuration->cells[record->cell].bounds;
+		double minimum[3];
+		double maximum[3];
+		uint32_t axis;
+
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			minimum[axis] = cell_bounds->mins.value[axis];
+			maximum[axis] = cell_bounds->maxs.value[axis];
+		}
+		build->region_order[region] = region;
+		build->region_keys[region] = BoundsMortonKey(&record->bounds,
+			minimum, maximum);
+	}
+	build->region_index_count = 0U;
+	for (cell = 0U; cell < cell_count; cell++)
+	{
+		uint32_t begin = build->cell_region_offsets[cell];
+		uint32_t end = build->cell_region_offsets[cell + 1U];
+
+		SortRegionRange(build, begin, end);
+		build->cell_region_roots[cell] = BuildRegionIndexNode(build, begin, end);
+	}
+	free(build->region_order);
+	free(build->region_order_scratch);
+	free(build->region_keys);
+	build->region_order = NULL;
+	build->region_order_scratch = NULL;
+	build->region_keys = NULL;
+	return build->region_index_count == (uint32_t)node_count;
 }
 
 static int RegionPose(sg_ground_build_t *build, uint32_t region,
@@ -1043,7 +1238,6 @@ static int AppendCapability(sg_ground_build_t *build,
 		else
 			low = middle + 1U;
 	}
-
 	if (build->output->capability_count == UINT32_MAX)
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
@@ -1425,32 +1619,54 @@ invalid:
 	return -1;
 }
 
-static int FindUniqueRegionAtPose(const sg_ground_build_t *build, uint32_t cell,
-	const float point[3], const sg_host_collision_pose_t *pose,
-	uint32_t *region_out)
-{
-	uint32_t region;
-	int found = 0;
+static int PointInsideBounds(const sg_rune_bounds_t *bounds,
+	const float point[3]);
 
-	for (region = build->cell_region_offsets[cell];
-		region < build->cell_region_offsets[cell + 1U]; region++)
+static int LocateRegionNode(sg_ground_build_t *build, uint32_t node_index,
+	const float point[3], const sg_host_collision_pose_t *pose,
+	uint32_t *region_out, int *found)
+{
+	const sg_ground_region_index_node_t *node =
+		&build->region_index[node_index];
+
+	build->output->localization_region_nodes_examined++;
+	if (!PointInsideBounds(&node->bounds, point))
+		return 1;
+	if (node->region != SG_GROUND_CAPABILITY_INDEX_NONE)
 	{
 		const sg_configuration_semantic_region_t *record =
-			&build->semantics->regions[region];
+			&build->semantics->regions[node->region];
 		int supported = (record->flags &
 			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U;
 
+		build->output->localization_region_comparisons++;
 		if (supported == pose->supported &&
 			record->water_level == pose->water_level &&
 			record->water_type == pose->water_type &&
 			PointInsideRegion(build->semantics, record, point))
 		{
-			if (found)
-				return -1;
-			*region_out = region;
-			found = 1;
+			if (*found)
+				return 0;
+			*region_out = node->region;
+			*found = 1;
 		}
+		return 1;
 	}
+	if (!LocateRegionNode(build, node->left, point, pose, region_out, found))
+		return 0;
+	return LocateRegionNode(build, node->right, point, pose, region_out, found);
+}
+
+static int FindUniqueRegionAtPose(sg_ground_build_t *build, uint32_t cell,
+	const float point[3], const sg_host_collision_pose_t *pose,
+	uint32_t *region_out)
+{
+	int found = 0;
+
+	build->output->localization_region_queries++;
+	if (!LocateRegionNode(build, build->cell_region_roots[cell], point, pose,
+		region_out, &found))
+		return -1;
 	return found;
 }
 
@@ -2116,13 +2332,6 @@ static int CompareCapability(const void *left_pointer,
 	return 0;
 }
 
-void SG_GroundCapabilityDefaultLimits(
-	sg_ground_capability_limits_t *limits_out)
-{
-	if (limits_out)
-		limits_out->max_capabilities = SG_RUNE_MODEL_MAX_KERNELS;
-}
-
 int SG_GroundCapabilityBuild(
 	const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
@@ -2130,12 +2339,10 @@ int SG_GroundCapabilityBuild(
 	const sg_rune_phase_basis_t *phases, size_t phase_count,
 	const sg_ground_phase_binding_t *bindings, size_t binding_count,
 	sg_host_pmove_function_t host_pmove,
-	const sg_ground_capability_limits_t *limits,
 	sg_ground_capability_set_t **set_out,
 	sg_ground_capability_error_t *error_out)
 {
 	sg_ground_build_t build;
-	sg_ground_capability_limits_t defaults;
 	int offsets;
 
 	if (error_out)
@@ -2157,15 +2364,6 @@ int SG_GroundCapabilityBuild(
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return 0;
 	}
-	SG_GroundCapabilityDefaultLimits(&defaults);
-	if (!limits)
-		limits = &defaults;
-	if (limits->max_capabilities == 0U)
-	{
-		SetError(error_out, SG_GROUND_CAPABILITY_ERROR_INVALID_ARGUMENT,
-			SG_GROUND_CAPABILITY_INDEX_NONE);
-		return 0;
-	}
 	memset(&build, 0, sizeof(build));
 	build.authority = authority;
 	build.configuration = configuration;
@@ -2173,7 +2371,6 @@ int SG_GroundCapabilityBuild(
 	build.phases = phases;
 	build.bindings = bindings;
 	build.host_pmove = host_pmove;
-	build.max_capabilities = limits->max_capabilities;
 	build.error = error_out;
 	build.output = calloc(1, sizeof(*build.output));
 	if (!build.output)
@@ -2192,20 +2389,16 @@ int SG_GroundCapabilityBuild(
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		goto fail;
 	}
-	if (!BuildCellSpatialIndex(&build))
+	if (!BuildCellSpatialIndex(&build) || !BuildRegionSpatialIndex(&build))
 		goto fail;
 	if (!BuildPortals(&build) || !BuildStanceOverlaps(&build) ||
 		!BuildTakeoffsAndLandings(&build))
 		goto fail;
-	if (build.output->capability_count > build.max_capabilities)
-	{
-		SetError(error_out, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
-			build.output->capability_count);
-		goto fail;
-	}
 	free(build.cell_phase_offsets);
 	free(build.cell_region_offsets);
 	free(build.cell_index);
+	free(build.cell_region_roots);
+	free(build.region_index);
 	*set_out = build.output;
 	SetError(error_out, SG_GROUND_CAPABILITY_ERROR_NONE,
 		SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -2218,6 +2411,11 @@ fail:
 	free(build.cell_order_scratch);
 	free(build.cell_keys);
 	free(build.cell_index);
+	free(build.region_order);
+	free(build.region_order_scratch);
+	free(build.region_keys);
+	free(build.cell_region_roots);
+	free(build.region_index);
 	SG_GroundCapabilityDestroy(build.output);
 	if (error_out && error_out->code == SG_GROUND_CAPABILITY_ERROR_NONE)
 		SetError(error_out, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
