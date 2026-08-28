@@ -5,7 +5,7 @@
 
 #include "slipgate/sg_rune_v2_acceptance.h"
 
-#define IMAGE_CAPACITY 1024U
+#define IMAGE_CAPACITY 2048U
 
 static int failures;
 
@@ -54,20 +54,6 @@ static unsigned char *SectionEntry(unsigned char *image, uint32_t index)
 		(size_t)index * SG_RUNE_V2_SECTION_ENTRY_BYTES;
 }
 
-static void SetBounds(unsigned char *record, uint32_t minimum_offset,
-	uint32_t maximum_offset, int32_t base)
-{
-	unsigned int axis;
-
-	for (axis = 0; axis < 3U; axis++)
-	{
-		SG_RuneV2WirePutU32(record + minimum_offset + axis * 4U,
-			(uint32_t)(base + (int32_t)axis));
-		SG_RuneV2WirePutU32(record + maximum_offset + axis * 4U,
-			(uint32_t)(base + (int32_t)axis + 16));
-	}
-}
-
 static void FixChecksums(unsigned char *image, uint32_t image_size)
 {
 	uint32_t index;
@@ -95,11 +81,18 @@ static uint32_t BuildImage(unsigned char image[IMAGE_CAPACITY],
 	sg_rune_v2_content_id_t schema_identity)
 {
 	static const section_definition_t definitions[] = {
+		{ SG_RUNE_V2_SECTION_MODEL, 1U },
+		{ SG_RUNE_V2_SECTION_PLANES, 0U },
+		{ SG_RUNE_V2_SECTION_PORTAL_VERTICES, 0U },
+		{ SG_RUNE_V2_SECTION_PHASES, 0U },
+		{ SG_RUNE_V2_SECTION_PHASE_TRANSITIONS, 0U },
 		{ SG_RUNE_V2_SECTION_CELLS, 2U },
 		{ SG_RUNE_V2_SECTION_PORTALS, 1U },
-		{ SG_RUNE_V2_SECTION_CAPABILITIES, 1U },
-		{ SG_RUNE_V2_SECTION_MECHANISMS, 1U },
-		{ SG_RUNE_V2_SECTION_COSTS, 1U },
+		{ SG_RUNE_V2_SECTION_SURFACES, 0U },
+		{ SG_RUNE_V2_SECTION_AFFORDANCES, 0U },
+		{ SG_RUNE_V2_SECTION_KERNELS, 0U },
+		{ SG_RUNE_V2_SECTION_LANDMARKS, 0U },
+		{ SG_RUNE_V2_SECTION_MECHANISMS, 0U },
 		{ SG_RUNE_V2_SECTION_BINDING, 1U }
 	};
 	uint64_t offset = SG_RUNE_V2_HEADER_BYTES +
@@ -148,49 +141,16 @@ static uint32_t BuildImage(unsigned char image[IMAGE_CAPACITY],
 	SG_RuneV2WirePutU64(image + SG_RUNE_V2_HEADER_TOTAL_BYTES_OFFSET,
 		image_size);
 
-	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image, 0U) +
+	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image,
+		SG_RUNE_V2_SECTION_MODEL - 1U) +
 		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CELL_ID_OFFSET, 0U);
-	SetBounds(record, SG_RUNE_V2_CELL_BOUNDS_MIN_OFFSET,
-		SG_RUNE_V2_CELL_BOUNDS_MAX_OFFSET, 0);
-	record += SG_RUNE_V2_CELL_RECORD_BYTES;
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CELL_ID_OFFSET, 1U);
-	SetBounds(record, SG_RUNE_V2_CELL_BOUNDS_MIN_OFFSET,
-		SG_RUNE_V2_CELL_BOUNDS_MAX_OFFSET, 16);
+	SG_RuneV2WirePutU16(record + SG_RUNE_V2_MODEL_VERSION_OFFSET,
+		SG_RUNE_MODEL_VERSION);
+	SG_RuneV2WirePutU32(record + SG_RUNE_V2_MODEL_SCHEMA_TAG_OFFSET,
+		SG_RUNE_MODEL_SCHEMA_TAG);
 
-	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image, 1U) +
-		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_PORTAL_ID_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_PORTAL_FROM_CELL_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_PORTAL_TO_CELL_OFFSET, 1U);
-	SetBounds(record, SG_RUNE_V2_PORTAL_BOUNDS_MIN_OFFSET,
-		SG_RUNE_V2_PORTAL_BOUNDS_MAX_OFFSET, 8);
-
-	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image, 2U) +
-		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CAPABILITY_ID_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CAPABILITY_FROM_CELL_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CAPABILITY_TO_CELL_OFFSET, 1U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CAPABILITY_KIND_OFFSET,
-		SG_RUNE_V2_CAPABILITY_WALK);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CAPABILITY_COST_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_CAPABILITY_MECHANISM_OFFSET,
-		SG_RUNE_V2_REFERENCE_NONE);
-
-	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image, 3U) +
-		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_MECHANISM_ID_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_MECHANISM_KIND_OFFSET, 1U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_MECHANISM_ENTRY_CELL_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_MECHANISM_EXIT_CELL_OFFSET, 1U);
-
-	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image, 4U) +
-		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_COST_ID_OFFSET, 0U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_COST_MIN_MS_OFFSET, 10U);
-	SG_RuneV2WirePutU32(record + SG_RUNE_V2_COST_MAX_MS_OFFSET, 20U);
-
-	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image, 5U) +
+	record = image + (size_t)SG_RuneV2WireGetU64(SectionEntry(image,
+		SG_RUNE_V2_SECTION_BINDING - 1U) +
 		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
 	memcpy(record + SG_RUNE_V2_BINDING_BSP_OFFSET, bsp_identity.bytes,
 		SG_RUNE_V2_CONTENT_ID_BYTES);
@@ -214,7 +174,7 @@ static void TestWireBoundary(void)
 		SG_RuneV2WireInspect(image, image_size, &view));
 	CHECK(view.header.generation == 7U);
 	CHECK(view.section[SG_RUNE_V2_SECTION_CELLS - 1U].count == 2U);
-	CHECK(SG_RuneV2ContentIdEqual(&view.bsp_identity, &bsp));
+	CHECK(SG_RuneV2ContentIdEqual(&view.binding.bsp_identity, &bsp));
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_TRUNCATED,
 		SG_RuneV2WireInspect(image, SG_RUNE_V2_HEADER_BYTES - 1U, &view));
 	memcpy(bad, image, SG_RUNE_V2_HEADER_BYTES);
@@ -236,17 +196,18 @@ static void TestWireBoundary(void)
 		SG_RuneV2WireInspect(bad, image_size, &view));
 
 	memcpy(bad, image, image_size);
-	portal_offset = SG_RuneV2WireGetU64(SectionEntry(bad, 1U) +
+	portal_offset = SG_RuneV2WireGetU64(SectionEntry(bad,
+		SG_RUNE_V2_SECTION_MODEL - 1U) +
 		SG_RUNE_V2_SECTION_OFFSET_OFFSET);
-	SG_RuneV2WirePutU32(bad + (size_t)portal_offset +
-		SG_RUNE_V2_PORTAL_TO_CELL_OFFSET, 2U);
+	SG_RuneV2WirePutU16(bad + (size_t)portal_offset +
+		SG_RUNE_V2_MODEL_VERSION_OFFSET, 0U);
 	FixChecksums(bad, image_size);
-	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_BAD_REFERENCE,
+	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_BAD_RECORD,
 		SG_RuneV2WireInspect(bad, image_size, &view));
 
 	memcpy(bad, image, image_size);
-	SG_RuneV2WirePutU32(SectionEntry(bad, 0U) +
-		SG_RUNE_V2_SECTION_COUNT_OFFSET, SG_RUNE_V2_MAX_CELLS + 1U);
+	SG_RuneV2WirePutU32(SectionEntry(bad, SG_RUNE_V2_SECTION_CELLS - 1U) +
+		SG_RUNE_V2_SECTION_COUNT_OFFSET, SG_RUNE_MODEL_MAX_CELLS + 1U);
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_HOSTILE_COUNT,
 		SG_RuneV2WireInspect(bad, image_size, &view));
 }
