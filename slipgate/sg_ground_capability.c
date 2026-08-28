@@ -24,8 +24,21 @@ typedef struct sg_ground_build_s
 	uint32_t max_capabilities;
 	uint32_t *cell_phase_offsets;
 	uint32_t *cell_region_offsets;
+	uint32_t *cell_order;
+	uint32_t *cell_order_scratch;
+	uint64_t *cell_keys;
+	struct sg_ground_cell_index_node_s *cell_index;
+	uint32_t cell_index_count;
 	sg_ground_capability_error_t *error;
 } sg_ground_build_t;
+
+typedef struct sg_ground_cell_index_node_s
+{
+	sg_rune_bounds_t bounds;
+	uint32_t left;
+	uint32_t right;
+	uint32_t cell;
+} sg_ground_cell_index_node_t;
 
 static void SetError(sg_ground_capability_error_t *error,
 	sg_ground_capability_error_code_t code, uint32_t source_index)
@@ -165,12 +178,24 @@ static int PortalContainsCrossing(const sg_configuration_space_t *space,
 		double side = Dot3(cross, portal->plane.normal);
 		int sign = side < 0.0 ? -1 : side > 0.0 ? 1 : 0;
 
-		if (sign != 0 && orientation != 0 && sign != orientation)
+		if (sign == 0 || (orientation != 0 && sign != orientation))
 			return 0;
-		if (sign != 0)
-			orientation = sign;
+		orientation = sign;
 	}
 	return orientation != 0;
+}
+
+static int PointOnPortalCellSide(const sg_configuration_space_t *space,
+	const sg_configuration_portal_t *portal, uint32_t cell,
+	const float point[3])
+{
+	double interior = Dot3(space->cells[cell].interior_witness.value,
+		portal->plane.normal) - (double)portal->plane.distance;
+	double observed = Dot3(point, portal->plane.normal) -
+		(double)portal->plane.distance;
+
+	return isfinite(interior) && isfinite(observed) &&
+		interior * observed > 0.0;
 }
 
 static int SourcesValid(const sg_host_collision_authority_t *authority,
@@ -316,6 +341,16 @@ static int SourcesValid(const sg_host_collision_authority_t *authority,
 			authority->identity.physics.gravity &&
 		isfinite(authority->identity.physics.ground_acceleration) &&
 		authority->identity.physics.ground_acceleration >= 0.0f &&
+		isfinite(authority->identity.physics.air_acceleration) &&
+		authority->identity.physics.air_acceleration >= 0.0f &&
+		isfinite(authority->identity.physics.water_acceleration) &&
+		authority->identity.physics.water_acceleration >= 0.0f &&
+		isfinite(authority->identity.physics.hook_acceleration) &&
+		authority->identity.physics.hook_acceleration >= 0.0f &&
+		isfinite(authority->identity.physics.external_acceleration) &&
+		authority->identity.physics.external_acceleration >= 0.0f &&
+		isfinite(authority->identity.physics.water_drag) &&
+		authority->identity.physics.water_drag >= 0.0f &&
 		isfinite(authority->identity.physics.max_velocity) &&
 		authority->identity.physics.max_velocity > 0.0f &&
 		authority->identity.physics.frame_ms != 0U &&
@@ -399,6 +434,173 @@ static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
 	return 1;
 }
 
+static int CellOrderLess(sg_ground_build_t *build, uint32_t left,
+	uint32_t right)
+{
+	build->output->localization_prepare_comparisons++;
+	return build->cell_keys[left] < build->cell_keys[right] ||
+		(build->cell_keys[left] == build->cell_keys[right] && left < right);
+}
+
+static void SortCellRange(sg_ground_build_t *build, uint32_t begin,
+	uint32_t end)
+{
+	uint32_t middle;
+	uint32_t left;
+	uint32_t right;
+	uint32_t output;
+
+	if (end - begin < 2U)
+		return;
+	middle = begin + (end - begin) / 2U;
+	SortCellRange(build, begin, middle);
+	SortCellRange(build, middle, end);
+	left = begin;
+	right = middle;
+	for (output = begin; output < end; output++)
+	{
+		if (right == end || (left < middle && CellOrderLess(build,
+			build->cell_order[left], build->cell_order[right])))
+			build->cell_order_scratch[output] = build->cell_order[left++];
+		else
+			build->cell_order_scratch[output] = build->cell_order[right++];
+	}
+	memcpy(&build->cell_order[begin], &build->cell_order_scratch[begin],
+		(size_t)(end - begin) * sizeof(*build->cell_order));
+}
+
+static uint32_t BuildCellIndexNode(sg_ground_build_t *build, uint32_t begin,
+	uint32_t end)
+{
+	uint32_t node_index = build->cell_index_count++;
+	sg_ground_cell_index_node_t *node = &build->cell_index[node_index];
+	uint32_t axis;
+
+	memset(node, 0, sizeof(*node));
+	build->output->localization_prepare_nodes++;
+	node->left = SG_GROUND_CAPABILITY_INDEX_NONE;
+	node->right = SG_GROUND_CAPABILITY_INDEX_NONE;
+	node->cell = SG_GROUND_CAPABILITY_INDEX_NONE;
+	if (end - begin == 1U)
+	{
+		node->cell = build->cell_order[begin];
+		node->bounds = build->configuration->cells[node->cell].bounds;
+		return node_index;
+	}
+	{
+		uint32_t middle = begin + (end - begin) / 2U;
+		const sg_ground_cell_index_node_t *left;
+		const sg_ground_cell_index_node_t *right;
+
+		node->left = BuildCellIndexNode(build, begin, middle);
+		node->right = BuildCellIndexNode(build, middle, end);
+		left = &build->cell_index[node->left];
+		right = &build->cell_index[node->right];
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			node->bounds.mins.value[axis] = fminf(
+				left->bounds.mins.value[axis], right->bounds.mins.value[axis]);
+			node->bounds.maxs.value[axis] = fmaxf(
+				left->bounds.maxs.value[axis], right->bounds.maxs.value[axis]);
+		}
+	}
+	return node_index;
+}
+
+static uint32_t SpreadMortonBits(uint32_t value)
+{
+	value &= UINT32_C(0x000003ff);
+	value = (value | value << 16U) & UINT32_C(0x030000ff);
+	value = (value | value << 8U) & UINT32_C(0x0300f00f);
+	value = (value | value << 4U) & UINT32_C(0x030c30c3);
+	value = (value | value << 2U) & UINT32_C(0x09249249);
+	return value;
+}
+
+static uint64_t CellMortonKey(const sg_configuration_cell_t *cell,
+	const double minimum[3], const double maximum[3])
+{
+	uint32_t encoded[3];
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		double center = ((double)cell->bounds.mins.value[axis] +
+			cell->bounds.maxs.value[axis]) * 0.5;
+		double scale = maximum[axis] > minimum[axis] ?
+			(center - minimum[axis]) / (maximum[axis] - minimum[axis]) : 0.0;
+
+		if (scale < 0.0)
+			scale = 0.0;
+		if (scale > 1.0)
+			scale = 1.0;
+		encoded[axis] = (uint32_t)floor(scale * 1023.0 + 0.5);
+	}
+	return (uint64_t)SpreadMortonBits(encoded[0]) |
+		(uint64_t)SpreadMortonBits(encoded[1]) << 1U |
+		(uint64_t)SpreadMortonBits(encoded[2]) << 2U;
+}
+
+static int BuildCellSpatialIndex(sg_ground_build_t *build)
+{
+	uint32_t cell_count = build->configuration->cell_count;
+	uint64_t node_count = (uint64_t)cell_count * 2U - 1U;
+	double minimum[3] = { INFINITY, INFINITY, INFINITY };
+	double maximum[3] = { -INFINITY, -INFINITY, -INFINITY };
+	uint32_t cell;
+	uint32_t axis;
+
+	if (node_count > UINT32_MAX ||
+		node_count > SIZE_MAX / sizeof(*build->cell_index))
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
+			cell_count);
+		return 0;
+	}
+	build->cell_order = malloc((size_t)cell_count *
+		sizeof(*build->cell_order));
+	build->cell_order_scratch = malloc((size_t)cell_count *
+		sizeof(*build->cell_order_scratch));
+	build->cell_keys = malloc((size_t)cell_count * sizeof(*build->cell_keys));
+	build->cell_index = calloc((size_t)node_count,
+		sizeof(*build->cell_index));
+	if (!build->cell_order || !build->cell_order_scratch || !build->cell_keys ||
+		!build->cell_index)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OUT_OF_MEMORY,
+			cell_count);
+		return 0;
+	}
+	for (cell = 0U; cell < cell_count; cell++)
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			double center = ((double)build->configuration->cells[cell].
+				bounds.mins.value[axis] + build->configuration->cells[cell].
+				bounds.maxs.value[axis]) * 0.5;
+
+			if (center < minimum[axis])
+				minimum[axis] = center;
+			if (center > maximum[axis])
+				maximum[axis] = center;
+		}
+	for (cell = 0U; cell < cell_count; cell++)
+	{
+		build->cell_order[cell] = cell;
+		build->cell_keys[cell] = CellMortonKey(
+			&build->configuration->cells[cell], minimum, maximum);
+	}
+	SortCellRange(build, 0U, cell_count);
+	build->cell_index_count = 0U;
+	(void)BuildCellIndexNode(build, 0U, cell_count);
+	free(build->cell_order);
+	free(build->cell_order_scratch);
+	free(build->cell_keys);
+	build->cell_order = NULL;
+	build->cell_order_scratch = NULL;
+	build->cell_keys = NULL;
+	return build->cell_index_count == (uint32_t)node_count;
+}
+
 static int RegionPose(sg_ground_build_t *build, uint32_t region,
 	sg_host_collision_pose_t *pose_out)
 {
@@ -417,6 +619,18 @@ static int RegionPose(sg_ground_build_t *build, uint32_t region,
 	return pose_out->valid ? 1 : 0;
 }
 
+static int GroundRegionEligible(
+	const sg_configuration_semantic_region_t *region,
+	const sg_host_collision_pose_t *pose)
+{
+	if (region->flags & (SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+		SG_CONFIGURATION_SEMANTIC_REGION_SLIME))
+		return 0;
+	if (region->flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER)
+		return pose->supported && region->water_level == 1U;
+	return region->water_level == 0U;
+}
+
 static int PhaseMatchesRegionPose(const sg_rune_phase_basis_t *phase,
 	const sg_configuration_semantic_region_t *region,
 	const sg_host_collision_pose_t *pose)
@@ -433,21 +647,25 @@ static int PhaseMatchesRegionPose(const sg_rune_phase_basis_t *phase,
 		medium = SG_RUNE_MEDIUM_SLIME;
 	else if (region->flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER)
 		medium = SG_RUNE_MEDIUM_WATER;
-	if (phase->stance != pose->stance || phase->medium != medium ||
-		phase->reference_frame != SG_RUNE_FRAME_WORLD ||
+	if (!GroundRegionEligible(region, pose) ||
+		phase->stance != pose->stance || phase->medium != medium ||
+		phase->reference_frame != (pose->supported && pose->support_is_mover ?
+			SG_RUNE_FRAME_MOVER_RELATIVE : SG_RUNE_FRAME_WORLD) ||
 		region->water_level != pose->water_level ||
 		region->water_type != pose->water_type ||
 		region_supported != pose->supported ||
 		(!pose->supported && !region_airborne) ||
 		(medium != SG_RUNE_MEDIUM_DRY &&
-			(!pose->supported || region->water_level != 1U)) ||
+			(medium != SG_RUNE_MEDIUM_WATER || !pose->supported ||
+			 region->water_level != 1U)) ||
 		phase->void_relation !=
 			((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) ?
 				SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR))
 		return 0;
 	if (pose->supported)
 		return phase->motion == SG_RUNE_MOTION_SUPPORTED &&
-			phase->support == SG_RUNE_SUPPORT_SUPPORTED;
+			phase->support == (pose->support_is_mover ?
+				SG_RUNE_SUPPORT_MOVER : SG_RUNE_SUPPORT_SUPPORTED);
 	return phase->motion == SG_RUNE_MOTION_AIRBORNE &&
 		phase->support == SG_RUNE_SUPPORT_NONE;
 }
@@ -910,8 +1128,15 @@ static void FillCapability(const sg_ground_build_t *build,
 	}
 	SetInterval(&capability->duration_ms,
 		(float)build->authority->identity.physics.frame_ms);
-	capability->acceleration =
-		build->authority->identity.physics.ground_acceleration;
+	if (build->phases[source_phase].motion == SG_RUNE_MOTION_AIRBORNE)
+		capability->acceleration =
+			build->authority->identity.physics.air_acceleration;
+	else if (build->phases[source_phase].motion == SG_RUNE_MOTION_SWIMMING)
+		capability->acceleration =
+			build->authority->identity.physics.water_acceleration;
+	else
+		capability->acceleration =
+			build->authority->identity.physics.ground_acceleration;
 	capability->gravity = build->authority->identity.physics.gravity;
 	capability->physics_abi_id = build->authority->identity.physics_abi_id;
 	capability->flags = SG_GROUND_CAPABILITY_DIRECTIONAL |
@@ -937,33 +1162,53 @@ static int EmitForObservation(sg_ground_build_t *build,
 	const sg_host_collision_pose_t *source_pose,
 	const sg_host_collision_pose_t *destination_pose,
 	const float initial_velocity[3],
-	const float destination_velocity[3],
+	const sg_host_pmove_result_t *result,
 	const float start[3], const float end[3])
 {
 	uint32_t destination_binding;
-	uint32_t before = build->output->capability_count;
+	uint32_t destination_phase = SG_GROUND_CAPABILITY_INDEX_NONE;
+	uint32_t matches = 0U;
+	sg_ground_capability_t capability;
+
+	if (ResultStance(result) != destination_pose->stance ||
+		result->grounded != destination_pose->supported ||
+		result->water_level != destination_pose->water_level ||
+		result->water_type != (int)destination_pose->water_type)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+			destination_cell);
+		return -1;
+	}
+	if (!GroundRegionEligible(&build->semantics->regions[destination_region],
+		destination_pose))
+		return 0;
 
 	for (destination_binding = build->cell_phase_offsets[destination_cell];
 		destination_binding < build->cell_phase_offsets[destination_cell + 1U];
 		destination_binding++)
 	{
-		uint32_t destination_phase =
+		uint32_t candidate_phase =
 			build->bindings[destination_binding].phase;
-		sg_ground_capability_t capability;
 
-		if (!PhaseMatchesRegionPose(&build->phases[destination_phase],
+		if (!PhaseMatchesRegionPose(&build->phases[candidate_phase],
 				&build->semantics->regions[destination_region], destination_pose) ||
-			!PhaseContainsVelocity(&build->phases[destination_phase],
-				destination_velocity))
+			!PhaseContainsVelocity(&build->phases[candidate_phase],
+				result->velocity))
 			continue;
-		FillCapability(build, &capability, kind, source_cell,
-			destination_cell, source_region, destination_region, portal,
-			source_phase, destination_phase, source_pose, initial_velocity,
-			destination_velocity, start, end);
-		if (!AppendCapability(build, &capability))
-			return -1;
+		destination_phase = candidate_phase;
+		matches++;
 	}
-	return build->output->capability_count != before;
+	if (matches != 1U)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+			destination_cell);
+		return -1;
+	}
+	FillCapability(build, &capability, kind, source_cell,
+		destination_cell, source_region, destination_region, portal,
+		source_phase, destination_phase, source_pose, initial_velocity,
+		result->velocity, start, end);
+	return AppendCapability(build, &capability) ? 1 : -1;
 }
 
 static int AddHalfspace(sg_configuration_lattice_halfspace_t *halfspaces,
@@ -1012,7 +1257,7 @@ static int PortalRegionWitness(const sg_ground_build_t *build,
 	const sg_configuration_semantic_region_t *region =
 		&build->semantics->regions[region_index];
 	uint64_t requested = (uint64_t)region->face_count +
-		(uint64_t)portal->vertex_count + 8U;
+		(uint64_t)portal->vertex_count + 12U;
 	sg_configuration_lattice_halfspace_t *halfspaces;
 	uint8_t *clearance;
 	float center[3] = { 0.0f, 0.0f, 0.0f };
@@ -1024,6 +1269,7 @@ static int PortalRegionWitness(const sg_ground_build_t *build,
 	uint32_t face;
 	uint32_t vertex;
 	uint32_t axis;
+	uint32_t normal_axis = 0U;
 	int positive_margin = 0;
 	int feasible;
 	int solved;
@@ -1119,6 +1365,40 @@ static int PortalRegionWitness(const sg_ground_build_t *build,
 	}
 	for (axis = 0U; axis < 3U; axis++)
 		objective[axis] = region->interior_witness.value[axis] - center[axis];
+	for (axis = 1U; axis < 3U; axis++)
+		if (fabsf(portal->plane.normal[axis]) >
+			fabsf(portal->plane.normal[normal_axis]))
+			normal_axis = axis;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		uint32_t saved_count;
+		double snapped;
+
+		if (axis == normal_axis)
+			continue;
+		snapped = nearbyint((double)center[axis] * 8.0) * 0.125;
+		if (!isfinite(snapped) || snapped < (double)SHRT_MIN / 8.0 ||
+			snapped > (double)SHRT_MAX / 8.0)
+			continue;
+		saved_count = count;
+		if (!AddHalfspace(halfspaces, clearance, capacity, &count,
+			axis == 0U ? 1.0f : 0.0f, axis == 1U ? 1.0f : 0.0f,
+			axis == 2U ? 1.0f : 0.0f, (float)snapped, 0) ||
+			!AddHalfspace(halfspaces, clearance, capacity, &count,
+			axis == 0U ? -1.0f : 0.0f, axis == 1U ? -1.0f : 0.0f,
+			axis == 2U ? -1.0f : 0.0f, (float)-snapped, 0))
+			goto invalid;
+		feasible = SG_ConfigurationLatticeFind(halfspaces, count, NULL, point,
+			&stats);
+		if (feasible < 0)
+		{
+			free(halfspaces);
+			free(clearance);
+			return feasible;
+		}
+		if (!feasible)
+			count = saved_count;
+	}
 	feasible = SG_ConfigurationLatticeFind(halfspaces, count, NULL, point,
 		&stats);
 	if (feasible <= 0)
@@ -1145,11 +1425,12 @@ invalid:
 	return -1;
 }
 
-static int FindRegionAtPose(const sg_ground_build_t *build, uint32_t cell,
+static int FindUniqueRegionAtPose(const sg_ground_build_t *build, uint32_t cell,
 	const float point[3], const sg_host_collision_pose_t *pose,
 	uint32_t *region_out)
 {
 	uint32_t region;
+	int found = 0;
 
 	for (region = build->cell_region_offsets[cell];
 		region < build->cell_region_offsets[cell + 1U]; region++)
@@ -1164,11 +1445,74 @@ static int FindRegionAtPose(const sg_ground_build_t *build, uint32_t cell,
 			record->water_type == pose->water_type &&
 			PointInsideRegion(build->semantics, record, point))
 		{
+			if (found)
+				return -1;
 			*region_out = region;
-			return 1;
+			found = 1;
 		}
 	}
-	return 0;
+	return found;
+}
+
+static int PointInsideBounds(const sg_rune_bounds_t *bounds,
+	const float point[3])
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+		if (point[axis] < bounds->mins.value[axis] ||
+			point[axis] > bounds->maxs.value[axis])
+			return 0;
+	return 1;
+}
+
+static int LocateCellRegionNode(sg_ground_build_t *build, uint32_t node_index,
+	const float point[3], sg_rune_stance_t stance,
+	const sg_host_collision_pose_t *pose, uint32_t *cell_out,
+	uint32_t *region_out, int *found)
+{
+	const sg_ground_cell_index_node_t *node = &build->cell_index[node_index];
+
+	build->output->localization_nodes_examined++;
+	if (!PointInsideBounds(&node->bounds, point))
+		return 1;
+	if (node->cell != SG_GROUND_CAPABILITY_INDEX_NONE)
+	{
+		int region_status;
+
+		if (build->configuration->cells[node->cell].stance != stance ||
+			!PointInsideCell(build->configuration, node->cell, point))
+			return 1;
+		region_status = FindUniqueRegionAtPose(build, node->cell, point, pose,
+			region_out);
+		if (region_status < 0 || (region_status > 0 && *found))
+			return 0;
+		if (region_status > 0)
+		{
+			*cell_out = node->cell;
+			*found = 1;
+		}
+		return 1;
+	}
+	if (!LocateCellRegionNode(build, node->left, point, stance, pose, cell_out,
+		region_out, found))
+		return 0;
+	return LocateCellRegionNode(build, node->right, point, stance, pose,
+		cell_out, region_out, found);
+}
+
+static int FindUniqueCellRegionAtPose(sg_ground_build_t *build,
+	const float point[3], sg_rune_stance_t stance,
+	const sg_host_collision_pose_t *pose, uint32_t *cell_out,
+	uint32_t *region_out)
+{
+	int found = 0;
+
+	build->output->localization_queries++;
+	if (!LocateCellRegionNode(build, 0U, point, stance, pose, cell_out,
+		region_out, &found))
+		return -1;
+	return found;
 }
 
 static int FindExactPortalSideWitness(const sg_ground_build_t *build,
@@ -1230,6 +1574,46 @@ static int FindExactPortalSideWitness(const sg_ground_build_t *build,
 	return 0;
 }
 
+static int FindPortalTarget(const sg_ground_build_t *build,
+	const sg_configuration_portal_t *portal, uint32_t cell,
+	int prefer_supported, const float reference[3], float target[3])
+{
+	uint32_t pass;
+
+	for (pass = 0U; pass < 2U; pass++)
+	{
+		uint32_t region;
+		int expected_supported = pass == 0U ? prefer_supported :
+			!prefer_supported;
+
+		for (region = build->cell_region_offsets[cell];
+			region < build->cell_region_offsets[cell + 1U]; region++)
+		{
+			float portal_point[3];
+			int supported = (build->semantics->regions[region].flags &
+				SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U;
+			int status;
+
+			if (supported != expected_supported)
+				continue;
+			status = FindExactPortalSideWitness(build, portal, cell, region,
+				reference, target);
+			if (status != 0)
+				return status;
+			status = PortalRegionWitness(build, portal, region, portal_point);
+			if (status < 0)
+				return status;
+			if (!status)
+				continue;
+			status = FindExactPortalSideWitness(build, portal, cell, region,
+				portal_point, target);
+			if (status != 0)
+				return status;
+		}
+	}
+	return 0;
+}
+
 static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 	uint32_t source_cell, uint32_t destination_cell)
 {
@@ -1242,12 +1626,13 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 		source_region < build->cell_region_offsets[source_cell + 1U];
 		source_region++)
 	{
-		float source_portal_point[3] = { 0.0f, 0.0f, 0.0f };
+		float portal_point[3] = { 0.0f, 0.0f, 0.0f };
 		float start[3];
+		float target[3];
 		sg_host_collision_pose_t source_pose;
-		uint32_t destination_region;
+		uint32_t source_binding;
 		int witness_status = PortalRegionWitness(build, portal, source_region,
-			source_portal_point);
+			portal_point);
 
 		if (witness_status < 0)
 		{
@@ -1262,7 +1647,7 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 		if (!witness_status)
 			continue;
 		witness_status = FindExactPortalSideWitness(build, portal, source_cell,
-			source_region, source_portal_point, start);
+			source_region, portal_point, start);
 		if (witness_status < 0)
 		{
 			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
@@ -1270,6 +1655,23 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 			return -1;
 		}
 		if (!witness_status)
+			continue;
+		witness_status = FindPortalTarget(build, portal, destination_cell,
+			(build->semantics->regions[source_region].flags &
+				SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U, portal_point,
+			target);
+		if (witness_status < 0)
+		{
+			SetError(build->error,
+				witness_status == -3 ? SG_GROUND_CAPABILITY_ERROR_OVERFLOW :
+				witness_status == -2 ?
+					SG_GROUND_CAPABILITY_ERROR_OUT_OF_MEMORY :
+					SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+				portal_index);
+			return -1;
+		}
+		if (!witness_status ||
+			!PortalContainsCrossing(build->configuration, portal, start, target))
 			continue;
 		if (!SG_HostCollisionClassifyPose(build->authority, NULL, start,
 				portal->stance, &source_pose))
@@ -1280,136 +1682,112 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 		}
 		if (!source_pose.valid)
 			continue;
-		for (destination_region = build->cell_region_offsets[destination_cell];
-			destination_region < build->cell_region_offsets[destination_cell + 1U];
-			destination_region++)
+		if (!source_pose.supported)
+			continue;
+		for (source_binding = build->cell_phase_offsets[source_cell];
+			source_binding < build->cell_phase_offsets[source_cell + 1U];
+			source_binding++)
 		{
-			float destination_portal_point[3] = { 0.0f, 0.0f, 0.0f };
-			float target[3];
-			uint32_t source_binding;
-			int destination_status = PortalRegionWitness(build, portal,
-				destination_region, destination_portal_point);
+			uint32_t source_phase = build->bindings[source_binding].phase;
+			float initial_velocity[3];
+			sg_host_pmove_result_t result;
+			sg_host_collision_pose_t destination_pose;
+			sg_ground_capability_kind_t kind;
+			uint32_t result_region;
+			uint32_t result_cell;
+			int emitted;
+			int localization;
 
-			if (destination_status < 0)
+			if (!PhaseMatchesRegionPose(&build->phases[source_phase],
+					&build->semantics->regions[source_region], &source_pose))
+				continue;
+			if (!PhaseVelocitySample(&build->phases[source_phase], 0,
+					initial_velocity))
 			{
-				SetError(build->error,
-					destination_status == -3 ?
-						SG_GROUND_CAPABILITY_ERROR_OVERFLOW :
-					destination_status == -2 ?
-						SG_GROUND_CAPABILITY_ERROR_OUT_OF_MEMORY :
-						SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
-					portal_index);
+				SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+					source_phase);
 				return -1;
 			}
-			if (!destination_status)
+			if (!EvaluateFrame(build, start, target, portal->stance, 1, 0,
+				portal->stance == SG_RUNE_STANCE_CROUCHING,
+				initial_velocity, &result))
+				return -1;
+			if (!PointInsideCell(build->configuration, destination_cell,
+					result.origin) ||
+				ResultStance(&result) !=
+					build->configuration->cells[destination_cell].stance ||
+				!PortalContainsCrossing(build->configuration, portal, start,
+					result.origin) ||
+				!PointOnPortalCellSide(build->configuration, portal,
+					destination_cell, result.origin))
 				continue;
-			destination_status = FindExactPortalSideWitness(build, portal,
-				destination_cell, destination_region, destination_portal_point,
-				target);
-			if (destination_status < 0)
+			if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+					result.origin, ResultStance(&result), &destination_pose))
 			{
 				SetError(build->error,
 					SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT, portal_index);
 				return -1;
 			}
-			if (!destination_status ||
-				!PortalContainsCrossing(build->configuration, portal, start, target))
+			if (!destination_pose.valid)
 				continue;
-			for (source_binding = build->cell_phase_offsets[source_cell];
-				source_binding < build->cell_phase_offsets[source_cell + 1U];
-				source_binding++)
+			kind = CrossingKind(&build->configuration->cells[source_cell],
+				&source_pose, &destination_pose, start, result.origin);
+			if (kind == SG_GROUND_CAPABILITY_KIND_COUNT)
+				continue;
+			localization = FindUniqueCellRegionAtPose(build, result.origin,
+				ResultStance(&result), &destination_pose, &result_cell,
+				&result_region);
+			if (localization <= 0)
 			{
-				uint32_t source_phase = build->bindings[source_binding].phase;
-				float initial_velocity[3];
-				sg_host_pmove_result_t result;
-				sg_host_collision_pose_t destination_pose;
-				sg_ground_capability_kind_t kind;
-				uint32_t result_region;
-				int emitted;
-
-				if (!PhaseMatchesRegionPose(&build->phases[source_phase],
-						&build->semantics->regions[source_region], &source_pose))
-					continue;
-				if (!PhaseVelocitySample(&build->phases[source_phase], 0,
-						initial_velocity))
-				{
-					SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
-						source_phase);
-					return -1;
-				}
-				if (!EvaluateFrame(build, start, target, portal->stance, 1, 0,
-					portal->stance == SG_RUNE_STANCE_CROUCHING,
-					initial_velocity, &result))
-					return -1;
-				if (!PointInsideCell(build->configuration, destination_cell,
-						result.origin) ||
-					ResultStance(&result) !=
-						build->configuration->cells[destination_cell].stance ||
-					!PortalContainsCrossing(build->configuration, portal, start,
-						result.origin))
-					continue;
-				if (!SG_HostCollisionClassifyPose(build->authority, NULL,
-						result.origin, ResultStance(&result), &destination_pose))
-				{
-					SetError(build->error,
-						SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT, portal_index);
-					return -1;
-				}
-				if (!destination_pose.valid ||
-					!FindRegionAtPose(build, destination_cell, result.origin,
-						&destination_pose, &result_region))
-					continue;
-				if (result.water_level != destination_pose.water_level ||
-					result.water_type != (int)destination_pose.water_type)
-					continue;
-				kind = CrossingKind(&build->configuration->cells[source_cell],
-					&source_pose, &destination_pose, start, result.origin);
-				if (kind == SG_GROUND_CAPABILITY_KIND_COUNT)
-					continue;
-				if (kind == SG_GROUND_CAPABILITY_WALK ||
-					kind == SG_GROUND_CAPABILITY_CROUCH ||
-					kind == SG_GROUND_CAPABILITY_RAMP ||
-					kind == SG_GROUND_CAPABILITY_STEP)
-				{
-					int continuity = EvaluateContinuouslySupported(build, start,
-						target, portal->stance,
-						portal->stance == SG_RUNE_STANCE_CROUCHING,
-						initial_velocity, &result);
-
-					if (continuity < 0)
-						return -1;
-					if (!continuity)
-						continue;
-					if (kind != SG_GROUND_CAPABILITY_STEP)
-					{
-						int geometric = GeometricallyContinuouslySupported(build,
-							start, result.origin, portal->stance);
-
-						if (geometric < 0)
-							return -1;
-						if (!geometric)
-							continue;
-					}
-					else
-					{
-						int geometric = GeometricallyStepSupported(build, start,
-							result.origin, portal->stance);
-
-						if (geometric < 0)
-							return -1;
-						if (!geometric)
-							continue;
-					}
-				}
-				emitted = EmitForObservation(build, kind, source_cell,
-					destination_cell, source_region, result_region, portal_index,
-					source_phase, &source_pose, &destination_pose,
-					initial_velocity, result.velocity, start, result.origin);
-				if (emitted < 0)
-					return -1;
-				if (emitted > 0)
-					proved = 1;
+				SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+					destination_cell);
+				return -1;
 			}
+			if (result_cell != destination_cell)
+				continue;
+			if (kind == SG_GROUND_CAPABILITY_WALK ||
+				kind == SG_GROUND_CAPABILITY_CROUCH ||
+				kind == SG_GROUND_CAPABILITY_RAMP ||
+				kind == SG_GROUND_CAPABILITY_STEP)
+			{
+				int continuity = EvaluateContinuouslySupported(build, start,
+					target, portal->stance,
+					portal->stance == SG_RUNE_STANCE_CROUCHING,
+					initial_velocity, &result);
+
+				if (continuity < 0)
+					return -1;
+				if (!continuity)
+					continue;
+				if (kind != SG_GROUND_CAPABILITY_STEP)
+				{
+					int geometric = GeometricallyContinuouslySupported(build,
+						start, result.origin, portal->stance);
+
+					if (geometric < 0)
+						return -1;
+					if (!geometric)
+						continue;
+				}
+				else
+				{
+					int geometric = GeometricallyStepSupported(build, start,
+						result.origin, portal->stance);
+
+					if (geometric < 0)
+						return -1;
+					if (!geometric)
+						continue;
+				}
+			}
+			emitted = EmitForObservation(build, kind, source_cell,
+				destination_cell, source_region, result_region, portal_index,
+				source_phase, &source_pose, &destination_pose,
+				initial_velocity, &result, start, result.origin);
+			if (emitted < 0)
+				return -1;
+			if (emitted > 0)
+				proved = 1;
 		}
 	}
 	return proved;
@@ -1451,24 +1829,6 @@ static sg_rune_stance_t ResultStance(const sg_host_pmove_result_t *result)
 		SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
 }
 
-static int FindCellRegionAtPose(const sg_ground_build_t *build,
-	const float point[3], sg_rune_stance_t stance,
-	const sg_host_collision_pose_t *pose, uint32_t *cell_out,
-	uint32_t *region_out)
-{
-	uint32_t cell;
-
-	for (cell = 0U; cell < build->configuration->cell_count; cell++)
-		if (build->configuration->cells[cell].stance == stance &&
-			PointInsideCell(build->configuration, cell, point) &&
-			FindRegionAtPose(build, cell, point, pose, region_out))
-		{
-			*cell_out = cell;
-			return 1;
-		}
-	return 0;
-}
-
 static int BuildTakeoffsAndLandings(sg_ground_build_t *build)
 {
 	uint32_t cell;
@@ -1507,6 +1867,7 @@ static int BuildTakeoffsAndLandings(sg_ground_build_t *build)
 				uint32_t destination_region;
 				uint32_t destination_cell;
 				sg_ground_capability_kind_t kind;
+				int localization;
 
 				if (!PhaseMatchesRegionPose(phase, source, &source_pose))
 					continue;
@@ -1522,8 +1883,18 @@ static int BuildTakeoffsAndLandings(sg_ground_build_t *build)
 				if (!EvaluateFrame(build, source->interior_witness.value,
 						source->interior_witness.value,
 						build->configuration->cells[cell].stance, 0,
-						source_pose.supported, 0, initial_velocity, &result))
+						source_pose.supported,
+						build->configuration->cells[cell].stance ==
+							SG_RUNE_STANCE_CROUCHING,
+						initial_velocity, &result))
 					return 0;
+				if (source_pose.supported && !result.grounded &&
+					result.velocity[2] > 0.0f)
+					kind = SG_GROUND_CAPABILITY_JUMP_TAKEOFF;
+				else if (!source_pose.supported && result.grounded)
+					kind = SG_GROUND_CAPABILITY_LANDING;
+				else
+					continue;
 				if (!SG_HostCollisionClassifyPose(build->authority, NULL,
 						result.origin, ResultStance(&result), &destination_pose))
 				{
@@ -1533,25 +1904,20 @@ static int BuildTakeoffsAndLandings(sg_ground_build_t *build)
 				}
 				if (!destination_pose.valid)
 					continue;
-				if (!FindCellRegionAtPose(build, result.origin,
+				localization = FindUniqueCellRegionAtPose(build, result.origin,
 					ResultStance(&result), &destination_pose, &destination_cell,
-					&destination_region))
-					continue;
-				if (result.water_level != destination_pose.water_level ||
-					result.water_type != (int)destination_pose.water_type)
-					continue;
-				if (source_pose.supported && !result.grounded &&
-					result.velocity[2] > 0.0f)
-					kind = SG_GROUND_CAPABILITY_JUMP_TAKEOFF;
-				else if (!source_pose.supported && result.grounded)
-					kind = SG_GROUND_CAPABILITY_LANDING;
-				else
-					continue;
+					&destination_region);
+				if (localization <= 0)
+				{
+					SetError(build->error,
+						SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE, source_region);
+					return 0;
+				}
 				if (EmitForObservation(build, kind, cell, destination_cell,
 					source_region,
 					destination_region, SG_GROUND_CAPABILITY_INDEX_NONE,
-					source_phase, &source_pose, &destination_pose,
-					initial_velocity, result.velocity,
+					 source_phase, &source_pose, &destination_pose,
+					initial_velocity, &result,
 					source->interior_witness.value, result.origin) < 0)
 					return 0;
 			}
@@ -1577,7 +1943,9 @@ static int BuildStanceDirection(sg_ground_build_t *build,
 		sg_host_pmove_result_t result;
 		sg_host_collision_pose_t destination_pose;
 		uint32_t destination_region;
+		uint32_t localized_cell;
 		int ducked;
+		int localization;
 
 		if (!PhaseMatchesRegionPose(&build->phases[source_phase],
 				&build->semantics->regions[source_region], source_pose))
@@ -1604,14 +1972,23 @@ static int BuildStanceDirection(sg_ground_build_t *build,
 				SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT, source_region);
 			return 0;
 		}
-		if (!destination_pose.valid ||
-			!FindRegionAtPose(build, destination_cell, result.origin,
-				&destination_pose, &destination_region))
+		if (!destination_pose.valid)
+			continue;
+		localization = FindUniqueCellRegionAtPose(build, result.origin,
+			destination_stance, &destination_pose, &localized_cell,
+			&destination_region);
+		if (localization <= 0)
+		{
+			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+				destination_cell);
+			return 0;
+		}
+		if (localized_cell != destination_cell)
 			continue;
 		if (EmitForObservation(build, SG_GROUND_CAPABILITY_STANCE,
 			source_cell, destination_cell, source_region, destination_region,
 			SG_GROUND_CAPABILITY_INDEX_NONE, source_phase, source_pose,
-			&destination_pose, initial_velocity, result.velocity, witness,
+			&destination_pose, initial_velocity, &result, witness,
 			result.origin) < 0)
 			return 0;
 	}
@@ -1631,6 +2008,10 @@ static int BuildStanceOverlaps(sg_ground_build_t *build)
 		sg_host_collision_pose_t crouching;
 		uint32_t standing_region;
 		uint32_t crouching_region;
+		uint32_t standing_cell;
+		uint32_t crouching_cell;
+		int standing_status;
+		int crouching_status;
 
 		if (record->standing_cell >= build->configuration->cell_count ||
 			record->crouching_cell >= build->configuration->cell_count ||
@@ -1651,11 +2032,22 @@ static int BuildStanceOverlaps(sg_ground_build_t *build)
 				SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT, overlap);
 			return 0;
 		}
-		if (!standing.valid || !crouching.valid ||
-			!FindRegionAtPose(build, record->standing_cell,
-				record->interior_witness.value, &standing, &standing_region) ||
-			!FindRegionAtPose(build, record->crouching_cell,
-				record->interior_witness.value, &crouching, &crouching_region))
+		if (!standing.valid || !crouching.valid)
+			continue;
+		standing_status = FindUniqueCellRegionAtPose(build,
+			record->interior_witness.value, SG_RUNE_STANCE_STANDING, &standing,
+			&standing_cell, &standing_region);
+		crouching_status = FindUniqueCellRegionAtPose(build,
+			record->interior_witness.value, SG_RUNE_STANCE_CROUCHING, &crouching,
+			&crouching_cell, &crouching_region);
+		if (standing_status <= 0 || crouching_status <= 0)
+		{
+			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+				overlap);
+			return 0;
+		}
+		if (standing_cell != record->standing_cell ||
+			crouching_cell != record->crouching_cell)
 			continue;
 		if (!BuildStanceDirection(build, record->interior_witness.value,
 			record->standing_cell, record->crouching_cell, standing_region,
@@ -1800,6 +2192,8 @@ int SG_GroundCapabilityBuild(
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		goto fail;
 	}
+	if (!BuildCellSpatialIndex(&build))
+		goto fail;
 	if (!BuildPortals(&build) || !BuildStanceOverlaps(&build) ||
 		!BuildTakeoffsAndLandings(&build))
 		goto fail;
@@ -1811,6 +2205,7 @@ int SG_GroundCapabilityBuild(
 	}
 	free(build.cell_phase_offsets);
 	free(build.cell_region_offsets);
+	free(build.cell_index);
 	*set_out = build.output;
 	SetError(error_out, SG_GROUND_CAPABILITY_ERROR_NONE,
 		SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -1819,6 +2214,10 @@ int SG_GroundCapabilityBuild(
 fail:
 	free(build.cell_phase_offsets);
 	free(build.cell_region_offsets);
+	free(build.cell_order);
+	free(build.cell_order_scratch);
+	free(build.cell_keys);
+	free(build.cell_index);
 	SG_GroundCapabilityDestroy(build.output);
 	if (error_out && error_out->code == SG_GROUND_CAPABILITY_ERROR_NONE)
 		SetError(error_out, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,

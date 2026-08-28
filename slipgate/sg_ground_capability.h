@@ -64,7 +64,7 @@ enum
 
 typedef struct sg_ground_capability_s
 {
-	/* One exact replay observation inside the named source/destination phases. */
+	/* One exact host observation localized to one source/destination phase. */
 	uint32_t source_cell;
 	uint32_t destination_cell;
 	uint32_t source_region;
@@ -95,12 +95,14 @@ typedef struct sg_ground_capability_set_s
 	uint32_t proved_directions;
 	uint32_t rejected_directions;
 	uint64_t pmove_frames;
+	uint64_t localization_prepare_comparisons;
+	uint64_t localization_prepare_nodes;
+	uint64_t localization_queries;
+	uint64_t localization_nodes_examined;
 } sg_ground_capability_set_t;
 
 void SG_GroundCapabilityDefaultLimits(
 	sg_ground_capability_limits_t *limits_out);
-/* The complete-model integrator calls this only after the shared BSP and
- * configuration-semantics acceptance barrier has passed. */
 int SG_GroundCapabilityBuild(
 	const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
