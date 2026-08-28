@@ -191,6 +191,7 @@ static int IdentityValid(const sg_rune_model_identity_t *identity)
 		physics->gravity <= (float)SHRT_MAX &&
 		truncf(physics->gravity) == physics->gravity &&
 		physics->frame_ms != 0U && physics->substep_ms != 0U &&
+		physics->substep_ms <= UCHAR_MAX &&
 		physics->substep_ms <= physics->frame_ms &&
 		physics->frame_ms % physics->substep_ms == 0U;
 }
@@ -559,6 +560,67 @@ static int PhaseContainsVelocity(const sg_rune_phase_basis_t *phase,
 		velocity[2] <= phase->velocity.z.max_value;
 }
 
+static sg_rune_medium_t ResultMedium(const sg_host_pmove_result_t *result)
+{
+	if (result->water_level == 0)
+		return SG_RUNE_MEDIUM_DRY;
+	if (result->water_type & SG_HOST_CONTENTS_WATER)
+		return SG_RUNE_MEDIUM_WATER;
+	if (result->water_type & SG_HOST_CONTENTS_LAVA)
+		return SG_RUNE_MEDIUM_LAVA;
+	if (result->water_type & SG_HOST_CONTENTS_SLIME)
+		return SG_RUNE_MEDIUM_SLIME;
+	return SG_RUNE_MEDIUM_DRY;
+}
+
+static int ResultMatchesDestination(const sg_water_build_t *build,
+	uint32_t region_index, uint32_t phase_index,
+	const sg_host_pmove_result_t *result)
+{
+	const sg_configuration_semantic_region_t *region =
+		&build->semantics->regions[region_index];
+	const sg_rune_phase_basis_t *phase = &build->phases[phase_index];
+	const sg_rune_hull_profile_t *hull;
+	sg_rune_stance_t stance;
+	sg_rune_motion_t motion;
+	sg_rune_support_t support;
+	int region_supported;
+	uint32_t axis;
+
+	if (!PointInRegion(build, region_index, result->origin))
+		return 0;
+	stance = (result->state.pm_flags & PMF_DUCKED) ?
+		SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+	hull = stance == SG_RUNE_STANCE_CROUCHING ?
+		&build->authority->identity.crouching_hull :
+		&build->authority->identity.standing_hull;
+	for (axis = 0U; axis < 3U; axis++)
+		if (result->mins[axis] != hull->mins.value[axis] ||
+			result->maxs[axis] != hull->maxs.value[axis])
+			return 0;
+	region_supported = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U;
+	if ((result->grounded != 0) != region_supported ||
+		region->water_level != (uint8_t)result->water_level ||
+		region->water_type !=
+			(sg_host_collision_contents_t)result->water_type)
+		return 0;
+	motion = result->water_level >= 2 ? SG_RUNE_MOTION_SWIMMING :
+		(result->grounded ? SG_RUNE_MOTION_SUPPORTED :
+			SG_RUNE_MOTION_AIRBORNE);
+	support = motion == SG_RUNE_MOTION_SUPPORTED ?
+		SG_RUNE_SUPPORT_SUPPORTED : SG_RUNE_SUPPORT_NONE;
+	if (result->support_model_index != 0U || result->support_instance_id != 0U)
+		return 0;
+	return phase->stance == stance && phase->motion == motion &&
+		phase->support == support && phase->medium == ResultMedium(result) &&
+		phase->void_relation == ((region->flags &
+			SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) ?
+			SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR) &&
+		phase->reference_frame == SG_RUNE_FRAME_WORLD &&
+		PhaseContainsVelocity(phase, result->velocity);
+}
+
 static void CommandForDirection(const float direction[3], usercmd_t *command)
 {
 	memset(command, 0, sizeof(*command));
@@ -620,7 +682,12 @@ static int Probe(sg_water_build_t *build, uint32_t source_region,
 	if (result.physics_abi_id != build->authority->identity.physics_abi_id ||
 		result.gravity != build->authority->identity.physics.gravity ||
 		result.elapsed_ms != build->authority->identity.physics.frame_ms ||
-		!Finite3(result.origin) || !Finite3(result.velocity))
+		result.evaluated_steps != build->authority->identity.physics.frame_ms /
+			build->authority->identity.physics.substep_ms ||
+		result.state.pm_type != PM_NORMAL ||
+		!Finite3(result.origin) || !Finite3(result.velocity) ||
+		!Finite3(result.mins) || !Finite3(result.maxs) ||
+		result.water_level < 0 || result.water_level > 3)
 	{
 		SetError(build, SG_WATER_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 			source_region);
@@ -628,9 +695,26 @@ static int Probe(sg_water_build_t *build, uint32_t source_region,
 	}
 	for (axis = 0U; axis < 3U; axis++)
 	{
+		if (result.origin[axis] != (float)result.state.origin[axis] * 0.125f ||
+			result.velocity[axis] !=
+				(float)result.state.velocity[axis] * 0.125f)
+		{
+			SetError(build, SG_WATER_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+				source_region);
+			return 0;
+		}
 		fact->observed_displacement.value[axis] = result.origin[axis] - start[axis];
 		fact->observed_velocity.value[axis] = result.velocity[axis];
+		fact->source_velocity.value[axis] =
+			(float)request.state.velocity[axis] * 0.125f;
 	}
+	fact->result_pm_flags = result.state.pm_flags;
+	fact->result_support_model_index = result.support_model_index;
+	fact->result_support_instance_id = result.support_instance_id;
+	fact->result_water_type =
+		(sg_host_collision_contents_t)result.water_type;
+	fact->result_grounded = (uint8_t)(result.grounded != 0);
+	fact->result_water_level = (uint8_t)result.water_level;
 	fact->parameters.displacement.x.min_value =
 		fact->observed_displacement.value[0];
 	fact->parameters.displacement.x.max_value =
@@ -649,14 +733,35 @@ static int Probe(sg_water_build_t *build, uint32_t source_region,
 	fact->parameters.speed.max_value =
 		build->authority->identity.physics.max_velocity;
 	fact->parameters.acceleration.min_value = 0.0f;
-	fact->parameters.acceleration.max_value =
-		build->authority->identity.physics.water_acceleration;
+	switch (build->phases[fact->source_phase].motion)
+	{
+	case SG_RUNE_MOTION_SUPPORTED:
+		fact->parameters.acceleration.max_value =
+			build->authority->identity.physics.ground_acceleration;
+		break;
+	case SG_RUNE_MOTION_AIRBORNE:
+		fact->parameters.acceleration.max_value =
+			build->authority->identity.physics.air_acceleration;
+		break;
+	case SG_RUNE_MOTION_SWIMMING:
+		fact->parameters.acceleration.max_value =
+			build->authority->identity.physics.water_acceleration;
+		break;
+	case SG_RUNE_MOTION_COUNT:
+		SetError(build, SG_WATER_CAPABILITY_ERROR_INVALID_PHASE,
+			fact->source_phase);
+		return 0;
+	}
 	fact->parameters.vertical_acceleration = fact->parameters.acceleration;
 	fact->parameters.gravity = build->authority->identity.physics.gravity;
-	fact->parameters.drag = build->authority->identity.physics.water_drag;
+	fact->parameters.drag = fact->source_medium == SG_RUNE_MEDIUM_DRY ? 0.0f :
+		build->authority->identity.physics.water_drag;
 	fact->parameters.physics_abi_id =
 		build->authority->identity.physics_abi_id;
 	fact->parameters.fixed_latency_ms = build->authority->identity.physics.frame_ms;
+	if (fact->source_medium != fact->destination_medium ||
+		fact->source_water_level != fact->destination_water_level)
+		fact->flags |= SG_WATER_CAPABILITY_STRADDLES_FRAME_LAW;
 	fact->flags |= SG_WATER_CAPABILITY_HOST_PROVEN;
 	build->output->host_pmove_frames++;
 	if (result_out)
@@ -693,8 +798,8 @@ static int ProbeLocalFact(sg_water_build_t *build, uint32_t region,
 
 		emitted.destination_phase =
 			build->bindings[destination_binding].phase;
-		if (PhaseContainsVelocity(
-			&build->phases[emitted.destination_phase], result.velocity) &&
+		if (ResultMatchesDestination(build, region,
+			emitted.destination_phase, &result) &&
 			!AppendFact(build, &emitted))
 			return 0;
 	}
@@ -727,32 +832,32 @@ static void FillRegionFact(const sg_water_build_t *build, uint32_t region,
 	fact->boundary_witness = record->interior_witness;
 	fact->destination_witness = record->interior_witness;
 	DirectionVector(direction, fact->direction_vector.value);
+	fact->command_vector = fact->direction_vector;
 	fact->flags = SG_WATER_CAPABILITY_DIRECTIONAL;
+}
+
+static void CombinedCurrentVector(sg_rune_contents_mask_t currents,
+	float vector[3])
+{
+	memset(vector, 0, 3U * sizeof(*vector));
+	if (currents & SG_RUNE_CONTENTS_CURRENT_0) vector[0] += 1.0f;
+	if (currents & SG_RUNE_CONTENTS_CURRENT_90) vector[1] += 1.0f;
+	if (currents & SG_RUNE_CONTENTS_CURRENT_180) vector[0] -= 1.0f;
+	if (currents & SG_RUNE_CONTENTS_CURRENT_270) vector[1] -= 1.0f;
+	if (currents & SG_RUNE_CONTENTS_CURRENT_UP) vector[2] += 1.0f;
+	if (currents & SG_RUNE_CONTENTS_CURRENT_DOWN) vector[2] -= 1.0f;
 }
 
 static int AppendLocalFacts(sg_water_build_t *build, uint32_t region_index)
 {
-	static const sg_rune_contents_mask_t currents[] = {
-		SG_RUNE_CONTENTS_CURRENT_0,
-		SG_RUNE_CONTENTS_CURRENT_90,
-		SG_RUNE_CONTENTS_CURRENT_180,
-		SG_RUNE_CONTENTS_CURRENT_270,
-		SG_RUNE_CONTENTS_CURRENT_UP,
-		SG_RUNE_CONTENTS_CURRENT_DOWN
-	};
-	static const sg_water_direction_t current_directions[] = {
-		SG_WATER_DIRECTION_POSITIVE_X,
-		SG_WATER_DIRECTION_POSITIVE_Y,
-		SG_WATER_DIRECTION_NEGATIVE_X,
-		SG_WATER_DIRECTION_NEGATIVE_Y,
-		SG_WATER_DIRECTION_POSITIVE_Z,
-		SG_WATER_DIRECTION_NEGATIVE_Z
-	};
 	const sg_configuration_semantic_region_t *region =
 		&build->semantics->regions[region_index];
+	sg_rune_contents_mask_t currents =
+		SG_HostCollisionRuneContents(region->water_type) &
+		SG_RUNE_CONTENTS_CURRENT_MASK;
 	uint32_t binding;
 
-	if (region->water_level < 2U)
+	if (region->water_level == 0U)
 		return 1;
 	build->output->wet_region_count++;
 	for (binding = build->binding_offsets[region_index];
@@ -760,21 +865,21 @@ static int AppendLocalFacts(sg_water_build_t *build, uint32_t region_index)
 	{
 		uint32_t direction;
 
-		for (direction = SG_WATER_DIRECTION_POSITIVE_X;
-			direction <= SG_WATER_DIRECTION_NEGATIVE_Z; direction++)
+		if (region->water_level >= 2U)
 		{
 			sg_water_capability_fact_t fact;
 
-			FillRegionFact(build, region_index, build->bindings[binding].phase,
-				SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
-				(sg_water_direction_t)direction, &fact);
-			if (!ProbeLocalFact(build, region_index,
-				fact.direction_vector.value, &fact))
-				return 0;
-		}
-		{
-			sg_water_capability_fact_t fact;
-
+			for (direction = SG_WATER_DIRECTION_POSITIVE_X;
+				direction <= SG_WATER_DIRECTION_NEGATIVE_Z; direction++)
+			{
+				FillRegionFact(build, region_index,
+					build->bindings[binding].phase,
+					SG_WATER_CAPABILITY_DIRECTIONAL_SWIM,
+					(sg_water_direction_t)direction, &fact);
+				if (!ProbeLocalFact(build, region_index,
+					fact.direction_vector.value, &fact))
+					return 0;
+			}
 			FillRegionFact(build, region_index, build->bindings[binding].phase,
 				SG_WATER_CAPABILITY_SINK, SG_WATER_DIRECTION_NEGATIVE_Z, &fact);
 			memset(fact.direction_vector.value, 0,
@@ -788,25 +893,20 @@ static int AppendLocalFacts(sg_water_build_t *build, uint32_t region_index)
 				fact.direction_vector.value, &fact))
 				return 0;
 		}
-		for (direction = 0U;
-			direction < sizeof(currents) / sizeof(currents[0]); direction++)
-			if ((SG_HostCollisionRuneContents(region->water_type) &
-				currents[direction]) != 0U)
-			{
-				sg_water_capability_fact_t fact;
+		if (currents != 0U)
+		{
+			sg_water_capability_fact_t fact;
+			float command[3] = { 0.0f, 0.0f, 0.0f };
 
-				FillRegionFact(build, region_index,
-					build->bindings[binding].phase,
-					SG_WATER_CAPABILITY_CURRENT,
-					current_directions[direction], &fact);
-				fact.current = currents[direction];
-				fact.flags |= SG_WATER_CAPABILITY_USES_CURRENT;
-				memset(fact.direction_vector.value, 0,
-					sizeof(fact.direction_vector.value));
-				if (!ProbeLocalFact(build, region_index,
-					fact.direction_vector.value, &fact))
-					return 0;
-			}
+			FillRegionFact(build, region_index, build->bindings[binding].phase,
+				SG_WATER_CAPABILITY_CURRENT,
+				SG_WATER_DIRECTION_COMBINED, &fact);
+			fact.current = currents;
+			fact.flags |= SG_WATER_CAPABILITY_USES_CURRENT;
+			CombinedCurrentVector(currents, fact.direction_vector.value);
+			if (!ProbeLocalFact(build, region_index, command, &fact))
+				return 0;
+		}
 	}
 	return 1;
 }
@@ -1211,6 +1311,7 @@ static int AppendBoundaryDirection(sg_water_build_t *build,
 		Copy3(fact.boundary_witness.value, boundary_witness);
 		Copy3(fact.destination_witness.value, destination_witness);
 		Copy3(fact.direction_vector.value, direction);
+		Copy3(fact.command_vector.value, direction);
 		fact.flags = SG_WATER_CAPABILITY_DIRECTIONAL;
 		if (fact.source_medium != fact.destination_medium)
 			fact.flags |= SG_WATER_CAPABILITY_CHANGES_MEDIUM;
@@ -1227,8 +1328,8 @@ static int AppendBoundaryDirection(sg_water_build_t *build,
 			destination_binding++)
 		{
 			fact.destination_phase = build->bindings[destination_binding].phase;
-			if (!PhaseContainsVelocity(
-				&build->phases[fact.destination_phase], result.velocity))
+			if (!ResultMatchesDestination(build, destination_region,
+				fact.destination_phase, &result))
 				continue;
 			if (!AppendFact(build, &fact))
 				return 0;

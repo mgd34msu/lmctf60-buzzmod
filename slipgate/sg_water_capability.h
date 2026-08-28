@@ -62,6 +62,7 @@ typedef enum sg_water_direction_e
 	SG_WATER_DIRECTION_NEGATIVE_Y,
 	SG_WATER_DIRECTION_POSITIVE_Z,
 	SG_WATER_DIRECTION_NEGATIVE_Z,
+	SG_WATER_DIRECTION_COMBINED,
 	SG_WATER_DIRECTION_BOUNDARY,
 	SG_WATER_DIRECTION_COUNT
 } sg_water_direction_t;
@@ -73,7 +74,8 @@ enum
 	SG_WATER_CAPABILITY_CHANGES_MEDIUM = UINT32_C(1) << 1,
 	SG_WATER_CAPABILITY_USES_CURRENT = UINT32_C(1) << 2,
 	SG_WATER_CAPABILITY_CROSSES_PORTAL = UINT32_C(1) << 3,
-	SG_WATER_CAPABILITY_HOST_PROVEN = UINT32_C(1) << 4
+	SG_WATER_CAPABILITY_HOST_PROVEN = UINT32_C(1) << 4,
+	SG_WATER_CAPABILITY_STRADDLES_FRAME_LAW = UINT32_C(1) << 5
 };
 
 typedef struct sg_water_capability_fact_s
@@ -100,8 +102,17 @@ typedef struct sg_water_capability_fact_s
 	sg_rune_vec3_t boundary_witness;
 	sg_rune_vec3_t destination_witness;
 	sg_rune_vec3_t direction_vector;
+	sg_rune_vec3_t command_vector;
+	sg_rune_vec3_t source_velocity;
 	sg_rune_vec3_t observed_displacement;
 	sg_rune_vec3_t observed_velocity;
+	uint32_t result_pm_flags;
+	uint32_t result_support_model_index;
+	uint64_t result_support_instance_id;
+	sg_host_collision_contents_t result_water_type;
+	uint8_t result_grounded;
+	uint8_t result_water_level;
+	uint8_t result_reserved[2];
 	sg_rune_kernel_parameters_t parameters;
 	sg_water_capability_flags_t flags;
 } sg_water_capability_fact_t;

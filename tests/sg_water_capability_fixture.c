@@ -147,8 +147,10 @@ sg_rune_phase_basis_t WaterFixturePhase(const water_fixture_t *fixture,
 	phase.id.value = SG_RuneModelStableIdFromOrderKey(&phase.order);
 	phase.stance = fixture->cells[region->cell].stance;
 	phase.motion = region->water_level >= 2U ? SG_RUNE_MOTION_SWIMMING :
-		SG_RUNE_MOTION_AIRBORNE;
-	phase.support = SG_RUNE_SUPPORT_NONE;
+		((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) ?
+			SG_RUNE_MOTION_SUPPORTED : SG_RUNE_MOTION_AIRBORNE);
+	phase.support = phase.motion == SG_RUNE_MOTION_SUPPORTED ?
+		SG_RUNE_SUPPORT_SUPPORTED : SG_RUNE_SUPPORT_NONE;
 	phase.medium = MediumFromContents(region->water_type);
 	phase.void_relation = SG_RUNE_VOID_CLEAR;
 	phase.reference_frame = SG_RUNE_FRAME_WORLD;
