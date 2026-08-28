@@ -231,10 +231,14 @@ static void StrategyCopyFailureRule(sg_strategy_failure_rule_t *out,
 	out->try_alternatives = source->try_alternatives;
 	out->max_attempts_per_choice = source->max_attempts_per_choice;
 	out->retry_wake.kind = source->retry_wake.kind;
-	out->retry_wake.fact.kind = source->retry_wake.fact.kind;
-	out->retry_wake.fact.subject_id = source->retry_wake.fact.subject_id;
-	out->retry_wake.fact.team = source->retry_wake.fact.team;
-	out->retry_wake.delay_ms = source->retry_wake.delay_ms;
+	if (source->retry_wake.kind == SG_STRATEGY_RETRY_FACT_REVISION)
+	{
+		out->retry_wake.fact.kind = source->retry_wake.fact.kind;
+		out->retry_wake.fact.subject_id = source->retry_wake.fact.subject_id;
+		out->retry_wake.fact.team = source->retry_wake.fact.team;
+	}
+	else if (source->retry_wake.kind == SG_STRATEGY_RETRY_NOT_BEFORE)
+		out->retry_wake.delay_ms = source->retry_wake.delay_ms;
 	out->exhausted = source->exhausted;
 }
 

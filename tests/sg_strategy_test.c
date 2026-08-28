@@ -250,6 +250,31 @@ static void TestCompilerFailuresAndCanonicalBytes(void)
 	CHECK(Compile(&poisoned, &second));
 	CHECK(memcmp(&first, &second, sizeof(first)) == 0);
 
+	spec.goals[0].failure.max_attempts_per_choice = 2U;
+	spec.goals[0].failure.retry_wake.kind = SG_STRATEGY_RETRY_NEXT_FRAME;
+	CHECK(Compile(&spec, &first));
+	poisoned = spec;
+	memset(&poisoned.goals[0].failure.retry_wake.fact, 0xa5,
+		sizeof(poisoned.goals[0].failure.retry_wake.fact));
+	CHECK(Compile(&poisoned, &second));
+	CHECK(memcmp(&first, &second, sizeof(first)) == 0);
+	CHECK(second.goals[0].failure.retry_wake.fact.kind ==
+		SG_STRATEGY_FACT_ALIVE);
+	CHECK(second.goals[0].failure.retry_wake.fact.subject_id == 0U);
+	CHECK(second.goals[0].failure.retry_wake.fact.team == 0U);
+
+	spec.goals[0].failure.retry_wake.kind =
+		SG_STRATEGY_RETRY_FACT_REVISION;
+	spec.goals[0].failure.retry_wake.fact.kind = SG_STRATEGY_FACT_CUSTOM;
+	spec.goals[0].failure.retry_wake.fact.subject_id = 77U;
+	spec.goals[0].failure.retry_wake.fact.team = 2U;
+	CHECK(Compile(&spec, &first));
+	CHECK(first.goals[0].failure.retry_wake.fact.kind ==
+		SG_STRATEGY_FACT_CUSTOM);
+	CHECK(first.goals[0].failure.retry_wake.fact.subject_id == 77U);
+	CHECK(first.goals[0].failure.retry_wake.fact.team == 2U);
+	CHECK(first.goals[0].failure.retry_wake.delay_ms == 0U);
+
 	memset(&spec, 0, sizeof(spec));
 	spec.plan_id = 13U;
 	spec.goal_count = 2U;
