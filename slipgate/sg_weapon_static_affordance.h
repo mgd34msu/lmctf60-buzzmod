@@ -110,10 +110,10 @@ typedef struct sg_weapon_static_prepare_error_s
 	uint32_t record;
 } sg_weapon_static_prepare_error_t;
 
-/* Transitional exact-byte loader bridge. This authenticates ownership of the
- * immutable decoded snapshot; it is not the future semantic-acceptance
- * publication. Keeping it as one replaceable input leaves resolver geometry
- * and query logic independent of that production integration. */
+/* Provisional exact-byte loader bridge. It authenticates ownership and
+ * lifetime of the immutable decoded snapshot, but does not establish the
+ * future semantic-acceptance publication. Preparation and query-time reload
+ * checks consume this pair through the isolated bridge reader. */
 typedef struct sg_weapon_static_artifact_loader_bridge_s
 {
 	const sg_rune_v2_artifact_loader_t *loader;

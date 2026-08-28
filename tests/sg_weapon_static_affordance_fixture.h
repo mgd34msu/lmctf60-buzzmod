@@ -205,18 +205,75 @@ static int LoadFixtureModel(const built_fixture_t *built,
 	return *snapshot_out != NULL;
 }
 
+static int FixtureSetPhaseSemantics(sg_rune_phase_basis_t *phase,
+	const sg_configuration_cell_t *cell,
+	const sg_configuration_semantic_region_t *region)
+{
+	const sg_configuration_semantic_region_flags_t medium_flags =
+		region->flags & (SG_CONFIGURATION_SEMANTIC_REGION_WATER |
+			SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+			SG_CONFIGURATION_SEMANTIC_REGION_SLIME);
+	const int supported = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U;
+	const int airborne = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE) != 0U;
+
+	if (supported == airborne ||
+		(medium_flags & (medium_flags - 1U)) != 0U)
+		return 0;
+	phase->stance = cell->stance;
+	phase->support = supported ? SG_RUNE_SUPPORT_SUPPORTED :
+		SG_RUNE_SUPPORT_NONE;
+	phase->motion = supported ? SG_RUNE_MOTION_SUPPORTED :
+		(region->water_level >= 2U ? SG_RUNE_MOTION_SWIMMING :
+		 SG_RUNE_MOTION_AIRBORNE);
+	if ((medium_flags & SG_CONFIGURATION_SEMANTIC_REGION_LAVA) != 0U)
+		phase->medium = SG_RUNE_MEDIUM_LAVA;
+	else if ((medium_flags & SG_CONFIGURATION_SEMANTIC_REGION_SLIME) != 0U)
+		phase->medium = SG_RUNE_MEDIUM_SLIME;
+	else if ((medium_flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER) != 0U)
+		phase->medium = SG_RUNE_MEDIUM_WATER;
+	else
+		phase->medium = SG_RUNE_MEDIUM_DRY;
+	phase->void_relation = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) != 0U ?
+		SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
+	phase->reference_frame = SG_RUNE_FRAME_WORLD;
+	phase->mover.value = SG_RUNE_STABLE_ID_NONE;
+	return 1;
+}
+
+static int FixturePhaseMatchesRegion(const sg_rune_phase_basis_t *phase,
+	const sg_configuration_cell_t *cell,
+	const sg_configuration_semantic_region_t *region)
+{
+	sg_rune_phase_basis_t expected;
+
+	memset(&expected, 0, sizeof(expected));
+	if (!FixtureSetPhaseSemantics(&expected, cell, region))
+		return 0;
+	return phase->stance == expected.stance &&
+		phase->motion == expected.motion &&
+		phase->support == expected.support &&
+		phase->medium == expected.medium &&
+		phase->void_relation == expected.void_relation &&
+		phase->reference_frame == expected.reference_frame &&
+		SG_RuneModelStableIdEqual(&phase->mover.value,
+			&expected.mover.value);
+}
+
 static int BuildFixtureModelAndContext(built_fixture_t *built)
 {
 	sg_weapon_static_prepare_input_t prepare;
 	sg_weapon_static_prepare_error_t prepare_error;
 	sg_rune_failure_reason_t reason;
-	uint32_t index, model_count = 0U;
+	uint32_t index, model_count = 0U, phase_count = 0U;
 
 	built->model_planes = calloc((size_t)built->configuration->cell_count * 6U,
 		sizeof(*built->model_planes));
 	built->model_cells = calloc(built->configuration->cell_count,
 		sizeof(*built->model_cells));
-	built->model_phases = calloc(built->configuration->cell_count,
+	built->model_phases = calloc(built->semantics->region_count,
 		sizeof(*built->model_phases));
 	if (!built->model_planes || !built->model_cells || !built->model_phases)
 	{
@@ -226,18 +283,9 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 	for (index = 0U; index < built->configuration->cell_count; index++)
 	{
 		sg_rune_cell_t *cell;
-		sg_rune_phase_basis_t *phase;
-		sg_rune_order_key_t phase_order = {
-			.source_set_identity =
-				built->fixture.identity.source_set_identity,
-			.domain = SG_RUNE_ORDER_PHASE,
-			.source_index = model_count,
-			.local_ordinal = model_count,
-			.variant = 0U
-		};
+		uint32_t region_index;
 
 		cell = &built->model_cells[model_count];
-		phase = &built->model_phases[model_count];
 		cell->id = built->configuration->cells[index].id;
 		if (!SG_RuneModelStableIdToOrderKey(&cell->id.value, &cell->order))
 		{
@@ -251,8 +299,8 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 		cell->geometry.source_ordinal = 0U;
 		cell->boundary_planes.first = model_count * 6U;
 		cell->boundary_planes.count = 6U;
-		cell->phases.first = model_count;
-		cell->phases.count = 1U;
+		cell->phases.first = phase_count;
+		cell->phases.count = 0U;
 		cell->bsp_leaf = built->configuration->cells[index].bsp_leaf;
 		cell->bsp_area = built->configuration->cells[index].bsp_area;
 		cell->bsp_cluster = built->configuration->cells[index].bsp_cluster;
@@ -275,20 +323,49 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 		SetModelPlane(&built->model_planes[model_count * 6U + 5U],
 			built->fixture.identity.source_set_identity, model_count * 6U + 5U,
 			0.0f, 0.0f, -1.0f, -cell->bounds.mins.value[2]);
-		phase->order = phase_order;
-		phase->id.value = SG_RuneModelStableIdFromOrderKey(&phase_order);
-		phase->stance = SG_RUNE_STANCE_STANDING;
-		phase->motion = SG_RUNE_MOTION_SUPPORTED;
-		phase->support = SG_RUNE_SUPPORT_SUPPORTED;
-		phase->medium = SG_RUNE_MEDIUM_DRY;
-		phase->void_relation = SG_RUNE_VOID_CLEAR;
-		phase->reference_frame = SG_RUNE_FRAME_WORLD;
-		phase->mover.value = SG_RUNE_STABLE_ID_NONE;
-		phase->time_quantum_ms = 8U;
-		phase->time_horizon_ms = 8U;
-		if (!SG_RuneModelPhaseValid(phase))
+		for (region_index = 0U;
+			region_index < built->semantics->region_count; region_index++)
 		{
-			fprintf(stderr, "phase invalid %u\n", index);
+			const sg_configuration_semantic_region_t *region =
+				&built->semantics->regions[region_index];
+			sg_rune_phase_basis_t *phase;
+			sg_rune_order_key_t phase_order;
+
+			if (region->cell != index)
+				continue;
+			if (cell->phases.count >= SG_RUNE_MODEL_MAX_CELL_PHASES)
+			{
+				fprintf(stderr, "fixture cell phase overflow %u\n", index);
+				return 0;
+			}
+			phase = &built->model_phases[phase_count];
+			memset(&phase_order, 0, sizeof(phase_order));
+			phase_order.source_set_identity =
+				built->fixture.identity.source_set_identity;
+			phase_order.domain = SG_RUNE_ORDER_PHASE;
+			phase_order.source_index = phase_count;
+			phase_order.local_ordinal = phase_count;
+			phase->order = phase_order;
+			phase->id.value = SG_RuneModelStableIdFromOrderKey(&phase_order);
+			if (!FixtureSetPhaseSemantics(phase,
+					&built->configuration->cells[index], region))
+			{
+				fprintf(stderr, "phase semantics invalid %u\n", region_index);
+				return 0;
+			}
+			phase->time_quantum_ms = 8U;
+			phase->time_horizon_ms = 8U;
+			if (!SG_RuneModelPhaseValid(phase))
+			{
+				fprintf(stderr, "phase invalid %u\n", region_index);
+				return 0;
+			}
+			cell->phases.count++;
+			phase_count++;
+		}
+		if (cell->phases.count == 0U)
+		{
+			fprintf(stderr, "fixture cell has no semantic phase %u\n", index);
 			return 0;
 		}
 		model_count++;
@@ -314,7 +391,7 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 	built->model.cells = built->model_cells;
 	built->model.cell_count = model_count;
 	built->model.phases = built->model_phases;
-	built->model.phase_count = model_count;
+	built->model.phase_count = phase_count;
 	FixtureFillContentIdentity(&built->binding.artifact_identity, 1U);
 	FixtureFillContentIdentity(&built->binding.bsp_identity, 33U);
 	FixtureFillContentIdentity(&built->binding.schema_identity, 65U);
@@ -349,7 +426,25 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 			built->binding.visibility_revision,
 			&built->visibility_publication))
 	{
+		sg_configuration_audit_result_t configuration_audit;
+		sg_configuration_semantics_audit_result_t semantics_audit;
+		sg_static_visibility_audit_result_t visibility_audit;
+
 		fprintf(stderr, "visibility publication failed\n");
+		if (!SG_ConfigurationAudit(&built->fixture.authority,
+				built->configuration, &configuration_audit))
+			fprintf(stderr, "configuration audit=%u record=%u\n",
+				(unsigned int)configuration_audit.code,
+				configuration_audit.record);
+		if (!SG_ConfigurationSemanticsAudit(&built->fixture.authority,
+				built->configuration, built->semantics, &semantics_audit))
+			fprintf(stderr, "semantics audit=%u record=%u\n",
+				(unsigned int)semantics_audit.code, semantics_audit.record);
+		if (!SG_StaticVisibilityAudit(&built->fixture.authority,
+				built->configuration, built->semantics, built->visibility,
+				&visibility_audit))
+			fprintf(stderr, "visibility audit=%u record=%u\n",
+				(unsigned int)visibility_audit.code, visibility_audit.record);
 		return 0;
 	}
 	memset(&prepare, 0, sizeof(prepare));
@@ -493,6 +588,92 @@ static fixture_t Fixture(int wall, int separate_areas, int connect_areas,
 	fixture.identity.physics.max_velocity = 2000;
 	fixture.identity.physics.frame_ms = 100;
 	fixture.identity.physics.substep_ms = 10;
+	return fixture;
+}
+
+static fixture_t WaterLevelFixture(void)
+{
+	fixture_t fixture = Fixture(0, 0, 0, 1, 0, 0.0f);
+	uint32_t leaf, side;
+
+	memset(fixture.planes, 0, sizeof(fixture.planes));
+	memset(fixture.nodes, 0, sizeof(fixture.nodes));
+	memset(fixture.leaves, 0, sizeof(fixture.leaves));
+	memset(fixture.leaf_brushes, 0, sizeof(fixture.leaf_brushes));
+	memset(fixture.models, 0, sizeof(fixture.models));
+	memset(fixture.brushes, 0, sizeof(fixture.brushes));
+	memset(fixture.sides, 0, sizeof(fixture.sides));
+	memset(fixture.visibility_offsets, 0,
+		sizeof(fixture.visibility_offsets));
+	memset(fixture.visibility_bytes, 0, sizeof(fixture.visibility_bytes));
+	SetPlane(&fixture.planes[0], 0.0f, 0.0f, 1.0f, -24.0f);
+	SetPlane(&fixture.planes[1], 0.0f, 0.0f, 1.0f, -12.0f);
+	fixture.planes[0].type = 2U;
+	fixture.planes[1].type = 2U;
+	fixture.nodes[0].plane = 0U;
+	fixture.nodes[0].children[0] = 1;
+	fixture.nodes[0].children[1] = -3;
+	fixture.nodes[1].plane = 1U;
+	fixture.nodes[1].children[0] = -1;
+	fixture.nodes[1].children[1] = -2;
+	fixture.leaves[0].cluster = 0;
+	fixture.leaves[0].area = 1U;
+	fixture.leaves[1].contents = SG_HOST_CONTENTS_WATER;
+	fixture.leaves[1].cluster = 1;
+	fixture.leaves[1].area = 1U;
+	fixture.leaves[2].contents = SG_HOST_CONTENTS_SOLID;
+	fixture.leaves[2].cluster = -1;
+	fixture.leaves[2].area = 1U;
+	for (leaf = 0U; leaf < 3U; leaf++)
+	{
+		fixture.leaves[leaf].first_leaf_brush = leaf;
+		fixture.leaves[leaf].leaf_brush_count = 1U;
+		fixture.leaf_brushes[leaf] = 0U;
+	}
+	SetPlane(&fixture.planes[2], 1.0f, 0.0f, 0.0f, 64.0f);
+	SetPlane(&fixture.planes[3], -1.0f, 0.0f, 0.0f, 64.0f);
+	SetPlane(&fixture.planes[4], 0.0f, 1.0f, 0.0f, 64.0f);
+	SetPlane(&fixture.planes[5], 0.0f, -1.0f, 0.0f, 64.0f);
+	SetPlane(&fixture.planes[6], 0.0f, 0.0f, 1.0f, -24.0f);
+	SetPlane(&fixture.planes[7], 0.0f, 0.0f, -1.0f, 64.0f);
+	fixture.planes[4].type = 1U;
+	fixture.planes[5].type = 1U;
+	fixture.planes[6].type = 2U;
+	fixture.planes[7].type = 2U;
+	fixture.brushes[0].first_side = 0U;
+	fixture.brushes[0].side_count = 6U;
+	fixture.brushes[0].contents = SG_HOST_CONTENTS_SOLID;
+	for (side = 0U; side < 6U; side++)
+	{
+		fixture.sides[side].plane = 2U + side;
+		fixture.sides[side].texinfo = 0U;
+	}
+	fixture.models[0].headnode = 0;
+	Set3(fixture.models[0].mins.value, -64.0f, -64.0f, -64.0f);
+	Set3(fixture.models[0].maxs.value, 64.0f, 64.0f, 96.0f);
+	WriteU32(fixture.visibility_bytes, 2U);
+	WriteU32(fixture.visibility_bytes + 4U, 20U);
+	WriteU32(fixture.visibility_bytes + 8U, 20U);
+	WriteU32(fixture.visibility_bytes + 12U, 21U);
+	WriteU32(fixture.visibility_bytes + 16U, 21U);
+	fixture.visibility_bytes[20] = 3U;
+	fixture.visibility_bytes[21] = 3U;
+	fixture.visibility_offsets[0][0] = 20U;
+	fixture.visibility_offsets[0][1] = 20U;
+	fixture.visibility_offsets[1][0] = 21U;
+	fixture.visibility_offsets[1][1] = 21U;
+	fixture.world.plane_count = 8U;
+	fixture.world.node_count = 2U;
+	fixture.world.leaf_count = 3U;
+	fixture.world.leaf_brush_count = 3U;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = 1U;
+	fixture.world.brush_side_count = 6U;
+	fixture.world.texinfo_count = 1U;
+	fixture.world.visibility.cluster_count = 2U;
+	fixture.world.visibility.byte_count = 22U;
+	fixture.world.area_count = 2U;
+	fixture.world.areaportal_count = 0U;
 	return fixture;
 }
 

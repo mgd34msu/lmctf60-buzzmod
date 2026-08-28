@@ -50,6 +50,43 @@ static sg_weapon_law_input_t WeaponLaw(const built_fixture_t *built)
 	return law;
 }
 
+static sg_rune_phase_ref_t PhaseAtPartition(const built_fixture_t *built,
+	uint32_t partition)
+{
+	sg_rune_phase_ref_t phase = SG_RUNE_PHASE_REF_NONE;
+	const sg_static_visibility_partition_t *visibility_partition;
+	const sg_configuration_semantic_region_t *region;
+	const sg_configuration_cell_t *configuration_cell;
+	uint32_t model_index;
+
+	if (partition >= built->visibility->partition_count)
+		return phase;
+	visibility_partition = &built->visibility->partitions[partition];
+	region = &built->semantics->regions[
+		visibility_partition->configuration_region];
+	configuration_cell = &built->configuration->cells[
+		visibility_partition->configuration_cell];
+	for (model_index = 0U; model_index < built->model.cell_count; model_index++)
+	{
+		const sg_rune_cell_t *model_cell = &built->model_cells[model_index];
+		uint32_t local;
+
+		if (!SG_RuneModelStableIdEqual(&model_cell->id.value,
+				&configuration_cell->id.value))
+			continue;
+		for (local = 0U; local < model_cell->phases.count; local++)
+		{
+			const sg_rune_phase_basis_t *candidate =
+				&built->model_phases[model_cell->phases.first + local];
+
+			if (FixturePhaseMatchesRegion(candidate, configuration_cell, region))
+				return candidate->id;
+		}
+		break;
+	}
+	return phase;
+}
+
 static void CellsAtPoints(const built_fixture_t *built,
 	const float source[3], const float target[3],
 	sg_rune_cell_ref_t *source_cell, sg_rune_cell_ref_t *target_cell,
@@ -57,7 +94,7 @@ static void CellsAtPoints(const built_fixture_t *built,
 {
 	sg_static_visibility_result_t visibility;
 	sg_static_visibility_error_t error;
-	uint32_t source_index, target_index, model_index;
+	uint32_t source_index, target_index;
 
 	CHECK(SG_StaticVisibilityQueryPoints(&built->fixture.authority,
 		&empty_scene, built->configuration, built->semantics,
@@ -78,21 +115,8 @@ static void CellsAtPoints(const built_fixture_t *built,
 		visibility.destination_partition].configuration_cell;
 	*source_cell = built->configuration->cells[source_index].id;
 	*target_cell = built->configuration->cells[target_index].id;
-	memset(source_phase, 0, sizeof(*source_phase));
-	memset(target_phase, 0, sizeof(*target_phase));
-	for (model_index = 0U; model_index < built->model.cell_count; model_index++)
-	{
-		if (SG_RuneModelStableIdEqual(
-				&built->model_cells[model_index].id.value,
-				&source_cell->value))
-			*source_phase = built->model_phases[
-				built->model_cells[model_index].phases.first].id;
-		if (SG_RuneModelStableIdEqual(
-				&built->model_cells[model_index].id.value,
-				&target_cell->value))
-			*target_phase = built->model_phases[
-				built->model_cells[model_index].phases.first].id;
-	}
+	*source_phase = PhaseAtPartition(built, visibility.source_partition);
+	*target_phase = PhaseAtPartition(built, visibility.destination_partition);
 }
 
 static sg_weapon_static_query_t Query(const built_fixture_t *built,
@@ -114,6 +138,37 @@ static sg_weapon_static_query_t Query(const built_fixture_t *built,
 	input.target_cell = target_cell;
 	input.source_phase = source_phase;
 	input.target_phase = target_phase;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		input.source_origin.value[axis] = source[axis];
+		input.target_origin.value[axis] = target[axis];
+	}
+	input.target_bounds = *target_bounds;
+	input.requested_relations = requested;
+	memset(&query, 0, sizeof(query));
+	CHECK(SG_WeaponStaticQueryPrepare(&input, &query));
+	return query;
+}
+
+static sg_weapon_static_query_t QueryForState(const built_fixture_t *built,
+	const float source[3], const float target[3],
+	const sg_rune_bounds_t *target_bounds,
+	const sg_rune_cell_ref_t *source_cell,
+	const sg_rune_phase_ref_t *source_phase,
+	const sg_rune_cell_ref_t *target_cell,
+	const sg_rune_phase_ref_t *target_phase,
+	sg_weapon_static_relation_t requested)
+{
+	sg_weapon_static_query_input_t input;
+	sg_weapon_static_query_t query;
+	uint32_t axis;
+
+	memset(&input, 0, sizeof(input));
+	input.binding = built->binding;
+	input.source_cell = *source_cell;
+	input.source_phase = *source_phase;
+	input.target_cell = *target_cell;
+	input.target_phase = *target_phase;
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		input.source_origin.value[axis] = source[axis];
@@ -1266,6 +1321,423 @@ static void CheckRejectedTransaction(const built_fixture_t *built,
 	CHECK(memcmp(&output, &before, sizeof(output)) == 0);
 }
 
+static uint32_t ModelPhaseIndex(const sg_rune_model_t *model,
+	const sg_rune_phase_ref_t *reference)
+{
+	uint32_t index;
+
+	for (index = 0U; index < model->phase_count; index++)
+		if (SG_RuneModelStableIdEqual(&model->phases[index].id.value,
+				&reference->value))
+			return index;
+	return UINT32_MAX;
+}
+
+static void SetTestMechanism(sg_rune_mechanism_t *mechanism,
+	const built_fixture_t *built, const sg_rune_cell_ref_t *entry_cell)
+{
+	sg_rune_order_key_t order;
+	uint32_t cell;
+
+	memset(mechanism, 0, sizeof(*mechanism));
+	memset(&order, 0, sizeof(order));
+	order.source_set_identity = built->model.identity.source_set_identity;
+	order.domain = SG_RUNE_ORDER_MECHANISM;
+	mechanism->order = order;
+	mechanism->id.value = SG_RuneModelStableIdFromOrderKey(&order);
+	mechanism->kind = SG_RUNE_MECHANISM_DOOR;
+	mechanism->entry_cell = *entry_cell;
+	mechanism->exit_cell = SG_RUNE_CELL_REF_NONE;
+	for (cell = 0U; cell < built->model.cell_count; cell++)
+		if (!SG_RuneModelStableIdEqual(&built->model.cells[cell].id.value,
+				&entry_cell->value))
+		{
+			mechanism->exit_cell = built->model.cells[cell].id;
+			break;
+		}
+	mechanism->activation_landmark = SG_RUNE_LANDMARK_REF_NONE;
+	mechanism->entity.index = 0U;
+	mechanism->entity.spawn_ordinal = 0U;
+}
+
+static void CheckAlteredPhaseRejected(const built_fixture_t *built,
+	const sg_weapon_static_query_t *query, sg_rune_model_t *model)
+{
+	sg_rune_v2_artifact_loader_t loader =
+		SG_RUNE_V2_ARTIFACT_LOADER_INITIALIZER;
+	const sg_rune_v2_artifact_snapshot_t *snapshot = NULL;
+	sg_weapon_static_prepare_input_t prepare;
+	sg_weapon_static_prepare_error_t prepare_error;
+	sg_weapon_static_context_t *context = NULL;
+	sg_weapon_static_affordance_t before, output;
+	sg_weapon_static_affordance_error_t error;
+	sg_weapon_law_input_t law = WeaponLaw(built);
+
+	CHECK(SG_RuneModelValidate(model, &built->model_evidence) ==
+		SG_RUNE_FAILURE_NONE);
+	CHECK(LoadFixtureModel(built, model, &built->model_evidence,
+		&loader, &snapshot));
+	if (!snapshot)
+	{
+		SG_RuneV2ArtifactLoaderDestroy(&loader);
+		return;
+	}
+	memset(&prepare, 0, sizeof(prepare));
+	prepare.artifact.loader = &loader;
+	prepare.artifact.snapshot = snapshot;
+	prepare.visibility_publication = built->visibility_publication;
+	CHECK(SG_WeaponStaticContextPrepare(&prepare, &context, &prepare_error));
+	if (context)
+	{
+		memset(&before, 0xa5, sizeof(before));
+		output = before;
+		CHECK(!SG_WeaponStaticAffordanceResolve(context, &empty_scene, query,
+			&law, SG_WEAPON_PROFILE_MACHINEGUN, &output, &error));
+		CHECK(error.code ==
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+		CHECK(memcmp(&output, &before, sizeof(output)) == 0);
+	}
+	SG_WeaponStaticContextDestroy(context);
+	SG_RuneV2ArtifactLoaderDestroy(&loader);
+}
+
+static void TestPosePhaseSemanticBinding(void)
+{
+	built_fixture_t built;
+	float point[3];
+	sg_rune_bounds_t bounds;
+	sg_weapon_static_query_t query;
+	sg_weapon_static_affordance_t affordance;
+	sg_weapon_static_affordance_error_t error;
+	sg_weapon_profile_t machinegun;
+	sg_rune_phase_basis_t *phases = NULL;
+	sg_rune_model_t model;
+	sg_rune_mechanism_t mechanism;
+	uint32_t partition, phase_index, mismatch;
+	int found = 0;
+
+	CHECK(BuildFixture(&built, 0, 0, 0, 1, 0, 0.0f));
+	if (!built.context)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	for (partition = 0U; partition < built.visibility->partition_count;
+		partition++)
+	{
+		const sg_static_visibility_partition_t *candidate =
+			&built.visibility->partitions[partition];
+
+		if (built.configuration->cells[
+				candidate->configuration_cell].stance !=
+			SG_RUNE_STANCE_CROUCHING)
+			continue;
+		memcpy(point, built.semantics->regions[
+			candidate->configuration_region].interior_witness.value,
+			sizeof(point));
+		found = 1;
+		break;
+	}
+	CHECK(found);
+	if (!found)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	bounds = BoundsAt(point, 1.0f);
+	query = Query(&built, point, point, &bounds,
+		SG_WEAPON_STATIC_DIRECT_VISIBILITY);
+	machinegun = ResolveProfile(&built, SG_WEAPON_PROFILE_MACHINEGUN);
+	CHECK(ResolveAffordance(&built, &empty_scene, &query, &machinegun,
+		&affordance, &error));
+	CHECK((affordance.proven_relations &
+		SG_WEAPON_STATIC_DIRECT_VISIBILITY) != 0U);
+	phase_index = ModelPhaseIndex(&built.model, &query.source_phase);
+	CHECK(phase_index != UINT32_MAX);
+	phases = malloc((size_t)built.model.phase_count * sizeof(*phases));
+	CHECK(phases != NULL);
+	if (!phases || phase_index == UINT32_MAX)
+	{
+		free(phases);
+		DestroyFixture(&built);
+		return;
+	}
+	for (mismatch = 0U; mismatch < 5U; mismatch++)
+	{
+		sg_rune_phase_basis_t *phase;
+
+		memcpy(phases, built.model.phases,
+			(size_t)built.model.phase_count * sizeof(*phases));
+		model = built.model;
+		model.phases = phases;
+		phase = &phases[phase_index];
+		switch (mismatch)
+		{
+		case 0U:
+			phase->stance = phase->stance == SG_RUNE_STANCE_STANDING ?
+				SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+			break;
+		case 1U:
+			/* Motion and support are structurally coupled. */
+			if (phase->motion == SG_RUNE_MOTION_SUPPORTED)
+			{
+				phase->motion = SG_RUNE_MOTION_AIRBORNE;
+				phase->support = SG_RUNE_SUPPORT_NONE;
+			}
+			else
+			{
+				phase->motion = SG_RUNE_MOTION_SUPPORTED;
+				phase->support = SG_RUNE_SUPPORT_SUPPORTED;
+			}
+			break;
+		case 2U:
+			phase->medium = phase->medium == SG_RUNE_MEDIUM_WATER ?
+				SG_RUNE_MEDIUM_LAVA : SG_RUNE_MEDIUM_WATER;
+			break;
+		case 3U:
+			phase->void_relation =
+				phase->void_relation == SG_RUNE_VOID_CLEAR ?
+				SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
+			break;
+		case 4U:
+			/* Mover support, frame, and ownership are contract-coupled. */
+			SetTestMechanism(&mechanism, &built, &query.source_cell);
+			model.mechanisms = &mechanism;
+			model.mechanism_count = 1U;
+			phase->motion = SG_RUNE_MOTION_SUPPORTED;
+			phase->support = SG_RUNE_SUPPORT_MOVER;
+			phase->reference_frame = SG_RUNE_FRAME_MOVER_RELATIVE;
+			phase->mover.value = mechanism.id.value;
+			break;
+		default:
+			break;
+		}
+		CheckAlteredPhaseRejected(&built, &query, &model);
+	}
+	free(phases);
+	DestroyFixture(&built);
+}
+
+static void TestAmbiguousSemanticPartitionRejected(void)
+{
+	built_fixture_t built;
+	float point[3] = { 0.0f, 0.0f, 0.0f };
+	sg_rune_bounds_t bounds;
+	sg_weapon_static_query_t query;
+	sg_weapon_profile_t machinegun;
+	sg_rune_cell_ref_t cell = SG_RUNE_CELL_REF_NONE;
+	sg_rune_phase_ref_t phase = SG_RUNE_PHASE_REF_NONE;
+	uint32_t partition, compatible = 0U;
+	int found = 0;
+
+	CHECK(BuildPreparedFixture(&built,
+		PartitionScalingFixture(SG_WEAPON_FIXTURE_PARTITION_BRUSHES)));
+	if (!built.context)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	for (partition = 0U;
+		partition < built.visibility->partition_count && !found; partition++)
+	{
+		const sg_static_visibility_partition_t *owner =
+			&built.visibility->partitions[partition];
+		const sg_configuration_semantic_region_t *owner_region =
+			&built.semantics->regions[owner->configuration_region];
+		sg_rune_phase_ref_t owner_phase = PhaseAtPartition(&built, partition);
+		uint32_t owner_phase_index = ModelPhaseIndex(&built.model, &owner_phase);
+		uint32_t face_local;
+
+		if (owner_phase_index == UINT32_MAX)
+			continue;
+
+		for (face_local = 0U;
+			face_local < owner_region->face_count && !found; face_local++)
+		{
+			const sg_configuration_semantic_face_t *face =
+				&built.semantics->faces[
+					owner_region->first_face + face_local];
+			uint32_t vertex_local;
+
+			for (vertex_local = 0U;
+				vertex_local < face->vertex_count && !found; vertex_local++)
+			{
+				const sg_rune_vec3_t *vertex = &built.semantics->vertices[
+					face->first_vertex + vertex_local];
+				uint32_t candidate;
+
+				compatible = 0U;
+				for (candidate = 0U;
+					candidate < built.visibility->partition_count; candidate++)
+				{
+					const sg_static_visibility_partition_t *other =
+						&built.visibility->partitions[candidate];
+					const sg_configuration_semantic_region_t *other_region;
+					uint32_t tested = 0U;
+
+					if (other->configuration_cell !=
+							owner->configuration_cell)
+						continue;
+					other_region = &built.semantics->regions[
+						other->configuration_region];
+					if (!FixturePhaseMatchesRegion(
+							&built.model.phases[owner_phase_index],
+							&built.configuration->cells[
+								owner->configuration_cell], other_region))
+						continue;
+					if (SG_StaticVisibilityPointInPartition(built.semantics,
+							built.visibility, candidate, vertex->value, &tested))
+						compatible++;
+				}
+				if (compatible > 1U)
+				{
+					memcpy(point, vertex->value, sizeof(point));
+					cell = built.configuration->cells[
+						owner->configuration_cell].id;
+					phase = owner_phase;
+					found = 1;
+				}
+			}
+		}
+	}
+	CHECK(found);
+	CHECK(compatible > 1U);
+	if (found)
+	{
+		bounds = BoundsAt(point, 1.0f);
+		query = QueryForState(&built, point, point, &bounds, &cell, &phase,
+			&cell, &phase, SG_WEAPON_STATIC_DIRECT_VISIBILITY);
+		machinegun = ResolveProfile(&built, SG_WEAPON_PROFILE_MACHINEGUN);
+		CheckRejectedTransaction(&built, &query, &machinegun,
+			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
+	}
+	DestroyFixture(&built);
+}
+
+static void TestWaterLevelMotionBinding(void)
+{
+	built_fixture_t built;
+	uint32_t shallow = UINT32_MAX, submerged = UINT32_MAX;
+	uint32_t supported_shallow = UINT32_MAX, dry_airborne = UINT32_MAX;
+	uint32_t partition;
+	uint32_t cases[4];
+	uint32_t case_index;
+
+	CHECK(BuildPreparedFixture(&built, WaterLevelFixture()));
+	if (!built.context)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	for (partition = 0U; partition < built.visibility->partition_count;
+		partition++)
+	{
+		const sg_configuration_semantic_region_t *region =
+			&built.semantics->regions[built.visibility->partitions[
+				partition].configuration_region];
+
+		if ((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE) != 0U &&
+			(region->flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER) != 0U &&
+			region->water_level == 1U && shallow == UINT32_MAX)
+			shallow = partition;
+		if ((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE) != 0U &&
+			(region->flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER) != 0U &&
+			region->water_level >= 2U && submerged == UINT32_MAX)
+			submerged = partition;
+		if ((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U &&
+			(region->flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER) != 0U &&
+			region->water_level == 1U && supported_shallow == UINT32_MAX)
+			supported_shallow = partition;
+		if ((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE) != 0U &&
+			(region->flags & (SG_CONFIGURATION_SEMANTIC_REGION_WATER |
+				SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+				SG_CONFIGURATION_SEMANTIC_REGION_SLIME)) == 0U &&
+			region->water_level == 0U && dry_airborne == UINT32_MAX)
+			dry_airborne = partition;
+	}
+	CHECK(shallow != UINT32_MAX);
+	CHECK(submerged != UINT32_MAX);
+	CHECK(supported_shallow != UINT32_MAX);
+	CHECK(dry_airborne != UINT32_MAX);
+	if (shallow == UINT32_MAX || submerged == UINT32_MAX ||
+		supported_shallow == UINT32_MAX || dry_airborne == UINT32_MAX)
+	{
+		DestroyFixture(&built);
+		return;
+	}
+	cases[0] = shallow;
+	cases[1] = submerged;
+	cases[2] = supported_shallow;
+	cases[3] = dry_airborne;
+	for (case_index = 0U; case_index < 4U; case_index++)
+	{
+		const sg_static_visibility_partition_t *visibility_partition =
+			&built.visibility->partitions[cases[case_index]];
+		const sg_configuration_semantic_region_t *region =
+			&built.semantics->regions[
+				visibility_partition->configuration_region];
+		const sg_rune_cell_ref_t cell = built.configuration->cells[
+			visibility_partition->configuration_cell].id;
+		const sg_rune_phase_ref_t phase =
+			PhaseAtPartition(&built, cases[case_index]);
+		const uint32_t phase_index = ModelPhaseIndex(&built.model, &phase);
+		const sg_rune_motion_t expected = case_index == 1U ?
+			SG_RUNE_MOTION_SWIMMING : (case_index == 2U ?
+			 SG_RUNE_MOTION_SUPPORTED : SG_RUNE_MOTION_AIRBORNE);
+		const sg_rune_support_t expected_support = case_index == 2U ?
+			SG_RUNE_SUPPORT_SUPPORTED : SG_RUNE_SUPPORT_NONE;
+		const sg_rune_medium_t expected_medium = case_index == 3U ?
+			SG_RUNE_MEDIUM_DRY : SG_RUNE_MEDIUM_WATER;
+		float point[3];
+		sg_rune_bounds_t bounds;
+		sg_weapon_static_query_t query;
+		sg_weapon_static_affordance_t affordance;
+		sg_weapon_static_affordance_error_t error;
+		sg_weapon_profile_t machinegun;
+		sg_rune_phase_basis_t *phases;
+		sg_rune_model_t model;
+
+		CHECK(phase_index != UINT32_MAX);
+		if (phase_index == UINT32_MAX)
+			continue;
+		CHECK(built.model.phases[phase_index].motion == expected);
+		CHECK(built.model.phases[phase_index].support == expected_support);
+		CHECK(built.model.phases[phase_index].medium == expected_medium);
+		memcpy(point, region->interior_witness.value, sizeof(point));
+		bounds = BoundsAt(point, 1.0f);
+		query = QueryForState(&built, point, point, &bounds, &cell, &phase,
+			&cell, &phase, SG_WEAPON_STATIC_DIRECT_VISIBILITY);
+		machinegun = ResolveProfile(&built, SG_WEAPON_PROFILE_MACHINEGUN);
+		CHECK(ResolveAffordance(&built, &empty_scene, &query, &machinegun,
+			&affordance, &error));
+		phases = malloc((size_t)built.model.phase_count * sizeof(*phases));
+		CHECK(phases != NULL);
+		if (!phases)
+			continue;
+		memcpy(phases, built.model.phases,
+			(size_t)built.model.phase_count * sizeof(*phases));
+		model = built.model;
+		model.phases = phases;
+		if (case_index == 0U)
+			phases[phase_index].motion = SG_RUNE_MOTION_SWIMMING;
+		else if (case_index == 1U)
+			phases[phase_index].motion = SG_RUNE_MOTION_AIRBORNE;
+		else if (case_index == 2U)
+		{
+			phases[phase_index].motion = SG_RUNE_MOTION_AIRBORNE;
+			phases[phase_index].support = SG_RUNE_SUPPORT_NONE;
+		}
+		else
+		{
+			phases[phase_index].motion = SG_RUNE_MOTION_SUPPORTED;
+			phases[phase_index].support = SG_RUNE_SUPPORT_SUPPORTED;
+		}
+		CheckAlteredPhaseRejected(&built, &query, &model);
+		free(phases);
+	}
+	DestroyFixture(&built);
+}
+
 static void CheckLawRejectedTransaction(const built_fixture_t *built,
 	const sg_weapon_static_query_t *query, const sg_weapon_law_input_t *law,
 	sg_weapon_profile_id_t profile_id,
@@ -1612,8 +2084,11 @@ static void TestErrorStrings(void)
 
 int main(void)
 {
+	TestWaterLevelMotionBinding();
 	TestSurfacePreparationScaling();
 	TestPartitionPointIndexScaling();
+	TestPosePhaseSemanticBinding();
+	TestAmbiguousSemanticPartitionRejected();
 	TestEveryProfileFamilyAndEffect();
 	TestOcclusionImpactSplashBounceAndSky();
 	TestConditionalMoverAndAreaPortal();

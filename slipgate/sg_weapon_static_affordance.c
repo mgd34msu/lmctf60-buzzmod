@@ -21,6 +21,11 @@ typedef struct sg_weapon_static_partition_ref_s
 {
 	uint32_t partition;
 	sg_rune_bounds_t bounds;
+	sg_rune_stance_t stance;
+	sg_rune_motion_t motion;
+	sg_rune_support_t support;
+	sg_rune_medium_t medium;
+	sg_rune_void_relation_t void_relation;
 } sg_weapon_static_partition_ref_t;
 
 typedef struct sg_weapon_static_partition_node_s
@@ -29,6 +34,11 @@ typedef struct sg_weapon_static_partition_node_s
 	uint32_t left;
 	uint32_t right;
 	uint32_t partition;
+	sg_rune_stance_t stance;
+	sg_rune_motion_t motion;
+	sg_rune_support_t support;
+	sg_rune_medium_t medium;
+	sg_rune_void_relation_t void_relation;
 } sg_weapon_static_partition_node_t;
 
 typedef struct sg_weapon_static_surface_ref_s
@@ -60,8 +70,7 @@ struct sg_weapon_static_context_s
 	const sg_static_visibility_t *visibility;
 	const sg_rune_model_t *model;
 	/* Provisional bridge lifetime/authenticity state only. */
-	const sg_rune_v2_artifact_loader_t *artifact_loader;
-	const sg_rune_v2_artifact_snapshot_t *artifact_snapshot;
+	sg_weapon_static_artifact_loader_bridge_t artifact;
 	const sg_static_visibility_publication_t *visibility_publication;
 	sg_weapon_static_cell_binding_t *cells;
 	uint32_t cell_count;
@@ -427,6 +436,43 @@ static void BoundsInclude(sg_rune_bounds_t *bounds,
 	}
 }
 
+static int SetPartitionSemantics(
+	const sg_configuration_cell_t *configuration_cell,
+	const sg_configuration_semantic_region_t *region,
+	sg_weapon_static_partition_ref_t *partition)
+{
+	const sg_configuration_semantic_region_flags_t medium_flags =
+		region->flags & (SG_CONFIGURATION_SEMANTIC_REGION_WATER |
+			SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+			SG_CONFIGURATION_SEMANTIC_REGION_SLIME);
+	const int supported = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U;
+	const int airborne = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE) != 0U;
+
+	if (supported == airborne ||
+		(medium_flags & (medium_flags - 1U)) != 0U)
+		return 0;
+	partition->stance = configuration_cell->stance;
+	if ((medium_flags & SG_CONFIGURATION_SEMANTIC_REGION_LAVA) != 0U)
+		partition->medium = SG_RUNE_MEDIUM_LAVA;
+	else if ((medium_flags & SG_CONFIGURATION_SEMANTIC_REGION_SLIME) != 0U)
+		partition->medium = SG_RUNE_MEDIUM_SLIME;
+	else if ((medium_flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER) != 0U)
+		partition->medium = SG_RUNE_MEDIUM_WATER;
+	else
+		partition->medium = SG_RUNE_MEDIUM_DRY;
+	partition->support = supported ? SG_RUNE_SUPPORT_SUPPORTED :
+		SG_RUNE_SUPPORT_NONE;
+	partition->motion = supported ? SG_RUNE_MOTION_SUPPORTED :
+		(region->water_level >= 2U ? SG_RUNE_MOTION_SWIMMING :
+		 SG_RUNE_MOTION_AIRBORNE);
+	partition->void_relation = (region->flags &
+		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) != 0U ?
+		SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
+	return 1;
+}
+
 static uint32_t BuildBvhNode(sg_weapon_static_context_t *context,
 	uint32_t first, uint32_t count)
 {
@@ -476,7 +522,15 @@ static uint32_t BuildPartitionNode(sg_weapon_static_context_t *context,
 	}
 	if (count == 1U)
 	{
-		node->partition = context->partition_refs[first].partition;
+		const sg_weapon_static_partition_ref_t *partition =
+			&context->partition_refs[first];
+
+		node->partition = partition->partition;
+		node->stance = partition->stance;
+		node->motion = partition->motion;
+		node->support = partition->support;
+		node->medium = partition->medium;
+		node->void_relation = partition->void_relation;
 		return node_index;
 	}
 	index = count / 2U;
@@ -672,8 +726,7 @@ int SG_WeaponStaticContextPrepare(
 	context->semantics = semantics;
 	context->visibility = visibility;
 	context->model = model;
-	context->artifact_loader = input->artifact.loader;
-	context->artifact_snapshot = artifact_snapshot;
+	context->artifact = input->artifact;
 	context->visibility_publication = input->visibility_publication;
 	context->cell_count = model->cell_count;
 	context->partition_count = visibility->partition_count;
@@ -820,6 +873,16 @@ int SG_WeaponStaticContextPrepare(
 				context->partition_refs[offset].partition = partition;
 				context->partition_refs[offset].bounds =
 					semantics->regions[region].bounds;
+				if (!SetPartitionSemantics(
+						&configuration->cells[
+							cell->configuration_cell],
+						&semantics->regions[region],
+						&context->partition_refs[offset]))
+				{
+					SetPrepareError(error_out,
+						SG_WEAPON_STATIC_PREPARE_ERROR_SOURCE_MISMATCH);
+					goto failure;
+				}
 				context->partition_preparation_work++;
 			}
 			PartitionRefSort(&context->partition_refs[cell->first_partition],
@@ -913,9 +976,30 @@ static int PointInsideBounds(const sg_rune_bounds_t *bounds,
 	return 1;
 }
 
+static int StableIdIsNone(const sg_rune_stable_id_t *id)
+{
+	return id->source_set_identity == UINT64_MAX && id->high == UINT64_MAX &&
+		id->low == UINT64_MAX;
+}
+
+static int PhaseMatchesPartition(const sg_rune_phase_basis_t *phase,
+	const sg_weapon_static_partition_node_t *partition)
+{
+	/* Static semantic regions carry no authenticated mechanism ownership.
+	 * Mover-relative poses therefore fail closed at this boundary. */
+	return phase->stance == partition->stance &&
+		phase->motion == partition->motion &&
+		phase->support == partition->support &&
+		phase->medium == partition->medium &&
+		phase->void_relation == partition->void_relation &&
+		phase->reference_frame == SG_RUNE_FRAME_WORLD &&
+		StableIdIsNone(&phase->mover.value);
+}
+
 static void FindPointPartitionNode(
 	const sg_weapon_static_context_t *context, uint32_t node_index,
-	const float point[3], uint32_t *best_partition,
+	const float point[3], const sg_rune_phase_basis_t *phase,
+	uint32_t *best_partition, uint32_t *matches,
 	uint32_t *nodes_visited, uint32_t *bounds_overlaps,
 	uint32_t *face_tests)
 {
@@ -932,15 +1016,20 @@ static void FindPointPartitionNode(
 
 		if (SG_StaticVisibilityPointInPartition(context->semantics,
 				context->visibility, node->partition, point, &tested) &&
-			node->partition < *best_partition)
-			*best_partition = node->partition;
+			(!phase || PhaseMatchesPartition(phase, node)))
+		{
+			if (*matches != UINT32_MAX)
+				(*matches)++;
+			if (node->partition < *best_partition)
+				*best_partition = node->partition;
+		}
 		*face_tests += tested;
 		return;
 	}
-	FindPointPartitionNode(context, node->left, point, best_partition,
-		nodes_visited, bounds_overlaps, face_tests);
-	FindPointPartitionNode(context, node->right, point, best_partition,
-		nodes_visited, bounds_overlaps, face_tests);
+	FindPointPartitionNode(context, node->left, point, phase, best_partition,
+		matches, nodes_visited, bounds_overlaps, face_tests);
+	FindPointPartitionNode(context, node->right, point, phase, best_partition,
+		matches, nodes_visited, bounds_overlaps, face_tests);
 }
 
 static int FindPointPartition(const sg_weapon_static_context_t *context,
@@ -949,10 +1038,28 @@ static int FindPointPartition(const sg_weapon_static_context_t *context,
 	uint32_t *bounds_overlaps, uint32_t *face_tests)
 {
 	uint32_t best = SG_STATIC_VISIBILITY_INDEX_NONE;
+	uint32_t matches = 0U;
 
-	FindPointPartitionNode(context, binding->partition_root, point, &best,
-		nodes_visited, bounds_overlaps, face_tests);
+	FindPointPartitionNode(context, binding->partition_root, point, NULL, &best,
+		&matches, nodes_visited, bounds_overlaps, face_tests);
 	if (best == SG_STATIC_VISIBILITY_INDEX_NONE)
+		return 0;
+	*partition_out = best;
+	return 1;
+}
+
+static int FindPosePartition(const sg_weapon_static_context_t *context,
+	const sg_weapon_static_cell_binding_t *binding,
+	const sg_rune_phase_basis_t *phase, const float point[3],
+	uint32_t *partition_out, uint32_t *nodes_visited,
+	uint32_t *bounds_overlaps, uint32_t *face_tests)
+{
+	uint32_t best = SG_STATIC_VISIBILITY_INDEX_NONE;
+	uint32_t matches = 0U;
+
+	FindPointPartitionNode(context, binding->partition_root, point, phase,
+		&best, &matches, nodes_visited, bounds_overlaps, face_tests);
+	if (matches != 1U || best == SG_STATIC_VISIBILITY_INDEX_NONE)
 		return 0;
 	*partition_out = best;
 	return 1;
@@ -976,7 +1083,8 @@ static int LocatePose(const sg_weapon_static_context_t *context,
 		span->count > context->model->phase_count - span->first ||
 		phase < span->first || phase - span->first >= span->count)
 		return 0;
-	return FindPointPartition(context, binding, point, partition_out,
+	return FindPosePartition(context, binding, &context->model->phases[phase],
+		point, partition_out,
 		nodes_visited_out, bounds_overlaps_out, face_tests_out);
 }
 
@@ -1890,8 +1998,7 @@ int SG_WeaponStaticAffordanceResolve(
 			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_ARGUMENT, NULL);
 		return 0;
 	}
-	if (SG_RuneV2ArtifactLoaderSnapshot(context->artifact_loader) !=
-			context->artifact_snapshot ||
+	if (!ReadArtifactLoaderBridge(&context->artifact) ||
 		!SG_StaticVisibilityPublicationRead(
 			context->visibility_publication, &published_authority,
 			&published_configuration, &published_semantics,
