@@ -6,9 +6,9 @@ release graphs. A Sol High agent produced a competing graph and reconciled all
 four results against the source and the 51 requirements in
 `PROJECT-COMPLETION-PLAN.md`.
 
-The graph has no arbitrary agent-count limit. Any ready node can receive a Luna
-Max implementation agent when that agent has isolated writable ownership. Sol
-High reviews each integrated gate against the diff and its verification
+The graph has no arbitrary agent-count limit. Assign each ready node to a Sol
+High implementation agent when that agent has isolated writable ownership.
+Root reviews each integrated gate against the diff and its verification
 evidence.
 
 ## Core construction graph
@@ -149,9 +149,9 @@ independently readable new-model artifact
 This branch can use synthetic structures before the generator exists. It joins
 the static generator at artifact integration.
 
-## Luna Max implementation ownership
+## Sol High implementation ownership
 
-Any ready node can receive its own Luna Max implementation agent. The shared
+Any ready node can receive its own Sol High implementation agent. The shared
 files require designated integrators.
 
 | Integrator | Exclusive ownership |
@@ -166,9 +166,9 @@ files require designated integrators.
 | Build | `GNUmakefile`, `Makefile`, generated source lists, and final test aggregation |
 | Documentation | `PROJECT-COMPLETION-PLAN.md`, `ARCHITECTURE.md`, tool documentation, and catalog status |
 
-Luna Max agents implement isolated modules and tests. They hand completed
-branches to the relevant integrator. Sol High reviews each integrated gate
-against the actual diff and runtime evidence.
+Sol High agents implement isolated modules and tests. They hand completed
+branches to the relevant integrator. Root reviews each integrated gate against
+the actual diff and runtime evidence.
 
 ## Integration and release graph
 
