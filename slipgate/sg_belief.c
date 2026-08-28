@@ -238,15 +238,74 @@ static int BeliefStableIdEqual(const sg_rune_stable_id_t *left,
 		left->high == right->high && left->low == right->low;
 }
 
+typedef struct belief_step_bounds_s
+{
+	float displacement_min[3];
+	float displacement_max[3];
+	float duration_min_ms;
+	float duration_max_ms;
+} belief_step_bounds_t;
+
+static int BeliefIntervalValid(const sg_rune_interval_t *interval,
+	int nonnegative)
+{
+	return interval && SG_BeliefFloatValid(interval->min_value) &&
+		SG_BeliefFloatValid(interval->max_value) &&
+		interval->min_value <= interval->max_value &&
+		(!nonnegative || interval->min_value >= 0.0f);
+}
+
+static int BeliefBoundsSetDisplacement(belief_step_bounds_t *bounds,
+	const sg_rune_interval3_t *displacement)
+{
+	const sg_rune_interval_t *axes[3];
+	size_t axis;
+
+	if (!bounds || !displacement)
+		return 0;
+	axes[0] = &displacement->x;
+	axes[1] = &displacement->y;
+	axes[2] = &displacement->z;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		if (!BeliefIntervalValid(axes[axis], 0))
+			return 0;
+		bounds->displacement_min[axis] = axes[axis]->min_value;
+		bounds->displacement_max[axis] = axes[axis]->max_value;
+	}
+	return 1;
+}
+
+static int BeliefFloatAdd(float left, float right, float *out)
+{
+	float sum;
+
+	if (!out || !SG_BeliefFloatValid(left) || !SG_BeliefFloatValid(right))
+		return 0;
+	sum = left + right;
+	if (!SG_BeliefFloatValid(sum))
+		return 0;
+	*out = sum;
+	return 1;
+}
+
 static int BeliefRuneRecordMatches(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	sg_belief_horizon_step_kind_t kind, uint32_t record_index,
-	const sg_phase_coordinate_t *from, const sg_phase_coordinate_t *to)
+	const sg_phase_coordinate_t *from, const sg_phase_coordinate_t *to,
+	belief_step_bounds_t *bounds)
 {
 	const sg_rune_model_t *model = snapshot->model;
 	const sg_rune_stable_id_t *from_id =
 		&model->phases[from->phase_id].id.value;
 	const sg_rune_stable_id_t *to_id = &model->phases[to->phase_id].id.value;
+	const sg_rune_stable_id_t *from_cell_id =
+		&model->cells[from->cell_id].id.value;
+	const sg_rune_stable_id_t *to_cell_id =
+		&model->cells[to->cell_id].id.value;
+	belief_step_bounds_t matched;
+
+	memset(&matched, 0, sizeof(matched));
 
 	if (kind == SG_BELIEF_HORIZON_PHASE_TRANSITION)
 	{
@@ -255,10 +314,21 @@ static int BeliefRuneRecordMatches(
 		    !model->phase_transitions)
 			return 0;
 		transition = &model->phase_transitions[record_index];
-		return transition->kind > SG_RUNE_PHASE_TRANSITION_NONE &&
-			transition->kind < SG_RUNE_PHASE_TRANSITION_KIND_COUNT &&
-			BeliefStableIdEqual(&transition->source_phase.value, from_id) &&
-			BeliefStableIdEqual(&transition->destination_phase.value, to_id);
+		if (transition->kind <= SG_RUNE_PHASE_TRANSITION_NONE ||
+		    transition->kind >= SG_RUNE_PHASE_TRANSITION_KIND_COUNT ||
+		    transition->flags != 0U ||
+		    !BeliefStableIdEqual(&transition->cell.value, from_cell_id) ||
+		    !BeliefStableIdEqual(&transition->cell.value, to_cell_id) ||
+		    !BeliefStableIdEqual(&transition->source_phase.value, from_id) ||
+		    !BeliefStableIdEqual(&transition->destination_phase.value, to_id) ||
+		    !BeliefIntervalValid(&transition->duration_ms, 1) ||
+		    transition->duration_ms.max_value <= 0.0f)
+			return 0;
+		matched.duration_min_ms = transition->duration_ms.min_value;
+		matched.duration_max_ms = transition->duration_ms.max_value;
+		if (bounds)
+			*bounds = matched;
+		return 1;
 	}
 	if (kind == SG_BELIEF_HORIZON_CAPABILITY_KERNEL)
 	{
@@ -266,23 +336,43 @@ static int BeliefRuneRecordMatches(
 		if (record_index >= model->kernel_count || !model->kernels)
 			return 0;
 		capability = &model->kernels[record_index];
-		return capability->family >= SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT &&
-			capability->family < SG_RUNE_CAPABILITY_FAMILY_COUNT &&
-			(capability->flags & (SG_RUNE_KERNEL_DIRECTIONAL |
-			 SG_RUNE_KERNEL_PHASE_AWARE | SG_RUNE_KERNEL_PROVEN)) ==
+		if (capability->family < SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT ||
+		    capability->family >= SG_RUNE_CAPABILITY_FAMILY_COUNT ||
+		    (capability->flags & ~(sg_rune_kernel_flags_t)
 			(SG_RUNE_KERNEL_DIRECTIONAL | SG_RUNE_KERNEL_PHASE_AWARE |
-			 SG_RUNE_KERNEL_PROVEN) &&
-			BeliefStableIdEqual(&capability->source_phase.value, from_id) &&
-			BeliefStableIdEqual(&capability->destination_phase.value, to_id);
+			 SG_RUNE_KERNEL_CHANGES_MEDIUM |
+			 SG_RUNE_KERNEL_REQUIRES_SUPPORT |
+			 SG_RUNE_KERNEL_PROVEN)) != 0U ||
+		    (capability->flags & (SG_RUNE_KERNEL_DIRECTIONAL |
+			 SG_RUNE_KERNEL_PHASE_AWARE | SG_RUNE_KERNEL_PROVEN)) !=
+			(SG_RUNE_KERNEL_DIRECTIONAL | SG_RUNE_KERNEL_PHASE_AWARE |
+			 SG_RUNE_KERNEL_PROVEN) ||
+		    !BeliefStableIdEqual(&capability->source_cell.value, from_cell_id) ||
+		    !BeliefStableIdEqual(&capability->destination_cell.value, to_cell_id) ||
+		    !BeliefStableIdEqual(&capability->source_phase.value, from_id) ||
+		    !BeliefStableIdEqual(&capability->destination_phase.value, to_id) ||
+		    !BeliefBoundsSetDisplacement(&matched,
+			&capability->parameters.displacement) ||
+		    !BeliefIntervalValid(&capability->parameters.duration_ms, 1) ||
+		    capability->parameters.duration_ms.max_value <= 0.0f)
+			return 0;
+		matched.duration_min_ms = capability->parameters.duration_ms.min_value;
+		matched.duration_max_ms = capability->parameters.duration_ms.max_value;
+		if (bounds)
+			*bounds = matched;
+		return 1;
 	}
 	return 0;
 }
 
 static int BeliefHorizonEntryValid(const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_horizon_kernel_t *kernel,
-	const sg_belief_horizon_entry_t *entry)
+	const sg_belief_horizon_entry_t *entry, belief_work_counters_t *counters)
 {
+	belief_step_bounds_t aggregate;
 	sg_phase_coordinate_t cursor;
+	uint64_t elapsed_ms;
+	size_t axis;
 	size_t index;
 	size_t end;
 
@@ -297,21 +387,54 @@ static int BeliefHorizonEntryValid(const sg_rune_runtime_snapshot_t *snapshot,
 		return 0;
 	if (entry->step_count == 0U)
 		return entry->from.phase_id == entry->to.phase_id &&
-			entry->from.cell_id == entry->to.cell_id;
+			entry->from.cell_id == entry->to.cell_id &&
+			entry->displacement[0] == 0.0f &&
+			entry->displacement[1] == 0.0f &&
+			entry->displacement[2] == 0.0f;
+	memset(&aggregate, 0, sizeof(aggregate));
 	cursor = entry->from;
 	for (index = entry->first_step; index < end; index++)
 	{
+		belief_step_bounds_t step_bounds;
 		const sg_belief_horizon_step_t *step = &kernel->steps[index];
 		if (step->from.phase_id != cursor.phase_id ||
 		    step->from.cell_id != cursor.cell_id ||
 		    !SG_PhaseCoordinateValid(snapshot, &step->to) ||
 		    !BeliefRuneRecordMatches(snapshot, step->kind,
-			step->record_index, &step->from, &step->to))
+			step->record_index, &step->from, &step->to, &step_bounds))
 			return 0;
+		for (axis = 0U; axis < 3U; axis++)
+			if (!BeliefFloatAdd(aggregate.displacement_min[axis],
+				step_bounds.displacement_min[axis],
+				&aggregate.displacement_min[axis]) ||
+			    !BeliefFloatAdd(aggregate.displacement_max[axis],
+				step_bounds.displacement_max[axis],
+				&aggregate.displacement_max[axis]))
+			{
+				counters->overflowed = 1;
+				return 0;
+			}
+		if (!BeliefFloatAdd(aggregate.duration_min_ms,
+			step_bounds.duration_min_ms, &aggregate.duration_min_ms) ||
+		    !BeliefFloatAdd(aggregate.duration_max_ms,
+			step_bounds.duration_max_ms, &aggregate.duration_max_ms))
+		{
+			counters->overflowed = 1;
+			return 0;
+		}
 		cursor = step->to;
 	}
-	return cursor.phase_id == entry->to.phase_id &&
-		cursor.cell_id == entry->to.cell_id;
+	elapsed_ms = kernel->to_time_ms - kernel->from_time_ms;
+	if (cursor.phase_id != entry->to.phase_id ||
+	    cursor.cell_id != entry->to.cell_id ||
+	    (long double)elapsed_ms < (long double)aggregate.duration_min_ms ||
+	    (long double)elapsed_ms > (long double)aggregate.duration_max_ms)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (entry->displacement[axis] < aggregate.displacement_min[axis] ||
+		    entry->displacement[axis] > aggregate.displacement_max[axis])
+			return 0;
+	return 1;
 }
 
 static int BeliefHorizonKernelValid(
@@ -358,7 +481,7 @@ static int BeliefHorizonKernelValid(
 		if (!SG_PhaseCoordinateValid(snapshot, &step->from) ||
 		    !SG_PhaseCoordinateValid(snapshot, &step->to) ||
 		    !BeliefRuneRecordMatches(snapshot, step->kind,
-			step->record_index, &step->from, &step->to) ||
+			step->record_index, &step->from, &step->to, NULL) ||
 		    !BeliefCounterIncrement(&counters->validated_horizon_steps,
 			counters))
 			return 0;
@@ -376,7 +499,7 @@ static int BeliefHorizonKernelValid(
 		{
 			const sg_belief_horizon_entry_t *entry =
 				&kernel->entries[cursor + offset];
-			if (!BeliefHorizonEntryValid(snapshot, kernel, entry) ||
+			if (!BeliefHorizonEntryValid(snapshot, kernel, entry, counters) ||
 			    entry->from.phase_id != phase ||
 			    entry->from.cell_id != snapshot->phases[phase].cell_id)
 				return 0;

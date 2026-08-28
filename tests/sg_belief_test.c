@@ -1,3 +1,4 @@
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -858,6 +859,61 @@ static void TestHorizonWitnessBoundsAndCells(void)
 		SG_BELIEF_REDUCE_APPLIED);
 }
 
+static void TestHorizonMultiStepMinkowskiBounds(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_t before;
+	sg_belief_horizon_entry_t entries[3];
+	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t steps[2];
+	sg_belief_horizon_kernel_t kernel;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	BeliefFixtureInit(&fixture);
+	fixture.model_kernels[0].parameters.displacement.x = Interval(9.0f, 11.0f);
+	fixture.model_kernels[0].parameters.duration_ms = Interval(40.0f, 60.0f);
+	fixture.model_kernels[2].parameters.displacement.x = Interval(19.0f, 21.0f);
+	fixture.model_kernels[2].parameters.duration_ms = Interval(40.0f, 60.0f);
+	InitState(&fixture, &state, storage, 8U);
+	entries[0] = HorizonEntry(0U, 0U, 2U, 1U, 33.0f, 1.0f);
+	entries[0].step_count = 2U;
+	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	steps[0] = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	steps[1] = HorizonCapabilityStep(1U, 0U, 2U, 1U, 2U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, steps, 2U);
+	frame = Frame(1U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	frame.kernels = &kernel;
+	frame.kernel_count = 1U;
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+
+	fixture.model_kernels[0].parameters.displacement.x =
+		Interval(9.0f, FLT_MAX);
+	fixture.model_kernels[2].parameters.displacement.x =
+		Interval(19.0f, FLT_MAX);
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_OVERFLOW);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+
+	fixture.model_kernels[0].parameters.displacement.x = Interval(9.0f, 11.0f);
+	fixture.model_kernels[2].parameters.displacement.x = Interval(19.0f, 21.0f);
+	entries[0].displacement[0] = 30.0f;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+}
+
 static void TestCompleteHorizonMultiHopAndTimeBound(void)
 {
 	belief_fixture_t fixture;
@@ -1014,7 +1070,7 @@ static void TestCsrKernelScalingCounters(void)
 	frame.evidence_count = 1U;
 	CHECK(SG_BeliefReduce(&snapshot, &state, &frame, &reduction) ==
 		SG_BELIEF_REDUCE_APPLIED);
-	entries[cursor++] = HorizonEntry(0U, 0U, 0U, 0U, 1.0f, 0.5f);
+	entries[cursor++] = HorizonEntry(0U, 0U, 0U, 0U, 0.0f, 0.5f);
 	entries[cursor++] = HorizonEntry(0U, 0U, 1U, 0U, 2.0f, 0.5f);
 	entries[1].step_count = 1U;
 	for (phase = 1U; phase < phase_count; phase++)
@@ -1033,7 +1089,7 @@ static void TestCsrKernelScalingCounters(void)
 	CHECK(reduction.validated_horizon_entries == entry_count);
 	CHECK(reduction.validated_horizon_steps == 1U);
 	CHECK(reduction.evaluated_outcomes == 2U);
-	CHECK(state.particle_count == 3U);
+	CHECK(state.particle_count == 2U);
 
 cleanup:
 	free(entries);
@@ -1386,6 +1442,7 @@ int main(void)
 	TestIdentityGenerationAndMotionFailClosed();
 	TestHorizonCannotInventConnectivity();
 	TestHorizonWitnessBoundsAndCells();
+	TestHorizonMultiStepMinkowskiBounds();
 	TestCompleteHorizonMultiHopAndTimeBound();
 	TestCsrKernelScalingCounters();
 	TestPropagationDecayPredictionAndRuneImmutability();
