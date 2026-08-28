@@ -73,7 +73,11 @@ catalog. The base static-visibility API proves exact point rays and coarse
 PVS/area exclusions; it does not prove continuous player-origin to surface
 coverage. The refinement must partition that coupled domain at occluder
 boundaries and carry an independently auditable no-omission/no-invention
-certificate. Finite point sampling is not a substitute.
+certificate. BSP events may guide predicate discovery, but symbolic execution
+of the exact muzzle-clearance and first-hit law remains the proof authority.
+The feasibility gate in `docs/hook-visibility-relation.md` must pass before the
+implementation expands. Finite point sampling and unrestricted action-tuple
+fallback are not substitutes.
 
 ## Runtime graph
 
