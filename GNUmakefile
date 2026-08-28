@@ -3325,7 +3325,8 @@ project-completion-plan-test: $(PROJECT_COMPLETION_PLAN_TEST) \
 		PROJECT-COMPLETION-PLAN.md
 	python3 -B $(PROJECT_COMPLETION_PLAN_TEST)
 
-rune-v2-contract-test: tests/sg_rune_v2_artifact_contract_test.c \
+rune-v2-contract-test: rune-v2-independent-reader-test \
+		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
 		tests/sg_bsp_world_test.c slipgate/sg_bsp_world.c \
