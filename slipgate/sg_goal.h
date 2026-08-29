@@ -30,6 +30,9 @@ void SG_DefenseSupplyBeginReturn(sg_bot_t *bot);
 void SG_DefenseSupplyFinish(sg_bot_t *bot);
 void SG_DefenseSupplyNoteItemTouch(edict_t *taker, edict_t *item);
 qboolean SG_DefenseSupplyActive(const sg_bot_t *bot);
+/* Execution-only field for the exact outbound supply target.  It does not
+ * establish strategic destination identity or authority. */
+const int *SG_DefenseSupplyTargetField(sg_bot_t *bot);
 qboolean SG_DefenseSupplyHome(int team);
 qboolean SG_DefenseSupplyThreat(int team);
 
@@ -47,6 +50,16 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot);
 const int *SG_CollectibleHealthField(sg_bot_t *bot);
 const int *SG_CollectibleAmmoField(sg_bot_t *bot);
 const int *SG_CollectibleArmorField(sg_bot_t *bot);
+/* Exact, physically collectible armor target for a typed prerequisite.  The
+ * returned field is execution data only; `target_ent_out` identifies the one
+ * live item whose semantic destination must be resolved by runtime authority. */
+const int *SG_CollectibleArmorTargetField(sg_bot_t *bot,
+	int *target_ent_out);
+/* The exact armor flood is per-bot scratch storage rather than TAG_LEVEL
+ * storage.  Retire it before the level owner tears down a map so a recycled
+ * bot slot cannot reuse the previous map's gradient when topology epochs
+ * restart. */
+void SG_CollectibleArmorTargetLevelReset(void);
 
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);
@@ -57,6 +70,9 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 
 /* resolves the frame's objective fields; context in, context out */
 void Think_Objective(sg_bot_t *bot, sg_think_t *tc);
+
+/* derives a local waypoint from the reducer-owned strategic field */
+void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc);
 
 void Think_InterceptField(sg_role_t role, int team,
                                  const int **support_out,

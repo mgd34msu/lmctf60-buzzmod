@@ -30,6 +30,8 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_pickup_target.h"
 
+#include <stdint.h>
+
 static int intercept_field[SG_MAX_SEEDS];
 
 #define SG_MEGA_PATIENCE	12.0f   /* seconds an offer may stand unspent */
@@ -616,6 +618,19 @@ static int sg_armor_collectible_count[SG_MAXBOTS];
 static int sg_armor_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_armor_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_armor_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+/* The aggregate armor field is useful for pricing but cannot authenticate one
+ * semantic item.  Strategy prerequisites therefore use this separate exact
+ * one-target field and retain the selected live edict alongside it. */
+static int sg_armor_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_armor_target_epoch[SG_MAXBOTS];
+static int sg_armor_target_seed[SG_MAXBOTS];
+static int sg_armor_target_ent[SG_MAXBOTS];
+/* `action_topology_epoch` is level-local and may restart at one.  This
+ * generation is advanced by the level owner before TAG_LEVEL storage dies,
+ * so the persistent per-bot scratch cache cannot mistake a new map for its
+ * predecessor. */
+static uint64_t sg_armor_target_level_generation = UINT64_C(1);
+static uint64_t sg_armor_target_generation[SG_MAXBOTS];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -627,6 +642,27 @@ static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 	if (index < 0 || index >= SG_MAXBOTS)
 		return 0;
 	return (int)index;
+}
+
+void SG_CollectibleArmorTargetLevelReset(void)
+{
+	int i;
+
+	/* Wrap cannot make an old entry current: every entry is invalidated below
+	 * before the next map has a chance to query its exact target field. */
+	if (sg_armor_target_level_generation == UINT64_MAX)
+		sg_armor_target_level_generation = UINT64_C(1);
+	else
+		sg_armor_target_level_generation++;
+	memset(sg_armor_target_field, 0, sizeof(sg_armor_target_field));
+	memset(sg_armor_target_epoch, 0, sizeof(sg_armor_target_epoch));
+	memset(sg_armor_target_generation, 0,
+	    sizeof(sg_armor_target_generation));
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_armor_target_seed[i] = -1;
+		sg_armor_target_ent[i] = -1;
+	}
 }
 
 static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
@@ -939,6 +975,104 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 	return sg_armor_collectible_field[bi];
 }
 
+static qboolean CollectibleArmorTargetCandidate(const sg_bot_t *bot,
+	int item_ent, int *seed_out, int *gain_out)
+{
+	edict_t *item;
+	int seed;
+	int gain;
+
+	if (!bot || !bot->ent || !SG_Rune() || !seed_out || !gain_out ||
+	    item_ent <= 0 || item_ent >= globals.num_edicts)
+		return false;
+	item = &g_edicts[item_ent];
+	if (!item->inuse || !item->classname ||
+	    strncmp(item->classname, "item_armor", 10) != 0 ||
+	    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
+	    !G_ArmorPickupEligible(item, bot->ent))
+		return false;
+	gain = G_ArmorPickupGain(item, bot->ent);
+	if (gain <= 0)
+		return false;
+	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+	if (seed < 0)
+		return false;
+	*seed_out = seed;
+	*gain_out = gain;
+	return true;
+}
+
+static const int *CollectibleArmorTargetField(sg_bot_t *bot, int target_ent,
+	int target_seed)
+{
+	int bi;
+	int cost = 0;
+
+	if (!bot || !SG_Rune() || target_ent <= 0 ||
+	    target_seed < 0 || target_seed >= SG_Rune()->hdr.num_seeds)
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	if (sg_armor_target_generation[bi] !=
+	    sg_armor_target_level_generation ||
+	    sg_armor_target_epoch[bi] != sg_fields.action_topology_epoch ||
+	    sg_armor_target_ent[bi] != target_ent ||
+	    sg_armor_target_seed[bi] != target_seed)
+	{
+		Field_Flood(SG_Rune(), sg_armor_target_field[bi], &target_seed,
+			&cost, 1);
+		sg_armor_target_epoch[bi] = sg_fields.action_topology_epoch;
+		sg_armor_target_ent[bi] = target_ent;
+		sg_armor_target_seed[bi] = target_seed;
+		sg_armor_target_generation[bi] =
+		    sg_armor_target_level_generation;
+	}
+	return sg_armor_target_field[bi];
+}
+
+#ifdef SG_GOAL_TEST
+/* The production chooser adds live item admission on top of this exact
+ * cache.  The focused map-restart test reaches the cache directly so it can
+ * hold the bot slot, edict, target id, seed, and epoch equal across maps. */
+const int *SG_GoalTestCollectibleArmorTargetField(sg_bot_t *bot,
+	int target_ent, int target_seed)
+{
+	return CollectibleArmorTargetField(bot, target_ent, target_seed);
+}
+#endif
+
+const int *SG_CollectibleArmorTargetField(sg_bot_t *bot, int *target_ent_out)
+{
+	int best_ent = -1;
+	int best_seed = -1;
+	int best_gain = 0;
+	int item_ent;
+
+	if (target_ent_out)
+		*target_ent_out = -1;
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	for (item_ent = 1; item_ent < globals.num_edicts; item_ent++)
+	{
+		int gain;
+		int seed;
+
+		if (!CollectibleArmorTargetCandidate(bot, item_ent, &seed, &gain))
+			continue;
+		if (best_ent < 0 || gain > best_gain ||
+		    (gain == best_gain && item_ent < best_ent))
+		{
+			best_ent = item_ent;
+			best_seed = seed;
+			best_gain = gain;
+		}
+	}
+	if (best_ent < 0)
+		return NULL;
+	if (target_ent_out)
+		*target_ent_out = best_ent;
+	return CollectibleArmorTargetField(bot, best_ent, best_seed);
+}
+
 static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
                                         int *out_seed, int *out_route_ms)
 {
@@ -1131,7 +1265,7 @@ static qboolean DefenseSupplyReturnAllowed(const sg_bot_t *bot,
 	       bot->def_supply_instance == bot->instance_token;
 }
 
-static const int *DefenseSupplyTargetField(sg_bot_t *bot)
+const int *SG_DefenseSupplyTargetField(sg_bot_t *bot)
 {
 	const int *target_field;
 	int target_seed;
@@ -1147,7 +1281,7 @@ static const int *DefenseSupplyTargetField(sg_bot_t *bot)
 
 static qboolean DefenseSupplyTargetFieldReachable(const sg_bot_t *bot)
 {
-	const int *field = DefenseSupplyTargetField((sg_bot_t *)bot);
+	const int *field = SG_DefenseSupplyTargetField((sg_bot_t *)bot);
 
 	return field && bot && bot->seed >= 0 &&
 	       field[bot->seed] < SG_FIELD_INF &&
@@ -1163,7 +1297,7 @@ static const int *DefenseSupplyRouteField(sg_bot_t *bot,
 
 	if (!bot || !goal_field || !pure || !SG_DefenseSupplyActive(bot))
 		return goal_field;
-	target_field = DefenseSupplyTargetField(bot);
+	target_field = SG_DefenseSupplyTargetField(bot);
 	if (!SG_DefenseSupplyRoute(
 		    (sg_defense_supply_phase_t)bot->def_supply_phase,
 		    NULL, target_field, goal_field,
@@ -1348,9 +1482,6 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	    tc->escort_mission);
 	int team = tc->team;
 	qboolean carrying = tc->carrying;
-	const sg_weights_t *w = tc->w;
-	const int *support = tc->support;
-	const int *intercept = tc->intercept;
 	const int *goal_field;
 	const int *route_field;
 	qboolean route_pure;
@@ -1648,107 +1779,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	                     ? goal_field[bot->seed] : -1;
 	route_field = goal_field;
 	route_pure = tc->rune_handoff_route;
-	if (SG_RuneHandoffAllowsOptional(tc->rune_handoff_route) &&
-	    !tc->strike_blocks_optional &&
-	    sg_cv.tactics->value &&
-	    role != SG_ROLE_ESCORT &&
-	    /* A carrier keeps the live escape field instead of committing to a
-	     * ten-second tactical waypoint. */
-	    role != SG_ROLE_CARRY && bot->seed >= 0 &&
-	    goal_field[bot->seed] < SG_FIELD_INF &&
-	    goal_field[bot->seed] >= 400)
-	{
-		static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
-		static unsigned tac_field_epoch[SG_MAXBOTS];
-		static sg_field_key_t tac_goal[SG_MAXBOTS];
-		int bi = (int)(bot - sg_bots);
-		sg_field_key_t goal = SG_FieldKey(SG_Rune(), goal_field);
-		sg_tactic_cache_t cache = {
-			.topology_current = Fields_ActionTopologyCurrent(tac_field_epoch[bi]),
-			.tactic_seed = bot->tac_seed, .cached_role = bot->tac_role,
-			.current_role = (int)role, .cached_goal = tac_goal[bi],
-			.current_goal = goal, .committed_at = bot->tac_time,
-			.now = level.time, .route_cost = tac_fields[bi][bot->seed]
-		};
-		qboolean need;
-		sg_route_pure_now = false;
-		need = SG_TacticCacheNeedsRefresh(&cache);
-
-		if (need)
-		{
-			static int g2_field[SG_MAX_SEEDS];
-			int s10, best10 = -1, g2 = -1, cur = goal_field[bot->seed];
-			float bv10 = 1e30f, gv10 = 1e30f;
-
-			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
-			     s10 < SG_MAX_SEEDS; s10++)
-			{
-				float sv;
-
-				if (goal_field[s10] >= SG_FIELD_INF ||
-				    goal_field[s10] > cur - 2500 ||
-				    goal_field[s10] < cur - 4500)
-					continue;
-				sv = Surface_At(tc, s10, w, goal_field, support,
-				                intercept);
-				if (sv < gv10)
-				{
-					gv10 = sv;
-					g2 = s10;
-				}
-			}
-			if (g2 >= 0)
-			{
-				int gc = 0;
-
-				Field_Flood(SG_Rune(), g2_field, &g2, &gc, 1);
-			}
-			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
-			     s10 < SG_MAX_SEEDS; s10++)
-			{
-				float sv;
-
-				if (goal_field[s10] >= SG_FIELD_INF ||
-				    goal_field[s10] > cur - 800 ||
-				    goal_field[s10] < cur - 2500)
-					continue;
-				sv = Surface_At(tc, s10, w, goal_field, support,
-				                intercept);
-				if (g2 >= 0 && g2_field[s10] < SG_FIELD_INF)
-					sv += 0.5f * (float)g2_field[s10];
-				if (sv < bv10)
-				{
-					bv10 = sv;
-					best10 = s10;
-				}
-			}
-			if (best10 >= 0)
-			{
-				int cost10 = 0;
-
-				bot->tac_seed = best10;
-				SG_Mark(&bot->tac_time);
-				bot->tac_role = (int)role;
-				tac_goal[bi] = goal;
-				Field_Flood(SG_Rune(), tac_fields[bi],
-				            &bot->tac_seed, &cost10, 1);
-				tac_field_epoch[bi] = sg_fields.action_topology_epoch;
-				if (sg_cv.debug->value)
-					sg_host.dprint("TACTIC %s seed=%d strat=%d\n",
-					           e->client->pers.netname,
-					           best10, goal_field[best10]);
-			}
-			else
-				bot->tac_seed = -1;     /* no room ahead: strategy raw */
-		}
-		if (bot->tac_seed >= 0 &&
-		    Fields_ActionTopologyCurrent(tac_field_epoch[bi]) &&
-		    tac_fields[bi][bot->seed] < SG_FIELD_INF)
-		{
-			route_field = tac_fields[bi];
-			route_pure = true;
-		}
-	}
+	/* Tactical waypoint selection runs after the typed strategy instruction
+	 * has committed this field in Think_TacticalRoute. */
 
 	/* The sortie is the one explicit route owner that may override tactics.
 	 * OUTBOUND follows the current live weapon field with no detour arithmetic;
@@ -1808,4 +1840,121 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	tc->goal_field = goal_field;
 	tc->route_field = route_field;
 	tc->route_pure = route_pure;
+}
+
+/* Derive a tactical waypoint only from the destination selected by the typed
+ * reducer.  Its activation identity replaces the old parallel role latch. */
+void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc)
+{
+	static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
+	static unsigned tac_field_epoch[SG_MAXBOTS];
+	static sg_field_key_t tac_goal[SG_MAXBOTS];
+	const int *goal_field;
+	int bi;
+
+	if (!bot || !tc || !tc->e || !tc->goal_field || !SG_Rune())
+		return;
+	goal_field = tc->goal_field;
+	tc->route_field = goal_field;
+	if (tc->route_pure || !SG_RuneHandoffAllowsOptional(
+	        tc->rune_handoff_route) || tc->strike_blocks_optional ||
+	    !sg_cv.tactics->value || tc->role == SG_ROLE_ESCORT ||
+	    tc->role == SG_ROLE_CARRY || bot->seed < 0 ||
+	    goal_field[bot->seed] >= SG_FIELD_INF ||
+	    goal_field[bot->seed] < 400)
+		return;
+	bi = (int)(bot - sg_bots);
+	if (bi < 0 || bi >= SG_MAXBOTS)
+		return;
+	{
+		sg_field_key_t goal = SG_FieldKey(SG_Rune(), goal_field);
+		sg_tactic_cache_t cache = {
+			.topology_current = Fields_ActionTopologyCurrent(tac_field_epoch[bi]),
+			.tactic_seed = bot->tac_seed,
+			.cached_strategy_activation = bot->tac_strategy_activation,
+			.current_strategy_activation = tc->strategy_activation_id,
+			.cached_goal = tac_goal[bi], .current_goal = goal,
+			.committed_at = bot->tac_time, .now = level.time,
+			.route_cost = tac_fields[bi][bot->seed]
+		};
+		qboolean need;
+
+		sg_route_pure_now = false;
+		need = SG_TacticCacheNeedsRefresh(&cache);
+		if (need)
+		{
+			static int g2_field[SG_MAX_SEEDS];
+			int s10, best10 = -1, g2 = -1;
+			int cur = goal_field[bot->seed];
+			float bv10 = 1e30f, gv10 = 1e30f;
+
+			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
+			     s10 < SG_MAX_SEEDS; s10++)
+			{
+				float sv;
+
+				if (goal_field[s10] >= SG_FIELD_INF ||
+				    goal_field[s10] > cur - 2500 ||
+				    goal_field[s10] < cur - 4500)
+					continue;
+				sv = Surface_At(tc, s10, tc->w, goal_field,
+				                tc->support, tc->intercept);
+				if (sv < gv10)
+				{
+					gv10 = sv;
+					g2 = s10;
+				}
+			}
+			if (g2 >= 0)
+			{
+				int gc = 0;
+
+				Field_Flood(SG_Rune(), g2_field, &g2, &gc, 1);
+			}
+			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
+			     s10 < SG_MAX_SEEDS; s10++)
+			{
+				float sv;
+
+				if (goal_field[s10] >= SG_FIELD_INF ||
+				    goal_field[s10] > cur - 800 ||
+				    goal_field[s10] < cur - 2500)
+					continue;
+				sv = Surface_At(tc, s10, tc->w, goal_field,
+				                tc->support, tc->intercept);
+				if (g2 >= 0 && g2_field[s10] < SG_FIELD_INF)
+					sv += 0.5f * (float)g2_field[s10];
+				if (sv < bv10)
+				{
+					bv10 = sv;
+					best10 = s10;
+				}
+			}
+			if (best10 >= 0)
+			{
+				int cost10 = 0;
+
+				bot->tac_seed = best10;
+				SG_Mark(&bot->tac_time);
+				bot->tac_strategy_activation = tc->strategy_activation_id;
+				tac_goal[bi] = goal;
+				Field_Flood(SG_Rune(), tac_fields[bi],
+				            &bot->tac_seed, &cost10, 1);
+				tac_field_epoch[bi] = sg_fields.action_topology_epoch;
+				if (sg_cv.debug->value)
+					sg_host.dprint("TACTIC %s seed=%d strat=%d\n",
+					           tc->e->client->pers.netname,
+					           best10, goal_field[best10]);
+			}
+			else
+				bot->tac_seed = -1;
+		}
+		if (bot->tac_seed >= 0 &&
+		    Fields_ActionTopologyCurrent(tac_field_epoch[bi]) &&
+		    tac_fields[bi][bot->seed] < SG_FIELD_INF)
+		{
+			tc->route_field = tac_fields[bi];
+			tc->route_pure = true;
+		}
+	}
 }

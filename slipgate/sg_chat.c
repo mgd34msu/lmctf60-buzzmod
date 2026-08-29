@@ -1,4 +1,5 @@
-
+#include <math.h>
+#include <stdint.h>
 
 #include "g_local.h"
 #include "g_ctffunc.h"
@@ -12,6 +13,7 @@
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_chat_random.h"
 #include "slipgate/sg_callout_policy.h"
+#include "slipgate/sg_bot.h"
 
 /* ------------------------------------------------------------- constants */
 
@@ -2991,6 +2993,55 @@ static int Chat_AckKind(int role, qboolean clear)
 	}
 }
 
+static uint64_t ChatStrategyNowMs(void)
+{
+	double milliseconds = (double)level.time * 1000.0;
+
+	if (!isfinite(milliseconds) || milliseconds < 0.0)
+		return 1U;
+	if (milliseconds >= (double)UINT64_MAX - 1.0)
+		return UINT64_MAX;
+	return (uint64_t)milliseconds + 1U;
+}
+
+/* `order_from` is still live at this point.  The exact authority stamp is
+ * therefore recoverable from trusted chat state rather than being copied
+ * from a lower-ranked autonomous proposal after the order disappears. */
+static void Chat_EndStrategyOrder(int cl, int order_from, qboolean cancel)
+{
+	edict_t *bot;
+	sg_strategy_caller_authority_t authority;
+	sg_strategy_caller_output_t output;
+	uint64_t at_ms;
+	uint8_t alive;
+	int slot;
+
+	if (cl < 0 || cl >= game.maxclients || order_from < 0 ||
+	    order_from >= game.maxclients)
+		return;
+	bot = g_edicts + 1 + cl;
+	alive = bot->inuse && bot->client && bot->deadflag == DEAD_NO &&
+		bot->health > 0 ? 1U : 0U;
+	memset(&authority, 0, sizeof(authority));
+	authority.rank = SG_STRATEGY_AUTHORITY_HUMAN;
+	authority.principal_kind = SG_STRATEGY_PRINCIPAL_HUMAN;
+	authority.principal_id = (uint32_t)order_from + 1U;
+	at_ms = ChatStrategyNowMs();
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+	{
+		sg_bot_t *strategy_bot = &sg_bots[slot];
+
+		if (!strategy_bot->active || strategy_bot->ent != bot)
+			continue;
+		if (cancel)
+			(void)SG_StrategyCallerCancel(&strategy_bot->strategy, &authority,
+				alive, at_ms, &output);
+		(void)SG_StrategyCallerRelease(&strategy_bot->strategy, &authority,
+			alive, at_ms, &output);
+		return;
+	}
+}
+
 static void Chat_Order(edict_t *bot, edict_t *from, int role, qboolean clear)
 {
 	int cl = Chat_ClientNum(bot);
@@ -3000,6 +3051,7 @@ static void Chat_Order(edict_t *bot, edict_t *from, int role, qboolean clear)
 
 	if (clear)
 	{
+		Chat_EndStrategyOrder(cl, chat_bot[cl].order_from, true);
 		chat_bot[cl].order_role = SG_CHAT_ROLE_NONE;
 		chat_bot[cl].order_expire = 0.0f;
 		chat_bot[cl].order_from = -1;
@@ -3649,6 +3701,7 @@ static void Chat_ExpireOrders(void)
 		if (chat_bot[i].order_role != SG_CHAT_ROLE_NONE &&
 		    !Chat_OrderLive(i))
 		{
+			Chat_EndStrategyOrder(i, chat_bot[i].order_from, false);
 			chat_bot[i].order_role = SG_CHAT_ROLE_NONE;
 			chat_bot[i].order_from = -1;
 		}
@@ -3664,6 +3717,19 @@ int SG_ChatOrderedRole(edict_t *bot)
 	if (!Chat_OrderLive(cl))
 		return SG_CHAT_ROLE_NONE;
 	return chat_bot[cl].order_role;
+}
+
+/* Stable human principal for the typed strategy authority stamp. */
+int SG_ChatOrderPrincipal(edict_t *bot)
+{
+	int cl;
+
+	if (!bot || !bot->inuse || !bot->client)
+		return -1;
+	cl = Chat_ClientNum(bot);
+	if (!Chat_OrderLive(cl))
+		return -1;
+	return chat_bot[cl].order_from;
 }
 
 edict_t *SG_ChatEscortTarget(edict_t *bot)
@@ -3721,6 +3787,7 @@ void SG_ChatResetClient(edict_t *client)
 	for (i = 0; i < game.maxclients; i++)
 		if (chat_bot[i].order_from == cl)
 		{
+			Chat_EndStrategyOrder(i, chat_bot[i].order_from, false);
 			chat_bot[i].order_role = SG_CHAT_ROLE_NONE;
 			chat_bot[i].order_from = -1;
 		}

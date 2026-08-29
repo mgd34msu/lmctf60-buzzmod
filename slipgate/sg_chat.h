@@ -63,6 +63,7 @@ static inline int SG_ChatTopicStampsBotGap(int topic)
 
 
 int			SG_ChatOrderedRole(edict_t *bot);
+int			SG_ChatOrderPrincipal(edict_t *bot);
 edict_t		*SG_ChatEscortTarget(edict_t *bot);
 void		SG_ChatResetClient(edict_t *client);
 
