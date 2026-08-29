@@ -134,17 +134,21 @@ class SourceBudgetTest(unittest.TestCase):
             Path("slipgate/sg_contract.generated.h"),
             Path("slipgate/regenerated_parser.c"),
             Path("tests/support/imported.c"),
+            Path("tests/slipgate/escape.generated.c"),
             Path("tests/test_authored.py"),
             Path("tools/check.sh"),
             Path("tools/rune_contracts_generated.py"),
+            Path("tools/slipgate/escape.generated.h"),
             Path("GNUmakefile"),
         ]
         self.assertEqual(
             [
                 Path("slipgate/sg_authored.c"),
                 Path("slipgate/regenerated_parser.c"),
+                Path("tests/slipgate/escape.generated.c"),
                 Path("tests/test_authored.py"),
                 Path("tools/check.sh"),
+                Path("tools/slipgate/escape.generated.h"),
                 Path("GNUmakefile"),
             ],
             tracked_authored_files(paths),

@@ -19,10 +19,7 @@ EXCLUDED = {"sqlite3.c", "sqlite3.h"}
 AUTHORED_ROOTS = {"slipgate", "tests", "tools"}
 AUTHORED_SUFFIXES = {".c", ".h", ".py", ".sh"}
 AUTHORED_FILES = {"GNUmakefile", "Makefile"}
-GENERATED_SOURCE_PATTERNS = (
-    "slipgate/*.generated.c",
-    "slipgate/*.generated.h",
-)
+GENERATED_SLIPGATE_SUFFIXES = (".generated.c", ".generated.h")
 GENERATED_SOURCE_FILES = {"tools/rune_contracts_generated.py"}
 MAX_SLIPGATE_COMMENT_LINES = 12
 MAX_PYTHON_MODULE_DOCSTRING_LINES = 12
@@ -211,8 +208,8 @@ def tracked_authored_files(paths: list[Path]) -> list[Path]:
         if name not in AUTHORED_FILES and path.suffix not in AUTHORED_SUFFIXES:
             continue
         if (name in GENERATED_SOURCE_FILES
-                or any(path.match(pattern)
-                       for pattern in GENERATED_SOURCE_PATTERNS)
+                or (path.parent == Path("slipgate")
+                    and path.name.endswith(GENERATED_SLIPGATE_SUFFIXES))
                 or path.parts[:2] == ("tests", "support")):
             continue
         authored.append(path)
