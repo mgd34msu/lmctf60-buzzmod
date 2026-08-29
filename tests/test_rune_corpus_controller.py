@@ -634,19 +634,34 @@ class RuneCorpusControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "runtime"
             page = mmap.PAGESIZE
+            program_count = 1025
+            program_size = struct.calcsize("<IIQQQQQQ")
+            table_end = 64 + program_count * program_size
+            segment_offset = (table_end + page - 1) // page * page
             header = struct.pack(
                 "<16sHHIQQQIHHHHHH",
                 b"\x7fELF\x02\x01\x01" + b"\0" * 9,
-                3, 62, 1, 0, 64, 0, 0, 64, 56, 1, 0, 0, 0,
+                3, 62, 1, 0, 64, 0, 0, 64, program_size, program_count, 0, 0, 0,
             )
-            program = struct.pack(
-                "<IIQQQQQQ", 1, 6, page, page, 0, page, page, page,
+            readonly_program = struct.pack(
+                "<IIQQQQQQ", 1, 4, 0, 0, 0, 0, 0, page,
             )
-            path.write_bytes((header + program).ljust(page * 2, b"\0"))
+            writable_program = struct.pack(
+                "<IIQQQQQQ", 1, 6, segment_offset, segment_offset, 0,
+                page, page, page,
+            )
+            path.write_bytes(
+                (header + readonly_program * (program_count - 1) + writable_program)
+                .ljust(segment_offset + page, b"\0")
+            )
             descriptor = os.open(path, os.O_RDONLY)
             try:
                 self.assertFalse(controller._elf_writable_file_range(descriptor, 0, page))
-                self.assertTrue(controller._elf_writable_file_range(descriptor, page, page))
+                self.assertTrue(
+                    controller._elf_writable_file_range(
+                        descriptor, segment_offset, page,
+                    )
+                )
             finally:
                 os.close(descriptor)
 

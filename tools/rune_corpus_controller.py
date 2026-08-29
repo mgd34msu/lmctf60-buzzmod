@@ -1962,6 +1962,7 @@ def _elf_writable_file_range(fd: int, offset: int, length: int) -> bool:
     header_size = struct.calcsize(header_format)
     try:
         header = os.pread(fd, header_size, 0)
+        file_size = os.fstat(fd).st_size
     except OSError as exc:
         raise ProcessIntegrityError("cannot inspect retained ELF descriptor") from exc
     if len(header) != header_size:
@@ -1969,9 +1970,16 @@ def _elf_writable_file_range(fd: int, offset: int, length: int) -> bool:
     fields = struct.unpack(header_format, header)
     program_offset, program_size, program_count = fields[5], fields[9], fields[10]
     expected_size = struct.calcsize(program_format)
-    if program_size != expected_size or program_count > 1024:
+    if program_size != expected_size or program_offset > file_size:
+        raise ProcessIntegrityError("retained ELF program headers are invalid")
+    table_space = file_size - program_offset
+    if program_count > table_space // program_size:
+        raise ProcessIntegrityError("retained ELF program headers are invalid")
+    table_end = program_offset + program_count * program_size
+    if table_end > file_size:
         raise ProcessIntegrityError("retained ELF program headers are invalid")
     mapped_end = offset + length
+    writable = False
     for index in range(program_count):
         try:
             program = os.pread(fd, program_size, program_offset + index * program_size)
@@ -1980,13 +1988,16 @@ def _elf_writable_file_range(fd: int, offset: int, length: int) -> bool:
         if len(program) != program_size:
             raise ProcessIntegrityError("retained ELF program header is short")
         fields = struct.unpack(program_format, program)
-        if fields[0] != 1 or (fields[flags_index] & 2) == 0:
+        if fields[0] != 1:
             continue
         segment_offset = fields[offset_index]
-        segment_end = segment_offset + fields[size_index]
+        segment_size = fields[size_index]
+        if segment_offset > file_size or segment_size > file_size - segment_offset:
+            raise ProcessIntegrityError("retained ELF load segment is invalid")
+        segment_end = segment_offset + segment_size
         if segment_offset < mapped_end and offset < segment_end:
-            return True
-    return False
+            writable = writable or (fields[flags_index] & 2) != 0
+    return writable
 
 
 def _validate_mapped_object(
