@@ -371,6 +371,18 @@ static void TestSimplexGeometry(void)
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 }
 
+static void TestNearDegenerateSimplexGeometry(void)
+{
+	dynamics_fixture_t fixture;
+
+	BuildFixture(&fixture);
+	fixture.charts[0].embedding.position = Interval3(0.0f, 1.0f);
+	fixture.charts[0].embedding.velocity = Interval3(0.0f, 1.0f);
+	fixture.charts[0].embedding.elapsed_ms = Interval(0.0f, 1.0f);
+	fixture.vertices[7].elapsed_ms = 1e-16f;
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
 static sg_rune_field_region_t Region(uint32_t ordinal, uint32_t parent,
 	uint32_t level)
 {
@@ -644,6 +656,7 @@ int main(void)
 	TestTypedIdsAndModes();
 	TestAggregateOwnership();
 	TestSimplexGeometry();
+	TestNearDegenerateSimplexGeometry();
 	TestExactLeafOwnership();
 	TestInternalHierarchySummaries();
 	TestLinearHierarchy();

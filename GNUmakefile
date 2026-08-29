@@ -3444,6 +3444,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		slipgate/sg_destination.c slipgate/sg_destination.h \
 		tests/run_sg_rune_dynamics_model_test.sh \
 		tests/sg_rune_dynamics_model_test.c \
+		tests/test_sg_rune_dynamics_rank_reference.py \
 		slipgate/sg_rune_dynamics_model.c \
 		slipgate/sg_rune_dynamics_geometry.c \
 		slipgate/sg_rune_field_contract.c \

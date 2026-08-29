@@ -14,10 +14,18 @@ sources="$sources slipgate/sg_rune_dynamics_geometry.c"
 sources="$sources slipgate/sg_rune_field_contract.c slipgate/sg_rune_model.c"
 
 cd "$repo_dir"
+python3 -B tests/test_sg_rune_dynamics_rank_reference.py
 for cc in gcc clang
 do
 	$cc $strict -I. $sources -lm -o "$tmp_dir/rune-dynamics-$cc"
 	"$tmp_dir/rune-dynamics-$cc"
+done
+
+for long_double_bits in 64 80
+do
+	gcc $strict -mlong-double-$long_double_bits -I. $sources -lm \
+		-o "$tmp_dir/rune-dynamics-ld$long_double_bits"
+	"$tmp_dir/rune-dynamics-ld$long_double_bits"
 done
 
 clang $strict -fno-omit-frame-pointer -fsanitize=address,undefined -I. \
