@@ -239,6 +239,12 @@ typedef struct sg_mechanism_topology_relation_s
 
 typedef struct sg_mechanism_capability_set_s
 {
+	/* Build seals this result.  Downstream immutable providers accept only a
+	 * live self-sealed result whose digest still matches all owned records. */
+	uint64_t seal_magic;
+	uint64_t seal_magic_inverse;
+	const struct sg_mechanism_capability_set_s *self;
+	uint64_t seal_digest;
 	sg_rune_model_identity_t identity;
 	uint64_t candidate_verifier_identity;
 	uint64_t trace_verifier_identity;
@@ -255,6 +261,13 @@ typedef struct sg_mechanism_capability_set_s
 	uint32_t *facts_by_trace;
 	uint64_t topology_edge_visits;
 } sg_mechanism_capability_set_t;
+
+#define SG_MECHANISM_CAPABILITY_SEAL_MAGIC UINT64_C(0x4d4341505345414c)
+
+uint64_t SG_MechanismCapabilitySetDigest(
+	const sg_mechanism_capability_set_t *capabilities);
+int SG_MechanismCapabilitySetAccepted(
+	const sg_mechanism_capability_set_t *capabilities);
 
 typedef struct sg_mechanism_capability_source_s
 {

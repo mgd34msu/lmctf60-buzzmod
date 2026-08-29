@@ -21,8 +21,11 @@ struct sg_phase_catalog_publication_s
 	 * publication is an immutable snapshot after Issue returns. */
 	sg_rune_phase_basis_t *phase_storage;
 	sg_phase_catalog_binding_t *binding_storage;
+	sg_rune_phase_transition_t *transition_storage;
+	sg_phase_catalog_transition_evidence_t *transition_evidence_storage;
 	uint32_t phase_capacity;
 	uint32_t binding_capacity;
+	uint32_t transition_capacity;
 };
 
 static int PublicationHeaderValid(
@@ -70,13 +73,34 @@ static int PublicationStorageShapeValid(
 
 	return publication->phase_capacity <= SG_RUNE_MODEL_MAX_PHASES &&
 		publication->binding_capacity <= SG_PHASE_CATALOG_MAX_BINDINGS &&
+		publication->transition_capacity <= SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS &&
+		AllocationFits((size_t)publication->phase_capacity,
+			sizeof(*publication->phase_storage)) &&
+		AllocationFits((size_t)publication->binding_capacity,
+			sizeof(*publication->binding_storage)) &&
+		AllocationFits((size_t)publication->transition_capacity,
+			sizeof(*publication->transition_storage)) &&
+		AllocationFits((size_t)publication->transition_capacity,
+			sizeof(*publication->transition_evidence_storage)) &&
 		view->phase_count <= publication->phase_capacity &&
 		view->binding_count <= publication->binding_capacity &&
+		view->transition_count <= publication->transition_capacity &&
 		(view->phase_count == 0U ? !view->phases && !publication->phase_storage :
+			view->phases && publication->phase_storage &&
 			view->phases == publication->phase_storage) &&
 		(view->binding_count == 0U ?
 			!view->bindings && !publication->binding_storage :
-			view->bindings == publication->binding_storage);
+			view->bindings && publication->binding_storage &&
+			view->bindings == publication->binding_storage) &&
+		(view->transition_count == 0U ?
+			!view->transitions && !view->transition_evidence &&
+			!publication->transition_storage &&
+			!publication->transition_evidence_storage :
+			view->transitions && publication->transition_storage &&
+			view->transition_evidence &&
+			publication->transition_evidence_storage &&
+			view->transitions == publication->transition_storage &&
+			view->transition_evidence == publication->transition_evidence_storage);
 }
 
 int SG_PhaseCatalogPublicationIssue(const sg_phase_catalog_source_t *source,
@@ -115,6 +139,7 @@ int SG_PhaseCatalogPublicationIssue(const sg_phase_catalog_source_t *source,
 	}
 	publication->phase_capacity = catalog->phase_count;
 	publication->binding_capacity = catalog->binding_count;
+	publication->transition_capacity = catalog->transition_count;
 	if (catalog->phase_count != 0U &&
 		!AllocationFits((size_t)catalog->phase_count,
 			sizeof(*publication->phase_storage)))
@@ -143,6 +168,32 @@ int SG_PhaseCatalogPublicationIssue(const sg_phase_catalog_source_t *source,
 			(size_t)catalog->binding_count * sizeof(*catalog->bindings));
 		publication->view.bindings = publication->binding_storage;
 	}
+	if (catalog->transition_count != 0U &&
+		(!AllocationFits((size_t)catalog->transition_count,
+			sizeof(*publication->transition_storage)) ||
+		 !AllocationFits((size_t)catalog->transition_count,
+			sizeof(*publication->transition_evidence_storage))))
+		goto allocation_failure;
+	if (catalog->transition_count != 0U)
+	{
+		publication->transition_storage = malloc((size_t)catalog->transition_count *
+			sizeof(*publication->transition_storage));
+		publication->transition_evidence_storage = malloc(
+			(size_t)catalog->transition_count *
+			sizeof(*publication->transition_evidence_storage));
+		if (!publication->transition_storage ||
+			!publication->transition_evidence_storage)
+			goto allocation_failure;
+		memcpy(publication->transition_storage, catalog->transitions,
+			(size_t)catalog->transition_count * sizeof(*catalog->transitions));
+		memcpy(publication->transition_evidence_storage,
+			catalog->transition_evidence,
+			(size_t)catalog->transition_count *
+				sizeof(*catalog->transition_evidence));
+		publication->view.transitions = publication->transition_storage;
+		publication->view.transition_evidence =
+			publication->transition_evidence_storage;
+	}
 	publication->magic = SG_PHASE_CATALOG_PUBLICATION_MAGIC;
 	publication->magic_inverse = ~SG_PHASE_CATALOG_PUBLICATION_MAGIC;
 	publication->self = publication;
@@ -153,6 +204,7 @@ int SG_PhaseCatalogPublicationIssue(const sg_phase_catalog_source_t *source,
 		catalog->mover_support_verifier_identity;
 	publication->view.phase_count = catalog->phase_count;
 	publication->view.binding_count = catalog->binding_count;
+	publication->view.transition_count = catalog->transition_count;
 	if (!PublicationStorageShapeValid(publication))
 		goto allocation_failure;
 	if (audit_out)
@@ -163,6 +215,8 @@ int SG_PhaseCatalogPublicationIssue(const sg_phase_catalog_source_t *source,
 allocation_failure:
 	free(publication->phase_storage);
 	free(publication->binding_storage);
+	free(publication->transition_storage);
+	free(publication->transition_evidence_storage);
 	memset(publication, 0, sizeof(*publication));
 	free(publication);
 	if (audit_out)
@@ -196,7 +250,13 @@ int SG_PhaseCatalogPublicationStorageOverlaps(
 	return RangesOverlap(address, size, publication->view.phases,
 		(size_t)publication->view.phase_count * sizeof(*publication->view.phases)) ||
 		RangesOverlap(address, size, publication->view.bindings,
-		(size_t)publication->view.binding_count * sizeof(*publication->view.bindings));
+		(size_t)publication->view.binding_count * sizeof(*publication->view.bindings)) ||
+		RangesOverlap(address, size, publication->view.transitions,
+		(size_t)publication->view.transition_count *
+			sizeof(*publication->view.transitions)) ||
+		RangesOverlap(address, size, publication->view.transition_evidence,
+		(size_t)publication->view.transition_count *
+			sizeof(*publication->view.transition_evidence));
 }
 
 void SG_PhaseCatalogPublicationDestroy(
@@ -206,6 +266,8 @@ void SG_PhaseCatalogPublicationDestroy(
 		return;
 	free(publication->phase_storage);
 	free(publication->binding_storage);
+	free(publication->transition_storage);
+	free(publication->transition_evidence_storage);
 	memset(publication, 0, sizeof(*publication));
 	free(publication);
 }

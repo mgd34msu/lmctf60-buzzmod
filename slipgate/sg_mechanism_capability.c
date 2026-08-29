@@ -1,4 +1,4 @@
-#include "sg_mechanism_capability.h"
+#include "sg_mechanism_capability_internal.h"
 
 #include <float.h>
 #include <limits.h>
@@ -1885,6 +1885,17 @@ int SG_MechanismCapabilityBuild(
 		SG_MechanismCapabilityDestroy(build.output);
 		if (error_out)
 			*error_out = build.error;
+		return 0;
+	}
+	SG_MechanismCapabilitySetStamp(build.output);
+	if (!SG_MechanismCapabilitySetAccepted(build.output))
+	{
+		SG_MechanismCapabilityDestroy(build.output);
+		if (error_out)
+		{
+			error_out->code = SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW;
+			error_out->source_index = 0U;
+		}
 		return 0;
 	}
 	*capabilities_out = build.output;

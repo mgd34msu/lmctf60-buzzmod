@@ -1,30 +1,30 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include "slipgate/sg_phase_catalog.h"
+#include "slipgate/sg_phase_catalog_internal.h"
 
-static int failures;
+static int phase_failures;
 
-#define CHECK(expression) do { \
+#define CHECK_PHASE(expression) do { \
 	if (!(expression)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", \
 			__FILE__, __LINE__, #expression); \
-		failures++; \
+		phase_failures++; \
 	} \
 } while (0)
 
-typedef struct fixture_s
+typedef struct phase_fixture_s
 {
 	sg_host_collision_authority_t authority;
 	sg_configuration_space_t configuration;
-	sg_configuration_cell_t cells[2];
+	sg_configuration_cell_t *cells;
 	sg_configuration_semantics_t semantics;
-	sg_configuration_semantic_region_t regions[4];
-	sg_configuration_semantic_face_t faces[4];
-	sg_phase_mover_support_t movers[2];
+	sg_configuration_semantic_region_t *regions;
+	sg_phase_mover_support_provider_t *provider;
 	sg_phase_catalog_source_t source;
-} fixture_t;
+} phase_fixture_t;
 
 static void Set3(float value[3], float x, float y, float z)
 {
@@ -61,246 +61,463 @@ static sg_rune_model_identity_t Identity(void)
 	return identity;
 }
 
-static sg_rune_mechanism_ref_t Mechanism(uint32_t source_index)
+static void SetCell(sg_configuration_cell_t *cell,
+	const sg_rune_model_identity_t *identity, uint32_t index,
+	sg_rune_stance_t stance)
 {
-	sg_rune_order_key_t order = {
-		UINT64_C(0x1004), SG_RUNE_ORDER_MECHANISM,
-		source_index, 0U, 0U
-	};
-	sg_rune_mechanism_ref_t result;
-
-	result.value = SG_RuneModelStableIdFromOrderKey(&order);
-	return result;
+	memset(cell, 0, sizeof(*cell));
+	cell->order.source_set_identity = identity->source_set_identity;
+	cell->order.domain = SG_RUNE_ORDER_CELL;
+	cell->order.source_index = index;
+	cell->order.local_ordinal = 0U;
+	cell->order.variant = 0U;
+	cell->id.value = SG_RuneModelStableIdFromOrderKey(&cell->order);
+	cell->stance = stance;
 }
 
-static void Region(fixture_t *fixture, uint32_t index, uint32_t cell,
-	uint32_t flags, uint8_t water_level, uint32_t water_type)
+static void SetRegion(sg_configuration_semantic_region_t *region,
+	uint64_t id, uint32_t cell, uint32_t flags)
 {
-	sg_configuration_semantic_region_t *region = &fixture->regions[index];
-
 	memset(region, 0, sizeof(*region));
-	region->id = UINT64_C(100) + index;
+	region->id = id;
 	region->cell = cell;
-	region->first_face = index;
-	region->face_count = 1U;
 	region->flags = flags;
-	region->water_level = water_level;
-	region->water_type = water_type;
-	region->origin_contents = water_type;
-	region->sample_contents[0] = water_type;
-	region->sample_contents[1] = water_type;
-	region->sample_contents[2] = water_type;
-	Set3(region->bounds.mins.value, -16.0f, -16.0f, (float)index);
-	Set3(region->bounds.maxs.value, 16.0f, 16.0f, (float)index + 1.0f);
-	Set3(region->interior_witness.value, 0.0f, 0.0f,
-		(float)index + 0.5f);
+	region->water_level = 0U;
+	region->water_type = 0U;
+	region->origin_contents = 0U;
+	Set3(region->bounds.mins.value, -16.0f, -16.0f, -24.0f);
+	Set3(region->bounds.maxs.value, 16.0f, 16.0f, 32.0f);
+	Set3(region->interior_witness.value, 0.0f, 0.0f, 0.0f);
 }
 
-static void FixtureInit(fixture_t *fixture)
+static int FixtureInit(phase_fixture_t *fixture, uint32_t cell_count,
+	uint32_t region_count, int split_support)
 {
 	sg_rune_model_identity_t identity = Identity();
+	sg_phase_catalog_error_t provider_error;
+	uint32_t index;
 
 	memset(fixture, 0, sizeof(*fixture));
+	fixture->cells = calloc(cell_count == 0U ? 1U : (size_t)cell_count,
+		sizeof(*fixture->cells));
+	fixture->regions = calloc(region_count == 0U ? 1U : (size_t)region_count,
+		sizeof(*fixture->regions));
+	if (!fixture->cells || !fixture->regions)
+	{
+		free(fixture->cells);
+		free(fixture->regions);
+		memset(fixture, 0, sizeof(*fixture));
+		return 0;
+	}
 	fixture->authority.identity = identity;
 	fixture->configuration.identity = identity;
 	fixture->configuration.cells = fixture->cells;
-	fixture->configuration.cell_count = 2U;
-	fixture->cells[0].stance = SG_RUNE_STANCE_STANDING;
-	fixture->cells[1].stance = SG_RUNE_STANCE_CROUCHING;
+	fixture->configuration.cell_count = cell_count;
 	fixture->semantics.identity = identity;
 	fixture->semantics.regions = fixture->regions;
-	fixture->semantics.region_count = 4U;
-	fixture->semantics.faces = fixture->faces;
-	fixture->semantics.face_count = 4U;
-	Region(fixture, 0U, 0U,
-		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U);
-	Region(fixture, 1U, 0U,
-		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U);
-	Region(fixture, 2U, 0U,
-		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE |
-		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT, 0U, 0U);
-	Region(fixture, 3U, 1U,
-		SG_CONFIGURATION_SEMANTIC_REGION_WATER |
-		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 3U,
-		SG_HOST_CONTENTS_WATER);
-	fixture->movers[0].semantic_region_id = fixture->regions[2].id;
-	fixture->movers[0].mechanism = Mechanism(4U);
-	fixture->movers[0].mechanism_state_mask =
-		SG_PHASE_MECHANISM_STATE_INACTIVE |
-		SG_PHASE_MECHANISM_STATE_ACTIVE;
-	fixture->movers[1].semantic_region_id = fixture->regions[2].id;
-	fixture->movers[1].mechanism = Mechanism(5U);
-	fixture->movers[1].mechanism_state_mask =
-		SG_PHASE_MECHANISM_STATE_DWELLING;
+	fixture->semantics.region_count = region_count;
+	fixture->semantics.faces = NULL;
+	fixture->semantics.face_count = 0U;
+	for (index = 0U; index < cell_count; index++)
+		SetCell(&fixture->cells[index], &identity, index,
+			index == 1U ? SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING);
+	if (!split_support)
+	{
+		if (region_count >= 1U)
+			SetRegion(&fixture->regions[0], 0U, 0U,
+				SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
+		if (region_count >= 2U)
+			SetRegion(&fixture->regions[1], 1U, 1U,
+				SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
+		for (index = 2U; index < region_count; index++)
+			SetRegion(&fixture->regions[index], index, 1U,
+				SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE);
+	}
+	else
+	{
+		SetRegion(&fixture->regions[0], 0U, 0U,
+			SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE);
+		SetRegion(&fixture->regions[1], 1U, 0U,
+			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
+	}
+	if (!SG_PhaseMoverSupportProviderBuildEmpty(&identity,
+		&fixture->provider, &provider_error))
+	{
+		free(fixture->cells);
+		free(fixture->regions);
+		memset(fixture, 0, sizeof(*fixture));
+		return 0;
+	}
 	fixture->source.authority = &fixture->authority;
 	fixture->source.configuration = &fixture->configuration;
 	fixture->source.semantics = &fixture->semantics;
-	fixture->source.mover_supports = fixture->movers;
-	fixture->source.mover_support_count = 2U;
-	fixture->source.mover_support_completion = SG_PHASE_CATALOG_COMPLETE;
-	fixture->source.mover_support_verifier_identity = UINT64_C(0x2001);
+	fixture->source.mover_support_provider = fixture->provider;
+	return 1;
 }
 
-static void TestCompleteCatalogAndStableMembership(void)
+static void FixtureDestroy(phase_fixture_t *fixture)
 {
-	fixture_t fixture;
-	sg_phase_catalog_t *catalog = NULL;
-	sg_phase_catalog_error_t error;
-	sg_phase_catalog_audit_result_t audit;
-	const sg_phase_catalog_binding_t *bindings;
-	uint32_t binding_count;
-
-	FixtureInit(&fixture);
-	CHECK(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	CHECK(catalog != NULL);
-	if (!catalog)
+	if (!fixture)
 		return;
-	CHECK(catalog->completion == SG_PHASE_CATALOG_COMPLETE);
-	CHECK(catalog->phase_count == 5U);
-	CHECK(catalog->binding_count == 6U);
-	CHECK(catalog->transition_completion == SG_PHASE_CATALOG_COMPLETE);
-	CHECK(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
-	CHECK(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
-	CHECK(audit.proved_phases == 5U);
-	CHECK(SG_PhaseCatalogBindingsForRegion(catalog,
-		fixture.regions[0].id, &bindings, &binding_count));
-	CHECK(binding_count == 1U);
-	CHECK(bindings != NULL && bindings[0].configuration_cell == 0U);
-	CHECK(SG_PhaseCatalogBindingsForRegion(catalog,
-		fixture.regions[2].id, &bindings, &binding_count));
-	CHECK(binding_count == 3U);
-	SG_PhaseCatalogDestroy(catalog);
+	SG_PhaseMoverSupportProviderDestroy(fixture->provider);
+	free(fixture->cells);
+	free(fixture->regions);
+	memset(fixture, 0, sizeof(*fixture));
 }
 
-static void TestProvenEmpty(void)
+typedef struct real_producer_fixture_s
 {
-	fixture_t fixture;
+	sg_bsp_world_t world;
+	sg_bsp_plane_t planes[7];
+	sg_bsp_node_t node;
+	sg_bsp_leaf_t leaves[3];
+	uint32_t leaf_brush;
+	sg_bsp_model_t models[2];
+	sg_bsp_brush_t brush;
+	sg_bsp_brush_side_t brush_sides[6];
+	sg_host_collision_authority_t authority;
+	sg_configuration_space_t *configuration;
+	sg_configuration_semantics_t *semantics;
+} real_producer_fixture_t;
+
+static void SetBspPlane(sg_bsp_plane_t *plane, float x, float y, float z,
+	float distance)
+{
+	Set3(plane->normal.value, x, y, z);
+	plane->distance = distance;
+	plane->type = x == 1.0f ? 0 : (y == 1.0f ? 1 : (z == 1.0f ? 2 : 3));
+}
+
+static void RealProducerWorldInit(real_producer_fixture_t *fixture)
+{
+	uint32_t side;
+
+	memset(fixture, 0, sizeof(*fixture));
+	SetBspPlane(&fixture->planes[0], 1.0f, 0.0f, 0.0f, 0.0f);
+	SetBspPlane(&fixture->planes[1], 1.0f, 0.0f, 0.0f, 2.0f);
+	SetBspPlane(&fixture->planes[2], -1.0f, 0.0f, 0.0f, 2.0f);
+	SetBspPlane(&fixture->planes[3], 0.0f, 1.0f, 0.0f, 64.0f);
+	SetBspPlane(&fixture->planes[4], 0.0f, -1.0f, 0.0f, 64.0f);
+	SetBspPlane(&fixture->planes[5], 0.0f, 0.0f, 1.0f, 64.0f);
+	SetBspPlane(&fixture->planes[6], 0.0f, 0.0f, -1.0f, 64.0f);
+	fixture->node.plane = 0U;
+	fixture->node.children[0] = -1;
+	fixture->node.children[1] = -2;
+	fixture->leaves[0].cluster = 0;
+	fixture->leaves[0].area = 1U;
+	fixture->leaves[1].cluster = 1;
+	fixture->leaves[1].area = 2U;
+	fixture->leaves[2].contents = SG_HOST_CONTENTS_SOLID;
+	fixture->leaves[2].cluster = -1;
+	fixture->leaves[2].first_leaf_brush = 0U;
+	fixture->leaves[2].leaf_brush_count = 1U;
+	fixture->leaf_brush = 0U;
+	fixture->brush.first_side = 0U;
+	fixture->brush.side_count = 6U;
+	fixture->brush.contents = SG_HOST_CONTENTS_SOLID;
+	for (side = 0U; side < 6U; side++)
+	{
+		fixture->brush_sides[side].plane = side + 1U;
+		fixture->brush_sides[side].texinfo = -1;
+	}
+	fixture->models[0].headnode = 0;
+	Set3(fixture->models[0].mins.value, -4096.0f, -4096.0f, -4096.0f);
+	Set3(fixture->models[0].maxs.value, 4095.875f, 4095.875f, 4095.875f);
+	fixture->models[1].headnode = -3;
+	Set3(fixture->models[1].mins.value, -2.0f, -64.0f, -64.0f);
+	Set3(fixture->models[1].maxs.value, 2.0f, 64.0f, 64.0f);
+	fixture->world.planes = fixture->planes;
+	fixture->world.plane_count = 7U;
+	fixture->world.nodes = &fixture->node;
+	fixture->world.node_count = 1U;
+	fixture->world.leaves = fixture->leaves;
+	fixture->world.leaf_count = 3U;
+	fixture->world.leaf_brushes = &fixture->leaf_brush;
+	fixture->world.leaf_brush_count = 1U;
+	fixture->world.models = fixture->models;
+	fixture->world.model_count = 2U;
+	fixture->world.brushes = &fixture->brush;
+	fixture->world.brush_count = 1U;
+	fixture->world.brush_sides = fixture->brush_sides;
+	fixture->world.brush_side_count = 6U;
+}
+
+static void RealProducerFixtureDestroy(real_producer_fixture_t *fixture)
+{
+	SG_ConfigurationSemanticsDestroy(fixture->semantics);
+	SG_ConfigurationDestroy(fixture->configuration);
+	fixture->semantics = NULL;
+	fixture->configuration = NULL;
+}
+
+static void TestRealConfigurationSemanticsProducer(void)
+{
+	real_producer_fixture_t fixture;
+	sg_rune_model_identity_t identity = Identity();
+	sg_host_collision_error_t host_error;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_limits_t semantics_limits;
+	sg_phase_mover_support_provider_t *provider = NULL;
+	sg_phase_catalog_source_t source;
 	sg_phase_catalog_t *catalog = NULL;
-	sg_phase_catalog_error_t error;
+	sg_phase_catalog_error_t catalog_error;
 	sg_phase_catalog_audit_result_t audit;
+	const sg_phase_catalog_binding_t *bindings = NULL;
+	uint32_t binding_count = 0U;
 
-	FixtureInit(&fixture);
-	fixture.configuration.cell_count = 0U;
-	fixture.configuration.cells = NULL;
-	fixture.semantics.region_count = 0U;
-	fixture.semantics.regions = NULL;
-	fixture.semantics.face_count = 0U;
-	fixture.semantics.faces = NULL;
-	fixture.source.mover_supports = NULL;
-	fixture.source.mover_support_count = 0U;
-	fixture.source.mover_support_completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
-	CHECK(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	CHECK(catalog != NULL);
-	if (!catalog)
+	RealProducerWorldInit(&fixture);
+	CHECK_PHASE(SG_HostCollisionInit(&fixture.authority, &fixture.world,
+		&identity, &host_error));
+	CHECK_PHASE(SG_ConfigurationBuild(&fixture.authority, NULL,
+		&fixture.configuration, &configuration_error));
+	if (!fixture.configuration)
+	{
+		RealProducerFixtureDestroy(&fixture);
 		return;
-	CHECK(catalog->completion == SG_PHASE_CATALOG_PROVEN_EMPTY);
-	CHECK(catalog->phase_count == 0U);
-	CHECK(catalog->transition_completion == SG_PHASE_CATALOG_PROVEN_EMPTY);
-	CHECK(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
-	CHECK(audit.code == SG_PHASE_CATALOG_AUDIT_OK_PROVEN_EMPTY);
-	SG_PhaseCatalogDestroy(catalog);
+	}
+	SG_ConfigurationSemanticsDefaultLimits(&semantics_limits);
+	CHECK_PHASE(SG_ConfigurationSemanticsBuild(&fixture.authority,
+		fixture.configuration, &semantics_limits, &fixture.semantics,
+		&semantics_error));
+	if (!fixture.semantics)
+	{
+		RealProducerFixtureDestroy(&fixture);
+		return;
+	}
+	CHECK_PHASE(fixture.semantics->region_count != 0U);
+	CHECK_PHASE(fixture.semantics->regions != NULL);
+	if (!fixture.semantics->regions)
+	{
+		RealProducerFixtureDestroy(&fixture);
+		return;
+	}
+	CHECK_PHASE(fixture.semantics->regions[0].id == 0U);
+	CHECK_PHASE(SG_PhaseMoverSupportProviderBuildEmpty(&identity, &provider,
+		&catalog_error));
+	memset(&source, 0, sizeof(source));
+	source.authority = &fixture.authority;
+	source.configuration = fixture.configuration;
+	source.semantics = fixture.semantics;
+	source.mover_support_provider = provider;
+	CHECK_PHASE(SG_PhaseCatalogBuild(&source, &catalog, &catalog_error));
+	CHECK_PHASE(catalog != NULL);
+	if (catalog)
+	{
+		CHECK_PHASE(SG_PhaseCatalogBindingsForRegion(catalog, 0U, &bindings,
+			&binding_count));
+		CHECK_PHASE(binding_count != 0U && bindings != NULL);
+		CHECK_PHASE(SG_PhaseCatalogAudit(&source, catalog, &audit));
+		SG_PhaseCatalogDestroy(catalog);
+	}
+	SG_PhaseMoverSupportProviderDestroy(provider);
+	RealProducerFixtureDestroy(&fixture);
 }
 
-static void TestAuditRejectsEveryRecordClass(void)
+static void TestRegionZeroAndImmutableEmpty(void)
 {
-	fixture_t fixture;
-	sg_phase_catalog_t *catalog = NULL;
-	sg_phase_catalog_error_t error;
-	sg_phase_catalog_audit_result_t audit;
-	uint32_t saved_count;
-	sg_rune_phase_basis_t saved_phase;
-	sg_phase_catalog_binding_t saved_binding;
-
-	FixtureInit(&fixture);
-	CHECK(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	if (!catalog)
-		return;
-	saved_count = catalog->phase_count;
-	catalog->phase_count--;
-	CHECK(!SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
-	CHECK(audit.code == SG_PHASE_CATALOG_AUDIT_OMITTED_PHASE);
-	catalog->phase_count = saved_count;
-	saved_phase = catalog->phases[1];
-	catalog->phases[1] = catalog->phases[0];
-	CHECK(!SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
-	CHECK(audit.code == SG_PHASE_CATALOG_AUDIT_DUPLICATE_PHASE);
-	catalog->phases[1] = saved_phase;
-	saved_binding = catalog->bindings[0];
-	catalog->bindings[0].phase = SG_RUNE_PHASE_REF_NONE;
-	CHECK(!SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
-	CHECK(audit.code == SG_PHASE_CATALOG_AUDIT_UNRESOLVED_BINDING);
-	catalog->bindings[0] = saved_binding;
-	fixture.source.mover_supports[0].mechanism_state_mask = 0U;
-	CHECK(!SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
-	CHECK(audit.code == SG_PHASE_CATALOG_AUDIT_INVALID_SOURCE);
-	SG_PhaseCatalogDestroy(catalog);
-}
-
-static void TestPublicationOwnsAuditedRecords(void)
-{
-	fixture_t fixture;
+	phase_fixture_t fixture;
 	sg_phase_catalog_t *catalog = NULL;
 	sg_phase_catalog_publication_t *publication = NULL;
-	const sg_phase_catalog_view_t *view = NULL;
 	sg_phase_catalog_error_t error;
 	sg_phase_catalog_audit_result_t audit;
-	sg_rune_phase_basis_t first;
+	const sg_phase_catalog_binding_t *bindings = NULL;
+	const sg_phase_catalog_view_t *view = NULL;
+	uint32_t binding_count = 0U;
 
-	FixtureInit(&fixture);
-	CHECK(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	CHECK(SG_PhaseCatalogPublicationIssue(&fixture.source, catalog,
-		&publication, &audit));
-	CHECK(publication != NULL);
-	CHECK(SG_PhaseCatalogPublicationRead(publication, &view));
-	CHECK(view != NULL && view->phase_count == 5U);
-	if (!view)
+	CHECK_PHASE(FixtureInit(&fixture, 2U, 2U, 0));
+	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog != NULL);
+	if (!catalog)
+	{
+		FixtureDestroy(&fixture);
 		return;
-	first = view->phases[0];
-	catalog->phases[0].velocity.x.max_value = 1.0f;
-	fixture.regions[0].flags = SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE;
-	CHECK(SG_PhaseCatalogPublicationRead(publication, &view));
-	CHECK(!memcmp(&first, &view->phases[0], sizeof(first)));
-	CHECK(!SG_PhaseCatalogPublicationStorageOverlaps(publication,
-		catalog->phases,
-		(size_t)catalog->phase_count * sizeof(*catalog->phases)));
-	CHECK(SG_PhaseCatalogPublicationStorageOverlaps(publication,
-		view->phases, (size_t)view->phase_count * sizeof(*view->phases)));
-	SG_PhaseCatalogDestroy(catalog);
+	}
+	CHECK_PHASE(catalog->completion == SG_PHASE_CATALOG_COMPLETE);
+	CHECK_PHASE(catalog->phase_count == 2U);
+	CHECK_PHASE(catalog->binding_count == 2U);
+	CHECK_PHASE(catalog->transition_completion ==
+		SG_PHASE_CATALOG_PROVEN_EMPTY);
+	CHECK_PHASE(catalog->transition_count == 0U);
+	CHECK_PHASE(SG_PhaseCatalogBindingsForRegion(catalog, 0U, &bindings,
+		&binding_count));
+	CHECK_PHASE(binding_count == 1U && bindings != NULL &&
+		bindings[0].semantic_region_id == 0U);
+	CHECK_PHASE(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
+	CHECK_PHASE(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
+	CHECK_PHASE(SG_PhaseCatalogPublicationIssue(&fixture.source, catalog,
+		&publication, &audit));
+	CHECK_PHASE(SG_PhaseCatalogPublicationRead(publication, &view));
+	CHECK_PHASE(view != NULL && view->phase_count == 2U &&
+		view->transition_count == 0U && view->transitions == NULL &&
+		view->transition_evidence == NULL);
+	CHECK_PHASE(!SG_PhaseCatalogPublicationStorageOverlaps(publication,
+		catalog->phases, (size_t)catalog->phase_count * sizeof(*catalog->phases)));
+	CHECK_PHASE(!SG_PhaseCatalogPublicationStorageOverlaps(publication,
+		fixture.regions, (size_t)fixture.semantics.region_count *
+		sizeof(*fixture.regions)));
 	SG_PhaseCatalogPublicationDestroy(publication);
+	SG_PhaseCatalogDestroy(catalog);
+	FixtureDestroy(&fixture);
 }
 
-static void TestIdentityAndMoverCoverageFailClosed(void)
+static void TestSupportTransitionEvidence(void)
 {
-	fixture_t fixture;
+	phase_fixture_t fixture;
 	sg_phase_catalog_t *catalog = NULL;
 	sg_phase_catalog_error_t error;
+	sg_phase_catalog_audit_result_t audit;
 
-	FixtureInit(&fixture);
-	fixture.semantics.identity.physics_abi_id++;
-	CHECK(!SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	CHECK(error.code == SG_PHASE_CATALOG_ERROR_IDENTITY_MISMATCH);
-	FixtureInit(&fixture);
-	fixture.source.mover_support_completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
-	CHECK(!SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	CHECK(error.code == SG_PHASE_CATALOG_ERROR_INVALID_SOURCE);
-	FixtureInit(&fixture);
-	fixture.source.mover_support_count = 0U;
-	fixture.source.mover_supports = NULL;
-	fixture.source.mover_support_completion = SG_PHASE_CATALOG_COMPLETE;
-	CHECK(!SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
-	CHECK(error.code == SG_PHASE_CATALOG_ERROR_INCOMPLETE_SOURCE);
+	CHECK_PHASE(FixtureInit(&fixture, 1U, 2U, 1));
+	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog != NULL);
+	if (!catalog)
+	{
+		FixtureDestroy(&fixture);
+		return;
+	}
+	CHECK_PHASE(catalog->phase_count == 2U);
+	CHECK_PHASE(catalog->transition_count == 1U);
+	CHECK_PHASE(catalog->transition_completion == SG_PHASE_CATALOG_COMPLETE);
+	CHECK_PHASE(catalog->transition_evidence[0].origin ==
+		SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE);
+	CHECK_PHASE(catalog->transitions[0].kind == SG_RUNE_PHASE_TRANSITION_SUPPORT);
+	CHECK_PHASE(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
+	CHECK_PHASE(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
+	catalog->transition_evidence[0].source_state_mask =
+		SG_PHASE_MECHANISM_STATE_RETURNING;
+	CHECK_PHASE(!SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
+	CHECK_PHASE(audit.code == SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT);
+	SG_PhaseCatalogDestroy(catalog);
+	FixtureDestroy(&fixture);
+}
+
+static void TestStanceAndPortalTransitions(void)
+{
+	phase_fixture_t fixture;
+	sg_configuration_stance_overlap_t overlap;
+	sg_configuration_portal_t portal;
+	sg_phase_catalog_t *catalog = NULL;
+	sg_phase_catalog_error_t error;
+	sg_phase_catalog_audit_result_t audit;
+	uint32_t index;
+	uint32_t stance_transitions = 0U;
+	uint32_t portal_transitions = 0U;
+
+	CHECK_PHASE(FixtureInit(&fixture, 2U, 2U, 0));
+	memset(&overlap, 0, sizeof(overlap));
+	overlap.standing_cell = 0U;
+	overlap.crouching_cell = 1U;
+	Set3(overlap.bounds.mins.value, -8.0f, -8.0f, -8.0f);
+	Set3(overlap.bounds.maxs.value, 8.0f, 8.0f, 8.0f);
+	Set3(overlap.interior_witness.value, 0.0f, 0.0f, 0.0f);
+	fixture.configuration.stance_overlaps = &overlap;
+	fixture.configuration.stance_overlap_count = 1U;
+	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog != NULL);
+	if (catalog)
+	{
+		for (index = 0U; index < catalog->transition_count; index++)
+			if (catalog->transition_evidence[index].origin ==
+				SG_PHASE_CATALOG_TRANSITION_STANCE_OVERLAP)
+				stance_transitions++;
+		CHECK_PHASE(stance_transitions == 1U);
+		CHECK_PHASE(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
+		SG_PhaseCatalogDestroy(catalog);
+		catalog = NULL;
+	}
+	FixtureDestroy(&fixture);
+
+	if (!FixtureInit(&fixture, 2U, 2U, 0))
+	{
+		CHECK_PHASE(0);
+		return;
+	}
+	fixture.cells[1].stance = SG_RUNE_STANCE_STANDING;
+	memset(&portal, 0, sizeof(portal));
+	portal.order.source_set_identity = fixture.authority.identity.source_set_identity;
+	portal.order.domain = SG_RUNE_ORDER_PORTAL;
+	portal.order.source_index = 0U;
+	portal.order.local_ordinal = 1U;
+	portal.order.variant = 0U;
+	portal.id.value = SG_RuneModelStableIdFromOrderKey(&portal.order);
+	portal.from_cell = 0U;
+	portal.to_cell = 1U;
+	portal.stance = SG_RUNE_STANCE_STANDING;
+	portal.plane.normal[0] = 1.0f;
+	portal.clearance = 1.0f;
+	fixture.configuration.portals = &portal;
+	fixture.configuration.portal_count = 1U;
+	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog != NULL);
+	if (catalog)
+	{
+		for (index = 0U; index < catalog->transition_count; index++)
+			if (catalog->transition_evidence[index].origin ==
+				SG_PHASE_CATALOG_TRANSITION_PORTAL)
+				portal_transitions++;
+		CHECK_PHASE(portal_transitions == 2U);
+		CHECK_PHASE(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
+		SG_PhaseCatalogDestroy(catalog);
+	}
+	FixtureDestroy(&fixture);
+}
+
+static void TestCallerCannotIssueMechanismProvider(void)
+{
+	phase_fixture_t fixture;
+	sg_mechanism_capability_set_t forged;
+	sg_phase_mover_support_provider_t *provider = NULL;
+	sg_phase_catalog_error_t error;
+
+	CHECK_PHASE(FixtureInit(&fixture, 1U, 1U, 0));
+	memset(&forged, 0, sizeof(forged));
+	CHECK_PHASE(!SG_PhaseMoverSupportProviderBuild(&fixture.semantics,
+		&forged, &provider, &error));
+	CHECK_PHASE(provider == NULL);
+	CHECK_PHASE(error.code == SG_PHASE_CATALOG_ERROR_INVALID_SOURCE);
+	FixtureDestroy(&fixture);
+}
+
+static void TestLargePreDedupSource(void)
+{
+	phase_fixture_t fixture;
+	sg_phase_catalog_t *catalog = NULL;
+	sg_phase_catalog_error_t error;
+	sg_phase_catalog_audit_result_t audit;
+	uint32_t index;
+	uint32_t count = SG_RUNE_MODEL_MAX_PHASES + 1U;
+
+	CHECK_PHASE(FixtureInit(&fixture, 1U, count, 0));
+	if (!fixture.regions)
+		return;
+	for (index = 0U; index < count; index++)
+		SetRegion(&fixture.regions[index], index, 0U,
+			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
+	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog != NULL);
+	if (catalog)
+	{
+		CHECK_PHASE(catalog->phase_count == 1U);
+		CHECK_PHASE(catalog->binding_count == count);
+		CHECK_PHASE(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
+		CHECK_PHASE(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
+	}
+	SG_PhaseCatalogDestroy(catalog);
+	FixtureDestroy(&fixture);
 }
 
 int main(void)
 {
-	TestCompleteCatalogAndStableMembership();
-	TestProvenEmpty();
-	TestAuditRejectsEveryRecordClass();
-	TestPublicationOwnsAuditedRecords();
-	TestIdentityAndMoverCoverageFailClosed();
-	if (failures)
+	TestRealConfigurationSemanticsProducer();
+	TestRegionZeroAndImmutableEmpty();
+	TestSupportTransitionEvidence();
+	TestStanceAndPortalTransitions();
+	TestCallerCannotIssueMechanismProvider();
+	TestLargePreDedupSource();
+	if (phase_failures)
 	{
-		fprintf(stderr, "%d phase catalog checks failed\n", failures);
+		fprintf(stderr, "%d phase catalog checks failed\n", phase_failures);
 		return 1;
 	}
 	puts("phase catalog checks passed");

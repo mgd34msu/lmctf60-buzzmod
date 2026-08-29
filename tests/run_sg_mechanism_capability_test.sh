@@ -8,6 +8,7 @@ trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
 sources='tests/sg_mechanism_capability_test.c
 slipgate/sg_mechanism_capability.c
+slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_bsp_completeness_proof.c
 slipgate/sg_bsp_completeness_core.c
 slipgate/sg_bsp_completeness_region.c
@@ -43,7 +44,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	"$tmp_dir/mechanism-capability-sanitize"
 
 for source in slipgate/sg_mechanism_capability.c \
-	tests/sg_mechanism_capability_test.c
+	slipgate/sg_mechanism_capability_seal.c tests/sg_mechanism_capability_test.c
 do
 	clang --analyze $strict $isl_cflags -I. "$source" \
 		-o "$tmp_dir/$(basename "$source").plist"
