@@ -1305,6 +1305,8 @@ OBJS := \
 	sg_goal.o \
 	slipgate/sg_destination.o \
 	slipgate/sg_rune_dynamics_model.o \
+	slipgate/sg_rune_dynamics_geometry.o \
+	slipgate/sg_rune_field_contract.o \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
@@ -3942,7 +3944,10 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		tests/run_sg_rune_dynamics_model_test.sh \
 		tests/sg_rune_dynamics_model_test.c \
 		slipgate/sg_rune_dynamics_model.c \
+		slipgate/sg_rune_dynamics_geometry.c \
+		slipgate/sg_rune_field_contract.c \
 		slipgate/sg_rune_dynamics_model.h \
+		slipgate/sg_rune_dynamics_model_internal.h \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
 	$(Q)set -e; \
@@ -3984,7 +3989,11 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		-o "$$tmp/destination.o"; \
 	sh tests/run_sg_rune_dynamics_model_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"
+		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_geometry.c -o "$$tmp/geometry.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \

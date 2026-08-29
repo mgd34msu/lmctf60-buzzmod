@@ -46,10 +46,11 @@ typedef struct sg_rune_boundary_transfer_id_s
 } sg_rune_boundary_transfer_id_t;
 typedef sg_rune_boundary_transfer_id_t sg_rune_boundary_transfer_ref_t;
 
-typedef struct sg_rune_control_domain_ref_s
+typedef struct sg_rune_control_domain_id_s
 {
 	sg_rune_stable_id_t value;
-} sg_rune_control_domain_ref_t;
+} sg_rune_control_domain_id_t;
+typedef sg_rune_control_domain_id_t sg_rune_control_domain_ref_t;
 
 typedef struct sg_rune_guard_condition_ref_s
 {
@@ -243,6 +244,18 @@ typedef struct sg_rune_control_fiber_s
 	sg_rune_dynamics_proof_ref_t coverage_proof;
 } sg_rune_control_fiber_t;
 
+typedef struct sg_rune_control_domain_s
+{
+	sg_rune_control_domain_id_t id;
+	sg_rune_state_chart_ref_t source_chart;
+	sg_rune_interval_t forward_move;
+	sg_rune_interval_t side_move;
+	sg_rune_interval_t up_move;
+	uint32_t required_buttons;
+	uint32_t allowed_buttons;
+	sg_rune_dynamics_proof_ref_t admissibility_proof;
+} sg_rune_control_domain_t;
+
 typedef struct sg_rune_flow_enclosure_s
 {
 	sg_rune_interval3_t position;
@@ -336,6 +349,8 @@ typedef struct sg_rune_dynamics_model_s
 	size_t state_domain_count;
 	const sg_rune_control_fiber_t *control_fibers;
 	size_t control_fiber_count;
+	const sg_rune_control_domain_t *control_domains;
+	size_t control_domain_count;
 	const sg_rune_response_patch_t *response_patches;
 	size_t response_patch_count;
 	const sg_rune_boundary_transfer_t *boundary_transfers;
@@ -453,6 +468,7 @@ int SG_RuneStateChartIdValid(const sg_rune_state_chart_id_t *id);
 int SG_RuneStateSimplexIdValid(const sg_rune_state_simplex_id_t *id);
 int SG_RuneStateDomainIdValid(const sg_rune_state_domain_id_t *id);
 int SG_RuneControlFiberIdValid(const sg_rune_control_fiber_id_t *id);
+int SG_RuneControlDomainIdValid(const sg_rune_control_domain_id_t *id);
 int SG_RuneResponsePatchIdValid(const sg_rune_response_patch_id_t *id);
 int SG_RuneBoundaryTransferIdValid(
 	const sg_rune_boundary_transfer_id_t *id);
@@ -469,6 +485,7 @@ int SG_RuneStateSimplexShapeValid(const sg_rune_state_simplex_t *simplex);
 int SG_RuneStateDomainShapeValid(const sg_rune_state_domain_t *domain);
 int SG_RuneStateChartShapeValid(const sg_rune_state_chart_t *chart);
 int SG_RuneControlFiberShapeValid(const sg_rune_control_fiber_t *fiber);
+int SG_RuneControlDomainShapeValid(const sg_rune_control_domain_t *domain);
 int SG_RuneResponsePatchShapeValid(const sg_rune_response_patch_t *patch);
 int SG_RuneBoundaryTransferShapeValid(
 	const sg_rune_boundary_transfer_t *transfer);

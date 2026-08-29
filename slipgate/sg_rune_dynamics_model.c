@@ -1,4 +1,4 @@
-#include "sg_rune_dynamics_model.h"
+#include "sg_rune_dynamics_model_internal.h"
 
 #include <math.h>
 
@@ -36,6 +36,8 @@ DEFINE_DOMAIN_VALIDATOR(SG_RuneResponsePatchIdValid,
 	sg_rune_response_patch_id_t, SG_RUNE_ORDER_RESPONSE_PATCH)
 DEFINE_DOMAIN_VALIDATOR(SG_RuneBoundaryTransferIdValid,
 	sg_rune_boundary_transfer_id_t, SG_RUNE_ORDER_BOUNDARY_TRANSFER)
+DEFINE_DOMAIN_VALIDATOR(SG_RuneControlDomainIdValid,
+	sg_rune_control_domain_id_t, SG_RUNE_ORDER_CONTROL_DOMAIN)
 DEFINE_DOMAIN_VALIDATOR(SG_RuneControlDomainRefValid,
 	sg_rune_control_domain_ref_t, SG_RUNE_ORDER_CONTROL_DOMAIN)
 DEFINE_DOMAIN_VALIDATOR(SG_RuneGuardConditionRefValid,
@@ -87,19 +89,6 @@ static int CostBoundsValid(const sg_rune_cost_bounds_t *cost)
 static int SpanWithin(uint32_t first, uint32_t count, size_t capacity)
 {
 	return (size_t)first <= capacity && (size_t)count <= capacity - first;
-}
-
-static int ErrorIntervalValid(const sg_rune_interval_t *interval)
-{
-	return IntervalValid(interval) && interval->min_value <= 0.0f &&
-		interval->max_value >= 0.0f;
-}
-
-static int ErrorInterval3Valid(const sg_rune_interval3_t *interval)
-{
-	return interval && ErrorIntervalValid(&interval->x) &&
-		ErrorIntervalValid(&interval->y) &&
-		ErrorIntervalValid(&interval->z);
 }
 
 static int WaterModeValid(const sg_rune_water_mode_t *water)
@@ -222,6 +211,17 @@ int SG_RuneControlFiberShapeValid(const sg_rune_control_fiber_t *fiber)
 		SG_RuneDynamicsProofRefValid(&fiber->coverage_proof);
 }
 
+int SG_RuneControlDomainShapeValid(const sg_rune_control_domain_t *domain)
+{
+	return domain && SG_RuneControlDomainIdValid(&domain->id) &&
+		SG_RuneStateChartIdValid(&domain->source_chart) &&
+		IntervalValid(&domain->forward_move) &&
+		IntervalValid(&domain->side_move) &&
+		IntervalValid(&domain->up_move) &&
+		(domain->required_buttons & ~domain->allowed_buttons) == 0U &&
+		SG_RuneDynamicsProofRefValid(&domain->admissibility_proof);
+}
+
 int SG_RuneResponsePatchShapeValid(const sg_rune_response_patch_t *patch)
 {
 	return patch && SG_RuneResponsePatchIdValid(&patch->id) &&
@@ -315,6 +315,31 @@ static int LeafOwnershipValid(const sg_rune_field_region_hierarchy_t *hierarchy,
 	return next_item == item_count;
 }
 
+static int InternalSummaryValid(
+	const sg_rune_field_region_hierarchy_t *hierarchy,
+	const sg_rune_field_region_t *region, field_region_owned_kind_t kind)
+{
+	sg_rune_field_region_span_t summary = RegionOwnedSpan(region, kind);
+	size_t child_index;
+	size_t next_item = summary.first;
+
+	if (region->children.count == 0U)
+		return 1;
+	for (child_index = 0U; child_index < region->children.count;
+	     child_index++)
+	{
+		uint32_t child = hierarchy->children[
+			(size_t)region->children.first + child_index];
+		sg_rune_field_region_span_t child_summary =
+			RegionOwnedSpan(&hierarchy->regions[child], kind);
+
+		if (child_summary.first != next_item)
+			return 0;
+		next_item += child_summary.count;
+	}
+	return next_item == (size_t)summary.first + summary.count;
+}
+
 int SG_RuneFieldRegionHierarchyValid(
 	const sg_rune_field_region_hierarchy_t *hierarchy)
 {
@@ -381,11 +406,20 @@ int SG_RuneFieldRegionHierarchyValid(
 				(size_t)region->children.first + child_index;
 			uint32_t child = hierarchy->children[packed_index];
 
-			if (child != packed_index + 1U ||
-			    (size_t)child >= hierarchy->region_count ||
+			if ((size_t)child >= hierarchy->region_count ||
+			    child <= region_index ||
+			    (child_index != 0U && child <=
+				hierarchy->children[packed_index - 1U]) ||
 			    hierarchy->regions[child].parent_region != region_index)
 				return 0;
 		}
+		if (!InternalSummaryValid(hierarchy, region,
+			FIELD_REGION_OWNS_CHART) ||
+		    !InternalSummaryValid(hierarchy, region,
+			FIELD_REGION_OWNS_STATE_DOMAIN) ||
+		    !InternalSummaryValid(hierarchy, region,
+			FIELD_REGION_OWNS_RESPONSE_PATCH))
+			return 0;
 	}
 	if (next_child != hierarchy->child_count)
 		return 0;
@@ -399,18 +433,6 @@ int SG_RuneFieldRegionHierarchyValid(
 			hierarchy->response_patch_leaf_regions,
 			hierarchy->response_patch_count,
 			FIELD_REGION_OWNS_RESPONSE_PATCH);
-}
-
-int SG_RuneFieldErrorContractValid(
-	const sg_rune_field_error_contract_t *contract)
-{
-	return contract && SG_RuneFieldErrorContractIdValid(&contract->id) &&
-		contract->cost_quantum_us != 0U &&
-		contract->maximum_value_width_us != 0U &&
-		contract->maximum_bellman_residual_us != 0U &&
-		ErrorInterval3Valid(&contract->position_error) &&
-		ErrorInterval3Valid(&contract->velocity_error) &&
-		ErrorIntervalValid(&contract->time_error);
 }
 
 static int StableIdCompareValue(const sg_rune_stable_id_t *left,
@@ -432,21 +454,51 @@ static int SpanInside(uint32_t first, uint32_t count, uint32_t outer_first,
 		(size_t)first + count <= (size_t)outer_first + outer_count;
 }
 
-static int ModeSourceMatches(const sg_rune_state_mode_t *mode,
-	uint64_t source_set_identity)
+#define DEFINE_BASE_RECORD_CONTAINS(function, type, records, count, ref_type) \
+static int function(const sg_rune_model_t *model, const ref_type *reference) \
+{ \
+	size_t low = 0U; \
+	size_t high = model->count; \
+	while (low < high) \
+	{ \
+		size_t middle = low + (high - low) / 2U; \
+		const type *record = &model->records[middle]; \
+		int order = StableIdCompareValue(&record->id.value, \
+			&reference->value); \
+		if (order < 0) \
+			low = middle + 1U; \
+		else if (order > 0) \
+			high = middle; \
+		else \
+			return 1; \
+	} \
+	return 0; \
+}
+
+DEFINE_BASE_RECORD_CONTAINS(CellAccepted, sg_rune_cell_t, cells, cell_count,
+	sg_rune_cell_ref_t)
+DEFINE_BASE_RECORD_CONTAINS(SurfaceAccepted, sg_rune_surface_t, surfaces,
+	surface_count, sg_rune_surface_ref_t)
+DEFINE_BASE_RECORD_CONTAINS(AffordanceAccepted, sg_rune_affordance_t,
+	affordances, affordance_count, sg_rune_affordance_ref_t)
+DEFINE_BASE_RECORD_CONTAINS(MechanismAccepted, sg_rune_mechanism_t,
+	mechanisms, mechanism_count, sg_rune_mechanism_ref_t)
+
+#undef DEFINE_BASE_RECORD_CONTAINS
+
+static int ModeReferencesAccepted(const sg_rune_state_mode_t *mode,
+	const sg_rune_model_t *model)
 {
 	if (mode->kind == SG_RUNE_STATE_MODE_SUPPORTED)
-		return mode->value.supported.support_surface.value.source_set_identity ==
-			source_set_identity;
+		return SurfaceAccepted(model,
+			&mode->value.supported.support_surface);
 	if (mode->kind == SG_RUNE_STATE_MODE_HOOK_BOLT)
-		return mode->value.hook_bolt.visibility_relation.value
-			.source_set_identity == source_set_identity;
+		return AffordanceAccepted(model,
+			&mode->value.hook_bolt.visibility_relation);
 	if (mode->kind == SG_RUNE_STATE_MODE_HOOK_PULL)
-		return mode->value.hook_pull.anchor_surface.value.source_set_identity ==
-			source_set_identity;
+		return SurfaceAccepted(model, &mode->value.hook_pull.anchor_surface);
 	if (mode->kind == SG_RUNE_STATE_MODE_MOVER_RELATIVE)
-		return mode->value.mover_relative.mover.value.source_set_identity ==
-			source_set_identity;
+		return MechanismAccepted(model, &mode->value.mover_relative.mover);
 	return 1;
 }
 
@@ -477,11 +529,13 @@ DEFINE_RECORD_FIND(FindStateChart, sg_rune_state_chart_t,
 	sg_rune_state_chart_ref_t, state_charts, state_chart_count)
 DEFINE_RECORD_FIND(FindStateDomain, sg_rune_state_domain_t,
 	sg_rune_state_domain_ref_t, state_domains, state_domain_count)
+DEFINE_RECORD_FIND(FindControlDomain, sg_rune_control_domain_t,
+	sg_rune_control_domain_ref_t, control_domains, control_domain_count)
 
 #undef DEFINE_RECORD_FIND
 
 static int DynamicsModelArraysValid(const sg_rune_dynamics_model_t *model,
-	uint64_t source_set_identity)
+	const sg_rune_model_t *base_model, uint64_t source_set_identity)
 {
 	size_t index;
 
@@ -505,18 +559,26 @@ static int DynamicsModelArraysValid(const sg_rune_dynamics_model_t *model,
 		model->state_domain_count, SG_RuneStateDomainShapeValid);
 	VALIDATE_RECORD_SEQUENCE(model->control_fibers,
 		model->control_fiber_count, SG_RuneControlFiberShapeValid);
+	VALIDATE_RECORD_SEQUENCE(model->control_domains,
+		model->control_domain_count, SG_RuneControlDomainShapeValid);
 	VALIDATE_RECORD_SEQUENCE(model->response_patches,
 		model->response_patch_count, SG_RuneResponsePatchShapeValid);
 	VALIDATE_RECORD_SEQUENCE(model->boundary_transfers,
 		model->boundary_transfer_count, SG_RuneBoundaryTransferShapeValid);
 #undef VALIDATE_RECORD_SEQUENCE
 	for (index = 0U; index < model->state_chart_count; index++)
-		if (model->state_charts[index].configuration_cell.value
-			.source_set_identity != source_set_identity ||
+		if (!CellAccepted(base_model,
+			&model->state_charts[index].configuration_cell) ||
 		    model->state_charts[index].coverage_proof.value
 			.source_set_identity != source_set_identity ||
-		    !ModeSourceMatches(&model->state_charts[index].mode,
-			source_set_identity))
+		    !ModeReferencesAccepted(&model->state_charts[index].mode,
+			base_model))
+			return 0;
+	for (index = 0U; index < model->control_domain_count; index++)
+		if (model->control_domains[index].source_chart.value
+			.source_set_identity != source_set_identity ||
+		    model->control_domains[index].admissibility_proof.value
+			.source_set_identity != source_set_identity)
 			return 0;
 	for (index = 0U; index < model->control_fiber_count; index++)
 		if (model->control_fibers[index].domain.value.source_set_identity !=
@@ -549,6 +611,12 @@ static int DynamicsModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 	size_t next_fiber = 0U;
 	size_t next_patch = 0U;
 	size_t next_transfer = 0U;
+
+	for (record_index = 0U; record_index < model->control_domain_count;
+	     record_index++)
+		if (!FindStateChart(model,
+			&model->control_domains[record_index].source_chart))
+			return 0;
 
 	for (chart_index = 0U; chart_index < model->state_chart_count;
 	     chart_index++)
@@ -608,10 +676,18 @@ static int DynamicsModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 		for (record_index = chart->control_fibers.first;
 		     record_index < (size_t)chart->control_fibers.first +
 			chart->control_fibers.count; record_index++)
-			if (!StableIdSame(
-				&model->control_fibers[record_index].source_chart.value,
+		{
+			const sg_rune_control_fiber_t *fiber =
+				&model->control_fibers[record_index];
+			const sg_rune_control_domain_t *domain =
+				FindControlDomain(model, &fiber->domain);
+
+			if (!StableIdSame(&fiber->source_chart.value,
+				&chart->id.value) || !domain ||
+			    !StableIdSame(&domain->source_chart.value,
 				&chart->id.value))
 				return 0;
+		}
 		for (record_index = chart->response_patches.first;
 		     record_index < (size_t)chart->response_patches.first +
 			chart->response_patches.count; record_index++)
@@ -686,6 +762,8 @@ int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 	    model->state_domain_count > UINT32_MAX || !model->control_fibers ||
 	    model->control_fiber_count == 0U ||
 	    model->control_fiber_count > UINT32_MAX || !model->response_patches ||
+	    !model->control_domains || model->control_domain_count == 0U ||
+	    model->control_domain_count > UINT32_MAX ||
 	    model->response_patch_count == 0U ||
 	    model->response_patch_count > UINT32_MAX ||
 	    !model->boundary_transfers || model->boundary_transfer_count == 0U ||
@@ -702,81 +780,7 @@ int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 	    model->error_contract.id.value.source_set_identity !=
 		source_set_identity)
 		return 0;
-	return DynamicsModelArraysValid(model, source_set_identity) &&
-		DynamicsModelOwnershipValid(model);
-}
-
-int SG_LocalizedFieldStateValid(const sg_localized_field_state_t *state)
-{
-	return state && state->rune_identity != 0U &&
-		state->topology_revision != 0U && state->pose_revision != 0U &&
-		state->sampled_at_ms != 0U &&
-		SG_RuneStateChartIdValid(&state->chart) &&
-		SG_RuneStateModeValid(&state->mode) && VectorValid(&state->position) &&
-		VectorValid(&state->velocity) && isfinite(state->elapsed_ms) &&
-		state->elapsed_ms >= 0.0f;
-}
-
-int SG_FieldEnvironmentValid(const sg_field_environment_t *environment)
-{
-	return environment && environment->rune_identity != 0U &&
-		environment->topology_revision != 0U &&
-		environment->environment_revision != 0U &&
-		environment->sampled_at_ms != 0U &&
-		environment->authenticated == 1U && environment->reserved[0] == 0U &&
-		environment->reserved[1] == 0U && environment->reserved[2] == 0U &&
-		environment->reserved[3] == 0U && environment->reserved[4] == 0U &&
-		environment->reserved[5] == 0U && environment->reserved[6] == 0U;
-}
-
-int SG_FieldHandleValid(const sg_field_handle_t *handle)
-{
-	return handle && handle->service_identity != 0U &&
-		handle->rune_identity != 0U && handle->topology_revision != 0U &&
-		handle->terminal_generation != 0U && handle->field_generation != 0U;
-}
-
-int SG_FieldGuidanceValid(const sg_field_guidance_t *guidance)
-{
-	size_t index;
-
-	if (!guidance || !SG_FieldHandleValid(&guidance->field) ||
-	    guidance->pose_revision == 0U || guidance->sampled_at_ms == 0U ||
-	    guidance->kind < SG_FIELD_GUIDANCE_TERMINAL ||
-	    guidance->kind >= SG_FIELD_GUIDANCE_KIND_COUNT)
-		return 0;
-	if (guidance->kind == SG_FIELD_GUIDANCE_TERMINAL)
-		return guidance->value.terminal.arrival_cost.lower_us == 0U &&
-			guidance->value.terminal.arrival_cost.upper_us == 0U &&
-			guidance->value.terminal.residual_bound_us !=
-				SG_RUNE_FIELD_COST_INFINITE;
-	if (guidance->kind == SG_FIELD_GUIDANCE_UNREACHABLE)
-		return guidance->value.unreachable.arrival_cost.lower_us ==
-			SG_RUNE_FIELD_COST_INFINITE &&
-			guidance->value.unreachable.arrival_cost.upper_us ==
-				SG_RUNE_FIELD_COST_INFINITE;
-	if (!CostBoundsValid(&guidance->value.descent.arrival_cost) ||
-	    guidance->value.descent.residual_bound_us ==
-		SG_RUNE_FIELD_COST_INFINITE ||
-	    !Interval3Valid(&guidance->value.descent.spatial_subgradient) ||
-	    !Interval3Valid(&guidance->value.descent.velocity_subgradient) ||
-	    !IntervalValid(&guidance->value.descent.time_subgradient) ||
-	    !guidance->value.descent.controls.values ||
-	    guidance->value.descent.controls.count == 0U)
-		return 0;
-	for (index = 0U; index < guidance->value.descent.controls.count; index++)
-	{
-		const sg_rune_field_descent_t *descent =
-			&guidance->value.descent.controls.values[index];
-		if (!SG_RuneControlFiberIdValid(&descent->control) ||
-		    descent->minimum_descent_us == 0U ||
-		    !CostBoundsValid(&descent->endpoint_cost) ||
-		    descent->endpoint_cost.upper_us >
-			guidance->value.descent.arrival_cost.lower_us ||
-		    descent->minimum_descent_us >
-			guidance->value.descent.arrival_cost.lower_us -
-				descent->endpoint_cost.upper_us)
-			return 0;
-	}
-	return 1;
+	return DynamicsModelArraysValid(model, snapshot->model,
+			source_set_identity) && DynamicsModelOwnershipValid(model) &&
+		SG_RuneDynamicsGeometryValid(model);
 }

@@ -1203,6 +1203,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_relay_wall_objective.o slipgate/sg_relay_wall_objective_game.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 slipgate/sg_destination.o slipgate/sg_rune_dynamics_model.o \
+		 slipgate/sg_rune_dynamics_geometry.o slipgate/sg_rune_field_contract.o \
 		 slipgate/sg_rune_model.o slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################
@@ -3444,7 +3445,10 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		tests/run_sg_rune_dynamics_model_test.sh \
 		tests/sg_rune_dynamics_model_test.c \
 		slipgate/sg_rune_dynamics_model.c \
+		slipgate/sg_rune_dynamics_geometry.c \
+		slipgate/sg_rune_field_contract.c \
 		slipgate/sg_rune_dynamics_model.h \
+		slipgate/sg_rune_dynamics_model_internal.h \
 		tests/support/yq2_pmove.c q_shared.c
 	@set -e; \
 	tmp=$$(mktemp -d); \
@@ -3485,7 +3489,11 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		-o "$$tmp/destination.o"; \
 	sh tests/run_sg_rune_dynamics_model_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"
+		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_geometry.c -o "$$tmp/geometry.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \

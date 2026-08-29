@@ -71,6 +71,7 @@ static sg_rune_state_mode_t SupportedMode(void)
 typedef struct dynamics_fixture_s
 {
 	sg_rune_cell_t cell;
+	sg_rune_surface_t surface;
 	sg_rune_phase_basis_t phase;
 	sg_rune_model_t rune_model;
 	sg_phase_coordinate_t phase_coordinate;
@@ -80,6 +81,7 @@ typedef struct dynamics_fixture_s
 	sg_rune_state_simplex_t simplices[1];
 	sg_rune_state_domain_t domains[1];
 	sg_rune_control_fiber_t fibers[1];
+	sg_rune_control_domain_t control_domains[1];
 	sg_rune_response_patch_t patches[1];
 	sg_rune_boundary_transfer_t transfers[1];
 	sg_rune_field_region_t regions[1];
@@ -105,6 +107,10 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->rune_model.completeness.state = SG_RUNE_COMPLETENESS_COMPLETE;
 	fixture->rune_model.cells = &fixture->cell;
 	fixture->rune_model.cell_count = 1U;
+	fixture->cell.id.value = Stable(SG_RUNE_ORDER_CELL, 1U);
+	fixture->surface.id.value = Stable(SG_RUNE_ORDER_SURFACE, 1U);
+	fixture->rune_model.surfaces = &fixture->surface;
+	fixture->rune_model.surface_count = 1U;
 	fixture->rune_model.phases = &fixture->phase;
 	fixture->rune_model.phase_count = 1U;
 	fixture->snapshot.identity = 2U;
@@ -121,8 +127,14 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 			Stable(SG_RUNE_ORDER_STATE_VERTEX, (uint32_t)index + 1U);
 		fixture->vertices[index].chart.value =
 			Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
-		fixture->vertices[index].position.value[0] = (float)index;
 	}
+	fixture->vertices[1].position.value[0] = 1.0f;
+	fixture->vertices[2].position.value[1] = 1.0f;
+	fixture->vertices[3].position.value[2] = 1.0f;
+	fixture->vertices[4].velocity.value[0] = 1.0f;
+	fixture->vertices[5].velocity.value[1] = 1.0f;
+	fixture->vertices[6].velocity.value[2] = 1.0f;
+	fixture->vertices[7].elapsed_ms = 1.0f;
 	chart = &fixture->charts[0];
 	chart->id.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
 	chart->configuration_cell.value = Stable(SG_RUNE_ORDER_CELL, 1U);
@@ -157,6 +169,15 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 		Stable(SG_RUNE_ORDER_GUARD_CONDITION, 1U);
 	fixture->fibers[0].coverage_proof.value =
 		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 2U);
+	fixture->control_domains[0].id.value =
+		Stable(SG_RUNE_ORDER_CONTROL_DOMAIN, 1U);
+	fixture->control_domains[0].source_chart = chart->id;
+	fixture->control_domains[0].forward_move = Interval(-400.0f, 400.0f);
+	fixture->control_domains[0].side_move = Interval(-400.0f, 400.0f);
+	fixture->control_domains[0].up_move = Interval(-400.0f, 400.0f);
+	fixture->control_domains[0].allowed_buttons = UINT32_MAX;
+	fixture->control_domains[0].admissibility_proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 7U);
 
 	patch = &fixture->patches[0];
 	patch->id.value = Stable(SG_RUNE_ORDER_RESPONSE_PATCH, 1U);
@@ -206,6 +227,8 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->dynamics.state_domain_count = 1U;
 	fixture->dynamics.control_fibers = fixture->fibers;
 	fixture->dynamics.control_fiber_count = 1U;
+	fixture->dynamics.control_domains = fixture->control_domains;
+	fixture->dynamics.control_domain_count = 1U;
 	fixture->dynamics.response_patches = fixture->patches;
 	fixture->dynamics.response_patch_count = 1U;
 	fixture->dynamics.boundary_transfers = fixture->transfers;
@@ -257,6 +280,8 @@ static void TestTypedIdsAndModes(void)
 		sg_rune_state_domain_id_t, SG_RUNE_ORDER_STATE_DOMAIN);
 	CHECK_TYPED_ID(SG_RuneControlFiberIdValid,
 		sg_rune_control_fiber_id_t, SG_RUNE_ORDER_CONTROL_FIBER);
+	CHECK_TYPED_ID(SG_RuneControlDomainIdValid,
+		sg_rune_control_domain_id_t, SG_RUNE_ORDER_CONTROL_DOMAIN);
 	CHECK_TYPED_ID(SG_RuneResponsePatchIdValid,
 		sg_rune_response_patch_id_t, SG_RUNE_ORDER_RESPONSE_PATCH);
 	CHECK_TYPED_ID(SG_RuneBoundaryTransferIdValid,
@@ -310,7 +335,39 @@ static void TestAggregateOwnership(void)
 		Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U);
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	fixture.patches[0].source_simplex = fixture.simplices[0].id;
+	fixture.charts[0].configuration_cell.value =
+		Stable(SG_RUNE_ORDER_CELL, 999U);
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.charts[0].configuration_cell.value =
+		Stable(SG_RUNE_ORDER_CELL, 1U);
+	fixture.charts[0].mode.value.supported.support_surface.value =
+		Stable(SG_RUNE_ORDER_SURFACE, 999U);
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.charts[0].mode = SupportedMode();
+	fixture.fibers[0].domain.value =
+		Stable(SG_RUNE_ORDER_CONTROL_DOMAIN, 999U);
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.fibers[0].domain = fixture.control_domains[0].id;
 	fixture.dynamics.topology_revision++;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
+static void TestSimplexGeometry(void)
+{
+	dynamics_fixture_t fixture;
+	sg_rune_state_vertex_t saved;
+
+	BuildFixture(&fixture);
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	saved = fixture.vertices[1];
+	fixture.vertices[1].position = fixture.vertices[0].position;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.vertices[1] = saved;
+	fixture.vertices[1].position.value[0] = 65.0f;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.vertices[1] = saved;
+	fixture.vertices[7].elapsed_ms = 0.0f;
+	fixture.vertices[7].position.value[0] = 0.5f;
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 }
 
@@ -369,6 +426,17 @@ static void TestExactLeafOwnership(void)
 	hierarchy.hierarchy_proof.value =
 		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 10U);
 	CHECK(SG_RuneFieldRegionHierarchyValid(&hierarchy));
+	regions[0].charts.count = 1U;
+	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
+	regions[0].charts.count = 3U;
+	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
+	regions[0].charts.count = 2U;
+	regions[0].state_domains.count = 1U;
+	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
+	regions[0].state_domains.count = 2U;
+	regions[0].response_patches.count = 1U;
+	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
+	regions[0].response_patches.count = 2U;
 	regions[2].charts.first = 0U;
 	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
 	regions[2].charts.first = 1U;
@@ -379,6 +447,51 @@ static void TestExactLeafOwnership(void)
 	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
 	patch_owners[1] = 2U;
 	children[1] = 1U;
+	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
+}
+
+static void TestInternalHierarchySummaries(void)
+{
+	sg_rune_field_region_t regions[4] = {
+		Region(1U, SG_RUNE_FIELD_NO_REGION, 0U),
+		Region(2U, 0U, 1U), Region(3U, 1U, 2U), Region(4U, 0U, 1U)
+	};
+	uint32_t children[3] = { 1U, 3U, 2U };
+	uint32_t owners[2] = { 2U, 3U };
+	sg_rune_field_region_hierarchy_t hierarchy = { 0 };
+	size_t index;
+
+	regions[0].children = (sg_rune_field_region_span_t){ 0U, 2U };
+	regions[1].children = (sg_rune_field_region_span_t){ 2U, 1U };
+	regions[2].children.first = 3U;
+	regions[3].children.first = 3U;
+	regions[0].charts = (sg_rune_state_chart_span_t){ 0U, 2U };
+	regions[1].charts = (sg_rune_state_chart_span_t){ 0U, 1U };
+	regions[2].charts = (sg_rune_state_chart_span_t){ 0U, 1U };
+	regions[3].charts = (sg_rune_state_chart_span_t){ 1U, 1U };
+	for (index = 0U; index < 4U; index++)
+	{
+		regions[index].state_domains = (sg_rune_state_domain_span_t){
+			regions[index].charts.first, regions[index].charts.count };
+		regions[index].response_patches =
+			(sg_rune_response_patch_span_t){ regions[index].charts.first,
+				regions[index].charts.count };
+	}
+	hierarchy.id.value = Stable(SG_RUNE_ORDER_FIELD_HIERARCHY, 1U);
+	hierarchy.regions = regions;
+	hierarchy.region_count = 4U;
+	hierarchy.children = children;
+	hierarchy.child_count = 3U;
+	hierarchy.chart_leaf_regions = owners;
+	hierarchy.state_domain_leaf_regions = owners;
+	hierarchy.response_patch_leaf_regions = owners;
+	hierarchy.chart_count = 2U;
+	hierarchy.state_domain_count = 2U;
+	hierarchy.response_patch_count = 2U;
+	hierarchy.hierarchy_proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 10U);
+	CHECK(SG_RuneFieldRegionHierarchyValid(&hierarchy));
+	regions[1].charts.count = 2U;
 	CHECK(!SG_RuneFieldRegionHierarchyValid(&hierarchy));
 }
 
@@ -444,6 +557,53 @@ cleanup:
 	free(regions);
 }
 
+static void TestDeepLinearHierarchy(void)
+{
+	const size_t count = 2048U;
+	sg_rune_field_region_t *regions = calloc(count, sizeof(*regions));
+	uint32_t *children = calloc(count - 1U, sizeof(*children));
+	uint32_t owner = (uint32_t)count - 1U;
+	sg_rune_field_region_hierarchy_t hierarchy = { 0 };
+	size_t index;
+
+	CHECK(regions && children);
+	if (!regions || !children)
+		goto cleanup;
+	for (index = 0U; index < count; index++)
+	{
+		regions[index] = Region((uint32_t)index + 1U,
+			index == 0U ? SG_RUNE_FIELD_NO_REGION : (uint32_t)index - 1U,
+			(uint32_t)index);
+		regions[index].children.first = (uint32_t)index;
+		regions[index].children.count = index + 1U < count ? 1U : 0U;
+		regions[index].charts = (sg_rune_state_chart_span_t){ 0U, 1U };
+		regions[index].state_domains =
+			(sg_rune_state_domain_span_t){ 0U, 1U };
+		regions[index].response_patches =
+			(sg_rune_response_patch_span_t){ 0U, 1U };
+		if (index + 1U < count)
+			children[index] = (uint32_t)index + 1U;
+	}
+	hierarchy.id.value = Stable(SG_RUNE_ORDER_FIELD_HIERARCHY, 1U);
+	hierarchy.regions = regions;
+	hierarchy.region_count = count;
+	hierarchy.children = children;
+	hierarchy.child_count = count - 1U;
+	hierarchy.chart_leaf_regions = &owner;
+	hierarchy.state_domain_leaf_regions = &owner;
+	hierarchy.response_patch_leaf_regions = &owner;
+	hierarchy.chart_count = 1U;
+	hierarchy.state_domain_count = 1U;
+	hierarchy.response_patch_count = 1U;
+	hierarchy.hierarchy_proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 1U);
+	CHECK(SG_RuneFieldRegionHierarchyValid(&hierarchy));
+
+cleanup:
+	free(children);
+	free(regions);
+}
+
 static void TestGuidanceIntervals(void)
 {
 	sg_rune_field_descent_t descent = {
@@ -483,8 +643,11 @@ int main(void)
 {
 	TestTypedIdsAndModes();
 	TestAggregateOwnership();
+	TestSimplexGeometry();
 	TestExactLeafOwnership();
+	TestInternalHierarchySummaries();
 	TestLinearHierarchy();
+	TestDeepLinearHierarchy();
 	TestGuidanceIntervals();
 	if (failures != 0)
 	{
