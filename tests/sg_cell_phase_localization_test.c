@@ -46,6 +46,7 @@ typedef struct locator_fixture_s
 	sg_configuration_face_t configuration_faces[MAX_CELLS * 6U];
 	sg_configuration_portal_t portals[MAX_PORTALS];
 	sg_rune_vec3_t portal_vertices[MAX_PORTALS * 4U];
+	sg_configuration_stance_overlap_t stance_overlaps[4];
 	sg_configuration_certificate_node_t certificates[8];
 	sg_configuration_semantics_t semantics;
 	sg_configuration_semantic_region_t regions[MAX_REGIONS];
@@ -67,12 +68,17 @@ typedef struct locator_fixture_s
 	uint32_t cell_portal_offsets[MAX_CELLS + 1U];
 	uint32_t cell_portal_cursors[MAX_CELLS];
 	uint32_t portal_indices[MAX_PORTALS * 2U];
+	uint32_t stance_overlap_offsets[MAX_CELLS + 1U];
+	uint32_t stance_overlap_cursors[MAX_CELLS];
+	uint32_t stance_overlap_indices[8];
 	uint32_t phase_transition_offsets[MAX_PHASES + 1U];
 	uint32_t phase_transition_cursors[MAX_PHASES];
 	uint32_t phase_transition_indices[MAX_PHASE_TRANSITIONS];
 	uint32_t phase_kernel_offsets[MAX_PHASES + 1U];
 	uint32_t phase_kernel_cursors[MAX_PHASES];
 	uint32_t phase_kernel_indices[MAX_KERNELS];
+	sg_localization_mover_binding_t mover_bindings[1];
+	size_t mover_binding_count;
 	sg_localization_workspace_t workspace;
 	sg_cell_phase_locator_t locator;
 	uint32_t phase_count;
@@ -461,6 +467,15 @@ static void FinalizeFixture(locator_fixture_t *fixture)
 	fixture->workspace.cell_portal_cursor_capacity = MAX_CELLS;
 	fixture->workspace.portal_indices = fixture->portal_indices;
 	fixture->workspace.portal_index_capacity = MAX_PORTALS * 2U;
+	fixture->workspace.stance_overlap_offsets =
+		fixture->stance_overlap_offsets;
+	fixture->workspace.stance_overlap_offset_capacity = MAX_CELLS + 1U;
+	fixture->workspace.stance_overlap_cursors =
+		fixture->stance_overlap_cursors;
+	fixture->workspace.stance_overlap_cursor_capacity = MAX_CELLS;
+	fixture->workspace.stance_overlap_indices =
+		fixture->stance_overlap_indices;
+	fixture->workspace.stance_overlap_index_capacity = 8U;
 	fixture->workspace.phase_transition_offsets =
 		fixture->phase_transition_offsets;
 	fixture->workspace.phase_transition_offset_capacity = MAX_PHASES + 1U;
@@ -480,6 +495,7 @@ static void FinalizeFixture(locator_fixture_t *fixture)
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture->authority,
 		&fixture->configuration, &fixture->semantics, &fixture->snapshot,
 		fixture->bindings, fixture->semantics.region_count,
+		fixture->mover_bindings, fixture->mover_binding_count,
 		&fixture->workspace, &fixture->locator, &status));
 	CHECK(status == SG_LOCALIZATION_OK);
 }
@@ -513,7 +529,6 @@ static sg_localization_observation_t Observation(
 	observation.frame_sequence = 9U;
 	observation.observed_at_ms = 100U;
 	observation.authenticated_at_ms = 100U;
-	observation.phase_started_at_ms = 0U;
 	Set3(observation.position, x, y, z);
 	return observation;
 }
@@ -524,7 +539,11 @@ static sg_localization_environment_t Environment(void)
 
 	memset(&environment, 0, sizeof(environment));
 	environment.authenticated = 1U;
+	environment.rune_identity = UINT64_C(0x201);
+	environment.topology_revision = UINT64_C(0x202);
+	environment.frame_sequence = 9U;
 	environment.sampled_at_ms = 100U;
+	environment.authenticated_at_ms = 100U;
 	return environment;
 }
 
@@ -534,6 +553,12 @@ static int Localize(locator_fixture_t *fixture,
 	sg_localized_player_state_t *state, sg_localization_status_t *status)
 {
 	sg_localization_request_t request = Request();
+
+	environment->rune_identity = observation->rune_identity;
+	environment->topology_revision = observation->topology_revision;
+	environment->frame_sequence = observation->frame_sequence;
+	environment->sampled_at_ms = observation->observed_at_ms;
+	environment->authenticated_at_ms = observation->authenticated_at_ms;
 
 	return SG_CellPhaseLocalize(&fixture->locator, &request, observation,
 		environment, state, status);
@@ -545,8 +570,42 @@ static int LocalizeRequest(locator_fixture_t *fixture,
 	sg_localization_environment_t *environment,
 	sg_localized_player_state_t *state, sg_localization_status_t *status)
 {
-	return SG_CellPhaseLocalize(&fixture->locator, request, observation,
+	sg_localization_continuity_sample_t sample;
+	const sg_localization_continuity_sample_t *saved_samples =
+		environment->continuity_samples;
+	size_t saved_count = environment->continuity_sample_count;
+	int result;
+
+	environment->rune_identity = observation->rune_identity;
+	environment->topology_revision = observation->topology_revision;
+	environment->frame_sequence = observation->frame_sequence;
+	environment->sampled_at_ms = observation->observed_at_ms;
+	environment->authenticated_at_ms = observation->authenticated_at_ms;
+	if (request->previous &&
+		observation->kind == SG_LOCALIZATION_OBSERVATION_PRESENT &&
+		environment->continuity_sample_count == 0U)
+	{
+		memset(&sample, 0, sizeof(sample));
+		sample.authenticated = 1U;
+		sample.stance = observation->stance;
+		sample.rune_identity = observation->rune_identity;
+		sample.topology_revision = observation->topology_revision;
+		sample.frame_sequence = observation->frame_sequence;
+		sample.sampled_at_ms = observation->observed_at_ms;
+		sample.authenticated_at_ms = observation->authenticated_at_ms;
+		memcpy(sample.position, observation->position, sizeof(sample.position));
+		memcpy(sample.velocity, observation->velocity, sizeof(sample.velocity));
+		sample.scene = environment->scene;
+		sample.movers = environment->movers;
+		sample.mover_count = environment->mover_count;
+		environment->continuity_samples = &sample;
+		environment->continuity_sample_count = 1U;
+	}
+	result = SG_CellPhaseLocalize(&fixture->locator, request, observation,
 		environment, state, status);
+	environment->continuity_samples = saved_samples;
+	environment->continuity_sample_count = saved_count;
+	return result;
 }
 
 static void TestStandingCrouchingLowCeilingAndHalfWall(void)
@@ -610,7 +669,7 @@ static void TestSupportWaterAirAndTime(void)
 			SG_LocalizationStatusString(status));
 	CHECK(status == SG_LOCALIZATION_OK);
 	CHECK(state.support == SG_RUNE_SUPPORT_SUPPORTED);
-	CHECK(state.phase_elapsed_ms == 100U && state.time_quantum_index == 10U);
+	CHECK(state.phase_elapsed_ms == 0U && state.time_quantum_index == 0U);
 	CHECK(state.support_model_index == SG_HOST_COLLISION_MODEL_WORLD);
 	CHECK(SG_DestinationPoseValid(&state.field_pose));
 	CHECK(SG_PhaseCoordinateValid(&fixture.snapshot,
@@ -814,7 +873,7 @@ static void TestBoundedRecoveryAndReset(void)
 	request.maximum_recovery_distance = 0.0f;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_RECOVERY_PARAMETER);
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
 	request.maximum_recovery_distance = NAN;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
@@ -988,6 +1047,44 @@ static void SetRuntimePortalKernel(locator_fixture_t *fixture,
 	fixture->model.kernel_count = 1U;
 }
 
+static void AddStanceOverlap(locator_fixture_t *fixture)
+{
+	sg_configuration_stance_overlap_t *overlap =
+		&fixture->stance_overlaps[0];
+
+	fixture->configuration.stance_overlaps = fixture->stance_overlaps;
+	fixture->configuration.stance_overlap_count = 1U;
+	memset(overlap, 0, sizeof(*overlap));
+	overlap->standing_cell = 0U;
+	overlap->crouching_cell = 1U;
+	overlap->first_face = fixture->configuration_cells[0].first_face;
+	overlap->face_count = fixture->configuration_cells[0].face_count;
+	overlap->bounds = fixture->configuration_cells[0].bounds;
+	overlap->interior_witness =
+		fixture->configuration_cells[0].interior_witness;
+}
+
+static void AddStanceKernel(locator_fixture_t *fixture)
+{
+	sg_rune_capability_kernel_t *kernel = &fixture->kernels[0];
+
+	memset(kernel, 0, sizeof(*kernel));
+	kernel->order = Order(SG_RUNE_ORDER_KERNEL, 0U);
+	kernel->id.value = SG_RuneModelStableIdFromOrderKey(&kernel->order);
+	kernel->source_cell = fixture->runtime_cells[0].id;
+	kernel->destination_cell = fixture->runtime_cells[1].id;
+	kernel->boundary = SG_RUNE_PORTAL_REF_NONE;
+	kernel->affordance = SG_RUNE_AFFORDANCE_REF_NONE;
+	kernel->mechanism = SG_RUNE_MECHANISM_REF_NONE;
+	kernel->source_phase = fixture->phases[0].id;
+	kernel->destination_phase = fixture->phases[1].id;
+	kernel->transition = SG_RUNE_PHASE_TRANSITION_REF_NONE;
+	kernel->family = SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT;
+	kernel->cost_law = SG_RUNE_COST_CONSTANT_RATE;
+	fixture->model.kernels = fixture->kernels;
+	fixture->model.kernel_count = 1U;
+}
+
 static void InitAdjacentStandingFixture(locator_fixture_t *fixture,
 	world_fixture_t *world);
 static void AddDirectPortal(locator_fixture_t *fixture);
@@ -1036,6 +1133,7 @@ static void TestPhaseContinuityProof(void)
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &fixture.locator, &status));
 	CHECK(fixture.locator.prepare_phase_transition_steps == 1U);
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
@@ -1046,8 +1144,55 @@ static void TestPhaseContinuityProof(void)
 	CHECK(!SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &fixture.locator, &status));
 	CHECK(status == SG_LOCALIZATION_INVALID_BINDING);
+}
+
+static void TestAuthenticatedStanceOverlapContinuity(void)
+{
+	world_fixture_t empty = EmptyWorld();
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+
+	InitStandardFixture(&fixture, &empty,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE, SG_RUNE_MEDIUM_DRY);
+	AddStanceOverlap(&fixture);
+	AddStanceKernel(&fixture);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		0.0f, 0.0f, 24.0f);
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	observation.stance = SG_RUNE_STANCE_CROUCHING;
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 101U;
+	observation.authenticated_at_ms = 101U;
+	request = Request();
+	request.now_ms = 101U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_recovery_distance = 0.5f;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(state.stance == SG_RUNE_STANCE_CROUCHING);
+	CHECK(state.configuration_cell == 1U);
+	CHECK(state.field_pose.phase.phase_id == 1U);
+
+	fixture.configuration.stance_overlap_count = 0U;
+	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
+		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
+		&fixture.workspace, &fixture.locator, &status));
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
 }
 
 static void TestSamePhaseClockCannotRewind(void)
@@ -1071,19 +1216,15 @@ static void TestSamePhaseClockCannotRewind(void)
 	observation.frame_sequence = 10U;
 	observation.observed_at_ms = 101U;
 	observation.authenticated_at_ms = 101U;
-	observation.phase_started_at_ms = 50U;
 	environment.sampled_at_ms = 101U;
 	request = Request();
 	request.now_ms = 101U;
 	request.minimum_frame_sequence = 10U;
 	request.previous = &previous;
 	request.maximum_recovery_distance = 0.5f;
-	CHECK(!LocalizeRequest(&fixture, &request, &observation,
-		&environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
-	observation.phase_started_at_ms = previous.phase_started_at_ms;
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
+	CHECK(state.phase_started_at_ms == previous.phase_started_at_ms);
 	CHECK(state.phase_elapsed_ms == previous.phase_elapsed_ms + 1U);
 }
 
@@ -1115,7 +1256,6 @@ static void TestPhaseTransitionClockOrigins(void)
 	FinalizeFixture(&fixture);
 	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
 		0.0f, 0.0f, 24.0f);
-	observation.phase_started_at_ms = 50U;
 	observation.velocity[0] = -10.0f;
 	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
 	observation.observed_at_ms = 101U;
@@ -1128,21 +1268,9 @@ static void TestPhaseTransitionClockOrigins(void)
 	request.minimum_frame_sequence = 10U;
 	request.previous = &previous;
 	request.maximum_recovery_distance = 0.5f;
-	observation.phase_started_at_ms = 0U;
-	CHECK(!LocalizeRequest(&fixture, &request, &observation,
-		&environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
-	observation.phase_started_at_ms = 75U;
-	CHECK(!LocalizeRequest(&fixture, &request, &observation,
-		&environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
-	observation.phase_started_at_ms = previous.phase_started_at_ms;
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
-	CHECK(state.phase_started_at_ms == previous.phase_started_at_ms);
-	observation.phase_started_at_ms = previous.field_pose.sample_time_ms;
-	CHECK(LocalizeRequest(&fixture, &request, &observation,
-		&environment, &state, &status));
+	CHECK(state.phase_started_at_ms == previous.field_pose.sample_time_ms);
 	CHECK(state.phase_elapsed_ms == 1U);
 }
 
@@ -1182,6 +1310,7 @@ static void TestRuntimePortalPhaseContinuity(void)
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &fixture.locator, &status));
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
@@ -1201,6 +1330,7 @@ static void TestRuntimePortalPhaseContinuity(void)
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &fixture.locator, &status));
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
@@ -1238,6 +1368,7 @@ static void TestMechanismCrossingPreparation(void)
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &fixture.locator, &status));
 }
 
@@ -1392,6 +1523,7 @@ static void TestRecoveryConnectivityProof(void)
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &fixture.locator, &status));
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
@@ -1408,6 +1540,138 @@ static void TestRecoveryConnectivityProof(void)
 	observation.frame_sequence = 10U;
 	request.previous = &previous;
 	request.maximum_recovery_distance = 80.0f;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+}
+
+static void TestAuthenticatedBentPmovePath(void)
+{
+	const float wall_mins[3] = { -2.0f, -5.0f, -40.0f };
+	const float wall_maxs[3] = { 2.0f, 5.0f, 100.0f };
+	world_fixture_t wall = BoxWorld(wall_mins, wall_maxs);
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localization_continuity_sample_t samples[3];
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+	size_t index;
+
+	InitStandardFixture(&fixture, &wall,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE, SG_RUNE_MEDIUM_DRY);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		-30.0f, 0.0f, 24.0f);
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	Set3(observation.position, 30.0f, 0.0f, 24.0f);
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 103U;
+	observation.authenticated_at_ms = 103U;
+	request = Request();
+	request.now_ms = 103U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_recovery_distance = 0.5f;
+	{
+		sg_host_collision_transition_t transition;
+
+		CHECK(SG_HostCollisionTransition(&fixture.authority, NULL,
+			previous.field_pose.position, observation.position,
+			observation.stance, &transition));
+		CHECK(!transition.clear);
+	}
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+
+	memset(samples, 0, sizeof(samples));
+	for (index = 0U; index < 3U; index++)
+	{
+		samples[index].authenticated = 1U;
+		samples[index].stance = observation.stance;
+		samples[index].rune_identity = observation.rune_identity;
+		samples[index].topology_revision = observation.topology_revision;
+		samples[index].frame_sequence = observation.frame_sequence;
+		samples[index].sampled_at_ms = 101U + index;
+		samples[index].authenticated_at_ms = 101U + index;
+	}
+	Set3(samples[0].position, -30.0f, -40.0f, 24.0f);
+	Set3(samples[1].position, 30.0f, -40.0f, 24.0f);
+	memcpy(samples[2].position, observation.position,
+		sizeof(samples[2].position));
+	environment.continuity_samples = samples;
+	environment.continuity_sample_count = 3U;
+	if (!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status))
+		fprintf(stderr, "bent path localization: %s\n",
+			SG_LocalizationStatusString(status));
+	CHECK(status == SG_LOCALIZATION_OK);
+	CHECK(state.field_pose.position[0] == 30.0f);
+	CHECK(state.field_pose.position[1] == 0.0f);
+	CHECK(state.phase_elapsed_ms == 3U);
+}
+
+static void TestMultiplePortalCrossingsInOneFrame(void)
+{
+	world_fixture_t empty = EmptyWorld();
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localization_continuity_sample_t samples[2];
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+	size_t index;
+
+	InitAdjacentStandingFixture(&fixture, &empty);
+	AddDirectPortal(&fixture);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		-10.0f, 0.0f, 24.0f);
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	Set3(observation.position, -20.0f, 0.0f, 24.0f);
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 102U;
+	observation.authenticated_at_ms = 102U;
+	request = Request();
+	request.now_ms = 102U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_recovery_distance = 0.5f;
+	memset(samples, 0, sizeof(samples));
+	for (index = 0U; index < 2U; index++)
+	{
+		samples[index].authenticated = 1U;
+		samples[index].stance = observation.stance;
+		samples[index].rune_identity = observation.rune_identity;
+		samples[index].topology_revision = observation.topology_revision;
+		samples[index].frame_sequence = observation.frame_sequence;
+		samples[index].sampled_at_ms = 101U + index;
+		samples[index].authenticated_at_ms = 101U + index;
+	}
+	Set3(samples[0].position, 10.0f, 0.0f, 24.0f);
+	memcpy(samples[1].position, observation.position,
+		sizeof(samples[1].position));
+	environment.continuity_samples = samples;
+	environment.continuity_sample_count = 2U;
+	if (!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status))
+		fprintf(stderr, "multi-portal localization: %s\n",
+			SG_LocalizationStatusString(status));
+	CHECK(status == SG_LOCALIZATION_OK);
+	CHECK(state.configuration_cell == 0U);
+
+	fixture.configuration.portal_count = 0U;
+	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
+		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
+		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
+		&fixture.workspace, &fixture.locator, &status));
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
 	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
@@ -1528,6 +1792,7 @@ static void TestPreparationScalesByRecords(void)
 	CHECK(!SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &locator, &status));
 	CHECK(status == SG_LOCALIZATION_INVALID_BINDING);
 	swap = fixture.bindings[1];
@@ -1537,6 +1802,7 @@ static void TestPreparationScalesByRecords(void)
 	CHECK(!SG_CellPhaseLocatorPrepare(&fixture.authority,
 		&fixture.configuration, &fixture.semantics, &fixture.snapshot,
 		fixture.bindings, fixture.semantics.region_count,
+		fixture.mover_bindings, fixture.mover_binding_count,
 		&fixture.workspace, &locator, &status));
 	CHECK(status == SG_LOCALIZATION_INVALID_ARGUMENT);
 }
@@ -1567,6 +1833,11 @@ static void TestMoverRelativePhase(void)
 	fixture.model.mechanisms = fixture.mechanisms;
 	fixture.model.mechanism_count = 1U;
 	mechanism = fixture.mechanisms[0].id;
+	fixture.mover_bindings[0].instance_id = UINT64_C(0x301);
+	fixture.mover_bindings[0].model_index = 1U;
+	fixture.mover_bindings[0].mechanism = mechanism;
+	fixture.mover_bindings[0].entity = fixture.mechanisms[0].entity;
+	fixture.mover_binding_count = 1U;
 	fixture.phases[0].reference_frame = SG_RUNE_FRAME_MOVER_RELATIVE;
 	fixture.phases[0].mover = mechanism;
 	fixture.phases[1].reference_frame = SG_RUNE_FRAME_MOVER_RELATIVE;
@@ -1578,19 +1849,17 @@ static void TestMoverRelativePhase(void)
 	scene.instances = &instance;
 	scene.instance_count = 1U;
 	memset(movers, 0, sizeof(movers));
-	movers[0].sampled_at_ms = 1U;
-	movers[0].instance_id = UINT64_C(0x999);
-	movers[0].model_index = 99U;
-	movers[0].velocity[0] = NAN;
-	movers[1].authenticated = 1U;
-	movers[1].sampled_at_ms = 100U;
-	movers[1].instance_id = instance.instance_id;
-	movers[1].model_index = instance.model_index;
-	movers[1].mechanism = mechanism;
-	movers[1].velocity[0] = 40.0f;
+	movers[0].authenticated = 1U;
+	movers[0].sampled_at_ms = 100U;
+	movers[0].instance_id = instance.instance_id;
+	movers[0].model_index = instance.model_index;
+	movers[0].mechanism = mechanism;
+	movers[0].entity = fixture.mechanisms[0].entity;
+	movers[0].transform = instance.transform;
+	movers[0].velocity[0] = 40.0f;
 	environment.scene = &scene;
 	environment.movers = movers;
-	environment.mover_count = 2U;
+	environment.mover_count = 1U;
 	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
 		0, 0, 24.125f);
 	observation.velocity[0] = 100.0f;
@@ -1602,11 +1871,11 @@ static void TestMoverRelativePhase(void)
 	CHECK(state.support_instance_id == instance.instance_id);
 	CHECK(state.phase_velocity[0] == 60.0f);
 	CHECK(SG_RuneModelStableIdEqual(&state.mover.value, &mechanism.value));
-	movers[2] = movers[1];
-	environment.mover_count = 3U;
-	CHECK(!Localize(&fixture, &observation, &environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_AMBIGUOUS_INPUT);
+	movers[1] = movers[0];
 	environment.mover_count = 2U;
+	CHECK(!Localize(&fixture, &observation, &environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_MOVER_UNBOUND);
+	environment.mover_count = 1U;
 	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
 	absent_observation = observation;
 	absent_observation.kind =
@@ -1614,6 +1883,7 @@ static void TestMoverRelativePhase(void)
 	absent_observation.frame_sequence = 10U;
 	absent_observation.observed_at_ms = 101U;
 	absent_observation.authenticated_at_ms = 101U;
+	movers[0].sampled_at_ms = 101U;
 	environment.sampled_at_ms = 101U;
 	request = Request();
 	request.now_ms = 101U;
@@ -1650,6 +1920,11 @@ static void TestMoverPhaseChangePreservesInstance(void)
 	fixture.model.mechanisms = fixture.mechanisms;
 	fixture.model.mechanism_count = 1U;
 	mechanism = fixture.mechanisms[0].id;
+	fixture.mover_bindings[0].instance_id = UINT64_C(0x301);
+	fixture.mover_bindings[0].model_index = 1U;
+	fixture.mover_bindings[0].mechanism = mechanism;
+	fixture.mover_bindings[0].entity = fixture.mechanisms[0].entity;
+	fixture.mover_binding_count = 1U;
 	SetPhase(&fixture, 0U, 0U, SG_RUNE_STANCE_STANDING,
 		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_MOVER, SG_RUNE_MEDIUM_DRY,
 		SG_RUNE_FRAME_MOVER_RELATIVE, mechanism, 0, 1000);
@@ -1676,6 +1951,8 @@ static void TestMoverPhaseChangePreservesInstance(void)
 	mover.instance_id = instance.instance_id;
 	mover.model_index = instance.model_index;
 	mover.mechanism = mechanism;
+	mover.entity = fixture.mechanisms[0].entity;
+	mover.transform = instance.transform;
 	environment.scene = &scene;
 	environment.movers = &mover;
 	environment.mover_count = 1U;
@@ -1694,7 +1971,7 @@ static void TestMoverPhaseChangePreservesInstance(void)
 	request.maximum_recovery_distance = 0.5f;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+	CHECK(status == SG_LOCALIZATION_MOVER_UNBOUND);
 	instance.instance_id = UINT64_C(0x301);
 	mover.instance_id = instance.instance_id;
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
@@ -1711,12 +1988,15 @@ int main(void)
 	TestBoundedRecoveryAndReset();
 	TestRecoveryOutsideCertificateBoundary();
 	TestPhaseContinuityProof();
+	TestAuthenticatedStanceOverlapContinuity();
 	TestSamePhaseClockCannotRewind();
 	TestPhaseTransitionClockOrigins();
 	TestRuntimePortalPhaseContinuity();
 	TestMechanismCrossingPreparation();
 	TestPreviousStateAuthentication();
 	TestRecoveryConnectivityProof();
+	TestAuthenticatedBentPmovePath();
+	TestMultiplePortalCrossingsInOneFrame();
 	TestPreparationScalesByRecords();
 	TestMoverRelativePhase();
 	TestMoverPhaseChangePreservesInstance();

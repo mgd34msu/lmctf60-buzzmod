@@ -83,6 +83,13 @@ typedef struct sg_localization_workspace_s
 	/* Two entries per undirected configuration portal. */
 	uint32_t *portal_indices;
 	size_t portal_index_capacity;
+	uint32_t *stance_overlap_offsets;
+	size_t stance_overlap_offset_capacity;
+	uint32_t *stance_overlap_cursors;
+	size_t stance_overlap_cursor_capacity;
+	/* Two entries per standing/crouching overlap. */
+	uint32_t *stance_overlap_indices;
+	size_t stance_overlap_index_capacity;
 	uint32_t *phase_transition_offsets;
 	size_t phase_transition_offset_capacity;
 	uint32_t *phase_transition_cursors;
@@ -111,10 +118,14 @@ typedef struct sg_cell_phase_locator_s
 	const uint32_t *region_runtime_regions;
 	const uint32_t *cell_portal_offsets;
 	const uint32_t *portal_indices;
+	const uint32_t *stance_overlap_offsets;
+	const uint32_t *stance_overlap_indices;
 	const uint32_t *phase_transition_offsets;
 	const uint32_t *phase_transition_indices;
 	const uint32_t *phase_kernel_offsets;
 	const uint32_t *phase_kernel_indices;
+	const struct sg_localization_mover_binding_s *mover_bindings;
+	size_t mover_binding_count;
 	uint64_t rune_identity;
 	uint64_t topology_revision;
 	uint32_t configuration_cell_count;
@@ -122,6 +133,7 @@ typedef struct sg_cell_phase_locator_s
 	uint32_t runtime_cell_count;
 	uint32_t runtime_phase_count;
 	uint32_t configuration_portal_count;
+	uint32_t configuration_stance_overlap_count;
 	uint32_t runtime_phase_transition_count;
 	uint32_t runtime_kernel_count;
 	uint64_t prepare_cell_steps;
@@ -136,6 +148,17 @@ typedef struct sg_cell_phase_locator_s
 	uint64_t prepare_kernel_lookup_comparisons;
 } sg_cell_phase_locator_t;
 
+/* Map-lifetime authority supplied by the accepted navigation publication.
+ * Runtime observations may name an instance only through this exact binding. */
+typedef struct sg_localization_mover_binding_s
+{
+	uint64_t instance_id;
+	uint32_t model_index;
+	uint32_t reserved;
+	sg_rune_mechanism_ref_t mechanism;
+	sg_rune_entity_ref_t entity;
+} sg_localization_mover_binding_t;
+
 typedef struct sg_localization_observation_s
 {
 	uint8_t authenticated;
@@ -148,7 +171,6 @@ typedef struct sg_localization_observation_s
 	uint64_t frame_sequence;
 	uint64_t observed_at_ms;
 	uint64_t authenticated_at_ms;
-	uint64_t phase_started_at_ms;
 	float position[3];
 	float velocity[3];
 } sg_localization_observation_t;
@@ -162,17 +184,46 @@ typedef struct sg_localization_mover_s
 	uint32_t model_index;
 	uint32_t reserved2;
 	sg_rune_mechanism_ref_t mechanism;
+	sg_rune_entity_ref_t entity;
+	sg_host_collision_transform_t transform;
 	float velocity[3];
 } sg_localization_mover_t;
+
+/* Ordered positions emitted by the authoritative Pmove replay. Include each
+ * path vertex where stance, configuration cell, or dynamic scene changes.
+ * The last sample must equal the present observation. These samples prove the
+ * path taken; they are not a route for localization to discover afterward. */
+typedef struct sg_localization_continuity_sample_s
+{
+	uint8_t authenticated;
+	uint8_t reserved[3];
+	sg_rune_stance_t stance;
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+	uint64_t frame_sequence;
+	uint64_t sampled_at_ms;
+	uint64_t authenticated_at_ms;
+	float position[3];
+	float velocity[3];
+	const sg_host_collision_scene_t *scene;
+	const sg_localization_mover_t *movers;
+	size_t mover_count;
+} sg_localization_continuity_sample_t;
 
 typedef struct sg_localization_environment_s
 {
 	uint8_t authenticated;
 	uint8_t reserved[7];
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+	uint64_t frame_sequence;
 	uint64_t sampled_at_ms;
+	uint64_t authenticated_at_ms;
 	const sg_host_collision_scene_t *scene;
 	const sg_localization_mover_t *movers;
 	size_t mover_count;
+	const sg_localization_continuity_sample_t *continuity_samples;
+	size_t continuity_sample_count;
 } sg_localization_environment_t;
 
 typedef struct sg_localized_player_state_s sg_localized_player_state_t;
@@ -183,8 +234,10 @@ typedef struct sg_localization_request_s
 	uint64_t now_ms;
 	uint64_t minimum_frame_sequence;
 	uint64_t max_observation_age_ms;
-	/* A prior state requests continuity proof. Present observations use the
-	 * geometric distance; temporary absence uses the duration. */
+	/* A prior state requests continuity proof. The distance only bounds
+	 * numeric-drift recovery outside exact published cells; exact path
+	 * continuity has no caller-selected distance cap. Temporary absence uses
+	 * the duration. */
 	const sg_localized_player_state_t *previous;
 	float maximum_recovery_distance;
 	uint32_t reserved;
@@ -219,6 +272,8 @@ struct sg_localized_player_state_s
 	sg_host_collision_contents_t water_type;
 	uint32_t support_model_index;
 	uint64_t support_instance_id;
+	sg_rune_entity_ref_t mover_entity;
+	sg_host_collision_transform_t support_transform;
 	sg_localization_recovery_t recovery;
 	uint32_t portal_candidates_examined;
 	uint32_t phase_transition_candidates_examined;
@@ -232,7 +287,9 @@ int SG_CellPhaseLocatorPrepare(
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_localization_region_binding_t *bindings,
-	size_t binding_count, sg_localization_workspace_t *workspace,
+	size_t binding_count,
+	const sg_localization_mover_binding_t *mover_bindings,
+	size_t mover_binding_count, sg_localization_workspace_t *workspace,
 	sg_cell_phase_locator_t *locator_out,
 	sg_localization_status_t *status_out);
 
