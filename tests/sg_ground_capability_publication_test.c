@@ -2,300 +2,295 @@
 #include "sg_ground_capability_test.c"
 
 #include "../slipgate/sg_ground_capability_publication.h"
+#include "../slipgate/sg_configuration_audit.h"
 
-static sg_ground_capability_publication_source_t PublicationSource(
-	ground_fixture_t *fixture, sg_host_pmove_function_t host_pmove,
-	const sg_ground_phase_binding_t *bindings, size_t binding_count)
+typedef struct accepted_source_fixture_s
 {
+	fixture_t world;
+	sg_host_collision_authority_t authority;
+	sg_configuration_space_t *configuration;
+	sg_configuration_semantics_t *semantics;
+	sg_ground_capability_set_t candidate;
 	sg_ground_capability_publication_source_t source;
+} accepted_source_fixture_t;
 
-	memset(&source, 0, sizeof(source));
-	source.authority = &fixture->authority;
-	source.configuration = &fixture->configuration;
-	source.semantics = &fixture->semantics;
-	source.phases = fixture->phases;
-	source.phase_count = 4U;
-	source.bindings = bindings;
-	source.binding_count = binding_count;
-	source.host_pmove = host_pmove;
-	source.host_law_identity = fixture->authority.identity.physics_abi_id;
-	return source;
+typedef union fake_phase_catalog_storage_u
+{
+	max_align_t alignment;
+	unsigned char bytes[sizeof(max_align_t)];
+} fake_phase_catalog_storage_t;
+
+static fixture_t WalkFixture(void)
+{
+	fixture_t fixture;
+	uint32_t side;
+
+	memset(&fixture, 0, sizeof(fixture));
+	fixture.planes = calloc(8U, sizeof(*fixture.planes));
+	fixture.nodes = calloc(2U, sizeof(*fixture.nodes));
+	fixture.leaves = calloc(3U, sizeof(*fixture.leaves));
+	fixture.leaf_brushes = calloc(1U, sizeof(*fixture.leaf_brushes));
+	fixture.models = calloc(1U, sizeof(*fixture.models));
+	fixture.brushes = calloc(1U, sizeof(*fixture.brushes));
+	fixture.brush_sides = calloc(6U, sizeof(*fixture.brush_sides));
+	if (!fixture.planes || !fixture.nodes || !fixture.leaves ||
+		!fixture.leaf_brushes || !fixture.models || !fixture.brushes ||
+		!fixture.brush_sides)
+	{
+		fputs("walk fixture allocation failed\n", stderr);
+		exit(2);
+	}
+	SetPlane(&fixture.planes[0], 0.0f, 0.0f, 1.0f, -24.0f);
+	SetPlane(&fixture.planes[1], 1.0f, 0.0f, 0.0f, 0.0f);
+	fixture.nodes[0].plane = 0U;
+	fixture.nodes[0].children[0] = 1;
+	fixture.nodes[0].children[1] = -3;
+	fixture.nodes[1].plane = 1U;
+	fixture.nodes[1].children[0] = -1;
+	fixture.nodes[1].children[1] = -2;
+	fixture.leaves[0].cluster = 0;
+	fixture.leaves[0].area = 1U;
+	fixture.leaves[1].cluster = 1;
+	fixture.leaves[1].area = 2U;
+	fixture.leaves[2].contents = SG_HOST_CONTENTS_SOLID;
+	fixture.leaves[2].cluster = -1;
+	fixture.leaves[2].area = 1U;
+	fixture.leaves[2].first_leaf_brush = 0U;
+	fixture.leaves[2].leaf_brush_count = 1U;
+	fixture.leaf_brushes[0] = 0U;
+	SetPlane(&fixture.planes[2], 1.0f, 0.0f, 0.0f, 4095.0f);
+	SetPlane(&fixture.planes[3], -1.0f, 0.0f, 0.0f, 4096.0f);
+	SetPlane(&fixture.planes[4], 0.0f, 1.0f, 0.0f, 4095.0f);
+	SetPlane(&fixture.planes[5], 0.0f, -1.0f, 0.0f, 4096.0f);
+	SetPlane(&fixture.planes[6], 0.0f, 0.0f, 1.0f, -24.125f);
+	SetPlane(&fixture.planes[7], 0.0f, 0.0f, -1.0f, 4096.0f);
+	fixture.brushes[0].first_side = 0U;
+	fixture.brushes[0].side_count = 6U;
+	fixture.brushes[0].contents = SG_HOST_CONTENTS_SOLID;
+	for (side = 0U; side < 6U; side++)
+	{
+		fixture.brush_sides[side].plane = side + 2U;
+		fixture.brush_sides[side].texinfo = -1;
+	}
+	fixture.models[0].headnode = 0;
+	SetVector(fixture.models[0].mins.value,
+		-4096.0f, -4096.0f, -4096.0f);
+	SetVector(fixture.models[0].maxs.value,
+		4095.0f, 4095.0f, 4095.0f);
+	fixture.world.planes = fixture.planes;
+	fixture.world.plane_count = 8U;
+	fixture.world.nodes = fixture.nodes;
+	fixture.world.node_count = 2U;
+	fixture.world.leaves = fixture.leaves;
+	fixture.world.leaf_count = 3U;
+	fixture.world.leaf_brushes = fixture.leaf_brushes;
+	fixture.world.leaf_brush_count = 1U;
+	fixture.world.models = fixture.models;
+	fixture.world.model_count = 1U;
+	fixture.world.brushes = fixture.brushes;
+	fixture.world.brush_count = 1U;
+	fixture.world.brush_sides = fixture.brush_sides;
+	fixture.world.brush_side_count = 6U;
+	return fixture;
 }
 
-static void TestExactAuditAndOwnedPublication(void)
+static void AcceptedSourceDestroy(accepted_source_fixture_t *fixture)
 {
-	const test_box_t floor = {
-		{ -4096.0f, -4096.0f, -4096.0f },
-		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
-	};
-	ground_fixture_t fixture;
-	sg_ground_capability_publication_source_t source;
-	sg_ground_capability_set_t *set = NULL;
+	SG_ConfigurationSemanticsDestroy(fixture->semantics);
+	SG_ConfigurationDestroy(fixture->configuration);
+	DestroyFixture(&fixture->world);
+	memset(fixture, 0, sizeof(*fixture));
+}
+
+static int AcceptedSourceInit(accepted_source_fixture_t *fixture)
+{
+	sg_rune_model_identity_t identity = GroundIdentity();
+	sg_host_collision_error_t host_error;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_limits_t limits;
+
+	memset(fixture, 0, sizeof(*fixture));
+	fixture->world = WalkFixture();
+	if (!SG_HostCollisionInit(&fixture->authority, &fixture->world.world,
+			&identity, &host_error))
+		goto fail;
+	if (!SG_ConfigurationBuild(&fixture->authority, NULL,
+			&fixture->configuration, &configuration_error) ||
+		!SG_ConfigurationAudit(&fixture->authority, fixture->configuration,
+			&configuration_audit))
+		goto fail;
+	SG_ConfigurationSemanticsDefaultLimits(&limits);
+	if (!SG_ConfigurationSemanticsBuild(&fixture->authority,
+			fixture->configuration, &limits, &fixture->semantics,
+			&semantics_error))
+		goto fail;
+	fixture->candidate.identity = identity;
+	fixture->source.authority = &fixture->authority;
+	fixture->source.configuration = fixture->configuration;
+	fixture->source.semantics = fixture->semantics;
+	fixture->source.host_pmove = Pmove;
+	fixture->source.host_law_identity = identity.physics_abi_id;
+	return 1;
+
+fail:
+	AcceptedSourceDestroy(fixture);
+	return 0;
+}
+
+static void TestAcceptedSourcesReachClosedPhaseSeam(void)
+{
+	accepted_source_fixture_t fixture;
+	fake_phase_catalog_storage_t fake_catalog;
+	sg_ground_capability_audit_result_t audit;
 	sg_ground_capability_publication_t *publication = NULL;
-	sg_ground_capability_publication_description_t description;
-	sg_ground_capability_publication_fact_t fact;
-	sg_ground_capability_audit_result_t audit;
-	sg_ground_capability_error_t error;
-	float published_gravity;
 
-	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
-		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
-	GroundFixtureRebind(&fixture);
-	source = PublicationSource(&fixture, Pmove, fixture.bindings, 4U);
-	CHECK(GroundBuild(&fixture, &set, &error));
-	CHECK(SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_OK);
-	CHECK(audit.completeness == SG_GROUND_CAPABILITY_COMPLETENESS_COMPLETE);
-	CHECK(audit.expected_facts == set->capability_count);
-	CHECK(audit.matched_facts == set->capability_count);
-	CHECK(audit.proved_portals == set->proved_portals);
-	CHECK(audit.proven_empty_portals == set->rejected_crossings);
-	CHECK(audit.proved_directions == set->proved_directions);
-	CHECK(audit.proven_empty_directions == set->rejected_directions);
-	CHECK(audit.host_pmove_frames > 0U);
-	CHECK(SG_GroundCapabilityPublicationIssue(&source, set, &publication,
+	memset(&fake_catalog, 0, sizeof(fake_catalog));
+	CHECK(AcceptedSourceInit(&fixture));
+	if (!fixture.configuration || !fixture.semantics)
+		return;
+	CHECK(fixture.configuration->certificate_node_count > 0U);
+	CHECK(fixture.semantics->boundary_count > 0U);
+	CHECK(fixture.configuration->portal_count > 0U);
+	CHECK(!SG_GroundCapabilityAudit(&fixture.source, &fixture.candidate,
 		&audit));
-	CHECK(SG_GroundCapabilityPublicationDescribe(publication, &description));
-	CHECK(description.host_law_identity ==
-		fixture.authority.identity.physics_abi_id);
-	CHECK(description.cell_count == fixture.configuration.cell_count);
-	CHECK(description.portal_count == fixture.configuration.portal_count);
-	CHECK(description.semantic_region_count == fixture.semantics.region_count);
-	CHECK(description.phase_count == 4U);
-	CHECK(description.binding_count == 4U);
-	CHECK(description.fact_count == set->capability_count);
-	CHECK(description.fact_count_by_kind[SG_GROUND_CAPABILITY_WALK] > 0U);
-	CHECK(description.fact_count_by_kind[
-		SG_GROUND_CAPABILITY_JUMP_TAKEOFF] > 0U);
-	CHECK(SG_GroundCapabilityPublicationFact(publication, 0U, &fact));
-	CHECK(SG_RuneModelStableIdEqual(&fact.source_cell.value,
-		&fixture.configuration.cells[set->capabilities[0].source_cell].id.value));
-	CHECK(SG_RuneModelStableIdEqual(&fact.source_phase.value,
-		&fixture.phases[set->capabilities[0].source_phase].id.value));
-	published_gravity = fact.gravity;
-	set->capabilities[0].gravity = 100.0f;
-	fixture.phases[set->capabilities[0].source_phase].velocity.x.max_value = 1.0f;
-	GroundFixtureDestroy(&fixture);
-	SG_GroundCapabilityDestroy(set);
-	CHECK(SG_GroundCapabilityPublicationDescribe(publication, &description));
-	CHECK(SG_GroundCapabilityPublicationFact(publication, 0U, &fact));
-	CHECK(fact.gravity == published_gravity);
-	CHECK(!SG_GroundCapabilityPublicationFact(publication,
-		description.fact_count, &fact));
-	SG_GroundCapabilityPublicationDestroy(publication);
-}
-
-static void CheckPublishedKind(ground_fixture_t *fixture,
-	sg_host_pmove_function_t host_pmove, sg_ground_capability_kind_t kind)
-{
-	sg_ground_capability_publication_source_t source =
-		PublicationSource(fixture, host_pmove, fixture->bindings, 4U);
-	sg_ground_capability_set_t *set = NULL;
-	sg_ground_capability_publication_t *publication = NULL;
-	sg_ground_capability_publication_description_t description;
-	sg_ground_capability_audit_result_t audit;
-	sg_ground_capability_error_t error;
-
-	CHECK(SG_GroundCapabilityBuild(&fixture->authority, &fixture->configuration,
-		&fixture->semantics, fixture->phases, 4U, fixture->bindings, 4U,
-		host_pmove, &set, &error));
-	CHECK(set != NULL && HasKind(set, kind));
-	CHECK(SG_GroundCapabilityPublicationIssue(&source, set, &publication,
-		&audit));
-	CHECK(SG_GroundCapabilityPublicationDescribe(publication, &description));
-	CHECK(description.fact_count_by_kind[kind] > 0U);
-	SG_GroundCapabilityPublicationDestroy(publication);
-	SG_GroundCapabilityDestroy(set);
-}
-
-static void TestGeneralizedKindsPublish(void)
-{
-	const float diagonal = 0.70710677f;
-	const test_box_t low_clearance[2] = {
-		{ { -4096.0f, -4096.0f, -4096.0f },
-			{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID },
-		{ { -4096.0f, -4096.0f, 16.0f },
-			{ 4095.0f, 4095.0f, 4095.0f }, SG_HOST_CONTENTS_SOLID }
-	};
-	const test_box_t ramp = {
-		{ -50.0f, -50.0f, -100.0f },
-		{ 50.0f, 50.0f, 100.0f }, SG_HOST_CONTENTS_SOLID
-	};
-	const test_box_t ledge = {
-		{ -4096.0f, -4096.0f, -4096.0f },
-		{ -16.1f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
-	};
-	ground_fixture_t fixture;
-
-	GroundFixtureInit(&fixture, low_clearance, 2U, 800.0f,
-		SG_RUNE_STANCE_CROUCHING, 0.0f, 0.0f);
-	GroundFixtureRebind(&fixture);
-	CheckPublishedKind(&fixture, Pmove, SG_GROUND_CAPABILITY_CROUCH);
-	GroundFixtureDestroy(&fixture);
-
-	GroundFixtureInit(&fixture, &ramp, 1U, 100.0f,
-		SG_RUNE_STANCE_STANDING, 39.0f, 41.0f);
-	SetPlane(&fixture.world.planes[5], -diagonal, 0.0f, diagonal, 0.0f);
-	fixture.semantics.faces = fixture.semantic_faces;
-	fixture.semantics.face_count = 2U;
-	SetVector(fixture.semantic_faces[0].normal, -1.0f, 0.0f, 1.0f);
-	fixture.semantic_faces[0].distance = 40.25f;
-	SetVector(fixture.semantic_faces[1].normal, 1.0f, 0.0f, -1.0f);
-	fixture.semantic_faces[1].distance = -39.75f;
-	fixture.regions[0].first_face = 0U;
-	fixture.regions[0].face_count = 2U;
-	fixture.regions[2].first_face = 0U;
-	fixture.regions[2].face_count = 2U;
-	SetRune3(&fixture.regions[0].bounds.mins, -64.0f, -64.0f, 20.0f);
-	SetRune3(&fixture.regions[0].bounds.maxs, 0.0f, 64.0f, 40.25f);
-	SetRune3(&fixture.regions[2].bounds.mins, 0.0f, -64.0f, 39.75f);
-	SetRune3(&fixture.regions[2].bounds.maxs, 64.0f, 64.0f, 64.0f);
-	SetRune3(&fixture.vertices[0], 0.0f, -32.0f, 32.0f);
-	SetRune3(&fixture.vertices[1], 0.0f, 32.0f, 32.0f);
-	SetRune3(&fixture.vertices[2], 0.0f, 32.0f, 48.0f);
-	SetRune3(&fixture.vertices[3], 0.0f, -32.0f, 48.0f);
-	GroundFixtureRebind(&fixture);
-	CheckPublishedKind(&fixture, Pmove, SG_GROUND_CAPABILITY_RAMP);
-	GroundFixtureDestroy(&fixture);
-
-	GroundFixtureInit(&fixture, &ledge, 1U, 800.0f,
-		SG_RUNE_STANCE_STANDING, 0.0f, -24.0f);
-	GroundFixtureRebind(&fixture);
-	SetRune3(&fixture.regions[3].bounds.mins, 0.0f, -64.0f, -64.0f);
-	SetRune3(&fixture.regions[3].bounds.maxs, 64.0f, 64.0f, 64.0f);
-	SetRune3(&fixture.regions[3].interior_witness, 1.0f, 0.0f, -4.0f);
-	CheckPublishedKind(&fixture, Pmove, SG_GROUND_CAPABILITY_DROP);
-	GroundFixtureDestroy(&fixture);
-}
-
-static void TestAuditRejectsEveryCandidateClass(void)
-{
-	const test_box_t floor = {
-		{ -4096.0f, -4096.0f, -4096.0f },
-		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
-	};
-	ground_fixture_t fixture;
-	sg_ground_capability_publication_source_t source;
-	sg_ground_capability_set_t *set = NULL;
-	sg_ground_capability_audit_result_t audit;
-	sg_ground_capability_error_t error;
-	sg_ground_capability_t saved;
-	uint32_t saved_count;
-	uint32_t saved_counter;
-
-	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
-		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
-	GroundFixtureRebind(&fixture);
-	source = PublicationSource(&fixture, Pmove, fixture.bindings, 4U);
-	CHECK(GroundBuild(&fixture, &set, &error));
-	if (!set || set->capability_count < 2U)
-		goto done;
-	saved = set->capabilities[0];
-	set->capabilities[0].gravity = 100.0f;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
-	CHECK(audit.record == 0U);
-	set->capabilities[0] = saved;
-	saved_count = set->capability_count;
-	set->capability_count--;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_OMITTED_FACT);
-	set->capability_count = saved_count + 1U;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_INVENTED_FACT);
-	set->capability_count = saved_count;
-	saved = set->capabilities[0];
-	set->capabilities[0] = set->capabilities[1];
-	set->capabilities[1] = saved;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_FACT_DISAGREEMENT);
-	set->capabilities[1] = set->capabilities[0];
-	set->capabilities[0] = saved;
-	saved_counter = set->proved_directions;
-	set->proved_directions++;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code ==
-		SG_GROUND_CAPABILITY_AUDIT_COMPLETENESS_DISAGREEMENT);
-	set->proved_directions = saved_counter;
-	set->identity.physics_abi_id++;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_IDENTITY_MISMATCH);
-	set->identity.physics_abi_id--;
-	source.host_law_identity++;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_HOST_LAW_MISMATCH);
-	source.host_law_identity--;
-	source.host_pmove = EmptyPmove;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_HOST_LAW_MISMATCH);
-	source.host_pmove = Pmove;
-	fixture.phases[0].time_quantum_ms = 0U;
-	CHECK(!SG_GroundCapabilityAudit(&source, set, &audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_RECONSTRUCTION_REJECTED);
-
-done:
-	SG_GroundCapabilityDestroy(set);
-	GroundFixtureDestroy(&fixture);
-}
-
-static void TestProvenEmptyPublication(void)
-{
-	const test_box_t floor = {
-		{ -4096.0f, -4096.0f, -4096.0f },
-		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
-	};
-	ground_fixture_t fixture;
-	sg_ground_phase_binding_t airborne[2];
-	sg_ground_capability_publication_source_t source;
-	sg_ground_capability_set_t *set = NULL;
-	sg_ground_capability_publication_t *publication = NULL;
-	sg_ground_capability_publication_description_t description;
-	sg_ground_capability_audit_result_t audit;
-	sg_ground_capability_error_t error;
-
-	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
-		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
-	GroundFixtureRebind(&fixture);
-	fixture.configuration.portal_count = 0U;
-	airborne[0] = fixture.bindings[1];
-	airborne[1] = fixture.bindings[3];
-	fixture.phases[1].velocity.z.min_value = 100.0f;
-	fixture.phases[1].velocity.z.max_value = 100.0f;
-	fixture.phases[3].velocity.z.min_value = 100.0f;
-	fixture.phases[3].velocity.z.max_value = 100.0f;
-	source = PublicationSource(&fixture, Pmove, airborne, 2U);
-	CHECK(SG_GroundCapabilityBuild(&fixture.authority, &fixture.configuration,
-		&fixture.semantics, fixture.phases, 4U, airborne, 2U, Pmove,
-		&set, &error));
-	CHECK(set != NULL && set->capability_count == 0U);
-	CHECK(SG_GroundCapabilityPublicationIssue(&source, set, &publication,
-		&audit));
+	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_REQUIRED);
 	CHECK(audit.completeness ==
-		SG_GROUND_CAPABILITY_COMPLETENESS_PROVEN_EMPTY);
-	CHECK(SG_GroundCapabilityPublicationDescribe(publication, &description));
-	CHECK(description.completeness ==
-		SG_GROUND_CAPABILITY_COMPLETENESS_PROVEN_EMPTY);
-	CHECK(description.fact_count == 0U);
-	CHECK(description.portal_count == 0U);
-	SG_GroundCapabilityPublicationDestroy(publication);
-	SG_GroundCapabilityDestroy(set);
-	GroundFixtureDestroy(&fixture);
+		SG_GROUND_CAPABILITY_COMPLETENESS_UNRESOLVED);
+	fixture.source.phase_catalog =
+		(const sg_phase_catalog_publication_t *)(const void *)&fake_catalog;
+	CHECK(!SG_GroundCapabilityAudit(&fixture.source, &fixture.candidate,
+		&audit));
+	CHECK(audit.code ==
+		SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_UNAVAILABLE);
+	CHECK(!SG_GroundCapabilityPublicationIssue(&fixture.source,
+		&fixture.candidate, &publication, &audit));
+	CHECK(publication == NULL);
+	CHECK(audit.code ==
+		SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_UNAVAILABLE);
+	AcceptedSourceDestroy(&fixture);
 }
 
-static void TestInvalidPublicationArgumentsAreDeterministic(void)
+static void TestZeroCountsCannotBypassAcceptedAudits(void)
+{
+	accepted_source_fixture_t fixture;
+	sg_ground_capability_audit_result_t audit;
+	uint32_t certificate_count;
+	uint32_t cell_count;
+	uint32_t boundary_count;
+	uint32_t region_cell;
+
+	CHECK(AcceptedSourceInit(&fixture));
+	if (!fixture.configuration || !fixture.semantics)
+		return;
+	certificate_count = fixture.configuration->certificate_node_count;
+	cell_count = fixture.configuration->cell_count;
+	boundary_count = fixture.semantics->boundary_count;
+	CHECK(certificate_count > 0U && cell_count > 1U && boundary_count > 0U);
+	fixture.configuration->certificate_node_count = 0U;
+	fixture.configuration->cell_count = cell_count - 1U;
+	fixture.semantics->boundary_count = 0U;
+	CHECK(!SG_GroundCapabilityAudit(&fixture.source, &fixture.candidate,
+		&audit));
+	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_CONFIGURATION_REJECTED);
+	CHECK(audit.completeness ==
+		SG_GROUND_CAPABILITY_COMPLETENESS_UNRESOLVED);
+	fixture.configuration->cell_count = cell_count;
+	fixture.configuration->certificate_node_count = certificate_count;
+	fixture.semantics->boundary_count = boundary_count;
+
+	CHECK(boundary_count > 0U && fixture.semantics->region_count > 0U);
+	region_cell = fixture.semantics->regions[0].cell;
+	fixture.semantics->boundary_count = 0U;
+	fixture.semantics->regions[0].cell = fixture.configuration->cell_count;
+	CHECK(!SG_GroundCapabilityAudit(&fixture.source, &fixture.candidate,
+		&audit));
+	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_SEMANTICS_REJECTED);
+	CHECK(audit.completeness ==
+		SG_GROUND_CAPABILITY_COMPLETENESS_UNRESOLVED);
+	fixture.semantics->regions[0].cell = region_cell;
+	fixture.semantics->boundary_count = boundary_count;
+	AcceptedSourceDestroy(&fixture);
+}
+
+static void TestAirborneOnlyCannotForgeProvenEmpty(void)
+{
+	const test_box_t floor = {
+		{ -4096.0f, -4096.0f, -4096.0f },
+		{ 4095.0f, 4095.0f, -24.1f }, SG_HOST_CONTENTS_SOLID
+	};
+	ground_fixture_t raw;
+	sg_ground_phase_binding_t airborne[2];
+	sg_ground_capability_set_t *candidate = NULL;
+	sg_ground_capability_error_t error;
+	accepted_source_fixture_t accepted;
+	sg_ground_capability_audit_result_t audit;
+
+	GroundFixtureInit(&raw, &floor, 1U, 800.0f,
+		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
+	GroundFixtureRebind(&raw);
+	airborne[0] = raw.bindings[1];
+	airborne[1] = raw.bindings[3];
+	raw.phases[1].velocity.z.min_value = 100.0f;
+	raw.phases[1].velocity.z.max_value = 100.0f;
+	raw.phases[3].velocity.z.min_value = 100.0f;
+	raw.phases[3].velocity.z.max_value = 100.0f;
+	CHECK(raw.configuration.portal_count == 1U);
+	CHECK(SG_GroundCapabilityBuild(&raw.authority, &raw.configuration,
+		&raw.semantics, raw.phases, 4U, airborne, 2U, Pmove,
+		&candidate, &error));
+	CHECK(candidate != NULL && candidate->capability_count == 0U);
+	CHECK(AcceptedSourceInit(&accepted));
+	if (candidate && accepted.configuration && accepted.semantics)
+	{
+		CHECK(accepted.configuration->portal_count > 0U);
+		candidate->identity = accepted.authority.identity;
+		CHECK(!SG_GroundCapabilityAudit(&accepted.source, candidate, &audit));
+		CHECK(audit.code ==
+			SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_REQUIRED);
+		CHECK(audit.completeness ==
+			SG_GROUND_CAPABILITY_COMPLETENESS_UNRESOLVED);
+	}
+	AcceptedSourceDestroy(&accepted);
+	SG_GroundCapabilityDestroy(candidate);
+	GroundFixtureDestroy(&raw);
+}
+
+static void TestExactFactsUseCanonicalFloatBits(void)
+{
+	sg_ground_capability_t left;
+	sg_ground_capability_t right;
+
+	memset(&left, 0, sizeof(left));
+	right = left;
+	CHECK(SG_GroundCapabilityFactBitsEqual(&left, &right));
+	right.gravity = -0.0f;
+	CHECK(!SG_GroundCapabilityFactBitsEqual(&left, &right));
+	right = left;
+	right.source_witness.value[1] = -0.0f;
+	CHECK(!SG_GroundCapabilityFactBitsEqual(&left, &right));
+	right = left;
+	right.duration_ms.max_value = -0.0f;
+	CHECK(!SG_GroundCapabilityFactBitsEqual(&left, &right));
+	CHECK(!SG_GroundCapabilityFactBitsEqual(NULL, &right));
+}
+
+static void TestInvalidArgumentsStayFailClosed(void)
 {
 	sg_ground_capability_audit_result_t audit;
 	sg_ground_capability_publication_t *publication = NULL;
 
 	memset(&audit, 0xa5, sizeof(audit));
-	CHECK(!SG_GroundCapabilityPublicationIssue(NULL, NULL, NULL, &audit));
+	CHECK(!SG_GroundCapabilityAudit(NULL, NULL, &audit));
 	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_INVALID_ARGUMENT);
 	CHECK(audit.completeness ==
 		SG_GROUND_CAPABILITY_COMPLETENESS_UNRESOLVED);
-	CHECK(audit.record == SG_GROUND_CAPABILITY_INDEX_NONE);
+	CHECK(!SG_GroundCapabilityPublicationIssue(NULL, NULL, NULL, &audit));
+	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_INVALID_ARGUMENT);
 	CHECK(!SG_GroundCapabilityPublicationIssue(NULL, NULL, &publication,
 		&audit));
-	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_INVALID_ARGUMENT);
+	CHECK(publication == NULL);
 	CHECK(!SG_GroundCapabilityPublicationDescribe(NULL, NULL));
 	CHECK(!SG_GroundCapabilityPublicationFact(NULL, 0U, NULL));
 	SG_GroundCapabilityPublicationDestroy(NULL);
@@ -306,16 +301,16 @@ int main(void)
 	if (RunGroundCapabilityTests() != 0)
 		return 1;
 	failures = 0;
-	TestExactAuditAndOwnedPublication();
-	TestGeneralizedKindsPublish();
-	TestAuditRejectsEveryCandidateClass();
-	TestProvenEmptyPublication();
-	TestInvalidPublicationArgumentsAreDeterministic();
+	TestAcceptedSourcesReachClosedPhaseSeam();
+	TestZeroCountsCannotBypassAcceptedAudits();
+	TestAirborneOnlyCannotForgeProvenEmpty();
+	TestExactFactsUseCanonicalFloatBits();
+	TestInvalidArgumentsStayFailClosed();
 	if (failures)
 	{
 		fprintf(stderr, "%d ground publication test failure(s)\n", failures);
 		return 1;
 	}
-	puts("ground capability publication checks passed");
+	puts("ground capability publication fail-closed checks passed");
 	return 0;
 }

@@ -1,11 +1,11 @@
 #ifndef SG_GROUND_CAPABILITY_PUBLICATION_H
 #define SG_GROUND_CAPABILITY_PUBLICATION_H
 
-#include <stddef.h>
 #include <stdint.h>
 
 #include "sg_ground_capability.h"
 
+typedef struct sg_phase_catalog_publication_s sg_phase_catalog_publication_t;
 typedef struct sg_ground_capability_publication_s
 	sg_ground_capability_publication_t;
 
@@ -24,6 +24,8 @@ typedef enum sg_ground_capability_audit_code_e
 	SG_GROUND_CAPABILITY_AUDIT_HOST_LAW_MISMATCH,
 	SG_GROUND_CAPABILITY_AUDIT_CONFIGURATION_REJECTED,
 	SG_GROUND_CAPABILITY_AUDIT_SEMANTICS_REJECTED,
+	SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_REQUIRED,
+	SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_UNAVAILABLE,
 	SG_GROUND_CAPABILITY_AUDIT_RECONSTRUCTION_REJECTED,
 	SG_GROUND_CAPABILITY_AUDIT_OMITTED_FACT,
 	SG_GROUND_CAPABILITY_AUDIT_INVENTED_FACT,
@@ -38,10 +40,7 @@ typedef struct sg_ground_capability_publication_source_s
 	const sg_host_collision_authority_t *authority;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
-	const sg_rune_phase_basis_t *phases;
-	size_t phase_count;
-	const sg_ground_phase_binding_t *bindings;
-	size_t binding_count;
+	const sg_phase_catalog_publication_t *phase_catalog;
 	sg_host_pmove_function_t host_pmove;
 	uint64_t host_law_identity;
 } sg_ground_capability_publication_source_t;
@@ -103,17 +102,18 @@ typedef struct sg_ground_capability_publication_description_s
 	uint32_t proven_empty_directions;
 } sg_ground_capability_publication_description_t;
 
+int SG_GroundCapabilityFactBitsEqual(
+	const sg_ground_capability_t *left,
+	const sg_ground_capability_t *right);
 int SG_GroundCapabilityAudit(
 	const sg_ground_capability_publication_source_t *source,
 	const sg_ground_capability_set_t *candidate,
 	sg_ground_capability_audit_result_t *result_out);
-
 int SG_GroundCapabilityPublicationIssue(
 	const sg_ground_capability_publication_source_t *source,
 	const sg_ground_capability_set_t *candidate,
 	sg_ground_capability_publication_t **publication_out,
 	sg_ground_capability_audit_result_t *audit_out);
-
 int SG_GroundCapabilityPublicationDescribe(
 	const sg_ground_capability_publication_t *publication,
 	sg_ground_capability_publication_description_t *description_out);
