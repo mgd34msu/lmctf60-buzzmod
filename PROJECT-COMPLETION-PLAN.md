@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | Integrated on `slipgate`: frozen contracts; complete BSP, collision, hull configuration, semantic, visibility, hook-surface, and completeness foundations; accepted ground, water, mechanism, and weapon foundations; artifact codec, loader, atomic publication, three independent readers, portable runtime-map preflight, exact BSP entity-semantics publication, authenticated static-affordance catalog, and continuous dynamics aggregate; sparse beliefs with exact life identity and topology-complete horizon prediction; weapon profiles; passive human traces; hook-visibility publication; and complete removal of the obsolete SNAG pipeline. Fail-closed ground and hook/air consumer seams await accepted phase and host-law providers. The directional field solver/cache, complete-model proof, and production navigation, strategy, perception, combat, and learning hookups remain open. |
+| Architectural state | Integrated on `slipgate`: frozen contracts; complete BSP, collision, hull configuration, semantic, visibility, hook-surface, and completeness foundations; accepted ground, water, mechanism, and weapon foundations; artifact codec, loader, atomic publication, three independent readers, portable runtime-map preflight, exact BSP entity-semantics publication, authenticated static-affordance catalog, and continuous dynamics aggregate; sparse beliefs with exact life identity and topology-complete horizon prediction; weapon profiles; passive human traces; hook-visibility publication; the authenticated strategy caller foundation; and complete removal of the obsolete SNAG pipeline. Fail-closed ground and hook/air consumer seams await accepted phase and host-law providers. The continuous directional field solver, complete-model proof, real `FieldService` registration, tactical selection, perception, combat, and learning hookups remain open. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` files and zero obsolete repair sidecars. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, accepted passive human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Unaccepted components remain review-required. |
@@ -222,8 +222,9 @@ phase can close:
 - [ ] Replace `Field_Flood` with the reviewed directional field solver.
 - [ ] Add static-field caching, incremental moving-target updates, and a coarse
   region hierarchy without changing final field values.
-- [ ] Implement the typed, conditional strategy queue and migrate role, strike,
-  item, supply, escort, intercept, carry, recovery, and human-order callers.
+- [ ] Finish the typed strategy migration. The queue and role, strike, item,
+  supply, escort, intercept, carry, recovery, and human-order callers are in
+  production. The caller still needs the accepted `FieldService` provider.
 - [ ] Replace action-link descent with tactical capability selection over the
   local gradient. Port reviewed live movement and mechanism reducers.
 - [ ] Delete superseded route-link commitment state and compatibility APIs.
