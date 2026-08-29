@@ -8,6 +8,9 @@
 #include "../q_shared.h"
 #include "sg_host_collision.h"
 
+/* Fixed by the accepted Quake II Pmove ABI, not caller configuration. */
+#define SG_HOST_PMOVE_STEP_HEIGHT 18.0f
+
 typedef enum sg_host_pmove_error_e
 {
 	SG_HOST_PMOVE_ERROR_NONE = 0,
@@ -52,12 +55,31 @@ typedef struct sg_host_pmove_result_s
 	uint64_t physics_abi_id;
 } sg_host_pmove_result_t;
 
+typedef struct sg_host_pmove_trace_s
+{
+	uint64_t ordinal;
+	uint32_t substep;
+	float start[3];
+	float mins[3];
+	float maxs[3];
+	float end[3];
+	sg_host_collision_trace_t result;
+} sg_host_pmove_trace_t;
+
 typedef struct sg_host_pmove_substep_s
 {
+	pmove_state_t before_state;
+	float before_origin[3];
+	float before_velocity[3];
 	pmove_state_t state;
 	float origin[3];
 	float velocity[3];
 	sg_rune_stance_t stance;
+	int grounded;
+	uint32_t support_model_index;
+	uint64_t support_instance_id;
+	int water_type;
+	int water_level;
 	uint32_t step;
 	uint32_t elapsed_ms;
 	/* This substep owns a contiguous interval in the frame trace sequence. */
@@ -70,6 +92,8 @@ typedef struct sg_host_pmove_replay_workspace_s
 {
 	sg_host_pmove_substep_t *substeps;
 	size_t substep_capacity;
+	sg_host_pmove_trace_t *traces;
+	size_t trace_capacity;
 } sg_host_pmove_replay_workspace_t;
 
 typedef struct sg_host_pmove_replay_s
@@ -78,6 +102,8 @@ typedef struct sg_host_pmove_replay_s
 	sg_host_pmove_result_t result;
 	const sg_host_pmove_substep_t *substeps;
 	size_t substep_count;
+	const sg_host_pmove_trace_t *traces;
+	size_t trace_count;
 	uint64_t bsp_content_id;
 	uint64_t physics_abi_id;
 	uint32_t frame_ms;

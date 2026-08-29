@@ -33,7 +33,7 @@ void Com_Printf(char *format, ...)
 
 static void LocalizationPmove(pmove_t *pmove)
 {
-	vec3_t origin;
+	vec3_t origin, destination, down;
 	trace_t trace;
 	uint32_t axis;
 	int ducked = (pmove->s.pm_flags & PMF_DUCKED) != 0;
@@ -51,14 +51,63 @@ static void LocalizationPmove(pmove_t *pmove)
 	pmove->maxs[2] = ducked ? 4.0f : 32.0f;
 	for (axis = 0U; axis < 3U; axis++)
 		origin[axis] = pmove->s.origin[axis] * 0.125f;
-	trace = pmove->trace(origin, pmove->mins, pmove->maxs, origin);
-	(void)trace;
 	pmove->s.velocity[0] = pmove->cmd.forwardmove;
 	pmove->s.velocity[1] = pmove->cmd.sidemove;
 	pmove->s.velocity[2] = 0;
 	for (axis = 0U; axis < 3U; axis++)
-		pmove->s.origin[axis] = (short)(pmove->s.origin[axis] +
+	{
+		short packed = (short)(pmove->s.origin[axis] +
 			(short)((pmove->s.velocity[axis] * pmove->cmd.msec) / 1000));
+
+		destination[axis] = packed * 0.125f;
+	}
+	trace = pmove->trace(origin, pmove->mins, pmove->maxs, destination);
+	for (axis = 0U; axis < 3U; axis++)
+		pmove->s.origin[axis] = (short)(trace.endpos[axis] * 8.0f);
+	VectorCopy(trace.endpos, down);
+	down[2] -= 0.25f;
+	trace = pmove->trace(trace.endpos, pmove->mins, pmove->maxs, down);
+	pmove->groundentity = trace.ent;
+	pmove->watertype = pmove->pointcontents(trace.endpos);
+	pmove->waterlevel = (pmove->watertype & MASK_WATER) ? 1 : 0;
+}
+
+static void TeleportPmove(pmove_t *pmove)
+{
+	vec3_t origin;
+	trace_t trace;
+	uint32_t axis;
+
+	pmove->mins[0] = pmove->mins[1] = -16.0f;
+	pmove->mins[2] = -24.0f;
+	pmove->maxs[0] = pmove->maxs[1] = 16.0f;
+	pmove->maxs[2] = 32.0f;
+	for (axis = 0U; axis < 3U; axis++)
+		origin[axis] = pmove->s.origin[axis] * 0.125f;
+	trace = pmove->trace(origin, pmove->mins, pmove->maxs, origin);
+	(void)trace;
+	pmove->s.origin[0] = 240;
+}
+
+static void PointTraceTeleportPmove(pmove_t *pmove)
+{
+	vec3_t origin, destination, point_hull = { 0.0f, 0.0f, 0.0f };
+	trace_t trace;
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		origin[axis] = pmove->s.origin[axis] * 0.125f;
+		destination[axis] = origin[axis];
+	}
+	destination[0] = 30.0f;
+	trace = pmove->trace(origin, point_hull, point_hull, destination);
+	pmove->mins[0] = pmove->mins[1] = -16.0f;
+	pmove->mins[2] = -24.0f;
+	pmove->maxs[0] = pmove->maxs[1] = 16.0f;
+	pmove->maxs[2] = 32.0f;
+	for (axis = 0U; axis < 3U; axis++)
+		pmove->s.origin[axis] = (short)(trace.endpos[axis] * 8.0f);
 }
 
 #define CHECK(expression) do { \
@@ -126,6 +175,7 @@ typedef struct locator_fixture_s
 	sg_cell_phase_locator_t locator;
 	sg_cell_phase_runtime_t runtime;
 	sg_host_pmove_substep_t replay_substeps[128];
+	sg_host_pmove_trace_t replay_traces[4096];
 	uint32_t phase_count;
 } locator_fixture_t;
 
@@ -726,6 +776,8 @@ static int LocalizeRequest(locator_fixture_t *fixture,
 	const sg_host_pmove_request_t *saved_request = environment->pmove_request;
 	sg_host_pmove_substep_t *saved_substeps = environment->replay_substeps;
 	size_t saved_capacity = environment->replay_substep_capacity;
+	sg_host_pmove_trace_t *saved_traces = environment->replay_traces;
+	size_t saved_trace_capacity = environment->replay_trace_capacity;
 	int result;
 	if (observation->kind != SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT &&
 		observation->kind != SG_LOCALIZATION_OBSERVATION_DEAD)
@@ -757,12 +809,18 @@ static int LocalizeRequest(locator_fixture_t *fixture,
 		environment->replay_substep_capacity =
 			sizeof(fixture->replay_substeps) /
 			sizeof(fixture->replay_substeps[0]);
+		environment->replay_traces = fixture->replay_traces;
+		environment->replay_trace_capacity =
+			sizeof(fixture->replay_traces) /
+			sizeof(fixture->replay_traces[0]);
 	}
 	result = SG_CellPhaseLocalize(&fixture->runtime, request, observation,
 		environment, state, status);
 	environment->pmove_request = saved_request;
 	environment->replay_substeps = saved_substeps;
 	environment->replay_substep_capacity = saved_capacity;
+	environment->replay_traces = saved_traces;
+	environment->replay_trace_capacity = saved_trace_capacity;
 	return result;
 }
 
@@ -1517,6 +1575,8 @@ static void CheckRealPmoveMotion(world_fixture_t *world,
 	environment.pmove_request = &pmove_request;
 	environment.replay_substeps = fixture.replay_substeps;
 	environment.replay_substep_capacity = 128U;
+	environment.replay_traces = fixture.replay_traces;
+	environment.replay_trace_capacity = 4096U;
 	request = Request();
 	request.now_ms = 101U;
 	request.minimum_frame_sequence = 10U;
@@ -1618,6 +1678,8 @@ static void TestRealPmoveStepSlide(void)
 	environment.pmove_request = &pmove_request;
 	environment.replay_substeps = fixture.replay_substeps;
 	environment.replay_substep_capacity = 128U;
+	environment.replay_traces = fixture.replay_traces;
+	environment.replay_trace_capacity = 4096U;
 	request = Request();
 	request.now_ms = 101U;
 	request.minimum_frame_sequence = 10U;
@@ -2264,7 +2326,7 @@ static void TestRecoveryConnectivityProof(void)
 	request.maximum_recovery_distance = 80.0f;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
-	CHECK(status == SG_LOCALIZATION_SOLID);
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
 }
 
 static void TestHostReplayRejectsFabricatedPolyline(void)
@@ -2307,6 +2369,80 @@ static void TestHostReplayRejectsFabricatedPolyline(void)
 	environment.pmove_request = &pmove_request;
 	environment.replay_substeps = fixture.replay_substeps;
 	environment.replay_substep_capacity = 3U;
+	environment.replay_traces = fixture.replay_traces;
+	environment.replay_trace_capacity = 4096U;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+}
+
+static void TestHostReplayRejectsStationaryTraceTeleport(void)
+{
+	const float wall_mins[3] = { -2.0f, -40.0f, -40.0f };
+	const float wall_maxs[3] = { 2.0f, 40.0f, 40.0f };
+	world_fixture_t wall = BoxWorld(wall_mins, wall_maxs);
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+
+	InitAdjacentStandingFixture(&fixture, &wall);
+	AddDirectPortal(&fixture);
+	SetFixtureTiming(&fixture, 60U, 60U);
+	FinalizeFixture(&fixture);
+	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, TeleportPmove,
+		&fixture.runtime, &status));
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		-30.0f, 0.0f, 24.0f);
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	observation.position[0] = 30.0f;
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 160U;
+	observation.authenticated_at_ms = 160U;
+	request = Request();
+	request.now_ms = 160U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_recovery_distance = 80.0f;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+}
+
+static void TestHostReplayRejectsSubstitutePointTrace(void)
+{
+	const float wall_mins[3] = { -2.0f, -40.0f, -40.0f };
+	const float wall_maxs[3] = { 2.0f, 40.0f, 10.0f };
+	world_fixture_t wall = BoxWorld(wall_mins, wall_maxs);
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+
+	InitAdjacentStandingFixture(&fixture, &wall);
+	AddDirectPortal(&fixture);
+	SetFixtureTiming(&fixture, 60U, 60U);
+	FinalizeFixture(&fixture);
+	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator,
+		PointTraceTeleportPmove, &fixture.runtime, &status));
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		-30.0f, 0.0f, 24.0f);
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	observation.position[0] = 30.0f;
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 160U;
+	observation.authenticated_at_ms = 160U;
+	request = Request();
+	request.now_ms = 160U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_recovery_distance = 80.0f;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
 	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
@@ -2595,6 +2731,8 @@ int main(void)
 	TestPreviousStateAuthentication();
 	TestRecoveryConnectivityProof();
 	TestHostReplayRejectsFabricatedPolyline();
+	TestHostReplayRejectsStationaryTraceTeleport();
+	TestHostReplayRejectsSubstitutePointTrace();
 	TestMultiplePortalCrossingsUseHostReplay();
 	TestPreparationScalesByRecords();
 	TestMoverCarryFailsClosedWithoutProductionAuthority();

@@ -177,12 +177,15 @@ typedef struct sg_localization_environment_s
 	const sg_host_pmove_request_t *pmove_request;
 	sg_host_pmove_substep_t *replay_substeps;
 	size_t replay_substep_capacity;
+	sg_host_pmove_trace_t *replay_traces;
+	size_t replay_trace_capacity;
 } sg_localization_environment_t;
 
-/* Prepared only after locator authority and the selected host Pmove entry
- * point pass. Moving-mechanism continuity stays unavailable until opaque
- * production mechanism, entity-semantics, mover, and host-law publications
- * can be checked here. */
+/* Foundation-only replay seam. A raw function pointer does not authenticate
+ * the engine Pmove owner, so production construction stays unavailable until
+ * the accepted host-law owner binding can be checked here. Moving-mechanism
+ * continuity additionally requires opaque mechanism, entity-semantics, mover,
+ * and transform-timeline publications. */
 typedef struct sg_cell_phase_runtime_s
 {
 	const sg_cell_phase_locator_t *locator;
@@ -261,6 +264,8 @@ int SG_CellPhaseLocatorPrepare(
 	sg_cell_phase_locator_t *locator_out,
 	sg_localization_status_t *status_out);
 
+/* Test/foundation constructor only until the accepted engine-Pmove owner
+ * publication replaces the unauthenticated callback argument. */
 int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
 	sg_host_pmove_function_t host_pmove,
 	sg_cell_phase_runtime_t *runtime_out,

@@ -1926,7 +1926,8 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	const sg_localization_observation_t *observation,
 	const sg_localization_environment_t *environment,
 	sg_localized_player_state_t *state_out,
-	sg_localization_status_t *status_out, int path_step, int host_replay_step)
+	sg_localization_status_t *status_out, int path_step,
+	int trace_transition_proven)
 {
 	sg_host_collision_pose_t host_pose;
 	sg_rune_mechanism_ref_t mover = SG_RUNE_MECHANISM_REF_NONE;
@@ -2046,7 +2047,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		SetStatus(status_out, SG_LOCALIZATION_SOLID);
 		return 0;
 	}
-	if (continuity && !host_replay_step &&
+	if (continuity && !trace_transition_proven &&
 		!ClearRecoveryTransition(locator, environment, request->previous,
 			observation))
 	{
@@ -2283,13 +2284,68 @@ static int PmoveStateEqual(const pmove_state_t *left,
 	return 1;
 }
 
+static int ReplayPointEqual(const float left[3], const float right[3])
+{
+	return memcmp(left, right, sizeof(float) * 3U) == 0;
+}
+
+static int ReplayStepPoint(const float candidate[3], const float base[3])
+{
+	return candidate[0] == base[0] && candidate[1] == base[1] &&
+		candidate[2] == base[2] + SG_HOST_PMOVE_STEP_HEIGHT;
+}
+
+static int ReplaySnapPoint(const float candidate[3], const float base[3])
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		double scaled = (double)base[axis] * 8.0;
+		float packed;
+		float jittered;
+
+		if (!isfinite(scaled) || scaled < SHRT_MIN || scaled > SHRT_MAX)
+			return 0;
+		packed = (short)scaled * 0.125f;
+		jittered = packed;
+		if (packed != base[axis])
+			jittered += base[axis] >= 0.0f ? 0.125f : -0.125f;
+		if (candidate[axis] != packed && candidate[axis] != jittered)
+			return 0;
+	}
+	return 1;
+}
+
+static int ReplayPackedOriginEqual(const pmove_state_t *state,
+	const float point[3])
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		double scaled = (double)point[axis] * 8.0;
+
+		if (!isfinite(scaled) || scaled < SHRT_MIN || scaled > SHRT_MAX ||
+			state->origin[axis] != (short)scaled)
+			return 0;
+	}
+	return 1;
+}
+
 static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
 	const sg_localized_player_state_t *previous,
+	const sg_host_pmove_replay_t *replay,
 	const sg_host_pmove_substep_t *substep, uint32_t expected_step,
 	uint32_t substep_ms, uint64_t expected_trace_ordinal,
 	uint64_t *next_trace_ordinal_out)
 {
 	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
+	const sg_rune_hull_profile_t *hull;
+	sg_host_collision_pose_t pose;
+	size_t first_trace;
+	size_t trace_index;
 	uint32_t axis;
 
 	if (substep->step != expected_step ||
@@ -2297,18 +2353,111 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 		substep->state.pm_type != PM_NORMAL || substep->trace_count == 0U ||
 		substep->first_trace_ordinal != expected_trace_ordinal ||
 		substep->collision_trace_count > substep->trace_count ||
-		substep->first_trace_ordinal > UINT64_MAX - substep->trace_count)
+		substep->first_trace_ordinal > UINT64_MAX - substep->trace_count ||
+		!PmoveStateEqual(&substep->before_state, &previous->host_state) ||
+		substep->stance != ((substep->state.pm_flags & PMF_DUCKED) ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING) ||
+		substep->first_trace_ordinal == 0U)
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		if (!isfinite(substep->origin[axis]) ||
+		if (!isfinite(substep->before_origin[axis]) ||
+			!isfinite(substep->before_velocity[axis]) ||
+			!isfinite(substep->origin[axis]) ||
 			!isfinite(substep->velocity[axis]) ||
+			substep->before_origin[axis] !=
+				substep->before_state.origin[axis] * 0.125f ||
+			substep->before_velocity[axis] !=
+				substep->before_state.velocity[axis] * 0.125f ||
 			substep->origin[axis] != substep->state.origin[axis] * 0.125f ||
 			substep->velocity[axis] !=
 				substep->state.velocity[axis] * 0.125f ||
 			fabs((double)previous->field_pose.velocity[axis]) >
 				physics->max_velocity ||
 			fabs((double)substep->velocity[axis]) > physics->max_velocity)
+			return 0;
+	}
+	if (!SG_HostCollisionClassifyPose(authority, scene, substep->origin,
+			substep->stance, &pose) || !pose.valid ||
+		substep->grounded != pose.supported ||
+		substep->water_level != pose.water_level ||
+		substep->water_type != (int)pose.water_type ||
+		(pose.supported &&
+			(substep->support_model_index != pose.support.model_index ||
+			substep->support_instance_id != pose.support.instance_id)) ||
+		(!pose.supported && (substep->support_model_index != 0U ||
+			substep->support_instance_id != 0U)))
+		return 0;
+	hull = substep->stance == SG_RUNE_STANCE_CROUCHING ?
+		&authority->identity.crouching_hull :
+		&authority->identity.standing_hull;
+	first_trace = (size_t)(substep->first_trace_ordinal - 1U);
+	if (first_trace > replay->trace_count ||
+		substep->trace_count > replay->trace_count - first_trace)
+		return 0;
+	for (trace_index = first_trace;
+		trace_index < first_trace + (size_t)substep->trace_count;
+		trace_index++)
+	{
+		const sg_host_pmove_trace_t *record = &replay->traces[trace_index];
+		sg_host_collision_trace_t authenticated;
+		int reachable = 0;
+		size_t prior;
+
+		if (record->ordinal != trace_index + 1U ||
+			record->substep != expected_step ||
+			memcmp(record->mins, hull->mins.value,
+				sizeof(record->mins)) != 0 ||
+			memcmp(record->maxs, hull->maxs.value,
+				sizeof(record->maxs)) != 0 ||
+			!SG_HostCollisionTrace(authority, scene, record->start,
+				record->mins, record->maxs, record->end,
+				SG_HOST_MASK_PLAYER_SOLID, &authenticated) ||
+			authenticated.allsolid != record->result.allsolid ||
+			authenticated.startsolid != record->result.startsolid ||
+			authenticated.fraction != record->result.fraction ||
+			memcmp(authenticated.end, record->result.end,
+				sizeof(authenticated.end)) != 0 ||
+			memcmp(authenticated.plane.normal, record->result.plane.normal,
+				sizeof(authenticated.plane.normal)) != 0 ||
+			authenticated.plane.distance != record->result.plane.distance ||
+			authenticated.plane.type != record->result.plane.type ||
+			authenticated.contents != record->result.contents ||
+			authenticated.texinfo != record->result.texinfo ||
+			authenticated.surface_flags != record->result.surface_flags ||
+			authenticated.model_index != record->result.model_index ||
+			authenticated.instance_id != record->result.instance_id)
+			return 0;
+		if (ReplayPointEqual(record->start, substep->before_origin) ||
+			ReplaySnapPoint(record->start, substep->before_origin) ||
+			ReplayStepPoint(record->start, substep->before_origin))
+			reachable = 1;
+		for (prior = first_trace; !reachable && prior < trace_index; prior++)
+			if (ReplayPointEqual(record->start,
+					replay->traces[prior].result.end) ||
+				ReplaySnapPoint(record->start,
+					replay->traces[prior].result.end) ||
+				ReplayStepPoint(record->start,
+					replay->traces[prior].result.end))
+				reachable = 1;
+		if (!reachable)
+			return 0;
+	}
+	if (!PmoveStateEqual(&substep->before_state, &substep->state))
+	{
+		int origin_reachable = 1;
+
+		for (axis = 0U; axis < 3U; axis++)
+			if (substep->state.origin[axis] !=
+				substep->before_state.origin[axis])
+				origin_reachable = 0;
+		for (trace_index = first_trace;
+			!origin_reachable &&
+			trace_index < first_trace + (size_t)substep->trace_count;
+			trace_index++)
+			origin_reachable = ReplayPackedOriginEqual(&substep->state,
+				replay->traces[trace_index].result.end);
+		if (!origin_reachable)
 			return 0;
 	}
 	*next_trace_ordinal_out = substep->first_trace_ordinal +
@@ -2323,7 +2472,9 @@ static int ReplayEnvelopeValid(const sg_host_collision_authority_t *authority,
 	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
 
 	return replay->substeps == workspace->substeps &&
+		replay->traces == workspace->traces &&
 		replay->substep_count == physics->frame_ms / physics->substep_ms &&
+		replay->trace_count == replay->result.trace_count &&
 		replay->result.evaluated_steps == replay->substep_count &&
 		replay->result.elapsed_ms == physics->frame_ms &&
 		replay->result.trace_count != 0U &&
@@ -2391,7 +2542,7 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		return 0;
 	}
 	if (!state_out || !environment->pmove_request ||
-		!environment->replay_substeps ||
+		!environment->replay_substeps || !environment->replay_traces ||
 		(environment->scene && environment->scene->instance_count != 0U) ||
 		locator->authority->identity.physics.frame_ms > UCHAR_MAX ||
 		environment->pmove_request->command.msec !=
@@ -2413,6 +2564,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	}
 	replay_workspace.substeps = environment->replay_substeps;
 	replay_workspace.substep_capacity = environment->replay_substep_capacity;
+	replay_workspace.traces = environment->replay_traces;
+	replay_workspace.trace_capacity = environment->replay_trace_capacity;
 	if (!SG_HostPmoveReplayFrame(locator->authority, environment->scene,
 			runtime->host_pmove, environment->pmove_request,
 			&replay_workspace, &replay, &replay_error))
@@ -2438,7 +2591,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		sg_localization_request_t step_request = *request;
 		sg_localized_player_state_t *output = (index & 1U) ? &second : &first;
 
-		if (!ReplayMotionValid(locator->authority, previous, substep,
+		if (!ReplayMotionValid(locator->authority, environment->scene,
+				previous, &replay, substep,
 				(uint32_t)index, replay.substep_ms, next_trace_ordinal,
 				&next_trace_ordinal) ||
 			collision_trace_count > UINT64_MAX -
@@ -2461,6 +2615,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		step_environment.pmove_request = NULL;
 		step_environment.replay_substeps = NULL;
 		step_environment.replay_substep_capacity = 0U;
+		step_environment.replay_traces = NULL;
+		step_environment.replay_trace_capacity = 0U;
 		step_request.previous = previous;
 		step_request.now_ms = step.observed_at_ms;
 		if (!LocalizeOne(locator, &step_request, &step, &step_environment,

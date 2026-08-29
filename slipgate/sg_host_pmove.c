@@ -9,8 +9,12 @@ typedef struct sg_host_pmove_scope_s
 	const sg_host_collision_authority_t *authority;
 	const sg_host_collision_scene_t *scene;
 	csurface_t surface;
+	sg_host_pmove_trace_t *traces;
+	size_t trace_capacity;
+	uint32_t substep;
 	uint64_t trace_count;
 	uint64_t collision_trace_count;
+	int trace_capacity_failed;
 	int collision_failed;
 } sg_host_pmove_scope_t;
 
@@ -34,12 +38,35 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 	trace_t host_trace;
 	sg_host_collision_trace_t trace;
 	sg_host_pmove_scope_t *scope = sg_host_pmove_scope;
+	sg_host_pmove_trace_t *record = NULL;
 
 	memset(&host_trace, 0, sizeof(host_trace));
 	host_trace.fraction = 1.0f;
 	VectorCopy(end, host_trace.endpos);
 	if (scope)
 	{
+		if (scope->traces)
+		{
+			if (scope->trace_count >= scope->trace_capacity)
+			{
+				scope->trace_capacity_failed = 1;
+				host_trace.allsolid = true;
+				host_trace.startsolid = true;
+				host_trace.fraction = 0.0f;
+				VectorCopy(start, host_trace.endpos);
+				host_trace.contents = CONTENTS_SOLID;
+				host_trace.ent = (struct edict_s *)(void *)scope;
+				return host_trace;
+			}
+			record = &scope->traces[scope->trace_count];
+			memset(record, 0, sizeof(*record));
+			record->ordinal = scope->trace_count + 1U;
+			record->substep = scope->substep;
+			VectorCopy(start, record->start);
+			VectorCopy(mins, record->mins);
+			VectorCopy(maxs, record->maxs);
+			VectorCopy(end, record->end);
+		}
 		scope->trace_count++;
 		memset(&scope->surface, 0, sizeof(scope->surface));
 		host_trace.surface = &scope->surface;
@@ -60,6 +87,8 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 		host_trace.ent = (struct edict_s *)(void *)scope;
 		return host_trace;
 	}
+	if (record)
+		record->result = trace;
 	host_trace.allsolid = trace.allsolid ? true : false;
 	host_trace.startsolid = trace.startsolid ? true : false;
 	host_trace.fraction = trace.fraction;
@@ -156,7 +185,8 @@ static int EvaluateFrame(
 	else if (parameters < 0)
 		error = SG_HOST_PMOVE_ERROR_UNSUPPORTED_GRAVITY;
 	else if (replay_out && (!workspace || !workspace->substeps ||
-		workspace->substep_capacity < steps))
+		workspace->substep_capacity < steps || !workspace->traces ||
+		workspace->trace_capacity == 0U))
 		error = SG_HOST_PMOVE_ERROR_CAPACITY;
 	if (error != SG_HOST_PMOVE_ERROR_NONE)
 	{
@@ -167,6 +197,11 @@ static int EvaluateFrame(
 	memset(&scope, 0, sizeof(scope));
 	scope.authority = authority;
 	scope.scene = scene;
+	if (replay_out)
+	{
+		scope.traces = workspace->traces;
+		scope.trace_capacity = workspace->trace_capacity;
+	}
 	state = request->state;
 	previous = request->previous_state;
 	state.gravity = gravity;
@@ -174,6 +209,7 @@ static int EvaluateFrame(
 	sg_host_pmove_scope = &scope;
 	for (step = 0; step < steps; step++)
 	{
+		pmove_state_t before_state = state;
 		uint64_t first_trace_ordinal = scope.trace_count + 1U;
 		uint64_t collision_trace_count = scope.collision_trace_count;
 
@@ -184,7 +220,13 @@ static int EvaluateFrame(
 		pm.snapinitial = memcmp(&previous, &pm.s, sizeof(pm.s)) != 0;
 		pm.trace = PmoveTrace;
 		pm.pointcontents = PmovePointContents;
+		scope.substep = step;
 		host_pmove(&pm);
+		if (scope.trace_capacity_failed)
+		{
+			error = SG_HOST_PMOVE_ERROR_CAPACITY;
+			break;
+		}
 		if (scope.collision_failed)
 		{
 			error = SG_HOST_PMOVE_ERROR_COLLISION;
@@ -200,17 +242,39 @@ static int EvaluateFrame(
 		if (replay_out)
 		{
 			sg_host_pmove_substep_t *substep = &workspace->substeps[step];
+			sg_host_collision_pose_t pose;
+			sg_rune_stance_t stance;
 			uint32_t axis;
 
 			memset(substep, 0, sizeof(*substep));
+			substep->before_state = before_state;
 			substep->state = pm.s;
 			for (axis = 0U; axis < 3U; axis++)
 			{
+				substep->before_origin[axis] =
+					before_state.origin[axis] * 0.125f;
+				substep->before_velocity[axis] =
+					before_state.velocity[axis] * 0.125f;
 				substep->origin[axis] = pm.s.origin[axis] * 0.125f;
 				substep->velocity[axis] = pm.s.velocity[axis] * 0.125f;
 			}
-			substep->stance = (pm.s.pm_flags & PMF_DUCKED) ?
+			stance = (pm.s.pm_flags & PMF_DUCKED) ?
 				SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+			substep->stance = stance;
+			if (!SG_HostCollisionClassifyPose(authority, scene,
+					substep->origin, stance, &pose))
+			{
+				error = SG_HOST_PMOVE_ERROR_COLLISION;
+				break;
+			}
+			substep->grounded = pm.groundentity != NULL;
+			if (pose.supported)
+			{
+				substep->support_model_index = pose.support.model_index;
+				substep->support_instance_id = pose.support.instance_id;
+			}
+			substep->water_type = pm.watertype;
+			substep->water_level = pm.waterlevel;
 			substep->step = step;
 			substep->elapsed_ms =
 				(step + 1U) * authority->identity.physics.substep_ms;
@@ -272,6 +336,8 @@ static int EvaluateFrame(
 		replay_out->result = *result_out;
 		replay_out->substeps = workspace->substeps;
 		replay_out->substep_count = steps;
+		replay_out->traces = workspace->traces;
+		replay_out->trace_count = (size_t)scope.trace_count;
 		replay_out->bsp_content_id = authority->identity.bsp_content_id;
 		replay_out->physics_abi_id = authority->identity.physics_abi_id;
 		replay_out->frame_ms = authority->identity.physics.frame_ms;
