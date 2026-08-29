@@ -1308,6 +1308,11 @@ OBJS := \
 	slipgate/sg_rune_dynamics_model.o \
 	slipgate/sg_rune_dynamics_geometry.o \
 	slipgate/sg_rune_field_contract.o \
+	slipgate/sg_bsp_world.o \
+	slipgate/sg_host_collision.o \
+	slipgate/sg_bsp_entity_semantics.o \
+	slipgate/sg_bsp_entity_semantics_audit_expected.o \
+	slipgate/sg_bsp_entity_semantics_publication.o \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
@@ -1379,6 +1384,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
+	bsp-entity-semantics-publication-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -1448,6 +1454,20 @@ slipgate/sg_mover_lease.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h
 slipgate/sg_button_live.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h slipgate/sg_mover_lease.h
+slipgate/sg_bsp_world.o: slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
+slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h
+slipgate/sg_bsp_entity_semantics.o: slipgate/sg_bsp_entity_semantics.c \
+		slipgate/sg_bsp_entity_semantics.h \
+		slipgate/sg_bsp_entity_semantics_storage_internal.h
+slipgate/sg_bsp_entity_semantics_audit_expected.o: \
+		slipgate/sg_bsp_entity_semantics_audit_expected.c \
+		slipgate/sg_bsp_entity_semantics_audit_internal.h
+slipgate/sg_bsp_entity_semantics_publication.o: \
+		slipgate/sg_bsp_entity_semantics_publication.c \
+		slipgate/sg_bsp_entity_semantics_publication.h \
+		slipgate/sg_bsp_entity_semantics_audit_internal.h \
+		slipgate/sg_bsp_entity_semantics_storage_internal.h
 slipgate/sg_compound_guard.o: slipgate/sg_compound_guard.c \
 		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h
 slipgate/sg_compound_guard_game.o: slipgate/sg_compound_guard_game.c \
@@ -3902,12 +3922,28 @@ static-affordance-catalog-publication-test: \
 	$(E) [TEST] static affordance catalog publication
 	$(Q)sh tests/run_sg_static_affordance_catalog_test.sh
 
+bsp-entity-semantics-publication-test: \
+		tests/run_sg_bsp_entity_semantics_publication_test.sh \
+		tests/sg_bsp_entity_semantics_publication_test.c \
+		slipgate/sg_bsp_entity_semantics_publication.c \
+		slipgate/sg_bsp_entity_semantics_publication.h \
+		slipgate/sg_bsp_entity_semantics_audit_expected.c \
+		slipgate/sg_bsp_entity_semantics_audit_internal.h \
+		slipgate/sg_bsp_entity_semantics_storage_internal.h \
+		slipgate/sg_bsp_entity_semantics.c \
+		slipgate/sg_bsp_entity_semantics.h \
+		slipgate/sg_host_collision.c slipgate/sg_host_collision.h \
+		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
+	$(E) [TEST] BSP entity semantics publication
+	$(Q)sh tests/run_sg_bsp_entity_semantics_publication_test.sh
+
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
 		weapon-effect-profile-test hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
+		bsp-entity-semantics-publication-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \

@@ -659,6 +659,7 @@ int SG_HostCollisionInit(sg_host_collision_authority_t *authority,
 	if (error != SG_HOST_COLLISION_ERROR_NONE)
 		return 0;
 	authority->world = world;
+	authority->content_identity = world->content_identity;
 	authority->identity = *identity;
 	return 1;
 }

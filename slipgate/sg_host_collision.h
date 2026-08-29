@@ -97,6 +97,8 @@ typedef struct sg_host_collision_authority_s
 {
 	/* The BSP is borrowed and must remain immutable for this authority's life. */
 	const sg_bsp_world_t *world;
+	/* Copied from the loader-authenticated world at initialization. */
+	sg_bsp_content_identity_t content_identity;
 	/* Identity is copied so gravity, movement cvars, and hulls cannot drift. */
 	sg_rune_model_identity_t identity;
 } sg_host_collision_authority_t;
