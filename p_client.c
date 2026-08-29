@@ -2113,6 +2113,11 @@ void PutClientInServer (edict_t *ent)
 	client->p_stats_player = p_saved_stats; // STATS - LM_Hati
 	client->ctf = ctftemp; //surt restore
 
+	if (unique_id == UINT64_MAX)
+	{
+		gi.error("PutClientInServer: player life identity exhausted");
+		return;
+	}
 	client->ctf.ctfid = unique_id++;
 	/* Combat aim/error/fire-window state belongs to this exact client life.
 	 * A respawn or recycled slot must not replay its predecessor's sequence. */

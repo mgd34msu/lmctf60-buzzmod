@@ -17,9 +17,15 @@ def main() -> None:
         r"\bstatic\s+uint64_t\s+unique_id\s*=\s*UINT64_C\(6\)\s*;",
         client,
     )
-    assert client.index("static uint64_t unique_id") < client.index(
-        "client->ctf.ctfid = unique_id++;"
+    assignment = client.index("client->ctf.ctfid = unique_id++;")
+    exhaustion = re.search(
+        r"if\s*\(\s*unique_id\s*==\s*UINT64_MAX\s*\)\s*\{\s*"
+        r"gi\.error\(\"PutClientInServer: player life identity exhausted\"\);"
+        r"\s*return;\s*\}",
+        client,
     )
+    assert exhaustion is not None
+    assert exhaustion.start() < assignment
 
 
 if __name__ == "__main__":
