@@ -39,8 +39,6 @@
 #define SG_HUMAN_TRACE_SPOOL_VERSION UINT16_C(2)
 #define SG_HUMAN_TRACE_SPOOL_PAYLOAD_BYTES 512U
 #define SG_HUMAN_TRACE_SPOOL_NAME_BYTES 192U
-#define SG_HUMAN_TRACE_ACK_MAGIC UINT32_C(0x53475441)
-#define SG_HUMAN_TRACE_ACK_VERSION UINT16_C(1)
 #ifndef SG_HUMAN_TRACE_SEGMENT_BYTES
 #define SG_HUMAN_TRACE_SEGMENT_BYTES (64U * 1024U * 1024U)
 #endif
@@ -113,18 +111,6 @@ typedef struct human_trace_spool_event_s
 	sg_human_trace_v3_event_t event;
 	uint8_t record_sha256[SG_HUMAN_TRACE_SHA256_BYTES];
 } human_trace_spool_event_t;
-
-typedef struct human_trace_spool_ack_s
-{
-	uint32_t magic;
-	uint16_t version;
-	uint16_t reserved;
-	uint8_t terminal_sha256[SG_HUMAN_TRACE_SHA256_BYTES];
-	uint32_t client_id;
-	uint32_t scope_reserved;
-	uint64_t spawn_generation;
-	uint8_t sha256[SG_HUMAN_TRACE_SHA256_BYTES];
-} human_trace_spool_ack_t;
 
 typedef struct human_trace_json_header_s
 {
@@ -212,7 +198,9 @@ static sg_human_trace_completion_t sg_human_trace_completion;
 static char sg_human_trace_spool_path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
 static uint8_t sg_human_trace_spool_previous_sha256[SG_HUMAN_TRACE_SHA256_BYTES];
 static qboolean sg_human_trace_event_failed;
-static uint64_t sg_human_trace_ack_nonce;
+static char (*sg_human_trace_segment_paths)[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
+static size_t sg_human_trace_segment_path_count;
+static size_t sg_human_trace_segment_path_capacity;
 
 struct sg_human_trace_v3_scope_acceptance_s
 {
@@ -225,6 +213,7 @@ struct sg_human_trace_v3_scope_acceptance_s
 
 static const void *sg_human_trace_active_collection;
 static const sg_human_trace_v3_spool_ref_t *sg_human_trace_active_root;
+static uint8_t sg_human_trace_active_root_learning_compatible;
 static uint64_t sg_human_trace_collection_issuance;
 
 static qboolean HumanTraceSpoolAppendEvent(
@@ -600,20 +589,6 @@ static qboolean HumanTraceHexToBytes(const char hex[65],
 	return hex[64] == '\0';
 }
 
-static void HumanTraceBytesToHex(const uint8_t bytes[SG_HUMAN_TRACE_SHA256_BYTES],
-	char hex[65])
-{
-	static const char digits[] = "0123456789abcdef";
-	uint32_t index;
-
-	for (index = 0U; index < SG_HUMAN_TRACE_SHA256_BYTES; index++)
-	{
-		hex[index * 2U] = digits[bytes[index] >> 4];
-		hex[index * 2U + 1U] = digits[bytes[index] & 15U];
-	}
-	hex[64] = '\0';
-}
-
 static qboolean HumanTraceBytesNonzero(const uint8_t *bytes, size_t length)
 {
 	uint8_t nonzero = 0U;
@@ -707,18 +682,93 @@ static qboolean HumanTraceSpoolWriteFrame(FILE *file,
 	if (!HumanTraceSpoolFrameDigest(&frame, digest))
 		return false;
 	memcpy(frame.sha256, digest, sizeof(frame.sha256));
-	if (fwrite(&frame, 1U, sizeof(frame), file) != sizeof(frame) ||
-		fflush(file) != 0)
+	if (fwrite(&frame, 1U, sizeof(frame), file) != sizeof(frame))
 		return false;
-#ifdef _WIN32
-	if (_commit(_fileno(file)) != 0)
-		return false;
-#else
-	if (fsync(fileno(file)) != 0)
-		return false;
-#endif
 	memcpy(previous, digest, SG_HUMAN_TRACE_SHA256_BYTES);
 	return true;
+}
+
+static qboolean HumanTraceFileDurable(FILE *file)
+{
+	if (!file || fflush(file) != 0)
+		return false;
+#ifdef _WIN32
+	return _commit(_fileno(file)) == 0;
+#else
+	return fsync(fileno(file)) == 0;
+#endif
+}
+
+static qboolean HumanTraceSegmentPathAppend(const char *path)
+{
+	char (*grown)[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
+	size_t capacity;
+
+	if (!path)
+		return false;
+	if (sg_human_trace_segment_path_count ==
+		sg_human_trace_segment_path_capacity)
+	{
+		capacity = sg_human_trace_segment_path_capacity ?
+			sg_human_trace_segment_path_capacity * 2U : 8U;
+		if (capacity < sg_human_trace_segment_path_capacity ||
+			capacity > SIZE_MAX / sizeof(*grown))
+			return false;
+		grown = realloc(sg_human_trace_segment_paths,
+			capacity * sizeof(*grown));
+		if (!grown)
+			return false;
+		sg_human_trace_segment_paths = grown;
+		sg_human_trace_segment_path_capacity = capacity;
+	}
+	if (snprintf(sg_human_trace_segment_paths[
+		sg_human_trace_segment_path_count], SG_HUMAN_TRACE_SPOOL_PATH_BYTES,
+		"%s", path) >= (int)SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
+		return false;
+	sg_human_trace_segment_path_count++;
+	return true;
+}
+
+static qboolean HumanTraceSegmentPathsDurable(void)
+{
+	size_t index;
+
+	for (index = 0U; index < sg_human_trace_segment_path_count; index++)
+	{
+#ifdef _WIN32
+		int descriptor = _open(sg_human_trace_segment_paths[index],
+			_O_WRONLY | _O_BINARY);
+
+		if (descriptor < 0 || _commit(descriptor) != 0 ||
+			_close(descriptor) != 0)
+			return false;
+#else
+		int descriptor = open(sg_human_trace_segment_paths[index], O_WRONLY);
+
+		if (descriptor < 0 || fsync(descriptor) != 0 || close(descriptor) != 0)
+			return false;
+#endif
+	}
+	return true;
+}
+
+static qboolean HumanTraceDirectoryDurable(const char *directory)
+{
+#ifdef _WIN32
+	(void)directory;
+	return true;
+#else
+	int descriptor;
+	int status;
+
+	if (!directory)
+		return false;
+	descriptor = open(directory, O_RDONLY);
+	if (descriptor < 0)
+		return false;
+	status = fsync(descriptor) == 0 && close(descriptor) == 0;
+	return status != 0;
+#endif
 }
 
 static qboolean HumanTraceSpoolPath(char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES],
@@ -799,7 +849,8 @@ static qboolean HumanTraceSpoolComplete(
 		!HumanTraceSpoolWriteFrame(sg_human_trace_spool_file,
 			sg_human_trace_spool_previous_sha256,
 			HUMAN_TRACE_SPOOL_FRAME_TERMINAL, completion,
-			sizeof(*completion)))
+			sizeof(*completion)) ||
+		!HumanTraceFileDurable(sg_human_trace_spool_file))
 	{
 		HumanTraceSpoolDisable();
 		return false;
@@ -1516,202 +1567,6 @@ static qboolean HumanTraceJsonSegmentRead(const char *path,
 	return true;
 }
 
-/* Consumption is deliberately outside the completed evidence spool.  A
- * terminal spool is immutable once it is exposed; each scope gets a tiny,
- * atomically-published receipt sidecar anchored to that terminal digest. */
-static qboolean HumanTraceAckPath(char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES],
-	const sg_human_trace_v3_spool_ref_t *spool, uint32_t client_id,
-	uint64_t spawn_generation)
-{
-	const char *separator;
-	const char *alternate;
-	char terminal_hex[65];
-	int directory_bytes;
-	int written;
-
-	if (!path || !spool || client_id == 0U || spawn_generation == 0U ||
-		!HumanTraceSpoolCompletionValid(&spool->completion))
-		return false;
-	separator = strrchr(spool->path, '/');
-	alternate = strrchr(spool->path, '\\');
-	if (!separator || (alternate && alternate > separator))
-		separator = alternate;
-	if (!separator || separator == spool->path)
-		return false;
-	directory_bytes = (int)(separator - spool->path);
-	HumanTraceBytesToHex(spool->completion.terminal_sha256, terminal_hex);
-	written = snprintf(path, SG_HUMAN_TRACE_SPOOL_PATH_BYTES,
-		"%.*s/humantrace-learning-ack-%s-%" PRIu32 "-%" PRIu64 ".ack",
-		directory_bytes, spool->path, terminal_hex, client_id, spawn_generation);
-	return written >= 0 && (size_t)written < SG_HUMAN_TRACE_SPOOL_PATH_BYTES;
-}
-
-static qboolean HumanTraceAckDigest(const human_trace_spool_ack_t *ack,
-	uint8_t digest_out[SG_HUMAN_TRACE_SHA256_BYTES])
-{
-	char hex[65];
-
-	if (!ack || !digest_out)
-		return false;
-	return HumanTraceSHA256((const unsigned char *)ack,
-		offsetof(human_trace_spool_ack_t, sha256), hex) &&
-		HumanTraceHexToBytes(hex, digest_out);
-}
-
-static qboolean HumanTraceAckValid(const human_trace_spool_ack_t *ack,
-	const sg_human_trace_completion_t *completion, uint32_t client_id,
-	uint64_t spawn_generation)
-{
-	uint8_t expected[SG_HUMAN_TRACE_SHA256_BYTES];
-
-	if (!ack || !completion || ack->magic != SG_HUMAN_TRACE_ACK_MAGIC ||
-		ack->version != SG_HUMAN_TRACE_ACK_VERSION || ack->reserved != 0U ||
-		ack->scope_reserved != 0U || ack->client_id != client_id ||
-		ack->spawn_generation != spawn_generation || memcmp(
-			ack->terminal_sha256, completion->terminal_sha256,
-			SG_HUMAN_TRACE_SHA256_BYTES) != 0 ||
-		!HumanTraceAckDigest(ack, expected))
-		return false;
-	return memcmp(ack->sha256, expected, sizeof(expected)) == 0;
-}
-
-static qboolean HumanTraceAckRead(const char *path,
-	const sg_human_trace_completion_t *completion, uint32_t client_id,
-	uint64_t spawn_generation)
-{
-	human_trace_spool_ack_t ack;
-	FILE *file;
-	size_t read;
-	int tail;
-	int error;
-	int close_status;
-
-	if (!path || !completion)
-		return false;
-	file = fopen(path, "rb");
-	if (!file)
-		return false;
-	read = fread(&ack, 1U, sizeof(ack), file);
-	if (read != sizeof(ack) || ferror(file) || feof(file))
-	{
-		fclose(file);
-		return false;
-	}
-	tail = fgetc(file);
-	error = ferror(file);
-	close_status = fclose(file);
-	return tail == EOF && error == 0 && close_status == 0 &&
-		HumanTraceAckValid(&ack, completion, client_id, spawn_generation);
-}
-
-static qboolean HumanTraceAckFlush(FILE *file)
-{
-	if (!file || fflush(file) != 0)
-		return false;
-#ifdef _WIN32
-	return _commit(_fileno(file)) == 0;
-#else
-	return fsync(fileno(file)) == 0;
-#endif
-}
-
-static qboolean HumanTraceAckWrite(FILE *file,
-	const sg_human_trace_completion_t *completion, uint32_t client_id,
-	uint64_t spawn_generation)
-{
-	human_trace_spool_ack_t ack;
-	uint8_t digest[SG_HUMAN_TRACE_SHA256_BYTES];
-	qboolean written;
-
-	if (!file || !completion || client_id == 0U || spawn_generation == 0U)
-		return false;
-	memset(&ack, 0, sizeof(ack));
-	ack.magic = SG_HUMAN_TRACE_ACK_MAGIC;
-	ack.version = SG_HUMAN_TRACE_ACK_VERSION;
-	memcpy(ack.terminal_sha256, completion->terminal_sha256,
-		sizeof(ack.terminal_sha256));
-	ack.client_id = client_id;
-	ack.spawn_generation = spawn_generation;
-	if (!HumanTraceAckDigest(&ack, digest))
-		return false;
-	memcpy(ack.sha256, digest, sizeof(ack.sha256));
-	written = fwrite(&ack, 1U, sizeof(ack), file) == sizeof(ack) &&
-		HumanTraceAckFlush(file);
-	return written;
-}
-
-static qboolean HumanTraceAckTemporary(char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES],
-	const char *receipt_path, FILE **file_out)
-{
-	human_trace_create_result_t created;
-	FILE *file;
-	int written;
-
-	if (!path || !receipt_path || !file_out)
-		return false;
-	*file_out = NULL;
-	for (;;)
-	{
-		if (sg_human_trace_ack_nonce == UINT64_MAX)
-			return false;
-		sg_human_trace_ack_nonce++;
-		written = snprintf(path, SG_HUMAN_TRACE_SPOOL_PATH_BYTES,
-			"%s.tmp-%" PRIu64, receipt_path, sg_human_trace_ack_nonce);
-		if (written < 0 || (size_t)written >= SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
-			return false;
-		file = NULL;
-		created = HumanTraceCreateExclusive(path, &file);
-		if (created == HUMAN_TRACE_CREATE_COLLISION)
-			continue;
-		if (created != HUMAN_TRACE_CREATE_OK)
-			return false;
-		*file_out = file;
-		return true;
-	}
-}
-
-static qboolean HumanTraceAckSyncParent(const char *path)
-{
-#ifdef _WIN32
-	(void)path;
-	return true;
-#else
-	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-	const char *separator;
-	int descriptor;
-	size_t bytes;
-	int status;
-
-	if (!path || !(separator = strrchr(path, '/')))
-		return false;
-	bytes = (size_t)(separator - path);
-	if (bytes == 0U || bytes >= sizeof(directory))
-		return false;
-	memcpy(directory, path, bytes);
-	directory[bytes] = '\0';
-	descriptor = open(directory, O_RDONLY);
-	if (descriptor < 0)
-		return false;
-	status = fsync(descriptor) == 0 && close(descriptor) == 0;
-	return status != 0;
-#endif
-}
-
-static qboolean HumanTraceAckPublish(const char *temporary_path,
-	const char *receipt_path)
-{
-	if (!temporary_path || !receipt_path)
-		return false;
-#ifdef _WIN32
-	return MoveFileExA(temporary_path, receipt_path,
-		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
-	if (rename(temporary_path, receipt_path) != 0)
-		return false;
-	return HumanTraceAckSyncParent(receipt_path);
-#endif
-}
-
 static qboolean HumanTraceSpoolDirectory(const sg_human_trace_v3_spool_ref_t *spool,
 	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
 {
@@ -2419,16 +2274,8 @@ static qboolean HumanTraceWriteAuthenticated(FILE *file,
 	line_length = (size_t)written;
 	if (!HumanTraceWriteFitsFileLimit(*segment_bytes, line_length))
 		return false;
-	if (fwrite(line, 1U, line_length, file) != line_length ||
-	    fflush(file) != 0)
+	if (fwrite(line, 1U, line_length, file) != line_length)
 		return false;
-#ifdef _WIN32
-	if (_commit(_fileno(file)) != 0)
-		return false;
-#else
-	if (fsync(fileno(file)) != 0)
-		return false;
-#endif
 	strcpy(sg_human_trace_previous_sha256, digest);
 	*segment_bytes += line_length;
 	return true;
@@ -2493,7 +2340,7 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 		LMCTF_REVISION, LMCTF_VERSION);
 	if (!header.valid ||
 	    !HumanTraceWriteAuthenticated(candidate_file, &segment_bytes,
-	        header.bytes, header.length))
+	        header.bytes, header.length) || !HumanTraceSegmentPathAppend(path))
 	{
 		fclose(candidate_file);
 		return false;
@@ -2656,7 +2503,7 @@ static qboolean HumanTraceReady(edict_t *entity, int *client_key,
 	uint64_t *spawn_generation)
 {
 	SG_CvarsInit();
-	return sg_cv.humantrace->value &&
+	return sg_cv.humantrace->value != 0.0f &&
 		HumanTraceHuman(entity, client_key, spawn_generation);
 }
 
@@ -2683,6 +2530,10 @@ void SG_HumanTraceNewLevel(void)
 	sg_human_trace_spool_path[0] = '\0';
 	sg_human_trace_event_failed = false;
 	memset(&sg_human_trace_completion, 0, sizeof(sg_human_trace_completion));
+	free(sg_human_trace_segment_paths);
+	sg_human_trace_segment_paths = NULL;
+	sg_human_trace_segment_path_count = 0U;
+	sg_human_trace_segment_path_capacity = 0U;
 }
 
 void SG_HumanTraceMatchEnd(void)
@@ -2705,8 +2556,10 @@ void SG_HumanTraceMatchEnd(void)
 			{
 				if (!HumanTraceCompletionSet(sg_human_trace_order + 1U,
 					(uint32_t)level.framenum, HumanTraceLevelTimeBits()) ||
+					!HumanTraceSegmentPathsDurable() ||
 					(!sg_human_trace_event_failed &&
-					 !HumanTraceSpoolComplete(&sg_human_trace_completion)))
+					 !HumanTraceSpoolComplete(&sg_human_trace_completion)) ||
+					!HumanTraceDirectoryDurable(sg_human_trace_directory))
 					sg_human_trace_event_failed = true;
 			}
 			sg_human_trace_order++;
@@ -2793,6 +2646,20 @@ static int HumanTraceSpoolNameSegment(const char *name,
 	return HumanTraceNameSegment(name, identity, ".learning", segment_out);
 }
 
+int SG_HumanTraceAcceptedV3Directory(
+	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
+{
+	char selected[512];
+
+	if (directory)
+		directory[0] = '\0';
+	if (!directory || !HumanTraceDirectoryCurrent(selected) ||
+		snprintf(directory, SG_HUMAN_TRACE_SPOOL_PATH_BYTES, "%s", selected) >=
+			(int)SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
+		return 0;
+	return 1;
+}
+
 typedef enum human_trace_manifest_candidate_kind_e
 {
 	HUMAN_TRACE_MANIFEST_SPOOL,
@@ -2822,6 +2689,7 @@ typedef struct human_trace_manifest_root_s
 	sg_human_trace_v3_scope_acceptance_t *scopes;
 	size_t scope_count;
 	uint8_t authenticated;
+	uint8_t learning_compatible;
 } human_trace_manifest_root_t;
 
 typedef struct human_trace_manifest_segment_s
@@ -3264,8 +3132,13 @@ static int HumanTraceManifestSegmentRead(
 	segment->events = capture.events;
 	segment->event_count = capture.count;
 	segment->event_capacity = capture.capacity;
-	segment->valid = valid && segment->summary.header.segment ==
-		candidate->segment;
+	if (!valid || segment->summary.header.segment != candidate->segment)
+	{
+		free(segment->events);
+		memset(segment, 0, sizeof(*segment));
+		return 0;
+	}
+	segment->valid = 1U;
 	return 1;
 }
 
@@ -3347,6 +3220,7 @@ static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 	if (!root || !segments || segment_count == 0U)
 		return 0;
 	memset(zero, 0, sizeof(zero));
+	root->learning_compatible = 1U;
 	for (segment_index = 0U; segment_index < segment_count; segment_index++)
 	{
 		const human_trace_manifest_segment_t *stored =
@@ -3358,6 +3232,19 @@ static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 			!HumanTraceJsonStableIdentityEqual(&segments[0].summary.header,
 				&current->header))
 			return 0;
+		if (segment_index != 0U &&
+			(current->header.gravity_bits != segments[0].summary.header.gravity_bits ||
+			 current->header.airaccelerate_bits !=
+				segments[0].summary.header.airaccelerate_bits ||
+			 current->header.maxvelocity_bits !=
+				segments[0].summary.header.maxvelocity_bits ||
+			 current->header.pmove_substep_ms !=
+				segments[0].summary.header.pmove_substep_ms ||
+			 current->header.server_frame_ms !=
+				segments[0].summary.header.server_frame_ms ||
+			 current->header.physics_flags !=
+				segments[0].summary.header.physics_flags))
+			root->learning_compatible = 0U;
 		if (segment_index == 0U)
 		{
 			if (current->header.continuation != 0U || memcmp(
@@ -3629,7 +3516,7 @@ static int HumanTraceManifestBuild(const sg_level_identity_t *identity,
 
 			if (read < 0)
 				return 0;
-			if (!HumanTraceManifestSegmentAppend(manifest, &segment))
+			if (read > 0 && !HumanTraceManifestSegmentAppend(manifest, &segment))
 			{
 				free(segment.events);
 				return 0;
@@ -3710,6 +3597,8 @@ int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 		if (!root->authenticated)
 			continue;
 		sg_human_trace_active_root = &root->spool;
+		sg_human_trace_active_root_learning_compatible =
+			root->learning_compatible;
 		result = visitor->begin_root(context, &root->spool);
 		for (event_index = 0U; result && event_index < root->event_count;
 			event_index++)
@@ -3726,61 +3615,20 @@ int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 		if (result)
 			result = visitor->finish_root(context);
 		sg_human_trace_active_root = NULL;
+		sg_human_trace_active_root_learning_compatible = 0U;
 	}
 	sg_human_trace_active_root = NULL;
+	sg_human_trace_active_root_learning_compatible = 0U;
 	sg_human_trace_active_collection = NULL;
 	HumanTraceManifestFree(&manifest);
 	return result;
 }
 
-static int HumanTraceStoredV3ScopeConsumedAuthorized(
-	const sg_human_trace_v3_spool_ref_t *spool, uint32_t client_id,
-	uint64_t spawn_generation)
+int SG_HumanTraceAcceptedV3RootLearningCompatible(
+	const sg_human_trace_v3_spool_ref_t *spool)
 {
-	char receipt_path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-
-	if (!spool || client_id == 0U || spawn_generation == 0U ||
-		!HumanTraceSpoolCompletionValid(&spool->completion) ||
-		!HumanTraceAckPath(receipt_path, spool, client_id, spawn_generation))
-		return 0;
-	return HumanTraceAckRead(receipt_path, &spool->completion, client_id,
-		spawn_generation) ? 1 : 0;
-}
-
-static int HumanTraceMarkStoredV3ScopeConsumedAuthorized(
-	const sg_human_trace_v3_spool_ref_t *spool, uint32_t client_id,
-	uint64_t spawn_generation)
-{
-	char receipt_path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-	char temporary_path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-	FILE *file;
-	int close_status;
-
-	if (!spool || client_id == 0U || spawn_generation == 0U ||
-		!HumanTraceSpoolCompletionValid(&spool->completion) ||
-		!HumanTraceAckPath(receipt_path, spool, client_id, spawn_generation))
-		return 0;
-	if (HumanTraceStoredV3ScopeConsumedAuthorized(spool, client_id,
-		spawn_generation))
-		return 1;
-	if (!HumanTraceAckTemporary(temporary_path, receipt_path, &file))
-		return 0;
-	if (!HumanTraceAckWrite(file, &spool->completion, client_id,
-		spawn_generation))
-	{
-		fclose(file);
-		remove(temporary_path);
-		return 0;
-	}
-	close_status = fclose(file);
-	if (close_status != 0 || !HumanTraceAckPublish(temporary_path,
-		receipt_path))
-	{
-		remove(temporary_path);
-		return 0;
-	}
-	return HumanTraceStoredV3ScopeConsumedAuthorized(spool, client_id,
-		spawn_generation);
+	return spool && spool == sg_human_trace_active_root &&
+		sg_human_trace_active_root_learning_compatible == 1U;
 }
 
 int SG_HumanTraceAcceptedV3ScopeView(
@@ -3809,34 +3657,6 @@ int SG_HumanTraceAcceptedV3ScopeView(
 	if (spawn_generation_out)
 		*spawn_generation_out = scope->spawn_generation;
 	return 1;
-}
-
-int SG_HumanTraceAcceptedV3ScopeConsumed(
-	const sg_human_trace_v3_scope_acceptance_t *scope)
-{
-	const sg_human_trace_v3_spool_ref_t *spool;
-	uint32_t client_id;
-	uint64_t spawn_generation;
-
-	if (!SG_HumanTraceAcceptedV3ScopeView(scope, &spool, &client_id,
-		&spawn_generation))
-		return 0;
-	return HumanTraceStoredV3ScopeConsumedAuthorized(spool, client_id,
-		spawn_generation);
-}
-
-int SG_HumanTraceMarkAcceptedV3ScopeConsumed(
-	const sg_human_trace_v3_scope_acceptance_t *scope)
-{
-	const sg_human_trace_v3_spool_ref_t *spool;
-	uint32_t client_id;
-	uint64_t spawn_generation;
-
-	if (!SG_HumanTraceAcceptedV3ScopeView(scope, &spool, &client_id,
-		&spawn_generation))
-		return 0;
-	return HumanTraceMarkStoredV3ScopeConsumedAuthorized(spool, client_id,
-		spawn_generation);
 }
 
 void SG_HumanTracePmove(edict_t *entity,

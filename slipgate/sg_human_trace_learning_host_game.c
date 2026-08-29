@@ -1,6 +1,7 @@
 /* Engine-owned v3 evidence derivation and post-match runtime consumption. */
 #include "sg_human_trace_learning_host_game.h"
 #include "sg_human_trace_learning_game_private.h"
+#include "sg_human_trace_learning_store.h"
 #include "sg_human_trace.h"
 #define SG_HUMAN_TRACE_LEARNING_SPOOL_INTERNAL 1
 #include "sg_human_trace_learning_spool_private.h"
@@ -18,19 +19,14 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef int (*learning_host_hook_kernel_locator_fn)(void *context,
-	const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_human_trace_v3_event_t *fire,
-	const sg_human_trace_v3_event_t *attach,
-	sg_human_trace_learning_kernel_key_t *key_out);
-
 typedef struct sg_human_trace_learning_host_published_runtime_s
 {
 	sg_human_trace_learning_runtime_t *runtime;
 	const sg_rune_runtime_snapshot_t *snapshot;
 	sg_level_identity_t level_identity;
 	void *evidence_context;
-	learning_host_hook_kernel_locator_fn locate_hook_kernel;
+	sg_human_trace_learning_hook_kernel_locator_fn locate_hook_kernel;
+	sg_human_trace_learning_store_t *store;
 } sg_human_trace_learning_host_published_runtime_t;
 
 typedef enum learning_host_source_kind_e
@@ -40,7 +36,14 @@ typedef enum learning_host_source_kind_e
 
 static sg_human_trace_learning_host_published_runtime_t
 	sg_human_trace_learning_host_published_runtime;
+static sg_human_trace_learning_store_t sg_human_trace_learning_host_store;
 static uint8_t sg_human_trace_learning_host_runtime_published;
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+static uint64_t sg_human_trace_learning_host_test_event_visits;
+static uint32_t sg_human_trace_learning_host_test_apply_client[MAX_CLIENTS * 4U];
+static uint64_t sg_human_trace_learning_host_test_apply_generation[MAX_CLIENTS * 4U];
+static size_t sg_human_trace_learning_host_test_apply_order_count;
+#endif
 
 static uint32_t LearningHostFloatBits(float value)
 {
@@ -485,51 +488,6 @@ static int LearningHostRuntimeApplyValid(
 		runtime->next_transaction_id != 0U;
 }
 
-static int LearningHostPlaythroughSame(
-	const sg_human_trace_learning_playthrough_t *playthrough,
-	const sg_human_trace_learning_trace_scope_t *scope)
-{
-	return playthrough->used == 1U &&
-		memcmp(playthrough->terminal_sha256.bytes,
-			scope->trace.terminal_sha256.bytes,
-			sizeof(playthrough->terminal_sha256.bytes)) == 0 &&
-		playthrough->client_id == scope->client_id &&
-		playthrough->spawn_generation == scope->spawn_generation;
-}
-
-typedef enum learning_host_playthrough_slot_kind_e
-{
-	LEARNING_HOST_PLAYTHROUGH_SLOT_NONE = 0,
-	LEARNING_HOST_PLAYTHROUGH_SLOT_EXISTING,
-	LEARNING_HOST_PLAYTHROUGH_SLOT_VACANT
-} learning_host_playthrough_slot_kind_t;
-
-static int LearningHostPlaythroughSlot(
-	const sg_human_trace_learning_runtime_t *runtime,
-	const sg_human_trace_learning_trace_scope_t *scope, uint32_t *slot_out)
-{
-	uint32_t index;
-	uint32_t vacant = runtime->playthrough_capacity;
-
-	for (index = 0U; index < runtime->playthrough_capacity; index++)
-	{
-		const sg_human_trace_learning_playthrough_t *playthrough =
-			&runtime->playthroughs[index];
-
-		if (LearningHostPlaythroughSame(playthrough, scope))
-		{
-			*slot_out = index;
-			return LEARNING_HOST_PLAYTHROUGH_SLOT_EXISTING;
-		}
-		if (playthrough->used == 0U && vacant == runtime->playthrough_capacity)
-			vacant = index;
-	}
-	if (vacant == runtime->playthrough_capacity)
-		return LEARNING_HOST_PLAYTHROUGH_SLOT_NONE;
-	*slot_out = vacant;
-	return LEARNING_HOST_PLAYTHROUGH_SLOT_VACANT;
-}
-
 typedef struct learning_host_scope_apply_context_s
 {
 	const sg_human_trace_learning_host_published_runtime_t *published;
@@ -667,10 +625,7 @@ static learning_host_scope_apply_result_t LearningHostApplyAcceptedV3Capability(
 	const learning_host_accepted_v3_capability_t *capability =
 		&sg_human_trace_learning_active_capability;
 	learning_host_scope_apply_context_t context;
-	sg_human_trace_learning_playthrough_t cursor;
 	uint64_t index;
-	uint32_t slot;
-	int slot_kind;
 
 	if (!published || sg_human_trace_learning_capability_active != 1U ||
 		capability->issuance == 0U || capability->issuance !=
@@ -682,34 +637,28 @@ static learning_host_scope_apply_result_t LearningHostApplyAcceptedV3Capability(
 		capability->snapshot != published->snapshot ||
 		!LearningHostPublishedMatchesTrace(published, &capability->scope.trace))
 		return LEARNING_HOST_SCOPE_REJECTED;
-	if (SG_HumanTraceAcceptedV3ScopeConsumed(capability->acceptance))
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+	if (sg_human_trace_learning_host_test_apply_order_count <
+		MAX_CLIENTS * 4U)
 	{
-		/* A receipt is durable idempotency. A stale retry cursor no longer owns
-		 * anything once that receipt is visible. */
-		if (LearningHostPlaythroughSlot(capability->runtime,
-			&capability->scope, &slot) ==
-				LEARNING_HOST_PLAYTHROUGH_SLOT_EXISTING)
-			memset(&capability->runtime->playthroughs[slot], 0,
-				sizeof(capability->runtime->playthroughs[slot]));
-		return LEARNING_HOST_SCOPE_EMPTY;
+		size_t applied = sg_human_trace_learning_host_test_apply_order_count++;
+
+		sg_human_trace_learning_host_test_apply_client[applied] =
+			capability->scope.client_id;
+		sg_human_trace_learning_host_test_apply_generation[applied] =
+			capability->scope.spawn_generation;
 	}
-	/* Empty/incomplete lifecycles consume no runtime cursor. The host has
-	 * already derived this exact count during its one authenticated stream. */
+#endif
+	if (!published->store || SG_HumanTraceLearningStoreScopeConsumed(
+		published->store, &capability->scope))
+		return LEARNING_HOST_SCOPE_EMPTY;
+	/* Even an empty authenticated life is incorporated in the same durable
+	 * state image used to suppress its replay. */
 	if (capability->record_count == 0U)
-		return SG_HumanTraceMarkAcceptedV3ScopeConsumed(capability->acceptance)
+		return SG_HumanTraceLearningStoreCommitScope(published->store,
+			capability->runtime->parameters,
+			capability->runtime->next_transaction_id, 0U, &capability->scope)
 			? LEARNING_HOST_SCOPE_EMPTY : LEARNING_HOST_SCOPE_REJECTED;
-	slot_kind = LearningHostPlaythroughSlot(capability->runtime,
-		&capability->scope, &slot);
-	if (slot_kind == LEARNING_HOST_PLAYTHROUGH_SLOT_NONE)
-		return LEARNING_HOST_SCOPE_REJECTED;
-	if (slot_kind == LEARNING_HOST_PLAYTHROUGH_SLOT_EXISTING)
-	{
-		if (!SG_HumanTraceMarkAcceptedV3ScopeConsumed(capability->acceptance))
-			return LEARNING_HOST_SCOPE_REJECTED;
-		memset(&capability->runtime->playthroughs[slot], 0,
-			sizeof(capability->runtime->playthroughs[slot]));
-		return LEARNING_HOST_SCOPE_EMPTY;
-	}
 	if (!LearningHostRuntimeApplyValid(capability->runtime))
 		return LEARNING_HOST_SCOPE_REJECTED;
 	memset(&context, 0, sizeof(context));
@@ -729,24 +678,20 @@ static learning_host_scope_apply_result_t LearningHostApplyAcceptedV3Capability(
 	}
 	if (context.record_count != capability->record_count)
 		return LEARNING_HOST_SCOPE_REJECTED;
-	cursor = capability->runtime->playthroughs[slot];
-	cursor.terminal_sha256 = capability->scope.trace.terminal_sha256;
-	cursor.client_id = capability->scope.client_id;
-	cursor.spawn_generation = capability->scope.spawn_generation;
-	cursor.last_frame = context.last_frame;
-	cursor.last_order = context.last_order;
-	cursor.used = 1U;
+	if (!SG_HumanTraceLearningStoreCommitScope(published->store,
+		&context.candidate, context.next_transaction_id, context.record_count,
+		&capability->scope))
+		return LEARNING_HOST_SCOPE_REJECTED;
 	if (!SG_HumanTraceLearningParametersReplace(capability->runtime->parameters,
 		&context.candidate))
-		return LEARNING_HOST_SCOPE_REJECTED;
-	capability->runtime->playthroughs[slot] = cursor;
-	capability->runtime->next_transaction_id = context.next_transaction_id;
-	/* The candidate has now committed atomically. Keep the cursor only while a
-	 * receipt write remains retryable; a durable receipt immediately releases
-	 * bounded runtime capacity for the next independent root. */
-	if (SG_HumanTraceMarkAcceptedV3ScopeConsumed(capability->acceptance))
-		memset(&capability->runtime->playthroughs[slot], 0,
-			sizeof(capability->runtime->playthroughs[slot]));
+	{
+		if (!SG_HumanTraceLearningStoreRestore(published->store,
+			capability->runtime->parameters,
+			&capability->runtime->next_transaction_id))
+			return LEARNING_HOST_SCOPE_REJECTED;
+	}
+	else
+		capability->runtime->next_transaction_id = context.next_transaction_id;
 	return LEARNING_HOST_SCOPE_COMMITTED;
 }
 
@@ -782,8 +727,6 @@ typedef struct learning_host_stream_context_s
 } learning_host_stream_context_t;
 
 #ifdef SG_HUMAN_TRACE_LEARNING_TEST
-static uint64_t sg_human_trace_learning_host_test_event_visits;
-
 void SG_HumanTraceLearningHostGameTestResetVisitCount(void)
 {
 	sg_human_trace_learning_host_test_event_visits = 0U;
@@ -792,6 +735,32 @@ void SG_HumanTraceLearningHostGameTestResetVisitCount(void)
 uint64_t SG_HumanTraceLearningHostGameTestVisitCount(void)
 {
 	return sg_human_trace_learning_host_test_event_visits;
+}
+
+void SG_HumanTraceLearningHostGameTestResetApplyOrder(void)
+{
+	memset(sg_human_trace_learning_host_test_apply_client, 0,
+		sizeof(sg_human_trace_learning_host_test_apply_client));
+	memset(sg_human_trace_learning_host_test_apply_generation, 0,
+		sizeof(sg_human_trace_learning_host_test_apply_generation));
+	sg_human_trace_learning_host_test_apply_order_count = 0U;
+}
+
+size_t SG_HumanTraceLearningHostGameTestApplyOrderCount(void)
+{
+	return sg_human_trace_learning_host_test_apply_order_count;
+}
+
+int SG_HumanTraceLearningHostGameTestApplyOrder(size_t index,
+	uint32_t *client_id_out, uint64_t *spawn_generation_out)
+{
+	if (!client_id_out || !spawn_generation_out ||
+		index >= sg_human_trace_learning_host_test_apply_order_count)
+		return 0;
+	*client_id_out = sg_human_trace_learning_host_test_apply_client[index];
+	*spawn_generation_out =
+		sg_human_trace_learning_host_test_apply_generation[index];
+	return 1;
 }
 #endif
 
@@ -894,7 +863,9 @@ static int LearningHostAppendStreamScope(
 		free(scope);
 		return 0;
 	}
-	scope->consumed = SG_HumanTraceAcceptedV3ScopeConsumed(acceptance) ? 1U : 0U;
+	scope->consumed = stream->published && stream->published->store &&
+		SG_HumanTraceLearningStoreScopeConsumed(stream->published->store,
+			&scope->capture.scope) ? 1U : 0U;
 	/* Stage published evidence even when a receipt was present at open. The
 	 * receipt may disappear before finish; retaining the records makes that
 	 * race retryable instead of turning it into an empty acknowledged scope. */
@@ -921,7 +892,7 @@ static int LearningHostStreamEvent(void *opaque,
 		event->order == 0U ||
 		event->order >= stream->trace.end_order ||
 		event->frame > stream->trace.end_frame || event->client_id == 0U ||
-		event->client_id > MAX_CLIENTS || event->spawn_generation == 0U)
+		event->spawn_generation == 0U)
 		return 0;
 #ifdef SG_HUMAN_TRACE_LEARNING_TEST
 	if (sg_human_trace_learning_host_test_event_visits == UINT64_MAX)
@@ -930,12 +901,20 @@ static int LearningHostStreamEvent(void *opaque,
 #endif
 	if (!stream->selected)
 		return 1;
+	if (event->client_id > MAX_CLIENTS)
+	{
+		stream->selected = 0U;
+		return 1;
+	}
 	scope = stream->current[event->client_id - 1U];
 	if (!scope || scope->acceptance != acceptance)
 	{
 		if (scope && event->spawn_generation <=
 			scope->capture.scope.spawn_generation)
-			return 0;
+		{
+			stream->selected = 0U;
+			return 1;
+		}
 		return LearningHostAppendStreamScope(stream, acceptance, event);
 	}
 	return LearningHostCaptureEvent(&scope->capture, event);
@@ -965,7 +944,9 @@ static int LearningHostBeginAcceptedRoot(void *opaque,
 		!LearningHostCompletionToTrace(&spool->completion, &stream->trace))
 		return 0;
 	stream->spool = spool;
-	stream->selected = LearningHostTraceCurrent(&stream->trace) &&
+	stream->selected =
+		SG_HumanTraceAcceptedV3RootLearningCompatible(spool) &&
+		LearningHostTraceCurrent(&stream->trace) &&
 		(!stream->published || LearningHostPublishedMatchesTrace(
 			stream->published, &stream->trace));
 	return 1;
@@ -1030,23 +1011,46 @@ static int LearningHostReportStoredPending(const sg_level_identity_t *identity,
 	return LearningHostVisitStored(NULL, identity, report);
 }
 
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-
-static int LearningHostTestPublishRuntime(
-	const sg_human_trace_learning_host_published_runtime_t *published,
+int SG_HumanTraceLearningHostGamePublishRuntime(
+	const sg_human_trace_learning_host_runtime_publication_t *publication,
 	sg_human_trace_learning_host_report_t *report_out)
 {
+	sg_human_trace_learning_host_published_runtime_t published;
 	sg_level_identity_t current;
+	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
 
 	if (report_out)
 		memset(report_out, 0, sizeof(*report_out));
-	if (!published || !published->locate_hook_kernel ||
-		!LearningHostRuntimeCurrent(published->runtime, published->snapshot) ||
+	if (!publication || !publication->locate_hook_kernel ||
+		sg_human_trace_learning_host_runtime_published ||
+		!LearningHostRuntimeCurrent(publication->runtime,
+			publication->snapshot) ||
 		!level.mapname[0] ||
 		SG_LevelIdentitySnapshot(level.mapname, &current) != SG_IDENTITY_OK ||
-		!LearningHostPublishedLevelMatches(&published->level_identity, &current))
+		!LearningHostPublishedLevelMatches(&publication->level_identity, &current) ||
+		!SG_HumanTraceAcceptedV3Directory(directory))
 		return 0;
-	sg_human_trace_learning_host_published_runtime = *published;
+	memset(&published, 0, sizeof(published));
+	published.runtime = publication->runtime;
+	published.snapshot = publication->snapshot;
+	published.level_identity = publication->level_identity;
+	published.evidence_context = publication->evidence_context;
+	published.locate_hook_kernel = publication->locate_hook_kernel;
+	if (!SG_HumanTraceLearningStoreOpen(&sg_human_trace_learning_host_store,
+		directory,
+		&publication->level_identity, publication->runtime->parameters,
+		publication->runtime->next_transaction_id) ||
+		!SG_HumanTraceLearningStoreRestore(&sg_human_trace_learning_host_store,
+			publication->runtime->parameters,
+			&publication->runtime->next_transaction_id) ||
+		!LearningHostRuntimeCurrent(publication->runtime,
+			publication->snapshot))
+	{
+		SG_HumanTraceLearningStoreClose(&sg_human_trace_learning_host_store);
+		return 0;
+	}
+	published.store = &sg_human_trace_learning_host_store;
+	sg_human_trace_learning_host_published_runtime = published;
 	sg_human_trace_learning_host_runtime_published = 1U;
 	if (report_out)
 		report_out->runtime_published = 1U;
@@ -1054,24 +1058,7 @@ static int LearningHostTestPublishRuntime(
 		&sg_human_trace_learning_host_published_runtime, report_out);
 }
 
-int SG_HumanTraceLearningHostGameTestPublishRuntime(
-	const sg_human_trace_learning_test_published_runtime_t *published,
-	sg_human_trace_learning_host_report_t *report_out)
-{
-	sg_human_trace_learning_host_published_runtime_t host_published;
-
-	if (!published)
-		return 0;
-	memset(&host_published, 0, sizeof(host_published));
-	host_published.runtime = published->runtime;
-	host_published.snapshot = published->snapshot;
-	host_published.level_identity = published->level_identity;
-	host_published.evidence_context = published->evidence_context;
-	host_published.locate_hook_kernel = published->locate_hook_kernel;
-	return LearningHostTestPublishRuntime(&host_published, report_out);
-}
-
-void SG_HumanTraceLearningHostGameTestWithdrawRuntime(
+void SG_HumanTraceLearningHostGameWithdrawRuntime(
 	const sg_human_trace_learning_runtime_t *runtime,
 	const sg_rune_runtime_snapshot_t *snapshot)
 {
@@ -1080,9 +1067,26 @@ void SG_HumanTraceLearningHostGameTestWithdrawRuntime(
 		sg_human_trace_learning_host_published_runtime.runtime != runtime ||
 		sg_human_trace_learning_host_published_runtime.snapshot != snapshot)
 		return;
+	SG_HumanTraceLearningStoreClose(&sg_human_trace_learning_host_store);
 	memset(&sg_human_trace_learning_host_published_runtime, 0,
 		sizeof(sg_human_trace_learning_host_published_runtime));
 	sg_human_trace_learning_host_runtime_published = 0U;
+}
+
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+
+int SG_HumanTraceLearningHostGameTestPublishRuntime(
+	const sg_human_trace_learning_test_published_runtime_t *published,
+	sg_human_trace_learning_host_report_t *report_out)
+{
+	return SG_HumanTraceLearningHostGamePublishRuntime(published, report_out);
+}
+
+void SG_HumanTraceLearningHostGameTestWithdrawRuntime(
+	const sg_human_trace_learning_runtime_t *runtime,
+	const sg_rune_runtime_snapshot_t *snapshot)
+{
+	SG_HumanTraceLearningHostGameWithdrawRuntime(runtime, snapshot);
 }
 
 #endif /* SG_HUMAN_TRACE_LEARNING_TEST */
@@ -1093,6 +1097,7 @@ void SG_HumanTraceLearningHostGamePostMatch(sg_human_trace_learning_host_report_
 	sg_human_trace_learning_trace_v3_auth_t trace;
 	sg_human_trace_learning_host_published_runtime_t published;
 	sg_level_identity_t trace_identity;
+	uint64_t rejected_before = 0U;
 
 	if (report_out)
 		memset(report_out, 0, sizeof(*report_out));
@@ -1120,13 +1125,17 @@ void SG_HumanTraceLearningHostGamePostMatch(sg_human_trace_learning_host_report_
 	}
 	if (report_out)
 		report_out->runtime_published = 1U;
-	if (!LearningHostApplyStored(&published, report_out) && report_out)
+	if (report_out)
+		rejected_before = report_out->rejected_batches;
+	if (!LearningHostApplyStored(&published, report_out) && report_out &&
+		report_out->rejected_batches == rejected_before)
 		report_out->rejected_batches++;
 }
 
 void SG_HumanTraceLearningHostGameReset(void)
 {
 	LearningHostRevokeAcceptedV3Capability();
+	SG_HumanTraceLearningStoreClose(&sg_human_trace_learning_host_store);
 	memset(&sg_human_trace_learning_host_published_runtime, 0,
 		sizeof(sg_human_trace_learning_host_published_runtime));
 	sg_human_trace_learning_host_runtime_published = 0U;

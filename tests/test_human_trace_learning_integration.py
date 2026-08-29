@@ -56,9 +56,11 @@ class HumanTraceLearningIntegrationTest(unittest.TestCase):
         )
 
         for forbidden in ("ApplyPostMatch", "RuntimeInit", "TestApply",
-                          "TestRuntime", "PublishRuntime", "WithdrawRuntime"):
+                          "TestRuntime"):
             self.assertNotIn(forbidden, game)
             self.assertNotIn(forbidden, host)
+        self.assertIn("SG_HumanTraceLearningHostGamePublishRuntime", host)
+        self.assertIn("SG_HumanTraceLearningHostGameWithdrawRuntime", host)
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             direct = directory / "direct_apply.c"
@@ -120,7 +122,8 @@ class HumanTraceLearningIntegrationTest(unittest.TestCase):
         self.assertIn("sg_human_trace_v3_scope_acceptance_t", spool_private)
         self.assertIn("SG_HumanTraceVisitAcceptedV3Collection", spool_private)
         self.assertNotIn("uint32_t client_id,", spool_private)
-        self.assertIn("SG_HumanTraceMarkAcceptedV3ScopeConsumed", spool_private)
+        self.assertNotIn("ScopeConsumed", spool_private)
+        self.assertNotIn("MarkAccepted", spool_private)
         self.assertNotIn("MarkStoredV3ScopeConsumed", spool_exports)
         self.assertNotIn("StoredV3ScopeConsumed", spool_exports)
         self.assertNotIn("StoredV3EventsAccepted", spool_exports)
@@ -181,6 +184,7 @@ class HumanTraceLearningIntegrationTest(unittest.TestCase):
             "slipgate/sg_human_trace_learning_game.o",
             "slipgate/sg_human_trace_learning_consumer.o",
             "slipgate/sg_human_trace_learning_host_game.o",
+            "slipgate/sg_human_trace_learning_store.o",
         )
         for makefile in ("GNUmakefile", "Makefile"):
             contents = self.source(makefile)
@@ -197,7 +201,8 @@ class HumanTraceLearningIntegrationTest(unittest.TestCase):
                     r"slipgate\sg_human_trace_learning.c",
                     r"slipgate\sg_human_trace_learning_game.c",
                     r"slipgate\sg_human_trace_learning_consumer.c",
-                    r"slipgate\sg_human_trace_learning_host_game.c"):
+                    r"slipgate\sg_human_trace_learning_host_game.c",
+                    r"slipgate\sg_human_trace_learning_store.c"):
                 self.assertIn(source_name, contents)
 
     def test_07_v3_importer_and_learner_share_the_terminal_identity(self) -> None:

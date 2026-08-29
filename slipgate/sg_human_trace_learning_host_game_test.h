@@ -10,20 +10,8 @@
 #include "sg_human_trace_learning_game_test.h"
 #include "sg_human_trace_learning_host_game.h"
 
-typedef int (*sg_human_trace_learning_test_hook_kernel_locator_fn)(void *context,
-	const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_human_trace_v3_event_t *fire,
-	const sg_human_trace_v3_event_t *attach,
-	sg_human_trace_learning_kernel_key_t *key_out);
-
-typedef struct sg_human_trace_learning_test_published_runtime_s
-{
-	sg_human_trace_learning_runtime_t *runtime;
-	const sg_rune_runtime_snapshot_t *snapshot;
-	sg_level_identity_t level_identity;
-	void *evidence_context;
-	sg_human_trace_learning_test_hook_kernel_locator_fn locate_hook_kernel;
-} sg_human_trace_learning_test_published_runtime_t;
+typedef sg_human_trace_learning_host_runtime_publication_t
+	sg_human_trace_learning_test_published_runtime_t;
 
 int SG_HumanTraceLearningHostGameTestPublishRuntime(
 	const sg_human_trace_learning_test_published_runtime_t *published,
@@ -33,5 +21,9 @@ void SG_HumanTraceLearningHostGameTestWithdrawRuntime(
 	const sg_rune_runtime_snapshot_t *snapshot);
 void SG_HumanTraceLearningHostGameTestResetVisitCount(void);
 uint64_t SG_HumanTraceLearningHostGameTestVisitCount(void);
+void SG_HumanTraceLearningHostGameTestResetApplyOrder(void);
+size_t SG_HumanTraceLearningHostGameTestApplyOrderCount(void);
+int SG_HumanTraceLearningHostGameTestApplyOrder(size_t index,
+	uint32_t *client_id_out, uint64_t *spawn_generation_out);
 
 #endif /* SG_HUMAN_TRACE_LEARNING_HOST_GAME_TEST_H */

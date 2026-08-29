@@ -417,7 +417,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
         ensure_binary()
         for mode in (
                 "spool-order", "spool-truncated", "spool-tampered",
-                "ack-truncated", "ack-tampered", "spool-quarantine"):
+                "spool-quarantine"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 completed = subprocess.run(
                     [str(BINARY), temporary, mode], cwd=ROOT,
@@ -444,6 +444,129 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                     text=True, capture_output=True,
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_learning_state_restores_before_receipts_skip_evidence(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "host-restart-write"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            state_path, = Path(temporary).glob("*.state")
+            encoded = state_path.read_bytes()
+            self.assertEqual(len(encoded), 104 + 8 + 3 * 52)
+            self.assertEqual(encoded[:4], b"SGLS")
+            self.assertEqual(int.from_bytes(encoded[4:6], "little"), 1)
+            self.assertEqual(int.from_bytes(encoded[6:8], "little"), 104)
+            self.assertEqual(
+                [int.from_bytes(encoded[offset:offset + 8], "little")
+                 for offset in (8, 16, 24, 32)],
+                [303, 404, 101, 202],
+            )
+            self.assertEqual(int.from_bytes(encoded[40:48], "little"), 4)
+            self.assertEqual(int.from_bytes(encoded[48:56], "little"), 4)
+            self.assertEqual(int.from_bytes(encoded[56:64], "little"), 1)
+            self.assertEqual(int.from_bytes(encoded[64:72], "little"), 3)
+            digest_input = bytearray(encoded)
+            digest_input[72:104] = bytes(32)
+            self.assertEqual(encoded[72:104], hashlib.sha256(digest_input).digest())
+            self.assertEqual(int.from_bytes(encoded[104:112], "little"), 500000)
+            receipts = encoded[112:]
+            self.assertEqual(
+                [int.from_bytes(receipts[offset + 32:offset + 36], "little")
+                 for offset in (0, 52, 104)], [1, 1, 1]
+            )
+            self.assertEqual(
+                [int.from_bytes(receipts[offset + 36:offset + 44], "little")
+                 for offset in (0, 52, 104)], [11, 12, 13]
+            )
+            self.assertEqual(
+                [int.from_bytes(receipts[offset + 44:offset + 52], "little")
+                 for offset in (0, 52, 104)], [2, 3, 4]
+            )
+            completed = subprocess.run(
+                [str(BINARY), temporary, "host-restart-read"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_learning_state_rejects_noncanonical_truncated_and_trailing(self) -> None:
+        ensure_binary()
+
+        def noncanonical_header(encoded: bytes) -> bytes:
+            changed = bytearray(encoded)
+            changed[6:8] = (105).to_bytes(2, "little")
+            changed[72:104] = bytes(32)
+            changed[72:104] = hashlib.sha256(changed).digest()
+            return bytes(changed)
+
+        mutations = (
+            lambda encoded: encoded[:-1],
+            lambda encoded: encoded + b"\x00",
+            noncanonical_header,
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as temporary:
+                written = subprocess.run(
+                    [str(BINARY), temporary, "host-restart-write"], cwd=ROOT,
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(written.returncode, 0, written.stderr)
+                state_path, = Path(temporary).glob("*.state")
+                state_path.write_bytes(mutate(state_path.read_bytes()))
+                rejected = subprocess.run(
+                    [str(BINARY), temporary, "host-state-invalid"], cwd=ROOT,
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(rejected.returncode, 0, rejected.stderr)
+
+    def test_learning_store_requires_exact_transaction_progression(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "host-store-progression"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_torn_learning_state_never_suppresses_evidence(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "host-state-torn"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_learning_rejects_cross_physics_root(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "host-physics-drift"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    @unittest.skipUnless(shutil.which("strace"), "strace is required")
+    def test_live_callbacks_never_sync_and_postmatch_sync_is_bounded(self) -> None:
+        ensure_binary()
+        for mode, maximum_syncs in (("long-stream-live", 0),
+                                    ("long-stream", 4)):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                trace = Path(temporary) / "syncs.txt"
+                completed = subprocess.run(
+                    ["strace", "-qq", "-e", "trace=fsync,fdatasync",
+                     "-o", str(trace), str(BINARY), temporary, mode],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                syncs = len(re.findall(r"^(?:f|fdata)sync\(",
+                                       trace.read_text(encoding="utf-8"),
+                                       flags=re.MULTILINE))
+                self.assertLessEqual(syncs, maximum_syncs)
 
     def test_receipts_deny_absent_and_typo_scopes(self) -> None:
         ensure_binary()

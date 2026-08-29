@@ -1219,6 +1219,7 @@ OBJS := \
 	slipgate/sg_human_trace_learning_game.o \
 	slipgate/sg_human_trace_learning_consumer.o \
 	slipgate/sg_human_trace_learning_host_game.o \
+	slipgate/sg_human_trace_learning_store.o \
 	slipgate/sg_rune_authority_game.o \
 	slipgate/sg_rune_update_source.o \
 	slipgate/sg_water_forest.o \
@@ -1749,6 +1750,7 @@ $(HUMAN_TRACE_HOOK_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_human_trace_learning_game.c \
 		slipgate/sg_human_trace_learning_consumer.c \
 		slipgate/sg_human_trace_learning_host_game.c \
+		slipgate/sg_human_trace_learning_store.c \
 		slipgate/sg_rune_v2_content_identity.c \
 		slipgate/sg_rune_model.c \
 		slipgate/sg_rune_v2_content_identity.h \
@@ -1765,6 +1767,7 @@ $(HUMAN_TRACE_IO_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_human_trace_learning_game.c \
 		slipgate/sg_human_trace_learning_consumer.c \
 		slipgate/sg_human_trace_learning_host_game.c \
+		slipgate/sg_human_trace_learning_store.c \
 		slipgate/sg_rune_v2_content_identity.c \
 		slipgate/sg_rune_model.c \
 		slipgate/sg_rune_v2_content_identity.h \
