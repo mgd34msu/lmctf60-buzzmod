@@ -147,6 +147,8 @@ static edict_t *runtime_last_passent;
 static int runtime_trace_calls;
 static int runtime_contents_calls;
 static int runtime_pmove_calls;
+static byte runtime_last_pmove_msec;
+static int runtime_touch_on_first_pmove;
 static edict_t *runtime_return_entity;
 
 static trace_t RuntimeTrace(vec3_t start, vec3_t mins, vec3_t maxs,
@@ -193,6 +195,12 @@ static void RuntimePmove(pmove_t *pmove)
 
 	trace = pmove->trace(start, mins, maxs, end);
 	(void)pmove->pointcontents(start);
+	runtime_last_pmove_msec = pmove->cmd.msec;
+	if (runtime_touch_on_first_pmove && runtime_pmove_calls == 0)
+	{
+		pmove->numtouch = 1;
+		pmove->touchents[0] = &runtime_edicts[2];
+	}
 	runtime_pmove_calls++;
 	pmove->groundentity = trace.ent;
 	VectorCopy(mins, pmove->mins);
@@ -278,6 +286,8 @@ static void InstallRuntimeBot(void)
 	runtime_trace_calls = 0;
 	runtime_contents_calls = 0;
 	runtime_pmove_calls = 0;
+	runtime_last_pmove_msec = 0U;
+	runtime_touch_on_first_pmove = 0;
 }
 
 static void ClearRuntimeBot(void)
@@ -584,6 +594,9 @@ static void TestEngineRuntimeOwnerBinding(void)
 	sg_host_engine_runtime_t *runtime = NULL;
 	sg_host_engine_runtime_status_t runtime_status;
 	sg_host_collision_trace_t trace;
+	sg_host_pmove_request_t request;
+	sg_host_pmove_result_t pmove_result;
+	sg_host_pmove_error_t pmove_error;
 	float start[3] = { 0.0f, 0.0f, 0.0f };
 	float mins[3] = { -16.0f, -16.0f, -24.0f };
 	float maxs[3] = { 16.0f, 16.0f, 32.0f };
@@ -612,6 +625,27 @@ static void TestEngineRuntimeOwnerBinding(void)
 	CHECK(SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	CHECK(runtime_last_passent == &runtime_edicts[1]);
+	/* ClientThink calls the engine exactly once with the caller's duration.
+	 * A contact produced by that callback must survive result publication. */
+	runtime_edicts[2].inuse = true;
+	runtime_edicts[2].s.number = 2;
+	runtime_edicts[2].s.modelindex = 2;
+	runtime_edicts[2].classname = "func_door";
+	memset(&request, 0, sizeof(request));
+	request.state.pm_type = PM_NORMAL;
+	request.previous_state = request.state;
+	request.command.msec = 25U;
+	runtime_touch_on_first_pmove = 1;
+	CHECK(SG_HostEngineRuntimePmove(runtime, 1U, &request, &pmove_result,
+		&pmove_error));
+	CHECK(pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	CHECK(runtime_pmove_calls == 1);
+	CHECK(runtime_contents_calls == 1);
+	CHECK(runtime_last_pmove_msec == 25U);
+	CHECK(pmove_result.evaluated_steps == 1U);
+	CHECK(pmove_result.elapsed_ms == 25U);
+	CHECK(pmove_result.touch_count == 1U);
+	CHECK(pmove_result.touch_instance_ids[0] == 2U);
 	sg_bots[0].active = false;
 	CHECK(!SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
@@ -1098,13 +1132,16 @@ static void TestOwnerFailClosedAndDrift(void)
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE && borrowed == NULL);
 	memset(&pmove_request, 0, sizeof(pmove_request));
 	pmove_request.state.pm_type = PM_NORMAL;
+	pmove_request.command.msec = 25U;
 	result = SG_HostLawProductionPmove(1U, &pmove_request, &pmove_result,
 		&pmove_error);
 	CHECK(result.status == SG_HOST_LAW_OK);
 	CHECK(pmove_error == SG_HOST_PMOVE_ERROR_NONE);
-	CHECK(pmove_result.evaluated_steps == 4U);
-	CHECK(runtime_pmove_calls == 4);
-	CHECK(runtime_contents_calls == 4);
+	CHECK(pmove_result.evaluated_steps == 1U);
+	CHECK(pmove_result.elapsed_ms == 25U);
+	CHECK(runtime_pmove_calls == 1);
+	CHECK(runtime_contents_calls == 1);
+	CHECK(runtime_last_pmove_msec == 25U);
 	CHECK(SG_HostLawProductionPublication() != NULL);
 	result = SG_HostLawProductionEngineTrace(1U, start, NULL, NULL, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace);

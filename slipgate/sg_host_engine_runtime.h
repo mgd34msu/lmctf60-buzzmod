@@ -68,7 +68,7 @@ int SG_HostEngineRuntimeHookTrace(const sg_host_engine_runtime_t *runtime,
 	sg_host_collision_contents_t mask, sg_host_hook_collision_t *collision_out,
 	sg_host_collision_trace_t *trace_out);
 
-/* Evaluate one accepted runtime frame through the captured exact Pmove. */
+/* Evaluate one accepted caller command through one captured exact Pmove. */
 int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
 	uint32_t subject_index, const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);

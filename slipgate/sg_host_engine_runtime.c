@@ -729,12 +729,8 @@ int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
 	const sg_host_static_identity_t *identity;
 	sg_host_engine_subject_t subject;
 	sg_host_engine_runtime_scope_t scope;
-	pmove_state_t previous;
-	pmove_state_t state;
 	pmove_t pm;
-	short gravity;
 	short effective_gravity;
-	uint32_t steps;
 	uint32_t step;
 
 	if (error_out)
@@ -783,10 +779,6 @@ int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
 			*error_out = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
 		return 0;
 	}
-	gravity = effective_gravity;
-	steps = identity->physics.frame_ms / identity->physics.substep_ms;
-	state = request->state;
-	previous = request->previous_state;
 	memset(result_out, 0, sizeof(*result_out));
 	memset(&scope, 0, sizeof(scope));
 	scope.runtime = runtime;
@@ -795,28 +787,20 @@ int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
 		(int)SG_HOST_MASK_PLAYER_SOLID : MASK_DEADSOLID;
 	sg_host_engine_runtime_scope = &scope;
 	memset(&pm, 0, sizeof(pm));
-	for (step = 0U; step < steps; step++)
-	{
-		memset(&pm, 0, sizeof(pm));
-		pm.s = state;
-		pm.s.gravity = gravity;
-		pm.cmd = request->command;
-		pm.cmd.msec = (byte)identity->physics.substep_ms;
-		pm.snapinitial = memcmp(&previous, &pm.s, sizeof(pm.s)) != 0;
-		pm.trace = RuntimePmoveTrace;
-		pm.pointcontents = RuntimePmoveContents;
-		if (!RuntimeCallbacksCurrent(runtime))
-			break;
+	pm.s = request->state;
+	pm.s.gravity = effective_gravity;
+	pm.cmd = request->command;
+	pm.snapinitial = memcmp(&request->previous_state, &pm.s,
+		sizeof(pm.s)) != 0;
+	pm.trace = RuntimePmoveTrace;
+	pm.pointcontents = RuntimePmoveContents;
+	if (RuntimeCallbacksCurrent(runtime))
 		runtime->pmove(&pm);
-		if (scope.collision_failed || !RuntimeSubjectCurrent(runtime, &subject) ||
-			(request->state.pm_type == PM_NORMAL &&
-				!HullMatchesIdentity(identity, &pm, effective_gravity)))
-			break;
-		state = pm.s;
-		previous = pm.s;
-	}
 	sg_host_engine_runtime_scope = NULL;
-	if (step != steps)
+	if (!RuntimeCallbacksCurrent(runtime) || scope.collision_failed ||
+		!RuntimeSubjectCurrent(runtime, &subject) ||
+		(request->state.pm_type == PM_NORMAL &&
+			!HullMatchesIdentity(identity, &pm, effective_gravity)))
 	{
 		if (error_out)
 			*error_out = scope.collision_failed ? SG_HOST_PMOVE_ERROR_COLLISION :
@@ -877,8 +861,8 @@ int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
 	}
 	result_out->water_type = pm.watertype;
 	result_out->water_level = pm.waterlevel;
-	result_out->evaluated_steps = steps;
-	result_out->elapsed_ms = identity->physics.frame_ms;
+	result_out->evaluated_steps = 1U;
+	result_out->elapsed_ms = request->command.msec;
 	result_out->gravity = (float)effective_gravity;
 	result_out->physics_abi_id = identity->physics_abi_id;
 	result_out->gravity_law_id = HookGravityActive(request) ?
