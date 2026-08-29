@@ -1372,6 +1372,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+	ground-capability-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
@@ -3882,6 +3883,7 @@ hook-visibility-catalog-test: \
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+		ground-capability-publication-test \
 		weapon-effect-profile-test hook-visibility-catalog-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
@@ -3990,6 +3992,16 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		-o "$$tmp/field"; \
 	"$$tmp/field"; \
 	sh tests/run_sg_destination_field_cache_test.sh
+
+ground-capability-publication-test: \
+		tests/run_sg_ground_capability_publication_test.sh \
+		tests/sg_ground_capability_publication_test.c \
+		tests/sg_ground_capability_test.c \
+		slipgate/sg_ground_capability_publication.c \
+		slipgate/sg_ground_capability_publication.h \
+		slipgate/sg_ground_capability.c slipgate/sg_ground_capability.h
+	$(E) [TEST] ground capability publication
+	$(Q)sh tests/run_sg_ground_capability_publication_test.sh
 
 rune-v2-belief-test: tests/run_sg_belief_test.sh \
 		tests/test_belief_life_identity_contract.py tests/sg_belief_test.c \

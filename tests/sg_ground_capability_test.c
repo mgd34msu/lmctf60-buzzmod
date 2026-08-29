@@ -1829,7 +1829,7 @@ static void TestAtomicityIdentityAndHostileCounts(void)
 	GroundFixtureDestroy(&fixture);
 }
 
-int main(void)
+static int RunGroundCapabilityTests(void)
 {
 	TestFlatAndGravity(100.0f);
 	TestFlatAndGravity(800.0f);
@@ -1865,3 +1865,10 @@ int main(void)
 	puts("ground capability checks passed");
 	return 0;
 }
+
+#ifndef SG_GROUND_CAPABILITY_TEST_NO_MAIN
+int main(void)
+{
+	return RunGroundCapabilityTests();
+}
+#endif
