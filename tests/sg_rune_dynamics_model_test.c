@@ -64,6 +64,13 @@ static sg_rune_stable_id_t Stable(uint32_t domain, uint32_t ordinal)
 	};
 }
 
+static int StableSame(const sg_rune_stable_id_t *left,
+	const sg_rune_stable_id_t *right)
+{
+	return left->source_set_identity == right->source_set_identity &&
+		left->high == right->high && left->low == right->low;
+}
+
 static sg_rune_interval_t Interval(float minimum, float maximum)
 {
 	return (sg_rune_interval_t){ minimum, maximum };
@@ -1293,6 +1300,7 @@ static void TestRepeatedRefinementFaceLineage(void)
 	};
 	static const uint8_t depths[5] = { 0U, 1U, 1U, 2U, 2U };
 	sg_field_reach_atom_t atom = { 0 };
+	sg_rune_state_domain_t domain = { 0 };
 	sg_field_refinement_tree_t tree = { 0 };
 	sg_field_refinement_node_t nodes[5] = { 0 };
 	sg_field_refinement_vertex_t vertices[10] = { 0 };
@@ -1327,6 +1335,9 @@ static void TestRepeatedRefinementFaceLineage(void)
 	atom.domain.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U);
 	atom.simplices = (sg_rune_state_simplex_span_t){ 0U, 1U };
 	atom.partition_proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 20U);
+	domain.id = atom.domain;
+	domain.chart.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
+	domain.simplices = atom.simplices;
 	for (node = 0U; node < 5U; node++)
 	{
 		const sg_field_refinement_vertex_t *cell[8];
@@ -1460,7 +1471,7 @@ static void TestRepeatedRefinementFaceLineage(void)
 	tree.atom_roots = roots;
 	tree.atom_count = 1U;
 	tree.proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 200U);
-	CHECK(SG_FieldRefinementTreeValid(&tree, &atom, 1U));
+	CHECK(SG_FieldRefinementTreeValid(&tree, &atom, 1U, &domain, 1U));
 }
 
 static void TestExactIntersectionHostiles(void)
@@ -1720,6 +1731,9 @@ static void TestCoincidentChartsRemainIndependent(void)
 	sg_rune_state_chart_t charts[2];
 	sg_rune_state_simplex_t simplices[4];
 	sg_rune_state_domain_t domains[2];
+	sg_rune_control_fiber_t fibers[2];
+	sg_rune_control_domain_t control_domains[2];
+	sg_rune_response_patch_t patches[2];
 	sg_rune_state_simplex_owner_t owners[4];
 	sg_field_reach_atom_t atoms[4];
 	sg_rune_domain_support_certificate_t support[2];
@@ -1728,7 +1742,15 @@ static void TestCoincidentChartsRemainIndependent(void)
 	uint32_t words[2] = { 7U, 7U };
 	sg_field_refinement_node_t nodes[4];
 	sg_field_refinement_vertex_ref_t node_vertices[32];
+	sg_field_refinement_face_t faces[30];
+	sg_field_refinement_vertex_ref_t face_vertices[210];
+	sg_field_refinement_face_incidence_t incidences[32];
+	sg_field_refinement_face_ref_t node_faces[32];
 	uint32_t roots[4] = { 0U, 1U, 2U, 3U };
+	sg_rune_field_region_t region;
+	uint32_t chart_regions[2] = { 0U, 0U };
+	uint32_t domain_regions[2] = { 0U, 0U };
+	uint32_t patch_regions[2] = { 0U, 0U };
 	size_t index;
 
 	BuildFixture(&fixture);
@@ -1736,17 +1758,33 @@ static void TestCoincidentChartsRemainIndependent(void)
 	memcpy(charts, fixture.charts, sizeof(fixture.charts));
 	memcpy(simplices, fixture.simplices, sizeof(fixture.simplices));
 	memcpy(domains, fixture.domains, sizeof(fixture.domains));
+	memcpy(fibers, fixture.fibers, sizeof(fixture.fibers));
+	memcpy(control_domains, fixture.control_domains,
+		sizeof(fixture.control_domains));
+	memcpy(patches, fixture.patches, sizeof(fixture.patches));
 	memcpy(owners, fixture.simplex_owners, sizeof(fixture.simplex_owners));
 	memcpy(atoms, fixture.reach_atoms, sizeof(fixture.reach_atoms));
 	memcpy(nodes, fixture.refinement_nodes,
 		2U * sizeof(*fixture.refinement_nodes));
 	memcpy(node_vertices, fixture.node_vertices,
 		16U * sizeof(*fixture.node_vertices));
+	memcpy(faces, fixture.refinement_faces,
+		15U * sizeof(*fixture.refinement_faces));
+	memcpy(face_vertices, fixture.face_vertices,
+		105U * sizeof(*fixture.face_vertices));
+	memcpy(incidences, fixture.face_incidences,
+		16U * sizeof(*fixture.face_incidences));
+	memcpy(node_faces, fixture.node_faces,
+		16U * sizeof(*fixture.node_faces));
 	charts[1] = charts[0];
 	charts[1].id.value = Stable(SG_RUNE_ORDER_STATE_CHART, 2U);
 	charts[1].state_vertices = (sg_rune_state_vertex_span_t){ 16U, 16U };
 	charts[1].simplices = (sg_rune_state_simplex_span_t){ 2U, 2U };
 	charts[1].state_domains = (sg_rune_state_domain_span_t){ 1U, 1U };
+	charts[1].control_fibers = (sg_rune_control_fiber_span_t){ 1U, 1U };
+	charts[1].response_patches = (sg_rune_response_patch_span_t){ 1U, 1U };
+	charts[1].boundary_transfers =
+		(sg_rune_boundary_transfer_span_t){ 1U, 0U };
 	for (index = 0U; index < 16U; index++)
 	{
 		state_vertices[16U + index] = state_vertices[index];
@@ -1766,6 +1804,24 @@ static void TestCoincidentChartsRemainIndependent(void)
 	domains[1].id.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 2U);
 	domains[1].chart = charts[1].id;
 	domains[1].simplices = (sg_rune_state_simplex_span_t){ 2U, 2U };
+	fibers[1] = fibers[0];
+	fibers[1].id.value = Stable(SG_RUNE_ORDER_CONTROL_FIBER, 2U);
+	fibers[1].source_chart = charts[1].id;
+	fibers[1].domain.value = Stable(SG_RUNE_ORDER_CONTROL_DOMAIN, 2U);
+	fibers[1].coverage_proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 202U);
+	control_domains[1] = control_domains[0];
+	control_domains[1].id = fibers[1].domain;
+	control_domains[1].source_chart = charts[1].id;
+	control_domains[1].admissibility_proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 203U);
+	patches[1] = patches[0];
+	patches[1].id.value = Stable(SG_RUNE_ORDER_RESPONSE_PATCH, 2U);
+	patches[1].source_chart = charts[1].id;
+	patches[1].source_simplex = simplices[2].id;
+	patches[1].controls = (sg_rune_control_fiber_span_t){ 1U, 1U };
+	patches[1].destination_domains =
+		(sg_rune_state_domain_span_t){ 1U, 1U };
+	patches[1].flow_proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 204U);
 	for (index = 0U; index < 2U; index++)
 	{
 		atoms[2U + index] = atoms[index];
@@ -1783,8 +1839,37 @@ static void TestCoincidentChartsRemainIndependent(void)
 			SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, (uint32_t)index + 3U);
 		nodes[2U + index].atom = atoms[2U + index].id;
 		nodes[2U + index].vertices.first = (uint32_t)(16U + index * 8U);
+		nodes[2U + index].faces.first = (uint32_t)(16U + index * 8U);
 		memcpy(&node_vertices[16U + index * 8U],
 			&fixture.node_vertices[index * 8U], 8U * sizeof(*node_vertices));
+	}
+	for (index = 0U; index < 15U; index++)
+	{
+		faces[15U + index] = fixture.refinement_faces[index];
+		faces[15U + index].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_FACE, (uint32_t)index + 16U);
+		faces[15U + index].vertices.first = (uint32_t)((15U + index) * 7U);
+		faces[15U + index].incidences.first =
+			fixture.refinement_faces[index].incidences.first + 16U;
+		faces[15U + index].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 160U);
+		memcpy(&face_vertices[(15U + index) * 7U],
+			&fixture.face_vertices[index * 7U],
+			7U * sizeof(*face_vertices));
+	}
+	for (index = 0U; index < 16U; index++)
+	{
+		size_t face;
+		incidences[16U + index] = fixture.face_incidences[index];
+		incidences[16U + index].node = StableSame(
+			&fixture.face_incidences[index].node.value,
+			&fixture.refinement_nodes[0].id.value) ? nodes[2].id : nodes[3].id;
+		for (face = 0U; face < 15U; face++)
+			if (StableSame(&fixture.node_faces[index].value,
+				&fixture.refinement_faces[face].id.value))
+				break;
+		CHECK(face < 15U);
+		node_faces[16U + index] = faces[15U + face].id;
 	}
 	support[0] = fixture.domain_support[0];
 	support[1] = fixture.domain_support[0];
@@ -1815,6 +1900,12 @@ static void TestCoincidentChartsRemainIndependent(void)
 	fixture.dynamics.state_simplex_count = 4U;
 	fixture.dynamics.state_domains = domains;
 	fixture.dynamics.state_domain_count = 2U;
+	fixture.dynamics.control_fibers = fibers;
+	fixture.dynamics.control_fiber_count = 2U;
+	fixture.dynamics.control_domains = control_domains;
+	fixture.dynamics.control_domain_count = 2U;
+	fixture.dynamics.response_patches = patches;
+	fixture.dynamics.response_patch_count = 2U;
 	fixture.dynamics.simplex_owners = owners;
 	fixture.dynamics.simplex_owner_count = 4U;
 	fixture.dynamics.reach_atoms = atoms;
@@ -1831,15 +1922,38 @@ static void TestCoincidentChartsRemainIndependent(void)
 	fixture.dynamics.refinement_tree.node_count = 4U;
 	fixture.dynamics.refinement_tree.node_vertices = node_vertices;
 	fixture.dynamics.refinement_tree.node_vertex_count = 32U;
+	fixture.dynamics.refinement_tree.faces = faces;
+	fixture.dynamics.refinement_tree.face_count = 30U;
+	fixture.dynamics.refinement_tree.face_vertices = face_vertices;
+	fixture.dynamics.refinement_tree.face_vertex_count = 210U;
+	fixture.dynamics.refinement_tree.face_incidences = incidences;
+	fixture.dynamics.refinement_tree.face_incidence_count = 32U;
+	fixture.dynamics.refinement_tree.node_faces = node_faces;
+	fixture.dynamics.refinement_tree.node_face_count = 32U;
 	fixture.dynamics.refinement_tree.atom_roots = roots;
 	fixture.dynamics.refinement_tree.atom_count = 4U;
+	region = fixture.regions[0];
+	region.charts.count = 2U;
+	region.state_domains.count = 2U;
+	region.response_patches.count = 2U;
+	fixture.dynamics.hierarchy.regions = &region;
+	fixture.dynamics.hierarchy.chart_leaf_regions = chart_regions;
+	fixture.dynamics.hierarchy.state_domain_leaf_regions = domain_regions;
+	fixture.dynamics.hierarchy.response_patch_leaf_regions = patch_regions;
+	fixture.dynamics.hierarchy.chart_count = 2U;
+	fixture.dynamics.hierarchy.state_domain_count = 2U;
+	fixture.dynamics.hierarchy.response_patch_count = 2U;
 	CHECK(SG_RuneDynamicsGeometryValid(&fixture.dynamics));
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	/* The same bytes become an overlap once the second component claims the
 	 * first chart identity. */
 	domains[1].chart = charts[0].id;
 	simplices[2].chart = charts[0].id;
 	simplices[3].chart = charts[0].id;
+	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
+		atoms, 4U, domains, 2U));
 	CHECK(!SG_RuneDynamicsGeometryValid(&fixture.dynamics));
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 }
 
 static sg_rune_field_region_t Region(uint32_t ordinal, uint32_t parent,

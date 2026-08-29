@@ -1025,8 +1025,47 @@ static int DerivedLocalFaceOrientation(
 		((sorted_position & 1U) != 0U ? -1 : 1);
 }
 
+static const sg_field_reach_atom_t *RefinementAtom(
+	const sg_field_reach_atom_t *atoms, size_t atom_count,
+	const sg_field_reach_atom_ref_t *reference)
+{
+	size_t atom;
+	for (atom = 0U; atom < atom_count; atom++)
+		if (SameStableId(&atoms[atom].id.value, &reference->value))
+			return &atoms[atom];
+	return NULL;
+}
+
+static const sg_rune_state_domain_t *RefinementDomain(
+	const sg_rune_state_domain_t *domains, size_t domain_count,
+	const sg_rune_state_domain_ref_t *reference)
+{
+	size_t domain;
+	for (domain = 0U; domain < domain_count; domain++)
+		if (SameStableId(&domains[domain].id.value, &reference->value))
+			return &domains[domain];
+	return NULL;
+}
+
+static const sg_rune_state_chart_ref_t *RefinementNodeChart(
+	const sg_field_refinement_node_t *node,
+	const sg_field_reach_atom_t *atoms, size_t atom_count,
+	const sg_rune_state_domain_t *domains, size_t domain_count)
+{
+	const sg_field_reach_atom_t *atom;
+	const sg_rune_state_domain_t *domain;
+	if (!node)
+		return NULL;
+	atom = RefinementAtom(atoms, atom_count, &node->atom);
+	if (!atom)
+		return NULL;
+	domain = RefinementDomain(domains, domain_count, &atom->domain);
+	return domain ? &domain->chart : NULL;
+}
+
 int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
-	const sg_field_reach_atom_t *atoms, size_t atom_count)
+	const sg_field_reach_atom_t *atoms, size_t atom_count,
+	const sg_rune_state_domain_t *domains, size_t domain_count)
 {
 	size_t node;
 	size_t packed = 0U;
@@ -1050,6 +1089,7 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 	    tree->child_count > UINT32_MAX ||
 	    (tree->child_count != 0U && !tree->children) || !tree->atom_roots ||
 	    !atoms || atom_count == 0U || tree->atom_count != atom_count ||
+	    !domains || domain_count == 0U ||
 	    !SG_RuneDynamicsProofRefValid(&tree->proof))
 		return 0;
 	source_set_identity = tree->id.value.source_set_identity;
@@ -1181,6 +1221,7 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 	for (node = 0U; node < tree->face_count; node++)
 	{
 		const sg_field_refinement_face_t *face = &tree->faces[node];
+		const sg_rune_state_chart_ref_t *face_chart = NULL;
 		uint32_t item;
 		if (!SG_FieldRefinementFaceIdValid(&face->id) ||
 		    face->id.value.source_set_identity != source_set_identity ||
@@ -1206,8 +1247,15 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 				&tree->face_incidences[packed_incidences + item];
 			const sg_field_refinement_node_t *incidence_node =
 				FindRefinementNode(tree, &incidence->node);
+			const sg_rune_state_chart_ref_t *incidence_chart;
 			int expected;
-			if (!incidence_node || incidence->local_face >
+			if (!incidence_node)
+				return 0;
+			incidence_chart = RefinementNodeChart(incidence_node, atoms,
+				atom_count, domains, domain_count);
+			if (!incidence_chart || (face_chart && !SameStableId(
+				&face_chart->value, &incidence_chart->value)) ||
+			    incidence->local_face >
 			    SG_RUNE_STATE_DIMENSION_COUNT || incidence->reserved[0] != 0U ||
 			    incidence->reserved[1] != 0U || !FaceListedByNode(tree,
 				incidence_node, face) || !SameStableId(
@@ -1221,6 +1269,7 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 				incidence->local_face);
 			if (incidence->orientation != expected)
 				return 0;
+			face_chart = incidence_chart;
 		}
 		if (face->incidences.count == 2U)
 		{
@@ -1259,15 +1308,34 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 		return 0;
 	for (node = 0U; node < tree->face_count; node++)
 	{
+		const sg_field_refinement_face_incidence_t *node_incidence =
+			&tree->face_incidences[tree->faces[node].incidences.first];
+		const sg_field_refinement_node_t *node_record =
+			FindRefinementNode(tree, &node_incidence->node);
+		const sg_rune_state_chart_ref_t *node_chart = RefinementNodeChart(
+			node_record, atoms, atom_count, domains, domain_count);
 		size_t previous;
 		for (previous = 0U; previous < node; previous++)
-			if (FacesHaveSameCoordinates(tree, &tree->faces[previous],
+		{
+			const sg_field_refinement_face_incidence_t *previous_incidence =
+				&tree->face_incidences[
+					tree->faces[previous].incidences.first];
+			const sg_field_refinement_node_t *previous_record =
+				FindRefinementNode(tree, &previous_incidence->node);
+			const sg_rune_state_chart_ref_t *previous_chart =
+				RefinementNodeChart(previous_record, atoms, atom_count,
+					domains, domain_count);
+			if (!node_chart || !previous_chart)
+				return 0;
+			if (SameStableId(&node_chart->value, &previous_chart->value) &&
+			    FacesHaveSameCoordinates(tree, &tree->faces[previous],
 				&tree->faces[node]) &&
 			    !FaceDescendsFrom(tree, &tree->faces[node],
 				&tree->faces[previous]) &&
 			    !FaceDescendsFrom(tree, &tree->faces[previous],
 				&tree->faces[node]))
 				return 0;
+		}
 	}
 	for (atom = 0U; atom < atom_count; atom++)
 	{
@@ -2059,7 +2127,8 @@ static int FieldModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 	size_t next_choice_outcome = 0U;
 
 	if (!SG_FieldRefinementTreeValid(&model->refinement_tree,
-		model->reach_atoms, model->reach_atom_count))
+		model->reach_atoms, model->reach_atom_count, model->state_domains,
+		model->state_domain_count))
 		return 0;
 	if (model->simplex_owner_count != model->state_simplex_count)
 		return 0;
