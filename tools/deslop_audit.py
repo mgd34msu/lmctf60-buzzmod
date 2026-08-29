@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Audit source comments, Python file structure, and authored-source size limits."""
-
 from __future__ import annotations
 
 import ast
@@ -238,7 +236,7 @@ def source_budget_findings(text: str, max_source_lines: int,
         lines.pop()
     line_count = physical_source_line_count(text)
     overlong = sum(
-        len(line.expandtabs(8)) > max_line_length
+        len(line.removesuffix("\r").expandtabs(8)) > max_line_length
         for line in lines
     )
     max_overlong = overlong_allowance or 0
