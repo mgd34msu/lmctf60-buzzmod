@@ -33,6 +33,8 @@ void Com_Printf(char *format, ...)
 
 static void LocalizationPmove(pmove_t *pmove)
 {
+	vec3_t origin;
+	trace_t trace;
 	uint32_t axis;
 	int ducked = (pmove->s.pm_flags & PMF_DUCKED) != 0;
 
@@ -47,6 +49,10 @@ static void LocalizationPmove(pmove_t *pmove)
 	pmove->maxs[0] = 16.0f;
 	pmove->maxs[1] = 16.0f;
 	pmove->maxs[2] = ducked ? 4.0f : 32.0f;
+	for (axis = 0U; axis < 3U; axis++)
+		origin[axis] = pmove->s.origin[axis] * 0.125f;
+	trace = pmove->trace(origin, pmove->mins, pmove->maxs, origin);
+	(void)trace;
 	pmove->s.velocity[0] = pmove->cmd.forwardmove;
 	pmove->s.velocity[1] = pmove->cmd.sidemove;
 	pmove->s.velocity[2] = 0;
@@ -258,6 +264,45 @@ static world_fixture_t ShallowWaterFloorWorld(void)
 	BindWorldArrays(&fixture);
 	return fixture;
 }
+
+#ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
+static world_fixture_t StepWorld(void)
+{
+	const float floor_mins[3] = { -100.0f, -100.0f, -100.0f };
+	const float floor_maxs[3] = { 100.0f, 100.0f, 0.0f };
+	const float step_mins[3] = { 0.0f, -100.0f, 0.0f };
+	const float step_maxs[3] = { 100.0f, 100.0f, 16.0f };
+	world_fixture_t fixture;
+	uint32_t leaf;
+
+	memset(&fixture, 0, sizeof(fixture));
+	AddBox(&fixture, 0U, 0U, 0U, 0U, 0U, floor_mins, floor_maxs);
+	AddBox(&fixture, 1U, 6U, 6U, 7U, 1U, step_mins, step_maxs);
+	fixture.nodes[0].children[0] = -1;
+	fixture.nodes[0].children[1] = -2;
+	fixture.leaf_brushes[0] = 0U;
+	fixture.leaf_brushes[1] = 1U;
+	for (leaf = 0U; leaf < 2U; leaf++)
+	{
+		fixture.leaves[leaf].contents = SG_HOST_CONTENTS_SOLID;
+		fixture.leaves[leaf].first_leaf_brush = 0U;
+		fixture.leaves[leaf].leaf_brush_count = 2U;
+	}
+	fixture.models[0].headnode = 0;
+	SetBsp3(&fixture.models[0].mins, -101.0f, -101.0f, -101.0f);
+	SetBsp3(&fixture.models[0].maxs, 101.0f, 101.0f, 17.0f);
+	fixture.world.plane_count = 12U;
+	fixture.world.node_count = 1U;
+	fixture.world.leaf_count = 2U;
+	fixture.world.leaf_brush_count = 2U;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = 2U;
+	fixture.world.brush_side_count = 12U;
+	fixture.world.texinfo_count = 2U;
+	BindWorldArrays(&fixture);
+	return fixture;
+}
+#endif
 
 static world_fixture_t WaterWorld(void)
 {
@@ -1019,11 +1064,9 @@ static void TestBoundedRecoveryAndReset(void)
 	request.minimum_frame_sequence = 11U;
 	request.maximum_recovery_distance = 0.0f;
 	request.maximum_temporary_absence_ms = 10U;
-	CHECK(LocalizeRequest(&fixture, &request, &observation,
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
-	CHECK(state.recovery == SG_LOCALIZATION_RECOVERY_TEMPORARY_ABSENCE);
-	CHECK(state.field_pose.sample_time_ms == 100U);
-	CHECK(state.localized_at_ms == 105U && state.frame_sequence == 11U);
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
 	request.maximum_temporary_absence_ms = 0U;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
@@ -1233,7 +1276,8 @@ static void InitAbsenceTimeBinFixture(locator_fixture_t *fixture,
 	fixture->runtime_cells[0].phases.count = 3U;
 	fixture->runtime_cells[1].phases.first = 3U;
 	SetTimeTransition(fixture, 0U, 0U, 1U, 100.0f);
-	SetTimeTransition(fixture, 1U, 1U, 2U, 100.0f);
+	SetTimeTransition(fixture, 1U, 1U, 2U, 200.0f);
+	SetFixtureTiming(fixture, 50U, 50U);
 	FinalizeFixture(fixture);
 }
 
@@ -1246,6 +1290,7 @@ static void TestTemporaryAbsenceCrossesAuthenticatedTimeBins(void)
 	sg_localization_environment_t environment = Environment();
 	sg_localization_observation_t observation;
 	sg_localized_player_state_t initial;
+	sg_localized_player_state_t aged;
 	sg_localized_player_state_t absence;
 	sg_localized_player_state_t state;
 	sg_localization_status_t status;
@@ -1257,29 +1302,39 @@ static void TestTemporaryAbsenceCrossesAuthenticatedTimeBins(void)
 	observation.host_state.pm_flags |= PMF_ON_GROUND;
 	CHECK(Localize(&fixture, &observation, &environment, &initial, &status));
 	CHECK(initial.field_pose.phase.phase_id == 0U);
-
-	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
 	observation.frame_sequence = 10U;
-	observation.observed_at_ms = 200U;
-	observation.authenticated_at_ms = 200U;
+	observation.observed_at_ms = 150U;
+	observation.authenticated_at_ms = 150U;
 	request = Request();
-	request.now_ms = 200U;
+	request.now_ms = 150U;
 	request.minimum_frame_sequence = 10U;
 	request.previous = &initial;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &aged, &status));
+	CHECK(aged.field_pose.phase.phase_id == 0U);
+	CHECK(aged.phase_elapsed_ms == 50U);
+
+	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
+	observation.frame_sequence = 11U;
+	observation.observed_at_ms = 250U;
+	observation.authenticated_at_ms = 250U;
+	request.now_ms = 250U;
+	request.minimum_frame_sequence = 11U;
+	request.previous = &aged;
 	request.maximum_temporary_absence_ms = 300U;
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &absence, &status));
 	CHECK(absence.field_pose.phase.phase_id == 1U);
 	CHECK(absence.phase_started_at_ms == initial.phase_started_at_ms);
-	CHECK(absence.phase_elapsed_ms == 100U);
-	CHECK(absence.time_quantum_index == 10U);
+	CHECK(absence.phase_elapsed_ms == 150U);
+	CHECK(absence.time_quantum_index == 15U);
 
-	observation.frame_sequence = 11U;
+	observation.frame_sequence = 12U;
 	observation.observed_at_ms = 350U;
 	observation.authenticated_at_ms = 350U;
 	request.now_ms = 350U;
-	request.minimum_frame_sequence = 11U;
-	request.previous = &initial;
+	request.minimum_frame_sequence = 12U;
+	request.previous = &aged;
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &absence, &status));
 	CHECK(absence.field_pose.phase.phase_id == 2U);
@@ -1289,18 +1344,18 @@ static void TestTemporaryAbsenceCrossesAuthenticatedTimeBins(void)
 	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
 		0.0f, 0.0f, 24.125f);
 	observation.host_state.pm_flags |= PMF_ON_GROUND;
-	observation.frame_sequence = 12U;
-	observation.observed_at_ms = 351U;
-	observation.authenticated_at_ms = 351U;
-	request.now_ms = 351U;
-	request.minimum_frame_sequence = 12U;
+	observation.frame_sequence = 13U;
+	observation.observed_at_ms = 400U;
+	observation.authenticated_at_ms = 400U;
+	request.now_ms = 400U;
+	request.minimum_frame_sequence = 13U;
 	request.previous = &absence;
 	request.maximum_temporary_absence_ms = 0U;
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
 	CHECK(state.field_pose.phase.phase_id == 2U);
 	CHECK(state.phase_started_at_ms == initial.phase_started_at_ms);
-	CHECK(state.phase_elapsed_ms == 251U);
+	CHECK(state.phase_elapsed_ms == 300U);
 
 	fixture.model.phase_transition_count = 1U;
 	CHECK(SG_CellPhaseLocatorPrepare(&fixture.authority,
@@ -1308,12 +1363,12 @@ static void TestTemporaryAbsenceCrossesAuthenticatedTimeBins(void)
 		fixture.bindings, fixture.semantics.region_count,
 		&fixture.workspace, &fixture.locator, &status));
 	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
-	observation.frame_sequence = 11U;
+	observation.frame_sequence = 12U;
 	observation.observed_at_ms = 350U;
 	observation.authenticated_at_ms = 350U;
 	request.now_ms = 350U;
-	request.minimum_frame_sequence = 11U;
-	request.previous = &initial;
+	request.minimum_frame_sequence = 12U;
+	request.previous = &aged;
 	request.maximum_temporary_absence_ms = 300U;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
@@ -1344,6 +1399,61 @@ static void TestTemporaryAbsenceRejectsShallowWaterHold(void)
 	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
 	CHECK(previous.water_level == 1U);
 	CHECK(previous.medium == SG_RUNE_MEDIUM_WATER);
+	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 105U;
+	observation.authenticated_at_ms = 105U;
+	request = Request();
+	request.now_ms = 105U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_temporary_absence_ms = 10U;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+}
+
+static void TestTemporaryAbsenceRejectsMovingAndTimedDryHold(void)
+{
+	const float floor_mins[3] = { -100.0f, -100.0f, -100.0f };
+	const float floor_maxs[3] = { 100.0f, 100.0f, 0.0f };
+	world_fixture_t floor = BoxWorld(floor_mins, floor_maxs);
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+
+	InitStandardFixture(&fixture, &floor,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U,
+		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_SUPPORTED,
+		SG_RUNE_MEDIUM_DRY);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		0.0f, 0.0f, 24.125f);
+	observation.velocity[0] = 300.0f;
+	observation.host_state.pm_flags |= PMF_ON_GROUND;
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 105U;
+	observation.authenticated_at_ms = 105U;
+	request = Request();
+	request.now_ms = 105U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_temporary_absence_ms = 10U;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		0.0f, 0.0f, 24.125f);
+	observation.host_state.pm_flags |= PMF_ON_GROUND;
+	observation.host_state.pm_time = 1U;
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
 	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
 	observation.frame_sequence = 10U;
 	observation.observed_at_ms = 105U;
@@ -1461,6 +1571,61 @@ static void TestRealPmoveAccelerationLaws(void)
 		SG_RUNE_MOTION_SWIMMING, SG_RUNE_SUPPORT_NONE,
 		SG_RUNE_MEDIUM_WATER, SG_RUNE_STANCE_STANDING, -30.0f,
 		0.0f, 0, 0, 0.0f, 1.5f);
+}
+
+static void TestRealPmoveStepSlide(void)
+{
+	world_fixture_t step_world = StepWorld();
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+	sg_host_pmove_request_t pmove_request;
+	sg_host_pmove_result_t result;
+	sg_host_pmove_error_t error;
+
+	InitStandardFixture(&fixture, &step_world,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U,
+		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_SUPPORTED,
+		SG_RUNE_MEDIUM_DRY);
+	FinalizeFixture(&fixture);
+	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, Pmove,
+		&fixture.runtime, &status));
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		-16.125f, 0.0f, 24.125f);
+	observation.velocity[0] = 300.0f;
+	observation.host_state.pm_flags |= PMF_ON_GROUND;
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	memset(&pmove_request, 0, sizeof(pmove_request));
+	pmove_request.state = previous.host_state;
+	pmove_request.previous_state = previous.host_state;
+	pmove_request.command.msec = 1U;
+	pmove_request.command.forwardmove = 300;
+	CHECK(SG_HostPmoveEvaluateFrame(&fixture.authority, NULL, Pmove,
+		&pmove_request, &result, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_NONE);
+	CHECK(result.origin[2] - previous.field_pose.position[2] == 16.0f ||
+		result.origin[2] - previous.field_pose.position[2] == 18.0f);
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 101U;
+	observation.authenticated_at_ms = 101U;
+	memcpy(observation.position, result.origin, sizeof(observation.position));
+	memcpy(observation.velocity, result.velocity, sizeof(observation.velocity));
+	observation.host_state = result.state;
+	environment.pmove_request = &pmove_request;
+	environment.replay_substeps = fixture.replay_substeps;
+	environment.replay_substep_capacity = 128U;
+	request = Request();
+	request.now_ms = 101U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_OK);
+	CHECK(state.field_pose.position[2] == result.origin[2]);
 }
 #endif
 
@@ -2419,6 +2584,7 @@ int main(void)
 	TestTemporaryAbsencePresentReentry();
 	TestTemporaryAbsenceCrossesAuthenticatedTimeBins();
 	TestTemporaryAbsenceRejectsShallowWaterHold();
+	TestTemporaryAbsenceRejectsMovingAndTimedDryHold();
 	TestPhaseContinuityProof();
 	TestAuthenticatedStanceOverlapContinuity();
 	TestSamePhaseClockCannotRewind();
@@ -2434,6 +2600,7 @@ int main(void)
 	TestMoverCarryFailsClosedWithoutProductionAuthority();
 #ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
 	TestRealPmoveAccelerationLaws();
+	TestRealPmoveStepSlide();
 #endif
 	if (failures != 0)
 	{

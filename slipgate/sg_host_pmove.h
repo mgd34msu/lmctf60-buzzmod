@@ -45,6 +45,9 @@ typedef struct sg_host_pmove_result_s
 	int water_level;
 	uint32_t evaluated_steps;
 	uint32_t elapsed_ms;
+	/* Exact collision-callback chronology executed by the selected host. */
+	uint64_t trace_count;
+	uint64_t collision_trace_count;
 	float gravity;
 	uint64_t physics_abi_id;
 } sg_host_pmove_result_t;
@@ -57,6 +60,10 @@ typedef struct sg_host_pmove_substep_s
 	sg_rune_stance_t stance;
 	uint32_t step;
 	uint32_t elapsed_ms;
+	/* This substep owns a contiguous interval in the frame trace sequence. */
+	uint64_t first_trace_ordinal;
+	uint64_t trace_count;
+	uint64_t collision_trace_count;
 } sg_host_pmove_substep_t;
 
 typedef struct sg_host_pmove_replay_workspace_s

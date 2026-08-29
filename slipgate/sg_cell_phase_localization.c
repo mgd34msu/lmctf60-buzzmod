@@ -1225,6 +1225,7 @@ static int ResolveAbsenceTimePhase(const sg_cell_phase_locator_t *locator,
 			const sg_rune_phase_transition_t *transition;
 			const sg_rune_phase_basis_t *destination;
 			uint32_t destination_phase;
+			double boundary;
 			uint64_t entry;
 
 			candidates_examined++;
@@ -1239,12 +1240,12 @@ static int ResolveAbsenceTimePhase(const sg_cell_phase_locator_t *locator,
 			if (destination->elapsed_ms.min_value < 0.0f ||
 				destination->elapsed_ms.min_value > (float)UINT32_MAX)
 				continue;
-			entry = (uint64_t)ceil((double)destination->elapsed_ms.min_value);
+			boundary = (double)destination->elapsed_ms.min_value;
+			entry = (uint64_t)ceil(boundary);
 			if (entry <= cursor || entry > elapsed_ms ||
 				entry > destination->time_horizon_ms ||
 				!IntervalContains(&destination->elapsed_ms, (double)entry) ||
-				!IntervalContains(&transition->duration_ms,
-					(double)(entry - cursor)))
+				!IntervalContains(&transition->duration_ms, boundary))
 				continue;
 			if (entry < next_entry)
 			{
@@ -1925,7 +1926,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	const sg_localization_observation_t *observation,
 	const sg_localization_environment_t *environment,
 	sg_localized_player_state_t *state_out,
-	sg_localization_status_t *status_out, int path_step)
+	sg_localization_status_t *status_out, int path_step, int host_replay_step)
 {
 	sg_host_collision_pose_t host_pose;
 	sg_rune_mechanism_ref_t mover = SG_RUNE_MECHANISM_REF_NONE;
@@ -1992,8 +1993,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 			SetStatus(status_out, SG_LOCALIZATION_STALE);
 			return 0;
 		}
-		if (request->previous->water_level != 0U ||
-			request->previous->medium != SG_RUNE_MEDIUM_DRY)
+		if (!AbsenceHoldValid(request->previous))
 		{
 			SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 			return 0;
@@ -2001,31 +2001,27 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		*state_out = *request->previous;
 		state_out->frame_sequence = observation->frame_sequence;
 		state_out->localized_at_ms = observation->observed_at_ms;
-		if (AbsenceHoldValid(request->previous))
+		if (observation->observed_at_ms <
+				request->previous->phase_started_at_ms)
 		{
-			if (observation->observed_at_ms <
-					request->previous->phase_started_at_ms)
-			{
-				SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
-				return 0;
-			}
-			elapsed = observation->observed_at_ms -
-				request->previous->phase_started_at_ms;
-			if (!ResolveAbsenceTimePhase(locator, request->previous, elapsed,
-					&phase, &candidates_examined))
-			{
-				SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
-				return 0;
-			}
-			phase_basis = &locator->snapshot->model->phases[phase];
-			state_out->field_pose.phase = locator->snapshot->phases[phase];
-			state_out->field_pose.sample_time_ms = observation->observed_at_ms;
-			state_out->phase_elapsed_ms = elapsed;
-			state_out->time_quantum_index = elapsed /
-				phase_basis->time_quantum_ms;
-			state_out->phase_transition_candidates_examined =
-				candidates_examined;
+			SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
+			return 0;
 		}
+		elapsed = observation->observed_at_ms -
+			request->previous->phase_started_at_ms;
+		if (!ResolveAbsenceTimePhase(locator, request->previous, elapsed,
+				&phase, &candidates_examined))
+		{
+			SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
+			return 0;
+		}
+		phase_basis = &locator->snapshot->model->phases[phase];
+		state_out->field_pose.phase = locator->snapshot->phases[phase];
+		state_out->field_pose.sample_time_ms = observation->observed_at_ms;
+		state_out->phase_elapsed_ms = elapsed;
+		state_out->time_quantum_index = elapsed /
+			phase_basis->time_quantum_ms;
+		state_out->phase_transition_candidates_examined = candidates_examined;
 		state_out->recovery = SG_LOCALIZATION_RECOVERY_TEMPORARY_ABSENCE;
 		SetStatus(status_out, SG_LOCALIZATION_OK);
 		return 1;
@@ -2050,7 +2046,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		SetStatus(status_out, SG_LOCALIZATION_SOLID);
 		return 0;
 	}
-	if (continuity &&
+	if (continuity && !host_replay_step &&
 		!ClearRecoveryTransition(locator, environment, request->previous,
 			observation))
 	{
@@ -2289,20 +2285,22 @@ static int PmoveStateEqual(const pmove_state_t *left,
 
 static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	const sg_localized_player_state_t *previous,
-	const sg_host_pmove_substep_t *substep, uint32_t substep_ms)
+	const sg_host_pmove_substep_t *substep, uint32_t expected_step,
+	uint32_t substep_ms, uint64_t expected_trace_ordinal,
+	uint64_t *next_trace_ordinal_out)
 {
 	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
-	double seconds = (double)substep_ms / 1000.0;
 	uint32_t axis;
 
-	if (substep->elapsed_ms != (substep->step + 1U) * substep_ms ||
-		substep->state.pm_type != PM_NORMAL)
+	if (substep->step != expected_step ||
+		substep->elapsed_ms != (expected_step + 1U) * substep_ms ||
+		substep->state.pm_type != PM_NORMAL || substep->trace_count == 0U ||
+		substep->first_trace_ordinal != expected_trace_ordinal ||
+		substep->collision_trace_count > substep->trace_count ||
+		substep->first_trace_ordinal > UINT64_MAX - substep->trace_count)
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		double displacement = fabs((double)substep->origin[axis] -
-			previous->field_pose.position[axis]);
-
 		if (!isfinite(substep->origin[axis]) ||
 			!isfinite(substep->velocity[axis]) ||
 			substep->origin[axis] != substep->state.origin[axis] * 0.125f ||
@@ -2310,10 +2308,11 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 				substep->state.velocity[axis] * 0.125f ||
 			fabs((double)previous->field_pose.velocity[axis]) >
 				physics->max_velocity ||
-			fabs((double)substep->velocity[axis]) > physics->max_velocity ||
-			displacement > physics->max_velocity * seconds + 0.125)
+			fabs((double)substep->velocity[axis]) > physics->max_velocity)
 			return 0;
 	}
+	*next_trace_ordinal_out = substep->first_trace_ordinal +
+		substep->trace_count;
 	return 1;
 }
 
@@ -2327,6 +2326,8 @@ static int ReplayEnvelopeValid(const sg_host_collision_authority_t *authority,
 		replay->substep_count == physics->frame_ms / physics->substep_ms &&
 		replay->result.evaluated_steps == replay->substep_count &&
 		replay->result.elapsed_ms == physics->frame_ms &&
+		replay->result.trace_count != 0U &&
+		replay->result.collision_trace_count <= replay->result.trace_count &&
 		replay->result.gravity == physics->gravity &&
 		replay->result.physics_abi_id == authority->identity.physics_abi_id &&
 		replay->bsp_content_id == authority->identity.bsp_content_id &&
@@ -2365,6 +2366,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	uint64_t portal_candidates_examined = 0U;
 	uint64_t phase_transition_candidates_examined = 0U;
 	uint64_t kernel_candidates_examined = 0U;
+	uint64_t next_trace_ordinal = 1U;
+	uint64_t collision_trace_count = 0U;
 	size_t index;
 
 	if (!RuntimeCurrent(runtime))
@@ -2379,7 +2382,7 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		observation->kind != SG_LOCALIZATION_OBSERVATION_PRESENT ||
 		request->previous == NULL)
 		return LocalizeOne(locator, request, observation, environment,
-			state_out, status_out, 0);
+			state_out, status_out, 0, 0);
 	if (!ObservationValid(locator, request, observation, environment,
 			status_out))
 	{
@@ -2436,12 +2439,16 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		sg_localized_player_state_t *output = (index & 1U) ? &second : &first;
 
 		if (!ReplayMotionValid(locator->authority, previous, substep,
-				replay.substep_ms))
+				(uint32_t)index, replay.substep_ms, next_trace_ordinal,
+				&next_trace_ordinal) ||
+			collision_trace_count > UINT64_MAX -
+				substep->collision_trace_count)
 		{
 			memset(state_out, 0, sizeof(*state_out));
 			SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 			return 0;
 		}
+		collision_trace_count += substep->collision_trace_count;
 		step.stance = substep->stance;
 		step.observed_at_ms = request->previous->field_pose.sample_time_ms +
 			substep->elapsed_ms;
@@ -2457,7 +2464,7 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		step_request.previous = previous;
 		step_request.now_ms = step.observed_at_ms;
 		if (!LocalizeOne(locator, &step_request, &step, &step_environment,
-				output, status_out, index != 0U))
+				output, status_out, index != 0U, 1))
 		{
 			memset(state_out, 0, sizeof(*state_out));
 			return 0;
@@ -2481,6 +2488,13 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		output->kernel_candidates_examined =
 			(uint32_t)kernel_candidates_examined;
 		previous = output;
+	}
+	if (next_trace_ordinal - 1U != replay.result.trace_count ||
+		collision_trace_count != replay.result.collision_trace_count)
+	{
+		memset(state_out, 0, sizeof(*state_out));
+		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
+		return 0;
 	}
 	*state_out = *previous;
 	return 1;

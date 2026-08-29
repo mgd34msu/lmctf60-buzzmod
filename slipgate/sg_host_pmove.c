@@ -9,6 +9,8 @@ typedef struct sg_host_pmove_scope_s
 	const sg_host_collision_authority_t *authority;
 	const sg_host_collision_scene_t *scene;
 	csurface_t surface;
+	uint64_t trace_count;
+	uint64_t collision_trace_count;
 	int collision_failed;
 } sg_host_pmove_scope_t;
 
@@ -38,6 +40,7 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 	VectorCopy(end, host_trace.endpos);
 	if (scope)
 	{
+		scope->trace_count++;
 		memset(&scope->surface, 0, sizeof(scope->surface));
 		host_trace.surface = &scope->surface;
 	}
@@ -45,7 +48,10 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 		start, mins, maxs, end, SG_HOST_MASK_PLAYER_SOLID, &trace))
 	{
 		if (scope)
+		{
 			scope->collision_failed = 1;
+			scope->collision_trace_count++;
+		}
 		host_trace.allsolid = true;
 		host_trace.startsolid = true;
 		host_trace.fraction = 0.0f;
@@ -65,6 +71,7 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 	host_trace.contents = (int)trace.contents;
 	if (trace.fraction < 1.0f || trace.startsolid || trace.allsolid)
 	{
+		scope->collision_trace_count++;
 		scope->surface.flags = trace.surface_flags;
 		/* Pmove treats entity pointers as opaque collision identities. */
 		host_trace.ent = (struct edict_s *)(void *)scope;
@@ -167,6 +174,9 @@ static int EvaluateFrame(
 	sg_host_pmove_scope = &scope;
 	for (step = 0; step < steps; step++)
 	{
+		uint64_t first_trace_ordinal = scope.trace_count + 1U;
+		uint64_t collision_trace_count = scope.collision_trace_count;
+
 		memset(&pm, 0, sizeof(pm));
 		pm.s = state;
 		pm.cmd = request->command;
@@ -204,6 +214,11 @@ static int EvaluateFrame(
 			substep->step = step;
 			substep->elapsed_ms =
 				(step + 1U) * authority->identity.physics.substep_ms;
+			substep->first_trace_ordinal = first_trace_ordinal;
+			substep->trace_count = scope.trace_count -
+				(first_trace_ordinal - 1U);
+			substep->collision_trace_count = scope.collision_trace_count -
+				collision_trace_count;
 		}
 	}
 	sg_host_pmove_scope = NULL;
@@ -246,6 +261,8 @@ static int EvaluateFrame(
 	result_out->water_level = pm.waterlevel;
 	result_out->evaluated_steps = steps;
 	result_out->elapsed_ms = authority->identity.physics.frame_ms;
+	result_out->trace_count = scope.trace_count;
+	result_out->collision_trace_count = scope.collision_trace_count;
 	result_out->gravity = authority->identity.physics.gravity;
 	result_out->physics_abi_id = authority->identity.physics_abi_id;
 	if (replay_out)

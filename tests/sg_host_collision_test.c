@@ -538,6 +538,8 @@ static void TestHostPmoveBoundary(void)
 	CHECK(result.state.gravity == 100);
 	CHECK(result.gravity == 100.0f && result.evaluated_steps == 4 &&
 		result.elapsed_ms == 100);
+	CHECK(result.trace_count == 20004U);
+	CHECK(result.collision_trace_count <= result.trace_count);
 	CHECK(result.state.velocity[2] == -8);
 	memset(substeps, 0xff, sizeof(substeps));
 	workspace.substeps = substeps;
@@ -550,8 +552,14 @@ static void TestHostPmoveBoundary(void)
 	CHECK(replay.frame_ms == 100U && replay.substep_ms == 25U);
 	CHECK(replay.physics_abi_id == authority.identity.physics_abi_id);
 	CHECK(replay.bsp_content_id == authority.identity.bsp_content_id);
+	CHECK(replay.result.trace_count == 4U);
+	CHECK(replay.result.collision_trace_count <= replay.result.trace_count);
 	CHECK(substeps[0].step == 0U && substeps[0].elapsed_ms == 25U);
 	CHECK(substeps[3].step == 3U && substeps[3].elapsed_ms == 100U);
+	CHECK(substeps[0].first_trace_ordinal == 1U &&
+		substeps[0].trace_count == 1U);
+	CHECK(substeps[3].first_trace_ordinal == 4U &&
+		substeps[3].trace_count == 1U);
 	CHECK(substeps[0].state.velocity[2] == -2);
 	CHECK(substeps[3].state.velocity[2] == -8);
 	workspace.substep_capacity = 3U;
