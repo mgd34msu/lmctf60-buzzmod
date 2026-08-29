@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Exercise the authored-source size budget."""
 
+import contextlib
+import io
 import sys
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from tools import deslop_audit
 from tools.deslop_audit import (
     load_source_budget,
     source_budget_findings,
@@ -59,6 +64,16 @@ class SourceBudgetTest(unittest.TestCase):
                 self.source_with_lines(10001), 9999, 100, None
             ),
         )
+
+    def test_non_lf_separators_do_not_create_physical_source_lines(self) -> None:
+        for separator in ("\f", "\v", "\x85", "\u2028", "\u2029"):
+            with self.subTest(separator=ascii(separator)):
+                text = "x\n" * 9998 + f"x{separator}x"
+                self.assertEqual(
+                    [],
+                    source_budget_findings(text, 9999, 100, None),
+                )
+                self.assertFalse(source_review_recommended(text, 9999))
 
     def test_source_size_and_line_length_are_independent(self) -> None:
         self.assertEqual(
@@ -117,20 +132,65 @@ class SourceBudgetTest(unittest.TestCase):
             Path("docs/example.py"),
             Path("slipgate/sg_authored.c"),
             Path("slipgate/sg_contract.generated.h"),
+            Path("slipgate/regenerated_parser.c"),
             Path("tests/support/imported.c"),
             Path("tests/test_authored.py"),
             Path("tools/check.sh"),
+            Path("tools/rune_contracts_generated.py"),
             Path("GNUmakefile"),
         ]
         self.assertEqual(
             [
                 Path("slipgate/sg_authored.c"),
+                Path("slipgate/regenerated_parser.c"),
                 Path("tests/test_authored.py"),
                 Path("tools/check.sh"),
                 Path("GNUmakefile"),
             ],
             tracked_authored_files(paths),
         )
+
+    def test_regenerated_name_does_not_escape_the_absolute_limit(self) -> None:
+        relative = Path("slipgate/regenerated_parser.c")
+        self.assertEqual([relative], tracked_authored_files([relative]))
+        self.assertEqual(
+            ["source-lines: 10001 > 9999"],
+            source_budget_findings(
+                self.source_with_lines(10001), 9999, 100, None
+            ),
+        )
+
+    def test_tracked_authored_symlink_is_a_finding_without_following(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            source = root / "slipgate" / "outside.c"
+            source.parent.mkdir(parents=True)
+            source.symlink_to(Path(directory) / "missing-outside.c")
+            relative = Path("slipgate/outside.c")
+
+            self.assertEqual([relative], tracked_authored_files([relative]))
+            self.assertEqual(
+                "tracked-symlink: authored source must be a regular file",
+                deslop_audit.authored_file_finding(root, relative),
+            )
+            output = io.StringIO()
+            with (
+                mock.patch.object(deslop_audit, "ROOT", root),
+                mock.patch.object(
+                    deslop_audit, "tracked_files", return_value=[relative]
+                ),
+                mock.patch.object(
+                    deslop_audit,
+                    "load_source_budget",
+                    return_value=(9999, 800, 100, {}),
+                ),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(1, deslop_audit.main())
+            self.assertIn(
+                f"{relative}: tracked-symlink: authored source must be a regular file",
+                output.getvalue(),
+            )
 
     def test_committed_policy_has_no_per_file_source_size_caps(self) -> None:
         self.assertEqual((9999, 800, 100), load_source_budget()[:3])

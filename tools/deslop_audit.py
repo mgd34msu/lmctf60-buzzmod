@@ -19,6 +19,11 @@ EXCLUDED = {"sqlite3.c", "sqlite3.h"}
 AUTHORED_ROOTS = {"slipgate", "tests", "tools"}
 AUTHORED_SUFFIXES = {".c", ".h", ".py", ".sh"}
 AUTHORED_FILES = {"GNUmakefile", "Makefile"}
+GENERATED_SOURCE_PATTERNS = (
+    "slipgate/*.generated.c",
+    "slipgate/*.generated.h",
+)
+GENERATED_SOURCE_FILES = {"tools/rune_contracts_generated.py"}
 MAX_SLIPGATE_COMMENT_LINES = 12
 MAX_PYTHON_MODULE_DOCSTRING_LINES = 12
 MAX_PYTHON_MEMBER_DOCSTRING_LINES = 12
@@ -205,17 +210,31 @@ def tracked_authored_files(paths: list[Path]) -> list[Path]:
             continue
         if name not in AUTHORED_FILES and path.suffix not in AUTHORED_SUFFIXES:
             continue
-        if "generated" in path.name or path.parts[:2] == ("tests", "support"):
+        if (name in GENERATED_SOURCE_FILES
+                or any(path.match(pattern)
+                       for pattern in GENERATED_SOURCE_PATTERNS)
+                or path.parts[:2] == ("tests", "support")):
             continue
-        if not (ROOT / path).is_symlink():
-            authored.append(path)
+        authored.append(path)
     return authored
+
+
+def authored_file_finding(root: Path, relative: Path) -> str | None:
+    if (root / relative).is_symlink():
+        return "tracked-symlink: authored source must be a regular file"
+    return None
+
+
+def physical_source_line_count(text: str) -> int:
+    return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
 def source_budget_findings(text: str, max_source_lines: int,
         max_line_length: int, overlong_allowance: int | None) -> list[str]:
-    lines = text.splitlines()
-    line_count = len(lines)
+    lines = text.split("\n")
+    if text.endswith("\n"):
+        lines.pop()
+    line_count = physical_source_line_count(text)
     overlong = sum(
         len(line.expandtabs(8)) > max_line_length
         for line in lines
@@ -238,7 +257,7 @@ def source_budget_findings(text: str, max_source_lines: int,
 
 
 def source_review_recommended(text: str, review_threshold_lines: int) -> bool:
-    return len(text.splitlines()) > review_threshold_lines
+    return physical_source_line_count(text) > review_threshold_lines
 
 
 def stale_allowance_paths(
@@ -284,6 +303,15 @@ def load_source_budget() -> tuple[int, int, int, dict[str, int]]:
 def main() -> int:
     findings = 0
     tracked = tracked_files()
+    authored = tracked_authored_files(tracked)
+    authored_symlinks = set()
+    for relative in authored:
+        finding = authored_file_finding(ROOT, relative)
+        if finding:
+            print(f"{relative}: {finding}")
+            findings += 1
+            authored_symlinks.add(relative)
+
     for relative in tracked_source_files(tracked):
         text = (ROOT / relative).read_text(encoding="utf-8")
         for line_number, line in comment_fragments(text):
@@ -301,6 +329,8 @@ def main() -> int:
                     findings += 1
 
     for relative in sorted((ROOT / "tools").glob("*.py")):
+        if relative.is_symlink():
+            continue
         text = relative.read_text(encoding="utf-8")
         doc_lines = python_module_docstring_lines(text)
         if doc_lines > MAX_PYTHON_MODULE_DOCSTRING_LINES:
@@ -327,6 +357,8 @@ def main() -> int:
             findings += 1
 
     for relative in sorted((ROOT / "tools").glob("*.sh")):
+        if relative.is_symlink():
+            continue
         for line_number, line in enumerate(
                 relative.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.lstrip()
@@ -339,12 +371,13 @@ def main() -> int:
 
     (max_source_lines, review_threshold_lines,
      max_line_length, overlong) = load_source_budget()
-    authored = tracked_authored_files(tracked)
     for stale in stale_allowance_paths(authored, overlong):
         print(f"{SOURCE_BUDGET_PATH.relative_to(ROOT)}: stale-path: {stale}")
         findings += 1
     review_count = 0
     for relative in authored:
+        if relative in authored_symlinks:
+            continue
         text = (ROOT / relative).read_text(encoding="utf-8")
         name = relative.as_posix()
         if source_review_recommended(text, review_threshold_lines):
