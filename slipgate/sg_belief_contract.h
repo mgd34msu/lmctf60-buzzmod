@@ -181,8 +181,8 @@ typedef struct sg_belief_horizon_step_s
 	uint32_t record_index;
 } sg_belief_horizon_step_t;
 
-/* One weighted outcome in a host-certified complete horizon kernel. The step
- * span proves every summarized movement against accepted RUNE structure. */
+/* One weighted outcome in a horizon candidate. The step span proves every
+ * summarized movement against accepted RUNE structure. */
 typedef struct sg_belief_horizon_entry_s
 {
 	sg_phase_coordinate_t from;
@@ -201,8 +201,8 @@ typedef struct sg_belief_horizon_span_s
 
 /* Runtime-only movement evidence. For every phase in the bound snapshot,
  * entries contain at least one outcome and its outgoing likelihoods sum to
- * one. host_complete certifies that the host included every phase reachable
- * through valid movement during [from_time_ms, to_time_ms]. */
+ * one. host_complete is reducer admission metadata and is not accepted horizon
+ * authority; prediction requires an independently audited opaque source. */
 typedef struct sg_belief_horizon_kernel_s
 {
 	uint64_t rune_identity;
@@ -279,13 +279,23 @@ typedef enum sg_belief_predict_result_e
 	SG_BELIEF_PREDICT_OVERFLOW
 } sg_belief_predict_result_t;
 
+typedef struct sg_belief_horizon_source_s sg_belief_horizon_source_t;
+typedef struct sg_belief_horizon_authority_s sg_belief_horizon_authority_t;
+
+typedef enum sg_belief_horizon_accept_result_e
+{
+	SG_BELIEF_HORIZON_ACCEPTED = 0,
+	SG_BELIEF_HORIZON_REJECTED_INVALID,
+	SG_BELIEF_HORIZON_ALLOCATION_FAILED,
+	SG_BELIEF_HORIZON_OVERFLOW
+} sg_belief_horizon_accept_result_t;
+
 typedef struct sg_belief_prediction_request_s
 {
 	uint64_t at_time_ms;
-	/* A nonempty chain exactly tiles [state.updated_at_ms, at_time_ms]. An
-	 * empty chain requests same-phase kinematic aging only. */
-	const sg_belief_horizon_kernel_t *kernels;
-	size_t kernel_count;
+	/* Null requests same-phase kinematic aging. A non-null publication is an
+	 * owned, independently accepted chain for this exact state and interval. */
+	const sg_belief_horizon_authority_t *horizon;
 	/* Scratch is caller-owned, disposable, and never aliases authority,
 	 * state, destination storage, or the other scratch span. */
 	sg_belief_particle_t *scratch_first;
@@ -308,6 +318,11 @@ typedef struct sg_belief_prediction_source_s
 	uint64_t state_generation;
 	uint64_t state_revision;
 	uint64_t state_time_ms;
+	uint64_t horizon_issuer_identity;
+	uint64_t horizon_source_identity;
+	uint64_t horizon_source_generation;
+	uint64_t horizon_fixed_point_identity;
+	uint64_t horizon_chain_identity;
 } sg_belief_prediction_source_t;
 
 /* Prediction particle storage belongs to the caller. It is written only when
@@ -798,10 +813,36 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 sg_belief_reduce_result_t SG_BeliefReduce(
 	const sg_rune_runtime_snapshot_t *snapshot, sg_belief_state_t *state,
 	const sg_belief_frame_t *frame, sg_belief_reduction_t *out);
+/* The opaque source is issued by the authenticated topology/localization
+ * predecessor. This module deliberately provides no production constructor. */
+sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_horizon_source_t *source,
+	const sg_belief_horizon_kernel_t *candidate,
+	size_t candidate_count,
+	sg_belief_horizon_authority_t **authority_out);
+void SG_BeliefHorizonAuthorityDestroy(
+	sg_belief_horizon_authority_t *authority);
 sg_belief_predict_result_t SG_BeliefPredict(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state,
 	const sg_belief_prediction_request_t *request,
 	sg_belief_prediction_t *out);
+
+#if defined(SG_BELIEF_TESTING)
+sg_belief_horizon_source_t *SG_BeliefTestHorizonSourceCreate(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	uint64_t issuer_identity,
+	uint64_t source_identity,
+	uint64_t source_generation,
+	uint64_t fixed_point_identity,
+	const sg_belief_horizon_kernel_t *complete_kernels,
+	size_t complete_kernel_count);
+void SG_BeliefTestHorizonSourceDestroy(sg_belief_horizon_source_t *source);
+void SG_BeliefTestHorizonAuthorityCorrupt(
+	sg_belief_horizon_authority_t *authority);
+#endif
 
 #endif /* SG_BELIEF_CONTRACT_H */
