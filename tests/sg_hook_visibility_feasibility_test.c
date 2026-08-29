@@ -132,6 +132,7 @@ static void CheckTamperDetection(hook_visibility_fixture_t *fixture,
 	sg_hook_visibility_feasibility_metrics_t saved_metrics;
 	sg_hook_visibility_terminal_outcome_t saved_outcome;
 	uint32_t saved_count;
+	uint64_t saved_source_digest, saved_verifier_source_digest;
 	float saved_range, saved_plane_distance;
 
 	saved_outcome = catalog->terminals[0].outcome;
@@ -157,6 +158,22 @@ static void CheckTamperDetection(hook_visibility_fixture_t *fixture,
 		&report));
 	CHECK(report.code == SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_SOURCE_MISMATCH);
 	fixture->planes[1].distance = saved_plane_distance;
+	CHECK(SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	saved_source_digest = catalog->source_digest;
+	catalog->source_digest ^= UINT64_C(1);
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	CHECK(report.code == SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_SOURCE_MISMATCH);
+	catalog->source_digest = saved_source_digest;
+	CHECK(SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	saved_verifier_source_digest = catalog->verifier_source_digest;
+	catalog->verifier_source_digest ^= UINT64_C(1);
+	CHECK(!SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
+		&report));
+	CHECK(report.code == SG_HOOK_VISIBILITY_FEASIBILITY_AUDIT_SOURCE_MISMATCH);
+	catalog->verifier_source_digest = saved_verifier_source_digest;
 	CHECK(SG_HookVisibilityFeasibilityAudit(&fixture->sources, catalog,
 		&report));
 	fixture->sources.control_count =

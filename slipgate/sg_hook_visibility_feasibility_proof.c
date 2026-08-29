@@ -265,30 +265,41 @@ static int ConstructControlHand(hook_build_t *build, int16_t pitch,
 	int16_t yaw, sg_hook_visibility_hand_t hand)
 {
 	sg_hook_visibility_i16_span_t *x_spans = NULL;
+	sg_hook_visibility_i16_span_t prior_spans[3];
 	uint32_t x_count = 0U, x;
 	int result = 0;
 
+	memset(prior_spans, 0, sizeof(prior_spans));
 	if (!SG_HookVisibilityFeasibilityAxisSpans(build, 0U, pitch, yaw, hand,
-			NULL, &x_spans, &x_count))
+			prior_spans, &x_spans, &x_count))
 	{
 		SetError(build, SG_HOOK_VISIBILITY_FEASIBILITY_ERROR_OUT_OF_MEMORY, 0U);
 		goto done;
 	}
 	for (x = 0U; x < x_count; x++)
 	{
-		sg_hook_visibility_i16_span_t *y_spans = NULL, *z_spans = NULL;
-		uint32_t y_count = 0U, z_count = 0U, y, z;
+		sg_hook_visibility_i16_span_t *y_spans = NULL;
+		uint32_t y_count = 0U, y;
 
+		prior_spans[0] = x_spans[x];
 		if (!SG_HookVisibilityFeasibilityAxisSpans(build, 1U, pitch, yaw,
-				hand, &x_spans[x], &y_spans, &y_count) ||
-			!SG_HookVisibilityFeasibilityAxisSpans(build, 2U, pitch, yaw,
-				hand, &x_spans[x], &z_spans, &z_count))
+				hand, prior_spans, &y_spans, &y_count))
 		{
-			free(z_spans);
 			free(y_spans);
 			goto done;
 		}
 		for (y = 0U; y < y_count; y++)
+		{
+			sg_hook_visibility_i16_span_t *z_spans = NULL;
+			uint32_t z_count = 0U, z;
+
+			prior_spans[1] = y_spans[y];
+			if (!SG_HookVisibilityFeasibilityAxisSpans(build, 2U, pitch, yaw,
+					hand, prior_spans, &z_spans, &z_count))
+			{
+				free(y_spans);
+				goto done;
+			}
 			for (z = 0U; z < z_count; z++)
 			{
 				sg_hook_visibility_domain_term_t domain;
@@ -312,7 +323,8 @@ static int ConstructControlHand(hook_build_t *build, int16_t pitch,
 					goto done;
 				}
 			}
-		free(z_spans);
+			free(z_spans);
+		}
 		free(y_spans);
 	}
 	result = 1;

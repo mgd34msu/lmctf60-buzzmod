@@ -98,13 +98,14 @@ int SG_HookVisibilityFeasibilityFamilyValid(
 int SG_HookVisibilityFeasibilityAxisSpans(
 	sg_hook_visibility_build_context_t *build, uint32_t axis, int16_t pitch,
 	int16_t yaw, sg_hook_visibility_hand_t hand,
-	const sg_hook_visibility_i16_span_t *x_span,
+	const sg_hook_visibility_i16_span_t prior_spans[3],
 	sg_hook_visibility_i16_span_t **spans_out, uint32_t *count_out);
 int SG_HookVisibilityFeasibilityEventCuts(
 	sg_hook_visibility_build_context_t *build, uint32_t axis, int16_t pitch,
 	int16_t yaw, sg_hook_visibility_hand_t hand,
-	const sg_hook_visibility_i16_span_t *x_span,
-	int16_t **cuts_out, uint32_t *count_out);
+	const sg_hook_visibility_i16_span_t prior_spans[3],
+	int16_t **cuts_out, uint32_t *count_out, int16_t **split_cuts_out,
+	uint32_t *split_count_out);
 int SG_HookVisibilityFeasibilityAuditTiling(
 	const sg_hook_visibility_feasibility_sources_t *sources,
 	const sg_hook_visibility_feasibility_catalog_t *catalog,

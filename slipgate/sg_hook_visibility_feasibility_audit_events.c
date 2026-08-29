@@ -119,17 +119,51 @@ static int FloatCutFits(const sg_hook_visibility_domain_term_t *domain,
 		CutFits(domain, axis, (int32_t)ceilf(value));
 }
 
-static float AuditProjection(uint32_t axis, float boundary, float origin_x,
-	float face_x, const float start_offset[3], const float delta[3], float limit)
+static void AuditBoundaryEvents(float minimum, float maximum, float epsilon,
+	float events[6])
+{
+	events[0] = minimum;
+	events[1] = maximum;
+	events[2] = minimum - epsilon;
+	events[3] = minimum + epsilon;
+	events[4] = maximum - epsilon;
+	events[5] = maximum + epsilon;
+}
+
+static void AuditSegment(
+	const sg_hook_visibility_feasibility_sources_t *sources,
+	const float forward[3], const float offset[3], int clearance,
+	float start[3], float delta[3], float *limit)
+{
+	if (clearance)
+	{
+		memcpy(delta, offset, sizeof(float) * 3U);
+		memset(start, 0, sizeof(float) * 3U);
+		*limit = 1.0f;
+	}
+	else
+	{
+		memcpy(delta, forward, sizeof(float) * 3U);
+		memcpy(start, offset, sizeof(float) * 3U);
+		*limit = sources->fire_law.maximum_range;
+	}
+}
+
+static float AuditProjection(uint32_t varying_axis, float varying_origin,
+	float face, uint32_t projected_axis, float boundary,
+	const float start_offset[3], const float delta[3], float minimum_parameter,
+	float maximum_parameter)
 {
 	float parameter;
 
-	if (delta[0] == 0.0f)
+	if (delta[varying_axis] == 0.0f)
 		return NAN;
-	parameter = (face_x - origin_x - start_offset[0]) / delta[0];
-	if (parameter < 0.0f || parameter > limit)
+	parameter = (face - varying_origin - start_offset[varying_axis]) /
+		delta[varying_axis];
+	if (parameter < minimum_parameter || parameter > maximum_parameter)
 		return NAN;
-	return (boundary - start_offset[axis] - delta[axis] * parameter) * 8.0f;
+	return (boundary - start_offset[projected_axis] -
+		delta[projected_axis] * parameter) * 8.0f;
 }
 
 static int ProjectionSignature(float value, int32_t signature[3])
@@ -156,22 +190,23 @@ static int ProjectionSignature(float value, int32_t signature[3])
 }
 
 static int ProjectionUniform(
-	const sg_hook_visibility_feasibility_sources_t *sources,
-	const sg_hook_visibility_domain_term_t *domain, uint32_t target_axis,
-	float boundary, float face, const float start_offset[3],
-	const float delta[3], float limit)
+	const sg_hook_visibility_domain_term_t *domain, uint32_t varying_axis,
+	float face, uint32_t projected_axis, float boundary,
+	const float start_offset[3], const float delta[3], float minimum_parameter,
+	float maximum_parameter)
 {
-	float first = AuditProjection(target_axis, boundary,
-		(float)domain->origins.mins[0] * 0.125f, face, start_offset, delta,
-		limit);
-	float last = AuditProjection(target_axis, boundary,
-		(float)domain->origins.maxs[0] * 0.125f, face, start_offset, delta,
-		limit);
+	float first = AuditProjection(varying_axis,
+		(float)domain->origins.mins[varying_axis] * 0.125f, face,
+		projected_axis, boundary, start_offset, delta, minimum_parameter,
+		maximum_parameter);
+	float last = AuditProjection(varying_axis,
+		(float)domain->origins.maxs[varying_axis] * 0.125f, face,
+		projected_axis, boundary, start_offset, delta, minimum_parameter,
+		maximum_parameter);
 	int32_t first_signature[3], last_signature[3];
 	int first_finite = ProjectionSignature(first, first_signature);
 	int last_finite = ProjectionSignature(last, last_signature);
 	float low, high;
-	int32_t event_min, event_max;
 
 	if (first_finite != last_finite)
 		return 0;
@@ -179,20 +214,21 @@ static int ProjectionUniform(
 		return 1;
 	low = first < last ? first : last;
 	high = first > last ? first : last;
-	if (high < (float)sources->origins.mins[target_axis] - 1.0f ||
-		low > (float)sources->origins.maxs[target_axis] + 1.0f)
+	if (high < (float)domain->origins.mins[projected_axis] - 1.0f ||
+		low > (float)domain->origins.maxs[projected_axis] + 1.0f)
 		return 1;
 	if (memcmp(first_signature, last_signature, sizeof(first_signature)) != 0)
 		return 0;
-	event_min = (int32_t)floorf(low);
-	event_max = (int32_t)ceilf(high);
-	if (event_max < domain->origins.mins[target_axis] ||
-		event_min > domain->origins.maxs[target_axis])
-		return 1;
-	return domain->origins.mins[target_axis] ==
-		domain->origins.maxs[target_axis] &&
-		domain->origins.mins[target_axis] >= event_min &&
-		domain->origins.mins[target_axis] <= event_max;
+	if (first_signature[2])
+	{
+		if (first_signature[0] < domain->origins.mins[projected_axis] ||
+			first_signature[0] > domain->origins.maxs[projected_axis])
+			return 1;
+		return domain->origins.mins[projected_axis] ==
+			domain->origins.maxs[projected_axis];
+	}
+	return domain->origins.maxs[projected_axis] <= first_signature[0] ||
+		domain->origins.mins[projected_axis] >= first_signature[1];
 }
 
 static int RuleUniform(
@@ -200,62 +236,143 @@ static int RuleUniform(
 	const sg_hook_visibility_domain_term_t *domain, uint32_t rule)
 {
 	float minimum[3], maximum[3], forward[3], offset[3];
-	float boundary[6];
-	uint32_t axis, event, clearance;
+	const uint32_t pairs[3][2] = {{0U, 1U}, {0U, 2U}, {1U, 2U}};
+	uint32_t axis, event, clearance, pair;
 
 	if (!AuditBrushBounds(sources, rule, minimum, maximum))
 		return 0;
 	AuditMuzzle(sources, domain, forward, offset);
-	for (event = 0U; event < 6U; event++)
+	for (axis = 0U; axis < 3U; axis++)
 	{
-		float coordinate = event == 0U ? minimum[0] :
-			(event == 1U ? maximum[0] :
-			 (event == 2U ? minimum[0] - sources->fire_law.trace_epsilon :
-			  (event == 3U ? minimum[0] + sources->fire_law.trace_epsilon :
-			   (event == 4U ? maximum[0] - sources->fire_law.trace_epsilon :
-				maximum[0] + sources->fire_law.trace_epsilon))));
+		float boundaries[6];
 
-		if (!FloatCutFits(domain, 0U, coordinate * 8.0f) ||
-			!FloatCutFits(domain, 0U, (coordinate - offset[0]) * 8.0f) ||
-			!FloatCutFits(domain, 0U, (coordinate - offset[0] -
-				forward[0] * sources->fire_law.maximum_range) * 8.0f))
-			return 0;
-	}
-	for (axis = 1U; axis < 3U; axis++)
-	{
-		boundary[0] = minimum[axis];
-		boundary[1] = maximum[axis];
-		boundary[2] = minimum[axis] - sources->fire_law.trace_epsilon;
-		boundary[3] = minimum[axis] + sources->fire_law.trace_epsilon;
-		boundary[4] = maximum[axis] - sources->fire_law.trace_epsilon;
-		boundary[5] = maximum[axis] + sources->fire_law.trace_epsilon;
-		for (event = 0U; event < 6U; event++)
-			if (!FloatCutFits(domain, axis, boundary[event] * 8.0f))
-				return 0;
+		AuditBoundaryEvents(minimum[axis], maximum[axis],
+			sources->fire_law.trace_epsilon, boundaries);
+		if (axis != 0U)
+		{
+			for (event = 0U; event < 6U; event++)
+				if (!FloatCutFits(domain, axis, boundaries[event] * 8.0f))
+					return 0;
+			continue;
+		}
 		for (clearance = 0U; clearance < 2U; clearance++)
 		{
-			float delta[3], start[3], limit;
-			float face;
+			float start[3], delta[3], limit;
 
-			if (clearance)
-			{
-				memcpy(delta, offset, sizeof(delta));
-				memset(start, 0, sizeof(start));
-				limit = 1.0f;
-			}
-			else
-			{
-				memcpy(delta, forward, sizeof(delta));
-				memcpy(start, offset, sizeof(start));
-				limit = sources->fire_law.maximum_range;
-			}
-			face = delta[0] > 0.0f ? minimum[0] : maximum[0];
+			AuditSegment(sources, forward, offset, (int)clearance, start,
+				delta, &limit);
 			for (event = 0U; event < 6U; event++)
-				if (!ProjectionUniform(sources, domain, axis, boundary[event],
-						face, start, delta, limit))
+				if (!FloatCutFits(domain, axis,
+						(boundaries[event] - start[axis]) * 8.0f) ||
+					!FloatCutFits(domain, axis,
+						(boundaries[event] - start[axis] -
+						 delta[axis] * limit) * 8.0f))
 					return 0;
 		}
 	}
+	for (pair = 0U; pair < 3U; pair++)
+		{
+			uint32_t first_axis = pairs[pair][0];
+			uint32_t second_axis = pairs[pair][1];
+			float first_boundaries[2], second_boundaries[6];
+			float source_min = (float)sources->origins.mins[0] * 0.125f;
+			float source_max = (float)sources->origins.maxs[0] * 0.125f;
+			float clearance_first =
+				(float)domain->origins.mins[0] * 0.125f;
+			float clearance_last =
+				(float)domain->origins.maxs[0] * 0.125f;
+			float clearance_min = offset[0] < 0.0f ?
+				clearance_first + offset[0] : clearance_first;
+			float clearance_max = offset[0] > 0.0f ?
+				clearance_last + offset[0] : clearance_last;
+			int guard = forward[0] > 0.0f ? minimum[0] <= source_min &&
+				maximum[0] < source_max : maximum[0] >= source_max &&
+				minimum[0] > source_min;
+			int guard_relevant = guard && clearance_max >= minimum[0] -
+				sources->fire_law.trace_epsilon && clearance_min <= maximum[0] +
+				sources->fire_law.trace_epsilon;
+			uint32_t first_event, second_event, first_event_count = 2U;
+
+			if (first_axis != 0U && !guard_relevant)
+				continue;
+			if (first_axis != 0U)
+			{
+				float first_shift = offset[first_axis] > 0.0f ?
+					-sources->fire_law.trace_epsilon :
+					sources->fire_law.trace_epsilon;
+				float second_shift = offset[second_axis] > 0.0f ?
+					-sources->fire_law.trace_epsilon :
+					sources->fire_law.trace_epsilon;
+
+				first_boundaries[0] = (offset[first_axis] > 0.0f ?
+					minimum[first_axis] : maximum[first_axis]) + first_shift;
+				second_boundaries[0] = (offset[second_axis] > 0.0f ?
+					maximum[second_axis] : minimum[second_axis]) + second_shift;
+				first_boundaries[1] = (offset[first_axis] > 0.0f ?
+					maximum[first_axis] : minimum[first_axis]) + first_shift;
+				second_boundaries[1] = (offset[second_axis] > 0.0f ?
+					minimum[second_axis] : maximum[second_axis]) + second_shift;
+			}
+			else
+			{
+				first_boundaries[0] = !guard ?
+					(forward[first_axis] > 0.0f ? minimum[first_axis] :
+					 maximum[first_axis]) : minimum[first_axis];
+				first_boundaries[1] = maximum[first_axis];
+				if (!guard)
+					first_event_count = 1U;
+				AuditBoundaryEvents(minimum[second_axis], maximum[second_axis],
+					sources->fire_law.trace_epsilon, second_boundaries);
+			}
+			for (clearance = first_axis != 0U ? 1U : 0U;
+				clearance < 2U; clearance++)
+			{
+				float start[3], delta[3], limit;
+				float minimum_parameter = 0.0f;
+				float maximum_parameter;
+
+				AuditSegment(sources, forward, offset, (int)clearance, start,
+					delta, &limit);
+				maximum_parameter = limit;
+				if (first_axis != 0U)
+				{
+					float x_shift = offset[0] > 0.0f ?
+						-sources->fire_law.trace_epsilon :
+						sources->fire_law.trace_epsilon;
+					float brush_min = minimum[0] + x_shift;
+					float brush_max = maximum[0] + x_shift;
+
+					if (offset[0] > 0.0f)
+					{
+						minimum_parameter = (brush_min - clearance_last) /
+							offset[0];
+						maximum_parameter = (brush_max - clearance_first) /
+							offset[0];
+					}
+					else
+					{
+						minimum_parameter = (brush_max - clearance_first) /
+							offset[0];
+						maximum_parameter = (brush_min - clearance_last) /
+							offset[0];
+					}
+					if (minimum_parameter < 0.0f)
+						minimum_parameter = 0.0f;
+					if (maximum_parameter > 1.0f)
+						maximum_parameter = 1.0f;
+				}
+				for (first_event = 0U; first_event < first_event_count;
+					first_event++)
+					for (second_event = first_axis != 0U ? first_event : 0U;
+						second_event < (first_axis != 0U ? first_event + 1U :
+						6U); second_event++)
+						if (!ProjectionUniform(domain, first_axis,
+								first_boundaries[first_event], second_axis,
+								second_boundaries[second_event], start, delta,
+								minimum_parameter, maximum_parameter))
+							return 0;
+			}
+		}
 	return 1;
 }
 

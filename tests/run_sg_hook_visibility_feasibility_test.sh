@@ -23,6 +23,7 @@ support='tests/sg_hook_visibility_feasibility_fixture.c
 tests/sg_hook_visibility_host_angle_reference.c'
 test_mains='tests/sg_hook_visibility_feasibility_test.c
 tests/sg_hook_visibility_production_angle_test.c
+tests/sg_hook_visibility_clearance_face_test.c
 tests/sg_hook_visibility_reverse_span_test.c
 tests/sg_hook_visibility_slanted_source_test.c
 tests/sg_hook_visibility_scaling_test.c'
@@ -66,6 +67,7 @@ for source in slipgate/sg_hook_visibility_feasibility.c \
 	tests/sg_hook_visibility_feasibility_fixture.c \
 	tests/sg_hook_visibility_host_angle_reference.c \
 	tests/sg_hook_visibility_production_angle_test.c \
+	tests/sg_hook_visibility_clearance_face_test.c \
 	tests/sg_hook_visibility_reverse_span_test.c \
 	tests/sg_hook_visibility_slanted_source_test.c \
 	tests/sg_hook_visibility_scaling_test.c

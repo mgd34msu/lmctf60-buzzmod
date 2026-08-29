@@ -33,6 +33,196 @@ static uint64_t AuditHashU64(uint64_t hash, uint64_t value)
 	return hash;
 }
 
+static uint64_t AuditHashU32(uint64_t hash, uint32_t value)
+{
+	uint32_t byte;
+
+	for (byte = 0U; byte < 4U; byte++)
+		hash = AuditHashByte(hash, (uint8_t)(value >> (byte * 8U)));
+	return hash;
+}
+
+static uint64_t AuditHashFloat(uint64_t hash, float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	return AuditHashU32(hash, bits);
+}
+
+static uint64_t AuditHashIdentity(uint64_t hash,
+	const sg_rune_model_identity_t *identity)
+{
+	uint32_t axis;
+
+	hash = AuditHashU64(hash, identity->bsp_content_id);
+	hash = AuditHashU64(hash, identity->entity_semantics_id);
+	hash = AuditHashU64(hash, identity->physics_abi_id);
+	hash = AuditHashU64(hash, identity->source_set_identity);
+	hash = AuditHashU64(hash, identity->schema_id);
+	hash = AuditHashU64(hash, identity->producer_identity);
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		hash = AuditHashFloat(hash,
+			identity->standing_hull.mins.value[axis]);
+		hash = AuditHashFloat(hash,
+			identity->standing_hull.maxs.value[axis]);
+		hash = AuditHashFloat(hash,
+			identity->crouching_hull.mins.value[axis]);
+		hash = AuditHashFloat(hash,
+			identity->crouching_hull.maxs.value[axis]);
+	}
+	hash = AuditHashFloat(hash, identity->physics.gravity);
+	hash = AuditHashFloat(hash, identity->physics.ground_acceleration);
+	hash = AuditHashFloat(hash, identity->physics.air_acceleration);
+	hash = AuditHashFloat(hash, identity->physics.water_acceleration);
+	hash = AuditHashFloat(hash, identity->physics.hook_acceleration);
+	hash = AuditHashFloat(hash, identity->physics.external_acceleration);
+	hash = AuditHashFloat(hash, identity->physics.water_drag);
+	hash = AuditHashFloat(hash, identity->physics.max_velocity);
+	hash = AuditHashU32(hash, identity->physics.frame_ms);
+	return AuditHashU32(hash, identity->physics.substep_ms);
+}
+
+static uint64_t AuditHashWorldCanonical(uint64_t hash,
+	const sg_bsp_world_t *world)
+{
+	uint32_t index, axis;
+
+	hash = AuditHashU32(hash, world->plane_count);
+	for (index = 0U; index < world->plane_count; index++)
+	{
+		for (axis = 0U; axis < 3U; axis++)
+			hash = AuditHashFloat(hash,
+				world->planes[index].normal.value[axis]);
+		hash = AuditHashFloat(hash, world->planes[index].distance);
+		hash = AuditHashU32(hash, (uint32_t)world->planes[index].type);
+	}
+	hash = AuditHashU32(hash, world->node_count);
+	for (index = 0U; index < world->node_count; index++)
+	{
+		hash = AuditHashU32(hash, world->nodes[index].plane);
+		hash = AuditHashU32(hash, (uint32_t)world->nodes[index].children[0]);
+		hash = AuditHashU32(hash, (uint32_t)world->nodes[index].children[1]);
+	}
+	hash = AuditHashU32(hash, world->leaf_count);
+	for (index = 0U; index < world->leaf_count; index++)
+	{
+		hash = AuditHashU32(hash, (uint32_t)world->leaves[index].contents);
+		hash = AuditHashU32(hash, world->leaves[index].first_leaf_brush);
+		hash = AuditHashU32(hash, world->leaves[index].leaf_brush_count);
+	}
+	hash = AuditHashU32(hash, world->leaf_brush_count);
+	for (index = 0U; index < world->leaf_brush_count; index++)
+		hash = AuditHashU32(hash, world->leaf_brushes[index]);
+	hash = AuditHashU32(hash, world->model_count);
+	for (index = 0U; index < world->model_count; index++)
+	{
+		hash = AuditHashU32(hash, (uint32_t)world->models[index].headnode);
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			hash = AuditHashFloat(hash,
+				world->models[index].mins.value[axis]);
+			hash = AuditHashFloat(hash,
+				world->models[index].maxs.value[axis]);
+			hash = AuditHashFloat(hash,
+				world->models[index].origin.value[axis]);
+		}
+	}
+	hash = AuditHashU32(hash, world->brush_count);
+	for (index = 0U; index < world->brush_count; index++)
+	{
+		hash = AuditHashU32(hash, world->brushes[index].first_side);
+		hash = AuditHashU32(hash, world->brushes[index].side_count);
+		hash = AuditHashU32(hash, (uint32_t)world->brushes[index].contents);
+	}
+	hash = AuditHashU32(hash, world->brush_side_count);
+	for (index = 0U; index < world->brush_side_count; index++)
+	{
+		hash = AuditHashU32(hash, world->brush_sides[index].plane);
+		hash = AuditHashU32(hash, (uint32_t)world->brush_sides[index].texinfo);
+	}
+	hash = AuditHashU32(hash, world->texinfo_count);
+	for (index = 0U; index < world->texinfo_count; index++)
+		hash = AuditHashU32(hash, (uint32_t)world->texinfos[index].flags);
+	return hash;
+}
+
+static uint64_t AuditHashSceneCanonical(uint64_t hash,
+	const sg_host_collision_scene_t *scene)
+{
+	size_t index;
+	uint32_t axis;
+
+	if (!scene)
+		return AuditHashU64(hash, 0U);
+	hash = AuditHashU64(hash, (uint64_t)scene->instance_count);
+	for (index = 0U; index < scene->instance_count; index++)
+	{
+		hash = AuditHashU64(hash, scene->instances[index].instance_id);
+		hash = AuditHashU32(hash, scene->instances[index].model_index);
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			hash = AuditHashFloat(hash,
+				scene->instances[index].transform.origin[axis]);
+			hash = AuditHashFloat(hash,
+				scene->instances[index].transform.angles[axis]);
+		}
+	}
+	return hash;
+}
+
+static uint64_t AuditCatalogSourceDigest(
+	const sg_hook_visibility_feasibility_sources_t *sources)
+{
+	const sg_hook_visibility_fire_law_t *law = &sources->fire_law;
+	uint64_t hash = AUDIT_FNV_OFFSET;
+	uint32_t index, axis;
+
+	hash = AuditHashIdentity(hash, &sources->collision->identity);
+	hash = AuditHashWorldCanonical(hash, sources->collision->world);
+	hash = AuditHashSceneCanonical(hash, sources->scene);
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		hash = AuditHashU32(hash, (uint16_t)sources->origins.mins[axis]);
+		hash = AuditHashU32(hash, (uint16_t)sources->origins.maxs[axis]);
+	}
+	hash = AuditHashU32(hash, (uint32_t)sources->stance);
+	hash = AuditHashU32(hash, sources->control_count);
+	for (index = 0U; index < sources->control_count; index++)
+	{
+		hash = AuditHashU32(hash, (uint16_t)sources->controls[index].pitch_min);
+		hash = AuditHashU32(hash, (uint16_t)sources->controls[index].pitch_max);
+		hash = AuditHashU32(hash, (uint16_t)sources->controls[index].yaw_min);
+		hash = AuditHashU32(hash, (uint16_t)sources->controls[index].yaw_max);
+	}
+	hash = AuditHashU32(hash, sources->surface_rule_count);
+	for (index = 0U; index < sources->surface_rule_count; index++)
+	{
+		const sg_hook_visibility_surface_rule_t *rule =
+			&sources->surface_rules[index];
+
+		hash = AuditHashU64(hash, rule->surface_id);
+		hash = AuditHashU32(hash, rule->model_index);
+		hash = AuditHashU32(hash, rule->brush_index);
+		hash = AuditHashU32(hash, rule->texinfo);
+		hash = AuditHashU32(hash, (uint32_t)rule->classification);
+	}
+	hash = AuditHashU64(hash, law->identity);
+	hash = AuditHashU64(hash, law->angle_authority_id);
+	hash = AuditHashU64(hash, law->mover_domain_identity);
+	hash = AuditHashFloat(hash, law->standing_view_height);
+	hash = AuditHashFloat(hash, law->crouching_view_height);
+	hash = AuditHashFloat(hash, law->muzzle_forward);
+	hash = AuditHashFloat(hash, law->muzzle_lateral);
+	hash = AuditHashFloat(hash, law->maximum_range);
+	hash = AuditHashFloat(hash, law->trace_epsilon);
+	hash = AuditHashU32(hash, law->shot_mask);
+	hash = AuditHashU32(hash, law->moving_model_count);
+	hash = AuditHashU64(hash, sources->producer_identity);
+	return AuditHashU64(hash, sources->verifier_identity);
+}
+
 static uint64_t AuditSourceDigest(
 	const sg_hook_visibility_feasibility_sources_t *sources)
 {
@@ -607,6 +797,7 @@ int SG_HookVisibilityFeasibilityAudit(
 		catalog->world_counts[7] != world->texinfo_count ||
 		catalog->producer_identity != sources->producer_identity ||
 		catalog->verifier_identity != sources->verifier_identity ||
+		catalog->source_digest != AuditCatalogSourceDigest(sources) ||
 		catalog->verifier_source_digest != AuditSourceDigest(sources) ||
 		AuditAngleAuthorityId() != SG_HOOK_VISIBILITY_ANGLE_AUTHORITY_ID)
 	{
