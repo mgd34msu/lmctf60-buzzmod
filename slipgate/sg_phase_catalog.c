@@ -1008,26 +1008,154 @@ static void FillPhase(const sg_phase_catalog_source_t *source,
 	phase_out->time_horizon_ms = source->authority->identity.physics.frame_ms;
 }
 
+static uint64_t PairHashU32(uint64_t hash, uint32_t value)
+{
+	uint32_t shift;
+	for (shift = 0U; shift != 32U; shift += 8U)
+		hash = (hash ^ (uint8_t)(value >> shift)) * UINT64_C(1099511628211);
+	return hash;
+}
+
+static uint64_t PairHashU64(uint64_t hash, uint64_t value)
+{
+	uint32_t shift;
+	for (shift = 0U; shift != 64U; shift += 8U)
+		hash = (hash ^ (uint8_t)(value >> shift)) * UINT64_C(1099511628211);
+	return hash;
+}
+
+static uint64_t PairHashFloat(uint64_t hash, float value)
+{
+	uint32_t bits;
+	if (value == 0.0f) value = 0.0f;
+	memcpy(&bits, &value, sizeof(bits));
+	return PairHashU32(hash, bits);
+}
+
+static uint64_t PairHashStable(uint64_t hash,
+	const sg_rune_stable_id_t *value)
+{
+	hash = PairHashU64(hash, value->source_set_identity);
+	hash = PairHashU64(hash, value->high);
+	return PairHashU64(hash, value->low);
+}
+
+static uint64_t TransitionPairHash(
+	const sg_phase_catalog_transition_pair_t *pair)
+{
+	const sg_rune_phase_transition_t *t = &pair->transition;
+	uint64_t hash = UINT64_C(1469598103934665603);
+
+	hash = PairHashStable(hash, &t->cell.value);
+	hash = PairHashStable(hash, &t->source_phase.value);
+	hash = PairHashStable(hash, &t->destination_phase.value);
+	hash = PairHashU32(hash, (uint32_t)t->kind);
+	hash = PairHashFloat(hash, t->duration_ms.min_value);
+	hash = PairHashFloat(hash, t->duration_ms.max_value);
+	hash = PairHashU32(hash, t->flags);
+	return PairHashStable(hash, &t->destination_cell.value);
+}
+
+static int TransitionPairFieldsEqual(
+	const sg_phase_catalog_transition_pair_t *left,
+	const sg_phase_catalog_transition_pair_t *right)
+{
+	const sg_rune_phase_transition_t *lt = &left->transition;
+	const sg_rune_phase_transition_t *rt = &right->transition;
+
+	return SG_RuneModelStableIdEqual(&lt->cell.value, &rt->cell.value) &&
+		SG_RuneModelStableIdEqual(&lt->source_phase.value,
+			&rt->source_phase.value) &&
+		SG_RuneModelStableIdEqual(&lt->destination_phase.value,
+			&rt->destination_phase.value) && lt->kind == rt->kind &&
+		lt->duration_ms.min_value == rt->duration_ms.min_value &&
+		lt->duration_ms.max_value == rt->duration_ms.max_value &&
+		lt->flags == rt->flags && SG_RuneModelStableIdEqual(
+			&lt->destination_cell.value, &rt->destination_cell.value);
+}
+
 static int AppendPair(sg_phase_catalog_expected_t *expected,
 	const sg_rune_phase_transition_t *transition,
 	const sg_phase_catalog_transition_evidence_t *evidence,
 	sg_phase_catalog_error_t *error_out)
 {
-	if (expected->transition_pair_count == UINT32_MAX)
+	uint64_t hash;
+	uint32_t slot;
+	uint32_t index;
+	uint32_t needed_hash_capacity;
+	uint32_t *grown_hash;
+	sg_phase_catalog_transition_pair_t candidate;
+
+	memset(&candidate, 0, sizeof(candidate));
+	candidate.transition = *transition;
+	candidate.evidence = *evidence;
+	hash = TransitionPairHash(&candidate);
+	if (expected->transition_pair_hash_capacity == 0U)
+	{
+		expected->transition_pair_hash_capacity = 32U;
+		expected->transition_pair_hash = calloc(
+			expected->transition_pair_hash_capacity,
+			sizeof(*expected->transition_pair_hash));
+		if (!expected->transition_pair_hash)
+		{
+			expected->transition_pair_hash_capacity = 0U;
+			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+	}
+	slot = (uint32_t)hash & (expected->transition_pair_hash_capacity - 1U);
+	while (expected->transition_pair_hash[slot] != 0U)
+	{
+		index = expected->transition_pair_hash[slot] - 1U;
+		if (TransitionPairFieldsEqual(&expected->transition_pairs[index],
+				&candidate))
+			return 1;
+		slot = (slot + 1U) & (expected->transition_pair_hash_capacity - 1U);
+	}
+	if (expected->transition_pair_count >=
+		SG_PHASE_CATALOG_TRANSITION_APPEND_LIMIT)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
 			expected->transition_pair_count);
 		return 0;
 	}
+	if (expected->transition_pair_hash_capacity / 2U <=
+		expected->transition_pair_count)
+	{
+		if (expected->transition_pair_hash_capacity > UINT32_MAX / 2U)
+		{
+			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+				expected->transition_pair_count);
+			return 0;
+		}
+		needed_hash_capacity = expected->transition_pair_hash_capacity * 2U;
+		grown_hash = calloc(needed_hash_capacity, sizeof(*grown_hash));
+		if (!grown_hash)
+		{
+			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		for (index = 0U; index < expected->transition_pair_count; index++)
+		{
+			uint64_t existing_hash = TransitionPairHash(
+				&expected->transition_pairs[index]);
+			slot = (uint32_t)existing_hash & (needed_hash_capacity - 1U);
+			while (grown_hash[slot] != 0U)
+				slot = (slot + 1U) & (needed_hash_capacity - 1U);
+			grown_hash[slot] = index + 1U;
+		}
+		free(expected->transition_pair_hash);
+		expected->transition_pair_hash = grown_hash;
+		expected->transition_pair_hash_capacity = needed_hash_capacity;
+		slot = (uint32_t)hash & (needed_hash_capacity - 1U);
+		while (expected->transition_pair_hash[slot] != 0U)
+			slot = (slot + 1U) & (needed_hash_capacity - 1U);
+	}
 	if (!ExpectedReservePairs(expected, expected->transition_pair_count + 1U,
 		error_out))
 		return 0;
-	memset(&expected->transition_pairs[expected->transition_pair_count], 0,
-		sizeof(*expected->transition_pairs));
-	expected->transition_pairs[expected->transition_pair_count].transition =
-		*transition;
-	expected->transition_pairs[expected->transition_pair_count].evidence =
-		*evidence;
+	expected->transition_pairs[expected->transition_pair_count] = candidate;
+	expected->transition_pair_hash[slot] = expected->transition_pair_count + 1U;
 	expected->transition_pair_count++;
 	return 1;
 }
@@ -1368,7 +1496,7 @@ static int TransitionPairCompare(const void *left_value,
 	const void *right_value)
 {
 	return ByteCompare(left_value, right_value,
-		sizeof(sg_phase_catalog_transition_pair_t));
+		sizeof(sg_rune_phase_transition_t));
 }
 
 static int PhaseOrderCompare(const void *left_value, const void *right_value)
@@ -1610,6 +1738,7 @@ void SG_PhaseCatalogExpectedDestroy(sg_phase_catalog_expected_t *expected)
 	free(expected->transitions);
 	free(expected->transition_evidence);
 	free(expected->transition_pairs);
+	free(expected->transition_pair_hash);
 	free(expected->phase_hash);
 	free(expected->phase_neutral_hash);
 	free(expected->phase_region_by_phase);
@@ -1689,6 +1818,7 @@ int SG_PhaseCatalogBuild(const sg_phase_catalog_source_t *source,
 	/* The catalog owns the published arrays.  Construction-only pair and
 	 * lookup storage must be released before the expected value is reset. */
 	free(expected.transition_pairs);
+	free(expected.transition_pair_hash);
 	free(expected.phase_hash);
 	free(expected.phase_neutral_hash);
 	free(expected.phase_region_by_phase);

@@ -61,36 +61,6 @@ static sg_rune_model_identity_t Identity(void)
 	return identity;
 }
 
-/* Empty-provider fixtures are private test construction.  Production code
- * receives an accepted result only from SG_MechanismCapabilityBuild; keeping
- * this issuer in the test translation unit prevents a public forge seam. */
-static uint64_t TestDigestBytes(uint64_t digest, const void *data, size_t size)
-{
-	const unsigned char *bytes = data;
-	size_t index;
-
-	for (index = 0U; index < size; index++)
-		digest = (digest ^ (uint64_t)bytes[index]) * UINT64_C(1099511628211);
-	return digest;
-}
-
-static void TestIssueAcceptedEmpty(sg_mechanism_capability_set_t *capabilities,
-	const sg_rune_model_identity_t *identity)
-{
-	uint64_t digest;
-	const uint64_t key = UINT64_C(0x8f2c6a4d9137be25);
-
-	memset(capabilities, 0, sizeof(*capabilities));
-	capabilities->identity = *identity;
-	digest = SG_MechanismCapabilitySetDigest(capabilities);
-	capabilities->seal_magic = SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->seal_magic_inverse = ~SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->self = capabilities;
-	digest = TestDigestBytes(digest, &capabilities->self,
-		sizeof(capabilities->self));
-	capabilities->seal_digest = TestDigestBytes(digest, &key, sizeof(key));
-}
-
 static void SetCell(sg_configuration_cell_t *cell,
 	const sg_rune_model_identity_t *identity, uint32_t index,
 	sg_rune_stance_t stance)
@@ -124,7 +94,7 @@ static int FixtureInit(phase_fixture_t *fixture, uint32_t cell_count,
 	uint32_t region_count, int split_support)
 {
 	sg_rune_model_identity_t identity = Identity();
-	sg_mechanism_capability_set_t capabilities;
+	sg_mechanism_capability_set_t *capabilities = NULL;
 	sg_phase_catalog_error_t provider_error;
 	uint32_t index;
 
@@ -171,15 +141,17 @@ static int FixtureInit(phase_fixture_t *fixture, uint32_t cell_count,
 		SetRegion(&fixture->regions[1], 1U, 0U,
 			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
 	}
-	TestIssueAcceptedEmpty(&capabilities, &identity);
-	if (!SG_PhaseMoverSupportProviderBuild(&fixture->semantics, &capabilities,
+	if (!SG_MechanismCapabilityTestIssue(&identity, NULL, 0U, &capabilities) ||
+		!SG_PhaseMoverSupportProviderBuild(&fixture->semantics, capabilities,
 		&fixture->provider, &provider_error))
 	{
+		SG_MechanismCapabilityDestroy(capabilities);
 		free(fixture->cells);
 		free(fixture->regions);
 		memset(fixture, 0, sizeof(*fixture));
 		return 0;
 	}
+	SG_MechanismCapabilityDestroy(capabilities);
 	fixture->source.authority = &fixture->authority;
 	fixture->source.configuration = &fixture->configuration;
 	fixture->source.semantics = &fixture->semantics;
@@ -326,11 +298,13 @@ static void TestRealConfigurationSemanticsProducer(void)
 	}
 	CHECK_PHASE(fixture.semantics->regions[0].id == 0U);
 	{
-		sg_mechanism_capability_set_t capabilities;
+		sg_mechanism_capability_set_t *capabilities = NULL;
 
-		TestIssueAcceptedEmpty(&capabilities, &identity);
+		CHECK_PHASE(SG_MechanismCapabilityTestIssue(&identity, NULL, 0U,
+			&capabilities));
 		CHECK_PHASE(SG_PhaseMoverSupportProviderBuild(
-			fixture.semantics, &capabilities, &provider, &catalog_error));
+			fixture.semantics, capabilities, &provider, &catalog_error));
+		SG_MechanismCapabilityDestroy(capabilities);
 	}
 	memset(&source, 0, sizeof(source));
 	source.authority = &fixture.authority;
@@ -530,14 +504,14 @@ static void TestStanceAndPortalTransitions(void)
 static void TestCallerCannotIssueMechanismProvider(void)
 {
 	phase_fixture_t fixture;
-	sg_mechanism_capability_set_t forged;
+	const sg_mechanism_capability_set_t *forged =
+		(const sg_mechanism_capability_set_t *)(uintptr_t)UINT32_C(1);
 	sg_phase_mover_support_provider_t *provider = NULL;
 	sg_phase_catalog_error_t error;
 
 	CHECK_PHASE(FixtureInit(&fixture, 1U, 1U, 0));
-	memset(&forged, 0, sizeof(forged));
 	CHECK_PHASE(!SG_PhaseMoverSupportProviderBuild(&fixture.semantics,
-		&forged, &provider, &error));
+		forged, &provider, &error));
 	CHECK_PHASE(provider == NULL);
 	CHECK_PHASE(error.code == SG_PHASE_CATALOG_ERROR_INVALID_SOURCE);
 	FixtureDestroy(&fixture);
@@ -571,8 +545,72 @@ static void TestLargePreDedupSource(void)
 	FixtureDestroy(&fixture);
 }
 
+#ifdef SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT
+static void TestTransitionAppendBoundBeforeGrowth(void)
+{
+	phase_fixture_t fixture;
+	sg_configuration_stance_overlap_t overlap;
+	sg_configuration_portal_t portals[2];
+	sg_phase_catalog_t *catalog = NULL;
+	sg_phase_catalog_error_t error;
+	uint32_t index;
+
+	CHECK_PHASE(SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT == UINT32_C(4));
+	CHECK_PHASE(FixtureInit(&fixture, 4U, 4U, 0));
+	SetRegion(&fixture.regions[2], (UINT64_C(2) << 32) | UINT64_C(2), 2U,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
+	SetRegion(&fixture.regions[3], (UINT64_C(3) << 32) | UINT64_C(3), 3U,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
+	memset(&overlap, 0, sizeof(overlap));
+	overlap.standing_cell = 0U;
+	overlap.crouching_cell = 1U;
+	Set3(overlap.bounds.mins.value, -8.0f, -8.0f, -8.0f);
+	Set3(overlap.bounds.maxs.value, 8.0f, 8.0f, 8.0f);
+	fixture.configuration.stance_overlaps = &overlap;
+	fixture.configuration.stance_overlap_count = 1U;
+	memset(portals, 0, sizeof(portals));
+	for (index = 0U; index < 2U; index++)
+	{
+		portals[index].order.source_set_identity =
+			fixture.authority.identity.source_set_identity;
+		portals[index].order.domain = SG_RUNE_ORDER_PORTAL;
+		portals[index].order.source_index = index;
+		portals[index].id.value = SG_RuneModelStableIdFromOrderKey(
+			&portals[index].order);
+		portals[index].from_cell = 0U;
+		portals[index].to_cell = 2U;
+		portals[index].stance = SG_RUNE_STANCE_STANDING;
+		portals[index].plane.normal[0] = 1.0f;
+		portals[index].clearance = 1.0f;
+	}
+	fixture.configuration.portals = portals;
+	fixture.configuration.portal_count = 2U;
+	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog != NULL && catalog->transition_count ==
+		SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT);
+	SG_PhaseCatalogDestroy(catalog);
+	catalog = NULL;
+	portals[1].to_cell = 3U;
+	CHECK_PHASE(!SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog == NULL);
+	CHECK_PHASE(error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	CHECK_PHASE(error.source_index == SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT);
+	FixtureDestroy(&fixture);
+}
+#endif
+
 int main(void)
 {
+#ifdef SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT
+	TestTransitionAppendBoundBeforeGrowth();
+	(void)TestRealConfigurationSemanticsProducer;
+	(void)TestRegionZeroAndImmutableEmpty;
+	(void)TestRejectNonCanonicalRegionIds;
+	(void)TestSupportTransitionEvidence;
+	(void)TestStanceAndPortalTransitions;
+	(void)TestCallerCannotIssueMechanismProvider;
+	(void)TestLargePreDedupSource;
+#else
 	TestRealConfigurationSemanticsProducer();
 	TestRegionZeroAndImmutableEmpty();
 	TestRejectNonCanonicalRegionIds();
@@ -580,6 +618,7 @@ int main(void)
 	TestStanceAndPortalTransitions();
 	TestCallerCannotIssueMechanismProvider();
 	TestLargePreDedupSource();
+#endif
 	if (phase_failures)
 	{
 		fprintf(stderr, "%d phase catalog checks failed\n", phase_failures);

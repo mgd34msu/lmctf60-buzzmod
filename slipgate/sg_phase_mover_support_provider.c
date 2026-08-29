@@ -11,6 +11,8 @@ typedef struct sg_phase_provider_support_sort_s
 	sg_phase_mover_support_t support;
 } sg_phase_provider_support_sort_t;
 
+static sg_phase_mover_support_provider_t *issued_providers;
+
 static int AllocationFits(size_t count, size_t element_size)
 {
 	return element_size != 0U && count <= SIZE_MAX / element_size;
@@ -68,40 +70,71 @@ static uint64_t DigestBytes(uint64_t digest, const void *data, size_t size)
 	return digest;
 }
 
+static uint64_t DigestU32(uint64_t digest, uint32_t value)
+{
+	unsigned char bytes[4];
+	uint32_t index;
+
+	for (index = 0U; index < 4U; index++)
+		bytes[index] = (unsigned char)(value >> (index * 8U));
+	return DigestBytes(digest, bytes, sizeof(bytes));
+}
+
+static uint64_t DigestU64(uint64_t digest, uint64_t value)
+{
+	unsigned char bytes[8];
+	uint32_t index;
+
+	for (index = 0U; index < 8U; index++)
+		bytes[index] = (unsigned char)(value >> (index * 8U));
+	return DigestBytes(digest, bytes, sizeof(bytes));
+}
+
 static uint64_t ProviderDigest(const sg_phase_mover_support_provider_t *provider)
 {
 	uint64_t digest = UINT64_C(1469598103934665603);
 
-	digest = DigestBytes(digest, &provider->identity,
-		sizeof(provider->identity));
-	digest = DigestBytes(digest, &provider->completion,
-		sizeof(provider->completion));
-	digest = DigestBytes(digest, &provider->accepted_capability_digest,
-		sizeof(provider->accepted_capability_digest));
-	digest = DigestBytes(digest, &provider->support_count,
-		sizeof(provider->support_count));
-	digest = DigestBytes(digest, &provider->fact_count,
-		sizeof(provider->fact_count));
+	uint32_t index;
+
+	digest = DigestU64(digest, UINT64_C(0x534750524f563031));
+	digest = DigestU64(digest,
+		SG_MechanismModelIdentityValue(&provider->identity));
+	digest = DigestU32(digest, (uint32_t)provider->completion);
+	digest = DigestU64(digest, provider->accepted_capability_identity);
+	digest = DigestU32(digest, provider->support_count);
+	digest = DigestU32(digest, provider->fact_count);
 	if (!AllocationFits((size_t)provider->support_count,
 			sizeof(*provider->supports)) ||
 		!AllocationFits((size_t)provider->fact_count,
 			sizeof(*provider->facts)))
 		return 0U;
-	if (provider->support_count != 0U)
-		digest = DigestBytes(digest, provider->supports,
-		(size_t)provider->support_count * sizeof(*provider->supports));
-	if (provider->fact_count != 0U)
-		digest = DigestBytes(digest, provider->facts,
-		(size_t)provider->fact_count * sizeof(*provider->facts));
+	for (index = 0U; index < provider->support_count; index++)
+	{
+		const sg_phase_mover_support_t *support = &provider->supports[index];
+		digest = DigestU64(digest, support->semantic_region_id);
+		digest = DigestU64(digest,
+			support->mechanism.value.source_set_identity);
+		digest = DigestU64(digest, support->mechanism.value.high);
+		digest = DigestU64(digest, support->mechanism.value.low);
+		digest = DigestU32(digest, support->mechanism_state_mask);
+	}
+	for (index = 0U; index < provider->fact_count; index++)
+		digest = DigestU64(digest,
+			SG_MechanismCapabilityFactIdentity(&provider->facts[index]));
 	return digest == 0U ? UINT64_C(1) : digest;
 }
 
 int SG_PhaseMoverSupportProviderHeaderValid(
 	const sg_phase_mover_support_provider_t *provider)
 {
-	return provider && provider->magic == SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC &&
-		provider->magic_inverse == ~SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC &&
-		provider->self == provider &&
+	const sg_phase_mover_support_provider_t *issued;
+
+	for (issued = issued_providers; issued; issued = issued->issued_next)
+		if (issued == provider && issued->issued_active)
+			break;
+	if (!issued)
+		return 0;
+	return
 		provider->completion >= SG_PHASE_CATALOG_COMPLETE &&
 		provider->completion < SG_PHASE_CATALOG_COMPLETION_COUNT &&
 		provider->verifier_identity != 0U &&
@@ -174,14 +207,13 @@ static int ProviderIdentityUsable(const sg_rune_model_identity_t *identity)
 }
 
 static int ProviderInputsValid(const sg_configuration_semantics_t *semantics,
-	const sg_mechanism_capability_set_t *capabilities)
+	const sg_mechanism_capability_view_t *capabilities)
 {
 	uint32_t index;
 
 	if (!semantics || !capabilities || !ProviderIdentityUsable(&semantics->identity) ||
 		!SG_PhaseCatalogIdentityEqual(&semantics->identity,
 			&capabilities->identity) ||
-		!SG_MechanismCapabilitySetAccepted(capabilities) ||
 		(semantics->region_count != 0U && !semantics->regions) ||
 		(capabilities->fact_count != 0U && !capabilities->facts))
 		return 0;
@@ -214,6 +246,7 @@ int SG_PhaseMoverSupportProviderBuild(
 	sg_phase_catalog_error_t *error_out)
 {
 	sg_phase_mover_support_provider_t *provider = NULL;
+	const sg_mechanism_capability_view_t *capabilities = NULL;
 	sg_phase_provider_support_sort_t *sorted = NULL;
 	uint32_t sorted_count = 0U;
 	uint32_t index;
@@ -221,7 +254,8 @@ int SG_PhaseMoverSupportProviderBuild(
 	if (error_out)
 		memset(error_out, 0, sizeof(*error_out));
 	if (!provider_out || *provider_out ||
-		!ProviderInputsValid(semantics, accepted_capabilities))
+		!SG_MechanismCapabilityOwnerAccepted(accepted_capabilities,
+			&capabilities) || !ProviderInputsValid(semantics, capabilities))
 	{
 		SG_PhaseCatalogSetError(error_out,
 			!provider_out ? SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT :
@@ -229,29 +263,29 @@ int SG_PhaseMoverSupportProviderBuild(
 		return 0;
 	}
 	*provider_out = NULL;
-	if (accepted_capabilities->fact_count != 0U)
+	if (capabilities->fact_count != 0U)
 	{
-		if (!AllocationFits((size_t)accepted_capabilities->fact_count,
+		if (!AllocationFits((size_t)capabilities->fact_count,
 			2U * sizeof(*sorted)))
 		{
 			SG_PhaseCatalogSetError(error_out,
 				SG_PHASE_CATALOG_ERROR_OVERFLOW,
-				accepted_capabilities->fact_count);
+				capabilities->fact_count);
 			return 0;
 		}
-		sorted = calloc((size_t)accepted_capabilities->fact_count * 2U,
+		sorted = calloc((size_t)capabilities->fact_count * 2U,
 			sizeof(*sorted));
 		if (!sorted)
 		{
 			SG_PhaseCatalogSetError(error_out,
 				SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY,
-				accepted_capabilities->fact_count);
+				capabilities->fact_count);
 			return 0;
 		}
-		for (index = 0U; index < accepted_capabilities->fact_count; index++)
+		for (index = 0U; index < capabilities->fact_count; index++)
 		{
 			const sg_mechanism_capability_fact_t *fact =
-				&accepted_capabilities->facts[index];
+				&capabilities->facts[index];
 			sg_phase_mechanism_state_mask_t source_mask =
 				(sg_phase_mechanism_state_mask_t)StateBit(fact->source_state);
 			sg_phase_mechanism_state_mask_t destination_mask =
@@ -290,11 +324,10 @@ int SG_PhaseMoverSupportProviderBuild(
 		return 0;
 	}
 	provider->identity = semantics->identity;
-	provider->completion = accepted_capabilities->fact_count == 0U ?
+	provider->completion = capabilities->fact_count == 0U ?
 		SG_PHASE_CATALOG_PROVEN_EMPTY : SG_PHASE_CATALOG_COMPLETE;
-	provider->accepted_capability_digest =
-		SG_MechanismCapabilitySetDigest(accepted_capabilities);
-	if (provider->accepted_capability_digest == 0U)
+	provider->accepted_capability_identity = capabilities->content_identity;
+	if (provider->accepted_capability_identity == 0U)
 	{
 		SG_PhaseCatalogSetError(error_out,
 			SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
@@ -355,20 +388,20 @@ int SG_PhaseMoverSupportProviderBuild(
 			}
 		}
 	}
-	if (accepted_capabilities->fact_count != 0U)
+	if (capabilities->fact_count != 0U)
 	{
-		if (!AllocationFits((size_t)accepted_capabilities->fact_count,
+		if (!AllocationFits((size_t)capabilities->fact_count,
 			sizeof(*provider->facts)))
 		{
 			SG_PhaseCatalogSetError(error_out,
 				SG_PHASE_CATALOG_ERROR_OVERFLOW,
-				accepted_capabilities->fact_count);
+				capabilities->fact_count);
 			free(sorted);
 			free(provider->supports);
 			free(provider);
 			return 0;
 		}
-		provider->facts = malloc((size_t)accepted_capabilities->fact_count *
+		provider->facts = malloc((size_t)capabilities->fact_count *
 			sizeof(*provider->facts));
 		if (!provider->facts)
 		{
@@ -379,16 +412,16 @@ int SG_PhaseMoverSupportProviderBuild(
 			free(provider);
 			return 0;
 		}
-		memcpy(provider->facts, accepted_capabilities->facts,
-			(size_t)accepted_capabilities->fact_count *
+		memcpy(provider->facts, capabilities->facts,
+			(size_t)capabilities->fact_count *
 				sizeof(*provider->facts));
-		provider->fact_count = accepted_capabilities->fact_count;
+		provider->fact_count = capabilities->fact_count;
 	}
-	provider->magic = SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC;
-	provider->magic_inverse = ~SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC;
-	provider->self = provider;
 	provider->verifier_identity = ProviderDigest(provider);
 	ProviderRefreshView(provider);
+	provider->issued_next = issued_providers;
+	provider->issued_active = 1;
+	issued_providers = provider;
 	free(sorted);
 	if (!SG_PhaseMoverSupportProviderHeaderValid(provider))
 	{
@@ -416,10 +449,18 @@ int SG_PhaseMoverSupportProviderRead(
 void SG_PhaseMoverSupportProviderDestroy(
 	sg_phase_mover_support_provider_t *provider)
 {
-	if (!provider)
-		return;
-	free(provider->supports);
-	free(provider->facts);
-	memset(provider, 0, sizeof(*provider));
-	free(provider);
+	sg_phase_mover_support_provider_t *issued;
+
+	for (issued = issued_providers; issued; issued = issued->issued_next)
+		if (issued == provider && issued->issued_active)
+		{
+			free(issued->supports);
+			free(issued->facts);
+			issued->supports = NULL;
+			issued->facts = NULL;
+			issued->issued_active = 0;
+			issued->verifier_identity = 0U;
+			memset(&issued->view, 0, sizeof(issued->view));
+			break;
+		}
 }

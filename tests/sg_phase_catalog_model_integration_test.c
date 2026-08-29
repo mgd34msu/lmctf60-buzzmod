@@ -6,6 +6,7 @@ int SG_RuneModelContractFixtureMain(void);
 #undef main
 
 #include "../slipgate/sg_phase_catalog_owner.h"
+#include "../slipgate/sg_mechanism_capability_internal.h"
 
 typedef struct catalog_model_source_fixture_s
 {
@@ -15,44 +16,9 @@ typedef struct catalog_model_source_fixture_s
 	sg_configuration_portal_t portal;
 	sg_configuration_semantics_t semantics;
 	sg_configuration_semantic_region_t regions[2];
-	sg_mechanism_capability_set_t capabilities;
+	sg_mechanism_capability_set_t *capabilities;
 	sg_phase_catalog_publication_t *publication;
 } catalog_model_source_fixture_t;
-
-/* This fixture has no mechanism rows, so it issues a private test-only empty
- * capability result.  The production issuer remains static inside the real
- * mechanism builder and is not reachable through a public stamp function. */
-static uint64_t TestDigestBytes(uint64_t digest, const void *data, size_t size)
-{
-	const unsigned char *bytes = data;
-	size_t index;
-
-	for (index = 0U; index < size; index++)
-		digest = (digest ^ (uint64_t)bytes[index]) * UINT64_C(1099511628211);
-	return digest;
-}
-
-static void TestSealAccepted(sg_mechanism_capability_set_t *capabilities)
-{
-	uint64_t digest;
-	const uint64_t key = UINT64_C(0x8f2c6a4d9137be25);
-
-	digest = SG_MechanismCapabilitySetDigest(capabilities);
-	capabilities->seal_magic = SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->seal_magic_inverse = ~SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->self = capabilities;
-	digest = TestDigestBytes(digest, &capabilities->self,
-		sizeof(capabilities->self));
-	capabilities->seal_digest = TestDigestBytes(digest, &key, sizeof(key));
-}
-
-static void TestIssueAcceptedEmpty(sg_mechanism_capability_set_t *capabilities,
-	const sg_rune_model_identity_t *identity)
-{
-	memset(capabilities, 0, sizeof(*capabilities));
-	capabilities->identity = *identity;
-	TestSealAccepted(capabilities);
-}
 
 static void SetCatalogCell(sg_configuration_cell_t *cell,
 	const sg_rune_model_identity_t *identity, uint32_t index)
@@ -110,7 +76,8 @@ static void InitCatalogModelSource(catalog_model_source_fixture_t *fixture,
 	fixture->portal.clearance = 1.0f;
 	fixture->configuration.portals = &fixture->portal;
 	fixture->configuration.portal_count = 1U;
-	TestIssueAcceptedEmpty(&fixture->capabilities, identity);
+	CHECK(SG_MechanismCapabilityTestIssue(identity, NULL, 0U,
+		&fixture->capabilities));
 }
 
 static void TestPublishedPortalTransitionsValidate(void)
@@ -126,7 +93,7 @@ static void TestPublishedPortalTransitionsValidate(void)
 	InitCatalogModelSource(&source_fixture, &model_fixture.model.identity);
 	CHECK(SG_PhaseCatalogPublicationBuild(&source_fixture.authority,
 		&source_fixture.configuration, &source_fixture.semantics,
-		&source_fixture.capabilities, &source_fixture.publication, &error,
+		source_fixture.capabilities, &source_fixture.publication, &error,
 		&audit));
 	CHECK(source_fixture.publication != NULL);
 	if (!source_fixture.publication)
@@ -169,6 +136,7 @@ static void TestPublishedPortalTransitionsValidate(void)
 	CHECK(SG_RuneModelValidate(&model_fixture.model,
 		&model_fixture.evidence) == SG_RUNE_FAILURE_NONE);
 	SG_PhaseCatalogPublicationDestroy(source_fixture.publication);
+	SG_MechanismCapabilityDestroy(source_fixture.capabilities);
 }
 
 typedef struct mechanism_heavy_source_fixture_s
@@ -178,9 +146,8 @@ typedef struct mechanism_heavy_source_fixture_s
 	sg_configuration_cell_t cells[2];
 	sg_configuration_semantics_t semantics;
 	sg_configuration_semantic_region_t regions[3];
-	sg_mechanism_capability_set_t capabilities;
+	sg_mechanism_capability_set_t *capabilities;
 	sg_mechanism_capability_fact_t *facts;
-	uint32_t *facts_by_trace;
 } mechanism_heavy_source_fixture_t;
 
 static void InitHeavySource(mechanism_heavy_source_fixture_t *fixture,
@@ -203,14 +170,8 @@ static void InitHeavySource(mechanism_heavy_source_fixture_t *fixture,
 	SetCatalogRegion(&fixture->regions[2], 2U, 1U);
 	fixture->facts = calloc(fact_count == 0U ? 1U : (size_t)fact_count,
 		sizeof(*fixture->facts));
-	fixture->facts_by_trace = calloc(fact_count == 0U ? 1U :
-		(size_t)fact_count, sizeof(*fixture->facts_by_trace));
-	if (!fixture->facts || !fixture->facts_by_trace)
+	if (!fixture->facts)
 		return;
-	fixture->capabilities.identity = *identity;
-	fixture->capabilities.facts = fixture->facts;
-	fixture->capabilities.fact_count = fact_count;
-	fixture->capabilities.facts_by_trace = fixture->facts_by_trace;
 	for (index = 0U; index < fact_count; index++)
 	{
 		sg_mechanism_capability_fact_t *fact = &fixture->facts[index];
@@ -228,15 +189,15 @@ static void InitHeavySource(mechanism_heavy_source_fixture_t *fixture,
 		fact->source_state = SG_MECHANISM_STATE_INACTIVE;
 		fact->destination_state = SG_MECHANISM_STATE_ACTIVATING;
 		fact->delay_ms = index + 1U;
-		fixture->facts_by_trace[index] = index;
 	}
-	TestSealAccepted(&fixture->capabilities);
+	CHECK(SG_MechanismCapabilityTestIssue(identity, fixture->facts, fact_count,
+		&fixture->capabilities));
 }
 
 static void DestroyHeavySource(mechanism_heavy_source_fixture_t *fixture)
 {
 	free(fixture->facts);
-	free(fixture->facts_by_trace);
+	SG_MechanismCapabilityDestroy(fixture->capabilities);
 	memset(fixture, 0, sizeof(*fixture));
 }
 
@@ -316,15 +277,15 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	model_fixture.model.identity.physics.frame_ms = 100U;
 	model_fixture.model.identity.physics.substep_ms = 10U;
 	InitHeavySource(&source_fixture, &model_fixture.model.identity, at_limit);
-	CHECK(source_fixture.facts != NULL && source_fixture.facts_by_trace != NULL);
-	if (!source_fixture.facts || !source_fixture.facts_by_trace)
+	CHECK(source_fixture.facts != NULL && source_fixture.capabilities != NULL);
+	if (!source_fixture.facts || !source_fixture.capabilities)
 	{
 		DestroyHeavySource(&source_fixture);
 		return;
 	}
 	CHECK(SG_PhaseCatalogPublicationBuild(&source_fixture.authority,
 		&source_fixture.configuration, &source_fixture.semantics,
-		&source_fixture.capabilities, &publication, &error, &audit));
+		source_fixture.capabilities, &publication, &error, &audit));
 	CHECK(publication != NULL);
 	if (publication)
 	{
@@ -344,12 +305,12 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	DestroyHeavySource(&source_fixture);
 
 	InitHeavySource(&source_fixture, &model_fixture.model.identity, over_limit);
-	CHECK(source_fixture.facts != NULL && source_fixture.facts_by_trace != NULL);
-	if (source_fixture.facts && source_fixture.facts_by_trace)
+	CHECK(source_fixture.facts != NULL && source_fixture.capabilities != NULL);
+	if (source_fixture.facts && source_fixture.capabilities)
 	{
 		CHECK(!SG_PhaseCatalogPublicationBuild(&source_fixture.authority,
 			&source_fixture.configuration, &source_fixture.semantics,
-			&source_fixture.capabilities, &publication, &error, &audit));
+			source_fixture.capabilities, &publication, &error, &audit));
 		CHECK(publication == NULL);
 		CHECK(error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
 	}

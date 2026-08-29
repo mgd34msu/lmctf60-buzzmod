@@ -82,31 +82,89 @@ static int AllocationFits(size_t count, size_t element_size)
 	return element_size != 0U && count <= SIZE_MAX / element_size;
 }
 
-#define SG_MECHANISM_CAPABILITY_SEAL_KEY UINT64_C(0x8f2c6a4d9137be25)
+static sg_mechanism_capability_set_t *issued_capabilities;
 
-static uint64_t ProducerDigestBytes(uint64_t digest, const void *data,
-	size_t size)
+static int CapabilityHandleActive(
+	const sg_mechanism_capability_set_t *capabilities)
 {
-	const unsigned char *bytes = data;
-	size_t index;
+	const sg_mechanism_capability_set_t *issued;
 
-	for (index = 0U; index < size; index++)
-		digest = (digest ^ (uint64_t)bytes[index]) * UINT64_C(1099511628211);
-	return digest;
+	for (issued = issued_capabilities; issued; issued = issued->issued_next)
+		if (issued == capabilities)
+			return issued->issued_active;
+	return 0;
+}
+
+static void ReleaseCapabilityStorage(
+	sg_mechanism_capability_set_t *capabilities)
+{
+	free(capabilities->facts);
+	free(capabilities->topology_edges);
+	free(capabilities->topology_relations);
+	free(capabilities->mechanism_offsets);
+	free(capabilities->facts_by_trace);
+	capabilities->facts = NULL;
+	capabilities->topology_edges = NULL;
+	capabilities->topology_relations = NULL;
+	capabilities->mechanism_offsets = NULL;
+	capabilities->facts_by_trace = NULL;
+}
+
+static void RefreshCapabilityView(sg_mechanism_capability_set_t *capabilities)
+{
+	capabilities->view.identity = capabilities->identity;
+	capabilities->view.candidate_verifier_identity =
+		capabilities->candidate_verifier_identity;
+	capabilities->view.trace_verifier_identity =
+		capabilities->trace_verifier_identity;
+	capabilities->view.content_identity = capabilities->content_identity;
+	capabilities->view.facts = capabilities->facts;
+	capabilities->view.fact_count = capabilities->fact_count;
+	capabilities->view.topology_edges = capabilities->topology_edges;
+	capabilities->view.topology_edge_count = capabilities->topology_edge_count;
+	capabilities->view.topology_relations = capabilities->topology_relations;
+	capabilities->view.topology_relation_count =
+		capabilities->topology_relation_count;
+	capabilities->view.mechanism_offsets = capabilities->mechanism_offsets;
+	capabilities->view.mechanism_offset_count =
+		capabilities->mechanism_offset_count;
+	capabilities->view.facts_by_trace = capabilities->facts_by_trace;
+	capabilities->view.topology_edge_visits =
+		capabilities->topology_edge_visits;
 }
 
 static void IssueAcceptedResult(sg_mechanism_capability_set_t *capabilities)
 {
-	uint64_t digest = SG_MechanismCapabilitySetDigest(capabilities);
-	const uint64_t key = SG_MECHANISM_CAPABILITY_SEAL_KEY;
+	capabilities->content_identity =
+		SG_MechanismCapabilityContentIdentity(capabilities);
+	RefreshCapabilityView(capabilities);
+	capabilities->issued_next = issued_capabilities;
+	capabilities->issued_active = 1;
+	issued_capabilities = capabilities;
+}
 
-	capabilities->seal_magic = SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->seal_magic_inverse = ~SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->self = capabilities;
-	digest = ProducerDigestBytes(digest, &capabilities->self,
-		sizeof(capabilities->self));
-	capabilities->seal_digest = ProducerDigestBytes(digest, &key,
-		sizeof(key));
+int SG_MechanismCapabilityOwnerAccepted(
+	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_view_t **view_out)
+{
+	if (view_out)
+		*view_out = NULL;
+	if (!CapabilityHandleActive(capabilities) ||
+		capabilities->content_identity == 0U ||
+		capabilities->content_identity !=
+			SG_MechanismCapabilityContentIdentity(capabilities))
+		return 0;
+	if (view_out)
+		*view_out = &capabilities->view;
+	return 1;
+}
+
+int SG_MechanismCapabilityRead(
+	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_view_t **view_out)
+{
+	return view_out &&
+		SG_MechanismCapabilityOwnerAccepted(capabilities, view_out);
 }
 
 static int Finite3(const sg_rune_vec3_t *value)
@@ -1909,15 +1967,17 @@ int SG_MechanismCapabilityBuild(
 	BuildScratchDestroy(&build);
 	if (!success)
 	{
-		SG_MechanismCapabilityDestroy(build.output);
+		ReleaseCapabilityStorage(build.output);
+		free(build.output);
 		if (error_out)
 			*error_out = build.error;
 		return 0;
 	}
 	IssueAcceptedResult(build.output);
-	if (!SG_MechanismCapabilitySetAccepted(build.output))
+	if (!SG_MechanismCapabilityOwnerAccepted(build.output, NULL))
 	{
-		SG_MechanismCapabilityDestroy(build.output);
+		ReleaseCapabilityStorage(build.output);
+		free(build.output);
 		if (error_out)
 		{
 			error_out->code = SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW;
@@ -2235,7 +2295,7 @@ int SG_MechanismCapabilityAudit(
 	if (!result_out)
 		return 0;
 	*result_out = result;
-	if (!source || !capabilities || !source->authority ||
+	if (!source || !CapabilityHandleActive(capabilities) || !source->authority ||
 		!source->entity_semantics || !source->host_traces ||
 		!IdentityEqual(&source->authority->identity, &capabilities->identity) ||
 		capabilities->candidate_verifier_identity !=
@@ -2468,15 +2528,59 @@ int SG_MechanismCapabilityAudit(
 void SG_MechanismCapabilityDestroy(
 	sg_mechanism_capability_set_t *capabilities)
 {
+	sg_mechanism_capability_set_t *issued;
+
 	if (!capabilities)
 		return;
-	free(capabilities->facts);
-	free(capabilities->topology_edges);
-	free(capabilities->topology_relations);
-	free(capabilities->mechanism_offsets);
-	free(capabilities->facts_by_trace);
-	free(capabilities);
+	for (issued = issued_capabilities; issued; issued = issued->issued_next)
+		if (issued == capabilities && issued->issued_active)
+		{
+			ReleaseCapabilityStorage(issued);
+			issued->issued_active = 0;
+			memset(&issued->view, 0, sizeof(issued->view));
+			issued->content_identity = 0U;
+			break;
+		}
 }
+
+#ifdef SG_MECHANISM_CAPABILITY_TESTING
+int SG_MechanismCapabilityTestIssue(
+	const sg_rune_model_identity_t *identity,
+	const sg_mechanism_capability_fact_t *facts, uint32_t fact_count,
+	sg_mechanism_capability_set_t **capabilities_out)
+{
+	sg_mechanism_capability_set_t *capabilities;
+	uint32_t index;
+
+	if (!identity || !capabilities_out || *capabilities_out ||
+		(fact_count != 0U && !facts) ||
+		!AllocationFits((size_t)fact_count, sizeof(*facts)))
+		return 0;
+	capabilities = calloc(1U, sizeof(*capabilities));
+	if (!capabilities)
+		return 0;
+	capabilities->identity = *identity;
+	if (fact_count != 0U)
+	{
+		capabilities->facts = malloc((size_t)fact_count * sizeof(*facts));
+		capabilities->facts_by_trace = malloc((size_t)fact_count *
+			sizeof(*capabilities->facts_by_trace));
+		if (!capabilities->facts || !capabilities->facts_by_trace)
+		{
+			ReleaseCapabilityStorage(capabilities);
+			free(capabilities);
+			return 0;
+		}
+		memcpy(capabilities->facts, facts, (size_t)fact_count * sizeof(*facts));
+		for (index = 0U; index < fact_count; index++)
+			capabilities->facts_by_trace[index] = index;
+		capabilities->fact_count = fact_count;
+	}
+	IssueAcceptedResult(capabilities);
+	*capabilities_out = capabilities;
+	return 1;
+}
+#endif
 
 const char *SG_MechanismCapabilityErrorString(
 	sg_mechanism_capability_error_code_t code)

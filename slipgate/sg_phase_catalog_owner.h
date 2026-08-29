@@ -1,10 +1,13 @@
-/* Production barrier for issuing an immutable phase catalog publication. */
+/* Construction barrier consumed by the downstream complete-model seal. */
 #ifndef SG_PHASE_CATALOG_OWNER_H
 #define SG_PHASE_CATALOG_OWNER_H
 
 #include "sg_phase_catalog.h"
 
-/* The owner consumes the already accepted mechanism result at the same
+/* This unit does not install runtime state.  The dependency graph assigns
+ * live ownership to complete_model_seal, which consumes this publication
+ * after the phase_catalog_publication gate succeeds.  The owner consumes the
+ * already accepted mechanism result at the same
  * construction barrier as configuration semantics.  It never accepts caller
  * supplied phase, support, mechanism, or verifier rows.  On success the
  * returned publication owns every byte required by its view and no longer

@@ -1317,12 +1317,6 @@ OBJS := \
 	slipgate/sg_strategy.o \
 	slipgate/sg_strategy_caller.o \
 	slipgate/sg_strategy_runtime_bridge.o \
-	slipgate/sg_mechanism_capability_seal.o \
-	slipgate/sg_phase_mover_support_provider.o \
-	slipgate/sg_phase_catalog.o \
-	slipgate/sg_phase_catalog_audit.o \
-	slipgate/sg_phase_catalog_publication.o \
-	slipgate/sg_phase_catalog_owner.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
 	sg_net.o \

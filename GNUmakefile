@@ -1211,12 +1211,6 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_bsp_entity_semantics_publication.o \
 		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
 		 slipgate/sg_strategy_caller.o slipgate/sg_strategy_runtime_bridge.o \
-		 slipgate/sg_mechanism_capability_seal.o \
-		 slipgate/sg_phase_mover_support_provider.o \
-		 slipgate/sg_phase_catalog.o \
-		 slipgate/sg_phase_catalog_audit.o \
-		 slipgate/sg_phase_catalog_publication.o \
-		 slipgate/sg_phase_catalog_owner.o \
 		 slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################

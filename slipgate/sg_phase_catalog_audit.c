@@ -34,6 +34,8 @@ typedef struct sg_audit_oracle_s
 	uint32_t binding_count;
 	sg_phase_catalog_transition_pair_t *transitions;
 	uint32_t transition_count;
+	uint32_t *transition_hash;
+	uint32_t transition_hash_capacity;
 	sg_phase_catalog_completion_t completion;
 	sg_phase_catalog_completion_t transition_completion;
 	uint64_t mover_support_verifier_identity;
@@ -840,7 +842,65 @@ static int OracleTransitionPairCompare(const void *left_value,
 	const void *right_value)
 {
 	return OracleByteCompare(left_value, right_value,
-		sizeof(sg_phase_catalog_transition_pair_t));
+		sizeof(sg_rune_phase_transition_t));
+}
+
+static uint64_t OracleHashU32(uint64_t hash, uint32_t value)
+{
+	uint32_t shift;
+	for (shift = 0U; shift != 32U; shift += 8U)
+		hash = (hash ^ (uint8_t)(value >> shift)) * UINT64_C(1099511628211);
+	return hash;
+}
+
+static uint64_t OracleHashU64(uint64_t hash, uint64_t value)
+{
+	uint32_t shift;
+	for (shift = 0U; shift != 64U; shift += 8U)
+		hash = (hash ^ (uint8_t)(value >> shift)) * UINT64_C(1099511628211);
+	return hash;
+}
+
+static uint64_t OracleHashStable(uint64_t hash,
+	const sg_rune_stable_id_t *value)
+{
+	hash = OracleHashU64(hash, value->source_set_identity);
+	hash = OracleHashU64(hash, value->high);
+	return OracleHashU64(hash, value->low);
+}
+
+static uint64_t OracleTransitionHash(const sg_rune_phase_transition_t *value)
+{
+	uint64_t hash = UINT64_C(1469598103934665603);
+	uint32_t bits;
+	float duration;
+
+	hash = OracleHashStable(hash, &value->cell.value);
+	hash = OracleHashStable(hash, &value->source_phase.value);
+	hash = OracleHashStable(hash, &value->destination_phase.value);
+	hash = OracleHashU32(hash, (uint32_t)value->kind);
+	duration = value->duration_ms.min_value;
+	if (duration == 0.0f) duration = 0.0f;
+	memcpy(&bits, &duration, sizeof(bits)); hash = OracleHashU32(hash, bits);
+	duration = value->duration_ms.max_value;
+	if (duration == 0.0f) duration = 0.0f;
+	memcpy(&bits, &duration, sizeof(bits)); hash = OracleHashU32(hash, bits);
+	hash = OracleHashU32(hash, value->flags);
+	return OracleHashStable(hash, &value->destination_cell.value);
+}
+
+static int OracleTransitionEqual(const sg_rune_phase_transition_t *left,
+	const sg_rune_phase_transition_t *right)
+{
+	return SG_RuneModelStableIdEqual(&left->cell.value, &right->cell.value) &&
+		SG_RuneModelStableIdEqual(&left->source_phase.value,
+			&right->source_phase.value) &&
+		SG_RuneModelStableIdEqual(&left->destination_phase.value,
+			&right->destination_phase.value) && left->kind == right->kind &&
+		left->duration_ms.min_value == right->duration_ms.min_value &&
+		left->duration_ms.max_value == right->duration_ms.max_value &&
+		left->flags == right->flags && SG_RuneModelStableIdEqual(
+			&left->destination_cell.value, &right->destination_cell.value);
 }
 
 static int OracleAppendTransition(sg_audit_oracle_t *oracle,
@@ -849,13 +909,70 @@ static int OracleAppendTransition(sg_audit_oracle_t *oracle,
 	sg_phase_catalog_error_t *error_out)
 {
 	sg_phase_catalog_transition_pair_t *grown;
+	uint32_t *grown_hash;
 	size_t capacity;
+	uint32_t slot;
+	uint32_t index;
+	uint32_t hash_capacity;
+	uint64_t hash = OracleTransitionHash(transition);
 
-	if (oracle->transition_count == UINT32_MAX)
+	if (oracle->transition_hash_capacity == 0U)
+	{
+		oracle->transition_hash_capacity = 32U;
+		oracle->transition_hash = calloc(oracle->transition_hash_capacity,
+			sizeof(*oracle->transition_hash));
+		if (!oracle->transition_hash)
+		{
+			oracle->transition_hash_capacity = 0U;
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+	}
+	slot = (uint32_t)hash & (oracle->transition_hash_capacity - 1U);
+	while (oracle->transition_hash[slot] != 0U)
+	{
+		index = oracle->transition_hash[slot] - 1U;
+		if (OracleTransitionEqual(&oracle->transitions[index].transition,
+				transition))
+			return 1;
+		slot = (slot + 1U) & (oracle->transition_hash_capacity - 1U);
+	}
+	if (oracle->transition_count >= SG_PHASE_CATALOG_TRANSITION_APPEND_LIMIT)
 	{
 		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
 			oracle->transition_count);
 		return 0;
+	}
+	if (oracle->transition_hash_capacity / 2U <= oracle->transition_count)
+	{
+		if (oracle->transition_hash_capacity > UINT32_MAX / 2U)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+				oracle->transition_count);
+			return 0;
+		}
+		hash_capacity = oracle->transition_hash_capacity * 2U;
+		grown_hash = calloc(hash_capacity, sizeof(*grown_hash));
+		if (!grown_hash)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		for (index = 0U; index < oracle->transition_count; index++)
+		{
+			uint64_t existing = OracleTransitionHash(
+				&oracle->transitions[index].transition);
+			uint32_t existing_slot = (uint32_t)existing & (hash_capacity - 1U);
+			while (grown_hash[existing_slot] != 0U)
+				existing_slot = (existing_slot + 1U) & (hash_capacity - 1U);
+			grown_hash[existing_slot] = index + 1U;
+		}
+		free(oracle->transition_hash);
+		oracle->transition_hash = grown_hash;
+		oracle->transition_hash_capacity = hash_capacity;
+		slot = (uint32_t)hash & (hash_capacity - 1U);
+		while (oracle->transition_hash[slot] != 0U)
+			slot = (slot + 1U) & (hash_capacity - 1U);
 	}
 	if ((size_t)oracle->transition_count == *capacity_out)
 	{
@@ -888,6 +1005,7 @@ static int OracleAppendTransition(sg_audit_oracle_t *oracle,
 		sizeof(oracle->transitions[oracle->transition_count]));
 	oracle->transitions[oracle->transition_count].transition = *transition;
 	oracle->transitions[oracle->transition_count].evidence = *evidence;
+	oracle->transition_hash[slot] = oracle->transition_count + 1U;
 	oracle->transition_count++;
 	return 1;
 }
@@ -1254,6 +1372,7 @@ static void OracleDestroy(sg_audit_oracle_t *oracle)
 	free(oracle->phases);
 	free(oracle->bindings);
 	free(oracle->transitions);
+	free(oracle->transition_hash);
 	memset(oracle, 0, sizeof(*oracle));
 }
 

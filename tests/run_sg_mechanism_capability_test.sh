@@ -6,6 +6,7 @@ tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
+strict="$strict -DSG_MECHANISM_CAPABILITY_TESTING"
 sources='tests/sg_mechanism_capability_test.c
 slipgate/sg_mechanism_capability.c
 slipgate/sg_mechanism_capability_seal.c

@@ -2,8 +2,16 @@
 #define SG_PHASE_CATALOG_INTERNAL_H
 
 #include "sg_phase_catalog.h"
+#include "sg_mechanism_capability_internal.h"
 
-#define SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC UINT64_C(0x50524f5649443031)
+#if defined(SG_PHASE_CATALOG_TESTING) && \
+	defined(SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT)
+#define SG_PHASE_CATALOG_TRANSITION_APPEND_LIMIT \
+	SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT
+#else
+#define SG_PHASE_CATALOG_TRANSITION_APPEND_LIMIT \
+	SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS
+#endif
 
 typedef struct sg_phase_catalog_transition_pair_s
 {
@@ -13,20 +21,19 @@ typedef struct sg_phase_catalog_transition_pair_s
 
 struct sg_phase_mover_support_provider_s
 {
-	uint64_t magic;
-	uint64_t magic_inverse;
-	const struct sg_phase_mover_support_provider_s *self;
 	sg_rune_model_identity_t identity;
 	sg_phase_catalog_completion_t completion;
 	/* Canonical provenance of the accepted capability snapshot.  This is a
 	 * value digest, never an address, so equivalent builds remain identical. */
-	uint64_t accepted_capability_digest;
+	uint64_t accepted_capability_identity;
 	uint64_t verifier_identity;
 	sg_phase_mover_support_t *supports;
 	uint32_t support_count;
 	sg_mechanism_capability_fact_t *facts;
 	uint32_t fact_count;
 	sg_phase_mover_support_provider_view_t view;
+	struct sg_phase_mover_support_provider_s *issued_next;
+	int issued_active;
 };
 
 typedef struct sg_phase_catalog_expected_s
@@ -41,6 +48,8 @@ typedef struct sg_phase_catalog_expected_s
 	sg_phase_catalog_transition_pair_t *transition_pairs;
 	uint32_t transition_pair_count;
 	uint32_t transition_pair_capacity;
+	uint32_t *transition_pair_hash;
+	uint32_t transition_pair_hash_capacity;
 	sg_phase_catalog_completion_t completion;
 	sg_phase_catalog_completion_t transition_completion;
 	uint64_t mover_support_verifier_identity;

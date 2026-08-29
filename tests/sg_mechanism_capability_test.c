@@ -1,11 +1,12 @@
 #include <float.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "slipgate/sg_mechanism_capability.h"
+#include "slipgate/sg_mechanism_capability_internal.h"
 
 #define ENTITY_COUNT UINT32_C(10)
 #define TRACE_COUNT UINT32_C(13)
@@ -1345,6 +1346,31 @@ static void TestScheduledParameterValidation(void)
 	FixtureDestroy(&fixture);
 }
 
+static void TestCanonicalIdentityIgnoresAbiPadding(void)
+{
+	sg_mechanism_capability_fact_t first;
+	sg_mechanism_capability_fact_t second;
+	unsigned char *bytes = (unsigned char *)&second;
+	size_t index;
+
+	memset(&first, 0, sizeof(first));
+	second = first;
+	CHECK(offsetof(sg_mechanism_capability_fact_t, trace_identity) >
+		sizeof(first.order));
+	for (index = sizeof(first.order);
+		index < offsetof(sg_mechanism_capability_fact_t, trace_identity);
+		index++)
+		bytes[index] = UINT8_C(0xa5);
+	CHECK(SG_MechanismCapabilityFactIdentity(&first) ==
+		SG_MechanismCapabilityFactIdentity(&second));
+	memset(&first, 0, sizeof(first));
+	memset(&second, 0, sizeof(second));
+	first.entry_witness.value[0] = -0.0f;
+	second.entry_witness.value[0] = 0.0f;
+	CHECK(SG_MechanismCapabilityFactIdentity(&first) ==
+		SG_MechanismCapabilityFactIdentity(&second));
+}
+
 int main(void)
 {
 	TestCompleteModel();
@@ -1357,6 +1383,7 @@ int main(void)
 	TestExactMillisecondTiming();
 	TestPhaseStanceBinding();
 	TestScheduledParameterValidation();
+	TestCanonicalIdentityIgnoresAbiPadding();
 	if (failures != 0)
 	{
 		fprintf(stderr, "mechanism capability failures: %d\n", failures);
