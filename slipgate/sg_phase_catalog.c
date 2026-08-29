@@ -897,6 +897,20 @@ static int AppendPhase(const sg_phase_catalog_source_t *source,
 			*phase_out = phase;
 		return 1;
 	}
+	if (!source || !source->configuration || !cell_ordinals ||
+		cell >= source->configuration->cell_count)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, cell);
+		return 0;
+	}
+	if (cell_ordinals[cell] >= SG_RUNE_MODEL_MAX_CELL_PHASES)
+	{
+		/* The local ordinal is the authoritative per-cell phase count.  Check
+		 * it before issuing another phase ID, so a publication can never
+		 * contain an overfull cell even transiently. */
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, cell);
+		return 0;
+	}
 	if (expected->phase_count >= SG_RUNE_MODEL_MAX_PHASES ||
 		!ExpectedReservePhases(expected, expected->phase_count + 1U, error_out))
 		return 0;

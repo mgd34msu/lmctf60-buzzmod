@@ -410,13 +410,21 @@ static int BeliefRuneRecordMatches(
 		transition = &model->phase_transitions[record_index];
 		if (transition->kind <= SG_RUNE_PHASE_TRANSITION_NONE ||
 		    transition->kind >= SG_RUNE_PHASE_TRANSITION_KIND_COUNT ||
-		    transition->flags != 0U ||
+		    (transition->flags & ~(sg_rune_phase_transition_flags_t)
+			    SG_RUNE_PHASE_TRANSITION_FLAGS_KNOWN) != 0U ||
 		    !BeliefStableIdEqual(&transition->cell.value, from_cell_id) ||
-		    !BeliefStableIdEqual(&transition->cell.value, to_cell_id) ||
+		    !BeliefStableIdEqual(&transition->destination_cell.value, to_cell_id) ||
+		    ((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U) !=
+			    (from->cell_id != to->cell_id) ||
+		    (transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL &&
+			    (from->cell_id == to->cell_id ||
+				    transition->duration_ms.min_value != 0.0f ||
+				    transition->duration_ms.max_value != 0.0f)) ||
 		    !BeliefStableIdEqual(&transition->source_phase.value, from_id) ||
 		    !BeliefStableIdEqual(&transition->destination_phase.value, to_id) ||
 		    !BeliefIntervalValid(&transition->duration_ms, 1) ||
-		    transition->duration_ms.max_value <= 0.0f)
+		    (transition->kind != SG_RUNE_PHASE_TRANSITION_PORTAL &&
+			    transition->duration_ms.max_value <= 0.0f))
 			return 0;
 		matched.duration_min_ms = transition->duration_ms.min_value;
 		matched.duration_max_ms = transition->duration_ms.max_value;
@@ -999,11 +1007,20 @@ static float BeliefHorizonMidpoint(const sg_rune_interval_t *interval)
 typedef struct belief_horizon_walk_frame_s
 {
 	sg_phase_coordinate_t phase;
-	size_t next_record;
+	size_t path_depth;
 	float duration_min_ms;
 	float duration_max_ms;
 	float displacement_min[3];
 	float displacement_max[3];
+	uint32_t *closure_phases;
+	uint32_t *closure_parent_phases;
+	uint32_t *closure_parent_edges;
+	uint32_t closure_count;
+	uint32_t closure_cursor;
+	uint32_t active_phase;
+	size_t active_path_length;
+	size_t next_record;
+	uint8_t active;
 } belief_horizon_walk_frame_t;
 
 static int BeliefHorizonRecordCount(const sg_rune_model_t *model,
@@ -1062,105 +1079,540 @@ static int BeliefHorizonRecord(
 	return 1;
 }
 
-static int BeliefHorizonDepthBound(const sg_rune_runtime_snapshot_t *snapshot,
-	uint64_t elapsed_ms, size_t *depth_out, int *overflowed_out)
+typedef struct belief_portal_edge_s
 {
-	const sg_rune_model_t *model = snapshot->model;
-	size_t *indegree;
-	size_t *longest;
-	uint32_t *queue;
-	size_t queue_read = 0U;
-	size_t queue_write = 0U;
-	size_t processed = 0U;
-	size_t zero_run = 0U;
-	size_t positive_steps = 0U;
-	float minimum = FLT_MAX;
+	uint32_t source;
+	uint32_t destination;
+	uint32_t record;
+} belief_portal_edge_t;
+
+/* Exact zero-time portal topology.  Components are contracted for cycle and
+ * depth analysis.  A per-frame visited traversal later chooses one canonical
+ * path from the entry phase to each reachable phase, so an SCC never creates
+ * arbitrary portal repetitions. */
+typedef struct belief_portal_graph_s
+{
+	uint32_t phase_count;
+	uint32_t edge_count;
+	belief_portal_edge_t *edges;
+	uint32_t *out_offsets;
+	uint32_t *out_edges;
+	uint32_t *reverse_offsets;
+	uint32_t *reverse_edges;
+	uint32_t component_count;
+	uint32_t *component;
+	uint32_t *path_scratch;
+} belief_portal_graph_t;
+
+static void BeliefPortalGraphDestroy(belief_portal_graph_t *graph)
+{
+	if (!graph)
+		return;
+	free(graph->edges);
+	free(graph->out_offsets);
+	free(graph->out_edges);
+	free(graph->reverse_offsets);
+	free(graph->reverse_edges);
+	free(graph->component);
+	free(graph->path_scratch);
+	memset(graph, 0, sizeof(*graph));
+}
+
+static int BeliefPortalGraphBuild(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	belief_portal_graph_t *graph, int *overflowed_out, int *invalid_out)
+{
+	const sg_rune_model_t *model;
+	uint32_t *out_counts = NULL;
+	uint32_t *reverse_counts = NULL;
+	uint32_t *out_cursor = NULL;
+	uint32_t *reverse_cursor = NULL;
+	uint8_t *visited = NULL;
+	uint32_t *finish_order = NULL;
+	uint32_t *stack = NULL;
+	uint32_t *stack_cursor = NULL;
+	uint32_t *component_stack = NULL;
+	uint32_t phase;
+	uint32_t edge_count = 0U;
+	uint32_t finish_count = 0U;
 	uint32_t index;
 
-	if (!depth_out || !overflowed_out)
+	if (!snapshot || !graph || !overflowed_out || !invalid_out ||
+		!snapshot->model)
 		return 0;
-	indegree = calloc((size_t)snapshot->phase_count, sizeof(*indegree));
-	longest = calloc((size_t)snapshot->phase_count, sizeof(*longest));
-	queue = calloc((size_t)snapshot->phase_count, sizeof(*queue));
-	if (!indegree || !longest || !queue)
+	model = snapshot->model;
+	if (snapshot->phase_count != 0U &&
+		(!snapshot->phases ||
+		 (model->phase_transition_count != 0U &&
+		  !model->phase_transitions)))
 	{
-		free(indegree);
-		free(longest);
-		free(queue);
-		return -1;
+		*invalid_out = 1;
+		return 0;
 	}
+	memset(graph, 0, sizeof(*graph));
+	*overflowed_out = 0;
+	*invalid_out = 0;
+	graph->phase_count = snapshot->phase_count;
+	if (snapshot->phase_count == 0U)
+		return 1;
+	for (index = 0U; index < model->phase_transition_count; index++)
+	{
+		const sg_rune_phase_transition_t *transition =
+			&model->phase_transitions[index];
+		uint32_t source;
+		uint32_t destination;
+		belief_step_bounds_t bounds;
+
+		if (transition->kind != SG_RUNE_PHASE_TRANSITION_PORTAL)
+			continue;
+		if (transition->duration_ms.min_value != 0.0f ||
+			transition->duration_ms.max_value != 0.0f)
+		{
+			*invalid_out = 1;
+			return 0;
+		}
+		source = BeliefHorizonPhaseIndex(model, &transition->source_phase);
+		destination = BeliefHorizonPhaseIndex(model,
+			&transition->destination_phase);
+		if (source >= snapshot->phase_count ||
+			destination >= snapshot->phase_count ||
+			!BeliefRuneRecordMatches(snapshot,
+				SG_BELIEF_HORIZON_PHASE_TRANSITION, index,
+				&snapshot->phases[source], &snapshot->phases[destination],
+				&bounds))
+		{
+			*invalid_out = 1;
+			return 0;
+		}
+		if (edge_count == UINT32_MAX)
+		{
+			*overflowed_out = 1;
+			goto failure;
+		}
+		edge_count++;
+	}
+	graph->edge_count = edge_count;
+	if (edge_count != 0U)
+	{
+		graph->edges = calloc((size_t)edge_count, sizeof(*graph->edges));
+		if (!graph->edges)
+			return 0;
+	}
+	if ((size_t)snapshot->phase_count + 1U >
+		SIZE_MAX / sizeof(*graph->out_offsets))
+	{
+		*overflowed_out = 1;
+		goto failure;
+	}
+	graph->out_offsets = calloc((size_t)snapshot->phase_count + 1U,
+		sizeof(*graph->out_offsets));
+	graph->reverse_offsets = calloc((size_t)snapshot->phase_count + 1U,
+		sizeof(*graph->reverse_offsets));
+	out_counts = calloc((size_t)snapshot->phase_count,
+		sizeof(*out_counts));
+	reverse_counts = calloc((size_t)snapshot->phase_count,
+		sizeof(*reverse_counts));
+	if (!graph->out_offsets || !graph->reverse_offsets || !out_counts ||
+		!reverse_counts)
+		goto failure;
+	edge_count = 0U;
+	for (index = 0U; index < model->phase_transition_count; index++)
+	{
+		const sg_rune_phase_transition_t *transition =
+			&model->phase_transitions[index];
+		uint32_t source;
+		uint32_t destination;
+
+		if (transition->kind != SG_RUNE_PHASE_TRANSITION_PORTAL)
+			continue;
+		source = BeliefHorizonPhaseIndex(model, &transition->source_phase);
+		destination = BeliefHorizonPhaseIndex(model,
+			&transition->destination_phase);
+		graph->edges[edge_count].source = source;
+		graph->edges[edge_count].destination = destination;
+		graph->edges[edge_count].record = index;
+		if (out_counts[source] == UINT32_MAX ||
+			reverse_counts[destination] == UINT32_MAX)
+		{
+			*overflowed_out = 1;
+			goto failure;
+		}
+		out_counts[source]++;
+		reverse_counts[destination]++;
+		edge_count++;
+	}
+	for (phase = 0U; phase < snapshot->phase_count; phase++)
+	{
+		if (graph->out_offsets[phase] > UINT32_MAX - out_counts[phase] ||
+			graph->reverse_offsets[phase] > UINT32_MAX -
+				reverse_counts[phase])
+		{
+			*overflowed_out = 1;
+			goto failure;
+		}
+		graph->out_offsets[phase + 1U] =
+			graph->out_offsets[phase] + out_counts[phase];
+		graph->reverse_offsets[phase + 1U] =
+			graph->reverse_offsets[phase] + reverse_counts[phase];
+	}
+	if (graph->out_offsets[snapshot->phase_count] != graph->edge_count ||
+		graph->reverse_offsets[snapshot->phase_count] != graph->edge_count)
+	{
+		*invalid_out = 1;
+		goto failure;
+	}
+	if (edge_count != 0U)
+	{
+		graph->out_edges = calloc((size_t)edge_count,
+			sizeof(*graph->out_edges));
+		graph->reverse_edges = calloc((size_t)edge_count,
+			sizeof(*graph->reverse_edges));
+		if (!graph->out_edges || !graph->reverse_edges)
+			goto failure;
+	}
+	out_cursor = calloc((size_t)snapshot->phase_count,
+		sizeof(*out_cursor));
+	reverse_cursor = calloc((size_t)snapshot->phase_count,
+		sizeof(*reverse_cursor));
+	if (!out_cursor || !reverse_cursor)
+		goto failure;
+	for (index = 0U; index < graph->edge_count; index++)
+	{
+		uint32_t source = graph->edges[index].source;
+		uint32_t destination = graph->edges[index].destination;
+		graph->out_edges[graph->out_offsets[source] + out_cursor[source]++] = index;
+		graph->reverse_edges[graph->reverse_offsets[destination] +
+			reverse_cursor[destination]++] = index;
+	}
+	graph->component = malloc((size_t)snapshot->phase_count *
+		sizeof(*graph->component));
+	visited = calloc((size_t)snapshot->phase_count, sizeof(*visited));
+	finish_order = malloc((size_t)snapshot->phase_count *
+		sizeof(*finish_order));
+	stack = malloc((size_t)snapshot->phase_count * sizeof(*stack));
+	stack_cursor = malloc((size_t)snapshot->phase_count *
+		sizeof(*stack_cursor));
+	if (!graph->component || !visited || !finish_order || !stack ||
+		!stack_cursor)
+		goto failure;
+	for (phase = 0U; phase < snapshot->phase_count; phase++)
+		graph->component[phase] = UINT32_MAX;
+	for (phase = 0U; phase < snapshot->phase_count; phase++)
+	{
+		size_t top;
+
+		if (visited[phase] != 0U)
+			continue;
+		visited[phase] = 1U;
+		top = 0U;
+		stack[top] = phase;
+		stack_cursor[top] = graph->out_offsets[phase];
+		top++;
+		while (top != 0U)
+		{
+			uint32_t source = stack[top - 1U];
+			uint32_t cursor = stack_cursor[top - 1U];
+
+			if (cursor < graph->out_offsets[source + 1U])
+			{
+				uint32_t edge = graph->out_edges[cursor];
+				uint32_t destination = graph->edges[edge].destination;
+
+				stack_cursor[top - 1U] = cursor + 1U;
+				if (visited[destination] == 0U)
+				{
+					visited[destination] = 1U;
+					stack[top] = destination;
+					stack_cursor[top] = graph->out_offsets[destination];
+					top++;
+				}
+			}
+			else
+			{
+				if (finish_count == UINT32_MAX)
+				{
+					*overflowed_out = 1;
+					goto failure;
+				}
+				finish_order[finish_count++] = source;
+				top--;
+			}
+		}
+	}
+	component_stack = malloc((size_t)snapshot->phase_count *
+		sizeof(*component_stack));
+	if (!component_stack)
+		goto failure;
+	for (index = finish_count; index != 0U; index--)
+	{
+		uint32_t root = finish_order[index - 1U];
+		uint32_t component;
+		size_t top;
+
+		if (graph->component[root] != UINT32_MAX)
+			continue;
+		component = graph->component_count++;
+		if (component == UINT32_MAX)
+		{
+			*overflowed_out = 1;
+			goto failure;
+		}
+		graph->component[root] = component;
+		top = 0U;
+		component_stack[top++] = root;
+		while (top != 0U)
+		{
+			uint32_t source = component_stack[--top];
+			uint32_t cursor;
+
+			for (cursor = graph->reverse_offsets[source];
+				cursor < graph->reverse_offsets[source + 1U]; cursor++)
+			{
+				uint32_t edge = graph->reverse_edges[cursor];
+				uint32_t destination = graph->edges[edge].source;
+
+				if (graph->component[destination] == UINT32_MAX)
+				{
+					graph->component[destination] = component;
+					component_stack[top++] = destination;
+				}
+			}
+		}
+	}
+	graph->path_scratch = malloc((size_t)snapshot->phase_count *
+		sizeof(*graph->path_scratch));
+	if (!graph->path_scratch)
+		goto failure;
+	free(out_counts);
+	free(reverse_counts);
+	free(out_cursor);
+	free(reverse_cursor);
+	free(visited);
+	free(finish_order);
+	free(stack);
+	free(stack_cursor);
+	free(component_stack);
+	return 1;
+
+failure:
+	free(out_counts);
+	free(reverse_counts);
+	free(out_cursor);
+	free(reverse_cursor);
+	free(visited);
+	free(finish_order);
+	free(stack);
+	free(stack_cursor);
+	free(component_stack);
+	BeliefPortalGraphDestroy(graph);
+	return 0;
+}
+
+typedef struct belief_component_edge_s
+{
+	uint32_t source;
+	uint32_t destination;
+} belief_component_edge_t;
+
+static int BeliefHorizonDepthBound(const sg_rune_runtime_snapshot_t *snapshot,
+	uint64_t elapsed_ms, const belief_portal_graph_t *portal_graph,
+	size_t *depth_out, int *overflowed_out)
+{
+	const sg_rune_model_t *model;
+	uint32_t *indegree = NULL;
+	uint32_t *longest = NULL;
+	uint32_t *queue = NULL;
+	uint32_t *edge_counts = NULL;
+	uint32_t *edge_offsets = NULL;
+	uint32_t *edge_cursor = NULL;
+	uint32_t *edge_indexes = NULL;
+	belief_component_edge_t *edges = NULL;
+	size_t record_count;
+	uint32_t edge_count = 0U;
+	uint32_t queue_read = 0U;
+	uint32_t queue_write = 0U;
+	uint32_t processed = 0U;
+	uint32_t component;
+	uint32_t index;
+	uint32_t longest_zero = 0U;
+	float minimum = FLT_MAX;
+	size_t positive_steps = 0U;
+	size_t internal_extra;
+	size_t zero_run;
+	size_t segment_count;
+
+	if (!snapshot || !snapshot->model || !portal_graph || !depth_out ||
+		!overflowed_out)
+		return 0;
+	model = snapshot->model;
+	if (!BeliefHorizonRecordCount(model, &record_count) ||
+		record_count > UINT32_MAX)
+	{
+		*overflowed_out = 1;
+		return 0;
+	}
+	if (portal_graph->component_count == 0U)
+	{
+		*depth_out = 0U;
+		return 1;
+	}
+	indegree = calloc((size_t)portal_graph->component_count,
+		sizeof(*indegree));
+	longest = calloc((size_t)portal_graph->component_count,
+		sizeof(*longest));
+	queue = calloc((size_t)portal_graph->component_count, sizeof(*queue));
+	edge_counts = calloc((size_t)portal_graph->component_count,
+		sizeof(*edge_counts));
+	if (!indegree || !longest || !queue || !edge_counts)
+		goto allocation_failure;
+	if (record_count == SIZE_MAX)
+		goto overflow;
+	edges = calloc(record_count == 0U ? 1U : record_count,
+		sizeof(*edges));
+	if (!edges)
+		goto allocation_failure;
 	for (index = 0U; index < model->phase_transition_count; index++)
 	{
 		const sg_rune_phase_transition_t *transition =
 			&model->phase_transitions[index];
 		float value = transition->duration_ms.min_value;
+		uint32_t source;
+		uint32_t destination;
+		uint32_t source_component;
+		uint32_t destination_component;
+		belief_step_bounds_t bounds;
+
 		if (!SG_BeliefFloatValid(value) || value < 0.0f)
 			goto invalid;
-		if (value == 0.0f)
+		if (value != 0.0f)
 		{
-			uint32_t destination = BeliefHorizonPhaseIndex(model,
-				&transition->destination_phase);
-			if (destination >= snapshot->phase_count ||
-			    indegree[destination] == SIZE_MAX)
-				goto overflow;
-			indegree[destination]++;
+			if (value < minimum)
+				minimum = value;
+			continue;
 		}
-		else if (value < minimum)
-			minimum = value;
+		source = BeliefHorizonPhaseIndex(model, &transition->source_phase);
+		destination = BeliefHorizonPhaseIndex(model,
+			&transition->destination_phase);
+		if (source >= snapshot->phase_count ||
+			destination >= snapshot->phase_count ||
+			!BeliefRuneRecordMatches(snapshot,
+				SG_BELIEF_HORIZON_PHASE_TRANSITION, index,
+				&snapshot->phases[source], &snapshot->phases[destination],
+				&bounds))
+			goto invalid;
+		source_component = portal_graph->component[source];
+		destination_component = portal_graph->component[destination];
+		if (transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL &&
+			source_component == destination_component)
+			continue;
+		if (source_component == destination_component)
+			goto invalid;
+		if (edge_count == UINT32_MAX ||
+			edge_counts[source_component] == UINT32_MAX ||
+			indegree[destination_component] == UINT32_MAX)
+			goto overflow;
+		edges[edge_count++] = (belief_component_edge_t){ source_component,
+			destination_component };
+		edge_counts[source_component]++;
+		indegree[destination_component]++;
 	}
 	for (index = 0U; index < model->kernel_count; index++)
 	{
 		const sg_rune_capability_kernel_t *capability = &model->kernels[index];
 		float value = capability->parameters.duration_ms.min_value;
+		uint32_t source;
+		uint32_t destination;
+		uint32_t source_component;
+		uint32_t destination_component;
+		belief_step_bounds_t bounds;
+
 		if (!SG_BeliefFloatValid(value) || value < 0.0f)
 			goto invalid;
-		if (value == 0.0f)
+		if (value != 0.0f)
 		{
-			uint32_t destination = BeliefHorizonPhaseIndex(model,
-				&capability->destination_phase);
-			if (destination >= snapshot->phase_count ||
-			    indegree[destination] == SIZE_MAX)
-				goto overflow;
-			indegree[destination]++;
+			if (value < minimum)
+				minimum = value;
+			continue;
 		}
-		else if (value < minimum)
-			minimum = value;
+		source = BeliefHorizonPhaseIndex(model, &capability->source_phase);
+		destination = BeliefHorizonPhaseIndex(model,
+			&capability->destination_phase);
+		if (source >= snapshot->phase_count ||
+			destination >= snapshot->phase_count ||
+			!BeliefRuneRecordMatches(snapshot,
+				SG_BELIEF_HORIZON_CAPABILITY_KERNEL, index,
+				&snapshot->phases[source], &snapshot->phases[destination],
+				&bounds))
+			goto invalid;
+		source_component = portal_graph->component[source];
+		destination_component = portal_graph->component[destination];
+		if (source_component == destination_component)
+			goto invalid;
+		if (edge_count == UINT32_MAX ||
+			edge_counts[source_component] == UINT32_MAX ||
+			indegree[destination_component] == UINT32_MAX)
+			goto overflow;
+		edges[edge_count++] = (belief_component_edge_t){ source_component,
+			destination_component };
+		edge_counts[source_component]++;
+		indegree[destination_component]++;
 	}
-	for (index = 0U; index < snapshot->phase_count; index++)
-		if (indegree[index] == 0U)
-			queue[queue_write++] = index;
+	edge_offsets = calloc((size_t)portal_graph->component_count + 1U,
+		sizeof(*edge_offsets));
+	edge_cursor = calloc((size_t)portal_graph->component_count,
+		sizeof(*edge_cursor));
+	if (!edge_offsets || !edge_cursor)
+		goto allocation_failure;
+	for (component = 0U; component < portal_graph->component_count;
+		component++)
+	{
+		if (edge_offsets[component] > UINT32_MAX -
+			edge_counts[component])
+			goto overflow;
+		edge_offsets[component + 1U] = edge_offsets[component] +
+			edge_counts[component];
+	}
+	if (edge_offsets[portal_graph->component_count] != edge_count)
+		goto invalid;
+	if (edge_count != 0U)
+	{
+		edge_indexes = calloc((size_t)edge_count, sizeof(*edge_indexes));
+		if (!edge_indexes)
+			goto allocation_failure;
+	}
+	for (index = 0U; index < edge_count; index++)
+	{
+		uint32_t source = edges[index].source;
+
+		edge_indexes[edge_offsets[source] + edge_cursor[source]++] = index;
+	}
+	for (component = 0U; component < portal_graph->component_count;
+		component++)
+		if (indegree[component] == 0U)
+			queue[queue_write++] = component;
 	while (queue_read < queue_write)
 	{
 		uint32_t source = queue[queue_read++];
-		size_t record_count;
-		size_t record;
+		uint32_t cursor;
+
 		processed++;
-		if (longest[source] > zero_run)
-			zero_run = longest[source];
-		if (!BeliefHorizonRecordCount(model, &record_count))
-			goto overflow;
-		for (record = 0U; record < record_count; record++)
+		if (longest[source] > longest_zero)
+			longest_zero = longest[source];
+		for (cursor = edge_offsets[source];
+			cursor < edge_offsets[source + 1U]; cursor++)
 		{
-			sg_belief_horizon_step_t step;
-			belief_step_bounds_t bounds;
-			int status = BeliefHorizonRecord(snapshot,
-				&snapshot->phases[source], record, &step, &bounds);
-			if (status < 0)
+			belief_component_edge_t edge = edges[edge_indexes[cursor]];
+
+			if (longest[edge.destination] < longest[source] + 1U)
+				longest[edge.destination] = longest[source] + 1U;
+			if (indegree[edge.destination] == 0U)
 				goto invalid;
-			if (status == 0 || bounds.duration_min_ms != 0.0f)
-				continue;
-			if (longest[source] == SIZE_MAX)
-				goto overflow;
-			if (longest[step.to.phase_id] < longest[source] + 1U)
-				longest[step.to.phase_id] = longest[source] + 1U;
-			if (indegree[step.to.phase_id] == 0U)
-				goto invalid;
-			indegree[step.to.phase_id]--;
-			if (indegree[step.to.phase_id] == 0U)
-				queue[queue_write++] = step.to.phase_id;
+			indegree[edge.destination]--;
+			if (indegree[edge.destination] == 0U)
+				queue[queue_write++] = edge.destination;
 		}
 	}
-	if (processed != (size_t)snapshot->phase_count)
+	if (processed != portal_graph->component_count)
 		goto invalid;
 	if (minimum != FLT_MAX)
 	{
@@ -1170,73 +1622,351 @@ static int BeliefHorizonDepthBound(const sg_rune_runtime_snapshot_t *snapshot,
 			goto overflow;
 		positive_steps = (size_t)count;
 	}
-	if (positive_steps == SIZE_MAX ||
-	    (zero_run != 0U && positive_steps + 1U > SIZE_MAX / zero_run) ||
-	    (positive_steps + 1U) * zero_run > SIZE_MAX - positive_steps)
+	/* Each contracted component can contribute at most one canonical path to
+	 * its root and one canonical path from its root.  This is a bound derived
+	 * from the quotient representation, not a loop budget. */
+	if (portal_graph->phase_count < portal_graph->component_count)
+		goto invalid;
+	internal_extra = (size_t)portal_graph->phase_count -
+		(size_t)portal_graph->component_count;
+	if (internal_extra > SIZE_MAX / 2U)
 		goto overflow;
-	*depth_out = (positive_steps + 1U) * zero_run + positive_steps;
+	internal_extra *= 2U;
+	if ((size_t)longest_zero > SIZE_MAX - internal_extra)
+		goto overflow;
+	zero_run = (size_t)longest_zero + internal_extra;
+	if (!BeliefSizeAdd(positive_steps, 1U, &segment_count) ||
+		(zero_run != 0U && segment_count > SIZE_MAX / zero_run))
+		goto overflow;
+	zero_run *= segment_count;
+	if (zero_run > SIZE_MAX - positive_steps)
+		goto overflow;
+	*depth_out = zero_run + positive_steps;
 	free(indegree);
 	free(longest);
 	free(queue);
+	free(edge_counts);
+	free(edge_offsets);
+	free(edge_cursor);
+	free(edge_indexes);
+	free(edges);
 	return 1;
 
 overflow:
 	*overflowed_out = 1;
+	goto cleanup;
 invalid:
+	/* The caller supplied a finite but semantically invalid horizon graph. */
+	*overflowed_out = 0;
+	goto cleanup;
+allocation_failure:
+cleanup:
 	free(indegree);
 	free(longest);
 	free(queue);
+	free(edge_counts);
+	free(edge_offsets);
+	free(edge_cursor);
+	free(edge_indexes);
+	free(edges);
 	return 0;
+}
+
+static void BeliefHorizonFrameDestroy(belief_horizon_walk_frame_t *frame)
+{
+	if (!frame)
+		return;
+	free(frame->closure_phases);
+	free(frame->closure_parent_phases);
+	free(frame->closure_parent_edges);
+	memset(frame, 0, sizeof(*frame));
+}
+
+static int BeliefHorizonFrameClosureBuild(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const belief_portal_graph_t *portal_graph, uint32_t entry_phase,
+	belief_horizon_walk_frame_t *frame, int *overflowed_out)
+{
+	size_t bytes;
+	uint32_t cursor;
+
+	if (!snapshot || !portal_graph || !frame || !overflowed_out ||
+		entry_phase >= snapshot->phase_count ||
+		portal_graph->phase_count != snapshot->phase_count)
+		return 0;
+	if (snapshot->phase_count != 0U &&
+		sizeof(uint32_t) > SIZE_MAX / (size_t)snapshot->phase_count)
+	{
+		*overflowed_out = 1;
+		return 0;
+	}
+	bytes = (size_t)snapshot->phase_count * sizeof(uint32_t);
+	frame->closure_phases = malloc(bytes);
+	frame->closure_parent_phases = malloc(bytes);
+	frame->closure_parent_edges = malloc(bytes);
+	if (!frame->closure_phases || !frame->closure_parent_phases ||
+		!frame->closure_parent_edges)
+		goto failure;
+	for (cursor = 0U; cursor < snapshot->phase_count; cursor++)
+	{
+		frame->closure_parent_phases[cursor] = UINT32_MAX;
+		frame->closure_parent_edges[cursor] = UINT32_MAX;
+	}
+	frame->closure_count = 1U;
+	frame->closure_cursor = 0U;
+	frame->closure_phases[0] = entry_phase;
+	frame->closure_parent_phases[entry_phase] = entry_phase;
+	while (frame->closure_cursor < frame->closure_count)
+	{
+		uint32_t source =
+			frame->closure_phases[frame->closure_cursor++];
+		uint32_t edge_cursor;
+
+		if (source >= snapshot->phase_count ||
+			!portal_graph->out_offsets ||
+			portal_graph->out_offsets[source] >
+			portal_graph->out_offsets[source + 1U] ||
+			portal_graph->out_offsets[source + 1U] >
+			portal_graph->edge_count)
+			goto failure;
+		for (edge_cursor = portal_graph->out_offsets[source];
+			edge_cursor < portal_graph->out_offsets[source + 1U];
+			edge_cursor++)
+		{
+			uint32_t edge_index;
+			uint32_t destination;
+
+			if (!portal_graph->out_edges)
+				goto failure;
+			edge_index = portal_graph->out_edges[edge_cursor];
+			if (edge_index >= portal_graph->edge_count)
+				goto failure;
+			destination = portal_graph->edges[edge_index].destination;
+			if (destination >= snapshot->phase_count)
+				goto failure;
+			if (frame->closure_parent_phases[destination] != UINT32_MAX)
+				continue;
+			if (frame->closure_count == UINT32_MAX ||
+			frame->closure_count == snapshot->phase_count)
+			{
+				*overflowed_out = 1;
+				goto failure;
+			}
+			frame->closure_parent_phases[destination] = source;
+			frame->closure_parent_edges[destination] = edge_index;
+			frame->closure_phases[frame->closure_count++] = destination;
+		}
+	}
+	frame->closure_cursor = 0U;
+	return 1;
+
+failure:
+	BeliefHorizonFrameDestroy(frame);
+	return 0;
+}
+
+static int BeliefHorizonClosurePath(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const belief_portal_graph_t *portal_graph,
+	const belief_horizon_walk_frame_t *frame, uint32_t destination,
+	size_t max_depth, sg_belief_horizon_step_t *path,
+	size_t *step_count_out)
+{
+	const sg_rune_model_t *model;
+	uint32_t cursor;
+	size_t reverse_count = 0U;
+	size_t index;
+
+	if (!snapshot || !portal_graph || !frame || !step_count_out ||
+		destination >= snapshot->phase_count ||
+		!frame->closure_parent_phases || !frame->closure_parent_edges ||
+		frame->phase.phase_id >= snapshot->phase_count ||
+		frame->closure_parent_phases[destination] == UINT32_MAX)
+		return 0;
+	model = snapshot->model;
+	cursor = destination;
+	while (cursor != frame->phase.phase_id)
+	{
+		uint32_t parent;
+		uint32_t edge_index;
+
+		if (reverse_count == snapshot->phase_count ||
+			!portal_graph->path_scratch)
+			return 0;
+		parent = frame->closure_parent_phases[cursor];
+		edge_index = frame->closure_parent_edges[cursor];
+		if (parent >= snapshot->phase_count ||
+			edge_index >= portal_graph->edge_count ||
+			portal_graph->edges[edge_index].source != parent ||
+			portal_graph->edges[edge_index].destination != cursor)
+			return 0;
+		portal_graph->path_scratch[reverse_count++] = edge_index;
+		cursor = parent;
+	}
+	if (frame->path_depth > max_depth ||
+		reverse_count > max_depth - frame->path_depth ||
+		(reverse_count != 0U && !path))
+		return 0;
+	for (index = 0U; index < reverse_count; index++)
+	{
+		uint32_t edge_index =
+			portal_graph->path_scratch[reverse_count - index - 1U];
+		const belief_portal_edge_t *edge = &portal_graph->edges[edge_index];
+		sg_belief_horizon_step_t step;
+		belief_step_bounds_t bounds;
+
+		if (edge->source >= snapshot->phase_count ||
+			edge->destination >= snapshot->phase_count ||
+			BeliefHorizonRecord(snapshot,
+				&snapshot->phases[edge->source], edge->record, &step,
+				&bounds) != 1 ||
+			step.kind != SG_BELIEF_HORIZON_PHASE_TRANSITION ||
+			step.to.phase_id != edge->destination ||
+			model->phase_transitions[edge->record].kind !=
+				SG_RUNE_PHASE_TRANSITION_PORTAL)
+			return 0;
+		path[frame->path_depth + index] = step;
+	}
+	*step_count_out = reverse_count;
+	return 1;
+}
+
+static int BeliefHorizonEmit(
+	const sg_rune_runtime_snapshot_t *snapshot, uint32_t origin_phase,
+	const sg_phase_coordinate_t *to, const belief_horizon_walk_frame_t *frame,
+	const sg_belief_horizon_step_t *path, size_t path_length,
+	float likelihood, sg_belief_horizon_entry_t *entries,
+	sg_belief_horizon_step_t *steps, size_t *entry_write,
+	size_t *step_write, int *overflowed_out)
+{
+	size_t first_step;
+	size_t axis;
+
+	if (!snapshot || !to || !frame || !entry_write || !step_write ||
+		!overflowed_out || origin_phase >= snapshot->phase_count ||
+		(path_length != 0U && !path) ||
+		(entries && path_length != 0U && !steps))
+		return 0;
+	first_step = *step_write;
+	if (!BeliefSizeAdd(*step_write, path_length, step_write) ||
+		!BeliefSizeAdd(*entry_write, 1U, entry_write))
+	{
+		*overflowed_out = 1;
+		return 0;
+	}
+	if (!entries)
+		return 1;
+	{
+		sg_belief_horizon_entry_t *entry = &entries[*entry_write - 1U];
+		entry->from = snapshot->phases[origin_phase];
+		entry->to = *to;
+		for (axis = 0U; axis < 3U; axis++)
+			entry->displacement[axis] = BeliefHorizonMidpoint(
+				&(sg_rune_interval_t){
+					frame->displacement_min[axis],
+					frame->displacement_max[axis] });
+		entry->likelihood = likelihood;
+		entry->first_step = first_step;
+		entry->step_count = path_length;
+		if (path_length != 0U)
+			memcpy(&steps[first_step], path,
+				path_length * sizeof(*path));
+	}
+	return 1;
 }
 
 static int BeliefHorizonWalk(
 	const sg_rune_runtime_snapshot_t *snapshot, uint32_t origin_phase,
 	uint64_t elapsed_ms, size_t max_depth, size_t record_count,
+	const belief_portal_graph_t *portal_graph,
 	belief_horizon_walk_frame_t *frames, sg_belief_horizon_step_t *path,
 	float likelihood, sg_belief_horizon_entry_t *entries,
 	sg_belief_horizon_step_t *steps, size_t *entry_write,
 	size_t *step_write, int *overflowed_out)
 {
-	size_t depth = 0U;
+	size_t top = 1U;
+
+	if (!snapshot || !portal_graph || !frames || !entry_write ||
+		!step_write || !overflowed_out || origin_phase >= snapshot->phase_count)
+		return 0;
 
 	memset(&frames[0], 0, sizeof(frames[0]));
 	frames[0].phase = snapshot->phases[origin_phase];
+	if (!BeliefHorizonFrameClosureBuild(snapshot, portal_graph, origin_phase,
+		&frames[0], overflowed_out))
+		goto failure;
 	if (entries)
 	{
 		entries[*entry_write].from = frames[0].phase;
 		entries[*entry_write].to = frames[0].phase;
 		entries[*entry_write].likelihood = likelihood;
 		entries[*entry_write].first_step = *step_write;
+		entries[*entry_write].step_count = 0U;
+		entries[*entry_write].displacement[0] = 0.0f;
+		entries[*entry_write].displacement[1] = 0.0f;
+		entries[*entry_write].displacement[2] = 0.0f;
 	}
 	if (!BeliefSizeAdd(*entry_write, 1U, entry_write))
 	{
 		*overflowed_out = 1;
-		return 0;
+		goto failure;
 	}
-	if (max_depth == 0U)
-		return 1;
 	while (1)
 	{
-		belief_horizon_walk_frame_t *frame = &frames[depth];
+		belief_horizon_walk_frame_t *frame;
 		belief_horizon_walk_frame_t next;
 		belief_step_bounds_t bounds;
 		sg_belief_horizon_step_t step;
 		int record_status;
 		size_t axis;
+		size_t closure_steps;
 		size_t path_length;
 
+		frame = &frames[top - 1U];
+		if (!frame->active)
+		{
+			if (frame->closure_cursor == frame->closure_count)
+			{
+				BeliefHorizonFrameDestroy(frame);
+				top--;
+				if (top == 0U)
+					return 1;
+				continue;
+			}
+			frame->active_phase =
+				frame->closure_phases[frame->closure_cursor++];
+			if (!BeliefHorizonClosurePath(snapshot, portal_graph, frame,
+				frame->active_phase, max_depth, path, &closure_steps) ||
+				!BeliefSizeAdd(frame->path_depth, closure_steps,
+					&frame->active_path_length))
+			{
+				*overflowed_out = 1;
+				goto failure;
+			}
+			/* The zero-time closure supplies one canonical path to each source
+			 * phase, but it does not create another probabilistic outcome.  Only
+			 * a positive-time record emits an entry.  This contracts portal SCCs
+			 * for probability accounting while retaining their portal witnesses
+			 * on paths that leave the contracted component. */
+			frame->next_record = 0U;
+			frame->active = 1U;
+		}
 		if (frame->next_record == record_count)
 		{
-			if (depth == 0U)
-				return 1;
-			depth--;
+			frame->active = 0U;
 			continue;
 		}
-		record_status = BeliefHorizonRecord(snapshot, &frame->phase,
+		record_status = BeliefHorizonRecord(snapshot,
+			&snapshot->phases[frame->active_phase],
 			frame->next_record++, &step, &bounds);
 		if (record_status < 0)
-			return 0;
+			goto failure;
 		if (record_status == 0)
+			continue;
+		if (step.kind == SG_BELIEF_HORIZON_PHASE_TRANSITION &&
+			step.record_index < snapshot->model->phase_transition_count &&
+			snapshot->model->phase_transitions[step.record_index].kind ==
+			SG_RUNE_PHASE_TRANSITION_PORTAL)
 			continue;
 		memset(&next, 0, sizeof(next));
 		next.phase = step.to;
@@ -1246,7 +1976,7 @@ static int BeliefHorizonWalk(
 			bounds.duration_max_ms, &next.duration_max_ms))
 		{
 			*overflowed_out = 1;
-			return 0;
+			goto failure;
 		}
 		for (axis = 0U; axis < 3U; axis++)
 			if (!BeliefFloatAdd(frame->displacement_min[axis],
@@ -1257,55 +1987,59 @@ static int BeliefHorizonWalk(
 				&next.displacement_max[axis]))
 			{
 				*overflowed_out = 1;
-				return 0;
+				goto failure;
 			}
 		if ((long double)next.duration_min_ms > (long double)elapsed_ms)
 			continue;
-		path[depth] = step;
-		path_length = depth + 1U;
+		if (frame->active_path_length == max_depth || !path)
+		{
+			*overflowed_out = 1;
+			goto failure;
+		}
+		path[frame->active_path_length] = step;
+		path_length = frame->active_path_length + 1U;
 		if (BeliefHorizonDurationContains(&(sg_rune_interval_t){
 		    next.duration_min_ms, next.duration_max_ms }, elapsed_ms))
 		{
-			size_t first_step = *step_write;
-			if (!BeliefSizeAdd(*step_write, path_length, step_write) ||
-			    !BeliefSizeAdd(*entry_write, 1U, entry_write))
-			{
-				*overflowed_out = 1;
-				return 0;
-			}
-			if (entries)
-			{
-				sg_belief_horizon_entry_t *entry =
-					&entries[*entry_write - 1U];
-				entry->from = snapshot->phases[origin_phase];
-				entry->to = next.phase;
-				for (axis = 0U; axis < 3U; axis++)
-					entry->displacement[axis] =
-						BeliefHorizonMidpoint(
-							&(sg_rune_interval_t){
-							 next.displacement_min[axis],
-							 next.displacement_max[axis] });
-				entry->likelihood = likelihood;
-				entry->first_step = first_step;
-				entry->step_count = path_length;
-				memcpy(&steps[first_step], path,
-					path_length * sizeof(*path));
-			}
+			if (!BeliefHorizonEmit(snapshot, origin_phase, &next.phase,
+				&next, path, path_length, likelihood, entries, steps,
+				entry_write, step_write, overflowed_out))
+				goto failure;
 		}
 		if (path_length < max_depth &&
 		    (long double)next.duration_min_ms <= (long double)elapsed_ms)
 		{
-			frames[path_length] = next;
-			depth = path_length;
+			if (top == max_depth + 1U)
+			{
+				*overflowed_out = 1;
+				goto failure;
+			}
+			memset(&frames[top], 0, sizeof(frames[top]));
+			frames[top] = next;
+			frames[top].path_depth = path_length;
+			if (!BeliefHorizonFrameClosureBuild(snapshot, portal_graph,
+				frames[top].phase.phase_id, &frames[top],
+				overflowed_out))
+				goto failure;
+			top++;
 		}
 	}
+
+failure:
+	while (top != 0U)
+	{
+		top--;
+		BeliefHorizonFrameDestroy(&frames[top]);
+	}
+	return 0;
 }
 
 static sg_belief_horizon_kernel_t *BeliefHorizonFixedPointCreate(
 	const sg_rune_runtime_snapshot_t *snapshot, uint64_t from_time_ms,
 	uint64_t to_time_ms, int *overflowed_out, int *invalid_out)
 {
-	const sg_rune_model_t *model = snapshot->model;
+	const sg_rune_model_t *model;
+	belief_portal_graph_t portal_graph;
 	sg_belief_horizon_kernel_t *kernel = NULL;
 	sg_belief_horizon_span_t *spans = NULL;
 	sg_belief_horizon_entry_t *entries = NULL;
@@ -1320,50 +2054,66 @@ static sg_belief_horizon_kernel_t *BeliefHorizonFixedPointCreate(
 	size_t write = 0U;
 	size_t step_write = 0U;
 	int depth_status;
+	int graph_invalid = 0;
 	uint32_t phase;
 
 	if (!overflowed_out || !invalid_out)
 		return NULL;
 	*overflowed_out = 0;
 	*invalid_out = 0;
+	if (!snapshot || !snapshot->model ||
+		(to_time_ms < from_time_ms))
+	{
+		*invalid_out = 1;
+		return NULL;
+	}
+	model = snapshot->model;
+	memset(&portal_graph, 0, sizeof(portal_graph));
 	if (!BeliefHorizonRecordCount(model, &record_count))
 	{
 		*overflowed_out = 1;
 		return NULL;
 	}
-	depth_status = BeliefHorizonDepthBound(snapshot, elapsed_ms, &max_depth,
-		overflowed_out);
+	if (!BeliefPortalGraphBuild(snapshot, &portal_graph, overflowed_out,
+		&graph_invalid))
+	{
+		*invalid_out = graph_invalid && !*overflowed_out;
+		BeliefPortalGraphDestroy(&portal_graph);
+		return NULL;
+	}
+	depth_status = BeliefHorizonDepthBound(snapshot, elapsed_ms,
+		&portal_graph, &max_depth, overflowed_out);
 	if (depth_status <= 0)
 	{
 		*invalid_out = depth_status == 0 && !*overflowed_out;
+		BeliefPortalGraphDestroy(&portal_graph);
 		return NULL;
 	}
 	if (max_depth > SIZE_MAX / sizeof(*path) ||
 	    max_depth == SIZE_MAX || max_depth + 1U > SIZE_MAX / sizeof(*frames))
 	{
 		*overflowed_out = 1;
+		BeliefPortalGraphDestroy(&portal_graph);
 		return NULL;
 	}
 	frames = calloc(max_depth + 1U, sizeof(*frames));
 	path = max_depth == 0U ? NULL : calloc(max_depth, sizeof(*path));
 	if (!frames || (max_depth != 0U && !path))
 	{
-		free(frames);
-		free(path);
-		return NULL;
+		*invalid_out = !*overflowed_out;
+		goto failure;
 	}
 	spans = calloc((size_t)snapshot->phase_count, sizeof(*spans));
 	if (!spans)
 	{
-		free(frames);
-		free(path);
-		return NULL;
+		goto failure;
 	}
 	for (phase = 0U; phase < snapshot->phase_count; phase++)
 	{
 		size_t phase_first = entry_count;
 		if (!BeliefHorizonWalk(snapshot, phase, elapsed_ms, max_depth,
-		    record_count, frames, path, 0.0f, NULL, NULL, &entry_count,
+		    record_count, &portal_graph, frames, path, 0.0f, NULL, NULL,
+		    &entry_count,
 		    &step_count, overflowed_out))
 		{
 			*invalid_out = !*overflowed_out;
@@ -1389,7 +2139,8 @@ static sg_belief_horizon_kernel_t *BeliefHorizonFixedPointCreate(
 	{
 		float likelihood = 1.0f / (float)spans[phase].entry_count;
 		if (!BeliefHorizonWalk(snapshot, phase, elapsed_ms, max_depth,
-		    record_count, frames, path, likelihood, entries, steps, &write,
+		    record_count, &portal_graph, frames, path, likelihood, entries,
+		    steps, &write,
 		    &step_write, overflowed_out))
 		{
 			*invalid_out = !*overflowed_out;
@@ -1411,6 +2162,7 @@ static sg_belief_horizon_kernel_t *BeliefHorizonFixedPointCreate(
 	kernel->step_count = step_count;
 	free(frames);
 	free(path);
+	BeliefPortalGraphDestroy(&portal_graph);
 	return kernel;
 
 failure:
@@ -1420,6 +2172,7 @@ failure:
 	free(steps);
 	free(frames);
 	free(path);
+	BeliefPortalGraphDestroy(&portal_graph);
 	return NULL;
 }
 
@@ -2907,7 +3660,7 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
 	if (!BeliefHorizonChainValid(snapshot, source->kernels,
 	    source->kernel_count, state->updated_at_ms, to_time_ms, &counters) ||
 	    !BeliefHorizonChainIdentity(&source->provenance, source->kernels,
-		source->kernel_count, &source->chain_identity))
+		 source->kernel_count, &source->chain_identity))
 	{
 		BeliefHorizonKernelsDestroy(source->kernels, source->kernel_count);
 		free(source);

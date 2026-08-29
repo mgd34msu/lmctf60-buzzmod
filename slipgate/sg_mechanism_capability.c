@@ -82,6 +82,33 @@ static int AllocationFits(size_t count, size_t element_size)
 	return element_size != 0U && count <= SIZE_MAX / element_size;
 }
 
+#define SG_MECHANISM_CAPABILITY_SEAL_KEY UINT64_C(0x8f2c6a4d9137be25)
+
+static uint64_t ProducerDigestBytes(uint64_t digest, const void *data,
+	size_t size)
+{
+	const unsigned char *bytes = data;
+	size_t index;
+
+	for (index = 0U; index < size; index++)
+		digest = (digest ^ (uint64_t)bytes[index]) * UINT64_C(1099511628211);
+	return digest;
+}
+
+static void IssueAcceptedResult(sg_mechanism_capability_set_t *capabilities)
+{
+	uint64_t digest = SG_MechanismCapabilitySetDigest(capabilities);
+	const uint64_t key = SG_MECHANISM_CAPABILITY_SEAL_KEY;
+
+	capabilities->seal_magic = SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
+	capabilities->seal_magic_inverse = ~SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
+	capabilities->self = capabilities;
+	digest = ProducerDigestBytes(digest, &capabilities->self,
+		sizeof(capabilities->self));
+	capabilities->seal_digest = ProducerDigestBytes(digest, &key,
+		sizeof(key));
+}
+
 static int Finite3(const sg_rune_vec3_t *value)
 {
 	return value && isfinite(value->value[0]) && isfinite(value->value[1]) &&
@@ -1887,7 +1914,7 @@ int SG_MechanismCapabilityBuild(
 			*error_out = build.error;
 		return 0;
 	}
-	SG_MechanismCapabilitySetStamp(build.output);
+	IssueAcceptedResult(build.output);
 	if (!SG_MechanismCapabilitySetAccepted(build.output))
 	{
 		SG_MechanismCapabilityDestroy(build.output);

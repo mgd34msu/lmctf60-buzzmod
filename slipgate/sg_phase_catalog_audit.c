@@ -19,9 +19,252 @@ typedef struct sg_binding_ref_s
 	uint32_t index;
 } sg_binding_ref_t;
 
+typedef struct sg_audit_phase_entry_s
+{
+	sg_rune_phase_basis_t phase;
+	uint32_t region;
+	size_t sequence;
+} sg_audit_phase_entry_t;
+
+typedef struct sg_audit_oracle_s
+{
+	sg_audit_phase_entry_t *phases;
+	uint32_t phase_count;
+	sg_phase_catalog_binding_t *bindings;
+	uint32_t binding_count;
+	sg_phase_catalog_transition_pair_t *transitions;
+	uint32_t transition_count;
+	sg_phase_catalog_completion_t completion;
+	sg_phase_catalog_completion_t transition_completion;
+	uint64_t mover_support_verifier_identity;
+} sg_audit_oracle_t;
+
+static int StableIdCompare(const sg_rune_stable_id_t *left,
+	const sg_rune_stable_id_t *right);
+
 static int AllocationFits(size_t count, size_t element_size)
 {
 	return element_size != 0U && count <= SIZE_MAX / element_size;
+}
+
+static void OracleSetError(sg_phase_catalog_error_t *error_out,
+	sg_phase_catalog_error_code_t code, uint32_t source_index)
+{
+	if (error_out && error_out->code == SG_PHASE_CATALOG_ERROR_NONE)
+	{
+		error_out->code = code;
+		error_out->source_index = source_index;
+	}
+}
+
+static int OracleRegionMedium(const sg_configuration_semantic_region_t *region,
+	sg_rune_medium_t *medium_out)
+{
+	uint32_t flags;
+
+	if (!region || !medium_out)
+		return 0;
+	flags = region->flags & (SG_CONFIGURATION_SEMANTIC_REGION_WATER |
+		SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+		SG_CONFIGURATION_SEMANTIC_REGION_SLIME);
+	if ((flags & (flags - 1U)) != 0U)
+		return 0;
+	if (flags == SG_CONFIGURATION_SEMANTIC_REGION_WATER)
+		*medium_out = SG_RUNE_MEDIUM_WATER;
+	else if (flags == SG_CONFIGURATION_SEMANTIC_REGION_LAVA)
+		*medium_out = SG_RUNE_MEDIUM_LAVA;
+	else if (flags == SG_CONFIGURATION_SEMANTIC_REGION_SLIME)
+		*medium_out = SG_RUNE_MEDIUM_SLIME;
+	else
+		*medium_out = SG_RUNE_MEDIUM_DRY;
+	return 1;
+}
+
+/* This is deliberately an audit-owned derivation.  It repeats the source
+ * facts needed to account for a phase, rather than calling the construction
+ * builder whose output is being audited. */
+static void OracleFillPhase(const sg_phase_catalog_source_t *source,
+	const sg_configuration_semantic_region_t *region, int mover,
+	const sg_rune_mechanism_ref_t *mechanism, uint32_t variant,
+	sg_rune_phase_basis_t *phase_out)
+{
+	sg_rune_medium_t medium = SG_RUNE_MEDIUM_DRY;
+	float speed = source->authority->identity.physics.max_velocity;
+
+	memset(phase_out, 0, sizeof(*phase_out));
+	phase_out->order.source_set_identity =
+		source->authority->identity.source_set_identity;
+	phase_out->order.domain = SG_RUNE_ORDER_PHASE;
+	phase_out->order.source_index = region->cell;
+	phase_out->order.variant = variant;
+	phase_out->stance = source->configuration->cells[region->cell].stance;
+	(void)OracleRegionMedium(region, &medium);
+	phase_out->motion = mover ? SG_RUNE_MOTION_SUPPORTED :
+		(region->water_level >= 2U ? SG_RUNE_MOTION_SWIMMING :
+			((region->flags & SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U ?
+				SG_RUNE_MOTION_SUPPORTED : SG_RUNE_MOTION_AIRBORNE));
+	phase_out->support = mover ? SG_RUNE_SUPPORT_MOVER :
+		(phase_out->motion == SG_RUNE_MOTION_SUPPORTED ?
+			SG_RUNE_SUPPORT_SUPPORTED : SG_RUNE_SUPPORT_NONE);
+	phase_out->medium = medium;
+	phase_out->void_relation =
+		(region->flags & SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) != 0U ?
+			SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
+	phase_out->reference_frame = mover ? SG_RUNE_FRAME_MOVER_RELATIVE :
+		SG_RUNE_FRAME_WORLD;
+	phase_out->mover = mover && mechanism ? *mechanism :
+		SG_RUNE_MECHANISM_REF_NONE;
+	phase_out->velocity.x.min_value = -speed;
+	phase_out->velocity.x.max_value = speed;
+	phase_out->velocity.y = phase_out->velocity.x;
+	phase_out->velocity.z = phase_out->velocity.x;
+	phase_out->elapsed_ms.min_value = 0.0f;
+	phase_out->elapsed_ms.max_value = (float)
+		source->authority->identity.physics.frame_ms;
+	phase_out->time_quantum_ms = source->authority->identity.physics.substep_ms;
+	phase_out->time_horizon_ms = source->authority->identity.physics.frame_ms;
+}
+
+static int OraclePhaseEquivalent(const sg_rune_phase_basis_t *left,
+	const sg_rune_phase_basis_t *right)
+{
+	return left && right && left->stance == right->stance &&
+		left->motion == right->motion && left->support == right->support &&
+		left->medium == right->medium && left->void_relation == right->void_relation &&
+		left->reference_frame == right->reference_frame &&
+		SG_RuneModelStableIdEqual(&left->mover.value, &right->mover.value) &&
+		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
+		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		left->time_quantum_ms == right->time_quantum_ms &&
+		left->time_horizon_ms == right->time_horizon_ms;
+}
+
+static int OraclePhaseNeutralEquivalent(const sg_rune_phase_basis_t *left,
+	const sg_rune_phase_basis_t *right)
+{
+	return left && right && left->motion == right->motion &&
+		left->support == right->support && left->medium == right->medium &&
+		left->void_relation == right->void_relation &&
+		left->reference_frame == right->reference_frame &&
+		SG_RuneModelStableIdEqual(&left->mover.value, &right->mover.value) &&
+		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
+		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		left->time_quantum_ms == right->time_quantum_ms &&
+		left->time_horizon_ms == right->time_horizon_ms;
+}
+
+static int OraclePhaseBasisCompare(const void *left_value,
+	const void *right_value)
+{
+	const sg_audit_phase_entry_t *left = left_value;
+	const sg_audit_phase_entry_t *right = right_value;
+	int comparison;
+
+	if (left->phase.order.source_index != right->phase.order.source_index)
+		return left->phase.order.source_index < right->phase.order.source_index ?
+			-1 : 1;
+	if (left->phase.stance != right->phase.stance)
+		return left->phase.stance < right->phase.stance ? -1 : 1;
+	if (left->phase.motion != right->phase.motion)
+		return left->phase.motion < right->phase.motion ? -1 : 1;
+	if (left->phase.support != right->phase.support)
+		return left->phase.support < right->phase.support ? -1 : 1;
+	if (left->phase.medium != right->phase.medium)
+		return left->phase.medium < right->phase.medium ? -1 : 1;
+	if (left->phase.void_relation != right->phase.void_relation)
+		return left->phase.void_relation < right->phase.void_relation ? -1 : 1;
+	if (left->phase.reference_frame != right->phase.reference_frame)
+		return left->phase.reference_frame < right->phase.reference_frame ? -1 : 1;
+	if ((comparison = StableIdCompare(&left->phase.mover.value,
+		&right->phase.mover.value)) != 0)
+		return comparison;
+	if ((comparison = memcmp(&left->phase.velocity, &right->phase.velocity,
+		sizeof(left->phase.velocity))) != 0)
+		return comparison < 0 ? -1 : 1;
+	if ((comparison = memcmp(&left->phase.elapsed_ms, &right->phase.elapsed_ms,
+		sizeof(left->phase.elapsed_ms))) != 0)
+		return comparison < 0 ? -1 : 1;
+	if (left->phase.time_quantum_ms != right->phase.time_quantum_ms)
+		return left->phase.time_quantum_ms < right->phase.time_quantum_ms ? -1 : 1;
+	if (left->phase.time_horizon_ms != right->phase.time_horizon_ms)
+		return left->phase.time_horizon_ms < right->phase.time_horizon_ms ? -1 : 1;
+	return left->sequence == right->sequence ? 0 :
+		(left->sequence < right->sequence ? -1 : 1);
+}
+
+static int OraclePhaseSequenceCompare(const void *left_value,
+	const void *right_value)
+{
+	const sg_audit_phase_entry_t *left = left_value;
+	const sg_audit_phase_entry_t *right = right_value;
+
+	if (left->sequence != right->sequence)
+		return left->sequence < right->sequence ? -1 : 1;
+	return OraclePhaseBasisCompare(left_value, right_value);
+}
+
+static int OraclePhaseOrderCompare(const void *left_value,
+	const void *right_value)
+{
+	const sg_audit_phase_entry_t *left = left_value;
+	const sg_audit_phase_entry_t *right = right_value;
+
+	return SG_RuneModelOrderKeyCompare(&left->phase.order,
+		&right->phase.order);
+}
+
+static int OracleAppendRawPhase(sg_audit_phase_entry_t **entries_out,
+	size_t *count_out, size_t *capacity_out,
+	const sg_rune_phase_basis_t *phase, uint32_t region,
+	sg_phase_catalog_error_t *error_out)
+{
+	sg_audit_phase_entry_t *grown;
+	size_t capacity;
+
+	if (!entries_out || !count_out || !capacity_out || !phase ||
+		*count_out == SIZE_MAX)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, 0U);
+		return 0;
+	}
+	if (*count_out == *capacity_out)
+	{
+		capacity = *capacity_out == 0U ? 16U : *capacity_out;
+		while (capacity <= *count_out)
+		{
+			if (capacity > SIZE_MAX / 2U)
+			{
+				capacity = SIZE_MAX;
+				break;
+			}
+			capacity *= 2U;
+		}
+		if (capacity == SIZE_MAX && *count_out == SIZE_MAX - 1U)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, 0U);
+			return 0;
+		}
+		if (!AllocationFits(capacity, sizeof(*grown)))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, 0U);
+			return 0;
+		}
+		grown = realloc(*entries_out, capacity * sizeof(*grown));
+		if (!grown)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		*entries_out = grown;
+		*capacity_out = capacity;
+	}
+	memset(&(*entries_out)[*count_out], 0,
+		sizeof((*entries_out)[*count_out]));
+	(*entries_out)[*count_out].phase = *phase;
+	(*entries_out)[*count_out].region = region;
+	(*entries_out)[*count_out].sequence = *count_out;
+	(*count_out)++;
+	return 1;
 }
 
 static int StableIdCompare(const sg_rune_stable_id_t *left,
@@ -247,6 +490,820 @@ static int RegionIndexById(const sg_configuration_semantics_t *semantics,
 			last = middle;
 	}
 	return -1;
+}
+
+static int OracleCellRange(const sg_audit_oracle_t *oracle, uint32_t cell,
+	uint32_t *first_out, uint32_t *last_out)
+{
+	uint32_t first = 0U;
+	uint32_t last = oracle->phase_count;
+
+	while (first < last)
+	{
+		uint32_t middle = first + (last - first) / 2U;
+
+		if (oracle->phases[middle].phase.order.source_index < cell)
+			first = middle + 1U;
+		else
+			last = middle;
+	}
+	*first_out = first;
+	last = oracle->phase_count;
+	while (first < last)
+	{
+		uint32_t middle = first + (last - first) / 2U;
+
+		if (oracle->phases[middle].phase.order.source_index <= cell)
+			first = middle + 1U;
+		else
+			last = middle;
+	}
+	*last_out = first;
+	return *first_out != *last_out;
+}
+
+static int OracleFindPhase(const sg_audit_oracle_t *oracle, uint32_t cell,
+	const sg_rune_phase_basis_t *candidate, uint32_t *phase_out)
+{
+	uint32_t first;
+	uint32_t last;
+	uint32_t index;
+
+	if (!OracleCellRange(oracle, cell, &first, &last))
+		return 0;
+	for (index = first; index < last; index++)
+		if (OraclePhaseEquivalent(&oracle->phases[index].phase, candidate))
+		{
+			if (phase_out)
+				*phase_out = index;
+			return 1;
+		}
+	return 0;
+}
+
+static int OracleFindNeutralPhase(const sg_audit_oracle_t *oracle,
+	uint32_t cell, const sg_rune_phase_basis_t *candidate,
+	sg_rune_stance_t stance, uint32_t *phase_out)
+{
+	uint32_t first;
+	uint32_t last;
+	uint32_t index;
+
+	if (!OracleCellRange(oracle, cell, &first, &last))
+		return 0;
+	for (index = first; index < last; index++)
+		if (oracle->phases[index].phase.stance == stance &&
+			OraclePhaseNeutralEquivalent(&oracle->phases[index].phase, candidate))
+		{
+			if (phase_out)
+				*phase_out = index;
+			return 1;
+		}
+	return 0;
+}
+
+static uint32_t OracleTimingSpan(const sg_mechanism_capability_fact_t *fact)
+{
+	uint64_t total = (uint64_t)fact->delay_ms + fact->dwell_ms +
+		fact->travel_ms + fact->wait_ms + fact->reset_ms;
+
+	if (total == 0U)
+		return 1U;
+	return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
+}
+
+static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
+	sg_audit_oracle_t *oracle, sg_phase_catalog_error_t *error_out)
+{
+	sg_audit_phase_entry_t *raw = NULL;
+	size_t raw_count = 0U;
+	size_t raw_capacity = 0U;
+	uint32_t *cell_ordinals = NULL;
+	uint32_t region;
+	uint32_t support;
+	uint32_t fact;
+
+	for (region = 0U; region < source->semantics->region_count; region++)
+	{
+		sg_rune_phase_basis_t phase;
+
+		OracleFillPhase(source, &source->semantics->regions[region], 0, NULL,
+			0U, &phase);
+		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
+			region, error_out))
+			goto failure;
+	}
+	for (support = 0U;
+		support < source->mover_support_provider->support_count; support++)
+	{
+		const sg_phase_mover_support_t *record =
+			&source->mover_support_provider->supports[support];
+		int region_index = RegionIndexById(source->semantics,
+			record->semantic_region_id);
+		sg_rune_phase_basis_t phase;
+
+		if (region_index < 0)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+				support);
+			goto failure;
+		}
+		OracleFillPhase(source, &source->semantics->regions[region_index], 1,
+			&record->mechanism, 1U, &phase);
+		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
+			(uint32_t)region_index, error_out))
+			goto failure;
+	}
+	for (fact = 0U; fact < source->mover_support_provider->fact_count; fact++)
+	{
+		const sg_mechanism_capability_fact_t *record =
+			&source->mover_support_provider->facts[fact];
+		sg_rune_phase_basis_t phase;
+		uint32_t elapsed;
+		uint32_t frame = source->authority->identity.physics.frame_ms;
+
+		if (record->source_region >= source->semantics->region_count ||
+			record->destination_region >= source->semantics->region_count)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, fact);
+			goto failure;
+		}
+		OracleFillPhase(source, &source->semantics->regions[
+			record->destination_region], 1, &record->mechanism_id, 1U, &phase);
+		elapsed = OracleTimingSpan(record);
+		if (elapsed > frame)
+			elapsed = frame;
+		if (elapsed == 0U)
+			elapsed = source->authority->identity.physics.substep_ms;
+		phase.order.variant = 3U;
+		phase.elapsed_ms.min_value = (float)elapsed;
+		phase.elapsed_ms.max_value = (float)frame;
+		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
+			record->destination_region, error_out))
+			goto failure;
+	}
+	if (raw_count > UINT32_MAX)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, UINT32_MAX);
+		goto failure;
+	}
+	if (raw_count != 0U)
+	{
+		size_t unique = 0U;
+		size_t index;
+
+		qsort(raw, raw_count, sizeof(*raw), OraclePhaseBasisCompare);
+		for (index = 0U; index < raw_count; index++)
+		{
+			if (unique == 0U ||
+				raw[index].phase.order.source_index !=
+					raw[unique - 1U].phase.order.source_index ||
+				!OraclePhaseEquivalent(&raw[index].phase,
+					&raw[unique - 1U].phase))
+				raw[unique++] = raw[index];
+		}
+		raw_count = unique;
+		qsort(raw, raw_count, sizeof(*raw), OraclePhaseSequenceCompare);
+	}
+	if (source->configuration->cell_count != 0U)
+	{
+		if (!AllocationFits((size_t)source->configuration->cell_count,
+			sizeof(*cell_ordinals)))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+				source->configuration->cell_count);
+			goto failure;
+		}
+		cell_ordinals = calloc((size_t)source->configuration->cell_count,
+			sizeof(*cell_ordinals));
+		if (!cell_ordinals)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			goto failure;
+		}
+	}
+	for (region = 0U; region < (uint32_t)raw_count; region++)
+	{
+		uint32_t cell = raw[region].phase.order.source_index;
+		uint32_t ordinal;
+
+		if (cell >= source->configuration->cell_count ||
+			cell_ordinals[cell] >= SG_RUNE_MODEL_MAX_CELL_PHASES)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, cell);
+			goto failure;
+		}
+		ordinal = cell_ordinals[cell]++;
+		raw[region].phase.order.local_ordinal = ordinal;
+		raw[region].phase.id.value = SG_RuneModelStableIdFromOrderKey(
+			&raw[region].phase.order);
+		if (!SG_RuneModelPhaseValid(&raw[region].phase))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_PHASE,
+				region);
+			goto failure;
+		}
+	}
+	if (raw_count != 0U)
+		qsort(raw, raw_count, sizeof(*raw), OraclePhaseOrderCompare);
+	oracle->phases = raw;
+	oracle->phase_count = (uint32_t)raw_count;
+	free(cell_ordinals);
+	return 1;
+
+failure:
+	free(cell_ordinals);
+	free(raw);
+	return 0;
+}
+
+static int OracleAppendBinding(sg_audit_oracle_t *oracle, size_t *capacity_out,
+	uint64_t region_id, uint32_t cell, uint32_t phase,
+	sg_phase_mechanism_state_mask_t state_mask,
+	sg_phase_catalog_error_t *error_out)
+{
+	sg_phase_catalog_binding_t *grown;
+	size_t capacity;
+
+	if (oracle->binding_count == UINT32_MAX)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+			oracle->binding_count);
+		return 0;
+	}
+	if ((size_t)oracle->binding_count == *capacity_out)
+	{
+		capacity = *capacity_out == 0U ? 16U : *capacity_out;
+		while (capacity <= (size_t)oracle->binding_count)
+		{
+			if (capacity > SIZE_MAX / 2U)
+			{
+				capacity = SIZE_MAX;
+				break;
+			}
+			capacity *= 2U;
+		}
+		if (!AllocationFits(capacity, sizeof(*grown)))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+				oracle->binding_count);
+			return 0;
+		}
+		grown = realloc(oracle->bindings, capacity * sizeof(*grown));
+		if (!grown)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		oracle->bindings = grown;
+		*capacity_out = capacity;
+	}
+	memset(&oracle->bindings[oracle->binding_count], 0,
+		sizeof(oracle->bindings[oracle->binding_count]));
+	oracle->bindings[oracle->binding_count].semantic_region_id = region_id;
+	oracle->bindings[oracle->binding_count].configuration_cell = cell;
+	oracle->bindings[oracle->binding_count].phase = oracle->phases[phase].phase.id;
+	oracle->bindings[oracle->binding_count].mechanism_state_mask = state_mask;
+	oracle->binding_count++;
+	return 1;
+}
+
+static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
+	sg_audit_oracle_t *oracle, sg_phase_catalog_error_t *error_out)
+{
+	size_t capacity = 0U;
+	uint32_t region;
+	uint32_t support_cursor = 0U;
+
+	for (region = 0U; region < source->semantics->region_count; region++)
+	{
+		const sg_configuration_semantic_region_t *record =
+			&source->semantics->regions[region];
+		sg_rune_phase_basis_t phase;
+		uint32_t phase_index;
+
+		OracleFillPhase(source, record, 0, NULL, 0U, &phase);
+		if (!OracleFindPhase(oracle, record->cell, &phase, &phase_index) ||
+			!OracleAppendBinding(oracle, &capacity, record->id, record->cell,
+				phase_index, 0U, error_out))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+				region);
+			return 0;
+		}
+		while (support_cursor < source->mover_support_provider->support_count &&
+			source->mover_support_provider->supports[support_cursor].
+				semantic_region_id < record->id)
+			support_cursor++;
+		while (support_cursor < source->mover_support_provider->support_count &&
+			source->mover_support_provider->supports[support_cursor].
+			semantic_region_id == record->id)
+		{
+			const sg_phase_mover_support_t *support =
+				&source->mover_support_provider->supports[support_cursor];
+
+			OracleFillPhase(source, record, 1, &support->mechanism, 1U, &phase);
+			if (!OracleFindPhase(oracle, record->cell, &phase, &phase_index) ||
+				!OracleAppendBinding(oracle, &capacity, record->id, record->cell,
+					phase_index, support->mechanism_state_mask, error_out))
+			{
+				OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+					support_cursor);
+				return 0;
+			}
+			support_cursor++;
+		}
+	}
+	if (support_cursor != source->mover_support_provider->support_count)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+			support_cursor);
+		return 0;
+	}
+	return 1;
+}
+
+static int OracleByteCompare(const void *left_value, const void *right_value,
+	size_t size)
+{
+	const unsigned char *left = left_value;
+	const unsigned char *right = right_value;
+	size_t index;
+
+	for (index = 0U; index < size; index++)
+		if (left[index] != right[index])
+			return left[index] < right[index] ? -1 : 1;
+	return 0;
+}
+
+static int OracleTransitionPairCompare(const void *left_value,
+	const void *right_value)
+{
+	return OracleByteCompare(left_value, right_value,
+		sizeof(sg_phase_catalog_transition_pair_t));
+}
+
+static int OracleAppendTransition(sg_audit_oracle_t *oracle,
+	size_t *capacity_out, const sg_rune_phase_transition_t *transition,
+	const sg_phase_catalog_transition_evidence_t *evidence,
+	sg_phase_catalog_error_t *error_out)
+{
+	sg_phase_catalog_transition_pair_t *grown;
+	size_t capacity;
+
+	if (oracle->transition_count == UINT32_MAX)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+			oracle->transition_count);
+		return 0;
+	}
+	if ((size_t)oracle->transition_count == *capacity_out)
+	{
+		capacity = *capacity_out == 0U ? 16U : *capacity_out;
+		while (capacity <= (size_t)oracle->transition_count)
+		{
+			if (capacity > SIZE_MAX / 2U)
+			{
+				capacity = SIZE_MAX;
+				break;
+			}
+			capacity *= 2U;
+		}
+		if (!AllocationFits(capacity, sizeof(*grown)))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+				oracle->transition_count);
+			return 0;
+		}
+		grown = realloc(oracle->transitions, capacity * sizeof(*grown));
+		if (!grown)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		oracle->transitions = grown;
+		*capacity_out = capacity;
+	}
+	memset(&oracle->transitions[oracle->transition_count], 0,
+		sizeof(oracle->transitions[oracle->transition_count]));
+	oracle->transitions[oracle->transition_count].transition = *transition;
+	oracle->transitions[oracle->transition_count].evidence = *evidence;
+	oracle->transition_count++;
+	return 1;
+}
+
+static int OracleAirbornePhase(const sg_rune_phase_basis_t *phase)
+{
+	return phase && phase->motion == SG_RUNE_MOTION_AIRBORNE &&
+		phase->support == SG_RUNE_SUPPORT_NONE &&
+		phase->reference_frame == SG_RUNE_FRAME_WORLD &&
+		!SG_RuneModelStableIdValid(&phase->mover.value);
+}
+
+static int OracleBuildStanceTransitions(const sg_phase_catalog_source_t *source,
+	sg_audit_oracle_t *oracle, size_t *capacity_out,
+	sg_phase_catalog_error_t *error_out)
+{
+	uint32_t overlap_index;
+
+	for (overlap_index = 0U;
+		overlap_index < source->configuration->stance_overlap_count;
+		overlap_index++)
+	{
+		const sg_configuration_stance_overlap_t *overlap =
+			&source->configuration->stance_overlaps[overlap_index];
+		uint32_t direction;
+
+		for (direction = 0U; direction < 2U; direction++)
+		{
+			uint32_t source_cell = direction == 0U ? overlap->standing_cell :
+				overlap->crouching_cell;
+			uint32_t destination_cell = direction == 0U ? overlap->crouching_cell :
+				overlap->standing_cell;
+			sg_rune_stance_t source_stance = direction == 0U ?
+				SG_RUNE_STANCE_STANDING : SG_RUNE_STANCE_CROUCHING;
+			sg_rune_stance_t destination_stance = direction == 0U ?
+				SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+			uint32_t source_first;
+			uint32_t source_last;
+			uint32_t phase;
+
+			if (!OracleCellRange(oracle, source_cell, &source_first, &source_last))
+				continue;
+			for (phase = source_first; phase < source_last; phase++)
+			{
+				uint32_t destination_phase;
+				sg_rune_phase_transition_t transition;
+				sg_phase_catalog_transition_evidence_t evidence;
+				uint32_t quantum = source->authority->identity.physics.substep_ms;
+				uint32_t frame = source->authority->identity.physics.frame_ms;
+				uint32_t source_region;
+				uint32_t destination_region;
+
+				if (oracle->phases[phase].phase.stance != source_stance ||
+					oracle->phases[phase].phase.reference_frame != SG_RUNE_FRAME_WORLD ||
+					!OracleFindNeutralPhase(oracle, destination_cell,
+						&oracle->phases[phase].phase, destination_stance,
+						&destination_phase))
+					continue;
+				source_region = oracle->phases[phase].region;
+				destination_region = oracle->phases[destination_phase].region;
+				if (source_region >= source->semantics->region_count ||
+					destination_region >= source->semantics->region_count)
+				{
+					OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+						phase);
+					return 0;
+				}
+				memset(&transition, 0, sizeof(transition));
+				memset(&evidence, 0, sizeof(evidence));
+				transition.cell = source->configuration->cells[source_cell].id;
+				transition.destination_cell =
+					source->configuration->cells[destination_cell].id;
+				transition.source_phase = oracle->phases[phase].phase.id;
+				transition.destination_phase =
+					oracle->phases[destination_phase].phase.id;
+				transition.kind = SG_RUNE_PHASE_TRANSITION_STANCE;
+				transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+				transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
+					(float)frame };
+				evidence.origin = SG_PHASE_CATALOG_TRANSITION_STANCE_OVERLAP;
+				evidence.source_record = overlap_index;
+				evidence.destination_record = SG_PHASE_CATALOG_INDEX_NONE;
+				evidence.source_cell = source_cell;
+				evidence.destination_cell = destination_cell;
+				evidence.source_region_id = source->semantics->regions[
+					source_region].id;
+				evidence.destination_region_id = source->semantics->regions[
+					destination_region].id;
+				if (!OracleAppendTransition(oracle, capacity_out, &transition,
+					&evidence, error_out))
+					return 0;
+			}
+		}
+	}
+	return 1;
+}
+
+static int OracleBuildPortalTransitions(const sg_phase_catalog_source_t *source,
+	sg_audit_oracle_t *oracle, size_t *capacity_out,
+	sg_phase_catalog_error_t *error_out)
+{
+	uint32_t portal_index;
+
+	if (!oracle->phases)
+	{
+		if (oracle->phase_count != 0U)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		return 1;
+	}
+
+	for (portal_index = 0U;
+		portal_index < source->configuration->portal_count; portal_index++)
+	{
+		const sg_configuration_portal_t *portal =
+			&source->configuration->portals[portal_index];
+		uint32_t direction;
+
+		for (direction = 0U; direction < 2U; direction++)
+		{
+			uint32_t source_cell = direction == 0U ? portal->from_cell :
+				portal->to_cell;
+			uint32_t destination_cell = direction == 0U ? portal->to_cell :
+				portal->from_cell;
+			uint32_t source_first;
+			uint32_t source_last;
+			uint32_t phase;
+
+			if (!OracleCellRange(oracle, source_cell, &source_first, &source_last))
+				continue;
+			for (phase = source_first; phase < source_last; phase++)
+			{
+				uint32_t destination_phase;
+				sg_rune_phase_transition_t transition;
+				sg_phase_catalog_transition_evidence_t evidence;
+				uint32_t source_region;
+				uint32_t destination_region;
+
+				if (oracle->phases[phase].phase.stance != portal->stance ||
+					!OracleFindPhase(oracle, destination_cell,
+						&oracle->phases[phase].phase, &destination_phase) ||
+					oracle->phases[destination_phase].phase.stance != portal->stance)
+					continue;
+				source_region = oracle->phases[phase].region;
+				destination_region = oracle->phases[destination_phase].region;
+				if (source_region >= source->semantics->region_count ||
+					destination_region >= source->semantics->region_count)
+				{
+					OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+						phase);
+					return 0;
+				}
+				memset(&transition, 0, sizeof(transition));
+				memset(&evidence, 0, sizeof(evidence));
+				transition.cell = source->configuration->cells[source_cell].id;
+				transition.destination_cell =
+					source->configuration->cells[destination_cell].id;
+				transition.source_phase = oracle->phases[phase].phase.id;
+				transition.destination_phase =
+					oracle->phases[destination_phase].phase.id;
+				transition.kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
+				transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+				transition.duration_ms = (sg_rune_interval_t){ 0.0f, 0.0f };
+				evidence.origin = SG_PHASE_CATALOG_TRANSITION_PORTAL;
+				evidence.source_record = portal_index;
+				evidence.destination_record = destination_cell;
+				evidence.source_cell = source_cell;
+				evidence.destination_cell = destination_cell;
+				evidence.source_region_id = source->semantics->regions[
+					source_region].id;
+				evidence.destination_region_id = source->semantics->regions[
+					destination_region].id;
+				evidence.portal = portal->id;
+				/* A portal is a geometric boundary relation.  It intentionally
+				 * carries no movement timing. */
+				evidence.portal_duration_ms = 0U;
+				if (!OracleAppendTransition(oracle, capacity_out, &transition,
+					&evidence, error_out))
+					return 0;
+			}
+		}
+	}
+	return 1;
+}
+
+static int OracleBuildSupportTransitions(const sg_phase_catalog_source_t *source,
+	sg_audit_oracle_t *oracle, size_t *capacity_out,
+	sg_phase_catalog_error_t *error_out)
+{
+	uint32_t phase;
+
+	for (phase = 0U; phase < oracle->phase_count; phase++)
+	{
+		sg_rune_phase_basis_t candidate;
+		uint32_t supported_phase;
+		uint32_t cell = oracle->phases[phase].phase.order.source_index;
+		uint32_t source_region = oracle->phases[phase].region;
+		uint32_t destination_region;
+		sg_rune_phase_transition_t transition;
+		sg_phase_catalog_transition_evidence_t evidence;
+		uint32_t frame = source->authority->identity.physics.frame_ms;
+		uint32_t quantum = source->authority->identity.physics.substep_ms;
+
+		if (!OracleAirbornePhase(&oracle->phases[phase].phase))
+			continue;
+		candidate = oracle->phases[phase].phase;
+		candidate.motion = SG_RUNE_MOTION_SUPPORTED;
+		candidate.support = SG_RUNE_SUPPORT_SUPPORTED;
+		if (!OracleFindPhase(oracle, cell, &candidate, &supported_phase))
+			continue;
+		destination_region = oracle->phases[supported_phase].region;
+		if (phase == supported_phase || source_region >= source->semantics->region_count ||
+			destination_region >= source->semantics->region_count)
+			continue;
+		memset(&transition, 0, sizeof(transition));
+		memset(&evidence, 0, sizeof(evidence));
+		transition.cell = source->configuration->cells[cell].id;
+		transition.destination_cell = source->configuration->cells[cell].id;
+		transition.source_phase = oracle->phases[phase].phase.id;
+		transition.destination_phase = oracle->phases[supported_phase].phase.id;
+		transition.kind = SG_RUNE_PHASE_TRANSITION_SUPPORT;
+		transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
+			(float)frame };
+		evidence.origin = SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE;
+		evidence.source_record = source_region;
+		evidence.destination_record = destination_region;
+		evidence.source_cell = cell;
+		evidence.destination_cell = cell;
+		evidence.source_region_id = source->semantics->regions[source_region].id;
+		evidence.destination_region_id =
+			source->semantics->regions[destination_region].id;
+		if (!OracleAppendTransition(oracle, capacity_out, &transition, &evidence,
+			error_out))
+			return 0;
+	}
+	return 1;
+}
+
+static uint32_t OracleStateBit(sg_mechanism_state_t state)
+{
+	if (state < SG_MECHANISM_STATE_INACTIVE ||
+		state >= SG_MECHANISM_STATE_COUNT)
+		return 0U;
+	return UINT32_C(1) << (uint32_t)state;
+}
+
+static int OracleBuildMechanismTransitions(
+	const sg_phase_catalog_source_t *source, sg_audit_oracle_t *oracle,
+	size_t *capacity_out, sg_phase_catalog_error_t *error_out)
+{
+	uint32_t fact_index;
+
+	for (fact_index = 0U;
+		fact_index < source->mover_support_provider->fact_count; fact_index++)
+	{
+		const sg_mechanism_capability_fact_t *fact =
+			&source->mover_support_provider->facts[fact_index];
+		const sg_configuration_semantic_region_t *source_region;
+		const sg_configuration_semantic_region_t *destination_region;
+		sg_rune_phase_basis_t source_candidate;
+		sg_rune_phase_basis_t destination_candidate;
+		uint32_t source_phase;
+		uint32_t destination_phase;
+		uint32_t elapsed;
+		uint32_t frame = source->authority->identity.physics.frame_ms;
+		uint32_t source_cell;
+		uint32_t destination_cell;
+		sg_rune_phase_transition_t transition;
+		sg_phase_catalog_transition_evidence_t evidence;
+
+		if (fact->source_region >= source->semantics->region_count ||
+			fact->destination_region >= source->semantics->region_count)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+				fact_index);
+			return 0;
+		}
+		source_region = &source->semantics->regions[fact->source_region];
+		destination_region = &source->semantics->regions[fact->destination_region];
+		source_cell = source_region->cell;
+		destination_cell = destination_region->cell;
+		OracleFillPhase(source, source_region, 1, &fact->mechanism_id, 1U,
+			&source_candidate);
+		OracleFillPhase(source, destination_region, 1, &fact->mechanism_id, 1U,
+			&destination_candidate);
+		if (!OracleFindPhase(oracle, source_cell, &source_candidate, &source_phase) ||
+			!OracleFindPhase(oracle, destination_cell, &destination_candidate,
+				&destination_phase))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+				fact_index);
+			return 0;
+		}
+		elapsed = OracleTimingSpan(fact);
+		if (elapsed > frame)
+			elapsed = frame;
+		if (elapsed == 0U)
+			elapsed = source->authority->identity.physics.substep_ms;
+		destination_candidate.order.variant = 3U;
+		destination_candidate.elapsed_ms.min_value = (float)elapsed;
+		destination_candidate.elapsed_ms.max_value = (float)frame;
+		if (!OracleFindPhase(oracle, destination_cell, &destination_candidate,
+			&destination_phase))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+				fact_index);
+			return 0;
+		}
+		if (source_phase == destination_phase)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+				fact_index);
+			return 0;
+		}
+		memset(&transition, 0, sizeof(transition));
+		memset(&evidence, 0, sizeof(evidence));
+		transition.cell = source->configuration->cells[source_cell].id;
+		transition.destination_cell =
+			source->configuration->cells[destination_cell].id;
+		transition.source_phase = oracle->phases[source_phase].phase.id;
+		transition.destination_phase = oracle->phases[destination_phase].phase.id;
+		transition.flags = source_cell == destination_cell ? 0U :
+			SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+		transition.kind = fact->kind == SG_MECHANISM_CAPABILITY_DWELL ?
+			SG_RUNE_PHASE_TRANSITION_MOVER_DWELL : SG_RUNE_PHASE_TRANSITION_TIME;
+		transition.duration_ms = (sg_rune_interval_t){
+			(float)OracleTimingSpan(fact), (float)OracleTimingSpan(fact) };
+		evidence.origin = SG_PHASE_CATALOG_TRANSITION_MECHANISM_STATE_TIMING;
+		evidence.source_record = fact_index;
+		evidence.destination_record = SG_PHASE_CATALOG_INDEX_NONE;
+		evidence.source_cell = source_cell;
+		evidence.destination_cell = destination_cell;
+		evidence.source_region_id = source_region->id;
+		evidence.destination_region_id = destination_region->id;
+		evidence.mechanism = fact->mechanism_id;
+		evidence.source_state_mask = (sg_phase_mechanism_state_mask_t)
+			OracleStateBit(fact->source_state);
+		evidence.destination_state_mask = (sg_phase_mechanism_state_mask_t)
+			OracleStateBit(fact->destination_state);
+		evidence.provider_verifier_identity =
+			source->mover_support_provider->verifier_identity;
+		evidence.delay_ms = fact->delay_ms;
+		evidence.dwell_ms = fact->dwell_ms;
+		evidence.travel_ms = fact->travel_ms;
+		evidence.wait_ms = fact->wait_ms;
+		evidence.reset_ms = fact->reset_ms;
+		evidence.activation_time_ms = fact->activation_time_ms;
+		evidence.active_time_ms = fact->active_time_ms;
+		evidence.exit_time_ms = fact->exit_time_ms;
+		evidence.reset_time_ms = fact->reset_time_ms;
+		if (!OracleAppendTransition(oracle, capacity_out, &transition, &evidence,
+			error_out))
+			return 0;
+	}
+	return 1;
+}
+
+static void OracleDestroy(sg_audit_oracle_t *oracle)
+{
+	if (!oracle)
+		return;
+	free(oracle->phases);
+	free(oracle->bindings);
+	free(oracle->transitions);
+	memset(oracle, 0, sizeof(*oracle));
+}
+
+static int OracleBuild(const sg_phase_catalog_source_t *source,
+	sg_audit_oracle_t *oracle, sg_phase_catalog_error_t *error_out)
+{
+	size_t transition_capacity = 0U;
+	uint32_t index;
+
+	memset(oracle, 0, sizeof(*oracle));
+	oracle->completion = source->configuration->cell_count == 0U ?
+		SG_PHASE_CATALOG_PROVEN_EMPTY : SG_PHASE_CATALOG_COMPLETE;
+	oracle->mover_support_verifier_identity =
+		source->mover_support_provider->verifier_identity;
+	if (!OracleBuildPhases(source, oracle, error_out) ||
+		!OracleBuildBindings(source, oracle, error_out) ||
+		!OracleBuildSupportTransitions(source, oracle, &transition_capacity,
+			error_out) ||
+		!OracleBuildStanceTransitions(source, oracle, &transition_capacity,
+			error_out) ||
+		!OracleBuildPortalTransitions(source, oracle, &transition_capacity,
+			error_out) ||
+		!OracleBuildMechanismTransitions(source, oracle, &transition_capacity,
+			error_out))
+	{
+		OracleDestroy(oracle);
+		return 0;
+	}
+	if (oracle->transition_count != 0U)
+	{
+		uint32_t output = 1U;
+
+		qsort(oracle->transitions, oracle->transition_count,
+			sizeof(*oracle->transitions), OracleTransitionPairCompare);
+		for (index = 1U; index < oracle->transition_count; index++)
+			if (OracleTransitionPairCompare(&oracle->transitions[index - 1U],
+				&oracle->transitions[index]) != 0)
+				oracle->transitions[output++] = oracle->transitions[index];
+		oracle->transition_count = output;
+	}
+	if (oracle->transition_count > SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+			oracle->transition_count);
+		OracleDestroy(oracle);
+		return 0;
+	}
+	oracle->transition_completion = oracle->transition_count == 0U ?
+		SG_PHASE_CATALOG_PROVEN_EMPTY : SG_PHASE_CATALOG_COMPLETE;
+	return 1;
 }
 
 static int PhaseExceptStanceEqual(const sg_rune_phase_basis_t *left,
@@ -492,8 +1549,11 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 	const sg_phase_catalog_t *catalog,
 	sg_phase_catalog_audit_result_t *result_out)
 {
-	sg_phase_catalog_expected_t expected;
+	sg_audit_oracle_t oracle;
+	sg_phase_catalog_expected_t phase_view;
 	sg_phase_catalog_error_t source_error;
+	sg_rune_phase_basis_t *oracle_phase_records = NULL;
+	sg_phase_catalog_transition_pair_t *catalog_pairs = NULL;
 	uint32_t index;
 	int duplicate;
 
@@ -513,8 +1573,10 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 		return 0;
 	}
 	memset(&source_error, 0, sizeof(source_error));
-	memset(&expected, 0, sizeof(expected));
-	if (!SG_PhaseCatalogBuildExpected(source, &expected, &source_error))
+	memset(&oracle, 0, sizeof(oracle));
+	memset(&phase_view, 0, sizeof(phase_view));
+	if (!SG_PhaseCatalogSourceValidate(source, &source_error) ||
+		!OracleBuild(source, &oracle, &source_error))
 	{
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_INVALID_SOURCE,
 			source_error.source_index);
@@ -523,31 +1585,51 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 	if (!SG_PhaseCatalogIdentityEqual(&catalog->identity,
 		&source->authority->identity) ||
 		catalog->mover_support_verifier_identity !=
-			expected.mover_support_verifier_identity)
+			oracle.mover_support_verifier_identity)
 	{
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_SOURCE_MISMATCH, 0U);
 		goto failure;
 	}
-	if (catalog->completion != expected.completion ||
-		catalog->transition_completion != expected.transition_completion)
+	if (catalog->completion != oracle.completion ||
+		catalog->transition_completion != oracle.transition_completion)
 	{
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_COMPLETION_DISAGREEMENT, 0U);
 		goto failure;
 	}
-	if (catalog->phase_count < expected.phase_count)
+	if (catalog->phase_count < oracle.phase_count)
 	{
-		result_out->omitted_phases = expected.phase_count - catalog->phase_count;
+		result_out->omitted_phases = oracle.phase_count - catalog->phase_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_OMITTED_PHASE,
 			catalog->phase_count);
 		goto failure;
 	}
-	if (catalog->phase_count > expected.phase_count)
+	if (catalog->phase_count > oracle.phase_count)
 	{
-		result_out->invented_phases = catalog->phase_count - expected.phase_count;
+		result_out->invented_phases = catalog->phase_count - oracle.phase_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_INVENTED_PHASE,
-			expected.phase_count);
+			oracle.phase_count);
 		goto failure;
 	}
+	if (oracle.phase_count != 0U)
+	{
+		if (!AllocationFits((size_t)oracle.phase_count,
+			sizeof(*oracle_phase_records)))
+		{
+			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_STORAGE_DISAGREEMENT, 0U);
+			goto failure;
+		}
+		oracle_phase_records = malloc((size_t)oracle.phase_count *
+			sizeof(*oracle_phase_records));
+		if (!oracle_phase_records)
+		{
+			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_STORAGE_DISAGREEMENT, 0U);
+			goto failure;
+		}
+		for (index = 0U; index < oracle.phase_count; index++)
+			oracle_phase_records[index] = oracle.phases[index].phase;
+	}
+	phase_view.phases = oracle_phase_records;
+	phase_view.phase_count = oracle.phase_count;
 	for (index = 0U; index < catalog->phase_count; index++)
 	{
 		if (!SG_RuneModelPhaseValid(&catalog->phases[index]) ||
@@ -565,9 +1647,9 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 		goto failure;
 	for (index = 0U; index < catalog->phase_count; index++)
 		if (!SG_PhaseCatalogPhaseEqual(&catalog->phases[index],
-			&expected.phases[index]))
+			&oracle.phases[index].phase))
 		{
-			int expected_index = PhaseIndexById(&expected,
+			int expected_index = PhaseIndexById(&phase_view,
 				&catalog->phases[index].id);
 
 			SetReport(result_out, expected_index < 0 ?
@@ -579,20 +1661,19 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 				result_out->invented_phases = 1U;
 			goto failure;
 		}
-	if (catalog->binding_count < expected.binding_count)
+	if (catalog->binding_count < oracle.binding_count)
 	{
-		result_out->omitted_bindings = expected.binding_count -
+		result_out->omitted_bindings = oracle.binding_count -
 			catalog->binding_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_OMITTED_BINDING,
 			catalog->binding_count);
 		goto failure;
 	}
-	if (catalog->binding_count > expected.binding_count)
+	if (catalog->binding_count > oracle.binding_count)
 	{
-		result_out->invented_bindings = catalog->binding_count -
-			expected.binding_count;
+		result_out->invented_bindings = catalog->binding_count - oracle.binding_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_INVENTED_BINDING,
-			expected.binding_count);
+			oracle.binding_count);
 		goto failure;
 	}
 	duplicate = DuplicateBinding(catalog, result_out);
@@ -600,68 +1681,98 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 		goto failure;
 	for (index = 0U; index < catalog->binding_count; index++)
 	{
-		if (PhaseIndexById(&expected, &catalog->bindings[index].phase) < 0)
+		if (PhaseIndexById(&phase_view, &catalog->bindings[index].phase) < 0)
 		{
 			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_UNRESOLVED_BINDING,
 				index);
 			goto failure;
 		}
 		if (!SG_PhaseCatalogBindingEqual(&catalog->bindings[index],
-			&expected.bindings[index]))
+			&oracle.bindings[index]))
 		{
 			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_BINDING_DISAGREEMENT,
 				index);
 			goto failure;
 		}
 	}
-	if (catalog->transition_count < expected.transition_count)
+	if (catalog->transition_count < oracle.transition_count)
 	{
-		result_out->omitted_phases = expected.transition_count -
+		result_out->omitted_phases = oracle.transition_count -
 			catalog->transition_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_OMITTED_TRANSITION,
 			catalog->transition_count);
 		goto failure;
 	}
-	if (catalog->transition_count > expected.transition_count)
+	if (catalog->transition_count > oracle.transition_count)
 	{
-		result_out->invented_phases = catalog->transition_count -
-			expected.transition_count;
+		result_out->invented_phases = catalog->transition_count - oracle.transition_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_INVENTED_TRANSITION,
-			expected.transition_count);
+			oracle.transition_count);
 		goto failure;
 	}
 	duplicate = DuplicateTransition(catalog, result_out);
 	if (duplicate != 0)
 		goto failure;
+	if (catalog->transition_count != 0U)
+	{
+		if (!AllocationFits((size_t)catalog->transition_count,
+			sizeof(*catalog_pairs)))
+		{
+			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_STORAGE_DISAGREEMENT, 0U);
+			goto failure;
+		}
+		catalog_pairs = calloc((size_t)catalog->transition_count,
+			sizeof(*catalog_pairs));
+		if (!catalog_pairs)
+		{
+			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_STORAGE_DISAGREEMENT, 0U);
+			goto failure;
+		}
+		for (index = 0U; index < catalog->transition_count; index++)
+		{
+			catalog_pairs[index].transition = catalog->transitions[index];
+			catalog_pairs[index].evidence = catalog->transition_evidence[index];
+			/* The source-accounting oracle compares the transition meaning;
+			 * order/id are checked independently below. */
+			memset(&catalog_pairs[index].transition.id, 0,
+				sizeof(catalog_pairs[index].transition.id));
+			memset(&catalog_pairs[index].transition.order, 0,
+				sizeof(catalog_pairs[index].transition.order));
+		}
+		qsort(catalog_pairs, catalog->transition_count,
+			sizeof(*catalog_pairs), OracleTransitionPairCompare);
+	}
 	for (index = 0U; index < catalog->transition_count; index++)
 	{
-		if (!TransitionValid(source, &expected, index,
-			&catalog->transitions[index], &catalog->transition_evidence[index]))
+		if (catalog->transitions[index].order.source_index != index ||
+			!TransitionValid(source, &phase_view, index,
+				&catalog->transitions[index], &catalog->transition_evidence[index]))
 		{
 			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT,
 				index);
 			goto failure;
 		}
-		if (memcmp(&catalog->transitions[index], &expected.transitions[index],
-				sizeof(*catalog->transitions)) != 0 ||
-			memcmp(&catalog->transition_evidence[index],
-				&expected.transition_evidence[index],
-				sizeof(*catalog->transition_evidence)) != 0)
+		if (OracleTransitionPairCompare(&catalog_pairs[index],
+				&oracle.transitions[index]) != 0)
 		{
 			SetReport(result_out,
 				SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT, index);
 			goto failure;
 		}
 	}
-	result_out->code = expected.completion == SG_PHASE_CATALOG_PROVEN_EMPTY ?
+	result_out->code = oracle.completion == SG_PHASE_CATALOG_PROVEN_EMPTY ?
 		SG_PHASE_CATALOG_AUDIT_OK_PROVEN_EMPTY : SG_PHASE_CATALOG_AUDIT_OK_COMPLETE;
-	result_out->proved_phases = expected.phase_count;
-	result_out->proved_bindings = expected.binding_count;
-	SG_PhaseCatalogExpectedDestroy(&expected);
+	result_out->proved_phases = oracle.phase_count;
+	result_out->proved_bindings = oracle.binding_count;
+	free(catalog_pairs);
+	free(oracle_phase_records);
+	OracleDestroy(&oracle);
 	return 1;
 
 failure:
-	SG_PhaseCatalogExpectedDestroy(&expected);
+	free(catalog_pairs);
+	free(oracle_phase_records);
+	OracleDestroy(&oracle);
 	return 0;
 }
 

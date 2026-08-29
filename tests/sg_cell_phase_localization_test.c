@@ -593,6 +593,8 @@ static void SetFixtureTiming(locator_fixture_t *fixture, uint32_t frame_ms,
 static void FinalizeFixture(locator_fixture_t *fixture)
 {
 	sg_localization_status_t status;
+	uint32_t transition_index;
+	uint32_t phase_index;
 
 	fixture->model.version = SG_RUNE_MODEL_VERSION;
 	fixture->model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
@@ -609,6 +611,26 @@ static void FinalizeFixture(locator_fixture_t *fixture)
 	fixture->model.cell_count = fixture->semantics.region_count;
 	fixture->model.phases = fixture->phases;
 	fixture->model.phase_count = fixture->phase_count;
+	for (transition_index = 0U;
+		transition_index < fixture->model.phase_transition_count;
+		transition_index++)
+	{
+		sg_rune_phase_transition_t *transition =
+			&fixture->phase_transitions[transition_index];
+
+		for (phase_index = 0U; phase_index < fixture->phase_count;
+			phase_index++)
+			if (SG_RuneModelStableIdEqual(&transition->destination_phase.value,
+				&fixture->phases[phase_index].id.value))
+			{
+				uint32_t cell = fixture->coordinates[phase_index].cell_id;
+
+				if (cell < fixture->model.cell_count)
+					transition->destination_cell =
+						fixture->runtime_cells[cell].id;
+				break;
+			}
+	}
 	fixture->snapshot.identity = UINT64_C(0x201);
 	fixture->snapshot.topology_revision = UINT64_C(0x202);
 	fixture->snapshot.cell_count = fixture->model.cell_count;

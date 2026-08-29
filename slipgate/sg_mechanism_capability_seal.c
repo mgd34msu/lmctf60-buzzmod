@@ -90,23 +90,9 @@ static uint64_t SealDigest(const sg_mechanism_capability_set_t *capabilities)
 
 	if (digest == 0U)
 		return 0U;
-	/* Bind the acceptance stamp to the producer-owned allocation itself.  A
-	 * caller may copy the public record, but cannot make that copy accepted by
-	 * retargeting its self pointer without also knowing this keyed digest. */
 	digest = DigestBytes(digest, &capabilities->self,
 		sizeof(capabilities->self));
 	return DigestBytes(digest, &key, sizeof(key));
-}
-
-void SG_MechanismCapabilitySetStamp(
-	sg_mechanism_capability_set_t *capabilities)
-{
-	if (!capabilities)
-		return;
-	capabilities->seal_magic = SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->seal_magic_inverse = ~SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
-	capabilities->self = capabilities;
-	capabilities->seal_digest = SealDigest(capabilities);
 }
 
 int SG_MechanismCapabilitySetAccepted(

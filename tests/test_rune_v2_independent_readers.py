@@ -272,6 +272,12 @@ class RuneV2IndependentReaderTests(unittest.TestCase):
         _fix_checksums(malformed)
         self.assert_rejected_by_all(bytes(malformed))
 
+    def test_hostile_phase_transition_count(self) -> None:
+        malformed = bytearray(self.valid)
+        struct.pack_into("<I", malformed, _entry(4) + 8, 4_194_305)
+        _fix_checksums(malformed)
+        self.assert_rejected_by_all(bytes(malformed))
+
     def test_count_size_disagreement(self) -> None:
         malformed = bytearray(self.valid)
         struct.pack_into("<I", malformed, _entry(5) + 8, 3)

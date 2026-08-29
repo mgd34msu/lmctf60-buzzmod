@@ -14,10 +14,7 @@
 #define SG_RUNE_MODEL_MAX_PORTAL_VERTICES UINT32_C(8388608)
 #define SG_RUNE_MODEL_MAX_PORTAL_VERTICES_PER_PORTAL UINT32_C(64)
 #define SG_RUNE_MODEL_MAX_PHASES UINT32_C(262144)
-/* A transition count is bounded only by its uint32 representation and the
- * checked allocation/offset arithmetic at each storage boundary.  Unlike the
- * fixed-shape model arrays below, phase transitions have no policy cap. */
-#define SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS UINT32_MAX
+#define SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS UINT32_C(4194304)
 #define SG_RUNE_MODEL_MAX_SURFACES UINT32_C(2097152)
 #define SG_RUNE_MODEL_MAX_AFFORDANCES UINT32_C(2097152)
 #define SG_RUNE_MODEL_MAX_KERNELS UINT32_C(4194304)

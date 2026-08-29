@@ -584,6 +584,7 @@ static int TransitionRecordValid(const sg_rune_model_t *model,
 {
 	sg_rune_stable_id_t expected;
 	uint32_t cell;
+	uint32_t destination_cell;
 
 	if (!transition || !SG_RuneModelOrderKeyValid(&transition->order) ||
 		transition->order.domain != SG_RUNE_ORDER_PHASE_TRANSITION ||
@@ -600,14 +601,24 @@ static int TransitionRecordValid(const sg_rune_model_t *model,
 		!isfinite(transition->duration_ms.max_value) ||
 		transition->duration_ms.min_value < 0.0f ||
 		transition->duration_ms.max_value < transition->duration_ms.min_value ||
-		transition->duration_ms.max_value <= 0.0f || transition->flags != 0U ||
+		(transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL ?
+			(transition->duration_ms.min_value != 0.0f ||
+				transition->duration_ms.max_value != 0.0f) :
+			transition->duration_ms.max_value <= 0.0f) ||
+		(transition->flags & ~(uint32_t)SG_RUNE_PHASE_TRANSITION_FLAGS_KNOWN) != 0U ||
 		!FindRuntimeCell(model, &transition->cell, &cell, comparisons) ||
+		!FindRuntimeCell(model, &transition->destination_cell, &destination_cell,
+			comparisons) ||
+		((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U) !=
+			(cell != destination_cell) ||
+		(transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL &&
+			cell == destination_cell) ||
 		!FindRuntimePhase(model, &transition->source_phase, source_out,
 			comparisons) ||
 		!FindRuntimePhase(model, &transition->destination_phase,
 			destination_out, comparisons) || *source_out == *destination_out ||
 		snapshot->phases[*source_out].cell_id != cell ||
-		snapshot->phases[*destination_out].cell_id != cell ||
+		snapshot->phases[*destination_out].cell_id != destination_cell ||
 		!PhaseTransitionSemanticsValid(transition,
 			&model->phases[*source_out], &model->phases[*destination_out]))
 		return 0;
@@ -1528,6 +1539,11 @@ static int RepresentedPhaseTransition(const sg_cell_phase_locator_t *locator,
 			case SG_RUNE_PHASE_TRANSITION_SUPPORT:
 				matches = previous->support !=
 					model->phases[destination_phase].support;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_PORTAL:
+				/* Portals are authenticated with the crossed boundary and
+				 * destination cell by the runtime-cell path below. */
+				matches = 0;
 				break;
 			case SG_RUNE_PHASE_TRANSITION_NONE:
 			case SG_RUNE_PHASE_TRANSITION_KIND_COUNT:

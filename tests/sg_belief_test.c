@@ -22,7 +22,7 @@ typedef struct belief_fixture_s
 {
 	sg_rune_plane_t planes[6];
 	sg_rune_phase_basis_t model_phases[3];
-	sg_rune_phase_transition_t model_transitions[1];
+	sg_rune_phase_transition_t model_transitions[8];
 	sg_rune_capability_kernel_t model_kernels[3];
 	sg_rune_cell_t cells[2];
 	sg_rune_model_t model;
@@ -123,6 +123,68 @@ static void SetKernel(sg_rune_capability_kernel_t *kernel,
 	kernel->parameters.gravity = 800.0f;
 	kernel->flags = SG_RUNE_KERNEL_DIRECTIONAL | SG_RUNE_KERNEL_PHASE_AWARE |
 		SG_RUNE_KERNEL_PROVEN;
+}
+
+static void SetPortalTransition(belief_fixture_t *fixture, uint32_t index,
+	uint32_t source_phase, uint32_t destination_phase)
+{
+	sg_rune_phase_transition_t *transition =
+		&fixture->model_transitions[index];
+	uint32_t source_cell = fixture->phases[source_phase].cell_id;
+	uint32_t destination_cell = fixture->phases[destination_phase].cell_id;
+
+	memset(transition, 0, sizeof(*transition));
+	transition->cell.value = fixture->cells[source_cell].id.value;
+	transition->destination_cell.value =
+		fixture->cells[destination_cell].id.value;
+	transition->source_phase.value =
+		fixture->model_phases[source_phase].id.value;
+	transition->destination_phase.value =
+		fixture->model_phases[destination_phase].id.value;
+	transition->kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
+	transition->duration_ms = Interval(0.0f, 0.0f);
+	transition->flags = source_cell == destination_cell ? 0U :
+		SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+	fixture->model.phase_transitions = fixture->model_transitions;
+	fixture->model.phase_transition_count = index + 1U;
+}
+
+static int PortalEntryHasCanonicalZeroPath(
+	const belief_fixture_t *fixture,
+	const sg_belief_horizon_kernel_t *kernel,
+	const sg_belief_horizon_entry_t *entry)
+{
+	size_t index;
+	uint32_t last_phase = UINT32_MAX;
+	uint32_t seen_phases = 0U;
+
+	for (index = entry->first_step;
+		index < entry->first_step + entry->step_count; index++)
+	{
+		const sg_belief_horizon_step_t *step = &kernel->steps[index];
+		int portal = step->kind == SG_BELIEF_HORIZON_PHASE_TRANSITION &&
+			step->record_index < fixture->model.phase_transition_count &&
+			fixture->model.phase_transitions[step->record_index].kind ==
+			SG_RUNE_PHASE_TRANSITION_PORTAL;
+
+		if (!portal)
+		{
+			last_phase = UINT32_MAX;
+			seen_phases = 0U;
+			continue;
+		}
+		if (step->from.phase_id >= 32U || step->to.phase_id >= 32U ||
+			(step->from.phase_id != last_phase && last_phase != UINT32_MAX) ||
+			(last_phase == UINT32_MAX &&
+				(seen_phases & (UINT32_C(1) << step->from.phase_id)) != 0U) ||
+			(seen_phases & (UINT32_C(1) << step->to.phase_id)) != 0U)
+			return 0;
+		if (last_phase == UINT32_MAX)
+			seen_phases |= UINT32_C(1) << step->from.phase_id;
+		seen_phases |= UINT32_C(1) << step->to.phase_id;
+		last_phase = step->to.phase_id;
+	}
+	return 1;
 }
 
 static void BeliefFixtureInit(belief_fixture_t *fixture)
@@ -2541,6 +2603,127 @@ static void TestHorizonIssuerZeroDurationClosure(void)
 	CHECK(source == NULL);
 }
 
+static void TestHorizonPortalSccClosure(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_state_t state;
+	sg_belief_horizon_source_t *source = NULL;
+	const sg_belief_horizon_kernel_t *kernels = NULL;
+	size_t kernel_count = 0U;
+	sg_rune_v2_content_id_t first_identity;
+	sg_rune_v2_content_id_t second_identity;
+	sg_rune_v2_content_id_t repeated_identity;
+	uint32_t origin;
+
+	/* A two-node bidirectional portal is one zero-time SCC.  Both directions
+	 * must be retained as canonical witnesses, but neither may be repeated. */
+	BeliefFixtureInit(&fixture);
+	SetPortalTransition(&fixture, 0U, 0U, 2U);
+	SetPortalTransition(&fixture, 1U, 2U, 0U);
+	fixture.model.kernel_count = 2U;
+	fixture.model_kernels[0].parameters.duration_ms = Interval(100.0f,
+		100.0f);
+	SetKernel(&fixture.model_kernels[1], &fixture.cells[1],
+		&fixture.model_phases[2], &fixture.cells[0],
+		&fixture.model_phases[1]);
+	fixture.model_kernels[1].parameters.duration_ms = Interval(100.0f,
+		100.0f);
+	InitState(&fixture, &state, storage, 8U);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		&source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &first_identity));
+	CHECK(kernel_count == 1U);
+	if (kernels && kernel_count == 1U)
+	{
+		int seen_portals[2] = { 0, 0 };
+		const sg_belief_horizon_kernel_t *kernel = &kernels[0];
+
+		for (origin = 0U; origin < fixture.snapshot.phase_count; origin++)
+		{
+			const sg_belief_horizon_span_t *span =
+				&kernel->origin_spans[origin];
+			size_t entry_index;
+			uint32_t merged_exits = 0U;
+
+			CHECK(span->entry_count == (origin == 1U ? 1U : 3U));
+			for (entry_index = span->first_entry;
+				entry_index < span->first_entry + span->entry_count;
+				entry_index++)
+			{
+				const sg_belief_horizon_entry_t *entry =
+					&kernel->entries[entry_index];
+				size_t step_index;
+
+				CHECK(PortalEntryHasCanonicalZeroPath(&fixture, kernel,
+					entry));
+				if (entry->to.phase_id == 1U && entry->step_count != 0U)
+					merged_exits++;
+				for (step_index = entry->first_step;
+					step_index < entry->first_step + entry->step_count;
+					step_index++)
+				{
+					const sg_belief_horizon_step_t *step =
+						&kernel->steps[step_index];
+					if (step->kind == SG_BELIEF_HORIZON_PHASE_TRANSITION &&
+						step->record_index < 2U)
+						seen_portals[step->record_index] = 1;
+				}
+			}
+			CHECK(merged_exits == (origin == 1U ? 0U : 2U));
+		}
+		CHECK(seen_portals[0] && seen_portals[1]);
+	}
+	SG_BeliefHorizonSourceDestroy(source);
+	source = NULL;
+
+	/* A three-node SCC exercises branch ordering and a positive-time exit. */
+	BeliefFixtureInit(&fixture);
+	SetPortalTransition(&fixture, 0U, 0U, 2U);
+	SetPortalTransition(&fixture, 1U, 2U, 0U);
+	SetPortalTransition(&fixture, 2U, 1U, 2U);
+	SetPortalTransition(&fixture, 3U, 2U, 1U);
+	fixture.model.kernel_count = 1U;
+	fixture.model.kernels = fixture.model_kernels;
+	fixture.model_kernels[0].parameters.duration_ms = Interval(100.0f,
+		100.0f);
+	InitState(&fixture, &state, storage, 8U);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		&source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &second_identity));
+	CHECK(kernel_count == 1U);
+	if (kernels && kernel_count == 1U)
+	{
+		const sg_belief_horizon_kernel_t *kernel = &kernels[0];
+
+		for (origin = 0U; origin < fixture.snapshot.phase_count; origin++)
+		{
+			const sg_belief_horizon_span_t *span =
+				&kernel->origin_spans[origin];
+
+			/* Baseline plus one two-step positive exit; portal loops do not
+			 * inflate support when the elapsed time is fixed at 100 ms. */
+			CHECK(span->entry_count == 2U);
+			CHECK(PortalEntryHasCanonicalZeroPath(&fixture, kernel,
+				&kernel->entries[span->first_entry]));
+			CHECK(PortalEntryHasCanonicalZeroPath(&fixture, kernel,
+				&kernel->entries[span->first_entry + 1U]));
+		}
+	}
+	CHECK(SG_RuneV2ContentIdValid(&first_identity));
+	CHECK(SG_RuneV2ContentIdValid(&second_identity));
+	SG_BeliefHorizonSourceDestroy(source);
+	source = NULL;
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		&source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &repeated_identity));
+	CHECK(SG_RuneV2ContentIdEqual(&second_identity, &repeated_identity));
+	SG_BeliefHorizonSourceDestroy(source);
+}
+
 static void TestHorizonOutputAliasBoundaries(void)
 {
 	belief_fixture_t fixture;
@@ -3394,6 +3577,7 @@ int main(void)
 	TestPredictionComposesAcceptedHorizon();
 	TestPredictionAuthorityRejectsFabrication();
 	TestHorizonIssuerZeroDurationClosure();
+	TestHorizonPortalSccClosure();
 	TestHorizonOutputAliasBoundaries();
 	TestHorizonHandleIdentityPreventsAllocatorAba();
 	TestHorizonRegistryAliasIsolation();

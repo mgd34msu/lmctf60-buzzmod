@@ -61,6 +61,36 @@ static sg_rune_model_identity_t Identity(void)
 	return identity;
 }
 
+/* Empty-provider fixtures are private test construction.  Production code
+ * receives an accepted result only from SG_MechanismCapabilityBuild; keeping
+ * this issuer in the test translation unit prevents a public forge seam. */
+static uint64_t TestDigestBytes(uint64_t digest, const void *data, size_t size)
+{
+	const unsigned char *bytes = data;
+	size_t index;
+
+	for (index = 0U; index < size; index++)
+		digest = (digest ^ (uint64_t)bytes[index]) * UINT64_C(1099511628211);
+	return digest;
+}
+
+static void TestIssueAcceptedEmpty(sg_mechanism_capability_set_t *capabilities,
+	const sg_rune_model_identity_t *identity)
+{
+	uint64_t digest;
+	const uint64_t key = UINT64_C(0x8f2c6a4d9137be25);
+
+	memset(capabilities, 0, sizeof(*capabilities));
+	capabilities->identity = *identity;
+	digest = SG_MechanismCapabilitySetDigest(capabilities);
+	capabilities->seal_magic = SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
+	capabilities->seal_magic_inverse = ~SG_MECHANISM_CAPABILITY_SEAL_MAGIC;
+	capabilities->self = capabilities;
+	digest = TestDigestBytes(digest, &capabilities->self,
+		sizeof(capabilities->self));
+	capabilities->seal_digest = TestDigestBytes(digest, &key, sizeof(key));
+}
+
 static void SetCell(sg_configuration_cell_t *cell,
 	const sg_rune_model_identity_t *identity, uint32_t index,
 	sg_rune_stance_t stance)
@@ -94,6 +124,7 @@ static int FixtureInit(phase_fixture_t *fixture, uint32_t cell_count,
 	uint32_t region_count, int split_support)
 {
 	sg_rune_model_identity_t identity = Identity();
+	sg_mechanism_capability_set_t capabilities;
 	sg_phase_catalog_error_t provider_error;
 	uint32_t index;
 
@@ -140,7 +171,8 @@ static int FixtureInit(phase_fixture_t *fixture, uint32_t cell_count,
 		SetRegion(&fixture->regions[1], 1U, 0U,
 			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
 	}
-	if (!SG_PhaseMoverSupportProviderBuildEmpty(&identity,
+	TestIssueAcceptedEmpty(&capabilities, &identity);
+	if (!SG_PhaseMoverSupportProviderBuild(&fixture->semantics, &capabilities,
 		&fixture->provider, &provider_error))
 	{
 		free(fixture->cells);
@@ -293,8 +325,13 @@ static void TestRealConfigurationSemanticsProducer(void)
 		return;
 	}
 	CHECK_PHASE(fixture.semantics->regions[0].id == 0U);
-	CHECK_PHASE(SG_PhaseMoverSupportProviderBuildEmpty(&identity, &provider,
-		&catalog_error));
+	{
+		sg_mechanism_capability_set_t capabilities;
+
+		TestIssueAcceptedEmpty(&capabilities, &identity);
+		CHECK_PHASE(SG_PhaseMoverSupportProviderBuild(
+			fixture.semantics, &capabilities, &provider, &catalog_error));
+	}
 	memset(&source, 0, sizeof(source));
 	source.authority = &fixture.authority;
 	source.configuration = fixture.configuration;

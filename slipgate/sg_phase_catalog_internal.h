@@ -73,12 +73,4 @@ int SG_PhaseCatalogIdentityEqual(const sg_rune_model_identity_t *left,
 	const sg_rune_model_identity_t *right);
 int SG_PhaseMoverSupportProviderHeaderValid(
 	const sg_phase_mover_support_provider_t *provider);
-/* Test/producer fixture for an explicitly empty accepted provider.  It is
- * intentionally outside the public catalog-consumer API; production callers
- * use SG_PhaseMoverSupportProviderBuild with an accepted capability set. */
-int SG_PhaseMoverSupportProviderBuildEmpty(
-	const sg_rune_model_identity_t *identity,
-	sg_phase_mover_support_provider_t **provider_out,
-	sg_phase_catalog_error_t *error_out);
-
 #endif /* SG_PHASE_CATALOG_INTERNAL_H */

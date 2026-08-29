@@ -401,38 +401,6 @@ int SG_PhaseMoverSupportProviderBuild(
 	return 1;
 }
 
-int SG_PhaseMoverSupportProviderBuildEmpty(
-	const sg_rune_model_identity_t *identity,
-	sg_phase_mover_support_provider_t **provider_out,
-	sg_phase_catalog_error_t *error_out)
-{
-	if (error_out)
-		memset(error_out, 0, sizeof(*error_out));
-	if (!provider_out || *provider_out || !ProviderIdentityUsable(identity))
-	{
-		SG_PhaseCatalogSetError(error_out,
-			!provider_out ? SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT :
-			SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
-		return 0;
-	}
-	*provider_out = calloc(1U, sizeof(**provider_out));
-	if (!*provider_out)
-	{
-		SG_PhaseCatalogSetError(error_out,
-			SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
-		return 0;
-	}
-	(*provider_out)->identity = *identity;
-	(*provider_out)->completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
-	(*provider_out)->accepted_capability_digest = 0U;
-	(*provider_out)->magic = SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC;
-	(*provider_out)->magic_inverse = ~SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC;
-	(*provider_out)->self = *provider_out;
-	(*provider_out)->verifier_identity = ProviderDigest(*provider_out);
-	ProviderRefreshView(*provider_out);
-	return 1;
-}
-
 int SG_PhaseMoverSupportProviderRead(
 	const sg_phase_mover_support_provider_t *provider,
 	const sg_phase_mover_support_provider_view_t **view_out)
