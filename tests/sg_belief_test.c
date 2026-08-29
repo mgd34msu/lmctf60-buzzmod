@@ -2782,6 +2782,157 @@ static void TestHorizonRegistryAliasIsolation(void)
 	SG_BeliefHorizonSourceDestroy(source);
 }
 
+static void TestHorizonAcceptRegistryAliasIsolation(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_particle_t predicted[8];
+	sg_belief_state_t state;
+	sg_belief_horizon_source_t *retired_source = NULL;
+	sg_belief_horizon_source_t *source = NULL;
+	sg_belief_horizon_source_t *other_source = NULL;
+	sg_belief_horizon_source_t *later_source = NULL;
+	sg_belief_horizon_authority_t *retired_authority = NULL;
+	sg_belief_horizon_authority_t *authority = NULL;
+	sg_belief_horizon_authority_t *later_authority = NULL;
+	const sg_belief_horizon_kernel_t *retired_kernels = NULL;
+	const sg_belief_horizon_kernel_t *kernels = NULL;
+	const sg_belief_horizon_kernel_t *other_kernels = NULL;
+	const sg_belief_horizon_kernel_t *later_kernels = NULL;
+	size_t retired_kernel_count = 0U;
+	size_t kernel_count = 0U;
+	size_t other_kernel_count = 0U;
+	size_t later_kernel_count = 0U;
+	size_t *authority_nested_slot;
+	sg_rune_v2_content_id_t identity;
+	sg_belief_prediction_request_t request;
+	sg_belief_prediction_t prediction;
+	uint64_t retired_source_issuance;
+	uint64_t source_issuance;
+	uint64_t other_source_issuance;
+	uint64_t retired_authority_issuance;
+	uint64_t authority_issuance;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	state.policy.diffusion_fraction = 1.0f;
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &retired_source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state,
+		retired_source, &retired_kernels, &retired_kernel_count,
+		&identity));
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state,
+		retired_source, retired_kernels, retired_kernel_count,
+		&retired_authority) == SG_BELIEF_HORIZON_ACCEPTED);
+	retired_source_issuance =
+		SG_BeliefTestHorizonSourceIssuanceIdentity(retired_source);
+	retired_authority_issuance =
+		SG_BeliefTestHorizonAuthorityIssuanceIdentity(retired_authority);
+	SG_BeliefHorizonSourceDestroy(retired_source);
+	SG_BeliefHorizonAuthorityDestroy(retired_authority);
+	CHECK(SG_BeliefTestHorizonSourceRetired(retired_source));
+	CHECK(SG_BeliefTestHorizonAuthorityRetired(retired_authority));
+
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &identity));
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count, &authority) == SG_BELIEF_HORIZON_ACCEPTED);
+	source_issuance = SG_BeliefTestHorizonSourceIssuanceIdentity(source);
+	authority_issuance =
+		SG_BeliefTestHorizonAuthorityIssuanceIdentity(authority);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &other_source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, other_source,
+		&other_kernels, &other_kernel_count, &identity));
+	other_source_issuance =
+		SG_BeliefTestHorizonSourceIssuanceIdentity(other_source);
+	authority_nested_slot = (size_t *)
+		SG_BeliefTestHorizonAuthorityFirstEntryStepSlot(authority);
+	CHECK(authority_nested_slot != NULL);
+	if (authority_nested_slot)
+		CHECK(*authority_nested_slot == 0U);
+	CHECK(other_kernels[0].entries[0].first_step == 0U);
+
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)
+			SG_BeliefTestHorizonSourceNextPointerSlot(retired_source)) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)
+			SG_BeliefTestHorizonAuthorityNextPointerSlot(
+				retired_authority)) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)
+			SG_BeliefTestHorizonSourcePayloadPointerSlot(retired_source)) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)
+			SG_BeliefTestHorizonAuthorityPayloadPointerSlot(
+				retired_authority)) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)(void *)other_source) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)(void *)authority) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)(void *)
+			&other_kernels[0].entries[0].first_step) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count,
+		(sg_belief_horizon_authority_t **)(void *)authority_nested_slot) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+
+	CHECK(SG_BeliefTestHorizonSourceIssuanceIdentity(retired_source) ==
+		retired_source_issuance);
+	CHECK(SG_BeliefTestHorizonSourceIssuanceIdentity(source) ==
+		source_issuance);
+	CHECK(SG_BeliefTestHorizonSourceIssuanceIdentity(other_source) ==
+		other_source_issuance);
+	CHECK(SG_BeliefTestHorizonAuthorityIssuanceIdentity(retired_authority) ==
+		retired_authority_issuance);
+	CHECK(SG_BeliefTestHorizonAuthorityIssuanceIdentity(authority) ==
+		authority_issuance);
+	CHECK(SG_BeliefTestHorizonSourceRetired(retired_source));
+	CHECK(SG_BeliefTestHorizonAuthorityRetired(retired_authority));
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &identity));
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, other_source,
+		&other_kernels, &other_kernel_count, &identity));
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &later_source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, later_source,
+		&later_kernels, &later_kernel_count, &identity));
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state,
+		later_source, later_kernels, later_kernel_count, &later_authority) ==
+		SG_BELIEF_HORIZON_ACCEPTED);
+	request = PredictionRequest(200U, later_authority, scratch_first,
+		scratch_second, 8U, predicted, 8U);
+	CHECK(SG_BeliefPredict(&fixture.snapshot, &state, &request, &prediction) ==
+		SG_BELIEF_PREDICT_APPLIED);
+	SG_BeliefHorizonSourceDestroy(retired_source);
+	SG_BeliefHorizonAuthorityDestroy(retired_authority);
+	SG_BeliefHorizonAuthorityDestroy(later_authority);
+	SG_BeliefHorizonAuthorityDestroy(authority);
+	SG_BeliefHorizonSourceDestroy(later_source);
+	SG_BeliefHorizonSourceDestroy(other_source);
+	SG_BeliefHorizonSourceDestroy(source);
+}
+
 static void TestTransactionalRejectDuplicateAndStale(void)
 {
 	belief_fixture_t fixture;
@@ -3200,6 +3351,7 @@ int main(void)
 	TestHorizonOutputAliasBoundaries();
 	TestHorizonHandleIdentityPreventsAllocatorAba();
 	TestHorizonRegistryAliasIsolation();
+	TestHorizonAcceptRegistryAliasIsolation();
 	TestTransactionalRejectDuplicateAndStale();
 	TestDelayedTeammateEvidenceIsAgedAndPropagated();
 	TestCapacityRetryBeyondOldThresholds();

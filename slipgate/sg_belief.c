@@ -1561,6 +1561,8 @@ static int BeliefFrameMemoryValid(
 	if (!BeliefByteRange(out, 1U, sizeof(*out),
 	    &writable[writable_count++]))
 		return 0;
+	if (!BeliefHorizonRegistriesDisjointFromAll(writable, writable_count))
+		return 0;
 	for (left = 0U; left < writable_count; left++)
 		if (!BeliefRangeDisjointFromRune(snapshot, &writable[left]))
 			return 0;
@@ -2510,6 +2512,7 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 	belief_byte_range_t config_range;
 	belief_byte_range_t snapshot_range;
 	belief_byte_range_t storage_range;
+	belief_byte_range_t writable[2];
 
 	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !state || !config || !storage ||
 	    capacity == 0U || !SG_BeliefTeamValid(config->audience_team) ||
@@ -2526,6 +2529,10 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 	    BeliefRangesOverlap(&state_range, &config_range) ||
 	    BeliefRangesOverlap(&state_range, &snapshot_range) ||
 	    BeliefRangesOverlap(&state_range, &storage_range))
+		return 0;
+	writable[0] = state_range;
+	writable[1] = storage_range;
+	if (!BeliefHorizonRegistriesDisjointFromAll(writable, 2U))
 		return 0;
 	memset(&candidate, 0, sizeof(candidate));
 	candidate.audience_team = config->audience_team;
@@ -2974,6 +2981,7 @@ static int BeliefHorizonAcceptOutputValid(
 
 	if (!BeliefByteRange(authority_out, 1U, sizeof(*authority_out),
 	    &writable) || !BeliefRangeDisjointFromRune(snapshot, &writable) ||
+	    !BeliefHorizonRegistriesDisjointFromAll(&writable, 1U) ||
 	    !BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &read) ||
 	    BeliefRangesOverlap(&writable, &read) ||
 	    !BeliefByteRange(state, 1U, sizeof(*state), &read) ||
@@ -3150,6 +3158,36 @@ void *SG_BeliefTestHorizonAuthorityPayloadPointerSlot(
 	return record ? (void *)&record->kernels : NULL;
 }
 
+void *SG_BeliefTestHorizonSourceNextPointerSlot(
+	const sg_belief_horizon_source_t *source)
+{
+	sg_belief_horizon_source_t *record = BeliefHorizonSourceRecord(source);
+
+	return record ? (void *)&record->next_issued : NULL;
+}
+
+void *SG_BeliefTestHorizonAuthorityNextPointerSlot(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
+
+	return record ? (void *)&record->next_issued : NULL;
+}
+
+void *SG_BeliefTestHorizonAuthorityFirstEntryStepSlot(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
+
+	if (!record || record->kernel_count == 0U || !record->kernels ||
+	    record->kernels[0].entry_count == 0U ||
+	    !record->kernels[0].entries)
+		return NULL;
+	return (void *)&record->kernels[0].entries[0].first_step;
+}
+
 int SG_BeliefTestHorizonSourceRetired(
 	const sg_belief_horizon_source_t *source)
 {
@@ -3205,6 +3243,8 @@ static int BeliefPredictionMemoryValid(
 		return 0;
 	if (!BeliefByteRange(out, 1U, sizeof(*out),
 	    &writable[writable_count++]))
+		return 0;
+	if (!BeliefHorizonRegistriesDisjointFromAll(writable, writable_count))
 		return 0;
 	for (left = 0U; left < writable_count; left++)
 	{

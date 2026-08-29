@@ -858,6 +858,12 @@ void *SG_BeliefTestHorizonSourcePayloadPointerSlot(
 	const sg_belief_horizon_source_t *source);
 void *SG_BeliefTestHorizonAuthorityPayloadPointerSlot(
 	const sg_belief_horizon_authority_t *authority);
+void *SG_BeliefTestHorizonSourceNextPointerSlot(
+	const sg_belief_horizon_source_t *source);
+void *SG_BeliefTestHorizonAuthorityNextPointerSlot(
+	const sg_belief_horizon_authority_t *authority);
+void *SG_BeliefTestHorizonAuthorityFirstEntryStepSlot(
+	const sg_belief_horizon_authority_t *authority);
 int SG_BeliefTestHorizonSourceRetired(
 	const sg_belief_horizon_source_t *source);
 int SG_BeliefTestHorizonAuthorityRetired(
