@@ -1576,18 +1576,16 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 	    !BeliefRangeDisjointFromRune(snapshot, &state_storage_range) ||
 	    BeliefRangesOverlap(&out_range, &state_storage_range))
 		return SG_BELIEF_REDUCE_REJECTED_INVALID;
+	if (frame->kernel_count > SIZE_MAX / sizeof(*frame->kernels) ||
+	    frame->evidence_count > SIZE_MAX / sizeof(*frame->evidence))
+		return SG_BELIEF_REDUCE_OVERFLOW;
+	if (!BeliefFrameMemoryValid(snapshot, state, frame, out))
+		return SG_BELIEF_REDUCE_REJECTED_INVALID;
 	memset(&reduction, 0, sizeof(reduction));
 	memset(&counters, 0, sizeof(counters));
 	reduction.committed_revision = state->revision;
 	reduction.particle_count = state->particle_count;
 	reduction.confidence = state->confidence;
-	if (frame->kernel_count > SIZE_MAX / sizeof(*frame->kernels) ||
-	    frame->evidence_count > SIZE_MAX / sizeof(*frame->evidence))
-	{
-		reduction.result = SG_BELIEF_REDUCE_OVERFLOW;
-		*out = reduction;
-		return reduction.result;
-	}
 	if (state->last_frame_sequence != 0U &&
 	    frame->sequence == state->last_frame_sequence)
 	{
@@ -1613,8 +1611,6 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 		*out = reduction;
 		return reduction.result;
 	}
-	if (!BeliefFrameMemoryValid(snapshot, state, frame, out))
-		return SG_BELIEF_REDUCE_REJECTED_INVALID;
 	current = frame->scratch_first;
 	next = frame->scratch_second;
 	count = state->particle_count;

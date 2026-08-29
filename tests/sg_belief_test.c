@@ -296,6 +296,104 @@ static sg_belief_frame_t Frame(uint64_t sequence, uint64_t revision,
 	return frame;
 }
 
+#define DECLARE_REDUCTION_ALIAS_STORAGE(name, type, count) \
+	typedef union name##_u { \
+		sg_belief_reduction_t reduction; \
+		type values[count]; \
+	} name
+
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_snapshot_storage_t,
+	sg_rune_runtime_snapshot_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_model_storage_t, sg_rune_model_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_phase_coordinate_storage_t,
+	sg_phase_coordinate_t, 3);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_plane_storage_t, sg_rune_plane_t, 6);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_vertex_storage_t, sg_rune_vec3_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_phase_basis_storage_t,
+	sg_rune_phase_basis_t, 3);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_phase_transition_storage_t,
+	sg_rune_phase_transition_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_cell_storage_t, sg_rune_cell_t, 2);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_portal_storage_t, sg_rune_portal_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_surface_storage_t, sg_rune_surface_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_affordance_storage_t,
+	sg_rune_affordance_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_rune_kernel_storage_t,
+	sg_rune_capability_kernel_t, 3);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_landmark_storage_t, sg_rune_landmark_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_mechanism_storage_t,
+	sg_rune_mechanism_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_frame_storage_t, sg_belief_frame_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_evidence_storage_t,
+	sg_belief_evidence_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_support_storage_t,
+	sg_belief_evidence_support_t, 2);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_horizon_kernel_storage_t,
+	sg_belief_horizon_kernel_t, 1);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_horizon_span_storage_t,
+	sg_belief_horizon_span_t, 3);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_horizon_entry_storage_t,
+	sg_belief_horizon_entry_t, 3);
+DECLARE_REDUCTION_ALIAS_STORAGE(alias_horizon_step_storage_t,
+	sg_belief_horizon_step_t, 1);
+
+#undef DECLARE_REDUCTION_ALIAS_STORAGE
+
+typedef struct belief_immutable_alias_inputs_s
+{
+	alias_snapshot_storage_t snapshot;
+	alias_model_storage_t model;
+	alias_phase_coordinate_storage_t snapshot_phases;
+	alias_plane_storage_t planes;
+	alias_vertex_storage_t portal_vertices;
+	alias_phase_basis_storage_t model_phases;
+	alias_phase_transition_storage_t phase_transitions;
+	alias_cell_storage_t cells;
+	alias_portal_storage_t portals;
+	alias_surface_storage_t surfaces;
+	alias_affordance_storage_t affordances;
+	alias_rune_kernel_storage_t rune_kernels;
+	alias_landmark_storage_t landmarks;
+	alias_mechanism_storage_t mechanisms;
+	alias_frame_storage_t frame;
+	alias_evidence_storage_t evidence;
+	alias_support_storage_t supports;
+	alias_horizon_kernel_storage_t horizon_kernels;
+	alias_horizon_span_storage_t horizon_spans;
+	alias_horizon_entry_storage_t horizon_entries;
+	alias_horizon_step_storage_t horizon_steps;
+} belief_immutable_alias_inputs_t;
+
+static sg_belief_reduction_t *ImmutableAliasOutput(
+	belief_immutable_alias_inputs_t *inputs, size_t alias)
+{
+	void *ranges[] = {
+		&inputs->snapshot.values[0],
+		&inputs->model.values[0],
+		&inputs->snapshot_phases.values[0],
+		&inputs->planes.values[0],
+		&inputs->portal_vertices.values[0],
+		&inputs->model_phases.values[0],
+		&inputs->phase_transitions.values[0],
+		&inputs->cells.values[0],
+		&inputs->portals.values[0],
+		&inputs->surfaces.values[0],
+		&inputs->affordances.values[0],
+		&inputs->rune_kernels.values[0],
+		&inputs->landmarks.values[0],
+		&inputs->mechanisms.values[0],
+		&inputs->frame.values[0],
+		&inputs->evidence.values[0],
+		&inputs->supports.values[0],
+		&inputs->horizon_kernels.values[0],
+		&inputs->horizon_spans.values[0],
+		&inputs->horizon_entries.values[0],
+		&inputs->horizon_steps.values[0]
+	};
+
+	return (sg_belief_reduction_t *)ranges[alias];
+}
+
 static void InitState(const belief_fixture_t *fixture, sg_belief_state_t *state,
 	sg_belief_particle_t *storage, size_t capacity)
 {
@@ -732,6 +830,123 @@ static sg_belief_horizon_kernel_t HorizonKernel(uint64_t from_time_ms,
 	kernel.steps = steps;
 	kernel.step_count = step_count;
 	return kernel;
+}
+
+static void ImmutableAliasInputsInit(
+	belief_immutable_alias_inputs_t *inputs)
+{
+	belief_fixture_t base;
+	sg_rune_model_t *model;
+	sg_rune_runtime_snapshot_t *snapshot;
+
+	BeliefFixtureInit(&base);
+	memset(inputs, 0, sizeof(*inputs));
+	memcpy(inputs->planes.values, base.planes, sizeof(base.planes));
+	memcpy(inputs->model_phases.values, base.model_phases,
+		sizeof(base.model_phases));
+	memcpy(inputs->cells.values, base.cells, sizeof(base.cells));
+	memcpy(inputs->rune_kernels.values, base.model_kernels,
+		sizeof(base.model_kernels));
+	memcpy(inputs->snapshot_phases.values, base.phases, sizeof(base.phases));
+	inputs->model.values[0] = base.model;
+	model = &inputs->model.values[0];
+	model->planes = inputs->planes.values;
+	model->portal_vertices = inputs->portal_vertices.values;
+	model->portal_vertex_count = 1U;
+	model->phases = inputs->model_phases.values;
+	model->phase_transitions = inputs->phase_transitions.values;
+	model->phase_transition_count = 1U;
+	model->cells = inputs->cells.values;
+	model->portals = inputs->portals.values;
+	model->portal_count = 1U;
+	model->surfaces = inputs->surfaces.values;
+	model->surface_count = 1U;
+	model->affordances = inputs->affordances.values;
+	model->affordance_count = 1U;
+	model->kernels = inputs->rune_kernels.values;
+	model->landmarks = inputs->landmarks.values;
+	model->landmark_count = 1U;
+	model->mechanisms = inputs->mechanisms.values;
+	model->mechanism_count = 1U;
+	inputs->snapshot.values[0] = base.snapshot;
+	snapshot = &inputs->snapshot.values[0];
+	snapshot->model = model;
+	snapshot->phases = inputs->snapshot_phases.values;
+
+	inputs->supports.values[0] = Support(0U, 0U, 0.5f);
+	inputs->supports.values[1] = Support(1U, 0U, 0.5f);
+	inputs->evidence.values[0] = Evidence(SG_BELIEF_SOURCE_ITEM, 1U, 200U,
+		inputs->supports.values, 2U);
+	inputs->horizon_entries.values[0] =
+		HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
+	inputs->horizon_entries.values[0].step_count = 1U;
+	inputs->horizon_entries.values[1] =
+		HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	inputs->horizon_entries.values[2] =
+		HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	inputs->horizon_steps.values[0] =
+		HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	inputs->horizon_kernels.values[0] = HorizonKernel(100U, 200U,
+		inputs->horizon_entries.values, 3U, inputs->horizon_spans.values, 3U,
+		inputs->horizon_steps.values, 1U);
+}
+
+static void TestRejectedOutputAliasesPreserveAllImmutableInputs(void)
+{
+	static const char *const names[] = {
+		"snapshot", "model", "snapshot phases", "model planes",
+		"model portal vertices", "model phases", "model phase transitions",
+		"model cells", "model portals", "model surfaces",
+		"model affordances", "model kernels", "model landmarks",
+		"model mechanisms", "frame", "evidence", "evidence supports",
+		"horizon kernels", "horizon spans", "horizon entries",
+		"horizon steps"
+	};
+	size_t alias;
+
+	for (alias = 0U; alias < sizeof(names) / sizeof(names[0]); alias++)
+	{
+		belief_immutable_alias_inputs_t inputs;
+		belief_immutable_alias_inputs_t inputs_before;
+		sg_belief_particle_t storage[4];
+		sg_belief_particle_t storage_before[4];
+		sg_belief_particle_t scratch_first[1];
+		sg_belief_particle_t scratch_second[1];
+		sg_belief_state_t state;
+		sg_belief_state_t state_before;
+		sg_belief_state_config_t config = Config(1U, 2U, 3U);
+		sg_belief_reduce_result_t result;
+
+		ImmutableAliasInputsInit(&inputs);
+		memset(storage, 0xa5, sizeof(storage));
+		CHECK(SG_BeliefStateInit(&inputs.snapshot.values[0], &state, &config,
+			storage, 4U));
+		inputs.frame.values[0] = Frame(1U, state.revision, 200U,
+			scratch_first, scratch_second, 1U);
+		inputs.frame.values[0].kernels = inputs.horizon_kernels.values;
+		inputs.frame.values[0].kernel_count = 1U;
+		inputs.frame.values[0].evidence = inputs.evidence.values;
+		inputs.frame.values[0].evidence_count = 1U;
+		inputs_before = inputs;
+		state_before = state;
+		memcpy(storage_before, storage, sizeof(storage));
+		result = SG_BeliefReduce(&inputs.snapshot.values[0], &state,
+			&inputs.frame.values[0], ImmutableAliasOutput(&inputs, alias));
+		if (result != SG_BELIEF_REDUCE_REJECTED_INVALID)
+		{
+			fprintf(stderr, "%s:%d: %s output alias returned %d\n",
+				__FILE__, __LINE__, names[alias], (int)result);
+			failures++;
+		}
+		if (memcmp(&inputs, &inputs_before, sizeof(inputs)) != 0)
+		{
+			fprintf(stderr, "%s:%d: %s output alias changed immutable input\n",
+				__FILE__, __LINE__, names[alias]);
+			failures++;
+		}
+		CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+		CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	}
 }
 
 static void TestSourceShapeGuards(void)
@@ -1837,6 +2052,7 @@ int main(void)
 	TestStateInitIsTransactional();
 	TestStorageAliasingAndCountOverflow();
 	TestRuneStorageAliasingRejected();
+	TestRejectedOutputAliasesPreserveAllImmutableInputs();
 	TestSightConcentrates();
 	TestCanonicalModeMerge();
 	TestAllEarnedSourcesAndTeamAuthority();

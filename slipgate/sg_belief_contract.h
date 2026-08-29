@@ -315,7 +315,6 @@ static inline int SG_BeliefRangeDisjointFromArray(uintptr_t mutable_begin,
 	return mutable_begin >= array_end || array_begin >= mutable_end;
 }
 
-/* Mutable belief buffers must never alias the immutable RUNE binding. */
 static inline int SG_BeliefMutableRangeDisjointFromRune(
 	const sg_rune_runtime_snapshot_t *snapshot, const void *storage,
 	size_t byte_count)
