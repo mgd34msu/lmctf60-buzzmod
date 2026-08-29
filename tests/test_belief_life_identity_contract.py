@@ -17,6 +17,7 @@ def main() -> None:
     observer = (ROOT / "p_observer.c").read_text()
     commands = (ROOT / "g_cmds.c").read_text()
     menu = (ROOT / "g_menu.c").read_text()
+    combat = (ROOT / "slipgate/sg_combat.c").read_text()
 
     assert re.search(r"\buint64_t\s+ctfid\s*;", local)
     assert re.search(
@@ -51,6 +52,21 @@ def main() -> None:
         r"layout\.\\n\"\);\s*return;\s*\}",
         save,
     )
+    random_identity = combat[
+        combat.index("static unsigned Combat_RandomIdentity"):
+        combat.index("static int Combat_ClientIndex")
+    ]
+    client_random_seam = combat[
+        combat.index("uint32_t SG_CombatAimTestClientRandom"):
+        combat.index("#endif", combat.index("uint32_t SG_CombatAimTestClientRandom"))
+    ]
+    assert re.search(
+        r"static unsigned Combat_RandomIdentity\(int client_index,\s*"
+        r"uint64_t client_life\)",
+        random_identity,
+    )
+    assert not re.search(r"\bunsigned\s+long\b", random_identity)
+    assert "Combat_RandomIdentity(client_index, client_life)" in client_random_seam
     for path in ROOT.glob("*.c"):
         assert not re.search(r"unsigned long\s+\w*ctfid", path.read_text())
     for path in (ROOT / "slipgate").glob("*.c"):

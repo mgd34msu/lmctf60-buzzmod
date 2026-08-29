@@ -591,6 +591,8 @@ static int test_combat_randomness_is_per_client(void)
 {
     int expected_random;
     unsigned first;
+    uint64_t low_life = UINT64_C(9001);
+    uint64_t high_life = low_life | (UINT64_C(1) << 32);
 
     srand(9917);
     expected_random = rand();
@@ -600,12 +602,11 @@ static int test_combat_randomness_is_per_client(void)
     CHECK(first == SG_CombatAimTestRandom(4, 3));
     CHECK(first != SG_CombatAimTestRandom(5, 3));
     CHECK(first != SG_CombatAimTestRandom(4, 4));
-    first = SG_CombatAimTestClientRandom(4, UINT64_C(9001), 3);
-    CHECK(first == SG_CombatAimTestClientRandom(4, UINT64_C(9001), 3));
+    first = SG_CombatAimTestClientRandom(4, low_life, 3);
+    CHECK(first == SG_CombatAimTestClientRandom(4, low_life, 3));
     CHECK(first != SG_CombatAimTestClientRandom(4, UINT64_C(9002), 3));
-    CHECK(first != SG_CombatAimTestClientRandom(5, UINT64_C(9001), 3));
-    CHECK(first != SG_CombatAimTestClientRandom(
-        4, UINT64_C(0x100000000) + UINT64_C(9001), 3));
+    CHECK(first != SG_CombatAimTestClientRandom(5, low_life, 3));
+    CHECK(first != SG_CombatAimTestClientRandom(4, high_life, 3));
     CHECK(rand() == expected_random);
     return 0;
 }
@@ -666,6 +667,24 @@ class CombatAimEnvelopeTest(unittest.TestCase):
                         spawn.index("Combat_ResetClient(ent);"))
         self.assertIn("self->client->ctf.ctfid", SOURCE)
         self.assertIn("Combat_RandomIdentity(ci", SOURCE)
+
+    def test_combat_random_identity_keeps_the_semantic_life_width(self) -> None:
+        random_identity = SOURCE[
+            SOURCE.index("static unsigned Combat_RandomIdentity"):
+            SOURCE.index("static int Combat_ClientIndex")
+        ]
+        seam = SOURCE[
+            SOURCE.index("uint32_t SG_CombatAimTestClientRandom"):
+            SOURCE.index("#endif", SOURCE.index("uint32_t SG_CombatAimTestClientRandom"))
+        ]
+
+        self.assertRegex(
+            random_identity,
+            r"static unsigned Combat_RandomIdentity\(int client_index,\s*"
+            r"uint64_t client_life\)",
+        )
+        self.assertNotRegex(random_identity, r"\bunsigned\s+long\b")
+        self.assertIn("Combat_RandomIdentity(client_index, client_life)", seam)
 
     def test_blocked_grenade_arc_cannot_rearm_the_trigger(self) -> None:
         move = (ROOT / "slipgate" / "sg_move.c").read_text()
