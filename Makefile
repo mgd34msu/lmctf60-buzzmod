@@ -1304,6 +1304,10 @@ OBJS := \
 	sg_descend.o slipgate/sg_traversal_transition.o \
 	sg_goal.o \
 	slipgate/sg_belief.o \
+	slipgate/sg_destination.o \
+	slipgate/sg_rune_dynamics_model.o \
+	slipgate/sg_rune_dynamics_geometry.o \
+	slipgate/sg_rune_field_contract.o \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
@@ -3936,10 +3940,16 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		slipgate/sg_rune_v2_artifact_publication_io.c \
 		tests/run_sg_strategy_test.sh tests/sg_strategy_test.c \
 		slipgate/sg_strategy.c slipgate/sg_strategy_contract.h \
-		tests/sg_destination_field_test.c slipgate/sg_destination_field.c \
-		tests/run_sg_destination_field_cache_test.sh \
-		tests/sg_destination_field_cache_test.c \
-		slipgate/sg_destination_field_cache.c \
+		tests/run_sg_destination_test.sh tests/sg_destination_test.c \
+		slipgate/sg_destination.c slipgate/sg_destination.h \
+		tests/run_sg_rune_dynamics_model_test.sh \
+		tests/sg_rune_dynamics_model_test.c \
+		tests/test_sg_rune_dynamics_rank_reference.py \
+		slipgate/sg_rune_dynamics_model.c \
+		slipgate/sg_rune_dynamics_geometry.c \
+		slipgate/sg_rune_field_contract.c \
+		slipgate/sg_rune_dynamics_model.h \
+		slipgate/sg_rune_dynamics_model_internal.h \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
 	$(Q)set -e; \
@@ -3976,23 +3986,16 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	"$$tmp/loader"; \
 	sh tests/run_sg_rune_v2_artifact_publication_test.sh; \
 	sh tests/run_sg_strategy_test.sh; \
-	$(CC) $$strict -Wcast-align -I. -c tests/sg_destination_field_test.c \
-		-o "$$tmp/field-test.o"; \
-	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination_field.c \
-		-o "$$tmp/field.o"; \
-	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_rune_model.c \
-		-o "$$tmp/field-model.o"; \
-	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-Wno-strict-prototypes -DDEDICATED_ONLY -I. \
-		-c tests/support/yq2_pmove.c -o "$$tmp/field-pmove.o"; \
-	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-Wno-strict-prototypes -I. -c q_shared.c \
-		-o "$$tmp/field-q-shared.o"; \
-	$(CC) "$$tmp/field-test.o" "$$tmp/field.o" "$$tmp/field-model.o" \
-		"$$tmp/field-pmove.o" "$$tmp/field-q-shared.o" -lm \
-		-o "$$tmp/field"; \
-	"$$tmp/field"; \
-	sh tests/run_sg_destination_field_cache_test.sh
+	sh tests/run_sg_destination_test.sh; \
+	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
+		-o "$$tmp/destination.o"; \
+	sh tests/run_sg_rune_dynamics_model_test.sh; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_geometry.c -o "$$tmp/geometry.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \

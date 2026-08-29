@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #include "sg_configuration_semantics.h"
-#include "sg_destination_field.h"
+#include "sg_destination.h"
 
 #define SG_LOCALIZATION_SUPPORT_MODEL_NONE UINT32_MAX
 

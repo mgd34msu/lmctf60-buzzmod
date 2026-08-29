@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "sg_destination_field.h"
+#include "sg_destination.h"
 #include "sg_rune_v2_content_identity.h"
 
 #define SG_BELIEF_MAX_CLIENTS 256U
@@ -714,8 +714,8 @@ static inline int SG_BeliefParticleValid(const sg_belief_particle_t *particle)
 {
 	uint8_t axis;
 
-	if (!particle || particle->phase.phase_id == SG_DESTINATION_FIELD_NO_PHASE ||
-	    particle->phase.cell_id == SG_DESTINATION_FIELD_NO_CELL ||
+	if (!particle || particle->phase.phase_id == SG_DESTINATION_NO_PHASE ||
+	    particle->phase.cell_id == SG_DESTINATION_NO_CELL ||
 	    particle->movement_state < SG_BELIEF_MOTION_UNKNOWN ||
 	    particle->movement_state >= SG_BELIEF_MOTION_COUNT ||
 	    particle->reserved != 0U || particle->reserved2 != 0U ||

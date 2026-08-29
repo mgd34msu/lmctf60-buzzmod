@@ -1202,7 +1202,9 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_v2_content_identity.o slipgate/sg_rune_v2_exact_snapshot.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_train_station_plan.o slipgate/sg_train_station_candidate.o slipgate/sg_train_station_candidate_game.o slipgate/sg_train_station_board_path.o slipgate/sg_train_station_transaction.o slipgate/sg_train_station_game.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_rune_learning.o slipgate/sg_rune_learning_game.o slipgate/sg_rune_authority_game.o slipgate/sg_rune_update_source.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o slipgate/sg_chain_hook_replay.o slipgate/sg_hook_oracle.o slipgate/sg_rune_hook_frontier.o slipgate/sg_rune_late_path.o slipgate/sg_rune_topology.o slipgate/sg_rune_topology_game.o slipgate/sg_rune_reverse_boundary.o slipgate/sg_rune_seed_game.o slipgate/sg_hook_game.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_mechanism_timeline.o slipgate/sg_relay_wall_transaction.o slipgate/sg_delayed_use_ticket.o slipgate/sg_relay_wall_live.o slipgate/sg_relay_wall_game.o slipgate/sg_timed_vault_transaction.o slipgate/sg_timed_vault_game.o slipgate/sg_timed_vault_game_runtime.o slipgate/sg_timed_vault_egress.o slipgate/sg_timed_vault_egress_game.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o slipgate/sg_rune_door_scope_game.o slipgate/sg_rune_door_frontier.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o slipgate/sg_shoot_door_live.o slipgate/sg_shoot_door_game.o sg_oracle.o slipgate/sg_oracle_rotator.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 		 slipgate/sg_relay_wall_objective.o slipgate/sg_relay_wall_objective_game.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
-		 slipgate/sg_belief.o slipgate/sg_rune_model.o slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
+		 slipgate/sg_belief.o slipgate/sg_destination.o slipgate/sg_rune_dynamics_model.o \
+		 slipgate/sg_rune_dynamics_geometry.o slipgate/sg_rune_field_contract.o \
+		 slipgate/sg_rune_model.o slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################
 # End of user-customizable section - you shouldn't have to touch
@@ -3438,10 +3440,16 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		slipgate/sg_rune_v2_artifact_publication_io.c \
 		tests/run_sg_strategy_test.sh tests/sg_strategy_test.c \
 		slipgate/sg_strategy.c slipgate/sg_strategy_contract.h \
-		tests/sg_destination_field_test.c slipgate/sg_destination_field.c \
-		tests/run_sg_destination_field_cache_test.sh \
-		tests/sg_destination_field_cache_test.c \
-		slipgate/sg_destination_field_cache.c \
+		tests/run_sg_destination_test.sh tests/sg_destination_test.c \
+		slipgate/sg_destination.c slipgate/sg_destination.h \
+		tests/run_sg_rune_dynamics_model_test.sh \
+		tests/sg_rune_dynamics_model_test.c \
+		tests/test_sg_rune_dynamics_rank_reference.py \
+		slipgate/sg_rune_dynamics_model.c \
+		slipgate/sg_rune_dynamics_geometry.c \
+		slipgate/sg_rune_field_contract.c \
+		slipgate/sg_rune_dynamics_model.h \
+		slipgate/sg_rune_dynamics_model_internal.h \
 		tests/support/yq2_pmove.c q_shared.c
 	@set -e; \
 	tmp=$$(mktemp -d); \
@@ -3477,23 +3485,16 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	"$$tmp/loader"; \
 	sh tests/run_sg_rune_v2_artifact_publication_test.sh; \
 	sh tests/run_sg_strategy_test.sh; \
-	$(CC) $$strict -Wcast-align -I. -c tests/sg_destination_field_test.c \
-		-o "$$tmp/field-test.o"; \
-	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination_field.c \
-		-o "$$tmp/field.o"; \
-	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_rune_model.c \
-		-o "$$tmp/field-model.o"; \
-	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-Wno-strict-prototypes -DDEDICATED_ONLY -I. \
-		-c tests/support/yq2_pmove.c -o "$$tmp/field-pmove.o"; \
-	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-Wno-strict-prototypes -I. -c q_shared.c \
-		-o "$$tmp/field-q-shared.o"; \
-	$(CC) "$$tmp/field-test.o" "$$tmp/field.o" "$$tmp/field-model.o" \
-		"$$tmp/field-pmove.o" "$$tmp/field-q-shared.o" -lm \
-		-o "$$tmp/field"; \
-	"$$tmp/field"; \
-	sh tests/run_sg_destination_field_cache_test.sh
+	sh tests/run_sg_destination_test.sh; \
+	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
+		-o "$$tmp/destination.o"; \
+	sh tests/run_sg_rune_dynamics_model_test.sh; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_geometry.c -o "$$tmp/geometry.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \
