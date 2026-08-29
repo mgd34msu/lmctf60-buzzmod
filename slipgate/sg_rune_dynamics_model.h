@@ -1034,7 +1034,8 @@ int SG_FieldLocalProgressKernelAcceptsCapture(
 	const sg_destination_terminal_capture_t *capture);
 int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 	const sg_field_reach_atom_t *atoms, size_t atom_count,
-	const sg_rune_state_domain_t *domains, size_t domain_count);
+	const sg_rune_state_domain_t *domains, size_t domain_count,
+	const sg_rune_state_chart_t *charts, size_t chart_count);
 int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 	const sg_rune_runtime_snapshot_t *snapshot);
 int SG_LocalizedFieldStateValid(const sg_localized_field_state_t *state);

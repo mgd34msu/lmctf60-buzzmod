@@ -23,6 +23,10 @@ typedef sg_field_status_t (*field_query_fn)(const sg_field_service_t *,
 	sg_field_guidance_t *);
 typedef sg_field_status_t (*field_release_fn)(sg_field_service_t *,
 	const sg_field_handle_t *);
+typedef int (*field_refinement_tree_valid_fn)(
+	const sg_field_refinement_tree_t *, const sg_field_reach_atom_t *, size_t,
+	const sg_rune_state_domain_t *, size_t, const sg_rune_state_chart_t *,
+	size_t);
 
 _Static_assert(_Generic(&SG_FieldServiceCreate, field_create_fn: 1,
 	default: 0), "field create must consume an authenticated publication");
@@ -40,6 +44,9 @@ _Static_assert(_Generic(&SG_FieldServiceQuery, field_query_fn: 1,
 	default: 0), "field query signature changed");
 _Static_assert(_Generic(&SG_FieldServiceRelease, field_release_fn: 1,
 	default: 0), "field release signature changed");
+_Static_assert(_Generic(&SG_FieldRefinementTreeValid,
+	field_refinement_tree_valid_fn: 1, default: 0),
+	"refinement validation must authenticate the chart catalog");
 _Static_assert(SG_FIELD_STATUS_MODEL_INCOMPLETE != SG_FIELD_STATUS_PROOF_FAILED,
 	"missing product coverage must not masquerade as a failed proof");
 _Static_assert(SG_FIELD_STATUS_NUMERICAL_ERROR != SG_FIELD_STATUS_PROOF_FAILED,
@@ -1301,6 +1308,7 @@ static void TestRepeatedRefinementFaceLineage(void)
 	static const uint8_t depths[5] = { 0U, 1U, 1U, 2U, 2U };
 	sg_field_reach_atom_t atom = { 0 };
 	sg_rune_state_domain_t domain = { 0 };
+	sg_rune_state_chart_t chart = { 0 };
 	sg_field_refinement_tree_t tree = { 0 };
 	sg_field_refinement_node_t nodes[5] = { 0 };
 	sg_field_refinement_vertex_t vertices[10] = { 0 };
@@ -1338,6 +1346,7 @@ static void TestRepeatedRefinementFaceLineage(void)
 	domain.id = atom.domain;
 	domain.chart.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
 	domain.simplices = atom.simplices;
+	chart.id = domain.chart;
 	for (node = 0U; node < 5U; node++)
 	{
 		const sg_field_refinement_vertex_t *cell[8];
@@ -1471,7 +1480,112 @@ static void TestRepeatedRefinementFaceLineage(void)
 	tree.atom_roots = roots;
 	tree.atom_count = 1U;
 	tree.proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 200U);
-	CHECK(SG_FieldRefinementTreeValid(&tree, &atom, 1U, &domain, 1U));
+	CHECK(SG_FieldRefinementTreeValid(&tree, &atom, 1U, &domain, 1U,
+		&chart, 1U));
+}
+
+static int FixtureRefinementTreeValid(const dynamics_fixture_t *fixture)
+{
+	return SG_FieldRefinementTreeValid(&fixture->dynamics.refinement_tree,
+		fixture->reach_atoms, fixture->dynamics.reach_atom_count,
+		fixture->domains, fixture->dynamics.state_domain_count,
+		fixture->charts, fixture->dynamics.state_chart_count);
+}
+
+static void TestRefinementCatalogAuthentication(void)
+{
+	dynamics_fixture_t fixture;
+	sg_rune_state_domain_t domains[3];
+	sg_rune_state_chart_t charts[2] = { 0 };
+
+	BuildFixture(&fixture);
+	CHECK(FixtureRefinementTreeValid(&fixture));
+	/* Duplicate atom IDs must not authenticate two roots. */
+	fixture.reach_atoms[1].id = fixture.reach_atoms[0].id;
+	fixture.refinement_nodes[1].atom = fixture.reach_atoms[0].id;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	{
+		sg_field_reach_atom_t saved = fixture.reach_atoms[0];
+		fixture.reach_atoms[0] = fixture.reach_atoms[1];
+		fixture.reach_atoms[1] = saved;
+	}
+	fixture.refinement_nodes[0].atom = fixture.reach_atoms[0].id;
+	fixture.refinement_nodes[1].atom = fixture.reach_atoms[1].id;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	/* The public validator must enforce the atom record shape itself. */
+	fixture.reach_atoms[0].simplices.count = 0U;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	/* The public validator must enforce the domain record shape itself. */
+	fixture.domains[0].simplices.count = 0U;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	/* Domain references retain their type and source authentication even when
+	 * the malformed record is present in the supplied catalog. */
+	fixture.domains[0].id.value = Stable(SG_RUNE_ORDER_FIELD_REACH_ATOM, 9U);
+	fixture.reach_atoms[0].domain = fixture.domains[0].id;
+	fixture.reach_atoms[1].domain = fixture.domains[0].id;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	fixture.domains[0].chart.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 9U);
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	fixture.domains[0].chart.value.source_set_identity = 2U;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	fixture.reach_atoms[0].partition_proof.value.source_set_identity = 2U;
+	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	/* These contradictory duplicate-domain catalogs contain the same records.
+	 * Reversing the duplicates must not change the verdict. */
+	domains[0] = fixture.domains[0];
+	domains[1] = fixture.domains[0];
+	domains[1].chart.value = Stable(SG_RUNE_ORDER_STATE_CHART, 2U);
+	domains[2] = fixture.domains[0];
+	domains[2].id.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 2U);
+	charts[0] = fixture.charts[0];
+	charts[1] = fixture.charts[0];
+	charts[1].id = domains[1].chart;
+	fixture.reach_atoms[1].domain = domains[2].id;
+	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
+		fixture.reach_atoms, 2U, domains, 3U, charts, 2U));
+	{
+		sg_rune_state_domain_t saved = domains[0];
+		domains[0] = domains[1];
+		domains[1] = saved;
+	}
+	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
+		fixture.reach_atoms, 2U, domains, 3U, charts, 2U));
+
+	BuildFixture(&fixture);
+	domains[0] = fixture.domains[0];
+	domains[0].id.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 2U);
+	domains[1] = fixture.domains[0];
+	fixture.reach_atoms[1].domain = domains[0].id;
+	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
+		fixture.reach_atoms, 2U, domains, 2U, fixture.charts, 1U));
+
+	BuildFixture(&fixture);
+	charts[0] = fixture.charts[0];
+	charts[0].id.value = Stable(SG_RUNE_ORDER_STATE_CHART, 2U);
+	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
+		fixture.reach_atoms, 2U, fixture.domains, 1U, charts, 1U));
+
+	BuildFixture(&fixture);
+	charts[0] = fixture.charts[0];
+	charts[1] = fixture.charts[0];
+	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
+		fixture.reach_atoms, 2U, fixture.domains, 1U, charts, 2U));
 }
 
 static void TestExactIntersectionHostiles(void)
@@ -1951,7 +2065,7 @@ static void TestCoincidentChartsRemainIndependent(void)
 	simplices[2].chart = charts[0].id;
 	simplices[3].chart = charts[0].id;
 	CHECK(!SG_FieldRefinementTreeValid(&fixture.dynamics.refinement_tree,
-		atoms, 4U, domains, 2U));
+		atoms, 4U, domains, 2U, charts, 2U));
 	CHECK(!SG_RuneDynamicsGeometryValid(&fixture.dynamics));
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 }
@@ -2305,6 +2419,7 @@ int main(void)
 	TestNearDegenerateSimplexGeometry();
 	TestExactIntersectionHostiles();
 	TestRepeatedRefinementFaceLineage();
+	TestRefinementCatalogAuthentication();
 	TestAuthenticatedGeometryCertificates();
 	TestRefinedBoundaryCoverage();
 	TestCoincidentChartsRemainIndependent();
