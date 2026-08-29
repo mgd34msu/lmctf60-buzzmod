@@ -11,7 +11,8 @@ strict="$strict -Wmissing-prototypes -Wcast-align"
 sources='tests/sg_rune_dynamics_model_test.c'
 sources="$sources slipgate/sg_rune_dynamics_model.c"
 sources="$sources slipgate/sg_rune_dynamics_geometry.c"
-sources="$sources slipgate/sg_rune_field_contract.c slipgate/sg_rune_model.c"
+sources="$sources slipgate/sg_rune_field_contract.c slipgate/sg_destination.c"
+sources="$sources slipgate/sg_rune_model.c"
 
 cd "$repo_dir"
 python3 -B tests/test_sg_rune_dynamics_rank_reference.py
@@ -36,4 +37,4 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 
 clang $strict --analyze -Xanalyzer -analyzer-output=text -I. \
 	slipgate/sg_rune_dynamics_model.c slipgate/sg_rune_dynamics_geometry.c \
-	slipgate/sg_rune_field_contract.c
+	slipgate/sg_rune_field_contract.c slipgate/sg_destination.c

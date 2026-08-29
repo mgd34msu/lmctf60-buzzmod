@@ -123,6 +123,7 @@ static void InitBindingRuntime(caller_fixture_t *fixture, uint16_t index,
 	field = &fixture->field_handles[index];
 	guidance = &fixture->guidances[index];
 	*terminal = (sg_destination_terminal_t){
+		.owner_identity = 1U,
 		.destination = *destination,
 		.generation = (uint64_t)index + 1U,
 		.kind = SG_DESTINATION_TERMINAL_STATIC_PATCH,
@@ -133,8 +134,13 @@ static void InitBindingRuntime(caller_fixture_t *fixture, uint16_t index,
 			}
 		}
 	};
+	terminal->value.static_patch.capture.anchor.owner_identity = 1U;
+	terminal->value.static_patch.capture.anchor.destination = *destination;
+	terminal->value.static_patch.capture.anchor.destination_generation =
+		terminal->generation;
 	*field = (sg_field_handle_t){
 		.service_identity = 1U,
+		.service_generation = 1U,
 		.rune_identity = fixture->snapshot.identity,
 		.topology_revision = fixture->snapshot.topology_revision,
 		.terminal_generation = terminal->generation,
@@ -298,6 +304,10 @@ static void PlanPrimaryRecover(sg_strategy_caller_plan_t *plan)
 		current;
 	((sg_destination_terminal_t *)plan->bindings[3].terminal)->destination =
 		home;
+	((sg_destination_terminal_t *)plan->bindings[2].terminal)->value.static_patch
+		.capture.anchor.destination = current;
+	((sg_destination_terminal_t *)plan->bindings[3].terminal)->value.static_patch
+		.capture.anchor.destination = home;
 }
 
 static sg_strategy_runtime_plan_request_t RuntimeRequest(
