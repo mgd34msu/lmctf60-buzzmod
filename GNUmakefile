@@ -3491,8 +3491,9 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	"$$tmp/field"; \
 	sh tests/run_sg_destination_field_cache_test.sh
 
-rune-v2-belief-test: tests/run_sg_belief_test.sh tests/sg_belief_test.c \
-		slipgate/sg_belief.c slipgate/sg_belief_contract.h
+rune-v2-belief-test: tests/run_sg_belief_test.sh \
+		tests/test_belief_life_identity_contract.py tests/sg_belief_test.c \
+		g_local.h p_client.c slipgate/sg_belief.c slipgate/sg_belief_contract.h
 	sh tests/run_sg_belief_test.sh
 
 rune-v2-perception-evidence-test: \

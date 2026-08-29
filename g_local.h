@@ -1184,7 +1184,7 @@ typedef struct
 	char                            printdata[PRINT_CHAT+1][MAX_PRINT_BUF]; //queues printing data
     //char							chatdata[MAX_PRINT_BUF]; //queues chat data
 	qboolean                        printready; //is there a queue waiting
-	unsigned long					ctfid; //this is guaranteed unique
+	uint64_t					ctfid; //this is guaranteed unique
 	int                             original_enterframe;
 	edict_t                         *popup_ent;
 	//qboolean						toss_state; // BUZZKILL - should tossed thing track nearest player?

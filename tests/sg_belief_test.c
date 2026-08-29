@@ -1141,6 +1141,10 @@ static void TestPlayerLifeIdentityRejectsSlotReuse(void)
 	config.target_life.spawn_generation = 31U;
 	CHECK(SG_BeliefStateInit(&fixture.snapshot, &state, &config, storage,
 		8U));
+	state.latest_provenance.reserved[0] = 1U;
+	CHECK(!SG_BeliefStateValid(&state));
+	state.latest_provenance.reserved[0] = 0U;
+	CHECK(SG_BeliefStateValid(&state));
 	before = state;
 	memcpy(storage_before, storage, sizeof(storage));
 	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);

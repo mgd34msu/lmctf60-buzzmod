@@ -697,6 +697,8 @@ static inline int SG_BeliefStateValid(const sg_belief_state_t *state)
 		return 0;
 	if ((state->last_evidence_sequence == 0U &&
 	     (state->latest_provenance.evidence_id != 0U ||
+	      !SG_BeliefReservedZero(state->latest_provenance.reserved,
+		sizeof(state->latest_provenance.reserved)) ||
 	      !SG_BeliefLifeIdentityEmpty(
 		&state->latest_provenance.issuer_life) ||
 	      state->latest_provenance.rune_identity != 0U ||

@@ -10,6 +10,8 @@ sources='tests/sg_belief_test.c slipgate/sg_belief.c'
 
 cd "$repo_dir"
 
+python3 -B tests/test_belief_life_identity_contract.py
+
 gcc $strict -I. $sources -lm -o "$tmp_dir/belief-gcc"
 "$tmp_dir/belief-gcc"
 

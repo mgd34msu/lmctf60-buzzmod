@@ -1918,7 +1918,7 @@ void PutClientInServer (edict_t *ent)
 	client_respawn_t	resp;
 	stats_player_s *p_saved_stats = NULL; // STATS - LM_Hati
 
-	static unsigned long unique_id = 6; //guaranteed 0-5 are special
+	static uint64_t unique_id = UINT64_C(6); //guaranteed 0-5 are special
 	
 	// find a spawn point
 	// do it before setting health back up, so farthest
