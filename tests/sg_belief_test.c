@@ -1209,8 +1209,12 @@ static void TestPlayerLifeIdentityRejectsSlotReuse(void)
 	CHECK(SG_BeliefLifeIdentityEqual(
 		&state.latest_provenance.issuer_life,
 		&evidence.provenance.issuer_life));
-	CHECK(SG_BeliefPredict(&fixture.snapshot, &state, 100U, predicted, 8U,
-		&prediction));
+	{
+		sg_belief_prediction_request_t request = PredictionRequest(100U,
+			NULL, scratch_first, scratch_second, 8U, predicted, 8U);
+		CHECK(SG_BeliefPredict(&fixture.snapshot, &state, &request,
+			&prediction) == SG_BELIEF_PREDICT_APPLIED);
+	}
 	CHECK(SG_BeliefLifeIdentityEqual(&prediction.target_life,
 		&state.target_life));
 }
@@ -2330,10 +2334,10 @@ static void TestPredictionAuthorityRejectsFabrication(void)
 	size_t canonical_count = 0U;
 	sg_rune_v2_content_id_t canonical_identity;
 	static const uint8_t expected_identity[SG_RUNE_V2_CONTENT_ID_BYTES] = {
-		0x14U, 0xdbU, 0x64U, 0x40U, 0x7bU, 0x52U, 0x9cU, 0x39U,
-		0xc9U, 0x1aU, 0x88U, 0x95U, 0x13U, 0x8aU, 0xd8U, 0xc9U,
-		0x98U, 0xe1U, 0x6eU, 0xd7U, 0x98U, 0x13U, 0x69U, 0xd0U,
-		0x96U, 0xaeU, 0x86U, 0x6fU, 0xe4U, 0x1fU, 0x05U, 0x53U
+		0xd2U, 0x35U, 0x87U, 0x71U, 0xfaU, 0x5eU, 0x07U, 0x4eU,
+		0xaeU, 0xf8U, 0xd6U, 0xbcU, 0x28U, 0x1fU, 0xf8U, 0x10U,
+		0x81U, 0x38U, 0x10U, 0x32U, 0xefU, 0x57U, 0x7eU, 0x30U,
+		0x95U, 0x3aU, 0x0dU, 0xebU, 0x08U, 0x6dU, 0x06U, 0x0bU
 	};
 	sg_belief_horizon_source_t *source = NULL;
 	sg_belief_horizon_authority_t *authority = NULL;
@@ -2441,6 +2445,14 @@ static void TestPredictionAuthorityRejectsFabrication(void)
 		SG_BELIEF_HORIZON_REJECTED_INVALID);
 
 	stale_state = state;
+	stale_state.target_life.spawn_generation++;
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &stale_state, source,
+		&canonical, &canonical_count, &canonical_identity));
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &stale_state,
+		source, canonical, canonical_count, &rejected) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(rejected == NULL);
+	stale_state = state;
 	stale_state.generation++;
 	stale_state.revision++;
 	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &stale_state,
@@ -2475,14 +2487,46 @@ static void TestHorizonIssuerZeroDurationClosure(void)
 	sg_belief_particle_t storage[8];
 	sg_belief_state_t state;
 	sg_belief_horizon_source_t *source = NULL;
+	const sg_belief_horizon_kernel_t *kernels = NULL;
+	size_t kernel_count = 0U;
+	sg_rune_v2_content_id_t positive_then_zero_identity;
+	sg_rune_v2_content_id_t zero_then_positive_identity;
+	const sg_belief_horizon_span_t *span;
+	const sg_belief_horizon_entry_t *entry;
 
 	BeliefFixtureInit(&fixture);
-	fixture.model_kernels[0].parameters.duration_ms = Interval(0.0f, 100.0f);
-	fixture.model_kernels[1].parameters.duration_ms = Interval(50.0f, 50.0f);
-	fixture.model_kernels[2].parameters.duration_ms = Interval(50.0f, 50.0f);
+	fixture.model_kernels[0].parameters.duration_ms = Interval(100.0f, 100.0f);
+	fixture.model_kernels[1].parameters.duration_ms = Interval(150.0f, 150.0f);
+	fixture.model_kernels[2].parameters.duration_ms = Interval(0.0f, 50.0f);
 	InitState(&fixture, &state, storage, 8U);
 	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
 		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &positive_then_zero_identity));
+	CHECK(kernel_count == 1U);
+	span = &kernels[0].origin_spans[0];
+	CHECK(span->entry_count == 3U);
+	entry = &kernels[0].entries[span->first_entry + 1U];
+	CHECK(entry->to.phase_id == 1U && entry->step_count == 1U);
+	entry = &kernels[0].entries[span->first_entry + 2U];
+	CHECK(entry->to.phase_id == 2U && entry->step_count == 2U);
+	SG_BeliefHorizonSourceDestroy(source);
+	source = NULL;
+	kernels = NULL;
+	kernel_count = 0U;
+	fixture.model_kernels[0].parameters.duration_ms = Interval(0.0f, 50.0f);
+	fixture.model_kernels[2].parameters.duration_ms = Interval(100.0f, 100.0f);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &zero_then_positive_identity));
+	CHECK(kernel_count == 1U);
+	span = &kernels[0].origin_spans[0];
+	CHECK(span->entry_count == 2U);
+	entry = &kernels[0].entries[span->first_entry + 1U];
+	CHECK(entry->to.phase_id == 2U && entry->step_count == 2U);
+	CHECK(!SG_RuneV2ContentIdEqual(&positive_then_zero_identity,
+		&zero_then_positive_identity));
 	SG_BeliefHorizonSourceDestroy(source);
 	source = NULL;
 	fixture.model_kernels[2].destination_cell.value =

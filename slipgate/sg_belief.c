@@ -24,7 +24,7 @@ typedef struct belief_horizon_provenance_s
 	uint64_t to_time_ms;
 	uint8_t audience_team;
 	uint8_t target_team;
-	uint16_t target_client;
+	sg_belief_life_identity_t target_life;
 } belief_horizon_provenance_t;
 
 struct sg_belief_horizon_source_s
@@ -646,13 +646,6 @@ static int BeliefCanonicalSizeAdd(size_t *size, size_t count, size_t width)
 	return BeliefSizeAdd(*size, bytes, size);
 }
 
-static void BeliefCanonicalU16(unsigned char *bytes, size_t *cursor,
-	uint16_t value)
-{
-	SG_RuneV2WirePutU16(bytes + *cursor, value);
-	*cursor += 2U;
-}
-
 static void BeliefCanonicalU32(unsigned char *bytes, size_t *cursor,
 	uint32_t value)
 {
@@ -688,10 +681,10 @@ static int BeliefHorizonChainIdentity(
 	sg_rune_v2_content_id_t *identity_out)
 {
 	static const unsigned char tag[8] = {
-		'S', 'G', 'B', 'H', 'Z', '0', '0', '2'
+		'S', 'G', 'B', 'H', 'Z', '0', '0', '3'
 	};
 	unsigned char *bytes;
-	size_t size = sizeof(tag) + 92U + 8U;
+	size_t size = sizeof(tag) + 106U + 8U;
 	size_t cursor = 0U;
 	size_t kernel_index;
 
@@ -728,7 +721,10 @@ static int BeliefHorizonChainIdentity(
 	BeliefCanonicalU64(bytes, &cursor, provenance->to_time_ms);
 	bytes[cursor++] = provenance->audience_team;
 	bytes[cursor++] = provenance->target_team;
-	BeliefCanonicalU16(bytes, &cursor, provenance->target_client);
+	BeliefCanonicalU32(bytes, &cursor, provenance->target_life.client_id);
+	BeliefCanonicalU32(bytes, &cursor, provenance->target_life.reserved);
+	BeliefCanonicalU64(bytes, &cursor,
+		provenance->target_life.spawn_generation);
 	BeliefCanonicalSize(bytes, &cursor, kernel_count);
 	for (kernel_index = 0U; kernel_index < kernel_count; kernel_index++)
 	{
@@ -1297,7 +1293,7 @@ static int BeliefHorizonWalk(
 			}
 		}
 		if (path_length < max_depth &&
-		    (long double)next.duration_min_ms < (long double)elapsed_ms)
+		    (long double)next.duration_min_ms <= (long double)elapsed_ms)
 		{
 			frames[path_length] = next;
 			depth = path_length;
@@ -2738,7 +2734,8 @@ static int BeliefHorizonProvenanceMatches(
 		provenance->to_time_ms == to_time_ms &&
 		provenance->audience_team == state->audience_team &&
 		provenance->target_team == state->target_team &&
-		provenance->target_client == state->target_client;
+		SG_BeliefLifeIdentityEqual(&provenance->target_life,
+			&state->target_life);
 }
 
 static int BeliefHorizonSourceValid(
@@ -2904,7 +2901,7 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
 	source->provenance.to_time_ms = to_time_ms;
 	source->provenance.audience_team = state->audience_team;
 	source->provenance.target_team = state->target_team;
-	source->provenance.target_client = state->target_client;
+	source->provenance.target_life = state->target_life;
 	source->kernel_count = 1U;
 	memset(&counters, 0, sizeof(counters));
 	if (!BeliefHorizonChainValid(snapshot, source->kernels,
