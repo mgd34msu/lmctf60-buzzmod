@@ -478,9 +478,6 @@
     <ClCompile Include="slipgate\sg_fields.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_snag_repair.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="slipgate\sg_net.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -769,9 +766,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_door_approach.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_snag_repair.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_hook_diagnostics.h">

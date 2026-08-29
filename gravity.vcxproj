@@ -435,7 +435,6 @@
     <ClCompile Include="slipgate\sg_combat.c" />
     <ClCompile Include="slipgate\sg_combat_land_lead.c" />
     <ClCompile Include="slipgate\sg_fields.c" />
-    <ClCompile Include="slipgate\sg_snag_repair.c" />
     <ClCompile Include="slipgate\sg_net.c" />
     <ClCompile Include="slipgate\sg_oracle.c" />
     <ClCompile Include="slipgate\sg_persona.c" />
@@ -536,7 +535,6 @@
     <ClInclude Include="slipgate\sg_human_speed.h" />
     <ClInclude Include="slipgate\sg_human_trace.h" />
     <ClInclude Include="slipgate\sg_door_approach.h" />
-    <ClInclude Include="slipgate\sg_snag_repair.h" />
     <ClInclude Include="slipgate\sg_hook_diagnostics.h" />
     <ClInclude Include="slipgate\sg_pov_identity.h" />
     <ClInclude Include="slipgate\sg_local.h" />

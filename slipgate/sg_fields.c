@@ -20,8 +20,6 @@
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_field_projection.h"
-#include "slipgate/sg_snag_repair.h"
-
 sg_fields_t sg_fields;
 
 /*
@@ -425,9 +423,7 @@ static void Field_FloodRun(rune_t *r, int *dist,
 				continue;
 
 			base = env_dist[id] + Fields_LinkTraversalCostMs(b) + sg_futile[x]
-			     + sg_link_futile[li] + sg_shelf_pen[u]
-			     + SG_SnagRepairSeedSurcharge(x)
-			     + SG_SnagRepairLinkSurcharge(li);
+			     + sg_link_futile[li] + sg_shelf_pen[u];
 			if (nb > 1)
 				base += Env_TurnCost(b->heading, env_head[id], env_slack[id]);
 
@@ -961,8 +957,6 @@ qboolean Fields_ActionTopologyRefresh(rune_t *r)
 qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 {
 	edict_t *rf, *bf;
-	cvar_t *gamedir;
-	const char *game_directory;
 	int i;
 
 	/* the next flood is this level's first: it carries the self-check */
@@ -973,27 +967,6 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 	sg_fields.action_topology_epoch++;
 	if (sg_fields.action_topology_epoch == 0)
 		 sg_fields.action_topology_epoch = 1;
-	/* A published artifact requires one exact RUNE-bound snag declaration;
-	 * zero repairs is explicit in that file, never inferred from ENOENT.  Unit
-	 * fixtures that construct only an in-memory graph have no artifact identity
-	 * and therefore do not perform level-file I/O. */
-	if (r->artifact.identity.map_name[0])
-	{
-		gamedir = sg_host.cvar ? sg_host.cvar("gamedir", "", 0) : NULL;
-		game_directory = gamedir && gamedir->string && gamedir->string[0]
-			? gamedir->string : ".";
-		if (!SG_SnagRepairLoadForLevel(r, game_directory))
-		{
-			if (sg_host.dprint)
-				sg_host.dprint("slipgate: snag declaration missing or invalid "
-				               "for map %s; fields rejected\n",
-				               r->artifact.identity.map_name);
-			return false;
-		}
-	}
-	else
-		SG_SnagRepairClear();
-
 	rf = SG_FlagStand(CTF_TEAM_RED, true);
 	bf = SG_FlagStand(CTF_TEAM_BLUE, true);
 	if (!rf || !bf)

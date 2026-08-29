@@ -407,24 +407,9 @@ FIELDS_CANDIDATE_TEST_OBJS := .sg_fields_candidate_test.make.o \
 	.sg_q_shared_under_test.make.o .sg_fields_candidate_under_test.make.o \
 	.sg_action_under_test.make.o \
 	.sg_caco_projection_under_test.make.o \
-	.sg_goal_projection_under_test.make.o \
-	.sg_snag_repair_under_test.make.o \
-	.sg_rune_file_sha_under_test.make.o
+	.sg_goal_projection_under_test.make.o
 FIELDS_CANDIDATE_TEST_DEPS := $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
-SNAG_REPAIR_TEST_BIN := sg_snag_repair_test.make
-SNAG_REPAIR_TEST_OBJS := .sg_snag_repair_test.make.o \
-	.sg_fields_candidate_under_test.make.o .sg_snag_repair_under_test.make.o \
-	.sg_action_under_test.make.o \
-	.sg_rune_file_sha_under_test.make.o
-SNAG_REPAIR_TEST_DEPS := $(SNAG_REPAIR_TEST_OBJS:.o=.d)
 SNAG_REPAIR_PYTHON_TEST := tests/test_snagrepair.py
-SNAG_REPAIR_TEST_ALL_ARTIFACTS := \
-	$(foreach flavor,gnu make,sg_snag_repair_test.$(flavor) \
-	.sg_snag_repair_test.$(flavor).o .sg_snag_repair_test.$(flavor).d \
-	.sg_snag_repair_under_test.$(flavor).o \
-	.sg_snag_repair_under_test.$(flavor).d \
-	.sg_rune_file_sha_under_test.$(flavor).o \
-	.sg_rune_file_sha_under_test.$(flavor).d)
 SPECTATOR_SOUND_TEST_BIN := sg_spectator_sound_test.make
 SPECTATOR_SOUND_TEST_OBJS := .sg_spectator_sound_test.make.o \
 	.sg_spectator_sound_net_under_test.make.o
@@ -1278,7 +1263,6 @@ OBJS := \
 	slipgate/sg_localization.o \
 	slipgate/sg_pickup_target.o \
 	sg_fields.o \
-	slipgate/sg_snag_repair.o \
 	sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 	sg_cvars.o \
 	sg_hooks.o \
@@ -1379,7 +1363,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	runegen-test botkin-test sheet-cli-test \
 	deslop-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
-	danger-lease-test danger-policy-test danger-test fields-candidate-test snag-repair-test \
+	danger-lease-test danger-policy-test danger-test fields-candidate-test \
 	spectator-sound-test human-speed-test defense-shift-test \
 	door-approach-test \
 	item-commitment-test hook-diagnostics-test \
@@ -1518,9 +1502,6 @@ slipgate/sg_compound_action_publication.o: \
 		slipgate/sg_replay.h slipgate/sg_rune.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
-slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
-		slipgate/sg_snag_repair.h g_local.h
-
 -include $(OBJS:.o=.d)
 -include $(POVLOCK_TEST_DEPS)
 -include $(POV_SESSION_TEST_DEPS)
@@ -1559,7 +1540,6 @@ slipgate/sg_snag_repair.o: slipgate/sg_snag_repair.c \
 -include $(DANGER_POLICY_TEST_DEPS)
 -include $(DANGER_TEST_DEPS)
 -include $(FIELDS_CANDIDATE_TEST_DEPS)
--include $(SNAG_REPAIR_TEST_DEPS)
 -include $(SPECTATOR_SOUND_TEST_DEPS)
 -include $(HUMAN_SPEED_TEST_DEPS)
 -include $(DOOR_APPROACH_TEST_DEPS)
@@ -1690,10 +1670,6 @@ $(DANGER_TEST_BIN): $(DANGER_TEST_OBJS)
 $(FIELDS_CANDIDATE_TEST_BIN): $(FIELDS_CANDIDATE_TEST_OBJS)
 	$(E) [TEST-LD] $@
 	$(Q)$(CC) -Wl,--gc-sections -o $@ $(FIELDS_CANDIDATE_TEST_OBJS) $(LIBS)
-
-$(SNAG_REPAIR_TEST_BIN): $(SNAG_REPAIR_TEST_OBJS)
-	$(E) [TEST-LD] $@
-	$(Q)$(CC) -Wl,--gc-sections -o $@ $(SNAG_REPAIR_TEST_OBJS) $(LIBS)
 
 $(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -2737,22 +2713,6 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 		-fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_snag_repair_test.make.o: tests/sg_snag_repair_test.c \
-		slipgate/sg_snag_repair.h $(REVISION_HEADER)
-	$(E) [TEST-CC] $@
-	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
-		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
-
-.sg_snag_repair_under_test.make.o: slipgate/sg_snag_repair.c \
-		slipgate/sg_snag_repair.h $(REVISION_HEADER)
-	$(E) [TEST-CC] $@
-	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
-		-Werror -Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
-
 .sg_caco_projection_under_test.make.o: slipgate/sg_caco.c $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -2796,13 +2756,6 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -Wno-strict-prototypes -DDEDICATED_ONLY \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
-
-.sg_rune_file_sha_under_test.make.o: slipgate/sg_rune_file.c \
-		slipgate/sg_rune_file.h $(REVISION_HEADER)
-	$(E) [TEST-CC] $@
-	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
-		-Werror -Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_human_speed_q_shared_under_test.make.o: q_shared.c q_shared.h \
 		$(REVISION_HEADER)
@@ -3641,7 +3594,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(TEMP_FLAG_DIAGNOSTIC_TEST) \
 		$(DANGER_LEASE_TEST_BIN) $(DANGER_POLICY_TEST_BIN) \
 		$(DANGER_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
-		$(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST) \
+		$(SNAG_REPAIR_PYTHON_TEST) \
 		$(SPECTATOR_SOUND_TEST_BIN) tests/test_spectator_limit.py \
 		$(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST) \
 		$(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN) \
@@ -3742,7 +3695,6 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(DANGER_POLICY_TEST_BIN)
 	$(Q)./$(DANGER_TEST_BIN)
 	$(Q)./$(FIELDS_CANDIDATE_TEST_BIN)
-	$(Q)./$(SNAG_REPAIR_TEST_BIN)
 	$(Q)python3 -B $(SNAG_REPAIR_PYTHON_TEST)
 	$(Q)./$(SPECTATOR_SOUND_TEST_BIN) && python3 -B tests/test_spectator_limit.py
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
@@ -4377,11 +4329,6 @@ fields-candidate-test: $(FIELDS_CANDIDATE_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(FIELDS_CANDIDATE_TEST_BIN)
 
-snag-repair-test: $(SNAG_REPAIR_TEST_BIN) $(SNAG_REPAIR_PYTHON_TEST)
-	$(E) [TEST] $<
-	$(Q)./$(SNAG_REPAIR_TEST_BIN)
-	$(Q)python3 -B $(SNAG_REPAIR_PYTHON_TEST)
-
 human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 	$(E) [TEST] $<
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
@@ -4630,7 +4577,6 @@ clean:
 		$(COMPOUND_GUARD_GAME_TEST_ALL_ARTIFACTS) \
 		$(DECLARED_DOOR_GUARD_TEST_ALL_ARTIFACTS) \
 		$(MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS) \
-		$(SNAG_REPAIR_TEST_ALL_ARTIFACTS) \
 		$(SPECTATOR_SOUND_TEST_ALL_ARTIFACTS) \
 		$(HUMAN_SPEED_TEST_ALL_ARTIFACTS) \
 		$(HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS) \

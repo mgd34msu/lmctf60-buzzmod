@@ -159,6 +159,7 @@ static void CheckHookFieldAdmission(void)
 	int initial_lane[7], initial_lane_seed;
 	int projection_field[7], steps[SG_PROJ_BRANCH];
 	int num_steps;
+	qboolean setup_ok;
 	unsigned initial_epoch;
 	int i;
 
@@ -185,6 +186,7 @@ static void CheckHookFieldAdmission(void)
 	rune.links = links;
 	rune.first_link = first_link;
 	rune.next_link = next_link;
+	strcpy(rune.artifact.identity.map_name, "testmap");
 	for (i = 0; i < 7; i++)
 		seeds[i].origin[0] = (float)i * 100.0f;
 	seeds[2].origin[2] = -200.0f;
@@ -246,7 +248,10 @@ static void CheckHookFieldAdmission(void)
 	hook_cvar.value = CTF_OFFHAND_HOOK;
 	ctfflags = &hook_cvar;
 	allocation_count = 0;
-	CHECK(Fields_Setup(&rune, &inputs));
+	setup_ok = Fields_Setup(&rune, &inputs);
+	CHECK(setup_ok);
+	if (!setup_ok)
+		return;
 	allocations_after_setup = allocation_count;
 	CHECK(allocations_after_setup > 0);
 	CHECK(sg_fields.hook_admitted);
