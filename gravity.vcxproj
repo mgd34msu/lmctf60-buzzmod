@@ -360,12 +360,6 @@
     <ClCompile Include="slipgate\sg_identity.c" />
     <ClCompile Include="slipgate\sg_human_speed.c" />
     <ClCompile Include="slipgate\sg_human_trace.c" />
-    <ClCompile Include="slipgate\sg_human_trace_learning_contract.c" />
-    <ClCompile Include="slipgate\sg_human_trace_learning.c" />
-    <ClCompile Include="slipgate\sg_human_trace_learning_game.c" />
-    <ClCompile Include="slipgate\sg_human_trace_learning_consumer.c" />
-    <ClCompile Include="slipgate\sg_human_trace_learning_host_game.c" />
-    <ClCompile Include="slipgate\sg_human_trace_learning_store.c" />
     <ClCompile Include="slipgate\sg_door_approach.c" />
     <ClCompile Include="slipgate\sg_hook_diagnostics.c" />
     <ClCompile Include="slipgate\sg_pov_identity.c" />
@@ -546,13 +540,6 @@
     <ClInclude Include="slipgate\sg_identity.h" />
     <ClInclude Include="slipgate\sg_human_speed.h" />
     <ClInclude Include="slipgate\sg_human_trace.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning_contract.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning_game.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning_game_private.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning_consumer.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning_host_game.h" />
-    <ClInclude Include="slipgate\sg_human_trace_learning_store.h" />
     <ClInclude Include="slipgate\sg_door_approach.h" />
     <ClInclude Include="slipgate\sg_hook_diagnostics.h" />
     <ClInclude Include="slipgate\sg_pov_identity.h" />

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,10 +26,7 @@ SHA256_HEX_BYTES = 64
 UINT32_MAX = 0xFFFFFFFF
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 INT32_MAX = 0x7FFFFFFF
-# Mirrors SG_HumanTraceLearningEffectiveCostValid: the canonical continuous
-# dynamics infinity sentinel is UINT64_MAX, so every nonzero lower uint64
-# value is an admissible effective traversal cost.
-EFFECTIVE_COST_MAX = UINT64_MAX - 1
+MAX_HOOK_EVENTS = 16384
 STATE_FIELDS = {
     "type", "origin", "velocity", "flags", "time", "gravity",
     "delta_angles",
@@ -37,6 +35,18 @@ COMMAND_FIELDS = {
     "msec", "buttons", "angles", "forward", "side", "up", "impulse",
     "light",
 }
+RUNE_BIND_FIELDS = {
+    "format", "kind", "start_sequence", "frame", "map",
+    "bsp_checksum", "entity_crc32", "physics_flags", "gravity",
+    "airaccelerate", "maxvelocity", "pmove_substep_ms",
+    "server_frame_ms", "host_physics_id", "route_contract",
+    "payload_crc32", "header_crc32", "action_contract_crc32",
+    "mechanism_contract_crc32", "num_seeds", "num_links",
+    "num_mechanism_nodes", "num_mechanism_edges",
+    "num_inventory_edges", "num_mechanism_plans", "string_bytes",
+    "rune_sha256",
+}
+RUNE_BIND_FIELDS_V2 = RUNE_BIND_FIELDS | {"start_hook_event"}
 HOOK_COMMON_FIELDS = {
     "format", "kind", "event", "after_step", "client", "frame", "hook",
 }
@@ -87,6 +97,7 @@ V3_END_FIELDS = {
     "format", "kind", "order", "frame", "level_time_bits", "prev_sha256",
     "sha256",
 }
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def integer(value: Any, name: str, low: int, high: int) -> int:
@@ -112,6 +123,21 @@ def integer_vector_2(value: Any, name: str, low: int,
             for index, item in enumerate(value)]
 
 
+def number(value: Any, name: str, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a finite number")
+    result = float(value)
+    if not math.isfinite(result) or result < low or result > high:
+        raise ValueError(f"{name} is outside {low}..{high}")
+    return result
+
+
+def sha256_hex(value: Any, name: str) -> str:
+    if not isinstance(value, str) or SHA256.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a lowercase SHA-256")
+    return value
+
+
 def validate_state(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != STATE_FIELDS:
         raise ValueError(f"{name} has the wrong fields")
@@ -132,7 +158,7 @@ def validate_state(value: Any, name: str) -> dict[str, Any]:
 
 def validate_command(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != COMMAND_FIELDS:
-        raise ValueError(f"{name} cmd has the wrong fields")
+        raise ValueError(f"{name} has the wrong fields")
     return {
         "msec": integer(value["msec"], f"{name}.msec", 0, 255),
         "buttons": integer(value["buttons"], f"{name}.buttons", 0, 255),
@@ -176,6 +202,103 @@ def validate_header(value: Any, line: int) -> dict[str, Any]:
     }
 
 
+def validate_rune_bind(value: Any, line: int,
+                       trace_identity: dict[str, Any],
+                       trace_format: str = TRACE_FORMAT_V1) -> dict[str, Any]:
+    fields = (RUNE_BIND_FIELDS_V2 if trace_format == TRACE_FORMAT_V2
+              else RUNE_BIND_FIELDS)
+    if not isinstance(value, dict) or set(value) != fields or \
+            value.get("format") != trace_format or \
+            value.get("kind") != "rune-bind":
+        raise ValueError(f"line {line}: invalid rune binding fields")
+    map_name = value.get("map")
+    if not isinstance(map_name, str) or not map_name or len(map_name) >= 64:
+        raise ValueError(f"line {line}: invalid rune binding map")
+    result = {
+        "start_sequence": integer(
+            value.get("start_sequence"),
+            f"line {line} start_sequence", 1, 2**63 - 1),
+        "frame": integer(value.get("frame"), f"line {line} frame",
+                         0, 0x7FFFFFFF),
+        "map": map_name,
+        "bsp_checksum": integer(
+            value.get("bsp_checksum"), f"line {line} bsp_checksum",
+            0, 0xFFFFFFFF),
+        "entity_crc32": integer(
+            value.get("entity_crc32"), f"line {line} entity_crc32",
+            0, 0xFFFFFFFF),
+        "physics_flags": integer(
+            value.get("physics_flags"), f"line {line} physics_flags",
+            0, 0xFFFFFFFF),
+        "gravity": number(value.get("gravity"), f"line {line} gravity",
+                          -65536.0, 65536.0),
+        "airaccelerate": number(
+            value.get("airaccelerate"), f"line {line} airaccelerate",
+            -65536.0, 65536.0),
+        "maxvelocity": number(
+            value.get("maxvelocity"), f"line {line} maxvelocity",
+            0.0, 65536.0),
+        "pmove_substep_ms": integer(
+            value.get("pmove_substep_ms"),
+            f"line {line} pmove_substep_ms", 1, 0xFFFF),
+        "server_frame_ms": integer(
+            value.get("server_frame_ms"),
+            f"line {line} server_frame_ms", 1, 0xFFFF),
+        "host_physics_id": integer(
+            value.get("host_physics_id"),
+            f"line {line} host_physics_id", 1, 0xFFFFFFFF),
+        "route_contract": integer(
+            value.get("route_contract"), f"line {line} route_contract",
+            1, 1),
+        "payload_crc32": integer(
+            value.get("payload_crc32"), f"line {line} payload_crc32",
+            0, 0xFFFFFFFF),
+        "header_crc32": integer(
+            value.get("header_crc32"), f"line {line} header_crc32",
+            0, 0xFFFFFFFF),
+        "action_contract_crc32": integer(
+            value.get("action_contract_crc32"),
+            f"line {line} action_contract_crc32", 0, 0xFFFFFFFF),
+        "mechanism_contract_crc32": integer(
+            value.get("mechanism_contract_crc32"),
+            f"line {line} mechanism_contract_crc32", 0, 0xFFFFFFFF),
+        "num_seeds": integer(
+            value.get("num_seeds"), f"line {line} num_seeds", 1, 32768),
+        "num_links": integer(
+            value.get("num_links"), f"line {line} num_links", 0, 262144),
+        "num_mechanism_nodes": integer(
+            value.get("num_mechanism_nodes"),
+            f"line {line} num_mechanism_nodes", 0, 8192),
+        "num_mechanism_edges": integer(
+            value.get("num_mechanism_edges"),
+            f"line {line} num_mechanism_edges", 0, 262144),
+        "num_inventory_edges": integer(
+            value.get("num_inventory_edges"),
+            f"line {line} num_inventory_edges", 0, 262144),
+        "num_mechanism_plans": integer(
+            value.get("num_mechanism_plans"),
+            f"line {line} num_mechanism_plans", 0, 262144),
+        "string_bytes": integer(
+            value.get("string_bytes"), f"line {line} string_bytes",
+            1, 1048576),
+        "rune_sha256": sha256_hex(
+            value.get("rune_sha256"), f"line {line} rune_sha256"),
+    }
+    if trace_format == TRACE_FORMAT_V2:
+        result["start_hook_event"] = integer(
+            value.get("start_hook_event"),
+            f"line {line} start_hook_event", 1, 2**63 - 1)
+    if (result["map"] != trace_identity["map"] or
+            result["bsp_checksum"] != trace_identity["bsp_checksum"] or
+            result["entity_crc32"] != trace_identity["entity_crc32"] or
+            result["host_physics_id"] != trace_identity["physics_id"]):
+        raise ValueError(f"line {line}: rune binding identity mismatch")
+    if result["num_inventory_edges"] > result["num_mechanism_edges"]:
+        raise ValueError(f"line {line}: rune binding edge counts disagree")
+    return result
+
+
+
 def validate_step(value: Any, line: int,
                   trace_format: str = TRACE_FORMAT_V1) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("format") != trace_format or \
@@ -192,7 +315,7 @@ def validate_step(value: Any, line: int,
                          0, INT32_MAX),
         "snapinitial": integer(
             value.get("snapinitial"), f"line {line} snapinitial", 0, 1),
-        "cmd": validate_command(value.get("cmd"), f"line {line}"),
+        "cmd": validate_command(value.get("cmd"), f"line {line} cmd"),
         "before": validate_state(
             value.get("before"), f"line {line} before"),
         "after": validate_state(value.get("after"), f"line {line} after"),
@@ -303,7 +426,7 @@ def printable(value: Any, line: int, name: str, capacity: int,
     return value
 
 
-def sha256_hex(value: Any, line: int, name: str) -> str:
+def v3_sha256_hex(value: Any, line: int, name: str) -> str:
     if not isinstance(value, str) or len(value) != SHA256_HEX_BYTES or \
             any(character not in "0123456789abcdef" for character in value):
         raise ValueError(f"line {line}: invalid {name}")
@@ -315,9 +438,9 @@ def validate_v3_digest(raw: str, value: dict[str, Any], line: int,
     if not raw.endswith("\n") or raw.endswith("\r\n"):
         raise ValueError(f"line {line}: v3 record has noncanonical newline")
     line_text = raw[:-1]
-    claimed_previous = sha256_hex(value.get("prev_sha256"), line,
-                                  "prev_sha256")
-    digest = sha256_hex(value.get("sha256"), line, "sha256")
+    claimed_previous = v3_sha256_hex(value.get("prev_sha256"), line,
+                                     "prev_sha256")
+    digest = v3_sha256_hex(value.get("sha256"), line, "sha256")
     suffix = f',"prev_sha256":"{claimed_previous}","sha256":"{digest}"}}'
     if claimed_previous != previous or not line_text.endswith(suffix) or \
             line_text.count(',"prev_sha256":"') != 1:
@@ -335,7 +458,7 @@ def validate_v3_header(value: Any, line: int, raw: str) -> tuple[
     value = require_fields(value, V3_HEADER_FIELDS, line, "v3 trace header")
     if value.get("format") != TRACE_FORMAT_V3 or value.get("kind") != "header":
         raise ValueError(f"line {line}: invalid trace header")
-    previous = sha256_hex(value.get("prev_sha256"), line, "prev_sha256")
+    previous = v3_sha256_hex(value.get("prev_sha256"), line, "prev_sha256")
     digest = validate_v3_digest(raw, value, line, previous)
     continuation = integer(value.get("continuation"), f"line {line} continuation",
                            0, 1)
@@ -585,6 +708,7 @@ def _read_sessions_single(path: Path) -> list[dict[str, Any]]:
                     current = {
                         "identity": validate_header(value, line_number),
                         "trace_format": trace_format,
+                        "rune_bindings": [],
                         "steps": [],
                         "hook_events": [],
                         "last_hook_event": 0,
@@ -633,7 +757,14 @@ def _read_sessions_single(path: Path) -> list[dict[str, Any]]:
                     raise ValueError(f"line {line_number}: unknown v3 record kind")
                 current["chain_previous"] = digest
                 continue
-            if kind == "step":
+            if kind == "rune-bind":
+                if current["rune_bindings"]:
+                    raise ValueError(
+                        f"line {line_number}: duplicate rune binding")
+                current["rune_bindings"].append(validate_rune_bind(
+                    value, line_number, current["identity"],
+                    current["trace_format"]))
+            elif kind == "step":
                 step = validate_step(value, line_number, current["trace_format"])
                 current["steps"].append(step)
                 current["greatest_step"] = max(current["greatest_step"],
@@ -654,6 +785,8 @@ def _read_sessions_single(path: Path) -> list[dict[str, Any]]:
                     raise ValueError(
                         f"line {line_number}: hook after_step exceeds "
                         "the preceding Pmove sequence")
+                if len(current["hook_events"]) >= MAX_HOOK_EVENTS:
+                    raise ValueError("trace hook event capacity exceeded")
                 current["hook_events"].append(event)
                 current["last_hook_event"] = event["event"]
                 current["last_hook_after_step"] = event["after_step"]
@@ -793,7 +926,9 @@ def _v3_stable_identity(header: dict[str, Any]) -> tuple[Any, ...]:
     """Fields a rotating segment may not change within one recorder session."""
     return tuple(header[field] for field in (
         "map", "bsp_checksum", "entity_crc32", "physics_id",
-        "host_physics_id", "module_revision", "module_version"))
+        "host_physics_id", "gravity_bits", "airaccelerate_bits",
+        "maxvelocity_bits", "pmove_substep_ms", "server_frame_ms",
+        "physics_flags", "module_revision", "module_version"))
 
 
 def _assemble_v3_session(segments: list[dict[str, Any]], ordinal: int) -> dict[str, Any]:
@@ -1001,132 +1136,6 @@ def replay_segments(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return segments
 
 
-def derive_v3_learning_observations(
-        session: dict[str, Any], client: int,
-        spawn_generation: int) -> list[dict[str, Any]]:
-    """Mirror the host's source-only derivation from accepted v3 records.
-
-    This intentionally names no RUNE region or kernel. Those are resolved only
-    by the exact published runtime, after the host has bound these ranges to the
-    terminal trace identity.
-    """
-    events = [
-        event for event in session["steps"] + session["hook_events"]
-        if event["client"] == client and
-        event["spawn_generation"] == spawn_generation
-    ]
-    events.sort(key=lambda event: event["order"])
-    last_step: dict[str, Any] | None = None
-    hook_fire: dict[str, Any] | None = None
-    hook_attach: dict[str, Any] | None = None
-    hook_terminal: dict[str, Any] | None = None
-    saw_step_after_attach = False
-    attempted_traversals = 0
-    completed_traversals = 0
-    observed_landings = 0
-    complete: tuple[dict[str, Any], dict[str, Any], dict[str, Any],
-                    dict[str, Any], int] | None = None
-    end = session["end"]
-    server_frame_ms = session["trace_header"]["server_frame_ms"]
-
-    def clear_attempt() -> None:
-        nonlocal hook_fire, hook_attach, hook_terminal, saw_step_after_attach
-        hook_fire = None
-        hook_attach = None
-        hook_terminal = None
-        saw_step_after_attach = False
-
-    def record_range(event: dict[str, Any]) -> dict[str, int]:
-        return {
-            "first_frame": event["frame"],
-            "last_frame": event["frame"],
-            "first_order": event["order"],
-            "last_order": event["order"],
-        }
-
-    for event in events:
-        if event["order"] >= end["order"]:
-            raise ValueError("learning observation reaches v3 terminal end")
-        if event["kind"] == "step":
-            last_step = event
-            if hook_attach is not None and event["order"] > hook_attach["order"]:
-                if hook_terminal is None:
-                    saw_step_after_attach = True
-                if event["ground"] >= 0:
-                    observed_landings += 1
-            if hook_terminal is not None and event["ground"] >= 0 and \
-                    hook_fire is not None and hook_attach is not None and \
-                    saw_step_after_attach and \
-                    event["order"] > hook_terminal["order"] and \
-                    event["frame"] >= hook_terminal["frame"] and \
-                    event["command"] >= hook_terminal["after_command"] and \
-                    completed_traversals < attempted_traversals:
-                frame_delta = event["frame"] - hook_attach["frame"]
-                elapsed = frame_delta * server_frame_ms
-                if frame_delta > 0 and 0 < elapsed <= EFFECTIVE_COST_MAX:
-                    completed_traversals += 1
-                    complete = (hook_fire, hook_attach, hook_terminal,
-                                event, elapsed)
-                clear_attempt()
-            continue
-        if event["kind"] == "hook-fire":
-            if last_step is None or \
-                    event["after_command"] != last_step["command"]:
-                continue
-            clear_attempt()
-            attempted_traversals += 1
-            hook_fire = event
-            continue
-        if event["kind"] == "hook-attach":
-            if hook_fire is None or last_step is None or \
-                    event["after_command"] < hook_fire["after_command"] or \
-                    event["after_command"] > last_step["command"] or \
-                    event["hook"] != hook_fire["hook"] or \
-                    event["hook_event"] <= hook_fire["hook_event"]:
-                continue
-            hook_attach = event
-            hook_terminal = None
-            saw_step_after_attach = False
-            continue
-        if event["kind"] in {"hook-release", "hook-reset"}:
-            if hook_attach is None or hook_terminal is not None or \
-                    not saw_step_after_attach or last_step is None or \
-                    event["after_command"] < hook_attach["after_command"] or \
-                    event["after_command"] > last_step["command"] or \
-                    event["hook"] != hook_attach["hook"] or \
-                    event["hook_event"] <= hook_attach["hook_event"]:
-                continue
-            hook_terminal = event
-
-    if complete is None:
-        return []
-    fire, attach, terminal, landing, elapsed = complete
-    if attempted_traversals == 0 or completed_traversals == 0 or \
-            completed_traversals > attempted_traversals or \
-            observed_landings < completed_traversals:
-        return []
-    tactic_prior = completed_traversals / attempted_traversals
-    landing_preference = completed_traversals / observed_landings
-    strategy_delta = completed_traversals - \
-        (attempted_traversals - completed_traversals)
-    counts = {
-        "attempted_traversals": attempted_traversals,
-        "completed_traversals": completed_traversals,
-        "observed_landings": observed_landings,
-    }
-    return [
-        {"kind": "strategy", "priority_delta": strategy_delta,
-         **counts, **record_range(fire)},
-        {"kind": "hook-cost", "effective_cost_ms": elapsed,
-         "fire_order": fire["order"], **counts, **record_range(attach)},
-        {"kind": "hook-tactic", "prior": tactic_prior,
-         **counts, **record_range(terminal)},
-        {"kind": "landing", "preference": landing_preference,
-         "after_origin": landing["after"]["origin"],
-         **counts, **record_range(landing)},
-    ]
-
-
 def build_evidence_v3(path: Path, session: dict[str, Any],
                       client: int | None, first_frame: int | None,
                       last_frame: int | None) -> dict[str, Any]:
@@ -1155,11 +1164,6 @@ def build_evidence_v3(path: Path, session: dict[str, Any],
         if event["client"] == client and
         event["spawn_generation"] == spawn_generation and
         frame_window[0] <= event["frame"] <= frame_window[1]
-    ]
-    learning_observations = [
-        record for record in derive_v3_learning_observations(
-            session, client, spawn_generation)
-        if frame_window[0] <= record["first_frame"] <= frame_window[1]
     ]
     header = session["trace_header"]
     end = session["end"]
@@ -1220,12 +1224,6 @@ def build_evidence_v3(path: Path, session: dict[str, Any],
         "segments": replay_segments(steps),
         "steps": steps,
         "hook_events": hook_events,
-        "learning_observations": {
-            "terminal_sha256": session["terminal_sha256"],
-            "client": client,
-            "spawn_generation": spawn_generation,
-            "records": learning_observations,
-        },
     }
 
 
@@ -1248,14 +1246,20 @@ def build_evidence(path: Path, session: dict[str, Any], client: int | None,
     if not steps:
         raise ValueError("selected trace window contains no steps")
     sequences = [step["seq"] for step in steps]
-    if len(sequences) != len(set(sequences)) or sequences != sorted(sequences):
+    if len(sequences) != len(set(sequences)):
+        raise ValueError("selected trace window contains duplicate sequences")
+    if sequences != sorted(sequences):
         raise ValueError("selected trace window is not sequence ordered")
     payload = path.read_bytes()
     frame_window = (steps[0]["frame"], steps[-1]["frame"])
+    binding = session.get("rune_bindings", [])
+    start_hook_event = (binding[0].get("start_hook_event", 1)
+                        if binding else 1)
     hook_events = [
         event for event in session.get("hook_events", [])
         if event["client"] == client and
-        frame_window[0] <= event["frame"] <= frame_window[1]
+        frame_window[0] <= event["frame"] <= frame_window[1] and
+        event["event"] >= start_hook_event
     ]
     return {
         "format": (EVIDENCE_FORMAT_V2
@@ -1269,6 +1273,7 @@ def build_evidence(path: Path, session: dict[str, Any], client: int | None,
         },
         "client": client,
         "frame_window": list(frame_window),
+        "rune_bindings": list(session.get("rune_bindings", [])),
         "segments": replay_segments(steps),
         "steps": steps,
         **({"hook_events": hook_events}

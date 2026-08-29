@@ -542,12 +542,7 @@ HUMAN_TRACE_IO_TEST_BIN = sg_human_trace_io_test.gnu
 HUMAN_TRACE_HOOK_TEST_SOURCE = tests/sg_human_trace_hook_test.c
 HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS = \
 	sg_human_trace_hook_test.gnu sg_human_trace_hook_test.make \
-	sg_human_trace_io_test.gnu
-HUMAN_TRACE_LEARNING_TEST_BIN = sg_human_trace_learning_test.gnu
-HUMAN_TRACE_LEARNING_INTEGRATION_TEST = \
-	tests/test_human_trace_learning_integration.py
-HUMAN_TRACE_LEARNING_TEST_ALL_ARTIFACTS = \
-	sg_human_trace_learning_test.gnu sg_human_trace_learning_test.make
+	sg_human_trace_io_test.gnu sg_human_trace_io_test.make
 HUMAN_SPEED_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make,sg_human_speed_test.$(flavor) \
 	.sg_human_speed_test.$(flavor).o .sg_human_speed_test.$(flavor).d \
@@ -1206,7 +1201,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 p_observer.o g_chase.o p_stats.o \
 		 stdlog.o gslog.o bat.o g_vote.o \
 		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_v2_content_identity.o slipgate/sg_rune_v2_exact_snapshot.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_train_station_plan.o slipgate/sg_train_station_candidate.o slipgate/sg_train_station_candidate_game.o slipgate/sg_train_station_board_path.o slipgate/sg_train_station_transaction.o slipgate/sg_train_station_game.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_rune_learning.o slipgate/sg_rune_learning_game.o slipgate/sg_human_trace_learning_contract.o slipgate/sg_human_trace_learning.o slipgate/sg_human_trace_learning_game.o slipgate/sg_human_trace_learning_consumer.o slipgate/sg_human_trace_learning_host_game.o slipgate/sg_human_trace_learning_store.o slipgate/sg_rune_authority_game.o slipgate/sg_rune_update_source.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o slipgate/sg_chain_hook_replay.o slipgate/sg_hook_oracle.o slipgate/sg_rune_hook_frontier.o slipgate/sg_rune_late_path.o slipgate/sg_rune_topology.o slipgate/sg_rune_topology_game.o slipgate/sg_rune_reverse_boundary.o slipgate/sg_rune_seed_game.o slipgate/sg_hook_game.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_mechanism_timeline.o slipgate/sg_relay_wall_transaction.o slipgate/sg_delayed_use_ticket.o slipgate/sg_relay_wall_live.o slipgate/sg_relay_wall_game.o slipgate/sg_timed_vault_transaction.o slipgate/sg_timed_vault_game.o slipgate/sg_timed_vault_game_runtime.o slipgate/sg_timed_vault_egress.o slipgate/sg_timed_vault_egress_game.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o slipgate/sg_rune_door_scope_game.o slipgate/sg_rune_door_frontier.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o slipgate/sg_shoot_door_live.o slipgate/sg_shoot_door_game.o sg_oracle.o slipgate/sg_oracle_rotator.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
+		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_v2_content_identity.o slipgate/sg_rune_v2_exact_snapshot.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_train_station_plan.o slipgate/sg_train_station_candidate.o slipgate/sg_train_station_candidate_game.o slipgate/sg_train_station_board_path.o slipgate/sg_train_station_transaction.o slipgate/sg_train_station_game.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_rune_learning.o slipgate/sg_rune_learning_game.o slipgate/sg_rune_authority_game.o slipgate/sg_rune_update_source.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o slipgate/sg_chain_hook_replay.o slipgate/sg_hook_oracle.o slipgate/sg_rune_hook_frontier.o slipgate/sg_rune_late_path.o slipgate/sg_rune_topology.o slipgate/sg_rune_topology_game.o slipgate/sg_rune_reverse_boundary.o slipgate/sg_rune_seed_game.o slipgate/sg_hook_game.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_mechanism_timeline.o slipgate/sg_relay_wall_transaction.o slipgate/sg_delayed_use_ticket.o slipgate/sg_relay_wall_live.o slipgate/sg_relay_wall_game.o slipgate/sg_timed_vault_transaction.o slipgate/sg_timed_vault_game.o slipgate/sg_timed_vault_game_runtime.o slipgate/sg_timed_vault_egress.o slipgate/sg_timed_vault_egress_game.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o slipgate/sg_rune_door_scope_game.o slipgate/sg_rune_door_frontier.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o slipgate/sg_shoot_door_live.o slipgate/sg_shoot_door_game.o sg_oracle.o slipgate/sg_oracle_rotator.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
 		 slipgate/sg_relay_wall_objective.o slipgate/sg_relay_wall_objective_game.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 slipgate/sg_belief.o slipgate/sg_destination.o \
@@ -1367,7 +1362,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	deslop-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-test fields-candidate-test \
-	spectator-sound-test human-speed-test human-trace-learning-test defense-shift-test \
+	spectator-sound-test human-speed-test defense-shift-test \
 	door-approach-test \
 	item-commitment-test hook-diagnostics-test \
 	run-handoff-test \
@@ -1597,36 +1592,22 @@ $(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
 
 $(HUMAN_TRACE_HOOK_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_human_trace.c \
-		slipgate/sg_human_trace_learning_contract.c \
-		slipgate/sg_human_trace_learning.c \
-		slipgate/sg_human_trace_learning_game.c \
-		slipgate/sg_human_trace_learning_consumer.c \
-		slipgate/sg_human_trace_learning_host_game.c \
-		slipgate/sg_human_trace_learning_store.c \
 		slipgate/sg_rune_v2_content_identity.c \
-		slipgate/sg_rune_model.c \
 		slipgate/sg_rune_v2_content_identity.h \
 		slipgate/sg_rune_v2_wire.h
 	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
-		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_LEARNING_TEST \
-		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite -lm
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_TEST \
+		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite
 
 $(HUMAN_TRACE_IO_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_human_trace.c \
-		slipgate/sg_human_trace_learning_contract.c \
-		slipgate/sg_human_trace_learning.c \
-		slipgate/sg_human_trace_learning_game.c \
-		slipgate/sg_human_trace_learning_consumer.c \
-		slipgate/sg_human_trace_learning_host_game.c \
-		slipgate/sg_human_trace_learning_store.c \
 		slipgate/sg_rune_v2_content_identity.c \
-		slipgate/sg_rune_model.c \
 		slipgate/sg_rune_v2_content_identity.h \
 		slipgate/sg_rune_v2_wire.h
 	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
 		-DSG_HUMAN_TRACE_SEGMENT_BYTES=4096U \
-		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_LEARNING_TEST \
-		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite -lm
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_TEST \
+		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite
 
 $(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
 	$(CC) -o $@ $(DOOR_APPROACH_TEST_OBJS) $(LDFLAGS)
@@ -3586,13 +3567,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	$(CC) $$strict -Wcast-align -I. -c \
 		slipgate/sg_rune_dynamics_geometry.c -o "$$tmp/geometry.o"; \
 	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"; \
-	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_human_trace_learning_contract.c \
-		-o "$$tmp/human-trace-learning-contract.o"; \
-	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_human_trace_learning_consumer.c \
-		-o "$$tmp/human-trace-learning-consumer.o"
+		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \
@@ -3982,19 +3957,6 @@ human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN) \
 		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp"; \
 		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp" writefail
 
-human-trace-learning-test: $(HUMAN_TRACE_LEARNING_INTEGRATION_TEST)
-	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic \
-		-DSG_HUMAN_TRACE_LEARNING_TEST -I. \
-		-o $(HUMAN_TRACE_LEARNING_TEST_BIN) \
-		tests/sg_human_trace_learning_test.c \
-		slipgate/sg_human_trace_learning_contract.c \
-		slipgate/sg_human_trace_learning.c \
-		slipgate/sg_human_trace_learning_game.c \
-		slipgate/sg_human_trace_learning_consumer.c \
-		slipgate/sg_rune_model.c -lm
-	./$(HUMAN_TRACE_LEARNING_TEST_BIN)
-	python3 -B $(HUMAN_TRACE_LEARNING_INTEGRATION_TEST)
-
 door-approach-test: $(DOOR_APPROACH_TEST_BIN)
 	./$(DOOR_APPROACH_TEST_BIN)
 
@@ -4254,7 +4216,6 @@ clean:
 			$(SPECTATOR_SOUND_TEST_ALL_ARTIFACTS) \
 			$(HUMAN_SPEED_TEST_ALL_ARTIFACTS) \
 			$(HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS) \
-			$(HUMAN_TRACE_LEARNING_TEST_ALL_ARTIFACTS) \
 			$(DOOR_APPROACH_TEST_ALL_ARTIFACTS) \
 			$(DEFENSE_SHIFT_TEST_ALL_ARTIFACTS) \
 			$(DEFENSE_SUPPLY_TEST_ALL_ARTIFACTS) \

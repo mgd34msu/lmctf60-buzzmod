@@ -63,6 +63,39 @@ def header(map_name: str = "lmctf01") -> dict[str, object]:
     }
 
 
+def rune_bind(*, start_sequence: int = 1,
+              rune_sha256: str = "b" * 64) -> dict[str, object]:
+    return {
+        "format": humantrace.TRACE_FORMAT,
+        "kind": "rune-bind",
+        "start_sequence": start_sequence,
+        "frame": 9,
+        "map": "lmctf01",
+        "bsp_checksum": 123,
+        "entity_crc32": 456,
+        "physics_flags": 0,
+        "gravity": 800,
+        "airaccelerate": 0,
+        "maxvelocity": 2000,
+        "pmove_substep_ms": 25,
+        "server_frame_ms": 100,
+        "host_physics_id": 1,
+        "route_contract": 1,
+        "payload_crc32": 33,
+        "header_crc32": 44,
+        "action_contract_crc32": 55,
+        "mechanism_contract_crc32": 66,
+        "num_seeds": 4,
+        "num_links": 2,
+        "num_mechanism_nodes": 0,
+        "num_mechanism_edges": 0,
+        "num_inventory_edges": 0,
+        "num_mechanism_plans": 0,
+        "string_bytes": 1,
+        "rune_sha256": rune_sha256,
+    }
+
+
 class HumanTraceTest(unittest.TestCase):
     def write_trace(self, directory: Path,
                     records: list[dict[str, object]]) -> Path:
@@ -97,7 +130,42 @@ class HumanTraceTest(unittest.TestCase):
                  "reason": "authoritative-state-change"},
             ])
         self.assertEqual(len(evidence["source"]["sha256"]), 64)
-    def test_trace_remains_a_read_only_diagnostic_input(self) -> None:
+        self.assertEqual(evidence["rune_bindings"], [])
+
+    def test_additive_local_only_rune_binding_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_trace(Path(temporary), [
+                header(),
+                rune_bind(start_sequence=2),
+                step(1, 9, [0, 0, 0], [8, 0, 0]),
+                step(2, 10, [8, 0, 0], [16, 0, 0]),
+            ])
+            session = humantrace.select_session(
+                humantrace.read_sessions(path), "latest", "lmctf01")
+            evidence = humantrace.build_evidence(
+                path, session, 1, None, None)
+
+        self.assertEqual(len(evidence["rune_bindings"]), 1)
+        self.assertEqual(
+            evidence["rune_bindings"][0]["start_sequence"], 2)
+        self.assertEqual(
+            evidence["rune_bindings"][0]["rune_sha256"], "b" * 64)
+
+    def test_binding_must_match_trace_identity_and_be_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bad = rune_bind()
+            bad["bsp_checksum"] = 999
+            path = self.write_trace(Path(temporary), [header(), bad])
+            with self.assertRaisesRegex(ValueError, "binding identity"):
+                humantrace.read_sessions(path)
+
+            path = self.write_trace(Path(temporary), [
+                header(), rune_bind(), rune_bind(start_sequence=2),
+            ])
+            with self.assertRaisesRegex(ValueError, "duplicate rune binding"):
+                humantrace.read_sessions(path)
+
+    def test_unbound_trace_remains_valid_diagnostic_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = self.write_trace(Path(temporary), [
                 header(), step(1, 10, [0, 0, 0], [8, 0, 0]),
@@ -107,7 +175,7 @@ class HumanTraceTest(unittest.TestCase):
             evidence = humantrace.build_evidence(
                 path, session, 1, None, None)
 
-        self.assertNotIn("rune_bindings", evidence)
+        self.assertEqual(evidence["rune_bindings"], [])
 
     def test_latest_session_and_client_selection_are_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -164,6 +232,8 @@ class HumanTraceTest(unittest.TestCase):
         trace_format = humantrace.TRACE_FORMAT_V2
         records = [
             {**header(), "format": trace_format},
+            {**rune_bind(), "format": trace_format,
+             "start_hook_event": 2},
             {**step(1, 10, [0, 0, 0], [8, 0, 0]),
              "format": trace_format},
             {
@@ -194,9 +264,9 @@ class HumanTraceTest(unittest.TestCase):
         self.assertEqual(evidence["format"], humantrace.EVIDENCE_FORMAT_V2)
         self.assertEqual(
             [event["kind"] for event in evidence["hook_events"]],
-            ["hook-fire", "hook-attach", "hook-release"],
+            ["hook-attach", "hook-release"],
         )
-        self.assertEqual(evidence["hook_events"][1]["bite_q8"],
+        self.assertEqual(evidence["hook_events"][0]["bite_q8"],
                          [1200, -2300, 440])
 
     def test_v2_rejects_bad_hook_event_order_and_after_step(self) -> None:
@@ -211,6 +281,8 @@ class HumanTraceTest(unittest.TestCase):
             directory = Path(temporary)
             path = self.write_trace(directory, [
                 {**header(), "format": trace_format},
+                {**rune_bind(), "format": trace_format,
+                 "start_hook_event": 1},
                 {**step(1, 10, [0, 0, 0], [8, 0, 0]),
                  "format": trace_format},
                 fire,
@@ -226,6 +298,8 @@ class HumanTraceTest(unittest.TestCase):
 
             path = self.write_trace(directory, [
                 {**header(), "format": trace_format},
+                {**rune_bind(), "format": trace_format,
+                 "start_hook_event": 1},
                 {**fire, "event": 1, "after_step": 9},
             ])
             with self.assertRaisesRegex(ValueError, "after_step"):
@@ -236,6 +310,8 @@ class HumanTraceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = self.write_trace(Path(temporary), [
                 {**header(), "format": trace_format},
+                {**rune_bind(), "format": trace_format,
+                 "start_hook_event": 1},
                 {
                     "format": trace_format, "kind": "hook-attach",
                     "event": 1, "after_step": 0, "client": 1,

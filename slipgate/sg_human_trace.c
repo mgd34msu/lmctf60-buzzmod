@@ -4,9 +4,6 @@
 #include "../g_local.h"
 #include "sg_cvars.h"
 #include "sg_human_trace.h"
-#define SG_HUMAN_TRACE_LEARNING_SPOOL_INTERNAL 1
-#include "sg_human_trace_learning_spool_private.h"
-#undef SG_HUMAN_TRACE_LEARNING_SPOOL_INTERNAL
 #include "sg_identity.h"
 #include "sg_rune_v2_content_identity.h"
 
@@ -152,12 +149,6 @@ typedef int (*human_trace_json_event_visitor_fn)(void *context,
 	const sg_human_trace_v3_event_t *event,
 	const uint8_t record_sha256[SG_HUMAN_TRACE_SHA256_BYTES]);
 
-typedef struct human_trace_spool_link_s
-{
-	FILE *file;
-	uint8_t previous_sha256[SG_HUMAN_TRACE_SHA256_BYTES];
-} human_trace_spool_link_t;
-
 typedef struct human_trace_spool_frame_s
 {
 	uint32_t magic;
@@ -202,19 +193,7 @@ static char (*sg_human_trace_segment_paths)[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
 static size_t sg_human_trace_segment_path_count;
 static size_t sg_human_trace_segment_path_capacity;
 
-struct sg_human_trace_v3_scope_acceptance_s
-{
-	const void *owner;
-	const sg_human_trace_v3_spool_ref_t *spool;
-	uint32_t client_id;
-	uint64_t spawn_generation;
-	uint64_t issuance;
-};
-
-static const void *sg_human_trace_active_collection;
-static const sg_human_trace_v3_spool_ref_t *sg_human_trace_active_root;
-static uint8_t sg_human_trace_active_root_learning_compatible;
-static uint64_t sg_human_trace_collection_issuance;
+static uint8_t sg_human_trace_collection_active;
 
 static qboolean HumanTraceSpoolAppendEvent(
 	const sg_human_trace_v3_event_t *event);
@@ -270,8 +249,8 @@ static qboolean HumanTraceEventValid(
 static qboolean HumanTraceEventPrepare(const sg_human_trace_v3_event_t *event)
 {
 	/* Once the recorder cannot produce a durable witness, do not retry work on
-	 * every later Pmove or hook callback.  The gameplay hook remains passive;
-	 * only learning derivation is fail-closed. */
+	 * every later Pmove or hook callback. The gameplay hook remains passive and
+	 * the incomplete evidence stays unavailable to consumers. */
 	if (sg_human_trace_event_failed || !HumanTraceEventValid(event))
 	{
 		sg_human_trace_event_failed = true;
@@ -284,13 +263,6 @@ static void HumanTraceEventCommit(const sg_human_trace_v3_event_t *event)
 {
 	if (!sg_human_trace_event_failed && !HumanTraceSpoolAppendEvent(event))
 		sg_human_trace_event_failed = true;
-}
-
-static qboolean HumanTraceCompletionEqual(
-	const sg_human_trace_completion_t *left,
-	const sg_human_trace_completion_t *right)
-{
-	return left && right && memcmp(left, right, sizeof(*left)) == 0;
 }
 
 static qboolean HumanTraceCompletionSet(uint64_t end_order,
@@ -776,7 +748,7 @@ static qboolean HumanTraceSpoolPath(char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES],
 {
 	int written = snprintf(path, SG_HUMAN_TRACE_SPOOL_PATH_BYTES,
 		"%s/humantrace-%s-%08" PRIx32 "-%08" PRIx32 "-%06" PRIu32
-		".learning", sg_human_trace_directory, sg_human_trace_identity.mapname,
+		".spool", sg_human_trace_directory, sg_human_trace_identity.mapname,
 		sg_human_trace_identity.bsp_checksum,
 		sg_human_trace_identity.entity_crc32, root_segment);
 
@@ -901,158 +873,6 @@ static qboolean HumanTraceSpoolCompletionValid(
 	return HumanTraceSafeName(completion->mapname) &&
 		HumanTraceBytesNonzero(completion->terminal_sha256,
 			SG_HUMAN_TRACE_SHA256_BYTES);
-}
-
-static qboolean HumanTraceSpoolValidatePath(const char *path,
-	const sg_human_trace_completion_t *expected,
-	sg_human_trace_completion_t *completion_out)
-{
-	human_trace_spool_frame_t frame;
-	human_trace_spool_header_t header;
-	sg_human_trace_completion_t terminal;
-	uint8_t previous[SG_HUMAN_TRACE_SHA256_BYTES];
-	uint64_t previous_order = 0U;
-	uint8_t header_seen = 0U;
-	uint8_t terminal_seen = 0U;
-	int status;
-	FILE *file;
-
-	if (completion_out)
-		memset(completion_out, 0, sizeof(*completion_out));
-	if (!path || !*path)
-		return false;
-	file = fopen(path, "rb");
-	if (!file)
-		return false;
-	memset(&header, 0, sizeof(header));
-	memset(&terminal, 0, sizeof(terminal));
-	memset(previous, 0, sizeof(previous));
-	while ((status = HumanTraceSpoolReadFrame(file, &frame)) > 0)
-	{
-		if (!HumanTraceSpoolFrameValid(&frame, previous))
-		{
-			fclose(file);
-			return false;
-		}
-		memcpy(previous, frame.sha256, sizeof(previous));
-		switch ((human_trace_spool_frame_kind_t)frame.kind)
-		{
-		case HUMAN_TRACE_SPOOL_FRAME_HEADER:
-			if (header_seen || terminal_seen)
-			{
-				fclose(file);
-				return false;
-			}
-			memcpy(&header, frame.payload, sizeof(header));
-			if (!header.identity.mapname[0] || !memchr(header.identity.mapname,
-				'\0', sizeof(header.identity.mapname)) ||
-				!HumanTraceSafeName(header.identity.mapname) ||
-				!header.identity.host_physics_id ||
-				header.session == UINT32_MAX ||
-				header.root_segment == UINT32_MAX ||
-				header.session != header.root_segment ||
-				!HumanTraceBytesNonzero(header.root_header_sha256,
-					SG_HUMAN_TRACE_SHA256_BYTES))
-			{
-				fclose(file);
-				return false;
-			}
-			header_seen = 1U;
-			break;
-		case HUMAN_TRACE_SPOOL_FRAME_EVENT:
-		{
-			human_trace_spool_event_t event;
-
-			if (!header_seen || terminal_seen)
-			{
-				fclose(file);
-				return false;
-			}
-			memcpy(&event, frame.payload, sizeof(event));
-			if (!HumanTraceEventValid(&event.event) ||
-				event.event.order <= previous_order ||
-				!HumanTraceBytesNonzero(event.record_sha256,
-					SG_HUMAN_TRACE_SHA256_BYTES))
-			{
-				fclose(file);
-				return false;
-			}
-			previous_order = event.event.order;
-			break;
-		}
-		case HUMAN_TRACE_SPOOL_FRAME_TERMINAL:
-			if (!header_seen || terminal_seen)
-			{
-				fclose(file);
-				return false;
-			}
-			memcpy(&terminal, frame.payload, sizeof(terminal));
-			if (!HumanTraceSpoolCompletionValid(&terminal) ||
-				terminal.session != (uint64_t)header.session ||
-				terminal.segment < header.root_segment ||
-				strncmp(terminal.mapname, header.identity.mapname,
-					sizeof(terminal.mapname)) != 0 ||
-				terminal.bsp_checksum != header.identity.bsp_checksum ||
-				terminal.entity_crc32 != header.identity.entity_crc32 ||
-				terminal.host_physics_id != header.identity.host_physics_id ||
-				previous_order >= terminal.end_order)
-			{
-				fclose(file);
-				return false;
-			}
-			terminal_seen = 1U;
-			break;
-		default:
-			fclose(file);
-			return false;
-		}
-	}
-	fclose(file);
-	if (status < 0 || !header_seen || !terminal_seen ||
-		(expected && !HumanTraceCompletionEqual(expected, &terminal)))
-		return false;
-	if (completion_out)
-		*completion_out = terminal;
-	return true;
-}
-
-static int HumanTraceSpoolVisitPath(const char *path,
-	const sg_human_trace_completion_t *expected,
-	sg_human_trace_v3_event_visitor_fn visitor, void *context)
-{
-	human_trace_spool_frame_t frame;
-	uint8_t previous[SG_HUMAN_TRACE_SHA256_BYTES];
-	int status;
-	FILE *file;
-
-	if (!visitor || !HumanTraceSpoolValidatePath(path, expected, NULL))
-		return 0;
-	file = fopen(path, "rb");
-	if (!file)
-		return 0;
-	memset(previous, 0, sizeof(previous));
-	while ((status = HumanTraceSpoolReadFrame(file, &frame)) > 0)
-	{
-		if (!HumanTraceSpoolFrameValid(&frame, previous))
-		{
-			fclose(file);
-			return 0;
-		}
-		memcpy(previous, frame.sha256, sizeof(previous));
-		if (frame.kind == HUMAN_TRACE_SPOOL_FRAME_EVENT)
-		{
-			human_trace_spool_event_t event;
-
-			memcpy(&event, frame.payload, sizeof(event));
-			if (!visitor(context, &event.event))
-			{
-				fclose(file);
-				return 0;
-			}
-		}
-	}
-	fclose(file);
-	return status == 0 ? 1 : 0;
 }
 
 static const char *HumanTraceJsonValue(const char *line, const char *prefix)
@@ -1567,29 +1387,6 @@ static qboolean HumanTraceJsonSegmentRead(const char *path,
 	return true;
 }
 
-static qboolean HumanTraceSpoolDirectory(const sg_human_trace_v3_spool_ref_t *spool,
-	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
-{
-	const char *separator;
-	const char *alternate;
-	size_t bytes;
-
-	if (!spool || !directory)
-		return false;
-	separator = strrchr(spool->path, '/');
-	alternate = strrchr(spool->path, '\\');
-	if (!separator || (alternate && alternate > separator))
-		separator = alternate;
-	if (!separator || separator == spool->path)
-		return false;
-	bytes = (size_t)(separator - spool->path);
-	if (bytes >= SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
-		return false;
-	memcpy(directory, spool->path, bytes);
-	directory[bytes] = '\0';
-	return true;
-}
-
 static qboolean HumanTraceJsonPathFor(const char *directory,
 	const sg_level_identity_t *identity, uint32_t segment,
 	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
@@ -1660,15 +1457,15 @@ static int HumanTraceJsonNameSegment(const char *name,
 	return HumanTraceNameSegment(name, identity, ".jsonl", segment_out);
 }
 
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-int SG_HumanTraceLearningSpoolTestFormatJsonPath(const char *directory,
+#ifdef SG_HUMAN_TRACE_TEST
+int SG_HumanTraceTestFormatJsonPath(const char *directory,
 	const sg_level_identity_t *identity, uint32_t segment,
 	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
 {
 	return HumanTraceJsonPathFor(directory, identity, segment, path) ? 1 : 0;
 }
 
-int SG_HumanTraceLearningSpoolTestJsonNameSegment(const char *name,
+int SG_HumanTraceTestJsonNameSegment(const char *name,
 	const sg_level_identity_t *identity, uint32_t *segment_out)
 {
 	return HumanTraceJsonNameSegment(name, identity, segment_out);
@@ -1720,377 +1517,6 @@ static qboolean HumanTraceJsonFinalMatchesCompletion(
 		segment->end_level_time_bits == completion->end_level_time_bits;
 }
 
-static qboolean HumanTraceSpoolHeaderRead(const char *path,
-	human_trace_spool_header_t *header_out)
-{
-	human_trace_spool_frame_t frame;
-	uint8_t zero[SG_HUMAN_TRACE_SHA256_BYTES];
-	FILE *file;
-	int status;
-
-	if (!path || !header_out)
-		return false;
-	file = fopen(path, "rb");
-	if (!file)
-		return false;
-	memset(zero, 0, sizeof(zero));
-	status = HumanTraceSpoolReadFrame(file, &frame);
-	if (fclose(file) != 0 || status != 1 ||
-		!HumanTraceSpoolFrameValid(&frame, zero) ||
-		frame.kind != HUMAN_TRACE_SPOOL_FRAME_HEADER)
-		return false;
-	memcpy(header_out, frame.payload, sizeof(*header_out));
-	return true;
-}
-
-static int HumanTraceSpoolLinkEvent(void *opaque,
-	const sg_human_trace_v3_event_t *event,
-	const uint8_t record_sha256[SG_HUMAN_TRACE_SHA256_BYTES])
-{
-	human_trace_spool_link_t *link = opaque;
-	human_trace_spool_frame_t frame;
-
-	if (!link || !link->file || !event || !record_sha256)
-		return 0;
-	while (HumanTraceSpoolReadFrame(link->file, &frame) > 0)
-	{
-		human_trace_spool_event_t recorded;
-
-		if (!HumanTraceSpoolFrameValid(&frame, link->previous_sha256))
-			return 0;
-		memcpy(link->previous_sha256, frame.sha256,
-			sizeof(link->previous_sha256));
-		if (frame.kind == HUMAN_TRACE_SPOOL_FRAME_TERMINAL)
-			return 0;
-		if (frame.kind != HUMAN_TRACE_SPOOL_FRAME_EVENT)
-			continue;
-		memcpy(&recorded, frame.payload, sizeof(recorded));
-		return memcmp(&recorded.event, event, sizeof(*event)) == 0 &&
-			memcmp(recorded.record_sha256, record_sha256,
-				SG_HUMAN_TRACE_SHA256_BYTES) == 0;
-	}
-	return 0;
-}
-
-static qboolean HumanTraceSpoolLinkFinish(human_trace_spool_link_t *link,
-	const sg_human_trace_completion_t *completion)
-{
-	human_trace_spool_frame_t frame;
-	uint8_t terminal_seen = 0U;
-	int status;
-
-	if (!link || !link->file || !completion)
-		return false;
-	while ((status = HumanTraceSpoolReadFrame(link->file, &frame)) > 0)
-	{
-		sg_human_trace_completion_t terminal;
-
-		if (!HumanTraceSpoolFrameValid(&frame, link->previous_sha256))
-			return false;
-		memcpy(link->previous_sha256, frame.sha256,
-			sizeof(link->previous_sha256));
-		if (frame.kind == HUMAN_TRACE_SPOOL_FRAME_EVENT ||
-			frame.kind == HUMAN_TRACE_SPOOL_FRAME_HEADER || terminal_seen)
-			return false;
-		if (frame.kind != HUMAN_TRACE_SPOOL_FRAME_TERMINAL)
-			return false;
-		memcpy(&terminal, frame.payload, sizeof(terminal));
-		if (!HumanTraceCompletionEqual(&terminal, completion))
-			return false;
-		terminal_seen = 1U;
-	}
-	return status == 0 && terminal_seen == 1U;
-}
-
-/* A spool is not authoritative; acceptance also binds every projected event,
- * range transition, and terminal hash to the canonical JSON chain. */
-static qboolean HumanTraceJsonHeaderRead(const char *path,
-	human_trace_json_header_t *header_out)
-{
-	char line[SG_HUMAN_TRACE_LINE_BYTES];
-	uint8_t previous[SG_HUMAN_TRACE_SHA256_BYTES];
-	uint8_t digest[SG_HUMAN_TRACE_SHA256_BYTES];
-	FILE *file;
-	qboolean valid;
-
-	if (!path || !header_out)
-		return false;
-	file = fopen(path, "rb");
-	if (!file)
-		return false;
-	valid = fgets(line, sizeof(line), file) != NULL && strchr(line, '\n') &&
-		HumanTraceJsonRecordDigest(line, previous, digest) &&
-		HumanTraceJsonHeader(line, previous, digest, header_out);
-	if (fclose(file) != 0)
-		valid = false;
-	return valid;
-}
-
-/* Counts authenticated segments and roots with this session's immutable
- * filename identity. Malformed same-session segments fail the check;
- * unrelated interrupted captures do not. */
-static int HumanTraceJsonSessionShape(const char *directory,
-	const human_trace_json_header_t *root, uint64_t *segment_count_out,
-	uint32_t *root_count_out)
-{
-	uint64_t segment_count = 0U;
-	uint32_t root_count = 0U;
-
-	if (!directory || !root || !segment_count_out || !root_count_out)
-		return -1;
-#ifdef _WIN32
-	{
-		char pattern[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-		WIN32_FIND_DATAA entry;
-		HANDLE handle;
-		int written = snprintf(pattern, sizeof(pattern),
-			"%s/humantrace-%s-%08" PRIx32 "-%08" PRIx32 "-*.jsonl",
-			directory, root->identity.mapname, root->identity.bsp_checksum,
-			root->identity.entity_crc32);
-
-		if (written < 0 || (size_t)written >= sizeof(pattern))
-			return -1;
-		handle = FindFirstFileA(pattern, &entry);
-		if (handle == INVALID_HANDLE_VALUE)
-			return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
-		do
-		{
-			char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-			human_trace_json_segment_t segment;
-			uint32_t ignored_segment;
-
-			if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-				!HumanTraceJsonNameSegment(entry.cFileName, &root->identity,
-					&ignored_segment))
-				continue;
-			if (snprintf(path, sizeof(path), "%s/%s", directory,
-				entry.cFileName) >= (int)sizeof(path))
-			{
-				FindClose(handle);
-				return -1;
-			}
-			if (!HumanTraceJsonHeaderRead(path, &segment.header) ||
-				segment.header.session != root->session)
-				continue;
-			if (segment.header.segment != ignored_segment)
-			{
-				FindClose(handle);
-				return -1;
-			}
-			if (!HumanTraceJsonSegmentRead(path, &segment, NULL, NULL) ||
-				!HumanTraceJsonStableIdentityEqual(root, &segment.header) ||
-				segment_count == UINT64_MAX)
-			{
-				FindClose(handle);
-				return -1;
-			}
-			segment_count++;
-			if (segment.header.continuation == 0U)
-			{
-				if (root_count == UINT32_MAX)
-				{
-					FindClose(handle);
-					return -1;
-				}
-				root_count++;
-			}
-		} while (FindNextFileA(handle, &entry));
-		if (GetLastError() != ERROR_NO_MORE_FILES)
-		{
-			FindClose(handle);
-			return -1;
-		}
-		FindClose(handle);
-	}
-#else
-	{
-		DIR *opened = opendir(directory);
-		struct dirent *entry;
-
-		if (!opened)
-			return -1;
-		errno = 0;
-		while ((entry = readdir(opened)) != NULL)
-		{
-			char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-			human_trace_json_segment_t segment;
-			uint32_t ignored_segment;
-
-			if (!HumanTraceJsonNameSegment(entry->d_name, &root->identity,
-				&ignored_segment))
-				continue;
-			if (snprintf(path, sizeof(path), "%s/%s", directory,
-				entry->d_name) >= (int)sizeof(path))
-			{
-				closedir(opened);
-				return -1;
-			}
-			if (!HumanTraceJsonHeaderRead(path, &segment.header) ||
-				segment.header.session != root->session)
-				continue;
-			if (segment.header.segment != ignored_segment)
-			{
-				closedir(opened);
-				return -1;
-			}
-			if (!HumanTraceJsonSegmentRead(path, &segment, NULL, NULL) ||
-				!HumanTraceJsonStableIdentityEqual(root, &segment.header) ||
-				segment_count == UINT64_MAX)
-			{
-				closedir(opened);
-				return -1;
-			}
-			segment_count++;
-			if (segment.header.continuation == 0U)
-			{
-				if (root_count == UINT32_MAX)
-				{
-					closedir(opened);
-					return -1;
-				}
-				root_count++;
-			}
-		}
-		if (errno != 0)
-		{
-			closedir(opened);
-			return -1;
-		}
-		closedir(opened);
-	}
-#endif
-	*segment_count_out = segment_count;
-	*root_count_out = root_count;
-	return 1;
-}
-
-/* Selects the unique continuation header whose previous digest matches the
- * predecessor. Multiple matches fail; session-shape validation checks the
- * complete sibling segments. */
-static int HumanTraceJsonFindContinuation(const char *directory,
-	const human_trace_json_header_t *root,
-	const uint8_t predecessor[SG_HUMAN_TRACE_SHA256_BYTES],
-	char path_out[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
-{
-	qboolean found = false;
-
-	if (!directory || !root || !predecessor || !path_out)
-		return -1;
-	path_out[0] = '\0';
-#ifdef _WIN32
-	{
-		char pattern[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-		WIN32_FIND_DATAA entry;
-		HANDLE handle;
-		int written = snprintf(pattern, sizeof(pattern),
-			"%s/humantrace-%s-%08" PRIx32 "-%08" PRIx32 "-*.jsonl",
-			directory, root->identity.mapname, root->identity.bsp_checksum,
-			root->identity.entity_crc32);
-
-		if (written < 0 || (size_t)written >= sizeof(pattern))
-			return -1;
-		handle = FindFirstFileA(pattern, &entry);
-		if (handle == INVALID_HANDLE_VALUE)
-			return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
-		do
-		{
-			char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-			human_trace_json_header_t header;
-			uint32_t ignored_segment;
-
-			if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-				!HumanTraceJsonNameSegment(entry.cFileName, &root->identity,
-					&ignored_segment))
-				continue;
-			if (snprintf(path, sizeof(path), "%s/%s", directory,
-				entry.cFileName) >= (int)sizeof(path))
-			{
-				FindClose(handle);
-				return -1;
-			}
-			if (!HumanTraceJsonHeaderRead(path, &header) ||
-				header.session != root->session)
-				continue;
-			if (header.segment != ignored_segment)
-			{
-				FindClose(handle);
-				return -1;
-			}
-			if (!HumanTraceJsonStableIdentityEqual(root, &header) ||
-				header.continuation != 1U || memcmp(
-				header.previous_sha256, predecessor,
-				SG_HUMAN_TRACE_SHA256_BYTES) != 0)
-				continue;
-			if (found || snprintf(path_out, SG_HUMAN_TRACE_SPOOL_PATH_BYTES,
-				"%s", path) >= (int)SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
-			{
-				FindClose(handle);
-				return -1;
-			}
-			found = true;
-		} while (FindNextFileA(handle, &entry));
-		if (GetLastError() != ERROR_NO_MORE_FILES)
-		{
-			FindClose(handle);
-			return -1;
-		}
-		FindClose(handle);
-	}
-#else
-	{
-		DIR *opened = opendir(directory);
-		struct dirent *entry;
-
-		if (!opened)
-			return -1;
-		errno = 0;
-		while ((entry = readdir(opened)) != NULL)
-		{
-			char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-			human_trace_json_header_t header;
-			uint32_t ignored_segment;
-
-			if (!HumanTraceJsonNameSegment(entry->d_name, &root->identity,
-				&ignored_segment))
-				continue;
-			if (snprintf(path, sizeof(path), "%s/%s", directory,
-				entry->d_name) >= (int)sizeof(path))
-			{
-				closedir(opened);
-				return -1;
-			}
-			if (!HumanTraceJsonHeaderRead(path, &header) ||
-				header.session != root->session)
-				continue;
-			if (header.segment != ignored_segment)
-			{
-				closedir(opened);
-				return -1;
-			}
-			if (!HumanTraceJsonStableIdentityEqual(root, &header) ||
-				header.continuation != 1U || memcmp(
-				header.previous_sha256, predecessor,
-				SG_HUMAN_TRACE_SHA256_BYTES) != 0)
-				continue;
-			if (found || snprintf(path_out, SG_HUMAN_TRACE_SPOOL_PATH_BYTES,
-				"%s", path) >= (int)SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
-			{
-				closedir(opened);
-				return -1;
-			}
-			found = true;
-		}
-		if (errno != 0)
-		{
-			closedir(opened);
-			return -1;
-		}
-		closedir(opened);
-	}
-#endif
-	return found ? 1 : 0;
-}
-
 static qboolean HumanTraceJsonRangeFollows(
 	const human_trace_json_segment_t *previous,
 	const human_trace_json_segment_t *next)
@@ -2103,108 +1529,6 @@ static qboolean HumanTraceJsonRangeFollows(
 		next->header.start_order == previous->last_order + 1U &&
 		next->header.start_command == previous->last_command + 1U &&
 		next->header.start_hook_event == previous->last_hook_event + 1U;
-}
-
-static qboolean HumanTraceSpoolLinkOpen(const char *path,
-	human_trace_spool_link_t *link)
-{
-	human_trace_spool_frame_t frame;
-	uint8_t zero[SG_HUMAN_TRACE_SHA256_BYTES];
-	int status;
-
-	if (!path || !link)
-		return false;
-	memset(link, 0, sizeof(*link));
-	link->file = fopen(path, "rb");
-	if (!link->file)
-		return false;
-	memset(zero, 0, sizeof(zero));
-	status = HumanTraceSpoolReadFrame(link->file, &frame);
-	if (status != 1 || !HumanTraceSpoolFrameValid(&frame, zero) ||
-		frame.kind != HUMAN_TRACE_SPOOL_FRAME_HEADER)
-	{
-		fclose(link->file);
-		link->file = NULL;
-		return false;
-	}
-	memcpy(link->previous_sha256, frame.sha256,
-		sizeof(link->previous_sha256));
-	return true;
-}
-
-static qboolean HumanTraceJsonSpoolAccepted(
-	const sg_human_trace_v3_spool_ref_t *spool)
-{
-	human_trace_spool_header_t spool_header;
-	human_trace_json_segment_t current;
-	human_trace_json_segment_t next;
-	human_trace_spool_link_t link;
-	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
-	uint8_t zero[SG_HUMAN_TRACE_SHA256_BYTES];
-	uint64_t session_segments;
-	uint64_t visited_segments = 0U;
-	uint32_t session_roots;
-	int continuation;
-	qboolean accepted = false;
-
-	if (!spool || !HumanTraceSpoolValidatePath(spool->path,
-		&spool->completion, NULL) || !HumanTraceSpoolHeaderRead(spool->path,
-		&spool_header) || spool_header.session != spool->completion.session ||
-		spool_header.root_segment != spool->root_segment ||
-		spool_header.session != spool_header.root_segment ||
-		!HumanTraceSpoolDirectory(spool, directory) ||
-		!HumanTraceJsonPathFor(directory, &spool_header.identity,
-			spool_header.root_segment, path) || !HumanTraceSpoolLinkOpen(
-			spool->path, &link))
-		return false;
-	memset(&zero, 0, sizeof(zero));
-	if (!HumanTraceJsonSegmentRead(path, &current, HumanTraceSpoolLinkEvent,
-		&link) || current.header.continuation != 0U || memcmp(
-		current.header.previous_sha256, zero, sizeof(zero)) != 0 ||
-		current.header.session != spool_header.session ||
-		current.header.segment != spool_header.root_segment ||
-		current.header.start_order != 1U || current.header.start_command != 1U ||
-		current.header.start_hook_event != 1U || memcmp(current.header.sha256,
-		spool_header.root_header_sha256, SG_HUMAN_TRACE_SHA256_BYTES) != 0 ||
-		strncmp(current.header.identity.mapname, spool_header.identity.mapname,
-			sizeof(current.header.identity.mapname)) != 0 ||
-		current.header.identity.bsp_checksum != spool_header.identity.bsp_checksum ||
-		current.header.identity.entity_crc32 != spool_header.identity.entity_crc32 ||
-		current.header.identity.host_physics_id != spool_header.identity.host_physics_id)
-		goto finish;
-	for (;;)
-	{
-		if (visited_segments == UINT64_MAX)
-			goto finish;
-		visited_segments++;
-		continuation = HumanTraceJsonFindContinuation(directory,
-			&current.header, current.last_sha256, path);
-		if (continuation < 0)
-			goto finish;
-		if (current.ended)
-		{
-			if (continuation != 0 || !HumanTraceJsonFinalMatchesCompletion(
-				&current, &spool->completion))
-				goto finish;
-			break;
-		}
-		if (continuation != 1 || !HumanTraceJsonSegmentRead(path, &next,
-			HumanTraceSpoolLinkEvent, &link) || !HumanTraceJsonRangeFollows(
-			&current, &next))
-			goto finish;
-		current = next;
-	}
-	if (HumanTraceJsonSessionShape(directory, &current.header,
-		&session_segments, &session_roots) != 1 || session_segments !=
-		visited_segments || session_roots != 1U || !HumanTraceSpoolLinkFinish(
-		&link, &spool->completion))
-		goto finish;
-	accepted = true;
-finish:
-	if (link.file && fclose(link.file) != 0)
-		accepted = false;
-	return accepted;
 }
 
 static uint32_t HumanTraceLevelTimeBits(void)
@@ -2576,50 +1900,6 @@ void SG_HumanTraceMatchEnd(void)
 	sg_human_trace_match_ended = true;
 }
 
-int SG_HumanTraceCompleted(sg_human_trace_completion_t *completion_out)
-{
-	uint32_t index;
-	uint8_t nonzero = 0U;
-
-	if (completion_out)
-		memset(completion_out, 0, sizeof(*completion_out));
-	if (!completion_out || !sg_human_trace_match_ended ||
-		sg_human_trace_completion.end_order == 0U)
-		return 0;
-	for (index = 0U; index < SG_HUMAN_TRACE_SHA256_BYTES; index++)
-		nonzero |= sg_human_trace_completion.terminal_sha256[index];
-	if (nonzero == 0U)
-		return 0;
-	*completion_out = sg_human_trace_completion;
-	return 1;
-}
-
-int SG_HumanTraceVisitAcceptedV3Events(
-	const sg_human_trace_completion_t *completion,
-	sg_human_trace_v3_event_visitor_fn visitor, void *context)
-{
-	sg_human_trace_completion_t current;
-	human_trace_spool_header_t header;
-	sg_human_trace_v3_spool_ref_t spool;
-
-	if (!completion || !visitor || sg_human_trace_event_failed ||
-		!SG_HumanTraceCompleted(&current) ||
-		!HumanTraceCompletionEqual(completion, &current) ||
-		!sg_human_trace_spool_path[0])
-		return 0;
-	if (!HumanTraceSpoolHeaderRead(sg_human_trace_spool_path, &header))
-		return 0;
-	memset(&spool, 0, sizeof(spool));
-	spool.completion = current;
-	spool.root_segment = header.root_segment;
-	if (snprintf(spool.path, sizeof(spool.path), "%s",
-		sg_human_trace_spool_path) >= (int)sizeof(spool.path) ||
-		!HumanTraceJsonSpoolAccepted(&spool))
-		return 0;
-	return HumanTraceSpoolVisitPath(sg_human_trace_spool_path, &current,
-		visitor, context);
-}
-
 static qboolean HumanTraceDirectoryCurrent(char directory[512])
 {
 	cvar_t *game_directory;
@@ -2643,21 +1923,7 @@ static qboolean HumanTraceDirectoryCurrent(char directory[512])
 static int HumanTraceSpoolNameSegment(const char *name,
 	const sg_level_identity_t *identity, uint32_t *segment_out)
 {
-	return HumanTraceNameSegment(name, identity, ".learning", segment_out);
-}
-
-int SG_HumanTraceAcceptedV3Directory(
-	char directory[SG_HUMAN_TRACE_SPOOL_PATH_BYTES])
-{
-	char selected[512];
-
-	if (directory)
-		directory[0] = '\0';
-	if (!directory || !HumanTraceDirectoryCurrent(selected) ||
-		snprintf(directory, SG_HUMAN_TRACE_SPOOL_PATH_BYTES, "%s", selected) >=
-			(int)SG_HUMAN_TRACE_SPOOL_PATH_BYTES)
-		return 0;
-	return 1;
+	return HumanTraceNameSegment(name, identity, ".spool", segment_out);
 }
 
 typedef enum human_trace_manifest_candidate_kind_e
@@ -2686,10 +1952,9 @@ typedef struct human_trace_manifest_root_s
 	human_trace_manifest_event_t *events;
 	size_t event_count;
 	size_t event_capacity;
-	sg_human_trace_v3_scope_acceptance_t *scopes;
+	sg_human_trace_v3_scope_t *scopes;
+	uint8_t *scope_started;
 	size_t scope_count;
-	uint8_t authenticated;
-	uint8_t learning_compatible;
 } human_trace_manifest_root_t;
 
 typedef struct human_trace_manifest_segment_s
@@ -2706,9 +1971,6 @@ typedef struct human_trace_manifest_s
 	human_trace_manifest_candidate_t *candidates;
 	size_t candidate_count;
 	size_t candidate_capacity;
-	human_trace_manifest_root_t *roots;
-	size_t root_count;
-	size_t root_capacity;
 	human_trace_manifest_segment_t *segments;
 	size_t segment_count;
 	size_t segment_capacity;
@@ -2774,15 +2036,9 @@ static void HumanTraceManifestFree(human_trace_manifest_t *manifest)
 
 	if (!manifest)
 		return;
-	for (index = 0U; index < manifest->root_count; index++)
-	{
-		free(manifest->roots[index].events);
-		free(manifest->roots[index].scopes);
-	}
 	for (index = 0U; index < manifest->segment_count; index++)
 		free(manifest->segments[index].events);
 	free(manifest->candidates);
-	free(manifest->roots);
 	free(manifest->segments);
 	memset(manifest, 0, sizeof(*manifest));
 }
@@ -2921,9 +2177,9 @@ static int HumanTraceManifestCandidatesSort(human_trace_manifest_t *manifest)
 			offset[index] = offset[index - 1U] + count[index - 1U];
 		for (index = 0U; index < manifest->candidate_count; index++)
 		{
-			uint32_t byte = (source[index].segment >> (pass * 8U)) & 0xffU;
+			uint32_t bucket = (source[index].segment >> (pass * 8U)) & 0xffU;
 
-			target[offset[byte]++] = source[index];
+			target[offset[bucket]++] = source[index];
 		}
 		{
 			human_trace_manifest_candidate_t *swap = source;
@@ -3076,18 +2332,6 @@ static int HumanTraceManifestRootRead(
 	return 1;
 }
 
-static int HumanTraceManifestRootAppend(human_trace_manifest_t *manifest,
-	human_trace_manifest_root_t *root)
-{
-	if (!manifest || !root || !HumanTraceManifestGrow((void **)&manifest->roots,
-		sizeof(*manifest->roots), manifest->root_count + 1U,
-		&manifest->root_capacity))
-		return 0;
-	manifest->roots[manifest->root_count++] = *root;
-	memset(root, 0, sizeof(*root));
-	return 1;
-}
-
 static int HumanTraceManifestCaptureJsonEvent(void *opaque,
 	const sg_human_trace_v3_event_t *event,
 	const uint8_t record_sha256[SG_HUMAN_TRACE_SHA256_BYTES])
@@ -3154,61 +2398,6 @@ static int HumanTraceManifestSegmentAppend(human_trace_manifest_t *manifest,
 	return 1;
 }
 
-static uint8_t HumanTraceManifestSegmentKeyByte(
-	const human_trace_manifest_segment_t *segment, size_t pass)
-{
-	uint64_t key = ((uint64_t)segment->summary.header.session << 32U) |
-		segment->summary.header.segment;
-
-	return (uint8_t)(key >> (pass * 8U));
-}
-
-static int HumanTraceManifestSegmentsSort(human_trace_manifest_t *manifest)
-{
-	human_trace_manifest_segment_t *temporary;
-	human_trace_manifest_segment_t *source;
-	human_trace_manifest_segment_t *target;
-	size_t count[256];
-	size_t offset[256];
-	size_t pass, index;
-
-	if (!manifest || manifest->segment_count < 2U)
-		return manifest != NULL;
-	if (manifest->segment_count > SIZE_MAX / sizeof(*temporary))
-		return 0;
-	temporary = malloc(manifest->segment_count * sizeof(*temporary));
-	if (!temporary)
-		return 0;
-	source = manifest->segments;
-	target = temporary;
-	for (pass = 0U; pass < sizeof(uint64_t); pass++)
-	{
-		memset(count, 0, sizeof(count));
-		for (index = 0U; index < manifest->segment_count; index++)
-			count[HumanTraceManifestSegmentKeyByte(&source[index], pass)]++;
-		offset[0] = 0U;
-		for (index = 1U; index < 256U; index++)
-			offset[index] = offset[index - 1U] + count[index - 1U];
-		for (index = 0U; index < manifest->segment_count; index++)
-		{
-			uint8_t byte = HumanTraceManifestSegmentKeyByte(&source[index], pass);
-
-			target[offset[byte]++] = source[index];
-		}
-		{
-			human_trace_manifest_segment_t *swap = source;
-
-			source = target;
-			target = swap;
-		}
-	}
-	if (source != manifest->segments)
-		memcpy(manifest->segments, source,
-			manifest->segment_count * sizeof(*source));
-	free(temporary);
-	return 1;
-}
-
 static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 	const human_trace_manifest_segment_t *segments, size_t segment_count)
 {
@@ -3220,7 +2409,6 @@ static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 	if (!root || !segments || segment_count == 0U)
 		return 0;
 	memset(zero, 0, sizeof(zero));
-	root->learning_compatible = 1U;
 	for (segment_index = 0U; segment_index < segment_count; segment_index++)
 	{
 		const human_trace_manifest_segment_t *stored =
@@ -3244,7 +2432,7 @@ static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 				segments[0].summary.header.server_frame_ms ||
 			 current->header.physics_flags !=
 				segments[0].summary.header.physics_flags))
-			root->learning_compatible = 0U;
+			return 0;
 		if (segment_index == 0U)
 		{
 			if (current->header.continuation != 0U || memcmp(
@@ -3320,9 +2508,9 @@ static int HumanTraceManifestScopeOccurrencesSort(
 			offset[index] = offset[index - 1U] + count[index - 1U];
 		for (index = 0U; index < item_count; index++)
 		{
-			uint8_t byte = HumanTraceManifestScopeKeyByte(&source[index], pass);
+			uint8_t bucket = HumanTraceManifestScopeKeyByte(&source[index], pass);
 
-			target[offset[byte]++] = source[index];
+			target[offset[bucket]++] = source[index];
 		}
 		{
 			human_trace_manifest_scope_occurrence_t *swap = source;
@@ -3367,9 +2555,9 @@ static int HumanTraceManifestScopeOrderSort(
 			offset[index] = offset[index - 1U] + count[index - 1U];
 		for (index = 0U; index < item_count; index++)
 		{
-			uint8_t byte = HumanTraceManifestScopeOrderByte(&source[index], pass);
+			uint8_t bucket = HumanTraceManifestScopeOrderByte(&source[index], pass);
 
-			target[offset[byte]++] = source[index];
+			target[offset[bucket]++] = source[index];
 		}
 		{
 			human_trace_manifest_scope_order_t *swap = source;
@@ -3442,17 +2630,16 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 		group_count > SIZE_MAX / sizeof(*root->scopes))
 		goto finish;
 	root->scopes = calloc(group_count, sizeof(*root->scopes));
+	root->scope_started = calloc(group_count, sizeof(*root->scope_started));
 	group_to_scope = malloc(group_count * sizeof(*group_to_scope));
-	if (!root->scopes || !group_to_scope)
+	if (!root->scopes || !root->scope_started || !group_to_scope)
 		goto finish;
 	root->scope_count = group_count;
 	for (index = 0U; index < group_count; index++)
 	{
-		sg_human_trace_v3_scope_acceptance_t *scope = &root->scopes[index];
+		sg_human_trace_v3_scope_t *scope = &root->scopes[index];
 
 		group_to_scope[order[index].group_index] = index;
-		scope->owner = manifest;
-		scope->spool = &root->spool;
 		scope->client_id = order[index].client_id;
 		scope->spawn_generation = order[index].spawn_generation;
 	}
@@ -3467,196 +2654,190 @@ finish:
 	if (!result)
 	{
 		free(root->scopes);
+		free(root->scope_started);
 		root->scopes = NULL;
+		root->scope_started = NULL;
 		root->scope_count = 0U;
 	}
 	return result;
 }
 
-static int HumanTraceManifestBuild(const sg_level_identity_t *identity,
-	human_trace_manifest_t *manifest)
+static void HumanTraceManifestSegmentsClear(human_trace_manifest_t *manifest)
 {
-	char directory[512];
 	size_t index;
-	size_t segment_cursor = 0U;
 
-	if (!identity || !manifest || !identity->mapname[0] ||
-		!HumanTraceDirectoryCurrent(directory) || !HumanTraceManifestScan(
-			directory, identity, manifest) ||
-		!HumanTraceManifestCandidatesSort(manifest))
-		return 0;
-	for (index = 0U; index < manifest->candidate_count; index++)
-	{
-		human_trace_manifest_candidate_t *candidate =
-			&manifest->candidates[index];
-
-		if (candidate->kind == HUMAN_TRACE_MANIFEST_SPOOL)
-		{
-			human_trace_manifest_root_t root;
-			int read = HumanTraceManifestRootRead(candidate, identity, &root);
-
-			if (read < 0)
-				return 0;
-			if (read > 0 && !HumanTraceManifestRootAppend(manifest, &root))
-			{
-				free(root.events);
-				return 0;
-			}
-		}
-	}
-	for (index = 0U; index < manifest->candidate_count; index++)
-	{
-		human_trace_manifest_candidate_t *candidate =
-			&manifest->candidates[index];
-
-		if (candidate->kind == HUMAN_TRACE_MANIFEST_JSON)
-		{
-			human_trace_manifest_segment_t segment;
-			int read = HumanTraceManifestSegmentRead(candidate, &segment);
-
-			if (read < 0)
-				return 0;
-			if (read > 0 && !HumanTraceManifestSegmentAppend(manifest, &segment))
-			{
-				free(segment.events);
-				return 0;
-			}
-		}
-	}
-	if (!HumanTraceManifestSegmentsSort(manifest))
-		return 0;
-	for (index = 0U; index < manifest->root_count; index++)
-	{
-		human_trace_manifest_root_t *root = &manifest->roots[index];
-		size_t first;
-
-		while (segment_cursor < manifest->segment_count &&
-			manifest->segments[segment_cursor].summary.header.session <
-				root->header.session)
-			segment_cursor++;
-		first = segment_cursor;
-		while (segment_cursor < manifest->segment_count &&
-			manifest->segments[segment_cursor].summary.header.session ==
-				root->header.session)
-			segment_cursor++;
-		if (HumanTraceManifestAuthenticateRoot(root,
-			first < manifest->segment_count ? &manifest->segments[first] : NULL,
-			segment_cursor - first))
-		{
-			if (!HumanTraceManifestBuildScopes(manifest, root))
-				return 0;
-			root->authenticated = 1U;
-		}
-	}
+	if (!manifest)
+		return;
 	for (index = 0U; index < manifest->segment_count; index++)
-	{
 		free(manifest->segments[index].events);
-		manifest->segments[index].events = NULL;
-		manifest->segments[index].event_count = 0U;
-		manifest->segments[index].event_capacity = 0U;
+	free(manifest->segments);
+	manifest->segments = NULL;
+	manifest->segment_count = 0U;
+	manifest->segment_capacity = 0U;
+}
+
+static void HumanTraceManifestRootClear(human_trace_manifest_root_t *root)
+{
+	if (!root)
+		return;
+	free(root->events);
+	free(root->scopes);
+	free(root->scope_started);
+	memset(root, 0, sizeof(*root));
+}
+
+static int HumanTraceManifestReadSegments(human_trace_manifest_t *manifest,
+	human_trace_manifest_root_t *root, size_t first, size_t after)
+{
+	uint64_t expected;
+	size_t index;
+	int valid = 1;
+
+	if (!manifest || !root || first > after ||
+		after > manifest->candidate_count)
+		return -1;
+	expected = root->header.root_segment;
+	for (index = first; index < after; index++)
+	{
+		human_trace_manifest_candidate_t *candidate =
+			&manifest->candidates[index];
+		human_trace_manifest_segment_t segment;
+		int read;
+
+		if (candidate->kind != HUMAN_TRACE_MANIFEST_JSON ||
+			candidate->segment < root->header.root_segment ||
+			candidate->segment > root->spool.completion.segment)
+			continue;
+		if ((uint64_t)candidate->segment != expected)
+		{
+			valid = 0;
+			continue;
+		}
+		read = HumanTraceManifestSegmentRead(candidate, &segment);
+		if (read < 0)
+			return -1;
+		if (read == 0)
+			valid = 0;
+		else if (!HumanTraceManifestSegmentAppend(manifest, &segment))
+		{
+			free(segment.events);
+			return -1;
+		}
+		expected++;
 	}
-	return 1;
+	if (expected != (uint64_t)root->spool.completion.segment + 1U)
+		valid = 0;
+	return valid;
+}
+
+static int HumanTraceManifestVisitRoot(human_trace_manifest_t *manifest,
+	human_trace_manifest_root_t *root,
+	const sg_human_trace_v3_collection_visitor_t *visitor, void *context)
+{
+	size_t event_index;
+	int result;
+
+	if (!manifest || !root || !visitor)
+		return 0;
+	if (!HumanTraceManifestAuthenticateRoot(root, manifest->segments,
+		manifest->segment_count) ||
+		!HumanTraceManifestBuildScopes(manifest, root))
+		return 1;
+	result = visitor->begin_root(context, &root->spool);
+	for (event_index = 0U; result && event_index < root->event_count;
+		event_index++)
+	{
+		human_trace_manifest_event_t *stored = &root->events[event_index];
+		const sg_human_trace_v3_event_t *event = &stored->recorded.event;
+		sg_human_trace_v3_scope_t *scope;
+
+		if (stored->scope_index >= root->scope_count)
+			return 0;
+		scope = &root->scopes[stored->scope_index];
+		if (event->client_id != scope->client_id ||
+			event->spawn_generation != scope->spawn_generation)
+			return 0;
+		if (!root->scope_started[stored->scope_index])
+		{
+			root->scope_started[stored->scope_index] = 1U;
+			result = visitor->scope(context, scope);
+		}
+		if (result)
+			result = visitor->event(context, scope, event);
+	}
+	if (result)
+		result = visitor->finish_root(context);
+	return result;
 }
 
 int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 	const sg_human_trace_v3_collection_visitor_t *visitor, void *context)
 {
 	human_trace_manifest_t manifest;
-	size_t root_index;
+	char directory[512];
+	size_t root_index, json_cursor = 0U;
 	int result = 1;
 
-	if (!identity || !visitor || !visitor->begin_root || !visitor->event ||
-		!visitor->finish_root || sg_human_trace_active_collection ||
-		sg_human_trace_collection_issuance == UINT64_MAX)
+	if (!identity || !identity->mapname[0] || !visitor ||
+		!visitor->begin_root || !visitor->scope || !visitor->event ||
+		!visitor->finish_root || sg_human_trace_collection_active ||
+		!HumanTraceDirectoryCurrent(directory))
 		return 0;
 	memset(&manifest, 0, sizeof(manifest));
-	if (!HumanTraceManifestBuild(identity, &manifest))
+	if (!HumanTraceManifestScan(directory, identity, &manifest) ||
+		!HumanTraceManifestCandidatesSort(&manifest))
 	{
 		HumanTraceManifestFree(&manifest);
 		return 0;
 	}
-	sg_human_trace_collection_issuance++;
-	for (root_index = 0U; root_index < manifest.root_count; root_index++)
+	sg_human_trace_collection_active = 1U;
+	root_index = 0U;
+	while (result && root_index < manifest.candidate_count)
 	{
-		human_trace_manifest_root_t *root = &manifest.roots[root_index];
-		size_t scope_index;
+		human_trace_manifest_candidate_t *candidate;
+		human_trace_manifest_root_t root;
+		size_t after, next_root;
+		uint64_t boundary = UINT64_C(1) + UINT32_MAX;
+		int read, segments;
 
-		if (!root->authenticated)
-			continue;
-		for (scope_index = 0U; scope_index < root->scope_count; scope_index++)
-			root->scopes[scope_index].issuance =
-				sg_human_trace_collection_issuance;
-	}
-	sg_human_trace_active_collection = &manifest;
-	for (root_index = 0U; result && root_index < manifest.root_count;
-		root_index++)
-	{
-		human_trace_manifest_root_t *root = &manifest.roots[root_index];
-		size_t event_index;
-
-		if (!root->authenticated)
-			continue;
-		sg_human_trace_active_root = &root->spool;
-		sg_human_trace_active_root_learning_compatible =
-			root->learning_compatible;
-		result = visitor->begin_root(context, &root->spool);
-		for (event_index = 0U; result && event_index < root->event_count;
-			event_index++)
+		while (root_index < manifest.candidate_count &&
+			manifest.candidates[root_index].kind != HUMAN_TRACE_MANIFEST_SPOOL)
+			root_index++;
+		if (root_index >= manifest.candidate_count)
+			break;
+		candidate = &manifest.candidates[root_index];
+		next_root = root_index + 1U;
+		while (next_root < manifest.candidate_count &&
+			manifest.candidates[next_root].kind != HUMAN_TRACE_MANIFEST_SPOOL)
+			next_root++;
+		if (next_root < manifest.candidate_count)
+			boundary = manifest.candidates[next_root].segment;
+		after = json_cursor;
+		while (after < manifest.candidate_count &&
+			(uint64_t)manifest.candidates[after].segment < boundary)
+			after++;
+		read = HumanTraceManifestRootRead(candidate, identity, &root);
+		if (read < 0)
+			result = 0;
+		else if (read > 0 &&
+			(uint64_t)root.spool.completion.segment < boundary)
 		{
-			human_trace_manifest_event_t *event = &root->events[event_index];
-
-			if (event->scope_index >= root->scope_count)
+			segments = HumanTraceManifestReadSegments(&manifest, &root,
+				json_cursor, after);
+			if (segments < 0)
 				result = 0;
-			else
-				result = visitor->event(context,
-					&root->scopes[event->scope_index],
-					&event->recorded.event);
+			else if (segments > 0)
+				result = HumanTraceManifestVisitRoot(&manifest, &root,
+					visitor, context);
 		}
-		if (result)
-			result = visitor->finish_root(context);
-		sg_human_trace_active_root = NULL;
-		sg_human_trace_active_root_learning_compatible = 0U;
+		HumanTraceManifestRootClear(&root);
+		HumanTraceManifestSegmentsClear(&manifest);
+		json_cursor = after;
+		root_index = next_root;
 	}
-	sg_human_trace_active_root = NULL;
-	sg_human_trace_active_root_learning_compatible = 0U;
-	sg_human_trace_active_collection = NULL;
+	sg_human_trace_collection_active = 0U;
 	HumanTraceManifestFree(&manifest);
 	return result;
-}
-
-int SG_HumanTraceAcceptedV3RootLearningCompatible(
-	const sg_human_trace_v3_spool_ref_t *spool)
-{
-	return spool && spool == sg_human_trace_active_root &&
-		sg_human_trace_active_root_learning_compatible == 1U;
-}
-
-int SG_HumanTraceAcceptedV3ScopeView(
-	const sg_human_trace_v3_scope_acceptance_t *scope,
-	const sg_human_trace_v3_spool_ref_t **spool_out,
-	uint32_t *client_id_out, uint64_t *spawn_generation_out)
-{
-	if (spool_out)
-		*spool_out = NULL;
-	if (client_id_out)
-		*client_id_out = 0U;
-	if (spawn_generation_out)
-		*spawn_generation_out = 0U;
-	if (!scope || !sg_human_trace_active_collection ||
-		scope->owner != sg_human_trace_active_collection ||
-		scope->issuance == 0U || scope->issuance !=
-			sg_human_trace_collection_issuance || !scope->spool ||
-		scope->spool != sg_human_trace_active_root ||
-		scope->client_id == 0U || scope->spawn_generation == 0U ||
-		!HumanTraceSpoolCompletionValid(&scope->spool->completion))
-		return 0;
-	if (spool_out)
-		*spool_out = scope->spool;
-	if (client_id_out)
-		*client_id_out = scope->client_id;
-	if (spawn_generation_out)
-		*spawn_generation_out = scope->spawn_generation;
-	return 1;
 }
 
 void SG_HumanTracePmove(edict_t *entity,

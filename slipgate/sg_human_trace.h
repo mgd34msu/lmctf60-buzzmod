@@ -65,15 +65,7 @@ typedef struct sg_human_trace_v3_event_s
 	uint8_t reserved;
 } sg_human_trace_v3_event_t;
 
-typedef int (*sg_human_trace_v3_event_visitor_fn)(void *context,
-	const sg_human_trace_v3_event_t *event);
-
-/* A completed recorder-owned spool is an immutable durable witness.  The
- * recorder validates its binary chain, terminal v3 identity, and every typed
- * event before exposing it to the host.  Scope-consumption receipts live in
- * separate terminal-bound atomic sidecars, so a torn receipt never corrupts
- * evidence. A path copied by an ordinary caller cannot authorize parameter
- * application; only the host's private capability can do that. */
+/* A completed recorder-owned spool is an immutable durable witness. */
 typedef struct sg_human_trace_v3_spool_ref_s
 {
 	sg_human_trace_completion_t completion;
@@ -81,14 +73,29 @@ typedef struct sg_human_trace_v3_spool_ref_s
 	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
 } sg_human_trace_v3_spool_ref_t;
 
+typedef struct sg_human_trace_v3_scope_s
+{
+	uint32_t client_id;
+	uint64_t spawn_generation;
+} sg_human_trace_v3_scope_t;
+
+typedef struct sg_human_trace_v3_collection_visitor_s
+{
+	int (*begin_root)(void *context,
+		const sg_human_trace_v3_spool_ref_t *root);
+	int (*scope)(void *context, const sg_human_trace_v3_scope_t *scope);
+	int (*event)(void *context, const sg_human_trace_v3_scope_t *scope,
+		const sg_human_trace_v3_event_t *event);
+	int (*finish_root)(void *context);
+} sg_human_trace_v3_collection_visitor_t;
+
 void SG_HumanTraceNewLevel(void);
 void SG_HumanTraceMatchEnd(void);
-int SG_HumanTraceCompleted(sg_human_trace_completion_t *completion_out);
-/* Visits only records committed into the exact current terminal trace. A
- * modified or cross-trace completion cannot select recorder state. */
-int SG_HumanTraceVisitAcceptedV3Events(
-	const sg_human_trace_completion_t *completion,
-	sg_human_trace_v3_event_visitor_fn visitor, void *context);
+/* Reads accepted roots only when called. Each root and player life is visited
+ * in canonical first-occurrence order; the API has no consume or mutation
+ * operation and remains valid after process restart. */
+int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
+	const sg_human_trace_v3_collection_visitor_t *visitor, void *context);
 void SG_HumanTracePmove(edict_t *entity,
 	const pmove_state_t *before, const pmove_t *after);
 void SG_HumanTraceHookFire(edict_t *entity, edict_t *hook);
@@ -96,5 +103,13 @@ void SG_HumanTraceHookAttach(edict_t *entity, edict_t *hook,
 	edict_t *target);
 void SG_HumanTraceHookRelease(edict_t *entity);
 void SG_HumanTraceHookReset(edict_t *entity, edict_t *hook);
+
+#ifdef SG_HUMAN_TRACE_TEST
+int SG_HumanTraceTestFormatJsonPath(const char *directory,
+	const sg_level_identity_t *identity, uint32_t segment,
+	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES]);
+int SG_HumanTraceTestJsonNameSegment(const char *name,
+	const sg_level_identity_t *identity, uint32_t *segment_out);
+#endif
 
 #endif /* SG_HUMAN_TRACE_H */

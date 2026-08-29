@@ -14,14 +14,6 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_human_trace.h"
 #include "slipgate/sg_identity.h"
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-#include "slipgate/sg_human_trace_learning_spool_private.h"
-#include "slipgate/sg_human_trace_learning_consumer.h"
-#include "slipgate/sg_human_trace_learning_game_test.h"
-#include "slipgate/sg_human_trace_learning_host_game.h"
-#include "slipgate/sg_human_trace_learning_host_game_test.h"
-#include "slipgate/sg_human_trace_learning_store.h"
-#endif
 
 game_locals_t game;
 level_locals_t level;
@@ -45,7 +37,6 @@ cvar_t *want_funky_gravity = &funky_gravity;
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 static int inject_write_failure;
 static unsigned inject_write_failure_after;
-static unsigned inject_persistence_write_failure;
 
 size_t __real_fwrite(const void *pointer, size_t size, size_t count,
 	FILE *stream);
@@ -53,11 +44,6 @@ size_t __real_fwrite(const void *pointer, size_t size, size_t count,
 size_t __wrap_fwrite(const void *pointer, size_t size, size_t count,
 	FILE *stream)
 {
-	if (inject_persistence_write_failure && size == 1U && count > 64U)
-	{
-		inject_persistence_write_failure--;
-		return __real_fwrite(pointer, size, count / 2U, stream);
-	}
 	if (inject_write_failure && size && count)
 	{
 		if (inject_write_failure_after != 0U)
@@ -129,25 +115,12 @@ static int TracePath(char *path, size_t size, const char *directory,
 		directory, segment) < (int)size;
 }
 
-static int LearningSpoolPath(char *path, size_t size, const char *directory,
+static int SpoolPath(char *path, size_t size, const char *directory,
 	unsigned segment)
 {
 	return snprintf(path, size,
-		"%s/humantrace-tracehook-00000065-000000ca-%06u.learning",
+		"%s/humantrace-tracehook-00000065-000000ca-%06u.spool",
 		directory, segment) < (int)size;
-}
-
-static int LearningStatePath(char *path, size_t size, const char *directory)
-{
-	int written;
-
-	if (!path || !directory)
-		return 0;
-	written = snprintf(path, size,
-		"%s/humantrace-learning-tracehook-00000065-000000ca-00000001-"
-		"000000000000012f-0000000000000194-0000000000000065-"
-		"00000000000000ca.state", directory);
-	return written >= 0 && (size_t)written < size;
 }
 
 static int CountRecords(const char *path, const char *kind)
@@ -195,12 +168,12 @@ static int AppendPartial(const char *path)
 static int AppendSpoolPartial(const char *path)
 {
 	FILE *file = fopen(path, "ab");
-	const unsigned char byte = 0xa5U;
+	const unsigned char marker = 0xa5U;
 	int ok;
 
 	if (!file)
 		return 0;
-	ok = fwrite(&byte, 1U, 1U, file) == 1U && fclose(file) == 0;
+	ok = fwrite(&marker, 1U, 1U, file) == 1U && fclose(file) == 0;
 	return ok;
 }
 
@@ -246,27 +219,26 @@ static int TraceIdentity(sg_level_identity_t *identity)
 typedef struct spool_scan_s
 {
 	sg_human_trace_v3_spool_ref_t first;
+	uint32_t scope_client[64];
+	uint64_t scope_generation[64];
 	uint32_t previous_root;
 	uint64_t count;
+	uint64_t event_count;
+	uint64_t last_event_order;
+	size_t root_scope_start;
+	size_t scope_count;
 	uint8_t have_previous;
 	uint8_t valid_order;
 } spool_scan_t;
 
-typedef struct spool_event_count_s
-{
-	uint64_t count;
-} spool_event_count_t;
-
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-typedef struct accepted_scope_test_s
+typedef struct scope_search_s
 {
 	const sg_human_trace_v3_spool_ref_t *target;
 	uint32_t client_id;
 	uint64_t spawn_generation;
 	uint8_t target_root;
 	uint8_t found;
-} accepted_scope_test_t;
-#endif
+} scope_search_t;
 
 static int ScanSpool(void *opaque, const sg_human_trace_v3_spool_ref_t *spool)
 {
@@ -281,27 +253,47 @@ static int ScanSpool(void *opaque, const sg_human_trace_v3_spool_ref_t *spool)
 	if (spool->completion.session != spool->root_segment)
 		scan->valid_order = 0U;
 	scan->previous_root = spool->root_segment;
+	scan->last_event_order = 0U;
+	scan->root_scope_start = scan->scope_count;
 	scan->have_previous = 1U;
 	scan->count++;
 	return 1;
 }
 
-static int CountStoredSpoolEvent(void *opaque,
+static int ScanCollectionEvent(void *opaque,
+	const sg_human_trace_v3_scope_t *scope,
 	const sg_human_trace_v3_event_t *event)
 {
-	spool_event_count_t *count = opaque;
+	spool_scan_t *scan = opaque;
 
-	if (!count || !event)
+	if (!scan || !scope || !event || event->client_id != scope->client_id ||
+		event->spawn_generation != scope->spawn_generation ||
+		event->order <= scan->last_event_order)
 		return 0;
-	count->count++;
+	scan->last_event_order = event->order;
+	scan->event_count++;
 	return 1;
 }
 
-static int ScanCollectionEvent(void *opaque,
-	const sg_human_trace_v3_scope_acceptance_t *scope,
-	const sg_human_trace_v3_event_t *event)
+static int ScanCollectionScope(void *opaque,
+	const sg_human_trace_v3_scope_t *scope)
 {
-	return opaque && scope && event;
+	spool_scan_t *scan = opaque;
+	size_t index;
+
+	if (!scan || !scope || scope->client_id == 0U ||
+		scope->spawn_generation == 0U ||
+		scan->scope_count >= sizeof(scan->scope_client) /
+			sizeof(scan->scope_client[0]))
+		return 0;
+	for (index = scan->root_scope_start; index < scan->scope_count; index++)
+		if (scan->scope_client[index] == scope->client_id &&
+			scan->scope_generation[index] == scope->spawn_generation)
+			return 0;
+	scan->scope_client[scan->scope_count] = scope->client_id;
+	scan->scope_generation[scan->scope_count] = scope->spawn_generation;
+	scan->scope_count++;
+	return 1;
 }
 
 static int ScanCollectionFinish(void *opaque)
@@ -309,67 +301,16 @@ static int ScanCollectionFinish(void *opaque)
 	return opaque != NULL;
 }
 
-typedef struct stored_event_visit_s
+static int CollectionScopePass(void *opaque,
+	const sg_human_trace_v3_scope_t *scope)
 {
-	const sg_human_trace_v3_spool_ref_t *target;
-	sg_human_trace_v3_event_visitor_fn visitor;
-	void *context;
-	uint8_t selected;
-} stored_event_visit_t;
+	return opaque && scope;
+}
 
-static int StoredEventBegin(void *opaque,
+static int ScopeSearchBegin(void *opaque,
 	const sg_human_trace_v3_spool_ref_t *spool)
 {
-	stored_event_visit_t *visit = opaque;
-
-	if (!visit || !visit->target || !spool)
-		return 0;
-	visit->selected = spool->root_segment == visit->target->root_segment &&
-		strcmp(spool->path, visit->target->path) == 0;
-	return 1;
-}
-
-static int StoredEventVisit(void *opaque,
-	const sg_human_trace_v3_scope_acceptance_t *scope,
-	const sg_human_trace_v3_event_t *event)
-{
-	stored_event_visit_t *visit = opaque;
-
-	return visit && scope && event && (!visit->selected ||
-		visit->visitor(visit->context, event));
-}
-
-static int StoredEventFinish(void *opaque)
-{
-	return opaque != NULL;
-}
-
-static int VisitStoredSpoolEvents(const sg_human_trace_v3_spool_ref_t *spool,
-	sg_human_trace_v3_event_visitor_fn visitor, void *context)
-{
-	stored_event_visit_t visit;
-	sg_human_trace_v3_collection_visitor_t collection;
-	sg_level_identity_t identity;
-
-	if (!spool || !visitor || !TraceIdentity(&identity))
-		return 0;
-	memset(&visit, 0, sizeof(visit));
-	memset(&collection, 0, sizeof(collection));
-	visit.target = spool;
-	visit.visitor = visitor;
-	visit.context = context;
-	collection.begin_root = StoredEventBegin;
-	collection.event = StoredEventVisit;
-	collection.finish_root = StoredEventFinish;
-	return SG_HumanTraceVisitAcceptedV3Collection(&identity, &collection,
-		&visit);
-}
-
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-static int AcceptedScopeBegin(void *opaque,
-	const sg_human_trace_v3_spool_ref_t *spool)
-{
-	accepted_scope_test_t *test = opaque;
+	scope_search_t *test = opaque;
 
 	if (!test || !test->target || !spool)
 		return 0;
@@ -378,37 +319,32 @@ static int AcceptedScopeBegin(void *opaque,
 	return 1;
 }
 
-static int AcceptedScopeEvent(void *opaque,
-	const sg_human_trace_v3_scope_acceptance_t *acceptance,
+static int ScopeSearchEvent(void *opaque,
+	const sg_human_trace_v3_scope_t *scope,
 	const sg_human_trace_v3_event_t *event)
 {
-	accepted_scope_test_t *test = opaque;
-	const sg_human_trace_v3_spool_ref_t *spool;
-	uint32_t client_id;
-	uint64_t spawn_generation;
+	scope_search_t *test = opaque;
 
-	if (!test || !acceptance || !event || !SG_HumanTraceAcceptedV3ScopeView(
-		acceptance, &spool, &client_id, &spawn_generation))
+	if (!test || !scope || !event)
 		return 0;
-	if (!test->target_root || test->found || spool->root_segment !=
-		test->target->root_segment || client_id != test->client_id ||
-		spawn_generation != test->spawn_generation)
+	if (!test->target_root || test->found || scope->client_id != test->client_id ||
+		scope->spawn_generation != test->spawn_generation)
 		return 1;
 	test->found = 1U;
 	return 1;
 }
 
-static int AcceptedScopeFinish(void *opaque)
+static int ScopeSearchFinish(void *opaque)
 {
-	accepted_scope_test_t *test = opaque;
+	scope_search_t *test = opaque;
 
 	return test != NULL;
 }
 
-static int AcceptedScopeExists(const sg_human_trace_v3_spool_ref_t *spool,
+static int ScopeExists(const sg_human_trace_v3_spool_ref_t *spool,
 	uint32_t client_id, uint64_t spawn_generation)
 {
-	accepted_scope_test_t test;
+	scope_search_t test;
 	sg_human_trace_v3_collection_visitor_t visitor;
 	sg_level_identity_t identity;
 
@@ -419,15 +355,15 @@ static int AcceptedScopeExists(const sg_human_trace_v3_spool_ref_t *spool,
 	test.target = spool;
 	test.client_id = client_id;
 	test.spawn_generation = spawn_generation;
-	visitor.begin_root = AcceptedScopeBegin;
-	visitor.event = AcceptedScopeEvent;
-	visitor.finish_root = AcceptedScopeFinish;
+	visitor.begin_root = ScopeSearchBegin;
+	visitor.scope = CollectionScopePass;
+	visitor.event = ScopeSearchEvent;
+	visitor.finish_root = ScopeSearchFinish;
 	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, &test) ||
 		!test.found)
 		return 0;
 	return 1;
 }
-#endif
 
 static int ScanCompletedSpools(spool_scan_t *scan)
 {
@@ -440,6 +376,7 @@ static int ScanCompletedSpools(spool_scan_t *scan)
 	memset(&visitor, 0, sizeof(visitor));
 	scan->valid_order = 1U;
 	visitor.begin_root = ScanSpool;
+	visitor.scope = ScanCollectionScope;
 	visitor.event = ScanCollectionEvent;
 	visitor.finish_root = ScanCollectionFinish;
 	return SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, scan);
@@ -451,660 +388,10 @@ static void RemoveTraceArtifact(const char *directory, unsigned segment)
 
 	if (TracePath(path, sizeof(path), directory, segment))
 		remove(path);
-	if (LearningSpoolPath(path, sizeof(path), directory, segment))
+	if (SpoolPath(path, sizeof(path), directory, segment))
 		remove(path);
 }
 
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-
-typedef struct learning_host_fixture_s
-{
-	sg_rune_cell_t cells[1];
-	sg_rune_phase_basis_t phases[1];
-	sg_rune_capability_kernel_t kernels[1];
-	sg_phase_coordinate_t coordinates[1];
-	sg_rune_model_t model;
-	sg_rune_runtime_snapshot_t snapshot;
-	sg_human_trace_learning_kernel_key_t keys[1];
-	uint64_t costs[1];
-	uint64_t workspace_costs[1];
-	sg_human_trace_learning_parameters_t parameters;
-	sg_human_trace_learning_workspace_t workspace;
-	sg_human_trace_learning_playthrough_t playthroughs[3];
-	sg_human_trace_learning_runtime_t runtime;
-} learning_host_fixture_t;
-
-static sg_rune_stable_id_t LearningHostStableId(uint32_t domain,
-	uint32_t ordinal)
-{
-	sg_rune_order_key_t order = {
-		UINT64_C(0x4c4541524e494e47), domain, 7U, ordinal, 0U
-	};
-
-	return SG_RuneModelStableIdFromOrderKey(&order);
-}
-
-static int LearningHostFixtureInit(learning_host_fixture_t *fixture)
-{
-	sg_human_trace_learning_domain_t domain;
-	sg_human_trace_learning_storage_t storage;
-
-	if (!fixture)
-		return 0;
-	memset(fixture, 0, sizeof(*fixture));
-	fixture->kernels[0].id.value = LearningHostStableId(SG_RUNE_ORDER_KERNEL,
-		0U);
-	fixture->kernels[0].family = SG_RUNE_CAPABILITY_HOOK_TRAJECTORY;
-	fixture->keys[0].kernel = fixture->kernels[0].id;
-	fixture->keys[0].control.value = LearningHostStableId(
-		SG_RUNE_ORDER_CONTROL_FIBER, 0U);
-	fixture->model = (sg_rune_model_t){
-		.version = SG_RUNE_MODEL_VERSION,
-		.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG,
-		.flags = SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
-			SG_RUNE_MODEL_NO_RUNTIME_ACTORS,
-		.identity = {
-			.bsp_content_id = UINT64_C(101),
-			.physics_abi_id = UINT64_C(202)
-		},
-		.completeness = { .state = SG_RUNE_COMPLETENESS_COMPLETE },
-		.cells = fixture->cells,
-		.cell_count = 1U,
-		.phases = fixture->phases,
-		.phase_count = 1U,
-		.kernels = fixture->kernels,
-		.kernel_count = 1U
-	};
-	fixture->coordinates[0] = (sg_phase_coordinate_t){ 0U, 0U };
-	fixture->snapshot = (sg_rune_runtime_snapshot_t){
-		.identity = UINT64_C(303),
-		.topology_revision = UINT64_C(404),
-		.cell_count = 1U,
-		.phase_count = 1U,
-		.region_count = 1U,
-		.model = &fixture->model,
-		.phases = fixture->coordinates
-	};
-	domain = (sg_human_trace_learning_domain_t){
-		.identity = {
-			.rune_identity = fixture->snapshot.identity,
-			.topology_revision = fixture->snapshot.topology_revision,
-			.bsp_identity = fixture->model.identity.bsp_content_id,
-			.physics_identity = fixture->model.identity.physics_abi_id
-		},
-		.snapshot = &fixture->snapshot,
-		.kernel_keys = fixture->keys,
-		.kernel_key_count = 1U
-	};
-	storage = (sg_human_trace_learning_storage_t){
-		.effective_cost_us = fixture->costs,
-		.effective_cost_capacity = 1U
-	};
-	fixture->workspace = (sg_human_trace_learning_workspace_t){
-		.effective_cost_us = fixture->workspace_costs,
-		.effective_cost_capacity = 1U
-	};
-	return SG_RuneRuntimeSnapshotValid(&fixture->snapshot) &&
-		SG_HumanTraceLearningParametersInit(&fixture->parameters, &domain,
-			&storage) && SG_HumanTraceLearningTestRuntimeInit(&fixture->runtime,
-			&fixture->parameters, &fixture->workspace, fixture->playthroughs,
-			1U, 1U);
-}
-
-static int LearningHostLocateKernel(void *context,
-	const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_human_trace_v3_event_t *fire,
-	const sg_human_trace_v3_event_t *attach,
-	sg_human_trace_learning_kernel_key_t *key_out)
-{
-	learning_host_fixture_t *fixture = context;
-
-	if (!fixture || snapshot != &fixture->snapshot || !fire || !attach ||
-		!key_out || fire->kind != SG_HUMAN_TRACE_V3_EVENT_HOOK_FIRE ||
-		attach->kind != SG_HUMAN_TRACE_V3_EVENT_HOOK_ATTACH ||
-		fire->client_id != attach->client_id ||
-		fire->spawn_generation != attach->spawn_generation ||
-		fire->order >= attach->order)
-		return 0;
-	*key_out = fixture->keys[0];
-	return 1;
-}
-
-static void LearningHostPublishedFixture(learning_host_fixture_t *fixture,
-	sg_human_trace_learning_test_published_runtime_t *published)
-{
-	memset(published, 0, sizeof(*published));
-	published->runtime = &fixture->runtime;
-	published->snapshot = &fixture->snapshot;
-	published->level_identity.bsp_checksum = 101U;
-	published->level_identity.entity_crc32 = 202U;
-	published->level_identity.host_physics_id = 1U;
-	strcpy(published->level_identity.mapname, "tracehook");
-	published->evidence_context = fixture;
-	published->locate_hook_kernel = LearningHostLocateKernel;
-}
-
-static int RunLearningHostSequentialRoots(void)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-	unsigned root;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 95;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, &report))
-		return 96;
-	SetupPmove(&before, &after);
-	for (root = 0U; root < 3U; root++)
-	{
-		SetupPlayer(player, &clients[0], (unsigned long)(11U + root));
-		SG_HumanTraceNewLevel();
-		CaptureCompleteTraversalFrames(player, hook, &before, &after,
-			(int)(1U + root * 8U), (int)(4U + root * 9U));
-		SG_HumanTraceMatchEnd();
-		memset(&report, 0, sizeof(report));
-		SG_HumanTraceLearningHostGamePostMatch(&report);
-		if (!report.trace_authenticated || !report.runtime_published ||
-			report.committed_batches != 1U || report.rejected_batches != 0U ||
-			fixture.playthroughs[0].used != 0U ||
-			fixture.parameters.generation != (uint64_t)(2U + root) ||
-			fixture.costs[0] != (uint64_t)(300000U + root * 100000U))
-			return 97;
-	}
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-
-static int RunLearningHostRestartWrite(void)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-	unsigned root;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 123;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 124;
-	SetupPmove(&before, &after);
-	for (root = 0U; root < 3U; root++)
-	{
-		SetupPlayer(player, &clients[0], (unsigned long)(11U + root));
-		SG_HumanTraceNewLevel();
-		CaptureCompleteTraversalFrames(player, hook, &before, &after,
-			(int)(1U + root * 8U), (int)(4U + root * 9U));
-		SG_HumanTraceMatchEnd();
-		SG_HumanTraceLearningHostGamePostMatch(&report);
-		if (report.committed_batches != 1U || report.rejected_batches != 0U)
-			return 125;
-	}
-	if (fixture.parameters.generation != UINT64_C(4) ||
-		fixture.costs[0] != UINT64_C(500000))
-		return 126;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-
-static int RunLearningHostRestartRead(const char *directory, int damaged)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	char state_path[1024];
-	int published_ok;
-
-	if (!LearningStatePath(state_path, sizeof(state_path), directory) ||
-		(damaged == 1 && !FlipSpoolByte(state_path)) ||
-		!LearningHostFixtureInit(&fixture))
-		return 127;
-	LearningHostPublishedFixture(&fixture, &published);
-	published_ok = SG_HumanTraceLearningHostGameTestPublishRuntime(&published,
-		&report);
-	if (damaged)
-	{
-		if (published_ok || fixture.parameters.generation != UINT64_C(1) ||
-			fixture.costs[0] != 0U)
-			return 128;
-	}
-	else if (!published_ok || !report.runtime_published ||
-		report.committed_batches != 0U || report.rejected_batches != 0U ||
-		fixture.parameters.generation != UINT64_C(4) ||
-		fixture.costs[0] != UINT64_C(500000))
-		return 129;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	remove(state_path);
-	return 0;
-}
-
-static int RunLearningStoreTransactionProgression(const char *directory)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_store_t store;
-	sg_human_trace_learning_trace_scope_t scope;
-	sg_level_identity_t identity;
-	char state_path[1024];
-	uint64_t next_transaction_id = 0U;
-	int result = 0;
-
-	if (!LearningHostFixtureInit(&fixture) ||
-		SG_LevelIdentitySnapshot("tracehook", &identity) != SG_IDENTITY_OK ||
-		!SG_HumanTraceLearningStoreOpen(&store, directory, &identity,
-			&fixture.parameters, fixture.runtime.next_transaction_id))
-		return 133;
-	memset(&scope, 0, sizeof(scope));
-	scope.trace.terminal_sha256.bytes[0] = 1U;
-	strcpy(scope.trace.mapname, "tracehook");
-	scope.trace.host_physics_id = SG_HOST_PHYSICS_EPOCH;
-	scope.trace.pmove_substep_ms = SG_HUMAN_TRACE_LEARNING_PMOVE_SUBSTEP_MS;
-	scope.trace.server_frame_ms = SG_HUMAN_TRACE_LEARNING_SERVER_FRAME_MS;
-	strcpy(scope.trace.module_version, "test");
-	scope.trace.end_order = 1U;
-	scope.client_id = 1U;
-	scope.spawn_generation = 1U;
-	if (SG_HumanTraceLearningStoreCommitScope(&store, &fixture.parameters,
-		fixture.runtime.next_transaction_id, 1U, &scope) ||
-		!SG_HumanTraceLearningStoreCommitScope(&store, &fixture.parameters,
-			fixture.runtime.next_transaction_id, 0U, &scope) ||
-		SG_HumanTraceLearningStoreCommitScope(&store, &fixture.parameters,
-			fixture.runtime.next_transaction_id, 0U, &scope) ||
-		!SG_HumanTraceLearningStoreRestore(&store, &fixture.parameters,
-			&next_transaction_id) || next_transaction_id != 1U ||
-		fixture.parameters.generation != 1U)
-		result = 134;
-	SG_HumanTraceLearningStoreClose(&store);
-	if (LearningStatePath(state_path, sizeof(state_path), directory))
-		remove(state_path);
-	return result;
-}
-
-static int RunLearningHostPhysicsDrift(void)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 130;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 131;
-	SetupPlayer(player, &clients[0], 11UL);
-	SetupPmove(&before, &after);
-	memset(hook, 0, sizeof(*hook));
-	hook->inuse = true;
-	hook->owner = player;
-	hook->hook_target = &entities[0];
-	player->client->hook = hook;
-	SG_HumanTraceNewLevel();
-	after.groundentity = NULL;
-	level.framenum = 1;
-	SG_HumanTracePmove(player, &before, &after);
-	SG_HumanTraceHookFire(player, hook);
-	SG_HumanTraceHookAttach(player, hook, &entities[0]);
-	gravity.value = 100.0f;
-	level.framenum = 2;
-	SG_HumanTracePmove(player, &before, &after);
-	level.framenum = 3;
-	SG_HumanTraceHookRelease(player);
-	SG_HumanTraceHookReset(player, hook);
-	after.groundentity = &entities[0];
-	level.framenum = 4;
-	SG_HumanTracePmove(player, &before, &after);
-	SG_HumanTraceMatchEnd();
-	SG_HumanTraceLearningHostGamePostMatch(&report);
-	if (!report.trace_authenticated || report.committed_batches != 0U ||
-		report.rejected_batches != 0U ||
-		fixture.parameters.generation != UINT64_C(1) || fixture.costs[0] != 0U)
-		return 132;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-
-#ifdef SG_HUMAN_TRACE_WRAP_FWRITE
-static int RunLearningHostReceiptFailure(void)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t first;
-	sg_human_trace_learning_host_report_t retry;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 98;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 99;
-	SetupPlayer(player, &clients[0], 11UL);
-	SetupPmove(&before, &after);
-	SG_HumanTraceNewLevel();
-	CaptureCompleteTraversal(player, hook, &before, &after, 1);
-	SG_HumanTraceMatchEnd();
-	/* The atomic model-state image tears before publication. Neither learned
-	 * parameters nor scope consumption may become visible. */
-	inject_persistence_write_failure = 1U;
-	SG_HumanTraceLearningHostGamePostMatch(&first);
-	if (!first.trace_authenticated || first.committed_batches != 0U ||
-		first.rejected_batches != 1U || fixture.parameters.generation != 1U ||
-		fixture.costs[0] != 0U || fixture.playthroughs[0].used != 0U)
-	{
-		fprintf(stderr, "persistence_failure auth=%u committed=%" PRIu64
-			" rejected=%" PRIu64 " generation=%" PRIu64 " cost=%" PRIu64
-			" used=%u\n", (unsigned)first.trace_authenticated,
-			first.committed_batches, first.rejected_batches,
-			fixture.parameters.generation, fixture.costs[0],
-			(unsigned)fixture.playthroughs[0].used);
-		return 100;
-	}
-	/* Queue the next root before retry. One discovery pass must durably commit
-	 * both roots in order while reusing the single runtime workspace. */
-	SetupPlayer(player, &clients[0], 12UL);
-	SG_HumanTraceNewLevel();
-	CaptureCompleteTraversalFrames(player, hook, &before, &after, 9, 13);
-	SG_HumanTraceMatchEnd();
-	SG_HumanTraceLearningHostGameReset();
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, &retry) ||
-		retry.committed_batches != 2U || retry.rejected_batches != 0U ||
-		fixture.parameters.generation != UINT64_C(3) ||
-		fixture.costs[0] != UINT64_C(400000) ||
-		fixture.playthroughs[0].used != 0U)
-		return 101;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-
-static int RunLearningHostFirstOccurrenceOrder(void)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *first = &entities[1];
-	edict_t *second = &entities[2];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-	uint32_t applied_client[3];
-	uint64_t applied_generation[3];
-	size_t applied;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 116;
-	fixture.runtime.playthrough_capacity = 3U;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 117;
-	SetupPmove(&before, &after);
-	SG_HumanTraceNewLevel();
-	SetupPlayer(first, &clients[0], 11UL);
-	memset(hook, 0, sizeof(*hook));
-	hook->inuse = true;
-	hook->owner = first;
-	hook->hook_target = &entities[0];
-	first->client->hook = hook;
-	after.groundentity = NULL;
-	level.framenum = 1;
-	SG_HumanTracePmove(first, &before, &after);
-	SG_HumanTraceHookFire(first, hook);
-	SG_HumanTraceHookAttach(first, hook, &entities[0]);
-	level.framenum = 2;
-	SG_HumanTracePmove(first, &before, &after);
-	level.framenum = 3;
-	SG_HumanTraceHookRelease(first);
-	SG_HumanTraceHookReset(first, hook);
-	SetupPlayer(second, &clients[1], 22UL);
-	CaptureCompleteTraversal(second, hook, &before, &after, 4);
-	SetupPlayer(second, &clients[1], 23UL);
-	CaptureCompleteTraversal(second, hook, &before, &after, 8);
-	after.groundentity = &entities[0];
-	level.framenum = 12;
-	SG_HumanTracePmove(first, &before, &after);
-	SG_HumanTraceMatchEnd();
-	SG_HumanTraceLearningHostGameTestResetApplyOrder();
-	SG_HumanTraceLearningHostGamePostMatch(&report);
-	for (applied = 0U; applied < 3U; applied++)
-		if (!SG_HumanTraceLearningHostGameTestApplyOrder(applied,
-			&applied_client[applied], &applied_generation[applied]))
-			return 118;
-	if (!report.trace_authenticated || report.committed_batches != 3U ||
-		report.rejected_batches != 0U ||
-		SG_HumanTraceLearningHostGameTestApplyOrderCount() != 3U ||
-		applied_client[0] != 1U || applied_generation[0] != UINT64_C(11) ||
-		applied_client[1] != 2U || applied_generation[1] != UINT64_C(22) ||
-		applied_client[2] != 2U || applied_generation[2] != UINT64_C(23))
-	{
-		fprintf(stderr,
-			"actual_scope_order=%" PRIu32 "/%" PRIu64 ",%" PRIu32 "/%" PRIu64
-			",%" PRIu32 "/%" PRIu64 "\n",
-			applied_client[0], applied_generation[0],
-			applied_client[1], applied_generation[1],
-			applied_client[2], applied_generation[2]);
-		return 119;
-	}
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-#endif
-
-static int RunLearningHostVisitCount(const char *directory, unsigned count,
-	int clean)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-	char state_path[1024];
-	unsigned index;
-	uint64_t expected;
-	int result = 0;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 102;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 103;
-	SetupPlayer(player, &clients[0], 11UL);
-	SetupPmove(&before, &after);
-	SG_HumanTraceNewLevel();
-	for (index = 0U; index < count; index++)
-		CaptureCompleteTraversal(player, hook, &before, &after,
-			(int)(1U + index * 4U));
-	SG_HumanTraceMatchEnd();
-	SG_HumanTraceLearningHostGameTestResetVisitCount();
-	SG_HumanTraceLearningHostGamePostMatch(&report);
-	expected = (uint64_t)count * UINT64_C(7);
-	if (!report.trace_authenticated || report.committed_batches != 1U ||
-		report.rejected_batches != 0U || fixture.parameters.generation !=
-		(UINT64_C(1) + (uint64_t)count) ||
-		SG_HumanTraceLearningHostGameTestVisitCount() != expected)
-		result = 104;
-	if (clean)
-	{
-		if (LearningStatePath(state_path, sizeof(state_path), directory))
-			remove(state_path);
-		RemoveTraceArtifact(directory, 0U);
-	}
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return result;
-}
-
-static int RunLearningHostLinearity(const char *directory)
-{
-	static const unsigned counts[] = { 64U, 128U, 256U, 512U };
-	unsigned index;
-
-	for (index = 0U; index < sizeof(counts) / sizeof(counts[0]); index++)
-		if (RunLearningHostVisitCount(directory, counts[index], 1) != 0)
-			return 105 + (int)index;
-	return 0;
-}
-
-static int RunLearningHostIORoots(unsigned root_count)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-	unsigned root;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 120;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 121;
-	SetupPmove(&before, &after);
-	for (root = 0U; root < root_count; root++)
-	{
-		SetupPlayer(player, &clients[0], (unsigned long)(11U + root));
-		SG_HumanTraceNewLevel();
-		CaptureCompleteTraversal(player, hook, &before, &after,
-			(int)(1U + root * 8U));
-		SG_HumanTraceMatchEnd();
-	}
-	SG_HumanTraceLearningHostGameTestResetVisitCount();
-	SG_HumanTraceLearningHostGamePostMatch(&report);
-	if (!report.trace_authenticated ||
-		report.committed_batches != root_count ||
-		report.rejected_batches != 0U ||
-		fixture.parameters.generation != UINT64_C(1) + root_count ||
-		SG_HumanTraceLearningHostGameTestVisitCount() !=
-			(uint64_t)root_count * UINT64_C(7))
-		return 122;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-
-static int RunLearningHostLongPostMatch(void)
-{
-	const unsigned long event_count = 16385UL;
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t report;
-	edict_t *player = &entities[1];
-	edict_t *hook = &entities[3];
-	pmove_state_t before;
-	pmove_t after;
-	unsigned long index;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 109;
-	LearningHostPublishedFixture(&fixture, &published);
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
-		return 110;
-	SetupPlayer(player, &clients[0], 11UL);
-	SetupPmove(&before, &after);
-	SG_HumanTraceNewLevel();
-	CaptureCompleteTraversal(player, hook, &before, &after, 1);
-	after.groundentity = &entities[0];
-	for (index = 7UL; index < event_count; index++)
-	{
-		level.framenum = (int)(index + 1UL);
-		SG_HumanTracePmove(player, &before, &after);
-	}
-	SG_HumanTraceMatchEnd();
-	SG_HumanTraceLearningHostGameTestResetVisitCount();
-	SG_HumanTraceLearningHostGamePostMatch(&report);
-	if (!report.trace_authenticated || report.committed_batches != 1U ||
-		report.rejected_batches != 0U || fixture.parameters.generation != 2U ||
-		SG_HumanTraceLearningHostGameTestVisitCount() != event_count ||
-		fixture.playthroughs[0].used != 0U)
-		return 111;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	return 0;
-}
-
-static int RunLearningHostIntegration(void)
-{
-	learning_host_fixture_t fixture;
-	sg_human_trace_learning_test_published_runtime_t published;
-	sg_human_trace_learning_host_report_t pending;
-	sg_human_trace_learning_host_report_t committed;
-	char state_path[1024];
-	uint64_t effective_cost_us;
-
-	if (!LearningHostFixtureInit(&fixture))
-		return 80;
-	memset(&published, 0, sizeof(published));
-	published.runtime = &fixture.runtime;
-	published.snapshot = &fixture.snapshot;
-	published.level_identity.bsp_checksum = 101U;
-	published.level_identity.entity_crc32 = 202U;
-	published.level_identity.host_physics_id = 1U;
-	strcpy(published.level_identity.mapname, "tracehook");
-	published.evidence_context = &fixture;
-	published.locate_hook_kernel = LearningHostLocateKernel;
-	if (!LearningStatePath(state_path, sizeof(state_path),
-		trace_directory.string))
-		return 81;
-	SG_HumanTraceLearningHostGamePostMatch(&pending);
-	if (!pending.trace_authenticated || pending.derived_batches != 1U ||
-		pending.derived_records != 1U || pending.committed_batches != 0U ||
-		pending.pending_batches != 1U || fixture.parameters.generation != 1U ||
-		fixture.costs[0] != 0U)
-		return 82;
-	/* A level transition and recorder teardown retire all in-process views, but
-	 * not the authenticated spool; a matching next publication must rediscover
-	 * and consume the same batch atomically. */
-	SG_HumanTraceLearningHostGameReset();
-	SG_HumanTraceNewLevel();
-	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published,
-		&committed) || committed.committed_batches != 1U ||
-		committed.rejected_batches != 0U || committed.pending_batches != 0U ||
-		fixture.parameters.generation != 2U || fixture.costs[0] !=
-		UINT64_C(300000) || fixture.playthroughs[0].used != 0U)
-		return 83;
-	if (!SG_HumanTraceLearningConsumerEffectiveKernelCost(
-		&fixture.parameters, &fixture.keys[0], UINT64_C(900000),
-		&effective_cost_us) || effective_cost_us != UINT64_C(300000))
-		return 84;
-	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
-		&fixture.snapshot);
-	SG_HumanTraceLearningHostGameReset();
-	remove(state_path);
-	return 0;
-}
-
-#endif /* SG_HUMAN_TRACE_LEARNING_TEST */
 
 static void SetupPlayer(edict_t *player, gclient_t *client,
 	unsigned long generation)
@@ -1292,7 +579,7 @@ static int RunRotation(const char *directory)
 		files++;
 		remove(path);
 	}
-	if (LearningSpoolPath(path, sizeof(path), directory, 0U))
+	if (SpoolPath(path, sizeof(path), directory, 0U))
 		remove(path);
 	return files >= 2 ? 0 : 31;
 }
@@ -1306,7 +593,7 @@ static int RunSpoolRejection(const char *directory, int tamper)
 	spool_scan_t scan;
 	int result = 0;
 
-	if (!LearningSpoolPath(spool_path, sizeof(spool_path), directory, 0U))
+	if (!SpoolPath(spool_path, sizeof(spool_path), directory, 0U))
 		return 32;
 	SetupPlayer(player, &clients[0], 11UL);
 	SetupPmove(&before, &after);
@@ -1335,7 +622,6 @@ static int RunLongStream(const char *directory, int finish)
 	pmove_state_t before;
 	pmove_t after;
 	spool_scan_t scan;
-	spool_event_count_t events;
 	unsigned long index;
 	int result = 0;
 
@@ -1352,12 +638,113 @@ static int RunLongStream(const char *directory, int finish)
 		return 0;
 	SG_HumanTraceMatchEnd();
 	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
-		!scan.valid_order)
+		!scan.valid_order || scan.event_count != event_count)
 		result = 36;
-	memset(&events, 0, sizeof(events));
-	if (!result && (!VisitStoredSpoolEvents(&scan.first,
-		CountStoredSpoolEvent, &events) || events.count != event_count))
-		result = 37;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunConsumerVisitCount(const char *directory, unsigned count,
+	int visit, int clean)
+{
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned index;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	for (index = 0U; index < count; index++)
+		CaptureCompleteTraversal(player, hook, &before, &after,
+			(int)(index * 4U + 1U));
+	SG_HumanTraceMatchEnd();
+	if (visit && (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || scan.scope_count != 1U ||
+		scan.event_count != (uint64_t)count * UINT64_C(7)))
+		result = 122;
+	if (clean)
+		RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunConsumerRoots(const char *directory, unsigned root_count,
+	int visit, int clean)
+{
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned root;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	for (root = 0U; root < root_count; root++)
+	{
+		SG_HumanTraceNewLevel();
+		CaptureCompleteTraversal(player, hook, &before, &after,
+			(int)(root * 4U + 1U));
+		SG_HumanTraceMatchEnd();
+	}
+	if (visit && (!ScanCompletedSpools(&scan) || scan.count != root_count ||
+		!scan.valid_order || scan.event_count !=
+			(uint64_t)root_count * UINT64_C(7) ||
+		scan.scope_count != root_count))
+		result = 123;
+	if (clean)
+		for (root = 0U; root < root_count; root++)
+			RemoveTraceArtifact(directory, root);
+	return result;
+}
+
+static int RunConsumerRestartRead(const char *directory)
+{
+	spool_scan_t scan;
+	unsigned root;
+
+	if (!ScanCompletedSpools(&scan) || scan.count != 3U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U || scan.event_count != UINT64_C(21) ||
+		scan.scope_count != 3U)
+		return 124;
+	for (root = 0U; root < 3U; root++)
+		RemoveTraceArtifact(directory, root);
+	return 0;
+}
+
+static int RunConsumerFirstOccurrence(const char *directory)
+{
+	edict_t *player1 = &entities[1];
+	edict_t *player2 = &entities[2];
+	pmove_state_t before1, before2;
+	pmove_t after1, after2;
+	spool_scan_t scan;
+	int result = 0;
+
+	SetupPlayer(player1, &clients[0], 11UL);
+	SetupPlayer(player2, &clients[1], 22UL);
+	SetupPmove(&before1, &after1);
+	SetupPmove(&before2, &after2);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player1, &before1, &after1);
+	level.framenum = 2;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	player2->client->ctf.ctfid = 23UL;
+	level.framenum = 3;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		scan.event_count != 3U || scan.scope_count != 3U ||
+		scan.scope_client[0] != 1U || scan.scope_generation[0] != UINT64_C(11) ||
+		scan.scope_client[1] != 2U || scan.scope_generation[1] != UINT64_C(22) ||
+		scan.scope_client[2] != 2U || scan.scope_generation[2] != UINT64_C(23))
+		result = 125;
 	RemoveTraceArtifact(directory, 0U);
 	return result;
 }
@@ -1414,13 +801,13 @@ static int RunSpoolQuarantine(const char *directory)
 	 * collision garbage. A canonical-name JSON sibling whose header cannot be
 	 * assigned to any session is quarantined before grouping. Valid roots zero
 	 * and two must still be visited FIFO. */
-	if (!LearningSpoolPath(spool_path, sizeof(spool_path), directory, 1U) ||
+	if (!SpoolPath(spool_path, sizeof(spool_path), directory, 1U) ||
 		!AppendSpoolPartial(spool_path))
 		result = 91;
-	if (!result && (!LearningSpoolPath(spool_path, sizeof(spool_path),
+	if (!result && (!SpoolPath(spool_path, sizeof(spool_path),
 		directory, 3U) || !AppendSpoolPartial(spool_path)))
 		result = 92;
-	if (!result && (!LearningSpoolPath(spool_path, sizeof(spool_path),
+	if (!result && (!SpoolPath(spool_path, sizeof(spool_path),
 		directory, 4U) || !AppendSpoolPartial(spool_path)))
 		result = 93;
 	if (!result && (!TracePath(json_path, sizeof(json_path), directory, 3U) ||
@@ -1451,18 +838,18 @@ static int RunSegmentNames(const char *directory)
 		return 112;
 	for (index = 0U; index < sizeof(segments) / sizeof(segments[0]); index++)
 	{
-		if (!SG_HumanTraceLearningSpoolTestFormatJsonPath(directory, &identity,
+		if (!SG_HumanTraceTestFormatJsonPath(directory, &identity,
 			segments[index], path))
 			return 113;
 		name = strrchr(path, '/');
 		name = name ? name + 1 : path;
 		if (strlen(name) < strlen(suffixes[index]) || strcmp(name + strlen(name) -
 			strlen(suffixes[index]), suffixes[index]) != 0 ||
-			!SG_HumanTraceLearningSpoolTestJsonNameSegment(name, &identity,
+			!SG_HumanTraceTestJsonNameSegment(name, &identity,
 				&parsed) || parsed != segments[index])
 			return 114;
 	}
-	if (SG_HumanTraceLearningSpoolTestJsonNameSegment(
+	if (SG_HumanTraceTestJsonNameSegment(
 		"humantrace-tracehook-00000065-000000ca-0000000.jsonl", &identity,
 		&parsed))
 		return 115;
@@ -1472,22 +859,17 @@ static int RunSegmentNames(const char *directory)
 static int RunStoredSpoolCoverage(void)
 {
 	spool_scan_t scan;
-	spool_event_count_t events;
 
 	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
-		!scan.valid_order || scan.first.root_segment != 0U)
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.event_count != 12U || scan.scope_count != 2U ||
+		scan.scope_client[0] != 1U || scan.scope_generation[0] != UINT64_C(11) ||
+		scan.scope_client[1] != 2U || scan.scope_generation[1] != UINT64_C(22))
 		return 39;
-	memset(&events, 0, sizeof(events));
-	if (!VisitStoredSpoolEvents(&scan.first, CountStoredSpoolEvent,
-		&events) || events.count != 12U)
-		return 40;
-	if (!AcceptedScopeExists(&scan.first, 2U, UINT64_C(22)) ||
-		!AcceptedScopeExists(&scan.first, 1U, UINT64_C(11)))
-		return 41;
 	return 0;
 }
 
-static int RunAcceptedScopeDenial(const char *directory)
+static int RunScopeIsolation(const char *directory)
 {
 	edict_t *player = &entities[1];
 	pmove_state_t before;
@@ -1506,9 +888,9 @@ static int RunAcceptedScopeDenial(const char *directory)
 	SG_HumanTraceMatchEnd();
 	if (!ScanCompletedSpools(&scan) || scan.count != 1U)
 		return 120;
-	absent_accepted = AcceptedScopeExists(&scan.first, 2U, UINT64_C(11));
-	typo_accepted = AcceptedScopeExists(&scan.first, 1U, UINT64_C(12));
-	valid_accepted = AcceptedScopeExists(&scan.first, 1U, UINT64_C(11));
+	absent_accepted = ScopeExists(&scan.first, 2U, UINT64_C(11));
+	typo_accepted = ScopeExists(&scan.first, 1U, UINT64_C(12));
+	valid_accepted = ScopeExists(&scan.first, 1U, UINT64_C(11));
 	if (absent_accepted || typo_accepted || !valid_accepted)
 	{
 		fprintf(stderr,
@@ -1546,9 +928,9 @@ static int RunWriteFailure(const char *directory)
 		return 42;
 	remove(path0);
 	remove(path1);
-	if (LearningSpoolPath(path0, sizeof(path0), directory, 0U))
+	if (SpoolPath(path0, sizeof(path0), directory, 0U))
 		remove(path0);
-	if (LearningSpoolPath(path1, sizeof(path1), directory, 1U))
+	if (SpoolPath(path1, sizeof(path1), directory, 1U))
 		remove(path1);
 	return 0;
 }
@@ -1629,10 +1011,7 @@ static int RunPhysicsDrift(const char *directory)
 	SG_HumanTraceMatchEnd();
 	if (CountRecords(path0, NULL) != 2 ||
 		CountRecords(path1, NULL) != 3 || !ScanCompletedSpools(&scan) ||
-		scan.count != 1U || !scan.valid_order ||
-		scan.first.root_segment != 0U || scan.first.completion.session != 0U ||
-		scan.first.completion.segment != 1U ||
-		scan.first.completion.continuation != 1U)
+		scan.count != 0U)
 		return 66;
 	return 0;
 }
@@ -1743,51 +1122,34 @@ int main(int argc, char **argv)
 		return RunLongStream(argv[1], 1);
 	if (argc == 3 && strcmp(argv[2], "long-stream-live") == 0)
 		return RunLongStream(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-64") == 0)
+		return RunConsumerVisitCount(argv[1], 64U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-128") == 0)
+		return RunConsumerVisitCount(argv[1], 128U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-256") == 0)
+		return RunConsumerVisitCount(argv[1], 256U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-512") == 0)
+		return RunConsumerVisitCount(argv[1], 512U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-roots") == 0)
+		return RunConsumerRoots(argv[1], 8U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-restart-write") == 0)
+		return RunConsumerRoots(argv[1], 3U, 0, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-restart-read") == 0)
+		return RunConsumerRestartRead(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-produce-only") == 0)
+		return RunConsumerVisitCount(argv[1], 1U, 0, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-boundary-source") == 0)
+		return RunConsumerVisitCount(argv[1], 1U, 0, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-first-occurrence") == 0)
+		return RunConsumerFirstOccurrence(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "spool-order") == 0)
 		return RunSpoolOrder(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "spool-quarantine") == 0)
 		return RunSpoolQuarantine(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "segment-names") == 0)
 		return RunSegmentNames(argv[1]);
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
-	if (argc == 3 && strcmp(argv[2], "host-sequential") == 0)
-		return RunLearningHostSequentialRoots();
-	if (argc == 3 && strcmp(argv[2], "host-restart-write") == 0)
-		return RunLearningHostRestartWrite();
-	if (argc == 3 && strcmp(argv[2], "host-restart-read") == 0)
-		return RunLearningHostRestartRead(argv[1], 0);
-	if (argc == 3 && strcmp(argv[2], "host-state-torn") == 0)
-	{
-		int write_result = RunLearningHostRestartWrite();
-
-		return write_result ? write_result :
-			RunLearningHostRestartRead(argv[1], 1);
-	}
-	if (argc == 3 && strcmp(argv[2], "host-state-invalid") == 0)
-		return RunLearningHostRestartRead(argv[1], -1);
-	if (argc == 3 && strcmp(argv[2], "host-store-progression") == 0)
-		return RunLearningStoreTransactionProgression(argv[1]);
-	if (argc == 3 && strcmp(argv[2], "host-physics-drift") == 0)
-		return RunLearningHostPhysicsDrift();
-	if (argc == 3 && strcmp(argv[2], "host-linearity") == 0)
-		return RunLearningHostLinearity(argv[1]);
-	if (argc == 3 && strcmp(argv[2], "host-io-64") == 0)
-		return RunLearningHostVisitCount(argv[1], 64U, 0);
-	if (argc == 3 && strcmp(argv[2], "host-io-128") == 0)
-		return RunLearningHostVisitCount(argv[1], 128U, 0);
-	if (argc == 3 && strcmp(argv[2], "host-io-roots") == 0)
-		return RunLearningHostIORoots(8U);
-	if (argc == 3 && strcmp(argv[2], "host-long-postmatch") == 0)
-		return RunLearningHostLongPostMatch();
-#ifdef SG_HUMAN_TRACE_WRAP_FWRITE
-	if (argc == 3 && strcmp(argv[2], "host-receipt-failure") == 0)
-		return RunLearningHostReceiptFailure();
-	if (argc == 3 && strcmp(argv[2], "host-first-occurrence") == 0)
-		return RunLearningHostFirstOccurrenceOrder();
-#endif
-#endif
-	if (argc == 3 && strcmp(argv[2], "accepted-scope-denial") == 0)
-		return RunAcceptedScopeDenial(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-scope-isolation") == 0)
+		return RunScopeIsolation(argv[1]);
 #ifndef _WIN32
 	if (argc == 3 && strcmp(argv[2], "fsize") == 0)
 		return RunFileSizeFailure(argv[1]);
@@ -1854,11 +1216,9 @@ int main(int argc, char **argv)
 	    memcmp(&after1, &after1_copy, sizeof(after1)) != 0)
 		result = 3;
 	SG_HumanTraceMatchEnd();
-#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+#ifdef SG_HUMAN_TRACE_TEST
 	if (!result && RunStoredSpoolCoverage() != 0)
 		result = 9;
-	if (!result && RunLearningHostIntegration() != 0)
-		result = 10;
 #endif
 	enabled.value = 0.0f;
 	if (!ObserveLifecycle(player1, hook1, &before1, &after1))

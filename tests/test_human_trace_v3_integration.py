@@ -273,7 +273,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
 
         self.assertEqual(sessions[0]["initial_trace_header"]["session"], 1)
 
-    def test_variable_width_canonical_segment_suffixes_and_cost_sentinel(self) -> None:
+    def test_variable_width_canonical_segment_suffixes(self) -> None:
         ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
             completed = subprocess.run(
@@ -309,37 +309,6 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 Path(f"{PREFIX}0000000.jsonl")
             )
         )
-        self.assertEqual(humantrace.EFFECTIVE_COST_MAX,
-                         humantrace.UINT64_MAX - 1)
-        scope = {"client": 1, "spawn_generation": 1}
-        session = {
-            "trace_header": {"server_frame_ms": 2},
-            "end": {"order": 7},
-            "steps": [
-                {"kind": "step", "order": 1, "frame": 0, "command": 1,
-                 "ground": -1, "after": {"origin": [0, 0, 0]}, **scope},
-                {"kind": "step", "order": 4, "frame": 1, "command": 2,
-                 "ground": -1, "after": {"origin": [0, 0, 0]}, **scope},
-                {"kind": "step", "order": 6,
-                 "frame": humantrace.UINT32_MAX, "command": 3,
-                 "ground": 0, "after": {"origin": [1, 2, 3]}, **scope},
-            ],
-            "hook_events": [
-                {"kind": "hook-fire", "order": 2, "frame": 0,
-                 "after_command": 1, "hook": 2, "hook_event": 1, **scope},
-                {"kind": "hook-attach", "order": 3, "frame": 0,
-                 "after_command": 1, "hook": 2, "hook_event": 2, **scope},
-                {"kind": "hook-release", "order": 5, "frame": 1,
-                 "after_command": 2, "hook": 2, "hook_event": 3, **scope},
-            ],
-        }
-        observations = humantrace.derive_v3_learning_observations(
-            session, 1, 1,
-        )
-        cost = next(item for item in observations
-                    if item["kind"] == "hook-cost")["effective_cost_ms"]
-        self.assertEqual(cost, humantrace.UINT32_MAX * 2)
-
     def test_physics_change_starts_an_exactly_bound_segment(self) -> None:
         ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
@@ -353,9 +322,6 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 directory / f"{PREFIX}000001.jsonl",
                 str(first[-1]["sha256"]),
             )
-            assembled = humantrace.read_sessions(
-                directory / f"{PREFIX}000001.jsonl"
-            )
             isolated = directory / "standalone"
             isolated.mkdir()
             continuation = directory / f"{PREFIX}000001.jsonl"
@@ -363,6 +329,8 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             copied.write_bytes(continuation.read_bytes())
             sessions = [first, second]
 
+            with self.assertRaisesRegex(ValueError, "session identity"):
+                humantrace.read_sessions(directory / f"{PREFIX}000001.jsonl")
             with self.assertRaisesRegex(ValueError, "zero-rooted"):
                 humantrace.read_sessions(copied)
 
@@ -371,47 +339,44 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
         self.assertEqual(sessions[1][0]["continuation"], 1)
         self.assertEqual(sessions[1][0]["session"], 0)
         self.assertEqual(sessions[1][0]["start_order"], 2)
-        self.assertEqual(len(assembled), 1)
-        self.assertEqual(assembled[0]["terminal_sha256"], second[-1]["sha256"])
-        self.assertEqual(
-            [path.name for path in assembled[0]["source_paths"]],
-            [f"{PREFIX}000000.jsonl", f"{PREFIX}000001.jsonl"],
-        )
 
     def test_segment_chain_crosses_six_digit_filename_boundary(self) -> None:
-        ensure_binary()
+        binary = ensure_io_binary()
         with tempfile.TemporaryDirectory() as temporary:
             subprocess.run(
-                [str(BINARY), temporary, "physics"], cwd=ROOT,
+                [str(binary), temporary, "consumer-boundary-source"], cwd=ROOT,
                 check=True, stdout=subprocess.DEVNULL,
             )
             directory = Path(temporary)
-            old_root = directory / f"{PREFIX}000000.jsonl"
-            old_continuation = directory / f"{PREFIX}000001.jsonl"
-            root_records = read_valid_prefix(old_root)
-            continuation_records = read_valid_prefix(
-                old_continuation, str(root_records[-1]["sha256"]),
-            )
-            root_records[0]["session"] = 999999
-            root_records[0]["segment"] = 999999
-            continuation_records[0]["session"] = 999999
-            continuation_records[0]["segment"] = 1000000
-            old_root.unlink()
-            old_continuation.unlink()
-            root_path = directory / f"{PREFIX}999999.jsonl"
-            continuation_path = directory / f"{PREFIX}1000000.jsonl"
-            rewritten_root = write_rechained_v3(root_path, root_records)
-            write_rechained_v3(
-                continuation_path,
-                continuation_records,
-                str(rewritten_root[-1]["sha256"]),
-            )
+            originals = sorted(directory.glob(f"{PREFIX}*.jsonl"),
+                               key=lambda path: humantrace._v3_filename_segment(path))
+            self.assertGreaterEqual(len(originals), 2)
+            previous = "0" * 64
+            groups: list[list[dict[str, object]]] = []
+            for original in originals:
+                records = read_valid_prefix(original, previous)
+                previous = str(records[-1]["sha256"])
+                groups.append(records)
+                original.unlink()
+            previous = "0" * 64
+            renamed: list[str] = []
+            for offset, records in enumerate(groups):
+                segment = 999999 + offset
+                records[0]["session"] = 999999
+                records[0]["segment"] = segment
+                destination = directory / f"{PREFIX}{segment:06d}.jsonl"
+                rewritten = write_rechained_v3(destination, records, previous)
+                previous = str(rewritten[-1]["sha256"])
+                renamed.append(destination.name)
             assembled = humantrace.read_sessions(directory)
 
         self.assertEqual(
             [path.name for path in assembled[0]["source_paths"]],
-            [f"{PREFIX}999999.jsonl", f"{PREFIX}1000000.jsonl"],
+            renamed,
         )
+        self.assertEqual(renamed[:2],
+                         [f"{PREFIX}999999.jsonl",
+                          f"{PREFIX}1000000.jsonl"])
 
     def test_durable_spools_reject_tampering_and_keep_root_fifo(self) -> None:
         ensure_binary()
@@ -435,9 +400,23 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_learning_host_reuses_one_cursor_and_retries_receipts(self) -> None:
+    def test_passive_collection_is_restart_safe(self) -> None:
         ensure_binary()
-        for mode in ("host-sequential", "host-receipt-failure"):
+        with tempfile.TemporaryDirectory() as temporary:
+            written = subprocess.run(
+                [str(BINARY), temporary, "consumer-restart-write"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(written.returncode, 0, written.stderr)
+            read = subprocess.run(
+                [str(BINARY), temporary, "consumer-restart-read"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(read.returncode, 0, read.stderr)
+
+    def test_collection_isolates_scopes_and_preserves_first_occurrence(self) -> None:
+        ensure_binary()
+        for mode in ("consumer-scope-isolation", "consumer-first-occurrence"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 completed = subprocess.run(
                     [str(BINARY), temporary, mode], cwd=ROOT,
@@ -445,167 +424,42 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_learning_state_restores_before_receipts_skip_evidence(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-restart-write"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            state_path, = Path(temporary).glob("*.state")
-            encoded = state_path.read_bytes()
-            self.assertEqual(len(encoded), 104 + 8 + 3 * 52)
-            self.assertEqual(encoded[:4], b"SGLS")
-            self.assertEqual(int.from_bytes(encoded[4:6], "little"), 1)
-            self.assertEqual(int.from_bytes(encoded[6:8], "little"), 104)
-            self.assertEqual(
-                [int.from_bytes(encoded[offset:offset + 8], "little")
-                 for offset in (8, 16, 24, 32)],
-                [303, 404, 101, 202],
-            )
-            self.assertEqual(int.from_bytes(encoded[40:48], "little"), 4)
-            self.assertEqual(int.from_bytes(encoded[48:56], "little"), 4)
-            self.assertEqual(int.from_bytes(encoded[56:64], "little"), 1)
-            self.assertEqual(int.from_bytes(encoded[64:72], "little"), 3)
-            digest_input = bytearray(encoded)
-            digest_input[72:104] = bytes(32)
-            self.assertEqual(encoded[72:104], hashlib.sha256(digest_input).digest())
-            self.assertEqual(int.from_bytes(encoded[104:112], "little"), 500000)
-            receipts = encoded[112:]
-            self.assertEqual(
-                [int.from_bytes(receipts[offset + 32:offset + 36], "little")
-                 for offset in (0, 52, 104)], [1, 1, 1]
-            )
-            self.assertEqual(
-                [int.from_bytes(receipts[offset + 36:offset + 44], "little")
-                 for offset in (0, 52, 104)], [11, 12, 13]
-            )
-            self.assertEqual(
-                [int.from_bytes(receipts[offset + 44:offset + 52], "little")
-                 for offset in (0, 52, 104)], [2, 3, 4]
-            )
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-restart-read"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_learning_state_rejects_noncanonical_truncated_and_trailing(self) -> None:
-        ensure_binary()
-
-        def noncanonical_header(encoded: bytes) -> bytes:
-            changed = bytearray(encoded)
-            changed[6:8] = (105).to_bytes(2, "little")
-            changed[72:104] = bytes(32)
-            changed[72:104] = hashlib.sha256(changed).digest()
-            return bytes(changed)
-
-        mutations = (
-            lambda encoded: encoded[:-1],
-            lambda encoded: encoded + b"\x00",
-            noncanonical_header,
-        )
-        for mutate in mutations:
-            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as temporary:
-                written = subprocess.run(
-                    [str(BINARY), temporary, "host-restart-write"], cwd=ROOT,
-                    text=True, capture_output=True,
-                )
-                self.assertEqual(written.returncode, 0, written.stderr)
-                state_path, = Path(temporary).glob("*.state")
-                state_path.write_bytes(mutate(state_path.read_bytes()))
-                rejected = subprocess.run(
-                    [str(BINARY), temporary, "host-state-invalid"], cwd=ROOT,
-                    text=True, capture_output=True,
-                )
-                self.assertEqual(rejected.returncode, 0, rejected.stderr)
-
-    def test_learning_store_requires_exact_transaction_progression(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-store-progression"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_torn_learning_state_never_suppresses_evidence(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-state-torn"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_learning_rejects_cross_physics_root(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-physics-drift"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-
     @unittest.skipUnless(shutil.which("strace"), "strace is required")
-    def test_live_callbacks_never_sync_and_postmatch_sync_is_bounded(self) -> None:
-        ensure_binary()
-        for mode, maximum_syncs in (("long-stream-live", 0),
-                                    ("long-stream", 4)):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
-                trace = Path(temporary) / "syncs.txt"
-                completed = subprocess.run(
-                    ["strace", "-qq", "-e", "trace=fsync,fdatasync",
-                     "-o", str(trace), str(BINARY), temporary, mode],
-                    cwd=ROOT,
-                    text=True,
-                    capture_output=True,
-                )
-                self.assertEqual(completed.returncode, 0, completed.stderr)
-                syncs = len(re.findall(r"^(?:f|fdata)sync\(",
-                                       trace.read_text(encoding="utf-8"),
-                                       flags=re.MULTILINE))
-                self.assertLessEqual(syncs, maximum_syncs)
-
-    def test_receipts_deny_absent_and_typo_scopes(self) -> None:
+    def test_production_capture_does_not_read_evidence_without_consumer(self) -> None:
         ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "syscalls.txt"
             completed = subprocess.run(
-                [str(BINARY), temporary, "accepted-scope-denial"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_learning_host_commits_scopes_by_first_occurrence(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-first-occurrence"], cwd=ROOT,
-                text=True, capture_output=True,
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_learning_host_stream_visit_count_is_linear(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-linearity"], cwd=ROOT,
-                text=True, capture_output=True,
+                ["strace", "-qq", "-e", "trace=openat,getdents64",
+                 "-o", str(trace), str(BINARY), temporary,
+                 "consumer-produce-only"],
+                cwd=ROOT, text=True, capture_output=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
+            evidence = [
+                path for path in Path(temporary).iterdir()
+                if path.suffix in (".jsonl", ".spool")
+            ]
+            self.assertEqual(len(evidence), 2)
+            syscalls = trace.read_text(encoding="utf-8").splitlines()
+            for path in evidence:
+                self.assertFalse(any(
+                    str(path) in line and "O_RDONLY" in line
+                    and "O_DIRECTORY" not in line
+                    for line in syscalls
+                ), path.name)
 
     @unittest.skipUnless(shutil.which("strace"), "strace is required")
     def test_authenticated_collection_opens_each_rotated_file_once(self) -> None:
         binary = ensure_io_binary()
         measurements: list[tuple[int, int]] = []
-        for count in (64, 128):
+        for count in (64, 128, 256, 512):
             with self.subTest(count=count), tempfile.TemporaryDirectory() as temporary:
                 trace = Path(temporary) / "syscalls.txt"
                 completed = subprocess.run(
                     ["strace", "-qq", "-e", "trace=openat,getdents64",
                      "-o", str(trace), str(binary), temporary,
-                     f"host-io-{count}"],
+                     f"consumer-io-{count}"],
                     cwd=ROOT,
                     text=True,
                     capture_output=True,
@@ -613,7 +467,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 evidence = sorted(
                     path for path in Path(temporary).iterdir()
-                    if path.suffix in (".jsonl", ".learning")
+                    if path.suffix in (".jsonl", ".spool")
                 )
                 self.assertGreater(
                     sum(path.suffix == ".jsonl" for path in evidence), 1
@@ -628,15 +482,16 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                     )
                     self.assertEqual(occurrences, 1, path.name)
                     read_opens += occurrences
-                directory_reads = len(re.findall(r"^getdents64\(", syscalls,
-                                                   flags=re.MULTILINE))
-                # Each scan issues one data read and one EOF read. This mode
-                # scans once before capture and once after.
-                self.assertLessEqual(directory_reads, 4)
+                directory_opens = sum(
+                    temporary in line and "O_DIRECTORY" in line
+                    for line in syscalls.splitlines()
+                )
+                self.assertEqual(directory_opens, 1)
                 measurements.append((len(evidence), read_opens))
-        self.assertLessEqual(measurements[1][0], measurements[0][0] * 2 + 2)
-        self.assertEqual(measurements[0][0], measurements[0][1])
-        self.assertEqual(measurements[1][0], measurements[1][1])
+        for previous, current in zip(measurements, measurements[1:]):
+            self.assertLessEqual(current[0], previous[0] * 2 + 2)
+        for files, read_opens in measurements:
+            self.assertEqual(files, read_opens)
 
     @unittest.skipUnless(shutil.which("strace"), "strace is required")
     def test_authenticated_collection_opens_each_multi_root_file_once(self) -> None:
@@ -645,7 +500,8 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             trace = Path(temporary) / "syscalls.txt"
             completed = subprocess.run(
                 ["strace", "-qq", "-e", "trace=openat,getdents64",
-                 "-o", str(trace), str(binary), temporary, "host-io-roots"],
+                 "-o", str(trace), str(binary), temporary,
+                 "consumer-io-roots"],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
@@ -653,10 +509,10 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             evidence = sorted(
                 path for path in Path(temporary).iterdir()
-                if path.suffix in (".jsonl", ".learning")
+                if path.suffix in (".jsonl", ".spool")
             )
             self.assertEqual(
-                sum(path.suffix == ".learning" for path in evidence), 8
+                sum(path.suffix == ".spool" for path in evidence), 8
             )
             self.assertGreater(
                 sum(path.suffix == ".jsonl" for path in evidence), 8
@@ -669,20 +525,12 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                     for line in syscalls.splitlines()
                 )
                 self.assertEqual(occurrences, 1, path.name)
-            directory_reads = len(re.findall(r"^getdents64\(", syscalls,
-                                               flags=re.MULTILINE))
-            self.assertLessEqual(directory_reads, 4)
-
-    def test_learning_host_accepts_16385_event_postmatch(self) -> None:
-        ensure_binary()
-        with tempfile.TemporaryDirectory() as temporary:
-            completed = subprocess.run(
-                [str(BINARY), temporary, "host-long-postmatch"], cwd=ROOT,
-                text=True, capture_output=True,
+            directory_opens = sum(
+                temporary in line and "O_DIRECTORY" in line
+                for line in syscalls.splitlines()
             )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(directory_opens, 1)
 
-    @unittest.skipIf(os.name == "nt", "fork is POSIX-only")
     def test_concurrent_processes_claim_unique_sessions(self) -> None:
         ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
