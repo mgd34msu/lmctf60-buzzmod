@@ -4,8 +4,8 @@
 
 static int IntervalValid(const sg_rune_interval_t *interval)
 {
-	return interval && isfinite(interval->min_value) &&
-		isfinite(interval->max_value) &&
+	return interval && SG_DestinationFloatValid(interval->min_value) &&
+		SG_DestinationFloatValid(interval->max_value) &&
 		interval->min_value <= interval->max_value;
 }
 
@@ -17,8 +17,9 @@ static int Interval3Valid(const sg_rune_interval3_t *interval)
 
 static int VectorValid(const sg_rune_vec3_t *vector)
 {
-	return vector && isfinite(vector->value[0]) &&
-		isfinite(vector->value[1]) && isfinite(vector->value[2]);
+	return vector && SG_DestinationFloatValid(vector->value[0]) &&
+		SG_DestinationFloatValid(vector->value[1]) &&
+		SG_DestinationFloatValid(vector->value[2]);
 }
 
 static int ErrorIntervalValid(const sg_rune_interval_t *interval)
@@ -71,7 +72,8 @@ int SG_LocalizedFieldStateValid(const sg_localized_field_state_t *state)
 		state->sampled_at_ms != 0U &&
 		SG_RuneStateChartIdValid(&state->chart) &&
 		SG_RuneStateModeValid(&state->mode) && VectorValid(&state->position) &&
-		VectorValid(&state->velocity) && isfinite(state->elapsed_ms) &&
+		VectorValid(&state->velocity) &&
+		SG_DestinationFloatValid(state->elapsed_ms) &&
 		state->elapsed_ms >= 0.0f;
 }
 

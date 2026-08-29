@@ -3,10 +3,14 @@
 #include <string.h>
 
 #include "slipgate/sg_rune_dynamics_model.h"
+#include "slipgate/sg_rune_dynamics_model_internal.h"
 
 typedef sg_field_status_t (*field_create_fn)(
-	const sg_rune_runtime_snapshot_t *, const sg_rune_dynamics_model_t *,
-	sg_field_service_t **);
+	const sg_field_model_publication_t *, sg_field_service_t **);
+typedef sg_field_status_t (*field_publication_issue_fn)(
+	const sg_field_model_source_t *, const sg_rune_runtime_snapshot_t *,
+	const sg_rune_dynamics_model_t *, sg_field_model_publication_t **);
+typedef void (*field_publication_destroy_fn)(sg_field_model_publication_t *);
 typedef sg_field_status_t (*field_resolve_fn)(sg_field_service_t *,
 	const sg_destination_terminal_t *, const sg_field_environment_t *, uint64_t,
 	sg_field_handle_t *);
@@ -21,7 +25,13 @@ typedef sg_field_status_t (*field_release_fn)(sg_field_service_t *,
 	const sg_field_handle_t *);
 
 _Static_assert(_Generic(&SG_FieldServiceCreate, field_create_fn: 1,
-	default: 0), "field create must consume the aggregate dynamics model");
+	default: 0), "field create must consume an authenticated publication");
+_Static_assert(_Generic(&SG_FieldModelPublicationIssue,
+	field_publication_issue_fn: 1, default: 0),
+	"only an opaque model source may publish the aggregate dynamics model");
+_Static_assert(_Generic(&SG_FieldModelPublicationDestroy,
+	field_publication_destroy_fn: 1, default: 0),
+	"model publication lifetime must remain owner controlled");
 _Static_assert(_Generic(&SG_FieldServiceResolve, field_resolve_fn: 1,
 	default: 0), "field resolve signature changed");
 _Static_assert(_Generic(&SG_FieldServiceRefresh, field_refresh_fn: 1,
@@ -30,6 +40,10 @@ _Static_assert(_Generic(&SG_FieldServiceQuery, field_query_fn: 1,
 	default: 0), "field query signature changed");
 _Static_assert(_Generic(&SG_FieldServiceRelease, field_release_fn: 1,
 	default: 0), "field release signature changed");
+_Static_assert(SG_FIELD_STATUS_MODEL_INCOMPLETE != SG_FIELD_STATUS_PROOF_FAILED,
+	"missing product coverage must not masquerade as a failed proof");
+_Static_assert(SG_FIELD_STATUS_NUMERICAL_ERROR != SG_FIELD_STATUS_PROOF_FAILED,
+	"numerical failure must not alter exact classification");
 
 static int failures;
 
@@ -82,26 +96,32 @@ typedef struct dynamics_fixture_s
 	sg_rune_model_t rune_model;
 	sg_phase_coordinate_t phase_coordinate;
 	sg_rune_runtime_snapshot_t snapshot;
-	sg_rune_state_vertex_t vertices[8];
+	sg_rune_state_vertex_t vertices[16];
 	sg_rune_state_chart_t charts[1];
-	sg_rune_state_simplex_t simplices[1];
+	sg_rune_state_simplex_t simplices[2];
 	sg_rune_state_domain_t domains[1];
 	sg_rune_control_fiber_t fibers[1];
 	sg_rune_control_domain_t control_domains[1];
 	sg_rune_response_patch_t patches[1];
 	sg_rune_boundary_transfer_t transfers[1];
 	sg_field_reach_atom_t reach_atoms[2];
-	sg_field_reach_atom_ref_t outcome_destination_atoms[3];
+	sg_field_outcome_cover_piece_t outcome_cover_pieces[4];
 	sg_field_guard_requirement_t guard_requirements[2];
 	sg_field_guard_effect_t guard_effects[1];
 	sg_field_outcome_t outcomes[3];
 	sg_field_choice_t choices[2];
 	sg_field_local_progress_kernel_t local_progress_kernels[1];
 	sg_field_refinement_node_t refinement_nodes[2];
+	sg_field_refinement_vertex_t refinement_vertices[16];
+	sg_field_refinement_vertex_ref_t node_vertices[16];
+	sg_field_refinement_face_t refinement_faces[16];
+	sg_field_refinement_vertex_ref_t face_vertices[112];
+	sg_field_refinement_face_incidence_t face_incidences[16];
+	sg_field_refinement_face_ref_t node_faces[16];
 	uint32_t refinement_roots[2];
 	sg_field_refinement_node_ref_t local_progress_sources[1];
 	sg_field_choice_ref_t local_progress_choices[1];
-	sg_field_progress_target_t local_progress_targets[2];
+	sg_field_progress_target_t local_progress_targets[3];
 	sg_rune_field_region_t regions[1];
 	uint32_t chart_leaf_regions[1];
 	uint32_t domain_leaf_regions[1];
@@ -139,7 +159,7 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->snapshot.model = &fixture->rune_model;
 	fixture->snapshot.phases = &fixture->phase_coordinate;
 
-	for (index = 0U; index < 8U; index++)
+	for (index = 0U; index < 16U; index++)
 	{
 		fixture->vertices[index].id.value =
 			Stable(SG_RUNE_ORDER_STATE_VERTEX, (uint32_t)index + 1U);
@@ -153,6 +173,22 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->vertices[5].velocity.value[1] = 1.0f;
 	fixture->vertices[6].velocity.value[2] = 1.0f;
 	fixture->vertices[7].elapsed_ms = 1.0f;
+	for (index = 0U; index < 7U; index++)
+	{
+		fixture->vertices[index + 8U].position =
+			fixture->vertices[index + 1U].position;
+		fixture->vertices[index + 8U].velocity =
+			fixture->vertices[index + 1U].velocity;
+		fixture->vertices[index + 8U].elapsed_ms =
+			fixture->vertices[index + 1U].elapsed_ms;
+	}
+	fixture->vertices[15].position.value[0] = 1.0f;
+	fixture->vertices[15].position.value[1] = 1.0f;
+	fixture->vertices[15].position.value[2] = 1.0f;
+	fixture->vertices[15].velocity.value[0] = 1.0f;
+	fixture->vertices[15].velocity.value[1] = 1.0f;
+	fixture->vertices[15].velocity.value[2] = 1.0f;
+	fixture->vertices[15].elapsed_ms = 1.0f;
 	chart = &fixture->charts[0];
 	chart->id.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
 	chart->configuration_cell.value = Stable(SG_RUNE_ORDER_CELL, 1U);
@@ -161,8 +197,8 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	chart->embedding.velocity = Interval3(-320.0f, 320.0f);
 	chart->embedding.elapsed_ms = Interval(0.0f, 100.0f);
 	chart->embedding.dimension_count = SG_RUNE_STATE_DIMENSION_COUNT;
-	chart->state_vertices = (sg_rune_state_vertex_span_t){ 0U, 8U };
-	chart->simplices = (sg_rune_state_simplex_span_t){ 0U, 1U };
+	chart->state_vertices = (sg_rune_state_vertex_span_t){ 0U, 16U };
+	chart->simplices = (sg_rune_state_simplex_span_t){ 0U, 2U };
 	chart->state_domains = (sg_rune_state_domain_span_t){ 0U, 1U };
 	chart->control_fibers = (sg_rune_control_fiber_span_t){ 0U, 1U };
 	chart->response_patches = (sg_rune_response_patch_span_t){ 0U, 1U };
@@ -175,10 +211,15 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->simplices[0].chart = chart->id;
 	fixture->simplices[0].vertices =
 		(sg_rune_state_vertex_span_t){ 0U, 8U };
+	fixture->simplices[1].id.value =
+		Stable(SG_RUNE_ORDER_STATE_SIMPLEX, 2U);
+	fixture->simplices[1].chart = chart->id;
+	fixture->simplices[1].vertices =
+		(sg_rune_state_vertex_span_t){ 8U, 8U };
 	fixture->domains[0].id.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U);
 	fixture->domains[0].chart = chart->id;
 	fixture->domains[0].simplices =
-		(sg_rune_state_simplex_span_t){ 0U, 1U };
+		(sg_rune_state_simplex_span_t){ 0U, 2U };
 	fixture->fibers[0].id.value = Stable(SG_RUNE_ORDER_CONTROL_FIBER, 1U);
 	fixture->fibers[0].source_chart = chart->id;
 	fixture->fibers[0].domain.value =
@@ -202,9 +243,9 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	patch->source_chart = chart->id;
 	patch->source_simplex = fixture->simplices[0].id;
 	patch->controls = (sg_rune_control_fiber_span_t){ 0U, 1U };
-	patch->flow.position = Interval3(-1.0f, 1.0f);
-	patch->flow.velocity = Interval3(-2.0f, 2.0f);
-	patch->flow.elapsed_ms = Interval(1.0f, 2.0f);
+	patch->flow.position = Interval3(0.0f, 1.0f);
+	patch->flow.velocity = Interval3(0.0f, 1.0f);
+	patch->flow.elapsed_ms = Interval(0.0f, 1.0f);
 	patch->running_cost = (sg_rune_cost_bounds_t){ 1000U, 2000U };
 	patch->destination_domains =
 		(sg_rune_state_domain_span_t){ 0U, 1U };
@@ -227,30 +268,116 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 			Stable(SG_RUNE_ORDER_FIELD_REACH_ATOM, (uint32_t)index + 1U);
 		fixture->reach_atoms[index].domain = fixture->domains[0].id;
 		fixture->reach_atoms[index].simplices =
-			(sg_rune_state_simplex_span_t){ 0U, 1U };
-		fixture->reach_atoms[index].state_bounds = patch->flow;
+			(sg_rune_state_simplex_span_t){ (uint32_t)index, 1U };
+		fixture->reach_atoms[index].state_bounds.position =
+			Interval3(0.0f, 1.0f);
+		fixture->reach_atoms[index].state_bounds.velocity =
+			Interval3(0.0f, 1.0f);
+		fixture->reach_atoms[index].state_bounds.elapsed_ms =
+			Interval(0.0f, 1.0f);
 		fixture->reach_atoms[index].partition_proof.value =
 			Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 20U);
 		fixture->refinement_nodes[index].id.value = Stable(
 			SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, (uint32_t)index + 1U);
 		fixture->refinement_nodes[index].parent = UINT32_MAX;
 		fixture->refinement_nodes[index].atom = fixture->reach_atoms[index].id;
-		fixture->refinement_nodes[index].state_bounds = patch->flow;
+		fixture->refinement_nodes[index].vertices =
+			(sg_field_refinement_vertex_ref_span_t){ (uint32_t)(index * 8U), 8U };
+		fixture->refinement_nodes[index].faces =
+			(sg_field_refinement_face_ref_span_t){ (uint32_t)(index * 8U), 8U };
+		fixture->refinement_nodes[index].orientation = 1;
+		fixture->refinement_nodes[index].state_bounds =
+			fixture->reach_atoms[index].state_bounds;
 		fixture->refinement_nodes[index].interpolation_error.position =
 			Interval3(0.0f, 0.0f);
 		fixture->refinement_nodes[index].interpolation_error.velocity =
 			Interval3(0.0f, 0.0f);
 		fixture->refinement_nodes[index].interpolation_error.elapsed_ms =
 			Interval(0.0f, 0.0f);
-		fixture->refinement_nodes[index].proof.value =
+		fixture->refinement_nodes[index].geometry_proof.value =
 			Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 30U);
+		fixture->refinement_nodes[index].interpolation_proof.value =
+			Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 32U);
 		fixture->refinement_roots[index] = (uint32_t)index;
 	}
-	fixture->reach_atoms[1].state_bounds.position = Interval3(-2.0f, 2.0f);
-	fixture->reach_atoms[1].state_bounds.velocity = Interval3(-3.0f, 3.0f);
-	fixture->reach_atoms[1].state_bounds.elapsed_ms = Interval(0.0f, 3.0f);
-	fixture->refinement_nodes[1].state_bounds =
-		fixture->reach_atoms[1].state_bounds;
+	for (index = 0U; index < 9U; index++)
+	{
+		const sg_rune_state_vertex_t *source = index < 8U ?
+			&fixture->vertices[index] : &fixture->vertices[15];
+		fixture->refinement_vertices[index].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_VERTEX, (uint32_t)index + 1U);
+		fixture->refinement_vertices[index].position = source->position;
+		fixture->refinement_vertices[index].velocity = source->velocity;
+		fixture->refinement_vertices[index].elapsed_ms = source->elapsed_ms;
+		fixture->refinement_vertices[index].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 100U);
+	}
+	for (index = 0U; index < 8U; index++)
+	{
+		fixture->node_vertices[index] = fixture->refinement_vertices[index].id;
+		fixture->node_vertices[index + 8U] =
+			fixture->refinement_vertices[index + 1U].id;
+	}
+	for (index = 0U; index < 15U; index++)
+	{
+		fixture->refinement_faces[index].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_FACE, (uint32_t)index + 1U);
+		fixture->refinement_faces[index].vertices =
+			(sg_field_refinement_vertex_ref_span_t){ (uint32_t)(index * 7U), 7U };
+		fixture->refinement_faces[index].parent_face.value =
+			SG_RUNE_STABLE_ID_NONE;
+		fixture->refinement_faces[index].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 130U);
+	}
+	/* Face zero is the exact shared face: node 0 omits vertex 0 and node 1
+	 * omits vertex 7. All remaining faces are exterior. */
+	fixture->refinement_faces[0].incidences =
+		(sg_field_refinement_incidence_span_t){ 0U, 2U };
+	fixture->face_incidences[0].node = fixture->refinement_nodes[0].id;
+	fixture->face_incidences[0].local_face = 0U;
+	fixture->face_incidences[0].orientation = 1;
+	fixture->face_incidences[1].node = fixture->refinement_nodes[1].id;
+	fixture->face_incidences[1].local_face = 7U;
+	fixture->face_incidences[1].orientation = -1;
+	for (index = 0U; index < 7U; index++)
+		fixture->face_vertices[index] = fixture->node_vertices[index + 1U];
+	fixture->node_faces[0] = fixture->refinement_faces[0].id;
+	fixture->node_faces[15] = fixture->refinement_faces[0].id;
+	{
+		size_t face_index = 1U;
+		size_t incidence_index = 2U;
+		size_t node_index;
+		for (node_index = 0U; node_index < 2U; node_index++)
+		{
+			size_t local_face;
+			for (local_face = 0U; local_face < 8U; local_face++)
+			{
+				size_t node_vertex;
+				size_t face_vertex = 0U;
+				if ((node_index == 0U && local_face == 0U) ||
+				    (node_index == 1U && local_face == 7U))
+					continue;
+				fixture->refinement_faces[face_index].incidences =
+					(sg_field_refinement_incidence_span_t){
+						(uint32_t)incidence_index, 1U };
+				fixture->face_incidences[incidence_index].node =
+					fixture->refinement_nodes[node_index].id;
+				fixture->face_incidences[incidence_index].local_face =
+					(uint8_t)local_face;
+				fixture->face_incidences[incidence_index].orientation =
+					(local_face & 1U) != 0U ? -1 : 1;
+				fixture->node_faces[node_index * 8U + local_face] =
+					fixture->refinement_faces[face_index].id;
+				for (node_vertex = 0U; node_vertex < 8U; node_vertex++)
+					if (node_vertex != local_face)
+						fixture->face_vertices[face_index * 7U +
+							face_vertex++] = fixture->node_vertices[
+								node_index * 8U + node_vertex];
+				face_index++;
+				incidence_index++;
+			}
+		}
+	}
 	fixture->guard_effects[0].condition = transfer->condition;
 	fixture->guard_effects[0].required_before = SG_FIELD_GUARD_FALSE;
 	fixture->guard_effects[0].resulting_after = SG_FIELD_GUARD_TRUE;
@@ -265,9 +392,10 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 		fixture->outcomes[index].id.value =
 			Stable(SG_RUNE_ORDER_FIELD_OUTCOME, (uint32_t)index + 1U);
 		for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
-			fixture->outcomes[index].endpoint.coefficient[row][row] = 1.0;
-		fixture->outcomes[index].endpoint.exact_rank =
-			SG_RUNE_STATE_DIMENSION_COUNT;
+			fixture->outcomes[index].endpoint.coefficient[row]
+				[SG_RUNE_STATE_DIMENSION_COUNT] =
+					row == 0U ? 0.25f : 0.125f;
+		fixture->outcomes[index].endpoint.exact_rank = 0U;
 		fixture->outcomes[index].endpoint.operator_proof.value = Stable(
 			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 60U);
 		fixture->outcomes[index].endpoint.image_proof.value = Stable(
@@ -277,10 +405,27 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 		fixture->outcomes[index].remainder.position = Interval3(0.0f, 0.0f);
 		fixture->outcomes[index].remainder.velocity = Interval3(0.0f, 0.0f);
 		fixture->outcomes[index].remainder.elapsed_ms = Interval(0.0f, 0.0f);
-		fixture->outcome_destination_atoms[index] =
+		fixture->outcome_cover_pieces[index].source_refinement_node =
+			fixture->refinement_nodes[0].id;
+		fixture->outcome_cover_pieces[index].atom =
 			fixture->reach_atoms[1].id;
+		fixture->outcome_cover_pieces[index].refinement_node =
+			fixture->refinement_nodes[1].id;
+		fixture->outcome_cover_pieces[index].image_piece.position.x =
+			Interval(0.25f, 0.25f);
+		fixture->outcome_cover_pieces[index].image_piece.position.y =
+			Interval(0.125f, 0.125f);
+		fixture->outcome_cover_pieces[index].image_piece.position.z =
+			Interval(0.125f, 0.125f);
+		fixture->outcome_cover_pieces[index].image_piece.velocity =
+			Interval3(0.125f, 0.125f);
+		fixture->outcome_cover_pieces[index].image_piece.elapsed_ms =
+			Interval(0.125f, 0.125f);
+		fixture->outcome_cover_pieces[index].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 160U);
 		fixture->outcomes[index].destination_cover =
-			(sg_field_reach_atom_ref_span_t){ (uint32_t)index, 1U };
+			(sg_field_outcome_cover_piece_span_t){ (uint32_t)index, 1U };
+		fixture->outcomes[index].cover_split_dimension = 0U;
 		fixture->outcomes[index].absolute_time_advance =
 			(sg_rune_time_advance_t){ index == 2U ? 0U : 1U,
 				index == 2U ? 0U : 1U };
@@ -313,14 +458,22 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->local_progress_kernels[0].covered_sources =
 		(sg_field_refinement_node_ref_span_t){ 0U, 1U };
 	fixture->local_progress_kernels[0].target_atom = fixture->reach_atoms[1].id;
-	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds =
-		fixture->reach_atoms[1].state_bounds;
+	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds.position.x =
+		Interval(0.25f, 0.25f);
+	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds.position.y =
+		Interval(0.125f, 0.125f);
+	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds.position.z =
+		Interval(0.125f, 0.125f);
+	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds.velocity =
+		Interval3(0.125f, 0.125f);
+	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds.elapsed_ms =
+		Interval(0.125f, 0.125f);
 	fixture->local_progress_kernels[0].terminal_parameters.position_offset_bounds =
-		Interval3(-0.5f, 0.5f);
+		Interval3(0.0f, 0.0f);
 	fixture->local_progress_kernels[0].terminal_parameters.velocity_bounds =
-		Interval3(-3.0f, 3.0f);
+		Interval3(0.125f, 0.125f);
 	fixture->local_progress_kernels[0].terminal_parameters.local_elapsed_bounds =
-		Interval(0.0f, 3.0f);
+		Interval(0.125f, 0.125f);
 	fixture->local_progress_kernels[0].terminal_parameters.proof.value =
 		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 54U);
 	fixture->local_progress_kernels[0].admissible_choices =
@@ -355,11 +508,11 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->dynamics.rune_identity = fixture->snapshot.identity;
 	fixture->dynamics.topology_revision = fixture->snapshot.topology_revision;
 	fixture->dynamics.state_vertices = fixture->vertices;
-	fixture->dynamics.state_vertex_count = 8U;
+	fixture->dynamics.state_vertex_count = 16U;
 	fixture->dynamics.state_charts = fixture->charts;
 	fixture->dynamics.state_chart_count = 1U;
 	fixture->dynamics.state_simplices = fixture->simplices;
-	fixture->dynamics.state_simplex_count = 1U;
+	fixture->dynamics.state_simplex_count = 2U;
 	fixture->dynamics.state_domains = fixture->domains;
 	fixture->dynamics.state_domain_count = 1U;
 	fixture->dynamics.control_fibers = fixture->fibers;
@@ -372,9 +525,8 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->dynamics.boundary_transfer_count = 1U;
 	fixture->dynamics.reach_atoms = fixture->reach_atoms;
 	fixture->dynamics.reach_atom_count = 2U;
-	fixture->dynamics.outcome_destination_atoms =
-		fixture->outcome_destination_atoms;
-	fixture->dynamics.outcome_destination_atom_count = 3U;
+	fixture->dynamics.outcome_cover_pieces = fixture->outcome_cover_pieces;
+	fixture->dynamics.outcome_cover_piece_count = 3U;
 	fixture->dynamics.guard_requirements = fixture->guard_requirements;
 	fixture->dynamics.guard_requirement_count = 2U;
 	fixture->dynamics.guard_effects = fixture->guard_effects;
@@ -395,6 +547,19 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 		Stable(SG_RUNE_ORDER_FIELD_REFINEMENT_TREE, 1U);
 	fixture->dynamics.refinement_tree.nodes = fixture->refinement_nodes;
 	fixture->dynamics.refinement_tree.node_count = 2U;
+	fixture->dynamics.refinement_tree.vertices = fixture->refinement_vertices;
+	fixture->dynamics.refinement_tree.vertex_count = 9U;
+	fixture->dynamics.refinement_tree.node_vertices = fixture->node_vertices;
+	fixture->dynamics.refinement_tree.node_vertex_count = 16U;
+	fixture->dynamics.refinement_tree.faces = fixture->refinement_faces;
+	fixture->dynamics.refinement_tree.face_count = 15U;
+	fixture->dynamics.refinement_tree.face_vertices = fixture->face_vertices;
+	fixture->dynamics.refinement_tree.face_vertex_count = 105U;
+	fixture->dynamics.refinement_tree.face_incidences =
+		fixture->face_incidences;
+	fixture->dynamics.refinement_tree.face_incidence_count = 16U;
+	fixture->dynamics.refinement_tree.node_faces = fixture->node_faces;
+	fixture->dynamics.refinement_tree.node_face_count = 16U;
 	fixture->dynamics.refinement_tree.atom_roots = fixture->refinement_roots;
 	fixture->dynamics.refinement_tree.atom_count = 2U;
 	fixture->dynamics.refinement_tree.proof.value =
@@ -473,6 +638,12 @@ static void TestTypedIdsAndModes(void)
 		sg_field_reach_atom_id_t, SG_RUNE_ORDER_FIELD_REACH_ATOM);
 	CHECK_TYPED_ID(SG_FieldLocalProgressIdValid,
 		sg_field_local_progress_id_t, SG_RUNE_ORDER_FIELD_LOCAL_PROGRESS);
+	CHECK_TYPED_ID(SG_FieldRefinementVertexIdValid,
+		sg_field_refinement_vertex_id_t,
+		SG_RUNE_ORDER_FIELD_REFINEMENT_VERTEX);
+	CHECK_TYPED_ID(SG_FieldRefinementFaceIdValid,
+		sg_field_refinement_face_id_t,
+		SG_RUNE_ORDER_FIELD_REFINEMENT_FACE);
 	CHECK_TYPED_ID(SG_FieldRefinementNodeIdValid,
 		sg_field_refinement_node_id_t,
 		SG_RUNE_ORDER_FIELD_REFINEMENT_NODE);
@@ -540,9 +711,11 @@ static void TestChoiceOutcomeAndProgressContracts(void)
 	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	/* AND is the complete outcome span of one choice. */
 	fixture.choices[0].outcomes.count = 1U;
+	fixture.choices[1].outcomes = (sg_field_outcome_span_t){ 1U, 2U };
 	fixture.local_progress_kernels[0].whole_outcome_targets.count = 1U;
 	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	fixture.choices[0].outcomes.count = 2U;
+	fixture.choices[1].outcomes = (sg_field_outcome_span_t){ 2U, 1U };
 	fixture.local_progress_kernels[0].whole_outcome_targets.count = 2U;
 	fixture.outcomes[1].destination_cover.first = 3U;
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
@@ -561,7 +734,8 @@ static void TestChoiceOutcomeAndProgressContracts(void)
 	fixture.local_progress_kernels[0].minimum_lyapunov_decrease = 0.0f;
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	fixture.local_progress_kernels[0].minimum_lyapunov_decrease = 0.125f;
-	/* Zero absolute-time advance is legal and does not alter local elapsed. */
+	/* Zero absolute-time advance is legal; local elapsed remains governed by
+	 * the independent affine endpoint row. */
 	fixture.outcomes[2].absolute_time_advance =
 		(sg_rune_time_advance_t){ 0U, 0U };
 	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
@@ -588,16 +762,27 @@ static void TestExecutableCoverageAndOperatorRanks(void)
 	first.anchor.destination.kind = SG_DESTINATION_WAYPOINT;
 	first.anchor.destination.value.point.point_id = 902U;
 	first.anchor.destination_generation = 903U;
+	first.anchor.position[0] = 0.25f;
+	first.anchor.position[1] = 0.125f;
+	first.anchor.position[2] = 0.125f;
+	first.anchor.velocity[0] = 0.125f;
+	first.anchor.velocity[1] = 0.125f;
+	first.anchor.velocity[2] = 0.125f;
+	first.anchor.local_elapsed_ms = 0.125f;
+	first.velocity = (sg_destination_interval3_t){
+		{ 0.125f, 0.125f }, { 0.125f, 0.125f },
+		{ 0.125f, 0.125f }
+	};
+	first.local_elapsed_ms = (sg_destination_interval_t){ 0.125f, 0.125f };
 	second = first;
 	second.anchor.owner_identity = 904U;
 	second.anchor.destination.value.point.point_id = 905U;
 	second.anchor.destination_generation = 906U;
-	second.anchor.position[0] = 1.5f;
 	CHECK(SG_FieldLocalProgressKernelAcceptsCapture(
 		&fixture.local_progress_kernels[0], &first));
 	CHECK(SG_FieldLocalProgressKernelAcceptsCapture(
 		&fixture.local_progress_kernels[0], &second));
-	second.anchor.position[0] = 3.0f;
+	second.anchor.position[0] = 0.5f;
 	CHECK(!SG_FieldLocalProgressKernelAcceptsCapture(
 		&fixture.local_progress_kernels[0], &second));
 	saved = fixture.outcomes[0].endpoint;
@@ -609,19 +794,19 @@ static void TestExecutableCoverageAndOperatorRanks(void)
 		for (diagonal = 0U; diagonal < rank; diagonal++)
 			fixture.outcomes[0].endpoint.coefficient[diagonal][diagonal] = 1.0f;
 		fixture.outcomes[0].endpoint.exact_rank = (uint8_t)rank;
-		CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+		CHECK(SG_FieldOutcomeShapeValid(&fixture.outcomes[0]));
 	}
 	fixture.outcomes[0].endpoint.exact_rank = 2U;
 	memset(fixture.outcomes[0].endpoint.coefficient, 0,
 		sizeof(fixture.outcomes[0].endpoint.coefficient));
 	fixture.outcomes[0].endpoint.coefficient[0][0] = 1.0f;
-	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	CHECK(!SG_FieldOutcomeShapeValid(&fixture.outcomes[0]));
 	fixture.outcomes[0].endpoint = saved;
 	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
-	fixture.outcome_destination_atoms[0].value =
+	fixture.outcome_cover_pieces[0].atom.value =
 		Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U);
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
-	fixture.outcome_destination_atoms[0] = fixture.reach_atoms[1].id;
+	fixture.outcome_cover_pieces[0].atom = fixture.reach_atoms[1].id;
 	fixture.local_progress_sources[0].value =
 		Stable(SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, 999U);
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
@@ -633,6 +818,150 @@ static void TestExecutableCoverageAndOperatorRanks(void)
 	fixture.choices[0].guard_requirements.count = 2U;
 	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	fixture.guard_requirements[1] = fixture.guard_requirements[0];
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
+static void SplitFirstOutcomeCover(dynamics_fixture_t *fixture)
+{
+	fixture->outcome_cover_pieces[3] = fixture->outcome_cover_pieces[2];
+	fixture->outcome_cover_pieces[2] = fixture->outcome_cover_pieces[1];
+	fixture->outcome_cover_pieces[1] = fixture->outcome_cover_pieces[0];
+	fixture->outcomes[0].destination_cover.count = 2U;
+	fixture->outcomes[1].destination_cover.first = 2U;
+	fixture->outcomes[2].destination_cover.first = 3U;
+	fixture->dynamics.outcome_cover_piece_count = 4U;
+	fixture->outcome_cover_pieces[0].atom = fixture->reach_atoms[0].id;
+	fixture->outcome_cover_pieces[0].refinement_node =
+		fixture->refinement_nodes[0].id;
+	fixture->local_progress_targets[2] = fixture->local_progress_targets[1];
+	fixture->local_progress_targets[1] = fixture->local_progress_targets[0];
+	fixture->local_progress_targets[0].atom = fixture->reach_atoms[0].id;
+	fixture->local_progress_kernels[0].whole_outcome_targets.count = 3U;
+	fixture->dynamics.local_progress_target_count = 3U;
+}
+
+static void TestExactFieldPartitionAndCover(void)
+{
+	dynamics_fixture_t fixture;
+	uint32_t dimension;
+
+	BuildFixture(&fixture);
+	fixture.reach_atoms[1].simplices.first = 0U;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	fixture.outcome_cover_pieces[0].source_refinement_node =
+		fixture.refinement_nodes[1].id;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	SplitFirstOutcomeCover(&fixture);
+	/* One complete outcome may land on the shared face of two target atoms.
+	 * Local progress publishes both targets; the attractor derives ranks. */
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcome_cover_pieces[1].image_piece.position.x.min_value = 0.375f;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcome_cover_pieces[1].image_piece.position.x.min_value = 0.125f;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcome_cover_pieces[1].image_piece.position.x.min_value = 0.25f;
+	fixture.local_progress_kernels[0].whole_outcome_targets.count = 2U;
+	fixture.dynamics.local_progress_target_count = 2U;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+		fixture.outcomes[0].endpoint.coefficient[dimension]
+			[SG_RUNE_STATE_DIMENSION_COUNT] = 0.0f;
+	fixture.outcome_cover_pieces[0].image_piece.position = Interval3(0.0f, 0.0f);
+	fixture.outcome_cover_pieces[0].image_piece.velocity = Interval3(0.0f, 0.0f);
+	fixture.outcome_cover_pieces[0].image_piece.elapsed_ms = Interval(0.0f, 0.0f);
+	/* The origin is inside node 1's AABB but outside its 7-simplex. */
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	fixture.local_progress_kernels[0].terminal_parameters
+		.position_offset_bounds.x.max_value = 1.0f;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
+static void TestExactRootPartitionGeometry(void)
+{
+	dynamics_fixture_t fixture;
+	uint32_t dimension;
+
+	BuildFixture(&fixture);
+	/* Put the second opposite vertex on the first simplex side of their
+	 * shared face. Both cells remain full rank and keep the same AABB. */
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		if (dimension < 3U)
+		{
+			fixture.vertices[15].position.value[dimension] = 0.125f;
+			fixture.refinement_vertices[8].position.value[dimension] = 0.125f;
+		}
+		else if (dimension < 6U)
+		{
+			fixture.vertices[15].velocity.value[dimension - 3U] = 0.125f;
+			fixture.refinement_vertices[8].velocity.value[dimension - 3U] =
+				0.125f;
+		}
+		else
+		{
+			fixture.vertices[15].elapsed_ms = 0.125f;
+			fixture.refinement_vertices[8].elapsed_ms = 0.125f;
+		}
+	}
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	/* Split the declared shared face into two coincident boundary faces. The
+	 * cells remain individually valid and separated, but their domain now has
+	 * a topological cut, the zero-width limit of a sliver gap. */
+	{
+		sg_field_refinement_face_incidence_t second =
+			fixture.face_incidences[1];
+		size_t face;
+		size_t vertex;
+		for (face = 1U; face < 15U; face++)
+		{
+			fixture.face_incidences[face] = fixture.face_incidences[face + 1U];
+			fixture.refinement_faces[face].incidences.first--;
+		}
+		fixture.refinement_faces[0].incidences.count = 1U;
+		fixture.refinement_faces[15].id.value =
+			Stable(SG_RUNE_ORDER_FIELD_REFINEMENT_FACE, 16U);
+		fixture.refinement_faces[15].vertices =
+			(sg_field_refinement_vertex_ref_span_t){ 105U, 7U };
+		fixture.refinement_faces[15].incidences =
+			(sg_field_refinement_incidence_span_t){ 15U, 1U };
+		fixture.refinement_faces[15].parent_face.value = SG_RUNE_STABLE_ID_NONE;
+		fixture.refinement_faces[15].proof.value =
+			Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 200U);
+		for (vertex = 0U; vertex < 7U; vertex++)
+			fixture.face_vertices[105U + vertex] = fixture.face_vertices[vertex];
+		fixture.face_incidences[15] = second;
+		fixture.node_faces[15] = fixture.refinement_faces[15].id;
+		fixture.dynamics.refinement_tree.face_count = 16U;
+		fixture.dynamics.refinement_tree.face_vertex_count = 112U;
+	}
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
+static void TestConformingRefinementAndCanonicalFloats(void)
+{
+	dynamics_fixture_t fixture;
+
+	CHECK(SG_DestinationFloatValid(0.0f));
+	CHECK(!SG_DestinationFloatValid(-0.0f));
+	BuildFixture(&fixture);
+	fixture.outcomes[0].endpoint.coefficient[0]
+		[SG_RUNE_STATE_DIMENSION_COUNT] = -0.0f;
+	CHECK(!SG_FieldOutcomeShapeValid(&fixture.outcomes[0]));
+	BuildFixture(&fixture);
+	fixture.node_faces[15] = fixture.refinement_faces[14].id;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	fixture.face_incidences[1].orientation = 1;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	fixture.refinement_vertices[8].position.value[0] = -0.0f;
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 }
 
@@ -660,11 +989,14 @@ static void TestNearDegenerateSimplexGeometry(void)
 	dynamics_fixture_t fixture;
 
 	BuildFixture(&fixture);
-	fixture.charts[0].embedding.position = Interval3(0.0f, 1.0f);
+	fixture.charts[0].embedding.position.x = Interval(0.0f, 3.0f);
+	fixture.charts[0].embedding.position.y = Interval(0.0f, 1.0f);
+	fixture.charts[0].embedding.position.z = Interval(0.0f, 1.0f);
 	fixture.charts[0].embedding.velocity = Interval3(0.0f, 1.0f);
 	fixture.charts[0].embedding.elapsed_ms = Interval(0.0f, 1.0f);
 	fixture.vertices[7].elapsed_ms = 1e-16f;
-	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.refinement_vertices[7].elapsed_ms = 1e-16f;
+	CHECK(SG_RuneDynamicsGeometryValid(&fixture.dynamics));
 }
 
 static sg_rune_field_region_t Region(uint32_t ordinal, uint32_t parent,
@@ -1009,6 +1341,9 @@ int main(void)
 	TestAggregateOwnership();
 	TestChoiceOutcomeAndProgressContracts();
 	TestExecutableCoverageAndOperatorRanks();
+	TestExactFieldPartitionAndCover();
+	TestExactRootPartitionGeometry();
+	TestConformingRefinementAndCanonicalFloats();
 	TestSimplexGeometry();
 	TestNearDegenerateSimplexGeometry();
 	TestExactLeafOwnership();

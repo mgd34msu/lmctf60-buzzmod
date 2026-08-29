@@ -7,7 +7,7 @@
 
 #include "sg_rune_model.h"
 
-#define SG_RUNTIME_CONTRACT_VERSION UINT16_C(5)
+#define SG_RUNTIME_CONTRACT_VERSION UINT16_C(6)
 #define SG_DESTINATION_COST_INFINITE UINT32_MAX
 #define SG_DESTINATION_NO_CELL UINT32_MAX
 #define SG_DESTINATION_NO_PHASE UINT32_MAX
@@ -271,7 +271,7 @@ static inline int SG_DestinationMotionValid(sg_destination_motion_t motion)
 
 static inline int SG_DestinationFloatValid(float value)
 {
-	return isfinite(value) != 0;
+	return isfinite(value) != 0 && (value != 0.0f || !signbit(value));
 }
 
 static inline int SG_PhaseCoordinateValid(

@@ -6,7 +6,7 @@
 
 #include "sg_destination.h"
 
-#define SG_RUNE_DYNAMICS_MODEL_VERSION UINT16_C(2)
+#define SG_RUNE_DYNAMICS_MODEL_VERSION UINT16_C(3)
 #define SG_RUNE_STATE_DIMENSION_COUNT UINT8_C(7)
 #define SG_RUNE_FIELD_COST_INFINITE UINT64_MAX
 #define SG_RUNE_FIELD_NO_REGION UINT32_MAX
@@ -106,6 +106,18 @@ typedef struct sg_field_refinement_node_id_s
 } sg_field_refinement_node_id_t;
 typedef sg_field_refinement_node_id_t sg_field_refinement_node_ref_t;
 
+typedef struct sg_field_refinement_vertex_id_s
+{
+	sg_rune_stable_id_t value;
+} sg_field_refinement_vertex_id_t;
+typedef sg_field_refinement_vertex_id_t sg_field_refinement_vertex_ref_t;
+
+typedef struct sg_field_refinement_face_id_s
+{
+	sg_rune_stable_id_t value;
+} sg_field_refinement_face_id_t;
+typedef sg_field_refinement_face_id_t sg_field_refinement_face_ref_t;
+
 typedef struct sg_field_refinement_tree_id_s
 {
 	sg_rune_stable_id_t value;
@@ -189,11 +201,11 @@ typedef struct sg_field_guard_requirement_span_s
 	uint32_t count;
 } sg_field_guard_requirement_span_t;
 
-typedef struct sg_field_reach_atom_ref_span_s
+typedef struct sg_field_outcome_cover_piece_span_s
 {
 	uint32_t first;
 	uint32_t count;
-} sg_field_reach_atom_ref_span_t;
+} sg_field_outcome_cover_piece_span_t;
 
 typedef struct sg_field_refinement_node_ref_span_s
 {
@@ -218,6 +230,24 @@ typedef struct sg_field_refinement_node_span_s
 	uint32_t first;
 	uint32_t count;
 } sg_field_refinement_node_span_t;
+
+typedef struct sg_field_refinement_vertex_ref_span_s
+{
+	uint32_t first;
+	uint32_t count;
+} sg_field_refinement_vertex_ref_span_t;
+
+typedef struct sg_field_refinement_face_ref_span_s
+{
+	uint32_t first;
+	uint32_t count;
+} sg_field_refinement_face_ref_span_t;
+
+typedef struct sg_field_refinement_incidence_span_s
+{
+	uint32_t first;
+	uint32_t count;
+} sg_field_refinement_incidence_span_t;
 
 typedef enum sg_rune_state_mode_kind_e
 {
@@ -421,11 +451,24 @@ typedef struct sg_field_outcome_s
 	sg_field_outcome_id_t id;
 	sg_rune_affine_state_operator_t endpoint;
 	sg_rune_flow_enclosure_t remainder;
-	sg_field_reach_atom_ref_span_t destination_cover;
+	sg_field_outcome_cover_piece_span_t destination_cover;
+	/* The cover is a canonical exact slab partition of the outward-rounded
+	 * image along this state coordinate. */
+	uint8_t cover_split_dimension;
+	uint8_t reserved[3];
 	sg_rune_time_advance_t absolute_time_advance;
 	sg_field_guard_effect_span_t guard_effects;
 	sg_rune_dynamics_proof_ref_t proof;
 } sg_field_outcome_t;
+
+typedef struct sg_field_outcome_cover_piece_s
+{
+	sg_field_refinement_node_ref_t source_refinement_node;
+	sg_field_reach_atom_ref_t atom;
+	sg_field_refinement_node_ref_t refinement_node;
+	sg_rune_flow_enclosure_t image_piece;
+	sg_rune_dynamics_proof_ref_t proof;
+} sg_field_outcome_cover_piece_t;
 
 typedef enum sg_field_choice_kind_e
 {
@@ -481,9 +524,35 @@ typedef struct sg_field_progress_target_s
 {
 	sg_field_outcome_ref_t outcome;
 	sg_field_reach_atom_ref_t atom;
-	uint32_t maximum_target_rank;
-	uint32_t reserved;
 } sg_field_progress_target_t;
+
+typedef struct sg_field_refinement_vertex_s
+{
+	sg_field_refinement_vertex_id_t id;
+	sg_rune_vec3_t position;
+	sg_rune_vec3_t velocity;
+	float elapsed_ms;
+	sg_rune_dynamics_proof_ref_t proof;
+} sg_field_refinement_vertex_t;
+
+typedef struct sg_field_refinement_face_incidence_s
+{
+	sg_field_refinement_node_ref_t node;
+	uint8_t local_face;
+	int8_t orientation;
+	uint8_t reserved[2];
+} sg_field_refinement_face_incidence_t;
+
+typedef struct sg_field_refinement_face_s
+{
+	sg_field_refinement_face_id_t id;
+	sg_field_refinement_vertex_ref_span_t vertices;
+	sg_field_refinement_incidence_span_t incidences;
+	/* NONE for an interior or root-boundary face. A child-boundary face
+	 * names the exact parent face that contains it. */
+	sg_field_refinement_face_ref_t parent_face;
+	sg_rune_dynamics_proof_ref_t proof;
+} sg_field_refinement_face_t;
 
 typedef struct sg_field_refinement_node_s
 {
@@ -491,9 +560,14 @@ typedef struct sg_field_refinement_node_s
 	uint32_t parent;
 	sg_field_refinement_node_span_t children;
 	sg_field_reach_atom_ref_t atom;
+	sg_field_refinement_vertex_ref_span_t vertices;
+	sg_field_refinement_face_ref_span_t faces;
+	int8_t orientation;
+	uint8_t reserved[3];
 	sg_rune_flow_enclosure_t state_bounds;
 	sg_rune_flow_enclosure_t interpolation_error;
-	sg_rune_dynamics_proof_ref_t proof;
+	sg_rune_dynamics_proof_ref_t geometry_proof;
+	sg_rune_dynamics_proof_ref_t interpolation_proof;
 } sg_field_refinement_node_t;
 
 typedef struct sg_field_refinement_tree_s
@@ -501,6 +575,18 @@ typedef struct sg_field_refinement_tree_s
 	sg_field_refinement_tree_id_t id;
 	const sg_field_refinement_node_t *nodes;
 	size_t node_count;
+	const sg_field_refinement_vertex_t *vertices;
+	size_t vertex_count;
+	const sg_field_refinement_vertex_ref_t *node_vertices;
+	size_t node_vertex_count;
+	const sg_field_refinement_face_t *faces;
+	size_t face_count;
+	const sg_field_refinement_vertex_ref_t *face_vertices;
+	size_t face_vertex_count;
+	const sg_field_refinement_face_incidence_t *face_incidences;
+	size_t face_incidence_count;
+	const sg_field_refinement_face_ref_t *node_faces;
+	size_t node_face_count;
 	const uint32_t *children;
 	size_t child_count;
 	const uint32_t *atom_roots;
@@ -596,8 +682,8 @@ typedef struct sg_rune_dynamics_model_s
 	size_t boundary_transfer_count;
 	const sg_field_reach_atom_t *reach_atoms;
 	size_t reach_atom_count;
-	const sg_field_reach_atom_ref_t *outcome_destination_atoms;
-	size_t outcome_destination_atom_count;
+	const sg_field_outcome_cover_piece_t *outcome_cover_pieces;
+	size_t outcome_cover_piece_count;
 	const sg_field_guard_requirement_t *guard_requirements;
 	size_t guard_requirement_count;
 	const sg_field_guard_effect_t *guard_effects;
@@ -620,6 +706,10 @@ typedef struct sg_rune_dynamics_model_s
 } sg_rune_dynamics_model_t;
 
 typedef struct sg_field_service_s sg_field_service_t;
+/* Both handles are opaque. Only the RUNE dynamics owner can mint a source;
+ * only that source can publish a complete, authenticated product graph. */
+typedef struct sg_field_model_source_s sg_field_model_source_t;
+typedef struct sg_field_model_publication_s sg_field_model_publication_t;
 
 typedef struct sg_field_handle_s
 {
@@ -759,10 +849,16 @@ typedef enum sg_field_status_e
 	SG_FIELD_STATUS_OK = 0,
 	SG_FIELD_STATUS_INVALID_ARGUMENT,
 	SG_FIELD_STATUS_INVALID_MODEL,
+	/* The accepted RUNE publication lacks product states, transitions, or
+	 * local-progress coverage needed to classify this valid terminal. */
+	SG_FIELD_STATUS_MODEL_INCOMPLETE,
 	SG_FIELD_STATUS_IDENTITY_MISMATCH,
 	SG_FIELD_STATUS_STALE,
 	SG_FIELD_STATUS_UNREACHABLE,
 	SG_FIELD_STATUS_PROOF_FAILED,
+	/* Exact classification succeeded, but the bounded numerical field could
+	 * not satisfy its published error contract. */
+	SG_FIELD_STATUS_NUMERICAL_ERROR,
 	SG_FIELD_STATUS_STORAGE,
 	SG_FIELD_STATUS_CAPACITY,
 	SG_FIELD_STATUS_COUNT
@@ -789,6 +885,9 @@ int SG_FieldChoiceIdValid(const sg_field_choice_id_t *id);
 int SG_FieldOutcomeIdValid(const sg_field_outcome_id_t *id);
 int SG_FieldReachAtomIdValid(const sg_field_reach_atom_id_t *id);
 int SG_FieldLocalProgressIdValid(const sg_field_local_progress_id_t *id);
+int SG_FieldRefinementVertexIdValid(
+	const sg_field_refinement_vertex_id_t *id);
+int SG_FieldRefinementFaceIdValid(const sg_field_refinement_face_id_t *id);
 int SG_FieldRefinementNodeIdValid(const sg_field_refinement_node_id_t *id);
 int SG_FieldRefinementTreeIdValid(const sg_field_refinement_tree_id_t *id);
 int SG_RuneStateModeValid(const sg_rune_state_mode_t *mode);
@@ -824,9 +923,18 @@ int SG_FieldEnvironmentValid(const sg_field_environment_t *environment);
 int SG_FieldHandleValid(const sg_field_handle_t *handle);
 int SG_FieldGuidanceValid(const sg_field_guidance_t *guidance);
 
-sg_field_status_t SG_FieldServiceCreate(
+/* Publication deep-copies the complete graph. Missing state, choice, outcome,
+ * guard, time, or local-progress coverage returns MODEL_INCOMPLETE and never
+ * produces a publication. */
+sg_field_status_t SG_FieldModelPublicationIssue(
+	const sg_field_model_source_t *source,
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_rune_dynamics_model_t *dynamics_model,
+	sg_field_model_publication_t **publication_out);
+void SG_FieldModelPublicationDestroy(sg_field_model_publication_t *publication);
+
+sg_field_status_t SG_FieldServiceCreate(
+	const sg_field_model_publication_t *publication,
 	sg_field_service_t **service_out);
 void SG_FieldServiceDestroy(sg_field_service_t *service);
 sg_field_status_t SG_FieldServiceResolve(sg_field_service_t *service,

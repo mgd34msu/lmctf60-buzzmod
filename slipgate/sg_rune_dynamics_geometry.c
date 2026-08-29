@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define SG_RUNE_BINARY32_RANK_PRIME_COUNT 68U
+#define SG_RUNE_EXACT_INTEGER_LIMB_COUNT 64U
 
 _Static_assert(CHAR_BIT == 8, "binary32 rank requires eight-bit bytes");
 _Static_assert(sizeof(float) == sizeof(uint32_t),
@@ -23,6 +24,14 @@ typedef struct sg_rune_binary32_dyadic_s
 	int exponent;
 	int negative;
 } sg_rune_binary32_dyadic_t;
+
+typedef struct sg_rune_exact_integer_s
+{
+	uint32_t limb[SG_RUNE_EXACT_INTEGER_LIMB_COUNT];
+	size_t count;
+	int negative;
+	int overflow;
+} sg_rune_exact_integer_t;
 
 static const uint32_t rank_primes[] = {
 	UINT32_C(1000000007), UINT32_C(1000000009),
@@ -128,6 +137,257 @@ static sg_rune_binary32_dyadic_t Binary32Dyadic(float value)
 		result.exponent = (int)encoded_exponent - 150;
 	}
 	return result;
+}
+
+static void ExactNormalize(sg_rune_exact_integer_t *value)
+{
+	while (value->count != 0U && value->limb[value->count - 1U] == 0U)
+		value->count--;
+	if (value->count == 0U)
+		value->negative = 0;
+}
+
+static int ExactMagnitudeCompare(const sg_rune_exact_integer_t *left,
+	const sg_rune_exact_integer_t *right)
+{
+	size_t limb;
+	if (left->count != right->count)
+		return left->count < right->count ? -1 : 1;
+	limb = left->count;
+	while (limb != 0U)
+	{
+		limb--;
+		if (left->limb[limb] != right->limb[limb])
+			return left->limb[limb] < right->limb[limb] ? -1 : 1;
+	}
+	return 0;
+}
+
+static sg_rune_exact_integer_t ExactMagnitudeAdd(
+	const sg_rune_exact_integer_t *left,
+	const sg_rune_exact_integer_t *right)
+{
+	sg_rune_exact_integer_t result = { { 0U }, 0U, 0, 0 };
+	size_t count = left->count > right->count ? left->count : right->count;
+	uint64_t carry = 0U;
+	size_t limb;
+	for (limb = 0U; limb < count; limb++)
+	{
+		uint64_t sum = carry;
+		if (limb < left->count)
+			sum += left->limb[limb];
+		if (limb < right->count)
+			sum += right->limb[limb];
+		result.limb[limb] = (uint32_t)sum;
+		carry = sum >> 32U;
+	}
+	result.count = count;
+	if (carry != 0U)
+	{
+		if (count == SG_RUNE_EXACT_INTEGER_LIMB_COUNT)
+			result.overflow = 1;
+		else
+		{
+			result.limb[count] = (uint32_t)carry;
+			result.count++;
+		}
+	}
+	return result;
+}
+
+static sg_rune_exact_integer_t ExactMagnitudeSubtract(
+	const sg_rune_exact_integer_t *larger,
+	const sg_rune_exact_integer_t *smaller)
+{
+	sg_rune_exact_integer_t result = *larger;
+	uint64_t borrow = 0U;
+	size_t limb;
+	for (limb = 0U; limb < larger->count; limb++)
+	{
+		uint64_t subtrahend = borrow;
+		uint64_t minuend = larger->limb[limb];
+		if (limb < smaller->count)
+			subtrahend += smaller->limb[limb];
+		result.limb[limb] = (uint32_t)(minuend - subtrahend);
+		borrow = minuend < subtrahend ? 1U : 0U;
+	}
+	ExactNormalize(&result);
+	return result;
+}
+
+static sg_rune_exact_integer_t ExactAdd(
+	const sg_rune_exact_integer_t *left,
+	const sg_rune_exact_integer_t *right)
+{
+	sg_rune_exact_integer_t result;
+	int order;
+	if (left->overflow || right->overflow)
+	{
+		result = *left;
+		result.overflow = 1;
+		return result;
+	}
+	if (left->negative == right->negative)
+	{
+		result = ExactMagnitudeAdd(left, right);
+		result.negative = left->negative;
+		return result;
+	}
+	order = ExactMagnitudeCompare(left, right);
+	if (order == 0)
+	{
+		memset(&result, 0, sizeof(result));
+		return result;
+	}
+	result = order > 0 ? ExactMagnitudeSubtract(left, right) :
+		ExactMagnitudeSubtract(right, left);
+	result.negative = order > 0 ? left->negative : right->negative;
+	return result;
+}
+
+static sg_rune_exact_integer_t ExactMultiply(
+	const sg_rune_exact_integer_t *left,
+	const sg_rune_exact_integer_t *right)
+{
+	sg_rune_exact_integer_t result = { { 0U }, 0U, 0, 0 };
+	size_t left_limb;
+	if (left->overflow || right->overflow)
+	{
+		result.overflow = 1;
+		return result;
+	}
+	if (left->count == 0U || right->count == 0U)
+		return result;
+	if (left->count > SG_RUNE_EXACT_INTEGER_LIMB_COUNT - right->count + 1U)
+	{
+		result.overflow = 1;
+		return result;
+	}
+	for (left_limb = 0U; left_limb < left->count; left_limb++)
+	{
+		uint64_t carry = 0U;
+		size_t right_limb;
+		for (right_limb = 0U; right_limb < right->count; right_limb++)
+		{
+			size_t output = left_limb + right_limb;
+			uint64_t product = (uint64_t)left->limb[left_limb] *
+				right->limb[right_limb] + result.limb[output] + carry;
+			result.limb[output] = (uint32_t)product;
+			carry = product >> 32U;
+		}
+		if (carry != 0U)
+		{
+			size_t output = left_limb + right->count;
+			if (output >= SG_RUNE_EXACT_INTEGER_LIMB_COUNT)
+			{
+				result.overflow = 1;
+				return result;
+			}
+			result.limb[output] = (uint32_t)carry;
+		}
+	}
+	result.count = left->count + right->count;
+	if (result.count > SG_RUNE_EXACT_INTEGER_LIMB_COUNT)
+		result.count = SG_RUNE_EXACT_INTEGER_LIMB_COUNT;
+	result.negative = left->negative != right->negative;
+	ExactNormalize(&result);
+	return result;
+}
+
+static sg_rune_exact_integer_t ExactFromDyadic(
+	const sg_rune_binary32_dyadic_t *value, int common_exponent)
+{
+	sg_rune_exact_integer_t result = { { 0U }, 0U, 0, 0 };
+	uint32_t shift;
+	size_t limb;
+	uint32_t offset;
+	uint64_t shifted;
+	if (value->mantissa == 0U)
+		return result;
+	shift = (uint32_t)(value->exponent - common_exponent);
+	limb = shift / 32U;
+	offset = shift % 32U;
+	shifted = (uint64_t)value->mantissa << offset;
+	if (limb >= SG_RUNE_EXACT_INTEGER_LIMB_COUNT)
+	{
+		result.overflow = 1;
+		return result;
+	}
+	result.limb[limb] = (uint32_t)shifted;
+	result.count = limb + 1U;
+	if ((shifted >> 32U) != 0U)
+	{
+		if (result.count == SG_RUNE_EXACT_INTEGER_LIMB_COUNT)
+			result.overflow = 1;
+		else
+		{
+			result.limb[result.count] = (uint32_t)(shifted >> 32U);
+			result.count++;
+		}
+	}
+	result.negative = value->negative;
+	return result;
+}
+
+static int NextPermutation(uint8_t permutation[SG_RUNE_STATE_DIMENSION_COUNT])
+{
+	size_t pivot = SG_RUNE_STATE_DIMENSION_COUNT - 1U;
+	size_t successor;
+	size_t left;
+	size_t right;
+	while (pivot != 0U && permutation[pivot - 1U] >= permutation[pivot])
+		pivot--;
+	if (pivot == 0U)
+		return 0;
+	successor = SG_RUNE_STATE_DIMENSION_COUNT - 1U;
+	while (permutation[successor] <= permutation[pivot - 1U])
+		successor--;
+	{
+		uint8_t temporary = permutation[pivot - 1U];
+		permutation[pivot - 1U] = permutation[successor];
+		permutation[successor] = temporary;
+	}
+	left = pivot;
+	right = SG_RUNE_STATE_DIMENSION_COUNT - 1U;
+	while (left < right)
+	{
+		uint8_t temporary = permutation[left];
+		permutation[left] = permutation[right];
+		permutation[right] = temporary;
+		left++;
+		right--;
+	}
+	return 1;
+}
+
+static sg_rune_exact_integer_t ExactDeterminant(
+	sg_rune_exact_integer_t matrix[SG_RUNE_STATE_DIMENSION_COUNT]
+		[SG_RUNE_STATE_DIMENSION_COUNT])
+{
+	uint8_t permutation[SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t determinant = { { 0U }, 0U, 0, 0 };
+	uint32_t index;
+	for (index = 0U; index < SG_RUNE_STATE_DIMENSION_COUNT; index++)
+		permutation[index] = (uint8_t)index;
+	do
+	{
+		sg_rune_exact_integer_t term = { { 1U }, 1U, 0, 0 };
+		uint32_t row;
+		uint32_t inversions = 0U;
+		for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+		{
+			uint32_t later;
+			term = ExactMultiply(&term, &matrix[row][permutation[row]]);
+			for (later = row + 1U; later < SG_RUNE_STATE_DIMENSION_COUNT;
+			     later++)
+				if (permutation[row] > permutation[later])
+					inversions++;
+		}
+		if ((inversions & 1U) != 0U && term.count != 0U)
+			term.negative = !term.negative;
+		determinant = ExactAdd(&determinant, &term);
+	} while (NextPermutation(permutation));
+	return determinant;
 }
 
 static uint32_t MultiplyModulo(uint32_t left, uint32_t right,
@@ -348,6 +608,352 @@ static int SimplexFullRank(const sg_rune_state_simplex_t *simplex,
 			coordinates[vertex][dimension] = Binary32Dyadic(
 				VertexCoordinate(&vertices[simplex->vertices.first + vertex],
 					dimension));
+			if (coordinates[vertex][dimension].mantissa != 0U &&
+			    (!have_nonzero || coordinates[vertex][dimension].exponent <
+				common_exponents[dimension]))
+			{
+				common_exponents[dimension] =
+					coordinates[vertex][dimension].exponent;
+				have_nonzero = 1;
+			}
+		}
+		if (!have_nonzero)
+			return 0;
+	}
+	for (prime = 0U; prime < SG_RUNE_BINARY32_RANK_PRIME_COUNT; prime++)
+		if (RankSevenModulo(coordinates, common_exponents,
+			rank_primes[prime]))
+			return 1;
+	return 0;
+}
+
+static float RefinementCoordinate(const sg_field_refinement_vertex_t *vertex,
+	uint32_t dimension)
+{
+	if (dimension < 3U)
+		return vertex->position.value[dimension];
+	if (dimension < 6U)
+		return vertex->velocity.value[dimension - 3U];
+	return vertex->elapsed_ms;
+}
+
+static sg_rune_exact_integer_t ExactSubtract(
+	const sg_rune_exact_integer_t *left,
+	const sg_rune_exact_integer_t *right)
+{
+	sg_rune_exact_integer_t negative_right = *right;
+	if (negative_right.count != 0U)
+		negative_right.negative = !negative_right.negative;
+	return ExactAdd(left, &negative_right);
+}
+
+static int ExactSameOrientationOrBoundary(
+	const sg_rune_exact_integer_t *value,
+	const sg_rune_exact_integer_t *orientation)
+{
+	return !value->overflow && value->count == 0U ? 1 :
+		!value->overflow && !orientation->overflow &&
+		value->negative == orientation->negative;
+}
+
+static int RefinementPointInCellExact(
+	const sg_field_refinement_vertex_t *const vertices[8],
+	const sg_field_refinement_vertex_t *point)
+{
+	sg_rune_binary32_dyadic_t dyadic[9][SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t coordinate[9][SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t matrix[SG_RUNE_STATE_DIMENSION_COUNT]
+		[SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t orientation;
+	sg_rune_exact_integer_t lambda_zero;
+	int common_exponent[SG_RUNE_STATE_DIMENSION_COUNT];
+	uint32_t dimension;
+	uint32_t vertex;
+
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		int have_nonzero = 0;
+		for (vertex = 0U; vertex < 9U; vertex++)
+		{
+			const sg_field_refinement_vertex_t *current =
+				vertex < 8U ? vertices[vertex] : point;
+			dyadic[vertex][dimension] = Binary32Dyadic(
+				RefinementCoordinate(current, dimension));
+			if (dyadic[vertex][dimension].mantissa != 0U &&
+			    (!have_nonzero || dyadic[vertex][dimension].exponent <
+				common_exponent[dimension]))
+			{
+				common_exponent[dimension] =
+					dyadic[vertex][dimension].exponent;
+				have_nonzero = 1;
+			}
+		}
+		if (!have_nonzero)
+			return 0;
+		for (vertex = 0U; vertex < 9U; vertex++)
+			coordinate[vertex][dimension] = ExactFromDyadic(
+				&dyadic[vertex][dimension], common_exponent[dimension]);
+	}
+	for (vertex = 0U; vertex < SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+		for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+		     dimension++)
+			matrix[vertex][dimension] = ExactSubtract(
+				&coordinate[vertex + 1U][dimension],
+				&coordinate[0][dimension]);
+	orientation = ExactDeterminant(matrix);
+	if (orientation.overflow || orientation.count == 0U)
+		return 0;
+	lambda_zero = orientation;
+	for (vertex = 0U; vertex < SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+	{
+		sg_rune_exact_integer_t saved[SG_RUNE_STATE_DIMENSION_COUNT];
+		sg_rune_exact_integer_t numerator;
+		for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+		     dimension++)
+		{
+			saved[dimension] = matrix[vertex][dimension];
+			matrix[vertex][dimension] = ExactSubtract(
+				&coordinate[8][dimension], &coordinate[0][dimension]);
+		}
+		numerator = ExactDeterminant(matrix);
+		for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+		     dimension++)
+			matrix[vertex][dimension] = saved[dimension];
+		if (!ExactSameOrientationOrBoundary(&numerator, &orientation))
+			return 0;
+		lambda_zero = ExactSubtract(&lambda_zero, &numerator);
+	}
+	return ExactSameOrientationOrBoundary(&lambda_zero, &orientation);
+}
+
+static const sg_rune_interval_t *GeometryFlowInterval(
+	const sg_rune_flow_enclosure_t *flow, uint32_t dimension)
+{
+	if (dimension < 3U)
+		return dimension == 0U ? &flow->position.x :
+			dimension == 1U ? &flow->position.y : &flow->position.z;
+	if (dimension < 6U)
+	{
+		dimension -= 3U;
+		return dimension == 0U ? &flow->velocity.x :
+			dimension == 1U ? &flow->velocity.y : &flow->velocity.z;
+	}
+	return &flow->elapsed_ms;
+}
+
+static void StoreRefinementCoordinate(sg_field_refinement_vertex_t *point,
+	uint32_t dimension, float value)
+{
+	if (dimension < 3U)
+		point->position.value[dimension] = value;
+	else if (dimension < 6U)
+		point->velocity.value[dimension - 3U] = value;
+	else
+		point->elapsed_ms = value;
+}
+
+int SG_FieldRefinementBoxInsideCell(
+	const sg_field_refinement_vertex_t *const vertices[8],
+	const sg_rune_flow_enclosure_t *box)
+{
+	uint8_t varying[SG_RUNE_STATE_DIMENSION_COUNT];
+	uint32_t varying_count = 0U;
+	uint32_t dimension;
+	uint32_t corner;
+
+	if (!vertices || !box)
+		return 0;
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		const sg_rune_interval_t *interval = GeometryFlowInterval(box, dimension);
+		if (interval->min_value != interval->max_value)
+			varying[varying_count++] = (uint8_t)dimension;
+	}
+	for (corner = 0U; corner < (UINT32_C(1) << varying_count); corner++)
+	{
+		sg_field_refinement_vertex_t point;
+		memset(&point, 0, sizeof(point));
+		for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+		     dimension++)
+			StoreRefinementCoordinate(&point, dimension,
+				GeometryFlowInterval(box, dimension)->min_value);
+		for (dimension = 0U; dimension < varying_count; dimension++)
+			if ((corner & (UINT32_C(1) << dimension)) != 0U)
+				StoreRefinementCoordinate(&point, varying[dimension],
+					GeometryFlowInterval(box, varying[dimension])->max_value);
+		if (!RefinementPointInCellExact(vertices, &point))
+			return 0;
+	}
+	return 1;
+}
+
+static int RefinementFaceSideExact(
+	const sg_field_refinement_vertex_t *const face[7],
+	const sg_field_refinement_vertex_t *point)
+{
+	sg_rune_binary32_dyadic_t dyadic[8][SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t coordinate[8][SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t matrix[SG_RUNE_STATE_DIMENSION_COUNT]
+		[SG_RUNE_STATE_DIMENSION_COUNT];
+	sg_rune_exact_integer_t determinant;
+	int common_exponent[SG_RUNE_STATE_DIMENSION_COUNT];
+	uint32_t dimension;
+	uint32_t vertex;
+
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		int have_nonzero = 0;
+		for (vertex = 0U; vertex < 8U; vertex++)
+		{
+			const sg_field_refinement_vertex_t *current =
+				vertex < 7U ? face[vertex] : point;
+			dyadic[vertex][dimension] = Binary32Dyadic(
+				RefinementCoordinate(current, dimension));
+			if (dyadic[vertex][dimension].mantissa != 0U &&
+			    (!have_nonzero || dyadic[vertex][dimension].exponent <
+				common_exponent[dimension]))
+			{
+				common_exponent[dimension] =
+					dyadic[vertex][dimension].exponent;
+				have_nonzero = 1;
+			}
+		}
+		if (!have_nonzero)
+			return 2;
+		for (vertex = 0U; vertex < 8U; vertex++)
+			coordinate[vertex][dimension] = ExactFromDyadic(
+				&dyadic[vertex][dimension], common_exponent[dimension]);
+	}
+	for (vertex = 0U; vertex < SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+		for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+		     dimension++)
+			matrix[vertex][dimension] = ExactSubtract(
+				&coordinate[vertex + 1U][dimension],
+				&coordinate[0][dimension]);
+	determinant = ExactDeterminant(matrix);
+	if (determinant.overflow)
+		return 2;
+	if (determinant.count == 0U)
+		return 0;
+	return determinant.negative ? -1 : 1;
+}
+
+static int CellFacetSeparates(
+	const sg_field_refinement_vertex_t *const owner[8],
+	const sg_field_refinement_vertex_t *const other[8])
+{
+	uint32_t omitted;
+	for (omitted = 0U; omitted <= SG_RUNE_STATE_DIMENSION_COUNT; omitted++)
+	{
+		const sg_field_refinement_vertex_t *face[7];
+		uint32_t vertex;
+		uint32_t face_vertex = 0U;
+		int owner_side;
+		int separates = 1;
+		for (vertex = 0U; vertex <= SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+			if (vertex != omitted)
+				face[face_vertex++] = owner[vertex];
+		owner_side = RefinementFaceSideExact(face, owner[omitted]);
+		if (owner_side == 0 || owner_side == 2)
+			return 0;
+		for (vertex = 0U; vertex <= SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+		{
+			int side = RefinementFaceSideExact(face, other[vertex]);
+			if (side == 2 || side == owner_side)
+			{
+				separates = 0;
+				break;
+			}
+		}
+		if (separates)
+			return 1;
+	}
+	return 0;
+}
+
+int SG_FieldRefinementCellsProperlyMeet(
+	const sg_field_refinement_vertex_t *const left[8],
+	const sg_field_refinement_vertex_t *const right[8])
+{
+	const sg_field_refinement_vertex_t *shared_face[7];
+	const sg_field_refinement_vertex_t *left_opposite = NULL;
+	const sg_field_refinement_vertex_t *right_opposite = NULL;
+	uint32_t left_vertex;
+	uint32_t shared = 0U;
+	if (!left || !right)
+		return 0;
+	for (left_vertex = 0U; left_vertex <= SG_RUNE_STATE_DIMENSION_COUNT;
+	     left_vertex++)
+	{
+		uint32_t right_vertex;
+		for (right_vertex = 0U; right_vertex <= SG_RUNE_STATE_DIMENSION_COUNT;
+		     right_vertex++)
+			if (left[left_vertex] == right[right_vertex])
+			{
+				if (shared < SG_RUNE_STATE_DIMENSION_COUNT)
+					shared_face[shared] = left[left_vertex];
+				shared++;
+				break;
+			}
+		if (right_vertex > SG_RUNE_STATE_DIMENSION_COUNT)
+			left_opposite = left[left_vertex];
+	}
+	if (shared == 8U)
+		return 0;
+	if (shared == 7U)
+	{
+		uint32_t right_vertex;
+		int left_side;
+		int right_side;
+		for (right_vertex = 0U; right_vertex <= SG_RUNE_STATE_DIMENSION_COUNT;
+		     right_vertex++)
+		{
+			uint32_t face_vertex;
+			for (face_vertex = 0U; face_vertex < 7U; face_vertex++)
+				if (right[right_vertex] == shared_face[face_vertex])
+					break;
+			if (face_vertex == 7U)
+			{
+				right_opposite = right[right_vertex];
+				break;
+			}
+		}
+		if (!left_opposite || !right_opposite)
+			return 0;
+		left_side = RefinementFaceSideExact(shared_face, left_opposite);
+		right_side = RefinementFaceSideExact(shared_face, right_opposite);
+		return left_side != 0 && left_side != 2 && right_side != 0 &&
+			right_side != 2 && left_side == -right_side;
+	}
+	return CellFacetSeparates(left, right) || CellFacetSeparates(right, left);
+}
+
+int SG_FieldRefinementCellFullRank(
+	const sg_field_refinement_vertex_t *const vertices[8])
+{
+	sg_rune_binary32_dyadic_t coordinates
+		[SG_RUNE_STATE_DIMENSION_COUNT + 1U]
+		[SG_RUNE_STATE_DIMENSION_COUNT];
+	int common_exponents[SG_RUNE_STATE_DIMENSION_COUNT];
+	uint32_t vertex;
+	uint32_t dimension;
+	size_t prime;
+
+	if (!vertices)
+		return 0;
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		int have_nonzero = 0;
+		for (vertex = 0U; vertex <= SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+		{
+			if (!vertices[vertex])
+				return 0;
+			coordinates[vertex][dimension] = Binary32Dyadic(
+				RefinementCoordinate(vertices[vertex], dimension));
 			if (coordinates[vertex][dimension].mantissa != 0U &&
 			    (!have_nonzero || coordinates[vertex][dimension].exponent <
 				common_exponents[dimension]))
