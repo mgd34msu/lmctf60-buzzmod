@@ -24,7 +24,8 @@ typedef struct sg_strategy_runtime_plan_request_s
 
 /* The planner supplies an immutable semantic target and role only.  In
  * particular, it cannot nominate an execution field: that field belongs to
- * the destination-field authority which owns the exact target binding. */
+ * the field-service/localization authority which owns the exact target
+ * binding. */
 typedef struct sg_strategy_runtime_target_request_s
 {
 	uint64_t commitment_id;
@@ -36,9 +37,10 @@ typedef struct sg_strategy_runtime_target_request_s
 } sg_strategy_runtime_target_request_t;
 
 /* A locator is not an authority.  It can only nominate an opaque borrowed
- * view issued by the destination-field owner; it cannot manufacture a
- * binding, snapshot, field, or execution pointer.  The bridge immediately
- * gives the view back to the registered authority for validation. */
+ * view issued by the field-service/localization owner; it cannot manufacture
+ * a binding, snapshot, terminal, field handle, guidance, or execution
+ * pointer.  The bridge immediately gives the view back to the registered
+ * authority for validation. */
 typedef struct sg_strategy_runtime_target_view_s
 {
 	const void *opaque;
@@ -48,11 +50,13 @@ typedef int (*sg_strategy_runtime_target_locator_fn)(void *context,
 	const sg_strategy_runtime_target_request_t *request,
 	sg_strategy_runtime_target_view_t *view_out);
 
-/* This callback is implemented by the destination-field/localization owner.
- * It must accept a view only when that exact view owns `request`'s complete
- * semantic destination and then return the matching field, snapshot, and
- * localization binding.  A same-kind FLAG/CURRENT versus FLAG/HOME swap must
- * fail here even if a locator could otherwise echo every request field. */
+/* This callback is implemented by the field-service/localization owner.  It
+ * must accept a view only when that exact view owns `request`'s complete
+ * semantic destination and then return the matching terminal, field handle,
+ * guidance, snapshot, localization state, and execution binding.  It must
+ * set `binding_out->accepted_view` to `view->opaque`; the bridge rejects any
+ * other capability.  A same-kind FLAG/CURRENT versus FLAG/HOME swap must fail
+ * here even if a locator could otherwise echo every request field. */
 typedef int (*sg_strategy_runtime_target_authority_fn)(void *context,
 	const sg_strategy_runtime_target_request_t *request,
 	const sg_strategy_runtime_target_view_t *view,
@@ -63,11 +67,11 @@ void SG_StrategyRuntimeTargetProviderSet(
 	sg_strategy_runtime_target_authority_fn authority, void *authority_context);
 
 /* Map teardown clears this locator/authority registration before either
- * borrowed view, snapshot, field, or localization lifetime ends. */
+ * borrowed view, snapshot, terminal, field, or localization lifetime ends. */
 int SG_StrategyRuntimeTargetProviderAvailable(void);
 
 /* A typed plan is available only while both an untrusted locator and the
- * destination-field authority are registered.  No registration means no
+ * field-service/localization authority are registered.  No registration means no
  * typed strategy plan: the production caller never derives destination
  * handles from legacy seeds or route fields. */
 int SG_StrategyRuntimePlanResolve(

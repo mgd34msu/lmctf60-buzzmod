@@ -4,9 +4,8 @@
 
 #include <stdint.h>
 
+#include "sg_rune_dynamics_model.h"
 #include "sg_strategy_contract.h"
-
-typedef struct sg_localized_player_state_s sg_localized_player_state_t;
 
 /* The only caller-owned capacity is the reducer contract's exact plan
  * capacity: every non-WAIT target has one authenticated runtime binding. */
@@ -20,15 +19,19 @@ typedef struct sg_strategy_caller_authority_s
 	uint32_t principal_id;
 } sg_strategy_caller_authority_t;
 
-/* `execution_field` is execution data supplied only by the registered
- * destination-field authority.  It never supplies destination identity,
- * reachability, pose, phase, or authority on its own.  The runtime authority
- * owns all pointed-to data until the caller replaces/releases it.
+/* `execution_field` is execution data supplied only by the registered field
+ * service/localization authority.  It never supplies destination identity,
+ * reachability, pose, phase, or authority on its own.  `accepted_view` is an
+ * opaque capability returned by that owner for the exact field binding: the
+ * caller never dereferences it, but the runtime bridge requires it to be the
+ * exact view accepted by the authority before this pointer can be used.  The
+ * runtime authority owns all pointed-to data until the caller
+ * replaces/releases it.
  * `observation_revision` and `pose_revision` are authority-monotonic whenever
  * their respective authenticated inputs change. */
 typedef struct sg_strategy_caller_target_binding_s
 {
-	/* These semantic fields are emitted by the destination-field authority.
+	/* These semantic fields are emitted by the field-service authority.
 	 * The caller rejects a binding unless they exactly match the immutable
 	 * target request; matching a destination kind alone is never sufficient. */
 	uint64_t commitment_id;
@@ -38,9 +41,13 @@ typedef struct sg_strategy_caller_target_binding_s
 	sg_destination_ref_t destination;
 	int role;
 	const int *execution_field;
+	const void *accepted_view;
 	const sg_rune_runtime_snapshot_t *snapshot;
-	const sg_destination_field_t *field;
-	const sg_localized_player_state_t *localized;
+	const sg_destination_terminal_t *terminal;
+	const sg_field_handle_t *field_handle;
+	const sg_field_guidance_t *guidance;
+	const sg_localized_field_state_t *localized;
+	sg_destination_handle_t resolved_destination;
 	uint64_t observation_revision;
 	uint64_t pose_revision;
 	uint64_t valid_until_ms;
@@ -83,8 +90,10 @@ typedef struct sg_strategy_caller_output_s
 	int role;
 	const int *execution_field;
 	const sg_rune_runtime_snapshot_t *snapshot;
-	const sg_destination_field_t *field;
-	const sg_localized_player_state_t *localized;
+	const sg_destination_terminal_t *terminal;
+	const sg_field_handle_t *field_handle;
+	const sg_field_guidance_t *guidance;
+	const sg_localized_field_state_t *localized;
 } sg_strategy_caller_output_t;
 
 int SG_StrategyCallerInit(sg_strategy_caller_t *caller);

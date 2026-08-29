@@ -3,8 +3,6 @@
 #include <limits.h>
 #include <string.h>
 
-#include "sg_cell_phase_localization.h"
-
 static int CallerAuthorityValid(const sg_strategy_caller_authority_t *authority)
 {
 	if (!authority || authority->principal_id == 0U)
@@ -69,6 +67,54 @@ static int CallerDestinationEqual(const sg_destination_ref_t *left,
 	case SG_DESTINATION_WAYPOINT:
 		return left->value.point.point_id == right->value.point.point_id;
 	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
+static int CallerFieldHandleEqual(const sg_field_handle_t *left,
+	const sg_field_handle_t *right)
+{
+	return left && right && left->service_identity == right->service_identity &&
+		left->rune_identity == right->rune_identity &&
+		left->topology_revision == right->topology_revision &&
+		left->terminal_generation == right->terminal_generation &&
+		left->field_generation == right->field_generation;
+}
+
+static int CallerGuidanceObservation(const sg_field_guidance_t *guidance,
+	sg_strategy_destination_status_t *status_out, uint32_t *cost_out)
+{
+	uint64_t cost_ms;
+	uint64_t upper_us;
+
+	if (!guidance || !status_out || !cost_out ||
+	    !SG_FieldGuidanceValid(guidance))
+		return 0;
+	switch (guidance->kind)
+	{
+	case SG_FIELD_GUIDANCE_TERMINAL:
+		*status_out = SG_STRATEGY_DESTINATION_REACHABLE;
+		*cost_out = 0U;
+		return 1;
+	case SG_FIELD_GUIDANCE_DESCENT:
+		/* Preserve the field service's upper bound when projecting it into the
+		 * reducer's millisecond domain.  A non-representable cost is rejected,
+		 * never silently capped or made reachable by a legacy estimate. */
+		upper_us = guidance->value.descent.arrival_cost.upper_us;
+		cost_ms = upper_us / UINT64_C(1000);
+		if (upper_us % UINT64_C(1000) != 0U)
+			cost_ms++;
+		if (cost_ms >= (uint64_t)SG_DESTINATION_COST_INFINITE)
+			return 0;
+		*status_out = SG_STRATEGY_DESTINATION_REACHABLE;
+		*cost_out = (uint32_t)cost_ms;
+		return 1;
+	case SG_FIELD_GUIDANCE_UNREACHABLE:
+		*status_out = SG_STRATEGY_DESTINATION_UNREACHABLE;
+		*cost_out = SG_DESTINATION_COST_INFINITE;
+		return 1;
+	case SG_FIELD_GUIDANCE_KIND_COUNT:
 	default:
 		return 0;
 	}
@@ -147,43 +193,52 @@ static int CallerBindingAuthenticated(const sg_strategy_caller_plan_t *plan,
 	const sg_strategy_caller_target_binding_t *binding,
 	const sg_strategy_target_choice_t *choice, uint64_t at_ms)
 {
-	const sg_field_sample_t *sample;
-	uint32_t phase_id;
-
-	/* The runtime bridge has already asked the destination-field authority to
-	 * prove the field/view's exact semantic target.  This boundary verifies the
-	 * emitted plan target and all runtime shape/lifetime facts; it retains a
-	 * kind check only as a local structural sanity check, never as identity. */
+	/* The runtime bridge has already asked the field-service/localization owner
+	 * to accept an opaque view for this exact semantic target.  This boundary
+	 * verifies the emitted target and the complete authenticated chain:
+	 * target -> terminal -> field handle -> guidance/localization.  The raw
+	 * execution pointer is usable only alongside that owner-issued capability;
+	 * matching a destination kind or echoed IDs is never sufficient. */
 	if (!plan || !binding || !choice ||
 	    binding->commitment_id != plan->commitment_id ||
 	    !CallerAuthorityEqual(&binding->authority, &plan->authority) ||
 	    !CallerDestinationEqual(&binding->destination, &choice->destination) ||
-	    !binding->execution_field ||
-	    !binding->snapshot || !binding->field || !binding->localized ||
+	    !binding->execution_field || !binding->accepted_view ||
+	    !binding->snapshot || !binding->terminal || !binding->field_handle ||
+	    !binding->guidance || !binding->localized ||
 	    binding->observation_revision == 0U || binding->pose_revision == 0U ||
 	    binding->valid_until_ms < at_ms ||
 	    !SG_RuneRuntimeSnapshotValid(binding->snapshot) ||
-	    !SG_DestinationFieldValid(binding->snapshot, binding->field) ||
-	    binding->field->destination.kind != binding->destination.kind ||
-	    binding->field->computed_at_ms > at_ms ||
+	    !SG_DestinationTerminalValid(binding->terminal) ||
+	    !CallerDestinationEqual(&binding->terminal->destination,
+		&binding->destination) ||
+	    !SG_FieldHandleValid(binding->field_handle) ||
+	    binding->field_handle->rune_identity != binding->snapshot->identity ||
+	    binding->field_handle->topology_revision !=
+		binding->snapshot->topology_revision ||
+	    binding->field_handle->terminal_generation !=
+		binding->terminal->generation ||
+	    !SG_FieldGuidanceValid(binding->guidance) ||
+	    !CallerFieldHandleEqual(binding->field_handle,
+		&binding->guidance->field) ||
+	    binding->guidance->pose_revision != binding->pose_revision ||
+	    binding->guidance->sampled_at_ms == 0U ||
+	    binding->guidance->sampled_at_ms > at_ms ||
+	    !SG_LocalizedFieldStateValid(binding->localized) ||
 	    binding->localized->rune_identity != binding->snapshot->identity ||
 	    binding->localized->topology_revision !=
 		binding->snapshot->topology_revision ||
-	    binding->localized->frame_sequence == 0U ||
-	    binding->localized->localized_at_ms == 0U ||
-	    binding->localized->localized_at_ms > at_ms ||
-	    !SG_DestinationPoseValid(&binding->localized->field_pose) ||
+	    binding->localized->pose_revision != binding->pose_revision ||
+	    binding->localized->sampled_at_ms != binding->guidance->sampled_at_ms ||
+	    binding->localized->sampled_at_ms > at_ms ||
+	    !SG_DestinationHandleValid(&binding->resolved_destination) ||
+	    binding->resolved_destination.kind != binding->destination.kind ||
 	    !SG_PhaseCoordinateValid(binding->snapshot,
-		&binding->localized->field_pose.phase))
+		&binding->resolved_destination.pose.phase) ||
+	    binding->resolved_destination.pose.region_id >=
+		binding->snapshot->region_count)
 		return 0;
-	phase_id = binding->localized->field_pose.phase.phase_id;
-	if (phase_id >= binding->field->sample_count)
-		return 0;
-	sample = &binding->field->samples[phase_id];
-	return SG_FieldSampleShapeValid(binding->snapshot, sample) &&
-		sample->phase.phase_id == phase_id &&
-		sample->phase.cell_id ==
-			binding->localized->field_pose.phase.cell_id;
+	return 1;
 }
 
 static int CallerPlanCountsSafe(const sg_strategy_caller_plan_t *plan,
@@ -297,9 +352,7 @@ static int CallerDestinationObservations(const sg_strategy_caller_plan_t *plan,
 		     choice_index++)
 		{
 			const sg_strategy_caller_target_binding_t *binding;
-			const sg_field_sample_t *sample;
 			sg_strategy_destination_observation_t *observation;
-			uint32_t phase_id;
 
 			if (count >= SG_STRATEGY_CALLER_MAX_BINDINGS ||
 			    !CallerBindingFor(plan, goal->id,
@@ -307,8 +360,6 @@ static int CallerDestinationObservations(const sg_strategy_caller_plan_t *plan,
 			    !CallerBindingAuthenticated(plan, binding,
 				&goal->choices[choice_index], at_ms))
 				return 0;
-			phase_id = binding->localized->field_pose.phase.phase_id;
-			sample = &binding->field->samples[phase_id];
 			observation = &observations[count];
 			memset(observation, 0, sizeof(*observation));
 			observation->plan_id = compiled->plan_id;
@@ -318,14 +369,12 @@ static int CallerDestinationObservations(const sg_strategy_caller_plan_t *plan,
 				binding->observation_revision;
 			observation->pose_revision = binding->pose_revision;
 			observation->observed_at_ms =
-				binding->localized->localized_at_ms;
+				binding->guidance->sampled_at_ms;
 			observation->valid_until_ms = binding->valid_until_ms;
-			observation->status = sample->finite
-				? SG_STRATEGY_DESTINATION_REACHABLE
-				: SG_STRATEGY_DESTINATION_UNREACHABLE;
-			observation->cost_ms = sample->finite
-				? sample->cost_ms : SG_DESTINATION_FIELD_INF;
-			observation->handle = binding->field->destination;
+			if (!CallerGuidanceObservation(binding->guidance,
+				&observation->status, &observation->cost_ms))
+				return 0;
+			observation->handle = binding->resolved_destination;
 			count++;
 		}
 	}
@@ -492,7 +541,9 @@ static void CallerOutput(const sg_strategy_caller_t *caller,
 	out->role = binding->role;
 	out->execution_field = binding->execution_field;
 	out->snapshot = binding->snapshot;
-	out->field = binding->field;
+	out->terminal = binding->terminal;
+	out->field_handle = binding->field_handle;
+	out->guidance = binding->guidance;
 	out->localized = binding->localized;
 }
 

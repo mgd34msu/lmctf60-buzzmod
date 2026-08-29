@@ -69,6 +69,65 @@ static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
 	}
 }
 
+static int RuntimeFieldHandleEqual(const sg_field_handle_t *left,
+	const sg_field_handle_t *right)
+{
+	return left && right && left->service_identity == right->service_identity &&
+		left->rune_identity == right->rune_identity &&
+		left->topology_revision == right->topology_revision &&
+		left->terminal_generation == right->terminal_generation &&
+		left->field_generation == right->field_generation;
+}
+
+/* The authority, not the locator, establishes this relation.  In particular,
+ * `accepted_view` is an owner-issued opaque capability for the returned raw
+ * execution pointer and canonical field objects.  Requiring it to be the
+ * exact view just accepted prevents a caller/provider echo from substituting
+ * another same-kind field after the authority check. */
+static int RuntimeBindingAccepted(
+	const sg_strategy_runtime_target_request_t *target,
+	const sg_strategy_runtime_target_view_t *view,
+	const sg_strategy_caller_target_binding_t *binding)
+{
+	if (!target || !view || !view->opaque || !binding ||
+	    binding->commitment_id != target->commitment_id ||
+	    !RuntimeAuthorityEqual(&binding->authority, &target->authority) ||
+	    binding->goal_id != target->goal_id ||
+	    binding->target_id != target->target_id ||
+	    !RuntimeDestinationEqual(&binding->destination,
+		&target->destination) ||
+	    binding->role != target->role || !binding->execution_field ||
+	    binding->accepted_view != view->opaque || !binding->snapshot ||
+	    !binding->terminal || !binding->field_handle || !binding->guidance ||
+	    !binding->localized || !SG_RuneRuntimeSnapshotValid(binding->snapshot) ||
+	    !SG_DestinationTerminalValid(binding->terminal) ||
+	    !RuntimeDestinationEqual(&binding->terminal->destination,
+		&target->destination) ||
+	    !SG_FieldHandleValid(binding->field_handle) ||
+	    binding->field_handle->rune_identity != binding->snapshot->identity ||
+	    binding->field_handle->topology_revision !=
+		binding->snapshot->topology_revision ||
+	    binding->field_handle->terminal_generation !=
+		binding->terminal->generation ||
+	    !SG_FieldGuidanceValid(binding->guidance) ||
+	    !RuntimeFieldHandleEqual(binding->field_handle,
+		&binding->guidance->field) ||
+	    !SG_LocalizedFieldStateValid(binding->localized) ||
+	    binding->localized->rune_identity != binding->snapshot->identity ||
+	    binding->localized->topology_revision !=
+		binding->snapshot->topology_revision ||
+	    binding->guidance->pose_revision != binding->localized->pose_revision ||
+	    binding->guidance->sampled_at_ms != binding->localized->sampled_at_ms ||
+	    !SG_DestinationHandleValid(&binding->resolved_destination) ||
+	    binding->resolved_destination.kind != target->destination.kind ||
+	    !SG_PhaseCoordinateValid(binding->snapshot,
+		&binding->resolved_destination.pose.phase) ||
+	    binding->resolved_destination.pose.region_id >=
+		binding->snapshot->region_count)
+		return 0;
+	return 1;
+}
+
 static int RuntimeExecutionFor(const sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_goal_id_t goal_id, sg_strategy_target_id_t target_id,
 	const sg_strategy_runtime_execution_t **execution_out)
@@ -209,13 +268,7 @@ int SG_StrategyRuntimePlanResolve(
 			    !sg_strategy_runtime_authority(
 				sg_strategy_runtime_authority_context, &target, &view,
 				&binding) ||
-			    binding.commitment_id != target.commitment_id ||
-			    !RuntimeAuthorityEqual(&binding.authority, &target.authority) ||
-			    binding.goal_id != target.goal_id ||
-			    binding.target_id != target.target_id ||
-			    !RuntimeDestinationEqual(&binding.destination,
-				&target.destination) ||
-			    binding.role != target.role || !binding.execution_field)
+			    !RuntimeBindingAccepted(&target, &view, &binding))
 				return 0;
 			candidate.bindings[binding_index] = binding;
 			binding_index++;
