@@ -59,6 +59,8 @@ typedef struct sg_host_pmove_trace_s
 {
 	uint64_t ordinal;
 	uint32_t substep;
+	/* Exact network movement state visible when this trace was issued. */
+	pmove_state_t state;
 	float start[3];
 	float mins[3];
 	float maxs[3];

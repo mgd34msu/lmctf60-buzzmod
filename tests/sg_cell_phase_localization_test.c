@@ -1633,6 +1633,75 @@ static void TestRealPmoveAccelerationLaws(void)
 		0.0f, 0, 0, 0.0f, 1.5f);
 }
 
+static void TestRealPmoveBlockedUnduck(void)
+{
+	const float ceiling_mins[3] = { -100.0f, -100.0f, 5.0f };
+	const float ceiling_maxs[3] = { 100.0f, 100.0f, 100.0f };
+	world_fixture_t ceiling = BoxWorld(ceiling_mins, ceiling_maxs);
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+	sg_host_pmove_request_t pmove_request;
+	sg_host_pmove_replay_workspace_t workspace;
+	sg_host_pmove_replay_t replay;
+	sg_host_pmove_error_t error;
+
+	InitStandardFixture(&fixture, &ceiling,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE,
+		SG_RUNE_MEDIUM_DRY);
+	FinalizeFixture(&fixture);
+	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, Pmove,
+		&fixture.runtime, &status));
+	observation = Observation(&fixture, SG_RUNE_STANCE_CROUCHING,
+		0.0f, 0.0f, 0.0f);
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	memset(&pmove_request, 0, sizeof(pmove_request));
+	pmove_request.state = previous.host_state;
+	pmove_request.previous_state = previous.host_state;
+	pmove_request.command.msec = 1U;
+	workspace.substeps = fixture.replay_substeps;
+	workspace.substep_capacity = 128U;
+	workspace.traces = fixture.replay_traces;
+	workspace.trace_capacity = 4096U;
+	CHECK(SG_HostPmoveReplayFrame(&fixture.authority, NULL, Pmove,
+		&pmove_request, &workspace, &replay, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_NONE);
+	CHECK(replay.trace_count > 1U);
+	CHECK((replay.traces[0].state.pm_flags & PMF_DUCKED) != 0);
+	CHECK(replay.traces[0].maxs[2] == 32.0f);
+	CHECK(replay.traces[0].result.allsolid);
+	CHECK(memcmp(replay.traces[0].start, replay.traces[0].end,
+		sizeof(replay.traces[0].start)) == 0);
+	CHECK((replay.result.state.pm_flags & PMF_DUCKED) != 0);
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 101U;
+	observation.authenticated_at_ms = 101U;
+	observation.stance = SG_RUNE_STANCE_CROUCHING;
+	memcpy(observation.position, replay.result.origin,
+		sizeof(observation.position));
+	memcpy(observation.velocity, replay.result.velocity,
+		sizeof(observation.velocity));
+	observation.host_state = replay.result.state;
+	environment.pmove_request = &pmove_request;
+	environment.replay_substeps = fixture.replay_substeps;
+	environment.replay_substep_capacity = 128U;
+	environment.replay_traces = fixture.replay_traces;
+	environment.replay_trace_capacity = 4096U;
+	request = Request();
+	request.now_ms = 101U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_OK);
+	CHECK(state.stance == SG_RUNE_STANCE_CROUCHING);
+}
+
 static void TestRealPmoveStepSlide(void)
 {
 	world_fixture_t step_world = StepWorld();
@@ -2738,6 +2807,7 @@ int main(void)
 	TestMoverCarryFailsClosedWithoutProductionAuthority();
 #ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
 	TestRealPmoveAccelerationLaws();
+	TestRealPmoveBlockedUnduck();
 	TestRealPmoveStepSlide();
 #endif
 	if (failures != 0)

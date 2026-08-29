@@ -8,6 +8,7 @@ typedef struct sg_host_pmove_scope_s
 {
 	const sg_host_collision_authority_t *authority;
 	const sg_host_collision_scene_t *scene;
+	const pmove_t *pmove;
 	csurface_t surface;
 	sg_host_pmove_trace_t *traces;
 	size_t trace_capacity;
@@ -62,6 +63,8 @@ static trace_t PmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end)
 			memset(record, 0, sizeof(*record));
 			record->ordinal = scope->trace_count + 1U;
 			record->substep = scope->substep;
+			if (scope->pmove)
+				record->state = scope->pmove->s;
 			VectorCopy(start, record->start);
 			VectorCopy(mins, record->mins);
 			VectorCopy(maxs, record->maxs);
@@ -221,7 +224,9 @@ static int EvaluateFrame(
 		pm.trace = PmoveTrace;
 		pm.pointcontents = PmovePointContents;
 		scope.substep = step;
+		scope.pmove = &pm;
 		host_pmove(&pm);
+		scope.pmove = NULL;
 		if (scope.trace_capacity_failed)
 		{
 			error = SG_HOST_PMOVE_ERROR_CAPACITY;

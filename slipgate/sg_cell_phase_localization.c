@@ -2333,6 +2333,47 @@ static int ReplayPackedOriginEqual(const pmove_state_t *state,
 	return 1;
 }
 
+static int ReplayTraceStance(const sg_host_collision_authority_t *authority,
+	const sg_host_pmove_trace_t *record, sg_rune_stance_t *stance_out)
+{
+	if (memcmp(record->mins, authority->identity.standing_hull.mins.value,
+			sizeof(record->mins)) == 0 &&
+		memcmp(record->maxs, authority->identity.standing_hull.maxs.value,
+			sizeof(record->maxs)) == 0)
+	{
+		*stance_out = SG_RUNE_STANCE_STANDING;
+		return 1;
+	}
+	if (memcmp(record->mins, authority->identity.crouching_hull.mins.value,
+			sizeof(record->mins)) == 0 &&
+		memcmp(record->maxs, authority->identity.crouching_hull.maxs.value,
+			sizeof(record->maxs)) == 0)
+	{
+		*stance_out = SG_RUNE_STANCE_CROUCHING;
+		return 1;
+	}
+	return 0;
+}
+
+static int ReplayUnduckProbeValid(
+	const sg_localized_player_state_t *previous,
+	const sg_host_pmove_replay_t *replay,
+	const sg_host_pmove_substep_t *substep,
+	const sg_host_pmove_trace_t *record, size_t trace_index,
+	size_t first_trace)
+{
+	int final_crouched =
+		(substep->state.pm_flags & PMF_DUCKED) != 0;
+
+	return trace_index == first_trace && replay->request.command.upmove >= 0 &&
+		(previous->host_state.pm_flags & PMF_DUCKED) != 0 &&
+		(record->state.pm_flags & PMF_DUCKED) != 0 &&
+		PmoveStateEqual(&record->state, &substep->before_state) &&
+		ReplayPointEqual(record->start, record->end) &&
+		((record->result.allsolid && final_crouched) ||
+		(!record->result.allsolid && !final_crouched));
+}
+
 static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	const sg_host_collision_scene_t *scene,
 	const sg_localized_player_state_t *previous,
@@ -2342,7 +2383,6 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	uint64_t *next_trace_ordinal_out)
 {
 	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
-	const sg_rune_hull_profile_t *hull;
 	sg_host_collision_pose_t pose;
 	size_t first_trace;
 	size_t trace_index;
@@ -2388,9 +2428,6 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 		(!pose.supported && (substep->support_model_index != 0U ||
 			substep->support_instance_id != 0U)))
 		return 0;
-	hull = substep->stance == SG_RUNE_STANCE_CROUCHING ?
-		&authority->identity.crouching_hull :
-		&authority->identity.standing_hull;
 	first_trace = (size_t)(substep->first_trace_ordinal - 1U);
 	if (first_trace > replay->trace_count ||
 		substep->trace_count > replay->trace_count - first_trace)
@@ -2401,15 +2438,24 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	{
 		const sg_host_pmove_trace_t *record = &replay->traces[trace_index];
 		sg_host_collision_trace_t authenticated;
+		sg_rune_stance_t trace_stance;
+		sg_rune_stance_t state_stance;
 		int reachable = 0;
 		size_t prior;
 
+		state_stance = (record->state.pm_flags & PMF_DUCKED) ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+
 		if (record->ordinal != trace_index + 1U ||
 			record->substep != expected_step ||
-			memcmp(record->mins, hull->mins.value,
-				sizeof(record->mins)) != 0 ||
-			memcmp(record->maxs, hull->maxs.value,
-				sizeof(record->maxs)) != 0 ||
+			record->state.pm_type != PM_NORMAL ||
+			record->state.gravity != (short)physics->gravity ||
+			!ReplayTraceStance(authority, record, &trace_stance) ||
+			(trace_stance != state_stance &&
+				(trace_stance != SG_RUNE_STANCE_STANDING ||
+				!ReplayUnduckProbeValid(previous, replay, substep, record,
+					trace_index, first_trace))) ||
+			(trace_stance == state_stance && trace_stance != substep->stance) ||
 			!SG_HostCollisionTrace(authority, scene, record->start,
 				record->mins, record->maxs, record->end,
 				SG_HOST_MASK_PLAYER_SOLID, &authenticated) ||
