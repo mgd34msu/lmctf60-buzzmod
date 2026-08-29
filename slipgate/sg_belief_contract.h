@@ -426,6 +426,7 @@ static inline float SG_BeliefAccelerationLimit(
 	sg_belief_motion_state_t movement_state)
 {
 	int mover_relative;
+	float limit;
 
 	switch (movement_state)
 	{
@@ -446,7 +447,12 @@ static inline float SG_BeliefAccelerationLimit(
 			return mover_relative ? physics->external_acceleration :
 				physics->ground_acceleration;
 		if (basis->motion == SG_RUNE_MOTION_AIRBORNE)
-			return physics->air_acceleration;
+		{
+			limit = physics->air_acceleration;
+			if (physics->hook_acceleration > limit)
+				limit = physics->hook_acceleration;
+			return limit;
+		}
 		if (basis->motion == SG_RUNE_MOTION_SWIMMING)
 			return physics->water_acceleration;
 		break;

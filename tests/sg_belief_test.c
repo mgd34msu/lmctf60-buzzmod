@@ -1292,6 +1292,109 @@ static void TestEvidenceAccelerationUsesPhaseAuthority(void)
 		support.orientation));
 }
 
+static void TestUnknownAirborneAccelerationUsesCompatibleUnion(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_t state_before;
+	sg_belief_evidence_support_t support;
+	sg_belief_evidence_t evidence;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	BeliefFixtureInit(&fixture);
+	fixture.model_phases[0].motion = SG_RUNE_MOTION_AIRBORNE;
+	fixture.model_phases[0].support = SG_RUNE_SUPPORT_NONE;
+	fixture.model_phases[0].reference_frame = SG_RUNE_FRAME_WORLD;
+	fixture.model.identity.physics.ground_acceleration = 2000.0f;
+	fixture.model.identity.physics.air_acceleration = 10.0f;
+	fixture.model.identity.physics.water_acceleration = 2000.0f;
+	fixture.model.identity.physics.hook_acceleration = 1000.0f;
+	fixture.model.identity.physics.external_acceleration = 2000.0f;
+	InitState(&fixture, &state, storage, 8U);
+	support = Support(0U, 0U, 1.0f);
+	support.movement_state = SG_BELIEF_MOTION_UNKNOWN;
+	support.acceleration[0] = 500.0f;
+	evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U, 100U, &support, 1U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	CHECK(state.particle_count == 1U);
+	CHECK(state.particles[0].movement_state == SG_BELIEF_MOTION_UNKNOWN);
+
+	InitState(&fixture, &state, storage, 8U);
+	support.acceleration[0] = 1500.0f;
+	frame.expected_revision = state.revision;
+	frame.expected_generation = state.generation;
+	state_before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+}
+
+static void TestHookCapabilityPublishesHookMovement(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_evidence_support_t support = Support(0U, 0U, 1.0f);
+	sg_belief_evidence_t evidence;
+	sg_belief_horizon_entry_t entries[3];
+	sg_belief_horizon_span_t spans[3];
+	sg_belief_horizon_step_t step;
+	sg_belief_horizon_kernel_t kernel;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+	size_t index;
+	int found_hook = 0;
+
+	BeliefFixtureInit(&fixture);
+	fixture.model_phases[1].motion = SG_RUNE_MOTION_AIRBORNE;
+	fixture.model_phases[1].support = SG_RUNE_SUPPORT_NONE;
+	fixture.model_phases[1].reference_frame = SG_RUNE_FRAME_WORLD;
+	fixture.model_kernels[0].family = SG_RUNE_CAPABILITY_HOOK_TRAJECTORY;
+	fixture.model.identity.physics.air_acceleration = 10.0f;
+	fixture.model.identity.physics.hook_acceleration = 1000.0f;
+	InitState(&fixture, &state, storage, 8U);
+	evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U, 100U, &support, 1U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+
+	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
+	entries[0].step_count = 1U;
+	entries[1] = HorizonEntry(1U, 0U, 1U, 0U, 0.0f, 1.0f);
+	entries[2] = HorizonEntry(2U, 1U, 2U, 1U, 0.0f, 1.0f);
+	step = HorizonCapabilityStep(0U, 0U, 1U, 0U, 0U);
+	kernel = HorizonKernel(100U, 200U, entries, 3U, spans, 3U, &step, 1U);
+	frame = Frame(2U, state.revision, 200U, scratch_first, scratch_second, 8U);
+	frame.kernels = &kernel;
+	frame.kernel_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	for (index = 0U; index < state.particle_count; index++)
+		if (state.particles[index].phase.phase_id == 1U &&
+		    state.particles[index].phase.cell_id == 0U)
+		{
+			CHECK(state.particles[index].movement_state ==
+				SG_BELIEF_MOTION_HOOK);
+			found_hook = 1;
+		}
+	CHECK(found_hook);
+}
+
 static void TestHorizonWitnessBoundsAndCells(void)
 {
 	belief_fixture_t fixture;
@@ -2142,6 +2245,8 @@ int main(void)
 	TestHorizonCannotInventConnectivity();
 	TestCellContainmentFailsClosed();
 	TestEvidenceAccelerationUsesPhaseAuthority();
+	TestUnknownAirborneAccelerationUsesCompatibleUnion();
+	TestHookCapabilityPublishesHookMovement();
 	TestHorizonWitnessBoundsAndCells();
 	TestHorizonMultiStepMinkowskiBounds();
 	TestMultiStepKinematicsRevalidated();

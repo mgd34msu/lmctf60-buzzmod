@@ -266,6 +266,7 @@ typedef struct belief_step_bounds_s
 	float acceleration_max;
 	float vertical_acceleration_max;
 	float gravity;
+	sg_rune_capability_family_t capability_family;
 	int constrains_kinematics;
 } belief_step_bounds_t;
 
@@ -329,6 +330,7 @@ static int BeliefRuneRecordMatches(
 	belief_step_bounds_t matched;
 
 	memset(&matched, 0, sizeof(matched));
+	matched.capability_family = SG_RUNE_CAPABILITY_FAMILY_COUNT;
 
 	if (kind == SG_BELIEF_HORIZON_PHASE_TRANSITION)
 	{
@@ -393,6 +395,7 @@ static int BeliefRuneRecordMatches(
 		matched.vertical_acceleration_max =
 			capability->parameters.vertical_acceleration.max_value;
 		matched.gravity = capability->parameters.gravity;
+		matched.capability_family = capability->family;
 		matched.constrains_kinematics = 1;
 		if (bounds)
 			*bounds = matched;
@@ -980,6 +983,37 @@ static sg_belief_motion_state_t BeliefMovementAtPhase(
 	return SG_BELIEF_MOTION_GROUND;
 }
 
+static sg_belief_motion_state_t BeliefMovementAfterStep(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_phase_coordinate_t *phase,
+	const belief_step_bounds_t *bounds, sg_belief_motion_state_t prior)
+{
+	sg_belief_motion_state_t movement_state;
+
+	switch (bounds->capability_family)
+	{
+	case SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT:
+		movement_state = SG_BELIEF_MOTION_GROUND;
+		break;
+	case SG_RUNE_CAPABILITY_AIRBORNE_CONTROL:
+		movement_state = SG_BELIEF_MOTION_AIR;
+		break;
+	case SG_RUNE_CAPABILITY_WATER_VOLUME:
+		movement_state = SG_BELIEF_MOTION_WATER;
+		break;
+	case SG_RUNE_CAPABILITY_HOOK_TRAJECTORY:
+		movement_state = SG_BELIEF_MOTION_HOOK;
+		break;
+	case SG_RUNE_CAPABILITY_MECHANISM_CROSSING:
+	case SG_RUNE_CAPABILITY_EXTERNAL_FORCE:
+	case SG_RUNE_CAPABILITY_FAMILY_COUNT:
+		movement_state = BeliefMovementAtPhase(snapshot, phase, prior);
+		break;
+	}
+	return SG_BeliefMotionStateCompatible(snapshot, phase, movement_state) ?
+		movement_state : SG_BELIEF_MOTION_COUNT;
+}
+
 static int BeliefKinematicsWithinStep(
 	const belief_step_bounds_t *bounds,
 	const sg_belief_particle_t *particle)
@@ -1008,13 +1042,15 @@ static int BeliefEntryKinematicsValid(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_horizon_kernel_t *kernel,
 	const sg_belief_horizon_entry_t *entry,
-	const sg_belief_particle_t *particle)
+	const sg_belief_particle_t *particle,
+	sg_belief_motion_state_t *result_movement_state)
 {
 	sg_belief_particle_t cursor;
 	size_t end;
 	size_t index;
 
-	if (!BeliefSizeAdd(entry->first_step, entry->step_count, &end))
+	if (!result_movement_state ||
+	    !BeliefSizeAdd(entry->first_step, entry->step_count, &end))
 		return 0;
 	BeliefCopyParticle(&cursor, particle);
 	for (index = entry->first_step; index < end; index++)
@@ -1025,8 +1061,6 @@ static int BeliefEntryKinematicsValid(
 		if (cursor.phase.phase_id != step->from.phase_id ||
 		    cursor.phase.cell_id != step->from.cell_id)
 			return 0;
-		cursor.movement_state = BeliefMovementAtPhase(snapshot,
-			&step->from, cursor.movement_state);
 		if (!SG_BeliefKinematicsCompatible(snapshot, &step->from,
 		    cursor.movement_state, cursor.velocity, cursor.acceleration,
 		    cursor.orientation) ||
@@ -1035,7 +1069,12 @@ static int BeliefEntryKinematicsValid(
 		    !BeliefKinematicsWithinStep(&bounds, &cursor))
 			return 0;
 		cursor.phase = step->to;
+		cursor.movement_state = BeliefMovementAfterStep(snapshot,
+			&cursor.phase, &bounds, cursor.movement_state);
+		if (cursor.movement_state == SG_BELIEF_MOTION_COUNT)
+			return 0;
 	}
+	*result_movement_state = cursor.movement_state;
 	return 1;
 }
 
@@ -1046,14 +1085,15 @@ static int BeliefMoveByHorizonEntry(
 	const sg_belief_particle_t *source, uint64_t elapsed_ms, uint64_t at_ms,
 	float spread_growth, sg_belief_particle_t *moved)
 {
+	sg_belief_motion_state_t result_movement_state;
 	size_t axis;
 
-	if (!BeliefEntryKinematicsValid(snapshot, kernel, entry, source))
+	if (!BeliefEntryKinematicsValid(snapshot, kernel, entry, source,
+	    &result_movement_state))
 		return 0;
 	BeliefCopyParticle(moved, source);
 	moved->phase = entry->to;
-	moved->movement_state = BeliefMovementAtPhase(snapshot, &moved->phase,
-		moved->movement_state);
+	moved->movement_state = result_movement_state;
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		moved->position[axis] = source->position[axis] +
