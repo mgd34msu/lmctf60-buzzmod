@@ -1048,6 +1048,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 	{
 		edict_t *dead_hook = self->client->hook;
 
+		SG_HumanTraceHookReset(self, dead_hook);
 		G_FreeEdict (dead_hook);
 		self->client->hook = NULL;
 		(void)SG_CompoundGuardGameBoltEvicted(self, dead_hook);
@@ -2726,6 +2727,7 @@ void ClientDisconnect (edict_t *ent)
 	{
 		edict_t *dead_hook = ent->client->hook;
 
+		SG_HumanTraceHookReset(ent, dead_hook);
 		G_FreeEdict (dead_hook);
 		ent->client->hook = NULL;
 		(void)SG_CompoundGuardGameBoltEvicted(ent, dead_hook);

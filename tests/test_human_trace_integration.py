@@ -108,12 +108,47 @@ class HumanTraceIntegrationTest(unittest.TestCase):
         lowered = source.lower()
 
         self.assertNotIn("sg_local.h", source)
-        self.assertNotIn("SG_Rune", source)
+        route_authority = source.replace(
+            "SG_RuneV2ContentIdentitySHA256", "")
+        self.assertNotIn("SG_Rune", route_authority)
         self.assertNotIn("Rune_Load", source)
         self.assertNotIn("Rune_Free", source)
         self.assertNotIn("local_only", lowered)
         self.assertNotIn("repair", lowered)
         self.assertIn("SG_LevelIdentitySnapshot", source)
+
+    def test_every_hook_destruction_boundary_records_reset(self) -> None:
+        sources = {
+            "g_ctffunc.c": [
+                ("SG_HumanTraceHookReset(ent, ent->client->hook);",
+                 "G_FreeEdict (ent->client->hook);"),
+            ],
+            "p_client.c": [
+                ("SG_HumanTraceHookReset(self, dead_hook);",
+                 "G_FreeEdict (dead_hook);"),
+                ("SG_HumanTraceHookReset(ent, dead_hook);",
+                 "G_FreeEdict (dead_hook);"),
+            ],
+            "g_cmds.c": [
+                ("SG_HumanTraceHookReset(ent, ent->client->hook);",
+                 "G_FreeEdict (ent->client->hook);"),
+            ],
+            "p_observer.c": [
+                ("SG_HumanTraceHookReset(ent, ent->client->hook);",
+                 "G_FreeEdict (ent->client->hook);"),
+            ],
+        }
+        for name, boundaries in sources.items():
+            source = (ROOT / name).read_text(encoding="utf-8")
+            self.assertEqual(
+                source.count("SG_HumanTraceHookReset("), len(boundaries), name)
+            cursor = 0
+            for reset, free in boundaries:
+                reset_at = source.index(reset, cursor)
+                free_at = source.index(free, reset_at)
+                self.assertLess(reset_at, free_at, name)
+                self.assertLess(free_at - reset_at, 320, name)
+                cursor = free_at + len(free)
 
     def test_records_are_source_bound_ordered_and_fail_closed(self) -> None:
         source = (ROOT / "slipgate" / "sg_human_trace.c").read_text(
@@ -124,7 +159,7 @@ class HumanTraceIntegrationTest(unittest.TestCase):
         self.assertIn("prev_sha256", source)
         self.assertIn("sha256", source)
         self.assertIn("SG_HUMAN_TRACE_SEGMENT_BYTES", source)
-        self.assertIn("SG_HUMAN_TRACE_MAX_SEGMENTS", source)
+        self.assertNotIn("SG_HUMAN_TRACE_MAX_SEGMENTS", source)
         self.assertIn('HumanTraceDisable("record write failed")', source)
         self.assertIn("HumanTraceCreateExclusive(path,", source)
         self.assertIn("O_EXCL", source)

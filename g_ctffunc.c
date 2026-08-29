@@ -2,6 +2,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_hook_game_events.h"
+#include "slipgate/sg_human_trace.h"
 #include "g_tourney.h"
 #include "stdlog.h"
 #include "p_stats.h"
@@ -1169,6 +1170,8 @@ void ctf_hook_abort(edict_t *ent)
 			if (ent->client->weaponstate == WEAPON_FIRING)
 				ent->client->weaponstate = WEAPON_READY;
 		}
+		if (ent->client->hook)
+			SG_HumanTraceHookReset(ent, ent->client->hook);
 		ent->client->hookstate = 0;
 		ent->client->hooklength = 0;
 		if (ent->client->hook)

@@ -1095,6 +1095,7 @@ void Drop_All (edict_t *ent)
 
 	if (ent->client->hook)
 	{
+		SG_HumanTraceHookReset(ent, ent->client->hook);
 		G_FreeEdict (ent->client->hook);
 		ent->client->hook = NULL;
 	}

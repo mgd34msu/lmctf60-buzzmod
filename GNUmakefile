@@ -1557,9 +1557,13 @@ $(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
 	$(CC) -o $@ $(HUMAN_SPEED_TEST_OBJS) $(LDFLAGS)
 
 $(HUMAN_TRACE_HOOK_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
-		slipgate/sg_human_trace.c
+		slipgate/sg_human_trace.c \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_wire.h
 	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
-		-o $@ $^ $(LDFLAGS) -lm
+		-DSG_HUMAN_TRACE_WRAP_FWRITE \
+		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite -lm
 
 $(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
 	$(CC) -o $@ $(DOOR_APPROACH_TEST_OBJS) $(LDFLAGS)
@@ -3813,7 +3817,8 @@ human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN)
 	tmp=$$(mktemp -d); \
 		trap 'rm -f "$$tmp/humantrace-tracehook.jsonl"; rmdir "$$tmp"' \
 			EXIT HUP INT TERM; \
-		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp"
+		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp"; \
+		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp" writefail
 
 door-approach-test: $(DOOR_APPROACH_TEST_BIN)
 	./$(DOOR_APPROACH_TEST_BIN)
