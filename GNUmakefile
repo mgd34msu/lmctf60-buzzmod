@@ -95,6 +95,7 @@ DEPEND_FILE = .depend
 HOST_TEST_BIN = sg_hooks_test.gnu
 HOST_TEST_OBJS = .sg_hooks_test.gnu.o .sg_hooks_under_test.gnu.o
 HOST_TEST_DEPS = $(HOST_TEST_OBJS:.o=.d)
+HOST_LAW_PUBLICATION_TEST = tests/run_sg_host_law_publication_test.sh
 ACTION_TEST_BIN = sg_action_test.gnu
 ACTION_TEST_OBJS = .sg_action_test.gnu.o .sg_action_under_test.gnu.o
 ACTION_TEST_DEPS = $(ACTION_TEST_OBJS:.o=.d)
@@ -1211,6 +1212,11 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_bsp_entity_semantics_publication.o \
 		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
 		 slipgate/sg_strategy_caller.o slipgate/sg_strategy_runtime_bridge.o \
+		 slipgate/sg_host_pmove.o slipgate/sg_host_engine_pmove.o \
+		 slipgate/sg_host_engine_runtime.o \
+		 slipgate/sg_host_engine_parity.o slipgate/sg_host_hook_law.o \
+		 slipgate/sg_host_mechanism_law.o slipgate/sg_host_law_owner.o \
+		 slipgate/sg_host_law_publication.o \
 		 slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################
@@ -1353,7 +1359,9 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
+	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
+	host-law-publication-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -1419,7 +1427,8 @@ slipgate/sg_button_live.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h slipgate/sg_mover_lease.h
 slipgate/sg_bsp_world.o: slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
 slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
-		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
+		slipgate/sg_rune_model.h
 slipgate/sg_bsp_entity_semantics.o: slipgate/sg_bsp_entity_semantics.c \
 		slipgate/sg_bsp_entity_semantics.h \
 		slipgate/sg_bsp_entity_semantics_storage_internal.h
@@ -1512,6 +1521,36 @@ slipgate/sg_compound_action_publication.o: \
 		slipgate/sg_compound_action_publication.h \
 		slipgate/sg_compound_publication.h slipgate/sg_compound.h \
 		slipgate/sg_replay.h slipgate/sg_rune.h q_shared.h
+slipgate/sg_host_pmove.o: slipgate/sg_host_pmove.c \
+		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
+		slipgate/sg_rune_model.h q_shared.h
+slipgate/sg_host_engine_pmove.o: slipgate/sg_host_engine_pmove.c \
+		slipgate/sg_host_engine_pmove.h slipgate/sg_host_pmove.h \
+		game.h q_shared.h
+slipgate/sg_host_engine_runtime.o: slipgate/sg_host_engine_runtime.c \
+		slipgate/sg_host_engine_runtime.h \
+		slipgate/sg_host_engine_runtime_private.h \
+		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
+		slipgate/sg_bsp_world.h slipgate/sg_identity.h \
+		slipgate/sg_destination.h game.h q_shared.h
+slipgate/sg_host_engine_parity.o: slipgate/sg_host_engine_parity.c \
+		slipgate/sg_host_engine_parity.h slipgate/sg_host_engine_pmove.h \
+		game.h q_shared.h
+slipgate/sg_host_hook_law.o: slipgate/sg_host_hook_law.c \
+		slipgate/sg_host_hook_law.h slipgate/sg_host_pmove.h \
+		slipgate/sg_weapon_host_constants.h q_shared.h
+slipgate/sg_host_mechanism_law.o: slipgate/sg_host_mechanism_law.c \
+		slipgate/sg_host_mechanism_law.h
+slipgate/sg_host_law_owner.o: slipgate/sg_host_law_owner.c \
+		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
+		slipgate/sg_identity.h game.h q_shared.h
+slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
+		slipgate/sg_host_law_publication.h slipgate/sg_host_collision.h \
+		slipgate/sg_host_pmove.h slipgate/sg_host_engine_pmove.h \
+		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
+		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
+		game.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 
@@ -3375,6 +3414,26 @@ weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
 		g_combat.c g_weapon.c p_weapon.c plasma.c plasma.h
 	sh tests/run_sg_weapon_effect_profile_test.sh
 
+host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
+		tests/sg_host_law_publication_test.c \
+		slipgate/sg_host_law_publication.c \
+		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
+		slipgate/sg_host_engine_pmove.c slipgate/sg_host_engine_pmove.h \
+		slipgate/sg_host_engine_runtime.c \
+		slipgate/sg_host_engine_runtime.h \
+		slipgate/sg_host_engine_runtime_private.h \
+		slipgate/sg_host_engine_parity.c slipgate/sg_host_engine_parity.h \
+		slipgate/sg_host_hook_law.c slipgate/sg_host_hook_law.h \
+		slipgate/sg_host_mechanism_law.c slipgate/sg_host_mechanism_law.h \
+		slipgate/sg_host_pmove.c \
+		slipgate/sg_host_collision.c slipgate/sg_bsp_world.c \
+		slipgate/sg_rune_model.c tests/support/yq2_pmove.c q_shared.c \
+		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
+		slipgate/sg_weapon_host_constants.h
+	@echo [TEST] host law publication
+	@sh $(HOST_LAW_PUBLICATION_TEST)
+
 rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
 		tests/sg_rune_v2_content_identity_test.c \
 		tests/sg_rune_v2_content_identity_probe.c \
@@ -3444,6 +3503,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		weapon-effect-profile-test hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
 		bsp-entity-semantics-publication-test \
+		host-law-publication-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \

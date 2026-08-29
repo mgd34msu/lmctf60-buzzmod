@@ -4,6 +4,17 @@
 #include "../slipgate/sg_ground_capability_publication.h"
 #include "../slipgate/sg_configuration_audit.h"
 
+#ifndef q_exported
+#define q_exported
+#endif
+#include "../game.h"
+
+/* The engine-binding object is linked so the shared host-pmove evaluator has
+ * one complete implementation in both contract dialects.  This publication
+ * fixture exercises the legacy source callback, so the import table remains
+ * empty here. */
+game_import_t gi;
+
 typedef struct accepted_source_fixture_s
 {
 	fixture_t world;

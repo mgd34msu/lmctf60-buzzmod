@@ -142,8 +142,29 @@ static int ParametersValid(const sg_host_collision_authority_t *authority,
 	return 1;
 }
 
+static int HookGravityActive(const sg_host_pmove_request_t *request)
+{
+	return request && request->hook_law_id == SG_HOST_PMOVE_HOOK_LAW_ID &&
+		request->hook_attached == 1U &&
+		request->hook_length < SG_HOST_PMOVE_HOOK_LENGTH_GRAVITY_ZERO;
+}
+
+static int RequestGravity(const sg_host_pmove_request_t *request,
+	short map_gravity, short *gravity_out)
+{
+	if (!request || !gravity_out || request->hook_attached > 1U)
+		return 0;
+	if (request->hook_law_id != 0U &&
+		request->hook_law_id != SG_HOST_PMOVE_HOOK_LAW_ID)
+		return 0;
+	if (request->hook_law_id == 0U && request->hook_attached != 0U)
+		return 0;
+	*gravity_out = HookGravityActive(request) ? 0 : map_gravity;
+	return 1;
+}
+
 static int HullMatchesIdentity(const sg_host_collision_authority_t *authority,
-	const pmove_t *pmove)
+	const pmove_t *pmove, short expected_gravity)
 {
 	const sg_rune_hull_profile_t *hull =
 		(pmove->s.pm_flags & PMF_DUCKED) ?
@@ -155,7 +176,7 @@ static int HullMatchesIdentity(const sg_host_collision_authority_t *authority,
 		if (pmove->mins[axis] != hull->mins.value[axis] ||
 			pmove->maxs[axis] != hull->maxs.value[axis])
 			return 0;
-	return pmove->s.gravity == (short)authority->identity.physics.gravity;
+	return pmove->s.gravity == expected_gravity;
 }
 
 static int EvaluateFrame(
@@ -172,6 +193,7 @@ static int EvaluateFrame(
 	pmove_state_t state;
 	pmove_t pm;
 	short gravity;
+	short effective_gravity;
 	uint32_t steps, step;
 	int parameters;
 	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
@@ -197,6 +219,12 @@ static int EvaluateFrame(
 			*error_out = error;
 		return 0;
 	}
+	if (!RequestGravity(request, gravity, &effective_gravity))
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
+		return 0;
+	}
 	memset(&scope, 0, sizeof(scope));
 	scope.authority = authority;
 	scope.scene = scene;
@@ -207,8 +235,13 @@ static int EvaluateFrame(
 	}
 	state = request->state;
 	previous = request->previous_state;
-	state.gravity = gravity;
+	state.gravity = effective_gravity;
 	memset(result_out, 0, sizeof(*result_out));
+	/* Keep a defined terminal value even for an analyzer that cannot derive
+	 * the positive step count from ParametersValid().  The production timing
+	 * contract below still rejects a zero-step authority before this point. */
+	memset(&pm, 0, sizeof(pm));
+	pm.s = state;
 	sg_host_pmove_scope = &scope;
 	for (step = 0; step < steps; step++)
 	{
@@ -237,7 +270,7 @@ static int EvaluateFrame(
 			error = SG_HOST_PMOVE_ERROR_COLLISION;
 			break;
 		}
-		if (!HullMatchesIdentity(authority, &pm))
+		if (!HullMatchesIdentity(authority, &pm, effective_gravity))
 		{
 			error = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
 			break;
@@ -332,8 +365,10 @@ static int EvaluateFrame(
 	result_out->elapsed_ms = authority->identity.physics.frame_ms;
 	result_out->trace_count = scope.trace_count;
 	result_out->collision_trace_count = scope.collision_trace_count;
-	result_out->gravity = authority->identity.physics.gravity;
+	result_out->gravity = (float)effective_gravity;
 	result_out->physics_abi_id = authority->identity.physics_abi_id;
+	result_out->gravity_law_id = HookGravityActive(request) ?
+		SG_HOST_PMOVE_HOOK_LAW_ID : UINT64_C(0);
 	if (replay_out)
 	{
 		memset(replay_out, 0, sizeof(*replay_out));

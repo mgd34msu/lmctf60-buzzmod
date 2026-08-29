@@ -3,6 +3,7 @@
 #include "g_tourney.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_pov_identity.h"
 
 #include <stdio.h>
@@ -11,6 +12,7 @@
 
 game_locals_t game;
 game_import_t gi;
+game_export_t globals;
 edict_t *g_edicts;
 sg_bot_t sg_bots[SG_MAXBOTS];
 int matchstate;
@@ -34,6 +36,28 @@ static int unicast_count;
 static char last_string[32];
 static edict_t *last_unicast;
 static qboolean last_reliable;
+
+qboolean SG_OwnsBot(edict_t *ent)
+{
+	return ent && (ent->flags & FL_BOT) != 0;
+}
+
+sg_host_law_result_t SG_HostLawProductionPmove(uint32_t subject_index,
+	const sg_host_pmove_request_t *request, sg_host_pmove_result_t *result_out,
+	sg_host_pmove_error_t *error_out)
+{
+	sg_host_law_result_t unavailable;
+
+	(void)subject_index;
+	(void)request;
+	if (result_out)
+		memset(result_out, 0, sizeof(*result_out));
+	if (error_out)
+		*error_out = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+	memset(&unavailable, 0, sizeof(unavailable));
+	unavailable.status = SG_HOST_LAW_HOST_UNAVAILABLE;
+	return unavailable;
+}
 
 #define CHECK(condition) do { \
 	if (!(condition)) { \

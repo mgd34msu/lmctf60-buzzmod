@@ -65,22 +65,93 @@ def main() -> None:
     assert "*bot = bot_before" in staging
 
     weapon = source("p_weapon.c")
+
+    owner = source("slipgate/sg_host_law_owner.c")
+    owner_internal = source("slipgate/sg_host_law_owner_internal.h")
+    for forbidden in (
+        "SG_HostLawProductionActivateAcceptedV2",
+        "sg_rune_v2_accepted_artifact_t",
+    ):
+        assert forbidden not in owner
+        assert forbidden not in owner_internal
+    runtime = source("slipgate/sg_host_engine_runtime.c")
+    activation = between(
+        runtime,
+        "SG_HostEngineRuntimeOwnerActivate(",
+        "int SG_HostEngineRuntimeCurrent",
+    )
+    for required in (
+        "RuntimeCallbacksCurrent(runtime)",
+        "SG_HostEngineRuntimeCurrent(runtime)",
+        "BuildStaticIdentity(&runtime->level, &current)",
+        "StaticIdentityEqual(&runtime->static_identity, &current)",
+    ):
+        assert required in activation
+    assert "accepted_artifact" not in activation
+    assert "binding" not in activation
+    assert "SG_HostLawPublicationOwnerIssueStatic" not in owner
+    assert "SG_HostLawPublicationOwnerIssueEnginePair" in owner
+    assert "SG_HostLawProductionBindActiveSubject" not in owner
+
+    hooks = source("slipgate/sg_hooks.c")
+    trace_adapter = between(hooks, "static trace_t Host_Trace", "static int Host_PointContents")
+    ordered(
+        trace_adapter,
+        "if (!SG_OwnsBot(passent))",
+        "return gi.trace",
+        "SG_HostLawProductionEngineTrace",
+    )
+    pointcontents = between(hooks, "static int Host_PointContents", "static int Host_BoxEdicts")
+    assert "return gi.pointcontents" in pointcontents
+    assert "SG_HostLawProduction" not in pointcontents
+
+    publication_header = source("slipgate/sg_host_law_publication.h")
+    test_only_hook_api = between(
+        publication_header,
+        "#ifdef SG_HOST_LAW_TESTING",
+        "#endif",
+    )
+    assert "SG_HostLawPublicationHookStep" in test_only_hook_api
+    assert "SG_HostLawPublicationHookFire" in test_only_hook_api
+    private_header = source("slipgate/sg_host_law_publication_private.h")
+    test_only_issue_api = between(
+        private_header,
+        "#ifdef SG_HOST_LAW_TESTING",
+        "#endif",
+    )
+    assert "SG_HostLawPublicationOwnerIssue(" in test_only_issue_api
+    assert "SG_HostLawPublicationOwnerIssueStatic(" in test_only_issue_api
+
     launch = between(weapon, "edict_t *fire_hook", "void Draw_Hook")
     assert "bolt->touch = SG_BotHookTouch;" in launch
-    assert "bolt->touch (bolt, tr.ent, &tr.plane, NULL);" in launch
-    assert "bolt->touch (bolt, tr.ent, NULL, NULL);" not in launch
     ordered(
         launch,
         "if (SG_OwnsBot(self))",
         "SG_CompoundGuardGameHookLinked(",
         "SG_CompoundHookGameLinked(",
-        "tr = gi.trace",
-        "if (SG_OwnsBot(self))",
+        "SG_HostLawProductionHookFire(",
+        "if (fire_result.status != SG_HOST_LAW_OK",
         "self->client->hook = bolt",
+        "ctf_hook_abort(self)",
+        "if (fire_step.collision_hit)",
         "bolt->touch",
         "if (self->client->hook != bolt)",
         "return NULL",
     )
+    host_failure = between(
+        launch,
+        "if (fire_result.status != SG_HOST_LAW_OK",
+        "//surt the muzzle flash code",
+    )
+    ordered(host_failure, "self->client->hook = bolt", "ctf_hook_abort(self)")
+    assert "G_FreeEdict" not in host_failure
+    invalid_collision = between(
+        launch,
+        "if (fire_step.collision_instance_id >=",
+        "target = &g_edicts",
+    )
+    ordered(invalid_collision, "self->client->hook = bolt", "ctf_hook_abort(self)")
+    assert "G_FreeEdict" not in invalid_collision
     assert "G_FreeEdict" in launch
     assert "return NULL" in launch
 
@@ -89,12 +160,14 @@ def main() -> None:
     )
     ordered(
         bot_touch,
+        "SG_HostLawProductionHookTouch(",
         "SG_CompoundHookGameAttachWillApply(",
         "VectorClear (self->velocity)",
         "self->hook_target = other",
         "gi.linkentity(self)",
         "SG_CompoundHookGameAttached(",
     )
+    assert "ctf_validateplayer" not in bot_touch
 
     human_touch = between(weapon, "void hook_touch", "void Grapple_Bolt_Think")
     assert "SG_HumanTraceHookAttach" in human_touch
@@ -120,6 +193,7 @@ def main() -> None:
     pull = between(weapon, "void CTF_HookPullStep", "void Weapon_Hook_Fire")
     ordered(
         pull,
+        "SG_HostLawProductionHookPullVelocity(",
         "ent->client->hooklength = speed",
         "VectorCopy (velocity, ent->velocity)",
         "VectorCopy (ent->velocity, ent->client->oldvelocity)",

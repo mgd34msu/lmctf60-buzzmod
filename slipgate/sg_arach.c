@@ -65,6 +65,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_host_law_owner.h"
 
 #include <errno.h>
 #include <math.h>
@@ -1257,13 +1258,26 @@ static qboolean SG_LevelSetupAttempt(void)
 		SG_SetupFailure("previous-failure", false);
 		return false;
 	}
+	/* Confirm that the level's exact BSP, physics, and engine callbacks are
+	 * published before loading the controller. */
+	{
+		sg_host_law_result_t host_law_result =
+			SG_HostLawProductionEnsureLevel(level.mapname);
+
+		if (host_law_result.status != SG_HOST_LAW_OK)
+			sg_host.dprint("slipgate: engine movement provider unavailable for %s: %s (%s)\n",
+				level.mapname, SG_HostLawStatusString(host_law_result.status),
+				SG_HostLawFieldString(host_law_result.field));
+	}
 
 	if (sg_rune)
 	{
 		if (strcmp(sg_rune_map, level.mapname) == 0)
 		{
 			if (SG_RunePhysicsCompatible(sg_rune))
+			{
 				return true;
+			}
 			sg_host.dprint("slipgate: setup held: active identity or "
 			               "physics law differs from loaded artifact\n");
 			SG_SetupFailure("active-identity", false);
@@ -4789,6 +4803,14 @@ void SG_RunFrame(void)
 	if (SG_TimerPending(sg_last_frame_time) ||
 	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
+	/* Host movement is not consumed until its exact engine binding has been
+	 * installed and revalidated for this frame.  The owner deliberately
+	 * returns HOST_UNAVAILABLE on ordinary production builds that have no BSP
+	 * bridge yet; that is the fail-closed state, not a permission to fall back
+	 * to a caller callback or a hull probe.  Retry this idempotent transaction
+	 * every frame: the bridge may appear after startup, and a prior consumer may
+	 * have retired a drifted owner after the one-shot artifact load. */
+	(void)SG_HostLawProductionEnsureLevel(level.mapname);
 	if (!sg_autoload_attempted)
 	{
 		sg_autoload_attempted = true;
@@ -4888,6 +4910,7 @@ void SG_LevelChange(void)
 	 * sources down; bot movement then uses the explicit non-authoritative
 	 * legacy fallback until the next accepted provider registers. */
 	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
+	SG_HostLawProductionReset();
 	/* Map teardown is a terminal owner in its own right. Finish before the
 	 * roster removal so the original map snapshot remains attached; slot reset
 	 * then sees a closed state and is intentionally idempotent. */

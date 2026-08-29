@@ -112,6 +112,75 @@ static identity_cvar_result_t Identity_ParseCvar(const cvar_t *var,
 	return IDENTITY_CVAR_OK;
 }
 
+static identity_cvar_result_t Identity_ParseCvar64(const cvar_t *var,
+	uint64_t *out)
+{
+	const char *s;
+	uint64_t value = 0U;
+	size_t length = 0U;
+
+	if (!var || !var->string)
+		return IDENTITY_CVAR_MISSING;
+	if (!(var->flags & CVAR_NOSET))
+		return IDENTITY_CVAR_UNPROTECTED;
+	s = var->string;
+	while (length <= 20U && s[length] != '\0')
+		length++;
+	if (length == 0U || length > 20U || (length > 1U && s[0] == '0'))
+		return IDENTITY_CVAR_NONCANONICAL;
+	for (size_t i = 0U; i < length; i++)
+	{
+		uint64_t digit;
+
+		if (s[i] < '0' || s[i] > '9')
+			return IDENTITY_CVAR_NONCANONICAL;
+		digit = (uint64_t)(s[i] - '0');
+		if (value > (UINT64_MAX - digit) / UINT64_C(10))
+			return IDENTITY_CVAR_NONCANONICAL;
+		value = value * UINT64_C(10) + digit;
+	}
+	if (value == 0U)
+		return IDENTITY_CVAR_NONCANONICAL;
+	*out = value;
+	return IDENTITY_CVAR_OK;
+}
+
+static identity_cvar_result_t Identity_ParseSHA256(const cvar_t *var,
+	uint8_t out[SG_LEVEL_BSP_SHA256_BYTES])
+{
+	const char *s;
+	size_t index;
+	int any = 0;
+
+	if (!var || !var->string)
+		return IDENTITY_CVAR_MISSING;
+	if (!(var->flags & CVAR_NOSET))
+		return IDENTITY_CVAR_UNPROTECTED;
+	s = var->string;
+	if (strlen(s) != SG_LEVEL_BSP_SHA256_BYTES * 2U)
+		return IDENTITY_CVAR_NONCANONICAL;
+	for (index = 0U; index < SG_LEVEL_BSP_SHA256_BYTES; index++)
+	{
+		unsigned char high = (unsigned char)s[index * 2U];
+		unsigned char low = (unsigned char)s[index * 2U + 1U];
+		uint8_t high_value;
+		uint8_t low_value;
+
+		if (!((high >= '0' && high <= '9') ||
+			(high >= 'a' && high <= 'f')) ||
+			!((low >= '0' && low <= '9') || (low >= 'a' && low <= 'f')))
+			return IDENTITY_CVAR_NONCANONICAL;
+		high_value = high <= '9' ? (uint8_t)(high - '0') :
+			(uint8_t)(high - 'a' + 10U);
+		low_value = low <= '9' ? (uint8_t)(low - '0') :
+			(uint8_t)(low - 'a' + 10U);
+		out[index] = (uint8_t)((high_value << 4U) | low_value);
+		if (out[index] != 0U)
+			any = 1;
+	}
+	return any ? IDENTITY_CVAR_OK : IDENTITY_CVAR_NONCANONICAL;
+}
+
 void SG_LevelIdentityReset(void)
 {
 	memset(&sg_identity_state, 0, sizeof(sg_identity_state));
@@ -123,6 +192,8 @@ sg_identity_status_t SG_LevelIdentityBegin(const char *mapname)
 {
 	cvar_t *mapchecksum;
 	cvar_t *physics_id;
+	cvar_t *bsp_sha256;
+	cvar_t *bsp_bytes;
 	identity_cvar_result_t result;
 	size_t map_length;
 
@@ -138,6 +209,8 @@ sg_identity_status_t SG_LevelIdentityBegin(const char *mapname)
 	 * object, so requesting CVAR_NOSET here would bless an operator spoof. */
 	mapchecksum = sg_host.cvar("sv_rune_mapchecksum", "", 0);
 	physics_id = sg_host.cvar("sv_rune_physics_id", "", 0);
+	bsp_sha256 = sg_host.cvar("sv_rune_bsp_sha256", "", 0);
+	bsp_bytes = sg_host.cvar("sv_rune_bsp_bytes", "", 0);
 
 	result = Identity_ParseCvar(mapchecksum,
 		&sg_identity_state.identity.bsp_checksum);
@@ -158,6 +231,23 @@ sg_identity_status_t SG_LevelIdentityBegin(const char *mapname)
 		return Identity_Fail(SG_IDENTITY_PHYSICS_ID_NONCANONICAL);
 	if (sg_identity_state.identity.host_physics_id != SG_HOST_PHYSICS_EPOCH)
 		return Identity_Fail(SG_IDENTITY_PHYSICS_ID_UNSUPPORTED);
+
+	result = Identity_ParseSHA256(bsp_sha256,
+		sg_identity_state.identity.bsp_sha256);
+	if (result == IDENTITY_CVAR_MISSING)
+		return Identity_Fail(SG_IDENTITY_BSP_SHA256_MISSING);
+	if (result == IDENTITY_CVAR_UNPROTECTED)
+		return Identity_Fail(SG_IDENTITY_BSP_SHA256_UNPROTECTED);
+	if (result != IDENTITY_CVAR_OK)
+		return Identity_Fail(SG_IDENTITY_BSP_SHA256_NONCANONICAL);
+	result = Identity_ParseCvar64(bsp_bytes,
+		&sg_identity_state.identity.bsp_bytes);
+	if (result == IDENTITY_CVAR_MISSING)
+		return Identity_Fail(SG_IDENTITY_BSP_BYTES_MISSING);
+	if (result == IDENTITY_CVAR_UNPROTECTED)
+		return Identity_Fail(SG_IDENTITY_BSP_BYTES_UNPROTECTED);
+	if (result != IDENTITY_CVAR_OK)
+		return Identity_Fail(SG_IDENTITY_BSP_BYTES_NONCANONICAL);
 
 	memset(sg_identity_state.identity.mapname, 0,
 		sizeof(sg_identity_state.identity.mapname));
@@ -286,7 +376,13 @@ const char *SG_LevelIdentityReason(sg_identity_status_t status)
 		"authoritative BSP checksum does not match",
 		"effective entity CRC32 does not match",
 		"host physics contract ID does not match",
-		"effective entity CRC32 could not be computed"
+		"effective entity CRC32 could not be computed",
+		"sv_rune_bsp_sha256 is missing",
+		"sv_rune_bsp_sha256 lacks CVAR_NOSET",
+		"sv_rune_bsp_sha256 is not canonical lowercase SHA-256",
+		"sv_rune_bsp_bytes is missing",
+		"sv_rune_bsp_bytes lacks CVAR_NOSET",
+		"sv_rune_bsp_bytes is not canonical positive uint64"
 	};
 
 	if (status < SG_IDENTITY_OK || status >= SG_IDENTITY_STATUS_COUNT)

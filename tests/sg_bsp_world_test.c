@@ -376,6 +376,9 @@ static void TestValidFixture(void)
 	CHECK(world->models[1].origin.value[0] == 32.0f);
 	CHECK(world->areas[1].first_areaportal == 1);
 	CHECK(world->areaportals[0].other_area == 1);
+	CHECK(world->source_size == fixture.size);
+	CHECK(memcmp(world->source_bytes, fixture.bytes, fixture.size) == 0);
+	CHECK(SG_BspWorldSourceIdentityCurrent(world));
 	{
 		static const uint8_t expected_identity[SG_BSP_CONTENT_ID_BYTES] = {
 			0x9dU, 0x4eU, 0x84U, 0x3eU, 0x31U, 0x3dU, 0x1aU, 0x27U,
@@ -388,6 +391,8 @@ static void TestValidFixture(void)
 			sizeof(expected_identity)));
 	}
 	memset(fixture.bytes, 0, fixture.size);
+	CHECK(world->source_bytes[0] == (uint8_t)'I');
+	CHECK(SG_BspWorldSourceIdentityCurrent(world));
 	CHECK(memcmp(world->entities, "{}\n", 4) == 0);
 	CHECK(world->lighting[0] == 10);
 	CHECK(world->visibility.bytes[12] == 1);

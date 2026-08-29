@@ -6,7 +6,7 @@ tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
-owned='tests/sg_host_collision_test.c slipgate/sg_host_collision.c slipgate/sg_host_pmove.c slipgate/sg_bsp_world.c slipgate/sg_rune_model.c'
+owned='tests/sg_host_collision_test.c slipgate/sg_host_collision.c slipgate/sg_host_pmove.c slipgate/sg_host_engine_pmove.c slipgate/sg_bsp_world.c slipgate/sg_rune_model.c'
 
 cd "$repo_dir"
 
@@ -22,6 +22,8 @@ build_real_oracle()
 		-o "$tmp_dir/collision-$suffix.o"
 	$cc $strict $extra -I. -c slipgate/sg_host_pmove.c \
 		-o "$tmp_dir/adapter-$suffix.o"
+	$cc $strict $extra -I. -c slipgate/sg_host_engine_pmove.c \
+		-o "$tmp_dir/engine-pmove-$suffix.o"
 	$cc $strict $extra -I. -c slipgate/sg_bsp_world.c \
 		-o "$tmp_dir/bsp-$suffix.o"
 	$cc $strict $extra -I. -c slipgate/sg_rune_model.c \
@@ -32,7 +34,8 @@ build_real_oracle()
 	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Wno-strict-prototypes \
 		$extra -I. -c q_shared.c -o "$tmp_dir/shared-$suffix.o"
 	$cc $extra "$tmp_dir/test-$suffix.o" "$tmp_dir/collision-$suffix.o" \
-		"$tmp_dir/adapter-$suffix.o" "$tmp_dir/bsp-$suffix.o" \
+		"$tmp_dir/adapter-$suffix.o" "$tmp_dir/engine-pmove-$suffix.o" \
+		"$tmp_dir/bsp-$suffix.o" \
 		"$tmp_dir/model-$suffix.o" "$tmp_dir/yq2-$suffix.o" \
 		"$tmp_dir/shared-$suffix.o" -lm -o "$tmp_dir/real-$suffix"
 }

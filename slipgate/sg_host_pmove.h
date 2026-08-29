@@ -2,12 +2,21 @@
 #ifndef SG_HOST_PMOVE_H
 #define SG_HOST_PMOVE_H
 
+/* q_shared.h predates include guards.  Reuse an already included copy when
+ * this interface is included by a game module after g_local.h. */
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef CVAR
 #include "../q_shared.h"
+#endif
 #include "sg_host_collision.h"
 
+/* The only dynamic gravity override accepted by the published evaluator is
+ * the live human hook state.  It is deliberately identity-bound rather than
+ * a caller-provided "gravity = 0" switch. */
+#define SG_HOST_PMOVE_HOOK_LAW_ID UINT64_C(0x484f4f4b4c573031)
+#define SG_HOST_PMOVE_HOOK_LENGTH_GRAVITY_ZERO 50U
 /* Fixed by the accepted Quake II Pmove ABI, not caller configuration. */
 #define SG_HOST_PMOVE_STEP_HEIGHT 18.0f
 
@@ -30,6 +39,12 @@ typedef struct sg_host_pmove_request_s
 	/* The host uses this exact comparison to select its initial snap search. */
 	pmove_state_t previous_state;
 	usercmd_t command;
+	/* These fields mirror ClientThink's authoritative hook branch.  All zero
+	 * means ordinary map gravity; nonzero values must name the published hook
+	 * law and its attached state. */
+	uint64_t hook_law_id;
+	uint32_t hook_attached;
+	uint32_t hook_length;
 } sg_host_pmove_request_t;
 
 typedef struct sg_host_pmove_result_s
@@ -44,6 +59,9 @@ typedef struct sg_host_pmove_result_s
 	int grounded;
 	uint32_t support_model_index;
 	uint64_t support_instance_id;
+	/* Engine-owned edict indices touched by this authoritative frame. */
+	uint32_t touch_count;
+	uint32_t touch_instance_ids[MAXTOUCH];
 	int water_type;
 	int water_level;
 	uint32_t evaluated_steps;
@@ -53,6 +71,7 @@ typedef struct sg_host_pmove_result_s
 	uint64_t collision_trace_count;
 	float gravity;
 	uint64_t physics_abi_id;
+	uint64_t gravity_law_id;
 } sg_host_pmove_result_t;
 
 typedef struct sg_host_pmove_trace_s

@@ -10,6 +10,7 @@
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
@@ -138,6 +139,7 @@ void ShutdownGame (void)
 {
 	SG_DangerCheckpoint("shutdown");
 	SG_DangerPersistenceReset();
+	SG_HostLawProductionReset();
 	SG_LevelIdentityReset();
 	gi.dprintf ("==== ShutdownGame ====\n");
 

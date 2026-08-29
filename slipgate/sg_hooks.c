@@ -12,6 +12,8 @@
 
 #include "g_local.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_client_ownership.h"
+#include "slipgate/sg_host_law_owner.h"
 
 sg_host_t sg_host;
 
@@ -59,12 +61,70 @@ static trace_t Host_Trace(const vec3_t start, const vec3_t mins,
                           const vec3_t maxs, const vec3_t end,
                           edict_t *passent, int contentmask)
 {
+#ifdef SG_HOST_TEST
 	return gi.trace((float *)start, (float *)mins, (float *)maxs,
 	                (float *)end, passent, contentmask);
+#else
+	static csurface_t surface;
+	sg_host_collision_trace_t published;
+	sg_host_law_result_t result;
+	trace_t trace;
+
+	if (!SG_OwnsBot(passent))
+		return gi.trace((float *)start, (float *)mins, (float *)maxs,
+		                (float *)end, passent, contentmask);
+	result = SG_HostLawProductionEngineTrace((uint32_t)passent->s.number,
+		start, mins, maxs, end,
+		(sg_host_collision_contents_t)contentmask, &published);
+	memset(&trace, 0, sizeof(trace));
+	trace.fraction = 1.0f;
+	VectorCopy(end, trace.endpos);
+	if (result.status != SG_HOST_LAW_OK)
+	{
+		trace.allsolid = true;
+		trace.startsolid = true;
+		trace.fraction = 0.0f;
+		VectorCopy(start, trace.endpos);
+		trace.contents = CONTENTS_SOLID;
+		return trace;
+	}
+	trace.allsolid = published.allsolid ? true : false;
+	trace.startsolid = published.startsolid ? true : false;
+	trace.fraction = published.fraction;
+	VectorCopy(published.end, trace.endpos);
+	VectorCopy(published.plane.normal, trace.plane.normal);
+	trace.plane.dist = published.plane.distance;
+	trace.plane.type = (byte)published.plane.type;
+	trace.plane.signbits = (published.plane.normal[0] < 0.0f ? 1 : 0) |
+		(published.plane.normal[1] < 0.0f ? 2 : 0) |
+		(published.plane.normal[2] < 0.0f ? 4 : 0);
+	trace.contents = (int)published.contents;
+	if (published.fraction < 1.0f || published.startsolid || published.allsolid)
+	{
+		if (published.instance_id >= (uint64_t)globals.num_edicts)
+		{
+			trace.allsolid = true;
+			trace.startsolid = true;
+			trace.fraction = 0.0f;
+			VectorCopy(start, trace.endpos);
+			trace.contents = CONTENTS_SOLID;
+			return trace;
+		}
+		memset(&surface, 0, sizeof(surface));
+		surface.flags = published.surface_flags;
+		trace.surface = &surface;
+		trace.ent = &g_edicts[published.instance_id];
+	}
+	return trace;
+#endif
 }
 
 static int Host_PointContents(const vec3_t point)
 {
+	/* This host service has no subject parameter and serves static generators,
+	 * localization, oracles, and non-bot callers.  It therefore remains the
+	 * exact base-engine adapter; subject-bound runtime queries use the private
+	 * owner seam inside Pmove/hook consumers instead. */
 	return gi.pointcontents((float *)point);
 }
 

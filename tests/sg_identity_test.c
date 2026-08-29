@@ -31,6 +31,10 @@ static int missing_map_cvar;
 static int missing_physics_cvar;
 static cvar_t map_cvar;
 static cvar_t physics_cvar;
+static cvar_t bsp_sha256_cvar;
+static cvar_t bsp_bytes_cvar;
+static const char valid_bsp_sha256[] =
+	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -49,6 +53,10 @@ static cvar_t *Mock_Cvar(const char *name, const char *value, int flags)
 		return missing_map_cvar ? NULL : &map_cvar;
 	if (strcmp(name, "sv_rune_physics_id") == 0)
 		return missing_physics_cvar ? NULL : &physics_cvar;
+	if (strcmp(name, "sv_rune_bsp_sha256") == 0)
+		return &bsp_sha256_cvar;
+	if (strcmp(name, "sv_rune_bsp_bytes") == 0)
+		return &bsp_bytes_cvar;
 	bad_cvar_call++;
 	return NULL;
 }
@@ -59,6 +67,8 @@ static void Mock_Reset(const char *mapchecksum, int map_flags,
 	memset(&sg_host, 0, sizeof(sg_host));
 	memset(&map_cvar, 0, sizeof(map_cvar));
 	memset(&physics_cvar, 0, sizeof(physics_cvar));
+	memset(&bsp_sha256_cvar, 0, sizeof(bsp_sha256_cvar));
+	memset(&bsp_bytes_cvar, 0, sizeof(bsp_bytes_cvar));
 	cvar_calls = 0;
 	bad_cvar_call = 0;
 	missing_map_cvar = 0;
@@ -69,6 +79,12 @@ static void Mock_Reset(const char *mapchecksum, int map_flags,
 	physics_cvar.name = "sv_rune_physics_id";
 	physics_cvar.string = (char *)physics;
 	physics_cvar.flags = physics_flags;
+	bsp_sha256_cvar.name = "sv_rune_bsp_sha256";
+	bsp_sha256_cvar.string = (char *)valid_bsp_sha256;
+	bsp_sha256_cvar.flags = CVAR_NOSET;
+	bsp_bytes_cvar.name = "sv_rune_bsp_bytes";
+	bsp_bytes_cvar.string = "123456";
+	bsp_bytes_cvar.flags = CVAR_NOSET;
 	sg_host.cvar = Mock_Cvar;
 	SG_LevelIdentityReset();
 }
@@ -378,7 +394,7 @@ static void TestValidAndFloatPrecision(void)
 	/* This member cannot carry the exact uint32_t value on ordinary hosts. */
 	map_cvar.value = 4294967296.0f;
 	CHECK(SG_LevelIdentityBegin("Map_1-TEST") == SG_IDENTITY_OK);
-	CHECK(cvar_calls == 2);
+	CHECK(cvar_calls == 4);
 	CHECK(bad_cvar_call == 0);
 	memset(&identity, 0xa5, sizeof(identity));
 	CHECK(SG_LevelIdentitySnapshot("Map_1-TEST", &identity) ==
@@ -393,6 +409,9 @@ static void TestValidAndFloatPrecision(void)
 	CHECK(identity.bsp_checksum == UINT32_MAX);
 	CHECK(identity.entity_crc32 == expected_crc);
 	CHECK(identity.host_physics_id == SG_HOST_PHYSICS_EPOCH);
+	CHECK(identity.bsp_bytes == UINT64_C(123456));
+	CHECK(identity.bsp_sha256[0] == UINT8_C(0x01));
+	CHECK(identity.bsp_sha256[31] == UINT8_C(0xef));
 	CHECK(strcmp(identity.mapname, "Map_1-TEST") == 0);
 	CHECK(SG_LevelIdentityMatch("Map_1-TEST", UINT32_MAX, expected_crc, 1) ==
 	      SG_IDENTITY_OK);
@@ -436,7 +455,7 @@ static void TestCanonicalUint32(void)
 		Mock_Reset(invalid[i], CVAR_NOSET, "1", CVAR_NOSET);
 		CHECK(SG_LevelIdentityBegin("map1") ==
 		      SG_IDENTITY_MAPCHECKSUM_NONCANONICAL);
-		CHECK(cvar_calls == 2);
+		CHECK(cvar_calls == 4);
 		CHECK(SG_LevelIdentitySnapshot("map1", &identity) ==
 		      SG_IDENTITY_MAPCHECKSUM_NONCANONICAL);
 	}
@@ -463,6 +482,38 @@ static void TestCanonicalUint32(void)
 	}
 }
 
+static void TestExactBspBridge(void)
+{
+	char uppercase[sizeof(valid_bsp_sha256)];
+
+	Mock_Valid("1");
+	memcpy(uppercase, valid_bsp_sha256, sizeof(uppercase));
+	uppercase[10] = 'A';
+	bsp_sha256_cvar.string = uppercase;
+	CHECK(SG_LevelIdentityBegin("bridge") ==
+		SG_IDENTITY_BSP_SHA256_NONCANONICAL);
+
+	Mock_Valid("1");
+	bsp_sha256_cvar.flags = 0;
+	CHECK(SG_LevelIdentityBegin("bridge") ==
+		SG_IDENTITY_BSP_SHA256_UNPROTECTED);
+
+	Mock_Valid("1");
+	bsp_bytes_cvar.string = "0";
+	CHECK(SG_LevelIdentityBegin("bridge") ==
+		SG_IDENTITY_BSP_BYTES_NONCANONICAL);
+
+	Mock_Valid("1");
+	bsp_bytes_cvar.string = "0001";
+	CHECK(SG_LevelIdentityBegin("bridge") ==
+		SG_IDENTITY_BSP_BYTES_NONCANONICAL);
+
+	Mock_Valid("1");
+	bsp_bytes_cvar.flags = 0;
+	CHECK(SG_LevelIdentityBegin("bridge") ==
+		SG_IDENTITY_BSP_BYTES_UNPROTECTED);
+}
+
 static void TestProtectionAndMissingValues(void)
 {
 	sg_level_identity_t identity;
@@ -483,7 +534,7 @@ static void TestProtectionAndMissingValues(void)
 	Mock_Valid("123");
 	missing_map_cvar = 1;
 	CHECK(SG_LevelIdentityBegin("map1") == SG_IDENTITY_MAPCHECKSUM_MISSING);
-	CHECK(cvar_calls == 2);
+	CHECK(cvar_calls == 4);
 
 	Mock_Valid("123");
 	missing_physics_cvar = 1;
@@ -683,6 +734,7 @@ int main(void)
 	TestCRC32();
 	TestValidAndFloatPrecision();
 	TestCanonicalUint32();
+	TestExactBspBridge();
 	TestProtectionAndMissingValues();
 	TestMapGrammar();
 	TestLifecycleAndMapSwitch();

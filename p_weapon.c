@@ -4,7 +4,18 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_compound_hook_game_events.h"
+#include "slipgate/sg_host_law_owner.h"
+#include "slipgate/sg_host_law_owner_internal.h"
 #include "slipgate/sg_human_trace.h"
+#ifdef world
+#define SG_P_WEAPON_RESTORE_WORLD
+#undef world
+#endif
+#include "slipgate/sg_host_hook_law.h"
+#ifdef SG_P_WEAPON_RESTORE_WORLD
+#define world (&g_edicts[0])
+#undef SG_P_WEAPON_RESTORE_WORLD
+#endif
 #include "m_player.h"
 #include "g_tourney.h"
 
@@ -22,6 +33,37 @@ void SG_NoteRailShot(edict_t *shooter);
 #define GRAPPLE_FIRE_HOOK_SPEED        SG_HOST_HOOK_FIRE_SPEED
 #define GRAPPLE_PULL_SPEED             SG_HOST_HOOK_PULL_SPEED
 #define GRAPPLE_PULL_BALANCED_SPEED    SG_HOST_HOOK_PULL_SPEED
+
+/* Capture the hook constants from the same translation unit that executes the
+ * weapon.  Tests and default helpers cannot replace this callback. */
+int SG_HostHookLiveCapture(sg_host_hook_law_t *law_out)
+{
+	if (!law_out)
+		return 0;
+	memset(law_out, 0, sizeof(*law_out));
+	law_out->version = SG_HOST_HOOK_LAW_VERSION;
+	law_out->trace_mask = MASK_SHOT;
+	law_out->muzzle_forward_offset = SG_HOST_HOOK_MUZZLE_FORWARD_OFFSET;
+	law_out->muzzle_right_offset = SG_HOST_HOOK_MUZZLE_RIGHT_OFFSET;
+	law_out->muzzle_view_offset = SG_HOST_HOOK_MUZZLE_VIEW_OFFSET;
+	law_out->fire_speed = GRAPPLE_FIRE_HOOK_SPEED;
+	law_out->pull_speed = GRAPPLE_PULL_SPEED;
+	law_out->initial_damage = SG_HOST_HOOK_INITIAL_DAMAGE;
+	law_out->attached_damage = SG_HOST_HOOK_ATTACHED_DAMAGE;
+	law_out->projectile_health = SG_HOST_HOOK_HEALTH;
+	law_out->attached_cadence_frames = SG_HOST_HOOK_ATTACHED_CADENCE;
+	law_out->trace_epsilon = SG_HOST_HOOK_TRACE_EPSILON;
+	if (ctfflags && isfinite(ctfflags->value) && ctfflags->value >= 0.0f &&
+		ctfflags->value <= (float)INT_MAX &&
+		truncf(ctfflags->value) == ctfflags->value)
+		law_out->no_grapple_damage =
+			((uint32_t)ctfflags->value & SG_HOST_HOOK_CTF_NO_GRAP_DAMAGE) != 0U;
+	law_out->identity = SG_HOST_HOOK_LAW_ID;
+	law_out->near_bite_distance = SG_HOST_HOOK_NEAR_BITE_DISTANCE;
+	law_out->near_bite_gravity_zero_distance =
+		SG_HOST_HOOK_NEAR_BITE_GRAVITY_ZERO_DISTANCE;
+	return 1;
+}
 
 static qboolean	is_quad;
 static byte		is_silenced;
@@ -1825,6 +1867,9 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 	cplane_t *plane, csurface_t *surf)
 {
 	vec3_t dest;
+	sg_host_hook_step_t touch_step;
+	sg_host_law_result_t touch_result;
+	uint32_t target_index;
 
 	if (!other)
 		return;
@@ -1835,43 +1880,24 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 	if (self->hook_target && self->hook_target != other) // Already have a target... ignore this new target
 		return;
 
-	if (other &&
-		(strcmp(other->classname, "bodyque") != 0) &&
-		(!ctf_validateplayer(other, CTF_TEAM_ANYTEAM)) &&
-		(strcmp(other->classname, "worldspawn") != 0) &&
-		(strncmp(other->classname, "func", 4) != 0) &&
-		(strncmp(other->classname, "info_flag", 9) != 0)
-		)
+	if (other->s.number < 0 || other->s.number >= globals.num_edicts ||
+		&g_edicts[other->s.number] != other)
 	{
-		/* HOOKABORT census (sg_debug): the noattach mass -- 6,488 per
-		 * wave -- ends in these abort paths, and no earlier telemetry
-		 * could see WHICH: an aborted bolt never attaches, so the bite
-		 * census was structurally blind to it. Name the entity. */
-		if (self->owner->client && sg_cv.debug->value)
-			gi.dprintf("HOOKABORT %s entity=%s\n",
-			           self->owner->client->pers.netname,
-			           other->classname ? other->classname : "?");
 		ctf_hook_abort(self->owner);
 		return;
 	}
-
-	//else we hit something else
-//	self->s.sound = gi.soundindex ("weapons/grapple/grpull.wav");
-//this works, but sounds bad
-
-	// Abort the hook if:
-	// [a] we hit the sky
-	// [b] we hit a teammate
-	// [c] we hit a dead guy
-	if ((surf && (surf->flags & SURF_SKY)) ||
-		((other->client) && (self->owner->client->ctf.teamnum == other->client->ctf.teamnum)) ||
-		other->deadflag)
+	target_index = (uint32_t)other->s.number;
+	touch_result = SG_HostLawProductionHookTouch(
+		(uint32_t)self->owner->s.number, (uint32_t)self->s.number,
+		target_index, surf ? surf->flags : 0,
+		&touch_step);
+	if (touch_result.status != SG_HOST_LAW_OK || touch_step.aborted ||
+		!touch_step.accepted)
 	{
 		if (self->owner->client && sg_cv.debug->value)
-			gi.dprintf("HOOKABORT %s %s\n",
-			           self->owner->client->pers.netname,
-			           (surf && (surf->flags & SURF_SKY)) ? "sky"
-			           : (other->client ? "teammate" : "corpse"));
+			gi.dprintf("HOOKABORT %s entity=%s\n",
+				self->owner->client->pers.netname,
+				other->classname ? other->classname : "?");
 		ctf_hook_abort(self->owner);
 		return;
 	}
@@ -1899,28 +1925,24 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 		self->owner->client->hookstate = 2;
 	}
 
-	if (! ((int)ctfflags->value & CTF_NO_GRAP_DAMAGE) || (!other->client)) //surt, no damage if server says so
+	if (touch_step.damage != 0U)
 	{
 		if (self->hook_target == other) 
 		{
-			if ( (level.framenum % 7) == 0 && (level.framenum != self->hook_lastframe) )
-			{
-				if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM)) //noise for hitting players
-					gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/gkilling.wav"), 1, ATTN_NORM, 0);
-				//every 1.5 seconds
-				T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, SG_HOST_HOOK_ATTACHED_DAMAGE, SG_HOST_HOOK_ATTACHED_DAMAGE, DAMAGE_ENERGY, MOD_CTF_GRAPPLE); //damage, knockback
-				self->hook_lastframe = level.framenum;
-			}
+			if (touch_step.target_kind == SG_HOST_HOOK_TARGET_PLAYER)
+				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/gkilling.wav"), 1, ATTN_NORM, 0);
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, (int)touch_step.damage, (int)touch_step.damage, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+			self->hook_lastframe = (int)touch_step.next_last_damage_frame;
 		}
 		else 
 		{
-			if (ctf_validateplayer(other,CTF_TEAM_ANYTEAM)) //noise for hitting players
+			if (touch_step.target_kind == SG_HOST_HOOK_TARGET_PLAYER)
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghit.wav"), 1, ATTN_NORM, 0);
 			else
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8f, ATTN_NORM, 0);
 			
 			// Bonus damage for first hit
-			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, SG_HOST_HOOK_INITIAL_DAMAGE, SG_HOST_HOOK_INITIAL_DAMAGE, DAMAGE_ENERGY, MOD_CTF_GRAPPLE); //damage, knockback
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, (int)touch_step.damage, (int)touch_step.damage, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
 		}
 	}
 	
@@ -1932,6 +1954,11 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 		
 	if (!self->hook_target)
 	{
+		if (!touch_step.attached)
+		{
+			ctf_hook_abort(self->owner);
+			return;
+		}
 		self->hook_target = other;
 		VectorSubtract(self->s.origin, self->hook_target->absmin, dest);
 		VectorCopy(dest, self->hook_offset);
@@ -2128,7 +2155,8 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 {
 	edict_t	*bolt;
-	trace_t	tr;
+	sg_host_hook_step_t fire_step;
+	sg_host_law_result_t fire_result;
 
 	VectorNormalize (dir);
 
@@ -2176,6 +2204,15 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 			return NULL;
 		}
 	}
+	fire_result = SG_HostLawProductionHookFire((uint32_t)self->s.number,
+		(uint32_t)bolt->s.number, &fire_step);
+	if (fire_result.status != SG_HOST_LAW_OK || !fire_step.accepted ||
+		fire_step.aborted)
+	{
+		self->client->hook = bolt;
+		ctf_hook_abort(self);
+		return NULL;
+	}
 
 
 	//surt the muzzle flash code also causes a shotgun noise!!!!
@@ -2198,19 +2235,30 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 		check_dodge (self, bolt->s.origin, dir, speed);
 	*/
 
-	tr = gi.trace (self->s.origin, NULL, NULL, bolt->s.origin, self, MASK_SHOT);
-	if (tr.fraction < 1.0)
+	if (fire_step.collision_hit)
 	{
-		VectorMA (bolt->s.origin, -10, dir, bolt->s.origin);
-		if (SG_OwnsBot(self))
+		cplane_t plane;
+		csurface_t surface;
+		edict_t *target;
+
+		if (fire_step.collision_instance_id >= (uint64_t)globals.num_edicts)
 		{
 			self->client->hook = bolt;
-			bolt->touch (bolt, tr.ent, &tr.plane, NULL);
-			if (self->client->hook != bolt)
-				return NULL;
+			ctf_hook_abort(self);
+			return NULL;
 		}
-		else
-			bolt->touch (bolt, tr.ent, &tr.plane, NULL);
+		target = &g_edicts[fire_step.collision_instance_id];
+		memset(&plane, 0, sizeof(plane));
+		VectorCopy(fire_step.collision_plane_normal, plane.normal);
+		plane.dist = fire_step.collision_plane_distance;
+		plane.type = (byte)fire_step.collision_plane_type;
+		memset(&surface, 0, sizeof(surface));
+		surface.flags = fire_step.collision_surface_flags;
+		VectorMA (bolt->s.origin, -10, dir, bolt->s.origin);
+		self->client->hook = bolt;
+		bolt->touch(bolt, target, &plane, &surface);
+		if (self->client->hook != bolt)
+			return NULL;
 	}
 	return bolt;
 }	
@@ -2332,8 +2380,21 @@ void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
 	if (draw_cable)
 		Draw_Hook (ent, start, ent->client->hook->s.origin);
 
-	speed = CTF_HookPullVelocity (start, ent->client->hook->s.origin,
-	                              velocity);
+	if (SG_OwnsBot(ent))
+	{
+		sg_host_law_result_t pull_result =
+			SG_HostLawProductionHookPullVelocity((uint32_t)ent->s.number,
+				(uint32_t)ent->client->hook->s.number, velocity, &speed);
+
+		if (pull_result.status != SG_HOST_LAW_OK)
+		{
+			ctf_hook_abort(ent);
+			return;
+		}
+	}
+	else
+		speed = CTF_HookPullVelocity (start, ent->client->hook->s.origin,
+		                              velocity);
 
 	if (!ent->client->hooklength)
 		ent->client->hooklength = speed;

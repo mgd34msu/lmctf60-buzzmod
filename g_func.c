@@ -3,6 +3,7 @@
 #include "slipgate/sg_compound_world.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_train_gate_game.h"
+#include "slipgate/sg_host_mechanism_law.h"
 
 /*
 =========================================================
@@ -52,6 +53,72 @@
 #define DOOR_TOGGLE			32
 #define DOOR_X_AXIS			64
 #define DOOR_Y_AXIS			128
+
+/* Keep the values returned by the live law capture next to the executable
+ * mover constants.  The callback below therefore reads the same source
+ * facts that the real callbacks use instead of rebuilding a test default. */
+#define SG_MOVER_DOOR_DEFAULT_SPEED	100.0f
+#define SG_MOVER_DOOR_DEATHMATCH_SCALE	2.0f
+#define SG_MOVER_DEFAULT_WAIT		3.0f
+#define SG_MOVER_DEFAULT_DAMAGE		2
+#define SG_MOVER_PLAT_DEFAULT_SPEED	20.0f
+#define SG_MOVER_PLAT_DEFAULT_ACCEL	5.0f
+#define SG_MOVER_PLAT_DEFAULT_DECEL	5.0f
+#define SG_MOVER_PLAT_TOP_DWELL		3.0f
+#define SG_MOVER_PLAT_TOP_TOUCH_DELAY	1.0f
+#define SG_MOVER_DOOR_TRIGGER_DEBOUNCE	1.0f
+#define SG_MOVER_DOOR_MESSAGE_DEBOUNCE	5.0f
+#define SG_MOVER_TRAIN_BLOCKED_DEBOUNCE	0.5f
+#define SG_MOVER_TRAIN_DEFAULT_SPEED	100.0f
+#define SG_MOVER_TRAIN_DEFAULT_DAMAGE	100
+#define SG_MOVER_NONCLIENT_DAMAGE	100000
+
+/* This is the production mover owner queried by the host-law publication.
+ * The values mirror the actual Move_Calc/plat/door/train setup in this file;
+ * notably SP_func_door doubles its stock 100 speed in deathmatch. */
+int SG_HostMechanismLiveCapture(sg_host_mechanism_law_t *law_out)
+{
+	if (!law_out)
+		return 0;
+	memset(law_out, 0, sizeof(*law_out));
+	law_out->version = SG_HOST_MECHANISM_LAW_VERSION;
+	law_out->frame_ms = (uint32_t)(FRAMETIME * 1000.0f);
+	law_out->move_equation_id = SG_HOST_MECHANISM_MOVE_EQUATION_ID;
+	law_out->acceleration_equation_id = SG_HOST_MECHANISM_ACCEL_EQUATION_ID;
+	law_out->door_equation_id = SG_HOST_MECHANISM_DOOR_EQUATION_ID;
+	law_out->platform_equation_id = SG_HOST_MECHANISM_PLAT_EQUATION_ID;
+	law_out->trigger_equation_id = SG_HOST_MECHANISM_TRIGGER_EQUATION_ID;
+	law_out->train_equation_id = SG_HOST_MECHANISM_TRAIN_EQUATION_ID;
+	law_out->identity = SG_HOST_MECHANISM_LAW_ID;
+	law_out->door_default_wait_ms =
+		(uint32_t)(SG_MOVER_DEFAULT_WAIT * 1000.0f);
+	law_out->platform_top_dwell_ms =
+		(uint32_t)(SG_MOVER_PLAT_TOP_DWELL * 1000.0f);
+	law_out->platform_top_touch_delay_ms =
+		(uint32_t)(SG_MOVER_PLAT_TOP_TOUCH_DELAY * 1000.0f);
+	law_out->door_trigger_debounce_ms =
+		(uint32_t)(SG_MOVER_DOOR_TRIGGER_DEBOUNCE * 1000.0f);
+	law_out->door_message_debounce_ms =
+		(uint32_t)(SG_MOVER_DOOR_MESSAGE_DEBOUNCE * 1000.0f);
+	law_out->train_blocked_debounce_ms =
+		(uint32_t)(SG_MOVER_TRAIN_BLOCKED_DEBOUNCE * 1000.0f);
+	law_out->trigger_default_wait_ms =
+		(uint32_t)(SG_HOST_MECHANISM_TRIGGER_DEFAULT_WAIT_SECONDS * 1000.0f);
+	law_out->trigger_remove_delay_ms = (uint32_t)(FRAMETIME * 1000.0f);
+	law_out->frame_schedule_ms = (uint32_t)(FRAMETIME * 1000.0f);
+	law_out->door_default_speed = deathmatch && deathmatch->value ?
+		SG_MOVER_DOOR_DEFAULT_SPEED * SG_MOVER_DOOR_DEATHMATCH_SCALE :
+		SG_MOVER_DOOR_DEFAULT_SPEED;
+	/* Rotating doors use SP_func_door_rotating's stock speed and are not
+	 * subject to func_door's deathmatch multiplier. */
+	law_out->door_rotating_default_speed = SG_MOVER_DOOR_DEFAULT_SPEED;
+	law_out->platform_default_speed = SG_MOVER_PLAT_DEFAULT_SPEED;
+	law_out->platform_default_accel = SG_MOVER_PLAT_DEFAULT_ACCEL;
+	law_out->platform_default_decel = SG_MOVER_PLAT_DEFAULT_DECEL;
+	law_out->train_default_speed = SG_MOVER_TRAIN_DEFAULT_SPEED;
+	law_out->train_default_damage = SG_MOVER_TRAIN_DEFAULT_DAMAGE;
+	return 1;
+}
 
 
 //
@@ -359,7 +426,7 @@ void plat_hit_top (edict_t *ent)
 	ent->moveinfo.state = STATE_TOP;
 
 	ent->think = plat_go_down;
-	ent->nextthink = level.time + 3;
+	ent->nextthink = level.time + SG_MOVER_PLAT_TOP_DWELL;
 }
 
 void plat_hit_bottom (edict_t *ent)
@@ -402,7 +469,7 @@ void plat_blocked (edict_t *self, edict_t *other)
 	if (!(other->svflags & SVF_MONSTER) && (!other->client) )
 	{
 		// give it a chance to go away on it's own terms (like gibs)
-		T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, 100000, 1, 0, MOD_CRUSH);
+		T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, SG_MOVER_NONCLIENT_DAMAGE, 1, 0, MOD_CRUSH);
 		// if it's still there, nuke it
 		if (other)
 			BecomeExplosion1 (other);
@@ -442,7 +509,7 @@ void Touch_Plat_Center (edict_t *ent, edict_t *other, cplane_t *plane, csurface_
 	if (ent->moveinfo.state == STATE_BOTTOM)
 		plat_go_up (ent);
 	else if (ent->moveinfo.state == STATE_TOP)
-		ent->nextthink = level.time + 1;	// the player is still on the plat, so delay going down
+		ent->nextthink = level.time + SG_MOVER_PLAT_TOP_TOUCH_DELAY;	// the player is still on the plat, so delay going down
 }
 
 void plat_spawn_inside_trigger (edict_t *ent)
@@ -519,22 +586,22 @@ void SP_func_plat (edict_t *ent)
 	ent->blocked = plat_blocked;
 
 	if (!ent->speed)
-		ent->speed = 20;
+		ent->speed = SG_MOVER_PLAT_DEFAULT_SPEED;
 	else
 		ent->speed *= 0.1f;
 
 	if (!ent->accel)
-		ent->accel = 5;
+		ent->accel = SG_MOVER_PLAT_DEFAULT_ACCEL;
 	else
 		ent->accel *= 0.1f;
 
 	if (!ent->decel)
-		ent->decel = 5;
+		ent->decel = SG_MOVER_PLAT_DEFAULT_DECEL;
 	else
 		ent->decel *= 0.1f;
 
 	if (!ent->dmg)
-		ent->dmg = 2;
+		ent->dmg = SG_MOVER_DEFAULT_DAMAGE;
 
 	if (!st.lip)
 		st.lip = 8;
@@ -1013,7 +1080,7 @@ void Touch_DoorTrigger (edict_t *self, edict_t *other, cplane_t *plane, csurface
 
 	if (level.time < self->touch_debounce_time)
 		return;
-	self->touch_debounce_time = level.time + 1.0;
+	self->touch_debounce_time = level.time + SG_MOVER_DOOR_TRIGGER_DEBOUNCE;
 
 	/* Preserve the physical trigger identity through door_use. */
 	door_use (self->owner, self, other);
@@ -1105,7 +1172,7 @@ void door_blocked  (edict_t *self, edict_t *other)
 	if (!(other->svflags & SVF_MONSTER) && (!other->client) )
 	{
 		// give it a chance to go away on it's own terms (like gibs)
-		T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, 100000, 1, 0, MOD_CRUSH);
+		T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, SG_MOVER_NONCLIENT_DAMAGE, 1, 0, MOD_CRUSH);
 		// if it's still there, nuke it
 		if (other)
 			BecomeExplosion1 (other);
@@ -1160,7 +1227,7 @@ void door_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 
 	if (level.time < self->touch_debounce_time)
 		return;
-	self->touch_debounce_time = level.time + 5.0;
+	self->touch_debounce_time = level.time + SG_MOVER_DOOR_MESSAGE_DEBOUNCE;
 
 	gi.centerprintf (other, "%s", self->message);
 	gi.sound (other, CHAN_AUTO, gi.soundindex ("misc/talk1.wav"), 1, ATTN_NORM, 0);
@@ -1186,9 +1253,9 @@ void SP_func_door (edict_t *ent)
 	ent->use = door_use;
 	
 	if (!ent->speed)
-		ent->speed = 100;
+		ent->speed = SG_MOVER_DOOR_DEFAULT_SPEED;
 	if (deathmatch->value)
-		ent->speed *= 2;
+		ent->speed *= SG_MOVER_DOOR_DEATHMATCH_SCALE;
 
 	if (!ent->accel)
 		ent->accel = ent->speed;
@@ -1196,11 +1263,11 @@ void SP_func_door (edict_t *ent)
 		ent->decel = ent->speed;
 
 	if (!ent->wait)
-		ent->wait = 3;
+		ent->wait = SG_MOVER_DEFAULT_WAIT;
 	if (!st.lip)
 		st.lip = 8;
 	if (!ent->dmg)
-		ent->dmg = 2;
+		ent->dmg = SG_MOVER_DEFAULT_DAMAGE;
 
 	// calculate second position
 	VectorCopy (ent->s.origin, ent->pos1);
@@ -1324,16 +1391,16 @@ void SP_func_door_rotating (edict_t *ent)
 	ent->use = door_use;
 
 	if (!ent->speed)
-		ent->speed = 100;
+		ent->speed = SG_MOVER_DOOR_DEFAULT_SPEED;
 	if (!ent->accel)
 		ent->accel = ent->speed;
 	if (!ent->decel)
 		ent->decel = ent->speed;
 
 	if (!ent->wait)
-		ent->wait = 3;
+		ent->wait = SG_MOVER_DEFAULT_WAIT;
 	if (!ent->dmg)
-		ent->dmg = 2;
+		ent->dmg = SG_MOVER_DEFAULT_DAMAGE;
 
 	if (ent->sounds != 1)
 	{
@@ -1494,7 +1561,7 @@ void train_blocked (edict_t *self, edict_t *other)
 	if (!(other->svflags & SVF_MONSTER) && (!other->client) )
 	{
 		// give it a chance to go away on it's own terms (like gibs)
-		T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, 100000, 1, 0, MOD_CRUSH);
+		T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, SG_MOVER_NONCLIENT_DAMAGE, 1, 0, MOD_CRUSH);
 		// if it's still there, nuke it
 		if (other)
 			BecomeExplosion1 (other);
@@ -1506,7 +1573,7 @@ void train_blocked (edict_t *self, edict_t *other)
 
 	if (!self->dmg)
 		return;
-	self->touch_debounce_time = level.time + 0.5;
+	self->touch_debounce_time = level.time + SG_MOVER_TRAIN_BLOCKED_DEBOUNCE;
 	T_Damage (other, self, self, vec3_origin, other->s.origin, vec3_origin, self->dmg, 1, 0, MOD_CRUSH);
 }
 
@@ -1695,7 +1762,7 @@ void SP_func_train (edict_t *self)
 	else
 	{
 		if (!self->dmg)
-			self->dmg = 100;
+			self->dmg = SG_MOVER_TRAIN_DEFAULT_DAMAGE;
 	}
 	self->solid = SOLID_BSP;
 	gi.setmodel (self, self->model);
@@ -1704,7 +1771,7 @@ void SP_func_train (edict_t *self)
 		self->moveinfo.sound_middle = gi.soundindex  (st.noise);
 
 	if (!self->speed)
-		self->speed = 100;
+		self->speed = SG_MOVER_TRAIN_DEFAULT_SPEED;
 
 	self->moveinfo.speed = self->speed;
 	self->moveinfo.accel = self->moveinfo.decel = self->moveinfo.speed;

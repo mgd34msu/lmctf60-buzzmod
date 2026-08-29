@@ -30,12 +30,16 @@ static int FiniteVector(const float value[3])
 
 static float Dot(const float left[3], const float right[3])
 {
+	if (!left || !right)
+		return 0.0f;
 	return left[0] * right[0] + left[1] * right[1] +
 		left[2] * right[2];
 }
 
 static void CopyVector(float destination[3], const float source[3])
 {
+	if (!destination || !source)
+		return;
 	destination[0] = source[0];
 	destination[1] = source[1];
 	destination[2] = source[2];
@@ -153,7 +157,7 @@ static void AngleAxis(const float angles[3], float axis[3][3])
 static void RotateVector(const float value[3], const float axis[3][3],
 	float result[3])
 {
-	float source[3];
+	float source[3] = { 0.0f, 0.0f, 0.0f };
 
 	CopyVector(source, value);
 	result[0] = Dot(source, axis[0]);
@@ -215,6 +219,8 @@ static uint32_t PlaneSignBits(const sg_bsp_plane_t *plane)
 static void SetTracePlane(sg_host_collision_trace_t *trace,
 	const sg_bsp_plane_t *plane)
 {
+	if (!trace || !plane)
+		return;
 	CopyVector(trace->plane.normal, plane->normal.value);
 	trace->plane.distance = plane->distance;
 	trace->plane.type = plane->type;
@@ -223,6 +229,8 @@ static void SetTracePlane(sg_host_collision_trace_t *trace,
 static void SetTraceSurface(sg_host_collision_trace_t *trace,
 	const sg_bsp_world_t *world, const sg_bsp_brush_side_t *side)
 {
+	if (!trace || !world || !side)
+		return;
 	if (side->texinfo < 0)
 	{
 		trace->texinfo = SG_HOST_COLLISION_TEXINFO_NONE;
