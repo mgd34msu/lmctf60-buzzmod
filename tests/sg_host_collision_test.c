@@ -7,6 +7,16 @@
 #include "../slipgate/sg_host_collision.h"
 #include "../slipgate/sg_host_pmove.h"
 
+#ifndef q_exported
+#define q_exported
+#endif
+#include "../game.h"
+
+/* sg_host_pmove carries the exact engine adapter alongside the legacy
+ * callback evaluator.  This collision fixture does not invoke that path, but
+ * supplies the import slot so the combined object set remains link-complete. */
+game_import_t gi;
+
 static int failures;
 static uint32_t fake_pmove_calls;
 static byte fake_pmove_msec;

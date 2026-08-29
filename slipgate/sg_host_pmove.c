@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "sg_host_pmove.h"
+#include "sg_host_engine_pmove.h"
 
 typedef struct sg_host_pmove_scope_s
 {
@@ -119,10 +120,11 @@ static int HullMatchesIdentity(const sg_host_collision_authority_t *authority,
 	return pmove->s.gravity == (short)authority->identity.physics.gravity;
 }
 
-int SG_HostPmoveEvaluateFrame(
+static int EvaluateFrame(
 	const sg_host_collision_authority_t *authority,
 	const sg_host_collision_scene_t *scene,
 	sg_host_pmove_function_t host_pmove,
+	int use_engine,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
 {
@@ -134,11 +136,12 @@ int SG_HostPmoveEvaluateFrame(
 	uint32_t steps, step;
 	int parameters;
 	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
+	const sg_rune_hull_profile_t *hull;
 
 	if (!authority || !request || !result_out ||
 		request->state.pm_type != PM_NORMAL)
 		error = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
-	else if (!host_pmove)
+	else if (!host_pmove && !use_engine)
 		error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
 	else if (sg_host_pmove_scope)
 		error = SG_HOST_PMOVE_ERROR_REENTRANT;
@@ -159,6 +162,11 @@ int SG_HostPmoveEvaluateFrame(
 	previous = request->previous_state;
 	state.gravity = gravity;
 	memset(result_out, 0, sizeof(*result_out));
+	/* Keep a defined terminal value even for an analyzer that cannot derive
+	 * the positive step count from ParametersValid().  The production timing
+	 * contract below still rejects a zero-step authority before this point. */
+	memset(&pm, 0, sizeof(pm));
+	pm.s = state;
 	sg_host_pmove_scope = &scope;
 	for (step = 0; step < steps; step++)
 	{
@@ -169,7 +177,15 @@ int SG_HostPmoveEvaluateFrame(
 		pm.snapinitial = memcmp(&previous, &pm.s, sizeof(pm.s)) != 0;
 		pm.trace = PmoveTrace;
 		pm.pointcontents = PmovePointContents;
-		host_pmove(&pm);
+		if (use_engine)
+		{
+			if (!SG_HostEnginePmove(&pm))
+				error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+		}
+		else
+			host_pmove(&pm);
+		if (error != SG_HOST_PMOVE_ERROR_NONE)
+			break;
 		if (scope.collision_failed)
 		{
 			error = SG_HOST_PMOVE_ERROR_COLLISION;
@@ -191,8 +207,14 @@ int SG_HostPmoveEvaluateFrame(
 		return 0;
 	}
 	result_out->state = pm.s;
-	VectorCopy(pm.mins, result_out->mins);
-	VectorCopy(pm.maxs, result_out->maxs);
+	/* HullMatchesIdentity above established these exact engine outputs.  Copy
+	 * the authoritative values rather than trusting an opaque adapter to
+	 * initialize a caller-owned pmove buffer for the analyzer. */
+	hull = (pm.s.pm_flags & PMF_DUCKED) ?
+		&authority->identity.crouching_hull :
+		&authority->identity.standing_hull;
+	VectorCopy(hull->mins.value, result_out->mins);
+	VectorCopy(hull->maxs.value, result_out->maxs);
 	VectorCopy(pm.viewangles, result_out->view_angles);
 	result_out->view_height = pm.viewheight;
 	result_out->grounded = pm.groundentity != NULL;
@@ -228,6 +250,27 @@ int SG_HostPmoveEvaluateFrame(
 	if (error_out)
 		*error_out = SG_HOST_PMOVE_ERROR_NONE;
 	return 1;
+}
+
+int SG_HostPmoveEvaluateFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	sg_host_pmove_function_t host_pmove,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+{
+	return EvaluateFrame(authority, scene, host_pmove, 0, request,
+		result_out, error_out);
+}
+
+int SG_HostPmoveEvaluateEngineFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+{
+	return EvaluateFrame(authority, scene, NULL, 1, request, result_out,
+		error_out);
 }
 
 const char *SG_HostPmoveErrorString(sg_host_pmove_error_t error)

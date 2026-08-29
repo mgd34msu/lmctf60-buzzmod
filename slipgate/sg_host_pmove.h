@@ -59,6 +59,13 @@ int SG_HostPmoveEvaluateFrame(
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
 
+/* Same evaluator, bound to the engine-owned gi.Pmove adapter. */
+int SG_HostPmoveEvaluateEngineFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+
 const char *SG_HostPmoveErrorString(sg_host_pmove_error_t error);
 
 #endif

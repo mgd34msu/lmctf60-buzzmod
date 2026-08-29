@@ -65,6 +65,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
 #include "slipgate/sg_field_projection.h"
+#include "slipgate/sg_host_law_owner.h"
 
 #include <errno.h>
 #include <math.h>
@@ -4789,6 +4790,12 @@ void SG_RunFrame(void)
 	if (SG_TimerPending(sg_last_frame_time) ||
 	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
 		SG_LevelChange();
+	/* Host movement is not consumed until its exact engine binding has been
+	 * installed and revalidated for this frame.  The owner deliberately
+	 * returns HOST_UNAVAILABLE on ordinary production builds that have no BSP
+	 * bridge yet; that is the fail-closed state, not a permission to fall back
+	 * to a caller callback or a hull probe. */
+	(void)SG_HostLawProductionRevalidate();
 	if (!sg_autoload_attempted)
 	{
 		sg_autoload_attempted = true;
@@ -4888,6 +4895,7 @@ void SG_LevelChange(void)
 	 * sources down; bot movement then uses the explicit non-authoritative
 	 * legacy fallback until the next accepted provider registers. */
 	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
+	SG_HostLawProductionReset();
 	/* Map teardown is a terminal owner in its own right. Finish before the
 	 * roster removal so the original map snapshot remains attached; slot reset
 	 * then sees a closed state and is intentionally idempotent. */

@@ -11,13 +11,16 @@
 #undef world
 #endif
 #include "sg_host_collision.h"
-#include "sg_host_pmove.h"
+#include "sg_host_engine_pmove.h"
+#include "sg_host_engine_parity.h"
+#include "sg_host_hook_law.h"
+#include "sg_host_mechanism_law.h"
 #ifdef SG_HOST_LAW_RESTORE_WORLD_MACRO
 #define world (&g_edicts[0])
 #undef SG_HOST_LAW_RESTORE_WORLD_MACRO
 #endif
 
-#define SG_HOST_LAW_PUBLICATION_VERSION UINT32_C(2)
+#define SG_HOST_LAW_PUBLICATION_VERSION UINT32_C(3)
 #define SG_HOST_LAW_ELEMENT_NONE UINT32_MAX
 
 typedef struct sg_host_law_publication_s sg_host_law_publication_t;
@@ -39,6 +42,8 @@ typedef struct sg_host_law_view_s
 	uint64_t hook_law_id;
 	uint64_t mechanism_law_id;
 	sg_rune_model_identity_t identity;
+	sg_host_engine_pmove_abi_t pmove_abi;
+	uint64_t pmove_behavior_fingerprint;
 	float airaccelerate;
 	float maxvelocity;
 	uint32_t movement_flags;
@@ -48,8 +53,8 @@ typedef struct sg_host_law_view_s
 	uint32_t hook_initial_damage;
 	uint32_t hook_attached_damage;
 	uint32_t hook_health;
-	uint32_t action_contract_crc32;
-	uint32_t mechanism_contract_crc32;
+	sg_host_hook_law_t hook;
+	sg_host_mechanism_law_t mechanism;
 } sg_host_law_view_t;
 
 typedef enum sg_host_law_status_e
@@ -70,6 +75,8 @@ typedef enum sg_host_law_field_e
 	SG_HOST_LAW_FIELD_VERSION,
 	SG_HOST_LAW_FIELD_COLLISION_LAW,
 	SG_HOST_LAW_FIELD_PMOVE_LAW,
+	SG_HOST_LAW_FIELD_PMOVE_ABI,
+	SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR,
 	SG_HOST_LAW_FIELD_GRAVITY_LAW,
 	SG_HOST_LAW_FIELD_HOOK_LAW,
 	SG_HOST_LAW_FIELD_MECHANISM_LAW,
@@ -102,8 +109,8 @@ typedef enum sg_host_law_field_e
 	SG_HOST_LAW_FIELD_HOOK_INITIAL_DAMAGE,
 	SG_HOST_LAW_FIELD_HOOK_ATTACHED_DAMAGE,
 	SG_HOST_LAW_FIELD_HOOK_HEALTH,
-	SG_HOST_LAW_FIELD_ACTION_CONTRACT,
-	SG_HOST_LAW_FIELD_MECHANISM_CONTRACT
+	SG_HOST_LAW_FIELD_HOOK_CHRONOLOGY,
+	SG_HOST_LAW_FIELD_MECHANISM_EQUATIONS
 } sg_host_law_field_t;
 
 typedef struct sg_host_law_result_s
@@ -148,6 +155,38 @@ sg_host_law_result_t SG_HostLawPublicationPmove(
 sg_host_law_result_t SG_HostLawPublicationHookPullVelocity(
 	const sg_host_law_publication_t *publication, const vec3_t start,
 	const vec3_t bite, vec3_t velocity, int *rope_length_out);
+sg_host_law_result_t SG_HostLawPublicationHookMuzzle(
+	const sg_host_law_publication_t *publication, const float origin[3],
+	float viewheight, int hand, const float forward[3], const float right[3],
+	float start_out[3]);
+sg_host_law_result_t SG_HostLawPublicationHookStep(
+	const sg_host_law_publication_t *publication,
+	const sg_host_hook_observation_t *observation,
+	sg_host_hook_step_t *step_out);
+
+sg_host_law_result_t SG_HostLawPublicationMoveSchedule(
+	const sg_host_law_publication_t *publication, float distance, float speed,
+	float accel, float decel, int current_entity,
+	sg_host_mechanism_move_result_t *result_out);
+sg_host_law_result_t SG_HostLawPublicationDoorStep(
+	const sg_host_law_publication_t *publication,
+	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
+	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
+	sg_host_mechanism_transition_t *result_out);
+sg_host_law_result_t SG_HostLawPublicationPlatformStep(
+	const sg_host_law_publication_t *publication,
+	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
+	uint64_t debounce_until_ms, sg_host_mechanism_transition_t *result_out);
+sg_host_law_result_t SG_HostLawPublicationTriggerStep(
+	const sg_host_law_publication_t *publication, int already_triggered,
+	float wait_seconds, uint64_t now_ms,
+	sg_host_mechanism_transition_t *result_out);
+sg_host_law_result_t SG_HostLawPublicationTrainStep(
+	const sg_host_law_publication_t *publication,
+	sg_host_mechanism_train_event_t event, uint32_t flags, float wait_seconds,
+	int state, int has_target, int has_current_target, int has_damage,
+	int other_is_client_or_monster, uint64_t now_ms, uint64_t debounce_until_ms,
+	sg_host_mechanism_transition_t *result_out);
 
 void SG_HostLawPublicationDestroy(sg_host_law_publication_t *publication);
 
