@@ -73,6 +73,7 @@ static int RuntimeFieldHandleEqual(const sg_field_handle_t *left,
 	const sg_field_handle_t *right)
 {
 	return left && right && left->service_identity == right->service_identity &&
+		left->service_generation == right->service_generation &&
 		left->rune_identity == right->rune_identity &&
 		left->topology_revision == right->topology_revision &&
 		left->terminal_generation == right->terminal_generation &&

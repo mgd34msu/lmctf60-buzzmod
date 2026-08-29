@@ -8,13 +8,17 @@ typedef sg_field_status_t (*field_create_fn)(
 	const sg_rune_runtime_snapshot_t *, const sg_rune_dynamics_model_t *,
 	sg_field_service_t **);
 typedef sg_field_status_t (*field_resolve_fn)(sg_field_service_t *,
-	const sg_destination_terminal_t *, uint64_t, sg_field_handle_t *);
-typedef sg_field_status_t (*field_refresh_fn)(sg_field_service_t *,
-	const sg_field_handle_t *, const sg_destination_terminal_t *, uint64_t,
+	const sg_destination_terminal_t *, const sg_field_environment_t *, uint64_t,
 	sg_field_handle_t *);
+typedef sg_field_status_t (*field_refresh_fn)(sg_field_service_t *,
+	const sg_field_handle_t *, const sg_destination_terminal_t *,
+	const sg_field_environment_t *, uint64_t, sg_field_handle_t *);
 typedef sg_field_status_t (*field_query_fn)(const sg_field_service_t *,
 	const sg_field_handle_t *, const sg_localized_field_state_t *,
-	const sg_field_environment_t *, sg_field_guidance_t *);
+	const sg_field_environment_t *, sg_field_option_t *, size_t,
+	sg_field_guidance_t *);
+typedef sg_field_status_t (*field_release_fn)(sg_field_service_t *,
+	const sg_field_handle_t *);
 
 _Static_assert(_Generic(&SG_FieldServiceCreate, field_create_fn: 1,
 	default: 0), "field create must consume the aggregate dynamics model");
@@ -24,6 +28,8 @@ _Static_assert(_Generic(&SG_FieldServiceRefresh, field_refresh_fn: 1,
 	default: 0), "field refresh signature changed");
 _Static_assert(_Generic(&SG_FieldServiceQuery, field_query_fn: 1,
 	default: 0), "field query signature changed");
+_Static_assert(_Generic(&SG_FieldServiceRelease, field_release_fn: 1,
+	default: 0), "field release signature changed");
 
 static int failures;
 
@@ -84,6 +90,18 @@ typedef struct dynamics_fixture_s
 	sg_rune_control_domain_t control_domains[1];
 	sg_rune_response_patch_t patches[1];
 	sg_rune_boundary_transfer_t transfers[1];
+	sg_field_reach_atom_t reach_atoms[2];
+	sg_field_reach_atom_ref_t outcome_destination_atoms[3];
+	sg_field_guard_requirement_t guard_requirements[2];
+	sg_field_guard_effect_t guard_effects[1];
+	sg_field_outcome_t outcomes[3];
+	sg_field_choice_t choices[2];
+	sg_field_local_progress_kernel_t local_progress_kernels[1];
+	sg_field_refinement_node_t refinement_nodes[2];
+	uint32_t refinement_roots[2];
+	sg_field_refinement_node_ref_t local_progress_sources[1];
+	sg_field_choice_ref_t local_progress_choices[1];
+	sg_field_progress_target_t local_progress_targets[2];
 	sg_rune_field_region_t regions[1];
 	uint32_t chart_leaf_regions[1];
 	uint32_t domain_leaf_regions[1];
@@ -203,6 +221,125 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	transfer->transfer_proof.value =
 		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 4U);
 
+	for (index = 0U; index < 2U; index++)
+	{
+		fixture->reach_atoms[index].id.value =
+			Stable(SG_RUNE_ORDER_FIELD_REACH_ATOM, (uint32_t)index + 1U);
+		fixture->reach_atoms[index].domain = fixture->domains[0].id;
+		fixture->reach_atoms[index].simplices =
+			(sg_rune_state_simplex_span_t){ 0U, 1U };
+		fixture->reach_atoms[index].state_bounds = patch->flow;
+		fixture->reach_atoms[index].partition_proof.value =
+			Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 20U);
+		fixture->refinement_nodes[index].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, (uint32_t)index + 1U);
+		fixture->refinement_nodes[index].parent = UINT32_MAX;
+		fixture->refinement_nodes[index].atom = fixture->reach_atoms[index].id;
+		fixture->refinement_nodes[index].state_bounds = patch->flow;
+		fixture->refinement_nodes[index].interpolation_error.position =
+			Interval3(0.0f, 0.0f);
+		fixture->refinement_nodes[index].interpolation_error.velocity =
+			Interval3(0.0f, 0.0f);
+		fixture->refinement_nodes[index].interpolation_error.elapsed_ms =
+			Interval(0.0f, 0.0f);
+		fixture->refinement_nodes[index].proof.value =
+			Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 30U);
+		fixture->refinement_roots[index] = (uint32_t)index;
+	}
+	fixture->reach_atoms[1].state_bounds.position = Interval3(-2.0f, 2.0f);
+	fixture->reach_atoms[1].state_bounds.velocity = Interval3(-3.0f, 3.0f);
+	fixture->reach_atoms[1].state_bounds.elapsed_ms = Interval(0.0f, 3.0f);
+	fixture->refinement_nodes[1].state_bounds =
+		fixture->reach_atoms[1].state_bounds;
+	fixture->guard_effects[0].condition = transfer->condition;
+	fixture->guard_effects[0].required_before = SG_FIELD_GUARD_FALSE;
+	fixture->guard_effects[0].resulting_after = SG_FIELD_GUARD_TRUE;
+	fixture->guard_effects[0].controllable = 1U;
+	fixture->guard_requirements[0].condition = fixture->fibers[0].condition;
+	fixture->guard_requirements[0].required = SG_FIELD_GUARD_TRUE;
+	fixture->guard_requirements[1].condition = fixture->transfers[0].condition;
+	fixture->guard_requirements[1].required = SG_FIELD_GUARD_FALSE;
+	for (index = 0U; index < 3U; index++)
+	{
+		uint32_t row;
+		fixture->outcomes[index].id.value =
+			Stable(SG_RUNE_ORDER_FIELD_OUTCOME, (uint32_t)index + 1U);
+		for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+			fixture->outcomes[index].endpoint.coefficient[row][row] = 1.0;
+		fixture->outcomes[index].endpoint.exact_rank =
+			SG_RUNE_STATE_DIMENSION_COUNT;
+		fixture->outcomes[index].endpoint.operator_proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 60U);
+		fixture->outcomes[index].endpoint.image_proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 70U);
+		fixture->outcomes[index].endpoint.cover_proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 80U);
+		fixture->outcomes[index].remainder.position = Interval3(0.0f, 0.0f);
+		fixture->outcomes[index].remainder.velocity = Interval3(0.0f, 0.0f);
+		fixture->outcomes[index].remainder.elapsed_ms = Interval(0.0f, 0.0f);
+		fixture->outcome_destination_atoms[index] =
+			fixture->reach_atoms[1].id;
+		fixture->outcomes[index].destination_cover =
+			(sg_field_reach_atom_ref_span_t){ (uint32_t)index, 1U };
+		fixture->outcomes[index].absolute_time_advance =
+			(sg_rune_time_advance_t){ index == 2U ? 0U : 1U,
+				index == 2U ? 0U : 1U };
+		fixture->outcomes[index].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)index + 40U);
+	}
+	fixture->outcomes[2].guard_effects =
+		(sg_field_guard_effect_span_t){ 0U, 1U };
+	fixture->choices[0].id.value = Stable(SG_RUNE_ORDER_FIELD_CHOICE, 1U);
+	fixture->choices[0].kind = SG_FIELD_CHOICE_CONTROL;
+	fixture->choices[0].authority.control = fixture->fibers[0].id;
+	fixture->choices[0].guard_requirements =
+		(sg_field_guard_requirement_span_t){ 0U, 1U };
+	fixture->choices[0].source_atom = fixture->reach_atoms[0].id;
+	fixture->choices[0].outcomes = (sg_field_outcome_span_t){ 0U, 2U };
+	fixture->choices[0].cost = (sg_rune_cost_bounds_t){ 0U, 10U };
+	fixture->choices[0].proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 50U);
+	fixture->choices[1].id.value = Stable(SG_RUNE_ORDER_FIELD_CHOICE, 2U);
+	fixture->choices[1].kind = SG_FIELD_CHOICE_TRANSFER;
+	fixture->choices[1].authority.transfer = fixture->transfers[0].id;
+	fixture->choices[1].guard_requirements =
+		(sg_field_guard_requirement_span_t){ 1U, 1U };
+	fixture->choices[1].source_atom = fixture->reach_atoms[0].id;
+	fixture->choices[1].outcomes = (sg_field_outcome_span_t){ 2U, 1U };
+	fixture->choices[1].cost = (sg_rune_cost_bounds_t){ 0U, 0U };
+	fixture->choices[1].proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 51U);
+	fixture->local_progress_kernels[0].id.value =
+		Stable(SG_RUNE_ORDER_FIELD_LOCAL_PROGRESS, 1U);
+	fixture->local_progress_kernels[0].source_atom = fixture->reach_atoms[0].id;
+	fixture->local_progress_kernels[0].covered_sources =
+		(sg_field_refinement_node_ref_span_t){ 0U, 1U };
+	fixture->local_progress_kernels[0].target_atom = fixture->reach_atoms[1].id;
+	fixture->local_progress_kernels[0].terminal_parameters.anchor_bounds =
+		fixture->reach_atoms[1].state_bounds;
+	fixture->local_progress_kernels[0].terminal_parameters.position_offset_bounds =
+		Interval3(-0.5f, 0.5f);
+	fixture->local_progress_kernels[0].terminal_parameters.velocity_bounds =
+		Interval3(-3.0f, 3.0f);
+	fixture->local_progress_kernels[0].terminal_parameters.local_elapsed_bounds =
+		Interval(0.0f, 3.0f);
+	fixture->local_progress_kernels[0].terminal_parameters.proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 54U);
+	fixture->local_progress_kernels[0].admissible_choices =
+		(sg_field_choice_ref_span_t){ 0U, 1U };
+	fixture->local_progress_kernels[0].whole_outcome_targets =
+		(sg_field_progress_target_span_t){ 0U, 2U };
+	fixture->local_progress_kernels[0].finite_rank = 1U;
+	fixture->local_progress_kernels[0].state_lyapunov[0] = 1.0f;
+	fixture->local_progress_kernels[0].anchor_lyapunov[0] = -1.0f;
+	fixture->local_progress_kernels[0].minimum_lyapunov_decrease = 0.125f;
+	fixture->local_progress_kernels[0].proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 52U);
+	fixture->local_progress_sources[0] = fixture->refinement_nodes[0].id;
+	fixture->local_progress_choices[0] = fixture->choices[0].id;
+	fixture->local_progress_targets[0].outcome = fixture->outcomes[0].id;
+	fixture->local_progress_targets[0].atom = fixture->reach_atoms[1].id;
+	fixture->local_progress_targets[1].outcome = fixture->outcomes[1].id;
+	fixture->local_progress_targets[1].atom = fixture->reach_atoms[1].id;
+
 	fixture->regions[0].id.value = Stable(SG_RUNE_ORDER_FIELD_REGION, 1U);
 	fixture->regions[0].parent_region = SG_RUNE_FIELD_NO_REGION;
 	fixture->regions[0].charts = (sg_rune_state_chart_span_t){ 0U, 1U };
@@ -233,6 +370,35 @@ static void BuildFixture(dynamics_fixture_t *fixture)
 	fixture->dynamics.response_patch_count = 1U;
 	fixture->dynamics.boundary_transfers = fixture->transfers;
 	fixture->dynamics.boundary_transfer_count = 1U;
+	fixture->dynamics.reach_atoms = fixture->reach_atoms;
+	fixture->dynamics.reach_atom_count = 2U;
+	fixture->dynamics.outcome_destination_atoms =
+		fixture->outcome_destination_atoms;
+	fixture->dynamics.outcome_destination_atom_count = 3U;
+	fixture->dynamics.guard_requirements = fixture->guard_requirements;
+	fixture->dynamics.guard_requirement_count = 2U;
+	fixture->dynamics.guard_effects = fixture->guard_effects;
+	fixture->dynamics.guard_effect_count = 1U;
+	fixture->dynamics.outcomes = fixture->outcomes;
+	fixture->dynamics.outcome_count = 3U;
+	fixture->dynamics.choices = fixture->choices;
+	fixture->dynamics.choice_count = 2U;
+	fixture->dynamics.local_progress_kernels = fixture->local_progress_kernels;
+	fixture->dynamics.local_progress_kernel_count = 1U;
+	fixture->dynamics.local_progress_sources = fixture->local_progress_sources;
+	fixture->dynamics.local_progress_source_count = 1U;
+	fixture->dynamics.local_progress_choices = fixture->local_progress_choices;
+	fixture->dynamics.local_progress_choice_count = 1U;
+	fixture->dynamics.local_progress_targets = fixture->local_progress_targets;
+	fixture->dynamics.local_progress_target_count = 2U;
+	fixture->dynamics.refinement_tree.id.value =
+		Stable(SG_RUNE_ORDER_FIELD_REFINEMENT_TREE, 1U);
+	fixture->dynamics.refinement_tree.nodes = fixture->refinement_nodes;
+	fixture->dynamics.refinement_tree.node_count = 2U;
+	fixture->dynamics.refinement_tree.atom_roots = fixture->refinement_roots;
+	fixture->dynamics.refinement_tree.atom_count = 2U;
+	fixture->dynamics.refinement_tree.proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 53U);
 	fixture->dynamics.hierarchy.id.value =
 		Stable(SG_RUNE_ORDER_FIELD_HIERARCHY, 1U);
 	fixture->dynamics.hierarchy.regions = fixture->regions;
@@ -299,6 +465,20 @@ static void TestTypedIdsAndModes(void)
 	CHECK_TYPED_ID(SG_RuneFieldErrorContractIdValid,
 		sg_rune_field_error_contract_id_t,
 		SG_RUNE_ORDER_FIELD_ERROR_CONTRACT);
+	CHECK_TYPED_ID(SG_FieldChoiceIdValid,
+		sg_field_choice_id_t, SG_RUNE_ORDER_FIELD_CHOICE);
+	CHECK_TYPED_ID(SG_FieldOutcomeIdValid,
+		sg_field_outcome_id_t, SG_RUNE_ORDER_FIELD_OUTCOME);
+	CHECK_TYPED_ID(SG_FieldReachAtomIdValid,
+		sg_field_reach_atom_id_t, SG_RUNE_ORDER_FIELD_REACH_ATOM);
+	CHECK_TYPED_ID(SG_FieldLocalProgressIdValid,
+		sg_field_local_progress_id_t, SG_RUNE_ORDER_FIELD_LOCAL_PROGRESS);
+	CHECK_TYPED_ID(SG_FieldRefinementNodeIdValid,
+		sg_field_refinement_node_id_t,
+		SG_RUNE_ORDER_FIELD_REFINEMENT_NODE);
+	CHECK_TYPED_ID(SG_FieldRefinementTreeIdValid,
+		sg_field_refinement_tree_id_t,
+		SG_RUNE_ORDER_FIELD_REFINEMENT_TREE);
 #undef CHECK_TYPED_ID
 	CHECK(SG_RuneStateModeValid(&mode));
 	mode.kind = SG_RUNE_STATE_MODE_WATER;
@@ -349,6 +529,110 @@ static void TestAggregateOwnership(void)
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	fixture.fibers[0].domain = fixture.control_domains[0].id;
 	fixture.dynamics.topology_revision++;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
+static void TestChoiceOutcomeAndProgressContracts(void)
+{
+	dynamics_fixture_t fixture;
+
+	BuildFixture(&fixture);
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	/* AND is the complete outcome span of one choice. */
+	fixture.choices[0].outcomes.count = 1U;
+	fixture.local_progress_kernels[0].whole_outcome_targets.count = 1U;
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.choices[0].outcomes.count = 2U;
+	fixture.local_progress_kernels[0].whole_outcome_targets.count = 2U;
+	fixture.outcomes[1].destination_cover.first = 3U;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcomes[1].destination_cover.first = 1U;
+	/* Guard changes are explicit controllable effects, never future truth. */
+	fixture.guard_effects[0].controllable = 0U;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.guard_effects[0].controllable = 1U;
+	fixture.guard_effects[0].resulting_after = SG_FIELD_GUARD_UNKNOWN;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.guard_effects[0].resulting_after = SG_FIELD_GUARD_TRUE;
+	/* Local progress must execute through a nonempty same-atom choice set. */
+	fixture.local_progress_kernels[0].admissible_choices.count = 0U;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.local_progress_kernels[0].admissible_choices.count = 1U;
+	fixture.local_progress_kernels[0].minimum_lyapunov_decrease = 0.0f;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.local_progress_kernels[0].minimum_lyapunov_decrease = 0.125f;
+	/* Zero absolute-time advance is legal and does not alter local elapsed. */
+	fixture.outcomes[2].absolute_time_advance =
+		(sg_rune_time_advance_t){ 0U, 0U };
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcomes[2].absolute_time_advance =
+		(sg_rune_time_advance_t){ 2U, 1U };
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcomes[2].absolute_time_advance =
+		(sg_rune_time_advance_t){ 0U, 0U };
+	fixture.refinement_roots[1] = 0U;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+}
+
+static void TestExecutableCoverageAndOperatorRanks(void)
+{
+	dynamics_fixture_t fixture;
+	sg_rune_affine_state_operator_t saved;
+	sg_destination_terminal_capture_t first = { 0 };
+	sg_destination_terminal_capture_t second = { 0 };
+	uint32_t rank;
+
+	BuildFixture(&fixture);
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	first.anchor.owner_identity = 901U;
+	first.anchor.destination.kind = SG_DESTINATION_WAYPOINT;
+	first.anchor.destination.value.point.point_id = 902U;
+	first.anchor.destination_generation = 903U;
+	second = first;
+	second.anchor.owner_identity = 904U;
+	second.anchor.destination.value.point.point_id = 905U;
+	second.anchor.destination_generation = 906U;
+	second.anchor.position[0] = 1.5f;
+	CHECK(SG_FieldLocalProgressKernelAcceptsCapture(
+		&fixture.local_progress_kernels[0], &first));
+	CHECK(SG_FieldLocalProgressKernelAcceptsCapture(
+		&fixture.local_progress_kernels[0], &second));
+	second.anchor.position[0] = 3.0f;
+	CHECK(!SG_FieldLocalProgressKernelAcceptsCapture(
+		&fixture.local_progress_kernels[0], &second));
+	saved = fixture.outcomes[0].endpoint;
+	for (rank = 0U; rank <= SG_RUNE_STATE_DIMENSION_COUNT; rank++)
+	{
+		uint32_t diagonal;
+		memset(fixture.outcomes[0].endpoint.coefficient, 0,
+			sizeof(fixture.outcomes[0].endpoint.coefficient));
+		for (diagonal = 0U; diagonal < rank; diagonal++)
+			fixture.outcomes[0].endpoint.coefficient[diagonal][diagonal] = 1.0f;
+		fixture.outcomes[0].endpoint.exact_rank = (uint8_t)rank;
+		CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	}
+	fixture.outcomes[0].endpoint.exact_rank = 2U;
+	memset(fixture.outcomes[0].endpoint.coefficient, 0,
+		sizeof(fixture.outcomes[0].endpoint.coefficient));
+	fixture.outcomes[0].endpoint.coefficient[0][0] = 1.0f;
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcomes[0].endpoint = saved;
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcome_destination_atoms[0].value =
+		Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U);
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.outcome_destination_atoms[0] = fixture.reach_atoms[1].id;
+	fixture.local_progress_sources[0].value =
+		Stable(SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, 999U);
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.local_progress_sources[0] = fixture.refinement_nodes[0].id;
+	fixture.local_progress_kernels[0].target_atom.value =
+		Stable(SG_RUNE_ORDER_FIELD_REACH_ATOM, 999U);
+	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	BuildFixture(&fixture);
+	fixture.choices[0].guard_requirements.count = 2U;
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	fixture.guard_requirements[1] = fixture.guard_requirements[0];
 	CHECK(!SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 }
 
@@ -618,43 +902,113 @@ cleanup:
 
 static void TestGuidanceIntervals(void)
 {
-	sg_rune_field_descent_t descent = {
-		.control = { { 0 } },
-		.minimum_descent_us = 100U,
-		.endpoint_cost = { 1000U, 2000U }
+	sg_field_option_t option = {
+		.kind = SG_FIELD_OPTION_CONTROL,
+		.value.control = {
+			.control = { { 0 } },
+			.minimum_descent_us = 100U,
+			.endpoint_cost = { 1000U, 2000U }
+		}
 	};
 	sg_field_guidance_t guidance = {
-		.field = { 1U, 2U, 3U, 4U, 5U },
+		.field = { 1U, 2U, 3U, 4U, 5U, 6U },
 		.pose_revision = 6U,
 		.sampled_at_ms = 7U,
 		.kind = SG_FIELD_GUIDANCE_DESCENT
 	};
 
-	descent.control.value = Stable(SG_RUNE_ORDER_CONTROL_FIBER, 1U);
+	option.value.control.control.value =
+		Stable(SG_RUNE_ORDER_CONTROL_FIBER, 1U);
 	guidance.value.descent.arrival_cost =
 		(sg_rune_cost_bounds_t){ 2500U, 3000U };
 	guidance.value.descent.residual_bound_us = 10U;
 	guidance.value.descent.spatial_subgradient = Interval3(-1.0f, 1.0f);
 	guidance.value.descent.velocity_subgradient = Interval3(-1.0f, 1.0f);
 	guidance.value.descent.time_subgradient = Interval(-1.0f, 0.0f);
-	guidance.value.descent.controls =
-		(sg_rune_field_descent_span_t){ &descent, 1U };
+	guidance.value.descent.position_error = Interval3(-0.5f, 0.5f);
+	guidance.value.descent.velocity_error = Interval3(-1.0f, 1.0f);
+	guidance.value.descent.time_error = Interval(-0.5f, 0.5f);
+	guidance.value.descent.options = &option;
+	guidance.value.descent.option_count = 1U;
+	guidance.value.descent.required_option_capacity = 1U;
 	CHECK(SG_FieldGuidanceValid(&guidance));
-	descent.endpoint_cost = (sg_rune_cost_bounds_t){ 1000U, 2450U };
-	descent.minimum_descent_us = 100U;
+	option.value.control.endpoint_cost =
+		(sg_rune_cost_bounds_t){ 1000U, 2450U };
+	option.value.control.minimum_descent_us = 100U;
 	CHECK(!SG_FieldGuidanceValid(&guidance));
-	descent.endpoint_cost = (sg_rune_cost_bounds_t){ 1000U, 2400U };
-	descent.minimum_descent_us = 100U;
+	option.value.control.endpoint_cost =
+		(sg_rune_cost_bounds_t){ 1000U, 2400U };
+	option.value.control.minimum_descent_us = 100U;
 	CHECK(SG_FieldGuidanceValid(&guidance));
-	descent.control.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
+	option.value.control.control.value =
+		Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
 	CHECK(!SG_FieldGuidanceValid(&guidance));
 	CHECK(SG_FieldHandleValid(&guidance.field));
+}
+
+static void TestEnvironmentGuardAndAbsoluteTimeContracts(void)
+{
+	sg_field_guard_state_t guards[2] = { 0 };
+	sg_field_guard_state_t future[2] = { 0 };
+	sg_field_event_slab_t slabs[2] = { 0 };
+	sg_field_environment_t environment = { 0 };
+	sg_localized_field_state_t state = { 0 };
+
+	guards[0].condition.value = Stable(SG_RUNE_ORDER_GUARD_CONDITION, 1U);
+	guards[0].truth = SG_FIELD_GUARD_TRUE;
+	guards[1].condition.value = Stable(SG_RUNE_ORDER_GUARD_CONDITION, 2U);
+	guards[1].truth = SG_FIELD_GUARD_FALSE;
+	future[0] = guards[0];
+	future[1] = guards[1];
+	slabs[0].valid_from_ms = 40U;
+	slabs[0].valid_until_ms = 100U;
+	slabs[0].exogenous_guards = &future[0];
+	slabs[0].exogenous_guard_count = 1U;
+	slabs[0].schedule_proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 1U);
+	slabs[1].valid_from_ms = 100U;
+	slabs[1].valid_until_ms = 200U;
+	slabs[1].exogenous_guards = &future[1];
+	slabs[1].exogenous_guard_count = 1U;
+	slabs[1].schedule_proof.value =
+		Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 2U);
+	environment.rune_identity = 1U;
+	environment.topology_revision = 2U;
+	environment.environment_revision = 3U;
+	environment.sampled_at_ms = 50U;
+	environment.authority_identity = 4U;
+	environment.guards = guards;
+	environment.guard_count = 2U;
+	environment.event_slabs = slabs;
+	environment.event_slab_count = 2U;
+	environment.authenticated = 1U;
+	CHECK(SG_FieldEnvironmentValid(&environment));
+	future[1].truth = SG_FIELD_GUARD_UNKNOWN;
+	CHECK(!SG_FieldEnvironmentValid(&environment));
+	future[1].truth = SG_FIELD_GUARD_FALSE;
+	slabs[1].valid_from_ms = 101U;
+	CHECK(!SG_FieldEnvironmentValid(&environment));
+	slabs[1].valid_from_ms = 100U;
+	guards[1].condition = guards[0].condition;
+	CHECK(!SG_FieldEnvironmentValid(&environment));
+	guards[1].condition.value = Stable(SG_RUNE_ORDER_GUARD_CONDITION, 2U);
+	state.rune_identity = 1U;
+	state.topology_revision = 2U;
+	state.pose_revision = 3U;
+	state.sampled_at_ms = 50U;
+	state.chart.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
+	state.mode = SupportedMode();
+	state.elapsed_ms = 1000.0f;
+	CHECK(SG_LocalizedFieldStateValid(&state));
+	CHECK(SG_FieldEnvironmentValid(&environment));
 }
 
 int main(void)
 {
 	TestTypedIdsAndModes();
 	TestAggregateOwnership();
+	TestChoiceOutcomeAndProgressContracts();
+	TestExecutableCoverageAndOperatorRanks();
 	TestSimplexGeometry();
 	TestNearDegenerateSimplexGeometry();
 	TestExactLeafOwnership();
@@ -662,6 +1016,7 @@ int main(void)
 	TestLinearHierarchy();
 	TestDeepLinearHierarchy();
 	TestGuidanceIntervals();
+	TestEnvironmentGuardAndAbsoluteTimeContracts();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_rune_dynamics_model_test: %d failure(s)\n",

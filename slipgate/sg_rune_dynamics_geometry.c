@@ -231,6 +231,102 @@ static int RankSevenModulo(
 	return 1;
 }
 
+static uint8_t OperatorRankModulo(
+	sg_rune_binary32_dyadic_t
+		coordinates[SG_RUNE_STATE_DIMENSION_COUNT]
+			[SG_RUNE_STATE_DIMENSION_COUNT],
+	const int common_exponents[SG_RUNE_STATE_DIMENSION_COUNT],
+	uint32_t modulus)
+{
+	uint32_t matrix[SG_RUNE_STATE_DIMENSION_COUNT]
+		[SG_RUNE_STATE_DIMENSION_COUNT];
+	uint32_t pivot_row = 0U;
+	uint32_t column;
+	uint32_t row;
+
+	for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+		for (column = 0U; column < SG_RUNE_STATE_DIMENSION_COUNT; column++)
+			matrix[row][column] = DyadicModulo(&coordinates[row][column],
+				common_exponents[column], modulus);
+	for (column = 0U; column < SG_RUNE_STATE_DIMENSION_COUNT &&
+	     pivot_row < SG_RUNE_STATE_DIMENSION_COUNT; column++)
+	{
+		uint32_t pivot = pivot_row;
+		uint32_t inverse;
+
+		while (pivot < SG_RUNE_STATE_DIMENSION_COUNT &&
+		       matrix[pivot][column] == 0U)
+			pivot++;
+		if (pivot == SG_RUNE_STATE_DIMENSION_COUNT)
+			continue;
+		if (pivot != pivot_row)
+			for (row = column; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+			{
+				uint32_t temporary = matrix[pivot_row][row];
+				matrix[pivot_row][row] = matrix[pivot][row];
+				matrix[pivot][row] = temporary;
+			}
+		inverse = PowerModulo(matrix[pivot_row][column], modulus - 2U,
+			modulus);
+		for (row = pivot_row + 1U; row < SG_RUNE_STATE_DIMENSION_COUNT;
+		     row++)
+		{
+			uint32_t factor = MultiplyModulo(matrix[row][column], inverse,
+				modulus);
+			uint32_t trailing;
+			for (trailing = column;
+			     trailing < SG_RUNE_STATE_DIMENSION_COUNT; trailing++)
+				matrix[row][trailing] = SubtractModulo(
+					matrix[row][trailing],
+					MultiplyModulo(factor, matrix[pivot_row][trailing],
+						modulus), modulus);
+		}
+		pivot_row++;
+	}
+	return (uint8_t)pivot_row;
+}
+
+uint8_t SG_RuneAffineOperatorRankExact(
+	const sg_rune_affine_state_operator_t *operator)
+{
+	sg_rune_binary32_dyadic_t coordinates[SG_RUNE_STATE_DIMENSION_COUNT]
+		[SG_RUNE_STATE_DIMENSION_COUNT];
+	int common_exponents[SG_RUNE_STATE_DIMENSION_COUNT];
+	uint8_t rank = 0U;
+	uint32_t column;
+	uint32_t row;
+	size_t prime;
+
+	for (column = 0U; column < SG_RUNE_STATE_DIMENSION_COUNT; column++)
+	{
+		int have_nonzero = 0;
+		common_exponents[column] = 0;
+		for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+		{
+			coordinates[row][column] =
+				Binary32Dyadic(operator->coefficient[row][column]);
+			if (coordinates[row][column].mantissa != 0U &&
+			    (!have_nonzero || coordinates[row][column].exponent <
+				common_exponents[column]))
+			{
+				common_exponents[column] =
+					coordinates[row][column].exponent;
+				have_nonzero = 1;
+			}
+		}
+	}
+	for (prime = 0U; prime < SG_RUNE_BINARY32_RANK_PRIME_COUNT; prime++)
+	{
+		uint8_t candidate = OperatorRankModulo(coordinates, common_exponents,
+			rank_primes[prime]);
+		if (candidate > rank)
+			rank = candidate;
+		if (rank == SG_RUNE_STATE_DIMENSION_COUNT)
+			break;
+	}
+	return rank;
+}
+
 static int SimplexFullRank(const sg_rune_state_simplex_t *simplex,
 	const sg_rune_state_vertex_t *vertices)
 {

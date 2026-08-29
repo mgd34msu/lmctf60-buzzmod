@@ -7,7 +7,7 @@
 
 #include "sg_rune_model.h"
 
-#define SG_RUNTIME_CONTRACT_VERSION UINT16_C(4)
+#define SG_RUNTIME_CONTRACT_VERSION UINT16_C(5)
 #define SG_DESTINATION_COST_INFINITE UINT32_MAX
 #define SG_DESTINATION_NO_CELL UINT32_MAX
 #define SG_DESTINATION_NO_PHASE UINT32_MAX
@@ -146,9 +146,43 @@ typedef struct sg_destination_terminal_domain_s
 	sg_rune_state_domain_ref_t domain;
 } sg_destination_terminal_domain_t;
 
+typedef struct sg_destination_interval_s
+{
+	float min_value;
+	float max_value;
+} sg_destination_interval_t;
+
+typedef struct sg_destination_interval3_s
+{
+	sg_destination_interval_t x;
+	sg_destination_interval_t y;
+	sg_destination_interval_t z;
+} sg_destination_interval3_t;
+
+typedef struct sg_destination_terminal_anchor_s
+{
+	/* Exact owner/content binding remains part of the key even when capture
+	 * sets overlap. Coordinates are canonical binary32 state coordinates. */
+	uint64_t owner_identity;
+	sg_destination_ref_t destination;
+	uint64_t destination_generation;
+	float position[3];
+	float velocity[3];
+	float local_elapsed_ms;
+} sg_destination_terminal_anchor_t;
+
+typedef struct sg_destination_terminal_capture_s
+{
+	sg_destination_terminal_anchor_t anchor;
+	sg_destination_interval3_t position_offset;
+	sg_destination_interval3_t velocity;
+	sg_destination_interval_t local_elapsed_ms;
+} sg_destination_terminal_capture_t;
+
 typedef struct sg_destination_static_patch_s
 {
 	sg_destination_terminal_domain_t domain;
+	sg_destination_terminal_capture_t capture;
 } sg_destination_static_patch_t;
 
 typedef struct sg_destination_tube_segment_s
@@ -156,6 +190,7 @@ typedef struct sg_destination_tube_segment_s
 	uint64_t valid_from_ms;
 	uint64_t valid_until_ms;
 	sg_destination_terminal_domain_t domain;
+	sg_destination_terminal_capture_t capture;
 } sg_destination_tube_segment_t;
 
 typedef struct sg_destination_moving_tube_s
@@ -174,6 +209,9 @@ typedef enum sg_destination_terminal_kind_e
 
 typedef struct sg_destination_terminal_s
 {
+	/* Identity of the authenticated publisher that owns this semantic
+	 * destination record. Every embedded capture anchor must bind to it. */
+	uint64_t owner_identity;
 	sg_destination_ref_t destination;
 	uint64_t generation;
 	sg_destination_terminal_kind_t kind;
@@ -313,5 +351,8 @@ static inline int SG_RuneRuntimeSnapshotValid(
 }
 
 int SG_DestinationTerminalValid(const sg_destination_terminal_t *terminal);
+int SG_DestinationTerminalCaptureValidFor(
+	const sg_destination_terminal_capture_t *capture,
+	const sg_destination_ref_t *destination, uint64_t generation);
 
 #endif

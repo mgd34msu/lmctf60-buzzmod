@@ -51,6 +51,18 @@ DEFINE_DOMAIN_VALIDATOR(SG_RuneFieldHierarchyIdValid,
 DEFINE_DOMAIN_VALIDATOR(SG_RuneFieldErrorContractIdValid,
 	sg_rune_field_error_contract_id_t,
 	SG_RUNE_ORDER_FIELD_ERROR_CONTRACT)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldChoiceIdValid,
+	sg_field_choice_id_t, SG_RUNE_ORDER_FIELD_CHOICE)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldOutcomeIdValid,
+	sg_field_outcome_id_t, SG_RUNE_ORDER_FIELD_OUTCOME)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldReachAtomIdValid,
+	sg_field_reach_atom_id_t, SG_RUNE_ORDER_FIELD_REACH_ATOM)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldLocalProgressIdValid,
+	sg_field_local_progress_id_t, SG_RUNE_ORDER_FIELD_LOCAL_PROGRESS)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldRefinementNodeIdValid,
+	sg_field_refinement_node_id_t, SG_RUNE_ORDER_FIELD_REFINEMENT_NODE)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldRefinementTreeIdValid,
+	sg_field_refinement_tree_id_t, SG_RUNE_ORDER_FIELD_REFINEMENT_TREE)
 
 #undef DEFINE_DOMAIN_VALIDATOR
 
@@ -84,6 +96,372 @@ static int CostBoundsValid(const sg_rune_cost_bounds_t *cost)
 {
 	return cost && cost->lower_us <= cost->upper_us &&
 		cost->upper_us < SG_RUNE_FIELD_COST_INFINITE;
+}
+
+static int SpanWithin(uint32_t first, uint32_t count, size_t capacity);
+
+static int AffineOperatorValid(const sg_rune_affine_state_operator_t *operator)
+{
+	uint32_t row;
+	uint32_t column;
+
+	if (!operator)
+		return 0;
+	for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+		for (column = 0U; column <= SG_RUNE_STATE_DIMENSION_COUNT;
+		     column++)
+			if (!isfinite(operator->coefficient[row][column]))
+				return 0;
+	return operator->exact_rank <= SG_RUNE_STATE_DIMENSION_COUNT &&
+		operator->exact_rank == SG_RuneAffineOperatorRankExact(operator) &&
+		operator->reserved[0] == 0U && operator->reserved[1] == 0U &&
+		operator->reserved[2] == 0U &&
+		SG_RuneDynamicsProofRefValid(&operator->operator_proof) &&
+		SG_RuneDynamicsProofRefValid(&operator->image_proof) &&
+		SG_RuneDynamicsProofRefValid(&operator->cover_proof);
+}
+
+int SG_FieldReachAtomShapeValid(const sg_field_reach_atom_t *atom)
+{
+	return atom && SG_FieldReachAtomIdValid(&atom->id) &&
+		SG_RuneStateDomainIdValid(&atom->domain) &&
+		atom->simplices.count != 0U && FlowEnclosureValid(&atom->state_bounds) &&
+		SG_RuneDynamicsProofRefValid(&atom->partition_proof);
+}
+
+int SG_FieldGuardEffectValid(const sg_field_guard_effect_t *effect)
+{
+	return effect && SG_RuneGuardConditionRefValid(&effect->condition) &&
+		effect->required_before >= SG_FIELD_GUARD_FALSE &&
+		effect->required_before < SG_FIELD_GUARD_UNKNOWN &&
+		effect->resulting_after >= SG_FIELD_GUARD_FALSE &&
+		effect->resulting_after < SG_FIELD_GUARD_UNKNOWN &&
+		effect->controllable == 1U && effect->reserved[0] == 0U &&
+		effect->reserved[1] == 0U && effect->reserved[2] == 0U;
+}
+
+static int GuardRequirementValid(const sg_field_guard_requirement_t *requirement)
+{
+	return requirement &&
+		SG_RuneGuardConditionRefValid(&requirement->condition) &&
+		requirement->required >= SG_FIELD_GUARD_FALSE &&
+		requirement->required < SG_FIELD_GUARD_UNKNOWN &&
+		requirement->reserved == 0U;
+}
+
+static int IntervalInside(const sg_rune_interval_t *inner,
+	const sg_rune_interval_t *outer)
+{
+	return inner->min_value >= outer->min_value &&
+		inner->max_value <= outer->max_value;
+}
+
+static int FlowInside(const sg_rune_flow_enclosure_t *inner,
+	const sg_rune_flow_enclosure_t *outer)
+{
+	return IntervalInside(&inner->position.x, &outer->position.x) &&
+		IntervalInside(&inner->position.y, &outer->position.y) &&
+		IntervalInside(&inner->position.z, &outer->position.z) &&
+		IntervalInside(&inner->velocity.x, &outer->velocity.x) &&
+		IntervalInside(&inner->velocity.y, &outer->velocity.y) &&
+		IntervalInside(&inner->velocity.z, &outer->velocity.z) &&
+		IntervalInside(&inner->elapsed_ms, &outer->elapsed_ms);
+}
+
+static const sg_rune_interval_t *FlowInterval(
+	const sg_rune_flow_enclosure_t *flow, uint32_t dimension)
+{
+	if (dimension < 3U)
+		return dimension == 0U ? &flow->position.x :
+			dimension == 1U ? &flow->position.y : &flow->position.z;
+	if (dimension < 6U)
+	{
+		dimension -= 3U;
+		return dimension == 0U ? &flow->velocity.x :
+			dimension == 1U ? &flow->velocity.y : &flow->velocity.z;
+	}
+	return &flow->elapsed_ms;
+}
+
+static void StoreFlowInterval(sg_rune_flow_enclosure_t *flow,
+	uint32_t dimension, float minimum, float maximum)
+{
+	sg_rune_interval_t *interval;
+	if (dimension < 3U)
+		interval = dimension == 0U ? &flow->position.x :
+			dimension == 1U ? &flow->position.y : &flow->position.z;
+	else if (dimension < 6U)
+	{
+		dimension -= 3U;
+		interval = dimension == 0U ? &flow->velocity.x :
+			dimension == 1U ? &flow->velocity.y : &flow->velocity.z;
+	}
+	else
+		interval = &flow->elapsed_ms;
+	interval->min_value = minimum;
+	interval->max_value = maximum;
+}
+
+static void OperatorImage(const sg_field_reach_atom_t *source,
+	const sg_field_outcome_t *outcome, sg_rune_flow_enclosure_t *image)
+{
+	uint32_t row;
+
+	for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
+	{
+		double minimum = outcome->endpoint.coefficient[row]
+			[SG_RUNE_STATE_DIMENSION_COUNT];
+		double maximum = minimum;
+		uint32_t column;
+		for (column = 0U; column < SG_RUNE_STATE_DIMENSION_COUNT; column++)
+		{
+			double coefficient = outcome->endpoint.coefficient[row][column];
+			const sg_rune_interval_t *input =
+				FlowInterval(&source->state_bounds, column);
+			double low;
+			double high;
+			if (coefficient == 0.0)
+				continue;
+			low = coefficient >= 0.0 ? input->min_value : input->max_value;
+			high = coefficient >= 0.0 ? input->max_value : input->min_value;
+			minimum = nextafter(minimum + coefficient * low, -INFINITY);
+			maximum = nextafter(maximum + coefficient * high, INFINITY);
+		}
+		{
+			const sg_rune_interval_t *remainder =
+				FlowInterval(&outcome->remainder, row);
+			double lower = minimum + remainder->min_value;
+			double upper = maximum + remainder->max_value;
+			float stored_minimum = (float)(remainder->min_value == 0.0f ?
+				lower : nextafter(lower, -INFINITY));
+			float stored_maximum = (float)(remainder->max_value == 0.0f ?
+				upper : nextafter(upper, INFINITY));
+			if ((double)stored_minimum > lower)
+				stored_minimum = nextafterf(stored_minimum, -INFINITY);
+			if ((double)stored_maximum < upper)
+				stored_maximum = nextafterf(stored_maximum, INFINITY);
+			StoreFlowInterval(image, row, stored_minimum, stored_maximum);
+		}
+	}
+}
+
+static int OutcomeCovered(const sg_rune_dynamics_model_t *model,
+	const sg_field_reach_atom_t *source, const sg_field_outcome_t *outcome)
+{
+	sg_rune_flow_enclosure_t image;
+	size_t item;
+
+	OperatorImage(source, outcome, &image);
+	for (item = outcome->destination_cover.first;
+	     item < (size_t)outcome->destination_cover.first +
+		outcome->destination_cover.count; item++)
+	{
+		size_t atom;
+		for (atom = 0U; atom < model->reach_atom_count; atom++)
+			if (model->reach_atoms[atom].id.value.source_set_identity ==
+				model->outcome_destination_atoms[item].value.source_set_identity &&
+			    model->reach_atoms[atom].id.value.high ==
+				model->outcome_destination_atoms[item].value.high &&
+			    model->reach_atoms[atom].id.value.low ==
+				model->outcome_destination_atoms[item].value.low &&
+			    FlowInside(&image, &model->reach_atoms[atom].state_bounds))
+				return 1;
+	}
+	return 0;
+}
+
+int SG_FieldOutcomeShapeValid(const sg_field_outcome_t *outcome)
+{
+	return outcome && SG_FieldOutcomeIdValid(&outcome->id) &&
+		AffineOperatorValid(&outcome->endpoint) &&
+		FlowEnclosureValid(&outcome->remainder) &&
+		outcome->destination_cover.count != 0U &&
+		outcome->absolute_time_advance.minimum_ms <=
+			outcome->absolute_time_advance.maximum_ms &&
+		SG_RuneDynamicsProofRefValid(&outcome->proof);
+}
+
+int SG_FieldChoiceShapeValid(const sg_field_choice_t *choice)
+{
+	if (!choice || !SG_FieldChoiceIdValid(&choice->id) ||
+	    choice->kind < SG_FIELD_CHOICE_CONTROL ||
+	    choice->kind >= SG_FIELD_CHOICE_KIND_COUNT ||
+	    !SG_FieldReachAtomIdValid(&choice->source_atom) ||
+	    choice->outcomes.count == 0U || !CostBoundsValid(&choice->cost) ||
+	    !SG_RuneDynamicsProofRefValid(&choice->proof))
+		return 0;
+	return choice->kind == SG_FIELD_CHOICE_CONTROL ?
+		SG_RuneControlFiberIdValid(&choice->authority.control) :
+		SG_RuneBoundaryTransferIdValid(&choice->authority.transfer);
+}
+
+int SG_FieldLocalProgressKernelShapeValid(
+	const sg_field_local_progress_kernel_t *progress)
+{
+	uint32_t coefficient;
+	if (!progress || !SG_FieldLocalProgressIdValid(&progress->id) ||
+		!SG_FieldReachAtomIdValid(&progress->source_atom) ||
+		progress->covered_sources.count == 0U ||
+		!SG_FieldReachAtomIdValid(&progress->target_atom) ||
+		!FlowEnclosureValid(&progress->terminal_parameters.anchor_bounds) ||
+		!Interval3Valid(&progress->terminal_parameters.position_offset_bounds) ||
+		!Interval3Valid(&progress->terminal_parameters.velocity_bounds) ||
+		!IntervalValid(&progress->terminal_parameters.local_elapsed_bounds) ||
+		progress->terminal_parameters.local_elapsed_bounds.min_value < 0.0f ||
+		!SG_RuneDynamicsProofRefValid(&progress->terminal_parameters.proof) ||
+		progress->admissible_choices.count == 0U ||
+		progress->whole_outcome_targets.count == 0U ||
+		progress->finite_rank == 0U || progress->reserved != 0U ||
+		!isfinite(progress->minimum_lyapunov_decrease) ||
+		progress->minimum_lyapunov_decrease <= 0.0f ||
+		!SG_RuneDynamicsProofRefValid(&progress->proof))
+		return 0;
+	for (coefficient = 0U; coefficient < SG_RUNE_STATE_DIMENSION_COUNT;
+	     coefficient++)
+		if (!isfinite(progress->state_lyapunov[coefficient]) ||
+		    !isfinite(progress->anchor_lyapunov[coefficient]))
+			return 0;
+	return isfinite(progress->lyapunov_constant);
+}
+
+int SG_FieldLocalProgressKernelAcceptsCapture(
+	const sg_field_local_progress_kernel_t *kernel,
+	const sg_destination_terminal_capture_t *capture)
+{
+	uint32_t dimension;
+
+	if (!SG_FieldLocalProgressKernelShapeValid(kernel) || !capture ||
+	    !SG_DestinationTerminalCaptureValidFor(capture,
+		&capture->anchor.destination,
+		capture->anchor.destination_generation))
+		return 0;
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		const sg_rune_interval_t *allowed =
+			FlowInterval(&kernel->terminal_parameters.anchor_bounds, dimension);
+		float coordinate = dimension < 3U ?
+			capture->anchor.position[dimension] : dimension < 6U ?
+			capture->anchor.velocity[dimension - 3U] :
+			capture->anchor.local_elapsed_ms;
+		if (!isfinite(coordinate) || coordinate < allowed->min_value ||
+		    coordinate > allowed->max_value)
+			return 0;
+	}
+	return capture->position_offset.x.min_value >=
+			kernel->terminal_parameters.position_offset_bounds.x.min_value &&
+		capture->position_offset.x.max_value <=
+			kernel->terminal_parameters.position_offset_bounds.x.max_value &&
+		capture->position_offset.y.min_value >=
+			kernel->terminal_parameters.position_offset_bounds.y.min_value &&
+		capture->position_offset.y.max_value <=
+			kernel->terminal_parameters.position_offset_bounds.y.max_value &&
+		capture->position_offset.z.min_value >=
+			kernel->terminal_parameters.position_offset_bounds.z.min_value &&
+		capture->position_offset.z.max_value <=
+			kernel->terminal_parameters.position_offset_bounds.z.max_value &&
+		capture->velocity.x.min_value >=
+			kernel->terminal_parameters.velocity_bounds.x.min_value &&
+		capture->velocity.x.max_value <=
+			kernel->terminal_parameters.velocity_bounds.x.max_value &&
+		capture->velocity.y.min_value >=
+			kernel->terminal_parameters.velocity_bounds.y.min_value &&
+		capture->velocity.y.max_value <=
+			kernel->terminal_parameters.velocity_bounds.y.max_value &&
+		capture->velocity.z.min_value >=
+			kernel->terminal_parameters.velocity_bounds.z.min_value &&
+		capture->velocity.z.max_value <=
+			kernel->terminal_parameters.velocity_bounds.z.max_value &&
+		capture->local_elapsed_ms.min_value >=
+			kernel->terminal_parameters.local_elapsed_bounds.min_value &&
+		capture->local_elapsed_ms.max_value <=
+			kernel->terminal_parameters.local_elapsed_bounds.max_value;
+}
+
+static int SameStableId(const sg_rune_stable_id_t *left,
+	const sg_rune_stable_id_t *right)
+{
+	return left->source_set_identity == right->source_set_identity &&
+		left->high == right->high && left->low == right->low;
+}
+
+int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
+	const sg_field_reach_atom_t *atoms, size_t atom_count)
+{
+	size_t node;
+	size_t packed = 0U;
+	size_t atom;
+	size_t root_cursor = 0U;
+	uint64_t source_set_identity;
+
+	if (!tree || !SG_FieldRefinementTreeIdValid(&tree->id) || !tree->nodes ||
+	    tree->node_count == 0U || tree->node_count > UINT32_MAX ||
+	    tree->child_count > UINT32_MAX ||
+	    (tree->child_count != 0U && !tree->children) || !tree->atom_roots ||
+	    !atoms || atom_count == 0U || tree->atom_count != atom_count ||
+	    !SG_RuneDynamicsProofRefValid(&tree->proof))
+		return 0;
+	source_set_identity = tree->id.value.source_set_identity;
+	if (tree->proof.value.source_set_identity != source_set_identity ||
+	    tree->child_count != tree->node_count - atom_count)
+		return 0;
+	for (node = 0U; node < tree->node_count; node++)
+	{
+		const sg_field_refinement_node_t *record = &tree->nodes[node];
+		size_t child;
+		if (!SG_FieldRefinementNodeIdValid(&record->id) ||
+		    !SG_FieldReachAtomIdValid(&record->atom) ||
+		    !FlowEnclosureValid(&record->state_bounds) ||
+		    !FlowEnclosureValid(&record->interpolation_error) ||
+		    !SG_RuneDynamicsProofRefValid(&record->proof) ||
+		    record->id.value.source_set_identity != source_set_identity ||
+		    record->atom.value.source_set_identity != source_set_identity ||
+		    record->proof.value.source_set_identity != source_set_identity ||
+		    record->children.first != packed ||
+		    !SpanWithin(record->children.first, record->children.count,
+			tree->child_count) ||
+		    (node == 0U ? record->parent != UINT32_MAX :
+			(record->parent != UINT32_MAX && record->parent >= node)))
+			return 0;
+		if (record->parent == UINT32_MAX)
+		{
+			if (root_cursor >= atom_count || tree->atom_roots[root_cursor] != node)
+				return 0;
+			root_cursor++;
+		}
+		else if (!FlowInside(&record->state_bounds,
+			&tree->nodes[record->parent].state_bounds) ||
+			 !FlowInside(&record->interpolation_error,
+				&tree->nodes[record->parent].interpolation_error))
+			return 0;
+		for (child = 0U; child < record->children.count; child++)
+		{
+			uint32_t child_node = tree->children[packed + child];
+			if (child_node <= node || child_node >= tree->node_count ||
+			    (packed + child != 0U &&
+			     tree->children[packed + child - 1U] >= child_node) ||
+			    tree->nodes[child_node].parent != node ||
+			    !SameStableId(&tree->nodes[child_node].atom.value,
+				&record->atom.value))
+				return 0;
+		}
+		packed += record->children.count;
+	}
+	if (packed != tree->child_count || root_cursor != atom_count)
+		return 0;
+	for (atom = 0U; atom < atom_count; atom++)
+	{
+		uint32_t root = tree->atom_roots[atom];
+		if (root >= tree->node_count || tree->nodes[root].parent != UINT32_MAX ||
+		    !SameStableId(&tree->nodes[root].atom.value, &atoms[atom].id.value))
+			return 0;
+		if (!FlowInside(&tree->nodes[root].state_bounds,
+			&atoms[atom].state_bounds) ||
+		    !FlowInside(&atoms[atom].state_bounds,
+			&tree->nodes[root].state_bounds))
+			return 0;
+	}
+	return 1;
 }
 
 static int SpanWithin(uint32_t first, uint32_t count, size_t capacity)
@@ -531,6 +909,17 @@ DEFINE_RECORD_FIND(FindStateDomain, sg_rune_state_domain_t,
 	sg_rune_state_domain_ref_t, state_domains, state_domain_count)
 DEFINE_RECORD_FIND(FindControlDomain, sg_rune_control_domain_t,
 	sg_rune_control_domain_ref_t, control_domains, control_domain_count)
+DEFINE_RECORD_FIND(FindControlFiber, sg_rune_control_fiber_t,
+	sg_rune_control_fiber_ref_t, control_fibers, control_fiber_count)
+DEFINE_RECORD_FIND(FindBoundaryTransfer, sg_rune_boundary_transfer_t,
+	sg_rune_boundary_transfer_ref_t, boundary_transfers,
+	boundary_transfer_count)
+DEFINE_RECORD_FIND(FindReachAtom, sg_field_reach_atom_t,
+	sg_field_reach_atom_ref_t, reach_atoms, reach_atom_count)
+DEFINE_RECORD_FIND(FindChoice, sg_field_choice_t,
+	sg_field_choice_ref_t, choices, choice_count)
+DEFINE_RECORD_FIND(FindOutcome, sg_field_outcome_t,
+	sg_field_outcome_ref_t, outcomes, outcome_count)
 
 #undef DEFINE_RECORD_FIND
 
@@ -565,7 +954,26 @@ static int DynamicsModelArraysValid(const sg_rune_dynamics_model_t *model,
 		model->response_patch_count, SG_RuneResponsePatchShapeValid);
 	VALIDATE_RECORD_SEQUENCE(model->boundary_transfers,
 		model->boundary_transfer_count, SG_RuneBoundaryTransferShapeValid);
+	VALIDATE_RECORD_SEQUENCE(model->reach_atoms,
+		model->reach_atom_count, SG_FieldReachAtomShapeValid);
+	VALIDATE_RECORD_SEQUENCE(model->outcomes,
+		model->outcome_count, SG_FieldOutcomeShapeValid);
+	VALIDATE_RECORD_SEQUENCE(model->choices,
+		model->choice_count, SG_FieldChoiceShapeValid);
+	VALIDATE_RECORD_SEQUENCE(model->local_progress_kernels,
+		model->local_progress_kernel_count,
+		SG_FieldLocalProgressKernelShapeValid);
 #undef VALIDATE_RECORD_SEQUENCE
+	for (index = 0U; index < model->guard_effect_count; index++)
+		if (!SG_FieldGuardEffectValid(&model->guard_effects[index]) ||
+		    model->guard_effects[index].condition.value.source_set_identity !=
+			source_set_identity)
+			return 0;
+	for (index = 0U; index < model->guard_requirement_count; index++)
+		if (!GuardRequirementValid(&model->guard_requirements[index]) ||
+		    model->guard_requirements[index].condition.value.source_set_identity !=
+			source_set_identity)
+			return 0;
 	for (index = 0U; index < model->state_chart_count; index++)
 		if (!CellAccepted(base_model,
 			&model->state_charts[index].configuration_cell) ||
@@ -596,6 +1004,30 @@ static int DynamicsModelArraysValid(const sg_rune_dynamics_model_t *model,
 		if (model->boundary_transfers[index].condition.value
 			.source_set_identity != source_set_identity ||
 		    model->boundary_transfers[index].transfer_proof.value
+			.source_set_identity != source_set_identity)
+			return 0;
+	for (index = 0U; index < model->reach_atom_count; index++)
+		if (model->reach_atoms[index].partition_proof.value.source_set_identity !=
+			source_set_identity)
+			return 0;
+	for (index = 0U; index < model->outcome_count; index++)
+		if (model->outcomes[index].proof.value.source_set_identity !=
+			source_set_identity ||
+		    model->outcomes[index].endpoint.operator_proof.value
+			.source_set_identity != source_set_identity ||
+		    model->outcomes[index].endpoint.image_proof.value
+			.source_set_identity != source_set_identity ||
+		    model->outcomes[index].endpoint.cover_proof.value
+			.source_set_identity != source_set_identity)
+			return 0;
+	for (index = 0U; index < model->choice_count; index++)
+		if (model->choices[index].proof.value.source_set_identity !=
+			source_set_identity)
+			return 0;
+	for (index = 0U; index < model->local_progress_kernel_count; index++)
+		if (model->local_progress_kernels[index].proof.value
+			.source_set_identity != source_set_identity ||
+		    model->local_progress_kernels[index].terminal_parameters.proof.value
 			.source_set_identity != source_set_identity)
 			return 0;
 	return 1;
@@ -742,6 +1174,173 @@ static int DynamicsModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 		next_transfer == model->boundary_transfer_count;
 }
 
+static int FieldModelOwnershipValid(const sg_rune_dynamics_model_t *model)
+{
+	size_t index;
+
+	for (index = 0U; index < model->reach_atom_count; index++)
+	{
+		const sg_field_reach_atom_t *atom = &model->reach_atoms[index];
+		const sg_rune_state_domain_t *domain =
+			FindStateDomain(model, &atom->domain);
+		if (!domain || !SpanInside(atom->simplices.first,
+			atom->simplices.count, domain->simplices.first,
+			domain->simplices.count))
+			return 0;
+	}
+	for (index = 0U; index < model->outcome_count; index++)
+	{
+		const sg_field_outcome_t *outcome = &model->outcomes[index];
+		size_t destination;
+		size_t effect;
+		if (!SpanWithin(outcome->destination_cover.first,
+			outcome->destination_cover.count,
+			model->outcome_destination_atom_count) ||
+		    !SpanWithin(outcome->guard_effects.first,
+			outcome->guard_effects.count, model->guard_effect_count))
+			return 0;
+		for (destination = outcome->destination_cover.first;
+		     destination < (size_t)outcome->destination_cover.first +
+			outcome->destination_cover.count; destination++)
+			if (!FindReachAtom(model,
+				&model->outcome_destination_atoms[destination]) ||
+			    (destination != outcome->destination_cover.first &&
+			     StableIdCompareValue(
+				&model->outcome_destination_atoms[destination - 1U].value,
+				&model->outcome_destination_atoms[destination].value) >= 0))
+				return 0;
+		for (effect = outcome->guard_effects.first;
+		     effect < (size_t)outcome->guard_effects.first +
+			outcome->guard_effects.count; effect++)
+			if (effect != outcome->guard_effects.first &&
+			    StableIdCompareValue(
+				&model->guard_effects[effect - 1U].condition.value,
+				&model->guard_effects[effect].condition.value) >= 0)
+				return 0;
+	}
+	for (index = 0U; index < model->choice_count; index++)
+	{
+		const sg_field_choice_t *choice = &model->choices[index];
+		const sg_field_reach_atom_t *source_atom =
+			FindReachAtom(model, &choice->source_atom);
+		size_t requirement;
+		size_t outcome;
+		if (!source_atom ||
+		    !SpanWithin(choice->outcomes.first, choice->outcomes.count,
+			model->outcome_count) ||
+		    !SpanWithin(choice->guard_requirements.first,
+			choice->guard_requirements.count,
+			model->guard_requirement_count) ||
+		    (choice->kind == SG_FIELD_CHOICE_CONTROL &&
+		     !FindControlFiber(model, &choice->authority.control)) ||
+		    (choice->kind == SG_FIELD_CHOICE_TRANSFER &&
+		     !FindBoundaryTransfer(model, &choice->authority.transfer)))
+			return 0;
+		for (requirement = choice->guard_requirements.first;
+		     requirement < (size_t)choice->guard_requirements.first +
+			choice->guard_requirements.count; requirement++)
+			if (requirement != choice->guard_requirements.first &&
+			    StableIdCompareValue(
+				&model->guard_requirements[requirement - 1U].condition.value,
+				&model->guard_requirements[requirement].condition.value) >= 0)
+				return 0;
+		for (outcome = choice->outcomes.first;
+		     outcome < (size_t)choice->outcomes.first +
+			choice->outcomes.count; outcome++)
+			if (!OutcomeCovered(model, source_atom, &model->outcomes[outcome]))
+				return 0;
+	}
+	for (index = 0U; index < model->local_progress_kernel_count; index++)
+	{
+		const sg_field_local_progress_kernel_t *progress =
+			&model->local_progress_kernels[index];
+		size_t item;
+		size_t required_targets = 0U;
+		if (!FindReachAtom(model, &progress->source_atom) ||
+		    !FindReachAtom(model, &progress->target_atom) ||
+		    !SpanWithin(progress->covered_sources.first,
+			progress->covered_sources.count,
+			model->local_progress_source_count) ||
+		    !SpanWithin(progress->admissible_choices.first,
+			progress->admissible_choices.count,
+			model->local_progress_choice_count) ||
+		    !SpanWithin(progress->whole_outcome_targets.first,
+			progress->whole_outcome_targets.count,
+			model->local_progress_target_count))
+			return 0;
+		for (item = progress->covered_sources.first;
+		     item < (size_t)progress->covered_sources.first +
+			progress->covered_sources.count; item++)
+		{
+			const sg_field_refinement_node_ref_t *reference =
+				&model->local_progress_sources[item];
+			size_t node;
+			for (node = 0U; node < model->refinement_tree.node_count; node++)
+				if (SameStableId(&model->refinement_tree.nodes[node].id.value,
+					&reference->value))
+					break;
+			if (node == model->refinement_tree.node_count ||
+			    !SameStableId(&model->refinement_tree.nodes[node].atom.value,
+				&progress->source_atom.value) ||
+			    (item != progress->covered_sources.first &&
+			     StableIdCompareValue(
+				&model->local_progress_sources[item - 1U].value,
+				&reference->value) >= 0))
+				return 0;
+		}
+		for (item = progress->admissible_choices.first;
+		     item < (size_t)progress->admissible_choices.first +
+			progress->admissible_choices.count; item++)
+		{
+			const sg_field_choice_t *choice =
+				FindChoice(model, &model->local_progress_choices[item]);
+			if (!choice || !SameStableId(&choice->source_atom.value,
+				&progress->source_atom.value) ||
+			    (item != progress->admissible_choices.first &&
+			     StableIdCompareValue(
+				&model->local_progress_choices[item - 1U].value,
+				&model->local_progress_choices[item].value) >= 0) ||
+			    required_targets > SIZE_MAX - choice->outcomes.count)
+				return 0;
+			required_targets += choice->outcomes.count;
+		}
+		if (required_targets != progress->whole_outcome_targets.count)
+			return 0;
+		for (item = 0U; item < progress->whole_outcome_targets.count; item++)
+		{
+			const sg_field_progress_target_t *target =
+				&model->local_progress_targets[
+					(size_t)progress->whole_outcome_targets.first + item];
+			size_t remaining = item;
+			size_t choice_index;
+			const sg_field_outcome_t *expected = NULL;
+			for (choice_index = progress->admissible_choices.first;
+			     choice_index < (size_t)progress->admissible_choices.first +
+				progress->admissible_choices.count; choice_index++)
+			{
+				const sg_field_choice_t *choice = FindChoice(model,
+					&model->local_progress_choices[choice_index]);
+				if (remaining < choice->outcomes.count)
+				{
+					expected = &model->outcomes[
+						(size_t)choice->outcomes.first + remaining];
+					break;
+				}
+				remaining -= choice->outcomes.count;
+			}
+			if (!FindOutcome(model, &target->outcome) ||
+			    !expected || !SameStableId(&target->outcome.value,
+				&expected->id.value) ||
+			    !FindReachAtom(model, &target->atom) ||
+			    target->reserved != 0U ||
+			    target->maximum_target_rank >= progress->finite_rank)
+				return 0;
+		}
+	}
+	return SG_FieldRefinementTreeValid(&model->refinement_tree,
+		model->reach_atoms, model->reach_atom_count);
+}
+
 int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 	const sg_rune_runtime_snapshot_t *snapshot)
 {
@@ -768,6 +1367,28 @@ int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 	    model->response_patch_count > UINT32_MAX ||
 	    !model->boundary_transfers || model->boundary_transfer_count == 0U ||
 	    model->boundary_transfer_count > UINT32_MAX ||
+	    !model->reach_atoms || model->reach_atom_count == 0U ||
+	    model->reach_atom_count > UINT32_MAX ||
+	    !model->outcome_destination_atoms ||
+	    model->outcome_destination_atom_count == 0U ||
+	    model->outcome_destination_atom_count > UINT32_MAX ||
+	    (!model->guard_requirements && model->guard_requirement_count != 0U) ||
+	    model->guard_requirement_count > UINT32_MAX ||
+	    (!model->guard_effects && model->guard_effect_count != 0U) ||
+	    model->guard_effect_count > UINT32_MAX ||
+	    !model->outcomes || model->outcome_count == 0U ||
+	    model->outcome_count > UINT32_MAX ||
+	    !model->choices || model->choice_count == 0U ||
+	    model->choice_count > UINT32_MAX ||
+	    !model->local_progress_kernels ||
+	    model->local_progress_kernel_count == 0U ||
+	    model->local_progress_kernel_count > UINT32_MAX ||
+	    !model->local_progress_sources || model->local_progress_source_count == 0U ||
+	    model->local_progress_source_count > UINT32_MAX ||
+	    !model->local_progress_choices || model->local_progress_choice_count == 0U ||
+	    model->local_progress_choice_count > UINT32_MAX ||
+	    !model->local_progress_targets || model->local_progress_target_count == 0U ||
+	    model->local_progress_target_count > UINT32_MAX ||
 	    !SG_RuneFieldRegionHierarchyValid(&model->hierarchy) ||
 	    !SG_RuneFieldErrorContractValid(&model->error_contract) ||
 	    model->hierarchy.chart_count != model->state_chart_count ||
@@ -782,5 +1403,6 @@ int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 		return 0;
 	return DynamicsModelArraysValid(model, snapshot->model,
 			source_set_identity) && DynamicsModelOwnershipValid(model) &&
+		FieldModelOwnershipValid(model) &&
 		SG_RuneDynamicsGeometryValid(model);
 }
