@@ -1,4 +1,6 @@
 #include "sg_host_law_publication.h"
+#include "sg_host_law_publication_private.h"
+#include "sg_host_engine_runtime_private.h"
 #include "sg_weapon_host_constants.h"
 
 #ifndef q_exported
@@ -34,6 +36,8 @@ struct sg_host_law_publication_s
 	/* Exactly one backend is live: authority for controller-frozen
 	 * construction, or runtime for owner-accepted engine queries. */
 	const sg_host_engine_runtime_t *runtime;
+	int static_only;
+	sg_host_static_identity_t static_identity;
 	sg_host_engine_pmove_binding_t pmove_binding;
 	sg_host_hook_live_capture_function_t hook_live_capture;
 	sg_host_mechanism_live_capture_function_t mechanism_live_capture;
@@ -75,6 +79,19 @@ static int FiniteVector(const float value[3])
 		isfinite(value[2]);
 }
 
+static int ContentIdentityValid(const sg_bsp_content_identity_t *identity)
+{
+	uint32_t index;
+	int any = 0;
+
+	if (!identity)
+		return 0;
+	for (index = 0U; index < SG_BSP_CONTENT_ID_BYTES; index++)
+		if (identity->bytes[index] != 0U)
+			any = 1;
+	return any;
+}
+
 static int FiniteHull(const sg_rune_hull_profile_t *hull)
 {
 	uint32_t axis;
@@ -96,10 +113,7 @@ static int IdentityValid(const sg_rune_model_identity_t *identity)
 	if (!identity || !identity->bsp_content_id ||
 		identity->bsp_content_id == UINT64_MAX || !identity->entity_semantics_id ||
 		identity->entity_semantics_id == UINT64_MAX || !identity->physics_abi_id ||
-		identity->physics_abi_id == UINT64_MAX || !identity->source_set_identity ||
-		identity->source_set_identity == UINT64_MAX || !identity->schema_id ||
-		identity->schema_id == UINT64_MAX || !identity->producer_identity ||
-		identity->producer_identity == UINT64_MAX ||
+		identity->physics_abi_id == UINT64_MAX ||
 		!FiniteHull(&identity->standing_hull) ||
 		!FiniteHull(&identity->crouching_hull))
 		return 0;
@@ -115,6 +129,30 @@ static int IdentityValid(const sg_rune_model_identity_t *identity)
 		physics->external_acceleration >= 0.0f && physics->water_drag >= 0.0f &&
 		physics->max_velocity > 0.0f && physics->frame_ms &&
 		physics->substep_ms;
+}
+
+static int StaticIdentityValid(const sg_host_static_identity_t *identity)
+{
+	const sg_rune_physics_parameters_t *physics;
+
+	if (!identity || !ContentIdentityValid(&identity->bsp_identity) ||
+		identity->bsp_bytes == 0U || identity->host_physics_epoch == 0U ||
+		identity->reserved != 0U || identity->physics_abi_id == 0U ||
+		identity->physics_abi_id == UINT64_MAX ||
+		!FiniteHull(&identity->standing_hull) ||
+		!FiniteHull(&identity->crouching_hull))
+		return 0;
+	physics = &identity->physics;
+	return isfinite(physics->gravity) && isfinite(physics->ground_acceleration) &&
+		isfinite(physics->air_acceleration) &&
+		isfinite(physics->water_acceleration) &&
+		isfinite(physics->hook_acceleration) &&
+		isfinite(physics->external_acceleration) && isfinite(physics->water_drag) &&
+		isfinite(physics->max_velocity) && physics->gravity >= 0.0f &&
+		physics->ground_acceleration >= 0.0f && physics->air_acceleration >= 0.0f &&
+		physics->water_acceleration >= 0.0f && physics->hook_acceleration >= 0.0f &&
+		physics->external_acceleration >= 0.0f && physics->water_drag >= 0.0f &&
+		physics->max_velocity > 0.0f && physics->frame_ms && physics->substep_ms;
 }
 
 static sg_host_law_result_t CompareU32(uint32_t expected, uint32_t observed,
@@ -236,6 +274,68 @@ static sg_host_law_result_t CompareIdentity(
 		return result;
 	return CompareU32(expected->physics.substep_ms, observed->physics.substep_ms,
 		status, SG_HOST_LAW_FIELD_SUBSTEP_MS);
+}
+
+static sg_host_law_result_t CompareStaticIdentity(
+	const sg_host_static_identity_t *expected,
+	const sg_host_static_identity_t *observed, sg_host_law_status_t status)
+{
+	sg_host_law_result_t result;
+	uint32_t index;
+	static const sg_host_law_field_t physics_fields[] = {
+		SG_HOST_LAW_FIELD_GRAVITY,
+		SG_HOST_LAW_FIELD_GROUND_ACCELERATION,
+		SG_HOST_LAW_FIELD_AIR_ACCELERATION,
+		SG_HOST_LAW_FIELD_WATER_ACCELERATION,
+		SG_HOST_LAW_FIELD_HOOK_ACCELERATION,
+		SG_HOST_LAW_FIELD_EXTERNAL_ACCELERATION,
+		SG_HOST_LAW_FIELD_WATER_DRAG,
+		SG_HOST_LAW_FIELD_MODEL_MAX_VELOCITY
+	};
+	const float *expected_physics = &expected->physics.gravity;
+	const float *observed_physics = &observed->physics.gravity;
+
+	if (memcmp(expected->bsp_identity.bytes, observed->bsp_identity.bytes,
+		SG_BSP_CONTENT_ID_BYTES) != 0)
+		return Result(status, SG_HOST_LAW_FIELD_BSP_CONTENT,
+			SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = CompareU64(expected->bsp_bytes, observed->bsp_bytes, status,
+		SG_HOST_LAW_FIELD_BSP_CONTENT);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareU32(expected->engine_checksum, observed->engine_checksum,
+		status, SG_HOST_LAW_FIELD_BSP_CONTENT);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareU32(expected->entity_crc32, observed->entity_crc32,
+		status, SG_HOST_LAW_FIELD_ENTITY_SEMANTICS);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareU32(expected->host_physics_epoch,
+		observed->host_physics_epoch, status, SG_HOST_LAW_FIELD_PHYSICS_ABI);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareU32(expected->reserved, observed->reserved, status,
+		SG_HOST_LAW_FIELD_VERSION);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareU64(expected->physics_abi_id, observed->physics_abi_id,
+		status, SG_HOST_LAW_FIELD_PHYSICS_ABI);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareHull(&expected->standing_hull, &observed->standing_hull,
+		status, SG_HOST_LAW_FIELD_STANDING_HULL_MINS,
+		SG_HOST_LAW_FIELD_STANDING_HULL_MAXS);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	result = CompareHull(&expected->crouching_hull, &observed->crouching_hull,
+		status, SG_HOST_LAW_FIELD_CROUCHING_HULL_MINS,
+		SG_HOST_LAW_FIELD_CROUCHING_HULL_MAXS);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	for (index = 0U; index < 8U; index++)
+	{
+		result = CompareFloat(expected_physics[index], observed_physics[index],
+			status, physics_fields[index]);
+		if (result.status != SG_HOST_LAW_OK) return result;
+	}
+	result = CompareU32(expected->physics.frame_ms,
+		observed->physics.frame_ms, status, SG_HOST_LAW_FIELD_FRAME_MS);
+	if (result.status != SG_HOST_LAW_OK) return result;
+	return CompareU32(expected->physics.substep_ms,
+		observed->physics.substep_ms, status, SG_HOST_LAW_FIELD_SUBSTEP_MS);
 }
 
 static sg_host_law_result_t ComparePmoveABI(
@@ -383,6 +483,18 @@ static sg_host_law_result_t CompareViews(const sg_host_law_view_t *expected,
 		observed->mechanism_law_id, status, SG_HOST_LAW_FIELD_MECHANISM_LAW);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
+	if (memcmp(&expected->bsp_identity, &observed->bsp_identity,
+		sizeof(expected->bsp_identity)) != 0)
+		return Result(status, SG_HOST_LAW_FIELD_BSP_CONTENT,
+			SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = CompareU64(expected->bsp_bytes, observed->bsp_bytes, status,
+		SG_HOST_LAW_FIELD_BSP_CONTENT);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	result = CompareStaticIdentity(&expected->static_identity,
+		&observed->static_identity, status);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
 	result = CompareIdentity(&expected->identity, &observed->identity, status);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
@@ -459,16 +571,29 @@ static int ABIShapeValid(const sg_host_engine_pmove_abi_t *abi)
 
 static int ViewShapeValid(const sg_host_law_view_t *view)
 {
+	const sg_rune_physics_parameters_t *physics;
+	int static_identity;
+	int model_identity;
+
+	if (!view)
+		return 0;
+	static_identity = StaticIdentityValid(&view->static_identity);
+	model_identity = IdentityValid(&view->identity);
+	if (static_identity + model_identity != 1)
+		return 0;
+	physics = static_identity ? &view->static_identity.physics :
+		&view->identity.physics;
 	return view && view->version == SG_HOST_LAW_PUBLICATION_VERSION &&
 		view->reserved == 0U && view->collision_law_id == SG_HOST_COLLISION_ID &&
 		view->pmove_law_id == SG_HOST_PMOVE_ID &&
 		view->gravity_law_id == SG_HOST_GRAVITY_ID &&
 		view->hook_law_id == SG_HOST_HOOK_LAW_ID &&
 		view->mechanism_law_id == SG_HOST_MECHANISM_LAW_ID &&
-		IdentityValid(&view->identity) && ABIShapeValid(&view->pmove_abi) &&
+		ContentIdentityValid(&view->bsp_identity) && view->bsp_bytes != 0U &&
+		ABIShapeValid(&view->pmove_abi) &&
 		view->pmove_behavior_fingerprint &&
 		SameFloat(view->airaccelerate, 0.0f) &&
-		SameFloat(view->maxvelocity, view->identity.physics.max_velocity) &&
+		SameFloat(view->maxvelocity, physics->max_velocity) &&
 		view->movement_flags == 0U && view->physics_flags ==
 		SG_HOST_ENGINE_PHYSICS_FLAGS &&
 		view->hook_fire_speed == view->hook.fire_speed &&
@@ -484,6 +609,7 @@ static int PublicationValid(const sg_host_law_publication_t *publication)
 {
 	int static_backend;
 	int runtime_backend;
+	int host_backend;
 	const sg_rune_model_identity_t *identity;
 
 	if (!publication || publication->state != SG_HOST_LAW_STATE ||
@@ -495,15 +621,35 @@ static int PublicationValid(const sg_host_law_publication_t *publication)
 		return 0;
 	static_backend = publication->authority.world != NULL;
 	runtime_backend = publication->runtime != NULL;
-	if (static_backend == runtime_backend)
+	host_backend = publication->static_only != 0;
+	if (static_backend + runtime_backend + host_backend != 1)
 		return 0;
 	if (static_backend &&
 		memcmp(&publication->authority.content_identity,
 			&publication->authority.world->content_identity,
 			sizeof(publication->authority.content_identity)) != 0)
 		return 0;
+	if (static_backend && memcmp(&publication->view.bsp_identity,
+		&publication->authority.content_identity,
+		sizeof(publication->view.bsp_identity)) != 0)
+		return 0;
 	if (runtime_backend && !SG_HostEngineRuntimeAccepted(publication->runtime))
 		return 0;
+	if (runtime_backend && (!SG_HostEngineRuntimeContentIdentity(
+		publication->runtime) || memcmp(&publication->view.bsp_identity,
+		SG_HostEngineRuntimeContentIdentity(publication->runtime),
+		sizeof(publication->view.bsp_identity)) != 0))
+		return 0;
+	if (host_backend &&
+		(memcmp(&publication->static_identity.bsp_identity,
+			&publication->view.bsp_identity,
+			sizeof(publication->static_identity.bsp_identity)) != 0 ||
+		 publication->static_identity.bsp_bytes != publication->view.bsp_bytes))
+		return 0;
+	if (host_backend)
+		return CompareStaticIdentity(&publication->static_identity,
+			&publication->view.static_identity,
+			SG_HOST_LAW_PRODUCTION_DRIFT).status == SG_HOST_LAW_OK;
 	identity = static_backend ? &publication->authority.identity :
 		SG_HostEngineRuntimeIdentity(publication->runtime);
 	return identity &&
@@ -513,6 +659,7 @@ static int PublicationValid(const sg_host_law_publication_t *publication)
 
 static sg_host_law_result_t CaptureLive(
 	const sg_rune_model_identity_t *identity,
+	const sg_host_static_identity_t *static_identity,
 	sg_host_law_view_t *view_out,
 	sg_host_engine_pmove_binding_t *binding_out)
 {
@@ -527,21 +674,39 @@ static sg_host_law_result_t CaptureLive(
 	sg_rune_physics_parameters_t host_physics;
 	sg_rune_hull_profile_t standing_hull;
 	sg_rune_hull_profile_t crouching_hull;
+	const sg_rune_hull_profile_t *expected_standing;
+	const sg_rune_hull_profile_t *expected_crouching;
+	const sg_rune_physics_parameters_t *expected_physics;
 	uint32_t index;
 
-	if (!identity || !view_out || !binding_out)
+	if (!view_out || !binding_out)
 		return Result(SG_HOST_LAW_INVALID_ARGUMENT, SG_HOST_LAW_FIELD_NONE,
 			SG_HOST_LAW_ELEMENT_NONE, 0U, 0U);
-	if (!IdentityValid(identity))
-		return Result(SG_HOST_LAW_INVALID_ARGUMENT, SG_HOST_LAW_FIELD_PHYSICS_ABI,
-			SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (identity)
+	{
+		if (static_identity || !IdentityValid(identity))
+			return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+				SG_HOST_LAW_FIELD_NONE, SG_HOST_LAW_ELEMENT_NONE, 0U, 0U);
+		expected_standing = &identity->standing_hull;
+		expected_crouching = &identity->crouching_hull;
+		expected_physics = &identity->physics;
+	}
+	else
+	{
+		if (!static_identity || !StaticIdentityValid(static_identity))
+			return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+				SG_HOST_LAW_FIELD_NONE, SG_HOST_LAW_ELEMENT_NONE, 0U, 0U);
+		expected_standing = &static_identity->standing_hull;
+		expected_crouching = &static_identity->crouching_hull;
+		expected_physics = &static_identity->physics;
+	}
 	if (!SG_HostEnginePmoveABI(&abi) ||
 		!SG_HostEnginePmoveBindingCapture(&binding))
 		return Result(SG_HOST_LAW_HOST_UNAVAILABLE, SG_HOST_LAW_FIELD_PMOVE_ABI,
 			SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	if (abi.substep_ms != identity->physics.substep_ms ||
+	if (abi.substep_ms != expected_physics->substep_ms ||
 		abi.substep_ms != SG_HOST_ENGINE_PMOVE_SUBSTEP_MS ||
-		identity->physics.frame_ms != SG_HOST_ENGINE_FRAME_MS)
+		expected_physics->frame_ms != SG_HOST_ENGINE_FRAME_MS)
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_PMOVE_ABI, SG_HOST_LAW_ELEMENT_NONE,
 			SG_HOST_ENGINE_PMOVE_SUBSTEP_MS, abi.substep_ms);
@@ -558,19 +723,19 @@ static sg_host_law_result_t CaptureLive(
 			SG_HOST_LAW_FIELD_AIRACCELERATE, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
 	if (!isfinite(gravity) || gravity < (float)SG_HOST_ENGINE_GRAVITY_MIN ||
 		gravity > (float)SG_HOST_ENGINE_GRAVITY_MAX || gravity != truncf(gravity) ||
-		!SameFloat(gravity, identity->physics.gravity))
+		!SameFloat(gravity, expected_physics->gravity))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_GRAVITY, SG_HOST_LAW_ELEMENT_NONE,
-			FloatBits(identity->physics.gravity), FloatBits(gravity));
+			FloatBits(expected_physics->gravity), FloatBits(gravity));
 	if (!SameFloat(airaccelerate->value, 0.0f))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_AIRACCELERATE, SG_HOST_LAW_ELEMENT_NONE, 0U,
 			FloatBits(airaccelerate->value));
 	if (!isfinite(maxvelocity) || maxvelocity <= 0.0f ||
-		!SameFloat(maxvelocity, identity->physics.max_velocity))
+		!SameFloat(maxvelocity, expected_physics->max_velocity))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_MAXVELOCITY, SG_HOST_LAW_ELEMENT_NONE,
-			FloatBits(identity->physics.max_velocity),
+			FloatBits(expected_physics->max_velocity),
 			FloatBits(maxvelocity));
 	if (!SameFloat(want_funky_gravity->value, 0.0f))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
@@ -602,7 +767,10 @@ static sg_host_law_result_t CaptureLive(
 	view_out->gravity_law_id = SG_HOST_GRAVITY_ID;
 	view_out->hook_law_id = hook.identity;
 	view_out->mechanism_law_id = mechanism.identity;
-	view_out->identity = *identity;
+	if (identity)
+		view_out->identity = *identity;
+	else
+		view_out->static_identity = *static_identity;
 	view_out->pmove_abi = abi;
 	/* This is an ABI binding fingerprint, not a finite behavior probe.  Exact
 	 * callback identity and its immutable owner are checked separately by the
@@ -633,28 +801,28 @@ static sg_host_law_result_t CaptureLive(
 	*binding_out = binding;
 	for (index = 0U; index < 3U; index++)
 	{
-		if (!SameFloat(view_out->identity.standing_hull.mins.value[index],
+		if (!SameFloat(expected_standing->mins.value[index],
 			standing_hull.mins.value[index]) ||
-			!SameFloat(view_out->identity.standing_hull.maxs.value[index],
+			!SameFloat(expected_standing->maxs.value[index],
 			standing_hull.maxs.value[index]) ||
-			!SameFloat(view_out->identity.crouching_hull.mins.value[index],
+			!SameFloat(expected_crouching->mins.value[index],
 			crouching_hull.mins.value[index]) ||
-			!SameFloat(view_out->identity.crouching_hull.maxs.value[index],
+			!SameFloat(expected_crouching->maxs.value[index],
 			crouching_hull.maxs.value[index]))
 			return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 				SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR, index, 1U, 0U);
 	}
-	if (!SameFloat(view_out->identity.physics.ground_acceleration,
+	if (!SameFloat(expected_physics->ground_acceleration,
 			host_physics.ground_acceleration) ||
-		!SameFloat(view_out->identity.physics.air_acceleration,
+		!SameFloat(expected_physics->air_acceleration,
 			host_physics.air_acceleration) ||
-		!SameFloat(view_out->identity.physics.water_acceleration,
+		!SameFloat(expected_physics->water_acceleration,
 			host_physics.water_acceleration) ||
-		!SameFloat(view_out->identity.physics.hook_acceleration,
+		!SameFloat(expected_physics->hook_acceleration,
 			host_physics.hook_acceleration) ||
-		!SameFloat(view_out->identity.physics.external_acceleration,
+		!SameFloat(expected_physics->external_acceleration,
 			host_physics.external_acceleration) ||
-		!SameFloat(view_out->identity.physics.water_drag,
+		!SameFloat(expected_physics->water_drag,
 			host_physics.water_drag))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_GRAVITY_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
@@ -667,7 +835,7 @@ static sg_host_law_result_t InvalidPublication(sg_host_law_field_t field)
 		SG_HOST_LAW_ELEMENT_NONE, 0U, 0U);
 }
 
-sg_host_law_result_t SG_HostLawPublicationIssue(
+sg_host_law_result_t SG_HostLawPublicationOwnerIssue(
 	const sg_host_collision_authority_t *authority,
 	sg_host_law_publication_t **publication_out)
 {
@@ -685,9 +853,12 @@ sg_host_law_result_t SG_HostLawPublicationIssue(
 			sizeof(authority->content_identity)) != 0)
 		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
 			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	result = CaptureLive(&authority->identity, &view, &binding);
+	result = CaptureLive(&authority->identity, NULL, &view, &binding);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
+	view.bsp_identity = authority->content_identity;
+	view.bsp_bytes = authority->world->source_size ?
+		(uint64_t)authority->world->source_size : UINT64_C(1);
 	publication = malloc(sizeof(*publication));
 	if (!publication)
 		return Result(SG_HOST_LAW_ALLOCATION_FAILED, SG_HOST_LAW_FIELD_NONE,
@@ -697,6 +868,7 @@ sg_host_law_result_t SG_HostLawPublicationIssue(
 	publication->self = publication;
 	publication->authority = *authority;
 	publication->runtime = NULL;
+	publication->static_only = 0;
 	publication->pmove_binding = binding;
 	publication->hook_live_capture = SG_HostHookLiveCapture;
 	publication->mechanism_live_capture = SG_HostMechanismLiveCapture;
@@ -705,35 +877,33 @@ sg_host_law_result_t SG_HostLawPublicationIssue(
 	return Ok();
 }
 
-sg_host_law_result_t SG_HostLawPublicationIssueRuntime(
-	const sg_host_engine_runtime_t *runtime,
+sg_host_law_result_t SG_HostLawPublicationOwnerIssueStatic(
+	const sg_host_static_identity_t *identity,
 	sg_host_law_publication_t **publication_out)
 {
 	sg_host_law_publication_t *publication;
 	sg_host_law_view_t view;
 	sg_host_engine_pmove_binding_t binding;
 	sg_host_law_result_t result;
-	const sg_rune_model_identity_t *identity;
 
-	if (!publication_out || *publication_out)
-		return Result(SG_HOST_LAW_INVALID_ARGUMENT, SG_HOST_LAW_FIELD_NONE,
-			SG_HOST_LAW_ELEMENT_NONE, 0U, 0U);
-	if (!runtime || !SG_HostEngineRuntimeAccepted(runtime) ||
-		!(identity = SG_HostEngineRuntimeIdentity(runtime)))
-		return Result(SG_HOST_LAW_HOST_UNAVAILABLE,
-			SG_HOST_LAW_FIELD_PMOVE_ABI, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	result = CaptureLive(identity, &view, &binding);
+	if (!publication_out || *publication_out ||
+		!StaticIdentityValid(identity))
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_BSP_CONTENT, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = CaptureLive(NULL, identity, &view, &binding);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
-	publication = malloc(sizeof(*publication));
+	view.bsp_identity = identity->bsp_identity;
+	view.bsp_bytes = identity->bsp_bytes;
+	publication = calloc(1U, sizeof(*publication));
 	if (!publication)
 		return Result(SG_HOST_LAW_ALLOCATION_FAILED, SG_HOST_LAW_FIELD_NONE,
 			SG_HOST_LAW_ELEMENT_NONE, 0U, 0U);
-	memset(publication, 0, sizeof(*publication));
 	publication->state = SG_HOST_LAW_STATE;
 	publication->state_inverse = ~SG_HOST_LAW_STATE;
 	publication->self = publication;
-	publication->runtime = runtime;
+	publication->static_only = 1;
+	publication->static_identity = *identity;
 	publication->pmove_binding = binding;
 	publication->hook_live_capture = SG_HostHookLiveCapture;
 	publication->mechanism_live_capture = SG_HostMechanismLiveCapture;
@@ -741,7 +911,7 @@ sg_host_law_result_t SG_HostLawPublicationIssueRuntime(
 	if (!PublicationValid(publication))
 	{
 		free(publication);
-		return InvalidPublication(SG_HOST_LAW_FIELD_PMOVE_LAW);
+		return InvalidPublication(SG_HOST_LAW_FIELD_BSP_CONTENT);
 	}
 	*publication_out = publication;
 	return Ok();
@@ -802,7 +972,9 @@ sg_host_law_result_t SG_HostLawPublicationRevalidateProduction(
 	identity = publication->runtime ?
 		SG_HostEngineRuntimeIdentity(publication->runtime) :
 		&publication->authority.identity;
-	result = CaptureLive(identity, &current, &binding);
+	result = CaptureLive(publication->static_only ? NULL : identity,
+		publication->static_only ? &publication->static_identity : NULL,
+		&current, &binding);
 	if (result.status != SG_HOST_LAW_OK)
 	{
 		if (result.status == SG_HOST_LAW_HOST_UNAVAILABLE ||
@@ -815,6 +987,11 @@ sg_host_law_result_t SG_HostLawPublicationRevalidateProduction(
 		return Result(SG_HOST_LAW_PRODUCTION_DRIFT,
 			SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR, SG_HOST_LAW_ELEMENT_NONE,
 			1U, 0U);
+	current.bsp_identity = publication->runtime ?
+		*SG_HostEngineRuntimeContentIdentity(publication->runtime) :
+		publication->static_only ? publication->static_identity.bsp_identity :
+		publication->authority.content_identity;
+	current.bsp_bytes = publication->view.bsp_bytes;
 	return CompareViews(&publication->view, &current,
 		SG_HOST_LAW_PRODUCTION_DRIFT);
 }
@@ -929,6 +1106,13 @@ sg_host_law_result_t SG_HostLawPublicationPmove(
 	result = SG_HostLawPublicationRevalidateProduction(publication);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
+	if (publication->static_only)
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+		return Result(SG_HOST_LAW_HOST_UNAVAILABLE,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	}
 	if (publication->runtime)
 	{
 		if (scene || !SG_HostEngineRuntimePmove(publication->runtime, request,
@@ -941,8 +1125,8 @@ sg_host_law_result_t SG_HostLawPublicationPmove(
 				(uint64_t)error);
 		}
 	}
-	else if (!SG_HostPmoveEvaluateBoundEngineFrame(&publication->authority,
-		scene, request, &publication->pmove_binding, result_out, &error))
+	else if (!SG_HostPmoveEvaluateFrame(&publication->authority, scene,
+		publication->pmove_binding.entry, request, result_out, &error))
 	{
 		if (error_out)
 			*error_out = error;
@@ -1044,6 +1228,9 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 	result = SG_HostLawPublicationRevalidateProduction(publication);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
+	if (publication->static_only)
+		return Result(SG_HOST_LAW_HOST_UNAVAILABLE,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
 	memset(&collision, 0, sizeof(collision));
 	memset(&trace, 0, sizeof(trace));
 	if (publication->runtime)
@@ -1051,7 +1238,7 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 		if (scene || !SG_HostEngineRuntimeHookTrace(publication->runtime,
 			request->start, request->end,
 			(sg_host_collision_contents_t)publication->view.hook.trace_mask,
-			&collision))
+			&collision, &trace))
 			return Result(SG_HOST_LAW_EVALUATION_FAILED,
 				SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U,
 				0U);
@@ -1089,6 +1276,63 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 	 * observation booleans and target identity never enter this path. */
 	if (!SG_HostHookStepWithCollision(&publication->view.hook, &observation,
 		&collision, step_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_HOOK_CHRONOLOGY, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	step_out->collision_hit = collision.hit;
+	if (collision.hit)
+	{
+		memcpy(step_out->collision_end, trace.end,
+			sizeof(step_out->collision_end));
+		memcpy(step_out->collision_plane_normal, trace.plane.normal,
+			sizeof(step_out->collision_plane_normal));
+		step_out->collision_plane_distance = trace.plane.distance;
+		step_out->collision_plane_type = trace.plane.type;
+		step_out->collision_surface_flags = trace.surface_flags;
+		step_out->collision_instance_id = trace.instance_id;
+	}
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerHookTouch(
+	const sg_host_law_publication_t *publication, uint32_t target_index,
+	int32_t surface_flags, int attached, uint32_t frame,
+	uint32_t last_damage_frame, sg_host_hook_step_t *step_out)
+{
+	sg_host_hook_collision_t collision;
+	sg_host_hook_observation_t observation;
+	sg_host_law_result_t result;
+
+	if (!step_out || (attached != 0 && attached != 1))
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_HOOK_CHRONOLOGY, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (!PublicationValid(publication))
+		return InvalidPublication(SG_HOST_LAW_FIELD_HOOK_CHRONOLOGY);
+	result = SG_HostLawPublicationRevalidateProduction(publication);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!publication->runtime ||
+		!SG_HostEngineRuntimeOwnerHookCollision(publication->runtime,
+			target_index, surface_flags, &collision))
+		return Result(SG_HOST_LAW_HOST_UNAVAILABLE,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	memset(&observation, 0, sizeof(observation));
+	observation.event = attached ? SG_HOST_HOOK_ATTACHED_TICK :
+		SG_HOST_HOOK_FLIGHT_HIT;
+	observation.phase = attached ? SG_HOST_HOOK_ATTACHED :
+		SG_HOST_HOOK_IN_FLIGHT;
+	observation.first_hit = !attached;
+	observation.frame = frame;
+	observation.last_damage_frame = last_damage_frame;
+	observation.target_kind = collision.target_kind;
+	observation.target_identity = collision.target_identity;
+	observation.attached_target_identity = attached ?
+		collision.target_identity : 0U;
+	observation.sky = collision.sky;
+	observation.owner_hit = collision.owner_hit;
+	observation.same_team = collision.same_team;
+	observation.target_dead = collision.target_dead;
+	observation.bite_distance = 0.0f;
+	if (!SG_HostHookStep(&publication->view.hook, &observation, step_out))
 		return Result(SG_HOST_LAW_EVALUATION_FAILED,
 			SG_HOST_LAW_FIELD_HOOK_CHRONOLOGY, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
 	return Ok();
@@ -1204,17 +1448,22 @@ sg_host_law_result_t SG_HostLawPublicationTrainStep(
 	return Ok();
 }
 
-void SG_HostLawPublicationDestroy(sg_host_law_publication_t *publication)
+void SG_HostLawPublicationOwnerDestroy(sg_host_law_publication_t *publication)
 {
-	if (!PublicationValid(publication))
+	if (!publication || publication->state != SG_HOST_LAW_STATE ||
+		publication->state_inverse != ~SG_HOST_LAW_STATE ||
+		publication->self != publication)
 		return;
 	publication->state = 0U;
 	publication->state_inverse = 0U;
 	publication->self = NULL;
 	publication->authority.world = NULL;
 	publication->runtime = NULL;
+	publication->static_only = 0;
 	memset(&publication->authority.identity, 0,
 		sizeof(publication->authority.identity));
+	memset(&publication->static_identity, 0,
+		sizeof(publication->static_identity));
 	memset(&publication->view, 0, sizeof(publication->view));
 	free(publication);
 }

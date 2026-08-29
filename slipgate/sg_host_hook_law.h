@@ -151,6 +151,15 @@ typedef struct sg_host_hook_step_s
 	sg_host_hook_phase_t next_phase;
 	sg_host_hook_target_kind_t target_kind;
 	uint64_t target_identity;
+	/* Owner-derived immediate trace record used by the live bot weapon to
+	 * dispatch its existing touch callback without issuing a second trace. */
+	int collision_hit;
+	float collision_end[3];
+	float collision_plane_normal[3];
+	float collision_plane_distance;
+	int32_t collision_plane_type;
+	int32_t collision_surface_flags;
+	uint64_t collision_instance_id;
 } sg_host_hook_step_t;
 
 void SG_HostHookLawDefault(sg_host_hook_law_t *law_out);

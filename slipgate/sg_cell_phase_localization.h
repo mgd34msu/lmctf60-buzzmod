@@ -7,6 +7,7 @@
 
 #include "sg_configuration_semantics.h"
 #include "sg_destination.h"
+#include "sg_host_pmove.h"
 
 #define SG_LOCALIZATION_SUPPORT_MODEL_NONE UINT32_MAX
 
@@ -83,6 +84,13 @@ typedef struct sg_localization_workspace_s
 	/* Two entries per undirected configuration portal. */
 	uint32_t *portal_indices;
 	size_t portal_index_capacity;
+	uint32_t *stance_overlap_offsets;
+	size_t stance_overlap_offset_capacity;
+	uint32_t *stance_overlap_cursors;
+	size_t stance_overlap_cursor_capacity;
+	/* Two entries per standing/crouching overlap. */
+	uint32_t *stance_overlap_indices;
+	size_t stance_overlap_index_capacity;
 	uint32_t *phase_transition_offsets;
 	size_t phase_transition_offset_capacity;
 	uint32_t *phase_transition_cursors;
@@ -111,6 +119,8 @@ typedef struct sg_cell_phase_locator_s
 	const uint32_t *region_runtime_regions;
 	const uint32_t *cell_portal_offsets;
 	const uint32_t *portal_indices;
+	const uint32_t *stance_overlap_offsets;
+	const uint32_t *stance_overlap_indices;
 	const uint32_t *phase_transition_offsets;
 	const uint32_t *phase_transition_indices;
 	const uint32_t *phase_kernel_offsets;
@@ -122,6 +132,7 @@ typedef struct sg_cell_phase_locator_s
 	uint32_t runtime_cell_count;
 	uint32_t runtime_phase_count;
 	uint32_t configuration_portal_count;
+	uint32_t configuration_stance_overlap_count;
 	uint32_t runtime_phase_transition_count;
 	uint32_t runtime_kernel_count;
 	uint64_t prepare_cell_steps;
@@ -148,32 +159,44 @@ typedef struct sg_localization_observation_s
 	uint64_t frame_sequence;
 	uint64_t observed_at_ms;
 	uint64_t authenticated_at_ms;
-	uint64_t phase_started_at_ms;
 	float position[3];
 	float velocity[3];
+	pmove_state_t host_state;
 } sg_localization_observation_t;
-
-typedef struct sg_localization_mover_s
-{
-	uint8_t authenticated;
-	uint8_t reserved[7];
-	uint64_t sampled_at_ms;
-	uint64_t instance_id;
-	uint32_t model_index;
-	uint32_t reserved2;
-	sg_rune_mechanism_ref_t mechanism;
-	float velocity[3];
-} sg_localization_mover_t;
 
 typedef struct sg_localization_environment_s
 {
 	uint8_t authenticated;
 	uint8_t reserved[7];
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+	uint64_t frame_sequence;
 	uint64_t sampled_at_ms;
+	uint64_t authenticated_at_ms;
 	const sg_host_collision_scene_t *scene;
-	const sg_localization_mover_t *movers;
-	size_t mover_count;
+	const sg_host_pmove_request_t *pmove_request;
+	sg_host_pmove_substep_t *replay_substeps;
+	size_t replay_substep_capacity;
+	sg_host_pmove_trace_t *replay_traces;
+	size_t replay_trace_capacity;
 } sg_localization_environment_t;
+
+/* Foundation-only replay seam. A raw function pointer does not authenticate
+ * the engine Pmove owner, so production construction stays unavailable until
+ * the accepted host-law owner binding can be checked here. Moving-mechanism
+ * continuity additionally requires opaque mechanism, entity-semantics, mover,
+ * and transform-timeline publications. */
+typedef struct sg_cell_phase_runtime_s
+{
+	const sg_cell_phase_locator_t *locator;
+	sg_host_pmove_function_t host_pmove;
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+	uint64_t physics_abi_id;
+	uint8_t prepared;
+	uint8_t mover_authority_ready;
+	uint8_t reserved[6];
+} sg_cell_phase_runtime_t;
 
 typedef struct sg_localized_player_state_s sg_localized_player_state_t;
 
@@ -183,8 +206,10 @@ typedef struct sg_localization_request_s
 	uint64_t now_ms;
 	uint64_t minimum_frame_sequence;
 	uint64_t max_observation_age_ms;
-	/* A prior state requests continuity proof. Present observations use the
-	 * geometric distance; temporary absence uses the duration. */
+	/* A prior state requests continuity proof. The distance only bounds
+	 * numeric-drift recovery outside exact published cells; exact path
+	 * continuity has no caller-selected distance cap. Temporary absence uses
+	 * the duration. */
 	const sg_localized_player_state_t *previous;
 	float maximum_recovery_distance;
 	uint32_t reserved;
@@ -219,6 +244,9 @@ struct sg_localized_player_state_s
 	sg_host_collision_contents_t water_type;
 	uint32_t support_model_index;
 	uint64_t support_instance_id;
+	pmove_state_t host_state;
+	uint8_t host_state_valid;
+	uint8_t reserved3[3];
 	sg_localization_recovery_t recovery;
 	uint32_t portal_candidates_examined;
 	uint32_t phase_transition_candidates_examined;
@@ -236,7 +264,14 @@ int SG_CellPhaseLocatorPrepare(
 	sg_cell_phase_locator_t *locator_out,
 	sg_localization_status_t *status_out);
 
-int SG_CellPhaseLocalize(const sg_cell_phase_locator_t *locator,
+/* Test/foundation constructor only until the accepted engine-Pmove owner
+ * publication replaces the unauthenticated callback argument. */
+int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
+	sg_host_pmove_function_t host_pmove,
+	sg_cell_phase_runtime_t *runtime_out,
+	sg_localization_status_t *status_out);
+
+int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	const sg_localization_request_t *request,
 	const sg_localization_observation_t *observation,
 	const sg_localization_environment_t *environment,

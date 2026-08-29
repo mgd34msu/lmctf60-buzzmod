@@ -5,19 +5,17 @@
 #define SG_HOST_ENGINE_RUNTIME_PRIVATE_H
 
 #include "sg_host_engine_runtime.h"
-
-/* The production owner retains the BSP.  Runtime activation calls this
- * resolver itself so no install caller can nominate a different world. */
-const sg_bsp_world_t *SG_HostLawOwnerRetainedWorld(void);
-
-/* Only sg_host_law_owner.c may issue the active RUNE/world join or resolve a
- * subject.  These symbols are intentionally absent from the public runtime
- * interface; the runtime resolves the retained world and active RUNE itself. */
-sg_host_engine_runtime_status_t SG_HostEngineRuntimeOwnerInstallActiveRune(
+/* Runtime activation remains fail-closed until the downstream cutover owns an
+ * opaque acceptance capability.  A constructible artifact snapshot is never
+ * an activation credential. */
+sg_host_engine_runtime_status_t SG_HostEngineRuntimeOwnerActivateAcceptedV2(
 	sg_host_engine_runtime_t *runtime);
 void SG_HostEngineRuntimeOwnerClearAcceptance(
 	sg_host_engine_runtime_t *runtime);
 sg_host_engine_runtime_status_t SG_HostEngineRuntimeOwnerBindActiveSubject(
 	sg_host_engine_runtime_t *runtime, uint32_t subject_index);
+int SG_HostEngineRuntimeOwnerHookCollision(
+	const sg_host_engine_runtime_t *runtime, uint32_t target_index,
+	int32_t surface_flags, sg_host_hook_collision_t *collision_out);
 
 #endif /* SG_HOST_ENGINE_RUNTIME_PRIVATE_H */

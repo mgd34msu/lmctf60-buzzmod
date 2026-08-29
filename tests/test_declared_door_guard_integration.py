@@ -57,7 +57,9 @@ def test_auto_door_touch_authorizes_before_debounce_and_use() -> None:
         "if (!(other->svflags & SVF_MONSTER) && (!other->client))"
     ) < touch.index("if ((self->owner->spawnflags & DOOR_NOMONSTER)") < authorized
     assert authorized < touch.index("if (level.time < self->touch_debounce_time)")
-    assert authorized < touch.index("self->touch_debounce_time = level.time + 1.0;")
+    assert authorized < touch.index(
+        "self->touch_debounce_time = level.time + SG_MOVER_DOOR_TRIGGER_DEBOUNCE;"
+    )
     assert authorized < touch.index("door_use (self->owner, self, other);")
 
 

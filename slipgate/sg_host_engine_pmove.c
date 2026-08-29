@@ -4,7 +4,6 @@
 #include "sg_host_engine_pmove.h"
 
 #include <limits.h>
-#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -58,41 +57,6 @@ int SG_HostEnginePmoveBound(const sg_host_engine_pmove_binding_t *binding,
 	if (!pmove || !SG_HostEnginePmoveBindingCurrent(binding))
 		return 0;
 	binding->entry(pmove);
-	return 1;
-}
-
-int SG_HostEnginePhysicsLaw(sg_rune_physics_parameters_t *law_out)
-{
-	cvar_t *airaccelerate;
-	float frame_ms;
-
-	if (!law_out || !gi.cvar || !sv_gravity || !sv_maxvelocity ||
-		!want_funky_gravity)
-		return 0;
-	airaccelerate = gi.cvar("sv_airaccelerate", "0", 0);
-	frame_ms = FRAMETIME * 1000.0f;
-	if (!airaccelerate || !isfinite(airaccelerate->value) ||
-		airaccelerate->value != 0.0f ||
-		!isfinite(sv_gravity->value) || sv_gravity->value < 1.0f ||
-		sv_gravity->value > (float)SHRT_MAX ||
-		truncf(sv_gravity->value) != sv_gravity->value ||
-		!isfinite(sv_maxvelocity->value) || sv_maxvelocity->value <= 0.0f ||
-		!isfinite(want_funky_gravity->value) ||
-		want_funky_gravity->value != 0.0f || !isfinite(frame_ms) ||
-		frame_ms <= 0.0f || truncf(frame_ms) != frame_ms ||
-		frame_ms > (float)UINT32_MAX)
-		return 0;
-	memset(law_out, 0, sizeof(*law_out));
-	law_out->gravity = sv_gravity->value;
-	law_out->ground_acceleration = SG_HOST_ENGINE_GROUND_ACCELERATION;
-	law_out->air_acceleration = SG_HOST_ENGINE_AIR_ACCELERATION;
-	law_out->water_acceleration = SG_HOST_ENGINE_WATER_ACCELERATION;
-	law_out->hook_acceleration = SG_HOST_ENGINE_HOOK_ACCELERATION;
-	law_out->external_acceleration = SG_HOST_ENGINE_EXTERNAL_ACCELERATION;
-	law_out->water_drag = SG_HOST_ENGINE_WATER_DRAG;
-	law_out->max_velocity = sv_maxvelocity->value;
-	law_out->frame_ms = (uint32_t)frame_ms;
-	law_out->substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
 	return 1;
 }
 

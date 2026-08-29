@@ -1589,10 +1589,16 @@ slipgate/sg_host_mechanism_law.o: slipgate/sg_host_mechanism_law.c \
 		slipgate/sg_host_mechanism_law.h
 slipgate/sg_host_law_owner.o: slipgate/sg_host_law_owner.c \
 		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_owner_internal.h \
+		slipgate/sg_host_law_publication_private.h \
+		slipgate/sg_host_engine_runtime_private.h \
 		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
 		slipgate/sg_identity.h game.h q_shared.h
 slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
-		slipgate/sg_host_law_publication.h slipgate/sg_host_collision.h \
+		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_publication_private.h \
+		slipgate/sg_host_engine_runtime_private.h \
+		slipgate/sg_host_collision.h \
 		slipgate/sg_host_pmove.h slipgate/sg_host_engine_pmove.h \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
@@ -3920,7 +3926,9 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 		tests/sg_host_law_publication_test.c \
 		slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_publication_private.h \
 		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
+		slipgate/sg_host_law_owner_internal.h \
 		slipgate/sg_host_engine_pmove.c slipgate/sg_host_engine_pmove.h \
 		slipgate/sg_host_engine_runtime.c \
 		slipgate/sg_host_engine_runtime.h \

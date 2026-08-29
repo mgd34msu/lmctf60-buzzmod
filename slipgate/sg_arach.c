@@ -1258,10 +1258,9 @@ static qboolean SG_LevelSetupAttempt(void)
 		SG_SetupFailure("previous-failure", false);
 		return false;
 	}
-	/* Capture the live engine owner before loading or publishing the RUNE.  The
-	 * host-law owner retains this level epoch and exact callback identities;
-	 * publication below can therefore join only the RUNE that this level
-	 * actually accepted. */
+	/* Publish upstream host-law input A before loading the current controller.  The
+	 * owner retains this level epoch, exact BSP identity, and callback identities;
+	 * authenticated runtime activation B belongs to the downstream cutover. */
 	{
 		sg_host_law_result_t host_law_result =
 			SG_HostLawProductionBeginLevel(level.mapname);
@@ -1278,12 +1277,6 @@ static qboolean SG_LevelSetupAttempt(void)
 		{
 			if (SG_RunePhysicsCompatible(sg_rune))
 			{
-				/* A previous setup can have completed before the host owner was
-				 * ready (for example after a transient engine callback failure).
-				 * Retry the owner join from the already-published live RUNE; do
-				 * not rebuild or accept a caller-shaped identity. */
-				if (!SG_HostLawProductionPublication())
-					(void)SG_HostLawProductionInstallActiveRune();
 				return true;
 			}
 			sg_host.dprint("slipgate: setup held: active identity or "
@@ -1523,15 +1516,6 @@ static qboolean SG_LevelSetupAttempt(void)
 	}
 	memcpy(sg_rune_map, sg_rune->artifact.identity.map_name,
 	    sizeof(sg_rune_map));
-	{
-		sg_host_law_result_t host_law_result =
-			SG_HostLawProductionInstallActiveRune();
-
-		if (host_law_result.status != SG_HOST_LAW_OK)
-			sg_host.dprint("slipgate: live host law unavailable for %s: %s (%s)\n",
-				sg_rune_map, SG_HostLawStatusString(host_law_result.status),
-				SG_HostLawFieldString(host_law_result.field));
-	}
 	if (sg_human_use)
 		Sidecar_LogPublished(game_directory, SG_SIDECAR_HUMAN, sg_rune,
 			sidecars.human_size);
@@ -4824,8 +4808,10 @@ void SG_RunFrame(void)
 	 * installed and revalidated for this frame.  The owner deliberately
 	 * returns HOST_UNAVAILABLE on ordinary production builds that have no BSP
 	 * bridge yet; that is the fail-closed state, not a permission to fall back
-	 * to a caller callback or a hull probe. */
-	(void)SG_HostLawProductionRevalidate();
+	 * to a caller callback or a hull probe.  Retry this idempotent transaction
+	 * every frame: the bridge may appear after startup, and a prior consumer may
+	 * have retired a drifted owner after the one-shot artifact load. */
+	(void)SG_HostLawProductionEnsureLevel(level.mapname);
 	if (!sg_autoload_attempted)
 	{
 		sg_autoload_attempted = true;

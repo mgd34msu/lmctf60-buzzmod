@@ -124,9 +124,14 @@ def test_frame_level_hook_and_free_order() -> None:
 
     weapon = source("p_weapon.c")
     fire = between(weapon, "edict_t *fire_hook", "// Ent is the owner")
-    assert fire.index("gi.linkentity (bolt);") < fire.index(
-        "SG_CompoundGuardGameHookLinked"
-    ) < fire.index("tr = gi.trace")
+    linked = fire.index("SG_CompoundGuardGameHookLinked")
+    published = fire.index("SG_HostLawProductionHookFire")
+    failed = fire.index("if (fire_result.status != SG_HOST_LAW_OK")
+    aborted = fire.index("ctf_hook_abort(self)", failed)
+    assert fire.index("gi.linkentity (bolt);") < linked < fire.index(
+        "SG_CompoundHookGameLinked"
+    ) < published < failed < aborted
+    assert "gi.trace" not in fire
 
     utils = between(source("g_utils.c"), "void G_FreeEdict", "G_TouchTriggers")
     protected = utils.index("return;", utils.index("BODY_QUEUE_SIZE"))

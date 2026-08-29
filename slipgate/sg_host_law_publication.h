@@ -25,13 +25,26 @@
 
 typedef struct sg_host_law_publication_s sg_host_law_publication_t;
 
-/*
- * The view is deliberately made from the canonical model identity.  The
- * identity contains the BSP, entity semantics, physics ABI, source set,
- * producer, hulls, and every physics parameter consumed by the adapters.
- * There is no reduced identity which a caller could accidentally compare in
- * place of the model identity.
- */
+/* Upstream identity published before any complete-model seal or artifact
+ * acceptance exists.  Every field is an authoritative host input; this type
+ * intentionally cannot be mistaken for sg_rune_model_identity_t. */
+typedef struct sg_host_static_identity_s
+{
+	sg_bsp_content_identity_t bsp_identity;
+	uint64_t bsp_bytes;
+	uint32_t engine_checksum;
+	uint32_t entity_crc32;
+	uint32_t host_physics_epoch;
+	uint32_t reserved;
+	uint64_t physics_abi_id;
+	sg_rune_hull_profile_t standing_hull;
+	sg_rune_hull_profile_t crouching_hull;
+	sg_rune_physics_parameters_t physics;
+} sg_host_static_identity_t;
+
+/* A carries the explicit static host identity used by the downstream model
+ * seal.  The complete-model identity is a separate field and remains zero
+ * until a future opaque B activation can supply the genuinely sealed value. */
 typedef struct sg_host_law_view_s
 {
 	uint32_t version;
@@ -41,6 +54,14 @@ typedef struct sg_host_law_view_s
 	uint64_t gravity_law_id;
 	uint64_t hook_law_id;
 	uint64_t mechanism_law_id;
+	/* Exact SHA-256 of the retained engine-selected BSP bytes. */
+	sg_bsp_content_identity_t bsp_identity;
+	uint64_t bsp_bytes;
+	/* Host-owned inputs to the downstream complete-model seal.  The
+	 * complete-model identity remains absent until that later seal. */
+	sg_host_static_identity_t static_identity;
+	/* Present only on the legacy controller-backed test publication or a
+	 * future downstream runtime publication, never on upstream A. */
 	sg_rune_model_identity_t identity;
 	sg_host_engine_pmove_abi_t pmove_abi;
 	uint64_t pmove_behavior_fingerprint;
@@ -122,22 +143,6 @@ typedef struct sg_host_law_result_s
 	uint64_t expected_bits;
 	uint64_t observed_bits;
 } sg_host_law_result_t;
-
-/*
- * Issue only from an initialized collision authority.  The authority owns
- * the canonical identity and binds the immutable BSP; callers cannot provide
- * a replacement collision, Pmove, or hook callback through this API.
- */
-sg_host_law_result_t SG_HostLawPublicationIssue(
-	const sg_host_collision_authority_t *authority,
-	sg_host_law_publication_t **publication_out);
-
-/* Runtime publication joins the captured engine callbacks only to an
- * owner-issued accepted RUNE snapshot and exact selected-BSP digest.  It has
- * no static BSP collision authority; runtime queries remain engine-backed. */
-sg_host_law_result_t SG_HostLawPublicationIssueRuntime(
-	const sg_host_engine_runtime_t *runtime,
-	sg_host_law_publication_t **publication_out);
 
 sg_host_law_result_t SG_HostLawPublicationRead(
 	const sg_host_law_publication_t *publication,
@@ -229,8 +234,6 @@ sg_host_law_result_t SG_HostLawPublicationTrainStep(
 	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
 	uint64_t now_ms, uint64_t debounce_until_ms,
 	sg_host_mechanism_transition_t *result_out);
-
-void SG_HostLawPublicationDestroy(sg_host_law_publication_t *publication);
 
 const char *SG_HostLawStatusString(sg_host_law_status_t status);
 const char *SG_HostLawFieldString(sg_host_law_field_t field);
