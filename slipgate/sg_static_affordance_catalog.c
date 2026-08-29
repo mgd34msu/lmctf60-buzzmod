@@ -180,6 +180,15 @@ static int BuildLayout(uint32_t partition_count, uint32_t area_count,
 	return 1;
 }
 
+static int WeaponRecordAllocationValid(uint32_t weapon_count)
+{
+	size_t size = 0U, offset;
+
+	return AddArray(&size, (size_t)weapon_count,
+		sizeof(sg_static_affordance_catalog_weapon_evidence_t),
+		_Alignof(sg_static_affordance_catalog_weapon_evidence_t), &offset);
+}
+
 static void *CatalogAt(sg_static_affordance_catalog_t *catalog,
 	size_t offset)
 {
@@ -490,6 +499,35 @@ static int WeaponRelationResultValid(
 	return 1;
 }
 
+static int WeaponQueryValid(const sg_weapon_static_query_t *query)
+{
+	sg_weapon_static_query_input_t input;
+	sg_weapon_static_query_t prepared;
+	uint32_t axis;
+
+	if (!query || query->exact_live_prefire_trace_required != 1U)
+		return 0;
+	memset(&input, 0, sizeof(input));
+	input.binding = query->binding;
+	input.source_cell = query->source_cell;
+	input.target_cell = query->target_cell;
+	input.source_phase = query->source_phase;
+	input.target_phase = query->target_phase;
+	input.source_origin = query->source_origin;
+	input.target_origin = query->target_origin;
+	input.target_bounds = query->target_bounds;
+	input.requested_relations = query->requested_relations;
+	if (!SG_WeaponStaticQueryPrepare(&input, &prepared))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (query->target_origin.value[axis] <
+				query->target_bounds.mins.value[axis] ||
+			query->target_origin.value[axis] >
+				query->target_bounds.maxs.value[axis])
+			return 0;
+	return 1;
+}
+
 static int WeaponEvidenceRecordValid(
 	const sg_static_affordance_catalog_weapon_evidence_t *weapon,
 	const sg_weapon_static_binding_t *binding,
@@ -502,6 +540,15 @@ static int WeaponEvidenceRecordValid(
 
 	if (!weapon || !binding || !identity ||
 		!SG_WeaponStaticBindingValid(binding) ||
+		!IdentityEqual(&weapon->static_identity, identity) ||
+		!BindingEqual(&weapon->binding, binding) ||
+		!BindingEqual(&weapon->query.binding, binding) ||
+		!WeaponQueryValid(&weapon->query) ||
+		weapon->static_scene_only != 1U ||
+		weapon->reserved[0] != 0U || weapon->reserved[1] != 0U ||
+		weapon->reserved[2] != 0U || weapon->reserved[3] != 0U ||
+		weapon->reserved[4] != 0U || weapon->reserved[5] != 0U ||
+		weapon->reserved[6] != 0U ||
 		!SG_WeaponProfileResolve(weapon->profile.id, &weapon->law, &resolved) ||
 		memcmp(&resolved, &weapon->profile, sizeof(resolved)) != 0 ||
 		!SG_WeaponProfileValid(&weapon->profile) ||
@@ -514,7 +561,9 @@ static int WeaponEvidenceRecordValid(
 		weapon->affordance.reserved[0] != 0U ||
 		weapon->affordance.reserved[1] != 0U ||
 		weapon->affordance.reserved[2] != 0U ||
-		weapon->affordance.requested_relations == 0U ||
+		weapon->query.requested_relations != SG_WEAPON_STATIC_RELATION_MASK ||
+		weapon->affordance.requested_relations !=
+			SG_WEAPON_STATIC_RELATION_MASK ||
 		(weapon->affordance.requested_relations &
 			~(uint32_t)SG_WEAPON_STATIC_RELATION_MASK) != 0U)
 		return 0;
@@ -544,8 +593,344 @@ static int WeaponEvidenceRecordValid(
 	return weapon->affordance.proven_relations == proven &&
 		weapon->affordance.rejected_relations == rejected &&
 		weapon->affordance.conditional_relations == conditional &&
+		(proven | rejected | conditional) ==
+			SG_WEAPON_STATIC_RELATION_MASK &&
 		(proven & rejected) == 0U && (proven & conditional) == 0U &&
 		(rejected & conditional) == 0U;
+}
+
+static int CompareU64(uint64_t left, uint64_t right)
+{
+	return left == right ? 0 : (left < right ? -1 : 1);
+}
+
+static int CompareU32(uint32_t left, uint32_t right)
+{
+	return left == right ? 0 : (left < right ? -1 : 1);
+}
+
+static int CompareU8(uint8_t left, uint8_t right)
+{
+	return left == right ? 0 : (left < right ? -1 : 1);
+}
+
+static int CompareFloat(float left, float right)
+{
+	return left == right ? 0 : (left < right ? -1 : 1);
+}
+
+static int CompareContentId(const sg_rune_v2_content_id_t *left,
+	const sg_rune_v2_content_id_t *right)
+{
+	size_t index;
+
+	for (index = 0U; index < SG_RUNE_V2_CONTENT_ID_BYTES; index++)
+	{
+		const int comparison = CompareU8(left->bytes[index],
+			right->bytes[index]);
+
+		if (comparison != 0)
+			return comparison;
+	}
+	return 0;
+}
+
+static int CompareBinding(const sg_weapon_static_binding_t *left,
+	const sg_weapon_static_binding_t *right)
+{
+	int comparison;
+
+	comparison = CompareContentId(&left->artifact_identity,
+		&right->artifact_identity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareContentId(&left->bsp_identity, &right->bsp_identity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareContentId(&left->schema_identity,
+		&right->schema_identity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->source_set_identity,
+		right->source_set_identity);
+	if (comparison != 0)
+		return comparison;
+	return CompareU64(left->visibility_revision, right->visibility_revision);
+}
+
+static int CompareVec3(const sg_rune_vec3_t *left, const sg_rune_vec3_t *right)
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		const int comparison = CompareFloat(left->value[axis],
+			right->value[axis]);
+
+		if (comparison != 0)
+			return comparison;
+	}
+	return 0;
+}
+
+static int CompareBounds(const sg_rune_bounds_t *left,
+	const sg_rune_bounds_t *right)
+{
+	int comparison = CompareVec3(&left->mins, &right->mins);
+
+	if (comparison != 0)
+		return comparison;
+	return CompareVec3(&left->maxs, &right->maxs);
+}
+
+static int CompareHull(const sg_rune_hull_profile_t *left,
+	const sg_rune_hull_profile_t *right)
+{
+	int comparison = CompareVec3(&left->mins, &right->mins);
+
+	if (comparison != 0)
+		return comparison;
+	return CompareVec3(&left->maxs, &right->maxs);
+}
+
+static int CompareStableId(const sg_rune_stable_id_t *left,
+	const sg_rune_stable_id_t *right)
+{
+	int comparison = CompareU64(left->source_set_identity,
+		right->source_set_identity);
+
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->high, right->high);
+	if (comparison != 0)
+		return comparison;
+	return CompareU64(left->low, right->low);
+}
+
+static int CompareQuery(const sg_weapon_static_query_t *left,
+	const sg_weapon_static_query_t *right)
+{
+	int comparison = CompareBinding(&left->binding, &right->binding);
+
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareStableId(&left->source_cell.value,
+		&right->source_cell.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareStableId(&left->target_cell.value,
+		&right->target_cell.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareStableId(&left->source_phase.value,
+		&right->source_phase.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareStableId(&left->target_phase.value,
+		&right->target_phase.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareVec3(&left->source_origin, &right->source_origin);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareVec3(&left->target_origin, &right->target_origin);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareBounds(&left->target_bounds, &right->target_bounds);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU32(left->requested_relations,
+		right->requested_relations);
+	if (comparison != 0)
+		return comparison;
+	return CompareU8(left->exact_live_prefire_trace_required,
+		right->exact_live_prefire_trace_required);
+}
+
+static int CompareLaw(const sg_weapon_law_input_t *left,
+	const sg_weapon_law_input_t *right)
+{
+	int comparison = CompareU64(left->build_identity, right->build_identity);
+
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->physics_abi_id, right->physics_abi_id);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU8(left->weapon_balance_compiled,
+		right->weapon_balance_compiled);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU8(left->weapon_balance_enabled,
+		right->weapon_balance_enabled);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU8(left->quad_active, right->quad_active);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU8(left->rail_match_active, right->rail_match_active);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU8(left->deathmatch_active, right->deathmatch_active);
+	if (comparison != 0)
+		return comparison;
+	return CompareU8(left->fast_switch_enabled, right->fast_switch_enabled);
+}
+
+static int CompareIdentity(const sg_rune_model_identity_t *left,
+	const sg_rune_model_identity_t *right)
+{
+	int comparison = CompareU64(left->bsp_content_id, right->bsp_content_id);
+
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->entity_semantics_id,
+		right->entity_semantics_id);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->physics_abi_id, right->physics_abi_id);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->source_set_identity,
+		right->source_set_identity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->schema_id, right->schema_id);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->producer_identity,
+		right->producer_identity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareHull(&left->standing_hull, &right->standing_hull);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareHull(&left->crouching_hull, &right->crouching_hull);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.gravity, right->physics.gravity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.ground_acceleration,
+		right->physics.ground_acceleration);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.air_acceleration,
+		right->physics.air_acceleration);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.water_acceleration,
+		right->physics.water_acceleration);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.hook_acceleration,
+		right->physics.hook_acceleration);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.external_acceleration,
+		right->physics.external_acceleration);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.water_drag,
+		right->physics.water_drag);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareFloat(left->physics.max_velocity,
+		right->physics.max_velocity);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU32(left->physics.frame_ms, right->physics.frame_ms);
+	if (comparison != 0)
+		return comparison;
+	return CompareU32(left->physics.substep_ms, right->physics.substep_ms);
+}
+
+/* The owner audit proves the resolved profile and every relation are the
+ * deterministic result of this complete resolver key.  Keeping the key
+ * fieldwise makes canonical order independent of struct padding and caller
+ * order, while the catalog still retains the complete resulting evidence. */
+static int WeaponSemanticCompare(
+	const sg_static_affordance_catalog_weapon_evidence_t *left,
+	const sg_static_affordance_catalog_weapon_evidence_t *right)
+{
+	int comparison = CompareIdentity(&left->static_identity,
+		&right->static_identity);
+
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareBinding(&left->binding, &right->binding);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareQuery(&left->query, &right->query);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareLaw(&left->law, &right->law);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU32((uint32_t)left->profile.id,
+		(uint32_t)right->profile.id);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->context_binding_comparisons,
+		right->context_binding_comparisons);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->context_partition_preparation_work,
+		right->context_partition_preparation_work);
+	if (comparison != 0)
+		return comparison;
+	comparison = CompareU64(left->context_surface_preparation_work,
+		right->context_surface_preparation_work);
+	if (comparison != 0)
+		return comparison;
+	return CompareU8(left->static_scene_only, right->static_scene_only);
+}
+
+static void WeaponEvidenceSift(
+	sg_static_affordance_catalog_weapon_evidence_t *weapons, uint32_t count,
+	uint32_t root)
+{
+	for (;;)
+	{
+		uint32_t child;
+		uint32_t selected = root;
+		sg_static_affordance_catalog_weapon_evidence_t swap;
+
+		/* A heap node in the upper half has no child.  This guard also
+		 * proves root * 2 + 1 cannot wrap before computing it. */
+		if (root >= count / 2U)
+			return;
+		child = root * 2U + 1U;
+		if (child < count && WeaponSemanticCompare(&weapons[selected],
+			&weapons[child]) < 0)
+			selected = child;
+		if (child + 1U < count && WeaponSemanticCompare(&weapons[selected],
+			&weapons[child + 1U]) < 0)
+			selected = child + 1U;
+		if (selected == root)
+			return;
+		swap = weapons[root];
+		weapons[root] = weapons[selected];
+		weapons[selected] = swap;
+		root = selected;
+	}
+}
+
+static void WeaponEvidenceSort(
+	sg_static_affordance_catalog_weapon_evidence_t *weapons, uint32_t count)
+{
+	uint32_t index;
+
+	for (index = count / 2U; index > 0U; index--)
+		WeaponEvidenceSift(weapons, count, index - 1U);
+	for (index = count; index > 1U; index--)
+	{
+		sg_static_affordance_catalog_weapon_evidence_t swap = weapons[0];
+
+		weapons[0] = weapons[index - 1U];
+		weapons[index - 1U] = swap;
+		WeaponEvidenceSift(weapons, index - 1U, 0U);
+	}
 }
 
 static int WeaponEvidenceValid(
@@ -558,7 +943,41 @@ static int WeaponEvidenceValid(
 	if (!weapons || weapon_count == 0U)
 		return 0;
 	for (index = 0U; index < weapon_count; index++)
-		if (!WeaponEvidenceRecordValid(&weapons[index], binding, identity))
+		if (!WeaponEvidenceRecordValid(&weapons[index], binding, identity) ||
+			(index != 0U && WeaponSemanticCompare(&weapons[index - 1U],
+				&weapons[index]) >= 0))
+			return 0;
+	return 1;
+}
+
+/* Read through the weapon owner's opaque boundary before this catalog has
+ * any result bytes.  The owner replay-audits each publication; this layer
+ * then proves complete seven-relation coverage and canonical ownership. */
+static int ReadCanonicalWeaponEvidence(
+	const sg_weapon_static_result_publication_t *const *publications,
+	uint32_t weapon_count, const sg_weapon_static_context_t *context,
+	const sg_weapon_static_binding_t *binding,
+	const sg_rune_model_identity_t *identity,
+	sg_static_affordance_catalog_weapon_evidence_t *records)
+{
+	uint32_t index;
+
+	if (!publications || !context || !binding || !identity || !records ||
+		weapon_count == 0U)
+		return 0;
+	for (index = 0U; index < weapon_count; index++)
+	{
+		if (!publications[index] ||
+			!SG_WeaponStaticResultPublicationContextMatches(
+				publications[index], context) ||
+			!SG_WeaponStaticResultPublicationEvidence(publications[index],
+				&records[index]) ||
+			!WeaponEvidenceRecordValid(&records[index], binding, identity))
+			return 0;
+	}
+	WeaponEvidenceSort(records, weapon_count);
+	for (index = 1U; index < weapon_count; index++)
+		if (WeaponSemanticCompare(&records[index - 1U], &records[index]) == 0)
 			return 0;
 	return 1;
 }
@@ -1009,6 +1428,7 @@ int SG_StaticAffordanceCatalogIssue(
 	sg_static_affordance_catalog_hook_source_t hook_source;
 	sg_static_affordance_catalog_layout_t layout;
 	sg_static_affordance_catalog_t *catalog;
+	sg_static_affordance_catalog_weapon_evidence_t *weapon_records = NULL;
 	sg_weapon_static_binding_t weapon_binding;
 	const sg_static_visibility_publication_t *weapon_publication;
 	const sg_host_collision_authority_t *authority;
@@ -1020,7 +1440,8 @@ int SG_StaticAffordanceCatalogIssue(
 	if (error_out)
 		memset(error_out, 0, sizeof(*error_out));
 	if (!input || !catalog_out || *catalog_out || !input->static_visibility ||
-		!input->weapon_context || !input->weapons || input->weapon_count == 0U ||
+		!input->weapon_context || !input->weapon_publications ||
+		input->weapon_count == 0U ||
 		!input->hook_catalog)
 	{
 		SetError(error_out, SG_STATIC_AFFORDANCE_CATALOG_ERROR_INVALID_ARGUMENT,
@@ -1054,12 +1475,28 @@ int SG_StaticAffordanceCatalogIssue(
 			SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
 		return 0;
 	}
-	if (!WeaponEvidenceValid(input->weapons, input->weapon_count,
-		&weapon_binding, &authority->identity))
+	if (!WeaponRecordAllocationValid(input->weapon_count))
+	{
+		SetError(error_out, SG_STATIC_AFFORDANCE_CATALOG_ERROR_OVERFLOW,
+			SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
+		return 0;
+	}
+	weapon_records = calloc((size_t)input->weapon_count,
+		sizeof(*weapon_records));
+	if (!weapon_records)
+	{
+		SetError(error_out, SG_STATIC_AFFORDANCE_CATALOG_ERROR_OUT_OF_MEMORY,
+			SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
+		return 0;
+	}
+	if (!ReadCanonicalWeaponEvidence(input->weapon_publications,
+		input->weapon_count, input->weapon_context, &weapon_binding,
+		&authority->identity, weapon_records))
 	{
 		SetError(error_out,
 			SG_STATIC_AFFORDANCE_CATALOG_ERROR_WEAPON_EVIDENCE_REJECTED,
 			SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
+		free(weapon_records);
 		return 0;
 	}
 	if (!HookSourceRead(input->hook_catalog, &hook_source))
@@ -1067,6 +1504,7 @@ int SG_StaticAffordanceCatalogIssue(
 		SetError(error_out,
 			SG_STATIC_AFFORDANCE_CATALOG_ERROR_HOOK_CATALOG_REJECTED,
 			SG_STATIC_AFFORDANCE_CATALOG_HOOK_VISIBILITY);
+		free(weapon_records);
 		return 0;
 	}
 	if (!IdentityEqual(&authority->identity,
@@ -1074,6 +1512,7 @@ int SG_StaticAffordanceCatalogIssue(
 	{
 		SetError(error_out, SG_STATIC_AFFORDANCE_CATALOG_ERROR_SOURCE_MISMATCH,
 			SG_STATIC_AFFORDANCE_CATALOG_HOOK_VISIBILITY);
+		free(weapon_records);
 		return 0;
 	}
 	if (!BuildLayout(visibility->partition_count, visibility->area_count,
@@ -1084,6 +1523,7 @@ int SG_StaticAffordanceCatalogIssue(
 	{
 		SetError(error_out, SG_STATIC_AFFORDANCE_CATALOG_ERROR_OVERFLOW,
 			SG_STATIC_AFFORDANCE_CATALOG_STATIC_VISIBILITY);
+		free(weapon_records);
 		return 0;
 	}
 	catalog = calloc(1U, layout.allocation_size);
@@ -1091,6 +1531,7 @@ int SG_StaticAffordanceCatalogIssue(
 	{
 		SetError(error_out, SG_STATIC_AFFORDANCE_CATALOG_ERROR_OUT_OF_MEMORY,
 			SG_STATIC_AFFORDANCE_CATALOG_STATIC_VISIBILITY);
+		free(weapon_records);
 		return 0;
 	}
 	catalog->magic = SG_STATIC_AFFORDANCE_CATALOG_MAGIC;
@@ -1108,10 +1549,13 @@ int SG_StaticAffordanceCatalogIssue(
 		SetError(error_out,
 			SG_STATIC_AFFORDANCE_CATALOG_ERROR_STATIC_VISIBILITY_REJECTED,
 			SG_STATIC_AFFORDANCE_CATALOG_STATIC_VISIBILITY);
+		free(weapon_records);
 		SG_StaticAffordanceCatalogDestroy(catalog);
 		return 0;
 	}
-	CopyWeaponEvidence(catalog, &layout, input->weapons, input->weapon_count);
+	CopyWeaponEvidence(catalog, &layout, weapon_records, input->weapon_count);
+	free(weapon_records);
+	weapon_records = NULL;
 	if (!CopyHookEvidence(catalog, &layout, input->hook_catalog, &hook_source))
 	{
 		SetError(error_out,

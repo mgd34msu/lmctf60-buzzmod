@@ -56,15 +56,10 @@ typedef struct sg_static_affordance_catalog_static_visibility_evidence_s
 	uint64_t classification_count;
 } sg_static_affordance_catalog_static_visibility_evidence_t;
 
-/* A resolved profile is paired with exactly the law that resolved it and the
- * complete seven-relation static result. The result is evidence only: its
- * required live pre-fire trace remains an irreversible host boundary. */
-typedef struct sg_static_affordance_catalog_weapon_evidence_s
-{
-	sg_weapon_law_input_t law;
-	sg_weapon_profile_t profile;
-	sg_weapon_static_affordance_t affordance;
-} sg_static_affordance_catalog_weapon_evidence_t;
+/* Weapon evidence is emitted only by the opaque weapon-owner publication.
+ * The catalog never accepts a caller-supplied affordance result structure. */
+typedef sg_weapon_static_result_evidence_t
+	sg_static_affordance_catalog_weapon_evidence_t;
 
 typedef struct sg_static_affordance_catalog_hook_terminal_s
 {
@@ -126,13 +121,15 @@ typedef struct sg_static_affordance_catalog_evidence_view_s
 	sg_static_affordance_catalog_hook_evidence_t hook;
 } sg_static_affordance_catalog_evidence_view_t;
 
-/* The caller owns every input. Issue deep-copies all accepted evidence, so
- * every predecessor may be destroyed immediately after a successful issue. */
+/* The caller owns every input. Weapon results must be opaque accepted
+ * publications from the weapon owner; Issue audits, canonicalizes, and
+ * deep-copies their complete evidence, so every predecessor may be destroyed
+ * immediately after a successful issue. */
 typedef struct sg_static_affordance_catalog_input_s
 {
 	const sg_static_visibility_publication_t *static_visibility;
 	const sg_weapon_static_context_t *weapon_context;
-	const sg_static_affordance_catalog_weapon_evidence_t *weapons;
+	const sg_weapon_static_result_publication_t *const *weapon_publications;
 	uint32_t weapon_count;
 	const sg_hook_visibility_catalog_t *hook_catalog;
 } sg_static_affordance_catalog_input_t;

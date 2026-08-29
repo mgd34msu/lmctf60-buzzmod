@@ -138,28 +138,34 @@ static sg_rune_bounds_t BoundsAt(const float point[3], float half_extent)
 	return bounds;
 }
 
-static int BuildWeaponEvidence(const built_fixture_t *weapon,
-	uint8_t rail_match_active,
-	sg_static_affordance_catalog_weapon_evidence_t *evidence_out)
+static int BuildWeaponCandidate(const built_fixture_t *weapon,
+	uint8_t rail_match_active, sg_weapon_static_relation_t requested_relations,
+	sg_weapon_static_query_t *query_out, sg_weapon_law_input_t *law_out,
+	sg_weapon_profile_t *profile_out,
+	sg_weapon_static_affordance_t *candidate_out)
 {
 	const float source[3] = {-100.0f, 0.0f, 0.0f};
 	const float target[3] = {100.0f, 0.0f, 0.0f};
 	sg_weapon_static_query_input_t query_input;
 	sg_weapon_static_query_t query;
+	sg_weapon_law_input_t law;
+	sg_weapon_profile_t profile;
+	sg_weapon_static_affordance_t candidate;
 	sg_rune_cell_ref_t source_cell, target_cell;
 	sg_rune_phase_ref_t source_phase, target_phase;
 
-	if (!weapon || !evidence_out || !CellsAtPoints(weapon, source, target,
+	if (!weapon || !query_out || !law_out || !profile_out || !candidate_out ||
+		!CellsAtPoints(weapon, source, target,
 		&source_cell, &target_cell, &source_phase, &target_phase))
 		return 0;
-	memset(evidence_out, 0, sizeof(*evidence_out));
-	evidence_out->law.build_identity = weapon->fixture.identity.producer_identity;
-	evidence_out->law.physics_abi_id = weapon->fixture.identity.physics_abi_id;
-	evidence_out->law.weapon_balance_compiled = SG_WEAPON_BALANCE_COMPILED;
-	evidence_out->law.deathmatch_active = 1U;
-	evidence_out->law.rail_match_active = rail_match_active;
+	memset(&law, 0, sizeof(law));
+	law.build_identity = weapon->fixture.identity.producer_identity;
+	law.physics_abi_id = weapon->fixture.identity.physics_abi_id;
+	law.weapon_balance_compiled = SG_WEAPON_BALANCE_COMPILED;
+	law.deathmatch_active = 1U;
+	law.rail_match_active = rail_match_active;
 	if (!SG_WeaponProfileResolve(SG_WEAPON_PROFILE_RAILGUN,
-		&evidence_out->law, &evidence_out->profile))
+		&law, &profile))
 		return 0;
 	memset(&query_input, 0, sizeof(query_input));
 	query_input.binding = weapon->binding;
@@ -172,13 +178,44 @@ static int BuildWeaponEvidence(const built_fixture_t *weapon,
 	memcpy(query_input.target_origin.value, target,
 		sizeof(query_input.target_origin.value));
 	query_input.target_bounds = BoundsAt(target, 16.0f);
-	query_input.requested_relations = SG_WEAPON_STATIC_RELATION_MASK;
+	query_input.requested_relations = requested_relations;
 	if (!SG_WeaponStaticQueryPrepare(&query_input, &query))
 		return 0;
-	return SG_WeaponStaticAffordanceResolve(weapon->context, &empty_scene,
-		&query, &evidence_out->law, evidence_out->profile.id,
-		&evidence_out->affordance,
-		&(sg_weapon_static_affordance_error_t){0});
+	if (!SG_WeaponStaticAffordanceResolve(weapon->context, &empty_scene,
+		&query, &law, profile.id, &candidate,
+		&(sg_weapon_static_affordance_error_t){0}))
+		return 0;
+	*query_out = query;
+	*law_out = law;
+	*profile_out = profile;
+	*candidate_out = candidate;
+	return 1;
+}
+
+static int BuildWeaponPublication(const built_fixture_t *weapon,
+	uint8_t rail_match_active, sg_weapon_static_relation_t requested_relations,
+	sg_weapon_static_result_publication_t **publication_out)
+{
+	sg_weapon_static_result_publication_input_t input;
+	sg_weapon_static_query_t query;
+	sg_weapon_law_input_t law;
+	sg_weapon_profile_t profile;
+	sg_weapon_static_affordance_t candidate;
+	sg_weapon_static_result_publication_error_t error;
+
+	if (!publication_out || *publication_out ||
+		!BuildWeaponCandidate(weapon, rail_match_active, requested_relations,
+			&query, &law, &profile, &candidate))
+		return 0;
+	memset(&input, 0, sizeof(input));
+	input.context = weapon->context;
+	input.scene = &empty_scene;
+	input.query = &query;
+	input.law = &law;
+	input.profile_id = profile.id;
+	input.candidate = &candidate;
+	return SG_WeaponStaticResultPublicationIssue(&input, publication_out,
+		&error);
 }
 
 static uint32_t HookOutcomeCount(const sg_hook_visibility_catalog_t *catalog,
@@ -416,6 +453,8 @@ static void CheckOwnedSnapshotSurvivesPredecessors(void)
 	sg_static_affordance_catalog_audit_report_t audit;
 	sg_static_affordance_catalog_evidence_view_t before, after;
 	sg_static_affordance_catalog_weapon_evidence_t weapon_evidence;
+	sg_weapon_static_result_publication_t *weapon_publication = NULL;
+	const sg_weapon_static_result_publication_t *weapon_publications[1];
 	sg_weapon_static_binding_t source_binding;
 	const sg_static_visibility_publication_t *source_publication;
 
@@ -425,7 +464,10 @@ static void CheckOwnedSnapshotSurvivesPredecessors(void)
 		DestroyFixture(&weapon);
 		return;
 	}
-	CHECK(BuildWeaponEvidence(&weapon, 0U, &weapon_evidence));
+	CHECK(BuildWeaponPublication(&weapon, 0U,
+		SG_WEAPON_STATIC_RELATION_MASK, &weapon_publication));
+	CHECK(SG_WeaponStaticResultPublicationEvidence(weapon_publication,
+		&weapon_evidence));
 	CHECK(SG_WeaponStaticContextSource(weapon.context, &source_binding,
 		&source_publication));
 	CHECK(source_publication == weapon.visibility_publication);
@@ -434,24 +476,28 @@ static void CheckOwnedSnapshotSurvivesPredecessors(void)
 		&hook));
 	if (!hook)
 	{
+		SG_WeaponStaticResultPublicationDestroy(weapon_publication);
 		DestroyFixture(&weapon);
 		return;
 	}
 	memset(&input, 0, sizeof(input));
 	input.static_visibility = weapon.visibility_publication;
 	input.weapon_context = weapon.context;
-	input.weapons = &weapon_evidence;
+	weapon_publications[0] = weapon_publication;
+	input.weapon_publications = weapon_publications;
 	input.weapon_count = 1U;
 	input.hook_catalog = hook;
 	CHECK(SG_StaticAffordanceCatalogIssue(&input, &catalog, &error));
 	if (!catalog)
 	{
+		SG_WeaponStaticResultPublicationDestroy(weapon_publication);
 		SG_HookVisibilityCatalogDestroy(hook);
 		DestroyFixture(&weapon);
 		return;
 	}
 	CheckEvidence(&weapon, hook, &weapon_evidence, catalog);
 	CHECK(SG_StaticAffordanceCatalogEvidence(catalog, &before));
+	SG_WeaponStaticResultPublicationDestroy(weapon_publication);
 	SG_HookVisibilityCatalogDestroy(hook);
 	DestroyFixture(&weapon);
 	CHECK(SG_StaticAffordanceCatalogAudit(catalog, &audit));
@@ -516,8 +562,10 @@ static void CheckEqualCountsKeepDifferentAssignments(void)
 	sg_hook_visibility_catalog_t *first_hook = NULL, *second_hook = NULL;
 	sg_static_affordance_catalog_t *first_catalog = NULL, *second_catalog = NULL;
 	sg_static_affordance_catalog_input_t first_input, second_input;
-	sg_static_affordance_catalog_weapon_evidence_t first_weapon_evidence;
-	sg_static_affordance_catalog_weapon_evidence_t second_weapon_evidence;
+	sg_weapon_static_result_publication_t *first_weapon_publication = NULL;
+	sg_weapon_static_result_publication_t *second_weapon_publication = NULL;
+	const sg_weapon_static_result_publication_t *first_weapon_publications[1];
+	const sg_weapon_static_result_publication_t *second_weapon_publications[1];
 	sg_static_affordance_catalog_evidence_view_t first_before, second_before;
 	sg_static_affordance_catalog_evidence_view_t first_after, second_after;
 	sg_static_affordance_catalog_error_t error;
@@ -532,8 +580,10 @@ static void CheckEqualCountsKeepDifferentAssignments(void)
 		DestroyFixture(&second_weapon);
 		return;
 	}
-	CHECK(BuildWeaponEvidence(&first_weapon, 0U, &first_weapon_evidence));
-	CHECK(BuildWeaponEvidence(&second_weapon, 1U, &second_weapon_evidence));
+	CHECK(BuildWeaponPublication(&first_weapon, 0U,
+		SG_WEAPON_STATIC_RELATION_MASK, &first_weapon_publication));
+	CHECK(BuildWeaponPublication(&second_weapon, 1U,
+		SG_WEAPON_STATIC_RELATION_MASK, &second_weapon_publication));
 	CHECK(BuildHookCatalogWithSurfaceOffset(&first_hook_fixture,
 		&first_weapon.fixture.authority.identity, 0U, &first_hook));
 	CHECK(BuildHookCatalogWithSurfaceOffset(&second_hook_fixture,
@@ -541,6 +591,8 @@ static void CheckEqualCountsKeepDifferentAssignments(void)
 		&second_hook));
 	if (!first_hook || !second_hook)
 	{
+		SG_WeaponStaticResultPublicationDestroy(first_weapon_publication);
+		SG_WeaponStaticResultPublicationDestroy(second_weapon_publication);
 		SG_HookVisibilityCatalogDestroy(first_hook);
 		SG_HookVisibilityCatalogDestroy(second_hook);
 		DestroyFixture(&first_weapon);
@@ -550,13 +602,15 @@ static void CheckEqualCountsKeepDifferentAssignments(void)
 	memset(&first_input, 0, sizeof(first_input));
 	first_input.static_visibility = first_weapon.visibility_publication;
 	first_input.weapon_context = first_weapon.context;
-	first_input.weapons = &first_weapon_evidence;
+	first_weapon_publications[0] = first_weapon_publication;
+	first_input.weapon_publications = first_weapon_publications;
 	first_input.weapon_count = 1U;
 	first_input.hook_catalog = first_hook;
 	memset(&second_input, 0, sizeof(second_input));
 	second_input.static_visibility = second_weapon.visibility_publication;
 	second_input.weapon_context = second_weapon.context;
-	second_input.weapons = &second_weapon_evidence;
+	second_weapon_publications[0] = second_weapon_publication;
+	second_input.weapon_publications = second_weapon_publications;
 	second_input.weapon_count = 1U;
 	second_input.hook_catalog = second_hook;
 	CHECK(SG_StaticAffordanceCatalogIssue(&first_input, &first_catalog, &error));
@@ -567,6 +621,8 @@ static void CheckEqualCountsKeepDifferentAssignments(void)
 		SG_StaticAffordanceCatalogDestroy(second_catalog);
 		SG_HookVisibilityCatalogDestroy(first_hook);
 		SG_HookVisibilityCatalogDestroy(second_hook);
+		SG_WeaponStaticResultPublicationDestroy(first_weapon_publication);
+		SG_WeaponStaticResultPublicationDestroy(second_weapon_publication);
 		DestroyFixture(&first_weapon);
 		DestroyFixture(&second_weapon);
 		return;
@@ -603,6 +659,8 @@ static void CheckEqualCountsKeepDifferentAssignments(void)
 			saw_different_classification = 1;
 	CHECK(saw_different_classification);
 	CHECK(first_before.content_digest != second_before.content_digest);
+	SG_WeaponStaticResultPublicationDestroy(first_weapon_publication);
+	SG_WeaponStaticResultPublicationDestroy(second_weapon_publication);
 	SG_HookVisibilityCatalogDestroy(first_hook);
 	SG_HookVisibilityCatalogDestroy(second_hook);
 	DestroyFixture(&first_weapon);
@@ -633,7 +691,8 @@ static void CheckSourceBindingRejections(void)
 	sg_static_affordance_catalog_t *catalog = NULL;
 	sg_static_affordance_catalog_input_t input;
 	sg_static_affordance_catalog_error_t error;
-	sg_static_affordance_catalog_weapon_evidence_t weapon_evidence;
+	sg_weapon_static_result_publication_t *weapon_publication = NULL;
+	const sg_weapon_static_result_publication_t *weapon_publications[1];
 
 	CHECK(BuildFixture(&weapon, 1, 0, 0, 1, 0, 0.0f));
 	if (!weapon.context)
@@ -641,12 +700,14 @@ static void CheckSourceBindingRejections(void)
 		DestroyFixture(&weapon);
 		return;
 	}
-	CHECK(BuildWeaponEvidence(&weapon, 0U, &weapon_evidence));
+	CHECK(BuildWeaponPublication(&weapon, 0U,
+		SG_WEAPON_STATIC_RELATION_MASK, &weapon_publication));
 	CHECK(BuildHookCatalog(&matching_fixture, &weapon.fixture.authority.identity,
 		&matching_hook));
 	CHECK(BuildHookCatalog(&foreign_fixture, NULL, &foreign_hook));
 	if (!matching_hook || !foreign_hook)
 	{
+		SG_WeaponStaticResultPublicationDestroy(weapon_publication);
 		SG_HookVisibilityCatalogDestroy(matching_hook);
 		SG_HookVisibilityCatalogDestroy(foreign_hook);
 		DestroyFixture(&weapon);
@@ -655,7 +716,8 @@ static void CheckSourceBindingRejections(void)
 	memset(&input, 0, sizeof(input));
 	input.static_visibility = weapon.visibility_publication;
 	input.weapon_context = weapon.context;
-	input.weapons = &weapon_evidence;
+	weapon_publications[0] = weapon_publication;
+	input.weapon_publications = weapon_publications;
 	input.weapon_count = 1U;
 	input.hook_catalog = foreign_hook;
 	CHECK(!SG_StaticAffordanceCatalogIssue(&input, &catalog, &error));
@@ -673,9 +735,221 @@ static void CheckSourceBindingRejections(void)
 	CHECK(error.authority ==
 		SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
 	SG_StaticVisibilityPublicationDestroy(other_publication);
+	SG_WeaponStaticResultPublicationDestroy(weapon_publication);
 	SG_HookVisibilityCatalogDestroy(matching_hook);
 	SG_HookVisibilityCatalogDestroy(foreign_hook);
 	DestroyFixture(&weapon);
+}
+
+static void CheckForgedWeaponPublicationRejected(void)
+{
+	built_fixture_t weapon;
+	sg_weapon_static_result_publication_t *publication = NULL;
+	sg_weapon_static_result_publication_input_t input;
+	sg_weapon_static_result_publication_error_t error;
+	sg_weapon_static_query_t query;
+	sg_weapon_law_input_t law;
+	sg_weapon_profile_t profile;
+	sg_weapon_static_affordance_t candidate;
+	sg_host_collision_instance_t instance;
+	sg_host_collision_scene_t nonstatic_scene;
+	uint32_t relation;
+	int forged = 0;
+
+	CHECK(BuildFixture(&weapon, 0, 0, 0, 1, 0, 0.0f));
+	if (!weapon.context)
+	{
+		DestroyFixture(&weapon);
+		return;
+	}
+	memset(&query, 0, sizeof(query));
+	memset(&law, 0, sizeof(law));
+	memset(&profile, 0, sizeof(profile));
+	memset(&candidate, 0, sizeof(candidate));
+	CHECK(BuildWeaponCandidate(&weapon, 0U,
+		SG_WEAPON_STATIC_RELATION_MASK, &query, &law, &profile, &candidate));
+	memset(&instance, 0, sizeof(instance));
+	instance.instance_id = 1U;
+	memset(&nonstatic_scene, 0, sizeof(nonstatic_scene));
+	nonstatic_scene.instances = &instance;
+	nonstatic_scene.instance_count = 1U;
+	memset(&input, 0, sizeof(input));
+	input.context = weapon.context;
+	input.scene = &nonstatic_scene;
+	input.query = &query;
+	input.law = &law;
+	input.profile_id = profile.id;
+	input.candidate = &candidate;
+	CHECK(!SG_WeaponStaticResultPublicationIssue(&input, &publication,
+		&error));
+	CHECK(publication == NULL);
+	CHECK(error.code ==
+		SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_STATIC_SCENE_REJECTED);
+	SG_WeaponStaticResultPublicationDestroy(publication);
+	publication = NULL;
+	for (relation = 0U; relation < SG_WEAPON_STATIC_RELATION_COUNT;
+		relation++)
+		if (candidate.relations[relation].status == SG_WEAPON_STATIC_PROVEN)
+		{
+			const sg_weapon_static_relation_t bit =
+				candidate.relations[relation].relation;
+
+			candidate.relations[relation].status = SG_WEAPON_STATIC_REJECTED;
+			candidate.proven_relations &= ~bit;
+			candidate.rejected_relations |= bit;
+			forged = 1;
+			break;
+		}
+	CHECK(forged);
+	input.scene = &empty_scene;
+	CHECK(!SG_WeaponStaticResultPublicationIssue(&input, &publication,
+		&error));
+	CHECK(publication == NULL);
+	CHECK(error.code ==
+		SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_CANDIDATE_REJECTED);
+	SG_WeaponStaticResultPublicationDestroy(publication);
+	DestroyFixture(&weapon);
+}
+
+static void CheckPartialWeaponPublicationRejectedByCatalog(void)
+{
+	built_fixture_t weapon;
+	hook_visibility_fixture_t hook_fixture;
+	sg_hook_visibility_catalog_t *hook = NULL;
+	sg_weapon_static_result_publication_t *publication = NULL;
+	const sg_weapon_static_result_publication_t *publications[1];
+	sg_static_affordance_catalog_t *catalog = NULL;
+	sg_static_affordance_catalog_input_t input;
+	sg_static_affordance_catalog_error_t error;
+
+	CHECK(BuildFixture(&weapon, 1, 0, 0, 1, 0, 0.0f));
+	if (!weapon.context)
+	{
+		DestroyFixture(&weapon);
+		return;
+	}
+	CHECK(BuildWeaponPublication(&weapon, 0U,
+		SG_WEAPON_STATIC_DIRECT_VISIBILITY, &publication));
+	CHECK(BuildHookCatalog(&hook_fixture, &weapon.fixture.authority.identity,
+		&hook));
+	if (!publication || !hook)
+	{
+		SG_WeaponStaticResultPublicationDestroy(publication);
+		SG_HookVisibilityCatalogDestroy(hook);
+		DestroyFixture(&weapon);
+		return;
+	}
+	memset(&input, 0, sizeof(input));
+	publications[0] = publication;
+	input.static_visibility = weapon.visibility_publication;
+	input.weapon_context = weapon.context;
+	input.weapon_publications = publications;
+	input.weapon_count = 1U;
+	input.hook_catalog = hook;
+	CHECK(!SG_StaticAffordanceCatalogIssue(&input, &catalog, &error));
+	CHECK(catalog == NULL);
+	CHECK(error.code == SG_STATIC_AFFORDANCE_CATALOG_ERROR_WEAPON_EVIDENCE_REJECTED);
+	CHECK(error.authority == SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
+	SG_WeaponStaticResultPublicationDestroy(publication);
+	SG_HookVisibilityCatalogDestroy(hook);
+	DestroyFixture(&weapon);
+}
+
+static void CheckWeaponCanonicalOrderAndDuplicateRejection(void)
+{
+	built_fixture_t weapon;
+	hook_visibility_fixture_t hook_fixture;
+	sg_hook_visibility_catalog_t *hook = NULL;
+	sg_weapon_static_result_publication_t *first = NULL;
+	sg_weapon_static_result_publication_t *second = NULL;
+	sg_weapon_static_result_publication_t *equivalent_first = NULL;
+	const sg_weapon_static_result_publication_t *forward[2];
+	const sg_weapon_static_result_publication_t *reverse[2];
+	const sg_weapon_static_result_publication_t *duplicates[2];
+	sg_static_affordance_catalog_t *forward_catalog = NULL;
+	sg_static_affordance_catalog_t *reverse_catalog = NULL;
+	sg_static_affordance_catalog_t *duplicate_catalog = NULL;
+	sg_static_affordance_catalog_input_t input;
+	sg_static_affordance_catalog_evidence_view_t forward_evidence;
+	sg_static_affordance_catalog_evidence_view_t reverse_evidence;
+	sg_static_affordance_catalog_error_t error;
+
+	CHECK(BuildFixture(&weapon, 1, 0, 0, 1, 0, 0.0f));
+	if (!weapon.context)
+	{
+		DestroyFixture(&weapon);
+		return;
+	}
+	CHECK(BuildWeaponPublication(&weapon, 0U,
+		SG_WEAPON_STATIC_RELATION_MASK, &first));
+	CHECK(BuildWeaponPublication(&weapon, 1U,
+		SG_WEAPON_STATIC_RELATION_MASK, &second));
+	CHECK(BuildWeaponPublication(&weapon, 0U,
+		SG_WEAPON_STATIC_RELATION_MASK, &equivalent_first));
+	CHECK(BuildHookCatalog(&hook_fixture, &weapon.fixture.authority.identity,
+		&hook));
+	if (!first || !second || !equivalent_first || !hook)
+	{
+		SG_WeaponStaticResultPublicationDestroy(first);
+		SG_WeaponStaticResultPublicationDestroy(second);
+		SG_WeaponStaticResultPublicationDestroy(equivalent_first);
+		SG_HookVisibilityCatalogDestroy(hook);
+		DestroyFixture(&weapon);
+		return;
+	}
+	memset(&input, 0, sizeof(input));
+	input.static_visibility = weapon.visibility_publication;
+	input.weapon_context = weapon.context;
+	input.weapon_count = 2U;
+	input.hook_catalog = hook;
+	forward[0] = first;
+	forward[1] = second;
+	input.weapon_publications = forward;
+	CHECK(SG_StaticAffordanceCatalogIssue(&input, &forward_catalog, &error));
+	reverse[0] = second;
+	reverse[1] = first;
+	input.weapon_publications = reverse;
+	CHECK(SG_StaticAffordanceCatalogIssue(&input, &reverse_catalog, &error));
+	if (!forward_catalog || !reverse_catalog)
+	{
+		SG_StaticAffordanceCatalogDestroy(forward_catalog);
+		SG_StaticAffordanceCatalogDestroy(reverse_catalog);
+		SG_WeaponStaticResultPublicationDestroy(first);
+		SG_WeaponStaticResultPublicationDestroy(second);
+		SG_WeaponStaticResultPublicationDestroy(equivalent_first);
+		SG_HookVisibilityCatalogDestroy(hook);
+		DestroyFixture(&weapon);
+		return;
+	}
+	CHECK(SG_StaticAffordanceCatalogEvidence(forward_catalog,
+		&forward_evidence));
+	CHECK(SG_StaticAffordanceCatalogEvidence(reverse_catalog,
+		&reverse_evidence));
+	CHECK(forward_evidence.weapon_count == 2U);
+	CHECK(reverse_evidence.weapon_count == 2U);
+	CHECK(forward_evidence.content_digest == reverse_evidence.content_digest);
+	CHECK(memcmp(forward_evidence.weapons, reverse_evidence.weapons,
+		(size_t)forward_evidence.weapon_count *
+			sizeof(*forward_evidence.weapons)) == 0);
+	duplicates[0] = first;
+	duplicates[1] = equivalent_first;
+	input.weapon_publications = duplicates;
+	CHECK(!SG_StaticAffordanceCatalogIssue(&input, &duplicate_catalog, &error));
+	CHECK(duplicate_catalog == NULL);
+	CHECK(error.code == SG_STATIC_AFFORDANCE_CATALOG_ERROR_WEAPON_EVIDENCE_REJECTED);
+	CHECK(error.authority == SG_STATIC_AFFORDANCE_CATALOG_WEAPON_STATIC_AFFORDANCE);
+	SG_StaticAffordanceCatalogDestroy(duplicate_catalog);
+	SG_WeaponStaticResultPublicationDestroy(first);
+	SG_WeaponStaticResultPublicationDestroy(second);
+	SG_WeaponStaticResultPublicationDestroy(equivalent_first);
+	SG_HookVisibilityCatalogDestroy(hook);
+	DestroyFixture(&weapon);
+	CHECK(SG_StaticAffordanceCatalogAudit(forward_catalog,
+		&(sg_static_affordance_catalog_audit_report_t){0}));
+	CHECK(SG_StaticAffordanceCatalogAudit(reverse_catalog,
+		&(sg_static_affordance_catalog_audit_report_t){0}));
+	SG_StaticAffordanceCatalogDestroy(forward_catalog);
+	SG_StaticAffordanceCatalogDestroy(reverse_catalog);
 }
 
 static void CheckArgumentAndStringContracts(void)
@@ -705,12 +979,26 @@ static void CheckArgumentAndStringContracts(void)
 	}
 }
 
+/* The catalog must accept only weapon-owner publications, never a public
+ * sg_weapon_static_affordance_t supplied by a caller. */
+static void CheckWeaponPublicationBoundary(void)
+{
+	sg_weapon_static_result_publication_t *publication = NULL;
+
+	CHECK(!SG_WeaponStaticResultPublicationIssue(NULL, &publication, NULL));
+	CHECK(publication == NULL);
+}
+
 int main(void)
 {
 	CheckOwnedSnapshotSurvivesPredecessors();
 	CheckEqualCountsKeepDifferentAssignments();
 	CheckSourceBindingRejections();
+	CheckForgedWeaponPublicationRejected();
+	CheckPartialWeaponPublicationRejectedByCatalog();
+	CheckWeaponCanonicalOrderAndDuplicateRejection();
 	CheckArgumentAndStringContracts();
+	CheckWeaponPublicationBoundary();
 	if (failures)
 		return 1;
 	puts("static affordance catalog preserved accepted audit evidence");

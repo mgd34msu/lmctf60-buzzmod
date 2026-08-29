@@ -6,6 +6,9 @@
 #include <string.h>
 
 #define SG_WEAPON_SURFACE_EPSILON 0.03125f
+#define SG_WEAPON_STATIC_RESULT_PUBLICATION_MAGIC UINT64_C(0x5753525030303031)
+#define SG_WEAPON_STATIC_RESULT_FNV_OFFSET UINT64_C(1469598103934665603)
+#define SG_WEAPON_STATIC_RESULT_FNV_PRIME UINT64_C(1099511628211)
 
 typedef struct sg_weapon_static_cell_binding_s
 {
@@ -86,6 +89,16 @@ struct sg_weapon_static_context_s
 	uint64_t binding_comparisons;
 	uint64_t partition_preparation_work;
 	uint64_t surface_preparation_work;
+};
+
+struct sg_weapon_static_result_publication_s
+{
+	uint64_t magic;
+	uint64_t magic_inverse;
+	const sg_weapon_static_result_publication_t *self;
+	const sg_weapon_static_context_t *context;
+	sg_weapon_static_result_evidence_t evidence;
+	uint64_t evidence_digest;
 };
 
 static const sg_weapon_static_relation_t relation_order[] = {
@@ -2126,6 +2139,391 @@ int SG_WeaponStaticAffordanceResolve(
 	FinalizeMasks(&affordance);
 	*affordance_out = affordance;
 	return 1;
+}
+
+static void SetResultPublicationError(
+	sg_weapon_static_result_publication_error_t *error_out,
+	sg_weapon_static_result_publication_error_code_t code,
+	const sg_weapon_static_affordance_error_t *resolution)
+{
+	if (!error_out)
+		return;
+	memset(error_out, 0, sizeof(*error_out));
+	error_out->code = code;
+	if (resolution)
+		error_out->resolution = *resolution;
+}
+
+static uint64_t ResultPublicationHashBytes(uint64_t hash,
+	const void *memory, size_t size)
+{
+	const unsigned char *bytes = memory;
+	size_t index;
+
+	for (index = 0U; index < size; index++)
+	{
+		hash ^= bytes[index];
+		hash *= SG_WEAPON_STATIC_RESULT_FNV_PRIME;
+	}
+	return hash;
+}
+
+static uint64_t ResultPublicationDigest(
+	const sg_weapon_static_result_evidence_t *evidence)
+{
+	uint64_t hash = SG_WEAPON_STATIC_RESULT_FNV_OFFSET;
+
+	hash = ResultPublicationHashBytes(hash, &evidence->static_identity,
+		sizeof(evidence->static_identity));
+	hash = ResultPublicationHashBytes(hash, &evidence->binding,
+		sizeof(evidence->binding));
+	hash = ResultPublicationHashBytes(hash, &evidence->query,
+		sizeof(evidence->query));
+	hash = ResultPublicationHashBytes(hash, &evidence->law,
+		sizeof(evidence->law));
+	hash = ResultPublicationHashBytes(hash, &evidence->profile,
+		sizeof(evidence->profile));
+	hash = ResultPublicationHashBytes(hash, &evidence->affordance,
+		sizeof(evidence->affordance));
+	hash = ResultPublicationHashBytes(hash,
+		&evidence->context_binding_comparisons,
+		sizeof(evidence->context_binding_comparisons));
+	hash = ResultPublicationHashBytes(hash,
+		&evidence->context_partition_preparation_work,
+		sizeof(evidence->context_partition_preparation_work));
+	hash = ResultPublicationHashBytes(hash,
+		&evidence->context_surface_preparation_work,
+		sizeof(evidence->context_surface_preparation_work));
+	hash = ResultPublicationHashBytes(hash, &evidence->static_scene_only,
+		sizeof(evidence->static_scene_only));
+	return ResultPublicationHashBytes(hash, evidence->reserved,
+		sizeof(evidence->reserved));
+}
+
+static int ResultPublicationHeaderValid(
+	const sg_weapon_static_result_publication_t *publication)
+{
+	return publication && publication->magic ==
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_MAGIC &&
+		publication->magic_inverse ==
+			~SG_WEAPON_STATIC_RESULT_PUBLICATION_MAGIC &&
+		publication->self == publication && publication->context != NULL;
+}
+
+static int StaticSceneOnly(const sg_host_collision_scene_t *scene)
+{
+	return scene && scene->instances == NULL && scene->instance_count == 0U;
+}
+
+static int ResultPublicationEvidenceBasicValid(
+	const sg_weapon_static_result_evidence_t *evidence)
+{
+	sg_weapon_profile_t resolved;
+
+	if (!evidence || evidence->static_scene_only != 1U ||
+		evidence->reserved[0] != 0U || evidence->reserved[1] != 0U ||
+		evidence->reserved[2] != 0U || evidence->reserved[3] != 0U ||
+		evidence->reserved[4] != 0U || evidence->reserved[5] != 0U ||
+		evidence->reserved[6] != 0U ||
+		evidence->static_identity.source_set_identity == 0U ||
+		!SG_WeaponStaticBindingValid(&evidence->binding) ||
+		!BindingEqual(&evidence->query.binding, &evidence->binding) ||
+		!PreparedQueryValid(&evidence->query) ||
+		evidence->law.build_identity !=
+			evidence->static_identity.producer_identity ||
+		evidence->law.physics_abi_id !=
+			evidence->static_identity.physics_abi_id ||
+		!SG_WeaponProfileResolve(evidence->profile.id, &evidence->law,
+			&resolved) ||
+		memcmp(&resolved, &evidence->profile, sizeof(resolved)) != 0 ||
+		!BindingEqual(&evidence->affordance.binding, &evidence->binding) ||
+		evidence->affordance.profile_id != evidence->profile.id ||
+		evidence->affordance.family != evidence->profile.family)
+		return 0;
+	return 1;
+}
+
+static int ResultPublicationSourceValid(
+	const sg_weapon_static_result_publication_t *publication)
+{
+	const sg_static_visibility_publication_t *visibility_publication;
+	const sg_host_collision_authority_t *authority;
+	const sg_configuration_space_t *configuration;
+	const sg_configuration_semantics_t *semantics;
+	const sg_static_visibility_t *visibility;
+	sg_weapon_static_binding_t binding;
+	uint64_t revision;
+
+	if (!ResultPublicationHeaderValid(publication) ||
+		!SG_WeaponStaticContextSource(publication->context, &binding,
+			&visibility_publication) ||
+		!SG_StaticVisibilityPublicationRead(visibility_publication, &authority,
+			&configuration, &semantics, &visibility, &revision))
+		return 0;
+	return authority && configuration && semantics && visibility &&
+		BindingEqual(&binding, &publication->evidence.binding) &&
+		IdentityEqual(&authority->identity,
+			&publication->evidence.static_identity) &&
+		revision == publication->evidence.binding.visibility_revision &&
+		SG_WeaponStaticContextBindingComparisons(publication->context) ==
+			publication->evidence.context_binding_comparisons &&
+		SG_WeaponStaticContextPartitionPreparationWork(publication->context) ==
+			publication->evidence.context_partition_preparation_work &&
+		SG_WeaponStaticContextSurfacePreparationWork(publication->context) ==
+			publication->evidence.context_surface_preparation_work;
+}
+
+static int ResultPublicationResolveExpected(
+	const sg_weapon_static_result_publication_t *publication,
+	sg_weapon_static_affordance_t *affordance_out,
+	sg_weapon_static_affordance_error_t *error_out)
+{
+	static const sg_host_collision_scene_t static_scene;
+
+	return SG_WeaponStaticAffordanceResolve(publication->context,
+		&static_scene, &publication->evidence.query,
+		&publication->evidence.law, publication->evidence.profile.id,
+		affordance_out, error_out);
+}
+
+int SG_WeaponStaticResultPublicationIssue(
+	const sg_weapon_static_result_publication_input_t *input,
+	sg_weapon_static_result_publication_t **publication_out,
+	sg_weapon_static_result_publication_error_t *error_out)
+{
+	const sg_static_visibility_publication_t *visibility_publication;
+	const sg_host_collision_authority_t *authority;
+	const sg_configuration_space_t *configuration;
+	const sg_configuration_semantics_t *semantics;
+	const sg_static_visibility_t *visibility;
+	sg_weapon_static_result_publication_t *publication;
+	sg_weapon_static_result_evidence_t evidence;
+	sg_weapon_static_result_publication_audit_report_t audit;
+	sg_weapon_static_binding_t binding;
+	sg_weapon_static_affordance_t expected;
+	sg_weapon_static_affordance_error_t resolution;
+	sg_weapon_profile_t profile;
+	uint64_t revision;
+
+	SetResultPublicationError(error_out,
+		SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_NONE, NULL);
+	if (publication_out)
+		*publication_out = NULL;
+	if (!input || !publication_out || !input->context || !input->scene ||
+		!input->query || !input->law || !input->candidate)
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_INVALID_ARGUMENT, NULL);
+		return 0;
+	}
+	if (!StaticSceneOnly(input->scene))
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_STATIC_SCENE_REJECTED,
+			NULL);
+		return 0;
+	}
+	if (!SG_WeaponStaticAffordanceResolve(input->context, input->scene,
+		input->query, input->law, input->profile_id, &expected, &resolution))
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_RESOLUTION_REJECTED,
+			&resolution);
+		return 0;
+	}
+	if (memcmp(&expected, input->candidate, sizeof(expected)) != 0)
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_CANDIDATE_REJECTED, NULL);
+		return 0;
+	}
+	if (!SG_WeaponProfileResolve(input->profile_id, input->law, &profile) ||
+		!SG_WeaponStaticContextSource(input->context, &binding,
+			&visibility_publication) ||
+		!SG_StaticVisibilityPublicationRead(visibility_publication, &authority,
+			&configuration, &semantics, &visibility, &revision) ||
+		!authority || !configuration || !semantics || !visibility ||
+		!BindingEqual(&binding, &input->query->binding) ||
+		revision != binding.visibility_revision)
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_SOURCE_MISMATCH, NULL);
+		return 0;
+	}
+	memset(&evidence, 0, sizeof(evidence));
+	evidence.static_identity = authority->identity;
+	evidence.binding = binding;
+	evidence.query = *input->query;
+	evidence.law = *input->law;
+	evidence.profile = profile;
+	evidence.affordance = expected;
+	evidence.context_binding_comparisons =
+		SG_WeaponStaticContextBindingComparisons(input->context);
+	evidence.context_partition_preparation_work =
+		SG_WeaponStaticContextPartitionPreparationWork(input->context);
+	evidence.context_surface_preparation_work =
+		SG_WeaponStaticContextSurfacePreparationWork(input->context);
+	evidence.static_scene_only = 1U;
+	if (!ResultPublicationEvidenceBasicValid(&evidence))
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_SOURCE_MISMATCH, NULL);
+		return 0;
+	}
+	publication = calloc(1U, sizeof(*publication));
+	if (!publication)
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_OUT_OF_MEMORY, NULL);
+		return 0;
+	}
+	publication->magic = SG_WEAPON_STATIC_RESULT_PUBLICATION_MAGIC;
+	publication->magic_inverse = ~SG_WEAPON_STATIC_RESULT_PUBLICATION_MAGIC;
+	publication->self = publication;
+	publication->context = input->context;
+	publication->evidence = evidence;
+	publication->evidence_digest = ResultPublicationDigest(&evidence);
+	if (!SG_WeaponStaticResultPublicationAudit(publication, &audit))
+	{
+		SetResultPublicationError(error_out,
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_COPY_DISAGREEMENT,
+			&audit.resolution);
+		SG_WeaponStaticResultPublicationDestroy(publication);
+		return 0;
+	}
+	*publication_out = publication;
+	return 1;
+}
+
+int SG_WeaponStaticResultPublicationAudit(
+	const sg_weapon_static_result_publication_t *publication,
+	sg_weapon_static_result_publication_audit_report_t *report_out)
+{
+	sg_weapon_static_result_publication_audit_report_t report;
+	sg_weapon_static_affordance_t expected;
+	sg_weapon_profile_t profile;
+
+	memset(&report, 0, sizeof(report));
+	report.code = SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_INVALID_ARGUMENT;
+	if (!publication || !report_out)
+	{
+		if (report_out)
+			*report_out = report;
+		return 0;
+	}
+	if (!ResultPublicationHeaderValid(publication))
+	{
+		report.code =
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_STORAGE_DISAGREEMENT;
+		*report_out = report;
+		return 0;
+	}
+	if (!ResultPublicationEvidenceBasicValid(&publication->evidence) ||
+		!ResultPublicationSourceValid(publication))
+	{
+		report.code =
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_SOURCE_MISMATCH;
+		*report_out = report;
+		return 0;
+	}
+	if (!SG_WeaponProfileResolve(publication->evidence.profile.id,
+		&publication->evidence.law, &profile) ||
+		memcmp(&profile, &publication->evidence.profile, sizeof(profile)) != 0 ||
+		!ResultPublicationResolveExpected(publication, &expected,
+			&report.resolution) ||
+		memcmp(&expected, &publication->evidence.affordance,
+			sizeof(expected)) != 0)
+	{
+		report.code =
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_EVIDENCE_DISAGREEMENT;
+		*report_out = report;
+		return 0;
+	}
+	if (publication->evidence_digest !=
+		ResultPublicationDigest(&publication->evidence))
+	{
+		report.code =
+			SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_DIGEST_DISAGREEMENT;
+		*report_out = report;
+		return 0;
+	}
+	report.code = SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_OK;
+	*report_out = report;
+	return 1;
+}
+
+int SG_WeaponStaticResultPublicationEvidence(
+	const sg_weapon_static_result_publication_t *publication,
+	sg_weapon_static_result_evidence_t *evidence_out)
+{
+	sg_weapon_static_result_publication_audit_report_t audit;
+
+	if (!evidence_out || !SG_WeaponStaticResultPublicationAudit(publication,
+		&audit))
+		return 0;
+	*evidence_out = publication->evidence;
+	return 1;
+}
+
+int SG_WeaponStaticResultPublicationContextMatches(
+	const sg_weapon_static_result_publication_t *publication,
+	const sg_weapon_static_context_t *context)
+{
+	return context && ResultPublicationHeaderValid(publication) &&
+		publication->context == context;
+}
+
+void SG_WeaponStaticResultPublicationDestroy(
+	sg_weapon_static_result_publication_t *publication)
+{
+	if (!ResultPublicationHeaderValid(publication))
+		return;
+	memset(publication, 0, sizeof(*publication));
+	free(publication);
+}
+
+const char *SG_WeaponStaticResultPublicationErrorString(
+	sg_weapon_static_result_publication_error_code_t code)
+{
+	switch (code)
+	{
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_NONE: return "none";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_INVALID_ARGUMENT:
+		return "invalid argument";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_STATIC_SCENE_REJECTED:
+		return "static scene rejected";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_RESOLUTION_REJECTED:
+		return "weapon resolution rejected";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_CANDIDATE_REJECTED:
+		return "candidate result rejected";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_SOURCE_MISMATCH:
+		return "weapon publication source mismatch";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_OUT_OF_MEMORY:
+		return "out of memory";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_COPY_DISAGREEMENT:
+		return "accepted publication copy disagreed";
+	default: return "unknown weapon result publication error";
+	}
+}
+
+const char *SG_WeaponStaticResultPublicationAuditCodeString(
+	sg_weapon_static_result_publication_audit_code_t code)
+{
+	switch (code)
+	{
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_OK: return "ok";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_INVALID_ARGUMENT:
+		return "invalid argument";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_STORAGE_DISAGREEMENT:
+		return "storage disagreement";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_SOURCE_MISMATCH:
+		return "source mismatch";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_EVIDENCE_DISAGREEMENT:
+		return "weapon evidence disagreed";
+	case SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_DIGEST_DISAGREEMENT:
+		return "evidence digest disagreed";
+	default: return "unknown weapon result publication audit error";
+	}
 }
 
 const char *SG_WeaponStaticAffordanceErrorString(

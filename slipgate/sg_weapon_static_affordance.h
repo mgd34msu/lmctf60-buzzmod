@@ -69,6 +69,44 @@ typedef struct sg_weapon_static_affordance_s
 		relations[SG_WEAPON_STATIC_RELATION_COUNT];
 } sg_weapon_static_affordance_t;
 
+/* Contexts remain source-bound while a result publication is audited. The
+ * opaque publication copies the accepted result, but never grants shot
+ * authority or retains a live scene. */
+typedef struct sg_weapon_static_context_s sg_weapon_static_context_t;
+typedef struct sg_weapon_static_result_publication_s
+	sg_weapon_static_result_publication_t;
+
+/* This is the complete immutable evidence emitted by the weapon owner. The
+ * static-scene marker is deliberately explicit: a publication has no actor,
+ * mover, or other runtime-scene input. */
+typedef struct sg_weapon_static_result_evidence_s
+{
+	sg_rune_model_identity_t static_identity;
+	sg_weapon_static_binding_t binding;
+	sg_weapon_static_query_t query;
+	sg_weapon_law_input_t law;
+	sg_weapon_profile_t profile;
+	sg_weapon_static_affordance_t affordance;
+	uint64_t context_binding_comparisons;
+	uint64_t context_partition_preparation_work;
+	uint64_t context_surface_preparation_work;
+	uint8_t static_scene_only;
+	uint8_t reserved[7];
+} sg_weapon_static_result_evidence_t;
+
+/* candidate is untrusted public output. Issue re-resolves the exact query in
+ * the weapon owner against a strictly empty static scene and accepts it only
+ * if every relation, witness, status, rejection, and work field agrees. */
+typedef struct sg_weapon_static_result_publication_input_s
+{
+	const sg_weapon_static_context_t *context;
+	const sg_host_collision_scene_t *scene;
+	const sg_weapon_static_query_t *query;
+	const sg_weapon_law_input_t *law;
+	sg_weapon_profile_id_t profile_id;
+	const sg_weapon_static_affordance_t *candidate;
+} sg_weapon_static_result_publication_input_t;
+
 typedef enum sg_weapon_static_affordance_error_code_e
 {
 	SG_WEAPON_STATIC_AFFORDANCE_ERROR_NONE = 0,
@@ -85,6 +123,40 @@ typedef struct sg_weapon_static_affordance_error_s
 	sg_weapon_static_affordance_error_code_t code;
 	sg_static_visibility_error_t visibility;
 } sg_weapon_static_affordance_error_t;
+
+typedef enum sg_weapon_static_result_publication_error_code_e
+{
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_NONE = 0,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_INVALID_ARGUMENT,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_STATIC_SCENE_REJECTED,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_RESOLUTION_REJECTED,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_CANDIDATE_REJECTED,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_SOURCE_MISMATCH,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_OUT_OF_MEMORY,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_ERROR_COPY_DISAGREEMENT
+} sg_weapon_static_result_publication_error_code_t;
+
+typedef struct sg_weapon_static_result_publication_error_s
+{
+	sg_weapon_static_result_publication_error_code_t code;
+	sg_weapon_static_affordance_error_t resolution;
+} sg_weapon_static_result_publication_error_t;
+
+typedef enum sg_weapon_static_result_publication_audit_code_e
+{
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_OK = 0,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_INVALID_ARGUMENT,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_STORAGE_DISAGREEMENT,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_SOURCE_MISMATCH,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_EVIDENCE_DISAGREEMENT,
+	SG_WEAPON_STATIC_RESULT_PUBLICATION_AUDIT_DIGEST_DISAGREEMENT
+} sg_weapon_static_result_publication_audit_code_t;
+
+typedef struct sg_weapon_static_result_publication_audit_report_s
+{
+	sg_weapon_static_result_publication_audit_code_t code;
+	sg_weapon_static_affordance_error_t resolution;
+} sg_weapon_static_result_publication_audit_report_t;
 
 typedef enum sg_weapon_static_prepare_error_code_e
 {
@@ -128,7 +200,6 @@ typedef struct sg_weapon_static_prepare_input_s
 
 /* Preparation validates every borrowed source and builds the owned lookup
  * indices. The borrowed sources must remain immutable and live until destroy. */
-typedef struct sg_weapon_static_context_s sg_weapon_static_context_t;
 
 int SG_WeaponStaticContextPrepare(
 	const sg_weapon_static_prepare_input_t *input,
@@ -161,6 +232,30 @@ int SG_WeaponStaticAffordanceResolve(
 	sg_weapon_profile_id_t profile_id,
 	sg_weapon_static_affordance_t *affordance_out,
 	sg_weapon_static_affordance_error_t *error_out);
+
+int SG_WeaponStaticResultPublicationIssue(
+	const sg_weapon_static_result_publication_input_t *input,
+	sg_weapon_static_result_publication_t **publication_out,
+	sg_weapon_static_result_publication_error_t *error_out);
+/* Audit replays the owner resolver while the source context remains live. */
+int SG_WeaponStaticResultPublicationAudit(
+	const sg_weapon_static_result_publication_t *publication,
+	sg_weapon_static_result_publication_audit_report_t *report_out);
+int SG_WeaponStaticResultPublicationEvidence(
+	const sg_weapon_static_result_publication_t *publication,
+	sg_weapon_static_result_evidence_t *evidence_out);
+/* This preserves the exact accepted context identity without exposing the
+ * context pointer from the opaque publication.  Catalog callers pair this
+ * with Evidence(), which performs the full replay audit. */
+int SG_WeaponStaticResultPublicationContextMatches(
+	const sg_weapon_static_result_publication_t *publication,
+	const sg_weapon_static_context_t *context);
+void SG_WeaponStaticResultPublicationDestroy(
+	sg_weapon_static_result_publication_t *publication);
+const char *SG_WeaponStaticResultPublicationErrorString(
+	sg_weapon_static_result_publication_error_code_t code);
+const char *SG_WeaponStaticResultPublicationAuditCodeString(
+	sg_weapon_static_result_publication_audit_code_t code);
 
 const char *SG_WeaponStaticAffordanceErrorString(
 	sg_weapon_static_affordance_error_code_t code);
