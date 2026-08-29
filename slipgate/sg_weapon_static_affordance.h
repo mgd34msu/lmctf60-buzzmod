@@ -134,6 +134,14 @@ int SG_WeaponStaticContextPrepare(
 	const sg_weapon_static_prepare_input_t *input,
 	sg_weapon_static_context_t **context_out,
 	sg_weapon_static_prepare_error_t *error_out);
+
+/* This is an acceptance identity only. The publication pointer is borrowed
+ * and is useful only while the context remains live; callers must not retain
+ * it after destroying the context. No geometry or resolver state is exposed. */
+int SG_WeaponStaticContextSource(const sg_weapon_static_context_t *context,
+	sg_weapon_static_binding_t *binding_out,
+	const sg_static_visibility_publication_t **visibility_publication_out);
+
 void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context);
 
 /* Preparation work evidence. This counts stable-ID comparisons used to build

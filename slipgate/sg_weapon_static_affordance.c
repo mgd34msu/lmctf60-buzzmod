@@ -573,6 +573,19 @@ void SG_WeaponStaticContextDestroy(sg_weapon_static_context_t *context)
 	free(context);
 }
 
+int SG_WeaponStaticContextSource(const sg_weapon_static_context_t *context,
+	sg_weapon_static_binding_t *binding_out,
+	const sg_static_visibility_publication_t **visibility_publication_out)
+{
+	if (!context || !binding_out || !visibility_publication_out ||
+		!context->visibility_publication ||
+		!SG_WeaponStaticBindingValid(&context->binding))
+		return 0;
+	*binding_out = context->binding;
+	*visibility_publication_out = context->visibility_publication;
+	return 1;
+}
+
 uint64_t SG_WeaponStaticContextBindingComparisons(
 	const sg_weapon_static_context_t *context)
 {
