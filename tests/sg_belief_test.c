@@ -1215,6 +1215,83 @@ static void TestCellContainmentFailsClosed(void)
 	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
 }
 
+static void TestEvidenceAccelerationUsesPhaseAuthority(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_particle_t predicted[8];
+	sg_belief_particle_t predicted_before[8];
+	sg_belief_state_t state;
+	sg_belief_state_t state_before;
+	sg_belief_evidence_support_t support;
+	sg_belief_evidence_t evidence;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+	sg_belief_prediction_t prediction;
+
+	BeliefFixtureInit(&fixture);
+	fixture.model.identity.physics.ground_acceleration = 10.0f;
+	fixture.model.identity.physics.hook_acceleration = 1000.0f;
+	InitState(&fixture, &state, storage, 8U);
+	support = Support(0U, 0U, 1.0f);
+	support.acceleration[0] = 10.0f;
+	support.acceleration[1] = 10.0f;
+	evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U, 100U, &support, 1U);
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	state_before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+
+	InitState(&fixture, &state, storage, 8U);
+	support.acceleration[1] = 0.0f;
+	support.acceleration[0] = 500.0f;
+	support.movement_state = SG_BELIEF_MOTION_UNKNOWN;
+	frame.expected_revision = state.revision;
+	frame.expected_generation = state.generation;
+	state_before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+
+	InitState(&fixture, &state, storage, 8U);
+	support.acceleration[0] = 6.0f;
+	support.acceleration[1] = 8.0f;
+	frame.expected_revision = state.revision;
+	frame.expected_generation = state.generation;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	CHECK(state.particle_count == 1U);
+	CHECK(state.particles[0].movement_state == SG_BELIEF_MOTION_UNKNOWN);
+	CHECK(SG_BeliefPredict(&fixture.snapshot, &state, 200U, predicted, 8U,
+		&prediction));
+	CHECK(prediction.particle_count == 1U);
+	CHECK(predicted[0].acceleration[0] == 6.0f);
+	CHECK(predicted[0].acceleration[1] == 8.0f);
+	memset(predicted, 0xa5, sizeof(predicted));
+	memcpy(predicted_before, predicted, sizeof(predicted));
+	state.particles[0].acceleration[0] = 500.0f;
+	CHECK(!SG_BeliefPredict(&fixture.snapshot, &state, 200U, predicted, 8U,
+		&prediction));
+	CHECK(memcmp(predicted, predicted_before, sizeof(predicted)) == 0);
+
+	fixture.model.identity.physics.ground_acceleration = FLT_MAX;
+	support.acceleration[0] = FLT_MAX;
+	support.acceleration[1] = FLT_MAX;
+	CHECK(!SG_BeliefKinematicsCompatible(&fixture.snapshot, &support.phase,
+		SG_BELIEF_MOTION_GROUND, support.velocity, support.acceleration,
+		support.orientation));
+}
+
 static void TestHorizonWitnessBoundsAndCells(void)
 {
 	belief_fixture_t fixture;
@@ -2064,6 +2141,7 @@ int main(void)
 	TestIdentityGenerationAndMotionFailClosed();
 	TestHorizonCannotInventConnectivity();
 	TestCellContainmentFailsClosed();
+	TestEvidenceAccelerationUsesPhaseAuthority();
 	TestHorizonWitnessBoundsAndCells();
 	TestHorizonMultiStepMinkowskiBounds();
 	TestMultiStepKinematicsRevalidated();

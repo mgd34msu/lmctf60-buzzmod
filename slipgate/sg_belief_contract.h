@@ -422,9 +422,10 @@ static inline int SG_BeliefPositionInsidePhaseCell(
 
 static inline float SG_BeliefAccelerationLimit(
 	const sg_rune_physics_parameters_t *physics,
+	const sg_rune_phase_basis_t *basis,
 	sg_belief_motion_state_t movement_state)
 {
-	float limit;
+	int mover_relative;
 
 	switch (movement_state)
 	{
@@ -439,20 +440,35 @@ static inline float SG_BeliefAccelerationLimit(
 	case SG_BELIEF_MOTION_MOVER:
 		return physics->external_acceleration;
 	case SG_BELIEF_MOTION_UNKNOWN:
-		limit = physics->ground_acceleration;
-		if (physics->air_acceleration > limit)
-			limit = physics->air_acceleration;
-		if (physics->water_acceleration > limit)
-			limit = physics->water_acceleration;
-		if (physics->hook_acceleration > limit)
-			limit = physics->hook_acceleration;
-		if (physics->external_acceleration > limit)
-			limit = physics->external_acceleration;
-		return limit;
+		mover_relative = basis->support == SG_RUNE_SUPPORT_MOVER ||
+			basis->reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE;
+		if (basis->motion == SG_RUNE_MOTION_SUPPORTED)
+			return mover_relative ? physics->external_acceleration :
+				physics->ground_acceleration;
+		if (basis->motion == SG_RUNE_MOTION_AIRBORNE)
+			return physics->air_acceleration;
+		if (basis->motion == SG_RUNE_MOTION_SWIMMING)
+			return physics->water_acceleration;
+		break;
 	case SG_BELIEF_MOTION_COUNT:
 		break;
 	}
 	return -1.0f;
+}
+
+static inline int SG_BeliefHorizontalVectorWithinLimit(
+	const float vector[3], float limit)
+{
+	double magnitude_squared;
+
+	if (!vector || !SG_BeliefFloatValid(vector[0]) ||
+	    !SG_BeliefFloatValid(vector[1]) || !SG_BeliefFloatValid(limit) ||
+	    limit < 0.0f)
+		return 0;
+	magnitude_squared = (double)vector[0] * (double)vector[0] +
+		(double)vector[1] * (double)vector[1];
+	return isfinite(magnitude_squared) &&
+		magnitude_squared <= (double)limit * (double)limit;
 }
 
 static inline int SG_BeliefMotionStateCompatible(
@@ -493,7 +509,8 @@ static inline int SG_BeliefKinematicsCompatible(
 	    !SG_BeliefFloatValid(physics->max_velocity) ||
 	    physics->max_velocity <= 0.0f)
 		return 0;
-	acceleration_limit = SG_BeliefAccelerationLimit(physics, movement_state);
+	acceleration_limit = SG_BeliefAccelerationLimit(physics, basis,
+		movement_state);
 	if (!SG_BeliefFloatValid(acceleration_limit) || acceleration_limit < 0.0f)
 		return 0;
 	vertical_limit = physics->gravity > acceleration_limit ?
@@ -507,14 +524,15 @@ static inline int SG_BeliefKinematicsCompatible(
 		    !SG_BeliefFloatValid(acceleration[axis]) ||
 		    !SG_BeliefFloatValid(orientation[axis]) ||
 		    !SG_BeliefIntervalContains(velocity_axes[axis], velocity[axis]) ||
-		    fabsf(acceleration[axis]) >
-			(axis == 2U ? vertical_limit : acceleration_limit) ||
+		    (axis == 2U && fabsf(acceleration[axis]) > vertical_limit) ||
 		    fabsf(orientation[axis]) >
 			SG_BELIEF_ORIENTATION_LIMIT_DEGREES)
 			return 0;
 		speed_squared += (double)velocity[axis] * (double)velocity[axis];
 	}
 	return isfinite(speed_squared) &&
+		SG_BeliefHorizontalVectorWithinLimit(acceleration,
+			acceleration_limit) &&
 		speed_squared <= (double)physics->max_velocity *
 			(double)physics->max_velocity;
 }
