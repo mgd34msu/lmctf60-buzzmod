@@ -8,6 +8,7 @@ trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion'
 strict="$strict -Wsign-conversion -Wshadow -Wstrict-prototypes"
 strict="$strict -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align"
+strict="$strict -DSG_HOST_LAW_TESTING"
 
 cd "$repo_dir"
 

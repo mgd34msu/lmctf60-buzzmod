@@ -2,44 +2,23 @@
 #ifndef SG_HOST_LAW_OWNER_H
 #define SG_HOST_LAW_OWNER_H
 
-#include <stddef.h>
 #include <stdint.h>
 
 #include "sg_destination.h"
 #include "sg_host_law_publication.h"
 
-#ifndef SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_TYPE
-#define SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_TYPE
-typedef struct sg_host_engine_runtime_acceptance_s
-	sg_host_engine_runtime_acceptance_t;
-#endif
-
-/* Install only after the production BSP/identity bridge has supplied the
- * exact authority.  A failed install leaves the previous owner untouched. */
-sg_host_law_result_t SG_HostLawProductionInstall(
-	const sg_host_collision_authority_t *authority);
-
 /* Begin a level by capturing the exact engine callback slots and committed
  * level epoch.  This deliberately does not open a BSP or publish laws. */
 sg_host_law_result_t SG_HostLawProductionBeginLevel(const char *mapname);
 
-/* Join the staged runtime to the exact active RUNE snapshot and the
- * controller-selected BSP SHA-256.  The runtime owner derives generation and
- * topology from this accepted snapshot; callers cannot nominate them. */
-sg_host_law_result_t SG_HostLawProductionInstallAccepted(
-	const sg_host_engine_runtime_acceptance_t *acceptance);
+/* The level/RUNE owner resolves the retained BSP bytes and active artifact
+ * internally, then publishes both the construction and live-engine views.
+ * There is no caller-shaped identity, token, or acceptance tuple. */
+sg_host_law_result_t SG_HostLawProductionInstallActiveRune(void);
 
 /* Bind a live player subject by engine edict index.  The owner resolves and
  * authenticates the edict; no raw callback or edict pointer is public. */
-sg_host_law_result_t SG_HostLawProductionBindSubject(uint32_t subject_index);
-
-/* Construction-only bridge for a controller-retained BSP byte stream.  The
- * SHA-256 is computed from these exact bytes and must match the controller's
- * selected identity before a static collision authority is published. */
-sg_host_law_result_t SG_HostLawProductionInstallConstruction(
-	const void *bsp_bytes, size_t bsp_size,
-	const sg_bsp_content_identity_t *content_identity,
-	const sg_rune_model_identity_t *identity);
+sg_host_law_result_t SG_HostLawProductionBindActiveSubject(uint32_t subject_index);
 
 /* Level teardown invalidates every borrowed BSP and its publication. */
 void SG_HostLawProductionReset(void);

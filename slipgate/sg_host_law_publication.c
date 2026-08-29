@@ -25,20 +25,6 @@ extern int CTF_HookPullVelocity(const vec3_t start, const vec3_t bite,
 #define SG_HOST_PMOVE_ID UINT64_C(0x504d4f56454c5733)
 #define SG_HOST_GRAVITY_ID UINT64_C(0x4752415649545933)
 
-#define SG_HOST_GROUND_ACCELERATION 10.0f
-#define SG_HOST_AIR_ACCELERATION 1.0f
-#define SG_HOST_WATER_ACCELERATION 10.0f
-#define SG_HOST_HOOK_ACCELERATION 800.0f
-#define SG_HOST_EXTERNAL_ACCELERATION 1.0f
-#define SG_HOST_WATER_DRAG 1.0f
-
-static const sg_rune_hull_profile_t sg_standing_hull = {
-	{ { -16.0f, -16.0f, -24.0f } }, { { 16.0f, 16.0f, 32.0f } }
-};
-static const sg_rune_hull_profile_t sg_crouching_hull = {
-	{ { -16.0f, -16.0f, -24.0f } }, { { 16.0f, 16.0f, 4.0f } }
-};
-
 struct sg_host_law_publication_s
 {
 	uint32_t state;
@@ -538,6 +524,9 @@ static sg_host_law_result_t CaptureLive(
 	float gravity;
 	float maxvelocity;
 	float ctf_flags;
+	sg_rune_physics_parameters_t host_physics;
+	sg_rune_hull_profile_t standing_hull;
+	sg_rune_hull_profile_t crouching_hull;
 	uint32_t index;
 
 	if (!identity || !view_out || !binding_out)
@@ -637,31 +626,36 @@ static sg_host_law_result_t CaptureLive(
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_MECHANISM_EQUATIONS, SG_HOST_LAW_ELEMENT_NONE,
 			1U, 0U);
+	if (!SG_HostEnginePhysicsLaw(&host_physics) ||
+		!SG_HostEngineHullProfiles(&standing_hull, &crouching_hull))
+		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
+			SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
 	*binding_out = binding;
 	for (index = 0U; index < 3U; index++)
 	{
 		if (!SameFloat(view_out->identity.standing_hull.mins.value[index],
-			sg_standing_hull.mins.value[index]) ||
+			standing_hull.mins.value[index]) ||
 			!SameFloat(view_out->identity.standing_hull.maxs.value[index],
-			sg_standing_hull.maxs.value[index]) ||
+			standing_hull.maxs.value[index]) ||
 			!SameFloat(view_out->identity.crouching_hull.mins.value[index],
-			sg_crouching_hull.mins.value[index]) ||
+			crouching_hull.mins.value[index]) ||
 			!SameFloat(view_out->identity.crouching_hull.maxs.value[index],
-			sg_crouching_hull.maxs.value[index]))
+			crouching_hull.maxs.value[index]))
 			return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 				SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR, index, 1U, 0U);
 	}
 	if (!SameFloat(view_out->identity.physics.ground_acceleration,
-		SG_HOST_GROUND_ACCELERATION) ||
+			host_physics.ground_acceleration) ||
 		!SameFloat(view_out->identity.physics.air_acceleration,
-		SG_HOST_AIR_ACCELERATION) ||
+			host_physics.air_acceleration) ||
 		!SameFloat(view_out->identity.physics.water_acceleration,
-		SG_HOST_WATER_ACCELERATION) ||
+			host_physics.water_acceleration) ||
 		!SameFloat(view_out->identity.physics.hook_acceleration,
-		SG_HOST_HOOK_ACCELERATION) ||
+			host_physics.hook_acceleration) ||
 		!SameFloat(view_out->identity.physics.external_acceleration,
-		SG_HOST_EXTERNAL_ACCELERATION) ||
-		!SameFloat(view_out->identity.physics.water_drag, SG_HOST_WATER_DRAG))
+			host_physics.external_acceleration) ||
+		!SameFloat(view_out->identity.physics.water_drag,
+			host_physics.water_drag))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_GRAVITY_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
 	return Ok();
@@ -1014,10 +1008,11 @@ static sg_host_hook_target_kind_t HookTargetKindFromCollision(
 {
 	if (trace->instance_id == 0U)
 		return SG_HOST_HOOK_TARGET_WORLD;
-	/* The collision scene is the mover authority, but this narrow adapter does
-	 * not invent entity semantics that the scene does not expose.  A non-world
-	 * model is therefore the exact accepted func target class. */
-	return SG_HOST_HOOK_TARGET_FUNC;
+	/* A static scene carries geometry identity only.  It does not carry the
+	 * live edict classname/team/dead state needed by hook_touch.  Refuse to
+	 * invent FUNC semantics from a model number; only the runtime backend,
+	 * which owns the traced edict, may admit a non-world target. */
+	return SG_HOST_HOOK_TARGET_OTHER;
 }
 
 static uint64_t HookTargetIdentityFromCollision(
@@ -1026,21 +1021,6 @@ static uint64_t HookTargetIdentityFromCollision(
 {
 	return trace->instance_id != 0U ? trace->instance_id :
 		authority->identity.bsp_content_id;
-}
-
-static uint64_t HookTargetIdentityFromRuntime(
-	const sg_host_engine_runtime_t *runtime,
-	const sg_host_collision_trace_t *trace)
-{
-	const sg_rune_model_identity_t *identity;
-
-	if (trace->instance_id != 0U)
-		return trace->instance_id;
-	identity = SG_HostEngineRuntimeIdentity(runtime);
-	/* WORLD has no edict instance.  Bind it to the accepted map identity so a
-	 * legitimate world touch remains an auditable target rather than an
-	 * identity-less collision rejected by the hook chronology validator. */
-	return identity ? identity->bsp_content_id : 0U;
 }
 
 sg_host_law_result_t SG_HostLawPublicationHookFire(
@@ -1054,7 +1034,6 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 	sg_host_collision_trace_t trace;
 	sg_host_law_result_t result;
 	const float zero[3] = { 0.0f, 0.0f, 0.0f };
-	int hit;
 
 	if (!request || !step_out || !FiniteVector(request->start) ||
 		!FiniteVector(request->end))
@@ -1065,13 +1044,14 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 	result = SG_HostLawPublicationRevalidateProduction(publication);
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
+	memset(&collision, 0, sizeof(collision));
 	memset(&trace, 0, sizeof(trace));
 	if (publication->runtime)
 	{
-		if (scene || !SG_HostEngineRuntimeTrace(publication->runtime,
-			request->start, zero, zero, request->end,
+		if (scene || !SG_HostEngineRuntimeHookTrace(publication->runtime,
+			request->start, request->end,
 			(sg_host_collision_contents_t)publication->view.hook.trace_mask,
-			&trace))
+			&collision))
 			return Result(SG_HOST_LAW_EVALUATION_FAILED,
 				SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U,
 				0U);
@@ -1082,30 +1062,29 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 		&trace))
 		return Result(SG_HOST_LAW_EVALUATION_FAILED,
 			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	hit = trace.fraction < 1.0f || trace.startsolid || trace.allsolid;
+	if (!publication->runtime)
+	{
+		int hit = trace.fraction < 1.0f || trace.startsolid || trace.allsolid;
+
+		collision.hit = hit;
+		if (hit)
+		{
+			/* Static construction has no live entity table, so it can
+			 * authenticate WORLD geometry only and never trusts the request's
+			 * owner_instance_id.  Non-world geometry remains OTHER and is
+			 * rejected by the hook chronology. */
+			collision.sky = (trace.surface_flags & SG_HOST_SURFACE_SKY) != 0;
+			collision.trace_epsilon_applied = 1;
+			collision.target_kind = HookTargetKindFromCollision(&trace);
+			collision.target_identity = HookTargetIdentityFromCollision(
+				&publication->authority, &trace);
+		}
+	}
 	memset(&observation, 0, sizeof(observation));
 	observation.event = request->phase == SG_HOST_HOOK_COAST ?
 		SG_HOST_HOOK_REFIRE : SG_HOST_HOOK_FIRE;
 	observation.phase = request->phase;
 	observation.attack_held = request->attack_held;
-	memset(&collision, 0, sizeof(collision));
-	collision.hit = hit;
-	if (hit)
-	{
-		collision.owner_hit = publication->runtime ?
-			trace.instance_id == SG_HostEngineRuntimeSubjectInstance(
-				publication->runtime) :
-			(request->owner_instance_id != 0U &&
-			trace.instance_id == request->owner_instance_id);
-		collision.sky = (trace.surface_flags & SG_HOST_SURFACE_SKY) != 0;
-		collision.same_team = 0;
-		collision.target_dead = 0;
-		collision.trace_epsilon_applied = 1;
-		collision.target_kind = HookTargetKindFromCollision(&trace);
-		collision.target_identity = publication->runtime ?
-			HookTargetIdentityFromRuntime(publication->runtime, &trace) :
-			HookTargetIdentityFromCollision(&publication->authority, &trace);
-	}
 	/* FIRE consumes only owner-derived collision facts.  The caller's old
 	 * observation booleans and target identity never enter this path. */
 	if (!SG_HostHookStepWithCollision(&publication->view.hook, &observation,

@@ -15,6 +15,16 @@
 #define SG_HOST_ENGINE_PHYSICS_FLAGS UINT32_C(0)
 #define SG_HOST_ENGINE_PMOVE_ABI_ID UINT64_C(0x51494d504f564531)
 
+/* These are the non-cvar terms of the selected engine Pmove contract.  They
+ * live beside the ABI binding so every publication backend obtains the same
+ * law from one authoritative host contract rather than duplicating values. */
+#define SG_HOST_ENGINE_GROUND_ACCELERATION 10.0f
+#define SG_HOST_ENGINE_AIR_ACCELERATION 1.0f
+#define SG_HOST_ENGINE_WATER_ACCELERATION 10.0f
+#define SG_HOST_ENGINE_HOOK_ACCELERATION 800.0f
+#define SG_HOST_ENGINE_EXTERNAL_ACCELERATION 1.0f
+#define SG_HOST_ENGINE_WATER_DRAG 1.0f
+
 typedef struct sg_host_engine_pmove_abi_s
 {
 	uint32_t version;
@@ -47,6 +57,11 @@ int SG_HostEnginePmoveBindingCurrent(
 	const sg_host_engine_pmove_binding_t *binding);
 int SG_HostEnginePmoveBound(const sg_host_engine_pmove_binding_t *binding,
 	pmove_t *pmove);
+
+int SG_HostEnginePhysicsLaw(sg_rune_physics_parameters_t *law_out);
+/* Player hulls are part of the selected engine movement contract. */
+int SG_HostEngineHullProfiles(sg_rune_hull_profile_t *standing_out,
+	sg_rune_hull_profile_t *crouching_out);
 
 /* Calls the engine import directly; no caller-supplied function is accepted. */
 int SG_HostEnginePmove(pmove_t *pmove);

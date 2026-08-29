@@ -1258,13 +1258,34 @@ static qboolean SG_LevelSetupAttempt(void)
 		SG_SetupFailure("previous-failure", false);
 		return false;
 	}
+	/* Capture the live engine owner before loading or publishing the RUNE.  The
+	 * host-law owner retains this level epoch and exact callback identities;
+	 * publication below can therefore join only the RUNE that this level
+	 * actually accepted. */
+	{
+		sg_host_law_result_t host_law_result =
+			SG_HostLawProductionBeginLevel(level.mapname);
+
+		if (host_law_result.status != SG_HOST_LAW_OK)
+			sg_host.dprint("slipgate: host law begin unavailable for %s: %s (%s)\n",
+				level.mapname, SG_HostLawStatusString(host_law_result.status),
+				SG_HostLawFieldString(host_law_result.field));
+	}
 
 	if (sg_rune)
 	{
 		if (strcmp(sg_rune_map, level.mapname) == 0)
 		{
 			if (SG_RunePhysicsCompatible(sg_rune))
+			{
+				/* A previous setup can have completed before the host owner was
+				 * ready (for example after a transient engine callback failure).
+				 * Retry the owner join from the already-published live RUNE; do
+				 * not rebuild or accept a caller-shaped identity. */
+				if (!SG_HostLawProductionPublication())
+					(void)SG_HostLawProductionInstallActiveRune();
 				return true;
+			}
 			sg_host.dprint("slipgate: setup held: active identity or "
 			               "physics law differs from loaded artifact\n");
 			SG_SetupFailure("active-identity", false);
@@ -1502,6 +1523,15 @@ static qboolean SG_LevelSetupAttempt(void)
 	}
 	memcpy(sg_rune_map, sg_rune->artifact.identity.map_name,
 	    sizeof(sg_rune_map));
+	{
+		sg_host_law_result_t host_law_result =
+			SG_HostLawProductionInstallActiveRune();
+
+		if (host_law_result.status != SG_HOST_LAW_OK)
+			sg_host.dprint("slipgate: live host law unavailable for %s: %s (%s)\n",
+				sg_rune_map, SG_HostLawStatusString(host_law_result.status),
+				SG_HostLawFieldString(host_law_result.field));
+	}
 	if (sg_human_use)
 		Sidecar_LogPublished(game_directory, SG_SIDECAR_HUMAN, sg_rune,
 			sidecars.human_size);
@@ -4871,6 +4901,9 @@ void SG_RunFrame(void)
 			SG_RetireBotForClient(ent);
 			continue;
 		}
+		/* The owner resolves this live subject through the authenticated edict
+		 * array before any engine-backed movement/collision consumer runs. */
+		(void)SG_HostLawProductionBindActiveSubject((uint32_t)ent->s.number);
 		/* One map-local pulse per server second proves the diagnostic stream's
 		 * complete residence coverage even while a bot is dead and therefore
 		 * cannot reach Think_Emit's route-state report. */

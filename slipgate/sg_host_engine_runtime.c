@@ -1,10 +1,13 @@
+#include "../g_local.h"
+#include "../g_ctffunc.h"
+#undef world
+
 #include "sg_host_engine_runtime.h"
 #include "sg_host_engine_runtime_private.h"
+#include "sg_host_engine_pmove.h"
+#include "sg_rune.h"
 
-#ifndef q_exported
-#define q_exported
-#endif
-#include "../game.h"
+extern rune_t *SG_Rune(void);
 
 #include <limits.h>
 #include <math.h>
@@ -16,6 +19,7 @@ extern game_export_t globals;
 
 #define SG_HOST_ENGINE_RUNTIME_STATE UINT32_C(0x45525433)
 #define SG_HOST_ENGINE_RUNTIME_STATE_INVERSE UINT32_C(0xb8adbccc)
+#define SG_HOST_RUNE_SHA256_HEX_BYTES 64U
 
 typedef trace_t (*sg_host_engine_trace_function_t)(vec3_t start,
 	vec3_t mins, vec3_t maxs, vec3_t end, edict_t *passent, int contentmask);
@@ -32,7 +36,10 @@ struct sg_host_engine_runtime_s
 	sg_level_identity_t level;
 	char mapname[SG_LEVEL_IDENTITY_MAPNAME_BYTES];
 	int accepted;
-	const sg_rune_runtime_snapshot_t *accepted_snapshot;
+	const rune_t *accepted_rune;
+	rune_artifact_t accepted_artifact;
+	const sg_bsp_world_t *accepted_world;
+	char accepted_rune_sha256[SG_HOST_RUNE_SHA256_HEX_BYTES + 1U];
 	sg_rune_model_identity_t identity;
 	sg_bsp_content_identity_t content_identity;
 	uint64_t generation;
@@ -43,17 +50,6 @@ struct sg_host_engine_runtime_s
 	int subject_number;
 };
 
-#define SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_STATE UINT32_C(0x45524133)
-
-struct sg_host_engine_runtime_acceptance_s
-{
-	uint32_t state;
-	uint32_t state_inverse;
-	const void *owner;
-	const sg_rune_runtime_snapshot_t *snapshot;
-	sg_bsp_content_identity_t content_identity;
-};
-
 typedef struct sg_host_engine_runtime_scope_s
 {
 	const sg_host_engine_runtime_t *runtime;
@@ -61,12 +57,6 @@ typedef struct sg_host_engine_runtime_scope_s
 } sg_host_engine_runtime_scope_t;
 
 static sg_host_engine_runtime_scope_t *sg_host_engine_runtime_scope;
-static const unsigned char sg_host_engine_runtime_owner_token;
-
-const void *SG_HostEngineRuntimeOwnerToken(void)
-{
-	return &sg_host_engine_runtime_owner_token;
-}
 
 static int FiniteVector(const float value[3])
 {
@@ -137,43 +127,218 @@ static int ContentIdentityValid(const sg_bsp_content_identity_t *identity)
 	return any;
 }
 
-static int ModelIdentityEqual(const sg_rune_model_identity_t *left,
-	const sg_rune_model_identity_t *right)
+static int RuneSHA256Valid(const char *sha256)
+{
+	uint32_t index;
+
+	if (!sha256 || strlen(sha256) != SG_HOST_RUNE_SHA256_HEX_BYTES)
+		return 0;
+	for (index = 0U; index < SG_HOST_RUNE_SHA256_HEX_BYTES; index++)
+		if (!((sha256[index] >= '0' && sha256[index] <= '9') ||
+			(sha256[index] >= 'a' && sha256[index] <= 'f')))
+			return 0;
+	return 1;
+}
+
+static uint64_t RuneSHA256Fingerprint(const char *sha256, uint64_t seed)
+{
+	uint32_t index;
+	uint64_t value = seed;
+
+	for (index = 0U; index < SG_HOST_RUNE_SHA256_HEX_BYTES; index++)
+		value = (value ^ (uint8_t)sha256[index]) * UINT64_C(1099511628211);
+	return value == 0U ? UINT64_C(1) : value;
+}
+
+static uint64_t FingerprintByte(uint64_t value, uint8_t octet)
+{
+	return (value ^ octet) * UINT64_C(1099511628211);
+}
+
+static uint64_t FingerprintU16(uint64_t value, uint16_t input)
+{
+	value = FingerprintByte(value, (uint8_t)input);
+	return FingerprintByte(value, (uint8_t)(input >> 8U));
+}
+
+static uint64_t FingerprintU32(uint64_t value, uint32_t input)
+{
+	uint32_t index;
+
+	for (index = 0U; index < 4U; index++)
+		value = FingerprintByte(value, (uint8_t)(input >> (index * 8U)));
+	return value;
+}
+
+static uint64_t FingerprintI16(uint64_t value, int16_t input)
+{
+	return FingerprintU16(value, (uint16_t)input);
+}
+
+static uint64_t FingerprintI32(uint64_t value, int32_t input)
+{
+	return FingerprintU32(value, (uint32_t)input);
+}
+
+static uint64_t FingerprintFloat(uint64_t value, float input)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &input, sizeof(bits));
+	return FingerprintU32(value, bits);
+}
+
+static uint64_t FingerprintVector(uint64_t value, const float input[3])
 {
 	uint32_t axis;
 
-	if (!left || !right || left->bsp_content_id != right->bsp_content_id ||
-		left->entity_semantics_id != right->entity_semantics_id ||
-		left->physics_abi_id != right->physics_abi_id ||
-		left->source_set_identity != right->source_set_identity ||
-		left->schema_id != right->schema_id ||
-		left->producer_identity != right->producer_identity ||
-		left->physics.frame_ms != right->physics.frame_ms ||
-		left->physics.substep_ms != right->physics.substep_ms)
-		return 0;
 	for (axis = 0U; axis < 3U; axis++)
+		value = FingerprintFloat(value, input[axis]);
+	return value;
+}
+
+static uint64_t FingerprintBytes(uint64_t value, const uint8_t *input,
+	size_t bytes)
+{
+	size_t index;
+
+	if (!input && bytes != 0U)
+		return 0U;
+	for (index = 0U; index < bytes; index++)
+		value = FingerprintByte(value, input[index]);
+	return value;
+}
+
+static uint64_t FingerprintSeed(uint64_t value, const rune_seed_t *seed)
+{
+	value = FingerprintVector(value, seed->origin);
+	value = FingerprintI16(value, seed->area_hint);
+	return FingerprintI16(value, seed->flags);
+}
+
+static uint64_t FingerprintLink(uint64_t value, const rune_link_t *link)
+{
+	value = FingerprintI32(value, (int32_t)link->from);
+	value = FingerprintI32(value, (int32_t)link->to);
+	value = FingerprintByte(value, link->action);
+	value = FingerprintByte(value, link->provenance);
+	value = FingerprintByte(value, link->min_speed);
+	value = FingerprintByte(value, link->heading);
+	value = FingerprintByte(value, link->heading_slack);
+	value = FingerprintByte(value, link->exit_speed);
+	value = FingerprintI16(value, link->cost_ms);
+	value = FingerprintVector(value, link->anchor);
+	value = FingerprintVector(value, link->mechanism_anchor);
+	value = FingerprintU16(value, link->sweep_clear_ms);
+	value = FingerprintByte(value, link->mode);
+	return FingerprintU32(value, link->mechanism_plan);
+}
+
+static uint64_t FingerprintMechanismNode(uint64_t value,
+	const rune_mechanism_node_t *node)
+{
+	uint32_t axis;
+
+	value = FingerprintU32(value, node->key);
+	value = FingerprintU16(value, node->kind);
+	value = FingerprintU16(value, node->flags);
+	value = FingerprintU32(value, node->classname_offset);
+	value = FingerprintU32(value, node->target_offset);
+	value = FingerprintU32(value, node->targetname_offset);
+	value = FingerprintU32(value, node->killtarget_offset);
+	value = FingerprintU32(value, node->owner_key);
+	value = FingerprintU32(value, node->team_master_key);
+	value = FingerprintU32(value, node->spawnflags);
+	value = FingerprintU16(value, node->touch_callback);
+	value = FingerprintU16(value, node->use_callback);
+	value = FingerprintU16(value, node->think_callback);
+	value = FingerprintU16(value, node->blocked_callback);
+	value = FingerprintI32(value, node->delay_ms);
+	value = FingerprintI32(value, node->wait_ms);
+	value = FingerprintU32(value, node->speed_q8);
+	value = FingerprintU32(value, node->accel_q8);
+	value = FingerprintU32(value, node->decel_q8);
+	for (axis = 0U; axis < 3U; axis++)
+		value = FingerprintI16(value, node->absmin_q8[axis]);
+	for (axis = 0U; axis < 3U; axis++)
+		value = FingerprintI16(value, node->absmax_q8[axis]);
+	value = FingerprintU32(value, node->path_target_offset);
+	return FingerprintVector(value, node->push_velocity);
+}
+
+static uint64_t FingerprintMechanismEdge(uint64_t value,
+	const rune_mechanism_edge_t *edge)
+{
+	value = FingerprintU32(value, edge->from_key);
+	value = FingerprintU32(value, edge->to_key);
+	value = FingerprintU16(value, edge->kind);
+	value = FingerprintU16(value, edge->ordinal);
+	return FingerprintU32(value, edge->delay_ms);
+}
+
+static uint64_t FingerprintMechanismPlan(uint64_t value,
+	const rune_mechanism_plan_t *plan)
+{
+	value = FingerprintU32(value, plan->entry_key);
+	value = FingerprintU32(value, plan->mover_key);
+	value = FingerprintU32(value, plan->first_edge);
+	value = FingerprintU32(value, plan->num_edges);
+	value = FingerprintU16(value, plan->controller_kind);
+	value = FingerprintU16(value, plan->flags);
+	value = FingerprintU16(value, plan->expected_members);
+	value = FingerprintU32(value, plan->cooldown_ms);
+	return FingerprintU32(value, plan->closure_crc32);
+}
+
+/* The encoded SHA is the immutable file generation.  This second fingerprint
+ * is deliberately over the live graph arrays as well: changing topology
+ * while leaving all public counts and a stale encoded digest untouched must
+ * invalidate the owner binding. */
+static uint64_t RuneTopologyFingerprint(const rune_t *rune, uint64_t seed)
+{
+	const rune_artifact_t *artifact;
+	uint32_t index;
+	uint64_t value = seed;
+
+	if (!rune || !SG_RunePublishedShapeValid(rune) ||
+		rune->artifact.num_seeds == 0U || !rune->seeds || !rune->first_link ||
+		!rune->linked_seed ||
+		(rune->artifact.num_links != 0U &&
+			(!rune->links || !rune->next_link)) ||
+		(rune->artifact.num_mechanism_nodes != 0U && !rune->mechanism_nodes) ||
+		(rune->artifact.num_mechanism_edges != 0U && !rune->mechanism_edges) ||
+		(rune->artifact.num_mechanism_plans != 0U && !rune->mechanism_plans) ||
+		!rune->mechanism_strings)
+		return 0U;
+	artifact = &rune->artifact;
+	/* Encode every field in a fixed little-endian order.  Native padding and
+	 * host integer layout are not part of the accepted topology identity. */
+	value = FingerprintU32(value, artifact->num_seeds);
+	for (index = 0U; index < artifact->num_seeds; index++)
 	{
-		if (left->standing_hull.mins.value[axis] !=
-				right->standing_hull.mins.value[axis] ||
-			left->standing_hull.maxs.value[axis] !=
-				right->standing_hull.maxs.value[axis] ||
-			left->crouching_hull.mins.value[axis] !=
-				right->crouching_hull.mins.value[axis] ||
-			left->crouching_hull.maxs.value[axis] !=
-				right->crouching_hull.maxs.value[axis])
-			return 0;
+		value = FingerprintSeed(value, &rune->seeds[index]);
+		value = FingerprintI32(value, (int32_t)rune->first_link[index]);
+		value = FingerprintByte(value, rune->linked_seed[index]);
 	}
-	return left->physics.gravity == right->physics.gravity &&
-		left->physics.ground_acceleration ==
-			right->physics.ground_acceleration &&
-		left->physics.air_acceleration == right->physics.air_acceleration &&
-		left->physics.water_acceleration ==
-			right->physics.water_acceleration &&
-		left->physics.hook_acceleration == right->physics.hook_acceleration &&
-		left->physics.external_acceleration ==
-			right->physics.external_acceleration &&
-		left->physics.water_drag == right->physics.water_drag &&
-		left->physics.max_velocity == right->physics.max_velocity;
+	value = FingerprintU32(value, artifact->num_links);
+	for (index = 0U; index < artifact->num_links; index++)
+	{
+		value = FingerprintLink(value, &rune->links[index]);
+		value = FingerprintI32(value, (int32_t)rune->next_link[index]);
+	}
+	value = FingerprintU32(value, artifact->num_mechanism_nodes);
+	for (index = 0U; index < artifact->num_mechanism_nodes; index++)
+		value = FingerprintMechanismNode(value, &rune->mechanism_nodes[index]);
+	value = FingerprintU32(value, artifact->num_mechanism_edges);
+	for (index = 0U; index < artifact->num_mechanism_edges; index++)
+		value = FingerprintMechanismEdge(value, &rune->mechanism_edges[index]);
+	value = FingerprintU32(value, artifact->num_mechanism_plans);
+	for (index = 0U; index < artifact->num_mechanism_plans; index++)
+		value = FingerprintMechanismPlan(value, &rune->mechanism_plans[index]);
+	value = FingerprintU32(value, artifact->string_bytes);
+	value = FingerprintBytes(value, rune->mechanism_strings,
+		(size_t)artifact->string_bytes);
+	return value == 0U ? UINT64_C(1) : value;
 }
 
 static int RuntimeShapeValid(const sg_host_engine_runtime_t *runtime)
@@ -213,33 +378,31 @@ static int RuntimeSubjectCurrent(const sg_host_engine_runtime_t *runtime)
 		return 0;
 	subject = &globals.edicts[runtime->subject_index];
 	return subject == runtime->subject && subject->inuse && subject->client &&
+		subject->client->pers.connected && subject->classname &&
+		strcmp(subject->classname, "player") == 0 &&
 		subject->s.number == runtime->subject_number &&
 		subject->client == runtime->subject_client;
 }
 
-static int AcceptanceValid(
-	const sg_host_engine_runtime_acceptance_t *acceptance)
+static void RuntimeClearSubject(sg_host_engine_runtime_t *runtime)
 {
-	return acceptance &&
-		acceptance->state == SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_STATE &&
-		acceptance->state_inverse == ~SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_STATE &&
-		acceptance->owner == SG_HostEngineRuntimeOwnerToken() &&
-		acceptance->snapshot &&
-		SG_RuneRuntimeSnapshotValid(acceptance->snapshot) &&
-		ContentIdentityValid(&acceptance->content_identity);
+	runtime->subject = NULL;
+	runtime->subject_index = 0U;
+	runtime->subject_client = NULL;
+	runtime->subject_number = 0;
 }
 
 sg_host_engine_runtime_status_t SG_HostEngineRuntimeBegin(
 	const char *mapname, sg_host_engine_runtime_t **runtime_out)
 {
 	sg_host_engine_runtime_t *runtime;
-	sg_level_identity_t level;
+	sg_level_identity_t level_identity;
 	sg_identity_status_t identity_status;
 
 	if (!runtime_out || *runtime_out || !mapname)
 		return SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT;
 	*runtime_out = NULL;
-	identity_status = SG_LevelIdentitySnapshot(mapname, &level);
+	identity_status = SG_LevelIdentitySnapshot(mapname, &level_identity);
 	if (identity_status != SG_IDENTITY_OK)
 		return identity_status == SG_IDENTITY_INVALID_ARGUMENT ||
 			identity_status == SG_IDENTITY_INVALID_MAPNAME ?
@@ -248,7 +411,7 @@ sg_host_engine_runtime_status_t SG_HostEngineRuntimeBegin(
 	/* The identity provider is an owner boundary too.  Do not let a provider
 	 * that returned a different committed map silently bind callbacks to this
 	 * level's runtime. */
-	if (strcmp(level.mapname, mapname) != 0)
+	if (strcmp(level_identity.mapname, mapname) != 0)
 		return SG_HOST_ENGINE_RUNTIME_LEVEL_UNAVAILABLE;
 	if (!gi.trace || !gi.pointcontents || !gi.Pmove)
 		return SG_HOST_ENGINE_RUNTIME_HOST_UNAVAILABLE;
@@ -262,95 +425,177 @@ sg_host_engine_runtime_status_t SG_HostEngineRuntimeBegin(
 	runtime->pointcontents =
 		(sg_host_engine_contents_function_t)gi.pointcontents;
 	runtime->pmove = (sg_host_pmove_function_t)gi.Pmove;
-	runtime->level = level;
-	memcpy(runtime->mapname, level.mapname, sizeof(runtime->mapname));
+	runtime->level = level_identity;
+	memcpy(runtime->mapname, level_identity.mapname, sizeof(runtime->mapname));
 	*runtime_out = runtime;
 	return SG_HOST_ENGINE_RUNTIME_OK;
 }
 
-sg_host_engine_runtime_status_t SG_HostEngineRuntimeAcceptanceIssueOwner(
-	const void *owner_token, const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_bsp_content_identity_t *content_identity,
-	sg_host_engine_runtime_acceptance_t **acceptance_out)
+static uint64_t ContentIdentityWord(const sg_bsp_content_identity_t *identity)
 {
-	sg_host_engine_runtime_acceptance_t *acceptance;
+	uint64_t value = 0U;
+	uint32_t index;
 
-	if (!acceptance_out || *acceptance_out ||
-		owner_token != SG_HostEngineRuntimeOwnerToken())
-		return SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT;
-	*acceptance_out = NULL;
-	if (!snapshot || !SG_RuneRuntimeSnapshotValid(snapshot))
-		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
-	if (!ContentIdentityValid(content_identity))
-		return SG_HOST_ENGINE_RUNTIME_INVALID_CONTENT_ID;
-	acceptance = calloc(1U, sizeof(*acceptance));
-	if (!acceptance)
-		return SG_HOST_ENGINE_RUNTIME_ALLOCATION_FAILED;
-	acceptance->state = SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_STATE;
-	acceptance->state_inverse = ~SG_HOST_ENGINE_RUNTIME_ACCEPTANCE_STATE;
-	acceptance->owner = SG_HostEngineRuntimeOwnerToken();
-	acceptance->snapshot = snapshot;
-	acceptance->content_identity = *content_identity;
-	*acceptance_out = acceptance;
-	return SG_HOST_ENGINE_RUNTIME_OK;
+	for (index = 0U; index < sizeof(value); index++)
+		value = (value << 8U) | identity->bytes[index];
+	return value;
 }
 
-void SG_HostEngineRuntimeAcceptanceDestroyOwner(
-	sg_host_engine_runtime_acceptance_t *acceptance)
+static int ActiveArtifactMatchesLevel(const rune_artifact_t *artifact,
+	const sg_level_identity_t *level_identity, const char *mapname)
 {
-	if (!acceptance)
+	return artifact && level_identity && mapname &&
+		artifact->identity.bsp_checksum == level_identity->bsp_checksum &&
+		artifact->identity.entity_crc32 == level_identity->entity_crc32 &&
+		artifact->identity.host_physics_id == level_identity->host_physics_id &&
+		memcmp(artifact->identity.map_name, mapname,
+			sizeof(artifact->identity.map_name)) == 0;
+}
+
+/* Convert the native RUNE artifact to the one host identity used by both the
+ * static construction and live-engine backends.  Every field is derived from
+ * the active artifact or retained BSP; no caller can nominate a replacement
+ * model identity. */
+static int HostIdentityFromActiveArtifact(const rune_artifact_t *artifact,
+	const sg_bsp_world_t *world, sg_rune_model_identity_t *identity_out)
+{
+	sg_rune_hull_profile_t standing_hull;
+	sg_rune_hull_profile_t crouching_hull;
+	uint32_t axis;
+
+	if (!artifact || !world || !identity_out || !ContentIdentityValid(
+		&world->content_identity))
+		return 0;
+	memset(identity_out, 0, sizeof(*identity_out));
+	if (!SG_HostEnginePhysicsLaw(&identity_out->physics))
+		return 0;
+	identity_out->bsp_content_id = ContentIdentityWord(&world->content_identity);
+	identity_out->entity_semantics_id = ((uint64_t)artifact->identity.entity_crc32 <<
+		32U) | artifact->identity.host_physics_id;
+	identity_out->physics_abi_id = SG_HOST_ENGINE_PMOVE_ABI_ID;
+	identity_out->source_set_identity =
+		((uint64_t)artifact->action_contract_crc32 << 32U) |
+		artifact->mechanism_contract_crc32;
+	identity_out->schema_id = ((uint64_t)artifact->magic << 32U) |
+		artifact->route_contract;
+	identity_out->producer_identity =
+		((uint64_t)artifact->header_crc32 << 32U) | artifact->payload_crc32;
+	if (!SG_HostEngineHullProfiles(&standing_hull, &crouching_hull))
+		return 0;
+	identity_out->standing_hull = standing_hull;
+	identity_out->crouching_hull = crouching_hull;
+	/* Gravity, velocity ceiling, and frame timing come from the live game
+	 * owner.  The retained RUNE must match them bit-for-bit; it never supplies
+	 * those values to the publication. */
+	if (memcmp(&artifact->identity.gravity,
+			&identity_out->physics.gravity, sizeof(artifact->identity.gravity)) != 0 ||
+		memcmp(&artifact->identity.maxvelocity,
+			&identity_out->physics.max_velocity,
+			sizeof(artifact->identity.maxvelocity)) != 0 ||
+		artifact->identity.airaccelerate != 0.0f ||
+		artifact->identity.physics_flags != SG_HOST_ENGINE_PHYSICS_FLAGS ||
+		artifact->identity.server_frame_ms != identity_out->physics.frame_ms ||
+		artifact->identity.pmove_substep_ms != identity_out->physics.substep_ms)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (!isfinite(identity_out->standing_hull.mins.value[axis]) ||
+			!isfinite(identity_out->standing_hull.maxs.value[axis]) ||
+			!isfinite(identity_out->crouching_hull.mins.value[axis]) ||
+			!isfinite(identity_out->crouching_hull.maxs.value[axis]))
+			return 0;
+	return IdentityValid(identity_out);
+}
+
+void SG_HostEngineRuntimeOwnerClearAcceptance(
+	sg_host_engine_runtime_t *runtime)
+{
+	if (!RuntimeShapeValid(runtime))
 		return;
-	acceptance->state = 0U;
-	acceptance->state_inverse = 0U;
-	acceptance->owner = NULL;
-	acceptance->snapshot = NULL;
-	memset(&acceptance->content_identity, 0,
-		sizeof(acceptance->content_identity));
-	free(acceptance);
+	runtime->accepted = 0;
+	runtime->accepted_rune = NULL;
+	memset(&runtime->accepted_artifact, 0, sizeof(runtime->accepted_artifact));
+	runtime->accepted_world = NULL;
+	memset(runtime->accepted_rune_sha256, 0,
+		sizeof(runtime->accepted_rune_sha256));
+	memset(&runtime->identity, 0, sizeof(runtime->identity));
+	memset(&runtime->content_identity, 0, sizeof(runtime->content_identity));
+	runtime->generation = 0U;
+	runtime->topology_revision = 0U;
+	RuntimeClearSubject(runtime);
 }
 
-sg_host_engine_runtime_status_t SG_HostEngineRuntimeJoinOwner(
-	sg_host_engine_runtime_t *runtime, const void *owner_token,
-	const sg_host_engine_runtime_acceptance_t *acceptance)
+sg_host_engine_runtime_status_t SG_HostEngineRuntimeOwnerInstallActiveRune(
+	sg_host_engine_runtime_t *runtime)
 {
-	const sg_rune_model_identity_t *identity;
+	rune_t *active;
+	const rune_artifact_t *artifact;
+	const sg_bsp_world_t *world;
+	sg_rune_model_identity_t identity;
 
-	if (owner_token != SG_HostEngineRuntimeOwnerToken())
+	if (!RuntimeShapeValid(runtime))
 		return SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT;
-	if (!RuntimeShapeValid(runtime) || !AcceptanceValid(acceptance))
-		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
-	identity = &acceptance->snapshot->model->identity;
-	if (!IdentityValid(identity))
-		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
+	SG_HostEngineRuntimeOwnerClearAcceptance(runtime);
+	world = SG_HostLawOwnerRetainedWorld();
+	if (!world || !world->source_bytes ||
+		world->source_size == 0U || !SG_BspWorldSourceIdentityCurrent(world))
+		return SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT;
 	if (!RuntimeCallbacksCurrent(runtime))
 		return SG_HOST_ENGINE_RUNTIME_DRIFT;
 	if (!SG_HostEngineRuntimeCurrent(runtime))
 		return SG_HOST_ENGINE_RUNTIME_LEVEL_UNAVAILABLE;
-	runtime->accepted_snapshot = acceptance->snapshot;
-	runtime->identity = *identity;
-	runtime->content_identity = acceptance->content_identity;
-	runtime->generation = acceptance->snapshot->identity;
-	runtime->topology_revision = acceptance->snapshot->topology_revision;
+	active = SG_Rune();
+	artifact = SG_RuneArtifact(active);
+	if (!active || !artifact || !SG_RunePublishedShapeValid(active) ||
+		!SG_RunePhysicsCompatible(active))
+		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
+	if (!ActiveArtifactMatchesLevel(artifact, &runtime->level,
+		runtime->mapname))
+		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
+	if (!RuneSHA256Valid(active->encoded_sha256))
+		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
+	if (world->engine_checksum != runtime->level.bsp_checksum)
+		return SG_HOST_ENGINE_RUNTIME_INVALID_CONTENT_ID;
+	if (!HostIdentityFromActiveArtifact(artifact, world, &identity))
+		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
+	runtime->accepted_rune = active;
+	runtime->accepted_artifact = *artifact;
+	runtime->accepted_world = world;
+	memcpy(runtime->accepted_rune_sha256, active->encoded_sha256,
+		sizeof(runtime->accepted_rune_sha256));
+	runtime->identity = identity;
+	runtime->content_identity = world->content_identity;
+	runtime->generation = RuneSHA256Fingerprint(active->encoded_sha256,
+		UINT64_C(1469598103934665603));
+	runtime->topology_revision = RuneTopologyFingerprint(active,
+		UINT64_C(1099511628211));
+	if (runtime->generation == 0U || runtime->topology_revision == 0U)
+	{
+		SG_HostEngineRuntimeOwnerClearAcceptance(runtime);
+		return SG_HOST_ENGINE_RUNTIME_INVALID_IDENTITY;
+	}
 	runtime->accepted = 1;
 	return SG_HOST_ENGINE_RUNTIME_OK;
 }
 
-sg_host_engine_runtime_status_t SG_HostEngineRuntimeBindSubjectOwner(
-	sg_host_engine_runtime_t *runtime, const void *owner_token,
-	uint32_t subject_index)
+sg_host_engine_runtime_status_t SG_HostEngineRuntimeOwnerBindActiveSubject(
+	sg_host_engine_runtime_t *runtime, uint32_t subject_index)
 {
 	edict_t *subject;
 
-	if (owner_token != SG_HostEngineRuntimeOwnerToken())
-		return SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT;
-	if (!RuntimeShapeValid(runtime) || !runtime->accepted ||
+	if (!RuntimeShapeValid(runtime))
+		return SG_HOST_ENGINE_RUNTIME_NOT_ACCEPTED;
+	/* A failed rebind must not leave the preceding bot as the active subject. */
+	RuntimeClearSubject(runtime);
+	if (!runtime->accepted ||
 		!RuntimeCallbacksCurrent(runtime) || !SG_HostEngineRuntimeCurrent(runtime))
 		return SG_HOST_ENGINE_RUNTIME_NOT_ACCEPTED;
 	if (!globals.edicts || globals.num_edicts <= 0 ||
 		subject_index >= (uint32_t)globals.num_edicts)
 		return SG_HOST_ENGINE_RUNTIME_HOST_UNAVAILABLE;
 	subject = &globals.edicts[subject_index];
-	if (!subject->inuse || !subject->client || subject->s.number <= 0 ||
+	if (!subject->inuse || !subject->client || !subject->client->pers.connected ||
+		!subject->classname || strcmp(subject->classname, "player") != 0 ||
+		subject->s.number <= 0 ||
 		(uint32_t)subject->s.number != subject_index)
 		return SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT;
 	runtime->subject = subject;
@@ -373,18 +618,36 @@ int SG_HostEngineRuntimeCurrent(const sg_host_engine_runtime_t *runtime)
 
 int SG_HostEngineRuntimeAccepted(const sg_host_engine_runtime_t *runtime)
 {
-	return RuntimeShapeValid(runtime) && runtime->accepted &&
-		runtime->accepted_snapshot &&
-		SG_RuneRuntimeSnapshotValid(runtime->accepted_snapshot) &&
-		ModelIdentityEqual(&runtime->identity,
-			&runtime->accepted_snapshot->model->identity) &&
-		runtime->generation == runtime->accepted_snapshot->identity &&
-		runtime->topology_revision ==
-			runtime->accepted_snapshot->topology_revision &&
-		IdentityValid(&runtime->identity) &&
-		ContentIdentityValid(&runtime->content_identity) &&
-		runtime->generation != 0U && runtime->topology_revision != 0U &&
-		SG_HostEngineRuntimeCurrent(runtime);
+	const rune_t *active;
+	const rune_artifact_t *artifact;
+
+	if (!RuntimeShapeValid(runtime) || !runtime->accepted ||
+		!runtime->accepted_rune || !runtime->accepted_world ||
+		!runtime->accepted_world->source_bytes ||
+		runtime->accepted_world->source_size == 0U ||
+		!IdentityValid(&runtime->identity) ||
+		!ContentIdentityValid(&runtime->content_identity) ||
+		runtime->generation == 0U || runtime->topology_revision == 0U ||
+		!RuntimeCallbacksCurrent(runtime) || !SG_HostEngineRuntimeCurrent(runtime) ||
+		!RuneSHA256Valid(runtime->accepted_rune_sha256))
+		return 0;
+	/* Re-read all live owner state.  A copied artifact or a caller's stale
+	 * snapshot is never sufficient to keep the runtime admitted. */
+	active = SG_Rune();
+	artifact = SG_RuneArtifact(active);
+	if (!active || active != runtime->accepted_rune || !artifact ||
+		!SG_RuneArtifactsEqual(artifact, &runtime->accepted_artifact) ||
+		strcmp(active->encoded_sha256, runtime->accepted_rune_sha256) != 0 ||
+		!SG_RunePhysicsCompatible(active) ||
+		!ActiveArtifactMatchesLevel(artifact, &runtime->level, runtime->mapname) ||
+		RuneTopologyFingerprint(active, UINT64_C(1099511628211)) !=
+			runtime->topology_revision ||
+		!SG_BspWorldSourceIdentityCurrent(runtime->accepted_world) ||
+		runtime->accepted_world->engine_checksum != runtime->level.bsp_checksum ||
+		memcmp(&runtime->accepted_world->content_identity,
+			&runtime->content_identity, sizeof(runtime->content_identity)) != 0)
+		return 0;
+	return 1;
 }
 
 static int TraceArgumentsValid(const float start[3], const float mins[3],
@@ -491,6 +754,77 @@ int SG_HostEngineRuntimeTrace(const sg_host_engine_runtime_t *runtime,
 	trace = runtime->trace(start_copy, mins ? mins_copy : NULL,
 		maxs ? maxs_copy : NULL, end_copy, runtime->subject, (int)mask);
 	return TraceConvert(&trace, trace_out);
+}
+
+static sg_host_hook_target_kind_t RuntimeTargetKind(edict_t *entity)
+{
+	if (!entity)
+		return SG_HOST_HOOK_TARGET_NONE;
+	if (entity->classname && strcmp(entity->classname, "bodyque") == 0)
+		return SG_HOST_HOOK_TARGET_BODYQUE;
+	/* Use the same validator and ordering as hook_touch.  Its deathmatch and
+	 * team rules are the human hook's definition of an attachable player. */
+	if (ctf_validateplayer(entity, CTF_TEAM_ANYTEAM))
+		return SG_HOST_HOOK_TARGET_PLAYER;
+	if (entity == &globals.edicts[0] || (entity->classname &&
+		strcmp(entity->classname, "worldspawn") == 0))
+		return SG_HOST_HOOK_TARGET_WORLD;
+	if (entity->classname && strncmp(entity->classname, "func", 4) == 0)
+		return SG_HOST_HOOK_TARGET_FUNC;
+	if (entity->classname && strncmp(entity->classname, "info_flag", 9) == 0)
+		return SG_HOST_HOOK_TARGET_INFO_FLAG;
+	return SG_HOST_HOOK_TARGET_OTHER;
+}
+
+int SG_HostEngineRuntimeHookTrace(const sg_host_engine_runtime_t *runtime,
+	const float start[3], const float end[3], sg_host_collision_contents_t mask,
+	sg_host_hook_collision_t *collision_out)
+{
+	trace_t trace;
+	float start_copy[3];
+	float end_copy[3];
+	sg_host_collision_trace_t normalized;
+	uint32_t entity_index;
+	edict_t *target;
+
+	if (!collision_out || !FiniteVector(start) || !FiniteVector(end) ||
+		!SG_HostEngineRuntimeAccepted(runtime) ||
+		!RuntimeSubjectCurrent(runtime))
+		return 0;
+	memset(collision_out, 0, sizeof(*collision_out));
+	memcpy(start_copy, start, sizeof(start_copy));
+	memcpy(end_copy, end, sizeof(end_copy));
+	trace = runtime->trace(start_copy, NULL, NULL, end_copy,
+		runtime->subject, (int)mask);
+	if (!TraceConvert(&trace, &normalized))
+		return 0;
+	if (trace.fraction >= 1.0f && !trace.startsolid && !trace.allsolid)
+		return 1;
+	/* A hit must retain the engine's exact target pointer.  Treating a
+	 * normalized model number as an entity class would allow a caller to turn
+	 * any mover into a valid FUNC target. */
+	if (!trace.ent || !EntityCurrent(trace.ent, &entity_index))
+		return 0;
+	target = trace.ent;
+	collision_out->hit = 1;
+	collision_out->owner_hit = target == runtime->subject;
+	collision_out->sky = (trace.surface &&
+		(trace.surface->flags & SG_HOST_SURFACE_SKY)) != 0;
+	collision_out->trace_epsilon_applied = 1;
+	if (collision_out->owner_hit)
+		return 1;
+	collision_out->target_kind = RuntimeTargetKind(target);
+	collision_out->target_identity = entity_index == 0U ?
+		runtime->identity.bsp_content_id : (uint64_t)entity_index;
+	collision_out->target_dead = target->deadflag != DEAD_NO;
+	/* hook_touch tests other->client directly after its target whitelist. */
+	if (target->client)
+		collision_out->same_team = runtime->subject->client->ctf.teamnum ==
+			target->client->ctf.teamnum;
+	/* T_Damage is deliberately not performed by this query.  The hook state
+	 * machine consumes this owner-derived record, and a live weapon owner is
+	 * responsible for reporting a post-damage death on its next touch. */
+	return 1;
 }
 
 int SG_HostEngineRuntimePointContents(
@@ -791,7 +1125,8 @@ void SG_HostEngineRuntimeDestroy(sg_host_engine_runtime_t *runtime)
 	runtime->trace = NULL;
 	runtime->pointcontents = NULL;
 	runtime->pmove = NULL;
-	runtime->accepted_snapshot = NULL;
+	runtime->accepted_rune = NULL;
+	runtime->accepted_world = NULL;
 	runtime->subject = NULL;
 	runtime->subject_client = NULL;
 	free(runtime);

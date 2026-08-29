@@ -8,6 +8,7 @@
 #include "sg_bsp_world.h"
 #include "sg_host_collision.h"
 #include "sg_host_pmove.h"
+#include "sg_host_hook_law.h"
 #include "sg_identity.h"
 
 /* The implementation owns the callback slots.  Callers receive only a
@@ -43,6 +44,11 @@ int SG_HostEngineRuntimeTrace(const sg_host_engine_runtime_t *runtime,
 	const float start[3], const float mins[3], const float maxs[3],
 	const float end[3], sg_host_collision_contents_t mask,
 	sg_host_collision_trace_t *trace_out);
+/* The same owner-issued trace, with hook target facts classified from the
+ * traced live edict.  This is the only runtime hook-collision seam. */
+int SG_HostEngineRuntimeHookTrace(const sg_host_engine_runtime_t *runtime,
+	const float start[3], const float end[3],
+	sg_host_collision_contents_t mask, sg_host_hook_collision_t *collision_out);
 int SG_HostEngineRuntimePointContents(
 	const sg_host_engine_runtime_t *runtime, const float point[3],
 	sg_host_collision_contents_t *contents_out);

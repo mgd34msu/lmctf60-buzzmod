@@ -191,6 +191,10 @@ typedef struct sg_bsp_world_s
 	sg_bsp_content_identity_t content_identity;
 	/* Exact Quake II CM_LoadMap checksum of the same retained file bytes. */
 	uint32_t engine_checksum;
+	/* The owner retains the exact byte stream used for parsing.  No later
+	 * authority may substitute a separately resolved loose or packed asset. */
+	uint8_t *source_bytes;
+	size_t source_size;
 	uint8_t *entities;
 	uint32_t entity_byte_count;
 	sg_bsp_plane_t *planes;
@@ -233,6 +237,14 @@ int SG_BspWorldLoadMemory(const void *data, size_t size,
 	sg_bsp_world_t **world_out, sg_bsp_error_t *error_out);
 int SG_BspWorldLoadFile(const char *path, sg_bsp_world_t **world_out,
 	sg_bsp_error_t *error_out);
+/* Exact Quake II Com_BlockChecksum for an already-retained byte stream. */
+int SG_BspWorldEngineChecksum(const void *data, size_t size,
+	uint32_t *checksum_out);
+/* SHA-256 identity for an already-retained byte stream. */
+int SG_BspWorldContentIdentity(const void *data, size_t size,
+	sg_bsp_content_identity_t *identity_out);
+/* Recompute both identities from the retained source bytes. */
+int SG_BspWorldSourceIdentityCurrent(const sg_bsp_world_t *world);
 void SG_BspWorldDestroy(sg_bsp_world_t *world);
 const char *SG_BspWorldErrorString(sg_bsp_error_code_t code);
 

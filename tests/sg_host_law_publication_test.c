@@ -4,11 +4,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../g_local.h"
+#include "../g_ctffunc.h"
+#undef world
 #ifndef q_exported
 #define q_exported
 #endif
 #include "../slipgate/sg_host_law_publication.h"
-#include "../game.h"
+#include "../slipgate/sg_host_engine_parity.h"
+#include "../slipgate/sg_rune.h"
 #include "../slipgate/sg_host_engine_runtime_private.h"
 #include "../slipgate/sg_host_law_owner.h"
 #include "../slipgate/sg_hooks.h"
@@ -32,7 +36,16 @@ static float test_live_rotating_door_speed = 100.0f;
 static sg_identity_status_t test_identity_snapshot_status =
 	SG_IDENTITY_UNAVAILABLE;
 static sg_level_identity_t test_level_identity;
+static rune_t test_runtime_rune;
+static sg_bsp_world_t test_world;
+static uint8_t test_runtime_source[] = {
+	0x52U, 0x55U, 0x4eU, 0x45U, 0x2dU, 0x68U, 0x6fU, 0x73U,
+	0x74U, 0x2dU, 0x77U, 0x6fU, 0x72U, 0x6cU, 0x64U, 0x00U
+};
 static int failures;
+
+rune_t *SG_Rune(void);
+const sg_bsp_world_t *SG_HostLawTestRetainedWorld(void);
 
 /* The publication unit test owns a synthetic authority.  The production
  * owner’s map-lifecycle bridge is linked in the game build and is deliberately
@@ -50,13 +63,75 @@ sg_identity_status_t SG_LevelIdentitySnapshot(const char *expected_mapname,
 	return test_identity_snapshot_status;
 }
 
+/* The focused test links the host-law owner without the full RUNE loader.  It
+ * still exposes the same owner functions used by production, so no test can
+ * issue a caller-shaped acceptance tuple. */
+rune_t *SG_Rune(void)
+{
+	return &test_runtime_rune;
+}
+
+qboolean ctf_validateplayer(edict_t *entity, int teamnum_wanted)
+{
+	if (!entity || !entity->client || !entity->inuse ||
+		!entity->client->pers.connected || !entity->classname ||
+		strcmp(entity->classname, "player") != 0)
+		return false;
+	if (teamnum_wanted == CTF_TEAM_IGNORETEAM)
+		return true;
+	if (teamnum_wanted == CTF_TEAM_ANYTEAM)
+		return entity->client->ctf.teamnum > CTF_TEAM_UNDEFINED &&
+			entity->client->ctf.teamnum < CTF_TEAM_LIMIT;
+	return teamnum_wanted == entity->client->ctf.teamnum;
+}
+
+const sg_bsp_world_t *SG_HostLawTestRetainedWorld(void)
+{
+	return test_world.source_bytes ? &test_world : NULL;
+}
+
+qboolean SG_RunePublishedShapeValid(const rune_t *rune)
+{
+	return rune == &test_runtime_rune;
+}
+
+const rune_artifact_t *SG_RuneArtifact(const rune_t *rune)
+{
+	return SG_RunePublishedShapeValid(rune) ? &rune->artifact : NULL;
+}
+
+int SG_RuneArtifactsEqual(const rune_artifact_t *left,
+	const rune_artifact_t *right)
+{
+	return left && right && memcmp(left, right, sizeof(*left)) == 0;
+}
+
+qboolean SG_RunePhysicsCompatible(const rune_t *rune)
+{
+	const rune_identity_t *identity;
+
+	if (!SG_RunePublishedShapeValid(rune) ||
+		test_identity_snapshot_status != SG_IDENTITY_OK)
+		return false;
+	identity = &rune->artifact.identity;
+	return identity->bsp_checksum == test_level_identity.bsp_checksum &&
+		identity->entity_crc32 == test_level_identity.entity_crc32 &&
+		identity->host_physics_id == test_level_identity.host_physics_id &&
+		identity->gravity == gravity_cvar.value &&
+		identity->airaccelerate == airaccelerate_cvar.value &&
+		identity->maxvelocity == maxvelocity_cvar.value &&
+		identity->pmove_substep_ms == SG_HOST_ENGINE_PMOVE_SUBSTEP_MS &&
+		identity->server_frame_ms == SG_HOST_ENGINE_FRAME_MS &&
+		memcmp(identity->map_name, test_level_identity.mapname,
+			sizeof(identity->map_name)) == 0;
+}
+
 /* This is a real BSP-shaped world. Pmove reaches it through the production
  * host collision adapter; no test callback supplies movement authority. */
 static sg_bsp_plane_t planes[1];
 static sg_bsp_node_t nodes[1];
 static sg_bsp_leaf_t leaves[2];
 static sg_bsp_model_t models[1];
-static sg_bsp_world_t test_world;
 static sg_bsp_plane_t hook_planes[2];
 static sg_bsp_node_t hook_nodes[1];
 static sg_bsp_leaf_t hook_leaves[2];
@@ -70,9 +145,7 @@ static gclient_t runtime_clients[2];
 static csurface_t runtime_surface;
 static edict_t *runtime_last_passent;
 static int runtime_trace_calls;
-static int runtime_return_mover;
-static int runtime_return_self;
-static int runtime_return_world;
+static edict_t *runtime_return_entity;
 
 static trace_t RuntimeTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 	vec3_t end, edict_t *passent, int mask)
@@ -89,14 +162,11 @@ static trace_t RuntimeTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 	trace.surface = &runtime_surface;
 	runtime_last_passent = passent;
 	runtime_trace_calls++;
-	if (runtime_return_world || runtime_return_mover || (runtime_return_self &&
-		passent != &runtime_edicts[1]))
+	if (runtime_return_entity)
 	{
 		trace.fraction = 0.5f;
 		trace.endpos[0] = (start[0] + end[0]) * 0.5f;
-		trace.ent = runtime_return_world ? &runtime_edicts[0] : runtime_return_mover ?
-			&runtime_edicts[2] :
-			&runtime_edicts[1];
+		trace.ent = runtime_return_entity;
 		trace.contents = CONTENTS_SOLID;
 		trace.plane.normal[0] = -1.0f;
 		trace.plane.normal[2] = 0.0f;
@@ -158,6 +228,20 @@ static void SetVector(float value[3], float x, float y, float z)
 	value[2] = z;
 }
 
+static void TestEngineChecksumVectors(void)
+{
+	static const uint8_t empty = 0U;
+	static const uint8_t abc[] = { 'a', 'b', 'c' };
+	uint32_t checksum = 0U;
+
+	/* RFC 1320 MD4 digests, reduced exactly as Quake II's
+	 * Com_BlockChecksum XORs its four little-endian words. */
+	CHECK(SG_BspWorldEngineChecksum(&empty, 0U, &checksum));
+	CHECK(checksum == UINT32_C(0xc6f640b7));
+	CHECK(SG_BspWorldEngineChecksum(abc, sizeof(abc), &checksum));
+	CHECK(checksum == UINT32_C(0x5da10e2e));
+}
+
 static void InitializeWorld(void)
 {
 	memset(&test_world, 0, sizeof(test_world));
@@ -179,6 +263,13 @@ static void InitializeWorld(void)
 	test_world.leaf_count = 2U;
 	test_world.models = models;
 	test_world.model_count = 1U;
+	test_world.source_bytes = test_runtime_source;
+	test_world.source_size = sizeof(test_runtime_source);
+	CHECK(SG_BspWorldContentIdentity(test_runtime_source,
+		sizeof(test_runtime_source), &test_world.content_identity));
+	CHECK(SG_BspWorldEngineChecksum(test_runtime_source,
+		sizeof(test_runtime_source), &test_world.engine_checksum));
+	CHECK(SG_BspWorldSourceIdentityCurrent(&test_world));
 }
 
 static void InitializeHookWorld(void)
@@ -413,19 +504,19 @@ static void TestEngineBindingAndParity(void)
 static void TestEngineRuntimeOwnerBinding(void)
 {
 	sg_host_engine_runtime_t *runtime = NULL;
-	sg_host_engine_runtime_acceptance_t *acceptance = NULL;
 	sg_host_engine_runtime_status_t runtime_status;
-	sg_rune_model_t model;
-	sg_rune_cell_t cells[1];
-	sg_rune_phase_basis_t model_phases[1];
-	sg_phase_coordinate_t snapshot_phases[1];
-	sg_rune_runtime_snapshot_t snapshot;
-	sg_bsp_content_identity_t content_identity;
+	sg_host_law_result_t law_result;
 	sg_host_collision_trace_t trace;
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error;
+	sg_host_law_publication_t *publication = NULL;
 	sg_host_hook_fire_request_t fire_request;
+	sg_host_hook_step_t fire_step;
+	rune_artifact_t saved_artifact;
+	uint32_t saved_checksum;
+	uint8_t saved_source_byte;
+	uint8_t saved_identity_byte;
 	float start[3] = { 0.0f, 0.0f, 0.0f };
 	float mins[3] = { -16.0f, -16.0f, -24.0f };
 	float maxs[3] = { 16.0f, 16.0f, 32.0f };
@@ -434,22 +525,97 @@ static void TestEngineRuntimeOwnerBinding(void)
 	sg_host_collision_contents_t contents;
 
 	memset(&test_level_identity, 0, sizeof(test_level_identity));
-	test_level_identity.bsp_checksum = 0x12345678U;
+	test_level_identity.bsp_checksum = test_world.engine_checksum;
 	test_level_identity.entity_crc32 = 0x9abcdef0U;
 	test_level_identity.host_physics_id = SG_HOST_PHYSICS_EPOCH;
 	memcpy(test_level_identity.mapname, "runtime_map",
 		sizeof("runtime_map"));
+	memset(&test_runtime_rune, 0, sizeof(test_runtime_rune));
+	test_runtime_rune.artifact.magic = RUNE_ARTIFACT_MAGIC;
+	test_runtime_rune.artifact.route_contract = RUNE_ROUTE_CONTRACT_LOCAL_ONLY;
+	test_runtime_rune.artifact.payload_crc32 = 0x11111111U;
+	test_runtime_rune.artifact.header_crc32 = 0x22222222U;
+	test_runtime_rune.artifact.action_contract_crc32 = 0x33333333U;
+	test_runtime_rune.artifact.mechanism_contract_crc32 = 0x44444444U;
+	test_runtime_rune.artifact.num_seeds = 1U;
+	test_runtime_rune.artifact.num_links = 1U;
+	test_runtime_rune.artifact.num_mechanism_nodes = 1U;
+	test_runtime_rune.artifact.num_mechanism_edges = 1U;
+	test_runtime_rune.artifact.num_inventory_edges = 1U;
+	test_runtime_rune.artifact.num_mechanism_plans = 1U;
+	test_runtime_rune.artifact.string_bytes = 1U;
+	test_runtime_rune.artifact.identity.bsp_checksum =
+		test_level_identity.bsp_checksum;
+	test_runtime_rune.artifact.identity.entity_crc32 =
+		test_level_identity.entity_crc32;
+	test_runtime_rune.artifact.identity.physics_flags = 0U;
+	test_runtime_rune.artifact.identity.gravity = gravity_cvar.value;
+	test_runtime_rune.artifact.identity.airaccelerate = airaccelerate_cvar.value;
+	test_runtime_rune.artifact.identity.maxvelocity = maxvelocity_cvar.value;
+	test_runtime_rune.artifact.identity.pmove_substep_ms =
+		SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
+	test_runtime_rune.artifact.identity.server_frame_ms = SG_HOST_ENGINE_FRAME_MS;
+	test_runtime_rune.artifact.identity.host_physics_id =
+		test_level_identity.host_physics_id;
+	memcpy(test_runtime_rune.artifact.identity.map_name, "runtime_map",
+		sizeof("runtime_map"));
+	test_runtime_rune.hdr.magic = (int)RUNE_ARTIFACT_MAGIC;
+	test_runtime_rune.hdr.num_seeds = 1;
+	test_runtime_rune.hdr.num_links = 1;
+	memcpy(test_runtime_rune.hdr.mapname, "runtime_map",
+		sizeof("runtime_map"));
+	{
+		static rune_seed_t seeds[1];
+		static rune_link_t links[1];
+		static int first_link[1];
+		static int next_link[1];
+		static byte linked_seed[1];
+		static rune_mechanism_node_t mechanism_nodes[1];
+		static rune_mechanism_edge_t mechanism_edges[1];
+		static rune_mechanism_plan_t mechanism_plans[1];
+		static unsigned char mechanism_strings[1];
+
+		memset(seeds, 0, sizeof(seeds));
+		memset(links, 0, sizeof(links));
+		memset(first_link, 0, sizeof(first_link));
+		memset(next_link, 0, sizeof(next_link));
+		memset(linked_seed, 0, sizeof(linked_seed));
+		memset(mechanism_nodes, 0, sizeof(mechanism_nodes));
+		memset(mechanism_edges, 0, sizeof(mechanism_edges));
+		memset(mechanism_plans, 0, sizeof(mechanism_plans));
+		memset(mechanism_strings, 0, sizeof(mechanism_strings));
+		links[0].from = 0;
+		links[0].to = 0;
+		test_runtime_rune.seeds = seeds;
+		test_runtime_rune.links = links;
+		test_runtime_rune.first_link = first_link;
+		test_runtime_rune.next_link = next_link;
+		test_runtime_rune.linked_seed = linked_seed;
+		test_runtime_rune.mechanism_nodes = mechanism_nodes;
+		test_runtime_rune.mechanism_edges = mechanism_edges;
+		test_runtime_rune.mechanism_plans = mechanism_plans;
+		test_runtime_rune.mechanism_strings = mechanism_strings;
+	}
+	memcpy(test_runtime_rune.encoded_sha256,
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		sizeof(test_runtime_rune.encoded_sha256));
 	memset(runtime_edicts, 0, sizeof(runtime_edicts));
 	memset(runtime_clients, 0, sizeof(runtime_clients));
 	runtime_edicts[0].inuse = true;
 	runtime_edicts[0].s.number = 0;
 	runtime_edicts[0].s.modelindex = 1;
+	runtime_edicts[0].classname = "worldspawn";
 	runtime_edicts[1].s.number = 1;
 	runtime_edicts[1].inuse = true;
 	runtime_edicts[1].client = &runtime_clients[1];
+	runtime_edicts[1].classname = "player";
+	runtime_edicts[1].s.modelindex = 1;
+	runtime_clients[1].pers.connected = true;
+	runtime_clients[1].ctf.teamnum = CTF_TEAM_RED;
 	runtime_edicts[2].s.number = 2;
 	runtime_edicts[2].s.modelindex = 7;
 	runtime_edicts[2].inuse = true;
+	runtime_edicts[2].classname = "func_door";
 	globals.edicts = runtime_edicts;
 	globals.num_edicts = 3;
 	gi.trace = RuntimeTrace;
@@ -457,65 +623,27 @@ static void TestEngineRuntimeOwnerBinding(void)
 	gi.Pmove = RuntimePmove;
 	runtime_last_passent = NULL;
 	runtime_trace_calls = 0;
-	runtime_return_mover = 0;
-	runtime_return_self = 1;
-	runtime_return_world = 0;
+	runtime_return_entity = NULL;
 	test_identity_snapshot_status = SG_IDENTITY_OK;
 	runtime_status = SG_HostEngineRuntimeBegin("runtime_map", &runtime);
 	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK && runtime != NULL);
-	memset(&model, 0, sizeof(model));
-	model.version = SG_RUNE_MODEL_VERSION;
-	model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
-	model.flags = SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
-		SG_RUNE_MODEL_NO_RUNTIME_ACTORS;
-	model.identity = Identity();
-	model.completeness.state = SG_RUNE_COMPLETENESS_COMPLETE;
-	model.completeness.expected_cells = 1U;
-	model.completeness.covered_cells = 1U;
-	model.cells = cells;
-	model.cell_count = 1U;
-	model.phases = model_phases;
-	model.phase_count = 1U;
-	memset(cells, 0, sizeof(cells));
-	memset(model_phases, 0, sizeof(model_phases));
-	snapshot_phases[0].phase_id = 0U;
-	snapshot_phases[0].cell_id = 0U;
-	memset(&snapshot, 0, sizeof(snapshot));
-	snapshot.identity = UINT64_C(0x7001);
-	snapshot.topology_revision = UINT64_C(0x9001);
-	snapshot.cell_count = 1U;
-	snapshot.phase_count = 1U;
-	snapshot.region_count = 1U;
-	snapshot.model = &model;
-	snapshot.phases = snapshot_phases;
-	memset(&content_identity, 0xa5, sizeof(content_identity));
-	runtime_status = SG_HostEngineRuntimeAcceptanceIssueOwner(
-		(void *)1, &snapshot, &content_identity, &acceptance);
-	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT &&
-		acceptance == NULL);
-	runtime_status = SG_HostEngineRuntimeAcceptanceIssueOwner(
-		SG_HostEngineRuntimeOwnerToken(), &snapshot, &content_identity,
-		&acceptance);
-	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK && acceptance != NULL);
-	runtime_status = SG_HostEngineRuntimeJoinOwner(runtime, (void *)1,
-		acceptance);
-	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT &&
-		!SG_HostEngineRuntimeAccepted(runtime));
-	runtime_status = SG_HostEngineRuntimeJoinOwner(runtime,
-		SG_HostEngineRuntimeOwnerToken(), acceptance);
+	runtime_status = SG_HostEngineRuntimeOwnerInstallActiveRune(runtime);
 	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK &&
 		SG_HostEngineRuntimeAccepted(runtime));
-	runtime_status = SG_HostEngineRuntimeBindSubjectOwner(runtime, (void *)1,
-		1U);
+	runtime_status = SG_HostEngineRuntimeOwnerBindActiveSubject(runtime, 1U);
+	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK);
+	runtime_status = SG_HostEngineRuntimeOwnerBindActiveSubject(runtime, 2U);
 	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_INVALID_ARGUMENT);
-	runtime_status = SG_HostEngineRuntimeBindSubjectOwner(runtime,
-		SG_HostEngineRuntimeOwnerToken(), 1U);
+	CHECK(!SG_HostEngineRuntimeTrace(runtime, start, mins, maxs, end,
+		SG_HOST_MASK_PLAYER_SOLID, &trace));
+	runtime_status = SG_HostEngineRuntimeOwnerBindActiveSubject(runtime, 1U);
 	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK);
 	CHECK(SG_HostEngineRuntimeCurrent(runtime));
+	runtime_return_entity = &runtime_edicts[1];
 	CHECK(SG_HostEngineRuntimeTrace(runtime, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	CHECK(runtime_last_passent == &runtime_edicts[1]);
-	CHECK(trace.instance_id == 0U);
+	CHECK(trace.instance_id == 1U && trace.model_index == 1U);
 	/* A recycled or torn-down subject invalidates the owner-bound query even
 	 * though the map/callback publication itself is still current. */
 	runtime_edicts[1].inuse = false;
@@ -526,9 +654,7 @@ static void TestEngineRuntimeOwnerBinding(void)
 	CHECK(!SG_HostEngineRuntimeTrace(runtime, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	runtime_edicts[1].s.number = 1;
-	runtime_return_self = 0;
-	runtime_return_mover = 1;
-	runtime_return_world = 0;
+	runtime_return_entity = &runtime_edicts[2];
 	CHECK(SG_HostEngineRuntimeTrace(runtime, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	CHECK(trace.instance_id == 2U && trace.model_index == 7U);
@@ -550,29 +676,70 @@ static void TestEngineRuntimeOwnerBinding(void)
 	/* The engine may report the world edict itself (slot zero) as support;
 	 * normalize it to the authenticated WORLD identity without confusing it
 	 * with a caller-created mover. */
-	runtime_return_mover = 0;
-	runtime_return_world = 1;
+	runtime_return_entity = &runtime_edicts[0];
 	CHECK(SG_HostEngineRuntimePmove(runtime, &request, &pmove_result,
 		&pmove_error));
 	CHECK(pmove_result.grounded && pmove_result.support_instance_id == 0U &&
 		pmove_result.support_model_index == SG_HOST_COLLISION_MODEL_WORLD);
-	/* The active snapshot is the lifetime authority.  A generation or topology
-	 * replacement, including a one-field mutation of the retained snapshot,
-	 * invalidates every runtime query. */
-	snapshot.identity++;
+	/* Same-count graph topology changes are still drift: the owner fingerprints
+	 * the actual active arrays instead of treating counts as a revision. */
+	test_runtime_rune.links[0].to = 1;
 	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
-	CHECK(!SG_HostEngineRuntimePmove(runtime, &request, &pmove_result,
-		&pmove_error));
-	snapshot.identity--;
+	test_runtime_rune.links[0].to = 0;
 	CHECK(SG_HostEngineRuntimeAccepted(runtime));
-	snapshot.topology_revision++;
+	/* Native record padding is not topology.  The revision encodes named
+	 * fields, so changing an otherwise-unused padding byte cannot create drift. */
+	if (offsetof(rune_link_t, mechanism_plan) >
+		offsetof(rune_link_t, mode) + sizeof(test_runtime_rune.links[0].mode))
+	{
+		unsigned char *link_bytes =
+			(unsigned char *)(void *)&test_runtime_rune.links[0];
+		size_t padding = offsetof(rune_link_t, mode) +
+			sizeof(test_runtime_rune.links[0].mode);
+		unsigned char saved_padding = link_bytes[padding];
+
+		link_bytes[padding] ^= UINT8_C(0xa5);
+		CHECK(SG_HostEngineRuntimeAccepted(runtime));
+		link_bytes[padding] = saved_padding;
+	}
+	saved_artifact = test_runtime_rune.artifact;
+	test_runtime_rune.artifact.identity.gravity = 100.0f;
 	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
-	snapshot.topology_revision--;
+	test_runtime_rune.artifact = saved_artifact;
 	CHECK(SG_HostEngineRuntimeAccepted(runtime));
-	model.identity.physics.gravity = 100.0f;
+	saved_source_byte = test_runtime_source[0];
+	test_runtime_source[0] ^= 1U;
 	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
-	model.identity.physics.gravity = 800.0f;
+	test_runtime_source[0] = saved_source_byte;
 	CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	saved_identity_byte = test_world.content_identity.bytes[0];
+	test_world.content_identity.bytes[0] ^= 1U;
+	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
+	test_world.content_identity.bytes[0] = saved_identity_byte;
+	CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	saved_checksum = test_world.engine_checksum;
+	test_world.engine_checksum ^= 1U;
+	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
+	test_world.engine_checksum = saved_checksum;
+	CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	{
+		char saved_sha = test_runtime_rune.encoded_sha256[0];
+
+		test_runtime_rune.encoded_sha256[0] = saved_sha == '0' ? '1' : '0';
+		CHECK(!SG_HostEngineRuntimeAccepted(runtime));
+		test_runtime_rune.encoded_sha256[0] = saved_sha;
+		CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	}
+	{
+		char saved_sha = test_runtime_rune.encoded_sha256[10];
+
+		CHECK(saved_sha >= 'a' && saved_sha <= 'f');
+		test_runtime_rune.encoded_sha256[10] =
+			(char)(saved_sha - ('a' - 'A'));
+		CHECK(!SG_HostEngineRuntimeAccepted(runtime));
+		test_runtime_rune.encoded_sha256[10] = saved_sha;
+		CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	}
 	/* The exact callback identity is part of the runtime lifetime, not merely
 	 * the ABI shape. */
 	gi.Pmove = Pmove;
@@ -587,43 +754,49 @@ static void TestEngineRuntimeOwnerBinding(void)
 	test_level_identity.entity_crc32--;
 	CHECK(SG_HostEngineRuntimeCurrent(runtime));
 	CHECK(SG_HostEngineRuntimeAccepted(runtime));
-	/* The production owner consumes the same opaque acceptance handle.  Its
-	 * publication exposes the owner-issued runtime collision view and no raw
-	 * callback seam. */
-	SG_HostLawProductionReset();
-	CHECK(SG_HostLawProductionBeginLevel("runtime_map").status ==
-		SG_HOST_LAW_OK);
-	CHECK(SG_HostLawProductionInstallAccepted(acceptance).status ==
-		SG_HOST_LAW_OK);
-	CHECK(SG_HostLawProductionBindSubject(1U).status == SG_HOST_LAW_OK);
-	CHECK(SG_HostLawProductionEnginePointContents(point, &contents).status ==
-		SG_HOST_LAW_OK);
-	CHECK(SG_HostLawProductionEngineTrace(start, mins, maxs, end,
-		SG_HOST_MASK_PLAYER_SOLID, &trace).status == SG_HOST_LAW_OK);
-	CHECK(runtime_last_passent == &runtime_edicts[1]);
+	law_result = SG_HostLawPublicationIssueRuntime(runtime, &publication);
+	CHECK(law_result.status == SG_HOST_LAW_OK && publication != NULL);
 	memset(&fire_request, 0, sizeof(fire_request));
 	fire_request.start[0] = 0.0f;
 	fire_request.end[0] = 64.0f;
 	fire_request.phase = SG_HOST_HOOK_IDLE;
 	fire_request.attack_held = 1;
-	runtime_return_mover = 0;
-	runtime_return_self = 0;
-	runtime_return_world = 1;
-	{
-		sg_host_hook_step_t fire_step;
-
-		CHECK(SG_HostLawPublicationHookFire(
-			SG_HostLawProductionPublication(), NULL, &fire_request,
-			&fire_step).status == SG_HOST_LAW_OK && fire_step.first_hit &&
-			fire_step.attached && fire_step.target_kind ==
-			SG_HOST_HOOK_TARGET_WORLD && fire_step.target_identity ==
-			UINT64_C(0x101));
-	}
-	CHECK(SG_HostLawProductionRevalidate().status == SG_HOST_LAW_OK);
-	SG_HostLawProductionReset();
+	runtime_return_entity = &runtime_edicts[2];
+	CHECK(SG_HostLawPublicationHookFire(publication, NULL, &fire_request,
+		&fire_step).status == SG_HOST_LAW_OK && fire_step.first_hit &&
+		fire_step.attached && fire_step.target_kind == SG_HOST_HOOK_TARGET_FUNC &&
+		fire_step.target_identity == UINT64_C(2));
+	/* Target class, team relationship, dead state, sky, and owner-hit all come
+	 * from the traced edict.  The request's owner id is intentionally bogus. */
+	runtime_edicts[2].client = &runtime_clients[0];
+	runtime_edicts[2].classname = "player";
+	runtime_clients[0].pers.connected = true;
+	runtime_clients[0].ctf.teamnum = CTF_TEAM_RED;
+	CHECK(SG_HostLawPublicationHookFire(publication, NULL, &fire_request,
+		&fire_step).status == SG_HOST_LAW_OK && fire_step.aborted &&
+		!fire_step.attached);
+	runtime_clients[0].ctf.teamnum = CTF_TEAM_BLUE;
+	runtime_edicts[2].deadflag = DEAD_DEAD;
+	CHECK(SG_HostLawPublicationHookFire(publication, NULL, &fire_request,
+		&fire_step).status == SG_HOST_LAW_OK && fire_step.aborted);
+	runtime_edicts[2].deadflag = DEAD_NO;
+	runtime_surface.flags = SG_HOST_SURFACE_SKY;
+	runtime_return_entity = &runtime_edicts[2];
+	CHECK(SG_HostLawPublicationHookFire(publication, NULL, &fire_request,
+		&fire_step).status == SG_HOST_LAW_OK && fire_step.aborted);
+	runtime_surface.flags = 0;
+	runtime_return_entity = &runtime_edicts[1];
+	CHECK(SG_HostLawPublicationHookFire(publication, NULL, &fire_request,
+		&fire_step).status == SG_HOST_LAW_OK && !fire_step.first_hit &&
+		!fire_step.attached && !fire_step.aborted);
+	runtime_return_entity = &runtime_edicts[2];
+	runtime_edicts[2].client = NULL;
+	runtime_edicts[2].classname = "misc_model";
+	CHECK(SG_HostLawPublicationHookFire(publication, NULL, &fire_request,
+		&fire_step).status == SG_HOST_LAW_OK && fire_step.aborted);
+	SG_HostLawPublicationDestroy(publication);
 	test_identity_snapshot_status = SG_IDENTITY_UNAVAILABLE;
 	CHECK(!SG_HostEngineRuntimeCurrent(runtime));
-	SG_HostEngineRuntimeAcceptanceDestroyOwner(acceptance);
 	SG_HostEngineRuntimeDestroy(runtime);
 	globals.edicts = NULL;
 	globals.num_edicts = 0;
@@ -1049,9 +1222,7 @@ static void TestMechanismEquations(void)
 
 static void TestOwnerFailClosedAndDrift(void)
 {
-	sg_host_collision_authority_t authority = Authority();
 	const sg_host_collision_authority_t *borrowed = NULL;
-	const sg_host_law_publication_t *publication;
 	sg_host_law_result_t result;
 
 	SG_HostLawProductionReset();
@@ -1062,23 +1233,19 @@ static void TestOwnerFailClosedAndDrift(void)
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE &&
 		result.field == SG_HOST_LAW_FIELD_PMOVE_ABI &&
 		SG_HostLawProductionPublication() == NULL);
-	test_identity_snapshot_status = SG_IDENTITY_UNAVAILABLE;
-	result = SG_HostLawProductionInstall(&authority);
-	CHECK(result.status == SG_HOST_LAW_OK);
-	publication = SG_HostLawProductionPublication();
-	CHECK(publication != NULL);
-	result = SG_HostLawProductionCollisionAuthority(&borrowed);
-	CHECK(result.status == SG_HOST_LAW_OK && borrowed != NULL &&
-		borrowed->world == &test_world);
-	result = SG_HostLawProductionRevalidate();
-	CHECK(result.status == SG_HOST_LAW_OK);
-	gravity_cvar.value = 799.0f;
-	result = SG_HostLawProductionRevalidate();
-	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
-	CHECK(SG_HostLawProductionPublication() == NULL);
-	gravity_cvar.value = 800.0f;
+	/* BeginLevel is a capture-only phase.  Without the owner-resolved retained
+	 * BSP it cannot publish either construction or runtime authority. */
+	gi.trace = RuntimeTrace;
+	gi.pointcontents = RuntimePointContents;
+	gi.Pmove = RuntimePmove;
+	result = SG_HostLawProductionInstallActiveRune();
+	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE &&
+		SG_HostLawProductionPublication() == NULL);
 	result = SG_HostLawProductionCollisionAuthority(&borrowed);
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE && borrowed == NULL);
+	gi.trace = NULL;
+	gi.pointcontents = NULL;
+	gi.Pmove = Pmove;
 }
 
 int main(void)
@@ -1100,6 +1267,7 @@ int main(void)
 	gi.Pmove = Pmove;
 	gi.cvar = TestCvar;
 	InitializeWorld();
+	TestEngineChecksumVectors();
 
 	TestEngineBindingAndParity();
 	TestEngineRuntimeOwnerBinding();

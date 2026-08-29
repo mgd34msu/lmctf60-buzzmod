@@ -248,61 +248,69 @@ static void BspMd4Transform(bsp_md4_t *context)
 #define SG_MD4_F(xv, yv, zv) (((xv) & (yv)) | (~(xv) & (zv)))
 #define SG_MD4_G(xv, yv, zv) (((xv) & (yv)) | ((xv) & (zv)) | ((yv) & (zv)))
 #define SG_MD4_H(xv, yv, zv) ((xv) ^ (yv) ^ (zv))
-#define SG_MD4_STEP(fn, av, bv, cv, dv, xv, shift) \
-	(av) = BspMd4RotateLeft((av) + fn((bv), (cv), (dv)) + (xv), shift)
+#define SG_MD4_STEP(fn, av, bv, cv, dv, xv, shift, constant) \
+		(av) = BspMd4RotateLeft((av) + fn((bv), (cv), (dv)) + (xv) + \
+			(constant), (shift))
 
-	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[0], 3U);
-	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[1], 7U);
-	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[2], 11U);
-	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[3], 19U);
-	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[4], 3U);
-	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[5], 7U);
-	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[6], 11U);
-	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[7], 19U);
-	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[8], 3U);
-	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[9], 7U);
-	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[10], 11U);
-	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[11], 19U);
-	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[12], 3U);
-	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[13], 7U);
-	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[14], 11U);
-	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[15], 19U);
+#define SG_MD4_K1 UINT32_C(0x00000000)
+#define SG_MD4_K2 UINT32_C(0x5a827999)
+#define SG_MD4_K3 UINT32_C(0x6ed9eba1)
 
-	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[0], 3U);
-	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[4], 5U);
-	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[8], 9U);
-	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[12], 13U);
-	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[1], 3U);
-	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[5], 5U);
-	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[9], 9U);
-	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[13], 13U);
-	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[2], 3U);
-	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[6], 5U);
-	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[10], 9U);
-	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[14], 13U);
-	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[3], 3U);
-	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[7], 5U);
-	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[11], 9U);
-	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[15], 13U);
+		SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[0], 3U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[1], 7U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[2], 11U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[3], 19U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[4], 3U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[5], 7U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[6], 11U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[7], 19U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[8], 3U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[9], 7U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[10], 11U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[11], 19U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[12], 3U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[13], 7U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[14], 11U, SG_MD4_K1);
+		SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[15], 19U, SG_MD4_K1);
 
-	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[0], 3U);
-	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[8], 9U);
-	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[4], 11U);
-	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[12], 15U);
-	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[2], 3U);
-	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[10], 9U);
-	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[6], 11U);
-	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[14], 15U);
-	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[1], 3U);
-	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[9], 9U);
-	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[5], 11U);
-	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[13], 15U);
-	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[3], 3U);
-	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[11], 9U);
-	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[7], 11U);
-	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[15], 15U);
+		SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[0], 3U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[4], 5U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[8], 9U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[12], 13U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[1], 3U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[5], 5U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[9], 9U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[13], 13U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[2], 3U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[6], 5U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[10], 9U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[14], 13U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[3], 3U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[7], 5U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[11], 9U, SG_MD4_K2);
+		SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[15], 13U, SG_MD4_K2);
+
+		SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[0], 3U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[8], 9U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[4], 11U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[12], 15U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[2], 3U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[10], 9U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[6], 11U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[14], 15U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[1], 3U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[9], 9U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[5], 11U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[13], 15U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[3], 3U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[11], 9U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[7], 11U, SG_MD4_K3);
+		SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[15], 15U, SG_MD4_K3);
 
 #undef SG_MD4_STEP
+#undef SG_MD4_K3
+#undef SG_MD4_K2
+#undef SG_MD4_K1
 #undef SG_MD4_H
 #undef SG_MD4_G
 #undef SG_MD4_F
@@ -377,6 +385,36 @@ static int BspEngineChecksum(const uint8_t *data, size_t bytes,
 	BspMd4Update(&context, data, bytes);
 	*checksum_out = BspMd4Final(&context);
 	return 1;
+}
+
+int SG_BspWorldEngineChecksum(const void *data, size_t bytes,
+	uint32_t *checksum_out)
+{
+	return BspEngineChecksum((const uint8_t *)data, bytes, checksum_out);
+}
+
+int SG_BspWorldContentIdentity(const void *data, size_t bytes,
+	sg_bsp_content_identity_t *identity_out)
+{
+	if (!data || !identity_out)
+		return 0;
+	BspSha256((const uint8_t *)data, bytes, identity_out);
+	return 1;
+}
+
+int SG_BspWorldSourceIdentityCurrent(const sg_bsp_world_t *world)
+{
+	sg_bsp_content_identity_t content_identity;
+	uint32_t engine_checksum;
+
+	if (!world || !world->source_bytes || world->source_size == 0U ||
+		!BspEngineChecksum(world->source_bytes, world->source_size,
+			&engine_checksum))
+		return 0;
+	BspSha256(world->source_bytes, world->source_size, &content_identity);
+	return engine_checksum == world->engine_checksum &&
+		memcmp(&content_identity, &world->content_identity,
+			sizeof(content_identity)) == 0;
 }
 
 _Static_assert(CHAR_BIT == 8, "IBSP decoding requires eight-bit bytes");
@@ -1540,6 +1578,16 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 	}
 	BspSha256(data, size, &world->content_identity);
 	world->engine_checksum = engine_checksum;
+	world->source_bytes = malloc(size);
+	if (!world->source_bytes)
+	{
+		BspSetError(error_out, SG_BSP_ERROR_OUT_OF_MEMORY,
+			SG_BSP_LUMP_ENTITIES, 0);
+		SG_BspWorldDestroy(world);
+		return 0;
+	}
+	memcpy(world->source_bytes, data, size);
+	world->source_size = size;
 	if (!BspLoadEntities(world, &lumps[SG_BSP_LUMP_ENTITIES], error_out) ||
 		!BspLoadPlanes(world, &lumps[SG_BSP_LUMP_PLANES], error_out) ||
 		!BspLoadVertices(world, &lumps[SG_BSP_LUMP_VERTICES], error_out) ||
@@ -1626,6 +1674,7 @@ void SG_BspWorldDestroy(sg_bsp_world_t *world)
 {
 	if (!world)
 		return;
+	free(world->source_bytes);
 	free(world->entities);
 	free(world->planes);
 	free(world->vertices);
