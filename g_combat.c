@@ -5,7 +5,7 @@
 #include "slipgate/sg_cvars.h"
 
 void SG_CombatHit(edict_t *att, edict_t *victim);
-void SG_NoteDamage(edict_t *victim, edict_t *att, unsigned long att_ctfid,
+void SG_NoteDamage(edict_t *victim, edict_t *att, uint64_t att_ctfid,
 	int dmg, int means, vec3_t d);
 
 /*

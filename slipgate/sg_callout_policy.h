@@ -7,8 +7,8 @@
  * slot is admitted as a new client life.
  */
 static inline int
-SG_CalloutSpeakerCurrent(unsigned long expected_ctfid,
-    unsigned long current_ctfid)
+SG_CalloutSpeakerCurrent(uint64_t expected_ctfid,
+    uint64_t current_ctfid)
 {
 	return expected_ctfid != 0 && current_ctfid == expected_ctfid;
 }

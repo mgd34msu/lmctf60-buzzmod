@@ -30,7 +30,7 @@ static sg_strike_frame_t Frame(float now)
 }
 
 static void AddAttacker(sg_strike_frame_t *frame, int slot,
-	uint32_t life, int tier, int enemy_goal)
+	uint64_t life, int tier, int enemy_goal)
 {
 	frame->slot[slot].present = 1;
 	frame->slot[slot].alive = 1;

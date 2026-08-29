@@ -351,7 +351,7 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 typedef struct
 {
 	int			enemy;			/* edict index of held target, 0 = none */
-	unsigned long	enemy_ctfid;	/* exact target life occupying that slot */
+	uint64_t	enemy_ctfid;	/* exact target life occupying that slot */
 	float		acquired_at;	/* level.time the target was acquired */
 
 	vec3_t		err;			/* aim error direction, unit length */
@@ -410,7 +410,7 @@ typedef struct
 	 * behind a wall is still the target the range is being held against; the
 	 * two are separate so the acquisition reset above keeps its exact meaning. */
 	int			enemy_last;		/* edict index, outlives the sighting */
-	unsigned long	enemy_last_ctfid; /* life identity of that sighting */
+	uint64_t	enemy_last_ctfid; /* life identity of that sighting */
 	vec3_t		enemy_org;
 	float		enemy_time;		/* level.time of the last successful scan */
 	int			enemy_weapon;	/* weapon index seen in their hands, -1 none */
@@ -422,7 +422,7 @@ typedef struct
 	 * process storage inert on its first frame, while ctfid prevents a later
 	 * life in the same slot from inheriting the pursuit. */
 	int			lost_client;
-	unsigned long	lost_ctfid;		/* exact client life being pursued */
+	uint64_t	lost_ctfid;		/* exact client life being pursued */
 	int			lost_seed;
 	float		lost_time;		/* when the target was lost */
 	float		lost_until;		/* when the hold expires; <= level.time = none */
@@ -3132,7 +3132,7 @@ void SG_CombatAlertFromBeliefs(edict_t *self, const int *goal_field)
 
 /* Current live entity, not its retained seed belief. */
 static edict_t *Combat_EnemyIdentityCurrent(edict_t *self, int enemy_index,
-                                            unsigned long enemy_ctfid)
+                                            uint64_t enemy_ctfid)
 {
 	edict_t *en;
 	int self_team;

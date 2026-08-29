@@ -16,7 +16,7 @@
  * permanently owning one side.
  */
 static int
-SG_CrowdPassSide(unsigned long self_ctfid, unsigned long mate_ctfid)
+SG_CrowdPassSide(uint64_t self_ctfid, uint64_t mate_ctfid)
 {
 	uint64_t lo;
 	uint64_t hi;
@@ -25,8 +25,8 @@ SG_CrowdPassSide(unsigned long self_ctfid, unsigned long mate_ctfid)
 	if (self_ctfid == 0 || mate_ctfid == 0 || self_ctfid == mate_ctfid)
 		return 0;
 
-	lo = (uint64_t)(self_ctfid < mate_ctfid ? self_ctfid : mate_ctfid);
-	hi = (uint64_t)(self_ctfid < mate_ctfid ? mate_ctfid : self_ctfid);
+	lo = self_ctfid < mate_ctfid ? self_ctfid : mate_ctfid;
+	hi = self_ctfid < mate_ctfid ? mate_ctfid : self_ctfid;
 	mixed = lo * UINT64_C(0x9e3779b97f4a7c15);
 	mixed ^= hi + UINT64_C(0x85ebca77c2b2ae63) + (mixed << 6) +
 	         (mixed >> 2);

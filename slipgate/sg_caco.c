@@ -107,7 +107,7 @@ typedef struct
 {
 	qboolean	pending;
 	int			speaker;            /* client number that will say it */
-	unsigned long	speaker_ctfid;     /* exact client life that queued it */
+	uint64_t	speaker_ctfid;     /* exact client life that queued it */
 	float		due;
 	char		line[160];
 } sg_callout_t;
@@ -1586,7 +1586,7 @@ static qboolean Caco_Hitscan(int mod)
 
 
 void SG_NoteDamage(edict_t *victim, edict_t *attacker,
-	unsigned long attacker_ctfid, int damage, int mod, vec3_t dir)
+	uint64_t attacker_ctfid, int damage, int mod, vec3_t dir)
 {
 	sg_damage_hit_t	*ring, *slot;
 	vec3_t			eye, from;

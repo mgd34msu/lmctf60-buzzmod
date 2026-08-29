@@ -208,7 +208,7 @@ static void ResetNetwork(void)
 }
 
 static void SetupClient(int index, const char *name, qboolean bot,
-	qboolean spectator, unsigned long ctfid)
+	qboolean spectator, uint64_t ctfid)
 {
 	edict_t *ent = &edicts[index];
 
@@ -225,7 +225,7 @@ static void SetupClient(int index, const char *name, qboolean bot,
 }
 
 static void SetupLiveBot(int index, int slot, const char *name,
-	unsigned long ctfid)
+	uint64_t ctfid)
 {
 	SetupClient(index, name, true, false, ctfid);
 	sg_bots[slot].ent = &edicts[index];

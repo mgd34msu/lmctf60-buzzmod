@@ -2206,7 +2206,7 @@ static void StrikePrepareFrame(void)
 		input->carrying = SG_BotCarrying(ent);
 		input->attack_eligible = StrikeAttackEligible(sg_strike_role_cache[i],
 		    input->carrying, SG_ChatOrderedRole(ent));
-		input->life_id = (uint32_t)ent->client->ctf.ctfid;
+		input->life_id = ent->client->ctf.ctfid;
 		if (!SG_CombatWeaponState(ent, &weapon))
 			memset(&weapon, 0, sizeof(weapon));
 		input->weapon_tier = weapon.available_tier;

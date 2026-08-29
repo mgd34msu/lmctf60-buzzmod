@@ -248,7 +248,7 @@ static void DefenseCombatZero(usercmd_t *cmd)
  * entity, flag and combat target may change between ClientThink sub-steps. */
 static qboolean DefenseCombatAuthority(edict_t *e, sg_bot_t *bot, int team,
 	const sg_think_t *tc, qboolean as_ok, edict_t *planned_stand,
-	edict_t *planned_enemy, unsigned long planned_enemy_ctfid,
+	edict_t *planned_enemy, uint64_t planned_enemy_ctfid,
 	edict_t **stand_out, edict_t **enemy_out)
 {
 	edict_t *flag, *stand, *enemy;
@@ -458,7 +458,7 @@ static qboolean AimedFireViewReady(const usercmd_t *cmd,
  * current target and support immediately before the command boundary. */
 static qboolean DefenseCombatWriteFinal(edict_t *e, sg_bot_t *bot, int team,
 	const sg_think_t *tc, qboolean as_ok, qboolean active, edict_t *stand,
-	edict_t *enemy, unsigned long enemy_ctfid, const vec3_t direction,
+	edict_t *enemy, uint64_t enemy_ctfid, const vec3_t direction,
 	usercmd_t *cmd)
 {
 	vec3_t combat_basis, combat_fwd, combat_right;
@@ -512,7 +512,7 @@ int SG_DefenseCombatTestAdapter(edict_t *e, sg_bot_t *bot, int team,
 	edict_t *stand = NULL;
 	vec3_t direction;
 	sg_think_t tc;
-	unsigned long enemy_ctfid = 0;
+	uint64_t enemy_ctfid = 0;
 	qboolean final_as_ok = false;
 	qboolean active;
 
@@ -6642,7 +6642,7 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 	qboolean door_suffix_grant = false;
 	edict_t *defcombat_enemy = NULL;
 	edict_t *defcombat_stand = NULL;
-	unsigned long defcombat_enemy_ctfid = 0;
+	uint64_t defcombat_enemy_ctfid = 0;
 	short weave_side = 0;
 	short aimed_fire_yaw = 0, aimed_fire_pitch = 0;
 	vec3_t d, defcombat_dir;

@@ -46,7 +46,7 @@ static sg_strike_frame_t Frame(float now)
 }
 
 static void AddAttacker(sg_strike_frame_t *frame, int slot,
-	uint32_t life, int weapon_tier, int enemy_goal)
+	uint64_t life, int weapon_tier, int enemy_goal)
 {
 	frame->slot[slot].present = 1;
 	frame->slot[slot].alive = 1;
@@ -118,6 +118,15 @@ static void TestWeaponDeadlineIsPerLifeAndImmutable(void)
 	CHECK(SG_StrikeStep(&team, &frame));
 	CHECK((team.weapon_ready_mask & Bit(0)) != 0u);
 	CHECK(!SG_StrikeMemberNeedsWeapon(&team, 0, frame.now));
+
+	/* The new host life differs only above the Windows unsigned-long width. */
+	frame.now = 27.0f;
+	frame.slot[0].life_id = UINT64_C(0x1000000c8);
+	frame.slot[0].weapon_tier = 1;
+	CHECK(SG_StrikeStep(&team, &frame));
+	CHECK(team.member_life[0] == UINT64_C(0x1000000c8));
+	CHECK(fabsf(team.weapon_deadline[0] - 32.0f) < 0.001f);
+	CHECK(SG_StrikeMemberNeedsWeapon(&team, 0, frame.now));
 }
 
 static void TestWeaponDeadlineSurvivesSameLifeReentry(void)

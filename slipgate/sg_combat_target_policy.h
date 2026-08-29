@@ -22,7 +22,7 @@ static inline byte SG_CombatTargetClaimTrigger(byte buttons,
  * before using the live entity. */
 static inline qboolean SG_CombatLiveEnemyIdentityAllowed(int self_team,
 	int target_team, int maxclients, int num_edicts, int target_edict_index,
-	unsigned long expected_ctfid, unsigned long current_ctfid,
+	uint64_t expected_ctfid, uint64_t current_ctfid,
 	qboolean target_inuse, qboolean target_client, qboolean target_live,
 	qboolean target_noclip)
 {

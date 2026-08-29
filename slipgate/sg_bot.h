@@ -254,7 +254,7 @@ typedef struct sg_bot_s
 	 * current-life CTF identity prevent a reconnect from inheriting a turn;
 	 * expiry keeps this a local engagement preference, not navigation state. */
 	int			defcombat_enemy_slot;
-	unsigned long	defcombat_enemy_ctfid;
+	uint64_t	defcombat_enemy_ctfid;
 	int			defcombat_tangent_sign;
 	float			defcombat_tangent_until;
 	qboolean	was_carrying;       /* for the carry-duration bookend */
@@ -384,7 +384,7 @@ typedef struct sg_bot_s
 	 * switch/cook deadlines distinguish this transaction from other grenade
 	 * uses sharing nade_phase. */
 	int			nade_target_slot;       /* g_edicts index, 0 means no bound target */
-	unsigned long	nade_target_ctfid;      /* current-life CTF identity for that slot */
+	uint64_t	nade_target_ctfid;      /* current-life CTF identity for that slot */
 	float		nade_target_switch_until;
 	float		nade_target_cook_until;
 	qboolean	flow_release;   /* cut early on momentum: no landing brake */

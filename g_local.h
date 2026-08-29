@@ -832,7 +832,7 @@ void	G_InitEdict (edict_t *e);
 edict_t	*G_Spawn (void);
 void	G_FreeEdict (edict_t *e);
 void	G_ProjectileOwnerSet (edict_t *projectile, edict_t *owner);
-unsigned long G_DamageAttackerCtfid (const edict_t *inflictor,
+uint64_t G_DamageAttackerCtfid (const edict_t *inflictor,
 	const edict_t *attacker);
 
 void	G_TouchTriggers (edict_t *ent);
@@ -1348,7 +1348,7 @@ struct gclient_s
 	 * so a disconnect/reuse cannot turn a named POV request into somebody else. */
 	qboolean	povlock_active;
 	int			povlock_target_index;
-	unsigned long	povlock_target_ctfid;
+	uint64_t	povlock_target_ctfid;
 
 	/* `povlock` explicitly arms one map-local recording session.  The
 	 * instantaneous ctfid above may disappear across an ordinary respawn;
@@ -1360,7 +1360,7 @@ struct gclient_s
 	qboolean	pov_record_wait_respawn;
 	int			pov_record_sg_slot;
 	unsigned long long pov_record_sg_instance;
-	unsigned long	pov_record_viewer_ctfid;
+	uint64_t	pov_record_viewer_ctfid;
 
 
 // SKWiD MOD
@@ -1457,7 +1457,7 @@ struct edict_s
 
 	//================================
 	int			movetype;
-	unsigned long	projectile_owner_ctfid;
+	uint64_t	projectile_owner_ctfid;
 	int			flags;
 
 	char		*model;

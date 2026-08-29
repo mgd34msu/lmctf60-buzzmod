@@ -432,7 +432,7 @@ typedef struct
 {
 	qboolean	pending;
 	int			speaker;        /* client number */
-	unsigned long	speaker_ctfid; /* exact bot generation that queued it */
+	uint64_t	speaker_ctfid; /* exact bot generation that queued it */
 	float		due;
 	char		line[SG_CHAT_LINE];
 
@@ -1431,7 +1431,7 @@ typedef struct
 {
 	qboolean	pending;
 	int			speaker;                /* client number */
-	unsigned long	speaker_ctfid;         /* exact bot generation */
+	uint64_t	speaker_ctfid;         /* exact bot generation */
 	float		due;
 	char		sound[SG_RADIO_SOUND];
 } sg_radioq_t;

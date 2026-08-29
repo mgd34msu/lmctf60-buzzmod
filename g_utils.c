@@ -495,7 +495,7 @@ void G_ProjectileOwnerSet(edict_t *projectile, edict_t *owner)
 	    owner && owner->client ? owner->client->ctf.ctfid : 0;
 }
 
-unsigned long G_DamageAttackerCtfid(const edict_t *inflictor,
+uint64_t G_DamageAttackerCtfid(const edict_t *inflictor,
 	const edict_t *attacker)
 {
 	if (!inflictor || !attacker || !attacker->client)

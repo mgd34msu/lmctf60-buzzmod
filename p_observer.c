@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "slipgate/sg_human_trace.h"
+#include <inttypes.h>
 #include "g_ctffunc.h"
 #include "stdlog.h"
 
@@ -175,7 +176,7 @@ qboolean Camera_Think(edict_t *ent)
 	trace_t trace;
 	edict_t * player=NULL;
 	edict_t * next_player=NULL;
-	unsigned long cur_val=0, next_val=999999999; //this could be trouble every billion players
+	uint64_t cur_val = 0, next_val = UINT64_MAX;
 
 
 
@@ -230,7 +231,7 @@ qboolean Camera_Think(edict_t *ent)
 		if (!ent->client->camera_target)
 			gi.centerprintf (ent, "Free movement observer mode.");
 		else if (ent->client->camera_target->client)
-			gi.centerprintf(ent, "Now observing: [%d] %s", 
+			gi.centerprintf(ent, "Now observing: [%" PRIu64 "] %s",
 			ent->client->camera_target->client->ctf.ctfid,
 			ent->client->camera_target->client->pers.netname);
 	}

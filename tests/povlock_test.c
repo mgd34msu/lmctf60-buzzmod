@@ -139,7 +139,7 @@ static void ResetFixture(void)
 }
 
 static edict_t *AdminClient(int index, const char *name, int team,
-	qboolean spectator, int flags, unsigned long ctfid)
+	qboolean spectator, int flags, uint64_t ctfid)
 {
 	edict_t *ent = &edicts[index];
 
@@ -195,7 +195,7 @@ edict_t *SG_BotPOVResolve(int slot, unsigned long long instance)
 }
 
 static void SetupClient(int index, const char *name, qboolean bot,
-	qboolean spectator, int score, unsigned long ctfid)
+	qboolean spectator, int score, uint64_t ctfid)
 {
 	edict_t *ent = &edicts[index];
 
@@ -214,10 +214,11 @@ static void SetupClient(int index, const char *name, qboolean bot,
 static int TestSelectionAndIdentity(void)
 {
 	edict_t *viewer = &edicts[1];
+	uint64_t alpha_life = UINT64_C(0x100000066);
 
 	ResetFixture();
 	SetupClient(1, "Recorder", false, true, 0, 1);
-	SetupClient(2, "Alpha", true, false, 7, 102);
+	SetupClient(2, "Alpha", true, false, 7, alpha_life);
 	SetupClient(3, "beta", true, false, 11, 103);
 	SetupClient(4, "Human", false, false, 99, 104);
 	SetupClient(5, "Legacy", true, false, 50, 105);
@@ -228,7 +229,7 @@ static int TestSelectionAndIdentity(void)
 	CHECK(!POVLock_CommandNameIs("chasecam"));
 	CHECK(POVLock_Command(viewer, "aLpHa"));
 	CHECK(viewer->client->povlock_target_index == 2);
-	CHECK(viewer->client->povlock_target_ctfid == 102);
+	CHECK(viewer->client->povlock_target_ctfid == alpha_life);
 	CHECK(viewer->client->pov_record_active);
 	CHECK(viewer->client->pov_record_pending);
 	CHECK(viewer->client->pov_record_sg_slot == 0);

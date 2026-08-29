@@ -17,6 +17,7 @@ qboolean SG_OwnsBot(edict_t * ent);
 int SG_RemoveBots(void);
 
 #define Function(f) {#f, f}
+#define GAME_SAVE_LAYOUT_VERSION __DATE__ " ctfid64-v1"
 
 mmove_t mmove_reloc;
 
@@ -670,7 +671,7 @@ void WriteGame(char* filename, qboolean autosave)
 	}
 
 	memset(str, 0, sizeof(str));
-	strcpy(str, __DATE__);
+	strcpy(str, GAME_SAVE_LAYOUT_VERSION);
 	fwrite(str, sizeof(str), 1, f);
 
 	game.autosaved = autosave;
@@ -711,10 +712,11 @@ void ReadGame(char* filename)
 	count = fread(str, sizeof(str), 1, f);
 	if (count)
 		; // don't worry, be happy
-	if (strcmp(str, __DATE__))
+	if (strcmp(str, GAME_SAVE_LAYOUT_VERSION))
 	{
 		fclose(f);
-		gi.error("Savegame from an older version.\n");
+		gi.error("Savegame from an incompatible client layout.\n");
+		return;
 	}
 
 	g_edicts = gi.TagMalloc(game.maxentities * sizeof(g_edicts[0]), TAG_GAME);

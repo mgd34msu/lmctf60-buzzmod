@@ -93,7 +93,7 @@ typedef struct sg_strike_slot_input_s
 	int alive;
 	int attack_eligible;
 	int carrying;
-	uint32_t life_id;
+	uint64_t life_id;
 	int weapon_tier;
 	int enemy_flag_goal_ms;
 	int recover_goal_ms;
@@ -146,7 +146,7 @@ typedef struct sg_strike_team_s
 	sg_strike_duty_t duty[SG_STRIKE_MAX_SLOTS];
 	/* Retained while a slot is outside member_mask so same-life re-selection
 	 * cannot re-arm its immutable usable-weapon deadline. */
-	uint32_t member_life[SG_STRIKE_MAX_SLOTS];
+	uint64_t member_life[SG_STRIKE_MAX_SLOTS];
 	float weapon_deadline[SG_STRIKE_MAX_SLOTS];
 	float phase_since;
 	float form_deadline;

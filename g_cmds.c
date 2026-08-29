@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include <inttypes.h>
 #include "ctf_file_io.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNoteChat from Cmd_Say_f
 #include "g_menu.h"
@@ -1924,7 +1925,7 @@ void Cmd_Users_f (edict_t *ent)
 			strcat(status, "(REF)  ");
 		else
 			strcat(status, "PLAYER ");
-		sprintf(message, " id: %lu %s frags: %d\n",
+		sprintf(message, " id: %" PRIu64 " %s frags: %d\n",
 			player->client->ctf.ctfid, 
 			player->client->pers.netname,
 			player->client->ps.stats[STAT_FRAGS]);
@@ -1938,7 +1939,7 @@ void Cmd_Users_f (edict_t *ent)
 //Force a client to observer (they probably went AFK and didn't come back)
 void Cmd_Fobserve_f (edict_t *ent)
 {
-	unsigned long i=0;
+	uint64_t i=0;
 	char *p;
 	edict_t * target = NULL;
 	edict_t * player = NULL;
@@ -1952,7 +1953,7 @@ void Cmd_Fobserve_f (edict_t *ent)
 	}
 
 	p = gi.args();
-	if (!sscanf(p, "%lu", &i))
+	if (!sscanf(p, "%" SCNu64, &i))
 	{
 		ctf_SafePrint(ent, PRINT_HIGH, "Usage: fobserve <number>\nUse \"users\" to list players by number.\n");
 		return;
@@ -2031,7 +2032,7 @@ void Cmd_QuadTime_f (edict_t *ent) {
 
 void Cmd_Kick_f (edict_t *ent)
 {
-	unsigned long i=0;
+	uint64_t i=0;
 	char *p;
 	edict_t * target = NULL;
 	edict_t * player = NULL;
@@ -2045,7 +2046,7 @@ void Cmd_Kick_f (edict_t *ent)
 	}
 
 	p = gi.args();
-	if (!sscanf(p, "%lu", &i))
+	if (!sscanf(p, "%" SCNu64, &i))
 	{
 		ctf_SafePrint(ent, PRINT_HIGH, "Usage: kick <number>\nUse \"users\" to list players by number.\n");
 		return;
@@ -2334,7 +2335,7 @@ void Cmd_PlayerList_f(edict_t *ent)
 		if (!e2->inuse)
 			continue;
 
-		Com_sprintf(st, sizeof(st), "%02d:%02d %4d %3d %s%s id: %lu\n",
+		Com_sprintf(st, sizeof(st), "%02d:%02d %4d %3d %s%s id: %" PRIu64 "\n",
 			(level.framenum - e2->client->resp.enterframe) / 600,
 			((level.framenum - e2->client->resp.enterframe) % 600)/10,
 			e2->client->ping,

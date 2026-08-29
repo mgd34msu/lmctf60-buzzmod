@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include <inttypes.h>
 #include "g_menu.h"
 #include "ui_text.h" // bounded appender, replaces the hand-guarded strcat loop below
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -1856,13 +1857,13 @@ void Ref_Map_Menu (edict_t *ent)
 void SelectKick(edict_t* ent)
 {
 	int i; //initialize j or you read off into memory
-	unsigned long id;
+	uint64_t id;
 	char kickcommand[MAX_INFO_STRING];
 
 	i = ent->client->menuselect;
-	if (sscanf(ent->client->localmenu[i].text, "%lu", &id))
+	if (sscanf(ent->client->localmenu[i].text, "%" SCNu64, &id))
 	{
-		Com_sprintf(kickcommand, sizeof kickcommand, "\nctfkick %lu\n", id);
+		Com_sprintf(kickcommand, sizeof kickcommand, "\nctfkick %" PRIu64 "\n", id);
 		ForceCommand(ent, kickcommand);
 	}
 }
@@ -1884,7 +1885,8 @@ void Ref_Kick_Menu (edict_t *ent)
 	player = ctf_findplayer(NULL, NULL, CTF_TEAM_IGNORETEAM);
 	while (player && i < 17)
 	{
-		sprintf(message, "%lu %s", player->client->ctf.ctfid, player->client->pers.netname);
+		sprintf(message, "%" PRIu64 " %s", player->client->ctf.ctfid,
+			player->client->pers.netname);
 		Menu_Set(ent, i, message, SelectKick);
 		player = ctf_findplayer(player, NULL, CTF_TEAM_IGNORETEAM);
 		i++;

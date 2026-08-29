@@ -7,10 +7,10 @@
 /* The dodge clock belongs to the admitted bot life, never to its recyclable
  * client slot or the squad-wide level clock. */
 static uint64_t
-SG_WeaveIdentityMix(uint64_t bot_instance, unsigned long client_ctfid)
+SG_WeaveIdentityMix(uint64_t bot_instance, uint64_t client_ctfid)
 {
 	uint64_t value = bot_instance ^
-	    ((uint64_t)client_ctfid + UINT64_C(0x9e3779b97f4a7c15));
+	    (client_ctfid + UINT64_C(0x9e3779b97f4a7c15));
 
 	value ^= value >> 30;
 	value *= UINT64_C(0xbf58476d1ce4e5b9);
@@ -21,7 +21,7 @@ SG_WeaveIdentityMix(uint64_t bot_instance, unsigned long client_ctfid)
 }
 
 static float
-SG_WeavePeriod(uint64_t bot_instance, unsigned long client_ctfid)
+SG_WeavePeriod(uint64_t bot_instance, uint64_t client_ctfid)
 {
 	uint64_t mixed = SG_WeaveIdentityMix(bot_instance, client_ctfid);
 
@@ -29,7 +29,7 @@ SG_WeavePeriod(uint64_t bot_instance, unsigned long client_ctfid)
 }
 
 static int
-SG_WeaveSideAt(uint64_t bot_instance, unsigned long client_ctfid,
+SG_WeaveSideAt(uint64_t bot_instance, uint64_t client_ctfid,
     float level_time)
 {
 	uint64_t mixed = SG_WeaveIdentityMix(bot_instance, client_ctfid);
@@ -47,7 +47,7 @@ SG_WeaveSideAt(uint64_t bot_instance, unsigned long client_ctfid,
  * same sine origin.  Use a distinct part of the identity mix so sharing a
  * weave period does not imply sharing an air-strafe shoulder. */
 static float
-SG_AirStrafeInitialPhase(uint64_t bot_instance, unsigned long client_ctfid)
+SG_AirStrafeInitialPhase(uint64_t bot_instance, uint64_t client_ctfid)
 {
 	uint64_t mixed = SG_WeaveIdentityMix(
 	    bot_instance ^ UINT64_C(0xd6e8feb86659fd93), client_ctfid);
