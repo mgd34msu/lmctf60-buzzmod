@@ -362,6 +362,7 @@ RUNE_BINDING_TEST_ALL_ARTIFACTS := \
 RUNE_ACCEPT_BIN := runeaccept.make
 RUNE_ACCEPT_OBJS := .runeaccept.make.o \
 	.sg_rune_file_under_test.make.o \
+	.sg_rune_v2_content_identity_under_test.make.o \
 	.sg_rune_artifact_loader_under_test.make.o \
 	.sg_rune_codec_under_test.make.o \
 	.sg_rune_action_under_test.make.o \
@@ -372,9 +373,13 @@ RUNE_ACCEPT_ALL_ARTIFACTS := \
 	.runeaccept.gnu.o .runeaccept.gnu.d \
 	.sg_rune_file_under_test.gnu.o \
 	.sg_rune_file_under_test.gnu.d \
+	.sg_rune_v2_content_identity_under_test.gnu.o \
+	.sg_rune_v2_content_identity_under_test.gnu.d \
 	.runeaccept.make.o .runeaccept.make.d \
 	.sg_rune_file_under_test.make.o \
-	.sg_rune_file_under_test.make.d
+	.sg_rune_file_under_test.make.d \
+	.sg_rune_v2_content_identity_under_test.make.o \
+	.sg_rune_v2_content_identity_under_test.make.d
 SIDECAR_WIRE_TEST_BIN := sg_sidecar_wire_test.make
 SIDECAR_WIRE_TEST_OBJS := .sg_sidecar_wire_test.make.o \
 	.sg_sidecar_wire_under_test.make.o .sg_rune_crc_under_test.make.o
@@ -1179,6 +1184,8 @@ OBJS := \
 	slipgate/sg_rune_codec.o \
 	slipgate/sg_rune_artifact_loader.o \
 	slipgate/sg_rune_artifact_writer.o \
+	slipgate/sg_rune_v2_content_identity.o \
+	slipgate/sg_rune_v2_exact_snapshot.o \
 	slipgate/sg_rune_file.o \
 	slipgate/sg_rune_stream.o \
 	slipgate/sg_rune_mechanism_catalog.o \
@@ -1355,7 +1362,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-accept-tool \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
-	rune-v2-contract-test rune-v2-independent-reader-test rune-v2-belief-test \
+	rune-v2-contract-test rune-v2-exact-snapshot-test \
+	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	weapon-effect-profile-test \
 	project-completion-plan-test \
@@ -1448,7 +1456,17 @@ slipgate/sg_rune_binding.o: slipgate/sg_rune_binding.c \
 		slipgate/sg_action_contract.generated.h q_shared.h
 slipgate/sg_rune_file.o: slipgate/sg_rune_file.c \
 		slipgate/sg_rune_file.h slipgate/sg_rune_artifact_loader.h \
-		slipgate/sg_rune_codec.h slipgate/sg_rune.h q_shared.h
+		slipgate/sg_rune_codec.h slipgate/sg_rune.h \
+		slipgate/sg_rune_v2_content_identity.h q_shared.h
+slipgate/sg_rune_v2_content_identity.o: \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h slipgate/sg_rune_v2_wire.h
+slipgate/sg_rune_v2_exact_snapshot.o: \
+		slipgate/sg_rune_v2_exact_snapshot.c \
+		slipgate/sg_rune_v2_exact_snapshot.h \
+		slipgate/sg_rune_v2_exact_snapshot_private.h \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_artifact_publication_internal.h
 slipgate/sg_rune_stream.o: slipgate/sg_rune_stream.c \
 		slipgate/sg_rune_stream.h slipgate/sg_rune_artifact_writer.h \
 		slipgate/sg_rune_codec.h slipgate/sg_rune.h q_shared.h
@@ -2596,7 +2614,17 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 .sg_rune_file_under_test.make.o: \
 		slipgate/sg_rune_file.c slipgate/sg_rune_file.h \
 		slipgate/sg_rune_artifact_loader.h slipgate/sg_rune.h \
+		slipgate/sg_rune_v2_content_identity.h \
 		$(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_v2_content_identity_under_test.make.o: \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_wire.h $(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \
@@ -3789,7 +3817,20 @@ weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
 	$(E) [TEST] weapon effect profiles
 	$(Q)sh tests/run_sg_weapon_effect_profile_test.sh
 
-rune-v2-contract-test: rune-v2-independent-reader-test rune-v2-belief-test \
+rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
+		tests/sg_rune_v2_content_identity_test.c \
+		tests/sg_rune_v2_content_identity_probe.c \
+		tests/test_sg_rune_v2_content_identity.py \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_exact_snapshot.c \
+		slipgate/sg_rune_v2_exact_snapshot.h \
+		slipgate/sg_rune_v2_exact_snapshot_private.h
+	$(E) [TEST] exact RUNE v2 snapshots
+	$(Q)sh tests/run_sg_rune_v2_exact_snapshot_test.sh
+
+rune-v2-contract-test: rune-v2-exact-snapshot-test \
+		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		weapon-effect-profile-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
