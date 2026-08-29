@@ -1,4 +1,3 @@
-/* Sparse earned-information beliefs over immutable RUNE runtime phases. */
 #ifndef SG_BELIEF_CONTRACT_H
 #define SG_BELIEF_CONTRACT_H
 

@@ -1,4 +1,3 @@
-/* Pure authenticated host-observation adapters for phase-space beliefs. */
 #ifndef SG_PERCEPTION_EVIDENCE_H
 #define SG_PERCEPTION_EVIDENCE_H
 
