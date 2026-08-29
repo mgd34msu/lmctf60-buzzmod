@@ -7,8 +7,15 @@
 typedef struct sg_host_engine_parity_context_s
 {
 	uint32_t mode;
+	uint32_t probe_seed;
+	int collision_origin_x;
+	int timing_velocity;
+	int forwardmove;
+	float water_surface_z;
 	uint32_t trace_calls;
 	uint32_t contents_calls;
+	const sg_host_engine_pmove_binding_t *binding;
+	sg_host_engine_parity_inputs_t inputs;
 	csurface_t surface;
 	int marker;
 } sg_host_engine_parity_context_t;
@@ -56,6 +63,40 @@ static void HashPmove(uint64_t *hash, uint32_t tag, const pmove_t *pmove)
 	HashBytes(hash, &pmove->waterlevel, sizeof(pmove->waterlevel));
 }
 
+static void HashInputs(uint64_t *hash,
+	const sg_host_engine_parity_inputs_t *inputs)
+{
+	HashBytes(hash, &inputs->gravity, sizeof(inputs->gravity));
+	HashBytes(hash, &inputs->max_velocity, sizeof(inputs->max_velocity));
+	HashBytes(hash, &inputs->airaccelerate, sizeof(inputs->airaccelerate));
+	HashBytes(hash, &inputs->frame_ms, sizeof(inputs->frame_ms));
+	HashBytes(hash, &inputs->substep_ms, sizeof(inputs->substep_ms));
+}
+
+/* Derive the probe geometry from the bound map physics.  The suite still
+ * checks the same six observable behaviors, but a replacement callback cannot
+ * pass by recognizing one public table of fixed origins and commands. */
+static uint32_t ProbeSeed(const sg_host_engine_parity_inputs_t *inputs)
+{
+	uint64_t hash = UINT64_C(1469598103934665603);
+
+	HashInputs(&hash, inputs);
+	return (uint32_t)(hash ^ (hash >> 32));
+}
+
+static void ConfigureProbes(sg_host_engine_parity_context_t *context)
+{
+	context->probe_seed = ProbeSeed(&context->inputs);
+	context->collision_origin_x = -32 -
+		(int)(context->probe_seed % 32U);
+	context->timing_velocity = 800 +
+		(int)(context->probe_seed % 128U);
+	context->forwardmove = 200 +
+		(int)(context->probe_seed % 101U);
+	context->water_surface_z = 1000.0f +
+		(float)(context->probe_seed % 97U);
+}
+
 static trace_t ParityTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 	vec3_t end)
 {
@@ -79,11 +120,13 @@ static trace_t ParityTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 		return trace;
 	}
 	if (sg_parity_context->mode == SG_HOST_ENGINE_PARITY_COLLISION &&
-		start[0] < 0.5f && end[0] > 0.5f)
+		start[0] < (float)sg_parity_context->collision_origin_x + 0.5f &&
+		end[0] > (float)sg_parity_context->collision_origin_x + 0.5f)
 	{
-		fraction = (0.5f - start[0]) / (end[0] - start[0]);
+		fraction = ((float)sg_parity_context->collision_origin_x + 0.5f -
+			start[0]) / (end[0] - start[0]);
 		trace.fraction = fraction < 0.0f ? 0.0f : fraction;
-		trace.endpos[0] = 0.5f;
+		trace.endpos[0] = (float)sg_parity_context->collision_origin_x + 0.5f;
 		trace.plane.normal[0] = -1.0f;
 		trace.plane.normal[2] = 0.0f;
 		trace.contents = CONTENTS_SOLID;
@@ -96,7 +139,8 @@ static int ParityContents(vec3_t point)
 {
 	sg_parity_context->contents_calls++;
 	if (sg_parity_context->mode == SG_HOST_ENGINE_PARITY_WATER)
-		return point[2] < 1000.0f ? CONTENTS_WATER : 0;
+		return point[2] < sg_parity_context->water_surface_z ?
+			CONTENTS_WATER : 0;
 	return 0;
 }
 
@@ -112,7 +156,7 @@ static int RunCase(uint32_t mode, pmove_state_t state, usercmd_t command,
 	pmove.pointcontents = ParityContents;
 	pmove_out[0] = pmove;
 	sg_parity_context->mode = mode;
-	if (!SG_HostEnginePmove(pmove_out))
+	if (!SG_HostEnginePmoveBound(sg_parity_context->binding, pmove_out))
 		return 0;
 	return FiniteVector(pmove_out->mins) && FiniteVector(pmove_out->maxs) &&
 		isfinite(pmove_out->viewheight);
@@ -127,10 +171,10 @@ static int RunAcceleration(uint64_t *hash, uint32_t *cases,
 
 	memset(&state, 0, sizeof(state));
 	state.pm_type = PM_NORMAL;
-	state.gravity = 800;
+	state.gravity = (short)sg_parity_context->inputs.gravity;
 	memset(&command, 0, sizeof(command));
-	command.msec = 25U;
-	command.forwardmove = 300;
+	command.msec = (byte)sg_parity_context->inputs.substep_ms;
+	command.forwardmove = (short)sg_parity_context->forwardmove;
 	if (!RunCase(SG_HOST_ENGINE_PARITY_ACCELERATION, state, command, &pmove) ||
 		pmove.s.velocity[0] <= 0.0f)
 		return 0;
@@ -140,7 +184,8 @@ static int RunAcceleration(uint64_t *hash, uint32_t *cases,
 	return 1;
 }
 
-static int RunGravity(uint64_t *hash, uint32_t *cases, uint32_t *calls)
+static int RunGravityCase(uint64_t *hash, uint32_t *cases, uint32_t *calls,
+	float gravity, uint32_t tag)
 {
 	pmove_state_t state;
 	usercmd_t command;
@@ -148,17 +193,28 @@ static int RunGravity(uint64_t *hash, uint32_t *cases, uint32_t *calls)
 
 	memset(&state, 0, sizeof(state));
 	state.pm_type = PM_NORMAL;
-	state.origin[2] = 1600;
-	state.gravity = 800;
+	state.origin[2] = (short)(1600 +
+		(short)(sg_parity_context->probe_seed % 16U) * 8);
+	state.gravity = (short)gravity;
 	memset(&command, 0, sizeof(command));
-	command.msec = 25U;
+	command.msec = (byte)sg_parity_context->inputs.substep_ms;
 	if (!RunCase(SG_HOST_ENGINE_PARITY_GRAVITY, state, command, &pmove) ||
 		pmove.s.velocity[2] >= 0 || pmove.s.origin[2] >= state.origin[2])
 		return 0;
-	HashPmove(hash, SG_HOST_ENGINE_PARITY_GRAVITY, &pmove);
+	HashPmove(hash, tag, &pmove);
 	*calls += 1U;
 	*cases |= SG_HOST_ENGINE_PARITY_GRAVITY;
 	return 1;
+}
+
+static int RunGravity(uint64_t *hash, uint32_t *cases, uint32_t *calls)
+{
+	/* Include both the live map value and the accepted low-gravity edge.  A
+	 * fixed 800-only probe cannot authenticate a map whose physics is 100. */
+	return RunGravityCase(hash, cases, calls, sg_parity_context->inputs.gravity,
+		SG_HOST_ENGINE_PARITY_GRAVITY) &&
+		RunGravityCase(hash, cases, calls, 100.0f,
+		SG_HOST_ENGINE_PARITY_GRAVITY + 6U);
 }
 
 static int RunCollision(uint64_t *hash, uint32_t *cases, uint32_t *calls)
@@ -169,13 +225,16 @@ static int RunCollision(uint64_t *hash, uint32_t *cases, uint32_t *calls)
 
 	memset(&state, 0, sizeof(state));
 	state.pm_type = PM_NORMAL;
-	state.origin[2] = 1600;
+	state.origin[0] = (short)(sg_parity_context->collision_origin_x * 8);
+	state.origin[2] = (short)(1600 +
+		(short)(sg_parity_context->probe_seed % 16U) * 8);
 	state.gravity = 0;
 	memset(&command, 0, sizeof(command));
-	command.msec = 100U;
-	command.forwardmove = 300;
+	command.msec = (byte)sg_parity_context->inputs.frame_ms;
+	command.forwardmove = (short)sg_parity_context->forwardmove;
 	if (!RunCase(SG_HOST_ENGINE_PARITY_COLLISION, state, command, &pmove) ||
-		pmove.s.origin[0] > 4 || pmove.s.velocity[0] > 1)
+		pmove.s.origin[0] > (short)(sg_parity_context->collision_origin_x *
+			8 + 4) || pmove.s.velocity[0] > 1)
 		return 0;
 	HashPmove(hash, SG_HOST_ENGINE_PARITY_COLLISION, &pmove);
 	*calls += 1U;
@@ -192,9 +251,9 @@ static int RunWater(uint64_t *hash, uint32_t *cases, uint32_t *calls)
 	memset(&state, 0, sizeof(state));
 	state.pm_type = PM_NORMAL;
 	state.origin[2] = 0;
-	state.gravity = 800;
+	state.gravity = (short)sg_parity_context->inputs.gravity;
 	memset(&command, 0, sizeof(command));
-	command.msec = 25U;
+	command.msec = (byte)sg_parity_context->inputs.substep_ms;
 	if (!RunCase(SG_HOST_ENGINE_PARITY_WATER, state, command, &pmove) ||
 		pmove.waterlevel == 0 || !(pmove.watertype & CONTENTS_WATER))
 		return 0;
@@ -246,11 +305,13 @@ static int RunTiming(uint64_t *hash, uint32_t *cases, uint32_t *calls)
 
 	memset(&state, 0, sizeof(state));
 	state.pm_type = PM_NORMAL;
-	state.origin[2] = 1600;
+	state.origin[2] = (short)(1600 +
+		(short)(sg_parity_context->probe_seed % 16U) * 8);
 	state.gravity = 0;
 	memset(&command, 0, sizeof(command));
-	command.msec = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
-	state.velocity[0] = 800;
+	command.msec = (byte)sg_parity_context->inputs.substep_ms;
+	state.origin[0] = (short)(sg_parity_context->probe_seed % 32U * 8U);
+	state.velocity[0] = (short)sg_parity_context->timing_velocity;
 	if (!RunCase(SG_HOST_ENGINE_PARITY_TIMING, state, command, &pmove) ||
 		pmove.s.origin[0] <= state.origin[0])
 		return 0;
@@ -260,18 +321,33 @@ static int RunTiming(uint64_t *hash, uint32_t *cases, uint32_t *calls)
 	return 1;
 }
 
-int SG_HostEnginePmoveParity(sg_host_engine_parity_result_t *result_out)
+int SG_HostEnginePmoveParityBound(
+	const sg_host_engine_pmove_binding_t *binding,
+	const sg_host_engine_parity_inputs_t *inputs,
+	sg_host_engine_parity_result_t *result_out)
 {
 	sg_host_engine_parity_context_t context;
 	uint64_t hash = UINT64_C(1469598103934665603);
 	uint32_t cases = 0U;
 	uint32_t calls = 0U;
 
-	if (!result_out || sg_parity_context)
+	if (!result_out || !binding || !inputs || sg_parity_context ||
+		!SG_HostEnginePmoveBindingCurrent(binding) ||
+		!isfinite(inputs->gravity) || inputs->gravity < 1.0f ||
+		inputs->gravity > 32767.0f || truncf(inputs->gravity) != inputs->gravity ||
+		!isfinite(inputs->max_velocity) || inputs->max_velocity < 800.0f ||
+		!isfinite(inputs->airaccelerate) || inputs->airaccelerate < 0.0f ||
+		inputs->frame_ms == 0U || inputs->substep_ms == 0U ||
+		inputs->frame_ms > UINT8_MAX || inputs->substep_ms > UINT8_MAX ||
+		inputs->frame_ms % inputs->substep_ms != 0U)
 		return 0;
 	memset(&context, 0, sizeof(context));
+	context.binding = binding;
+	context.inputs = *inputs;
+	ConfigureProbes(&context);
 	memset(result_out, 0, sizeof(*result_out));
 	sg_parity_context = &context;
+	HashInputs(&hash, inputs);
 	if (!RunAcceleration(&hash, &cases, &calls) ||
 		!RunGravity(&hash, &cases, &calls) ||
 		!RunCollision(&hash, &cases, &calls) ||
@@ -293,4 +369,17 @@ int SG_HostEnginePmoveParity(sg_host_engine_parity_result_t *result_out)
 	result_out->trace_calls = context.trace_calls;
 	result_out->contents_calls = context.contents_calls;
 	return cases == SG_HOST_ENGINE_PARITY_ALL;
+}
+
+int SG_HostEnginePmoveParity(sg_host_engine_parity_result_t *result_out)
+{
+	sg_host_engine_pmove_binding_t binding;
+	sg_host_engine_parity_inputs_t inputs = {
+		800.0f, 2000.0f, 0.0f, SG_HOST_ENGINE_FRAME_MS,
+		SG_HOST_ENGINE_PMOVE_SUBSTEP_MS
+	};
+
+	if (!SG_HostEnginePmoveBindingCapture(&binding))
+		return 0;
+	return SG_HostEnginePmoveParityBound(&binding, &inputs, result_out);
 }

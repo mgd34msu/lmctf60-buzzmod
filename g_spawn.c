@@ -2,6 +2,7 @@
 #include "g_local.h"
 #include "g_entfile_path.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
@@ -1116,6 +1117,17 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 		gi.dprintf("slipgate: rune identity unavailable for %s: %s\n",
 		           mapname ? mapname : "<null>",
 		           SG_LevelIdentityReason(identity_status));
+	if (identity_status == SG_IDENTITY_OK)
+	{
+		sg_host_law_result_t host_law_result =
+			SG_HostLawProductionInstallLevel(mapname);
+
+		if (host_law_result.status != SG_HOST_LAW_OK)
+			gi.dprintf("slipgate: host law unavailable for %s: %s (%s)\n",
+				mapname ? mapname : "<null>",
+				SG_HostLawStatusString(host_law_result.status),
+				SG_HostLawFieldString(host_law_result.field));
+	}
 }
 
 

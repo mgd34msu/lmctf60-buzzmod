@@ -9,6 +9,10 @@
 sg_host_law_result_t SG_HostLawProductionInstall(
 	const sg_host_collision_authority_t *authority);
 
+/* Production level owner: obtain the committed level identity and load the
+ * same map BSP used by the engine before publishing any consumer view. */
+sg_host_law_result_t SG_HostLawProductionInstallLevel(const char *mapname);
+
 /* Level teardown invalidates every borrowed BSP and its publication. */
 void SG_HostLawProductionReset(void);
 
@@ -17,5 +21,11 @@ void SG_HostLawProductionReset(void);
 sg_host_law_result_t SG_HostLawProductionRevalidate(void);
 
 const sg_host_law_publication_t *SG_HostLawProductionPublication(void);
+
+/* Owner-issued read-only collision view.  The pointer is borrowed until the
+ * next level reset; NULL is returned whenever the publication is absent or
+ * its live identity has drifted. */
+sg_host_law_result_t SG_HostLawProductionCollisionAuthority(
+	const sg_host_collision_authority_t **authority_out);
 
 #endif /* SG_HOST_LAW_OWNER_H */

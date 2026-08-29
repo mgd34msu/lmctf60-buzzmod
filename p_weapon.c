@@ -5,6 +5,15 @@
 #include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_compound_hook_game_events.h"
 #include "slipgate/sg_human_trace.h"
+#ifdef world
+#define SG_P_WEAPON_RESTORE_WORLD
+#undef world
+#endif
+#include "slipgate/sg_host_hook_law.h"
+#ifdef SG_P_WEAPON_RESTORE_WORLD
+#define world (&g_edicts[0])
+#undef SG_P_WEAPON_RESTORE_WORLD
+#endif
 #include "m_player.h"
 #include "g_tourney.h"
 
@@ -22,6 +31,38 @@ void SG_NoteRailShot(edict_t *shooter);
 #define GRAPPLE_FIRE_HOOK_SPEED        SG_HOST_HOOK_FIRE_SPEED
 #define GRAPPLE_PULL_SPEED             SG_HOST_HOOK_PULL_SPEED
 #define GRAPPLE_PULL_BALANCED_SPEED    SG_HOST_HOOK_PULL_SPEED
+
+/* Host-law publication asks the live weapon owner for this snapshot on every
+ * issue and revalidation.  Keep the callback in this production translation
+ * unit so a test/default helper cannot silently become movement authority. */
+int SG_HostHookLiveCapture(sg_host_hook_law_t *law_out)
+{
+	if (!law_out)
+		return 0;
+	memset(law_out, 0, sizeof(*law_out));
+	law_out->version = SG_HOST_HOOK_LAW_VERSION;
+	law_out->trace_mask = MASK_SHOT;
+	law_out->muzzle_forward_offset = SG_HOST_HOOK_MUZZLE_FORWARD_OFFSET;
+	law_out->muzzle_right_offset = SG_HOST_HOOK_MUZZLE_RIGHT_OFFSET;
+	law_out->muzzle_view_offset = SG_HOST_HOOK_MUZZLE_VIEW_OFFSET;
+	law_out->fire_speed = GRAPPLE_FIRE_HOOK_SPEED;
+	law_out->pull_speed = GRAPPLE_PULL_SPEED;
+	law_out->initial_damage = SG_HOST_HOOK_INITIAL_DAMAGE;
+	law_out->attached_damage = SG_HOST_HOOK_ATTACHED_DAMAGE;
+	law_out->projectile_health = SG_HOST_HOOK_HEALTH;
+	law_out->attached_cadence_frames = SG_HOST_HOOK_ATTACHED_CADENCE;
+	law_out->trace_epsilon = SG_HOST_HOOK_TRACE_EPSILON;
+	if (ctfflags && isfinite(ctfflags->value) && ctfflags->value >= 0.0f &&
+		ctfflags->value <= (float)INT_MAX &&
+		truncf(ctfflags->value) == ctfflags->value)
+		law_out->no_grapple_damage =
+			((uint32_t)ctfflags->value & SG_HOST_HOOK_CTF_NO_GRAP_DAMAGE) != 0U;
+	law_out->identity = SG_HOST_HOOK_LAW_ID;
+	law_out->near_bite_distance = SG_HOST_HOOK_NEAR_BITE_DISTANCE;
+	law_out->near_bite_gravity_zero_distance =
+		SG_HOST_HOOK_NEAR_BITE_GRAVITY_ZERO_DISTANCE;
+	return 1;
+}
 
 static qboolean	is_quad;
 static byte		is_silenced;
@@ -2119,7 +2160,8 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	    MASK_SHOT);
 	if (tr.fraction < 1.0)
 	{
-		VectorMA(bolt->s.origin, -10, dir, bolt->s.origin);
+		VectorMA(bolt->s.origin, -SG_HOST_HOOK_TRACE_EPSILON, dir,
+			bolt->s.origin);
 		bolt->touch(bolt, tr.ent, &tr.plane, NULL);
 	}
 	return bolt;
@@ -2201,7 +2243,8 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	tr = gi.trace (self->s.origin, NULL, NULL, bolt->s.origin, self, MASK_SHOT);
 	if (tr.fraction < 1.0)
 	{
-		VectorMA (bolt->s.origin, -10, dir, bolt->s.origin);
+		VectorMA (bolt->s.origin, -SG_HOST_HOOK_TRACE_EPSILON, dir,
+			bolt->s.origin);
 		if (SG_OwnsBot(self))
 		{
 			self->client->hook = bolt;
@@ -2253,7 +2296,9 @@ void CTF_HookMuzzle (const vec3_t origin, float viewheight, int hand,
 {
 	vec3_t offset;
 
-	VectorSet (offset, 8, 8, viewheight - 8);
+	VectorSet (offset, SG_HOST_HOOK_MUZZLE_FORWARD_OFFSET,
+		SG_HOST_HOOK_MUZZLE_RIGHT_OFFSET,
+		viewheight - SG_HOST_HOOK_MUZZLE_VIEW_OFFSET);
 	if (hand == LEFT_HANDED)
 		offset[1] *= -1;
 	else if (hand == CENTER_HANDED)

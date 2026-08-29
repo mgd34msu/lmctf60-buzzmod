@@ -11,6 +11,7 @@
 #include "../game.h"
 #include "../slipgate/sg_host_law_owner.h"
 #include "../slipgate/sg_hooks.h"
+#include "../slipgate/sg_identity.h"
 
 game_import_t gi;
 sg_host_t sg_host;
@@ -24,7 +25,20 @@ static cvar_t maxvelocity_cvar;
 static cvar_t funky_gravity_cvar;
 static cvar_t airaccelerate_cvar;
 static cvar_t ctf_flags_cvar;
+static float test_live_door_speed = 200.0f;
 static int failures;
+
+/* The publication unit test owns a synthetic authority.  The production
+ * owner’s map-lifecycle bridge is linked in the game build and is deliberately
+ * unavailable in this isolated fixture. */
+sg_identity_status_t SG_LevelIdentitySnapshot(const char *expected_mapname,
+	sg_level_identity_t *out)
+{
+	(void)expected_mapname;
+	if (out)
+		memset(out, 0, sizeof(*out));
+	return SG_IDENTITY_UNAVAILABLE;
+}
 
 /* This is a real BSP-shaped world. Pmove reaches it through the production
  * host collision adapter; no test callback supplies movement authority. */
@@ -167,6 +181,25 @@ int CTF_HookPullVelocity(const vec3_t start, const vec3_t bite,
 	return HookSpeed(start, bite, velocity);
 }
 
+int SG_HostHookLiveCapture(sg_host_hook_law_t *law_out)
+{
+	if (!law_out)
+		return 0;
+	SG_HostHookLawDefault(law_out);
+	law_out->no_grapple_damage =
+		((uint32_t)ctf_flags_cvar.value & SG_HOST_HOOK_CTF_NO_GRAP_DAMAGE) != 0U;
+	return 1;
+}
+
+int SG_HostMechanismLiveCapture(sg_host_mechanism_law_t *law_out)
+{
+	if (!law_out)
+		return 0;
+	SG_HostMechanismLawDefault(law_out);
+	law_out->door_default_speed = test_live_door_speed;
+	return 1;
+}
+
 static void ForgedPmove(pmove_t *pmove)
 {
 	Pmove(pmove);
@@ -199,6 +232,8 @@ static sg_host_law_view_t Read(const sg_host_law_publication_t *publication)
 static void TestEngineBindingAndParity(void)
 {
 	sg_host_engine_pmove_abi_t abi;
+	sg_host_engine_pmove_binding_t binding;
+	sg_host_engine_parity_inputs_t low_gravity_inputs;
 	sg_host_engine_parity_result_t parity;
 
 	gi.Pmove = Pmove;
@@ -213,12 +248,26 @@ static void TestEngineBindingAndParity(void)
 	CHECK(abi.fraction_bits == SG_HOST_ENGINE_PMOVE_FRACTION_BITS);
 	CHECK(abi.substep_ms == SG_HOST_ENGINE_PMOVE_SUBSTEP_MS);
 	CHECK(abi.identity == SG_HOST_ENGINE_PMOVE_ABI_ID);
+	CHECK(SG_HostEnginePmoveBindingCapture(&binding));
+	CHECK(binding.entry == Pmove);
+	CHECK(binding.owner == (const void *)&gi);
+	CHECK(SG_HostEnginePmoveBindingCurrent(&binding));
 	CHECK(SG_HostEnginePmoveParity(&parity));
 	CHECK(parity.cases == SG_HOST_ENGINE_PARITY_ALL);
 	CHECK(parity.fingerprint != 0U);
-	CHECK(parity.engine_calls == 7U);
+	CHECK(parity.engine_calls == 8U);
 	CHECK(parity.trace_calls != 0U);
 	CHECK(parity.contents_calls != 0U);
+	low_gravity_inputs.gravity = 100.0f;
+	low_gravity_inputs.max_velocity = 2000.0f;
+	low_gravity_inputs.airaccelerate = 0.0f;
+	low_gravity_inputs.frame_ms = SG_HOST_ENGINE_FRAME_MS;
+	low_gravity_inputs.substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
+	CHECK(SG_HostEnginePmoveParityBound(&binding, &low_gravity_inputs,
+		&parity));
+	CHECK(parity.cases == SG_HOST_ENGINE_PARITY_ALL);
+	CHECK(parity.engine_calls == 8U);
+	CHECK(parity.fingerprint != 0U);
 }
 
 static void TestPublicationAndCallbackIsolation(void)
@@ -251,6 +300,7 @@ static void TestPublicationAndCallbackIsolation(void)
 static void TestPmoveAndCollisionExecution(void)
 {
 	sg_host_law_publication_t *publication = Issue();
+	const sg_host_collision_authority_t *borrowed_authority = NULL;
 	sg_host_collision_trace_t trace;
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t pmove_result;
@@ -259,6 +309,12 @@ static void TestPmoveAndCollisionExecution(void)
 	const float end[3] = { 64.0f, 0.0f, 0.0f };
 	sg_host_law_result_t result;
 
+	result = SG_HostLawPublicationCollisionAuthority(publication,
+		&borrowed_authority);
+	CHECK(result.status == SG_HOST_LAW_OK && borrowed_authority != NULL);
+	CHECK(borrowed_authority->world == &test_world);
+	result = SG_HostLawPublicationCollisionAuthority(publication, NULL);
+	CHECK(result.status == SG_HOST_LAW_INVALID_ARGUMENT);
 	memset(&trace, 0, sizeof(trace));
 	result = SG_HostLawPublicationCollisionTrace(publication, NULL, zero, zero,
 		zero, end, SG_HOST_MASK_PLAYER_SOLID, &trace);
@@ -276,6 +332,24 @@ static void TestPmoveAndCollisionExecution(void)
 	CHECK(pmove_result.evaluated_steps == 4U);
 	CHECK(pmove_result.elapsed_ms == SG_HOST_ENGINE_FRAME_MS);
 	CHECK(pmove_result.physics_abi_id == UINT64_C(0x303));
+	request.hook_law_id = SG_HOST_PMOVE_HOOK_LAW_ID;
+	request.hook_attached = 1U;
+	request.hook_length = SG_HOST_PMOVE_HOOK_LENGTH_GRAVITY_ZERO - 1U;
+	result = SG_HostLawPublicationPmove(publication, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_result.gravity == 0.0f &&
+		pmove_result.gravity_law_id == SG_HOST_PMOVE_HOOK_LAW_ID);
+	request.hook_length = SG_HOST_PMOVE_HOOK_LENGTH_GRAVITY_ZERO;
+	result = SG_HostLawPublicationPmove(publication, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK && pmove_result.gravity == 800.0f &&
+		pmove_result.gravity_law_id == 0U);
+	request.hook_law_id = UINT64_C(0xdeadbeef);
+	result = SG_HostLawPublicationPmove(publication, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED &&
+		pmove_error == SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH);
 	SG_HostLawPublicationDestroy(publication);
 }
 
@@ -369,6 +443,38 @@ static void TestHookChronology(void)
 	result = SG_HostLawPublicationHookStep(publication, &observation, &step);
 	CHECK(result.status == SG_HOST_LAW_OK && step.accepted);
 	CHECK(step.next_phase == SG_HOST_HOOK_IN_FLIGHT);
+	{
+		sg_host_hook_observation_t immediate;
+
+		memset(&immediate, 0, sizeof(immediate));
+		immediate.event = SG_HOST_HOOK_FIRE;
+		immediate.phase = SG_HOST_HOOK_IDLE;
+		immediate.attack_held = 1;
+		immediate.muzzle_clear = 0;
+		immediate.immediate_hit = 1;
+		immediate.target_kind = SG_HOST_HOOK_TARGET_WORLD;
+		immediate.target_identity = UINT64_C(0x77);
+		result = SG_HostLawPublicationHookStep(publication, &immediate, &step);
+		CHECK(result.status == SG_HOST_LAW_OK && step.accepted &&
+			step.first_hit && step.attached && step.trace_epsilon_applied &&
+			step.target_identity == UINT64_C(0x77) &&
+			step.next_phase == SG_HOST_HOOK_ATTACHED);
+		immediate.sky = 1;
+		result = SG_HostLawPublicationHookStep(publication, &immediate, &step);
+		CHECK(result.status == SG_HOST_LAW_OK && step.accepted && step.aborted &&
+			!step.attached && step.next_phase == SG_HOST_HOOK_IDLE);
+	}
+	{
+		sg_host_hook_observation_t grounded = observation;
+
+		grounded.event = SG_HOST_HOOK_RELEASE;
+		grounded.phase = SG_HOST_HOOK_ATTACHED;
+		grounded.grounded = 1;
+		result = SG_HostLawPublicationHookStep(publication, &grounded, &step);
+		CHECK(result.status == SG_HOST_LAW_OK && step.released &&
+			!step.coast_velocity && step.zero_velocity_z &&
+			step.zero_oldvelocity_z);
+	}
 	SG_HostLawPublicationDestroy(publication);
 }
 
@@ -389,8 +495,11 @@ static void TestHookDamagePolicy(void)
 	observation.target_identity = UINT64_C(0x42);
 	result = SG_HostLawPublicationHookStep(publication, &observation, &step);
 	CHECK(result.status == SG_HOST_LAW_OK && step.attached && step.damage == 0U);
-	SG_HostLawPublicationDestroy(publication);
 	ctf_flags_cvar.value = 0.0f;
+	result = SG_HostLawPublicationRevalidateProduction(publication);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_HOOK_CHRONOLOGY);
+	SG_HostLawPublicationDestroy(publication);
 }
 
 static void TestMechanismEquations(void)
@@ -423,6 +532,8 @@ static void TestMechanismEquations(void)
 		1000U, 0U, &transition);
 	CHECK(result.status == SG_HOST_LAW_OK && transition.accepted);
 	CHECK(transition.next_think_ms == 4000U);
+	CHECK(Read(publication).mechanism.door_default_speed == 200.0f &&
+		transition.blocker_kind == SG_HOST_MECHANISM_BLOCKER_NONE);
 	result = SG_HostLawPublicationDoorStep(publication,
 		SG_HOST_MECHANISM_DOOR_TOP, SG_HOST_MECHANISM_DOOR_TOGGLE,
 		SG_HOST_MECHANISM_STATE_TOP, 0.0f, 1000U, 0U, &transition);
@@ -449,6 +560,25 @@ static void TestMechanismEquations(void)
 		1.0f, 0U, 0U, &transition);
 	CHECK(result.status == SG_HOST_LAW_OK && !transition.reversed &&
 		transition.next_state == SG_HOST_MECHANISM_STATE_TOP);
+	result = SG_HostLawPublicationDoorStepEx(publication,
+		SG_HOST_MECHANISM_DOOR_BLOCKED, 0U, SG_HOST_MECHANISM_STATE_DOWN,
+		1.0f, 0U, 0U, SG_HOST_MECHANISM_BLOCKER_OTHER, 2U, &transition);
+	CHECK(result.status == SG_HOST_LAW_OK && transition.accepted &&
+		transition.damaged && transition.destroyed &&
+		transition.damage == SG_HOST_MECHANISM_NONCLIENT_DAMAGE &&
+		transition.blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER &&
+		!transition.reversed);
+	result = SG_HostLawPublicationDoorStepEx(publication,
+		SG_HOST_MECHANISM_DOOR_BLOCKED, 0U, SG_HOST_MECHANISM_STATE_DOWN,
+		1.0f, 0U, 0U, SG_HOST_MECHANISM_BLOCKER_CLIENT, 9U, &transition);
+	CHECK(result.status == SG_HOST_LAW_OK && transition.damaged &&
+		transition.damage == 9U && transition.reversed &&
+		transition.blocker_kind == SG_HOST_MECHANISM_BLOCKER_CLIENT &&
+		transition.next_state == SG_HOST_MECHANISM_STATE_UP);
+	result = SG_HostLawPublicationDoorStepEx(publication,
+		SG_HOST_MECHANISM_DOOR_BLOCKED, 0U, SG_HOST_MECHANISM_STATE_DOWN,
+		1.0f, 0U, 0U, SG_HOST_MECHANISM_BLOCKER_NONE, 2U, &transition);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
 	result = SG_HostLawPublicationPlatformStep(publication,
 		SG_HOST_MECHANISM_PLATFORM_TOP, SG_HOST_MECHANISM_STATE_TOP, 200U,
 		0U, &transition);
@@ -462,6 +592,14 @@ static void TestMechanismEquations(void)
 		SG_HOST_MECHANISM_STATE_BOTTOM, 500U, 0U, &transition);
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		transition.next_state == SG_HOST_MECHANISM_STATE_UP);
+	result = SG_HostLawPublicationPlatformStepEx(publication,
+		SG_HOST_MECHANISM_PLATFORM_BLOCKED, SG_HOST_MECHANISM_STATE_UP,
+		500U, 0U, SG_HOST_MECHANISM_BLOCKER_OTHER, 2U, &transition);
+	CHECK(result.status == SG_HOST_LAW_OK && transition.accepted &&
+		transition.damaged && transition.destroyed &&
+		transition.damage == SG_HOST_MECHANISM_NONCLIENT_DAMAGE &&
+		transition.blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER &&
+		!transition.reversed);
 	result = SG_HostLawPublicationTriggerStep(publication, 0, 0.0f, 100U,
 		&transition);
 	CHECK(result.status == SG_HOST_LAW_OK && transition.next_think_ms == 300U);
@@ -480,6 +618,11 @@ static void TestMechanismEquations(void)
 		SG_HOST_MECHANISM_TRAIN_WAIT, SG_HOST_MECHANISM_TRAIN_TOGGLE, -1.0f,
 		SG_HOST_MECHANISM_STATE_UP, 0, 0, 0, 0, 0U, 0U, &transition);
 	CHECK(result.status == SG_HOST_LAW_OK && transition.stopped);
+	test_live_door_speed = 100.0f;
+	result = SG_HostLawPublicationRevalidateProduction(publication);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_MECHANISM_EQUATIONS);
+	test_live_door_speed = 200.0f;
 	{
 		sg_host_law_view_t view = Read(publication);
 		view.hook.near_bite_gravity_zero_distance += 1.0f;
@@ -500,6 +643,7 @@ static void TestMechanismEquations(void)
 static void TestOwnerFailClosedAndDrift(void)
 {
 	sg_host_collision_authority_t authority = Authority();
+	const sg_host_collision_authority_t *borrowed = NULL;
 	const sg_host_law_publication_t *publication;
 	sg_host_law_result_t result;
 
@@ -510,6 +654,9 @@ static void TestOwnerFailClosedAndDrift(void)
 	CHECK(result.status == SG_HOST_LAW_OK);
 	publication = SG_HostLawProductionPublication();
 	CHECK(publication != NULL);
+	result = SG_HostLawProductionCollisionAuthority(&borrowed);
+	CHECK(result.status == SG_HOST_LAW_OK && borrowed != NULL &&
+		borrowed->world == &test_world);
 	result = SG_HostLawProductionRevalidate();
 	CHECK(result.status == SG_HOST_LAW_OK);
 	gravity_cvar.value = 799.0f;
@@ -517,6 +664,8 @@ static void TestOwnerFailClosedAndDrift(void)
 	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
 	CHECK(SG_HostLawProductionPublication() == NULL);
 	gravity_cvar.value = 800.0f;
+	result = SG_HostLawProductionCollisionAuthority(&borrowed);
+	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE && borrowed == NULL);
 }
 
 int main(void)

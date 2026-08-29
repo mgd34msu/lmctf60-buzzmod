@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 
+#include "sg_host_engine_pmove.h"
+
 typedef enum sg_host_engine_parity_case_e
 {
 	SG_HOST_ENGINE_PARITY_ACCELERATION = 1U << 0,
@@ -25,7 +27,20 @@ typedef struct sg_host_engine_parity_result_s
 	uint32_t contents_calls;
 } sg_host_engine_parity_result_t;
 
-/* Runs all six fixed movement behaviors through gi.Pmove. */
+typedef struct sg_host_engine_parity_inputs_s
+{
+	float gravity;
+	float max_velocity;
+	float airaccelerate;
+	uint32_t frame_ms;
+	uint32_t substep_ms;
+} sg_host_engine_parity_inputs_t;
+
+/* Runs the movement behaviors through one captured engine callback. */
 int SG_HostEnginePmoveParity(sg_host_engine_parity_result_t *result_out);
+int SG_HostEnginePmoveParityBound(
+	const sg_host_engine_pmove_binding_t *binding,
+	const sg_host_engine_parity_inputs_t *inputs,
+	sg_host_engine_parity_result_t *result_out);
 
 #endif /* SG_HOST_ENGINE_PARITY_H */

@@ -54,6 +54,14 @@ static int StateValid(int state)
 		state == SG_HOST_MECHANISM_STATE_DOWN;
 }
 
+static int BlockerKindValid(sg_host_mechanism_blocker_kind_t blocker_kind)
+{
+	return blocker_kind == SG_HOST_MECHANISM_BLOCKER_NONE ||
+		blocker_kind == SG_HOST_MECHANISM_BLOCKER_CLIENT ||
+		blocker_kind == SG_HOST_MECHANISM_BLOCKER_MONSTER ||
+		blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER;
+}
+
 static float AccelerationDistance(float target, float rate)
 {
 	return target * ((target / rate) + 1.0f) / 2.0f;
@@ -226,7 +234,9 @@ void SG_HostMechanismLawDefault(sg_host_mechanism_law_t *law_out)
 	law_out->trigger_default_wait_ms = 200U;
 	law_out->trigger_remove_delay_ms = 100U;
 	law_out->frame_schedule_ms = 100U;
-	law_out->door_default_speed = 100.0f;
+	/* SP_func_door doubles its stock 100 speed in deathmatch.  The
+	 * production publication is the deathmatch host law. */
+	law_out->door_default_speed = 200.0f;
 	law_out->platform_default_speed = 20.0f;
 	law_out->platform_default_accel = 5.0f;
 	law_out->platform_default_decel = 5.0f;
@@ -255,7 +265,7 @@ int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law)
 		law->trigger_default_wait_ms == 200U &&
 		law->trigger_remove_delay_ms == 100U &&
 		law->frame_schedule_ms == 100U &&
-		SameFloat(law->door_default_speed, 100.0f) &&
+		SameFloat(law->door_default_speed, 200.0f) &&
 		SameFloat(law->platform_default_speed, 20.0f) &&
 		SameFloat(law->platform_default_accel, 5.0f) &&
 		SameFloat(law->platform_default_decel, 5.0f) &&
@@ -396,12 +406,14 @@ int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 	}
 }
 
-int SG_HostMechanismDoorStep(const sg_host_mechanism_law_t *law,
+int SG_HostMechanismDoorStepEx(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
 	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
+	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
 	sg_host_mechanism_transition_t *result_out)
 {
-	if (!result_out || !SG_HostMechanismLawValid(law) || !StateValid(state))
+	if (!result_out || !SG_HostMechanismLawValid(law) || !StateValid(state) ||
+		!BlockerKindValid(blocker_kind))
 		return 0;
 	if (!isfinite(wait_seconds))
 		return 0;
@@ -447,7 +459,22 @@ int SG_HostMechanismDoorStep(const sg_host_mechanism_law_t *law,
 	}
 	if (event == SG_HOST_MECHANISM_DOOR_BLOCKED)
 	{
+		if (blocker_kind == SG_HOST_MECHANISM_BLOCKER_NONE)
+			return 0;
+		result_out->blocker_kind = blocker_kind;
 		result_out->accepted = 1;
+		if (blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER)
+		{
+			result_out->damaged = 1;
+			result_out->destroyed = 1;
+			result_out->damage = SG_HOST_MECHANISM_NONCLIENT_DAMAGE;
+			return 1;
+		}
+		if (blocker_kind != SG_HOST_MECHANISM_BLOCKER_CLIENT &&
+			blocker_kind != SG_HOST_MECHANISM_BLOCKER_MONSTER)
+			return 0;
+		result_out->damaged = damage != 0U;
+		result_out->damage = damage;
 		if (!(flags & SG_HOST_MECHANISM_DOOR_CRUSHER) && wait_seconds >= 0.0f &&
 			(state == SG_HOST_MECHANISM_STATE_UP ||
 			 state == SG_HOST_MECHANISM_STATE_DOWN))
@@ -490,11 +517,23 @@ int SG_HostMechanismDoorStep(const sg_host_mechanism_law_t *law,
 	return 0;
 }
 
-int SG_HostMechanismPlatformStep(const sg_host_mechanism_law_t *law,
-	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
-	uint64_t debounce_until_ms, sg_host_mechanism_transition_t *result_out)
+int SG_HostMechanismDoorStep(const sg_host_mechanism_law_t *law,
+	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
+	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
+	sg_host_mechanism_transition_t *result_out)
 {
-	if (!result_out || !SG_HostMechanismLawValid(law) || !StateValid(state))
+	return SG_HostMechanismDoorStepEx(law, event, flags, state, wait_seconds,
+		now_ms, debounce_until_ms, SG_HOST_MECHANISM_BLOCKER_CLIENT,
+		SG_HOST_MECHANISM_DEFAULT_DOOR_DAMAGE, result_out);
+}
+
+int SG_HostMechanismPlatformStepEx(const sg_host_mechanism_law_t *law,
+	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
+	uint64_t debounce_until_ms, sg_host_mechanism_blocker_kind_t blocker_kind,
+	uint32_t damage, sg_host_mechanism_transition_t *result_out)
+{
+	if (!result_out || !SG_HostMechanismLawValid(law) || !StateValid(state) ||
+		!BlockerKindValid(blocker_kind))
 		return 0;
 	ClearTransition(result_out);
 	result_out->next_state = state;
@@ -523,7 +562,22 @@ int SG_HostMechanismPlatformStep(const sg_host_mechanism_law_t *law,
 	}
 	if (event == SG_HOST_MECHANISM_PLATFORM_BLOCKED)
 	{
+		if (blocker_kind == SG_HOST_MECHANISM_BLOCKER_NONE)
+			return 0;
+		result_out->blocker_kind = blocker_kind;
 		result_out->accepted = 1;
+		if (blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER)
+		{
+			result_out->damaged = 1;
+			result_out->destroyed = 1;
+			result_out->damage = SG_HOST_MECHANISM_NONCLIENT_DAMAGE;
+			return 1;
+		}
+		if (blocker_kind != SG_HOST_MECHANISM_BLOCKER_CLIENT &&
+			blocker_kind != SG_HOST_MECHANISM_BLOCKER_MONSTER)
+			return 0;
+		result_out->damaged = damage != 0U;
+		result_out->damage = damage;
 		if (state == SG_HOST_MECHANISM_STATE_UP)
 		{
 			result_out->reversed = 1;
@@ -537,6 +591,15 @@ int SG_HostMechanismPlatformStep(const sg_host_mechanism_law_t *law,
 		return 1;
 	}
 	return 0;
+}
+
+int SG_HostMechanismPlatformStep(const sg_host_mechanism_law_t *law,
+	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
+	uint64_t debounce_until_ms, sg_host_mechanism_transition_t *result_out)
+{
+	return SG_HostMechanismPlatformStepEx(law, event, state, now_ms,
+		debounce_until_ms, SG_HOST_MECHANISM_BLOCKER_CLIENT,
+		SG_HOST_MECHANISM_DEFAULT_DOOR_DAMAGE, result_out);
 }
 
 int SG_HostMechanismTriggerStep(const sg_host_mechanism_law_t *law,

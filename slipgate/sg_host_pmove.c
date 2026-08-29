@@ -104,8 +104,29 @@ static int ParametersValid(const sg_host_collision_authority_t *authority,
 	return 1;
 }
 
+static int HookGravityActive(const sg_host_pmove_request_t *request)
+{
+	return request && request->hook_law_id == SG_HOST_PMOVE_HOOK_LAW_ID &&
+		request->hook_attached == 1U &&
+		request->hook_length < SG_HOST_PMOVE_HOOK_LENGTH_GRAVITY_ZERO;
+}
+
+static int RequestGravity(const sg_host_pmove_request_t *request,
+	short map_gravity, short *gravity_out)
+{
+	if (!request || !gravity_out || request->hook_attached > 1U)
+		return 0;
+	if (request->hook_law_id != 0U &&
+		request->hook_law_id != SG_HOST_PMOVE_HOOK_LAW_ID)
+		return 0;
+	if (request->hook_law_id == 0U && request->hook_attached != 0U)
+		return 0;
+	*gravity_out = HookGravityActive(request) ? 0 : map_gravity;
+	return 1;
+}
+
 static int HullMatchesIdentity(const sg_host_collision_authority_t *authority,
-	const pmove_t *pmove)
+	const pmove_t *pmove, short expected_gravity)
 {
 	const sg_rune_hull_profile_t *hull =
 		(pmove->s.pm_flags & PMF_DUCKED) ?
@@ -117,7 +138,7 @@ static int HullMatchesIdentity(const sg_host_collision_authority_t *authority,
 		if (pmove->mins[axis] != hull->mins.value[axis] ||
 			pmove->maxs[axis] != hull->maxs.value[axis])
 			return 0;
-	return pmove->s.gravity == (short)authority->identity.physics.gravity;
+	return pmove->s.gravity == expected_gravity;
 }
 
 static int EvaluateFrame(
@@ -125,6 +146,7 @@ static int EvaluateFrame(
 	const sg_host_collision_scene_t *scene,
 	sg_host_pmove_function_t host_pmove,
 	int use_engine,
+	const struct sg_host_engine_pmove_binding_s *binding,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
 {
@@ -133,6 +155,7 @@ static int EvaluateFrame(
 	pmove_state_t state;
 	pmove_t pm;
 	short gravity;
+	short effective_gravity;
 	uint32_t steps, step;
 	int parameters;
 	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
@@ -142,6 +165,8 @@ static int EvaluateFrame(
 		request->state.pm_type != PM_NORMAL)
 		error = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
 	else if (!host_pmove && !use_engine)
+		error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+	else if (use_engine && !binding)
 		error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
 	else if (sg_host_pmove_scope)
 		error = SG_HOST_PMOVE_ERROR_REENTRANT;
@@ -155,12 +180,18 @@ static int EvaluateFrame(
 			*error_out = error;
 		return 0;
 	}
+	if (!RequestGravity(request, gravity, &effective_gravity))
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
+		return 0;
+	}
 	memset(&scope, 0, sizeof(scope));
 	scope.authority = authority;
 	scope.scene = scene;
 	state = request->state;
 	previous = request->previous_state;
-	state.gravity = gravity;
+	state.gravity = effective_gravity;
 	memset(result_out, 0, sizeof(*result_out));
 	/* Keep a defined terminal value even for an analyzer that cannot derive
 	 * the positive step count from ParametersValid().  The production timing
@@ -179,7 +210,7 @@ static int EvaluateFrame(
 		pm.pointcontents = PmovePointContents;
 		if (use_engine)
 		{
-			if (!SG_HostEnginePmove(&pm))
+			if (!SG_HostEnginePmoveBound(binding, &pm))
 				error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
 		}
 		else
@@ -191,7 +222,7 @@ static int EvaluateFrame(
 			error = SG_HOST_PMOVE_ERROR_COLLISION;
 			break;
 		}
-		if (!HullMatchesIdentity(authority, &pm))
+		if (!HullMatchesIdentity(authority, &pm, effective_gravity))
 		{
 			error = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
 			break;
@@ -245,8 +276,10 @@ static int EvaluateFrame(
 	result_out->water_level = pm.waterlevel;
 	result_out->evaluated_steps = steps;
 	result_out->elapsed_ms = authority->identity.physics.frame_ms;
-	result_out->gravity = authority->identity.physics.gravity;
+	result_out->gravity = (float)effective_gravity;
 	result_out->physics_abi_id = authority->identity.physics_abi_id;
+	result_out->gravity_law_id = HookGravityActive(request) ?
+		SG_HOST_PMOVE_HOOK_LAW_ID : UINT64_C(0);
 	if (error_out)
 		*error_out = SG_HOST_PMOVE_ERROR_NONE;
 	return 1;
@@ -259,7 +292,7 @@ int SG_HostPmoveEvaluateFrame(
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
 {
-	return EvaluateFrame(authority, scene, host_pmove, 0, request,
+	return EvaluateFrame(authority, scene, host_pmove, 0, NULL, request,
 		result_out, error_out);
 }
 
@@ -269,8 +302,27 @@ int SG_HostPmoveEvaluateEngineFrame(
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
 {
-	return EvaluateFrame(authority, scene, NULL, 1, request, result_out,
-		error_out);
+	sg_host_engine_pmove_binding_t binding;
+
+	if (!SG_HostEnginePmoveBindingCapture(&binding))
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+		return 0;
+	}
+	return EvaluateFrame(authority, scene, NULL, 1, &binding, request,
+		result_out, error_out);
+}
+
+int SG_HostPmoveEvaluateBoundEngineFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const struct sg_host_engine_pmove_binding_s *binding,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+{
+	return EvaluateFrame(authority, scene, NULL, 1, binding, request,
+		result_out, error_out);
 }
 
 const char *SG_HostPmoveErrorString(sg_host_pmove_error_t error)

@@ -32,6 +32,35 @@ int SG_HostEnginePmoveABI(sg_host_engine_pmove_abi_t *abi_out)
 	return gi.Pmove != NULL;
 }
 
+int SG_HostEnginePmoveBindingCapture(
+	sg_host_engine_pmove_binding_t *binding_out)
+{
+	if (!binding_out)
+		return 0;
+	memset(binding_out, 0, sizeof(*binding_out));
+	if (!gi.Pmove)
+		return 0;
+	binding_out->entry = gi.Pmove;
+	binding_out->owner = (const void *)&gi;
+	return 1;
+}
+
+int SG_HostEnginePmoveBindingCurrent(
+	const sg_host_engine_pmove_binding_t *binding)
+{
+	return binding && binding->entry && binding->owner == (const void *)&gi &&
+		gi.Pmove == binding->entry;
+}
+
+int SG_HostEnginePmoveBound(const sg_host_engine_pmove_binding_t *binding,
+	pmove_t *pmove)
+{
+	if (!pmove || !SG_HostEnginePmoveBindingCurrent(binding))
+		return 0;
+	binding->entry(pmove);
+	return 1;
+}
+
 int SG_HostEnginePmove(pmove_t *pmove)
 {
 	if (!pmove || !gi.Pmove)

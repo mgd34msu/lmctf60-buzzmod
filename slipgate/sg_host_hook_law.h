@@ -13,6 +13,10 @@
 #define SG_HOST_HOOK_NEAR_BITE_DISTANCE 120.0f
 #define SG_HOST_HOOK_NEAR_BITE_GRAVITY_ZERO_DISTANCE 50.0f
 #define SG_HOST_HOOK_CTF_NO_GRAP_DAMAGE UINT32_C(64)
+#define SG_HOST_HOOK_MUZZLE_FORWARD_OFFSET 8U
+#define SG_HOST_HOOK_MUZZLE_RIGHT_OFFSET 8U
+#define SG_HOST_HOOK_MUZZLE_VIEW_OFFSET 8U
+#define SG_HOST_HOOK_TRACE_EPSILON 10.0f
 
 typedef enum sg_host_hook_phase_e
 {
@@ -56,6 +60,9 @@ typedef struct sg_host_hook_law_s
 	uint32_t attached_damage;
 	uint32_t projectile_health;
 	uint32_t attached_cadence_frames;
+	/* LMCTF_FireHumanHook moves a blocked bolt back by this exact amount
+	 * before invoking its touch callback. */
+	float trace_epsilon;
 	/* Runtime ctf_no_grapple_damage is part of the published damage law. */
 	uint32_t no_grapple_damage;
 	uint64_t identity;
@@ -65,6 +72,8 @@ typedef struct sg_host_hook_law_s
 	float near_bite_distance;
 	float near_bite_gravity_zero_distance;
 } sg_host_hook_law_t;
+
+typedef int (*sg_host_hook_live_capture_function_t)(sg_host_hook_law_t *law);
 
 typedef struct sg_host_hook_observation_s
 {
@@ -76,6 +85,10 @@ typedef struct sg_host_hook_observation_s
 	uint64_t target_identity;
 	float bite_distance;
 	int muzzle_clear;
+	/* FIRE accepts the spawn before this trace result is consumed.  When set,
+	 * first_hit is the immediate touch from that same fire operation. */
+	int immediate_hit;
+	int trace_epsilon_applied;
 	int first_hit;
 	int sky;
 	int owner_hit;
@@ -85,6 +98,7 @@ typedef struct sg_host_hook_observation_s
 	 * touch path aborts before publishing an attachment in this case. */
 	int target_died_after_damage;
 	int attack_held;
+	int grounded;
 	/* The identity returned by the first accepted hit.  An attached tick
 	 * must carry this forward so a moving bite cannot silently retarget. */
 	uint64_t attached_target_identity;
@@ -102,6 +116,9 @@ typedef struct sg_host_hook_step_s
 	int pull_after_pmove;
 	int gravity_applied;
 	int gravity_zeroed;
+	int zero_velocity_z;
+	int zero_oldvelocity_z;
+	int trace_epsilon_applied;
 	uint32_t damage;
 	uint32_t next_last_damage_frame;
 	sg_host_hook_phase_t next_phase;
@@ -110,6 +127,8 @@ typedef struct sg_host_hook_step_s
 } sg_host_hook_step_t;
 
 void SG_HostHookLawDefault(sg_host_hook_law_t *law_out);
+/* Implemented by the live weapon owner (p_weapon.c). */
+int SG_HostHookLiveCapture(sg_host_hook_law_t *law_out);
 int SG_HostHookLawValid(const sg_host_hook_law_t *law);
 int SG_HostHookMuzzle(const float origin[3], float viewheight, int hand,
 	const float forward[3], const float right[3], float start_out[3]);

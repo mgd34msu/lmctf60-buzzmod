@@ -141,6 +141,13 @@ sg_host_law_result_t SG_HostLawPublicationMatch(
 sg_host_law_result_t SG_HostLawPublicationRevalidateProduction(
 	const sg_host_law_publication_t *publication);
 
+/* Borrow the collision authority owned by this publication.  The returned
+ * view is read-only and is valid only until the publication is destroyed;
+ * callers must reacquire it after every level transition. */
+sg_host_law_result_t SG_HostLawPublicationCollisionAuthority(
+	const sg_host_law_publication_t *publication,
+	const sg_host_collision_authority_t **authority_out);
+
 /* Execute the captured laws.  None of these functions accepts a callback. */
 sg_host_law_result_t SG_HostLawPublicationCollisionTrace(
 	const sg_host_law_publication_t *publication,
@@ -173,10 +180,21 @@ sg_host_law_result_t SG_HostLawPublicationDoorStep(
 	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
 	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
 	sg_host_mechanism_transition_t *result_out);
+sg_host_law_result_t SG_HostLawPublicationDoorStepEx(
+	const sg_host_law_publication_t *publication,
+	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
+	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
+	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
+	sg_host_mechanism_transition_t *result_out);
 sg_host_law_result_t SG_HostLawPublicationPlatformStep(
 	const sg_host_law_publication_t *publication,
 	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
 	uint64_t debounce_until_ms, sg_host_mechanism_transition_t *result_out);
+sg_host_law_result_t SG_HostLawPublicationPlatformStepEx(
+	const sg_host_law_publication_t *publication,
+	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
+	uint64_t debounce_until_ms, sg_host_mechanism_blocker_kind_t blocker_kind,
+	uint32_t damage, sg_host_mechanism_transition_t *result_out);
 sg_host_law_result_t SG_HostLawPublicationTriggerStep(
 	const sg_host_law_publication_t *publication, int already_triggered,
 	float wait_seconds, uint64_t now_ms,

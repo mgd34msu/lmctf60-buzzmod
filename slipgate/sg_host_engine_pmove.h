@@ -30,8 +30,24 @@ typedef struct sg_host_engine_pmove_abi_s
 	uint64_t identity;
 } sg_host_engine_pmove_abi_t;
 
+/* A publication captures the exact callback and the import table that owns
+ * it.  ABI constants describe the shape only; they are not authority for
+ * executing a mutable import slot. */
+typedef struct sg_host_engine_pmove_binding_s
+{
+	sg_host_pmove_function_t entry;
+	const void *owner;
+} sg_host_engine_pmove_binding_t;
+
 /* Returns zero unless the game import contains the engine Pmove slot. */
 int SG_HostEnginePmoveABI(sg_host_engine_pmove_abi_t *abi_out);
+
+int SG_HostEnginePmoveBindingCapture(
+	sg_host_engine_pmove_binding_t *binding_out);
+int SG_HostEnginePmoveBindingCurrent(
+	const sg_host_engine_pmove_binding_t *binding);
+int SG_HostEnginePmoveBound(const sg_host_engine_pmove_binding_t *binding,
+	pmove_t *pmove);
 
 /* Calls the engine import directly; no caller-supplied function is accepted. */
 int SG_HostEnginePmove(pmove_t *pmove);

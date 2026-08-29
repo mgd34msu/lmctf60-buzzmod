@@ -9,6 +9,14 @@
 #endif
 #include "sg_host_collision.h"
 
+struct sg_host_engine_pmove_binding_s;
+
+/* The only dynamic gravity override accepted by the published evaluator is
+ * the live human hook state.  It is deliberately identity-bound rather than
+ * a caller-provided "gravity = 0" switch. */
+#define SG_HOST_PMOVE_HOOK_LAW_ID UINT64_C(0x484f4f4b4c573031)
+#define SG_HOST_PMOVE_HOOK_LENGTH_GRAVITY_ZERO 50U
+
 typedef enum sg_host_pmove_error_e
 {
 	SG_HOST_PMOVE_ERROR_NONE = 0,
@@ -27,6 +35,12 @@ typedef struct sg_host_pmove_request_s
 	/* The host uses this exact comparison to select its initial snap search. */
 	pmove_state_t previous_state;
 	usercmd_t command;
+	/* These fields mirror ClientThink's authoritative hook branch.  All zero
+	 * means ordinary map gravity; nonzero values must name the published hook
+	 * law and its attached state. */
+	uint64_t hook_law_id;
+	uint32_t hook_attached;
+	uint32_t hook_length;
 } sg_host_pmove_request_t;
 
 typedef struct sg_host_pmove_result_s
@@ -47,6 +61,7 @@ typedef struct sg_host_pmove_result_s
 	uint32_t elapsed_ms;
 	float gravity;
 	uint64_t physics_abi_id;
+	uint64_t gravity_law_id;
 } sg_host_pmove_result_t;
 
 typedef void (*sg_host_pmove_function_t)(pmove_t *pmove);
@@ -64,6 +79,14 @@ int SG_HostPmoveEvaluateEngineFrame(
 	const sg_host_collision_authority_t *authority,
 	const sg_host_collision_scene_t *scene,
 	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+
+/* Same operation using the callback captured by a publication. */
+int SG_HostPmoveEvaluateBoundEngineFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const struct sg_host_engine_pmove_binding_s *binding,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
 
 const char *SG_HostPmoveErrorString(sg_host_pmove_error_t error);

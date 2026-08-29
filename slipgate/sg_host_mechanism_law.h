@@ -18,6 +18,9 @@
 #define SG_HOST_MECHANISM_TRAIN_START_ON UINT32_C(1)
 #define SG_HOST_MECHANISM_TRAIN_TOGGLE UINT32_C(2)
 #define SG_HOST_MECHANISM_TRAIN_BLOCK_STOPS UINT32_C(4)
+#define SG_HOST_MECHANISM_DEFAULT_DOOR_DAMAGE UINT32_C(2)
+#define SG_HOST_MECHANISM_NONCLIENT_DAMAGE UINT32_C(100000)
+#define SG_HOST_MECHANISM_TRIGGER_DEFAULT_WAIT_SECONDS 0.2f
 
 /* The stock mover state values are part of the executable equation, not
  * caller-owned labels. */
@@ -53,6 +56,9 @@ typedef struct sg_host_mechanism_law_s
 	float train_default_speed;
 } sg_host_mechanism_law_t;
 
+typedef int (*sg_host_mechanism_live_capture_function_t)(
+	sg_host_mechanism_law_t *law);
+
 typedef struct sg_host_mechanism_move_result_s
 {
 	int valid;
@@ -87,6 +93,14 @@ typedef enum sg_host_mechanism_train_event_e
 	SG_HOST_MECHANISM_TRAIN_USE
 } sg_host_mechanism_train_event_t;
 
+typedef enum sg_host_mechanism_blocker_kind_e
+{
+	SG_HOST_MECHANISM_BLOCKER_NONE = 0,
+	SG_HOST_MECHANISM_BLOCKER_CLIENT,
+	SG_HOST_MECHANISM_BLOCKER_MONSTER,
+	SG_HOST_MECHANISM_BLOCKER_OTHER
+} sg_host_mechanism_blocker_kind_t;
+
 typedef struct sg_host_mechanism_transition_s
 {
 	int accepted;
@@ -97,11 +111,15 @@ typedef struct sg_host_mechanism_transition_s
 	int damaged;
 	int destroyed;
 	int next_state;
+	sg_host_mechanism_blocker_kind_t blocker_kind;
+	uint32_t damage;
 	uint64_t next_think_ms;
 	uint64_t next_debounce_ms;
 } sg_host_mechanism_transition_t;
 
 void SG_HostMechanismLawDefault(sg_host_mechanism_law_t *law_out);
+/* Implemented by the live mover owner (g_func.c). */
+int SG_HostMechanismLiveCapture(sg_host_mechanism_law_t *law_out);
 int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law);
 int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 	float distance, float speed, float accel, float decel, int current_entity,
@@ -110,9 +128,18 @@ int SG_HostMechanismDoorStep(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
 	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
 	sg_host_mechanism_transition_t *result_out);
+int SG_HostMechanismDoorStepEx(const sg_host_mechanism_law_t *law,
+	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
+	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,
+	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
+	sg_host_mechanism_transition_t *result_out);
 int SG_HostMechanismPlatformStep(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
 	uint64_t debounce_until_ms, sg_host_mechanism_transition_t *result_out);
+int SG_HostMechanismPlatformStepEx(const sg_host_mechanism_law_t *law,
+	sg_host_mechanism_platform_event_t event, int state, uint64_t now_ms,
+	uint64_t debounce_until_ms, sg_host_mechanism_blocker_kind_t blocker_kind,
+	uint32_t damage, sg_host_mechanism_transition_t *result_out);
 int SG_HostMechanismTriggerStep(const sg_host_mechanism_law_t *law,
 	int already_triggered, float wait_seconds, uint64_t now_ms,
 	sg_host_mechanism_transition_t *result_out);

@@ -1538,7 +1538,8 @@ slipgate/sg_host_mechanism_law.o: slipgate/sg_host_mechanism_law.c \
 		slipgate/sg_host_mechanism_law.h
 slipgate/sg_host_law_owner.o: slipgate/sg_host_law_owner.c \
 		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_collision.h game.h q_shared.h
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
+		slipgate/sg_identity.h game.h q_shared.h
 slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_law_publication.h slipgate/sg_host_collision.h \
 		slipgate/sg_host_pmove.h slipgate/sg_host_engine_pmove.h \
