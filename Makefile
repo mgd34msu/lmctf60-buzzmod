@@ -1317,6 +1317,12 @@ OBJS := \
 	slipgate/sg_strategy.o \
 	slipgate/sg_strategy_caller.o \
 	slipgate/sg_strategy_runtime_bridge.o \
+	slipgate/sg_mechanism_capability_seal.o \
+	slipgate/sg_phase_mover_support_provider.o \
+	slipgate/sg_phase_catalog.o \
+	slipgate/sg_phase_catalog_audit.o \
+	slipgate/sg_phase_catalog_publication.o \
+	slipgate/sg_phase_catalog_owner.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
 	sg_net.o \
@@ -3877,11 +3883,13 @@ weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
 phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 		tests/sg_phase_catalog_test.c \
 		tests/sg_phase_catalog_mechanism_integration_test.c \
+		tests/sg_phase_catalog_model_integration_test.c \
 		tests/sg_mechanism_capability_test.c \
 		slipgate/sg_phase_catalog.c slipgate/sg_phase_catalog.h \
 		slipgate/sg_phase_catalog_internal.h \
 		slipgate/sg_phase_catalog_audit.c \
 		slipgate/sg_phase_catalog_publication.c \
+		slipgate/sg_phase_catalog_owner.c slipgate/sg_phase_catalog_owner.h \
 		slipgate/sg_phase_mover_support_provider.c \
 		slipgate/sg_mechanism_capability_seal.c \
 		slipgate/sg_mechanism_capability.h \
@@ -3899,7 +3907,7 @@ phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 		slipgate/sg_bsp_completeness_state.c \
 		slipgate/sg_bsp_completeness_portal.c \
 		slipgate/sg_bsp_completeness_portal_index.c \
-		slipgate/sg_rune_model.h
+		slipgate/sg_rune_model.h slipgate/sg_rune_model.c
 	$(E) [TEST] phase catalog publication
 	$(Q)sh tests/run_sg_phase_catalog_test.sh
 

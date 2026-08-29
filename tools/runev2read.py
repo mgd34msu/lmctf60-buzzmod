@@ -15,7 +15,7 @@ from dataclasses import dataclass
 MAGIC = 0x324E5552
 VERSION = 2
 ENDIAN = 0x0102
-SCHEMA_REVISION = 3
+SCHEMA_REVISION = 4
 HEADER_BYTES = 64
 ENTRY_BYTES = 32
 SECTION_COUNT = 13
@@ -25,9 +25,9 @@ UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
 NONE_ID = (UINT64_MAX, UINT64_MAX, UINT64_MAX)
 
-RECORD_BYTES = (0, 256, 64, 12, 136, 136, 164, 172, 132, 104, 332,
+RECORD_BYTES = (0, 256, 64, 12, 136, 160, 164, 172, 132, 104, 332,
                 188, 160, 64)
-MAX_COUNTS = (0, 1, 4_194_304, 8_388_608, 262_144, 4_194_304,
+MAX_COUNTS = (0, 1, 4_194_304, 8_388_608, 262_144, UINT32_MAX,
               1_048_576, 2_097_152, 2_097_152, 2_097_152, 4_194_304,
               65_536, 65_536, 1)
 
@@ -382,17 +382,27 @@ def _validate_records(data: bytes, sections: list[Section], source: int,
     for index in range(sections[4].count):
         record = _record(data, sections[4], index)
         cell_index = _find(cells, _stable_id(data, record + 48))
+        destination_cell_index = _find(cells, _stable_id(data, record + 136))
         source_phase = _find(phases, _stable_id(data, record + 72))
         destination_phase = _find(phases, _stable_id(data, record + 96))
-        assert cell_index is not None and source_phase is not None and destination_phase is not None
+        assert (cell_index is not None and destination_cell_index is not None
+                and source_phase is not None and destination_phase is not None)
         kind = _u32(data, record + 120)
+        flags = _u32(data, record + 132)
         duration = _interval(data, record + 124, True)
-        if source_phase == destination_phase or not 1 <= kind < 8 or duration[1] <= 0.0 \
-                or _u32(data, record + 132) != 0:
+        cross_cell = bool(flags & 1)
+        if (source_phase == destination_phase or not 1 <= kind < 9
+                or (kind == 8 and duration != (0.0, 0.0))
+                or (kind != 8 and duration[1] <= 0.0)
+                or flags & ~1
+                or cross_cell != (cell_index != destination_cell_index)
+                or (kind == 8 and not cross_cell)):
             _reject("bad-domain")
         phase_span = cell_values[cell_index]["spans"][1]
+        destination_phase_span = cell_values[destination_cell_index]["spans"][1]
         if not (phase_span[0] <= source_phase < phase_span[0] + phase_span[1]
-                and phase_span[0] <= destination_phase < phase_span[0] + phase_span[1]):
+                and destination_phase_span[0] <= destination_phase <
+                destination_phase_span[0] + destination_phase_span[1]):
             _reject("bad-reference")
         source_value = phase_values[source_phase]
         destination_value = phase_values[destination_phase]
@@ -444,6 +454,9 @@ def _validate_records(data: bytes, sections: list[Section], source: int,
                           or source_value["stance"] != destination_value["stance"]
                           or source_value["void"] != destination_value["void"]
                           or not same_clock):
+            _reject("bad-domain")
+        if kind == 8 and (not same_discrete or not same_clock
+                          or not same_velocity or not same_elapsed):
             _reject("bad-domain")
 
     portal_values: list[dict[str, object]] = []

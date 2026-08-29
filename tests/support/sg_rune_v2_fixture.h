@@ -8,7 +8,7 @@
 #include "slipgate/sg_rune_v2_codec.h"
 
 #define TEST_IMAGE_CAPACITY 4096U
-#define TEST_IMAGE_BYTES 3328U
+#define TEST_IMAGE_BYTES 3352U
 #define SOURCE_SET_ID UINT64_C(0x5352435345543031)
 
 typedef struct sg_rune_v2_test_model_fixture_s
@@ -150,6 +150,7 @@ static void SG_RuneV2TestFixtureInit(sg_rune_v2_test_model_fixture_t *fixture)
 	fixture->phase_transitions[0].order =
 		Order(SG_RUNE_ORDER_PHASE_TRANSITION, 0U);
 	fixture->phase_transitions[0].cell = CellId(0U);
+	fixture->phase_transitions[0].destination_cell = CellId(0U);
 	fixture->phase_transitions[0].source_phase = PhaseId(0U);
 	fixture->phase_transitions[0].destination_phase = PhaseId(1U);
 	fixture->phase_transitions[0].kind = SG_RUNE_PHASE_TRANSITION_STANCE;

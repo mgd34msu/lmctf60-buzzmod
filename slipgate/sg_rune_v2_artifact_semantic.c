@@ -456,7 +456,8 @@ static int CatalogRelationsValid(const sg_rune_v2_semantic_catalog_view_t *catal
 		if (!RecordIdentityValid(&transition->id.value, &transition->order,
 			SG_RUNE_ORDER_PHASE_TRANSITION,
 			catalog->identity.source_set_identity, previous) ||
-			!FindExpectedCell(catalog, &transition->cell.value))
+			!FindExpectedCell(catalog, &transition->cell.value) ||
+			!FindExpectedCell(catalog, &transition->destination_cell.value))
 			return 0;
 		previous = &transition->order;
 	}
@@ -899,6 +900,8 @@ static int TransitionEqual(const sg_rune_phase_transition_t *candidate,
 	return StableIdEqual(&candidate->id.value, &expected->id.value) &&
 		OrderEqual(&candidate->order, &expected->order) &&
 		StableIdEqual(&candidate->cell.value, &expected->cell.value) &&
+		StableIdEqual(&candidate->destination_cell.value,
+			&expected->destination_cell.value) &&
 		StableIdEqual(&candidate->source_phase.value,
 			&expected->source_phase.value) &&
 		StableIdEqual(&candidate->destination_phase.value,

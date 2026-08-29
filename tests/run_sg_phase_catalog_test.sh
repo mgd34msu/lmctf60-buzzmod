@@ -10,6 +10,21 @@ sources='tests/sg_phase_catalog_test.c
 slipgate/sg_phase_catalog.c
 slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
+slipgate/sg_phase_catalog_owner.c
+slipgate/sg_phase_mover_support_provider.c
+slipgate/sg_mechanism_capability_seal.c
+slipgate/sg_configuration_semantics.c
+slipgate/sg_configuration_lattice.c
+slipgate/sg_configuration_space.c
+slipgate/sg_configuration_audit.c
+slipgate/sg_host_collision.c
+slipgate/sg_bsp_world.c
+slipgate/sg_rune_model.c'
+model_sources='tests/sg_phase_catalog_model_integration_test.c
+slipgate/sg_phase_catalog.c
+slipgate/sg_phase_catalog_audit.c
+slipgate/sg_phase_catalog_publication.c
+slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c
 slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_configuration_semantics.c
@@ -27,6 +42,7 @@ slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_phase_catalog.c
 slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
+slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c
 slipgate/sg_configuration_semantics.c
 slipgate/sg_configuration_lattice.c
@@ -55,6 +71,13 @@ done
 
 for cc in gcc clang
 do
+	$cc $strict $isl_cflags -I. $model_sources -lm $isl_libs \
+		-o "$tmp_dir/phase-catalog-model-$cc"
+	"$tmp_dir/phase-catalog-model-$cc"
+done
+
+for cc in gcc clang
+do
 	$cc $strict $isl_cflags -I. $producer_sources -lm $isl_libs \
 		-o "$tmp_dir/phase-catalog-producer-$cc"
 	"$tmp_dir/phase-catalog-producer-$cc"
@@ -74,8 +97,16 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/phase-catalog-sanitize"
 
+clang $strict $isl_cflags -O1 -g -fno-omit-frame-pointer \
+	-fsanitize=address,undefined -I. $model_sources -lm $isl_libs \
+	-o "$tmp_dir/phase-catalog-model-sanitize"
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	"$tmp_dir/phase-catalog-model-sanitize"
+
 for source in slipgate/sg_phase_catalog.c slipgate/sg_phase_catalog_audit.c \
 	slipgate/sg_phase_catalog_publication.c \
+	slipgate/sg_phase_catalog_owner.c \
 	slipgate/sg_phase_mover_support_provider.c \
 	slipgate/sg_mechanism_capability_seal.c tests/sg_phase_catalog_test.c
 do
@@ -86,3 +117,7 @@ done
 clang --analyze $strict $isl_cflags -I. \
 	tests/sg_phase_catalog_mechanism_integration_test.c \
 	-o "$tmp_dir/sg_phase_catalog_mechanism_integration_test.c.plist"
+
+clang --analyze $strict $isl_cflags -I. \
+	tests/sg_phase_catalog_model_integration_test.c \
+	-o "$tmp_dir/sg_phase_catalog_model_integration_test.c.plist"

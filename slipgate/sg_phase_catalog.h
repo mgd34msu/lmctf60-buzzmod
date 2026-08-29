@@ -9,7 +9,6 @@
 #include "sg_mechanism_capability.h"
 
 #define SG_PHASE_CATALOG_INDEX_NONE UINT32_MAX
-#define SG_PHASE_CATALOG_MAX_BINDINGS SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS
 
 /* A source completion value is evidence about the complete mover-support
  * enumeration.  It is not a permission for the caller to manufacture phase
@@ -113,6 +112,9 @@ typedef struct sg_phase_catalog_transition_evidence_s
 	uint32_t travel_ms;
 	uint32_t wait_ms;
 	uint32_t reset_ms;
+	/* PORTAL is geometric adjacency and has no movement travel time.  This
+	 * authenticated field is therefore required to remain exactly zero. */
+	uint32_t portal_duration_ms;
 	uint64_t activation_time_ms;
 	uint64_t active_time_ms;
 	uint64_t exit_time_ms;

@@ -261,6 +261,7 @@ static void ExpectedTransition(sg_rune_v2_expected_transition_t *expected,
 	memset(expected, 0, sizeof(*expected));
 	expected->id = transition->id;
 	expected->cell = transition->cell;
+	expected->destination_cell = transition->destination_cell;
 	expected->order = transition->order;
 	expected->source_phase = transition->source_phase;
 	expected->destination_phase = transition->destination_phase;

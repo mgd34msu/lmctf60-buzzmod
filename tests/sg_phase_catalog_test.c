@@ -127,10 +127,10 @@ static int FixtureInit(phase_fixture_t *fixture, uint32_t cell_count,
 			SetRegion(&fixture->regions[0], 0U, 0U,
 				SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
 		if (region_count >= 2U)
-			SetRegion(&fixture->regions[1], 1U, 1U,
+			SetRegion(&fixture->regions[1], (UINT64_C(1) << 32) | 1U, 1U,
 				SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
 		for (index = 2U; index < region_count; index++)
-			SetRegion(&fixture->regions[index], index, 1U,
+			SetRegion(&fixture->regions[index], (UINT64_C(1) << 32) | index, 1U,
 				SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE);
 	}
 	else
@@ -325,7 +325,13 @@ static void TestRegionZeroAndImmutableEmpty(void)
 	const sg_phase_catalog_view_t *view = NULL;
 	uint32_t binding_count = 0U;
 
-	CHECK_PHASE(FixtureInit(&fixture, 2U, 2U, 0));
+	if (!FixtureInit(&fixture, 2U, 2U, 0))
+	{
+		CHECK_PHASE(0);
+		return;
+	}
+	CHECK_PHASE(fixture.regions[0].id == 0U &&
+		fixture.regions[1].id == ((UINT64_C(1) << 32) | UINT64_C(1)));
 	CHECK_PHASE(SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
 	CHECK_PHASE(catalog != NULL);
 	if (!catalog)
@@ -358,6 +364,27 @@ static void TestRegionZeroAndImmutableEmpty(void)
 		sizeof(*fixture.regions)));
 	SG_PhaseCatalogPublicationDestroy(publication);
 	SG_PhaseCatalogDestroy(catalog);
+	FixtureDestroy(&fixture);
+}
+
+static void TestRejectNonCanonicalRegionIds(void)
+{
+	phase_fixture_t fixture;
+	sg_phase_catalog_t *catalog = NULL;
+	sg_phase_catalog_error_t error;
+
+	if (!FixtureInit(&fixture, 2U, 2U, 0))
+	{
+		CHECK_PHASE(0);
+		return;
+	}
+	/* These values are increasing and unique, but are not the producer's
+	 * ((uint64_t)cell_index << 32) | region_index derivation. */
+	fixture.regions[0].id = UINT64_C(100);
+	fixture.regions[1].id = UINT64_C(101);
+	CHECK_PHASE(!SG_PhaseCatalogBuild(&fixture.source, &catalog, &error));
+	CHECK_PHASE(catalog == NULL);
+	CHECK_PHASE(error.code == SG_PHASE_CATALOG_ERROR_INVALID_SOURCE);
 	FixtureDestroy(&fixture);
 }
 
@@ -421,7 +448,7 @@ static void TestStanceAndPortalTransitions(void)
 			if (catalog->transition_evidence[index].origin ==
 				SG_PHASE_CATALOG_TRANSITION_STANCE_OVERLAP)
 				stance_transitions++;
-		CHECK_PHASE(stance_transitions == 1U);
+		CHECK_PHASE(stance_transitions == 2U);
 		CHECK_PHASE(SG_PhaseCatalogAudit(&fixture.source, catalog, &audit));
 		SG_PhaseCatalogDestroy(catalog);
 		catalog = NULL;
@@ -511,6 +538,7 @@ int main(void)
 {
 	TestRealConfigurationSemanticsProducer();
 	TestRegionZeroAndImmutableEmpty();
+	TestRejectNonCanonicalRegionIds();
 	TestSupportTransitionEvidence();
 	TestStanceAndPortalTransitions();
 	TestCallerCannotIssueMechanismProvider();

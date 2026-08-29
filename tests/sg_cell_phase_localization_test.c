@@ -1826,6 +1826,7 @@ static void SetAccelerationTransition(locator_fixture_t *fixture,
 	transition->order = Order(SG_RUNE_ORDER_PHASE_TRANSITION, 0U);
 	transition->id.value = SG_RuneModelStableIdFromOrderKey(&transition->order);
 	transition->cell = fixture->runtime_cells[0].id;
+	transition->destination_cell = fixture->runtime_cells[0].id;
 	transition->source_phase = fixture->phases[source_phase].id;
 	transition->destination_phase = fixture->phases[destination_phase].id;
 	transition->kind = SG_RUNE_PHASE_TRANSITION_ACCELERATION;

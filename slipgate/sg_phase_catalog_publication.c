@@ -72,7 +72,6 @@ static int PublicationStorageShapeValid(
 	const sg_phase_catalog_view_t *view = &publication->view;
 
 	return publication->phase_capacity <= SG_RUNE_MODEL_MAX_PHASES &&
-		publication->binding_capacity <= SG_PHASE_CATALOG_MAX_BINDINGS &&
 		publication->transition_capacity <= SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS &&
 		AllocationFits((size_t)publication->phase_capacity,
 			sizeof(*publication->phase_storage)) &&

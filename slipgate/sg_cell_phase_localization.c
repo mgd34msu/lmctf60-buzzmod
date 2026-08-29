@@ -567,6 +567,8 @@ static int PhaseTransitionSemanticsValid(
 			destination->support != SG_RUNE_SUPPORT_NONE &&
 			source->stance == destination->stance &&
 			source->void_relation == destination->void_relation && clock;
+	case SG_RUNE_PHASE_TRANSITION_PORTAL:
+		return discrete && clock && velocity && elapsed;
 	case SG_RUNE_PHASE_TRANSITION_NONE:
 	case SG_RUNE_PHASE_TRANSITION_KIND_COUNT:
 		return 0;

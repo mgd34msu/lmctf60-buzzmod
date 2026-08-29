@@ -1775,6 +1775,8 @@ static void TestHorizonWitnessBoundsAndCells(void)
 	fixture.model.phase_transition_count = 1U;
 	fixture.model.phase_transitions = fixture.model_transitions;
 	fixture.model_transitions[0].cell.value = fixture.cells[0].id.value;
+	fixture.model_transitions[0].destination_cell.value =
+		fixture.cells[0].id.value;
 	fixture.model_transitions[0].source_phase.value =
 		fixture.model_phases[0].id.value;
 	fixture.model_transitions[0].destination_phase.value =

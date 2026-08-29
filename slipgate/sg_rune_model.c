@@ -496,6 +496,13 @@ static int PhaseInCell(const sg_rune_model_t *model,
 	return 0;
 }
 
+static int PhaseIndexInCell(const sg_rune_cell_t *cell,
+	uint32_t phase_index)
+{
+	return cell && phase_index >= cell->phases.first &&
+		phase_index - cell->phases.first < cell->phases.count;
+}
+
 static int PhaseDiscreteEqual(const sg_rune_phase_basis_t *left,
 	const sg_rune_phase_basis_t *right)
 {
@@ -538,6 +545,16 @@ static sg_rune_failure_reason_t ValidateTransitionSemantics(
 	case SG_RUNE_PHASE_TRANSITION_STANCE:
 		if (!PhaseEqualExceptStance(source, destination) ||
 			source->stance == destination->stance)
+			return SG_RUNE_FAILURE_INVALID_PHASE;
+		break;
+	case SG_RUNE_PHASE_TRANSITION_PORTAL:
+		/* Portal motion is represented separately from TIME.  Its endpoint
+		 * phases must have the same elapsed basis, even though their cell
+		 * ownership differs. */
+		if (!PhaseDiscreteEqual(source, destination) ||
+			!PhaseClockEqual(source, destination) ||
+			!Interval3Equal(&source->velocity, &destination->velocity) ||
+			!IntervalEqual(&source->elapsed_ms, &destination->elapsed_ms))
 			return SG_RUNE_FAILURE_INVALID_PHASE;
 		break;
 	case SG_RUNE_PHASE_TRANSITION_ACCELERATION:
@@ -605,9 +622,11 @@ static sg_rune_failure_reason_t ValidateTransition(
 	const sg_rune_order_key_t *previous)
 {
 	uint32_t cell_index;
+	uint32_t destination_cell_index;
 	uint32_t source_index;
 	uint32_t destination_index;
 	sg_rune_failure_reason_t reason;
+	int cross_cell;
 
 	reason = RecordIdentity(&transition->id.value, &transition->order,
 		SG_RUNE_ORDER_PHASE_TRANSITION, model->identity.source_set_identity,
@@ -622,12 +641,24 @@ static sg_rune_failure_reason_t ValidateTransition(
 		transition->kind <= SG_RUNE_PHASE_TRANSITION_NONE ||
 		transition->kind >= SG_RUNE_PHASE_TRANSITION_KIND_COUNT ||
 		!IntervalValid(&transition->duration_ms, 1) ||
-		transition->duration_ms.max_value <= 0.0f || transition->flags != 0)
+		(transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL ?
+			(transition->duration_ms.min_value != 0.0f ||
+			 transition->duration_ms.max_value != 0.0f) :
+			transition->duration_ms.max_value <= 0.0f) ||
+		(transition->flags & ~(sg_rune_phase_transition_flags_t)
+			SG_RUNE_PHASE_TRANSITION_FLAGS_KNOWN) != 0)
 		return SG_RUNE_FAILURE_INVALID_PHASE;
-	if (!PhaseInCell(model, &model->cells[cell_index],
-		&model->phases[source_index]) ||
-		!PhaseInCell(model, &model->cells[cell_index],
-			&model->phases[destination_index]))
+	cross_cell = (transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0;
+	if (transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL && !cross_cell)
+		return SG_RUNE_FAILURE_INVALID_REFERENCE;
+	if (!FindCell(model, transition->destination_cell,
+		&destination_cell_index) ||
+		cross_cell != (cell_index != destination_cell_index))
+		return SG_RUNE_FAILURE_INVALID_REFERENCE;
+	if (!PhaseIndexInCell(&model->cells[cell_index], source_index))
+		return SG_RUNE_FAILURE_INVALID_REFERENCE;
+	if (!PhaseIndexInCell(&model->cells[destination_cell_index],
+		destination_index))
 		return SG_RUNE_FAILURE_INVALID_REFERENCE;
 	return ValidateTransitionSemantics(transition, &model->phases[source_index],
 		&model->phases[destination_index]);

@@ -18,6 +18,9 @@ struct sg_phase_mover_support_provider_s
 	const struct sg_phase_mover_support_provider_s *self;
 	sg_rune_model_identity_t identity;
 	sg_phase_catalog_completion_t completion;
+	/* Canonical provenance of the accepted capability snapshot.  This is a
+	 * value digest, never an address, so equivalent builds remain identical. */
+	uint64_t accepted_capability_digest;
 	uint64_t verifier_identity;
 	sg_phase_mover_support_t *supports;
 	uint32_t support_count;

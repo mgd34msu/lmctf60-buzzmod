@@ -10,7 +10,7 @@
 #define RV2M_MAGIC UINT32_C(0x324e5552)
 #define RV2M_VERSION UINT16_C(2)
 #define RV2M_ENDIAN UINT16_C(0x0102)
-#define RV2M_SCHEMA_REVISION UINT32_C(3)
+#define RV2M_SCHEMA_REVISION UINT32_C(4)
 #define RV2M_HEADER_BYTES UINT64_C(64)
 #define RV2M_SECTION_ENTRY_BYTES UINT64_C(32)
 #define RV2M_SECTION_COUNT UINT32_C(13)
@@ -71,12 +71,12 @@ typedef struct rv2m_expected_s
 static int RV2MakeBounds(const unsigned char *bytes);
 
 static const uint32_t rv2m_record_bytes[RV2M_SECTION_COUNT] = {
-	256U, 64U, 12U, 136U, 136U, 164U, 172U, 132U, 104U, 332U,
+	256U, 64U, 12U, 136U, 160U, 164U, 172U, 132U, 104U, 332U,
 	188U, 160U, 64U
 };
 
 static const uint32_t rv2m_max_counts[RV2M_SECTION_COUNT] = {
-	1U, 4194304U, 8388608U, 262144U, 4194304U, 1048576U,
+	1U, 4194304U, 8388608U, 262144U, UINT32_MAX, 1048576U,
 	2097152U, 2097152U, 2097152U, 4194304U, 65536U, 65536U, 1U
 };
 
@@ -500,9 +500,10 @@ static int RV2MakeValidateReferences(const rv2m_context_t *context)
 		const unsigned char *record = RV2MakeRecord(context, 4U, index);
 
 		if (!RV2MakeReference(context, 5U, RV2MakeId(record + 48U), 0) ||
+			!RV2MakeReference(context, 5U, RV2MakeId(record + 136U), 0) ||
 			!RV2MakeReference(context, 3U, RV2MakeId(record + 72U), 0) ||
 			!RV2MakeReference(context, 3U, RV2MakeId(record + 96U), 0) ||
-			RV2MakeReadU32(record + 132U) != 0U)
+			(RV2MakeReadU32(record + 132U) & ~UINT32_C(1)) != 0U)
 			return 0;
 	}
 	for (index = 0U; index < context->section[6].count; index++)
@@ -741,6 +742,11 @@ static int RV2MakeTransitionSemantics(uint32_t kind,
 			RV2MakeReadU32(source + 48U) == RV2MakeReadU32(destination + 48U) &&
 			RV2MakeReadU32(source + 64U) == RV2MakeReadU32(destination + 64U) &&
 			RV2MakePhaseClockEqual(source, destination);
+	case 8U:
+		return RV2MakePhaseDiscreteEqual(source, destination) &&
+			RV2MakePhaseClockEqual(source, destination) &&
+			RV2MakeInterval3Equal(source + 96U, destination + 96U) &&
+			RV2MakeIntervalEqual(source + 120U, destination + 120U);
 	default:
 		return 0;
 	}
@@ -831,20 +837,28 @@ static int RV2MakeValidatePrivateRecords(const rv2m_context_t *context)
 		const unsigned char *source_record;
 		const unsigned char *destination_record;
 		uint32_t cell;
+		uint32_t destination_cell;
 		uint32_t source_phase;
 		uint32_t destination_phase;
 		uint32_t kind = RV2MakeReadU32(record + 120U);
+		uint32_t flags = RV2MakeReadU32(record + 132U);
 
 		if (!RV2MakeFindIdIndex(context, 5U, RV2MakeId(record + 48U), &cell) ||
+			!RV2MakeFindIdIndex(context, 5U, RV2MakeId(record + 136U),
+				&destination_cell) ||
 			!RV2MakeFindIdIndex(context, 3U, RV2MakeId(record + 72U),
 				&source_phase) ||
 			!RV2MakeFindIdIndex(context, 3U, RV2MakeId(record + 96U),
 				&destination_phase) || source_phase == destination_phase ||
-			kind < 1U || kind >= 8U || !RV2MakeInterval(record + 124U, 1) ||
-			RV2MakeReadF32(record + 128U) <= 0.0f ||
-			RV2MakeReadU32(record + 132U) != 0U ||
+			kind < 1U || kind >= 9U || !RV2MakeInterval(record + 124U, 1) ||
+			(kind == 8U ? (RV2MakeReadF32(record + 124U) != 0.0f ||
+				RV2MakeReadF32(record + 128U) != 0.0f) :
+				RV2MakeReadF32(record + 128U) <= 0.0f) ||
+			(flags & ~UINT32_C(1)) != 0U ||
+			((flags & UINT32_C(1)) != 0U) != (cell != destination_cell) ||
+			(kind == 8U && (flags & UINT32_C(1)) == 0U) ||
 			!RV2MakePhaseInCell(context, cell, source_phase) ||
-			!RV2MakePhaseInCell(context, cell, destination_phase))
+			!RV2MakePhaseInCell(context, destination_cell, destination_phase))
 			return 0;
 		source_record = RV2MakeRecord(context, 3U, source_phase);
 		destination_record = RV2MakeRecord(context, 3U, destination_phase);

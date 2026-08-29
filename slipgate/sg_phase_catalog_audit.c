@@ -82,7 +82,6 @@ static int CatalogStorageShapeValid(const sg_phase_catalog_t *catalog,
 	sg_phase_catalog_audit_result_t *report_out)
 {
 	if (catalog->phase_capacity > SG_RUNE_MODEL_MAX_PHASES ||
-		catalog->binding_capacity > SG_PHASE_CATALOG_MAX_BINDINGS ||
 		catalog->transition_capacity > SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS ||
 		!AllocationFits((size_t)catalog->phase_capacity,
 			sizeof(*catalog->phases)) ||
@@ -297,14 +296,20 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 		transition->order.source_set_identity !=
 			source->authority->identity.source_set_identity ||
 		!SG_RuneModelStableIdValid(&transition->cell.value) ||
+		!SG_RuneModelStableIdValid(&transition->destination_cell.value) ||
 		!IntervalValid(&transition->duration_ms) ||
-		transition->duration_ms.max_value <= 0.0f || transition->flags != 0U ||
+		(evidence->origin != SG_PHASE_CATALOG_TRANSITION_PORTAL &&
+			transition->duration_ms.max_value <= 0.0f) ||
+		(transition->flags & ~(uint32_t)SG_RUNE_PHASE_TRANSITION_FLAGS_KNOWN) !=
+			0U ||
 		evidence->origin < SG_PHASE_CATALOG_TRANSITION_STANCE_OVERLAP ||
 		evidence->origin >= SG_PHASE_CATALOG_TRANSITION_ORIGIN_COUNT ||
 		evidence->source_cell >= configuration->cell_count ||
 		evidence->destination_cell >= configuration->cell_count ||
 		!SG_RuneModelStableIdEqual(&transition->cell.value,
-			&configuration->cells[evidence->source_cell].id.value))
+			&configuration->cells[evidence->source_cell].id.value) ||
+		!SG_RuneModelStableIdEqual(&transition->destination_cell.value,
+			&configuration->cells[evidence->destination_cell].id.value))
 		return 0;
 	expected_id = SG_RuneModelStableIdFromOrderKey(&transition->order);
 	if (!SG_RuneModelStableIdEqual(&transition->id.value, &expected_id))
@@ -314,7 +319,9 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 	if (source_phase < 0 || destination_phase < 0 || source_phase == destination_phase ||
 		expected->phases[source_phase].order.source_index != evidence->source_cell ||
 		expected->phases[destination_phase].order.source_index !=
-			evidence->destination_cell)
+			evidence->destination_cell ||
+		((evidence->source_cell != evidence->destination_cell) !=
+			((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U)))
 		return 0;
 	switch (evidence->origin)
 	{
@@ -325,30 +332,51 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 		int destination_region = RegionIndexById(semantics,
 			evidence->destination_region_id);
 
-		return transition->kind == SG_RUNE_PHASE_TRANSITION_STANCE &&
-			evidence->source_record < configuration->stance_overlap_count &&
-			evidence->destination_record == SG_PHASE_CATALOG_INDEX_NONE &&
-			evidence->source_cell == configuration->stance_overlaps[
-				evidence->source_record].standing_cell &&
-			evidence->destination_cell == configuration->stance_overlaps[
-				evidence->source_record].crouching_cell && source_region >= 0 &&
-			destination_region >= 0 && semantics->regions[source_region].cell ==
-			evidence->source_cell && semantics->regions[destination_region].cell ==
-			evidence->destination_cell &&
-			expected->phases[source_phase].stance == SG_RUNE_STANCE_STANDING &&
-			expected->phases[destination_phase].stance == SG_RUNE_STANCE_CROUCHING &&
-			PhaseExceptStanceEqual(&expected->phases[source_phase],
-				&expected->phases[destination_phase]);
+		{
+			const sg_configuration_stance_overlap_t *overlap;
+			int forward;
+			int reverse;
+
+			if (transition->kind != SG_RUNE_PHASE_TRANSITION_STANCE ||
+				(transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) == 0U ||
+				evidence->source_record >= configuration->stance_overlap_count ||
+				evidence->destination_record != SG_PHASE_CATALOG_INDEX_NONE ||
+				source_region < 0 || destination_region < 0 ||
+				semantics->regions[source_region].cell != evidence->source_cell ||
+				semantics->regions[destination_region].cell !=
+					evidence->destination_cell)
+				return 0;
+			overlap = &configuration->stance_overlaps[evidence->source_record];
+			forward = evidence->source_cell == overlap->standing_cell &&
+				evidence->destination_cell == overlap->crouching_cell;
+			reverse = evidence->source_cell == overlap->crouching_cell &&
+				evidence->destination_cell == overlap->standing_cell;
+			return (forward || reverse) &&
+				((forward && expected->phases[source_phase].stance ==
+					SG_RUNE_STANCE_STANDING &&
+					expected->phases[destination_phase].stance ==
+					SG_RUNE_STANCE_CROUCHING) ||
+				 (reverse && expected->phases[source_phase].stance ==
+					SG_RUNE_STANCE_CROUCHING &&
+					expected->phases[destination_phase].stance ==
+					SG_RUNE_STANCE_STANDING)) &&
+				PhaseExceptStanceEqual(&expected->phases[source_phase],
+					&expected->phases[destination_phase]);
+		}
 	}
 	case SG_PHASE_CATALOG_TRANSITION_PORTAL:
 	{
 		const sg_configuration_portal_t *portal;
 
-		if (transition->kind != SG_RUNE_PHASE_TRANSITION_TIME ||
+		if (transition->kind != SG_RUNE_PHASE_TRANSITION_PORTAL ||
+			(transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) == 0U ||
 			evidence->source_record >= configuration->portal_count ||
-			evidence->destination_record >= configuration->cell_count ||
+			evidence->destination_record != evidence->destination_cell ||
 			evidence->source_state_mask != 0U || evidence->destination_state_mask != 0U ||
-			evidence->provider_verifier_identity != 0U)
+			evidence->provider_verifier_identity != 0U ||
+			evidence->portal_duration_ms != 0U ||
+			transition->duration_ms.min_value != 0.0f ||
+			transition->duration_ms.max_value != 0.0f)
 			return 0;
 		portal = &configuration->portals[evidence->source_record];
 		return SG_RuneModelStableIdEqual(&evidence->portal.value, &portal->id.value) &&
@@ -361,8 +389,12 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 			RegionIndexById(semantics, evidence->destination_region_id) >= 0 &&
 			semantics->regions[RegionIndexById(semantics,
 				evidence->source_region_id)].cell == evidence->source_cell &&
-			semantics->regions[RegionIndexById(semantics,
-				evidence->destination_region_id)].cell == evidence->destination_cell;
+				semantics->regions[RegionIndexById(semantics,
+					evidence->destination_region_id)].cell == evidence->destination_cell &&
+			expected->phases[source_phase].stance ==
+				expected->phases[destination_phase].stance &&
+			PhaseExceptStanceEqual(&expected->phases[source_phase],
+				&expected->phases[destination_phase]);
 	}
 	case SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE:
 		return transition->kind == SG_RUNE_PHASE_TRANSITION_SUPPORT &&
@@ -422,7 +454,9 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 		destination_region = RegionIndexById(semantics,
 			evidence->destination_region_id);
 		return transition->kind == (fact->kind == SG_MECHANISM_CAPABILITY_DWELL ?
-			SG_RUNE_PHASE_TRANSITION_MOVER_DWELL : SG_RUNE_PHASE_TRANSITION_TIME) &&
+				SG_RUNE_PHASE_TRANSITION_MOVER_DWELL : SG_RUNE_PHASE_TRANSITION_TIME) &&
+				((evidence->source_cell != evidence->destination_cell) ==
+				 ((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U)) &&
 			transition->duration_ms.min_value == (float)TimingSpan(fact) &&
 			transition->duration_ms.max_value == (float)TimingSpan(fact) &&
 			transition->kind != SG_RUNE_PHASE_TRANSITION_NONE &&

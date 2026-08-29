@@ -145,9 +145,12 @@ static int RegionFactsValid(const sg_phase_catalog_source_t *source,
 	uint32_t water_flags = region->water_type & SG_HOST_MASK_WATER;
 	sg_rune_medium_t medium;
 
-	/* Region ID zero is the first canonical ID emitted by
-	 * SG_ConfigurationSemanticsBuild and is therefore valid. */
+	/* Semantic producers derive IDs from the immutable source position.  The
+	 * cell is not enough to identify a region: reject caller-selected or merely
+	 * increasing IDs before any phase can be issued from them. */
 	if (region->cell >= source->configuration->cell_count ||
+		region->id != (((uint64_t)region->cell << 32) |
+			(uint64_t)region_index) ||
 		!Finite3(region->interior_witness.value) ||
 		!Finite3(region->bounds.mins.value) || !Finite3(region->bounds.maxs.value) ||
 		region->bounds.mins.value[0] >= region->bounds.maxs.value[0] ||
@@ -803,7 +806,10 @@ static int ExpectedReserveBindings(sg_phase_catalog_expected_t *expected,
 	uint32_t capacity;
 	void *grown;
 
-	if (required > SG_PHASE_CATALOG_MAX_BINDINGS)
+	/* Binding rows are source relations and are allowed to exceed the RUNE
+	 * transition output bound.  Only the uint32 count and allocation size are
+	 * representation limits. */
+	if (required == 0U)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, required);
 		return 0;
@@ -813,8 +819,8 @@ static int ExpectedReserveBindings(sg_phase_catalog_expected_t *expected,
 	capacity = expected->binding_capacity == 0U ? 16U : expected->binding_capacity;
 	while (capacity < required)
 	{
-		if (capacity > SG_PHASE_CATALOG_MAX_BINDINGS / 2U)
-			capacity = SG_PHASE_CATALOG_MAX_BINDINGS;
+		if (capacity > UINT32_MAX / 2U)
+			capacity = UINT32_MAX;
 		else
 			capacity *= 2U;
 	}
@@ -928,6 +934,12 @@ static int AppendBinding(sg_phase_catalog_expected_t *expected,
 {
 	sg_phase_catalog_binding_t *binding;
 
+	if (expected->binding_count == UINT32_MAX)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+			expected->binding_count);
+		return 0;
+	}
 	if (!ExpectedReserveBindings(expected, expected->binding_count + 1U,
 		error_out))
 		return 0;
@@ -987,6 +999,12 @@ static int AppendPair(sg_phase_catalog_expected_t *expected,
 	const sg_phase_catalog_transition_evidence_t *evidence,
 	sg_phase_catalog_error_t *error_out)
 {
+	if (expected->transition_pair_count == UINT32_MAX)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+			expected->transition_pair_count);
+		return 0;
+	}
 	if (!ExpectedReservePairs(expected, expected->transition_pair_count + 1U,
 		error_out))
 		return 0;
@@ -1036,59 +1054,67 @@ static int AppendStanceTransition(const sg_phase_catalog_source_t *source,
 	const sg_configuration_stance_overlap_t *overlap =
 		&source->configuration->stance_overlaps[overlap_index];
 	uint32_t source_first, source_last, destination_first, destination_last;
-	uint32_t source_phase = SG_PHASE_CATALOG_INDEX_NONE;
-	uint32_t destination_phase = SG_PHASE_CATALOG_INDEX_NONE;
 	uint32_t phase;
+	uint32_t direction;
 
 	if (!PhaseCellRange(expected, overlap->standing_cell, &source_first,
 		&source_last) || !PhaseCellRange(expected, overlap->crouching_cell,
 		&destination_first, &destination_last))
 		return 0;
-	(void)destination_first;
-	(void)destination_last;
-	for (phase = source_first; phase < source_last; phase++)
+	/* The overlap is bidirectional.  Walk each source stance independently and
+	 * use the neutral fingerprint index for the destination; there is no
+	 * first-match shortcut, so every compatible pair is represented. */
+	for (direction = 0U; direction < 2U; direction++)
 	{
-		uint32_t candidate;
+		uint32_t source_cell = direction == 0U ? overlap->standing_cell :
+			overlap->crouching_cell;
+		uint32_t destination_cell = direction == 0U ? overlap->crouching_cell :
+			overlap->standing_cell;
+		sg_rune_stance_t source_stance = direction == 0U ?
+			SG_RUNE_STANCE_STANDING : SG_RUNE_STANCE_CROUCHING;
+		sg_rune_stance_t destination_stance = direction == 0U ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+		uint32_t first = direction == 0U ? source_first : destination_first;
+		uint32_t last = direction == 0U ? source_last : destination_last;
 
-		if (expected->phases[phase].stance != SG_RUNE_STANCE_STANDING ||
-			expected->phases[phase].reference_frame != SG_RUNE_FRAME_WORLD)
-			continue;
-		if (PhaseNeutralFind(expected, overlap->crouching_cell,
-			&expected->phases[phase], SG_RUNE_STANCE_CROUCHING, &candidate))
+		for (phase = first; phase < last; phase++)
 		{
-			source_phase = phase;
-			destination_phase = candidate;
-			break;
+			uint32_t candidate;
+			sg_rune_phase_transition_t transition;
+			sg_phase_catalog_transition_evidence_t evidence;
+			uint32_t frame = source->authority->identity.physics.frame_ms;
+			uint32_t quantum = source->authority->identity.physics.substep_ms;
+
+			if (expected->phases[phase].stance != source_stance ||
+				expected->phases[phase].reference_frame != SG_RUNE_FRAME_WORLD ||
+				!PhaseNeutralFind(expected, destination_cell,
+					&expected->phases[phase], destination_stance, &candidate))
+				continue;
+			memset(&transition, 0, sizeof(transition));
+			memset(&evidence, 0, sizeof(evidence));
+			transition.cell = source->configuration->cells[source_cell].id;
+			transition.destination_cell =
+				source->configuration->cells[destination_cell].id;
+			transition.source_phase = expected->phases[phase].id;
+			transition.destination_phase = expected->phases[candidate].id;
+			transition.kind = SG_RUNE_PHASE_TRANSITION_STANCE;
+			transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+			transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
+				(float)frame };
+			evidence.origin = SG_PHASE_CATALOG_TRANSITION_STANCE_OVERLAP;
+			evidence.source_record = overlap_index;
+			evidence.destination_record = SG_PHASE_CATALOG_INDEX_NONE;
+			evidence.source_cell = source_cell;
+			evidence.destination_cell = destination_cell;
+			evidence.source_region_id = source->semantics->regions[
+				expected->phase_region_by_phase[phase]].id;
+			evidence.destination_region_id = source->semantics->regions[
+				expected->phase_region_by_phase[candidate]].id;
+			if (!AppendPair(expected, &transition, &evidence, error_out))
+				return 0;
 		}
 	}
-	if (source_phase == SG_PHASE_CATALOG_INDEX_NONE ||
-		destination_phase == SG_PHASE_CATALOG_INDEX_NONE)
-		return 0;
-	{
-		sg_rune_phase_transition_t transition;
-		sg_phase_catalog_transition_evidence_t evidence;
-		uint32_t frame = source->authority->identity.physics.frame_ms;
-		uint32_t quantum = source->authority->identity.physics.substep_ms;
-
-		memset(&transition, 0, sizeof(transition));
-		memset(&evidence, 0, sizeof(evidence));
-		transition.cell = source->configuration->cells[overlap->standing_cell].id;
-		transition.source_phase = expected->phases[source_phase].id;
-		transition.destination_phase = expected->phases[destination_phase].id;
-		transition.kind = SG_RUNE_PHASE_TRANSITION_STANCE;
-		transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
-			(float)frame };
-		evidence.origin = SG_PHASE_CATALOG_TRANSITION_STANCE_OVERLAP;
-		evidence.source_record = overlap_index;
-		evidence.destination_record = SG_PHASE_CATALOG_INDEX_NONE;
-		evidence.source_cell = overlap->standing_cell;
-		evidence.destination_cell = overlap->crouching_cell;
-		evidence.source_region_id = source->semantics->regions[
-			expected->phase_region_by_phase[source_phase]].id;
-		evidence.destination_region_id = source->semantics->regions[
-			expected->phase_region_by_phase[destination_phase]].id;
-		return AppendPair(expected, &transition, &evidence, error_out);
-	}
+	return 1;
 }
 
 static int AppendPortalTransition(const sg_phase_catalog_source_t *source,
@@ -1104,7 +1130,6 @@ static int AppendPortalTransition(const sg_phase_catalog_source_t *source,
 	uint32_t destination_first;
 	uint32_t destination_last;
 	uint32_t source_phase;
-	int appended = 0;
 
 	if (!PhaseCellRange(expected, source_cell, &source_first, &source_last) ||
 		!PhaseCellRange(expected, destination_cell, &destination_first,
@@ -1120,8 +1145,6 @@ static int AppendPortalTransition(const sg_phase_catalog_source_t *source,
 		uint32_t destination_phase;
 		sg_rune_phase_transition_t transition;
 		sg_phase_catalog_transition_evidence_t evidence;
-		uint32_t frame = source->authority->identity.physics.frame_ms;
-		uint32_t quantum = source->authority->identity.physics.substep_ms;
 
 		if (expected->phases[source_phase].stance != portal->stance ||
 			!PhaseFind(expected, destination_cell, &expected->phases[source_phase],
@@ -1131,11 +1154,16 @@ static int AppendPortalTransition(const sg_phase_catalog_source_t *source,
 		memset(&transition, 0, sizeof(transition));
 		memset(&evidence, 0, sizeof(evidence));
 		transition.cell = source->configuration->cells[source_cell].id;
+		transition.destination_cell =
+			source->configuration->cells[destination_cell].id;
 		transition.source_phase = expected->phases[source_phase].id;
 		transition.destination_phase = expected->phases[destination_phase].id;
-		transition.kind = SG_RUNE_PHASE_TRANSITION_TIME;
-		transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
-			(float)frame };
+		transition.kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
+		transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+		/* Configuration supplies geometric adjacency, not movement travel time.
+		 * Keep this as an exact zero-duration boundary relation; movement timing
+		 * is owned by the accepted movement capability publication. */
+		transition.duration_ms = (sg_rune_interval_t){ 0.0f, 0.0f };
 		evidence.origin = SG_PHASE_CATALOG_TRANSITION_PORTAL;
 		evidence.source_record = portal_index;
 		evidence.destination_record = reverse ? portal->from_cell :
@@ -1147,11 +1175,11 @@ static int AppendPortalTransition(const sg_phase_catalog_source_t *source,
 		evidence.destination_region_id = source->semantics->regions[
 			expected->phase_region_by_phase[destination_phase]].id;
 		evidence.portal = portal->id;
+		evidence.portal_duration_ms = 0U;
 		if (!AppendPair(expected, &transition, &evidence, error_out))
 			return 0;
-		appended = 1;
 	}
-	return appended;
+	return 1;
 }
 
 static int AirbornePhaseForSupport(const sg_rune_phase_basis_t *airborne)
@@ -1182,6 +1210,7 @@ static int AppendSupportTransition(const sg_phase_catalog_source_t *source,
 	memset(&transition, 0, sizeof(transition));
 	memset(&evidence, 0, sizeof(evidence));
 	transition.cell = source->configuration->cells[cell].id;
+	transition.destination_cell = source->configuration->cells[cell].id;
 	transition.source_phase = expected->phases[airborne_phase].id;
 	transition.destination_phase = expected->phases[supported_phase].id;
 	transition.kind = SG_RUNE_PHASE_TRANSITION_SUPPORT;
@@ -1245,27 +1274,39 @@ static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
 		!PhaseFind(expected, destination_cell, &destination_candidate,
 			&destination_phase))
 		return 0;
-	if (source_phase == destination_phase)
-	{
-		elapsed = TimingSpan(fact);
-		if (elapsed > frame)
-			elapsed = frame;
-		if (elapsed == 0U)
-			elapsed = source->authority->identity.physics.substep_ms;
-		destination_candidate.order.variant = 3U;
-		destination_candidate.elapsed_ms.min_value = (float)elapsed;
-		destination_candidate.elapsed_ms.max_value = (float)frame;
-		if (!AppendPhase(source, expected, &destination_candidate, destination_cell,
-			cell_ordinals, &destination_phase, error_out))
-			return 0;
-	}
+	/* A mechanism transition is a timed state change even when its source and
+	 * destination regions have the same static basis.  Issue a distinct,
+	 * evidence-derived elapsed phase on the destination side in all cases so
+	 * the RUNE TIME/MOVER_DWELL contract never receives equal elapsed ranges. */
+	elapsed = TimingSpan(fact);
+	if (elapsed > frame)
+		elapsed = frame;
+	if (elapsed == 0U)
+		elapsed = source->authority->identity.physics.substep_ms;
+	destination_candidate.order.variant = 3U;
+	destination_candidate.elapsed_ms.min_value = (float)elapsed;
+	destination_candidate.elapsed_ms.max_value = (float)frame;
+	if (!AppendPhase(source, expected, &destination_candidate, destination_cell,
+		cell_ordinals, &destination_phase, error_out))
+		return 0;
+	if (expected->phase_region_by_phase[source_phase] ==
+		SG_PHASE_CATALOG_INDEX_NONE)
+		expected->phase_region_by_phase[source_phase] = fact->source_region;
+	if (expected->phase_region_by_phase[destination_phase] ==
+		SG_PHASE_CATALOG_INDEX_NONE)
+		expected->phase_region_by_phase[destination_phase] =
+		fact->destination_region;
 	if (source_phase == destination_phase)
 		return 0;
 	memset(&transition, 0, sizeof(transition));
 	memset(&evidence, 0, sizeof(evidence));
 	transition.cell = source->configuration->cells[source_cell].id;
+	transition.destination_cell =
+		source->configuration->cells[destination_cell].id;
 	transition.source_phase = expected->phases[source_phase].id;
 	transition.destination_phase = expected->phases[destination_phase].id;
+	transition.flags = source_cell == destination_cell ? 0U :
+		SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
 	transition.kind = fact->kind == SG_MECHANISM_CAPABILITY_DWELL ?
 		SG_RUNE_PHASE_TRANSITION_MOVER_DWELL : SG_RUNE_PHASE_TRANSITION_TIME;
 	transition.duration_ms = (sg_rune_interval_t){ (float)TimingSpan(fact),
@@ -1571,7 +1612,6 @@ int SG_PhaseCatalogHeaderValid(const sg_phase_catalog_t *catalog)
 static int CatalogStorageShapeValid(const sg_phase_catalog_t *catalog)
 {
 	return catalog && catalog->phase_capacity <= SG_RUNE_MODEL_MAX_PHASES &&
-		catalog->binding_capacity <= SG_PHASE_CATALOG_MAX_BINDINGS &&
 		catalog->transition_capacity <= SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS &&
 		AllocationFits((size_t)catalog->phase_capacity,
 			sizeof(*catalog->phases)) &&

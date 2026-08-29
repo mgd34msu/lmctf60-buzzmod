@@ -4,6 +4,7 @@ int SG_MechanismCapabilityFixtureMain(void);
 #undef main
 
 #include "slipgate/sg_phase_catalog.h"
+#include "slipgate/sg_phase_catalog_owner.h"
 
 static int phase_integration_failures;
 
@@ -21,12 +22,22 @@ int main(void)
 	sg_mechanism_capability_set_t *capabilities = NULL;
 	sg_mechanism_capability_error_t capability_error;
 	sg_phase_mover_support_provider_t *provider = NULL;
+	sg_phase_mover_support_provider_t *provider_again = NULL;
 	sg_phase_catalog_error_t provider_error;
 	sg_phase_catalog_source_t phase_source;
 	sg_phase_catalog_t *catalog = NULL;
 	sg_phase_catalog_error_t phase_error;
 	sg_phase_catalog_audit_result_t audit;
 	const sg_phase_mover_support_provider_view_t *provider_view = NULL;
+	const sg_phase_mover_support_provider_view_t *provider_view_again = NULL;
+	sg_phase_catalog_publication_t *publication = NULL;
+	sg_phase_catalog_publication_t *publication_again = NULL;
+	const sg_phase_catalog_view_t *publication_view = NULL;
+	const sg_phase_catalog_view_t *publication_view_again = NULL;
+	sg_phase_catalog_error_t publication_error;
+	sg_phase_catalog_audit_result_t publication_audit;
+	sg_phase_catalog_error_t publication_again_error;
+	sg_phase_catalog_audit_result_t publication_again_audit;
 	sg_mechanism_capability_set_t forged;
 	sg_phase_mover_support_provider_t *forged_provider = NULL;
 	sg_phase_catalog_error_t forged_error;
@@ -53,9 +64,22 @@ int main(void)
 	CHECK_PHASE_INTEGRATION(provider != NULL);
 	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider,
 		&provider_view));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
+		fixture.configuration_semantics, capabilities, &provider_again,
+		&provider_error));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_again,
+		&provider_view_again));
 	CHECK_PHASE_INTEGRATION(provider_view != NULL &&
 		provider_view->fact_count == capabilities->fact_count &&
 		provider_view->support_count != 0U);
+	CHECK_PHASE_INTEGRATION(provider_view_again != NULL && provider_view != NULL &&
+		provider_view_again->verifier_identity == provider_view->verifier_identity &&
+		provider_view_again->support_count == provider_view->support_count &&
+		provider_view_again->fact_count == provider_view->fact_count &&
+		memcmp(provider_view_again->supports, provider_view->supports,
+			(size_t)provider_view->support_count * sizeof(*provider_view->supports)) == 0 &&
+		memcmp(provider_view_again->facts, provider_view->facts,
+			(size_t)provider_view->fact_count * sizeof(*provider_view->facts)) == 0);
 	if (provider_view)
 		for (index = 0U; index < provider_view->support_count; index++)
 			state_mask |= provider_view->supports[index].mechanism_state_mask;
@@ -88,16 +112,88 @@ int main(void)
 		CHECK_PHASE_INTEGRATION(binding_index != UINT32_MAX);
 		if (binding_index != UINT32_MAX)
 		{
-			catalog->bindings[binding_index].mechanism_state_mask =
+			uint32_t original_mask =
+				catalog->bindings[binding_index].mechanism_state_mask;
+			catalog->bindings[binding_index].mechanism_state_mask = original_mask ^
 				SG_PHASE_MECHANISM_STATE_RETURNING;
+			if (catalog->bindings[binding_index].mechanism_state_mask == 0U)
+				catalog->bindings[binding_index].mechanism_state_mask =
+					original_mask ^ SG_PHASE_MECHANISM_STATE_INACTIVE;
 			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source,
 				catalog, &audit));
 			CHECK_PHASE_INTEGRATION(audit.code ==
 				SG_PHASE_CATALOG_AUDIT_BINDING_DISAGREEMENT);
+			catalog->bindings[binding_index].mechanism_state_mask = original_mask;
 		}
+		for (index = 0U; index < catalog->transition_count; index++)
+			if (catalog->transition_evidence[index].origin ==
+				SG_PHASE_CATALOG_TRANSITION_MECHANISM_STATE_TIMING)
+			{
+				catalog->transition_evidence[index].delay_ms++;
+				CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source,
+					catalog, &audit));
+				CHECK_PHASE_INTEGRATION(audit.code ==
+					SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT);
+				break;
+			}
 		SG_PhaseCatalogDestroy(catalog);
 	}
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(&fixture.authority,
+		fixture.configuration, fixture.configuration_semantics, capabilities,
+		&publication, &publication_error, &publication_audit));
+	CHECK_PHASE_INTEGRATION(publication != NULL);
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication,
+		&publication_view));
+	CHECK_PHASE_INTEGRATION(publication_view != NULL &&
+		publication_view->phase_count != 0U &&
+		publication_view->transition_count != 0U);
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(&fixture.authority,
+		fixture.configuration, fixture.configuration_semantics, capabilities,
+		&publication_again, &publication_again_error,
+		&publication_again_audit));
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication_again,
+		&publication_view_again));
+	CHECK_PHASE_INTEGRATION(publication_view != NULL &&
+		publication_view_again != NULL &&
+		memcmp(&publication_view_again->identity, &publication_view->identity,
+			sizeof(publication_view->identity)) == 0 &&
+		publication_view_again->completion == publication_view->completion &&
+		publication_view_again->transition_completion ==
+			publication_view->transition_completion &&
+		publication_view_again->mover_support_verifier_identity ==
+			publication_view->mover_support_verifier_identity &&
+		publication_view_again->phase_count == publication_view->phase_count &&
+		publication_view_again->binding_count == publication_view->binding_count &&
+		publication_view_again->transition_count ==
+			publication_view->transition_count);
+	if (publication_view && publication_view_again &&
+		publication_view_again->phase_count == publication_view->phase_count &&
+		publication_view_again->binding_count == publication_view->binding_count &&
+		publication_view_again->transition_count ==
+			publication_view->transition_count)
+	{
+		if (publication_view->phase_count != 0U)
+			CHECK_PHASE_INTEGRATION(memcmp(publication_view_again->phases,
+				publication_view->phases, (size_t)publication_view->phase_count *
+					sizeof(*publication_view->phases)) == 0);
+		if (publication_view->binding_count != 0U)
+			CHECK_PHASE_INTEGRATION(memcmp(publication_view_again->bindings,
+				publication_view->bindings, (size_t)publication_view->binding_count *
+					sizeof(*publication_view->bindings)) == 0);
+		if (publication_view->transition_count != 0U)
+		{
+			CHECK_PHASE_INTEGRATION(memcmp(publication_view_again->transitions,
+				publication_view->transitions, (size_t)publication_view->transition_count *
+					sizeof(*publication_view->transitions)) == 0);
+			CHECK_PHASE_INTEGRATION(memcmp(publication_view_again->transition_evidence,
+				publication_view->transition_evidence, (size_t)publication_view->transition_count *
+					sizeof(*publication_view->transition_evidence)) == 0);
+		}
+	}
+	SG_PhaseCatalogPublicationDestroy(publication);
+	SG_PhaseCatalogPublicationDestroy(publication_again);
 	SG_PhaseMoverSupportProviderDestroy(provider);
+	SG_PhaseMoverSupportProviderDestroy(provider_again);
 	SG_MechanismCapabilityDestroy(capabilities);
 	FixtureDestroy(&fixture);
 	if (phase_integration_failures)

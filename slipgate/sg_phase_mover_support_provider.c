@@ -72,11 +72,12 @@ static uint64_t ProviderDigest(const sg_phase_mover_support_provider_t *provider
 {
 	uint64_t digest = UINT64_C(1469598103934665603);
 
-	digest = DigestBytes(digest, &provider->self, sizeof(provider->self));
 	digest = DigestBytes(digest, &provider->identity,
 		sizeof(provider->identity));
 	digest = DigestBytes(digest, &provider->completion,
 		sizeof(provider->completion));
+	digest = DigestBytes(digest, &provider->accepted_capability_digest,
+		sizeof(provider->accepted_capability_digest));
 	digest = DigestBytes(digest, &provider->support_count,
 		sizeof(provider->support_count));
 	digest = DigestBytes(digest, &provider->fact_count,
@@ -291,6 +292,16 @@ int SG_PhaseMoverSupportProviderBuild(
 	provider->identity = semantics->identity;
 	provider->completion = accepted_capabilities->fact_count == 0U ?
 		SG_PHASE_CATALOG_PROVEN_EMPTY : SG_PHASE_CATALOG_COMPLETE;
+	provider->accepted_capability_digest =
+		SG_MechanismCapabilitySetDigest(accepted_capabilities);
+	if (provider->accepted_capability_digest == 0U)
+	{
+		SG_PhaseCatalogSetError(error_out,
+			SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
+		free(sorted);
+		free(provider);
+		return 0;
+	}
 	provider->support_count = 0U;
 	for (index = 0U; index < sorted_count; index++)
 	{
@@ -413,6 +424,7 @@ int SG_PhaseMoverSupportProviderBuildEmpty(
 	}
 	(*provider_out)->identity = *identity;
 	(*provider_out)->completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
+	(*provider_out)->accepted_capability_digest = 0U;
 	(*provider_out)->magic = SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC;
 	(*provider_out)->magic_inverse = ~SG_PHASE_MOVER_SUPPORT_PROVIDER_MAGIC;
 	(*provider_out)->self = *provider_out;
