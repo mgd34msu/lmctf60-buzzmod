@@ -117,6 +117,39 @@ class HumanTraceIntegrationTest(unittest.TestCase):
         self.assertNotIn("repair", lowered)
         self.assertIn("SG_LevelIdentitySnapshot", source)
 
+    def test_consumer_boundary_is_authenticated_and_read_only(self) -> None:
+        header = (ROOT / "slipgate" / "sg_human_trace.h").read_text(
+            encoding="utf-8")
+        source = (ROOT / "slipgate" / "sg_human_trace.c").read_text(
+            encoding="utf-8")
+        production = "".join(
+            (ROOT / name).read_text(encoding="utf-8")
+            for name in ("g_spawn.c", "p_hud.c", "GNUmakefile", "Makefile")
+        )
+
+        self.assertIn("SG_HumanTraceVisitAcceptedV3Collection", header)
+        self.assertIn("SG_HumanTraceAcceptedV3ScopeView", header)
+        self.assertIn("sg_human_trace_v3_segment_ref_t", header)
+        self.assertIn(
+            "typedef struct sg_human_trace_v3_scope_acceptance_s\n"
+            "\tsg_human_trace_v3_scope_acceptance_t;",
+            header,
+        )
+        for obsolete in (
+                "SG_HumanTraceCompleted",
+                "SG_HumanTraceVisitAcceptedV3Events",
+                "SG_HumanTraceVisitStoredV3EventsAccepted",
+                "SG_HumanTraceAcceptedV3ScopeConsumed",
+                "SG_HumanTraceMarkAcceptedV3ScopeConsumed"):
+            self.assertNotIn(obsolete, header + source)
+        self.assertNotIn("HumanTraceLearning", production)
+        self.assertEqual(
+            [path for path in
+             (ROOT / "slipgate").glob("sg_human_trace_learning*")
+             if path.suffix in {".c", ".h"}],
+            [],
+        )
+
     def test_every_hook_destruction_boundary_records_reset(self) -> None:
         sources = {
             "g_ctffunc.c": [

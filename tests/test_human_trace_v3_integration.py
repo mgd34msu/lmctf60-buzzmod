@@ -4,9 +4,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
+
+from tools import humantrace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +32,19 @@ def ensure_binary() -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
+
+
+def ensure_io_binary() -> Path:
+    flavor = "make" if BINARY_NAME.endswith(".make") else "gnu"
+    binary = ROOT / f"sg_human_trace_io_test.{flavor}"
+    subprocess.run(
+        ["make", "-f", "Makefile" if flavor == "make" else "GNUmakefile",
+         binary.name],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    return binary
 
 
 def read_valid_prefix(
@@ -53,6 +70,31 @@ def read_valid_prefix(
     return records
 
 
+def write_rechained_v3(
+    path: Path,
+    records: list[dict[str, object]],
+    previous: str = "0" * 64,
+) -> list[dict[str, object]]:
+    lines: list[str] = []
+    rewritten: list[dict[str, object]] = []
+    for original in records:
+        record = dict(original)
+        record["prev_sha256"] = previous
+        record["sha256"] = "0" * 64
+        encoded = json.dumps(record, separators=(",", ":"))
+        marker = ',"prev_sha256":"'
+        payload = encoded[:encoded.index(marker)] + "}"
+        digest = hashlib.sha256(
+            previous.encode("ascii") + payload.encode("utf-8")
+        ).hexdigest()
+        record["sha256"] = digest
+        lines.append(json.dumps(record, separators=(",", ":")))
+        rewritten.append(record)
+        previous = digest
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return rewritten
+
+
 class HumanTraceV3IntegrationTest(unittest.TestCase):
     def test_two_sessions_restart_recovery_and_hash_chain(self) -> None:
         ensure_binary()
@@ -65,34 +107,51 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             )
             directory = Path(temporary)
             sessions = [
-                read_valid_prefix(directory / f"{PREFIX}{index:06}.jsonl")
+                read_valid_prefix(directory / f"{PREFIX}{index:06d}.jsonl")
                 for index in range(3)
             ]
 
         self.assertEqual(
             [record["kind"] for record in sessions[0]],
-            ["header", "step", "hook-fire", "hook-attach",
-             "hook-release", "hook-reset", "end"],
+            ["header", "step", "hook-fire", "hook-attach", "step",
+             "hook-release", "hook-reset", "step", "step",
+             "hook-fire", "hook-attach", "step", "hook-release",
+             "end"],
         )
         self.assertEqual(len(sessions[1]), 7)
         self.assertEqual(
             [record["kind"] for record in sessions[2]],
             ["header", "step", "end"],
         )
-        first = sessions[0][1:]
+        first = sessions[0][1:8]
+        incomplete = sessions[0][8:13]
         second = sessions[1][1:]
-        self.assertTrue(all(record.get("client") == 1 for record in first[:-1]))
+        self.assertTrue(all(record.get("client") == 1 for record in first))
         self.assertTrue(all(
-            record.get("spawn_generation") == 11 for record in first[:-1]
+            record.get("spawn_generation") == 11 for record in first
         ))
-        self.assertTrue(all(record.get("frame") == 17 for record in first))
+        self.assertEqual(
+            [record.get("frame") for record in first],
+            [17, 17, 17, 18, 19, 19, 20],
+        )
+        self.assertTrue(all(record.get("client") == 2 for record in incomplete))
+        self.assertTrue(all(
+            record.get("spawn_generation") == 22 for record in incomplete
+        ))
+        self.assertEqual(
+            [record.get("frame") for record in incomplete],
+            [25, 25, 25, 26, 27],
+        )
         self.assertTrue(all(record.get("client") == 2 for record in second[:-1]))
         self.assertTrue(all(
             record.get("spawn_generation") == 22 for record in second[:-1]
         ))
         self.assertTrue(all(record.get("frame") == 31 for record in second))
         self.assertEqual(
-            [record["order"] for record in first], [1, 2, 3, 4, 5, 6]
+            [record["order"] for record in first], [1, 2, 3, 4, 5, 6, 7]
+        )
+        self.assertEqual(
+            [record["order"] for record in incomplete], [8, 9, 10, 11, 12]
         )
 
         header = sessions[0][0]
@@ -176,9 +235,80 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             )
             files = sorted(Path(temporary).glob(f"{PREFIX}*.jsonl"))
             records = [read_valid_prefix(path) for path in files]
+            assembled = humantrace.read_sessions(files[1])
+            assembled_from_directory = humantrace.read_sessions(
+                Path(temporary)
+            )
+            forged_directory = Path(temporary) / "forged"
+            forged_directory.mkdir()
+            forged = forged_directory / files[1].name
+            forged_records = [dict(record) for record in records[1]]
+            forged_records[0]["session"] = 2
+            write_rechained_v3(forged, forged_records)
+            with self.assertRaisesRegex(ValueError, "invalid zero anchor"):
+                humantrace.read_sessions(forged)
 
         self.assertEqual(len(records), 2)
         self.assertEqual(records[1][0]["session"], 1)
+        self.assertEqual(assembled[0]["initial_trace_header"]["session"], 1)
+        self.assertEqual(assembled[0]["initial_trace_header"]["segment"], 1)
+        self.assertEqual(
+            assembled_from_directory[0]["initial_trace_header"]["session"], 1
+        )
+
+    def test_directory_skips_an_unauthenticated_v3_collision(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(
+                [str(BINARY), temporary, "collision"], cwd=ROOT,
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            directory = Path(temporary)
+            collision = directory / f"{PREFIX}000000.jsonl"
+            collision.write_text(
+                '{"format":"lmctf-human-trace-v3","kind":"header"}\n',
+                encoding="utf-8",
+            )
+            sessions = humantrace.read_sessions(directory)
+
+        self.assertEqual(sessions[0]["initial_trace_header"]["session"], 1)
+
+    def test_variable_width_canonical_segment_suffixes(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "segment-names"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            humantrace._v3_filename_segment(
+                Path(f"{PREFIX}999999.jsonl")
+            ),
+            999999,
+        )
+        self.assertEqual(
+            humantrace._v3_filename_segment(
+                Path(f"{PREFIX}1000000.jsonl")
+            ),
+            1000000,
+        )
+        self.assertEqual(
+            humantrace._v3_filename_segment(
+                Path(f"{PREFIX}000001.jsonl")
+            ),
+            1,
+        )
+        self.assertIsNone(
+            humantrace._v3_filename_segment(
+                Path(f"{PREFIX}0.jsonl")
+            )
+        )
+        self.assertIsNone(
+            humantrace._v3_filename_segment(
+                Path(f"{PREFIX}0000000.jsonl")
+            )
+        )
 
     def test_physics_change_starts_an_exactly_bound_segment(self) -> None:
         ensure_binary()
@@ -193,15 +323,270 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 directory / f"{PREFIX}000001.jsonl",
                 str(first[-1]["sha256"]),
             )
-            sessions = [first, second]
+            isolated = directory / "standalone"
+            isolated.mkdir()
+            continuation = directory / f"{PREFIX}000001.jsonl"
+            copied = isolated / continuation.name
+            copied.write_bytes(continuation.read_bytes())
+            assembled = humantrace.read_sessions(continuation)
 
-        self.assertEqual(sessions[0][0]["gravity_bits"], 0x44480000)
-        self.assertEqual(sessions[1][0]["gravity_bits"], 0x42C80000)
-        self.assertEqual(sessions[1][0]["continuation"], 1)
-        self.assertEqual(sessions[1][0]["session"], 0)
-        self.assertEqual(sessions[1][0]["start_order"], 2)
+            with self.assertRaisesRegex(ValueError, "zero-rooted"):
+                humantrace.read_sessions(copied)
 
-    @unittest.skipIf(os.name == "nt", "fork is POSIX-only")
+        self.assertEqual(first[0]["gravity_bits"], 0x44480000)
+        self.assertEqual(second[0]["gravity_bits"], 0x42C80000)
+        self.assertEqual(second[0]["continuation"], 1)
+        self.assertEqual(second[0]["session"], 0)
+        self.assertEqual(second[0]["start_order"], 2)
+        self.assertEqual(
+            [header["gravity_bits"]
+             for header in assembled[0]["segment_headers"]],
+            [0x44480000, 0x42C80000],
+        )
+        self.assertEqual(assembled[0]["identity"]["gravity_bits"],
+                         0x42C80000)
+
+    def test_segment_chain_crosses_six_digit_filename_boundary(self) -> None:
+        binary = ensure_io_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(
+                [str(binary), temporary, "consumer-boundary-source"], cwd=ROOT,
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            directory = Path(temporary)
+            originals = sorted(directory.glob(f"{PREFIX}*.jsonl"),
+                               key=lambda path: humantrace._v3_filename_segment(path))
+            self.assertGreaterEqual(len(originals), 2)
+            previous = "0" * 64
+            groups: list[list[dict[str, object]]] = []
+            for original in originals:
+                records = read_valid_prefix(original, previous)
+                previous = str(records[-1]["sha256"])
+                groups.append(records)
+                original.unlink()
+            previous = "0" * 64
+            renamed: list[str] = []
+            for offset, records in enumerate(groups):
+                segment = 999999 + offset
+                records[0]["session"] = 999999
+                records[0]["segment"] = segment
+                destination = directory / f"{PREFIX}{segment:06d}.jsonl"
+                rewritten = write_rechained_v3(destination, records, previous)
+                previous = str(rewritten[-1]["sha256"])
+                renamed.append(destination.name)
+            assembled = humantrace.read_sessions(directory)
+
+        self.assertEqual(
+            [path.name for path in assembled[0]["source_paths"]],
+            renamed,
+        )
+        self.assertEqual(renamed[:2],
+                         [f"{PREFIX}999999.jsonl",
+                          f"{PREFIX}1000000.jsonl"])
+
+    def test_durable_spools_reject_tampering_and_keep_root_fifo(self) -> None:
+        ensure_binary()
+        for mode in (
+                "spool-order", "spool-truncated", "spool-tampered",
+                "spool-quarantine", "physics-gap"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                completed = subprocess.run(
+                    [str(BINARY), temporary, mode], cwd=ROOT,
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_streaming_spool_has_no_historical_hook_event_cap(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "long-stream"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_passive_collection_is_restart_safe(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            written = subprocess.run(
+                [str(BINARY), temporary, "consumer-restart-write"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(written.returncode, 0, written.stderr)
+            read = subprocess.run(
+                [str(BINARY), temporary, "consumer-restart-read"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(read.returncode, 0, read.stderr)
+
+    def test_collection_isolates_scopes_and_preserves_first_occurrence(self) -> None:
+        ensure_binary()
+        for mode in ("consumer-scope-isolation", "consumer-first-occurrence"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                completed = subprocess.run(
+                    [str(BINARY), temporary, mode], cwd=ROOT,
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_retired_scope_cannot_revive_after_allocator_reuse(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "consumer-scope-reuse"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_forged_session_collision_cannot_quarantine_another_root(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            written = subprocess.run(
+                [str(BINARY), temporary, "consumer-restart-write"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(written.returncode, 0, written.stderr)
+            forged_path = directory / f"{PREFIX}000001.jsonl"
+            forged_records = read_valid_prefix(forged_path)
+            forged_records[0]["session"] = 0
+            write_rechained_v3(forged_path, forged_records)
+
+            assembled_zero = humantrace.read_sessions(
+                directory / f"{PREFIX}000000.jsonl"
+            )
+            with self.assertRaisesRegex(ValueError, "invalid zero anchor"):
+                humantrace.read_sessions(forged_path)
+            assembled_two = humantrace.read_sessions(
+                directory / f"{PREFIX}000002.jsonl"
+            )
+            assembled_directory = humantrace.read_sessions(directory)
+            read = subprocess.run(
+                [str(BINARY), temporary,
+                 "consumer-three-root-collision-read"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+
+        self.assertEqual(read.returncode, 0, read.stderr)
+        self.assertEqual(
+            assembled_zero[0]["initial_trace_header"]["segment"], 0
+        )
+        self.assertEqual(
+            assembled_two[0]["initial_trace_header"]["segment"], 2
+        )
+        self.assertEqual(
+            assembled_directory[0]["initial_trace_header"]["segment"], 0
+        )
+
+    @unittest.skipUnless(shutil.which("strace"), "strace is required")
+    def test_production_capture_does_not_read_evidence_without_consumer(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "syscalls.txt"
+            completed = subprocess.run(
+                ["strace", "-qq", "-e", "trace=openat,getdents64",
+                 "-o", str(trace), str(BINARY), temporary,
+                 "consumer-produce-only"],
+                cwd=ROOT, text=True, capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            evidence = [
+                path for path in Path(temporary).iterdir()
+                if path.suffix in (".jsonl", ".spool")
+            ]
+            self.assertEqual(len(evidence), 2)
+            syscalls = trace.read_text(encoding="utf-8").splitlines()
+            for path in evidence:
+                self.assertFalse(any(
+                    str(path) in line and "O_RDONLY" in line
+                    and "O_DIRECTORY" not in line
+                    for line in syscalls
+                ), path.name)
+
+    @unittest.skipUnless(shutil.which("strace"), "strace is required")
+    def test_authenticated_collection_opens_each_rotated_file_once(self) -> None:
+        binary = ensure_io_binary()
+        measurements: list[tuple[int, int]] = []
+        for count in (64, 128, 256, 512):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as temporary:
+                trace = Path(temporary) / "syscalls.txt"
+                completed = subprocess.run(
+                    ["strace", "-qq", "-e", "trace=openat,getdents64",
+                     "-o", str(trace), str(binary), temporary,
+                     f"consumer-io-{count}"],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                evidence = sorted(
+                    path for path in Path(temporary).iterdir()
+                    if path.suffix in (".jsonl", ".spool")
+                )
+                self.assertGreater(
+                    sum(path.suffix == ".jsonl" for path in evidence), 1
+                )
+                syscalls = trace.read_text(encoding="utf-8")
+                read_opens = 0
+                for path in evidence:
+                    occurrences = sum(
+                        str(path) in line and "O_RDONLY" in line
+                        and "O_DIRECTORY" not in line
+                        for line in syscalls.splitlines()
+                    )
+                    self.assertEqual(occurrences, 1, path.name)
+                    read_opens += occurrences
+                directory_opens = sum(
+                    temporary in line and "O_DIRECTORY" in line
+                    for line in syscalls.splitlines()
+                )
+                self.assertEqual(directory_opens, 1)
+                measurements.append((len(evidence), read_opens))
+        for previous, current in zip(measurements, measurements[1:]):
+            self.assertLessEqual(current[0], previous[0] * 2 + 2)
+        for files, read_opens in measurements:
+            self.assertEqual(files, read_opens)
+
+    @unittest.skipUnless(shutil.which("strace"), "strace is required")
+    def test_authenticated_collection_opens_each_multi_root_file_once(self) -> None:
+        binary = ensure_io_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "syscalls.txt"
+            completed = subprocess.run(
+                ["strace", "-qq", "-e", "trace=openat,getdents64",
+                 "-o", str(trace), str(binary), temporary,
+                 "consumer-io-roots"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            evidence = sorted(
+                path for path in Path(temporary).iterdir()
+                if path.suffix in (".jsonl", ".spool")
+            )
+            self.assertEqual(
+                sum(path.suffix == ".spool" for path in evidence), 8
+            )
+            self.assertGreater(
+                sum(path.suffix == ".jsonl" for path in evidence), 8
+            )
+            syscalls = trace.read_text(encoding="utf-8")
+            for path in evidence:
+                occurrences = sum(
+                    str(path) in line and "O_RDONLY" in line
+                    and "O_DIRECTORY" not in line
+                    for line in syscalls.splitlines()
+                )
+                self.assertEqual(occurrences, 1, path.name)
+            directory_opens = sum(
+                temporary in line and "O_DIRECTORY" in line
+                for line in syscalls.splitlines()
+            )
+            self.assertEqual(directory_opens, 1)
+
     def test_concurrent_processes_claim_unique_sessions(self) -> None:
         ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,4 +1,6 @@
 #include <stdarg.h>
+#include <inttypes.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +37,7 @@ cvar_t *sv_maxvelocity = &maxvelocity;
 cvar_t *want_funky_gravity = &funky_gravity;
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 static int inject_write_failure;
+static unsigned inject_write_failure_after;
 
 size_t __real_fwrite(const void *pointer, size_t size, size_t count,
 	FILE *stream);
@@ -44,6 +47,11 @@ size_t __wrap_fwrite(const void *pointer, size_t size, size_t count,
 {
 	if (inject_write_failure && size && count)
 	{
+		if (inject_write_failure_after != 0U)
+		{
+			inject_write_failure_after--;
+			return __real_fwrite(pointer, size, count, stream);
+		}
 		size_t partial = count / 2U;
 
 		inject_write_failure = 0;
@@ -54,7 +62,56 @@ size_t __wrap_fwrite(const void *pointer, size_t size, size_t count,
 }
 #endif
 
+#ifdef SG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR
+typedef union scope_reuse_storage_u
+{
+	max_align_t alignment;
+	unsigned char bytes[4096];
+} scope_reuse_storage_t;
+
+static scope_reuse_storage_t scope_reuse_storage;
+static int force_scope_allocator_reuse;
+static int scope_reuse_storage_in_use;
+static unsigned scope_reuse_allocation_count;
+
+void *__real_calloc(size_t count, size_t size);
+void __real_free(void *pointer);
+
+void *__wrap_calloc(size_t count, size_t size)
+{
+	if (force_scope_allocator_reuse && count != 0U && size != 0U &&
+		count <= sizeof(scope_reuse_storage.bytes) / size &&
+		!scope_reuse_storage_in_use)
+	{
+		memset(scope_reuse_storage.bytes, 0, count * size);
+		scope_reuse_storage_in_use = 1;
+		scope_reuse_allocation_count++;
+		return scope_reuse_storage.bytes;
+	}
+	return __real_calloc(count, size);
+}
+
+void __wrap_free(void *pointer)
+{
+	if (pointer == scope_reuse_storage.bytes)
+	{
+		scope_reuse_storage_in_use = 0;
+		return;
+	}
+	__real_free(pointer);
+}
+#endif
+
 edict_t *g_edicts = entities;
+
+static void SetupPlayer(edict_t *player, gclient_t *client,
+	unsigned long generation);
+static void SetupPmove(pmove_state_t *before, pmove_t *after);
+static void CaptureCompleteTraversalFrames(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame,
+	int landing_frame);
+static void CaptureCompleteTraversal(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame);
 
 static cvar_t *TestCvar(char *name, char *value, int flags)
 {
@@ -99,6 +156,14 @@ static int TracePath(char *path, size_t size, const char *directory,
 		directory, segment) < (int)size;
 }
 
+static int SpoolPath(char *path, size_t size, const char *directory,
+	unsigned segment)
+{
+	return snprintf(path, size,
+		"%s/humantrace-tracehook-00000065-000000ca-%06u.spool",
+		directory, segment) < (int)size;
+}
+
 static int CountRecords(const char *path, const char *kind)
 {
 	FILE *file = fopen(path, "rb");
@@ -140,6 +205,353 @@ static int AppendPartial(const char *path)
 		sizeof(partial) - 1U && fclose(file) == 0;
 	return ok;
 }
+
+static int AppendSpoolPartial(const char *path)
+{
+	FILE *file = fopen(path, "ab");
+	const unsigned char marker = 0xa5U;
+	int ok;
+
+	if (!file)
+		return 0;
+	ok = fwrite(&marker, 1U, 1U, file) == 1U && fclose(file) == 0;
+	return ok;
+}
+
+static int FlipSpoolByte(const char *path)
+{
+	FILE *file = fopen(path, "r+b");
+	int value;
+	int ok;
+
+	if (!file || fseek(file, 80L, SEEK_SET) != 0)
+	{
+		if (file)
+			fclose(file);
+		return 0;
+	}
+	value = fgetc(file);
+	if (value == EOF || fseek(file, 80L, SEEK_SET) != 0)
+	{
+		fclose(file);
+		return 0;
+	}
+	if (fputc(value ^ 1, file) == EOF || fflush(file) != 0)
+	{
+		fclose(file);
+		return 0;
+	}
+	ok = fclose(file) == 0;
+	return ok;
+}
+
+static int TraceIdentity(sg_level_identity_t *identity)
+{
+	if (!identity)
+		return 0;
+	memset(identity, 0, sizeof(*identity));
+	identity->bsp_checksum = 101U;
+	identity->entity_crc32 = 202U;
+	identity->host_physics_id = 1U;
+	strcpy(identity->mapname, "tracehook");
+	return 1;
+}
+
+typedef struct spool_scan_s
+{
+	sg_human_trace_v3_spool_ref_t first;
+	uint32_t scope_client[64];
+	uint64_t scope_generation[64];
+	uint32_t segment_number[64];
+	uint32_t segment_gravity_bits[64];
+	const sg_human_trace_v3_scope_acceptance_t *saved_scope;
+	uint32_t previous_root;
+	uint32_t previous_segment;
+	uint64_t count;
+	uint64_t event_count;
+	uint64_t last_event_order;
+	size_t root_scope_start;
+	size_t scope_count;
+	size_t segment_count;
+	uint8_t have_previous;
+	uint8_t have_previous_segment;
+	uint8_t valid_order;
+	uint8_t forged_scope_accepted;
+} spool_scan_t;
+
+typedef struct scope_search_s
+{
+	const sg_human_trace_v3_spool_ref_t *target;
+	uint32_t client_id;
+	uint64_t spawn_generation;
+	uint8_t target_root;
+	uint8_t found;
+} scope_search_t;
+
+typedef struct scope_reuse_visit_s
+{
+	const sg_human_trace_v3_scope_acceptance_t *retired;
+	const sg_human_trace_v3_scope_acceptance_t *current;
+	uint8_t capture_retired;
+	uint8_t retired_accepted;
+} scope_reuse_visit_t;
+
+static int ScanSpool(void *opaque, const sg_human_trace_v3_spool_ref_t *spool)
+{
+	spool_scan_t *scan = opaque;
+
+	if (!scan || !spool)
+		return 0;
+	if (!scan->have_previous)
+		scan->first = *spool;
+	else if (spool->root_segment <= scan->previous_root)
+		scan->valid_order = 0U;
+	if (spool->completion.session != spool->root_segment)
+		scan->valid_order = 0U;
+	scan->previous_root = spool->root_segment;
+	scan->last_event_order = 0U;
+	scan->root_scope_start = scan->scope_count;
+	scan->have_previous_segment = 0U;
+	scan->have_previous = 1U;
+	scan->count++;
+	return 1;
+}
+
+static int ScanCollectionSegment(void *opaque,
+	const sg_human_trace_v3_segment_ref_t *segment)
+{
+	spool_scan_t *scan = opaque;
+
+	if (!scan || !segment || segment->session != scan->previous_root ||
+		segment->segment < segment->session ||
+		segment->identity.host_physics_id != 1U)
+		return 0;
+	if (scan->have_previous_segment &&
+		segment->segment <= scan->previous_segment)
+		scan->valid_order = 0U;
+	scan->previous_segment = segment->segment;
+	scan->have_previous_segment = 1U;
+	if (scan->segment_count < sizeof(scan->segment_number) /
+		sizeof(scan->segment_number[0]))
+	{
+		scan->segment_number[scan->segment_count] = segment->segment;
+		scan->segment_gravity_bits[scan->segment_count] = segment->gravity_bits;
+	}
+	scan->segment_count++;
+	return 1;
+}
+
+static int ScanCollectionEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event)
+{
+	spool_scan_t *scan = opaque;
+	const sg_human_trace_v3_spool_ref_t *root;
+	uint64_t spawn_generation;
+	uint32_t client_id;
+
+	if (!scan || !scope || !segment || !event ||
+		!SG_HumanTraceAcceptedV3ScopeView(scope, &root, &client_id,
+			&spawn_generation) || !root || root->root_segment != scan->previous_root ||
+		event->client_id != client_id ||
+		event->spawn_generation != spawn_generation ||
+		segment->segment != scan->previous_segment ||
+		event->order <= scan->last_event_order)
+		return 0;
+	scan->last_event_order = event->order;
+	scan->event_count++;
+	return 1;
+}
+
+static int ScanCollectionScope(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope)
+{
+	spool_scan_t *scan = opaque;
+	const sg_human_trace_v3_spool_ref_t *root;
+	uint64_t spawn_generation;
+	uint32_t client_id;
+	uint64_t forged[16];
+	size_t index;
+
+	if (!scan || !scope)
+		return 0;
+	memset(forged, 0, sizeof(forged));
+	if (SG_HumanTraceAcceptedV3ScopeView(
+		(const sg_human_trace_v3_scope_acceptance_t *)forged,
+		NULL, NULL, NULL))
+		scan->forged_scope_accepted = 1U;
+	if (!SG_HumanTraceAcceptedV3ScopeView(scope, &root,
+		&client_id, &spawn_generation) || !root ||
+		root->root_segment != scan->previous_root || client_id == 0U ||
+		spawn_generation == 0U ||
+		scan->scope_count >= sizeof(scan->scope_client) /
+			sizeof(scan->scope_client[0]))
+		return 0;
+	for (index = scan->root_scope_start; index < scan->scope_count; index++)
+		if (scan->scope_client[index] == client_id &&
+			scan->scope_generation[index] == spawn_generation)
+			return 0;
+	scan->scope_client[scan->scope_count] = client_id;
+	scan->scope_generation[scan->scope_count] = spawn_generation;
+	if (!scan->saved_scope)
+		scan->saved_scope = scope;
+	scan->scope_count++;
+	return 1;
+}
+
+static int ScanCollectionFinish(void *opaque)
+{
+	return opaque != NULL;
+}
+
+static int CollectionSegmentPass(void *opaque,
+	const sg_human_trace_v3_segment_ref_t *segment)
+{
+	return opaque && segment;
+}
+
+static int ScopeSearchBegin(void *opaque,
+	const sg_human_trace_v3_spool_ref_t *spool)
+{
+	scope_search_t *test = opaque;
+
+	if (!test || !test->target || !spool)
+		return 0;
+	test->target_root = spool->root_segment == test->target->root_segment &&
+		strcmp(spool->path, test->target->path) == 0;
+	return 1;
+}
+
+static int ScopeSearchScope(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope)
+{
+	scope_search_t *test = opaque;
+	const sg_human_trace_v3_spool_ref_t *root;
+	uint64_t spawn_generation;
+	uint32_t client_id;
+
+	if (!test || !scope || !SG_HumanTraceAcceptedV3ScopeView(scope, &root,
+		&client_id, &spawn_generation) || !root)
+		return 0;
+	if (!test->target_root || test->found || client_id != test->client_id ||
+		spawn_generation != test->spawn_generation)
+		return 1;
+	test->found = 1U;
+	return 1;
+}
+
+static int ScopeSearchEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event)
+{
+	return opaque && scope && segment && event;
+}
+
+static int ScopeSearchFinish(void *opaque)
+{
+	scope_search_t *test = opaque;
+
+	return test != NULL;
+}
+
+static int ScopeReuseBegin(void *opaque,
+	const sg_human_trace_v3_spool_ref_t *spool)
+{
+	return opaque != NULL && spool != NULL;
+}
+
+static int ScopeReuseScope(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope)
+{
+	scope_reuse_visit_t *visit = opaque;
+
+	if (!visit || !scope || !SG_HumanTraceAcceptedV3ScopeView(scope,
+		NULL, NULL, NULL))
+		return 0;
+	if (visit->capture_retired)
+		visit->retired = scope;
+	else
+	{
+		visit->current = scope;
+		visit->retired_accepted = (uint8_t)
+			SG_HumanTraceAcceptedV3ScopeView(visit->retired,
+				NULL, NULL, NULL);
+	}
+	return 1;
+}
+
+static int ScopeReuseEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event)
+{
+	return opaque != NULL && scope != NULL && segment != NULL && event != NULL;
+}
+
+static int ScopeReuseFinish(void *opaque)
+{
+	return opaque != NULL;
+}
+
+static int ScopeExists(const sg_human_trace_v3_spool_ref_t *spool,
+	uint32_t client_id, uint64_t spawn_generation)
+{
+	scope_search_t test;
+	sg_human_trace_v3_collection_visitor_t visitor;
+	sg_level_identity_t identity;
+
+	if (!spool || !TraceIdentity(&identity))
+		return 0;
+	memset(&test, 0, sizeof(test));
+	memset(&visitor, 0, sizeof(visitor));
+	test.target = spool;
+	test.client_id = client_id;
+	test.spawn_generation = spawn_generation;
+	visitor.begin_root = ScopeSearchBegin;
+	visitor.segment = CollectionSegmentPass;
+	visitor.scope = ScopeSearchScope;
+	visitor.event = ScopeSearchEvent;
+	visitor.finish_root = ScopeSearchFinish;
+	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, &test) ||
+		!test.found)
+		return 0;
+	return 1;
+}
+
+static int ScanCompletedSpools(spool_scan_t *scan)
+{
+	sg_level_identity_t identity;
+	sg_human_trace_v3_collection_visitor_t visitor;
+
+	if (!scan || !TraceIdentity(&identity))
+		return 0;
+	memset(scan, 0, sizeof(*scan));
+	memset(&visitor, 0, sizeof(visitor));
+	scan->valid_order = 1U;
+	visitor.begin_root = ScanSpool;
+	visitor.segment = ScanCollectionSegment;
+	visitor.scope = ScanCollectionScope;
+	visitor.event = ScanCollectionEvent;
+	visitor.finish_root = ScanCollectionFinish;
+	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, scan) ||
+		scan->forged_scope_accepted ||
+		SG_HumanTraceAcceptedV3ScopeView(scan->saved_scope, NULL, NULL, NULL))
+		return 0;
+	return 1;
+}
+
+static void RemoveTraceArtifact(const char *directory, unsigned segment)
+{
+	char path[1024];
+
+	if (TracePath(path, sizeof(path), directory, segment))
+		remove(path);
+	if (SpoolPath(path, sizeof(path), directory, segment))
+		remove(path);
+}
+
 
 static void SetupPlayer(edict_t *player, gclient_t *client,
 	unsigned long generation)
@@ -241,6 +653,38 @@ static int ObserveLifecycle(edict_t *player, edict_t *hook,
 		memcmp(after, &after_copy, sizeof(*after)) == 0;
 }
 
+static void CaptureCompleteTraversalFrames(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame,
+	int landing_frame)
+{
+	memset(hook, 0, sizeof(*hook));
+	hook->inuse = true;
+	hook->owner = player;
+	hook->hook_target = &entities[0];
+	player->client->hook = hook;
+	after->groundentity = NULL;
+	level.framenum = first_frame;
+	SG_HumanTracePmove(player, before, after);
+	SG_HumanTraceHookFire(player, hook);
+	SG_HumanTraceHookAttach(player, hook, &entities[0]);
+	level.framenum = first_frame + 1;
+	SG_HumanTracePmove(player, before, after);
+	level.framenum = first_frame + 2;
+	SG_HumanTraceHookRelease(player);
+	SG_HumanTraceHookReset(player, hook);
+	after->groundentity = &entities[0];
+	level.framenum = landing_frame;
+	SG_HumanTracePmove(player, before, after);
+	after->groundentity = NULL;
+}
+
+static void CaptureCompleteTraversal(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame)
+{
+	CaptureCompleteTraversalFrames(player, hook, before, after, first_frame,
+		first_frame + 3);
+}
+
 static int RunCapacityFailure(const char *directory)
 {
 	char path[1024];
@@ -295,7 +739,389 @@ static int RunRotation(const char *directory)
 		files++;
 		remove(path);
 	}
+	if (SpoolPath(path, sizeof(path), directory, 0U))
+		remove(path);
 	return files >= 2 ? 0 : 31;
+}
+
+static int RunSpoolRejection(const char *directory, int tamper)
+{
+	char spool_path[1024];
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	int result = 0;
+
+	if (!SpoolPath(spool_path, sizeof(spool_path), directory, 0U))
+		return 32;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || strcmp(scan.first.path, spool_path) != 0)
+		result = 33;
+	if (!result && !(tamper ? FlipSpoolByte(spool_path) :
+		AppendSpoolPartial(spool_path)))
+		result = 34;
+	if (!result && (!ScanCompletedSpools(&scan) || scan.count != 0U))
+		result = 35;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunLongStream(const char *directory, int finish)
+{
+	/* This deliberately crosses the historical 16,384-event refusal point.
+	 * It is a regression witness, not a recorder work limit. */
+	const unsigned long event_count = 16385UL;
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned long index;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	after.groundentity = &entities[0];
+	SG_HumanTraceNewLevel();
+	for (index = 0UL; index < event_count; index++)
+	{
+		level.framenum = (int)(index + 1UL);
+		SG_HumanTracePmove(player, &before, &after);
+	}
+	if (!finish)
+		return 0;
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || scan.event_count != event_count)
+		result = 36;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunConsumerVisitCount(const char *directory, unsigned count,
+	int visit, int clean)
+{
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned index;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	for (index = 0U; index < count; index++)
+		CaptureCompleteTraversal(player, hook, &before, &after,
+			(int)(index * 4U + 1U));
+	SG_HumanTraceMatchEnd();
+	if (visit && (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || scan.scope_count != 1U ||
+		scan.event_count != (uint64_t)count * UINT64_C(7)))
+		result = 122;
+	if (clean)
+		RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunConsumerRoots(const char *directory, unsigned root_count,
+	int visit, int clean)
+{
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned root;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	for (root = 0U; root < root_count; root++)
+	{
+		SG_HumanTraceNewLevel();
+		CaptureCompleteTraversal(player, hook, &before, &after,
+			(int)(root * 4U + 1U));
+		SG_HumanTraceMatchEnd();
+	}
+	if (visit && (!ScanCompletedSpools(&scan) || scan.count != root_count ||
+		!scan.valid_order || scan.event_count !=
+			(uint64_t)root_count * UINT64_C(7) ||
+		scan.scope_count != root_count))
+		result = 123;
+	if (clean)
+		for (root = 0U; root < root_count; root++)
+			RemoveTraceArtifact(directory, root);
+	return result;
+}
+
+static int RunConsumerRestartRead(const char *directory)
+{
+	spool_scan_t scan;
+	unsigned root;
+
+	if (!ScanCompletedSpools(&scan) || scan.count != 3U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U || scan.event_count != UINT64_C(21) ||
+		scan.scope_count != 3U)
+		return 124;
+	for (root = 0U; root < 3U; root++)
+		RemoveTraceArtifact(directory, root);
+	return 0;
+}
+
+static int RunConsumerFirstOccurrence(const char *directory)
+{
+	edict_t *player1 = &entities[1];
+	edict_t *player2 = &entities[2];
+	pmove_state_t before1, before2;
+	pmove_t after1, after2;
+	spool_scan_t scan;
+	int result = 0;
+
+	SetupPlayer(player1, &clients[0], 11UL);
+	SetupPlayer(player2, &clients[1], 22UL);
+	SetupPmove(&before1, &after1);
+	SetupPmove(&before2, &after2);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player1, &before1, &after1);
+	level.framenum = 2;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	player2->client->ctf.ctfid = 23UL;
+	level.framenum = 3;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		scan.event_count != 3U || scan.scope_count != 3U ||
+		scan.scope_client[0] != 1U || scan.scope_generation[0] != UINT64_C(11) ||
+		scan.scope_client[1] != 2U || scan.scope_generation[1] != UINT64_C(22) ||
+		scan.scope_client[2] != 2U || scan.scope_generation[2] != UINT64_C(23))
+		result = 125;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunSpoolOrder(const char *directory)
+{
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned segment;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	for (segment = 0U; segment < 3U; segment++)
+	{
+		level.framenum = (int)(segment + 1U);
+		SG_HumanTraceNewLevel();
+		SG_HumanTracePmove(player, &before, &after);
+		SG_HumanTraceMatchEnd();
+	}
+	if (!ScanCompletedSpools(&scan) || scan.count != 3U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U)
+		result = 38;
+	for (segment = 0U; segment < 3U; segment++)
+		RemoveTraceArtifact(directory, segment);
+	return result;
+}
+
+static int RunSpoolQuarantine(const char *directory)
+{
+	char spool_path[1024];
+	char json_path[1024];
+	FILE *malformed;
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned segment;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	for (segment = 0U; segment < 3U; segment++)
+	{
+		level.framenum = (int)(segment + 1U);
+		SG_HumanTraceNewLevel();
+		SG_HumanTracePmove(player, &before, &after);
+		SG_HumanTraceMatchEnd();
+	}
+	/* Root one is a torn completed spool. Roots three and four are unrelated
+	 * collision garbage. A canonical-name JSON sibling whose header cannot be
+	 * assigned to any session is quarantined before grouping. Valid roots zero
+	 * and two must still be visited FIFO. */
+	if (!SpoolPath(spool_path, sizeof(spool_path), directory, 1U) ||
+		!AppendSpoolPartial(spool_path))
+		result = 91;
+	if (!result && (!SpoolPath(spool_path, sizeof(spool_path),
+		directory, 3U) || !AppendSpoolPartial(spool_path)))
+		result = 92;
+	if (!result && (!SpoolPath(spool_path, sizeof(spool_path),
+		directory, 4U) || !AppendSpoolPartial(spool_path)))
+		result = 93;
+	if (!result && (!TracePath(json_path, sizeof(json_path), directory, 3U) ||
+		!(malformed = fopen(json_path, "wb"))))
+		result = 93;
+	if (!result && (fputs("{\n", malformed) < 0 || fclose(malformed) != 0))
+		result = 93;
+	if (!result && (!ScanCompletedSpools(&scan) || scan.count != 2U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U))
+		result = 94;
+	for (segment = 0U; segment < 5U; segment++)
+		RemoveTraceArtifact(directory, segment);
+	return result;
+}
+
+static int RunSegmentNames(const char *directory)
+{
+	static const uint32_t segments[] = { 999999U, 1000000U };
+	static const char *const suffixes[] = { "999999.jsonl", "1000000.jsonl" };
+	sg_level_identity_t identity;
+	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
+	const char *name;
+	uint32_t parsed;
+	size_t index;
+
+	if (!TraceIdentity(&identity))
+		return 112;
+	for (index = 0U; index < sizeof(segments) / sizeof(segments[0]); index++)
+	{
+		if (!SG_HumanTraceTestFormatJsonPath(directory, &identity,
+			segments[index], path))
+			return 113;
+		name = strrchr(path, '/');
+		name = name ? name + 1 : path;
+		if (strlen(name) < strlen(suffixes[index]) || strcmp(name + strlen(name) -
+			strlen(suffixes[index]), suffixes[index]) != 0 ||
+			!SG_HumanTraceTestJsonNameSegment(name, &identity,
+				&parsed) || parsed != segments[index])
+			return 114;
+	}
+	if (SG_HumanTraceTestJsonNameSegment(
+		"humantrace-tracehook-00000065-000000ca-0000000.jsonl", &identity,
+		&parsed))
+		return 115;
+	return 0;
+}
+
+static int RunStoredSpoolCoverage(void)
+{
+	spool_scan_t scan;
+
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.event_count != 12U || scan.scope_count != 2U ||
+		scan.scope_client[0] != 1U || scan.scope_generation[0] != UINT64_C(11) ||
+		scan.scope_client[1] != 2U || scan.scope_generation[1] != UINT64_C(22))
+		return 39;
+	return 0;
+}
+
+static int RunScopeIsolation(const char *directory)
+{
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	int absent_accepted;
+	int typo_accepted;
+	int valid_accepted;
+
+	(void)directory;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U)
+		return 120;
+	absent_accepted = ScopeExists(&scan.first, 2U, UINT64_C(11));
+	typo_accepted = ScopeExists(&scan.first, 1U, UINT64_C(12));
+	valid_accepted = ScopeExists(&scan.first, 1U, UINT64_C(11));
+	if (absent_accepted || typo_accepted || !valid_accepted)
+	{
+		fprintf(stderr,
+			"absent_scope_accepted=%d typo_scope_accepted=%d valid_scope_accepted=%d\n",
+			absent_accepted, typo_accepted, valid_accepted);
+		return 121;
+	}
+	return 0;
+}
+
+static int RunScopeAllocatorReuse(const char *directory)
+{
+#ifdef SG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	scope_reuse_visit_t visit;
+	sg_human_trace_v3_collection_visitor_t visitor;
+	sg_level_identity_t identity;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!TraceIdentity(&identity))
+		return 126;
+	memset(&visit, 0, sizeof(visit));
+	memset(&visitor, 0, sizeof(visitor));
+	visitor.begin_root = ScopeReuseBegin;
+	visitor.segment = CollectionSegmentPass;
+	visitor.scope = ScopeReuseScope;
+	visitor.event = ScopeReuseEvent;
+	visitor.finish_root = ScopeReuseFinish;
+	force_scope_allocator_reuse = 1;
+	visit.capture_retired = 1U;
+	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, &visit) ||
+		!visit.retired || SG_HumanTraceAcceptedV3ScopeView(visit.retired,
+			NULL, NULL, NULL))
+		result = 127;
+	visit.capture_retired = 0U;
+	if (!result && (!SG_HumanTraceVisitAcceptedV3Collection(&identity,
+		&visitor, &visit) || !visit.current ||
+		visit.current == visit.retired || visit.retired_accepted))
+		result = 128;
+	if (!result && scope_reuse_allocation_count != 1U)
+		result = 129;
+	force_scope_allocator_reuse = 0;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+#else
+	(void)directory;
+	return 130;
+#endif
+}
+
+static int RunThreeRootCollisionRead(const char *directory)
+{
+	spool_scan_t scan;
+	unsigned root;
+
+	if (!ScanCompletedSpools(&scan) || scan.count != 2U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U || scan.event_count != UINT64_C(14) ||
+		scan.scope_count != 2U)
+		return 131;
+	for (root = 0U; root < 3U; root++)
+		RemoveTraceArtifact(directory, root);
+	return 0;
 }
 
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
@@ -325,6 +1151,10 @@ static int RunWriteFailure(const char *directory)
 		return 42;
 	remove(path0);
 	remove(path1);
+	if (SpoolPath(path0, sizeof(path0), directory, 0U))
+		remove(path0);
+	if (SpoolPath(path1, sizeof(path1), directory, 1U))
+		remove(path1);
 	return 0;
 }
 #endif
@@ -384,16 +1214,27 @@ static int RunCollision(const char *directory)
 	return CountRecords(path, NULL) == 1 ? 0 : 62;
 }
 
-static int RunPhysicsDrift(const char *directory)
+static int RunPhysicsDrift(const char *directory, int occupied_gap)
 {
-	char path0[1024], path1[1024];
+	char path0[1024], path1[1024], path2[1024];
+	FILE *occupied = NULL;
 	edict_t *player = &entities[1];
 	pmove_state_t before;
 	pmove_t after;
+	spool_scan_t scan;
+	unsigned terminal_segment = occupied_gap ? 2U : 1U;
 
 	if (!TracePath(path0, sizeof(path0), directory, 0U) ||
-	    !TracePath(path1, sizeof(path1), directory, 1U))
+	    !TracePath(path1, sizeof(path1), directory, 1U) ||
+	    !TracePath(path2, sizeof(path2), directory, terminal_segment))
 		return 65;
+	if (occupied_gap)
+	{
+		occupied = fopen(path1, "wb");
+		if (!occupied || fputs("occupied\n", occupied) < 0 ||
+			fclose(occupied) != 0)
+			return 65;
+	}
 	SetupPlayer(player, &clients[0], 11UL);
 	SetupPmove(&before, &after);
 	SG_HumanTraceNewLevel();
@@ -402,7 +1243,14 @@ static int RunPhysicsDrift(const char *directory)
 	SG_HumanTracePmove(player, &before, &after);
 	SG_HumanTraceMatchEnd();
 	if (CountRecords(path0, NULL) != 2 ||
-	    CountRecords(path1, NULL) != 3)
+		CountRecords(path2, NULL) != 3 || !ScanCompletedSpools(&scan) ||
+		scan.count != 1U || scan.event_count != 2U ||
+		scan.segment_count != 2U || scan.segment_number[0] != 0U ||
+		scan.segment_number[1] != terminal_segment ||
+		scan.segment_gravity_bits[0] != UINT32_C(0x44480000) ||
+		scan.segment_gravity_bits[1] != UINT32_C(0x42c80000) ||
+		scan.first.completion.segment != terminal_segment ||
+		scan.first.completion.gravity_bits != UINT32_C(0x42c80000))
 		return 66;
 	return 0;
 }
@@ -476,8 +1324,13 @@ int main(int argc, char **argv)
 	edict_t *hook1 = &entities[3];
 	edict_t *player2 = &entities[2];
 	edict_t *hook2 = &entities[4];
+	edict_t player1_copy;
+	edict_t hook1_copy;
+	gclient_t client1_copy;
 	pmove_state_t before1, before2;
 	pmove_t after1, after2;
+	pmove_state_t before1_copy;
+	pmove_t after1_copy;
 	int result = 0;
 
 	if ((argc != 2 && argc != 3) ||
@@ -500,6 +1353,46 @@ int main(int argc, char **argv)
 		return RunCapacityFailure(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "rotation") == 0)
 		return RunRotation(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "spool-truncated") == 0)
+		return RunSpoolRejection(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "spool-tampered") == 0)
+		return RunSpoolRejection(argv[1], 1);
+	if (argc == 3 && strcmp(argv[2], "long-stream") == 0)
+		return RunLongStream(argv[1], 1);
+	if (argc == 3 && strcmp(argv[2], "long-stream-live") == 0)
+		return RunLongStream(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-64") == 0)
+		return RunConsumerVisitCount(argv[1], 64U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-128") == 0)
+		return RunConsumerVisitCount(argv[1], 128U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-256") == 0)
+		return RunConsumerVisitCount(argv[1], 256U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-512") == 0)
+		return RunConsumerVisitCount(argv[1], 512U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-io-roots") == 0)
+		return RunConsumerRoots(argv[1], 8U, 1, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-restart-write") == 0)
+		return RunConsumerRoots(argv[1], 3U, 0, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-restart-read") == 0)
+		return RunConsumerRestartRead(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-produce-only") == 0)
+		return RunConsumerVisitCount(argv[1], 1U, 0, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-boundary-source") == 0)
+		return RunConsumerVisitCount(argv[1], 1U, 0, 0);
+	if (argc == 3 && strcmp(argv[2], "consumer-first-occurrence") == 0)
+		return RunConsumerFirstOccurrence(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "spool-order") == 0)
+		return RunSpoolOrder(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "spool-quarantine") == 0)
+		return RunSpoolQuarantine(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "segment-names") == 0)
+		return RunSegmentNames(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-scope-isolation") == 0)
+		return RunScopeIsolation(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-scope-reuse") == 0)
+		return RunScopeAllocatorReuse(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-three-root-collision-read") == 0)
+		return RunThreeRootCollisionRead(argv[1]);
 #ifndef _WIN32
 	if (argc == 3 && strcmp(argv[2], "fsize") == 0)
 		return RunFileSizeFailure(argv[1]);
@@ -507,7 +1400,9 @@ int main(int argc, char **argv)
 	if (argc == 3 && strcmp(argv[2], "collision") == 0)
 		return RunCollision(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "physics") == 0)
-		return RunPhysicsDrift(argv[1]);
+		return RunPhysicsDrift(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "physics-gap") == 0)
+		return RunPhysicsDrift(argv[1], 1);
 #ifndef _WIN32
 	if (argc == 3 && strcmp(argv[2], "concurrent") == 0)
 		return RunConcurrentCollision(argv[1]);
@@ -534,11 +1429,42 @@ int main(int argc, char **argv)
 	hook2->s.origin[0] = 96.0f;
 	player2->client->hook = hook2;
 
+	player1_copy = *player1;
+	hook1_copy = *hook1;
+	client1_copy = *player1->client;
+	before1_copy = before1;
+	after1_copy = after1;
 	level.framenum = 17;
 	SG_HumanTraceNewLevel();
-	if (!ObserveLifecycle(player1, hook1, &before1, &after1))
+	SG_HumanTracePmove(player1, &before1, &after1);
+	SG_HumanTraceHookFire(player1, hook1);
+	SG_HumanTraceHookAttach(player1, hook1, &entities[0]);
+	level.framenum = 18;
+	SG_HumanTracePmove(player1, &before1, &after1);
+	level.framenum = 19;
+	SG_HumanTraceHookRelease(player1);
+	SG_HumanTraceHookReset(player1, hook1);
+	level.framenum = 20;
+	SG_HumanTracePmove(player1, &before1, &after1);
+	level.framenum = 25;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	SG_HumanTraceHookFire(player2, hook2);
+	SG_HumanTraceHookAttach(player2, hook2, &entities[0]);
+	level.framenum = 26;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	level.framenum = 27;
+	SG_HumanTraceHookRelease(player2);
+	if (memcmp(player1, &player1_copy, sizeof(*player1)) != 0 ||
+	    memcmp(hook1, &hook1_copy, sizeof(*hook1)) != 0 ||
+	    memcmp(player1->client, &client1_copy, sizeof(*player1->client)) != 0 ||
+	    memcmp(&before1, &before1_copy, sizeof(before1)) != 0 ||
+	    memcmp(&after1, &after1_copy, sizeof(after1)) != 0)
 		result = 3;
 	SG_HumanTraceMatchEnd();
+#ifdef SG_HUMAN_TRACE_TEST
+	if (!result && RunStoredSpoolCoverage() != 0)
+		result = 9;
+#endif
 	enabled.value = 0.0f;
 	if (!ObserveLifecycle(player1, hook1, &before1, &after1))
 		result = 4;
@@ -550,18 +1476,20 @@ int main(int argc, char **argv)
 		result = 5;
 	SG_HumanTraceMatchEnd();
 
-	if (CountRecords(path0, NULL) != 7 ||
+	if (CountRecords(path0, NULL) != 14 ||
 	    CountRecords(path1, NULL) != 7 ||
-	    CountRecords(path0, "\"kind\":\"step\"") != 1 ||
-	    CountRecords(path0, "\"kind\":\"hook-fire\"") != 1 ||
-	    CountRecords(path0, "\"kind\":\"hook-attach\"") != 1 ||
-	    CountRecords(path0, "\"kind\":\"hook-release\"") != 1 ||
+	    CountRecords(path0, "\"kind\":\"step\"") != 5 ||
+	    CountRecords(path0, "\"kind\":\"hook-fire\"") != 2 ||
+	    CountRecords(path0, "\"kind\":\"hook-attach\"") != 2 ||
+	    CountRecords(path0, "\"kind\":\"hook-release\"") != 2 ||
 	    CountRecords(path0, "\"kind\":\"hook-reset\"") != 1 ||
-	    CountRecords(path0, "\"sha256\":") != 7 ||
+	    CountRecords(path0, "\"sha256\":") != 14 ||
 	    !FileContains(path0, "\"client\":1,\"spawn_generation\":11") ||
-	    !FileContains(path0, "\"frame\":17") ||
+	    !FileContains(path0, "\"frame\":20") ||
+	    !FileContains(path0, "\"client\":2,\"spawn_generation\":22") ||
+	    !FileContains(path0, "\"frame\":27") ||
 	    !FileContains(path0, "\"order\":1,\"command\":1") ||
-	    !FileContains(path0, "\"order\":5,\"hook_event\":4") ||
+	    !FileContains(path0, "\"order\":6,\"hook_event\":4") ||
 	    !FileContains(path1, "\"client\":2,\"spawn_generation\":22") ||
 	    !FileContains(path1, "\"frame\":31"))
 		result = 6;
@@ -579,9 +1507,9 @@ int main(int argc, char **argv)
 
 	if (!getenv("SG_HUMAN_TRACE_KEEP"))
 	{
-		remove(path0);
-		remove(path1);
-		remove(path2);
+		RemoveTraceArtifact(argv[1], 0U);
+		RemoveTraceArtifact(argv[1], 1U);
+		RemoveTraceArtifact(argv[1], 2U);
 	}
 	if (result)
 		return result;

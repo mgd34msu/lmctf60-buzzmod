@@ -442,9 +442,11 @@ HUMAN_TRACE_TESTS := tests/test_humantrace.py \
 	tests/test_human_trace_integration.py \
 	tests/test_human_trace_v3_integration.py
 HUMAN_TRACE_HOOK_TEST_BIN := sg_human_trace_hook_test.make
+HUMAN_TRACE_IO_TEST_BIN := sg_human_trace_io_test.make
 HUMAN_TRACE_HOOK_TEST_SOURCE := tests/sg_human_trace_hook_test.c
 HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS := \
-	sg_human_trace_hook_test.gnu sg_human_trace_hook_test.make
+	sg_human_trace_hook_test.gnu sg_human_trace_hook_test.make \
+	sg_human_trace_io_test.gnu sg_human_trace_io_test.make
 HUMAN_SPEED_TEST_ALL_ARTIFACTS := \
 	sg_human_speed_test.gnu sg_human_speed_test.make \
 	.sg_human_speed_test.gnu.o .sg_human_speed_test.gnu.d \
@@ -1786,8 +1788,21 @@ $(HUMAN_TRACE_HOOK_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_rune_v2_wire.h
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
-		-DSG_HUMAN_TRACE_WRAP_FWRITE \
-		-o $@ $(filter %.c,$^) $(LIBS) -Wl,--wrap=fwrite
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR \
+		-DSG_HUMAN_TRACE_TEST -o $@ $(filter %.c,$^) $(LIBS) \
+		-Wl,--wrap=fwrite -Wl,--wrap=calloc -Wl,--wrap=free
+
+$(HUMAN_TRACE_IO_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
+		slipgate/sg_human_trace.c \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_wire.h
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
+		-DSG_HUMAN_TRACE_SEGMENT_BYTES=4096U \
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR \
+		-DSG_HUMAN_TRACE_TEST -o $@ $(filter %.c,$^) $(LIBS) \
+		-Wl,--wrap=fwrite -Wl,--wrap=calloc -Wl,--wrap=free
 
 $(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
 	$(E) [TEST-LD] $@
@@ -4594,7 +4609,8 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
 
-human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN)
+human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN) \
+		$(HUMAN_TRACE_IO_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)SG_HUMAN_TRACE_TEST_BINARY=$(HUMAN_TRACE_HOOK_TEST_BIN) \
 		python3 -B -m unittest tests.test_humantrace \
