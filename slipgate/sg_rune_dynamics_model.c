@@ -850,6 +850,22 @@ static int FacesHaveSameCoordinates(const sg_field_refinement_tree_t *tree,
 	return 1;
 }
 
+static int FaceDescendsFrom(const sg_field_refinement_tree_t *tree,
+	const sg_field_refinement_face_t *descendant,
+	const sg_field_refinement_face_t *ancestor)
+{
+	const sg_field_refinement_face_t *current = descendant;
+	while (!StableIdNone(&current->parent_face.value))
+	{
+		if (SameStableId(&current->parent_face.value, &ancestor->id.value))
+			return 1;
+		current = FindRefinementFace(tree, &current->parent_face);
+		if (!current)
+			return 0;
+	}
+	return 0;
+}
+
 static int VertexIsExactMidpoint(
 	const sg_field_refinement_vertex_t *midpoint,
 	const sg_field_refinement_vertex_t *left,
@@ -1246,11 +1262,11 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 		size_t previous;
 		for (previous = 0U; previous < node; previous++)
 			if (FacesHaveSameCoordinates(tree, &tree->faces[previous],
-				&tree->faces[node]) && !SameStableId(
-					&tree->faces[node].parent_face.value,
-					&tree->faces[previous].id.value) && !SameStableId(
-					&tree->faces[previous].parent_face.value,
-					&tree->faces[node].id.value))
+				&tree->faces[node]) &&
+			    !FaceDescendsFrom(tree, &tree->faces[node],
+				&tree->faces[previous]) &&
+			    !FaceDescendsFrom(tree, &tree->faces[previous],
+				&tree->faces[node]))
 				return 0;
 	}
 	for (atom = 0U; atom < atom_count; atom++)

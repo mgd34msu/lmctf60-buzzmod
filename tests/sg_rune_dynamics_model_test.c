@@ -1151,6 +1151,318 @@ static void StandardRefinementSimplex(sg_field_refinement_vertex_t vertices[8])
 		SetRefinementCoordinate(&vertices[vertex], vertex - 1U, 1.0f);
 }
 
+static float TestRefinementCoordinate(
+	const sg_field_refinement_vertex_t *vertex, uint32_t dimension)
+{
+	if (dimension < 3U)
+		return vertex->position.value[dimension];
+	if (dimension < 6U)
+		return vertex->velocity.value[dimension - 3U];
+	return vertex->elapsed_ms;
+}
+
+static int TestRefinementCoordinateOrder(
+	const sg_field_refinement_vertex_t *left,
+	const sg_field_refinement_vertex_t *right)
+{
+	uint32_t dimension;
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		float left_value = TestRefinementCoordinate(left, dimension);
+		float right_value = TestRefinementCoordinate(right, dimension);
+		if (left_value < right_value)
+			return -1;
+		if (left_value > right_value)
+			return 1;
+	}
+	return 0;
+}
+
+static void TestRefinementBounds(
+	const sg_field_refinement_vertex_t *const vertices[8],
+	sg_rune_flow_enclosure_t *bounds)
+{
+	uint32_t dimension;
+	memset(bounds, 0, sizeof(*bounds));
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		float minimum = TestRefinementCoordinate(vertices[0], dimension);
+		float maximum = minimum;
+		uint32_t vertex;
+		for (vertex = 1U; vertex < 8U; vertex++)
+		{
+			float value = TestRefinementCoordinate(vertices[vertex], dimension);
+			if (value < minimum)
+				minimum = value;
+			if (value > maximum)
+				maximum = value;
+		}
+		if (dimension < 3U)
+		{
+			sg_rune_interval_t *interval = dimension == 0U ?
+				&bounds->position.x : dimension == 1U ?
+				&bounds->position.y : &bounds->position.z;
+			interval->min_value = minimum;
+			interval->max_value = maximum;
+		}
+		else if (dimension < 6U)
+		{
+			sg_rune_interval_t *interval = dimension == 3U ?
+				&bounds->velocity.x : dimension == 4U ?
+				&bounds->velocity.y : &bounds->velocity.z;
+			interval->min_value = minimum;
+			interval->max_value = maximum;
+		}
+		else
+		{
+			bounds->elapsed_ms.min_value = minimum;
+			bounds->elapsed_ms.max_value = maximum;
+		}
+	}
+}
+
+typedef struct refinement_face_builder_s
+{
+	uint32_t vertices[7];
+	uint32_t nodes[2];
+	uint8_t local_faces[2];
+	uint8_t depth;
+	uint8_t incidence_count;
+} refinement_face_builder_t;
+
+static int TestFaceKeySame(const uint32_t left[7], const uint32_t right[7])
+{
+	return memcmp(left, right, 7U * sizeof(*left)) == 0;
+}
+
+static int TestVertexInsideFace(
+	const sg_field_refinement_vertex_t *vertex, const uint32_t face[7],
+	const sg_field_refinement_vertex_t *vertices)
+{
+	uint32_t left;
+	for (left = 0U; left < 7U; left++)
+	{
+		uint32_t right;
+		if (TestRefinementCoordinateOrder(vertex, &vertices[face[left]]) == 0)
+			return 1;
+		for (right = left + 1U; right < 7U; right++)
+			if (SG_FieldRefinementVertexExactMidpoint(vertex,
+				&vertices[face[left]], &vertices[face[right]]))
+				return 1;
+	}
+	return 0;
+}
+
+static int TestFaceInsideFace(const uint32_t child[7],
+	const uint32_t parent[7], const sg_field_refinement_vertex_t *vertices)
+{
+	uint32_t vertex;
+	for (vertex = 0U; vertex < 7U; vertex++)
+		if (!TestVertexInsideFace(&vertices[child[vertex]], parent, vertices))
+			return 0;
+	return 1;
+}
+
+static int TestLocalFaceOrientation(const uint32_t node_vertices[8],
+	uint8_t local_face, const sg_field_refinement_vertex_t *vertices)
+{
+	const sg_field_refinement_vertex_t *cell[8];
+	const sg_field_refinement_vertex_t *omitted;
+	uint32_t vertex;
+	uint32_t sorted_position = 0U;
+	for (vertex = 0U; vertex < 8U; vertex++)
+		cell[vertex] = &vertices[node_vertices[vertex]];
+	omitted = cell[local_face];
+	for (vertex = 0U; vertex < 8U; vertex++)
+		if (TestRefinementCoordinateOrder(cell[vertex], omitted) < 0)
+			sorted_position++;
+	return SG_FieldRefinementCellOrientation(cell) *
+		((sorted_position & 1U) != 0U ? -1 : 1);
+}
+
+static void TestRepeatedRefinementFaceLineage(void)
+{
+	static const uint32_t node_vertex_indices[5][8] = {
+		{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U },
+		{ 0U, 1U, 3U, 4U, 5U, 6U, 7U, 8U },
+		{ 0U, 2U, 3U, 4U, 5U, 6U, 7U, 8U },
+		{ 0U, 1U, 3U, 4U, 5U, 6U, 7U, 9U },
+		{ 0U, 3U, 4U, 5U, 6U, 7U, 8U, 9U }
+	};
+	static const uint8_t depths[5] = { 0U, 1U, 1U, 2U, 2U };
+	sg_field_reach_atom_t atom = { 0 };
+	sg_field_refinement_tree_t tree = { 0 };
+	sg_field_refinement_node_t nodes[5] = { 0 };
+	sg_field_refinement_vertex_t vertices[10] = { 0 };
+	sg_field_refinement_vertex_ref_t node_vertices[40] = { 0 };
+	sg_field_refinement_face_t faces[40] = { 0 };
+	sg_field_refinement_vertex_ref_t face_vertices[280] = { 0 };
+	sg_field_refinement_face_incidence_t incidences[40] = { 0 };
+	sg_field_refinement_face_ref_t node_faces[40] = { 0 };
+	refinement_face_builder_t builders[40] = { 0 };
+	uint32_t face_for_local[5][8] = { { 0 } };
+	uint32_t children[4] = { 1U, 2U, 3U, 4U };
+	uint32_t roots[1] = { 0U };
+	size_t face_count = 0U;
+	size_t incidence_count = 0U;
+	uint32_t node;
+
+	StandardRefinementSimplex(vertices);
+	vertices[8] = vertices[0];
+	SetRefinementCoordinate(&vertices[8], 0U, 0.5f);
+	SetRefinementCoordinate(&vertices[8], 1U, 0.5f);
+	vertices[9] = vertices[0];
+	SetRefinementCoordinate(&vertices[9], 0U, 0.75f);
+	SetRefinementCoordinate(&vertices[9], 1U, 0.25f);
+	for (node = 0U; node < 10U; node++)
+	{
+		vertices[node].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_VERTEX, node + 1U);
+		vertices[node].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, node + 1U);
+	}
+	atom.id.value = Stable(SG_RUNE_ORDER_FIELD_REACH_ATOM, 1U);
+	atom.domain.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U);
+	atom.simplices = (sg_rune_state_simplex_span_t){ 0U, 1U };
+	atom.partition_proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 20U);
+	for (node = 0U; node < 5U; node++)
+	{
+		const sg_field_refinement_vertex_t *cell[8];
+		uint32_t local;
+		nodes[node].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, node + 1U);
+		nodes[node].parent = node == 0U ? UINT32_MAX :
+			(node <= 2U ? 0U : 1U);
+		nodes[node].children = node == 0U ?
+			(sg_field_refinement_node_span_t){ 0U, 2U } : node == 1U ?
+			(sg_field_refinement_node_span_t){ 2U, 2U } :
+			(sg_field_refinement_node_span_t){ 4U, 0U };
+		nodes[node].atom = atom.id;
+		nodes[node].vertices = (sg_field_refinement_vertex_ref_span_t){
+			node * 8U, 8U };
+		nodes[node].faces = (sg_field_refinement_face_ref_span_t){
+			node * 8U, 8U };
+		nodes[node].geometry_proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, 40U + node);
+		nodes[node].interpolation_proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, 50U + node);
+		for (local = 0U; local < 8U; local++)
+		{
+			node_vertices[node * 8U + local] =
+				vertices[node_vertex_indices[node][local]].id;
+			cell[local] = &vertices[node_vertex_indices[node][local]];
+		}
+		nodes[node].orientation =
+			(int8_t)SG_FieldRefinementCellOrientation(cell);
+		TestRefinementBounds(cell, &nodes[node].state_bounds);
+	}
+	atom.state_bounds = nodes[0].state_bounds;
+
+	for (node = 0U; node < 5U; node++)
+	{
+		uint32_t local_face;
+		for (local_face = 0U; local_face < 8U; local_face++)
+		{
+			uint32_t key[7];
+			uint32_t local;
+			uint32_t key_index = 0U;
+			size_t face;
+			for (local = 0U; local < 8U; local++)
+				if (local != local_face)
+					key[key_index++] = node_vertex_indices[node][local];
+			for (face = 0U; face < face_count; face++)
+				if (builders[face].depth == depths[node] &&
+				    TestFaceKeySame(builders[face].vertices, key))
+					break;
+			if (face == face_count)
+			{
+				memcpy(builders[face].vertices, key, sizeof(key));
+				builders[face].depth = depths[node];
+				face_count++;
+			}
+			CHECK(builders[face].incidence_count < 2U);
+			builders[face].nodes[builders[face].incidence_count] = node;
+			builders[face].local_faces[builders[face].incidence_count] =
+				(uint8_t)local_face;
+			builders[face].incidence_count++;
+			face_for_local[node][local_face] = (uint32_t)face;
+		}
+	}
+	CHECK(face_count == 38U);
+	for (size_t face = 0U; face < face_count; face++)
+	{
+		uint32_t item;
+		faces[face].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_FACE, (uint32_t)face + 1U);
+		faces[face].vertices = (sg_field_refinement_vertex_ref_span_t){
+			(uint32_t)(face * 7U), 7U };
+		faces[face].incidences = (sg_field_refinement_incidence_span_t){
+			(uint32_t)incidence_count, builders[face].incidence_count };
+		faces[face].parent_face.value = SG_RUNE_STABLE_ID_NONE;
+		faces[face].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)face + 100U);
+		for (item = 0U; item < 7U; item++)
+			face_vertices[face * 7U + item] =
+				vertices[builders[face].vertices[item]].id;
+		for (item = 0U; item < builders[face].incidence_count; item++)
+		{
+			uint32_t incidence_node = builders[face].nodes[item];
+			uint8_t local_face = builders[face].local_faces[item];
+			incidences[incidence_count].node = nodes[incidence_node].id;
+			incidences[incidence_count].local_face = local_face;
+			incidences[incidence_count].orientation =
+				(int8_t)TestLocalFaceOrientation(
+					node_vertex_indices[incidence_node], local_face, vertices);
+			node_faces[incidence_node * 8U + local_face] = faces[face].id;
+			incidence_count++;
+		}
+	}
+	CHECK(incidence_count == 40U);
+	for (size_t face = 0U; face < face_count; face++)
+		if (builders[face].incidence_count == 1U &&
+		    builders[face].nodes[0] != 0U)
+		{
+			uint32_t child_node = builders[face].nodes[0];
+			uint32_t parent_node = nodes[child_node].parent;
+			uint32_t parent_local;
+			for (parent_local = 0U; parent_local < 8U; parent_local++)
+			{
+				uint32_t parent_face = face_for_local[parent_node][parent_local];
+				if (TestFaceInsideFace(builders[face].vertices,
+					builders[parent_face].vertices, vertices))
+				{
+					faces[face].parent_face = faces[parent_face].id;
+					break;
+				}
+			}
+			CHECK(parent_local < 8U);
+		}
+
+	tree.id.value = Stable(SG_RUNE_ORDER_FIELD_REFINEMENT_TREE, 1U);
+	tree.nodes = nodes;
+	tree.node_count = 5U;
+	tree.vertices = vertices;
+	tree.vertex_count = 10U;
+	tree.node_vertices = node_vertices;
+	tree.node_vertex_count = 40U;
+	tree.faces = faces;
+	tree.face_count = face_count;
+	tree.face_vertices = face_vertices;
+	tree.face_vertex_count = face_count * 7U;
+	tree.face_incidences = incidences;
+	tree.face_incidence_count = incidence_count;
+	tree.node_faces = node_faces;
+	tree.node_face_count = 40U;
+	tree.children = children;
+	tree.child_count = 4U;
+	tree.atom_roots = roots;
+	tree.atom_count = 1U;
+	tree.proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 200U);
+	CHECK(SG_FieldRefinementTreeValid(&tree, &atom, 1U));
+}
+
 static void TestExactIntersectionHostiles(void)
 {
 	sg_field_refinement_vertex_t left_storage[8];
@@ -1398,6 +1710,135 @@ static void TestRefinedBoundaryCoverage(void)
 	nodes[1].children = (sg_field_refinement_node_span_t){ 0U, 0U };
 	fixture.dynamics.refinement_tree.node_count = 4U;
 	fixture.dynamics.refinement_tree.child_count = 2U;
+	CHECK(!SG_RuneDynamicsGeometryValid(&fixture.dynamics));
+}
+
+static void TestCoincidentChartsRemainIndependent(void)
+{
+	dynamics_fixture_t fixture;
+	sg_rune_state_vertex_t state_vertices[32];
+	sg_rune_state_chart_t charts[2];
+	sg_rune_state_simplex_t simplices[4];
+	sg_rune_state_domain_t domains[2];
+	sg_rune_state_simplex_owner_t owners[4];
+	sg_field_reach_atom_t atoms[4];
+	sg_rune_domain_support_certificate_t support[2];
+	sg_rune_domain_boundary_facet_t boundary[28];
+	sg_field_refinement_vertex_ref_t boundary_vertices[196];
+	uint32_t words[2] = { 7U, 7U };
+	sg_field_refinement_node_t nodes[4];
+	sg_field_refinement_vertex_ref_t node_vertices[32];
+	uint32_t roots[4] = { 0U, 1U, 2U, 3U };
+	size_t index;
+
+	BuildFixture(&fixture);
+	memcpy(state_vertices, fixture.vertices, 16U * sizeof(*state_vertices));
+	memcpy(charts, fixture.charts, sizeof(fixture.charts));
+	memcpy(simplices, fixture.simplices, sizeof(fixture.simplices));
+	memcpy(domains, fixture.domains, sizeof(fixture.domains));
+	memcpy(owners, fixture.simplex_owners, sizeof(fixture.simplex_owners));
+	memcpy(atoms, fixture.reach_atoms, sizeof(fixture.reach_atoms));
+	memcpy(nodes, fixture.refinement_nodes,
+		2U * sizeof(*fixture.refinement_nodes));
+	memcpy(node_vertices, fixture.node_vertices,
+		16U * sizeof(*fixture.node_vertices));
+	charts[1] = charts[0];
+	charts[1].id.value = Stable(SG_RUNE_ORDER_STATE_CHART, 2U);
+	charts[1].state_vertices = (sg_rune_state_vertex_span_t){ 16U, 16U };
+	charts[1].simplices = (sg_rune_state_simplex_span_t){ 2U, 2U };
+	charts[1].state_domains = (sg_rune_state_domain_span_t){ 1U, 1U };
+	for (index = 0U; index < 16U; index++)
+	{
+		state_vertices[16U + index] = state_vertices[index];
+		state_vertices[16U + index].id.value = Stable(
+			SG_RUNE_ORDER_STATE_VERTEX, (uint32_t)index + 17U);
+		state_vertices[16U + index].chart = charts[1].id;
+	}
+	for (index = 0U; index < 2U; index++)
+	{
+		simplices[2U + index] = simplices[index];
+		simplices[2U + index].id.value = Stable(
+			SG_RUNE_ORDER_STATE_SIMPLEX, (uint32_t)index + 3U);
+		simplices[2U + index].chart = charts[1].id;
+		simplices[2U + index].vertices.first = (uint32_t)(16U + index * 8U);
+	}
+	domains[1] = domains[0];
+	domains[1].id.value = Stable(SG_RUNE_ORDER_STATE_DOMAIN, 2U);
+	domains[1].chart = charts[1].id;
+	domains[1].simplices = (sg_rune_state_simplex_span_t){ 2U, 2U };
+	for (index = 0U; index < 2U; index++)
+	{
+		atoms[2U + index] = atoms[index];
+		atoms[2U + index].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REACH_ATOM, (uint32_t)index + 3U);
+		atoms[2U + index].domain = domains[1].id;
+		atoms[2U + index].simplices.first = (uint32_t)index + 2U;
+		owners[2U + index].simplex = simplices[2U + index].id;
+		owners[2U + index].domain = domains[1].id;
+		owners[2U + index].atom = atoms[2U + index].id;
+		owners[2U + index].proof.value = Stable(
+			SG_RUNE_ORDER_SIMPLEX_OWNERSHIP_PROOF, (uint32_t)index + 3U);
+		nodes[2U + index] = nodes[index];
+		nodes[2U + index].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, (uint32_t)index + 3U);
+		nodes[2U + index].atom = atoms[2U + index].id;
+		nodes[2U + index].vertices.first = (uint32_t)(16U + index * 8U);
+		memcpy(&node_vertices[16U + index * 8U],
+			&fixture.node_vertices[index * 8U], 8U * sizeof(*node_vertices));
+	}
+	support[0] = fixture.domain_support[0];
+	support[1] = fixture.domain_support[0];
+	support[1].domain = domains[1].id;
+	support[1].boundary_facets.first = 14U;
+	support[1].normalized_volume.magnitude.first = 1U;
+	support[1].proof.value = Stable(SG_RUNE_ORDER_DOMAIN_SUPPORT_PROOF, 2U);
+	for (index = 0U; index < 14U; index++)
+	{
+		boundary[index] = fixture.domain_boundary_facets[index];
+		boundary[14U + index] = fixture.domain_boundary_facets[index];
+		boundary[14U + index].domain = domains[1].id;
+		boundary[14U + index].vertices.first += 98U;
+		boundary[14U + index].proof.value = Stable(
+			SG_RUNE_ORDER_DOMAIN_BOUNDARY_PROOF, (uint32_t)index + 20U);
+	}
+	for (index = 0U; index < 98U; index++)
+	{
+		boundary_vertices[index] = fixture.domain_boundary_vertices[index];
+		boundary_vertices[98U + index] =
+			fixture.domain_boundary_vertices[index];
+	}
+	fixture.dynamics.state_vertices = state_vertices;
+	fixture.dynamics.state_vertex_count = 32U;
+	fixture.dynamics.state_charts = charts;
+	fixture.dynamics.state_chart_count = 2U;
+	fixture.dynamics.state_simplices = simplices;
+	fixture.dynamics.state_simplex_count = 4U;
+	fixture.dynamics.state_domains = domains;
+	fixture.dynamics.state_domain_count = 2U;
+	fixture.dynamics.simplex_owners = owners;
+	fixture.dynamics.simplex_owner_count = 4U;
+	fixture.dynamics.reach_atoms = atoms;
+	fixture.dynamics.reach_atom_count = 4U;
+	fixture.dynamics.domain_support = support;
+	fixture.dynamics.domain_support_count = 2U;
+	fixture.dynamics.domain_boundary_facets = boundary;
+	fixture.dynamics.domain_boundary_facet_count = 28U;
+	fixture.dynamics.domain_boundary_vertices = boundary_vertices;
+	fixture.dynamics.domain_boundary_vertex_count = 196U;
+	fixture.dynamics.exact_words = words;
+	fixture.dynamics.exact_word_count = 2U;
+	fixture.dynamics.refinement_tree.nodes = nodes;
+	fixture.dynamics.refinement_tree.node_count = 4U;
+	fixture.dynamics.refinement_tree.node_vertices = node_vertices;
+	fixture.dynamics.refinement_tree.node_vertex_count = 32U;
+	fixture.dynamics.refinement_tree.atom_roots = roots;
+	fixture.dynamics.refinement_tree.atom_count = 4U;
+	CHECK(SG_RuneDynamicsGeometryValid(&fixture.dynamics));
+	/* The same bytes become an overlap once the second component claims the
+	 * first chart identity. */
+	domains[1].chart = charts[0].id;
+	simplices[2].chart = charts[0].id;
+	simplices[3].chart = charts[0].id;
 	CHECK(!SG_RuneDynamicsGeometryValid(&fixture.dynamics));
 }
 
@@ -1749,8 +2190,10 @@ int main(void)
 	TestSimplexGeometry();
 	TestNearDegenerateSimplexGeometry();
 	TestExactIntersectionHostiles();
+	TestRepeatedRefinementFaceLineage();
 	TestAuthenticatedGeometryCertificates();
 	TestRefinedBoundaryCoverage();
+	TestCoincidentChartsRemainIndependent();
 	TestExactLeafOwnership();
 	TestInternalHierarchySummaries();
 	TestLinearHierarchy();

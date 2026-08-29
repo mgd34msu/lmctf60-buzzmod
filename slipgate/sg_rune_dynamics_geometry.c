@@ -1714,6 +1714,7 @@ int SG_FieldRefinementCellFullRank(
 typedef struct sg_geometry_cell_s
 {
 	const sg_field_refinement_vertex_t *vertices[8];
+	size_t chart;
 	size_t domain;
 	size_t atom;
 	size_t source;
@@ -1724,6 +1725,7 @@ typedef struct sg_geometry_cell_s
 typedef struct sg_geometry_facet_s
 {
 	const sg_field_refinement_vertex_t *vertices[7];
+	size_t chart;
 	size_t domain;
 	size_t cell;
 	int orientation;
@@ -1748,6 +1750,8 @@ static int GeometryFacetCompare(const void *left_value, const void *right_value)
 		if (order != 0)
 			return order;
 	}
+	if (left->chart != right->chart)
+		return left->chart < right->chart ? -1 : 1;
 	if (left->domain != right->domain)
 		return left->domain < right->domain ? -1 : 1;
 	if (left->cell != right->cell)
@@ -1760,6 +1764,8 @@ static int GeometryFacetCoordinatesEqual(const sg_geometry_facet_t *left,
 	const sg_geometry_facet_t *right)
 {
 	uint32_t vertex;
+	if (left->chart != right->chart)
+		return 0;
 	for (vertex = 0U; vertex < SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
 		if (!RefinementCoordinatesEqual(left->vertices[vertex],
 			right->vertices[vertex]))
@@ -1893,6 +1899,17 @@ static size_t GeometryDomainIndex(const sg_rune_dynamics_model_t *model,
 	return SIZE_MAX;
 }
 
+static size_t GeometryChartIndex(const sg_rune_dynamics_model_t *model,
+	const sg_rune_state_chart_ref_t *reference)
+{
+	size_t index;
+	for (index = 0U; index < model->state_chart_count; index++)
+		if (GeometryStableIdSame(&model->state_charts[index].id.value,
+			&reference->value))
+			return index;
+	return SIZE_MAX;
+}
+
 static size_t GeometryAtomIndex(const sg_rune_dynamics_model_t *model,
 	const sg_field_reach_atom_ref_t *reference)
 {
@@ -1945,6 +1962,7 @@ static int GeometryBuildFacets(const sg_geometry_cell_t *cells,
 			uint32_t vertex;
 			uint32_t face_vertex = 0U;
 			facet->domain = cells[cell].domain;
+			facet->chart = cells[cell].chart;
 			facet->cell = cell;
 			facet->orientation = cell_orientation *
 				((omitted & 1U) != 0U ? -1 : 1);
@@ -2274,6 +2292,10 @@ static int GeometryManifestValid(const sg_rune_dynamics_model_t *model,
 				model->id.value.source_set_identity)
 				return 0;
 			manifest[facet].domain = domain;
+			manifest[facet].chart = GeometryChartIndex(model,
+				&model->state_domains[domain].chart);
+			if (manifest[facet].chart == SIZE_MAX)
+				return 0;
 			manifest[facet].cell = facet;
 			manifest[facet].orientation = record->orientation;
 			for (vertex = 0U; vertex < SG_RUNE_STATE_DIMENSION_COUNT;
@@ -2610,10 +2632,12 @@ int SG_RuneDynamicsGeometryValid(const sg_rune_dynamics_model_t *model)
 			goto cleanup;
 		base_cells[index].domain = GeometryDomainIndex(model,
 			&model->simplex_owners[index].domain);
+		base_cells[index].chart = GeometryChartIndex(model, &simplex->chart);
 		base_cells[index].atom = GeometryAtomIndex(model,
 			&model->simplex_owners[index].atom);
 		base_cells[index].source = index;
-		if (base_cells[index].domain == SIZE_MAX ||
+		if (base_cells[index].chart == SIZE_MAX ||
+		    base_cells[index].domain == SIZE_MAX ||
 		    base_cells[index].atom == SIZE_MAX)
 			goto cleanup;
 		for (vertex = 0U; vertex < 8U; vertex++)
@@ -2658,8 +2682,13 @@ int SG_RuneDynamicsGeometryValid(const sg_rune_dynamics_model_t *model)
 			active_cells[active_count].atom = atom;
 			active_cells[active_count].domain = GeometryDomainIndex(model,
 				&model->reach_atoms[atom].domain);
+			if (active_cells[active_count].domain != SIZE_MAX)
+				active_cells[active_count].chart = GeometryChartIndex(model,
+					&model->state_domains[
+						active_cells[active_count].domain].chart);
 			active_cells[active_count].source = index;
-			if (active_cells[active_count].domain == SIZE_MAX)
+			if (active_cells[active_count].domain == SIZE_MAX ||
+			    active_cells[active_count].chart == SIZE_MAX)
 				goto cleanup;
 			active_count++;
 		}
