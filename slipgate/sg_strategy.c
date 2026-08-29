@@ -917,15 +917,14 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 		     (frame->goal_outcome.failure <= SG_STRATEGY_FAILURE_NONE ||
 		      frame->goal_outcome.failure >= SG_STRATEGY_FAILURE_REASON_COUNT)))
 			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
-		if (frame->tactical.present && frame->tactical.blocked)
-			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
 	}
 	if (!StrategyActivationEmpty(&state->activation) &&
 	    frame->directive.kind == SG_STRATEGY_DIRECTIVE_NONE)
 	{
-		if (!frame->tactical.present ||
-		    !StrategyActivationEqual(&frame->tactical.activation,
-			&state->activation))
+		if ((!frame->goal_outcome.present && !frame->tactical.present) ||
+		    (frame->tactical.present &&
+		     !StrategyActivationEqual(&frame->tactical.activation,
+			&state->activation)))
 			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
 	}
 	if (frame->tactical.present)
@@ -1402,7 +1401,7 @@ static int StrategyApplyTactical(sg_strategy_state_t *state,
 	int goal_found;
 	sg_strategy_goal_runtime_t *runtime;
 
-	if (!frame->tactical.present)
+	if (!frame->tactical.present || frame->goal_outcome.present)
 		return 1;
 	if (frame->tactical.observation_revision ==
 	    state->suspension.observation_revision)
