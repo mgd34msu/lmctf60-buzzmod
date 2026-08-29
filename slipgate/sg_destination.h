@@ -11,6 +11,7 @@
 #define SG_DESTINATION_COST_INFINITE UINT32_MAX
 #define SG_DESTINATION_NO_CELL UINT32_MAX
 #define SG_DESTINATION_NO_PHASE UINT32_MAX
+#define SG_DESTINATION_NO_REGION UINT32_MAX
 
 typedef enum sg_destination_kind_e
 {
@@ -239,7 +240,8 @@ static inline int SG_DestinationPoseValid(const sg_destination_pose_t *pose)
 	uint32_t axis;
 
 	if (!pose || pose->phase.phase_id == SG_DESTINATION_NO_PHASE ||
-	    pose->phase.cell_id == SG_DESTINATION_NO_CELL)
+	    pose->phase.cell_id == SG_DESTINATION_NO_CELL ||
+	    pose->region_id == SG_DESTINATION_NO_REGION)
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 		if (!SG_DestinationFloatValid(pose->position[axis]) ||
@@ -276,7 +278,8 @@ static inline int SG_RuneRuntimeSnapshotValid(
 
 	if (!snapshot || snapshot->identity == 0U || !snapshot->model ||
 	    snapshot->topology_revision == 0U || snapshot->cell_count == 0U ||
-	    snapshot->phase_count == 0U || !snapshot->phases ||
+	    snapshot->phase_count == 0U || snapshot->region_count == 0U ||
+	    !snapshot->phases ||
 	    snapshot->model->version != SG_RUNE_MODEL_VERSION ||
 	    snapshot->model->schema_tag != SG_RUNE_MODEL_SCHEMA_TAG ||
 	    (snapshot->model->flags & (SG_RUNE_MODEL_IMMUTABLE |

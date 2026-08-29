@@ -64,10 +64,33 @@ static void TestMovingTube(void)
 	CHECK(!SG_DestinationTerminalValid(&terminal));
 }
 
+static void TestResolvedDestinationBoundaries(void)
+{
+	sg_destination_handle_t handle = {
+		.id = 1U,
+		.generation = 2U,
+		.kind = SG_DESTINATION_WAYPOINT,
+		.motion = SG_DESTINATION_STATIC,
+		.valid = 1U,
+		.pose = {
+			.phase = { 3U, 4U },
+			.region_id = 5U
+		}
+	};
+
+	CHECK(SG_DestinationHandleValid(&handle));
+	handle.reserved[2] = 1U;
+	CHECK(SG_DestinationHandleValid(&handle));
+	handle.reserved[2] = 0U;
+	handle.pose.region_id = SG_DESTINATION_NO_REGION;
+	CHECK(!SG_DestinationHandleValid(&handle));
+}
+
 int main(void)
 {
 	TestStaticPatch();
 	TestMovingTube();
+	TestResolvedDestinationBoundaries();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_destination_test: %d failure(s)\n", failures);

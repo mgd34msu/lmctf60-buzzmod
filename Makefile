@@ -3937,6 +3937,10 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		slipgate/sg_strategy.c slipgate/sg_strategy_contract.h \
 		tests/run_sg_destination_test.sh tests/sg_destination_test.c \
 		slipgate/sg_destination.c slipgate/sg_destination.h \
+		tests/run_sg_rune_dynamics_model_test.sh \
+		tests/sg_rune_dynamics_model_test.c \
+		slipgate/sg_rune_dynamics_model.c \
+		slipgate/sg_rune_dynamics_model.h \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
 	$(Q)set -e; \
@@ -3975,7 +3979,10 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	sh tests/run_sg_strategy_test.sh; \
 	sh tests/run_sg_destination_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
-		-o "$$tmp/destination.o"
+		-o "$$tmp/destination.o"; \
+	sh tests/run_sg_rune_dynamics_model_test.sh; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \
