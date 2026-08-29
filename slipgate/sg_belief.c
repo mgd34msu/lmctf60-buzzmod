@@ -1019,7 +1019,6 @@ static int BeliefKinematicsWithinStep(
 	const sg_belief_particle_t *particle)
 {
 	double speed_squared = 0.0;
-	float vertical_limit;
 	size_t axis;
 
 	if (!bounds->constrains_kinematics)
@@ -1027,15 +1026,12 @@ static int BeliefKinematicsWithinStep(
 	for (axis = 0U; axis < 3U; axis++)
 		speed_squared += (double)particle->velocity[axis] *
 			(double)particle->velocity[axis];
-	vertical_limit = bounds->vertical_acceleration_max + bounds->gravity;
-	if (!SG_BeliefFloatValid(vertical_limit))
-		return 0;
 	return isfinite(speed_squared) &&
 		speed_squared <= (double)bounds->speed_max *
 			(double)bounds->speed_max &&
-		SG_BeliefHorizontalVectorWithinLimit(particle->acceleration,
-			bounds->acceleration_max) &&
-		fabsf(particle->acceleration[2]) <= vertical_limit;
+		SG_BeliefAccelerationWithinLimits(particle->acceleration,
+			bounds->acceleration_max, bounds->vertical_acceleration_max,
+			bounds->gravity);
 }
 
 static int BeliefEntryKinematicsValid(

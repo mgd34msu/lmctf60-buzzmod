@@ -477,6 +477,22 @@ static inline int SG_BeliefHorizontalVectorWithinLimit(
 		magnitude_squared <= (double)limit * (double)limit;
 }
 
+static inline int SG_BeliefAccelerationWithinLimits(const float vector[3],
+	float horizontal_limit, float vertical_control_limit, float gravity)
+{
+	double vertical_limit;
+
+	if (!vector || !SG_BeliefFloatValid(vector[2]) ||
+	    !SG_BeliefFloatValid(vertical_control_limit) ||
+	    vertical_control_limit < 0.0f || !SG_BeliefFloatValid(gravity) ||
+	    gravity < 0.0f)
+		return 0;
+	vertical_limit = (double)vertical_control_limit + (double)gravity;
+	return isfinite(vertical_limit) &&
+		SG_BeliefHorizontalVectorWithinLimit(vector, horizontal_limit) &&
+		fabs((double)vector[2]) <= vertical_limit;
+}
+
 static inline int SG_BeliefMotionStateCompatible(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_phase_coordinate_t *phase,
@@ -492,7 +508,6 @@ static inline int SG_BeliefKinematicsCompatible(
 	const sg_rune_physics_parameters_t *physics;
 	const sg_rune_interval_t *velocity_axes[3];
 	float acceleration_limit;
-	float vertical_limit;
 	double speed_squared = 0.0;
 	size_t axis;
 
@@ -519,8 +534,6 @@ static inline int SG_BeliefKinematicsCompatible(
 		movement_state);
 	if (!SG_BeliefFloatValid(acceleration_limit) || acceleration_limit < 0.0f)
 		return 0;
-	vertical_limit = physics->gravity > acceleration_limit ?
-		physics->gravity : acceleration_limit;
 	velocity_axes[0] = &basis->velocity.x;
 	velocity_axes[1] = &basis->velocity.y;
 	velocity_axes[2] = &basis->velocity.z;
@@ -530,15 +543,14 @@ static inline int SG_BeliefKinematicsCompatible(
 		    !SG_BeliefFloatValid(acceleration[axis]) ||
 		    !SG_BeliefFloatValid(orientation[axis]) ||
 		    !SG_BeliefIntervalContains(velocity_axes[axis], velocity[axis]) ||
-		    (axis == 2U && fabsf(acceleration[axis]) > vertical_limit) ||
 		    fabsf(orientation[axis]) >
 			SG_BELIEF_ORIENTATION_LIMIT_DEGREES)
 			return 0;
 		speed_squared += (double)velocity[axis] * (double)velocity[axis];
 	}
 	return isfinite(speed_squared) &&
-		SG_BeliefHorizontalVectorWithinLimit(acceleration,
-			acceleration_limit) &&
+		SG_BeliefAccelerationWithinLimits(acceleration, acceleration_limit,
+			acceleration_limit, physics->gravity) &&
 		speed_squared <= (double)physics->max_velocity *
 			(double)physics->max_velocity;
 }
