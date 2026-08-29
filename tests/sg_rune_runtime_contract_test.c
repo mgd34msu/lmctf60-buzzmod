@@ -8,8 +8,8 @@
 #include "slipgate/sg_tactic_contract.h"
 #include "slipgate/sg_weapon_contract.h"
 
-_Static_assert(SG_RUNTIME_CONTRACT_VERSION == UINT16_C(6),
-	"runtime contract ABI is version 6 with authenticated field publication");
+_Static_assert(SG_RUNTIME_CONTRACT_VERSION == UINT16_C(7),
+	"runtime contract ABI is version 7 with exact field geometry publication");
 
 static int failures;
 

@@ -6,7 +6,7 @@
 
 #include "sg_destination.h"
 
-#define SG_RUNE_DYNAMICS_MODEL_VERSION UINT16_C(3)
+#define SG_RUNE_DYNAMICS_MODEL_VERSION UINT16_C(4)
 #define SG_RUNE_STATE_DIMENSION_COUNT UINT8_C(7)
 #define SG_RUNE_FIELD_COST_INFINITE UINT64_MAX
 #define SG_RUNE_FIELD_NO_REGION UINT32_MAX
@@ -62,6 +62,31 @@ typedef struct sg_rune_dynamics_proof_ref_s
 	sg_rune_stable_id_t value;
 } sg_rune_dynamics_proof_ref_t;
 
+typedef struct sg_rune_simplex_ownership_proof_ref_s
+{
+	sg_rune_stable_id_t value;
+} sg_rune_simplex_ownership_proof_ref_t;
+
+typedef struct sg_rune_domain_support_proof_ref_s
+{
+	sg_rune_stable_id_t value;
+} sg_rune_domain_support_proof_ref_t;
+
+typedef struct sg_rune_domain_boundary_proof_ref_s
+{
+	sg_rune_stable_id_t value;
+} sg_rune_domain_boundary_proof_ref_t;
+
+typedef struct sg_field_outcome_image_proof_ref_s
+{
+	sg_rune_stable_id_t value;
+} sg_field_outcome_image_proof_ref_t;
+
+typedef struct sg_field_outcome_cover_proof_ref_s
+{
+	sg_rune_stable_id_t value;
+} sg_field_outcome_cover_proof_ref_t;
+
 typedef struct sg_rune_field_region_id_s
 {
 	sg_rune_stable_id_t value;
@@ -88,6 +113,12 @@ typedef struct sg_field_outcome_id_s
 	sg_rune_stable_id_t value;
 } sg_field_outcome_id_t;
 typedef sg_field_outcome_id_t sg_field_outcome_ref_t;
+
+typedef struct sg_field_outcome_image_id_s
+{
+	sg_rune_stable_id_t value;
+} sg_field_outcome_image_id_t;
+typedef sg_field_outcome_image_id_t sg_field_outcome_image_ref_t;
 
 typedef struct sg_field_reach_atom_id_s
 {
@@ -206,6 +237,24 @@ typedef struct sg_field_outcome_cover_piece_span_s
 	uint32_t first;
 	uint32_t count;
 } sg_field_outcome_cover_piece_span_t;
+
+typedef struct sg_field_outcome_image_span_s
+{
+	uint32_t first;
+	uint32_t count;
+} sg_field_outcome_image_span_t;
+
+typedef struct sg_rune_domain_boundary_facet_span_s
+{
+	uint32_t first;
+	uint32_t count;
+} sg_rune_domain_boundary_facet_span_t;
+
+typedef struct sg_rune_exact_word_span_s
+{
+	uint32_t first;
+	uint32_t count;
+} sg_rune_exact_word_span_t;
 
 typedef struct sg_field_refinement_node_ref_span_s
 {
@@ -446,11 +495,56 @@ typedef struct sg_field_reach_atom_s
 	sg_rune_dynamics_proof_ref_t partition_proof;
 } sg_field_reach_atom_t;
 
+typedef struct sg_rune_state_simplex_owner_s
+{
+	sg_rune_state_simplex_ref_t simplex;
+	sg_rune_state_domain_ref_t domain;
+	sg_field_reach_atom_ref_t atom;
+	sg_rune_simplex_ownership_proof_ref_t proof;
+} sg_rune_state_simplex_owner_t;
+
+typedef struct sg_rune_exact_positive_dyadic_s
+{
+	/* Canonical little-endian magnitude. The low word is odd, the high word
+	 * is nonzero, and value = magnitude * 2^exponent. */
+	sg_rune_exact_word_span_t magnitude;
+	int32_t exponent;
+} sg_rune_exact_positive_dyadic_t;
+
+typedef struct sg_rune_domain_boundary_facet_s
+{
+	sg_rune_state_domain_ref_t domain;
+	sg_field_refinement_vertex_ref_span_t vertices;
+	/* Coefficient relative to lexicographic coordinate-key order. */
+	int8_t orientation;
+	uint8_t reserved[3];
+	sg_rune_domain_boundary_proof_ref_t proof;
+} sg_rune_domain_boundary_facet_t;
+
+typedef struct sg_rune_domain_support_certificate_s
+{
+	sg_rune_state_domain_ref_t domain;
+	sg_rune_domain_boundary_facet_span_t boundary_facets;
+	sg_rune_exact_positive_dyadic_t normalized_volume;
+	sg_rune_domain_support_proof_ref_t proof;
+} sg_rune_domain_support_certificate_t;
+
+typedef struct sg_field_outcome_image_s
+{
+	sg_field_outcome_image_id_t id;
+	sg_field_outcome_ref_t outcome;
+	sg_field_refinement_node_ref_t source_leaf;
+	sg_rune_flow_enclosure_t canonical_image;
+	sg_field_outcome_cover_piece_span_t destination_cover;
+	sg_field_outcome_image_proof_ref_t proof;
+} sg_field_outcome_image_t;
+
 typedef struct sg_field_outcome_s
 {
 	sg_field_outcome_id_t id;
 	sg_rune_affine_state_operator_t endpoint;
 	sg_rune_flow_enclosure_t remainder;
+	sg_field_outcome_image_span_t source_images;
 	sg_field_outcome_cover_piece_span_t destination_cover;
 	/* The cover is a canonical exact slab partition of the outward-rounded
 	 * image along this state coordinate. */
@@ -463,11 +557,12 @@ typedef struct sg_field_outcome_s
 
 typedef struct sg_field_outcome_cover_piece_s
 {
+	sg_field_outcome_image_ref_t source_image;
 	sg_field_refinement_node_ref_t source_refinement_node;
 	sg_field_reach_atom_ref_t atom;
 	sg_field_refinement_node_ref_t refinement_node;
 	sg_rune_flow_enclosure_t image_piece;
-	sg_rune_dynamics_proof_ref_t proof;
+	sg_field_outcome_cover_proof_ref_t proof;
 } sg_field_outcome_cover_piece_t;
 
 typedef enum sg_field_choice_kind_e
@@ -682,6 +777,18 @@ typedef struct sg_rune_dynamics_model_s
 	size_t boundary_transfer_count;
 	const sg_field_reach_atom_t *reach_atoms;
 	size_t reach_atom_count;
+	const sg_rune_state_simplex_owner_t *simplex_owners;
+	size_t simplex_owner_count;
+	const sg_rune_domain_support_certificate_t *domain_support;
+	size_t domain_support_count;
+	const sg_rune_domain_boundary_facet_t *domain_boundary_facets;
+	size_t domain_boundary_facet_count;
+	const sg_field_refinement_vertex_ref_t *domain_boundary_vertices;
+	size_t domain_boundary_vertex_count;
+	const uint32_t *exact_words;
+	size_t exact_word_count;
+	const sg_field_outcome_image_t *outcome_images;
+	size_t outcome_image_count;
 	const sg_field_outcome_cover_piece_t *outcome_cover_pieces;
 	size_t outcome_cover_piece_count;
 	const sg_field_guard_requirement_t *guard_requirements;
@@ -877,6 +984,17 @@ int SG_RuneBoundaryTransferIdValid(
 int SG_RuneControlDomainRefValid(const sg_rune_control_domain_ref_t *ref);
 int SG_RuneGuardConditionRefValid(const sg_rune_guard_condition_ref_t *ref);
 int SG_RuneDynamicsProofRefValid(const sg_rune_dynamics_proof_ref_t *ref);
+int SG_RuneSimplexOwnershipProofRefValid(
+	const sg_rune_simplex_ownership_proof_ref_t *ref);
+int SG_RuneDomainSupportProofRefValid(
+	const sg_rune_domain_support_proof_ref_t *ref);
+int SG_RuneDomainBoundaryProofRefValid(
+	const sg_rune_domain_boundary_proof_ref_t *ref);
+int SG_FieldOutcomeImageIdValid(const sg_field_outcome_image_id_t *id);
+int SG_FieldOutcomeImageProofRefValid(
+	const sg_field_outcome_image_proof_ref_t *ref);
+int SG_FieldOutcomeCoverProofRefValid(
+	const sg_field_outcome_cover_proof_ref_t *ref);
 int SG_RuneFieldRegionIdValid(const sg_rune_field_region_id_t *id);
 int SG_RuneFieldHierarchyIdValid(const sg_rune_field_hierarchy_id_t *id);
 int SG_RuneFieldErrorContractIdValid(

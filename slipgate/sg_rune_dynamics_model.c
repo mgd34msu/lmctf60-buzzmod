@@ -45,6 +45,22 @@ DEFINE_DOMAIN_VALIDATOR(SG_RuneGuardConditionRefValid,
 	sg_rune_guard_condition_ref_t, SG_RUNE_ORDER_GUARD_CONDITION)
 DEFINE_DOMAIN_VALIDATOR(SG_RuneDynamicsProofRefValid,
 	sg_rune_dynamics_proof_ref_t, SG_RUNE_ORDER_DYNAMICS_PROOF)
+DEFINE_DOMAIN_VALIDATOR(SG_RuneSimplexOwnershipProofRefValid,
+	sg_rune_simplex_ownership_proof_ref_t,
+	SG_RUNE_ORDER_SIMPLEX_OWNERSHIP_PROOF)
+DEFINE_DOMAIN_VALIDATOR(SG_RuneDomainSupportProofRefValid,
+	sg_rune_domain_support_proof_ref_t, SG_RUNE_ORDER_DOMAIN_SUPPORT_PROOF)
+DEFINE_DOMAIN_VALIDATOR(SG_RuneDomainBoundaryProofRefValid,
+	sg_rune_domain_boundary_proof_ref_t,
+	SG_RUNE_ORDER_DOMAIN_BOUNDARY_PROOF)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldOutcomeImageIdValid,
+	sg_field_outcome_image_id_t, SG_RUNE_ORDER_FIELD_OUTCOME_IMAGE)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldOutcomeImageProofRefValid,
+	sg_field_outcome_image_proof_ref_t,
+	SG_RUNE_ORDER_FIELD_OUTCOME_IMAGE_PROOF)
+DEFINE_DOMAIN_VALIDATOR(SG_FieldOutcomeCoverProofRefValid,
+	sg_field_outcome_cover_proof_ref_t,
+	SG_RUNE_ORDER_FIELD_OUTCOME_COVER_PROOF)
 DEFINE_DOMAIN_VALIDATOR(SG_RuneFieldRegionIdValid,
 	sg_rune_field_region_id_t, SG_RUNE_ORDER_FIELD_REGION)
 DEFINE_DOMAIN_VALIDATOR(SG_RuneFieldHierarchyIdValid,
@@ -115,6 +131,11 @@ static const sg_field_refinement_node_t *FindRefinementNode(
 static int RefinementBoxInsideNode(const sg_field_refinement_tree_t *tree,
 	const sg_field_refinement_node_t *node,
 	const sg_rune_flow_enclosure_t *box);
+static int LoadRefinementNodeVertices(const sg_field_refinement_tree_t *tree,
+	const sg_field_refinement_node_t *node,
+	const sg_field_refinement_vertex_t *vertices[8]);
+static int FlowSame(const sg_rune_flow_enclosure_t *left,
+	const sg_rune_flow_enclosure_t *right);
 
 static int AffineOperatorValid(const sg_rune_affine_state_operator_t *operator)
 {
@@ -247,104 +268,80 @@ static const sg_rune_interval_t *FlowInterval(
 	return &flow->elapsed_ms;
 }
 
-static void StoreFlowInterval(sg_rune_flow_enclosure_t *flow,
-	uint32_t dimension, float minimum, float maximum)
+static sg_rune_interval_t *MutableFlowInterval(
+	sg_rune_flow_enclosure_t *flow, uint32_t dimension)
 {
-	sg_rune_interval_t *interval;
 	if (dimension < 3U)
-		interval = dimension == 0U ? &flow->position.x :
+		return dimension == 0U ? &flow->position.x :
 			dimension == 1U ? &flow->position.y : &flow->position.z;
-	else if (dimension < 6U)
+	if (dimension < 6U)
 	{
 		dimension -= 3U;
-		interval = dimension == 0U ? &flow->velocity.x :
+		return dimension == 0U ? &flow->velocity.x :
 			dimension == 1U ? &flow->velocity.y : &flow->velocity.z;
 	}
-	else
-		interval = &flow->elapsed_ms;
-	interval->min_value = minimum;
-	interval->max_value = maximum;
+	return &flow->elapsed_ms;
 }
 
-static double AddOutward(double left, double right, double direction)
-{
-	double sum = left + right;
-	if (sum - left == right && sum - right == left)
-		return sum;
-	return nextafter(sum, direction);
-}
-
-static void OperatorImage(const sg_rune_flow_enclosure_t *source,
+static int OperatorImage(const sg_field_refinement_tree_t *tree,
+	const sg_field_refinement_node_t *source,
 	const sg_field_outcome_t *outcome, sg_rune_flow_enclosure_t *image)
 {
-	uint32_t row;
-
-	for (row = 0U; row < SG_RUNE_STATE_DIMENSION_COUNT; row++)
-	{
-		double minimum = outcome->endpoint.coefficient[row]
-			[SG_RUNE_STATE_DIMENSION_COUNT];
-		double maximum = minimum;
-		uint32_t column;
-		for (column = 0U; column < SG_RUNE_STATE_DIMENSION_COUNT; column++)
-		{
-			double coefficient = outcome->endpoint.coefficient[row][column];
-			const sg_rune_interval_t *input =
-				FlowInterval(source, column);
-			double low;
-			double high;
-			if (coefficient == 0.0)
-				continue;
-			low = coefficient >= 0.0 ? input->min_value : input->max_value;
-			high = coefficient >= 0.0 ? input->max_value : input->min_value;
-			minimum = AddOutward(minimum, coefficient * low, -INFINITY);
-			maximum = AddOutward(maximum, coefficient * high, INFINITY);
-		}
-		{
-			const sg_rune_interval_t *remainder =
-				FlowInterval(&outcome->remainder, row);
-			double lower = minimum + remainder->min_value;
-			double upper = maximum + remainder->max_value;
-			float stored_minimum = (float)(remainder->min_value == 0.0f ?
-				lower : nextafter(lower, -INFINITY));
-			float stored_maximum = (float)(remainder->max_value == 0.0f ?
-				upper : nextafter(upper, INFINITY));
-			if ((double)stored_minimum > lower)
-				stored_minimum = nextafterf(stored_minimum, -INFINITY);
-			if ((double)stored_maximum < upper)
-				stored_maximum = nextafterf(stored_maximum, INFINITY);
-			StoreFlowInterval(image, row, stored_minimum, stored_maximum);
-		}
-	}
+	const sg_field_refinement_vertex_t *vertices[8];
+	return LoadRefinementNodeVertices(tree, source, vertices) &&
+		SG_FieldOutcomeCanonicalImage(vertices, outcome, image);
 }
 
 static int OutcomeCovered(const sg_rune_dynamics_model_t *model,
 	const sg_field_reach_atom_t *source, const sg_field_outcome_t *outcome)
 {
-	size_t item;
-	size_t end = (size_t)outcome->destination_cover.first +
-		outcome->destination_cover.count;
+	size_t image_index;
+	size_t image_end = (size_t)outcome->source_images.first +
+		outcome->source_images.count;
+	size_t next_cover = outcome->destination_cover.first;
 	const sg_rune_stable_id_t *previous_source = NULL;
 
-	for (item = outcome->destination_cover.first; item < end;)
+	for (image_index = outcome->source_images.first; image_index < image_end;
+	     image_index++)
 	{
-		const sg_field_outcome_cover_piece_t *first_piece =
-			&model->outcome_cover_pieces[item];
+		const sg_field_outcome_image_t *published =
+			&model->outcome_images[image_index];
 		const sg_field_refinement_node_t *source_node = FindRefinementNode(
-			&model->refinement_tree, &first_piece->source_refinement_node);
+			&model->refinement_tree, &published->source_leaf);
 		sg_rune_flow_enclosure_t image;
 		const sg_rune_interval_t *whole_split;
 		float cursor;
+		size_t item;
+		size_t cover_end = (size_t)published->destination_cover.first +
+			published->destination_cover.count;
 
-		if (!source_node || source_node->children.count != 0U ||
+		if (!SG_FieldOutcomeImageIdValid(&published->id) ||
+		    !SameStableId(&published->outcome.value, &outcome->id.value) ||
+		    !SG_FieldOutcomeImageProofRefValid(&published->proof) ||
+		    published->id.value.source_set_identity !=
+			model->id.value.source_set_identity ||
+		    published->outcome.value.source_set_identity !=
+			model->id.value.source_set_identity ||
+		    published->proof.value.source_set_identity !=
+			model->id.value.source_set_identity ||
+		    published->destination_cover.first != next_cover ||
+		    published->destination_cover.count == 0U ||
+		    !SpanWithin(published->destination_cover.first,
+			published->destination_cover.count,
+			model->outcome_cover_piece_count) || !source_node ||
+		    source_node->children.count != 0U ||
 		    !SameStableId(&source_node->atom.value, &source->id.value) ||
 		    (previous_source && StableIdCompareValue(previous_source,
 			&source_node->id.value) >= 0))
 			return 0;
 		previous_source = &source_node->id.value;
-		OperatorImage(&source_node->state_bounds, outcome, &image);
+		if (!OperatorImage(&model->refinement_tree, source_node, outcome,
+			&image) || !FlowSame(&image, &published->canonical_image))
+			return 0;
 		whole_split = FlowInterval(&image, outcome->cover_split_dimension);
 		cursor = whole_split->min_value;
-		do
+		for (item = published->destination_cover.first; item < cover_end;
+		     item++)
 		{
 			const sg_field_outcome_cover_piece_t *piece =
 				&model->outcome_cover_pieces[item];
@@ -364,7 +361,9 @@ static int OutcomeCovered(const sg_rune_dynamics_model_t *model,
 				}
 			destination_node = FindRefinementNode(&model->refinement_tree,
 				&piece->refinement_node);
-			if (!SameStableId(&piece->source_refinement_node.value,
+			if (!SameStableId(&piece->source_image.value,
+				&published->id.value) ||
+			    !SameStableId(&piece->source_refinement_node.value,
 				&source_node->id.value) || !atom || !destination_node ||
 			    destination_node->children.count != 0U ||
 			    !SameStableId(&destination_node->atom.value, &atom->id.value) ||
@@ -372,7 +371,7 @@ static int OutcomeCovered(const sg_rune_dynamics_model_t *model,
 			    !FlowInside(&piece->image_piece, &destination_node->state_bounds) ||
 			    !RefinementBoxInsideNode(&model->refinement_tree,
 				destination_node, &piece->image_piece) ||
-			    !SG_RuneDynamicsProofRefValid(&piece->proof) ||
+			    !SG_FieldOutcomeCoverProofRefValid(&piece->proof) ||
 			    piece->proof.value.source_set_identity !=
 				model->id.value.source_set_identity)
 				return 0;
@@ -389,26 +388,29 @@ static int OutcomeCovered(const sg_rune_dynamics_model_t *model,
 					FlowInterval(&image, dimension)->max_value))
 					return 0;
 			cursor = piece_split->max_value;
-			item++;
-		} while (item < end && SameStableId(
-			&model->outcome_cover_pieces[item].source_refinement_node.value,
-			&source_node->id.value));
+		}
 		if (cursor != whole_split->max_value)
 			return 0;
+		next_cover = cover_end;
 	}
-	for (item = 0U; item < model->refinement_tree.node_count; item++)
+	if (next_cover != (size_t)outcome->destination_cover.first +
+		outcome->destination_cover.count)
+		return 0;
+	for (image_index = 0U; image_index < model->refinement_tree.node_count;
+	     image_index++)
 	{
 		const sg_field_refinement_node_t *leaf =
-			&model->refinement_tree.nodes[item];
-		size_t cover;
+			&model->refinement_tree.nodes[image_index];
+		size_t published_index;
 		if (leaf->children.count != 0U ||
 		    !SameStableId(&leaf->atom.value, &source->id.value))
 			continue;
-		for (cover = outcome->destination_cover.first; cover < end; cover++)
-			if (SameStableId(&model->outcome_cover_pieces[cover]
-				.source_refinement_node.value, &leaf->id.value))
+		for (published_index = outcome->source_images.first;
+		     published_index < image_end; published_index++)
+			if (SameStableId(&model->outcome_images[published_index]
+				.source_leaf.value, &leaf->id.value))
 				break;
-		if (cover == end)
+		if (published_index == image_end)
 			return 0;
 	}
 	return 1;
@@ -419,6 +421,7 @@ int SG_FieldOutcomeShapeValid(const sg_field_outcome_t *outcome)
 	return outcome && SG_FieldOutcomeIdValid(&outcome->id) &&
 		AffineOperatorValid(&outcome->endpoint) &&
 		FlowEnclosureValid(&outcome->remainder) &&
+		outcome->source_images.count != 0U &&
 		outcome->destination_cover.count != 0U &&
 		outcome->cover_split_dimension < SG_RUNE_STATE_DIMENSION_COUNT &&
 		outcome->reserved[0] == 0U && outcome->reserved[1] == 0U &&
@@ -649,23 +652,6 @@ static int TerminalParametersInsideNode(
 		RefinementBoxInsideNode(tree, node, &capture);
 }
 
-static int RefinementNodesShareFace(const sg_field_refinement_tree_t *tree,
-	const sg_field_refinement_node_t *left,
-	const sg_field_refinement_node_t *right)
-{
-	uint32_t left_face;
-	uint32_t right_face;
-	for (left_face = 0U; left_face <= SG_RUNE_STATE_DIMENSION_COUNT;
-	     left_face++)
-		for (right_face = 0U; right_face <= SG_RUNE_STATE_DIMENSION_COUNT;
-		     right_face++)
-			if (SameStableId(&tree->node_faces[(size_t)left->faces.first +
-				left_face].value, &tree->node_faces[(size_t)right->faces.first +
-				right_face].value))
-				return 1;
-	return 0;
-}
-
 static int RefinementVertexInside(
 	const sg_field_refinement_vertex_t *vertex,
 	const sg_rune_flow_enclosure_t *bounds)
@@ -710,6 +696,46 @@ static float RefinementCoordinateValue(
 	return vertex->elapsed_ms;
 }
 
+static int RefinementCoordinatesSame(
+	const sg_field_refinement_vertex_t *left,
+	const sg_field_refinement_vertex_t *right)
+{
+	uint32_t dimension;
+	if (!left || !right)
+		return 0;
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		float left_value = RefinementCoordinateValue(left, dimension);
+		float right_value = RefinementCoordinateValue(right, dimension);
+		uint32_t left_bits;
+		uint32_t right_bits;
+		memcpy(&left_bits, &left_value, sizeof(left_bits));
+		memcpy(&right_bits, &right_value, sizeof(right_bits));
+		if (left_bits != right_bits)
+			return 0;
+	}
+	return 1;
+}
+
+static int RefinementCoordinateOrder(
+	const sg_field_refinement_vertex_t *left,
+	const sg_field_refinement_vertex_t *right)
+{
+	uint32_t dimension;
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		float left_value = RefinementCoordinateValue(left, dimension);
+		float right_value = RefinementCoordinateValue(right, dimension);
+		if (left_value < right_value)
+			return -1;
+		if (left_value > right_value)
+			return 1;
+	}
+	return 0;
+}
+
 static int InterpolationErrorValid(const sg_rune_flow_enclosure_t *error)
 {
 	uint32_t dimension;
@@ -745,7 +771,8 @@ static void RefinementVertexBounds(
 			if (coordinate > maximum)
 				maximum = coordinate;
 		}
-		StoreFlowInterval(bounds, dimension, minimum, maximum);
+		MutableFlowInterval(bounds, dimension)->min_value = minimum;
+		MutableFlowInterval(bounds, dimension)->max_value = maximum;
 	}
 }
 
@@ -755,22 +782,30 @@ static int FaceMatchesLocalSimplexFace(
 	const sg_field_refinement_face_t *face)
 {
 	uint32_t node_vertex;
-	uint32_t face_vertex = 0U;
 
 	if (face->vertices.count != SG_RUNE_STATE_DIMENSION_COUNT)
 		return 0;
 	for (node_vertex = 0U;
 	     node_vertex <= SG_RUNE_STATE_DIMENSION_COUNT; node_vertex++)
 	{
-		const sg_field_refinement_vertex_ref_t *node_reference;
-		const sg_field_refinement_vertex_ref_t *face_reference;
+		const sg_field_refinement_vertex_t *node_record;
+		uint32_t face_vertex;
 		if (node_vertex == local_face)
 			continue;
-		node_reference = &tree->node_vertices[
-			(size_t)node->vertices.first + node_vertex];
-		face_reference = &tree->face_vertices[
-			(size_t)face->vertices.first + face_vertex++];
-		if (!SameStableId(&node_reference->value, &face_reference->value))
+		node_record = FindRefinementVertex(tree, &tree->node_vertices[
+			(size_t)node->vertices.first + node_vertex]);
+		if (!node_record)
+			return 0;
+		for (face_vertex = 0U; face_vertex < SG_RUNE_STATE_DIMENSION_COUNT;
+		     face_vertex++)
+		{
+			const sg_field_refinement_vertex_t *face_record =
+				FindRefinementVertex(tree, &tree->face_vertices[
+					(size_t)face->vertices.first + face_vertex]);
+			if (RefinementCoordinatesSame(node_record, face_record))
+				break;
+		}
+		if (face_vertex == SG_RUNE_STATE_DIMENSION_COUNT)
 			return 0;
 	}
 	return 1;
@@ -787,6 +822,32 @@ static int FaceListedByNode(const sg_field_refinement_tree_t *tree,
 			(size_t)node->faces.first + local_face].value, &face->id.value))
 			return 1;
 	return 0;
+}
+
+static int FacesHaveSameCoordinates(const sg_field_refinement_tree_t *tree,
+	const sg_field_refinement_face_t *left,
+	const sg_field_refinement_face_t *right)
+{
+	uint32_t left_vertex;
+	for (left_vertex = 0U; left_vertex < SG_RUNE_STATE_DIMENSION_COUNT;
+	     left_vertex++)
+	{
+		const sg_field_refinement_vertex_t *left_record =
+			FindRefinementVertex(tree, &tree->face_vertices[
+				(size_t)left->vertices.first + left_vertex]);
+		uint32_t right_vertex;
+		if (!left_record)
+			return 0;
+		for (right_vertex = 0U;
+		     right_vertex < SG_RUNE_STATE_DIMENSION_COUNT; right_vertex++)
+			if (RefinementCoordinatesSame(left_record,
+				FindRefinementVertex(tree, &tree->face_vertices[
+					(size_t)right->vertices.first + right_vertex])))
+				break;
+		if (right_vertex == SG_RUNE_STATE_DIMENSION_COUNT)
+			return 0;
+	}
+	return 1;
 }
 
 static int VertexIsExactMidpoint(
@@ -821,8 +882,8 @@ static int ChildFaceInsideParentFace(
 		for (left = 0U; left < SG_RUNE_STATE_DIMENSION_COUNT; left++)
 		{
 			uint32_t right;
-			if (SameStableId(&child_vertex->id.value,
-				&parent_vertices[left]->id.value))
+			if (RefinementCoordinatesSame(child_vertex,
+				parent_vertices[left]))
 			{
 				contained = 1;
 				break;
@@ -844,14 +905,14 @@ static int ChildFaceInsideParentFace(
 	return 1;
 }
 
-static int NodeContainsVertex(const sg_field_refinement_tree_t *tree,
+static int NodeContainsCoordinate(const sg_field_refinement_tree_t *tree,
 	const sg_field_refinement_node_t *node,
-	const sg_field_refinement_vertex_ref_t *vertex)
+	const sg_field_refinement_vertex_t *vertex)
 {
 	uint32_t item;
 	for (item = 0U; item < node->vertices.count; item++)
-		if (SameStableId(&tree->node_vertices[
-			(size_t)node->vertices.first + item].value, &vertex->value))
+		if (RefinementCoordinatesSame(FindRefinementVertex(tree,
+			&tree->node_vertices[(size_t)node->vertices.first + item]), vertex))
 			return 1;
 	return 0;
 }
@@ -861,16 +922,7 @@ static int VertexIsExactMidpoint(
 	const sg_field_refinement_vertex_t *left,
 	const sg_field_refinement_vertex_t *right)
 {
-	uint32_t dimension;
-	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
-	     dimension++)
-	{
-		double exact = ((double)RefinementCoordinateValue(left, dimension) +
-			RefinementCoordinateValue(right, dimension)) * 0.5;
-		if ((double)RefinementCoordinateValue(midpoint, dimension) != exact)
-			return 0;
-	}
-	return 1;
+	return SG_FieldRefinementVertexExactMidpoint(midpoint, left, right);
 }
 
 static int ChildrenExactlyBisectParent(
@@ -879,9 +931,9 @@ static int ChildrenExactlyBisectParent(
 {
 	const sg_field_refinement_node_t *left;
 	const sg_field_refinement_node_t *right;
-	const sg_field_refinement_vertex_ref_t *midpoint = NULL;
-	const sg_field_refinement_vertex_ref_t *left_unique = NULL;
-	const sg_field_refinement_vertex_ref_t *right_unique = NULL;
+	const sg_field_refinement_vertex_t *midpoint = NULL;
+	const sg_field_refinement_vertex_t *left_unique = NULL;
+	const sg_field_refinement_vertex_t *right_unique = NULL;
 	uint32_t common = 0U;
 	uint32_t parent_common = 0U;
 	uint32_t item;
@@ -894,42 +946,67 @@ static int ChildrenExactlyBisectParent(
 	right = &tree->nodes[tree->children[parent->children.first + 1U]];
 	for (item = 0U; item < 8U; item++)
 	{
-		const sg_field_refinement_vertex_ref_t *reference =
-			&tree->node_vertices[(size_t)left->vertices.first + item];
-		if (NodeContainsVertex(tree, right, reference))
+		const sg_field_refinement_vertex_t *vertex = FindRefinementVertex(tree,
+			&tree->node_vertices[(size_t)left->vertices.first + item]);
+		if (!vertex)
+			return 0;
+		if (NodeContainsCoordinate(tree, right, vertex))
 		{
 			common++;
-			if (NodeContainsVertex(tree, parent, reference))
+			if (NodeContainsCoordinate(tree, parent, vertex))
 				parent_common++;
 			else if (midpoint)
 				return 0;
 			else
-				midpoint = reference;
+				midpoint = vertex;
 		}
 		else if (left_unique)
 			return 0;
 		else
-			left_unique = reference;
+			left_unique = vertex;
 	}
 	for (item = 0U; item < 8U; item++)
 	{
-		const sg_field_refinement_vertex_ref_t *reference =
-			&tree->node_vertices[(size_t)right->vertices.first + item];
-		if (!NodeContainsVertex(tree, left, reference))
+		const sg_field_refinement_vertex_t *vertex = FindRefinementVertex(tree,
+			&tree->node_vertices[(size_t)right->vertices.first + item]);
+		if (!vertex)
+			return 0;
+		if (!NodeContainsCoordinate(tree, left, vertex))
 		{
 			if (right_unique)
 				return 0;
-			right_unique = reference;
+			right_unique = vertex;
 		}
 	}
 	if (common != 7U || parent_common != 6U || !midpoint || !left_unique ||
-	    !right_unique || !NodeContainsVertex(tree, parent, left_unique) ||
-	    !NodeContainsVertex(tree, parent, right_unique) ||
-	    SameStableId(&left_unique->value, &right_unique->value))
+	    !right_unique || !NodeContainsCoordinate(tree, parent, left_unique) ||
+	    !NodeContainsCoordinate(tree, parent, right_unique) ||
+	    RefinementCoordinatesSame(left_unique, right_unique))
 		return 0;
-	return VertexIsExactMidpoint(FindRefinementVertex(tree, midpoint),
-		FindRefinementVertex(tree, left_unique),
-		FindRefinementVertex(tree, right_unique));
+	return VertexIsExactMidpoint(midpoint, left_unique, right_unique);
+}
+
+static int DerivedLocalFaceOrientation(
+	const sg_field_refinement_tree_t *tree,
+	const sg_field_refinement_node_t *node, uint8_t local_face)
+{
+	const sg_field_refinement_vertex_t *cell[8];
+	const sg_field_refinement_vertex_t *omitted;
+	uint32_t vertex;
+	uint32_t sorted_position = 0U;
+	for (vertex = 0U; vertex < 8U; vertex++)
+	{
+		cell[vertex] = FindRefinementVertex(tree, &tree->node_vertices[
+			(size_t)node->vertices.first + vertex]);
+		if (!cell[vertex])
+			return 0;
+	}
+	omitted = cell[local_face];
+	for (vertex = 0U; vertex < 8U; vertex++)
+		if (RefinementCoordinateOrder(cell[vertex], omitted) < 0)
+			sorted_position++;
+	return SG_FieldRefinementCellOrientation(cell) *
+		((sorted_position & 1U) != 0U ? -1 : 1);
 }
 
 int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
@@ -1031,7 +1108,9 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 				(uint8_t)local, face))
 				return 0;
 		}
-		if (!SG_FieldRefinementCellFullRank(cell_vertices))
+		if (!SG_FieldRefinementCellFullRank(cell_vertices) ||
+		    SG_FieldRefinementCellOrientation(cell_vertices) !=
+			record->orientation)
 			return 0;
 		RefinementVertexBounds(cell_vertices, &exact_bounds);
 		if (!FlowSame(&exact_bounds, &record->state_bounds))
@@ -1068,6 +1147,21 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 	    tree->node_vertex_count || packed_node_faces != tree->node_face_count ||
 	    root_cursor != atom_count)
 		return 0;
+	for (node = 0U; node < tree->node_count; node++)
+		if (tree->nodes[node].parent != UINT32_MAX)
+		{
+			const sg_field_refinement_node_t *parent =
+				&tree->nodes[tree->nodes[node].parent];
+			size_t child;
+			for (child = parent->children.first;
+			     child < (size_t)parent->children.first +
+				parent->children.count; child++)
+				if (tree->children[child] == node)
+					break;
+			if (child == (size_t)parent->children.first +
+				parent->children.count)
+				return 0;
+		}
 	for (node = 0U; node < tree->face_count; node++)
 	{
 		const sg_field_refinement_face_t *face = &tree->faces[node];
@@ -1107,8 +1201,8 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 				&tree->face_incidences[packed_incidences + item - 1U].node.value,
 				&incidence->node.value) >= 0))
 				return 0;
-			expected = incidence_node->orientation *
-				((incidence->local_face & 1U) != 0U ? -1 : 1);
+			expected = DerivedLocalFaceOrientation(tree, incidence_node,
+				incidence->local_face);
 			if (incidence->orientation != expected)
 				return 0;
 		}
@@ -1147,6 +1241,18 @@ int SG_FieldRefinementTreeValid(const sg_field_refinement_tree_t *tree,
 	if (packed_face_vertices != tree->face_vertex_count ||
 	    packed_incidences != tree->face_incidence_count)
 		return 0;
+	for (node = 0U; node < tree->face_count; node++)
+	{
+		size_t previous;
+		for (previous = 0U; previous < node; previous++)
+			if (FacesHaveSameCoordinates(tree, &tree->faces[previous],
+				&tree->faces[node]) && !SameStableId(
+					&tree->faces[node].parent_face.value,
+					&tree->faces[previous].id.value) && !SameStableId(
+					&tree->faces[previous].parent_face.value,
+					&tree->faces[node].id.value))
+				return 0;
+	}
 	for (atom = 0U; atom < atom_count; atom++)
 	{
 		uint32_t root = tree->atom_roots[atom];
@@ -1681,6 +1787,16 @@ static int DynamicsModelArraysValid(const sg_rune_dynamics_model_t *model,
 		    !ModeReferencesAccepted(&model->state_charts[index].mode,
 			base_model))
 			return 0;
+	for (index = 0U; index < base_model->cell_count; index++)
+	{
+		size_t chart;
+		for (chart = 0U; chart < model->state_chart_count; chart++)
+			if (SameStableId(&base_model->cells[index].id.value,
+				&model->state_charts[chart].configuration_cell.value))
+				break;
+		if (chart == model->state_chart_count)
+			return 0;
+	}
 	for (index = 0U; index < model->control_domain_count; index++)
 		if (model->control_domains[index].source_chart.value
 			.source_set_identity != source_set_identity ||
@@ -1708,6 +1824,51 @@ static int DynamicsModelArraysValid(const sg_rune_dynamics_model_t *model,
 	for (index = 0U; index < model->reach_atom_count; index++)
 		if (model->reach_atoms[index].partition_proof.value.source_set_identity !=
 			source_set_identity)
+			return 0;
+	for (index = 0U; index < model->simplex_owner_count; index++)
+		if (!SG_RuneStateSimplexIdValid(&model->simplex_owners[index].simplex) ||
+		    !SG_RuneStateDomainIdValid(&model->simplex_owners[index].domain) ||
+		    !SG_FieldReachAtomIdValid(&model->simplex_owners[index].atom) ||
+		    !SG_RuneSimplexOwnershipProofRefValid(
+			&model->simplex_owners[index].proof) ||
+		    model->simplex_owners[index].simplex.value.source_set_identity !=
+			source_set_identity ||
+		    model->simplex_owners[index].domain.value.source_set_identity !=
+			source_set_identity ||
+		    model->simplex_owners[index].atom.value.source_set_identity !=
+			source_set_identity ||
+		    model->simplex_owners[index].proof.value.source_set_identity !=
+			source_set_identity)
+			return 0;
+	for (index = 0U; index < model->outcome_image_count; index++)
+		if (!SG_FieldOutcomeImageIdValid(&model->outcome_images[index].id) ||
+		    !SG_FieldOutcomeIdValid(&model->outcome_images[index].outcome) ||
+		    !SG_FieldRefinementNodeIdValid(
+			&model->outcome_images[index].source_leaf) ||
+		    !FlowEnclosureValid(&model->outcome_images[index].canonical_image) ||
+		    !SG_FieldOutcomeImageProofRefValid(
+			&model->outcome_images[index].proof) ||
+		    model->outcome_images[index].id.value.source_set_identity !=
+			source_set_identity ||
+		    model->outcome_images[index].outcome.value.source_set_identity !=
+			source_set_identity ||
+		    model->outcome_images[index].source_leaf.value.source_set_identity !=
+			source_set_identity ||
+		    model->outcome_images[index].proof.value.source_set_identity !=
+			source_set_identity ||
+		    (index != 0U && StableIdCompareValue(
+			&model->outcome_images[index - 1U].id.value,
+			&model->outcome_images[index].id.value) >= 0))
+			return 0;
+	for (index = 0U; index < model->outcome_cover_piece_count; index++)
+		if (!SG_FieldOutcomeImageIdValid(
+			&model->outcome_cover_pieces[index].source_image) ||
+		    !SG_FieldOutcomeCoverProofRefValid(
+			&model->outcome_cover_pieces[index].proof) ||
+		    model->outcome_cover_pieces[index].source_image.value
+			.source_set_identity != source_set_identity ||
+		    model->outcome_cover_pieces[index].proof.value
+			.source_set_identity != source_set_identity)
 			return 0;
 	for (index = 0U; index < model->outcome_count; index++)
 		if (model->outcomes[index].proof.value.source_set_identity !=
@@ -1877,12 +2038,56 @@ static int FieldModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 {
 	size_t index;
 	size_t next_atom_simplex = 0U;
+	size_t next_outcome_image = 0U;
 	size_t next_cover_piece = 0U;
 	size_t next_choice_outcome = 0U;
 
 	if (!SG_FieldRefinementTreeValid(&model->refinement_tree,
 		model->reach_atoms, model->reach_atom_count))
 		return 0;
+	if (model->simplex_owner_count != model->state_simplex_count)
+		return 0;
+	for (index = 0U; index < model->state_simplex_count; index++)
+	{
+		const sg_rune_state_simplex_owner_t *owner =
+			&model->simplex_owners[index];
+		const sg_rune_state_simplex_t *simplex =
+			&model->state_simplices[index];
+		const sg_rune_state_domain_t *domain =
+			FindStateDomain(model, &owner->domain);
+		const sg_field_reach_atom_t *atom =
+			FindReachAtom(model, &owner->atom);
+		size_t domain_memberships = 0U;
+		size_t atom_memberships = 0U;
+		size_t member;
+		if (!SameStableId(&owner->simplex.value, &simplex->id.value) ||
+		    !domain || !atom ||
+		    !SameStableId(&domain->chart.value, &simplex->chart.value) ||
+		    !SameStableId(&atom->domain.value, &domain->id.value))
+			return 0;
+		for (member = 0U; member < model->state_domain_count; member++)
+			if (index >= model->state_domains[member].simplices.first &&
+			    index < (size_t)model->state_domains[member].simplices.first +
+				model->state_domains[member].simplices.count)
+			{
+				domain_memberships++;
+				if (!SameStableId(&model->state_domains[member].id.value,
+					&owner->domain.value))
+					return 0;
+			}
+		for (member = 0U; member < model->reach_atom_count; member++)
+			if (index >= model->reach_atoms[member].simplices.first &&
+			    index < (size_t)model->reach_atoms[member].simplices.first +
+				model->reach_atoms[member].simplices.count)
+			{
+				atom_memberships++;
+				if (!SameStableId(&model->reach_atoms[member].id.value,
+					&owner->atom.value))
+					return 0;
+			}
+		if (domain_memberships != 1U || atom_memberships != 1U)
+			return 0;
+	}
 	for (index = 0U; index < model->reach_atom_count; index++)
 	{
 		const sg_field_reach_atom_t *atom = &model->reach_atoms[index];
@@ -1902,13 +2107,17 @@ static int FieldModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 		const sg_field_outcome_t *outcome = &model->outcomes[index];
 		size_t destination;
 		size_t effect;
-		if (outcome->destination_cover.first != next_cover_piece ||
+		if (outcome->source_images.first != next_outcome_image ||
+		    !SpanWithin(outcome->source_images.first,
+			outcome->source_images.count, model->outcome_image_count) ||
+		    outcome->destination_cover.first != next_cover_piece ||
 		    !SpanWithin(outcome->destination_cover.first,
 			outcome->destination_cover.count,
 			model->outcome_cover_piece_count) ||
 		    !SpanWithin(outcome->guard_effects.first,
 			outcome->guard_effects.count, model->guard_effect_count))
 			return 0;
+		next_outcome_image += outcome->source_images.count;
 		for (destination = outcome->destination_cover.first;
 		     destination < (size_t)outcome->destination_cover.first +
 			outcome->destination_cover.count; destination++)
@@ -1937,7 +2146,8 @@ static int FieldModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 				&model->guard_effects[effect].condition.value) >= 0)
 				return 0;
 		}
-	if (next_cover_piece != model->outcome_cover_piece_count)
+	if (next_outcome_image != model->outcome_image_count ||
+	    next_cover_piece != model->outcome_cover_piece_count)
 		return 0;
 	for (index = 0U; index < model->choice_count; index++)
 	{
@@ -2131,53 +2341,31 @@ static int FieldModelOwnershipValid(const sg_rune_dynamics_model_t *model)
 		{
 			const sg_rune_state_vertex_t *accepted = &model->state_vertices[
 				(size_t)simplex->vertices.first + vertex];
-			const sg_field_refinement_vertex_t *refined =
-				FindRefinementVertex(&model->refinement_tree,
-					&model->refinement_tree.node_vertices[
-						(size_t)root->vertices.first + vertex]);
-			uint32_t dimension;
-			if (!refined)
-				return 0;
-			for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
-			     dimension++)
+			uint32_t candidate;
+			for (candidate = 0U; candidate < 8U; candidate++)
 			{
-				float coordinate = dimension < 3U ?
-					accepted->position.value[dimension] : dimension < 6U ?
-					accepted->velocity.value[dimension - 3U] :
-					accepted->elapsed_ms;
-				if (coordinate != RefinementCoordinateValue(refined, dimension))
+				const sg_field_refinement_vertex_t *refined =
+					FindRefinementVertex(&model->refinement_tree,
+						&model->refinement_tree.node_vertices[
+							(size_t)root->vertices.first + candidate]);
+				uint32_t dimension;
+				if (!refined)
 					return 0;
-			}
-		}
-		{
-			const sg_field_refinement_vertex_t *root_vertices[8];
-			size_t previous;
-			int same_domain_predecessor = 0;
-			int connected = 0;
-			if (!LoadRefinementNodeVertices(&model->refinement_tree, root,
-				root_vertices))
-				return 0;
-			for (previous = 0U; previous < index; previous++)
-			{
-				const sg_field_refinement_node_t *previous_root =
-					&model->refinement_tree.nodes[
-						model->refinement_tree.atom_roots[previous]];
-				const sg_field_refinement_vertex_t *previous_vertices[8];
-				if (!LoadRefinementNodeVertices(&model->refinement_tree,
-					previous_root, previous_vertices) ||
-				    !SG_FieldRefinementCellsProperlyMeet(previous_vertices,
-					root_vertices))
-					return 0;
-				if (SameStableId(&model->reach_atoms[previous].domain.value,
-					&atom->domain.value))
+				for (dimension = 0U;
+				     dimension < SG_RUNE_STATE_DIMENSION_COUNT; dimension++)
 				{
-					same_domain_predecessor = 1;
-					if (RefinementNodesShareFace(&model->refinement_tree,
-						previous_root, root))
-						connected = 1;
+					float coordinate = dimension < 3U ?
+						accepted->position.value[dimension] : dimension < 6U ?
+						accepted->velocity.value[dimension - 3U] :
+						accepted->elapsed_ms;
+					if (coordinate !=
+					    RefinementCoordinateValue(refined, dimension))
+						break;
 				}
+				if (dimension == SG_RUNE_STATE_DIMENSION_COUNT)
+					break;
 			}
-			if (same_domain_predecessor && !connected)
+			if (candidate == 8U)
 				return 0;
 		}
 	}
@@ -2212,6 +2400,20 @@ int SG_RuneDynamicsModelValid(const sg_rune_dynamics_model_t *model,
 	    model->boundary_transfer_count > UINT32_MAX ||
 	    !model->reach_atoms || model->reach_atom_count == 0U ||
 	    model->reach_atom_count > UINT32_MAX ||
+	    !model->simplex_owners ||
+	    model->simplex_owner_count != model->state_simplex_count ||
+	    !model->domain_support ||
+	    model->domain_support_count != model->state_domain_count ||
+	    !model->domain_boundary_facets ||
+	    model->domain_boundary_facet_count == 0U ||
+	    model->domain_boundary_facet_count > UINT32_MAX ||
+	    !model->domain_boundary_vertices ||
+	    model->domain_boundary_vertex_count == 0U ||
+	    model->domain_boundary_vertex_count > UINT32_MAX ||
+	    !model->exact_words || model->exact_word_count == 0U ||
+	    model->exact_word_count > UINT32_MAX ||
+	    !model->outcome_images || model->outcome_image_count == 0U ||
+	    model->outcome_image_count > UINT32_MAX ||
 	    !model->outcome_cover_pieces || model->outcome_cover_piece_count == 0U ||
 	    model->outcome_cover_piece_count > UINT32_MAX ||
 	    (!model->guard_requirements && model->guard_requirement_count != 0U) ||
