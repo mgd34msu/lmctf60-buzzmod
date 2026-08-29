@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <string.h>
 
+_Static_assert(SG_BSP_CONTENT_ID_BYTES == SG_RUNE_V2_CONTENT_ID_BYTES,
+	"BSP and RUNE content identities must have the same width");
+
 /* The schema id is deliberately independent from the RUNE model schema.  A
  * change to the entity projection must invalidate every publication even
  * when the surrounding RUNE wire format is unchanged. */
@@ -40,6 +43,25 @@ static int WorldSourceValid(const sg_bsp_world_t *world)
 		world->models && world->model_count != 0U;
 }
 
+static int ContentIdentityValid(const sg_bsp_content_identity_t *identity)
+{
+	uint32_t index;
+
+	if (!identity)
+		return 0;
+	for (index = 0U; index < SG_BSP_CONTENT_ID_BYTES; index++)
+		if (identity->bytes[index] != 0U)
+			return 1;
+	return 0;
+}
+
+static int ContentIdentityEqual(const sg_bsp_content_identity_t *left,
+	const uint8_t *right)
+{
+	return left && right &&
+		!memcmp(left->bytes, right, SG_BSP_CONTENT_ID_BYTES);
+}
+
 static void CountExpected(const sg_bsp_entity_semantics_t *expected,
 	sg_bsp_entity_semantics_audit_result_t *result)
 {
@@ -62,7 +84,8 @@ static void CountExpected(const sg_bsp_entity_semantics_t *expected,
 		: SG_BSP_ENTITY_SEMANTICS_COMPLETE;
 }
 
-int SG_BspEntitySemanticsAuditOwned(const sg_bsp_world_t *world,
+int SG_BspEntitySemanticsAuditOwned(
+	const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_t **owned_out,
@@ -70,9 +93,11 @@ int SG_BspEntitySemanticsAuditOwned(const sg_bsp_world_t *world,
 {
 	sg_bsp_entity_semantics_error_t error;
 	sg_bsp_entity_semantics_t *expected = NULL;
+	const sg_bsp_world_t *world;
 
 	ResetResult(result_out);
-	if (!world || !binding || !candidate || !owned_out || *owned_out ||
+	if (!authority || !authority->world || !binding || !candidate ||
+		!owned_out || *owned_out ||
 		!result_out)
 	{
 		if (result_out)
@@ -85,10 +110,27 @@ int SG_BspEntitySemanticsAuditOwned(const sg_bsp_world_t *world,
 		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_IDENTITY;
 		return 0;
 	}
+	world = authority->world;
 	if (!WorldSourceValid(world))
 	{
 		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_SOURCE;
 		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_WORLD;
+		return 0;
+	}
+	if (!ContentIdentityValid(&world->content_identity) ||
+		!ContentIdentityValid(&authority->content_identity))
+	{
+		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_SOURCE;
+		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_IDENTITY;
+		return 0;
+	}
+	if (!ContentIdentityEqual(&world->content_identity,
+		authority->content_identity.bytes) ||
+		!ContentIdentityEqual(&world->content_identity,
+		binding->source_identity.bytes))
+	{
+		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_IDENTITY_MISMATCH;
+		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_IDENTITY;
 		return 0;
 	}
 	if (candidate->source_set_identity != binding->source_set_identity ||

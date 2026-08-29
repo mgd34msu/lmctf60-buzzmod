@@ -31,6 +31,185 @@
 #define BSP_PLANE_Z INT32_C(2)
 #define BSP_PLANE_NON_AXIAL INT32_C(6)
 
+typedef struct bsp_sha256_s
+{
+	uint32_t state[8];
+	uint64_t bit_count;
+	uint8_t block[64];
+	size_t block_bytes;
+} bsp_sha256_t;
+
+static uint32_t BspSha256RotateRight(uint32_t value, unsigned int count)
+{
+	return (value >> count) | (value << (32U - count));
+}
+
+static void BspSha256Transform(bsp_sha256_t *context)
+{
+	static const uint32_t constants[64] = {
+		UINT32_C(0x428a2f98), UINT32_C(0x71374491),
+		UINT32_C(0xb5c0fbcf), UINT32_C(0xe9b5dba5),
+		UINT32_C(0x3956c25b), UINT32_C(0x59f111f1),
+		UINT32_C(0x923f82a4), UINT32_C(0xab1c5ed5),
+		UINT32_C(0xd807aa98), UINT32_C(0x12835b01),
+		UINT32_C(0x243185be), UINT32_C(0x550c7dc3),
+		UINT32_C(0x72be5d74), UINT32_C(0x80deb1fe),
+		UINT32_C(0x9bdc06a7), UINT32_C(0xc19bf174),
+		UINT32_C(0xe49b69c1), UINT32_C(0xefbe4786),
+		UINT32_C(0x0fc19dc6), UINT32_C(0x240ca1cc),
+		UINT32_C(0x2de92c6f), UINT32_C(0x4a7484aa),
+		UINT32_C(0x5cb0a9dc), UINT32_C(0x76f988da),
+		UINT32_C(0x983e5152), UINT32_C(0xa831c66d),
+		UINT32_C(0xb00327c8), UINT32_C(0xbf597fc7),
+		UINT32_C(0xc6e00bf3), UINT32_C(0xd5a79147),
+		UINT32_C(0x06ca6351), UINT32_C(0x14292967),
+		UINT32_C(0x27b70a85), UINT32_C(0x2e1b2138),
+		UINT32_C(0x4d2c6dfc), UINT32_C(0x53380d13),
+		UINT32_C(0x650a7354), UINT32_C(0x766a0abb),
+		UINT32_C(0x81c2c92e), UINT32_C(0x92722c85),
+		UINT32_C(0xa2bfe8a1), UINT32_C(0xa81a664b),
+		UINT32_C(0xc24b8b70), UINT32_C(0xc76c51a3),
+		UINT32_C(0xd192e819), UINT32_C(0xd6990624),
+		UINT32_C(0xf40e3585), UINT32_C(0x106aa070),
+		UINT32_C(0x19a4c116), UINT32_C(0x1e376c08),
+		UINT32_C(0x2748774c), UINT32_C(0x34b0bcb5),
+		UINT32_C(0x391c0cb3), UINT32_C(0x4ed8aa4a),
+		UINT32_C(0x5b9cca4f), UINT32_C(0x682e6ff3),
+		UINT32_C(0x748f82ee), UINT32_C(0x78a5636f),
+		UINT32_C(0x84c87814), UINT32_C(0x8cc70208),
+		UINT32_C(0x90befffa), UINT32_C(0xa4506ceb),
+		UINT32_C(0xbef9a3f7), UINT32_C(0xc67178f2)
+	};
+	uint32_t schedule[64];
+	uint32_t words[8];
+	uint32_t index;
+
+	for (index = 0U; index < 16U; index++)
+		schedule[index] = ((uint32_t)context->block[index * 4U] << 24) |
+			((uint32_t)context->block[index * 4U + 1U] << 16) |
+			((uint32_t)context->block[index * 4U + 2U] << 8) |
+			(uint32_t)context->block[index * 4U + 3U];
+	for (index = 16U; index < 64U; index++)
+	{
+		uint32_t first = BspSha256RotateRight(schedule[index - 15U], 7U) ^
+			BspSha256RotateRight(schedule[index - 15U], 18U) ^
+			(schedule[index - 15U] >> 3U);
+		uint32_t second = BspSha256RotateRight(schedule[index - 2U], 17U) ^
+			BspSha256RotateRight(schedule[index - 2U], 19U) ^
+			(schedule[index - 2U] >> 10U);
+
+		schedule[index] = schedule[index - 16U] + first +
+			schedule[index - 7U] + second;
+	}
+	for (index = 0U; index < 8U; index++)
+		words[index] = context->state[index];
+	for (index = 0U; index < 64U; index++)
+	{
+		uint32_t first = BspSha256RotateRight(words[0], 2U) ^
+			BspSha256RotateRight(words[0], 13U) ^
+			BspSha256RotateRight(words[0], 22U);
+		uint32_t majority = (words[0] & words[1]) ^
+			(words[0] & words[2]) ^ (words[1] & words[2]);
+		uint32_t second = BspSha256RotateRight(words[4], 6U) ^
+			BspSha256RotateRight(words[4], 11U) ^
+			BspSha256RotateRight(words[4], 25U);
+		uint32_t choice = (words[4] & words[5]) ^
+			(~words[4] & words[6]);
+		uint32_t temporary1 = words[7] + second + choice +
+			constants[index] + schedule[index];
+		uint32_t temporary2 = first + majority;
+
+		words[7] = words[6];
+		words[6] = words[5];
+		words[5] = words[4];
+		words[4] = words[3] + temporary1;
+		words[3] = words[2];
+		words[2] = words[1];
+		words[1] = words[0];
+		words[0] = temporary1 + temporary2;
+	}
+	for (index = 0U; index < 8U; index++)
+		context->state[index] += words[index];
+}
+
+static void BspSha256Init(bsp_sha256_t *context)
+{
+	static const uint32_t initial_state[8] = {
+		UINT32_C(0x6a09e667), UINT32_C(0xbb67ae85),
+		UINT32_C(0x3c6ef372), UINT32_C(0xa54ff53a),
+		UINT32_C(0x510e527f), UINT32_C(0x9b05688c),
+		UINT32_C(0x1f83d9ab), UINT32_C(0x5be0cd19)
+	};
+
+	memcpy(context->state, initial_state, sizeof(initial_state));
+	context->bit_count = 0U;
+	context->block_bytes = 0U;
+}
+
+static void BspSha256Update(bsp_sha256_t *context, const uint8_t *data,
+	size_t bytes)
+{
+	while (bytes != 0U)
+	{
+		size_t available = sizeof(context->block) - context->block_bytes;
+		size_t copy = bytes < available ? bytes : available;
+
+		memcpy(context->block + context->block_bytes, data, copy);
+		context->block_bytes += copy;
+		data += copy;
+		bytes -= copy;
+		context->bit_count += (uint64_t)copy * UINT64_C(8);
+		if (context->block_bytes == sizeof(context->block))
+		{
+			BspSha256Transform(context);
+			context->block_bytes = 0U;
+		}
+	}
+}
+
+static void BspSha256Final(bsp_sha256_t *context,
+	sg_bsp_content_identity_t *identity)
+{
+	uint64_t bit_count = context->bit_count;
+	uint32_t index;
+
+	context->block[context->block_bytes++] = UINT8_C(0x80);
+	if (context->block_bytes > 56U)
+	{
+		memset(context->block + context->block_bytes, 0,
+			sizeof(context->block) - context->block_bytes);
+		BspSha256Transform(context);
+		context->block_bytes = 0U;
+	}
+	memset(context->block + context->block_bytes, 0,
+		56U - context->block_bytes);
+	context->block_bytes = 56U;
+	for (index = 0U; index < 8U; index++)
+		context->block[56U + index] = (uint8_t)(bit_count >>
+			(56U - index * 8U));
+	BspSha256Transform(context);
+	for (index = 0U; index < 8U; index++)
+	{
+		identity->bytes[index * 4U] = (uint8_t)(context->state[index] >> 24);
+		identity->bytes[index * 4U + 1U] =
+			(uint8_t)(context->state[index] >> 16);
+		identity->bytes[index * 4U + 2U] =
+			(uint8_t)(context->state[index] >> 8);
+		identity->bytes[index * 4U + 3U] =
+			(uint8_t)context->state[index];
+	}
+}
+
+static void BspSha256(const uint8_t *data, size_t bytes,
+	sg_bsp_content_identity_t *identity)
+{
+	bsp_sha256_t context;
+
+	BspSha256Init(&context);
+	BspSha256Update(&context, data, bytes);
+	BspSha256Final(&context, identity);
+}
+
 _Static_assert(CHAR_BIT == 8, "IBSP decoding requires eight-bit bytes");
 _Static_assert(sizeof(float) == 4 && FLT_RADIX == 2 && FLT_MANT_DIG == 24 &&
 	FLT_MAX_EXP == 128, "IBSP decoding requires IEEE binary32 floats");
@@ -1183,6 +1362,7 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 			SG_BSP_LUMP_ENTITIES, 0);
 		return 0;
 	}
+	BspSha256(data, size, &world->content_identity);
 	if (!BspLoadEntities(world, &lumps[SG_BSP_LUMP_ENTITIES], error_out) ||
 		!BspLoadPlanes(world, &lumps[SG_BSP_LUMP_PLANES], error_out) ||
 		!BspLoadVertices(world, &lumps[SG_BSP_LUMP_VERTICES], error_out) ||

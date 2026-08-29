@@ -376,6 +376,17 @@ static void TestValidFixture(void)
 	CHECK(world->models[1].origin.value[0] == 32.0f);
 	CHECK(world->areas[1].first_areaportal == 1);
 	CHECK(world->areaportals[0].other_area == 1);
+	{
+		static const uint8_t expected_identity[SG_BSP_CONTENT_ID_BYTES] = {
+			0x9dU, 0x4eU, 0x84U, 0x3eU, 0x31U, 0x3dU, 0x1aU, 0x27U,
+			0x5cU, 0x47U, 0x12U, 0x2bU, 0x9dU, 0xfeU, 0x11U, 0x09U,
+			0x67U, 0xd9U, 0xa5U, 0xd5U, 0x14U, 0xd2U, 0x17U, 0x47U,
+			0xbdU, 0x0fU, 0x88U, 0x47U, 0x77U, 0x8dU, 0x0bU, 0x96U
+		};
+
+		CHECK(!memcmp(world->content_identity.bytes, expected_identity,
+			sizeof(expected_identity)));
+	}
 	memset(fixture.bytes, 0, fixture.size);
 	CHECK(memcmp(world->entities, "{}\n", 4) == 0);
 	CHECK(world->lighting[0] == 10);

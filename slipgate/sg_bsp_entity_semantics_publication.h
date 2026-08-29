@@ -4,14 +4,15 @@
 #include <stdint.h>
 
 #include "sg_bsp_entity_semantics.h"
+#include "sg_host_collision.h"
 #include "sg_rune_v2_wire.h"
 
 extern const sg_rune_v2_content_id_t SG_BSP_ENTITY_SEMANTICS_SCHEMA_ID;
 
-/* The source identity is the caller's exact immutable BSP identity.  The
- * parsed world intentionally does not retain the original file bytes, so
- * this boundary preserves the identity supplied by the BSP loader while the
- * audit replays all entity facts from the parsed source. */
+/* The source identity is the SHA-256 identity calculated by the BSP loader.
+ * Production callers must use an authority initialized on that same loaded
+ * world; the audit compares both copied authority and world identities before
+ * replaying any parsed entity facts. */
 typedef struct sg_bsp_entity_semantics_binding_s
 {
 	sg_rune_v2_content_id_t source_identity;
@@ -85,14 +86,16 @@ typedef struct sg_bsp_entity_semantics_view_s
 	uint32_t string_bytes;
 } sg_bsp_entity_semantics_view_t;
 
-int SG_BspEntitySemanticsAudit(const sg_bsp_world_t *world,
+int SG_BspEntitySemanticsAudit(const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_audit_result_t *result_out);
 
-/* Issue copies the complete candidate.  The caller may destroy both world and
- * candidate after a successful call; output remains valid until destroy. */
-int SG_BspEntitySemanticsPublicationIssue(const sg_bsp_world_t *world,
+/* Issue publishes a source-reconstructed complete snapshot.  The caller may
+ * destroy both authority/world and candidate after success; output remains
+ * valid until destroy. */
+int SG_BspEntitySemanticsPublicationIssue(
+	const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_publication_t **publication_out,

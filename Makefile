@@ -3894,7 +3894,9 @@ bsp-entity-semantics-publication-test: \
 		slipgate/sg_bsp_entity_semantics_audit_expected.c \
 		slipgate/sg_bsp_entity_semantics_audit_internal.h \
 		slipgate/sg_bsp_entity_semantics.c \
-		slipgate/sg_bsp_entity_semantics.h
+		slipgate/sg_bsp_entity_semantics.h \
+		slipgate/sg_host_collision.c slipgate/sg_host_collision.h \
+		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
 	$(E) [TEST] BSP entity semantics publication
 	$(Q)sh tests/run_sg_bsp_entity_semantics_publication_test.sh
 

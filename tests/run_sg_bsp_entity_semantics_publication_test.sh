@@ -9,6 +9,12 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion
 sources='tests/sg_bsp_entity_semantics_publication_test.c
 slipgate/sg_bsp_entity_semantics_publication.c
 slipgate/sg_bsp_entity_semantics_audit_expected.c
+slipgate/sg_bsp_entity_semantics.c
+slipgate/sg_host_collision.c
+slipgate/sg_bsp_world.c'
+analyzer_sources='tests/sg_bsp_entity_semantics_publication_test.c
+slipgate/sg_bsp_entity_semantics_publication.c
+slipgate/sg_bsp_entity_semantics_audit_expected.c
 slipgate/sg_bsp_entity_semantics.c'
 
 cd "$repo_dir"
@@ -24,7 +30,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/entity-publication-sanitize"
 
-for source in $sources
+for source in $analyzer_sources
 do
 	clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes \

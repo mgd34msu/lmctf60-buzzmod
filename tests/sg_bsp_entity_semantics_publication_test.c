@@ -19,7 +19,11 @@ typedef struct fixture_s
 {
 	sg_bsp_world_t world;
 	uint8_t *entities;
+	sg_bsp_plane_t plane;
+	sg_bsp_node_t node;
+	sg_bsp_leaf_t leaf;
 	sg_bsp_model_t models[4];
+	sg_host_collision_authority_t authority;
 } fixture_t;
 
 static sg_bsp_entity_semantics_binding_t binding;
@@ -39,6 +43,8 @@ static void InitFixture(fixture_t *fixture, const char *text)
 {
 	size_t length = strlen(text) + 1U;
 	uint32_t index;
+	sg_rune_model_identity_t identity;
+	sg_host_collision_error_t host_error;
 
 	memset(fixture, 0, sizeof(*fixture));
 	fixture->entities = malloc(length);
@@ -46,8 +52,16 @@ static void InitFixture(fixture_t *fixture, const char *text)
 	if (!fixture->entities)
 		return;
 	memcpy(fixture->entities, text, length);
+	memcpy(fixture->world.content_identity.bytes,
+		binding.source_identity.bytes, SG_BSP_CONTENT_ID_BYTES);
 	fixture->world.entities = fixture->entities;
 	fixture->world.entity_byte_count = (uint32_t)length;
+	fixture->world.planes = &fixture->plane;
+	fixture->world.plane_count = 1U;
+	fixture->world.nodes = &fixture->node;
+	fixture->world.node_count = 1U;
+	fixture->world.leaves = &fixture->leaf;
+	fixture->world.leaf_count = 1U;
 	fixture->world.models = fixture->models;
 	fixture->world.model_count = 4U;
 	for (index = 0U; index < fixture->world.model_count; index++)
@@ -59,6 +73,29 @@ static void InitFixture(fixture_t *fixture, const char *text)
 		fixture->models[index].maxs.value[1] = 16.0f;
 		fixture->models[index].maxs.value[2] = 65.0f;
 	}
+	memset(&identity, 0, sizeof(identity));
+	identity.bsp_content_id = UINT64_C(1);
+	identity.physics_abi_id = UINT64_C(2);
+	identity.standing_hull.mins.value[0] = -16.0f;
+	identity.standing_hull.mins.value[1] = -16.0f;
+	identity.standing_hull.mins.value[2] = -24.0f;
+	identity.standing_hull.maxs.value[0] = 16.0f;
+	identity.standing_hull.maxs.value[1] = 16.0f;
+	identity.standing_hull.maxs.value[2] = 32.0f;
+	identity.crouching_hull = identity.standing_hull;
+	identity.crouching_hull.maxs.value[2] = 4.0f;
+	identity.physics.gravity = 800.0f;
+	identity.physics.ground_acceleration = 10.0f;
+	identity.physics.air_acceleration = 1.0f;
+	identity.physics.water_acceleration = 10.0f;
+	identity.physics.hook_acceleration = 800.0f;
+	identity.physics.external_acceleration = 1.0f;
+	identity.physics.water_drag = 1.0f;
+	identity.physics.max_velocity = 2000.0f;
+	identity.physics.frame_ms = 100;
+	identity.physics.substep_ms = 10;
+	CHECK(SG_HostCollisionInit(&fixture->authority, &fixture->world,
+		&identity, &host_error));
 }
 
 static void DestroyFixture(fixture_t *fixture)
@@ -119,13 +156,13 @@ static void TestCompleteAuditAndOwnedPublication(void)
 	InitFixture(&fixture, text);
 	candidate = Build(&fixture);
 	CHECK(candidate != NULL);
-	CHECK(SG_BspEntitySemanticsAudit(&fixture.world, &binding, candidate,
+	CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
 		&audit));
 	CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_OK);
 	CHECK(audit.completeness == SG_BSP_ENTITY_SEMANTICS_COMPLETE);
 	CHECK(audit.expected_entities == 3U);
 	CHECK(audit.expected_edges == 1U);
-	CHECK(SG_BspEntitySemanticsPublicationIssue(&fixture.world, &binding,
+	CHECK(SG_BspEntitySemanticsPublicationIssue(&fixture.authority, &binding,
 		candidate, &publication, &audit));
 	CHECK(publication != NULL);
 	SG_BspEntitySemanticsDestroy(candidate);
@@ -154,11 +191,70 @@ static void TestProvenEmpty(void)
 	candidate.world.source_set_identity = binding.source_set_identity;
 	candidate.world.source_entity_ordinal = 0U;
 	candidate.world.gravity = 800.0f;
-	CHECK(SG_BspEntitySemanticsAudit(&fixture.world, &binding, &candidate,
+	CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding, &candidate,
 		&audit));
 	CHECK(audit.completeness == SG_BSP_ENTITY_SEMANTICS_PROVEN_EMPTY);
 	CHECK(audit.expected_entities == 0U);
 	CHECK(audit.expected_edges == 0U);
+	DestroyFixture(&fixture);
+}
+
+static void TestHostileTrailingStringExtent(void)
+{
+	fixture_t fixture;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantics_audit_result_t audit;
+	sg_bsp_entity_semantics_publication_t *publication = NULL;
+	sg_bsp_entity_semantics_view_t view;
+	char *strings;
+
+	InitFixture(&fixture, "{ \"classname\" \"worldspawn\" }\n");
+	candidate = Build(&fixture);
+	CHECK(candidate != NULL);
+	if (candidate)
+	{
+		strings = malloc(10U);
+		CHECK(strings != NULL);
+		if (strings)
+		{
+			memcpy(strings, "attested\0x", 10U);
+			free(candidate->strings);
+			candidate->strings = strings;
+			candidate->string_bytes = UINT32_C(1048586);
+			CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(SG_BspEntitySemanticsPublicationIssue(
+				&fixture.authority, &binding, candidate, &publication, &audit));
+			CHECK(SG_BspEntitySemanticsPublicationRead(publication, &view));
+			CHECK(view.string_bytes == 0U && view.strings == NULL);
+			SG_BspEntitySemanticsPublicationDestroy(publication);
+		}
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&fixture);
+
+	InitFixture(&fixture,
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"item_quad\" \"origin\" \"1 2 3\" }\n");
+	candidate = Build(&fixture);
+	CHECK(candidate != NULL);
+	if (candidate)
+	{
+		strings = malloc(10U);
+		CHECK(strings != NULL);
+		if (strings)
+		{
+			memcpy(strings, "attested\0x", 10U);
+			free(candidate->strings);
+			candidate->strings = strings;
+			candidate->string_bytes = UINT32_C(1048586);
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code ==
+				SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+		}
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
 	DestroyFixture(&fixture);
 }
 
@@ -172,7 +268,7 @@ static void TestExplicitWorldFactIsComplete(void)
 		"{ \"classname\" \"worldspawn\" \"gravity\" \"100\" }\n");
 	candidate = Build(&fixture);
 	CHECK(candidate != NULL);
-	CHECK(SG_BspEntitySemanticsAudit(&fixture.world, &binding, candidate,
+	CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
 		&audit));
 	CHECK(audit.completeness == SG_BSP_ENTITY_SEMANTICS_COMPLETE);
 	SG_BspEntitySemanticsDestroy(candidate);
@@ -206,7 +302,7 @@ static void TestEquivalentStringLayout(void)
 			candidate->strings = shifted;
 			candidate->string_bytes += 2U;
 			ShiftStringOffsets(candidate, 2U);
-			CHECK(SG_BspEntitySemanticsAudit(&fixture.world, &binding,
+			CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
 				candidate, &audit));
 			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_OK);
 		}
@@ -239,7 +335,7 @@ static void TestTrailingInventedInvalidFact(void)
 			candidate->entities[1].canonical_ordinal = 1U;
 			candidate->entities[1].source_entity_ordinal = UINT32_MAX;
 			candidate->entity_count = 2U;
-			CHECK(!SG_BspEntitySemanticsAudit(&fixture.world, &binding,
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
 				candidate, &audit));
 			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT ||
 				audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVENTED_FACT);
@@ -266,13 +362,13 @@ static void TestOmittedAndInventedFacts(void)
 	if (candidate)
 	{
 		candidate->entity_count--;
-		CHECK(!SG_BspEntitySemanticsAudit(&fixture.world, &binding, candidate,
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
 			&audit));
 		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_OMITTED_FACT);
 		CHECK(audit.omitted_facts == 1U);
 		candidate->entity_count++;
 		candidate->entities[0].origin.value[0] += 1.0f;
-		CHECK(!SG_BspEntitySemanticsAudit(&fixture.world, &binding, candidate,
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
 			&audit));
 		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
 		CHECK(audit.omitted_facts == 1U);
@@ -302,14 +398,14 @@ static void TestDuplicateAndUnresolvedFacts(void)
 		saved_source = candidate->entities[1].source_entity_ordinal;
 		candidate->entities[1].source_entity_ordinal =
 			candidate->entities[0].source_entity_ordinal;
-		CHECK(!SG_BspEntitySemanticsAudit(&fixture.world, &binding, candidate,
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
 			&audit));
 		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_DUPLICATE_FACT);
 		CHECK(audit.duplicate_facts != 0U);
 		candidate->entities[1].source_entity_ordinal = saved_source;
 		saved_destination = candidate->edges[0].destination;
 		candidate->edges[0].destination = candidate->entity_count;
-		CHECK(!SG_BspEntitySemanticsAudit(&fixture.world, &binding, candidate,
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
 			&audit));
 		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_UNRESOLVED_FACT);
 		CHECK(audit.unresolved_facts == 1U);
@@ -317,6 +413,61 @@ static void TestDuplicateAndUnresolvedFacts(void)
 	}
 	SG_BspEntitySemanticsDestroy(candidate);
 	DestroyFixture(&fixture);
+}
+
+static void TestDuplicateTopologyFact(void)
+{
+	static const char text[] =
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"trigger_multiple\" \"model\" \"*1\" \"target\" \"gate\" }\n"
+		"{ \"classname\" \"func_door\" \"model\" \"*2\" \"targetname\" \"gate\" }\n"
+		"{ \"classname\" \"func_button\" \"model\" \"*3\" \"targetname\" \"gate\" }\n";
+	fixture_t fixture;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantics_audit_result_t audit;
+
+	InitFixture(&fixture, text);
+	candidate = Build(&fixture);
+	CHECK(candidate != NULL);
+	if (candidate)
+	{
+		CHECK(candidate->edge_count == 2U);
+		if (candidate->edge_count == 2U)
+		{
+			candidate->edges[1] = candidate->edges[0];
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_DUPLICATE_FACT);
+			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
+			CHECK(audit.duplicate_facts == 1U);
+		}
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&fixture);
+}
+
+static void TestCrossBspIdentityMismatch(void)
+{
+	fixture_t first;
+	fixture_t second;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantics_audit_result_t audit;
+
+	InitFixture(&first, "{ \"classname\" \"worldspawn\" }\n");
+	InitFixture(&second, "{ \"classname\" \"worldspawn\" }\n");
+	second.world.content_identity.bytes[0] ^= 1U;
+	candidate = Build(&second);
+	CHECK(candidate != NULL);
+	CHECK(!SG_BspEntitySemanticsAudit(&second.authority, &binding,
+		candidate, &audit));
+	CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_IDENTITY_MISMATCH);
+	second.authority.content_identity = second.world.content_identity;
+	CHECK(!SG_BspEntitySemanticsAudit(&second.authority, &binding,
+		candidate, &audit));
+	CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_IDENTITY_MISMATCH);
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&second);
+	DestroyFixture(&first);
 }
 
 static void TestIdentityAndTransactionalOutput(void)
@@ -331,10 +482,10 @@ static void TestIdentityAndTransactionalOutput(void)
 	InitFixture(&fixture, "{ \"classname\" \"worldspawn\" }\n");
 	candidate = Build(&fixture);
 	wrong.schema_identity.bytes[0] ^= 1U;
-	CHECK(!SG_BspEntitySemanticsAudit(&fixture.world, &wrong, candidate,
+	CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &wrong, candidate,
 		&audit));
 	CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_IDENTITY_MISMATCH);
-	CHECK(!SG_BspEntitySemanticsPublicationIssue(&fixture.world, &binding,
+	CHECK(!SG_BspEntitySemanticsPublicationIssue(&fixture.authority, &binding,
 		candidate, &sentinel, &audit));
 	CHECK(sentinel == (sg_bsp_entity_semantics_publication_t *)(uintptr_t)1U);
 	SG_BspEntitySemanticsDestroy(candidate);
@@ -346,11 +497,14 @@ int main(void)
 	InitBinding();
 	TestCompleteAuditAndOwnedPublication();
 	TestProvenEmpty();
+	TestHostileTrailingStringExtent();
 	TestExplicitWorldFactIsComplete();
 	TestEquivalentStringLayout();
 	TestTrailingInventedInvalidFact();
 	TestOmittedAndInventedFacts();
 	TestDuplicateAndUnresolvedFacts();
+	TestDuplicateTopologyFact();
+	TestCrossBspIdentityMismatch();
 	TestIdentityAndTransactionalOutput();
 	if (failures)
 	{

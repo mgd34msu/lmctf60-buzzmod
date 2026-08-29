@@ -80,22 +80,6 @@ static int StringOffsetValid(const sg_bsp_entity_semantics_t *semantics,
 		(size_t)(semantics->string_bytes - offset)) != NULL;
 }
 
-static int StringEqual(const sg_bsp_entity_semantics_t *left,
-	uint32_t left_offset, const sg_bsp_entity_semantics_t *right,
-	uint32_t right_offset)
-{
-	const char *left_string;
-	const char *right_string;
-
-	if (left_offset == SG_BSP_ENTITY_STRING_NONE ||
-		right_offset == SG_BSP_ENTITY_STRING_NONE)
-		return left_offset == SG_BSP_ENTITY_STRING_NONE &&
-			right_offset == SG_BSP_ENTITY_STRING_NONE;
-	left_string = SG_BspEntitySemanticsString(left, left_offset);
-	right_string = SG_BspEntitySemanticsString(right, right_offset);
-	return left_string && right_string && !strcmp(left_string, right_string);
-}
-
 static int BindingValid(const sg_bsp_entity_semantics_binding_t *binding)
 {
 	return binding && SG_RuneV2ContentIdValid(&binding->source_identity) &&
@@ -153,6 +137,67 @@ static void RecordDisagreement(
 		domain, record);
 }
 
+static int RelocatedOffsetEqual(uint32_t expected, uint32_t candidate,
+	uint32_t *delta_out, int *delta_known)
+{
+	uint32_t delta;
+
+	if (expected == SG_BSP_ENTITY_STRING_NONE ||
+		candidate == SG_BSP_ENTITY_STRING_NONE)
+		return expected == SG_BSP_ENTITY_STRING_NONE &&
+			candidate == SG_BSP_ENTITY_STRING_NONE;
+	if (candidate < expected)
+		return 0;
+	delta = candidate - expected;
+	if (!*delta_known)
+	{
+		*delta_out = delta;
+		*delta_known = 1;
+		return 1;
+	}
+	return delta == *delta_out;
+}
+
+static int StringLayoutEqual(const sg_bsp_entity_semantics_t *expected,
+	const sg_bsp_entity_semantics_t *candidate)
+{
+	uint32_t delta = 0U;
+	uint32_t index;
+	int delta_known = 0;
+
+	if (!expected || !candidate || expected->entity_count !=
+		candidate->entity_count || expected->edge_count != candidate->edge_count)
+		return 0;
+	for (index = 0U; index < expected->entity_count; index++)
+	{
+		const sg_bsp_entity_semantic_t *left = &expected->entities[index];
+		const sg_bsp_entity_semantic_t *right = &candidate->entities[index];
+
+		if (!RelocatedOffsetEqual(left->classname, right->classname, &delta,
+			&delta_known) ||
+			!RelocatedOffsetEqual(left->targetname, right->targetname, &delta,
+				&delta_known) ||
+			!RelocatedOffsetEqual(left->required_item, right->required_item,
+				&delta, &delta_known) ||
+			!RelocatedOffsetEqual(left->spawned_classname,
+				right->spawned_classname, &delta, &delta_known) ||
+			!RelocatedOffsetEqual(left->destination_map,
+				right->destination_map, &delta, &delta_known))
+			return 0;
+	}
+	for (index = 0U; index < expected->edge_count; index++)
+		if (!RelocatedOffsetEqual(expected->edges[index].name,
+			candidate->edges[index].name, &delta, &delta_known))
+			return 0;
+	if (!delta_known)
+		/* A candidate may carry an unused, caller-owned table.  It has no
+		 * semantic authority when the source projection has no string refs. */
+		return expected->string_bytes == 0U;
+	if (delta > UINT32_MAX - expected->string_bytes)
+		return 0;
+	return candidate->string_bytes == expected->string_bytes + delta;
+}
+
 static int WorldEqual(const sg_bsp_world_entity_semantics_t *left,
 	const sg_bsp_world_entity_semantics_t *right)
 {
@@ -162,29 +207,18 @@ static int WorldEqual(const sg_bsp_world_entity_semantics_t *left,
 		left->flags == right->flags && FloatEqual(left->gravity, right->gravity);
 }
 
-static int EntityEqual(const sg_bsp_entity_semantics_t *left_semantics,
-	const sg_bsp_entity_semantic_t *left,
-	const sg_bsp_entity_semantics_t *right_semantics,
+static int EntityEqual(const sg_bsp_entity_semantic_t *left,
 	const sg_bsp_entity_semantic_t *right,
 	sg_bsp_entity_semantics_fact_domain_t *domain_out)
 {
 	if (domain_out)
 		*domain_out = SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY;
-	if (!left_semantics || !left || !right_semantics || !right)
+	if (!left || !right)
 		return 0;
 	if (left->source_set_identity != right->source_set_identity ||
 		left->source_entity_ordinal != right->source_entity_ordinal ||
 		left->canonical_ordinal != right->canonical_ordinal ||
-		!StringEqual(left_semantics, left->classname, right_semantics,
-			right->classname) ||
-		!StringEqual(left_semantics, left->targetname, right_semantics,
-			right->targetname) ||
-		!StringEqual(left_semantics, left->required_item, right_semantics,
-			right->required_item) ||
-		!StringEqual(left_semantics, left->spawned_classname, right_semantics,
-			right->spawned_classname) ||
-		!StringEqual(left_semantics, left->destination_map, right_semantics,
-			right->destination_map) || left->bsp_model != right->bsp_model)
+		left->bsp_model != right->bsp_model)
 		return 0;
 	if (left->flags != right->flags)
 	{
@@ -235,15 +269,19 @@ static int EntityEqual(const sg_bsp_entity_semantics_t *left_semantics,
 	return 1;
 }
 
-static int EdgeEqual(const sg_bsp_entity_semantics_t *left_semantics,
-	const sg_bsp_entity_semantic_edge_t *left,
-	const sg_bsp_entity_semantics_t *right_semantics,
+static int EdgeEqual(const sg_bsp_entity_semantic_edge_t *left,
 	const sg_bsp_entity_semantic_edge_t *right)
 {
 	return left && right && left->source == right->source &&
 		left->destination == right->destination && left->kind == right->kind &&
-		left->fanout_ordinal == right->fanout_ordinal &&
-		StringEqual(left_semantics, left->name, right_semantics, right->name);
+		left->fanout_ordinal == right->fanout_ordinal;
+}
+
+static int EdgeTopologyDuplicate(const sg_bsp_entity_semantic_edge_t *left,
+	const sg_bsp_entity_semantic_edge_t *right)
+{
+	return left && right && left->source == right->source &&
+		left->destination == right->destination && left->kind == right->kind;
 }
 
 static int EntityStringsValid(const sg_bsp_entity_semantics_t *semantics,
@@ -310,7 +348,6 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 			entity->source_entity_ordinal >= world->entity_byte_count ||
 			(entity->bsp_model != SG_BSP_ENTITY_MODEL_NONE &&
 				entity->bsp_model >= world->model_count) ||
-			!EntityStringsValid(candidate, entity) ||
 			!EntityValuesFinite(entity))
 		{
 			AddCount(&result->invalid_facts, 1U);
@@ -322,7 +359,7 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 			if (candidate->entities[previous].source_entity_ordinal ==
 				entity->source_entity_ordinal)
 			{
-				result->duplicate_facts++;
+				AddCount(&result->duplicate_facts, 1U);
 				SetFailure(result,
 					SG_BSP_ENTITY_SEMANTICS_AUDIT_DUPLICATE_FACT,
 					SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY, index);
@@ -332,6 +369,7 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 	for (index = 0U; index < candidate->edge_count; index++)
 	{
 		const sg_bsp_entity_semantic_edge_t *edge = &candidate->edges[index];
+		uint32_t previous;
 
 		if (edge->source >= candidate->entity_count ||
 			edge->destination >= candidate->entity_count)
@@ -343,14 +381,22 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 			return 0;
 		}
 		if (edge->kind < SG_MECH_EDGE_TARGET ||
-			edge->kind > SG_MECH_EDGE_ROUTE_TARGET ||
-			!StringOffsetValid(candidate, edge->name))
+			edge->kind > SG_MECH_EDGE_ROUTE_TARGET)
 		{
 			AddCount(&result->invalid_facts, 1U);
 			SetFailure(result, SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT,
 				SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY, index);
 			return 0;
 		}
+		for (previous = 0U; previous < index; previous++)
+			if (EdgeTopologyDuplicate(&candidate->edges[previous], edge))
+			{
+				AddCount(&result->duplicate_facts, 1U);
+				SetFailure(result,
+					SG_BSP_ENTITY_SEMANTICS_AUDIT_DUPLICATE_FACT,
+					SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY, index);
+				return 0;
+			}
 	}
 	for (index = 0U; index < candidate->entity_count; index++)
 	{
@@ -433,14 +479,68 @@ static int PublicationValid(
 		SnapshotStorageValid(&publication->snapshot, publication->model_count);
 }
 
-int SG_BspEntitySemanticsAudit(const sg_bsp_world_t *world,
+static int CompareCandidate(const sg_bsp_world_t *world,
+	const sg_bsp_entity_semantics_binding_t *binding,
+	const sg_bsp_entity_semantics_t *candidate,
+	const sg_bsp_entity_semantics_t *expected,
+	sg_bsp_entity_semantics_audit_result_t *result_out)
+{
+	uint32_t index;
+	if (candidate->entity_count != expected->entity_count)
+	{
+		CountDifference(result_out, expected->entity_count,
+			candidate->entity_count, SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY);
+		return 0;
+	}
+	if (candidate->edge_count != expected->edge_count)
+	{
+		CountDifference(result_out, expected->edge_count, candidate->edge_count,
+			SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
+		return 0;
+	}
+	if (!CandidateStorageValid(world, binding, candidate, result_out))
+		return 0;
+	if (!StringLayoutEqual(expected, candidate))
+	{
+		RecordDisagreement(result_out, SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY,
+			UINT32_MAX);
+		return 0;
+	}
+	if (!WorldEqual(&candidate->world, &expected->world))
+	{
+		RecordDisagreement(result_out, SG_BSP_ENTITY_SEMANTICS_FACT_WORLD,
+			UINT32_MAX);
+		return 0;
+	}
+	for (index = 0U; index < expected->entity_count; index++)
+	{
+		sg_bsp_entity_semantics_fact_domain_t domain;
+
+		if (!EntityEqual(&expected->entities[index],
+			&candidate->entities[index], &domain))
+		{
+			RecordDisagreement(result_out, domain, index);
+			return 0;
+		}
+	}
+	for (index = 0U; index < expected->edge_count; index++)
+		if (!EdgeEqual(&expected->edges[index], &candidate->edges[index]))
+		{
+			RecordDisagreement(result_out,
+				SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY, index);
+			return 0;
+		}
+	return 1;
+}
+
+int SG_BspEntitySemanticsAudit(
+	const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_audit_result_t *result_out)
 {
 	sg_bsp_entity_semantics_t *expected = NULL;
-	uint32_t index;
-	int success = 0;
+	int success;
 
 	if (result_out)
 	{
@@ -449,70 +549,17 @@ int SG_BspEntitySemanticsAudit(const sg_bsp_world_t *world,
 		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_NONE;
 		result_out->record = UINT32_MAX;
 	}
-	if (!result_out || !world || !binding || !candidate)
+	if (!result_out || !authority || !binding || !candidate)
 	{
 		if (result_out)
 			result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_ARGUMENT;
 		return 0;
 	}
-	if (!BindingValid(binding))
-	{
-		SetFailure(result_out, SG_BSP_ENTITY_SEMANTICS_AUDIT_IDENTITY_MISMATCH,
-			SG_BSP_ENTITY_SEMANTICS_FACT_IDENTITY, UINT32_MAX);
+	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, candidate,
+		&expected, result_out))
 		return 0;
-	}
-	if (candidate->source_set_identity != binding->source_set_identity ||
-		candidate->world.source_set_identity != binding->source_set_identity)
-	{
-		SetFailure(result_out, SG_BSP_ENTITY_SEMANTICS_AUDIT_IDENTITY_MISMATCH,
-			SG_BSP_ENTITY_SEMANTICS_FACT_IDENTITY, UINT32_MAX);
-		return 0;
-	}
-	if (!SG_BspEntitySemanticsAuditOwned(world, binding, candidate, &expected,
-		result_out))
-		return 0;
-	if (candidate->entity_count != expected->entity_count)
-	{
-		CountDifference(result_out, expected->entity_count,
-			candidate->entity_count, SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY);
-		goto done;
-	}
-	if (candidate->edge_count != expected->edge_count)
-	{
-		CountDifference(result_out, expected->edge_count, candidate->edge_count,
-			SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
-		goto done;
-	}
-	if (!CandidateStorageValid(world, binding, candidate, result_out))
-		goto done;
-	if (!WorldEqual(&candidate->world, &expected->world))
-	{
-		RecordDisagreement(result_out, SG_BSP_ENTITY_SEMANTICS_FACT_WORLD,
-			UINT32_MAX);
-		goto done;
-	}
-	for (index = 0U; index < expected->entity_count; index++)
-	{
-		sg_bsp_entity_semantics_fact_domain_t domain;
-
-		if (!EntityEqual(expected, &expected->entities[index], candidate,
-			&candidate->entities[index], &domain))
-		{
-			RecordDisagreement(result_out, domain, index);
-			goto done;
-		}
-	}
-	for (index = 0U; index < expected->edge_count; index++)
-		if (!EdgeEqual(expected, &expected->edges[index], candidate,
-			&candidate->edges[index]))
-		{
-			RecordDisagreement(result_out,
-				SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY, index);
-			goto done;
-		}
-	success = 1;
-
-done:
+	success = CompareCandidate(authority->world, binding, candidate, expected,
+		result_out);
 	SG_BspEntitySemanticsDestroy(expected);
 	return success;
 }
@@ -564,13 +611,15 @@ failed:
 	return 0;
 }
 
-int SG_BspEntitySemanticsPublicationIssue(const sg_bsp_world_t *world,
+int SG_BspEntitySemanticsPublicationIssue(
+	const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_publication_t **publication_out,
 	sg_bsp_entity_semantics_audit_result_t *result_out)
 {
 	sg_bsp_entity_semantics_publication_t *publication;
+	sg_bsp_entity_semantics_t *expected = NULL;
 
 	if (!publication_out || *publication_out || !result_out)
 	{
@@ -583,12 +632,21 @@ int SG_BspEntitySemanticsPublicationIssue(const sg_bsp_world_t *world,
 		}
 		return 0;
 	}
-	if (!SG_BspEntitySemanticsAudit(world, binding, candidate, result_out))
+	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, candidate,
+		&expected, result_out) ||
+		!CompareCandidate(authority->world, binding, candidate, expected,
+			result_out))
+	{
+		SG_BspEntitySemanticsDestroy(expected);
 		return 0;
+	}
+	/* The publication owns a fresh source reconstruction.  Candidate string
+	 * extents are never copied, so trailing caller storage cannot escape audit. */
 	publication = calloc(1U, sizeof(*publication));
 	if (!publication)
 	{
 		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_OUT_OF_MEMORY;
+		SG_BspEntitySemanticsDestroy(expected);
 		return 0;
 	}
 	publication->magic = SG_BSP_ENTITY_SEMANTICS_PUBLICATION_MAGIC;
@@ -596,13 +654,15 @@ int SG_BspEntitySemanticsPublicationIssue(const sg_bsp_world_t *world,
 	publication->self = publication;
 	publication->binding = *binding;
 	publication->completeness = result_out->completeness;
-	publication->model_count = world->model_count;
-	if (!CopySnapshot(candidate, &publication->snapshot))
+	publication->model_count = authority->world->model_count;
+	if (!CopySnapshot(expected, &publication->snapshot))
 	{
 		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_OUT_OF_MEMORY;
+		SG_BspEntitySemanticsDestroy(expected);
 		free(publication);
 		return 0;
 	}
+	SG_BspEntitySemanticsDestroy(expected);
 	if (!PublicationValid(publication))
 	{
 		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT;

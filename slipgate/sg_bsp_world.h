@@ -14,6 +14,13 @@
 #define SG_BSP_MAX_CLUSTERS UINT32_C(65536)
 #define SG_BSP_MAX_AREAS UINT32_C(256)
 #define SG_BSP_MAX_MODELS UINT32_C(8190)
+#define SG_BSP_CONTENT_ID_BYTES UINT32_C(32)
+
+/* SHA-256 of the exact bytes accepted by SG_BspWorldLoadMemory/File. */
+typedef struct sg_bsp_content_identity_s
+{
+	uint8_t bytes[SG_BSP_CONTENT_ID_BYTES];
+} sg_bsp_content_identity_t;
 
 typedef enum sg_bsp_lump_e
 {
@@ -180,6 +187,8 @@ typedef struct sg_bsp_areaportal_s
 
 typedef struct sg_bsp_world_s
 {
+	/* Authenticated by the BSP loader before any borrowed authority is built. */
+	sg_bsp_content_identity_t content_identity;
 	uint8_t *entities;
 	uint32_t entity_byte_count;
 	sg_bsp_plane_t *planes;

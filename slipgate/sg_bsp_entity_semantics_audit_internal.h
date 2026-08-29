@@ -3,7 +3,8 @@
 
 #include "sg_bsp_entity_semantics_publication.h"
 
-int SG_BspEntitySemanticsAuditOwned(const sg_bsp_world_t *world,
+int SG_BspEntitySemanticsAuditOwned(
+	const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_t **owned_out,
