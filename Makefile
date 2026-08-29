@@ -4039,11 +4039,15 @@ rune-naming-test: $(RUNE_NAMING_TEST)
 	$(Q)python3 $(RUNE_NAMING_TEST)
 
 rune-v2-independent-reader-test: tools/runev2read.c tools/runev2read.py \
+		tools/runev2makecheck.c \
 		tests/sg_rune_v2_codec_probe.c tests/sg_rune_v2_fixture_writer.c \
 		tests/test_rune_v2_independent_readers.py \
+		tests/test_rune_v2_make_independent_reader.py \
+		tests/run_rune_v2_make_independent_reader_test.sh \
 		tests/support/sg_rune_v2_fixture.h \
 		slipgate/sg_rune_v2_artifact_loader.c slipgate/sg_rune_v2_codec.c \
-		slipgate/sg_rune_model.c
+		slipgate/sg_rune_model.c slipgate/sg_rune_v2_exact_snapshot.c \
+		slipgate/sg_rune_v2_content_identity.c
 	$(E) [TEST] RUNE v2 independent readers
 	$(Q)set -e; \
 	tmp=$$(mktemp -d); \
@@ -4077,7 +4081,8 @@ rune-v2-independent-reader-test: tools/runev2read.c tools/runev2read.py \
 	RUNE_V2_C_READER="$$tmp/reader-san" \
 	RUNE_V2_CODEC_PROBE="$$tmp/probe-san" \
 	RUNE_V2_FIXTURE_WRITER="$$tmp/writer-san" \
-		python3 -B tests/test_rune_v2_independent_readers.py
+		python3 -B tests/test_rune_v2_independent_readers.py; \
+	sh tests/run_rune_v2_make_independent_reader_test.sh "$(CC)"
 
 rune-artifact-test: $(RUNE_PYTHON_TESTS)
 	$(E) [TEST] rune artifact
