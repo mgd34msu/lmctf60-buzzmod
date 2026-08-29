@@ -1,7 +1,11 @@
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 #include "g_local.h"
 #include "slipgate/sg_cvars.h"
@@ -20,6 +24,13 @@ static gclient_t clients[2];
 static cvar_t enabled;
 static cvar_t trace_directory;
 static cvar_t game_directory;
+static cvar_t airaccelerate;
+static cvar_t gravity;
+static cvar_t maxvelocity;
+static cvar_t funky_gravity;
+cvar_t *sv_gravity = &gravity;
+cvar_t *sv_maxvelocity = &maxvelocity;
+cvar_t *want_funky_gravity = &funky_gravity;
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 static int inject_write_failure;
 
@@ -49,6 +60,8 @@ static cvar_t *TestCvar(char *name, char *value, int flags)
 	(void)flags;
 	if (strcmp(name, "gamedir") == 0)
 		return &game_directory;
+	if (strcmp(name, "sv_airaccelerate") == 0)
+		return &airaccelerate;
 	return NULL;
 }
 
@@ -134,6 +147,14 @@ static void SetupPlayer(edict_t *player, gclient_t *client,
 	player->inuse = true;
 	player->client = client;
 	player->viewheight = 22;
+	player->s.origin[0] = 1.1f;
+	player->velocity[0] = 2.2f;
+	player->mins[0] = -16.0f;
+	player->mins[1] = -16.0f;
+	player->mins[2] = -24.0f;
+	player->maxs[0] = 16.0f;
+	player->maxs[1] = 16.0f;
+	player->maxs[2] = 32.0f;
 	client->ctf.ctfid = generation;
 	client->pers.hand = RIGHT_HANDED;
 	client->v_angle[YAW] = 90.0f;
@@ -153,6 +174,16 @@ static void SetupPmove(pmove_state_t *before, pmove_t *after)
 	after->cmd.buttons = BUTTON_ATTACK;
 	after->cmd.angles[YAW] = 16384;
 	after->cmd.forwardmove = 400;
+	after->viewangles[0] = 1.1f;
+	after->viewangles[1] = 2.2f;
+	after->viewangles[2] = 3.3f;
+	after->viewheight = 22.0f;
+	after->mins[0] = -16.0f;
+	after->mins[1] = -16.0f;
+	after->mins[2] = -24.0f;
+	after->maxs[0] = 16.0f;
+	after->maxs[1] = 16.0f;
+	after->maxs[2] = 32.0f;
 }
 
 static int ObserveLifecycle(edict_t *player, edict_t *hook,
@@ -264,6 +295,61 @@ static int RunWriteFailure(const char *directory)
 }
 #endif
 
+#ifndef _WIN32
+static int RunFileSizeFailure(const char *directory)
+{
+	struct rlimit original, limited;
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	int unchanged;
+	(void)directory;
+
+	if (getrlimit(RLIMIT_FSIZE, &original) != 0)
+		return 50;
+	limited = original;
+	limited.rlim_cur = 1;
+	if (setrlimit(RLIMIT_FSIZE, &limited) != 0)
+		return 51;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	memset(hook, 0, sizeof(*hook));
+	hook->inuse = true;
+	hook->owner = player;
+	hook->hook_target = &entities[0];
+	player->client->hook = hook;
+	SG_HumanTraceNewLevel();
+	unchanged = ObserveLifecycle(player, hook, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (setrlimit(RLIMIT_FSIZE, &original) != 0)
+		return 52;
+	return unchanged ? 0 : 53;
+}
+#endif
+
+static int RunCollision(const char *directory)
+{
+	char path[1024];
+	FILE *occupied;
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+
+	if (!TracePath(path, sizeof(path), directory, 0U))
+		return 60;
+	occupied = fopen(path, "wb");
+	if (!occupied || fputs("occupied\n", occupied) < 0 ||
+	    fclose(occupied) != 0)
+		return 61;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	return CountRecords(path, NULL) == 1 ? 0 : 62;
+}
+
 int main(int argc, char **argv)
 {
 	char path0[1024], path1[1024], path2[1024];
@@ -281,6 +367,10 @@ int main(int argc, char **argv)
 	    !TracePath(path2, sizeof(path2), argv[1], 2U))
 		return 2;
 	enabled.value = 1.0f;
+	airaccelerate.value = 1.5f;
+	gravity.value = 800.0f;
+	maxvelocity.value = 2000.0f;
+	funky_gravity.value = 0.0f;
 	trace_directory.string = argv[1];
 	game_directory.string = argv[1];
 	gi.cvar = TestCvar;
@@ -291,6 +381,12 @@ int main(int argc, char **argv)
 		return RunCapacityFailure(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "rotation") == 0)
 		return RunRotation(argv[1]);
+#ifndef _WIN32
+	if (argc == 3 && strcmp(argv[2], "fsize") == 0)
+		return RunFileSizeFailure(argv[1]);
+#endif
+	if (argc == 3 && strcmp(argv[2], "collision") == 0)
+		return RunCollision(argv[1]);
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 	if (argc == 3 && strcmp(argv[2], "writefail") == 0)
 		return RunWriteFailure(argv[1]);
@@ -303,7 +399,8 @@ int main(int argc, char **argv)
 	hook1->inuse = true;
 	hook1->owner = player1;
 	hook1->hook_target = &entities[0];
-	hook1->s.origin[0] = 64.0f;
+	hook1->s.origin[0] = 64.1f;
+	hook1->velocity[0] = 5.2f;
 	player1->client->hook = hook1;
 	hook2->inuse = true;
 	hook2->owner = player2;

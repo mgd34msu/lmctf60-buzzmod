@@ -130,6 +130,28 @@ class HumanTraceIntegrationTest(unittest.TestCase):
         self.assertIn("O_EXCL", source)
         self.assertNotIn('fopen(path, "a")', source)
 
+    def test_v3_keeps_exact_runtime_values_and_physics_identity(self) -> None:
+        source = (ROOT / "slipgate" / "sg_human_trace.c").read_text(
+            encoding="utf-8")
+
+        self.assertNotIn("HumanTraceVectorQ8", source)
+        self.assertNotIn("origin_q8", source)
+        self.assertNotIn("velocity_q8", source)
+        for field in (
+                "viewangles_bits", "viewheight_bits", "mins_bits",
+                "maxs_bits", "gravity_bits", "airaccelerate_bits",
+                "maxvelocity_bits", "pmove_substep_ms",
+                "server_frame_ms", "physics_flags"):
+            self.assertIn(field, source)
+
+    def test_v3_integration_runs_in_both_standard_targets(self) -> None:
+        for name in ("GNUmakefile", "Makefile"):
+            source = (ROOT / name).read_text(encoding="utf-8")
+            assignment = source[source.index("HUMAN_TRACE_TESTS"):
+                                source.index("HUMAN_TRACE_HOOK_TEST_BIN")]
+            self.assertIn("tests/test_human_trace_v3_integration.py",
+                          assignment, name)
+
 
 if __name__ == "__main__":
     unittest.main()

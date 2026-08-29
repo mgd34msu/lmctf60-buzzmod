@@ -83,6 +83,64 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             [record["order"] for record in first], [1, 2, 3, 4, 5, 6]
         )
 
+        header = sessions[0][0]
+        self.assertEqual(header["gravity_bits"], 0x44480000)
+        self.assertEqual(header["airaccelerate_bits"], 0x3FC00000)
+        self.assertEqual(header["maxvelocity_bits"], 0x44FA0000)
+        self.assertEqual(header["pmove_substep_ms"], 25)
+        self.assertEqual(header["server_frame_ms"], 100)
+        self.assertEqual(header["physics_flags"], 0)
+
+        step = sessions[0][1]
+        self.assertEqual(step["viewangles_bits"],
+                         [0x3F8CCCCD, 0x400CCCCD, 0x40533333])
+        self.assertEqual(step["viewheight_bits"], 0x41B00000)
+        self.assertEqual(step["mins_bits"],
+                         [0xC1800000, 0xC1800000, 0xC1C00000])
+        self.assertEqual(step["maxs_bits"],
+                         [0x41800000, 0x41800000, 0x42000000])
+
+        hook_fire = sessions[0][2]
+        self.assertEqual(hook_fire["origin_bits"][0], 0x3F8CCCCD)
+        self.assertEqual(hook_fire["velocity_bits"][0], 0x400CCCCD)
+        self.assertEqual(hook_fire["hook_origin_bits"][0], 0x42803333)
+        self.assertEqual(hook_fire["hook_velocity_bits"][0], 0x40A66666)
+
+    @unittest.skipIf(os.name == "nt", "RLIMIT_FSIZE is POSIX-only")
+    def test_file_size_limit_disables_capture_without_sigxfsz(self) -> None:
+        subprocess.run(
+            ["make", "-f", "GNUmakefile", BINARY.name],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "fsize"], cwd=ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_exclusive_create_collision_retries_a_new_session(self) -> None:
+        subprocess.run(
+            ["make", "-f", "GNUmakefile", BINARY.name],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(
+                [str(BINARY), temporary, "collision"], cwd=ROOT,
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            files = sorted(Path(temporary).glob(f"{PREFIX}*.jsonl"))
+            records = [read_valid_prefix(path) for path in files]
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[1][0]["session"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -433,7 +433,8 @@ HUMAN_SPEED_TEST_OBJS := .sg_human_speed_test.make.o \
 HUMAN_SPEED_TEST_DEPS := $(HUMAN_SPEED_TEST_OBJS:.o=.d)
 HUMAN_SPEED_INTEGRATION_TEST := tests/test_human_speed_integration.py
 HUMAN_TRACE_TESTS := tests/test_humantrace.py \
-	tests/test_human_trace_integration.py
+	tests/test_human_trace_integration.py \
+	tests/test_human_trace_v3_integration.py
 HUMAN_TRACE_HOOK_TEST_BIN := sg_human_trace_hook_test.make
 HUMAN_TRACE_HOOK_TEST_SOURCE := tests/sg_human_trace_hook_test.c
 HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS := \
@@ -3728,7 +3729,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
 	$(Q)python3 -B -m unittest tests.test_humantrace \
-		tests.test_human_trace_integration
+		tests.test_human_trace_integration \
+		tests.test_human_trace_v3_integration
 	$(Q)tmp=$$(mktemp -d); \
 		trap 'rm -f "$$tmp/humantrace-tracehook.jsonl"; rmdir "$$tmp"' \
 			EXIT HUP INT TERM; \
@@ -4378,7 +4380,8 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)python3 -B -m unittest tests.test_humantrace \
-		tests.test_human_trace_integration
+		tests.test_human_trace_integration \
+		tests.test_human_trace_v3_integration
 	$(Q)tmp=$$(mktemp -d); \
 		trap 'rm -f "$$tmp/humantrace-tracehook.jsonl"; rmdir "$$tmp"' \
 			EXIT HUP INT TERM; \
