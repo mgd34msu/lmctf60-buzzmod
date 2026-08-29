@@ -101,6 +101,16 @@ class RuneV2MakeIndependentReaderTests(unittest.TestCase):
         result = self._run_make(data)
         self.assertEqual(1, result.returncode, (result.stdout, result.stderr))
 
+    def _reject_like_production(self, data: bytes) -> None:
+        artifact = self._write(data)
+        production = subprocess.run(self._probe_command(artifact), text=True,
+                                    capture_output=True, check=False)
+        reader = subprocess.run(self._make_command(self.reader, artifact, data),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(1, production.returncode,
+                         (production.stdout, production.stderr))
+        self.assertEqual(1, reader.returncode, (reader.stdout, reader.stderr))
+
     def _probe_command(self, artifact: Path) -> list[str]:
         return [str(self.codec_probe), "--generation", str(GENERATION),
                 "--bsp-id", BSP_ID.hex(), "--schema-id", SCHEMA_ID.hex(),
@@ -175,6 +185,35 @@ class RuneV2MakeIndependentReaderTests(unittest.TestCase):
         wrong_identity = bytes(reversed(hashlib.sha256(self.valid).digest()))
         result = self._run_make(self.valid, artifact_identity=wrong_identity)
         self.assertEqual(1, result.returncode, (result.stdout, result.stderr))
+
+    def test_rebound_private_semantic_mutants_match_production_rejection(self) -> None:
+        malformed = bytearray(self.valid)
+        portal_offset, _ = _section(malformed, 6)
+        struct.pack_into("<I", malformed, portal_offset + 152, 99)
+        _fix_checksums(malformed)
+        self._reject_like_production(bytes(malformed))
+
+        malformed = bytearray(self.valid)
+        model_offset, _ = _section(malformed, 0)
+        struct.pack_into("<I", malformed, model_offset + 236, 1)
+        _fix_checksums(malformed)
+        self._reject_like_production(bytes(malformed))
+
+        malformed = bytearray(self.valid)
+        planes_offset, _ = _section(malformed, 1)
+        first = bytes(malformed[planes_offset:planes_offset + 64])
+        second = bytes(malformed[planes_offset + 64:planes_offset + 128])
+        malformed[planes_offset:planes_offset + 64] = second
+        malformed[planes_offset + 64:planes_offset + 128] = first
+        _fix_checksums(malformed)
+        self._reject_like_production(bytes(malformed))
+
+        malformed = bytearray(self.valid)
+        kernel_offset, _ = _section(malformed, 9)
+        malformed[kernel_offset + 72:kernel_offset + 96] = \
+            malformed[kernel_offset + 48:kernel_offset + 72]
+        _fix_checksums(malformed)
+        self._reject_like_production(bytes(malformed))
 
     def test_corrupted_reader_disagrees_with_production_probe(self) -> None:
         malformed = bytearray(self.valid)

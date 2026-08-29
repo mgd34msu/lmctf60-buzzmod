@@ -2,6 +2,7 @@
 #include "slipgate/sg_rune_v2_exact_snapshot.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +18,11 @@
 #define RV2M_MAX_ARTIFACT_BYTES UINT64_C(4294967296)
 #define RV2M_ID_BYTES 32U
 #define RV2M_NONE UINT64_MAX
+#define RV2M_CONTENTS_KNOWN UINT32_C(0x1fff)
+#define RV2M_CELL_SEMANTICS_KNOWN UINT32_C(0x0f)
+#define RV2M_SURFACE_SEMANTICS_KNOWN UINT32_C(0x1f)
+#define RV2M_PORTAL_FLAGS_KNOWN UINT32_C(0x0f)
+#define RV2M_KERNEL_FLAGS_KNOWN UINT32_C(0x1f)
 
 typedef struct rv2m_section_s
 {
@@ -33,12 +39,23 @@ typedef struct rv2m_id_s
 	uint64_t low;
 } rv2m_id_t;
 
+typedef struct rv2m_order_s
+{
+	uint64_t source;
+	uint32_t domain;
+	uint32_t source_index;
+	uint32_t ordinal;
+	uint32_t variant;
+} rv2m_order_t;
+
 typedef struct rv2m_context_s
 {
 	const unsigned char *bytes;
 	size_t size;
 	uint64_t generation;
 	uint64_t source;
+	uint64_t physics_id;
+	float physics[8];
 	rv2m_section_t section[RV2M_SECTION_COUNT];
 } rv2m_context_t;
 
@@ -50,6 +67,8 @@ typedef struct rv2m_expected_s
 	unsigned char artifact[RV2M_ID_BYTES];
 	unsigned char exact_artifact[RV2M_ID_BYTES];
 } rv2m_expected_t;
+
+static int RV2MakeBounds(const unsigned char *bytes);
 
 static const uint32_t rv2m_record_bytes[RV2M_SECTION_COUNT] = {
 	256U, 64U, 12U, 136U, 136U, 164U, 172U, 132U, 104U, 332U,
@@ -83,6 +102,15 @@ static uint64_t RV2MakeReadU64(const unsigned char *bytes)
 
 	for (index = 0U; index < 8U; index++)
 		value |= (uint64_t)bytes[index] << (index * 8U);
+	return value;
+}
+
+static float RV2MakeReadF32(const unsigned char *bytes)
+{
+	uint32_t bits = RV2MakeReadU32(bytes);
+	float value;
+
+	memcpy(&value, &bits, sizeof(value));
 	return value;
 }
 
@@ -209,6 +237,22 @@ static int RV2MakeReference(const rv2m_context_t *context, uint32_t section,
 		RV2MakeFindId(context, section, wanted);
 }
 
+static int RV2MakeFindIdIndex(const rv2m_context_t *context, uint32_t section,
+	rv2m_id_t wanted, uint32_t *index_out)
+{
+	uint32_t index;
+
+	for (index = 0U; index < context->section[section].count; index++)
+		if (RV2MakeIdEqual(RV2MakeId(RV2MakeRecord(context, section, index)),
+			wanted))
+		{
+			if (index_out)
+				*index_out = index;
+			return 1;
+		}
+	return 0;
+}
+
 static int RV2MakeParseHeader(rv2m_context_t *context)
 {
 	const unsigned char *bytes = context->bytes;
@@ -292,6 +336,8 @@ static int RV2MakeValidateModel(rv2m_context_t *context)
 	const unsigned char *model = RV2MakeRecord(context, 0U, 0U);
 	uint32_t cells = context->section[5].count;
 	uint32_t portals = context->section[6].count;
+	uint64_t producer;
+	unsigned int index;
 
 	if (RV2MakeReadU16(model) != 2U || RV2MakeReadU16(model + 2U) != 0U ||
 		RV2MakeReadU32(model + 4U) != UINT32_C(0x32554e52) ||
@@ -301,19 +347,63 @@ static int RV2MakeValidateModel(rv2m_context_t *context)
 		RV2MakeReadU32(model + 188U) != 0U ||
 		RV2MakeReadU32(model + 252U) != 0U)
 		return 0;
+	context->physics_id = RV2MakeReadU64(model + 32U);
 	context->source = RV2MakeReadU64(model + 40U);
+	producer = RV2MakeReadU64(model + 56U);
 	if (context->source == 0U || context->source == RV2M_NONE ||
 		RV2MakeReadU64(model + 16U) == 0U ||
-		RV2MakeReadU64(model + 24U) == 0U ||
-		RV2MakeReadU64(model + 32U) == 0U ||
-		RV2MakeReadU64(model + 48U) == 0U ||
-		RV2MakeReadU64(model + 56U) == 0U ||
+		RV2MakeReadU64(model + 24U) == 0U || context->physics_id == 0U ||
+		RV2MakeReadU64(model + 48U) == 0U || producer == 0U ||
+		!RV2MakeBounds(model + 64U) || !RV2MakeBounds(model + 88U))
+		return 0;
+	for (index = 0U; index < 8U; index++)
+	{
+		context->physics[index] = RV2MakeReadF32(model + 112U + index * 4U);
+		if (!isfinite(context->physics[index]) ||
+			(index < 7U && context->physics[index] < 0.0f))
+			return 0;
+	}
+	if (context->physics[7] <= 0.0f || RV2MakeReadU32(model + 144U) == 0U ||
+		RV2MakeReadU32(model + 148U) == 0U ||
+		RV2MakeReadU32(model + 148U) > RV2MakeReadU32(model + 144U) ||
+		RV2MakeReadU32(model + 152U) != 2U ||
+		RV2MakeReadU32(model + 156U) != 0U ||
 		RV2MakeReadU32(model + 160U) != cells ||
 		RV2MakeReadU32(model + 164U) != portals ||
 		RV2MakeReadU32(model + 168U) != cells ||
-		RV2MakeReadU32(model + 172U) != portals || cells == 0U)
+		RV2MakeReadU32(model + 172U) != portals || cells == 0U ||
+		RV2MakeReadU32(model + 176U) != UINT32_MAX ||
+		RV2MakeReadU32(model + 180U) != 1U ||
+		RV2MakeReadU32(model + 184U) != 0U ||
+		RV2MakeReadU64(model + 192U) == 0U ||
+		RV2MakeReadU64(model + 192U) == producer ||
+		RV2MakeReadU64(model + 200U) != RV2MakeReadU64(model + 16U) ||
+		RV2MakeReadU64(model + 208U) != context->source ||
+		RV2MakeReadU64(model + 216U) == 0U ||
+		RV2MakeReadU32(model + 224U) == 0U ||
+		RV2MakeReadU32(model + 228U) != cells ||
+		RV2MakeReadU32(model + 232U) != portals ||
+		RV2MakeReadU32(model + 236U) != 0U ||
+		RV2MakeReadU32(model + 240U) != 0U ||
+		RV2MakeReadU32(model + 244U) != 0U ||
+		RV2MakeReadU32(model + 248U) != 0U)
 		return 0;
 	return 1;
+}
+
+static int RV2MakeOrderCompare(rv2m_order_t left, rv2m_order_t right)
+{
+	if (left.source != right.source)
+		return left.source < right.source ? -1 : 1;
+	if (left.domain != right.domain)
+		return left.domain < right.domain ? -1 : 1;
+	if (left.source_index != right.source_index)
+		return left.source_index < right.source_index ? -1 : 1;
+	if (left.ordinal != right.ordinal)
+		return left.ordinal < right.ordinal ? -1 : 1;
+	if (left.variant != right.variant)
+		return left.variant < right.variant ? -1 : 1;
+	return 0;
 }
 
 static int RV2MakeValidateIdentities(const rv2m_context_t *context)
@@ -324,6 +414,8 @@ static int RV2MakeValidateIdentities(const rv2m_context_t *context)
 	{
 		uint32_t index;
 		uint32_t domain = rv2m_domains[section];
+		rv2m_order_t previous_order = { 0 };
+		int have_previous = 0;
 
 		if (domain == 0U)
 			continue;
@@ -336,13 +428,20 @@ static int RV2MakeValidateIdentities(const rv2m_context_t *context)
 			uint32_t source_index = RV2MakeReadU32(record + 36U);
 			uint32_t ordinal = RV2MakeReadU32(record + 40U);
 			uint32_t variant = RV2MakeReadU32(record + 44U);
+			rv2m_order_t order = {
+				source, order_domain, source_index, ordinal, variant
+			};
 
 			if (id.source != context->source || source != context->source ||
 				order_domain != domain || source_index == UINT32_MAX ||
 				ordinal == UINT32_MAX || variant == UINT32_MAX ||
 				id.high != ((uint64_t)domain << 32 | source_index) ||
-				id.low != ((uint64_t)ordinal << 32 | variant))
+				id.low != ((uint64_t)ordinal << 32 | variant) ||
+				(have_previous &&
+					RV2MakeOrderCompare(previous_order, order) >= 0))
 				return 0;
+			previous_order = order;
+			have_previous = 1;
 		}
 	}
 	return 1;
@@ -462,6 +561,602 @@ static int RV2MakeValidateReferences(const rv2m_context_t *context)
 	return 1;
 }
 
+static int RV2MakeFinite(const unsigned char *bytes, unsigned int count)
+{
+	unsigned int index;
+
+	for (index = 0U; index < count; index++)
+		if (!isfinite(RV2MakeReadF32(bytes + index * 4U)))
+			return 0;
+	return 1;
+}
+
+static int RV2MakeInterval(const unsigned char *bytes, int nonnegative)
+{
+	float minimum;
+	float maximum;
+
+	if (!RV2MakeFinite(bytes, 2U))
+		return 0;
+	minimum = RV2MakeReadF32(bytes);
+	maximum = RV2MakeReadF32(bytes + 4U);
+	return minimum <= maximum && (!nonnegative || minimum >= 0.0f);
+}
+
+static int RV2MakeInterval3(const unsigned char *bytes, int nonnegative)
+{
+	return RV2MakeInterval(bytes, nonnegative) &&
+		RV2MakeInterval(bytes + 8U, nonnegative) &&
+		RV2MakeInterval(bytes + 16U, nonnegative);
+}
+
+static int RV2MakeBounds(const unsigned char *bytes)
+{
+	unsigned int axis;
+
+	if (!RV2MakeFinite(bytes, 6U))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (RV2MakeReadF32(bytes + axis * 4U) >=
+			RV2MakeReadF32(bytes + 12U + axis * 4U))
+			return 0;
+	return 1;
+}
+
+static int RV2MakePointInside(const unsigned char *point,
+	const unsigned char *bounds)
+{
+	unsigned int axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float value = RV2MakeReadF32(point + axis * 4U);
+
+		if (value < RV2MakeReadF32(bounds + axis * 4U) ||
+			value > RV2MakeReadF32(bounds + 12U + axis * 4U))
+			return 0;
+	}
+	return 1;
+}
+
+static int RV2MakeGeometry(const unsigned char *bytes, uint64_t source)
+{
+	return RV2MakeReadU64(bytes) == source &&
+		RV2MakeReadU32(bytes + 8U) != UINT32_MAX &&
+		RV2MakeReadU32(bytes + 12U) != UINT32_MAX;
+}
+
+static int RV2MakeEntity(const unsigned char *bytes)
+{
+	return (RV2MakeReadU32(bytes) == UINT32_MAX) ==
+		(RV2MakeReadU32(bytes + 4U) == UINT32_MAX);
+}
+
+static int RV2MakePhaseInCell(const rv2m_context_t *context,
+	uint32_t cell, uint32_t phase)
+{
+	const unsigned char *record = RV2MakeRecord(context, 5U, cell);
+	uint32_t first = RV2MakeReadU32(record + 96U);
+	uint32_t count = RV2MakeReadU32(record + 100U);
+
+	return phase >= first && phase - first < count;
+}
+
+static int RV2MakeIntervalEqual(const unsigned char *left,
+	const unsigned char *right)
+{
+	return RV2MakeReadF32(left) == RV2MakeReadF32(right) &&
+		RV2MakeReadF32(left + 4U) == RV2MakeReadF32(right + 4U);
+}
+
+static int RV2MakeInterval3Equal(const unsigned char *left,
+	const unsigned char *right)
+{
+	return RV2MakeIntervalEqual(left, right) &&
+		RV2MakeIntervalEqual(left + 8U, right + 8U) &&
+		RV2MakeIntervalEqual(left + 16U, right + 16U);
+}
+
+static int RV2MakePhaseDiscreteEqual(const unsigned char *left,
+	const unsigned char *right)
+{
+	return RV2MakeReadU32(left + 48U) == RV2MakeReadU32(right + 48U) &&
+		RV2MakeReadU32(left + 52U) == RV2MakeReadU32(right + 52U) &&
+		RV2MakeReadU32(left + 56U) == RV2MakeReadU32(right + 56U) &&
+		RV2MakeReadU32(left + 60U) == RV2MakeReadU32(right + 60U) &&
+		RV2MakeReadU32(left + 64U) == RV2MakeReadU32(right + 64U) &&
+		RV2MakeReadU32(left + 68U) == RV2MakeReadU32(right + 68U) &&
+		RV2MakeIdEqual(RV2MakeId(left + 72U), RV2MakeId(right + 72U));
+}
+
+static int RV2MakePhaseClockEqual(const unsigned char *left,
+	const unsigned char *right)
+{
+	return RV2MakeReadU32(left + 128U) == RV2MakeReadU32(right + 128U) &&
+		RV2MakeReadU32(left + 132U) == RV2MakeReadU32(right + 132U);
+}
+
+static int RV2MakePhaseEqualExceptStance(const unsigned char *left,
+	const unsigned char *right)
+{
+	return RV2MakeReadU32(left + 52U) == RV2MakeReadU32(right + 52U) &&
+		RV2MakeReadU32(left + 56U) == RV2MakeReadU32(right + 56U) &&
+		RV2MakeReadU32(left + 60U) == RV2MakeReadU32(right + 60U) &&
+		RV2MakeReadU32(left + 64U) == RV2MakeReadU32(right + 64U) &&
+		RV2MakeReadU32(left + 68U) == RV2MakeReadU32(right + 68U) &&
+		RV2MakeIdEqual(RV2MakeId(left + 72U), RV2MakeId(right + 72U)) &&
+		RV2MakeInterval3Equal(left + 96U, right + 96U) &&
+		RV2MakeIntervalEqual(left + 120U, right + 120U) &&
+		RV2MakePhaseClockEqual(left, right);
+}
+
+static int RV2MakeTransitionSemantics(uint32_t kind,
+	const unsigned char *source, const unsigned char *destination)
+{
+	if (RV2MakeReadU32(source + 60U) != RV2MakeReadU32(destination + 60U))
+		return 0;
+	switch (kind)
+	{
+	case 1U:
+		return RV2MakePhaseEqualExceptStance(source, destination) &&
+			RV2MakeReadU32(source + 48U) != RV2MakeReadU32(destination + 48U);
+	case 2U:
+		return RV2MakePhaseDiscreteEqual(source, destination) &&
+			RV2MakePhaseClockEqual(source, destination) &&
+			!RV2MakeInterval3Equal(source + 96U, destination + 96U) &&
+			RV2MakeIntervalEqual(source + 120U, destination + 120U);
+	case 3U:
+		return RV2MakePhaseDiscreteEqual(source, destination) &&
+			RV2MakePhaseClockEqual(source, destination) &&
+			RV2MakeInterval3Equal(source + 96U, destination + 96U) &&
+			!RV2MakeIntervalEqual(source + 120U, destination + 120U);
+	case 4U:
+		return RV2MakePhaseDiscreteEqual(source, destination) &&
+			RV2MakePhaseClockEqual(source, destination) &&
+			RV2MakeReadU32(source + 56U) == 2U &&
+			RV2MakeInterval3Equal(source + 96U, destination + 96U) &&
+			!RV2MakeIntervalEqual(source + 120U, destination + 120U);
+	case 5U:
+		return RV2MakeReadU32(source + 52U) == 0U &&
+			RV2MakeReadU32(source + 56U) != 0U &&
+			RV2MakeReadU32(destination + 52U) == 1U &&
+			RV2MakeReadU32(destination + 56U) == 0U &&
+			RV2MakeReadU32(source + 48U) == RV2MakeReadU32(destination + 48U) &&
+			RV2MakeReadU32(source + 64U) == RV2MakeReadU32(destination + 64U) &&
+			RV2MakePhaseClockEqual(source, destination) &&
+			RV2MakeReadU32(destination + 68U) == 0U &&
+			RV2MakeIdNone(RV2MakeId(destination + 72U));
+	case 6U:
+		return RV2MakeReadU32(source + 52U) == 1U &&
+			RV2MakeReadU32(destination + 52U) == 1U &&
+			RV2MakePhaseDiscreteEqual(source, destination) &&
+			RV2MakePhaseClockEqual(source, destination) &&
+			(!RV2MakeInterval3Equal(source + 96U, destination + 96U) ||
+				!RV2MakeIntervalEqual(source + 120U, destination + 120U));
+	case 7U:
+		return RV2MakeReadU32(source + 52U) == 1U &&
+			RV2MakeReadU32(source + 56U) == 0U &&
+			RV2MakeReadU32(destination + 52U) == 0U &&
+			RV2MakeReadU32(destination + 56U) != 0U &&
+			RV2MakeReadU32(source + 48U) == RV2MakeReadU32(destination + 48U) &&
+			RV2MakeReadU32(source + 64U) == RV2MakeReadU32(destination + 64U) &&
+			RV2MakePhaseClockEqual(source, destination);
+	default:
+		return 0;
+	}
+}
+
+static int RV2MakePortalAllows(const rv2m_context_t *context,
+	uint32_t portal, rv2m_id_t source, rv2m_id_t destination)
+{
+	const unsigned char *record = RV2MakeRecord(context, 6U, portal);
+	int forward = RV2MakeIdEqual(RV2MakeId(record + 64U), source) &&
+		RV2MakeIdEqual(RV2MakeId(record + 88U), destination);
+	int reverse = RV2MakeIdEqual(RV2MakeId(record + 88U), source) &&
+		RV2MakeIdEqual(RV2MakeId(record + 64U), destination);
+	uint32_t direction = RV2MakeReadU32(record + 152U);
+
+	return (forward || reverse) && (direction != 1U || forward) &&
+		(direction != 2U || reverse);
+}
+
+static int RV2MakeSpanContains(const unsigned char *span, uint32_t index)
+{
+	uint32_t first = RV2MakeReadU32(span);
+	uint32_t count = RV2MakeReadU32(span + 4U);
+
+	return index >= first && index - first < count;
+}
+
+static int RV2MakeValidatePrivateRecords(const rv2m_context_t *context)
+{
+	uint32_t index;
+
+	for (index = 0U; index < context->section[1].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 1U, index);
+		double x;
+		double y;
+		double z;
+
+		if (!RV2MakeFinite(record + 48U, 4U))
+			return 0;
+		x = RV2MakeReadF32(record + 48U);
+		y = RV2MakeReadF32(record + 52U);
+		z = RV2MakeReadF32(record + 56U);
+		if (!isfinite(x * x + y * y + z * z) || x * x + y * y + z * z <= 0.0)
+			return 0;
+	}
+	for (index = 0U; index < context->section[3].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 3U, index);
+		uint32_t stance = RV2MakeReadU32(record + 48U);
+		uint32_t motion = RV2MakeReadU32(record + 52U);
+		uint32_t support = RV2MakeReadU32(record + 56U);
+		uint32_t medium = RV2MakeReadU32(record + 60U);
+		uint32_t frame = RV2MakeReadU32(record + 68U);
+		rv2m_id_t mover = RV2MakeId(record + 72U);
+
+		if (stance >= 2U || motion >= 3U || support >= 3U || medium >= 4U ||
+			RV2MakeReadU32(record + 64U) >= 2U || frame >= 2U ||
+			!RV2MakeInterval3(record + 96U, 0) ||
+			!RV2MakeInterval(record + 120U, 1) ||
+			RV2MakeReadU32(record + 128U) == 0U ||
+			RV2MakeReadU32(record + 132U) < RV2MakeReadU32(record + 128U) ||
+			(motion == 0U && support == 0U) ||
+			(motion == 1U && support != 0U) ||
+			(motion == 2U && ((medium < 1U || medium > 3U) || support != 0U)) ||
+			(support == 2U && frame != 1U) ||
+			(frame == 0U && !RV2MakeIdNone(mover)) ||
+			(frame == 1U && (RV2MakeIdNone(mover) ||
+				(uint32_t)(mover.high >> 32) != 10U || support != 2U)))
+			return 0;
+	}
+	for (index = 0U; index < context->section[5].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 5U, index);
+
+		if (!RV2MakeGeometry(record + 48U, context->source) ||
+			!RV2MakeBounds(record + 64U) ||
+			RV2MakeReadU32(record + 144U) == UINT32_MAX ||
+			RV2MakeReadU32(record + 148U) == UINT32_MAX ||
+			RV2MakeReadU32(record + 152U) == UINT32_MAX ||
+			(RV2MakeReadU32(record + 156U) & ~RV2M_CONTENTS_KNOWN) != 0U ||
+			(RV2MakeReadU32(record + 160U) & ~RV2M_CELL_SEMANTICS_KNOWN) != 0U)
+			return 0;
+	}
+	for (index = 0U; index < context->section[4].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 4U, index);
+		const unsigned char *source_record;
+		const unsigned char *destination_record;
+		uint32_t cell;
+		uint32_t source_phase;
+		uint32_t destination_phase;
+		uint32_t kind = RV2MakeReadU32(record + 120U);
+
+		if (!RV2MakeFindIdIndex(context, 5U, RV2MakeId(record + 48U), &cell) ||
+			!RV2MakeFindIdIndex(context, 3U, RV2MakeId(record + 72U),
+				&source_phase) ||
+			!RV2MakeFindIdIndex(context, 3U, RV2MakeId(record + 96U),
+				&destination_phase) || source_phase == destination_phase ||
+			kind < 1U || kind >= 8U || !RV2MakeInterval(record + 124U, 1) ||
+			RV2MakeReadF32(record + 128U) <= 0.0f ||
+			RV2MakeReadU32(record + 132U) != 0U ||
+			!RV2MakePhaseInCell(context, cell, source_phase) ||
+			!RV2MakePhaseInCell(context, cell, destination_phase))
+			return 0;
+		source_record = RV2MakeRecord(context, 3U, source_phase);
+		destination_record = RV2MakeRecord(context, 3U, destination_phase);
+		if (!RV2MakeTransitionSemantics(kind, source_record, destination_record))
+			return 0;
+	}
+	return 1;
+}
+
+static int RV2MakeValidateRelations(const rv2m_context_t *context)
+{
+	uint32_t index;
+
+	for (index = 0U; index < context->section[6].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 6U, index);
+		rv2m_id_t from = RV2MakeId(record + 64U);
+		rv2m_id_t to = RV2MakeId(record + 88U);
+		uint32_t flags = RV2MakeReadU32(record + 168U);
+
+		uint32_t first_vertex = RV2MakeReadU32(record + 136U);
+		uint32_t vertex_count = RV2MakeReadU32(record + 140U);
+		uint32_t vertex;
+
+		if (!RV2MakeGeometry(record + 48U, context->source) ||
+			RV2MakeIdEqual(from, to) || RV2MakeReadU32(record + 152U) >= 3U ||
+			!RV2MakeFinite(record + 156U, 1U) ||
+			RV2MakeReadF32(record + 156U) < 0.0f || (flags & 1U) == 0U ||
+			(flags & ~RV2M_PORTAL_FLAGS_KNOWN) != 0U ||
+			(RV2MakeReadU32(record + 160U) & ~RV2M_CONTENTS_KNOWN) != 0U ||
+			(RV2MakeReadU32(record + 164U) & ~RV2M_CONTENTS_KNOWN) != 0U ||
+			((flags & 2U) == 0U && RV2MakeReadU32(record + 160U) !=
+					RV2MakeReadU32(record + 164U)))
+			return 0;
+		for (vertex = 0U; vertex < vertex_count; vertex++)
+			if (!RV2MakeFinite(RV2MakeRecord(context, 2U, first_vertex + vertex),
+				3U))
+				return 0;
+	}
+	for (index = 0U; index < context->section[7].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 7U, index);
+
+		if (!RV2MakeGeometry(record + 48U, context->source) ||
+			!RV2MakeFinite(record + 112U, 3U) ||
+			(RV2MakeReadU32(record + 124U) & ~RV2M_CONTENTS_KNOWN) != 0U ||
+			(RV2MakeReadU32(record + 128U) & ~RV2M_SURFACE_SEMANTICS_KNOWN) != 0U)
+			return 0;
+	}
+	for (index = 0U; index < context->section[8].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 8U, index);
+
+		if (RV2MakeReadU32(record + 88U) >= 7U ||
+			!RV2MakeInterval(record + 92U, 1))
+			return 0;
+	}
+	for (index = 0U; index < context->section[11].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 11U, index);
+		rv2m_id_t entry = RV2MakeId(record + 52U);
+		rv2m_id_t exit_cell = RV2MakeId(record + 76U);
+		rv2m_id_t activation = RV2MakeId(record + 100U);
+
+		if (RV2MakeReadU32(record + 48U) >= 8U ||
+			RV2MakeIdEqual(entry, exit_cell) || !RV2MakeEntity(record + 124U) ||
+			!RV2MakeInterval(record + 132U, 1) ||
+			!RV2MakeInterval(record + 140U, 1) ||
+			(RV2MakeIdNone(activation) &&
+				RV2MakeReadU32(record + 124U) == UINT32_MAX))
+			return 0;
+	}
+	for (index = 0U; index < context->section[10].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 10U, index);
+		uint32_t cell;
+		uint32_t surface;
+
+		if (!RV2MakeGeometry(record + 48U, context->source) ||
+			!RV2MakeFindIdIndex(context, 5U, RV2MakeId(record + 64U), &cell) ||
+			!RV2MakeEntity(record + 88U) || RV2MakeReadU32(record + 96U) >= 9U ||
+			!RV2MakeFinite(record + 100U, 3U) || !RV2MakeBounds(record + 112U) ||
+			!RV2MakePointInside(record + 100U, record + 112U) ||
+			!RV2MakePointInside(record + 100U,
+				RV2MakeRecord(context, 5U, cell) + 64U))
+			return 0;
+		if (!RV2MakeIdNone(RV2MakeId(record + 160U)) &&
+			(!RV2MakeFindIdIndex(context, 7U, RV2MakeId(record + 160U),
+				&surface) || !RV2MakeIdEqual(RV2MakeId(
+				RV2MakeRecord(context, 7U, surface) + 64U), RV2MakeId(record + 64U))))
+			return 0;
+		(void)cell;
+	}
+	for (index = 0U; index < context->section[9].count; index++)
+	{
+		const unsigned char *record = RV2MakeRecord(context, 9U, index);
+		rv2m_id_t source_cell = RV2MakeId(record + 48U);
+		rv2m_id_t destination_cell = RV2MakeId(record + 72U);
+		rv2m_id_t boundary = RV2MakeId(record + 96U);
+		rv2m_id_t mechanism = RV2MakeId(record + 144U);
+		rv2m_id_t transition = RV2MakeId(record + 216U);
+		uint32_t source_cell_index;
+		uint32_t destination_cell_index;
+		uint32_t source_phase;
+		uint32_t destination_phase;
+		uint32_t portal;
+		uint32_t family = RV2MakeReadU32(record + 240U);
+		uint32_t flags = RV2MakeReadU32(record + 328U);
+		uint32_t source_medium;
+		uint32_t destination_medium;
+		int water;
+		float acceleration_limit;
+
+		if (!RV2MakeFindIdIndex(context, 5U, source_cell, &source_cell_index) ||
+			!RV2MakeFindIdIndex(context, 5U, destination_cell,
+				&destination_cell_index) ||
+			!RV2MakeFindIdIndex(context, 3U, RV2MakeId(record + 168U),
+				&source_phase) ||
+			!RV2MakeFindIdIndex(context, 3U, RV2MakeId(record + 192U),
+				&destination_phase) ||
+			!RV2MakePhaseInCell(context, source_cell_index, source_phase) ||
+			!RV2MakePhaseInCell(context, destination_cell_index, destination_phase) ||
+			!RV2MakeReference(context, 8U, RV2MakeId(record + 120U), 1) ||
+			!RV2MakeReference(context, 11U, mechanism, 1) ||
+			family >= 6U || RV2MakeReadU32(record + 244U) >= 6U ||
+			(flags & ~RV2M_KERNEL_FLAGS_KNOWN) != 0U ||
+			(flags & UINT32_C(0x13)) != UINT32_C(0x13) ||
+			!RV2MakeInterval3(record + 248U, 0) ||
+			!RV2MakeInterval(record + 272U, 1) ||
+			RV2MakeReadF32(record + 276U) <= 0.0f ||
+			!RV2MakeInterval(record + 280U, 1) ||
+			!RV2MakeInterval(record + 288U, 1) ||
+			!RV2MakeInterval(record + 296U, 1) ||
+			!RV2MakeFinite(record + 304U, 2U) ||
+			RV2MakeReadU64(record + 312U) != context->physics_id ||
+			RV2MakeReadF32(record + 304U) != context->physics[0] ||
+			RV2MakeReadF32(record + 284U) > context->physics[7])
+			return 0;
+		if (RV2MakeIdEqual(source_cell, destination_cell))
+		{
+			uint32_t transition_index;
+			const unsigned char *transition_record;
+
+			if (!RV2MakeIdNone(boundary) || RV2MakeIdNone(transition) ||
+				!RV2MakeFindIdIndex(context, 4U, transition, &transition_index))
+				return 0;
+			transition_record = RV2MakeRecord(context, 4U, transition_index);
+			if (!RV2MakeIdEqual(RV2MakeId(transition_record + 48U), source_cell) ||
+				!RV2MakeIdEqual(RV2MakeId(transition_record + 72U),
+					RV2MakeId(record + 168U)) ||
+				!RV2MakeIdEqual(RV2MakeId(transition_record + 96U),
+					RV2MakeId(record + 192U)))
+				return 0;
+		}
+		else if (!RV2MakeIdNone(transition) ||
+			!RV2MakeFindIdIndex(context, 6U, boundary, &portal) ||
+			!RV2MakePortalAllows(context, portal, source_cell, destination_cell))
+			return 0;
+		acceleration_limit = family == 0U ? context->physics[1] :
+			family == 1U ? context->physics[2] :
+			family == 2U ? context->physics[3] :
+			family == 3U ? context->physics[4] : context->physics[5];
+		if (RV2MakeReadF32(record + 292U) > acceleration_limit ||
+			RV2MakeReadF32(record + 300U) > acceleration_limit ||
+			(family == 4U && RV2MakeIdNone(mechanism)))
+			return 0;
+		source_medium = RV2MakeReadU32(
+			RV2MakeRecord(context, 3U, source_phase) + 60U);
+		destination_medium = RV2MakeReadU32(
+			RV2MakeRecord(context, 3U, destination_phase) + 60U);
+		water = (source_medium >= 1U && source_medium <= 3U) ||
+			(destination_medium >= 1U && destination_medium <= 3U);
+		if (RV2MakeReadF32(record + 308U) !=
+				(water ? context->physics[6] : 0.0f) ||
+			(((flags & 4U) != 0U) != (source_medium != destination_medium)) ||
+			((flags & 8U) != 0U && RV2MakeReadU32(
+				RV2MakeRecord(context, 3U, source_phase) + 56U) == 0U) ||
+			(family == 2U && !water))
+			return 0;
+		if (!RV2MakeIdEqual(source_cell, destination_cell) &&
+			source_medium != destination_medium &&
+			(RV2MakeReadU32(RV2MakeRecord(context, 6U, portal) + 168U) & 2U) == 0U)
+			return 0;
+	}
+	return 1;
+}
+
+static int RV2MakeValidatePhaseMovers(const rv2m_context_t *context)
+{
+	uint32_t phase_index;
+
+	for (phase_index = 0U; phase_index < context->section[3].count;
+		phase_index++)
+	{
+		const unsigned char *phase = RV2MakeRecord(context, 3U, phase_index);
+		uint32_t mechanism_index;
+		uint32_t entry;
+		uint32_t exit_cell;
+		const unsigned char *mechanism;
+
+		if (RV2MakeReadU32(phase + 68U) != 1U)
+			continue;
+		if (!RV2MakeFindIdIndex(context, 11U, RV2MakeId(phase + 72U),
+			&mechanism_index))
+			return 0;
+		mechanism = RV2MakeRecord(context, 11U, mechanism_index);
+		if (!RV2MakeFindIdIndex(context, 5U, RV2MakeId(mechanism + 52U),
+			&entry) || !RV2MakeFindIdIndex(context, 5U,
+			RV2MakeId(mechanism + 76U), &exit_cell) ||
+			(!RV2MakePhaseInCell(context, entry, phase_index) &&
+			 !RV2MakePhaseInCell(context, exit_cell, phase_index)))
+			return 0;
+	}
+	return 1;
+}
+
+static int RV2MakeValidateOwnership(const rv2m_context_t *context)
+{
+	uint32_t cell_index;
+	uint32_t record_index;
+
+	for (cell_index = 0U; cell_index < context->section[5].count;
+		cell_index++)
+	{
+		const unsigned char *cell = RV2MakeRecord(context, 5U, cell_index);
+		rv2m_id_t cell_id = RV2MakeId(cell);
+		uint32_t first;
+		uint32_t count;
+		uint32_t index;
+
+		first = RV2MakeReadU32(cell + 104U);
+		count = RV2MakeReadU32(cell + 108U);
+		for (index = first; index < first + count; index++)
+			if (!RV2MakeIdEqual(RV2MakeId(
+				RV2MakeRecord(context, 7U, index) + 64U), cell_id))
+				return 0;
+		first = RV2MakeReadU32(cell + 112U);
+		count = RV2MakeReadU32(cell + 116U);
+		for (index = first; index < first + count; index++)
+			if (!RV2MakeIdEqual(RV2MakeId(
+				RV2MakeRecord(context, 8U, index) + 48U), cell_id))
+				return 0;
+		first = RV2MakeReadU32(cell + 120U);
+		count = RV2MakeReadU32(cell + 124U);
+		for (index = first; index < first + count; index++)
+			if (!RV2MakeIdEqual(RV2MakeId(
+				RV2MakeRecord(context, 9U, index) + 48U), cell_id))
+				return 0;
+		first = RV2MakeReadU32(cell + 128U);
+		count = RV2MakeReadU32(cell + 132U);
+		for (index = first; index < first + count; index++)
+			if (!RV2MakeIdEqual(RV2MakeId(
+				RV2MakeRecord(context, 10U, index) + 64U), cell_id))
+				return 0;
+		first = RV2MakeReadU32(cell + 136U);
+		count = RV2MakeReadU32(cell + 140U);
+		for (index = first; index < first + count; index++)
+		{
+			const unsigned char *mechanism = RV2MakeRecord(context, 11U, index);
+
+			if (!RV2MakeIdEqual(RV2MakeId(mechanism + 52U), cell_id) &&
+				!RV2MakeIdEqual(RV2MakeId(mechanism + 76U), cell_id))
+				return 0;
+		}
+	}
+	for (record_index = 0U; record_index < context->section[7].count;
+		record_index++)
+	{
+		uint32_t owner;
+
+		if (!RV2MakeFindIdIndex(context, 5U,
+			RV2MakeId(RV2MakeRecord(context, 7U, record_index) + 64U),
+			&owner) || !RV2MakeSpanContains(
+				RV2MakeRecord(context, 5U, owner) + 104U, record_index))
+			return 0;
+	}
+	for (record_index = 0U; record_index < context->section[8].count;
+		record_index++)
+	{
+		uint32_t owner;
+
+		if (!RV2MakeFindIdIndex(context, 5U,
+			RV2MakeId(RV2MakeRecord(context, 8U, record_index) + 48U),
+			&owner) || !RV2MakeSpanContains(
+				RV2MakeRecord(context, 5U, owner) + 112U, record_index))
+			return 0;
+	}
+	for (record_index = 0U; record_index < context->section[9].count;
+		record_index++)
+	{
+		uint32_t owner;
+
+		if (!RV2MakeFindIdIndex(context, 5U,
+			RV2MakeId(RV2MakeRecord(context, 9U, record_index) + 48U),
+			&owner) || !RV2MakeSpanContains(
+				RV2MakeRecord(context, 5U, owner) + 120U, record_index))
+			return 0;
+	}
+	for (record_index = 0U; record_index < context->section[10].count;
+		record_index++)
+	{
+		uint32_t owner;
+
+		if (!RV2MakeFindIdIndex(context, 5U,
+			RV2MakeId(RV2MakeRecord(context, 10U, record_index) + 64U),
+			&owner) || !RV2MakeSpanContains(
+				RV2MakeRecord(context, 5U, owner) + 128U, record_index))
+			return 0;
+	}
+	return 1;
+}
+
 static int RV2MakeValidateBinding(const rv2m_context_t *context,
 	const rv2m_expected_t *expected, const unsigned char *exact_identity)
 {
@@ -486,8 +1181,12 @@ static int RV2MakeValidate(const sg_rune_v2_snapshot_view_t *snapshot,
 	context->size = snapshot->size;
 	return RV2MakeParseHeader(context) && RV2MakeValidateModel(context) &&
 		RV2MakeValidateIdentities(context) && RV2MakeValidateSpans(context) &&
-		RV2MakeValidateReferences(context) && RV2MakeValidateBinding(context,
-			expected, snapshot->content_identity.bytes);
+		RV2MakeValidateReferences(context) &&
+		RV2MakeValidatePrivateRecords(context) &&
+		RV2MakeValidateRelations(context) && RV2MakeValidatePhaseMovers(context) &&
+		RV2MakeValidateOwnership(context) &&
+		RV2MakeValidateBinding(context, expected,
+			snapshot->content_identity.bytes);
 }
 
 static int RV2MakeHexDigit(char value, unsigned char *output)
