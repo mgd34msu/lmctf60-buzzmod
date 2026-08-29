@@ -782,9 +782,9 @@ static void TestUnavailableAlternativeRetry(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(50U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1U);
 	observations[1] = Observation(50U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 2U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 2U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
@@ -881,7 +881,7 @@ static void TestRetryWakeGatesRepeatedChoice(void)
 	observations[0] = Observation(52U, 1U, 10U, 1U, 100U,
 		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
 	observations[1] = Observation(52U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1001U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
 
@@ -942,10 +942,10 @@ static void TestTargetRevisionWakeIsPerChoice(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(55U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF,
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE,
 		1000U);
 	observations[1] = Observation(55U, 1U, 11U, 100U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF,
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE,
 		1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
@@ -1039,7 +1039,7 @@ static void TestStaleTargetIsNotReissued(void)
 	CHECK(reduction.instruction.kind ==
 		SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION);
 	CHECK(reduction.instruction.handle.valid == 0U);
-	CHECK(reduction.instruction.cost_ms == SG_DESTINATION_FIELD_INF);
+	CHECK(reduction.instruction.cost_ms == SG_DESTINATION_COST_INFINITE);
 	CHECK(reduction.instruction.destination_wait_reason ==
 		SG_STRATEGY_DESTINATION_WAIT_STALE);
 	CHECK(state.activation.goal_id == 1U);
@@ -1253,13 +1253,13 @@ static void TestUnavailableWaitAndTimeWindow(void)
 	spec.goals[0].conditions[0].value.time.not_after_ms = 300U;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(80U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1000U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
 	CHECK(state.goals[0].attempt_count == 0U);
 	frame = Frame(2U, state.revision, 200U);
 	observation = Observation(80U, 1U, 10U, 2U, 200U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1000U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
 	frame.destinations = &observation;
 	frame.destination_count = 1U;
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
@@ -1279,7 +1279,7 @@ static void TestUnavailableWaitAndTimeWindow(void)
 	spec.goals[0].failure.exhausted = SG_STRATEGY_FAILURE_SKIP_GOAL;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(81U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1000U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_SKIPPED);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_COMPLETED);
@@ -1533,7 +1533,7 @@ static void TestUnavailablePrerequisiteFailsDependentGoal(void)
 	spec.goals[1].dependencies[0].accept = SG_STRATEGY_DEPENDENCY_SUCCESS;
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(96U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_FIELD_INF, 1000U);
+		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
 	observations[1] = Observation(96U, 2U, 11U, 1U, 100U,
 		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);

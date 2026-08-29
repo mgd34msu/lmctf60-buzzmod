@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "sg_destination_field.h"
+#include "sg_destination.h"
 
 #define SG_STRATEGY_MAX_GOALS 64U
 #define SG_STRATEGY_MAX_DEPENDENCIES 8U

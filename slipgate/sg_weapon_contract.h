@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "sg_belief_contract.h"
-#include "sg_destination_field.h"
+#include "sg_destination.h"
 #include "sg_weapon_effect_profile.h"
 
 typedef enum sg_weapon_trace_status_e
@@ -145,8 +145,8 @@ static inline int SG_WeaponAffordanceValid(
 {
 	return affordance && affordance->rune_identity != 0U &&
 	       affordance->visibility_revision != 0U &&
-	       affordance->source_cell_id != SG_DESTINATION_FIELD_NO_CELL &&
-	       affordance->target_cell_id != SG_DESTINATION_FIELD_NO_CELL &&
+	       affordance->source_cell_id != SG_DESTINATION_NO_CELL &&
+	       affordance->target_cell_id != SG_DESTINATION_NO_CELL &&
 	       affordance->allowed_effects != 0U &&
 	       (affordance->allowed_effects & ~(uint32_t)SG_WEAPON_EFFECT_MASK) == 0U &&
 	       SG_WeaponFloatValid(affordance->visibility_probability) &&
@@ -245,8 +245,8 @@ static inline int SG_WeaponPrefireRequestValid(
 	    request->rune_identity == 0U || request->pose_revision == 0U ||
 	    request->fired_at_ms == 0U ||
 	    request->prediction_time_ms < request->fired_at_ms ||
-	    request->source_cell_id == SG_DESTINATION_FIELD_NO_CELL ||
-	    request->target_cell_id == SG_DESTINATION_FIELD_NO_CELL ||
+	    request->source_cell_id == SG_DESTINATION_NO_CELL ||
+	    request->target_cell_id == SG_DESTINATION_NO_CELL ||
 	    request->shooter_client >= SG_BELIEF_MAX_CLIENTS ||
 	    request->target_client >= SG_BELIEF_MAX_CLIENTS ||
 	    request->shooter_client == request->target_client ||

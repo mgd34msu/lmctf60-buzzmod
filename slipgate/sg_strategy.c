@@ -742,13 +742,13 @@ static int StrategyDestinationObservationValid(
 		return 0;
 	choice = &plan->goals[(uint16_t)goal_index].choices[(uint8_t)choice_index];
 	if (observation->status == SG_STRATEGY_DESTINATION_UNOBSERVED)
-		return observation->cost_ms == SG_DESTINATION_FIELD_INF &&
+		return observation->cost_ms == SG_DESTINATION_COST_INFINITE &&
 			observation->pose_revision == 0U && observation->handle.valid == 0U;
-	if (observation->cost_ms != SG_DESTINATION_FIELD_INF &&
+	if (observation->cost_ms != SG_DESTINATION_COST_INFINITE &&
 	    observation->status == SG_STRATEGY_DESTINATION_UNREACHABLE)
 		return 0;
 	if (observation->status == SG_STRATEGY_DESTINATION_REACHABLE &&
-	    observation->cost_ms >= SG_DESTINATION_FIELD_INF)
+	    observation->cost_ms >= SG_DESTINATION_COST_INFINITE)
 		return 0;
 	return observation->pose_revision != 0U &&
 		StrategyHandleMatchesRef(&observation->handle, &choice->destination);
@@ -1513,7 +1513,7 @@ static int StrategySelectReachable(const sg_strategy_goal_t *goal,
 	uint8_t limit = goal->failure.try_alternatives ? goal->choice_count : 1U;
 	int selected = -1;
 	uint8_t fewest_attempts = UINT8_MAX;
-	uint32_t best_cost = SG_DESTINATION_FIELD_INF;
+	uint32_t best_cost = SG_DESTINATION_COST_INFINITE;
 
 	for (index = 0U; index < limit; index++)
 		if (runtime->choices[index].attempts <
@@ -1667,7 +1667,7 @@ static void StrategyInstructionForActive(sg_strategy_state_t *state,
 		state->current_instruction.destination = goal->choices[choice].destination;
 		if (kind == SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION)
 		{
-			state->current_instruction.cost_ms = SG_DESTINATION_FIELD_INF;
+			state->current_instruction.cost_ms = SG_DESTINATION_COST_INFINITE;
 			state->current_instruction.destination_wait_reason =
 				StrategyChoiceWaitReason(&runtime->choices[choice],
 					at_ms);

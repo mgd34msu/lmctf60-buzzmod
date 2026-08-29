@@ -412,6 +412,9 @@
     <ClCompile Include="slipgate\sg_arach.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_destination.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_localization.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -781,6 +784,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_local.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_destination.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune.h">
