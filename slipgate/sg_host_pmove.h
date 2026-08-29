@@ -2,7 +2,11 @@
 #ifndef SG_HOST_PMOVE_H
 #define SG_HOST_PMOVE_H
 
+/* q_shared.h predates include guards.  Reuse an already included copy when
+ * this interface is included by a game module after g_local.h. */
+#ifndef CVAR
 #include "../q_shared.h"
+#endif
 #include "sg_host_collision.h"
 
 typedef enum sg_host_pmove_error_e

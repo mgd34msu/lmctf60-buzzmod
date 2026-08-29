@@ -19,6 +19,7 @@ REVISION_TEMPLATE := GitRevisionInfo.tmpl
 HOST_TEST_BIN := sg_hooks_test.make
 HOST_TEST_OBJS := .sg_hooks_test.make.o .sg_hooks_under_test.make.o
 HOST_TEST_DEPS := $(HOST_TEST_OBJS:.o=.d)
+HOST_LAW_PUBLICATION_TEST := tests/run_sg_host_law_publication_test.sh
 ACTION_TEST_BIN := sg_action_test.make
 ACTION_TEST_OBJS := .sg_action_test.make.o .sg_action_under_test.make.o
 ACTION_TEST_DEPS := $(ACTION_TEST_OBJS:.o=.d)
@@ -1314,9 +1315,17 @@ OBJS := \
 	slipgate/sg_bsp_entity_semantics_audit_expected.o \
 	slipgate/sg_bsp_entity_semantics_publication.o \
 	slipgate/sg_rune_model.o \
+<<<<<<< HEAD
 	slipgate/sg_strategy.o \
 	slipgate/sg_strategy_caller.o \
 	slipgate/sg_strategy_runtime_bridge.o \
+	slipgate/sg_host_pmove.o \
+	slipgate/sg_host_engine_pmove.o \
+	slipgate/sg_host_engine_parity.o \
+	slipgate/sg_host_hook_law.o \
+	slipgate/sg_host_mechanism_law.o \
+	slipgate/sg_host_law_owner.o \
+	slipgate/sg_host_law_publication.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
 	sg_net.o \
@@ -1387,7 +1396,9 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
+	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
+	host-law-publication-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -1555,6 +1566,16 @@ slipgate/sg_compound_action_publication.o: \
 		slipgate/sg_compound_action_publication.h \
 		slipgate/sg_compound_publication.h slipgate/sg_compound.h \
 		slipgate/sg_replay.h slipgate/sg_rune.h q_shared.h
+slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
+		slipgate/sg_rune_model.h
+slipgate/sg_host_pmove.o: slipgate/sg_host_pmove.c \
+		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
+		slipgate/sg_rune_model.h q_shared.h
+slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
+		slipgate/sg_host_law_publication.h slipgate/sg_host_collision.h \
+		slipgate/sg_host_pmove.h slipgate/sg_action_contract.generated.h \
+		slipgate/sg_weapon_host_constants.h slipgate/sg_hooks.h game.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 -include $(OBJS:.o=.d)
@@ -3874,6 +3895,16 @@ weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
 	$(E) [TEST] weapon effect profiles
 	$(Q)sh tests/run_sg_weapon_effect_profile_test.sh
 
+host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
+		tests/sg_host_law_publication_test.c \
+		slipgate/sg_host_law_publication.c \
+		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
+		slipgate/sg_host_pmove.c slipgate/sg_action_contract.generated.h \
+		slipgate/sg_weapon_host_constants.h
+	$(E) [TEST] host law publication
+	$(Q)sh $(HOST_LAW_PUBLICATION_TEST)
+
 rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
 		tests/sg_rune_v2_content_identity_test.c \
 		tests/sg_rune_v2_content_identity_probe.c \
@@ -3944,9 +3975,11 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
+<<<<<<< HEAD
 		weapon-effect-profile-test hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
 		bsp-entity-semantics-publication-test \
+		host-law-publication-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
