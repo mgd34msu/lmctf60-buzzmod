@@ -191,40 +191,23 @@ trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 
 prepare_stage() {
-    local stage_dir="$1" map="$2" entry base
+    local stage_dir="$1" map="$2" base source source_bsp
     mkdir -p "$stage_dir/maps" "$stage_dir/players" "$stage_dir/demos" \
         "$stage_dir/screenshots" || return 1
-    for entry in "$LIVE_GAME_DIR"/*; do
-        [ -e "$entry" ] || continue
-        base="${entry##*/}"
-        case "$base" in
-            maps|players|demos|screenshots)
-                continue
-                ;;
-            game.so|gamex86_64.so|*.cfg)
-                cp -p -- "$entry" "$stage_dir/$base" || return 1
-                ;;
-            *)
-                ln -s -- "$entry" "$stage_dir/$base" || return 1
-                ;;
-        esac
-    done
     for base in game.so gamex86_64.so "$CFG"; do
-        if [ ! -f "$stage_dir/$base" ] || [ -L "$stage_dir/$base" ]; then
-            echo "runegen: staged input is not a frozen regular file: $base" >&2
+        source="$LIVE_GAME_DIR/$base"
+        if [ ! -f "$source" ] || [ -L "$source" ]; then
+            echo "runegen: source input is not a frozen regular file: $base" >&2
             return 1
         fi
+        cp -p -- "$source" "$stage_dir/$base" || return 1
     done
-    for entry in "$LIVE_GAME_DIR/maps"/*; do
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        base="${entry##*/}"
-        case "$base" in
-            "$map.rune"|"$map.snag")
-                continue
-                ;;
-        esac
-        ln -s -- "$entry" "$stage_dir/maps/$base" || return 1
-    done
+    source_bsp="$LIVE_GAME_DIR/maps/$map.bsp"
+    if [ ! -f "$source_bsp" ] || [ -L "$source_bsp" ]; then
+        echo "runegen: source BSP is not a frozen regular file: $map.bsp" >&2
+        return 1
+    fi
+    cp -p -- "$source_bsp" "$stage_dir/maps/$map.bsp" || return 1
 }
 
 run_engine() {
@@ -288,15 +271,15 @@ run_one() {
     local map="$1" port="$2" log_stem="$3"
     local stage_dir stage_game staged_rune generation_log cold_log
     local accept_log inspect_log count_log lint_log semantic_log
-    local evidence provenance manifest backup_manifest
+    local provenance manifest backup_manifest
     local t0 t1 elapsed status_code detail write_prefix write_record write_line
     local write_count write_payload roots_count roots_record roots_line roots_number
     local write_number red_root blue_root seeds links nodes triggers inventory plans
-    local failure_after_write rune_sha snag_sha evidence_sha
+    local failure_after_write rune_sha
 
     python3 "$RUNE_PAIR" recover --map "$map" \
         --live-maps "$LIVE_GAME_DIR/maps" || {
-        detail="cannot recover prior pair transaction"
+        detail="cannot recover prior RUNE transaction"
         echo "rune: FAILED map=$map port=$port -- $detail"
         RESULT_LINES+=("$map|-|-|0|FAIL|$detail")
         return
@@ -317,9 +300,8 @@ run_one() {
     count_log="$log_stem.counts.log"
     lint_log="$log_stem.lint.log"
     semantic_log="$log_stem.semantic.log"
-    evidence="$log_stem.snag-bootstrap-evidence.json"
     provenance="$log_stem.provenance.json"
-    manifest="$log_stem.pair.json"
+    manifest="$log_stem.rune.json"
     if ! prepare_stage "$stage_dir" "$map"; then
         fail_run "$map" "$port" 0 "cannot prepare staging game directory" "$stage_dir"
         return
@@ -340,7 +322,7 @@ run_one() {
             "generation engine did not confirm maxclients=$MAXCLIENTS" "$stage_dir"
         return
     fi
-    if grep -qE '^slipgate: (snag|rune) ready ' "$generation_log"; then
+    if grep -qE '^slipgate: rune ready ' "$generation_log"; then
         fail_run "$map" "$port" "$elapsed" \
             "generation log contains forbidden runtime readiness" "$stage_dir"
         return
@@ -459,17 +441,18 @@ PY
             return
         fi
     fi
-    if ! python3 "$RUNE_PAIR" provenance --map "$map" --rune "$staged_rune" \
+    if ! python3 "$RUNE_PAIR" provenance --map "$map" \
+            --bsp "$stage_dir/maps/$map.bsp" --rune "$staged_rune" \
             --q2ded "$Q2DED_REAL" --config "$stage_dir/$CFG" \
             --module "$stage_dir/game.so" --module "$stage_dir/gamex86_64.so" \
             --maxclients "$MAXCLIENTS" --count "seeds=$seeds" \
             --count "links=$links" --count "mechanism_nodes=$nodes" \
             --count "plans=$plans" --output "$provenance" || \
             ! python3 "$RUNE_PAIR" stage --map "$map" \
-                --stage-maps "$stage_dir/maps" --evidence "$evidence" \
+                --stage-maps "$stage_dir/maps" \
                 --provenance "$provenance" --manifest "$manifest"; then
         fail_run "$map" "$port" "$elapsed" \
-            "explicit-zero pair staging failed" "$stage_dir"
+            "RUNE identity staging failed" "$stage_dir"
         return
     fi
     run_engine cold "$stage_dir" "$map" "$port" "$cold_log"
@@ -486,23 +469,20 @@ PY
             ! python3 "$RUNE_PAIR" verify-cold-load --manifest "$manifest" \
                 --cold-log "$cold_log"; then
         fail_run "$map" "$port" "$elapsed" \
-            "cold-load pair attestation failed (see $cold_log)" "$stage_dir"
+            "cold-load RUNE attestation failed (see $cold_log)" "$stage_dir"
         return
     fi
     if ! backup_manifest="$(python3 "$RUNE_PAIR" install --manifest "$manifest" \
             --live-maps "$LIVE_GAME_DIR/maps" --backup-dir "$RUNE_BACKUP_DIR")"; then
         fail_run "$map" "$port" "$elapsed" \
-            "journaled pair install failed" "$stage_dir"
+            "journaled RUNE install failed" "$stage_dir"
         return
     fi
     rune_sha="$(sha256sum "$LIVE_GAME_DIR/maps/$map.rune" | awk '{print $1}')"
-    snag_sha="$(sha256sum "$LIVE_GAME_DIR/maps/$map.snag" | awk '{print $1}')"
-    evidence_sha="$(sha256sum "$evidence" | awk '{print $1}')"
     cleanup_stage "$stage_dir"
-    echo "rune: installed pair rune=$LIVE_GAME_DIR/maps/$map.rune sha256=$rune_sha"
-    echo "rune: installed pair snag=$LIVE_GAME_DIR/maps/$map.snag sha256=$snag_sha"
-    echo "rune: evidence=$evidence sha256=$evidence_sha backup=$backup_manifest"
-    RESULT_LINES+=("$map|$seeds|$links|$elapsed|ok|pair gate clean; backup=$backup_manifest")
+    echo "rune: installed rune=$LIVE_GAME_DIR/maps/$map.rune sha256=$rune_sha"
+    echo "rune: backup=$backup_manifest"
+    RESULT_LINES+=("$map|$seeds|$links|$elapsed|ok|RUNE gate clean; backup=$backup_manifest")
 }
 
 index=0
@@ -519,13 +499,13 @@ for map in "${MAPS[@]}"; do
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "[dry-run] map=$map port=$port maxclients=$MAXCLIENTS no elapsed deadline"
         echo "[dry-run] generation launch sends only: maxclients, sv rune, quit"
-        echo "[dry-run] omit $map.rune and $map.snag; freeze game.so and gamex86_64.so"
+        echo "[dry-run] omit $map.rune; freeze game.so and gamex86_64.so"
         echo "[dry-run] run C/Python/count/root/lint gates on the fresh RUNE"
-        echo "[dry-run] stage canonical NO_ACCEPTED_OBSERVATION evidence and repairs=0 SNAG"
+        echo "[dry-run] bind the RUNE to exact provenance and frozen inputs"
         echo "[dry-run] cold launch sends only: maxclients, sv sg add red, quit"
-        echo "[dry-run] require ordered exact SNAG-ready then RUNE-ready digest attestation"
-        echo "[dry-run] journal SNAG-first, RUNE-second pair install with byte recovery"
-        RESULT_LINES+=("$map|-|-|-|DRY-RUN|two engines -> pair proof -> journaled install")
+        echo "[dry-run] require one exact RUNE-ready attestation"
+        echo "[dry-run] journal one RUNE install with byte recovery"
+        RESULT_LINES+=("$map|-|-|-|DRY-RUN|two engines -> RUNE proof -> journaled install")
     else
         echo "=== runegen: $map (port $port, maxclients $MAXCLIENTS) ==="
         run_one "$map" "$port" "$log_stem"

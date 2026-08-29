@@ -236,10 +236,8 @@ Binary sidecars carry optional map/RUNE-bound human movement, flag-live,
 escape, defense, and danger inputs. Their headers bind them to the exact RUNE
 identity and payload checksum. Runtime loaders reject mismatched identity or
 malformed payloads rather than adapting them to a different spatial model. The
-learning and SNAG schemas still require migration review. Retained `.snag`
-repairs use a separate strict text format and only add bounded field-cost
-surcharges; it must not alter configuration-space coverage or physical
-reachability.
+learning sidecar schema remains subject to migration review. No legacy
+seed/link repair sidecar is loaded, generated, staged, or released.
 
 Tracked analysis JSON is not automatically runtime authority. A report used to
 accept the final build needs a capture receipt binding its demo/log, source,

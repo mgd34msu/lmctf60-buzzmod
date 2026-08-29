@@ -503,7 +503,7 @@ def _verify_receipt(receipt: dict, path: Path, evidence_root: Path,
         "format", "fleet_id", "bundle_id", "lane", "offset", "sequence", "map",
         "runner_sha256", "topmaps_sha256", "engine_generation",
         "client_generation", "bsp_file", "rune_file", "rune_sha256",
-        "snag_file", "sg_players", "residence", "serverrecord",
+        "sg_players", "residence", "serverrecord",
         "console_segment", "pov", "receipt_hash",
     }
     if set(receipt) != required:
@@ -525,7 +525,6 @@ def _verify_receipt(receipt: dict, path: Path, evidence_root: Path,
     _verify_bundle_copy(receipt.get("bsp_file"), bundle_roles, f"bsp:{name}", "BSP")
     rune = receipt.get("rune_file")
     _verify_bundle_copy(rune, bundle_roles, f"rune:{name}", "RUNE")
-    _verify_bundle_copy(receipt.get("snag_file"), bundle_roles, f"snag:{name}", "SNAG")
     if receipt.get("rune_sha256") != rune["sha256"]:
         raise FleetError("residence RUNE digest drift")
     if not Path(rune["path"]).name.lower().startswith(name.lower() + "."):
@@ -949,7 +948,6 @@ def _route_runtime_files(lane: str, map_name: str, game_root: Path,
         "maplist": game_root / "route-only-maplist.txt",
         "bsp_file": game_root / "maps" / f"{map_name}.bsp",
         "rune_file": game_root / "maps" / f"{map_name}.rune",
-        "snag_file": game_root / "maps" / f"{map_name}.snag",
     }
     records = {field: _file_record(_inside(path, game_root, f"{lane} {field}"))
                for field, path in paths.items()}
@@ -958,8 +956,7 @@ def _route_runtime_files(lane: str, map_name: str, game_root: Path,
             ("module_secondary", "module-secondary", "secondary module"),
             ("maplist", "route-only-maplist", "route-only maplist"),
             ("bsp_file", f"bsp:{map_name}", "BSP"),
-            ("rune_file", f"rune:{map_name}", "RUNE"),
-            ("snag_file", f"snag:{map_name}", "SNAG")):
+            ("rune_file", f"rune:{map_name}", "RUNE")):
         _verify_bundle_copy(records[field], bundle_roles, role, f"{lane} runtime {label}")
     return records
 
@@ -968,7 +965,7 @@ def _verify_route_runtime_files(lane: str, map_name: str, runtime_files: Any,
                                 bundle_roles: Mapping[str, dict]) -> None:
     """Re-open the private runtime files recorded before route-only launch."""
     required = {
-        "module_primary", "module_secondary", "maplist", "bsp_file", "rune_file", "snag_file",
+        "module_primary", "module_secondary", "maplist", "bsp_file", "rune_file",
     }
     if not isinstance(runtime_files, dict) or set(runtime_files) != required:
         raise FleetError("route-only runtime file inventory is invalid")
@@ -980,7 +977,6 @@ def _verify_route_runtime_files(lane: str, map_name: str, runtime_files: Any,
         "maplist": game_root / "route-only-maplist.txt",
         "bsp_file": game_root / "maps" / f"{map_name}.bsp",
         "rune_file": game_root / "maps" / f"{map_name}.rune",
-        "snag_file": game_root / "maps" / f"{map_name}.snag",
     }
     for field, path in expected.items():
         if _verify_file_record(runtime_files[field], f"route-only runtime {field}") != path:
@@ -990,8 +986,7 @@ def _verify_route_runtime_files(lane: str, map_name: str, runtime_files: Any,
             ("module_secondary", "module-secondary", "secondary module"),
             ("maplist", "route-only-maplist", "route-only maplist"),
             ("bsp_file", f"bsp:{map_name}", "BSP"),
-            ("rune_file", f"rune:{map_name}", "RUNE"),
-            ("snag_file", f"snag:{map_name}", "SNAG")):
+            ("rune_file", f"rune:{map_name}", "RUNE")):
         _verify_bundle_copy(runtime_files[field], bundle_roles, role,
                             f"{lane} runtime {label}")
 
@@ -1142,7 +1137,7 @@ def _verify_route_receipt(receipt: dict, path: Path, evidence_root: Path,
     required = {
         "format", "campaign_id", "bundle_id", "lane", "map", "runner_sha256",
         "engine_generation", "client_generation", "bsp_file", "rune_file",
-        "rune_sha256", "snag_file", "sg_players", "residence", "serverrecord",
+        "rune_sha256", "sg_players", "residence", "serverrecord",
         "console_segment", "runtime_files", "pov", "session_database", "runtime", "behavior",
         "controller_result", "receipt_hash",
     }
@@ -1161,7 +1156,6 @@ def _verify_route_receipt(receipt: dict, path: Path, evidence_root: Path,
     _verify_bundle_copy(receipt.get("bsp_file"), bundle_roles, f"bsp:{map_name}", "BSP")
     rune = receipt.get("rune_file")
     rune_path = _verify_bundle_copy(rune, bundle_roles, f"rune:{map_name}", "RUNE")
-    _verify_bundle_copy(receipt.get("snag_file"), bundle_roles, f"snag:{map_name}", "SNAG")
     if receipt.get("rune_sha256") != rune["sha256"]:
         raise FleetError("route-only RUNE digest drift")
     if receipt.get("runtime_files") != owner["lane_runtime"][lane]:
@@ -1709,7 +1703,7 @@ def _validate_route_only_run_spec(path: Path) -> tuple[dict, dict]:
             raise FleetError(f"invalid fresh route-only backup path for {lane}")
         artifacts = lane_spec["artifacts"]
         if not isinstance(artifacts, dict) or set(artifacts) != {
-                "bsp_file", "rune_file", "snag_file"}:
+                "bsp_file", "rune_file"}:
             raise FleetError(f"route-only artifact inventory is invalid for {lane}")
         for label, record in artifacts.items():
             _verify_file_record(record, f"{lane} {label}")

@@ -333,7 +333,6 @@ class FleetRunnerLiveTest(unittest.TestCase):
                 artifacts[name] = {
                     "bsp_file": _write(artifact_root / f"{name}.bsp", b"bsp\n"),
                     "rune_file": _write(artifact_root / f"{name}.rune", b"rune\n"),
-                    "snag_file": _write(artifact_root / f"{name}.snag", b"snag\n"),
                     "red_flag_origin": [0.0, 0.0, 0.0],
                     "blue_flag_origin": [1.0, 1.0, 1.0],
                 }
@@ -376,9 +375,9 @@ class FleetRunnerLiveTest(unittest.TestCase):
                         self.core, "_verify_installed_bundle",
                         return_value=(active_bundle, bundle_verifier)), mock.patch.object(
                             self.core, "_validate_installed_final_corpus",
-                            side_effect=ValueError("cross-map SNAG")), mock.patch.object(
+                            side_effect=ValueError("cross-map RUNE")), mock.patch.object(
                                 live, "_start", side_effect=AssertionError("fleet launched")):
-                    with self.assertRaisesRegex(ValueError, "cross-map SNAG"):
+                    with self.assertRaisesRegex(ValueError, "cross-map RUNE"):
                         live.run_fleet(self.core, spec, state, evidence)
                 self.assertFalse(state.exists())
                 self.assertFalse(evidence.exists())
@@ -439,8 +438,7 @@ class FleetRunnerLiveTest(unittest.TestCase):
                         ("gamex86_64.so", "module-secondary"),
                         ("route-only-maplist.txt", "route-only-maplist"),
                         (f"maps/{map_name}.bsp", f"bsp:{map_name}"),
-                        (f"maps/{map_name}.rune", f"rune:{map_name}"),
-                        (f"maps/{map_name}.snag", f"snag:{map_name}")):
+                        (f"maps/{map_name}.rune", f"rune:{map_name}")):
                     destination = game / filename
                     destination.write_bytes(Path(roles[role]["path"]).read_bytes())
                 lanes.append({
@@ -454,8 +452,7 @@ class FleetRunnerLiveTest(unittest.TestCase):
                     "statsdb_backup": str(game / "route-only-session.db"),
                     "artifacts": {
                         field: self.core._file_record(game / "maps" / f"{map_name}.{suffix}")
-                        for field, suffix in (("bsp_file", "bsp"), ("rune_file", "rune"),
-                                              ("snag_file", "snag"))
+                        for field, suffix in (("bsp_file", "bsp"), ("rune_file", "rune"))
                     },
                 })
             spec = root / "route-run.json"
@@ -497,9 +494,9 @@ class FleetRunnerLiveTest(unittest.TestCase):
                         self.core, "_verify_installed_bundle",
                         return_value=(active, bundle_verifier)), mock.patch.object(
                             self.core, "_validate_installed_final_corpus",
-                            side_effect=ValueError("cross-map SNAG")), mock.patch.object(
+                            side_effect=ValueError("cross-map RUNE")), mock.patch.object(
                                 live, "_start", side_effect=AssertionError("route launched")):
-                    with self.assertRaisesRegex(ValueError, "cross-map SNAG"):
+                    with self.assertRaisesRegex(ValueError, "cross-map RUNE"):
                         live.run_route_only(self.core, spec, state, evidence)
                 self.assertFalse(state.exists())
                 self.assertFalse(evidence.exists())

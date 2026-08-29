@@ -334,20 +334,19 @@ def _validate_final_corpus_binding(
         raise BundleError(f"final corpus binding is invalid: {exc}") from exc
 
 
-def _expected_roles() -> tuple[set[str], set[str]]:
+def _expected_roles() -> set[str]:
     maps = _maps()
     required = set(FIXED_ROLES)
     required.update(f"bsp:{name}" for name in maps)
     required.update(f"rune:{name}" for name in maps)
-    optional = {f"snag:{name}" for name in maps}
-    return required, optional
+    return required
 
 
 def _role_path(role: str) -> str:
     if role in FIXED_ROLES:
         return FIXED_ROLES[role]
     kind, separator, map_name = role.partition(":")
-    if separator and kind in {"bsp", "rune", "snag"} and map_name in _maps():
+    if separator and kind in {"bsp", "rune"} and map_name in _maps():
         return f"game/maps/{map_name}.{kind}"
     raise BundleError(f"unknown bundle role: {role}")
 
@@ -384,7 +383,7 @@ def _validate_content(authority: Any) -> dict:
     files = authority["files"]
     if not isinstance(files, list):
         raise BundleError("bundle file inventory is not a list")
-    required, optional = _expected_roles()
+    required = _expected_roles()
     seen_roles, seen_paths = set(), set()
     records = []
     for record in files:
@@ -394,7 +393,7 @@ def _validate_content(authority: Any) -> dict:
         path = _safe_relative(record["path"])
         role = record["role"]
         if (not isinstance(role, str) or role in seen_roles or path in seen_paths or
-                role not in required | optional or path != _role_path(role) or
+                role not in required or path != _role_path(role) or
                 record["mode"] not in {0o444, 0o555} or
                 type(record["size"]) is not int or record["size"] < 0 or
                 SHA_RE.fullmatch(str(record["sha256"])) is None):
@@ -402,10 +401,8 @@ def _validate_content(authority: Any) -> dict:
         seen_roles.add(role)
         seen_paths.add(path)
         records.append(dict(record))
-    if not required.issubset(seen_roles) or not seen_roles.issubset(required | optional):
+    if seen_roles != required:
         raise BundleError("bundle file role inventory is incomplete")
-    if any(f"snag:{name}" not in seen_roles for name in _topmaps()):
-        raise BundleError("top-20 bundle artifacts require matching SNAG files")
     if records != sorted(records, key=lambda item: item["path"]):
         raise BundleError("bundle file inventory is not path-sorted")
     by_role = {record["role"]: record for record in records}

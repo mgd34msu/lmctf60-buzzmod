@@ -328,7 +328,7 @@ class RuneCorpusFinalizerTest(unittest.TestCase):
             identity = finalizer._identity(SnapshotDefinedApi, snapshot, run_root)
             self.assertEqual(("map1", "map2", "map3"), identity["maps"])
 
-    def test_bundle_binding_replays_each_present_snag_from_its_final_attempt(self):
+    def test_bundle_binding_replays_runes_bsps_and_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             snapshot, run_root, corpus_root = root / "snapshot", root / "run", root / "corpus"
@@ -357,19 +357,11 @@ class RuneCorpusFinalizerTest(unittest.TestCase):
             for index, map_name in enumerate(maps):
                 rune = f"rune-{map_name}\n".encode("ascii")
                 bsp = f"bsp-{map_name}\n".encode("ascii")
-                snag = (
-                    run_root / "runs" / map_name / "attempt-0001" / "cold-load"
-                    / "private" / "game" / "maps" / f"{map_name}.snag"
-                )
-                snag.parent.mkdir(parents=True)
-                snag.write_bytes(f"snag-{map_name}\n".encode("ascii"))
-                snag.chmod(0o444)
                 result_path = run_root / "runs" / map_name / "attempt-0001" / "result.json"
                 result = {
                     "map": map_name, "attempt": 1,
                     "artifact_sha256": digest(rune),
                     "artifact": {"size": len(rune), "sha256": digest(rune)},
-                    "cold_load_snag_record": str(snag.relative_to(run_root)),
                 }
                 controller.atomic_write_json(result_path, result, mode=0o444)
                 results.append({
@@ -386,9 +378,6 @@ class RuneCorpusFinalizerTest(unittest.TestCase):
                 roles[f"asset:{map_name}"] = {"size": len(bsp), "sha256": digest(bsp)}
                 bundle_roles[f"rune:{map_name}"] = {"size": len(rune), "sha256": digest(rune)}
                 bundle_roles[f"bsp:{map_name}"] = dict(roles[f"asset:{map_name}"])
-                bundle_roles[f"snag:{map_name}"] = controller.regular_file_record(
-                    snag, require_unaliased=True
-                )
             authority_path = corpus_root / "corpus-authority.json"
             authority_path.write_text("{}\n", encoding="ascii")
             authority_path.chmod(0o444)
@@ -423,30 +412,6 @@ class RuneCorpusFinalizerTest(unittest.TestCase):
                     engine_record={"size": len(engine), "sha256": digest(engine)},
                 )
             self.assertEqual(set(maps), set(checked))
-            bundle_roles["snag:map1"]["sha256"] = "0" * 64
-            with mock.patch.object(finalizer, "verify_final_corpus", return_value=verified):
-                with self.assertRaisesRegex(controller.CorpusError, "snag:map1"):
-                    finalizer.validate_bundle_final_corpus_binding(
-                        BindingApi, binding=binding, controller_record=controller_record,
-                        finalizer_record=finalizer_record, bundle_roles=bundle_roles,
-                    )
-            bundle_roles["snag:map1"] = controller.regular_file_record(
-                run_root / "runs" / "map1" / "attempt-0001" / "cold-load" / "private"
-                / "game" / "maps" / "map1.snag", require_unaliased=True,
-            )
-            result_path = run_root / "runs" / "map1" / "attempt-0001" / "result.json"
-            result, _raw = controller._load_json_regular(result_path)
-            result["cold_load_snag_record"] = str(
-                (run_root / "runs" / "map2" / "attempt-0001" / "cold-load" / "private"
-                 / "game" / "maps" / "map2.snag").relative_to(run_root)
-            )
-            controller.atomic_write_json(result_path, result, mode=0o444)
-            with mock.patch.object(finalizer, "verify_final_corpus", return_value=verified):
-                with self.assertRaisesRegex(controller.CorpusError, "SNAG record"):
-                    finalizer.validate_bundle_final_corpus_binding(
-                        BindingApi, binding=binding, controller_record=controller_record,
-                        finalizer_record=finalizer_record, bundle_roles=bundle_roles,
-                    )
 
     def test_publish_verify_and_repeat_ignore_mutable_pointer(self):
         with tempfile.TemporaryDirectory() as temporary:

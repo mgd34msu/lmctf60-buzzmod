@@ -16,7 +16,7 @@ inode, and SHA-256:
 - the production configuration;
 - the pinned demo decoder and `fleet_runner_live.py` runtime;
 - the ten map-list files;
-- every top-20 BSP, RUNE, SNAG, and flag-origin authority.
+- every top-20 BSP, RUNE, and flag-origin authority.
 
 Each lane record names its private root, exact engine and client argument
 vectors, serverrecord directory, POV demo path, canonical offset, and complete
@@ -24,11 +24,11 @@ artifact inventory. The runner rejects missing fields, extra fields, symlinks,
 map-list drift, development-launcher arguments, and a runtime helper that is
 not the sibling of the exact runner being executed. It imports the exact
 sibling `server_bundle.py`, verifies the active installed generation, and
-requires each runtime module, config, maplist, BSP, RUNE, and SNAG copy to match
+requires each runtime module, config, maplist, BSP, and RUNE copy to match
 its installed role by size and SHA-256. Before launch, it replays the installed
-sealed final corpus across all 175 maps and requires the RUNE, BSP, module, and
-every present SNAG role to match. Every residence records that bundle ID and the
-same final-corpus binding.
+sealed final corpus across all 175 maps and requires the RUNE, BSP, and module
+roles to match. Every residence records that bundle ID and the same final-corpus
+binding.
 
 The state and evidence roots must not exist before `run`. Stop the old
 `wavewatch` and `waveloop` development fleet first. They are neither a parent
@@ -52,7 +52,7 @@ change.
 
 For every residence, the runner starts a map-local serverrecord, authenticates
 the exact ten-bot roster and census, controls one persistent spectator's POV
-lifecycle, and binds the console, demo, BSP, RUNE, SNAG, process, client, and
+lifecycle, and binds the console, demo, BSP, RUNE, process, client, and
 frame identities into a receipt. It signals only captured pidfds. Successful
 shutdown freezes 210 receipts, a hash-chained ledger, and a `SAFE_STOPPED`
 owner record.
@@ -72,8 +72,6 @@ python3 -B tools/fleet-runner.py verify \
 The verifier requires frozen trees, an unheld lock, absent engine and client
 generations, the exact schedule and wrap, one unchanged generation per lane,
 complete POV and serverrecord lifecycles, and a canonical 210-entry ledger.
-`snag_corpus.py` imports this same verifier from the exact runner bytes and
-repeats it around final sidecar derivation.
 
 ## Focused gate
 
@@ -90,7 +88,7 @@ script.
 ## Route-only ordinary-match proof
 
 These ten maps are the only development `ROUTE_ONLY` candidate universe. They
-are deliberately outside the top-20 fleet and are not SNAG-corpus input:
+are deliberately outside the top-20 fleet:
 
 ```text
 r01 lmctf01   r02 lmctf06   r03 lmctf12   r04 lmctf15   r05 lmctf19
@@ -124,7 +122,7 @@ candidate classified `PASS` cannot appear in the spec, and omitting or adding a
 selected lane fails before launch. Selected roots and private game roots must be
 pairwise disjoint. Each lane has an
 initially absent `route-only-session.db` destination,
-and exact loaded `game.so`, `gamex86_64.so`, empty maplist, BSP, RUNE, and SNAG
+and exact loaded `game.so`, `gamex86_64.so`, empty maplist, BSP, and RUNE
 copies. Each selected controller result must match its RUNE and BSP bytes,
 module bytes, and the controller's stable port assignment.
 
@@ -153,8 +151,7 @@ cross-map flag route.
 The successful owner records a normal `quit` request and clean engine exit
 before it is frozen as `SAFE_STOPPED`; verifier cleanup never signals any
 uncaptured process. Failed roots are evidence only and cannot be resumed or
-stitched. The canonical fleet, `tools/topmaps.txt`, and `snag_corpus.py` remain
-unchanged.
+stitched. The canonical fleet and `tools/topmaps.txt` remain unchanged.
 
 ```sh
 make -f GNUmakefile route-only-match-test

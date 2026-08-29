@@ -700,7 +700,7 @@ def validate_bundle_final_corpus_binding(
     bundle_roles: Mapping[str, Mapping[str, Any]],
     engine_record: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Bind every bundled RUNE, BSP, module, and present SNAG to one corpus."""
+    """Bind every bundled RUNE, BSP, and module to one corpus."""
     if not isinstance(binding, Mapping) or set(binding) != FINAL_CORPUS_BINDING_FIELDS:
         raise api.CorpusError("final corpus binding is incomplete")
     if not isinstance(bundle_roles, Mapping):
@@ -801,24 +801,6 @@ def validate_bundle_final_corpus_binding(
             expected=_binding_role_record(api, bundle_roles, f"bsp:{map_name}"),
             label=f"bsp:{map_name}",
         )
-        snag_role = bundle_roles.get(f"snag:{map_name}")
-        if snag_role is not None:
-            snag_relative = result.get("cold_load_snag_record")
-            expected_snag = (
-                run_root / "runs" / map_name / f"attempt-{item['attempt']:04d}"
-                / "cold-load" / "private" / "game" / "maps" / f"{map_name}.snag"
-            )
-            if (
-                not isinstance(snag_relative, str)
-                or run_root / snag_relative != expected_snag
-            ):
-                raise api.CorpusError(f"final corpus binding SNAG record drifted for {map_name}")
-            _binding_matches_record(
-                api,
-                record=api.regular_file_record(expected_snag, require_unaliased=True),
-                expected=_binding_role_record(api, bundle_roles, f"snag:{map_name}"),
-                label=f"snag:{map_name}",
-            )
         checked[map_name] = dict(item)
     return checked
 

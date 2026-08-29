@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise runegen's two-engine RUNE/SNAG acceptance boundary."""
+"""Exercise runegen's two-engine RUNE acceptance boundary."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -60,7 +59,10 @@ count=$(( count + 1 ))
 printf '%s\n' "$count" > "$RUNEGEN_LAUNCH_COUNT"
 stage="$PWD/$game"
 artifact="$stage/maps/$mapname.rune"
-snag="$stage/maps/$mapname.snag"
+if find "$stage" -iname '*snag*' -print -quit | grep -q .; then
+    echo "retired artifact leaked into private stage" >&2
+    exit 96
+fi
 IFS= read -r first || exit 94
 IFS= read -r second || exit 94
 IFS= read -r third || exit 94
@@ -80,9 +82,8 @@ if [ "$count" -eq 1 ]; then
         echo "generation received $second" >&2
         exit 94
     fi
-    if [ -e "$artifact" ] || [ -L "$artifact" ] ||
-            [ -e "$snag" ] || [ -L "$snag" ]; then
-        echo "old pair leaked into generation stage" >&2
+    if [ -e "$artifact" ] || [ -L "$artifact" ]; then
+        echo "old RUNE leaked into generation stage" >&2
         exit 97
     fi
     cp "$RUNEGEN_FIXTURE" "$artifact"
@@ -116,68 +117,39 @@ if [ "$count" -ne 2 ] || [ "$second" != "sv sg add red" ]; then
     echo "cold load received $second at launch $count" >&2
     exit 94
 fi
-if [ ! -f "$artifact" ] || [ -L "$artifact" ] ||
-        [ ! -f "$snag" ] || [ -L "$snag" ]; then
-    echo "cold load did not receive independent pair files" >&2
+if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+    echo "cold load did not receive the staged RUNE" >&2
     exit 98
 fi
-rune_sha="$(sha256sum "$artifact" | awk '{print $1}')"
-snag_sha="$(sha256sum "$snag" | awk '{print $1}')"
-declared_rune="$(awk '$1 == "rune_sha256" {print $2}' "$snag")"
-evidence_sha="$(awk '$1 == "evidence_sha256" {print $2}' "$snag")"
-repairs="$(awk '$1 == "repairs" {print $2}' "$snag")"
-if [ "$repairs" != 0 ] || [ "$declared_rune" != "$rune_sha" ]; then
-    echo "fake cold loader rejected actual SNAG bytes" >&2
-    exit 98
-fi
-if ! find "$RUNEGEN_LOGS" -maxdepth 1 -name '*.snag-bootstrap-evidence.json' \
-        -type f -print -quit | grep -q .; then
-    echo "evidence file missing" >&2
-    exit 98
-fi
-evidence_file="$(find "$RUNEGEN_LOGS" -maxdepth 1 \
-    -name '*.snag-bootstrap-evidence.json' -type f -print -quit)"
-actual_evidence_sha="$(sha256sum "$evidence_file" | awk '{print $1}')"
-if [ "$actual_evidence_sha" != "$evidence_sha" ]; then
-    echo "fake cold loader rejected evidence binding" >&2
-    exit 98
-fi
-attestation="slipgate: snag ready map=$mapname repairs=0 rune_sha256=$rune_sha evidence_sha256=$evidence_sha snag_sha256=$snag_sha"
 ready="slipgate: rune ready $mapname, 2 seeds, 2 links, 3 mechanism nodes, 1 plans, gravity 650, all fields up"
 case "$scenario" in
-    missing-attestation)
+    missing-readiness)
+        echo "ordinary output"
+        ;;
+    duplicate-readiness)
+        echo "$ready"
         echo "$ready"
         ;;
-    duplicate-attestation)
-        echo "$attestation"
-        echo "$attestation"
-        echo "$ready"
-        ;;
-    reversed-attestation)
-        echo "$ready"
-        echo "$attestation"
-        ;;
-    wrong-attestation)
-        echo "${attestation/rune_sha256=$rune_sha/rune_sha256=$(printf '0%.0s' {1..64})}"
-        echo "$ready"
+    wrong-readiness)
+        echo "${ready/2 seeds/3 seeds}"
         ;;
     cold-write)
-        echo "$attestation"
         echo "rune: wrote forbidden"
         echo "$ready"
         ;;
     cold-nonzero)
-        echo "$attestation"
         echo "$ready"
         exit 92
         ;;
     mutate-module)
-        echo "$attestation"
         echo "$ready"
         printf 'changed\n' >> "$stage/game.so"
         ;;
+    mutate-bsp)
+        echo "$ready"
+        printf 'changed\n' >> "$stage/maps/$mapname.bsp"
+        ;;
     *)
-        echo "$attestation"
         echo "$ready"
         ;;
 esac
@@ -212,7 +184,6 @@ class RunegenGateTest(unittest.TestCase):
         scenario: str,
         *,
         dry_run: bool = False,
-        old_snag: bytes | None = b"old-snag",
         maxclients: str = "16",
         signal_run: bool = False,
         reject_timeout_command: bool = False,
@@ -230,13 +201,15 @@ class RunegenGateTest(unittest.TestCase):
             logs.mkdir()
             (live / "rune.cfg").write_text("set maxclients 7\n", encoding="utf-8")
             (live / "pak1.pak").write_bytes(b"asset")
+            (live / "snag-corpus-manifest.json").write_bytes(b"retired")
             (live / "game.so").write_bytes(b"module")
             (live / "gamex86_64.so").write_bytes(b"module")
+            (maps / f"{MAP}.bsp").write_bytes(b"map-bsp")
+            (maps / f"{MAP}.snag").write_bytes(b"retired")
+            (maps / "other.snag").write_bytes(b"retired")
+            (maps / "snag-bootstrap-evidence.json").write_bytes(b"retired")
             old_rune_path = maps / f"{MAP}.rune"
-            old_snag_path = maps / f"{MAP}.snag"
             old_rune_path.write_bytes(b"old-rune")
-            if old_snag is not None:
-                old_snag_path.write_bytes(old_snag)
             fixture = work / "fixture.rune"
             fixture.write_bytes(_build_rune())
             engine = engine_dir / "q2ded"
@@ -344,7 +317,6 @@ class RunegenGateTest(unittest.TestCase):
             return {
                 "completed": completed,
                 "rune": old_rune_path.read_bytes(),
-                "snag": old_snag_path.read_bytes() if old_snag_path.exists() else None,
                 "launches": int(launch_count.read_text()) if launch_count.exists() else 0,
                 "commands": commands.read_text() if commands.exists() else "",
                 "logs": sorted(path.name for path in logs.glob("*.log")),
@@ -355,21 +327,13 @@ class RunegenGateTest(unittest.TestCase):
                 "fixture": fixture.read_bytes(),
             }
 
-    def test_success_uses_two_engines_and_installs_fresh_pair(self):
+    def test_success_uses_two_engines_and_installs_fresh_rune(self):
         result = self.run_scenario("success")
         completed = result["completed"]
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
         self.assertEqual(2, result["launches"])
         self.assertEqual("launch=1:sv rune\nlaunch=2:sv sg add red\n", result["commands"])
         self.assertEqual(result["fixture"], result["rune"])
-        fields = dict(
-            line.split(" ", 1)
-            for line in result["snag"].decode("ascii").splitlines()
-        )
-        self.assertEqual("0", fields["repairs"])
-        self.assertEqual(
-            hashlib.sha256(result["rune"]).hexdigest(), fields["rune_sha256"]
-        )
         self.assertEqual(
             1, len([name for name in result["logs"] if name.endswith("-generation.log")])
         )
@@ -378,10 +342,9 @@ class RunegenGateTest(unittest.TestCase):
         )
         self.assertEqual(1, len(result["backups"]))
         backup = result["backups"][0]
-        self.assertTrue(backup["old"]["rune"]["exists"])
-        self.assertTrue(backup["old"]["snag"]["exists"])
+        self.assertTrue(backup["rune"]["exists"])
 
-    def test_generation_failures_never_launch_cold_or_change_live_pair(self):
+    def test_generation_failures_never_launch_cold_or_change_live_rune(self):
         for scenario in (
             "generation-readiness",
             "generation-failure",
@@ -394,30 +357,22 @@ class RunegenGateTest(unittest.TestCase):
                 self.assertEqual(1, result["completed"].returncode)
                 self.assertEqual(1, result["launches"])
                 self.assertEqual(b"old-rune", result["rune"])
-                self.assertEqual(b"old-snag", result["snag"])
 
-    def test_cold_attestation_failures_preserve_old_pair(self):
+    def test_cold_attestation_failures_preserve_old_rune(self):
         for scenario in (
-            "missing-attestation",
-            "duplicate-attestation",
-            "reversed-attestation",
-            "wrong-attestation",
+            "missing-readiness",
+            "duplicate-readiness",
+            "wrong-readiness",
             "cold-write",
             "cold-nonzero",
             "mutate-module",
+            "mutate-bsp",
         ):
             with self.subTest(scenario=scenario):
                 result = self.run_scenario(scenario)
                 self.assertEqual(1, result["completed"].returncode)
                 self.assertEqual(2, result["launches"])
                 self.assertEqual(b"old-rune", result["rune"])
-                self.assertEqual(b"old-snag", result["snag"])
-
-    def test_failed_run_preserves_absent_old_snag(self):
-        result = self.run_scenario("missing-attestation", old_snag=None)
-        self.assertEqual(1, result["completed"].returncode)
-        self.assertEqual(b"old-rune", result["rune"])
-        self.assertIsNone(result["snag"])
 
     def test_invalid_maxclients_stops_before_launch(self):
         result = self.run_scenario("success", maxclients="0")
@@ -429,7 +384,6 @@ class RunegenGateTest(unittest.TestCase):
         result = self.run_scenario("linger-generation", signal_run=True)
         self.assertNotEqual(0, result["completed"].returncode)
         self.assertEqual(b"old-rune", result["rune"])
-        self.assertEqual(b"old-snag", result["snag"])
 
     def test_engine_has_no_elapsed_timeout(self):
         result = self.run_scenario("success", reject_timeout_command=True)
@@ -437,7 +391,7 @@ class RunegenGateTest(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
         self.assertEqual(2, result["launches"])
 
-    def test_dry_run_describes_two_engines_and_pair_transaction(self):
+    def test_dry_run_describes_two_engines_and_rune_transaction(self):
         result = self.run_scenario("success", dry_run=True)
         completed = result["completed"]
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
@@ -445,9 +399,9 @@ class RunegenGateTest(unittest.TestCase):
         self.assertIn("generation launch sends only: maxclients, sv rune, quit", completed.stdout)
         self.assertIn("no elapsed deadline", completed.stdout)
         self.assertIn("cold launch sends only: maxclients, sv sg add red, quit", completed.stdout)
-        self.assertIn("omit runetest.rune and runetest.snag", completed.stdout)
-        self.assertIn("repairs=0 SNAG", completed.stdout)
-        self.assertIn("SNAG-first, RUNE-second", completed.stdout)
+        self.assertIn("omit runetest.rune", completed.stdout)
+        self.assertIn("bind the RUNE to exact provenance", completed.stdout)
+        self.assertIn("journal one RUNE install", completed.stdout)
 
 
 if __name__ == "__main__":

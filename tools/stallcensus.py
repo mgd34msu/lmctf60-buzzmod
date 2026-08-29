@@ -3,7 +3,6 @@
 
 Strict analysis requires complete serverrecord frames, stable player identity,
 exact receipt windows, one-second census coverage, and RUNE-bound route rows.
-The output describes evidence; snagrepair owns repair selection and encoding.
 """
 
 import argparse
@@ -39,7 +38,7 @@ STALL_GROSS_UNITS = 48.0     # gross path length floor for "jitter" -- double
                               # the net ceiling so genuine push-and-cancel
                               # motion trips it, not position quantization
 STALL_YAW_DPS = 120.0        # sustained yaw-rate floor for "yaw_turn"
-STALL_PUSH_UNITS = 8.0       # yaw alone is a deliberate scan, not a snag
+STALL_PUSH_UNITS = 8.0       # yaw alone is a deliberate scan, not a stall
 POST_R = 200.0                # own-stand radius counted as holding a post
 CLUSTER_R = 64.0              # stall-midpoint clustering radius
 
@@ -355,7 +354,7 @@ episodes. Returns (stall_seconds, post_seconds, [stall episode dicts
                         dyaw_tot / (win * DT) >= STALL_YAW_DPS)
         # A post is deliberate only when it lacks navigation-failure
         # evidence.  A bot visibly pushing or hunting at its own stand is a
-        # snag, not a successful guard hold.
+        # stall, not a successful guard hold.
         kind = 'stall' if jitter or yaw_turn else ('post' if near_own else None)
         if kind is None:
             continue
@@ -455,14 +454,14 @@ def analyze(path, stands_all, map_identities=None, *, expected_map=None,
     if (authenticated and
             (d.get('parse_complete') is not True or
              d.get('terminated') is not True)):
-        raise ValueError("authenticated snag census requires a complete decode")
+        raise ValueError("authenticated stall census requires a complete decode")
     if cap_s is not None:
         film.cap_tracks_to_duration(d, cap_s=cap_s)
     if expected_map is not None and d['map'] != expected_map:
         raise ValueError(
             f"demo map {d['map']!r} does not match {expected_map!r}")
     if require_svrecord and not d['svrecord']:
-        raise ValueError("authenticated snag census requires serverrecord")
+        raise ValueError("authenticated stall census requires serverrecord")
     if require_svrecord:
         wire_frames = d.get('wire_framenums')
         if (not isinstance(wire_frames, list) or
@@ -471,7 +470,7 @@ def analyze(path, stands_all, map_identities=None, *, expected_map=None,
                 any(right != left + 1
                     for left, right in zip(wire_frames, wire_frames[1:]))):
             raise ValueError(
-                "authenticated snag census requires consecutive wire frames")
+                "authenticated stall census requires consecutive wire frames")
     if frame_range is not None:
         if (not isinstance(frame_range, (tuple, list)) or
                 len(frame_range) != 2 or
@@ -499,7 +498,7 @@ def analyze(path, stands_all, map_identities=None, *, expected_map=None,
     if frame_range is not None:
         epochs = d.get('skin_epochs')
         if not isinstance(epochs, dict):
-            raise ValueError("authenticated snag census requires skin epochs")
+            raise ValueError("authenticated stall census requires skin epochs")
         raw_skins = {}
         for ent in d['tracks']:
             slot_epochs = epochs.get(ent - 1, [])
@@ -528,7 +527,7 @@ def analyze(path, stands_all, map_identities=None, *, expected_map=None,
     stands = stands_all.get(d['map'])
     if frame_range is not None:
         if not isinstance(stands, dict) or set(stands) != {'red', 'blue'}:
-            raise ValueError("authenticated snag census requires both flag stands")
+            raise ValueError("authenticated stall census requires both flag stands")
         for team, origin in stands.items():
             if (not isinstance(origin, (tuple, list)) or len(origin) < 2 or
                     any(not isinstance(value, (int, float)) or
@@ -651,7 +650,7 @@ def analyze(path, stands_all, map_identities=None, *, expected_map=None,
         'stall_episodes': visible_episodes if frame_range is not None else None,
         # Never aggregate these over maps: their coordinates are meaningful
         # only under this row's map identity.
-        'snag_clusters': cluster_points(points),
+        'stall_clusters': cluster_points(points),
         'top_stall_locations': cluster_points(points)[:3],
         '_durations': durations,      # for --compare's exact pooled median;
         '_obs_min': obs_min,          # stripped before per-demo printing

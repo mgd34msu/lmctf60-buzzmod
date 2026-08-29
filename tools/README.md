@@ -69,22 +69,12 @@ how the tools fit together and which artifacts they own.
 : Inspect BSP mechanisms, derive map flag metadata, and render graph data for
   diagnosis. Their output is development data unless a manifest binds it.
 
-## Snag evidence
+## Route evidence
 
 `stallcensus.py`
 
 : Joins authenticated residence telemetry with strict serverrecord decoding and
-  emits player and frame-bounded stall episodes.
-
-`snagrepair.py`
-
-: Correlates route stalls with visible motion evidence and writes repairs bound
-  to the exact RUNE and evidence digests.
-
-`snag_corpus.py`
-
-: Builds the 175-map snag corpus from verified stopped-residence receipts. It
-  fails on missing, ambiguous, or changed authority.
+  emits player and frame-bounded stall episodes for diagnosis.
 
 ## Demo and match analysis
 

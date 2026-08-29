@@ -22,15 +22,12 @@ roles and paths:
 - `maplist:s01` through `maplist:s10` at
   `game/maplists/LANE.txt`;
 - one `bsp:MAP` and one `rune:MAP` for every map in
-  `rune-corpus-maps.txt`;
-- each accepted `snag:MAP`, including all top-20 maps.
+  `rune-corpus-maps.txt`.
 
 The builder rejects an extra role, a missing required role, a wrong target
 path, a symlink, a changed input, a noncanonical rotation, unequal module
-aliases, a v1 specification, and a bundle whose RUNE, BSP, module, or present
-SNAG bytes differ from the sealed final corpus. Every top-20 SNAG is required.
-For each optional SNAG, the builder reopens that map's final accepted result and
-requires its `cold_load_snag_record` to match the bundled bytes.
+aliases, a v1 specification, and a bundle whose RUNE, BSP, or module bytes
+differ from the sealed final corpus.
 
 ## Build and verify the release files
 

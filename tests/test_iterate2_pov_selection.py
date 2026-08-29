@@ -8,15 +8,11 @@ import struct
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "tools"))
 
-import runeio  # noqa: E402
-import snagrepair  # noqa: E402
 from tests.test_rune_artifact import _build_rune, _fix_header_crc  # noqa: E402
 
 
@@ -71,21 +67,14 @@ class IterateSelectionTest(unittest.TestCase):
             "rune_contracts_generated.py",
             "rune_pair_preflight.py",
             "runeio.py",
-            "snagrepair.py",
         ):
             shutil.copy2(REPO / "tools" / name, self.tools / name)
         shutil.copy2(REPO / "tools/topmaps.txt", self.tools / "topmaps.txt")
         for line in (self.tools / "topmaps.txt").read_text().splitlines():
             if line and not line.startswith("#"):
                 rune_payload = rune_for_map(line)
-                rune_path = maps / f"{line}.rune"
-                rune_path.write_bytes(rune_payload)
-                rune = runeio.decode_rune(rune_payload)
-                rune_sha256 = hashlib.sha256(rune_payload).hexdigest()
-                (maps / f"{line}.snag").write_text(
-                    snagrepair.render(line, rune, [], "e" * 64, rune_sha256),
-                    encoding="ascii",
-                )
+                (maps / f"{line}.bsp").write_bytes(f"exact-bsp-{line}".encode("ascii"))
+                (maps / f"{line}.rune").write_bytes(rune_payload)
         source = self.root / "multicall.c"
         source.write_text(MULTICALL)
         multicall = self.bin / "multicall"
@@ -137,8 +126,13 @@ class IterateSelectionTest(unittest.TestCase):
         self.assertNotIn("pov-wave.sh", source)
         self.assertNotIn("pov-record.sh", source)
 
-    def test_missing_route_artifact_refuses_to_launch_empty_fleet(self):
-        (self.game_root / "testgame" / "maps" / "lmctf09.snag").unlink()
+    def test_valid_runes_need_no_sidecar(self):
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(sum(line.startswith("fake-q2 ") for line in trace), 10)
+
+    def test_missing_rune_refuses_to_launch_empty_fleet(self):
+        (self.game_root / "testgame" / "maps" / "lmctf09.rune").unlink()
         result, trace = self.run_off(None, "0")
         self.assertEqual(result.returncode, 2)
         self.assertIn("refusing empty fleet", result.stderr)
@@ -155,34 +149,28 @@ class IterateSelectionTest(unittest.TestCase):
         self.assertIn("artifact preflight failed", result.stderr)
         self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
 
-    def test_wrong_snag_rune_sha_refuses_before_launch(self):
-        path = self.game_root / "testgame" / "maps" / "lmctf09.snag"
-        payload = path.read_text(encoding="ascii")
-        payload = re.sub(r"(?m)^rune_sha256 [0-9a-f]{64}$",
-                         "rune_sha256 " + "0" * 64, payload)
-        path.write_text(payload, encoding="ascii")
+    def test_rune_for_different_selected_bsp_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.rune"
+        path.write_bytes(rune_for_map("lmctf10"))
+        result, trace = self.run_off(None, "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("artifact preflight failed", result.stderr)
+        self.assertIn("authenticates map", result.stderr)
+        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
+
+    def test_truncated_rune_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.rune"
+        path.write_bytes(path.read_bytes()[:32])
         result, trace = self.run_off(None, "0")
         self.assertEqual(result.returncode, 2)
         self.assertIn("artifact preflight failed", result.stderr)
         self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
 
-    def test_missing_snag_binding_refuses_before_launch(self):
-        path = self.game_root / "testgame" / "maps" / "lmctf09.snag"
-        lines = path.read_text(encoding="ascii").splitlines()
-        path.write_text("\n".join(
-            line for line in lines if not line.startswith("rune_payload_crc ")
-        ) + "\n", encoding="ascii")
-        result, trace = self.run_off(None, "0")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("artifact preflight failed", result.stderr)
-        self.assertFalse(any(line.startswith("fake-q2 ") for line in trace))
-
-    def test_malformed_snag_binding_refuses_before_launch(self):
-        path = self.game_root / "testgame" / "maps" / "lmctf09.snag"
-        payload = path.read_text(encoding="ascii").replace(
-            "rune_num_links 2", "rune_num_links nope"
-        )
-        path.write_text(payload, encoding="ascii")
+    def test_bad_rune_header_crc_refuses_before_launch(self):
+        path = self.game_root / "testgame" / "maps" / "lmctf09.rune"
+        payload = bytearray(path.read_bytes())
+        payload[64] ^= 1
+        path.write_bytes(payload)
         result, trace = self.run_off(None, "0")
         self.assertEqual(result.returncode, 2)
         self.assertIn("artifact preflight failed", result.stderr)

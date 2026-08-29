@@ -102,10 +102,6 @@ class FleetFixture:
             name: _write(self.inputs / "maps" / f"{name}.bsp", b"bsp\n")
             for name in runner.CANONICAL_TOPMAPS
         }
-        self.snags = {
-            name: _write(self.inputs / "maps" / f"{name}.snag", b"snag\n")
-            for name in runner.CANONICAL_TOPMAPS
-        }
 
     def verify_stopped(self):
         with mock.patch.object(
@@ -196,7 +192,6 @@ class FleetFixture:
                     "bsp_file": self.bsps[name],
                     "rune_file": self.runes[name],
                     "rune_sha256": self.runes[name]["sha256"],
-                    "snag_file": self.snags[name],
                     "sg_players": players,
                     "residence": {
                         "start_frame": 0,

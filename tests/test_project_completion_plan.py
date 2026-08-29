@@ -131,7 +131,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "xmap14",
             "12 isolated workers",
             "no generation or review timeout",
-            "zero `.rune` and zero `.snag` files",
+            "zero `.rune` files and zero obsolete repair sidecars",
             "zero pre-rewrite RUNEs",
             "Do not push",
             "Do not publish remotely",

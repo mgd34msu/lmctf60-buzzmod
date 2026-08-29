@@ -156,7 +156,7 @@ wire contract
     +-- independent Python reader
     +-- lint and semantic completeness
     +-- sidecar migration
-    +-- SNAG retain-or-delete decision
+    +-- obsolete repair-sidecar deletion
     |
     v
 independently readable new-model artifact
@@ -256,7 +256,7 @@ The Sol High review rejected these dependencies from the initial analyses:
 - Proof tooling does not wait for final documentation.
 - Fleet is not a separate mandatory release phase unless it is the selected
   ordinary-match test system.
-- The completion plan does not require a post-fleet SNAG phase.
+- The completion plan does not require a post-fleet repair phase.
 - Every route-only release branch is obsolete and must be deleted.
 - BSP-3 is full 3D configuration space. BSP-4 is hull-valid adjacency. BSP-7
   owns contents and static semantics.
@@ -276,5 +276,6 @@ The contract wave must settle these decisions:
   events.
 - Sparse belief representation and authenticated observations.
 - Wire sections, checksums, hostile-count limits, and reader agreement.
-- Whether SNAG remains a bounded cost sidecar or is deleted.
+- The obsolete seed/link repair sidecar is deleted; any future learned-cost
+  sidecar requires its own stable-cell or capability-kernel contract.
 - The authoritative hard-regression map set and its strict wave barrier.

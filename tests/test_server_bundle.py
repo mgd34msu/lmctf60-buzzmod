@@ -67,7 +67,6 @@ class BundleFixture:
         for map_name in MAPS:
             self._add(f"bsp:{map_name}", f"game/maps/{map_name}.bsp", b"bsp\n")
             self._add(f"rune:{map_name}", f"game/maps/{map_name}.rune", b"rune\n")
-            self._add(f"snag:{map_name}", f"game/maps/{map_name}.snag", b"snag\n")
 
     def _add(self, role: str, relative: str, payload: bytes):
         source = self.root / relative.replace("/", "-")
@@ -199,9 +198,9 @@ class ServerBundleTest(unittest.TestCase):
     def test_final_corpus_binding_blocks_build_release_and_install(self):
         fixture = BundleFixture(self.root, "binding-rejected", b"module\n")
         self.validate_binding_mock.side_effect = server_bundle.BundleError(
-            "cross-map SNAG"
+            "cross-map RUNE"
         )
-        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map SNAG"):
+        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map RUNE"):
             self.build_fixture(
                 fixture,
                 self.root / "binding-rejected.tar",
@@ -211,25 +210,25 @@ class ServerBundleTest(unittest.TestCase):
         self.validate_binding_mock.side_effect = None
         archive, manifest, _release = self.build("binding-accepted", b"module\n")
         self.validate_binding_mock.side_effect = server_bundle.BundleError(
-            "cross-map SNAG"
+            "cross-map RUNE"
         )
-        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map SNAG"):
+        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map RUNE"):
             server_bundle.verify_release(manifest, archive)
-        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map SNAG"):
+        with self.assertRaisesRegex(server_bundle.BundleError, "cross-map RUNE"):
             server_bundle.install_bundle(
                 manifest, archive, self.root / "binding-install", expected_active=None
             )
 
-    def test_topmap_snag_is_mandatory(self):
-        fixture = BundleFixture(self.root, "missing-snag", b"module\n")
-        fixture.entries = [
-            entry for entry in fixture.entries if entry["role"] != f"snag:{TOPMAPS[0]}"
-        ]
-        with self.assertRaisesRegex(server_bundle.BundleError, "top-20"):
+    def test_stale_sidecar_role_is_rejected_as_extra_input(self):
+        fixture = BundleFixture(self.root, "stale-sidecar", b"module\n")
+        fixture._add(
+            f"snag:{TOPMAPS[0]}", f"game/maps/{TOPMAPS[0]}.snag", b"stale\n"
+        )
+        with self.assertRaisesRegex(server_bundle.BundleError, "invalid or duplicate"):
             self.build_fixture(
                 fixture,
-                self.root / "missing-snag.tar",
-                self.root / "missing-snag.json",
+                self.root / "stale-sidecar.tar",
+                self.root / "stale-sidecar.json",
             )
         self.assertFalse(self.build_binding_mock.called)
 

@@ -63,34 +63,6 @@ def report(map_name: str, *, seeds: int = 7, links: int = 9,
     })
 
 
-def bootstrap_snag_text(
-    map_name: str, artifact_sha256: str, evidence_sha256: str
-) -> str:
-    """Return canonical-shaped bootstrap bytes for fake controller tests."""
-    return "\n".join((
-        "snag_format 2",
-        f"map {map_name}",
-        "bsp_checksum 1",
-        "entity_crc 2",
-        "physics_flags 0",
-        "gravity 800",
-        "airaccelerate 0",
-        "maxvelocity 2000",
-        "pmove_ms 25",
-        "frame_ms 100",
-        "host_physics_id 1",
-        "rune_payload_crc 3",
-        "rune_header_crc 4",
-        "rune_action_contract_crc 5",
-        "rune_mechanism_contract_crc 6",
-        "rune_num_seeds 7",
-        "rune_num_links 9",
-        f"rune_sha256 {artifact_sha256}",
-        f"evidence_sha256 {evidence_sha256}",
-        "repairs 0",
-    )) + "\n"
-
-
 class FakeGateRunner:
     def __init__(
         self, map_name: str, *, python_seeds: int | None = None,
@@ -328,9 +300,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
         if actual_tools:
             files["tools/runelint.py"] = ("runelint", ROOT / "tools/runelint.py")
             files["tools/runeio.py"] = ("runeio", ROOT / "tools/runeio.py")
-            files["tools/snagrepair.py"] = (
-                "snagrepair", ROOT / "tools/snagrepair.py",
-            )
             files["tools/rune_contracts_generated.py"] = (
                 "contracts", ROOT / "tools/rune_contracts_generated.py",
             )
@@ -341,14 +310,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
         else:
             add("tools/runelint.py", "runelint", b"raise SystemExit(0)\n")
             add("tools/runeio.py", "runeio", b"def main(argv):\n print(" + repr(gate_report.decode()).encode() + b")\n return 0\n")
-            add(
-                "tools/snagrepair.py", "snagrepair",
-                b"def main(argv):\n"
-                b" import pathlib\n"
-                b" target=pathlib.Path(argv[argv.index('--output')+1])\n"
-                b" target.write_text('fake snag\\n',encoding='ascii')\n"
-                b" return 0\n",
-            )
             add(
                 "tools/rune_contracts_generated.py",
                 "contracts",
@@ -1103,7 +1064,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "python_interpreter_sha256", "python_libpython_sha256",
                 "python_runtime_manifest_sha256", "module_hashes", "action_contract_hash",
                 "mechanism_contract_hash", "linter_sha256", "reader_sha256",
-                "snagrepair_sha256",
                 "acceptor_gnu_sha256", "acceptor_make_sha256",
                 "semantic_checker_manifest_sha256", "semantic_checkers",
                 "adoption_policy_version", "adopted_runes",
@@ -1958,13 +1918,12 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
     def test_fake_engine_pass_failure_unbounded_and_timeout_lifecycle(self):
         class FakeInput:
-            def __init__(self, process, output, private, ready, deferred,
+            def __init__(self, process, output, private, ready,
                          failure_line, exit_failure_line):
                 self.process = process
                 self.output = output
                 self.private = private
                 self.ready = ready
-                self.deferred = deferred
                 self.failure_line = failure_line
                 self.exit_failure_line = exit_failure_line
 
@@ -1992,13 +1951,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                             "slipgate: rune ready lmctf01, 7 seeds, 9 links, "
                             "4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
                         )
-                    if self.deferred:
-                        lines += (
-                            "slipgate: snag declaration missing or invalid for map "
-                            "lmctf01; fields rejected\n"
-                            "slipgate: field setup failed (no flags?); disabled "
-                            "until the next level\n"
-                        )
                     if self.failure_line is not None:
                         lines += self.failure_line + "\n"
                     self.output.write(lines.encode())
@@ -2023,7 +1975,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 return None
 
         class FakeProcess:
-            def __init__(self, output, private, ready, deferred, failure_line,
+            def __init__(self, output, private, ready, failure_line,
                          exit_failure_line, pid, cold_output=None,
                          cold_ready_after_polls=None,
                          generation_ready_after_polls=0, immediate_exit=False):
@@ -2036,7 +1988,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 self.generation_poll_count = 0
                 self.generation_ready_after_polls = generation_ready_after_polls
                 self.stdin = FakeInput(
-                    self, output, private, ready, deferred, failure_line,
+                    self, output, private, ready, failure_line,
                     exit_failure_line
                 )
 
@@ -2075,10 +2027,8 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 run_root: Path,
                 ready: bool,
                 generation_timeout: int | None,
-                deferred: bool = False,
                 failure_line: str | None = None,
                 exit_failure_line: str | None = None,
-                cold_load_snag_failure: bool = False,
                 cold_load_timeout: float = 0.25,
                 cold_ready_after_polls: int | None = 1,
                 generation_ready_after_polls: int | None = 0,
@@ -2117,42 +2067,21 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     self.assertNotEqual("q2ded", launched_engine.name[:15])
                     cold_output = None
                     if launch_number == 2:
-                        artifact = Path(kwargs["cwd"]) / "game/maps/lmctf01.rune"
-                        snag = artifact.with_suffix(".snag")
-                        evidence = Path(kwargs["cwd"]).parent / "snag-bootstrap-evidence.json"
                         def emit_cold_output():
-                            if cold_load_snag_failure:
-                                kwargs["stdout"].write(
-                                    b"slipgate: snag declaration missing or invalid for "
-                                    b"map lmctf01; fields rejected\n"
-                                    b"slipgate: field setup failed (no flags?); disabled "
-                                    b"until the next level\n"
-                                    b"slipgate: rune setup terminal map=lmctf01 "
-                                    b"source=autoload class=infra stage=fields\n"
-                                )
-                            else:
-                                kwargs["stdout"].write(
-                                    (
-                                        "slipgate: snag ready map=lmctf01 repairs=0 "
-                                        f"rune_sha256={controller.sha256_regular(artifact)} "
-                                        f"evidence_sha256={controller.sha256_regular(evidence)} "
-                                        f"snag_sha256={controller.sha256_regular(snag)}\n"
-                                    ).encode("ascii")
-                                )
-                                kwargs["stdout"].write(
-                                    b"slipgate: route contract complete\n"
-                                )
-                                kwargs["stdout"].write(
-                                    b"slipgate: objective roots red=1 blue=2\n"
-                                )
-                                kwargs["stdout"].write(
-                                    b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
-                                    b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
-                                )
+                            kwargs["stdout"].write(
+                                b"slipgate: route contract complete\n"
+                            )
+                            kwargs["stdout"].write(
+                                b"slipgate: objective roots red=1 blue=2\n"
+                            )
+                            kwargs["stdout"].write(
+                                b"slipgate: rune ready lmctf01, 7 seeds, 9 links, "
+                                b"4 mechanism nodes, 5 plans, gravity 800, all fields up\n"
+                            )
                             kwargs["stdout"].flush()
                         cold_output = emit_cold_output
                     fake = FakeProcess(
-                        kwargs["stdout"], Path(kwargs["cwd"]), ready, deferred,
+                        kwargs["stdout"], Path(kwargs["cwd"]), ready,
                         failure_line, exit_failure_line, 424241 + launch_number,
                         cold_output=cold_output,
                         cold_ready_after_polls=(
@@ -2186,30 +2115,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     cold_load_timeouts.append(kwargs["timeout"])
                     return original_cold_load(*args, **kwargs)
 
-                def bootstrap_snag(_attempt, _snapshot, _map_name,
-                                   artifact, _fingerprint, **_kwargs):
-                    evidence = _attempt / "snag-bootstrap-evidence.json"
-                    controller.atomic_write_json(evidence, {
-                        "artifact_sha256": controller.sha256_regular(artifact),
-                        "classification": "NO_ACCEPTED_OBSERVATION",
-                        "fingerprint": _fingerprint,
-                        "format": "lmctf-snag-bootstrap-v1",
-                        "map": _map_name,
-                    })
-                    target = artifact.with_suffix(".snag")
-                    target.write_text(
-                        bootstrap_snag_text(
-                            _map_name,
-                            controller.sha256_regular(artifact),
-                            controller.sha256_regular(evidence),
-                        ),
-                        encoding="ascii",
-                    )
-                    return {
-                        "evidence": controller.regular_file_record(evidence),
-                        "snag": controller.regular_file_record(target),
-                    }
-
                 def heartbeat(event, _map_name, _details):
                     assert heartbeat_events is not None
                     heartbeat_events.append(event)
@@ -2217,7 +2122,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 with mock.patch.object(controller.subprocess, "Popen", side_effect=popen), \
                         mock.patch.object(controller, "wait_for_exec_identity", side_effect=identity_for_engine), \
                         mock.patch.object(controller, "open_pidfd", side_effect=pidfd), \
-                        mock.patch.object(controller, "stage_bootstrap_snag", side_effect=bootstrap_snag), \
                         mock.patch.object(controller, "run_fresh_cold_load", side_effect=cold_load):
                     result = controller.run_one_map(
                         run_root, snapshot, "lmctf01", 62000, "fingerprint",
@@ -2228,15 +2132,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         gate_runner=FakeGateRunner("lmctf01"),
                     )
                 self.assertTrue(descriptors)
-                deferred_write_terminal = (
-                    deferred and failure_line == (
-                        "slipgate: rune setup terminal map=lmctf01 source=write "
-                        "class=infra stage=fields"
-                    )
-                )
                 cold_load_expected = (
-                    (ready or deferred)
-                    and (failure_line is None or deferred_write_terminal)
+                    ready
+                    and failure_line is None
                     and exit_failure_line is None
                 )
                 self.assertEqual(
@@ -2251,7 +2149,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             pass_root = work / "pass-run"
             passed, cold_processes = run_scenario(
-                pass_root, False, 1, deferred=True,
+                pass_root, True, 1,
                 cold_ready_after_polls=3,
             )
             self.assertEqual("PASS", passed["classification"])
@@ -2272,8 +2170,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
             self.assertEqual(4, len(pass_result["gate_log_sha256"]))
             self.assertIsNotNone(pass_result["cold_load_owner_record"])
             self.assertIsNotNone(pass_result["cold_load_log_sha256"])
-            self.assertIsNotNone(pass_result["cold_load_snag_record"])
-            self.assertIsNotNone(pass_result["cold_load_snag_evidence_record"])
             attempt = pass_root / "runs/lmctf01/attempt-0001"
             self.assertEqual(
                 attempt / "private/game/maps/lmctf01.rune",
@@ -2342,11 +2238,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
             )
             self.assertEqual("INFRA_FAIL", post_write_infra["classification"])
             self.assertEqual(write_infra, post_write_infra["detail"])
-            deferred_write_terminal, _cold_processes = run_scenario(
-                work / "deferred-write-terminal-run", False, None,
-                deferred=True, failure_line=write_infra,
-            )
-            self.assertEqual("PASS", deferred_write_terminal["classification"])
 
             immediate, _cold_processes = run_scenario(
                 work / "immediate-exit-run", False, None, immediate_exit=True
@@ -2391,7 +2282,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
 
             cold_timeout_root = work / "cold-timeout-run"
             cold_timed_out, cold_processes = run_scenario(
-                cold_timeout_root, False, 1, deferred=True,
+                cold_timeout_root, True, 1,
                 cold_load_timeout=0.02, cold_ready_after_polls=None,
             )
             self.assertEqual("LINT_FAIL", cold_timed_out["classification"])
@@ -2400,22 +2291,12 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 cold_timed_out["detail"],
             )
             self.assertGreater(cold_processes[0].poll_count, 0)
-
-            cold_failure_root = work / "cold-snag-failure-run"
-            cold_failure, cold_processes = run_scenario(
-                cold_failure_root, False, 1, deferred=True,
-                cold_load_snag_failure=True, cold_load_timeout=5.0,
-            )
-            self.assertEqual("INFRA_FAIL", cold_failure["classification"])
-            self.assertIn("source=autoload class=infra stage=fields", cold_failure["detail"])
-            self.assertLess(cold_processes[0].poll_count, 10)
             self.thaw(snapshot)
             self.thaw(pass_root)
             self.thaw(rejected_root)
             self.thaw(fast_root)
             self.thaw(timeout_root)
             self.thaw(cold_timeout_root)
-            self.thaw(cold_failure_root)
             self.thaw(work / "immediate-exit-run")
             self.thaw(work / "post-write-infra-run")
 
@@ -2730,71 +2611,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     route_only.replace("open-exhausted", "open-budget"),
                     "gatecase", artifact, attempt,
                 )
-            deferred = good.replace(
-                "slipgate: rune ready gatecase, 7 seeds, 9 links, 4 mechanism "
-                "nodes, 5 plans, gravity 800, all fields up\n",
-                "slipgate: snag declaration missing or invalid for map gatecase; "
-                "fields rejected\n"
-                "slipgate: field setup failed (no flags?); disabled until the "
-                "next level\n",
-            )
-            parsed = controller.parse_generation_log(
-                deferred, "gatecase", artifact, attempt
-            )
-            self.assertEqual(5, parsed["counts"]["plans"])
-            self.assertTrue(controller.generation_deferred_publication_complete(
-                deferred.splitlines(), "gatecase"
-            ))
-            interleaved = deferred.replace(
-                "slipgate: snag declaration missing or invalid for map gatecase; "
-                "fields rejected\n",
-                "CBTWHY frames=0 seen=0 fire=0\n"
-                "CBTSCAN unteamed=0 same=0 acquired=0\n"
-                "slipgate: snag declaration missing or invalid for map gatecase; "
-                "fields rejected\n",
-            )
-            self.assertTrue(controller.generation_deferred_publication_complete(
-                interleaved.splitlines(), "gatecase"
-            ))
-            self.assertEqual(
-                5,
-                controller.parse_generation_log(
-                    interleaved, "gatecase", artifact, attempt
-                )["counts"]["plans"],
-            )
-            invalid_deferred = (
-                deferred.replace("map gatecase", "map wrongmap"),
-                deferred.replace(
-                    "slipgate: snag declaration missing or invalid for map gatecase; "
-                    "fields rejected\n"
-                    "slipgate: field setup failed (no flags?); disabled until the "
-                    "next level\n",
-                    "slipgate: field setup failed (no flags?); disabled until the "
-                    "next level\n"
-                    "slipgate: snag declaration missing or invalid for map gatecase; "
-                    "fields rejected\n",
-                ),
-                deferred.replace(
-                    "rune: wrote game/maps/gatecase.rune (7 seeds, 9 links, "
-                    "4 mechanism nodes, 2 triggers, 3 inventory edges, "
-                    "5 activation plans)\n",
-                    "",
-                ),
-            )
-            for invalid in invalid_deferred:
-                with self.subTest(invalid=invalid.splitlines()[-2:]):
-                    self.assertFalse(
-                        controller.generation_deferred_publication_complete(
-                            invalid.splitlines(), "gatecase"
-                        )
-                    )
-                    with self.assertRaisesRegex(
-                        controller.CorpusError,
-                        "generation completion|final write",
-                    ):
-                        controller.parse_generation_log(
-                            invalid, "gatecase", artifact, attempt
-                        )
             with self.assertRaisesRegex(controller.CorpusError, "objective-root"):
                 controller.parse_generation_log(
                     good.replace(
@@ -3060,14 +2876,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
             controller.parse_cold_load_log(
                 ready.replace("7 seeds", "8 seeds"), "lmctf01", counts
             )
-        with self.assertRaisesRegex(
-            controller.CorpusError, "snag declaration missing or invalid"
-        ):
+        with self.assertRaisesRegex(controller.CorpusError, "runtime-ready"):
             controller.parse_cold_load_log(
-                "slipgate: snag declaration missing or invalid for map lmctf01; "
-                "fields rejected\n"
-                "slipgate: field setup failed (no flags?); disabled until the "
-                "next level\n",
+                "ordinary output without readiness\n",
                 "lmctf01",
                 counts,
             )
@@ -3122,166 +2933,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
             with self.assertRaisesRegex(controller.CorpusError, "changed after it was parsed"):
                 reader.bound_record()
             reader.close()
-
-    def test_cold_load_bootstrap_snag_uses_frozen_tool_and_exact_artifact(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            snapshot = self.make_snapshot(work)
-            attempt = work / "attempt"
-            artifact = attempt / "private/game/maps/lmctf01.rune"
-            artifact.parent.mkdir(parents=True)
-            artifact.write_bytes(b"authenticated-rune-bytes")
-            before = controller.regular_file_record(artifact)
-
-            heartbeat_check = mock.Mock()
-
-            def verified(_snapshot, _layout, label, target, arguments, **kwargs):
-                self.assertEqual(label, "snag-bootstrap")
-                self.assertIs(heartbeat_check, kwargs["heartbeat_check"])
-                roles = controller.verify_snapshot(snapshot)["by_role"]
-                self.assertEqual(
-                    target, snapshot / roles["snagrepair"]["path"])
-                self.assertEqual(arguments[:3], [
-                    "--explicit-zero", "--map", "lmctf01"])
-                self.assertEqual(arguments[3:5], ["--rune", str(artifact)])
-                output = Path(arguments[arguments.index("--output") + 1])
-                evidence = Path(
-                    arguments[arguments.index("--evidence-manifest") + 1])
-                output.write_text(
-                    bootstrap_snag_text(
-                        "lmctf01",
-                        controller.sha256_regular(artifact),
-                        controller.sha256_regular(evidence),
-                    ),
-                    encoding="ascii",
-                )
-                return 0, b"", {"ready": {}, "done": {}}
-
-            with mock.patch.object(
-                    controller, "run_verified_python", side_effect=verified):
-                result = controller.stage_bootstrap_snag(
-                    attempt, snapshot, "lmctf01", artifact, "f" * 64,
-                    heartbeat_check=heartbeat_check,
-                )
-            self.assertEqual(controller.regular_file_record(artifact), before)
-            self.assertEqual(result["snag"]["mode"], 0o444)
-            self.assertEqual(result["evidence"]["mode"], 0o444)
-            evidence = json.loads(
-                (attempt / "snag-bootstrap-evidence.json").read_text())
-            self.assertEqual(evidence, {
-                "artifact_sha256": before["sha256"],
-                "classification": "NO_ACCEPTED_OBSERVATION",
-                "fingerprint": "f" * 64,
-                "format": "lmctf-snag-bootstrap-v1",
-                "map": "lmctf01",
-            })
-            (attempt / "snag-bootstrap-evidence.json").chmod(0o644)
-            (attempt / "snag-bootstrap-evidence.json").write_text(
-                '{"changed":true}\n', encoding="ascii")
-            with self.assertRaisesRegex(
-                    controller.GateIntegrityError, "changed its bootstrap"):
-                controller._validate_retained_bootstrap_snag(
-                    result,
-                    artifact_sha256=before["sha256"],
-                    fingerprint="f" * 64,
-                    map_name="lmctf01",
-                )
-            self.thaw(snapshot)
-
-    def test_cold_load_bootstrap_snag_observes_heartbeat_failure(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            snapshot = self.make_snapshot(work)
-            attempt = work / "attempt"
-            artifact = attempt / "private/game/maps/lmctf01.rune"
-            artifact.parent.mkdir(parents=True)
-            artifact.write_bytes(b"authenticated-rune-bytes")
-            with mock.patch.object(
-                    controller,
-                    "run_verified_python",
-                    side_effect=lambda *_args, **kwargs: kwargs["heartbeat_check"](),
-            ) as verified:
-                with self.assertRaisesRegex(controller.CorpusError, "ticker write failed"):
-                    controller.stage_bootstrap_snag(
-                        attempt, snapshot, "lmctf01", artifact, "f" * 64,
-                        heartbeat_check=lambda: (_ for _ in ()).throw(
-                            controller.CorpusError("ticker write failed")
-                        ),
-                    )
-            self.assertIsNotNone(verified.call_args.kwargs["heartbeat_check"])
-            self.thaw(snapshot)
-
-    def test_cold_load_bootstrap_snag_rejects_gate_and_output_drift(self):
-        scenarios = (
-            ("exit", controller.CorpusError),
-            ("stdout", controller.CorpusError),
-            ("missing", controller.GateIntegrityError),
-            ("artifact", controller.GateIntegrityError),
-            ("hardlink", controller.GateIntegrityError),
-            ("wrong-evidence", controller.CorpusError),
-        )
-        for scenario, error_type in scenarios:
-            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
-                work = Path(temporary)
-                snapshot = self.make_snapshot(work)
-                attempt = work / "attempt"
-                artifact = attempt / "private/game/maps/lmctf01.rune"
-                artifact.parent.mkdir(parents=True)
-                artifact.write_bytes(b"authenticated-rune-bytes")
-
-                def verified(_snapshot, _layout, _label, _target, arguments, **_kwargs):
-                    output = Path(arguments[arguments.index("--output") + 1])
-                    evidence = Path(
-                        arguments[arguments.index("--evidence-manifest") + 1])
-                    if scenario == "exit":
-                        return 7, b"", {"ready": {}, "done": {}}
-                    if scenario == "missing":
-                        return 0, b"", {"ready": {}, "done": {}}
-                    if scenario == "hardlink":
-                        os.link(artifact, output)
-                    else:
-                        evidence_hash = (
-                            "0" * 64 if scenario == "wrong-evidence"
-                            else controller.sha256_regular(evidence)
-                        )
-                        output.write_text(
-                            bootstrap_snag_text(
-                                "lmctf01",
-                                controller.sha256_regular(artifact),
-                                evidence_hash,
-                            ),
-                            encoding="ascii",
-                        )
-                    if scenario == "artifact":
-                        artifact.write_bytes(b"changed-rune-bytes")
-                    return (
-                        0,
-                        b"unexpected output" if scenario == "stdout" else b"",
-                        {"ready": {}, "done": {}},
-                    )
-
-                with mock.patch.object(
-                        controller, "run_verified_python", side_effect=verified):
-                    with self.assertRaises(error_type):
-                        controller.stage_bootstrap_snag(
-                            attempt, snapshot, "lmctf01", artifact, "f" * 64)
-                self.thaw(snapshot)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            work = Path(temporary)
-            snapshot = self.make_snapshot(work)
-            attempt = work / "attempt"
-            artifact = attempt / "private/game/maps/lmctf01.rune"
-            artifact.parent.mkdir(parents=True)
-            artifact.write_bytes(b"authenticated-rune-bytes")
-            artifact.with_suffix(".snag").write_bytes(b"preexisting")
-            with mock.patch.object(controller, "run_verified_python") as runner:
-                with self.assertRaisesRegex(
-                        controller.GateIntegrityError, "already exists"):
-                    controller.stage_bootstrap_snag(
-                        attempt, snapshot, "lmctf01", artifact, "f" * 64)
-            runner.assert_not_called()
-            self.thaw(snapshot)
 
     def test_contaminated_pass_is_not_resumable(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3378,8 +3029,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 "cold_load_owner_record": None,
                 "cold_load_command_sha256": None,
                 "cold_load_log_sha256": None,
-                "cold_load_snag_record": None,
-                "cold_load_snag_evidence_record": None,
             }
             result_path = controller.publish_result(run_root, "gatecase", result, attempt)
             runner = FakeGateRunner("gatecase")

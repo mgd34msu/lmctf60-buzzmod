@@ -20,8 +20,8 @@ controllers, and corpus checks use only the standard library.
 
 - RUNE: `runeio.py`, `runelint.py`, `runeaccept.c`, `runegen.sh`,
   `rune_corpus_controller.py`, and `bspmechanisms.py`.
-- Runtime evidence: `film.py`, `stallcensus.py`, `snagrepair.py`,
-  `snag_corpus.py`, `conduct.py`, and the sheet renderers.
+- Runtime evidence: `film.py`, `stallcensus.py`, `conduct.py`, and the sheet
+  renderers.
 - Telemetry and diagnostics: `gamestat.sh`, `rolestat.py`, `hookevents.py`,
   `hookdiag.py`, and the focused census tools.
 - Fleet: the current tracked launch scripts are development-only. Production

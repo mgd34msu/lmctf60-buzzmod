@@ -439,7 +439,7 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 "pov_demo": str(root / "r01" / "pov.dm2"), "game_root": str(game),
                 "statsdb_backup": str(game / "route-only-session.db"),
                 "artifacts": {field: record for field in
-                              ("bsp_file", "rune_file", "snag_file")},
+                              ("bsp_file", "rune_file")},
             }
             common = {
                 "format": self.runner.FORMAT_ROUTE_SPEC, "campaign_id": "fixture",
@@ -489,7 +489,7 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                     "game_root": str(game_root),
                     "statsdb_backup": str(game_root / "route-only-session.db"),
                     "artifacts": {field: record for field in
-                                  ("bsp_file", "rune_file", "snag_file")},
+                                  ("bsp_file", "rune_file")},
                 }
 
             def reject(lanes, expression):
@@ -582,8 +582,7 @@ class RouteOnlyEvidenceTest(unittest.TestCase):
                 records = {}
                 for field, role, name in (
                         ("bsp_file", f"bsp:{map_name}", f"{map_name}.bsp"),
-                        ("rune_file", f"rune:{map_name}", f"{map_name}.rune"),
-                        ("snag_file", f"snag:{map_name}", f"{map_name}.snag")):
+                        ("rune_file", f"rune:{map_name}", f"{map_name}.rune")):
                     payload = Path(roles[role]["path"]).read_bytes()
                     (game / "maps" / name).write_bytes(payload)
                     supplied = root / "supplied" / lane / name

@@ -13,10 +13,7 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "tools"))
 
-import runeio  # noqa: E402
-import snagrepair  # noqa: E402
 from tests.test_rune_artifact import _build_rune, _fix_header_crc  # noqa: E402
 
 
@@ -381,7 +378,6 @@ class SupervisorTest(unittest.TestCase):
             "rune_contracts_generated.py",
             "rune_pair_preflight.py",
             "runeio.py",
-            "snagrepair.py",
             "topmaps.txt",
         ):
             shutil.copy2(REPO / "tools" / name, tools / name)
@@ -390,14 +386,10 @@ class SupervisorTest(unittest.TestCase):
         for line in (tools / "topmaps.txt").read_text().splitlines():
             if line and not line.startswith("#"):
                 rune_payload = rune_for_map(line)
-                rune_path = maps / f"{line}.rune"
-                rune_path.write_bytes(rune_payload)
-                rune = runeio.decode_rune(rune_payload)
-                rune_sha256 = hashlib.sha256(rune_payload).hexdigest()
-                (maps / f"{line}.snag").write_text(
-                    snagrepair.render(line, rune, [], "e" * 64, rune_sha256),
-                    encoding="ascii",
+                (maps / f"{line}.bsp").write_bytes(
+                    f"exact-bsp-{line}".encode("ascii")
                 )
+                (maps / f"{line}.rune").write_bytes(rune_payload)
         for module in ("game.so", "gamex86_64.so"):
             (self.game / module).write_bytes(b"exact-module")
         shutil.copy2(self.supervisor, tools / "pov-supervisor")

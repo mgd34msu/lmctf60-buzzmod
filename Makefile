@@ -419,7 +419,7 @@ FIELDS_CANDIDATE_TEST_OBJS := .sg_fields_candidate_test.make.o \
 	.sg_caco_projection_under_test.make.o \
 	.sg_goal_projection_under_test.make.o
 FIELDS_CANDIDATE_TEST_DEPS := $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
-SNAG_REPAIR_PYTHON_TEST := tests/test_snagrepair.py
+STALL_CENSUS_PYTHON_TEST := tests/test_stallcensus.py
 SPECTATOR_SOUND_TEST_BIN := sg_spectator_sound_test.make
 SPECTATOR_SOUND_TEST_OBJS := .sg_spectator_sound_test.make.o \
 	.sg_spectator_sound_net_under_test.make.o
@@ -781,7 +781,8 @@ RUNE_PYTHON_TESTS := tests/test_rune_contracts.py \
 	tests/test_sidecario.py \
 	tests/test_rune_tool_readers.py \
 	tests/test_lmctf58_rune_accept.py \
-	tests/test_rune_water_overflow_failfast.py
+	tests/test_rune_water_overflow_failfast.py \
+	tests/test_rune_pair_preflight.py
 RUNGEN_TEST := tests/test_runegen_gate.py
 RUNGEN_PAIR_TEST := tests/test_runegen_pair.py
 RUNGEN_PAIR_TOOL := tools/runegen_pair.py
@@ -1343,7 +1344,7 @@ POV_SUPERVISOR_TEST_BIN := pov_supervisor_unit.make
 POV_SUPERVISOR_TEST := tests/test_pov_supervisor.py
 POV_ITERATE_SELECTION_TEST := tests/test_iterate2_pov_selection.py
 RUNE_PAIR_PREFLIGHT_DEPS := tools/rune_pair_preflight.py tools/runeio.py \
-	tools/rune_contracts_generated.py tools/snagrepair.py
+	tools/rune_contracts_generated.py
 POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
@@ -3646,7 +3647,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(TEMP_FLAG_DIAGNOSTIC_TEST) \
 		$(DANGER_LEASE_TEST_BIN) $(DANGER_POLICY_TEST_BIN) \
 		$(DANGER_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
-		$(SNAG_REPAIR_PYTHON_TEST) \
+		$(STALL_CENSUS_PYTHON_TEST) \
 		$(SPECTATOR_SOUND_TEST_BIN) tests/test_spectator_limit.py \
 		$(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST) \
 		$(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN) \
@@ -3731,7 +3732,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers \
 		tests.test_lmctf58_rune_accept \
-		tests.test_rune_water_overflow_failfast
+		tests.test_rune_water_overflow_failfast \
+		tests.test_rune_pair_preflight
 	$(Q)python3 $(RUNGEN_TEST)
 	$(Q)python3 -m unittest tests.test_runegen_pair
 	$(Q)python3 $(BOTKIN_TEST)
@@ -3747,7 +3749,7 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(DANGER_POLICY_TEST_BIN)
 	$(Q)./$(DANGER_TEST_BIN)
 	$(Q)./$(FIELDS_CANDIDATE_TEST_BIN)
-	$(Q)python3 -B $(SNAG_REPAIR_PYTHON_TEST)
+	$(Q)python3 -B $(STALL_CENSUS_PYTHON_TEST)
 	$(Q)./$(SPECTATOR_SOUND_TEST_BIN) && python3 -B tests/test_spectator_limit.py
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
@@ -4019,7 +4021,7 @@ deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 	$(Q)python3 -B $(DESLOP_AUDIT)
 
 runegen-test: tools/runegen.sh $(RUNGEN_PAIR_TOOL) $(RUNGEN_TEST) \
-		$(RUNGEN_PAIR_TEST)
+		$(RUNGEN_PAIR_TEST) tools/runeio.py tools/rune_contracts_generated.py
 	$(E) [TEST] runegen pair
 	$(Q)python3 $(RUNGEN_TEST)
 	$(Q)python3 -m unittest tests.test_runegen_pair
@@ -4109,7 +4111,8 @@ rune-artifact-test: $(RUNE_PYTHON_TESTS)
 	$(Q)python3 -m unittest tests.test_rune_contracts tests.test_rune_artifact \
 		tests.test_sidecario tests.test_rune_tool_readers \
 		tests.test_lmctf58_rune_accept \
-		tests.test_rune_water_overflow_failfast
+		tests.test_rune_water_overflow_failfast \
+		tests.test_rune_pair_preflight
 
 push-game-integration-test: $(PUSH_GAME_INTEGRATION_TEST)
 	$(E) [TEST] push game integration

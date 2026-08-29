@@ -173,7 +173,7 @@ def _lane_inputs(core, spec: dict, by_lane: dict,
             raise ValueError(f"{lane} artifact inventory is incomplete")
         for map_name, authority in artifacts.items():
             if not isinstance(authority, dict) or set(authority) != {
-                    "bsp_file", "rune_file", "snag_file", "red_flag_origin",
+                    "bsp_file", "rune_file", "red_flag_origin",
                     "blue_flag_origin"}:
                 raise ValueError(f"invalid artifact authority for {lane}/{map_name}")
             core._verify_bundle_copy(
@@ -181,9 +181,6 @@ def _lane_inputs(core, spec: dict, by_lane: dict,
             )
             core._verify_bundle_copy(
                 authority["rune_file"], bundle_roles, f"rune:{map_name}", "RUNE"
-            )
-            core._verify_bundle_copy(
-                authority["snag_file"], bundle_roles, f"snag:{map_name}", "SNAG"
             )
             core._vector(authority["red_flag_origin"], "red flag origin")
             core._vector(authority["blue_flag_origin"], "blue flag origin")
@@ -385,7 +382,7 @@ def _finish_residence(core, film, spec: dict, run: LaneRun,
         "client_generation": run.client_identity,
         "bsp_file": artifact["bsp_file"], "rune_file": artifact["rune_file"],
         "rune_sha256": artifact["rune_file"]["sha256"],
-        "snag_file": artifact["snag_file"], "sg_players": players,
+        "sg_players": players,
         "residence": {"start_frame": wire[0] - 1, "end_frame": wire[-1],
                       "red_flag_origin": artifact["red_flag_origin"],
                       "blue_flag_origin": artifact["blue_flag_origin"]},
@@ -725,8 +722,7 @@ def _route_lane_inputs(core, lanes: dict, bundle_roles: dict[str, dict],
         )
         for field, role, label in (
                 ("bsp_file", f"bsp:{map_name}", "BSP"),
-                ("rune_file", f"rune:{map_name}", "RUNE"),
-                ("snag_file", f"snag:{map_name}", "SNAG")):
+                ("rune_file", f"rune:{map_name}", "RUNE")):
             core._verify_bundle_copy(artifacts[field], bundle_roles, role,
                                      f"{lane} {label}")
             if artifacts[field] != runtime_files[field]:
@@ -821,7 +817,7 @@ def _finish_route_match(core, film, spec: dict, run: LaneRun,
         "client_generation": run.client_identity,
         "bsp_file": artifact["bsp_file"], "rune_file": artifact["rune_file"],
         "rune_sha256": artifact["rune_file"]["sha256"],
-        "snag_file": artifact["snag_file"], "sg_players": players,
+        "sg_players": players,
         "residence": {"start_frame": wire[0] - 1, "end_frame": wire[-1],
                       "measurement": measurement, "exit_frame": run.exit_frame,
                       "exit_time_seconds": run.exit_time},

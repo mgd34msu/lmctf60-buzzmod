@@ -91,18 +91,6 @@ READY_RE = re.compile(
 ROUTE_READY_RE = re.compile(
     r"^slipgate: route contract (complete|local-only)$"
 )
-SNAG_READY_RE = re.compile(
-    r"^slipgate: snag ready map=([A-Za-z0-9_][A-Za-z0-9_-]{0,62}) "
-    r"repairs=([0-9]+) rune_sha256=([0-9a-f]{64}) "
-    r"evidence_sha256=([0-9a-f]{64}) snag_sha256=([0-9a-f]{64})$"
-)
-SNAG_DECLARATION_FAILURE_RE = re.compile(
-    r"^slipgate: snag declaration missing or invalid for map "
-    r"([A-Za-z0-9_][A-Za-z0-9_-]{0,62}); fields rejected$"
-)
-DEFERRED_FIELD_FAILURE = (
-    "slipgate: field setup failed (no flags?); disabled until the next level"
-)
 FAILURE_RE = re.compile(
     r"^rune: (?:rejected .+|FAILED(?::| |$).*|generation refused .+|"
     r"revalidation failed .+|install failed .+|"
@@ -149,7 +137,7 @@ def setup_terminal_receipt(
 def last_cold_load_failure(
     lines: Sequence[str], map_name: str
 ) -> str | None:
-    """Return a generator failure or the expected map's SNAG load failure."""
+    """Return a generator or runtime failure from a fresh load."""
     terminal = setup_terminal_receipt(lines, map_name, "autoload")
     if terminal is not None and terminal[0] == "infra":
         return terminal[2]
@@ -159,10 +147,6 @@ def last_cold_load_failure(
     failure = last_anchored_failure(lines)
     if failure is not None:
         return failure
-    for line in reversed(lines):
-        match = SNAG_DECLARATION_FAILURE_RE.fullmatch(line)
-        if match is not None and match.group(1) == map_name:
-            return line
     return None
 
 
@@ -190,29 +174,6 @@ def runtime_infrastructure_failure(
         if RUNTIME_INFRA_RE.fullmatch(line) and line.startswith(prefix):
             return line
     return None
-
-
-def generation_deferred_publication_complete(
-    lines: Sequence[str], map_name: str
-) -> bool:
-    """Recognize the exact post-write failure that the cold load will resolve."""
-    expected_artifact = f"game/maps/{map_name}.rune"
-    write_seen = False
-    for index in range(len(lines) - 1):
-        write = WRITE_RE.fullmatch(lines[index])
-        if write is not None and write.group(1) == expected_artifact:
-            write_seen = True
-            continue
-        if not write_seen:
-            continue
-        snag = SNAG_DECLARATION_FAILURE_RE.fullmatch(lines[index])
-        if (
-            snag is not None
-            and snag.group(1) == map_name
-            and lines[index + 1] == DEFERRED_FIELD_FAILURE
-        ):
-            return True
-    return False
 
 
 class IncrementalLineReader:
@@ -352,7 +313,7 @@ ATTEMPT_INTENT_FIELDS = frozenset({
     "format", "fingerprint", "map", "stable_port", "attempt", "kind",
     "created_at", "source_artifact", "rejection_result",
 })
-TERMINAL_RESULT_FORMAT = "lmctf-rune-attempt-result-v2"
+TERMINAL_RESULT_FORMAT = "lmctf-rune-attempt-result-v3"
 ATTEMPT_COMMIT_FORMAT = "lmctf-rune-attempt-commit-v1"
 ATTEMPT_ABORT_FORMAT = "lmctf-rune-attempt-abort-v1"
 ATTEMPT_DISPOSITIONS = frozenset({"accepted", "artifact_rejected", "infra_failed"})
@@ -374,7 +335,6 @@ TERMINAL_RESULT_FIELDS = frozenset(
         "decoded_counts", "gate_output_sha256", "gate_log_sha256",
         "semantic_gate_labels", "cold_load_owner_record",
         "cold_load_command_sha256", "cold_load_log_sha256",
-        "cold_load_snag_record", "cold_load_snag_evidence_record",
     }
 )
 REQUIRED_SNAPSHOT_ROLES = frozenset(
@@ -384,7 +344,6 @@ REQUIRED_SNAPSHOT_ROLES = frozenset(
         "module_secondary",
         "runelint",
         "runeio",
-        "snagrepair",
         "contracts",
         "acceptor_gnu",
         "acceptor_make",
@@ -1619,7 +1578,6 @@ def build_fingerprint_document(
         "mechanism_contract_hash": mechanism_hash,
         "linter_sha256": by_role["runelint"]["sha256"],
         "reader_sha256": by_role["runeio"]["sha256"],
-        "snagrepair_sha256": by_role["snagrepair"]["sha256"],
         "acceptor_gnu_sha256": by_role["acceptor_gnu"]["sha256"],
         "acceptor_make_sha256": by_role["acceptor_make"]["sha256"],
         "semantic_checker_manifest_sha256": by_role[
@@ -3034,21 +2992,17 @@ def parse_generation_log(text: str, map_name: str, artifact: Path, attempt: Path
         (index, item) for index, item in ready
         if index > write_index and item.group(1) == map_name
     ]
-    deferred_publication = generation_deferred_publication_complete(
-        lines, map_name
-    )
-    if len(matching_ready) + int(deferred_publication) != 1:
+    if len(matching_ready) != 1:
         raise CorpusError(
             "expected one post-write generation completion, found "
-            f"{len(matching_ready) + int(deferred_publication)}"
+            f"{len(matching_ready)}"
         )
-    if matching_ready:
-        _ready_index, ready_match = matching_ready[0]
-        ready_counts = tuple(int(ready_match.group(index)) for index in range(2, 6))
-        if ready_counts != (
-            counts["seeds"], counts["links"], counts["mechanism_nodes"], counts["plans"]
-        ):
-            raise CorpusError("runtime-ready counts disagree with generator counts")
+    _ready_index, ready_match = matching_ready[0]
+    ready_counts = tuple(int(ready_match.group(index)) for index in range(2, 6))
+    if ready_counts != (
+        counts["seeds"], counts["links"], counts["mechanism_nodes"], counts["plans"]
+    ):
+        raise CorpusError("runtime-ready counts disagree with generator counts")
     return {
         "objective_roots": {"red": red, "blue": blue},
         "counts": counts,
@@ -3547,88 +3501,6 @@ def _validate_gate_integrity_evidence(
             raise CorpusError("gate integrity command identity disagrees with expected argv")
 
 
-def _validate_bootstrap_snag_evidence(
-    snag: Path,
-    evidence: Path,
-    *,
-    artifact_sha256: str,
-    fingerprint: str,
-    map_name: str,
-) -> None:
-    value, evidence_raw = _load_json_regular(evidence, require_unaliased=True)
-    expected = {
-        "artifact_sha256": artifact_sha256,
-        "classification": "NO_ACCEPTED_OBSERVATION",
-        "fingerprint": fingerprint,
-        "format": "lmctf-snag-bootstrap-v1",
-        "map": map_name,
-    }
-    if value != expected or evidence_raw != canonical_json(expected):
-        raise CorpusError("bootstrap snag evidence identity is invalid")
-    snag_raw, _snag_record = read_regular_bytes(
-        snag, require_unaliased=True,
-    )
-    try:
-        snag_text = snag_raw.decode("ascii")
-    except UnicodeDecodeError as exc:
-        raise CorpusError("bootstrap snag is not ASCII") from exc
-    lines = snag_text.splitlines()
-    keys = (
-        "snag_format", "map", "bsp_checksum", "entity_crc", "physics_flags",
-        "gravity", "airaccelerate", "maxvelocity", "pmove_ms", "frame_ms",
-        "host_physics_id", "rune_payload_crc", "rune_header_crc",
-        "rune_action_contract_crc", "rune_mechanism_contract_crc",
-        "rune_num_seeds", "rune_num_links", "rune_sha256",
-        "evidence_sha256", "repairs",
-    )
-    fields: dict[str, str] = {}
-    for expected_key, line in zip(keys, lines, strict=False):
-        key, separator, field = line.partition(" ")
-        if key != expected_key or separator != " " or not field or " " in field:
-            raise CorpusError("bootstrap snag header is not canonical")
-        fields[key] = field
-    if (
-        not snag_text.endswith("\n")
-        or "\r" in snag_text
-        or len(lines) != len(keys)
-        or fields.get("snag_format") != "2"
-        or fields.get("map") != map_name
-        or fields.get("rune_sha256") != artifact_sha256
-        or fields.get("evidence_sha256") != sha256_bytes(evidence_raw)
-        or fields.get("repairs") != "0"
-    ):
-        raise CorpusError("bootstrap snag is not the exact explicit-zero declaration")
-
-
-def _validate_retained_bootstrap_snag(
-    records: Mapping[str, Mapping[str, Any]],
-    *,
-    artifact_sha256: str,
-    fingerprint: str,
-    map_name: str,
-) -> None:
-    """Require the staged snag/evidence paths to remain the exact same bytes."""
-    if not isinstance(records, Mapping) or set(records) != {"snag", "evidence"}:
-        raise GateIntegrityError("bootstrap snag record set is incomplete")
-    paths: dict[str, Path] = {}
-    for label in ("snag", "evidence"):
-        record = records[label]
-        if not isinstance(record, Mapping) or set(record) != {
-                "path", "mode", "size", "sha256"}:
-            raise GateIntegrityError(f"bootstrap snag {label} record is malformed")
-        path = Path(str(record["path"]))
-        if regular_file_record(path, require_unaliased=True) != dict(record):
-            raise GateIntegrityError(
-                f"fresh cold-load changed its bootstrap snag {label}")
-        paths[label] = path
-    _validate_bootstrap_snag_evidence(
-        paths["snag"], paths["evidence"],
-        artifact_sha256=artifact_sha256,
-        fingerprint=fingerprint,
-        map_name=map_name,
-    )
-
-
 def _validate_terminal_schema(
     value: Mapping[str, Any],
     *,
@@ -3947,20 +3819,12 @@ def _validate_terminal_schema(
             attempt / "cold-load" / "private" / "game" / "maps"
             / f"{map_name}.rune"
         )
-        cold_snag = cold_artifact.with_suffix(".snag")
-        cold_snag_evidence = attempt / "cold-load" / "snag-bootstrap-evidence.json"
         if (
             value["cold_load_owner_record"]
             != str(cold_owner.relative_to(run_root))
-            or value["cold_load_snag_record"]
-            != str(cold_snag.relative_to(run_root))
-            or value["cold_load_snag_evidence_record"]
-            != str(cold_snag_evidence.relative_to(run_root))
             or cold_owner not in paths
             or cold_log not in paths
             or cold_artifact not in paths
-            or cold_snag not in paths
-            or cold_snag_evidence not in paths
         ):
             raise CorpusError("PASS lacks complete fresh cold-load evidence")
         if (
@@ -3970,13 +3834,6 @@ def _validate_terminal_schema(
             or sha256_regular(cold_artifact) != value["artifact_sha256"]
         ):
             raise CorpusError("PASS fresh cold-load hashes disagree")
-        _validate_bootstrap_snag_evidence(
-            cold_snag,
-            cold_snag_evidence,
-            artifact_sha256=value["artifact_sha256"],
-            fingerprint=fingerprint,
-            map_name=map_name,
-        )
         cold_owner_value, _cold_owner_raw = _load_json_regular(cold_owner)
         if (
             not isinstance(cold_owner_value, dict)
@@ -4026,19 +3883,11 @@ def _validate_terminal_schema(
         cold_runtime = parse_cold_load_log(cold_text, map_name, banner, route_contract)
         if cold_runtime["objective_roots"] != roots:
             raise CorpusError("fresh cold-load roots disagree with stored roots")
-        validate_cold_load_snag_attestation(
-            cold_text,
-            map_name,
-            artifact_sha256=value["artifact_sha256"],
-            evidence_sha256=sha256_regular(cold_snag_evidence),
-            snag_sha256=sha256_regular(cold_snag),
-        )
     else:
         if any(value[field] is not None for field in (
             "decoded_counts", "gate_output_sha256", "gate_log_sha256",
             "semantic_gate_labels", "cold_load_owner_record",
             "cold_load_command_sha256", "cold_load_log_sha256",
-            "cold_load_snag_record", "cold_load_snag_evidence_record",
         )):
             raise CorpusError("failed result contains successful gate reports")
         if value["route_contract"] is not None:
@@ -4680,8 +4529,7 @@ def recover_stale_attempts(
                     "decoded_counts": None, "gate_output_sha256": None,
                     "gate_log_sha256": None, "semantic_gate_labels": None,
                     "cold_load_owner_record": None, "cold_load_command_sha256": None,
-                    "cold_load_log_sha256": None, "cold_load_snag_record": None,
-                    "cold_load_snag_evidence_record": None,
+                    "cold_load_log_sha256": None,
                 }
                 publish_result(run_root, map_name, result, attempt)
                 recovered += 1
@@ -4816,8 +4664,6 @@ def recover_stale_attempts(
                     "cold_load_owner_record": None,
                     "cold_load_command_sha256": None,
                     "cold_load_log_sha256": None,
-                    "cold_load_snag_record": None,
-                    "cold_load_snag_evidence_record": None,
                 }
                 publish_result(run_root, map_name, result, attempt)
                 recovered += 1
@@ -4915,38 +4761,6 @@ def parse_cold_load_log(
     }
 
 
-def validate_cold_load_snag_attestation(
-    text: str,
-    map_name: str,
-    *,
-    artifact_sha256: str,
-    evidence_sha256: str,
-    snag_sha256: str,
-) -> None:
-    """Require one runtime digest for the exact sidecar bytes actually read."""
-    if not all(_is_sha256(value) for value in (
-        artifact_sha256, evidence_sha256, snag_sha256,
-    )):
-        raise GateIntegrityError("cold-load snag authority has an invalid digest")
-    matches = [
-        match for line in text.splitlines()
-        if (match := SNAG_READY_RE.fullmatch(line)) is not None
-    ]
-    if len(matches) != 1:
-        raise CorpusError(
-            f"fresh cold-load expected one snag-ready line, found {len(matches)}"
-        )
-    match = matches[0]
-    if (
-        match.group(1) != map_name
-        or int(match.group(2)) != 0
-        or match.group(3) != artifact_sha256
-        or match.group(4) != evidence_sha256
-        or match.group(5) != snag_sha256
-    ):
-        raise CorpusError("fresh cold-load snag attestation disagrees with staged bytes")
-
-
 def stage_private_inputs(
     attempt: Path,
     snapshot: Path,
@@ -4969,83 +4783,6 @@ def stage_private_inputs(
     config_name = Path(str(roles["generator_config"]["path"])).name
     _copy_snapshot_file(snapshot, roles["generator_config"], game / config_name)
     return private, engine, artifact, config_name
-
-
-def stage_bootstrap_snag(
-    attempt: Path,
-    snapshot: Path,
-    map_name: str,
-    artifact: Path,
-    fingerprint: str,
-    *,
-    heartbeat_check: Callable[[], None] | None = None,
-) -> dict[str, Any]:
-    """Create the explicit zero-repair sidecar needed for a fresh cold load."""
-    before = regular_file_record(artifact)
-    verified = verify_snapshot(snapshot)
-    roles = verified["by_role"]
-    evidence = attempt / "snag-bootstrap-evidence.json"
-    atomic_write_json(evidence, {
-        "artifact_sha256": before["sha256"],
-        "classification": "NO_ACCEPTED_OBSERVATION",
-        "fingerprint": fingerprint,
-        "format": "lmctf-snag-bootstrap-v1",
-        "map": map_name,
-    })
-    target = artifact.with_suffix(".snag")
-    if target.exists() or target.is_symlink():
-        raise GateIntegrityError("bootstrap snag target already exists")
-    rc, output, _lifecycle = run_verified_python(
-        snapshot,
-        verified["python_runtime"],
-        "snag-bootstrap",
-        snapshot / roles["snagrepair"]["path"],
-        [
-            "--explicit-zero",
-            "--map", map_name,
-            "--rune", str(artifact),
-            "--evidence-manifest", str(evidence),
-            "--output", str(target),
-        ],
-        heartbeat_check=heartbeat_check,
-    )
-    if rc != 0:
-        raise CorpusError(f"snag-bootstrap gate exited {rc}")
-    if output:
-        raise CorpusError("snag-bootstrap gate emitted unexpected output")
-    if regular_file_record(artifact) != before:
-        raise GateIntegrityError("artifact changed while staging bootstrap snag")
-    try:
-        target_info = target.lstat()
-        evidence_info = evidence.lstat()
-        artifact_info = artifact.lstat()
-    except OSError as exc:
-        raise GateIntegrityError(
-            f"bootstrap snag output is unavailable: {exc}"
-        ) from exc
-    if (
-        not stat.S_ISREG(target_info.st_mode)
-        or target_info.st_nlink != 1
-        or (target_info.st_dev, target_info.st_ino) in {
-            (evidence_info.st_dev, evidence_info.st_ino),
-            (artifact_info.st_dev, artifact_info.st_ino),
-        }
-    ):
-        raise GateIntegrityError("bootstrap snag is not one independent regular file")
-    target.chmod(0o444)
-    evidence.chmod(0o444)
-    target_record = regular_file_record(target, require_unaliased=True)
-    result = {
-        "evidence": regular_file_record(evidence, require_unaliased=True),
-        "snag": target_record,
-    }
-    _validate_retained_bootstrap_snag(
-        result,
-        artifact_sha256=before["sha256"],
-        fingerprint=fingerprint,
-        map_name=map_name,
-    )
-    return result
 
 
 def run_fresh_cold_load(
@@ -5077,10 +4814,6 @@ def run_fresh_cold_load(
     staged = regular_file_record(artifact)
     if staged["sha256"] != source_before["sha256"] or staged["size"] != source_before["size"]:
         raise GateIntegrityError("fresh cold-load artifact copy mismatch")
-    snag = stage_bootstrap_snag(
-        cold_root, snapshot, map_name, artifact, fingerprint,
-        heartbeat_check=heartbeat_check,
-    )
 
     command = [str(engine)] + [
         value.format(port=stable_port, map=map_name, config=config_name)
@@ -5196,19 +4929,6 @@ def run_fresh_cold_load(
             raise GateIntegrityError("artifact changed during fresh cold-load")
         if regular_file_record(artifact) != staged:
             raise GateIntegrityError("fresh cold-load changed its staged artifact")
-        _validate_retained_bootstrap_snag(
-            snag,
-            artifact_sha256=source_before["sha256"],
-            fingerprint=fingerprint,
-            map_name=map_name,
-        )
-        validate_cold_load_snag_attestation(
-            final_log,
-            map_name,
-            artifact_sha256=str(staged["sha256"]),
-            evidence_sha256=str(snag["evidence"]["sha256"]),
-            snag_sha256=str(snag["snag"]["sha256"]),
-        )
         transfer_observer = True
         return {
             "owner": owner_path,
@@ -5216,7 +4936,6 @@ def run_fresh_cold_load(
             "log_record": log_record,
             "log_observer": observer,
             "command_sha256": command_hash,
-            "snag": snag,
             "objective_roots": runtime["objective_roots"],
         }
     finally:
@@ -5424,14 +5143,6 @@ def run_adopted_map(
         "cold_load_log_sha256": (
             str(cold_load["log_record"]["sha256"]) if cold_load else None
         ),
-        "cold_load_snag_record": (
-            str(Path(cold_load["snag"]["snag"]["path"]).relative_to(run_root))
-            if cold_load else None
-        ),
-        "cold_load_snag_evidence_record": (
-            str(Path(cold_load["snag"]["evidence"]["path"]).relative_to(run_root))
-            if cold_load else None
-        ),
     }
     cold_binding = (
         (cold_observer, cold_load["log_record"])
@@ -5601,7 +5312,6 @@ def run_one_map(
                 },
             )
         ready_seen = False
-        deferred_publication_seen = False
         failure_seen = False
         infrastructure_failure_seen = False
         deadline_expired = False
@@ -5636,11 +5346,7 @@ def run_one_map(
                     and match.group(1) == map_name
                     for line in lines
                 )
-                deferred_publication_seen = (
-                    generation_deferred_publication_complete(lines, map_name)
-                )
-                if (failure_seen or infrastructure_failure_seen or ready_seen
-                        or deferred_publication_seen):
+                if failure_seen or infrastructure_failure_seen or ready_seen:
                     if ready_seen:
                         # Allow buffered post-ready diagnostics to arrive before quit.
                         time.sleep(0.25)
@@ -5679,22 +5385,15 @@ def run_one_map(
         final_infrastructure_failure = runtime_infrastructure_failure(
             final_lines, map_name
         )
-        deferred_publication_seen = generation_deferred_publication_complete(
-            final_lines, map_name
-        )
         write_terminal = setup_terminal_receipt(final_lines, map_name, "write")
-        if (
-            write_terminal is not None
-            and write_terminal[0] == "infra"
-            and not (deferred_publication_seen and write_terminal[1] == "fields")
-        ):
+        if write_terminal is not None and write_terminal[0] == "infra":
             final_infrastructure_failure = write_terminal[2]
         ready_seen = ready_seen or any(
             (match := READY_RE.fullmatch(line)) is not None
             and match.group(1) == map_name
             for line in final_lines
         )
-        if ready_seen or deferred_publication_seen:
+        if ready_seen:
             deadline_expired = False
         if final_failure is not None:
             failure_line = final_failure
@@ -5713,11 +5412,11 @@ def run_one_map(
         elif deadline_expired:
             classification = "TIMEOUT"
             detail = "generation timeout before runtime-ready acceptance"
-        elif not ready_seen and not deferred_publication_seen:
+        elif not ready_seen:
             classification = "GEN_FAIL"
             detail = "engine exited before accepted generation completion"
         proceed_with_success = (
-            (ready_seen or deferred_publication_seen)
+            ready_seen
             and not failure_seen
             and final_infrastructure_failure is None
             and not deadline_expired
@@ -5913,14 +5612,6 @@ def run_one_map(
         ),
         "cold_load_log_sha256": (
             str(cold_load["log_record"]["sha256"]) if cold_load else None
-        ),
-        "cold_load_snag_record": (
-            str(Path(cold_load["snag"]["snag"]["path"]).relative_to(run_root))
-            if cold_load else None
-        ),
-        "cold_load_snag_evidence_record": (
-            str(Path(cold_load["snag"]["evidence"]["path"]).relative_to(run_root))
-            if cold_load else None
         ),
     }
     try:
