@@ -27,8 +27,14 @@ typedef struct sg_strategy_caller_authority_s
  * their respective authenticated inputs change. */
 typedef struct sg_strategy_caller_target_binding_s
 {
+	/* These semantic fields are echoed by the authenticated provider.  The
+	 * caller rejects a binding unless they exactly match the immutable target
+	 * request; matching a destination kind alone is never sufficient. */
+	uint64_t commitment_id;
+	sg_strategy_caller_authority_t authority;
 	sg_strategy_goal_id_t goal_id;
 	sg_strategy_target_id_t target_id;
+	sg_destination_ref_t destination;
 	int role;
 	const int *execution_field;
 	const sg_rune_runtime_snapshot_t *snapshot;
@@ -103,6 +109,13 @@ int SG_StrategyCallerSettle(sg_strategy_caller_t *caller, uint8_t alive,
 	sg_strategy_goal_outcome_kind_t outcome,
 	sg_strategy_failure_reason_t failure, uint64_t at_ms,
 	sg_strategy_caller_output_t *out);
+
+/* Cancellation is an explicit owner action.  It records the cancelled
+ * terminal state; callers that want to yield the authority afterwards must
+ * issue the separate exact-owner Release action. */
+int SG_StrategyCallerCancel(sg_strategy_caller_t *caller,
+	const sg_strategy_caller_authority_t *authority, uint8_t alive,
+	uint64_t at_ms, sg_strategy_caller_output_t *out);
 
 /* Release is intentionally separate from Submit.  The owning authenticated
  * authority must identify itself exactly; a lower-ranked proposal can never

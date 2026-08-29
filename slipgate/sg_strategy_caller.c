@@ -41,6 +41,39 @@ static int CallerAuthorityMatchesState(
 		authority->principal_id == state->authority.principal.id;
 }
 
+static int CallerDestinationEqual(const sg_destination_ref_t *left,
+	const sg_destination_ref_t *right)
+{
+	if (!left || !right || left->kind != right->kind)
+		return 0;
+	switch (left->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		return left->value.flag.team == right->value.flag.team &&
+			left->value.flag.location == right->value.flag.location;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+		return left->value.item.item_id == right->value.item.item_id;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		return left->value.carrier.client_id ==
+				right->value.carrier.client_id &&
+			left->value.carrier.team == right->value.carrier.team &&
+			left->value.carrier.selector == right->value.carrier.selector;
+	case SG_DESTINATION_DEFENSIVE_POST:
+		return left->value.post.region_id == right->value.post.region_id;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		return left->value.point.point_id == right->value.point.point_id;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
 static int CallerNext(uint64_t *value)
 {
 	if (!value || *value == UINT64_MAX)
@@ -117,21 +150,25 @@ static int CallerBindingFor(const sg_strategy_caller_plan_t *plan,
 	return 1;
 }
 
-static int CallerBindingAuthenticated(
+static int CallerBindingAuthenticated(const sg_strategy_caller_plan_t *plan,
 	const sg_strategy_caller_target_binding_t *binding,
 	const sg_strategy_target_choice_t *choice, uint64_t at_ms)
 {
 	const sg_field_sample_t *sample;
 	uint32_t phase_id;
 
-	if (!binding || !choice || !binding->execution_field ||
+	if (!plan || !binding || !choice ||
+	    binding->commitment_id != plan->commitment_id ||
+	    !CallerAuthorityEqual(&binding->authority, &plan->authority) ||
+	    !CallerDestinationEqual(&binding->destination, &choice->destination) ||
+	    !binding->execution_field ||
 	    !binding->snapshot || !binding->field || !binding->localized ||
 	    binding->observation_revision == 0U || binding->pose_revision == 0U ||
 	    binding->valid_until_ms < at_ms ||
 	    !SG_RuneRuntimeSnapshotValid(binding->snapshot) ||
 	    !SG_DestinationFieldValid(binding->snapshot, binding->field) ||
 	    !CallerHandleMatchesDestination(&binding->field->destination,
-		&choice->destination) ||
+		&binding->destination) ||
 	    binding->field->computed_at_ms > at_ms ||
 	    binding->localized->rune_identity != binding->snapshot->identity ||
 	    binding->localized->topology_revision !=
@@ -212,7 +249,7 @@ static int CallerPlanCompile(const sg_strategy_caller_plan_t *plan,
 
 			if (!CallerBindingFor(plan, goal->id,
 				goal->choices[choice_index].id, &binding) ||
-			    !CallerBindingAuthenticated(binding,
+			    !CallerBindingAuthenticated(plan, binding,
 				&goal->choices[choice_index], at_ms))
 				return 0;
 		}
@@ -271,7 +308,7 @@ static int CallerDestinationObservations(const sg_strategy_caller_plan_t *plan,
 			if (count >= SG_STRATEGY_CALLER_MAX_BINDINGS ||
 			    !CallerBindingFor(plan, goal->id,
 				goal->choices[choice_index].id, &binding) ||
-			    !CallerBindingAuthenticated(binding,
+			    !CallerBindingAuthenticated(plan, binding,
 				&goal->choices[choice_index], at_ms))
 				return 0;
 			phase_id = binding->localized->field_pose.phase.phase_id;
@@ -572,6 +609,38 @@ int SG_StrategyCallerSettle(sg_strategy_caller_t *caller, uint8_t alive,
 {
 	return SG_StrategyCallerAdvance(caller, alive, outcome, failure, at_ms,
 		out);
+}
+
+int SG_StrategyCallerCancel(sg_strategy_caller_t *caller,
+	const sg_strategy_caller_authority_t *authority, uint8_t alive,
+	uint64_t at_ms, sg_strategy_caller_output_t *out)
+{
+	sg_strategy_life_snapshot_t life;
+	sg_strategy_frame_t frame;
+	uint64_t authority_epoch;
+
+	if (!caller || !caller->initialized || !authority || !out || at_ms == 0U ||
+	    !CallerAuthorityValid(authority) || !caller->reducer.has_plan ||
+	    !CallerAuthorityMatchesState(authority, &caller->reducer) ||
+	    !CallerLifeFrame(caller, alive, &life))
+		return 0;
+	authority_epoch = caller->next_authority_epoch;
+	if (!CallerNext(&authority_epoch))
+		return 0;
+	memset(&frame, 0, sizeof(frame));
+	frame.at_ms = at_ms;
+	frame.life = life;
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_CANCEL;
+	frame.directive.stamp.rank = authority->rank;
+	frame.directive.stamp.principal.kind = authority->principal_kind;
+	frame.directive.stamp.principal.id = authority->principal_id;
+	frame.directive.stamp.epoch = authority_epoch;
+	if (!CallerReduce(caller, &frame))
+		return 0;
+	caller->next_authority_epoch = authority_epoch;
+	CallerLifeCommit(caller, &life);
+	CallerOutput(caller, out);
+	return 1;
 }
 
 int SG_StrategyCallerRelease(sg_strategy_caller_t *caller,

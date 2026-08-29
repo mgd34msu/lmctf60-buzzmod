@@ -74,9 +74,58 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrategyCallerSubmit", source)
         self.assertIn("SG_StrategyCallerAdvance", source)
         self.assertIn("SG_StrategyCallerSettle", source)
+        self.assertIn("SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID", source)
+        self.assertIn("SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID", source)
+        self.assertIn("SG_STRATEGY_LEAD_PREPARATION_GOAL_ID", source)
+        self.assertIn("StrategyAppendPreparation", source)
+        self.assertIn("StrategyActivePlanRequest", source)
+        self.assertIn("StrategyFramePlanRequest", source)
         self.assertNotIn("SG_FieldRootSeed", source)
         self.assertNotIn("SG_Rune()->seeds[root]", source)
         self.assertIn("return chat_bot[cl].order_from;", chat)
+
+    def test_provider_dependency_uses_explicit_execution_fallback(self):
+        source = self.text("sg_arach.c")
+        commit_start = source.index("static qboolean StrategyCommitFrame")
+        commit_end = source.index("static void StrategyInterrupt", commit_start)
+        commit = source[commit_start:commit_end]
+        self.assertIn("SG_StrategyRuntimeTargetProviderAvailable", commit)
+        self.assertIn("StrategyLegacyExecutionFallback", commit)
+        self.assertIn("StrategyFramePlanRequest", commit)
+        self.assertNotIn("StrategyPlanRequest(bot, tc", commit)
+        self.assertLess(
+            commit.index("SG_StrategyRuntimeTargetProviderAvailable"),
+            commit.index("StrategyFramePlanRequest"),
+        )
+        self.assertIn("SG_StrategyRuntimeTargetProviderSet(NULL, NULL)", source)
+
+    def test_provider_binds_full_semantic_target_and_order_lifecycle(self):
+        bridge = self.text("slipgate/sg_strategy_runtime_bridge.c")
+        caller = self.text("slipgate/sg_strategy_caller.c")
+        chat = self.text("sg_chat.c")
+        self.assertIn("RuntimeDestinationEqual", bridge)
+        self.assertIn("binding.commitment_id != target.commitment_id", bridge)
+        self.assertIn("RuntimeAuthorityEqual(&binding.authority", bridge)
+        self.assertIn("binding.goal_id != target.goal_id", bridge)
+        self.assertIn("binding.target_id != target.target_id", bridge)
+        self.assertIn("binding.destination", bridge)
+        self.assertIn("binding.role != target.role", bridge)
+        self.assertIn("binding.execution_field != target.execution_field", bridge)
+        self.assertIn("CallerDestinationEqual", caller)
+        self.assertIn("binding->commitment_id != plan->commitment_id", caller)
+        self.assertIn("SG_StrategyCallerCancel", chat)
+        self.assertIn("SG_StrategyCallerRelease", chat)
+        self.assertIn(
+            "authority.principal_id = (uint32_t)order_from + 1U;", chat
+        )
+        expiry_start = chat.index("static void Chat_ExpireOrders")
+        expiry_end = chat.index("int SG_ChatOrderedRole", expiry_start)
+        expiry = chat[expiry_start:expiry_end]
+        self.assertIn("Chat_EndStrategyOrder", expiry)
+        self.assertLess(
+            expiry.index("Chat_EndStrategyOrder"),
+            expiry.index("chat_bot[i].order_from = -1"),
+        )
 
     def test_reducer_owns_the_post_commit_route(self):
         source = self.text("sg_arach.c")

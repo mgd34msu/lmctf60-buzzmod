@@ -25,6 +25,48 @@ static int RuntimeAuthorityValid(
 	}
 }
 
+static int RuntimeAuthorityEqual(
+	const sg_strategy_caller_authority_t *left,
+	const sg_strategy_caller_authority_t *right)
+{
+	return left && right && left->rank == right->rank &&
+		left->principal_kind == right->principal_kind &&
+		left->principal_id == right->principal_id;
+}
+
+static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
+	const sg_destination_ref_t *right)
+{
+	if (!left || !right || left->kind != right->kind)
+		return 0;
+	switch (left->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		return left->value.flag.team == right->value.flag.team &&
+			left->value.flag.location == right->value.flag.location;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+		return left->value.item.item_id == right->value.item.item_id;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		return left->value.carrier.client_id ==
+				right->value.carrier.client_id &&
+			left->value.carrier.team == right->value.carrier.team &&
+			left->value.carrier.selector == right->value.carrier.selector;
+	case SG_DESTINATION_DEFENSIVE_POST:
+		return left->value.post.region_id == right->value.post.region_id;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		return left->value.point.point_id == right->value.point.point_id;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
 static int RuntimeExecutionFor(const sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_goal_id_t goal_id, sg_strategy_target_id_t target_id,
 	const sg_strategy_runtime_execution_t **execution_out)
@@ -107,6 +149,11 @@ void SG_StrategyRuntimeTargetProviderSet(
 	sg_strategy_runtime_provider_context = context;
 }
 
+int SG_StrategyRuntimeTargetProviderAvailable(void)
+{
+	return sg_strategy_runtime_provider != NULL;
+}
+
 int SG_StrategyRuntimePlanResolve(
 	const sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_caller_plan_t *plan_out)
@@ -151,8 +198,12 @@ int SG_StrategyRuntimePlanResolve(
 			memset(&binding, 0, sizeof(binding));
 			if (!sg_strategy_runtime_provider(
 				sg_strategy_runtime_provider_context, &target, &binding) ||
+			    binding.commitment_id != target.commitment_id ||
+			    !RuntimeAuthorityEqual(&binding.authority, &target.authority) ||
 			    binding.goal_id != target.goal_id ||
 			    binding.target_id != target.target_id ||
+			    !RuntimeDestinationEqual(&binding.destination,
+				&target.destination) ||
 			    binding.role != target.role ||
 			    binding.execution_field != target.execution_field)
 				return 0;

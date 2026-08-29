@@ -26,7 +26,10 @@ typedef struct sg_strategy_runtime_plan_request_s
 } sg_strategy_runtime_plan_request_t;
 
 /* The runtime provider receives the immutable semantic target selected by the
- * caller and may only supply its authenticated dynamic binding. */
+ * caller and may only supply its authenticated dynamic binding.  Its output
+ * must echo commitment, authority, goal, target, destination, role, and
+ * execution field exactly; the bridge rejects a partial or same-kind-only
+ * binding. */
 typedef struct sg_strategy_runtime_target_request_s
 {
 	uint64_t commitment_id;
@@ -48,8 +51,12 @@ typedef int (*sg_strategy_runtime_target_provider_fn)(void *context,
 void SG_StrategyRuntimeTargetProviderSet(
 	sg_strategy_runtime_target_provider_fn provider, void *context);
 
-/* No provider means no plan: the production caller fails closed instead of
- * deriving destination handles from legacy seeds or route fields. */
+/* Map teardown clears this registration before the provider's borrowed
+ * snapshot, field, or localization lifetime ends. */
+int SG_StrategyRuntimeTargetProviderAvailable(void);
+
+/* No provider means no typed strategy plan: the production caller never
+ * derives destination handles from legacy seeds or route fields. */
 int SG_StrategyRuntimePlanResolve(
 	const sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_caller_plan_t *plan_out);

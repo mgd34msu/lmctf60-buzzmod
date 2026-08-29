@@ -1131,7 +1131,7 @@ static qboolean DefenseSupplyReturnAllowed(const sg_bot_t *bot,
 	       bot->def_supply_instance == bot->instance_token;
 }
 
-static const int *DefenseSupplyTargetField(sg_bot_t *bot)
+const int *SG_DefenseSupplyTargetField(sg_bot_t *bot)
 {
 	const int *target_field;
 	int target_seed;
@@ -1147,7 +1147,7 @@ static const int *DefenseSupplyTargetField(sg_bot_t *bot)
 
 static qboolean DefenseSupplyTargetFieldReachable(const sg_bot_t *bot)
 {
-	const int *field = DefenseSupplyTargetField((sg_bot_t *)bot);
+	const int *field = SG_DefenseSupplyTargetField((sg_bot_t *)bot);
 
 	return field && bot && bot->seed >= 0 &&
 	       field[bot->seed] < SG_FIELD_INF &&
@@ -1163,7 +1163,7 @@ static const int *DefenseSupplyRouteField(sg_bot_t *bot,
 
 	if (!bot || !goal_field || !pure || !SG_DefenseSupplyActive(bot))
 		return goal_field;
-	target_field = DefenseSupplyTargetField(bot);
+	target_field = SG_DefenseSupplyTargetField(bot);
 	if (!SG_DefenseSupplyRoute(
 		    (sg_defense_supply_phase_t)bot->def_supply_phase,
 		    NULL, target_field, goal_field,
