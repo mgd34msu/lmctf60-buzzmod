@@ -214,8 +214,8 @@ static void TestCanonicalRoundTrip(void)
 		1U, 8U, 3U, 3U, 1U, 2U, 1U, 1U, 1U, 1U, 1U, 1U, 1U
 	};
 	static const uint64_t expected_offsets[] = {
-		480U, 736U, 1248U, 1288U, 1696U, 1832U, 2160U,
-		2336U, 2472U, 2576U, 2912U, 3104U, 3264U
+		480U, 736U, 1248U, 1288U, 1696U, 1856U, 2184U,
+		2360U, 2496U, 2600U, 2936U, 3128U, 3288U
 	};
 
 	SG_RuneV2TestFixtureInit(&fixture);
@@ -242,8 +242,8 @@ static void TestCanonicalRoundTrip(void)
 		CHECK(view.section[index].count == expected_counts[index]);
 		CHECK(view.section[index].offset == expected_offsets[index]);
 	}
-	CHECK_U32(0x4d5e8d67, view.header.payload_crc32);
-	CHECK_U32(0x3255c58b, SG_RuneV2WireGetU32(first +
+	CHECK_U32(0x5e1e7c37, view.header.payload_crc32);
+	CHECK_U32(0x2f794b08, SG_RuneV2WireGetU32(first +
 		SG_RUNE_V2_HEADER_CRC_OFFSET));
 	CHECK_DIAGNOSTIC(SG_RUNE_V2_WIRE_OK,
 		SG_RuneV2CodecDecode(first, first_size, &scratch.storage,

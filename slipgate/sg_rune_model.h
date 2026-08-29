@@ -449,8 +449,20 @@ typedef enum sg_rune_phase_transition_kind_e
 	SG_RUNE_PHASE_TRANSITION_TAKEOFF,
 	SG_RUNE_PHASE_TRANSITION_RELAUNCH,
 	SG_RUNE_PHASE_TRANSITION_SUPPORT,
+	/* A transition whose source phase is owned by transition.cell and whose
+	 * destination phase is owned by another cell. */
+	SG_RUNE_PHASE_TRANSITION_PORTAL,
 	SG_RUNE_PHASE_TRANSITION_KIND_COUNT
 } sg_rune_phase_transition_kind_t;
+
+typedef uint32_t sg_rune_phase_transition_flags_t;
+enum
+{
+	SG_RUNE_PHASE_TRANSITION_CROSS_CELL = UINT32_C(1) << 0
+};
+
+#define SG_RUNE_PHASE_TRANSITION_FLAGS_KNOWN \
+	SG_RUNE_PHASE_TRANSITION_CROSS_CELL
 
 typedef struct sg_rune_phase_transition_s
 {
@@ -461,7 +473,10 @@ typedef struct sg_rune_phase_transition_s
 	sg_rune_phase_ref_t destination_phase;
 	sg_rune_phase_transition_kind_t kind;
 	sg_rune_interval_t duration_ms;
-	uint32_t flags;
+	sg_rune_phase_transition_flags_t flags;
+	/* Explicit destination ownership is required for cross-cell execution;
+	 * same-cell transitions repeat the source cell reference. */
+	sg_rune_cell_ref_t destination_cell;
 } sg_rune_phase_transition_t;
 
 typedef enum sg_rune_portal_direction_e

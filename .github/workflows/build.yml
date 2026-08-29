@@ -114,6 +114,11 @@ jobs:
             -print -quit)
           test -n "$module"
           ldd -r "$module" 2>&1 | tee module-relocations.log
+          if grep -Eq 'lib(isl|gmp)\.so' module-relocations.log; then
+            grep -E 'lib(isl|gmp)\.so' module-relocations.log
+            echo "::error::runtime module links an offline solver dependency"
+            exit 1
+          fi
 
       - name: Fail on warnings
         shell: bash

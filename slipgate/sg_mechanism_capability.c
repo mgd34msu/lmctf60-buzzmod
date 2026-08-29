@@ -1,9 +1,11 @@
-#include "sg_mechanism_capability.h"
+#include "sg_mechanism_capability_internal.h"
+#include "sg_authority_entropy.h"
 
 #include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,7 +55,7 @@ typedef struct sg_mechanism_relation_ref_s
 typedef struct sg_mechanism_build_s
 {
 	const sg_mechanism_capability_source_t *source;
-	sg_mechanism_capability_set_t *output;
+	sg_mechanism_capability_payload_t *output;
 	uint32_t topology_edge_capacity;
 	sg_mechanism_edge_ref_t *edge_refs;
 	uint32_t *edge_offsets;
@@ -82,6 +84,310 @@ static int AllocationFits(size_t count, size_t element_size)
 	return element_size != 0U && count <= SIZE_MAX / element_size;
 }
 
+static atomic_uintptr_t next_authority_token = ATOMIC_VAR_INIT(1U);
+static atomic_flag authority_key_lock = ATOMIC_FLAG_INIT;
+static atomic_int authority_key_state = ATOMIC_VAR_INIT(0);
+static uint64_t authority_key[2];
+
+static int AuthorityKeyReady(void)
+{
+	int state = atomic_load_explicit(&authority_key_state, memory_order_acquire);
+
+	if (state != 0)
+		return state > 0;
+	while (atomic_flag_test_and_set_explicit(&authority_key_lock,
+		memory_order_acquire))
+		;
+	state = atomic_load_explicit(&authority_key_state, memory_order_relaxed);
+	if (state == 0)
+	{
+		state = SG_AuthorityEntropyFill(authority_key,
+			sizeof(authority_key)) ? 1 : -1;
+		atomic_store_explicit(&authority_key_state, state, memory_order_release);
+	}
+	atomic_flag_clear_explicit(&authority_key_lock, memory_order_release);
+	return state > 0;
+}
+
+static uint32_t AuthorityRound(uint32_t value, uint32_t round)
+{
+	uint64_t mixed = (uint64_t)value ^ authority_key[round & 1U] ^
+		((uint64_t)round * UINT64_C(0x9e3779b97f4a7c15));
+
+	mixed ^= mixed >> 30U;
+	mixed *= UINT64_C(0xbf58476d1ce4e5b9);
+	mixed ^= mixed >> 27U;
+	mixed *= UINT64_C(0x94d049bb133111eb);
+	mixed ^= mixed >> 31U;
+	return (uint32_t)mixed;
+}
+
+static uint64_t AuthorityPermute64(uint64_t value)
+{
+	uint32_t left = (uint32_t)(value >> 32U);
+	uint32_t right = (uint32_t)value;
+	uint32_t round;
+
+	for (round = 0U; round < 8U; round++)
+	{
+		uint32_t next = left ^ AuthorityRound(right, round);
+
+		left = right;
+		right = next;
+	}
+	return ((uint64_t)left << 32U) | (uint64_t)right;
+}
+
+#if UINTPTR_MAX == UINT32_MAX
+static uint32_t AuthorityPermute32(uint32_t value)
+{
+	uint16_t left = (uint16_t)(value >> 16U);
+	uint16_t right = (uint16_t)value;
+	uint32_t round;
+
+	for (round = 0U; round < 8U; round++)
+	{
+		uint16_t next = (uint16_t)(left ^
+			(uint16_t)AuthorityRound((uint32_t)right, round));
+
+		left = right;
+		right = next;
+	}
+	return ((uint32_t)left << 16U) | (uint32_t)right;
+}
+#endif
+
+int SG_AuthorityTokenMint(uintptr_t *token_out)
+{
+	uintptr_t current;
+	uintptr_t token;
+
+	if (!token_out || !AuthorityKeyReady())
+		return 0;
+	for (;;)
+	{
+		current = atomic_load_explicit(&next_authority_token,
+			memory_order_relaxed);
+		while (current != 0U && current < UINTPTR_MAX)
+			if (atomic_compare_exchange_weak_explicit(&next_authority_token,
+				&current, current + 1U, memory_order_relaxed,
+				memory_order_relaxed))
+				break;
+		if (current == 0U || current == UINTPTR_MAX)
+			return 0;
+#if UINTPTR_MAX == UINT64_MAX
+		token = (uintptr_t)AuthorityPermute64((uint64_t)current);
+#elif UINTPTR_MAX == UINT32_MAX
+		token = (uintptr_t)AuthorityPermute32((uint32_t)current);
+#else
+#error unsupported uintptr_t width
+#endif
+		if (token != 0U && token != UINTPTR_MAX)
+		{
+			*token_out = token;
+			return 1;
+		}
+	}
+}
+
+static void ReleaseCapabilityStorage(
+	sg_mechanism_capability_payload_t *capabilities)
+{
+	free(capabilities->facts);
+	free(capabilities->topology_edges);
+	free(capabilities->topology_relations);
+	free(capabilities->mechanism_offsets);
+	free(capabilities->facts_by_trace);
+	capabilities->facts = NULL;
+	capabilities->topology_edges = NULL;
+	capabilities->topology_relations = NULL;
+	capabilities->mechanism_offsets = NULL;
+	capabilities->facts_by_trace = NULL;
+}
+
+static void ReleaseCapabilityViewStorage(
+	sg_mechanism_capability_record_t *record)
+{
+	free(record->view_facts);
+	free(record->view_topology_edges);
+	free(record->view_topology_relations);
+	free(record->view_mechanism_offsets);
+	free(record->view_facts_by_trace);
+}
+
+static int AllocateCapabilityViewStorage(
+	sg_mechanism_capability_record_t *record,
+	const sg_mechanism_capability_payload_t *payload)
+{
+	if (payload->fact_count != 0U)
+	{
+		record->view_facts = malloc((size_t)payload->fact_count *
+			sizeof(*record->view_facts));
+		record->view_facts_by_trace = malloc((size_t)payload->fact_count *
+			sizeof(*record->view_facts_by_trace));
+	}
+	if (payload->topology_edge_count != 0U)
+		record->view_topology_edges = malloc(
+			(size_t)payload->topology_edge_count *
+			sizeof(*record->view_topology_edges));
+	if (payload->topology_relation_count != 0U)
+		record->view_topology_relations = malloc(
+			(size_t)payload->topology_relation_count *
+			sizeof(*record->view_topology_relations));
+	if (payload->mechanism_offset_count != 0U)
+		record->view_mechanism_offsets = malloc(
+			(size_t)payload->mechanism_offset_count *
+			sizeof(*record->view_mechanism_offsets));
+	return (payload->fact_count == 0U ||
+		(record->view_facts && record->view_facts_by_trace)) &&
+		(payload->topology_edge_count == 0U || record->view_topology_edges) &&
+		(payload->topology_relation_count == 0U ||
+			record->view_topology_relations) &&
+		(payload->mechanism_offset_count == 0U ||
+			record->view_mechanism_offsets);
+}
+
+static void RefreshCapabilityView(sg_mechanism_capability_record_t *record)
+{
+	const sg_mechanism_capability_payload_t *payload = record->payload;
+
+	if (payload->fact_count != 0U)
+	{
+		memcpy(record->view_facts, payload->facts,
+			(size_t)payload->fact_count * sizeof(*payload->facts));
+		memcpy(record->view_facts_by_trace, payload->facts_by_trace,
+			(size_t)payload->fact_count * sizeof(*payload->facts_by_trace));
+	}
+	if (payload->topology_edge_count != 0U)
+		memcpy(record->view_topology_edges, payload->topology_edges,
+			(size_t)payload->topology_edge_count *
+			sizeof(*payload->topology_edges));
+	if (payload->topology_relation_count != 0U)
+		memcpy(record->view_topology_relations, payload->topology_relations,
+			(size_t)payload->topology_relation_count *
+			sizeof(*payload->topology_relations));
+	if (payload->mechanism_offset_count != 0U)
+		memcpy(record->view_mechanism_offsets, payload->mechanism_offsets,
+			(size_t)payload->mechanism_offset_count *
+			sizeof(*payload->mechanism_offsets));
+	memset(&record->view, 0, sizeof(record->view));
+	record->view.identity = payload->identity;
+	record->view.candidate_verifier_identity =
+		payload->candidate_verifier_identity;
+	record->view.trace_verifier_identity = payload->trace_verifier_identity;
+	record->view.content_identity = payload->content_identity;
+	record->view.facts = record->view_facts;
+	record->view.fact_count = payload->fact_count;
+	record->view.topology_edges = record->view_topology_edges;
+	record->view.topology_edge_count = payload->topology_edge_count;
+	record->view.topology_relations = record->view_topology_relations;
+	record->view.topology_relation_count = payload->topology_relation_count;
+	record->view.mechanism_offsets = record->view_mechanism_offsets;
+	record->view.mechanism_offset_count = payload->mechanism_offset_count;
+	record->view.facts_by_trace = record->view_facts_by_trace;
+	record->view.topology_edge_visits = payload->topology_edge_visits;
+}
+
+int SG_MechanismCapabilityOwnerCreate(
+	sg_mechanism_capability_owner_t **owner_out)
+{
+	sg_mechanism_capability_owner_t *owner;
+
+	if (!owner_out || *owner_out)
+		return 0;
+	owner = calloc(1U, sizeof(*owner));
+	if (!owner)
+		return 0;
+	*owner_out = owner;
+	return 1;
+}
+
+sg_mechanism_capability_payload_t *SG_MechanismCapabilityOwnerPayload(
+	const sg_mechanism_capability_owner_t *owner,
+	const sg_mechanism_capability_set_t *capabilities)
+{
+	sg_mechanism_capability_record_t *record;
+
+	if (!owner || !capabilities)
+		return NULL;
+	for (record = owner->live; record; record = record->next)
+		if (record->token == capabilities)
+			return record->payload;
+	return NULL;
+}
+
+static int IssueAcceptedResult(sg_mechanism_capability_owner_t *owner,
+	sg_mechanism_capability_payload_t *payload,
+	sg_mechanism_capability_set_t **capabilities_out)
+{
+	sg_mechanism_capability_record_t *record;
+	uintptr_t token;
+
+	payload->content_identity = SG_MechanismCapabilityContentIdentity(payload);
+	if (payload->content_identity == 0U || owner->live_count == UINT32_MAX)
+		return 0;
+	record = calloc(1U, sizeof(*record));
+	if (!record)
+		return 0;
+	record->payload = payload;
+	if (!AllocateCapabilityViewStorage(record, payload))
+	{
+		ReleaseCapabilityViewStorage(record);
+		free(record);
+		return 0;
+	}
+	if (!SG_AuthorityTokenMint(&token))
+	{
+		ReleaseCapabilityViewStorage(record);
+		free(record);
+		return 0;
+	}
+	record->token = (sg_mechanism_capability_set_t *)(uintptr_t)token;
+	RefreshCapabilityView(record);
+	record->next = owner->live;
+	owner->live = record;
+	owner->live_count++;
+	*capabilities_out = record->token;
+	return 1;
+}
+
+const sg_mechanism_capability_payload_t *
+SG_MechanismCapabilityOwnerAcceptedPayload(
+	const sg_mechanism_capability_owner_t *owner,
+	const sg_mechanism_capability_set_t *capabilities)
+{
+	sg_mechanism_capability_payload_t *payload;
+
+	payload = SG_MechanismCapabilityOwnerPayload(owner, capabilities);
+	if (!payload || payload->content_identity == 0U ||
+		payload->content_identity !=
+			SG_MechanismCapabilityContentIdentity(payload))
+		return NULL;
+	return payload;
+}
+
+int SG_MechanismCapabilityRead(
+	const sg_mechanism_capability_owner_t *owner,
+	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_view_t **view_out)
+{
+	sg_mechanism_capability_record_t *record;
+
+	if (view_out)
+		*view_out = NULL;
+	if (!view_out || !SG_MechanismCapabilityOwnerAcceptedPayload(owner,
+		capabilities))
+		return 0;
+	for (record = owner->live; record; record = record->next)
+		if (record->token == capabilities)
+		{
+			RefreshCapabilityView(record);
+			*view_out = &record->view;
+			return 1;
+		}
+	return 0;
+}
+
 static int Finite3(const sg_rune_vec3_t *value)
 {
 	return value && isfinite(value->value[0]) && isfinite(value->value[1]) &&
@@ -91,13 +397,28 @@ static int Finite3(const sg_rune_vec3_t *value)
 static int HullEqual(const sg_rune_hull_profile_t *left,
 	const sg_rune_hull_profile_t *right)
 {
-	return memcmp(left, right, sizeof(*left)) == 0;
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+		if (left->mins.value[axis] != right->mins.value[axis] ||
+			left->maxs.value[axis] != right->maxs.value[axis])
+			return 0;
+	return 1;
 }
 
 static int PhysicsEqual(const sg_rune_physics_parameters_t *left,
 	const sg_rune_physics_parameters_t *right)
 {
-	return memcmp(left, right, sizeof(*left)) == 0;
+	return left->gravity == right->gravity &&
+		left->ground_acceleration == right->ground_acceleration &&
+		left->air_acceleration == right->air_acceleration &&
+		left->water_acceleration == right->water_acceleration &&
+		left->hook_acceleration == right->hook_acceleration &&
+		left->external_acceleration == right->external_acceleration &&
+		left->water_drag == right->water_drag &&
+		left->max_velocity == right->max_velocity &&
+		left->frame_ms == right->frame_ms &&
+		left->substep_ms == right->substep_ms;
 }
 
 static int IdentityEqual(const sg_rune_model_identity_t *left,
@@ -1505,7 +1826,7 @@ static sg_mechanism_capability_flags_t FactFlags(
 }
 
 static const sg_mechanism_topology_relation_t *FindTopologyRelation(
-	const sg_mechanism_capability_set_t *set, uint32_t controller,
+	const sg_mechanism_capability_payload_t *set, uint32_t controller,
 	uint32_t mechanism)
 {
 	uint32_t low = 0U;
@@ -1838,6 +2159,7 @@ static void BuildScratchDestroy(sg_mechanism_build_t *build)
 }
 
 int SG_MechanismCapabilityBuild(
+	sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
 	sg_mechanism_capability_set_t **capabilities_out,
 	sg_mechanism_capability_error_t *error_out)
@@ -1855,10 +2177,10 @@ int SG_MechanismCapabilityBuild(
 	memset(&build, 0, sizeof(build));
 	build.source = source;
 	build.error.source_index = SG_MECHANISM_CAPABILITY_INDEX_NONE;
-	if (!capabilities_out)
+	if (!owner || !capabilities_out)
 		SetError(&build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_ARGUMENT,
 			SG_MECHANISM_CAPABILITY_INDEX_NONE);
-	if (!capabilities_out || !SourceShapeValid(&build))
+	if (!owner || !capabilities_out || !SourceShapeValid(&build))
 	{
 		if (error_out)
 			*error_out = build.error;
@@ -1882,16 +2204,38 @@ int SG_MechanismCapabilityBuild(
 	BuildScratchDestroy(&build);
 	if (!success)
 	{
-		SG_MechanismCapabilityDestroy(build.output);
+		ReleaseCapabilityStorage(build.output);
+		free(build.output);
 		if (error_out)
 			*error_out = build.error;
 		return 0;
 	}
-	*capabilities_out = build.output;
+	if (!IssueAcceptedResult(owner, build.output, capabilities_out))
+	{
+		ReleaseCapabilityStorage(build.output);
+		free(build.output);
+		if (error_out)
+		{
+			error_out->code = SG_MECHANISM_CAPABILITY_ERROR_OVERFLOW;
+			error_out->source_index = 0U;
+		}
+		return 0;
+	}
+	if (!SG_MechanismCapabilityOwnerAcceptedPayload(owner, *capabilities_out))
+	{
+		SG_MechanismCapabilityDestroy(owner, *capabilities_out);
+		*capabilities_out = NULL;
+		if (error_out)
+		{
+			error_out->code = SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE;
+			error_out->source_index = 0U;
+		}
+		return 0;
+	}
 	return 1;
 }
 
-static uint32_t FindFactByTrace(const sg_mechanism_capability_set_t *set,
+static uint32_t FindFactByTrace(const sg_mechanism_capability_payload_t *set,
 	uint64_t identity, uint64_t *comparisons)
 {
 	uint32_t low = 0U;
@@ -1976,9 +2320,9 @@ done:
 
 static int TopologyAuthentic(
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_capability_set_t *capabilities)
+	const sg_mechanism_capability_payload_t *capabilities)
 {
-	sg_mechanism_capability_set_t metrics;
+	sg_mechanism_capability_payload_t metrics;
 	sg_mechanism_build_t build;
 	uint32_t relation_index;
 	int valid = 0;
@@ -2154,7 +2498,7 @@ static int FactsOrdered(const sg_mechanism_capability_fact_t *left,
 
 static int AuditTopologyRelation(
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_payload_t *capabilities,
 	const sg_mechanism_topology_relation_t *relation)
 {
 	uint32_t current = relation->controller_entity;
@@ -2180,10 +2524,13 @@ static int AuditTopologyRelation(
 }
 
 int SG_MechanismCapabilityAudit(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_set_t *capability,
 	sg_mechanism_capability_audit_result_t *result_out)
 {
+	const sg_mechanism_capability_payload_t *capabilities =
+		SG_MechanismCapabilityOwnerPayload(owner, capability);
 	sg_mechanism_capability_audit_result_t result;
 	uint8_t *seen = NULL;
 	uint8_t *relation_seen = NULL;
@@ -2428,16 +2775,45 @@ int SG_MechanismCapabilityAudit(
 }
 
 void SG_MechanismCapabilityDestroy(
+	sg_mechanism_capability_owner_t *owner,
 	sg_mechanism_capability_set_t *capabilities)
 {
-	if (!capabilities)
+	sg_mechanism_capability_record_t **link;
+	sg_mechanism_capability_record_t *record;
+
+	if (!owner || !capabilities)
 		return;
-	free(capabilities->facts);
-	free(capabilities->topology_edges);
-	free(capabilities->topology_relations);
-	free(capabilities->mechanism_offsets);
-	free(capabilities->facts_by_trace);
-	free(capabilities);
+	for (link = &owner->live; *link; link = &(*link)->next)
+		if ((*link)->token == capabilities)
+		{
+			record = *link;
+			*link = record->next;
+			ReleaseCapabilityViewStorage(record);
+			ReleaseCapabilityStorage(record->payload);
+			free(record->payload);
+			free(record);
+			owner->live_count--;
+			break;
+		}
+}
+
+void SG_MechanismCapabilityOwnerDestroy(
+	sg_mechanism_capability_owner_t *owner)
+{
+	sg_mechanism_capability_record_t *record;
+
+	if (!owner)
+		return;
+	while (owner->live)
+	{
+		record = owner->live;
+		owner->live = record->next;
+		ReleaseCapabilityViewStorage(record);
+		ReleaseCapabilityStorage(record->payload);
+		free(record->payload);
+		free(record);
+	}
+	free(owner);
 }
 
 const char *SG_MechanismCapabilityErrorString(

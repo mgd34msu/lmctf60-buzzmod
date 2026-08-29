@@ -126,7 +126,7 @@ def _build_scale_fixture(base: bytes, cell_count: int) -> bytes:
     payloads = [bytes(model), sections[1], b"", sections[3][:136], b"",
                 bytes(cells), b"", bytes(surfaces), b"", b"", b"", b"",
                 sections[12]]
-    record_bytes = (256, 64, 12, 136, 136, 164, 172, 132, 104, 332,
+    record_bytes = (256, 64, 12, 136, 160, 164, 172, 132, 104, 332,
                     188, 160, 64)
     output = bytearray(HEADER_BYTES + SECTION_COUNT * ENTRY_BYTES)
     for index, payload in enumerate(payloads):
@@ -141,7 +141,7 @@ def _build_scale_fixture(base: bytes, cell_count: int) -> bytes:
     while len(output) % 8:
         output.append(0)
     struct.pack_into("<IHHHHIIIQQII", output, 0, 0x324E5552, 2, 0x0102,
-                     HEADER_BYTES, ENTRY_BYTES, SECTION_COUNT, 0, 3,
+                     HEADER_BYTES, ENTRY_BYTES, SECTION_COUNT, 0, 4,
                      GENERATION, len(output), _crc32(output[HEADER_BYTES:]), 0)
     struct.pack_into("<I", output, 44, _crc32(output[:HEADER_BYTES]))
     return bytes(output)
@@ -272,6 +272,12 @@ class RuneV2IndependentReaderTests(unittest.TestCase):
         _fix_checksums(malformed)
         self.assert_rejected_by_all(bytes(malformed))
 
+    def test_hostile_phase_transition_count(self) -> None:
+        malformed = bytearray(self.valid)
+        struct.pack_into("<I", malformed, _entry(4) + 8, 4_194_305)
+        _fix_checksums(malformed)
+        self.assert_rejected_by_all(bytes(malformed))
+
     def test_count_size_disagreement(self) -> None:
         malformed = bytearray(self.valid)
         struct.pack_into("<I", malformed, _entry(5) + 8, 3)
@@ -308,6 +314,19 @@ class RuneV2IndependentReaderTests(unittest.TestCase):
         malformed = bytearray(self.valid)
         low = struct.unpack_from("<Q", malformed, offset + 52 + 16)[0]
         struct.pack_into("<Q", malformed, offset + 52 + 16, low + 1)
+        _fix_checksums(malformed)
+        self.assert_rejected_by_all(bytes(malformed))
+
+    def test_transition_destination_cell_is_authenticated(self) -> None:
+        # The fixture's stance transition is local. Pointing its explicit
+        # destination ownership at the other valid cell must therefore make
+        # the cross-cell relation inconsistent in every reader.
+        transition_offset, _ = _section(self.valid, 4)
+        destination_cell_offset = transition_offset + 136
+        malformed = bytearray(self.valid)
+        malformed[destination_cell_offset:destination_cell_offset + 24] = \
+            self.valid[_section(self.valid, 5)[0] + 164:
+                       _section(self.valid, 5)[0] + 164 + 24]
         _fix_checksums(malformed)
         self.assert_rejected_by_all(bytes(malformed))
 

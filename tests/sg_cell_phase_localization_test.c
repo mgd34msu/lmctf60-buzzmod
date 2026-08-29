@@ -593,6 +593,8 @@ static void SetFixtureTiming(locator_fixture_t *fixture, uint32_t frame_ms,
 static void FinalizeFixture(locator_fixture_t *fixture)
 {
 	sg_localization_status_t status;
+	uint32_t transition_index;
+	uint32_t phase_index;
 
 	fixture->model.version = SG_RUNE_MODEL_VERSION;
 	fixture->model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
@@ -609,6 +611,26 @@ static void FinalizeFixture(locator_fixture_t *fixture)
 	fixture->model.cell_count = fixture->semantics.region_count;
 	fixture->model.phases = fixture->phases;
 	fixture->model.phase_count = fixture->phase_count;
+	for (transition_index = 0U;
+		transition_index < fixture->model.phase_transition_count;
+		transition_index++)
+	{
+		sg_rune_phase_transition_t *transition =
+			&fixture->phase_transitions[transition_index];
+
+		for (phase_index = 0U; phase_index < fixture->phase_count;
+			phase_index++)
+			if (SG_RuneModelStableIdEqual(&transition->destination_phase.value,
+				&fixture->phases[phase_index].id.value))
+			{
+				uint32_t cell = fixture->coordinates[phase_index].cell_id;
+
+				if (cell < fixture->model.cell_count)
+					transition->destination_cell =
+						fixture->runtime_cells[cell].id;
+				break;
+			}
+	}
 	fixture->snapshot.identity = UINT64_C(0x201);
 	fixture->snapshot.topology_revision = UINT64_C(0x202);
 	fixture->snapshot.cell_count = fixture->model.cell_count;
@@ -1311,6 +1333,25 @@ static void SetTimeTransition(locator_fixture_t *fixture, uint32_t index,
 	fixture->model.phase_transition_count = index + 1U;
 }
 
+static void SetPortalPhaseTransition(locator_fixture_t *fixture,
+	uint32_t source_phase, uint32_t destination_phase)
+{
+	sg_rune_phase_transition_t *transition = &fixture->phase_transitions[0];
+
+	memset(transition, 0, sizeof(*transition));
+	transition->order = Order(SG_RUNE_ORDER_PHASE_TRANSITION, 0U);
+	transition->id.value = SG_RuneModelStableIdFromOrderKey(&transition->order);
+	transition->cell = fixture->runtime_cells[0].id;
+	transition->destination_cell = fixture->runtime_cells[1].id;
+	transition->source_phase = fixture->phases[source_phase].id;
+	transition->destination_phase = fixture->phases[destination_phase].id;
+	transition->kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
+	transition->duration_ms = (sg_rune_interval_t){ 0.0f, 0.0f };
+	transition->flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+	fixture->model.phase_transitions = fixture->phase_transitions;
+	fixture->model.phase_transition_count = 1U;
+}
+
 static void InitAbsenceTimeBinFixture(locator_fixture_t *fixture,
 	world_fixture_t *floor)
 {
@@ -1826,6 +1867,7 @@ static void SetAccelerationTransition(locator_fixture_t *fixture,
 	transition->order = Order(SG_RUNE_ORDER_PHASE_TRANSITION, 0U);
 	transition->id.value = SG_RuneModelStableIdFromOrderKey(&transition->order);
 	transition->cell = fixture->runtime_cells[0].id;
+	transition->destination_cell = fixture->runtime_cells[0].id;
 	transition->source_phase = fixture->phases[source_phase].id;
 	transition->destination_phase = fixture->phases[destination_phase].id;
 	transition->kind = SG_RUNE_PHASE_TRANSITION_ACCELERATION;
@@ -2235,6 +2277,46 @@ static void TestRuntimePortalPhaseContinuity(void)
 	CHECK(!LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
 	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+}
+
+static void TestZeroTimePortalPhaseContinuity(void)
+{
+	world_fixture_t empty = EmptyWorld();
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+
+	InitAdjacentStandingFixture(&fixture, &empty);
+	fixture.bindings[1].rune_cell = fixture.runtime_cells[1].id;
+	AddDirectPortal(&fixture);
+	SetPortalPhaseTransition(&fixture, 0U, 1U);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		-0.125f, 0.0f, 24.0f);
+	observation.velocity[0] = 250.0f;
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	CHECK(previous.field_pose.phase.cell_id == 0U);
+	observation.position[0] = 0.125f;
+	observation.velocity[0] = 250.0f;
+	observation.observed_at_ms = 101U;
+	observation.authenticated_at_ms = 101U;
+	observation.frame_sequence = 10U;
+	environment.sampled_at_ms = 101U;
+	request = Request();
+	request.now_ms = 101U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	request.maximum_recovery_distance = 0.5f;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(state.field_pose.phase.cell_id == 1U);
+	CHECK(state.field_pose.phase.phase_id == 1U);
+	CHECK(state.kernel_candidates_examined == 0U);
+	CHECK(state.phase_transition_candidates_examined == 1U);
 }
 
 static void TestMechanismCrossingPreparation(void)
@@ -2853,6 +2935,7 @@ int main(void)
 	TestPhaseTransitionClockOrigins();
 	TestAgedTimeBinTransitionPreservesEpoch();
 	TestRuntimePortalPhaseContinuity();
+	TestZeroTimePortalPhaseContinuity();
 	TestMechanismCrossingPreparation();
 	TestPreviousStateAuthentication();
 	TestRecoveryConnectivityProof();

@@ -151,6 +151,7 @@ typedef struct sg_rune_v2_expected_transition_s
 {
 	sg_rune_phase_transition_id_t id;
 	sg_rune_cell_ref_t cell;
+	sg_rune_cell_ref_t destination_cell;
 	sg_rune_order_key_t order;
 	sg_rune_phase_ref_t source_phase;
 	sg_rune_phase_ref_t destination_phase;

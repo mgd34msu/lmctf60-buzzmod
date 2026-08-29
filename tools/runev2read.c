@@ -19,7 +19,7 @@
 #define RV2_MAGIC UINT32_C(0x324e5552)
 #define RV2_VERSION UINT16_C(2)
 #define RV2_ENDIAN UINT16_C(0x0102)
-#define RV2_SCHEMA_REVISION UINT32_C(3)
+#define RV2_SCHEMA_REVISION UINT32_C(4)
 #define RV2_HEADER_BYTES UINT32_C(64)
 #define RV2_ENTRY_BYTES UINT32_C(32)
 #define RV2_SECTION_COUNT UINT32_C(13)
@@ -112,7 +112,7 @@ _Static_assert(sizeof(rv2_file_offset_t) >= sizeof(uint64_t),
 	"RUNE v2 file offsets require at least 64 bits");
 
 static const uint32_t rv2_record_bytes[RV2_SECTION_COUNT] = {
-	256U, 64U, 12U, 136U, 136U, 164U, 172U, 132U, 104U, 332U,
+	256U, 64U, 12U, 136U, 160U, 164U, 172U, 132U, 104U, 332U,
 	188U, 160U, 64U
 };
 
@@ -704,6 +704,11 @@ static int TransitionSemanticsValid(uint32_t kind,
 			ReadU32(source + 48U) == ReadU32(destination + 48U) &&
 			ReadU32(source + 64U) == ReadU32(destination + 64U) &&
 			PhaseClockEqual(source, destination);
+	case 8U:
+		return PhaseDiscreteEqual(source, destination) &&
+			PhaseClockEqual(source, destination) &&
+			Interval3Equal(source + 96U, destination + 96U) &&
+			IntervalEqual(source + 120U, destination + 120U);
 	default:
 		return 0;
 	}
@@ -717,19 +722,27 @@ static int ValidateTransitions(rv2_context_t *context)
 	{
 		const unsigned char *record = Record(context, 4U, index);
 		uint32_t cell;
+		uint32_t destination_cell;
 		uint32_t source_phase;
 		uint32_t destination_phase;
+		uint32_t kind = ReadU32(record + 120U);
+		uint32_t flags = ReadU32(record + 132U);
 
 		if (!FindId(context, 5U, ReadId(record + 48U), &cell) ||
+			!FindId(context, 5U, ReadId(record + 136U), &destination_cell) ||
 			!FindId(context, 3U, ReadId(record + 72U), &source_phase) ||
 			!FindId(context, 3U, ReadId(record + 96U), &destination_phase) ||
-			source_phase == destination_phase || ReadU32(record + 120U) < 1U ||
-			ReadU32(record + 120U) >= 8U ||
+			source_phase == destination_phase || kind < 1U || kind >= 9U ||
 			!IntervalValid(record + 124U, 1) ||
-			ReadF32(record + 128U) <= 0.0f || ReadU32(record + 132U) != 0U ||
+			(kind == 8U ? (ReadF32(record + 124U) != 0.0f ||
+				ReadF32(record + 128U) != 0.0f) :
+				ReadF32(record + 128U) <= 0.0f) ||
+			(flags & ~UINT32_C(1)) != 0U ||
+			((flags & UINT32_C(1)) != 0U) != (cell != destination_cell) ||
+			(kind == 8U && (flags & UINT32_C(1)) == 0U) ||
 			!PhaseInCell(context, cell, source_phase) ||
-			!PhaseInCell(context, cell, destination_phase) ||
-			!TransitionSemanticsValid(ReadU32(record + 120U),
+			!PhaseInCell(context, destination_cell, destination_phase) ||
+			!TransitionSemanticsValid(kind,
 				Record(context, 3U, source_phase),
 				Record(context, 3U, destination_phase)))
 			return 0;

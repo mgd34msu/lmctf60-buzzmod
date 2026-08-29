@@ -452,6 +452,8 @@ static void CodecEncodeTransition(unsigned char *record,
 		&transition->duration_ms);
 	SG_RuneV2WirePutU32(record + SG_RUNE_V2_TRANSITION_FLAGS_OFFSET,
 		transition->flags);
+	CodecPutStableId(record + SG_RUNE_V2_TRANSITION_DESTINATION_CELL_OFFSET,
+		&transition->destination_cell.value);
 }
 
 static void CodecEncodeCell(unsigned char *record, const sg_rune_cell_t *cell)
@@ -1054,6 +1056,8 @@ static void CodecDecodeTransition(const unsigned char *record,
 		&transition->duration_ms);
 	transition->flags = SG_RuneV2WireGetU32(record +
 		SG_RUNE_V2_TRANSITION_FLAGS_OFFSET);
+	CodecGetStableId(record + SG_RUNE_V2_TRANSITION_DESTINATION_CELL_OFFSET,
+		&transition->destination_cell.value);
 }
 
 static void CodecDecodeCell(const unsigned char *record, sg_rune_cell_t *cell)

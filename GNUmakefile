@@ -3448,6 +3448,38 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 	@echo [TEST] host law publication
 	@sh $(HOST_LAW_PUBLICATION_TEST)
 
+phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
+		tests/sg_phase_catalog_test.c \
+		tests/sg_phase_catalog_mechanism_integration_test.c \
+		tests/sg_phase_catalog_model_integration_test.c \
+		tests/sg_mechanism_capability_test.c \
+		slipgate/sg_phase_catalog.c slipgate/sg_phase_catalog.h \
+		slipgate/sg_phase_catalog_internal.h \
+		slipgate/sg_phase_catalog_audit.c \
+		slipgate/sg_phase_catalog_publication.c \
+		slipgate/sg_phase_catalog_owner.c slipgate/sg_phase_catalog_owner.h \
+		slipgate/sg_phase_mover_support_provider.c \
+		slipgate/sg_authority_entropy.c slipgate/sg_authority_entropy.h \
+		slipgate/sg_mechanism_capability.c \
+		slipgate/sg_mechanism_capability_seal.c \
+		slipgate/sg_mechanism_capability.h \
+		slipgate/sg_mechanism_capability_internal.h \
+		slipgate/sg_configuration_semantics.c \
+		slipgate/sg_configuration_lattice.c slipgate/sg_configuration_space.c \
+		slipgate/sg_configuration_audit.c slipgate/sg_host_collision.c \
+		slipgate/sg_bsp_world.c slipgate/sg_rune_model.c \
+		slipgate/sg_bsp_completeness_proof.c \
+		slipgate/sg_bsp_completeness_core.c \
+		slipgate/sg_bsp_completeness_region.c \
+		slipgate/sg_bsp_completeness_traversal.c \
+		slipgate/sg_bsp_completeness_lattice.c \
+		slipgate/sg_bsp_completeness_coverage.c \
+		slipgate/sg_bsp_completeness_state.c \
+		slipgate/sg_bsp_completeness_portal.c \
+		slipgate/sg_bsp_completeness_portal_index.c \
+		slipgate/sg_rune_model.h slipgate/sg_rune_model.c
+	sh tests/run_sg_phase_catalog_test.sh
+
 rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
 		tests/sg_rune_v2_content_identity_test.c \
 		tests/sg_rune_v2_content_identity_probe.c \
@@ -3514,7 +3546,8 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
-		weapon-effect-profile-test hook-visibility-catalog-test \
+		weapon-effect-profile-test phase-catalog-publication-test \
+		hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
 		bsp-entity-semantics-publication-test \
 		host-law-publication-test \

@@ -237,24 +237,30 @@ typedef struct sg_mechanism_topology_relation_s
 	uint32_t edge_count;
 } sg_mechanism_topology_relation_t;
 
-typedef struct sg_mechanism_capability_set_s
+typedef struct sg_mechanism_capability_set_s sg_mechanism_capability_set_t;
+typedef struct sg_mechanism_capability_owner_s
+	sg_mechanism_capability_owner_t;
+
+/* Read-only content of an owner-issued capability result.  The handle remains
+ * opaque: content identity describes the snapshot but is not issuance
+ * authority and cannot be used to mint another accepted handle. */
+typedef struct sg_mechanism_capability_view_s
 {
 	sg_rune_model_identity_t identity;
 	uint64_t candidate_verifier_identity;
 	uint64_t trace_verifier_identity;
-	sg_mechanism_capability_fact_t *facts;
+	uint64_t content_identity;
+	const sg_mechanism_capability_fact_t *facts;
 	uint32_t fact_count;
-	uint32_t *topology_edges;
+	const uint32_t *topology_edges;
 	uint32_t topology_edge_count;
-	sg_mechanism_topology_relation_t *topology_relations;
+	const sg_mechanism_topology_relation_t *topology_relations;
 	uint32_t topology_relation_count;
-	/* Entity n owns facts in [mechanism_offsets[n], mechanism_offsets[n + 1]). */
-	uint32_t *mechanism_offsets;
+	const uint32_t *mechanism_offsets;
 	uint32_t mechanism_offset_count;
-	/* Fact indexes sorted by trace_identity for deterministic audit lookup. */
-	uint32_t *facts_by_trace;
+	const uint32_t *facts_by_trace;
 	uint64_t topology_edge_visits;
-} sg_mechanism_capability_set_t;
+} sg_mechanism_capability_view_t;
 
 typedef struct sg_mechanism_capability_source_s
 {
@@ -290,15 +296,26 @@ typedef struct sg_mechanism_capability_audit_result_s
 	uint64_t lookup_comparisons;
 } sg_mechanism_capability_audit_result_t;
 
+int SG_MechanismCapabilityOwnerCreate(
+	sg_mechanism_capability_owner_t **owner_out);
+void SG_MechanismCapabilityOwnerDestroy(
+	sg_mechanism_capability_owner_t *owner);
 int SG_MechanismCapabilityBuild(
+	sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
 	sg_mechanism_capability_set_t **capabilities_out,
 	sg_mechanism_capability_error_t *error_out);
 int SG_MechanismCapabilityAudit(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
 	const sg_mechanism_capability_set_t *capabilities,
 	sg_mechanism_capability_audit_result_t *result_out);
+int SG_MechanismCapabilityRead(
+	const sg_mechanism_capability_owner_t *owner,
+	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_view_t **view_out);
 void SG_MechanismCapabilityDestroy(
+	sg_mechanism_capability_owner_t *owner,
 	sg_mechanism_capability_set_t *capabilities);
 const char *SG_MechanismCapabilityErrorString(
 	sg_mechanism_capability_error_code_t code);

@@ -186,6 +186,7 @@ static void InitFixture(model_fixture_t *fixture)
 	fixture->transitions[0].id = TransitionId(0);
 	fixture->transitions[0].order = order;
 	fixture->transitions[0].cell = CellId(0);
+	fixture->transitions[0].destination_cell = CellId(0);
 	fixture->transitions[0].source_phase = fixture->phases[0].id;
 	fixture->transitions[0].destination_phase = fixture->phases[1].id;
 	fixture->transitions[0].kind = SG_RUNE_PHASE_TRANSITION_STANCE;
