@@ -17,6 +17,20 @@
 
 static int failures;
 
+#ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
+extern void Pmove(pmove_t *pmove);
+void Com_DPrintf(const char *format, ...);
+void Com_DPrintf(const char *format, ...)
+{
+	(void)format;
+}
+void Com_Printf(char *format, ...);
+void Com_Printf(char *format, ...)
+{
+	(void)format;
+}
+#endif
+
 static void LocalizationPmove(pmove_t *pmove)
 {
 	uint32_t axis;
@@ -1069,6 +1083,184 @@ static void TestRecoveryOutsideCertificateBoundary(void)
 	CHECK(state.recovery == SG_LOCALIZATION_RECOVERY_NUMERIC_DRIFT);
 }
 
+static void TestTemporaryAbsencePresentReentry(void)
+{
+	const float floor_mins[3] = { -100.0f, -100.0f, -100.0f };
+	const float floor_maxs[3] = { 100.0f, 100.0f, 0.0f };
+	world_fixture_t floor = BoxWorld(floor_mins, floor_maxs);
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t initial;
+	sg_localized_player_state_t absence;
+	sg_localized_player_state_t forged;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+
+	InitStandardFixture(&fixture, &floor,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U,
+		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_SUPPORTED,
+		SG_RUNE_MEDIUM_DRY);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		0.0f, 0.0f, 24.125f);
+	observation.host_state.pm_flags |= PMF_ON_GROUND;
+	CHECK(Localize(&fixture, &observation, &environment, &initial, &status));
+
+	observation.kind = SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT;
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 105U;
+	observation.authenticated_at_ms = 105U;
+	request = Request();
+	request.now_ms = 105U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &initial;
+	request.maximum_temporary_absence_ms = 10U;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &absence, &status));
+	CHECK(absence.phase_started_at_ms == initial.phase_started_at_ms);
+	CHECK(absence.field_pose.sample_time_ms == 105U);
+	CHECK(absence.phase_elapsed_ms == 5U);
+
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		0.0f, 0.0f, 24.125f);
+	observation.host_state.pm_flags |= PMF_ON_GROUND;
+	observation.frame_sequence = 11U;
+	observation.observed_at_ms = 106U;
+	observation.authenticated_at_ms = 106U;
+	request = Request();
+	request.now_ms = 106U;
+	request.minimum_frame_sequence = 11U;
+	request.previous = &absence;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(state.phase_started_at_ms == initial.phase_started_at_ms);
+	CHECK(state.phase_elapsed_ms == 6U);
+
+	observation.observed_at_ms = 107U;
+	observation.authenticated_at_ms = 107U;
+	observation.frame_sequence = 12U;
+	request.now_ms = 107U;
+	request.minimum_frame_sequence = 12U;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+
+	observation.observed_at_ms = 106U;
+	observation.authenticated_at_ms = 106U;
+	observation.frame_sequence = 11U;
+	request.now_ms = 106U;
+	request.minimum_frame_sequence = 11U;
+	forged = absence;
+	forged.phase_started_at_ms++;
+	request.previous = &forged;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+	forged = absence;
+	forged.host_state.origin[0]++;
+	request.previous = &forged;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_RECOVERY_REJECTED);
+
+	request.previous = &absence;
+	request.now_ms = 107U;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_STALE);
+}
+
+#ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
+static void CheckRealPmoveAcceleration(world_fixture_t *world,
+	sg_configuration_semantic_region_flags_t flags, uint8_t water_level,
+	sg_host_collision_contents_t water_type, sg_rune_motion_t motion,
+	sg_rune_support_t support, sg_rune_medium_t medium,
+	sg_rune_stance_t stance, float z, float expected_x, float expected_z)
+{
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_localized_player_state_t previous;
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+	sg_localization_request_t request;
+	sg_host_pmove_request_t pmove_request;
+	sg_host_pmove_result_t result;
+	sg_host_pmove_error_t error;
+
+	InitStandardFixture(&fixture, world, flags, water_level, water_type,
+		motion, support, medium);
+	FinalizeFixture(&fixture);
+	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, Pmove,
+		&fixture.runtime, &status));
+	observation = Observation(&fixture, stance, 0.0f, 0.0f, z);
+	if (motion == SG_RUNE_MOTION_SUPPORTED)
+		observation.host_state.pm_flags |= PMF_ON_GROUND;
+	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
+	memset(&pmove_request, 0, sizeof(pmove_request));
+	pmove_request.state = previous.host_state;
+	pmove_request.previous_state = previous.host_state;
+	pmove_request.command.msec = 1U;
+	pmove_request.command.forwardmove = 300;
+	if (stance == SG_RUNE_STANCE_CROUCHING)
+		pmove_request.command.upmove = -1;
+	CHECK(SG_HostPmoveEvaluateFrame(&fixture.authority, NULL, Pmove,
+		&pmove_request, &result, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_NONE);
+	CHECK(result.velocity[0] == expected_x);
+	CHECK(result.velocity[2] == expected_z);
+	observation.frame_sequence = 10U;
+	observation.observed_at_ms = 101U;
+	observation.authenticated_at_ms = 101U;
+	memcpy(observation.position, result.origin, sizeof(observation.position));
+	memcpy(observation.velocity, result.velocity, sizeof(observation.velocity));
+	observation.host_state = result.state;
+	environment.pmove_request = &pmove_request;
+	environment.replay_substeps = fixture.replay_substeps;
+	environment.replay_substep_capacity = 128U;
+	request = Request();
+	request.now_ms = 101U;
+	request.minimum_frame_sequence = 10U;
+	request.previous = &previous;
+	CHECK(LocalizeRequest(&fixture, &request, &observation,
+		&environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_OK);
+	CHECK(state.field_pose.velocity[0] == expected_x);
+	CHECK(state.field_pose.velocity[2] == expected_z);
+}
+
+static void TestRealPmoveAccelerationLaws(void)
+{
+	const float floor_mins[3] = { -100.0f, -100.0f, -100.0f };
+	const float floor_maxs[3] = { 100.0f, 100.0f, 0.0f };
+	world_fixture_t standing_floor = BoxWorld(floor_mins, floor_maxs);
+	world_fixture_t crouching_floor = BoxWorld(floor_mins, floor_maxs);
+	world_fixture_t air = EmptyWorld();
+	world_fixture_t water = WaterWorld();
+
+	CheckRealPmoveAcceleration(&standing_floor,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U,
+		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_SUPPORTED,
+		SG_RUNE_MEDIUM_DRY, SG_RUNE_STANCE_STANDING, 24.125f, 3.0f, 0.0f);
+	CheckRealPmoveAcceleration(&crouching_floor,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED, 0U, 0U,
+		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_SUPPORTED,
+		SG_RUNE_MEDIUM_DRY, SG_RUNE_STANCE_CROUCHING, 24.125f, 1.0f, 0.0f);
+	CheckRealPmoveAcceleration(&air,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE,
+		SG_RUNE_MEDIUM_DRY, SG_RUNE_STANCE_STANDING, 24.0f, 0.25f, -0.75f);
+	CheckRealPmoveAcceleration(&water,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE |
+			SG_CONFIGURATION_SEMANTIC_REGION_WATER,
+		3U, SG_HOST_CONTENTS_WATER, SG_RUNE_MOTION_SWIMMING,
+		SG_RUNE_SUPPORT_NONE, SG_RUNE_MEDIUM_WATER,
+		SG_RUNE_STANCE_STANDING, -30.0f, 0.875f, 1.125f);
+}
+#endif
+
 static void SetAccelerationTransition(locator_fixture_t *fixture,
 	uint32_t source_phase, uint32_t destination_phase)
 {
@@ -2021,6 +2213,7 @@ int main(void)
 	TestAuthenticationFreshnessAndHostAgreement();
 	TestBoundedRecoveryAndReset();
 	TestRecoveryOutsideCertificateBoundary();
+	TestTemporaryAbsencePresentReentry();
 	TestPhaseContinuityProof();
 	TestAuthenticatedStanceOverlapContinuity();
 	TestSamePhaseClockCannotRewind();
@@ -2034,6 +2227,9 @@ int main(void)
 	TestMultiplePortalCrossingsUseHostReplay();
 	TestPreparationScalesByRecords();
 	TestMoverCarryFailsClosedWithoutProductionAuthority();
+#ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
+	TestRealPmoveAccelerationLaws();
+#endif
 	if (failures != 0)
 	{
 		fprintf(stderr, "%d localization checks failed\n", failures);

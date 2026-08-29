@@ -943,6 +943,31 @@ static int HostStateMatchesObservation(
 	return 1;
 }
 
+static int HostStateMatchesStoredState(
+	const sg_host_collision_authority_t *authority,
+	const sg_localized_player_state_t *state)
+{
+	float gravity = authority->identity.physics.gravity;
+	uint32_t axis;
+	int ducked;
+
+	if (!state->host_state_valid || !isfinite(gravity) || gravity < 0.0f ||
+		gravity > (float)SHRT_MAX || truncf(gravity) != gravity ||
+		state->host_state.pm_type != PM_NORMAL ||
+		state->host_state.gravity != (short)gravity)
+		return 0;
+	ducked = (state->host_state.pm_flags & PMF_DUCKED) != 0;
+	if (ducked != (state->stance == SG_RUNE_STANCE_CROUCHING))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (state->host_state.origin[axis] * 0.125f !=
+				state->field_pose.position[axis] ||
+			state->host_state.velocity[axis] * 0.125f !=
+				state->field_pose.velocity[axis])
+			return 0;
+	return 1;
+}
+
 static int ObservationValid(const sg_cell_phase_locator_t *locator,
 	const sg_localization_request_t *request,
 	const sg_localization_observation_t *observation,
@@ -1140,6 +1165,23 @@ static int RequestRecoveryValid(const sg_localization_request_t *request,
 			request->maximum_temporary_absence_ms != 0U;
 	return request->maximum_recovery_distance == 0.0f &&
 		request->maximum_temporary_absence_ms == 0U;
+}
+
+static int AbsenceHoldValid(const sg_localized_player_state_t *state)
+{
+	uint32_t axis;
+
+	if (state->motion != SG_RUNE_MOTION_SUPPORTED ||
+		state->support != SG_RUNE_SUPPORT_SUPPORTED ||
+		state->reference_frame != SG_RUNE_FRAME_WORLD ||
+		(state->host_state.pm_flags & PMF_ON_GROUND) == 0U ||
+		state->host_state.pm_time != 0U)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (state->field_pose.velocity[axis] != 0.0f ||
+			state->host_state.velocity[axis] != 0)
+			return 0;
+	return 1;
 }
 
 static double Dot3(const float left[3], const float right[3]);
@@ -1602,8 +1644,7 @@ static int StoredStateFactsValid(const sg_cell_phase_locator_t *locator,
 			SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) != 0U) !=
 		 (state->void_relation == SG_RUNE_VOID_ADJACENT)))
 		return 0;
-	if (!state->host_state_valid ||
-		state->host_state.pm_type != PM_NORMAL)
+	if (!HostStateMatchesStoredState(locator->authority, state))
 		return 0;
 	if (state->water_level >= 2U)
 		return state->motion == SG_RUNE_MOTION_SWIMMING &&
@@ -1856,6 +1897,9 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	}
 	if (observation->kind == SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT)
 	{
+		const sg_rune_phase_basis_t *phase_basis;
+		uint64_t elapsed;
+
 		previous_status = PreviousStateStatus(locator, observation,
 			request->previous, 0);
 		if (previous_status != SG_LOCALIZATION_OK)
@@ -1875,6 +1919,29 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		*state_out = *request->previous;
 		state_out->frame_sequence = observation->frame_sequence;
 		state_out->localized_at_ms = observation->observed_at_ms;
+		if (AbsenceHoldValid(request->previous))
+		{
+			if (observation->observed_at_ms <
+					request->previous->phase_started_at_ms)
+			{
+				SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
+				return 0;
+			}
+			elapsed = observation->observed_at_ms -
+				request->previous->phase_started_at_ms;
+			phase_basis = &locator->snapshot->model->phases[
+				request->previous->field_pose.phase.phase_id];
+			if (!IntervalContains(&phase_basis->elapsed_ms, (double)elapsed) ||
+				elapsed > phase_basis->time_horizon_ms)
+			{
+				SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
+				return 0;
+			}
+			state_out->field_pose.sample_time_ms = observation->observed_at_ms;
+			state_out->phase_elapsed_ms = elapsed;
+			state_out->time_quantum_index = elapsed /
+				phase_basis->time_quantum_ms;
+		}
 		state_out->recovery = SG_LOCALIZATION_RECOVERY_TEMPORARY_ABSENCE;
 		SetStatus(status_out, SG_LOCALIZATION_OK);
 		return 1;
@@ -2136,31 +2203,77 @@ static int PmoveStateEqual(const pmove_state_t *left,
 	return 1;
 }
 
-static float MaximumHostAcceleration(
-	const sg_rune_physics_parameters_t *physics)
+static double CommandWishSpeed(const sg_localized_player_state_t *previous,
+	const usercmd_t *command)
 {
-	float maximum = physics->ground_acceleration;
+	double wish[3] = { command->forwardmove, command->sidemove, 0.0 };
+	sg_host_collision_contents_t contents = previous->water_type;
 
-	if (physics->air_acceleration > maximum)
-		maximum = physics->air_acceleration;
-	if (physics->water_acceleration > maximum)
-		maximum = physics->water_acceleration;
-	if (physics->hook_acceleration > maximum)
-		maximum = physics->hook_acceleration;
-	if (physics->external_acceleration > maximum)
-		maximum = physics->external_acceleration;
-	return maximum + physics->gravity;
+	if (previous->motion == SG_RUNE_MOTION_SWIMMING)
+	{
+		wish[2] = command->upmove;
+		if (command->forwardmove == 0 && command->sidemove == 0 &&
+			command->upmove == 0)
+			wish[2] = -60.0;
+	}
+	if (contents & SG_HOST_CONTENTS_CURRENT_0)
+		wish[0] += 100.0;
+	if (contents & SG_HOST_CONTENTS_CURRENT_90)
+		wish[1] += 100.0;
+	if (contents & SG_HOST_CONTENTS_CURRENT_180)
+		wish[0] -= 100.0;
+	if (contents & SG_HOST_CONTENTS_CURRENT_270)
+		wish[1] -= 100.0;
+	if (contents & SG_HOST_CONTENTS_CURRENT_UP)
+		wish[2] += 100.0;
+	if (contents & SG_HOST_CONTENTS_CURRENT_DOWN)
+		wish[2] -= 100.0;
+	if (previous->motion == SG_RUNE_MOTION_SWIMMING)
+		return sqrt(wish[0] * wish[0] + wish[1] * wish[1] +
+			wish[2] * wish[2]) * 0.5;
+	return sqrt(wish[0] * wish[0] + wish[1] * wish[1]);
+}
+
+static double HostVelocityChangeLimit(
+	const sg_rune_physics_parameters_t *physics,
+	const sg_localized_player_state_t *previous, const usercmd_t *command,
+	double seconds)
+{
+	double coefficient = physics->air_acceleration;
+	double wishspeed = CommandWishSpeed(previous, command);
+	double source_speed = sqrt(
+		(double)previous->field_pose.velocity[0] *
+			previous->field_pose.velocity[0] +
+		(double)previous->field_pose.velocity[1] *
+			previous->field_pose.velocity[1] +
+		(double)previous->field_pose.velocity[2] *
+			previous->field_pose.velocity[2]);
+	double limit;
+
+	if (previous->motion == SG_RUNE_MOTION_SUPPORTED)
+		coefficient = physics->ground_acceleration;
+	else if (previous->motion == SG_RUNE_MOTION_SWIMMING)
+		coefficient = physics->water_acceleration;
+	limit = coefficient * seconds * wishspeed;
+	if (previous->motion == SG_RUNE_MOTION_AIRBORNE)
+		limit += physics->gravity * seconds;
+	if (previous->motion == SG_RUNE_MOTION_SWIMMING)
+		limit += physics->water_drag * previous->water_level *
+			source_speed * seconds;
+	return limit + 0.125 * sqrt(3.0);
 }
 
 static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	const sg_localized_player_state_t *previous,
-	const sg_host_pmove_substep_t *substep, uint32_t substep_ms)
+	const usercmd_t *command, const sg_host_pmove_substep_t *substep,
+	uint32_t substep_ms)
 {
 	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
 	double seconds = (double)substep_ms / 1000.0;
-	double acceleration = MaximumHostAcceleration(physics);
-	double position_slop = 0.125 + acceleration * seconds * seconds;
-	double velocity_slop = 0.125 + acceleration * seconds;
+	double position_slop = 0.125;
+	double velocity_delta_squared = 0.0;
+	double velocity_limit = HostVelocityChangeLimit(physics, previous, command,
+		seconds);
 	uint32_t axis;
 
 	if (substep->elapsed_ms != (substep->step + 1U) * substep_ms ||
@@ -2174,13 +2287,14 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 			fabs(destination_velocity));
 		double displacement = fabs((double)substep->origin[axis] -
 			previous->field_pose.position[axis]);
+		double velocity_delta = destination_velocity - source_velocity;
 
 		if (maximum_velocity > physics->max_velocity ||
-			fabs(destination_velocity - source_velocity) > velocity_slop ||
 			displacement > maximum_velocity * seconds + position_slop)
 			return 0;
+		velocity_delta_squared += velocity_delta * velocity_delta;
 	}
-	return 1;
+	return sqrt(velocity_delta_squared) <= velocity_limit;
 }
 
 static int ReplayFinalEqual(const sg_host_pmove_replay_t *replay,
@@ -2228,6 +2342,13 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		request->previous == NULL)
 		return LocalizeOne(locator, request, observation, environment,
 			state_out, status_out, 0);
+	if (!ObservationValid(locator, request, observation, environment,
+			status_out))
+	{
+		if (state_out)
+			memset(state_out, 0, sizeof(*state_out));
+		return 0;
+	}
 	if (!state_out || !environment->pmove_request ||
 		!environment->replay_substeps ||
 		(environment->scene && environment->scene->instance_count != 0U) ||
@@ -2275,7 +2396,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		sg_localization_request_t step_request = *request;
 		sg_localized_player_state_t *output = (index & 1U) ? &second : &first;
 
-		if (!ReplayMotionValid(locator->authority, previous, substep,
+		if (!ReplayMotionValid(locator->authority, previous,
+				&replay.request.command, substep,
 				replay.substep_ms))
 		{
 			memset(state_out, 0, sizeof(*state_out));
