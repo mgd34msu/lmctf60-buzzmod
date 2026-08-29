@@ -1557,6 +1557,53 @@ static int RepresentedPhaseTransition(const sg_cell_phase_locator_t *locator,
 	return 0;
 }
 
+static int RepresentedPortalPhaseTransition(
+	const sg_cell_phase_locator_t *locator,
+	const sg_localized_player_state_t *previous, uint32_t destination_cell,
+	uint32_t destination_phase, uint32_t *candidates_examined)
+{
+	const sg_rune_model_t *model = locator->snapshot->model;
+	uint32_t source_cell = previous->field_pose.phase.cell_id;
+	uint32_t source_phase = previous->field_pose.phase.phase_id;
+	uint32_t first;
+	uint32_t last;
+	uint32_t offset;
+
+	if (source_cell >= model->cell_count ||
+		destination_cell >= model->cell_count ||
+		source_phase >= model->phase_count ||
+		destination_phase >= model->phase_count)
+		return 0;
+	first = locator->phase_transition_offsets[source_phase];
+	last = locator->phase_transition_offsets[source_phase + 1U];
+	if (first > last || last > model->phase_transition_count)
+		return 0;
+	for (offset = first; offset < last; offset++)
+	{
+		uint32_t index = locator->phase_transition_indices[offset];
+		const sg_rune_phase_transition_t *transition;
+
+		(*candidates_examined)++;
+		if (index >= model->phase_transition_count)
+			return 0;
+		transition = &model->phase_transitions[index];
+		if (transition->kind == SG_RUNE_PHASE_TRANSITION_PORTAL &&
+			(transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U &&
+			transition->duration_ms.min_value == 0.0f &&
+			transition->duration_ms.max_value == 0.0f &&
+			SG_RuneModelStableIdEqual(&transition->cell.value,
+				&model->cells[source_cell].id.value) &&
+			SG_RuneModelStableIdEqual(&transition->source_phase.value,
+				&model->phases[source_phase].id.value) &&
+			SG_RuneModelStableIdEqual(&transition->destination_cell.value,
+				&model->cells[destination_cell].id.value) &&
+			SG_RuneModelStableIdEqual(&transition->destination_phase.value,
+				&model->phases[destination_phase].id.value))
+			return 1;
+	}
+	return 0;
+}
+
 static int RepresentedRuntimeCellTransition(
 	const sg_cell_phase_locator_t *locator,
 	const sg_localized_player_state_t *previous, uint32_t destination_cell,
@@ -2204,9 +2251,10 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	}
 	if (continuity && runtime_cell !=
 			request->previous->field_pose.phase.cell_id &&
-		!RepresentedRuntimeCellTransition(locator, request->previous,
-			runtime_cell, phase, &crossed_portal, observation,
-			&kernel_candidates_examined))
+		!RepresentedPortalPhaseTransition(locator, request->previous,
+			runtime_cell, phase, &phase_transition_candidates_examined) &&
+		!RepresentedRuntimeCellTransition(locator, request->previous, runtime_cell,
+			phase, &crossed_portal, observation, &kernel_candidates_examined))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 		return 0;

@@ -5,6 +5,7 @@
 #include <string.h>
 
 int SG_PhaseCatalogPublicationBuild(
+	sg_phase_catalog_publication_owner_t *publication_owner,
 	sg_mechanism_capability_owner_t *capability_owner,
 	const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
@@ -26,7 +27,8 @@ int SG_PhaseCatalogPublicationBuild(
 		memset(error_out, 0, sizeof(*error_out));
 	if (audit_out)
 		memset(audit_out, 0, sizeof(*audit_out));
-	if (!capability_owner || !publication_out || *publication_out || !authority ||
+	if (!publication_owner || !capability_owner || !publication_out ||
+		*publication_out || !authority || !configuration ||
 		!semantics || !accepted_capabilities)
 	{
 		SG_PhaseCatalogSetError(error_out,
@@ -64,8 +66,8 @@ int SG_PhaseCatalogPublicationBuild(
 		return 0;
 	}
 	memset(&audit, 0, sizeof(audit));
-	if (!SG_PhaseCatalogPublicationIssue(&source, catalog, publication_out,
-		&audit))
+	if (!SG_PhaseCatalogPublicationIssue(publication_owner, &source, catalog,
+		publication_out, &audit))
 	{
 		if (audit_out)
 			*audit_out = audit;

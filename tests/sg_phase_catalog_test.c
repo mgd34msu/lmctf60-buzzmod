@@ -201,6 +201,112 @@ static void FixtureDestroy(phase_fixture_t *fixture)
 	memset(fixture, 0, sizeof(*fixture));
 }
 
+static void TestCanonicalFieldEquality(void)
+{
+	sg_rune_model_identity_t first = Identity();
+	sg_rune_model_identity_t second = first;
+	sg_phase_catalog_binding_t first_binding;
+	sg_phase_catalog_binding_t second_binding;
+	unsigned char *bytes = (unsigned char *)&second_binding;
+	size_t index;
+
+	first.physics.ground_acceleration = 0.0f;
+	second.physics.ground_acceleration = -0.0f;
+	CHECK_PHASE(SG_PhaseCatalogIdentityEqual(&first, &second));
+	memset(&first_binding, 0, sizeof(first_binding));
+	first_binding.semantic_region_id = UINT64_C(17);
+	first_binding.configuration_cell = 3U;
+	first_binding.phase.value.source_set_identity = UINT64_C(4);
+	first_binding.phase.value.high = UINT64_C(5);
+	first_binding.phase.value.low = UINT64_C(6);
+	first_binding.mechanism_state_mask = SG_PHASE_MECHANISM_STATE_ACTIVE;
+	second_binding = first_binding;
+	for (index = offsetof(sg_phase_catalog_binding_t, configuration_cell) +
+		sizeof(first_binding.configuration_cell);
+		index < offsetof(sg_phase_catalog_binding_t, phase); index++)
+		bytes[index] = UINT8_C(0xa5);
+	CHECK_PHASE(SG_PhaseCatalogBindingEqual(&first_binding, &second_binding));
+}
+
+static void TestMultiRegionPhaseOrdering(void)
+{
+	phase_fixture_t fixture;
+	sg_phase_mover_support_t supports[2];
+	sg_mechanism_capability_fact_t fact;
+	sg_phase_catalog_t *catalog = NULL;
+	sg_phase_catalog_error_t error = { 0 };
+	uint32_t index;
+
+	if (!FixtureInit(&fixture, 1U, 2U, 1))
+	{
+		CHECK_PHASE(0);
+		return;
+	}
+	memset(supports, 0, sizeof(supports));
+	for (index = 0U; index < 2U; index++)
+	{
+		sg_rune_order_key_t order;
+
+		memset(&order, 0, sizeof(order));
+		order.source_set_identity =
+			fixture.authority.identity.source_set_identity;
+		order.domain = SG_RUNE_ORDER_MECHANISM;
+		order.source_index = index;
+		supports[index].semantic_region_id = fixture.regions[index].id;
+		supports[index].mechanism.value =
+			SG_RuneModelStableIdFromOrderKey(&order);
+		supports[index].mechanism_state_mask =
+			SG_PHASE_MECHANISM_STATE_ACTIVE;
+	}
+	fixture.derivation.supports = supports;
+	fixture.derivation.support_count = 2U;
+	memset(&fact, 0, sizeof(fact));
+	fact.mechanism_id = supports[0].mechanism;
+	fact.source_region = 0U;
+	fact.destination_region = 0U;
+	fact.kind = SG_MECHANISM_CAPABILITY_DWELL;
+	fact.source_state = SG_MECHANISM_STATE_ACTIVE;
+	fact.destination_state = SG_MECHANISM_STATE_DWELLING;
+	fact.dwell_ms = 10U;
+	fixture.derivation.facts = &fact;
+	fixture.derivation.fact_count = 1U;
+	fixture.derivation.completion = SG_PHASE_CATALOG_COMPLETE;
+	CHECK_PHASE(DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog != NULL && catalog->phase_count == 5U);
+	if (catalog && catalog->phase_count == 5U)
+	{
+		int destination_binding_found = 0;
+
+		CHECK_PHASE(catalog->phases[0].order.local_ordinal == 0U &&
+			!SG_RuneModelStableIdValid(&catalog->phases[0].mover.value));
+		CHECK_PHASE(catalog->phases[1].order.local_ordinal == 1U &&
+			SG_RuneModelStableIdEqual(&catalog->phases[1].mover.value,
+				&supports[0].mechanism.value));
+		CHECK_PHASE(catalog->phases[2].order.local_ordinal == 2U &&
+			!SG_RuneModelStableIdValid(&catalog->phases[2].mover.value));
+		CHECK_PHASE(catalog->phases[3].order.local_ordinal == 3U &&
+			SG_RuneModelStableIdEqual(&catalog->phases[3].mover.value,
+				&supports[1].mechanism.value));
+		CHECK_PHASE(catalog->phases[4].order.local_ordinal == 4U &&
+			SG_RuneModelStableIdEqual(&catalog->phases[4].mover.value,
+				&supports[0].mechanism.value));
+		for (index = 0U; index < catalog->binding_count; index++)
+			if (catalog->bindings[index].semantic_region_id ==
+					fixture.regions[0].id &&
+				catalog->bindings[index].configuration_cell == 0U &&
+				SG_RuneModelStableIdEqual(
+					&catalog->bindings[index].phase.value,
+					&catalog->phases[4].id.value) &&
+				(catalog->bindings[index].mechanism_state_mask &
+					SG_PHASE_MECHANISM_STATE_DWELLING) != 0U)
+				destination_binding_found = 1;
+		CHECK_PHASE(destination_binding_found);
+	}
+	SG_PhaseCatalogDestroy(catalog);
+	FixtureDestroy(&fixture);
+}
+
 typedef struct real_producer_fixture_s
 {
 	sg_bsp_world_t world;
@@ -526,29 +632,63 @@ static void TestCallerCannotIssueMechanismProvider(void)
 	FixtureDestroy(&fixture);
 }
 
-static void TestLargePreDedupSource(void)
+static void TestGlobalSourceBounds(void)
 {
 	phase_fixture_t fixture;
 	sg_phase_catalog_t *catalog = NULL;
 	sg_phase_catalog_error_t error = { 0 };
-	uint32_t index;
-	uint32_t count = SG_RUNE_MODEL_MAX_PHASES + 1U;
 
-	CHECK_PHASE(FixtureInit(&fixture, 1U, count, 0));
-	if (!fixture.regions)
+	CHECK_PHASE(FixtureInit(&fixture, 1U, 1U, 0));
+	if (!fixture.regions || !fixture.cells)
 		return;
-	for (index = 0U; index < count; index++)
-		SetRegion(&fixture.regions[index], index, 0U,
-			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED);
-	CHECK_PHASE(DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+
+	fixture.configuration.cell_count = SG_RUNE_MODEL_MAX_CELLS + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
 		&error));
-	CHECK_PHASE(catalog != NULL);
-	if (catalog)
-	{
-		CHECK_PHASE(catalog->phase_count == 1U);
-		CHECK_PHASE(catalog->binding_count == count);
-	}
-	SG_PhaseCatalogDestroy(catalog);
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	fixture.configuration.cell_count = 1U;
+	error = (sg_phase_catalog_error_t){ 0 };
+
+	fixture.configuration.portal_count = SG_RUNE_MODEL_MAX_PORTALS + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	fixture.configuration.portal_count = 0U;
+	error = (sg_phase_catalog_error_t){ 0 };
+
+	fixture.configuration.stance_overlap_count =
+		SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	fixture.configuration.stance_overlap_count = 0U;
+	error = (sg_phase_catalog_error_t){ 0 };
+
+	fixture.semantics.region_count = SG_RUNE_MODEL_MAX_PHASES + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	fixture.semantics.region_count = 1U;
+	error = (sg_phase_catalog_error_t){ 0 };
+
+	fixture.semantics.face_count = SG_RUNE_MODEL_MAX_PLANES + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	fixture.semantics.face_count = 0U;
+	error = (sg_phase_catalog_error_t){ 0 };
+
+	fixture.derivation.support_count = SG_RUNE_MODEL_MAX_PHASES + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+	fixture.derivation.support_count = 0U;
+	error = (sg_phase_catalog_error_t){ 0 };
+
+	fixture.derivation.fact_count = SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS + 1U;
+	CHECK_PHASE(!DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog == NULL && error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
 	FixtureDestroy(&fixture);
 }
 
@@ -610,6 +750,8 @@ static void TestTransitionAppendBoundBeforeGrowth(void)
 
 int main(void)
 {
+	TestCanonicalFieldEquality();
+	TestMultiRegionPhaseOrdering();
 #ifdef SG_PHASE_CATALOG_TEST_TRANSITION_LIMIT
 	TestTransitionAppendBoundBeforeGrowth();
 	(void)TestRealConfigurationSemanticsProducer;
@@ -618,7 +760,7 @@ int main(void)
 	(void)TestSupportTransitionEvidence;
 	(void)TestStanceAndPortalTransitions;
 	(void)TestCallerCannotIssueMechanismProvider;
-	(void)TestLargePreDedupSource;
+	(void)TestGlobalSourceBounds;
 #else
 	TestRealConfigurationSemanticsProducer();
 	TestRegionZeroAndImmutableEmpty();
@@ -626,7 +768,7 @@ int main(void)
 	TestSupportTransitionEvidence();
 	TestStanceAndPortalTransitions();
 	TestCallerCannotIssueMechanismProvider();
-	TestLargePreDedupSource();
+	TestGlobalSourceBounds();
 #endif
 	if (phase_failures)
 	{

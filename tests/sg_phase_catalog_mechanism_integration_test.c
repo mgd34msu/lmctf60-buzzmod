@@ -8,6 +8,12 @@ int SG_MechanismCapabilityFixtureMain(void);
 
 static int phase_integration_failures;
 
+static void MutateConstBytes(const void *destination, const void *source,
+	size_t size)
+{
+	memcpy((void *)(uintptr_t)destination, source, size);
+}
+
 #define CHECK_PHASE_INTEGRATION(expression) do { \
 	if (!(expression)) { \
 		fprintf(stderr, "%s:%d: check failed: %s\n", \
@@ -125,12 +131,45 @@ static void TestOwnerTeardownRejectsPriorToken(mechanism_fixture_t *fixture,
 	SG_PhaseMoverSupportProviderOwnerDestroy(second_provider_owner);
 }
 
+static void TestPublicationOwnerCycles(mechanism_fixture_t *fixture,
+	const sg_mechanism_capability_set_t *accepted_capabilities)
+{
+	uint32_t cycle;
+
+	for (cycle = 0U; cycle < 32U; cycle++)
+	{
+		sg_phase_catalog_publication_owner_t *owner = NULL;
+		sg_phase_catalog_publication_t *publication = NULL;
+		const sg_phase_catalog_publication_t *stale;
+		const sg_phase_catalog_view_t *view = NULL;
+		sg_phase_catalog_error_t error;
+		sg_phase_catalog_audit_result_t audit;
+
+		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationOwnerCreate(&owner));
+		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(owner,
+			fixture->capability_owner, &fixture->authority,
+			fixture->configuration, fixture->configuration_semantics,
+			accepted_capabilities, &publication, &error, &audit));
+		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(owner,
+			publication, &view));
+		stale = publication;
+		SG_PhaseCatalogPublicationDestroy(owner, publication);
+		CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogPublicationRead(owner, stale,
+			&view));
+		SG_PhaseCatalogPublicationDestroy(owner,
+			(sg_phase_catalog_publication_t *)(uintptr_t)stale);
+		SG_PhaseCatalogPublicationOwnerDestroy(owner);
+	}
+}
+
 int main(void)
 {
 	mechanism_fixture_t fixture;
 	sg_mechanism_capability_owner_t *cross_capability_owner = NULL;
 	sg_phase_mover_support_provider_owner_t *provider_owner = NULL;
 	sg_phase_mover_support_provider_owner_t *cross_provider_owner = NULL;
+	sg_phase_catalog_publication_owner_t *publication_owner = NULL;
+	sg_phase_catalog_publication_owner_t *cross_publication_owner = NULL;
 	sg_mechanism_capability_set_t *capabilities = NULL;
 	sg_mechanism_capability_set_t *equivalent_capabilities = NULL;
 	sg_mechanism_capability_set_t *replacement_capabilities = NULL;
@@ -138,6 +177,7 @@ int main(void)
 	const sg_mechanism_capability_view_t *capability_view = NULL;
 	const sg_mechanism_capability_view_t *equivalent_capability_view = NULL;
 	const sg_mechanism_capability_view_t *rejected_capability_view = NULL;
+	sg_mechanism_capability_payload_t *capability_payload = NULL;
 	sg_mechanism_capability_payload_t *equivalent_payload = NULL;
 	sg_mechanism_capability_error_t capability_error;
 	sg_phase_mover_support_provider_t *provider = NULL;
@@ -152,8 +192,10 @@ int main(void)
 	const sg_phase_mover_support_provider_view_t *provider_view = NULL;
 	const sg_phase_mover_support_provider_view_t *provider_view_again = NULL;
 	const sg_phase_mover_support_provider_view_t *rejected_provider_view = NULL;
+	sg_phase_mover_support_provider_payload_t *provider_payload = NULL;
 	sg_phase_catalog_publication_t *publication = NULL;
 	sg_phase_catalog_publication_t *publication_again = NULL;
+	const sg_phase_catalog_publication_t *stale_publication = NULL;
 	const sg_phase_catalog_view_t *publication_view = NULL;
 	const sg_phase_catalog_view_t *publication_view_again = NULL;
 	sg_phase_catalog_error_t publication_error;
@@ -175,6 +217,10 @@ int main(void)
 		&provider_owner));
 	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
 		&cross_provider_owner));
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationOwnerCreate(
+		&publication_owner));
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationOwnerCreate(
+		&cross_publication_owner));
 	CHECK_PHASE_INTEGRATION(Build(&fixture, &capabilities, &capability_error));
 	CHECK_PHASE_INTEGRATION(capabilities != NULL);
 	if (!capabilities)
@@ -188,11 +234,7 @@ int main(void)
 		fixture.capability_owner, equivalent_capabilities);
 	CHECK_PHASE_INTEGRATION(equivalent_payload != NULL);
 	if (equivalent_payload)
-	{
 		equivalent_payload->topology_edge_visits += UINT64_C(37);
-		equivalent_payload->view.topology_edge_visits =
-			equivalent_payload->topology_edge_visits;
-	}
 	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(fixture.capability_owner,
 		equivalent_capabilities,
 		&equivalent_capability_view));
@@ -203,6 +245,37 @@ int main(void)
 			equivalent_capability_view->topology_edge_visits &&
 		capability_view->content_identity ==
 			equivalent_capability_view->content_identity);
+	capability_payload = SG_MechanismCapabilityOwnerPayload(
+		fixture.capability_owner, capabilities);
+	CHECK_PHASE_INTEGRATION(capability_payload != NULL);
+	if (capability_view && capability_payload)
+	{
+		sg_mechanism_capability_view_t hostile_view;
+		sg_mechanism_capability_fact_t zero_fact;
+		sg_mechanism_topology_relation_t zero_relation;
+		uint32_t zero = 0U;
+
+		memset(&hostile_view, 0, sizeof(hostile_view));
+		memset(&zero_fact, 0, sizeof(zero_fact));
+		memset(&zero_relation, 0, sizeof(zero_relation));
+		if (capability_payload->fact_count != 0U)
+		{
+			MutateConstBytes(capability_view->facts, &zero_fact,
+				sizeof(zero_fact));
+			MutateConstBytes(capability_view->facts_by_trace, &zero,
+				sizeof(zero));
+		}
+		if (capability_payload->topology_edge_count != 0U)
+			MutateConstBytes(capability_view->topology_edges, &zero,
+				sizeof(zero));
+		if (capability_payload->topology_relation_count != 0U)
+			MutateConstBytes(capability_view->topology_relations, &zero_relation,
+				sizeof(zero_relation));
+		if (capability_payload->mechanism_offset_count != 0U)
+			MutateConstBytes(capability_view->mechanism_offsets, &zero,
+				sizeof(zero));
+		MutateConstBytes(capability_view, &hostile_view, sizeof(hostile_view));
+	}
 	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderBuild(provider_owner,
 		fixture.capability_owner, fixture.configuration_semantics, forged,
 		&forged_provider,
@@ -216,6 +289,20 @@ int main(void)
 	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_owner,
 		provider,
 		&provider_view));
+	CHECK_PHASE_INTEGRATION(provider_view && capability_payload &&
+		provider_view->fact_count == capability_payload->fact_count &&
+		(provider_view->fact_count == 0U ||
+			SG_MechanismCapabilityFactIdentity(&provider_view->facts[0]) ==
+			SG_MechanismCapabilityFactIdentity(&capability_payload->facts[0])));
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(fixture.capability_owner,
+		capabilities, &capability_view));
+	CHECK_PHASE_INTEGRATION(capability_view && capability_payload &&
+		capability_view->fact_count == capability_payload->fact_count &&
+		capability_view->content_identity == capability_payload->content_identity &&
+		(capability_view->fact_count == 0U ||
+			memcmp(capability_view->facts, capability_payload->facts,
+				(size_t)capability_view->fact_count *
+					sizeof(*capability_view->facts)) == 0));
 	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(
 		cross_provider_owner, provider, &rejected_provider_view));
 	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(provider_owner,
@@ -241,6 +328,26 @@ int main(void)
 			state_mask |= provider_view->supports[index].mechanism_state_mask;
 	CHECK_PHASE_INTEGRATION((state_mask & SG_PHASE_MECHANISM_STATE_RETURNING) !=
 		0U);
+	provider_payload = SG_PhaseMoverSupportProviderPayload(provider_owner,
+		provider);
+	CHECK_PHASE_INTEGRATION(provider_payload != NULL);
+	if (provider_view && provider_payload)
+	{
+		sg_phase_mover_support_provider_view_t hostile_view;
+		sg_phase_mover_support_t zero_support;
+		sg_mechanism_capability_fact_t zero_fact;
+
+		memset(&hostile_view, 0, sizeof(hostile_view));
+		memset(&zero_support, 0, sizeof(zero_support));
+		memset(&zero_fact, 0, sizeof(zero_fact));
+		if (provider_payload->support_count != 0U)
+			MutateConstBytes(provider_view->supports, &zero_support,
+				sizeof(zero_support));
+		if (provider_payload->fact_count != 0U)
+			MutateConstBytes(provider_view->facts, &zero_fact,
+				sizeof(zero_fact));
+		MutateConstBytes(provider_view, &hostile_view, sizeof(hostile_view));
+	}
 	memset(&phase_source, 0, sizeof(phase_source));
 	phase_source.authority = &fixture.authority;
 	phase_source.configuration = fixture.configuration;
@@ -249,6 +356,16 @@ int main(void)
 	phase_source.mover_support_provider = provider;
 	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogBuild(&phase_source, &catalog,
 		&phase_error));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_owner,
+		provider, &provider_view));
+	CHECK_PHASE_INTEGRATION(provider_view && provider_payload &&
+		provider_view->verifier_identity == provider_payload->verifier_identity &&
+		provider_view->support_count == provider_payload->support_count &&
+		provider_view->fact_count == provider_payload->fact_count &&
+		(provider_view->support_count == 0U ||
+			memcmp(provider_view->supports, provider_payload->supports,
+				(size_t)provider_view->support_count *
+					sizeof(*provider_view->supports)) == 0));
 	CHECK_PHASE_INTEGRATION(catalog != NULL);
 	if (catalog)
 	{
@@ -260,6 +377,27 @@ int main(void)
 		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogAudit(&phase_source, catalog,
 			&audit));
 		CHECK_PHASE_INTEGRATION(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
+		for (index = 0U; index < catalog->transition_count; index++)
+			if (catalog->transition_evidence[index].origin ==
+				SG_PHASE_CATALOG_TRANSITION_MECHANISM_STATE_TIMING)
+			{
+				uint32_t binding;
+				int destination_binding_found = 0;
+
+				for (binding = 0U; binding < catalog->binding_count; binding++)
+					if (catalog->bindings[binding].semantic_region_id ==
+							catalog->transition_evidence[index].destination_region_id &&
+						catalog->bindings[binding].configuration_cell ==
+							catalog->transition_evidence[index].destination_cell &&
+						SG_RuneModelStableIdEqual(
+							&catalog->bindings[binding].phase.value,
+							&catalog->transitions[index].destination_phase.value) &&
+						(catalog->bindings[binding].mechanism_state_mask &
+							catalog->transition_evidence[index].destination_state_mask) ==
+							catalog->transition_evidence[index].destination_state_mask)
+						destination_binding_found = 1;
+				CHECK_PHASE_INTEGRATION(destination_binding_found);
+			}
 		for (index = 0U; index < catalog->binding_count; index++)
 			if (catalog->bindings[index].mechanism_state_mask != 0U)
 			{
@@ -296,22 +434,75 @@ int main(void)
 		SG_PhaseCatalogDestroy(catalog);
 	}
 	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(
-		fixture.capability_owner, &fixture.authority,
+		publication_owner, fixture.capability_owner, &fixture.authority,
 		fixture.configuration, fixture.configuration_semantics, capabilities,
 		&publication, &publication_error, &publication_audit));
 	CHECK_PHASE_INTEGRATION(publication != NULL);
-	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication,
-		&publication_view));
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication_owner,
+		publication, &publication_view));
 	CHECK_PHASE_INTEGRATION(publication_view != NULL &&
 		publication_view->phase_count != 0U &&
 		publication_view->transition_count != 0U);
+	if (publication_view && publication_view->phase_count != 0U &&
+		publication_view->binding_count != 0U &&
+		publication_view->transition_count != 0U)
+	{
+		sg_phase_catalog_view_t expected_view = *publication_view;
+		sg_phase_catalog_view_t hostile_view;
+		sg_rune_phase_basis_t expected_phase = publication_view->phases[0];
+		sg_phase_catalog_binding_t expected_binding = publication_view->bindings[0];
+		sg_rune_phase_transition_t expected_transition =
+			publication_view->transitions[0];
+		sg_phase_catalog_transition_evidence_t expected_evidence =
+			publication_view->transition_evidence[0];
+		sg_rune_phase_basis_t zero_phase;
+		sg_phase_catalog_binding_t zero_binding;
+		sg_rune_phase_transition_t zero_transition;
+		sg_phase_catalog_transition_evidence_t zero_evidence;
+
+		memset(&hostile_view, 0, sizeof(hostile_view));
+		memset(&zero_phase, 0, sizeof(zero_phase));
+		memset(&zero_binding, 0, sizeof(zero_binding));
+		memset(&zero_transition, 0, sizeof(zero_transition));
+		memset(&zero_evidence, 0, sizeof(zero_evidence));
+		MutateConstBytes(publication_view->phases, &zero_phase,
+			sizeof(zero_phase));
+		MutateConstBytes(publication_view->bindings, &zero_binding,
+			sizeof(zero_binding));
+		MutateConstBytes(publication_view->transitions, &zero_transition,
+			sizeof(zero_transition));
+		MutateConstBytes(publication_view->transition_evidence, &zero_evidence,
+			sizeof(zero_evidence));
+		MutateConstBytes(publication_view, &hostile_view, sizeof(hostile_view));
+		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(
+			publication_owner, publication, &publication_view));
+		CHECK_PHASE_INTEGRATION(publication_view &&
+			SG_PhaseCatalogIdentityEqual(&publication_view->identity,
+				&expected_view.identity) &&
+			publication_view->completion == expected_view.completion &&
+			publication_view->transition_completion ==
+				expected_view.transition_completion &&
+			publication_view->mover_support_verifier_identity ==
+				expected_view.mover_support_verifier_identity &&
+			publication_view->phase_count == expected_view.phase_count &&
+			publication_view->binding_count == expected_view.binding_count &&
+			publication_view->transition_count == expected_view.transition_count &&
+			memcmp(&publication_view->phases[0], &expected_phase,
+				sizeof(expected_phase)) == 0 &&
+			memcmp(&publication_view->bindings[0], &expected_binding,
+				sizeof(expected_binding)) == 0 &&
+			memcmp(&publication_view->transitions[0], &expected_transition,
+				sizeof(expected_transition)) == 0 &&
+			memcmp(&publication_view->transition_evidence[0], &expected_evidence,
+				sizeof(expected_evidence)) == 0);
+	}
 	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(
-		fixture.capability_owner, &fixture.authority,
+		publication_owner, fixture.capability_owner, &fixture.authority,
 		fixture.configuration, fixture.configuration_semantics, capabilities,
 		&publication_again, &publication_again_error,
 		&publication_again_audit));
-	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication_again,
-		&publication_view_again));
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication_owner,
+		publication_again, &publication_view_again));
 	CHECK_PHASE_INTEGRATION(publication_view != NULL &&
 		publication_view_again != NULL &&
 		memcmp(&publication_view_again->identity, &publication_view->identity,
@@ -349,8 +540,18 @@ int main(void)
 					sizeof(*publication_view->transition_evidence)) == 0);
 		}
 	}
-	SG_PhaseCatalogPublicationDestroy(publication);
-	SG_PhaseCatalogPublicationDestroy(publication_again);
+	CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogPublicationRead(
+		cross_publication_owner, publication, &publication_view_again));
+	stale_publication = publication;
+	CHECK_PHASE_INTEGRATION(publication != publication_again);
+	SG_PhaseCatalogPublicationDestroy(publication_owner, publication);
+	CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogPublicationRead(publication_owner,
+		stale_publication, &publication_view));
+	SG_PhaseCatalogPublicationDestroy(publication_owner,
+		(sg_phase_catalog_publication_t *)(uintptr_t)stale_publication);
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(publication_owner,
+		publication_again, &publication_view_again));
+	SG_PhaseCatalogPublicationDestroy(publication_owner, publication_again);
 	stale_provider = provider;
 	SG_PhaseMoverSupportProviderDestroy(provider_owner, provider);
 	provider = NULL;
@@ -400,11 +601,14 @@ int main(void)
 	CHECK_PHASE_INTEGRATION(replacement_provider != NULL);
 	TestOwnerCyclesBoundLiveStorage(&fixture, equivalent_capabilities);
 	TestOwnerTeardownRejectsPriorToken(&fixture, equivalent_capabilities);
+	TestPublicationOwnerCycles(&fixture, equivalent_capabilities);
 	SG_PhaseMoverSupportProviderDestroy(provider_owner, replacement_provider);
 	SG_MechanismCapabilityDestroy(fixture.capability_owner,
 		replacement_capabilities);
 	SG_MechanismCapabilityDestroy(fixture.capability_owner,
 		equivalent_capabilities);
+	SG_PhaseCatalogPublicationOwnerDestroy(cross_publication_owner);
+	SG_PhaseCatalogPublicationOwnerDestroy(publication_owner);
 	SG_PhaseMoverSupportProviderOwnerDestroy(cross_provider_owner);
 	SG_PhaseMoverSupportProviderOwnerDestroy(provider_owner);
 	SG_MechanismCapabilityOwnerDestroy(cross_capability_owner);

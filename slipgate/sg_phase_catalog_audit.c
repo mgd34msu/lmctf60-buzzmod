@@ -43,6 +43,7 @@ typedef struct sg_audit_oracle_s
 
 static int StableIdCompare(const sg_rune_stable_id_t *left,
 	const sg_rune_stable_id_t *right);
+static uint32_t OracleStateBit(sg_mechanism_state_t state);
 
 static int AllocationFits(size_t count, size_t element_size)
 {
@@ -127,6 +128,58 @@ static void OracleFillPhase(const sg_phase_catalog_source_t *source,
 	phase_out->time_horizon_ms = source->authority->identity.physics.frame_ms;
 }
 
+static int OracleIntervalEqual(const sg_rune_interval_t *left,
+	const sg_rune_interval_t *right)
+{
+	return left->min_value == right->min_value &&
+		left->max_value == right->max_value;
+}
+
+static int OracleInterval3Equal(const sg_rune_interval3_t *left,
+	const sg_rune_interval3_t *right)
+{
+	return OracleIntervalEqual(&left->x, &right->x) &&
+		OracleIntervalEqual(&left->y, &right->y) &&
+		OracleIntervalEqual(&left->z, &right->z);
+}
+
+static int OracleFloatCompare(float left, float right)
+{
+	uint32_t left_bits;
+	uint32_t right_bits;
+
+	if (left == right)
+		return 0;
+	if (!isnan(left) && !isnan(right))
+		return left < right ? -1 : 1;
+	if (isnan(left) != isnan(right))
+		return isnan(left) ? 1 : -1;
+	memcpy(&left_bits, &left, sizeof(left_bits));
+	memcpy(&right_bits, &right, sizeof(right_bits));
+	return left_bits == right_bits ? 0 : (left_bits < right_bits ? -1 : 1);
+}
+
+static int OracleIntervalCompare(const sg_rune_interval_t *left,
+	const sg_rune_interval_t *right)
+{
+	int comparison = OracleFloatCompare(left->min_value, right->min_value);
+
+	return comparison != 0 ? comparison :
+		OracleFloatCompare(left->max_value, right->max_value);
+}
+
+static int OracleInterval3Compare(const sg_rune_interval3_t *left,
+	const sg_rune_interval3_t *right)
+{
+	int comparison = OracleIntervalCompare(&left->x, &right->x);
+
+	if (comparison == 0)
+		comparison = OracleIntervalCompare(&left->y, &right->y);
+	if (comparison == 0)
+		comparison = OracleIntervalCompare(&left->z, &right->z);
+	return comparison;
+}
+
 static int OraclePhaseEquivalent(const sg_rune_phase_basis_t *left,
 	const sg_rune_phase_basis_t *right)
 {
@@ -135,8 +188,8 @@ static int OraclePhaseEquivalent(const sg_rune_phase_basis_t *left,
 		left->medium == right->medium && left->void_relation == right->void_relation &&
 		left->reference_frame == right->reference_frame &&
 		SG_RuneModelStableIdEqual(&left->mover.value, &right->mover.value) &&
-		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
-		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		OracleInterval3Equal(&left->velocity, &right->velocity) &&
+		OracleIntervalEqual(&left->elapsed_ms, &right->elapsed_ms) &&
 		left->time_quantum_ms == right->time_quantum_ms &&
 		left->time_horizon_ms == right->time_horizon_ms;
 }
@@ -149,8 +202,8 @@ static int OraclePhaseNeutralEquivalent(const sg_rune_phase_basis_t *left,
 		left->void_relation == right->void_relation &&
 		left->reference_frame == right->reference_frame &&
 		SG_RuneModelStableIdEqual(&left->mover.value, &right->mover.value) &&
-		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
-		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		OracleInterval3Equal(&left->velocity, &right->velocity) &&
+		OracleIntervalEqual(&left->elapsed_ms, &right->elapsed_ms) &&
 		left->time_quantum_ms == right->time_quantum_ms &&
 		left->time_horizon_ms == right->time_horizon_ms;
 }
@@ -180,12 +233,12 @@ static int OraclePhaseBasisCompare(const void *left_value,
 	if ((comparison = StableIdCompare(&left->phase.mover.value,
 		&right->phase.mover.value)) != 0)
 		return comparison;
-	if ((comparison = memcmp(&left->phase.velocity, &right->phase.velocity,
-		sizeof(left->phase.velocity))) != 0)
-		return comparison < 0 ? -1 : 1;
-	if ((comparison = memcmp(&left->phase.elapsed_ms, &right->phase.elapsed_ms,
-		sizeof(left->phase.elapsed_ms))) != 0)
-		return comparison < 0 ? -1 : 1;
+	if ((comparison = OracleInterval3Compare(&left->phase.velocity,
+		&right->phase.velocity)) != 0)
+		return comparison;
+	if ((comparison = OracleIntervalCompare(&left->phase.elapsed_ms,
+		&right->phase.elapsed_ms)) != 0)
+		return comparison;
 	if (left->phase.time_quantum_ms != right->phase.time_quantum_ms)
 		return left->phase.time_quantum_ms < right->phase.time_quantum_ms ? -1 : 1;
 	if (left->phase.time_horizon_ms != right->phase.time_horizon_ms)
@@ -327,6 +380,7 @@ static int CatalogStorageShapeValid(const sg_phase_catalog_t *catalog,
 	sg_phase_catalog_audit_result_t *report_out)
 {
 	if (catalog->phase_capacity > SG_RUNE_MODEL_MAX_PHASES ||
+		catalog->binding_capacity > SG_PHASE_CATALOG_MAX_BINDINGS ||
 		catalog->transition_capacity > SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS ||
 		!AllocationFits((size_t)catalog->phase_capacity,
 			sizeof(*catalog->phases)) ||
@@ -582,7 +636,7 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 	size_t raw_capacity = 0U;
 	uint32_t *cell_ordinals = NULL;
 	uint32_t region;
-	uint32_t support;
+	uint32_t support_cursor = 0U;
 	uint32_t fact;
 
 	for (region = 0U; region < source->semantics->region_count; region++)
@@ -594,27 +648,30 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
 			region, error_out))
 			goto failure;
-	}
-	for (support = 0U;
-		support < SG_PHASE_SOURCE_PROVIDER(source)->support_count; support++)
-	{
-		const sg_phase_mover_support_t *record =
-			&SG_PHASE_SOURCE_PROVIDER(source)->supports[support];
-		int region_index = RegionIndexById(source->semantics,
-			record->semantic_region_id);
-		sg_rune_phase_basis_t phase;
-
-		if (region_index < 0)
+		while (support_cursor < SG_PHASE_SOURCE_PROVIDER(source)->support_count &&
+			SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor].
+				semantic_region_id < source->semantics->regions[region].id)
+			support_cursor++;
+		while (support_cursor < SG_PHASE_SOURCE_PROVIDER(source)->support_count &&
+			SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor].
+				semantic_region_id == source->semantics->regions[region].id)
 		{
-			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
-				support);
-			goto failure;
+			const sg_phase_mover_support_t *record =
+				&SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor];
+
+			OracleFillPhase(source, &source->semantics->regions[region], 1,
+				&record->mechanism, 1U, &phase);
+			if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
+				region, error_out))
+				goto failure;
+			support_cursor++;
 		}
-		OracleFillPhase(source, &source->semantics->regions[region_index], 1,
-			&record->mechanism, 1U, &phase);
-		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
-			(uint32_t)region_index, error_out))
-			goto failure;
+	}
+	if (support_cursor != SG_PHASE_SOURCE_PROVIDER(source)->support_count)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
+			support_cursor);
+		goto failure;
 	}
 	for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count; fact++)
 	{
@@ -666,6 +723,12 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 		}
 		raw_count = unique;
 		qsort(raw, raw_count, sizeof(*raw), OraclePhaseSequenceCompare);
+	}
+	if (raw_count > SG_RUNE_MODEL_MAX_PHASES)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
+			SG_RUNE_MODEL_MAX_PHASES);
+		goto failure;
 	}
 	if (source->configuration->cell_count != 0U)
 	{
@@ -725,9 +788,33 @@ static int OracleAppendBinding(sg_audit_oracle_t *oracle, size_t *capacity_out,
 	sg_phase_catalog_error_t *error_out)
 {
 	sg_phase_catalog_binding_t *grown;
+	sg_phase_catalog_binding_t *binding;
 	size_t capacity;
+	uint32_t index;
+	uint32_t insertion;
 
-	if (oracle->binding_count == UINT32_MAX)
+	if (!oracle || phase >= oracle->phase_count)
+	{
+		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, phase);
+		return 0;
+	}
+	insertion = oracle->binding_count;
+	for (index = 0U; index < oracle->binding_count; index++)
+	{
+		binding = &oracle->bindings[index];
+		if (binding->semantic_region_id == region_id &&
+			binding->configuration_cell == cell &&
+			SG_RuneModelStableIdEqual(&binding->phase.value,
+				&oracle->phases[phase].phase.id.value))
+		{
+			binding->mechanism_state_mask |= state_mask;
+			return 1;
+		}
+		if (insertion == oracle->binding_count &&
+			binding->semantic_region_id > region_id)
+			insertion = index;
+	}
+	if (oracle->binding_count >= SG_PHASE_CATALOG_MAX_BINDINGS)
 	{
 		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
 			oracle->binding_count);
@@ -760,12 +847,17 @@ static int OracleAppendBinding(sg_audit_oracle_t *oracle, size_t *capacity_out,
 		oracle->bindings = grown;
 		*capacity_out = capacity;
 	}
-	memset(&oracle->bindings[oracle->binding_count], 0,
-		sizeof(oracle->bindings[oracle->binding_count]));
-	oracle->bindings[oracle->binding_count].semantic_region_id = region_id;
-	oracle->bindings[oracle->binding_count].configuration_cell = cell;
-	oracle->bindings[oracle->binding_count].phase = oracle->phases[phase].phase.id;
-	oracle->bindings[oracle->binding_count].mechanism_state_mask = state_mask;
+	if (insertion < oracle->binding_count)
+		memmove(&oracle->bindings[insertion + 1U],
+			&oracle->bindings[insertion],
+			(size_t)(oracle->binding_count - insertion) *
+				sizeof(*oracle->bindings));
+	binding = &oracle->bindings[insertion];
+	memset(binding, 0, sizeof(*binding));
+	binding->semantic_region_id = region_id;
+	binding->configuration_cell = cell;
+	binding->phase = oracle->phases[phase].phase.id;
+	binding->mechanism_state_mask = state_mask;
 	oracle->binding_count++;
 	return 1;
 }
@@ -776,6 +868,7 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 	size_t capacity = 0U;
 	uint32_t region;
 	uint32_t support_cursor = 0U;
+	uint32_t fact;
 
 	for (region = 0U; region < source->semantics->region_count; region++)
 	{
@@ -822,27 +915,73 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 			support_cursor);
 		return 0;
 	}
+	for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count; fact++)
+	{
+		const sg_mechanism_capability_fact_t *record =
+			&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact];
+		const sg_configuration_semantic_region_t *destination =
+			&source->semantics->regions[record->destination_region];
+		sg_rune_phase_basis_t phase;
+		uint32_t phase_index;
+		uint32_t elapsed = OracleTimingSpan(record);
+		uint32_t frame = source->authority->identity.physics.frame_ms;
+
+		OracleFillPhase(source, destination, 1, &record->mechanism_id, 1U,
+			&phase);
+		if (elapsed > frame)
+			elapsed = frame;
+		if (elapsed == 0U)
+			elapsed = source->authority->identity.physics.substep_ms;
+		phase.order.variant = 3U;
+		phase.elapsed_ms.min_value = (float)elapsed;
+		phase.elapsed_ms.max_value = (float)frame;
+		if (!OracleFindPhase(oracle, destination->cell, &phase, &phase_index) ||
+			!OracleAppendBinding(oracle, &capacity, destination->id,
+				destination->cell, phase_index,
+				(sg_phase_mechanism_state_mask_t)
+					OracleStateBit(record->destination_state), error_out))
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, fact);
+			return 0;
+		}
+	}
 	return 1;
-}
-
-static int OracleByteCompare(const void *left_value, const void *right_value,
-	size_t size)
-{
-	const unsigned char *left = left_value;
-	const unsigned char *right = right_value;
-	size_t index;
-
-	for (index = 0U; index < size; index++)
-		if (left[index] != right[index])
-			return left[index] < right[index] ? -1 : 1;
-	return 0;
 }
 
 static int OracleTransitionPairCompare(const void *left_value,
 	const void *right_value)
 {
-	return OracleByteCompare(left_value, right_value,
-		sizeof(sg_rune_phase_transition_t));
+	const sg_phase_catalog_transition_pair_t *left = left_value;
+	const sg_phase_catalog_transition_pair_t *right = right_value;
+	const sg_rune_phase_transition_t *lt = &left->transition;
+	const sg_rune_phase_transition_t *rt = &right->transition;
+	int comparison;
+
+	comparison = StableIdCompare(&lt->cell.value, &rt->cell.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = StableIdCompare(&lt->source_phase.value,
+		&rt->source_phase.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = StableIdCompare(&lt->destination_phase.value,
+		&rt->destination_phase.value);
+	if (comparison != 0)
+		return comparison;
+	if (lt->kind != rt->kind)
+		return lt->kind < rt->kind ? -1 : 1;
+	comparison = OracleFloatCompare(lt->duration_ms.min_value,
+		rt->duration_ms.min_value);
+	if (comparison != 0)
+		return comparison;
+	comparison = OracleFloatCompare(lt->duration_ms.max_value,
+		rt->duration_ms.max_value);
+	if (comparison != 0)
+		return comparison;
+	if (lt->flags != rt->flags)
+		return lt->flags < rt->flags ? -1 : 1;
+	return StableIdCompare(&lt->destination_cell.value,
+		&rt->destination_cell.value);
 }
 
 static uint64_t OracleHashU32(uint64_t hash, uint32_t value)
@@ -1433,8 +1572,8 @@ static int PhaseExceptStanceEqual(const sg_rune_phase_basis_t *left,
 		left->void_relation == right->void_relation &&
 		left->reference_frame == right->reference_frame &&
 		SG_RuneModelStableIdEqual(&left->mover.value, &right->mover.value) &&
-		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
-		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		OracleInterval3Equal(&left->velocity, &right->velocity) &&
+		OracleIntervalEqual(&left->elapsed_ms, &right->elapsed_ms) &&
 		left->time_quantum_ms == right->time_quantum_ms &&
 		left->time_horizon_ms == right->time_horizon_ms;
 }
@@ -1455,8 +1594,30 @@ static uint32_t TimingSpan(const sg_mechanism_capability_fact_t *fact)
 	return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
 }
 
+static int BindingExists(const sg_phase_catalog_expected_t *expected,
+	uint64_t region_id, uint32_t cell, const sg_rune_phase_ref_t *phase,
+	sg_phase_mechanism_state_mask_t required_state_mask)
+{
+	uint32_t index;
+
+	if (!expected || !phase)
+		return 0;
+	for (index = 0U; index < expected->binding_count; index++)
+	{
+		const sg_phase_catalog_binding_t *binding = &expected->bindings[index];
+
+		if (binding->semantic_region_id == region_id &&
+			binding->configuration_cell == cell &&
+			SG_RuneModelStableIdEqual(&binding->phase.value, &phase->value) &&
+			(binding->mechanism_state_mask & required_state_mask) ==
+				required_state_mask)
+			return 1;
+	}
+	return 0;
+}
+
 static int TransitionValid(const sg_phase_catalog_source_t *source,
-	const sg_phase_catalog_expected_t *expected, uint32_t index,
+	const sg_phase_catalog_expected_t *expected,
 	const sg_rune_phase_transition_t *transition,
 	const sg_phase_catalog_transition_evidence_t *evidence)
 {
@@ -1497,7 +1658,11 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 		expected->phases[destination_phase].order.source_index !=
 			evidence->destination_cell ||
 		((evidence->source_cell != evidence->destination_cell) !=
-			((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U)))
+			((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U)) ||
+		!BindingExists(expected, evidence->source_region_id,
+			evidence->source_cell, &transition->source_phase, 0U) ||
+		!BindingExists(expected, evidence->destination_region_id,
+			evidence->destination_cell, &transition->destination_phase, 0U))
 		return 0;
 	switch (evidence->origin)
 	{
@@ -1631,8 +1796,8 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 			evidence->destination_region_id);
 		return transition->kind == (fact->kind == SG_MECHANISM_CAPABILITY_DWELL ?
 				SG_RUNE_PHASE_TRANSITION_MOVER_DWELL : SG_RUNE_PHASE_TRANSITION_TIME) &&
-				((evidence->source_cell != evidence->destination_cell) ==
-				 ((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U)) &&
+			((evidence->source_cell != evidence->destination_cell) ==
+			 ((transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) != 0U)) &&
 			transition->duration_ms.min_value == (float)TimingSpan(fact) &&
 			transition->duration_ms.max_value == (float)TimingSpan(fact) &&
 			transition->kind != SG_RUNE_PHASE_TRANSITION_NONE &&
@@ -1645,6 +1810,12 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 			semantics->regions[destination_region].cell == evidence->destination_cell &&
 			evidence->source_state_mask == source_mask &&
 			evidence->destination_state_mask == destination_mask &&
+			BindingExists(expected, evidence->source_region_id,
+				evidence->source_cell, &transition->source_phase,
+				(sg_phase_mechanism_state_mask_t)source_mask) &&
+			BindingExists(expected, evidence->destination_region_id,
+				evidence->destination_cell, &transition->destination_phase,
+				(sg_phase_mechanism_state_mask_t)destination_mask) &&
 			evidence->delay_ms == fact->delay_ms && evidence->dwell_ms == fact->dwell_ms &&
 			evidence->travel_ms == fact->travel_ms && evidence->wait_ms == fact->wait_ms &&
 			evidence->reset_ms == fact->reset_ms &&
@@ -1660,7 +1831,6 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 	case SG_PHASE_CATALOG_TRANSITION_ORIGIN_COUNT:
 		break;
 	}
-	(void)index;
 	return 0;
 }
 
@@ -1749,6 +1919,8 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 	}
 	phase_view.phases = oracle_phase_records;
 	phase_view.phase_count = oracle.phase_count;
+	phase_view.bindings = oracle.bindings;
+	phase_view.binding_count = oracle.binding_count;
 	for (index = 0U; index < catalog->phase_count; index++)
 	{
 		if (!SG_RuneModelPhaseValid(&catalog->phases[index]) ||
@@ -1864,7 +2036,7 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 	for (index = 0U; index < catalog->transition_count; index++)
 	{
 		if (catalog->transitions[index].order.source_index != index ||
-			!TransitionValid(source, &phase_view, index,
+			!TransitionValid(source, &phase_view,
 				&catalog->transitions[index], &catalog->transition_evidence[index]))
 		{
 			SetReport(result_out, SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT,

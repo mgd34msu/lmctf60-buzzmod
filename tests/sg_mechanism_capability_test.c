@@ -1366,6 +1366,8 @@ static void TestCanonicalIdentityIgnoresAbiPadding(void)
 {
 	sg_mechanism_capability_fact_t first;
 	sg_mechanism_capability_fact_t second;
+	sg_rune_model_identity_t first_identity = MakeIdentity(800.0f);
+	sg_rune_model_identity_t second_identity = first_identity;
 	unsigned char *bytes = (unsigned char *)&second;
 	size_t index;
 
@@ -1385,6 +1387,10 @@ static void TestCanonicalIdentityIgnoresAbiPadding(void)
 	second.entry_witness.value[0] = 0.0f;
 	CHECK(SG_MechanismCapabilityFactIdentity(&first) ==
 		SG_MechanismCapabilityFactIdentity(&second));
+	first_identity.physics.ground_acceleration = 0.0f;
+	second_identity.physics.ground_acceleration = -0.0f;
+	CHECK(SG_MechanismModelIdentityValue(&first_identity) ==
+		SG_MechanismModelIdentityValue(&second_identity));
 }
 
 int main(void)

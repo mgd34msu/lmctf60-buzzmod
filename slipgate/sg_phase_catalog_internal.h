@@ -33,13 +33,15 @@ typedef struct sg_phase_mover_support_provider_payload_s
 	uint32_t support_count;
 	sg_mechanism_capability_fact_t *facts;
 	uint32_t fact_count;
-	sg_phase_mover_support_provider_view_t view;
 } sg_phase_mover_support_provider_payload_t;
 
 typedef struct sg_phase_mover_support_provider_record_s
 {
 	sg_phase_mover_support_provider_t *token;
 	sg_phase_mover_support_provider_payload_t *payload;
+	sg_phase_mover_support_provider_view_t view;
+	sg_phase_mover_support_t *view_supports;
+	sg_mechanism_capability_fact_t *view_facts;
 	struct sg_phase_mover_support_provider_record_s *next;
 } sg_phase_mover_support_provider_record_t;
 

@@ -80,17 +80,37 @@ static int IdentityValid(const sg_rune_model_identity_t *identity)
 int SG_PhaseCatalogIdentityEqual(const sg_rune_model_identity_t *left,
 	const sg_rune_model_identity_t *right)
 {
-	return left && right && left->bsp_content_id == right->bsp_content_id &&
-		left->entity_semantics_id == right->entity_semantics_id &&
-		left->physics_abi_id == right->physics_abi_id &&
-		left->source_set_identity == right->source_set_identity &&
-		left->schema_id == right->schema_id &&
-		left->producer_identity == right->producer_identity &&
-		memcmp(&left->standing_hull, &right->standing_hull,
-			sizeof(left->standing_hull)) == 0 &&
-		memcmp(&left->crouching_hull, &right->crouching_hull,
-			sizeof(left->crouching_hull)) == 0 &&
-		memcmp(&left->physics, &right->physics, sizeof(left->physics)) == 0;
+	uint32_t axis;
+
+	if (!left || !right || left->bsp_content_id != right->bsp_content_id ||
+		left->entity_semantics_id != right->entity_semantics_id ||
+		left->physics_abi_id != right->physics_abi_id ||
+		left->source_set_identity != right->source_set_identity ||
+		left->schema_id != right->schema_id ||
+		left->producer_identity != right->producer_identity)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (left->standing_hull.mins.value[axis] !=
+				right->standing_hull.mins.value[axis] ||
+			left->standing_hull.maxs.value[axis] !=
+				right->standing_hull.maxs.value[axis] ||
+			left->crouching_hull.mins.value[axis] !=
+				right->crouching_hull.mins.value[axis] ||
+			left->crouching_hull.maxs.value[axis] !=
+				right->crouching_hull.maxs.value[axis])
+			return 0;
+	return left->physics.gravity == right->physics.gravity &&
+		left->physics.ground_acceleration ==
+			right->physics.ground_acceleration &&
+		left->physics.air_acceleration == right->physics.air_acceleration &&
+		left->physics.water_acceleration == right->physics.water_acceleration &&
+		left->physics.hook_acceleration == right->physics.hook_acceleration &&
+		left->physics.external_acceleration ==
+			right->physics.external_acceleration &&
+		left->physics.water_drag == right->physics.water_drag &&
+		left->physics.max_velocity == right->physics.max_velocity &&
+		left->physics.frame_ms == right->physics.frame_ms &&
+		left->physics.substep_ms == right->physics.substep_ms;
 }
 
 static int StableIdEqual(const sg_rune_stable_id_t *left,
@@ -109,6 +129,21 @@ static int StableIdCompare(const sg_rune_stable_id_t *left,
 	if (left->low != right->low)
 		return left->low < right->low ? -1 : 1;
 	return 0;
+}
+
+static int IntervalEqual(const sg_rune_interval_t *left,
+	const sg_rune_interval_t *right)
+{
+	return left->min_value == right->min_value &&
+		left->max_value == right->max_value;
+}
+
+static int Interval3Equal(const sg_rune_interval3_t *left,
+	const sg_rune_interval3_t *right)
+{
+	return IntervalEqual(&left->x, &right->x) &&
+		IntervalEqual(&left->y, &right->y) &&
+		IntervalEqual(&left->z, &right->z);
 }
 
 static int RegionMedium(const sg_configuration_semantic_region_t *region,
@@ -377,20 +412,28 @@ static int SourceValidateWithProvider(const sg_phase_catalog_source_t *source,
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_IDENTITY_MISMATCH, 0U);
 		return 0;
 	}
-	/* Cell count is a phase-addressing representation limit.  Semantic
-	 * regions, provider rows, and relation records are source data: they are
-	 * deduplicated or indexed below before output limits are applied. */
+	/* These are hostile-input limits on producer-owned source collections.
+	 * Exact phase and transition limits are enforced again after semantic
+	 * deduplication, where they constrain the published output. */
 	if (source->configuration->cell_count > SG_RUNE_MODEL_MAX_CELLS ||
-		(source->configuration->cell_count != 0U &&
+		source->configuration->portal_count > SG_RUNE_MODEL_MAX_PORTALS ||
+		source->configuration->stance_overlap_count >
+			SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS ||
+		source->semantics->region_count > SG_RUNE_MODEL_MAX_PHASES ||
+		source->semantics->face_count > SG_RUNE_MODEL_MAX_PLANES ||
+		provider->support_count > SG_RUNE_MODEL_MAX_PHASES ||
+		provider->fact_count > SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, 0U);
+		return 0;
+	}
+	if ((source->configuration->cell_count != 0U &&
 			!source->configuration->cells) ||
 		(source->semantics->region_count != 0U && !source->semantics->regions) ||
 		(source->semantics->face_count != 0U && !source->semantics->faces) ||
 		!ConfigurationRelationsValid(source))
 	{
-		SetErrorOnce(error_out,
-			(source->configuration->cell_count > SG_RUNE_MODEL_MAX_CELLS) ?
-				SG_PHASE_CATALOG_ERROR_OVERFLOW :
-				SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
 		return 0;
 	}
 	if (!ProviderSupportsValid(source, provider))
@@ -508,8 +551,8 @@ static int PhaseEquivalent(const sg_rune_phase_basis_t *left,
 		left->medium == right->medium && left->void_relation == right->void_relation &&
 		left->reference_frame == right->reference_frame &&
 		StableIdEqual(&left->mover.value, &right->mover.value) &&
-		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
-		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		Interval3Equal(&left->velocity, &right->velocity) &&
+		IntervalEqual(&left->elapsed_ms, &right->elapsed_ms) &&
 		left->time_quantum_ms == right->time_quantum_ms &&
 		left->time_horizon_ms == right->time_horizon_ms;
 }
@@ -517,13 +560,29 @@ static int PhaseEquivalent(const sg_rune_phase_basis_t *left,
 int SG_PhaseCatalogPhaseEqual(const sg_rune_phase_basis_t *left,
 	const sg_rune_phase_basis_t *right)
 {
-	return left && right && memcmp(left, right, sizeof(*left)) == 0;
+	return left && right && StableIdEqual(&left->id.value, &right->id.value) &&
+		SG_RuneModelOrderKeyCompare(&left->order, &right->order) == 0 &&
+		PhaseEquivalent(left, right);
 }
 
 int SG_PhaseCatalogBindingEqual(const sg_phase_catalog_binding_t *left,
 	const sg_phase_catalog_binding_t *right)
 {
-	return left && right && memcmp(left, right, sizeof(*left)) == 0;
+	return left && right &&
+		left->semantic_region_id == right->semantic_region_id &&
+		left->configuration_cell == right->configuration_cell &&
+		StableIdEqual(&left->phase.value, &right->phase.value) &&
+		left->mechanism_state_mask == right->mechanism_state_mask;
+}
+
+static uint32_t CanonicalFloatBits(float value)
+{
+	uint32_t bits;
+
+	if (value == 0.0f)
+		value = 0.0f;
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
 }
 
 static uint64_t HashMix(uint64_t hash, uint64_t value)
@@ -548,13 +607,13 @@ static uint64_t PhaseHash(const sg_rune_phase_basis_t *phase,
 	hash = HashMix(hash, phase->mover.value.source_set_identity);
 	hash = HashMix(hash, phase->mover.value.high);
 	hash = HashMix(hash, phase->mover.value.low);
-	memcpy(&bits, &phase->velocity.x.min_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->velocity.x.min_value);
 	hash = HashMix(hash, bits);
-	memcpy(&bits, &phase->velocity.x.max_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->velocity.x.max_value);
 	hash = HashMix(hash, bits);
-	memcpy(&bits, &phase->elapsed_ms.min_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->elapsed_ms.min_value);
 	hash = HashMix(hash, bits);
-	memcpy(&bits, &phase->elapsed_ms.max_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->elapsed_ms.max_value);
 	hash = HashMix(hash, bits);
 	hash = HashMix(hash, phase->time_quantum_ms);
 	hash = HashMix(hash, phase->time_horizon_ms);
@@ -576,13 +635,13 @@ static uint64_t NeutralPhaseHash(const sg_rune_phase_basis_t *phase,
 	hash = HashMix(hash, phase->mover.value.source_set_identity);
 	hash = HashMix(hash, phase->mover.value.high);
 	hash = HashMix(hash, phase->mover.value.low);
-	memcpy(&bits, &phase->velocity.x.min_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->velocity.x.min_value);
 	hash = HashMix(hash, bits);
-	memcpy(&bits, &phase->velocity.x.max_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->velocity.x.max_value);
 	hash = HashMix(hash, bits);
-	memcpy(&bits, &phase->elapsed_ms.min_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->elapsed_ms.min_value);
 	hash = HashMix(hash, bits);
-	memcpy(&bits, &phase->elapsed_ms.max_value, sizeof(bits));
+	bits = CanonicalFloatBits(phase->elapsed_ms.max_value);
 	hash = HashMix(hash, bits);
 	hash = HashMix(hash, phase->time_quantum_ms);
 	hash = HashMix(hash, phase->time_horizon_ms);
@@ -654,7 +713,7 @@ static int HashInsert(const sg_rune_phase_basis_t *phase, uint32_t phase_index,
 }
 
 static int HashEnsure(sg_phase_catalog_expected_t *expected,
-	const sg_rune_phase_basis_t *phase, uint32_t phase_index)
+	uint32_t phase_index)
 {
 	uint32_t required = phase_index + 1U;
 
@@ -673,7 +732,6 @@ static int HashEnsure(sg_phase_catalog_expected_t *expected,
 			&expected->phase_neutral_hash_capacity, expected->phases,
 			expected->phase_count - 1U, 1))
 		return 0;
-	(void)phase;
 	return 1;
 }
 
@@ -714,8 +772,8 @@ static int PhaseNeutralEquivalent(const sg_rune_phase_basis_t *left,
 		left->void_relation == right->void_relation &&
 		left->reference_frame == right->reference_frame &&
 		StableIdEqual(&left->mover.value, &right->mover.value) &&
-		memcmp(&left->velocity, &right->velocity, sizeof(left->velocity)) == 0 &&
-		memcmp(&left->elapsed_ms, &right->elapsed_ms, sizeof(left->elapsed_ms)) == 0 &&
+		Interval3Equal(&left->velocity, &right->velocity) &&
+		IntervalEqual(&left->elapsed_ms, &right->elapsed_ms) &&
 		left->time_quantum_ms == right->time_quantum_ms &&
 		left->time_horizon_ms == right->time_horizon_ms;
 }
@@ -816,10 +874,7 @@ static int ExpectedReserveBindings(sg_phase_catalog_expected_t *expected,
 	uint32_t capacity;
 	void *grown;
 
-	/* Binding rows are source relations and are allowed to exceed the RUNE
-	 * transition output bound.  Only the uint32 count and allocation size are
-	 * representation limits. */
-	if (required == 0U)
+	if (required == 0U || required > SG_PHASE_CATALOG_MAX_BINDINGS)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, required);
 		return 0;
@@ -829,8 +884,8 @@ static int ExpectedReserveBindings(sg_phase_catalog_expected_t *expected,
 	capacity = expected->binding_capacity == 0U ? 16U : expected->binding_capacity;
 	while (capacity < required)
 	{
-		if (capacity > UINT32_MAX / 2U)
-			capacity = UINT32_MAX;
+		if (capacity > SG_PHASE_CATALOG_MAX_BINDINGS / 2U)
+			capacity = SG_PHASE_CATALOG_MAX_BINDINGS;
 		else
 			capacity *= 2U;
 	}
@@ -936,7 +991,7 @@ static int AppendPhase(const sg_phase_catalog_source_t *source,
 	}
 	phase = expected->phase_count++;
 	expected->phases[phase] = record;
-	if (!HashEnsure(expected, &record, phase) ||
+	if (!HashEnsure(expected, phase) ||
 		!HashInsert(&record, phase, expected->phase_hash,
 			expected->phase_hash_capacity, 0) ||
 		!HashInsert(&record, phase, expected->phase_neutral_hash,
@@ -957,8 +1012,31 @@ static int AppendBinding(sg_phase_catalog_expected_t *expected,
 	sg_phase_catalog_error_t *error_out)
 {
 	sg_phase_catalog_binding_t *binding;
+	uint32_t index;
+	uint32_t insertion;
 
-	if (expected->binding_count == UINT32_MAX)
+	if (!expected || !region || phase >= expected->phase_count)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, phase);
+		return 0;
+	}
+	insertion = expected->binding_count;
+	for (index = 0U; index < expected->binding_count; index++)
+	{
+		binding = &expected->bindings[index];
+		if (binding->semantic_region_id == region->id &&
+			binding->configuration_cell == cell &&
+			StableIdEqual(&binding->phase.value,
+				&expected->phases[phase].id.value))
+		{
+			binding->mechanism_state_mask |= state_mask;
+			return 1;
+		}
+		if (insertion == expected->binding_count &&
+			binding->semantic_region_id > region->id)
+			insertion = index;
+	}
+	if (expected->binding_count >= SG_PHASE_CATALOG_MAX_BINDINGS)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW,
 			expected->binding_count);
@@ -967,7 +1045,13 @@ static int AppendBinding(sg_phase_catalog_expected_t *expected,
 	if (!ExpectedReserveBindings(expected, expected->binding_count + 1U,
 		error_out))
 		return 0;
-	binding = &expected->bindings[expected->binding_count++];
+	if (insertion < expected->binding_count)
+		memmove(&expected->bindings[insertion + 1U],
+			&expected->bindings[insertion],
+			(size_t)(expected->binding_count - insertion) *
+				sizeof(*expected->bindings));
+	binding = &expected->bindings[insertion];
+	expected->binding_count++;
 	memset(binding, 0, sizeof(*binding));
 	binding->semantic_region_id = region->id;
 	binding->configuration_cell = cell;
@@ -1448,7 +1532,11 @@ static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
 	if (expected->phase_region_by_phase[destination_phase] ==
 		SG_PHASE_CATALOG_INDEX_NONE)
 		expected->phase_region_by_phase[destination_phase] =
-		fact->destination_region;
+			fact->destination_region;
+	if (!AppendBinding(expected, destination_region, destination_cell,
+		destination_phase, (sg_phase_mechanism_state_mask_t)
+			StateBit(fact->destination_state), error_out))
+		return 0;
 	if (source_phase == destination_phase)
 		return 0;
 	memset(&transition, 0, sizeof(transition));
@@ -1490,24 +1578,56 @@ static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
 	return AppendPair(expected, &transition, &evidence, error_out);
 }
 
-static int ByteCompare(const void *left_value, const void *right_value,
-	size_t size)
+static int FloatCompare(float left, float right)
 {
-	const unsigned char *left = left_value;
-	const unsigned char *right = right_value;
-	size_t index;
+	uint32_t left_bits;
+	uint32_t right_bits;
 
-	for (index = 0U; index < size; index++)
-		if (left[index] != right[index])
-			return left[index] < right[index] ? -1 : 1;
-	return 0;
+	if (left == right)
+		return 0;
+	if (!isnan(left) && !isnan(right))
+		return left < right ? -1 : 1;
+	if (isnan(left) != isnan(right))
+		return isnan(left) ? 1 : -1;
+	memcpy(&left_bits, &left, sizeof(left_bits));
+	memcpy(&right_bits, &right, sizeof(right_bits));
+	return left_bits == right_bits ? 0 : (left_bits < right_bits ? -1 : 1);
 }
 
 static int TransitionPairCompare(const void *left_value,
 	const void *right_value)
 {
-	return ByteCompare(left_value, right_value,
-		sizeof(sg_rune_phase_transition_t));
+	const sg_phase_catalog_transition_pair_t *left = left_value;
+	const sg_phase_catalog_transition_pair_t *right = right_value;
+	const sg_rune_phase_transition_t *lt = &left->transition;
+	const sg_rune_phase_transition_t *rt = &right->transition;
+	int comparison;
+
+	comparison = StableIdCompare(&lt->cell.value, &rt->cell.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = StableIdCompare(&lt->source_phase.value,
+		&rt->source_phase.value);
+	if (comparison != 0)
+		return comparison;
+	comparison = StableIdCompare(&lt->destination_phase.value,
+		&rt->destination_phase.value);
+	if (comparison != 0)
+		return comparison;
+	if (lt->kind != rt->kind)
+		return lt->kind < rt->kind ? -1 : 1;
+	comparison = FloatCompare(lt->duration_ms.min_value,
+		rt->duration_ms.min_value);
+	if (comparison != 0)
+		return comparison;
+	comparison = FloatCompare(lt->duration_ms.max_value,
+		rt->duration_ms.max_value);
+	if (comparison != 0)
+		return comparison;
+	if (lt->flags != rt->flags)
+		return lt->flags < rt->flags ? -1 : 1;
+	return StableIdCompare(&lt->destination_cell.value,
+		&rt->destination_cell.value);
 }
 
 static int PhaseOrderCompare(const void *left_value, const void *right_value)
@@ -1816,6 +1936,7 @@ int SG_PhaseCatalogHeaderValid(const sg_phase_catalog_t *catalog)
 static int CatalogStorageShapeValid(const sg_phase_catalog_t *catalog)
 {
 	return catalog && catalog->phase_capacity <= SG_RUNE_MODEL_MAX_PHASES &&
+		catalog->binding_capacity <= SG_PHASE_CATALOG_MAX_BINDINGS &&
 		catalog->transition_capacity <= SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS &&
 		AllocationFits((size_t)catalog->phase_capacity,
 			sizeof(*catalog->phases)) &&

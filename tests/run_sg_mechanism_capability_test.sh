@@ -7,6 +7,7 @@ trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
 sources='tests/sg_mechanism_capability_test.c
+slipgate/sg_authority_entropy.c
 slipgate/sg_mechanism_capability.c
 slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_bsp_completeness_proof.c
@@ -31,6 +32,13 @@ isl_libs=$(pkg-config --libs isl)
 cd "$repo_dir"
 for cc in gcc clang
 do
+	$cc $strict -D_WIN32 -I. -c slipgate/sg_authority_entropy.c \
+		-o "$tmp_dir/authority-entropy-windows-$cc.o"
+	$cc $strict -U__linux__ -I. -c slipgate/sg_authority_entropy.c \
+		-o "$tmp_dir/authority-entropy-posix-$cc.o"
+done
+for cc in gcc clang
+do
 	$cc $strict $isl_cflags -I. $sources -lm $isl_libs \
 		-o "$tmp_dir/mechanism-capability-$cc"
 	"$tmp_dir/mechanism-capability-$cc"
@@ -43,7 +51,8 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/mechanism-capability-sanitize"
 
-for source in slipgate/sg_mechanism_capability.c \
+for source in slipgate/sg_authority_entropy.c \
+	slipgate/sg_mechanism_capability.c \
 	slipgate/sg_mechanism_capability_seal.c tests/sg_mechanism_capability_test.c
 do
 	clang --analyze $strict $isl_cflags -I. "$source" \

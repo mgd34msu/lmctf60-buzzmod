@@ -9,6 +9,7 @@
 #include "sg_mechanism_capability.h"
 
 #define SG_PHASE_CATALOG_INDEX_NONE UINT32_MAX
+#define SG_PHASE_CATALOG_MAX_BINDINGS SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS
 
 /* A source completion value is evidence about the complete mover-support
  * enumeration.  It is not a permission for the caller to manufacture phase
@@ -236,18 +237,29 @@ typedef struct sg_phase_catalog_view_s
 } sg_phase_catalog_view_t;
 
 typedef struct sg_phase_catalog_publication_s sg_phase_catalog_publication_t;
+typedef struct sg_phase_catalog_publication_owner_s
+	sg_phase_catalog_publication_owner_t;
 
-int SG_PhaseCatalogPublicationIssue(const sg_phase_catalog_source_t *source,
+int SG_PhaseCatalogPublicationOwnerCreate(
+	sg_phase_catalog_publication_owner_t **owner_out);
+void SG_PhaseCatalogPublicationOwnerDestroy(
+	sg_phase_catalog_publication_owner_t *owner);
+int SG_PhaseCatalogPublicationIssue(
+	sg_phase_catalog_publication_owner_t *owner,
+	const sg_phase_catalog_source_t *source,
 	const sg_phase_catalog_t *catalog,
 	sg_phase_catalog_publication_t **publication_out,
 	sg_phase_catalog_audit_result_t *audit_out);
 int SG_PhaseCatalogPublicationRead(
+	const sg_phase_catalog_publication_owner_t *owner,
 	const sg_phase_catalog_publication_t *publication,
 	const sg_phase_catalog_view_t **view_out);
 int SG_PhaseCatalogPublicationStorageOverlaps(
+	const sg_phase_catalog_publication_owner_t *owner,
 	const sg_phase_catalog_publication_t *publication,
 	const void *address, size_t size);
 void SG_PhaseCatalogPublicationDestroy(
+	sg_phase_catalog_publication_owner_t *owner,
 	sg_phase_catalog_publication_t *publication);
 
 /* Issue an immutable mover-support snapshot only from a sealed capability

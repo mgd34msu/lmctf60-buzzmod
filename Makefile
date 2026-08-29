@@ -1068,6 +1068,10 @@ RM ?= rm -f
 CPPFLAGS += -I.
 CFLAGS ?= -DVER='"$(VER)"' -std=c11 -O0 -fno-strict-aliasing -g -Wall -MMD
 LDFLAGS ?= -shared
+ISL_CFLAGS ?= $(shell pkg-config --cflags isl 2>/dev/null)
+ISL_LIBS ?= $(shell pkg-config --libs isl 2>/dev/null)
+CPPFLAGS += $(ISL_CFLAGS)
+LIBS += $(ISL_LIBS)
 
 ifdef CONFIG_WINDOWS
     LDFLAGS += -mconsole
@@ -1313,6 +1317,27 @@ OBJS := \
 	slipgate/sg_bsp_entity_semantics.o \
 	slipgate/sg_bsp_entity_semantics_audit_expected.o \
 	slipgate/sg_bsp_entity_semantics_publication.o \
+	slipgate/sg_authority_entropy.o \
+	slipgate/sg_bsp_completeness_proof.o \
+	slipgate/sg_bsp_completeness_core.o \
+	slipgate/sg_bsp_completeness_region.o \
+	slipgate/sg_bsp_completeness_traversal.o \
+	slipgate/sg_bsp_completeness_lattice.o \
+	slipgate/sg_bsp_completeness_coverage.o \
+	slipgate/sg_bsp_completeness_state.o \
+	slipgate/sg_bsp_completeness_portal.o \
+	slipgate/sg_bsp_completeness_portal_index.o \
+	slipgate/sg_configuration_semantics.o \
+	slipgate/sg_configuration_lattice.o \
+	slipgate/sg_configuration_space.o \
+	slipgate/sg_configuration_audit.o \
+	slipgate/sg_mechanism_capability.o \
+	slipgate/sg_mechanism_capability_seal.o \
+	slipgate/sg_phase_catalog.o \
+	slipgate/sg_phase_catalog_audit.o \
+	slipgate/sg_phase_catalog_publication.o \
+	slipgate/sg_phase_catalog_owner.o \
+	slipgate/sg_phase_mover_support_provider.o \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_strategy.o \
 	slipgate/sg_strategy_caller.o \
@@ -1331,7 +1356,8 @@ ifdef CONFIG_VARIABLE_SERVER_FPS
 endif
 
 ifdef CONFIG_WINDOWS
-    TARGET ?= game$(CPU)-lmctf-$(VER).dll
+	TARGET ?= game$(CPU)-lmctf-$(VER).dll
+	LIBS += -ladvapi32
 else
     LIBS += -lm
     TARGET ?= game$(CPU)-lmctf-$(VER).so
@@ -3885,6 +3911,8 @@ phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 		slipgate/sg_phase_catalog_publication.c \
 		slipgate/sg_phase_catalog_owner.c slipgate/sg_phase_catalog_owner.h \
 		slipgate/sg_phase_mover_support_provider.c \
+		slipgate/sg_authority_entropy.c slipgate/sg_authority_entropy.h \
+		slipgate/sg_mechanism_capability.c \
 		slipgate/sg_mechanism_capability_seal.c \
 		slipgate/sg_mechanism_capability.h \
 		slipgate/sg_mechanism_capability_internal.h \

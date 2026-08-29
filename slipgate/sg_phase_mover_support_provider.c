@@ -154,26 +154,28 @@ int SG_PhaseMoverSupportProviderHeaderValid(
 		payload->verifier_identity != UINT64_MAX &&
 		(payload->support_count == 0U || payload->supports) &&
 		(payload->fact_count == 0U || payload->facts) &&
-		SG_PhaseCatalogIdentityEqual(&payload->identity,
-			&payload->view.identity) && payload->view.completion ==
-			payload->completion && payload->view.verifier_identity ==
-			payload->verifier_identity && payload->view.supports ==
-			payload->supports && payload->view.support_count ==
-			payload->support_count && payload->view.facts == payload->facts &&
-		payload->view.fact_count == payload->fact_count &&
 		payload->verifier_identity == ProviderDigest(payload);
 }
 
 static void ProviderRefreshView(
-	sg_phase_mover_support_provider_payload_t *provider)
+	sg_phase_mover_support_provider_record_t *record)
 {
-	provider->view.identity = provider->identity;
-	provider->view.completion = provider->completion;
-	provider->view.verifier_identity = provider->verifier_identity;
-	provider->view.supports = provider->supports;
-	provider->view.support_count = provider->support_count;
-	provider->view.facts = provider->facts;
-	provider->view.fact_count = provider->fact_count;
+	const sg_phase_mover_support_provider_payload_t *provider = record->payload;
+
+	if (provider->support_count != 0U)
+		memcpy(record->view_supports, provider->supports,
+			(size_t)provider->support_count * sizeof(*provider->supports));
+	if (provider->fact_count != 0U)
+		memcpy(record->view_facts, provider->facts,
+			(size_t)provider->fact_count * sizeof(*provider->facts));
+	memset(&record->view, 0, sizeof(record->view));
+	record->view.identity = provider->identity;
+	record->view.completion = provider->completion;
+	record->view.verifier_identity = provider->verifier_identity;
+	record->view.supports = record->view_supports;
+	record->view.support_count = provider->support_count;
+	record->view.facts = record->view_facts;
+	record->view.fact_count = provider->fact_count;
 }
 
 static int ProviderIdentityUsable(const sg_rune_model_identity_t *identity)
@@ -221,7 +223,7 @@ static int ProviderIdentityUsable(const sg_rune_model_identity_t *identity)
 }
 
 static int ProviderInputsValid(const sg_configuration_semantics_t *semantics,
-	const sg_mechanism_capability_view_t *capabilities)
+	const sg_mechanism_capability_payload_t *capabilities)
 {
 	uint32_t index;
 
@@ -277,17 +279,17 @@ int SG_PhaseMoverSupportProviderBuild(
 {
 	sg_phase_mover_support_provider_payload_t *provider = NULL;
 	sg_phase_mover_support_provider_record_t *record = NULL;
-	const sg_mechanism_capability_view_t *capabilities = NULL;
+	const sg_mechanism_capability_payload_t *capabilities = NULL;
 	sg_phase_provider_support_sort_t *sorted = NULL;
 	uint32_t sorted_count = 0U;
 	uint32_t index;
 
 	if (error_out)
 		memset(error_out, 0, sizeof(*error_out));
-	if (!owner || !provider_out || *provider_out ||
-		!SG_MechanismCapabilityOwnerAccepted(capability_owner,
-			accepted_capabilities,
-			&capabilities) || !ProviderInputsValid(semantics, capabilities))
+	capabilities = SG_MechanismCapabilityOwnerAcceptedPayload(capability_owner,
+		accepted_capabilities);
+	if (!owner || !provider_out || *provider_out || !capabilities ||
+		!ProviderInputsValid(semantics, capabilities))
 	{
 		SG_PhaseCatalogSetError(error_out,
 			!provider_out ? SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT :
@@ -450,10 +452,10 @@ int SG_PhaseMoverSupportProviderBuild(
 		provider->fact_count = capabilities->fact_count;
 	}
 	provider->verifier_identity = ProviderDigest(provider);
-	ProviderRefreshView(provider);
 	if (owner->live_count == UINT32_MAX)
 	{
 		SG_PhaseCatalogSetError(error_out, SG_PHASE_CATALOG_ERROR_OVERFLOW, 0U);
+		free(sorted);
 		free(provider->supports);
 		free(provider->facts);
 		free(provider);
@@ -464,6 +466,28 @@ int SG_PhaseMoverSupportProviderBuild(
 	{
 		SG_PhaseCatalogSetError(error_out,
 			SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+		free(sorted);
+		free(provider->supports);
+		free(provider->facts);
+		free(provider);
+		return 0;
+	}
+	record->payload = provider;
+	if (provider->support_count != 0U)
+		record->view_supports = malloc((size_t)provider->support_count *
+			sizeof(*record->view_supports));
+	if (provider->fact_count != 0U)
+		record->view_facts = malloc((size_t)provider->fact_count *
+			sizeof(*record->view_facts));
+	if ((provider->support_count != 0U && !record->view_supports) ||
+		(provider->fact_count != 0U && !record->view_facts))
+	{
+		SG_PhaseCatalogSetError(error_out,
+			SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+		free(sorted);
+		free(record->view_supports);
+		free(record->view_facts);
+		free(record);
 		free(provider->supports);
 		free(provider->facts);
 		free(provider);
@@ -476,16 +500,19 @@ int SG_PhaseMoverSupportProviderBuild(
 		{
 			SG_PhaseCatalogSetError(error_out,
 				SG_PHASE_CATALOG_ERROR_OVERFLOW, 0U);
+			free(record->view_supports);
+			free(record->view_facts);
 			free(record);
 			free(provider->supports);
 			free(provider->facts);
 			free(provider);
+			free(sorted);
 			return 0;
 		}
 		record->token =
 			(sg_phase_mover_support_provider_t *)(uintptr_t)token;
 	}
-	record->payload = provider;
+	ProviderRefreshView(record);
 	record->next = owner->live;
 	owner->live = record;
 	owner->live_count++;
@@ -506,12 +533,20 @@ int SG_PhaseMoverSupportProviderRead(
 	const sg_phase_mover_support_provider_t *provider,
 	const sg_phase_mover_support_provider_view_t **view_out)
 {
+	sg_phase_mover_support_provider_record_t *record;
+
 	if (view_out)
 		*view_out = NULL;
 	if (!view_out || !SG_PhaseMoverSupportProviderHeaderValid(owner, provider))
 		return 0;
-	*view_out = &SG_PhaseMoverSupportProviderPayload(owner, provider)->view;
-	return 1;
+	for (record = owner->live; record; record = record->next)
+		if (record->token == provider)
+		{
+			ProviderRefreshView(record);
+			*view_out = &record->view;
+			return 1;
+		}
+	return 0;
 }
 
 void SG_PhaseMoverSupportProviderDestroy(
@@ -528,6 +563,8 @@ void SG_PhaseMoverSupportProviderDestroy(
 		{
 			record = *link;
 			*link = record->next;
+			free(record->view_supports);
+			free(record->view_facts);
 			free(record->payload->supports);
 			free(record->payload->facts);
 			free(record->payload);
@@ -548,6 +585,8 @@ void SG_PhaseMoverSupportProviderOwnerDestroy(
 	{
 		record = owner->live;
 		owner->live = record->next;
+		free(record->view_supports);
+		free(record->view_facts);
 		free(record->payload->supports);
 		free(record->payload->facts);
 		free(record->payload);

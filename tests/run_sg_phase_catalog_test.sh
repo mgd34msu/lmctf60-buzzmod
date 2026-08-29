@@ -22,6 +22,7 @@ slipgate/sg_host_collision.c
 slipgate/sg_bsp_world.c
 slipgate/sg_rune_model.c'
 mechanism_sources='slipgate/sg_mechanism_capability.c
+slipgate/sg_authority_entropy.c
 slipgate/sg_bsp_completeness_proof.c
 slipgate/sg_bsp_completeness_core.c
 slipgate/sg_bsp_completeness_region.c
@@ -52,6 +53,7 @@ $mechanism_sources"
 isl_cflags=$(pkg-config --cflags isl)
 isl_libs=$(pkg-config --libs isl)
 producer_sources='tests/sg_phase_catalog_mechanism_integration_test.c
+slipgate/sg_authority_entropy.c
 slipgate/sg_mechanism_capability.c
 slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_phase_catalog.c
@@ -77,6 +79,13 @@ slipgate/sg_bsp_completeness_portal.c
 slipgate/sg_bsp_completeness_portal_index.c'
 
 cd "$repo_dir"
+for cc in gcc clang
+do
+	$cc $strict -D_WIN32 -I. -c slipgate/sg_authority_entropy.c \
+		-o "$tmp_dir/authority-entropy-windows-$cc.o"
+	$cc $strict -U__linux__ -I. -c slipgate/sg_authority_entropy.c \
+		-o "$tmp_dir/authority-entropy-posix-$cc.o"
+done
 for cc in gcc clang
 do
 	$cc $strict $isl_cflags -I. $sources -lm $isl_libs \
