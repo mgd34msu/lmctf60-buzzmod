@@ -1118,7 +1118,7 @@ static int RefinementCatalogsValid(const sg_field_reach_atom_t *atoms,
 			&domains[index].id.value) >= 0))
 			return 0;
 	for (index = 0U; index < chart_count; index++)
-		if (!SG_RuneStateChartIdValid(&charts[index].id) ||
+		if (!SG_RuneStateChartShapeValid(&charts[index]) ||
 		    charts[index].id.value.source_set_identity != source_set_identity ||
 		    (index != 0U && StableIdCompareValue(
 			&charts[index - 1U].id.value,

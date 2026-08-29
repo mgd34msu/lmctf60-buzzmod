@@ -1347,6 +1347,18 @@ static void TestRepeatedRefinementFaceLineage(void)
 	domain.chart.value = Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
 	domain.simplices = atom.simplices;
 	chart.id = domain.chart;
+	chart.configuration_cell.value = Stable(SG_RUNE_ORDER_CELL, 1U);
+	chart.mode = SupportedMode();
+	chart.embedding.position = Interval3(0.0f, 1.0f);
+	chart.embedding.velocity = Interval3(0.0f, 1.0f);
+	chart.embedding.elapsed_ms = Interval(0.0f, 1.0f);
+	chart.embedding.dimension_count = SG_RUNE_STATE_DIMENSION_COUNT;
+	chart.state_vertices = (sg_rune_state_vertex_span_t){ 0U, 1U };
+	chart.simplices = (sg_rune_state_simplex_span_t){ 0U, 1U };
+	chart.state_domains = (sg_rune_state_domain_span_t){ 0U, 1U };
+	chart.control_fibers = (sg_rune_control_fiber_span_t){ 0U, 1U };
+	chart.response_patches = (sg_rune_response_patch_span_t){ 0U, 1U };
+	chart.coverage_proof.value = Stable(SG_RUNE_ORDER_DYNAMICS_PROOF, 201U);
 	for (node = 0U; node < 5U; node++)
 	{
 		const sg_field_refinement_vertex_t *cell[8];
@@ -1492,10 +1504,19 @@ static int FixtureRefinementTreeValid(const dynamics_fixture_t *fixture)
 		fixture->charts, fixture->dynamics.state_chart_count);
 }
 
+static int FixtureRefinementTreeChartValid(const dynamics_fixture_t *fixture,
+	const sg_rune_state_chart_t *chart)
+{
+	return SG_FieldRefinementTreeValid(&fixture->dynamics.refinement_tree,
+		fixture->reach_atoms, fixture->dynamics.reach_atom_count,
+		fixture->domains, fixture->dynamics.state_domain_count, chart, 1U);
+}
+
 static void TestRefinementCatalogAuthentication(void)
 {
 	dynamics_fixture_t fixture;
 	sg_rune_state_domain_t domains[3];
+	sg_rune_state_chart_t malformed_chart;
 	sg_rune_state_chart_t charts[2] = { 0 };
 
 	BuildFixture(&fixture);
@@ -1524,6 +1545,54 @@ static void TestRefinementCatalogAuthentication(void)
 	/* The public validator must enforce the domain record shape itself. */
 	fixture.domains[0].simplices.count = 0U;
 	CHECK(!FixtureRefinementTreeValid(&fixture));
+
+	BuildFixture(&fixture);
+	/* The public validator must enforce the complete chart record shape before
+	 * using a chart to authenticate refinement references. */
+	malformed_chart = fixture.charts[0];
+	malformed_chart.configuration_cell.value =
+		Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.mode.kind = SG_RUNE_STATE_MODE_KIND_COUNT;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.embedding.position.x = Interval(1.0f, 0.0f);
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.embedding.velocity.x = Interval(1.0f, 0.0f);
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.embedding.elapsed_ms = Interval(1.0f, 0.0f);
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.embedding.elapsed_ms = Interval(-1.0f, 0.0f);
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.embedding.dimension_count = 0U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.embedding.reserved[0] = 1U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.state_vertices.count = 0U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.simplices.count = 0U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.state_domains.count = 0U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.control_fibers.count = 0U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.response_patches.count = 0U;
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
+	malformed_chart = fixture.charts[0];
+	malformed_chart.coverage_proof.value =
+		Stable(SG_RUNE_ORDER_STATE_CHART, 1U);
+	CHECK(!FixtureRefinementTreeChartValid(&fixture, &malformed_chart));
 
 	BuildFixture(&fixture);
 	/* Domain references retain their type and source authentication even when
