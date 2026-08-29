@@ -1,18 +1,12 @@
-#include "../g_local.h"
 #include "sg_host_law_owner.h"
-#include "sg_hooks.h"
+#include "sg_host_engine_runtime_private.h"
 #include "sg_identity.h"
 
-#ifdef world
-#undef world
-#endif
-
-#include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 static sg_host_law_publication_t *sg_host_law_production;
 static sg_bsp_world_t *sg_host_law_production_world;
+static sg_host_engine_runtime_t *sg_host_law_production_runtime;
 
 static sg_host_law_result_t HostUnavailable(void)
 {
@@ -26,8 +20,8 @@ static sg_host_law_result_t HostUnavailable(void)
 	return result;
 }
 
-static sg_host_law_result_t OwnerResult(sg_host_law_status_t status,
-	sg_host_law_field_t field, uint64_t observed)
+static sg_host_law_result_t OwnerMismatch(sg_host_law_status_t status,
+	sg_host_law_field_t field, uint64_t expected, uint64_t observed)
 {
 	sg_host_law_result_t result;
 
@@ -35,9 +29,16 @@ static sg_host_law_result_t OwnerResult(sg_host_law_status_t status,
 	result.status = status;
 	result.field = field;
 	result.element = SG_HOST_LAW_ELEMENT_NONE;
-	result.expected_bits = 1U;
+	result.expected_bits = expected;
 	result.observed_bits = observed;
 	return result;
+}
+
+static sg_host_law_result_t HostUnavailableField(sg_host_law_field_t field,
+	uint64_t expected, uint64_t observed)
+{
+	return OwnerMismatch(SG_HOST_LAW_HOST_UNAVAILABLE, field, expected,
+		observed);
 }
 
 static void OwnerClear(void)
@@ -46,8 +47,11 @@ static void OwnerClear(void)
 		SG_HostLawPublicationDestroy(sg_host_law_production);
 	if (sg_host_law_production_world)
 		SG_BspWorldDestroy(sg_host_law_production_world);
+	if (sg_host_law_production_runtime)
+		SG_HostEngineRuntimeDestroy(sg_host_law_production_runtime);
 	sg_host_law_production = NULL;
 	sg_host_law_production_world = NULL;
+	sg_host_law_production_runtime = NULL;
 }
 
 sg_host_law_result_t SG_HostLawProductionInstall(
@@ -64,94 +68,97 @@ sg_host_law_result_t SG_HostLawProductionInstall(
 	return result;
 }
 
-static uint64_t LevelIdentityPart(uint32_t high, uint32_t low)
+sg_host_law_result_t SG_HostLawProductionBeginLevel(const char *mapname)
 {
-	uint64_t value = ((uint64_t)high << 32) | (uint64_t)low;
+	sg_host_engine_runtime_status_t runtime_status;
 
-	return value == 0U || value == UINT64_MAX ? value ^ UINT64_C(1) : value;
+	OwnerClear();
+	runtime_status = SG_HostEngineRuntimeBegin(mapname,
+		&sg_host_law_production_runtime);
+	if (runtime_status == SG_HOST_ENGINE_RUNTIME_OK)
+		return OwnerMismatch(SG_HOST_LAW_OK, SG_HOST_LAW_FIELD_NONE,
+			0U, 0U);
+	return HostUnavailableField(SG_HOST_LAW_FIELD_PMOVE_ABI, 1U,
+		(uint64_t)runtime_status);
 }
 
-static int BuildLevelIdentity(const sg_level_identity_t *level_identity,
-	sg_rune_model_identity_t *identity_out)
+sg_host_law_result_t SG_HostLawProductionInstallAccepted(
+	const sg_host_engine_runtime_acceptance_t *acceptance)
 {
-	cvar_t *airaccelerate;
+	sg_host_engine_runtime_status_t runtime_status;
+	sg_host_law_publication_t *publication = NULL;
+	sg_host_law_result_t result;
 
-	if (!level_identity || !identity_out || !sg_host.cvar || !sv_gravity ||
-		!sv_maxvelocity)
-		return 0;
-	airaccelerate = sg_host.cvar("sv_airaccelerate", "0", 0);
-	if (!airaccelerate || !isfinite(sv_gravity->value) ||
-		!isfinite(sv_maxvelocity->value) || !isfinite(airaccelerate->value))
-		return 0;
-	memset(identity_out, 0, sizeof(*identity_out));
-	identity_out->bsp_content_id =
-		LevelIdentityPart(level_identity->bsp_checksum,
-			level_identity->bsp_checksum ^ UINT32_C(0x42535031));
-	identity_out->entity_semantics_id =
-		LevelIdentityPart(level_identity->entity_crc32,
-			level_identity->entity_crc32 ^ UINT32_C(0x454e5431));
-	identity_out->physics_abi_id = SG_HOST_ENGINE_PMOVE_ABI_ID;
-	identity_out->source_set_identity = LevelIdentityPart(
-		level_identity->bsp_checksum ^ level_identity->entity_crc32,
-		level_identity->host_physics_id ^ UINT32_C(0x53524331));
-	identity_out->schema_id = (uint64_t)SG_RUNE_MODEL_SCHEMA_TAG;
-	identity_out->producer_identity = UINT64_C(0x5347484f53544c31);
-	identity_out->standing_hull.mins.value[0] = -16.0f;
-	identity_out->standing_hull.mins.value[1] = -16.0f;
-	identity_out->standing_hull.mins.value[2] = -24.0f;
-	identity_out->standing_hull.maxs.value[0] = 16.0f;
-	identity_out->standing_hull.maxs.value[1] = 16.0f;
-	identity_out->standing_hull.maxs.value[2] = 32.0f;
-	identity_out->crouching_hull.mins = identity_out->standing_hull.mins;
-	identity_out->crouching_hull.maxs = identity_out->standing_hull.maxs;
-	identity_out->crouching_hull.maxs.value[2] = 4.0f;
-	identity_out->physics.gravity = sv_gravity->value;
-	identity_out->physics.ground_acceleration = 10.0f;
-	identity_out->physics.air_acceleration = 1.0f;
-	identity_out->physics.water_acceleration = 10.0f;
-	identity_out->physics.hook_acceleration = 800.0f;
-	identity_out->physics.external_acceleration = 1.0f;
-	identity_out->physics.water_drag = 1.0f;
-	identity_out->physics.max_velocity = sv_maxvelocity->value;
-	identity_out->physics.frame_ms = SG_HOST_ENGINE_FRAME_MS;
-	identity_out->physics.substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
-	return 1;
+	if (!sg_host_law_production_runtime)
+		return HostUnavailable();
+	runtime_status = SG_HostEngineRuntimeJoinOwner(
+		sg_host_law_production_runtime, SG_HostEngineRuntimeOwnerToken(),
+		acceptance);
+	if (runtime_status != SG_HOST_ENGINE_RUNTIME_OK)
+	{
+		OwnerClear();
+		return HostUnavailableField(SG_HOST_LAW_FIELD_PMOVE_ABI, 1U,
+			(uint64_t)runtime_status);
+	}
+	result = SG_HostLawPublicationIssueRuntime(
+		sg_host_law_production_runtime, &publication);
+	if (result.status != SG_HOST_LAW_OK)
+	{
+		OwnerClear();
+		return result;
+	}
+	if (sg_host_law_production)
+		SG_HostLawPublicationDestroy(sg_host_law_production);
+	sg_host_law_production = publication;
+	return result;
 }
 
-sg_host_law_result_t SG_HostLawProductionInstallLevel(const char *mapname)
+sg_host_law_result_t SG_HostLawProductionBindSubject(uint32_t subject_index)
 {
-	sg_level_identity_t level_identity;
-	sg_rune_model_identity_t identity;
+	sg_host_engine_runtime_status_t runtime_status;
+
+	if (!sg_host_law_production_runtime)
+		return HostUnavailable();
+	runtime_status = SG_HostEngineRuntimeBindSubjectOwner(
+		sg_host_law_production_runtime, SG_HostEngineRuntimeOwnerToken(),
+		subject_index);
+	if (runtime_status != SG_HOST_ENGINE_RUNTIME_OK)
+		return HostUnavailableField(SG_HOST_LAW_FIELD_COLLISION_LAW, 1U,
+			(uint64_t)runtime_status);
+	return OwnerMismatch(SG_HOST_LAW_OK, SG_HOST_LAW_FIELD_NONE, 0U, 0U);
+}
+
+sg_host_law_result_t SG_HostLawProductionInstallConstruction(
+	const void *bsp_bytes, size_t bsp_size,
+	const sg_bsp_content_identity_t *content_identity,
+	const sg_rune_model_identity_t *identity)
+{
+	sg_bsp_world_t *world = NULL;
 	sg_host_collision_authority_t authority;
 	sg_host_collision_error_t collision_error;
-	sg_bsp_world_t *world = NULL;
 	sg_bsp_error_t bsp_error;
 	sg_host_law_publication_t *publication = NULL;
 	sg_host_law_result_t result;
-	cvar_t *game_directory_cvar;
-	const char *game_directory;
-	char path[1024];
-	int path_length;
 
-	if (!mapname || SG_LevelIdentitySnapshot(mapname, &level_identity) !=
-		SG_IDENTITY_OK || !BuildLevelIdentity(&level_identity, &identity))
-		return HostUnavailable();
-	game_directory_cvar = sg_host.cvar ? sg_host.cvar("gamedir", "", 0) : NULL;
-	game_directory = game_directory_cvar && game_directory_cvar->string &&
-		game_directory_cvar->string[0] ? game_directory_cvar->string : ".";
-	path_length = snprintf(path, sizeof(path), "%s/maps/%s.bsp", game_directory,
-		mapname);
-	if (path_length < 0 || (size_t)path_length >= sizeof(path))
-		return HostUnavailable();
+	if (!bsp_bytes || !bsp_size || !content_identity || !identity)
+		return HostUnavailableField(SG_HOST_LAW_FIELD_BSP_CONTENT, 1U, 0U);
 	memset(&bsp_error, 0, sizeof(bsp_error));
-	if (!SG_BspWorldLoadFile(path, &world, &bsp_error))
-		return OwnerResult(SG_HOST_LAW_HOST_UNAVAILABLE,
-			SG_HOST_LAW_FIELD_BSP_CONTENT, (uint64_t)bsp_error.code);
-	if (!SG_HostCollisionInit(&authority, world, &identity, &collision_error))
+	if (!SG_BspWorldLoadMemory(bsp_bytes, bsp_size, &world, &bsp_error))
+		return HostUnavailableField(SG_HOST_LAW_FIELD_BSP_CONTENT, 1U,
+			(uint64_t)bsp_error.code);
+	if (memcmp(&world->content_identity, content_identity,
+		sizeof(*content_identity)) != 0)
 	{
 		SG_BspWorldDestroy(world);
-		return OwnerResult(SG_HOST_LAW_INVALID_ARGUMENT,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, (uint64_t)collision_error);
+		return OwnerMismatch(SG_HOST_LAW_PRODUCTION_DRIFT,
+			SG_HOST_LAW_FIELD_BSP_CONTENT, 1U, 0U);
+	}
+	memset(&authority, 0, sizeof(authority));
+	if (!SG_HostCollisionInit(&authority, world, identity, &collision_error))
+	{
+		SG_BspWorldDestroy(world);
+		return HostUnavailableField(SG_HOST_LAW_FIELD_COLLISION_LAW, 1U,
+			(uint64_t)collision_error);
 	}
 	result = SG_HostLawPublicationIssue(&authority, &publication);
 	if (result.status != SG_HOST_LAW_OK)
@@ -160,9 +167,9 @@ sg_host_law_result_t SG_HostLawProductionInstallLevel(const char *mapname)
 		return result;
 	}
 	OwnerClear();
-	sg_host_law_production = publication;
 	sg_host_law_production_world = world;
-	return OwnerResult(SG_HOST_LAW_OK, SG_HOST_LAW_FIELD_NONE, 0U);
+	sg_host_law_production = publication;
+	return result;
 }
 
 void SG_HostLawProductionReset(void)
@@ -206,4 +213,24 @@ sg_host_law_result_t SG_HostLawProductionCollisionAuthority(
 		return HostUnavailable();
 	return SG_HostLawPublicationCollisionAuthority(sg_host_law_production,
 		authority_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionEngineTrace(
+	const float start[3], const float mins[3], const float maxs[3],
+	const float end[3], sg_host_collision_contents_t mask,
+	sg_host_collision_trace_t *trace_out)
+{
+	if (!sg_host_law_production)
+		return HostUnavailable();
+	return SG_HostLawPublicationEngineTrace(sg_host_law_production, start,
+		mins, maxs, end, mask, trace_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionEnginePointContents(
+	const float point[3], sg_host_collision_contents_t *contents_out)
+{
+	if (!sg_host_law_production)
+		return HostUnavailable();
+	return SG_HostLawPublicationEnginePointContents(sg_host_law_production,
+		point, contents_out);
 }

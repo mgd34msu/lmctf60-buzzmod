@@ -42,5 +42,14 @@ int SG_HostEnginePmoveParityBound(
 	const sg_host_engine_pmove_binding_t *binding,
 	const sg_host_engine_parity_inputs_t *inputs,
 	sg_host_engine_parity_result_t *result_out);
+/* Adds a broad runtime pass against the same owner-issued BSP/scene used by
+ * the publication.  The immutable callback binding remains the authority;
+ * this pass is regression evidence for map collision and contents behavior. */
+int SG_HostEnginePmoveParityBoundOnAuthority(
+	const sg_host_engine_pmove_binding_t *binding,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_engine_parity_inputs_t *inputs,
+	sg_host_engine_parity_result_t *result_out);
 
 #endif /* SG_HOST_ENGINE_PARITY_H */

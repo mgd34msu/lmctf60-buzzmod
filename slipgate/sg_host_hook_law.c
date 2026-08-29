@@ -96,6 +96,47 @@ static int TargetAllowed(sg_host_hook_target_kind_t kind)
 		kind == SG_HOST_HOOK_TARGET_INFO_FLAG;
 }
 
+static int BooleanValueValid(int value)
+{
+	return value == 0 || value == 1;
+}
+
+static int TargetKindPresent(sg_host_hook_target_kind_t kind)
+{
+	return kind == SG_HOST_HOOK_TARGET_WORLD ||
+		kind == SG_HOST_HOOK_TARGET_PLAYER ||
+		kind == SG_HOST_HOOK_TARGET_BODYQUE ||
+		kind == SG_HOST_HOOK_TARGET_FUNC ||
+		kind == SG_HOST_HOOK_TARGET_INFO_FLAG ||
+		kind == SG_HOST_HOOK_TARGET_OTHER;
+}
+
+static int CollisionObservationValid(const sg_host_hook_collision_t *collision)
+{
+	if (!collision)
+		return 1;
+	if (!BooleanValueValid(collision->hit) ||
+		!BooleanValueValid(collision->owner_hit) ||
+		!BooleanValueValid(collision->sky) ||
+		!BooleanValueValid(collision->same_team) ||
+		!BooleanValueValid(collision->target_dead) ||
+		!BooleanValueValid(collision->target_died_after_damage) ||
+		!BooleanValueValid(collision->trace_epsilon_applied))
+		return 0;
+	if (!collision->hit)
+		return !collision->owner_hit && !collision->sky &&
+			!collision->same_team && !collision->target_dead &&
+			!collision->target_died_after_damage &&
+			!collision->trace_epsilon_applied &&
+			collision->target_kind == SG_HOST_HOOK_TARGET_NONE &&
+			collision->target_identity == 0U;
+	if (!collision->owner_hit &&
+		(!TargetKindPresent(collision->target_kind) ||
+			collision->target_identity == 0U))
+		return 0;
+	return TargetKindPresent(collision->target_kind) || collision->owner_hit;
+}
+
 static int DamageAllowed(const sg_host_hook_law_t *law,
 	sg_host_hook_target_kind_t kind)
 {
@@ -141,7 +182,7 @@ static void ApplyFlightHit(const sg_host_hook_law_t *law,
 	step_out->next_phase = SG_HOST_HOOK_ATTACHED;
 }
 
-int SG_HostHookStep(const sg_host_hook_law_t *law,
+static int HookStepInternal(const sg_host_hook_law_t *law,
 	const sg_host_hook_observation_t *observation,
 	sg_host_hook_step_t *step_out)
 {
@@ -170,8 +211,7 @@ int SG_HostHookStep(const sg_host_hook_law_t *law,
 		 * touch; callers report that touch with first_hit/immediate_hit. */
 		if (input->immediate_hit)
 		{
-			step_out->trace_epsilon_applied = input->trace_epsilon_applied ||
-				!input->muzzle_clear;
+			step_out->trace_epsilon_applied = input->trace_epsilon_applied;
 			ApplyFlightHit(law, input, step_out);
 		}
 		return 1;
@@ -265,4 +305,45 @@ int SG_HostHookStep(const sg_host_hook_law_t *law,
 		return 1;
 	}
 	return 0;
+}
+
+int SG_HostHookStepWithCollision(const sg_host_hook_law_t *law,
+	const sg_host_hook_observation_t *observation,
+	const sg_host_hook_collision_t *collision,
+	sg_host_hook_step_t *step_out)
+{
+	sg_host_hook_observation_t authorized;
+
+	if (!observation || !step_out || !CollisionObservationValid(collision))
+		return 0;
+	if (observation->event != SG_HOST_HOOK_FIRE &&
+		observation->event != SG_HOST_HOOK_REFIRE)
+		return HookStepInternal(law, observation, step_out);
+	/* A public observation may describe the phase and attack button, but may
+	 * not describe the collision that follows the real spawn/link/state
+	 * advance.  Replace every FIRE collision field with the owner-derived
+	 * record, or with explicit no-hit state for the legacy seam. */
+	authorized = *observation;
+	authorized.muzzle_clear = 1;
+	authorized.immediate_hit = collision ? collision->hit : 0;
+	authorized.trace_epsilon_applied = collision ?
+		collision->trace_epsilon_applied : 0;
+	authorized.first_hit = 0;
+	authorized.sky = collision ? collision->sky : 0;
+	authorized.owner_hit = collision ? collision->owner_hit : 0;
+	authorized.same_team = collision ? collision->same_team : 0;
+	authorized.target_dead = collision ? collision->target_dead : 0;
+	authorized.target_died_after_damage = collision ?
+		collision->target_died_after_damage : 0;
+	authorized.target_kind = collision ? collision->target_kind :
+		SG_HOST_HOOK_TARGET_NONE;
+	authorized.target_identity = collision ? collision->target_identity : 0U;
+	return HookStepInternal(law, &authorized, step_out);
+}
+
+int SG_HostHookStep(const sg_host_hook_law_t *law,
+	const sg_host_hook_observation_t *observation,
+	sg_host_hook_step_t *step_out)
+{
+	return SG_HostHookStepWithCollision(law, observation, NULL, step_out);
 }

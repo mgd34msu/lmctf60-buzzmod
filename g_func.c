@@ -109,10 +109,14 @@ int SG_HostMechanismLiveCapture(sg_host_mechanism_law_t *law_out)
 	law_out->door_default_speed = deathmatch && deathmatch->value ?
 		SG_MOVER_DOOR_DEFAULT_SPEED * SG_MOVER_DOOR_DEATHMATCH_SCALE :
 		SG_MOVER_DOOR_DEFAULT_SPEED;
+	/* Rotating doors use SP_func_door_rotating's stock speed and are not
+	 * subject to func_door's deathmatch multiplier. */
+	law_out->door_rotating_default_speed = SG_MOVER_DOOR_DEFAULT_SPEED;
 	law_out->platform_default_speed = SG_MOVER_PLAT_DEFAULT_SPEED;
 	law_out->platform_default_accel = SG_MOVER_PLAT_DEFAULT_ACCEL;
 	law_out->platform_default_decel = SG_MOVER_PLAT_DEFAULT_DECEL;
 	law_out->train_default_speed = SG_MOVER_TRAIN_DEFAULT_SPEED;
+	law_out->train_default_damage = SG_MOVER_TRAIN_DEFAULT_DAMAGE;
 	return 1;
 }
 

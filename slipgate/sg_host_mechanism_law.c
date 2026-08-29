@@ -235,12 +235,15 @@ void SG_HostMechanismLawDefault(sg_host_mechanism_law_t *law_out)
 	law_out->trigger_remove_delay_ms = 100U;
 	law_out->frame_schedule_ms = 100U;
 	/* SP_func_door doubles its stock 100 speed in deathmatch.  The
-	 * production publication is the deathmatch host law. */
+	 * production publication is the deathmatch host law.  Rotating doors
+	 * retain the stock 100 speed; these are distinct executable classes. */
 	law_out->door_default_speed = 200.0f;
+	law_out->door_rotating_default_speed = 100.0f;
 	law_out->platform_default_speed = 20.0f;
 	law_out->platform_default_accel = 5.0f;
 	law_out->platform_default_decel = 5.0f;
 	law_out->train_default_speed = 100.0f;
+	law_out->train_default_damage = SG_HOST_MECHANISM_DEFAULT_TRAIN_DAMAGE;
 }
 
 int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law)
@@ -266,10 +269,12 @@ int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law)
 		law->trigger_remove_delay_ms == 100U &&
 		law->frame_schedule_ms == 100U &&
 		SameFloat(law->door_default_speed, 200.0f) &&
+		SameFloat(law->door_rotating_default_speed, 100.0f) &&
 		SameFloat(law->platform_default_speed, 20.0f) &&
 		SameFloat(law->platform_default_accel, 5.0f) &&
 		SameFloat(law->platform_default_decel, 5.0f) &&
-		SameFloat(law->train_default_speed, 100.0f);
+		SameFloat(law->train_default_speed, 100.0f) &&
+		law->train_default_damage == SG_HOST_MECHANISM_DEFAULT_TRAIN_DAMAGE;
 }
 
 int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
@@ -635,23 +640,36 @@ int SG_HostMechanismTriggerStep(const sg_host_mechanism_law_t *law,
 
 int SG_HostMechanismTrainStep(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_train_event_t event, uint32_t flags, float wait_seconds,
-	int state, int has_target, int has_current_target, int has_damage,
-	int other_is_client_or_monster, uint64_t now_ms, uint64_t debounce_until_ms,
+	int state, int has_target, int has_current_target,
+	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
+	uint64_t now_ms, uint64_t debounce_until_ms,
 	sg_host_mechanism_transition_t *result_out)
 {
-	if (!result_out || !SG_HostMechanismLawValid(law) || !StateValid(state))
+	if (!result_out || !SG_HostMechanismLawValid(law) || !StateValid(state) ||
+		!BlockerKindValid(blocker_kind))
 		return 0;
 	ClearTransition(result_out);
 	result_out->next_state = state;
 	if (event == SG_HOST_MECHANISM_TRAIN_BLOCKED)
 	{
-		if (!other_is_client_or_monster)
+		if (blocker_kind == SG_HOST_MECHANISM_BLOCKER_NONE)
+			return 0;
+		/* Publish the live blocker facts even when the executable callback
+		 * declines to act because of BLOCK_STOPS, debounce, or zero self->dmg. */
+		result_out->blocker_kind = blocker_kind;
+		result_out->damage = blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER ?
+			SG_HOST_MECHANISM_NONCLIENT_DAMAGE : damage;
+		if (blocker_kind == SG_HOST_MECHANISM_BLOCKER_OTHER)
 		{
 			result_out->accepted = 1;
+			result_out->damaged = 1;
 			result_out->destroyed = 1;
 			return 1;
 		}
-		if ((flags & SG_HOST_MECHANISM_TRAIN_BLOCK_STOPS) || !has_damage ||
+		if (blocker_kind != SG_HOST_MECHANISM_BLOCKER_CLIENT &&
+			blocker_kind != SG_HOST_MECHANISM_BLOCKER_MONSTER)
+			return 0;
+		if ((flags & SG_HOST_MECHANISM_TRAIN_BLOCK_STOPS) || damage == 0U ||
 			now_ms < debounce_until_ms)
 			return 1;
 		result_out->accepted = 1;

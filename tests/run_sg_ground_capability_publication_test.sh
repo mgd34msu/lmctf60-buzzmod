@@ -12,6 +12,7 @@ sources='tests/sg_ground_capability_publication_test.c
 slipgate/sg_ground_capability_publication.c
 slipgate/sg_ground_capability.c
 slipgate/sg_host_pmove.c
+slipgate/sg_host_engine_pmove.c
 slipgate/sg_configuration_audit.c
 slipgate/sg_configuration_semantics.c
 slipgate/sg_bsp_completeness_proof.c

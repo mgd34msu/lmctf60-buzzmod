@@ -22,6 +22,7 @@ compile_host_law()
 		'slipgate/sg_host_law_publication.c publication' \
 		'slipgate/sg_host_law_owner.c owner' \
 		'slipgate/sg_host_engine_pmove.c engine-pmove' \
+		'slipgate/sg_host_engine_runtime.c engine-runtime' \
 		'slipgate/sg_host_engine_parity.c engine-parity' \
 		'slipgate/sg_host_hook_law.c hook-law' \
 		'slipgate/sg_host_mechanism_law.c mechanism-law' \
@@ -44,6 +45,7 @@ compile_host_law()
 		"$tmp_dir/publication-$suffix.o" \
 		"$tmp_dir/owner-$suffix.o" \
 		"$tmp_dir/engine-pmove-$suffix.o" \
+		"$tmp_dir/engine-runtime-$suffix.o" \
 		"$tmp_dir/engine-parity-$suffix.o" \
 		"$tmp_dir/hook-law-$suffix.o" \
 		"$tmp_dir/mechanism-law-$suffix.o" \
@@ -72,6 +74,7 @@ for source in \
 	slipgate/sg_host_law_publication.c \
 	slipgate/sg_host_law_owner.c \
 	slipgate/sg_host_engine_pmove.c \
+	slipgate/sg_host_engine_runtime.c \
 	slipgate/sg_host_engine_parity.c \
 	slipgate/sg_host_hook_law.c \
 	slipgate/sg_host_mechanism_law.c \

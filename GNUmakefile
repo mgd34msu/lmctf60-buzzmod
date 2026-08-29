@@ -1213,6 +1213,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
 		 slipgate/sg_strategy_caller.o slipgate/sg_strategy_runtime_bridge.o \
 		 slipgate/sg_host_pmove.o slipgate/sg_host_engine_pmove.o \
+		 slipgate/sg_host_engine_runtime.o \
 		 slipgate/sg_host_engine_parity.o slipgate/sg_host_hook_law.o \
 		 slipgate/sg_host_mechanism_law.o slipgate/sg_host_law_owner.o \
 		 slipgate/sg_host_law_publication.o \
@@ -1426,7 +1427,8 @@ slipgate/sg_button_live.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h slipgate/sg_mover_lease.h
 slipgate/sg_bsp_world.o: slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
 slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
-		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
+		slipgate/sg_rune_model.h
 slipgate/sg_bsp_entity_semantics.o: slipgate/sg_bsp_entity_semantics.c \
 		slipgate/sg_bsp_entity_semantics.h \
 		slipgate/sg_bsp_entity_semantics_storage_internal.h
@@ -1519,15 +1521,18 @@ slipgate/sg_compound_action_publication.o: \
 		slipgate/sg_compound_action_publication.h \
 		slipgate/sg_compound_publication.h slipgate/sg_compound.h \
 		slipgate/sg_replay.h slipgate/sg_rune.h q_shared.h
-slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
-		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
-		slipgate/sg_rune_model.h
 slipgate/sg_host_pmove.o: slipgate/sg_host_pmove.c \
 		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
 		slipgate/sg_rune_model.h q_shared.h
 slipgate/sg_host_engine_pmove.o: slipgate/sg_host_engine_pmove.c \
 		slipgate/sg_host_engine_pmove.h slipgate/sg_host_pmove.h \
 		game.h q_shared.h
+slipgate/sg_host_engine_runtime.o: slipgate/sg_host_engine_runtime.c \
+		slipgate/sg_host_engine_runtime.h \
+		slipgate/sg_host_engine_runtime_private.h \
+		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
+		slipgate/sg_bsp_world.h slipgate/sg_identity.h \
+		slipgate/sg_destination.h game.h q_shared.h
 slipgate/sg_host_engine_parity.o: slipgate/sg_host_engine_parity.c \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_engine_pmove.h \
 		game.h q_shared.h
@@ -3415,6 +3420,9 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 		slipgate/sg_host_law_publication.h \
 		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
 		slipgate/sg_host_engine_pmove.c slipgate/sg_host_engine_pmove.h \
+		slipgate/sg_host_engine_runtime.c \
+		slipgate/sg_host_engine_runtime.h \
+		slipgate/sg_host_engine_runtime_private.h \
 		slipgate/sg_host_engine_parity.c slipgate/sg_host_engine_parity.h \
 		slipgate/sg_host_hook_law.c slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.c slipgate/sg_host_mechanism_law.h \

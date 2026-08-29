@@ -104,6 +104,33 @@ typedef struct sg_host_hook_observation_s
 	uint64_t attached_target_identity;
 } sg_host_hook_observation_t;
 
+/* A FIRE touch is accepted only after the publication's collision authority
+ * has filled this record.  It is intentionally separate from the public
+ * observation so caller-supplied target/sky booleans cannot manufacture an
+ * attach. */
+typedef struct sg_host_hook_collision_s
+{
+	int hit;
+	int owner_hit;
+	int sky;
+	int same_team;
+	int target_dead;
+	int target_died_after_damage;
+	int trace_epsilon_applied;
+	sg_host_hook_target_kind_t target_kind;
+	uint64_t target_identity;
+} sg_host_hook_collision_t;
+
+typedef struct sg_host_hook_fire_request_s
+{
+	/* The live bolt trace is from the owner origin to the spawned bolt. */
+	float start[3];
+	float end[3];
+	sg_host_hook_phase_t phase;
+	uint64_t owner_instance_id;
+	int attack_held;
+} sg_host_hook_fire_request_t;
+
 typedef struct sg_host_hook_step_s
 {
 	int accepted;
@@ -134,6 +161,13 @@ int SG_HostHookMuzzle(const float origin[3], float viewheight, int hand,
 	const float forward[3], const float right[3], float start_out[3]);
 int SG_HostHookStep(const sg_host_hook_law_t *law,
 	const sg_host_hook_observation_t *observation,
+	sg_host_hook_step_t *step_out);
+
+/* Internal publication seam: collision must be derived by the owner before
+ * FIRE chronology consumes it.  Non-FIRE events use the observation as-is. */
+int SG_HostHookStepWithCollision(const sg_host_hook_law_t *law,
+	const sg_host_hook_observation_t *observation,
+	const sg_host_hook_collision_t *collision,
 	sg_host_hook_step_t *step_out);
 
 #endif /* SG_HOST_HOOK_LAW_H */

@@ -1120,7 +1120,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	if (identity_status == SG_IDENTITY_OK)
 	{
 		sg_host_law_result_t host_law_result =
-			SG_HostLawProductionInstallLevel(mapname);
+			SG_HostLawProductionBeginLevel(mapname);
 
 		if (host_law_result.status != SG_HOST_LAW_OK)
 			gi.dprintf("slipgate: host law unavailable for %s: %s (%s)\n",

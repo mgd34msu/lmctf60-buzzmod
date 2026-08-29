@@ -210,6 +210,175 @@ static void BspSha256(const uint8_t *data, size_t bytes,
 	BspSha256Final(&context, identity);
 }
 
+/* Quake II publishes Com_BlockChecksum (the XOR of the four little-endian
+ * MD4 words) as CS_MAPCHECKSUM.  Compute it while the loader still owns the
+ * exact bytes so the production owner can compare the engine identity without
+ * reopening or separately trusting a loose BSP path. */
+typedef struct bsp_md4_s
+{
+	uint32_t state[4];
+	uint64_t bit_count;
+	uint8_t block[64];
+	size_t block_bytes;
+} bsp_md4_t;
+
+static uint32_t BspMd4RotateLeft(uint32_t value, unsigned int count)
+{
+	return (value << count) | (value >> (32U - count));
+}
+
+static uint32_t BspMd4ReadU32(const uint8_t *bytes)
+{
+	return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8U) |
+		((uint32_t)bytes[2] << 16U) | ((uint32_t)bytes[3] << 24U);
+}
+
+static void BspMd4Transform(bsp_md4_t *context)
+{
+	uint32_t x[16];
+	uint32_t a = context->state[0];
+	uint32_t b = context->state[1];
+	uint32_t c = context->state[2];
+	uint32_t d = context->state[3];
+	uint32_t index;
+
+	for (index = 0U; index < 16U; index++)
+		x[index] = BspMd4ReadU32(context->block + index * 4U);
+
+#define SG_MD4_F(xv, yv, zv) (((xv) & (yv)) | (~(xv) & (zv)))
+#define SG_MD4_G(xv, yv, zv) (((xv) & (yv)) | ((xv) & (zv)) | ((yv) & (zv)))
+#define SG_MD4_H(xv, yv, zv) ((xv) ^ (yv) ^ (zv))
+#define SG_MD4_STEP(fn, av, bv, cv, dv, xv, shift) \
+	(av) = BspMd4RotateLeft((av) + fn((bv), (cv), (dv)) + (xv), shift)
+
+	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[0], 3U);
+	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[1], 7U);
+	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[2], 11U);
+	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[3], 19U);
+	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[4], 3U);
+	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[5], 7U);
+	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[6], 11U);
+	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[7], 19U);
+	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[8], 3U);
+	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[9], 7U);
+	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[10], 11U);
+	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[11], 19U);
+	SG_MD4_STEP(SG_MD4_F, a, b, c, d, x[12], 3U);
+	SG_MD4_STEP(SG_MD4_F, d, a, b, c, x[13], 7U);
+	SG_MD4_STEP(SG_MD4_F, c, d, a, b, x[14], 11U);
+	SG_MD4_STEP(SG_MD4_F, b, c, d, a, x[15], 19U);
+
+	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[0], 3U);
+	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[4], 5U);
+	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[8], 9U);
+	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[12], 13U);
+	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[1], 3U);
+	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[5], 5U);
+	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[9], 9U);
+	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[13], 13U);
+	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[2], 3U);
+	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[6], 5U);
+	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[10], 9U);
+	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[14], 13U);
+	SG_MD4_STEP(SG_MD4_G, a, b, c, d, x[3], 3U);
+	SG_MD4_STEP(SG_MD4_G, d, a, b, c, x[7], 5U);
+	SG_MD4_STEP(SG_MD4_G, c, d, a, b, x[11], 9U);
+	SG_MD4_STEP(SG_MD4_G, b, c, d, a, x[15], 13U);
+
+	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[0], 3U);
+	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[8], 9U);
+	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[4], 11U);
+	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[12], 15U);
+	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[2], 3U);
+	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[10], 9U);
+	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[6], 11U);
+	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[14], 15U);
+	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[1], 3U);
+	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[9], 9U);
+	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[5], 11U);
+	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[13], 15U);
+	SG_MD4_STEP(SG_MD4_H, a, b, c, d, x[3], 3U);
+	SG_MD4_STEP(SG_MD4_H, d, a, b, c, x[11], 9U);
+	SG_MD4_STEP(SG_MD4_H, c, d, a, b, x[7], 11U);
+	SG_MD4_STEP(SG_MD4_H, b, c, d, a, x[15], 15U);
+
+#undef SG_MD4_STEP
+#undef SG_MD4_H
+#undef SG_MD4_G
+#undef SG_MD4_F
+	context->state[0] += a;
+	context->state[1] += b;
+	context->state[2] += c;
+	context->state[3] += d;
+}
+
+static void BspMd4Init(bsp_md4_t *context)
+{
+	context->state[0] = UINT32_C(0x67452301);
+	context->state[1] = UINT32_C(0xefcdab89);
+	context->state[2] = UINT32_C(0x98badcfe);
+	context->state[3] = UINT32_C(0x10325476);
+	context->bit_count = 0U;
+	context->block_bytes = 0U;
+}
+
+static void BspMd4Update(bsp_md4_t *context, const uint8_t *data,
+	size_t bytes)
+{
+	while (bytes != 0U)
+	{
+		size_t available = sizeof(context->block) - context->block_bytes;
+		size_t copy = bytes < available ? bytes : available;
+
+		memcpy(context->block + context->block_bytes, data, copy);
+		context->block_bytes += copy;
+		context->bit_count += (uint64_t)copy * UINT64_C(8);
+		data += copy;
+		bytes -= copy;
+		if (context->block_bytes == sizeof(context->block))
+		{
+			BspMd4Transform(context);
+			context->block_bytes = 0U;
+		}
+	}
+}
+
+static uint32_t BspMd4Final(bsp_md4_t *context)
+{
+	uint64_t bit_count = context->bit_count;
+	uint32_t digest[4];
+	uint32_t index;
+
+	context->block[context->block_bytes++] = UINT8_C(0x80);
+	if (context->block_bytes > 56U)
+	{
+		memset(context->block + context->block_bytes, 0,
+			sizeof(context->block) - context->block_bytes);
+		BspMd4Transform(context);
+		context->block_bytes = 0U;
+	}
+	memset(context->block + context->block_bytes, 0,
+		56U - context->block_bytes);
+	for (index = 0U; index < 8U; index++)
+		context->block[56U + index] = (uint8_t)(bit_count >> (index * 8U));
+	BspMd4Transform(context);
+	memcpy(digest, context->state, sizeof(digest));
+	return digest[0] ^ digest[1] ^ digest[2] ^ digest[3];
+}
+
+static int BspEngineChecksum(const uint8_t *data, size_t bytes,
+	uint32_t *checksum_out)
+{
+	bsp_md4_t context;
+
+	if (!data || !checksum_out || bytes > (size_t)INT_MAX)
+		return 0;
+	BspMd4Init(&context);
+	BspMd4Update(&context, data, bytes);
+	*checksum_out = BspMd4Final(&context);
+	return 1;
+}
+
 _Static_assert(CHAR_BIT == 8, "IBSP decoding requires eight-bit bytes");
 _Static_assert(sizeof(float) == 4 && FLT_RADIX == 2 && FLT_MANT_DIG == 24 &&
 	FLT_MAX_EXP == 128, "IBSP decoding requires IEEE binary32 floats");
@@ -1326,6 +1495,7 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 	const uint8_t *data = data_value;
 	bsp_lump_view_t lumps[SG_BSP_LUMP_COUNT];
 	sg_bsp_world_t *world;
+	uint32_t engine_checksum;
 
 	BspSetError(error_out, SG_BSP_ERROR_NONE, SG_BSP_LUMP_ENTITIES, 0);
 	if (!data || !world_out || *world_out)
@@ -1355,6 +1525,12 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 	if (!BspReadLumps(data, size, lumps, error_out) ||
 		!BspValidateHostLimits(lumps, error_out))
 		return 0;
+	if (!BspEngineChecksum(data, size, &engine_checksum))
+	{
+		BspSetError(error_out, SG_BSP_ERROR_SIZE_OVERFLOW,
+			SG_BSP_LUMP_ENTITIES, 0);
+		return 0;
+	}
 	world = calloc(1, sizeof(*world));
 	if (!world)
 	{
@@ -1363,6 +1539,7 @@ int SG_BspWorldLoadMemory(const void *data_value, size_t size,
 		return 0;
 	}
 	BspSha256(data, size, &world->content_identity);
+	world->engine_checksum = engine_checksum;
 	if (!BspLoadEntities(world, &lumps[SG_BSP_LUMP_ENTITIES], error_out) ||
 		!BspLoadPlanes(world, &lumps[SG_BSP_LUMP_PLANES], error_out) ||
 		!BspLoadVertices(world, &lumps[SG_BSP_LUMP_VERTICES], error_out) ||

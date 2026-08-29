@@ -2160,8 +2160,7 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	    MASK_SHOT);
 	if (tr.fraction < 1.0)
 	{
-		VectorMA(bolt->s.origin, -SG_HOST_HOOK_TRACE_EPSILON, dir,
-			bolt->s.origin);
+		VectorMA(bolt->s.origin, -10, dir, bolt->s.origin);
 		bolt->touch(bolt, tr.ent, &tr.plane, NULL);
 	}
 	return bolt;
@@ -2243,8 +2242,7 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	tr = gi.trace (self->s.origin, NULL, NULL, bolt->s.origin, self, MASK_SHOT);
 	if (tr.fraction < 1.0)
 	{
-		VectorMA (bolt->s.origin, -SG_HOST_HOOK_TRACE_EPSILON, dir,
-			bolt->s.origin);
+		VectorMA (bolt->s.origin, -10, dir, bolt->s.origin);
 		if (SG_OwnsBot(self))
 		{
 			self->client->hook = bolt;
@@ -2296,9 +2294,7 @@ void CTF_HookMuzzle (const vec3_t origin, float viewheight, int hand,
 {
 	vec3_t offset;
 
-	VectorSet (offset, SG_HOST_HOOK_MUZZLE_FORWARD_OFFSET,
-		SG_HOST_HOOK_MUZZLE_RIGHT_OFFSET,
-		viewheight - SG_HOST_HOOK_MUZZLE_VIEW_OFFSET);
+	VectorSet (offset, 8, 8, viewheight - 8);
 	if (hand == LEFT_HANDED)
 		offset[1] *= -1;
 	else if (hand == CENTER_HANDED)

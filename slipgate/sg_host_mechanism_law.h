@@ -19,6 +19,7 @@
 #define SG_HOST_MECHANISM_TRAIN_TOGGLE UINT32_C(2)
 #define SG_HOST_MECHANISM_TRAIN_BLOCK_STOPS UINT32_C(4)
 #define SG_HOST_MECHANISM_DEFAULT_DOOR_DAMAGE UINT32_C(2)
+#define SG_HOST_MECHANISM_DEFAULT_TRAIN_DAMAGE UINT32_C(100)
 #define SG_HOST_MECHANISM_NONCLIENT_DAMAGE UINT32_C(100000)
 #define SG_HOST_MECHANISM_TRIGGER_DEFAULT_WAIT_SECONDS 0.2f
 
@@ -50,10 +51,12 @@ typedef struct sg_host_mechanism_law_s
 	uint32_t trigger_remove_delay_ms;
 	uint32_t frame_schedule_ms;
 	float door_default_speed;
+	float door_rotating_default_speed;
 	float platform_default_speed;
 	float platform_default_accel;
 	float platform_default_decel;
 	float train_default_speed;
+	uint32_t train_default_damage;
 } sg_host_mechanism_law_t;
 
 typedef int (*sg_host_mechanism_live_capture_function_t)(
@@ -145,8 +148,9 @@ int SG_HostMechanismTriggerStep(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_transition_t *result_out);
 int SG_HostMechanismTrainStep(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_train_event_t event, uint32_t flags, float wait_seconds,
-	int state, int has_target, int has_current_target, int has_damage,
-	int other_is_client_or_monster, uint64_t now_ms, uint64_t debounce_until_ms,
+	int state, int has_target, int has_current_target,
+	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
+	uint64_t now_ms, uint64_t debounce_until_ms,
 	sg_host_mechanism_transition_t *result_out);
 
 #endif /* SG_HOST_MECHANISM_LAW_H */

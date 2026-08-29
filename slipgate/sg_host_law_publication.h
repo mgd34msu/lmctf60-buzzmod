@@ -13,6 +13,7 @@
 #include "sg_host_collision.h"
 #include "sg_host_engine_pmove.h"
 #include "sg_host_engine_parity.h"
+#include "sg_host_engine_runtime.h"
 #include "sg_host_hook_law.h"
 #include "sg_host_mechanism_law.h"
 #ifdef SG_HOST_LAW_RESTORE_WORLD_MACRO
@@ -132,6 +133,13 @@ sg_host_law_result_t SG_HostLawPublicationIssue(
 	const sg_host_collision_authority_t *authority,
 	sg_host_law_publication_t **publication_out);
 
+/* Runtime publication joins the captured engine callbacks only to an
+ * owner-issued accepted RUNE snapshot and exact selected-BSP digest.  It has
+ * no static BSP collision authority; runtime queries remain engine-backed. */
+sg_host_law_result_t SG_HostLawPublicationIssueRuntime(
+	const sg_host_engine_runtime_t *runtime,
+	sg_host_law_publication_t **publication_out);
+
 sg_host_law_result_t SG_HostLawPublicationRead(
 	const sg_host_law_publication_t *publication,
 	sg_host_law_view_t *view_out);
@@ -154,6 +162,13 @@ sg_host_law_result_t SG_HostLawPublicationCollisionTrace(
 	const sg_host_collision_scene_t *scene, const float start[3],
 	const float mins[3], const float maxs[3], const float end[3],
 	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out);
+sg_host_law_result_t SG_HostLawPublicationEngineTrace(
+	const sg_host_law_publication_t *publication, const float start[3],
+	const float mins[3], const float maxs[3], const float end[3],
+	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out);
+sg_host_law_result_t SG_HostLawPublicationEnginePointContents(
+	const sg_host_law_publication_t *publication, const float point[3],
+	sg_host_collision_contents_t *contents_out);
 sg_host_law_result_t SG_HostLawPublicationPmove(
 	const sg_host_law_publication_t *publication,
 	const sg_host_collision_scene_t *scene,
@@ -169,6 +184,15 @@ sg_host_law_result_t SG_HostLawPublicationHookMuzzle(
 sg_host_law_result_t SG_HostLawPublicationHookStep(
 	const sg_host_law_publication_t *publication,
 	const sg_host_hook_observation_t *observation,
+	sg_host_hook_step_t *step_out);
+/* Spawn/link and trace the bolt through the publication-owned collision
+ * authority before applying the immediate first-hit/attach/abort chronology.
+ * The request contains only owner phase/button and trace endpoints; target,
+ * sky, team, and hit fields are derived internally. */
+sg_host_law_result_t SG_HostLawPublicationHookFire(
+	const sg_host_law_publication_t *publication,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_hook_fire_request_t *request,
 	sg_host_hook_step_t *step_out);
 
 sg_host_law_result_t SG_HostLawPublicationMoveSchedule(
@@ -202,8 +226,9 @@ sg_host_law_result_t SG_HostLawPublicationTriggerStep(
 sg_host_law_result_t SG_HostLawPublicationTrainStep(
 	const sg_host_law_publication_t *publication,
 	sg_host_mechanism_train_event_t event, uint32_t flags, float wait_seconds,
-	int state, int has_target, int has_current_target, int has_damage,
-	int other_is_client_or_monster, uint64_t now_ms, uint64_t debounce_until_ms,
+	int state, int has_target, int has_current_target,
+	sg_host_mechanism_blocker_kind_t blocker_kind, uint32_t damage,
+	uint64_t now_ms, uint64_t debounce_until_ms,
 	sg_host_mechanism_transition_t *result_out);
 
 void SG_HostLawPublicationDestroy(sg_host_law_publication_t *publication);

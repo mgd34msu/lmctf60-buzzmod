@@ -189,6 +189,8 @@ typedef struct sg_bsp_world_s
 {
 	/* Authenticated by the BSP loader before any borrowed authority is built. */
 	sg_bsp_content_identity_t content_identity;
+	/* Exact Quake II CM_LoadMap checksum of the same retained file bytes. */
+	uint32_t engine_checksum;
 	uint8_t *entities;
 	uint32_t entity_byte_count;
 	sg_bsp_plane_t *planes;
