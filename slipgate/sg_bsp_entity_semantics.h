@@ -147,6 +147,8 @@ typedef struct sg_bsp_entity_semantics_s
 {
 	uint64_t source_set_identity;
 	sg_bsp_world_entity_semantics_t world;
+	/* Builder-issued storage; audits authenticate bases and extents before
+	 * indexing, so caller-owned arrays cannot be presented as facts. */
 	sg_bsp_entity_semantic_t *entities;
 	uint32_t entity_count;
 	sg_bsp_entity_semantic_edge_t *edges;

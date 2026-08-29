@@ -20,6 +20,17 @@ typedef struct sg_bsp_entity_semantics_binding_s
 	sg_rune_v2_content_id_t schema_identity;
 } sg_bsp_entity_semantics_binding_t;
 
+/* Construction barrier for the production graph owner: load the BSP through
+ * SG_BspWorldLoadMemory/File, initialize sg_host_collision_authority_t with
+ * SG_HostCollisionInit on that exact world, and bind source_identity to the
+ * resulting world digest.  Build the candidate with
+ * SG_BspEntitySemanticsBuild using the same source_set_identity, then call
+ * SG_BspEntitySemanticsAudit or SG_BspEntitySemanticsPublicationIssue before
+ * registering it with a downstream graph.  Builder-issued array and string
+ * storage is required; caller-supplied arrays are not an authority.  Until a
+ * downstream graph owner supplies this caller, production registration stays
+ * closed and no authority may be fabricated or map-specific exception used. */
+
 typedef enum sg_bsp_entity_semantics_completeness_e
 {
 	SG_BSP_ENTITY_SEMANTICS_COMPLETENESS_NONE = 0,

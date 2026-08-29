@@ -1308,6 +1308,11 @@ OBJS := \
 	slipgate/sg_rune_dynamics_model.o \
 	slipgate/sg_rune_dynamics_geometry.o \
 	slipgate/sg_rune_field_contract.o \
+	slipgate/sg_bsp_world.o \
+	slipgate/sg_host_collision.o \
+	slipgate/sg_bsp_entity_semantics.o \
+	slipgate/sg_bsp_entity_semantics_audit_expected.o \
+	slipgate/sg_bsp_entity_semantics_publication.o \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
@@ -1449,6 +1454,20 @@ slipgate/sg_mover_lease.o: slipgate/sg_mover_lease.c \
 		slipgate/sg_mover_lease.h
 slipgate/sg_button_live.o: slipgate/sg_button_live.c \
 		slipgate/sg_button_live.h slipgate/sg_mover_lease.h
+slipgate/sg_bsp_world.o: slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
+slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
+		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h
+slipgate/sg_bsp_entity_semantics.o: slipgate/sg_bsp_entity_semantics.c \
+		slipgate/sg_bsp_entity_semantics.h \
+		slipgate/sg_bsp_entity_semantics_storage_internal.h
+slipgate/sg_bsp_entity_semantics_audit_expected.o: \
+		slipgate/sg_bsp_entity_semantics_audit_expected.c \
+		slipgate/sg_bsp_entity_semantics_audit_internal.h
+slipgate/sg_bsp_entity_semantics_publication.o: \
+		slipgate/sg_bsp_entity_semantics_publication.c \
+		slipgate/sg_bsp_entity_semantics_publication.h \
+		slipgate/sg_bsp_entity_semantics_audit_internal.h \
+		slipgate/sg_bsp_entity_semantics_storage_internal.h
 slipgate/sg_compound_guard.o: slipgate/sg_compound_guard.c \
 		slipgate/sg_compound_guard.h slipgate/sg_mover_lease.h
 slipgate/sg_compound_guard_game.o: slipgate/sg_compound_guard_game.c \

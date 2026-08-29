@@ -218,6 +218,73 @@ static void TestHostileStringExtent(void)
 	DestroyFixture(&fixture);
 }
 
+static void TestHostileArrayExtent(void)
+{
+	fixture_t entity_fixture;
+	fixture_t edge_fixture;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantic_t *original_entities;
+	sg_bsp_entity_semantic_t *replacement_entities;
+	sg_bsp_entity_semantic_edge_t *original_edges;
+	sg_bsp_entity_semantic_edge_t *replacement_edges;
+	sg_bsp_entity_semantics_audit_result_t audit;
+
+	InitFixture(&entity_fixture,
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"trigger_multiple\" \"model\" \"*1\" \"target\" \"gate\" }\n"
+		"{ \"classname\" \"func_door\" \"model\" \"*2\" \"targetname\" \"gate\" }\n");
+	candidate = Build(&entity_fixture);
+	CHECK(candidate != NULL);
+	if (candidate)
+	{
+		original_entities = candidate->entities;
+		replacement_entities = malloc(sizeof(*replacement_entities));
+		CHECK(replacement_entities != NULL);
+		if (replacement_entities)
+		{
+			CHECK(candidate->entity_count > 1U);
+			replacement_entities[0] = original_entities[0];
+			candidate->entities = replacement_entities;
+			CHECK(!SG_BspEntitySemanticsAudit(&entity_fixture.authority,
+				&binding, candidate, &audit));
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY);
+			candidate->entities = original_entities;
+			free(replacement_entities);
+		}
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&entity_fixture);
+
+	InitFixture(&edge_fixture,
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"trigger_multiple\" \"model\" \"*1\" \"target\" \"gate\" }\n"
+		"{ \"classname\" \"func_door\" \"model\" \"*2\" \"targetname\" \"gate\" }\n"
+		"{ \"classname\" \"func_button\" \"model\" \"*3\" \"targetname\" \"gate\" }\n");
+	candidate = Build(&edge_fixture);
+	CHECK(candidate != NULL);
+	if (candidate)
+	{
+		original_edges = candidate->edges;
+		replacement_edges = malloc(sizeof(*replacement_edges));
+		CHECK(replacement_edges != NULL);
+		if (replacement_edges)
+		{
+			CHECK(candidate->edge_count > 1U);
+			replacement_edges[0] = original_edges[0];
+			candidate->edges = replacement_edges;
+			CHECK(!SG_BspEntitySemanticsAudit(&edge_fixture.authority,
+				&binding, candidate, &audit));
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
+			candidate->edges = original_edges;
+			free(replacement_edges);
+		}
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&edge_fixture);
+}
+
 static void TestExplicitWorldFactIsComplete(void)
 {
 	fixture_t fixture;
@@ -281,6 +348,30 @@ static void TestExactStringFacts(void)
 					CHECK(audit.code ==
 						SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
 					CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY);
+					{
+						uint32_t first_record = index;
+						uint32_t prior;
+						uint32_t prior_field;
+
+						for (prior = 0U; prior < index; prior++)
+						{
+							uint32_t *prior_fields[] = {
+								&candidate->entities[prior].classname,
+								&candidate->entities[prior].targetname,
+								&candidate->entities[prior].required_item,
+								&candidate->entities[prior].spawned_classname,
+								&candidate->entities[prior].destination_map
+							};
+
+							for (prior_field = 0U;
+								prior_field < sizeof(prior_fields) /
+									sizeof(prior_fields[0]); prior_field++)
+								if (first_record == index &&
+									*prior_fields[prior_field] == *fields[field])
+									first_record = prior;
+						}
+						CHECK(audit.record == first_record);
+					}
 					candidate->strings[*fields[field]] = saved;
 				}
 		}
@@ -320,6 +411,7 @@ static void TestExactStringFacts(void)
 			CHECK(audit.code ==
 				SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
 			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
+			CHECK(audit.record == index);
 			candidate->strings[offset] = saved;
 		}
 		for (index = 0U; index < sizeof(field_hits) / sizeof(field_hits[0]); index++)
@@ -467,6 +559,58 @@ static void TestDuplicateTopologyFact(void)
 	DestroyFixture(&fixture);
 }
 
+static void TestAppendedDuplicateFacts(void)
+{
+	static const char text[] =
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"trigger_multiple\" \"model\" \"*1\" \"target\" \"gate\" }\n"
+		"{ \"classname\" \"func_door\" \"model\" \"*2\" \"targetname\" \"gate\" }\n";
+	fixture_t fixture;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantics_audit_result_t audit;
+	uint32_t entity_count;
+	uint32_t edge_count;
+
+	InitFixture(&fixture, text);
+	candidate = Build(&fixture);
+	CHECK(candidate != NULL);
+	if (candidate)
+	{
+		entity_count = candidate->entity_count;
+		edge_count = candidate->edge_count;
+		CHECK(entity_count > 0U);
+		CHECK(edge_count > 0U);
+		if (entity_count > 0U)
+		{
+			candidate->entities[entity_count] = candidate->entities[0];
+			candidate->entity_count = entity_count + 1U;
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code ==
+				SG_BSP_ENTITY_SEMANTICS_AUDIT_DUPLICATE_FACT);
+			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY);
+			CHECK(audit.record == entity_count);
+			CHECK(audit.duplicate_facts == 1U);
+			candidate->entity_count = entity_count;
+		}
+		if (edge_count > 0U)
+		{
+			candidate->edges[edge_count] = candidate->edges[0];
+			candidate->edge_count = edge_count + 1U;
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code ==
+				SG_BSP_ENTITY_SEMANTICS_AUDIT_DUPLICATE_FACT);
+			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
+			CHECK(audit.record == edge_count);
+			CHECK(audit.duplicate_facts == 1U);
+			candidate->edge_count = edge_count;
+		}
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&fixture);
+}
+
 static void TestCrossBspIdentityMismatch(void)
 {
 	fixture_t first;
@@ -519,12 +663,14 @@ int main(void)
 	TestCompleteAuditAndOwnedPublication();
 	TestProvenEmpty();
 	TestHostileStringExtent();
+	TestHostileArrayExtent();
 	TestExplicitWorldFactIsComplete();
 	TestExactStringFacts();
 	TestTrailingInventedInvalidFact();
 	TestOmittedAndInventedFacts();
 	TestDuplicateAndUnresolvedFacts();
 	TestDuplicateTopologyFact();
+	TestAppendedDuplicateFacts();
 	TestCrossBspIdentityMismatch();
 	TestIdentityAndTransactionalOutput();
 	if (failures)

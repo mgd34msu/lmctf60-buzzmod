@@ -160,6 +160,24 @@ static void RecordDisagreement(
 		domain, record);
 }
 
+static int EntityStringValuesEqual(
+	const sg_bsp_entity_semantics_t *expected,
+	const sg_bsp_entity_semantic_t *expected_entity,
+	const sg_bsp_entity_semantics_t *candidate,
+	const sg_bsp_entity_semantic_t *candidate_entity)
+{
+	return StringEqual(expected, expected_entity->classname, candidate,
+		candidate_entity->classname) &&
+		StringEqual(expected, expected_entity->targetname, candidate,
+			candidate_entity->targetname) &&
+		StringEqual(expected, expected_entity->required_item, candidate,
+			candidate_entity->required_item) &&
+		StringEqual(expected, expected_entity->spawned_classname, candidate,
+			candidate_entity->spawned_classname) &&
+		StringEqual(expected, expected_entity->destination_map, candidate,
+			candidate_entity->destination_map);
+}
+
 static int StringValuesEqual(const sg_bsp_entity_semantics_t *expected,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_fact_domain_t *domain_out, uint32_t *record_out)
@@ -178,15 +196,12 @@ static int StringValuesEqual(const sg_bsp_entity_semantics_t *expected,
 		const sg_bsp_entity_semantic_t *left = &expected->entities[index];
 		const sg_bsp_entity_semantic_t *right = &candidate->entities[index];
 
-		if (!StringEqual(expected, left->classname, candidate, right->classname) ||
-			!StringEqual(expected, left->targetname, candidate, right->targetname) ||
-			!StringEqual(expected, left->required_item, candidate,
-				right->required_item) ||
-			!StringEqual(expected, left->spawned_classname, candidate,
-				right->spawned_classname) ||
-			!StringEqual(expected, left->destination_map, candidate,
-					right->destination_map))
+		if (!EntityStringValuesEqual(expected, left, candidate, right))
+		{
+			if (record_out)
+				*record_out = index;
 			return 0;
+		}
 	}
 	for (index = 0U; index < expected->edge_count; index++)
 		if (!StringEqual(expected, expected->edges[index].name, candidate,
@@ -333,6 +348,20 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 		AddCount(&result->invalid_facts, 1U);
 		SetFailure(result, SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT,
 			SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY, UINT32_MAX);
+		return 0;
+	}
+	if (!SG_BspEntitySemanticsEntityStorageValid(candidate))
+	{
+		AddCount(&result->invalid_facts, 1U);
+		SetFailure(result, SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT,
+			SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY, UINT32_MAX);
+		return 0;
+	}
+	if (!SG_BspEntitySemanticsEdgeStorageValid(candidate))
+	{
+		AddCount(&result->invalid_facts, 1U);
+		SetFailure(result, SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT,
+			SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY, UINT32_MAX);
 		return 0;
 	}
 	if (!SG_BspEntitySemanticsStringStorageValid(candidate))
@@ -498,6 +527,11 @@ static int CompareCandidate(const sg_bsp_world_t *world,
 	sg_bsp_entity_semantics_audit_result_t *result_out)
 {
 	uint32_t index;
+	/* Validate the issued extents before either count mismatch can cause a
+	 * caller-controlled index to be read.  This also lets an authenticated
+	 * spare slot classify an appended duplicate precisely. */
+	if (!CandidateStorageValid(world, binding, candidate, result_out))
+		return 0;
 	if (candidate->entity_count != expected->entity_count)
 	{
 		CountDifference(result_out, expected->entity_count,
@@ -510,8 +544,6 @@ static int CompareCandidate(const sg_bsp_world_t *world,
 			SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
 		return 0;
 	}
-	if (!CandidateStorageValid(world, binding, candidate, result_out))
-		return 0;
 	{
 		sg_bsp_entity_semantics_fact_domain_t domain;
 		uint32_t record;

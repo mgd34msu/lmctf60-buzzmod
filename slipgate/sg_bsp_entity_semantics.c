@@ -84,75 +84,118 @@ typedef struct work_edges_s
 	size_t capacity;
 } work_edges_t;
 
-typedef struct string_storage_record_s
+typedef struct storage_record_s
 {
 	const sg_bsp_entity_semantics_t *owner;
-	const char *base;
-	uint32_t capacity;
-	struct string_storage_record_s *next;
-} string_storage_record_t;
+	const sg_bsp_entity_semantic_t *entities;
+	uint32_t entity_capacity;
+	const sg_bsp_entity_semantic_edge_t *edges;
+	uint32_t edge_capacity;
+	const char *strings;
+	uint32_t string_capacity;
+	struct storage_record_s *next;
+} storage_record_t;
 
-static string_storage_record_t *string_storage_records;
+static storage_record_t *storage_records;
 
-static string_storage_record_t *FindStringStorage(
+static storage_record_t *FindStorage(
 	const sg_bsp_entity_semantics_t *semantics)
 {
-	string_storage_record_t *record;
+	storage_record_t *record;
 
-	for (record = string_storage_records; record; record = record->next)
+	for (record = storage_records; record; record = record->next)
 		if (record->owner == semantics)
 			return record;
 	return NULL;
 }
 
-int SG_BspEntitySemanticsStringStorageRegister(
-	sg_bsp_entity_semantics_t *semantics)
+int SG_BspEntitySemanticsStorageRegister(
+	sg_bsp_entity_semantics_t *semantics, uint32_t entity_capacity,
+	uint32_t edge_capacity)
 {
-	string_storage_record_t *record;
+	storage_record_t *record;
 
 	if (!semantics)
 		return 0;
-	if (!semantics->string_bytes && !semantics->strings)
-		return 1;
-	if (!semantics->string_bytes || !semantics->strings ||
-		FindStringStorage(semantics))
+	if ((!semantics->entities && entity_capacity) ||
+		(semantics->entities && !entity_capacity) ||
+		semantics->entity_count > entity_capacity ||
+		(!semantics->edges && edge_capacity) ||
+		(semantics->edges && !edge_capacity) ||
+		semantics->edge_count > edge_capacity ||
+		(!semantics->strings && semantics->string_bytes) ||
+		(semantics->strings && !semantics->string_bytes) ||
+		FindStorage(semantics))
 		return 0;
+	if (!entity_capacity && !edge_capacity && !semantics->string_bytes)
+		return 1;
 	record = malloc(sizeof(*record));
 	if (!record)
 		return 0;
 	record->owner = semantics;
-	record->base = semantics->strings;
-	record->capacity = semantics->string_bytes;
-	record->next = string_storage_records;
-	string_storage_records = record;
+	record->entities = semantics->entities;
+	record->entity_capacity = entity_capacity;
+	record->edges = semantics->edges;
+	record->edge_capacity = edge_capacity;
+	record->strings = semantics->strings;
+	record->string_capacity = semantics->string_bytes;
+	record->next = storage_records;
+	storage_records = record;
 	return 1;
+}
+
+int SG_BspEntitySemanticsEntityStorageValid(
+	const sg_bsp_entity_semantics_t *semantics)
+{
+	storage_record_t *record;
+
+	if (!semantics)
+		return 0;
+	if (!semantics->entity_count && !semantics->entities)
+		return 1;
+	record = FindStorage(semantics);
+	return record && record->entities == semantics->entities &&
+		semantics->entity_count <= record->entity_capacity;
+}
+
+int SG_BspEntitySemanticsEdgeStorageValid(
+	const sg_bsp_entity_semantics_t *semantics)
+{
+	storage_record_t *record;
+
+	if (!semantics)
+		return 0;
+	if (!semantics->edge_count && !semantics->edges)
+		return 1;
+	record = FindStorage(semantics);
+	return record && record->edges == semantics->edges &&
+		semantics->edge_count <= record->edge_capacity;
 }
 
 int SG_BspEntitySemanticsStringStorageValid(
 	const sg_bsp_entity_semantics_t *semantics)
 {
-	string_storage_record_t *record;
+	storage_record_t *record;
 
 	if (!semantics)
 		return 0;
 	if (!semantics->string_bytes && !semantics->strings)
 		return 1;
-	record = FindStringStorage(semantics);
-	return record && record->base == semantics->strings &&
-		semantics->string_bytes <= record->capacity;
+	record = FindStorage(semantics);
+	return record && record->strings == semantics->strings &&
+		semantics->string_bytes <= record->string_capacity;
 }
 
-void SG_BspEntitySemanticsStringStorageForget(
-	sg_bsp_entity_semantics_t *semantics)
+void SG_BspEntitySemanticsStorageForget(sg_bsp_entity_semantics_t *semantics)
 {
-	string_storage_record_t **link;
+	storage_record_t **link;
 
 	if (!semantics)
 		return;
-	for (link = &string_storage_records; *link; link = &(*link)->next)
+	for (link = &storage_records; *link; link = &(*link)->next)
 		if ((*link)->owner == semantics)
 		{
-			string_storage_record_t *record = *link;
+			storage_record_t *record = *link;
 
 			*link = record->next;
 			free(record);
@@ -181,6 +224,20 @@ static int SizeMultiply(size_t left, size_t right, size_t *result)
 	if (!result || (right && left > SIZE_MAX / right))
 		return 0;
 	*result = left * right;
+	return 1;
+}
+
+/* A builder-issued array has one zeroed spare slot when representable.  The
+ * spare is structural: it permits the audit to classify an appended fact
+ * before comparing counts, while the registry still authenticates its full
+ * allocation extent.  It is not a workload limit. */
+static int IssuedArrayCapacity(size_t count, uint32_t *capacity_out)
+{
+	if (!capacity_out || count > UINT32_MAX)
+		return 0;
+	if (count && count < UINT32_MAX)
+		count++;
+	*capacity_out = (uint32_t)count;
 	return 1;
 }
 
@@ -1977,6 +2034,8 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 	sg_bsp_entity_semantics_t *result = NULL;
 	uint8_t *used_models = NULL;
 	uint32_t *entity_to_record = NULL;
+	uint32_t entity_capacity = 0U;
+	uint32_t edge_capacity = 0U;
 	size_t index;
 	size_t allocation_bytes;
 	int success = 0;
@@ -2076,6 +2135,13 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 			UINT32_MAX, UINT32_MAX);
 		goto done;
 	}
+	if (!IssuedArrayCapacity(records.count, &entity_capacity) ||
+		!IssuedArrayCapacity(edges.count, &edge_capacity))
+	{
+		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
+			UINT32_MAX, UINT32_MAX);
+		goto done;
+	}
 	if (edges.count > 1U)
 		qsort(edges.values, edges.count, sizeof(*edges.values), CompareEdges);
 	result = calloc(1U, sizeof(*result));
@@ -2091,9 +2157,16 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 		goto done;
 	result->entity_count = (uint32_t)records.count;
 	result->edge_count = (uint32_t)edges.count;
-	if (records.count)
+	if (entity_capacity)
 	{
-		result->entities = malloc(records.count * sizeof(*result->entities));
+		if (!SizeMultiply((size_t)entity_capacity,
+			sizeof(*result->entities), &allocation_bytes))
+		{
+			SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
+				UINT32_MAX, UINT32_MAX);
+			goto done;
+		}
+		result->entities = calloc(1U, allocation_bytes);
 		if (!result->entities)
 		{
 			SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY,
@@ -2101,9 +2174,16 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 			goto done;
 		}
 	}
-	if (edges.count)
+	if (edge_capacity)
 	{
-		result->edges = malloc(edges.count * sizeof(*result->edges));
+		if (!SizeMultiply((size_t)edge_capacity, sizeof(*result->edges),
+			&allocation_bytes))
+		{
+			SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
+				UINT32_MAX, UINT32_MAX);
+			goto done;
+		}
+		result->edges = calloc(1U, allocation_bytes);
 		if (!result->edges)
 		{
 			SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY,
@@ -2162,7 +2242,8 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 			goto done;
 		}
 	}
-	if (!SG_BspEntitySemanticsStringStorageRegister(result))
+	if (!SG_BspEntitySemanticsStorageRegister(result, entity_capacity,
+		edge_capacity))
 	{
 		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY,
 			UINT32_MAX, UINT32_MAX);
@@ -2186,7 +2267,7 @@ void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics)
 {
 	if (!semantics)
 		return;
-	SG_BspEntitySemanticsStringStorageForget(semantics);
+	SG_BspEntitySemanticsStorageForget(semantics);
 	free(semantics->entities);
 	free(semantics->edges);
 	free(semantics->strings);
