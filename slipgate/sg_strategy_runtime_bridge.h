@@ -9,9 +9,6 @@ typedef struct sg_strategy_runtime_execution_s
 	sg_strategy_goal_id_t goal_id;
 	sg_strategy_target_id_t target_id;
 	int role;
-	/* Legacy execution data only.  The resolver must bind authenticated
-	 * snapshot, field, and localization sources before the caller accepts it. */
-	const int *execution_field;
 } sg_strategy_runtime_execution_t;
 
 typedef struct sg_strategy_runtime_plan_request_s
@@ -25,11 +22,9 @@ typedef struct sg_strategy_runtime_plan_request_s
 		executions[SG_STRATEGY_CALLER_MAX_BINDINGS];
 } sg_strategy_runtime_plan_request_t;
 
-/* The runtime provider receives the immutable semantic target selected by the
- * caller and may only supply its authenticated dynamic binding.  Its output
- * must echo commitment, authority, goal, target, destination, role, and
- * execution field exactly; the bridge rejects a partial or same-kind-only
- * binding. */
+/* The planner supplies an immutable semantic target and role only.  In
+ * particular, it cannot nominate an execution field: that field belongs to
+ * the destination-field authority which owns the exact target binding. */
 typedef struct sg_strategy_runtime_target_request_s
 {
 	uint64_t commitment_id;
@@ -38,25 +33,43 @@ typedef struct sg_strategy_runtime_target_request_s
 	sg_strategy_target_id_t target_id;
 	sg_destination_ref_t destination;
 	int role;
-	const int *execution_field;
 } sg_strategy_runtime_target_request_t;
 
-/* The destination-field/localization integration owns this provider.  For
- * each target it must return the exact snapshot, destination field, localized
- * player state, and monotonic revisions.  It cannot alter the policy plan. */
-typedef int (*sg_strategy_runtime_target_provider_fn)(void *context,
+/* A locator is not an authority.  It can only nominate an opaque borrowed
+ * view issued by the destination-field owner; it cannot manufacture a
+ * binding, snapshot, field, or execution pointer.  The bridge immediately
+ * gives the view back to the registered authority for validation. */
+typedef struct sg_strategy_runtime_target_view_s
+{
+	const void *opaque;
+} sg_strategy_runtime_target_view_t;
+
+typedef int (*sg_strategy_runtime_target_locator_fn)(void *context,
 	const sg_strategy_runtime_target_request_t *request,
+	sg_strategy_runtime_target_view_t *view_out);
+
+/* This callback is implemented by the destination-field/localization owner.
+ * It must accept a view only when that exact view owns `request`'s complete
+ * semantic destination and then return the matching field, snapshot, and
+ * localization binding.  A same-kind FLAG/CURRENT versus FLAG/HOME swap must
+ * fail here even if a locator could otherwise echo every request field. */
+typedef int (*sg_strategy_runtime_target_authority_fn)(void *context,
+	const sg_strategy_runtime_target_request_t *request,
+	const sg_strategy_runtime_target_view_t *view,
 	sg_strategy_caller_target_binding_t *binding_out);
 
 void SG_StrategyRuntimeTargetProviderSet(
-	sg_strategy_runtime_target_provider_fn provider, void *context);
+	sg_strategy_runtime_target_locator_fn locator, void *locator_context,
+	sg_strategy_runtime_target_authority_fn authority, void *authority_context);
 
-/* Map teardown clears this registration before the provider's borrowed
- * snapshot, field, or localization lifetime ends. */
+/* Map teardown clears this locator/authority registration before either
+ * borrowed view, snapshot, field, or localization lifetime ends. */
 int SG_StrategyRuntimeTargetProviderAvailable(void);
 
-/* No provider means no typed strategy plan: the production caller never
- * derives destination handles from legacy seeds or route fields. */
+/* A typed plan is available only while both an untrusted locator and the
+ * destination-field authority are registered.  No registration means no
+ * typed strategy plan: the production caller never derives destination
+ * handles from legacy seeds or route fields. */
 int SG_StrategyRuntimePlanResolve(
 	const sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_caller_plan_t *plan_out);

@@ -616,6 +616,13 @@ static int sg_armor_collectible_count[SG_MAXBOTS];
 static int sg_armor_collectible_ent[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_armor_collectible_seed[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
 static int sg_armor_collectible_cost[SG_MAXBOTS][SG_WEAPON_FIELD_SOURCES];
+/* The aggregate armor field is useful for pricing but cannot authenticate one
+ * semantic item.  Strategy prerequisites therefore use this separate exact
+ * one-target field and retain the selected live edict alongside it. */
+static int sg_armor_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
+static unsigned sg_armor_target_epoch[SG_MAXBOTS];
+static int sg_armor_target_seed[SG_MAXBOTS];
+static int sg_armor_target_ent[SG_MAXBOTS];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -937,6 +944,89 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot)
 		sg_armor_collectible_ready[bi] = 1;
 	}
 	return sg_armor_collectible_field[bi];
+}
+
+static qboolean CollectibleArmorTargetCandidate(const sg_bot_t *bot,
+	int item_ent, int *seed_out, int *gain_out)
+{
+	edict_t *item;
+	int seed;
+	int gain;
+
+	if (!bot || !bot->ent || !SG_Rune() || !seed_out || !gain_out ||
+	    item_ent <= 0 || item_ent >= globals.num_edicts)
+		return false;
+	item = &g_edicts[item_ent];
+	if (!item->inuse || !item->classname ||
+	    strncmp(item->classname, "item_armor", 10) != 0 ||
+	    item->solid == SOLID_NOT || !Caco_ItemBelievedUp(item) ||
+	    !G_ArmorPickupEligible(item, bot->ent))
+		return false;
+	gain = G_ArmorPickupGain(item, bot->ent);
+	if (gain <= 0)
+		return false;
+	seed = Rune_NearestSeed(SG_Rune(), item->s.origin);
+	if (seed < 0)
+		return false;
+	*seed_out = seed;
+	*gain_out = gain;
+	return true;
+}
+
+static const int *CollectibleArmorTargetField(sg_bot_t *bot, int target_ent,
+	int target_seed)
+{
+	int bi;
+	int cost = 0;
+
+	if (!bot || !SG_Rune() || target_ent <= 0 ||
+	    target_seed < 0 || target_seed >= SG_Rune()->hdr.num_seeds)
+		return NULL;
+	bi = DefenseSupplyBotIndex(bot);
+	if (sg_armor_target_epoch[bi] != sg_fields.action_topology_epoch ||
+	    sg_armor_target_ent[bi] != target_ent ||
+	    sg_armor_target_seed[bi] != target_seed)
+	{
+		Field_Flood(SG_Rune(), sg_armor_target_field[bi], &target_seed,
+			&cost, 1);
+		sg_armor_target_epoch[bi] = sg_fields.action_topology_epoch;
+		sg_armor_target_ent[bi] = target_ent;
+		sg_armor_target_seed[bi] = target_seed;
+	}
+	return sg_armor_target_field[bi];
+}
+
+const int *SG_CollectibleArmorTargetField(sg_bot_t *bot, int *target_ent_out)
+{
+	int best_ent = -1;
+	int best_seed = -1;
+	int best_gain = 0;
+	int item_ent;
+
+	if (target_ent_out)
+		*target_ent_out = -1;
+	if (!bot || !bot->ent || !SG_Rune())
+		return NULL;
+	for (item_ent = 1; item_ent < globals.num_edicts; item_ent++)
+	{
+		int gain;
+		int seed;
+
+		if (!CollectibleArmorTargetCandidate(bot, item_ent, &seed, &gain))
+			continue;
+		if (best_ent < 0 || gain > best_gain ||
+		    (gain == best_gain && item_ent < best_ent))
+		{
+			best_ent = item_ent;
+			best_seed = seed;
+			best_gain = gain;
+		}
+	}
+	if (best_ent < 0)
+		return NULL;
+	if (target_ent_out)
+		*target_ent_out = best_ent;
+	return CollectibleArmorTargetField(bot, best_ent, best_seed);
 }
 
 static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,

@@ -20,16 +20,17 @@ typedef struct sg_strategy_caller_authority_s
 	uint32_t principal_id;
 } sg_strategy_caller_authority_t;
 
-/* `execution_field` is legacy execution data only.  It never supplies the
- * destination identity, reachability, pose, phase, or authority.  The runtime
- * provider owns all pointed-to data until the caller replaces/releases it.
- * `observation_revision` and `pose_revision` are provider-monotonic whenever
+/* `execution_field` is execution data supplied only by the registered
+ * destination-field authority.  It never supplies destination identity,
+ * reachability, pose, phase, or authority on its own.  The runtime authority
+ * owns all pointed-to data until the caller replaces/releases it.
+ * `observation_revision` and `pose_revision` are authority-monotonic whenever
  * their respective authenticated inputs change. */
 typedef struct sg_strategy_caller_target_binding_s
 {
-	/* These semantic fields are echoed by the authenticated provider.  The
-	 * caller rejects a binding unless they exactly match the immutable target
-	 * request; matching a destination kind alone is never sufficient. */
+	/* These semantic fields are emitted by the destination-field authority.
+	 * The caller rejects a binding unless they exactly match the immutable
+	 * target request; matching a destination kind alone is never sufficient. */
 	uint64_t commitment_id;
 	sg_strategy_caller_authority_t authority;
 	sg_strategy_goal_id_t goal_id;

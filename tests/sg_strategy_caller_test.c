@@ -229,6 +229,30 @@ static sg_strategy_caller_plan_t Plan(const caller_fixture_t *fixture,
 	return plan;
 }
 
+static void PlanPrimaryRecover(sg_strategy_caller_plan_t *plan)
+{
+	sg_strategy_goal_spec_t *primary;
+	sg_destination_ref_t current;
+	sg_destination_ref_t home;
+
+	if (!plan)
+		return;
+	primary = &plan->spec.goals[2];
+	memset(&current, 0, sizeof(current));
+	memset(&home, 0, sizeof(home));
+	current.kind = SG_DESTINATION_FLAG;
+	current.value.flag.team = 1U;
+	current.value.flag.location = SG_DESTINATION_FLAG_CURRENT;
+	home.kind = SG_DESTINATION_FLAG;
+	home.value.flag.team = 1U;
+	home.value.flag.location = SG_DESTINATION_FLAG_HOME;
+	primary->kind = SG_STRATEGY_GOAL_RECOVER_FLAG;
+	primary->choices[0].destination = current;
+	primary->choices[1].destination = home;
+	plan->bindings[2].destination = current;
+	plan->bindings[3].destination = home;
+}
+
 static sg_strategy_runtime_plan_request_t RuntimeRequest(
 	const sg_strategy_caller_plan_t *plan)
 {
@@ -244,26 +268,145 @@ static sg_strategy_runtime_plan_request_t RuntimeRequest(
 		request.executions[index] = (sg_strategy_runtime_execution_t){
 			.goal_id = plan->bindings[index].goal_id,
 			.target_id = plan->bindings[index].target_id,
-			.role = plan->bindings[index].role,
-			.execution_field = plan->bindings[index].execution_field
+			.role = plan->bindings[index].role
 		};
 	return request;
 }
 
-static int RuntimeProvider(void *context,
-	const sg_strategy_runtime_target_request_t *request,
-	sg_strategy_caller_target_binding_t *binding_out)
+typedef struct runtime_target_record_s
 {
-	const sg_strategy_caller_plan_t *plan = context;
+	/* These are the destination-field owner's immutable view facts.  The
+	 * locator below cannot change them by echoing a different binding. */
+	sg_destination_ref_t semantic_destination;
+	const int *semantic_execution_field;
+	sg_strategy_caller_target_binding_t binding;
+} runtime_target_record_t;
+
+typedef struct runtime_fixture_s
+{
+	runtime_target_record_t records[SG_STRATEGY_CALLER_MAX_BINDINGS];
+	uint16_t count;
+	int forced_view_index;
+} runtime_fixture_t;
+
+static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
+	const sg_destination_ref_t *right)
+{
+	if (!left || !right || left->kind != right->kind)
+		return 0;
+	switch (left->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		return left->value.flag.team == right->value.flag.team &&
+			left->value.flag.location == right->value.flag.location;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+		return left->value.item.item_id == right->value.item.item_id;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		return left->value.carrier.client_id ==
+				right->value.carrier.client_id &&
+			left->value.carrier.team == right->value.carrier.team &&
+			left->value.carrier.selector == right->value.carrier.selector;
+	case SG_DESTINATION_DEFENSIVE_POST:
+		return left->value.post.region_id == right->value.post.region_id;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		return left->value.point.point_id == right->value.point.point_id;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
+static int RuntimeAuthorityEqual(const sg_strategy_caller_authority_t *left,
+	const sg_strategy_caller_authority_t *right)
+{
+	return left && right && left->rank == right->rank &&
+		left->principal_kind == right->principal_kind &&
+		left->principal_id == right->principal_id;
+}
+
+static void InitRuntimeFixture(runtime_fixture_t *runtime,
+	const sg_strategy_caller_plan_t *plan)
+{
 	uint16_t index;
 
+	memset(runtime, 0, sizeof(*runtime));
+	runtime->forced_view_index = -1;
+	runtime->count = plan->binding_count;
 	for (index = 0U; index < plan->binding_count; index++)
-		if (plan->bindings[index].goal_id == request->goal_id &&
-		    plan->bindings[index].target_id == request->target_id)
+	{
+		runtime->records[index].semantic_destination =
+			plan->bindings[index].destination;
+		runtime->records[index].semantic_execution_field =
+			plan->bindings[index].execution_field;
+		runtime->records[index].binding = plan->bindings[index];
+	}
+}
+
+static int RuntimeProvider(void *context,
+	const sg_strategy_runtime_target_request_t *request,
+	sg_strategy_runtime_target_view_t *view_out)
+{
+	runtime_fixture_t *runtime = context;
+	uint16_t index;
+
+	if (!runtime || !request || !view_out)
+		return 0;
+	if (runtime->forced_view_index >= 0 &&
+	    runtime->forced_view_index < runtime->count)
+	{
+		view_out->opaque = &runtime->records[runtime->forced_view_index];
+		return 1;
+	}
+	for (index = 0U; index < runtime->count; index++)
+		if (runtime->records[index].binding.goal_id == request->goal_id &&
+		    runtime->records[index].binding.target_id == request->target_id)
 		{
-			*binding_out = plan->bindings[index];
+			view_out->opaque = &runtime->records[index];
 			return 1;
 		}
+	return 0;
+}
+
+static int RuntimeAuthority(void *context,
+	const sg_strategy_runtime_target_request_t *request,
+	const sg_strategy_runtime_target_view_t *view,
+	sg_strategy_caller_target_binding_t *binding_out)
+{
+	runtime_fixture_t *runtime = context;
+	uint16_t index;
+
+	if (!runtime || !request || !view || !view->opaque || !binding_out)
+		return 0;
+	for (index = 0U; index < runtime->count; index++)
+	{
+		const runtime_target_record_t *record = &runtime->records[index];
+
+		if (view->opaque != record)
+			continue;
+		/* The opaque record, not locator-controlled echo data, proves that the
+		 * actual field is tied to this full semantic target. */
+		if (record->binding.commitment_id != request->commitment_id ||
+		    !RuntimeAuthorityEqual(&record->binding.authority,
+				&request->authority) ||
+		    record->binding.goal_id != request->goal_id ||
+		    record->binding.target_id != request->target_id ||
+		    !RuntimeDestinationEqual(&record->semantic_destination,
+				&request->destination) ||
+		    !RuntimeDestinationEqual(&record->binding.destination,
+				&record->semantic_destination) ||
+		    record->binding.role != request->role ||
+		    record->binding.execution_field !=
+				record->semantic_execution_field)
+			return 0;
+		*binding_out = record->binding;
+		return 1;
+	}
 	return 0;
 }
 
@@ -401,6 +544,34 @@ static void TestCallerRejectsSameKindDestinationForgery(void)
 		SG_STRATEGY_BLOCK_NONE, &output));
 }
 
+static void TestSemanticGoalChangeReplacesAutonomousPlan(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_plan_t capture;
+	sg_strategy_caller_plan_t recover;
+	uint64_t capture_plan_id;
+
+	InitFixture(&fixture);
+	capture = Plan(&fixture, 23U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	/* Keep the commitment equal on purpose: a CAPTURE->RECOVER semantic
+	 * transition must not be hidden behind only a new hash value. */
+	recover = Plan(&fixture, 23U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	PlanPrimaryRecover(&recover);
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyCallerSubmit(&caller, &capture, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	capture_plan_id = output.plan_id;
+	CHECK(SG_StrategyCallerSubmit(&caller, &recover, 1U, 110U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(output.plan_id != capture_plan_id);
+	CHECK(caller.reducer.plan.goals[2].kind == SG_STRATEGY_GOAL_RECOVER_FLAG);
+	CHECK(caller.plan.bindings[2].destination.value.flag.team == 1U);
+}
+
 static void TestLowerAuthorityCannotReleaseHumanPlan(void)
 {
 	caller_fixture_t fixture;
@@ -451,35 +622,69 @@ static void TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider(void)
 	sg_strategy_caller_plan_t plan;
 	sg_strategy_caller_plan_t resolved;
 	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t runtime;
 
 	InitFixture(&fixture);
 	plan = Plan(&fixture, 40U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
 		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
 	request = RuntimeRequest(&plan);
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL);
+	InitRuntimeFixture(&runtime, &plan);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
 	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &plan);
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime);
 	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
 	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
 	CHECK(resolved.bindings[0].snapshot == &fixture.snapshot);
-	plan.bindings[2].destination.value.flag.location =
+	runtime.records[2].binding.destination.value.flag.location =
 		SG_DESTINATION_FLAG_HOME;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	plan.bindings[2].destination.value.flag.location =
+	runtime.records[2].binding.destination.value.flag.location =
 		SG_DESTINATION_FLAG_CURRENT;
-	plan.bindings[0].commitment_id++;
+	runtime.records[0].binding.commitment_id++;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	plan.bindings[0].commitment_id--;
-	plan.bindings[0].authority.principal_id++;
+	runtime.records[0].binding.commitment_id--;
+	runtime.records[0].binding.authority.principal_id++;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	plan.bindings[0].authority.principal_id--;
-	plan.bindings[0].role++;
+	runtime.records[0].binding.authority.principal_id--;
+	runtime.records[0].binding.role++;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	plan.bindings[0].role--;
-	request.executions[0].execution_field = fallback_field;
+	runtime.records[0].binding.role--;
+	runtime.records[0].binding.execution_field = fallback_field;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
+	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
+}
+
+static void TestRuntimeAuthorityRejectsSameKindFieldViewSwap(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t plan;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t runtime;
+
+	InitFixture(&fixture);
+	plan = Plan(&fixture, 41U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&plan);
+	InitRuntimeFixture(&runtime, &plan);
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime);
+	/* A malicious locator can nominate HOME's opaque field view and echo the
+	 * requested CURRENT metadata perfectly.  The destination authority still
+	 * rejects it because the accepted view owns HOME, not CURRENT. */
+	runtime.records[3].binding.commitment_id = request.commitment_id;
+	runtime.records[3].binding.authority = request.authority;
+	runtime.records[3].binding.goal_id = request.spec.goals[2].id;
+	runtime.records[3].binding.target_id = request.spec.goals[2].choices[0].id;
+	runtime.records[3].binding.destination = request.spec.goals[2].choices[0].destination;
+	runtime.records[3].binding.role = request.executions[2].role;
+	runtime.forced_view_index = 3;
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	runtime.forced_view_index = -1;
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
 	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
 }
 
@@ -489,8 +694,10 @@ int main(void)
 	TestQueuedPlanPersistsFailureAdvance();
 	TestSuspendedTerminalAdvanceAndAuthenticatedSources();
 	TestCallerRejectsSameKindDestinationForgery();
+	TestSemanticGoalChangeReplacesAutonomousPlan();
 	TestLowerAuthorityCannotReleaseHumanPlan();
 	TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider();
+	TestRuntimeAuthorityRejectsSameKindFieldViewSwap();
 	if (failures)
 	{
 		fprintf(stderr, "sg_strategy_caller_test: %d failure(s)\n", failures);

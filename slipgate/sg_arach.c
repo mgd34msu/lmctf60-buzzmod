@@ -2378,10 +2378,16 @@ static void StrategyPointDestination(sg_destination_ref_t *destination,
 }
 
 #define SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID UINT32_C(1)
-#define SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID UINT32_C(2)
-#define SG_STRATEGY_LEAD_PREPARATION_GOAL_ID UINT32_C(3)
-#define SG_STRATEGY_PRIMARY_GOAL_ID UINT32_C(4)
-#define SG_STRATEGY_FIRST_TARGET_ID UINT32_C(1)
+#define SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID UINT32_C(2)
+#define SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID UINT32_C(3)
+#define SG_STRATEGY_LEAD_PREPARATION_GOAL_ID UINT32_C(4)
+#define SG_STRATEGY_PRIMARY_GOAL_ID UINT32_C(5)
+#define SG_STRATEGY_WEAPON_PREPARATION_TARGET_ID UINT32_C(1)
+#define SG_STRATEGY_ARMOR_PREPARATION_TARGET_ID UINT32_C(2)
+#define SG_STRATEGY_SUPPLY_PREPARATION_TARGET_ID UINT32_C(3)
+#define SG_STRATEGY_LEAD_PREPARATION_TARGET_ID UINT32_C(4)
+#define SG_STRATEGY_PRIMARY_TARGET_ID UINT32_C(5)
+#define SG_STRATEGY_PRIMARY_ALTERNATE_TARGET_ID UINT32_C(6)
 
 static uint64_t StrategyCommitmentDestination(uint64_t hash,
 	const sg_destination_ref_t *destination)
@@ -2502,12 +2508,12 @@ static sg_strategy_goal_spec_t *StrategyRequestGoal(
 
 static int StrategyRequestChoice(sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_goal_spec_t *goal, sg_strategy_target_id_t target_id,
-	const sg_destination_ref_t *destination, int role, const int *field)
+	const sg_destination_ref_t *destination, int role)
 {
 	uint8_t choice_index;
 	sg_strategy_runtime_execution_t *execution;
 
-	if (!request || !goal || target_id == 0U || !destination || !field ||
+	if (!request || !goal || target_id == 0U || !destination ||
 	    !SG_DestinationRefValid(destination) ||
 	    goal->choice_count >= SG_STRATEGY_MAX_CHOICES ||
 	    request->execution_count >= SG_STRATEGY_CALLER_MAX_BINDINGS)
@@ -2521,7 +2527,6 @@ static int StrategyRequestChoice(sg_strategy_runtime_plan_request_t *request,
 	execution->goal_id = goal->id;
 	execution->target_id = target_id;
 	execution->role = role;
-	execution->execution_field = field;
 	request->execution_count++;
 	return 1;
 }
@@ -2530,21 +2535,18 @@ static int StrategyAppendPreparation(
 	sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_goal_id_t goal_id,
 	sg_strategy_goal_id_t *previous_goal_id,
-	sg_strategy_target_id_t *next_target_id,
-	const sg_destination_ref_t *destination, int role, const int *field)
+	sg_strategy_target_id_t target_id,
+	const sg_destination_ref_t *destination, int role)
 {
 	sg_strategy_goal_spec_t *goal;
 
-	if (!request || !previous_goal_id || !next_target_id ||
-	    *next_target_id == 0U || *next_target_id == UINT32_MAX ||
-	    !destination || !field)
+	if (!request || !previous_goal_id || target_id == 0U || !destination)
 		return 0;
 	goal = StrategyRequestGoal(request, goal_id,
 		SG_STRATEGY_GOAL_COLLECT_ITEM, INT16_C(100));
-	if (!goal || !StrategyRequestChoice(request, goal, *next_target_id,
-		destination, role, field))
+	if (!goal || !StrategyRequestChoice(request, goal, target_id,
+		destination, role))
 		return 0;
-	(*next_target_id)++;
 	goal->failure.try_alternatives = 0U;
 	if (*previous_goal_id != 0U)
 	{
@@ -2558,22 +2560,19 @@ static int StrategyAppendPreparation(
 
 static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 	sg_strike_duty_t strike_duty, sg_strategy_goal_kind_t *kind_out,
-	sg_destination_ref_t *primary_out, const int **primary_field_out,
-	sg_destination_ref_t *alternate_out, const int **alternate_field_out,
+	sg_destination_ref_t *primary_out, sg_destination_ref_t *alternate_out,
 	int *has_alternate_out)
 {
-	const int *field;
-	const int *alternate_field = NULL;
+	const int *route_field;
 	int team;
 	int enemy;
 
-	if (!bot || !tc || !kind_out || !primary_out || !primary_field_out ||
-	    !alternate_out || !alternate_field_out || !has_alternate_out ||
-	    !tc->goal_field)
+	if (!bot || !tc || !kind_out || !primary_out || !alternate_out ||
+	    !has_alternate_out)
 		return 0;
 	team = tc->team;
 	enemy = SG_EnemyTeam(team);
-	field = tc->goal_field;
+	route_field = tc->goal_field;
 	memset(primary_out, 0, sizeof(*primary_out));
 	memset(alternate_out, 0, sizeof(*alternate_out));
 	*has_alternate_out = 0;
@@ -2581,16 +2580,13 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 	{
 		*kind_out = SG_STRATEGY_GOAL_CARRY_FLAG;
 		StrategyFlagDestination(primary_out, team, SG_DESTINATION_FLAG_HOME);
-		field = StrikeHomeField(team);
 		StrategyFlagDestination(alternate_out, team,
 			SG_DESTINATION_FLAG_CURRENT);
-		alternate_field = StrikeOwnField(team);
 	}
 	else if (tc->rune_handoff_route)
 	{
 		*kind_out = SG_STRATEGY_GOAL_ESCORT_CARRIER;
 		StrategyCarrierDestination(primary_out, SG_DESTINATION_ESCORT, team, -1);
-		field = StrikeCarrierField(team);
 	}
 	else if (strike_duty == SG_STRIKE_DUTY_RECOVER ||
 	         tc->role == SG_ROLE_RECOVER)
@@ -2598,9 +2594,8 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 		*kind_out = SG_STRATEGY_GOAL_RECOVER_FLAG;
 		StrategyFlagDestination(primary_out, team,
 			SG_DESTINATION_FLAG_CURRENT);
-		field = StrikeOwnField(team);
 		StrategyFlagDestination(alternate_out, team, SG_DESTINATION_FLAG_HOME);
-		alternate_field = StrikeHomeField(team);
+		*has_alternate_out = 1;
 	}
 	else if (strike_duty == SG_STRIKE_DUTY_ESCORT ||
 	         tc->role == SG_ROLE_ESCORT)
@@ -2615,11 +2610,11 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 		{
 			StrategyCarrierDestination(alternate_out,
 				SG_DESTINATION_ESCORT, team, -1);
-			alternate_field = StrikeCarrierField(team);
+			*has_alternate_out = 1;
 		}
 	}
 	else if (tc->role == SG_ROLE_DEFEND &&
-	         field == sg_fields.to_icept[SG_TeamIdx(team)])
+	         route_field == sg_fields.to_icept[SG_TeamIdx(team)])
 	{
 		*kind_out = SG_STRATEGY_GOAL_INTERCEPT_CARRIER;
 		StrategyCarrierDestination(primary_out, SG_DESTINATION_INTERCEPT,
@@ -2632,25 +2627,18 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 			(uint64_t)(unsigned)team);
 		StrategyPointDestination(alternate_out, SG_DESTINATION_DEFENSIVE_POST,
 			(uint64_t)(unsigned)team + UINT64_C(2));
-		alternate_field = sg_fields.to_post[SG_TeamIdx(team)];
+		*has_alternate_out = 1;
 	}
 	else
 	{
 		*kind_out = SG_STRATEGY_GOAL_CAPTURE_FLAG;
 		StrategyFlagDestination(primary_out, enemy,
 			SG_DESTINATION_FLAG_CURRENT);
-		field = StrikeEnemyField(team);
 		StrategyFlagDestination(alternate_out, enemy, SG_DESTINATION_FLAG_HOME);
-		alternate_field = team == CTF_TEAM_RED ? sg_fields.to_blue_flag
-		                                      : sg_fields.to_red_flag;
-	}
-	if (!field)
-		field = tc->goal_field;
-	if (alternate_field && SG_DestinationRefValid(alternate_out))
 		*has_alternate_out = 1;
-	*primary_field_out = field;
-	*alternate_field_out = alternate_field;
-	return SG_DestinationRefValid(primary_out) && field != NULL;
+	}
+	return SG_DestinationRefValid(primary_out) &&
+		(!*has_alternate_out || SG_DestinationRefValid(alternate_out));
 }
 
 static int StrategyPolicyAuthority(const sg_bot_t *bot, const sg_think_t *tc,
@@ -2688,16 +2676,12 @@ static int StrategyPlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	sg_destination_ref_t preparation_destination;
 	sg_destination_ref_t primary_destination;
 	sg_destination_ref_t alternate_destination;
-	const int *preparation_field;
-	const int *primary_field;
-	const int *alternate_field;
 	sg_strategy_goal_kind_t primary_kind;
 	sg_strategy_goal_id_t previous_goal_id = 0U;
-	uint32_t target_id = SG_STRATEGY_FIRST_TARGET_ID;
 	int target_ent;
 	int has_alternate;
 
-	if (!bot || !tc || !request || !tc->goal_field)
+	if (!bot || !tc || !request)
 		return 0;
 	memset(request, 0, sizeof(*request));
 	if (!StrategyPolicyAuthority(bot, tc, &request->authority))
@@ -2708,71 +2692,87 @@ static int StrategyPlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	if (tc->strike_weapon_pursuit && bot->strike_weapon_target_ent >= 0)
 	{
 		target_ent = bot->strike_weapon_target_ent;
-		preparation_field = SG_StrikeWeaponTargetField(bot, NULL);
 		memset(&preparation_destination, 0, sizeof(preparation_destination));
 		preparation_destination.kind = SG_DESTINATION_WEAPON;
 		preparation_destination.value.item.item_id =
 			(uint64_t)(unsigned)target_ent + 1U;
-		if (!preparation_field || !StrategyAppendPreparation(request,
+		if (!SG_StrikeWeaponTargetField(bot, NULL) ||
+		    !StrategyAppendPreparation(request,
 			SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID, &previous_goal_id,
-			&target_id, &preparation_destination, (int)tc->role,
-			preparation_field))
+			SG_STRATEGY_WEAPON_PREPARATION_TARGET_ID,
+			&preparation_destination, (int)tc->role))
 			return 0;
+	}
+	if (tc->collectible_item_field[SG_FC_ARMOR])
+	{
+		const int *armor_field;
+
+		armor_field = SG_CollectibleArmorTargetField(bot, &target_ent);
+		if (armor_field && target_ent > 0 && bot->seed >= 0 &&
+		    bot->seed < SG_Rune()->hdr.num_seeds &&
+		    armor_field[bot->seed] < SG_FIELD_INF)
+		{
+			memset(&preparation_destination, 0,
+				sizeof(preparation_destination));
+			preparation_destination.kind = SG_DESTINATION_ARMOR;
+			preparation_destination.value.item.item_id =
+				(uint64_t)(unsigned)target_ent + 1U;
+			if (!StrategyAppendPreparation(request,
+				SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID, &previous_goal_id,
+				SG_STRATEGY_ARMOR_PREPARATION_TARGET_ID,
+				&preparation_destination, (int)tc->role))
+				return 0;
+		}
 	}
 	if (SG_DefenseSupplyActive(bot) &&
 	    bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND &&
 	    bot->def_supply_ent >= 0)
 	{
 		target_ent = bot->def_supply_ent;
-		preparation_field = SG_DefenseSupplyTargetField(bot);
 		memset(&preparation_destination, 0, sizeof(preparation_destination));
 		preparation_destination.kind = SG_DESTINATION_WEAPON;
 		preparation_destination.value.item.item_id =
 			(uint64_t)(unsigned)target_ent + 1U;
-		if (!preparation_field || !StrategyAppendPreparation(request,
+		if (!SG_DefenseSupplyTargetField(bot) ||
+		    !StrategyAppendPreparation(request,
 			SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID, &previous_goal_id,
-			&target_id, &preparation_destination, (int)tc->role,
-			preparation_field))
+			SG_STRATEGY_SUPPLY_PREPARATION_TARGET_ID,
+			&preparation_destination, (int)tc->role))
 			return 0;
 	}
 	if (bot->lead_ent > 0)
 	{
 		target_ent = bot->lead_ent;
-		preparation_field = Lead_Field(bot, tc->role, tc->carrying,
-			SG_ChatOrderedRole(tc->e));
 		memset(&preparation_destination, 0, sizeof(preparation_destination));
 		preparation_destination.kind = SG_DESTINATION_POWERUP;
 		preparation_destination.value.item.item_id =
 			(uint64_t)(unsigned)target_ent + 1U;
-		if (!preparation_field || !StrategyAppendPreparation(request,
+		if (!Lead_Field(bot, tc->role, tc->carrying,
+			SG_ChatOrderedRole(tc->e)) || !StrategyAppendPreparation(request,
 			SG_STRATEGY_LEAD_PREPARATION_GOAL_ID, &previous_goal_id,
-			&target_id, &preparation_destination, (int)tc->role,
-			preparation_field))
+			SG_STRATEGY_LEAD_PREPARATION_TARGET_ID,
+			&preparation_destination, (int)tc->role))
 			return 0;
 	}
 	if (!StrategyPrimaryDestination(bot, tc, strike_duty, &primary_kind,
-		&primary_destination, &primary_field, &alternate_destination,
-		&alternate_field, &has_alternate))
+		&primary_destination, &alternate_destination, &has_alternate))
 		return 0;
 	primary = StrategyRequestGoal(request, SG_STRATEGY_PRIMARY_GOAL_ID,
 		primary_kind, INT16_C(50));
-	if (!primary || target_id == UINT32_MAX ||
-	    !StrategyRequestChoice(request, primary, target_id,
-		&primary_destination, (int)tc->role, primary_field))
+	if (!primary || !StrategyRequestChoice(request, primary,
+		SG_STRATEGY_PRIMARY_TARGET_ID,
+		&primary_destination, (int)tc->role))
 		return 0;
-	target_id++;
 	if (previous_goal_id != 0U)
 	{
 		primary->dependency_count = 1U;
 		primary->dependencies[0].goal_id = previous_goal_id;
 		primary->dependencies[0].accept = SG_STRATEGY_DEPENDENCY_SETTLED;
 	}
-	if (has_alternate && (target_id == UINT32_MAX ||
-		!StrategyRequestChoice(request, primary, target_id,
-		&alternate_destination, (int)tc->role, alternate_field)))
+	if (has_alternate && !StrategyRequestChoice(request, primary,
+		SG_STRATEGY_PRIMARY_ALTERNATE_TARGET_ID,
+		&alternate_destination, (int)tc->role))
 		return 0;
-	if (has_alternate)
-		target_id++;
 	request->commitment_id = StrategyRequestCommitment(request);
 	return true;
 }
@@ -2786,14 +2786,13 @@ static int StrategyAuthorityEqual(
 		left->principal_id == right->principal_id;
 }
 
-/* Refresh an admitted plan's authenticated dynamic bindings without
- * reconstructing its semantic queue.  In particular, a settled prerequisite
- * remains part of the commitment while the next goal activates. */
+/* Refresh an admitted plan without importing legacy execution data.  The
+ * destination-field authority re-resolves every retained semantic target and
+ * owns the resulting field pointer; settled prerequisites therefore remain
+ * committed while the next goal activates. */
 static int StrategyActivePlanRequest(const sg_strategy_caller_t *caller,
-	const sg_think_t *tc, sg_strategy_runtime_plan_request_t *request)
+	sg_strategy_runtime_plan_request_t *request)
 {
-	sg_strategy_goal_id_t active_goal_id = 0U;
-	sg_strategy_target_id_t active_target_id = 0U;
 	uint16_t index;
 
 	if (!caller || !request || !caller->has_plan || !caller->reducer.has_plan ||
@@ -2805,27 +2804,6 @@ static int StrategyActivePlanRequest(const sg_strategy_caller_t *caller,
 	request->authority = caller->plan.authority;
 	request->spec = caller->plan.spec;
 	request->execution_count = caller->plan.binding_count;
-	if (caller->reducer.activation.activation_id != 0U)
-	{
-		for (index = 0U; index < caller->reducer.plan.goal_count; index++)
-		{
-			const sg_strategy_goal_t *goal =
-				&caller->reducer.plan.goals[index];
-			uint8_t choice_index;
-
-			if (goal->id != caller->reducer.activation.goal_id)
-				continue;
-			choice_index = caller->reducer.goals[index].selected_choice;
-			if (choice_index == SG_STRATEGY_NO_CHOICE ||
-			    choice_index >= goal->choice_count)
-				return 0;
-			active_goal_id = goal->id;
-			active_target_id = goal->choices[choice_index].id;
-			break;
-		}
-		if (active_goal_id == 0U)
-			return 0;
-	}
 	for (index = 0U; index < caller->plan.binding_count; index++)
 	{
 		const sg_strategy_caller_target_binding_t *binding =
@@ -2834,44 +2812,7 @@ static int StrategyActivePlanRequest(const sg_strategy_caller_t *caller,
 		request->executions[index].goal_id = binding->goal_id;
 		request->executions[index].target_id = binding->target_id;
 		request->executions[index].role = binding->role;
-		request->executions[index].execution_field = binding->execution_field;
-		/* Legacy routing can refresh only the current execution pointer.  The
-		 * immutable semantic plan, its authority, and every queued target stay
-		 * unchanged, so a just-settled prerequisite cannot be replaced away. */
-		if (tc && tc->goal_field && binding->goal_id == active_goal_id &&
-		    binding->target_id == active_target_id)
-			request->executions[index].execution_field = tc->goal_field;
 	}
-	return 1;
-}
-
-static int StrategyPlanPrimaryRole(const sg_strategy_caller_plan_t *plan,
-	int *role_out)
-{
-	int found = 0;
-	int role = 0;
-	uint16_t index;
-
-	if (!plan || !role_out)
-		return 0;
-	for (index = 0U; index < plan->binding_count; index++)
-	{
-		const sg_strategy_caller_target_binding_t *binding =
-			&plan->bindings[index];
-
-		if (binding->goal_id != SG_STRATEGY_PRIMARY_GOAL_ID)
-			continue;
-		if (!found)
-		{
-			role = binding->role;
-			found = 1;
-		}
-		else if (role != binding->role)
-			return 0;
-	}
-	if (!found)
-		return 0;
-	*role_out = role;
 	return 1;
 }
 
@@ -2898,14 +2839,335 @@ static int StrategyPlanTerminal(const sg_strategy_caller_t *caller)
 	}
 }
 
-/* Autonomous role churn is execution policy, not permission to discard a
- * queued commitment.  A fresh semantic request is reserved for a terminal
- * plan, a changed authority, or an explicit new human role order. */
-static int StrategyPlanReusable(const sg_bot_t *bot, const sg_think_t *tc)
+static int StrategyDestinationEqual(const sg_destination_ref_t *left,
+	const sg_destination_ref_t *right)
+{
+	if (!left || !right || left->kind != right->kind)
+		return 0;
+	switch (left->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		return left->value.flag.team == right->value.flag.team &&
+			left->value.flag.location == right->value.flag.location;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+		return left->value.item.item_id == right->value.item.item_id;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		return left->value.carrier.client_id ==
+				right->value.carrier.client_id &&
+			left->value.carrier.team == right->value.carrier.team &&
+			left->value.carrier.selector == right->value.carrier.selector;
+	case SG_DESTINATION_DEFENSIVE_POST:
+		return left->value.post.region_id == right->value.post.region_id;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		return left->value.point.point_id == right->value.point.point_id;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
+static int StrategyFactKeyEqual(const sg_strategy_fact_key_t *left,
+	const sg_strategy_fact_key_t *right)
+{
+	return left && right && left->kind == right->kind &&
+		left->subject_id == right->subject_id && left->team == right->team;
+}
+
+static int StrategyConditionEqual(const sg_strategy_condition_t *left,
+	const sg_strategy_condition_t *right)
+{
+	if (!left || !right || left->kind != right->kind ||
+	    left->scope != right->scope)
+		return 0;
+	switch (left->kind)
+	{
+	case SG_STRATEGY_CONDITION_FACT_EQUALS:
+		return StrategyFactKeyEqual(&left->value.fact.key,
+			&right->value.fact.key) &&
+			left->value.fact.expected_value == right->value.fact.expected_value;
+	case SG_STRATEGY_CONDITION_TIME_WINDOW:
+		return left->value.time.not_before_ms ==
+				right->value.time.not_before_ms &&
+			left->value.time.not_after_ms == right->value.time.not_after_ms;
+	case SG_STRATEGY_CONDITION_KIND_COUNT:
+	default:
+		return 0;
+	}
+}
+
+static int StrategyRetryWakeEqual(const sg_strategy_retry_wake_t *left,
+	const sg_strategy_retry_wake_t *right)
+{
+	if (!left || !right || left->kind != right->kind)
+		return 0;
+	switch (left->kind)
+	{
+	case SG_STRATEGY_RETRY_FACT_REVISION:
+		return StrategyFactKeyEqual(&left->fact, &right->fact);
+	case SG_STRATEGY_RETRY_NOT_BEFORE:
+		return left->delay_ms == right->delay_ms;
+	case SG_STRATEGY_RETRY_NONE:
+	case SG_STRATEGY_RETRY_NEXT_FRAME:
+	case SG_STRATEGY_RETRY_TARGET_REVISION:
+		return 1;
+	case SG_STRATEGY_RETRY_WAKE_COUNT:
+	default:
+		return 0;
+	}
+}
+
+static int StrategyFailureEqual(const sg_strategy_failure_rule_t *left,
+	const sg_strategy_failure_rule_t *right)
+{
+	return left && right &&
+		left->try_alternatives == right->try_alternatives &&
+		left->max_attempts_per_choice == right->max_attempts_per_choice &&
+		left->exhausted == right->exhausted &&
+		StrategyRetryWakeEqual(&left->retry_wake, &right->retry_wake);
+}
+
+static int StrategyGoalSemanticsEqual(const sg_strategy_goal_spec_t *left,
+	const sg_strategy_goal_spec_t *right)
+{
+	uint8_t index;
+
+	if (!left || !right || left->id != right->id ||
+	    left->kind != right->kind || left->priority != right->priority ||
+	    left->unavailable != right->unavailable ||
+	    left->condition_count != right->condition_count ||
+	    left->choice_count != right->choice_count ||
+	    !StrategyFailureEqual(&left->failure, &right->failure))
+		return 0;
+	for (index = 0U; index < left->condition_count; index++)
+		if (!StrategyConditionEqual(&left->conditions[index],
+			&right->conditions[index]))
+			return 0;
+	for (index = 0U; index < left->choice_count; index++)
+		if (left->choices[index].id != right->choices[index].id ||
+		    !StrategyDestinationEqual(&left->choices[index].destination,
+				&right->choices[index].destination))
+			return 0;
+	return 1;
+}
+
+static const sg_strategy_goal_spec_t *StrategyGoalSpecFor(
+	const sg_strategy_plan_spec_t *spec, sg_strategy_goal_id_t goal_id)
+{
+	uint16_t index;
+
+	if (!spec)
+		return NULL;
+	for (index = 0U; index < spec->goal_count; index++)
+		if (spec->goals[index].id == goal_id)
+			return &spec->goals[index];
+	return NULL;
+}
+
+static int StrategyGoalTerminalById(const sg_strategy_caller_t *caller,
+	sg_strategy_goal_id_t goal_id, int *terminal_out)
+{
+	uint16_t index;
+
+	if (!caller || !terminal_out)
+		return 0;
+	for (index = 0U; index < caller->reducer.plan.goal_count; index++)
+	{
+		sg_strategy_goal_phase_t phase;
+
+		if (caller->reducer.plan.goals[index].id != goal_id)
+			continue;
+		phase = caller->reducer.goals[index].phase;
+		*terminal_out = phase == SG_STRATEGY_GOAL_SUCCEEDED ||
+			phase == SG_STRATEGY_GOAL_SKIPPED ||
+			phase == SG_STRATEGY_GOAL_FAILED ||
+			phase == SG_STRATEGY_GOAL_CANCELLED;
+		return 1;
+	}
+	return 0;
+}
+
+static const sg_strategy_runtime_execution_t *StrategyExecutionFor(
+	const sg_strategy_runtime_plan_request_t *request,
+	sg_strategy_goal_id_t goal_id, sg_strategy_target_id_t target_id)
+{
+	const sg_strategy_runtime_execution_t *found = NULL;
+	uint16_t index;
+
+	if (!request)
+		return NULL;
+	for (index = 0U; index < request->execution_count; index++)
+	{
+		const sg_strategy_runtime_execution_t *execution =
+			&request->executions[index];
+
+		if (execution->goal_id != goal_id ||
+		    execution->target_id != target_id)
+			continue;
+		if (found)
+			return NULL;
+		found = execution;
+	}
+	return found;
+}
+
+static const sg_strategy_caller_target_binding_t *StrategyBindingFor(
+	const sg_strategy_caller_plan_t *plan, sg_strategy_goal_id_t goal_id,
+	sg_strategy_target_id_t target_id)
+{
+	const sg_strategy_caller_target_binding_t *found = NULL;
+	uint16_t index;
+
+	if (!plan)
+		return NULL;
+	for (index = 0U; index < plan->binding_count; index++)
+	{
+		const sg_strategy_caller_target_binding_t *binding =
+			&plan->bindings[index];
+
+		if (binding->goal_id != goal_id || binding->target_id != target_id)
+			continue;
+		if (found)
+			return NULL;
+		found = binding;
+	}
+	return found;
+}
+
+static int StrategyGoalRolesEqual(
+	const sg_strategy_runtime_plan_request_t *candidate,
+	const sg_strategy_caller_plan_t *admitted,
+	const sg_strategy_goal_spec_t *goal)
+{
+	uint8_t index;
+
+	if (!candidate || !admitted || !goal)
+		return 0;
+	for (index = 0U; index < goal->choice_count; index++)
+	{
+		const sg_strategy_runtime_execution_t *execution =
+			StrategyExecutionFor(candidate, goal->id, goal->choices[index].id);
+		const sg_strategy_caller_target_binding_t *binding =
+			StrategyBindingFor(admitted, goal->id, goal->choices[index].id);
+
+		if (!execution || !binding || execution->role != binding->role)
+			return 0;
+	}
+	return 1;
+}
+
+/* A fresh current request omits prerequisites that the reducer has already
+ * settled.  Ignore only those terminal dependency edges; every current goal,
+ * role, destination, failure rule, condition, and authority must still match
+ * before an autonomous plan may be retained. */
+static int StrategyGoalDependenciesMatchLivePlan(
+	const sg_strategy_goal_spec_t *candidate,
+	const sg_strategy_goal_spec_t *admitted,
+	const sg_strategy_caller_t *caller)
+{
+	uint8_t candidate_index;
+	uint8_t admitted_index = 0U;
+
+	if (!candidate || !admitted || !caller)
+		return 0;
+	for (candidate_index = 0U;
+	     candidate_index < candidate->dependency_count; candidate_index++)
+	{
+		const sg_strategy_dependency_spec_t *candidate_dependency =
+			&candidate->dependencies[candidate_index];
+		int terminal;
+
+		if (!StrategyGoalTerminalById(caller,
+			candidate_dependency->goal_id, &terminal) || terminal)
+			return 0;
+		while (admitted_index < admitted->dependency_count)
+		{
+			const sg_strategy_dependency_spec_t *admitted_dependency =
+				&admitted->dependencies[admitted_index];
+
+			if (!StrategyGoalTerminalById(caller,
+				admitted_dependency->goal_id, &terminal))
+				return 0;
+			if (!terminal)
+				break;
+			admitted_index++;
+		}
+		if (admitted_index >= admitted->dependency_count ||
+		    admitted->dependencies[admitted_index].goal_id !=
+				candidate_dependency->goal_id ||
+		    admitted->dependencies[admitted_index].accept !=
+				candidate_dependency->accept)
+			return 0;
+		admitted_index++;
+	}
+	while (admitted_index < admitted->dependency_count)
+	{
+		int terminal;
+
+		if (!StrategyGoalTerminalById(caller,
+			admitted->dependencies[admitted_index].goal_id, &terminal) ||
+		    !terminal)
+			return 0;
+		admitted_index++;
+	}
+	return 1;
+}
+
+static int StrategyRequestMatchesLivePlan(
+	const sg_strategy_runtime_plan_request_t *candidate,
+	const sg_strategy_caller_t *caller)
+{
+	uint16_t index;
+
+	if (!candidate || !caller || !caller->has_plan ||
+	    !StrategyAuthorityEqual(&candidate->authority,
+		&caller->plan.authority))
+		return 0;
+	for (index = 0U; index < candidate->spec.goal_count; index++)
+	{
+		const sg_strategy_goal_spec_t *candidate_goal =
+			&candidate->spec.goals[index];
+		const sg_strategy_goal_spec_t *admitted_goal = StrategyGoalSpecFor(
+			&caller->plan.spec, candidate_goal->id);
+		int terminal;
+
+		if (!admitted_goal || !StrategyGoalTerminalById(caller,
+			candidate_goal->id, &terminal) || terminal ||
+		    !StrategyGoalSemanticsEqual(candidate_goal, admitted_goal) ||
+		    !StrategyGoalDependenciesMatchLivePlan(candidate_goal,
+				admitted_goal, caller) ||
+		    !StrategyGoalRolesEqual(candidate, &caller->plan, candidate_goal))
+			return 0;
+	}
+	for (index = 0U; index < caller->plan.spec.goal_count; index++)
+	{
+		const sg_strategy_goal_spec_t *admitted_goal =
+			&caller->plan.spec.goals[index];
+		int terminal;
+
+		if (!StrategyGoalTerminalById(caller, admitted_goal->id, &terminal))
+			return 0;
+		if (!terminal && !StrategyGoalSpecFor(&candidate->spec,
+			admitted_goal->id))
+			return 0;
+	}
+	return 1;
+}
+
+/* Autonomous plans are reusable only while the complete current semantic
+ * request still describes the admitted live queue.  CAPTURE->RECOVER, a role
+ * change, authority change, or any target/spec change deliberately returns a
+ * new request so the caller replaces the plan instead of retargeting it. */
+static int StrategyPlanReusable(sg_bot_t *bot, sg_think_t *tc,
+	sg_strike_duty_t strike_duty)
 {
 	sg_strategy_caller_authority_t policy_authority;
-	int ordered_role;
-	int primary_role;
+	sg_strategy_runtime_plan_request_t candidate;
 
 	if (!bot || !tc || !bot->strategy.has_plan ||
 	    !bot->strategy.reducer.has_plan || StrategyPlanTerminal(&bot->strategy) ||
@@ -2913,19 +3175,15 @@ static int StrategyPlanReusable(const sg_bot_t *bot, const sg_think_t *tc)
 	    !StrategyAuthorityEqual(&bot->strategy.plan.authority,
 		&policy_authority))
 		return 0;
-	if (policy_authority.rank != SG_STRATEGY_AUTHORITY_HUMAN)
-		return 1;
-	ordered_role = SG_ChatOrderedRole(tc->e);
-	return ordered_role >= 0 &&
-		StrategyPlanPrimaryRole(&bot->strategy.plan, &primary_role) &&
-		primary_role == ordered_role;
+	return StrategyPlanRequest(bot, tc, strike_duty, &candidate) &&
+		StrategyRequestMatchesLivePlan(&candidate, &bot->strategy);
 }
 
 static int StrategyFramePlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	sg_strike_duty_t strike_duty, sg_strategy_runtime_plan_request_t *request)
 {
-	if (StrategyPlanReusable(bot, tc))
-		return StrategyActivePlanRequest(&bot->strategy, tc, request);
+	if (StrategyPlanReusable(bot, tc, strike_duty))
+		return StrategyActivePlanRequest(&bot->strategy, request);
 	return StrategyPlanRequest(bot, tc, strike_duty, request);
 }
 
@@ -2983,6 +3241,16 @@ static int StrategyPreparationStillLive(const sg_bot_t *bot,
 			instruction->destination.kind == SG_DESTINATION_WEAPON &&
 			instruction->destination.value.item.item_id ==
 				(uint64_t)(unsigned)bot->strike_weapon_target_ent + 1U;
+	case SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID:
+	{
+		int target_ent = -1;
+
+		return SG_CollectibleArmorTargetField((sg_bot_t *)bot, &target_ent) &&
+			target_ent > 0 &&
+			instruction->destination.kind == SG_DESTINATION_ARMOR &&
+			instruction->destination.value.item.item_id ==
+				(uint64_t)(unsigned)target_ent + 1U;
+	}
 	case SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID:
 		return SG_DefenseSupplyActive(bot) &&
 			bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND &&
@@ -4619,7 +4887,7 @@ void SG_LevelChange(void)
 	 * and localization storage.  Clear it before any level owner tears those
 	 * sources down; bot movement then uses the explicit non-authoritative
 	 * legacy fallback until the next accepted provider registers. */
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
 	/* Map teardown is a terminal owner in its own right. Finish before the
 	 * roster removal so the original map snapshot remains attached; slot reset
 	 * then sees a closed state and is intentionally idempotent. */

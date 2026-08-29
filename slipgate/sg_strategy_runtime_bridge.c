@@ -2,8 +2,10 @@
 
 #include <string.h>
 
-static sg_strategy_runtime_target_provider_fn sg_strategy_runtime_provider;
-static void *sg_strategy_runtime_provider_context;
+static sg_strategy_runtime_target_locator_fn sg_strategy_runtime_locator;
+static void *sg_strategy_runtime_locator_context;
+static sg_strategy_runtime_target_authority_fn sg_strategy_runtime_authority;
+static void *sg_strategy_runtime_authority_context;
 
 static int RuntimeAuthorityValid(
 	const sg_strategy_caller_authority_t *authority)
@@ -87,7 +89,7 @@ static int RuntimeExecutionFor(const sg_strategy_runtime_plan_request_t *request
 			return 0;
 		found = execution;
 	}
-	if (!found || !found->execution_field)
+	if (!found)
 		return 0;
 	*execution_out = found;
 	return 1;
@@ -143,15 +145,19 @@ static int RuntimeRequestCompile(const sg_strategy_runtime_plan_request_t *reque
 }
 
 void SG_StrategyRuntimeTargetProviderSet(
-	sg_strategy_runtime_target_provider_fn provider, void *context)
+	sg_strategy_runtime_target_locator_fn locator, void *locator_context,
+	sg_strategy_runtime_target_authority_fn authority, void *authority_context)
 {
-	sg_strategy_runtime_provider = provider;
-	sg_strategy_runtime_provider_context = context;
+	sg_strategy_runtime_locator = locator;
+	sg_strategy_runtime_locator_context = locator_context;
+	sg_strategy_runtime_authority = authority;
+	sg_strategy_runtime_authority_context = authority_context;
 }
 
 int SG_StrategyRuntimeTargetProviderAvailable(void)
 {
-	return sg_strategy_runtime_provider != NULL;
+	return sg_strategy_runtime_locator != NULL &&
+		sg_strategy_runtime_authority != NULL;
 }
 
 int SG_StrategyRuntimePlanResolve(
@@ -163,7 +169,7 @@ int SG_StrategyRuntimePlanResolve(
 	uint16_t goal_index;
 	uint16_t binding_index = 0U;
 
-	if (!request || !plan_out || !sg_strategy_runtime_provider ||
+	if (!request || !plan_out || !SG_StrategyRuntimeTargetProviderAvailable() ||
 	    !RuntimeRequestCompile(request, &compiled))
 		return 0;
 	memset(&candidate, 0, sizeof(candidate));
@@ -181,6 +187,7 @@ int SG_StrategyRuntimePlanResolve(
 		{
 			const sg_strategy_runtime_execution_t *execution;
 			sg_strategy_runtime_target_request_t target;
+			sg_strategy_runtime_target_view_t view;
 			sg_strategy_caller_target_binding_t binding;
 
 			if (binding_index >= candidate.binding_count ||
@@ -194,18 +201,21 @@ int SG_StrategyRuntimePlanResolve(
 			target.target_id = goal->choices[choice_index].id;
 			target.destination = goal->choices[choice_index].destination;
 			target.role = execution->role;
-			target.execution_field = execution->execution_field;
+			memset(&view, 0, sizeof(view));
 			memset(&binding, 0, sizeof(binding));
-			if (!sg_strategy_runtime_provider(
-				sg_strategy_runtime_provider_context, &target, &binding) ||
+			if (!sg_strategy_runtime_locator(
+				sg_strategy_runtime_locator_context, &target, &view) ||
+			    !view.opaque ||
+			    !sg_strategy_runtime_authority(
+				sg_strategy_runtime_authority_context, &target, &view,
+				&binding) ||
 			    binding.commitment_id != target.commitment_id ||
 			    !RuntimeAuthorityEqual(&binding.authority, &target.authority) ||
 			    binding.goal_id != target.goal_id ||
 			    binding.target_id != target.target_id ||
 			    !RuntimeDestinationEqual(&binding.destination,
 				&target.destination) ||
-			    binding.role != target.role ||
-			    binding.execution_field != target.execution_field)
+			    binding.role != target.role || !binding.execution_field)
 				return 0;
 			candidate.bindings[binding_index] = binding;
 			binding_index++;

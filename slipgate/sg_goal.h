@@ -50,6 +50,11 @@ const int *SG_CollectibleWeaponField(sg_bot_t *bot);
 const int *SG_CollectibleHealthField(sg_bot_t *bot);
 const int *SG_CollectibleAmmoField(sg_bot_t *bot);
 const int *SG_CollectibleArmorField(sg_bot_t *bot);
+/* Exact, physically collectible armor target for a typed prerequisite.  The
+ * returned field is execution data only; `target_ent_out` identifies the one
+ * live item whose semantic destination must be resolved by runtime authority. */
+const int *SG_CollectibleArmorTargetField(sg_bot_t *bot,
+	int *target_ent_out);
 
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);

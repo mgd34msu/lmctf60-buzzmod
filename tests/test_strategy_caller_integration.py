@@ -66,6 +66,7 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         ):
             self.assertIn(goal, source)
         self.assertIn("SG_DESTINATION_WEAPON", source)
+        self.assertIn("SG_DESTINATION_ARMOR", source)
         self.assertIn("SG_DESTINATION_POWERUP", source)
         self.assertIn("SG_ChatOrderPrincipal(tc->e)", source)
         self.assertIn("SG_STRATEGY_AUTHORITY_HUMAN", source)
@@ -75,11 +76,13 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         self.assertIn("SG_StrategyCallerAdvance", source)
         self.assertIn("SG_StrategyCallerSettle", source)
         self.assertIn("SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID", source)
+        self.assertIn("SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID", source)
         self.assertIn("SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID", source)
         self.assertIn("SG_STRATEGY_LEAD_PREPARATION_GOAL_ID", source)
         self.assertIn("StrategyAppendPreparation", source)
         self.assertIn("StrategyActivePlanRequest", source)
         self.assertIn("StrategyFramePlanRequest", source)
+        self.assertIn("StrategyRequestMatchesLivePlan", source)
         self.assertNotIn("SG_FieldRootSeed", source)
         self.assertNotIn("SG_Rune()->seeds[root]", source)
         self.assertIn("return chat_bot[cl].order_from;", chat)
@@ -97,20 +100,35 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
             commit.index("SG_StrategyRuntimeTargetProviderAvailable"),
             commit.index("StrategyFramePlanRequest"),
         )
-        self.assertIn("SG_StrategyRuntimeTargetProviderSet(NULL, NULL)", source)
+        self.assertIn(
+            "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL)",
+            source,
+        )
 
-    def test_provider_binds_full_semantic_target_and_order_lifecycle(self):
+    def test_provider_requires_destination_field_authority_and_order_lifecycle(self):
         bridge = self.text("slipgate/sg_strategy_runtime_bridge.c")
+        bridge_header = self.text("slipgate/sg_strategy_runtime_bridge.h")
         caller = self.text("slipgate/sg_strategy_caller.c")
         chat = self.text("sg_chat.c")
         self.assertIn("RuntimeDestinationEqual", bridge)
+        self.assertIn("sg_strategy_runtime_target_view_t", bridge_header)
+        self.assertIn("sg_strategy_runtime_target_authority_fn", bridge_header)
+        self.assertIn("!view.opaque", bridge)
+        self.assertIn("sg_strategy_runtime_authority(", bridge)
         self.assertIn("binding.commitment_id != target.commitment_id", bridge)
         self.assertIn("RuntimeAuthorityEqual(&binding.authority", bridge)
         self.assertIn("binding.goal_id != target.goal_id", bridge)
         self.assertIn("binding.target_id != target.target_id", bridge)
         self.assertIn("binding.destination", bridge)
         self.assertIn("binding.role != target.role", bridge)
-        self.assertIn("binding.execution_field != target.execution_field", bridge)
+        self.assertIn("!binding.execution_field", bridge)
+        execution_start = bridge_header.index(
+            "typedef struct sg_strategy_runtime_execution_s"
+        )
+        execution_end = bridge_header.index(
+            "typedef struct sg_strategy_runtime_plan_request_s", execution_start
+        )
+        self.assertNotIn("execution_field", bridge_header[execution_start:execution_end])
         self.assertIn("CallerDestinationEqual", caller)
         self.assertIn("binding->commitment_id != plan->commitment_id", caller)
         self.assertIn("SG_StrategyCallerCancel", chat)
@@ -126,6 +144,50 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
             expiry.index("Chat_EndStrategyOrder"),
             expiry.index("chat_bot[i].order_from = -1"),
         )
+
+    def test_production_request_has_canonical_ordered_prerequisites(self):
+        source = self.text("slipgate/sg_arach.c")
+        start = source.index("static int StrategyPlanRequest")
+        end = source.index("static int StrategyAuthorityEqual", start)
+        request = source[start:end]
+        self.assertIn("SG_CollectibleArmorTargetField", request)
+        self.assertIn("SG_DESTINATION_WEAPON", request)
+        self.assertIn("SG_DESTINATION_ARMOR", request)
+        self.assertIn("SG_DESTINATION_POWERUP", request)
+        self.assertIn("SG_STRATEGY_DEPENDENCY_SETTLED", request)
+        self.assertLess(
+            request.index("SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID"),
+            request.index("SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID"),
+        )
+        self.assertLess(
+            request.index("SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID"),
+            request.index("SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID"),
+        )
+        self.assertLess(
+            request.index("SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID"),
+            request.index("SG_STRATEGY_LEAD_PREPARATION_GOAL_ID"),
+        )
+        self.assertLess(
+            request.index("SG_STRATEGY_LEAD_PREPARATION_GOAL_ID"),
+            request.index("SG_STRATEGY_PRIMARY_GOAL_ID"),
+        )
+
+    def test_autonomous_reuse_compares_current_semantics_before_refresh(self):
+        source = self.text("slipgate/sg_arach.c")
+        reusable_start = source.index("static int StrategyPlanReusable")
+        reusable_end = source.index("static int StrategyFramePlanRequest", reusable_start)
+        reusable = source[reusable_start:reusable_end]
+        self.assertIn("StrategyPlanRequest(bot, tc, strike_duty, &candidate)", reusable)
+        self.assertIn("StrategyRequestMatchesLivePlan(&candidate", reusable)
+        self.assertIn("StrategyGoalSemanticsEqual", source)
+        self.assertIn("StrategyGoalRolesEqual", source)
+        self.assertIn("StrategyGoalDependenciesMatchLivePlan", source)
+        active_start = source.index("static int StrategyActivePlanRequest")
+        active_end = source.index("static int StrategyPlanTerminal", active_start)
+        active = source[active_start:active_end]
+        self.assertIn("request->spec = caller->plan.spec", active)
+        self.assertNotIn("tc->goal_field", active)
+        self.assertNotIn("execution_field", active)
 
     def test_reducer_owns_the_post_commit_route(self):
         source = self.text("sg_arach.c")

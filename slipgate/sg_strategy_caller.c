@@ -117,13 +117,6 @@ static void CallerLifeCommit(sg_strategy_caller_t *caller,
 	caller->life_id = life->life_id;
 }
 
-static int CallerHandleMatchesDestination(const sg_destination_handle_t *handle,
-	const sg_destination_ref_t *destination)
-{
-	return handle && destination && SG_DestinationHandleValid(handle) &&
-		SG_DestinationRefValid(destination) && handle->kind == destination->kind;
-}
-
 static int CallerBindingFor(const sg_strategy_caller_plan_t *plan,
 	sg_strategy_goal_id_t goal_id, sg_strategy_target_id_t target_id,
 	const sg_strategy_caller_target_binding_t **binding_out)
@@ -157,6 +150,10 @@ static int CallerBindingAuthenticated(const sg_strategy_caller_plan_t *plan,
 	const sg_field_sample_t *sample;
 	uint32_t phase_id;
 
+	/* The runtime bridge has already asked the destination-field authority to
+	 * prove the field/view's exact semantic target.  This boundary verifies the
+	 * emitted plan target and all runtime shape/lifetime facts; it retains a
+	 * kind check only as a local structural sanity check, never as identity. */
 	if (!plan || !binding || !choice ||
 	    binding->commitment_id != plan->commitment_id ||
 	    !CallerAuthorityEqual(&binding->authority, &plan->authority) ||
@@ -167,8 +164,7 @@ static int CallerBindingAuthenticated(const sg_strategy_caller_plan_t *plan,
 	    binding->valid_until_ms < at_ms ||
 	    !SG_RuneRuntimeSnapshotValid(binding->snapshot) ||
 	    !SG_DestinationFieldValid(binding->snapshot, binding->field) ||
-	    !CallerHandleMatchesDestination(&binding->field->destination,
-		&binding->destination) ||
+	    binding->field->destination.kind != binding->destination.kind ||
 	    binding->field->computed_at_ms > at_ms ||
 	    binding->localized->rune_identity != binding->snapshot->identity ||
 	    binding->localized->topology_revision !=
