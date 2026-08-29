@@ -484,7 +484,6 @@ static int BuildRelations(hook_build_t *build)
 	if (!AllocationSize(build, build->sources->surface_rule_count,
 			sizeof(*build->catalog->relations), &allocation_size))
 		return 0;
-	(void)allocation_size;
 	build->catalog->relations = calloc(build->sources->surface_rule_count,
 		sizeof(*build->catalog->relations));
 	if (!build->catalog->relations)

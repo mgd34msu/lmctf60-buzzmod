@@ -31,7 +31,7 @@ tests/sg_hook_visibility_scaling_test.c'
 cd "$repo_dir"
 for cc in gcc clang
 do
-	$cc -std=gnu11 -w -I. -c q_shared.c -o "$tmp_dir/q-shared-$cc.o"
+	$cc -std=gnu11 -I. -c q_shared.c -o "$tmp_dir/q-shared-$cc.o"
 	for main in $test_mains
 	do
 		name=$(basename "$main" .c)
@@ -42,7 +42,7 @@ do
 done
 
 sanitize='-fno-omit-frame-pointer -fsanitize=address,undefined'
-clang -std=gnu11 -w $sanitize -I. -c q_shared.c \
+clang -std=gnu11 $sanitize -I. -c q_shared.c \
 	-o "$tmp_dir/q-shared-sanitize.o"
 for main in $test_mains
 do
@@ -66,6 +66,7 @@ for source in slipgate/sg_hook_visibility_feasibility.c \
 	slipgate/sg_hook_visibility_feasibility_audit_tiling.c \
 	tests/sg_hook_visibility_feasibility_fixture.c \
 	tests/sg_hook_visibility_host_angle_reference.c \
+	tests/sg_hook_visibility_feasibility_test.c \
 	tests/sg_hook_visibility_production_angle_test.c \
 	tests/sg_hook_visibility_clearance_face_test.c \
 	tests/sg_hook_visibility_reverse_span_test.c \

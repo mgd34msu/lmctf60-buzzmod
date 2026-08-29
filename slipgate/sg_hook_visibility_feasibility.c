@@ -272,7 +272,6 @@ static int ControlSupported(const sg_hook_visibility_control_root_t *control)
 	int forward;
 	int reverse;
 
-	/* This is the synthetic gate's bounded fiber, not a production limit. */
 	if (control->pitch_min > control->pitch_max ||
 		control->yaw_min > control->yaw_max ||
 		(control->pitch_min != control->pitch_max &&

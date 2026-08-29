@@ -147,7 +147,6 @@ static int DirectionSign(const hook_build_t *build, int *sign_out)
 			int current;
 
 			SG_HookVisibilityFeasibilityDirection(pitch, yaw, forward, right);
-			(void)right;
 			if (forward[0] == 0.0f)
 				return 0;
 			current = forward[0] > 0.0f ? 1 : -1;
