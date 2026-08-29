@@ -1,11 +1,14 @@
 #include "sg_mechanism_capability_internal.h"
 
 #include <float.h>
+#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 
 typedef struct sg_mechanism_edge_ref_s
 {
@@ -53,7 +56,7 @@ typedef struct sg_mechanism_relation_ref_s
 typedef struct sg_mechanism_build_s
 {
 	const sg_mechanism_capability_source_t *source;
-	sg_mechanism_capability_set_t *output;
+	sg_mechanism_capability_payload_t *output;
 	uint32_t topology_edge_capacity;
 	sg_mechanism_edge_ref_t *edge_refs;
 	uint32_t *edge_offsets;
@@ -82,21 +85,134 @@ static int AllocationFits(size_t count, size_t element_size)
 	return element_size != 0U && count <= SIZE_MAX / element_size;
 }
 
-static sg_mechanism_capability_set_t *issued_capabilities;
+static atomic_uintptr_t next_authority_token = ATOMIC_VAR_INIT(1U);
+static atomic_flag authority_key_lock = ATOMIC_FLAG_INIT;
+static atomic_int authority_key_state = ATOMIC_VAR_INIT(0);
+static uint64_t authority_key[2];
 
-static int CapabilityHandleActive(
-	const sg_mechanism_capability_set_t *capabilities)
+static int FillRandom(void *buffer, size_t size)
 {
-	const sg_mechanism_capability_set_t *issued;
+	unsigned char *bytes = buffer;
+	size_t offset = 0U;
 
-	for (issued = issued_capabilities; issued; issued = issued->issued_next)
-		if (issued == capabilities)
-			return issued->issued_active;
-	return 0;
+	while (offset < size)
+	{
+		ssize_t count = getrandom(bytes + offset, size - offset, 0U);
+
+		if (count > 0)
+		{
+			offset += (size_t)count;
+			continue;
+		}
+		if (count < 0 && errno == EINTR)
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+static int AuthorityKeyReady(void)
+{
+	int state = atomic_load_explicit(&authority_key_state, memory_order_acquire);
+
+	if (state != 0)
+		return state > 0;
+	while (atomic_flag_test_and_set_explicit(&authority_key_lock,
+		memory_order_acquire))
+		;
+	state = atomic_load_explicit(&authority_key_state, memory_order_relaxed);
+	if (state == 0)
+	{
+		state = FillRandom(authority_key, sizeof(authority_key)) ? 1 : -1;
+		atomic_store_explicit(&authority_key_state, state, memory_order_release);
+	}
+	atomic_flag_clear_explicit(&authority_key_lock, memory_order_release);
+	return state > 0;
+}
+
+static uint32_t AuthorityRound(uint32_t value, uint32_t round)
+{
+	uint64_t mixed = (uint64_t)value ^ authority_key[round & 1U] ^
+		((uint64_t)round * UINT64_C(0x9e3779b97f4a7c15));
+
+	mixed ^= mixed >> 30U;
+	mixed *= UINT64_C(0xbf58476d1ce4e5b9);
+	mixed ^= mixed >> 27U;
+	mixed *= UINT64_C(0x94d049bb133111eb);
+	mixed ^= mixed >> 31U;
+	return (uint32_t)mixed;
+}
+
+static uint64_t AuthorityPermute64(uint64_t value)
+{
+	uint32_t left = (uint32_t)(value >> 32U);
+	uint32_t right = (uint32_t)value;
+	uint32_t round;
+
+	for (round = 0U; round < 8U; round++)
+	{
+		uint32_t next = left ^ AuthorityRound(right, round);
+
+		left = right;
+		right = next;
+	}
+	return ((uint64_t)left << 32U) | (uint64_t)right;
+}
+
+#if UINTPTR_MAX == UINT32_MAX
+static uint32_t AuthorityPermute32(uint32_t value)
+{
+	uint16_t left = (uint16_t)(value >> 16U);
+	uint16_t right = (uint16_t)value;
+	uint32_t round;
+
+	for (round = 0U; round < 8U; round++)
+	{
+		uint16_t next = (uint16_t)(left ^
+			(uint16_t)AuthorityRound((uint32_t)right, round));
+
+		left = right;
+		right = next;
+	}
+	return ((uint32_t)left << 16U) | (uint32_t)right;
+}
+#endif
+
+int SG_AuthorityTokenMint(uintptr_t *token_out)
+{
+	uintptr_t current;
+	uintptr_t token;
+
+	if (!token_out || !AuthorityKeyReady())
+		return 0;
+	for (;;)
+	{
+		current = atomic_load_explicit(&next_authority_token,
+			memory_order_relaxed);
+		while (current != 0U && current < UINTPTR_MAX)
+			if (atomic_compare_exchange_weak_explicit(&next_authority_token,
+				&current, current + 1U, memory_order_relaxed,
+				memory_order_relaxed))
+				break;
+		if (current == 0U || current == UINTPTR_MAX)
+			return 0;
+#if UINTPTR_MAX == UINT64_MAX
+		token = (uintptr_t)AuthorityPermute64((uint64_t)current);
+#elif UINTPTR_MAX == UINT32_MAX
+		token = (uintptr_t)AuthorityPermute32((uint32_t)current);
+#else
+#error unsupported uintptr_t width
+#endif
+		if (token != 0U && token != UINTPTR_MAX)
+		{
+			*token_out = token;
+			return 1;
+		}
+	}
 }
 
 static void ReleaseCapabilityStorage(
-	sg_mechanism_capability_set_t *capabilities)
+	sg_mechanism_capability_payload_t *capabilities)
 {
 	free(capabilities->facts);
 	free(capabilities->topology_edges);
@@ -110,7 +226,7 @@ static void ReleaseCapabilityStorage(
 	capabilities->facts_by_trace = NULL;
 }
 
-static void RefreshCapabilityView(sg_mechanism_capability_set_t *capabilities)
+static void RefreshCapabilityView(sg_mechanism_capability_payload_t *capabilities)
 {
 	capabilities->view.identity = capabilities->identity;
 	capabilities->view.candidate_verifier_identity =
@@ -133,38 +249,88 @@ static void RefreshCapabilityView(sg_mechanism_capability_set_t *capabilities)
 		capabilities->topology_edge_visits;
 }
 
-static void IssueAcceptedResult(sg_mechanism_capability_set_t *capabilities)
+int SG_MechanismCapabilityOwnerCreate(
+	sg_mechanism_capability_owner_t **owner_out)
 {
-	capabilities->content_identity =
-		SG_MechanismCapabilityContentIdentity(capabilities);
-	RefreshCapabilityView(capabilities);
-	capabilities->issued_next = issued_capabilities;
-	capabilities->issued_active = 1;
-	issued_capabilities = capabilities;
+	sg_mechanism_capability_owner_t *owner;
+
+	if (!owner_out || *owner_out)
+		return 0;
+	owner = calloc(1U, sizeof(*owner));
+	if (!owner)
+		return 0;
+	*owner_out = owner;
+	return 1;
+}
+
+sg_mechanism_capability_payload_t *SG_MechanismCapabilityOwnerPayload(
+	const sg_mechanism_capability_owner_t *owner,
+	const sg_mechanism_capability_set_t *capabilities)
+{
+	sg_mechanism_capability_record_t *record;
+
+	if (!owner || !capabilities)
+		return NULL;
+	for (record = owner->live; record; record = record->next)
+		if (record->token == capabilities)
+			return record->payload;
+	return NULL;
+}
+
+static int IssueAcceptedResult(sg_mechanism_capability_owner_t *owner,
+	sg_mechanism_capability_payload_t *payload,
+	sg_mechanism_capability_set_t **capabilities_out)
+{
+	sg_mechanism_capability_record_t *record;
+	uintptr_t token;
+
+	payload->content_identity = SG_MechanismCapabilityContentIdentity(payload);
+	if (payload->content_identity == 0U || owner->live_count == UINT32_MAX)
+		return 0;
+	record = calloc(1U, sizeof(*record));
+	if (!record)
+		return 0;
+	if (!SG_AuthorityTokenMint(&token))
+	{
+		free(record);
+		return 0;
+	}
+	RefreshCapabilityView(payload);
+	record->token = (sg_mechanism_capability_set_t *)(uintptr_t)token;
+	record->payload = payload;
+	record->next = owner->live;
+	owner->live = record;
+	owner->live_count++;
+	*capabilities_out = record->token;
+	return 1;
 }
 
 int SG_MechanismCapabilityOwnerAccepted(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_set_t *capabilities,
 	const sg_mechanism_capability_view_t **view_out)
 {
+	sg_mechanism_capability_payload_t *payload;
+
 	if (view_out)
 		*view_out = NULL;
-	if (!CapabilityHandleActive(capabilities) ||
-		capabilities->content_identity == 0U ||
-		capabilities->content_identity !=
-			SG_MechanismCapabilityContentIdentity(capabilities))
+	payload = SG_MechanismCapabilityOwnerPayload(owner, capabilities);
+	if (!payload || payload->content_identity == 0U ||
+		payload->content_identity !=
+			SG_MechanismCapabilityContentIdentity(payload))
 		return 0;
 	if (view_out)
-		*view_out = &capabilities->view;
+		*view_out = &payload->view;
 	return 1;
 }
 
 int SG_MechanismCapabilityRead(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_set_t *capabilities,
 	const sg_mechanism_capability_view_t **view_out)
 {
 	return view_out &&
-		SG_MechanismCapabilityOwnerAccepted(capabilities, view_out);
+		SG_MechanismCapabilityOwnerAccepted(owner, capabilities, view_out);
 }
 
 static int Finite3(const sg_rune_vec3_t *value)
@@ -1590,7 +1756,7 @@ static sg_mechanism_capability_flags_t FactFlags(
 }
 
 static const sg_mechanism_topology_relation_t *FindTopologyRelation(
-	const sg_mechanism_capability_set_t *set, uint32_t controller,
+	const sg_mechanism_capability_payload_t *set, uint32_t controller,
 	uint32_t mechanism)
 {
 	uint32_t low = 0U;
@@ -1923,6 +2089,7 @@ static void BuildScratchDestroy(sg_mechanism_build_t *build)
 }
 
 int SG_MechanismCapabilityBuild(
+	sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
 	sg_mechanism_capability_set_t **capabilities_out,
 	sg_mechanism_capability_error_t *error_out)
@@ -1940,10 +2107,10 @@ int SG_MechanismCapabilityBuild(
 	memset(&build, 0, sizeof(build));
 	build.source = source;
 	build.error.source_index = SG_MECHANISM_CAPABILITY_INDEX_NONE;
-	if (!capabilities_out)
+	if (!owner || !capabilities_out)
 		SetError(&build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_ARGUMENT,
 			SG_MECHANISM_CAPABILITY_INDEX_NONE);
-	if (!capabilities_out || !SourceShapeValid(&build))
+	if (!owner || !capabilities_out || !SourceShapeValid(&build))
 	{
 		if (error_out)
 			*error_out = build.error;
@@ -1973,8 +2140,7 @@ int SG_MechanismCapabilityBuild(
 			*error_out = build.error;
 		return 0;
 	}
-	IssueAcceptedResult(build.output);
-	if (!SG_MechanismCapabilityOwnerAccepted(build.output, NULL))
+	if (!IssueAcceptedResult(owner, build.output, capabilities_out))
 	{
 		ReleaseCapabilityStorage(build.output);
 		free(build.output);
@@ -1985,11 +2151,21 @@ int SG_MechanismCapabilityBuild(
 		}
 		return 0;
 	}
-	*capabilities_out = build.output;
+	if (!SG_MechanismCapabilityOwnerAccepted(owner, *capabilities_out, NULL))
+	{
+		SG_MechanismCapabilityDestroy(owner, *capabilities_out);
+		*capabilities_out = NULL;
+		if (error_out)
+		{
+			error_out->code = SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE;
+			error_out->source_index = 0U;
+		}
+		return 0;
+	}
 	return 1;
 }
 
-static uint32_t FindFactByTrace(const sg_mechanism_capability_set_t *set,
+static uint32_t FindFactByTrace(const sg_mechanism_capability_payload_t *set,
 	uint64_t identity, uint64_t *comparisons)
 {
 	uint32_t low = 0U;
@@ -2074,9 +2250,9 @@ done:
 
 static int TopologyAuthentic(
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_capability_set_t *capabilities)
+	const sg_mechanism_capability_payload_t *capabilities)
 {
-	sg_mechanism_capability_set_t metrics;
+	sg_mechanism_capability_payload_t metrics;
 	sg_mechanism_build_t build;
 	uint32_t relation_index;
 	int valid = 0;
@@ -2252,7 +2428,7 @@ static int FactsOrdered(const sg_mechanism_capability_fact_t *left,
 
 static int AuditTopologyRelation(
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_payload_t *capabilities,
 	const sg_mechanism_topology_relation_t *relation)
 {
 	uint32_t current = relation->controller_entity;
@@ -2278,10 +2454,13 @@ static int AuditTopologyRelation(
 }
 
 int SG_MechanismCapabilityAudit(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
-	const sg_mechanism_capability_set_t *capabilities,
+	const sg_mechanism_capability_set_t *capability,
 	sg_mechanism_capability_audit_result_t *result_out)
 {
+	const sg_mechanism_capability_payload_t *capabilities =
+		SG_MechanismCapabilityOwnerPayload(owner, capability);
 	sg_mechanism_capability_audit_result_t result;
 	uint8_t *seen = NULL;
 	uint8_t *relation_seen = NULL;
@@ -2295,7 +2474,7 @@ int SG_MechanismCapabilityAudit(
 	if (!result_out)
 		return 0;
 	*result_out = result;
-	if (!source || !CapabilityHandleActive(capabilities) || !source->authority ||
+	if (!source || !capabilities || !source->authority ||
 		!source->entity_semantics || !source->host_traces ||
 		!IdentityEqual(&source->authority->identity, &capabilities->identity) ||
 		capabilities->candidate_verifier_identity !=
@@ -2526,61 +2705,44 @@ int SG_MechanismCapabilityAudit(
 }
 
 void SG_MechanismCapabilityDestroy(
+	sg_mechanism_capability_owner_t *owner,
 	sg_mechanism_capability_set_t *capabilities)
 {
-	sg_mechanism_capability_set_t *issued;
+	sg_mechanism_capability_record_t **link;
+	sg_mechanism_capability_record_t *record;
 
-	if (!capabilities)
+	if (!owner || !capabilities)
 		return;
-	for (issued = issued_capabilities; issued; issued = issued->issued_next)
-		if (issued == capabilities && issued->issued_active)
+	for (link = &owner->live; *link; link = &(*link)->next)
+		if ((*link)->token == capabilities)
 		{
-			ReleaseCapabilityStorage(issued);
-			issued->issued_active = 0;
-			memset(&issued->view, 0, sizeof(issued->view));
-			issued->content_identity = 0U;
+			record = *link;
+			*link = record->next;
+			ReleaseCapabilityStorage(record->payload);
+			free(record->payload);
+			free(record);
+			owner->live_count--;
 			break;
 		}
 }
 
-#ifdef SG_MECHANISM_CAPABILITY_TESTING
-int SG_MechanismCapabilityTestIssue(
-	const sg_rune_model_identity_t *identity,
-	const sg_mechanism_capability_fact_t *facts, uint32_t fact_count,
-	sg_mechanism_capability_set_t **capabilities_out)
+void SG_MechanismCapabilityOwnerDestroy(
+	sg_mechanism_capability_owner_t *owner)
 {
-	sg_mechanism_capability_set_t *capabilities;
-	uint32_t index;
+	sg_mechanism_capability_record_t *record;
 
-	if (!identity || !capabilities_out || *capabilities_out ||
-		(fact_count != 0U && !facts) ||
-		!AllocationFits((size_t)fact_count, sizeof(*facts)))
-		return 0;
-	capabilities = calloc(1U, sizeof(*capabilities));
-	if (!capabilities)
-		return 0;
-	capabilities->identity = *identity;
-	if (fact_count != 0U)
+	if (!owner)
+		return;
+	while (owner->live)
 	{
-		capabilities->facts = malloc((size_t)fact_count * sizeof(*facts));
-		capabilities->facts_by_trace = malloc((size_t)fact_count *
-			sizeof(*capabilities->facts_by_trace));
-		if (!capabilities->facts || !capabilities->facts_by_trace)
-		{
-			ReleaseCapabilityStorage(capabilities);
-			free(capabilities);
-			return 0;
-		}
-		memcpy(capabilities->facts, facts, (size_t)fact_count * sizeof(*facts));
-		for (index = 0U; index < fact_count; index++)
-			capabilities->facts_by_trace[index] = index;
-		capabilities->fact_count = fact_count;
+		record = owner->live;
+		owner->live = record->next;
+		ReleaseCapabilityStorage(record->payload);
+		free(record->payload);
+		free(record);
 	}
-	IssueAcceptedResult(capabilities);
-	*capabilities_out = capabilities;
-	return 1;
+	free(owner);
 }
-#endif
 
 const char *SG_MechanismCapabilityErrorString(
 	sg_mechanism_capability_error_code_t code)

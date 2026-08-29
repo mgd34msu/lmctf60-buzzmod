@@ -238,6 +238,8 @@ typedef struct sg_mechanism_topology_relation_s
 } sg_mechanism_topology_relation_t;
 
 typedef struct sg_mechanism_capability_set_s sg_mechanism_capability_set_t;
+typedef struct sg_mechanism_capability_owner_s
+	sg_mechanism_capability_owner_t;
 
 /* Read-only content of an owner-issued capability result.  The handle remains
  * opaque: content identity describes the snapshot but is not issuance
@@ -294,18 +296,26 @@ typedef struct sg_mechanism_capability_audit_result_s
 	uint64_t lookup_comparisons;
 } sg_mechanism_capability_audit_result_t;
 
+int SG_MechanismCapabilityOwnerCreate(
+	sg_mechanism_capability_owner_t **owner_out);
+void SG_MechanismCapabilityOwnerDestroy(
+	sg_mechanism_capability_owner_t *owner);
 int SG_MechanismCapabilityBuild(
+	sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
 	sg_mechanism_capability_set_t **capabilities_out,
 	sg_mechanism_capability_error_t *error_out);
 int SG_MechanismCapabilityAudit(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_source_t *source,
 	const sg_mechanism_capability_set_t *capabilities,
 	sg_mechanism_capability_audit_result_t *result_out);
 int SG_MechanismCapabilityRead(
+	const sg_mechanism_capability_owner_t *owner,
 	const sg_mechanism_capability_set_t *capabilities,
 	const sg_mechanism_capability_view_t **view_out);
 void SG_MechanismCapabilityDestroy(
+	sg_mechanism_capability_owner_t *owner,
 	sg_mechanism_capability_set_t *capabilities);
 const char *SG_MechanismCapabilityErrorString(
 	sg_mechanism_capability_error_code_t code);

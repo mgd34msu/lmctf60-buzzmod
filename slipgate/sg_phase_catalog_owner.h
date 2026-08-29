@@ -13,6 +13,7 @@
  * returned publication owns every byte required by its view and no longer
  * borrows the source/provider objects. */
 int SG_PhaseCatalogPublicationBuild(
+	sg_mechanism_capability_owner_t *capability_owner,
 	const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,

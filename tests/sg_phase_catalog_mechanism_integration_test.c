@@ -3,7 +3,7 @@ int SG_MechanismCapabilityFixtureMain(void);
 #include "sg_mechanism_capability_test.c"
 #undef main
 
-#include "slipgate/sg_phase_catalog.h"
+#include "slipgate/sg_phase_catalog_internal.h"
 #include "slipgate/sg_phase_catalog_owner.h"
 
 static int phase_integration_failures;
@@ -16,15 +16,129 @@ static int phase_integration_failures;
 	} \
 } while (0)
 
+static void TestOwnerCyclesBoundLiveStorage(mechanism_fixture_t *fixture,
+	const sg_mechanism_capability_set_t *accepted_capabilities)
+{
+	uint32_t cycle;
+
+	for (cycle = 0U; cycle < 32U; cycle++)
+	{
+		sg_mechanism_capability_owner_t *capability_owner = NULL;
+		sg_mechanism_capability_set_t *capabilities = NULL;
+		sg_mechanism_capability_error_t capability_error;
+		const sg_mechanism_capability_view_t *capability_view = NULL;
+		sg_phase_mover_support_provider_owner_t *provider_owner = NULL;
+		sg_phase_mover_support_provider_t *provider = NULL;
+		sg_phase_catalog_error_t provider_error;
+		const sg_phase_mover_support_provider_view_t *provider_view = NULL;
+
+		CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityOwnerCreate(
+			&capability_owner));
+		CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityBuild(capability_owner,
+			&fixture->source, &capabilities, &capability_error));
+		CHECK_PHASE_INTEGRATION(capability_owner != NULL &&
+			capability_owner->live_count == 1U);
+		CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(capability_owner,
+			capabilities, &capability_view));
+		SG_MechanismCapabilityDestroy(capability_owner, capabilities);
+		CHECK_PHASE_INTEGRATION(capability_owner != NULL &&
+			capability_owner->live_count == 0U && capability_owner->live == NULL);
+		SG_MechanismCapabilityOwnerDestroy(capability_owner);
+
+		CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
+			&provider_owner));
+		CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
+			provider_owner, fixture->capability_owner,
+			fixture->configuration_semantics, accepted_capabilities,
+			&provider, &provider_error));
+		CHECK_PHASE_INTEGRATION(provider_owner != NULL &&
+			provider_owner->live_count == 1U);
+		CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_owner,
+			provider, &provider_view));
+		SG_PhaseMoverSupportProviderDestroy(provider_owner, provider);
+		CHECK_PHASE_INTEGRATION(provider_owner != NULL &&
+			provider_owner->live_count == 0U && provider_owner->live == NULL);
+		SG_PhaseMoverSupportProviderOwnerDestroy(provider_owner);
+	}
+}
+
+static void TestOwnerTeardownRejectsPriorToken(mechanism_fixture_t *fixture,
+	const sg_mechanism_capability_set_t *accepted_capabilities)
+{
+	sg_mechanism_capability_owner_t *first_owner = NULL;
+	sg_mechanism_capability_owner_t *second_owner = NULL;
+	sg_mechanism_capability_set_t *first = NULL;
+	sg_mechanism_capability_set_t *second = NULL;
+	const sg_mechanism_capability_view_t *view = NULL;
+	sg_mechanism_capability_error_t error;
+	sg_phase_mover_support_provider_owner_t *provider_owner = NULL;
+	sg_phase_mover_support_provider_owner_t *first_provider_owner = NULL;
+	sg_phase_mover_support_provider_owner_t *second_provider_owner = NULL;
+	sg_phase_mover_support_provider_t *provider = NULL;
+	sg_phase_mover_support_provider_t *first_provider = NULL;
+	sg_phase_mover_support_provider_t *second_provider = NULL;
+	const sg_phase_mover_support_provider_view_t *provider_view = NULL;
+	sg_phase_catalog_error_t provider_error;
+
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityOwnerCreate(&first_owner));
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityBuild(first_owner,
+		&fixture->source, &first, &error));
+	SG_MechanismCapabilityOwnerDestroy(first_owner);
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityOwnerCreate(&second_owner));
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityBuild(second_owner,
+		&fixture->source, &second, &error));
+	CHECK_PHASE_INTEGRATION(first != second);
+	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityRead(second_owner, first,
+		&view));
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(second_owner, second,
+		&view));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
+		&provider_owner));
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderBuild(provider_owner,
+		second_owner, fixture->configuration_semantics, first, &provider,
+		&provider_error));
+	CHECK_PHASE_INTEGRATION(provider == NULL);
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(provider_owner,
+		second_owner, fixture->configuration_semantics, second, &provider,
+		&provider_error));
+	SG_PhaseMoverSupportProviderOwnerDestroy(provider_owner);
+	SG_MechanismCapabilityOwnerDestroy(second_owner);
+
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
+		&first_provider_owner));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
+		first_provider_owner, fixture->capability_owner,
+		fixture->configuration_semantics, accepted_capabilities,
+		&first_provider, &provider_error));
+	SG_PhaseMoverSupportProviderOwnerDestroy(first_provider_owner);
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
+		&second_provider_owner));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
+		second_provider_owner, fixture->capability_owner,
+		fixture->configuration_semantics, accepted_capabilities,
+		&second_provider, &provider_error));
+	CHECK_PHASE_INTEGRATION(first_provider != second_provider);
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(
+		second_provider_owner, first_provider, &provider_view));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(
+		second_provider_owner, second_provider, &provider_view));
+	SG_PhaseMoverSupportProviderOwnerDestroy(second_provider_owner);
+}
+
 int main(void)
 {
 	mechanism_fixture_t fixture;
+	sg_mechanism_capability_owner_t *cross_capability_owner = NULL;
+	sg_phase_mover_support_provider_owner_t *provider_owner = NULL;
+	sg_phase_mover_support_provider_owner_t *cross_provider_owner = NULL;
 	sg_mechanism_capability_set_t *capabilities = NULL;
 	sg_mechanism_capability_set_t *equivalent_capabilities = NULL;
 	sg_mechanism_capability_set_t *replacement_capabilities = NULL;
 	const sg_mechanism_capability_set_t *stale_capabilities = NULL;
 	const sg_mechanism_capability_view_t *capability_view = NULL;
 	const sg_mechanism_capability_view_t *equivalent_capability_view = NULL;
+	const sg_mechanism_capability_view_t *rejected_capability_view = NULL;
+	sg_mechanism_capability_payload_t *equivalent_payload = NULL;
 	sg_mechanism_capability_error_t capability_error;
 	sg_phase_mover_support_provider_t *provider = NULL;
 	sg_phase_mover_support_provider_t *provider_again = NULL;
@@ -37,6 +151,7 @@ int main(void)
 	sg_phase_catalog_audit_result_t audit;
 	const sg_phase_mover_support_provider_view_t *provider_view = NULL;
 	const sg_phase_mover_support_provider_view_t *provider_view_again = NULL;
+	const sg_phase_mover_support_provider_view_t *rejected_provider_view = NULL;
 	sg_phase_catalog_publication_t *publication = NULL;
 	sg_phase_catalog_publication_t *publication_again = NULL;
 	const sg_phase_catalog_view_t *publication_view = NULL;
@@ -54,33 +169,61 @@ int main(void)
 	uint32_t binding_index = UINT32_MAX;
 
 	CHECK_PHASE_INTEGRATION(FixtureInit(&fixture));
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityOwnerCreate(
+		&cross_capability_owner));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
+		&provider_owner));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderOwnerCreate(
+		&cross_provider_owner));
 	CHECK_PHASE_INTEGRATION(Build(&fixture, &capabilities, &capability_error));
 	CHECK_PHASE_INTEGRATION(capabilities != NULL);
 	if (!capabilities)
 		return 1;
-	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(capabilities,
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(fixture.capability_owner,
+		capabilities,
 		&capability_view));
 	CHECK_PHASE_INTEGRATION(Build(&fixture, &equivalent_capabilities,
 		&capability_error));
-	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(equivalent_capabilities,
+	equivalent_payload = SG_MechanismCapabilityOwnerPayload(
+		fixture.capability_owner, equivalent_capabilities);
+	CHECK_PHASE_INTEGRATION(equivalent_payload != NULL);
+	if (equivalent_payload)
+	{
+		equivalent_payload->topology_edge_visits += UINT64_C(37);
+		equivalent_payload->view.topology_edge_visits =
+			equivalent_payload->topology_edge_visits;
+	}
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(fixture.capability_owner,
+		equivalent_capabilities,
 		&equivalent_capability_view));
+	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityRead(cross_capability_owner,
+		capabilities, &rejected_capability_view));
 	CHECK_PHASE_INTEGRATION(capability_view && equivalent_capability_view &&
+		capability_view->topology_edge_visits !=
+			equivalent_capability_view->topology_edge_visits &&
 		capability_view->content_identity ==
 			equivalent_capability_view->content_identity);
-	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderBuild(
-		fixture.configuration_semantics, forged, &forged_provider,
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderBuild(provider_owner,
+		fixture.capability_owner, fixture.configuration_semantics, forged,
+		&forged_provider,
 		&forged_error));
 	CHECK_PHASE_INTEGRATION(forged_provider == NULL);
-	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
-		fixture.configuration_semantics, capabilities, &provider,
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(provider_owner,
+		fixture.capability_owner, fixture.configuration_semantics, capabilities,
+		&provider,
 		&provider_error));
 	CHECK_PHASE_INTEGRATION(provider != NULL);
-	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider,
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_owner,
+		provider,
 		&provider_view));
-	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
-		fixture.configuration_semantics, equivalent_capabilities, &provider_again,
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(
+		cross_provider_owner, provider, &rejected_provider_view));
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(provider_owner,
+		fixture.capability_owner, fixture.configuration_semantics,
+		equivalent_capabilities, &provider_again,
 		&provider_error));
-	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_again,
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_owner,
+		provider_again,
 		&provider_view_again));
 	CHECK_PHASE_INTEGRATION(provider_view != NULL && capability_view != NULL &&
 		provider_view->fact_count == capability_view->fact_count &&
@@ -102,6 +245,7 @@ int main(void)
 	phase_source.authority = &fixture.authority;
 	phase_source.configuration = fixture.configuration;
 	phase_source.semantics = fixture.configuration_semantics;
+	phase_source.mover_support_owner = provider_owner;
 	phase_source.mover_support_provider = provider;
 	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogBuild(&phase_source, &catalog,
 		&phase_error));
@@ -151,7 +295,8 @@ int main(void)
 			}
 		SG_PhaseCatalogDestroy(catalog);
 	}
-	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(&fixture.authority,
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(
+		fixture.capability_owner, &fixture.authority,
 		fixture.configuration, fixture.configuration_semantics, capabilities,
 		&publication, &publication_error, &publication_audit));
 	CHECK_PHASE_INTEGRATION(publication != NULL);
@@ -160,7 +305,8 @@ int main(void)
 	CHECK_PHASE_INTEGRATION(publication_view != NULL &&
 		publication_view->phase_count != 0U &&
 		publication_view->transition_count != 0U);
-	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(&fixture.authority,
+	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(
+		fixture.capability_owner, &fixture.authority,
 		fixture.configuration, fixture.configuration_semantics, capabilities,
 		&publication_again, &publication_again_error,
 		&publication_again_audit));
@@ -206,42 +352,62 @@ int main(void)
 	SG_PhaseCatalogPublicationDestroy(publication);
 	SG_PhaseCatalogPublicationDestroy(publication_again);
 	stale_provider = provider;
-	SG_PhaseMoverSupportProviderDestroy(provider);
+	SG_PhaseMoverSupportProviderDestroy(provider_owner, provider);
 	provider = NULL;
-	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(stale_provider,
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(provider_owner,
+		stale_provider,
 		&provider_view));
-	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
-		fixture.configuration_semantics, equivalent_capabilities,
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(provider_owner,
+		fixture.capability_owner, fixture.configuration_semantics,
+		equivalent_capabilities,
 		&replacement_provider, &provider_error));
 	CHECK_PHASE_INTEGRATION(replacement_provider != stale_provider);
-	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(stale_provider,
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderRead(provider_owner,
+		stale_provider,
 		&provider_view));
-	SG_PhaseMoverSupportProviderDestroy(replacement_provider);
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderRead(provider_owner,
+		replacement_provider, &provider_view));
+	SG_PhaseMoverSupportProviderDestroy(provider_owner, replacement_provider);
 	replacement_provider = NULL;
-	SG_PhaseMoverSupportProviderDestroy(provider_again);
+	SG_PhaseMoverSupportProviderDestroy(provider_owner, provider_again);
 	stale_capabilities = capabilities;
-	SG_MechanismCapabilityDestroy(capabilities);
+	SG_MechanismCapabilityDestroy(fixture.capability_owner, capabilities);
 	capabilities = NULL;
-	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityRead(stale_capabilities,
+	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityRead(
+		fixture.capability_owner, stale_capabilities,
 		&capability_view));
-	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderBuild(
-		fixture.configuration_semantics, stale_capabilities, &forged_provider,
+	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityAudit(
+		fixture.capability_owner, &fixture.source, stale_capabilities,
+		&(sg_mechanism_capability_audit_result_t){ 0 }));
+	CHECK_PHASE_INTEGRATION(!SG_PhaseMoverSupportProviderBuild(provider_owner,
+		fixture.capability_owner, fixture.configuration_semantics,
+		stale_capabilities, &forged_provider,
 		&forged_error));
 	CHECK_PHASE_INTEGRATION(forged_provider == NULL);
 	CHECK_PHASE_INTEGRATION(Build(&fixture, &replacement_capabilities,
 		&capability_error));
 	CHECK_PHASE_INTEGRATION(replacement_capabilities != stale_capabilities);
-	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityRead(stale_capabilities,
+	CHECK_PHASE_INTEGRATION(!SG_MechanismCapabilityRead(
+		fixture.capability_owner, stale_capabilities,
 		&capability_view));
-	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(replacement_capabilities,
+	CHECK_PHASE_INTEGRATION(SG_MechanismCapabilityRead(
+		fixture.capability_owner, replacement_capabilities,
 		&capability_view));
-	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(
-		fixture.configuration_semantics, replacement_capabilities,
+	CHECK_PHASE_INTEGRATION(SG_PhaseMoverSupportProviderBuild(provider_owner,
+		fixture.capability_owner, fixture.configuration_semantics,
+		replacement_capabilities,
 		&replacement_provider, &provider_error));
 	CHECK_PHASE_INTEGRATION(replacement_provider != NULL);
-	SG_PhaseMoverSupportProviderDestroy(replacement_provider);
-	SG_MechanismCapabilityDestroy(replacement_capabilities);
-	SG_MechanismCapabilityDestroy(equivalent_capabilities);
+	TestOwnerCyclesBoundLiveStorage(&fixture, equivalent_capabilities);
+	TestOwnerTeardownRejectsPriorToken(&fixture, equivalent_capabilities);
+	SG_PhaseMoverSupportProviderDestroy(provider_owner, replacement_provider);
+	SG_MechanismCapabilityDestroy(fixture.capability_owner,
+		replacement_capabilities);
+	SG_MechanismCapabilityDestroy(fixture.capability_owner,
+		equivalent_capabilities);
+	SG_PhaseMoverSupportProviderOwnerDestroy(cross_provider_owner);
+	SG_PhaseMoverSupportProviderOwnerDestroy(provider_owner);
+	SG_MechanismCapabilityOwnerDestroy(cross_capability_owner);
 	FixtureDestroy(&fixture);
 	if (phase_integration_failures)
 	{

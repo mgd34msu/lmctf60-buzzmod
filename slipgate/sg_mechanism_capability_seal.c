@@ -171,7 +171,7 @@ uint64_t SG_MechanismCapabilityFactIdentity(
 }
 
 uint64_t SG_MechanismCapabilityContentIdentity(
-	const sg_mechanism_capability_set_t *c)
+	const sg_mechanism_capability_payload_t *c)
 {
 	sg_canonical_digest_t d = { UINT64_C(1469598103934665603) };
 	uint32_t i;
@@ -196,6 +196,5 @@ uint64_t SG_MechanismCapabilityContentIdentity(
 	U32(&d, c->mechanism_offset_count);
 	for (i = 0U; i < c->mechanism_offset_count; i++) U32(&d, c->mechanism_offsets[i]);
 	for (i = 0U; i < c->fact_count; i++) U32(&d, c->facts_by_trace[i]);
-	U64(&d, c->topology_edge_visits);
 	return d.value == 0U ? UINT64_C(1) : d.value;
 }

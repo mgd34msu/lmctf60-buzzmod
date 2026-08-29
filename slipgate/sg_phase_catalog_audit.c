@@ -596,10 +596,10 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 			goto failure;
 	}
 	for (support = 0U;
-		support < source->mover_support_provider->support_count; support++)
+		support < SG_PHASE_SOURCE_PROVIDER(source)->support_count; support++)
 	{
 		const sg_phase_mover_support_t *record =
-			&source->mover_support_provider->supports[support];
+			&SG_PHASE_SOURCE_PROVIDER(source)->supports[support];
 		int region_index = RegionIndexById(source->semantics,
 			record->semantic_region_id);
 		sg_rune_phase_basis_t phase;
@@ -616,10 +616,10 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 			(uint32_t)region_index, error_out))
 			goto failure;
 	}
-	for (fact = 0U; fact < source->mover_support_provider->fact_count; fact++)
+	for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count; fact++)
 	{
 		const sg_mechanism_capability_fact_t *record =
-			&source->mover_support_provider->facts[fact];
+			&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact];
 		sg_rune_phase_basis_t phase;
 		uint32_t elapsed;
 		uint32_t frame = source->authority->identity.physics.frame_ms;
@@ -793,16 +793,16 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 				region);
 			return 0;
 		}
-		while (support_cursor < source->mover_support_provider->support_count &&
-			source->mover_support_provider->supports[support_cursor].
+		while (support_cursor < SG_PHASE_SOURCE_PROVIDER(source)->support_count &&
+			SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor].
 				semantic_region_id < record->id)
 			support_cursor++;
-		while (support_cursor < source->mover_support_provider->support_count &&
-			source->mover_support_provider->supports[support_cursor].
+		while (support_cursor < SG_PHASE_SOURCE_PROVIDER(source)->support_count &&
+			SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor].
 			semantic_region_id == record->id)
 		{
 			const sg_phase_mover_support_t *support =
-				&source->mover_support_provider->supports[support_cursor];
+				&SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor];
 
 			OracleFillPhase(source, record, 1, &support->mechanism, 1U, &phase);
 			if (!OracleFindPhase(oracle, record->cell, &phase, &phase_index) ||
@@ -816,7 +816,7 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 			support_cursor++;
 		}
 	}
-	if (support_cursor != source->mover_support_provider->support_count)
+	if (support_cursor != SG_PHASE_SOURCE_PROVIDER(source)->support_count)
 	{
 		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
 			support_cursor);
@@ -1261,10 +1261,10 @@ static int OracleBuildMechanismTransitions(
 	uint32_t fact_index;
 
 	for (fact_index = 0U;
-		fact_index < source->mover_support_provider->fact_count; fact_index++)
+		fact_index < SG_PHASE_SOURCE_PROVIDER(source)->fact_count; fact_index++)
 	{
 		const sg_mechanism_capability_fact_t *fact =
-			&source->mover_support_provider->facts[fact_index];
+			&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact_index];
 		const sg_configuration_semantic_region_t *source_region;
 		const sg_configuration_semantic_region_t *destination_region;
 		sg_rune_phase_basis_t source_candidate;
@@ -1348,7 +1348,7 @@ static int OracleBuildMechanismTransitions(
 		evidence.destination_state_mask = (sg_phase_mechanism_state_mask_t)
 			OracleStateBit(fact->destination_state);
 		evidence.provider_verifier_identity =
-			source->mover_support_provider->verifier_identity;
+			SG_PHASE_SOURCE_PROVIDER(source)->verifier_identity;
 		evidence.delay_ms = fact->delay_ms;
 		evidence.dwell_ms = fact->dwell_ms;
 		evidence.travel_ms = fact->travel_ms;
@@ -1386,7 +1386,7 @@ static int OracleBuild(const sg_phase_catalog_source_t *source,
 	oracle->completion = source->configuration->cell_count == 0U ?
 		SG_PHASE_CATALOG_PROVEN_EMPTY : SG_PHASE_CATALOG_COMPLETE;
 	oracle->mover_support_verifier_identity =
-		source->mover_support_provider->verifier_identity;
+		SG_PHASE_SOURCE_PROVIDER(source)->verifier_identity;
 	if (!OracleBuildPhases(source, oracle, error_out) ||
 		!OracleBuildBindings(source, oracle, error_out) ||
 		!OracleBuildSupportTransitions(source, oracle, &transition_capacity,
@@ -1607,7 +1607,7 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 		int source_region;
 		int destination_region;
 
-		if (evidence->source_record >= source->mover_support_provider->fact_count ||
+		if (evidence->source_record >= SG_PHASE_SOURCE_PROVIDER(source)->fact_count ||
 			evidence->destination_record != SG_PHASE_CATALOG_INDEX_NONE ||
 			(evidence->source_state_mask &
 				~(sg_phase_mechanism_state_mask_t)
@@ -1616,9 +1616,9 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 				~(sg_phase_mechanism_state_mask_t)
 					SG_PHASE_MECHANISM_STATE_KNOWN) != 0U ||
 			evidence->provider_verifier_identity !=
-				source->mover_support_provider->verifier_identity)
+				SG_PHASE_SOURCE_PROVIDER(source)->verifier_identity)
 			return 0;
-		fact = &source->mover_support_provider->facts[evidence->source_record];
+		fact = &SG_PHASE_SOURCE_PROVIDER(source)->facts[evidence->source_record];
 		if (fact->source_state < SG_MECHANISM_STATE_INACTIVE ||
 			fact->source_state >= SG_MECHANISM_STATE_COUNT ||
 			fact->destination_state < SG_MECHANISM_STATE_INACTIVE ||

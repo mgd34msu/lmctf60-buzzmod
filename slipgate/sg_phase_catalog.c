@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SG_PHASE_CATALOG_MAGIC UINT64_C(0x50434154414c4f47)
-
 static int AllocationFits(size_t count, size_t element_size)
 {
 	return element_size != 0U && count <= SIZE_MAX / element_size;
@@ -257,14 +255,12 @@ static int ProviderSupportCompare(const sg_phase_mover_support_t *left,
 	return 0;
 }
 
-static int ProviderSupportsValid(const sg_phase_catalog_source_t *source)
+static int ProviderSupportsValid(const sg_phase_catalog_source_t *source,
+	const sg_phase_mover_support_provider_payload_t *provider)
 {
-	const sg_phase_mover_support_provider_t *provider =
-		source->mover_support_provider;
 	uint32_t index;
 
-	if (!SG_PhaseMoverSupportProviderHeaderValid(provider) ||
-		!SG_PhaseCatalogIdentityEqual(&provider->identity,
+	if (!provider || !SG_PhaseCatalogIdentityEqual(&provider->identity,
 			&source->authority->identity) ||
 		(provider->support_count != 0U && !provider->supports) ||
 		(provider->fact_count != 0U && !provider->facts) ||
@@ -353,7 +349,8 @@ static int ConfigurationRelationsValid(const sg_phase_catalog_source_t *source)
 	return 1;
 }
 
-int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
+static int SourceValidateWithProvider(const sg_phase_catalog_source_t *source,
+	const sg_phase_mover_support_provider_payload_t *provider,
 	sg_phase_catalog_error_t *error_out)
 {
 	const sg_rune_model_identity_t *identity;
@@ -361,7 +358,7 @@ int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
 	uint32_t region;
 
 	if (!source || !source->authority || !source->configuration ||
-		!source->semantics || !source->mover_support_provider)
+		!source->semantics || !provider)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT, 0U);
 		return 0;
@@ -372,17 +369,10 @@ int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
 		return 0;
 	}
-	if (!SG_PhaseMoverSupportProviderHeaderValid(
-			source->mover_support_provider))
-	{
-		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
-		return 0;
-	}
 	if (!SG_PhaseCatalogIdentityEqual(identity,
 		&source->configuration->identity) ||
 		!SG_PhaseCatalogIdentityEqual(identity, &source->semantics->identity) ||
-		!SG_PhaseCatalogIdentityEqual(identity,
-			&source->mover_support_provider->identity))
+		!SG_PhaseCatalogIdentityEqual(identity, &provider->identity))
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_IDENTITY_MISMATCH, 0U);
 		return 0;
@@ -403,7 +393,7 @@ int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
 				SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
 		return 0;
 	}
-	if (!ProviderSupportsValid(source))
+	if (!ProviderSupportsValid(source, provider))
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
 		return 0;
@@ -424,9 +414,8 @@ int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
 	{
 		if (source->semantics->region_count != 0U ||
 			source->semantics->face_count != 0U ||
-			source->mover_support_provider->support_count != 0U ||
-			source->mover_support_provider->fact_count != 0U ||
-			source->mover_support_provider->completion !=
+			provider->support_count != 0U || provider->fact_count != 0U ||
+			provider->completion !=
 				SG_PHASE_CATALOG_PROVEN_EMPTY)
 		{
 			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
@@ -488,6 +477,27 @@ int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
 		}
 	}
 	return 1;
+}
+
+int SG_PhaseCatalogSourceValidate(const sg_phase_catalog_source_t *source,
+	sg_phase_catalog_error_t *error_out)
+{
+	const sg_phase_mover_support_provider_payload_t *provider;
+
+	if (!source || !source->mover_support_owner ||
+		!source->mover_support_provider)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT, 0U);
+		return 0;
+	}
+	if (!SG_PhaseMoverSupportProviderHeaderValid(
+			source->mover_support_owner, source->mover_support_provider))
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, 0U);
+		return 0;
+	}
+	provider = SG_PHASE_SOURCE_PROVIDER(source);
+	return SourceValidateWithProvider(source, provider, error_out);
 }
 
 static int PhaseEquivalent(const sg_rune_phase_basis_t *left,
@@ -1388,11 +1398,12 @@ static uint32_t TimingSpan(const sg_mechanism_capability_fact_t *fact)
 }
 
 static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
+	const sg_phase_mover_support_provider_payload_t *provider,
 	sg_phase_catalog_expected_t *expected, uint32_t fact_index,
 	uint32_t *cell_ordinals, sg_phase_catalog_error_t *error_out)
 {
 	const sg_mechanism_capability_fact_t *fact =
-		&source->mover_support_provider->facts[fact_index];
+		&provider->facts[fact_index];
 	const sg_configuration_semantic_region_t *source_region =
 		&source->semantics->regions[fact->source_region];
 	const sg_configuration_semantic_region_t *destination_region =
@@ -1466,7 +1477,7 @@ static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
 	evidence.destination_state_mask = (sg_phase_mechanism_state_mask_t)
 		StateBit(fact->destination_state);
 	evidence.provider_verifier_identity =
-		source->mover_support_provider->verifier_identity;
+		provider->verifier_identity;
 	evidence.delay_ms = fact->delay_ms;
 	evidence.dwell_ms = fact->dwell_ms;
 	evidence.travel_ms = fact->travel_ms;
@@ -1579,7 +1590,8 @@ static int FinalizeTransitions(sg_phase_catalog_expected_t *expected,
 	return 1;
 }
 
-int SG_PhaseCatalogBuildExpected(const sg_phase_catalog_source_t *source,
+static int BuildExpectedValidated(const sg_phase_catalog_source_t *source,
+	const sg_phase_mover_support_provider_payload_t *provider,
 	sg_phase_catalog_expected_t *expected, sg_phase_catalog_error_t *error_out)
 {
 	uint32_t *cell_ordinals = NULL;
@@ -1587,18 +1599,10 @@ int SG_PhaseCatalogBuildExpected(const sg_phase_catalog_source_t *source,
 	uint32_t cell;
 	uint32_t support_cursor = 0U;
 
-	if (!expected)
-	{
-		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT, 0U);
-		return 0;
-	}
-	memset(expected, 0, sizeof(*expected));
-	if (!SG_PhaseCatalogSourceValidate(source, error_out))
-		return 0;
 	expected->completion = source->configuration->cell_count == 0U ?
 		SG_PHASE_CATALOG_PROVEN_EMPTY : SG_PHASE_CATALOG_COMPLETE;
 	expected->mover_support_verifier_identity =
-		source->mover_support_provider->verifier_identity;
+		provider->verifier_identity;
 	if (source->configuration->cell_count == 0U)
 	{
 		expected->transition_completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
@@ -1634,16 +1638,16 @@ int SG_PhaseCatalogBuildExpected(const sg_phase_catalog_source_t *source,
 		if (expected->phase_region_by_phase[phase] ==
 			SG_PHASE_CATALOG_INDEX_NONE)
 			expected->phase_region_by_phase[phase] = region;
-		while (support_cursor < source->mover_support_provider->support_count &&
-			source->mover_support_provider->supports[support_cursor].
+		while (support_cursor < provider->support_count &&
+			provider->supports[support_cursor].
 				semantic_region_id < record->id)
 			support_cursor++;
-		while (support_cursor < source->mover_support_provider->support_count &&
-			source->mover_support_provider->supports[support_cursor].
+		while (support_cursor < provider->support_count &&
+			provider->supports[support_cursor].
 				semantic_region_id == record->id)
 		{
 			const sg_phase_mover_support_t *support =
-				&source->mover_support_provider->supports[support_cursor];
+				&provider->supports[support_cursor];
 			sg_rune_mechanism_ref_t mechanism = support->mechanism;
 
 			FillPhase(source, record, 1, &mechanism, 1U, &candidate);
@@ -1658,7 +1662,7 @@ int SG_PhaseCatalogBuildExpected(const sg_phase_catalog_source_t *source,
 			support_cursor++;
 		}
 	}
-	if (support_cursor != source->mover_support_provider->support_count)
+	if (support_cursor != provider->support_count)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
 			support_cursor);
@@ -1708,9 +1712,9 @@ int SG_PhaseCatalogBuildExpected(const sg_phase_catalog_source_t *source,
 			goto failure;
 		}
 	}
-	for (region = 0U; region < source->mover_support_provider->fact_count;
+	for (region = 0U; region < provider->fact_count;
 		region++)
-		if (!AppendMechanismTransition(source, expected, region,
+		if (!AppendMechanismTransition(source, provider, expected, region,
 			cell_ordinals, error_out))
 		{
 			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, region);
@@ -1727,6 +1731,63 @@ failure:
 	free(cell_ordinals);
 	SG_PhaseCatalogExpectedDestroy(expected);
 	return 0;
+}
+
+int SG_PhaseCatalogBuildExpected(const sg_phase_catalog_source_t *source,
+	sg_phase_catalog_expected_t *expected, sg_phase_catalog_error_t *error_out)
+{
+	const sg_phase_mover_support_provider_payload_t *provider;
+
+	if (!expected)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT, 0U);
+		return 0;
+	}
+	memset(expected, 0, sizeof(*expected));
+	if (!SG_PhaseCatalogSourceValidate(source, error_out))
+		return 0;
+	provider = SG_PHASE_SOURCE_PROVIDER(source);
+	return BuildExpectedValidated(source, provider, expected, error_out);
+}
+
+int SG_PhaseCatalogDeriveExpectedNonAuthoritative(
+	const sg_phase_catalog_non_authoritative_source_t *source,
+	sg_phase_catalog_expected_t *expected, sg_phase_catalog_error_t *error_out)
+{
+	sg_phase_mover_support_provider_payload_t provider;
+	sg_phase_catalog_source_t derivation_source;
+
+	if (error_out)
+		memset(error_out, 0, sizeof(*error_out));
+	if (!expected)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT, 0U);
+		return 0;
+	}
+	memset(expected, 0, sizeof(*expected));
+	if (!source || !source->authority || !source->configuration ||
+		!source->semantics || source->verifier_identity == 0U ||
+		source->verifier_identity == UINT64_MAX)
+	{
+		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_ARGUMENT, 0U);
+		return 0;
+	}
+	memset(&provider, 0, sizeof(provider));
+	provider.identity = source->authority->identity;
+	provider.completion = source->completion;
+	provider.supports = source->supports;
+	provider.support_count = source->support_count;
+	provider.facts = source->facts;
+	provider.fact_count = source->fact_count;
+	provider.verifier_identity = source->verifier_identity;
+	memset(&derivation_source, 0, sizeof(derivation_source));
+	derivation_source.authority = source->authority;
+	derivation_source.configuration = source->configuration;
+	derivation_source.semantics = source->semantics;
+	if (!SourceValidateWithProvider(&derivation_source, &provider, error_out))
+		return 0;
+	return BuildExpectedValidated(&derivation_source, &provider, expected,
+		error_out);
 }
 
 void SG_PhaseCatalogExpectedDestroy(sg_phase_catalog_expected_t *expected)

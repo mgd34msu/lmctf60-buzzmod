@@ -50,6 +50,8 @@ typedef struct sg_phase_mover_support_s
 
 typedef struct sg_phase_mover_support_provider_s
 	sg_phase_mover_support_provider_t;
+typedef struct sg_phase_mover_support_provider_owner_s
+	sg_phase_mover_support_provider_owner_t;
 
 typedef struct sg_phase_mover_support_provider_view_s
 {
@@ -68,6 +70,7 @@ typedef struct sg_phase_catalog_source_s
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	/* This object is issued from an accepted immutable mechanism result. */
+	const sg_phase_mover_support_provider_owner_t *mover_support_owner;
 	const sg_phase_mover_support_provider_t *mover_support_provider;
 } sg_phase_catalog_source_t;
 
@@ -250,15 +253,23 @@ void SG_PhaseCatalogPublicationDestroy(
 /* Issue an immutable mover-support snapshot only from a sealed capability
  * result.  The provider derives support IDs, masks, and its verifier identity
  * from the accepted facts; none are caller-shaped inputs. */
+int SG_PhaseMoverSupportProviderOwnerCreate(
+	sg_phase_mover_support_provider_owner_t **owner_out);
+void SG_PhaseMoverSupportProviderOwnerDestroy(
+	sg_phase_mover_support_provider_owner_t *owner);
 int SG_PhaseMoverSupportProviderBuild(
+	sg_phase_mover_support_provider_owner_t *owner,
+	const sg_mechanism_capability_owner_t *capability_owner,
 	const sg_configuration_semantics_t *semantics,
 	const sg_mechanism_capability_set_t *accepted_capabilities,
 	sg_phase_mover_support_provider_t **provider_out,
 	sg_phase_catalog_error_t *error_out);
 int SG_PhaseMoverSupportProviderRead(
+	const sg_phase_mover_support_provider_owner_t *owner,
 	const sg_phase_mover_support_provider_t *provider,
 	const sg_phase_mover_support_provider_view_t **view_out);
 void SG_PhaseMoverSupportProviderDestroy(
+	sg_phase_mover_support_provider_owner_t *owner,
 	sg_phase_mover_support_provider_t *provider);
 
 #endif /* SG_PHASE_CATALOG_H */

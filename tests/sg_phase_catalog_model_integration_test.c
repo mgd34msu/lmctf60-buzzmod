@@ -1,12 +1,12 @@
-/* Exercise the production publication barrier all the way into the frozen
- * RUNE model validator. */
+/* Exercise pure catalog derivation all the way into the frozen RUNE model
+ * validator.  Authoritative publication is covered by the mechanism
+ * integration fixture, which obtains its capability from the real builder. */
 int SG_RuneModelContractFixtureMain(void);
 #define main SG_RuneModelContractFixtureMain
 #include "sg_rune_model_contract_test.c"
 #undef main
 
-#include "../slipgate/sg_phase_catalog_owner.h"
-#include "../slipgate/sg_mechanism_capability_internal.h"
+#include "../slipgate/sg_phase_catalog_internal.h"
 
 typedef struct catalog_model_source_fixture_s
 {
@@ -16,8 +16,7 @@ typedef struct catalog_model_source_fixture_s
 	sg_configuration_portal_t portal;
 	sg_configuration_semantics_t semantics;
 	sg_configuration_semantic_region_t regions[2];
-	sg_mechanism_capability_set_t *capabilities;
-	sg_phase_catalog_publication_t *publication;
+	sg_phase_catalog_non_authoritative_source_t derivation;
 } catalog_model_source_fixture_t;
 
 static void SetCatalogCell(sg_configuration_cell_t *cell,
@@ -76,36 +75,51 @@ static void InitCatalogModelSource(catalog_model_source_fixture_t *fixture,
 	fixture->portal.clearance = 1.0f;
 	fixture->configuration.portals = &fixture->portal;
 	fixture->configuration.portal_count = 1U;
-	CHECK(SG_MechanismCapabilityTestIssue(identity, NULL, 0U,
-		&fixture->capabilities));
+	fixture->derivation.authority = &fixture->authority;
+	fixture->derivation.configuration = &fixture->configuration;
+	fixture->derivation.semantics = &fixture->semantics;
+	fixture->derivation.completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
+	fixture->derivation.verifier_identity = UINT64_C(0x4e4f4e4155544810);
 }
 
-static void TestPublishedPortalTransitionsValidate(void)
+static void ViewExpected(const sg_phase_catalog_expected_t *expected,
+	const sg_rune_model_identity_t *identity, sg_phase_catalog_view_t *view)
+{
+	memset(view, 0, sizeof(*view));
+	view->identity = *identity;
+	view->completion = expected->completion;
+	view->transition_completion = expected->transition_completion;
+	view->mover_support_verifier_identity =
+		expected->mover_support_verifier_identity;
+	view->phases = expected->phases;
+	view->phase_count = expected->phase_count;
+	view->bindings = expected->bindings;
+	view->binding_count = expected->binding_count;
+	view->transitions = expected->transitions;
+	view->transition_evidence = expected->transition_evidence;
+	view->transition_count = expected->transition_count;
+}
+
+static void TestDerivedPortalTransitionsValidate(void)
 {
 	model_fixture_t model_fixture;
 	catalog_model_source_fixture_t source_fixture;
-	const sg_phase_catalog_view_t *view = NULL;
+	sg_phase_catalog_expected_t expected;
+	sg_phase_catalog_view_t view_storage;
+	const sg_phase_catalog_view_t *view = &view_storage;
 	sg_phase_catalog_error_t error;
-	sg_phase_catalog_audit_result_t audit;
 	uint32_t index;
 
 	InitFixture(&model_fixture);
 	InitCatalogModelSource(&source_fixture, &model_fixture.model.identity);
-	CHECK(SG_PhaseCatalogPublicationBuild(&source_fixture.authority,
-		&source_fixture.configuration, &source_fixture.semantics,
-		source_fixture.capabilities, &source_fixture.publication, &error,
-		&audit));
-	CHECK(source_fixture.publication != NULL);
-	if (!source_fixture.publication)
+	memset(&expected, 0, sizeof(expected));
+	CHECK(SG_PhaseCatalogDeriveExpectedNonAuthoritative(
+		&source_fixture.derivation, &expected, &error));
+	if (expected.phase_count == 0U)
 		return;
-	CHECK(SG_PhaseCatalogPublicationRead(source_fixture.publication, &view));
+	ViewExpected(&expected, &model_fixture.model.identity, &view_storage);
 	CHECK(view != NULL && view->phase_count == 2U &&
 		view->transition_count == 2U);
-	if (!view)
-	{
-		SG_PhaseCatalogPublicationDestroy(source_fixture.publication);
-		return;
-	}
 	for (index = 0U; index < view->transition_count; index++)
 	{
 		CHECK(view->transitions[index].kind == SG_RUNE_PHASE_TRANSITION_PORTAL);
@@ -118,8 +132,7 @@ static void TestPublishedPortalTransitionsValidate(void)
 		CHECK(view->transition_evidence[index].portal_duration_ms == 0U);
 	}
 
-	/* Reuse the fully populated model fixture for geometry and completeness,
-	 * replacing only the phase/transition arrays with the immutable view. */
+	/* Reuse the fully populated model fixture for geometry and completeness. */
 	model_fixture.model.phases = view->phases;
 	model_fixture.model.phase_count = view->phase_count;
 	model_fixture.model.phase_transitions = view->transitions;
@@ -135,8 +148,7 @@ static void TestPublishedPortalTransitionsValidate(void)
 	SetEvidence(&model_fixture.model, &model_fixture.evidence);
 	CHECK(SG_RuneModelValidate(&model_fixture.model,
 		&model_fixture.evidence) == SG_RUNE_FAILURE_NONE);
-	SG_PhaseCatalogPublicationDestroy(source_fixture.publication);
-	SG_MechanismCapabilityDestroy(source_fixture.capabilities);
+	SG_PhaseCatalogExpectedDestroy(&expected);
 }
 
 typedef struct mechanism_heavy_source_fixture_s
@@ -146,8 +158,9 @@ typedef struct mechanism_heavy_source_fixture_s
 	sg_configuration_cell_t cells[2];
 	sg_configuration_semantics_t semantics;
 	sg_configuration_semantic_region_t regions[3];
-	sg_mechanism_capability_set_t *capabilities;
+	sg_phase_mover_support_t supports[2];
 	sg_mechanism_capability_fact_t *facts;
+	sg_phase_catalog_non_authoritative_source_t derivation;
 } mechanism_heavy_source_fixture_t;
 
 static void InitHeavySource(mechanism_heavy_source_fixture_t *fixture,
@@ -190,14 +203,29 @@ static void InitHeavySource(mechanism_heavy_source_fixture_t *fixture,
 		fact->destination_state = SG_MECHANISM_STATE_ACTIVATING;
 		fact->delay_ms = index + 1U;
 	}
-	CHECK(SG_MechanismCapabilityTestIssue(identity, fixture->facts, fact_count,
-		&fixture->capabilities));
+	memset(fixture->supports, 0, sizeof(fixture->supports));
+	fixture->supports[0].semantic_region_id = fixture->regions[0].id;
+	fixture->supports[0].mechanism.value = MechanismId(0U).value;
+	fixture->supports[0].mechanism_state_mask =
+		UINT32_C(1) << SG_MECHANISM_STATE_INACTIVE;
+	fixture->supports[1].semantic_region_id = fixture->regions[1].id;
+	fixture->supports[1].mechanism.value = MechanismId(0U).value;
+	fixture->supports[1].mechanism_state_mask =
+		UINT32_C(1) << SG_MECHANISM_STATE_ACTIVATING;
+	fixture->derivation.authority = &fixture->authority;
+	fixture->derivation.configuration = &fixture->configuration;
+	fixture->derivation.semantics = &fixture->semantics;
+	fixture->derivation.supports = fixture->supports;
+	fixture->derivation.support_count = 2U;
+	fixture->derivation.facts = fixture->facts;
+	fixture->derivation.fact_count = fact_count;
+	fixture->derivation.completion = SG_PHASE_CATALOG_COMPLETE;
+	fixture->derivation.verifier_identity = UINT64_C(0x4e4f4e4155544820);
 }
 
 static void DestroyHeavySource(mechanism_heavy_source_fixture_t *fixture)
 {
 	free(fixture->facts);
-	SG_MechanismCapabilityDestroy(fixture->capabilities);
 	memset(fixture, 0, sizeof(*fixture));
 }
 
@@ -264,10 +292,10 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 {
 	model_fixture_t model_fixture;
 	mechanism_heavy_source_fixture_t source_fixture;
-	const sg_phase_catalog_view_t *view = NULL;
-	sg_phase_catalog_publication_t *publication = NULL;
+	sg_phase_catalog_expected_t expected;
+	sg_phase_catalog_view_t view_storage;
+	const sg_phase_catalog_view_t *view = &view_storage;
 	sg_phase_catalog_error_t error;
-	sg_phase_catalog_audit_result_t audit;
 	uint32_t at_limit = SG_RUNE_MODEL_MAX_CELL_PHASES - 2U;
 	uint32_t over_limit = at_limit + 1U;
 
@@ -277,19 +305,18 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	model_fixture.model.identity.physics.frame_ms = 100U;
 	model_fixture.model.identity.physics.substep_ms = 10U;
 	InitHeavySource(&source_fixture, &model_fixture.model.identity, at_limit);
-	CHECK(source_fixture.facts != NULL && source_fixture.capabilities != NULL);
-	if (!source_fixture.facts || !source_fixture.capabilities)
+	CHECK(source_fixture.facts != NULL);
+	if (!source_fixture.facts)
 	{
 		DestroyHeavySource(&source_fixture);
 		return;
 	}
-	CHECK(SG_PhaseCatalogPublicationBuild(&source_fixture.authority,
-		&source_fixture.configuration, &source_fixture.semantics,
-		source_fixture.capabilities, &publication, &error, &audit));
-	CHECK(publication != NULL);
-	if (publication)
+	memset(&expected, 0, sizeof(expected));
+	CHECK(SG_PhaseCatalogDeriveExpectedNonAuthoritative(
+		&source_fixture.derivation, &expected, &error));
+	if (expected.phase_count != 0U)
 	{
-		CHECK(SG_PhaseCatalogPublicationRead(publication, &view));
+		ViewExpected(&expected, &model_fixture.model.identity, &view_storage);
 		CHECK(view != NULL && view->phase_count ==
 			SG_RUNE_MODEL_MAX_CELL_PHASES + 1U);
 		CHECK(view != NULL && view->transition_count == at_limit);
@@ -299,27 +326,26 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 			CHECK(SG_RuneModelValidate(&model_fixture.model,
 				&model_fixture.evidence) == SG_RUNE_FAILURE_NONE);
 		}
-		SG_PhaseCatalogPublicationDestroy(publication);
-		publication = NULL;
 	}
+	SG_PhaseCatalogExpectedDestroy(&expected);
 	DestroyHeavySource(&source_fixture);
 
 	InitHeavySource(&source_fixture, &model_fixture.model.identity, over_limit);
-	CHECK(source_fixture.facts != NULL && source_fixture.capabilities != NULL);
-	if (source_fixture.facts && source_fixture.capabilities)
+	CHECK(source_fixture.facts != NULL);
+	if (source_fixture.facts)
 	{
-		CHECK(!SG_PhaseCatalogPublicationBuild(&source_fixture.authority,
-			&source_fixture.configuration, &source_fixture.semantics,
-			source_fixture.capabilities, &publication, &error, &audit));
-		CHECK(publication == NULL);
+		memset(&expected, 0, sizeof(expected));
+		CHECK(!SG_PhaseCatalogDeriveExpectedNonAuthoritative(
+			&source_fixture.derivation, &expected, &error));
 		CHECK(error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+		SG_PhaseCatalogExpectedDestroy(&expected);
 	}
 	DestroyHeavySource(&source_fixture);
 }
 
 int main(void)
 {
-	TestPublishedPortalTransitionsValidate();
+	TestDerivedPortalTransitionsValidate();
 	TestMechanismHeavyCellPhaseLimit();
 	if (failures != 0)
 		return 1;
