@@ -444,9 +444,12 @@ class StrikeIntegrationTest(unittest.TestCase):
         goal = (ROOT / "slipgate/sg_goal.c").read_text()
         lead = goal.index("const int *lead = Lead_Field")
         tactics = goal.index("sg_cv.tactics->value")
-        for route_guard in (goal[lead - 140:lead], goal[tactics - 140:tactics]):
-            self.assertIn("!tc->strike_blocks_optional", route_guard)
-            self.assertIn("SG_RuneHandoffAllowsOptional", route_guard)
+        lead_guard = goal[lead - 140:lead]
+        self.assertIn("!tc->strike_blocks_optional", lead_guard)
+        self.assertIn("SG_RuneHandoffAllowsOptional", lead_guard)
+        tactic_guard = goal[tactics - 140:tactics]
+        self.assertIn("tc->strike_blocks_optional ||", tactic_guard)
+        self.assertIn("SG_RuneHandoffAllowsOptional", tactic_guard)
         mega = goal.index("tc->mega =")
         self.assertIn("tc->strike_blocks_optional", goal[mega:mega + 160])
         price = (ROOT / "slipgate/sg_price.c").read_text()

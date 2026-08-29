@@ -58,6 +58,9 @@ void Think_CarryBookends(sg_bot_t *bot, edict_t *e,
 /* resolves the frame's objective fields; context in, context out */
 void Think_Objective(sg_bot_t *bot, sg_think_t *tc);
 
+/* derives a local waypoint from the reducer-owned strategic field */
+void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc);
+
 void Think_InterceptField(sg_role_t role, int team,
                                  const int **support_out,
                                  const int **intercept_out);

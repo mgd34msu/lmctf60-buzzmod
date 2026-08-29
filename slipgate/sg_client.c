@@ -73,6 +73,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	/* This is the only production reset point for the immutable instance. */
 	SG_BotPOVInstanceReset(bot);
 	memset(bot, 0, sizeof(*bot));
+	(void)SG_StrategyCallerInit(&bot->strategy);
 	SG_CompoundHookGameReset(bot);
 	bot->compound_drop_live.drop_link = -1;
 	bot->seed = -1;
@@ -141,7 +142,7 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	bot->def_supply_until = 0.0f;
 	bot->def_supply_next = 0.0f;
 	bot->tac_seed = -1;
-	bot->tac_role = -1;
+	bot->tac_strategy_activation = 0U;
 	bot->rally_cover = -1;
 	bot->rail_link = -1;
 	bot->railhold_enemy = -1;

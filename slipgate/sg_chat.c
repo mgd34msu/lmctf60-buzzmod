@@ -3666,6 +3666,19 @@ int SG_ChatOrderedRole(edict_t *bot)
 	return chat_bot[cl].order_role;
 }
 
+/* Stable human principal for the typed strategy authority stamp. */
+int SG_ChatOrderPrincipal(edict_t *bot)
+{
+	int cl;
+
+	if (!bot || !bot->inuse || !bot->client)
+		return -1;
+	cl = Chat_ClientNum(bot);
+	if (!Chat_OrderLive(cl))
+		return -1;
+	return chat_bot[cl].order_from;
+}
+
 edict_t *SG_ChatEscortTarget(edict_t *bot)
 {
 	edict_t	*from;

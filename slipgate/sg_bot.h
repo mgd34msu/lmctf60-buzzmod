@@ -21,6 +21,7 @@
 #include "sg_rune.h"
 #include "sg_strike.h"
 #include "sg_field_key.h"
+#include "sg_strategy_caller.h"
 
 #define SG_MAXBOTS      16
 #define SG_DOOR_APPROACH_MAX_MASTERS 16
@@ -118,6 +119,9 @@ typedef struct sg_bot_s
 	/* Process-lifetime identity for one active occupant of this SG slot.
 	 * Assigned once after its first ClientBegin and erased only by reset. */
 	unsigned long long instance_token;
+	/* Policies publish proposals; only this reducer binds the destination
+	 * consumed by tactical waypoint and movement selection. */
+	sg_strategy_caller_t strategy;
 	/* Shared mover ownership survives death/respawn and is retired before the
 	 * containing process-storage slot is erased. */
 	sg_compound_guard_bot_t compound_guard;
@@ -464,8 +468,7 @@ typedef struct sg_bot_s
 	float		nav_yaw_t;      /* its clock */
 	int			tac_seed;       /* committed tactical waypoint (-1 none) */
 	float		tac_time;       /* when the waypoint was committed */
-	int			tac_role;       /* role the waypoint serves: strategy
-	                             * change retires the tactic */
+	uint64_t		tac_strategy_activation; /* typed owner of the waypoint */
 	float		strict_since;   /* independent strict grab-hold clock */
 	int			last_room;      /* defenders believed at the stand, last census */
 	int			rally_cover;    /* the low-exposure seed the wait happens at */
@@ -608,6 +611,8 @@ typedef struct sg_think_s {
 				strike_blocks_optional,
 				strike_weapon_pursuit;
 	float			strike_weapon_deadline;
+	uint64_t		strategy_plan_id;
+	uint64_t		strategy_activation_id;
 } sg_think_t;
 
 void SG_BotThink(sg_bot_t *bot);

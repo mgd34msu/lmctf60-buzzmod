@@ -63,6 +63,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_goal.h"
 #include "slipgate/sg_strike_adapter.h"
+#include "slipgate/sg_field_projection.h"
 
 #include <errno.h>
 #include <math.h>
@@ -2320,6 +2321,310 @@ static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
 	return SG_Role((sg_bot_t *)bot, carrying);
 }
 
+static uint64_t StrategyNowMs(void)
+{
+	double milliseconds = (double)level.time * 1000.0;
+
+	if (!isfinite(milliseconds) || milliseconds < 0.0)
+		return 1U;
+	if (milliseconds >= (double)UINT64_MAX - 1.0)
+		return UINT64_MAX;
+	return (uint64_t)milliseconds + 1U;
+}
+
+static uint64_t StrategyCommitmentWord(uint64_t hash, uint64_t word)
+{
+	hash ^= word;
+	return hash * UINT64_C(1099511628211);
+}
+
+static uint64_t StrategyCommitmentId(sg_strategy_goal_kind_t goal_kind,
+	int role, const sg_destination_ref_t *destination)
+{
+	uint64_t hash = UINT64_C(1469598103934665603);
+
+	hash = StrategyCommitmentWord(hash, (uint64_t)goal_kind);
+	hash = StrategyCommitmentWord(hash, (uint64_t)(unsigned)(role + 1));
+	hash = StrategyCommitmentWord(hash, (uint64_t)destination->kind);
+	switch (destination->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		hash = StrategyCommitmentWord(hash, destination->value.flag.team);
+		hash = StrategyCommitmentWord(hash, destination->value.flag.location);
+		break;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+		hash = StrategyCommitmentWord(hash,
+			destination->value.item.item_id);
+		break;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		hash = StrategyCommitmentWord(hash,
+			destination->value.carrier.team);
+		hash = StrategyCommitmentWord(hash,
+			destination->value.carrier.selector);
+		hash = StrategyCommitmentWord(hash,
+			destination->value.carrier.client_id);
+		break;
+	case SG_DESTINATION_DEFENSIVE_POST:
+		hash = StrategyCommitmentWord(hash,
+			destination->value.post.region_id);
+		break;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		hash = StrategyCommitmentWord(hash,
+			destination->value.point.point_id);
+		break;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		break;
+	}
+	return hash ? hash : 1U;
+}
+
+static void StrategyCarrierDestination(sg_destination_ref_t *destination,
+	sg_destination_kind_t kind, int team, int client)
+{
+	memset(destination, 0, sizeof(*destination));
+	destination->kind = kind;
+	destination->value.carrier.team = (uint8_t)team;
+	if (client >= 0 && client < UINT16_MAX)
+	{
+		destination->value.carrier.selector = SG_DESTINATION_CARRIER_EXACT;
+		destination->value.carrier.client_id = (uint16_t)client;
+	}
+	else
+	{
+		destination->value.carrier.selector = SG_DESTINATION_CARRIER_ANY;
+		destination->value.carrier.client_id = UINT16_MAX;
+	}
+}
+
+static void StrategyFlagDestination(sg_destination_ref_t *destination,
+	int team, sg_destination_flag_location_t location)
+{
+	memset(destination, 0, sizeof(*destination));
+	destination->kind = SG_DESTINATION_FLAG;
+	destination->value.flag.team = (uint8_t)team;
+	destination->value.flag.location = (uint8_t)location;
+}
+
+static void StrategyPointDestination(sg_destination_ref_t *destination,
+	sg_destination_kind_t kind, int root)
+{
+	memset(destination, 0, sizeof(*destination));
+	destination->kind = kind;
+	if (kind == SG_DESTINATION_DEFENSIVE_POST)
+		destination->value.post.region_id = root >= 0
+			? (uint32_t)root : 0U;
+	else
+		destination->value.point.point_id = root >= 0
+			? (uint64_t)(unsigned)root + 1U : 1U;
+}
+
+static int StrategyProposal(sg_bot_t *bot, sg_think_t *tc,
+	sg_strike_duty_t strike_duty, sg_strategy_proposal_t *proposal)
+{
+	const int *field;
+	int root, ordered_role, order_principal, team, enemy;
+	uint64_t at_ms;
+
+	if (!bot || !tc || !proposal || !tc->goal_field || !SG_Rune())
+		return 0;
+	memset(proposal, 0, sizeof(*proposal));
+	field = tc->goal_field;
+	team = tc->team;
+	enemy = SG_EnemyTeam(team);
+	root = SG_FieldRootSeed(SG_Rune(), field);
+	ordered_role = SG_ChatOrderedRole(tc->e);
+	order_principal = SG_ChatOrderPrincipal(tc->e);
+	proposal->goal_kind = SG_STRATEGY_GOAL_DESTINATION;
+	proposal->role = (int)tc->role;
+	proposal->goal_field = field;
+	proposal->authority_rank = ordered_role >= 0
+		? SG_STRATEGY_AUTHORITY_HUMAN : SG_STRATEGY_AUTHORITY_AUTONOMOUS;
+	proposal->principal_kind = ordered_role >= 0
+		? SG_STRATEGY_PRINCIPAL_HUMAN : SG_STRATEGY_PRINCIPAL_AUTONOMOUS;
+	proposal->principal_id = ordered_role >= 0 && order_principal >= 0
+		? (uint32_t)order_principal + 1U
+		: (uint32_t)(bot - sg_bots) + 1U;
+
+	if (tc->carrying || strike_duty == SG_STRIKE_DUTY_CARRY)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_CARRY_FLAG;
+		StrategyFlagDestination(&proposal->destination, team,
+			SG_DESTINATION_FLAG_HOME);
+	}
+	else if (tc->strike_weapon_pursuit && bot->strike_weapon_target_ent >= 0)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_COLLECT_ITEM;
+		proposal->destination.kind = SG_DESTINATION_WEAPON;
+		proposal->destination.value.item.item_id =
+			(uint64_t)(unsigned)bot->strike_weapon_target_ent + 1U;
+	}
+	else if (SG_DefenseSupplyActive(bot) &&
+	         bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND &&
+	         bot->def_supply_ent >= 0)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_COLLECT_ITEM;
+		proposal->destination.kind = SG_DESTINATION_WEAPON;
+		proposal->destination.value.item.item_id =
+			(uint64_t)(unsigned)bot->def_supply_ent + 1U;
+	}
+	else if (bot->lead_ent > 0)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_COLLECT_ITEM;
+		proposal->destination.kind = SG_DESTINATION_POWERUP;
+		proposal->destination.value.item.item_id =
+			(uint64_t)(unsigned)bot->lead_ent + 1U;
+	}
+	else if (tc->rune_handoff_route)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_ESCORT_CARRIER;
+		StrategyCarrierDestination(&proposal->destination,
+			SG_DESTINATION_ESCORT, team, -1);
+	}
+	else if (strike_duty == SG_STRIKE_DUTY_RECOVER ||
+	         tc->role == SG_ROLE_RECOVER)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_RECOVER_FLAG;
+		StrategyFlagDestination(&proposal->destination, team,
+			SG_DESTINATION_FLAG_CURRENT);
+	}
+	else if (strike_duty == SG_STRIKE_DUTY_ESCORT ||
+	         tc->role == SG_ROLE_ESCORT)
+	{
+		edict_t *target = SG_ChatEscortTarget(tc->e);
+		int client = target ? (int)(target - g_edicts) - 1 : -1;
+
+		proposal->goal_kind = SG_STRATEGY_GOAL_ESCORT_CARRIER;
+		StrategyCarrierDestination(&proposal->destination,
+			SG_DESTINATION_ESCORT, team, client);
+	}
+	else if (tc->role == SG_ROLE_DEFEND &&
+	         field == sg_fields.to_icept[SG_TeamIdx(team)])
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_INTERCEPT_CARRIER;
+		StrategyCarrierDestination(&proposal->destination,
+			SG_DESTINATION_INTERCEPT, enemy, -1);
+	}
+	else if (tc->role == SG_ROLE_DEFEND &&
+	         field != (team == CTF_TEAM_RED ? sg_fields.to_red_flag
+	                                      : sg_fields.to_blue_flag))
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_DEFEND_POST;
+		StrategyPointDestination(&proposal->destination,
+			field == sg_fields.to_post[SG_TeamIdx(team)]
+				? SG_DESTINATION_DEFENSIVE_POST
+				: SG_DESTINATION_LEARNED_POINT,
+			root);
+	}
+	else if (tc->role == SG_ROLE_DEFEND)
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_DEFEND_POST;
+		StrategyPointDestination(&proposal->destination,
+			SG_DESTINATION_DEFENSIVE_POST, root);
+	}
+	else
+	{
+		proposal->goal_kind = SG_STRATEGY_GOAL_CAPTURE_FLAG;
+		StrategyFlagDestination(&proposal->destination, enemy,
+			SG_DESTINATION_FLAG_CURRENT);
+	}
+
+	proposal->commitment_id = StrategyCommitmentId(proposal->goal_kind,
+		proposal->role, &proposal->destination);
+	proposal->destination_status = SG_STRATEGY_DESTINATION_UNOBSERVED;
+	proposal->cost_ms = SG_DESTINATION_FIELD_INF;
+	if (root >= 0)
+	{
+		uint64_t generation = (uint64_t)sg_fields.action_topology_epoch + 1U;
+		sg_destination_motion_t motion =
+			proposal->destination.kind == SG_DESTINATION_CARRIER ||
+			proposal->destination.kind == SG_DESTINATION_ESCORT ||
+			proposal->destination.kind == SG_DESTINATION_INTERCEPT ||
+			(proposal->destination.kind == SG_DESTINATION_FLAG &&
+			 proposal->destination.value.flag.location ==
+			     SG_DESTINATION_FLAG_CURRENT)
+			? SG_DESTINATION_MOVING : SG_DESTINATION_STATIC;
+
+		at_ms = StrategyNowMs();
+		proposal->destination_status =
+			bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds &&
+			field[bot->seed] < SG_FIELD_INF
+			? SG_STRATEGY_DESTINATION_REACHABLE
+			: SG_STRATEGY_DESTINATION_UNREACHABLE;
+		if (proposal->destination_status ==
+		    SG_STRATEGY_DESTINATION_REACHABLE)
+			proposal->cost_ms = (uint32_t)field[bot->seed];
+		proposal->handle.id = proposal->commitment_id;
+		proposal->handle.generation = generation ? generation : 1U;
+		proposal->handle.kind = proposal->destination.kind;
+		proposal->handle.motion = motion;
+		proposal->handle.valid = 1U;
+		proposal->handle.pose.phase.phase_id = (uint32_t)root;
+		proposal->handle.pose.phase.cell_id = (uint32_t)root;
+		VectorCopy(SG_Rune()->seeds[root].origin,
+			proposal->handle.pose.position);
+		proposal->handle.pose.sample_time_ms =
+			motion == SG_DESTINATION_MOVING ? at_ms : 0U;
+		proposal->handle.pose.region_id = (uint32_t)root;
+	}
+	return 1;
+}
+
+static sg_strategy_tactical_block_reason_t StrategyBlockReason(
+	const sg_bot_t *bot, const sg_think_t *tc)
+{
+	if (tc && tc->e && SG_CombatWouldEngage(tc->e))
+		return SG_STRATEGY_BLOCK_COMBAT;
+	if (bot && (bot->mate_block_last || bot->door_held_last ||
+	            bot->deaddoor_ahead))
+		return SG_STRATEGY_BLOCK_OBSTRUCTION;
+	if (bot && (bot->hook_phase != 0 || bot->speedhook ||
+	            bot->air_hook_launch_active))
+		return SG_STRATEGY_BLOCK_HOOK_OPPORTUNITY;
+	return SG_STRATEGY_BLOCK_NONE;
+}
+
+static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
+	sg_strike_duty_t strike_duty)
+{
+	sg_strategy_proposal_t proposal;
+	sg_strategy_caller_output_t output;
+
+	if (!StrategyProposal(bot, tc, strike_duty, &proposal) ||
+	    !SG_StrategyCallerStep(&bot->strategy, &proposal, 1U,
+	        StrategyNowMs(), StrategyBlockReason(bot, tc), &output) ||
+	    !output.goal_field)
+		return false;
+	tc->role = (sg_role_t)output.role;
+	tc->goal_field = output.goal_field;
+	if (output.goal_field != proposal.goal_field)
+	{
+		tc->route_field = output.goal_field;
+		tc->route_pure = false;
+		tc->rune_handoff_route = false;
+		tc->scoop_mission = false;
+		tc->strike_weapon_pursuit = false;
+	}
+	tc->strategy_plan_id = output.plan_id;
+	tc->strategy_activation_id = output.activation_id;
+	return true;
+}
+
+static void StrategyInterrupt(sg_bot_t *bot, qboolean alive,
+	sg_strategy_tactical_block_reason_t reason)
+{
+	sg_strategy_caller_output_t output;
+
+	(void)SG_StrategyCallerPulse(&bot->strategy, alive ? 1U : 0U,
+		StrategyNowMs(), reason, &output);
+}
+
 
 
 
@@ -2475,7 +2780,7 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 	bot->rally_cover = -1;
 	bot->tac_seed = -1;
 	bot->tac_time = 0.0f;
-	bot->tac_role = -1;
+	bot->tac_strategy_activation = 0U;
 	bot->patrol_seed = -1;
 	bot->patrol_link = -1;
 	bot->patrol_until = 0.0f;
@@ -2535,6 +2840,7 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 {
 	if (!e->deadflag)
 		return false;
+	StrategyInterrupt(bot, false, SG_STRATEGY_BLOCK_CONTROLLER);
 
 	/* my own death, at my own seed: the most honest sighting there
 	 * is, and the danger dimension's only teacher */
@@ -2717,11 +3023,12 @@ static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
 				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&
 				    !(sg_fields.shelf_cliff[pti][was] > 0))
 					sg_host.dprint("PITTRACE %s role=%s seed %d->%d z=%.0f "
-					           "tac_seed=%d tac_role=%d hook=%d\n",
+					           "tac_seed=%d tac_strategy=%llu hook=%d\n",
 					           e->client->pers.netname,
 					           role,
 					           was, bot->seed, e->s.origin[2],
-					           bot->tac_seed, bot->tac_role,
+					           bot->tac_seed,
+					           (unsigned long long)bot->tac_strategy_activation,
 					           bot->hook_phase);
 			}
 		}
@@ -3095,6 +3402,7 @@ void SG_BotThink(sg_bot_t *bot)
 	VectorClear(duel_org);
 	if (SG_CompoundSwimGameOwns(bot))
 	{
+		StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_CONTROLLER);
 		if (!e->deadflag)
 			(void)SG_CompoundSwimGameEmit(bot,
 			    (int)bot->compound_swim.snapshot.binding.link_index);
@@ -3111,6 +3419,8 @@ void SG_BotThink(sg_bot_t *bot)
 		run_state = SG_DeclaredDoorGuardRunState(bot);
 		if (run_state == SG_COMPOUND_GUARD_RUN_TERMINAL)
 		{
+			StrategyInterrupt(bot, e->deadflag == DEAD_NO,
+				SG_STRATEGY_BLOCK_CONTROLLER);
 			(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
 			    "death", "declared-door");
 			SG_DeclaredDoorTerminalDeath(bot);
@@ -3124,6 +3434,7 @@ void SG_BotThink(sg_bot_t *bot)
 		}
 		if (run_state != SG_COMPOUND_GUARD_RUN_READY)
 		{
+			StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_CONTROLLER);
 			/* A later bot slot must not enter a newly claimed/released set.  Its
 			 * already-linked hook is independent entity physics, so retire that
 			 * projectile before suppressing the body command. */
@@ -3146,6 +3457,7 @@ void SG_BotThink(sg_bot_t *bot)
 		return;
 	if (!rune_compatible)
 	{
+		StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_CONTROLLER);
 		/* A runtime cvar change invalidates every stored ballistic witness.
 		 * Leave the body in real physics, but submit no navigation and retire
 		 * every action that could resume under a different law. */
@@ -3283,6 +3595,7 @@ void SG_BotThink(sg_bot_t *bot)
 	    !SG_CompoundHookGameOwnsHostRope(bot) &&
 	    (e->client->hookstate != 0 || e->client->hook != NULL))
 	{
+		StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_CONTROLLER);
 		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
 		    "stale-host-rope", "cleanup");
 		ctf_hook_abort(e);
@@ -3353,7 +3666,10 @@ void SG_BotThink(sg_bot_t *bot)
 	if (bot->hook_link >= 0 && !bot->speedhook &&
 	    (bot->hook_phase == 2 || bot->hook_phase == 3) &&
 	    SG_HookActiveFrame(bot, e))
+	{
+		StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_HOOK_OPPORTUNITY);
 		return;
+	}
 
 	team = e->client->ctf.teamnum;
 	carrying = SG_BotCarrying(e);
@@ -3548,6 +3864,10 @@ void SG_BotThink(sg_bot_t *bot)
 		}
 	}
 	(void)RouteLocalNormalize(bot, &tc);
+	if (!StrategyCommitFrame(bot, &tc, strike_duty))
+		return;
+	role = tc.role;
+	Think_TacticalRoute(bot, &tc);
 
 	goal_field = tc.goal_field;
 	/* Objective published the prior route cost before the strike overlay may

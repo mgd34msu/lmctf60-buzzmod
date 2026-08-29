@@ -659,7 +659,8 @@ static void CheckTacticCacheTracksObjectiveIdentity(void)
 	int moving_field[2] = { 0, 500 };
 	sg_tactic_cache_t cache = {
 		.topology_current = true, .tactic_seed = 4,
-		.cached_role = SG_ROLE_ATTACK, .current_role = SG_ROLE_ATTACK,
+		.cached_strategy_activation = 10U,
+		.current_strategy_activation = 10U,
 		.cached_goal = { moving_field, 1 },
 		.current_goal = { moving_field, 1 },
 		.committed_at = 10.0f, .now = 11.0f, .route_cost = 900
@@ -672,7 +673,7 @@ static void CheckTacticCacheTracksObjectiveIdentity(void)
 	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
 	CHECK_REFRESH(cache.current_goal.root_seed = 0);
 	CHECK_REFRESH(cache.current_goal.field = fixed_field);
-	CHECK_REFRESH(cache.current_role = SG_ROLE_RECOVER);
+	CHECK_REFRESH(cache.current_strategy_activation = 11U);
 	CHECK_REFRESH(cache.committed_at = 12.0f);
 	cache = base;
 	cache.now = 20.0f;

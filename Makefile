@@ -1309,6 +1309,8 @@ OBJS := \
 	slipgate/sg_rune_dynamics_geometry.o \
 	slipgate/sg_rune_field_contract.o \
 	slipgate/sg_rune_model.o \
+	slipgate/sg_strategy.o \
+	slipgate/sg_strategy_caller.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
 	sg_net.o \
@@ -3950,6 +3952,10 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		slipgate/sg_rune_field_contract.c \
 		slipgate/sg_rune_dynamics_model.h \
 		slipgate/sg_rune_dynamics_model_internal.h \
+		tests/run_sg_strategy_caller_test.sh \
+		tests/sg_strategy_caller_test.c \
+		tests/test_strategy_caller_integration.py \
+		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
 	$(Q)set -e; \
@@ -3986,6 +3992,8 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	"$$tmp/loader"; \
 	sh tests/run_sg_rune_v2_artifact_publication_test.sh; \
 	sh tests/run_sg_strategy_test.sh; \
+	sh tests/run_sg_strategy_caller_test.sh; \
+	python3 -B tests/test_strategy_caller_integration.py; \
 	sh tests/run_sg_destination_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
 		-o "$$tmp/destination.o"; \

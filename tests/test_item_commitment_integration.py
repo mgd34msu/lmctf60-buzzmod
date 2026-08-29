@@ -273,10 +273,6 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         handoff = source[start:end]
         self.assertIn("tc->rune_handoff_route = true;", handoff)
         self.assertIn(
-            "SG_RuneHandoffAllowsOptional(tc->rune_handoff_route)",
-            handoff,
-        )
-        self.assertIn(
             "!SG_RuneHandoffAllowsOptional(",
             handoff,
         )
@@ -284,19 +280,28 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
             r"SG_RuneHandoffAllowsOptional\(\s*tc->rune_handoff_route\s*\)",
             handoff,
         )
-        self.assertEqual(len(optional_guards), 3)
+        self.assertEqual(len(optional_guards), 2)
         self.assertIn("route_pure = tc->rune_handoff_route;", handoff)
 
-    def test_tactic_cache_is_wired_to_objective_identity(self):
+        tactical_start = source.index("void Think_TacticalRoute")
+        tactical = source[tactical_start:]
+        self.assertRegex(
+            tactical,
+            r"SG_RuneHandoffAllowsOptional\(\s*"
+            r"tc->rune_handoff_route\s*\)",
+        )
+
+    def test_tactic_cache_is_wired_to_strategy_activation(self):
         source = self.text("slipgate/sg_goal.c")
-        start = source.index("static int tac_fields")
-        end = source.index("if (SG_DefenseSupplyActive(bot))", start)
+        start = source.index("void Think_TacticalRoute")
+        end = len(source)
         tactics = source[start:end]
         root = tactics.index("SG_FieldKey(SG_Rune(), goal_field)")
         refresh = tactics.index("SG_TacticCacheNeedsRefresh(&cache)")
         publish = tactics.index("tac_goal[bi] = goal")
         flood = tactics.index("Field_Flood(SG_Rune(), tac_fields[bi]")
 
+        self.assertIn("current_strategy_activation", tactics)
         self.assertLess(root, refresh)
         self.assertLess(refresh, publish)
         self.assertLess(publish, flood)

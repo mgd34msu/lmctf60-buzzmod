@@ -1204,7 +1204,9 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 slipgate/sg_belief.o slipgate/sg_destination.o slipgate/sg_rune_dynamics_model.o \
 		 slipgate/sg_rune_dynamics_geometry.o slipgate/sg_rune_field_contract.o \
-		 slipgate/sg_rune_model.o slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
+		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
+		 slipgate/sg_strategy_caller.o \
+		 slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################
 # End of user-customizable section - you shouldn't have to touch
@@ -3450,6 +3452,10 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		slipgate/sg_rune_field_contract.c \
 		slipgate/sg_rune_dynamics_model.h \
 		slipgate/sg_rune_dynamics_model_internal.h \
+		tests/run_sg_strategy_caller_test.sh \
+		tests/sg_strategy_caller_test.c \
+		tests/test_strategy_caller_integration.py \
+		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
 		tests/support/yq2_pmove.c q_shared.c
 	@set -e; \
 	tmp=$$(mktemp -d); \
@@ -3485,6 +3491,8 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	"$$tmp/loader"; \
 	sh tests/run_sg_rune_v2_artifact_publication_test.sh; \
 	sh tests/run_sg_strategy_test.sh; \
+	sh tests/run_sg_strategy_caller_test.sh; \
+	python3 -B tests/test_strategy_caller_integration.py; \
 	sh tests/run_sg_destination_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
 		-o "$$tmp/destination.o"; \
