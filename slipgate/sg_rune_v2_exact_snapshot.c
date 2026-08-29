@@ -10,11 +10,13 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <wchar.h>
 #else
 #include <errno.h>
 #include <fcntl.h>
@@ -247,20 +249,115 @@ static wchar_t *WidePath(const char *utf8_path)
 	return wide;
 }
 
+static wchar_t *AbsoluteWidePath(const wchar_t *wide)
+{
+	DWORD needed;
+	DWORD written;
+	wchar_t *absolute;
+
+	needed = GetFullPathNameW(wide, 0U, NULL, NULL);
+	if (needed == 0U || (size_t)needed >= SIZE_MAX / sizeof(*absolute))
+		return NULL;
+	absolute = (wchar_t *)malloc(((size_t)needed + 1U) * sizeof(*absolute));
+	if (!absolute)
+		return NULL;
+	written = GetFullPathNameW(wide, needed + 1U, absolute, NULL);
+	if (written == 0U || written > needed)
+	{
+		free(absolute);
+		return NULL;
+	}
+	return absolute;
+}
+
+static int IsWideSeparator(wchar_t character)
+{
+	return character == L'\\' || character == L'/';
+}
+
+static size_t WindowsRootLength(const wchar_t *path)
+{
+	const wchar_t *cursor;
+	size_t length = wcslen(path);
+
+	if (length < 3U)
+		return 0U;
+	if ((path[0] >= L'a' && path[0] <= L'z') ||
+	    (path[0] >= L'A' && path[0] <= L'Z'))
+		return path[1] == L':' && IsWideSeparator(path[2]) ? 3U : 0U;
+	if (!IsWideSeparator(path[0]) || !IsWideSeparator(path[1]))
+		return 0U;
+	cursor = path + 2;
+	if (length >= 4U && path[2] == L'?' && IsWideSeparator(path[3]))
+	{
+		if (length < 7U)
+			return 0U;
+		if ((path[4] >= L'a' && path[4] <= L'z') ||
+		    (path[4] >= L'A' && path[4] <= L'Z'))
+			return path[5] == L':' && IsWideSeparator(path[6]) ? 7U : 0U;
+		if (wcsncmp(path + 4, L"UNC\\", 4U) != 0)
+			return 0U;
+		cursor = path + 8;
+	}
+	while (*cursor && !IsWideSeparator(*cursor))
+		cursor++;
+	if (!IsWideSeparator(*cursor))
+		return 0U;
+	cursor++;
+	while (*cursor && !IsWideSeparator(*cursor))
+		cursor++;
+	return IsWideSeparator(*cursor) ? (size_t)(cursor - path + 1) : 0U;
+}
+
+static int WindowsParentsAreNotReparsePoints(wchar_t *path)
+{
+	size_t root_length = WindowsRootLength(path);
+	size_t index;
+
+	if (root_length == 0U)
+		return 0;
+	for (index = root_length; path[index] != L'\0'; index++)
+	{
+		DWORD attributes;
+		wchar_t saved;
+
+		if (!IsWideSeparator(path[index]))
+			continue;
+		saved = path[index];
+		path[index] = L'\0';
+		attributes = GetFileAttributesW(path);
+		path[index] = saved;
+		if (attributes == INVALID_FILE_ATTRIBUTES ||
+		    (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U ||
+		    (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0U)
+			return 0;
+	}
+	return 1;
+}
+
 static void *DefaultOpenRead(void *context, const char *utf8_path)
 {
 	wchar_t *wide;
+	wchar_t *absolute;
 	HANDLE file;
 	(void)context;
 
 	wide = WidePath(utf8_path);
 	if (!wide)
 		return NULL;
-	file = CreateFileW(wide, GENERIC_READ,
+	absolute = AbsoluteWidePath(wide);
+	free(wide);
+	if (!absolute || !WindowsParentsAreNotReparsePoints(absolute))
+	{
+		free(absolute);
+		errno = ELOOP;
+		return NULL;
+	}
+	file = CreateFileW(absolute, GENERIC_READ,
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
 		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
 		FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	free(wide);
+	free(absolute);
 	if (file == INVALID_HANDLE_VALUE)
 	{
 		DWORD error = GetLastError();
@@ -320,23 +417,90 @@ static int DefaultClose(void *context, void *file)
 
 #else
 
+static int ComponentIsDotOrDotDot(const char *component, size_t length)
+{
+	return (length == 1U && component[0] == '.') ||
+		(length == 2U && component[0] == '.' && component[1] == '.');
+}
+
+static int OpenReadWithoutSymlinkComponents(const char *path)
+{
+	char component[NAME_MAX + 1U];
+	const char *cursor = path;
+	int directory;
+
+#ifndef O_NOFOLLOW
+	(void)component;
+	(void)cursor;
+	errno = ENOTSUP;
+	return -1;
+#else
+	int directory_flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
+
+#ifdef O_CLOEXEC
+	directory_flags |= O_CLOEXEC;
+#endif
+	directory = open(path[0] == '/' ? "/" : ".", directory_flags);
+	if (directory < 0)
+		return -1;
+	while (*cursor == '/')
+		cursor++;
+	while (*cursor)
+	{
+		const char *next = cursor;
+		size_t length;
+		int final_component;
+		int flags;
+		int opened;
+
+		while (*next && *next != '/')
+			next++;
+		length = (size_t)(next - cursor);
+		if (length == 0U || length > NAME_MAX ||
+		    ComponentIsDotOrDotDot(cursor, length))
+		{
+			int saved_error = EINVAL;
+
+			(void)close(directory);
+			errno = saved_error;
+			return -1;
+		}
+		memcpy(component, cursor, length);
+		component[length] = '\0';
+		while (*next == '/')
+			next++;
+		final_component = *next == '\0';
+		flags = final_component ? O_RDONLY | O_NOFOLLOW | O_NONBLOCK
+			: directory_flags;
+
+#ifdef O_CLOEXEC
+		if (final_component)
+			flags |= O_CLOEXEC;
+#endif
+		opened = openat(directory, component, flags);
+		if (opened < 0)
+		{
+			int saved_error = errno;
+
+			(void)close(directory);
+			errno = saved_error;
+			return -1;
+		}
+		(void)close(directory);
+		directory = opened;
+		cursor = next;
+	}
+	return directory;
+#endif
+}
+
 static void *DefaultOpenRead(void *context, const char *utf8_path)
 {
-	int flags = O_RDONLY;
 	int file;
 	int *owned;
 	(void)context;
 
-#ifdef O_NOFOLLOW
-	flags |= O_NOFOLLOW;
-#endif
-#ifdef O_NONBLOCK
-	flags |= O_NONBLOCK;
-#endif
-#ifdef O_CLOEXEC
-	flags |= O_CLOEXEC;
-#endif
-	file = open(utf8_path, flags);
+	file = OpenReadWithoutSymlinkComponents(utf8_path);
 	if (file < 0)
 		return NULL;
 	owned = (int *)malloc(sizeof(*owned));

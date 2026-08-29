@@ -7,6 +7,7 @@ import dataclasses
 import contextlib
 import io
 import json
+import mmap
 import os
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -214,12 +216,18 @@ class RuneCorpusControllerTests(unittest.TestCase):
             trailing.write_bytes(valid.read_bytes() + b"x")
             hardlink = work / "hardlink.rune"
             symlink = work / "symlink.rune"
+            real_parent = work / "real-parent"
+            parent_symlink = work / "parent-symlink"
             os.link(valid, hardlink)
             symlink.symlink_to(valid)
+            real_parent.mkdir()
+            os.link(valid, real_parent / "valid.rune")
+            parent_symlink.symlink_to(real_parent, target_is_directory=True)
             cases = (
                 (["runeaccept.gnu", valid], 0),
                 (["runeaccept.gnu", hardlink], 0),
                 (["runeaccept.gnu", symlink], 3),
+                (["runeaccept.gnu", parent_symlink / "valid.rune"], 3),
                 (["runeaccept.gnu", truncated], 1),
                 (["runeaccept.gnu", trailing], 1),
                 (["runeaccept.gnu", work / "missing.rune"], 3),
@@ -491,7 +499,64 @@ class RuneCorpusControllerTests(unittest.TestCase):
         ):
             controller.validate_variant_scope(["tw2ctf3", "tw2ctf3a"])
 
-    def test_linux_map_preflight_uses_paths_and_manifested_bytes(self):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux process_vm_readv")
+    def test_mapped_object_identity_outlives_named_path_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            mapped = work / "mapped-runtime"
+            replacement = work / "replacement-runtime"
+            restore = work / "restore-runtime"
+            mapped.write_bytes(b"mapped runtime bytes")
+            record = controller.regular_file_record(mapped)
+            descriptor = os.open(mapped, os.O_RDONLY)
+            record["descriptor"] = descriptor
+            view = mmap.mmap(
+                descriptor, 0, flags=mmap.MAP_PRIVATE,
+                prot=mmap.PROT_READ | mmap.PROT_EXEC,
+            )
+            try:
+                maps = Path("/proc/self/maps").read_text(encoding="utf-8")
+                fields = next(
+                    line.split()
+                    for line in maps.splitlines()
+                    if line.endswith(str(mapped))
+                )
+                address_range = fields[0]
+                replacement.write_bytes(b"attacker replacement")
+                os.replace(replacement, mapped)
+                controller._validate_mapped_object(
+                    os.getpid(), address_range, int(fields[2], 16), fields[1], record
+                )
+                attacker_fd = os.open(mapped, os.O_RDONLY)
+                attacker_view = mmap.mmap(
+                    attacker_fd, 0, flags=mmap.MAP_PRIVATE,
+                    prot=mmap.PROT_READ | mmap.PROT_EXEC,
+                )
+                try:
+                    maps = Path("/proc/self/maps").read_text(encoding="utf-8")
+                    attacker_fields = next(
+                        line.split()
+                        for line in maps.splitlines()
+                        if line.endswith(str(mapped))
+                    )
+                    attacker_range = attacker_fields[0]
+                    restore.write_bytes(b"mapped runtime bytes")
+                    os.replace(restore, mapped)
+                    with self.assertRaisesRegex(
+                        controller.ProcessIntegrityError, "mapped object differs"
+                    ):
+                        controller._validate_mapped_object(
+                            os.getpid(), attacker_range,
+                            int(attacker_fields[2], 16), attacker_fields[1], record,
+                        )
+                finally:
+                    attacker_view.close()
+                    os.close(attacker_fd)
+            finally:
+                view.close()
+                os.close(descriptor)
+
+    def test_linux_map_preflight_accepts_zero_identity_fields(self):
         with tempfile.TemporaryDirectory() as temporary:
             snapshot = self.make_snapshot(Path(temporary))
             verified = controller.verify_snapshot(snapshot)
@@ -508,7 +573,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 original_read_text = Path.read_text
 
                 def validate(
-                    pathname: str, dev: int, inode: int, expected: str,
+                    pathname: str, dev: int, inode: int,
                     *, permissions: str = "r-xp", offset: int = 0,
                     same_mount_namespace: bool = True,
                 ):
@@ -529,23 +594,24 @@ class RuneCorpusControllerTests(unittest.TestCase):
                                 controller, "_same_mount_namespace",
                                 return_value=same_mount_namespace,
                             ), \
+                            mock.patch.object(
+                                controller, "_validate_mapped_object",
+                            ), \
                             mock.patch.object(controller, "capture_process_identity", return_value=identity):
                         return controller._validate_verified_python_process(
                             4242, 9, snapshot, verified, retained, command
                         )
 
-                for filesystem in ("btrfs", "ext4", "xfs", "zfs", "ntfs", "exfat"):
-                    with self.subTest(filesystem=filesystem):
-                        validate(record["canonical_path"], 0, 0, filesystem)
+                validate(record["canonical_path"], 0, 0)
                 with self.assertRaisesRegex(
                     controller.ProcessIntegrityError, "mount namespace"
                 ):
                     validate(
-                        record["canonical_path"], 0, 0, "changed mount namespace",
+                        record["canonical_path"], 0, 0,
                         same_mount_namespace=False,
                     )
                 for pseudo in controller.PSEUDO_MAP_ALLOWLIST:
-                    validate(pseudo, 0, 0, "pseudo")
+                    validate(pseudo, 0, 0)
                 for pathname, label in (
                     (str(Path("/host") / loader.name), "canonical"),
                     (
@@ -560,7 +626,7 @@ class RuneCorpusControllerTests(unittest.TestCase):
                         "deleted", "thread stack", "named anon", "devzero", "sysv"
                     ) else "canonical|manifested"
                     with self.assertRaisesRegex(controller.ProcessIntegrityError, pattern):
-                        validate(pathname, 0, 0, label)
+                        validate(pathname, 0, 0)
             finally:
                 retained.close()
                 self.thaw(snapshot)

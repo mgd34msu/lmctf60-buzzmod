@@ -401,6 +401,10 @@ static void TestPOSIXFilesystemPolicy(void)
 	char regular[1024];
 	char hardlink_path[1024];
 	char symlink_path[1024];
+	char parent_path[1024];
+	char parent_regular_path[1024];
+	char parent_symlink_path[1024];
+	char parent_symlink_regular_path[1024];
 	char fifo_path[1024];
 	char socket_path[1024];
 	char directory_path[1024];
@@ -413,6 +417,10 @@ static void TestPOSIXFilesystemPolicy(void)
 	MakePath(regular, directory, "regular");
 	MakePath(hardlink_path, directory, "hardlink");
 	MakePath(symlink_path, directory, "symlink");
+	MakePath(parent_path, directory, "parent");
+	MakePath(parent_regular_path, parent_path, "regular");
+	MakePath(parent_symlink_path, directory, "parent-symlink");
+	MakePath(parent_symlink_regular_path, parent_symlink_path, "regular");
 	MakePath(fifo_path, directory, "fifo");
 	MakePath(socket_path, directory, "socket");
 	MakePath(directory_path, directory, "directory");
@@ -420,6 +428,9 @@ static void TestPOSIXFilesystemPolicy(void)
 	WriteExactFile(regular, (const unsigned char *)"exact", 5U);
 	assert(link(regular, hardlink_path) == 0);
 	assert(symlink(regular, symlink_path) == 0);
+	assert(mkdir(parent_path, 0700) == 0);
+	WriteExactFile(parent_regular_path, (const unsigned char *)"exact", 5U);
+	assert(symlink(parent_path, parent_symlink_path) == 0);
 	assert(mkfifo(fifo_path, 0600) == 0);
 	assert(mkdir(directory_path, 0700) == 0);
 	socket_file = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -434,6 +445,9 @@ static void TestPOSIXFilesystemPolicy(void)
 	ExpectAcquire(regular, SG_RUNE_V2_SNAPSHOT_OK);
 	ExpectAcquire(hardlink_path, SG_RUNE_V2_SNAPSHOT_OK);
 	ExpectAcquire(symlink_path, SG_RUNE_V2_SNAPSHOT_OPEN_FAILED);
+	ExpectAcquire(parent_regular_path, SG_RUNE_V2_SNAPSHOT_OK);
+	ExpectAcquire(parent_symlink_regular_path,
+		SG_RUNE_V2_SNAPSHOT_OPEN_FAILED);
 	ExpectAcquire(fifo_path, SG_RUNE_V2_SNAPSHOT_NOT_REGULAR);
 	ExpectAcquire(socket_path, SG_RUNE_V2_SNAPSHOT_OPEN_FAILED);
 	ExpectAcquire(directory_path, SG_RUNE_V2_SNAPSHOT_NOT_REGULAR);
@@ -450,6 +464,9 @@ static void TestPOSIXFilesystemPolicy(void)
 	assert(unlink(sparse_path) == 0);
 	assert(rmdir(directory_path) == 0);
 	assert(unlink(fifo_path) == 0);
+	assert(unlink(parent_symlink_path) == 0);
+	assert(unlink(parent_regular_path) == 0);
+	assert(rmdir(parent_path) == 0);
 	assert(unlink(symlink_path) == 0);
 	assert(unlink(hardlink_path) == 0);
 	assert(unlink(regular) == 0);

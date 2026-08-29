@@ -1809,6 +1809,7 @@ def _retained_snapshot_files(snapshot: Path, verified: Mapping[str, Any]) -> Ret
             record = {
                 **dict(entry),
                 "canonical_path": str(path.resolve(strict=True)),
+                "descriptor": fd,
             }
             if record["canonical_path"] in retained.paths:
                 raise ProcessIntegrityError("two manifested inputs share one path")
@@ -1824,6 +1825,21 @@ _PROC_MAP_RE = re.compile(
     r"(?P<offset>[0-9a-f]+)\s+(?P<major>[0-9a-f]+):(?P<minor>[0-9a-f]+)\s+"
     r"(?P<inode>[0-9]+)(?:\s+(?P<path>.*))?$"
 )
+
+
+class _IOVec(ctypes.Structure):
+    _fields_ = (("iov_base", ctypes.c_void_p), ("iov_len", ctypes.c_size_t))
+
+
+try:
+    _PROCESS_VM_READV = ctypes.CDLL(None, use_errno=True).process_vm_readv
+    _PROCESS_VM_READV.argtypes = (
+        ctypes.c_int, ctypes.POINTER(_IOVec), ctypes.c_ulong,
+        ctypes.POINTER(_IOVec), ctypes.c_ulong, ctypes.c_ulong,
+    )
+    _PROCESS_VM_READV.restype = ctypes.c_ssize_t
+except AttributeError:
+    _PROCESS_VM_READV = None
 
 
 def _same_mount_namespace(pid: int) -> bool:
@@ -1863,6 +1879,72 @@ def _validate_host_data_mapping(
             or stat.S_IMODE(info.st_mode) & 0o022):
         raise ProcessIntegrityError(f"host data mapping identity is unsafe: {pathname}")
     return True
+
+
+def _validate_retained_descriptor(record: Mapping[str, Any]) -> int:
+    fd = record.get("descriptor")
+    if not isinstance(fd, int) or fd < 0:
+        raise ProcessIntegrityError("retained descriptor is unavailable")
+    try:
+        info = os.fstat(fd)
+    except OSError as exc:
+        raise ProcessIntegrityError("cannot inspect retained descriptor") from exc
+    if (not stat.S_ISREG(info.st_mode) or info.st_size != record["size"]
+            or stat.S_IMODE(info.st_mode) != record["mode"]
+            or _sha256_fd(fd) != record["sha256"]):
+        raise ProcessIntegrityError(
+            f"retained descriptor differs from manifest: {record['path']}"
+        )
+    return fd
+
+
+def _read_verified_process_memory(pid: int, address: int, size: int) -> bytes:
+    buffer = ctypes.create_string_buffer(size)
+    local = _IOVec(ctypes.cast(buffer, ctypes.c_void_p), size)
+    remote = _IOVec(ctypes.c_void_p(address), size)
+
+    if _PROCESS_VM_READV is None:
+        raise ProcessIntegrityError("process memory inspection is unavailable")
+    ctypes.set_errno(0)
+    amount = _PROCESS_VM_READV(pid, ctypes.byref(local), 1,
+        ctypes.byref(remote), 1, 0)
+    if amount != size:
+        error = ctypes.get_errno()
+        raise ProcessIntegrityError(
+            f"cannot read verified Python mapped bytes: {error or 'short read'}"
+        )
+    return buffer.raw
+
+
+def _validate_mapped_object(
+    pid: int, address_range: str, offset: int, permissions: str,
+    record: Mapping[str, Any],
+) -> None:
+    start_text, separator, end_text = address_range.partition("-")
+    if (not separator or re.fullmatch(r"[0-9a-f]+", start_text) is None
+            or re.fullmatch(r"[0-9a-f]+", end_text) is None or offset < 0):
+        raise ProcessIntegrityError("verified Python map range is invalid")
+    start = int(start_text, 16)
+    end = int(end_text, 16)
+    if end <= start or offset >= record["size"]:
+        raise ProcessIntegrityError("verified Python mapped range is invalid")
+    fd = _validate_retained_descriptor(record)
+    # Dynamic relocation mutates private writable mappings after load.
+    if "x" not in permissions:
+        return
+    length = min(end - start, record["size"] - offset)
+    checked = 0
+    while checked < length:
+        amount = min(1024 * 1024, length - checked)
+        expected = os.pread(fd, amount, offset + checked)
+        if len(expected) != amount:
+            raise ProcessIntegrityError("retained descriptor became short")
+        actual = _read_verified_process_memory(pid, start + checked, amount)
+        if actual != expected:
+            raise ProcessIntegrityError(
+                f"mapped object differs from manifest: {record['path']}"
+            )
+        checked += amount
 
 
 def _validate_retained_path(snapshot: Path, record: Mapping[str, Any]) -> None:
@@ -1920,7 +2002,10 @@ def _validate_verified_python_process(
         record = retained.paths.get(pathname)
         if record is None:
             raise ProcessIntegrityError(f"mapped path is not manifested: {pathname}")
-        _validate_retained_path(snapshot, record)
+        _validate_mapped_object(
+            pid, match.group("range"), int(match.group("offset"), 16),
+            match.group("permissions"), record,
+        )
     if _proc_start_ticks(pid) != start_before or capture_process_identity(pid) != identity:
         raise ProcessIntegrityError("verified Python identity changed during map validation")
     if not _pidfd_is_live(pidfd):
