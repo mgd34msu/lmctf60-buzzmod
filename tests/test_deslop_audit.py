@@ -130,6 +130,32 @@ class SourceBudgetTest(unittest.TestCase):
                 self.assertEqual(0, deslop_audit.main())
             self.assertIn("deslop findings: 0", output.getvalue())
 
+    def test_main_counts_bare_cr_as_a_source_column(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relative = Path("slipgate/source.c")
+            source = root / relative
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"x" * 100 + b"\r")
+            output = io.StringIO()
+            with (
+                mock.patch.object(deslop_audit, "ROOT", root),
+                mock.patch.object(
+                    deslop_audit, "tracked_files", return_value=[relative]
+                ),
+                mock.patch.object(
+                    deslop_audit,
+                    "load_source_budget",
+                    return_value=(9999, 800, 100, {}),
+                ),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(1, deslop_audit.main())
+            self.assertIn(
+                "slipgate/source.c: overlong-lines: 1 > 0 at 100 columns",
+                output.getvalue(),
+            )
+
     def test_source_size_and_line_length_are_independent(self) -> None:
         self.assertEqual(
             ["overlong-lines: 1 > 0 at 5 columns"],

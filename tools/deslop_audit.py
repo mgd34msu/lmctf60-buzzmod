@@ -232,13 +232,16 @@ def physical_source_line_count(text: str) -> int:
 def source_budget_findings(text: str, max_source_lines: int,
         max_line_length: int, overlong_allowance: int | None) -> list[str]:
     lines = text.split("\n")
-    if text.endswith("\n"):
+    ends_with_lf = text.endswith("\n")
+    if ends_with_lf:
         lines.pop()
     line_count = physical_source_line_count(text)
-    overlong = sum(
-        len(line.removesuffix("\r").expandtabs(8)) > max_line_length
-        for line in lines
-    )
+    overlong = 0
+    for index, line in enumerate(lines):
+        terminated_by_lf = index + 1 < len(lines) or ends_with_lf
+        if terminated_by_lf and line.endswith("\r"):
+            line = line[:-1]
+        overlong += len(line.expandtabs(8)) > max_line_length
     max_overlong = overlong_allowance or 0
 
     findings = []
