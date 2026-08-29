@@ -221,14 +221,21 @@ typedef struct spool_scan_s
 	sg_human_trace_v3_spool_ref_t first;
 	uint32_t scope_client[64];
 	uint64_t scope_generation[64];
+	uint32_t segment_number[64];
+	uint32_t segment_gravity_bits[64];
+	const sg_human_trace_v3_scope_acceptance_t *saved_scope;
 	uint32_t previous_root;
+	uint32_t previous_segment;
 	uint64_t count;
 	uint64_t event_count;
 	uint64_t last_event_order;
 	size_t root_scope_start;
 	size_t scope_count;
+	size_t segment_count;
 	uint8_t have_previous;
+	uint8_t have_previous_segment;
 	uint8_t valid_order;
+	uint8_t forged_scope_accepted;
 } spool_scan_t;
 
 typedef struct scope_search_s
@@ -255,19 +262,52 @@ static int ScanSpool(void *opaque, const sg_human_trace_v3_spool_ref_t *spool)
 	scan->previous_root = spool->root_segment;
 	scan->last_event_order = 0U;
 	scan->root_scope_start = scan->scope_count;
+	scan->have_previous_segment = 0U;
 	scan->have_previous = 1U;
 	scan->count++;
 	return 1;
 }
 
-static int ScanCollectionEvent(void *opaque,
-	const sg_human_trace_v3_scope_t *scope,
-	const sg_human_trace_v3_event_t *event)
+static int ScanCollectionSegment(void *opaque,
+	const sg_human_trace_v3_segment_ref_t *segment)
 {
 	spool_scan_t *scan = opaque;
 
-	if (!scan || !scope || !event || event->client_id != scope->client_id ||
-		event->spawn_generation != scope->spawn_generation ||
+	if (!scan || !segment || segment->session != scan->previous_root ||
+		segment->segment < segment->session ||
+		segment->identity.host_physics_id != 1U)
+		return 0;
+	if (scan->have_previous_segment &&
+		segment->segment <= scan->previous_segment)
+		scan->valid_order = 0U;
+	scan->previous_segment = segment->segment;
+	scan->have_previous_segment = 1U;
+	if (scan->segment_count < sizeof(scan->segment_number) /
+		sizeof(scan->segment_number[0]))
+	{
+		scan->segment_number[scan->segment_count] = segment->segment;
+		scan->segment_gravity_bits[scan->segment_count] = segment->gravity_bits;
+	}
+	scan->segment_count++;
+	return 1;
+}
+
+static int ScanCollectionEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event)
+{
+	spool_scan_t *scan = opaque;
+	const sg_human_trace_v3_spool_ref_t *root;
+	uint64_t spawn_generation;
+	uint32_t client_id;
+
+	if (!scan || !scope || !segment || !event ||
+		!SG_HumanTraceAcceptedV3ScopeView(scope, &root, &client_id,
+			&spawn_generation) || !root || root->root_segment != scan->previous_root ||
+		event->client_id != client_id ||
+		event->spawn_generation != spawn_generation ||
+		segment->segment != scan->previous_segment ||
 		event->order <= scan->last_event_order)
 		return 0;
 	scan->last_event_order = event->order;
@@ -276,22 +316,37 @@ static int ScanCollectionEvent(void *opaque,
 }
 
 static int ScanCollectionScope(void *opaque,
-	const sg_human_trace_v3_scope_t *scope)
+	const sg_human_trace_v3_scope_acceptance_t *scope)
 {
 	spool_scan_t *scan = opaque;
+	const sg_human_trace_v3_spool_ref_t *root;
+	uint64_t spawn_generation;
+	uint32_t client_id;
+	uint64_t forged[16];
 	size_t index;
 
-	if (!scan || !scope || scope->client_id == 0U ||
-		scope->spawn_generation == 0U ||
+	if (!scan || !scope)
+		return 0;
+	memset(forged, 0, sizeof(forged));
+	if (SG_HumanTraceAcceptedV3ScopeView(
+		(const sg_human_trace_v3_scope_acceptance_t *)forged,
+		NULL, NULL, NULL))
+		scan->forged_scope_accepted = 1U;
+	if (!SG_HumanTraceAcceptedV3ScopeView(scope, &root,
+		&client_id, &spawn_generation) || !root ||
+		root->root_segment != scan->previous_root || client_id == 0U ||
+		spawn_generation == 0U ||
 		scan->scope_count >= sizeof(scan->scope_client) /
 			sizeof(scan->scope_client[0]))
 		return 0;
 	for (index = scan->root_scope_start; index < scan->scope_count; index++)
-		if (scan->scope_client[index] == scope->client_id &&
-			scan->scope_generation[index] == scope->spawn_generation)
+		if (scan->scope_client[index] == client_id &&
+			scan->scope_generation[index] == spawn_generation)
 			return 0;
-	scan->scope_client[scan->scope_count] = scope->client_id;
-	scan->scope_generation[scan->scope_count] = scope->spawn_generation;
+	scan->scope_client[scan->scope_count] = client_id;
+	scan->scope_generation[scan->scope_count] = spawn_generation;
+	if (!scan->saved_scope)
+		scan->saved_scope = scope;
 	scan->scope_count++;
 	return 1;
 }
@@ -301,10 +356,10 @@ static int ScanCollectionFinish(void *opaque)
 	return opaque != NULL;
 }
 
-static int CollectionScopePass(void *opaque,
-	const sg_human_trace_v3_scope_t *scope)
+static int CollectionSegmentPass(void *opaque,
+	const sg_human_trace_v3_segment_ref_t *segment)
 {
-	return opaque && scope;
+	return opaque && segment;
 }
 
 static int ScopeSearchBegin(void *opaque,
@@ -319,19 +374,30 @@ static int ScopeSearchBegin(void *opaque,
 	return 1;
 }
 
-static int ScopeSearchEvent(void *opaque,
-	const sg_human_trace_v3_scope_t *scope,
-	const sg_human_trace_v3_event_t *event)
+static int ScopeSearchScope(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope)
 {
 	scope_search_t *test = opaque;
+	const sg_human_trace_v3_spool_ref_t *root;
+	uint64_t spawn_generation;
+	uint32_t client_id;
 
-	if (!test || !scope || !event)
+	if (!test || !scope || !SG_HumanTraceAcceptedV3ScopeView(scope, &root,
+		&client_id, &spawn_generation) || !root)
 		return 0;
-	if (!test->target_root || test->found || scope->client_id != test->client_id ||
-		scope->spawn_generation != test->spawn_generation)
+	if (!test->target_root || test->found || client_id != test->client_id ||
+		spawn_generation != test->spawn_generation)
 		return 1;
 	test->found = 1U;
 	return 1;
+}
+
+static int ScopeSearchEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event)
+{
+	return opaque && scope && segment && event;
 }
 
 static int ScopeSearchFinish(void *opaque)
@@ -356,7 +422,8 @@ static int ScopeExists(const sg_human_trace_v3_spool_ref_t *spool,
 	test.client_id = client_id;
 	test.spawn_generation = spawn_generation;
 	visitor.begin_root = ScopeSearchBegin;
-	visitor.scope = CollectionScopePass;
+	visitor.segment = CollectionSegmentPass;
+	visitor.scope = ScopeSearchScope;
 	visitor.event = ScopeSearchEvent;
 	visitor.finish_root = ScopeSearchFinish;
 	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, &test) ||
@@ -376,10 +443,15 @@ static int ScanCompletedSpools(spool_scan_t *scan)
 	memset(&visitor, 0, sizeof(visitor));
 	scan->valid_order = 1U;
 	visitor.begin_root = ScanSpool;
+	visitor.segment = ScanCollectionSegment;
 	visitor.scope = ScanCollectionScope;
 	visitor.event = ScanCollectionEvent;
 	visitor.finish_root = ScanCollectionFinish;
-	return SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, scan);
+	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, scan) ||
+		scan->forged_scope_accepted ||
+		SG_HumanTraceAcceptedV3ScopeView(scan->saved_scope, NULL, NULL, NULL))
+		return 0;
+	return 1;
 }
 
 static void RemoveTraceArtifact(const char *directory, unsigned segment)
@@ -991,17 +1063,27 @@ static int RunCollision(const char *directory)
 	return CountRecords(path, NULL) == 1 ? 0 : 62;
 }
 
-static int RunPhysicsDrift(const char *directory)
+static int RunPhysicsDrift(const char *directory, int occupied_gap)
 {
-	char path0[1024], path1[1024];
+	char path0[1024], path1[1024], path2[1024];
+	FILE *occupied = NULL;
 	edict_t *player = &entities[1];
 	pmove_state_t before;
 	pmove_t after;
 	spool_scan_t scan;
+	unsigned terminal_segment = occupied_gap ? 2U : 1U;
 
 	if (!TracePath(path0, sizeof(path0), directory, 0U) ||
-	    !TracePath(path1, sizeof(path1), directory, 1U))
+	    !TracePath(path1, sizeof(path1), directory, 1U) ||
+	    !TracePath(path2, sizeof(path2), directory, terminal_segment))
 		return 65;
+	if (occupied_gap)
+	{
+		occupied = fopen(path1, "wb");
+		if (!occupied || fputs("occupied\n", occupied) < 0 ||
+			fclose(occupied) != 0)
+			return 65;
+	}
 	SetupPlayer(player, &clients[0], 11UL);
 	SetupPmove(&before, &after);
 	SG_HumanTraceNewLevel();
@@ -1010,8 +1092,14 @@ static int RunPhysicsDrift(const char *directory)
 	SG_HumanTracePmove(player, &before, &after);
 	SG_HumanTraceMatchEnd();
 	if (CountRecords(path0, NULL) != 2 ||
-		CountRecords(path1, NULL) != 3 || !ScanCompletedSpools(&scan) ||
-		scan.count != 0U)
+		CountRecords(path2, NULL) != 3 || !ScanCompletedSpools(&scan) ||
+		scan.count != 1U || scan.event_count != 2U ||
+		scan.segment_count != 2U || scan.segment_number[0] != 0U ||
+		scan.segment_number[1] != terminal_segment ||
+		scan.segment_gravity_bits[0] != UINT32_C(0x44480000) ||
+		scan.segment_gravity_bits[1] != UINT32_C(0x42c80000) ||
+		scan.first.completion.segment != terminal_segment ||
+		scan.first.completion.gravity_bits != UINT32_C(0x42c80000))
 		return 66;
 	return 0;
 }
@@ -1157,7 +1245,9 @@ int main(int argc, char **argv)
 	if (argc == 3 && strcmp(argv[2], "collision") == 0)
 		return RunCollision(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "physics") == 0)
-		return RunPhysicsDrift(argv[1]);
+		return RunPhysicsDrift(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "physics-gap") == 0)
+		return RunPhysicsDrift(argv[1], 1);
 #ifndef _WIN32
 	if (argc == 3 && strcmp(argv[2], "concurrent") == 0)
 		return RunConcurrentCollision(argv[1]);

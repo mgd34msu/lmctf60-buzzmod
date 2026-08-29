@@ -73,18 +73,46 @@ typedef struct sg_human_trace_v3_spool_ref_s
 	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
 } sg_human_trace_v3_spool_ref_t;
 
-typedef struct sg_human_trace_v3_scope_s
+/* Physics may change between recorder segments. Consumers receive the exact
+ * authenticated header that governed each event instead of treating terminal
+ * physics as if it governed the whole root. */
+typedef struct sg_human_trace_v3_segment_ref_s
 {
-	uint32_t client_id;
-	uint64_t spawn_generation;
-} sg_human_trace_v3_scope_t;
+	sg_level_identity_t identity;
+	uint32_t session;
+	uint32_t segment;
+	uint32_t continuation;
+	uint32_t physics_id;
+	uint32_t gravity_bits;
+	uint32_t airaccelerate_bits;
+	uint32_t maxvelocity_bits;
+	uint16_t pmove_substep_ms;
+	uint16_t server_frame_ms;
+	uint32_t physics_flags;
+	uint32_t module_revision;
+	char module_version[SG_HUMAN_TRACE_VERSION_BYTES];
+	uint64_t start_order;
+	uint64_t start_command;
+	uint64_t start_hook_event;
+	uint8_t previous_sha256[SG_HUMAN_TRACE_SHA256_BYTES];
+	uint8_t header_sha256[SG_HUMAN_TRACE_SHA256_BYTES];
+} sg_human_trace_v3_segment_ref_t;
+
+/* Minted only for one exact client life in the active authenticated visit. */
+typedef struct sg_human_trace_v3_scope_acceptance_s
+	sg_human_trace_v3_scope_acceptance_t;
 
 typedef struct sg_human_trace_v3_collection_visitor_s
 {
 	int (*begin_root)(void *context,
 		const sg_human_trace_v3_spool_ref_t *root);
-	int (*scope)(void *context, const sg_human_trace_v3_scope_t *scope);
-	int (*event)(void *context, const sg_human_trace_v3_scope_t *scope,
+	int (*segment)(void *context,
+		const sg_human_trace_v3_segment_ref_t *segment);
+	int (*scope)(void *context,
+		const sg_human_trace_v3_scope_acceptance_t *scope);
+	int (*event)(void *context,
+		const sg_human_trace_v3_scope_acceptance_t *scope,
+		const sg_human_trace_v3_segment_ref_t *segment,
 		const sg_human_trace_v3_event_t *event);
 	int (*finish_root)(void *context);
 } sg_human_trace_v3_collection_visitor_t;
@@ -96,6 +124,12 @@ void SG_HumanTraceMatchEnd(void);
  * operation and remains valid after process restart. */
 int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 	const sg_human_trace_v3_collection_visitor_t *visitor, void *context);
+/* Opens an opaque scope only while its authenticated root is being visited.
+ * Saved or caller-forged pointers are rejected, and no receipt is produced. */
+int SG_HumanTraceAcceptedV3ScopeView(
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_spool_ref_t **root_out,
+	uint32_t *client_id_out, uint64_t *spawn_generation_out);
 void SG_HumanTracePmove(edict_t *entity,
 	const pmove_state_t *before, const pmove_t *after);
 void SG_HumanTraceHookFire(edict_t *entity, edict_t *hook);

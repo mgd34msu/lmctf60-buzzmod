@@ -309,6 +309,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 Path(f"{PREFIX}0000000.jsonl")
             )
         )
+
     def test_physics_change_starts_an_exactly_bound_segment(self) -> None:
         ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
@@ -327,18 +328,23 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
             continuation = directory / f"{PREFIX}000001.jsonl"
             copied = isolated / continuation.name
             copied.write_bytes(continuation.read_bytes())
-            sessions = [first, second]
+            assembled = humantrace.read_sessions(continuation)
 
-            with self.assertRaisesRegex(ValueError, "session identity"):
-                humantrace.read_sessions(directory / f"{PREFIX}000001.jsonl")
             with self.assertRaisesRegex(ValueError, "zero-rooted"):
                 humantrace.read_sessions(copied)
 
-        self.assertEqual(sessions[0][0]["gravity_bits"], 0x44480000)
-        self.assertEqual(sessions[1][0]["gravity_bits"], 0x42C80000)
-        self.assertEqual(sessions[1][0]["continuation"], 1)
-        self.assertEqual(sessions[1][0]["session"], 0)
-        self.assertEqual(sessions[1][0]["start_order"], 2)
+        self.assertEqual(first[0]["gravity_bits"], 0x44480000)
+        self.assertEqual(second[0]["gravity_bits"], 0x42C80000)
+        self.assertEqual(second[0]["continuation"], 1)
+        self.assertEqual(second[0]["session"], 0)
+        self.assertEqual(second[0]["start_order"], 2)
+        self.assertEqual(
+            [header["gravity_bits"]
+             for header in assembled[0]["segment_headers"]],
+            [0x44480000, 0x42C80000],
+        )
+        self.assertEqual(assembled[0]["identity"]["gravity_bits"],
+                         0x42C80000)
 
     def test_segment_chain_crosses_six_digit_filename_boundary(self) -> None:
         binary = ensure_io_binary()
@@ -382,7 +388,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
         ensure_binary()
         for mode in (
                 "spool-order", "spool-truncated", "spool-tampered",
-                "spool-quarantine"):
+                "spool-quarantine", "physics-gap"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 completed = subprocess.run(
                     [str(BINARY), temporary, mode], cwd=ROOT,

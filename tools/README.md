@@ -147,12 +147,12 @@ how the tools fit together and which artifacts they own.
     --output /absolute/path/to/traces/lmctf01.replay.json
   ```
 
-  Omit the frame options to import the full session. The importer validates and
-  preserves the captured map, BSP, entity, physics, and module identity. It
-  also starts a new replay segment when the authoritative state changes
-  between commands. Such a change can identify a pusher, teleporter, grapple
-  update, or other server-frame effect that a
-  Pmove-only replay must model explicitly.
+  Omit the frame options to import the full session. The importer preserves the
+  map, BSP, entity, and module identity for the session. It preserves the
+  physics identity for each segment because physics can change during capture.
+  The importer also starts a new replay segment when authoritative state changes
+  between commands. The state change can identify a pusher, teleporter, grapple
+  update, or other server-frame effect that a Pmove-only replay must model.
 
   From any selected v3 segment, the importer discovers its deterministic
   siblings in numeric segment order, requires one zero-rooted chain through the

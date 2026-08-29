@@ -26,7 +26,6 @@ SHA256_HEX_BYTES = 64
 UINT32_MAX = 0xFFFFFFFF
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 INT32_MAX = 0x7FFFFFFF
-MAX_HOOK_EVENTS = 16384
 STATE_FIELDS = {
     "type", "origin", "velocity", "flags", "time", "gravity",
     "delta_angles",
@@ -785,8 +784,6 @@ def _read_sessions_single(path: Path) -> list[dict[str, Any]]:
                     raise ValueError(
                         f"line {line_number}: hook after_step exceeds "
                         "the preceding Pmove sequence")
-                if len(current["hook_events"]) >= MAX_HOOK_EVENTS:
-                    raise ValueError("trace hook event capacity exceeded")
                 current["hook_events"].append(event)
                 current["last_hook_event"] = event["event"]
                 current["last_hook_after_step"] = event["after_step"]
@@ -926,9 +923,7 @@ def _v3_stable_identity(header: dict[str, Any]) -> tuple[Any, ...]:
     """Fields a rotating segment may not change within one recorder session."""
     return tuple(header[field] for field in (
         "map", "bsp_checksum", "entity_crc32", "physics_id",
-        "host_physics_id", "gravity_bits", "airaccelerate_bits",
-        "maxvelocity_bits", "pmove_substep_ms", "server_frame_ms",
-        "physics_flags", "module_revision", "module_version"))
+        "host_physics_id", "module_revision", "module_version"))
 
 
 def _assemble_v3_session(segments: list[dict[str, Any]], ordinal: int) -> dict[str, Any]:
