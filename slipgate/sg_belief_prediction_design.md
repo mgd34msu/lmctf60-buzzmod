@@ -47,6 +47,8 @@ the chain. The caller-set completeness byte is validated data, not evidence of
 completeness. Issue, source view, and acceptance validate every writable output
 range before writing. Those ranges must be mutually disjoint and disjoint from
 the snapshot, belief, source, candidate, and nested kernel storage they borrow.
+Issue and source view also reject overlap with every live or retired source and
+authority record and every live registry-owned kernel payload.
 
 The chain identity is SHA-256 over a versioned, fixed-width, little-endian
 encoding of its provenance, kernels, spans, outcomes, likelihoods, and witness

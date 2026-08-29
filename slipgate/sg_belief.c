@@ -1472,6 +1472,62 @@ static int BeliefRangeDisjointFromAll(const belief_byte_range_t *range,
 	return 1;
 }
 
+static int BeliefHorizonPayloadDisjointFromAll(
+	const sg_belief_horizon_kernel_t *kernels, size_t kernel_count,
+	const belief_byte_range_t *writable, size_t writable_count)
+{
+	belief_byte_range_t read;
+	size_t index;
+
+	if (kernel_count == 0U)
+		return kernels == NULL;
+	if (!BeliefByteRange(kernels, kernel_count, sizeof(*kernels), &read) ||
+	    !BeliefRangeDisjointFromAll(&read, writable, writable_count))
+		return 0;
+	for (index = 0U; index < kernel_count; index++)
+	{
+		const sg_belief_horizon_kernel_t *kernel = &kernels[index];
+
+		if (!BeliefByteRange(kernel->origin_spans,
+		    kernel->origin_span_count, sizeof(*kernel->origin_spans), &read) ||
+		    !BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
+		    !BeliefByteRange(kernel->entries, kernel->entry_count,
+			sizeof(*kernel->entries), &read) ||
+		    !BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
+		    (kernel->step_count != 0U &&
+		     (!BeliefByteRange(kernel->steps, kernel->step_count,
+			sizeof(*kernel->steps), &read) ||
+		      !BeliefRangeDisjointFromAll(&read, writable,
+			writable_count))))
+			return 0;
+	}
+	return 1;
+}
+
+static int BeliefHorizonRegistriesDisjointFromAll(
+	const belief_byte_range_t *writable, size_t writable_count)
+{
+	const sg_belief_horizon_source_t *source;
+	const sg_belief_horizon_authority_t *authority;
+	belief_byte_range_t read;
+
+	for (source = belief_issued_sources; source;
+	     source = source->next_issued)
+		if (!BeliefByteRange(source, 1U, sizeof(*source), &read) ||
+		    !BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
+		    !BeliefHorizonPayloadDisjointFromAll(source->kernels,
+			source->kernel_count, writable, writable_count))
+			return 0;
+	for (authority = belief_issued_authorities; authority;
+	     authority = authority->next_issued)
+		if (!BeliefByteRange(authority, 1U, sizeof(*authority), &read) ||
+		    !BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
+		    !BeliefHorizonPayloadDisjointFromAll(authority->kernels,
+			authority->kernel_count, writable, writable_count))
+			return 0;
+	return 1;
+}
+
 static int BeliefFrameMemoryValid(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state, const sg_belief_frame_t *frame,
@@ -2727,6 +2783,7 @@ static int BeliefHorizonIssueOutputValid(
 
 	return BeliefByteRange(source_out, 1U, sizeof(*source_out), &writable) &&
 		BeliefRangeDisjointFromRune(snapshot, &writable) &&
+		BeliefHorizonRegistriesDisjointFromAll(&writable, 1U) &&
 		BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &read) &&
 		!BeliefRangesOverlap(&writable, &read) &&
 		BeliefByteRange(state, 1U, sizeof(*state), &read) &&
@@ -2756,6 +2813,8 @@ static int BeliefHorizonViewOutputsValid(
 		&writable[1]) ||
 	    !BeliefByteRange(content_identity_out, 1U,
 		sizeof(*content_identity_out), &writable[2]))
+		return 0;
+	if (!BeliefHorizonRegistriesDisjointFromAll(writable, 3U))
 		return 0;
 	for (left = 0U; left < 3U; left++)
 	{
@@ -3072,6 +3131,42 @@ uint64_t SG_BeliefTestHorizonAuthorityIssuanceIdentity(
 		BeliefHorizonAuthorityRecord(authority);
 
 	return record ? record->issuance_identity : 0U;
+}
+
+void *SG_BeliefTestHorizonSourcePayloadPointerSlot(
+	const sg_belief_horizon_source_t *source)
+{
+	sg_belief_horizon_source_t *record = BeliefHorizonSourceRecord(source);
+
+	return record ? (void *)&record->kernels : NULL;
+}
+
+void *SG_BeliefTestHorizonAuthorityPayloadPointerSlot(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
+
+	return record ? (void *)&record->kernels : NULL;
+}
+
+int SG_BeliefTestHorizonSourceRetired(
+	const sg_belief_horizon_source_t *source)
+{
+	sg_belief_horizon_source_t *record = BeliefHorizonSourceRecord(source);
+
+	return record && record->active == 0U && record->kernels == NULL &&
+		record->kernel_count == 0U;
+}
+
+int SG_BeliefTestHorizonAuthorityRetired(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
+
+	return record && record->active == 0U && record->kernels == NULL &&
+		record->kernel_count == 0U;
 }
 #endif
 

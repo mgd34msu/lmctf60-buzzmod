@@ -854,6 +854,14 @@ uint64_t SG_BeliefTestHorizonSourceIssuanceIdentity(
 	const sg_belief_horizon_source_t *source);
 uint64_t SG_BeliefTestHorizonAuthorityIssuanceIdentity(
 	const sg_belief_horizon_authority_t *authority);
+void *SG_BeliefTestHorizonSourcePayloadPointerSlot(
+	const sg_belief_horizon_source_t *source);
+void *SG_BeliefTestHorizonAuthorityPayloadPointerSlot(
+	const sg_belief_horizon_authority_t *authority);
+int SG_BeliefTestHorizonSourceRetired(
+	const sg_belief_horizon_source_t *source);
+int SG_BeliefTestHorizonAuthorityRetired(
+	const sg_belief_horizon_authority_t *authority);
 #endif
 
 #endif /* SG_BELIEF_CONTRACT_H */
