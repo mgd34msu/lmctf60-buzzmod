@@ -10,13 +10,30 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "sg_human_trace_hook_test.gnu"
+BINARY_NAME = os.environ.get(
+    "SG_HUMAN_TRACE_TEST_BINARY", "sg_human_trace_hook_test.gnu"
+)
+BINARY = ROOT / BINARY_NAME
 PREFIX = "humantrace-tracehook-00000065-000000ca-"
 
 
-def read_valid_prefix(path: Path) -> list[dict[str, object]]:
+def ensure_binary() -> None:
+    if BINARY.exists():
+        return
+    if BINARY_NAME != "sg_human_trace_hook_test.gnu":
+        raise FileNotFoundError(BINARY)
+    subprocess.run(
+        ["make", "-f", "GNUmakefile", BINARY.name],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
+def read_valid_prefix(
+    path: Path, previous: str = "0" * 64
+) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
-    previous = "0" * 64
     for raw_line in path.read_bytes().splitlines():
         try:
             line = raw_line.decode("utf-8")
@@ -38,12 +55,7 @@ def read_valid_prefix(path: Path) -> list[dict[str, object]]:
 
 class HumanTraceV3IntegrationTest(unittest.TestCase):
     def test_two_sessions_restart_recovery_and_hash_chain(self) -> None:
-        subprocess.run(
-            ["make", "-f", "GNUmakefile", BINARY.name],
-            cwd=ROOT,
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+        ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
             environment = os.environ.copy()
             environment["SG_HUMAN_TRACE_KEEP"] = "1"
@@ -84,6 +96,8 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
         )
 
         header = sessions[0][0]
+        self.assertEqual(header["physics_id"], 0)
+        self.assertEqual(header["host_physics_id"], 1)
         self.assertEqual(header["gravity_bits"], 0x44480000)
         self.assertEqual(header["airaccelerate_bits"], 0x3FC00000)
         self.assertEqual(header["maxvelocity_bits"], 0x44FA0000)
@@ -92,6 +106,35 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
         self.assertEqual(header["physics_flags"], 0)
 
         step = sessions[0][1]
+        self.assertEqual(step["snapinitial"], 1)
+        self.assertEqual(step["cmd"], {
+            "msec": 25,
+            "buttons": 3,
+            "angles": [1234, -2345, 3456],
+            "forward": 400,
+            "side": -300,
+            "up": 200,
+            "impulse": 17,
+            "light": 91,
+        })
+        self.assertEqual(step["before"], {
+            "type": 0,
+            "origin": [8, -16, 24],
+            "velocity": [80, -96, 112],
+            "flags": 5,
+            "time": 7,
+            "gravity": 777,
+            "delta_angles": [101, -202, 303],
+        })
+        self.assertEqual(step["after"], {
+            "type": 0,
+            "origin": [16, -24, 32],
+            "velocity": [120, -136, 152],
+            "flags": 9,
+            "time": 11,
+            "gravity": 333,
+            "delta_angles": [404, -505, 606],
+        })
         self.assertEqual(step["viewangles_bits"],
                          [0x3F8CCCCD, 0x400CCCCD, 0x40533333])
         self.assertEqual(step["viewheight_bits"], 0x41B00000)
@@ -99,6 +142,12 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                          [0xC1800000, 0xC1800000, 0xC1C00000])
         self.assertEqual(step["maxs_bits"],
                          [0x41800000, 0x41800000, 0x42000000])
+        self.assertEqual(step["ground"], 0)
+        self.assertEqual(step["waterlevel"], 2)
+        self.assertEqual(step["watertype"], 32)
+        self.assertEqual(step["numtouch"], 2)
+        self.assertEqual(step["touches"], [0, 2])
+        self.assertEqual(sessions[1][1]["ground"], -1)
 
         hook_fire = sessions[0][2]
         self.assertEqual(hook_fire["origin_bits"][0], 0x3F8CCCCD)
@@ -108,12 +157,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "RLIMIT_FSIZE is POSIX-only")
     def test_file_size_limit_disables_capture_without_sigxfsz(self) -> None:
-        subprocess.run(
-            ["make", "-f", "GNUmakefile", BINARY.name],
-            cwd=ROOT,
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+        ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
             completed = subprocess.run(
                 [str(BINARY), temporary, "fsize"], cwd=ROOT,
@@ -124,12 +168,7 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_exclusive_create_collision_retries_a_new_session(self) -> None:
-        subprocess.run(
-            ["make", "-f", "GNUmakefile", BINARY.name],
-            cwd=ROOT,
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+        ensure_binary()
         with tempfile.TemporaryDirectory() as temporary:
             subprocess.run(
                 [str(BINARY), temporary, "collision"], cwd=ROOT,
@@ -140,6 +179,44 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
 
         self.assertEqual(len(records), 2)
         self.assertEqual(records[1][0]["session"], 1)
+
+    def test_physics_change_starts_an_exactly_bound_segment(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(
+                [str(BINARY), temporary, "physics"], cwd=ROOT,
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            directory = Path(temporary)
+            first = read_valid_prefix(directory / f"{PREFIX}000000.jsonl")
+            second = read_valid_prefix(
+                directory / f"{PREFIX}000001.jsonl",
+                str(first[-1]["sha256"]),
+            )
+            sessions = [first, second]
+
+        self.assertEqual(sessions[0][0]["gravity_bits"], 0x44480000)
+        self.assertEqual(sessions[1][0]["gravity_bits"], 0x42C80000)
+        self.assertEqual(sessions[1][0]["continuation"], 1)
+        self.assertEqual(sessions[1][0]["session"], 0)
+        self.assertEqual(sessions[1][0]["start_order"], 2)
+
+    @unittest.skipIf(os.name == "nt", "fork is POSIX-only")
+    def test_concurrent_processes_claim_unique_sessions(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(
+                [str(BINARY), temporary, "concurrent"], cwd=ROOT,
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            files = sorted(Path(temporary).glob(f"{PREFIX}*.jsonl"))
+            records = [read_valid_prefix(path) for path in files]
+
+        self.assertEqual(len(records), 8)
+        self.assertEqual(
+            sorted(record[0]["session"] for record in records),
+            list(range(8)),
+        )
 
 
 if __name__ == "__main__":

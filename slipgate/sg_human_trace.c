@@ -1,4 +1,3 @@
-/* Authenticated, append-only human command/Pmove/hook observation. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -7,8 +6,8 @@
 #include "sg_human_trace.h"
 #include "sg_identity.h"
 
+#include <errno.h>
 #include <inttypes.h>
-#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,11 +19,15 @@
 #include <sys/stat.h>
 #else
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
 #define SG_HUMAN_TRACE_FORMAT "lmctf-human-trace-v3"
 #define SG_HUMAN_TRACE_LINE_BYTES 8192U
+#define SG_HUMAN_TRACE_PMOVE_SUBSTEP_MS 25U
+#define SG_HUMAN_TRACE_SERVER_FRAME_MS 100U
+#define SG_HUMAN_TRACE_PHYSICS_FUNKY_GRAVITY UINT32_C(1)
 #ifndef SG_HUMAN_TRACE_SEGMENT_BYTES
 #define SG_HUMAN_TRACE_SEGMENT_BYTES (64U * 1024U * 1024U)
 #endif
@@ -34,6 +37,8 @@
 
 _Static_assert(sizeof(((level_locals_t *)0)->time) == sizeof(uint32_t),
 	"human trace timing requires a 32-bit level.time");
+_Static_assert(sizeof(float) == sizeof(uint32_t),
+	"human trace exact values require 32-bit float storage");
 
 typedef struct human_trace_sha256_s
 {
@@ -50,8 +55,45 @@ typedef struct human_trace_builder_s
 	qboolean valid;
 } human_trace_builder_t;
 
+typedef struct human_trace_physics_s
+{
+	uint32_t gravity_bits;
+	uint32_t airaccelerate_bits;
+	uint32_t maxvelocity_bits;
+	uint32_t flags;
+	uint16_t pmove_substep_ms;
+	uint16_t server_frame_ms;
+} human_trace_physics_t;
+
+typedef struct human_trace_hook_snapshot_s
+{
+	uint32_t origin_bits[3];
+	uint32_t velocity_bits[3];
+	uint32_t mins_bits[3];
+	uint32_t maxs_bits[3];
+	uint32_t viewangles_bits[3];
+	uint32_t viewheight_bits;
+	uint32_t hook_origin_bits[3];
+	uint32_t hook_velocity_bits[3];
+	uint32_t hook_offset_bits[3];
+	uint32_t hookend_bits[3];
+	uint32_t hookangle_bits[3];
+	int hook_state;
+	int hook_length;
+	int hand;
+	int hook_target;
+} human_trace_hook_snapshot_t;
+
+typedef enum human_trace_create_result_e
+{
+	HUMAN_TRACE_CREATE_OK = 0,
+	HUMAN_TRACE_CREATE_COLLISION,
+	HUMAN_TRACE_CREATE_ERROR
+} human_trace_create_result_t;
+
 static FILE *sg_human_trace_file;
 static sg_level_identity_t sg_human_trace_identity;
+static human_trace_physics_t sg_human_trace_physics;
 static char sg_human_trace_directory[512];
 static uint64_t sg_human_trace_order;
 static uint64_t sg_human_trace_command;
@@ -230,6 +272,120 @@ static void HumanTraceBuilderAppend(human_trace_builder_t *builder,
 	builder->length += (size_t)written;
 }
 
+static int HumanTraceEntityKey(const edict_t *entity);
+
+static uint32_t HumanTraceFloatBits(float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+
+static void HumanTraceVectorBits(const vec3_t vector, uint32_t bits[3])
+{
+	int axis;
+
+	for (axis = 0; axis < 3; axis++)
+		bits[axis] = HumanTraceFloatBits(vector[axis]);
+}
+
+static void HumanTraceBuilderVectorBits(human_trace_builder_t *builder,
+	const char *name, const uint32_t bits[3])
+{
+	HumanTraceBuilderAppend(builder,
+		",\"%s\":[%" PRIu32 ",%" PRIu32 ",%" PRIu32 "]",
+		name, bits[0], bits[1], bits[2]);
+}
+
+static qboolean HumanTracePhysicsCapture(human_trace_physics_t *physics)
+{
+	cvar_t *airaccelerate;
+
+	if (!physics || !gi.cvar || !sv_gravity || !sv_maxvelocity ||
+	    !want_funky_gravity)
+		return false;
+	if (FRAMETIME * 1000.0f !=
+	    (float)SG_HUMAN_TRACE_SERVER_FRAME_MS)
+		return false;
+	airaccelerate = gi.cvar("sv_airaccelerate", "0", 0);
+	if (!airaccelerate)
+		return false;
+	physics->gravity_bits = HumanTraceFloatBits(sv_gravity->value);
+	physics->airaccelerate_bits =
+		HumanTraceFloatBits(airaccelerate->value);
+	physics->maxvelocity_bits = HumanTraceFloatBits(sv_maxvelocity->value);
+	physics->flags = want_funky_gravity->value != 0.0f
+		? SG_HUMAN_TRACE_PHYSICS_FUNKY_GRAVITY : 0U;
+	physics->pmove_substep_ms = SG_HUMAN_TRACE_PMOVE_SUBSTEP_MS;
+	physics->server_frame_ms = SG_HUMAN_TRACE_SERVER_FRAME_MS;
+	return true;
+}
+
+static qboolean HumanTracePhysicsEqual(const human_trace_physics_t *left,
+	const human_trace_physics_t *right)
+{
+	return left->gravity_bits == right->gravity_bits &&
+		left->airaccelerate_bits == right->airaccelerate_bits &&
+		left->maxvelocity_bits == right->maxvelocity_bits &&
+		left->flags == right->flags &&
+		left->pmove_substep_ms == right->pmove_substep_ms &&
+		left->server_frame_ms == right->server_frame_ms;
+}
+
+static void HumanTraceHookSnapshot(const edict_t *entity,
+	const edict_t *hook, human_trace_hook_snapshot_t *snapshot)
+{
+	memset(snapshot, 0, sizeof(*snapshot));
+	HumanTraceVectorBits(entity->s.origin, snapshot->origin_bits);
+	HumanTraceVectorBits(entity->velocity, snapshot->velocity_bits);
+	HumanTraceVectorBits(entity->mins, snapshot->mins_bits);
+	HumanTraceVectorBits(entity->maxs, snapshot->maxs_bits);
+	HumanTraceVectorBits(entity->client->v_angle,
+		snapshot->viewangles_bits);
+	snapshot->viewheight_bits = HumanTraceFloatBits((float)entity->viewheight);
+	HumanTraceVectorBits(hook->s.origin, snapshot->hook_origin_bits);
+	HumanTraceVectorBits(hook->velocity, snapshot->hook_velocity_bits);
+	HumanTraceVectorBits(hook->hook_offset, snapshot->hook_offset_bits);
+	HumanTraceVectorBits(entity->client->hookend, snapshot->hookend_bits);
+	HumanTraceVectorBits(entity->client->hookangle,
+		snapshot->hookangle_bits);
+	snapshot->hook_state = entity->client->hookstate;
+	snapshot->hook_length = entity->client->hooklength;
+	snapshot->hand = entity->client->pers.hand;
+	snapshot->hook_target = HumanTraceEntityKey(hook->hook_target);
+}
+
+static void HumanTraceBuilderHookSnapshot(human_trace_builder_t *builder,
+	const human_trace_hook_snapshot_t *snapshot)
+{
+	HumanTraceBuilderVectorBits(builder, "origin_bits",
+		snapshot->origin_bits);
+	HumanTraceBuilderVectorBits(builder, "velocity_bits",
+		snapshot->velocity_bits);
+	HumanTraceBuilderVectorBits(builder, "mins_bits", snapshot->mins_bits);
+	HumanTraceBuilderVectorBits(builder, "maxs_bits", snapshot->maxs_bits);
+	HumanTraceBuilderVectorBits(builder, "viewangles_bits",
+		snapshot->viewangles_bits);
+	HumanTraceBuilderAppend(builder, ",\"viewheight_bits\":%" PRIu32,
+		snapshot->viewheight_bits);
+	HumanTraceBuilderVectorBits(builder, "hook_origin_bits",
+		snapshot->hook_origin_bits);
+	HumanTraceBuilderVectorBits(builder, "hook_velocity_bits",
+		snapshot->hook_velocity_bits);
+	HumanTraceBuilderVectorBits(builder, "hook_offset_bits",
+		snapshot->hook_offset_bits);
+	HumanTraceBuilderVectorBits(builder, "hookend_bits",
+		snapshot->hookend_bits);
+	HumanTraceBuilderVectorBits(builder, "hookangle_bits",
+		snapshot->hookangle_bits);
+	HumanTraceBuilderAppend(builder,
+		",\"hook_state\":%d,\"hook_length\":%d,\"hand\":%d,"
+		"\"hook_target\":%d",
+		snapshot->hook_state, snapshot->hook_length, snapshot->hand,
+		snapshot->hook_target);
+}
+
 static int HumanTraceEntityKey(const edict_t *entity)
 {
 	uintptr_t address;
@@ -237,16 +393,18 @@ static int HumanTraceEntityKey(const edict_t *entity)
 	uintptr_t offset;
 	size_t extent;
 
-	if (!entity || !g_edicts)
-		return 0;
+	if (!entity)
+		return -1;
+	if (!g_edicts)
+		return -2;
 	address = (uintptr_t)entity;
 	base = (uintptr_t)g_edicts;
 	extent = (size_t)globals.num_edicts * sizeof(*g_edicts);
 	if (address < base)
-		return -1;
+		return -2;
 	offset = address - base;
 	if (offset >= extent || offset % sizeof(*g_edicts))
-		return -1;
+		return -2;
 	return (int)(offset / sizeof(*g_edicts));
 }
 
@@ -276,38 +434,40 @@ static qboolean HumanTracePath(char path[1024], uint32_t segment)
 	return written >= 0 && written < 1024;
 }
 
-static qboolean HumanTraceFileExists(const char *path)
-{
-	FILE *file = fopen(path, "rb");
-
-	if (!file)
-		return false;
-	fclose(file);
-	return true;
-}
-
-static FILE *HumanTraceCreateExclusive(const char *path)
+static human_trace_create_result_t HumanTraceCreateExclusive(
+	const char *path, FILE **out)
 {
 	int descriptor;
 	FILE *file;
 
+	*out = NULL;
 #ifdef _WIN32
 	descriptor = _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,
 		_S_IREAD | _S_IWRITE);
 	if (descriptor < 0)
-		return NULL;
+		return errno == EEXIST ? HUMAN_TRACE_CREATE_COLLISION :
+			HUMAN_TRACE_CREATE_ERROR;
 	file = _fdopen(descriptor, "wb");
 	if (!file)
 		_close(descriptor);
 #else
 	descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
 	if (descriptor < 0)
-		return NULL;
+		return errno == EEXIST ? HUMAN_TRACE_CREATE_COLLISION :
+			HUMAN_TRACE_CREATE_ERROR;
 	file = fdopen(descriptor, "wb");
 	if (!file)
 		close(descriptor);
 #endif
-	return file;
+	if (!file)
+		return HUMAN_TRACE_CREATE_ERROR;
+	if (setvbuf(file, NULL, _IONBF, 0) != 0)
+	{
+		fclose(file);
+		return HUMAN_TRACE_CREATE_ERROR;
+	}
+	*out = file;
+	return HUMAN_TRACE_CREATE_OK;
 }
 
 static uint32_t HumanTraceLevelTimeBits(void)
@@ -328,8 +488,30 @@ static void HumanTraceDisable(const char *message)
 	sg_human_trace_open_failed = true;
 }
 
-static qboolean HumanTraceWriteAuthenticated(const char *payload,
-	size_t payload_length)
+static qboolean HumanTraceWriteFitsFileLimit(size_t current_bytes,
+	size_t length)
+{
+#ifdef _WIN32
+	(void)current_bytes;
+	(void)length;
+	return true;
+#else
+	struct rlimit limit;
+
+	if (getrlimit(RLIMIT_FSIZE, &limit) != 0)
+		return false;
+	if (limit.rlim_cur == RLIM_INFINITY)
+		return true;
+	if ((uintmax_t)current_bytes >
+	    (uintmax_t)limit.rlim_cur)
+		return false;
+	return (uintmax_t)length <= (uintmax_t)limit.rlim_cur -
+		(uintmax_t)current_bytes;
+#endif
+}
+
+static qboolean HumanTraceWriteAuthenticated(FILE *file,
+	size_t *segment_bytes, const char *payload, size_t payload_length)
 {
 	unsigned char digest_input[65U + SG_HUMAN_TRACE_LINE_BYTES];
 	char digest[65];
@@ -337,7 +519,7 @@ static qboolean HumanTraceWriteAuthenticated(const char *payload,
 	int written;
 	size_t line_length;
 
-	if (!sg_human_trace_file || payload_length < 2U ||
+	if (!file || !segment_bytes || payload_length < 2U ||
 	    payload[payload_length - 1U] != '}' ||
 	    payload_length + 166U >= sizeof(line))
 		return false;
@@ -350,11 +532,13 @@ static qboolean HumanTraceWriteAuthenticated(const char *payload,
 	if (written < 0 || (size_t)written >= sizeof(line))
 		return false;
 	line_length = (size_t)written;
-	if (fwrite(line, 1U, line_length, sg_human_trace_file) != line_length ||
-	    fflush(sg_human_trace_file) != 0)
+	if (!HumanTraceWriteFitsFileLimit(*segment_bytes, line_length))
+		return false;
+	if (fwrite(line, 1U, line_length, file) != line_length ||
+	    fflush(file) != 0)
 		return false;
 	strcpy(sg_human_trace_previous_sha256, digest);
-	sg_human_trace_segment_bytes += line_length;
+	*segment_bytes += line_length;
 	return true;
 }
 
@@ -362,15 +546,25 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 {
 	human_trace_builder_t header;
 	char path[1024];
+	human_trace_create_result_t created;
+	FILE *candidate_file = NULL;
+	uint32_t candidate = sg_human_trace_segment;
+	uint32_t session;
+	size_t segment_bytes = 0U;
 
-	if (sg_human_trace_segment >= SG_HUMAN_TRACE_MAX_SEGMENTS ||
-	    !HumanTracePath(path, sg_human_trace_segment) ||
-	    HumanTraceFileExists(path))
-		return false;
-	sg_human_trace_file = HumanTraceCreateExclusive(path);
-	if (!sg_human_trace_file)
-		return false;
-	sg_human_trace_segment_bytes = 0U;
+	for (;;)
+	{
+		if (candidate >= SG_HUMAN_TRACE_MAX_SEGMENTS ||
+		    !HumanTracePath(path, candidate))
+			return false;
+		created = HumanTraceCreateExclusive(path, &candidate_file);
+		if (created == HUMAN_TRACE_CREATE_OK)
+			break;
+		if (created != HUMAN_TRACE_CREATE_COLLISION)
+			return false;
+		candidate++;
+	}
+	session = continuation ? sg_human_trace_session : candidate;
 	HumanTraceBuilderBegin(&header);
 	HumanTraceBuilderAppend(&header,
 		"{\"format\":\"%s\",\"kind\":\"header\","
@@ -379,22 +573,38 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 		"\"start_command\":%" PRIu64 ","
 		"\"start_hook_event\":%" PRIu64 ","
 		"\"map\":\"%s\",\"bsp_checksum\":%" PRIu32 ","
-		"\"entity_crc32\":%" PRIu32 ",\"physics_id\":%" PRIu32 ","
+		"\"entity_crc32\":%" PRIu32 ",\"physics_id\":0,"
+		"\"host_physics_id\":%" PRIu32 ","
+		"\"gravity_bits\":%" PRIu32 ","
+		"\"airaccelerate_bits\":%" PRIu32 ","
+		"\"maxvelocity_bits\":%" PRIu32 ","
+		"\"pmove_substep_ms\":%u,\"server_frame_ms\":%u,"
+		"\"physics_flags\":%" PRIu32 ","
 		"\"module_revision\":%d,\"module_version\":\"%s\"}",
-		SG_HUMAN_TRACE_FORMAT, sg_human_trace_session,
-		sg_human_trace_segment, continuation ? 1 : 0,
+		SG_HUMAN_TRACE_FORMAT, session, candidate, continuation ? 1 : 0,
 		sg_human_trace_order + 1U, sg_human_trace_command + 1U,
 		sg_human_trace_hook_event + 1U, sg_human_trace_identity.mapname,
 		sg_human_trace_identity.bsp_checksum,
 		sg_human_trace_identity.entity_crc32,
 		sg_human_trace_identity.host_physics_id,
+		sg_human_trace_physics.gravity_bits,
+		sg_human_trace_physics.airaccelerate_bits,
+		sg_human_trace_physics.maxvelocity_bits,
+		(unsigned)sg_human_trace_physics.pmove_substep_ms,
+		(unsigned)sg_human_trace_physics.server_frame_ms,
+		sg_human_trace_physics.flags,
 		LMCTF_REVISION, LMCTF_VERSION);
 	if (!header.valid ||
-	    !HumanTraceWriteAuthenticated(header.bytes, header.length))
+	    !HumanTraceWriteAuthenticated(candidate_file, &segment_bytes,
+	        header.bytes, header.length))
 	{
-		HumanTraceDisable("segment header write failed");
+		fclose(candidate_file);
 		return false;
 	}
+	sg_human_trace_file = candidate_file;
+	sg_human_trace_session = session;
+	sg_human_trace_segment = candidate;
+	sg_human_trace_segment_bytes = segment_bytes;
 	gi.dprintf("humantrace: recording passive evidence to %s\n", path);
 	return true;
 }
@@ -403,8 +613,6 @@ static qboolean HumanTraceOpen(void)
 {
 	cvar_t *game_directory;
 	const char *directory;
-	char path[1024];
-	uint32_t candidate;
 
 	if (sg_human_trace_file)
 		return true;
@@ -412,9 +620,10 @@ static qboolean HumanTraceOpen(void)
 		return false;
 	if (SG_LevelIdentitySnapshot(level.mapname,
 	        &sg_human_trace_identity) != SG_IDENTITY_OK ||
-	    !HumanTraceSafeName(sg_human_trace_identity.mapname))
+	    !HumanTraceSafeName(sg_human_trace_identity.mapname) ||
+	    !HumanTracePhysicsCapture(&sg_human_trace_physics))
 	{
-		HumanTraceDisable("level identity is unavailable or unsafe");
+		HumanTraceDisable("level or physics identity is unavailable");
 		return false;
 	}
 	game_directory = gi.cvar("gamedir", "", 0);
@@ -429,24 +638,7 @@ static qboolean HumanTraceOpen(void)
 		HumanTraceDisable("output directory is too long");
 		return false;
 	}
-	for (candidate = 0U; candidate < SG_HUMAN_TRACE_MAX_SEGMENTS;
-	     candidate++)
-	{
-		sg_human_trace_segment = candidate;
-		if (!HumanTracePath(path, candidate))
-		{
-			HumanTraceDisable("output path is too long");
-			return false;
-		}
-		if (!HumanTraceFileExists(path))
-			break;
-	}
-	if (candidate == SG_HUMAN_TRACE_MAX_SEGMENTS)
-	{
-		HumanTraceDisable("segment capacity exhausted");
-		return false;
-	}
-	sg_human_trace_session = candidate;
+	sg_human_trace_segment = 0U;
 	memset(sg_human_trace_previous_sha256, '0', 64U);
 	sg_human_trace_previous_sha256[64] = '\0';
 	if (!HumanTraceOpenSegment(false))
@@ -483,6 +675,27 @@ static qboolean HumanTraceRotate(void)
 	return true;
 }
 
+static qboolean HumanTracePrepareRecord(void)
+{
+	human_trace_physics_t current_physics;
+
+	if (!HumanTraceOpen())
+		return false;
+	if (!HumanTracePhysicsCapture(&current_physics))
+	{
+		HumanTraceDisable("physics identity became unavailable");
+		return false;
+	}
+	if (!HumanTracePhysicsEqual(&current_physics,
+	        &sg_human_trace_physics))
+	{
+		sg_human_trace_physics = current_physics;
+		if (!HumanTraceRotate())
+			return false;
+	}
+	return true;
+}
+
 static qboolean HumanTraceCommit(const human_trace_builder_t *builder)
 {
 	size_t authenticated_size;
@@ -492,31 +705,17 @@ static qboolean HumanTraceCommit(const human_trace_builder_t *builder)
 		HumanTraceDisable("record exceeded the fixed line capacity");
 		return false;
 	}
-	if (!HumanTraceOpen())
+	if (!sg_human_trace_file)
 		return false;
 	authenticated_size = builder->length + 166U;
 	if (sg_human_trace_segment_bytes + authenticated_size >
 	    SG_HUMAN_TRACE_SEGMENT_BYTES && !HumanTraceRotate())
 		return false;
-	if (!HumanTraceWriteAuthenticated(builder->bytes, builder->length))
+	if (!HumanTraceWriteAuthenticated(sg_human_trace_file,
+	        &sg_human_trace_segment_bytes, builder->bytes, builder->length))
 	{
 		HumanTraceDisable("record write failed");
 		return false;
-	}
-	return true;
-}
-
-static qboolean HumanTraceVectorQ8(const vec3_t vector, int32_t out[3])
-{
-	int i;
-
-	for (i = 0; i < 3; i++)
-	{
-		double scaled = (double)vector[i] * 8.0;
-		if (!isfinite(scaled) || scaled < (double)INT32_MIN ||
-		    scaled > (double)INT32_MAX)
-			return false;
-		out[i] = (int32_t)lround(scaled);
 	}
 	return true;
 }
@@ -567,6 +766,7 @@ void SG_HumanTraceNewLevel(void)
 		fclose(sg_human_trace_file);
 	sg_human_trace_file = NULL;
 	memset(&sg_human_trace_identity, 0, sizeof(sg_human_trace_identity));
+	memset(&sg_human_trace_physics, 0, sizeof(sg_human_trace_physics));
 	sg_human_trace_directory[0] = '\0';
 	sg_human_trace_order = 0U;
 	sg_human_trace_command = 0U;
@@ -585,7 +785,7 @@ void SG_HumanTraceMatchEnd(void)
 	human_trace_builder_t builder;
 
 	if (sg_human_trace_file && !sg_human_trace_open_failed &&
-	    sg_human_trace_order != UINT64_MAX)
+	    sg_human_trace_order != UINT64_MAX && HumanTracePrepareRecord())
 	{
 		HumanTraceBuilderBegin(&builder);
 		HumanTraceBuilderAppend(&builder,
@@ -613,6 +813,7 @@ void SG_HumanTracePmove(edict_t *entity,
 	const usercmd_t *command;
 	uint64_t spawn_generation;
 	uint64_t next_order, next_command;
+	uint32_t vector_bits[3];
 	int client_key;
 	int i;
 
@@ -621,6 +822,8 @@ void SG_HumanTracePmove(edict_t *entity,
 	    !HumanTraceReady(entity, &client_key, &spawn_generation) ||
 	    sg_human_trace_order == UINT64_MAX ||
 	    sg_human_trace_command == UINT64_MAX)
+		return;
+	if (!HumanTracePrepareRecord())
 		return;
 	next_order = sg_human_trace_order + 1U;
 	next_command = sg_human_trace_command + 1U;
@@ -647,10 +850,19 @@ void SG_HumanTracePmove(edict_t *entity,
 	HumanTraceState(&builder, before);
 	HumanTraceBuilderAppend(&builder, ",\"after\":");
 	HumanTraceState(&builder, &after->s);
+	HumanTraceVectorBits(after->viewangles, vector_bits);
+	HumanTraceBuilderVectorBits(&builder, "viewangles_bits", vector_bits);
+	HumanTraceBuilderAppend(&builder, ",\"viewheight_bits\":%" PRIu32,
+		HumanTraceFloatBits(after->viewheight));
+	HumanTraceVectorBits(after->mins, vector_bits);
+	HumanTraceBuilderVectorBits(&builder, "mins_bits", vector_bits);
+	HumanTraceVectorBits(after->maxs, vector_bits);
+	HumanTraceBuilderVectorBits(&builder, "maxs_bits", vector_bits);
 	HumanTraceBuilderAppend(&builder,
 		",\"ground\":%d,\"waterlevel\":%d,\"watertype\":%d,"
+		"\"numtouch\":%d,"
 		"\"touches\":[", HumanTraceEntityKey(after->groundentity),
-		after->waterlevel, after->watertype);
+		after->waterlevel, after->watertype, after->numtouch);
 	for (i = 0; i < after->numtouch; i++)
 		HumanTraceBuilderAppend(&builder, "%s%d", i ? "," : "",
 			HumanTraceEntityKey(after->touchents[i]));
@@ -665,21 +877,22 @@ void SG_HumanTracePmove(edict_t *entity,
 void SG_HumanTraceHookFire(edict_t *entity, edict_t *hook)
 {
 	human_trace_builder_t builder;
+	human_trace_hook_snapshot_t snapshot;
 	uint64_t spawn_generation;
 	uint64_t next_order, next_event;
-	int32_t origin[3], velocity[3];
 	int client_key, hook_key;
 
 	if (!HumanTraceReady(entity, &client_key, &spawn_generation) ||
 	    !hook || hook->owner != entity ||
-	    !HumanTraceVectorQ8(entity->s.origin, origin) ||
-	    !HumanTraceVectorQ8(entity->velocity, velocity) ||
 	    (hook_key = HumanTraceEntityKey(hook)) <= 0 ||
 	    sg_human_trace_order == UINT64_MAX ||
 	    sg_human_trace_hook_event == UINT64_MAX)
 		return;
+	if (!HumanTracePrepareRecord())
+		return;
 	next_order = sg_human_trace_order + 1U;
 	next_event = sg_human_trace_hook_event + 1U;
+	HumanTraceHookSnapshot(entity, hook, &snapshot);
 	HumanTraceBuilderBegin(&builder);
 	HumanTraceBuilderAppend(&builder,
 		"{\"format\":\"%s\",\"kind\":\"hook-fire\","
@@ -687,16 +900,11 @@ void SG_HumanTraceHookFire(edict_t *entity, edict_t *hook)
 		"\"after_command\":%" PRIu64 ",\"client\":%d,"
 		"\"spawn_generation\":%" PRIu64 ",\"frame\":%d,"
 		"\"level_time_bits\":%" PRIu32 ","
-		"\"hook\":%d,\"origin_q8\":[%d,%d,%d],"
-		"\"velocity_q8\":[%d,%d,%d],\"view_short\":[%d,%d],"
-		"\"hand\":%d}", SG_HUMAN_TRACE_FORMAT, next_order,
+		"\"hook\":%d", SG_HUMAN_TRACE_FORMAT, next_order,
 		next_event, sg_human_trace_command, client_key, spawn_generation,
-		level.framenum, HumanTraceLevelTimeBits(), hook_key,
-		origin[0], origin[1], origin[2],
-		velocity[0], velocity[1], velocity[2],
-		(short)ANGLE2SHORT(entity->client->v_angle[PITCH]),
-		(short)ANGLE2SHORT(entity->client->v_angle[YAW]),
-		entity->client->pers.hand);
+		level.framenum, HumanTraceLevelTimeBits(), hook_key);
+	HumanTraceBuilderHookSnapshot(&builder, &snapshot);
+	HumanTraceBuilderAppend(&builder, "}");
 	if (HumanTraceCommit(&builder))
 	{
 		sg_human_trace_order = next_order;
@@ -708,22 +916,24 @@ void SG_HumanTraceHookAttach(edict_t *entity, edict_t *hook,
 	edict_t *target)
 {
 	human_trace_builder_t builder;
+	human_trace_hook_snapshot_t snapshot;
 	uint64_t spawn_generation;
 	uint64_t next_order, next_event;
-	int32_t bite[3];
 	int client_key, hook_key, target_key;
 
 	if (!HumanTraceReady(entity, &client_key, &spawn_generation) ||
 	    !hook || !target || hook->owner != entity ||
 	    hook->hook_target != target ||
-	    !HumanTraceVectorQ8(hook->s.origin, bite) ||
 	    (hook_key = HumanTraceEntityKey(hook)) <= 0 ||
 	    (target_key = HumanTraceEntityKey(target)) < 0 ||
 	    sg_human_trace_order == UINT64_MAX ||
 	    sg_human_trace_hook_event == UINT64_MAX)
 		return;
+	if (!HumanTracePrepareRecord())
+		return;
 	next_order = sg_human_trace_order + 1U;
 	next_event = sg_human_trace_hook_event + 1U;
+	HumanTraceHookSnapshot(entity, hook, &snapshot);
 	HumanTraceBuilderBegin(&builder);
 	HumanTraceBuilderAppend(&builder,
 		"{\"format\":\"%s\",\"kind\":\"hook-attach\","
@@ -731,12 +941,13 @@ void SG_HumanTraceHookAttach(edict_t *entity, edict_t *hook,
 		"\"after_command\":%" PRIu64 ",\"client\":%d,"
 		"\"spawn_generation\":%" PRIu64 ",\"frame\":%d,"
 		"\"level_time_bits\":%" PRIu32 ","
-		"\"hook\":%d,\"bite_q8\":[%d,%d,%d],"
-		"\"target\":%d,\"world\":%d}", SG_HUMAN_TRACE_FORMAT,
+		"\"hook\":%d,\"target\":%d,\"world\":%d",
+		SG_HUMAN_TRACE_FORMAT,
 		next_order, next_event, sg_human_trace_command, client_key,
 		spawn_generation, level.framenum, HumanTraceLevelTimeBits(),
-		hook_key, bite[0], bite[1],
-		bite[2], target_key, target == g_edicts ? 1 : 0);
+		hook_key, target_key, target == g_edicts ? 1 : 0);
+	HumanTraceBuilderHookSnapshot(&builder, &snapshot);
+	HumanTraceBuilderAppend(&builder, "}");
 	if (HumanTraceCommit(&builder))
 	{
 		sg_human_trace_order = next_order;
@@ -748,21 +959,22 @@ static void HumanTraceHookTerminal(edict_t *entity, edict_t *hook,
 	const char *kind)
 {
 	human_trace_builder_t builder;
+	human_trace_hook_snapshot_t snapshot;
 	uint64_t spawn_generation;
 	uint64_t next_order, next_event;
-	int32_t origin[3], velocity[3];
 	int client_key, hook_key;
 
 	if (!HumanTraceReady(entity, &client_key, &spawn_generation) ||
 	    !hook || hook->owner != entity ||
-	    !HumanTraceVectorQ8(entity->s.origin, origin) ||
-	    !HumanTraceVectorQ8(entity->velocity, velocity) ||
 	    (hook_key = HumanTraceEntityKey(hook)) <= 0 ||
 	    sg_human_trace_order == UINT64_MAX ||
 	    sg_human_trace_hook_event == UINT64_MAX)
 		return;
+	if (!HumanTracePrepareRecord())
+		return;
 	next_order = sg_human_trace_order + 1U;
 	next_event = sg_human_trace_hook_event + 1U;
+	HumanTraceHookSnapshot(entity, hook, &snapshot);
 	HumanTraceBuilderBegin(&builder);
 	HumanTraceBuilderAppend(&builder,
 		"{\"format\":\"%s\",\"kind\":\"%s\","
@@ -770,12 +982,12 @@ static void HumanTraceHookTerminal(edict_t *entity, edict_t *hook,
 		"\"after_command\":%" PRIu64 ",\"client\":%d,"
 		"\"spawn_generation\":%" PRIu64 ",\"frame\":%d,"
 		"\"level_time_bits\":%" PRIu32 ","
-		"\"hook\":%d,\"origin_q8\":[%d,%d,%d],"
-		"\"velocity_q8\":[%d,%d,%d]}", SG_HUMAN_TRACE_FORMAT,
+		"\"hook\":%d", SG_HUMAN_TRACE_FORMAT,
 		kind, next_order, next_event, sg_human_trace_command, client_key,
 		spawn_generation, level.framenum, HumanTraceLevelTimeBits(),
-		hook_key, origin[0], origin[1],
-		origin[2], velocity[0], velocity[1], velocity[2]);
+		hook_key);
+	HumanTraceBuilderHookSnapshot(&builder, &snapshot);
+	HumanTraceBuilderAppend(&builder, "}");
 	if (HumanTraceCommit(&builder))
 	{
 		sg_human_trace_order = next_order;

@@ -56,7 +56,7 @@ class HumanTraceIntegrationTest(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("void SG_HumanTraceMatchEnd(void);", header)
         self.assertIn("sg_human_trace_match_ended", source)
-        self.assertIn("fflush(sg_human_trace_file)", source)
+        self.assertIn("fflush(file)", source)
         self.assertIn("fclose(sg_human_trace_file)", source)
         self.assertIn(r'\"kind\":\"end\"', source)
 
@@ -126,8 +126,11 @@ class HumanTraceIntegrationTest(unittest.TestCase):
         self.assertIn("SG_HUMAN_TRACE_SEGMENT_BYTES", source)
         self.assertIn("SG_HUMAN_TRACE_MAX_SEGMENTS", source)
         self.assertIn('HumanTraceDisable("record write failed")', source)
-        self.assertIn("HumanTraceCreateExclusive(path)", source)
+        self.assertIn("HumanTraceCreateExclusive(path,", source)
         self.assertIn("O_EXCL", source)
+        self.assertNotIn("HumanTraceFileExists", source)
+        self.assertNotIn("sigaction", source)
+        self.assertNotIn("signal(", source)
         self.assertNotIn('fopen(path, "a")', source)
 
     def test_v3_keeps_exact_runtime_values_and_physics_identity(self) -> None:

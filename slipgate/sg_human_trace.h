@@ -1,4 +1,3 @@
-/* Passive human command, Pmove, and hook lifecycle capture. */
 #ifndef SG_HUMAN_TRACE_H
 #define SG_HUMAN_TRACE_H
 

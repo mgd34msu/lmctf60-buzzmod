@@ -5,6 +5,8 @@
 #include <string.h>
 #ifndef _WIN32
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #include "g_local.h"
@@ -166,14 +168,41 @@ static void SetupPmove(pmove_state_t *before, pmove_t *after)
 	memset(after, 0, sizeof(*after));
 	before->pm_type = PM_NORMAL;
 	before->origin[0] = 8;
+	before->origin[1] = -16;
+	before->origin[2] = 24;
 	before->velocity[0] = 80;
-	before->gravity = 800;
+	before->velocity[1] = -96;
+	before->velocity[2] = 112;
+	before->pm_flags = 5;
+	before->pm_time = 7;
+	before->gravity = 777;
+	before->delta_angles[0] = 101;
+	before->delta_angles[1] = -202;
+	before->delta_angles[2] = 303;
 	after->s = *before;
 	after->s.origin[0] = 16;
+	after->s.origin[1] = -24;
+	after->s.origin[2] = 32;
+	after->s.velocity[0] = 120;
+	after->s.velocity[1] = -136;
+	after->s.velocity[2] = 152;
+	after->s.pm_flags = 9;
+	after->s.pm_time = 11;
+	after->s.gravity = 333;
+	after->s.delta_angles[0] = 404;
+	after->s.delta_angles[1] = -505;
+	after->s.delta_angles[2] = 606;
+	after->snapinitial = true;
 	after->cmd.msec = 25;
-	after->cmd.buttons = BUTTON_ATTACK;
-	after->cmd.angles[YAW] = 16384;
+	after->cmd.buttons = BUTTON_ATTACK | BUTTON_USE;
+	after->cmd.angles[0] = 1234;
+	after->cmd.angles[1] = -2345;
+	after->cmd.angles[2] = 3456;
 	after->cmd.forwardmove = 400;
+	after->cmd.sidemove = -300;
+	after->cmd.upmove = 200;
+	after->cmd.impulse = 17;
+	after->cmd.lightlevel = 91;
 	after->viewangles[0] = 1.1f;
 	after->viewangles[1] = 2.2f;
 	after->viewangles[2] = 3.3f;
@@ -184,6 +213,11 @@ static void SetupPmove(pmove_state_t *before, pmove_t *after)
 	after->maxs[0] = 16.0f;
 	after->maxs[1] = 16.0f;
 	after->maxs[2] = 32.0f;
+	after->waterlevel = 2;
+	after->watertype = CONTENTS_WATER;
+	after->numtouch = 2;
+	after->touchents[0] = &entities[0];
+	after->touchents[1] = &entities[2];
 }
 
 static int ObserveLifecycle(edict_t *player, edict_t *hook,
@@ -350,6 +384,91 @@ static int RunCollision(const char *directory)
 	return CountRecords(path, NULL) == 1 ? 0 : 62;
 }
 
+static int RunPhysicsDrift(const char *directory)
+{
+	char path0[1024], path1[1024];
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+
+	if (!TracePath(path0, sizeof(path0), directory, 0U) ||
+	    !TracePath(path1, sizeof(path1), directory, 1U))
+		return 65;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	gravity.value = 100.0f;
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (CountRecords(path0, NULL) != 2 ||
+	    CountRecords(path1, NULL) != 3)
+		return 66;
+	return 0;
+}
+
+#ifndef _WIN32
+static int RunConcurrentCollision(const char *directory)
+{
+	pid_t children[8];
+	int gate[2];
+	int child;
+	int status;
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+
+	if (pipe(gate) != 0)
+		return 70;
+	for (child = 0; child < 8; child++)
+	{
+		children[child] = fork();
+		if (children[child] < 0)
+		{
+			int started = child;
+
+			close(gate[0]);
+			close(gate[1]);
+			while (started-- > 0)
+				(void)waitpid(children[started], NULL, 0);
+			return 71;
+		}
+		if (children[child] == 0)
+		{
+			char released;
+
+			close(gate[1]);
+			if (read(gate[0], &released, 1U) != 0)
+				_exit(72);
+			close(gate[0]);
+			SetupPlayer(player, &clients[0], (unsigned long)(11 + child));
+			SetupPmove(&before, &after);
+			SG_HumanTraceNewLevel();
+			SG_HumanTracePmove(player, &before, &after);
+			SG_HumanTraceMatchEnd();
+			_exit(0);
+		}
+	}
+	close(gate[0]);
+	close(gate[1]);
+	for (child = 0; child < 8; child++)
+	{
+		if (waitpid(children[child], &status, 0) != children[child] ||
+		    !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			return 73;
+	}
+	for (child = 0; child < 8; child++)
+	{
+		char path[1024];
+
+		if (!TracePath(path, sizeof(path), directory, (unsigned)child) ||
+		    CountRecords(path, NULL) != 3)
+			return 74;
+	}
+	return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	char path0[1024], path1[1024], path2[1024];
@@ -387,6 +506,12 @@ int main(int argc, char **argv)
 #endif
 	if (argc == 3 && strcmp(argv[2], "collision") == 0)
 		return RunCollision(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "physics") == 0)
+		return RunPhysicsDrift(argv[1]);
+#ifndef _WIN32
+	if (argc == 3 && strcmp(argv[2], "concurrent") == 0)
+		return RunConcurrentCollision(argv[1]);
+#endif
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 	if (argc == 3 && strcmp(argv[2], "writefail") == 0)
 		return RunWriteFailure(argv[1]);
@@ -396,6 +521,7 @@ int main(int argc, char **argv)
 	SetupPlayer(player2, &clients[1], 22UL);
 	SetupPmove(&before1, &after1);
 	SetupPmove(&before2, &after2);
+	after1.groundentity = &entities[0];
 	hook1->inuse = true;
 	hook1->owner = player1;
 	hook1->hook_target = &entities[0];
@@ -408,8 +534,6 @@ int main(int argc, char **argv)
 	hook2->s.origin[0] = 96.0f;
 	player2->client->hook = hook2;
 
-	/* The enabled and disabled observers must leave every gameplay byte and
-	 * every Pmove input/output byte unchanged. */
 	level.framenum = 17;
 	SG_HumanTraceNewLevel();
 	if (!ObserveLifecycle(player1, hook1, &before1, &after1))
@@ -420,8 +544,6 @@ int main(int argc, char **argv)
 		result = 4;
 	enabled.value = 1.0f;
 
-	/* A second playthrough gets a new segment and remains independently
-	 * selectable by client, spawn generation, and frame. */
 	level.framenum = 31;
 	SG_HumanTraceNewLevel();
 	if (!ObserveLifecycle(player2, hook2, &before2, &after2))
@@ -444,8 +566,6 @@ int main(int argc, char **argv)
 	    !FileContains(path1, "\"frame\":31"))
 		result = 6;
 
-	/* Simulate a process dying during the last line. The next process-level
-	 * session selects a fresh segment instead of appending after the torn tail. */
 	if (!AppendPartial(path1))
 		result = 7;
 	level.framenum = 32;

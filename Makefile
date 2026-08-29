@@ -3728,7 +3728,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 	$(Q)./$(SPECTATOR_SOUND_TEST_BIN) && python3 -B tests/test_spectator_limit.py
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
-	$(Q)python3 -B -m unittest tests.test_humantrace \
+	$(Q)SG_HUMAN_TRACE_TEST_BINARY=$(HUMAN_TRACE_HOOK_TEST_BIN) \
+		python3 -B -m unittest tests.test_humantrace \
 		tests.test_human_trace_integration \
 		tests.test_human_trace_v3_integration
 	$(Q)tmp=$$(mktemp -d); \
@@ -4379,7 +4380,8 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 
 human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN)
 	$(E) [TEST] $<
-	$(Q)python3 -B -m unittest tests.test_humantrace \
+	$(Q)SG_HUMAN_TRACE_TEST_BINARY=$(HUMAN_TRACE_HOOK_TEST_BIN) \
+		python3 -B -m unittest tests.test_humantrace \
 		tests.test_human_trace_integration \
 		tests.test_human_trace_v3_integration
 	$(Q)tmp=$$(mktemp -d); \
