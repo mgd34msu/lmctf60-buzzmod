@@ -94,6 +94,17 @@ static void BeliefReportCounters(sg_belief_reduction_t *reduction,
 	reduction->evaluated_outcomes = counters->evaluated_outcomes;
 }
 
+static void BeliefReportPredictionCounters(sg_belief_prediction_t *prediction,
+	const belief_work_counters_t *counters)
+{
+	prediction->validated_phase_spans = counters->validated_phase_spans;
+	prediction->validated_horizon_entries =
+		counters->validated_horizon_entries;
+	prediction->validated_horizon_steps =
+		counters->validated_horizon_steps;
+	prediction->evaluated_outcomes = counters->evaluated_outcomes;
+}
+
 static int BeliefStateBoundToSnapshot(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state)
@@ -994,7 +1005,7 @@ static sg_belief_motion_state_t BeliefMovementAfterStep(
 	const sg_phase_coordinate_t *phase,
 	const belief_step_bounds_t *bounds, sg_belief_motion_state_t prior)
 {
-	sg_belief_motion_state_t movement_state;
+	sg_belief_motion_state_t movement_state = SG_BELIEF_MOTION_COUNT;
 
 	switch (bounds->capability_family)
 	{
@@ -1119,9 +1130,9 @@ static int BeliefNormalize(sg_belief_particle_t *particles, size_t *count)
 	size_t index;
 	size_t write = 0U;
 	size_t largest = 0U;
-	double total = 0.0;
-	double normalized_total = 0.0;
-	float divisor;
+	double scaled_total = 0.0;
+	double other_total = 0.0;
+	float maximum = 0.0f;
 
 	for (index = 0U; index < *count; index++)
 	{
@@ -1130,31 +1141,48 @@ static int BeliefNormalize(sg_belief_particle_t *particles, size_t *count)
 			return 0;
 		if (particles[index].weight > 0.0f)
 		{
-			total += (double)particles[index].weight;
-			if (!isfinite(total))
-				return 0;
 			if (write != index)
 				particles[write] = particles[index];
+			if (particles[write].weight > maximum)
+			{
+				maximum = particles[write].weight;
+				largest = write;
+			}
 			write++;
 		}
 	}
 	*count = write;
 	if (write == 0U)
 		return 1;
-	if (total <= 0.0 || total > (double)FLT_MAX)
+	if (maximum <= 0.0f)
 		return 0;
-	divisor = (float)total;
 	for (index = 0U; index < write; index++)
 	{
-		particles[index].weight /= divisor;
-		if (!SG_BeliefFloatValid(particles[index].weight) ||
-		    particles[index].weight <= 0.0f)
+		double scaled = (double)particles[index].weight / (double)maximum;
+		float represented = (float)scaled;
+		if (!isfinite(scaled) || scaled <= 0.0)
 			return 0;
-		if (particles[index].weight > particles[largest].weight)
-			largest = index;
-		normalized_total += (double)particles[index].weight;
+		if (represented == 0.0f)
+			represented = FLT_TRUE_MIN;
+		particles[index].weight = represented;
+		scaled_total += (double)represented;
 	}
-	particles[largest].weight += (float)(1.0 - normalized_total);
+	if (!isfinite(scaled_total) || scaled_total <= 0.0)
+		return 0;
+	for (index = 0U; index < write; index++)
+	{
+		float normalized;
+		if (index == largest)
+			continue;
+		normalized = (float)((double)particles[index].weight / scaled_total);
+		if (normalized == 0.0f)
+			normalized = FLT_TRUE_MIN;
+		if (!SG_BeliefFloatValid(normalized) || normalized <= 0.0f)
+			return 0;
+		particles[index].weight = normalized;
+		other_total += (double)normalized;
+	}
+	particles[largest].weight = (float)(1.0 - other_total);
 	if (!SG_BeliefFloatValid(particles[largest].weight) ||
 	    particles[largest].weight <= 0.0f || particles[largest].weight > 1.0f)
 		return 0;
@@ -1746,72 +1774,293 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 	return reduction.result;
 }
 
-int SG_BeliefPredict(const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_belief_state_t *state, uint64_t at_time_ms,
-	sg_belief_particle_t *storage, size_t capacity,
+static int BeliefPredictionMemoryValid(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_prediction_request_t *request,
+	const sg_belief_prediction_t *out)
+{
+	belief_byte_range_t writable[4];
+	belief_byte_range_t read_range;
+	size_t writable_count = 0U;
+	size_t left;
+	size_t right;
+
+	if ((request->scratch_capacity == 0U &&
+	     (request->scratch_first || request->scratch_second)) ||
+	    (request->scratch_capacity != 0U &&
+	     (!request->scratch_first || !request->scratch_second)) ||
+	    (request->particle_capacity == 0U && request->particles) ||
+	    (request->particle_capacity != 0U && !request->particles) ||
+	    (request->kernel_count == 0U && request->kernels) ||
+	    (request->kernel_count != 0U && !request->kernels))
+		return 0;
+	if (request->scratch_capacity != 0U)
+	{
+		if (!BeliefByteRange(request->scratch_first,
+		    request->scratch_capacity, sizeof(*request->scratch_first),
+		    &writable[writable_count++]) ||
+		    !BeliefByteRange(request->scratch_second,
+			request->scratch_capacity, sizeof(*request->scratch_second),
+			&writable[writable_count++]))
+			return 0;
+	}
+	if (request->particle_capacity != 0U &&
+	    !BeliefByteRange(request->particles, request->particle_capacity,
+		sizeof(*request->particles), &writable[writable_count++]))
+		return 0;
+	if (!BeliefByteRange(out, 1U, sizeof(*out),
+	    &writable[writable_count++]))
+		return 0;
+	for (left = 0U; left < writable_count; left++)
+	{
+		if (!BeliefRangeDisjointFromRune(snapshot, &writable[left]))
+			return 0;
+		for (right = left + 1U; right < writable_count; right++)
+			if (BeliefRangesOverlap(&writable[left], &writable[right]))
+				return 0;
+	}
+	if (!BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count) ||
+	    !BeliefByteRange(state, 1U, sizeof(*state), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count) ||
+	    !BeliefByteRange(state->particles, state->particle_capacity,
+		sizeof(*state->particles), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count) ||
+	    !BeliefByteRange(request, 1U, sizeof(*request), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count))
+		return 0;
+	if (request->kernel_count == 0U)
+		return 1;
+	if (!BeliefByteRange(request->kernels, request->kernel_count,
+	    sizeof(*request->kernels), &read_range) ||
+	    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count))
+		return 0;
+	for (left = 0U; left < request->kernel_count; left++)
+	{
+		const sg_belief_horizon_kernel_t *kernel = &request->kernels[left];
+		if (!BeliefByteRange(kernel->origin_spans, kernel->origin_span_count,
+		    sizeof(*kernel->origin_spans), &read_range) ||
+		    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count) ||
+		    !BeliefByteRange(kernel->entries, kernel->entry_count,
+			sizeof(*kernel->entries), &read_range) ||
+		    !BeliefRangeDisjointFromAll(&read_range, writable, writable_count))
+			return 0;
+		if (kernel->step_count != 0U &&
+		    (!BeliefByteRange(kernel->steps, kernel->step_count,
+			sizeof(*kernel->steps), &read_range) ||
+		     !BeliefRangeDisjointFromAll(&read_range, writable,
+			writable_count)))
+			return 0;
+	}
+	return 1;
+}
+
+static void BeliefPredictionDescribe(sg_belief_prediction_t *prediction,
+	const sg_belief_state_t *state,
+	const sg_belief_prediction_request_t *request, float confidence)
+{
+	memset(prediction, 0, sizeof(*prediction));
+	prediction->at_time_ms = request->at_time_ms;
+	prediction->target_life = state->target_life;
+	prediction->subject.audience_team = state->audience_team;
+	prediction->subject.target_team = state->target_team;
+	prediction->source.rune_identity = state->rune_identity;
+	prediction->source.topology_revision = state->topology_revision;
+	prediction->source.state_generation = state->generation;
+	prediction->source.state_revision = state->revision;
+	prediction->source.state_time_ms = state->updated_at_ms;
+	prediction->particle_capacity = request->particle_capacity;
+	prediction->confidence = confidence;
+	prediction->particles = request->particles;
+}
+
+sg_belief_predict_result_t SG_BeliefPredict(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_prediction_request_t *request,
 	sg_belief_prediction_t *out)
 {
-	sg_belief_prediction_t candidate;
-	belief_byte_range_t out_range;
-	belief_byte_range_t state_range;
-	belief_byte_range_t state_storage_range;
-	belief_byte_range_t output_storage_range;
+	sg_belief_prediction_t prediction;
+	belief_work_counters_t counters;
+	sg_belief_particle_t *current;
+	sg_belief_particle_t *next;
 	uint64_t elapsed_ms;
 	float confidence;
-	size_t required;
+	size_t count;
+	size_t required_scratch;
 	size_t index;
 
-	if (!out || !storage || !BeliefStateBoundToSnapshot(snapshot, state) ||
-	    at_time_ms < state->updated_at_ms ||
-	    !BeliefByteRange(out, 1U, sizeof(*out), &out_range) ||
-	    !BeliefByteRange(state, 1U, sizeof(*state), &state_range) ||
-	    !BeliefByteRange(state->particles, state->particle_capacity,
-		sizeof(*state->particles), &state_storage_range) ||
-	    !BeliefRangeDisjointFromRune(snapshot, &out_range) ||
-	    BeliefRangesOverlap(&out_range, &state_range) ||
-	    BeliefRangesOverlap(&out_range, &state_storage_range) ||
-	    (capacity != 0U &&
-	     (!BeliefByteRange(storage, capacity, sizeof(*storage),
-		&output_storage_range) ||
-	      !BeliefRangeDisjointFromRune(snapshot, &output_storage_range) ||
-	      BeliefRangesOverlap(&output_storage_range, &state_range) ||
-	      BeliefRangesOverlap(&output_storage_range, &state_storage_range) ||
-	      BeliefRangesOverlap(&output_storage_range, &out_range))))
-		return 0;
-	elapsed_ms = at_time_ms - state->updated_at_ms;
+	if (!snapshot || !state || !request || !out)
+		return SG_BELIEF_PREDICT_REJECTED_INVALID;
+	if (request->kernel_count > SIZE_MAX / sizeof(*request->kernels) ||
+	    request->scratch_capacity > SIZE_MAX / sizeof(*request->scratch_first) ||
+	    request->particle_capacity > SIZE_MAX / sizeof(*request->particles))
+		return SG_BELIEF_PREDICT_OVERFLOW;
+	if (request->kernels)
+		for (index = 0U; index < request->kernel_count; index++)
+			if (request->kernels[index].origin_span_count >
+			    SIZE_MAX / sizeof(*request->kernels[index].origin_spans) ||
+			    request->kernels[index].entry_count >
+			    SIZE_MAX / sizeof(*request->kernels[index].entries) ||
+			    request->kernels[index].step_count >
+			    SIZE_MAX / sizeof(*request->kernels[index].steps))
+				return SG_BELIEF_PREDICT_OVERFLOW;
+	if (!BeliefStateBoundToSnapshot(snapshot, state) ||
+	    request->at_time_ms < state->updated_at_ms ||
+	    !BeliefPredictionMemoryValid(snapshot, state, request, out))
+		return SG_BELIEF_PREDICT_REJECTED_INVALID;
+	memset(&counters, 0, sizeof(counters));
+	for (index = 0U; index < request->kernel_count; index++)
+	{
+		const sg_belief_horizon_kernel_t *kernel = &request->kernels[index];
+		if (!BeliefHorizonKernelValid(snapshot, kernel, &counters))
+			return counters.overflowed ? SG_BELIEF_PREDICT_OVERFLOW :
+				SG_BELIEF_PREDICT_REJECTED_INVALID;
+		if ((index == 0U &&
+		     kernel->from_time_ms != state->updated_at_ms) ||
+		    (index != 0U && kernel->from_time_ms !=
+			request->kernels[index - 1U].to_time_ms))
+			return SG_BELIEF_PREDICT_REJECTED_INVALID;
+	}
+	if (request->kernel_count != 0U &&
+	    request->kernels[request->kernel_count - 1U].to_time_ms !=
+		request->at_time_ms)
+		return SG_BELIEF_PREDICT_REJECTED_INVALID;
+	elapsed_ms = request->at_time_ms - state->updated_at_ms;
 	confidence = state->confidence * expf(-(float)elapsed_ms /
 		(float)state->policy.confidence_decay_ms);
-	required = confidence > 0.0f ? state->particle_count : 0U;
-	memset(&candidate, 0, sizeof(candidate));
-	candidate.at_time_ms = at_time_ms;
-	candidate.target_life = state->target_life;
-	candidate.particle_capacity = capacity;
-	candidate.required_particle_capacity = required;
-	candidate.confidence = confidence;
-	candidate.total_weight = required == 0U ? 0.0f : 1.0f;
-	candidate.particles = storage;
-	if (capacity < required)
+	BeliefPredictionDescribe(&prediction, state, request, confidence);
+	BeliefReportPredictionCounters(&prediction, &counters);
+	count = confidence > 0.0f ? state->particle_count : 0U;
+	required_scratch = count;
+	prediction.required_scratch_capacity = required_scratch;
+	if (request->scratch_capacity < required_scratch)
 	{
-		*out = candidate;
-		return 0;
+		*out = prediction;
+		return SG_BELIEF_PREDICT_CAPACITY;
 	}
-	for (index = 0U; index < required; index++)
+	if (count == 0U)
 	{
-		sg_belief_particle_t checked;
-		BeliefCopyParticle(&checked, &state->particles[index]);
-		if (!BeliefIntegrateParticle(snapshot, &checked, elapsed_ms, at_time_ms,
-		    state->policy.spread_growth_per_ms))
-			return 0;
+		prediction.total_weight = 0.0f;
+		*out = prediction;
+		return SG_BELIEF_PREDICT_APPLIED;
 	}
-	candidate.particle_count = required;
-	for (index = 0U; index < required; index++)
+	current = request->scratch_first;
+	next = request->scratch_second;
+	for (index = 0U; index < count; index++)
+		BeliefCopyParticle(&current[index], &state->particles[index]);
+	if (request->kernel_count == 0U)
 	{
-		BeliefCopyParticle(&storage[index], &state->particles[index]);
-		if (!BeliefIntegrateParticle(snapshot, &storage[index], elapsed_ms,
-		    at_time_ms,
-		    state->policy.spread_growth_per_ms))
-			return 0;
+		for (index = 0U; index < count; index++)
+			if (!BeliefIntegrateParticle(snapshot, &current[index], elapsed_ms,
+			    request->at_time_ms,
+			    state->policy.spread_growth_per_ms))
+				return SG_BELIEF_PREDICT_REJECTED_INVALID;
 	}
-	*out = candidate;
-	return 1;
+	else
+	{
+		for (index = 0U; index < request->kernel_count; index++)
+		{
+			const sg_belief_horizon_kernel_t *kernel =
+				&request->kernels[index];
+			uint64_t stage_elapsed = kernel->to_time_ms -
+				kernel->from_time_ms;
+			size_t source_index;
+			size_t stage_required = 0U;
+			size_t write = 0U;
+
+			for (source_index = 0U; source_index < count; source_index++)
+			{
+				const sg_belief_horizon_span_t *span =
+					BeliefHorizonSpan(kernel,
+						&current[source_index].phase);
+				if (state->policy.diffusion_fraction < 1.0f &&
+				    !BeliefSizeAdd(stage_required, 1U, &stage_required))
+					goto prediction_overflow;
+				if (state->policy.diffusion_fraction > 0.0f &&
+				    !BeliefSizeAdd(stage_required, span->entry_count,
+					&stage_required))
+					goto prediction_overflow;
+			}
+			if (stage_required > required_scratch)
+				required_scratch = stage_required;
+			prediction.required_scratch_capacity = required_scratch;
+			if (request->scratch_capacity < stage_required)
+			{
+				BeliefReportPredictionCounters(&prediction, &counters);
+				*out = prediction;
+				return SG_BELIEF_PREDICT_CAPACITY;
+			}
+			for (source_index = 0U; source_index < count; source_index++)
+			{
+				const sg_belief_particle_t *source = &current[source_index];
+				const sg_belief_horizon_span_t *span =
+					BeliefHorizonSpan(kernel, &source->phase);
+				size_t offset;
+				if (state->policy.diffusion_fraction < 1.0f)
+				{
+					sg_belief_particle_t retained;
+					BeliefCopyParticle(&retained, source);
+					if (!BeliefIntegrateParticle(snapshot, &retained,
+					    stage_elapsed, kernel->to_time_ms,
+					    state->policy.spread_growth_per_ms) ||
+					    !BeliefWeightProduct(retained.weight,
+						1.0f - state->policy.diffusion_fraction,
+						1.0f, &retained.weight) ||
+					    !BeliefAppendParticle(next, &write, &retained))
+						return SG_BELIEF_PREDICT_REJECTED_INVALID;
+				}
+				if (state->policy.diffusion_fraction > 0.0f)
+					for (offset = 0U; offset < span->entry_count; offset++)
+					{
+						sg_belief_particle_t moved;
+						const sg_belief_horizon_entry_t *entry =
+							&kernel->entries[
+								span->first_entry + offset];
+						if (!BeliefMoveByHorizonEntry(snapshot, kernel,
+						    entry, source, stage_elapsed,
+						    kernel->to_time_ms,
+						    state->policy.spread_growth_per_ms, &moved) ||
+						    !BeliefWeightProduct(moved.weight,
+							state->policy.diffusion_fraction,
+							entry->likelihood, &moved.weight) ||
+						    !BeliefCounterIncrement(
+							&counters.evaluated_outcomes, &counters) ||
+						    !BeliefAppendParticle(next, &write, &moved))
+							return counters.overflowed ?
+								SG_BELIEF_PREDICT_OVERFLOW :
+								SG_BELIEF_PREDICT_REJECTED_INVALID;
+					}
+			}
+			if (!BeliefNormalize(next, &write))
+				return SG_BELIEF_PREDICT_REJECTED_INVALID;
+			{
+				sg_belief_particle_t *swap = current;
+				current = next;
+				next = swap;
+			}
+			count = write;
+		}
+	}
+	prediction.required_particle_capacity = count;
+	prediction.required_scratch_capacity = required_scratch;
+	BeliefReportPredictionCounters(&prediction, &counters);
+	if (request->particle_capacity < count)
+	{
+		*out = prediction;
+		return SG_BELIEF_PREDICT_CAPACITY;
+	}
+	for (index = 0U; index < count; index++)
+		BeliefCopyParticle(&request->particles[index], &current[index]);
+	prediction.particle_count = count;
+	prediction.total_weight = 1.0f;
+	*out = prediction;
+	return SG_BELIEF_PREDICT_APPLIED;
+
+prediction_overflow:
+	prediction.required_scratch_capacity = SIZE_MAX;
+	BeliefReportPredictionCounters(&prediction, &counters);
+	*out = prediction;
+	return SG_BELIEF_PREDICT_OVERFLOW;
 }

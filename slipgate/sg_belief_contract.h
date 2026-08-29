@@ -271,14 +271,62 @@ typedef struct sg_belief_reduction_s
 	float confidence;
 } sg_belief_reduction_t;
 
-/* Prediction output storage belongs to the caller and never aliases state. */
+typedef enum sg_belief_predict_result_e
+{
+	SG_BELIEF_PREDICT_APPLIED = 0,
+	SG_BELIEF_PREDICT_REJECTED_INVALID,
+	SG_BELIEF_PREDICT_CAPACITY,
+	SG_BELIEF_PREDICT_OVERFLOW
+} sg_belief_predict_result_t;
+
+typedef struct sg_belief_prediction_request_s
+{
+	uint64_t at_time_ms;
+	/* A nonempty chain exactly tiles [state.updated_at_ms, at_time_ms]. An
+	 * empty chain requests same-phase kinematic aging only. */
+	const sg_belief_horizon_kernel_t *kernels;
+	size_t kernel_count;
+	/* Scratch is caller-owned, disposable, and never aliases authority,
+	 * state, destination storage, or the other scratch span. */
+	sg_belief_particle_t *scratch_first;
+	sg_belief_particle_t *scratch_second;
+	size_t scratch_capacity;
+	sg_belief_particle_t *particles;
+	size_t particle_capacity;
+} sg_belief_prediction_request_t;
+
+typedef struct sg_belief_prediction_subject_s
+{
+	uint8_t audience_team;
+	uint8_t target_team;
+} sg_belief_prediction_subject_t;
+
+typedef struct sg_belief_prediction_source_s
+{
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+	uint64_t state_generation;
+	uint64_t state_revision;
+	uint64_t state_time_ms;
+} sg_belief_prediction_source_t;
+
+/* Prediction particle storage belongs to the caller. It is written only when
+ * prediction returns APPLIED. The result may report capacity needs, and
+ * scratch may be overwritten on any result. */
 typedef struct sg_belief_prediction_s
 {
 	uint64_t at_time_ms;
 	sg_belief_life_identity_t target_life;
+	sg_belief_prediction_subject_t subject;
+	sg_belief_prediction_source_t source;
 	size_t particle_count;
 	size_t particle_capacity;
 	size_t required_particle_capacity;
+	size_t required_scratch_capacity;
+	size_t validated_phase_spans;
+	size_t validated_horizon_entries;
+	size_t validated_horizon_steps;
+	size_t evaluated_outcomes;
 	float confidence;
 	float total_weight;
 	sg_belief_particle_t *particles;
@@ -750,9 +798,10 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 sg_belief_reduce_result_t SG_BeliefReduce(
 	const sg_rune_runtime_snapshot_t *snapshot, sg_belief_state_t *state,
 	const sg_belief_frame_t *frame, sg_belief_reduction_t *out);
-int SG_BeliefPredict(const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_belief_state_t *state, uint64_t at_time_ms,
-	sg_belief_particle_t *storage, size_t capacity,
+sg_belief_predict_result_t SG_BeliefPredict(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_prediction_request_t *request,
 	sg_belief_prediction_t *out);
 
 #endif /* SG_BELIEF_CONTRACT_H */
