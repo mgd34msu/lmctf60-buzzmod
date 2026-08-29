@@ -30,6 +30,8 @@
 #include "slipgate/sg_move.h"
 #include "slipgate/sg_pickup_target.h"
 
+#include <stdint.h>
+
 static int intercept_field[SG_MAX_SEEDS];
 
 #define SG_MEGA_PATIENCE	12.0f   /* seconds an offer may stand unspent */
@@ -623,6 +625,12 @@ static int sg_armor_target_field[SG_MAXBOTS][SG_MAX_SEEDS];
 static unsigned sg_armor_target_epoch[SG_MAXBOTS];
 static int sg_armor_target_seed[SG_MAXBOTS];
 static int sg_armor_target_ent[SG_MAXBOTS];
+/* `action_topology_epoch` is level-local and may restart at one.  This
+ * generation is advanced by the level owner before TAG_LEVEL storage dies,
+ * so the persistent per-bot scratch cache cannot mistake a new map for its
+ * predecessor. */
+static uint64_t sg_armor_target_level_generation = UINT64_C(1);
+static uint64_t sg_armor_target_generation[SG_MAXBOTS];
 
 static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 {
@@ -634,6 +642,27 @@ static int DefenseSupplyBotIndex(const sg_bot_t *bot)
 	if (index < 0 || index >= SG_MAXBOTS)
 		return 0;
 	return (int)index;
+}
+
+void SG_CollectibleArmorTargetLevelReset(void)
+{
+	int i;
+
+	/* Wrap cannot make an old entry current: every entry is invalidated below
+	 * before the next map has a chance to query its exact target field. */
+	if (sg_armor_target_level_generation == UINT64_MAX)
+		sg_armor_target_level_generation = UINT64_C(1);
+	else
+		sg_armor_target_level_generation++;
+	memset(sg_armor_target_field, 0, sizeof(sg_armor_target_field));
+	memset(sg_armor_target_epoch, 0, sizeof(sg_armor_target_epoch));
+	memset(sg_armor_target_generation, 0,
+	    sizeof(sg_armor_target_generation));
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		sg_armor_target_seed[i] = -1;
+		sg_armor_target_ent[i] = -1;
+	}
 }
 
 static const int *WeaponTargetField(sg_bot_t *bot, int target_seed)
@@ -983,7 +1012,9 @@ static const int *CollectibleArmorTargetField(sg_bot_t *bot, int target_ent,
 	    target_seed < 0 || target_seed >= SG_Rune()->hdr.num_seeds)
 		return NULL;
 	bi = DefenseSupplyBotIndex(bot);
-	if (sg_armor_target_epoch[bi] != sg_fields.action_topology_epoch ||
+	if (sg_armor_target_generation[bi] !=
+	    sg_armor_target_level_generation ||
+	    sg_armor_target_epoch[bi] != sg_fields.action_topology_epoch ||
 	    sg_armor_target_ent[bi] != target_ent ||
 	    sg_armor_target_seed[bi] != target_seed)
 	{
@@ -992,9 +1023,22 @@ static const int *CollectibleArmorTargetField(sg_bot_t *bot, int target_ent,
 		sg_armor_target_epoch[bi] = sg_fields.action_topology_epoch;
 		sg_armor_target_ent[bi] = target_ent;
 		sg_armor_target_seed[bi] = target_seed;
+		sg_armor_target_generation[bi] =
+		    sg_armor_target_level_generation;
 	}
 	return sg_armor_target_field[bi];
 }
+
+#ifdef SG_GOAL_TEST
+/* The production chooser adds live item admission on top of this exact
+ * cache.  The focused map-restart test reaches the cache directly so it can
+ * hold the bot slot, edict, target id, seed, and epoch equal across maps. */
+const int *SG_GoalTestCollectibleArmorTargetField(sg_bot_t *bot,
+	int target_ent, int target_seed)
+{
+	return CollectibleArmorTargetField(bot, target_ent, target_seed);
+}
+#endif
 
 const int *SG_CollectibleArmorTargetField(sg_bot_t *bot, int *target_ent_out)
 {

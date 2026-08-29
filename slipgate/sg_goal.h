@@ -55,6 +55,11 @@ const int *SG_CollectibleArmorField(sg_bot_t *bot);
  * live item whose semantic destination must be resolved by runtime authority. */
 const int *SG_CollectibleArmorTargetField(sg_bot_t *bot,
 	int *target_ent_out);
+/* The exact armor flood is per-bot scratch storage rather than TAG_LEVEL
+ * storage.  Retire it before the level owner tears down a map so a recycled
+ * bot slot cannot reuse the previous map's gradient when topology epochs
+ * restart. */
+void SG_CollectibleArmorTargetLevelReset(void);
 
 /* fills the frame's live weight row in the context */
 void Think_LiveWeights(sg_bot_t *bot, sg_think_t *tc);

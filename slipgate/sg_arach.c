@@ -4904,6 +4904,10 @@ void SG_LevelChange(void)
 	 * clients through the real disconnect path while their objective state is
 	 * still valid; otherwise the next map inherits invisible client slots. */
 	SG_RemoveBots();
+	/* Exact armor prerequisite fields live in persistent bot scratch arrays.
+	 * Their topology epoch is level-local, so retire every entry after the last
+	 * bot callback and before TAG_LEVEL teardown can recycle the old rune. */
+	SG_CollectibleArmorTargetLevelReset();
 	/* SpawnEntities resets level.time after this synchronous hook. Zero keeps
 	 * the first new-map frame from interpreting that reset as an unhandled
 	 * second transition and retiring a bot added by a startup/rcon command. */

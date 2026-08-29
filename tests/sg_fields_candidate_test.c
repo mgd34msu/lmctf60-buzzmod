@@ -13,12 +13,16 @@
 #include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_hooks.h"
+#include "slipgate/sg_bot.h"
+#include "slipgate/sg_goal.h"
 
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
 void Fields_TestFloodFlat(rune_t *r, int *dist,
 	const int *sources, const int *source_cost, int num_sources);
 int SG_CacoLifecycleTest(void);
 int Rally_CoverSeed(const rune_t *r, int from);
+const int *SG_GoalTestCollectibleArmorTargetField(sg_bot_t *bot,
+	int target_ent, int target_seed);
 
 /* Field_Flood's focused production section needs only these host-owned
  * globals.  Everything else in sg_fields.c is discarded by --gc-sections. */
@@ -31,6 +35,7 @@ game_locals_t game;
 
 static edict_t test_edicts[4];
 edict_t *g_edicts = test_edicts;
+sg_bot_t sg_bots[SG_MAXBOTS];
 static int allocation_count;
 static rune_t *test_current_rune;
 
@@ -466,6 +471,65 @@ static void CheckRallyCoverAdmission(void)
 	CHECK(Rally_CoverSeed(NULL, 0) == -1);
 }
 
+static void CheckExactArmorFieldDoesNotCrossMapRestart(void)
+{
+	rune_t rune;
+	rune_seed_t seeds[2];
+	rune_link_t links[1];
+	int first_link[2] = { 0, -1 };
+	int next_link[1] = { -1 };
+	sg_bot_t *bot = &sg_bots[0];
+	const int *first_field;
+	const int *second_field;
+	int first_cost;
+
+	/* The allocator is allowed to reuse the old rune address.  This fixture
+	 * deliberately retains the same bot slot, edict, target, source seed, and
+	 * level-local topology epoch across a restart; only the map topology
+	 * changes. */
+	memset(&rune, 0, sizeof(rune));
+	memset(seeds, 0, sizeof(seeds));
+	memset(links, 0, sizeof(links));
+	memset(sg_bots, 0, sizeof(sg_bots));
+	rune.hdr.num_seeds = 2;
+	rune.hdr.num_links = 1;
+	rune.seeds = seeds;
+	rune.links = links;
+	rune.first_link = first_link;
+	rune.next_link = next_link;
+	Link(&links[0], 0, 1, RL_RUN, 100);
+	bot->ent = &test_edicts[0];
+	bot->seed = 0;
+	test_current_rune = &rune;
+	sg_fields.action_topology_epoch = 1U;
+	SG_CollectibleArmorTargetLevelReset();
+
+	first_field = SG_GoalTestCollectibleArmorTargetField(bot, 37, 1);
+	CHECK(first_field != NULL);
+	if (!first_field)
+		return;
+	first_cost = first_field[0];
+	CHECK(first_cost < SG_FIELD_INF);
+	CHECK(first_field[1] == 0);
+
+	/* SG_LevelChange calls this while the old rune is still valid, before the
+	 * TAG_LEVEL owner destroys it.  Reuse the same storage as the next map and
+	 * reset its epoch to one: the old cache key would otherwise hit. */
+	SG_CollectibleArmorTargetLevelReset();
+	test_current_rune = NULL;
+	rune.hdr.num_links = 0;
+	test_current_rune = &rune;
+	sg_fields.action_topology_epoch = 1U;
+
+	second_field = SG_GoalTestCollectibleArmorTargetField(bot, 37, 1);
+	CHECK(second_field != NULL);
+	if (!second_field)
+		return;
+	CHECK(second_field[0] == SG_FIELD_INF);
+	CHECK(second_field[1] == 0);
+	CHECK(second_field[0] != first_cost);
+}
+
 static void CheckCarrierTrailFollowsTheScoringRoute(void)
 {
 	rune_t rune;
@@ -733,6 +797,7 @@ int main(void)
 	CheckHookFieldAdmission();
 	CheckInterceptAdmission();
 	CheckRallyCoverAdmission();
+	CheckExactArmorFieldDoesNotCrossMapRestart();
 	CheckCarrierTrailFollowsTheScoringRoute();
 	CheckLocalFieldSeedAdmission();
 	failures += SG_CacoLifecycleTest();

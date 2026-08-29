@@ -196,6 +196,22 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         ))
         self.assertNotIn("RouteLocalNormalize(bot, &tc)", source[commit:])
 
+    def test_exact_armor_scratch_cache_is_retired_before_map_storage(self):
+        goal = self.text("slipgate/sg_goal.c")
+        header = self.text("slipgate/sg_goal.h")
+        source = self.text("sg_arach.c")
+        level_start = source.index("void SG_LevelChange(void)")
+        level_end = source.index("sg_rune = NULL;", level_start)
+        level = source[level_start:level_end]
+
+        self.assertIn("SG_CollectibleArmorTargetLevelReset", header)
+        self.assertIn("sg_armor_target_level_generation", goal)
+        self.assertIn("sg_armor_target_generation[bi]", goal)
+        self.assertIn("memset(sg_armor_target_field", goal)
+        self.assertIn("SG_CollectibleArmorTargetLevelReset();", level)
+        self.assertLess(level.index("SG_RemoveBots();"),
+                        level.index("SG_CollectibleArmorTargetLevelReset();"))
+
 
 if __name__ == "__main__":
     unittest.main()
