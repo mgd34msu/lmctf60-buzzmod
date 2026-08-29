@@ -3,6 +3,7 @@
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -74,6 +75,37 @@ class SourceBudgetTest(unittest.TestCase):
                     source_budget_findings(text, 9999, 100, None),
                 )
                 self.assertFalse(source_review_recommended(text, 9999))
+
+    def test_main_preserves_cr_while_reading_authored_source(self) -> None:
+        cases = (
+            b"x\r" * 10000,
+            b"x\r\n" * 9998 + b"x\rx",
+        )
+        for content in cases:
+            with self.subTest(content=content[-8:]):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    relative = Path("slipgate/source.c")
+                    source = root / relative
+                    source.parent.mkdir(parents=True)
+                    source.write_bytes(content)
+                    output = io.StringIO()
+                    with (
+                        mock.patch.object(deslop_audit, "ROOT", root),
+                        mock.patch.object(
+                            deslop_audit,
+                            "tracked_files",
+                            return_value=[relative],
+                        ),
+                        mock.patch.object(
+                            deslop_audit,
+                            "load_source_budget",
+                            return_value=(9999, 800, 100000, {}),
+                        ),
+                        contextlib.redirect_stdout(output),
+                    ):
+                        self.assertEqual(0, deslop_audit.main())
+                    self.assertIn("deslop findings: 0", output.getvalue())
 
     def test_source_size_and_line_length_are_independent(self) -> None:
         self.assertEqual(
@@ -198,6 +230,41 @@ class SourceBudgetTest(unittest.TestCase):
 
     def test_committed_policy_has_no_per_file_source_size_caps(self) -> None:
         self.assertEqual((9999, 800, 100), load_source_budget()[:3])
+
+    def test_allowance_paths_must_be_normalized_repository_relative(self) -> None:
+        invalid_paths = (
+            "/tmp/source.c",
+            "../source.c",
+            "tools/../source.c",
+            "C:/source.c",
+            r"C:\source.c",
+            r"..\source.c",
+        )
+        for invalid_path in invalid_paths:
+            with self.subTest(invalid_path=invalid_path):
+                with tempfile.TemporaryDirectory() as directory:
+                    policy = Path(directory) / "source-size-budget.json"
+                    policy.write_text(
+                        json.dumps(
+                            {
+                                "format": "lmctf-authored-source-policy-v2",
+                                "absolute_max_authored_source_lines": 9999,
+                                "review_threshold_lines": 800,
+                                "max_line_length": 100,
+                                "overlong_files": {invalid_path: 1},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    with mock.patch.object(
+                        deslop_audit, "SOURCE_BUDGET_PATH", policy
+                    ):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            "source budget paths must be normalized "
+                            "repository-relative paths",
+                        ):
+                            load_source_budget()
 
 
 if __name__ == "__main__":

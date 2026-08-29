@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report narrative implementation comments that do not belong in source."""
+"""Audit source comments, Python file structure, and authored-source size limits."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import json
 import re
 import subprocess
 import tokenize
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,6 +222,11 @@ def authored_file_finding(root: Path, relative: Path) -> str | None:
     return None
 
 
+def read_source_text_preserving_newlines(path: Path) -> str:
+    with path.open("r", encoding="utf-8", newline="") as source:
+        return source.read()
+
+
 def physical_source_line_count(text: str) -> int:
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
@@ -285,8 +290,22 @@ def load_source_budget() -> tuple[int, int, int, dict[str, int]]:
     if not isinstance(allowances, dict):
         raise ValueError("source budget overlong_files must be an object")
     for path, value in allowances.items():
-        if not isinstance(path, str) or Path(path).as_posix() != path:
-            raise ValueError("source budget paths must be normalized strings")
+        if not isinstance(path, str):
+            raise ValueError(
+                "source budget paths must be normalized repository-relative paths"
+            )
+        posix_path = PurePosixPath(path)
+        windows_path = PureWindowsPath(path)
+        if (posix_path.as_posix() != path
+                or windows_path.as_posix() != path
+                or posix_path.is_absolute()
+                or windows_path.is_absolute()
+                or windows_path.drive
+                or ".." in posix_path.parts
+                or ".." in windows_path.parts):
+            raise ValueError(
+                "source budget paths must be normalized repository-relative paths"
+            )
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"source budget overlong_files {path} is invalid")
     return (
@@ -310,7 +329,7 @@ def main() -> int:
             authored_symlinks.add(relative)
 
     for relative in tracked_source_files(tracked):
-        text = (ROOT / relative).read_text(encoding="utf-8")
+        text = read_source_text_preserving_newlines(ROOT / relative)
         for line_number, line in comment_fragments(text):
             for name, pattern in RULES:
                 if pattern.search(line):
@@ -328,7 +347,7 @@ def main() -> int:
     for relative in sorted((ROOT / "tools").glob("*.py")):
         if relative.is_symlink():
             continue
-        text = relative.read_text(encoding="utf-8")
+        text = read_source_text_preserving_newlines(relative)
         doc_lines = python_module_docstring_lines(text)
         if doc_lines > MAX_PYTHON_MODULE_DOCSTRING_LINES:
             print(
@@ -357,7 +376,7 @@ def main() -> int:
         if relative.is_symlink():
             continue
         for line_number, line in enumerate(
-                relative.read_text(encoding="utf-8").splitlines(), 1):
+                read_source_text_preserving_newlines(relative).splitlines(), 1):
             stripped = line.lstrip()
             if not stripped.startswith("#") or stripped.startswith("#!"):
                 continue
@@ -375,7 +394,7 @@ def main() -> int:
     for relative in authored:
         if relative in authored_symlinks:
             continue
-        text = (ROOT / relative).read_text(encoding="utf-8")
+        text = read_source_text_preserving_newlines(ROOT / relative)
         name = relative.as_posix()
         if source_review_recommended(text, review_threshold_lines):
             review_count += 1
