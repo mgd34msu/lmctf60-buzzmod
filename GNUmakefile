@@ -1336,7 +1336,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
-	weapon-effect-profile-test \
+	weapon-effect-profile-test hook-visibility-catalog-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -3342,10 +3342,31 @@ rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
 		slipgate/sg_rune_v2_exact_snapshot_private.h
 	sh tests/run_sg_rune_v2_exact_snapshot_test.sh
 
+hook-visibility-catalog-test: \
+		tests/run_sg_hook_visibility_catalog_test.sh \
+		tests/sg_hook_visibility_catalog_test.c \
+		tests/sg_hook_visibility_feasibility_fixture.c \
+		tests/sg_hook_visibility_feasibility_fixture.h \
+		slipgate/sg_hook_visibility_catalog.c \
+		slipgate/sg_hook_visibility_catalog.h \
+		slipgate/sg_hook_visibility_feasibility.c \
+		slipgate/sg_hook_visibility_feasibility.h \
+		slipgate/sg_hook_visibility_feasibility_internal.h \
+		slipgate/sg_hook_visibility_feasibility_family.c \
+		slipgate/sg_hook_visibility_feasibility_events.c \
+		slipgate/sg_hook_visibility_feasibility_partition.c \
+		slipgate/sg_hook_visibility_feasibility_proof.c \
+		slipgate/sg_hook_visibility_feasibility_verifier_digest.c \
+		slipgate/sg_hook_visibility_feasibility_audit.c \
+		slipgate/sg_hook_visibility_feasibility_audit_family.c \
+		slipgate/sg_hook_visibility_feasibility_audit_events.c \
+		slipgate/sg_hook_visibility_feasibility_audit_tiling.c
+	sh tests/run_sg_hook_visibility_catalog_test.sh
+
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
-		weapon-effect-profile-test \
+		weapon-effect-profile-test hook-visibility-catalog-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
