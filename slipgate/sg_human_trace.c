@@ -1944,6 +1944,9 @@ typedef struct human_trace_manifest_event_s
 	const sg_human_trace_v3_segment_ref_t *segment;
 } human_trace_manifest_event_t;
 
+typedef struct human_trace_scope_allocation_s
+	human_trace_scope_allocation_t;
+
 typedef struct human_trace_manifest_root_s
 {
 	sg_human_trace_v3_spool_ref_t spool;
@@ -1952,6 +1955,7 @@ typedef struct human_trace_manifest_root_s
 	size_t event_count;
 	size_t event_capacity;
 	sg_human_trace_v3_scope_acceptance_t *scopes;
+	human_trace_scope_allocation_t *scope_allocation;
 	uint8_t *scope_started;
 	size_t scope_count;
 	size_t segment_first;
@@ -1966,6 +1970,8 @@ typedef struct human_trace_manifest_segment_s
 	human_trace_spool_event_t *events;
 	size_t event_count;
 	size_t event_capacity;
+	size_t next_segment;
+	uint8_t next_ambiguous;
 	uint8_t valid;
 } human_trace_manifest_segment_t;
 
@@ -1980,6 +1986,7 @@ typedef struct human_trace_manifest_s
 	human_trace_manifest_segment_t *segments;
 	size_t segment_count;
 	size_t segment_capacity;
+	uint64_t visit_identity;
 } human_trace_manifest_t;
 
 typedef struct human_trace_manifest_scope_occurrence_s
@@ -2011,12 +2018,46 @@ struct sg_human_trace_v3_scope_acceptance_s
 	const human_trace_manifest_t *owner;
 	const human_trace_manifest_root_t *root;
 	const sg_human_trace_v3_spool_ref_t *spool;
+	uint64_t visit_identity;
+	uint64_t allocation_identity;
 	uint32_t client_id;
 	uint64_t spawn_generation;
 };
 
+struct human_trace_scope_allocation_s
+{
+	human_trace_scope_allocation_t *retired_next;
+	uint64_t allocation_identity;
+	size_t scope_count;
+	sg_human_trace_v3_scope_acceptance_t scopes[];
+};
+
 static const human_trace_manifest_t *sg_human_trace_active_collection;
 static const human_trace_manifest_root_t *sg_human_trace_active_root;
+static human_trace_scope_allocation_t *sg_human_trace_retired_scopes;
+static uint64_t sg_human_trace_next_visit_identity = UINT64_C(1);
+static uint64_t sg_human_trace_next_allocation_identity = UINT64_C(1);
+
+static int HumanTraceAuthorityIdentityNext(uint64_t *next,
+	uint64_t *identity_out)
+{
+	if (!next || !identity_out || *next == 0U)
+		return 0;
+	*identity_out = *next;
+	(*next)++;
+	return 1;
+}
+
+static void HumanTraceScopeAllocationRetire(
+	human_trace_scope_allocation_t *allocation)
+{
+	if (!allocation)
+		return;
+	/* Acceptance addresses are process-lifetime capabilities. Keeping the
+	 * small token block reachable prevents allocator ABA after a visit retires. */
+	allocation->retired_next = sg_human_trace_retired_scopes;
+	sg_human_trace_retired_scopes = allocation;
+}
 
 static int HumanTraceManifestGrow(void **items, size_t item_bytes,
 	size_t needed, size_t *capacity)
@@ -2057,7 +2098,8 @@ static void HumanTraceManifestFree(human_trace_manifest_t *manifest)
 	for (index = 0U; index < manifest->root_count; index++)
 	{
 		free(manifest->roots[index].events);
-		free(manifest->roots[index].scopes);
+		HumanTraceScopeAllocationRetire(
+			manifest->roots[index].scope_allocation);
 		free(manifest->roots[index].scope_started);
 	}
 	for (index = 0U; index < manifest->segment_count; index++)
@@ -2413,6 +2455,7 @@ static int HumanTraceManifestSegmentRead(
 	segment->events = capture.events;
 	segment->event_count = capture.count;
 	segment->event_capacity = capture.capacity;
+	segment->next_segment = SIZE_MAX;
 	if (!valid || segment->summary.header.segment != candidate->segment)
 	{
 		free(segment->events);
@@ -2464,10 +2507,7 @@ static int HumanTraceManifestSegmentAppend(human_trace_manifest_t *manifest,
 static uint8_t HumanTraceManifestSegmentKeyByte(
 	const human_trace_manifest_segment_t *segment, size_t pass)
 {
-	uint64_t key = ((uint64_t)segment->summary.header.session << 32U) |
-		segment->summary.header.segment;
-
-	return (uint8_t)(key >> (pass * 8U));
+	return (uint8_t)(segment->summary.header.segment >> (pass * 8U));
 }
 
 static int HumanTraceManifestSegmentsSort(human_trace_manifest_t *manifest)
@@ -2483,7 +2523,7 @@ static int HumanTraceManifestSegmentsSort(human_trace_manifest_t *manifest)
 		return 0;
 	source = manifest->segments;
 	target = temporary;
-	for (pass = 0U; pass < sizeof(uint64_t); pass++)
+	for (pass = 0U; pass < sizeof(uint32_t); pass++)
 	{
 		memset(count, 0, sizeof(count));
 		for (index = 0U; index < manifest->segment_count; index++)
@@ -2511,29 +2551,200 @@ static int HumanTraceManifestSegmentsSort(human_trace_manifest_t *manifest)
 	return 1;
 }
 
+typedef enum human_trace_manifest_digest_key_e
+{
+	HUMAN_TRACE_MANIFEST_LAST_DIGEST,
+	HUMAN_TRACE_MANIFEST_PREVIOUS_DIGEST
+} human_trace_manifest_digest_key_t;
+
+static const uint8_t *HumanTraceManifestSegmentDigest(
+	const human_trace_manifest_segment_t *segment,
+	human_trace_manifest_digest_key_t key)
+{
+	return key == HUMAN_TRACE_MANIFEST_LAST_DIGEST
+		? segment->summary.last_sha256
+		: segment->summary.header.previous_sha256;
+}
+
+static int HumanTraceManifestDigestIndexesSort(
+	const human_trace_manifest_t *manifest, size_t *items, size_t item_count,
+	human_trace_manifest_digest_key_t key)
+{
+	size_t *temporary, *source, *target;
+	size_t count[256], offset[256];
+	size_t pass, index;
+
+	if (!manifest || item_count > manifest->segment_count ||
+		(item_count != 0U && !items))
+		return 0;
+	if (item_count < 2U)
+		return 1;
+	if (item_count > SIZE_MAX / sizeof(*temporary) ||
+		!(temporary = malloc(item_count * sizeof(*temporary))))
+		return 0;
+	source = items;
+	target = temporary;
+	for (pass = 0U; pass < SG_HUMAN_TRACE_SHA256_BYTES; pass++)
+	{
+		size_t byte = SG_HUMAN_TRACE_SHA256_BYTES - pass - 1U;
+
+		memset(count, 0, sizeof(count));
+		for (index = 0U; index < item_count; index++)
+			count[HumanTraceManifestSegmentDigest(
+				&manifest->segments[source[index]], key)[byte]]++;
+		offset[0] = 0U;
+		for (index = 1U; index < 256U; index++)
+			offset[index] = offset[index - 1U] + count[index - 1U];
+		for (index = 0U; index < item_count; index++)
+		{
+			uint8_t bucket = HumanTraceManifestSegmentDigest(
+				&manifest->segments[source[index]], key)[byte];
+
+			target[offset[bucket]++] = source[index];
+		}
+		{
+			size_t *swap = source;
+
+			source = target;
+			target = swap;
+		}
+	}
+	if (source != items)
+		memcpy(items, source, item_count * sizeof(*items));
+	free(temporary);
+	return 1;
+}
+
+static int HumanTraceManifestSegmentsLink(human_trace_manifest_t *manifest)
+{
+	size_t *last = NULL, *previous = NULL;
+	size_t continuation_count = 0U;
+	size_t last_at = 0U, previous_at = 0U;
+	size_t index;
+	int result = 0;
+
+	if (!manifest || manifest->segment_count == 0U)
+		return manifest != NULL;
+	if (manifest->segment_count > SIZE_MAX / sizeof(*last))
+		return 0;
+	last = malloc(manifest->segment_count * sizeof(*last));
+	previous = malloc(manifest->segment_count * sizeof(*previous));
+	if (!last || !previous)
+		goto finish;
+	for (index = 0U; index < manifest->segment_count; index++)
+	{
+		last[index] = index;
+		manifest->segments[index].next_segment = SIZE_MAX;
+		manifest->segments[index].next_ambiguous = 0U;
+		if (manifest->segments[index].summary.header.continuation == 1U)
+			previous[continuation_count++] = index;
+	}
+	if (!HumanTraceManifestDigestIndexesSort(manifest, last,
+		manifest->segment_count, HUMAN_TRACE_MANIFEST_LAST_DIGEST) ||
+		!HumanTraceManifestDigestIndexesSort(manifest, previous,
+			continuation_count, HUMAN_TRACE_MANIFEST_PREVIOUS_DIGEST))
+		goto finish;
+	while (last_at < manifest->segment_count &&
+		previous_at < continuation_count)
+	{
+		human_trace_manifest_segment_t *from =
+			&manifest->segments[last[last_at]];
+		human_trace_manifest_segment_t *to =
+			&manifest->segments[previous[previous_at]];
+		int comparison = memcmp(from->summary.last_sha256,
+			to->summary.header.previous_sha256,
+			SG_HUMAN_TRACE_SHA256_BYTES);
+
+		if (comparison < 0)
+		{
+			last_at++;
+			continue;
+		}
+		if (comparison > 0)
+		{
+			previous_at++;
+			continue;
+		}
+		{
+			size_t last_after = last_at + 1U;
+			size_t previous_after = previous_at + 1U;
+			size_t match = SIZE_MAX;
+			size_t matches = 0U;
+
+			while (last_after < manifest->segment_count && memcmp(
+				manifest->segments[last[last_after]].summary.last_sha256,
+				from->summary.last_sha256,
+				SG_HUMAN_TRACE_SHA256_BYTES) == 0)
+				last_after++;
+			while (previous_after < continuation_count && memcmp(
+				manifest->segments[previous[previous_after]].summary.header.
+					previous_sha256, from->summary.last_sha256,
+				SG_HUMAN_TRACE_SHA256_BYTES) == 0)
+				previous_after++;
+			if (last_after - last_at == 1U)
+			{
+				for (index = previous_at; index < previous_after; index++)
+				{
+					human_trace_manifest_segment_t *candidate =
+						&manifest->segments[previous[index]];
+
+					if (candidate->summary.header.session ==
+						from->summary.header.session &&
+						HumanTraceJsonStableIdentityEqual(
+							&from->summary.header,
+							&candidate->summary.header))
+					{
+						match = previous[index];
+						matches++;
+					}
+				}
+				if (matches == 1U)
+					from->next_segment = match;
+				else if (matches > 1U)
+					from->next_ambiguous = 1U;
+			}
+			else
+				for (index = last_at; index < last_after; index++)
+					manifest->segments[last[index]].next_ambiguous = 1U;
+			last_at = last_after;
+			previous_at = previous_after;
+		}
+	}
+	result = 1;
+finish:
+	free(last);
+	free(previous);
+	return result;
+}
+
 static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
-	const human_trace_manifest_segment_t *segments, size_t segment_count)
+	human_trace_manifest_segment_t *segments, size_t segment_count,
+	size_t first_segment, size_t *accepted_segment_count)
 {
 	const human_trace_json_segment_t *previous = NULL;
 	size_t event_index = 0U;
-	size_t segment_index;
+	size_t segment_index = first_segment;
+	size_t visited = 0U;
 	uint8_t zero[SG_HUMAN_TRACE_SHA256_BYTES];
 
-	if (!root || !segments || segment_count == 0U)
+	if (accepted_segment_count)
+		*accepted_segment_count = 0U;
+	if (!root || !segments || segment_count == 0U ||
+		first_segment >= segment_count)
 		return 0;
 	memset(zero, 0, sizeof(zero));
-	for (segment_index = 0U; segment_index < segment_count; segment_index++)
+	for (;;)
 	{
-		const human_trace_manifest_segment_t *stored =
-			&segments[segment_index];
+		human_trace_manifest_segment_t *stored = &segments[segment_index];
 		const human_trace_json_segment_t *current = &stored->summary;
 		size_t json_event;
 
 		if (!stored->valid || current->header.session != root->header.session ||
-			!HumanTraceJsonStableIdentityEqual(&segments[0].summary.header,
+			!HumanTraceJsonStableIdentityEqual(
+				&segments[first_segment].summary.header,
 				&current->header))
 			return 0;
-		if (segment_index == 0U)
+		if (visited == 0U)
 		{
 			if (current->header.continuation != 0U || memcmp(
 				current->header.previous_sha256, zero, sizeof(zero)) != 0 ||
@@ -2571,9 +2782,20 @@ static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 			event_index++;
 		}
 		previous = current;
+		visited++;
+		if (current->ended)
+			break;
+		if (visited >= segment_count || stored->next_ambiguous ||
+			stored->next_segment == SIZE_MAX)
+			return 0;
+		segment_index = stored->next_segment;
 	}
-	return previous && previous->ended && event_index == root->event_count &&
-		HumanTraceJsonFinalMatchesCompletion(previous, &root->spool.completion);
+	if (!previous || event_index != root->event_count ||
+		!HumanTraceJsonFinalMatchesCompletion(previous, &root->spool.completion))
+		return 0;
+	if (accepted_segment_count)
+		*accepted_segment_count = visited;
+	return 1;
 }
 
 static uint8_t HumanTraceManifestScopeKeyByte(
@@ -2678,7 +2900,10 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 {
 	human_trace_manifest_scope_occurrence_t *occurrences = NULL;
 	human_trace_manifest_scope_order_t *order = NULL;
+	human_trace_scope_allocation_t *allocation = NULL;
 	size_t *group_to_scope = NULL;
+	size_t allocation_bytes;
+	uint64_t allocation_identity;
 	size_t group_count = 0U;
 	size_t index;
 	int result = 0;
@@ -2728,9 +2953,22 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 		group_count++;
 	}
 	if (!HumanTraceManifestScopeOrderSort(order, group_count) ||
-		group_count > SIZE_MAX / sizeof(*root->scopes))
+		group_count > (SIZE_MAX - sizeof(*allocation)) /
+			sizeof(*root->scopes))
 		goto finish;
-	root->scopes = calloc(group_count, sizeof(*root->scopes));
+	allocation_bytes = sizeof(*allocation) +
+		group_count * sizeof(*root->scopes);
+	if (!HumanTraceAuthorityIdentityNext(
+		&sg_human_trace_next_allocation_identity,
+		&allocation_identity))
+		goto finish;
+	allocation = calloc(1U, allocation_bytes);
+	if (!allocation)
+		goto finish;
+	allocation->allocation_identity = allocation_identity;
+	allocation->scope_count = group_count;
+	root->scope_allocation = allocation;
+	root->scopes = allocation->scopes;
 	root->scope_started = calloc(group_count, sizeof(*root->scope_started));
 	group_to_scope = malloc(group_count * sizeof(*group_to_scope));
 	if (!root->scopes || !root->scope_started || !group_to_scope)
@@ -2744,6 +2982,8 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 		scope->owner = manifest;
 		scope->root = root;
 		scope->spool = &root->spool;
+		scope->visit_identity = manifest->visit_identity;
+		scope->allocation_identity = allocation->allocation_identity;
 		scope->client_id = order[index].client_id;
 		scope->spawn_generation = order[index].spawn_generation;
 	}
@@ -2757,8 +2997,9 @@ finish:
 	free(group_to_scope);
 	if (!result)
 	{
-		free(root->scopes);
+		free(root->scope_allocation);
 		free(root->scope_started);
+		root->scope_allocation = NULL;
 		root->scopes = NULL;
 		root->scope_started = NULL;
 		root->scope_count = 0U;
@@ -2816,28 +3057,27 @@ static int HumanTraceManifestBuild(const sg_level_identity_t *identity,
 			}
 		}
 	}
-	if (!HumanTraceManifestSegmentsSort(manifest))
+	if (!HumanTraceManifestSegmentsSort(manifest) ||
+		!HumanTraceManifestSegmentsLink(manifest))
 		return 0;
 	for (index = 0U; index < manifest->root_count; index++)
 	{
 		human_trace_manifest_root_t *root = &manifest->roots[index];
-		size_t first;
+		size_t accepted_segment_count = 0U;
 
 		while (segment_cursor < manifest->segment_count &&
-			manifest->segments[segment_cursor].summary.header.session <
-				root->header.session)
+			manifest->segments[segment_cursor].summary.header.segment <
+				root->header.root_segment)
 			segment_cursor++;
-		first = segment_cursor;
-		while (segment_cursor < manifest->segment_count &&
-			manifest->segments[segment_cursor].summary.header.session ==
-				root->header.session)
-			segment_cursor++;
-		if (HumanTraceManifestAuthenticateRoot(root,
-			first < manifest->segment_count ? &manifest->segments[first] : NULL,
-			segment_cursor - first))
+		if (segment_cursor < manifest->segment_count &&
+			manifest->segments[segment_cursor].summary.header.segment ==
+				root->header.root_segment &&
+			HumanTraceManifestAuthenticateRoot(root, manifest->segments,
+				manifest->segment_count, segment_cursor,
+				&accepted_segment_count))
 		{
-			root->segment_first = first;
-			root->segment_count = segment_cursor - first;
+			root->segment_first = segment_cursor;
+			root->segment_count = accepted_segment_count;
 			if (!HumanTraceManifestBuildScopes(manifest, root))
 				return 0;
 			root->authenticated = 1U;
@@ -2858,17 +3098,19 @@ static int HumanTraceManifestVisitRoot(human_trace_manifest_t *manifest,
 {
 	size_t event_index = 0U;
 	size_t segment_index;
+	size_t stored_segment_index;
 	int result;
 
 	if (!manifest || !root || !root->authenticated || !visitor)
 		return 0;
 	sg_human_trace_active_root = root;
+	stored_segment_index = root->segment_first;
 	result = visitor->begin_root(context, &root->spool);
 	for (segment_index = 0U; result && segment_index < root->segment_count;
 		segment_index++)
 	{
 		const human_trace_manifest_segment_t *stored_segment =
-			&manifest->segments[root->segment_first + segment_index];
+			&manifest->segments[stored_segment_index];
 		size_t segment_event;
 
 		result = visitor->segment(context, &stored_segment->ref);
@@ -2908,6 +3150,14 @@ static int HumanTraceManifestVisitRoot(human_trace_manifest_t *manifest,
 				result = visitor->event(context, scope,
 					&stored_segment->ref, event);
 		}
+		if (result && segment_index + 1U < root->segment_count)
+		{
+			if (stored_segment->next_ambiguous ||
+				stored_segment->next_segment >= manifest->segment_count)
+				result = 0;
+			else
+				stored_segment_index = stored_segment->next_segment;
+		}
 	}
 	if (result && event_index != root->event_count)
 		result = 0;
@@ -2930,6 +3180,9 @@ int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 		sg_human_trace_active_collection)
 		return 0;
 	memset(&manifest, 0, sizeof(manifest));
+	if (!HumanTraceAuthorityIdentityNext(&sg_human_trace_next_visit_identity,
+		&manifest.visit_identity))
+		return 0;
 	if (!HumanTraceManifestBuild(identity, &manifest))
 	{
 		HumanTraceManifestFree(&manifest);
@@ -2980,6 +3233,15 @@ int SG_HumanTraceAcceptedV3ScopeView(
 	index = (size_t)((address - first) /
 		sizeof(*sg_human_trace_active_root->scopes));
 	if (&sg_human_trace_active_root->scopes[index] != scope ||
+		!sg_human_trace_active_root->scope_allocation ||
+		sg_human_trace_active_root->scope_allocation->scopes !=
+			sg_human_trace_active_root->scopes ||
+		sg_human_trace_active_root->scope_allocation->scope_count !=
+			sg_human_trace_active_root->scope_count ||
+		scope->visit_identity !=
+			sg_human_trace_active_collection->visit_identity ||
+		scope->allocation_identity !=
+			sg_human_trace_active_root->scope_allocation->allocation_identity ||
 		scope->owner != sg_human_trace_active_collection ||
 		scope->root != sg_human_trace_active_root ||
 		scope->spool != &sg_human_trace_active_root->spool ||

@@ -1596,8 +1596,9 @@ $(HUMAN_TRACE_HOOK_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_rune_v2_content_identity.h \
 		slipgate/sg_rune_v2_wire.h
 	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
-		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_TEST \
-		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR \
+		-DSG_HUMAN_TRACE_TEST -o $@ $(filter %.c,$^) $(LDFLAGS) \
+		-Wl,--wrap=fwrite -Wl,--wrap=calloc -Wl,--wrap=free
 
 $(HUMAN_TRACE_IO_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_human_trace.c \
@@ -1606,8 +1607,9 @@ $(HUMAN_TRACE_IO_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_rune_v2_wire.h
 	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
 		-DSG_HUMAN_TRACE_SEGMENT_BYTES=4096U \
-		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_TEST \
-		-o $@ $(filter %.c,$^) $(LDFLAGS) -Wl,--wrap=fwrite
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR \
+		-DSG_HUMAN_TRACE_TEST -o $@ $(filter %.c,$^) $(LDFLAGS) \
+		-Wl,--wrap=fwrite -Wl,--wrap=calloc -Wl,--wrap=free
 
 $(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
 	$(CC) -o $@ $(DOOR_APPROACH_TEST_OBJS) $(LDFLAGS)

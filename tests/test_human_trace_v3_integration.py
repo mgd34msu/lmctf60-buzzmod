@@ -430,6 +430,56 @@ class HumanTraceV3IntegrationTest(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_retired_scope_cannot_revive_after_allocator_reuse(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [str(BINARY), temporary, "consumer-scope-reuse"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_forged_session_collision_cannot_quarantine_another_root(self) -> None:
+        ensure_binary()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            written = subprocess.run(
+                [str(BINARY), temporary, "consumer-restart-write"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+            self.assertEqual(written.returncode, 0, written.stderr)
+            forged_path = directory / f"{PREFIX}000001.jsonl"
+            forged_records = read_valid_prefix(forged_path)
+            forged_records[0]["session"] = 0
+            write_rechained_v3(forged_path, forged_records)
+
+            assembled_zero = humantrace.read_sessions(
+                directory / f"{PREFIX}000000.jsonl"
+            )
+            with self.assertRaisesRegex(ValueError, "invalid zero anchor"):
+                humantrace.read_sessions(forged_path)
+            assembled_two = humantrace.read_sessions(
+                directory / f"{PREFIX}000002.jsonl"
+            )
+            assembled_directory = humantrace.read_sessions(directory)
+            read = subprocess.run(
+                [str(BINARY), temporary,
+                 "consumer-three-root-collision-read"], cwd=ROOT,
+                text=True, capture_output=True,
+            )
+
+        self.assertEqual(read.returncode, 0, read.stderr)
+        self.assertEqual(
+            assembled_zero[0]["initial_trace_header"]["segment"], 0
+        )
+        self.assertEqual(
+            assembled_two[0]["initial_trace_header"]["segment"], 2
+        )
+        self.assertEqual(
+            assembled_directory[0]["initial_trace_header"]["segment"], 0
+        )
+
     @unittest.skipUnless(shutil.which("strace"), "strace is required")
     def test_production_capture_does_not_read_evidence_without_consumer(self) -> None:
         ensure_binary()

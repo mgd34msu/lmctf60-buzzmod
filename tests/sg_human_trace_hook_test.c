@@ -1,5 +1,6 @@
 #include <stdarg.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +59,46 @@ size_t __wrap_fwrite(const void *pointer, size_t size, size_t count,
 		return partial;
 	}
 	return __real_fwrite(pointer, size, count, stream);
+}
+#endif
+
+#ifdef SG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR
+typedef union scope_reuse_storage_u
+{
+	max_align_t alignment;
+	unsigned char bytes[4096];
+} scope_reuse_storage_t;
+
+static scope_reuse_storage_t scope_reuse_storage;
+static int force_scope_allocator_reuse;
+static int scope_reuse_storage_in_use;
+static unsigned scope_reuse_allocation_count;
+
+void *__real_calloc(size_t count, size_t size);
+void __real_free(void *pointer);
+
+void *__wrap_calloc(size_t count, size_t size)
+{
+	if (force_scope_allocator_reuse && count != 0U && size != 0U &&
+		count <= sizeof(scope_reuse_storage.bytes) / size &&
+		!scope_reuse_storage_in_use)
+	{
+		memset(scope_reuse_storage.bytes, 0, count * size);
+		scope_reuse_storage_in_use = 1;
+		scope_reuse_allocation_count++;
+		return scope_reuse_storage.bytes;
+	}
+	return __real_calloc(count, size);
+}
+
+void __wrap_free(void *pointer)
+{
+	if (pointer == scope_reuse_storage.bytes)
+	{
+		scope_reuse_storage_in_use = 0;
+		return;
+	}
+	__real_free(pointer);
 }
 #endif
 
@@ -247,6 +288,14 @@ typedef struct scope_search_s
 	uint8_t found;
 } scope_search_t;
 
+typedef struct scope_reuse_visit_s
+{
+	const sg_human_trace_v3_scope_acceptance_t *retired;
+	const sg_human_trace_v3_scope_acceptance_t *current;
+	uint8_t capture_retired;
+	uint8_t retired_accepted;
+} scope_reuse_visit_t;
+
 static int ScanSpool(void *opaque, const sg_human_trace_v3_spool_ref_t *spool)
 {
 	spool_scan_t *scan = opaque;
@@ -405,6 +454,45 @@ static int ScopeSearchFinish(void *opaque)
 	scope_search_t *test = opaque;
 
 	return test != NULL;
+}
+
+static int ScopeReuseBegin(void *opaque,
+	const sg_human_trace_v3_spool_ref_t *spool)
+{
+	return opaque != NULL && spool != NULL;
+}
+
+static int ScopeReuseScope(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope)
+{
+	scope_reuse_visit_t *visit = opaque;
+
+	if (!visit || !scope || !SG_HumanTraceAcceptedV3ScopeView(scope,
+		NULL, NULL, NULL))
+		return 0;
+	if (visit->capture_retired)
+		visit->retired = scope;
+	else
+	{
+		visit->current = scope;
+		visit->retired_accepted = (uint8_t)
+			SG_HumanTraceAcceptedV3ScopeView(visit->retired,
+				NULL, NULL, NULL);
+	}
+	return 1;
+}
+
+static int ScopeReuseEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event)
+{
+	return opaque != NULL && scope != NULL && segment != NULL && event != NULL;
+}
+
+static int ScopeReuseFinish(void *opaque)
+{
+	return opaque != NULL;
 }
 
 static int ScopeExists(const sg_human_trace_v3_spool_ref_t *spool,
@@ -973,6 +1061,69 @@ static int RunScopeIsolation(const char *directory)
 	return 0;
 }
 
+static int RunScopeAllocatorReuse(const char *directory)
+{
+#ifdef SG_HUMAN_TRACE_WRAP_SCOPE_ALLOCATOR
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	scope_reuse_visit_t visit;
+	sg_human_trace_v3_collection_visitor_t visitor;
+	sg_level_identity_t identity;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!TraceIdentity(&identity))
+		return 126;
+	memset(&visit, 0, sizeof(visit));
+	memset(&visitor, 0, sizeof(visitor));
+	visitor.begin_root = ScopeReuseBegin;
+	visitor.segment = CollectionSegmentPass;
+	visitor.scope = ScopeReuseScope;
+	visitor.event = ScopeReuseEvent;
+	visitor.finish_root = ScopeReuseFinish;
+	force_scope_allocator_reuse = 1;
+	visit.capture_retired = 1U;
+	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, &visit) ||
+		!visit.retired || SG_HumanTraceAcceptedV3ScopeView(visit.retired,
+			NULL, NULL, NULL))
+		result = 127;
+	visit.capture_retired = 0U;
+	if (!result && (!SG_HumanTraceVisitAcceptedV3Collection(&identity,
+		&visitor, &visit) || !visit.current ||
+		visit.current == visit.retired || visit.retired_accepted))
+		result = 128;
+	if (!result && scope_reuse_allocation_count != 1U)
+		result = 129;
+	force_scope_allocator_reuse = 0;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+#else
+	(void)directory;
+	return 130;
+#endif
+}
+
+static int RunThreeRootCollisionRead(const char *directory)
+{
+	spool_scan_t scan;
+	unsigned root;
+
+	if (!ScanCompletedSpools(&scan) || scan.count != 2U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U || scan.event_count != UINT64_C(14) ||
+		scan.scope_count != 2U)
+		return 131;
+	for (root = 0U; root < 3U; root++)
+		RemoveTraceArtifact(directory, root);
+	return 0;
+}
+
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 static int RunWriteFailure(const char *directory)
 {
@@ -1238,6 +1389,10 @@ int main(int argc, char **argv)
 		return RunSegmentNames(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "consumer-scope-isolation") == 0)
 		return RunScopeIsolation(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-scope-reuse") == 0)
+		return RunScopeAllocatorReuse(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "consumer-three-root-collision-read") == 0)
+		return RunThreeRootCollisionRead(argv[1]);
 #ifndef _WIN32
 	if (argc == 3 && strcmp(argv[2], "fsize") == 0)
 		return RunFileSizeFailure(argv[1]);

@@ -1007,8 +1007,73 @@ def _assemble_v3_session(segments: list[dict[str, Any]], ordinal: int) -> dict[s
     }
 
 
+def _v3_chain_for_selected(
+    segments: list[dict[str, Any]], selected_path: Path
+) -> list[dict[str, Any]]:
+    """Bind one selected segment to its zero anchor and hash chain."""
+    selected = next(
+        (segment for segment in segments if segment["path"] == selected_path),
+        None,
+    )
+    if selected is None:
+        raise ValueError("trace contains no selected v3 session")
+
+    by_last_digest: dict[str, list[dict[str, Any]]] = {}
+    by_predecessor: dict[str, list[dict[str, Any]]] = {}
+    for segment in segments:
+        by_last_digest.setdefault(segment["last_digest"], []).append(segment)
+        header = segment["header"]
+        if header["continuation"] == 1:
+            by_predecessor.setdefault(header["prev_sha256"], []).append(segment)
+
+    root = selected
+    ancestry: set[Path] = set()
+    while root["header"]["continuation"] == 1:
+        if root["path"] in ancestry:
+            raise ValueError("v3 continuation chain contains a cycle")
+        ancestry.add(root["path"])
+        header = root["header"]
+        predecessors = [
+            segment
+            for segment in by_last_digest.get(header["prev_sha256"], [])
+            if segment["header"]["session"] == header["session"]
+            and _v3_stable_identity(segment["header"])
+            == _v3_stable_identity(header)
+        ]
+        if len(predecessors) != 1:
+            raise ValueError("v3 session must have exactly one zero-rooted segment")
+        root = predecessors[0]
+
+    ordered: list[dict[str, Any]] = []
+    consumed: set[Path] = set()
+    current = root
+    root_header = root["header"]
+    while True:
+        if current["path"] in consumed:
+            raise ValueError("v3 continuation chain contains a cycle")
+        consumed.add(current["path"])
+        ordered.append(current)
+        if current["end"] is not None:
+            break
+        continuations = [
+            segment
+            for segment in by_predecessor.get(current["last_digest"], [])
+            if segment["header"]["session"] == root_header["session"]
+            and _v3_stable_identity(segment["header"])
+            == _v3_stable_identity(root_header)
+        ]
+        if not continuations:
+            raise ValueError("v3 segment chain ends before a terminal end")
+        if len(continuations) != 1:
+            raise ValueError("v3 continuation predecessor is ambiguous")
+        current = continuations[0]
+
+    if selected_path not in consumed:
+        raise ValueError("selected v3 segment is outside its authenticated chain")
+    return ordered
+
+
 def _read_v3_segment_set(path: Path) -> list[dict[str, Any]]:
-    selected_header = _v3_header_only(path)
     sibling = _v3_segment_prefix(path)
     by_segment: dict[int, Path] = {}
     if sibling is None:
@@ -1041,25 +1106,25 @@ def _read_v3_segment_set(path: Path) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
     for candidate in paths:
         try:
-            header = _v3_header_only(candidate)
+            segment = _validate_v3_segment(candidate)
+            filename_segment = _v3_filename_segment(segment["path"])
+            if filename_segment is None or \
+                    filename_segment != segment["header"]["segment"]:
+                raise ValueError(
+                    "v3 header segment does not match its filename"
+                )
         except ValueError:
             # An existing filename collision or interrupted unrelated capture
-            # has no authenticated v3 header with which it could join this
-            # selected session. A malformed selected path is never ignored.
+            # has no authenticated segment with which it could join the
+            # selected hash chain. A malformed selected path is never ignored.
             if candidate == path:
                 raise
             continue
-        if header["session"] != selected_header["session"]:
-            continue
-        segments.append(_validate_v3_segment(candidate))
-    for segment in segments:
-        filename_segment = _v3_filename_segment(segment["path"])
-        if filename_segment is None or \
-                filename_segment != segment["header"]["segment"]:
-            raise ValueError("v3 header segment does not match its filename")
+        segments.append(segment)
     if not segments:
         raise ValueError("trace contains no selected v3 session")
-    return [_assemble_v3_session(segments, 1)]
+    chain = _v3_chain_for_selected(segments, path)
+    return [_assemble_v3_session(chain, 1)]
 
 
 def read_sessions(path: Path) -> list[dict[str, Any]]:
