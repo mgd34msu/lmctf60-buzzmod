@@ -1346,6 +1346,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
+	bsp-entity-semantics-publication-test \
 	project-completion-plan-test \
 	fleet-runner-test route-only-match-test server-bundle-test \
 	runegen-test botkin-test sheet-cli-test \
@@ -3385,11 +3386,23 @@ hook-visibility-catalog-test: \
 		slipgate/sg_hook_visibility_feasibility_audit_tiling.c
 	sh tests/run_sg_hook_visibility_catalog_test.sh
 
+bsp-entity-semantics-publication-test: \
+		tests/run_sg_bsp_entity_semantics_publication_test.sh \
+		tests/sg_bsp_entity_semantics_publication_test.c \
+		slipgate/sg_bsp_entity_semantics_publication.c \
+		slipgate/sg_bsp_entity_semantics_publication.h \
+		slipgate/sg_bsp_entity_semantics_audit_expected.c \
+		slipgate/sg_bsp_entity_semantics_audit_internal.h \
+		slipgate/sg_bsp_entity_semantics.c \
+		slipgate/sg_bsp_entity_semantics.h
+	sh tests/run_sg_bsp_entity_semantics_publication_test.sh
+
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
 		weapon-effect-profile-test hook-visibility-catalog-test \
+		bsp-entity-semantics-publication-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
