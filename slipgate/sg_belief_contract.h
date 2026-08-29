@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "sg_destination_field.h"
+#include "sg_rune_v2_content_identity.h"
 
 #define SG_BELIEF_MAX_CLIENTS 256U
 #define SG_BELIEF_WEIGHT_EPSILON 0.000001f
@@ -322,7 +323,7 @@ typedef struct sg_belief_prediction_source_s
 	uint64_t horizon_source_identity;
 	uint64_t horizon_source_generation;
 	uint64_t horizon_fixed_point_identity;
-	uint64_t horizon_chain_identity;
+	sg_rune_v2_content_id_t horizon_chain_identity;
 } sg_belief_prediction_source_t;
 
 /* Prediction particle storage belongs to the caller. It is written only when
@@ -813,8 +814,17 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 sg_belief_reduce_result_t SG_BeliefReduce(
 	const sg_rune_runtime_snapshot_t *snapshot, sg_belief_state_t *state,
 	const sg_belief_frame_t *frame, sg_belief_reduction_t *out);
-/* The opaque source is issued by the authenticated topology/localization
- * predecessor. This module deliberately provides no production constructor. */
+/* Issues the complete deterministic topology prior for the exact interval.
+ * The source and all nested kernel storage remain module-owned. */
+sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	uint64_t to_time_ms,
+	sg_belief_horizon_source_t **source_out);
+int SG_BeliefHorizonSourceView(const sg_belief_horizon_source_t *source,
+	const sg_belief_horizon_kernel_t **kernels_out, size_t *kernel_count_out,
+	sg_rune_v2_content_id_t *content_identity_out);
+void SG_BeliefHorizonSourceDestroy(sg_belief_horizon_source_t *source);
 sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state,
@@ -831,16 +841,6 @@ sg_belief_predict_result_t SG_BeliefPredict(
 	sg_belief_prediction_t *out);
 
 #if defined(SG_BELIEF_TESTING)
-sg_belief_horizon_source_t *SG_BeliefTestHorizonSourceCreate(
-	const sg_rune_runtime_snapshot_t *snapshot,
-	const sg_belief_state_t *state,
-	uint64_t issuer_identity,
-	uint64_t source_identity,
-	uint64_t source_generation,
-	uint64_t fixed_point_identity,
-	const sg_belief_horizon_kernel_t *complete_kernels,
-	size_t complete_kernel_count);
-void SG_BeliefTestHorizonSourceDestroy(sg_belief_horizon_source_t *source);
 void SG_BeliefTestHorizonAuthorityCorrupt(
 	sg_belief_horizon_authority_t *authority);
 #endif

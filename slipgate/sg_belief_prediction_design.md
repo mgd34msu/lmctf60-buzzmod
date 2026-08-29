@@ -22,25 +22,39 @@ prefix. The caller owns output particles and the result structure.
 ## Authority boundary
 
 Raw kernels cannot enter `SG_BeliefPredict`. `SG_BeliefHorizonAuthorityAccept`
-requires an opaque source publication from the authenticated phase-space
-topology and runtime-localization predecessor. Acceptance independently
-validates every candidate witness, exact interval tiling, and exact equality
-with the predecessor's complete fixed point, then deep-copies the predecessor
-chain. A caller-set completeness byte is not acceptance evidence. Later caller
-mutation cannot change the published chain, and content tampering invalidates
-its identity.
+requires a live opaque source issued by `SG_BeliefHorizonSourceIssue`. The
+issuer reads only the accepted belief binding and its immutable RUNE snapshot.
+For the exact requested interval it emits the same-phase outcome and every
+finite sequence of phase-transition and capability witnesses whose aggregate
+authenticated duration contains the interval. Positive movement duration gives
+the closure a derived finite depth; acyclic zero-minimum-duration witnesses are
+included between positive steps. A zero-minimum-duration cycle is rejected
+because it has no finite complete enumeration. The outcomes receive a
+deterministic equal topology prior; no actor observation or hidden actor
+location can select an outcome or weight.
 
-This repository has no production publisher for that predecessor publication.
-The production API therefore exposes no source constructor. Tests use a
-test-only predecessor fixture to exercise independent comparison and the
-consumer semantics. The runtime-localization owner must publish the real opaque
-source before a live caller can request witnessed cross-phase prediction.
+The module owns both source and accepted-authority storage and records live
+issuance separately from their C representation. A copied or fabricated object
+therefore has no authority, even if another translation unit reproduces the
+private layout. Acceptance validates every candidate witness, exact interval
+tiling, and byte-exact semantic equality with the issued fixed point before it
+deep-copies the chain. The caller-set completeness byte is validated data, not
+evidence of completeness. Writable output storage must be disjoint from all
+snapshot, belief, source, candidate, and nested kernel storage.
+
+The chain identity is SHA-256 over a versioned, fixed-width, little-endian
+encoding of its provenance, kernels, spans, outcomes, likelihoods, and witness
+steps. This avoids ABI padding and host-endian identity drift. Prediction
+requires both live issuance and an exact identity match before consuming the
+owned chain.
 
 ## Prediction
 
 Each accepted stage uses the same retained-versus-witnessed branching, exact
 phase checks, capability checks, cell containment, merge, and stable
 normalization rules as belief reduction. It performs no graph search and
-derives no transition from topology alone. The result reports the subject,
-belief and RUNE revisions, and the complete influencing authority chain
-identity.
+admits no transition beyond the issued topology outcomes. The result reports
+the subject, belief and RUNE revisions, and the complete influencing authority
+chain identity. Capability displacement intervals remain uncertainty: their
+midpoint locates the sparse mode while the interval half-width expands its
+spread.

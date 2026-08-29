@@ -4006,7 +4006,9 @@ ground-capability-publication-test: \
 
 rune-v2-belief-test: tests/run_sg_belief_test.sh \
 		tests/test_belief_life_identity_contract.py tests/sg_belief_test.c \
-		g_local.h p_client.c slipgate/sg_belief.c slipgate/sg_belief_contract.h
+		g_local.h p_client.c slipgate/sg_belief.c slipgate/sg_belief_contract.h \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h
 	$(E) [TEST] RUNE v2 phase-space beliefs
 	$(Q)sh tests/run_sg_belief_test.sh
 
@@ -4015,7 +4017,9 @@ rune-v2-perception-evidence-test: \
 		tests/sg_perception_evidence_test.c \
 		slipgate/sg_perception_evidence.c \
 		slipgate/sg_perception_evidence.h \
-		slipgate/sg_belief.c slipgate/sg_belief_contract.h
+		slipgate/sg_belief.c slipgate/sg_belief_contract.h \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h
 	$(E) [TEST] RUNE v2 perception evidence
 	$(Q)sh tests/run_sg_perception_evidence_test.sh
 

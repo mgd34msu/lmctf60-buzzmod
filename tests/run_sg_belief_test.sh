@@ -6,7 +6,7 @@ tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -DSG_BELIEF_TESTING -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wcast-align'
-sources='tests/sg_belief_test.c slipgate/sg_belief.c'
+sources='tests/sg_belief_test.c slipgate/sg_belief.c slipgate/sg_rune_v2_content_identity.c'
 
 cd "$repo_dir"
 
@@ -25,4 +25,5 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	"$tmp_dir/belief-sanitize"
 
 clang $strict --analyze -Xanalyzer -analyzer-output=text -I. \
-	tests/sg_belief_test.c slipgate/sg_belief.c
+	tests/sg_belief_test.c slipgate/sg_belief.c \
+	slipgate/sg_rune_v2_content_identity.c
