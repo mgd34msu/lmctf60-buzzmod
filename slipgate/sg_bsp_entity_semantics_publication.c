@@ -1,6 +1,7 @@
 #include "sg_bsp_entity_semantics_publication.h"
 
 #include "sg_bsp_entity_semantics_audit_internal.h"
+#include "sg_bsp_entity_semantics_storage_internal.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -80,6 +81,28 @@ static int StringOffsetValid(const sg_bsp_entity_semantics_t *semantics,
 		(size_t)(semantics->string_bytes - offset)) != NULL;
 }
 
+static int StringEqual(const sg_bsp_entity_semantics_t *left,
+	uint32_t left_offset, const sg_bsp_entity_semantics_t *right,
+	uint32_t right_offset)
+{
+	const char *left_string;
+	const char *right_string;
+
+	if (!SG_BspEntitySemanticsStringStorageValid(left) ||
+		!SG_BspEntitySemanticsStringStorageValid(right))
+		return 0;
+	if (left_offset == SG_BSP_ENTITY_STRING_NONE ||
+		right_offset == SG_BSP_ENTITY_STRING_NONE)
+		return left_offset == SG_BSP_ENTITY_STRING_NONE &&
+			right_offset == SG_BSP_ENTITY_STRING_NONE;
+	if (!StringOffsetValid(left, left_offset) ||
+		!StringOffsetValid(right, right_offset))
+		return 0;
+	left_string = left->strings + left_offset;
+	right_string = right->strings + right_offset;
+	return !strcmp(left_string, right_string);
+}
+
 static int BindingValid(const sg_bsp_entity_semantics_binding_t *binding)
 {
 	return binding && SG_RuneV2ContentIdValid(&binding->source_identity) &&
@@ -137,34 +160,16 @@ static void RecordDisagreement(
 		domain, record);
 }
 
-static int RelocatedOffsetEqual(uint32_t expected, uint32_t candidate,
-	uint32_t *delta_out, int *delta_known)
+static int StringValuesEqual(const sg_bsp_entity_semantics_t *expected,
+	const sg_bsp_entity_semantics_t *candidate,
+	sg_bsp_entity_semantics_fact_domain_t *domain_out, uint32_t *record_out)
 {
-	uint32_t delta;
-
-	if (expected == SG_BSP_ENTITY_STRING_NONE ||
-		candidate == SG_BSP_ENTITY_STRING_NONE)
-		return expected == SG_BSP_ENTITY_STRING_NONE &&
-			candidate == SG_BSP_ENTITY_STRING_NONE;
-	if (candidate < expected)
-		return 0;
-	delta = candidate - expected;
-	if (!*delta_known)
-	{
-		*delta_out = delta;
-		*delta_known = 1;
-		return 1;
-	}
-	return delta == *delta_out;
-}
-
-static int StringLayoutEqual(const sg_bsp_entity_semantics_t *expected,
-	const sg_bsp_entity_semantics_t *candidate)
-{
-	uint32_t delta = 0U;
 	uint32_t index;
-	int delta_known = 0;
 
+	if (domain_out)
+		*domain_out = SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY;
+	if (record_out)
+		*record_out = UINT32_MAX;
 	if (!expected || !candidate || expected->entity_count !=
 		candidate->entity_count || expected->edge_count != candidate->edge_count)
 		return 0;
@@ -173,29 +178,27 @@ static int StringLayoutEqual(const sg_bsp_entity_semantics_t *expected,
 		const sg_bsp_entity_semantic_t *left = &expected->entities[index];
 		const sg_bsp_entity_semantic_t *right = &candidate->entities[index];
 
-		if (!RelocatedOffsetEqual(left->classname, right->classname, &delta,
-			&delta_known) ||
-			!RelocatedOffsetEqual(left->targetname, right->targetname, &delta,
-				&delta_known) ||
-			!RelocatedOffsetEqual(left->required_item, right->required_item,
-				&delta, &delta_known) ||
-			!RelocatedOffsetEqual(left->spawned_classname,
-				right->spawned_classname, &delta, &delta_known) ||
-			!RelocatedOffsetEqual(left->destination_map,
-				right->destination_map, &delta, &delta_known))
+		if (!StringEqual(expected, left->classname, candidate, right->classname) ||
+			!StringEqual(expected, left->targetname, candidate, right->targetname) ||
+			!StringEqual(expected, left->required_item, candidate,
+				right->required_item) ||
+			!StringEqual(expected, left->spawned_classname, candidate,
+				right->spawned_classname) ||
+			!StringEqual(expected, left->destination_map, candidate,
+					right->destination_map))
 			return 0;
 	}
 	for (index = 0U; index < expected->edge_count; index++)
-		if (!RelocatedOffsetEqual(expected->edges[index].name,
-			candidate->edges[index].name, &delta, &delta_known))
+		if (!StringEqual(expected, expected->edges[index].name, candidate,
+			candidate->edges[index].name))
+		{
+			if (domain_out)
+				*domain_out = SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY;
+			if (record_out)
+				*record_out = index;
 			return 0;
-	if (!delta_known)
-		/* A candidate may carry an unused, caller-owned table.  It has no
-		 * semantic authority when the source projection has no string refs. */
-		return expected->string_bytes == 0U;
-	if (delta > UINT32_MAX - expected->string_bytes)
-		return 0;
-	return candidate->string_bytes == expected->string_bytes + delta;
+		}
+	return 1;
 }
 
 static int WorldEqual(const sg_bsp_world_entity_semantics_t *left,
@@ -332,6 +335,13 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 			SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY, UINT32_MAX);
 		return 0;
 	}
+	if (!SG_BspEntitySemanticsStringStorageValid(candidate))
+	{
+		AddCount(&result->invalid_facts, 1U);
+		SetFailure(result, SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT,
+			SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY, UINT32_MAX);
+		return 0;
+	}
 	if (!FloatFinite(candidate->world.gravity))
 	{
 		AddCount(&result->invalid_facts, 1U);
@@ -348,6 +358,7 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 			entity->source_entity_ordinal >= world->entity_byte_count ||
 			(entity->bsp_model != SG_BSP_ENTITY_MODEL_NONE &&
 				entity->bsp_model >= world->model_count) ||
+			!EntityStringsValid(candidate, entity) ||
 			!EntityValuesFinite(entity))
 		{
 			AddCount(&result->invalid_facts, 1U);
@@ -381,7 +392,8 @@ static int CandidateStorageValid(const sg_bsp_world_t *world,
 			return 0;
 		}
 		if (edge->kind < SG_MECH_EDGE_TARGET ||
-			edge->kind > SG_MECH_EDGE_ROUTE_TARGET)
+			edge->kind > SG_MECH_EDGE_ROUTE_TARGET ||
+			!StringOffsetValid(candidate, edge->name))
 		{
 			AddCount(&result->invalid_facts, 1U);
 			SetFailure(result, SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT,
@@ -500,11 +512,15 @@ static int CompareCandidate(const sg_bsp_world_t *world,
 	}
 	if (!CandidateStorageValid(world, binding, candidate, result_out))
 		return 0;
-	if (!StringLayoutEqual(expected, candidate))
 	{
-		RecordDisagreement(result_out, SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY,
-			UINT32_MAX);
-		return 0;
+		sg_bsp_entity_semantics_fact_domain_t domain;
+		uint32_t record;
+
+		if (!StringValuesEqual(expected, candidate, &domain, &record))
+		{
+			RecordDisagreement(result_out, domain, record);
+			return 0;
+		}
 	}
 	if (!WorldEqual(&candidate->world, &expected->world))
 	{

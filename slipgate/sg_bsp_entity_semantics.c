@@ -1,5 +1,7 @@
 #include "sg_bsp_entity_semantics.h"
 
+#include "sg_bsp_entity_semantics_storage_internal.h"
+
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -81,6 +83,82 @@ typedef struct work_edges_s
 	size_t count;
 	size_t capacity;
 } work_edges_t;
+
+typedef struct string_storage_record_s
+{
+	const sg_bsp_entity_semantics_t *owner;
+	const char *base;
+	uint32_t capacity;
+	struct string_storage_record_s *next;
+} string_storage_record_t;
+
+static string_storage_record_t *string_storage_records;
+
+static string_storage_record_t *FindStringStorage(
+	const sg_bsp_entity_semantics_t *semantics)
+{
+	string_storage_record_t *record;
+
+	for (record = string_storage_records; record; record = record->next)
+		if (record->owner == semantics)
+			return record;
+	return NULL;
+}
+
+int SG_BspEntitySemanticsStringStorageRegister(
+	sg_bsp_entity_semantics_t *semantics)
+{
+	string_storage_record_t *record;
+
+	if (!semantics)
+		return 0;
+	if (!semantics->string_bytes && !semantics->strings)
+		return 1;
+	if (!semantics->string_bytes || !semantics->strings ||
+		FindStringStorage(semantics))
+		return 0;
+	record = malloc(sizeof(*record));
+	if (!record)
+		return 0;
+	record->owner = semantics;
+	record->base = semantics->strings;
+	record->capacity = semantics->string_bytes;
+	record->next = string_storage_records;
+	string_storage_records = record;
+	return 1;
+}
+
+int SG_BspEntitySemanticsStringStorageValid(
+	const sg_bsp_entity_semantics_t *semantics)
+{
+	string_storage_record_t *record;
+
+	if (!semantics)
+		return 0;
+	if (!semantics->string_bytes && !semantics->strings)
+		return 1;
+	record = FindStringStorage(semantics);
+	return record && record->base == semantics->strings &&
+		semantics->string_bytes <= record->capacity;
+}
+
+void SG_BspEntitySemanticsStringStorageForget(
+	sg_bsp_entity_semantics_t *semantics)
+{
+	string_storage_record_t **link;
+
+	if (!semantics)
+		return;
+	for (link = &string_storage_records; *link; link = &(*link)->next)
+		if ((*link)->owner == semantics)
+		{
+			string_storage_record_t *record = *link;
+
+			*link = record->next;
+			free(record);
+			return;
+		}
+}
 
 enum
 {
@@ -2084,6 +2162,12 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 			goto done;
 		}
 	}
+	if (!SG_BspEntitySemanticsStringStorageRegister(result))
+	{
+		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY,
+			UINT32_MAX, UINT32_MAX);
+		goto done;
+	}
 	*semantics_out = result;
 	result = NULL;
 	success = 1;
@@ -2102,6 +2186,7 @@ void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics)
 {
 	if (!semantics)
 		return;
+	SG_BspEntitySemanticsStringStorageForget(semantics);
 	free(semantics->entities);
 	free(semantics->edges);
 	free(semantics->strings);
@@ -2112,6 +2197,7 @@ const char *SG_BspEntitySemanticsString(
 	const sg_bsp_entity_semantics_t *semantics, uint32_t offset)
 {
 	if (!semantics || offset == SG_BSP_ENTITY_STRING_NONE ||
+		!SG_BspEntitySemanticsStringStorageValid(semantics) ||
 		offset >= semantics->string_bytes)
 		return NULL;
 	if (!memchr(semantics->strings + offset, '\0',

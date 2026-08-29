@@ -151,6 +151,7 @@ typedef struct sg_bsp_entity_semantics_s
 	uint32_t entity_count;
 	sg_bsp_entity_semantic_edge_t *edges;
 	uint32_t edge_count;
+	/* Non-empty string storage is builder-owned and audited by extent identity. */
 	char *strings;
 	uint32_t string_bytes;
 } sg_bsp_entity_semantics_t;

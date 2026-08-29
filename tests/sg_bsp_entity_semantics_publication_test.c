@@ -114,32 +114,6 @@ static sg_bsp_entity_semantics_t *Build(fixture_t *fixture)
 	return semantics;
 }
 
-static void ShiftStringOffsets(sg_bsp_entity_semantics_t *semantics,
-	uint32_t offset)
-{
-	uint32_t index;
-
-	for (index = 0U; index < semantics->entity_count; index++)
-	{
-		uint32_t *values[] = {
-			&semantics->entities[index].classname,
-			&semantics->entities[index].targetname,
-			&semantics->entities[index].required_item,
-			&semantics->entities[index].spawned_classname,
-			&semantics->entities[index].destination_map
-		};
-		uint32_t value_index;
-
-		for (value_index = 0U;
-			value_index < sizeof(values) / sizeof(values[0]); value_index++)
-			if (*values[value_index] != SG_BSP_ENTITY_STRING_NONE)
-				*values[value_index] += offset;
-	}
-	for (index = 0U; index < semantics->edge_count; index++)
-		if (semantics->edges[index].name != SG_BSP_ENTITY_STRING_NONE)
-			semantics->edges[index].name += offset;
-}
-
 static void TestCompleteAuditAndOwnedPublication(void)
 {
 	static const char text[] =
@@ -199,39 +173,14 @@ static void TestProvenEmpty(void)
 	DestroyFixture(&fixture);
 }
 
-static void TestHostileTrailingStringExtent(void)
+static void TestHostileStringExtent(void)
 {
 	fixture_t fixture;
 	sg_bsp_entity_semantics_t *candidate;
 	sg_bsp_entity_semantics_audit_result_t audit;
-	sg_bsp_entity_semantics_publication_t *publication = NULL;
-	sg_bsp_entity_semantics_view_t view;
-	char *strings;
-
-	InitFixture(&fixture, "{ \"classname\" \"worldspawn\" }\n");
-	candidate = Build(&fixture);
-	CHECK(candidate != NULL);
-	if (candidate)
-	{
-		strings = malloc(10U);
-		CHECK(strings != NULL);
-		if (strings)
-		{
-			memcpy(strings, "attested\0x", 10U);
-			free(candidate->strings);
-			candidate->strings = strings;
-			candidate->string_bytes = UINT32_C(1048586);
-			CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
-				candidate, &audit));
-			CHECK(SG_BspEntitySemanticsPublicationIssue(
-				&fixture.authority, &binding, candidate, &publication, &audit));
-			CHECK(SG_BspEntitySemanticsPublicationRead(publication, &view));
-			CHECK(view.string_bytes == 0U && view.strings == NULL);
-			SG_BspEntitySemanticsPublicationDestroy(publication);
-		}
-	}
-	SG_BspEntitySemanticsDestroy(candidate);
-	DestroyFixture(&fixture);
+	char *original_strings;
+	char *replacement;
+	uint32_t original_bytes;
 
 	InitFixture(&fixture,
 		"{ \"classname\" \"worldspawn\" }\n"
@@ -240,18 +189,29 @@ static void TestHostileTrailingStringExtent(void)
 	CHECK(candidate != NULL);
 	if (candidate)
 	{
-		strings = malloc(10U);
-		CHECK(strings != NULL);
-		if (strings)
+		original_strings = candidate->strings;
+		original_bytes = candidate->string_bytes;
+		candidate->string_bytes = UINT32_C(1048586);
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+			candidate, &audit));
+		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+		candidate->string_bytes = original_bytes;
+		replacement = malloc((size_t)original_bytes);
+		CHECK(replacement != NULL);
+		if (replacement)
 		{
-			memcpy(strings, "attested\0x", 10U);
-			free(candidate->strings);
-			candidate->strings = strings;
+			memcpy(replacement, original_strings, (size_t)original_bytes);
+			candidate->strings = replacement;
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
 			candidate->string_bytes = UINT32_C(1048586);
 			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
 				candidate, &audit));
-			CHECK(audit.code ==
-				SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+			free(replacement);
+			candidate->strings = original_strings;
+			candidate->string_bytes = original_bytes;
 		}
 	}
 	SG_BspEntitySemanticsDestroy(candidate);
@@ -275,37 +235,98 @@ static void TestExplicitWorldFactIsComplete(void)
 	DestroyFixture(&fixture);
 }
 
-static void TestEquivalentStringLayout(void)
+static void TestExactStringFacts(void)
 {
 	static const char text[] =
 		"{ \"classname\" \"worldspawn\" }\n"
-		"{ \"classname\" \"trigger_multiple\" \"model\" \"*1\" \"target\" \"gate\" }\n"
-		"{ \"classname\" \"func_door\" \"model\" \"*2\" \"targetname\" \"gate\" }\n";
+		"{ \"classname\" \"trigger_key\" \"target\" \"event\" \"item\" \"key_data_cd\" }\n"
+		"{ \"classname\" \"target_speaker\" \"targetname\" \"event\" }\n"
+		"{ \"classname\" \"target_spawner\" \"target\" \"spawned_class\" }\n"
+		"{ \"classname\" \"target_speaker\" \"targetname\" \"spawned_class\" }\n"
+		"{ \"classname\" \"target_changelevel\" \"map\" \"nextmap\" }\n"
+		"{ \"classname\" \"func_button\" \"model\" \"*1\" \"team\" \"team_name\" }\n"
+		"{ \"classname\" \"func_button\" \"model\" \"*2\" \"team\" \"team_name\" }\n";
 	fixture_t fixture;
 	sg_bsp_entity_semantics_t *candidate;
 	sg_bsp_entity_semantics_audit_result_t audit;
-	char *shifted;
+	uint32_t field_hits[5] = { 0U, 0U, 0U, 0U, 0U };
+	uint32_t edge_hits = 0U;
+	uint32_t index;
 
 	InitFixture(&fixture, text);
 	candidate = Build(&fixture);
 	CHECK(candidate != NULL);
 	if (candidate)
 	{
-		shifted = malloc((size_t)candidate->string_bytes + 2U);
-		CHECK(shifted != NULL);
-		if (shifted)
+		for (index = 0U; index < candidate->entity_count; index++)
 		{
-			shifted[0] = 'x';
-			shifted[1] = '\0';
-			memcpy(shifted + 2, candidate->strings, candidate->string_bytes);
-			free(candidate->strings);
-			candidate->strings = shifted;
-			candidate->string_bytes += 2U;
-			ShiftStringOffsets(candidate, 2U);
-			CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
-				candidate, &audit));
-			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_OK);
+			uint32_t *fields[] = {
+				&candidate->entities[index].classname,
+				&candidate->entities[index].targetname,
+				&candidate->entities[index].required_item,
+				&candidate->entities[index].spawned_classname,
+				&candidate->entities[index].destination_map
+			};
+			uint32_t field;
+
+			for (field = 0U; field < sizeof(fields) / sizeof(fields[0]); field++)
+				if (*fields[field] != SG_BSP_ENTITY_STRING_NONE)
+				{
+					char saved = candidate->strings[*fields[field]];
+
+					field_hits[field]++;
+					candidate->strings[*fields[field]] = saved == 'x' ? 'y' : 'x';
+					CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority,
+						&binding, candidate, &audit));
+					CHECK(audit.code ==
+						SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+					CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_ENTITY);
+					candidate->strings[*fields[field]] = saved;
+				}
 		}
+		for (index = 0U; index < candidate->edge_count; index++)
+		{
+			uint32_t offset = candidate->edges[index].name;
+			char saved;
+			uint32_t entity_index;
+			int entity_reference = 0;
+
+			CHECK(offset != SG_BSP_ENTITY_STRING_NONE);
+			if (offset == SG_BSP_ENTITY_STRING_NONE)
+				continue;
+			for (entity_index = 0U; entity_index < candidate->entity_count;
+				entity_index++)
+			{
+				uint32_t *fields[] = {
+					&candidate->entities[entity_index].classname,
+					&candidate->entities[entity_index].targetname,
+					&candidate->entities[entity_index].required_item,
+					&candidate->entities[entity_index].spawned_classname,
+					&candidate->entities[entity_index].destination_map
+				};
+				uint32_t field;
+
+				for (field = 0U; field < sizeof(fields) / sizeof(fields[0]); field++)
+					if (*fields[field] == offset)
+						entity_reference = 1;
+			}
+			if (entity_reference)
+				continue;
+			edge_hits++;
+			saved = candidate->strings[offset];
+			candidate->strings[offset] = saved == 'x' ? 'y' : 'x';
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code ==
+				SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+			CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_TOPOLOGY);
+			candidate->strings[offset] = saved;
+		}
+		for (index = 0U; index < sizeof(field_hits) / sizeof(field_hits[0]); index++)
+			CHECK(field_hits[index] != 0U);
+		CHECK(edge_hits != 0U);
+		CHECK(SG_BspEntitySemanticsAudit(&fixture.authority, &binding, candidate,
+			&audit));
 	}
 	SG_BspEntitySemanticsDestroy(candidate);
 	DestroyFixture(&fixture);
@@ -497,9 +518,9 @@ int main(void)
 	InitBinding();
 	TestCompleteAuditAndOwnedPublication();
 	TestProvenEmpty();
-	TestHostileTrailingStringExtent();
+	TestHostileStringExtent();
 	TestExplicitWorldFactIsComplete();
-	TestEquivalentStringLayout();
+	TestExactStringFacts();
 	TestTrailingInventedInvalidFact();
 	TestOmittedAndInventedFacts();
 	TestDuplicateAndUnresolvedFacts();

@@ -3893,6 +3893,7 @@ bsp-entity-semantics-publication-test: \
 		slipgate/sg_bsp_entity_semantics_publication.h \
 		slipgate/sg_bsp_entity_semantics_audit_expected.c \
 		slipgate/sg_bsp_entity_semantics_audit_internal.h \
+		slipgate/sg_bsp_entity_semantics_storage_internal.h \
 		slipgate/sg_bsp_entity_semantics.c \
 		slipgate/sg_bsp_entity_semantics.h \
 		slipgate/sg_host_collision.c slipgate/sg_host_collision.h \
