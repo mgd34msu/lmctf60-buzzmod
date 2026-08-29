@@ -1633,11 +1633,14 @@ static void TestRealPmoveAccelerationLaws(void)
 		0.0f, 0, 0, 0.0f, 1.5f);
 }
 
-static void TestRealPmoveBlockedUnduck(void)
+static void AddStanceOverlap(locator_fixture_t *fixture);
+static void AddStanceKernel(locator_fixture_t *fixture);
+
+static void CheckRealPmoveDuckChronology(world_fixture_t *world,
+	sg_configuration_semantic_region_flags_t flags,
+	sg_rune_motion_t motion, sg_rune_support_t support, float z,
+	int grounded, int expect_probe, int expect_blocked)
 {
-	const float ceiling_mins[3] = { -100.0f, -100.0f, 5.0f };
-	const float ceiling_maxs[3] = { 100.0f, 100.0f, 100.0f };
-	world_fixture_t ceiling = BoxWorld(ceiling_mins, ceiling_maxs);
 	locator_fixture_t fixture;
 	sg_localization_environment_t environment = Environment();
 	sg_localization_observation_t observation;
@@ -1649,21 +1652,39 @@ static void TestRealPmoveBlockedUnduck(void)
 	sg_host_pmove_replay_workspace_t workspace;
 	sg_host_pmove_replay_t replay;
 	sg_host_pmove_error_t error;
+	size_t standing_traces = 0U;
+	size_t index;
 
-	InitStandardFixture(&fixture, &ceiling,
-		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
-		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE,
+	InitStandardFixture(&fixture, world, flags, 0U, 0U, motion, support,
 		SG_RUNE_MEDIUM_DRY);
+	if (expect_probe && !expect_blocked)
+	{
+		AddStanceOverlap(&fixture);
+		AddStanceKernel(&fixture);
+		fixture.kernels[0].source_cell = fixture.runtime_cells[1].id;
+		fixture.kernels[0].destination_cell = fixture.runtime_cells[0].id;
+		fixture.kernels[0].source_phase = fixture.phases[1].id;
+		fixture.kernels[0].destination_phase = fixture.phases[0].id;
+		fixture.kernels[0].parameters.duration_ms =
+			(sg_rune_interval_t){ 1.0f, 1.0f };
+		fixture.kernels[0].parameters.displacement.z =
+			(sg_rune_interval_t){ -0.125f, -0.125f };
+		fixture.kernels[0].parameters.speed =
+			(sg_rune_interval_t){ 125.0f, 125.0f };
+	}
 	FinalizeFixture(&fixture);
 	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, Pmove,
 		&fixture.runtime, &status));
 	observation = Observation(&fixture, SG_RUNE_STANCE_CROUCHING,
-		0.0f, 0.0f, 0.0f);
+		0.0f, 0.0f, z);
+	if (grounded)
+		observation.host_state.pm_flags |= PMF_ON_GROUND;
 	CHECK(Localize(&fixture, &observation, &environment, &previous, &status));
 	memset(&pmove_request, 0, sizeof(pmove_request));
 	pmove_request.state = previous.host_state;
 	pmove_request.previous_state = previous.host_state;
 	pmove_request.command.msec = 1U;
+	pmove_request.command.upmove = -1;
 	workspace.substeps = fixture.replay_substeps;
 	workspace.substep_capacity = 128U;
 	workspace.traces = fixture.replay_traces;
@@ -1671,17 +1692,29 @@ static void TestRealPmoveBlockedUnduck(void)
 	CHECK(SG_HostPmoveReplayFrame(&fixture.authority, NULL, Pmove,
 		&pmove_request, &workspace, &replay, &error));
 	CHECK(error == SG_HOST_PMOVE_ERROR_NONE);
-	CHECK(replay.trace_count > 1U);
-	CHECK((replay.traces[0].state.pm_flags & PMF_DUCKED) != 0);
-	CHECK(replay.traces[0].maxs[2] == 32.0f);
-	CHECK(replay.traces[0].result.allsolid);
-	CHECK(memcmp(replay.traces[0].start, replay.traces[0].end,
-		sizeof(replay.traces[0].start)) == 0);
-	CHECK((replay.result.state.pm_flags & PMF_DUCKED) != 0);
+	for (index = 0U; index < replay.trace_count; index++)
+		if (replay.traces[index].maxs[2] == 32.0f)
+			standing_traces++;
+	CHECK((standing_traces != 0U) == expect_probe);
+	if (expect_probe)
+	{
+		CHECK((replay.traces[0].state.pm_flags & PMF_DUCKED) != 0);
+		CHECK((replay.traces[0].state.pm_flags & PMF_ON_GROUND) == 0);
+		CHECK(replay.traces[0].maxs[2] == 32.0f);
+		CHECK(replay.traces[0].result.allsolid == expect_blocked);
+		CHECK(memcmp(replay.traces[0].start, replay.traces[0].end,
+			sizeof(replay.traces[0].start)) == 0);
+	}
+	CHECK(((replay.result.state.pm_flags & PMF_DUCKED) != 0) ==
+		(expect_blocked || !expect_probe));
+	if (expect_probe && !expect_blocked)
+		CHECK(replay.result.origin[2] - previous.field_pose.position[2] ==
+			-0.125f);
 	observation.frame_sequence = 10U;
 	observation.observed_at_ms = 101U;
 	observation.authenticated_at_ms = 101U;
-	observation.stance = SG_RUNE_STANCE_CROUCHING;
+	observation.stance = (replay.result.state.pm_flags & PMF_DUCKED) ?
+		SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
 	memcpy(observation.position, replay.result.origin,
 		sizeof(observation.position));
 	memcpy(observation.velocity, replay.result.velocity,
@@ -1699,7 +1732,31 @@ static void TestRealPmoveBlockedUnduck(void)
 	CHECK(LocalizeRequest(&fixture, &request, &observation,
 		&environment, &state, &status));
 	CHECK(status == SG_LOCALIZATION_OK);
-	CHECK(state.stance == SG_RUNE_STANCE_CROUCHING);
+	CHECK(state.stance == observation.stance);
+}
+
+static void TestRealPmoveUnduckChronology(void)
+{
+	const float ceiling_mins[3] = { -100.0f, -100.0f, 5.0f };
+	const float ceiling_maxs[3] = { 100.0f, 100.0f, 100.0f };
+	const float floor_mins[3] = { -100.0f, -100.0f, -100.0f };
+	const float floor_maxs[3] = { 100.0f, 100.0f, 0.0f };
+	world_fixture_t ceiling = BoxWorld(ceiling_mins, ceiling_maxs);
+	world_fixture_t air = EmptyWorld();
+	world_fixture_t floor = BoxWorld(floor_mins, floor_maxs);
+
+	CheckRealPmoveDuckChronology(&ceiling,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE,
+		0.0f, 0, 1, 1);
+	CheckRealPmoveDuckChronology(&air,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE,
+		24.0f, 0, 1, 0);
+	CheckRealPmoveDuckChronology(&floor,
+		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED,
+		SG_RUNE_MOTION_SUPPORTED, SG_RUNE_SUPPORT_SUPPORTED,
+		24.125f, 1, 0, 0);
 }
 
 static void TestRealPmoveStepSlide(void)
@@ -2807,7 +2864,7 @@ int main(void)
 	TestMoverCarryFailsClosedWithoutProductionAuthority();
 #ifdef SG_LOCALIZATION_REAL_PMOVE_TEST
 	TestRealPmoveAccelerationLaws();
-	TestRealPmoveBlockedUnduck();
+	TestRealPmoveUnduckChronology();
 	TestRealPmoveStepSlide();
 #endif
 	if (failures != 0)

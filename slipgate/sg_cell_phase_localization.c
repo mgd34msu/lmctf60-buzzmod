@@ -2356,17 +2356,17 @@ static int ReplayTraceStance(const sg_host_collision_authority_t *authority,
 }
 
 static int ReplayUnduckProbeValid(
-	const sg_localized_player_state_t *previous,
 	const sg_host_pmove_replay_t *replay,
 	const sg_host_pmove_substep_t *substep,
 	const sg_host_pmove_trace_t *record, size_t trace_index,
-	size_t first_trace)
+	size_t first_trace, int before_grounded)
 {
 	int final_crouched =
 		(substep->state.pm_flags & PMF_DUCKED) != 0;
 
-	return trace_index == first_trace && replay->request.command.upmove >= 0 &&
-		(previous->host_state.pm_flags & PMF_DUCKED) != 0 &&
+	return trace_index == first_trace &&
+		!(replay->request.command.upmove < 0 && before_grounded) &&
+		(substep->before_state.pm_flags & PMF_DUCKED) != 0 &&
 		(record->state.pm_flags & PMF_DUCKED) != 0 &&
 		PmoveStateEqual(&record->state, &substep->before_state) &&
 		ReplayPointEqual(record->start, record->end) &&
@@ -2383,7 +2383,10 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	uint64_t *next_trace_ordinal_out)
 {
 	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
+	sg_host_collision_pose_t before_pose;
 	sg_host_collision_pose_t pose;
+	sg_rune_stance_t before_stance;
+	int before_grounded;
 	size_t first_trace;
 	size_t trace_index;
 	uint32_t axis;
@@ -2417,6 +2420,14 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 			fabs((double)substep->velocity[axis]) > physics->max_velocity)
 			return 0;
 	}
+	before_stance = (substep->before_state.pm_flags & PMF_DUCKED) ?
+		SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+	before_grounded =
+		(substep->before_state.pm_flags & PMF_ON_GROUND) != 0;
+	if (!SG_HostCollisionClassifyPose(authority, scene,
+			substep->before_origin, before_stance, &before_pose) ||
+		!before_pose.valid || before_grounded != before_pose.supported)
+		return 0;
 	if (!SG_HostCollisionClassifyPose(authority, scene, substep->origin,
 			substep->stance, &pose) || !pose.valid ||
 		substep->grounded != pose.supported ||
@@ -2453,8 +2464,8 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 			!ReplayTraceStance(authority, record, &trace_stance) ||
 			(trace_stance != state_stance &&
 				(trace_stance != SG_RUNE_STANCE_STANDING ||
-				!ReplayUnduckProbeValid(previous, replay, substep, record,
-					trace_index, first_trace))) ||
+				!ReplayUnduckProbeValid(replay, substep, record,
+					trace_index, first_trace, before_grounded))) ||
 			(trace_stance == state_stance && trace_stance != substep->stance) ||
 			!SG_HostCollisionTrace(authority, scene, record->start,
 				record->mins, record->maxs, record->end,
