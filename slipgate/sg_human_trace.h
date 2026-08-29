@@ -1,4 +1,4 @@
-/* Exact human Pmove evidence capture for offline traversal diagnosis. */
+/* Passive human command, Pmove, and hook lifecycle capture. */
 #ifndef SG_HUMAN_TRACE_H
 #define SG_HUMAN_TRACE_H
 
@@ -12,5 +12,6 @@ void SG_HumanTraceHookFire(edict_t *entity, edict_t *hook);
 void SG_HumanTraceHookAttach(edict_t *entity, edict_t *hook,
 	edict_t *target);
 void SG_HumanTraceHookRelease(edict_t *entity);
+void SG_HumanTraceHookReset(edict_t *entity, edict_t *hook);
 
 #endif /* SG_HUMAN_TRACE_H */

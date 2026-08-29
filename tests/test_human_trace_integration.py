@@ -56,13 +56,9 @@ class HumanTraceIntegrationTest(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("void SG_HumanTraceMatchEnd(void);", header)
         self.assertIn("sg_human_trace_match_ended", source)
-        self.assertIn(
-            "int flush_failed = fflush(sg_human_trace_file) != 0;",
-            source)
-        self.assertIn(
-            "int close_failed = fclose(sg_human_trace_file) != 0;",
-            source)
-        self.assertIn('\\"kind\\":\\"rune-bind\\"', source)
+        self.assertIn("fflush(sg_human_trace_file)", source)
+        self.assertIn("fclose(sg_human_trace_file)", source)
+        self.assertIn(r'\"kind\":\"end\"', source)
 
     def test_hook_observers_do_not_control_legacy_hook_flow(self) -> None:
         weapon = (ROOT / "p_weapon.c").read_text(encoding="utf-8")
@@ -104,21 +100,35 @@ class HumanTraceIntegrationTest(unittest.TestCase):
         self.assertIn("void SG_HumanTraceHookFire", header)
         self.assertIn("void SG_HumanTraceHookAttach", header)
         self.assertIn("void SG_HumanTraceHookRelease", header)
+        self.assertIn("void SG_HumanTraceHookReset", header)
 
-    def test_hook_observation_binds_without_a_bot_owned_rune(self) -> None:
+    def test_capture_has_no_route_or_learning_authority(self) -> None:
         source = (ROOT / "slipgate" / "sg_human_trace.c").read_text(
             encoding="utf-8")
-        bind = source[
-            source.index("static qboolean HumanTraceBindRune"):
-            source.index("void SG_HumanTraceNewLevel")]
-        ready = source[
-            source.index("static qboolean HumanTraceHookReady"):
-            source.index("static void HumanTraceHookCommit")]
+        lowered = source.lower()
 
-        self.assertIn("Rune_Load(level.mapname)", bind)
-        self.assertIn("Rune_Free(transient_rune);", bind)
-        self.assertIn("HumanTraceBindRune(true)", ready)
-        self.assertNotIn("SG_LevelSetup()", bind + ready)
+        self.assertNotIn("sg_local.h", source)
+        self.assertNotIn("SG_Rune", source)
+        self.assertNotIn("Rune_Load", source)
+        self.assertNotIn("Rune_Free", source)
+        self.assertNotIn("local_only", lowered)
+        self.assertNotIn("repair", lowered)
+        self.assertIn("SG_LevelIdentitySnapshot", source)
+
+    def test_records_are_source_bound_ordered_and_fail_closed(self) -> None:
+        source = (ROOT / "slipgate" / "sg_human_trace.c").read_text(
+            encoding="utf-8")
+
+        self.assertIn("lmctf-human-trace-v3", source)
+        self.assertIn("spawn_generation", source)
+        self.assertIn("prev_sha256", source)
+        self.assertIn("sha256", source)
+        self.assertIn("SG_HUMAN_TRACE_SEGMENT_BYTES", source)
+        self.assertIn("SG_HUMAN_TRACE_MAX_SEGMENTS", source)
+        self.assertIn('HumanTraceDisable("record write failed")', source)
+        self.assertIn("HumanTraceCreateExclusive(path)", source)
+        self.assertIn("O_EXCL", source)
+        self.assertNotIn('fopen(path, "a")', source)
 
 
 if __name__ == "__main__":
