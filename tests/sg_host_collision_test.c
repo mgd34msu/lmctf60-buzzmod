@@ -520,6 +520,10 @@ static void TestHostPmoveBoundary(void)
 	sg_host_collision_authority_t authority = Authority(&fixture, 100, 100, 25);
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t result;
+	sg_host_pmove_substep_t substeps[4];
+	sg_host_pmove_trace_t traces[4];
+	sg_host_pmove_replay_workspace_t workspace;
+	sg_host_pmove_replay_t replay;
 	sg_host_pmove_error_t error;
 
 	memset(&request, 0, sizeof(request));
@@ -535,7 +539,50 @@ static void TestHostPmoveBoundary(void)
 	CHECK(result.state.gravity == 100);
 	CHECK(result.gravity == 100.0f && result.evaluated_steps == 4 &&
 		result.elapsed_ms == 100);
+	CHECK(result.trace_count == 20004U);
+	CHECK(result.collision_trace_count <= result.trace_count);
 	CHECK(result.state.velocity[2] == -8);
+	memset(substeps, 0xff, sizeof(substeps));
+	workspace.substeps = substeps;
+	workspace.substep_capacity = 4U;
+	workspace.traces = traces;
+	workspace.trace_capacity = 4U;
+	fake_pmove_calls = 0;
+	CHECK(SG_HostPmoveReplayFrame(&authority, NULL, FakePmove, &request,
+		&workspace, &replay, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_NONE && fake_pmove_calls == 4);
+	CHECK(replay.substeps == substeps && replay.substep_count == 4U);
+	CHECK(replay.traces == traces && replay.trace_count == 4U);
+	CHECK(replay.frame_ms == 100U && replay.substep_ms == 25U);
+	CHECK(replay.physics_abi_id == authority.identity.physics_abi_id);
+	CHECK(replay.bsp_content_id == authority.identity.bsp_content_id);
+	CHECK(replay.result.trace_count == 4U);
+	CHECK(replay.result.collision_trace_count <= replay.result.trace_count);
+	CHECK(substeps[0].step == 0U && substeps[0].elapsed_ms == 25U);
+	CHECK(substeps[3].step == 3U && substeps[3].elapsed_ms == 100U);
+	CHECK(substeps[0].first_trace_ordinal == 1U &&
+		substeps[0].trace_count == 1U);
+	CHECK(substeps[3].first_trace_ordinal == 4U &&
+		substeps[3].trace_count == 1U);
+	CHECK(substeps[0].state.velocity[2] == -2);
+	CHECK(substeps[3].state.velocity[2] == -8);
+	CHECK(substeps[0].before_state.velocity[2] == 0);
+	CHECK(substeps[3].before_state.velocity[2] == -6);
+	CHECK(traces[0].ordinal == 1U && traces[0].substep == 0U);
+	CHECK(traces[3].ordinal == 4U && traces[3].substep == 3U);
+	CHECK(traces[0].start[2] == 0.0f && traces[0].end[2] == -0.25f);
+	CHECK(traces[0].result.fraction < 1.0f);
+	CHECK(traces[0].result.contents == SG_HOST_CONTENTS_SOLID);
+	CHECK(traces[0].result.model_index == SG_HOST_COLLISION_MODEL_WORLD);
+	workspace.substep_capacity = 3U;
+	CHECK(!SG_HostPmoveReplayFrame(&authority, NULL, FakePmove, &request,
+		&workspace, &replay, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_CAPACITY);
+	workspace.substep_capacity = 4U;
+	workspace.trace_capacity = 3U;
+	CHECK(!SG_HostPmoveReplayFrame(&authority, NULL, FakePmove, &request,
+		&workspace, &replay, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_CAPACITY);
 	authority.identity.physics.gravity = 40000.0f;
 	CHECK(!SG_HostPmoveEvaluateFrame(&authority, NULL, FakePmove, &request,
 		&result, &error));
