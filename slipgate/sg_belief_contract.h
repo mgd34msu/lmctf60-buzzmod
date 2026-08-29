@@ -821,9 +821,14 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
 	const sg_belief_state_t *state,
 	uint64_t to_time_ms,
 	sg_belief_horizon_source_t **source_out);
-int SG_BeliefHorizonSourceView(const sg_belief_horizon_source_t *source,
+int SG_BeliefHorizonSourceView(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_horizon_source_t *source,
 	const sg_belief_horizon_kernel_t **kernels_out, size_t *kernel_count_out,
 	sg_rune_v2_content_id_t *content_identity_out);
+/* Destroy retires the issued handle. The module keeps a tombstone so a stale
+ * pointer can never name a later issuance after allocator reuse. */
 void SG_BeliefHorizonSourceDestroy(sg_belief_horizon_source_t *source);
 sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
 	const sg_rune_runtime_snapshot_t *snapshot,
@@ -832,6 +837,8 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
 	const sg_belief_horizon_kernel_t *candidate,
 	size_t candidate_count,
 	sg_belief_horizon_authority_t **authority_out);
+/* Destroy releases the owned kernel payload and permanently retires the
+ * handle identity. */
 void SG_BeliefHorizonAuthorityDestroy(
 	sg_belief_horizon_authority_t *authority);
 sg_belief_predict_result_t SG_BeliefPredict(
@@ -843,6 +850,10 @@ sg_belief_predict_result_t SG_BeliefPredict(
 #if defined(SG_BELIEF_TESTING)
 void SG_BeliefTestHorizonAuthorityCorrupt(
 	sg_belief_horizon_authority_t *authority);
+uint64_t SG_BeliefTestHorizonSourceIssuanceIdentity(
+	const sg_belief_horizon_source_t *source);
+uint64_t SG_BeliefTestHorizonAuthorityIssuanceIdentity(
+	const sg_belief_horizon_authority_t *authority);
 #endif
 
 #endif /* SG_BELIEF_CONTRACT_H */

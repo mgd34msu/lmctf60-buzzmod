@@ -29,6 +29,9 @@ typedef struct belief_horizon_provenance_s
 
 struct sg_belief_horizon_source_s
 {
+	uint64_t issuance_identity;
+	uint8_t active;
+	uint8_t reserved[7];
 	belief_horizon_provenance_t provenance;
 	sg_rune_v2_content_id_t chain_identity;
 	size_t kernel_count;
@@ -38,6 +41,9 @@ struct sg_belief_horizon_source_s
 
 struct sg_belief_horizon_authority_s
 {
+	uint64_t issuance_identity;
+	uint8_t active;
+	uint8_t reserved[7];
 	belief_horizon_provenance_t provenance;
 	sg_rune_v2_content_id_t chain_identity;
 	size_t kernel_count;
@@ -47,6 +53,10 @@ struct sg_belief_horizon_authority_s
 
 static sg_belief_horizon_source_t *belief_issued_sources;
 static sg_belief_horizon_authority_t *belief_issued_authorities;
+static uint64_t belief_next_issuance_identity = 1U;
+
+/* Retired handle records remain as tombstones. Their addresses cannot reenter
+ * the allocator, and issuance identities never derive from belief state. */
 
 static int BeliefSizeAdd(size_t left, size_t right, size_t *out)
 {
@@ -915,27 +925,52 @@ static int BeliefHorizonChainValid(const sg_rune_runtime_snapshot_t *snapshot,
 	return kernels[kernel_count - 1U].to_time_ms == to_time_ms;
 }
 
-static int BeliefHorizonSourceIssued(
+static sg_belief_horizon_source_t *BeliefHorizonSourceRecord(
 	const sg_belief_horizon_source_t *source)
 {
-	const sg_belief_horizon_source_t *cursor;
+	sg_belief_horizon_source_t *cursor;
 
 	for (cursor = belief_issued_sources; cursor; cursor = cursor->next_issued)
 		if (cursor == source)
-			return 1;
-	return 0;
+			return cursor;
+	return NULL;
+}
+
+static sg_belief_horizon_authority_t *BeliefHorizonAuthorityRecord(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_authority_t *cursor;
+
+	for (cursor = belief_issued_authorities; cursor;
+	     cursor = cursor->next_issued)
+		if (cursor == authority)
+			return cursor;
+	return NULL;
+}
+
+static int BeliefHorizonSourceIssued(
+	const sg_belief_horizon_source_t *source)
+{
+	sg_belief_horizon_source_t *record = BeliefHorizonSourceRecord(source);
+
+	return record && record->active == 1U && record->issuance_identity != 0U;
 }
 
 static int BeliefHorizonAuthorityIssued(
 	const sg_belief_horizon_authority_t *authority)
 {
-	const sg_belief_horizon_authority_t *cursor;
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
 
-	for (cursor = belief_issued_authorities; cursor;
-	     cursor = cursor->next_issued)
-		if (cursor == authority)
-			return 1;
-	return 0;
+	return record && record->active == 1U && record->issuance_identity != 0U;
+}
+
+static int BeliefHorizonIssuanceIdentity(uint64_t *identity_out)
+{
+	if (!identity_out || belief_next_issuance_identity == 0U)
+		return 0;
+	*identity_out = belief_next_issuance_identity++;
+	return 1;
 }
 
 static uint32_t BeliefHorizonPhaseIndex(const sg_rune_model_t *model,
@@ -2682,6 +2717,85 @@ static int BeliefHorizonAuthorityValid(
 	return SG_RuneV2ContentIdEqual(&authority->chain_identity, &identity);
 }
 
+static int BeliefHorizonIssueOutputValid(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	sg_belief_horizon_source_t **source_out)
+{
+	belief_byte_range_t writable;
+	belief_byte_range_t read;
+
+	return BeliefByteRange(source_out, 1U, sizeof(*source_out), &writable) &&
+		BeliefRangeDisjointFromRune(snapshot, &writable) &&
+		BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &read) &&
+		!BeliefRangesOverlap(&writable, &read) &&
+		BeliefByteRange(state, 1U, sizeof(*state), &read) &&
+		!BeliefRangesOverlap(&writable, &read) &&
+		BeliefByteRange(state->particles, state->particle_capacity,
+			sizeof(*state->particles), &read) &&
+		!BeliefRangesOverlap(&writable, &read);
+}
+
+static int BeliefHorizonViewOutputsValid(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_horizon_source_t *source,
+	const sg_belief_horizon_kernel_t **kernels_out,
+	size_t *kernel_count_out,
+	sg_rune_v2_content_id_t *content_identity_out)
+{
+	belief_byte_range_t writable[3];
+	belief_byte_range_t read;
+	size_t left;
+	size_t right;
+	size_t index;
+
+	if (!BeliefByteRange(kernels_out, 1U, sizeof(*kernels_out),
+	    &writable[0]) ||
+	    !BeliefByteRange(kernel_count_out, 1U, sizeof(*kernel_count_out),
+		&writable[1]) ||
+	    !BeliefByteRange(content_identity_out, 1U,
+		sizeof(*content_identity_out), &writable[2]))
+		return 0;
+	for (left = 0U; left < 3U; left++)
+	{
+		if (!BeliefRangeDisjointFromRune(snapshot, &writable[left]))
+			return 0;
+		for (right = left + 1U; right < 3U; right++)
+			if (BeliefRangesOverlap(&writable[left], &writable[right]))
+				return 0;
+	}
+	if (!BeliefByteRange(snapshot, 1U, sizeof(*snapshot), &read) ||
+	    !BeliefRangeDisjointFromAll(&read, writable, 3U) ||
+	    !BeliefByteRange(state, 1U, sizeof(*state), &read) ||
+	    !BeliefRangeDisjointFromAll(&read, writable, 3U) ||
+	    !BeliefByteRange(state->particles, state->particle_capacity,
+		sizeof(*state->particles), &read) ||
+	    !BeliefRangeDisjointFromAll(&read, writable, 3U) ||
+	    !BeliefByteRange(source, 1U, sizeof(*source), &read) ||
+	    !BeliefRangeDisjointFromAll(&read, writable, 3U) ||
+	    !BeliefByteRange(source->kernels, source->kernel_count,
+		sizeof(*source->kernels), &read) ||
+	    !BeliefRangeDisjointFromAll(&read, writable, 3U))
+		return 0;
+	for (index = 0U; index < source->kernel_count; index++)
+	{
+		const sg_belief_horizon_kernel_t *kernel = &source->kernels[index];
+		if (!BeliefByteRange(kernel->origin_spans, kernel->origin_span_count,
+		    sizeof(*kernel->origin_spans), &read) ||
+		    !BeliefRangeDisjointFromAll(&read, writable, 3U) ||
+		    !BeliefByteRange(kernel->entries, kernel->entry_count,
+			sizeof(*kernel->entries), &read) ||
+		    !BeliefRangeDisjointFromAll(&read, writable, 3U) ||
+		    (kernel->step_count != 0U &&
+		     (!BeliefByteRange(kernel->steps, kernel->step_count,
+			sizeof(*kernel->steps), &read) ||
+		      !BeliefRangeDisjointFromAll(&read, writable, 3U))))
+			return 0;
+	}
+	return 1;
+}
+
 sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state,
@@ -2693,7 +2807,9 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
 	int overflowed;
 	int invalid;
 
-	if (!snapshot || !state || !source_out || *source_out ||
+	if (!snapshot || !state || !source_out ||
+	    !BeliefHorizonIssueOutputValid(snapshot, state, source_out) ||
+	    *source_out ||
 	    !BeliefStateBoundToSnapshot(snapshot, state) ||
 	    to_time_ms <= state->updated_at_ms)
 		return SG_BELIEF_HORIZON_REJECTED_INVALID;
@@ -2735,23 +2851,37 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonSourceIssue(
 		return counters.overflowed ? SG_BELIEF_HORIZON_OVERFLOW :
 			SG_BELIEF_HORIZON_REJECTED_INVALID;
 	}
+	if (!BeliefHorizonIssuanceIdentity(&source->issuance_identity))
+	{
+		BeliefHorizonKernelsDestroy(source->kernels, source->kernel_count);
+		free(source);
+		return SG_BELIEF_HORIZON_OVERFLOW;
+	}
+	source->active = 1U;
 	source->next_issued = belief_issued_sources;
 	belief_issued_sources = source;
 	*source_out = source;
 	return SG_BELIEF_HORIZON_ACCEPTED;
 }
 
-int SG_BeliefHorizonSourceView(const sg_belief_horizon_source_t *source,
+int SG_BeliefHorizonSourceView(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_horizon_source_t *source,
 	const sg_belief_horizon_kernel_t **kernels_out, size_t *kernel_count_out,
 	sg_rune_v2_content_id_t *content_identity_out)
 {
-	sg_rune_v2_content_id_t identity;
+	belief_work_counters_t counters;
 
-	if (!kernels_out || !kernel_count_out || !content_identity_out ||
+	if (!snapshot || !state || !kernels_out || !kernel_count_out ||
+	    !content_identity_out ||
 	    !BeliefHorizonSourceIssued(source) ||
-	    !BeliefHorizonChainIdentity(&source->provenance, source->kernels,
-		source->kernel_count, &identity) ||
-	    !SG_RuneV2ContentIdEqual(&source->chain_identity, &identity))
+	    !BeliefHorizonViewOutputsValid(snapshot, state, source, kernels_out,
+		kernel_count_out, content_identity_out))
+		return 0;
+	memset(&counters, 0, sizeof(counters));
+	if (!BeliefStateBoundToSnapshot(snapshot, state) ||
+	    !BeliefHorizonSourceValid(source, snapshot, state, &counters))
 		return 0;
 	*kernels_out = source->kernels;
 	*kernel_count_out = source->kernel_count;
@@ -2761,16 +2891,15 @@ int SG_BeliefHorizonSourceView(const sg_belief_horizon_source_t *source,
 
 void SG_BeliefHorizonSourceDestroy(sg_belief_horizon_source_t *source)
 {
-	sg_belief_horizon_source_t **cursor = &belief_issued_sources;
+	sg_belief_horizon_source_t *record = BeliefHorizonSourceRecord(source);
 
-	while (*cursor && *cursor != source)
-		cursor = &(*cursor)->next_issued;
-	if (!*cursor)
+	if (!record || record->active != 1U)
 		return;
-	*cursor = source->next_issued;
-	BeliefHorizonKernelsDestroy(source->kernels, source->kernel_count);
-	memset(source, 0, sizeof(*source));
-	free(source);
+	record->active = 0U;
+	BeliefHorizonKernelsDestroy(record->kernels, record->kernel_count);
+	record->kernels = NULL;
+	record->kernel_count = 0U;
+	memset(&record->chain_identity, 0, sizeof(record->chain_identity));
 }
 
 static int BeliefHorizonAcceptOutputValid(
@@ -2891,6 +3020,14 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
 		free(authority);
 		return SG_BELIEF_HORIZON_ALLOCATION_FAILED;
 	}
+	if (!BeliefHorizonIssuanceIdentity(&authority->issuance_identity))
+	{
+		BeliefHorizonKernelsDestroy(authority->kernels,
+			authority->kernel_count);
+		free(authority);
+		return SG_BELIEF_HORIZON_OVERFLOW;
+	}
+	authority->active = 1U;
 	authority->next_issued = belief_issued_authorities;
 	belief_issued_authorities = authority;
 	*authority_out = authority;
@@ -2900,17 +3037,16 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
 void SG_BeliefHorizonAuthorityDestroy(
 	sg_belief_horizon_authority_t *authority)
 {
-	sg_belief_horizon_authority_t **cursor = &belief_issued_authorities;
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
 
-	while (*cursor && *cursor != authority)
-		cursor = &(*cursor)->next_issued;
-	if (!*cursor)
+	if (!record || record->active != 1U)
 		return;
-	*cursor = authority->next_issued;
-	BeliefHorizonKernelsDestroy(authority->kernels,
-		authority->kernel_count);
-	memset(authority, 0, sizeof(*authority));
-	free(authority);
+	record->active = 0U;
+	BeliefHorizonKernelsDestroy(record->kernels, record->kernel_count);
+	record->kernels = NULL;
+	record->kernel_count = 0U;
+	memset(&record->chain_identity, 0, sizeof(record->chain_identity));
 }
 
 #if defined(SG_BELIEF_TESTING)
@@ -2919,6 +3055,23 @@ void SG_BeliefTestHorizonAuthorityCorrupt(
 {
 	if (BeliefHorizonAuthorityIssued(authority))
 		authority->chain_identity.bytes[0] ^= UINT8_C(1);
+}
+
+uint64_t SG_BeliefTestHorizonSourceIssuanceIdentity(
+	const sg_belief_horizon_source_t *source)
+{
+	sg_belief_horizon_source_t *record = BeliefHorizonSourceRecord(source);
+
+	return record ? record->issuance_identity : 0U;
+}
+
+uint64_t SG_BeliefTestHorizonAuthorityIssuanceIdentity(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_authority_t *record =
+		BeliefHorizonAuthorityRecord(authority);
+
+	return record ? record->issuance_identity : 0U;
 }
 #endif
 

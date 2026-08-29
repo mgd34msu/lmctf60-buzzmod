@@ -33,14 +33,20 @@ because it has no finite complete enumeration. The outcomes receive a
 deterministic equal topology prior; no actor observation or hidden actor
 location can select an outcome or weight.
 
-The module owns both source and accepted-authority storage and records live
-issuance separately from their C representation. A copied or fabricated object
-therefore has no authority, even if another translation unit reproduces the
-private layout. Acceptance validates every candidate witness, exact interval
-tiling, and byte-exact semantic equality with the issued fixed point before it
-deep-copies the chain. The caller-set completeness byte is validated data, not
-evidence of completeness. Writable output storage must be disjoint from all
-snapshot, belief, source, candidate, and nested kernel storage.
+The module registry owns every source and accepted-authority handle. It assigns
+a monotonic issuance identity that does not use belief state generation. A
+copied or fabricated object therefore has no authority, even if another
+translation unit reproduces the private layout. Destroy frees the kernel
+payload and retires the handle, but retains its registry record as a tombstone.
+The module checks registry membership before dereferencing a handle, and no
+later issuance can reuse a retired handle address.
+
+Acceptance validates every candidate witness, exact interval tiling, and
+byte-exact semantic equality with the issued fixed point before it deep-copies
+the chain. The caller-set completeness byte is validated data, not evidence of
+completeness. Issue, source view, and acceptance validate every writable output
+range before writing. Those ranges must be mutually disjoint and disjoint from
+the snapshot, belief, source, candidate, and nested kernel storage they borrow.
 
 The chain identity is SHA-256 over a versioned, fixed-width, little-endian
 encoding of its provenance, kernels, spans, outcomes, likelihoods, and witness

@@ -2222,8 +2222,8 @@ static void TestPredictionComposesAcceptedHorizon(void)
 		SG_BELIEF_REDUCE_APPLIED);
 	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
 		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
-	CHECK(SG_BeliefHorizonSourceView(source, &kernels, &kernel_count,
-		&content_identity));
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &content_identity));
 	CHECK(kernel_count == 1U);
 	CHECK(SG_RuneV2ContentIdValid(&content_identity));
 	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
@@ -2368,8 +2368,8 @@ static void TestPredictionAuthorityRejectsFabrication(void)
 		complete_spans, 3U, &complete_step, 1U);
 	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
 		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
-	CHECK(SG_BeliefHorizonSourceView(source, &canonical, &canonical_count,
-		&canonical_identity));
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&canonical, &canonical_count, &canonical_identity));
 	CHECK(canonical_count == 1U);
 	CHECK(SG_RuneV2ContentIdValid(&canonical_identity));
 	CHECK(memcmp(canonical_identity.bytes, expected_identity,
@@ -2493,6 +2493,171 @@ static void TestHorizonIssuerZeroDurationClosure(void)
 	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
 		200U, &source) == SG_BELIEF_HORIZON_REJECTED_INVALID);
 	CHECK(source == NULL);
+}
+
+static void TestHorizonOutputAliasBoundaries(void)
+{
+	belief_fixture_t fixture;
+	belief_fixture_t fixture_before;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_state_t state;
+	sg_belief_state_t state_before;
+	sg_belief_horizon_source_t *source = NULL;
+	const sg_belief_horizon_kernel_t *kernels = NULL;
+	size_t kernel_count = 0U;
+	sg_rune_v2_content_id_t identity;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	fixture_before = fixture;
+	state_before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		(sg_belief_horizon_source_t **)(void *)&state.revision) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		(sg_belief_horizon_source_t **)(void *)&storage[0]) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		(sg_belief_horizon_source_t **)(void *)
+			&fixture.snapshot.topology_revision) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state, 200U,
+		(sg_belief_horizon_source_t **)(void *)&fixture.model_kernels[0]) ==
+		SG_BELIEF_HORIZON_REJECTED_INVALID);
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &identity));
+	CHECK(kernel_count == 1U);
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		(const sg_belief_horizon_kernel_t **)(void *)&kernel_count,
+		&kernel_count, &identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count,
+		(sg_rune_v2_content_id_t *)(void *)&kernels));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count,
+		(sg_rune_v2_content_id_t *)(void *)&kernel_count));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		(const sg_belief_horizon_kernel_t **)(void *)source,
+		&kernel_count, &identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, (size_t *)(void *)&kernels[0], &identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, (size_t *)(void *)kernels[0].origin_spans, &identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count,
+		(sg_rune_v2_content_id_t *)(void *)kernels[0].entries));
+	CHECK(kernels[0].step_count != 0U);
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count,
+		(sg_rune_v2_content_id_t *)(void *)kernels[0].steps));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		(const sg_belief_horizon_kernel_t **)(void *)
+			&fixture.model_kernels[0],
+		&kernel_count, &identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, (size_t *)(void *)&fixture.snapshot.topology_revision,
+		&identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, (size_t *)(void *)&state.revision, &identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count,
+		(sg_rune_v2_content_id_t *)(void *)&storage[0]));
+	CHECK(memcmp(&fixture, &fixture_before, sizeof(fixture)) == 0);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	SG_BeliefHorizonSourceDestroy(source);
+}
+
+static void TestHorizonHandleIdentityPreventsAllocatorAba(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_particle_t predicted[8];
+	sg_belief_state_t state;
+	sg_belief_horizon_source_t *stale_source = NULL;
+	sg_belief_horizon_source_t *source = NULL;
+	sg_belief_horizon_authority_t *stale_authority = NULL;
+	sg_belief_horizon_authority_t *authority = NULL;
+	const sg_belief_horizon_kernel_t *kernels = NULL;
+	const sg_belief_horizon_kernel_t *stale_kernels =
+		(const sg_belief_horizon_kernel_t *)(uintptr_t)1U;
+	size_t kernel_count = 0U;
+	size_t stale_count = 99U;
+	sg_rune_v2_content_id_t identity;
+	sg_rune_v2_content_id_t stale_identity;
+	sg_belief_prediction_request_t request;
+	sg_belief_prediction_t prediction;
+	sg_belief_prediction_t prediction_before;
+	uint64_t stale_source_identity;
+	uint64_t source_identity;
+	uint64_t stale_authority_identity;
+	uint64_t authority_identity;
+
+	BeliefFixtureInit(&fixture);
+	InitState(&fixture, &state, storage, 8U);
+	state.policy.diffusion_fraction = 1.0f;
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &stale_source) == SG_BELIEF_HORIZON_ACCEPTED);
+	stale_source_identity =
+		SG_BeliefTestHorizonSourceIssuanceIdentity(stale_source);
+	CHECK(stale_source_identity != 0U);
+	SG_BeliefHorizonSourceDestroy(stale_source);
+	CHECK(SG_BeliefHorizonSourceIssue(&fixture.snapshot, &state,
+		200U, &source) == SG_BELIEF_HORIZON_ACCEPTED);
+	source_identity = SG_BeliefTestHorizonSourceIssuanceIdentity(source);
+	CHECK(source != stale_source);
+	CHECK(source_identity != 0U && source_identity != stale_source_identity);
+	memset(&stale_identity, 0xa5, sizeof(stale_identity));
+	CHECK(!SG_BeliefHorizonSourceView(&fixture.snapshot, &state, stale_source,
+		&stale_kernels, &stale_count, &stale_identity));
+	CHECK(stale_kernels ==
+		(const sg_belief_horizon_kernel_t *)(uintptr_t)1U);
+	CHECK(stale_count == 99U);
+	{
+		sg_rune_v2_content_id_t unchanged_identity;
+
+		memset(&unchanged_identity, 0xa5, sizeof(unchanged_identity));
+		CHECK(memcmp(&stale_identity, &unchanged_identity,
+			sizeof(stale_identity)) == 0);
+	}
+	SG_BeliefHorizonSourceDestroy(stale_source);
+	CHECK(SG_BeliefHorizonSourceView(&fixture.snapshot, &state, source,
+		&kernels, &kernel_count, &identity));
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count, &stale_authority) ==
+		SG_BELIEF_HORIZON_ACCEPTED);
+	stale_authority_identity =
+		SG_BeliefTestHorizonAuthorityIssuanceIdentity(stale_authority);
+	SG_BeliefHorizonAuthorityDestroy(stale_authority);
+	CHECK(SG_BeliefHorizonAuthorityAccept(&fixture.snapshot, &state, source,
+		kernels, kernel_count, &authority) == SG_BELIEF_HORIZON_ACCEPTED);
+	authority_identity =
+		SG_BeliefTestHorizonAuthorityIssuanceIdentity(authority);
+	CHECK(authority != stale_authority);
+	CHECK(authority_identity != 0U &&
+		authority_identity != stale_authority_identity);
+	request = PredictionRequest(200U, stale_authority, scratch_first,
+		scratch_second, 8U, predicted, 8U);
+	memset(&prediction, 0xa5, sizeof(prediction));
+	prediction_before = prediction;
+	CHECK(SG_BeliefPredict(&fixture.snapshot, &state, &request, &prediction) ==
+		SG_BELIEF_PREDICT_REJECTED_INVALID);
+	CHECK(memcmp(&prediction, &prediction_before, sizeof(prediction)) == 0);
+	SG_BeliefHorizonAuthorityDestroy(stale_authority);
+	request.horizon = authority;
+	CHECK(SG_BeliefPredict(&fixture.snapshot, &state, &request, &prediction) ==
+		SG_BELIEF_PREDICT_APPLIED);
+	SG_BeliefHorizonAuthorityDestroy(authority);
+	SG_BeliefHorizonSourceDestroy(source);
 }
 
 static void TestTransactionalRejectDuplicateAndStale(void)
@@ -2910,6 +3075,8 @@ int main(void)
 	TestPredictionComposesAcceptedHorizon();
 	TestPredictionAuthorityRejectsFabrication();
 	TestHorizonIssuerZeroDurationClosure();
+	TestHorizonOutputAliasBoundaries();
+	TestHorizonHandleIdentityPreventsAllocatorAba();
 	TestTransactionalRejectDuplicateAndStale();
 	TestDelayedTeammateEvidenceIsAgedAndPropagated();
 	TestCapacityRetryBeyondOldThresholds();
