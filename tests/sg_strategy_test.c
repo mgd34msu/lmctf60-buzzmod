@@ -567,6 +567,132 @@ static void TestSuspensionPersistsUntilTacticsResume(void)
 	CHECK(state.activation.goal_id == 1U);
 }
 
+static void TestTerminalOutcomeSettlesBlockedActivation(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 411U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	spec.goals[0].kind = SG_STRATEGY_GOAL_COLLECT_ITEM;
+	spec.goals[0].choices[0].destination.kind = SG_DESTINATION_WEAPON;
+	spec.goals[0].choices[0].destination.value.item.item_id = 100U;
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(411U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	observation.handle.kind = SG_DESTINATION_WEAPON;
+	Begin(&state, &plan, &observation, 1U, &reduction);
+
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 1U, SG_STRATEGY_BLOCK_COMBAT);
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.suspension.active == 1U);
+
+	frame = Frame(3U, state.revision, 120U);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_SUCCEEDED);
+	CHECK(state.activation.activation_id == 0U);
+	CHECK(state.suspension.active == 0U);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_GOAL_COMPLETED));
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 412U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(2U, 20U, 200U);
+	spec.goals[0].kind = SG_STRATEGY_GOAL_CAPTURE_FLAG;
+	spec.goals[0].choices[0].destination.kind = SG_DESTINATION_FLAG;
+	spec.goals[0].choices[0].destination.value.flag.team = 2U;
+	spec.goals[0].choices[0].destination.value.flag.location =
+		SG_DESTINATION_FLAG_CURRENT;
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(412U, 2U, 20U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 2000U);
+	observation.handle.kind = SG_DESTINATION_FLAG;
+	Begin(&state, &plan, &observation, 1U, &reduction);
+
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 1U, SG_STRATEGY_BLOCK_OBSTRUCTION);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_SUCCEEDED);
+	CHECK(state.activation.activation_id == 0U);
+	CHECK(state.suspension.active == 0U);
+	CHECK(!HasEffect(&reduction, SG_STRATEGY_EFFECT_TACTICAL_SUSPENDED));
+}
+
+static void TestTerminalOutcomeBindingAndDirectiveIsolation(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_state_t before;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 413U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(413U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+	Begin(&state, &plan, &observation, 1U, &reduction);
+
+	frame = Frame(2U, state.revision, 110U);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.activation.activation_id++;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+	before = state;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+
+	frame = Frame(2U, state.revision, 110U);
+	BindTactical(&frame, &state, 1U, 1U, SG_STRATEGY_BLOCK_COMBAT);
+	frame.tactical.activation.activation_id++;
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+
+	frame = Frame(2U, state.revision - 1U, 110U);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_REJECTED_STALE);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+
+	frame = Frame(2U, state.revision, 110U);
+	frame.directive.kind = SG_STRATEGY_DIRECTIVE_RELEASE;
+	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_HUMAN,
+		SG_STRATEGY_PRINCIPAL_HUMAN, 9U, 2U);
+	frame.goal_outcome.present = 1U;
+	frame.goal_outcome.activation = state.activation;
+	frame.goal_outcome.kind = SG_STRATEGY_OUTCOME_COMPLETED;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_REJECTED_INVALID);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+}
+
 static void TestCancelSettlesEveryOpenGoal(void)
 {
 	sg_strategy_plan_spec_t spec;
@@ -1484,6 +1610,8 @@ int main(void)
 	TestCheapestMovingAndDuplicateRejects();
 	TestSuspensionDeathAndRespawn();
 	TestSuspensionPersistsUntilTacticsResume();
+	TestTerminalOutcomeSettlesBlockedActivation();
+	TestTerminalOutcomeBindingAndDirectiveIsolation();
 	TestCancelSettlesEveryOpenGoal();
 	TestCancelAtGoalCapacity();
 	TestUnavailableAlternativeRetry();
