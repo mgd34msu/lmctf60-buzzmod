@@ -72,8 +72,10 @@ static sg_perception_adapt_result_t PerceptionAuthenticationValid(
 	    authentication->authority >= SG_PERCEPTION_AUTHORITY_COUNT ||
 	    !SG_BeliefTeamValid(authentication->issuer_team) ||
 	    authentication->issuer_team != authentication->audience_team ||
-	    authentication->issuer_client >= SG_BELIEF_MAX_CLIENTS ||
-	    authentication->reserved != 0U || authentication->event_id == 0U ||
+	    !SG_BeliefReservedZero(authentication->reserved,
+		sizeof(authentication->reserved)) ||
+	    !SG_BeliefLifeIdentityValid(&authentication->issuer_life) ||
+	    authentication->event_id == 0U ||
 	    authentication->evidence_sequence == 0U ||
 	    authentication->observed_at_ms == 0U ||
 	    authentication->observed_at_ms >
@@ -401,7 +403,7 @@ static void PerceptionBuildEvidence(sg_belief_evidence_t *evidence,
 			SG_BELIEF_ISSUER_TEAMMATE : SG_BELIEF_ISSUER_LOCAL_SENSOR;
 	evidence->provenance.issuer_team = authentication->issuer_team;
 	evidence->provenance.audience_team = authentication->audience_team;
-	evidence->provenance.issuer_client = authentication->issuer_client;
+	evidence->provenance.issuer_life = authentication->issuer_life;
 	evidence->provenance.evidence_id = authentication->event_id;
 	evidence->provenance.evidence_sequence =
 		authentication->evidence_sequence;
@@ -413,7 +415,7 @@ static void PerceptionBuildEvidence(sg_belief_evidence_t *evidence,
 	evidence->source = PerceptionBeliefSource(observation->source);
 	evidence->kind = observation->evidence_kind;
 	evidence->target_team = observation->target_team;
-	evidence->target_client = observation->target_client;
+	evidence->target_life = observation->target_life;
 	evidence->observed_at_ms = authentication->observed_at_ms;
 	evidence->valid_until_ms = authentication->valid_until_ms;
 	evidence->confidence = observation->confidence;
@@ -458,8 +460,10 @@ sg_perception_adapt_result_t SG_PerceptionEvidenceAdapt(
 	    observation->evidence_kind < SG_BELIEF_EVIDENCE_POSITIVE ||
 	    observation->evidence_kind >= SG_BELIEF_EVIDENCE_KIND_COUNT ||
 	    !SG_BeliefTeamValid(observation->target_team) ||
-	    observation->target_client >= SG_BELIEF_MAX_CLIENTS ||
-	    observation->reserved != 0U || !isfinite(observation->confidence) ||
+	    !SG_BeliefReservedZero(observation->reserved,
+		sizeof(observation->reserved)) ||
+	    !SG_BeliefLifeIdentityValid(&observation->target_life) ||
+	    !isfinite(observation->confidence) ||
 	    observation->confidence <= 0.0f || observation->confidence > 1.0f)
 	{
 		*out = adaptation;

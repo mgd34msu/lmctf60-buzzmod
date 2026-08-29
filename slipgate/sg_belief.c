@@ -210,8 +210,10 @@ static sg_belief_reduce_result_t BeliefEvidenceValid(
 	    provenance->issuer_kind >= SG_BELIEF_ISSUER_KIND_COUNT ||
 	    provenance->issuer_team != state->audience_team ||
 	    provenance->audience_team != state->audience_team ||
-	    provenance->issuer_client >= SG_BELIEF_MAX_CLIENTS ||
-	    provenance->reserved != 0U || provenance->evidence_id == 0U ||
+	    !SG_BeliefReservedZero(provenance->reserved,
+		sizeof(provenance->reserved)) ||
+	    !SG_BeliefLifeIdentityValid(&provenance->issuer_life) ||
+	    provenance->evidence_id == 0U ||
 	    provenance->evidence_sequence == 0U ||
 	    provenance->authenticated_at_ms == 0U ||
 	    provenance->rune_identity != snapshot->identity ||
@@ -228,8 +230,9 @@ static sg_belief_reduce_result_t BeliefEvidenceValid(
 	    evidence->kind < SG_BELIEF_EVIDENCE_POSITIVE ||
 	    evidence->kind >= SG_BELIEF_EVIDENCE_KIND_COUNT ||
 	    evidence->target_team != state->target_team ||
-	    evidence->target_client != state->target_client ||
-	    evidence->reserved != 0U || evidence->observed_at_ms == 0U ||
+	    !SG_BeliefReservedZero(evidence->reserved, sizeof(evidence->reserved)) ||
+	    !SG_BeliefLifeIdentityValid(&evidence->target_life) ||
+	    evidence->observed_at_ms == 0U ||
 	    evidence->observed_at_ms > at_ms ||
 	    evidence->confidence <= 0.0f ||
 	    evidence->confidence > 1.0f ||
@@ -239,6 +242,9 @@ static sg_belief_reduce_result_t BeliefEvidenceValid(
 		sizeof(*evidence->supports), &support_range) ||
 	    !BeliefEvidenceShapeValid(evidence))
 		return SG_BELIEF_REDUCE_REJECTED_INVALID;
+	if (!SG_BeliefLifeIdentityEqual(&evidence->target_life,
+		&state->target_life))
+		return SG_BELIEF_REDUCE_REJECTED_AUTHORITY;
 	if (evidence->valid_until_ms < at_ms)
 		return SG_BELIEF_REDUCE_REJECTED_STALE;
 	for (index = 0U; index < evidence->support_count; index++)
@@ -1541,7 +1547,8 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !state || !config || !storage ||
 	    capacity == 0U || !SG_BeliefTeamValid(config->audience_team) ||
 	    !SG_BeliefTeamValid(config->target_team) ||
-	    config->target_client >= SG_BELIEF_MAX_CLIENTS ||
+	    !SG_BeliefReservedZero(config->reserved, sizeof(config->reserved)) ||
+	    !SG_BeliefLifeIdentityValid(&config->target_life) ||
 	    config->initialized_at_ms == 0U || !BeliefPolicyValid(&config->policy) ||
 	    !BeliefByteRange(state, 1U, sizeof(*state), &state_range) ||
 	    !BeliefByteRange(config, 1U, sizeof(*config), &config_range) ||
@@ -1556,7 +1563,7 @@ int SG_BeliefStateInit(const sg_rune_runtime_snapshot_t *snapshot,
 	memset(&candidate, 0, sizeof(candidate));
 	candidate.audience_team = config->audience_team;
 	candidate.target_team = config->target_team;
-	candidate.target_client = config->target_client;
+	candidate.target_life = config->target_life;
 	candidate.particle_capacity = capacity;
 	candidate.generation = 1U;
 	candidate.revision = 1U;
@@ -1677,28 +1684,7 @@ sg_belief_reduce_result_t SG_BeliefReduce(
 		}
 		candidate.last_evidence_sequence =
 			evidence->provenance.evidence_sequence;
-		memset(&candidate.latest_provenance, 0,
-			sizeof(candidate.latest_provenance));
-		candidate.latest_provenance.authenticated =
-			evidence->provenance.authenticated;
-		candidate.latest_provenance.issuer_kind =
-			evidence->provenance.issuer_kind;
-		candidate.latest_provenance.issuer_team =
-			evidence->provenance.issuer_team;
-		candidate.latest_provenance.audience_team =
-			evidence->provenance.audience_team;
-		candidate.latest_provenance.issuer_client =
-			evidence->provenance.issuer_client;
-		candidate.latest_provenance.evidence_id =
-			evidence->provenance.evidence_id;
-		candidate.latest_provenance.evidence_sequence =
-			evidence->provenance.evidence_sequence;
-		candidate.latest_provenance.authenticated_at_ms =
-			evidence->provenance.authenticated_at_ms;
-		candidate.latest_provenance.rune_identity =
-			evidence->provenance.rune_identity;
-		candidate.latest_provenance.topology_revision =
-			evidence->provenance.topology_revision;
+		candidate.latest_provenance = evidence->provenance;
 		candidate.latest_source = evidence->source;
 		candidate.latest_observed_at_ms = evidence->observed_at_ms;
 		candidate.latest_valid_until_ms = evidence->valid_until_ms;
@@ -1798,6 +1784,7 @@ int SG_BeliefPredict(const sg_rune_runtime_snapshot_t *snapshot,
 	required = confidence > 0.0f ? state->particle_count : 0U;
 	memset(&candidate, 0, sizeof(candidate));
 	candidate.at_time_ms = at_time_ms;
+	candidate.target_life = state->target_life;
 	candidate.particle_capacity = capacity;
 	candidate.required_particle_capacity = required;
 	candidate.confidence = confidence;

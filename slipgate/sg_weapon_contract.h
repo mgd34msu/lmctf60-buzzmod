@@ -46,6 +46,7 @@ typedef struct sg_weapon_effect_query_s
 	uint8_t shooter_team;
 	uint8_t target_team;
 	uint8_t reserved;
+	sg_belief_life_identity_t target_life;
 	uint32_t shooter_cell_id;
 	uint32_t target_cell_id;
 	uint32_t opportunity_cost_ms;
@@ -78,6 +79,7 @@ typedef struct sg_weapon_effect_result_s
 	uint16_t target_client;
 	uint8_t audience_team;
 	uint8_t shooter_team;
+	sg_belief_life_identity_t target_life;
 	uint32_t shooter_cell_id;
 	uint32_t target_cell_id;
 	uint64_t prediction_time_ms;
@@ -160,13 +162,14 @@ static inline int SG_WeaponAffordanceValid(
 
 static inline int SG_WeaponBeliefBoundToQuery(
 	const sg_belief_state_t *belief, uint8_t audience_team,
-	uint8_t target_team, uint16_t target_client, uint64_t now_ms,
+	uint8_t target_team, const sg_belief_life_identity_t *target_life,
+	uint64_t now_ms,
 	uint64_t prediction_time_ms)
 {
 	return SG_BeliefStateValid(belief) && belief->particle_count != 0U &&
 	       belief->audience_team == audience_team &&
 	       belief->target_team == target_team &&
-	       belief->target_client == target_client &&
+	       SG_BeliefLifeIdentityEqual(&belief->target_life, target_life) &&
 	       belief->updated_at_ms <= now_ms && prediction_time_ms >= now_ms;
 }
 
@@ -192,13 +195,15 @@ static inline int SG_WeaponEffectQueryValid(
 	    query->shooter_client >= SG_BELIEF_MAX_CLIENTS ||
 	    query->target_client >= SG_BELIEF_MAX_CLIENTS ||
 	    query->shooter_client == query->target_client ||
+	    !SG_BeliefLifeIdentityValid(&query->target_life) ||
+	    query->target_life.client_id != query->target_client ||
 	    query->shooter_cell_id != query->affordance->source_cell_id ||
 	    query->target_cell_id != query->affordance->target_cell_id ||
 	    query->now_ms == 0U || query->prediction_time_ms < query->now_ms ||
 	    query->teammate_snapshot_revision == 0U ||
 	    query->teammate_evidence_complete != 1U ||
 	    !SG_WeaponBeliefBoundToQuery(query->target_belief,
-		query->audience_team, query->target_team, query->target_client,
+		query->audience_team, query->target_team, &query->target_life,
 		query->now_ms, query->prediction_time_ms) ||
 	    query->teammate_belief_count > SG_BELIEF_MAX_CLIENTS ||
 	    (query->teammate_belief_count != 0U && !query->teammate_beliefs) ||
@@ -213,13 +218,14 @@ static inline int SG_WeaponEffectQueryValid(
 			return 0;
 	for (index = 0U; index < query->teammate_belief_count; index++)
 	{
-		const uint16_t teammate_client =
-			query->teammate_beliefs[index].target_client;
+		const sg_belief_life_identity_t *teammate_life =
+			&query->teammate_beliefs[index].target_life;
+		uint32_t teammate_client = teammate_life->client_id;
 
 		if (!SG_WeaponBeliefBoundToQuery(&query->teammate_beliefs[index],
 			query->audience_team, query->shooter_team,
-		    teammate_client, query->now_ms,
-		    query->prediction_time_ms) ||
+			teammate_life, query->now_ms,
+			query->prediction_time_ms) ||
 		    teammate_client == query->shooter_client ||
 		    teammate_client == query->target_client ||
 		    teammate_seen[teammate_client] != 0U)

@@ -62,8 +62,8 @@ typedef struct sg_perception_authentication_s
 	sg_perception_authority_t authority;
 	uint8_t issuer_team;
 	uint8_t audience_team;
-	uint16_t issuer_client;
-	uint16_t reserved;
+	uint8_t reserved[6];
+	sg_belief_life_identity_t issuer_life;
 	uint64_t event_id;
 	uint64_t evidence_sequence;
 	uint64_t observed_at_ms;
@@ -156,8 +156,8 @@ typedef struct sg_perception_observation_s
 	sg_perception_source_t source;
 	sg_belief_evidence_kind_t evidence_kind;
 	uint8_t target_team;
-	uint16_t target_client;
-	uint8_t reserved;
+	uint8_t reserved[7];
+	sg_belief_life_identity_t target_life;
 	float confidence;
 	union
 	{

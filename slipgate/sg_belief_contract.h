@@ -11,6 +11,16 @@
 #define SG_BELIEF_WEIGHT_EPSILON 0.000001f
 #define SG_BELIEF_ORIENTATION_LIMIT_DEGREES 360.0f
 
+/* The host owns spawn_generation: it is minted once after a completed client
+ * spawn and never reused. client_id scopes that generation to one client
+ * slot, so an old observation cannot name a later occupant of that slot. */
+typedef struct sg_belief_life_identity_s
+{
+	uint32_t client_id;
+	uint32_t reserved;
+	uint64_t spawn_generation;
+} sg_belief_life_identity_t;
+
 typedef enum sg_belief_evidence_source_e
 {
 	SG_BELIEF_SOURCE_SIGHT = 0,
@@ -53,8 +63,8 @@ typedef struct sg_belief_provenance_s
 	sg_belief_issuer_kind_t issuer_kind;
 	uint8_t issuer_team;
 	uint8_t audience_team;
-	uint16_t issuer_client;
-	uint16_t reserved;
+	uint8_t reserved[6];
+	sg_belief_life_identity_t issuer_life;
 	uint64_t evidence_id;
 	uint64_t evidence_sequence;
 	uint64_t authenticated_at_ms;
@@ -82,8 +92,8 @@ typedef struct sg_belief_evidence_s
 	sg_belief_evidence_source_t source;
 	sg_belief_evidence_kind_t kind;
 	uint8_t target_team;
-	uint16_t target_client;
-	uint8_t reserved;
+	uint8_t reserved[7];
+	sg_belief_life_identity_t target_life;
 	uint64_t observed_at_ms;
 	uint64_t valid_until_ms;
 	float confidence;
@@ -121,7 +131,8 @@ typedef struct sg_belief_state_config_s
 {
 	uint8_t audience_team;
 	uint8_t target_team;
-	uint16_t target_client;
+	uint8_t reserved[6];
+	sg_belief_life_identity_t target_life;
 	uint64_t initialized_at_ms;
 	sg_belief_policy_t policy;
 } sg_belief_state_config_t;
@@ -132,7 +143,8 @@ typedef struct sg_belief_state_s
 {
 	uint8_t audience_team;
 	uint8_t target_team;
-	uint16_t target_client;
+	uint8_t reserved[6];
+	sg_belief_life_identity_t target_life;
 	size_t particle_count;
 	size_t particle_capacity;
 	uint64_t generation;
@@ -263,6 +275,7 @@ typedef struct sg_belief_reduction_s
 typedef struct sg_belief_prediction_s
 {
 	uint64_t at_time_ms;
+	sg_belief_life_identity_t target_life;
 	size_t particle_count;
 	size_t particle_capacity;
 	size_t required_particle_capacity;
@@ -274,6 +287,42 @@ typedef struct sg_belief_prediction_s
 static inline int SG_BeliefTeamValid(uint8_t team)
 {
 	return team == 1U || team == 2U;
+}
+
+static inline int SG_BeliefLifeIdentityValid(
+	const sg_belief_life_identity_t *life)
+{
+	return life && life->client_id < SG_BELIEF_MAX_CLIENTS &&
+		life->reserved == 0U && life->spawn_generation != 0U;
+}
+
+static inline int SG_BeliefLifeIdentityEqual(
+	const sg_belief_life_identity_t *left,
+	const sg_belief_life_identity_t *right)
+{
+	return SG_BeliefLifeIdentityValid(left) &&
+		SG_BeliefLifeIdentityValid(right) &&
+		left->client_id == right->client_id &&
+		left->spawn_generation == right->spawn_generation;
+}
+
+static inline int SG_BeliefLifeIdentityEmpty(
+	const sg_belief_life_identity_t *life)
+{
+	return life && life->client_id == 0U && life->reserved == 0U &&
+		life->spawn_generation == 0U;
+}
+
+static inline int SG_BeliefReservedZero(const uint8_t *reserved, size_t count)
+{
+	size_t index;
+
+	if (!reserved)
+		return 0;
+	for (index = 0U; index < count; index++)
+		if (reserved[index] != 0U)
+			return 0;
+	return 1;
 }
 
 static inline int SG_BeliefFloatValid(float value)
@@ -629,7 +678,8 @@ static inline int SG_BeliefStateValid(const sg_belief_state_t *state)
 
 	if (!state || !SG_BeliefTeamValid(state->audience_team) ||
 	    !SG_BeliefTeamValid(state->target_team) ||
-	    state->target_client >= SG_BELIEF_MAX_CLIENTS ||
+	    !SG_BeliefReservedZero(state->reserved, sizeof(state->reserved)) ||
+	    !SG_BeliefLifeIdentityValid(&state->target_life) ||
 	    state->particle_capacity == 0U ||
 	    state->particle_count > state->particle_capacity || !state->particles ||
 	    state->generation == 0U || state->revision == 0U ||
@@ -647,6 +697,8 @@ static inline int SG_BeliefStateValid(const sg_belief_state_t *state)
 		return 0;
 	if ((state->last_evidence_sequence == 0U &&
 	     (state->latest_provenance.evidence_id != 0U ||
+	      !SG_BeliefLifeIdentityEmpty(
+		&state->latest_provenance.issuer_life) ||
 	      state->latest_provenance.rune_identity != 0U ||
 	      state->latest_provenance.topology_revision != 0U ||
 	      state->latest_observed_at_ms != 0U ||
@@ -654,6 +706,10 @@ static inline int SG_BeliefStateValid(const sg_belief_state_t *state)
 	      state->latest_evidence_confidence != 0.0f)) ||
 	    (state->last_evidence_sequence != 0U &&
 	     (state->latest_provenance.authenticated != 1U ||
+	      !SG_BeliefReservedZero(state->latest_provenance.reserved,
+		sizeof(state->latest_provenance.reserved)) ||
+	      !SG_BeliefLifeIdentityValid(
+		&state->latest_provenance.issuer_life) ||
 	      state->latest_provenance.evidence_sequence !=
 		state->last_evidence_sequence ||
 	      state->latest_provenance.audience_team != state->audience_team ||

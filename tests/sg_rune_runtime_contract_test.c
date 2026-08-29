@@ -366,6 +366,15 @@ static void TestFieldTacticDomainCompatibility(void)
 	CHECK(!SG_TacticGradientValid(&request.gradient, &request.live));
 }
 
+static sg_belief_life_identity_t Life(uint32_t client_id,
+	uint64_t spawn_generation)
+{
+	return (sg_belief_life_identity_t){
+		.client_id = client_id,
+		.spawn_generation = spawn_generation
+	};
+}
+
 static sg_weapon_effect_query_t WeaponQuery(sg_belief_state_t *target,
 	const sg_weapon_profile_t *profile)
 {
@@ -389,6 +398,7 @@ static sg_weapon_effect_query_t WeaponQuery(sg_belief_state_t *target,
 		.audience_team = 1U,
 		.shooter_team = 1U,
 		.target_team = 2U,
+		.target_life = { .client_id = 3U, .spawn_generation = 30U },
 		.shooter_cell_id = 1U,
 		.target_cell_id = 3U,
 		.rune_identity = 99U,
@@ -419,7 +429,7 @@ static void TestWeaponObservationAndClientBindings(void)
 	sg_belief_state_t target = {
 		.audience_team = 1U,
 		.target_team = 2U,
-		.target_client = 3U,
+		.target_life = { .client_id = 3U, .spawn_generation = 30U },
 		.particle_count = 1U,
 		.particle_capacity = 1U,
 		.generation = 1U,
@@ -493,6 +503,9 @@ static void TestWeaponObservationAndClientBindings(void)
 		&profile));
 	query = WeaponQuery(&target, &profile);
 	CHECK(SG_WeaponEffectQueryValid(&query));
+	query.target_life.spawn_generation++;
+	CHECK(!SG_WeaponEffectQueryValid(&query));
+	query.target_life.spawn_generation--;
 	invalid_affordance = *query.affordance;
 	invalid_affordance.allowed_effects |= UINT32_C(1) << 6;
 	CHECK(!SG_WeaponAffordanceValid(&invalid_affordance));
@@ -513,15 +526,17 @@ static void TestWeaponObservationAndClientBindings(void)
 		teammate_beliefs[index] = target;
 		teammate_beliefs[index].audience_team = query.audience_team;
 		teammate_beliefs[index].target_team = query.shooter_team;
-		teammate_beliefs[index].target_client = (uint16_t)(4U + index);
+		teammate_beliefs[index].target_life = Life(4U + index,
+			40U + index);
 		teammate_beliefs[index].particles = &teammate_particles[index];
 	}
 	query.teammate_beliefs = teammate_beliefs;
 	query.teammate_belief_count = 17U;
 	CHECK(SG_WeaponEffectQueryValid(&query));
-	teammate_beliefs[16].target_client = teammate_beliefs[15].target_client;
+	teammate_beliefs[16].target_life =
+		teammate_beliefs[15].target_life;
 	CHECK(!SG_WeaponEffectQueryValid(&query));
-	teammate_beliefs[16].target_client = 20U;
+	teammate_beliefs[16].target_life = Life(20U, 56U);
 	query.teammate_belief_count = SG_BELIEF_MAX_CLIENTS + 1U;
 	CHECK(!SG_WeaponEffectQueryValid(&query));
 	query.teammate_beliefs = NULL;
@@ -545,7 +560,7 @@ static void TestWeaponObservationAndClientBindings(void)
 	CHECK(!SG_WeaponEffectQueryValid(&query));
 	target.updated_at_ms = 500U;
 	particle.future_time_ms = 500U;
-	target.target_client = query.shooter_client;
+	target.target_life.client_id = query.shooter_client;
 	query.target_client = query.shooter_client;
 	CHECK(!SG_WeaponEffectQueryValid(&query));
 	CHECK(SG_WeaponPrefireShotMatches(&request, &validation));

@@ -212,15 +212,26 @@ static void LargeBeliefFixtureInit(large_belief_fixture_t *fixture)
 	CHECK(SG_RuneRuntimeSnapshotValid(&fixture->snapshot));
 }
 
+static sg_belief_life_identity_t Life(uint32_t client_id,
+	uint64_t spawn_generation)
+{
+	sg_belief_life_identity_t life;
+
+	memset(&life, 0, sizeof(life));
+	life.client_id = client_id;
+	life.spawn_generation = spawn_generation;
+	return life;
+}
+
 static sg_belief_state_config_t Config(uint8_t audience, uint8_t target,
-	uint16_t client)
+	uint32_t client_id)
 {
 	sg_belief_state_config_t config;
 
 	memset(&config, 0, sizeof(config));
 	config.audience_team = audience;
 	config.target_team = target;
-	config.target_client = client;
+	config.target_life = Life(client_id, 30U);
 	config.initialized_at_ms = 100U;
 	config.policy.confidence_decay_ms = 1000U;
 	config.policy.diffusion_fraction = 0.5f;
@@ -253,7 +264,7 @@ static sg_belief_evidence_t Evidence(sg_belief_evidence_source_t source,
 	evidence.provenance.issuer_kind = SG_BELIEF_ISSUER_LOCAL_SENSOR;
 	evidence.provenance.issuer_team = 1U;
 	evidence.provenance.audience_team = 1U;
-	evidence.provenance.issuer_client = 1U;
+	evidence.provenance.issuer_life = Life(1U, 10U);
 	evidence.provenance.evidence_id = sequence + 100U;
 	evidence.provenance.evidence_sequence = sequence;
 	evidence.provenance.authenticated_at_ms = at_ms;
@@ -262,7 +273,7 @@ static sg_belief_evidence_t Evidence(sg_belief_evidence_source_t source,
 	evidence.source = source;
 	evidence.kind = SG_BELIEF_EVIDENCE_POSITIVE;
 	evidence.target_team = 2U;
-	evidence.target_client = 3U;
+	evidence.target_life = Life(3U, 30U);
 	evidence.observed_at_ms = at_ms;
 	evidence.valid_until_ms = at_ms + 100U;
 	evidence.confidence = 1.0f;
@@ -631,7 +642,7 @@ static void TestAllEarnedSourcesAndTeamAuthority(void)
 		if (source == SG_BELIEF_SOURCE_TEAMMATE)
 		{
 			evidence.provenance.issuer_kind = SG_BELIEF_ISSUER_TEAMMATE;
-			evidence.provenance.issuer_client = 7U;
+			evidence.provenance.issuer_life = Life(7U, 20U);
 		}
 		frame = Frame(sequence, state.revision, 99U + sequence,
 			scratch_first, scratch_second, 32U);
@@ -1106,6 +1117,63 @@ static void TestIdentityGenerationAndMotionFailClosed(void)
 	frame.evidence_count = 1U;
 	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
 		SG_BELIEF_REDUCE_REJECTED_INVALID);
+}
+
+static void TestPlayerLifeIdentityRejectsSlotReuse(void)
+{
+	belief_fixture_t fixture;
+	sg_belief_particle_t storage[8];
+	sg_belief_particle_t storage_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_particle_t predicted[8];
+	sg_belief_state_t state;
+	sg_belief_state_t before;
+	sg_belief_state_config_t config = Config(1U, 2U, 3U);
+	sg_belief_evidence_support_t support = Support(0U, 0U, 1.0f);
+	sg_belief_evidence_t evidence = Evidence(SG_BELIEF_SOURCE_SIGHT, 1U,
+		100U, &support, 1U);
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+	sg_belief_prediction_t prediction;
+
+	BeliefFixtureInit(&fixture);
+	config.target_life.spawn_generation = 31U;
+	CHECK(SG_BeliefStateInit(&fixture.snapshot, &state, &config, storage,
+		8U));
+	before = state;
+	memcpy(storage_before, storage, sizeof(storage));
+	frame = Frame(1U, state.revision, 100U, scratch_first, scratch_second, 8U);
+	config.target_life.spawn_generation = 0U;
+	CHECK(!SG_BeliefStateInit(&fixture.snapshot, &state, &config, storage,
+		8U));
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	config.target_life.spawn_generation = 31U;
+	evidence.target_life = Life(3U, 30U);
+	frame.evidence = &evidence;
+	frame.evidence_count = 1U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_AUTHORITY);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	evidence.target_life = config.target_life;
+	evidence.provenance.issuer_life.spawn_generation = 0U;
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_AUTHORITY);
+	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
+	CHECK(memcmp(storage, storage_before, sizeof(storage)) == 0);
+	evidence.provenance.issuer_life = Life(1U, 10U);
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	CHECK(SG_BeliefLifeIdentityEqual(&state.target_life,
+		&config.target_life));
+	CHECK(SG_BeliefLifeIdentityEqual(
+		&state.latest_provenance.issuer_life,
+		&evidence.provenance.issuer_life));
+	CHECK(SG_BeliefPredict(&fixture.snapshot, &state, 100U, predicted, 8U,
+		&prediction));
+	CHECK(SG_BeliefLifeIdentityEqual(&prediction.target_life,
+		&state.target_life));
 }
 
 static void TestHorizonCannotInventConnectivity(void)
@@ -2144,7 +2212,7 @@ static void TestDelayedTeammateEvidenceIsAgedAndPropagated(void)
 	BeliefFixtureInit(&fixture);
 	InitState(&fixture, &state, storage, 8U);
 	evidence.provenance.issuer_kind = SG_BELIEF_ISSUER_TEAMMATE;
-	evidence.provenance.issuer_client = 7U;
+	evidence.provenance.issuer_life = Life(7U, 20U);
 	evidence.provenance.authenticated_at_ms = 150U;
 	evidence.valid_until_ms = 250U;
 	entries[0] = HorizonEntry(0U, 0U, 1U, 0U, 10.0f, 1.0f);
@@ -2455,6 +2523,7 @@ int main(void)
 	TestDirectUncertainEvidenceCannotCollapseToExactAim();
 	TestNegativeVisibilityUsesRegionUnion();
 	TestIdentityGenerationAndMotionFailClosed();
+	TestPlayerLifeIdentityRejectsSlotReuse();
 	TestHorizonCannotInventConnectivity();
 	TestCellContainmentFailsClosed();
 	TestEvidenceAccelerationUsesPhaseAuthority();

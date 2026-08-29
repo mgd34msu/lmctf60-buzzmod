@@ -126,6 +126,17 @@ static void FixtureInit(perception_fixture_t *fixture)
 	CHECK(SG_RuneRuntimeSnapshotValid(&fixture->snapshot));
 }
 
+static sg_belief_life_identity_t Life(uint32_t client_id,
+	uint64_t spawn_generation)
+{
+	sg_belief_life_identity_t life;
+
+	memset(&life, 0, sizeof(life));
+	life.client_id = client_id;
+	life.spawn_generation = spawn_generation;
+	return life;
+}
+
 static sg_perception_authentication_t Authentication(
 	sg_perception_authority_t authority, uint64_t observed_at_ms,
 	uint64_t authenticated_at_ms)
@@ -137,7 +148,7 @@ static sg_perception_authentication_t Authentication(
 	authentication.authority = authority;
 	authentication.issuer_team = 1U;
 	authentication.audience_team = 1U;
-	authentication.issuer_client = 4U;
+	authentication.issuer_life = Life(4U, 40U);
 	authentication.event_id = 1001U;
 	authentication.evidence_sequence = 1U;
 	authentication.observed_at_ms = observed_at_ms;
@@ -177,7 +188,7 @@ static sg_perception_observation_t Observation(sg_perception_source_t source)
 	observation.source = source;
 	observation.evidence_kind = SG_BELIEF_EVIDENCE_POSITIVE;
 	observation.target_team = 2U;
-	observation.target_client = 3U;
+	observation.target_life = Life(3U, 30U);
 	observation.confidence = 0.8f;
 	return observation;
 }
@@ -481,7 +492,7 @@ static void TestDelayedTeammateFeedsReducer(void)
 	memset(&config, 0, sizeof(config));
 	config.audience_team = 1U;
 	config.target_team = 2U;
-	config.target_client = 3U;
+	config.target_life = Life(3U, 30U);
 	config.initialized_at_ms = 100U;
 	config.policy.confidence_decay_ms = 1000U;
 	config.policy.diffusion_fraction = 0.5f;
@@ -501,6 +512,78 @@ static void TestDelayedTeammateFeedsReducer(void)
 		SG_BELIEF_REDUCE_APPLIED);
 	CHECK(state.particle_count == 2U);
 	CHECK(fabsf(state.confidence - 0.8f * expf(-0.1f)) < 0.0001f);
+}
+
+static void TestPlayerLifeIdentitySurvivesAdaptation(void)
+{
+	perception_fixture_t fixture;
+	sg_perception_observation_t observation =
+		Observation(SG_PERCEPTION_SOURCE_SIGHT);
+	sg_belief_evidence_support_t support_storage[2];
+	sg_perception_adaptation_t adaptation;
+	sg_belief_particle_t particles[8];
+	sg_belief_particle_t particles_before[8];
+	sg_belief_particle_t scratch_first[8];
+	sg_belief_particle_t scratch_second[8];
+	sg_belief_state_t state;
+	sg_belief_state_t state_before;
+	sg_belief_state_config_t config;
+	sg_belief_frame_t frame;
+	sg_belief_reduction_t reduction;
+
+	FixtureInit(&fixture);
+	observation.data.sight.in_pvs = 1U;
+	observation.data.sight.line_of_sight_proved = 1U;
+	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
+		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f, 1.0f);
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		support_storage, 2U, &adaptation) == SG_PERCEPTION_ADAPT_APPLIED);
+	CHECK(SG_BeliefLifeIdentityEqual(&adaptation.evidence.target_life,
+		&observation.target_life));
+	CHECK(SG_BeliefLifeIdentityEqual(
+		&adaptation.evidence.provenance.issuer_life,
+		&observation.authentication.issuer_life));
+
+	memset(&config, 0, sizeof(config));
+	config.audience_team = 1U;
+	config.target_team = 2U;
+	config.target_life = Life(3U, 31U);
+	config.initialized_at_ms = 100U;
+	config.policy.confidence_decay_ms = 1000U;
+	config.policy.diffusion_fraction = 0.5f;
+	config.policy.spread_growth_per_ms = 0.01f;
+	CHECK(SG_BeliefStateInit(&fixture.snapshot, &state, &config, particles,
+		8U));
+	memset(&frame, 0, sizeof(frame));
+	frame.sequence = 1U;
+	frame.expected_revision = state.revision;
+	frame.expected_generation = state.generation;
+	frame.at_ms = 100U;
+	frame.evidence = &adaptation.evidence;
+	frame.evidence_count = 1U;
+	frame.scratch_first = scratch_first;
+	frame.scratch_second = scratch_second;
+	frame.scratch_capacity = 8U;
+	state_before = state;
+	memcpy(particles_before, particles, sizeof(particles));
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_REJECTED_AUTHORITY);
+	CHECK(memcmp(&state, &state_before, sizeof(state)) == 0);
+	CHECK(memcmp(particles, particles_before, sizeof(particles)) == 0);
+
+	observation.target_life = config.target_life;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		support_storage, 2U, &adaptation) == SG_PERCEPTION_ADAPT_APPLIED);
+	CHECK(SG_BeliefReduce(&fixture.snapshot, &state, &frame, &reduction) ==
+		SG_BELIEF_REDUCE_APPLIED);
+	observation.authentication.issuer_life.spawn_generation = 0U;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		support_storage, 2U, &adaptation) ==
+		SG_PERCEPTION_ADAPT_REJECTED_AUTHORITY);
+	observation.authentication.issuer_life.spawn_generation = 40U;
+	observation.target_life.spawn_generation = 0U;
+	CHECK(SG_PerceptionEvidenceAdapt(&fixture.snapshot, &observation,
+		support_storage, 2U, &adaptation) == SG_PERCEPTION_ADAPT_REJECTED_INVALID);
 }
 
 static void TestTeammateStaticLocationLaundering(void)
@@ -903,8 +986,8 @@ static void FillPoisonedSight(sg_perception_observation_t *observation,
 	observation->source = SG_PERCEPTION_SOURCE_SIGHT;
 	observation->evidence_kind = SG_BELIEF_EVIDENCE_POSITIVE;
 	observation->target_team = 2U;
-	observation->target_client = 3U;
-	observation->reserved = 0U;
+	observation->target_life = Life(3U, 30U);
+	memset(observation->reserved, 0, sizeof(observation->reserved));
 	observation->confidence = 0.8f;
 	observation->data.sight.in_pvs = 1U;
 	observation->data.sight.line_of_sight_proved = 1U;
@@ -1018,6 +1101,7 @@ int main(void)
 	TestSoundDamageShapePermutationInvariant();
 	TestItemAndFlagStaticRuneLocations();
 	TestDelayedTeammateFeedsReducer();
+	TestPlayerLifeIdentitySurvivesAdaptation();
 	TestTeammateStaticLocationLaundering();
 	TestAliasAndRangeRejection();
 	TestNestedHypothesisSpanAliasing();
