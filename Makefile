@@ -441,9 +441,16 @@ HUMAN_TRACE_TESTS := tests/test_humantrace.py \
 	tests/test_human_trace_integration.py \
 	tests/test_human_trace_v3_integration.py
 HUMAN_TRACE_HOOK_TEST_BIN := sg_human_trace_hook_test.make
+HUMAN_TRACE_IO_TEST_BIN := sg_human_trace_io_test.make
 HUMAN_TRACE_HOOK_TEST_SOURCE := tests/sg_human_trace_hook_test.c
 HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS := \
-	sg_human_trace_hook_test.gnu sg_human_trace_hook_test.make
+	sg_human_trace_hook_test.gnu sg_human_trace_hook_test.make \
+	sg_human_trace_io_test.make
+HUMAN_TRACE_LEARNING_TEST_BIN := sg_human_trace_learning_test.make
+HUMAN_TRACE_LEARNING_INTEGRATION_TEST := \
+	tests/test_human_trace_learning_integration.py
+HUMAN_TRACE_LEARNING_TEST_ALL_ARTIFACTS := \
+	sg_human_trace_learning_test.gnu sg_human_trace_learning_test.make
 HUMAN_SPEED_TEST_ALL_ARTIFACTS := \
 	sg_human_speed_test.gnu sg_human_speed_test.make \
 	.sg_human_speed_test.gnu.o .sg_human_speed_test.gnu.d \
@@ -1207,6 +1214,11 @@ OBJS := \
 	slipgate/sg_rune_binding.o \
 	slipgate/sg_rune_learning.o \
 	slipgate/sg_rune_learning_game.o \
+	slipgate/sg_human_trace_learning_contract.o \
+	slipgate/sg_human_trace_learning.o \
+	slipgate/sg_human_trace_learning_game.o \
+	slipgate/sg_human_trace_learning_consumer.o \
+	slipgate/sg_human_trace_learning_host_game.o \
 	slipgate/sg_rune_authority_game.o \
 	slipgate/sg_rune_update_source.o \
 	slipgate/sg_water_forest.o \
@@ -1394,7 +1406,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	deslop-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
 	danger-lease-test danger-policy-test danger-test fields-candidate-test \
-	spectator-sound-test human-speed-test defense-shift-test \
+	spectator-sound-test human-speed-test human-trace-learning-test defense-shift-test \
 	door-approach-test \
 	item-commitment-test hook-diagnostics-test \
 	run-handoff-test \
@@ -1732,12 +1744,35 @@ $(HUMAN_SPEED_TEST_BIN): $(HUMAN_SPEED_TEST_OBJS)
 
 $(HUMAN_TRACE_HOOK_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
 		slipgate/sg_human_trace.c \
+		slipgate/sg_human_trace_learning_contract.c \
+		slipgate/sg_human_trace_learning.c \
+		slipgate/sg_human_trace_learning_game.c \
+		slipgate/sg_human_trace_learning_consumer.c \
+		slipgate/sg_human_trace_learning_host_game.c \
 		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_model.c \
 		slipgate/sg_rune_v2_content_identity.h \
 		slipgate/sg_rune_v2_wire.h
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
-		-DSG_HUMAN_TRACE_WRAP_FWRITE \
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_LEARNING_TEST \
+		-o $@ $(filter %.c,$^) $(LIBS) -Wl,--wrap=fwrite
+
+$(HUMAN_TRACE_IO_TEST_BIN): $(HUMAN_TRACE_HOOK_TEST_SOURCE) \
+		slipgate/sg_human_trace.c \
+		slipgate/sg_human_trace_learning_contract.c \
+		slipgate/sg_human_trace_learning.c \
+		slipgate/sg_human_trace_learning_game.c \
+		slipgate/sg_human_trace_learning_consumer.c \
+		slipgate/sg_human_trace_learning_host_game.c \
+		slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_model.c \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_wire.h
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
+		-DSG_HUMAN_TRACE_SEGMENT_BYTES=4096U \
+		-DSG_HUMAN_TRACE_WRAP_FWRITE -DSG_HUMAN_TRACE_LEARNING_TEST \
 		-o $@ $(filter %.c,$^) $(LIBS) -Wl,--wrap=fwrite
 
 $(DOOR_APPROACH_TEST_BIN): $(DOOR_APPROACH_TEST_OBJS)
@@ -4059,7 +4094,13 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	$(CC) $$strict -Wcast-align -I. -c \
 		slipgate/sg_rune_dynamics_geometry.c -o "$$tmp/geometry.o"; \
 	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
+		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_human_trace_learning_contract.c \
+		-o "$$tmp/human-trace-learning-contract.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_human_trace_learning_consumer.c \
+		-o "$$tmp/human-trace-learning-consumer.o"
 
 ground-capability-publication-test: \
 		tests/run_sg_ground_capability_publication_test.sh \
@@ -4516,7 +4557,8 @@ human-speed-test: $(HUMAN_SPEED_TEST_BIN) $(HUMAN_SPEED_INTEGRATION_TEST)
 	$(Q)./$(HUMAN_SPEED_TEST_BIN)
 	$(Q)python3 -B $(HUMAN_SPEED_INTEGRATION_TEST)
 
-human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN)
+human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN) \
+		$(HUMAN_TRACE_IO_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)SG_HUMAN_TRACE_TEST_BINARY=$(HUMAN_TRACE_HOOK_TEST_BIN) \
 		python3 -B -m unittest tests.test_humantrace \
@@ -4527,6 +4569,20 @@ human-trace-test: $(HUMAN_TRACE_TESTS) $(HUMAN_TRACE_HOOK_TEST_BIN)
 			EXIT HUP INT TERM; \
 		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp"; \
 		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp" writefail
+
+human-trace-learning-test: $(HUMAN_TRACE_LEARNING_INTEGRATION_TEST)
+	$(E) [TEST] human trace learning
+	$(Q)$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic \
+		-DSG_HUMAN_TRACE_LEARNING_TEST -I. \
+		-o $(HUMAN_TRACE_LEARNING_TEST_BIN) \
+		tests/sg_human_trace_learning_test.c \
+		slipgate/sg_human_trace_learning_contract.c \
+		slipgate/sg_human_trace_learning.c \
+		slipgate/sg_human_trace_learning_game.c \
+		slipgate/sg_human_trace_learning_consumer.c \
+		slipgate/sg_rune_model.c -lm
+	$(Q)./$(HUMAN_TRACE_LEARNING_TEST_BIN)
+	$(Q)python3 -B $(HUMAN_TRACE_LEARNING_INTEGRATION_TEST)
 
 door-approach-test: $(DOOR_APPROACH_TEST_BIN)
 	$(E) [TEST] $<
@@ -4765,6 +4821,7 @@ clean:
 		$(SPECTATOR_SOUND_TEST_ALL_ARTIFACTS) \
 		$(HUMAN_SPEED_TEST_ALL_ARTIFACTS) \
 		$(HUMAN_TRACE_HOOK_TEST_ALL_ARTIFACTS) \
+		$(HUMAN_TRACE_LEARNING_TEST_ALL_ARTIFACTS) \
 		$(DOOR_APPROACH_TEST_ALL_ARTIFACTS) \
 		$(DEFENSE_SHIFT_TEST_ALL_ARTIFACTS) \
 		$(DEFENSE_SUPPLY_TEST_ALL_ARTIFACTS) \

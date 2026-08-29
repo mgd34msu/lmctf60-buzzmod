@@ -24,7 +24,6 @@ except ModuleNotFoundError:
 
 RLEARN_FORMAT = 2
 MAX_CANDIDATES = 4096
-MAX_HOOK_EVENTS = 16384
 MAX_HOOK_CANDIDATES = 512
 MAX_HOOKS_PER_PAIR = 8
 MAX_REPLAY_BYTES = 64 * 1024 * 1024
@@ -291,8 +290,6 @@ def _validate_replay(rune: Any, source_sha256: str,
         raw_events = replay.get("hook_events")
         if not isinstance(raw_events, list):
             raise ValueError("replay hook events are missing")
-        if len(raw_events) > MAX_HOOK_EVENTS:
-            raise ValueError("replay hook event capacity exceeded")
         start_hook_event = humantrace.integer(
             binding.get("start_hook_event"), "binding start_hook_event",
             1, 2**63 - 1)

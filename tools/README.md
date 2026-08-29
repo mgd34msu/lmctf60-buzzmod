@@ -147,40 +147,29 @@ how the tools fit together and which artifacts they own.
     --output /absolute/path/to/traces/lmctf01.replay.json
   ```
 
-  Omit the frame options to import the full session. The importer validates and
-  preserves the captured map, BSP, entity, physics, and module identity. It
-  also starts a new replay segment when the authoritative state changes
-  between commands. Such a change can identify a pusher, teleporter, grapple
-  update, or other server-frame effect that a Pmove-only replay must model
-  explicitly.
+  Omit the frame options to import the full session. From any selected v3
+  segment, the importer discovers its deterministic siblings, requires one
+  zero-rooted chain through the terminal `end`, and verifies each exact
+  SHA-256 record before it emits authenticated evidence. It preserves the
+  captured map, BSP, entity,
+  physics, and module identity. It also starts a new replay segment when the
+  authoritative state changes between commands. Such a change can identify a
+  pusher, teleporter, grapple update, or other server-frame effect that a
+  Pmove-only replay must model explicitly.
 
-  Legacy traces captured before runtime RUNE binding can be recovered without
-  weakening normal imports. Recovery requires an unbound replay, a
-  `local_only` RUNE, and exact map, BSP, entity, and physics identity:
+  V3 evidence also contains terminal-bound, source-only learning observations:
+  grounded landing steps and completed hook lifecycles carry their exact client,
+  spawn generation, frame, and order ranges. They deliberately name no RUNE
+  region or kernel. The production host resolves only those static references
+  through the exact published runtime before it constructs a parameter batch.
 
-  ```sh
-  python3 tools/runelearn.py recover \
-    --rune /absolute/path/to/maps/lmctf01.rune \
-    --replay /absolute/path/to/traces/lmctf01.replay.json \
-    --output /absolute/path/to/traces/lmctf01.recovered.json
-  ```
-
-  The recovered binding is marked `posthoc-identity-exact`. It only permits
-  route nomination; the in-engine oracle must still reproduce every edge.
-
-  To nominate both dry runs and legacy hook pulls from that recovered v1
-  replay, build one source-bound learning artifact:
-
-  ```sh
-  python3 tools/runelearn.py legacy-combined-build \
-    --rune /absolute/path/to/maps/lmctf01.rune \
-    --replay /absolute/path/to/traces/lmctf01.recovered.json \
-    --output /absolute/path/to/maps/lmctf01.rlearn
-  ```
-
-  This command validates the replay and its post-hoc binding once, then writes
-  deterministic dry and hook sections for one update. `legacy-build` remains
-  the hook-only form.
+  Imported human-trace evidence is diagnostic input only. It cannot bind to a
+  RUNE, nominate a route, repair connectivity, or alter player movement or
+  hook behavior. The host derives post-match parameter batches only after the
+  live terminal trace and published runtime snapshot agree on the exact level
+  identity; absent or mismatched model publication leaves the authenticated
+  durable spool pending across level resets and process restarts until a
+  matching runtime publishes and consumes it atomically.
 
 `gamestat.sh`, `rolestat.py`
 

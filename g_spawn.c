@@ -6,6 +6,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_human_trace.h"
+#include "slipgate/sg_human_trace_learning_host_game.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
 #include "g_tourney.h"
@@ -971,6 +972,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	 * cannot create a client that the deferred time-rewind detector orphans. */
 	SG_LevelChange ();
 
+	SG_HumanTraceLearningHostGameReset();
 	SG_HumanTraceNewLevel ();
 	SG_NetNewLevel ();
 

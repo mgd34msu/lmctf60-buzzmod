@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,13 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_human_trace.h"
 #include "slipgate/sg_identity.h"
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+#include "slipgate/sg_human_trace_learning_spool_private.h"
+#include "slipgate/sg_human_trace_learning_consumer.h"
+#include "slipgate/sg_human_trace_learning_game_test.h"
+#include "slipgate/sg_human_trace_learning_host_game.h"
+#include "slipgate/sg_human_trace_learning_host_game_test.h"
+#endif
 
 game_locals_t game;
 level_locals_t level;
@@ -35,6 +43,8 @@ cvar_t *sv_maxvelocity = &maxvelocity;
 cvar_t *want_funky_gravity = &funky_gravity;
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
 static int inject_write_failure;
+static unsigned inject_write_failure_after;
+static unsigned inject_receipt_write_failure;
 
 size_t __real_fwrite(const void *pointer, size_t size, size_t count,
 	FILE *stream);
@@ -42,8 +52,18 @@ size_t __real_fwrite(const void *pointer, size_t size, size_t count,
 size_t __wrap_fwrite(const void *pointer, size_t size, size_t count,
 	FILE *stream)
 {
+	if (inject_receipt_write_failure && size == 1U && count > 64U)
+	{
+		inject_receipt_write_failure--;
+		return __real_fwrite(pointer, size, count / 2U, stream);
+	}
 	if (inject_write_failure && size && count)
 	{
+		if (inject_write_failure_after != 0U)
+		{
+			inject_write_failure_after--;
+			return __real_fwrite(pointer, size, count, stream);
+		}
 		size_t partial = count / 2U;
 
 		inject_write_failure = 0;
@@ -55,6 +75,15 @@ size_t __wrap_fwrite(const void *pointer, size_t size, size_t count,
 #endif
 
 edict_t *g_edicts = entities;
+
+static void SetupPlayer(edict_t *player, gclient_t *client,
+	unsigned long generation);
+static void SetupPmove(pmove_state_t *before, pmove_t *after);
+static void CaptureCompleteTraversalFrames(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame,
+	int landing_frame);
+static void CaptureCompleteTraversal(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame);
 
 static cvar_t *TestCvar(char *name, char *value, int flags)
 {
@@ -99,6 +128,42 @@ static int TracePath(char *path, size_t size, const char *directory,
 		directory, segment) < (int)size;
 }
 
+static int LearningSpoolPath(char *path, size_t size, const char *directory,
+	unsigned segment)
+{
+	return snprintf(path, size,
+		"%s/humantrace-tracehook-00000065-000000ca-%06u.learning",
+		directory, segment) < (int)size;
+}
+
+static int LearningReceiptPath(char *path, size_t size,
+	const sg_human_trace_v3_spool_ref_t *spool, uint32_t client_id,
+	uint64_t spawn_generation)
+{
+	static const char digits[] = "0123456789abcdef";
+	const char *separator;
+	char terminal[65];
+	unsigned index;
+	int written;
+
+	if (!path || !spool || client_id == 0U || spawn_generation == 0U ||
+		!(separator = strrchr(spool->path, '/')) || separator == spool->path)
+		return 0;
+	for (index = 0U; index < SG_HUMAN_TRACE_SHA256_BYTES; index++)
+	{
+		terminal[index * 2U] = digits[
+			spool->completion.terminal_sha256[index] >> 4];
+		terminal[index * 2U + 1U] = digits[
+			spool->completion.terminal_sha256[index] & 15U];
+	}
+	terminal[64] = '\0';
+	written = snprintf(path, size,
+		"%.*s/humantrace-learning-ack-%s-%" PRIu32 "-%" PRIu64 ".ack",
+		(int)(separator - spool->path), spool->path, terminal, client_id,
+		spawn_generation);
+	return written >= 0 && (size_t)written < size;
+}
+
 static int CountRecords(const char *path, const char *kind)
 {
 	FILE *file = fopen(path, "rb");
@@ -140,6 +205,783 @@ static int AppendPartial(const char *path)
 		sizeof(partial) - 1U && fclose(file) == 0;
 	return ok;
 }
+
+static int AppendSpoolPartial(const char *path)
+{
+	FILE *file = fopen(path, "ab");
+	const unsigned char byte = 0xa5U;
+	int ok;
+
+	if (!file)
+		return 0;
+	ok = fwrite(&byte, 1U, 1U, file) == 1U && fclose(file) == 0;
+	return ok;
+}
+
+static int FlipSpoolByte(const char *path)
+{
+	FILE *file = fopen(path, "r+b");
+	int value;
+	int ok;
+
+	if (!file || fseek(file, 80L, SEEK_SET) != 0)
+	{
+		if (file)
+			fclose(file);
+		return 0;
+	}
+	value = fgetc(file);
+	if (value == EOF || fseek(file, 80L, SEEK_SET) != 0)
+	{
+		fclose(file);
+		return 0;
+	}
+	if (fputc(value ^ 1, file) == EOF || fflush(file) != 0)
+	{
+		fclose(file);
+		return 0;
+	}
+	ok = fclose(file) == 0;
+	return ok;
+}
+
+static int TraceIdentity(sg_level_identity_t *identity)
+{
+	if (!identity)
+		return 0;
+	memset(identity, 0, sizeof(*identity));
+	identity->bsp_checksum = 101U;
+	identity->entity_crc32 = 202U;
+	identity->host_physics_id = 1U;
+	strcpy(identity->mapname, "tracehook");
+	return 1;
+}
+
+typedef struct spool_scan_s
+{
+	sg_human_trace_v3_spool_ref_t first;
+	uint32_t previous_root;
+	uint64_t count;
+	uint8_t have_previous;
+	uint8_t valid_order;
+} spool_scan_t;
+
+typedef struct spool_event_count_s
+{
+	uint64_t count;
+} spool_event_count_t;
+
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+typedef struct accepted_receipt_test_s
+{
+	const sg_human_trace_v3_spool_ref_t *target;
+	uint32_t client_id;
+	uint64_t spawn_generation;
+	uint8_t target_root;
+	uint8_t found;
+	uint8_t mark;
+	uint8_t consumed;
+} accepted_receipt_test_t;
+#endif
+
+static int ScanSpool(void *opaque, const sg_human_trace_v3_spool_ref_t *spool)
+{
+	spool_scan_t *scan = opaque;
+
+	if (!scan || !spool)
+		return 0;
+	if (!scan->have_previous)
+		scan->first = *spool;
+	else if (spool->root_segment <= scan->previous_root)
+		scan->valid_order = 0U;
+	if (spool->completion.session != spool->root_segment)
+		scan->valid_order = 0U;
+	scan->previous_root = spool->root_segment;
+	scan->have_previous = 1U;
+	scan->count++;
+	return 1;
+}
+
+static int CountStoredSpoolEvent(void *opaque,
+	const sg_human_trace_v3_event_t *event)
+{
+	spool_event_count_t *count = opaque;
+
+	if (!count || !event)
+		return 0;
+	count->count++;
+	return 1;
+}
+
+static int ScanCollectionEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_event_t *event)
+{
+	return opaque && scope && event;
+}
+
+static int ScanCollectionFinish(void *opaque)
+{
+	return opaque != NULL;
+}
+
+typedef struct stored_event_visit_s
+{
+	const sg_human_trace_v3_spool_ref_t *target;
+	sg_human_trace_v3_event_visitor_fn visitor;
+	void *context;
+	uint8_t selected;
+} stored_event_visit_t;
+
+static int StoredEventBegin(void *opaque,
+	const sg_human_trace_v3_spool_ref_t *spool)
+{
+	stored_event_visit_t *visit = opaque;
+
+	if (!visit || !visit->target || !spool)
+		return 0;
+	visit->selected = spool->root_segment == visit->target->root_segment &&
+		strcmp(spool->path, visit->target->path) == 0;
+	return 1;
+}
+
+static int StoredEventVisit(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	const sg_human_trace_v3_event_t *event)
+{
+	stored_event_visit_t *visit = opaque;
+
+	return visit && scope && event && (!visit->selected ||
+		visit->visitor(visit->context, event));
+}
+
+static int StoredEventFinish(void *opaque)
+{
+	return opaque != NULL;
+}
+
+static int VisitStoredSpoolEvents(const sg_human_trace_v3_spool_ref_t *spool,
+	sg_human_trace_v3_event_visitor_fn visitor, void *context)
+{
+	stored_event_visit_t visit;
+	sg_human_trace_v3_collection_visitor_t collection;
+	sg_level_identity_t identity;
+
+	if (!spool || !visitor || !TraceIdentity(&identity))
+		return 0;
+	memset(&visit, 0, sizeof(visit));
+	memset(&collection, 0, sizeof(collection));
+	visit.target = spool;
+	visit.visitor = visitor;
+	visit.context = context;
+	collection.begin_root = StoredEventBegin;
+	collection.event = StoredEventVisit;
+	collection.finish_root = StoredEventFinish;
+	return SG_HumanTraceVisitAcceptedV3Collection(&identity, &collection,
+		&visit);
+}
+
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+static int AcceptedReceiptBegin(void *opaque,
+	const sg_human_trace_v3_spool_ref_t *spool)
+{
+	accepted_receipt_test_t *test = opaque;
+
+	if (!test || !test->target || !spool)
+		return 0;
+	test->target_root = spool->root_segment == test->target->root_segment &&
+		strcmp(spool->path, test->target->path) == 0;
+	return 1;
+}
+
+static int AcceptedReceiptEvent(void *opaque,
+	const sg_human_trace_v3_scope_acceptance_t *acceptance,
+	const sg_human_trace_v3_event_t *event)
+{
+	accepted_receipt_test_t *test = opaque;
+	const sg_human_trace_v3_spool_ref_t *spool;
+	uint32_t client_id;
+	uint64_t spawn_generation;
+
+	if (!test || !acceptance || !event || !SG_HumanTraceAcceptedV3ScopeView(
+		acceptance, &spool, &client_id, &spawn_generation))
+		return 0;
+	if (!test->target_root || test->found || spool->root_segment !=
+		test->target->root_segment || client_id != test->client_id ||
+		spawn_generation != test->spawn_generation)
+		return 1;
+	test->found = 1U;
+	if (test->mark && !SG_HumanTraceMarkAcceptedV3ScopeConsumed(acceptance))
+		return 0;
+	test->consumed = SG_HumanTraceAcceptedV3ScopeConsumed(acceptance) ? 1U : 0U;
+	return 1;
+}
+
+static int AcceptedReceiptFinish(void *opaque)
+{
+	accepted_receipt_test_t *test = opaque;
+
+	return test != NULL;
+}
+
+static int AcceptedReceiptState(const sg_human_trace_v3_spool_ref_t *spool,
+	uint32_t client_id, uint64_t spawn_generation, int mark,
+	int *consumed_out)
+{
+	accepted_receipt_test_t test;
+	sg_human_trace_v3_collection_visitor_t visitor;
+	sg_level_identity_t identity;
+
+	if (!spool || !consumed_out || !TraceIdentity(&identity))
+		return 0;
+	memset(&test, 0, sizeof(test));
+	memset(&visitor, 0, sizeof(visitor));
+	test.target = spool;
+	test.client_id = client_id;
+	test.spawn_generation = spawn_generation;
+	test.mark = mark ? 1U : 0U;
+	visitor.begin_root = AcceptedReceiptBegin;
+	visitor.event = AcceptedReceiptEvent;
+	visitor.finish_root = AcceptedReceiptFinish;
+	if (!SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, &test) ||
+		!test.found)
+		return 0;
+	*consumed_out = test.consumed != 0U;
+	return 1;
+}
+#endif
+
+static int ScanCompletedSpools(spool_scan_t *scan)
+{
+	sg_level_identity_t identity;
+	sg_human_trace_v3_collection_visitor_t visitor;
+
+	if (!scan || !TraceIdentity(&identity))
+		return 0;
+	memset(scan, 0, sizeof(*scan));
+	memset(&visitor, 0, sizeof(visitor));
+	scan->valid_order = 1U;
+	visitor.begin_root = ScanSpool;
+	visitor.event = ScanCollectionEvent;
+	visitor.finish_root = ScanCollectionFinish;
+	return SG_HumanTraceVisitAcceptedV3Collection(&identity, &visitor, scan);
+}
+
+static void RemoveTraceArtifact(const char *directory, unsigned segment)
+{
+	char path[1024];
+
+	if (TracePath(path, sizeof(path), directory, segment))
+		remove(path);
+	if (LearningSpoolPath(path, sizeof(path), directory, segment))
+		remove(path);
+}
+
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+
+typedef struct learning_host_fixture_s
+{
+	sg_rune_cell_t cells[1];
+	sg_rune_phase_basis_t phases[1];
+	sg_rune_capability_kernel_t kernels[1];
+	sg_phase_coordinate_t coordinates[1];
+	sg_rune_model_t model;
+	sg_rune_runtime_snapshot_t snapshot;
+	sg_human_trace_learning_kernel_key_t keys[1];
+	uint64_t costs[1];
+	uint64_t workspace_costs[1];
+	sg_human_trace_learning_parameters_t parameters;
+	sg_human_trace_learning_workspace_t workspace;
+	sg_human_trace_learning_playthrough_t playthroughs[3];
+	sg_human_trace_learning_runtime_t runtime;
+} learning_host_fixture_t;
+
+static sg_rune_stable_id_t LearningHostStableId(uint32_t domain,
+	uint32_t ordinal)
+{
+	sg_rune_order_key_t order = {
+		UINT64_C(0x4c4541524e494e47), domain, 7U, ordinal, 0U
+	};
+
+	return SG_RuneModelStableIdFromOrderKey(&order);
+}
+
+static int LearningHostFixtureInit(learning_host_fixture_t *fixture)
+{
+	sg_human_trace_learning_domain_t domain;
+	sg_human_trace_learning_storage_t storage;
+
+	if (!fixture)
+		return 0;
+	memset(fixture, 0, sizeof(*fixture));
+	fixture->kernels[0].id.value = LearningHostStableId(SG_RUNE_ORDER_KERNEL,
+		0U);
+	fixture->kernels[0].family = SG_RUNE_CAPABILITY_HOOK_TRAJECTORY;
+	fixture->keys[0].kernel = fixture->kernels[0].id;
+	fixture->keys[0].control.value = LearningHostStableId(
+		SG_RUNE_ORDER_CONTROL_FIBER, 0U);
+	fixture->model = (sg_rune_model_t){
+		.version = SG_RUNE_MODEL_VERSION,
+		.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG,
+		.flags = SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
+			SG_RUNE_MODEL_NO_RUNTIME_ACTORS,
+		.identity = {
+			.bsp_content_id = UINT64_C(101),
+			.physics_abi_id = UINT64_C(202)
+		},
+		.completeness = { .state = SG_RUNE_COMPLETENESS_COMPLETE },
+		.cells = fixture->cells,
+		.cell_count = 1U,
+		.phases = fixture->phases,
+		.phase_count = 1U,
+		.kernels = fixture->kernels,
+		.kernel_count = 1U
+	};
+	fixture->coordinates[0] = (sg_phase_coordinate_t){ 0U, 0U };
+	fixture->snapshot = (sg_rune_runtime_snapshot_t){
+		.identity = UINT64_C(303),
+		.topology_revision = UINT64_C(404),
+		.cell_count = 1U,
+		.phase_count = 1U,
+		.region_count = 1U,
+		.model = &fixture->model,
+		.phases = fixture->coordinates
+	};
+	domain = (sg_human_trace_learning_domain_t){
+		.identity = {
+			.rune_identity = fixture->snapshot.identity,
+			.topology_revision = fixture->snapshot.topology_revision,
+			.bsp_identity = fixture->model.identity.bsp_content_id,
+			.physics_identity = fixture->model.identity.physics_abi_id
+		},
+		.snapshot = &fixture->snapshot,
+		.kernel_keys = fixture->keys,
+		.kernel_key_count = 1U
+	};
+	storage = (sg_human_trace_learning_storage_t){
+		.effective_cost_us = fixture->costs,
+		.effective_cost_capacity = 1U
+	};
+	fixture->workspace = (sg_human_trace_learning_workspace_t){
+		.effective_cost_us = fixture->workspace_costs,
+		.effective_cost_capacity = 1U
+	};
+	return SG_RuneRuntimeSnapshotValid(&fixture->snapshot) &&
+		SG_HumanTraceLearningParametersInit(&fixture->parameters, &domain,
+			&storage) && SG_HumanTraceLearningTestRuntimeInit(&fixture->runtime,
+			&fixture->parameters, &fixture->workspace, fixture->playthroughs,
+			1U, 1U);
+}
+
+static int LearningHostLocateKernel(void *context,
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_human_trace_v3_event_t *fire,
+	const sg_human_trace_v3_event_t *attach,
+	sg_human_trace_learning_kernel_key_t *key_out)
+{
+	learning_host_fixture_t *fixture = context;
+
+	if (!fixture || snapshot != &fixture->snapshot || !fire || !attach ||
+		!key_out || fire->kind != SG_HUMAN_TRACE_V3_EVENT_HOOK_FIRE ||
+		attach->kind != SG_HUMAN_TRACE_V3_EVENT_HOOK_ATTACH ||
+		fire->client_id != attach->client_id ||
+		fire->spawn_generation != attach->spawn_generation ||
+		fire->order >= attach->order)
+		return 0;
+	*key_out = fixture->keys[0];
+	return 1;
+}
+
+static void LearningHostPublishedFixture(learning_host_fixture_t *fixture,
+	sg_human_trace_learning_test_published_runtime_t *published)
+{
+	memset(published, 0, sizeof(*published));
+	published->runtime = &fixture->runtime;
+	published->snapshot = &fixture->snapshot;
+	published->level_identity.bsp_checksum = 101U;
+	published->level_identity.entity_crc32 = 202U;
+	published->level_identity.host_physics_id = 1U;
+	strcpy(published->level_identity.mapname, "tracehook");
+	published->evidence_context = fixture;
+	published->locate_hook_kernel = LearningHostLocateKernel;
+}
+
+static int RunLearningHostSequentialRoots(void)
+{
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t report;
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	unsigned root;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 95;
+	LearningHostPublishedFixture(&fixture, &published);
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, &report))
+		return 96;
+	SetupPmove(&before, &after);
+	for (root = 0U; root < 3U; root++)
+	{
+		SetupPlayer(player, &clients[0], (unsigned long)(11U + root));
+		SG_HumanTraceNewLevel();
+		CaptureCompleteTraversalFrames(player, hook, &before, &after,
+			(int)(1U + root * 8U), (int)(4U + root * 9U));
+		SG_HumanTraceMatchEnd();
+		memset(&report, 0, sizeof(report));
+		SG_HumanTraceLearningHostGamePostMatch(&report);
+		if (!report.trace_authenticated || !report.runtime_published ||
+			report.committed_batches != 1U || report.rejected_batches != 0U ||
+			fixture.playthroughs[0].used != 0U ||
+			fixture.parameters.generation != (uint64_t)(2U + root) ||
+			fixture.costs[0] != (uint64_t)(300000U + root * 100000U))
+			return 97;
+	}
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return 0;
+}
+
+#ifdef SG_HUMAN_TRACE_WRAP_FWRITE
+static int RunLearningHostReceiptFailure(void)
+{
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t first;
+	sg_human_trace_learning_host_report_t retry;
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	uint64_t generation;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 98;
+	LearningHostPublishedFixture(&fixture, &published);
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
+		return 99;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	CaptureCompleteTraversal(player, hook, &before, &after, 1);
+	SG_HumanTraceMatchEnd();
+	/* The terminal-bound receipt tears after the parameter commit. The exact
+	 * scope cursor must remain available for recovery. */
+	inject_receipt_write_failure = 1U;
+	SG_HumanTraceLearningHostGamePostMatch(&first);
+	if (!first.trace_authenticated || first.committed_batches != 1U ||
+		first.rejected_batches != 0U || fixture.parameters.generation != 2U ||
+		fixture.playthroughs[0].used != 1U)
+		return 100;
+	generation = fixture.parameters.generation;
+	/* Queue the next root before retry. One discovery pass must repair root
+	 * zero's receipt, release the only cursor, and commit root one with it. */
+	SetupPlayer(player, &clients[0], 12UL);
+	SG_HumanTraceNewLevel();
+	CaptureCompleteTraversalFrames(player, hook, &before, &after, 9, 13);
+	SG_HumanTraceMatchEnd();
+	SG_HumanTraceLearningHostGameReset();
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, &retry) ||
+		retry.committed_batches != 1U || retry.rejected_batches != 0U ||
+		fixture.parameters.generation != generation + 1U ||
+		fixture.costs[0] != UINT64_C(400000) ||
+		fixture.playthroughs[0].used != 0U)
+		return 101;
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return 0;
+}
+
+static int RunLearningHostFirstOccurrenceOrder(void)
+{
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t report;
+	edict_t *first = &entities[1];
+	edict_t *second = &entities[2];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 116;
+	fixture.runtime.playthrough_capacity = 3U;
+	LearningHostPublishedFixture(&fixture, &published);
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
+		return 117;
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	SetupPlayer(first, &clients[0], 11UL);
+	memset(hook, 0, sizeof(*hook));
+	hook->inuse = true;
+	hook->owner = first;
+	hook->hook_target = &entities[0];
+	first->client->hook = hook;
+	after.groundentity = NULL;
+	level.framenum = 1;
+	SG_HumanTracePmove(first, &before, &after);
+	SG_HumanTraceHookFire(first, hook);
+	SG_HumanTraceHookAttach(first, hook, &entities[0]);
+	level.framenum = 2;
+	SG_HumanTracePmove(first, &before, &after);
+	level.framenum = 3;
+	SG_HumanTraceHookRelease(first);
+	SG_HumanTraceHookReset(first, hook);
+	SetupPlayer(second, &clients[1], 22UL);
+	CaptureCompleteTraversal(second, hook, &before, &after, 4);
+	SetupPlayer(second, &clients[1], 23UL);
+	CaptureCompleteTraversal(second, hook, &before, &after, 8);
+	after.groundentity = &entities[0];
+	level.framenum = 12;
+	SG_HumanTracePmove(first, &before, &after);
+	SG_HumanTraceMatchEnd();
+	inject_receipt_write_failure = 3U;
+	SG_HumanTraceLearningHostGamePostMatch(&report);
+	if (!report.trace_authenticated || report.committed_batches != 3U ||
+		report.rejected_batches != 0U ||
+		fixture.playthroughs[0].used != 1U ||
+		fixture.playthroughs[0].client_id != 1U ||
+		fixture.playthroughs[0].spawn_generation != UINT64_C(11) ||
+		fixture.playthroughs[1].used != 1U ||
+		fixture.playthroughs[1].client_id != 2U ||
+		fixture.playthroughs[1].spawn_generation != UINT64_C(22) ||
+		fixture.playthroughs[2].used != 1U ||
+		fixture.playthroughs[2].client_id != 2U ||
+		fixture.playthroughs[2].spawn_generation != UINT64_C(23))
+	{
+		fprintf(stderr,
+			"actual_scope_order=%" PRIu32 "/%" PRIu64 ",%" PRIu32 "/%" PRIu64
+			",%" PRIu32 "/%" PRIu64 "\n",
+			fixture.playthroughs[0].client_id,
+			fixture.playthroughs[0].spawn_generation,
+			fixture.playthroughs[1].client_id,
+			fixture.playthroughs[1].spawn_generation,
+			fixture.playthroughs[2].client_id,
+			fixture.playthroughs[2].spawn_generation);
+		return 119;
+	}
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return 0;
+}
+#endif
+
+static int RunLearningHostVisitCount(const char *directory, unsigned count,
+	int clean)
+{
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t report;
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	char receipt_path[1024];
+	unsigned index;
+	uint64_t expected;
+	int result = 0;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 102;
+	LearningHostPublishedFixture(&fixture, &published);
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
+		return 103;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	for (index = 0U; index < count; index++)
+		CaptureCompleteTraversal(player, hook, &before, &after,
+			(int)(1U + index * 4U));
+	SG_HumanTraceMatchEnd();
+	SG_HumanTraceLearningHostGameTestResetVisitCount();
+	SG_HumanTraceLearningHostGamePostMatch(&report);
+	expected = (uint64_t)count * UINT64_C(7);
+	if (!report.trace_authenticated || report.committed_batches != 1U ||
+		report.rejected_batches != 0U || fixture.parameters.generation !=
+		(UINT64_C(1) + (uint64_t)count) ||
+		SG_HumanTraceLearningHostGameTestVisitCount() != expected)
+		result = 104;
+	if (clean)
+	{
+		if (ScanCompletedSpools(&scan) && scan.count == 1U &&
+			LearningReceiptPath(receipt_path, sizeof(receipt_path), &scan.first,
+				1U, UINT64_C(11)))
+			remove(receipt_path);
+		RemoveTraceArtifact(directory, 0U);
+	}
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return result;
+}
+
+static int RunLearningHostLinearity(const char *directory)
+{
+	static const unsigned counts[] = { 64U, 128U, 256U, 512U };
+	unsigned index;
+
+	for (index = 0U; index < sizeof(counts) / sizeof(counts[0]); index++)
+		if (RunLearningHostVisitCount(directory, counts[index], 1) != 0)
+			return 105 + (int)index;
+	return 0;
+}
+
+static int RunLearningHostIORoots(unsigned root_count)
+{
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t report;
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	unsigned root;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 120;
+	LearningHostPublishedFixture(&fixture, &published);
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
+		return 121;
+	SetupPmove(&before, &after);
+	for (root = 0U; root < root_count; root++)
+	{
+		SetupPlayer(player, &clients[0], (unsigned long)(11U + root));
+		SG_HumanTraceNewLevel();
+		CaptureCompleteTraversal(player, hook, &before, &after,
+			(int)(1U + root * 8U));
+		SG_HumanTraceMatchEnd();
+	}
+	SG_HumanTraceLearningHostGameTestResetVisitCount();
+	SG_HumanTraceLearningHostGamePostMatch(&report);
+	if (!report.trace_authenticated ||
+		report.committed_batches != root_count ||
+		report.rejected_batches != 0U ||
+		fixture.parameters.generation != UINT64_C(1) + root_count ||
+		SG_HumanTraceLearningHostGameTestVisitCount() !=
+			(uint64_t)root_count * UINT64_C(7))
+		return 122;
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return 0;
+}
+
+static int RunLearningHostLongPostMatch(void)
+{
+	const unsigned long event_count = 16385UL;
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t report;
+	edict_t *player = &entities[1];
+	edict_t *hook = &entities[3];
+	pmove_state_t before;
+	pmove_t after;
+	unsigned long index;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 109;
+	LearningHostPublishedFixture(&fixture, &published);
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published, NULL))
+		return 110;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	SG_HumanTraceNewLevel();
+	CaptureCompleteTraversal(player, hook, &before, &after, 1);
+	after.groundentity = &entities[0];
+	for (index = 7UL; index < event_count; index++)
+	{
+		level.framenum = (int)(index + 1UL);
+		SG_HumanTracePmove(player, &before, &after);
+	}
+	SG_HumanTraceMatchEnd();
+	SG_HumanTraceLearningHostGameTestResetVisitCount();
+	SG_HumanTraceLearningHostGamePostMatch(&report);
+	if (!report.trace_authenticated || report.committed_batches != 1U ||
+		report.rejected_batches != 0U || fixture.parameters.generation != 2U ||
+		SG_HumanTraceLearningHostGameTestVisitCount() != event_count ||
+		fixture.playthroughs[0].used != 0U)
+		return 111;
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return 0;
+}
+
+static int RunLearningHostIntegration(void)
+{
+	learning_host_fixture_t fixture;
+	sg_human_trace_learning_test_published_runtime_t published;
+	sg_human_trace_learning_host_report_t pending;
+	sg_human_trace_learning_host_report_t committed;
+	spool_scan_t scan;
+	char receipt_path[1024];
+	uint64_t effective_cost_us;
+	int consumed;
+
+	if (!LearningHostFixtureInit(&fixture))
+		return 80;
+	memset(&published, 0, sizeof(published));
+	published.runtime = &fixture.runtime;
+	published.snapshot = &fixture.snapshot;
+	published.level_identity.bsp_checksum = 101U;
+	published.level_identity.entity_crc32 = 202U;
+	published.level_identity.host_physics_id = 1U;
+	strcpy(published.level_identity.mapname, "tracehook");
+	published.evidence_context = &fixture;
+	published.locate_hook_kernel = LearningHostLocateKernel;
+	/* A valid receipt is then damaged as though its final sector tore after a
+	 * crash.  It must not suppress the real host-only replay below: the
+	 * immutable spool remains discoverable and the host repairs the sidecar
+	 * only after its atomic parameter commit. */
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!LearningReceiptPath(receipt_path, sizeof(receipt_path), &scan.first,
+			1U, UINT64_C(11)) || !AcceptedReceiptState(&scan.first, 1U,
+			UINT64_C(11), 1, &consumed) || !consumed ||
+		!FlipSpoolByte(receipt_path) || !AcceptedReceiptState(&scan.first, 1U,
+			UINT64_C(11), 0, &consumed) || consumed)
+		return 81;
+	SG_HumanTraceLearningHostGamePostMatch(&pending);
+	if (!pending.trace_authenticated || pending.derived_batches != 1U ||
+		pending.derived_records != 1U || pending.committed_batches != 0U ||
+		pending.pending_batches != 1U || fixture.parameters.generation != 1U ||
+		fixture.costs[0] != 0U)
+		return 82;
+	/* A level transition and recorder teardown retire all in-process views, but
+	 * not the authenticated spool; a matching next publication must rediscover
+	 * and consume the same batch atomically. */
+	SG_HumanTraceLearningHostGameReset();
+	SG_HumanTraceNewLevel();
+	if (!SG_HumanTraceLearningHostGameTestPublishRuntime(&published,
+		&committed) || committed.committed_batches != 1U ||
+		committed.rejected_batches != 0U || committed.pending_batches != 0U ||
+		fixture.parameters.generation != 2U || fixture.costs[0] !=
+		UINT64_C(300000) || fixture.playthroughs[0].used != 0U)
+		return 83;
+	if (!SG_HumanTraceLearningConsumerEffectiveKernelCost(
+		&fixture.parameters, &fixture.keys[0], UINT64_C(900000),
+		&effective_cost_us) || effective_cost_us != UINT64_C(300000))
+		return 84;
+	if (!ScanCompletedSpools(&scan))
+		return 85;
+	if (LearningReceiptPath(receipt_path, sizeof(receipt_path), &scan.first,
+		1U, UINT64_C(11)))
+		remove(receipt_path);
+	if (LearningReceiptPath(receipt_path, sizeof(receipt_path), &scan.first,
+		2U, UINT64_C(22)))
+		remove(receipt_path);
+	SG_HumanTraceLearningHostGameTestWithdrawRuntime(&fixture.runtime,
+		&fixture.snapshot);
+	SG_HumanTraceLearningHostGameReset();
+	return 0;
+}
+
+#endif /* SG_HUMAN_TRACE_LEARNING_TEST */
 
 static void SetupPlayer(edict_t *player, gclient_t *client,
 	unsigned long generation)
@@ -241,6 +1083,38 @@ static int ObserveLifecycle(edict_t *player, edict_t *hook,
 		memcmp(after, &after_copy, sizeof(*after)) == 0;
 }
 
+static void CaptureCompleteTraversalFrames(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame,
+	int landing_frame)
+{
+	memset(hook, 0, sizeof(*hook));
+	hook->inuse = true;
+	hook->owner = player;
+	hook->hook_target = &entities[0];
+	player->client->hook = hook;
+	after->groundentity = NULL;
+	level.framenum = first_frame;
+	SG_HumanTracePmove(player, before, after);
+	SG_HumanTraceHookFire(player, hook);
+	SG_HumanTraceHookAttach(player, hook, &entities[0]);
+	level.framenum = first_frame + 1;
+	SG_HumanTracePmove(player, before, after);
+	level.framenum = first_frame + 2;
+	SG_HumanTraceHookRelease(player);
+	SG_HumanTraceHookReset(player, hook);
+	after->groundentity = &entities[0];
+	level.framenum = landing_frame;
+	SG_HumanTracePmove(player, before, after);
+	after->groundentity = NULL;
+}
+
+static void CaptureCompleteTraversal(edict_t *player, edict_t *hook,
+	pmove_state_t *before, pmove_t *after, int first_frame)
+{
+	CaptureCompleteTraversalFrames(player, hook, before, after, first_frame,
+		first_frame + 3);
+}
+
 static int RunCapacityFailure(const char *directory)
 {
 	char path[1024];
@@ -295,7 +1169,267 @@ static int RunRotation(const char *directory)
 		files++;
 		remove(path);
 	}
+	if (LearningSpoolPath(path, sizeof(path), directory, 0U))
+		remove(path);
 	return files >= 2 ? 0 : 31;
+}
+
+static int RunSpoolRejection(const char *directory, int tamper)
+{
+	char spool_path[1024];
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	int result = 0;
+
+	if (!LearningSpoolPath(spool_path, sizeof(spool_path), directory, 0U))
+		return 32;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || strcmp(scan.first.path, spool_path) != 0)
+		result = 33;
+	if (!result && !(tamper ? FlipSpoolByte(spool_path) :
+		AppendSpoolPartial(spool_path)))
+		result = 34;
+	if (!result && (!ScanCompletedSpools(&scan) || scan.count != 0U))
+		result = 35;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunAckRecovery(const char *directory, int tamper)
+{
+	char receipt_path[1024] = { 0 };
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	int consumed;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!LearningReceiptPath(receipt_path, sizeof(receipt_path), &scan.first,
+			1U, UINT64_C(11)) || !AcceptedReceiptState(&scan.first, 1U,
+			UINT64_C(11), 1, &consumed) || !consumed)
+		result = 42;
+	if (!result && !(tamper ? FlipSpoolByte(receipt_path) :
+		AppendSpoolPartial(receipt_path)))
+		result = 43;
+	/* A torn or modified receipt is ignored.  It cannot poison the immutable
+	 * evidence spool or suppress a later replay of this scope. */
+	if (!result && (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!AcceptedReceiptState(&scan.first, 1U, UINT64_C(11), 0,
+			&consumed) || consumed))
+		result = 44;
+	if (!result && (!AcceptedReceiptState(&scan.first, 1U, UINT64_C(11), 1,
+		&consumed) || !consumed))
+		result = 45;
+	if (receipt_path[0])
+		remove(receipt_path);
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunLongStream(const char *directory)
+{
+	/* This deliberately crosses the historical 16,384-event refusal point.
+	 * It is a regression witness, not a recorder work limit. */
+	const unsigned long event_count = 16385UL;
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	spool_event_count_t events;
+	unsigned long index;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	after.groundentity = &entities[0];
+	SG_HumanTraceNewLevel();
+	for (index = 0UL; index < event_count; index++)
+	{
+		level.framenum = (int)(index + 1UL);
+		SG_HumanTracePmove(player, &before, &after);
+	}
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order)
+		result = 36;
+	memset(&events, 0, sizeof(events));
+	if (!result && (!VisitStoredSpoolEvents(&scan.first,
+		CountStoredSpoolEvent, &events) || events.count != event_count))
+		result = 37;
+	RemoveTraceArtifact(directory, 0U);
+	return result;
+}
+
+static int RunSpoolOrder(const char *directory)
+{
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned segment;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	for (segment = 0U; segment < 3U; segment++)
+	{
+		level.framenum = (int)(segment + 1U);
+		SG_HumanTraceNewLevel();
+		SG_HumanTracePmove(player, &before, &after);
+		SG_HumanTraceMatchEnd();
+	}
+	if (!ScanCompletedSpools(&scan) || scan.count != 3U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U)
+		result = 38;
+	for (segment = 0U; segment < 3U; segment++)
+		RemoveTraceArtifact(directory, segment);
+	return result;
+}
+
+static int RunSpoolQuarantine(const char *directory)
+{
+	char spool_path[1024];
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	unsigned segment;
+	int result = 0;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	for (segment = 0U; segment < 3U; segment++)
+	{
+		level.framenum = (int)(segment + 1U);
+		SG_HumanTraceNewLevel();
+		SG_HumanTracePmove(player, &before, &after);
+		SG_HumanTraceMatchEnd();
+	}
+	/* Root one is a torn completed spool. Roots three and four are unrelated
+	 * collision garbage. Valid roots zero and two must still be visited FIFO. */
+	if (!LearningSpoolPath(spool_path, sizeof(spool_path), directory, 1U) ||
+		!AppendSpoolPartial(spool_path))
+		result = 91;
+	if (!result && (!LearningSpoolPath(spool_path, sizeof(spool_path),
+		directory, 3U) || !AppendSpoolPartial(spool_path)))
+		result = 92;
+	if (!result && (!LearningSpoolPath(spool_path, sizeof(spool_path),
+		directory, 4U) || !AppendSpoolPartial(spool_path)))
+		result = 93;
+	if (!result && (!ScanCompletedSpools(&scan) || scan.count != 2U ||
+		!scan.valid_order || scan.first.root_segment != 0U ||
+		scan.previous_root != 2U))
+		result = 94;
+	for (segment = 0U; segment < 5U; segment++)
+		RemoveTraceArtifact(directory, segment);
+	return result;
+}
+
+static int RunSegmentNames(const char *directory)
+{
+	static const uint32_t segments[] = { 999999U, 1000000U };
+	static const char *const suffixes[] = { "999999.jsonl", "1000000.jsonl" };
+	sg_level_identity_t identity;
+	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
+	const char *name;
+	uint32_t parsed;
+	size_t index;
+
+	if (!TraceIdentity(&identity))
+		return 112;
+	for (index = 0U; index < sizeof(segments) / sizeof(segments[0]); index++)
+	{
+		if (!SG_HumanTraceLearningSpoolTestFormatJsonPath(directory, &identity,
+			segments[index], path))
+			return 113;
+		name = strrchr(path, '/');
+		name = name ? name + 1 : path;
+		if (strlen(name) < strlen(suffixes[index]) || strcmp(name + strlen(name) -
+			strlen(suffixes[index]), suffixes[index]) != 0 ||
+			!SG_HumanTraceLearningSpoolTestJsonNameSegment(name, &identity,
+				&parsed) || parsed != segments[index])
+			return 114;
+	}
+	if (SG_HumanTraceLearningSpoolTestJsonNameSegment(
+		"humantrace-tracehook-00000065-000000ca-0000000.jsonl", &identity,
+		&parsed))
+		return 115;
+	return 0;
+}
+
+static int RunStoredSpoolCoverage(void)
+{
+	spool_scan_t scan;
+	spool_event_count_t events;
+	int consumed;
+
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		!scan.valid_order || scan.first.root_segment != 0U)
+		return 39;
+	memset(&events, 0, sizeof(events));
+	if (!VisitStoredSpoolEvents(&scan.first, CountStoredSpoolEvent,
+		&events) || events.count != 12U)
+		return 40;
+	/* Acknowledging the incomplete second life must not hide the complete first
+	 * life.  The later publisher therefore still sees and commits client one. */
+	if (!AcceptedReceiptState(&scan.first, 2U, UINT64_C(22), 1,
+		&consumed) || !consumed || !AcceptedReceiptState(&scan.first, 1U,
+		UINT64_C(11), 0, &consumed) || consumed)
+		return 41;
+	return 0;
+}
+
+static int RunAcceptedScopeDenial(const char *directory)
+{
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+	int absent_accepted;
+	int consumed;
+	int typo_accepted;
+	int valid_accepted;
+
+	(void)directory;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U)
+		return 120;
+	absent_accepted = AcceptedReceiptState(&scan.first, 2U, UINT64_C(11), 1,
+		&consumed);
+	typo_accepted = AcceptedReceiptState(&scan.first, 1U, UINT64_C(12), 1,
+		&consumed);
+	valid_accepted = AcceptedReceiptState(&scan.first, 1U, UINT64_C(11), 1,
+		&consumed);
+	if (absent_accepted || typo_accepted || !valid_accepted || !consumed)
+	{
+		fprintf(stderr,
+			"absent_scope_accepted=%d typo_scope_accepted=%d valid_scope_accepted=%d\n",
+			absent_accepted, typo_accepted, valid_accepted);
+		return 121;
+	}
+	return 0;
 }
 
 #ifdef SG_HUMAN_TRACE_WRAP_FWRITE
@@ -325,6 +1459,10 @@ static int RunWriteFailure(const char *directory)
 		return 42;
 	remove(path0);
 	remove(path1);
+	if (LearningSpoolPath(path0, sizeof(path0), directory, 0U))
+		remove(path0);
+	if (LearningSpoolPath(path1, sizeof(path1), directory, 1U))
+		remove(path1);
 	return 0;
 }
 #endif
@@ -390,6 +1528,7 @@ static int RunPhysicsDrift(const char *directory)
 	edict_t *player = &entities[1];
 	pmove_state_t before;
 	pmove_t after;
+	spool_scan_t scan;
 
 	if (!TracePath(path0, sizeof(path0), directory, 0U) ||
 	    !TracePath(path1, sizeof(path1), directory, 1U))
@@ -402,7 +1541,11 @@ static int RunPhysicsDrift(const char *directory)
 	SG_HumanTracePmove(player, &before, &after);
 	SG_HumanTraceMatchEnd();
 	if (CountRecords(path0, NULL) != 2 ||
-	    CountRecords(path1, NULL) != 3)
+		CountRecords(path1, NULL) != 3 || !ScanCompletedSpools(&scan) ||
+		scan.count != 1U || !scan.valid_order ||
+		scan.first.root_segment != 0U || scan.first.completion.session != 0U ||
+		scan.first.completion.segment != 1U ||
+		scan.first.completion.continuation != 1U)
 		return 66;
 	return 0;
 }
@@ -476,8 +1619,13 @@ int main(int argc, char **argv)
 	edict_t *hook1 = &entities[3];
 	edict_t *player2 = &entities[2];
 	edict_t *hook2 = &entities[4];
+	edict_t player1_copy;
+	edict_t hook1_copy;
+	gclient_t client1_copy;
 	pmove_state_t before1, before2;
 	pmove_t after1, after2;
+	pmove_state_t before1_copy;
+	pmove_t after1_copy;
 	int result = 0;
 
 	if ((argc != 2 && argc != 3) ||
@@ -500,6 +1648,44 @@ int main(int argc, char **argv)
 		return RunCapacityFailure(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "rotation") == 0)
 		return RunRotation(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "spool-truncated") == 0)
+		return RunSpoolRejection(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "spool-tampered") == 0)
+		return RunSpoolRejection(argv[1], 1);
+	if (argc == 3 && strcmp(argv[2], "ack-truncated") == 0)
+		return RunAckRecovery(argv[1], 0);
+	if (argc == 3 && strcmp(argv[2], "ack-tampered") == 0)
+		return RunAckRecovery(argv[1], 1);
+	if (argc == 3 && strcmp(argv[2], "long-stream") == 0)
+		return RunLongStream(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "spool-order") == 0)
+		return RunSpoolOrder(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "spool-quarantine") == 0)
+		return RunSpoolQuarantine(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "segment-names") == 0)
+		return RunSegmentNames(argv[1]);
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+	if (argc == 3 && strcmp(argv[2], "host-sequential") == 0)
+		return RunLearningHostSequentialRoots();
+	if (argc == 3 && strcmp(argv[2], "host-linearity") == 0)
+		return RunLearningHostLinearity(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "host-io-64") == 0)
+		return RunLearningHostVisitCount(argv[1], 64U, 0);
+	if (argc == 3 && strcmp(argv[2], "host-io-128") == 0)
+		return RunLearningHostVisitCount(argv[1], 128U, 0);
+	if (argc == 3 && strcmp(argv[2], "host-io-roots") == 0)
+		return RunLearningHostIORoots(8U);
+	if (argc == 3 && strcmp(argv[2], "host-long-postmatch") == 0)
+		return RunLearningHostLongPostMatch();
+#ifdef SG_HUMAN_TRACE_WRAP_FWRITE
+	if (argc == 3 && strcmp(argv[2], "host-receipt-failure") == 0)
+		return RunLearningHostReceiptFailure();
+	if (argc == 3 && strcmp(argv[2], "host-first-occurrence") == 0)
+		return RunLearningHostFirstOccurrenceOrder();
+#endif
+#endif
+	if (argc == 3 && strcmp(argv[2], "accepted-scope-denial") == 0)
+		return RunAcceptedScopeDenial(argv[1]);
 #ifndef _WIN32
 	if (argc == 3 && strcmp(argv[2], "fsize") == 0)
 		return RunFileSizeFailure(argv[1]);
@@ -534,11 +1720,44 @@ int main(int argc, char **argv)
 	hook2->s.origin[0] = 96.0f;
 	player2->client->hook = hook2;
 
+	player1_copy = *player1;
+	hook1_copy = *hook1;
+	client1_copy = *player1->client;
+	before1_copy = before1;
+	after1_copy = after1;
 	level.framenum = 17;
 	SG_HumanTraceNewLevel();
-	if (!ObserveLifecycle(player1, hook1, &before1, &after1))
+	SG_HumanTracePmove(player1, &before1, &after1);
+	SG_HumanTraceHookFire(player1, hook1);
+	SG_HumanTraceHookAttach(player1, hook1, &entities[0]);
+	level.framenum = 18;
+	SG_HumanTracePmove(player1, &before1, &after1);
+	level.framenum = 19;
+	SG_HumanTraceHookRelease(player1);
+	SG_HumanTraceHookReset(player1, hook1);
+	level.framenum = 20;
+	SG_HumanTracePmove(player1, &before1, &after1);
+	level.framenum = 25;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	SG_HumanTraceHookFire(player2, hook2);
+	SG_HumanTraceHookAttach(player2, hook2, &entities[0]);
+	level.framenum = 26;
+	SG_HumanTracePmove(player2, &before2, &after2);
+	level.framenum = 27;
+	SG_HumanTraceHookRelease(player2);
+	if (memcmp(player1, &player1_copy, sizeof(*player1)) != 0 ||
+	    memcmp(hook1, &hook1_copy, sizeof(*hook1)) != 0 ||
+	    memcmp(player1->client, &client1_copy, sizeof(*player1->client)) != 0 ||
+	    memcmp(&before1, &before1_copy, sizeof(before1)) != 0 ||
+	    memcmp(&after1, &after1_copy, sizeof(after1)) != 0)
 		result = 3;
 	SG_HumanTraceMatchEnd();
+#ifdef SG_HUMAN_TRACE_LEARNING_TEST
+	if (!result && RunStoredSpoolCoverage() != 0)
+		result = 9;
+	if (!result && RunLearningHostIntegration() != 0)
+		result = 10;
+#endif
 	enabled.value = 0.0f;
 	if (!ObserveLifecycle(player1, hook1, &before1, &after1))
 		result = 4;
@@ -550,18 +1769,20 @@ int main(int argc, char **argv)
 		result = 5;
 	SG_HumanTraceMatchEnd();
 
-	if (CountRecords(path0, NULL) != 7 ||
+	if (CountRecords(path0, NULL) != 14 ||
 	    CountRecords(path1, NULL) != 7 ||
-	    CountRecords(path0, "\"kind\":\"step\"") != 1 ||
-	    CountRecords(path0, "\"kind\":\"hook-fire\"") != 1 ||
-	    CountRecords(path0, "\"kind\":\"hook-attach\"") != 1 ||
-	    CountRecords(path0, "\"kind\":\"hook-release\"") != 1 ||
+	    CountRecords(path0, "\"kind\":\"step\"") != 5 ||
+	    CountRecords(path0, "\"kind\":\"hook-fire\"") != 2 ||
+	    CountRecords(path0, "\"kind\":\"hook-attach\"") != 2 ||
+	    CountRecords(path0, "\"kind\":\"hook-release\"") != 2 ||
 	    CountRecords(path0, "\"kind\":\"hook-reset\"") != 1 ||
-	    CountRecords(path0, "\"sha256\":") != 7 ||
+	    CountRecords(path0, "\"sha256\":") != 14 ||
 	    !FileContains(path0, "\"client\":1,\"spawn_generation\":11") ||
-	    !FileContains(path0, "\"frame\":17") ||
+	    !FileContains(path0, "\"frame\":20") ||
+	    !FileContains(path0, "\"client\":2,\"spawn_generation\":22") ||
+	    !FileContains(path0, "\"frame\":27") ||
 	    !FileContains(path0, "\"order\":1,\"command\":1") ||
-	    !FileContains(path0, "\"order\":5,\"hook_event\":4") ||
+	    !FileContains(path0, "\"order\":6,\"hook_event\":4") ||
 	    !FileContains(path1, "\"client\":2,\"spawn_generation\":22") ||
 	    !FileContains(path1, "\"frame\":31"))
 		result = 6;
@@ -579,9 +1800,9 @@ int main(int argc, char **argv)
 
 	if (!getenv("SG_HUMAN_TRACE_KEEP"))
 	{
-		remove(path0);
-		remove(path1);
-		remove(path2);
+		RemoveTraceArtifact(argv[1], 0U);
+		RemoveTraceArtifact(argv[1], 1U);
+		RemoveTraceArtifact(argv[1], 2U);
 	}
 	if (result)
 		return result;
