@@ -7,43 +7,133 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from tools.deslop_audit import source_budget_findings
+from tools.deslop_audit import (
+    load_source_budget,
+    source_budget_findings,
+    source_review_recommended,
+    stale_allowance_paths,
+    tracked_authored_files,
+)
 
 
 class SourceBudgetTest(unittest.TestCase):
-    def test_new_source_must_fit_default_limits(self) -> None:
-        self.assertEqual(
-            ["source-lines: 4 > 3"],
-            source_budget_findings("a\nb\nc\nd\n", 3, 5, None, None),
+    @staticmethod
+    def source_with_lines(line_count: int) -> str:
+        return "x\n" * line_count
+
+    def test_review_threshold_is_not_a_hard_limit(self) -> None:
+        for line_count in (799, 800, 801):
+            with self.subTest(line_count=line_count):
+                self.assertEqual(
+                    [],
+                    source_budget_findings(
+                        self.source_with_lines(line_count), 9999, 100, None
+                    ),
+                )
+        self.assertFalse(
+            source_review_recommended(self.source_with_lines(799), 800)
         )
-        self.assertEqual(
-            ["overlong-lines: 1 > 0 at 5 columns"],
-            source_budget_findings("123456\n", 3, 5, None, None),
+        self.assertFalse(
+            source_review_recommended(self.source_with_lines(800), 800)
+        )
+        self.assertTrue(
+            source_review_recommended(self.source_with_lines(801), 800)
         )
 
-    def test_existing_debt_may_not_grow(self) -> None:
+    def test_absolute_source_line_limit_boundaries(self) -> None:
         self.assertEqual(
             [],
-            source_budget_findings("123456\nb\nc\nd\n", 3, 5, 4, 1),
+            source_budget_findings(
+                self.source_with_lines(9999), 9999, 100, None
+            ),
         )
         self.assertEqual(
-            [
-                "source-lines: 5 > 4",
-                "overlong-lines: 2 > 1 at 5 columns",
-            ],
+            ["source-lines: 10000 > 9999"],
             source_budget_findings(
-                "123456\nabcdef\nb\nc\nd\n", 3, 5, 4, 1
+                self.source_with_lines(10000), 9999, 100, None
+            ),
+        )
+        self.assertEqual(
+            ["source-lines: 10001 > 9999"],
+            source_budget_findings(
+                self.source_with_lines(10001), 9999, 100, None
             ),
         )
 
-    def test_reduced_debt_requires_a_lower_budget(self) -> None:
+    def test_source_size_and_line_length_are_independent(self) -> None:
+        self.assertEqual(
+            ["overlong-lines: 1 > 0 at 5 columns"],
+            source_budget_findings("123456\n" + "x\n" * 800, 9999, 5, None),
+        )
         self.assertEqual(
             [
-                "stale-source-lines-budget: lower 4 to 3",
-                "stale-overlong-lines-budget: lower 1 to 0",
+                "source-lines: 10000 > 9999",
+                "overlong-lines: 1 > 0 at 5 columns",
             ],
-            source_budget_findings("a\nb\nc\n", 3, 5, 4, 1),
+            source_budget_findings(
+                "123456\n" + "x\n" * 9999, 9999, 5, None
+            ),
         )
+
+    def test_existing_overlong_line_debt_may_not_grow(self) -> None:
+        self.assertEqual(
+            [],
+            source_budget_findings("123456\nb\nc\nd\n", 9999, 5, 1),
+        )
+        self.assertEqual(
+            ["overlong-lines: 2 > 1 at 5 columns"],
+            source_budget_findings(
+                "123456\nabcdef\nb\nc\nd\n", 9999, 5, 1
+            ),
+        )
+
+    def test_reduced_overlong_line_debt_requires_a_lower_budget(self) -> None:
+        self.assertEqual(
+            ["stale-overlong-lines-budget: lower 1 to 0"],
+            source_budget_findings("a\nb\nc\n", 9999, 5, 1),
+        )
+
+    def test_deleted_and_renamed_allowance_paths_are_stale(self) -> None:
+        self.assertEqual(
+            ["slipgate/deleted.c"],
+            stale_allowance_paths(
+                [Path("slipgate/current.c")], {"slipgate/deleted.c": 1}
+            ),
+        )
+        self.assertEqual(
+            ["slipgate/old_name.c"],
+            stale_allowance_paths(
+                [Path("slipgate/new_name.c")], {"slipgate/old_name.c": 1}
+            ),
+        )
+        self.assertEqual(
+            ["overlong-lines: 1 > 0 at 5 columns"],
+            source_budget_findings("123456\n", 9999, 5, None),
+        )
+
+    def test_non_authored_and_generated_files_are_excluded(self) -> None:
+        paths = [
+            Path("g_main.c"),
+            Path("docs/example.py"),
+            Path("slipgate/sg_authored.c"),
+            Path("slipgate/sg_contract.generated.h"),
+            Path("tests/support/imported.c"),
+            Path("tests/test_authored.py"),
+            Path("tools/check.sh"),
+            Path("GNUmakefile"),
+        ]
+        self.assertEqual(
+            [
+                Path("slipgate/sg_authored.c"),
+                Path("tests/test_authored.py"),
+                Path("tools/check.sh"),
+                Path("GNUmakefile"),
+            ],
+            tracked_authored_files(paths),
+        )
+
+    def test_committed_policy_has_no_per_file_source_size_caps(self) -> None:
+        self.assertEqual((9999, 800, 100), load_source_budget()[:3])
 
 
 if __name__ == "__main__":

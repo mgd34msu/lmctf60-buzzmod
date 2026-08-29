@@ -7,15 +7,16 @@
 - Put only cross-module declarations in headers.
 - Split a file when unrelated state or lifecycle rules appear in it.
 
-`tools/source-size-budget.json` records current size debt in authored source.
-Eight hundred lines is the default review threshold, not a hard module limit.
-A cohesive module may exceed it when another split would divide one subsystem;
-record that allowance explicitly. Files without a recorded line-length
-exception may not contain lines over 100 columns after tab expansion.
+`tools/source-size-budget.json` defines the authored-source policy. Eight hundred
+lines is a review threshold, not a hard module limit. A cohesive module may
+exceed it when another split would divide one subsystem. An authored file may
+contain at most 9,999 lines. Files without a reviewed line-length exception may
+not contain lines over 100 columns after tab expansion.
 
-Do not grow an existing monolith merely because it already has an allowance.
-Split at a subsystem, state owner, or lifecycle boundary. Do not split a file
-into numbered fragments or manufacture tiny files to satisfy a line count.
+Do not grow an existing monolith merely because it already exceeds the review
+threshold. Split at a subsystem, state owner, or lifecycle boundary. Do not
+split a file into numbered fragments or manufacture tiny files to satisfy a
+line count.
 
 ## Functions and state
 
@@ -42,8 +43,9 @@ results, implementation history, reviewer conversations, dates, ownership
 rulings, or the code's control flow. Git history holds that material.
 
 `tools/deslop_audit.py` rejects narrative patterns, oversized SLIPGATE block
-comments, source-budget growth, and unbudgeted lines over 100 columns. Tests
-must anchor to functions or executable statements, never prose.
+comments, authored files with 10,000 lines or more, and unbudgeted lines over
+100 columns. Tests must anchor to functions or executable statements, never
+prose.
 
 ## Changes and verification
 

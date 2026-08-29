@@ -212,29 +212,23 @@ def tracked_authored_files(paths: list[Path]) -> list[Path]:
     return authored
 
 
-def source_budget_findings(text: str, default_max_lines: int,
-        max_line_length: int, line_allowance: int | None,
-        overlong_allowance: int | None) -> list[str]:
+def source_budget_findings(text: str, max_source_lines: int,
+        max_line_length: int, overlong_allowance: int | None) -> list[str]:
     lines = text.splitlines()
     line_count = len(lines)
     overlong = sum(
         len(line.expandtabs(8)) > max_line_length
         for line in lines
     )
-    max_lines = line_allowance or default_max_lines
     max_overlong = overlong_allowance or 0
 
     findings = []
-    if line_count > max_lines:
-        findings.append(f"source-lines: {line_count} > {max_lines}")
+    if line_count > max_source_lines:
+        findings.append(f"source-lines: {line_count} > {max_source_lines}")
     if overlong > max_overlong:
         findings.append(
             f"overlong-lines: {overlong} > {max_overlong} "
             f"at {max_line_length} columns"
-        )
-    if line_allowance is not None and line_count < max_lines:
-        findings.append(
-            f"stale-source-lines-budget: lower {max_lines} to {line_count}"
         )
     if overlong_allowance is not None and overlong < max_overlong:
         findings.append(
@@ -243,35 +237,46 @@ def source_budget_findings(text: str, default_max_lines: int,
     return findings
 
 
-def load_source_budget() -> tuple[int, int, dict[str, int], dict[str, int]]:
+def source_review_recommended(text: str, review_threshold_lines: int) -> bool:
+    return len(text.splitlines()) > review_threshold_lines
+
+
+def stale_allowance_paths(
+        authored: list[Path], allowances: dict[str, int]) -> list[str]:
+    authored_names = {path.as_posix() for path in authored}
+    return sorted(set(allowances) - authored_names)
+
+
+def load_source_budget() -> tuple[int, int, int, dict[str, int]]:
     document = json.loads(SOURCE_BUDGET_PATH.read_text(encoding="utf-8"))
     required = {
-        "default_max_lines", "format", "max_line_length",
-        "overlong_files", "oversized_files",
+        "absolute_max_authored_source_lines", "format", "max_line_length",
+        "overlong_files", "review_threshold_lines",
     }
     if set(document) != required:
         raise ValueError("source budget has unexpected top-level fields")
-    if document["format"] != "lmctf-authored-source-budget-v1":
+    if document["format"] != "lmctf-authored-source-policy-v2":
         raise ValueError("source budget format is not supported")
 
-    for field in ("default_max_lines", "max_line_length"):
+    for field in (
+            "absolute_max_authored_source_lines", "review_threshold_lines",
+            "max_line_length"):
         value = document[field]
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"source budget {field} must be a positive integer")
 
-    for field in ("oversized_files", "overlong_files"):
-        allowances = document[field]
-        if not isinstance(allowances, dict):
-            raise ValueError(f"source budget {field} must be an object")
-        for path, value in allowances.items():
-            if not isinstance(path, str) or Path(path).as_posix() != path:
-                raise ValueError("source budget paths must be normalized strings")
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise ValueError(f"source budget {field} {path} is invalid")
+    allowances = document["overlong_files"]
+    if not isinstance(allowances, dict):
+        raise ValueError("source budget overlong_files must be an object")
+    for path, value in allowances.items():
+        if not isinstance(path, str) or Path(path).as_posix() != path:
+            raise ValueError("source budget paths must be normalized strings")
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"source budget overlong_files {path} is invalid")
     return (
-        document["default_max_lines"],
+        document["absolute_max_authored_source_lines"],
+        document["review_threshold_lines"],
         document["max_line_length"],
-        document["oversized_files"],
         document["overlong_files"],
     )
 
@@ -332,21 +337,27 @@ def main() -> int:
                 print(f"{relative.relative_to(ROOT)}:{line_number}: {rule}: {line.strip()}")
                 findings += 1
 
-    default_max_lines, max_line_length, oversized, overlong = load_source_budget()
+    (max_source_lines, review_threshold_lines,
+     max_line_length, overlong) = load_source_budget()
     authored = tracked_authored_files(tracked)
-    authored_names = {path.as_posix() for path in authored}
-    budget_names = set(oversized) | set(overlong)
-    for stale in sorted(budget_names - authored_names):
+    for stale in stale_allowance_paths(authored, overlong):
         print(f"{SOURCE_BUDGET_PATH.relative_to(ROOT)}: stale-path: {stale}")
         findings += 1
+    review_count = 0
     for relative in authored:
         text = (ROOT / relative).read_text(encoding="utf-8")
         name = relative.as_posix()
+        if source_review_recommended(text, review_threshold_lines):
+            review_count += 1
         for message in source_budget_findings(
-                text, default_max_lines, max_line_length,
-                oversized.get(name), overlong.get(name)):
+                text, max_source_lines, max_line_length, overlong.get(name)):
             print(f"{relative}: {message}")
             findings += 1
+    if review_count:
+        print(
+            f"source review guidance: {review_count} authored files exceed "
+            f"{review_threshold_lines} lines (non-failing)"
+        )
     print(f"deslop findings: {findings}")
     return 1 if findings else 0
 

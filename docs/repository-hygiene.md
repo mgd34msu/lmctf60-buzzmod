@@ -42,10 +42,13 @@ not classify the root Quake II and LMCTF source or vendored SQLite as new projec
 code.
 
 `tools/deslop_audit.py` reads `tools/source-size-budget.json`. Eight hundred
-lines is the default review threshold; a larger cohesive module needs an
-explicit recorded allowance. The audit also rejects lines over 100 columns in
-files that have no exception. Do not add unrelated work to an existing size
-exception. Lower stale allowances when a file becomes smaller. Run
+lines is a review threshold, not a hard module limit. The audit reports how many
+authored files exceed that threshold without failing them. An authored file may
+contain at most 9,999 lines; the audit rejects files with 10,000 lines or more.
+
+The audit separately rejects lines over 100 columns in files that have no
+reviewed exception. Do not add unrelated overlong lines to an existing
+exception. Lower a stale allowance when a file has fewer overlong lines. Run
 `make deslop-test` with either Make dialect.
 
 Split source at an ownership or lifecycle boundary. Keep the public interface in
