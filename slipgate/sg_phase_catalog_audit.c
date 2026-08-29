@@ -1988,15 +1988,12 @@ int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
 	}
 	if (catalog->transition_count < oracle.transition_count)
 	{
-		result_out->omitted_phases = oracle.transition_count -
-			catalog->transition_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_OMITTED_TRANSITION,
 			catalog->transition_count);
 		goto failure;
 	}
 	if (catalog->transition_count > oracle.transition_count)
 	{
-		result_out->invented_phases = catalog->transition_count - oracle.transition_count;
 		SetReport(result_out, SG_PHASE_CATALOG_AUDIT_INVENTED_TRANSITION,
 			oracle.transition_count);
 		goto failure;

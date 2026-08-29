@@ -377,6 +377,29 @@ int main(void)
 		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogAudit(&phase_source, catalog,
 			&audit));
 		CHECK_PHASE_INTEGRATION(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
+		if (catalog->transition_count != 0U)
+		{
+			uint32_t transition_count = catalog->transition_count;
+			uint32_t transition_capacity = catalog->transition_capacity;
+
+			catalog->transition_count = transition_count - 1U;
+			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source, catalog,
+				&audit));
+			CHECK_PHASE_INTEGRATION(audit.code ==
+				SG_PHASE_CATALOG_AUDIT_OMITTED_TRANSITION);
+			CHECK_PHASE_INTEGRATION(audit.omitted_phases == 0U &&
+				audit.invented_phases == 0U);
+			catalog->transition_count = transition_count + 1U;
+			catalog->transition_capacity = transition_count + 1U;
+			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source, catalog,
+				&audit));
+			CHECK_PHASE_INTEGRATION(audit.code ==
+				SG_PHASE_CATALOG_AUDIT_INVENTED_TRANSITION);
+			CHECK_PHASE_INTEGRATION(audit.omitted_phases == 0U &&
+				audit.invented_phases == 0U);
+			catalog->transition_count = transition_count;
+			catalog->transition_capacity = transition_capacity;
+		}
 		for (index = 0U; index < catalog->transition_count; index++)
 			if (catalog->transition_evidence[index].origin ==
 				SG_PHASE_CATALOG_TRANSITION_MECHANISM_STATE_TIMING)

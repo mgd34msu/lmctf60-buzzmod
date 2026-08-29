@@ -1209,26 +1209,6 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_bsp_entity_semantics.o \
 		 slipgate/sg_bsp_entity_semantics_audit_expected.o \
 		 slipgate/sg_bsp_entity_semantics_publication.o \
-		 slipgate/sg_authority_entropy.o \
-		 slipgate/sg_bsp_completeness_proof.o \
-		 slipgate/sg_bsp_completeness_core.o \
-		 slipgate/sg_bsp_completeness_region.o \
-		 slipgate/sg_bsp_completeness_traversal.o \
-		 slipgate/sg_bsp_completeness_lattice.o \
-		 slipgate/sg_bsp_completeness_coverage.o \
-		 slipgate/sg_bsp_completeness_state.o \
-		 slipgate/sg_bsp_completeness_portal.o \
-		 slipgate/sg_bsp_completeness_portal_index.o \
-		 slipgate/sg_configuration_semantics.o \
-		 slipgate/sg_configuration_lattice.o \
-		 slipgate/sg_configuration_space.o \
-		 slipgate/sg_configuration_audit.o \
-		 slipgate/sg_mechanism_capability.o \
-		 slipgate/sg_mechanism_capability_seal.o \
-		 slipgate/sg_phase_catalog.o slipgate/sg_phase_catalog_audit.o \
-		 slipgate/sg_phase_catalog_publication.o \
-		 slipgate/sg_phase_catalog_owner.o \
-		 slipgate/sg_phase_mover_support_provider.o \
 		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
 		 slipgate/sg_strategy_caller.o slipgate/sg_strategy_runtime_bridge.o \
 		 slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
@@ -1322,13 +1302,6 @@ endif
 
 SHLIBCFLAGS = -fPIC
 SHLIBLDFLAGS = -shared
-ISL_CFLAGS ?= $(shell pkg-config --cflags isl 2>/dev/null)
-ISL_LIBS ?= $(shell pkg-config --libs isl 2>/dev/null)
-CPPFLAGS += $(ISL_CFLAGS)
-LDFLAGS += $(ISL_LIBS)
-ifeq ($(PLATFORM),Windows)
-LDFLAGS += -ladvapi32
-endif
 
 ######################################################################
 # Targets
