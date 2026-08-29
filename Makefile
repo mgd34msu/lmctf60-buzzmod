@@ -3885,11 +3885,29 @@ hook-visibility-catalog-test: \
 	$(E) [TEST] hook visibility catalog
 	$(Q)sh tests/run_sg_hook_visibility_catalog_test.sh
 
+static-affordance-catalog-publication-test: \
+		tests/run_sg_static_affordance_catalog_test.sh \
+		tests/sg_static_affordance_catalog_test.c \
+		tests/sg_hook_visibility_feasibility_fixture.c \
+		tests/sg_hook_visibility_feasibility_fixture.h \
+		tests/sg_weapon_static_affordance_fixture.h \
+		slipgate/sg_static_affordance_catalog.c \
+		slipgate/sg_static_affordance_catalog.h \
+		slipgate/sg_weapon_static_affordance.c \
+		slipgate/sg_weapon_static_affordance.h \
+		slipgate/sg_static_visibility_publication.c \
+		slipgate/sg_static_visibility_publication.h \
+		slipgate/sg_hook_visibility_catalog.c \
+		slipgate/sg_hook_visibility_catalog.h
+	$(E) [TEST] static affordance catalog publication
+	$(Q)sh tests/run_sg_static_affordance_catalog_test.sh
+
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
 		weapon-effect-profile-test hook-visibility-catalog-test \
+		static-affordance-catalog-publication-test \
 		tests/sg_rune_v2_artifact_contract_test.c \
 		tests/sg_rune_runtime_contract_test.c \
 		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
