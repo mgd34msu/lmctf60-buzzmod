@@ -14,6 +14,7 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
             source = self.text(path)
             self.assertIn("slipgate/sg_strategy.o", source)
             self.assertIn("slipgate/sg_strategy_caller.o", source)
+            self.assertIn("slipgate/sg_strategy_runtime_bridge.o", source)
 
     def test_bot_slot_owns_and_initializes_strategy_lifecycle(self):
         header = self.text("slipgate/sg_bot.h")
@@ -52,7 +53,7 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         self.assertIn("SG_STRATEGY_BLOCK_COMBAT", source)
         self.assertIn("SG_STRATEGY_BLOCK_OBSTRUCTION", source)
 
-    def test_role_objective_and_human_order_feed_typed_proposal(self):
+    def test_role_objective_and_human_order_feed_authenticated_queued_plan(self):
         source = self.text("sg_arach.c")
         chat = self.text("sg_chat.c")
         for goal in (
@@ -68,7 +69,21 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         self.assertIn("SG_DESTINATION_POWERUP", source)
         self.assertIn("SG_ChatOrderPrincipal(tc->e)", source)
         self.assertIn("SG_STRATEGY_AUTHORITY_HUMAN", source)
+        self.assertIn("SG_STRATEGY_DEPENDENCY_SETTLED", source)
+        self.assertIn("SG_StrategyRuntimePlanResolve", source)
+        self.assertIn("SG_StrategyCallerSubmit", source)
+        self.assertIn("SG_StrategyCallerAdvance", source)
+        self.assertIn("SG_StrategyCallerSettle", source)
+        self.assertNotIn("SG_FieldRootSeed", source)
+        self.assertNotIn("SG_Rune()->seeds[root]", source)
         self.assertIn("return chat_bot[cl].order_from;", chat)
+
+    def test_reducer_owns_the_post_commit_route(self):
+        source = self.text("sg_arach.c")
+        commit = source.index("StrategyCommitFrame(bot, &tc", source.index(
+            "Think_Objective(bot, &tc)"
+        ))
+        self.assertNotIn("RouteLocalNormalize(bot, &tc)", source[commit:])
 
 
 if __name__ == "__main__":

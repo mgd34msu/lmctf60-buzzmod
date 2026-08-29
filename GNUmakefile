@@ -1205,7 +1205,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_belief.o slipgate/sg_destination.o slipgate/sg_rune_dynamics_model.o \
 		 slipgate/sg_rune_dynamics_geometry.o slipgate/sg_rune_field_contract.o \
 		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
-		 slipgate/sg_strategy_caller.o \
+		 slipgate/sg_strategy_caller.o slipgate/sg_strategy_runtime_bridge.o \
 		 slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################
@@ -3456,6 +3456,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		tests/sg_strategy_caller_test.c \
 		tests/test_strategy_caller_integration.py \
 		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
+		slipgate/sg_strategy_runtime_bridge.c slipgate/sg_strategy_runtime_bridge.h \
 		tests/support/yq2_pmove.c q_shared.c
 	@set -e; \
 	tmp=$$(mktemp -d); \

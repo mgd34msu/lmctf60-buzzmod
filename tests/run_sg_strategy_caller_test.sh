@@ -6,7 +6,7 @@ tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wcast-align'
-sources='tests/sg_strategy_caller_test.c slipgate/sg_strategy_caller.c slipgate/sg_strategy.c'
+sources='tests/sg_strategy_caller_test.c slipgate/sg_strategy_caller.c slipgate/sg_strategy_runtime_bridge.c slipgate/sg_strategy.c'
 
 cd "$repo_dir"
 

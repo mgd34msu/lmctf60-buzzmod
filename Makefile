@@ -1311,6 +1311,7 @@ OBJS := \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_strategy.o \
 	slipgate/sg_strategy_caller.o \
+	slipgate/sg_strategy_runtime_bridge.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \
 	sg_net.o \
@@ -3956,6 +3957,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		tests/sg_strategy_caller_test.c \
 		tests/test_strategy_caller_integration.py \
 		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
+		slipgate/sg_strategy_runtime_bridge.c slipgate/sg_strategy_runtime_bridge.h \
 		tests/support/yq2_pmove.c q_shared.c
 	$(E) [TEST] RUNE v2 contracts
 	$(Q)set -e; \
