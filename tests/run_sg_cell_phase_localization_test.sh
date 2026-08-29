@@ -6,7 +6,7 @@ tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
-sources='tests/sg_cell_phase_localization_test.c slipgate/sg_cell_phase_localization.c slipgate/sg_host_collision.c slipgate/sg_rune_model.c'
+sources='tests/sg_cell_phase_localization_test.c slipgate/sg_cell_phase_localization.c slipgate/sg_host_collision.c slipgate/sg_host_pmove.c slipgate/sg_rune_model.c'
 
 cd "$repo_dir"
 for cc in gcc clang

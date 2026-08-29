@@ -119,12 +119,14 @@ static int HullMatchesIdentity(const sg_host_collision_authority_t *authority,
 	return pmove->s.gravity == (short)authority->identity.physics.gravity;
 }
 
-int SG_HostPmoveEvaluateFrame(
+static int EvaluateFrame(
 	const sg_host_collision_authority_t *authority,
 	const sg_host_collision_scene_t *scene,
 	sg_host_pmove_function_t host_pmove,
 	const sg_host_pmove_request_t *request,
-	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+	sg_host_pmove_result_t *result_out,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
 {
 	sg_host_pmove_scope_t scope;
 	pmove_state_t previous;
@@ -146,6 +148,9 @@ int SG_HostPmoveEvaluateFrame(
 		error = SG_HOST_PMOVE_ERROR_UNSUPPORTED_TIMING;
 	else if (parameters < 0)
 		error = SG_HOST_PMOVE_ERROR_UNSUPPORTED_GRAVITY;
+	else if (replay_out && (!workspace || !workspace->substeps ||
+		workspace->substep_capacity < steps))
+		error = SG_HOST_PMOVE_ERROR_CAPACITY;
 	if (error != SG_HOST_PMOVE_ERROR_NONE)
 	{
 		if (error_out)
@@ -182,6 +187,24 @@ int SG_HostPmoveEvaluateFrame(
 		}
 		state = pm.s;
 		previous = pm.s;
+		if (replay_out)
+		{
+			sg_host_pmove_substep_t *substep = &workspace->substeps[step];
+			uint32_t axis;
+
+			memset(substep, 0, sizeof(*substep));
+			substep->state = pm.s;
+			for (axis = 0U; axis < 3U; axis++)
+			{
+				substep->origin[axis] = pm.s.origin[axis] * 0.125f;
+				substep->velocity[axis] = pm.s.velocity[axis] * 0.125f;
+			}
+			substep->stance = (pm.s.pm_flags & PMF_DUCKED) ?
+				SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+			substep->step = step;
+			substep->elapsed_ms =
+				(step + 1U) * authority->identity.physics.substep_ms;
+		}
 	}
 	sg_host_pmove_scope = NULL;
 	if (error != SG_HOST_PMOVE_ERROR_NONE)
@@ -225,9 +248,53 @@ int SG_HostPmoveEvaluateFrame(
 	result_out->elapsed_ms = authority->identity.physics.frame_ms;
 	result_out->gravity = authority->identity.physics.gravity;
 	result_out->physics_abi_id = authority->identity.physics_abi_id;
+	if (replay_out)
+	{
+		memset(replay_out, 0, sizeof(*replay_out));
+		replay_out->request = *request;
+		replay_out->result = *result_out;
+		replay_out->substeps = workspace->substeps;
+		replay_out->substep_count = steps;
+		replay_out->bsp_content_id = authority->identity.bsp_content_id;
+		replay_out->physics_abi_id = authority->identity.physics_abi_id;
+		replay_out->frame_ms = authority->identity.physics.frame_ms;
+		replay_out->substep_ms = authority->identity.physics.substep_ms;
+	}
 	if (error_out)
 		*error_out = SG_HOST_PMOVE_ERROR_NONE;
 	return 1;
+}
+
+int SG_HostPmoveEvaluateFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	sg_host_pmove_function_t host_pmove,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+{
+	return EvaluateFrame(authority, scene, host_pmove, request, result_out,
+		NULL, NULL, error_out);
+}
+
+int SG_HostPmoveReplayFrame(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	sg_host_pmove_function_t host_pmove,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
+{
+	sg_host_pmove_result_t result;
+
+	if (!replay_out)
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
+		return 0;
+	}
+	memset(replay_out, 0, sizeof(*replay_out));
+	return EvaluateFrame(authority, scene, host_pmove, request, &result,
+		workspace, replay_out, error_out);
 }
 
 const char *SG_HostPmoveErrorString(sg_host_pmove_error_t error)
@@ -241,6 +308,7 @@ const char *SG_HostPmoveErrorString(sg_host_pmove_error_t error)
 	case SG_HOST_PMOVE_ERROR_UNSUPPORTED_GRAVITY: return "unsupported Pmove gravity";
 	case SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH: return "Pmove identity mismatch";
 	case SG_HOST_PMOVE_ERROR_REENTRANT: return "reentrant Pmove evaluation";
+	case SG_HOST_PMOVE_ERROR_CAPACITY: return "insufficient replay capacity";
 	case SG_HOST_PMOVE_ERROR_COLLISION: return "collision callback failure";
 	default: return "unknown Pmove error";
 	}

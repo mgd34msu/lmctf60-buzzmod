@@ -1,5 +1,6 @@
 #include "sg_cell_phase_localization.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -159,99 +160,6 @@ static int FindRuntimePhase(const sg_rune_model_t *model,
 			last = middle;
 	}
 	return 0;
-}
-
-static int FindMechanism(const sg_rune_model_t *model,
-	const sg_rune_mechanism_ref_t *reference, uint32_t *mechanism_out)
-{
-	uint32_t first = 0U;
-	uint32_t last;
-
-	if (!model || !reference ||
-		!SG_RuneModelStableIdValid(&reference->value))
-		return 0;
-	last = model->mechanism_count;
-	while (first < last)
-	{
-		uint32_t middle = first + (last - first) / 2U;
-		int comparison = StableIdCompare(
-			&model->mechanisms[middle].id.value, &reference->value);
-
-		if (comparison == 0)
-		{
-			if (mechanism_out)
-				*mechanism_out = middle;
-			return 1;
-		}
-		if (comparison < 0)
-			first = middle + 1U;
-		else
-			last = middle;
-	}
-	return 0;
-}
-
-static const sg_localization_mover_binding_t *FindMoverBinding(
-	const sg_cell_phase_locator_t *locator, uint64_t instance_id)
-{
-	size_t first = 0U;
-	size_t last = locator->mover_binding_count;
-
-	while (first < last)
-	{
-		size_t middle = first + (last - first) / 2U;
-		uint64_t candidate = locator->mover_bindings[middle].instance_id;
-
-		if (candidate == instance_id)
-			return &locator->mover_bindings[middle];
-		if (candidate < instance_id)
-			first = middle + 1U;
-		else
-			last = middle;
-	}
-	return NULL;
-}
-
-static int EntityEqual(const sg_rune_entity_ref_t *left,
-	const sg_rune_entity_ref_t *right)
-{
-	return left && right && left->index == right->index &&
-		left->spawn_ordinal == right->spawn_ordinal;
-}
-
-static int EntityNone(const sg_rune_entity_ref_t *entity)
-{
-	return entity && entity->index == UINT32_MAX &&
-		entity->spawn_ordinal == UINT32_MAX;
-}
-
-static int BindMoverAuthority(const sg_host_collision_authority_t *authority,
-	const sg_rune_model_t *model,
-	const sg_localization_mover_binding_t *bindings, size_t binding_count)
-{
-	size_t index;
-
-	if (binding_count != 0U && !bindings)
-		return 0;
-	for (index = 0U; index < binding_count; index++)
-	{
-		const sg_localization_mover_binding_t *binding = &bindings[index];
-		const sg_rune_mechanism_t *mechanism;
-		uint32_t mechanism_index;
-
-		if (binding->instance_id == 0U || binding->model_index == 0U ||
-			binding->model_index >= authority->world->model_count ||
-			binding->reserved != 0U ||
-			(index != 0U && bindings[index - 1U].instance_id >=
-				binding->instance_id) ||
-			!FindMechanism(model, &binding->mechanism, &mechanism_index))
-			return 0;
-		mechanism = &model->mechanisms[mechanism_index];
-		if (EntityNone(&binding->entity) ||
-			!EntityEqual(&binding->entity, &mechanism->entity))
-			return 0;
-	}
-	return 1;
 }
 
 static int ConfigurationShapeValid(
@@ -848,9 +756,7 @@ int SG_CellPhaseLocatorPrepare(
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_localization_region_binding_t *bindings,
-	size_t binding_count,
-	const sg_localization_mover_binding_t *mover_bindings,
-	size_t mover_binding_count, sg_localization_workspace_t *workspace,
+	size_t binding_count, sg_localization_workspace_t *workspace,
 	sg_cell_phase_locator_t *locator_out,
 	sg_localization_status_t *status_out)
 {
@@ -904,9 +810,7 @@ int SG_CellPhaseLocatorPrepare(
 		!BindConfigurationPortals(configuration, workspace, locator_out) ||
 		!BindStanceOverlaps(configuration, workspace) ||
 		!BindPhaseTransitions(snapshot, workspace, locator_out) ||
-		!BindPhaseKernels(snapshot, workspace, locator_out) ||
-		!BindMoverAuthority(authority, snapshot->model, mover_bindings,
-			mover_binding_count))
+		!BindPhaseKernels(snapshot, workspace, locator_out))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_INVALID_BINDING);
 		return 0;
@@ -929,8 +833,6 @@ int SG_CellPhaseLocatorPrepare(
 		workspace->phase_transition_indices;
 	locator_out->phase_kernel_offsets = workspace->phase_kernel_offsets;
 	locator_out->phase_kernel_indices = workspace->phase_kernel_indices;
-	locator_out->mover_bindings = mover_bindings;
-	locator_out->mover_binding_count = mover_binding_count;
 	locator_out->rune_identity = snapshot->identity;
 	locator_out->topology_revision = snapshot->topology_revision;
 	locator_out->configuration_cell_count = configuration->cell_count;
@@ -959,7 +861,6 @@ static int LocatorCurrent(const sg_cell_phase_locator_t *locator)
 			locator->portal_indices) &&
 		(locator->configuration_stance_overlap_count == 0U ||
 			locator->stance_overlap_indices) &&
-		(locator->mover_binding_count == 0U || locator->mover_bindings) &&
 		(locator->runtime_phase_transition_count == 0U ||
 			locator->phase_transition_indices) &&
 		(locator->runtime_kernel_count == 0U ||
@@ -979,6 +880,67 @@ static int LocatorCurrent(const sg_cell_phase_locator_t *locator)
 			locator->snapshot->model->phase_transition_count &&
 		locator->runtime_kernel_count ==
 			locator->snapshot->model->kernel_count;
+}
+
+int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
+	sg_host_pmove_function_t host_pmove,
+	sg_cell_phase_runtime_t *runtime_out,
+	sg_localization_status_t *status_out)
+{
+	if (runtime_out)
+		memset(runtime_out, 0, sizeof(*runtime_out));
+	SetStatus(status_out, SG_LOCALIZATION_INVALID_ARGUMENT);
+	if (!runtime_out || !host_pmove || !LocatorCurrent(locator))
+		return 0;
+	runtime_out->locator = locator;
+	runtime_out->host_pmove = host_pmove;
+	runtime_out->rune_identity = locator->rune_identity;
+	runtime_out->topology_revision = locator->topology_revision;
+	runtime_out->physics_abi_id = locator->authority->identity.physics_abi_id;
+	runtime_out->prepared = 1U;
+	/* The accepted mover/entity/host-law publications are not all available.
+	 * A caller-provided scene or timeline must never turn this on. */
+	runtime_out->mover_authority_ready = 0U;
+	SetStatus(status_out, SG_LOCALIZATION_OK);
+	return 1;
+}
+
+static int RuntimeCurrent(const sg_cell_phase_runtime_t *runtime)
+{
+	return runtime && runtime->prepared == 1U &&
+		ZeroBytes(runtime->reserved, sizeof(runtime->reserved)) &&
+		runtime->host_pmove && LocatorCurrent(runtime->locator) &&
+		runtime->rune_identity == runtime->locator->rune_identity &&
+		runtime->topology_revision == runtime->locator->topology_revision &&
+		runtime->physics_abi_id ==
+			runtime->locator->authority->identity.physics_abi_id &&
+		runtime->mover_authority_ready == 0U;
+}
+
+static int HostStateMatchesObservation(
+	const sg_host_collision_authority_t *authority,
+	const sg_localization_observation_t *observation)
+{
+	float gravity = authority->identity.physics.gravity;
+	uint32_t axis;
+	int ducked;
+
+	if (!isfinite(gravity) || gravity < 0.0f || gravity > (float)SHRT_MAX ||
+		truncf(gravity) != gravity ||
+		observation->host_state.pm_type != PM_NORMAL ||
+		observation->host_state.gravity !=
+			(short)gravity)
+		return 0;
+	ducked = (observation->host_state.pm_flags & PMF_DUCKED) != 0;
+	if (ducked != (observation->stance == SG_RUNE_STANCE_CROUCHING))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (observation->host_state.origin[axis] * 0.125f !=
+				observation->position[axis] ||
+			observation->host_state.velocity[axis] * 0.125f !=
+				observation->velocity[axis])
+			return 0;
+	return 1;
 }
 
 static int ObservationValid(const sg_cell_phase_locator_t *locator,
@@ -1028,7 +990,8 @@ static int ObservationValid(const sg_cell_phase_locator_t *locator,
 	}
 	if (observation->kind != SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT &&
 		observation->kind != SG_LOCALIZATION_OBSERVATION_DEAD &&
-		(!Finite3(observation->position) || !Finite3(observation->velocity)))
+		(!Finite3(observation->position) || !Finite3(observation->velocity) ||
+		 !HostStateMatchesObservation(locator->authority, observation)))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_NONFINITE);
 		return 0;
@@ -1180,77 +1143,7 @@ static int RequestRecoveryValid(const sg_localization_request_t *request,
 }
 
 static double Dot3(const float left[3], const float right[3]);
-static int MoverValid(const sg_cell_phase_locator_t *locator,
-	const sg_localization_mover_t *mover, uint64_t observed_at_ms);
-
-static void LocalizationAngleAxis(const float angles[3], float axis[3][3])
-{
-	const float radians = 0.01745329251994329577f;
-	float sy = sinf(angles[1] * radians);
-	float cy = cosf(angles[1] * radians);
-	float sp = sinf(angles[0] * radians);
-	float cp = cosf(angles[0] * radians);
-	float sr = sinf(angles[2] * radians);
-	float cr = cosf(angles[2] * radians);
-
-	axis[0][0] = cp * cy;
-	axis[0][1] = cp * sy;
-	axis[0][2] = -sp;
-	axis[1][0] = sr * sp * cy - cr * sy;
-	axis[1][1] = sr * sp * sy + cr * cy;
-	axis[1][2] = sr * cp;
-	axis[2][0] = cr * sp * cy + sr * sy;
-	axis[2][1] = cr * sp * sy - sr * cy;
-	axis[2][2] = cr * cp;
-}
-
-static void LocalizationToModelPoint(const float point[3],
-	const sg_host_collision_transform_t *transform, float result[3])
-{
-	float axis[3][3];
-	float translated[3];
-	uint32_t row;
-	uint32_t column;
-
-	for (column = 0U; column < 3U; column++)
-		translated[column] = point[column] - transform->origin[column];
-	LocalizationAngleAxis(transform->angles, axis);
-	for (row = 0U; row < 3U; row++)
-		result[row] = (float)Dot3(translated, axis[row]);
-}
-
-static int ExactMoverCarry(const sg_cell_phase_locator_t *locator,
-	const sg_localization_environment_t *environment,
-	const sg_localized_player_state_t *previous,
-	const sg_localization_observation_t *observation,
-	const sg_host_collision_pose_t *destination_pose)
-{
-	const sg_localization_mover_t *current = NULL;
-	float source_local[3];
-	float destination_local[3];
-	size_t index;
-
-	if (previous->support != SG_RUNE_SUPPORT_MOVER ||
-		!destination_pose->support_is_mover ||
-		destination_pose->support.instance_id != previous->support_instance_id ||
-		destination_pose->support.model_index != previous->support_model_index)
-		return 0;
-	for (index = 0U; index < environment->mover_count; index++)
-		if (environment->movers[index].instance_id ==
-				previous->support_instance_id)
-			current = &environment->movers[index];
-	if (!current || !MoverValid(locator, current,
-			observation->observed_at_ms) ||
-		!SG_RuneModelStableIdEqual(&current->mechanism.value,
-			&previous->mover.value) ||
-		!EntityEqual(&current->entity, &previous->mover_entity))
-		return 0;
-	LocalizationToModelPoint(previous->field_pose.position,
-		&previous->support_transform, source_local);
-	LocalizationToModelPoint(observation->position, &current->transform,
-		destination_local);
-	return memcmp(source_local, destination_local, sizeof(source_local)) == 0;
-}
+static int IntervalContains(const sg_rune_interval_t *interval, double value);
 
 static int ClearRecoveryTransition(const sg_cell_phase_locator_t *locator,
 	const sg_localization_environment_t *environment,
@@ -1456,13 +1349,15 @@ static int RepresentedPortalTransition(const sg_cell_phase_locator_t *locator,
 
 static int RepresentedPhaseTransition(const sg_cell_phase_locator_t *locator,
 	const sg_localized_player_state_t *previous, uint32_t destination_phase,
-	uint64_t observed_at_ms, uint32_t *candidates_examined)
+	const sg_localization_observation_t *observation,
+	uint32_t *candidates_examined)
 {
 	const sg_rune_model_t *model = locator->snapshot->model;
 	uint32_t source_phase = previous->field_pose.phase.phase_id;
 	uint32_t first = locator->phase_transition_offsets[source_phase];
 	uint32_t last = locator->phase_transition_offsets[source_phase + 1U];
-	uint64_t elapsed = observed_at_ms - previous->field_pose.sample_time_ms;
+	uint64_t elapsed = observation->observed_at_ms -
+		previous->field_pose.sample_time_ms;
 	uint32_t offset;
 
 	if (first > last || last > model->phase_transition_count)
@@ -1480,7 +1375,48 @@ static int RepresentedPhaseTransition(const sg_cell_phase_locator_t *locator,
 				&model->phases[destination_phase].id.value) &&
 			(double)elapsed >= transition->duration_ms.min_value &&
 			(double)elapsed <= transition->duration_ms.max_value)
-			return 1;
+		{
+			int matches = 0;
+
+			switch (transition->kind)
+			{
+			case SG_RUNE_PHASE_TRANSITION_STANCE:
+				matches = previous->stance != observation->stance;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_ACCELERATION:
+				matches = memcmp(previous->field_pose.velocity,
+					observation->velocity,
+					sizeof(observation->velocity)) != 0;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_TIME:
+				matches = observation->observed_at_ms >
+					previous->field_pose.sample_time_ms;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_MOVER_DWELL:
+				matches = 0;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_TAKEOFF:
+				matches = previous->motion == SG_RUNE_MOTION_SUPPORTED &&
+					model->phases[destination_phase].motion ==
+						SG_RUNE_MOTION_AIRBORNE;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_RELAUNCH:
+				matches = previous->motion == SG_RUNE_MOTION_AIRBORNE &&
+					model->phases[destination_phase].motion ==
+						SG_RUNE_MOTION_AIRBORNE;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_SUPPORT:
+				matches = previous->support !=
+					model->phases[destination_phase].support;
+				break;
+			case SG_RUNE_PHASE_TRANSITION_NONE:
+			case SG_RUNE_PHASE_TRANSITION_KIND_COUNT:
+				matches = 0;
+				break;
+			}
+			if (matches)
+				return 1;
+		}
 	}
 	return 0;
 }
@@ -1489,6 +1425,7 @@ static int RepresentedRuntimeCellTransition(
 	const sg_cell_phase_locator_t *locator,
 	const sg_localized_player_state_t *previous, uint32_t destination_cell,
 	uint32_t destination_phase, const sg_rune_portal_id_t *crossed_portal,
+	const sg_localization_observation_t *observation,
 	uint32_t *candidates_examined)
 {
 	const sg_rune_model_t *model = locator->snapshot->model;
@@ -1514,7 +1451,54 @@ static int RepresentedRuntimeCellTransition(
 				&model->phases[destination_phase].id.value) &&
 			SG_RuneModelStableIdEqual(&kernel->boundary.value,
 				&crossed_portal->value))
+		{
+			double duration = (double)(observation->observed_at_ms -
+				previous->field_pose.sample_time_ms);
+			double seconds = duration / 1000.0;
+			double speed_squared = 0.0;
+			double acceleration_squared = 0.0;
+			uint32_t axis;
+			const sg_rune_interval_t *displacement[3] = {
+				&kernel->parameters.displacement.x,
+				&kernel->parameters.displacement.y,
+				&kernel->parameters.displacement.z
+			};
+
+			if (!IntervalContains(&kernel->parameters.duration_ms, duration) ||
+				seconds <= 0.0 ||
+				(kernel->parameters.physics_abi_id != 0U &&
+				 kernel->parameters.physics_abi_id !=
+					locator->authority->identity.physics_abi_id))
+				continue;
+			for (axis = 0U; axis < 3U; axis++)
+			{
+				double delta = (double)observation->position[axis] -
+					previous->field_pose.position[axis];
+				double velocity_delta =
+					(double)observation->velocity[axis] -
+					previous->field_pose.velocity[axis];
+
+				if (!IntervalContains(displacement[axis], delta))
+					break;
+				speed_squared += (delta / seconds) * (delta / seconds);
+				acceleration_squared +=
+					(velocity_delta / seconds) *
+					(velocity_delta / seconds);
+			}
+			if (axis != 3U ||
+				!IntervalContains(&kernel->parameters.speed,
+					sqrt(speed_squared)))
+				continue;
+			if (kernel->cost_law == SG_RUNE_COST_ACCELERATION_LIMITED &&
+				!IntervalContains(&kernel->parameters.acceleration,
+					sqrt(acceleration_squared)))
+				continue;
+			if (kernel->cost_law == SG_RUNE_COST_BALLISTIC &&
+				kernel->parameters.gravity !=
+					locator->authority->identity.physics.gravity)
+				continue;
 			return 1;
+		}
 	}
 	return 0;
 }
@@ -1618,50 +1602,28 @@ static int StoredStateFactsValid(const sg_cell_phase_locator_t *locator,
 			SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) != 0U) !=
 		 (state->void_relation == SG_RUNE_VOID_ADJACENT)))
 		return 0;
+	if (!state->host_state_valid ||
+		state->host_state.pm_type != PM_NORMAL)
+		return 0;
 	if (state->water_level >= 2U)
 		return state->motion == SG_RUNE_MOTION_SWIMMING &&
 			state->support == SG_RUNE_SUPPORT_NONE &&
 			state->reference_frame == SG_RUNE_FRAME_WORLD &&
 			state->support_model_index == SG_LOCALIZATION_SUPPORT_MODEL_NONE &&
-			state->support_instance_id == 0U &&
-			EntityNone(&state->mover_entity) &&
-			memcmp(&state->support_transform,
-				&(sg_host_collision_transform_t){ { 0 }, { 0 } },
-				sizeof(state->support_transform)) == 0;
+			state->support_instance_id == 0U;
 	if (state->support == SG_RUNE_SUPPORT_NONE)
 		return state->motion == SG_RUNE_MOTION_AIRBORNE &&
 			state->reference_frame == SG_RUNE_FRAME_WORLD &&
 			state->support_model_index == SG_LOCALIZATION_SUPPORT_MODEL_NONE &&
-			state->support_instance_id == 0U &&
-			EntityNone(&state->mover_entity) &&
-			memcmp(&state->support_transform,
-				&(sg_host_collision_transform_t){ { 0 }, { 0 } },
-				sizeof(state->support_transform)) == 0;
+			state->support_instance_id == 0U;
 	if (state->motion != SG_RUNE_MOTION_SUPPORTED ||
 		state->support_model_index == SG_LOCALIZATION_SUPPORT_MODEL_NONE)
 		return 0;
 	if (mover_support)
-	{
-		const sg_localization_mover_binding_t *binding =
-			FindMoverBinding(locator, state->support_instance_id);
-
-		return binding && binding->model_index == state->support_model_index &&
-			SG_RuneModelStableIdEqual(&binding->mechanism.value,
-				&state->mover.value) &&
-			EntityEqual(&binding->entity, &state->mover_entity) &&
-			Finite3(state->support_transform.origin) &&
-			Finite3(state->support_transform.angles) &&
-			state->reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE &&
-			state->support_instance_id != 0U &&
-			SG_RuneModelStableIdValid(&state->mover.value);
-	}
+		return 0;
 	return state->support == SG_RUNE_SUPPORT_SUPPORTED &&
 		state->reference_frame == SG_RUNE_FRAME_WORLD &&
-		state->support_instance_id == 0U &&
-		EntityNone(&state->mover_entity) &&
-		memcmp(&state->support_transform,
-			&(sg_host_collision_transform_t){ { 0 }, { 0 } },
-			sizeof(state->support_transform)) == 0;
+		state->support_instance_id == 0U;
 }
 
 static sg_localization_status_t PreviousStateStatus(
@@ -1765,110 +1727,6 @@ static int FindSemanticRegion(const sg_cell_phase_locator_t *locator,
 	return 1;
 }
 
-static int MoverValid(const sg_cell_phase_locator_t *locator,
-	const sg_localization_mover_t *mover, uint64_t observed_at_ms)
-{
-	const sg_localization_mover_binding_t *binding;
-
-	binding = mover ? FindMoverBinding(locator, mover->instance_id) : NULL;
-	return mover && mover->authenticated == 1U &&
-		ZeroBytes(mover->reserved, sizeof(mover->reserved)) &&
-		mover->reserved2 == 0U && mover->sampled_at_ms == observed_at_ms &&
-		mover->instance_id != 0U && mover->model_index != 0U &&
-		Finite3(mover->velocity) && Finite3(mover->transform.origin) &&
-		Finite3(mover->transform.angles) && binding &&
-		binding->model_index == mover->model_index &&
-		SG_RuneModelStableIdEqual(&binding->mechanism.value,
-			&mover->mechanism.value) &&
-		EntityEqual(&binding->entity, &mover->entity);
-}
-
-static int TransformEqual(const sg_host_collision_transform_t *left,
-	const sg_host_collision_transform_t *right)
-{
-	return memcmp(left, right, sizeof(*left)) == 0;
-}
-
-static const sg_host_collision_instance_t *FindSceneInstance(
-	const sg_host_collision_scene_t *scene, uint64_t instance_id)
-{
-	size_t index;
-
-	if (!scene)
-		return NULL;
-	for (index = 0U; index < scene->instance_count; index++)
-		if (scene->instances[index].instance_id == instance_id)
-			return &scene->instances[index];
-	return NULL;
-}
-
-static int EnvironmentMoversValid(const sg_cell_phase_locator_t *locator,
-	const sg_localization_environment_t *environment,
-	uint64_t observed_at_ms)
-{
-	size_t index;
-	size_t scene_count = environment->scene ?
-		environment->scene->instance_count : 0U;
-
-	if (environment->mover_count != scene_count ||
-		(environment->mover_count != 0U && !environment->movers) ||
-		(scene_count != 0U && !environment->scene->instances))
-		return 0;
-	for (index = 0U; index < environment->mover_count; index++)
-	{
-		const sg_localization_mover_t *mover = &environment->movers[index];
-		const sg_host_collision_instance_t *instance;
-
-		if ((index != 0U && environment->movers[index - 1U].instance_id >=
-			mover->instance_id) || !MoverValid(locator, mover, observed_at_ms))
-			return 0;
-		instance = FindSceneInstance(environment->scene, mover->instance_id);
-		if (!instance || instance->model_index != mover->model_index ||
-			!TransformEqual(&instance->transform, &mover->transform))
-			return 0;
-	}
-	return 1;
-}
-
-static int ResolveMover(const sg_localization_environment_t *environment,
-	const sg_host_collision_pose_t *pose,
-	const sg_localization_mover_t **mover_out,
-	sg_localization_status_t *status_out)
-{
-	size_t index;
-	const sg_localization_mover_t *match = NULL;
-
-	*mover_out = NULL;
-	if (!pose->support_is_mover)
-		return 1;
-	if (!environment->movers || environment->mover_count == 0U)
-	{
-		SetStatus(status_out, SG_LOCALIZATION_MOVER_UNBOUND);
-		return 0;
-	}
-	for (index = 0U; index < environment->mover_count; index++)
-	{
-		const sg_localization_mover_t *candidate = &environment->movers[index];
-
-		if (candidate->instance_id != pose->support.instance_id ||
-			candidate->model_index != pose->support.model_index)
-			continue;
-		if (match)
-		{
-			SetStatus(status_out, SG_LOCALIZATION_AMBIGUOUS_INPUT);
-			return 0;
-		}
-		match = candidate;
-	}
-	if (!match)
-	{
-		SetStatus(status_out, SG_LOCALIZATION_MOVER_UNBOUND);
-		return 0;
-	}
-	*mover_out = match;
-	return 1;
-}
-
 static int IntervalContains(const sg_rune_interval_t *interval, double value)
 {
 	return value >= (double)interval->min_value &&
@@ -1954,7 +1812,6 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	sg_localization_status_t *status_out, int path_step)
 {
 	sg_host_collision_pose_t host_pose;
-	const sg_localization_mover_t *live_mover;
 	sg_rune_mechanism_ref_t mover = SG_RUNE_MECHANISM_REF_NONE;
 	sg_rune_portal_id_t crossed_portal = SG_RUNE_PORTAL_REF_NONE;
 	sg_rune_motion_t motion;
@@ -1987,12 +1844,6 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	if (!ObservationValid(locator, request, observation, environment,
 			status_out))
 		return 0;
-	if (!EnvironmentMoversValid(locator, environment,
-			observation->observed_at_ms))
-	{
-		SetStatus(status_out, SG_LOCALIZATION_MOVER_UNBOUND);
-		return 0;
-	}
 	if (!RequestRecoveryValid(request, observation))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_PARAMETER);
@@ -2050,9 +1901,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	}
 	if (continuity &&
 		!ClearRecoveryTransition(locator, environment, request->previous,
-			observation) &&
-		!ExactMoverCarry(locator, environment, request->previous, observation,
-			&host_pose))
+			observation))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 		return 0;
@@ -2126,10 +1975,11 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		else if (continuity)
 			recovery = SG_LOCALIZATION_RECOVERY_EXACT_CONTINUITY;
 	}
-	live_mover = NULL;
-	if (host_pose.water_level < 2U &&
-		!ResolveMover(environment, &host_pose, &live_mover, status_out))
+	if (host_pose.water_level < 2U && host_pose.support_is_mover)
+	{
+		SetStatus(status_out, SG_LOCALIZATION_MOVER_UNBOUND);
 		return 0;
+	}
 	runtime_cell = locator->region_runtime_cells[semantic_region];
 	if (runtime_cell >= locator->runtime_cell_count)
 	{
@@ -2158,10 +2008,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		reference_frame = SG_RUNE_FRAME_WORLD;
 	}
 	for (axis = 0U; axis < 3U; axis++)
-		phase_velocity[axis] = observation->velocity[axis] -
-			(live_mover ? live_mover->velocity[axis] : 0.0f);
-	if (live_mover)
-		mover = live_mover->mechanism;
+		phase_velocity[axis] = observation->velocity[axis];
 	void_relation = (locator->semantics->regions[semantic_region].flags &
 		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT) ?
 		SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
@@ -2183,26 +2030,16 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		elapsed_ms = observation->observed_at_ms - phase_started_at_ms;
 		if (!FindPhase(locator, runtime_cell, observation->stance, motion,
 				support, medium, void_relation, reference_frame, &mover,
-				phase_velocity, elapsed_ms, &phase) ||
-			phase != request->previous->field_pose.phase.phase_id)
+				phase_velocity, elapsed_ms, &phase))
 		{
-			phase_started_at_ms =
-				request->previous->field_pose.sample_time_ms;
-			elapsed_ms = observation->observed_at_ms - phase_started_at_ms;
-			if (!FindPhase(locator, runtime_cell, observation->stance, motion,
-					support, medium, void_relation, reference_frame, &mover,
-					phase_velocity, elapsed_ms, &phase) ||
-				phase == request->previous->field_pose.phase.phase_id)
-			{
-				SetStatus(status_out, SG_LOCALIZATION_NO_PHASE);
-				return 0;
-			}
+			SetStatus(status_out, SG_LOCALIZATION_NO_PHASE);
+			return 0;
 		}
 	}
 	if (continuity && runtime_cell !=
 			request->previous->field_pose.phase.cell_id &&
 		!RepresentedRuntimeCellTransition(locator, request->previous,
-			runtime_cell, phase, &crossed_portal,
+			runtime_cell, phase, &crossed_portal, observation,
 			&kernel_candidates_examined))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
@@ -2212,7 +2049,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 			request->previous->field_pose.phase.cell_id &&
 		phase != request->previous->field_pose.phase.phase_id &&
 		!RepresentedPhaseTransition(locator, request->previous, phase,
-			observation->observed_at_ms,
+			observation,
 			&phase_transition_candidates_examined))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
@@ -2242,8 +2079,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		state_out->field_pose.position[axis] = observation->position[axis];
 		state_out->field_pose.velocity[axis] = observation->velocity[axis];
 		state_out->phase_velocity[axis] = phase_velocity[axis];
-		state_out->reference_velocity[axis] = live_mover ?
-			live_mover->velocity[axis] : 0.0f;
+		state_out->reference_velocity[axis] = 0.0f;
 	}
 	state_out->field_pose.sample_time_ms = observation->observed_at_ms;
 	state_out->field_pose.region_id =
@@ -2273,10 +2109,8 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		host_pose.support.model_index : SG_LOCALIZATION_SUPPORT_MODEL_NONE;
 	state_out->support_instance_id = support != SG_RUNE_SUPPORT_NONE ?
 		host_pose.support.instance_id : 0U;
-	state_out->mover_entity = live_mover ? live_mover->entity :
-		SG_RUNE_ENTITY_REF_NONE;
-	if (live_mover)
-		state_out->support_transform = live_mover->transform;
+	state_out->host_state = observation->host_state;
+	state_out->host_state_valid = 1U;
 	state_out->recovery = recovery;
 	state_out->portal_candidates_examined = portal_candidates_examined;
 	state_out->phase_transition_candidates_examined =
@@ -2286,109 +2120,207 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	return 1;
 }
 
-static int ContinuitySampleValid(const sg_cell_phase_locator_t *locator,
-	const sg_localization_observation_t *observation,
-	const sg_localization_continuity_sample_t *sample)
+static int PmoveStateEqual(const pmove_state_t *left,
+	const pmove_state_t *right)
 {
-	return sample && sample->authenticated == 1U &&
-		ZeroBytes(sample->reserved, sizeof(sample->reserved)) &&
-		sample->stance >= SG_RUNE_STANCE_STANDING &&
-		sample->stance < SG_RUNE_STANCE_COUNT &&
-		sample->rune_identity == locator->rune_identity &&
-		sample->topology_revision == locator->topology_revision &&
-		sample->frame_sequence == observation->frame_sequence &&
-		sample->authenticated_at_ms == sample->sampled_at_ms &&
-		Finite3(sample->position) && Finite3(sample->velocity);
+	uint32_t axis;
+
+	if (left->pm_type != right->pm_type || left->pm_flags != right->pm_flags ||
+		left->pm_time != right->pm_time || left->gravity != right->gravity)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (left->origin[axis] != right->origin[axis] ||
+			left->velocity[axis] != right->velocity[axis] ||
+			left->delta_angles[axis] != right->delta_angles[axis])
+			return 0;
+	return 1;
 }
 
-static int FinalContinuitySampleEqual(
-	const sg_localization_continuity_sample_t *sample,
-	const sg_localization_observation_t *observation,
-	const sg_localization_environment_t *environment)
+static float MaximumHostAcceleration(
+	const sg_rune_physics_parameters_t *physics)
 {
-	return sample->stance == observation->stance &&
-		sample->sampled_at_ms == observation->observed_at_ms &&
-		memcmp(sample->position, observation->position,
-			sizeof(sample->position)) == 0 &&
-		memcmp(sample->velocity, observation->velocity,
-			sizeof(sample->velocity)) == 0 && sample->scene == environment->scene &&
-		sample->movers == environment->movers &&
-		sample->mover_count == environment->mover_count;
+	float maximum = physics->ground_acceleration;
+
+	if (physics->air_acceleration > maximum)
+		maximum = physics->air_acceleration;
+	if (physics->water_acceleration > maximum)
+		maximum = physics->water_acceleration;
+	if (physics->hook_acceleration > maximum)
+		maximum = physics->hook_acceleration;
+	if (physics->external_acceleration > maximum)
+		maximum = physics->external_acceleration;
+	return maximum + physics->gravity;
 }
 
-int SG_CellPhaseLocalize(const sg_cell_phase_locator_t *locator,
+static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
+	const sg_localized_player_state_t *previous,
+	const sg_host_pmove_substep_t *substep, uint32_t substep_ms)
+{
+	const sg_rune_physics_parameters_t *physics = &authority->identity.physics;
+	double seconds = (double)substep_ms / 1000.0;
+	double acceleration = MaximumHostAcceleration(physics);
+	double position_slop = 0.125 + acceleration * seconds * seconds;
+	double velocity_slop = 0.125 + acceleration * seconds;
+	uint32_t axis;
+
+	if (substep->elapsed_ms != (substep->step + 1U) * substep_ms ||
+		substep->state.pm_type != PM_NORMAL)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		double source_velocity = previous->field_pose.velocity[axis];
+		double destination_velocity = substep->velocity[axis];
+		double maximum_velocity = fmax(fabs(source_velocity),
+			fabs(destination_velocity));
+		double displacement = fabs((double)substep->origin[axis] -
+			previous->field_pose.position[axis]);
+
+		if (maximum_velocity > physics->max_velocity ||
+			fabs(destination_velocity - source_velocity) > velocity_slop ||
+			displacement > maximum_velocity * seconds + position_slop)
+			return 0;
+	}
+	return 1;
+}
+
+static int ReplayFinalEqual(const sg_host_pmove_replay_t *replay,
+	const sg_localization_observation_t *observation)
+{
+	int crouching = (replay->result.state.pm_flags & PMF_DUCKED) != 0;
+
+	return PmoveStateEqual(&replay->result.state, &observation->host_state) &&
+		memcmp(replay->result.origin, observation->position,
+			sizeof(replay->result.origin)) == 0 &&
+		memcmp(replay->result.velocity, observation->velocity,
+			sizeof(replay->result.velocity)) == 0 &&
+		crouching == (observation->stance == SG_RUNE_STANCE_CROUCHING);
+}
+
+int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	const sg_localization_request_t *request,
 	const sg_localization_observation_t *observation,
 	const sg_localization_environment_t *environment,
 	sg_localized_player_state_t *state_out,
 	sg_localization_status_t *status_out)
 {
+	const sg_cell_phase_locator_t *locator;
+	sg_host_pmove_replay_workspace_t replay_workspace;
+	sg_host_pmove_replay_t replay;
+	sg_host_pmove_error_t replay_error;
 	sg_localized_player_state_t first;
 	sg_localized_player_state_t second;
 	const sg_localized_player_state_t *previous;
+	uint64_t portal_candidates_examined = 0U;
+	uint64_t phase_transition_candidates_examined = 0U;
+	uint64_t kernel_candidates_examined = 0U;
 	size_t index;
 
+	if (!RuntimeCurrent(runtime))
+	{
+		if (state_out)
+			memset(state_out, 0, sizeof(*state_out));
+		SetStatus(status_out, SG_LOCALIZATION_INVALID_ARGUMENT);
+		return 0;
+	}
+	locator = runtime->locator;
 	if (!request || !observation || !environment ||
 		observation->kind != SG_LOCALIZATION_OBSERVATION_PRESENT ||
 		request->previous == NULL)
 		return LocalizeOne(locator, request, observation, environment,
 			state_out, status_out, 0);
-	if (!state_out || !environment->continuity_samples ||
-		environment->continuity_sample_count == 0U)
+	if (!state_out || !environment->pmove_request ||
+		!environment->replay_substeps ||
+		(environment->scene && environment->scene->instance_count != 0U) ||
+		locator->authority->identity.physics.frame_ms > UCHAR_MAX ||
+		environment->pmove_request->command.msec !=
+			(byte)locator->authority->identity.physics.frame_ms ||
+		observation->observed_at_ms <
+			request->previous->field_pose.sample_time_ms ||
+		observation->observed_at_ms -
+			request->previous->field_pose.sample_time_ms !=
+			locator->authority->identity.physics.frame_ms ||
+		!PmoveStateEqual(&environment->pmove_request->state,
+			&request->previous->host_state) ||
+		!PmoveStateEqual(&environment->pmove_request->previous_state,
+			&request->previous->host_state))
 	{
 		if (state_out)
 			memset(state_out, 0, sizeof(*state_out));
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 		return 0;
 	}
-	previous = request->previous;
-	for (index = 0U; index < environment->continuity_sample_count; index++)
+	replay_workspace.substeps = environment->replay_substeps;
+	replay_workspace.substep_capacity = environment->replay_substep_capacity;
+	if (!SG_HostPmoveReplayFrame(locator->authority, environment->scene,
+			runtime->host_pmove, environment->pmove_request,
+			&replay_workspace, &replay, &replay_error))
 	{
-		const sg_localization_continuity_sample_t *sample =
-			&environment->continuity_samples[index];
+		memset(state_out, 0, sizeof(*state_out));
+		SetStatus(status_out, replay_error == SG_HOST_PMOVE_ERROR_CAPACITY ?
+			SG_LOCALIZATION_CAPACITY : SG_LOCALIZATION_RECOVERY_REJECTED);
+		return 0;
+	}
+	if (!ReplayFinalEqual(&replay, observation))
+	{
+		memset(state_out, 0, sizeof(*state_out));
+		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
+		return 0;
+	}
+	previous = request->previous;
+	for (index = 0U; index < replay.substep_count; index++)
+	{
+		const sg_host_pmove_substep_t *substep = &replay.substeps[index];
 		sg_localization_observation_t step = *observation;
 		sg_localization_environment_t step_environment = *environment;
 		sg_localization_request_t step_request = *request;
 		sg_localized_player_state_t *output = (index & 1U) ? &second : &first;
 
-		if (!ContinuitySampleValid(locator, observation, sample) ||
-			sample->sampled_at_ms < previous->field_pose.sample_time_ms ||
-			sample->sampled_at_ms > observation->observed_at_ms)
+		if (!ReplayMotionValid(locator->authority, previous, substep,
+				replay.substep_ms))
 		{
 			memset(state_out, 0, sizeof(*state_out));
 			SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 			return 0;
 		}
-		step.stance = sample->stance;
-		step.observed_at_ms = sample->sampled_at_ms;
-		step.authenticated_at_ms = sample->authenticated_at_ms;
-		memcpy(step.position, sample->position, sizeof(step.position));
-		memcpy(step.velocity, sample->velocity, sizeof(step.velocity));
-		step_environment.sampled_at_ms = sample->sampled_at_ms;
-		step_environment.authenticated_at_ms = sample->authenticated_at_ms;
-		step_environment.scene = sample->scene;
-		step_environment.movers = sample->movers;
-		step_environment.mover_count = sample->mover_count;
-		step_environment.continuity_samples = NULL;
-		step_environment.continuity_sample_count = 0U;
+		step.stance = substep->stance;
+		step.observed_at_ms = request->previous->field_pose.sample_time_ms +
+			substep->elapsed_ms;
+		step.authenticated_at_ms = step.observed_at_ms;
+		memcpy(step.position, substep->origin, sizeof(step.position));
+		memcpy(step.velocity, substep->velocity, sizeof(step.velocity));
+		step.host_state = substep->state;
+		step_environment.sampled_at_ms = step.observed_at_ms;
+		step_environment.authenticated_at_ms = step.observed_at_ms;
+		step_environment.pmove_request = NULL;
+		step_environment.replay_substeps = NULL;
+		step_environment.replay_substep_capacity = 0U;
 		step_request.previous = previous;
-		step_request.now_ms = sample->sampled_at_ms;
+		step_request.now_ms = step.observed_at_ms;
 		if (!LocalizeOne(locator, &step_request, &step, &step_environment,
 				output, status_out, index != 0U))
 		{
 			memset(state_out, 0, sizeof(*state_out));
 			return 0;
 		}
+		portal_candidates_examined += output->portal_candidates_examined;
+		phase_transition_candidates_examined +=
+			output->phase_transition_candidates_examined;
+		kernel_candidates_examined += output->kernel_candidates_examined;
+		if (portal_candidates_examined > UINT32_MAX ||
+			phase_transition_candidates_examined > UINT32_MAX ||
+			kernel_candidates_examined > UINT32_MAX)
+		{
+			memset(state_out, 0, sizeof(*state_out));
+			SetStatus(status_out, SG_LOCALIZATION_CAPACITY);
+			return 0;
+		}
+		output->portal_candidates_examined =
+			(uint32_t)portal_candidates_examined;
+		output->phase_transition_candidates_examined =
+			(uint32_t)phase_transition_candidates_examined;
+		output->kernel_candidates_examined =
+			(uint32_t)kernel_candidates_examined;
 		previous = output;
-	}
-	if (!FinalContinuitySampleEqual(
-			&environment->continuity_samples[
-				environment->continuity_sample_count - 1U],
-			observation, environment))
-	{
-		memset(state_out, 0, sizeof(*state_out));
-		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
-		return 0;
 	}
 	*state_out = *previous;
 	return 1;

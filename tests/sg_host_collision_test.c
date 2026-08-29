@@ -520,6 +520,9 @@ static void TestHostPmoveBoundary(void)
 	sg_host_collision_authority_t authority = Authority(&fixture, 100, 100, 25);
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t result;
+	sg_host_pmove_substep_t substeps[4];
+	sg_host_pmove_replay_workspace_t workspace;
+	sg_host_pmove_replay_t replay;
 	sg_host_pmove_error_t error;
 
 	memset(&request, 0, sizeof(request));
@@ -536,6 +539,25 @@ static void TestHostPmoveBoundary(void)
 	CHECK(result.gravity == 100.0f && result.evaluated_steps == 4 &&
 		result.elapsed_ms == 100);
 	CHECK(result.state.velocity[2] == -8);
+	memset(substeps, 0xff, sizeof(substeps));
+	workspace.substeps = substeps;
+	workspace.substep_capacity = 4U;
+	fake_pmove_calls = 0;
+	CHECK(SG_HostPmoveReplayFrame(&authority, NULL, FakePmove, &request,
+		&workspace, &replay, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_NONE && fake_pmove_calls == 4);
+	CHECK(replay.substeps == substeps && replay.substep_count == 4U);
+	CHECK(replay.frame_ms == 100U && replay.substep_ms == 25U);
+	CHECK(replay.physics_abi_id == authority.identity.physics_abi_id);
+	CHECK(replay.bsp_content_id == authority.identity.bsp_content_id);
+	CHECK(substeps[0].step == 0U && substeps[0].elapsed_ms == 25U);
+	CHECK(substeps[3].step == 3U && substeps[3].elapsed_ms == 100U);
+	CHECK(substeps[0].state.velocity[2] == -2);
+	CHECK(substeps[3].state.velocity[2] == -8);
+	workspace.substep_capacity = 3U;
+	CHECK(!SG_HostPmoveReplayFrame(&authority, NULL, FakePmove, &request,
+		&workspace, &replay, &error));
+	CHECK(error == SG_HOST_PMOVE_ERROR_CAPACITY);
 	authority.identity.physics.gravity = 40000.0f;
 	CHECK(!SG_HostPmoveEvaluateFrame(&authority, NULL, FakePmove, &request,
 		&result, &error));
