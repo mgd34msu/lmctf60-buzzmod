@@ -363,6 +363,7 @@ RUNE_ACCEPT_BIN := runeaccept.make
 RUNE_ACCEPT_OBJS := .runeaccept.make.o \
 	.sg_rune_file_under_test.make.o \
 	.sg_rune_v2_content_identity_under_test.make.o \
+	.sg_rune_v2_exact_snapshot_under_test.make.o \
 	.sg_rune_artifact_loader_under_test.make.o \
 	.sg_rune_codec_under_test.make.o \
 	.sg_rune_action_under_test.make.o \
@@ -375,11 +376,15 @@ RUNE_ACCEPT_ALL_ARTIFACTS := \
 	.sg_rune_file_under_test.gnu.d \
 	.sg_rune_v2_content_identity_under_test.gnu.o \
 	.sg_rune_v2_content_identity_under_test.gnu.d \
+	.sg_rune_v2_exact_snapshot_under_test.gnu.o \
+	.sg_rune_v2_exact_snapshot_under_test.gnu.d \
 	.runeaccept.make.o .runeaccept.make.d \
 	.sg_rune_file_under_test.make.o \
 	.sg_rune_file_under_test.make.d \
 	.sg_rune_v2_content_identity_under_test.make.o \
-	.sg_rune_v2_content_identity_under_test.make.d
+	.sg_rune_v2_content_identity_under_test.make.d \
+	.sg_rune_v2_exact_snapshot_under_test.make.o \
+	.sg_rune_v2_exact_snapshot_under_test.make.d
 SIDECAR_WIRE_TEST_BIN := sg_sidecar_wire_test.make
 SIDECAR_WIRE_TEST_OBJS := .sg_sidecar_wire_test.make.o \
 	.sg_sidecar_wire_under_test.make.o .sg_rune_crc_under_test.make.o
@@ -1458,7 +1463,8 @@ slipgate/sg_rune_binding.o: slipgate/sg_rune_binding.c \
 slipgate/sg_rune_file.o: slipgate/sg_rune_file.c \
 		slipgate/sg_rune_file.h slipgate/sg_rune_artifact_loader.h \
 		slipgate/sg_rune_codec.h slipgate/sg_rune.h \
-		slipgate/sg_rune_v2_content_identity.h q_shared.h
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_exact_snapshot.h q_shared.h
 slipgate/sg_rune_v2_content_identity.o: \
 		slipgate/sg_rune_v2_content_identity.c \
 		slipgate/sg_rune_v2_content_identity.h slipgate/sg_rune_v2_wire.h
@@ -2620,6 +2626,7 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 		slipgate/sg_rune_file.c slipgate/sg_rune_file.h \
 		slipgate/sg_rune_artifact_loader.h slipgate/sg_rune.h \
 		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_exact_snapshot.h \
 		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
@@ -2630,6 +2637,18 @@ $(COMPOUND_PUBLICATION_CASE_MAKE_OBJS): .sg_%.make.o: tests/sg_%.c \
 		slipgate/sg_rune_v2_content_identity.c \
 		slipgate/sg_rune_v2_content_identity.h \
 		slipgate/sg_rune_v2_wire.h $(REVISION_HEADER)
+	$(E) [TEST-CC] $@
+	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
+		-Werror -Wpedantic -I. -MMD -MP \
+		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
+
+.sg_rune_v2_exact_snapshot_under_test.make.o: \
+		slipgate/sg_rune_v2_exact_snapshot.c \
+		slipgate/sg_rune_v2_exact_snapshot.h \
+		slipgate/sg_rune_v2_exact_snapshot_private.h \
+		slipgate/sg_rune_v2_content_identity.h \
+		slipgate/sg_rune_v2_artifact_publication_internal.h \
+		$(REVISION_HEADER)
 	$(E) [TEST-CC] $@
 	$(Q)$(CC) $(filter-out -MMD,$(CFLAGS)) -std=c11 -Wall -Wextra \
 		-Werror -Wpedantic -I. -MMD -MP \

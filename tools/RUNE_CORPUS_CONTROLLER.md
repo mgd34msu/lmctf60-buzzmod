@@ -41,6 +41,12 @@ start ticks, executable, command hash, and owner record still match.  Failure
 to prove ownership leaves the process untouched and records an infrastructure
 failure.
 
+The private-Python runtime preflight is Linux-only: it uses a private ELF
+loader, pidfds, and `/proc` process diagnostics. It fails before launch on
+Windows and macOS rather than attempting those Linux checks. This limitation is
+only for the corpus controller; the game RUNE reader uses exact content
+snapshots on native Windows APIs and POSIX systems, including macOS.
+
 ## Input freeze
 
 Build an immutable input snapshot from the approved production build. The

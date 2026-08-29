@@ -9,68 +9,37 @@
 #include "sg_action.h"
 #include "sg_rune_artifact_loader.h"
 #include "sg_rune_v2_content_identity.h"
+#include "sg_rune_v2_exact_snapshot.h"
 
 #include <errno.h>
 #include <limits.h>
-#include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
 
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-
-#ifdef _WIN32
-typedef struct _stat rune_file_stat_t;
-#else
-typedef struct stat rune_file_stat_t;
-#endif
-
-static int RuneFile_StreamStat(FILE *file, rune_file_stat_t *status)
+static void RuneFile_ContentIdentityText(const sg_rune_v2_content_id_t *identity,
+	char out[65])
 {
-#ifdef _WIN32
-	return _fstat(_fileno(file), status);
-#else
-	return fstat(fileno(file), status);
-#endif
-}
+	static const char hex[] = "0123456789abcdef";
+	size_t index;
 
-static qboolean RuneFile_StatMatches(const rune_file_stat_t *left,
-	const rune_file_stat_t *right)
-{
-	if (left->st_dev != right->st_dev || left->st_ino != right->st_ino ||
-	    left->st_size != right->st_size)
-		return false;
-#ifdef _WIN32
-	return left->st_mtime == right->st_mtime;
-#else
-	return left->st_mtim.tv_sec == right->st_mtim.tv_sec &&
-		left->st_mtim.tv_nsec == right->st_mtim.tv_nsec &&
-		left->st_ctim.tv_sec == right->st_ctim.tv_sec &&
-		left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
-#endif
+	for (index = 0U; index < sizeof(identity->bytes); index++)
+	{
+		out[index * 2U] = hex[identity->bytes[index] >> 4];
+		out[index * 2U + 1U] = hex[identity->bytes[index] & 15U];
+	}
+	out[64] = '\0';
 }
 
 void SG_RuneFileSHA256Buffer(const unsigned char *bytes, size_t length,
 	char out[65])
 {
-	static const char hex[] = "0123456789abcdef";
 	sg_rune_v2_content_id_t identity;
-	size_t index;
 
 	if (!SG_RuneV2ContentIdentitySHA256(bytes, length, &identity))
 	{
 		out[0] = '\0';
 		return;
 	}
-	for (index = 0U; index < sizeof(identity.bytes); index++)
-	{
-		out[index * 2U] = hex[identity.bytes[index] >> 4];
-		out[index * 2U + 1U] = hex[identity.bytes[index] & 15U];
-	}
-	out[64] = '\0';
+	RuneFile_ContentIdentityText(&identity, out);
 }
 
 typedef struct rune_decode_storage_s
@@ -106,6 +75,52 @@ static sg_rune_file_load_result_t RuneFile_Result(
 	result.index = index;
 	result.os_error = os_error;
 	return result;
+}
+
+static sg_rune_file_load_result_t RuneFile_SnapshotFailure(
+	sg_rune_v2_snapshot_diagnostic_t diagnostic, int os_error)
+{
+	switch (diagnostic)
+	{
+	case SG_RUNE_V2_SNAPSHOT_OPEN_FAILED:
+		return RuneFile_Result(os_error == ENOENT
+			? SG_RUNE_FILE_LOAD_MISSING : SG_RUNE_FILE_LOAD_INFRA,
+			"snapshot", "artifact snapshot open failure", UINT32_MAX,
+			os_error);
+	case SG_RUNE_V2_SNAPSHOT_NOT_REGULAR:
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "snapshot",
+			"artifact is not a regular file", UINT32_MAX, 0);
+	case SG_RUNE_V2_SNAPSHOT_TOO_LARGE:
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "snapshot",
+			"artifact exceeds snapshot limit", UINT32_MAX, 0);
+	case SG_RUNE_V2_SNAPSHOT_SHORT_READ:
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "snapshot",
+			"artifact snapshot is truncated", UINT32_MAX, 0);
+	case SG_RUNE_V2_SNAPSHOT_EXTRA_BYTES:
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "snapshot",
+			"artifact changed during snapshot read", UINT32_MAX, 0);
+	case SG_RUNE_V2_SNAPSHOT_FILE_CHANGED:
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "snapshot",
+			"artifact changed during snapshot read", UINT32_MAX, os_error);
+	default:
+		return RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "snapshot",
+			"artifact snapshot failure", UINT32_MAX, os_error);
+	}
+}
+
+static sg_rune_file_inspect_status_t RuneFile_SnapshotInspectStatus(
+	sg_rune_v2_snapshot_diagnostic_t diagnostic)
+{
+	switch (diagnostic)
+	{
+	case SG_RUNE_V2_SNAPSHOT_NOT_REGULAR:
+	case SG_RUNE_V2_SNAPSHOT_TOO_LARGE:
+	case SG_RUNE_V2_SNAPSHOT_SHORT_READ:
+	case SG_RUNE_V2_SNAPSHOT_EXTRA_BYTES:
+		return SG_RUNE_FILE_INSPECT_DRIFT;
+	default:
+		return SG_RUNE_FILE_INSPECT_ERROR;
+	}
 }
 
 static const char *RuneFile_DiagnosticText(sg_rune_codec_diagnostic_t diagnostic)
@@ -411,7 +426,6 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	sg_rune_alloc_fn allocate, sg_rune_free_fn release,
 	rune_t **rune_out)
 {
-	unsigned char encoded_header[SG_RUNE_CODEC_HEADER_BYTES];
 	rune_decode_storage_t storage;
 	sg_rune_codec_workspace_t workspace;
 	sg_rune_artifact_backing_t backing;
@@ -419,15 +433,12 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	sg_rune_codec_header_t header;
 	sg_rune_codec_identity_t wire_identity;
 	sg_rune_codec_diagnostic_t diagnostic = RLCODEC_OK;
+	sg_rune_v2_snapshot_diagnostic_t snapshot_diagnostic;
+	sg_rune_v2_exact_snapshot_t *exact_snapshot = NULL;
+	const sg_rune_v2_snapshot_view_t *snapshot_view = NULL;
 	sg_rune_file_load_result_t result;
-	unsigned char *snapshot = NULL;
 	rune_t *rune = NULL;
-	FILE *file = NULL;
 	size_t file_size = 0U;
-	size_t read_size;
-	long file_length;
-	rune_file_stat_t file_before;
-	rune_file_stat_t file_after;
 	uint32_t failure_index = UINT32_MAX;
 	const char *failure;
 
@@ -446,27 +457,29 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	RuneFile_WireIdentity(expected_identity, &wire_identity);
 
 	errno = 0;
-	file = fopen(path, "rb");
-	if (!file)
+	snapshot_diagnostic = SG_RuneV2ExactSnapshotAcquireFile(path,
+		SG_RUNE_V2_SNAPSHOT_ARTIFACT, &exact_snapshot);
+	if (snapshot_diagnostic != SG_RUNE_V2_SNAPSHOT_OK)
 	{
-		if (errno == ENOENT)
-			return RuneFile_Result(SG_RUNE_FILE_LOAD_MISSING, "open",
-				"artifact is missing", UINT32_MAX, ENOENT);
-		return RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "open",
-			"artifact open failure", UINT32_MAX, errno ? errno : EIO);
-	}
-	read_size = fread(encoded_header, 1, sizeof(encoded_header), file);
-	if (read_size != sizeof(encoded_header) || ferror(file))
-	{
-		result = RuneFile_Result(ferror(file)
-			? SG_RUNE_FILE_LOAD_INFRA : SG_RUNE_FILE_LOAD_REJECTED,
-			"header-read",
-			"RUNE header is incomplete", UINT32_MAX,
-			ferror(file) ? (errno ? errno : EIO) : 0);
+		result = RuneFile_SnapshotFailure(snapshot_diagnostic,
+			errno ? errno : EIO);
 		goto cleanup;
 	}
-	diagnostic = SG_RuneCodecDecodeHeader(encoded_header,
-		sizeof(encoded_header), &header);
+	if (SG_RuneV2ExactSnapshotInspect(exact_snapshot, &snapshot_view) !=
+	    SG_RUNE_V2_SNAPSHOT_OK || !snapshot_view)
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "snapshot",
+			"artifact snapshot inspection failed", UINT32_MAX, EIO);
+		goto cleanup;
+	}
+	if (snapshot_view->size < SG_RUNE_CODEC_HEADER_BYTES)
+	{
+		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "header-read",
+			"RUNE header is incomplete", UINT32_MAX, 0);
+		goto cleanup;
+	}
+	diagnostic = SG_RuneCodecDecodeHeader(snapshot_view->bytes,
+		SG_RUNE_CODEC_HEADER_BYTES, &header);
 	if (diagnostic != RLCODEC_OK)
 	{
 		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "header",
@@ -489,69 +502,12 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 			: RuneFile_DiagnosticText(diagnostic), UINT32_MAX, 0);
 		goto cleanup;
 	}
-	if (fseek(file, 0, SEEK_END) != 0 ||
-	    (file_length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0)
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "file-size",
-			"artifact size inspection failed", UINT32_MAX,
-			errno ? errno : EIO);
-		goto cleanup;
-	}
-	if ((size_t)file_length != file_size)
+	if (snapshot_view->size != file_size)
 	{
 		result = RuneFile_Result(SG_RUNE_FILE_LOAD_REJECTED, "file-size",
 			"artifact size differs from authenticated header", UINT32_MAX, 0);
 		goto cleanup;
 	}
-	if (RuneFile_StreamStat(file, &file_before) != 0)
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "file-stat",
-			"artifact identity inspection failed", UINT32_MAX,
-			errno ? errno : EIO);
-		goto cleanup;
-	}
-	snapshot = allocate((int)file_size);
-	if (!snapshot)
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "allocation",
-			"artifact snapshot allocation failure", UINT32_MAX, 0);
-		goto cleanup;
-	}
-	if (fread(snapshot, 1, file_size, file) != file_size)
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "read",
-			ferror(file) ? "artifact read failure" : "short artifact read",
-			UINT32_MAX, ferror(file) ? (errno ? errno : EIO) : 0);
-		goto cleanup;
-	}
-	if (fgetc(file) != EOF)
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "read",
-			"artifact changed during authenticated read", UINT32_MAX, 0);
-		goto cleanup;
-	}
-	if (ferror(file))
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "read",
-			"artifact read failure", UINT32_MAX, errno ? errno : EIO);
-		goto cleanup;
-	}
-	if (RuneFile_StreamStat(file, &file_after) != 0 ||
-	    !RuneFile_StatMatches(&file_before, &file_after))
-	{
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "file-stat",
-			"artifact changed during authenticated read", UINT32_MAX,
-			errno ? errno : EIO);
-		goto cleanup;
-	}
-	if (fclose(file) != 0)
-	{
-		file = NULL;
-		result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "close",
-			"artifact close failure", UINT32_MAX, errno ? errno : EIO);
-		goto cleanup;
-	}
-	file = NULL;
 
 	rune = allocate((int)sizeof(*rune));
 	if (rune)
@@ -667,7 +623,8 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 	workspace.string_marks = storage.string_marks;
 	workspace.string_mark_capacity = header.string_bytes;
 
-	diagnostic = SG_RuneArtifactLoaderLoad(&loader, snapshot, file_size,
+	diagnostic = SG_RuneArtifactLoaderLoad(&loader, snapshot_view->bytes,
+		file_size,
 		&wire_identity, &backing, &workspace);
 	if (diagnostic != RLCODEC_OK)
 	{
@@ -689,39 +646,82 @@ sg_rune_file_load_result_t SG_RuneFileLoad(const char *path,
 			"runtime-adapter", failure, failure_index, 0);
 		goto cleanup;
 	}
-	SG_RuneFileSHA256Buffer(snapshot, file_size, rune->encoded_sha256);
+	RuneFile_ContentIdentityText(&snapshot_view->content_identity,
+		rune->encoded_sha256);
 	*rune_out = rune;
 	rune = NULL;
 	result = RuneFile_Result(SG_RUNE_FILE_LOAD_READY, "ready", NULL,
 		UINT32_MAX, 0);
 
 cleanup:
-	if (file)
-	{
-		if (fclose(file) != 0 &&
-		    result.status != SG_RUNE_FILE_LOAD_READY)
-			result = RuneFile_Result(SG_RUNE_FILE_LOAD_INFRA, "close",
-				"artifact close failure", UINT32_MAX, errno ? errno : EIO);
-	}
 	RuneFile_StorageFree(&storage, release);
-	if (snapshot)
-		release(snapshot);
+	SG_RuneV2ExactSnapshotDestroy(exact_snapshot);
 	RuneFile_NativeFree(rune, release);
 	return result;
+}
+
+static sg_rune_file_inspect_status_t RuneFile_AcquireSnapshot(const char *path,
+	sg_rune_v2_exact_snapshot_t **snapshot_out,
+	const sg_rune_v2_snapshot_view_t **view_out, int *os_error_out)
+{
+	sg_rune_v2_snapshot_diagnostic_t diagnostic;
+
+	*snapshot_out = NULL;
+	*view_out = NULL;
+	errno = 0;
+	diagnostic = SG_RuneV2ExactSnapshotAcquireFile(path,
+		SG_RUNE_V2_SNAPSHOT_ARTIFACT, snapshot_out);
+	if (diagnostic != SG_RUNE_V2_SNAPSHOT_OK)
+	{
+		sg_rune_file_inspect_status_t status =
+			RuneFile_SnapshotInspectStatus(diagnostic);
+
+		if (status == SG_RUNE_FILE_INSPECT_ERROR && os_error_out)
+			*os_error_out = errno ? errno : EIO;
+		return status;
+	}
+	if (SG_RuneV2ExactSnapshotInspect(*snapshot_out, view_out) !=
+	    SG_RUNE_V2_SNAPSHOT_OK || !*view_out)
+	{
+		SG_RuneV2ExactSnapshotDestroy(*snapshot_out);
+		*snapshot_out = NULL;
+		if (os_error_out)
+			*os_error_out = EIO;
+		return SG_RUNE_FILE_INSPECT_ERROR;
+	}
+	return SG_RUNE_FILE_INSPECT_MATCH;
+}
+
+static int RuneFile_SnapshotHeader(const sg_rune_v2_snapshot_view_t *view,
+	const rune_identity_t *expected_identity, sg_rune_codec_header_t *header_out)
+{
+	sg_rune_codec_identity_t wire_identity;
+	size_t expected_file_size;
+
+	if (view->size < SG_RUNE_CODEC_HEADER_BYTES)
+		return 0;
+	RuneFile_WireIdentity(expected_identity, &wire_identity);
+	if (SG_RuneCodecDecodeHeader(view->bytes, SG_RUNE_CODEC_HEADER_BYTES,
+	        header_out) != RLCODEC_OK ||
+	    SG_RuneCodecMatchIdentity(header_out, &wire_identity) != RLCODEC_OK ||
+	    SG_RuneCodecFileSize(header_out->num_seeds, header_out->num_links,
+	        header_out->num_activation_nodes,
+	        header_out->num_activation_edges,
+	        header_out->num_activation_plans, header_out->string_bytes,
+	        &expected_file_size) != RLCODEC_OK ||
+	    expected_file_size != view->size)
+		return 0;
+	return 1;
 }
 
 sg_rune_file_inspect_status_t SG_RuneFileInspect(const char *path,
 	const rune_identity_t *expected_identity, rune_artifact_t *artifact_out,
 	int *os_error_out)
 {
-	unsigned char header_bytes[SG_RUNE_CODEC_HEADER_BYTES];
-	sg_rune_codec_identity_t wire_identity;
-	sg_rune_codec_header_t wire_header;
-	FILE *file = NULL;
-	long file_length;
-	size_t expected_file_size;
-	size_t read_size;
-	int close_status;
+	sg_rune_v2_exact_snapshot_t *snapshot = NULL;
+	const sg_rune_v2_snapshot_view_t *view = NULL;
+	sg_rune_codec_header_t header;
+	sg_rune_file_inspect_status_t status;
 
 	if (artifact_out)
 		memset(artifact_out, 0, sizeof(*artifact_out));
@@ -729,47 +729,18 @@ sg_rune_file_inspect_status_t SG_RuneFileInspect(const char *path,
 		*os_error_out = 0;
 	if (!path || !path[0] || !expected_identity || !artifact_out)
 		return SG_RUNE_FILE_INSPECT_DRIFT;
-	RuneFile_WireIdentity(expected_identity, &wire_identity);
-	errno = 0;
-	file = fopen(path, "rb");
-	if (!file)
+	status = RuneFile_AcquireSnapshot(path, &snapshot, &view, os_error_out);
+	if (status != SG_RUNE_FILE_INSPECT_MATCH)
+		return status;
+	if (!RuneFile_SnapshotHeader(view, expected_identity, &header))
+		status = SG_RUNE_FILE_INSPECT_DRIFT;
+	else
 	{
-		if (os_error_out)
-			*os_error_out = errno ? errno : EIO;
-		return SG_RUNE_FILE_INSPECT_ERROR;
+		RuneFile_ArtifactFromWire(&header, artifact_out);
+		status = SG_RUNE_FILE_INSPECT_MATCH;
 	}
-	read_size = fread(header_bytes, 1, sizeof(header_bytes), file);
-	if (read_size != sizeof(header_bytes) || ferror(file) ||
-	    fseek(file, 0, SEEK_END) != 0 ||
-	    (file_length = ftell(file)) < 0)
-	{
-		int saved_error = errno ? errno : EIO;
-
-		(void)fclose(file);
-		if (os_error_out)
-			*os_error_out = saved_error;
-		return SG_RUNE_FILE_INSPECT_ERROR;
-	}
-	errno = 0;
-	close_status = fclose(file);
-	if (close_status != 0)
-	{
-		if (os_error_out)
-			*os_error_out = errno ? errno : EIO;
-		return SG_RUNE_FILE_INSPECT_ERROR;
-	}
-	if (SG_RuneCodecDecodeHeader(header_bytes, sizeof(header_bytes),
-	        &wire_header) != RLCODEC_OK ||
-	    SG_RuneCodecMatchIdentity(&wire_header, &wire_identity) != RLCODEC_OK ||
-	    SG_RuneCodecFileSize(wire_header.num_seeds, wire_header.num_links,
-	        wire_header.num_activation_nodes,
-	        wire_header.num_activation_edges,
-	        wire_header.num_activation_plans, wire_header.string_bytes,
-	        &expected_file_size) != RLCODEC_OK ||
-	    expected_file_size != (size_t)file_length)
-		return SG_RUNE_FILE_INSPECT_DRIFT;
-	RuneFile_ArtifactFromWire(&wire_header, artifact_out);
-	return SG_RUNE_FILE_INSPECT_MATCH;
+	SG_RuneV2ExactSnapshotDestroy(snapshot);
+	return status;
 }
 
 static int RuneFile_SHA256TextValid(const char *text)
@@ -789,18 +760,11 @@ sg_rune_file_inspect_status_t SG_RuneFileInspectExact(const char *path,
 	const rune_identity_t *expected_identity, const char *expected_sha256,
 	rune_artifact_t *artifact_out, int *os_error_out)
 {
-	unsigned char header_bytes[SG_RUNE_CODEC_HEADER_BYTES];
-	unsigned char *snapshot = NULL;
-	sg_rune_codec_identity_t wire_identity;
-	sg_rune_codec_header_t wire_header;
-	FILE *file = NULL;
+	sg_rune_v2_exact_snapshot_t *snapshot = NULL;
+	const sg_rune_v2_snapshot_view_t *view = NULL;
+	sg_rune_codec_header_t header;
 	char actual_sha256[65];
-	long file_length;
-	size_t expected_file_size;
-	size_t read_size;
-	int saved_error = 0;
-	int close_status;
-	sg_rune_file_inspect_status_t status = SG_RUNE_FILE_INSPECT_ERROR;
+	sg_rune_file_inspect_status_t status;
 
 	if (artifact_out)
 		memset(artifact_out, 0, sizeof(*artifact_out));
@@ -809,77 +773,22 @@ sg_rune_file_inspect_status_t SG_RuneFileInspectExact(const char *path,
 	if (!path || !path[0] || !expected_identity || !artifact_out ||
 	    !RuneFile_SHA256TextValid(expected_sha256))
 		return SG_RUNE_FILE_INSPECT_DRIFT;
-	RuneFile_WireIdentity(expected_identity, &wire_identity);
-	errno = 0;
-	file = fopen(path, "rb");
-	if (!file)
-	{
-		if (os_error_out)
-			*os_error_out = errno ? errno : EIO;
-		return SG_RUNE_FILE_INSPECT_ERROR;
-	}
-	read_size = fread(header_bytes, 1U, sizeof(header_bytes), file);
-	if (read_size != sizeof(header_bytes) || ferror(file) ||
-	    SG_RuneCodecDecodeHeader(header_bytes, sizeof(header_bytes),
-	        &wire_header) != RLCODEC_OK ||
-	    SG_RuneCodecMatchIdentity(&wire_header, &wire_identity) != RLCODEC_OK ||
-	    SG_RuneCodecFileSize(wire_header.num_seeds, wire_header.num_links,
-	        wire_header.num_activation_nodes,
-	        wire_header.num_activation_edges,
-	        wire_header.num_activation_plans, wire_header.string_bytes,
-	        &expected_file_size) != RLCODEC_OK)
-	{
-		status = ferror(file) ? SG_RUNE_FILE_INSPECT_ERROR
-			: SG_RUNE_FILE_INSPECT_DRIFT;
-		saved_error = status == SG_RUNE_FILE_INSPECT_ERROR
-			? (errno ? errno : EIO) : 0;
-		goto done;
-	}
-	if (fseek(file, 0, SEEK_END) != 0 ||
-	    (file_length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0)
-	{
-		saved_error = errno ? errno : EIO;
-		goto done;
-	}
-	if (expected_file_size != (size_t)file_length)
-	{
-		status = SG_RUNE_FILE_INSPECT_DRIFT;
-		goto done;
-	}
-	snapshot = malloc(expected_file_size ? expected_file_size : 1U);
-	if (!snapshot)
-	{
-		saved_error = ENOMEM;
-		goto done;
-	}
-	read_size = fread(snapshot, 1U, expected_file_size, file);
-	if (read_size != expected_file_size || ferror(file))
-	{
-		saved_error = errno ? errno : EIO;
-		goto done;
-	}
-	SG_RuneFileSHA256Buffer(snapshot, expected_file_size, actual_sha256);
-	if (strcmp(actual_sha256, expected_sha256) != 0)
-	{
-		status = SG_RUNE_FILE_INSPECT_DRIFT;
-		goto done;
-	}
-	RuneFile_ArtifactFromWire(&wire_header, artifact_out);
-	status = SG_RUNE_FILE_INSPECT_MATCH;
-
-done:
-	errno = 0;
-	close_status = fclose(file);
-	if (close_status != 0)
-	{
-		status = SG_RUNE_FILE_INSPECT_ERROR;
-		if (!saved_error)
-			saved_error = errno ? errno : EIO;
-	}
-	free(snapshot);
-	if (status == SG_RUNE_FILE_INSPECT_ERROR && os_error_out)
-		*os_error_out = saved_error ? saved_error : EIO;
+	status = RuneFile_AcquireSnapshot(path, &snapshot, &view, os_error_out);
 	if (status != SG_RUNE_FILE_INSPECT_MATCH)
-		memset(artifact_out, 0, sizeof(*artifact_out));
+		return status;
+	if (!RuneFile_SnapshotHeader(view, expected_identity, &header))
+		status = SG_RUNE_FILE_INSPECT_DRIFT;
+	else
+	{
+		RuneFile_ContentIdentityText(&view->content_identity, actual_sha256);
+		if (strcmp(actual_sha256, expected_sha256) != 0)
+			status = SG_RUNE_FILE_INSPECT_DRIFT;
+		else
+		{
+			RuneFile_ArtifactFromWire(&header, artifact_out);
+			status = SG_RUNE_FILE_INSPECT_MATCH;
+		}
+	}
+	SG_RuneV2ExactSnapshotDestroy(snapshot);
 	return status;
 }

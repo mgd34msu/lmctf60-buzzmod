@@ -8,6 +8,7 @@
 
 #include "sg_rune_v2_artifact_publication_internal.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -260,7 +261,15 @@ static void *DefaultOpenRead(void *context, const char *utf8_path)
 		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
 		FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 	free(wide);
-	return file == INVALID_HANDLE_VALUE ? NULL : file;
+	if (file == INVALID_HANDLE_VALUE)
+	{
+		DWORD error = GetLastError();
+
+		errno = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+			? ENOENT : EIO;
+		return NULL;
+	}
+	return file;
 }
 
 static int DefaultInspect(void *context, void *file,

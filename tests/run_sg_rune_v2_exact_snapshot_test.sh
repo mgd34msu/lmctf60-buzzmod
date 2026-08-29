@@ -49,4 +49,7 @@ then
 	x86_64-w64-mingw32-gcc $strict -I. -c \
 		slipgate/sg_rune_v2_exact_snapshot.c \
 		-o "$tmp_dir/exact-snapshot-mingw.o"
+	x86_64-w64-mingw32-gcc $strict -I. -c \
+		slipgate/sg_rune_file.c \
+		-o "$tmp_dir/rune-file-mingw.o"
 fi

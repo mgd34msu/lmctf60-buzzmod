@@ -212,8 +212,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
             truncated.write_bytes(valid.read_bytes()[:-1])
             trailing = work / "trailing.rune"
             trailing.write_bytes(valid.read_bytes() + b"x")
+            hardlink = work / "hardlink.rune"
+            symlink = work / "symlink.rune"
+            os.link(valid, hardlink)
+            symlink.symlink_to(valid)
             cases = (
                 (["runeaccept.gnu", valid], 0),
+                (["runeaccept.gnu", hardlink], 0),
+                (["runeaccept.gnu", symlink], 3),
                 (["runeaccept.gnu", truncated], 1),
                 (["runeaccept.gnu", trailing], 1),
                 (["runeaccept.gnu", work / "missing.rune"], 3),
@@ -485,14 +491,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
         ):
             controller.validate_variant_scope(["tw2ctf3", "tw2ctf3a"])
 
-    def test_parent_map_authority_rejects_host_basename_inode_device_and_zero_inode(self):
+    def test_linux_map_preflight_uses_paths_and_manifested_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             snapshot = self.make_snapshot(Path(temporary))
             verified = controller.verify_snapshot(snapshot)
             retained = controller._retained_snapshot_files(snapshot, verified)
             try:
                 loader = snapshot / verified["python_runtime"]["loader"]["path"]
-                record = next(item for item in retained.records.values() if item["canonical_path"] == str(loader))
+                record = retained.paths[str(loader)]
                 command = [str(loader)]
                 identity = controller.ProcessIdentity(
                     pid=4242, boot_id="00000000-0000-0000-0000-000000000000", start_ticks=12,
@@ -500,15 +506,10 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     cmdline_sha256=controller.sha256_bytes(controller._nul_argv(command)),
                 )
                 original_read_text = Path.read_text
-                default_mountinfo = Path("/proc/self/mountinfo").read_text(
-                    encoding="utf-8"
-                )
 
                 def validate(
                     pathname: str, dev: int, inode: int, expected: str,
                     *, permissions: str = "r-xp", offset: int = 0,
-                    mountinfo: str | None = None,
-                    child_mountinfo: str | None = None,
                     same_mount_namespace: bool = True,
                 ):
                     line = (
@@ -519,10 +520,6 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     def read_text(path, *args, **kwargs):
                         if str(path) == "/proc/4242/maps":
                             return line
-                        if mountinfo is not None and str(path) == "/proc/self/mountinfo":
-                            return mountinfo
-                        if str(path) == "/proc/4242/mountinfo":
-                            return child_mountinfo or mountinfo or default_mountinfo
                         return original_read_text(path, *args, **kwargs)
 
                     with mock.patch.object(Path, "read_text", new=read_text), \
@@ -537,121 +534,46 @@ class RuneCorpusControllerTests(unittest.TestCase):
                             4242, 9, snapshot, verified, retained, command
                         )
 
-                validate(record["canonical_path"], record["dev"], record["ino"], "accepted")
+                for filesystem in ("btrfs", "ext4", "xfs", "zfs", "ntfs", "exfat"):
+                    with self.subTest(filesystem=filesystem):
+                        validate(record["canonical_path"], 0, 0, filesystem)
                 with self.assertRaisesRegex(
                     controller.ProcessIntegrityError, "mount namespace"
                 ):
                     validate(
-                        record["canonical_path"], record["dev"], record["ino"],
-                        "direct identity in changed mount namespace",
+                        record["canonical_path"], 0, 0, "changed mount namespace",
                         same_mount_namespace=False,
                     )
-                btrfs_dev = os.makedev(
-                    os.major(record["dev"]), os.minor(record["dev"]) + 1
-                )
-                mountinfo = (
-                    f"57 32 {os.major(btrfs_dev)}:{os.minor(btrfs_dev)} "
-                    f"/@home {snapshot.parent} rw,relatime - btrfs /dev/test rw\n"
-                )
-                record["mount_identity"] = controller._mount_identity(
-                    mountinfo, record["canonical_path"]
-                )
-                validate(
-                    record["canonical_path"], btrfs_dev, record["ino"],
-                    "btrfs subvolume", mountinfo=mountinfo,
-                )
-                top_mountinfo = mountinfo + (
-                    f"99 57 {os.major(btrfs_dev)}:{os.minor(btrfs_dev)} "
-                    f"/@top {snapshot.parent} rw,relatime - btrfs /dev/test rw\n"
-                )
-                record["mount_identity"] = controller._mount_identity(
-                    top_mountinfo, record["canonical_path"]
-                )
-                self.assertEqual(99, record["mount_identity"].mount_id)
-                validate(
-                    record["canonical_path"], btrfs_dev, record["ino"],
-                    "top stacked btrfs mount", mountinfo=top_mountinfo,
-                )
-                record["mount_identity"] = controller._mount_identity(
-                    mountinfo, record["canonical_path"]
-                )
-                with self.assertRaisesRegex(
-                    controller.ProcessIntegrityError, "mount namespace"
-                ):
-                    validate(
-                        record["canonical_path"], btrfs_dev, record["ino"],
-                        "changed mount namespace", mountinfo=mountinfo,
-                        same_mount_namespace=False,
-                    )
-                for parent, child in (
-                    (mountinfo.replace(" btrfs ", " ext4 "), None),
-                    (mountinfo, mountinfo.replace("/@home", "/@other")),
-                    (
-                        mountinfo,
-                        mountinfo + mountinfo.replace("57 32", "99 32").replace(
-                            "/@home", "/@other"
-                        ),
-                    ),
-                ):
-                    with self.assertRaisesRegex(
-                        controller.ProcessIntegrityError, "manifested|ambiguous"
-                    ):
-                        validate(
-                            record["canonical_path"], btrfs_dev, record["ino"],
-                            "unsafe mount alias", mountinfo=parent,
-                            child_mountinfo=child,
-                        )
-                cache = os.stat("/etc/ld.so.cache", follow_symlinks=False)
-                validate(
-                    "/etc/ld.so.cache", cache.st_dev, cache.st_ino, "host data",
-                    permissions="r--p",
-                )
-                for permissions, offset in (("r-xp", 0), ("rw-p", 0), ("r--p", 1)):
-                    with self.assertRaisesRegex(controller.ProcessIntegrityError, "unsafe access"):
-                        validate(
-                            "/etc/ld.so.cache", cache.st_dev, cache.st_ino, "host data",
-                            permissions=permissions, offset=offset,
-                        )
                 for pseudo in controller.PSEUDO_MAP_ALLOWLIST:
                     validate(pseudo, 0, 0, "pseudo")
-                for pathname, dev, inode, label in (
-                    (str(Path("/host") / loader.name), record["dev"], record["ino"], "canonical"),
-                    (record["canonical_path"], record["dev"], record["ino"] + 1, "inode"),
-                    (record["canonical_path"], os.makedev(os.major(record["dev"]) + 1, os.minor(record["dev"])), record["ino"], "device"),
+                for pathname, label in (
+                    (str(Path("/host") / loader.name), "canonical"),
                     (
-                        record["canonical_path"] + " (deleted)",
-                        record["dev"], record["ino"], "deleted",
+                        record["canonical_path"] + " (deleted)", "deleted",
                     ),
-                    (record["canonical_path"], record["dev"], 0, "zero inode"),
-                    ("[stack:9]", 0, 0, "thread stack"),
-                    ("[anon:host]", 0, 0, "named anon"),
-                    ("/dev/zero", 0, 0, "devzero"),
-                    ("/SYSV00000000", 0, 0, "sysv"),
+                    ("[stack:9]", "thread stack"),
+                    ("[anon:host]", "named anon"),
+                    ("/dev/zero", "devzero"),
+                    ("/SYSV00000000", "sysv"),
                 ):
-                    pattern = "zero inode" if label == "zero inode" else (
-                        "forbidden" if label in ("deleted", "thread stack", "named anon", "devzero", "sysv") else "canonical|inode|manifested"
-                    )
+                    pattern = "forbidden" if label in (
+                        "deleted", "thread stack", "named anon", "devzero", "sysv"
+                    ) else "canonical|manifested"
                     with self.assertRaisesRegex(controller.ProcessIntegrityError, pattern):
-                        validate(pathname, dev, inode, label)
+                        validate(pathname, 0, 0, label)
             finally:
                 retained.close()
                 self.thaw(snapshot)
 
-    def test_retention_captures_btrfs_map_identity(self):
+    def test_retention_never_reads_mountinfo(self):
         with tempfile.TemporaryDirectory() as temporary:
             snapshot = self.make_snapshot(Path(temporary))
             verified = controller.verify_snapshot(snapshot)
-            canonical_parent = snapshot.parent.resolve(strict=True)
-            map_device = os.makedev(0, 29)
-            mountinfo = (
-                f"57 32 0:29 /@home {canonical_parent} rw,relatime "
-                "- btrfs /dev/test rw\n"
-            )
             original_read_text = Path.read_text
 
             def retain_read_text(path, *args, **kwargs):
                 if str(path) == "/proc/self/mountinfo":
-                    return mountinfo
+                    raise AssertionError("retention must not read mountinfo")
                 return original_read_text(path, *args, **kwargs)
 
             with mock.patch.object(Path, "read_text", new=retain_read_text):
@@ -659,29 +581,24 @@ class RuneCorpusControllerTests(unittest.TestCase):
             try:
                 loader = snapshot / verified["python_runtime"]["loader"]["path"]
                 record = retained.paths[str(loader.resolve(strict=True))]
-                self.assertEqual(map_device, record["mount_identity"].device)
-                self.assertEqual("btrfs", record["mount_identity"].filesystem)
-
-                def map_read_text(path, *args, **kwargs):
-                    if str(path) in (
-                        "/proc/self/mountinfo", "/proc/4242/mountinfo"
-                    ):
-                        return mountinfo
-                    return original_read_text(path, *args, **kwargs)
-
-                with mock.patch.object(Path, "read_text", new=map_read_text), \
-                        mock.patch.object(
-                            controller, "_same_mount_namespace", return_value=True
-                        ):
-                    self.assertTrue(controller._mapping_mount_matches(
-                        4242, record["canonical_path"], map_device, record
-                    ))
-                    self.assertFalse(controller._mapping_mount_matches(
-                        4242, record["canonical_path"], os.makedev(0, 30), record
-                    ))
+                self.assertEqual(str(loader), record["canonical_path"])
+                self.assertEqual(
+                    verified["python_runtime"]["loader"]["sha256"], record["sha256"]
+                )
             finally:
                 retained.close()
                 self.thaw(snapshot)
+
+    def test_nonlinux_runtime_preflight_stops_before_proc_access(self):
+        for platform_name in ("win32", "darwin"):
+            with self.subTest(platform=platform_name), \
+                    mock.patch.object(controller.sys, "platform", platform_name), \
+                    mock.patch.object(
+                        controller, "verify_snapshot",
+                        side_effect=AssertionError("preflight must stop before snapshot work"),
+                    ):
+                with self.assertRaisesRegex(controller.CorpusError, "only on Linux"):
+                    controller.preflight_python_runtime(Path("/unused"))
 
     def test_handshake_pipe_deadlines_reject_silent_partial_and_oversized_frames(self):
         for payload, pattern in ((b"", "deadline"), (b"\0\0", "deadline"), (b"\0\1\0\1", "length")):
@@ -717,18 +634,20 @@ class RuneCorpusControllerTests(unittest.TestCase):
             for fd in (control_r, control_w, stdout_r, stdout_w):
                 os.close(fd)
 
-    def test_retained_manifest_authority_rejects_hardlinked_runtime_input(self):
+    def test_retained_manifest_authority_accepts_hardlinked_runtime_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             snapshot = self.make_snapshot(work)
             verified = controller.verify_snapshot(snapshot)
             loader = snapshot / verified["python_runtime"]["loader"]["path"]
             os.link(loader, work / "loader-hardlink")
-            with self.assertRaisesRegex(controller.ProcessIntegrityError, "hardlink"):
-                controller._retained_snapshot_files(snapshot, controller.verify_snapshot(snapshot))
+            retained = controller._retained_snapshot_files(
+                snapshot, controller.verify_snapshot(snapshot)
+            )
+            retained.close()
             self.thaw(snapshot)
 
-    def test_retained_manifest_authority_detects_replace_restore_race(self):
+    def test_retained_manifest_authority_detects_content_mismatch_race(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             snapshot = self.make_snapshot(work)
@@ -736,9 +655,9 @@ class RuneCorpusControllerTests(unittest.TestCase):
             retained = controller._retained_snapshot_files(snapshot, verified)
             try:
                 loader = snapshot / verified["python_runtime"]["loader"]["path"]
-                record = next(item for item in retained.records.values() if item["canonical_path"] == str(loader))
+                record = retained.paths[str(loader)]
                 replacement = work / "replacement-loader"
-                shutil.copyfile(loader, replacement)
+                replacement.write_bytes(b"replacement loader bytes")
                 replacement.chmod(record["mode"])
                 loader.parent.chmod(0o700)
                 os.replace(replacement, loader)

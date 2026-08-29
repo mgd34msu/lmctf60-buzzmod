@@ -448,6 +448,17 @@ ACCEPTOR_CONTRACT_PROBE_TIMEOUT = 300.0
 CHILD_ENVIRONMENT = ENGINE_ENVIRONMENT
 PSEUDO_MAP_ALLOWLIST = frozenset({"[heap]", "[stack]", "[vdso]", "[vvar]", "[vvar_vclock]", "[vsyscall]"})
 HOST_DATA_MAP_ALLOWLIST = frozenset({"/etc/ld.so.cache"})
+
+
+def _linux_runtime_preflight_supported() -> bool:
+    return sys.platform.startswith("linux") and Path("/proc").is_dir()
+
+
+def _require_linux_runtime_preflight() -> None:
+    if not _linux_runtime_preflight_supported():
+        raise CorpusError("private Python runtime preflight is supported only on Linux")
+
+
 PYTHON_RUNTIME_PROBE = r"""
 import _hashlib, _json, _struct, argparse, array, collections, concurrent.futures, ctypes, dataclasses, encodings, fcntl, hashlib, json, math, os, re, runpy, select, shutil, signal, socket, struct, sys, tempfile, threading, typing, zlib
 def physical(path):
@@ -1773,7 +1784,6 @@ def _read_frame(
 
 @dataclasses.dataclass
 class RetainedSnapshot:
-    records: dict[tuple[int, int], dict[str, Any]]
     paths: dict[str, dict[str, Any]]
     descriptors: list[int]
 
@@ -1787,31 +1797,21 @@ class RetainedSnapshot:
 
 
 def _retained_snapshot_files(snapshot: Path, verified: Mapping[str, Any]) -> RetainedSnapshot:
-    retained = RetainedSnapshot({}, {}, [])
+    retained = RetainedSnapshot({}, [])
     try:
-        mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
         for entry in verified["manifest"]["files"]:
             logical = str(entry["path"])
             path = snapshot / logical
             fd, info = _open_regular(path)
             retained.descriptors.append(fd)
-            if info.st_nlink != 1:
-                raise ProcessIntegrityError(f"manifested input has a hardlink: {logical}")
             if _sha256_fd(fd) != entry["sha256"] or info.st_size != entry["size"] or stat.S_IMODE(info.st_mode) != entry["mode"]:
                 raise ProcessIntegrityError("retained snapshot input does not match manifest")
-            key = (info.st_dev, info.st_ino)
-            if key in retained.records:
-                raise ProcessIntegrityError("two manifested inputs alias one inode")
             record = {
-                **dict(entry), "dev": info.st_dev, "ino": info.st_ino,
+                **dict(entry),
                 "canonical_path": str(path.resolve(strict=True)),
             }
-            record["mount_identity"] = _mount_identity(
-                mountinfo, record["canonical_path"]
-            )
             if record["canonical_path"] in retained.paths:
                 raise ProcessIntegrityError("two manifested inputs share one path")
-            retained.records[key] = record
             retained.paths[record["canonical_path"]] = record
         return retained
     except BaseException:
@@ -1826,72 +1826,6 @@ _PROC_MAP_RE = re.compile(
 )
 
 
-_MOUNT_FIELD_ESCAPE_RE = re.compile(r"\\([0-7]{3})")
-
-
-def _mount_field(value: str) -> str:
-    if re.search(r"\\(?![0-7]{3})", value):
-        raise ProcessIntegrityError("malformed mountinfo escape")
-    decoded = _MOUNT_FIELD_ESCAPE_RE.sub(
-        lambda match: chr(int(match.group(1), 8)), value
-    )
-    return decoded
-
-
-@dataclasses.dataclass(frozen=True)
-class MountIdentity:
-    mount_id: int
-    parent_id: int
-    device: int
-    root: str
-    mount_point: str
-    filesystem: str
-    mountinfo_line: str
-
-
-def _mount_identity(mountinfo: str, pathname: str) -> MountIdentity | None:
-    candidate = PurePosixPath(pathname)
-    matching: list[MountIdentity] = []
-    for line in mountinfo.splitlines():
-        left, separator, right = line.partition(" - ")
-        left_fields = left.split()
-        right_fields = right.split()
-        if not separator or len(left_fields) < 6 or len(right_fields) < 3:
-            raise ProcessIntegrityError("malformed process mountinfo")
-        device_fields = left_fields[2].split(":")
-        if len(device_fields) != 2:
-            raise ProcessIntegrityError("malformed process mount device")
-        try:
-            mount_id = int(left_fields[0])
-            parent_id = int(left_fields[1])
-            device = os.makedev(int(device_fields[0]), int(device_fields[1]))
-        except ValueError as exc:
-            raise ProcessIntegrityError("malformed process mount identity") from exc
-        root = _mount_field(left_fields[3])
-        if not PurePosixPath(root).is_absolute():
-            raise ProcessIntegrityError("process mount root is not absolute")
-        mount_point = PurePosixPath(_mount_field(left_fields[4]))
-        if not mount_point.is_absolute():
-            raise ProcessIntegrityError("process mount point is not absolute")
-        if candidate != mount_point and mount_point not in candidate.parents:
-            continue
-        matching.append(MountIdentity(
-            mount_id, parent_id, device, root, str(mount_point), right_fields[0], line
-        ))
-    if not matching:
-        return None
-    deepest = max(len(PurePosixPath(item.mount_point).parts) for item in matching)
-    peers = [
-        item for item in matching
-        if len(PurePosixPath(item.mount_point).parts) == deepest
-    ]
-    covered_ids = {item.parent_id for item in peers}
-    visible = [item for item in peers if item.mount_id not in covered_ids]
-    if len(visible) != 1:
-        raise ProcessIntegrityError("ambiguous process mount identity")
-    return visible[0]
-
-
 def _same_mount_namespace(pid: int) -> bool:
     try:
         parent = Path("/proc/self/ns/mnt").stat()
@@ -1901,31 +1835,6 @@ def _same_mount_namespace(pid: int) -> bool:
     return (parent.st_dev, parent.st_ino) == (child.st_dev, child.st_ino)
 
 
-def _mapping_mount_matches(
-    pid: int, pathname: str, device: int, record: Mapping[str, Any]
-) -> bool:
-    expected = record.get("mount_identity")
-    if (
-        not isinstance(expected, MountIdentity)
-        or expected.device != device
-        or (expected.filesystem != "btrfs" and record["dev"] != device)
-        or not _same_mount_namespace(pid)
-    ):
-        return False
-    try:
-        parent_text = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-        child_text = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
-    except OSError:
-        return False
-    parent = _mount_identity(parent_text, pathname)
-    child = _mount_identity(child_text, pathname)
-    return (
-        parent == expected
-        and child == expected
-        and _same_mount_namespace(pid)
-    )
-
-
 def _pidfd_is_live(pidfd: int) -> bool:
     poller = select.poll()
     poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
@@ -1933,7 +1842,7 @@ def _pidfd_is_live(pidfd: int) -> bool:
 
 
 def _validate_host_data_mapping(
-    pathname: str, permissions: str, offset: int, _dev: int, inode: int,
+    pathname: str, permissions: str, offset: int,
 ) -> bool:
     if pathname not in HOST_DATA_MAP_ALLOWLIST:
         return False
@@ -1947,20 +1856,11 @@ def _validate_host_data_mapping(
     except OSError as exc:
         raise ProcessIntegrityError(f"cannot authenticate host data mapping: {pathname}") from exc
     try:
-        before = os.fstat(fd)
-        _sha256_fd(fd)
-        after = os.fstat(fd)
-        named = os.lstat(pathname)
+        info = os.fstat(fd)
     finally:
         os.close(fd)
-    identity = lambda info: (
-        info.st_dev, info.st_ino, info.st_size, stat.S_IMODE(info.st_mode),
-        info.st_uid, info.st_gid, info.st_nlink, info.st_mtime_ns, info.st_ctime_ns,
-    )
-    if (identity(before) != identity(after) or identity(after) != identity(named)
-            or not stat.S_ISREG(after.st_mode) or after.st_uid != 0 or after.st_gid != 0
-            or stat.S_IMODE(after.st_mode) & 0o022 or after.st_nlink != 1
-            or after.st_ino != inode):
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+            or stat.S_IMODE(info.st_mode) & 0o022):
         raise ProcessIntegrityError(f"host data mapping identity is unsafe: {pathname}")
     return True
 
@@ -1969,9 +1869,9 @@ def _validate_retained_path(snapshot: Path, record: Mapping[str, Any]) -> None:
     path = snapshot / str(record["path"])
     fd, info = _open_regular(path)
     try:
-        if (info.st_dev, info.st_ino, info.st_size, stat.S_IMODE(info.st_mode), info.st_nlink) != (
-            record["dev"], record["ino"], record["size"], record["mode"], 1
-        ) or _sha256_fd(fd) != record["sha256"]:
+        if (info.st_size != record["size"]
+                or stat.S_IMODE(info.st_mode) != record["mode"]
+                or _sha256_fd(fd) != record["sha256"]):
             raise ProcessIntegrityError(f"manifest path changed during child validation: {record['path']}")
     finally:
         os.close(fd)
@@ -1981,6 +1881,7 @@ def _validate_verified_python_process(
     pid: int, pidfd: int, snapshot: Path, verified: Mapping[str, Any],
     retained: RetainedSnapshot, command: Sequence[str],
 ) -> tuple[ProcessIdentity, str]:
+    _require_linux_runtime_preflight()
     if not _pidfd_is_live(pidfd):
         raise ProcessIntegrityError("verified Python exited before parent validation")
     if not _same_mount_namespace(pid):
@@ -2012,30 +1913,13 @@ def _validate_verified_python_process(
             raise ProcessIntegrityError(f"forbidden named mapping: {pathname}")
         if not pathname.startswith("/"):
             raise ProcessIntegrityError(f"forbidden non-filesystem mapping: {pathname}")
-        dev = os.makedev(int(match.group("major"), 16), int(match.group("minor"), 16))
-        inode = int(match.group("inode"))
-        if inode == 0:
-            raise ProcessIntegrityError(f"filesystem mapping has zero inode: {pathname}")
         if _validate_host_data_mapping(
-            pathname, match.group("permissions"), int(match.group("offset"), 16), dev, inode,
+            pathname, match.group("permissions"), int(match.group("offset"), 16),
         ):
             continue
-        record = retained.records.get((dev, inode))
+        record = retained.paths.get(pathname)
         if record is None:
-            candidate = retained.paths.get(pathname)
-            if (
-                candidate is not None
-                and candidate["ino"] == inode
-                and isinstance(candidate.get("mount_identity"), MountIdentity)
-                and candidate["mount_identity"].filesystem == "btrfs"
-            ):
-                record = candidate
-        if record is None:
-            raise ProcessIntegrityError(f"mapped device/inode is not manifested: {pathname}")
-        if pathname != record["canonical_path"]:
-            raise ProcessIntegrityError(f"mapped path is not the canonical manifested path: {pathname}")
-        if not _mapping_mount_matches(pid, pathname, dev, record):
-            raise ProcessIntegrityError(f"mapped mount identity is not manifested: {pathname}")
+            raise ProcessIntegrityError(f"mapped path is not manifested: {pathname}")
         _validate_retained_path(snapshot, record)
     if _proc_start_ticks(pid) != start_before or capture_process_identity(pid) != identity:
         raise ProcessIntegrityError("verified Python identity changed during map validation")
@@ -2087,6 +1971,7 @@ def run_verified_python(
 ) -> tuple[int, bytes, dict[str, Any]]:
     """Run a gate only after parent verification at READY and DONE."""
     if runner is subprocess.run:
+        _require_linux_runtime_preflight()
         require_pidfd_support()
     command_prefix = _private_python_command(snapshot, layout, PYTHON_GATE_BOOTSTRAP)
     if runner is not subprocess.run:
@@ -2167,7 +2052,7 @@ def run_verified_python(
         if process.returncode != done["rc"]:
             raise ProcessIntegrityError("verified Python exit status disagrees with DONE")
         verify_snapshot(snapshot)
-        for record in retained.records.values():
+        for record in retained.paths.values():
             _validate_retained_path(snapshot, record)
         return process.returncode, bytes(output), {
             "ready": ready, "done": done,
@@ -2214,6 +2099,8 @@ def preflight_python_runtime(
     heartbeat_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Execute and prove the complete private Python authority before use."""
+    if runner is subprocess.run:
+        _require_linux_runtime_preflight()
     before = verify_snapshot(snapshot)
     layout = before["python_runtime"]
     runtime_root = snapshot / layout["root"]
@@ -2392,6 +2279,7 @@ def open_pidfd(pid: int) -> int | None:
 
 
 def require_pidfd_support() -> None:
+    _require_linux_runtime_preflight()
     opener = getattr(os, "pidfd_open", None)
     sender = getattr(signal, "pidfd_send_signal", None)
     if opener is None or sender is None:
