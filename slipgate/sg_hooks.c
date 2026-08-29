@@ -73,10 +73,9 @@ static trace_t Host_Trace(const vec3_t start, const vec3_t mins,
 	if (!SG_OwnsBot(passent))
 		return gi.trace((float *)start, (float *)mins, (float *)maxs,
 		                (float *)end, passent, contentmask);
-	result = SG_HostLawProductionBindActiveSubject((uint32_t)passent->s.number);
-	if (result.status == SG_HOST_LAW_OK)
-		result = SG_HostLawProductionEngineTrace(start, mins, maxs, end,
-			(sg_host_collision_contents_t)contentmask, &published);
+	result = SG_HostLawProductionEngineTrace((uint32_t)passent->s.number,
+		start, mins, maxs, end,
+		(sg_host_collision_contents_t)contentmask, &published);
 	memset(&trace, 0, sizeof(trace));
 	trace.fraction = 1.0f;
 	VectorCopy(end, trace.endpos);

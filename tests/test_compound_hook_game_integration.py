@@ -75,17 +75,52 @@ def main() -> None:
         assert forbidden not in owner
         assert forbidden not in owner_internal
     runtime = source("slipgate/sg_host_engine_runtime.c")
-    closed_activation = between(
+    activation = between(
         runtime,
-        "SG_HostEngineRuntimeOwnerActivateAcceptedV2(",
-        "sg_host_engine_runtime_status_t SG_HostEngineRuntimeOwnerBindActiveSubject",
+        "SG_HostEngineRuntimeOwnerActivate(",
+        "int SG_HostEngineRuntimeCurrent",
     )
-    assert "SG_HOST_ENGINE_RUNTIME_NOT_ACCEPTED" in closed_activation
+    for required in (
+        "RuntimeCallbacksCurrent(runtime)",
+        "SG_HostEngineRuntimeCurrent(runtime)",
+        "BuildStaticIdentity(&runtime->level, &current)",
+        "StaticIdentityEqual(&runtime->static_identity, &current)",
+    ):
+        assert required in activation
+    assert "accepted_artifact" not in activation
+    assert "binding" not in activation
+    assert "SG_HostLawPublicationOwnerIssueStatic" not in owner
+    assert "SG_HostLawPublicationOwnerIssueEnginePair" in owner
+    assert "SG_HostLawProductionBindActiveSubject" not in owner
 
     hooks = source("slipgate/sg_hooks.c")
+    trace_adapter = between(hooks, "static trace_t Host_Trace", "static int Host_PointContents")
+    ordered(
+        trace_adapter,
+        "if (!SG_OwnsBot(passent))",
+        "return gi.trace",
+        "SG_HostLawProductionEngineTrace",
+    )
     pointcontents = between(hooks, "static int Host_PointContents", "static int Host_BoxEdicts")
     assert "return gi.pointcontents" in pointcontents
     assert "SG_HostLawProduction" not in pointcontents
+
+    publication_header = source("slipgate/sg_host_law_publication.h")
+    test_only_hook_api = between(
+        publication_header,
+        "#ifdef SG_HOST_LAW_TESTING",
+        "#endif",
+    )
+    assert "SG_HostLawPublicationHookStep" in test_only_hook_api
+    assert "SG_HostLawPublicationHookFire" in test_only_hook_api
+    private_header = source("slipgate/sg_host_law_publication_private.h")
+    test_only_issue_api = between(
+        private_header,
+        "#ifdef SG_HOST_LAW_TESTING",
+        "#endif",
+    )
+    assert "SG_HostLawPublicationOwnerIssue(" in test_only_issue_api
+    assert "SG_HostLawPublicationOwnerIssueStatic(" in test_only_issue_api
 
     launch = between(weapon, "edict_t *fire_hook", "void Draw_Hook")
     assert "bolt->touch = SG_BotHookTouch;" in launch

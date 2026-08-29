@@ -11,8 +11,24 @@
 #include "sg_host_hook_law.h"
 #include "sg_identity.h"
 
-/* The implementation owns the callback slots.  Callers receive only a
- * borrowed opaque view and can never install a replacement callback. */
+/* Exact engine inputs for one committed level.  This is an upstream host
+ * identity, not a complete-model or RUNE identity. */
+typedef struct sg_host_static_identity_s
+{
+	sg_bsp_content_identity_t bsp_identity;
+	uint64_t bsp_bytes;
+	uint32_t engine_checksum;
+	uint32_t entity_crc32;
+	uint32_t host_physics_epoch;
+	uint32_t reserved;
+	uint64_t physics_abi_id;
+	sg_rune_hull_profile_t standing_hull;
+	sg_rune_hull_profile_t crouching_hull;
+	sg_rune_physics_parameters_t physics;
+} sg_host_static_identity_t;
+
+/* The implementation owns the callback slots.  Callers hold only this opaque
+ * runtime and cannot install or replace a callback. */
 typedef struct sg_host_engine_runtime_s sg_host_engine_runtime_t;
 
 typedef enum sg_host_engine_runtime_status_e
@@ -38,38 +54,26 @@ int SG_HostEngineRuntimeCurrent(const sg_host_engine_runtime_t *runtime);
 int SG_HostEngineRuntimeAccepted(const sg_host_engine_runtime_t *runtime);
 
 /* These are the only runtime collision queries.  They use the captured
- * engine callbacks and the owner-bound subject context, and return
+ * engine callbacks and a freshly authenticated bot subject, and return
  * zero/failure after lifetime or law drift. */
 int SG_HostEngineRuntimeTrace(const sg_host_engine_runtime_t *runtime,
-	const float start[3], const float mins[3], const float maxs[3],
+	uint32_t subject_index, const float start[3], const float mins[3],
+	const float maxs[3],
 	const float end[3], sg_host_collision_contents_t mask,
 	sg_host_collision_trace_t *trace_out);
 /* The same owner-issued trace, with hook target facts classified from the
  * traced live edict.  This is the only runtime hook-collision seam. */
 int SG_HostEngineRuntimeHookTrace(const sg_host_engine_runtime_t *runtime,
-	const float start[3], const float end[3],
+	uint32_t subject_index, uint32_t hook_index,
 	sg_host_collision_contents_t mask, sg_host_hook_collision_t *collision_out,
 	sg_host_collision_trace_t *trace_out);
-int SG_HostEngineRuntimePointContents(
-	const sg_host_engine_runtime_t *runtime, const float point[3],
-	sg_host_collision_contents_t *contents_out);
 
 /* Evaluate one accepted runtime frame through the captured exact Pmove. */
 int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
-	const sg_host_pmove_request_t *request,
+	uint32_t subject_index, const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
 
-const sg_rune_model_identity_t *SG_HostEngineRuntimeIdentity(
-	const sg_host_engine_runtime_t *runtime);
-const sg_bsp_content_identity_t *SG_HostEngineRuntimeContentIdentity(
-	const sg_host_engine_runtime_t *runtime);
-uint64_t SG_HostEngineRuntimeBspBytes(
-	const sg_host_engine_runtime_t *runtime);
-uint64_t SG_HostEngineRuntimeGeneration(
-	const sg_host_engine_runtime_t *runtime);
-uint64_t SG_HostEngineRuntimeTopologyRevision(
-	const sg_host_engine_runtime_t *runtime);
-uint64_t SG_HostEngineRuntimeSubjectInstance(
+const sg_host_static_identity_t *SG_HostEngineRuntimeStaticIdentity(
 	const sg_host_engine_runtime_t *runtime);
 
 void SG_HostEngineRuntimeDestroy(sg_host_engine_runtime_t *runtime);

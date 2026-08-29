@@ -34,9 +34,8 @@ void SG_NoteRailShot(edict_t *shooter);
 #define GRAPPLE_PULL_SPEED             SG_HOST_HOOK_PULL_SPEED
 #define GRAPPLE_PULL_BALANCED_SPEED    SG_HOST_HOOK_PULL_SPEED
 
-/* Host-law publication asks the live weapon owner for this snapshot on every
- * issue and revalidation.  Keep the callback in this production translation
- * unit so a test/default helper cannot silently become movement authority. */
+/* Capture the hook constants from the same translation unit that executes the
+ * weapon.  Tests and default helpers cannot replace this callback. */
 int SG_HostHookLiveCapture(sg_host_hook_law_t *law_out)
 {
 	if (!law_out)
@@ -1889,9 +1888,8 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 	}
 	target_index = (uint32_t)other->s.number;
 	touch_result = SG_HostLawProductionHookTouch(
-		(uint32_t)self->owner->s.number, target_index,
-		surf ? surf->flags : 0, self->hook_target != NULL,
-		(uint32_t)level.framenum, (uint32_t)self->hook_lastframe,
+		(uint32_t)self->owner->s.number, (uint32_t)self->s.number,
+		target_index, surf ? surf->flags : 0,
 		&touch_step);
 	if (touch_result.status != SG_HOST_LAW_OK || touch_step.aborted ||
 		!touch_step.accepted)
@@ -2157,7 +2155,6 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 {
 	edict_t	*bolt;
-	sg_host_hook_fire_request_t fire_request;
 	sg_host_hook_step_t fire_step;
 	sg_host_law_result_t fire_result;
 
@@ -2207,14 +2204,8 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 			return NULL;
 		}
 	}
-	memset(&fire_request, 0, sizeof(fire_request));
-	VectorCopy(self->s.origin, fire_request.start);
-	VectorCopy(bolt->s.origin, fire_request.end);
-	fire_request.phase = SG_HOST_HOOK_IDLE;
-	fire_request.owner_instance_id = (uint64_t)self->s.number;
-	fire_request.attack_held = 1;
 	fire_result = SG_HostLawProductionHookFire((uint32_t)self->s.number,
-		&fire_request, &fire_step);
+		(uint32_t)bolt->s.number, &fire_step);
 	if (fire_result.status != SG_HOST_LAW_OK || !fire_step.accepted ||
 		fire_step.aborted)
 	{
@@ -2393,7 +2384,7 @@ void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
 	{
 		sg_host_law_result_t pull_result =
 			SG_HostLawProductionHookPullVelocity((uint32_t)ent->s.number,
-				start, ent->client->hook->s.origin, velocity, &speed);
+				(uint32_t)ent->client->hook->s.number, velocity, &speed);
 
 		if (pull_result.status != SG_HOST_LAW_OK)
 		{

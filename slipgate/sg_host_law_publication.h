@@ -25,26 +25,9 @@
 
 typedef struct sg_host_law_publication_s sg_host_law_publication_t;
 
-/* Upstream identity published before any complete-model seal or artifact
- * acceptance exists.  Every field is an authoritative host input; this type
- * intentionally cannot be mistaken for sg_rune_model_identity_t. */
-typedef struct sg_host_static_identity_s
-{
-	sg_bsp_content_identity_t bsp_identity;
-	uint64_t bsp_bytes;
-	uint32_t engine_checksum;
-	uint32_t entity_crc32;
-	uint32_t host_physics_epoch;
-	uint32_t reserved;
-	uint64_t physics_abi_id;
-	sg_rune_hull_profile_t standing_hull;
-	sg_rune_hull_profile_t crouching_hull;
-	sg_rune_physics_parameters_t physics;
-} sg_host_static_identity_t;
-
-/* A carries the explicit static host identity used by the downstream model
- * seal.  The complete-model identity is a separate field and remains zero
- * until a future opaque B activation can supply the genuinely sealed value. */
+/* Both engine-backed publications carry these exact upstream inputs for the
+ * downstream model seal.  They do not claim a complete-model or RUNE
+ * identity. */
 typedef struct sg_host_law_view_s
 {
 	uint32_t version;
@@ -60,8 +43,7 @@ typedef struct sg_host_law_view_s
 	/* Host-owned inputs to the downstream complete-model seal.  The
 	 * complete-model identity remains absent until that later seal. */
 	sg_host_static_identity_t static_identity;
-	/* Present only on the legacy controller-backed test publication or a
-	 * future downstream runtime publication, never on upstream A. */
+	/* Present only on the legacy controller-backed test publication. */
 	sg_rune_model_identity_t identity;
 	sg_host_engine_pmove_abi_t pmove_abi;
 	uint64_t pmove_behavior_fingerprint;
@@ -166,13 +148,6 @@ sg_host_law_result_t SG_HostLawPublicationCollisionTrace(
 	const sg_host_collision_scene_t *scene, const float start[3],
 	const float mins[3], const float maxs[3], const float end[3],
 	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out);
-sg_host_law_result_t SG_HostLawPublicationEngineTrace(
-	const sg_host_law_publication_t *publication, const float start[3],
-	const float mins[3], const float maxs[3], const float end[3],
-	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out);
-sg_host_law_result_t SG_HostLawPublicationEnginePointContents(
-	const sg_host_law_publication_t *publication, const float point[3],
-	sg_host_collision_contents_t *contents_out);
 sg_host_law_result_t SG_HostLawPublicationPmove(
 	const sg_host_law_publication_t *publication,
 	const sg_host_collision_scene_t *scene,
@@ -185,6 +160,7 @@ sg_host_law_result_t SG_HostLawPublicationHookMuzzle(
 	const sg_host_law_publication_t *publication, const float origin[3],
 	float viewheight, int hand, const float forward[3], const float right[3],
 	float start_out[3]);
+#ifdef SG_HOST_LAW_TESTING
 sg_host_law_result_t SG_HostLawPublicationHookStep(
 	const sg_host_law_publication_t *publication,
 	const sg_host_hook_observation_t *observation,
@@ -198,6 +174,7 @@ sg_host_law_result_t SG_HostLawPublicationHookFire(
 	const sg_host_collision_scene_t *scene,
 	const sg_host_hook_fire_request_t *request,
 	sg_host_hook_step_t *step_out);
+#endif
 
 sg_host_law_result_t SG_HostLawPublicationMoveSchedule(
 	const sg_host_law_publication_t *publication, float distance, float speed,

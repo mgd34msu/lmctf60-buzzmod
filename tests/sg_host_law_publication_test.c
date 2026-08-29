@@ -19,10 +19,14 @@
 #include "../slipgate/sg_host_law_owner_internal.h"
 #include "../slipgate/sg_hooks.h"
 #include "../slipgate/sg_identity.h"
+#include "../slipgate/sg_local.h"
+#include "../slipgate/sg_bot.h"
 
 game_import_t gi;
 game_export_t globals;
+level_locals_t level;
 sg_host_t sg_host;
+sg_bot_t sg_bots[SG_MAXBOTS];
 cvar_t *sv_gravity;
 cvar_t *sv_maxvelocity;
 cvar_t *want_funky_gravity;
@@ -136,11 +140,13 @@ static sg_bsp_brush_t hook_brushes[1];
 static sg_bsp_brush_side_t hook_brush_sides[1];
 static sg_bsp_model_t hook_models[1];
 static sg_bsp_world_t hook_world;
-static edict_t runtime_edicts[3];
-static gclient_t runtime_clients[2];
+static edict_t runtime_edicts[4];
+static gclient_t runtime_clients[4];
 static csurface_t runtime_surface;
 static edict_t *runtime_last_passent;
 static int runtime_trace_calls;
+static int runtime_contents_calls;
+static int runtime_pmove_calls;
 static edict_t *runtime_return_entity;
 
 static trace_t RuntimeTrace(vec3_t start, vec3_t mins, vec3_t maxs,
@@ -173,6 +179,7 @@ static trace_t RuntimeTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 static int RuntimePointContents(vec3_t point)
 {
 	(void)point;
+	runtime_contents_calls++;
 	return 0;
 }
 
@@ -185,6 +192,8 @@ static void RuntimePmove(pmove_t *pmove)
 	trace_t trace;
 
 	trace = pmove->trace(start, mins, maxs, end);
+	(void)pmove->pointcontents(start);
+	runtime_pmove_calls++;
 	pmove->groundentity = trace.ent;
 	VectorCopy(mins, pmove->mins);
 	VectorCopy(maxs, pmove->maxs);
@@ -196,6 +205,8 @@ static void RuntimePmove(pmove_t *pmove)
 extern void Pmove(pmove_t *pmove);
 int CTF_HookPullVelocity(const vec3_t start, const vec3_t bite,
 	vec3_t velocity);
+void CTF_HookMuzzle(const vec3_t origin, float viewheight, int hand,
+	const vec3_t forward, const vec3_t right, vec3_t start);
 void Com_DPrintf(const char *format, ...);
 void Com_Printf(char *format, ...);
 
@@ -207,6 +218,22 @@ void Com_DPrintf(const char *format, ...)
 void Com_Printf(char *format, ...)
 {
 	(void)format;
+}
+
+void CTF_HookMuzzle(const vec3_t origin, float viewheight, int hand,
+	const vec3_t forward, const vec3_t right, vec3_t start)
+{
+	vec3_t offset;
+
+	VectorSet(offset, 8.0f, 8.0f, viewheight - 8.0f);
+	if (hand == LEFT_HANDED)
+		offset[1] = -offset[1];
+	else if (hand == CENTER_HANDED)
+		offset[1] = 0.0f;
+	start[0] = origin[0] + forward[0] * offset[0] + right[0] * offset[1];
+	start[1] = origin[1] + forward[1] * offset[0] + right[1] * offset[1];
+	start[2] = origin[2] + forward[2] * offset[0] + right[2] * offset[1] +
+		offset[2];
 }
 
 #define CHECK(expression) do { \
@@ -222,6 +249,42 @@ static void SetVector(float value[3], float x, float y, float z)
 	value[0] = x;
 	value[1] = y;
 	value[2] = z;
+}
+
+static void InstallRuntimeBot(void)
+{
+	memset(runtime_edicts, 0, sizeof(runtime_edicts));
+	memset(runtime_clients, 0, sizeof(runtime_clients));
+	memset(sg_bots, 0, sizeof(sg_bots));
+	memset(&level, 0, sizeof(level));
+	runtime_edicts[0].inuse = true;
+	runtime_edicts[0].s.number = 0;
+	runtime_edicts[0].classname = "worldspawn";
+	runtime_edicts[1].inuse = true;
+	runtime_edicts[1].s.number = 1;
+	runtime_edicts[1].s.modelindex = 1;
+	runtime_edicts[1].client = &runtime_clients[1];
+	runtime_edicts[1].classname = "player";
+	runtime_edicts[1].flags = FL_BOT;
+	runtime_edicts[1].health = 100;
+	runtime_edicts[1].viewheight = 22.0f;
+	runtime_clients[1].pers.connected = true;
+	runtime_clients[1].ctf.teamnum = CTF_TEAM_RED;
+	sg_bots[0].active = true;
+	sg_bots[0].ent = &runtime_edicts[1];
+	globals.edicts = runtime_edicts;
+	globals.num_edicts = 4;
+	runtime_return_entity = NULL;
+	runtime_trace_calls = 0;
+	runtime_contents_calls = 0;
+	runtime_pmove_calls = 0;
+}
+
+static void ClearRuntimeBot(void)
+{
+	memset(sg_bots, 0, sizeof(sg_bots));
+	globals.edicts = NULL;
+	globals.num_edicts = 0;
 }
 
 static void TestEngineChecksumVectors(void)
@@ -535,18 +598,7 @@ static void TestEngineRuntimeOwnerBinding(void)
 		sizeof(test_level_identity.bsp_sha256));
 	memcpy(test_level_identity.mapname, "runtime_map",
 		sizeof("runtime_map"));
-	memset(runtime_edicts, 0, sizeof(runtime_edicts));
-	memset(runtime_clients, 0, sizeof(runtime_clients));
-	runtime_edicts[0].inuse = true;
-	runtime_edicts[0].s.number = 0;
-	runtime_edicts[0].classname = "worldspawn";
-	runtime_edicts[1].inuse = true;
-	runtime_edicts[1].s.number = 1;
-	runtime_edicts[1].client = &runtime_clients[1];
-	runtime_edicts[1].classname = "player";
-	runtime_clients[1].pers.connected = true;
-	globals.edicts = runtime_edicts;
-	globals.num_edicts = 2;
+	InstallRuntimeBot();
 	gi.trace = RuntimeTrace;
 	gi.pointcontents = RuntimePointContents;
 	gi.Pmove = RuntimePmove;
@@ -554,23 +606,23 @@ static void TestEngineRuntimeOwnerBinding(void)
 	runtime_status = SG_HostEngineRuntimeBegin("runtime_map", &runtime);
 	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK && runtime != NULL);
 	CHECK(SG_HostEngineRuntimeCurrent(runtime));
-	/* A plain, caller-constructible snapshot is not an activation credential.
-	 * Until downstream installs an opaque capability, B and every runtime
-	 * consumer remain unavailable. */
-	runtime_status = SG_HostEngineRuntimeOwnerActivateAcceptedV2(runtime);
-	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_NOT_ACCEPTED);
-	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
-	CHECK(SG_HostEngineRuntimeOwnerBindActiveSubject(runtime, 1U) ==
-		SG_HOST_ENGINE_RUNTIME_NOT_ACCEPTED);
-	CHECK(!SG_HostEngineRuntimeTrace(runtime, start, mins, maxs, end,
+	runtime_status = SG_HostEngineRuntimeOwnerActivate(runtime);
+	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK);
+	CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	CHECK(SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
+	CHECK(runtime_last_passent == &runtime_edicts[1]);
+	sg_bots[0].active = false;
+	CHECK(!SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
+		SG_HOST_MASK_PLAYER_SOLID, &trace));
+	sg_bots[0].active = true;
 	gi.Pmove = Pmove;
 	CHECK(!SG_HostEngineRuntimeCurrent(runtime));
+	CHECK(!SG_HostEngineRuntimeAccepted(runtime));
 	gi.Pmove = RuntimePmove;
 	CHECK(SG_HostEngineRuntimeCurrent(runtime));
 	SG_HostEngineRuntimeDestroy(runtime);
-	globals.edicts = NULL;
-	globals.num_edicts = 0;
+	ClearRuntimeBot();
 	gi.trace = NULL;
 	gi.pointcontents = NULL;
 	gi.Pmove = Pmove;
@@ -1000,8 +1052,12 @@ static void TestOwnerFailClosedAndDrift(void)
 	sg_host_pmove_request_t pmove_request;
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error;
-	sg_host_hook_fire_request_t fire_request;
 	sg_host_hook_step_t hook_step;
+	sg_host_collision_trace_t trace;
+	vec3_t velocity;
+	int rope_length = -1;
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = { 64.0f, 0.0f, 0.0f };
 	uint8_t replacement_digest[SG_LEVEL_BSP_SHA256_BYTES];
 
 	SG_HostLawProductionReset();
@@ -1015,6 +1071,7 @@ static void TestOwnerFailClosedAndDrift(void)
 	gi.trace = RuntimeTrace;
 	gi.pointcontents = RuntimePointContents;
 	gi.Pmove = RuntimePmove;
+	InstallRuntimeBot();
 	memset(&test_level_identity, 0, sizeof(test_level_identity));
 	test_level_identity.bsp_checksum = test_world.engine_checksum;
 	test_level_identity.entity_crc32 = UINT32_C(0x12345678);
@@ -1026,7 +1083,7 @@ static void TestOwnerFailClosedAndDrift(void)
 	result = SG_HostLawProductionEnsureLevel("packed_map");
 	static_publication = SG_HostLawProductionStaticPublication();
 	CHECK(result.status == SG_HOST_LAW_OK && static_publication != NULL &&
-		SG_HostLawProductionPublication() == NULL);
+		SG_HostLawProductionPublication() != NULL);
 	result = SG_HostLawPublicationRead(static_publication, &view);
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		view.identity.bsp_content_id == 0U &&
@@ -1040,23 +1097,62 @@ static void TestOwnerFailClosedAndDrift(void)
 	result = SG_HostLawProductionCollisionAuthority(&borrowed);
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE && borrowed == NULL);
 	memset(&pmove_request, 0, sizeof(pmove_request));
+	pmove_request.state.pm_type = PM_NORMAL;
 	result = SG_HostLawProductionPmove(1U, &pmove_request, &pmove_result,
 		&pmove_error);
-	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE &&
-		SG_HostLawProductionPublication() == NULL);
-	memset(&fire_request, 0, sizeof(fire_request));
-	result = SG_HostLawProductionHookFire(1U, &fire_request, &hook_step);
-	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE &&
-		SG_HostLawProductionPublication() == NULL);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	CHECK(pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	CHECK(pmove_result.evaluated_steps == 4U);
+	CHECK(runtime_pmove_calls == 4);
+	CHECK(runtime_contents_calls == 4);
+	CHECK(SG_HostLawProductionPublication() != NULL);
+	result = SG_HostLawProductionEngineTrace(1U, start, NULL, NULL, end,
+		SG_HOST_MASK_PLAYER_SOLID, &trace);
+	CHECK(result.status == SG_HOST_LAW_OK && trace.fraction == 1.0f &&
+		runtime_last_passent == &runtime_edicts[1]);
+
+	runtime_edicts[2].inuse = true;
+	runtime_edicts[2].s.number = 2;
+	runtime_edicts[2].s.modelindex = 2;
+	runtime_edicts[2].classname = "hook";
+	runtime_edicts[2].owner = &runtime_edicts[1];
+	SetVector(runtime_edicts[2].s.origin, 64.0f, 0.0f, 0.0f);
+	runtime_clients[1].hook = &runtime_edicts[2];
+	result = SG_HostLawProductionHookFire(1U, 2U, &hook_step);
+	CHECK(result.status == SG_HOST_LAW_OK && hook_step.accepted &&
+		!hook_step.aborted && !hook_step.collision_hit);
+	level.framenum = 20;
+	result = SG_HostLawProductionHookTouch(1U, 2U, 0U, 0, &hook_step);
+	CHECK(result.status == SG_HOST_LAW_OK && hook_step.accepted &&
+		!hook_step.aborted && hook_step.attached);
+	runtime_edicts[2].hook_target = &runtime_edicts[0];
+	result = SG_HostLawProductionHookTouch(1U, 2U, 0U, 0, &hook_step);
+	CHECK(result.status == SG_HOST_LAW_OK && hook_step.accepted &&
+		!hook_step.aborted);
+	result = SG_HostLawProductionHookPullVelocity(1U, 2U, velocity,
+		&rope_length);
+	CHECK(result.status == SG_HOST_LAW_OK && rope_length >= 0 &&
+		isfinite(velocity[0]) && isfinite(velocity[1]) && isfinite(velocity[2]));
+
+	/* The edict flag alone cannot borrow a retired SG ownership slot. */
+	sg_bots[0].active = false;
+	result = SG_HostLawProductionPmove(1U, &pmove_request, &pmove_result,
+		&pmove_error);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED &&
+		pmove_error == SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE);
+	sg_bots[0].active = true;
 	/* Callback drift is recoverable after the one-shot setup latch: EnsureLevel
-	 * retires A and captures the new authoritative callback set. */
+	 * captures a fresh construction/runtime pair. */
 	gi.Pmove = Pmove;
 	result = SG_HostLawProductionEnsureLevel("packed_map");
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		SG_HostLawProductionStaticPublication() != NULL &&
-		SG_HostLawProductionPublication() == NULL);
+		SG_HostLawProductionPublication() != NULL);
 	gi.Pmove = RuntimePmove;
-	/* Exact bridge drift also rebuilds A; no stale digest remains published. */
+	result = SG_HostLawProductionEnsureLevel("packed_map");
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		SG_HostLawProductionPublication() != NULL);
+	/* Exact bridge drift also rebuilds both views. */
 	memcpy(replacement_digest, test_level_identity.bsp_sha256,
 		sizeof(replacement_digest));
 	test_level_identity.bsp_sha256[0] ^= UINT8_C(1);
@@ -1070,6 +1166,14 @@ static void TestOwnerFailClosedAndDrift(void)
 	memcpy(test_level_identity.bsp_sha256, replacement_digest,
 		sizeof(test_level_identity.bsp_sha256));
 	SG_HostLawProductionReset();
+	CHECK(SG_HostLawProductionPublication() == NULL &&
+		SG_HostLawProductionStaticPublication() == NULL);
+	result = SG_HostLawProductionBeginLevel("packed_map");
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		SG_HostLawProductionPublication() != NULL &&
+		SG_HostLawProductionStaticPublication() != NULL);
+	SG_HostLawProductionReset();
+	ClearRuntimeBot();
 	gi.trace = NULL;
 	gi.pointcontents = NULL;
 	gi.Pmove = Pmove;

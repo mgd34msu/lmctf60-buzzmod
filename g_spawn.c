@@ -1123,7 +1123,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 			SG_HostLawProductionBeginLevel(mapname);
 
 		if (host_law_result.status != SG_HOST_LAW_OK)
-			gi.dprintf("slipgate: host law unavailable for %s: %s (%s)\n",
+			gi.dprintf("slipgate: engine movement provider unavailable for %s: %s (%s)\n",
 				mapname ? mapname : "<null>",
 				SG_HostLawStatusString(host_law_result.status),
 				SG_HostLawFieldString(host_law_result.field));

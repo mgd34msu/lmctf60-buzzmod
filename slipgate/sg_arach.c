@@ -1258,15 +1258,14 @@ static qboolean SG_LevelSetupAttempt(void)
 		SG_SetupFailure("previous-failure", false);
 		return false;
 	}
-	/* Publish upstream host-law input A before loading the current controller.  The
-	 * owner retains this level epoch, exact BSP identity, and callback identities;
-	 * authenticated runtime activation B belongs to the downstream cutover. */
+	/* Confirm that the level's exact BSP, physics, and engine callbacks are
+	 * published before loading the controller. */
 	{
 		sg_host_law_result_t host_law_result =
-			SG_HostLawProductionBeginLevel(level.mapname);
+			SG_HostLawProductionEnsureLevel(level.mapname);
 
 		if (host_law_result.status != SG_HOST_LAW_OK)
-			sg_host.dprint("slipgate: host law begin unavailable for %s: %s (%s)\n",
+			sg_host.dprint("slipgate: engine movement provider unavailable for %s: %s (%s)\n",
 				level.mapname, SG_HostLawStatusString(host_law_result.status),
 				SG_HostLawFieldString(host_law_result.field));
 	}
@@ -4887,9 +4886,6 @@ void SG_RunFrame(void)
 			SG_RetireBotForClient(ent);
 			continue;
 		}
-		/* The owner resolves this live subject through the authenticated edict
-		 * array before any engine-backed movement/collision consumer runs. */
-		(void)SG_HostLawProductionBindActiveSubject((uint32_t)ent->s.number);
 		/* One map-local pulse per server second proves the diagnostic stream's
 		 * complete residence coverage even while a bot is dead and therefore
 		 * cannot reach Think_Emit's route-state report. */
