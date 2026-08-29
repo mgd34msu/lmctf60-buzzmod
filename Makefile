@@ -1303,6 +1303,8 @@ OBJS := \
 	sg_price.o \
 	sg_descend.o slipgate/sg_traversal_transition.o \
 	sg_goal.o \
+	slipgate/sg_destination.o \
+	slipgate/sg_rune_dynamics_model.o \
 	slipgate/sg_rune_model.o \
 	slipgate/sg_weapon_effect_profile.o \
 	sg_chat.o \

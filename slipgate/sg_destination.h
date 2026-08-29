@@ -128,10 +128,22 @@ typedef struct sg_rune_runtime_snapshot_s
 	const sg_phase_coordinate_t *phases;
 } sg_rune_runtime_snapshot_t;
 
+typedef struct sg_rune_state_chart_id_s
+{
+	sg_rune_stable_id_t value;
+} sg_rune_state_chart_id_t;
+typedef sg_rune_state_chart_id_t sg_rune_state_chart_ref_t;
+
+typedef struct sg_rune_state_domain_id_s
+{
+	sg_rune_stable_id_t value;
+} sg_rune_state_domain_id_t;
+typedef sg_rune_state_domain_id_t sg_rune_state_domain_ref_t;
+
 typedef struct sg_destination_terminal_domain_s
 {
-	uint64_t chart_identity;
-	uint64_t domain_identity;
+	sg_rune_state_chart_ref_t chart;
+	sg_rune_state_domain_ref_t domain;
 } sg_destination_terminal_domain_t;
 
 typedef struct sg_destination_static_patch_s
@@ -256,6 +268,8 @@ static inline int SG_DestinationHandleValid(
 	return handle && handle->valid == 1U && handle->id != 0U &&
 	       handle->generation != 0U && SG_DestinationKindValid(handle->kind) &&
 	       SG_DestinationMotionValid(handle->motion) &&
+	       handle->reserved[0] == 0U && handle->reserved[1] == 0U &&
+	       handle->reserved[2] == 0U &&
 	       SG_DestinationPoseValid(&handle->pose) &&
 	       ((handle->motion == SG_DESTINATION_STATIC &&
 	         handle->pose.sample_time_ms == 0U) ||

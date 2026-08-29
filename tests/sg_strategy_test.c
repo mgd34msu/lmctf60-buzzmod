@@ -1339,7 +1339,7 @@ static void TestFactsSurviveReplacement(void)
 	CHECK(state.fact_count == 1U);
 }
 
-static void TestSemanticObservationReplayIgnoresReservedBytes(void)
+static void TestSemanticObservationRejectsReservedBytes(void)
 {
 	sg_strategy_plan_spec_t spec;
 	sg_strategy_plan_t plan;
@@ -1364,7 +1364,7 @@ static void TestSemanticObservationReplayIgnoresReservedBytes(void)
 	frame.destinations = &observation;
 	frame.destination_count = 1U;
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
-		SG_STRATEGY_REDUCE_APPLIED);
+		SG_STRATEGY_REDUCE_REJECTED_INVALID);
 	CHECK(state.goals[0].choices[0].handle.reserved[0] == 0U);
 }
 
@@ -1626,7 +1626,7 @@ int main(void)
 	TestWeaponArmorFlagChain();
 	TestUnavailableWaitAndTimeWindow();
 	TestFactsSurviveReplacement();
-	TestSemanticObservationReplayIgnoresReservedBytes();
+	TestSemanticObservationRejectsReservedBytes();
 	TestEscortRecoveryAndTimedPowerupPlan();
 	TestRoleChangeAndHumanOrderAuthority();
 	TestUnavailablePrerequisiteFailsDependentGoal();

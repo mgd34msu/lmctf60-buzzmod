@@ -9,6 +9,7 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion'
 strict="$strict -Wsign-conversion -Wshadow -Wstrict-prototypes"
 strict="$strict -Wmissing-prototypes -Wcast-align"
 sources='tests/sg_destination_test.c slipgate/sg_destination.c'
+sources="$sources slipgate/sg_rune_model.c"
 
 cd "$repo_dir"
 for cc in gcc clang
@@ -24,4 +25,4 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	"$tmp_dir/destination-sanitize"
 
 clang $strict --analyze -Xanalyzer -analyzer-output=text -I. \
-	slipgate/sg_destination.c
+	slipgate/sg_destination.c slipgate/sg_rune_model.c

@@ -2,8 +2,14 @@
 
 static int TerminalDomainValid(const sg_destination_terminal_domain_t *domain)
 {
-	return domain && domain->chart_identity != 0U &&
-		domain->domain_identity != 0U;
+	return domain && SG_RuneModelStableIdValid(&domain->chart.value) &&
+		(uint32_t)(domain->chart.value.high >> 32) ==
+			SG_RUNE_ORDER_STATE_CHART &&
+		SG_RuneModelStableIdValid(&domain->domain.value) &&
+		(uint32_t)(domain->domain.value.high >> 32) ==
+			SG_RUNE_ORDER_STATE_DOMAIN &&
+		domain->chart.value.source_set_identity ==
+			domain->domain.value.source_set_identity;
 }
 
 int SG_DestinationTerminalValid(const sg_destination_terminal_t *terminal)
