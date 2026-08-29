@@ -46,6 +46,9 @@ loader, pidfds, and `/proc` process diagnostics. It fails before launch on
 Windows and macOS rather than attempting those Linux checks. This limitation is
 only for the corpus controller; the game RUNE reader uses exact content
 snapshots on native Windows APIs and POSIX systems, including macOS.
+The Linux preflight also requires permission to open each mutable or relocated
+mapping through `/proc/<pid>/map_files`; it fails closed when the kernel denies
+that authority.
 
 ## Input freeze
 

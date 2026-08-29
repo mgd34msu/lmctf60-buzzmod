@@ -254,6 +254,7 @@ static wchar_t *AbsoluteWidePath(const wchar_t *wide)
 	DWORD needed;
 	DWORD written;
 	wchar_t *absolute;
+	size_t index;
 
 	needed = GetFullPathNameW(wide, 0U, NULL, NULL);
 	if (needed == 0U || (size_t)needed >= SIZE_MAX / sizeof(*absolute))
@@ -266,6 +267,11 @@ static wchar_t *AbsoluteWidePath(const wchar_t *wide)
 	{
 		free(absolute);
 		return NULL;
+	}
+	for (index = 0U; absolute[index] != L'\0'; index++)
+	{
+		if (absolute[index] == L'/')
+			absolute[index] = L'\\';
 	}
 	return absolute;
 }
@@ -335,6 +341,79 @@ static int WindowsParentsAreNotReparsePoints(wchar_t *path)
 	return 1;
 }
 
+static wchar_t *WindowsExtendedPath(const wchar_t *path)
+{
+	const wchar_t *prefix;
+	const wchar_t *suffix;
+	size_t prefix_length;
+	size_t suffix_length;
+	wchar_t *extended;
+
+	if (wcsncmp(path, L"\\\\?\\", 4U) == 0)
+	{
+		prefix = L"";
+		suffix = path;
+	}
+	else if (IsWideSeparator(path[0]) && IsWideSeparator(path[1]))
+	{
+		prefix = L"\\\\?\\UNC\\";
+		suffix = path + 2;
+	}
+	else
+	{
+		prefix = L"\\\\?\\";
+		suffix = path;
+	}
+	prefix_length = wcslen(prefix);
+	suffix_length = wcslen(suffix);
+	if (suffix_length > SIZE_MAX - prefix_length - 1U ||
+	    prefix_length + suffix_length + 1U > SIZE_MAX / sizeof(*extended))
+		return NULL;
+	extended = (wchar_t *)malloc((prefix_length + suffix_length + 1U) *
+		sizeof(*extended));
+	if (!extended)
+		return NULL;
+	memcpy(extended, prefix, prefix_length * sizeof(*extended));
+	memcpy(extended + prefix_length, suffix,
+		(suffix_length + 1U) * sizeof(*extended));
+	return extended;
+}
+
+static wchar_t *WindowsFinalPath(HANDLE file)
+{
+	DWORD needed;
+	DWORD written;
+	wchar_t *path;
+
+	needed = GetFinalPathNameByHandleW(file, NULL, 0U,
+		FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	if (needed == 0U || (size_t)needed >= SIZE_MAX / sizeof(*path))
+		return NULL;
+	path = (wchar_t *)malloc(((size_t)needed + 1U) * sizeof(*path));
+	if (!path)
+		return NULL;
+	written = GetFinalPathNameByHandleW(file, path, needed + 1U,
+		FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	if (written == 0U || written > needed)
+	{
+		free(path);
+		return NULL;
+	}
+	return path;
+}
+
+static int WindowsOpenedPathMatches(HANDLE file, const wchar_t *absolute)
+{
+	wchar_t *expected = WindowsExtendedPath(absolute);
+	wchar_t *actual = WindowsFinalPath(file);
+	int matches = expected && actual &&
+		CompareStringOrdinal(expected, -1, actual, -1, TRUE) == CSTR_EQUAL;
+
+	free(actual);
+	free(expected);
+	return matches;
+}
+
 static void *DefaultOpenRead(void *context, const char *utf8_path)
 {
 	wchar_t *wide;
@@ -357,15 +436,24 @@ static void *DefaultOpenRead(void *context, const char *utf8_path)
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
 		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
 		FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	free(absolute);
 	if (file == INVALID_HANDLE_VALUE)
 	{
 		DWORD error = GetLastError();
 
+		free(absolute);
 		errno = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
 			? ENOENT : EIO;
 		return NULL;
 	}
+	if (!WindowsParentsAreNotReparsePoints(absolute) ||
+	    !WindowsOpenedPathMatches(file, absolute))
+	{
+		(void)CloseHandle(file);
+		free(absolute);
+		errno = ELOOP;
+		return NULL;
+	}
+	free(absolute);
 	return file;
 }
 

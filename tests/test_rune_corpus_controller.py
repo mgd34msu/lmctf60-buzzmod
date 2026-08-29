@@ -431,7 +431,14 @@ class RuneCorpusControllerTests(unittest.TestCase):
                 return observed
 
             with mock.patch.object(controller, "_validate_verified_python_process", side_effect=observe):
-                preflight = controller.preflight_python_runtime(snapshot)
+                try:
+                    preflight = controller.preflight_python_runtime(snapshot)
+                except controller.ProcessIntegrityError as exc:
+                    self.assertEqual(
+                        "cannot authenticate verified Python mapped backing", str(exc)
+                    )
+                    self.thaw(snapshot)
+                    return
                 rc, output, lifecycle = controller.run_verified_python(
                     snapshot, verified["python_runtime"], "integration", target, [str(artifact)]
                 )
@@ -554,6 +561,127 @@ class RuneCorpusControllerTests(unittest.TestCase):
                     os.close(attacker_fd)
             finally:
                 view.close()
+                os.close(descriptor)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux maps")
+    def test_readonly_mapped_object_identity_rejects_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            trusted = work / "trusted-runtime"
+            attacker = work / "attacker-runtime"
+            trusted.write_bytes(small_python_elf("good-loader"))
+            attacker.write_bytes(small_python_elf("evil-loader"))
+            record = controller.regular_file_record(trusted)
+            descriptor = os.open(trusted, os.O_RDONLY)
+            record["descriptor"] = descriptor
+            attacker_fd = os.open(attacker, os.O_RDONLY)
+            view = mmap.mmap(
+                attacker_fd, 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ,
+            )
+            try:
+                fields = next(
+                    line.split()
+                    for line in Path("/proc/self/maps").read_text(encoding="utf-8").splitlines()
+                    if line.endswith(str(attacker))
+                )
+                self.assertNotIn("x", fields[1])
+                with self.assertRaisesRegex(
+                    controller.ProcessIntegrityError, "mapped object differs"
+                ):
+                    controller._validate_mapped_object(
+                        os.getpid(), fields[0], int(fields[2], 16), fields[1], record,
+                    )
+            finally:
+                view.close()
+                os.close(attacker_fd)
+                os.close(descriptor)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux maps")
+    def test_readonly_mapped_object_identity_honors_map_offset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "runtime"
+            page = mmap.PAGESIZE
+            path.write_bytes(b"A" * page + b"B" * page)
+            record = controller.regular_file_record(path)
+            descriptor = os.open(path, os.O_RDONLY)
+            record["descriptor"] = descriptor
+            view = mmap.mmap(
+                descriptor, page, flags=mmap.MAP_PRIVATE,
+                prot=mmap.PROT_READ, offset=page,
+            )
+            try:
+                fields = next(
+                    line.split()
+                    for line in Path("/proc/self/maps").read_text(encoding="utf-8").splitlines()
+                    if line.endswith(str(path)) and int(line.split()[2], 16) == page
+                )
+                controller._validate_mapped_object(
+                    os.getpid(), fields[0], int(fields[2], 16), fields[1], record,
+                )
+            finally:
+                view.close()
+                os.close(descriptor)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux process_vm_readv")
+    def test_process_memory_short_read_fails_closed(self):
+        with mock.patch.object(controller, "_PROCESS_VM_READV", return_value=1):
+            with self.assertRaisesRegex(
+                controller.ProcessIntegrityError, "cannot read verified Python mapped bytes"
+            ):
+                controller._read_verified_process_memory(os.getpid(), 1, 2)
+
+    def test_elf_writable_file_range_detects_relro_origin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "runtime"
+            page = mmap.PAGESIZE
+            header = struct.pack(
+                "<16sHHIQQQIHHHHHH",
+                b"\x7fELF\x02\x01\x01" + b"\0" * 9,
+                3, 62, 1, 0, 64, 0, 0, 64, 56, 1, 0, 0, 0,
+            )
+            program = struct.pack(
+                "<IIQQQQQQ", 1, 6, page, page, 0, page, page, page,
+            )
+            path.write_bytes((header + program).ljust(page * 2, b"\0"))
+            descriptor = os.open(path, os.O_RDONLY)
+            try:
+                self.assertFalse(controller._elf_writable_file_range(descriptor, 0, page))
+                self.assertTrue(controller._elf_writable_file_range(descriptor, page, page))
+            finally:
+                os.close(descriptor)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux maps")
+    def test_writable_mapped_object_requires_backing_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            trusted = work / "trusted-runtime"
+            attacker = work / "attacker-runtime"
+            trusted.write_bytes(b"trusted runtime bytes")
+            attacker.write_bytes(b"attacker runtime bytes")
+            record = controller.regular_file_record(trusted)
+            descriptor = os.open(trusted, os.O_RDONLY)
+            record["descriptor"] = descriptor
+            attacker_fd = os.open(attacker, os.O_RDONLY)
+            view = mmap.mmap(
+                attacker_fd, 0, flags=mmap.MAP_PRIVATE,
+                prot=mmap.PROT_READ | mmap.PROT_WRITE,
+            )
+            try:
+                fields = next(
+                    line.split()
+                    for line in Path("/proc/self/maps").read_text(encoding="utf-8").splitlines()
+                    if line.endswith(str(attacker))
+                )
+                self.assertIn("w", fields[1])
+                with self.assertRaisesRegex(
+                    controller.ProcessIntegrityError, "mapped backing|cannot authenticate"
+                ):
+                    controller._validate_mapped_object(
+                        os.getpid(), fields[0], int(fields[2], 16), fields[1], record,
+                    )
+            finally:
+                view.close()
+                os.close(attacker_fd)
                 os.close(descriptor)
 
     def test_linux_map_preflight_accepts_zero_identity_fields(self):

@@ -26,6 +26,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1916,6 +1917,78 @@ def _read_verified_process_memory(pid: int, address: int, size: int) -> bytes:
     return buffer.raw
 
 
+def _validate_mapped_backing(
+    pid: int, address_range: str, record: Mapping[str, Any],
+) -> None:
+    try:
+        fd = os.open(
+            f"/proc/{pid}/map_files/{address_range}",
+            os.O_RDONLY | os.O_CLOEXEC,
+        )
+    except OSError as exc:
+        raise ProcessIntegrityError(
+            "cannot authenticate verified Python mapped backing"
+        ) from exc
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_size != record["size"]
+                or stat.S_IMODE(info.st_mode) != record["mode"]
+                or _sha256_fd(fd) != record["sha256"]):
+            raise ProcessIntegrityError(
+                f"mapped backing differs from manifest: {record['path']}"
+            )
+    finally:
+        os.close(fd)
+
+
+def _elf_writable_file_range(fd: int, offset: int, length: int) -> bool:
+    try:
+        ident = os.pread(fd, 16, 0)
+    except OSError as exc:
+        raise ProcessIntegrityError("cannot inspect retained ELF descriptor") from exc
+    if len(ident) != 16 or ident[:4] != b"\x7fELF" or ident[5] not in (1, 2):
+        return False
+    byte_order = "<" if ident[5] == 1 else ">"
+    if ident[4] == 1:
+        header_format = byte_order + "16sHHIIIIIHHHHHH"
+        program_format = byte_order + "IIIIIIII"
+        offset_index, size_index, flags_index = 1, 4, 6
+    elif ident[4] == 2:
+        header_format = byte_order + "16sHHIQQQIHHHHHH"
+        program_format = byte_order + "IIQQQQQQ"
+        offset_index, size_index, flags_index = 2, 5, 1
+    else:
+        return False
+    header_size = struct.calcsize(header_format)
+    try:
+        header = os.pread(fd, header_size, 0)
+    except OSError as exc:
+        raise ProcessIntegrityError("cannot inspect retained ELF descriptor") from exc
+    if len(header) != header_size:
+        raise ProcessIntegrityError("retained ELF header is short")
+    fields = struct.unpack(header_format, header)
+    program_offset, program_size, program_count = fields[5], fields[9], fields[10]
+    expected_size = struct.calcsize(program_format)
+    if program_size != expected_size or program_count > 1024:
+        raise ProcessIntegrityError("retained ELF program headers are invalid")
+    mapped_end = offset + length
+    for index in range(program_count):
+        try:
+            program = os.pread(fd, program_size, program_offset + index * program_size)
+        except OSError as exc:
+            raise ProcessIntegrityError("cannot inspect retained ELF descriptor") from exc
+        if len(program) != program_size:
+            raise ProcessIntegrityError("retained ELF program header is short")
+        fields = struct.unpack(program_format, program)
+        if fields[0] != 1 or (fields[flags_index] & 2) == 0:
+            continue
+        segment_offset = fields[offset_index]
+        segment_end = segment_offset + fields[size_index]
+        if segment_offset < mapped_end and offset < segment_end:
+            return True
+    return False
+
+
 def _validate_mapped_object(
     pid: int, address_range: str, offset: int, permissions: str,
     record: Mapping[str, Any],
@@ -1929,10 +2002,11 @@ def _validate_mapped_object(
     if end <= start or offset >= record["size"]:
         raise ProcessIntegrityError("verified Python mapped range is invalid")
     fd = _validate_retained_descriptor(record)
-    # Dynamic relocation mutates private writable mappings after load.
-    if "x" not in permissions:
-        return
     length = min(end - start, record["size"] - offset)
+    if ("w" in permissions or "r" not in permissions
+            or _elf_writable_file_range(fd, offset, length)):
+        _validate_mapped_backing(pid, address_range, record)
+        return
     checked = 0
     while checked < length:
         amount = min(1024 * 1024, length - checked)
