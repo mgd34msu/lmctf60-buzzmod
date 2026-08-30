@@ -6,8 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_completeness_proof.h"
-#include "sg_configuration_audit.h"
+#include "sg_host_law_construction_offline.h"
 #include "sg_mechanism_capability_internal.h"
 
 typedef struct sg_ground_phase_ref_index_s
@@ -60,13 +59,12 @@ typedef struct sg_ground_reconstruction_source_s
 
 typedef struct sg_ground_normalized_source_s
 {
-	const sg_host_law_publication_t *engine_authority;
-	const sg_host_collision_authority_t *collision_authority;
+	const sg_host_law_construction_t *construction;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	const sg_phase_catalog_publication_owner_t *phase_catalog_owner;
 	const sg_phase_catalog_publication_t *phase_catalog;
-	sg_host_law_view_t engine_view;
+	sg_host_law_construction_view_t construction_view;
 	sg_phase_catalog_completion_t phase_completion;
 	sg_phase_catalog_completion_t transition_completion;
 	uint64_t mover_support_verifier_identity;
@@ -102,8 +100,6 @@ struct sg_ground_capability_publication_owner_s
 	sg_ground_publication_record_t *live;
 	uint32_t live_count;
 };
-
-static _Thread_local int sg_ground_engine_pmove_failed;
 
 static int CapabilityOrderCompare(
 	const sg_ground_capability_t *left,
@@ -387,8 +383,8 @@ static int AuditAcceptedGeometry(
 	memset(&completeness, 0, sizeof(completeness));
 	memset(&configuration, 0, sizeof(configuration));
 	memset(&semantics, 0, sizeof(semantics));
-	if (!SG_BspCompletenessProve(source->collision_authority,
-			source->configuration, &completeness) ||
+	if (SG_HostLawConstructionCompletenessProve(source->construction,
+			source->configuration, &completeness).status != SG_HOST_LAW_OK ||
 		completeness.code != SG_BSP_COMPLETENESS_OK ||
 		completeness.represented_cells != source->configuration->cell_count ||
 		completeness.proved_cells != source->configuration->cell_count ||
@@ -405,8 +401,8 @@ static int AuditAcceptedGeometry(
 			completeness.record);
 		return 0;
 	}
-	if (!SG_ConfigurationAudit(source->collision_authority,
-			source->configuration, &configuration) ||
+	if (SG_HostLawConstructionConfigurationAudit(source->construction,
+			source->configuration, &configuration).status != SG_HOST_LAW_OK ||
 		configuration.code != SG_CONFIGURATION_AUDIT_OK ||
 		configuration.proved_cells != source->configuration->cell_count ||
 		configuration.proved_portals != source->configuration->portal_count ||
@@ -418,8 +414,9 @@ static int AuditAcceptedGeometry(
 			configuration.record);
 		return 0;
 	}
-	if (!SG_ConfigurationSemanticsAudit(source->collision_authority,
-		source->configuration, source->semantics, &semantics) ||
+	if (SG_HostLawConstructionSemanticsAudit(source->construction,
+		source->configuration, source->semantics,
+		&semantics).status != SG_HOST_LAW_OK ||
 		semantics.code != SG_CONFIGURATION_SEMANTICS_AUDIT_OK)
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_SEMANTICS_REJECTED,
@@ -429,13 +426,16 @@ static int AuditAcceptedGeometry(
 	return 1;
 }
 
-static int EngineViewValid(const sg_ground_normalized_source_t *source)
+static int ConstructionViewValid(const sg_ground_normalized_source_t *source)
 {
-	const sg_host_law_view_t *view = &source->engine_view;
-	const sg_rune_model_identity_t *identity =
-		&source->collision_authority->identity;
+	const sg_host_law_construction_view_t *construction =
+		&source->construction_view;
+	const sg_host_law_view_t *view = &construction->laws;
+	const sg_rune_model_identity_t *identity = &source->configuration->identity;
 
-	return view->version == SG_HOST_LAW_PUBLICATION_VERSION &&
+	return construction->version == SG_HOST_LAW_PUBLICATION_VERSION &&
+		construction->current == 1U && construction->level_generation != 0U &&
+		view->version == SG_HOST_LAW_PUBLICATION_VERSION &&
 		view->reserved == 0U && view->collision_law_id != 0U &&
 		view->pmove_law_id != 0U && view->gravity_law_id != 0U &&
 		view->collision_law_id != view->pmove_law_id &&
@@ -450,7 +450,19 @@ static int EngineViewValid(const sg_ground_normalized_source_t *source)
 		FloatBitsEqual(view->maxvelocity, identity->physics.max_velocity) &&
 		view->movement_flags == 0U &&
 		view->physics_flags == SG_HOST_ENGINE_PHYSICS_FLAGS &&
-		IdentityEqual(&view->identity, identity);
+		view->identity.bsp_content_id == 0U &&
+		view->identity.entity_semantics_id == 0U &&
+		view->identity.source_set_identity == 0U &&
+		view->identity.schema_id == 0U &&
+		view->identity.producer_identity == 0U &&
+		construction->host_static_identity.physics_abi_id ==
+			identity->physics_abi_id &&
+		memcmp(&construction->host_static_identity.standing_hull,
+			&identity->standing_hull, sizeof(identity->standing_hull)) == 0 &&
+		memcmp(&construction->host_static_identity.crouching_hull,
+			&identity->crouching_hull, sizeof(identity->crouching_hull)) == 0 &&
+		memcmp(&construction->host_static_identity.physics, &identity->physics,
+			sizeof(identity->physics)) == 0;
 }
 
 static int CopyArray(void **destination, const void *source, size_t count,
@@ -1425,44 +1437,31 @@ static int PrepareSource(
 	const sg_phase_catalog_view_t *phase_view = NULL;
 	sg_host_law_result_t host_result;
 
-	if (!input || !source || !result || !input->engine_authority ||
+	if (!input || !source || !result || !input->construction ||
 		!input->configuration || !input->semantics ||
 		!input->phase_catalog_owner || !input->phase_catalog)
 		return 0;
 	memset(source, 0, sizeof(*source));
-	source->engine_authority = input->engine_authority;
+	source->construction = input->construction;
 	source->configuration = input->configuration;
 	source->semantics = input->semantics;
 	source->phase_catalog_owner = input->phase_catalog_owner;
 	source->phase_catalog = input->phase_catalog;
-	host_result = SG_HostLawPublicationRevalidateProduction(
-		input->engine_authority);
+	host_result = SG_HostLawConstructionRead(input->construction,
+		&source->construction_view);
 	if (host_result.status != SG_HOST_LAW_OK)
 	{
-		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_ENGINE_AUTHORITY_REJECTED,
+		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_CONSTRUCTION_REJECTED,
 			host_result.element);
 		return 0;
 	}
-	host_result = SG_HostLawPublicationRead(input->engine_authority,
-		&source->engine_view);
-	if (host_result.status != SG_HOST_LAW_OK)
+	if (!ConstructionViewValid(source))
 	{
-		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_ENGINE_AUTHORITY_REJECTED,
+		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_CONSTRUCTION_REJECTED,
 			host_result.element);
 		return 0;
 	}
-	host_result = SG_HostLawPublicationCollisionAuthority(
-		input->engine_authority, &source->collision_authority);
-	if (host_result.status != SG_HOST_LAW_OK || !source->collision_authority ||
-		!source->collision_authority->world || !EngineViewValid(source))
-	{
-		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_ENGINE_AUTHORITY_REJECTED,
-			host_result.element);
-		return 0;
-	}
-	if (!IdentityEqual(&source->collision_authority->identity,
-			&input->configuration->identity) ||
-		!IdentityEqual(&source->collision_authority->identity,
+	if (!IdentityEqual(&input->configuration->identity,
 			&input->semantics->identity))
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_IDENTITY_MISMATCH,
@@ -1479,7 +1478,7 @@ static int PrepareSource(
 		return 0;
 	}
 	if (!IdentityEqual(&phase_view->identity,
-			&source->collision_authority->identity))
+			&source->configuration->identity))
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_IDENTITY_MISMATCH,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -1497,7 +1496,7 @@ static int SamePhaseView(const sg_ground_normalized_source_t *source,
 	const sg_phase_catalog_view_t *view)
 {
 	return view && IdentityEqual(&view->identity,
-			&source->collision_authority->identity) &&
+			&source->configuration->identity) &&
 		view->completion == source->phase_completion &&
 		view->transition_completion == source->transition_completion &&
 		view->mover_support_verifier_identity ==
@@ -1523,31 +1522,19 @@ static int SourceStillCurrent(const sg_ground_normalized_source_t *source,
 	sg_ground_capability_audit_result_t *result)
 {
 	const sg_phase_catalog_view_t *phase_view = NULL;
-	const sg_host_collision_authority_t *collision_authority = NULL;
-	sg_host_law_view_t engine_view;
+	sg_host_law_construction_view_t construction_view;
 	sg_host_law_result_t host_result;
 
-	host_result = SG_HostLawPublicationRevalidateProduction(
-		source->engine_authority);
+	host_result = SG_HostLawConstructionRead(source->construction,
+		&construction_view);
 	if (host_result.status != SG_HOST_LAW_OK)
 	{
-		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_ENGINE_AUTHORITY_REJECTED,
+		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_CONSTRUCTION_REJECTED,
 			host_result.element);
 		return 0;
 	}
-	host_result = SG_HostLawPublicationRead(source->engine_authority,
-		&engine_view);
-	if (host_result.status != SG_HOST_LAW_OK ||
-		memcmp(&engine_view, &source->engine_view, sizeof(engine_view)) != 0)
-	{
-		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_SOURCE_MUTATED,
-			host_result.element);
-		return 0;
-	}
-	host_result = SG_HostLawPublicationCollisionAuthority(
-		source->engine_authority, &collision_authority);
-	if (host_result.status != SG_HOST_LAW_OK ||
-		collision_authority != source->collision_authority)
+	if (memcmp(&construction_view, &source->construction_view,
+			sizeof(construction_view)) != 0)
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_SOURCE_MUTATED,
 			host_result.element);
@@ -1571,12 +1558,6 @@ static int SourceStillCurrent(const sg_ground_normalized_source_t *source,
 		return 0;
 	}
 	return AuditAcceptedGeometry(source, result);
-}
-
-static void GroundEnginePmove(pmove_t *pmove)
-{
-	if (!SG_HostEnginePmove(pmove))
-		sg_ground_engine_pmove_failed = 1;
 }
 
 static sg_ground_capability_audit_code_t ReconstructionCode(
@@ -1611,18 +1592,16 @@ static int Reconstruct(const sg_ground_capability_publication_source_t *input,
 			SetResult(result, SG_GROUND_CAPABILITY_AUDIT_OUT_OF_MEMORY, 0U);
 			return 0;
 		}
-		expected->identity = source->collision_authority->identity;
+		expected->identity = source->configuration->identity;
 	}
 	else
 	{
 		if (!ReconstructionSourceBuild(source, &reconstruction, result))
 			return 0;
-		sg_ground_engine_pmove_failed = 0;
-		if (!SG_GroundCapabilityBuild(source->collision_authority,
+		if (!SG_GroundCapabilityBuild(source->construction,
 				&reconstruction.configuration, &reconstruction.semantics,
 				source->phases, source->phase_count, reconstruction.bindings,
-				source->ground_binding_count, GroundEnginePmove, &expected,
-				&error) || sg_ground_engine_pmove_failed)
+				source->ground_binding_count, &expected, &error))
 		{
 			ReconstructionSourceDestroy(&reconstruction);
 			SG_GroundCapabilityDestroy(expected);
@@ -2075,7 +2054,7 @@ static int PayloadValid(const sg_ground_publication_payload_t *payload)
 		((description->fact_count == 0U) !=
 		 (description->completeness ==
 			SG_GROUND_CAPABILITY_COMPLETENESS_PROVEN_EMPTY)) ||
-		description->engine_authority_version !=
+		description->construction_version !=
 			SG_HOST_LAW_PUBLICATION_VERSION || description->reserved != 0U ||
 		description->collision_law_id == 0U ||
 		description->pmove_law_id == 0U ||
@@ -2288,18 +2267,19 @@ int SG_GroundCapabilityPublicationIssue(
 			goto done;
 		}
 	}
-	record->payload->description.identity =
-		source.collision_authority->identity;
-	record->payload->description.engine_authority_version =
-		source.engine_view.version;
+	record->payload->description.identity = source.configuration->identity;
+	record->payload->description.construction_version =
+		source.construction_view.version;
 	record->payload->description.collision_law_id =
-		source.engine_view.collision_law_id;
-	record->payload->description.pmove_law_id = source.engine_view.pmove_law_id;
+		source.construction_view.laws.collision_law_id;
+	record->payload->description.pmove_law_id =
+		source.construction_view.laws.pmove_law_id;
 	record->payload->description.gravity_law_id =
-		source.engine_view.gravity_law_id;
-	record->payload->description.pmove_abi = source.engine_view.pmove_abi;
+		source.construction_view.laws.gravity_law_id;
+	record->payload->description.pmove_abi =
+		source.construction_view.laws.pmove_abi;
 	record->payload->description.pmove_behavior_fingerprint =
-		source.engine_view.pmove_behavior_fingerprint;
+		source.construction_view.laws.pmove_behavior_fingerprint;
 	record->payload->description.completeness = audit.completeness;
 	record->payload->description.cell_count = source.configuration->cell_count;
 	record->payload->description.portal_count =
@@ -2462,7 +2442,7 @@ const char *SG_GroundCapabilityAuditCodeString(
 {
 	static const char *const names[] = {
 		"ok", "invalid argument", "identity mismatch",
-		"engine authority rejected", "configuration rejected",
+		"construction rejected", "configuration rejected",
 		"semantics rejected", "phase catalog rejected",
 		"phase binding rejected", "phase transition rejected",
 		"reconstruction rejected", "invalid fact", "duplicate fact",

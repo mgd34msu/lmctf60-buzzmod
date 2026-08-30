@@ -25,7 +25,7 @@ typedef enum sg_ground_capability_audit_code_e
 	SG_GROUND_CAPABILITY_AUDIT_OK = 0,
 	SG_GROUND_CAPABILITY_AUDIT_INVALID_ARGUMENT,
 	SG_GROUND_CAPABILITY_AUDIT_IDENTITY_MISMATCH,
-	SG_GROUND_CAPABILITY_AUDIT_ENGINE_AUTHORITY_REJECTED,
+	SG_GROUND_CAPABILITY_AUDIT_CONSTRUCTION_REJECTED,
 	SG_GROUND_CAPABILITY_AUDIT_CONFIGURATION_REJECTED,
 	SG_GROUND_CAPABILITY_AUDIT_SEMANTICS_REJECTED,
 	SG_GROUND_CAPABILITY_AUDIT_PHASE_CATALOG_REJECTED,
@@ -44,12 +44,12 @@ typedef enum sg_ground_capability_audit_code_e
 	SG_GROUND_CAPABILITY_AUDIT_OUT_OF_MEMORY
 } sg_ground_capability_audit_code_t;
 
-/* The two opaque publications authenticate collision, Pmove, phases, and
- * transitions. Configuration and semantics remain the audited construction
- * products that those publications bind by exact model identity. */
+/* The opaque construction handle authenticates collision and Pmove. The
+ * phase publication authenticates phases and transitions. Configuration and
+ * semantics remain audited construction products bound by model identity. */
 typedef struct sg_ground_capability_publication_source_s
 {
-	const sg_host_law_publication_t *engine_authority;
+	const sg_host_law_construction_t *construction;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	const sg_phase_catalog_publication_owner_t *phase_catalog_owner;
@@ -105,7 +105,7 @@ typedef struct sg_ground_capability_publication_fact_s
 typedef struct sg_ground_capability_publication_description_s
 {
 	sg_rune_model_identity_t identity;
-	uint32_t engine_authority_version;
+	uint32_t construction_version;
 	uint32_t reserved;
 	uint64_t collision_law_id;
 	uint64_t pmove_law_id;

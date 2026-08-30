@@ -6,20 +6,22 @@
 #include <string.h>
 
 #include "sg_configuration_lattice.h"
+#include "sg_host_law_publication.h"
 
 #define SG_GROUND_LEVEL_EPSILON 0.25f
 #define SG_GROUND_NORMAL_FLAT 0.999f
 #define SG_GROUND_COMMAND_SPEED 400
 #define SG_GROUND_PLANE_EPSILON 0.00004
+#define SG_GROUND_INITIAL_TRACES_PER_SUBSTEP 16U
 
 typedef struct sg_ground_build_s
 {
-	const sg_host_collision_authority_t *authority;
+	const sg_host_law_construction_t *construction;
+	const sg_rune_model_identity_t *identity;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	const sg_rune_phase_basis_t *phases;
 	const sg_ground_phase_binding_t *bindings;
-	sg_host_pmove_function_t host_pmove;
 	sg_ground_capability_set_t *output;
 	uint32_t capacity;
 	uint32_t *cell_phase_offsets;
@@ -61,6 +63,11 @@ static void SetError(sg_ground_capability_error_t *error,
 		return;
 	error->code = code;
 	error->source_index = source_index;
+}
+
+static int AllocationFits(size_t count, size_t element_size)
+{
+	return element_size != 0U && count <= SIZE_MAX / element_size;
 }
 
 static int Finite3(const float value[3])
@@ -271,20 +278,46 @@ static int PointOnPortalCellSide(const sg_configuration_space_t *space,
 		interior * observed > 0.0;
 }
 
-static int SourcesValid(const sg_host_collision_authority_t *authority,
+static int HostStaticTermsMatch(const sg_host_static_identity_t *host,
+	const sg_rune_model_identity_t *identity)
+{
+	return host && identity &&
+		identity->physics_abi_id == host->physics_abi_id &&
+		memcmp(&identity->standing_hull, &host->standing_hull,
+			sizeof(identity->standing_hull)) == 0 &&
+		memcmp(&identity->crouching_hull, &host->crouching_hull,
+			sizeof(identity->crouching_hull)) == 0 &&
+		memcmp(&identity->physics, &host->physics,
+			sizeof(identity->physics)) == 0;
+}
+
+static int SourcesValid(const sg_host_law_construction_t *construction,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics)
 {
+	sg_host_law_construction_view_t host;
+	sg_host_law_result_t host_result;
 	uint32_t cell;
 	uint32_t portal;
 	uint32_t region;
 	uint32_t face;
 	uint32_t overlap;
 
-	if (!authority || !authority->world || !configuration || !semantics ||
-		!IdentityValid(&authority->identity) ||
-		!IdentityEqual(&authority->identity, &configuration->identity) ||
-		!IdentityEqual(&authority->identity, &semantics->identity) ||
+	memset(&host, 0, sizeof(host));
+	host_result = SG_HostLawConstructionRead(construction, &host);
+	if (host_result.status != SG_HOST_LAW_OK ||
+		host.version != SG_HOST_LAW_PUBLICATION_VERSION || host.current != 1U ||
+		host.level_generation == 0U ||
+		host.laws.collision_law_id == 0U || host.laws.pmove_law_id == 0U ||
+		host.laws.gravity_law_id == 0U ||
+		host.laws.pmove_abi.version != SG_HOST_ENGINE_PMOVE_ABI_VERSION ||
+		host.laws.pmove_abi.identity != host.host_static_identity.physics_abi_id ||
+		host.laws.pmove_behavior_fingerprint != host.laws.pmove_abi.identity ||
+		!configuration || !semantics ||
+		!IdentityValid(&configuration->identity) ||
+		!IdentityEqual(&configuration->identity, &semantics->identity) ||
+		!HostStaticTermsMatch(&host.host_static_identity,
+			&configuration->identity) ||
 		configuration->cell_count == 0U || !configuration->cells ||
 		(configuration->face_count != 0U && !configuration->faces) ||
 		(configuration->portal_count != 0U &&
@@ -305,7 +338,7 @@ static int SourcesValid(const sg_host_collision_authority_t *authority,
 			!SG_RuneModelOrderKeyValid(&record->order) ||
 			record->order.domain != SG_RUNE_ORDER_CELL ||
 			record->order.source_set_identity !=
-				authority->identity.source_set_identity ||
+				configuration->identity.source_set_identity ||
 			!SG_RuneModelStableIdEqual(&record->id.value,
 				&expected) ||
 			(cell != 0U && SG_RuneModelOrderKeyCompare(
@@ -342,7 +375,7 @@ static int SourcesValid(const sg_host_collision_authority_t *authority,
 			!SG_RuneModelOrderKeyValid(&record->order) ||
 			record->order.domain != SG_RUNE_ORDER_PORTAL ||
 			record->order.source_set_identity !=
-				authority->identity.source_set_identity ||
+				configuration->identity.source_set_identity ||
 			!SG_RuneModelStableIdEqual(&record->id.value, &expected) ||
 			(portal != 0U && SG_RuneModelOrderKeyCompare(
 				&configuration->portals[portal - 1U].order,
@@ -457,7 +490,7 @@ static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
 			phase = &build->phases[record->phase];
 			if (!SG_RuneModelPhaseValid(phase) ||
 				phase->order.source_set_identity !=
-					build->authority->identity.source_set_identity ||
+					build->identity->source_set_identity ||
 				phase->stance != build->configuration->cells[cell].stance)
 			{
 				free(phase_seen);
@@ -796,6 +829,16 @@ static int BuildRegionSpatialIndex(sg_ground_build_t *build)
 	return build->region_index_count == (uint32_t)node_count;
 }
 
+static int GroundClassifyPose(const sg_ground_build_t *build,
+	const float origin[3], sg_rune_stance_t stance,
+	sg_host_collision_pose_t *pose_out)
+{
+	sg_host_law_result_t result = SG_HostLawConstructionClassifyPose(
+		build->construction, NULL, origin, stance, pose_out);
+
+	return result.status == SG_HOST_LAW_OK;
+}
+
 static int RegionPose(sg_ground_build_t *build, uint32_t region,
 	sg_host_collision_pose_t *pose_out)
 {
@@ -804,7 +847,7 @@ static int RegionPose(sg_ground_build_t *build, uint32_t region,
 	const sg_configuration_cell_t *cell =
 		&build->configuration->cells[record->cell];
 
-	if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+	if (!GroundClassifyPose(build,
 		record->interior_witness.value, cell->stance, pose_out))
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
@@ -957,7 +1000,7 @@ static int EvaluateFrame(sg_ground_build_t *build, const float start[3],
 
 	memset(&request, 0, sizeof(request));
 	if (!StateFromOrigin(start, stance,
-			build->authority->identity.physics.gravity, &request.state))
+			build->identity->physics.gravity, &request.state))
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -990,8 +1033,8 @@ static int EvaluateFrame(sg_ground_build_t *build, const float start[3],
 	request.command.forwardmove = move ? SG_GROUND_COMMAND_SPEED : 0;
 	request.command.upmove = jump ? SG_GROUND_COMMAND_SPEED :
 		(crouch ? -SG_GROUND_COMMAND_SPEED : 0);
-	if (!SG_HostPmoveEvaluateFrame(build->authority, NULL, build->host_pmove,
-			&request, result_out, &error))
+	if (SG_HostLawConstructionPmove(build->construction, NULL, &request,
+			result_out, &error).status != SG_HOST_LAW_OK)
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -999,8 +1042,8 @@ static int EvaluateFrame(sg_ground_build_t *build, const float start[3],
 	}
 	build->output->pmove_frames++;
 	if (error != SG_HOST_PMOVE_ERROR_NONE ||
-		result_out->physics_abi_id != build->authority->identity.physics_abi_id ||
-		result_out->gravity != build->authority->identity.physics.gravity)
+		result_out->physics_abi_id != build->identity->physics_abi_id ||
+		result_out->gravity != build->identity->physics.gravity)
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -1040,20 +1083,25 @@ static int EvaluateContinuouslySupported(sg_ground_build_t *build,
 	int crouch, const float initial_velocity[3],
 	const sg_host_pmove_result_t *expected)
 {
-	sg_host_collision_authority_t substep_authority = *build->authority;
 	sg_host_pmove_request_t request;
-	sg_host_pmove_result_t result;
+	sg_host_pmove_replay_workspace_t workspace;
+	sg_host_pmove_replay_t replay;
+	sg_host_pmove_substep_t *substeps = NULL;
+	sg_host_pmove_trace_t *traces = NULL;
 	sg_host_pmove_error_t error;
+	sg_host_law_result_t host_result;
 	float yaw;
 	double yaw_short;
-	uint32_t steps = build->authority->identity.physics.frame_ms /
-		build->authority->identity.physics.substep_ms;
+	uint32_t steps = build->identity->physics.frame_ms /
+		build->identity->physics.substep_ms;
+	size_t trace_capacity;
 	uint32_t axis;
 	uint32_t step;
+	int supported = -1;
 
 	memset(&request, 0, sizeof(request));
 	if (!StateFromOrigin(start, stance,
-			build->authority->identity.physics.gravity, &request.state))
+			build->identity->physics.gravity, &request.state))
 	{
 		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -1081,43 +1129,110 @@ static int EvaluateContinuouslySupported(sg_ground_build_t *build,
 	request.command.angles[YAW] = (short)yaw_short;
 	request.command.forwardmove = SG_GROUND_COMMAND_SPEED;
 	request.command.upmove = crouch ? -SG_GROUND_COMMAND_SPEED : 0;
-	substep_authority.identity.physics.frame_ms =
-		build->authority->identity.physics.substep_ms;
-	for (step = 0U; step < steps; step++)
+	if (!AllocationFits((size_t)steps, sizeof(*substeps)) ||
+		!AllocationFits((size_t)steps,
+			SG_GROUND_INITIAL_TRACES_PER_SUBSTEP))
 	{
-		sg_host_collision_pose_t pose;
-		sg_rune_stance_t actual_stance;
-
-		if (!SG_HostPmoveEvaluateFrame(&substep_authority, NULL,
-				build->host_pmove, &request, &result, &error))
-		{
-			SetError(build->error,
-				SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
-				SG_GROUND_CAPABILITY_INDEX_NONE);
-			return -1;
-		}
-		build->output->pmove_frames++;
-		actual_stance = ResultStance(&result);
-		if (!SG_HostCollisionClassifyPose(build->authority, NULL,
-				result.origin, actual_stance, &pose))
-		{
-			SetError(build->error,
-				SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
-				SG_GROUND_CAPABILITY_INDEX_NONE);
-			return -1;
-		}
-		if (!pose.valid || !pose.supported)
-			return 0;
-		request.state = result.state;
-		request.previous_state = result.state;
-	}
-	if (memcmp(&result.state, &expected->state, sizeof(result.state)) != 0)
-	{
-		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return -1;
 	}
-	return 1;
+	trace_capacity = (size_t)steps * SG_GROUND_INITIAL_TRACES_PER_SUBSTEP;
+	if (!AllocationFits(trace_capacity, sizeof(*traces)))
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
+			SG_GROUND_CAPABILITY_INDEX_NONE);
+		return -1;
+	}
+	substeps = calloc((size_t)steps, sizeof(*substeps));
+	if (!substeps)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OUT_OF_MEMORY,
+			SG_GROUND_CAPABILITY_INDEX_NONE);
+		goto done;
+	}
+	for (;;)
+	{
+		traces = calloc(trace_capacity, sizeof(*traces));
+		if (!traces)
+		{
+			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OUT_OF_MEMORY,
+				SG_GROUND_CAPABILITY_INDEX_NONE);
+			goto done;
+		}
+		memset(&workspace, 0, sizeof(workspace));
+		workspace.substeps = substeps;
+		workspace.substep_capacity = steps;
+		workspace.traces = traces;
+		workspace.trace_capacity = trace_capacity;
+		memset(&replay, 0, sizeof(replay));
+		error = SG_HOST_PMOVE_ERROR_NONE;
+		host_result = SG_HostLawConstructionReplayFrame(build->construction,
+			NULL, &request, &workspace, &replay, &error);
+		if (host_result.status == SG_HOST_LAW_OK)
+			break;
+		free(traces);
+		traces = NULL;
+		if (error != SG_HOST_PMOVE_ERROR_CAPACITY)
+		{
+			SetError(build->error,
+				SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+				SG_GROUND_CAPABILITY_INDEX_NONE);
+			goto done;
+		}
+		if (trace_capacity > SIZE_MAX / 2U ||
+			!AllocationFits(trace_capacity * 2U, sizeof(*traces)))
+		{
+			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_OVERFLOW,
+				SG_GROUND_CAPABILITY_INDEX_NONE);
+			goto done;
+		}
+		trace_capacity *= 2U;
+	}
+	if (error != SG_HOST_PMOVE_ERROR_NONE || replay.substep_count != steps ||
+		replay.physics_abi_id != build->identity->physics_abi_id ||
+		replay.frame_ms != build->identity->physics.frame_ms ||
+		replay.substep_ms != build->identity->physics.substep_ms ||
+		memcmp(&replay.result.state, &expected->state,
+			sizeof(expected->state)) != 0)
+	{
+		SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+			SG_GROUND_CAPABILITY_INDEX_NONE);
+		goto done;
+	}
+	build->output->pmove_frames += (uint64_t)replay.substep_count;
+	supported = 1;
+	for (step = 0U; step < steps; step++)
+	{
+		sg_host_collision_pose_t pose;
+
+		if (!GroundClassifyPose(build, replay.substeps[step].origin,
+				replay.substeps[step].stance, &pose))
+		{
+			SetError(build->error,
+				SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
+				SG_GROUND_CAPABILITY_INDEX_NONE);
+			supported = -1;
+			break;
+		}
+		if (replay.substeps[step].grounded != pose.supported)
+		{
+			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_INVALID_PHASE,
+				SG_GROUND_CAPABILITY_INDEX_NONE);
+			supported = -1;
+			break;
+		}
+		if (!pose.valid || !pose.supported)
+		{
+			supported = 0;
+			break;
+		}
+	}
+
+done:
+	free(traces);
+	free(substeps);
+	return supported;
 }
 
 static int GeometricallyContinuouslySupported(sg_ground_build_t *build,
@@ -1144,7 +1259,7 @@ static int GeometricallyContinuouslySupported(sg_ground_build_t *build,
 		for (axis = 0U; axis < 3U; axis++)
 			point[axis] = (float)((double)start[axis] +
 				((double)end[axis] - start[axis]) * fraction);
-		if (!SG_HostCollisionClassifyPose(build->authority, NULL, point,
+		if (!GroundClassifyPose(build, point,
 				stance, &pose))
 		{
 			SetError(build->error,
@@ -1191,7 +1306,7 @@ static int GeometricallyStepSupported(sg_ground_build_t *build,
 			point[1] = (float)((double)start[1] +
 				((double)end[1] - start[1]) * fraction);
 			point[2] = (float)z * 0.125f;
-			if (!SG_HostCollisionClassifyPose(build->authority, NULL, point,
+			if (!GroundClassifyPose(build, point,
 					stance, &pose))
 			{
 				SetError(build->error,
@@ -1321,18 +1436,18 @@ static void FillCapability(const sg_ground_build_t *build,
 			SetInterval(&capability->displacement.z, delta);
 	}
 	SetInterval(&capability->duration_ms,
-		(float)build->authority->identity.physics.frame_ms);
+		(float)build->identity->physics.frame_ms);
 	if (build->phases[source_phase].motion == SG_RUNE_MOTION_AIRBORNE)
 		capability->acceleration =
-			build->authority->identity.physics.air_acceleration;
+			build->identity->physics.air_acceleration;
 	else if (build->phases[source_phase].motion == SG_RUNE_MOTION_SWIMMING)
 		capability->acceleration =
-			build->authority->identity.physics.water_acceleration;
+			build->identity->physics.water_acceleration;
 	else
 		capability->acceleration =
-			build->authority->identity.physics.ground_acceleration;
-	capability->gravity = build->authority->identity.physics.gravity;
-	capability->physics_abi_id = build->authority->identity.physics_abi_id;
+			build->identity->physics.ground_acceleration;
+	capability->gravity = build->identity->physics.gravity;
+	capability->physics_abi_id = build->identity->physics_abi_id;
 	capability->flags = SG_GROUND_CAPABILITY_DIRECTIONAL |
 		SG_GROUND_CAPABILITY_PROVEN;
 	if (source_pose->supported)
@@ -1825,7 +1940,7 @@ static int FindExactPortalSideWitness(const sg_ground_build_t *build,
 						!PointInsideRegion(build->semantics,
 							&build->semantics->regions[region], candidate))
 						continue;
-					if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+					if (!GroundClassifyPose(build,
 						candidate, build->configuration->cells[cell].stance, &pose))
 						return -1;
 					if (!pose.valid || pose.supported != expected_supported)
@@ -1935,7 +2050,7 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 		if (!witness_status ||
 			!PortalContainsCrossing(build->configuration, portal, start, target))
 			continue;
-		if (!SG_HostCollisionClassifyPose(build->authority, NULL, start,
+		if (!GroundClassifyPose(build, start,
 				portal->stance, &source_pose))
 		{
 			SetError(build->error, SG_GROUND_CAPABILITY_ERROR_HOST_DISAGREEMENT,
@@ -1983,7 +2098,7 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 				!PointOnPortalCellSide(build->configuration, portal,
 					destination_cell, result.origin))
 				continue;
-			if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+			if (!GroundClassifyPose(build,
 					result.origin, ResultStance(&result), &destination_pose))
 			{
 				SetError(build->error,
@@ -2157,7 +2272,7 @@ static int BuildTakeoffsAndLandings(sg_ground_build_t *build)
 					kind = SG_GROUND_CAPABILITY_LANDING;
 				else
 					continue;
-				if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+				if (!GroundClassifyPose(build,
 						result.origin, ResultStance(&result), &destination_pose))
 				{
 					SetError(build->error,
@@ -2227,7 +2342,7 @@ static int BuildStanceDirection(sg_ground_build_t *build,
 			!PointInsideCell(build->configuration, destination_cell,
 				result.origin))
 			continue;
-		if (!SG_HostCollisionClassifyPose(build->authority, NULL, result.origin,
+		if (!GroundClassifyPose(build, result.origin,
 				destination_stance, &destination_pose))
 		{
 			SetError(build->error,
@@ -2283,10 +2398,10 @@ static int BuildStanceOverlaps(sg_ground_build_t *build)
 				SG_RUNE_STANCE_CROUCHING ||
 			!Finite3(record->interior_witness.value))
 			continue;
-		if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+		if (!GroundClassifyPose(build,
 				record->interior_witness.value, SG_RUNE_STANCE_STANDING,
 				&standing) ||
-			!SG_HostCollisionClassifyPose(build->authority, NULL,
+			!GroundClassifyPose(build,
 				record->interior_witness.value, SG_RUNE_STANCE_CROUCHING,
 				&crouching))
 		{
@@ -2379,12 +2494,11 @@ static int CompareCapability(const void *left_pointer,
 }
 
 int SG_GroundCapabilityBuild(
-	const sg_host_collision_authority_t *authority,
+	const sg_host_law_construction_t *construction,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_phase_basis_t *phases, size_t phase_count,
 	const sg_ground_phase_binding_t *bindings, size_t binding_count,
-	sg_host_pmove_function_t host_pmove,
 	sg_ground_capability_set_t **set_out,
 	sg_ground_capability_error_t *error_out)
 {
@@ -2393,30 +2507,29 @@ int SG_GroundCapabilityBuild(
 
 	if (error_out)
 		memset(error_out, 0, sizeof(*error_out));
-	if (!authority || !configuration || !semantics || !phases || !bindings ||
-		!host_pmove || !set_out || *set_out)
+	if (!construction || !configuration || !semantics || !phases || !bindings ||
+		!set_out || *set_out)
 	{
 		SetError(error_out, SG_GROUND_CAPABILITY_ERROR_INVALID_ARGUMENT,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return 0;
 	}
-	if (!SourcesValid(authority, configuration, semantics))
+	if (!SourcesValid(construction, configuration, semantics))
 	{
 		SetError(error_out,
-			!IdentityEqual(&authority->identity, &configuration->identity) ||
-			 !IdentityEqual(&authority->identity, &semantics->identity) ?
+			!IdentityEqual(&configuration->identity, &semantics->identity) ?
 				SG_GROUND_CAPABILITY_ERROR_IDENTITY_MISMATCH :
 				SG_GROUND_CAPABILITY_ERROR_INVALID_SOURCE,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return 0;
 	}
 	memset(&build, 0, sizeof(build));
-	build.authority = authority;
+	build.construction = construction;
+	build.identity = &configuration->identity;
 	build.configuration = configuration;
 	build.semantics = semantics;
 	build.phases = phases;
 	build.bindings = bindings;
-	build.host_pmove = host_pmove;
 	build.error = error_out;
 	build.output = calloc(1, sizeof(*build.output));
 	if (!build.output)
@@ -2425,7 +2538,7 @@ int SG_GroundCapabilityBuild(
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return 0;
 	}
-	build.output->identity = authority->identity;
+	build.output->identity = configuration->identity;
 	offsets = BuildOffsets(&build, phase_count, binding_count);
 	if (offsets <= 0)
 	{
