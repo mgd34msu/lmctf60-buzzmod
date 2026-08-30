@@ -351,6 +351,7 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 	sg_perception_observation_t observation;
 	sg_belief_life_identity_t life31;
 	sg_belief_life_identity_t life32;
+	sg_belief_life_identity_t life33;
 	const sg_belief_runtime_view_t *view;
 
 	FixtureInit(&fixture);
@@ -358,6 +359,7 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 	CHECK(SG_BeliefRuntimeProviderSet(&provider));
 	life31 = Life(3U, 31U);
 	life32 = Life(3U, 32U);
+	life33 = Life(3U, 33U);
 	SightObservation(&observation, 1U, 200U, 31U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
@@ -415,7 +417,7 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 	SightObservation(&observation, 5U, 800U, 33U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SG_BeliefRuntimeRetireClient(3U);
+	SG_BeliefRuntimeRetireLife(&life33);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
 	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
 	SightObservation(&observation, 6U, 900U, 33U);
@@ -460,8 +462,8 @@ static void TestRuntimeIssuerLifeFences(void)
 	CHECK(view && view->updated_at_ms == 100U);
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 
-	/* A life known only as an issuer still establishes a client retirement
-	 * boundary, so a later target claim cannot revive that exact life. */
+	/* A life known only as an issuer still establishes an exact-life retirement
+	 * boundary, so a later target claim cannot revive that life. */
 	FixtureInit(&fixture);
 	provider = Provider(&fixture, 1U, 0.5f);
 	CHECK(SG_BeliefRuntimeProviderSet(&provider));
@@ -469,7 +471,7 @@ static void TestRuntimeIssuerLifeFences(void)
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	CHECK(SG_BeliefRuntimeView(1U, &target30) != NULL);
-	SG_BeliefRuntimeRetireClient(4U);
+	SG_BeliefRuntimeRetireLife(&issuer40);
 	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
 	SightObservation(&observation, 2U, 200U, 40U);
 	observation.target_life = issuer40;
@@ -1152,7 +1154,7 @@ static void TestRuntimeOwner(void)
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
 	fixture.snapshot.topology_revision = 7U;
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
-	SG_BeliefRuntimeRetireClient(3U);
+	SG_BeliefRuntimeRetireLife(&current_target);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 	CHECK(!SG_BeliefRuntimeProviderAvailable());

@@ -333,13 +333,6 @@ static void BeliefRuntimeLifeFenceRetire(
 	fence->retired = 1U;
 }
 
-static void BeliefRuntimeClientFenceRetire(uint32_t client_id)
-{
-	if (client_id < SG_BELIEF_MAX_CLIENTS &&
-		belief_runtime_life_fences[client_id].spawn_generation != 0U)
-		belief_runtime_life_fences[client_id].retired = 1U;
-}
-
 static int BeliefRuntimeLifeFenceCurrent(
 	const sg_belief_life_identity_t *life)
 {
@@ -1135,37 +1128,6 @@ void SG_BeliefRuntimeRetireLife(const sg_belief_life_identity_t *life)
 			if (SG_BeliefLifeIdentityEqual(&track->state.target_life, life) ||
 				BeliefRuntimeIssuerRecorded(track, life))
 				BeliefRuntimeClearTrack(track);
-		}
-}
-
-void SG_BeliefRuntimeRetireClient(uint32_t client_id)
-{
-	size_t team;
-	size_t client;
-
-	if (client_id >= SG_BELIEF_MAX_CLIENTS)
-		return;
-	BeliefRuntimeClientFenceRetire(client_id);
-	for (team = 0U; team < 2U; team++)
-		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
-		{
-			belief_runtime_track_t *track = &belief_runtime_tracks[team][client];
-
-			if (!track->active || !SG_BeliefStateValid(&track->state))
-				continue;
-			if (track->state.target_life.client_id == client_id)
-				BeliefRuntimeClearTrack(track);
-			else
-			{
-				size_t issuer;
-
-				for (issuer = 0U; issuer < track->issuer_count; issuer++)
-					if (track->issuers[issuer].client_id == client_id)
-					{
-						BeliefRuntimeClearTrack(track);
-						break;
-					}
-			}
 		}
 }
 

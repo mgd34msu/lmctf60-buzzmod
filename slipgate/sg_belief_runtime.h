@@ -112,11 +112,6 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
  * is removed, so recycled slots cannot inherit its authority. */
 void SG_BeliefRuntimeRetireLife(const sg_belief_life_identity_t *life);
 
-/* A host client-slot teardown is a stronger lifecycle boundary than an
- * observation: it retires every generation in that slot if the host can no
- * longer present the departing exact life. */
-void SG_BeliefRuntimeRetireClient(uint32_t client_id);
-
 /* Return NULL unless this exact audience/target life has a current sparse
  * projection.  The returned pointer remains owned by the runtime. */
 const sg_belief_runtime_view_t *SG_BeliefRuntimeView(uint8_t audience_team,
