@@ -308,13 +308,16 @@ int SG_StrategyRuntimePlanResolve(
 			authority_accepted = sg_strategy_runtime_authority(
 				sg_strategy_runtime_authority_context, &target, &view,
 				&binding);
-			if (!authority_accepted ||
-			    !RuntimeBindingAccepted(&target, &view, &binding))
+			if (!authority_accepted)
+				goto reject;
+			if (!RuntimeBindingAccepted(&target, &view, &binding))
 			{
-				if (authority_accepted)
-					sg_strategy_runtime_release_view(
-						sg_strategy_runtime_release_context,
-						view.opaque);
+				/* The authority accepted this lease even though its emitted
+				 * binding failed the caller contract.  Attach only the opaque
+				 * lease to the rollback plan so every accepted view retires
+				 * from one detached callback/context snapshot. */
+				candidate.bindings[binding_index].accepted_view = view.opaque;
+				binding_index++;
 				goto reject;
 			}
 			candidate.bindings[binding_index] = binding;

@@ -22,28 +22,45 @@ static int CallerAuthorityValid(const sg_strategy_caller_authority_t *authority)
 	}
 }
 
-void SG_StrategyCallerPlanDiscard(sg_strategy_caller_plan_t *plan)
+static void CallerRetiredPlanRelease(
+	const sg_strategy_caller_plan_t *retired)
 {
 	uint16_t index;
 
+	if (!retired || !retired->release_view)
+		return;
+	for (index = 0U; index < retired->binding_count &&
+	     index < SG_STRATEGY_CALLER_MAX_BINDINGS; index++)
+		if (retired->bindings[index].accepted_view)
+			retired->release_view(retired->release_context,
+				retired->bindings[index].accepted_view);
+}
+
+void SG_StrategyCallerPlanDiscard(sg_strategy_caller_plan_t *plan)
+{
+	sg_strategy_caller_plan_t retired;
+
 	if (!plan)
 		return;
-	if (plan->release_view)
-		for (index = 0U; index < plan->binding_count &&
-		     index < SG_STRATEGY_CALLER_MAX_BINDINGS; index++)
-			if (plan->bindings[index].accepted_view)
-				plan->release_view(plan->release_context,
-					plan->bindings[index].accepted_view);
+	retired = *plan;
 	memset(plan, 0, sizeof(*plan));
+	CallerRetiredPlanRelease(&retired);
 }
 
 void SG_StrategyCallerDestroy(sg_strategy_caller_t *caller)
 {
+	sg_strategy_caller_plan_t retired;
+	int owns_plan;
+
 	if (!caller)
 		return;
-	if (caller->initialized && caller->has_plan)
-		SG_StrategyCallerPlanDiscard(&caller->plan);
+	memset(&retired, 0, sizeof(retired));
+	owns_plan = caller->initialized && caller->has_plan;
+	if (owns_plan)
+		retired = caller->plan;
 	memset(caller, 0, sizeof(*caller));
+	if (owns_plan)
+		CallerRetiredPlanRelease(&retired);
 }
 
 void SG_StrategyCallerOwnerLost(sg_strategy_caller_t *caller)
@@ -626,7 +643,7 @@ int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
 		candidate.plan = *plan;
 		*caller = candidate;
 		memset(plan, 0, sizeof(*plan));
-		SG_StrategyCallerPlanDiscard(&retired);
+		CallerRetiredPlanRelease(&retired);
 		CallerOutput(caller, out);
 		return 1;
 	}
@@ -640,7 +657,7 @@ int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
 		return 0;
 	*caller = candidate;
 	memset(plan, 0, sizeof(*plan));
-	SG_StrategyCallerPlanDiscard(&retired);
+	CallerRetiredPlanRelease(&retired);
 	CallerOutput(caller, out);
 	return 1;
 }
@@ -742,6 +759,7 @@ int SG_StrategyCallerRelease(sg_strategy_caller_t *caller,
 	const sg_strategy_caller_authority_t *authority, uint8_t alive,
 	uint64_t at_ms, sg_strategy_caller_output_t *out)
 {
+	sg_strategy_caller_plan_t retired;
 	sg_strategy_life_snapshot_t life;
 	sg_strategy_frame_t frame;
 	uint64_t authority_epoch;
@@ -766,8 +784,10 @@ int SG_StrategyCallerRelease(sg_strategy_caller_t *caller,
 		return 0;
 	caller->next_authority_epoch = authority_epoch;
 	CallerLifeCommit(caller, &life);
-	SG_StrategyCallerPlanDiscard(&caller->plan);
+	retired = caller->plan;
+	memset(&caller->plan, 0, sizeof(caller->plan));
 	caller->has_plan = 0U;
 	CallerOutput(caller, out);
+	CallerRetiredPlanRelease(&retired);
 	return 1;
 }

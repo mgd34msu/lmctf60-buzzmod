@@ -361,6 +361,7 @@ typedef struct runtime_fixture_s
 	uint32_t acquired;
 	uint32_t released;
 	uint32_t releases[SG_STRATEGY_CALLER_MAX_BINDINGS];
+	uint8_t clear_provider_on_release;
 } runtime_fixture_t;
 
 static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
@@ -503,6 +504,12 @@ static void RuntimeRelease(void *context, const void *accepted_view)
 		{
 			runtime->released++;
 			runtime->releases[index]++;
+			if (runtime->clear_provider_on_release)
+			{
+				runtime->clear_provider_on_release = 0U;
+				SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL,
+					NULL, NULL);
+			}
 			return;
 		}
 }
@@ -513,6 +520,72 @@ static void CountRelease(void *context, const void *accepted_view)
 
 	if (count && accepted_view)
 		(*count)++;
+}
+
+typedef struct retirement_fixture_s
+{
+	sg_strategy_caller_t *caller;
+	sg_strategy_caller_plan_t *plan_to_mutate;
+	sg_strategy_caller_authority_t authority;
+	const void *views[4];
+	uint32_t released;
+	uint32_t releases[4];
+	uint8_t callback_entered;
+	uint8_t destroy_on_first;
+	uint8_t release_on_first;
+	uint8_t mutate_plan_on_first;
+	int reentrant_release_result;
+} retirement_fixture_t;
+
+static void InitRetirementFixture(retirement_fixture_t *retirement,
+	caller_fixture_t *fixture)
+{
+	uint16_t index;
+
+	memset(retirement, 0, sizeof(*retirement));
+	for (index = 0U; index < 4U; index++)
+		retirement->views[index] = &fixture->accepted_views[index];
+}
+
+static void RetirementRelease(void *context, const void *accepted_view)
+{
+	retirement_fixture_t *retirement = context;
+	uint16_t index;
+
+	if (!retirement || !accepted_view)
+		return;
+	retirement->released++;
+	for (index = 0U; index < 4U; index++)
+		if (retirement->views[index] == accepted_view)
+		{
+			retirement->releases[index]++;
+			break;
+		}
+	if (retirement->callback_entered)
+		return;
+	retirement->callback_entered = 1U;
+	if (retirement->mutate_plan_on_first && retirement->plan_to_mutate)
+		memset(retirement->plan_to_mutate, 0,
+			sizeof(*retirement->plan_to_mutate));
+	if (retirement->release_on_first && retirement->caller)
+	{
+		sg_strategy_caller_output_t output;
+
+		retirement->reentrant_release_result = SG_StrategyCallerRelease(
+			retirement->caller, &retirement->authority, 1U, 101U,
+			&output);
+	}
+	if (retirement->destroy_on_first && retirement->caller)
+		SG_StrategyCallerDestroy(retirement->caller);
+}
+
+static void CheckReleasedExactlyOnce(const retirement_fixture_t *retirement)
+{
+	uint16_t index;
+
+	CHECK(retirement->released == 4U);
+	for (index = 0U; index < 4U; index++)
+		CHECK(retirement->releases[index] == 1U);
 }
 
 static void TestQueuedPlanAdvancesAcrossGoals(void)
@@ -866,6 +939,185 @@ static void TestRuntimeResolutionRollsBackAndCallerReleasesViews(void)
 	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 }
 
+static void TestPlanDiscardDetachesBeforeCallbackMutation(void)
+{
+	caller_fixture_t fixture;
+	retirement_fixture_t retirement;
+	sg_strategy_caller_plan_t plan;
+
+	InitFixture(&fixture);
+	plan = Plan(&fixture, 44U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	InitRetirementFixture(&retirement, &fixture);
+	retirement.plan_to_mutate = &plan;
+	retirement.mutate_plan_on_first = 1U;
+	plan.release_view = RetirementRelease;
+	plan.release_context = &retirement;
+	SG_StrategyCallerPlanDiscard(&plan);
+	CheckReleasedExactlyOnce(&retirement);
+	CHECK(plan.binding_count == 0U);
+	CHECK(plan.release_view == NULL);
+}
+
+static void TestDestroyDetachesBeforeReentrantDestroyAndRelease(void)
+{
+	caller_fixture_t fixture;
+	retirement_fixture_t retirement;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_plan_t plan;
+
+	InitFixture(&fixture);
+	plan = Plan(&fixture, 45U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	InitRetirementFixture(&retirement, &fixture);
+	retirement.caller = &caller;
+	retirement.authority = plan.authority;
+	retirement.destroy_on_first = 1U;
+	retirement.release_on_first = 1U;
+	plan.release_view = RetirementRelease;
+	plan.release_context = &retirement;
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	SG_StrategyCallerDestroy(&caller);
+	CheckReleasedExactlyOnce(&retirement);
+	CHECK(retirement.reentrant_release_result == 0);
+	CHECK(caller.initialized == 0U);
+	CHECK(caller.has_plan == 0U);
+}
+
+static void TestExplicitReleaseDetachesBeforeReentrantDestroy(void)
+{
+	caller_fixture_t fixture;
+	retirement_fixture_t retirement;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_plan_t plan;
+	sg_strategy_caller_authority_t authority;
+
+	InitFixture(&fixture);
+	plan = Plan(&fixture, 46U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	authority = plan.authority;
+	InitRetirementFixture(&retirement, &fixture);
+	retirement.caller = &caller;
+	retirement.destroy_on_first = 1U;
+	plan.release_view = RetirementRelease;
+	plan.release_context = &retirement;
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(SG_StrategyCallerRelease(&caller, &authority, 1U, 110U,
+		&output));
+	CheckReleasedExactlyOnce(&retirement);
+	CHECK(caller.initialized == 0U);
+	CHECK(caller.has_plan == 0U);
+}
+
+static void TestReplacementRetirementSurvivesReentrantDestroy(void)
+{
+	caller_fixture_t old_fixture;
+	caller_fixture_t new_fixture;
+	retirement_fixture_t retirement;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_plan_t old_plan;
+	sg_strategy_caller_plan_t new_plan;
+	uint32_t new_releases = 0U;
+
+	InitFixture(&old_fixture);
+	InitFixture(&new_fixture);
+	old_plan = Plan(&old_fixture, 47U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	new_plan = Plan(&new_fixture, 48U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	PlanPrimaryRecover(&new_plan);
+	InitRetirementFixture(&retirement, &old_fixture);
+	retirement.caller = &caller;
+	retirement.destroy_on_first = 1U;
+	old_plan.release_view = RetirementRelease;
+	old_plan.release_context = &retirement;
+	new_plan.release_view = CountRelease;
+	new_plan.release_context = &new_releases;
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyCallerSubmit(&caller, &old_plan, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(SG_StrategyCallerSubmit(&caller, &new_plan, 1U, 110U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CheckReleasedExactlyOnce(&retirement);
+	CHECK(new_releases == 4U);
+	CHECK(caller.initialized == 0U);
+	CHECK(caller.has_plan == 0U);
+}
+
+static void TestLowerAuthorityRetirementSurvivesMutationAndDestroy(void)
+{
+	caller_fixture_t human_fixture;
+	caller_fixture_t autonomous_fixture;
+	retirement_fixture_t retirement;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_plan_t human;
+	sg_strategy_caller_plan_t autonomous;
+	uint32_t human_releases = 0U;
+
+	InitFixture(&human_fixture);
+	InitFixture(&autonomous_fixture);
+	human = Plan(&human_fixture, 49U, SG_STRATEGY_AUTHORITY_HUMAN,
+		SG_STRATEGY_PRINCIPAL_HUMAN, 7U);
+	autonomous = Plan(&autonomous_fixture, 50U,
+		SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	InitRetirementFixture(&retirement, &autonomous_fixture);
+	retirement.caller = &caller;
+	retirement.plan_to_mutate = &autonomous;
+	retirement.destroy_on_first = 1U;
+	retirement.mutate_plan_on_first = 1U;
+	human.release_view = CountRelease;
+	human.release_context = &human_releases;
+	autonomous.release_view = RetirementRelease;
+	autonomous.release_context = &retirement;
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyCallerSubmit(&caller, &human, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(SG_StrategyCallerSubmit(&caller, &autonomous, 1U, 110U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CheckReleasedExactlyOnce(&retirement);
+	CHECK(human_releases == 4U);
+	CHECK(caller.initialized == 0U);
+	CHECK(caller.has_plan == 0U);
+}
+
+static void TestPartialRollbackUsesDetachedReleaseOwner(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t runtime;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 51U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	InitRuntimeFixture(&runtime, &source);
+	memset(&resolved, 0, sizeof(resolved));
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
+	runtime.clear_provider_on_release = 1U;
+	((sg_field_guidance_t *)runtime.records[2].binding.guidance)->pose_revision++;
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(runtime.acquired == 3U);
+	CHECK(runtime.released == 3U);
+	CHECK(runtime.releases[0] == 1U);
+	CHECK(runtime.releases[1] == 1U);
+	CHECK(runtime.releases[2] == 1U);
+	CHECK(resolved.binding_count == 0U);
+	CHECK(resolved.release_view == NULL);
+	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
+}
+
 static void TestRuntimeProviderRequiresReleaseOwner(void)
 {
 	caller_fixture_t fixture;
@@ -892,6 +1144,12 @@ int main(void)
 	TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider();
 	TestRuntimeAuthorityRejectsSameKindFieldViewSwap();
 	TestRuntimeResolutionRollsBackAndCallerReleasesViews();
+	TestPlanDiscardDetachesBeforeCallbackMutation();
+	TestDestroyDetachesBeforeReentrantDestroyAndRelease();
+	TestExplicitReleaseDetachesBeforeReentrantDestroy();
+	TestReplacementRetirementSurvivesReentrantDestroy();
+	TestLowerAuthorityRetirementSurvivesMutationAndDestroy();
+	TestPartialRollbackUsesDetachedReleaseOwner();
 	TestRuntimeProviderRequiresReleaseOwner();
 	if (failures)
 	{

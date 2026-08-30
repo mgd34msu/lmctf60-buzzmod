@@ -107,8 +107,10 @@ typedef struct sg_strategy_caller_output_s
 int SG_StrategyCallerInit(sg_strategy_caller_t *caller);
 
 /* Discard an unsubmitted resolved plan or retire a caller at an owner
- * boundary.  Both operations release every accepted view before clearing the
- * borrowed pointers.  Destroy is safe on zero-initialized caller storage. */
+ * boundary.  Both operations first detach and clear every borrowed pointer,
+ * then release the retirement-local accepted views.  Owner callbacks may
+ * re-enter or mutate the cleared source without releasing a view twice.
+ * Destroy is safe on zero-initialized caller storage. */
 void SG_StrategyCallerPlanDiscard(sg_strategy_caller_plan_t *plan);
 void SG_StrategyCallerDestroy(sg_strategy_caller_t *caller);
 /* Emergency recovery for a host that reports a level change only after the
