@@ -1364,6 +1364,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-test ground-capability-publication-test \
 	water-capability-publication-test water-capability-real-bsp-test \
+	external-force-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
 	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
@@ -3499,6 +3500,15 @@ phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 		slipgate/sg_rune_model.h slipgate/sg_rune_model.c
 	sh tests/run_sg_phase_catalog_test.sh
 
+external-force-publication-test: \
+		tests/run_sg_external_force_publication_test.sh \
+		tests/sg_external_force_publication_test.c \
+		slipgate/sg_external_force_builder.c \
+		slipgate/sg_external_force_builder.h \
+		slipgate/sg_external_force_publication.c \
+		slipgate/sg_external_force_publication.h
+	sh tests/run_sg_external_force_publication_test.sh
+
 rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
 		tests/sg_rune_v2_content_identity_test.c \
 		tests/sg_rune_v2_content_identity_probe.c \
@@ -3565,7 +3575,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
-		water-capability-publication-test \
+		water-capability-publication-test external-force-publication-test \
 		weapon-effect-profile-test phase-catalog-publication-test \
 		hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
