@@ -1315,6 +1315,7 @@ OBJS := \
 	slipgate/sg_rune_dynamics_geometry.o \
 	slipgate/sg_rune_field_contract.o \
 	slipgate/sg_field_attractor.o \
+	slipgate/sg_field_service.o \
 	slipgate/sg_bsp_world.o \
 	slipgate/sg_host_collision.o \
 	slipgate/sg_bsp_entity_semantics.o \
@@ -4168,6 +4169,9 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		tests/run_sg_field_attractor_test.sh \
 		tests/sg_field_attractor_test.c \
 		slipgate/sg_field_attractor.c slipgate/sg_field_attractor.h \
+		tests/run_sg_field_service_test.sh \
+		slipgate/sg_field_service.c \
+		slipgate/sg_field_service_owner_private.h \
 		tests/run_sg_strategy_caller_test.sh \
 		tests/sg_strategy_caller_test.c \
 		tests/test_strategy_caller_integration.py \
@@ -4216,6 +4220,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		-o "$$tmp/destination.o"; \
 	sh tests/run_sg_rune_dynamics_model_test.sh; \
 	sh tests/run_sg_field_attractor_test.sh; \
+	sh tests/run_sg_field_service_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c \
 		slipgate/sg_rune_dynamics_model.c -o "$$tmp/dynamics.o"; \
 	$(CC) $$strict -Wcast-align -I. -c \
@@ -4223,7 +4228,9 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	$(CC) $$strict -Wcast-align -I. -c \
 		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"; \
 	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_field_attractor.c -o "$$tmp/field-attractor.o"
+		slipgate/sg_field_attractor.c -o "$$tmp/field-attractor.o"; \
+	$(CC) $$strict -Wcast-align -I. -c \
+		slipgate/sg_field_service.c -o "$$tmp/field-service.o"
 
 ground-capability-test: tests/run_sg_ground_capability_test.sh \
 		tests/sg_ground_capability_test.c \
