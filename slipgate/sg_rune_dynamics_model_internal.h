@@ -11,6 +11,15 @@ int SG_FieldRefinementCellFullRank(
 int SG_FieldRefinementBoxInsideCell(
 	const sg_field_refinement_vertex_t *const vertices[8],
 	const sg_rune_flow_enclosure_t *box);
+int SG_FieldRefinementPointInCellExact(
+	const sg_field_refinement_vertex_t *const vertices[8],
+	const sg_field_refinement_vertex_t *point);
+int SG_RuneDynamicsLocatePointExact(const sg_rune_dynamics_model_t *model,
+	const sg_rune_state_chart_ref_t *chart, const sg_rune_vec3_t *position,
+	const sg_rune_vec3_t *velocity, float elapsed_ms,
+	sg_rune_state_simplex_id_t *simplex_out,
+	sg_field_reach_atom_id_t *atom_out,
+	sg_field_refinement_node_id_t *leaf_out);
 int SG_FieldRefinementCellsProperlyMeet(
 	const sg_field_refinement_vertex_t *const left[8],
 	const sg_field_refinement_vertex_t *const right[8]);

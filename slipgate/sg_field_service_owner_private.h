@@ -22,6 +22,15 @@ size_t SG_FieldServiceTestLeaseCount(const sg_field_service_t *service);
 uint64_t SG_FieldServiceTestCleanSolveCount(const sg_field_service_t *service);
 uint64_t SG_FieldServiceTestIncrementalReuseCount(
 	const sg_field_service_t *service);
+uint64_t SG_FieldServiceTestIncrementalReusedNodeCount(
+	const sg_field_service_t *service);
+sg_field_status_t SG_FieldServiceTestStoredCost(
+	const sg_field_service_t *service, const sg_field_handle_t *handle,
+	const sg_localized_field_state_t *state, sg_rune_cost_bounds_t *cost_out);
+int SG_FieldServiceTestLocateState(const sg_field_service_t *service,
+	const sg_localized_field_state_t *state,
+	sg_field_reach_atom_id_t *atom_out,
+	sg_field_refinement_node_id_t *leaf_out);
 #endif
 
 #endif

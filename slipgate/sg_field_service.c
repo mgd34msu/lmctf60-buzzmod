@@ -80,6 +80,7 @@ struct sg_field_cache_entry_s
 	sg_field_environment_copy_t environment;
 	uint64_t solved_at_ms;
 	uint8_t incrementally_reused;
+	size_t reused_node_count;
 	sg_field_solution_t solution;
 	sg_field_cache_entry_t *next;
 };
@@ -122,6 +123,7 @@ struct sg_field_service_s
 	sg_field_lease_t *leases;
 	uint64_t clean_solves;
 	uint64_t incremental_reuses;
+	uint64_t incremental_reused_nodes;
 };
 
 static _Atomic uint64_t next_private_identity = UINT64_C(1);
@@ -209,6 +211,13 @@ uint64_t SG_FieldServiceTestIncrementalReuseCount(
 {
 	return service && service->magic == FIELD_SERVICE_MAGIC ?
 		service->incremental_reuses : 0U;
+}
+
+uint64_t SG_FieldServiceTestIncrementalReusedNodeCount(
+	const sg_field_service_t *service)
+{
+	return service && service->magic == FIELD_SERVICE_MAGIC ?
+		service->incremental_reused_nodes : 0U;
 }
 #endif
 
@@ -1681,7 +1690,10 @@ static int RuleIntervalCost(const sg_rune_dynamics_model_t *model,
 			if (solution->rule_outcomes[item] != outcome_index)
 				continue;
 			if (!solution->reachable[destination] ||
-			    solution->rank[destination] >= solution->rank[rule->source_node])
+			    solution->costs[destination].lower_us ==
+				SG_RUNE_FIELD_COST_INFINITE ||
+			    solution->costs[destination].upper_us ==
+				SG_RUNE_FIELD_COST_INFINITE)
 				return 0;
 			if (!found || solution->costs[destination].lower_us >
 				destination_lower)
@@ -1727,68 +1739,105 @@ static int RuleIntervalCost(const sg_rune_dynamics_model_t *model,
 		cost_out->upper_us < SG_RUNE_FIELD_COST_INFINITE;
 }
 
-static sg_field_status_t BuildBellmanCosts(
-	const sg_rune_dynamics_model_t *model, sg_field_solution_t *solution)
+static int RuleHasKernelRepresentation(const sg_field_solution_t *solution,
+	const sg_field_bellman_rule_t *rule)
 {
-	uint32_t maximum_rank = 0U;
-	uint32_t rank;
+	size_t index;
+
+	if (rule->kernel_index != FIELD_NO_KERNEL)
+		return 0;
+	for (index = 0U; index < solution->rule_count; index++)
+		if (solution->rules[index].source_node == rule->source_node &&
+		    solution->rules[index].choice_index == rule->choice_index &&
+		    solution->rules[index].kernel_index != FIELD_NO_KERNEL)
+			return 1;
+	return 0;
+}
+
+static sg_field_status_t BuildBellmanCosts(
+	const sg_rune_dynamics_model_t *model, sg_field_solution_t *solution,
+	const uint8_t *recompute)
+{
 	size_t node;
+	int changed;
 
 	for (node = 0U; node < solution->node_count; node++)
 	{
+		if (recompute && !recompute[node])
+			continue;
 		solution->costs[node] = (sg_rune_cost_bounds_t){
 			SG_RUNE_FIELD_COST_INFINITE, SG_RUNE_FIELD_COST_INFINITE };
-		if (solution->reachable[node] && solution->rank[node] > maximum_rank)
-			maximum_rank = solution->rank[node];
 		if (solution->terminal_atoms[node])
 			solution->costs[node] = (sg_rune_cost_bounds_t){ 0U, 0U };
 	}
-	for (rank = 1U; rank <= maximum_rank; rank++)
+	do
+	{
+		changed = 0;
 		for (node = 0U; node < solution->node_count; node++)
 		{
 			uint64_t lower = SG_RUNE_FIELD_COST_INFINITE;
 			uint64_t upper = SG_RUNE_FIELD_COST_INFINITE;
+			uint64_t fallback_lower = SG_RUNE_FIELD_COST_INFINITE;
+			uint64_t fallback_upper = SG_RUNE_FIELD_COST_INFINITE;
 			size_t rule_index;
-			if (!solution->reachable[node] || solution->rank[node] != rank)
+			if ((recompute && !recompute[node]) ||
+			    !solution->reachable[node] || solution->terminal_atoms[node])
 				continue;
 			for (rule_index = 0U; rule_index < solution->rule_count;
 			     rule_index++)
 			{
 				sg_rune_cost_bounds_t candidate;
 				sg_rune_cost_bounds_t endpoint;
-				size_t preferred;
 				if (solution->rules[rule_index].source_node != node ||
+				    RuleHasKernelRepresentation(solution,
+					&solution->rules[rule_index]) ||
 				    !RuleIntervalCost(model, solution,
 					&solution->rules[rule_index], &candidate, &endpoint))
 					continue;
 				if (solution->rules[rule_index].kernel_index ==
-					FIELD_NO_KERNEL)
-					for (preferred = 0U; preferred < solution->rule_count;
-					     preferred++)
-						if (solution->rules[preferred].source_node == node &&
-						    solution->rules[preferred].kernel_index !=
-							FIELD_NO_KERNEL &&
-						    RuleIntervalCost(model, solution,
-							&solution->rules[preferred], &candidate,
-							&endpoint))
-							break;
-				if (solution->rules[rule_index].kernel_index ==
-					FIELD_NO_KERNEL && preferred < solution->rule_count)
+					FIELD_NO_KERNEL &&
+				    candidate.lower_us <= endpoint.upper_us)
+				{
+					if (candidate.lower_us < fallback_lower)
+						fallback_lower = candidate.lower_us;
+					if (candidate.upper_us < fallback_upper)
+						fallback_upper = candidate.upper_us;
 					continue;
-				if (!RuleIntervalCost(model, solution,
-					&solution->rules[rule_index], &candidate, &endpoint))
-					continue;
+				}
 				if (candidate.lower_us < lower)
 					lower = candidate.lower_us;
 				if (candidate.upper_us < upper)
 					upper = candidate.upper_us;
 			}
 			if (lower == SG_RUNE_FIELD_COST_INFINITE ||
-			    upper == SG_RUNE_FIELD_COST_INFINITE || lower > upper ||
-			    upper - lower > model->error_contract.maximum_value_width_us)
+			    upper == SG_RUNE_FIELD_COST_INFINITE)
+			{
+				lower = fallback_lower;
+				upper = fallback_upper;
+			}
+			if (lower == SG_RUNE_FIELD_COST_INFINITE ||
+			    upper == SG_RUNE_FIELD_COST_INFINITE)
+				continue;
+			if (lower > solution->costs[node].lower_us ||
+			    upper > solution->costs[node].upper_us)
 				return SG_FIELD_STATUS_NUMERICAL_ERROR;
-			solution->costs[node] = (sg_rune_cost_bounds_t){ lower, upper };
+			if (lower != solution->costs[node].lower_us ||
+			    upper != solution->costs[node].upper_us)
+			{
+				solution->costs[node] =
+					(sg_rune_cost_bounds_t){ lower, upper };
+				changed = 1;
+			}
 		}
+	} while (changed);
+	for (node = 0U; node < solution->node_count; node++)
+		if (solution->reachable[node] &&
+		    (solution->costs[node].lower_us == SG_RUNE_FIELD_COST_INFINITE ||
+		     solution->costs[node].upper_us == SG_RUNE_FIELD_COST_INFINITE ||
+		     solution->costs[node].lower_us > solution->costs[node].upper_us ||
+		     solution->costs[node].upper_us - solution->costs[node].lower_us >
+			model->error_contract.maximum_value_width_us))
+			return SG_FIELD_STATUS_NUMERICAL_ERROR;
 	return SG_FIELD_STATUS_OK;
 }
 
@@ -1849,7 +1898,8 @@ static sg_field_status_t MaximumLocalSpanNew(
 	return SG_FIELD_STATUS_OK;
 }
 
-static sg_field_status_t SolutionBuild(const sg_rune_dynamics_model_t *model,
+static sg_field_status_t SolutionClassify(
+	const sg_rune_dynamics_model_t *model,
 	const sg_destination_terminal_t *terminal,
 	const sg_field_environment_t *environment, uint64_t now_ms,
 	sg_field_solution_t *solution)
@@ -1956,8 +2006,6 @@ static sg_field_status_t SolutionBuild(const sg_rune_dynamics_model_t *model,
 		goto done;
 	}
 	status = MaximumLocalSpanNew(model, &solution->local_span_us);
-	if (status == SG_FIELD_STATUS_OK)
-		status = BuildBellmanCosts(model, solution);
 
 done:
 	SG_FieldAttractorResultDestroy(&result);
@@ -1965,93 +2013,163 @@ done:
 	return status;
 }
 
-static int SolutionClone(const sg_rune_dynamics_model_t *model,
-	const sg_field_solution_t *source, sg_field_solution_t *destination)
-{
-	memset(destination, 0, sizeof(*destination));
-	destination->atom_count = source->atom_count;
-	destination->node_count = source->node_count;
-	destination->region_count = source->region_count;
-	destination->guard_vector_count = source->guard_vector_count;
-	destination->guard_count = source->guard_count;
-	destination->rule_count = source->rule_count;
-	destination->rule_destination_count = source->rule_destination_count;
-	destination->regions = CopyArray(source->regions, source->region_count,
-		sizeof(*source->regions));
-	destination->guard_truths = CopyArray(source->guard_truths,
-		source->guard_vector_count * source->guard_count,
-		sizeof(*source->guard_truths));
-	destination->terminal_atoms = CopyArray(source->terminal_atoms,
-		source->node_count, sizeof(*source->terminal_atoms));
-	destination->reachable = CopyArray(source->reachable, source->node_count,
-		sizeof(*source->reachable));
-	destination->rank = CopyArray(source->rank, source->node_count,
-		sizeof(*source->rank));
-	destination->costs = CopyArray(source->costs, source->node_count,
-		sizeof(*source->costs));
-	destination->accepted_kernels = CopyArray(source->accepted_kernels,
-		source->region_count * model->local_progress_kernel_count,
-		sizeof(*source->accepted_kernels));
-	destination->rules = CopyArray(source->rules, source->rule_count,
-		sizeof(*source->rules));
-	destination->rule_destinations = CopyArray(source->rule_destinations,
-		source->rule_destination_count, sizeof(*source->rule_destinations));
-	destination->rule_outcomes = CopyArray(source->rule_outcomes,
-		source->rule_destination_count, sizeof(*source->rule_outcomes));
-	if (!destination->regions ||
-	    (source->guard_count != 0U && !destination->guard_truths) ||
-	    !destination->terminal_atoms ||
-	    !destination->reachable ||
-	    !destination->rank || !destination->costs ||
-	    !destination->accepted_kernels ||
-	    (source->rule_count != 0U && !destination->rules) ||
-	    (source->rule_destination_count != 0U &&
-	     (!destination->rule_destinations || !destination->rule_outcomes)))
-		return 0;
-	destination->local_span_us = source->local_span_us;
-	return 1;
-}
-
-static int KernelAcceptsActiveTerminal(const sg_rune_dynamics_model_t *model,
-	const sg_field_local_progress_kernel_t *kernel,
-	const sg_destination_terminal_t *terminal, uint64_t now_ms)
-{
-	const sg_destination_terminal_domain_t *domain = NULL;
-	const sg_destination_terminal_capture_t *capture =
-		ActiveCapture(terminal, now_ms, &domain);
-	uint32_t target;
-
-	return capture && domain &&
-		SG_FieldLocalProgressKernelAcceptsCapture(kernel, capture) &&
-		FindAtomIndex(model, &kernel->target_atom, &target) &&
-		DomainMatches(model, target, domain);
-}
-
-static int IncrementalClassificationSame(
-	const sg_rune_dynamics_model_t *model,
-	const sg_field_cache_entry_t *previous,
+static sg_field_status_t SolutionBuild(const sg_rune_dynamics_model_t *model,
 	const sg_destination_terminal_t *terminal,
-	const sg_field_environment_t *environment, uint64_t now_ms)
+	const sg_field_environment_t *environment, uint64_t now_ms,
+	sg_field_solution_t *solution)
 {
-	size_t index;
+	sg_field_status_t status = SolutionClassify(model, terminal, environment,
+		now_ms, solution);
 
-	if (previous->terminal.value.kind != SG_DESTINATION_TERMINAL_MOVING_TUBE ||
-	    terminal->kind != SG_DESTINATION_TERMINAL_MOVING_TUBE ||
-	    !EnvironmentSame(&previous->environment.value, environment))
+	return status == SG_FIELD_STATUS_OK ?
+		BuildBellmanCosts(model, solution, NULL) : status;
+}
+
+static int NodeRulesSame(const sg_field_solution_t *left,
+	const sg_field_solution_t *right, uint32_t node)
+{
+	size_t left_index = 0U;
+	size_t right_index = 0U;
+
+	for (;;)
+	{
+		const sg_field_bellman_rule_t *left_rule;
+		const sg_field_bellman_rule_t *right_rule;
+		size_t destination;
+		while (left_index < left->rule_count &&
+		       left->rules[left_index].source_node != node)
+			left_index++;
+		while (right_index < right->rule_count &&
+		       right->rules[right_index].source_node != node)
+			right_index++;
+		if (left_index == left->rule_count ||
+		    right_index == right->rule_count)
+			return left_index == left->rule_count &&
+				right_index == right->rule_count;
+		left_rule = &left->rules[left_index++];
+		right_rule = &right->rules[right_index++];
+		if (left_rule->choice_index != right_rule->choice_index ||
+		    left_rule->kernel_index != right_rule->kernel_index ||
+		    left_rule->destinations.count != right_rule->destinations.count)
+			return 0;
+		for (destination = 0U;
+		     destination < left_rule->destinations.count; destination++)
+		{
+			size_t left_destination =
+				(size_t)left_rule->destinations.first + destination;
+			size_t right_destination =
+				(size_t)right_rule->destinations.first + destination;
+			if (left->rule_destinations[left_destination] !=
+				right->rule_destinations[right_destination] ||
+			    left->rule_outcomes[left_destination] !=
+				right->rule_outcomes[right_destination])
+				return 0;
+		}
+	}
+}
+
+static void MarkRulePredecessors(const sg_field_solution_t *solution,
+	uint8_t *affected, int *changed)
+{
+	size_t rule_index;
+
+	for (rule_index = 0U; rule_index < solution->rule_count; rule_index++)
+	{
+		const sg_field_bellman_rule_t *rule = &solution->rules[rule_index];
+		size_t destination;
+		if (affected[rule->source_node])
+			continue;
+		for (destination = rule->destinations.first;
+		     destination < (size_t)rule->destinations.first +
+			rule->destinations.count; destination++)
+			if (affected[solution->rule_destinations[destination]])
+			{
+				affected[rule->source_node] = 1U;
+				*changed = 1;
+				break;
+			}
+	}
+}
+
+static int SolutionProductShapeSame(const sg_rune_dynamics_model_t *model,
+	const sg_field_solution_t *left, const sg_field_solution_t *right)
+{
+	size_t truth_count;
+
+	if (left->atom_count != right->atom_count ||
+	    left->node_count != right->node_count ||
+	    left->region_count != right->region_count ||
+	    left->guard_vector_count != right->guard_vector_count ||
+	    left->guard_count != right->guard_count ||
+	    left->local_span_us != right->local_span_us ||
+	    left->region_count > SIZE_MAX / model->local_progress_kernel_count ||
+	    (left->guard_count != 0U &&
+	     left->guard_vector_count > SIZE_MAX / left->guard_count))
 		return 0;
-	for (index = 0U; index < model->choice_count; index++)
-		if (ChoiceEnabled(model, &model->choices[index],
-			&previous->environment.value, previous->solved_at_ms) !=
-		    ChoiceEnabled(model, &model->choices[index], environment, now_ms))
-			return 0;
-	for (index = 0U; index < model->local_progress_kernel_count; index++)
-		if (KernelAcceptsActiveTerminal(model,
-			&model->local_progress_kernels[index],
-			&previous->terminal.value, previous->solved_at_ms) !=
-		    KernelAcceptsActiveTerminal(model,
-			&model->local_progress_kernels[index], terminal, now_ms))
-			return 0;
-	return 1;
+	truth_count = left->guard_vector_count * left->guard_count;
+	return truth_count == 0U || memcmp(left->guard_truths,
+		right->guard_truths, truth_count * sizeof(*left->guard_truths)) == 0;
+}
+
+static sg_field_status_t SolutionBuildIncremental(
+	const sg_rune_dynamics_model_t *model,
+	const sg_destination_terminal_t *terminal,
+	const sg_field_environment_t *environment, uint64_t now_ms,
+	const sg_field_solution_t *previous, sg_field_solution_t *solution,
+	size_t *reused_out)
+{
+	uint8_t *affected = NULL;
+	sg_field_status_t status;
+	size_t node;
+	size_t reused = 0U;
+	int changed;
+
+	*reused_out = 0U;
+	status = SolutionClassify(model, terminal, environment, now_ms, solution);
+	if (status != SG_FIELD_STATUS_OK)
+		return status;
+	if (!SolutionProductShapeSame(model, previous, solution))
+		return BuildBellmanCosts(model, solution, NULL);
+	affected = calloc(solution->node_count, sizeof(*affected));
+	if (!affected)
+		return SG_FIELD_STATUS_STORAGE;
+	memcpy(solution->costs, previous->costs,
+		solution->node_count * sizeof(*solution->costs));
+	for (node = 0U; node < solution->node_count; node++)
+	{
+		size_t product_region = node / solution->atom_count;
+		size_t region = product_region % solution->region_count;
+		size_t kernel;
+		if (solution->terminal_atoms[node] != previous->terminal_atoms[node] ||
+		    solution->reachable[node] != previous->reachable[node] ||
+		    solution->rank[node] != previous->rank[node] ||
+		    !NodeRulesSame(previous, solution, (uint32_t)node))
+			affected[node] = 1U;
+		for (kernel = 0U; !affected[node] &&
+		     kernel < model->local_progress_kernel_count; kernel++)
+			if (solution->accepted_kernels[region *
+				model->local_progress_kernel_count + kernel] !=
+			    previous->accepted_kernels[region *
+				model->local_progress_kernel_count + kernel])
+				affected[node] = 1U;
+	}
+	do
+	{
+		changed = 0;
+		MarkRulePredecessors(previous, affected, &changed);
+		MarkRulePredecessors(solution, affected, &changed);
+	} while (changed);
+	for (node = 0U; node < solution->node_count; node++)
+		if (!affected[node])
+			reused++;
+	if (reused == 0U)
+		status = BuildBellmanCosts(model, solution, NULL);
+	else
+		status = BuildBellmanCosts(model, solution, affected);
+	free(affected);
+	if (status == SG_FIELD_STATUS_OK)
+		*reused_out = reused;
+	return status;
 }
 
 static void CacheEntryDestroy(sg_field_cache_entry_t *entry)
@@ -2111,19 +2229,11 @@ static sg_field_status_t CacheEntryCreate(const sg_rune_dynamics_model_t *model,
 		CacheEntryDestroy(entry);
 		return SG_FIELD_STATUS_STORAGE;
 	}
-	if (incremental_predecessor && IncrementalClassificationSame(model,
-		incremental_predecessor, &entry->terminal.value,
-		&entry->environment.value, now_ms))
-	{
-		if (!SolutionClone(model, &incremental_predecessor->solution,
-			&entry->solution))
-		{
-			CacheEntryDestroy(entry);
-			return SG_FIELD_STATUS_STORAGE;
-		}
-		entry->incrementally_reused = 1U;
-		status = SG_FIELD_STATUS_OK;
-	}
+	if (incremental_predecessor)
+		status = SolutionBuildIncremental(model, &entry->terminal.value,
+			&entry->environment.value, now_ms,
+			&incremental_predecessor->solution, &entry->solution,
+			&entry->reused_node_count);
 	else
 		status = SolutionBuild(model, &entry->terminal.value,
 			&entry->environment.value, now_ms, &entry->solution);
@@ -2133,6 +2243,7 @@ static sg_field_status_t CacheEntryCreate(const sg_rune_dynamics_model_t *model,
 		return status;
 	}
 	entry->solved_at_ms = now_ms;
+	entry->incrementally_reused = entry->reused_node_count != 0U;
 	*entry_out = entry;
 	return SG_FIELD_STATUS_OK;
 }
@@ -2334,7 +2445,8 @@ sg_field_status_t SG_FieldServiceResolve(sg_field_service_t *service,
 	{
 		new_entry->next = service->cache;
 		service->cache = new_entry;
-		service->clean_solves++;
+		if (service->clean_solves != UINT64_MAX)
+			service->clean_solves++;
 	}
 	lease->next = service->leases;
 	service->leases = lease;
@@ -2403,8 +2515,17 @@ sg_field_status_t SG_FieldServiceRefresh(sg_field_service_t *service,
 		new_entry->next = service->cache;
 		service->cache = new_entry;
 		if (new_entry->incrementally_reused)
-			service->incremental_reuses++;
-		else
+		{
+			if (service->incremental_reuses != UINT64_MAX)
+				service->incremental_reuses++;
+			if (service->incremental_reused_nodes > UINT64_MAX -
+			    (uint64_t)new_entry->reused_node_count)
+				service->incremental_reused_nodes = UINT64_MAX;
+			else
+				service->incremental_reused_nodes +=
+					(uint64_t)new_entry->reused_node_count;
+		}
+		else if (service->clean_solves != UINT64_MAX)
 			service->clean_solves++;
 	}
 	*previous_link = previous_lease->next;
@@ -2452,33 +2573,15 @@ static int ModeSame(const sg_rune_state_mode_t *left,
 	}
 }
 
-static int StateInsideFlow(const sg_localized_field_state_t *state,
-	const sg_rune_flow_enclosure_t *flow)
-{
-	return state->position.value[0] >= flow->position.x.min_value &&
-		state->position.value[0] <= flow->position.x.max_value &&
-		state->position.value[1] >= flow->position.y.min_value &&
-		state->position.value[1] <= flow->position.y.max_value &&
-		state->position.value[2] >= flow->position.z.min_value &&
-		state->position.value[2] <= flow->position.z.max_value &&
-		state->velocity.value[0] >= flow->velocity.x.min_value &&
-		state->velocity.value[0] <= flow->velocity.x.max_value &&
-		state->velocity.value[1] >= flow->velocity.y.min_value &&
-		state->velocity.value[1] <= flow->velocity.y.max_value &&
-		state->velocity.value[2] >= flow->velocity.z.min_value &&
-		state->velocity.value[2] <= flow->velocity.z.max_value &&
-		state->elapsed_ms >= flow->elapsed_ms.min_value &&
-		state->elapsed_ms <= flow->elapsed_ms.max_value;
-}
-
 static int FindStateAtom(const sg_rune_dynamics_model_t *model,
 	const sg_localized_field_state_t *state, uint32_t *atom_out,
 	const sg_field_refinement_node_t **leaf_out)
 {
 	size_t chart_index;
-	size_t atom_index;
-	uint32_t selected_atom = UINT32_MAX;
-	const sg_field_refinement_node_t *selected_leaf = NULL;
+	size_t leaf_index;
+	sg_rune_state_simplex_id_t simplex;
+	sg_field_reach_atom_id_t atom;
+	sg_field_refinement_node_id_t leaf;
 
 	for (chart_index = 0U; chart_index < model->state_chart_count; chart_index++)
 		if (StableSame(&model->state_charts[chart_index].id.value,
@@ -2487,50 +2590,67 @@ static int FindStateAtom(const sg_rune_dynamics_model_t *model,
 	if (chart_index == model->state_chart_count ||
 	    !ModeSame(&model->state_charts[chart_index].mode, &state->mode))
 		return 0;
-	for (atom_index = 0U; atom_index < model->reach_atom_count; atom_index++)
-	{
-		const sg_field_reach_atom_t *atom = &model->reach_atoms[atom_index];
-		const sg_rune_state_domain_t *domain = NULL;
-		const sg_field_refinement_node_t *leaf = NULL;
-		size_t domain_index;
-		size_t node_index;
-		for (domain_index = 0U; domain_index < model->state_domain_count;
-		     domain_index++)
-			if (StableSame(&model->state_domains[domain_index].id.value,
-				&atom->domain.value))
-			{
-				domain = &model->state_domains[domain_index];
-				break;
-			}
-		if (!domain || !StableSame(&domain->chart.value, &state->chart.value) ||
-		    !StateInsideFlow(state, &atom->state_bounds))
-			continue;
-		for (node_index = 0U; node_index < model->refinement_tree.node_count;
-		     node_index++)
-		{
-			const sg_field_refinement_node_t *candidate =
-				&model->refinement_tree.nodes[node_index];
-			if (candidate->children.count == 0U &&
-			    StableSame(&candidate->atom.value, &atom->id.value) &&
-			    StateInsideFlow(state, &candidate->state_bounds) &&
-			    (!leaf || StableOrder(&candidate->id.value,
-				&leaf->id.value) < 0))
-				leaf = candidate;
-		}
-		if (leaf && (selected_atom == UINT32_MAX ||
-		    StableOrder(&atom->id.value,
-			&model->reach_atoms[selected_atom].id.value) < 0))
-		{
-			selected_atom = (uint32_t)atom_index;
-			selected_leaf = leaf;
-		}
-	}
-	if (selected_atom == UINT32_MAX || !selected_leaf)
+	if (!SG_RuneDynamicsLocatePointExact(model, &state->chart,
+		&state->position, &state->velocity, state->elapsed_ms,
+		&simplex, &atom, &leaf) || !FindAtomIndex(model, &atom, atom_out))
 		return 0;
-	*atom_out = selected_atom;
-	*leaf_out = selected_leaf;
+	(void)simplex;
+	for (leaf_index = 0U; leaf_index < model->refinement_tree.node_count;
+	     leaf_index++)
+		if (StableSame(&model->refinement_tree.nodes[leaf_index].id.value,
+			&leaf.value))
+			break;
+	if (leaf_index == model->refinement_tree.node_count)
+		return 0;
+	*leaf_out = &model->refinement_tree.nodes[leaf_index];
 	return 1;
 }
+
+#ifdef SG_FIELD_SERVICE_TESTING
+sg_field_status_t SG_FieldServiceTestStoredCost(
+	const sg_field_service_t *service, const sg_field_handle_t *handle,
+	const sg_localized_field_state_t *state, sg_rune_cost_bounds_t *cost_out)
+{
+	const sg_field_refinement_node_t *leaf;
+	sg_field_lease_t *lease;
+	uint32_t atom;
+	uint32_t node;
+	size_t region;
+
+	if (!service || !handle || !state || !cost_out ||
+	    service->magic != FIELD_SERVICE_MAGIC)
+		return SG_FIELD_STATUS_INVALID_ARGUMENT;
+	lease = FindLease(service, handle, NULL);
+	if (!lease)
+		return SG_FIELD_STATUS_STALE;
+	if (!FindStateAtom(&service->storage.model, state, &atom, &leaf))
+		return SG_FIELD_STATUS_MODEL_INCOMPLETE;
+	(void)leaf;
+	region = TimeRegionIndex(&lease->entry->solution, state->sampled_at_ms);
+	if (region == SIZE_MAX || !NodeIndex(&lease->entry->solution, 0U,
+		region, atom, &node))
+		return SG_FIELD_STATUS_STALE;
+	*cost_out = lease->entry->solution.costs[node];
+	return SG_FIELD_STATUS_OK;
+}
+
+int SG_FieldServiceTestLocateState(const sg_field_service_t *service,
+	const sg_localized_field_state_t *state,
+	sg_field_reach_atom_id_t *atom_out,
+	sg_field_refinement_node_id_t *leaf_out)
+{
+	const sg_field_refinement_node_t *leaf;
+	uint32_t atom;
+
+	if (!service || !state || !atom_out || !leaf_out ||
+	    service->magic != FIELD_SERVICE_MAGIC ||
+	    !FindStateAtom(&service->storage.model, state, &atom, &leaf))
+		return 0;
+	*atom_out = service->storage.model.reach_atoms[atom].id;
+	*leaf_out = leaf->id;
+	return 1;
+}
+#endif
 
 static int StateInsideCapture(const sg_localized_field_state_t *state,
 	const sg_destination_terminal_capture_t *capture)
@@ -2597,20 +2717,25 @@ static int QueryRuleEligible(const sg_rune_dynamics_model_t *model,
 	const sg_field_solution_t *solution = &entry->solution;
 	const sg_field_bellman_rule_t *rule = &solution->rules[rule_index];
 	const sg_field_choice_t *choice;
-	const sg_field_local_progress_kernel_t *kernel;
+	const sg_field_local_progress_kernel_t *kernel = NULL;
 	sg_rune_cost_bounds_t candidate;
 	long double decrease;
 
-	if (rule->source_node != node || rule->kernel_index == FIELD_NO_KERNEL ||
-	    rule->kernel_index >= model->local_progress_kernel_count ||
-	    !solution->accepted_kernels[region *
-		model->local_progress_kernel_count + rule->kernel_index])
+	if (rule->source_node != node)
 		return 0;
 	choice = &model->choices[rule->choice_index];
-	kernel = &model->local_progress_kernels[rule->kernel_index];
+	if (rule->kernel_index != FIELD_NO_KERNEL)
+	{
+		if (rule->kernel_index >= model->local_progress_kernel_count ||
+		    !solution->accepted_kernels[region *
+			model->local_progress_kernel_count + rule->kernel_index])
+			return 0;
+		kernel = &model->local_progress_kernels[rule->kernel_index];
+		if (!KernelCoversLeaf(model, kernel, leaf) ||
+		    !ChoiceReferencedByKernel(model, kernel, choice))
+			return 0;
+	}
 	if (!ChoiceEnabled(model, choice, &entry->environment.value, query_time_ms) ||
-	    !KernelCoversLeaf(model, kernel, leaf) ||
-	    !ChoiceReferencedByKernel(model, kernel, choice) ||
 	    !RuleIntervalCost(model, solution, rule, &candidate, endpoint_out) ||
 	    candidate.upper_us != solution->costs[node].upper_us)
 		return 0;
@@ -2618,6 +2743,8 @@ static int QueryRuleEligible(const sg_rune_dynamics_model_t *model,
 		*minimum_out = solution->costs[node].lower_us - endpoint_out->upper_us;
 	else
 	{
+		if (!kernel)
+			return 0;
 		decrease = ceill((long double)kernel->minimum_lyapunov_decrease *
 			(long double)model->error_contract.cost_quantum_us);
 		if (!isfinite(decrease) || decrease <= 0.0L ||
