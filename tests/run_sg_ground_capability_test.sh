@@ -9,6 +9,7 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 -Wformat=2 -Wcast-qual -Wcast-align'
 sources='tests/sg_ground_capability_test.c
+tests/sg_ground_construction_fixture.c
 slipgate/sg_ground_capability.c
 slipgate/sg_host_pmove.c
 slipgate/sg_bsp_completeness_proof.c

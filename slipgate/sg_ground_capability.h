@@ -5,7 +5,8 @@
 #include <stdint.h>
 
 #include "sg_configuration_semantics.h"
-#include "sg_host_pmove.h"
+
+typedef struct sg_host_law_construction_s sg_host_law_construction_t;
 
 #define SG_GROUND_CAPABILITY_INDEX_NONE UINT32_MAX
 
@@ -102,12 +103,11 @@ typedef struct sg_ground_capability_set_s
 } sg_ground_capability_set_t;
 
 int SG_GroundCapabilityBuild(
-	const sg_host_collision_authority_t *authority,
+	const sg_host_law_construction_t *construction,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_phase_basis_t *phases, size_t phase_count,
 	const sg_ground_phase_binding_t *bindings, size_t binding_count,
-	sg_host_pmove_function_t host_pmove,
 	sg_ground_capability_set_t **set_out,
 	sg_ground_capability_error_t *error_out);
 void SG_GroundCapabilityDestroy(sg_ground_capability_set_t *set);
