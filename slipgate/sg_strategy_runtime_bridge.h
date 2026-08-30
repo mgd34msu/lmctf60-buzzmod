@@ -65,18 +65,31 @@ typedef int (*sg_strategy_runtime_target_authority_fn)(void *context,
 	const sg_strategy_runtime_target_view_t *view,
 	sg_strategy_caller_target_binding_t *binding_out);
 
+/* A locator only lends a borrowed view: the bridge never releases it unless
+ * the authority from that same provider registration accepts that exact view.
+ * Authority acceptance leases the exact nominated view.  Normal rollback,
+ * replacement, explicit release, and pre-owner teardown return that lease
+ * through the matching callback, including an accepted view whose emitted
+ * binding is rejected.  Post-owner-loss recovery abandons it without invoking
+ * a callback whose context is already invalid. */
+typedef void (*sg_strategy_runtime_target_release_fn)(void *context,
+	const void *accepted_view);
+
 void SG_StrategyRuntimeTargetProviderSet(
 	sg_strategy_runtime_target_locator_fn locator, void *locator_context,
-	sg_strategy_runtime_target_authority_fn authority, void *authority_context);
+	sg_strategy_runtime_target_authority_fn authority, void *authority_context,
+	sg_strategy_runtime_target_release_fn release_view,
+	void *release_context);
 
-/* Map teardown clears this locator/authority registration before either
+/* Normal map teardown clears this locator/authority registration before either
  * borrowed view, snapshot, terminal, field, or localization lifetime ends. */
 int SG_StrategyRuntimeTargetProviderAvailable(void);
 
 /* A typed plan is available only while both an untrusted locator and the
  * field-service/localization authority are registered.  No registration means no
  * typed strategy plan: the production caller never derives destination
- * handles from legacy seeds or route fields. */
+ * handles from legacy seeds or route fields.  `plan_out` must be zeroed or
+ * moved from; resolution never overwrites an outstanding binding lease. */
 int SG_StrategyRuntimePlanResolve(
 	const sg_strategy_runtime_plan_request_t *request,
 	sg_strategy_caller_plan_t *plan_out);

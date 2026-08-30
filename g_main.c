@@ -16,6 +16,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_strategy_runtime_bridge.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -140,14 +141,15 @@ void ShutdownGame (void)
 {
 	SG_DangerCheckpoint("shutdown");
 	SG_DangerPersistenceReset();
-	(void)SG_BotLocalizationProviderSet(NULL);
-	SG_HostLawProductionReset();
-	SG_LevelIdentityReset();
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 	gi.dprintf ("==== ShutdownGame ====\n");
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
 
 	SG_RosterStorageReset();
+	(void)SG_BotLocalizationProviderSet(NULL);
+	SG_HostLawProductionReset();
+	SG_LevelIdentityReset();
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 

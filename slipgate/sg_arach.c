@@ -3362,6 +3362,7 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 	if (!bot || !tc)
 		return false;
 	now_ms = StrategyNowMs();
+	memset(&plan, 0, sizeof(plan));
 	StrategyReleaseMissingHumanOrder(bot, tc, now_ms);
 	legacy_field = tc->goal_field;
 	if (!SG_StrategyRuntimeTargetProviderAvailable())
@@ -3369,9 +3370,15 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 	StrategyAdvanceLiveGoal(bot, tc, now_ms);
 	if (!StrategyFramePlanRequest(bot, tc, strike_duty, &request) ||
 	    !(request.localized_player = SG_BotLocalizationCurrent(bot)) ||
-	    !SG_StrategyRuntimePlanResolve(&request, &plan) ||
-	    !SG_StrategyCallerSubmit(&bot->strategy, &plan, 1U, now_ms,
-		StrategyBlockReason(bot, tc), &output) || !output.execution_field)
+	    !SG_StrategyRuntimePlanResolve(&request, &plan))
+		return false;
+	if (!SG_StrategyCallerSubmit(&bot->strategy, &plan, 1U, now_ms,
+		StrategyBlockReason(bot, tc), &output))
+	{
+		SG_StrategyCallerPlanDiscard(&plan);
+		return false;
+	}
+	if (!output.execution_field)
 		return false;
 	tc->role = (sg_role_t)output.role;
 	tc->goal_field = output.execution_field;
@@ -4558,15 +4565,21 @@ void SG_BotThink(sg_bot_t *bot)
 void SG_RunFrame(void)
 {
 	int i;
-	/*
-	 * Level changes are detected here rather than by a hook in the spawn
-	 * code: the rune and fields were TAG_LEVEL so the engine already freed
-	 * them, and level.time restarting is the tell. Same map or different,
-	 * every pointer we held is stale the moment this trips.
-	 */
+	/* Recover a transition missed by the synchronous SpawnEntities/ReadLevel
+	 * hooks.  TAG_LEVEL is already gone on this path, so every map pointer and
+	 * owner callback is stale when the time or map-name sentinel trips. */
 	if (SG_TimerPending(sg_last_frame_time) ||
 	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
+	{
+		/* This detector is a recovery path after the host has already retired
+		 * TAG_LEVEL.  Clear callback entrypoints and dangling plan leases without
+		 * calling back into the lost owner; the synchronous SpawnEntities and
+		 * ReadLevel paths perform the normal exact release. */
+		SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+		for (i = 0; i < SG_MAXBOTS; i++)
+			SG_StrategyCallerOwnerLost(&sg_bots[i].strategy);
 		SG_LevelChange();
+	}
 	/* Host movement is not consumed until its exact engine binding has been
 	 * installed and revalidated for this frame.  The owner deliberately
 	 * returns HOST_UNAVAILABLE on ordinary production builds that have no BSP
@@ -4674,15 +4687,20 @@ void SG_LevelChange(void)
 	 * and localization storage.  Clear it before any level owner tears those
 	 * sources down; bot movement then fails closed until the next accepted
 	 * provider registers. */
-	(void)SG_BotLocalizationProviderSet(NULL);
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
-	SG_HostLawProductionReset();
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 	/* Map teardown is a terminal owner in its own right. Finish before the
 	 * roster removal so the original map snapshot remains attached; slot reset
 	 * then sees a closed state and is intentionally idempotent. */
 	for (i = 0; i < SG_MAXBOTS; i++)
 		(void)SG_HookDiagnosticsFinish(&sg_bots[i].hook_diagnostics,
 		    "map-transition", "level-change");
+	/* Retire only the field-view leases while every field/localization owner is
+	 * still alive.  The later full slot reset remains behind the compound-guard
+	 * level fence and sees an already empty, idempotent strategy caller. */
+	for (i = 0; i < SG_MAXBOTS; i++)
+		SG_StrategyCallerDestroy(&sg_bots[i].strategy);
+	(void)SG_BotLocalizationProviderSet(NULL);
+	SG_HostLawProductionReset();
 	SG_ButtonExecutionLevelReset();
 	SG_TimedVaultEgressScopeEnd();
 	(void)SG_CompoundGuardGameLevelReset();

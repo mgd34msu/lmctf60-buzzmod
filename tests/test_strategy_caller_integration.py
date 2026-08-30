@@ -106,7 +106,7 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
             commit.index("StrategyFramePlanRequest"),
         )
         self.assertIn(
-            "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL)",
+            "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL)",
             source,
         )
 
@@ -114,12 +114,16 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         bridge = self.text("slipgate/sg_strategy_runtime_bridge.c")
         bridge_header = self.text("slipgate/sg_strategy_runtime_bridge.h")
         caller = self.text("slipgate/sg_strategy_caller.c")
+        client = self.text("slipgate/sg_client.c")
         chat = self.text("sg_chat.c")
         self.assertIn("RuntimeDestinationEqual", bridge)
         self.assertIn("sg_strategy_runtime_target_view_t", bridge_header)
         self.assertIn("sg_strategy_runtime_target_authority_fn", bridge_header)
         self.assertIn("!view.opaque", bridge)
-        self.assertIn("sg_strategy_runtime_authority(", bridge)
+        self.assertIn("sg_strategy_runtime_provider_registration_t", bridge)
+        self.assertIn("registration.authority(", bridge)
+        self.assertIn("registration.release_view", bridge)
+        self.assertIn("RuntimeProviderRegistrationCurrent(&registration)", bridge)
         self.assertIn("binding->commitment_id != target->commitment_id", bridge)
         self.assertIn("RuntimeAuthorityEqual(&binding->authority", bridge)
         self.assertIn("binding->goal_id != target->goal_id", bridge)
@@ -147,6 +151,7 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         self.assertNotIn("SG_DestinationFieldValid", caller)
         self.assertIn("SG_StrategyCallerCancel", chat)
         self.assertIn("SG_StrategyCallerRelease", chat)
+        self.assertIn("SG_StrategyCallerDestroy(&bot->strategy)", client)
         self.assertIn(
             "authority.principal_id = (uint32_t)order_from + 1U;", chat
         )
@@ -225,6 +230,64 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         self.assertIn("SG_CollectibleArmorTargetLevelReset();", level)
         self.assertLess(level.index("SG_RemoveBots();"),
                         level.index("SG_CollectibleArmorTargetLevelReset();"))
+
+    def test_strategy_views_retire_before_owner_storage(self):
+        level_source = self.text("sg_arach.c")
+        shutdown_source = self.text("g_main.c")
+        level_start = level_source.index("void SG_LevelChange(void)")
+        level = level_source[level_start:]
+        level_clear = level.index(
+            "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL)"
+        )
+        level_retire = level.index(
+            "SG_StrategyCallerDestroy(&sg_bots[i].strategy)", level_clear
+        )
+        level_guard = level.index("SG_CompoundGuardGameLevelReset()", level_retire)
+        level_roster = level.index("SG_RemoveBots();", level_clear)
+        level_localization = level.index(
+            "SG_BotLocalizationProviderSet(NULL)", level_retire
+        )
+        self.assertLess(level_clear, level_retire)
+        self.assertLess(level_retire, level_localization)
+        self.assertLess(level_guard, level_roster)
+
+        shutdown_start = shutdown_source.index("void ShutdownGame (void)")
+        shutdown = shutdown_source[shutdown_start:]
+        shutdown_clear = shutdown.index(
+            "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL)"
+        )
+        shutdown_roster = shutdown.index("SG_RosterStorageReset();", shutdown_clear)
+        shutdown_localization = shutdown.index(
+            "SG_BotLocalizationProviderSet(NULL)", shutdown_roster
+        )
+        shutdown_free = shutdown.index("gi.FreeTags (TAG_LEVEL)", shutdown_localization)
+        self.assertLess(shutdown_clear, shutdown_roster)
+        self.assertLess(shutdown_roster, shutdown_localization)
+        self.assertLess(shutdown_localization, shutdown_free)
+
+    def test_failed_strategy_submit_discards_resolved_views(self):
+        source = self.text("sg_arach.c")
+        start = source.index("static qboolean StrategyCommitFrame")
+        end = source.index("static void StrategyInterrupt", start)
+        commit = source[start:end]
+        resolve = commit.index("SG_StrategyRuntimePlanResolve")
+        submit = commit.index("SG_StrategyCallerSubmit", resolve)
+        discard = commit.index("SG_StrategyCallerPlanDiscard", submit)
+        self.assertLess(resolve, submit)
+        self.assertLess(submit, discard)
+
+    def test_late_level_detection_never_calls_lost_view_owner(self):
+        source = self.text("sg_arach.c")
+        start = source.index("void SG_RunFrame(void)")
+        end = source.index("SG_CompoundGuardGameFrame();", start)
+        prologue = source[start:end]
+        clear = prologue.index(
+            "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL)"
+        )
+        abandon = prologue.index("SG_StrategyCallerOwnerLost", clear)
+        level_change = prologue.index("SG_LevelChange();", abandon)
+        self.assertLess(clear, abandon)
+        self.assertLess(abandon, level_change)
 
 
 if __name__ == "__main__":

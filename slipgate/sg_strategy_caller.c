@@ -22,6 +22,53 @@ static int CallerAuthorityValid(const sg_strategy_caller_authority_t *authority)
 	}
 }
 
+static void CallerRetiredPlanRelease(
+	const sg_strategy_caller_plan_t *retired)
+{
+	uint16_t index;
+
+	if (!retired || !retired->release_view)
+		return;
+	for (index = 0U; index < retired->binding_count &&
+	     index < SG_STRATEGY_CALLER_MAX_BINDINGS; index++)
+		if (retired->bindings[index].accepted_view)
+			retired->release_view(retired->release_context,
+				retired->bindings[index].accepted_view);
+}
+
+void SG_StrategyCallerPlanDiscard(sg_strategy_caller_plan_t *plan)
+{
+	sg_strategy_caller_plan_t retired;
+
+	if (!plan)
+		return;
+	retired = *plan;
+	memset(plan, 0, sizeof(*plan));
+	CallerRetiredPlanRelease(&retired);
+}
+
+void SG_StrategyCallerDestroy(sg_strategy_caller_t *caller)
+{
+	sg_strategy_caller_plan_t retired;
+	int owns_plan;
+
+	if (!caller)
+		return;
+	memset(&retired, 0, sizeof(retired));
+	owns_plan = caller->initialized && caller->has_plan;
+	if (owns_plan)
+		retired = caller->plan;
+	memset(caller, 0, sizeof(*caller));
+	if (owns_plan)
+		CallerRetiredPlanRelease(&retired);
+}
+
+void SG_StrategyCallerOwnerLost(sg_strategy_caller_t *caller)
+{
+	if (caller)
+		memset(caller, 0, sizeof(*caller));
+}
+
 static int CallerAuthorityEqual(const sg_strategy_caller_authority_t *left,
 	const sg_strategy_caller_authority_t *right)
 {
@@ -560,14 +607,17 @@ int SG_StrategyCallerInit(sg_strategy_caller_t *caller)
 }
 
 int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
-	const sg_strategy_caller_plan_t *plan, uint8_t alive, uint64_t at_ms,
+	sg_strategy_caller_plan_t *plan, uint8_t alive, uint64_t at_ms,
 	sg_strategy_tactical_block_reason_t block_reason,
 	sg_strategy_caller_output_t *out)
 {
 	sg_strategy_plan_t compiled;
+	sg_strategy_caller_t candidate;
+	sg_strategy_caller_plan_t retired;
 	uint64_t validation_plan_id;
 
-	if (!caller || !caller->initialized || !plan || !out || at_ms == 0U ||
+	if (!caller || !caller->initialized || !plan || plan == &caller->plan ||
+	    !out || at_ms == 0U ||
 	    !CallerAuthorityValid(&plan->authority))
 		return 0;
 	if (caller->reducer.has_plan &&
@@ -576,6 +626,7 @@ int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
 		if (!caller->has_plan || !CallerPulsePlan(caller, &caller->plan,
 			alive, at_ms, block_reason))
 			return 0;
+		SG_StrategyCallerPlanDiscard(plan);
 		CallerOutput(caller, out);
 		return 1;
 	}
@@ -585,15 +636,28 @@ int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
 		return 0;
 	if (caller->has_plan && CallerPlansEquivalent(&caller->plan, plan))
 	{
-		if (!CallerPulsePlan(caller, plan, alive, at_ms, block_reason))
+		candidate = *caller;
+		if (!CallerPulsePlan(&candidate, plan, alive, at_ms, block_reason))
 			return 0;
-		caller->plan = *plan;
+		retired = caller->plan;
+		candidate.plan = *plan;
+		*caller = candidate;
+		memset(plan, 0, sizeof(*plan));
+		CallerRetiredPlanRelease(&retired);
 		CallerOutput(caller, out);
 		return 1;
 	}
-	if (!CallerReplace(caller, plan, alive, at_ms) ||
-	    !CallerPulsePlan(caller, &caller->plan, alive, at_ms, block_reason))
+	memset(&retired, 0, sizeof(retired));
+	if (caller->has_plan)
+		retired = caller->plan;
+	candidate = *caller;
+	if (!CallerReplace(&candidate, plan, alive, at_ms) ||
+	    !CallerPulsePlan(&candidate, &candidate.plan, alive, at_ms,
+		block_reason))
 		return 0;
+	*caller = candidate;
+	memset(plan, 0, sizeof(*plan));
+	CallerRetiredPlanRelease(&retired);
 	CallerOutput(caller, out);
 	return 1;
 }
@@ -695,6 +759,7 @@ int SG_StrategyCallerRelease(sg_strategy_caller_t *caller,
 	const sg_strategy_caller_authority_t *authority, uint8_t alive,
 	uint64_t at_ms, sg_strategy_caller_output_t *out)
 {
+	sg_strategy_caller_plan_t retired;
 	sg_strategy_life_snapshot_t life;
 	sg_strategy_frame_t frame;
 	uint64_t authority_epoch;
@@ -719,8 +784,10 @@ int SG_StrategyCallerRelease(sg_strategy_caller_t *caller,
 		return 0;
 	caller->next_authority_epoch = authority_epoch;
 	CallerLifeCommit(caller, &life);
+	retired = caller->plan;
 	memset(&caller->plan, 0, sizeof(caller->plan));
 	caller->has_plan = 0U;
 	CallerOutput(caller, out);
+	CallerRetiredPlanRelease(&retired);
 	return 1;
 }
