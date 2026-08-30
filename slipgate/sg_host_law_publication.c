@@ -1223,6 +1223,170 @@ sg_host_law_result_t SG_HostLawPublicationOwnerPmove(
 	return Ok();
 }
 
+static sg_host_law_result_t OwnerRuntimePublication(
+	const sg_host_law_publication_t *publication, sg_host_law_field_t field)
+{
+	sg_host_law_result_t result;
+
+	if (!PublicationValid(publication) ||
+		publication->backend != SG_HOST_LAW_BACKEND_ENGINE_RUNTIME ||
+		!publication->runtime)
+		return InvalidPublication(field);
+	result = SG_HostLawPublicationRevalidateProduction(publication);
+	return result;
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerSubject(
+	const sg_host_law_publication_t *publication, uint32_t subject_index,
+	sg_host_engine_subject_identity_t *subject_out)
+{
+	sg_host_law_result_t result;
+
+	if (!subject_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	memset(subject_out, 0, sizeof(*subject_out));
+	result = OwnerRuntimePublication(publication, SG_HOST_LAW_FIELD_PMOVE_LAW);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerSubject(publication->runtime, subject_index,
+		subject_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectCurrent(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject)
+{
+	sg_host_law_result_t result = OwnerRuntimePublication(publication,
+		SG_HOST_LAW_FIELD_PMOVE_LAW);
+
+	if (!subject)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerSubjectCurrent(publication->runtime, subject))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerReplayFrame(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
+{
+	sg_host_law_result_t result;
+	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
+
+	if (!subject || !request || !workspace || !replay_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = OwnerRuntimePublication(publication, SG_HOST_LAW_FIELD_PMOVE_LAW);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerReplayFrame(publication->runtime, subject,
+		request, workspace, replay_out, &error))
+	{
+		if (error_out)
+			*error_out = error;
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 0U,
+			(uint64_t)error);
+	}
+	if (error_out)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectTrace(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject,
+	const float start[3], const float mins[3], const float maxs[3],
+	const float end[3], sg_host_collision_contents_t mask,
+	sg_host_collision_trace_t *trace_out)
+{
+	sg_host_law_result_t result = OwnerRuntimePublication(publication,
+		SG_HOST_LAW_FIELD_COLLISION_LAW);
+
+	if (!subject || !start || !end || !trace_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerTrace(publication->runtime, subject, start,
+		mins, maxs, end, mask, trace_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectPointContents(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject, const float point[3],
+	sg_host_collision_contents_t *contents_out)
+{
+	sg_host_law_result_t result = OwnerRuntimePublication(publication,
+		SG_HOST_LAW_FIELD_COLLISION_LAW);
+
+	if (!subject || !point || !contents_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerPointContents(publication->runtime, subject,
+		point, contents_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectClassifyPose(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	sg_host_law_result_t result = OwnerRuntimePublication(publication,
+		SG_HOST_LAW_FIELD_COLLISION_LAW);
+
+	if (!subject || !origin || !pose_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerClassifyPose(publication->runtime, subject,
+		origin, stance, pose_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectTransition(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out)
+{
+	sg_host_law_result_t result = OwnerRuntimePublication(publication,
+		SG_HOST_LAW_FIELD_COLLISION_LAW);
+
+	if (!subject || !start || !end || !transition_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerTransition(publication->runtime, subject,
+		start, end, stance, transition_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
 sg_host_law_result_t SG_HostLawPublicationHookPullVelocity(
 	const sg_host_law_publication_t *publication, const vec3_t start,
 	const vec3_t bite, vec3_t velocity, int *rope_length_out)

@@ -7,7 +7,7 @@
 
 #include "sg_configuration_semantics.h"
 #include "sg_destination.h"
-#include "sg_host_pmove.h"
+#include "sg_host_law_owner.h"
 
 #define SG_LOCALIZATION_SUPPORT_MODEL_NONE UINT32_MAX
 
@@ -50,12 +50,7 @@ typedef enum sg_localization_recovery_e
 	SG_LOCALIZATION_RECOVERY_TEMPORARY_ABSENCE
 } sg_localization_recovery_t;
 
-typedef struct sg_localization_subject_s
-{
-	uint32_t client_id;
-	uint32_t reserved;
-	uint64_t spawn_generation;
-} sg_localization_subject_t;
+typedef sg_host_law_subject_t sg_localization_subject_t;
 
 /* Bindings are in the same canonical order as semantic regions. The artifact
  * integration layer supplies this relation; neither input implies it. */
@@ -105,6 +100,26 @@ typedef struct sg_localization_workspace_s
 	size_t phase_kernel_index_capacity;
 } sg_localization_workspace_t;
 
+/* Runtime-safe view of the phase basis frozen into one accepted RUNE model.
+ * Offline phase construction and audit own how these records are produced;
+ * localization retains only the immutable runtime artifact and its exact
+ * identity. */
+typedef struct sg_localization_phase_view_s
+{
+	const sg_rune_model_t *model;
+	const sg_rune_phase_basis_t *phases;
+	const sg_rune_phase_transition_t *transitions;
+	sg_rune_model_identity_t identity;
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+	uint32_t cell_count;
+	uint32_t phase_count;
+	uint32_t transition_count;
+	uint32_t region_count;
+	sg_rune_model_flags_t flags;
+	sg_rune_completeness_t completeness;
+} sg_localization_phase_view_t;
+
 /* Prepared once after an audited configuration, semantics set, and runtime
  * snapshot have been bound. All referenced storage remains caller-owned. */
 typedef struct sg_cell_phase_locator_s
@@ -113,6 +128,7 @@ typedef struct sg_cell_phase_locator_s
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	const sg_rune_runtime_snapshot_t *snapshot;
+	sg_localization_phase_view_t phase_view;
 	const uint32_t *cell_region_offsets;
 	const uint32_t *region_indices;
 	const uint32_t *region_runtime_cells;
@@ -173,7 +189,6 @@ typedef struct sg_localization_environment_s
 	uint64_t frame_sequence;
 	uint64_t sampled_at_ms;
 	uint64_t authenticated_at_ms;
-	const sg_host_collision_scene_t *scene;
 	const sg_host_pmove_request_t *pmove_request;
 	sg_host_pmove_substep_t *replay_substeps;
 	size_t replay_substep_capacity;
@@ -181,18 +196,17 @@ typedef struct sg_localization_environment_s
 	size_t replay_trace_capacity;
 } sg_localization_environment_t;
 
-/* Foundation-only replay seam. A raw function pointer does not authenticate
- * the engine Pmove owner, so production construction stays unavailable until
- * the accepted host-law owner binding can be checked here. Moving-mechanism
- * continuity additionally requires opaque mechanism, entity-semantics, mover,
- * and transform-timeline publications. */
+/* The runtime retains the exact engine physics/collision publication accepted
+ * at construction. Every localization operation revalidates it through the
+ * owner. Moving-mechanism continuity remains unavailable until opaque
+ * mechanism, entity-semantics, mover, and transform-timeline publications are
+ * accepted. */
 typedef struct sg_cell_phase_runtime_s
 {
 	const sg_cell_phase_locator_t *locator;
-	sg_host_pmove_function_t host_pmove;
+	sg_host_law_view_t host_law;
 	uint64_t rune_identity;
 	uint64_t topology_revision;
-	uint64_t physics_abi_id;
 	uint8_t prepared;
 	uint8_t mover_authority_ready;
 	uint8_t reserved[6];
@@ -264,10 +278,7 @@ int SG_CellPhaseLocatorPrepare(
 	sg_cell_phase_locator_t *locator_out,
 	sg_localization_status_t *status_out);
 
-/* Test/foundation constructor only until the accepted engine-Pmove owner
- * publication replaces the unauthenticated callback argument. */
 int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
-	sg_host_pmove_function_t host_pmove,
 	sg_cell_phase_runtime_t *runtime_out,
 	sg_localization_status_t *status_out);
 

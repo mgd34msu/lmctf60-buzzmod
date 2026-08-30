@@ -278,6 +278,7 @@ static void InstallRuntimeBot(void)
 	runtime_edicts[1].viewheight = 22.0f;
 	runtime_clients[1].pers.connected = true;
 	runtime_clients[1].ctf.teamnum = CTF_TEAM_RED;
+	runtime_clients[1].ctf.ctfid = UINT64_C(0x1001);
 	sg_bots[0].active = true;
 	sg_bots[0].ent = &runtime_edicts[1];
 	globals.edicts = runtime_edicts;
@@ -597,6 +598,12 @@ static void TestEngineRuntimeOwnerBinding(void)
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error;
+	sg_host_engine_subject_identity_t subject;
+	sg_host_pmove_substep_t replay_substeps[4];
+	sg_host_pmove_trace_t replay_traces[8];
+	sg_host_pmove_replay_workspace_t replay_workspace;
+	sg_host_pmove_replay_t replay;
+	sg_host_collision_pose_t pose;
 	float start[3] = { 0.0f, 0.0f, 0.0f };
 	float mins[3] = { -16.0f, -16.0f, -24.0f };
 	float maxs[3] = { 16.0f, 16.0f, 32.0f };
@@ -622,6 +629,10 @@ static void TestEngineRuntimeOwnerBinding(void)
 	runtime_status = SG_HostEngineRuntimeOwnerActivate(runtime);
 	CHECK(runtime_status == SG_HOST_ENGINE_RUNTIME_OK);
 	CHECK(SG_HostEngineRuntimeAccepted(runtime));
+	CHECK(SG_HostEngineRuntimeOwnerSubject(runtime, 1U, &subject));
+	CHECK(subject.client_id == 1U && subject.reserved == 0U &&
+		subject.spawn_generation == UINT64_C(0x1001));
+	CHECK(SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, &subject));
 	CHECK(SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	CHECK(runtime_last_passent == &runtime_edicts[1]);
@@ -646,6 +657,30 @@ static void TestEngineRuntimeOwnerBinding(void)
 	CHECK(pmove_result.elapsed_ms == 25U);
 	CHECK(pmove_result.touch_count == 1U);
 	CHECK(pmove_result.touch_instance_ids[0] == 2U);
+	memset(&replay_workspace, 0, sizeof(replay_workspace));
+	replay_workspace.substeps = replay_substeps;
+	replay_workspace.substep_capacity = 4U;
+	replay_workspace.traces = replay_traces;
+	replay_workspace.trace_capacity = 8U;
+	request.command.msec = (byte)SG_HOST_ENGINE_FRAME_MS;
+	runtime_touch_on_first_pmove = 0;
+	CHECK(SG_HostEngineRuntimeOwnerReplayFrame(runtime, &subject, &request,
+		&replay_workspace, &replay, &pmove_error));
+	CHECK(pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	CHECK(replay.substep_count == 4U && replay.trace_count == 4U);
+	CHECK(replay.result.evaluated_steps == 4U &&
+		replay.result.elapsed_ms == SG_HOST_ENGINE_FRAME_MS);
+	CHECK(memcmp(replay.bsp_identity.bytes, test_world.content_identity.bytes,
+		sizeof(replay.bsp_identity.bytes)) == 0);
+	CHECK(SG_HostEngineRuntimeOwnerClassifyPose(runtime, &subject, start,
+		SG_RUNE_STANCE_STANDING, &pose));
+	CHECK(pose.valid && !pose.supported && pose.water_level == 0U);
+	runtime_clients[1].ctf.ctfid++;
+	CHECK(!SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, &subject));
+	CHECK(!SG_HostEngineRuntimeOwnerReplayFrame(runtime, &subject, &request,
+		&replay_workspace, &replay, &pmove_error));
+	runtime_clients[1].ctf.ctfid = subject.spawn_generation;
+	CHECK(SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, &subject));
 	sg_bots[0].active = false;
 	CHECK(!SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
@@ -1088,6 +1123,12 @@ static void TestOwnerFailClosedAndDrift(void)
 	sg_host_pmove_error_t pmove_error;
 	sg_host_hook_step_t hook_step;
 	sg_host_collision_trace_t trace;
+	sg_host_collision_pose_t pose;
+	sg_host_law_subject_t subject;
+	sg_host_pmove_substep_t replay_substeps[4];
+	sg_host_pmove_trace_t replay_traces[8];
+	sg_host_pmove_replay_workspace_t replay_workspace;
+	sg_host_pmove_replay_t replay;
 	vec3_t velocity;
 	int rope_length = -1;
 	const float start[3] = { 0.0f, 0.0f, 0.0f };
@@ -1147,6 +1188,39 @@ static void TestOwnerFailClosedAndDrift(void)
 		SG_HOST_MASK_PLAYER_SOLID, &trace);
 	CHECK(result.status == SG_HOST_LAW_OK && trace.fraction == 1.0f &&
 		runtime_last_passent == &runtime_edicts[1]);
+	result = SG_HostLawProductionRead(&view);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		memcmp(view.bsp_identity.bytes, test_world.content_identity.bytes,
+			sizeof(view.bsp_identity.bytes)) == 0);
+	result = SG_HostLawProductionSubject(1U, &subject);
+	CHECK(result.status == SG_HOST_LAW_OK && subject.client_id == 1U &&
+		subject.spawn_generation == UINT64_C(0x1001));
+	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+		SG_HOST_LAW_OK);
+	CHECK(SG_HostLawProductionSubjectClassifyPose(&subject, start,
+		SG_RUNE_STANCE_STANDING, &pose).status == SG_HOST_LAW_OK);
+	CHECK(pose.valid && !pose.supported);
+	memset(&replay_workspace, 0, sizeof(replay_workspace));
+	replay_workspace.substeps = replay_substeps;
+	replay_workspace.substep_capacity = 4U;
+	replay_workspace.traces = replay_traces;
+	replay_workspace.trace_capacity = 8U;
+	pmove_request.command.msec = (byte)SG_HOST_ENGINE_FRAME_MS;
+	result = SG_HostLawProductionReplayFrame(&subject, &pmove_request,
+		&replay_workspace, &replay, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE && replay.substep_count == 4U &&
+		replay.trace_count == 4U);
+	runtime_clients[1].ctf.ctfid++;
+	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+		SG_HOST_LAW_EVALUATION_FAILED);
+	result = SG_HostLawProductionSubjectTrace(&subject, start, NULL, NULL, end,
+		SG_HOST_MASK_PLAYER_SOLID, &trace);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+	runtime_clients[1].ctf.ctfid = subject.spawn_generation;
+	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+		SG_HOST_LAW_OK);
+	pmove_request.command.msec = 25U;
 
 	runtime_edicts[2].inuse = true;
 	runtime_edicts[2].s.number = 2;
@@ -1205,10 +1279,18 @@ static void TestOwnerFailClosedAndDrift(void)
 	SG_HostLawProductionReset();
 	CHECK(SG_HostLawProductionPublication() == NULL &&
 		SG_HostLawProductionStaticPublication() == NULL);
+	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+		SG_HOST_LAW_HOST_UNAVAILABLE);
+	runtime_clients[1].ctf.ctfid++;
 	result = SG_HostLawProductionBeginLevel("packed_map");
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		SG_HostLawProductionPublication() != NULL &&
 		SG_HostLawProductionStaticPublication() != NULL);
+	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+		SG_HOST_LAW_EVALUATION_FAILED);
+	result = SG_HostLawProductionSubject(1U, &subject);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		subject.spawn_generation == runtime_clients[1].ctf.ctfid);
 	SG_HostLawProductionReset();
 	ClearRuntimeBot();
 	gi.trace = NULL;

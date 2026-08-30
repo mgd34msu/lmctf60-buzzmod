@@ -141,6 +141,104 @@ sg_host_law_result_t SG_HostLawProductionPmove(uint32_t subject_index,
 		subject_index, request, result_out, error_out);
 }
 
+sg_host_law_result_t SG_HostLawProductionRead(sg_host_law_view_t *view_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationRead(sg_host_law_owner.production, view_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubject(uint32_t subject_index,
+	sg_host_law_subject_t *subject_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerSubject(sg_host_law_owner.production,
+		subject_index, subject_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectCurrent(
+	const sg_host_law_subject_t *subject)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerSubjectCurrent(
+		sg_host_law_owner.production, subject);
+}
+
+sg_host_law_result_t SG_HostLawProductionReplayFrame(
+	const sg_host_law_subject_t *subject,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerReplayFrame(sg_host_law_owner.production,
+		subject, request, workspace, replay_out, error_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectTrace(
+	const sg_host_law_subject_t *subject, const float start[3],
+	const float mins[3], const float maxs[3], const float end[3],
+	sg_host_collision_contents_t mask,
+	sg_host_collision_trace_t *trace_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerSubjectTrace(
+		sg_host_law_owner.production, subject, start, mins, maxs, end, mask,
+		trace_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectPointContents(
+	const sg_host_law_subject_t *subject, const float point[3],
+	sg_host_collision_contents_t *contents_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerSubjectPointContents(
+		sg_host_law_owner.production, subject, point, contents_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectClassifyPose(
+	const sg_host_law_subject_t *subject, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerSubjectClassifyPose(
+		sg_host_law_owner.production, subject, origin, stance, pose_out);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectTransition(
+	const sg_host_law_subject_t *subject, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerSubjectTransition(
+		sg_host_law_owner.production, subject, start, end, stance,
+		transition_out);
+}
+
 sg_host_law_result_t SG_HostLawProductionHookFire(uint32_t subject_index,
 	uint32_t hook_index, sg_host_hook_step_t *step_out)
 {
