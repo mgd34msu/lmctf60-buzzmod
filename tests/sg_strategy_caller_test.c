@@ -358,6 +358,9 @@ typedef struct runtime_fixture_s
 	runtime_target_record_t records[SG_STRATEGY_CALLER_MAX_BINDINGS];
 	uint16_t count;
 	int forced_view_index;
+	uint32_t acquired;
+	uint32_t released;
+	uint32_t releases[SG_STRATEGY_CALLER_MAX_BINDINGS];
 } runtime_fixture_t;
 
 static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
@@ -481,10 +484,35 @@ static int RuntimeAuthority(void *context,
 		    record->binding.execution_field !=
 				record->semantic_execution_field)
 			return 0;
+		runtime->acquired++;
 		*binding_out = record->binding;
 		return 1;
 	}
 	return 0;
+}
+
+static void RuntimeRelease(void *context, const void *accepted_view)
+{
+	runtime_fixture_t *runtime = context;
+	uint16_t index;
+
+	if (!runtime || !accepted_view)
+		return;
+	for (index = 0U; index < runtime->count; index++)
+		if (accepted_view == &runtime->records[index])
+		{
+			runtime->released++;
+			runtime->releases[index]++;
+			return;
+		}
+}
+
+static void CountRelease(void *context, const void *accepted_view)
+{
+	uint32_t *count = context;
+
+	if (count && accepted_view)
+		(*count)++;
 }
 
 static void TestQueuedPlanAdvancesAcrossGoals(void)
@@ -516,6 +544,8 @@ static void TestQueuedPlanAdvancesAcrossGoals(void)
 	CHECK(output.execution_field == armor_field);
 	plan_id = output.plan_id;
 	history = caller.reducer.history_sequence;
+	plan = Plan(&fixture, 10U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
 	plan.bindings[1].execution_field = refreshed_armor_field;
 	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 115U,
 		SG_STRATEGY_BLOCK_NONE, &output));
@@ -660,14 +690,23 @@ static void TestLowerAuthorityCannotReleaseHumanPlan(void)
 	sg_strategy_caller_output_t output;
 	sg_strategy_caller_plan_t autonomous;
 	sg_strategy_caller_plan_t human;
+	sg_strategy_caller_authority_t autonomous_authority;
+	sg_strategy_caller_authority_t human_authority;
 	uint64_t human_plan_id;
 	uint64_t history;
+	uint32_t ignored_releases = 0U;
+	uint16_t ignored_binding_count;
 
 	InitFixture(&fixture);
 	autonomous = Plan(&fixture, 30U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
 		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	autonomous_authority = autonomous.authority;
 	human = Plan(&fixture, 31U, SG_STRATEGY_AUTHORITY_HUMAN,
 		SG_STRATEGY_PRINCIPAL_HUMAN, 7U);
+	human_authority = human.authority;
+	autonomous.release_view = CountRelease;
+	autonomous.release_context = &ignored_releases;
+	ignored_binding_count = autonomous.binding_count;
 	CHECK(SG_StrategyCallerInit(&caller));
 	CHECK(SG_StrategyCallerSubmit(&caller, &human, 1U, 100U,
 		SG_STRATEGY_BLOCK_NONE, &output));
@@ -681,17 +720,20 @@ static void TestLowerAuthorityCannotReleaseHumanPlan(void)
 		SG_STRATEGY_PRINCIPAL_HUMAN);
 	CHECK(caller.reducer.authority.principal.id == 7U);
 	CHECK(caller.reducer.history_sequence == history);
-	CHECK(!SG_StrategyCallerCancel(&caller, &autonomous.authority, 1U,
+	CHECK(ignored_releases == ignored_binding_count);
+	CHECK(!SG_StrategyCallerCancel(&caller, &autonomous_authority, 1U,
 		120U, &output));
-	CHECK(!SG_StrategyCallerRelease(&caller, &autonomous.authority, 1U,
+	CHECK(!SG_StrategyCallerRelease(&caller, &autonomous_authority, 1U,
 		120U, &output));
-	CHECK(SG_StrategyCallerCancel(&caller, &human.authority, 1U, 120U,
+	CHECK(SG_StrategyCallerCancel(&caller, &human_authority, 1U, 120U,
 		&output));
 	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_CANCELLED);
 	CHECK(caller.reducer.cancelled == 1U);
-	CHECK(SG_StrategyCallerRelease(&caller, &human.authority, 1U, 120U,
+	CHECK(SG_StrategyCallerRelease(&caller, &human_authority, 1U, 120U,
 		&output));
 	CHECK(caller.reducer.authority.principal.kind == SG_STRATEGY_PRINCIPAL_NONE);
+	autonomous = Plan(&fixture, 30U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
 	CHECK(SG_StrategyCallerSubmit(&caller, &autonomous, 1U, 130U,
 		SG_STRATEGY_BLOCK_NONE, &output));
 	CHECK(caller.reducer.authority.rank == SG_STRATEGY_AUTHORITY_AUTONOMOUS);
@@ -710,17 +752,22 @@ static void TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider(void)
 		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
 	request = RuntimeRequest(&plan);
 	InitRuntimeFixture(&runtime, &plan);
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
+	memset(&resolved, 0, sizeof(resolved));
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
 	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime);
+		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
 	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
 	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
 	CHECK(resolved.bindings[0].snapshot == &fixture.snapshot);
+	SG_StrategyCallerPlanDiscard(&resolved);
+	CHECK(runtime.acquired == 4U);
+	CHECK(runtime.released == 4U);
 	runtime.records[2].binding.destination.value.flag.location =
 		SG_DESTINATION_FLAG_HOME;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(resolved.commitment_id == 0U);
 	runtime.records[2].binding.destination.value.flag.location =
 		SG_DESTINATION_FLAG_CURRENT;
 	runtime.records[0].binding.commitment_id++;
@@ -734,7 +781,7 @@ static void TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider(void)
 	runtime.records[0].binding.role--;
 	runtime.records[0].binding.execution_field = fallback_field;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
 }
 
@@ -751,8 +798,9 @@ static void TestRuntimeAuthorityRejectsSameKindFieldViewSwap(void)
 		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
 	request = RuntimeRequest(&plan);
 	InitRuntimeFixture(&runtime, &plan);
+	memset(&resolved, 0, sizeof(resolved));
 	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime);
+		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
 	/* A malicious locator can nominate HOME's opaque field view and make every
 	 * returned target/terminal/field/guidance echo look like CURRENT.  The
 	 * destination authority still rejects it because the accepted view owns
@@ -772,7 +820,64 @@ static void TestRuntimeAuthorityRejectsSameKindFieldViewSwap(void)
 	runtime.forced_view_index = 3;
 	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
 	runtime.forced_view_index = -1;
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
+}
+
+static void TestRuntimeResolutionRollsBackAndCallerReleasesViews(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_runtime_plan_request_t request;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_output_t output;
+	runtime_fixture_t runtime;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 42U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	InitRuntimeFixture(&runtime, &source);
+	memset(&resolved, 0, sizeof(resolved));
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
+	runtime.records[2].binding.role++;
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(runtime.acquired == 2U);
+	CHECK(runtime.released == 2U);
+	runtime.records[2].binding.role--;
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(SG_StrategyCallerSubmit(&caller, &resolved, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(runtime.acquired == 6U);
+	CHECK(runtime.released == 2U);
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(SG_StrategyCallerSubmit(&caller, &resolved, 1U, 110U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(runtime.acquired == 10U);
+	CHECK(runtime.released == 6U);
+	CHECK(SG_StrategyCallerRelease(&caller, &source.authority, 1U, 120U,
+		&output));
+	CHECK(runtime.released == 10U);
+	SG_StrategyCallerDestroy(&caller);
+	CHECK(runtime.released == 10U);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+}
+
+static void TestRuntimeProviderRequiresReleaseOwner(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t plan;
+	runtime_fixture_t runtime;
+
+	InitFixture(&fixture);
+	plan = Plan(&fixture, 43U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	InitRuntimeFixture(&runtime, &plan);
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime, NULL, NULL);
 	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
 }
 
@@ -786,6 +891,8 @@ int main(void)
 	TestLowerAuthorityCannotReleaseHumanPlan();
 	TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider();
 	TestRuntimeAuthorityRejectsSameKindFieldViewSwap();
+	TestRuntimeResolutionRollsBackAndCallerReleasesViews();
+	TestRuntimeProviderRequiresReleaseOwner();
 	if (failures)
 	{
 		fprintf(stderr, "sg_strategy_caller_test: %d failure(s)\n", failures);

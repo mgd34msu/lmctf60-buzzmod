@@ -6,6 +6,8 @@ static sg_strategy_runtime_target_locator_fn sg_strategy_runtime_locator;
 static void *sg_strategy_runtime_locator_context;
 static sg_strategy_runtime_target_authority_fn sg_strategy_runtime_authority;
 static void *sg_strategy_runtime_authority_context;
+static sg_strategy_runtime_target_release_fn sg_strategy_runtime_release_view;
+static void *sg_strategy_runtime_release_context;
 
 static int RuntimeAuthorityValid(
 	const sg_strategy_caller_authority_t *authority)
@@ -220,18 +222,33 @@ static int RuntimeRequestCompile(const sg_strategy_runtime_plan_request_t *reque
 
 void SG_StrategyRuntimeTargetProviderSet(
 	sg_strategy_runtime_target_locator_fn locator, void *locator_context,
-	sg_strategy_runtime_target_authority_fn authority, void *authority_context)
+	sg_strategy_runtime_target_authority_fn authority, void *authority_context,
+	sg_strategy_runtime_target_release_fn release_view,
+	void *release_context)
 {
+	if (!locator || !authority || !release_view)
+	{
+		sg_strategy_runtime_locator = NULL;
+		sg_strategy_runtime_locator_context = NULL;
+		sg_strategy_runtime_authority = NULL;
+		sg_strategy_runtime_authority_context = NULL;
+		sg_strategy_runtime_release_view = NULL;
+		sg_strategy_runtime_release_context = NULL;
+		return;
+	}
 	sg_strategy_runtime_locator = locator;
 	sg_strategy_runtime_locator_context = locator_context;
 	sg_strategy_runtime_authority = authority;
 	sg_strategy_runtime_authority_context = authority_context;
+	sg_strategy_runtime_release_view = release_view;
+	sg_strategy_runtime_release_context = release_context;
 }
 
 int SG_StrategyRuntimeTargetProviderAvailable(void)
 {
 	return sg_strategy_runtime_locator != NULL &&
-		sg_strategy_runtime_authority != NULL;
+		sg_strategy_runtime_authority != NULL &&
+		sg_strategy_runtime_release_view != NULL;
 }
 
 int SG_StrategyRuntimePlanResolve(
@@ -243,7 +260,10 @@ int SG_StrategyRuntimePlanResolve(
 	uint16_t goal_index;
 	uint16_t binding_index = 0U;
 
-	if (!request || !plan_out || !SG_StrategyRuntimeTargetProviderAvailable() ||
+	if (!plan_out || plan_out->binding_count != 0U || plan_out->release_view ||
+	    plan_out->release_context)
+		return 0;
+	if (!request || !SG_StrategyRuntimeTargetProviderAvailable() ||
 	    !RuntimeRequestCompile(request, &compiled))
 		return 0;
 	memset(&candidate, 0, sizeof(candidate));
@@ -251,6 +271,8 @@ int SG_StrategyRuntimePlanResolve(
 	candidate.authority = request->authority;
 	candidate.spec = request->spec;
 	candidate.binding_count = request->execution_count;
+	candidate.release_view = sg_strategy_runtime_release_view;
+	candidate.release_context = sg_strategy_runtime_release_context;
 	for (goal_index = 0U; goal_index < compiled.goal_count; goal_index++)
 	{
 		const sg_strategy_goal_t *goal = &compiled.goals[goal_index];
@@ -263,11 +285,12 @@ int SG_StrategyRuntimePlanResolve(
 			sg_strategy_runtime_target_request_t target;
 			sg_strategy_runtime_target_view_t view;
 			sg_strategy_caller_target_binding_t binding;
+			int authority_accepted;
 
 			if (binding_index >= candidate.binding_count ||
 			    !RuntimeExecutionFor(request, goal->id,
 				goal->choices[choice_index].id, &execution))
-				return 0;
+				goto reject;
 			memset(&target, 0, sizeof(target));
 			target.commitment_id = request->commitment_id;
 			target.localized_player = request->localized_player;
@@ -280,18 +303,31 @@ int SG_StrategyRuntimePlanResolve(
 			memset(&binding, 0, sizeof(binding));
 			if (!sg_strategy_runtime_locator(
 				sg_strategy_runtime_locator_context, &target, &view) ||
-			    !view.opaque ||
-			    !sg_strategy_runtime_authority(
+			    !view.opaque)
+				goto reject;
+			authority_accepted = sg_strategy_runtime_authority(
 				sg_strategy_runtime_authority_context, &target, &view,
-				&binding) ||
+				&binding);
+			if (!authority_accepted ||
 			    !RuntimeBindingAccepted(&target, &view, &binding))
-				return 0;
+			{
+				if (authority_accepted)
+					sg_strategy_runtime_release_view(
+						sg_strategy_runtime_release_context,
+						view.opaque);
+				goto reject;
+			}
 			candidate.bindings[binding_index] = binding;
 			binding_index++;
 		}
 	}
 	if (binding_index != candidate.binding_count)
-		return 0;
+		goto reject;
 	*plan_out = candidate;
 	return 1;
+
+reject:
+	candidate.binding_count = binding_index;
+	SG_StrategyCallerPlanDiscard(&candidate);
+	return 0;
 }

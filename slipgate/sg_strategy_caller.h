@@ -53,6 +53,12 @@ typedef struct sg_strategy_caller_target_binding_s
 	uint64_t valid_until_ms;
 } sg_strategy_caller_target_binding_t;
 
+/* The runtime owner leases each accepted opaque view to a resolved plan.
+ * Release is expressed in terms of that capability: the strategy caller never
+ * dereferences the opaque view or reconstructs a field-service handle from it. */
+typedef void (*sg_strategy_caller_view_release_fn)(void *context,
+	const void *accepted_view);
+
 /* Callers submit an actual immutable, potentially queued plan.  plan_id is
  * assigned by the caller, so providers must leave spec.plan_id as zero. */
 typedef struct sg_strategy_caller_plan_s
@@ -62,6 +68,8 @@ typedef struct sg_strategy_caller_plan_s
 	sg_strategy_plan_spec_t spec;
 	uint16_t binding_count;
 	uint16_t reserved;
+	sg_strategy_caller_view_release_fn release_view;
+	void *release_context;
 	sg_strategy_caller_target_binding_t
 		bindings[SG_STRATEGY_CALLER_MAX_BINDINGS];
 } sg_strategy_caller_plan_t;
@@ -98,10 +106,22 @@ typedef struct sg_strategy_caller_output_s
 
 int SG_StrategyCallerInit(sg_strategy_caller_t *caller);
 
-/* A lower authority proposal only refreshes/pulses the retained plan.  It
- * cannot issue cancellation or release on behalf of the current principal. */
+/* Discard an unsubmitted resolved plan or retire a caller at an owner
+ * boundary.  Both operations release every accepted view before clearing the
+ * borrowed pointers.  Destroy is safe on zero-initialized caller storage. */
+void SG_StrategyCallerPlanDiscard(sg_strategy_caller_plan_t *plan);
+void SG_StrategyCallerDestroy(sg_strategy_caller_t *caller);
+/* Emergency recovery for a host that reports a level change only after the
+ * registered owner storage is already gone.  It clears dangling leases
+ * without invoking their now-invalid callback. */
+void SG_StrategyCallerOwnerLost(sg_strategy_caller_t *caller);
+
+/* Submit consumes and clears the input plan on success.  It either retains the
+ * leases or releases them when a lower authority proposal only pulses the
+ * existing plan.  Failure leaves the input untouched for the submitter to
+ * discard.  The input must not alias the caller's retained plan. */
 int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
-	const sg_strategy_caller_plan_t *plan, uint8_t alive, uint64_t at_ms,
+	sg_strategy_caller_plan_t *plan, uint8_t alive, uint64_t at_ms,
 	sg_strategy_tactical_block_reason_t block_reason,
 	sg_strategy_caller_output_t *out);
 
