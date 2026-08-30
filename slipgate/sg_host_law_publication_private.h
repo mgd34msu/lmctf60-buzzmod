@@ -45,6 +45,37 @@ sg_host_law_result_t SG_HostLawPublicationOwnerPmove(
 	const sg_host_law_publication_t *publication, uint32_t subject_index,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubject(
+	const sg_host_law_publication_t *publication, uint32_t subject_index,
+	sg_host_engine_subject_identity_t *subject_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectCurrent(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject);
+sg_host_law_result_t SG_HostLawPublicationOwnerReplayFrame(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectTrace(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject,
+	const float start[3], const float mins[3], const float maxs[3],
+	const float end[3], sg_host_collision_contents_t mask,
+	sg_host_collision_trace_t *trace_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectPointContents(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject, const float point[3],
+	sg_host_collision_contents_t *contents_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectClassifyPose(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectTransition(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out);
 sg_host_law_result_t SG_HostLawPublicationOwnerEngineTrace(
 	const sg_host_law_publication_t *publication, uint32_t subject_index,
 	const float start[3], const float mins[3], const float maxs[3],

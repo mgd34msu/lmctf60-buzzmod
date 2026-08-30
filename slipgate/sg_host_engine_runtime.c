@@ -41,6 +41,7 @@ typedef struct sg_host_engine_subject_s
 	uint32_t index;
 	const gclient_t *client;
 	int number;
+	uint64_t spawn_generation;
 } sg_host_engine_subject_t;
 
 typedef struct sg_host_engine_runtime_scope_s
@@ -49,6 +50,13 @@ typedef struct sg_host_engine_runtime_scope_s
 	sg_host_engine_subject_t subject;
 	int collision_failed;
 	int trace_mask;
+	const pmove_t *pmove;
+	sg_host_pmove_trace_t *traces;
+	size_t trace_capacity;
+	uint32_t substep;
+	uint64_t trace_count;
+	uint64_t collision_trace_count;
+	int trace_capacity_failed;
 } sg_host_engine_runtime_scope_t;
 
 static sg_host_engine_runtime_scope_t *sg_host_engine_runtime_scope;
@@ -209,6 +217,8 @@ static int RuntimeSubjectCurrent(const sg_host_engine_runtime_t *runtime,
 		current->client->pers.connected && current->classname &&
 		strcmp(current->classname, "player") == 0 &&
 		current->s.number == subject->number && current->client == subject->client &&
+		current->client->ctf.ctfid == subject->spawn_generation &&
+		subject->spawn_generation != 0U &&
 		SG_OwnsBot(current);
 }
 
@@ -226,13 +236,50 @@ static int RuntimeBotSubject(const sg_host_engine_runtime_t *runtime,
 	if (!subject->inuse || !subject->client ||
 		!subject->client->pers.connected || !subject->classname ||
 		strcmp(subject->classname, "player") != 0 || subject->s.number <= 0 ||
-		(uint32_t)subject->s.number != subject_index || !SG_OwnsBot(subject))
+		(uint32_t)subject->s.number != subject_index ||
+		subject->client->ctf.ctfid == 0U || !SG_OwnsBot(subject))
 		return 0;
 	subject_out->entity = subject;
 	subject_out->index = subject_index;
 	subject_out->client = subject->client;
 	subject_out->number = subject->s.number;
+	subject_out->spawn_generation = subject->client->ctf.ctfid;
 	return RuntimeSubjectCurrent(runtime, subject_out);
+}
+
+static int RuntimeExactBotSubject(const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity,
+	sg_host_engine_subject_t *subject_out)
+{
+	return identity && identity->reserved == 0U &&
+		identity->spawn_generation != 0U &&
+		RuntimeBotSubject(runtime, identity->client_id, subject_out) &&
+		subject_out->spawn_generation == identity->spawn_generation;
+}
+
+int SG_HostEngineRuntimeOwnerSubject(
+	const sg_host_engine_runtime_t *runtime, uint32_t subject_index,
+	sg_host_engine_subject_identity_t *subject_out)
+{
+	sg_host_engine_subject_t subject;
+
+	if (subject_out)
+		memset(subject_out, 0, sizeof(*subject_out));
+	if (!subject_out || !RuntimeBotSubject(runtime, subject_index, &subject))
+		return 0;
+	subject_out->client_id = subject.index;
+	subject_out->spawn_generation = subject.spawn_generation;
+	return RuntimeSubjectCurrent(runtime, &subject);
+}
+
+int SG_HostEngineRuntimeOwnerSubjectCurrent(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity)
+{
+	sg_host_engine_subject_t subject;
+
+	return RuntimeExactBotSubject(runtime, identity, &subject) &&
+		RuntimeSubjectCurrent(runtime, &subject);
 }
 
 sg_host_engine_runtime_status_t SG_HostEngineRuntimeBegin(
@@ -631,12 +678,175 @@ static int RuntimePointContents(const sg_host_engine_runtime_t *runtime,
 	return RuntimeSubjectCurrent(runtime, subject);
 }
 
+int SG_HostEngineRuntimeOwnerTrace(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity,
+	const float start[3], const float mins[3], const float maxs[3],
+	const float end[3], sg_host_collision_contents_t mask,
+	sg_host_collision_trace_t *trace_out)
+{
+	sg_host_engine_subject_t subject;
+	float start_copy[3];
+	float mins_copy[3];
+	float maxs_copy[3];
+	float end_copy[3];
+	trace_t trace;
+
+	if (!RuntimeExactBotSubject(runtime, identity, &subject) ||
+		!TraceArgumentsValid(start, mins, maxs, end) || !trace_out)
+		return 0;
+	memcpy(start_copy, start, sizeof(start_copy));
+	memcpy(end_copy, end, sizeof(end_copy));
+	if (mins)
+		memcpy(mins_copy, mins, sizeof(mins_copy));
+	if (maxs)
+		memcpy(maxs_copy, maxs, sizeof(maxs_copy));
+	trace = runtime->trace(start_copy, mins ? mins_copy : NULL,
+		maxs ? maxs_copy : NULL, end_copy, subject.entity, (int)mask);
+	return RuntimeSubjectCurrent(runtime, &subject) &&
+		TraceConvert(&trace, trace_out);
+}
+
+int SG_HostEngineRuntimeOwnerPointContents(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity, const float point[3],
+	sg_host_collision_contents_t *contents_out)
+{
+	sg_host_engine_subject_t subject;
+
+	return RuntimeExactBotSubject(runtime, identity, &subject) &&
+		RuntimePointContents(runtime, &subject, point, contents_out);
+}
+
+static const sg_rune_hull_profile_t *RuntimeStanceHull(
+	const sg_host_engine_runtime_t *runtime, sg_rune_stance_t stance)
+{
+	if (!runtime)
+		return NULL;
+	if (stance == SG_RUNE_STANCE_STANDING)
+		return &runtime->static_identity.standing_hull;
+	if (stance == SG_RUNE_STANCE_CROUCHING)
+		return &runtime->static_identity.crouching_hull;
+	return NULL;
+}
+
+int SG_HostEngineRuntimeOwnerClassifyPose(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	const sg_rune_hull_profile_t *hull;
+	float support_end[3];
+	float sample[3];
+	float view_height;
+	int sample2;
+	int sample1;
+	sg_host_collision_contents_t contents;
+
+	if (!pose_out || !FiniteVector(origin) ||
+		!(hull = RuntimeStanceHull(runtime, stance)) ||
+		!SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, identity))
+		return 0;
+	memset(pose_out, 0, sizeof(*pose_out));
+	pose_out->stance = stance;
+	pose_out->hull = *hull;
+	pose_out->gravity = runtime->static_identity.physics.gravity;
+	pose_out->physics_abi_id = runtime->static_identity.physics_abi_id;
+	if (!SG_HostEngineRuntimeOwnerTrace(runtime, identity, origin,
+		hull->mins.value, hull->maxs.value, origin,
+		SG_HOST_MASK_PLAYER_SOLID, &pose_out->occupancy))
+		return 0;
+	pose_out->valid = !pose_out->occupancy.allsolid;
+	memcpy(support_end, origin, sizeof(support_end));
+	support_end[2] -= SG_HOST_GROUND_PROBE;
+	if (!SG_HostEngineRuntimeOwnerTrace(runtime, identity, origin,
+		hull->mins.value, hull->maxs.value, support_end,
+		SG_HOST_MASK_PLAYER_SOLID, &pose_out->support))
+		return 0;
+	pose_out->supported = pose_out->support.startsolid ||
+		(pose_out->support.fraction < 1.0f &&
+		 pose_out->support.plane.normal[2] >= SG_HOST_GROUND_NORMAL_Z);
+	pose_out->support_is_mover = pose_out->supported &&
+		pose_out->support.instance_id != 0U;
+	view_height = stance == SG_RUNE_STANCE_STANDING ?
+		SG_HOST_STANDING_VIEW_HEIGHT : SG_HOST_CROUCHING_VIEW_HEIGHT;
+	{
+		float sample_height = view_height - hull->mins.value[2];
+
+		if (sample_height < (float)INT_MIN ||
+			sample_height >= (float)INT_MAX)
+			return 0;
+		sample2 = (int)sample_height;
+	}
+	sample1 = sample2 / 2;
+	memcpy(sample, origin, sizeof(sample));
+	sample[2] = origin[2] + hull->mins.value[2] + 1.0f;
+	if (!SG_HostEngineRuntimeOwnerPointContents(runtime, identity, sample,
+		&contents))
+		return 0;
+	if ((contents & SG_HOST_MASK_WATER) != 0U)
+	{
+		pose_out->water_type = contents;
+		pose_out->water_level = 1U;
+		sample[2] = origin[2] + hull->mins.value[2] + (float)sample1;
+		if (!SG_HostEngineRuntimeOwnerPointContents(runtime, identity, sample,
+			&contents))
+			return 0;
+		if ((contents & SG_HOST_MASK_WATER) != 0U)
+		{
+			pose_out->water_level = 2U;
+			sample[2] = origin[2] + hull->mins.value[2] + (float)sample2;
+			if (!SG_HostEngineRuntimeOwnerPointContents(runtime, identity,
+				sample, &contents))
+				return 0;
+			if ((contents & SG_HOST_MASK_WATER) != 0U)
+				pose_out->water_level = 3U;
+		}
+	}
+	return SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, identity);
+}
+
+int SG_HostEngineRuntimeOwnerTransition(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out)
+{
+	const sg_rune_hull_profile_t *hull = RuntimeStanceHull(runtime, stance);
+	sg_host_collision_trace_t source;
+	sg_host_collision_trace_t destination;
+
+	if (!hull || !transition_out || !FiniteVector(start) ||
+		!FiniteVector(end))
+		return 0;
+	memset(transition_out, 0, sizeof(*transition_out));
+	if (!SG_HostEngineRuntimeOwnerTrace(runtime, identity, start,
+		hull->mins.value, hull->maxs.value, start,
+		SG_HOST_MASK_PLAYER_SOLID, &source) ||
+		!SG_HostEngineRuntimeOwnerTrace(runtime, identity, end,
+		hull->mins.value, hull->maxs.value, end,
+		SG_HOST_MASK_PLAYER_SOLID, &destination) ||
+		!SG_HostEngineRuntimeOwnerTrace(runtime, identity, start,
+		hull->mins.value, hull->maxs.value, end,
+		SG_HOST_MASK_PLAYER_SOLID, &transition_out->sweep))
+		return 0;
+	transition_out->source_valid = !source.allsolid;
+	transition_out->destination_valid = !destination.allsolid;
+	transition_out->clear = transition_out->source_valid &&
+		transition_out->destination_valid &&
+		!transition_out->sweep.startsolid &&
+		!transition_out->sweep.allsolid &&
+		transition_out->sweep.fraction == 1.0f;
+	return SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, identity);
+}
+
 static trace_t RuntimePmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 	vec3_t end)
 {
 	trace_t trace;
 	sg_host_collision_trace_t host_trace;
 	sg_host_engine_runtime_scope_t *scope = sg_host_engine_runtime_scope;
+	sg_host_pmove_trace_t *record = NULL;
 
 	memset(&trace, 0, sizeof(trace));
 	trace.fraction = 1.0f;
@@ -653,6 +863,32 @@ static trace_t RuntimePmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 		trace.contents = CONTENTS_SOLID;
 		return trace;
 	}
+	if (scope->traces)
+	{
+		if (scope->trace_count >= scope->trace_capacity)
+		{
+			scope->trace_capacity_failed = 1;
+			trace.allsolid = true;
+			trace.startsolid = true;
+			trace.fraction = 0.0f;
+			VectorCopy(start, trace.endpos);
+			trace.contents = CONTENTS_SOLID;
+			return trace;
+		}
+		record = &scope->traces[scope->trace_count];
+		memset(record, 0, sizeof(*record));
+		record->ordinal = scope->trace_count + 1U;
+		record->substep = scope->substep;
+		if (scope->pmove)
+			record->state = scope->pmove->s;
+		memcpy(record->start, start, sizeof(record->start));
+		if (mins)
+			memcpy(record->mins, mins, sizeof(record->mins));
+		if (maxs)
+			memcpy(record->maxs, maxs, sizeof(record->maxs));
+		memcpy(record->end, end, sizeof(record->end));
+	}
+	scope->trace_count++;
 	/* Keep the engine trace object intact inside the private Pmove scope.  In
 	 * particular, `ent` is the engine's authenticated ground/mover identity;
 	 * reconstructing a normalized trace here would turn every support into
@@ -662,12 +898,20 @@ static trace_t RuntimePmoveTrace(vec3_t start, vec3_t mins, vec3_t maxs,
 	if (!TraceConvert(&trace, &host_trace))
 	{
 		scope->collision_failed = 1;
+		scope->collision_trace_count++;
 		memset(&trace, 0, sizeof(trace));
 		trace.fraction = 0.0f;
 		VectorCopy(start, trace.endpos);
 		trace.allsolid = true;
 		trace.startsolid = true;
 		trace.contents = CONTENTS_SOLID;
+	}
+	else
+	{
+		if (record)
+			record->result = host_trace;
+		if (trace.fraction < 1.0f || trace.startsolid || trace.allsolid)
+			scope->collision_trace_count++;
 	}
 	return trace;
 }
@@ -863,11 +1107,261 @@ int SG_HostEngineRuntimePmove(const sg_host_engine_runtime_t *runtime,
 	result_out->water_level = pm.waterlevel;
 	result_out->evaluated_steps = 1U;
 	result_out->elapsed_ms = request->command.msec;
+	result_out->trace_count = scope.trace_count;
+	result_out->collision_trace_count = scope.collision_trace_count;
 	result_out->gravity = (float)effective_gravity;
 	result_out->physics_abi_id = identity->physics_abi_id;
 	result_out->gravity_law_id = HookGravityActive(request) ?
 		SG_HOST_PMOVE_HOOK_LAW_ID : UINT64_C(0);
 	return 1;
+}
+
+int SG_HostEngineRuntimeOwnerReplayFrame(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
+{
+	const sg_host_static_identity_t *static_identity;
+	sg_host_engine_subject_t subject;
+	sg_host_engine_runtime_scope_t scope;
+	pmove_state_t previous;
+	pmove_state_t state;
+	pmove_t pm;
+	short effective_gravity;
+	uint32_t steps;
+	uint32_t step;
+	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
+
+	if (error_out)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	if (replay_out)
+		memset(replay_out, 0, sizeof(*replay_out));
+	if (!runtime || !request || !workspace || !replay_out ||
+		request->state.pm_type != PM_NORMAL)
+		error = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
+	else if (!RuntimeExactBotSubject(runtime, identity, &subject))
+		error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+	else if (sg_host_engine_runtime_scope)
+		error = SG_HOST_PMOVE_ERROR_REENTRANT;
+	else if (runtime->static_identity.physics.substep_ms == 0U ||
+		runtime->static_identity.physics.substep_ms > UCHAR_MAX ||
+		runtime->static_identity.physics.frame_ms == 0U ||
+		runtime->static_identity.physics.frame_ms > UCHAR_MAX ||
+		runtime->static_identity.physics.frame_ms %
+			runtime->static_identity.physics.substep_ms != 0U ||
+		request->command.msec !=
+			(byte)runtime->static_identity.physics.frame_ms)
+		error = SG_HOST_PMOVE_ERROR_UNSUPPORTED_TIMING;
+	else
+	{
+		steps = runtime->static_identity.physics.frame_ms /
+			runtime->static_identity.physics.substep_ms;
+		if (!workspace->substeps || workspace->substep_capacity < steps ||
+			!workspace->traces || workspace->trace_capacity == 0U)
+			error = SG_HOST_PMOVE_ERROR_CAPACITY;
+	}
+	if (error != SG_HOST_PMOVE_ERROR_NONE)
+	{
+		if (error_out)
+			*error_out = error;
+		return 0;
+	}
+	static_identity = &runtime->static_identity;
+	if (!isfinite(static_identity->physics.gravity) ||
+		static_identity->physics.gravity < 0.0f ||
+		static_identity->physics.gravity > (float)SHRT_MAX ||
+		truncf(static_identity->physics.gravity) !=
+			static_identity->physics.gravity)
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_UNSUPPORTED_GRAVITY;
+		return 0;
+	}
+	if (!RequestGravity(request, (short)static_identity->physics.gravity,
+		&effective_gravity))
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
+		return 0;
+	}
+	memset(&scope, 0, sizeof(scope));
+	scope.runtime = runtime;
+	scope.subject = subject;
+	scope.trace_mask = subject.entity->health > 0 ?
+		(int)SG_HOST_MASK_PLAYER_SOLID : MASK_DEADSOLID;
+	scope.traces = workspace->traces;
+	scope.trace_capacity = workspace->trace_capacity;
+	state = request->state;
+	previous = request->previous_state;
+	state.gravity = effective_gravity;
+	memset(&pm, 0, sizeof(pm));
+	pm.s = state;
+	sg_host_engine_runtime_scope = &scope;
+	for (step = 0U; step < steps; step++)
+	{
+		pmove_state_t before_state = state;
+		uint64_t first_trace_ordinal = scope.trace_count + 1U;
+		uint64_t collision_trace_count = scope.collision_trace_count;
+		sg_host_pmove_substep_t *substep = &workspace->substeps[step];
+
+		memset(&pm, 0, sizeof(pm));
+		pm.s = state;
+		pm.cmd = request->command;
+		pm.cmd.msec = (byte)static_identity->physics.substep_ms;
+		pm.snapinitial = memcmp(&previous, &pm.s, sizeof(pm.s)) != 0;
+		pm.trace = RuntimePmoveTrace;
+		pm.pointcontents = RuntimePmoveContents;
+		scope.substep = step;
+		scope.pmove = &pm;
+		if (RuntimeCallbacksCurrent(runtime))
+			runtime->pmove(&pm);
+		scope.pmove = NULL;
+		if (!RuntimeCallbacksCurrent(runtime) ||
+			!RuntimeSubjectCurrent(runtime, &subject))
+		{
+			error = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+			break;
+		}
+		if (scope.trace_capacity_failed)
+		{
+			error = SG_HOST_PMOVE_ERROR_CAPACITY;
+			break;
+		}
+		if (scope.collision_failed)
+		{
+			error = SG_HOST_PMOVE_ERROR_COLLISION;
+			break;
+		}
+		if (!HullMatchesIdentity(static_identity, &pm, effective_gravity))
+		{
+			error = SG_HOST_PMOVE_ERROR_IDENTITY_MISMATCH;
+			break;
+		}
+		memset(substep, 0, sizeof(*substep));
+		substep->before_state = before_state;
+		substep->state = pm.s;
+		for (uint32_t axis = 0U; axis < 3U; axis++)
+		{
+			substep->before_origin[axis] =
+				before_state.origin[axis] * 0.125f;
+			substep->before_velocity[axis] =
+				before_state.velocity[axis] * 0.125f;
+			substep->origin[axis] = pm.s.origin[axis] * 0.125f;
+			substep->velocity[axis] = pm.s.velocity[axis] * 0.125f;
+		}
+		substep->stance = (pm.s.pm_flags & PMF_DUCKED) != 0 ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+		substep->grounded = pm.groundentity != NULL;
+		if (pm.groundentity)
+		{
+			uint32_t ground_index;
+
+			if (!EntityCurrent(pm.groundentity, &ground_index) ||
+				(ground_index != 0U && pm.groundentity->s.modelindex <= 0))
+			{
+				error = SG_HOST_PMOVE_ERROR_COLLISION;
+				break;
+			}
+			substep->support_model_index = ground_index == 0U ?
+				SG_HOST_COLLISION_MODEL_WORLD :
+				(uint32_t)pm.groundentity->s.modelindex;
+			substep->support_instance_id = (uint64_t)ground_index;
+		}
+		substep->water_type = pm.watertype;
+		substep->water_level = pm.waterlevel;
+		substep->step = step;
+		substep->elapsed_ms =
+			(step + 1U) * static_identity->physics.substep_ms;
+		substep->first_trace_ordinal = first_trace_ordinal;
+		substep->trace_count = scope.trace_count -
+			(first_trace_ordinal - 1U);
+		substep->collision_trace_count = scope.collision_trace_count -
+			collision_trace_count;
+		state = pm.s;
+		previous = pm.s;
+	}
+	sg_host_engine_runtime_scope = NULL;
+	if (error != SG_HOST_PMOVE_ERROR_NONE)
+	{
+		if (error_out)
+			*error_out = error;
+		return 0;
+	}
+	memset(&replay_out->result, 0, sizeof(replay_out->result));
+	replay_out->result.state = pm.s;
+	memcpy(replay_out->result.mins, pm.mins,
+		sizeof(replay_out->result.mins));
+	memcpy(replay_out->result.maxs, pm.maxs,
+		sizeof(replay_out->result.maxs));
+	memcpy(replay_out->result.view_angles, pm.viewangles,
+		sizeof(replay_out->result.view_angles));
+	replay_out->result.view_height = pm.viewheight;
+	replay_out->result.grounded = pm.groundentity != NULL;
+	if (pm.groundentity)
+	{
+		uint32_t ground_index;
+
+		if (!EntityCurrent(pm.groundentity, &ground_index) ||
+			(ground_index != 0U && pm.groundentity->s.modelindex <= 0))
+		{
+			if (error_out)
+				*error_out = SG_HOST_PMOVE_ERROR_COLLISION;
+			return 0;
+		}
+		replay_out->result.support_model_index = ground_index == 0U ?
+			SG_HOST_COLLISION_MODEL_WORLD :
+			(uint32_t)pm.groundentity->s.modelindex;
+		replay_out->result.support_instance_id = (uint64_t)ground_index;
+	}
+	if (pm.numtouch < 0 || pm.numtouch > MAXTOUCH)
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_COLLISION;
+		return 0;
+	}
+	replay_out->result.touch_count = (uint32_t)pm.numtouch;
+	for (step = 0U; step < replay_out->result.touch_count; step++)
+	{
+		uint32_t touch_index;
+
+		if (!EntityCurrent(pm.touchents[step], &touch_index))
+		{
+			if (error_out)
+				*error_out = SG_HOST_PMOVE_ERROR_COLLISION;
+			return 0;
+		}
+		replay_out->result.touch_instance_ids[step] = touch_index;
+	}
+	for (step = 0U; step < 3U; step++)
+	{
+		replay_out->result.origin[step] = pm.s.origin[step] * 0.125f;
+		replay_out->result.velocity[step] = pm.s.velocity[step] * 0.125f;
+	}
+	replay_out->result.water_type = pm.watertype;
+	replay_out->result.water_level = pm.waterlevel;
+	replay_out->result.evaluated_steps = steps;
+	replay_out->result.elapsed_ms = static_identity->physics.frame_ms;
+	replay_out->result.trace_count = scope.trace_count;
+	replay_out->result.collision_trace_count = scope.collision_trace_count;
+	replay_out->result.gravity = (float)effective_gravity;
+	replay_out->result.physics_abi_id = static_identity->physics_abi_id;
+	replay_out->result.gravity_law_id = HookGravityActive(request) ?
+		SG_HOST_PMOVE_HOOK_LAW_ID : UINT64_C(0);
+	replay_out->request = *request;
+	replay_out->substeps = workspace->substeps;
+	replay_out->substep_count = steps;
+	replay_out->traces = workspace->traces;
+	replay_out->trace_count = (size_t)scope.trace_count;
+	replay_out->bsp_identity = static_identity->bsp_identity;
+	replay_out->bsp_content_id = 0U;
+	replay_out->physics_abi_id = static_identity->physics_abi_id;
+	replay_out->frame_ms = static_identity->physics.frame_ms;
+	replay_out->substep_ms = static_identity->physics.substep_ms;
+	if (error_out)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	return RuntimeSubjectCurrent(runtime, &subject);
 }
 
 const sg_host_static_identity_t *SG_HostEngineRuntimeStaticIdentity(

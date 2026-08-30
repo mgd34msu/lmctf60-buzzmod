@@ -125,6 +125,9 @@ typedef struct sg_host_pmove_replay_s
 	size_t substep_count;
 	const sg_host_pmove_trace_t *traces;
 	size_t trace_count;
+	/* Exact loader or engine publication identity for the BSP bytes used by
+	 * every collision callback in this replay. */
+	sg_bsp_content_identity_t bsp_identity;
 	uint64_t bsp_content_id;
 	uint64_t physics_abi_id;
 	uint32_t frame_ms;
