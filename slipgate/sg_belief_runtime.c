@@ -457,6 +457,28 @@ static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
 			belief_runtime_provider.snapshot->topology_revision;
 }
 
+static int BeliefRuntimeTrackOrderingIdentityMatches(
+	const belief_runtime_track_t *track, uint8_t audience_team,
+	const sg_belief_life_identity_t *target_life)
+{
+	return track && track->active == 1U && SG_BeliefStateValid(&track->state) &&
+		track->state.audience_team == audience_team &&
+		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life);
+}
+
+static int BeliefRuntimeEvidenceFollowsTrack(
+	const belief_runtime_track_t *track, const sg_belief_evidence_t *evidence)
+{
+	return track && evidence &&
+		evidence->provenance.authenticated_at_ms >=
+			track->state.updated_at_ms &&
+		evidence->observed_at_ms >= track->state.updated_at_ms &&
+		evidence->provenance.evidence_sequence >
+			track->state.last_evidence_sequence &&
+		evidence->valid_until_ms >=
+			evidence->provenance.authenticated_at_ms;
+}
+
 static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
 	size_t required_capacity)
 {
@@ -876,7 +898,8 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	uint64_t sequence;
 	sg_belief_life_identity_t *prepared_issuers = NULL;
 	size_t prepared_issuer_capacity = 0U;
-	int replacement;
+	int ordering_identity_replacement;
+	int fresh_storage;
 	int append_issuer;
 	sg_belief_reduce_result_t result;
 
@@ -926,43 +949,41 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
 	}
-	replacement = !BeliefRuntimeTrackMatches(track,
+	ordering_identity_replacement = !BeliefRuntimeTrackOrderingIdentityMatches(
+		track, adaptation.evidence.provenance.audience_team,
+		&adaptation.evidence.target_life);
+	if (!ordering_identity_replacement &&
+		!BeliefRuntimeEvidenceFollowsTrack(track, &adaptation.evidence))
+	{
+		free(supports);
+		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
+	}
+	fresh_storage = ordering_identity_replacement ||
+		!BeliefRuntimeTrackMatches(track,
 		adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life) ||
 		track->state.target_team != adaptation.evidence.target_team ||
 		BeliefRuntimeTrackSupersededByPublication(track, &life_publication);
 	memset(&candidate, 0, sizeof(candidate));
-	working = replacement ? &candidate : track;
-	if (replacement && !BeliefRuntimeBuildTrack(working, &adaptation.evidence,
+	working = fresh_storage ? &candidate : track;
+	if (fresh_storage && !BeliefRuntimeBuildTrack(working, &adaptation.evidence,
 		adaptation.required_support_capacity))
 	{
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_CAPACITY;
 	}
-	if (!replacement &&
-		(adaptation.evidence.provenance.authenticated_at_ms <
-			working->state.updated_at_ms ||
-		 adaptation.evidence.observed_at_ms < working->state.updated_at_ms ||
-		 adaptation.evidence.provenance.evidence_sequence <=
-			working->state.last_evidence_sequence ||
-		 adaptation.evidence.valid_until_ms <
-			adaptation.evidence.provenance.authenticated_at_ms))
-	{
-		free(supports);
-		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
-	}
 	if (!BeliefRuntimePrepareIssuer(working,
 		&adaptation.evidence.provenance.issuer_life, &append_issuer,
 		&prepared_issuers, &prepared_issuer_capacity))
 	{
-		if (replacement)
+		if (fresh_storage)
 			BeliefRuntimeClearTrack(&candidate);
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_CAPACITY;
 	}
 	if (!BeliefRuntimeTentativeReductionSequence(&sequence))
 	{
-		if (replacement)
+		if (fresh_storage)
 			BeliefRuntimeClearTrack(&candidate);
 		free(prepared_issuers);
 		free(supports);
@@ -983,7 +1004,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		&kernel_count);
 	if (horizon_result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
 	{
-		if (replacement)
+		if (fresh_storage)
 			BeliefRuntimeClearTrack(&candidate);
 		free(prepared_issuers);
 		free(supports);
@@ -1001,7 +1022,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	free(supports);
 	if (result != SG_BELIEF_REDUCE_APPLIED)
 	{
-		if (replacement)
+		if (fresh_storage)
 			BeliefRuntimeClearTrack(&candidate);
 		free(prepared_issuers);
 		return result == SG_BELIEF_REDUCE_CAPACITY ?
@@ -1013,7 +1034,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	BeliefRuntimeCommitIssuer(working,
 		&adaptation.evidence.provenance.issuer_life, append_issuer,
 		prepared_issuers, prepared_issuer_capacity);
-	if (replacement)
+	if (fresh_storage)
 	{
 		BeliefRuntimeClearTrack(track);
 		*track = candidate;
