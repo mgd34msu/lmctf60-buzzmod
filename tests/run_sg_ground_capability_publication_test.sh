@@ -3,16 +3,30 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
-trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
+revision_header_created=0
+trap 'rm -r "$tmp_dir"; if test "$revision_header_created" = 1; then rm -f "$repo_dir/GitRevisionInfo.h"; fi' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
--Wformat=2 -Wcast-qual -Wcast-align'
+-Wformat=2 -Wcast-qual -Wcast-align -DSG_HOST_LAW_TESTING
+-DSG_GROUND_CAPABILITY_TESTING'
 sources='tests/sg_ground_capability_publication_test.c
+tests/sg_ground_capability_publication_phase_fixture.c
 slipgate/sg_ground_capability_publication.c
 slipgate/sg_ground_capability.c
+slipgate/sg_host_law_publication.c
 slipgate/sg_host_pmove.c
 slipgate/sg_host_engine_pmove.c
+slipgate/sg_host_hook_law.c
+slipgate/sg_host_mechanism_law.c
+slipgate/sg_phase_catalog.c
+slipgate/sg_phase_catalog_audit.c
+slipgate/sg_phase_catalog_publication.c
+slipgate/sg_phase_catalog_owner.c
+slipgate/sg_phase_mover_support_provider.c
+slipgate/sg_mechanism_capability.c
+slipgate/sg_mechanism_capability_seal.c
+slipgate/sg_authority_entropy.c
 slipgate/sg_configuration_audit.c
 slipgate/sg_configuration_semantics.c
 slipgate/sg_bsp_completeness_proof.c
@@ -30,11 +44,17 @@ slipgate/sg_host_collision.c
 slipgate/sg_bsp_world.c
 slipgate/sg_rune_model.c'
 owned='tests/sg_ground_capability_publication_test.c
+tests/sg_ground_capability_publication_phase_fixture.c
 slipgate/sg_ground_capability_publication.c'
 isl_cflags=$(pkg-config --cflags isl)
 isl_libs=$(pkg-config --libs isl)
 
 cd "$repo_dir"
+if test ! -r GitRevisionInfo.h
+then
+	make -s GitRevisionInfo.h
+	revision_header_created=1
+fi
 
 build_test()
 {

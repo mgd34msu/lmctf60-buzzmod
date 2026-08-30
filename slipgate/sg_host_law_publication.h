@@ -24,6 +24,7 @@
 #define SG_HOST_LAW_ELEMENT_NONE UINT32_MAX
 
 typedef struct sg_host_law_publication_s sg_host_law_publication_t;
+typedef struct sg_host_law_construction_s sg_host_law_construction_t;
 
 /* Both engine-backed publications carry these exact upstream inputs for the
  * downstream model seal.  They do not claim a complete-model or RUNE
@@ -126,6 +127,38 @@ typedef struct sg_host_law_result_s
 	uint64_t observed_bits;
 } sg_host_law_result_t;
 
+/* Pointer-free facts copied from the handle-owned loader parse.  These are
+ * descriptive metadata only; collision and BSP storage never cross the
+ * construction boundary. */
+typedef struct sg_host_law_construction_geometry_s
+{
+	sg_bsp_content_identity_t bsp_identity;
+	uint64_t bsp_bytes;
+	uint32_t engine_checksum;
+	uint32_t entity_bytes;
+	uint32_t plane_count;
+	uint32_t node_count;
+	uint32_t texinfo_count;
+	uint32_t leaf_count;
+	uint32_t leaf_brush_count;
+	uint32_t model_count;
+	uint32_t brush_count;
+	uint32_t brush_side_count;
+} sg_host_law_construction_geometry_t;
+
+typedef struct sg_host_law_construction_view_s
+{
+	uint32_t version;
+	uint32_t current;
+	uint64_t level_generation;
+	/* This is the complete identity authenticated by the live host at this
+	 * layer: BSP SHA/size/checksum and engine physics.  Downstream entity,
+	 * schema, source-set, and producer identities are deliberately absent. */
+	sg_host_static_identity_t host_static_identity;
+	sg_host_law_construction_geometry_t geometry;
+	sg_host_law_view_t laws;
+} sg_host_law_construction_view_t;
+
 sg_host_law_result_t SG_HostLawPublicationRead(
 	const sg_host_law_publication_t *publication,
 	sg_host_law_view_t *view_out);
@@ -153,6 +186,49 @@ sg_host_law_result_t SG_HostLawPublicationPmove(
 	const sg_host_collision_scene_t *scene,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+/* An issued construction handle owns its loader-parsed BSP and sealed law
+ * state.  Consumers never pair it with a raw publication or authority. */
+sg_host_law_result_t SG_HostLawConstructionCurrent(
+	const sg_host_law_construction_t *construction);
+sg_host_law_result_t SG_HostLawConstructionRead(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_construction_view_t *view_out);
+/* Collision operations remain construction-bound so neither an authority nor
+ * its owned BSP arrays can be substituted or mutated by a consumer. */
+sg_host_law_result_t SG_HostLawConstructionCollisionTrace(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float mins[3], const float maxs[3], const float end[3],
+	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out);
+sg_host_law_result_t SG_HostLawConstructionPointContents(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float point[3],
+	sg_host_collision_contents_t *contents_out);
+sg_host_law_result_t SG_HostLawConstructionClassifyPose(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out);
+sg_host_law_result_t SG_HostLawConstructionTransition(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out);
+sg_host_law_result_t SG_HostLawConstructionPmove(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+/* SG_HostPmoveReplayFrame owns the fixed frame/substep loop.  This wrapper
+ * copy-outs its complete authenticated substep and trace chronology without
+ * exposing the captured Pmove callback.  A capacity error is retryable with a
+ * larger caller-owned workspace. */
+sg_host_law_result_t SG_HostLawConstructionReplayFrame(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out);
+void SG_HostLawConstructionDestroy(sg_host_law_construction_t *construction);
 sg_host_law_result_t SG_HostLawPublicationHookPullVelocity(
 	const sg_host_law_publication_t *publication, const vec3_t start,
 	const vec3_t bite, vec3_t velocity, int *rope_length_out);

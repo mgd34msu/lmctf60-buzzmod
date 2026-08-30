@@ -96,6 +96,7 @@ HOST_TEST_BIN = sg_hooks_test.gnu
 HOST_TEST_OBJS = .sg_hooks_test.gnu.o .sg_hooks_under_test.gnu.o
 HOST_TEST_DEPS = $(HOST_TEST_OBJS:.o=.d)
 HOST_LAW_PUBLICATION_TEST = tests/run_sg_host_law_publication_test.sh
+HOST_LAW_RUNTIME_LINK_CHECK = tests/verify_sg_host_law_runtime_link.sh
 ACTION_TEST_BIN = sg_action_test.gnu
 ACTION_TEST_OBJS = .sg_action_test.gnu.o .sg_action_under_test.gnu.o
 ACTION_TEST_DEPS = $(ACTION_TEST_OBJS:.o=.d)
@@ -1335,7 +1336,8 @@ RUNE_PAIR_PREFLIGHT_DEPS = tools/rune_pair_preflight.py tools/runeio.py \
 POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
-.PHONY: all dep host-test action-test compound-test mover-lease-test \
+.PHONY: all dep host-test host-law-runtime-link-check action-test \
+	compound-test mover-lease-test \
 	water-forest-test \
 	povlock-test pov-session-production-test pov-supervisor-test \
 	button-live-test mechanism-timeline-test relay-wall-transaction-test \
@@ -1390,6 +1392,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	compound-swim-oracle-test compound-hook-oracle-test rune-door-scope-test \
 	snapshot-test stripcr clean distclean FORCE
 all: dep $(TARGET)
+host-law-runtime-link-check: dep $(TARGET) $(HOST_LAW_RUNTIME_LINK_CHECK)
+	sh $(HOST_LAW_RUNTIME_LINK_CHECK) $(TARGET)
 FORCE:
 $(REVISION_HEADER): $(REVISION_TEMPLATE) FORCE
 	@echo "Generating $@..."
@@ -1549,7 +1553,9 @@ slipgate/sg_host_law_owner.o: slipgate/sg_host_law_owner.c \
 		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
 		slipgate/sg_identity.h game.h q_shared.h
 slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
-		slipgate/sg_host_law_publication.h slipgate/sg_host_collision.h \
+		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_publication_private.h \
+		slipgate/sg_host_collision.h \
 		slipgate/sg_host_pmove.h slipgate/sg_host_engine_pmove.h \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
@@ -3433,6 +3439,9 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 		tests/sg_host_law_publication_test.c \
 		slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_publication_private.h \
+		slipgate/sg_host_law_construction_offline.c \
+		slipgate/sg_host_law_construction_offline.h \
 		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
 		slipgate/sg_host_engine_pmove.c slipgate/sg_host_engine_pmove.h \
 		slipgate/sg_host_engine_runtime.c \
