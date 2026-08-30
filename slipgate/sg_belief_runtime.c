@@ -466,13 +466,29 @@ static int BeliefRuntimeTrackOrderingIdentityMatches(
 		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life);
 }
 
+static uint64_t BeliefRuntimeTrackTimeWatermark(
+	const belief_runtime_track_t *track)
+{
+	uint64_t watermark;
+
+	if (!track)
+		return 0U;
+	watermark = track->state.updated_at_ms;
+	if (track->view.updated_at_ms > watermark)
+		watermark = track->view.updated_at_ms;
+	return watermark;
+}
+
 static int BeliefRuntimeEvidenceFollowsTrack(
 	const belief_runtime_track_t *track, const sg_belief_evidence_t *evidence)
 {
-	return track && evidence &&
-		evidence->provenance.authenticated_at_ms >=
-			track->state.updated_at_ms &&
-		evidence->observed_at_ms >= track->state.updated_at_ms &&
+	uint64_t watermark;
+
+	if (!track || !evidence)
+		return 0;
+	watermark = BeliefRuntimeTrackTimeWatermark(track);
+	return evidence->provenance.authenticated_at_ms >= watermark &&
+		evidence->observed_at_ms >= watermark &&
 		evidence->provenance.evidence_sequence >
 			track->state.last_evidence_sequence &&
 		evidence->valid_until_ms >=
