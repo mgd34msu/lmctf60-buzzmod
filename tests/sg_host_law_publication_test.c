@@ -877,6 +877,7 @@ static void TestEngineRuntimeOwnerBinding(void)
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error;
 	sg_host_engine_subject_identity_t subject;
+	sg_host_engine_subject_identity_t respawn_subject;
 	sg_host_pmove_state_observation_t state_observation;
 	sg_host_pmove_substep_t replay_substeps[4];
 	sg_host_pmove_trace_t replay_traces[8];
@@ -913,20 +914,41 @@ static void TestEngineRuntimeOwnerBinding(void)
 		subject.spawn_generation == UINT64_C(0x1001));
 	CHECK(SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, &subject));
 	runtime_clients[1].ps.pmove.origin[0] = 80;
+	runtime_clients[1].ps.pmove.origin[2] = 192;
 	runtime_clients[1].ps.pmove.velocity[1] = -24;
 	runtime_edicts[1].s.origin[0] = 10.0f;
+	/* PutClientInServer deliberately publishes the body one unit above the
+	 * network movement origin until the first selected-engine Pmove. */
+	runtime_edicts[1].s.origin[2] = 25.0f;
 	runtime_edicts[1].velocity[1] = -3.0f;
 	CHECK(SG_HostEngineRuntimeOwnerSubjectState(runtime, &subject,
 		&state_observation));
 	CHECK(state_observation.state.origin[0] == 80 &&
 		state_observation.origin[0] == 10.0f &&
+		state_observation.origin[2] == 24.0f &&
 		state_observation.velocity[1] == -3.0f);
-	runtime_edicts[1].s.origin[0] = 10.125f;
+	runtime_clients[1].ctf.ctfid++;
 	CHECK(!SG_HostEngineRuntimeOwnerSubjectState(runtime, &subject,
 		&state_observation));
 	CHECK(state_observation.state.origin[0] == 0 &&
 		state_observation.origin[0] == 0.0f);
-	runtime_edicts[1].s.origin[0] = 10.0f;
+	CHECK(SG_HostEngineRuntimeOwnerSubject(runtime, 1U, &respawn_subject));
+	runtime_clients[1].ps.pmove.origin[2] = 320;
+	runtime_edicts[1].s.origin[2] = 41.0f;
+	CHECK(SG_HostEngineRuntimeOwnerSubjectState(runtime, &respawn_subject,
+		&state_observation));
+	CHECK(state_observation.origin[2] == 40.0f);
+	runtime_clients[1].ps.pmove.pm_type = (pmtype_t)(PM_FREEZE + 1);
+	CHECK(!SG_HostEngineRuntimeOwnerSubjectState(runtime, &respawn_subject,
+		&state_observation));
+	runtime_clients[1].ps.pmove.pm_type = PM_NORMAL;
+	runtime_clients[1].ps.pmove.pm_flags = UINT8_C(0x80);
+	CHECK(!SG_HostEngineRuntimeOwnerSubjectState(runtime, &respawn_subject,
+		&state_observation));
+	runtime_clients[1].ps.pmove.pm_flags = 0U;
+	runtime_clients[1].ctf.ctfid = subject.spawn_generation;
+	runtime_clients[1].ps.pmove.origin[2] = 192;
+	runtime_edicts[1].s.origin[2] = 25.0f;
 	CHECK(SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	CHECK(runtime_last_passent == &runtime_edicts[1]);

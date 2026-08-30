@@ -85,10 +85,13 @@ sg_host_law_result_t SG_HostLawProductionSubjectState(
 	}
 	memset(observation_out, 0, sizeof(*observation_out));
 	observation_out->state = client.ps.pmove;
-	memcpy(observation_out->origin, entity.s.origin,
-		sizeof(observation_out->origin));
-	memcpy(observation_out->velocity, entity.velocity,
-		sizeof(observation_out->velocity));
+	for (int axis = 0; axis < 3; axis++)
+	{
+		observation_out->origin[axis] =
+			observation_out->state.origin[axis] * 0.125f;
+		observation_out->velocity[axis] =
+			observation_out->state.velocity[axis] * 0.125f;
+	}
 	subject_state_calls++;
 	return result;
 }
@@ -172,6 +175,8 @@ static int TestLifeAndMotion(void)
 	entity.client = &client;
 	entity.deadflag = DEAD_NO;
 	entity.s.number = 7;
+	client.ps.pmove.origin[2] = 192;
+	entity.s.origin[2] = 25.0f;
 	sg_bots[0].active = true;
 	sg_bots[0].ent = &entity;
 	CHECK(SG_BotLocalizationProviderSet(&runtime));
@@ -182,7 +187,8 @@ static int TestLifeAndMotion(void)
 	CHECK(captured_observation.kind ==
 		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
 	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
-	CHECK(captured_observation.position[0] == entity.s.origin[0]);
+	CHECK(captured_observation.position[2] == 24.0f);
+	CHECK(captured_observation.position[2] + 1.0f == entity.s.origin[2]);
 	request = PmoveRequest(NULL);
 	result = PmoveResult(0U, 10.0f);
 	SG_BotLocalizationObservePmove(&entity, &request, &result);
@@ -232,12 +238,16 @@ static int TestInvalidationAndSlotReuse(void)
 	sg_host_pmove_result_t result;
 
 	spawn_generation++;
+	client.ps.pmove.origin[2] = 320;
+	entity.s.origin[2] = 41.0f;
 	level.framenum++;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
 	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) != NULL);
 	CHECK(sg_bots[0].localization_subject.spawn_generation == spawn_generation);
 	CHECK(captured_observation.kind ==
 		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
+	CHECK(captured_observation.position[2] == 40.0f);
+	CHECK(captured_observation.position[2] + 1.0f == entity.s.origin[2]);
 	request = PmoveRequest(NULL);
 	result = PmoveResult(0U, 20.0f);
 	SG_BotLocalizationObservePmove(bot_entity, &request, &result);

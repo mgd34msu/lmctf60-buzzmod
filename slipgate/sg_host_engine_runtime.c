@@ -289,6 +289,9 @@ int SG_HostEngineRuntimeOwnerSubjectState(
 {
 	sg_host_engine_subject_t subject;
 	uint32_t axis;
+	const uint32_t pm_flags = PMF_DUCKED | PMF_JUMP_HELD | PMF_ON_GROUND |
+		PMF_TIME_WATERJUMP | PMF_TIME_LAND | PMF_TIME_TELEPORT |
+		PMF_NO_PREDICTION;
 
 	if (observation_out)
 		memset(observation_out, 0, sizeof(*observation_out));
@@ -296,22 +299,26 @@ int SG_HostEngineRuntimeOwnerSubjectState(
 		!RuntimeExactBotSubject(runtime, identity, &subject))
 		return 0;
 	observation_out->state = subject.client->ps.pmove;
+	if (observation_out->state.pm_type < PM_NORMAL ||
+		observation_out->state.pm_type > PM_FREEZE ||
+		((uint32_t)observation_out->state.pm_flags & ~pm_flags) != 0U)
+	{
+		memset(observation_out, 0, sizeof(*observation_out));
+		return 0;
+	}
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		observation_out->origin[axis] =
 			observation_out->state.origin[axis] * 0.125f;
 		observation_out->velocity[axis] =
 			observation_out->state.velocity[axis] * 0.125f;
-		if (!SameFloat(observation_out->origin[axis],
-				subject.entity->s.origin[axis]) ||
-			!SameFloat(observation_out->velocity[axis],
-				subject.entity->velocity[axis]))
-		{
-			memset(observation_out, 0, sizeof(*observation_out));
-			return 0;
-		}
 	}
-	if (!RuntimeSubjectCurrent(runtime, &subject))
+	/* ps.pmove is the selected engine's bit-exact movement authority.  The
+	 * edict body is not: PutClientInServer intentionally places s.origin one
+	 * unit above ps.pmove.origin until the first Pmove. */
+	if (!FiniteVector(observation_out->origin) ||
+		!FiniteVector(observation_out->velocity) ||
+		!RuntimeSubjectCurrent(runtime, &subject))
 	{
 		memset(observation_out, 0, sizeof(*observation_out));
 		return 0;
