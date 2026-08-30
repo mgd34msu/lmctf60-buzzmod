@@ -554,7 +554,11 @@ static int OracleCellRange(const sg_audit_oracle_t *oracle, uint32_t cell,
 	uint32_t *first_out, uint32_t *last_out)
 {
 	uint32_t first = 0U;
-	uint32_t last = oracle->phase_count;
+	uint32_t last;
+
+	if (!oracle || !first_out || !last_out || !oracle->phases)
+		return 0;
+	last = oracle->phase_count;
 
 	while (first < last)
 	{
@@ -671,40 +675,43 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 				goto failure;
 			support_cursor++;
 		}
+		for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count;
+			fact++)
+		{
+			const sg_mechanism_capability_fact_t *record =
+				&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact];
+			uint32_t elapsed;
+			uint32_t frame = source->authority->identity.physics.frame_ms;
+
+			if (record->source_region >= source->semantics->region_count ||
+				record->destination_region >= source->semantics->region_count)
+			{
+				OracleSetError(error_out,
+					SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, fact);
+				goto failure;
+			}
+			if (record->destination_region != region)
+				continue;
+			OracleFillPhase(source, &source->semantics->regions[region], 1,
+				&record->mechanism_id, 1U, &phase);
+			elapsed = OracleTimingSpan(record);
+			if (elapsed > frame)
+				elapsed = frame;
+			if (elapsed == 0U)
+				elapsed = source->authority->identity.physics.substep_ms;
+			phase.order.variant = 3U;
+			phase.elapsed_ms.min_value = (float)elapsed;
+			phase.elapsed_ms.max_value = (float)frame;
+			if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
+				region, error_out))
+				goto failure;
+		}
 	}
 	if (support_cursor != SG_PHASE_SOURCE_PROVIDER(source)->support_count)
 	{
 		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
 			support_cursor);
 		goto failure;
-	}
-	for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count; fact++)
-	{
-		const sg_mechanism_capability_fact_t *record =
-			&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact];
-		sg_rune_phase_basis_t phase;
-		uint32_t elapsed;
-		uint32_t frame = source->authority->identity.physics.frame_ms;
-
-		if (record->source_region >= source->semantics->region_count ||
-			record->destination_region >= source->semantics->region_count)
-		{
-			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, fact);
-			goto failure;
-		}
-		OracleFillPhase(source, &source->semantics->regions[
-			record->destination_region], 1, &record->mechanism_id, 1U, &phase);
-		elapsed = OracleTimingSpan(record);
-		if (elapsed > frame)
-			elapsed = frame;
-		if (elapsed == 0U)
-			elapsed = source->authority->identity.physics.substep_ms;
-		phase.order.variant = 3U;
-		phase.elapsed_ms.min_value = (float)elapsed;
-		phase.elapsed_ms.max_value = (float)frame;
-		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
-			record->destination_region, error_out))
-			goto failure;
 	}
 	if (raw_count > UINT32_MAX)
 	{
@@ -1170,6 +1177,16 @@ static int OracleBuildStanceTransitions(const sg_phase_catalog_source_t *source,
 	sg_phase_catalog_error_t *error_out)
 {
 	uint32_t overlap_index;
+
+	if (!oracle->phases)
+	{
+		if (oracle->phase_count != 0U)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		return 1;
+	}
 
 	for (overlap_index = 0U;
 		overlap_index < source->configuration->stance_overlap_count;
