@@ -1005,6 +1005,222 @@ static void TestRuntimeAudienceClientWatermarkResetStartsUniverse(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static void TestRuntimeAudienceTargetSequenceSurvivesIssuerRetirement(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t issuer40;
+	sg_belief_life_identity_t target30;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	issuer40 = Life(4U, 40U);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 5U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SG_BeliefRuntimeRetireLife(&issuer40);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	SightObservation(&observation, 4U, 200U, 30U);
+	observation.authentication.issuer_life = Life(4U, 41U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceSurvivesProviderReplacement(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 5U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	SightObservation(&observation, 4U, 200U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceSurvivesFrameRegression(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 5U, 500U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(1U, 400U) ==
+		SG_BELIEF_RUNTIME_FRAME_REJECTED);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	SightObservation(&observation, 4U, 600U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceResetsForNewGeneration(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target31;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target31 = Life(3U, 31U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 5U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SightObservation(&observation, 4U, 200U, 31U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target31);
+	CHECK(view && view->updated_at_ms == 200U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceStaysAudienceScoped(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 5U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SightObservation(&observation, 4U, 200U, 30U);
+	observation.authentication.issuer_team = 2U;
+	observation.authentication.audience_team = 2U;
+	observation.target_team = 1U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(2U, &target30);
+	CHECK(view && view->updated_at_ms == 200U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceResetStartsUniverse(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 5U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SG_BeliefRuntimeReset();
+	SightObservation(&observation, 4U, 200U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 200U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceRejectedObserveDoesNotAdvance(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 3U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SightObservation(&observation, 5U, 150U, 30U);
+	observation.authentication.authenticated_at_ms = 200U;
+	observation.authentication.valid_until_ms = 199U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	SightObservation(&observation, 4U, 200U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 200U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeAudienceTargetSequenceFailureDoesNotAdvance(void)
+{
+	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
+		SG_BELIEF_HORIZON_ALLOCATION_FAILED,
+		SG_BELIEF_HORIZON_OVERFLOW
+	};
+	size_t index;
+
+	for (index = 0U; index < sizeof(failures_to_inject) /
+		sizeof(failures_to_inject[0]); index++)
+	{
+		runtime_fixture_t fixture;
+		sg_belief_runtime_provider_t provider;
+		sg_perception_observation_t observation;
+		sg_belief_life_identity_t target30;
+		const sg_belief_runtime_view_t *view;
+
+		FixtureInit(&fixture);
+		provider = Provider(&fixture, 1U, 0.5f);
+		target30 = Life(3U, 30U);
+		CHECK(SG_BeliefRuntimeProviderSet(&provider));
+		SightObservation(&observation, 3U, 100U, 30U);
+		CHECK(SG_BeliefRuntimeObserve(&observation) ==
+			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+		SightObservation(&observation, 5U, 150U, 30U);
+		observation.authentication.authenticated_at_ms = 200U;
+		observation.authentication.valid_until_ms = 300U;
+		SG_BeliefTestHorizonScopeFailNext(failures_to_inject[index]);
+		CHECK(SG_BeliefRuntimeObserve(&observation) ==
+			(failures_to_inject[index] ==
+			 SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
+				SG_BELIEF_RUNTIME_OBSERVE_CAPACITY :
+				SG_BELIEF_RUNTIME_OBSERVE_OVERFLOW));
+		SightObservation(&observation, 4U, 200U, 30U);
+		CHECK(SG_BeliefRuntimeObserve(&observation) ==
+			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+		view = SG_BeliefRuntimeView(1U, &target30);
+		CHECK(view && view->updated_at_ms == 200U);
+		CHECK(SG_BeliefRuntimeProviderSet(NULL));
+	}
+}
+
 static void TestRuntimeFrameIsAtomic(void)
 {
 	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
@@ -1479,6 +1695,14 @@ int main(void)
 	TestRuntimeAudienceClientWatermarkFailureDoesNotAdvance();
 	TestRuntimeAudienceClientWatermarkSurvivesProviderReplacement();
 	TestRuntimeAudienceClientWatermarkResetStartsUniverse();
+	TestRuntimeAudienceTargetSequenceSurvivesIssuerRetirement();
+	TestRuntimeAudienceTargetSequenceSurvivesProviderReplacement();
+	TestRuntimeAudienceTargetSequenceSurvivesFrameRegression();
+	TestRuntimeAudienceTargetSequenceResetsForNewGeneration();
+	TestRuntimeAudienceTargetSequenceStaysAudienceScoped();
+	TestRuntimeAudienceTargetSequenceResetStartsUniverse();
+	TestRuntimeAudienceTargetSequenceRejectedObserveDoesNotAdvance();
+	TestRuntimeAudienceTargetSequenceFailureDoesNotAdvance();
 	TestRuntimeFrameIsAtomic();
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();

@@ -77,15 +77,15 @@ typedef enum sg_belief_runtime_frame_result_e
 
 /* Registration is a transient lifecycle boundary.  A non-NULL replacement is
  * validated completely before it retires tracks or the current provider, while
- * exact-life retirement tombstones and audience/client time watermarks remain
- * in force for the same identity universe.  Every accepted registration
- * receives a monotonic, non-wrapping owner identity, including an equal-valued
- * or policy-only replacement.  Clearing or an explicit reset establishes a
- * new life-identity universe. */
+ * exact-life retirement tombstones, audience/client time watermarks, and
+ * exact-target evidence sequence fences remain in force for the same identity
+ * universe.  Every accepted registration receives a monotonic, non-wrapping
+ * owner identity, including an equal-valued or policy-only replacement.
+ * Clearing or an explicit reset establishes a new life-identity universe. */
 int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider);
 int SG_BeliefRuntimeProviderAvailable(void);
 /* Explicitly clear the current life-identity universe, including retired-life
- * tombstones and audience/client time watermarks. */
+ * tombstones, audience/client time watermarks, and evidence sequence fences. */
 void SG_BeliefRuntimeReset(void);
 
 /* The registered snapshot is borrowed and immutable.  It is exposed only so
@@ -99,8 +99,9 @@ int SG_BeliefRuntimeHypothesis(const sg_belief_runtime_pose_t *pose,
 	sg_perception_hypothesis_t *out);
 
 /* Adapt and reduce one authenticated observation.  The runtime owns monotonic
- * reduction sequencing, so several team observations at one sample time are
- * retained instead of being mistaken for duplicates. */
+ * reduction sequencing and per-audience/exact-target evidence sequencing
+ * across transient lifecycle boundaries, so several team observations at one
+ * sample time are retained instead of being mistaken for duplicates. */
 sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	const sg_perception_observation_t *observation);
 
@@ -108,7 +109,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
  * Every committed track advances its audience/client time watermark, even
  * when the resulting projection is empty.  A sequence or timestamp regression
  * retires transient tracks and fails closed without clearing permanent
- * retired-life tombstones or time watermarks.
+ * retired-life tombstones, time watermarks, or evidence sequence fences.
  * Capacity is never truncated: a staging capacity or overflow result leaves
  * every track and the global frame bookkeeping unchanged. */
 sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
