@@ -916,6 +916,7 @@ static void TestConstraintOnlyPortal(void)
 int main(void)
 {
 	CHECK(SG_ConfigurationTestConstraintFacetWinding());
+	CHECK(SG_ConfigurationTestFinalRepresentationBounds());
 	TestExactLatticeBoundaries();
 	TestHostFloatBoundaryLocalization();
 	TestConstraintOnlyPortal();

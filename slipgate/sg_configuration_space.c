@@ -1252,12 +1252,13 @@ static int PolyExactBounds(config_build_t *build, config_poly_t *poly,
 static int AuthoritativePolyBounds(config_build_t *build, config_poly_t *poly,
 	float mins[3], float maxs[3])
 {
-	uint32_t axis;
+	uint32_t axis, face;
 
 	if (!poly->face_count)
 		return 0;
-	if (poly->exact_split)
-		return PolyExactBounds(build, poly, mins, maxs);
+	for (face = 0; face < poly->face_count; face++)
+		if (!poly->faces[face].vertex_count)
+			return PolyExactBounds(build, poly, mins, maxs);
 	PolyBounds(poly, mins, maxs);
 	for (axis = 0; axis < 3U; axis++)
 		if (!isfinite(mins[axis]) || !isfinite(maxs[axis]) ||
@@ -1265,6 +1266,99 @@ static int AuthoritativePolyBounds(config_build_t *build, config_poly_t *poly,
 			return 0;
 	return 1;
 }
+
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationTestFinalRepresentationBounds(void)
+{
+	sg_rune_bounds_t bounds;
+	sg_configuration_plane_t redundant, clip;
+	sg_configuration_space_t space;
+	config_build_t build;
+	config_poly_t source, result, empty = { 0 };
+	float mins[3], maxs[3], vertex_mins[3], vertex_maxs[3];
+	uint32_t face;
+	int valid = 0;
+
+	memset(&bounds, 0, sizeof(bounds));
+	memset(&redundant, 0, sizeof(redundant));
+	memset(&clip, 0, sizeof(clip));
+	memset(&space, 0, sizeof(space));
+	memset(&build, 0, sizeof(build));
+	memset(&source, 0, sizeof(source));
+	memset(&result, 0, sizeof(result));
+	for (face = 0; face < 3U; face++)
+	{
+		bounds.mins.value[face] = -1.0f;
+		bounds.maxs.value[face] = 1.0f;
+	}
+	if (!BoxPoly(&bounds, &source))
+		goto done;
+	for (face = 0; face < source.face_count; face++)
+	{
+		source.faces[face].plane.source_kind = SG_CONFIGURATION_PLANE_BSP;
+		source.faces[face].plane.source_index = face;
+	}
+	{
+		config_mesh_face_t *grown = realloc(source.faces,
+			(size_t)(source.face_count + 1U) * sizeof(*grown));
+
+		if (!grown)
+			goto done;
+		source.faces = grown;
+		memset(&source.faces[source.face_count], 0,
+			sizeof(source.faces[source.face_count]));
+	}
+	redundant.normal[0] = 1.0f;
+	redundant.distance = 2.0f;
+	redundant.source_kind = SG_CONFIGURATION_PLANE_BSP;
+	redundant.source_index = 6U;
+	source.faces[source.face_count].plane = redundant;
+	source.face_count++;
+	source.exact_split = 1U;
+	clip.normal[0] = 1.0f;
+	clip.normal[1] = 0.1f;
+	clip.source_kind = SG_CONFIGURATION_PLANE_BSP;
+	clip.source_index = 7U;
+	build.space = &space;
+	if (!CanonicalizeClip(&build, &source, &clip, 1, &empty, &result) ||
+		!result.exact_split || result.face_count != 6U)
+		goto done;
+	for (face = 0; face < result.face_count; face++)
+		if (!result.faces[face].vertex_count)
+			goto done;
+	PolyBounds(&result, vertex_mins, vertex_maxs);
+	if (AuthoritativePolyBounds(&build, &result, mins, maxs) <= 0)
+		goto done;
+	for (face = 0; face < 3U; face++)
+		if (mins[face] != vertex_mins[face] || maxs[face] != vertex_maxs[face])
+			goto done;
+	if (vertex_mins[0] != -1.0f ||
+		fabsf(vertex_maxs[0] - 0.1f) > CONFIG_POINT_EPSILON)
+		goto done;
+	{
+		config_mesh_face_t *grown = realloc(result.faces,
+			(size_t)(result.face_count + 1U) * sizeof(*grown));
+
+		if (!grown)
+			goto done;
+		result.faces = grown;
+		memset(&result.faces[result.face_count], 0,
+			sizeof(result.faces[result.face_count]));
+		result.faces[result.face_count].plane = redundant;
+		result.face_count++;
+		result.exact_bounds_valid = 0U;
+	}
+	if (AuthoritativePolyBounds(&build, &result, mins, maxs) <= 0 ||
+		mins[0] != -1.0f || maxs[0] != 0.0f)
+		goto done;
+	valid = 1;
+
+done:
+	FreePoly(&result);
+	FreePoly(&source);
+	return valid;
+}
+#endif
 
 static int AppendCertificate(config_build_t *build,
 	sg_configuration_certificate_kind_t kind, sg_rune_stance_t stance,

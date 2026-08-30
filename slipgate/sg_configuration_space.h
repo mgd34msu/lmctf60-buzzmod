@@ -192,6 +192,7 @@ const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code);
 
 #if defined(SG_CONFIGURATION_SPACE_TESTING)
 int SG_ConfigurationTestConstraintFacetWinding(void);
+int SG_ConfigurationTestFinalRepresentationBounds(void);
 int SG_ConfigurationTestConstraintPortal(
 	const sg_host_collision_authority_t *authority);
 int SG_ConfigurationTestHostValidatedCandidate(

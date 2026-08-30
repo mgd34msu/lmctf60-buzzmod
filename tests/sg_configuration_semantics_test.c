@@ -1196,9 +1196,73 @@ static void TestConfigurationBuilderCanonicalNearCorner(void)
 	SG_ConfigurationDestroy(configuration);
 }
 
+static void TestAllFacetHistoryBoundsSemantics(void)
+{
+	static const float facet_points[6][4][3] = {
+		{{-1,-1,-1},{-1,-1,1},{-1,1,1},{-1,1,-1}},
+		{{-1,1,-1},{-1,1,1},{-0.1f,1,1},{-0.1f,1,-1}},
+		{{-1,-1,-1},{0.1f,-1,-1},{0.1f,-1,1},{-1,-1,1}},
+		{{-1,-1,1},{0.1f,-1,1},{-0.1f,1,1},{-1,1,1}},
+		{{-1,-1,-1},{-1,1,-1},{-0.1f,1,-1},{0.1f,-1,-1}},
+		{{0.1f,-1,-1},{-0.1f,1,-1},{-0.1f,1,1},{0.1f,-1,1}}
+	};
+	fixture_t fixture = Fixture();
+	sg_configuration_semantics_t *semantics = NULL;
+	uint32_t face;
+
+	SetPlane(&fixture.planes[0], -1, 0, 0, 1);
+	SetPlane(&fixture.planes[1], 0, 1, 0, 1);
+	SetPlane(&fixture.planes[2], 0, -1, 0, 1);
+	SetPlane(&fixture.planes[3], 0, 0, 1, 1);
+	SetPlane(&fixture.planes[4], 0, 0, -1, 1);
+	SetPlane(&fixture.planes[5], 1, 0.1f, 0, 0);
+	fixture.nodes[0].plane = 5U;
+	fixture.nodes[0].children[0] = -2;
+	fixture.nodes[0].children[1] = -1;
+	fixture.world.plane_count = 6U;
+	fixture.world.node_count = 1U;
+	fixture.world.leaf_count = 2U;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = 0U;
+	fixture.world.brush_side_count = 0U;
+	fixture.world.leaf_brush_count = 0U;
+	fixture.models[0].headnode = 0;
+	Set3(fixture.models[0].mins.value, -1, -1, -1);
+	Set3(fixture.models[0].maxs.value, 1, 1, 1);
+	fixture.leaves[0].contents = 0;
+	fixture.leaves[0].cluster = 0;
+	fixture.leaves[0].area = 1U;
+	fixture.leaves[0].first_leaf_brush = 0U;
+	fixture.leaves[0].leaf_brush_count = 0U;
+	fixture.leaves[1].first_leaf_brush = 0U;
+	fixture.leaves[1].leaf_brush_count = 0U;
+	fixture.configuration.face_count = 6U;
+	fixture.configuration.vertex_count = 24U;
+	fixture.cell.face_count = 6U;
+	memset(fixture.faces, 0, sizeof(fixture.faces));
+	memset(fixture.vertices, 0, sizeof(fixture.vertices));
+	fixture.cell.bsp_leaf.index = 0U;
+	fixture.cell.bsp_area.index = 1U;
+	fixture.cell.bsp_cluster.index = 0U;
+	Set3(fixture.cell.bounds.mins.value, -1, -1, -1);
+	Set3(fixture.cell.bounds.maxs.value, 0.1f, 1, 1);
+	Set3(fixture.cell.interior_witness.value, -0.5f, 0, 0);
+	for (face = 0; face < 6U; face++)
+		SetFace(&fixture, face, fixture.planes[face].normal.value[0],
+			fixture.planes[face].normal.value[1],
+			fixture.planes[face].normal.value[2],
+			fixture.planes[face].distance, SG_CONFIGURATION_PLANE_BSP,
+			face, facet_points[face]);
+	BindFixture(&fixture);
+	CHECK(Build(&fixture, &semantics));
+	SG_ConfigurationSemanticsDestroy(semantics);
+}
+
 int main(void)
 {
+	#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
 	CHECK(SG_ConfigurationSemanticsTestMixedConstraintMesh());
+	#endif
 	TestVolumetricWaterAndAudit();
 	TestThinBrushSupportFractionPartition();
 	TestSurfaceAuthorityAndNoPickupObstruction();
@@ -1208,6 +1272,7 @@ int main(void)
 	TestTransactionalOverflowAndMutationAudit();
 	TestMalformedSourceFailsClosed();
 	TestConfigurationBuilderCanonicalNearCorner();
+	TestAllFacetHistoryBoundsSemantics();
 	TestConfigurationBuilderComposition();
 	if (failures)
 	{
