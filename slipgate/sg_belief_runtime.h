@@ -77,14 +77,15 @@ typedef enum sg_belief_runtime_frame_result_e
 
 /* Registration is a transient lifecycle boundary.  A non-NULL replacement is
  * validated completely before it retires tracks or the current provider, while
- * exact-life retirement tombstones remain in force for the same identity
- * universe.  Every accepted registration receives a monotonic, non-wrapping
- * owner identity, including an equal-valued or policy-only replacement.
- * Clearing or an explicit reset establishes a new life-identity universe. */
+ * exact-life retirement tombstones and audience/client time watermarks remain
+ * in force for the same identity universe.  Every accepted registration
+ * receives a monotonic, non-wrapping owner identity, including an equal-valued
+ * or policy-only replacement.  Clearing or an explicit reset establishes a
+ * new life-identity universe. */
 int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider);
 int SG_BeliefRuntimeProviderAvailable(void);
 /* Explicitly clear the current life-identity universe, including retired-life
- * tombstones. */
+ * tombstones and audience/client time watermarks. */
 void SG_BeliefRuntimeReset(void);
 
 /* The registered snapshot is borrowed and immutable.  It is exposed only so
@@ -104,8 +105,10 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	const sg_perception_observation_t *observation);
 
 /* Age every current track and refresh its predictor-backed view atomically.
- * A sequence or timestamp regression retires transient tracks and fails
- * closed without clearing permanent retired-life tombstones.
+ * Every committed track advances its audience/client time watermark, even
+ * when the resulting projection is empty.  A sequence or timestamp regression
+ * retires transient tracks and fails closed without clearing permanent
+ * retired-life tombstones or time watermarks.
  * Capacity is never truncated: a staging capacity or overflow result leaves
  * every track and the global frame bookkeeping unchanged. */
 sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(

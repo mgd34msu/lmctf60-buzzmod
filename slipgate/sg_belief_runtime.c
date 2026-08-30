@@ -45,6 +45,8 @@ static sg_belief_runtime_provider_t belief_runtime_provider;
 static belief_runtime_track_t belief_runtime_tracks[2][SG_BELIEF_MAX_CLIENTS];
 static belief_runtime_life_fence_t
 	belief_runtime_life_fences[SG_BELIEF_MAX_CLIENTS];
+static uint64_t
+	belief_runtime_audience_client_watermarks[2][SG_BELIEF_MAX_CLIENTS];
 static uint64_t belief_runtime_reduction_sequence;
 static uint64_t belief_runtime_frame_sequence;
 static uint64_t belief_runtime_frame_time;
@@ -143,6 +145,8 @@ void SG_BeliefRuntimeReset(void)
 	BeliefRuntimeTransientReset();
 	memset(belief_runtime_life_fences, 0,
 		sizeof(belief_runtime_life_fences));
+	memset(belief_runtime_audience_client_watermarks, 0,
+		sizeof(belief_runtime_audience_client_watermarks));
 }
 
 int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider)
@@ -459,36 +463,27 @@ static int BeliefRuntimeTrackOrderingIdentityMatches(
 		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life);
 }
 
-static int BeliefRuntimeTrackOrderingClientMatches(
-	const belief_runtime_track_t *track, uint8_t audience_team,
-	const sg_belief_life_identity_t *target_life)
+static void BeliefRuntimeAudienceClientWatermarkAdvance(size_t team,
+	size_t client, uint64_t at_ms)
 {
-	return track && track->active == 1U && SG_BeliefStateValid(&track->state) &&
-		track->state.audience_team == audience_team &&
-		track->state.target_life.client_id == target_life->client_id;
+	if (team >= 2U || client >= SG_BELIEF_MAX_CLIENTS)
+		return;
+	if (at_ms > belief_runtime_audience_client_watermarks[team][client])
+		belief_runtime_audience_client_watermarks[team][client] = at_ms;
 }
 
-static uint64_t BeliefRuntimeTrackTimeWatermark(
-	const belief_runtime_track_t *track)
+static int BeliefRuntimeEvidenceFollowsAudienceClientWatermark(
+	const sg_belief_evidence_t *evidence)
 {
+	size_t team;
 	uint64_t watermark;
 
-	if (!track)
-		return 0U;
-	watermark = track->state.updated_at_ms;
-	if (track->view.updated_at_ms > watermark)
-		watermark = track->view.updated_at_ms;
-	return watermark;
-}
-
-static int BeliefRuntimeEvidenceTimesFollowTrack(
-	const belief_runtime_track_t *track, const sg_belief_evidence_t *evidence)
-{
-	uint64_t watermark;
-
-	if (!track || !evidence)
+	if (!evidence || !BeliefRuntimeTeamIndex(
+		evidence->provenance.audience_team, &team) ||
+		!SG_BeliefLifeIdentityValid(&evidence->target_life))
 		return 0;
-	watermark = BeliefRuntimeTrackTimeWatermark(track);
+	watermark = belief_runtime_audience_client_watermarks[team]
+		[evidence->target_life.client_id];
 	return evidence->provenance.authenticated_at_ms >= watermark &&
 		evidence->observed_at_ms >= watermark &&
 		evidence->valid_until_ms >=
@@ -921,6 +916,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	uint64_t sequence;
 	sg_belief_life_identity_t *prepared_issuers = NULL;
 	size_t prepared_issuer_capacity = 0U;
+	size_t audience_index;
 	int ordering_identity_replacement;
 	int fresh_storage;
 	int append_issuer;
@@ -965,6 +961,14 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
 	}
+	if (!BeliefRuntimeTeamIndex(adaptation.evidence.provenance.audience_team,
+		&audience_index) ||
+		!BeliefRuntimeEvidenceFollowsAudienceClientWatermark(
+			&adaptation.evidence))
+	{
+		free(supports);
+		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
+	}
 	track = BeliefRuntimeTrack(adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life);
 	if (!track)
@@ -975,13 +979,9 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	ordering_identity_replacement = !BeliefRuntimeTrackOrderingIdentityMatches(
 		track, adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life);
-	if (BeliefRuntimeTrackOrderingClientMatches(track,
-		adaptation.evidence.provenance.audience_team,
-		&adaptation.evidence.target_life) &&
-		(!BeliefRuntimeEvidenceTimesFollowTrack(track, &adaptation.evidence) ||
-		(!ordering_identity_replacement &&
-		 !BeliefRuntimeEvidenceSequenceFollowsTrack(track,
-			&adaptation.evidence))))
+	if (!ordering_identity_replacement &&
+		!BeliefRuntimeEvidenceSequenceFollowsTrack(track,
+			&adaptation.evidence))
 	{
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
@@ -1070,6 +1070,9 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	BeliefRuntimeLifePublicationCommit(&life_publication);
 	belief_runtime_reduction_sequence = sequence;
 	(void)BeliefRuntimeRefreshView(track);
+	BeliefRuntimeAudienceClientWatermarkAdvance(audience_index,
+		adaptation.evidence.target_life.client_id,
+		adaptation.evidence.provenance.authenticated_at_ms);
 	return SG_BELIEF_RUNTIME_OBSERVE_APPLIED;
 }
 
@@ -1116,9 +1119,13 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 	for (team = 0U; team < 2U; team++)
 		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
 			if (candidates[team][client].track.active)
+			{
 				BeliefRuntimeFrameCandidateCommit(
 					&belief_runtime_tracks[team][client],
 					&candidates[team][client]);
+				BeliefRuntimeAudienceClientWatermarkAdvance(team, client,
+					at_ms);
+			}
 	belief_runtime_frame_sequence = frame_sequence;
 	belief_runtime_frame_time = at_ms;
 	return SG_BELIEF_RUNTIME_FRAME_APPLIED;
