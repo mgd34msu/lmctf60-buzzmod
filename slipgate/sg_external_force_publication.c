@@ -7,10 +7,13 @@
 
 #include "sg_bsp_completeness_proof.h"
 #include "sg_configuration_audit.h"
+#include "sg_configuration_lattice.h"
 
 #define SG_EXTERNAL_FORCE_MAGIC UINT64_C(0x455854464f524345)
-#define SG_EXTERNAL_FORCE_WATER_SPEED 400.0f
-#define SG_EXTERNAL_FORCE_CONVEYOR_SPEED 100.0f
+#define SG_EXTERNAL_FORCE_CURRENT_MASK \
+	(SG_HOST_CONTENTS_CURRENT_0 | SG_HOST_CONTENTS_CURRENT_90 | \
+	 SG_HOST_CONTENTS_CURRENT_180 | SG_HOST_CONTENTS_CURRENT_270 | \
+	 SG_HOST_CONTENTS_CURRENT_UP | SG_HOST_CONTENTS_CURRENT_DOWN)
 
 typedef struct sg_external_force_build_s
 {
@@ -148,6 +151,12 @@ static int FactEqual(const sg_external_force_fact_t *left,
 			&right->destination_cell.value) &&
 		left->source_region_id == right->source_region_id &&
 		left->destination_region_id == right->destination_region_id &&
+		left->source_model_index == right->source_model_index &&
+		left->source_leaf_index == right->source_leaf_index &&
+		left->source_contents == right->source_contents &&
+		VecEqual(&left->source_witness, &right->source_witness) &&
+		VecEqual(&left->source_model_origin, &right->source_model_origin) &&
+		VecEqual(&left->source_model_angles, &right->source_model_angles) &&
 		StableEqual(&left->portal.value, &right->portal.value) &&
 		StableEqual(&left->source_phase.value, &right->source_phase.value) &&
 		StableEqual(&left->destination_phase.value,
@@ -184,6 +193,9 @@ static int FactCompare(const void *left_value, const void *right_value)
 	if (comparison) return comparison;
 	COMPARE_SCALAR(source_region_id);
 	COMPARE_SCALAR(destination_region_id);
+	COMPARE_SCALAR(source_model_index);
+	COMPARE_SCALAR(source_leaf_index);
+	COMPARE_SCALAR(source_contents);
 	comparison = StableCompare(&left->source_phase.value,
 		&right->source_phase.value);
 	if (comparison) return comparison;
@@ -374,7 +386,7 @@ static uint32_t MechanismTimingSpan(
 	return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
 }
 
-static int AppendMechanismFacts(sg_external_force_build_t *build)
+static int IssueAppendMechanismFacts(sg_external_force_build_t *build)
 {
 	const sg_configuration_space_t *configuration =
 		build->source->configuration;
@@ -465,6 +477,8 @@ static int AppendMechanismFacts(sg_external_force_build_t *build)
 			configuration->cells[evidence->destination_cell].id;
 		fact.source_region_id = evidence->source_region_id;
 		fact.destination_region_id = evidence->destination_region_id;
+		fact.source_model_index = UINT32_MAX;
+		fact.source_leaf_index = UINT32_MAX;
 		fact.portal = evidence->portal;
 		fact.source_phase = transition->source_phase;
 		fact.destination_phase = transition->destination_phase;
@@ -505,43 +519,224 @@ static int AppendMechanismFacts(sg_external_force_build_t *build)
 	return 1;
 }
 
-static void CurrentVector(sg_host_collision_contents_t contents,
-	float speed, sg_rune_vec3_t *velocity)
+typedef struct sg_external_force_partition_s
 {
-	memset(velocity, 0, sizeof(*velocity));
-	if (contents & SG_HOST_CONTENTS_CURRENT_0) velocity->value[0] += speed;
-	if (contents & SG_HOST_CONTENTS_CURRENT_90) velocity->value[1] += speed;
-	if (contents & SG_HOST_CONTENTS_CURRENT_180) velocity->value[0] -= speed;
-	if (contents & SG_HOST_CONTENTS_CURRENT_270) velocity->value[1] -= speed;
-	if (contents & SG_HOST_CONTENTS_CURRENT_UP) velocity->value[2] += speed;
-	if (contents & SG_HOST_CONTENTS_CURRENT_DOWN) velocity->value[2] -= speed;
+	uint32_t leaf;
+	sg_host_collision_contents_t contents;
+	sg_rune_vec3_t witness;
+} sg_external_force_partition_t;
+
+typedef struct sg_external_force_partition_list_s
+{
+	sg_external_force_partition_t *values;
+	uint32_t count;
+	uint32_t capacity;
+} sg_external_force_partition_list_t;
+
+static void AngleAxis(const float angles[3], float axis[3][3])
+{
+	const float radians = 0.01745329251994329577f;
+	float sy = sinf(angles[1] * radians);
+	float cy = cosf(angles[1] * radians);
+	float sp = sinf(angles[0] * radians);
+	float cp = cosf(angles[0] * radians);
+	float sr = sinf(angles[2] * radians);
+	float cr = cosf(angles[2] * radians);
+
+	axis[0][0] = cp * cy;
+	axis[0][1] = cp * sy;
+	axis[0][2] = -sp;
+	axis[1][0] = sr * sp * cy - cr * sy;
+	axis[1][1] = sr * sp * sy + cr * cy;
+	axis[1][2] = sr * cp;
+	axis[2][0] = cr * sp * cy + sr * sy;
+	axis[2][1] = cr * sp * sy - sr * cy;
+	axis[2][2] = cr * cp;
 }
 
-static int BoundsOverlap(const sg_rune_bounds_t *left,
-	const sg_rune_bounds_t *right)
+static void WorldHalfspace(const float local_normal[3], float local_distance,
+	const sg_host_collision_transform_t *transform,
+	sg_configuration_lattice_halfspace_t *halfspace)
 {
+	float axis[3][3];
+	uint32_t row;
+	uint32_t column;
+
+	AngleAxis(transform->angles, axis);
+	for (column = 0U; column < 3U; column++)
+	{
+		halfspace->normal[column] = 0.0f;
+		for (row = 0U; row < 3U; row++)
+			halfspace->normal[column] +=
+				local_normal[row] * axis[row][column];
+	}
+	halfspace->distance = local_distance;
+	for (column = 0U; column < 3U; column++)
+		halfspace->distance += halfspace->normal[column] *
+			transform->origin[column];
+	halfspace->open = 0;
+}
+
+static int AppendPartition(sg_external_force_partition_list_t *partitions,
+	uint32_t leaf, sg_host_collision_contents_t contents,
+	const int32_t point[3])
+{
+	sg_external_force_partition_t *replacement;
+	uint32_t capacity;
 	uint32_t axis;
 
-	for (axis = 0U; axis < 3U; axis++)
-		if (left->maxs.value[axis] < right->mins.value[axis] ||
-			left->mins.value[axis] > right->maxs.value[axis])
+	if (partitions->count == partitions->capacity)
+	{
+		capacity = partitions->capacity ? partitions->capacity * 2U : 4U;
+		if (capacity < partitions->capacity)
 			return 0;
+		replacement = realloc(partitions->values,
+			(size_t)capacity * sizeof(*replacement));
+		if (!replacement)
+			return 0;
+		partitions->values = replacement;
+		partitions->capacity = capacity;
+	}
+	partitions->values[partitions->count].leaf = leaf;
+	partitions->values[partitions->count].contents = contents;
+	for (axis = 0U; axis < 3U; axis++)
+		partitions->values[partitions->count].witness.value[axis] =
+			(float)point[axis] * 0.125f;
+	partitions->count++;
 	return 1;
+}
+
+static int TraverseCurrentPartitions(const sg_bsp_world_t *world,
+	int32_t child, const sg_host_collision_transform_t *transform,
+	sg_configuration_lattice_halfspace_t *halfspaces, uint32_t count,
+	uint32_t capacity, sg_external_force_partition_list_t *partitions)
+{
+	if (child < 0)
+	{
+		uint32_t leaf = (uint32_t)(-1 - child);
+		int32_t point[3];
+		sg_configuration_lattice_stats_t stats;
+		int feasible;
+
+		if (leaf >= world->leaf_count ||
+			(world->leaves[leaf].contents & SG_EXTERNAL_FORCE_CURRENT_MASK) == 0)
+			return leaf < world->leaf_count;
+		memset(&stats, 0, sizeof(stats));
+		feasible = SG_ConfigurationLatticeFind(halfspaces, count, NULL,
+			point, &stats);
+		if (feasible < 0)
+			return 0;
+		return feasible == 0 || AppendPartition(partitions, leaf,
+			world->leaves[leaf].contents & SG_EXTERNAL_FORCE_CURRENT_MASK,
+			point);
+	}
+	if ((uint32_t)child >= world->node_count || count >= capacity)
+		return 0;
+	{
+		const sg_bsp_node_t *node = &world->nodes[(uint32_t)child];
+		const sg_bsp_plane_t *plane;
+		sg_configuration_lattice_halfspace_t world_plane;
+		uint32_t axis;
+
+		if (node->plane >= world->plane_count)
+			return 0;
+		plane = &world->planes[node->plane];
+		WorldHalfspace(plane->normal.value, plane->distance, transform,
+			&world_plane);
+		halfspaces[count] = world_plane;
+		for (axis = 0U; axis < 3U; axis++)
+			halfspaces[count].normal[axis] = -world_plane.normal[axis];
+		halfspaces[count].distance = -world_plane.distance;
+		halfspaces[count].open = 0;
+		if (!TraverseCurrentPartitions(world, node->children[0], transform,
+			halfspaces, count + 1U, capacity, partitions))
+			return 0;
+		halfspaces[count] = world_plane;
+		halfspaces[count].open = 1;
+		return TraverseCurrentPartitions(world, node->children[1], transform,
+			halfspaces, count + 1U, capacity, partitions);
+	}
+}
+
+static int FindCurrentPartitions(const sg_external_force_build_t *build,
+	const sg_bsp_entity_semantic_t *entity, uint32_t region_index,
+	sg_external_force_partition_list_t *partitions)
+{
+	const sg_bsp_world_t *world = build->source->collision_authority->world;
+	const sg_configuration_semantics_t *semantics =
+		build->source->configuration_semantics;
+	const sg_configuration_semantic_region_t *region =
+		&semantics->regions[region_index];
+	const sg_bsp_model_t *model;
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	sg_host_collision_transform_t transform;
+	uint32_t capacity;
+	uint32_t count = 0U;
+	uint32_t axis;
+	int result;
+
+	if (entity->bsp_model >= world->model_count ||
+		region->first_face > semantics->face_count ||
+		region->face_count > semantics->face_count - region->first_face ||
+		region->face_count > UINT32_MAX - 6U ||
+		world->node_count > UINT32_MAX - region->face_count - 6U)
+		return 0;
+	capacity = region->face_count + 6U + world->node_count;
+	halfspaces = calloc(capacity ? capacity : 1U, sizeof(*halfspaces));
+	if (!halfspaces)
+		return 0;
+	for (axis = 0U; axis < region->face_count; axis++)
+	{
+		const sg_configuration_semantic_face_t *face =
+			&semantics->faces[region->first_face + axis];
+
+		memcpy(halfspaces[count].normal, face->normal,
+			sizeof(halfspaces[count].normal));
+		halfspaces[count].distance = face->distance;
+		halfspaces[count].open = 0;
+		count++;
+	}
+	memset(&transform, 0, sizeof(transform));
+	memcpy(transform.origin, entity->origin.value, sizeof(transform.origin));
+	memcpy(transform.angles, entity->angles.value, sizeof(transform.angles));
+	model = &world->models[entity->bsp_model];
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float normal[3] = { 0.0f, 0.0f, 0.0f };
+
+		normal[axis] = 1.0f;
+		WorldHalfspace(normal, model->maxs.value[axis], &transform,
+			&halfspaces[count++]);
+		normal[axis] = -1.0f;
+		WorldHalfspace(normal, -model->mins.value[axis], &transform,
+			&halfspaces[count++]);
+	}
+	result = TraverseCurrentPartitions(world, model->headnode, &transform,
+		halfspaces, count, capacity, partitions);
+	free(halfspaces);
+	if (result)
+		for (axis = 0U; axis < partitions->count; axis++)
+			if ((SG_HostCollisionPointContentsModel(
+					build->source->collision_authority, entity->bsp_model,
+					&transform, partitions->values[axis].witness.value) &
+					SG_EXTERNAL_FORCE_CURRENT_MASK) !=
+				partitions->values[axis].contents)
+				return 0;
+	return result;
 }
 
 static int AppendLocalFact(sg_external_force_build_t *build,
 	sg_external_force_kind_t kind, uint32_t entity_ordinal,
 	const sg_bsp_entity_semantic_t *entity, uint32_t region_index,
 	const sg_phase_catalog_binding_t *binding,
-	sg_host_collision_contents_t currents)
+	sg_host_collision_contents_t currents, uint32_t model_index,
+	uint32_t leaf_index, const sg_rune_vec3_t *witness)
 {
 	const sg_configuration_semantic_region_t *region =
 		&build->source->configuration_semantics->regions[region_index];
 	const sg_configuration_cell_t *cell =
 		&build->source->configuration->cells[region->cell];
 	sg_external_force_fact_t fact;
-	float acceleration_scale;
-	uint32_t axis;
 
 	memset(&fact, 0, sizeof(fact));
 	fact.kind = kind;
@@ -552,41 +747,33 @@ static int AppendLocalFact(sg_external_force_build_t *build,
 	fact.destination_cell = cell->id;
 	fact.source_region_id = region->id;
 	fact.destination_region_id = region->id;
+	fact.source_model_index = model_index;
+	fact.source_leaf_index = leaf_index;
+	fact.source_contents = currents;
+	fact.source_witness = witness ? *witness : region->interior_witness;
+	if (entity)
+	{
+		memcpy(fact.source_model_origin.value, entity->origin.value,
+			sizeof(fact.source_model_origin.value));
+		memcpy(fact.source_model_angles.value, entity->angles.value,
+			sizeof(fact.source_model_angles.value));
+	}
 	fact.portal = SG_RUNE_PORTAL_REF_NONE;
 	fact.source_phase = binding->phase;
 	fact.destination_phase = binding->phase;
-	fact.gravity = build->phases->identity.physics.gravity;
 	fact.duration_ms = build->phases->identity.physics.frame_ms;
 	fact.physics_abi_id = build->phases->identity.physics_abi_id;
-	fact.flags = SG_EXTERNAL_FORCE_HOST_PROVEN;
-	if (kind == SG_EXTERNAL_FORCE_GRAVITY)
-	{
-		fact.acceleration.value[2] = -fact.gravity;
-	}
-	else
-	{
-		CurrentVector(currents,
-			kind == SG_EXTERNAL_FORCE_WATER_CURRENT ?
-			SG_EXTERNAL_FORCE_WATER_SPEED :
-			SG_EXTERNAL_FORCE_CONVEYOR_SPEED, &fact.velocity);
-		acceleration_scale = kind == SG_EXTERNAL_FORCE_WATER_CURRENT ?
-			build->phases->identity.physics.water_acceleration :
-			build->phases->identity.physics.ground_acceleration;
-		for (axis = 0U; axis < 3U; axis++)
-			fact.acceleration.value[axis] =
-				fact.velocity.value[axis] == 0.0f ? 0.0f :
-				copysignf(acceleration_scale, fact.velocity.value[axis]);
-		if (kind == SG_EXTERNAL_FORCE_CONVEYOR_CURRENT && entity &&
-			(entity->flags & SG_BSP_ENTITY_USE_ACTIVATED) != 0U)
-			fact.flags |= SG_EXTERNAL_FORCE_CONDITIONAL;
-	}
-	/* Gravity and currents change velocity; unlike a mover or push they do
-	 * not directly displace the player. Phase motion integrates these exact
-	 * contributions under the accepted Pmove ABI. */
+	/* The exact local law is a state-dependent Pmove observation.  Geometry
+	 * establishes this obligation, but no value is published until the
+	 * authenticated offline construction adapter supplies that observation. */
+	fact.flags = SG_EXTERNAL_FORCE_LAW_UNRESOLVED;
+	if (kind == SG_EXTERNAL_FORCE_CONVEYOR_CURRENT && entity &&
+		(entity->flags & SG_BSP_ENTITY_USE_ACTIVATED) != 0U)
+		fact.flags |= SG_EXTERNAL_FORCE_CONDITIONAL;
 	return AppendFact(build, &fact);
 }
 
-static int AppendRegionForces(sg_external_force_build_t *build)
+static int IssueAppendRegionForces(sg_external_force_build_t *build)
 {
 	const sg_configuration_semantics_t *semantics =
 		build->source->configuration_semantics;
@@ -614,17 +801,19 @@ static int AppendRegionForces(sg_external_force_build_t *build)
 				binding->configuration_cell != region->cell)
 				continue;
 			if (!AppendLocalFact(build, SG_EXTERNAL_FORCE_GRAVITY,
-					UINT32_MAX, NULL, region_index, binding, 0U) ||
+					UINT32_MAX, NULL, region_index, binding, 0U, 0U,
+					UINT32_MAX, NULL) ||
 				(currents != 0U && region->water_level != 0U &&
 				 !AppendLocalFact(build, SG_EXTERNAL_FORCE_WATER_CURRENT,
-					UINT32_MAX, NULL, region_index, binding, currents)))
+					UINT32_MAX, NULL, region_index, binding, currents, 0U,
+					region->sample_leaves[0], NULL)))
 				return 0;
 		}
 	}
 	return 1;
 }
 
-static int AppendEntityLocalForces(sg_external_force_build_t *build)
+static int IssueAppendEntityLocalForces(sg_external_force_build_t *build)
 {
 	const sg_configuration_semantics_t *semantics =
 		build->source->configuration_semantics;
@@ -648,28 +837,16 @@ static int AppendEntityLocalForces(sg_external_force_build_t *build)
 			const sg_configuration_semantic_region_t *region =
 				&semantics->regions[region_index];
 			uint32_t binding_index;
-			sg_host_collision_contents_t currents = 0U;
+			sg_external_force_partition_list_t partitions;
+			uint32_t partition_index;
 
-			if (!BoundsOverlap(&entity->bounds, &region->bounds))
-				continue;
+			memset(&partitions, 0, sizeof(partitions));
+			if (!FindCurrentPartitions(build, entity, region_index, &partitions))
 			{
-				sg_host_collision_transform_t transform;
-
-				memset(&transform, 0, sizeof(transform));
-				memcpy(transform.origin, entity->origin.value,
-					sizeof(transform.origin));
-				memcpy(transform.angles, entity->angles.value,
-					sizeof(transform.angles));
-				currents = SG_HostCollisionPointContentsModel(
-					build->source->collision_authority, entity->bsp_model,
-					&transform, region->interior_witness.value);
-				if ((currents & (SG_HOST_CONTENTS_CURRENT_0 |
-					SG_HOST_CONTENTS_CURRENT_90 |
-					SG_HOST_CONTENTS_CURRENT_180 |
-					SG_HOST_CONTENTS_CURRENT_270 |
-					SG_HOST_CONTENTS_CURRENT_UP |
-					SG_HOST_CONTENTS_CURRENT_DOWN)) == 0U)
-					continue;
+				free(partitions.values);
+				build->error = SG_EXTERNAL_FORCE_AUDIT_INVALID_FACT;
+				build->record = entity_index;
+				return 0;
 			}
 			for (binding_index = 0U;
 				binding_index < build->phases->binding_count; binding_index++)
@@ -680,18 +857,254 @@ static int AppendEntityLocalForces(sg_external_force_build_t *build)
 				if (binding->semantic_region_id != region->id ||
 					binding->configuration_cell != region->cell)
 					continue;
-				if (!AppendLocalFact(build,
-					SG_EXTERNAL_FORCE_CONVEYOR_CURRENT,
-					entity->source_entity_ordinal, entity, region_index,
-					binding, currents))
-					return 0;
+				for (partition_index = 0U;
+					partition_index < partitions.count; partition_index++)
+					if (!AppendLocalFact(build,
+						SG_EXTERNAL_FORCE_CONVEYOR_CURRENT,
+						entity->source_entity_ordinal, entity, region_index,
+						binding, partitions.values[partition_index].contents,
+						entity->bsp_model,
+						partitions.values[partition_index].leaf,
+						&partitions.values[partition_index].witness))
+					{
+						free(partitions.values);
+						return 0;
+					}
 			}
+			free(partitions.values);
 		}
 	}
 	return 1;
 }
 
-static int BuildFacts(const sg_external_force_source_t *source,
+/* Audit reconstruction intentionally walks accepted authorities in the
+ * opposite direction from issuance: mechanisms locate phase evidence,
+ * bindings locate regions, and regions locate conveyor entities. */
+static int AuditAppendMechanismFacts(sg_external_force_build_t *build)
+{
+	const sg_configuration_space_t *configuration =
+		build->source->configuration;
+	uint32_t mechanism_index;
+
+	for (mechanism_index = 0U;
+		mechanism_index < build->mechanisms->fact_count; mechanism_index++)
+	{
+		const sg_mechanism_capability_fact_t *mechanism =
+			&build->mechanisms->facts[mechanism_index];
+		uint32_t phase_index;
+		int include = mechanism->kind == SG_MECHANISM_CAPABILITY_PUSH ||
+			(mechanism->flags & SG_MECHANISM_CAPABILITY_MOVER_RELATIVE) != 0U ||
+			mechanism->kind == SG_MECHANISM_CAPABILITY_LIFT_RIDE ||
+			mechanism->kind == SG_MECHANISM_CAPABILITY_TRAIN_RIDE ||
+			mechanism->kind == SG_MECHANISM_CAPABILITY_ROTATOR_CROSSING;
+
+		if (!include)
+			continue;
+		for (phase_index = 0U; phase_index < build->phases->transition_count;
+			phase_index++)
+		{
+			const sg_phase_catalog_transition_evidence_t *evidence =
+				&build->phases->transition_evidence[phase_index];
+			const sg_rune_phase_transition_t *transition =
+				&build->phases->transitions[phase_index];
+			sg_external_force_fact_t fact;
+
+			if (evidence->origin !=
+					SG_PHASE_CATALOG_TRANSITION_MECHANISM_STATE_TIMING ||
+				evidence->source_record != mechanism_index)
+				continue;
+			if (evidence->source_cell >= configuration->cell_count ||
+				evidence->destination_cell >= configuration->cell_count ||
+				mechanism->source_region >=
+					build->source->configuration_semantics->region_count ||
+				mechanism->destination_region >=
+					build->source->configuration_semantics->region_count ||
+				!StableEqual(&evidence->mechanism.value,
+					&mechanism->mechanism_id.value) ||
+				evidence->provider_verifier_identity !=
+					build->phases->mover_support_verifier_identity ||
+				evidence->source_state_mask !=
+					MechanismStateBit(mechanism->source_state) ||
+				evidence->destination_state_mask !=
+					MechanismStateBit(mechanism->destination_state) ||
+				evidence->delay_ms != mechanism->delay_ms ||
+				evidence->dwell_ms != mechanism->dwell_ms ||
+				evidence->travel_ms != mechanism->travel_ms ||
+				evidence->wait_ms != mechanism->wait_ms ||
+				evidence->reset_ms != mechanism->reset_ms ||
+				build->source->configuration_semantics->regions[
+					mechanism->source_region].id != evidence->source_region_id ||
+				build->source->configuration_semantics->regions[
+					mechanism->destination_region].id !=
+					evidence->destination_region_id ||
+				!StableEqual(&transition->cell.value,
+					&configuration->cells[evidence->source_cell].id.value) ||
+				!StableEqual(&transition->destination_cell.value,
+					&configuration->cells[evidence->destination_cell].id.value))
+			{
+				build->error = SG_EXTERNAL_FORCE_AUDIT_INVALID_FACT;
+				build->record = phase_index;
+				return 0;
+			}
+			memset(&fact, 0, sizeof(fact));
+			fact.source_entity_ordinal = UINT32_MAX;
+			fact.mechanism_entity_index = mechanism->mechanism_entity;
+			fact.kind = mechanism->kind == SG_MECHANISM_CAPABILITY_PUSH ?
+				SG_EXTERNAL_FORCE_TRIGGER_PUSH :
+				SG_EXTERNAL_FORCE_MOVER_DISPLACEMENT;
+			fact.mechanism.value = mechanism->mechanism_id.value;
+			fact.source_cell = configuration->cells[evidence->source_cell].id;
+			fact.destination_cell =
+				configuration->cells[evidence->destination_cell].id;
+			fact.source_region_id = evidence->source_region_id;
+			fact.destination_region_id = evidence->destination_region_id;
+			fact.source_model_index = UINT32_MAX;
+			fact.source_leaf_index = UINT32_MAX;
+			fact.portal = evidence->portal;
+			fact.source_phase = transition->source_phase;
+			fact.destination_phase = transition->destination_phase;
+			fact.displacement = mechanism->parameters.displacement;
+			fact.velocity = mechanism->observed_velocity;
+			fact.acceleration.value[0] =
+				mechanism->mechanism_direction.value[0] *
+				mechanism->parameters.acceleration.max_value;
+			fact.acceleration.value[1] =
+				mechanism->mechanism_direction.value[1] *
+				mechanism->parameters.acceleration.max_value;
+			fact.acceleration.value[2] =
+				mechanism->mechanism_direction.value[2] *
+				mechanism->parameters.vertical_acceleration.max_value;
+			fact.gravity = mechanism->parameters.gravity;
+			fact.delay_ms = mechanism->delay_ms;
+			fact.duration_ms = mechanism->travel_ms;
+			fact.dwell_ms = mechanism->dwell_ms;
+			fact.wait_ms = mechanism->wait_ms;
+			fact.reset_ms = mechanism->reset_ms;
+			fact.physics_abi_id = build->phases->identity.physics_abi_id;
+			fact.flags = SG_EXTERNAL_FORCE_HOST_PROVEN;
+			if ((mechanism->flags & SG_MECHANISM_CAPABILITY_ONE_SHOT) != 0U)
+				fact.flags |= SG_EXTERNAL_FORCE_ONE_SHOT;
+			if ((mechanism->flags & SG_MECHANISM_CAPABILITY_CONDITIONAL) != 0U)
+				fact.flags |= SG_EXTERNAL_FORCE_CONDITIONAL;
+			if (fact.kind == SG_EXTERNAL_FORCE_MOVER_DISPLACEMENT)
+				fact.flags |= SG_EXTERNAL_FORCE_MOVER_RELATIVE;
+			if (!PhaseBindingFor(build, fact.source_region_id,
+					evidence->source_cell, &fact.source_phase) ||
+				!PhaseBindingFor(build, fact.destination_region_id,
+					evidence->destination_cell, &fact.destination_phase) ||
+				!AppendFact(build, &fact))
+				return 0;
+		}
+	}
+	return 1;
+}
+
+static int AuditAppendRegionForces(sg_external_force_build_t *build)
+{
+	const sg_configuration_semantics_t *semantics =
+		build->source->configuration_semantics;
+	uint32_t binding_index;
+
+	for (binding_index = 0U; binding_index < build->phases->binding_count;
+		binding_index++)
+	{
+		const sg_phase_catalog_binding_t *binding =
+			&build->phases->bindings[binding_index];
+		uint32_t region_index;
+		int found = 0;
+
+		for (region_index = 0U; region_index < semantics->region_count;
+			region_index++)
+		{
+			const sg_configuration_semantic_region_t *region =
+				&semantics->regions[region_index];
+			sg_host_collision_contents_t currents;
+
+			if (region->id != binding->semantic_region_id ||
+				region->cell != binding->configuration_cell)
+				continue;
+			found = 1;
+			currents = region->water_type & SG_EXTERNAL_FORCE_CURRENT_MASK;
+			if (!AppendLocalFact(build, SG_EXTERNAL_FORCE_GRAVITY,
+					UINT32_MAX, NULL, region_index, binding, 0U, 0U,
+					UINT32_MAX, NULL) ||
+				(currents != 0U && region->water_level != 0U &&
+				 !AppendLocalFact(build, SG_EXTERNAL_FORCE_WATER_CURRENT,
+					UINT32_MAX, NULL, region_index, binding, currents, 0U,
+					region->sample_leaves[0], NULL)))
+				return 0;
+			break;
+		}
+		if (!found)
+		{
+			build->error = SG_EXTERNAL_FORCE_AUDIT_INVALID_FACT;
+			build->record = binding_index;
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static int AuditAppendEntityLocalForces(sg_external_force_build_t *build)
+{
+	const sg_configuration_semantics_t *semantics =
+		build->source->configuration_semantics;
+	uint32_t region_index;
+
+	for (region_index = 0U; region_index < semantics->region_count;
+		region_index++)
+	{
+		const sg_configuration_semantic_region_t *region =
+			&semantics->regions[region_index];
+		uint32_t entity_index;
+
+		for (entity_index = 0U; entity_index < build->entities.entity_count;
+			entity_index++)
+		{
+			const sg_bsp_entity_semantic_t *entity =
+				&build->entities.entities[entity_index];
+			sg_external_force_partition_list_t partitions;
+			uint32_t binding_index;
+
+			if (entity->physics_kind != SG_BSP_ENTITY_PHYSICS_CONVEYOR)
+				continue;
+			memset(&partitions, 0, sizeof(partitions));
+			if (!FindCurrentPartitions(build, entity, region_index, &partitions))
+			{
+				free(partitions.values);
+				return 0;
+			}
+			for (binding_index = 0U;
+				binding_index < build->phases->binding_count; binding_index++)
+			{
+				const sg_phase_catalog_binding_t *binding =
+					&build->phases->bindings[binding_index];
+				uint32_t partition_index;
+
+				if (binding->semantic_region_id != region->id ||
+					binding->configuration_cell != region->cell)
+					continue;
+				for (partition_index = 0U;
+					partition_index < partitions.count; partition_index++)
+					if (!AppendLocalFact(build,
+						SG_EXTERNAL_FORCE_CONVEYOR_CURRENT,
+						entity->source_entity_ordinal, entity, region_index,
+						binding, partitions.values[partition_index].contents,
+						entity->bsp_model,
+						partitions.values[partition_index].leaf,
+						&partitions.values[partition_index].witness))
+					{
+						free(partitions.values);
+						return 0;
+					}
+			}
+			free(partitions.values);
+		}
+	}
+	return 1;
+}
+
+static int AuditReconstructFacts(const sg_external_force_source_t *source,
 	sg_external_force_build_t *build)
 {
 	uint32_t index;
@@ -700,8 +1113,33 @@ static int BuildFacts(const sg_external_force_source_t *source,
 	build->source = source;
 	build->error = SG_EXTERNAL_FORCE_AUDIT_OK;
 	build->record = UINT32_MAX;
-	if (!ReadSources(build) || !AppendMechanismFacts(build) ||
-		!AppendRegionForces(build) || !AppendEntityLocalForces(build))
+	if (!ReadSources(build) || !AuditAppendMechanismFacts(build) ||
+		!AuditAppendRegionForces(build) ||
+		!AuditAppendEntityLocalForces(build))
+		return 0;
+	qsort(build->facts, build->fact_count, sizeof(*build->facts), FactCompare);
+	for (index = 1U; index < build->fact_count; index++)
+		if (FactEqual(&build->facts[index - 1U], &build->facts[index]))
+		{
+			build->error = SG_EXTERNAL_FORCE_AUDIT_DUPLICATE_FACT;
+			build->record = index;
+			return 0;
+		}
+	return 1;
+}
+
+static int IssueBuildFacts(const sg_external_force_source_t *source,
+	sg_external_force_build_t *build)
+{
+	uint32_t index;
+
+	memset(build, 0, sizeof(*build));
+	build->source = source;
+	build->error = SG_EXTERNAL_FORCE_AUDIT_OK;
+	build->record = UINT32_MAX;
+	if (!ReadSources(build) || !IssueAppendMechanismFacts(build) ||
+		!IssueAppendRegionForces(build) ||
+		!IssueAppendEntityLocalForces(build))
 		return 0;
 	qsort(build->facts, build->fact_count, sizeof(*build->facts), FactCompare);
 	for (index = 1U; index < build->fact_count; index++)
@@ -718,6 +1156,37 @@ static const sg_external_force_fact_t *PublicationFacts(
 	const sg_external_force_publication_t *publication)
 {
 	return (const sg_external_force_fact_t *)(publication + 1);
+}
+
+static sg_external_force_completeness_t FactsCompleteness(
+	const sg_external_force_fact_t *facts, uint32_t fact_count,
+	sg_external_force_kind_t kind)
+{
+	uint32_t index;
+	int found = 0;
+
+	for (index = 0U; index < fact_count; index++)
+		if (facts[index].kind == kind)
+		{
+			found = 1;
+			if ((facts[index].flags & SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U)
+				return SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED;
+		}
+	return found ? SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
+		SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
+}
+
+static sg_external_force_completeness_t OverallCompleteness(
+	const sg_external_force_completeness_t by_kind[SG_EXTERNAL_FORCE_KIND_COUNT],
+	uint32_t fact_count)
+{
+	uint32_t index;
+
+	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
+		if (by_kind[index] == SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED)
+			return SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED;
+	return fact_count ? SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
+		SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
 }
 
 static uint64_t HashBytes(uint64_t hash, const void *data, size_t size)
@@ -779,10 +1248,9 @@ static int PublicationValid(const sg_external_force_publication_t *publication)
 		publication->view.content_identity == 0U ||
 		publication->view.content_identity != PublicationContentIdentity(
 			&publication->view, PublicationFacts(publication)) ||
-		publication->view.completeness !=
-			(publication->view.fact_count != 0U ?
-			 SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-			 SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY))
+		publication->view.completeness != OverallCompleteness(
+			publication->view.completeness_by_kind,
+			publication->view.fact_count))
 		return 0;
 	for (index = 0U; index < publication->view.fact_count; index++)
 	{
@@ -802,9 +1270,9 @@ static int PublicationValid(const sg_external_force_publication_t *publication)
 		count += publication->view.fact_count_by_kind[index];
 		if (publication->view.fact_count_by_kind[index] != observed[index] ||
 			publication->view.completeness_by_kind[index] !=
-				(observed[index] != 0U ?
-				 SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-				 SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY))
+				FactsCompleteness(PublicationFacts(publication),
+					publication->view.fact_count,
+					(sg_external_force_kind_t)index))
 			return 0;
 	}
 	return count == publication->view.fact_count;
@@ -841,34 +1309,51 @@ static int ComparePublication(const sg_external_force_build_t *expected,
 			UINT32_MAX);
 		return 0;
 	}
-	if (publication->view.completeness !=
-			(expected->fact_count != 0U ?
-			 SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-			 SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY))
+	audit->observed_facts = publication->view.fact_count;
+	for (index = 1U; index < publication->view.fact_count; index++)
 	{
-		SetAudit(audit, SG_EXTERNAL_FORCE_AUDIT_COMPLETENESS_DISAGREEMENT,
-			UINT32_MAX);
-		return 0;
-	}
-	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
-		if (publication->view.fact_count_by_kind[index] !=
-				expected_by_kind[index] ||
-			publication->view.completeness_by_kind[index] !=
-				(expected_by_kind[index] != 0U ?
-				 SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-				 SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY))
+		const sg_external_force_fact_t *previous =
+			&PublicationFacts(publication)[index - 1U];
+		const sg_external_force_fact_t *current =
+			&PublicationFacts(publication)[index];
+
+		if (FactEqual(previous, current))
 		{
-			SetAudit(audit,
-				SG_EXTERNAL_FORCE_AUDIT_COMPLETENESS_DISAGREEMENT, index);
+			SetAudit(audit, SG_EXTERNAL_FORCE_AUDIT_DUPLICATE_FACT, index);
 			return 0;
 		}
-	audit->observed_facts = publication->view.fact_count;
+		if (FactCompare(previous, current) > 0)
+		{
+			SetAudit(audit, SG_EXTERNAL_FORCE_AUDIT_NONDETERMINISTIC_ORDER,
+				index);
+			return 0;
+		}
+	}
 	if (expected->fact_count != publication->view.fact_count)
 	{
 		SetAudit(audit,
 			expected->fact_count > publication->view.fact_count ?
 			SG_EXTERNAL_FORCE_AUDIT_OMITTED_FACT :
 			SG_EXTERNAL_FORCE_AUDIT_INVENTED_FACT, UINT32_MAX);
+		return 0;
+	}
+	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
+		if (publication->view.fact_count_by_kind[index] !=
+				expected_by_kind[index] ||
+			publication->view.completeness_by_kind[index] !=
+				FactsCompleteness(expected->facts, expected->fact_count,
+					(sg_external_force_kind_t)index))
+		{
+			SetAudit(audit,
+				SG_EXTERNAL_FORCE_AUDIT_COMPLETENESS_DISAGREEMENT, index);
+			return 0;
+		}
+	if (publication->view.completeness != OverallCompleteness(
+			publication->view.completeness_by_kind,
+			publication->view.fact_count))
+	{
+		SetAudit(audit, SG_EXTERNAL_FORCE_AUDIT_COMPLETENESS_DISAGREEMENT,
+			UINT32_MAX);
 		return 0;
 	}
 	for (index = 0U; index < expected->fact_count; index++)
@@ -902,7 +1387,7 @@ int SG_ExternalForcePublicationAudit(
 		!source->configuration_semantics || !source->mechanism_owner ||
 		!source->mechanisms || !source->phase_owner || !source->phases)
 		return 0;
-	if (!BuildFacts(source, &expected))
+	if (!AuditReconstructFacts(source, &expected))
 	{
 		SetAudit(&audit, expected.error, expected.record);
 		free(expected.facts);
@@ -912,18 +1397,16 @@ int SG_ExternalForcePublicationAudit(
 	for (index = 0U; index < expected.fact_count; index++)
 		audit.facts_by_kind[expected.facts[index].kind]++;
 	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
-		audit.completeness_by_kind[index] = audit.facts_by_kind[index] != 0U ?
-			SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-			SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
+		audit.completeness_by_kind[index] = FactsCompleteness(expected.facts,
+			expected.fact_count, (sg_external_force_kind_t)index);
 	if (!ComparePublication(&expected, publication, &audit))
 	{
 		free(expected.facts);
 		*audit_out = audit;
 		return 0;
 	}
-	audit.completeness = expected.fact_count ?
-		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-		SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
+	audit.completeness = OverallCompleteness(audit.completeness_by_kind,
+		expected.fact_count);
 	SetAudit(&audit, SG_EXTERNAL_FORCE_AUDIT_OK, UINT32_MAX);
 	free(expected.facts);
 	*audit_out = audit;
@@ -954,7 +1437,7 @@ int SG_ExternalForcePublicationIssue(
 		audit_out->record = UINT32_MAX;
 		return 0;
 	}
-	if (!BuildFacts(source, &build))
+	if (!IssueBuildFacts(source, &build))
 	{
 		memset(audit_out, 0, sizeof(*audit_out));
 		audit_out->code = build.error;
@@ -995,9 +1478,6 @@ int SG_ExternalForcePublicationIssue(
 		build.phases->mover_support_verifier_identity;
 	publication->view.pmove_behavior_fingerprint =
 		build.host.pmove_behavior_fingerprint;
-	publication->view.completeness = build.fact_count ?
-		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-		SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
 	publication->view.fact_count = build.fact_count;
 	if (build.fact_count)
 		memcpy((void *)(publication + 1), build.facts,
@@ -1005,10 +1485,10 @@ int SG_ExternalForcePublicationIssue(
 	for (index = 0U; index < build.fact_count; index++)
 		publication->view.fact_count_by_kind[build.facts[index].kind]++;
 	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
-		publication->view.completeness_by_kind[index] =
-			publication->view.fact_count_by_kind[index] != 0U ?
-			SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-			SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
+		publication->view.completeness_by_kind[index] = FactsCompleteness(
+			build.facts, build.fact_count, (sg_external_force_kind_t)index);
+	publication->view.completeness = OverallCompleteness(
+		publication->view.completeness_by_kind, build.fact_count);
 	publication->view.content_identity = PublicationContentIdentity(
 		&publication->view, PublicationFacts(publication));
 	free(build.facts);

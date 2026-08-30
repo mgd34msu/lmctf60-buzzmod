@@ -27,12 +27,16 @@ enum
 	SG_EXTERNAL_FORCE_ONE_SHOT = UINT32_C(1) << 0,
 	SG_EXTERNAL_FORCE_CONDITIONAL = UINT32_C(1) << 1,
 	SG_EXTERNAL_FORCE_MOVER_RELATIVE = UINT32_C(1) << 2,
-	SG_EXTERNAL_FORCE_HOST_PROVEN = UINT32_C(1) << 3
+	SG_EXTERNAL_FORCE_HOST_PROVEN = UINT32_C(1) << 3,
+	/* The spatial obligation is complete, but its state-dependent Pmove
+	 * observation has not yet been authenticated. */
+	SG_EXTERNAL_FORCE_LAW_UNRESOLVED = UINT32_C(1) << 4
 };
 
 #define SG_EXTERNAL_FORCE_FLAGS_KNOWN \
 	(SG_EXTERNAL_FORCE_ONE_SHOT | SG_EXTERNAL_FORCE_CONDITIONAL | \
-	 SG_EXTERNAL_FORCE_MOVER_RELATIVE | SG_EXTERNAL_FORCE_HOST_PROVEN)
+	 SG_EXTERNAL_FORCE_MOVER_RELATIVE | SG_EXTERNAL_FORCE_HOST_PROVEN | \
+	 SG_EXTERNAL_FORCE_LAW_UNRESOLVED)
 
 typedef struct sg_external_force_fact_s
 {
@@ -44,6 +48,12 @@ typedef struct sg_external_force_fact_s
 	sg_rune_cell_ref_t destination_cell;
 	uint64_t source_region_id;
 	uint64_t destination_region_id;
+	uint32_t source_model_index;
+	uint32_t source_leaf_index;
+	sg_host_collision_contents_t source_contents;
+	sg_rune_vec3_t source_witness;
+	sg_rune_vec3_t source_model_origin;
+	sg_rune_vec3_t source_model_angles;
 	sg_rune_portal_ref_t portal;
 	sg_rune_phase_ref_t source_phase;
 	sg_rune_phase_ref_t destination_phase;

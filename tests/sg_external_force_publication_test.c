@@ -21,6 +21,101 @@ typedef struct external_publication_layout_s
 	sg_external_force_view_t view;
 } external_publication_layout_t;
 
+static sg_external_force_fact_t *ExternalFacts(
+	external_publication_layout_t *layout)
+{
+	return (sg_external_force_fact_t *)(void *)(layout + 1);
+}
+
+static uint64_t ExternalHashBytes(uint64_t hash, const void *data, size_t size)
+{
+	const uint8_t *bytes = data;
+	size_t index;
+
+	for (index = 0U; index < size; index++)
+	{
+		hash ^= bytes[index];
+		hash *= UINT64_C(1099511628211);
+	}
+	return hash;
+}
+
+static sg_external_force_completeness_t ExternalKindCompleteness(
+	const sg_external_force_fact_t *facts, uint32_t count, uint32_t kind)
+{
+	uint32_t index;
+	int found = 0;
+
+	for (index = 0U; index < count; index++)
+		if ((uint32_t)facts[index].kind == kind)
+		{
+			found = 1;
+			if ((facts[index].flags &
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U)
+				return SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED;
+		}
+	return found ? SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
+		SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY;
+}
+
+static void ExternalReseal(external_publication_layout_t *layout)
+{
+	sg_external_force_view_t hash_view;
+	sg_external_force_fact_t *facts = ExternalFacts(layout);
+	uint64_t hash = UINT64_C(14695981039346656037);
+	uint32_t index;
+	int unresolved = 0;
+
+	layout->self = (const sg_external_force_publication_t *)(const void *)layout;
+	layout->allocation_size = sizeof(*layout) +
+		(size_t)layout->view.fact_count * sizeof(*facts);
+	layout->allocation_size_inverse = ~layout->allocation_size;
+	memset(layout->view.fact_count_by_kind, 0,
+		sizeof(layout->view.fact_count_by_kind));
+	for (index = 0U; index < layout->view.fact_count; index++)
+		layout->view.fact_count_by_kind[facts[index].kind]++;
+	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
+	{
+		layout->view.completeness_by_kind[index] =
+			ExternalKindCompleteness(facts, layout->view.fact_count, index);
+		unresolved |= layout->view.completeness_by_kind[index] ==
+			SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED;
+	}
+	layout->view.completeness = unresolved ?
+		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED :
+		(layout->view.fact_count ? SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
+		 SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY);
+	hash_view = layout->view;
+	hash_view.content_identity = 0U;
+	hash = ExternalHashBytes(hash, &hash_view, sizeof(hash_view));
+	hash = ExternalHashBytes(hash, facts,
+		(size_t)layout->view.fact_count * sizeof(*facts));
+	layout->view.content_identity = hash ? hash : UINT64_C(1);
+}
+
+static external_publication_layout_t *ExternalClonePublication(
+	const sg_external_force_publication_t *publication, uint32_t fact_count)
+{
+	const external_publication_layout_t *source =
+		(const external_publication_layout_t *)(const void *)publication;
+	external_publication_layout_t *clone;
+	uint32_t copy_count = fact_count < source->view.fact_count ? fact_count :
+		source->view.fact_count;
+	size_t size = sizeof(*clone) +
+		(size_t)fact_count * sizeof(sg_external_force_fact_t);
+
+	clone = calloc(1U, size);
+	if (!clone)
+		return NULL;
+	memcpy(clone, source, sizeof(*clone));
+	if (copy_count)
+		memcpy(ExternalFacts(clone), source + 1,
+			(size_t)copy_count * sizeof(sg_external_force_fact_t));
+	clone->view.fact_count = fact_count;
+	ExternalReseal(clone);
+	return clone;
+}
+
 #define CHECK_EXTERNAL(expression) do { \
 	if (!(expression)) { \
 		fprintf(stderr, "%s:%d: external check failed: %s\n", \
@@ -56,21 +151,59 @@ sg_host_law_result_t SG_HostLawPublicationRevalidateProduction(
 	return result;
 }
 
-static sg_bsp_entity_semantics_publication_t *ExternalEntityPublication(
-	mechanism_fixture_t *fixture)
+static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 {
 	static sg_bsp_model_t expanded_models[5];
-	static sg_bsp_leaf_t expanded_leaves[4];
+	static sg_bsp_node_t expanded_nodes[2];
+	static sg_bsp_leaf_t expanded_leaves[5];
 	static const char text[] =
 		"{ \"classname\" \"worldspawn\" }\n"
 		"{ \"classname\" \"trigger_gravity\" \"model\" \"*1\" "
 		"\"gravity\" \"2\" }\n"
 		"{ \"classname\" \"func_conveyor\" \"model\" \"*2\" "
+		"\"origin\" \"0 32 0\" \"angles\" \"0 90 0\" "
 		"\"spawnflags\" \"1\" }\n"
 		"{ \"classname\" \"trigger_monsterjump\" \"model\" \"*3\" "
 		"\"speed\" \"200\" \"height\" \"200\" }\n"
 		"{ \"classname\" \"trigger_hurt\" \"model\" \"*4\" "
 		"\"dmg\" \"50\" }\n";
+
+	memset(expanded_models, 0, sizeof(expanded_models));
+	memcpy(expanded_models, fixture->models, sizeof(fixture->models));
+	memset(expanded_nodes, 0, sizeof(expanded_nodes));
+	memcpy(expanded_nodes, fixture->world.nodes,
+		fixture->world.node_count * sizeof(*expanded_nodes));
+	memcpy(expanded_leaves, fixture->leaves, sizeof(fixture->leaves));
+	expanded_models[2] = fixture->models[0];
+	expanded_models[2].headnode = 1;
+	Set3(expanded_models[2].mins.value, -128.0f, -128.0f, -128.0f);
+	Set3(expanded_models[2].maxs.value, 128.0f, 128.0f, 128.0f);
+	memset(&expanded_leaves[3], 0, sizeof(expanded_leaves[3]));
+	expanded_leaves[3].contents = SG_HOST_CONTENTS_SOLID |
+		SG_HOST_CONTENTS_CURRENT_0;
+	expanded_leaves[3].cluster = -1;
+	memset(&expanded_leaves[4], 0, sizeof(expanded_leaves[4]));
+	expanded_leaves[4].contents = SG_HOST_CONTENTS_SOLID;
+	expanded_leaves[4].cluster = -1;
+	expanded_nodes[1].plane = 0U;
+	expanded_nodes[1].children[0] = -5;
+	expanded_nodes[1].children[1] = -4;
+	expanded_models[3] = fixture->models[1];
+	expanded_models[4] = fixture->models[1];
+	fixture->world.models = expanded_models;
+	fixture->world.model_count = 5U;
+	fixture->world.nodes = expanded_nodes;
+	fixture->world.node_count = 2U;
+	fixture->world.leaves = expanded_leaves;
+	fixture->world.leaf_count = 5U;
+	fixture->world.entities = (uint8_t *)(uintptr_t)text;
+	fixture->world.entity_byte_count = (uint32_t)sizeof(text);
+
+}
+
+static sg_bsp_entity_semantics_publication_t *ExternalEntityPublication(
+	mechanism_fixture_t *fixture)
+{
 	sg_bsp_entity_semantics_binding_t binding;
 	sg_bsp_entity_semantics_t *candidate = NULL;
 	sg_bsp_entity_semantics_publication_t *publication = NULL;
@@ -84,25 +217,6 @@ static sg_bsp_entity_semantics_publication_t *ExternalEntityPublication(
 	binding.source_set_identity =
 		fixture->authority.identity.source_set_identity;
 	binding.schema_identity = SG_BSP_ENTITY_SEMANTICS_SCHEMA_ID;
-	memset(expanded_models, 0, sizeof(expanded_models));
-	memcpy(expanded_models, fixture->models, sizeof(fixture->models));
-	memcpy(expanded_leaves, fixture->leaves, sizeof(fixture->leaves));
-	expanded_models[2] = fixture->models[0];
-	expanded_models[2].headnode = -4;
-	Set3(expanded_models[2].mins.value, -128.0f, -128.0f, -128.0f);
-	Set3(expanded_models[2].maxs.value, 128.0f, 128.0f, 128.0f);
-	memset(&expanded_leaves[3], 0, sizeof(expanded_leaves[3]));
-	expanded_leaves[3].contents = SG_HOST_CONTENTS_SOLID |
-		SG_HOST_CONTENTS_CURRENT_0;
-	expanded_leaves[3].cluster = -1;
-	expanded_models[3] = expanded_models[2];
-	expanded_models[4] = expanded_models[2];
-	fixture->world.models = expanded_models;
-	fixture->world.model_count = 5U;
-	fixture->world.leaves = expanded_leaves;
-	fixture->world.leaf_count = 4U;
-	fixture->world.entities = (uint8_t *)(uintptr_t)text;
-	fixture->world.entity_byte_count = (uint32_t)sizeof(text);
 	CHECK_EXTERNAL(SG_BspEntitySemanticsBuild(&fixture->world,
 		binding.source_set_identity, &candidate, &error));
 	if (candidate)
@@ -137,7 +251,8 @@ static void ExternalHostView(const mechanism_fixture_t *fixture)
 	external_host_view.pmove_behavior_fingerprint = UINT64_C(0xabc123);
 }
 
-static int ExternalMakeCurrentWorld(mechanism_fixture_t *fixture)
+static int ExternalRebuildWorld(mechanism_fixture_t *fixture,
+	int with_currents)
 {
 	sg_rune_model_identity_t identity = fixture->authority.identity;
 	sg_host_collision_error_t host_error;
@@ -150,9 +265,12 @@ static int ExternalMakeCurrentWorld(mechanism_fixture_t *fixture)
 	SG_ConfigurationDestroy(fixture->configuration);
 	fixture->configuration_semantics = NULL;
 	fixture->configuration = NULL;
-	fixture->leaves[0].contents = SG_HOST_CONTENTS_WATER |
-		SG_HOST_CONTENTS_CURRENT_0 | SG_HOST_CONTENTS_CURRENT_UP;
-	fixture->leaves[1].contents = fixture->leaves[0].contents;
+	if (with_currents)
+	{
+		fixture->world.leaves[0].contents = SG_HOST_CONTENTS_WATER |
+			SG_HOST_CONTENTS_CURRENT_0 | SG_HOST_CONTENTS_CURRENT_UP;
+		fixture->world.leaves[1].contents = fixture->world.leaves[0].contents;
+	}
 	if (!SG_HostCollisionInit(&fixture->authority, &fixture->world, &identity,
 			&host_error) ||
 		!SG_ConfigurationBuild(&fixture->authority, NULL,
@@ -169,10 +287,13 @@ static int ExternalMakeCurrentWorld(mechanism_fixture_t *fixture)
 	fixture->source.configuration = fixture->configuration;
 	fixture->source.configuration_semantics =
 		fixture->configuration_semantics;
-	fixture->phases[0].motion = SG_RUNE_MOTION_SWIMMING;
-	fixture->phases[0].support = SG_RUNE_SUPPORT_NONE;
-	for (index = 0U; index < PHASE_COUNT; index++)
-		fixture->phases[index].medium = SG_RUNE_MEDIUM_WATER;
+	if (with_currents)
+	{
+		fixture->phases[0].motion = SG_RUNE_MOTION_SWIMMING;
+		fixture->phases[0].support = SG_RUNE_SUPPORT_NONE;
+		for (index = 0U; index < PHASE_COUNT; index++)
+			fixture->phases[index].medium = SG_RUNE_MEDIUM_WATER;
+	}
 	for (index = 0U; index < TRACE_COUNT; index++)
 	{
 		fixture->traces[index].source_region = FindRegion(fixture,
@@ -202,7 +323,8 @@ static int ExternalSourceInit(mechanism_fixture_t *fixture,
 	memset(source_out, 0, sizeof(*source_out));
 	if (!FixtureInit(fixture))
 		return 0;
-	if (with_currents && !ExternalMakeCurrentWorld(fixture))
+	ExternalInstallEntityWorld(fixture);
+	if (!ExternalRebuildWorld(fixture, with_currents))
 		return 0;
 	fixture->entities[6].flags |= SG_BSP_ENTITY_DWELL_DEFINED;
 	fixture->entities[6].dwell_ms = -1000.0f;
@@ -259,12 +381,16 @@ static void TestAllAcceptedMechanismForces(void)
 		&phases, &entities, &source, 1));
 	if (!entities || !phases || !capabilities)
 		return;
-	CHECK_EXTERNAL(SG_ExternalForcePublicationIssue(&source, &publication,
-		&audit));
-	CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_OK);
+	if (!SG_ExternalForcePublicationIssue(&source, &publication, &audit))
+		fprintf(stderr, "external issue rejected: %s record=%u\n",
+			SG_ExternalForceAuditCodeString(audit.code), audit.record);
 	CHECK_EXTERNAL(publication != NULL);
+	CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_OK);
+	if (!publication)
+		return;
 	CHECK_EXTERNAL(SG_ExternalForcePublicationRead(publication, &view));
-	CHECK_EXTERNAL(view.completeness == SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
+	CHECK_EXTERNAL(view.completeness ==
+		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
 	for (index = 0U; index < view.fact_count; index++)
 	{
 		sg_external_force_fact_t fact_storage;
@@ -277,33 +403,61 @@ static void TestAllAcceptedMechanismForces(void)
 			&fact->destination_cell.value));
 		CHECK_EXTERNAL(fact->physics_abi_id ==
 			fixture.authority.identity.physics_abi_id);
-		CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) != 0U);
 		if (fact->kind == SG_EXTERNAL_FORCE_TRIGGER_PUSH)
 		{
 			pushes++;
 			CHECK_EXTERNAL(fact->source_entity_ordinal == UINT32_MAX);
 			CHECK_EXTERNAL(fact->mechanism_entity_index != UINT32_MAX);
 			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_ONE_SHOT) != 0U);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) != 0U);
+			CHECK_EXTERNAL((fact->flags &
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) == 0U);
 		}
 		if (fact->kind == SG_EXTERNAL_FORCE_MOVER_DISPLACEMENT)
+		{
 			movers++;
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) != 0U);
+		}
 		if (fact->kind == SG_EXTERNAL_FORCE_GRAVITY)
 		{
 			gravity++;
 			CHECK_EXTERNAL(fact->source_entity_ordinal == UINT32_MAX);
-			CHECK_EXTERNAL(fact->gravity == 800.0f);
-			CHECK_EXTERNAL(fact->acceleration.value[2] == -800.0f);
+			CHECK_EXTERNAL(fact->gravity == 0.0f);
+			CHECK_EXTERNAL(fact->acceleration.value[2] == 0.0f);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) == 0U);
+			CHECK_EXTERNAL((fact->flags &
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U);
 		}
 		if (fact->kind == SG_EXTERNAL_FORCE_CONVEYOR_CURRENT)
 		{
+			sg_host_collision_transform_t transform;
+
 			conveyors++;
-			CHECK_EXTERNAL(fact->velocity.value[0] == 100.0f);
+			CHECK_EXTERNAL(fact->velocity.value[0] == 0.0f);
+			CHECK_EXTERNAL(fact->source_model_index == 2U);
+			CHECK_EXTERNAL(fact->source_leaf_index == 3U);
+			CHECK_EXTERNAL(fact->source_model_origin.value[1] == 32.0f);
+			CHECK_EXTERNAL(fact->source_model_angles.value[1] == 90.0f);
+			memset(&transform, 0, sizeof(transform));
+			memcpy(transform.origin, fact->source_model_origin.value,
+				sizeof(transform.origin));
+			memcpy(transform.angles, fact->source_model_angles.value,
+				sizeof(transform.angles));
+			CHECK_EXTERNAL((SG_HostCollisionPointContentsModel(
+				&fixture.authority, fact->source_model_index, &transform,
+				fact->source_witness.value) & SG_HOST_CONTENTS_CURRENT_0) != 0U);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) == 0U);
+			CHECK_EXTERNAL((fact->flags &
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U);
 		}
 		if (fact->kind == SG_EXTERNAL_FORCE_WATER_CURRENT)
 		{
 			currents++;
-			CHECK_EXTERNAL(fact->velocity.value[0] == 400.0f);
-			CHECK_EXTERNAL(fact->velocity.value[2] == 400.0f);
+			CHECK_EXTERNAL(fact->velocity.value[0] == 0.0f);
+			CHECK_EXTERNAL(fact->velocity.value[2] == 0.0f);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) == 0U);
+			CHECK_EXTERNAL((fact->flags &
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U);
 		}
 	}
 	CHECK_EXTERNAL(pushes > 0U);
@@ -315,11 +469,20 @@ static void TestAllAcceptedMechanismForces(void)
 		pushes);
 	CHECK_EXTERNAL(view.fact_count_by_kind[
 		SG_EXTERNAL_FORCE_MOVER_DISPLACEMENT] == movers);
-	for (index = 0U; index < SG_EXTERNAL_FORCE_KIND_COUNT; index++)
-		CHECK_EXTERNAL(view.completeness_by_kind[index] ==
-			(view.fact_count_by_kind[index] != 0U ?
-			 SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE :
-			 SG_EXTERNAL_FORCE_COMPLETENESS_PROVEN_EMPTY));
+	CHECK_EXTERNAL(view.completeness_by_kind[
+		SG_EXTERNAL_FORCE_TRIGGER_PUSH] ==
+		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
+	CHECK_EXTERNAL(view.completeness_by_kind[
+		SG_EXTERNAL_FORCE_MOVER_DISPLACEMENT] ==
+		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
+	CHECK_EXTERNAL(view.completeness_by_kind[
+		SG_EXTERNAL_FORCE_WATER_CURRENT] ==
+		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
+	CHECK_EXTERNAL(view.completeness_by_kind[
+		SG_EXTERNAL_FORCE_CONVEYOR_CURRENT] ==
+		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
+	CHECK_EXTERNAL(view.completeness_by_kind[SG_EXTERNAL_FORCE_GRAVITY] ==
+		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
 
 	/* Reissuing from the same accepted authorities is byte-deterministic. */
 	CHECK_EXTERNAL(SG_ExternalForcePublicationIssue(&source,
@@ -340,6 +503,95 @@ static void TestAllAcceptedMechanismForces(void)
 			sizeof(first_fact)) == 0);
 	}
 	SG_ExternalForcePublicationDestroy(second_publication);
+
+	/* The auditor reconstructs independently and classifies internally sealed
+	 * hostile candidates rather than trusting issuer storage. */
+	{
+		external_publication_layout_t *candidate;
+		sg_external_force_fact_t temporary;
+
+		CHECK_EXTERNAL(view.fact_count >= 2U);
+		candidate = ExternalClonePublication(publication, view.fact_count - 1U);
+		CHECK_EXTERNAL(candidate != NULL);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_OMITTED_FACT);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+
+		candidate = ExternalClonePublication(publication, view.fact_count + 1U);
+		CHECK_EXTERNAL(candidate != NULL);
+		ExternalFacts(candidate)[view.fact_count] =
+			ExternalFacts(candidate)[view.fact_count - 1U];
+		ExternalFacts(candidate)[view.fact_count].reset_ms++;
+		ExternalReseal(candidate);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_INVENTED_FACT);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+
+		candidate = ExternalClonePublication(publication, view.fact_count);
+		CHECK_EXTERNAL(candidate != NULL);
+		ExternalFacts(candidate)[1] = ExternalFacts(candidate)[0];
+		ExternalReseal(candidate);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_DUPLICATE_FACT);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+
+		candidate = ExternalClonePublication(publication, view.fact_count);
+		CHECK_EXTERNAL(candidate != NULL);
+		ExternalFacts(candidate)[view.fact_count - 1U].duration_ms++;
+		ExternalReseal(candidate);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code ==
+			SG_EXTERNAL_FORCE_AUDIT_FACT_DISAGREEMENT);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+
+		candidate = ExternalClonePublication(publication, view.fact_count);
+		CHECK_EXTERNAL(candidate != NULL);
+		candidate->view.pmove_behavior_fingerprint++;
+		ExternalReseal(candidate);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code ==
+			SG_EXTERNAL_FORCE_AUDIT_METADATA_DISAGREEMENT);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+
+		candidate = ExternalClonePublication(publication, 0U);
+		CHECK_EXTERNAL(candidate != NULL);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_OMITTED_FACT);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+
+		candidate = ExternalClonePublication(publication, view.fact_count);
+		CHECK_EXTERNAL(candidate != NULL);
+		temporary = ExternalFacts(candidate)[0];
+		ExternalFacts(candidate)[0] =
+			ExternalFacts(candidate)[view.fact_count - 1U];
+		ExternalFacts(candidate)[view.fact_count - 1U] = temporary;
+		ExternalReseal(candidate);
+		CHECK_EXTERNAL(!SG_ExternalForcePublicationAudit(&source,
+			(const sg_external_force_publication_t *)(const void *)candidate,
+			&audit));
+		CHECK_EXTERNAL(audit.code ==
+			SG_EXTERNAL_FORCE_AUDIT_NONDETERMINISTIC_ORDER);
+		SG_ExternalForcePublicationDestroy(
+			(sg_external_force_publication_t *)(void *)candidate);
+	}
 
 	/* A forged zero-fact claim invalidates the seal and cannot be audited as
 	 * proven-empty. No public read API exposes the mutated storage. */
