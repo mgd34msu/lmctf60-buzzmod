@@ -948,20 +948,24 @@ static int TransitionPhaseSemanticsValid(
 	const sg_rune_phase_basis_t *source,
 	const sg_rune_phase_basis_t *destination)
 {
-	if (source->medium != destination->medium)
-		return 0;
 	switch (transition->kind)
 	{
 	case SG_RUNE_PHASE_TRANSITION_STANCE:
-		return source->stance != destination->stance &&
+		return source->medium == destination->medium &&
+			source->stance != destination->stance &&
 			PhaseEqualExceptStance(source, destination);
 	case SG_RUNE_PHASE_TRANSITION_PORTAL:
-		return PhaseDiscreteEqual(source, destination) &&
-			PhaseClockEqual(source, destination) &&
-			Interval3BitsEqual(&source->velocity, &destination->velocity) &&
-			IntervalBitsEqual(&source->elapsed_ms, &destination->elapsed_ms);
+		return source->stance == destination->stance &&
+			((source->reference_frame == SG_RUNE_FRAME_WORLD &&
+			  destination->reference_frame == SG_RUNE_FRAME_WORLD) ||
+			 (source->reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE &&
+			  destination->reference_frame ==
+				SG_RUNE_FRAME_MOVER_RELATIVE &&
+			  SG_RuneModelStableIdEqual(&source->mover.value,
+				&destination->mover.value)));
 	case SG_RUNE_PHASE_TRANSITION_SUPPORT:
-		return source->motion == SG_RUNE_MOTION_AIRBORNE &&
+		return source->medium == destination->medium &&
+			source->motion == SG_RUNE_MOTION_AIRBORNE &&
 			source->support == SG_RUNE_SUPPORT_NONE &&
 			destination->motion == SG_RUNE_MOTION_SUPPORTED &&
 			destination->support != SG_RUNE_SUPPORT_NONE &&
@@ -989,6 +993,32 @@ static int TransitionPhaseSemanticsValid(
 	return 0;
 }
 
+static sg_phase_mechanism_state_mask_t PhaseStateMask(
+	const sg_ground_normalized_source_t *source,
+	const sg_rune_phase_basis_t *phase)
+{
+	sg_phase_mechanism_state_mask_t states = 0U;
+	uint32_t binding;
+
+	for (binding = 0U; binding < source->catalog_binding_count; binding++)
+		if (SG_RuneModelStableIdEqual(
+			&source->catalog_bindings[binding].phase.value,
+			&phase->id.value))
+			states |= source->catalog_bindings[binding].mechanism_state_mask;
+	return states;
+}
+
+static int PortalTimingFieldsValid(
+	const sg_phase_catalog_transition_evidence_t *evidence)
+{
+	return evidence->provider_verifier_identity == 0U &&
+		evidence->delay_ms == 0U && evidence->dwell_ms == 0U &&
+		evidence->travel_ms == 0U && evidence->wait_ms == 0U &&
+		evidence->reset_ms == 0U && evidence->activation_time_ms == 0U &&
+		evidence->active_time_ms == 0U && evidence->exit_time_ms == 0U &&
+		evidence->reset_time_ms == 0U;
+}
+
 static uint32_t TransitionTimingSpan(
 	const sg_phase_catalog_transition_evidence_t *evidence)
 {
@@ -1004,7 +1034,7 @@ static int TransitionValid(
 	const sg_ground_normalized_source_t *source,
 	const sg_ground_phase_ref_index_t *phase_index,
 	const sg_ground_cell_ref_index_t *cell_index,
-	const uint32_t *phase_cells, uint32_t index)
+	const uint32_t *phase_cells, const uint32_t *phase_regions, uint32_t index)
 {
 	const sg_rune_phase_transition_t *transition =
 		&source->phase_transitions[index];
@@ -1097,27 +1127,49 @@ static int TransitionValid(
 		}
 		break;
 	case SG_PHASE_CATALOG_TRANSITION_PORTAL:
+	{
+		const sg_configuration_portal_t *portal;
+		sg_phase_mechanism_state_mask_t source_states;
+		sg_phase_mechanism_state_mask_t destination_states;
+
 		if (evidence->source_record >= source->configuration->portal_count ||
 			transition->kind != SG_RUNE_PHASE_TRANSITION_PORTAL ||
 			!cross_cell || !ReferenceIsAbsent(&evidence->mechanism.value) ||
-			!TransitionTimingFieldsZero(evidence) ||
+			!PortalTimingFieldsValid(evidence) ||
 			evidence->portal_duration_ms != 0U ||
 			!FloatBitsEqual(transition->duration_ms.min_value, 0.0f) ||
-			!FloatBitsEqual(transition->duration_ms.max_value, 0.0f))
+			!FloatBitsEqual(transition->duration_ms.max_value, 0.0f) ||
+			phase_regions[source_phase] != source_region ||
+			phase_regions[destination_phase] != destination_region)
 			return 0;
+		portal = &source->configuration->portals[evidence->source_record];
+		if (!SG_RuneModelStableIdEqual(&evidence->portal.value,
+				&portal->id.value) ||
+			evidence->destination_record != destination_cell ||
+			source->phases[source_phase].stance != portal->stance ||
+			source->phases[destination_phase].stance != portal->stance ||
+			!((source_cell == portal->from_cell &&
+				destination_cell == portal->to_cell) ||
+			  (source_cell == portal->to_cell &&
+				destination_cell == portal->from_cell)))
+			return 0;
+		source_states = PhaseStateMask(source,
+			&source->phases[source_phase]);
+		destination_states = PhaseStateMask(source,
+			&source->phases[destination_phase]);
+		if (evidence->source_state_mask != source_states ||
+			evidence->destination_state_mask != destination_states)
+			return 0;
+		if (source->phases[source_phase].reference_frame ==
+				SG_RUNE_FRAME_WORLD)
 		{
-			const sg_configuration_portal_t *portal =
-				&source->configuration->portals[evidence->source_record];
-			if (!SG_RuneModelStableIdEqual(&evidence->portal.value,
-					&portal->id.value) ||
-				evidence->destination_record != destination_cell ||
-				!((source_cell == portal->from_cell &&
-					destination_cell == portal->to_cell) ||
-					(source_cell == portal->to_cell &&
-					destination_cell == portal->from_cell)))
+			if (source_states != 0U || destination_states != 0U)
 				return 0;
 		}
+		else if ((source_states & destination_states) == 0U)
+			return 0;
 		break;
+	}
 	case SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE:
 		if (evidence->source_record != source_region ||
 			evidence->destination_record != destination_region || cross_cell ||
@@ -1173,6 +1225,7 @@ static int NormalizePhaseCatalog(
 	sg_ground_cell_ref_index_t *cell_index = NULL;
 	sg_ground_catalog_binding_key_t *binding_keys = NULL;
 	uint32_t *phase_cells = NULL;
+	uint32_t *phase_regions = NULL;
 	uint8_t *region_seen = NULL;
 	uint32_t index;
 	int ok = 0;
@@ -1238,6 +1291,7 @@ static int NormalizePhaseCatalog(
 			sizeof(*cell_index)) ||
 		!AllocationFits(view->binding_count, sizeof(*binding_keys)) ||
 		!AllocationFits(view->phase_count, sizeof(*phase_cells)) ||
+		!AllocationFits(view->phase_count, sizeof(*phase_regions)) ||
 		!AllocationFits(source->semantics->region_count,
 			sizeof(*region_seen)))
 	{
@@ -1250,11 +1304,13 @@ static int NormalizePhaseCatalog(
 	binding_keys = malloc((size_t)view->binding_count *
 		sizeof(*binding_keys));
 	phase_cells = malloc((size_t)view->phase_count * sizeof(*phase_cells));
+	phase_regions = malloc((size_t)view->phase_count * sizeof(*phase_regions));
 	region_seen = calloc((size_t)source->semantics->region_count,
 		sizeof(*region_seen));
 	source->ground_bindings = malloc((size_t)view->phase_count *
 		sizeof(*source->ground_bindings));
 	if (!phase_index || !cell_index || !binding_keys || !phase_cells ||
+		!phase_regions ||
 		!region_seen || !source->ground_bindings)
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_OUT_OF_MEMORY, 0U);
@@ -1276,6 +1332,7 @@ static int NormalizePhaseCatalog(
 		phase_index[index].reference = source->phases[index].id;
 		phase_index[index].index = index;
 		phase_cells[index] = SG_GROUND_CAPABILITY_INDEX_NONE;
+		phase_regions[index] = SG_GROUND_CAPABILITY_INDEX_NONE;
 	}
 	qsort(phase_index, view->phase_count, sizeof(*phase_index),
 		PhaseRefIndexCompare);
@@ -1338,13 +1395,16 @@ static int NormalizePhaseCatalog(
 				binding->mechanism_state_mask == 0U :
 				binding->mechanism_state_mask != 0U) ||
 			(phase_cells[phase] != SG_GROUND_CAPABILITY_INDEX_NONE &&
-			 phase_cells[phase] != binding->configuration_cell))
+			 phase_cells[phase] != binding->configuration_cell) ||
+			(phase_regions[phase] != SG_GROUND_CAPABILITY_INDEX_NONE &&
+			 phase_regions[phase] != region))
 		{
 			SetResult(result, SG_GROUND_CAPABILITY_AUDIT_PHASE_BINDING_REJECTED,
 				index);
 			goto done;
 		}
 		phase_cells[phase] = binding->configuration_cell;
+		phase_regions[phase] = region;
 		region_seen[region] = 1U;
 		binding_keys[index].region = binding->semantic_region_id;
 		binding_keys[index].cell = binding->configuration_cell;
@@ -1394,7 +1454,7 @@ static int NormalizePhaseCatalog(
 		sizeof(*source->ground_bindings), GroundBindingCompare);
 	for (index = 0U; index < view->transition_count; index++)
 		if (!TransitionValid(source, phase_index, cell_index, phase_cells,
-			index))
+			phase_regions, index))
 		{
 			SetResult(result,
 				SG_GROUND_CAPABILITY_AUDIT_PHASE_TRANSITION_REJECTED, index);
@@ -1407,6 +1467,7 @@ done:
 	free(cell_index);
 	free(binding_keys);
 	free(phase_cells);
+	free(phase_regions);
 	free(region_seen);
 	if (ok)
 	{
