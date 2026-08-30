@@ -522,6 +522,63 @@ static void TestRuntimeIssuerLifeFences(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static void TestRuntimeIssuerGenerationInvalidatesTracks(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 100U);
+
+	/* A rejected issuer generation cannot publish its fence or disturb the
+	 * established target belief. */
+	SightObservation(&observation, 2U, 200U, 31U);
+	observation.target_life = Life(5U, 31U);
+	observation.authentication.issuer_life = Life(4U, 41U);
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	SG_BeliefTestHorizonScopeFailNext(
+		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 100U);
+	SightObservation(&observation, 3U, 160U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(1U, 180U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 180U);
+
+	/* Publishing issuer 4/41 retires every track that recorded issuer 4/40.
+	 * The later frame may advance the new track, never the stale one. */
+	SightObservation(&observation, 4U, 220U, 31U);
+	observation.target_life = Life(5U, 31U);
+	observation.authentication.issuer_life = Life(4U, 41U);
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	CHECK(SG_BeliefRuntimeFrame(2U, 300U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	view = SG_BeliefRuntimeViewForClient(1U, 5U);
+	CHECK(view && view->updated_at_ms == 300U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
 static void TestRuntimeFrameIsAtomic(void)
 {
 	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
@@ -957,6 +1014,7 @@ int main(void)
 	TestRuntimeReplacementIsAtomic();
 	TestRuntimeLifeFencePreventsResurrection();
 	TestRuntimeIssuerLifeFences();
+	TestRuntimeIssuerGenerationInvalidatesTracks();
 	TestRuntimeFrameIsAtomic();
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();

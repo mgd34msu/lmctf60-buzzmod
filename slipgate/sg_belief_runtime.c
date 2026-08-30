@@ -352,7 +352,30 @@ static int BeliefRuntimeLifeFenceCurrent(
 		fence->retired == 0U;
 }
 
-static void BeliefRuntimeClearSupersededTargetTracks(
+static int BeliefRuntimeTrackRecordsSupersededLife(
+	const belief_runtime_track_t *track,
+	const sg_belief_life_identity_t *life)
+{
+	size_t issuer;
+
+	if (!track || !SG_BeliefLifeIdentityValid(life))
+		return 0;
+	if (track->state.target_life.client_id == life->client_id &&
+		track->state.target_life.spawn_generation < life->spawn_generation)
+		return 1;
+	if (track->issuer_count == 0U)
+		return 0;
+	if (!track->issuers || track->issuer_count > track->issuer_capacity)
+		return 1;
+	for (issuer = 0U; issuer < track->issuer_count; issuer++)
+		if (track->issuers[issuer].client_id == life->client_id &&
+			track->issuers[issuer].spawn_generation <
+				life->spawn_generation)
+			return 1;
+	return 0;
+}
+
+static void BeliefRuntimeClearSupersededLifeTracks(
 	const sg_belief_life_identity_t *life)
 {
 	size_t team;
@@ -367,11 +390,23 @@ static void BeliefRuntimeClearSupersededTargetTracks(
 				&belief_runtime_tracks[team][client];
 
 			if (track->active == 1U &&
-				track->state.target_life.client_id == life->client_id &&
-				track->state.target_life.spawn_generation <
-					life->spawn_generation)
+				BeliefRuntimeTrackRecordsSupersededLife(track, life))
 				BeliefRuntimeClearTrack(track);
 		}
+}
+
+static int BeliefRuntimeTrackIssuersCurrent(
+	const belief_runtime_track_t *track)
+{
+	size_t issuer;
+
+	if (!track || track->issuer_count == 0U || !track->issuers ||
+		track->issuer_count > track->issuer_capacity)
+		return 0;
+	for (issuer = 0U; issuer < track->issuer_count; issuer++)
+		if (!BeliefRuntimeLifeFenceCurrent(&track->issuers[issuer]))
+			return 0;
+	return 1;
 }
 
 static void BeliefRuntimeLifePublicationCommit(
@@ -381,11 +416,12 @@ static void BeliefRuntimeLifePublicationCommit(
 
 	/* Both roles have already been authenticated and all fallible candidate
 	 * work has completed.  Publish every generation before clearing stale
-	 * target tracks, so one observation cannot expose a partial life order. */
+	 * tracks, including tracks derived from a retired issuer, so one observation
+	 * cannot expose a partial life order. */
 	for (index = 0U; index < publication->count; index++)
 		BeliefRuntimeLifeFenceCommit(&publication->lives[index]);
 	for (index = 0U; index < publication->count; index++)
-		BeliefRuntimeClearSupersededTargetTracks(&publication->lives[index]);
+		BeliefRuntimeClearSupersededLifeTracks(&publication->lives[index]);
 }
 
 static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
@@ -396,6 +432,7 @@ static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
 		track->state.audience_team == audience_team &&
 		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life) &&
 		BeliefRuntimeLifeFenceCurrent(target_life) &&
+		BeliefRuntimeTrackIssuersCurrent(track) &&
 		track->localization_generation ==
 			belief_runtime_provider.localization_generation &&
 		track->state.rune_identity == belief_runtime_provider.snapshot->identity &&
@@ -1000,7 +1037,8 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 				result = SG_BELIEF_RUNTIME_FRAME_REJECTED;
 				goto failure;
 			}
-			if (!BeliefRuntimeLifeFenceCurrent(&track->state.target_life))
+			if (!BeliefRuntimeLifeFenceCurrent(&track->state.target_life) ||
+				!BeliefRuntimeTrackIssuersCurrent(track))
 				continue;
 			result = BeliefRuntimeFrameCandidatePrepare(track, at_ms,
 				&candidates[team][client]);
