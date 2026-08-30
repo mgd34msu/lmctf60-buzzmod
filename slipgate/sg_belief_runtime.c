@@ -22,17 +22,36 @@ typedef struct belief_runtime_track_s
 	sg_belief_runtime_view_t view;
 } belief_runtime_track_t;
 
+typedef struct belief_runtime_life_fence_s
+{
+	uint64_t spawn_generation;
+	uint64_t observed_at_ms;
+	uint64_t authenticated_at_ms;
+	uint8_t retired;
+	uint8_t reserved[7];
+} belief_runtime_life_fence_t;
+
+typedef struct belief_runtime_frame_candidate_s
+{
+	belief_runtime_track_t track;
+	sg_belief_horizon_scope_prepared_t *horizon;
+} belief_runtime_frame_candidate_t;
+
 static sg_belief_runtime_provider_t belief_runtime_provider;
 static belief_runtime_track_t belief_runtime_tracks[2][SG_BELIEF_MAX_CLIENTS];
+static belief_runtime_life_fence_t
+	belief_runtime_life_fences[SG_BELIEF_MAX_CLIENTS];
 static uint64_t belief_runtime_reduction_sequence;
 static uint64_t belief_runtime_frame_sequence;
 static uint64_t belief_runtime_frame_time;
+static uint64_t belief_runtime_provider_epoch;
 
 typedef struct belief_runtime_provider_capture_s
 {
 	sg_belief_runtime_provider_t provider;
 	uint64_t rune_identity;
 	uint64_t topology_revision;
+	uint64_t epoch;
 } belief_runtime_provider_capture_t;
 
 static int BeliefRuntimeProviderValid(const sg_belief_runtime_provider_t *provider)
@@ -69,6 +88,7 @@ static int BeliefRuntimeProviderCapture(
 	capture->rune_identity = capture->provider.snapshot->identity;
 	capture->topology_revision =
 		capture->provider.snapshot->topology_revision;
+	capture->epoch = belief_runtime_provider_epoch;
 	return 1;
 }
 
@@ -76,6 +96,8 @@ static int BeliefRuntimeProviderCaptureCurrent(
 	const belief_runtime_provider_capture_t *capture)
 {
 	return capture && BeliefRuntimeCurrent() &&
+		belief_runtime_provider_epoch == capture->epoch &&
+		capture->epoch != 0U &&
 		belief_runtime_provider.snapshot == capture->provider.snapshot &&
 		belief_runtime_provider.localization_generation ==
 			capture->provider.localization_generation &&
@@ -110,17 +132,30 @@ void SG_BeliefRuntimeReset(void)
 	belief_runtime_reduction_sequence = 0U;
 	belief_runtime_frame_sequence = 0U;
 	belief_runtime_frame_time = 0U;
+	memset(belief_runtime_life_fences, 0,
+		sizeof(belief_runtime_life_fences));
 }
 
 int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider)
 {
-	memset(&belief_runtime_provider, 0, sizeof(belief_runtime_provider));
-	SG_BeliefRuntimeReset();
+	sg_belief_runtime_provider_t candidate;
+	uint64_t next_epoch;
+
 	if (!provider)
+	{
+		memset(&belief_runtime_provider, 0, sizeof(belief_runtime_provider));
+		SG_BeliefRuntimeReset();
 		return 1;
+	}
 	if (!BeliefRuntimeProviderValid(provider))
 		return 0;
-	belief_runtime_provider = *provider;
+	if (belief_runtime_provider_epoch == UINT64_MAX)
+		return 0;
+	candidate = *provider;
+	next_epoch = belief_runtime_provider_epoch + 1U;
+	SG_BeliefRuntimeReset();
+	belief_runtime_provider = candidate;
+	belief_runtime_provider_epoch = next_epoch;
 	return 1;
 }
 
@@ -133,6 +168,13 @@ const sg_rune_runtime_snapshot_t *SG_BeliefRuntimeSnapshot(void)
 {
 	return BeliefRuntimeCurrent() ? belief_runtime_provider.snapshot : NULL;
 }
+
+#if defined(SG_BELIEF_TESTING)
+void SG_BeliefTestRuntimeProviderEpochExhaust(void)
+{
+	belief_runtime_provider_epoch = UINT64_MAX;
+}
+#endif
 
 static int BeliefRuntimeFinite3(const float value[3])
 {
@@ -184,6 +226,88 @@ static belief_runtime_track_t *BeliefRuntimeTrack(uint8_t audience_team,
 		!SG_BeliefLifeIdentityValid(target_life))
 		return NULL;
 	return &belief_runtime_tracks[team_index][target_life->client_id];
+}
+
+static int BeliefRuntimeLifeFenceAdmits(
+	const sg_belief_evidence_t *evidence)
+{
+	const belief_runtime_life_fence_t *fence;
+	const sg_belief_life_identity_t *life;
+
+	if (!evidence || !SG_BeliefLifeIdentityValid(&evidence->target_life))
+		return 0;
+	life = &evidence->target_life;
+	fence = &belief_runtime_life_fences[life->client_id];
+	if (fence->spawn_generation == 0U)
+		return 1;
+	if (life->spawn_generation < fence->spawn_generation)
+		return 0;
+	/* A fresh authenticated life is ordered by its non-reusable generation,
+	 * not by receipt timing from its retired predecessor.  Timestamps order
+	 * evidence only within that exact life. */
+	if (life->spawn_generation > fence->spawn_generation)
+		return 1;
+	if (life->spawn_generation == fence->spawn_generation && fence->retired)
+		return 0;
+	return evidence->observed_at_ms >= fence->observed_at_ms &&
+		evidence->provenance.authenticated_at_ms >=
+			fence->authenticated_at_ms;
+}
+
+static void BeliefRuntimeLifeFenceCommit(
+	const sg_belief_evidence_t *evidence)
+{
+	belief_runtime_life_fence_t *fence;
+	const sg_belief_life_identity_t *life;
+
+	if (!evidence || !SG_BeliefLifeIdentityValid(&evidence->target_life))
+		return;
+	life = &evidence->target_life;
+	fence = &belief_runtime_life_fences[life->client_id];
+	if (life->spawn_generation > fence->spawn_generation)
+	{
+		fence->spawn_generation = life->spawn_generation;
+		fence->observed_at_ms = evidence->observed_at_ms;
+		fence->authenticated_at_ms =
+			evidence->provenance.authenticated_at_ms;
+		fence->retired = 0U;
+		return;
+	}
+	if (life->spawn_generation == fence->spawn_generation)
+	{
+		if (evidence->observed_at_ms > fence->observed_at_ms)
+			fence->observed_at_ms = evidence->observed_at_ms;
+		if (evidence->provenance.authenticated_at_ms >
+			fence->authenticated_at_ms)
+			fence->authenticated_at_ms =
+				evidence->provenance.authenticated_at_ms;
+	}
+}
+
+static void BeliefRuntimeLifeFenceRetire(
+	const sg_belief_life_identity_t *life)
+{
+	belief_runtime_life_fence_t *fence;
+
+	if (!SG_BeliefLifeIdentityValid(life))
+		return;
+	fence = &belief_runtime_life_fences[life->client_id];
+	if (life->spawn_generation < fence->spawn_generation)
+		return;
+	if (life->spawn_generation > fence->spawn_generation)
+	{
+		fence->spawn_generation = life->spawn_generation;
+		fence->observed_at_ms = 0U;
+		fence->authenticated_at_ms = 0U;
+	}
+	fence->retired = 1U;
+}
+
+static void BeliefRuntimeClientFenceRetire(uint32_t client_id)
+{
+	if (client_id < SG_BELIEF_MAX_CLIENTS &&
+		belief_runtime_life_fences[client_id].spawn_generation != 0U)
+		belief_runtime_life_fences[client_id].retired = 1U;
 }
 
 static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
@@ -513,6 +637,94 @@ static sg_belief_runtime_frame_result_t BeliefRuntimeRefreshView(
 	return result;
 }
 
+static void BeliefRuntimeFrameCandidateClear(
+	belief_runtime_frame_candidate_t *candidate)
+{
+	if (!candidate)
+		return;
+	SG_BeliefHorizonScopePreparedDestroy(candidate->horizon);
+	free(candidate->track.particles);
+	free(candidate->track.scratch_first);
+	free(candidate->track.scratch_second);
+	free(candidate->track.prediction_particles);
+	memset(candidate, 0, sizeof(*candidate));
+}
+
+static sg_belief_runtime_frame_result_t BeliefRuntimeFrameCandidatePrepare(
+	const belief_runtime_track_t *track, uint64_t at_ms,
+	belief_runtime_frame_candidate_t *candidate)
+{
+	const sg_belief_horizon_authority_t *authority = NULL;
+	sg_belief_horizon_accept_result_t horizon_result;
+	sg_belief_runtime_frame_result_t result;
+
+	if (!track || !candidate || !track->active ||
+		!SG_BeliefStateValid(&track->state) ||
+		!track->horizon_scope || at_ms < track->state.updated_at_ms)
+		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
+	memset(candidate, 0, sizeof(*candidate));
+	candidate->track = *track;
+	candidate->track.particles = NULL;
+	candidate->track.scratch_first = NULL;
+	candidate->track.scratch_second = NULL;
+	candidate->track.prediction_particles = NULL;
+	candidate->track.capacity = 0U;
+	candidate->track.issuers = NULL;
+	candidate->track.issuer_count = 0U;
+	candidate->track.issuer_capacity = 0U;
+	memset(&candidate->track.view, 0, sizeof(candidate->track.view));
+	if (!BeliefRuntimeGrowTrack(&candidate->track, track->capacity))
+		return SG_BELIEF_RUNTIME_FRAME_CAPACITY;
+	if (at_ms > track->state.updated_at_ms)
+	{
+		horizon_result = SG_BeliefHorizonScopePrepareCandidate(
+			track->horizon_scope, belief_runtime_provider.snapshot,
+			&candidate->track.state, at_ms, 0U, &candidate->horizon);
+		if (horizon_result != SG_BELIEF_HORIZON_ACCEPTED)
+			return horizon_result == SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
+				SG_BELIEF_RUNTIME_FRAME_CAPACITY :
+				horizon_result == SG_BELIEF_HORIZON_OVERFLOW ?
+					SG_BELIEF_RUNTIME_FRAME_OVERFLOW :
+					SG_BELIEF_RUNTIME_FRAME_REJECTED;
+		authority = SG_BeliefHorizonScopePreparedAuthority(candidate->horizon);
+		if (!authority)
+			return SG_BELIEF_RUNTIME_FRAME_REJECTED;
+	}
+	result = BeliefRuntimePredict(&candidate->track, at_ms, authority,
+		&candidate->track.view);
+	return result;
+}
+
+static void BeliefRuntimeFrameCandidateCommit(belief_runtime_track_t *track,
+	belief_runtime_frame_candidate_t *candidate)
+{
+	if (!track || !candidate)
+		return;
+	if (candidate->horizon)
+	{
+		SG_BeliefHorizonScopePreparedCommit(track->horizon_scope,
+			candidate->horizon);
+		candidate->horizon = NULL;
+	}
+	free(track->particles);
+	free(track->scratch_first);
+	free(track->scratch_second);
+	free(track->prediction_particles);
+	track->particles = candidate->track.particles;
+	track->scratch_first = candidate->track.scratch_first;
+	track->scratch_second = candidate->track.scratch_second;
+	track->prediction_particles = candidate->track.prediction_particles;
+	track->capacity = candidate->track.capacity;
+	track->state = candidate->track.state;
+	track->state.particles = track->particles;
+	track->state.particle_capacity = track->capacity;
+	track->view = candidate->track.view;
+	candidate->track.particles = NULL;
+	candidate->track.scratch_first = NULL;
+	candidate->track.scratch_second = NULL;
+	candidate->track.prediction_particles = NULL;
+}
+
 sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	const sg_perception_observation_t *observation)
 {
@@ -568,7 +780,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	}
 	track = BeliefRuntimeTrack(adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life);
-	if (!track)
+	if (!track || !BeliefRuntimeLifeFenceAdmits(&adaptation.evidence))
 	{
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
@@ -664,6 +876,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		BeliefRuntimeClearTrack(track);
 		*track = candidate;
 	}
+	BeliefRuntimeLifeFenceCommit(&adaptation.evidence);
 	belief_runtime_reduction_sequence = sequence;
 	(void)BeliefRuntimeRefreshView(track);
 	return SG_BELIEF_RUNTIME_OBSERVE_APPLIED;
@@ -672,8 +885,10 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 	uint64_t frame_sequence, uint64_t at_ms)
 {
+	belief_runtime_frame_candidate_t candidates[2][SG_BELIEF_MAX_CLIENTS];
 	size_t team;
 	size_t client;
+	sg_belief_runtime_frame_result_t result;
 
 	if (!BeliefRuntimeCurrent())
 		return SG_BELIEF_RUNTIME_FRAME_UNAVAILABLE;
@@ -684,49 +899,40 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 		SG_BeliefRuntimeReset();
 		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
 	}
+	memset(candidates, 0, sizeof(candidates));
 	for (team = 0U; team < 2U; team++)
 		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
 		{
 			belief_runtime_track_t *track = &belief_runtime_tracks[team][client];
-			const sg_belief_horizon_authority_t *authority;
-			const sg_belief_horizon_kernel_t *kernels;
-			sg_belief_runtime_frame_result_t result;
-			sg_belief_runtime_view_t view;
-			size_t kernel_count;
 
 			if (!track->active)
 				continue;
 			if (!SG_BeliefStateValid(&track->state) ||
 				track->state.updated_at_ms > at_ms)
 			{
-				if (!SG_BeliefStateValid(&track->state))
-					BeliefRuntimeClearTrack(track);
-				else
-					return SG_BELIEF_RUNTIME_FRAME_REJECTED;
-				continue;
+				result = SG_BELIEF_RUNTIME_FRAME_REJECTED;
+				goto failure;
 			}
-			authority = NULL;
-			kernels = NULL;
-			kernel_count = 0U;
-			result = BeliefRuntimeHorizonPrepare(track, at_ms, 0U,
-				&authority, &kernels, &kernel_count);
+			result = BeliefRuntimeFrameCandidatePrepare(track, at_ms,
+				&candidates[team][client]);
 			if (result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
-				return result;
-			result = BeliefRuntimePredict(track, at_ms, authority, &view);
-			if (result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
-				return result;
-			if (at_ms > track->state.updated_at_ms &&
-				(kernels == NULL || kernel_count == 0U))
-				return SG_BELIEF_RUNTIME_FRAME_REJECTED;
-			/* A frame publishes an authenticated horizon projection but does not
-			 * commit an empty reducer frame.  Later evidence therefore always
-			 * reduces from the same prior observation time, independent of how
-			 * many intermediate render/think frames sampled the belief. */
-			track->view = view;
+				goto failure;
 		}
+	for (team = 0U; team < 2U; team++)
+		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
+			if (belief_runtime_tracks[team][client].active)
+				BeliefRuntimeFrameCandidateCommit(
+					&belief_runtime_tracks[team][client],
+					&candidates[team][client]);
 	belief_runtime_frame_sequence = frame_sequence;
 	belief_runtime_frame_time = at_ms;
 	return SG_BELIEF_RUNTIME_FRAME_APPLIED;
+
+failure:
+	for (team = 0U; team < 2U; team++)
+		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
+			BeliefRuntimeFrameCandidateClear(&candidates[team][client]);
+	return result;
 }
 
 void SG_BeliefRuntimeRetireLife(const sg_belief_life_identity_t *life)
@@ -736,6 +942,7 @@ void SG_BeliefRuntimeRetireLife(const sg_belief_life_identity_t *life)
 
 	if (!SG_BeliefLifeIdentityValid(life))
 		return;
+	BeliefRuntimeLifeFenceRetire(life);
 	for (team = 0U; team < 2U; team++)
 		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
 		{
@@ -756,6 +963,7 @@ void SG_BeliefRuntimeRetireClient(uint32_t client_id)
 
 	if (client_id >= SG_BELIEF_MAX_CLIENTS)
 		return;
+	BeliefRuntimeClientFenceRetire(client_id);
 	for (team = 0U; team < 2U; team++)
 		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
 		{

@@ -75,8 +75,11 @@ typedef enum sg_belief_runtime_frame_result_e
 	SG_BELIEF_RUNTIME_FRAME_OVERFLOW
 } sg_belief_runtime_frame_result_t;
 
-/* Registration is a lifecycle boundary.  Replacing or clearing a provider
- * retires every track before any borrowed snapshot or locator can go stale. */
+/* Registration is a lifecycle boundary.  A non-NULL replacement is validated
+ * completely before it can retire tracks or the current provider.  Every
+ * accepted registration receives a monotonic, non-wrapping owner identity,
+ * including an equal-valued or policy-only replacement.  Clearing retires
+ * every track before any borrowed snapshot or locator can go stale. */
 int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider);
 int SG_BeliefRuntimeProviderAvailable(void);
 void SG_BeliefRuntimeReset(void);
@@ -97,9 +100,10 @@ int SG_BeliefRuntimeHypothesis(const sg_belief_runtime_pose_t *pose,
 sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	const sg_perception_observation_t *observation);
 
-/* Age every current track and refresh its predictor-backed view.  A sequence
- * or timestamp regression retires all tracks and fails closed.  Capacity is
- * never truncated: a capacity result leaves that track's belief unchanged. */
+/* Age every current track and refresh its predictor-backed view atomically.
+ * A sequence or timestamp regression retires all tracks and fails closed.
+ * Capacity is never truncated: any non-applied result leaves every track and
+ * the global frame bookkeeping unchanged. */
 sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 	uint64_t frame_sequence, uint64_t at_ms);
 
@@ -122,5 +126,9 @@ const sg_belief_runtime_view_t *SG_BeliefRuntimeView(uint8_t audience_team,
  * from turning a belief lookup back into an enemy-state oracle. */
 const sg_belief_runtime_view_t *SG_BeliefRuntimeViewForClient(
 	uint8_t audience_team, uint32_t client_id);
+
+#if defined(SG_BELIEF_TESTING)
+void SG_BeliefTestRuntimeProviderEpochExhaust(void);
+#endif
 
 #endif /* SG_BELIEF_RUNTIME_H */

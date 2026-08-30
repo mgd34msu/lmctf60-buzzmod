@@ -27,6 +27,7 @@ typedef struct runtime_fixture_s
 } runtime_fixture_t;
 
 static sg_belief_runtime_provider_t replacement_provider;
+static sg_belief_runtime_provider_t restored_provider;
 
 static sg_rune_stable_id_t StableId(uint64_t low)
 {
@@ -150,6 +151,17 @@ static int LocateReplacingProvider(void *context,
 	int located = Locate(context, snapshot, position, phase_out);
 
 	(void)SG_BeliefRuntimeProviderSet(&replacement_provider);
+	return located;
+}
+
+static int LocateReplacingProviderTwice(void *context,
+	const sg_rune_runtime_snapshot_t *snapshot, const float position[3],
+	sg_phase_coordinate_t *phase_out)
+{
+	int located = Locate(context, snapshot, position, phase_out);
+
+	(void)SG_BeliefRuntimeProviderSet(&replacement_provider);
+	(void)SG_BeliefRuntimeProviderSet(&restored_provider);
 	return located;
 }
 
@@ -332,6 +344,106 @@ static void TestRuntimeReplacementIsAtomic(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static void TestRuntimeLifeFencePreventsResurrection(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t life31;
+	sg_belief_life_identity_t life32;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	life31 = Life(3U, 31U);
+	life32 = Life(3U, 32U);
+	SightObservation(&observation, 1U, 200U, 31U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SightObservation(&observation, 2U, 150U, 30U);
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
+	/* Spawn generation dominates timestamps from a retired life: this really
+	 * is a new occupant, so build its candidate and swap only after reduction
+	 * succeeds. */
+	SightObservation(&observation, 3U, 100U, 32U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life32));
+	SG_BeliefRuntimeRetireLife(&life32);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	SightObservation(&observation, 4U, 500U, 32U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	SightObservation(&observation, 5U, 600U, 33U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SG_BeliefRuntimeRetireClient(3U);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	SightObservation(&observation, 6U, 700U, 33U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	SightObservation(&observation, 7U, 800U, 34U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeFrameIsAtomic(void)
+{
+	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
+		SG_BELIEF_HORIZON_ALLOCATION_FAILED,
+		SG_BELIEF_HORIZON_OVERFLOW
+	};
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	const sg_belief_runtime_view_t *first;
+	const sg_belief_runtime_view_t *second;
+	size_t kind;
+	size_t failure_index;
+
+	for (kind = 0U; kind < sizeof(failures_to_inject) /
+		sizeof(failures_to_inject[0]); kind++)
+		for (failure_index = 0U; failure_index < 2U; failure_index++)
+		{
+			FixtureInit(&fixture);
+			provider = Provider(&fixture, 1U, 0.5f);
+			CHECK(SG_BeliefRuntimeProviderSet(&provider));
+			SightObservation(&observation, 1U, 100U, 30U);
+			CHECK(SG_BeliefRuntimeObserve(&observation) ==
+				SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+			SightObservation(&observation, 2U, 100U, 30U);
+			observation.target_life = Life(5U, 30U);
+			CHECK(SG_BeliefRuntimeObserve(&observation) ==
+				SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+			SG_BeliefTestHorizonScopeFailAfter(failure_index,
+				failures_to_inject[kind]);
+			CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
+				(failures_to_inject[kind] ==
+				 SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
+					SG_BELIEF_RUNTIME_FRAME_CAPACITY :
+					SG_BELIEF_RUNTIME_FRAME_OVERFLOW));
+			first = SG_BeliefRuntimeViewForClient(1U, 3U);
+			second = SG_BeliefRuntimeViewForClient(1U, 5U);
+			CHECK(first && first->updated_at_ms == 100U);
+			CHECK(second && second->updated_at_ms == 100U);
+			CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
+				SG_BELIEF_RUNTIME_FRAME_APPLIED);
+			first = SG_BeliefRuntimeViewForClient(1U, 3U);
+			second = SG_BeliefRuntimeViewForClient(1U, 5U);
+			CHECK(first && first->updated_at_ms == 200U);
+			CHECK(second && second->updated_at_ms == 200U);
+			CHECK(SG_BeliefRuntimeProviderSet(NULL));
+		}
+}
+
 static void TestRuntimeRejectedObservationPreservesTrack(void)
 {
 	runtime_fixture_t fixture;
@@ -389,6 +501,85 @@ static void TestRuntimeLocatorProviderChangeRejected(void)
 	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
 	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
 	CHECK(SG_BeliefRuntimeProviderAvailable());
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeProviderReplacementIsTransactional(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_belief_runtime_provider_t invalid;
+	sg_belief_runtime_pose_t pose;
+	sg_perception_hypothesis_t hypothesis;
+	sg_perception_hypothesis_t expected;
+	sg_perception_observation_t observation;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SightObservation(&observation, 2U, 100U, 30U);
+	observation.target_life = Life(5U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	invalid = provider;
+	invalid.localization_generation = 0U;
+	CHECK(!SG_BeliefRuntimeProviderSet(&invalid));
+	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 5U) != NULL);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+
+	provider = Provider(&fixture, 1U, 0.5f);
+	provider.locate = LocateReplacingProvider;
+	replacement_provider = provider;
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	memset(&pose, 0, sizeof(pose));
+	pose.movement_state = SG_BELIEF_MOTION_GROUND;
+	memset(&hypothesis, 0xa5, sizeof(hypothesis));
+	expected = hypothesis;
+	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
+	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
+	CHECK(SG_BeliefRuntimeProviderAvailable());
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+
+	provider = Provider(&fixture, 1U, 0.5f);
+	provider.locate = LocateReplacingProviderTwice;
+	replacement_provider = Provider(&fixture, 2U, 0.5f);
+	restored_provider = provider;
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	memset(&hypothesis, 0xa5, sizeof(hypothesis));
+	expected = hypothesis;
+	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
+	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
+	CHECK(SG_BeliefRuntimeProviderAvailable());
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+
+	provider = Provider(&fixture, 1U, 0.5f);
+	provider.locate = LocateReplacingProvider;
+	replacement_provider = provider;
+	replacement_provider.policy.diffusion_fraction = 0.25f;
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	memset(&hypothesis, 0xa5, sizeof(hypothesis));
+	expected = hypothesis;
+	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
+	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
+	CHECK(SG_BeliefRuntimeProviderAvailable());
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+
+	provider = Provider(&fixture, 1U, 0.5f);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 3U, 300U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SG_BeliefTestRuntimeProviderEpochExhaust();
+	invalid = provider;
+	invalid.policy.diffusion_fraction = 0.25f;
+	CHECK(!SG_BeliefRuntimeProviderSet(&invalid));
+	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
@@ -635,10 +826,13 @@ int main(void)
 {
 	TestRuntimeHorizonScopeLifecycle();
 	TestRuntimeReplacementIsAtomic();
+	TestRuntimeLifeFencePreventsResurrection();
+	TestRuntimeFrameIsAtomic();
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();
 	TestRuntimeDelayedEvidenceConverges();
 	TestRuntimeOwner();
+	TestRuntimeProviderReplacementIsTransactional();
 	if (failures != 0)
 	{
 		fprintf(stderr, "sg_belief_runtime_test: %d failure(s)\n", failures);
