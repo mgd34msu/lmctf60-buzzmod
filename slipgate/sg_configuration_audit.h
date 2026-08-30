@@ -39,4 +39,8 @@ int SG_ConfigurationAudit(const sg_host_collision_authority_t *authority,
 	sg_configuration_audit_result_t *result_out);
 const char *SG_ConfigurationAuditCodeString(sg_configuration_audit_code_t code);
 
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationAuditTestTangentPortalGeometry(void);
+#endif
+
 #endif

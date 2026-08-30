@@ -403,10 +403,31 @@ static void TestEmptyWaterVoidAndAdversarialRecords(void)
 				space->portal_count--;
 			}
 		}
+		{
+			sg_configuration_portal_t *grown = realloc(space->portals,
+				(size_t)(portal_count + 1U) * sizeof(*grown));
+
+			CHECK(grown != NULL);
+			if (grown)
+			{
+				space->portals = grown;
+				grown[portal_count] = grown[0];
+				space->portal_count++;
+				CHECK(!SG_BspCompletenessProve(&authority, space, &result));
+				CHECK(result.code == SG_BSP_COMPLETENESS_INVENTED_PORTAL);
+				space->portal_count--;
+			}
+		}
 		clearance = space->portals[0].clearance;
 		space->portals[0].clearance = 0.0f;
 		CHECK(!SG_BspCompletenessProve(&authority, space, &result));
-		CHECK(result.code == SG_BSP_COMPLETENESS_OMITTED_PORTAL);
+		CHECK(result.code == SG_BSP_COMPLETENESS_INVALID_PORTAL);
+		space->portals[0].clearance = NAN;
+		CHECK(!SG_BspCompletenessProve(&authority, space, &result));
+		CHECK(result.code == SG_BSP_COMPLETENESS_INVALID_PORTAL);
+		space->portals[0].clearance = clearance * 2.0f;
+		CHECK(!SG_BspCompletenessProve(&authority, space, &result));
+		CHECK(result.code == SG_BSP_COMPLETENESS_INVALID_PORTAL);
 		space->portals[0].clearance = clearance;
 		CHECK(Prove(&authority, space, &result));
 		{
@@ -515,6 +536,74 @@ static void TestEquivalentPlanePortalIndex(void)
 	DestroyFixture(&fixture);
 }
 
+static void TestAuthoritativeFacetPortal(void)
+{
+	test_box_t boxes[8];
+	fixture_t fixture;
+	sg_host_collision_authority_t authority;
+	sg_configuration_space_t *space = NULL;
+	sg_bsp_completeness_result_t result;
+	uint32_t brush, portal;
+	int found = 0;
+
+	for (brush = 0U; brush < 8U; brush++)
+	{
+		float center = -112.0f + 32.0f * (float)brush;
+
+		SetVector(boxes[brush].mins, center - 24.0f, center - 24.0f,
+			-96.0f);
+		SetVector(boxes[brush].maxs, center + 24.0f, center + 24.0f,
+			-64.0f + 2.0f * (float)brush);
+		boxes[brush].contents = SG_HOST_CONTENTS_SOLID;
+	}
+	fixture = Fixture(boxes, 8U, SG_HOST_CONTENTS_SOLID,
+		SG_HOST_CONTENTS_SOLID);
+	SetPlane(&fixture.planes[0], 1.0f, 0.0f, 0.0f, -4000.0f);
+	fixture.nodes[0].children[0] = -2;
+	fixture.nodes[0].children[1] = -1;
+	fixture.leaves[0].first_leaf_brush = 0U;
+	fixture.leaves[0].leaf_brush_count = 0U;
+	fixture.leaves[1].first_leaf_brush = 0U;
+	fixture.leaves[1].leaf_brush_count = 8U;
+	fixture.world.leaf_brush_count = 8U;
+	CHECK(Build(&fixture, &authority, &space));
+	if (space)
+	{
+		CHECK(Prove(&authority, space, &result));
+		for (portal = 0U; portal < space->portal_count; portal++)
+		{
+			const sg_configuration_portal_t *candidate =
+				&space->portals[portal];
+			float mins[3] = { INFINITY, INFINITY, INFINITY };
+			float maxs[3] = { -INFINITY, -INFINITY, -INFINITY };
+			uint32_t vertex, axis;
+
+			if (candidate->plane.normal[0] != 1.0f ||
+				candidate->plane.normal[1] != 0.0f ||
+				candidate->plane.normal[2] != 0.0f ||
+				candidate->plane.distance != -152.0f)
+				continue;
+			for (vertex = 0U; vertex < candidate->vertex_count; vertex++)
+				for (axis = 0U; axis < 3U; axis++)
+				{
+					float value = space->vertices[
+						candidate->first_vertex + vertex].value[axis];
+
+					mins[axis] = fminf(mins[axis], value);
+					maxs[axis] = fmaxf(maxs[axis], value);
+				}
+			if (candidate->vertex_count == 4U && mins[0] == -152.0f &&
+				maxs[0] == -152.0f && mins[1] == -152.0f &&
+				maxs[1] == -72.0f && mins[2] == -40.0f &&
+				maxs[2] == 4095.875f)
+				found = 1;
+		}
+		CHECK(found);
+	}
+	SG_ConfigurationDestroy(space);
+	DestroyFixture(&fixture);
+}
+
 static void TestCellCoveragePlaneScaleInvariance(void)
 {
 	static const float scales[] = {
@@ -600,11 +689,108 @@ static void TestTranslatedCornerRounding(void)
 	CHECK(!pose.valid);
 	if (space)
 	{
-		CHECK(!SG_BspCompletenessProve(&authority, space, &result));
-		CHECK(result.code == SG_BSP_COMPLETENESS_OMITTED_PORTAL);
+		CHECK(Prove(&authority, space, &result));
+		CHECK(result.code == SG_BSP_COMPLETENESS_OK);
+		CHECK(space->cell_count == 24U);
+		CHECK(space->portal_count == 52U);
+		CHECK(result.represented_cells == space->cell_count);
 		CHECK(result.proved_cells == space->cell_count);
+		CHECK(result.omitted_cells == 0U);
+		CHECK(result.invented_cells == 0U);
+		CHECK(result.represented_portals == space->portal_count);
+		CHECK(result.expected_portals == space->portal_count);
+		CHECK(result.proved_portals == space->portal_count);
+		CHECK(result.omitted_portals == 0U);
+		CHECK(result.invented_portals == 0U);
 	}
 	SG_ConfigurationDestroy(space);
+	DestroyFixture(&fixture);
+}
+
+static void TestNarrowHighCoordinatePortal(void)
+{
+	const float low = 4095.7451171875f;
+	const float high = 4095.7548828125f;
+	const float hostile_low = 4095.733642578125f;
+	const float hostile_high = 4095.7666015625f;
+	const float width = high - low;
+	const float coordinate_ulp = nextafterf(low, INFINITY) - low;
+	fixture_t fixture = Fixture(NULL, 0U, 0, 0);
+	sg_rune_model_identity_t identity = Identity();
+	sg_host_collision_authority_t authority;
+	sg_host_collision_error_t host_error;
+	sg_bsp_completeness_result_t result;
+	float near_low, near_high;
+
+	CHECK(SG_HostCollisionInit(&authority, &fixture.world, &identity,
+		&host_error));
+	CHECK(width == 0.009765625f);
+	CHECK(width * width > 0.000001f);
+	CHECK((hostile_high - hostile_low) / coordinate_ulp == 135.0f);
+	CHECK((hostile_high - hostile_low) * (hostile_high - hostile_low) /
+		(width * width) == 11.390625f);
+	CHECK(SG_BspProofTestNarrowHighCoordinatePortal(&authority, low, high,
+		low, high, &result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_OK);
+	CHECK(result.expected_portals == 1U);
+	CHECK(result.proved_portals == 1U);
+	CHECK(result.portal_lookup_candidates == 1U);
+	near_low = nextafterf(low, -INFINITY);
+	near_high = nextafterf(high, INFINITY);
+	CHECK(SG_BspProofTestNarrowHighCoordinatePortal(&authority, low, high,
+		near_low, near_high, &result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_OK);
+	CHECK(!SG_BspProofTestNarrowHighCoordinatePortal(&authority, low, high,
+		hostile_low, hostile_high, &result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_OMITTED_PORTAL);
+	CHECK(result.omitted_portals == 1U);
+	CHECK(!SG_BspProofTestNarrowHighCoordinateBowtie(&authority, low, high,
+		&result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_INVALID_PORTAL);
+	CHECK(!SG_BspProofTestNormalDisplacedHighCoordinatePortal(&authority,
+		0.0005f, &result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_INVALID_PORTAL);
+	DestroyFixture(&fixture);
+}
+
+static void TestTinyPortalRepresentationTolerance(void)
+{
+	const float low = 0.0f;
+	const float high = 0.0015f;
+	const float enlarged_high = 0.0017f;
+	fixture_t fixture = Fixture(NULL, 0U, 0, 0);
+	sg_rune_model_identity_t identity = Identity();
+	sg_host_collision_authority_t authority;
+	sg_host_collision_error_t host_error;
+	sg_bsp_completeness_result_t result;
+
+	CHECK(SG_HostCollisionInit(&authority, &fixture.world, &identity,
+		&host_error));
+	CHECK((high - low) * (high - low) > 0.000001f);
+	CHECK((enlarged_high - low) * (enlarged_high - low) -
+		(high - low) * (high - low) < 0.000001f);
+	CHECK(SG_BspProofTestNarrowHighCoordinatePortal(&authority, low, high,
+		low, high, &result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_OK);
+	CHECK(!SG_BspProofTestNarrowHighCoordinatePortal(&authority, low, high,
+		low, enlarged_high, &result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_OMITTED_PORTAL);
+	DestroyFixture(&fixture);
+}
+
+static void TestConstraintFallbackPortalGeometry(void)
+{
+	fixture_t fixture = Fixture(NULL, 0U, 0, 0);
+	sg_rune_model_identity_t identity = Identity();
+	sg_host_collision_authority_t authority;
+	sg_host_collision_error_t host_error;
+	sg_bsp_completeness_result_t result;
+
+	CHECK(SG_HostCollisionInit(&authority, &fixture.world, &identity,
+		&host_error));
+	CHECK(!SG_BspProofTestConstraintFallbackInventedPortal(&authority,
+		&result));
+	CHECK(result.code == SG_BSP_COMPLETENESS_OMITTED_PORTAL);
 	DestroyFixture(&fixture);
 }
 
@@ -834,11 +1020,16 @@ static void TestSameLeafIntervalScaling(void)
 int main(void)
 {
 	CHECK(SG_BspProofTestZeroPolygonPortalKinds());
+	CHECK(SG_BspProofTestPortalVertexLimit());
+	TestAuthoritativeFacetPortal();
 	TestEmptyWaterVoidAndAdversarialRecords();
 	TestHostLeafGatingAndExactBrushBoundary();
 	TestEquivalentPlanePortalIndex();
 	TestCellCoveragePlaneScaleInvariance();
 	TestTranslatedCornerRounding();
+	TestNarrowHighCoordinatePortal();
+	TestTinyPortalRepresentationTolerance();
+	TestConstraintFallbackPortalGeometry();
 	TestLowCeilingWindowAndHalfWall();
 	TestRampMultiHeightAndLargeCoordinates();
 	TestSupportedRoom();

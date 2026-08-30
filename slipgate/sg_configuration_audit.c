@@ -1,6 +1,7 @@
 #include "sg_configuration_audit.h"
 #include "sg_configuration_lattice.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -272,12 +273,56 @@ static int PlaneMatches(const sg_configuration_plane_t *face,
 		face->source_index != space->source_index ||
 		face->source_variant != space->source_variant ||
 		face->reversed != space->reversed ||
-		fabsf(face->distance - space->distance) > AUDIT_EPSILON)
+		face->distance != space->distance)
 		return 0;
 	for (axis = 0; axis < 3; axis++)
-		if (fabsf(face->normal[axis] - space->normal[axis]) > AUDIT_EPSILON)
+		if (face->normal[axis] != space->normal[axis])
 			return 0;
 	return 1;
+}
+
+static int CellImpliesConstraintQ8(audit_context_t *audit,
+	const sg_configuration_cell_t *cell, const audit_halfspace_t *constraint)
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	sg_configuration_lattice_stats_t stats = { 0 };
+	int32_t point[3];
+	uint32_t face, axis;
+	int result;
+
+	if (cell->face_count == UINT32_MAX)
+		return -1;
+#if SIZE_MAX == UINT32_MAX
+	if ((size_t)(cell->face_count + 1U) > SIZE_MAX / sizeof(*halfspaces))
+		return -1;
+#endif
+	halfspaces = malloc((size_t)(cell->face_count + 1U) *
+		sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_plane_t *plane = &audit->space->faces[
+			cell->first_face + face].plane;
+		audit_halfspace_t source = FromPlane(plane);
+
+		CopyVector(halfspaces[face].normal, plane->normal);
+		halfspaces[face].distance = plane->distance;
+		halfspaces[face].open = HalfspaceIsOpen(&source);
+	}
+	for (axis = 0U; axis < 3U; axis++)
+		halfspaces[cell->face_count].normal[axis] = -constraint->normal[axis];
+	halfspaces[cell->face_count].distance = -constraint->distance;
+	halfspaces[cell->face_count].open = !HalfspaceIsOpen(constraint);
+	result = SG_ConfigurationLatticeFind(halfspaces, cell->face_count + 1U,
+		NULL, point, &stats);
+	free(halfspaces);
+	audit->result.lattice_solve_calls += stats.solve_calls;
+	audit->result.lattice_constraints += stats.constraints;
+	if (stats.maximum_binary_shift > audit->result.lattice_maximum_binary_shift)
+		audit->result.lattice_maximum_binary_shift =
+			stats.maximum_binary_shift;
+	return result < 0 ? -1 : result == 0;
 }
 
 static int ValidateCellRegion(audit_context_t *audit, uint32_t cell_index,
@@ -327,8 +372,28 @@ static int ValidateCellRegion(audit_context_t *audit, uint32_t cell_index,
 					space_count))
 				return 0;
 	}
-	/* Every output face is an inherited inequality, so the certificate region
-	 * is a subset of the cell. The vertex checks above prove the reverse. */
+	for (constraint = 0U; constraint < space_count; constraint++)
+	{
+		int found = 0;
+		int implied;
+
+		for (face_offset = 0U; face_offset < cell->face_count; face_offset++)
+			if (PlaneMatches(&configuration->faces[
+					cell->first_face + face_offset].plane, &spaces[constraint]))
+			{
+				found = 1;
+				break;
+			}
+		if (found)
+			continue;
+		implied = CellImpliesConstraintQ8(audit, cell, &spaces[constraint]);
+		if (implied <= 0)
+		{
+			Fail(audit, implied < 0 ? SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY :
+				SG_CONFIGURATION_AUDIT_INVALID_CELL, cell_index);
+			return 0;
+		}
+	}
 	audit->seen_cells[cell_index] = 1;
 	audit->result.proved_cells++;
 	return 1;
@@ -537,6 +602,8 @@ static int AuditFaceInteriorWitness(audit_context_t *audit,
 		cell->stance, &pose) && pose.valid ? 1 : -1;
 }
 
+static int AuditCellGeometry(audit_context_t *audit, uint32_t cell_index);
+
 static int AuditHostCells(audit_context_t *audit)
 {
 	const sg_bsp_world_t *world = audit->authority->world;
@@ -548,6 +615,15 @@ static int AuditHostCells(audit_context_t *audit)
 		sg_host_collision_pose_t pose;
 		uint32_t leaf, face_offset;
 		sg_rune_contents_mask_t contents;
+		int geometry;
+
+		geometry = AuditCellGeometry(audit, cell_index);
+		if (geometry <= 0)
+		{
+			Fail(audit, geometry < 0 ? SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY :
+				SG_CONFIGURATION_AUDIT_INVALID_CELL, cell_index);
+			return 0;
+		}
 
 		if (!SG_HostCollisionClassifyPose(audit->authority, NULL,
 				cell->interior_witness.value, cell->stance, &pose) || !pose.valid ||
@@ -588,125 +664,6 @@ static uint32_t DominantAxis(const float normal[3])
 	return axis;
 }
 
-static void Project(const float point[3], uint32_t drop, float projected[2])
-{
-	projected[0] = point[(drop + 1U) % 3U];
-	projected[1] = point[(drop + 2U) % 3U];
-}
-
-static float Cross2(const float a[2], const float b[2], const float c[2])
-{
-	return (b[0] - a[0]) * (c[1] - a[1]) -
-		(b[1] - a[1]) * (c[0] - a[0]);
-}
-
-typedef struct audit_point2_s
-{
-	float value[2];
-} audit_point2_t;
-
-static int FacesOverlapArea(const sg_configuration_space_t *space,
-	const sg_configuration_face_t *a, const sg_configuration_face_t *b,
-	float center_out[3])
-{
-	const sg_rune_vec3_t *a_vertices = &space->vertices[a->first_vertex];
-	const sg_rune_vec3_t *b_vertices = &space->vertices[b->first_vertex];
-	uint32_t drop = DominantAxis(a->plane.normal);
-	audit_point2_t *polygon;
-	uint32_t count = a->vertex_count;
-	float clip_orientation = 0.0f;
-	uint32_t index, edge;
-
-	polygon = malloc((size_t)count * sizeof(*polygon));
-	if (!polygon)
-		return 0;
-	for (index = 0; index < count; index++)
-		Project(a_vertices[index].value, drop, polygon[index].value);
-	for (index = 0; index < b->vertex_count; index++)
-	{
-		float current[2], next[2];
-
-		Project(b_vertices[index].value, drop, current);
-		Project(b_vertices[(index + 1U) % b->vertex_count].value, drop, next);
-		clip_orientation += current[0] * next[1] - next[0] * current[1];
-	}
-	for (edge = 0; edge < b->vertex_count && count >= 3U; edge++)
-	{
-		audit_point2_t *next_polygon = malloc((size_t)(count + 1U) *
-			sizeof(*next_polygon));
-		float clip_a[2], clip_b[2];
-		uint32_t next_count = 0;
-
-		if (!next_polygon)
-		{
-			free(polygon);
-			return 0;
-		}
-		Project(b_vertices[edge].value, drop, clip_a);
-		Project(b_vertices[(edge + 1U) % b->vertex_count].value, drop, clip_b);
-		for (index = 0; index < count; index++)
-		{
-			const audit_point2_t *start = &polygon[index];
-			const audit_point2_t *end = &polygon[(index + 1U) % count];
-			float start_distance = Cross2(clip_a, clip_b, start->value);
-			float end_distance = Cross2(clip_a, clip_b, end->value);
-			int start_inside = clip_orientation >= 0.0f ?
-				start_distance >= -AUDIT_AREA_EPSILON :
-				start_distance <= AUDIT_AREA_EPSILON;
-			int end_inside = clip_orientation >= 0.0f ?
-				end_distance >= -AUDIT_AREA_EPSILON :
-				end_distance <= AUDIT_AREA_EPSILON;
-
-			if (start_inside)
-				next_polygon[next_count++] = *start;
-			if (start_inside != end_inside)
-			{
-				float fraction = start_distance /
-					(start_distance - end_distance);
-
-				next_polygon[next_count].value[0] = start->value[0] +
-					fraction * (end->value[0] - start->value[0]);
-				next_polygon[next_count].value[1] = start->value[1] +
-					fraction * (end->value[1] - start->value[1]);
-				next_count++;
-			}
-		}
-		free(polygon);
-		polygon = next_polygon;
-		count = next_count;
-	}
-	if (count >= 3U)
-	{
-		float area = 0.0f;
-		float projected_center[2] = { 0.0f, 0.0f };
-		uint32_t u = (drop + 1U) % 3U;
-		uint32_t v = (drop + 2U) % 3U;
-
-		for (index = 0; index < count; index++)
-		{
-			area += polygon[index].value[0] *
-				polygon[(index + 1U) % count].value[1] -
-				polygon[(index + 1U) % count].value[0] *
-				polygon[index].value[1];
-			projected_center[0] += polygon[index].value[0];
-			projected_center[1] += polygon[index].value[1];
-		}
-		free(polygon);
-		if (fabsf(area) <= AUDIT_AREA_EPSILON ||
-			fabsf(a->plane.normal[drop]) <= AUDIT_AREA_EPSILON)
-			return 0;
-		memset(center_out, 0, 3U * sizeof(*center_out));
-		center_out[u] = projected_center[0] / (float)count;
-		center_out[v] = projected_center[1] / (float)count;
-		center_out[drop] = (a->plane.distance -
-			a->plane.normal[u] * center_out[u] -
-			a->plane.normal[v] * center_out[v]) / a->plane.normal[drop];
-		return 1;
-	}
-	free(polygon);
-	return 0;
-}
-
 static void AuditCanonicalPlane(const sg_configuration_plane_t *plane,
 	float normal[3], float *distance);
 
@@ -726,7 +683,10 @@ static int CanonicalPlanesClose(const sg_configuration_plane_t *a,
 static int SameBoundary(const sg_configuration_plane_t *a,
 	const sg_configuration_plane_t *b)
 {
-	return Dot(a->normal, b->normal) < 0.0f && CanonicalPlanesClose(a, b);
+	return (double)a->normal[0] * b->normal[0] +
+		(double)a->normal[1] * b->normal[1] +
+		(double)a->normal[2] * b->normal[2] < 0.0 &&
+		CanonicalPlanesClose(a, b);
 }
 
 static const sg_configuration_plane_t *CellBoundaryPlane(
@@ -740,7 +700,9 @@ static const sg_configuration_plane_t *CellBoundaryPlane(
 	{
 		const sg_configuration_plane_t *candidate =
 			&space->faces[cell->first_face + offset].plane;
-		int same = Dot(candidate->normal, boundary->normal) > 0.0f &&
+		int same = ((double)candidate->normal[0] * boundary->normal[0] +
+			(double)candidate->normal[1] * boundary->normal[1] +
+			(double)candidate->normal[2] * boundary->normal[2]) > 0.0 &&
 			CanonicalPlanesClose(candidate, boundary);
 
 		if (same || SameBoundary(candidate, boundary))
@@ -767,7 +729,10 @@ static int AuditPortalSideWitness(audit_context_t *audit, uint32_t cell_index,
 	int classified;
 
 	if (cell->face_count > UINT32_MAX - other->face_count)
+	{
+		Fail(audit, SG_CONFIGURATION_AUDIT_OVERFLOW, cell_index);
 		return -1;
+	}
 	halfspaces = calloc((size_t)cell->face_count + other->face_count,
 		sizeof(*halfspaces));
 	planes = calloc((size_t)cell->face_count + other->face_count,
@@ -779,6 +744,7 @@ static int AuditPortalSideWitness(audit_context_t *audit, uint32_t cell_index,
 		free(halfspaces);
 		free(planes);
 		free(clearance);
+		Fail(audit, SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY, cell_index);
 		return -1;
 	}
 	constraint_count = 0U;
@@ -790,7 +756,9 @@ static int AuditPortalSideWitness(audit_context_t *audit, uint32_t cell_index,
 
 		for (existing = 0U; existing < constraint_count; existing++)
 			if (CanonicalPlanesClose(planes[existing], plane) &&
-				Dot(planes[existing]->normal, plane->normal) > 0.0f)
+				((double)planes[existing]->normal[0] * plane->normal[0] +
+				(double)planes[existing]->normal[1] * plane->normal[1] +
+				(double)planes[existing]->normal[2] * plane->normal[2]) > 0.0)
 			{
 				if (CanonicalPlanesClose(plane, boundary))
 					clearance[existing] = 0U;
@@ -815,7 +783,9 @@ static int AuditPortalSideWitness(audit_context_t *audit, uint32_t cell_index,
 			continue;
 		for (existing = 0U; existing < constraint_count; existing++)
 			if (CanonicalPlanesClose(planes[existing], plane) &&
-				Dot(planes[existing]->normal, plane->normal) > 0.0f)
+				((double)planes[existing]->normal[0] * plane->normal[0] +
+				(double)planes[existing]->normal[1] * plane->normal[1] +
+				(double)planes[existing]->normal[2] * plane->normal[2]) > 0.0)
 				break;
 		if (existing < constraint_count)
 			continue;
@@ -863,12 +833,9 @@ typedef struct audit_face_ref_s
 {
 	uint32_t cell;
 	uint32_t face;
-	float mins[3];
-	float maxs[3];
 	float canonical_normal[3];
 	float canonical_distance;
-	float sweep_min;
-	float sweep_max;
+	int64_t bin[4];
 } audit_face_ref_t;
 
 typedef struct audit_portal_ref_s
@@ -876,9 +843,9 @@ typedef struct audit_portal_ref_s
 	uint32_t portal;
 	uint32_t from;
 	uint32_t to;
-	uint32_t source_kind;
-	uint32_t source_index;
-	uint32_t source_variant;
+	float canonical_normal[3];
+	float canonical_distance;
+	int64_t bin[4];
 } audit_portal_ref_t;
 
 static int AuditFaceCompare(const sg_configuration_space_t *space,
@@ -891,16 +858,72 @@ static int AuditFaceCompare(const sg_configuration_space_t *space,
 	if ((a_value) < (b_value)) return -1; \
 	if ((a_value) > (b_value)) return 1; } while (0)
 	AUDIT_COMPARE(ca->stance, cb->stance);
-	AUDIT_COMPARE(left->canonical_normal[0], right->canonical_normal[0]);
-	AUDIT_COMPARE(left->canonical_normal[1], right->canonical_normal[1]);
-	AUDIT_COMPARE(left->canonical_normal[2], right->canonical_normal[2]);
-	AUDIT_COMPARE(left->canonical_distance, right->canonical_distance);
-	AUDIT_COMPARE(left->sweep_min, right->sweep_min);
-	AUDIT_COMPARE(left->sweep_max, right->sweep_max);
+	AUDIT_COMPARE(left->bin[0], right->bin[0]);
+	AUDIT_COMPARE(left->bin[1], right->bin[1]);
+	AUDIT_COMPARE(left->bin[2], right->bin[2]);
+	AUDIT_COMPARE(left->bin[3], right->bin[3]);
 	AUDIT_COMPARE(left->cell, right->cell);
 	AUDIT_COMPARE(left->face, right->face);
 #undef AUDIT_COMPARE
 	return 0;
+}
+
+static int AuditPlaneBins(const float normal[3], float distance,
+	int64_t bin[4])
+{
+	const float values[4] = { normal[0], normal[1], normal[2], distance };
+	uint32_t component;
+
+	for (component = 0U; component < 4U; component++)
+	{
+		double value = floor((double)values[component] /
+			(2.0 * (double)AUDIT_GEOMETRY_EPSILON));
+
+		if (!isfinite(value) || value < (double)INT64_MIN ||
+			value > (double)INT64_MAX)
+			return 0;
+		bin[component] = (int64_t)value;
+	}
+	return 1;
+}
+
+static int AuditFaceBins(audit_face_ref_t *face)
+{
+	return AuditPlaneBins(face->canonical_normal, face->canonical_distance,
+		face->bin);
+}
+
+static int AuditFaceBinKeyCompare(const sg_configuration_space_t *space,
+	const audit_face_ref_t *face, sg_rune_stance_t stance,
+	const int64_t bin[4])
+{
+	uint32_t component;
+	const sg_rune_stance_t face_stance = space->cells[face->cell].stance;
+
+	if (face_stance != stance)
+		return face_stance < stance ? -1 : 1;
+	for (component = 0U; component < 4U; component++)
+		if (face->bin[component] != bin[component])
+			return face->bin[component] < bin[component] ? -1 : 1;
+	return 0;
+}
+
+static uint32_t AuditFaceBinLowerBound(const sg_configuration_space_t *space,
+	const audit_face_ref_t *faces, uint32_t count, sg_rune_stance_t stance,
+	const int64_t bin[4])
+{
+	uint32_t low = 0U, high = count;
+
+	while (low < high)
+	{
+		uint32_t middle = low + (high - low) / 2U;
+
+		if (AuditFaceBinKeyCompare(space, &faces[middle], stance, bin) < 0)
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	return low;
 }
 
 static void AuditCanonicalPlane(const sg_configuration_plane_t *plane,
@@ -964,32 +987,6 @@ static int SortAuditFaces(const sg_configuration_space_t *space,
 	return 1;
 }
 
-static int SameAuditFaceGroup(const sg_configuration_space_t *space,
-	const audit_face_ref_t *left, const audit_face_ref_t *right)
-{
-	return space->cells[left->cell].stance == space->cells[right->cell].stance &&
-		fabsf(left->canonical_normal[0] - right->canonical_normal[0]) <=
-			AUDIT_GEOMETRY_EPSILON &&
-		fabsf(left->canonical_normal[1] - right->canonical_normal[1]) <=
-			AUDIT_GEOMETRY_EPSILON &&
-		fabsf(left->canonical_normal[2] - right->canonical_normal[2]) <=
-			AUDIT_GEOMETRY_EPSILON &&
-		fabsf(left->canonical_distance - right->canonical_distance) <=
-			AUDIT_GEOMETRY_EPSILON;
-}
-
-static int RefBoundsOverlap(const audit_face_ref_t *a,
-	const audit_face_ref_t *b)
-{
-	uint32_t axis;
-
-	for (axis = 0; axis < 3; axis++)
-		if (a->maxs[axis] < b->mins[axis] - AUDIT_EPSILON ||
-			a->mins[axis] > b->maxs[axis] + AUDIT_EPSILON)
-			return 0;
-	return 1;
-}
-
 static int PortalRefCompare(const audit_portal_ref_t *a,
 	const audit_portal_ref_t *b)
 {
@@ -998,9 +995,10 @@ static int PortalRefCompare(const audit_portal_ref_t *a,
 	if ((a_value) > (b_value)) return 1; } while (0)
 	AUDIT_COMPARE(a->from, b->from);
 	AUDIT_COMPARE(a->to, b->to);
-	AUDIT_COMPARE(a->source_kind, b->source_kind);
-	AUDIT_COMPARE(a->source_index, b->source_index);
-	AUDIT_COMPARE(a->source_variant, b->source_variant);
+	AUDIT_COMPARE(a->bin[0], b->bin[0]);
+	AUDIT_COMPARE(a->bin[1], b->bin[1]);
+	AUDIT_COMPARE(a->bin[2], b->bin[2]);
+	AUDIT_COMPARE(a->bin[3], b->bin[3]);
 	AUDIT_COMPARE(a->portal, b->portal);
 #undef AUDIT_COMPARE
 	return 0;
@@ -1042,64 +1040,87 @@ static int SortPortalRefs(audit_portal_ref_t *values, uint32_t count)
 	return 1;
 }
 
-static int FindPortalRef(const sg_configuration_space_t *space,
-	const audit_portal_ref_t *references, uint32_t count, uint8_t *seen,
+static int OffsetAuditBin(int64_t value, int delta, int64_t *result)
+{
+	if ((delta < 0 && value == INT64_MIN) ||
+		(delta > 0 && value == INT64_MAX))
+		return 0;
+	*result = value + (int64_t)delta;
+	return 1;
+}
+
+static int FindPortalRef(const audit_portal_ref_t *references, uint32_t count,
+	uint8_t *seen,
 	uint32_t a, uint32_t b,
 	const sg_configuration_plane_t *plane)
 {
-	audit_portal_ref_t key;
-	uint32_t low = 0, high = count, index;
+	audit_portal_ref_t query;
 	uint32_t from = a < b ? a : b;
 	uint32_t to = a < b ? b : a;
+	int d0, d1, d2, d3;
 
-	for (index = 0; index < count; index++)
-	{
-		const sg_configuration_portal_t *portal =
-			&space->portals[references[index].portal];
+	memset(&query, 0, sizeof(query));
+	query.from = from;
+	query.to = to;
+	AuditCanonicalPlane(plane, query.canonical_normal,
+		&query.canonical_distance);
+	if (!AuditPlaneBins(query.canonical_normal, query.canonical_distance,
+			query.bin))
+		return 0;
+	for (d0 = -1; d0 <= 1; d0++)
+		for (d1 = -1; d1 <= 1; d1++)
+			for (d2 = -1; d2 <= 1; d2++)
+				for (d3 = -1; d3 <= 1; d3++)
+				{
+					audit_portal_ref_t key = query;
+					uint32_t low = 0U, high = count;
 
-		if (references[index].from == from && references[index].to == to &&
-			CanonicalPlanesClose(&portal->plane, plane))
-		{
-			seen[references[index].portal] = 1U;
-			return 1;
-		}
-	}
+					if (!OffsetAuditBin(query.bin[0], d0, &key.bin[0]) ||
+						!OffsetAuditBin(query.bin[1], d1, &key.bin[1]) ||
+						!OffsetAuditBin(query.bin[2], d2, &key.bin[2]) ||
+						!OffsetAuditBin(query.bin[3], d3, &key.bin[3]))
+						continue;
+					while (low < high)
+					{
+						uint32_t middle = low + (high - low) / 2U;
+						audit_portal_ref_t candidate = references[middle];
 
-	memset(&key, 0, sizeof(key));
-	key.from = a < b ? a : b;
-	key.to = a < b ? b : a;
-	key.source_kind = plane->source_kind;
-	key.source_index = plane->source_index;
-	key.source_variant = plane->source_variant;
-	while (low < high)
-	{
-		uint32_t middle = low + (high - low) / 2U;
-		audit_portal_ref_t candidate = references[middle];
+						candidate.portal = 0U;
+						if (PortalRefCompare(&candidate, &key) < 0)
+							low = middle + 1U;
+						else
+							high = middle;
+					}
+					while (low < count && references[low].from == from &&
+						references[low].to == to &&
+						memcmp(references[low].bin, key.bin,
+							sizeof(key.bin)) == 0)
+					{
+						const audit_portal_ref_t *candidate = &references[low++];
 
-		candidate.portal = 0;
-		if (PortalRefCompare(&candidate, &key) < 0)
-			low = middle + 1U;
-		else
-			high = middle;
-	}
-	while (low < count && references[low].from == key.from &&
-		references[low].to == key.to &&
-		references[low].source_kind == key.source_kind &&
-		references[low].source_index == key.source_index &&
-		references[low].source_variant == key.source_variant)
-	{
-		if (!seen[references[low].portal])
-		{
-			seen[references[low].portal] = 1;
-			return 1;
-		}
-		low++;
-	}
+						if (fabsf(candidate->canonical_normal[0] -
+								query.canonical_normal[0]) <=
+								AUDIT_GEOMETRY_EPSILON &&
+							fabsf(candidate->canonical_normal[1] -
+								query.canonical_normal[1]) <=
+								AUDIT_GEOMETRY_EPSILON &&
+							fabsf(candidate->canonical_normal[2] -
+								query.canonical_normal[2]) <=
+								AUDIT_GEOMETRY_EPSILON &&
+							fabsf(candidate->canonical_distance -
+								query.canonical_distance) <=
+								AUDIT_GEOMETRY_EPSILON)
+						{
+							seen[candidate->portal] = 1U;
+							return 1;
+						}
+					}
+				}
 	return 0;
 }
 
 static int AuditPortalGeometry(const sg_configuration_space_t *space,
-	const sg_configuration_portal_t *portal)
+	const sg_configuration_portal_t *portal, float *area_out)
 {
 	const sg_configuration_cell_t *cells[2] = {
 		&space->cells[portal->from_cell], &space->cells[portal->to_cell]
@@ -1110,11 +1131,12 @@ static int AuditPortalGeometry(const sg_configuration_space_t *space,
 	uint32_t vertex, cell, face;
 	const float *origin;
 	double area2 = 0.0;
-	double portal_length = sqrt((double)Dot(portal->plane.normal,
-		portal->plane.normal));
+	double portal_length = hypot(hypot((double)portal->plane.normal[0],
+		(double)portal->plane.normal[1]),
+		(double)portal->plane.normal[2]);
 
 	if (!(portal_length > 0.0) ||
-		fabsf(portal->plane.normal[drop]) <= AUDIT_AREA_EPSILON)
+		!(fabs((double)portal->plane.normal[drop]) / portal_length > 0.0))
 		return 0;
 	origin = space->vertices[portal->first_vertex].value;
 	for (vertex = 0; vertex < portal->vertex_count; vertex++)
@@ -1124,8 +1146,10 @@ static int AuditPortalGeometry(const sg_configuration_space_t *space,
 		const float *next = space->vertices[portal->first_vertex +
 			(vertex + 1U) % portal->vertex_count].value;
 
-		if (!FiniteVector(point) || fabs(((double)Dot(point,
-				portal->plane.normal) - portal->plane.distance) / portal_length) >
+		if (!FiniteVector(point) || fabs(((double)point[0] *
+				portal->plane.normal[0] + (double)point[1] *
+				portal->plane.normal[1] + (double)point[2] *
+				portal->plane.normal[2] - portal->plane.distance) / portal_length) >
 				AUDIT_EPSILON)
 			return 0;
 		for (cell = 0; cell < 2U; cell++)
@@ -1133,11 +1157,13 @@ static int AuditPortalGeometry(const sg_configuration_space_t *space,
 			{
 				const sg_configuration_plane_t *plane = &space->faces[
 					cells[cell]->first_face + face].plane;
-				double length = sqrt((double)Dot(plane->normal,
-					plane->normal));
+				double length = hypot(hypot((double)plane->normal[0],
+					(double)plane->normal[1]), (double)plane->normal[2]);
 
-				if (!(length > 0.0) || ((double)Dot(point, plane->normal) -
-						plane->distance) / length > AUDIT_EPSILON)
+				if (!(length > 0.0) || ((double)point[0] * plane->normal[0] +
+						(double)point[1] * plane->normal[1] +
+						(double)point[2] * plane->normal[2] - plane->distance) /
+						length > AUDIT_EPSILON)
 					return 0;
 			}
 		area2 += ((double)point[u] - origin[u]) *
@@ -1145,8 +1171,931 @@ static int AuditPortalGeometry(const sg_configuration_space_t *space,
 			((double)next[u] - origin[u]) *
 			((double)point[v] - origin[v]);
 	}
-	return fabs(area2) / fabs((double)portal->plane.normal[drop]) >
-		AUDIT_AREA_EPSILON;
+	*area_out = (float)(fabs(area2) * 0.5 * portal_length /
+		fabs((double)portal->plane.normal[drop]));
+	return isfinite(*area_out) && *area_out > AUDIT_AREA_EPSILON;
+}
+
+typedef struct audit_boundary_point_s
+{
+	double value[3];
+	double angle;
+} audit_boundary_point_t;
+
+typedef struct audit_double_halfspace_s
+{
+	double normal[3];
+	double distance;
+} audit_double_halfspace_t;
+
+typedef enum audit_geometry_result_e
+{
+	AUDIT_GEOMETRY_OUT_OF_MEMORY = -2,
+	AUDIT_GEOMETRY_INVALID = -1,
+	AUDIT_GEOMETRY_EMPTY = 0,
+	AUDIT_GEOMETRY_POLYGON = 1
+} audit_geometry_result_t;
+
+static double AuditDeterminantDouble(const double a[3], const double b[3],
+	const double c[3])
+{
+	return a[0] * (b[1] * c[2] - b[2] * c[1]) -
+		a[1] * (b[0] * c[2] - b[2] * c[0]) +
+		a[2] * (b[0] * c[1] - b[1] * c[0]);
+}
+
+static int NormalizeAuditHalfspace(const sg_configuration_plane_t *plane,
+	audit_double_halfspace_t *result)
+{
+	double scale = fmax(fabs((double)plane->normal[0]),
+		fmax(fabs((double)plane->normal[1]),
+			fabs((double)plane->normal[2])));
+	double length;
+	uint32_t axis;
+
+	if (!(scale > 0.0) || !isfinite(scale) || !isfinite(plane->distance))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		result->normal[axis] = (double)plane->normal[axis] / scale;
+	length = sqrt(result->normal[0] * result->normal[0] +
+		result->normal[1] * result->normal[1] +
+		result->normal[2] * result->normal[2]);
+	if (!(length > 0.0) || !isfinite(length))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		result->normal[axis] /= length;
+	result->distance = ((double)plane->distance / scale) / length;
+	return isfinite(result->normal[0]) && isfinite(result->normal[1]) &&
+		isfinite(result->normal[2]) && isfinite(result->distance);
+}
+
+static int IntersectThreeDouble(const audit_double_halfspace_t *a,
+	const audit_double_halfspace_t *b, const audit_double_halfspace_t *c,
+	double point[3])
+{
+	double na[3], nb[3], nc[3], distances[3];
+	double column0[3], column1[3], column2[3];
+	double determinant;
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		na[axis] = a->normal[axis];
+		nb[axis] = b->normal[axis];
+		nc[axis] = c->normal[axis];
+	}
+	determinant = AuditDeterminantDouble(na, nb, nc);
+	{
+		double scale = fabs(na[0] * (nb[1] * nc[2] - nb[2] * nc[1])) +
+			fabs(na[1] * (nb[2] * nc[0] - nb[0] * nc[2])) +
+			fabs(na[2] * (nb[0] * nc[1] - nb[1] * nc[0]));
+
+		if (fabs(determinant) <= DBL_EPSILON * fmax(1.0, scale))
+			return 0;
+	}
+	distances[0] = a->distance;
+	distances[1] = b->distance;
+	distances[2] = c->distance;
+	column0[0] = distances[0];
+	column0[1] = distances[1];
+	column0[2] = distances[2];
+	column1[0] = na[1];
+	column1[1] = nb[1];
+	column1[2] = nc[1];
+	column2[0] = na[2];
+	column2[1] = nb[2];
+	column2[2] = nc[2];
+	point[0] = AuditDeterminantDouble(column0, column1, column2) / determinant;
+	column0[0] = na[0];
+	column0[1] = nb[0];
+	column0[2] = nc[0];
+	column1[0] = distances[0];
+	column1[1] = distances[1];
+	column1[2] = distances[2];
+	point[1] = AuditDeterminantDouble(column0, column1, column2) / determinant;
+	column1[0] = na[1];
+	column1[1] = nb[1];
+	column1[2] = nc[1];
+	column2[0] = distances[0];
+	column2[1] = distances[1];
+	column2[2] = distances[2];
+	point[2] = AuditDeterminantDouble(column0, column1, column2) / determinant;
+	return isfinite(point[0]) && isfinite(point[1]) && isfinite(point[2]);
+}
+
+static int AuditPointInsideClosure(const double point[3],
+	const audit_double_halfspace_t *spaces, uint32_t count)
+{
+	uint32_t index;
+
+	for (index = 0U; index < count; index++)
+		if (point[0] * spaces[index].normal[0] +
+			point[1] * spaces[index].normal[1] +
+			point[2] * spaces[index].normal[2] - spaces[index].distance >
+			(double)AUDIT_GEOMETRY_EPSILON)
+			return 0;
+	return 1;
+}
+
+static float AuditPortalCoordinateTolerance(double value);
+
+static int AppendAuditBoundaryPoint(audit_boundary_point_t **points,
+	uint32_t *count, uint32_t *capacity, const double point[3])
+{
+	audit_boundary_point_t *grown;
+	uint32_t index, next;
+
+	for (index = 0U; index < *count; index++)
+		if (fabs((double)(float)point[0] -
+				(double)(float)(*points)[index].value[0]) <=
+				(double)fmaxf(AuditPortalCoordinateTolerance(point[0]),
+					AuditPortalCoordinateTolerance((*points)[index].value[0])) &&
+			fabs((double)(float)point[1] -
+				(double)(float)(*points)[index].value[1]) <=
+				(double)fmaxf(AuditPortalCoordinateTolerance(point[1]),
+					AuditPortalCoordinateTolerance((*points)[index].value[1])) &&
+			fabs((double)(float)point[2] -
+				(double)(float)(*points)[index].value[2]) <=
+				(double)fmaxf(AuditPortalCoordinateTolerance(point[2]),
+					AuditPortalCoordinateTolerance((*points)[index].value[2])))
+			return 1;
+	if (*count == UINT32_MAX)
+		return 0;
+	if (*count == *capacity)
+	{
+		next = *capacity ? *capacity : 8U;
+		if (next <= *count)
+		{
+			if (next > UINT32_MAX / 2U)
+				next = UINT32_MAX;
+			else
+				next *= 2U;
+		}
+		if (next <= *count)
+			return 0;
+#if SIZE_MAX == UINT32_MAX
+		if ((size_t)next > SIZE_MAX / sizeof(*grown))
+			return 0;
+#endif
+		grown = realloc(*points, (size_t)next * sizeof(*grown));
+		if (!grown)
+			return 0;
+		*points = grown;
+		*capacity = next;
+	}
+	memcpy((*points)[*count].value, point, 3U * sizeof(*point));
+	(*count)++;
+	return 1;
+}
+
+static int AuditAuthoritativeBoundaryGeometry(
+	const sg_configuration_space_t *space,
+	uint32_t a, uint32_t b, const sg_configuration_plane_t *boundary,
+	audit_boundary_point_t **points_out, uint32_t *point_count_out,
+	float *area_out)
+{
+	const sg_configuration_cell_t *cells[2] = { &space->cells[a],
+		&space->cells[b] };
+	uint32_t count, cell, face, first, second, point_count = 0U;
+	uint32_t point_capacity = 0U;
+	audit_double_halfspace_t *halfspaces = NULL, boundary_space;
+	audit_boundary_point_t *points = NULL;
+	uint32_t drop, u, v, index;
+	double center_u = 0.0, center_v = 0.0, area2 = 0.0;
+	int result = AUDIT_GEOMETRY_INVALID;
+
+	*points_out = NULL;
+	*point_count_out = 0U;
+	*area_out = 0.0f;
+	if (cells[0]->face_count > UINT32_MAX - cells[1]->face_count)
+		return AUDIT_GEOMETRY_OUT_OF_MEMORY;
+	if (!NormalizeAuditHalfspace(boundary, &boundary_space))
+		return AUDIT_GEOMETRY_INVALID;
+	count = cells[0]->face_count + cells[1]->face_count;
+#if SIZE_MAX == UINT32_MAX
+	if ((size_t)count > SIZE_MAX / sizeof(*halfspaces))
+		return AUDIT_GEOMETRY_OUT_OF_MEMORY;
+#endif
+	halfspaces = malloc((size_t)count * sizeof(*halfspaces));
+	if (!halfspaces && count)
+	{
+		result = AUDIT_GEOMETRY_OUT_OF_MEMORY;
+		goto done;
+	}
+	count = 0U;
+	for (cell = 0U; cell < 2U; cell++)
+		for (face = 0U; face < cells[cell]->face_count; face++)
+			if (!NormalizeAuditHalfspace(&space->faces[
+					cells[cell]->first_face + face].plane, &halfspaces[count++]))
+				goto done;
+	for (first = 0U; first < count; first++)
+		for (second = first + 1U; second < count; second++)
+		{
+			double point[3];
+
+			if (!IntersectThreeDouble(&boundary_space, &halfspaces[first],
+					&halfspaces[second], point) ||
+				!AuditPointInsideClosure(point, halfspaces, count))
+				continue;
+			if (!AppendAuditBoundaryPoint(&points, &point_count, &point_capacity,
+					point))
+			{
+				result = AUDIT_GEOMETRY_OUT_OF_MEMORY;
+				goto done;
+			}
+		}
+	if (point_count < 3U)
+	{
+		result = AUDIT_GEOMETRY_EMPTY;
+		goto done;
+	}
+	drop = DominantAxis(boundary->normal);
+	u = (drop + 1U) % 3U;
+	v = (drop + 2U) % 3U;
+	for (index = 0U; index < point_count; index++)
+	{
+		center_u += points[index].value[u];
+		center_v += points[index].value[v];
+	}
+	center_u /= (double)point_count;
+	center_v /= (double)point_count;
+	for (index = 0U; index < point_count; index++)
+		points[index].angle = atan2(points[index].value[v] - center_v,
+			points[index].value[u] - center_u);
+	for (index = 1U; index < point_count; index++)
+	{
+		audit_boundary_point_t value = points[index];
+		uint32_t position = index;
+
+		while (position > 0U && points[position - 1U].angle > value.angle)
+		{
+			points[position] = points[position - 1U];
+			position--;
+		}
+		points[position] = value;
+	}
+	for (index = 0U; index < point_count; index++)
+		area2 += points[index].value[u] *
+			points[(index + 1U) % point_count].value[v] -
+			points[(index + 1U) % point_count].value[u] *
+			points[index].value[v];
+	if (!(fabs(boundary_space.normal[drop]) > 0.0))
+		goto done;
+	area2 = fabs(area2) * 0.5 / fabs(boundary_space.normal[drop]);
+	if (!isfinite(area2) || area2 > (double)FLT_MAX)
+		goto done;
+	*area_out = (float)area2;
+	result = *area_out > AUDIT_AREA_EPSILON ? AUDIT_GEOMETRY_POLYGON :
+		AUDIT_GEOMETRY_EMPTY;
+	if (result == AUDIT_GEOMETRY_POLYGON)
+	{
+		*points_out = points;
+		*point_count_out = point_count;
+		points = NULL;
+	}
+
+done:
+	free(points);
+	free(halfspaces);
+	return result;
+}
+
+static float AuditPortalMatchTolerance(float magnitude)
+{
+	return fmaxf(AUDIT_GEOMETRY_EPSILON,
+		fabsf(magnitude) * FLT_EPSILON * 64.0f);
+}
+
+static float AuditPortalCoordinateTolerance(double value)
+{
+	float rounded = (float)value;
+	float lower = nextafterf(rounded, -INFINITY);
+	float upper = nextafterf(rounded, INFINITY);
+	float ulp = fmaxf(rounded - lower, upper - rounded);
+
+	return fmaxf(AUDIT_GEOMETRY_EPSILON, ulp * 2.0f);
+}
+
+static int AuditOrderedFacet(const sg_configuration_space_t *space,
+	const sg_configuration_face_t *face)
+{
+	uint32_t drop = DominantAxis(face->plane.normal);
+	uint32_t u = (drop + 1U) % 3U, v = (drop + 2U) % 3U;
+	uint32_t vertex;
+	double sign = 0.0;
+
+	if (face->vertex_count < 3U)
+		return 0;
+	for (vertex = 0U; vertex < face->vertex_count; vertex++)
+	{
+		const float *a = space->vertices[
+			face->first_vertex + vertex].value;
+		const float *b = space->vertices[face->first_vertex +
+			(vertex + 1U) % face->vertex_count].value;
+		const float *c = space->vertices[face->first_vertex +
+			(vertex + 2U) % face->vertex_count].value;
+		double cross = ((double)b[u] - a[u]) * ((double)c[v] - b[v]) -
+			((double)b[v] - a[v]) * ((double)c[u] - b[u]);
+
+		if (!isfinite(cross))
+			return 0;
+		if (cross == 0.0)
+			continue;
+		if (sign == 0.0)
+			sign = cross;
+		else if ((sign < 0.0) != (cross < 0.0))
+			return 0;
+	}
+	return sign != 0.0 &&
+		(sign < 0.0) == (face->plane.normal[drop] < 0.0f);
+}
+
+static int AuditCellExactBounds(audit_context_t *audit,
+	const sg_configuration_cell_t *cell, float mins[3], float maxs[3])
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	uint32_t face, axis;
+
+	halfspaces = malloc((size_t)cell->face_count * sizeof(*halfspaces));
+	if (!halfspaces && cell->face_count)
+		return -1;
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_plane_t *plane = &audit->space->faces[
+			cell->first_face + face].plane;
+		audit_halfspace_t source = FromPlane(plane);
+
+		CopyVector(halfspaces[face].normal, plane->normal);
+		halfspaces[face].distance = plane->distance;
+		halfspaces[face].open = HalfspaceIsOpen(&source);
+	}
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		int32_t minimum, maximum;
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
+			cell->face_count, axis, &minimum, &maximum, &stats);
+
+		audit->result.lattice_solve_calls += stats.solve_calls;
+		audit->result.lattice_constraints += stats.constraints;
+		if (stats.maximum_binary_shift >
+			audit->result.lattice_maximum_binary_shift)
+			audit->result.lattice_maximum_binary_shift =
+				stats.maximum_binary_shift;
+		if (result <= 0)
+		{
+			free(halfspaces);
+			return result;
+		}
+		mins[axis] = (float)minimum * 0.125f;
+		maxs[axis] = (float)maximum * 0.125f;
+	}
+	free(halfspaces);
+	return 1;
+}
+
+static int AuditCellGeometry(audit_context_t *audit, uint32_t cell_index)
+{
+	const sg_configuration_cell_t *cell = &audit->space->cells[cell_index];
+	audit_double_halfspace_t *halfspaces = NULL;
+	audit_boundary_point_t *points = NULL;
+	uint32_t point_count = 0U, point_capacity = 0U;
+	uint32_t first, second, third, face, axis;
+	float expected_mins[3] = { INFINITY, INFINITY, INFINITY };
+	float expected_maxs[3] = { -INFINITY, -INFINITY, -INFINITY };
+	int has_constraint = 0, valid = 0;
+
+	if (!cell->face_count || cell->first_face > audit->space->face_count ||
+		cell->face_count > audit->space->face_count - cell->first_face)
+		return 0;
+#if SIZE_MAX == UINT32_MAX
+	if ((size_t)cell->face_count > SIZE_MAX / sizeof(*halfspaces))
+		return -1;
+#endif
+	halfspaces = malloc((size_t)cell->face_count * sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_face_t *source = &audit->space->faces[
+			cell->first_face + face];
+
+		if (source->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
+			source->first_vertex > audit->space->vertex_count ||
+			source->vertex_count > audit->space->vertex_count -
+				source->first_vertex ||
+			!NormalizeAuditHalfspace(&source->plane, &halfspaces[face]))
+			goto done;
+		has_constraint |=
+			source->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	}
+	for (first = 0U; first < cell->face_count; first++)
+		for (second = first + 1U; second < cell->face_count; second++)
+			for (third = second + 1U; third < cell->face_count; third++)
+			{
+				double point[3];
+
+				if (!IntersectThreeDouble(&halfspaces[first],
+						&halfspaces[second], &halfspaces[third], point) ||
+					!AuditPointInsideClosure(point, halfspaces,
+						cell->face_count))
+					continue;
+				if (!AppendAuditBoundaryPoint(&points, &point_count,
+						&point_capacity, point))
+				{
+					valid = -1;
+					goto done;
+				}
+			}
+	if (!point_count)
+		goto done;
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_face_t *actual = &audit->space->faces[
+			cell->first_face + face];
+		uint32_t incident_count = 0U, vertex, candidate;
+		uint8_t *matched = NULL;
+		int expected_facet;
+
+		for (candidate = 0U; candidate < point_count; candidate++)
+		{
+			double residual = points[candidate].value[0] *
+				halfspaces[face].normal[0] + points[candidate].value[1] *
+				halfspaces[face].normal[1] + points[candidate].value[2] *
+				halfspaces[face].normal[2] - halfspaces[face].distance;
+
+			if (fabs(residual) <= (double)AUDIT_GEOMETRY_EPSILON)
+				incident_count++;
+		}
+		expected_facet = incident_count >= 3U;
+		if ((actual->kind == SG_CONFIGURATION_FACE_FACET) != expected_facet ||
+			(expected_facet && actual->vertex_count != incident_count) ||
+			(!expected_facet && actual->vertex_count != 0U))
+			goto done;
+		if (!expected_facet)
+			continue;
+		if (!AuditOrderedFacet(audit->space, actual))
+			goto done;
+		matched = calloc(point_count, sizeof(*matched));
+		if (!matched)
+		{
+			valid = -1;
+			goto done;
+		}
+		for (vertex = 0U; vertex < actual->vertex_count; vertex++)
+		{
+			const float *value = audit->space->vertices[
+				actual->first_vertex + vertex].value;
+			int found = 0;
+
+			if (!FiniteVector(value))
+			{
+				free(matched);
+				goto done;
+			}
+			for (candidate = 0U; candidate < point_count; candidate++)
+			{
+				double residual = points[candidate].value[0] *
+					halfspaces[face].normal[0] + points[candidate].value[1] *
+					halfspaces[face].normal[1] + points[candidate].value[2] *
+					halfspaces[face].normal[2] - halfspaces[face].distance;
+
+				if (matched[candidate] || fabs(residual) >
+						(double)AUDIT_GEOMETRY_EPSILON ||
+					fabs((double)value[0] - points[candidate].value[0]) >
+						(double)AuditPortalCoordinateTolerance(
+							points[candidate].value[0]) ||
+					fabs((double)value[1] - points[candidate].value[1]) >
+						(double)AuditPortalCoordinateTolerance(
+							points[candidate].value[1]) ||
+					fabs((double)value[2] - points[candidate].value[2]) >
+						(double)AuditPortalCoordinateTolerance(
+							points[candidate].value[2]))
+					continue;
+				matched[candidate] = 1U;
+				found = 1;
+				break;
+			}
+			if (!found)
+			{
+				free(matched);
+				goto done;
+			}
+		}
+		free(matched);
+	}
+	if (has_constraint)
+	{
+		int result = AuditCellExactBounds(audit, cell, expected_mins,
+			expected_maxs);
+
+		if (result <= 0)
+		{
+			valid = result;
+			goto done;
+		}
+	}
+	else
+		for (first = 0U; first < point_count; first++)
+			for (axis = 0U; axis < 3U; axis++)
+			{
+				float value = (float)points[first].value[axis];
+
+				if (value < expected_mins[axis])
+					expected_mins[axis] = value;
+				if (value > expected_maxs[axis])
+					expected_maxs[axis] = value;
+			}
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float minimum = cell->bounds.mins.value[axis];
+		float maximum = cell->bounds.maxs.value[axis];
+
+		if (!isfinite(minimum) || !isfinite(maximum) ||
+			(has_constraint ? minimum != expected_mins[axis] :
+			 fabsf(minimum - expected_mins[axis]) >
+				AuditPortalCoordinateTolerance(expected_mins[axis])) ||
+			(has_constraint ? maximum != expected_maxs[axis] :
+			 fabsf(maximum - expected_maxs[axis]) >
+				AuditPortalCoordinateTolerance(expected_maxs[axis])))
+			goto done;
+	}
+	valid = 1;
+
+done:
+	free(points);
+	free(halfspaces);
+	return valid;
+}
+
+static int AuditTangentBoundaryGeometry(const sg_configuration_space_t *space,
+	const sg_configuration_portal_t *portal,
+	const sg_configuration_plane_t *boundary, const float first_witness[3],
+	const float second_witness[3], double expected[4][3], float *area_out)
+{
+	const sg_configuration_cell_t *cells[2] = {
+		&space->cells[portal->from_cell], &space->cells[portal->to_cell]
+	};
+	audit_double_halfspace_t normalized;
+	double first_side, second_side, denominator, fraction;
+	float center[3], tangent[3] = { 0.0f, 0.0f, 0.0f };
+	float bitangent[3], minimum_slack = INFINITY, radius, scale;
+	uint32_t axis, seed_axis = 0U, cell, face, vertex;
+	double area2 = 0.0;
+	uint32_t drop, u, v;
+
+	*area_out = 0.0f;
+	if (!NormalizeAuditHalfspace(boundary, &normalized))
+		return 0;
+	first_side = (double)first_witness[0] * normalized.normal[0] +
+		(double)first_witness[1] * normalized.normal[1] +
+		(double)first_witness[2] * normalized.normal[2] - normalized.distance;
+	second_side = (double)second_witness[0] * normalized.normal[0] +
+		(double)second_witness[1] * normalized.normal[1] +
+		(double)second_witness[2] * normalized.normal[2] - normalized.distance;
+	denominator = first_side - second_side;
+	if (first_side * second_side > 0.0 || denominator == 0.0 ||
+		!isfinite(denominator))
+		return 0;
+	fraction = first_side / denominator;
+	for (axis = 0U; axis < 3U; axis++)
+		center[axis] = (float)((double)first_witness[axis] + fraction *
+			((double)second_witness[axis] - first_witness[axis]));
+	{
+		double residual = (double)center[0] * normalized.normal[0] +
+			(double)center[1] * normalized.normal[1] +
+			(double)center[2] * normalized.normal[2] - normalized.distance;
+
+		for (axis = 0U; axis < 3U; axis++)
+			center[axis] = (float)((double)center[axis] -
+				residual * normalized.normal[axis]);
+	}
+	for (axis = 1U; axis < 3U; axis++)
+		if (fabs(normalized.normal[axis]) <
+			fabs(normalized.normal[seed_axis]))
+			seed_axis = axis;
+	tangent[seed_axis] = 1.0f;
+	{
+		double projection = (double)tangent[0] * normalized.normal[0] +
+			(double)tangent[1] * normalized.normal[1] +
+			(double)tangent[2] * normalized.normal[2];
+		double length_squared;
+
+		for (axis = 0U; axis < 3U; axis++)
+			tangent[axis] = (float)((double)tangent[axis] -
+				projection * normalized.normal[axis]);
+		length_squared = (double)tangent[0] * tangent[0] +
+			(double)tangent[1] * tangent[1] +
+			(double)tangent[2] * tangent[2];
+		if (!(length_squared > 0.0))
+			return 0;
+		scale = (float)(1.0 / sqrt(length_squared));
+		for (axis = 0U; axis < 3U; axis++)
+			tangent[axis] *= scale;
+	}
+	bitangent[0] = (float)(normalized.normal[1] * tangent[2] -
+		normalized.normal[2] * tangent[1]);
+	bitangent[1] = (float)(normalized.normal[2] * tangent[0] -
+		normalized.normal[0] * tangent[2]);
+	bitangent[2] = (float)(normalized.normal[0] * tangent[1] -
+		normalized.normal[1] * tangent[0]);
+	scale = (float)(1.0 / sqrt((double)bitangent[0] * bitangent[0] +
+		(double)bitangent[1] * bitangent[1] +
+		(double)bitangent[2] * bitangent[2]));
+	for (axis = 0U; axis < 3U; axis++)
+		bitangent[axis] *= scale;
+	for (cell = 0U; cell < 2U; cell++)
+		for (face = 0U; face < cells[cell]->face_count; face++)
+		{
+			const sg_configuration_plane_t *plane = &space->faces[
+				cells[cell]->first_face + face].plane;
+			audit_double_halfspace_t plane_space;
+			double slack;
+
+			if (CanonicalPlanesClose(plane, boundary))
+				continue;
+			if (!NormalizeAuditHalfspace(plane, &plane_space))
+				return 0;
+			slack = plane_space.distance -
+				((double)center[0] * plane_space.normal[0] +
+				(double)center[1] * plane_space.normal[1] +
+				(double)center[2] * plane_space.normal[2]);
+			if (!(slack > 0.0))
+				return 0;
+			if (slack < minimum_slack)
+				minimum_slack = (float)slack;
+		}
+	if (!isfinite(minimum_slack) ||
+		!(minimum_slack > 0.00001f * 8.0f))
+		return 0;
+	radius = minimum_slack * 0.125f;
+	for (vertex = 0U; vertex < 4U; vertex++)
+		for (axis = 0U; axis < 3U; axis++)
+			expected[vertex][axis] = (double)center[axis] + radius *
+				((vertex == 0U || vertex == 3U) ? tangent[axis] :
+				 -tangent[axis]) + radius *
+				((vertex < 2U) ? bitangent[axis] : -bitangent[axis]);
+	drop = DominantAxis(boundary->normal);
+	u = (drop + 1U) % 3U;
+	v = (drop + 2U) % 3U;
+	for (vertex = 0U; vertex < 4U; vertex++)
+		area2 += (expected[vertex][u] - center[u]) *
+			(expected[(vertex + 1U) % 4U][v] - center[v]) -
+			(expected[(vertex + 1U) % 4U][u] - center[u]) *
+			(expected[vertex][v] - center[v]);
+	area2 = fabs(area2) * 0.5 / fabs(normalized.normal[drop]);
+	if (!isfinite(area2) || !(area2 > (double)AUDIT_AREA_EPSILON) ||
+		area2 > (double)FLT_MAX)
+		return 0;
+	*area_out = (float)area2;
+	return 1;
+}
+
+static int AuditPortalCyclicMatches(const sg_configuration_space_t *space,
+	const sg_configuration_portal_t *portal, const double expected[4][3])
+{
+	uint32_t rotation, vertex, axis;
+	int reverse;
+
+	if (portal->vertex_count != 4U)
+		return 0;
+	for (reverse = 0; reverse < 2; reverse++)
+		for (rotation = 0U; rotation < 4U; rotation++)
+		{
+			int match = 1;
+
+			for (vertex = 0U; vertex < 4U && match; vertex++)
+			{
+				uint32_t expected_index = reverse ?
+					(rotation + 4U - vertex) % 4U :
+					(rotation + vertex) % 4U;
+				const float *actual = space->vertices[
+					portal->first_vertex + vertex].value;
+
+				for (axis = 0U; axis < 3U; axis++)
+					if (fabs((double)actual[axis] -
+							expected[expected_index][axis]) >
+						(double)AuditPortalCoordinateTolerance(
+							expected[expected_index][axis]))
+						match = 0;
+			}
+			if (match)
+				return 1;
+		}
+	return 0;
+}
+
+static int AuditPortalMatchesAuthoritative(
+	const sg_configuration_space_t *space,
+	const sg_configuration_portal_t *portal,
+	const sg_configuration_plane_t *boundary, const float first_witness[3],
+	const float second_witness[3], float portal_area)
+{
+	audit_boundary_point_t *expected = NULL;
+	uint8_t *matched = NULL;
+	uint32_t expected_count = 0U, vertex, candidate;
+	float expected_area = 0.0f;
+	float area_tolerance, clearance_tolerance;
+	int reconstructed, valid = -1;
+
+	reconstructed = AuditAuthoritativeBoundaryGeometry(space,
+		portal->from_cell, portal->to_cell, boundary, &expected,
+		&expected_count, &expected_area);
+	if (reconstructed == AUDIT_GEOMETRY_OUT_OF_MEMORY)
+		goto done;
+	if (reconstructed == AUDIT_GEOMETRY_INVALID)
+	{
+		valid = 0;
+		goto done;
+	}
+	if (reconstructed == AUDIT_GEOMETRY_EMPTY)
+	{
+		double tangent[4][3];
+		float tangent_area;
+
+		valid = AuditTangentBoundaryGeometry(space, portal, boundary,
+			first_witness, second_witness, tangent, &tangent_area) &&
+			AuditPortalCyclicMatches(space, portal,
+				(const double (*)[3])tangent);
+		if (!valid)
+			goto done;
+		area_tolerance = fmaxf(AUDIT_AREA_EPSILON,
+			fabsf(tangent_area) * FLT_EPSILON * 64.0f);
+		clearance_tolerance = AuditPortalMatchTolerance(sqrtf(tangent_area));
+		valid = fabsf(portal_area - tangent_area) <= area_tolerance &&
+			fabsf(portal->clearance - sqrtf(tangent_area)) <=
+				clearance_tolerance;
+		goto done;
+	}
+	if (expected_count != portal->vertex_count)
+	{
+		valid = 0;
+		goto done;
+	}
+	matched = calloc(expected_count, sizeof(*matched));
+	if (!matched)
+		goto done;
+	valid = 0;
+	for (vertex = 0U; vertex < portal->vertex_count; vertex++)
+	{
+		const float *actual = space->vertices[
+			portal->first_vertex + vertex].value;
+		int found = 0;
+
+		for (candidate = 0U; candidate < expected_count; candidate++)
+			if (!matched[candidate] &&
+				fabs((double)actual[0] - expected[candidate].value[0]) <=
+					(double)AuditPortalCoordinateTolerance(
+						expected[candidate].value[0]) &&
+				fabs((double)actual[1] - expected[candidate].value[1]) <=
+					(double)AuditPortalCoordinateTolerance(
+						expected[candidate].value[1]) &&
+				fabs((double)actual[2] - expected[candidate].value[2]) <=
+					(double)AuditPortalCoordinateTolerance(
+						expected[candidate].value[2]))
+			{
+				matched[candidate] = 1U;
+				found = 1;
+				break;
+			}
+		if (!found)
+			goto done;
+	}
+	area_tolerance = fmaxf(AUDIT_AREA_EPSILON,
+		fabsf(expected_area) * FLT_EPSILON * 64.0f);
+	clearance_tolerance = AuditPortalMatchTolerance(sqrtf(expected_area));
+	valid = fabsf(portal_area - expected_area) <= area_tolerance &&
+		fabsf(portal->clearance - sqrtf(expected_area)) <= clearance_tolerance;
+
+done:
+	free(matched);
+	free(expected);
+	return valid;
+}
+
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationAuditTestTangentPortalGeometry(void)
+{
+	sg_configuration_space_t space;
+	sg_configuration_cell_t cells[2];
+	sg_configuration_face_t faces[4];
+	sg_configuration_portal_t portal;
+	sg_rune_vec3_t vertices[4], saved[4];
+	double expected[4][3];
+	const float from[3] = { -0.5f, 0.0f, 0.0f };
+	const float to[3] = { 0.5f, 0.0f, 0.0f };
+	const float bin_normal_a[3] = { 1.0f, -FLT_TRUE_MIN, 0.0f };
+	const float bin_normal_b[3] = { 1.0f, AUDIT_GEOMETRY_EPSILON, 0.0f };
+	audit_portal_ref_t bin_reference;
+	sg_configuration_plane_t bin_query;
+	uint8_t bin_seen[1] = { 0U };
+	int64_t bin_a[4], bin_b[4];
+	float area, expected_area;
+	uint32_t vertex, axis;
+	int valid = 1;
+
+	memset(&space, 0, sizeof(space));
+	memset(cells, 0, sizeof(cells));
+	memset(faces, 0, sizeof(faces));
+	memset(&portal, 0, sizeof(portal));
+	memset(vertices, 0, sizeof(vertices));
+	space.cells = cells;
+	space.cell_count = 2U;
+	space.faces = faces;
+	space.face_count = 4U;
+	space.vertices = vertices;
+	space.vertex_count = 4U;
+	cells[0].first_face = 0U;
+	cells[0].face_count = 2U;
+	cells[1].first_face = 2U;
+	cells[1].face_count = 2U;
+	faces[0].plane.normal[0] = 1.0e-30f;
+	faces[1].plane.normal[1] = 1.0f;
+	faces[1].plane.distance = 1.0f;
+	faces[2].plane.normal[0] = -1.0e-30f;
+	faces[3].plane.normal[1] = -1.0f;
+	faces[3].plane.distance = 1.0f;
+	portal.from_cell = 0U;
+	portal.to_cell = 1U;
+	portal.vertex_count = 4U;
+	portal.plane = faces[0].plane;
+	if (!AuditTangentBoundaryGeometry(&space, &portal, &portal.plane,
+			from, to, expected, &expected_area))
+		return 0;
+	for (vertex = 0U; vertex < 4U; vertex++)
+		for (axis = 0U; axis < 3U; axis++)
+			vertices[vertex].value[axis] = (float)expected[vertex][axis];
+	memcpy(saved, vertices, sizeof(saved));
+	if (!AuditPortalGeometry(&space, &portal, &area))
+		return 0;
+	portal.clearance = sqrtf(expected_area);
+	valid &= AuditPortalMatchesAuthoritative(&space, &portal, &portal.plane,
+		from, to, area) == 1;
+	portal.vertex_count = 3U;
+	valid &= AuditPortalMatchesAuthoritative(&space, &portal, &portal.plane,
+		from, to, area) == 0;
+	portal.vertex_count = 4U;
+	vertices[0].value[1] += 0.01f;
+	valid &= AuditPortalMatchesAuthoritative(&space, &portal, &portal.plane,
+		from, to, area) == 0;
+	memcpy(vertices, saved, sizeof(saved));
+	vertices[1] = saved[2];
+	vertices[2] = saved[1];
+	valid &= AuditPortalMatchesAuthoritative(&space, &portal, &portal.plane,
+		from, to, area) == 0;
+	memcpy(vertices, saved, sizeof(saved));
+	portal.clearance *= 2.0f;
+	valid &= AuditPortalMatchesAuthoritative(&space, &portal, &portal.plane,
+		from, to, area) == 0;
+	valid &= AuditPlaneBins(bin_normal_a, 0.0f, bin_a) &&
+		AuditPlaneBins(bin_normal_b, 0.0f, bin_b);
+	for (axis = 0U; axis < 4U; axis++)
+		valid &= llabs(bin_a[axis] - bin_b[axis]) <= 1;
+	memset(&bin_reference, 0, sizeof(bin_reference));
+	memset(&bin_query, 0, sizeof(bin_query));
+	bin_reference.from = 0U;
+	bin_reference.to = 1U;
+	memcpy(bin_reference.canonical_normal, bin_normal_a,
+		sizeof(bin_reference.canonical_normal));
+	memcpy(bin_reference.bin, bin_a, sizeof(bin_reference.bin));
+	memcpy(bin_query.normal, bin_normal_b, sizeof(bin_query.normal));
+	valid &= FindPortalRef(&bin_reference, 1U, bin_seen, 0U, 1U,
+		&bin_query) && bin_seen[0];
+	return valid;
+}
+#endif
+
+static int AuditExpectedFacePair(audit_context_t *audit,
+	const audit_face_ref_t *a, const audit_face_ref_t *b,
+	const audit_portal_ref_t *portals, uint32_t portal_count, uint8_t *seen)
+{
+	const sg_configuration_face_t *face_a = &audit->space->faces[a->face];
+	const sg_configuration_face_t *face_b = &audit->space->faces[b->face];
+	const sg_configuration_cell_t *cell_a = &audit->space->cells[a->cell];
+	float from[3], to[3];
+	sg_host_collision_transition_t transition;
+	int from_result, to_result;
+
+	if (a->cell == b->cell ||
+		!SameBoundary(&face_a->plane, &face_b->plane))
+		return 1;
+	from_result = AuditPortalSideWitness(audit, a->cell, b->cell,
+		&face_a->plane, from);
+	to_result = AuditPortalSideWitness(audit, b->cell, a->cell,
+		&face_b->plane, to);
+	if (from_result < 0 || to_result < 0)
+		return 0;
+	if (!from_result || !to_result ||
+		!SG_HostCollisionTransition(audit->authority, NULL, from, to,
+			cell_a->stance, &transition) || !transition.clear)
+		return 1;
+	if (!FindPortalRef(portals, portal_count, seen,
+			a->cell, b->cell, &face_a->plane))
+	{
+		audit->result.omitted_portals++;
+		return 0;
+	}
+	return 1;
 }
 
 static int AuditPortals(audit_context_t *audit)
@@ -1155,22 +2104,27 @@ static int AuditPortals(audit_context_t *audit)
 	audit_face_ref_t *faces = NULL;
 	audit_portal_ref_t *portals = NULL;
 	uint32_t face_count = 0, face_index = 0, portal_index, cell;
-	uint32_t group_start;
 	int valid = 0;
 
 	for (cell = 0; cell < audit->space->cell_count; cell++)
 	{
 		if (audit->space->cells[cell].face_count > UINT32_MAX - face_count)
+		{
+			Fail(audit, SG_CONFIGURATION_AUDIT_OVERFLOW, cell);
 			goto done;
+		}
 		face_count += audit->space->cells[cell].face_count;
 	}
 	seen = calloc(audit->space->portal_count ? audit->space->portal_count : 1U,
 		sizeof(*seen));
-	faces = malloc((size_t)face_count * sizeof(*faces));
-	portals = malloc((size_t)audit->space->portal_count * sizeof(*portals));
-	if (!seen || (!faces && face_count) ||
-		(!portals && audit->space->portal_count))
+	faces = calloc(face_count ? face_count : 1U, sizeof(*faces));
+	portals = calloc(audit->space->portal_count ?
+		audit->space->portal_count : 1U, sizeof(*portals));
+	if (!seen || !faces || !portals)
+	{
+		Fail(audit, SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY, 0U);
 		goto done;
+	}
 	for (cell = 0; cell < audit->space->cell_count; cell++)
 	{
 		uint32_t offset;
@@ -1179,7 +2133,6 @@ static int AuditPortals(audit_context_t *audit)
 		{
 			audit_face_ref_t *reference;
 			const sg_configuration_face_t *face;
-			uint32_t vertex, axis, drop, sweep_axis;
 
 			face = &audit->space->faces[
 				audit->space->cells[cell].first_face + offset];
@@ -1188,34 +2141,8 @@ static int AuditPortals(audit_context_t *audit)
 			reference->face = audit->space->cells[cell].first_face + offset;
 			AuditCanonicalPlane(&face->plane, reference->canonical_normal,
 				&reference->canonical_distance);
-			for (axis = 0; axis < 3; axis++)
-			{
-				reference->mins[axis] = INFINITY;
-				reference->maxs[axis] = -INFINITY;
-			}
-			if (face->kind == SG_CONFIGURATION_FACE_FACET)
-				for (vertex = 0; vertex < face->vertex_count; vertex++)
-					for (axis = 0; axis < 3; axis++)
-					{
-						float value = audit->space->vertices[
-							face->first_vertex + vertex].value[axis];
-
-						if (value < reference->mins[axis])
-							reference->mins[axis] = value;
-						if (value > reference->maxs[axis])
-							reference->maxs[axis] = value;
-					}
-			else
-			{
-				CopyVector(reference->mins,
-					audit->space->cells[cell].bounds.mins.value);
-				CopyVector(reference->maxs,
-					audit->space->cells[cell].bounds.maxs.value);
-			}
-			drop = DominantAxis(face->plane.normal);
-			sweep_axis = (drop + 1U) % 3U;
-			reference->sweep_min = reference->mins[sweep_axis];
-			reference->sweep_max = reference->maxs[sweep_axis];
+			if (!AuditFaceBins(reference))
+				goto done;
 		}
 	}
 	face_count = face_index;
@@ -1226,65 +2153,56 @@ static int AuditPortals(audit_context_t *audit)
 			&audit->space->portals[portal_index];
 
 		portals[portal_index].portal = portal_index;
-		portals[portal_index].from = portal->from_cell;
-		portals[portal_index].to = portal->to_cell;
-		portals[portal_index].source_kind = portal->plane.source_kind;
-		portals[portal_index].source_index = portal->plane.source_index;
-		portals[portal_index].source_variant = portal->plane.source_variant;
+		portals[portal_index].from = portal->from_cell < portal->to_cell ?
+			portal->from_cell : portal->to_cell;
+		portals[portal_index].to = portal->from_cell < portal->to_cell ?
+			portal->to_cell : portal->from_cell;
+		AuditCanonicalPlane(&portal->plane,
+			portals[portal_index].canonical_normal,
+			&portals[portal_index].canonical_distance);
+		if (!AuditPlaneBins(portals[portal_index].canonical_normal,
+				portals[portal_index].canonical_distance,
+				portals[portal_index].bin))
+			goto done;
 	}
 	if (!SortAuditFaces(audit->space, faces, face_count) ||
 		!SortPortalRefs(portals, audit->space->portal_count))
-		goto done;
-	for (group_start = 0; group_start < face_count; )
 	{
-		uint32_t group_end = group_start + 1U;
-		uint32_t left, right;
+		Fail(audit, SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY, 0U);
+		goto done;
+	}
+	for (face_index = 0U; face_index < face_count; face_index++)
+	{
+		const audit_face_ref_t *left = &faces[face_index];
+		const sg_rune_stance_t stance =
+			audit->space->cells[left->cell].stance;
+		int d0, d1, d2, d3;
 
-		while (group_end < face_count && SameAuditFaceGroup(audit->space,
-			&faces[group_start], &faces[group_end]))
-			group_end++;
-		for (left = group_start; left < group_end; left++)
-			for (right = left + 1U; right < group_end; right++)
+		for (d0 = -1; d0 <= 1; d0++)
+			for (d1 = -1; d1 <= 1; d1++)
+				for (d2 = -1; d2 <= 1; d2++)
+					for (d3 = -1; d3 <= 1; d3++)
 			{
-				const audit_face_ref_t *a = &faces[left];
-				const audit_face_ref_t *b = &faces[right];
-				const sg_configuration_face_t *face_a =
-					&audit->space->faces[a->face];
-				const sg_configuration_face_t *face_b =
-					&audit->space->faces[b->face];
-				const sg_configuration_cell_t *cell_a =
-					&audit->space->cells[a->cell];
-				float center[3], from[3], to[3];
-				sg_host_collision_transition_t transition;
-				int from_result, to_result;
+				int64_t bin[4];
+				uint32_t right;
 
-				if (b->sweep_min > a->sweep_max + AUDIT_EPSILON)
-					break;
-				if (a->cell == b->cell || !RefBoundsOverlap(a, b) ||
-					!SameBoundary(&face_a->plane, &face_b->plane) ||
-					(face_a->kind == SG_CONFIGURATION_FACE_FACET &&
-					 face_b->kind == SG_CONFIGURATION_FACE_FACET &&
-					 !FacesOverlapArea(audit->space, face_a, face_b, center)))
+				if (!OffsetAuditBin(left->bin[0], d0, &bin[0]) ||
+					!OffsetAuditBin(left->bin[1], d1, &bin[1]) ||
+					!OffsetAuditBin(left->bin[2], d2, &bin[2]) ||
+					!OffsetAuditBin(left->bin[3], d3, &bin[3]))
 					continue;
-				from_result = AuditPortalSideWitness(audit, a->cell, b->cell,
-					&face_a->plane, from);
-				to_result = AuditPortalSideWitness(audit, b->cell, a->cell,
-					&face_b->plane, to);
-				if (from_result < 0 || to_result < 0)
-					goto done;
-				if (!from_result || !to_result ||
-					!SG_HostCollisionTransition(audit->authority, NULL, from, to,
-						cell_a->stance, &transition) || !transition.clear)
-					continue;
-				if (!FindPortalRef(audit->space, portals,
-						audit->space->portal_count, seen, a->cell, b->cell,
-						&face_a->plane))
+				right = AuditFaceBinLowerBound(audit->space, faces,
+					face_count, stance, bin);
+				while (right < face_count && AuditFaceBinKeyCompare(
+					audit->space, &faces[right], stance, bin) == 0)
 				{
-					audit->result.omitted_portals++;
-					goto done;
+					if (right > face_index && !AuditExpectedFacePair(audit,
+							left, &faces[right], portals,
+							audit->space->portal_count, seen))
+						goto done;
+					right++;
 				}
 			}
-		group_start = group_end;
 	}
 	for (portal_index = 0; portal_index < audit->space->portal_count;
 		portal_index++)
@@ -1292,17 +2210,22 @@ static int AuditPortals(audit_context_t *audit)
 		const sg_configuration_portal_t *portal =
 			&audit->space->portals[portal_index];
 		float from[3], to[3];
+		float portal_area = 0.0f;
 		sg_host_collision_transition_t transition;
 		const sg_configuration_plane_t *from_plane, *to_plane;
+		int geometry;
 
 		if (!seen[portal_index] ||
 			portal->from_cell >= audit->space->cell_count ||
 			portal->to_cell >= audit->space->cell_count ||
+			portal->stance != audit->space->cells[portal->from_cell].stance ||
+			portal->stance != audit->space->cells[portal->to_cell].stance ||
+			!isfinite(portal->clearance) || !(portal->clearance > 0.0f) ||
 			portal->first_vertex > audit->space->vertex_count ||
 			portal->vertex_count < 3U ||
 			portal->vertex_count > audit->space->vertex_count -
 				portal->first_vertex ||
-			!AuditPortalGeometry(audit->space, portal))
+			!AuditPortalGeometry(audit->space, portal, &portal_area))
 		{
 			audit->result.invented_portals++;
 			goto done;
@@ -1315,9 +2238,17 @@ static int AuditPortals(audit_context_t *audit)
 			AuditPortalSideWitness(audit, portal->from_cell, portal->to_cell,
 				from_plane, from) != 1 ||
 			AuditPortalSideWitness(audit, portal->to_cell, portal->from_cell,
-				to_plane, to) != 1 ||
-			!SG_HostCollisionTransition(audit->authority, NULL, from, to,
-				portal->stance, &transition) || !transition.clear)
+				to_plane, to) != 1)
+			goto done;
+		geometry = AuditPortalMatchesAuthoritative(audit->space, portal,
+			from_plane, from, to, portal_area);
+		if (geometry < 0)
+		{
+			Fail(audit, SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY, portal_index);
+			goto done;
+		}
+		if (!geometry || !SG_HostCollisionTransition(audit->authority, NULL,
+				from, to, portal->stance, &transition) || !transition.clear)
 			goto done;
 		audit->result.proved_portals++;
 		audit->result.boundary_witnesses += 2U;
@@ -1672,11 +2603,11 @@ static int AuditStanceOverlaps(audit_context_t *audit)
 		audit->space->stance_overlap_count : 1U, sizeof(*seen));
 	covered = calloc(audit->space->cell_count ? audit->space->cell_count : 1U,
 		sizeof(*covered));
-	cells = malloc((size_t)audit->space->cell_count * sizeof(*cells));
-	overlaps = malloc((size_t)audit->space->stance_overlap_count *
-		sizeof(*overlaps));
-	if (!seen || !covered || (!cells && audit->space->cell_count) ||
-		(!overlaps && audit->space->stance_overlap_count))
+	cells = calloc(audit->space->cell_count ? audit->space->cell_count : 1U,
+		sizeof(*cells));
+	overlaps = calloc(audit->space->stance_overlap_count ?
+		audit->space->stance_overlap_count : 1U, sizeof(*overlaps));
+	if (!seen || !covered || !cells || !overlaps)
 		goto done;
 	for (index = 0; index < audit->space->cell_count; index++)
 	{

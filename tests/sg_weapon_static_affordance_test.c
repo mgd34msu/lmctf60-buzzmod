@@ -1192,7 +1192,7 @@ static void TestPartitionPointIndexScaling(void)
 	uint64_t preparation_bound;
 
 	CHECK(BuildPreparedFixture(&built,
-		PartitionScalingFixture(SG_WEAPON_FIXTURE_PARTITION_BRUSHES)));
+		PartitionScalingFixture(SG_WEAPON_FIXTURE_PARTITIONS)));
 	if (!built.context)
 	{
 		DestroyFixture(&built);
@@ -1531,7 +1531,7 @@ static void TestAmbiguousSemanticPartitionRejected(void)
 	int found = 0;
 
 	CHECK(BuildPreparedFixture(&built,
-		PartitionScalingFixture(SG_WEAPON_FIXTURE_PARTITION_BRUSHES)));
+		PartitionScalingFixture(SG_WEAPON_FIXTURE_PARTITIONS)));
 	if (!built.context)
 	{
 		DestroyFixture(&built);

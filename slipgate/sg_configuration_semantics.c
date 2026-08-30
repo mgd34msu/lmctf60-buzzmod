@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define SEMANTICS_POINT_EPSILON 0.00001f
+#define SEMANTICS_GEOMETRY_EPSILON 0.000001
 #define SEMANTICS_CONTENTS_DEADMONSTER UINT32_C(0x04000000)
 #define SEMANTICS_GROUND_PROBE 0.25f
 #define SEMANTICS_TRACE_EPSILON 0.03125f
@@ -71,6 +72,62 @@ static void Copy3(float out[3], const float in[3])
 static int Finite3(const float value[3])
 {
 	return isfinite(value[0]) && isfinite(value[1]) && isfinite(value[2]);
+}
+
+static int NormalizeSemanticPlaneDouble(
+	const sg_configuration_plane_t *plane, double normal[3], double *distance)
+{
+	double scale = fmax(fabs((double)plane->normal[0]),
+		fmax(fabs((double)plane->normal[1]),
+			fabs((double)plane->normal[2])));
+	double length;
+	uint32_t axis;
+
+	if (!(scale > 0.0) || !isfinite(scale) || !isfinite(plane->distance))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		normal[axis] = (double)plane->normal[axis] / scale;
+	length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
+		normal[2] * normal[2]);
+	if (!(length > 0.0) || !isfinite(length))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		normal[axis] /= length;
+	*distance = ((double)plane->distance / scale) / length;
+	return isfinite(*distance);
+}
+
+static float PublishedCoordinateTolerance(float value)
+{
+	float lower = nextafterf(value, -INFINITY);
+	float upper = nextafterf(value, INFINITY);
+
+	return fmaxf((float)SEMANTICS_GEOMETRY_EPSILON,
+		fmaxf(value - lower, upper - value) * 2.0f);
+}
+
+static double PublishedPlaneResidualTolerance(const float point[3],
+	const double normal[3])
+{
+	return SEMANTICS_GEOMETRY_EPSILON +
+		fabs(normal[0]) * PublishedCoordinateTolerance(point[0]) +
+		fabs(normal[1]) * PublishedCoordinateTolerance(point[1]) +
+		fabs(normal[2]) * PublishedCoordinateTolerance(point[2]);
+}
+
+static int PublishedPointsSame(const float left[3], const float right[3])
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float tolerance = fmaxf(PublishedCoordinateTolerance(left[axis]),
+			PublishedCoordinateTolerance(right[axis]));
+
+		if (fabsf(left[axis] - right[axis]) > tolerance)
+			return 0;
+	}
+	return 1;
 }
 
 static void SetError(semantic_build_t *build,
@@ -309,7 +366,8 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 			uint32_t vertex;
 			if (!Finite3(face->plane.normal) ||
 				!isfinite(face->plane.distance) ||
-				Dot(face->plane.normal, face->plane.normal) <= 0.0f ||
+				(face->plane.normal[0] == 0.0f && face->plane.normal[1] == 0.0f &&
+					face->plane.normal[2] == 0.0f) ||
 				face->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
 				(face->kind == SG_CONFIGURATION_FACE_FACET &&
 					face->vertex_count < 3U) ||
@@ -408,33 +466,42 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 		{
 			const sg_configuration_face_t *face =
 				&configuration->faces[cell->first_face + local];
+			double face_normal[3], face_distance;
 			uint32_t vertex;
-			if (Dot(cell->interior_witness.value, face->plane.normal) >=
-				face->plane.distance)
+			if (!NormalizeSemanticPlaneDouble(&face->plane, face_normal,
+					&face_distance) ||
+				(double)cell->interior_witness.value[0] * face_normal[0] +
+				(double)cell->interior_witness.value[1] * face_normal[1] +
+				(double)cell->interior_witness.value[2] * face_normal[2] >=
+					face_distance)
 				return 0;
 			for (vertex = face->first_vertex;
 				vertex < face->first_vertex + face->vertex_count; vertex++)
 			{
 				const float *point = configuration->vertices[vertex].value;
 				uint32_t other, prior;
-				if (fabsf(Dot(point, face->plane.normal) - face->plane.distance) >
-					SEMANTICS_POINT_EPSILON * 4.0f)
+				if (fabs((double)point[0] * face_normal[0] +
+						(double)point[1] * face_normal[1] +
+						(double)point[2] * face_normal[2] - face_distance) >
+					PublishedPlaneResidualTolerance(point, face_normal))
 					return 0;
 				for (other = 0; other < cell->face_count; other++)
 				{
 					const sg_configuration_face_t *halfspace =
 						&configuration->faces[cell->first_face + other];
-					if (Dot(point, halfspace->plane.normal) -
-						halfspace->plane.distance > SEMANTICS_POINT_EPSILON)
+					double normal[3], distance;
+
+					if (!NormalizeSemanticPlaneDouble(&halfspace->plane, normal,
+							&distance) ||
+						(double)point[0] * normal[0] +
+						(double)point[1] * normal[1] +
+						(double)point[2] * normal[2] - distance >
+							PublishedPlaneResidualTolerance(point, normal))
 						return 0;
 				}
 				for (prior = face->first_vertex; prior < vertex; prior++)
-					if (fabsf(configuration->vertices[prior].value[0] - point[0]) <=
-							SEMANTICS_POINT_EPSILON &&
-						fabsf(configuration->vertices[prior].value[1] - point[1]) <=
-							SEMANTICS_POINT_EPSILON &&
-						fabsf(configuration->vertices[prior].value[2] - point[2]) <=
-							SEMANTICS_POINT_EPSILON)
+					if (PublishedPointsSame(
+							configuration->vertices[prior].value, point))
 						return 0;
 			}
 		}
@@ -638,7 +705,7 @@ static int AppendSupportDecision(semantic_build_t *build,
 	uint32_t index;
 
 	if (!Finite3(normal) || !isfinite(distance) ||
-		Dot(normal, normal) <= FLT_EPSILON)
+		(normal[0] == 0.0f && normal[1] == 0.0f && normal[2] == 0.0f))
 		return 1;
 	for (index = 0; index < count; index++)
 		if (decisions[index].normal[0] == normal[0] &&
@@ -947,16 +1014,46 @@ static int AddBspSideConstraint(const sg_bsp_plane_t *plane, float offset,
 	return AppendConstraint(constraints, &constraint);
 }
 
+static int NormalizeSemanticHalfspaceDouble(
+	const sg_configuration_lattice_halfspace_t *halfspace, double normal[3],
+	double *distance)
+{
+	double scale = fmax(fabs((double)halfspace->normal[0]),
+		fmax(fabs((double)halfspace->normal[1]),
+			fabs((double)halfspace->normal[2])));
+	double length;
+	uint32_t axis;
+
+	if (!(scale > 0.0) || !isfinite(scale) || !isfinite(halfspace->distance))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		normal[axis] = (double)halfspace->normal[axis] / scale;
+	length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
+		normal[2] * normal[2]);
+	if (!(length > 0.0) || !isfinite(length))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		normal[axis] /= length;
+	*distance = ((double)halfspace->distance / scale) / length;
+	return isfinite(*distance);
+}
+
 static int PointInside(const float point[3],
 	const semantic_constraints_t *constraints)
 {
 	uint32_t index;
 
 	for (index = 0; index < constraints->count; index++)
-		if (Dot(point, constraints->items[index].halfspace.normal) -
-			constraints->items[index].halfspace.distance >
-			SEMANTICS_POINT_EPSILON)
+	{
+		double normal[3], distance;
+
+		if (!NormalizeSemanticHalfspaceDouble(
+				&constraints->items[index].halfspace, normal, &distance) ||
+			(double)point[0] * normal[0] + (double)point[1] * normal[1] +
+			(double)point[2] * normal[2] - distance >
+				PublishedPlaneResidualTolerance(point, normal))
 			return 0;
+	}
 	return 1;
 }
 
@@ -964,22 +1061,24 @@ static int Intersect3(const semantic_constraint_t *a,
 	const semantic_constraint_t *b, const semantic_constraint_t *c,
 	float point[3])
 {
-	double n0[3], n1[3], n2[3];
+	double n0[3], n1[3], n2[3], d0, d1, d2;
 	double cross12[3], cross20[3], cross01[3], determinant;
+	double determinant_scale;
 	uint32_t axis;
 
-	for (axis = 0; axis < 3U; axis++)
-	{
-		n0[axis] = a->halfspace.normal[axis];
-		n1[axis] = b->halfspace.normal[axis];
-		n2[axis] = c->halfspace.normal[axis];
-	}
+	if (!NormalizeSemanticHalfspaceDouble(&a->halfspace, n0, &d0) ||
+		!NormalizeSemanticHalfspaceDouble(&b->halfspace, n1, &d1) ||
+		!NormalizeSemanticHalfspaceDouble(&c->halfspace, n2, &d2))
+		return 0;
 	cross12[0] = n1[1] * n2[2] - n1[2] * n2[1];
 	cross12[1] = n1[2] * n2[0] - n1[0] * n2[2];
 	cross12[2] = n1[0] * n2[1] - n1[1] * n2[0];
 	determinant = n0[0] * cross12[0] + n0[1] * cross12[1] +
 		n0[2] * cross12[2];
-	if (!isfinite(determinant) || fabs(determinant) <= DBL_EPSILON)
+	determinant_scale = fabs(n0[0] * cross12[0]) +
+		fabs(n0[1] * cross12[1]) + fabs(n0[2] * cross12[2]);
+	if (!isfinite(determinant) || fabs(determinant) <=
+		DBL_EPSILON * fmax(1.0, determinant_scale))
 		return 0;
 	cross20[0] = n2[1] * n0[2] - n2[2] * n0[1];
 	cross20[1] = n2[2] * n0[0] - n2[0] * n0[2];
@@ -988,17 +1087,14 @@ static int Intersect3(const semantic_constraint_t *a,
 	cross01[1] = n0[2] * n1[0] - n0[0] * n1[2];
 	cross01[2] = n0[0] * n1[1] - n0[1] * n1[0];
 	for (axis = 0; axis < 3; axis++)
-		point[axis] = (float)(((double)a->halfspace.distance * cross12[axis] +
-			(double)b->halfspace.distance * cross20[axis] +
-			(double)c->halfspace.distance * cross01[axis]) / determinant);
+		point[axis] = (float)((d0 * cross12[axis] + d1 * cross20[axis] +
+			d2 * cross01[axis]) / determinant);
 	return Finite3(point);
 }
 
 static int SamePoint(const sg_rune_vec3_t *point, const float value[3])
 {
-	return fabsf(point->value[0] - value[0]) <= SEMANTICS_POINT_EPSILON &&
-		fabsf(point->value[1] - value[1]) <= SEMANTICS_POINT_EPSILON &&
-		fabsf(point->value[2] - value[2]) <= SEMANTICS_POINT_EPSILON;
+	return PublishedPointsSame(point->value, value);
 }
 
 static int SameHalfspace(const sg_configuration_lattice_halfspace_t *left,
@@ -1010,6 +1106,7 @@ static int SameHalfspace(const sg_configuration_lattice_halfspace_t *left,
 		left->distance == right->distance;
 }
 
+#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
 static int CanonicalFacesMatch(const sg_configuration_space_t *configuration,
 	const sg_configuration_cell_t *cell, const sg_rune_vec3_t *points,
 	uint32_t point_count)
@@ -1020,10 +1117,16 @@ static int CanonicalFacesMatch(const sg_configuration_space_t *configuration,
 	{
 		const sg_configuration_face_t *face =
 			&configuration->faces[cell->first_face + local];
+		double normal[3], distance;
 		uint32_t expected = 0, point;
+
+		if (!NormalizeSemanticPlaneDouble(&face->plane, normal, &distance))
+			return 0;
 		for (point = 0; point < point_count; point++)
-			if (fabsf(Dot(points[point].value, face->plane.normal) -
-				face->plane.distance) <= SEMANTICS_POINT_EPSILON * 4.0f)
+			if (fabs((double)points[point].value[0] * normal[0] +
+				(double)points[point].value[1] * normal[1] +
+				(double)points[point].value[2] * normal[2] - distance) <=
+				PublishedPlaneResidualTolerance(points[point].value, normal))
 			{
 				uint32_t actual;
 				expected++;
@@ -1063,64 +1166,181 @@ static int CanonicalCellMeshValid(
 	}
 	return CanonicalFacesMatch(configuration, cell, points, point_count);
 }
+#endif
+
+static int SemanticIntersectPlanesDouble(const sg_configuration_plane_t *a,
+	const sg_configuration_plane_t *b, const sg_configuration_plane_t *c,
+	double point[3])
+{
+	double n0[3], n1[3], n2[3], cross12[3], cross20[3], cross01[3];
+	double d0, d1, d2, determinant, determinant_scale;
+	uint32_t axis;
+
+	if (!NormalizeSemanticPlaneDouble(a, n0, &d0) ||
+		!NormalizeSemanticPlaneDouble(b, n1, &d1) ||
+		!NormalizeSemanticPlaneDouble(c, n2, &d2))
+		return 0;
+	cross12[0] = n1[1] * n2[2] - n1[2] * n2[1];
+	cross12[1] = n1[2] * n2[0] - n1[0] * n2[2];
+	cross12[2] = n1[0] * n2[1] - n1[1] * n2[0];
+	determinant = n0[0] * cross12[0] + n0[1] * cross12[1] +
+		n0[2] * cross12[2];
+	determinant_scale = fabs(n0[0] * cross12[0]) +
+		fabs(n0[1] * cross12[1]) + fabs(n0[2] * cross12[2]);
+	if (!isfinite(determinant) || fabs(determinant) <=
+		DBL_EPSILON * fmax(1.0, determinant_scale))
+		return 0;
+	cross20[0] = n2[1] * n0[2] - n2[2] * n0[1];
+	cross20[1] = n2[2] * n0[0] - n2[0] * n0[2];
+	cross20[2] = n2[0] * n0[1] - n2[1] * n0[0];
+	cross01[0] = n0[1] * n1[2] - n0[2] * n1[1];
+	cross01[1] = n0[2] * n1[0] - n0[0] * n1[2];
+	cross01[2] = n0[0] * n1[1] - n0[1] * n1[0];
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		point[axis] = (d0 * cross12[axis] + d1 * cross20[axis] +
+			d2 * cross01[axis]) / determinant;
+		if (!isfinite(point[axis]))
+			return 0;
+	}
+	return 1;
+}
+
+static int SemanticPointInsideCellDouble(
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, const double point[3])
+{
+	uint32_t face;
+
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_plane_t *plane = &configuration->faces[
+			cell->first_face + face].plane;
+		double normal[3], distance;
+		double residual;
+
+		if (!NormalizeSemanticPlaneDouble(plane, normal, &distance))
+			return 0;
+		residual = point[0] * normal[0] + point[1] * normal[1] +
+			point[2] * normal[2] - distance;
+		if (residual > SEMANTICS_GEOMETRY_EPSILON)
+			return 0;
+	}
+	return 1;
+}
+
+static int SemanticAppendPublishedPoint(sg_rune_vec3_t **points,
+	uint32_t *count, uint32_t *capacity, const double exact[3])
+{
+	float rounded[3];
+	uint32_t axis, existing;
+
+	for (axis = 0U; axis < 3U; axis++)
+		rounded[axis] = (float)exact[axis];
+	for (existing = 0U; existing < *count; existing++)
+		if (SamePoint(&(*points)[existing], rounded))
+			return 1;
+	if (*count == UINT32_MAX || !Grow((void **)points, capacity, *count + 1U,
+			UINT32_MAX, sizeof(**points)))
+		return 0;
+	Copy3((*points)[(*count)++].value, rounded);
+	return 1;
+}
 
 static int ValidateCellMesh(const sg_configuration_space_t *configuration,
 	uint32_t cell_index)
 {
 	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
-	sg_rune_vec3_t *points = NULL;
-	uint32_t point_count = 0, point_capacity = 0;
-	uint32_t first, second, third;
-	int valid = 0;
+	sg_rune_vec3_t *all = NULL;
+	uint32_t all_count = 0U, all_capacity = 0U;
+	uint32_t first, second, third, face;
+	int has_constraint = 0, valid = 0;
 
 	for (first = 0; first < cell->face_count; first++)
 		for (second = first + 1U; second < cell->face_count; second++)
 			for (third = second + 1U; third < cell->face_count; third++)
 			{
-				semantic_constraint_t constraints[3];
-				float point[3];
-				uint32_t face, existing;
-				memset(constraints, 0, sizeof(constraints));
-				Copy3(constraints[0].halfspace.normal,
-					configuration->faces[cell->first_face + first].plane.normal);
-				constraints[0].halfspace.distance =
-					configuration->faces[cell->first_face + first].plane.distance;
-				Copy3(constraints[1].halfspace.normal,
-					configuration->faces[cell->first_face + second].plane.normal);
-				constraints[1].halfspace.distance =
-					configuration->faces[cell->first_face + second].plane.distance;
-				Copy3(constraints[2].halfspace.normal,
-					configuration->faces[cell->first_face + third].plane.normal);
-				constraints[2].halfspace.distance =
-					configuration->faces[cell->first_face + third].plane.distance;
-				if (!Intersect3(&constraints[0], &constraints[1], &constraints[2],
-					point))
+				double point[3];
+				if (!SemanticIntersectPlanesDouble(&configuration->faces[
+						cell->first_face + first].plane, &configuration->faces[
+						cell->first_face + second].plane, &configuration->faces[
+						cell->first_face + third].plane, point) ||
+					!SemanticPointInsideCellDouble(configuration, cell, point))
 					continue;
-				for (face = 0; face < cell->face_count; face++)
-				{
-					const sg_configuration_face_t *halfspace =
-						&configuration->faces[cell->first_face + face];
-					if (Dot(point, halfspace->plane.normal) -
-						halfspace->plane.distance > SEMANTICS_POINT_EPSILON)
-						break;
-				}
-				if (face != cell->face_count)
-					continue;
-				for (existing = 0; existing < point_count; existing++)
-					if (SamePoint(&points[existing], point))
-						break;
-				if (existing != point_count)
-					continue;
-				if (point_count == UINT32_MAX ||
-					!Grow((void **)&points, &point_capacity, point_count + 1U,
-						UINT32_MAX, sizeof(*points)))
+				if (!SemanticAppendPublishedPoint(&all, &all_count,
+						&all_capacity, point))
 					goto done;
-				Copy3(points[point_count++].value, point);
 			}
-	valid = CanonicalCellMeshValid(configuration, cell, points, point_count);
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_face_t *actual = &configuration->faces[
+			cell->first_face + face];
+		sg_rune_vec3_t *expected = NULL;
+		uint8_t *matched = NULL;
+		uint32_t expected_count = 0U, expected_capacity = 0U, vertex;
+
+		has_constraint |= actual->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+		for (first = 0U; first < cell->face_count; first++)
+			if (first != face)
+				for (second = first + 1U; second < cell->face_count; second++)
+					if (second != face)
+					{
+						double point[3];
+						if (!SemanticIntersectPlanesDouble(&actual->plane,
+								&configuration->faces[cell->first_face + first].plane,
+								&configuration->faces[cell->first_face + second].plane,
+								point) || !SemanticPointInsideCellDouble(configuration,
+								cell, point))
+							continue;
+						if (!SemanticAppendPublishedPoint(&expected,
+								&expected_count, &expected_capacity, point))
+						{
+							free(expected);
+							goto done;
+						}
+					}
+		if ((actual->kind == SG_CONFIGURATION_FACE_FACET) !=
+				(expected_count >= 3U) ||
+			actual->vertex_count != (expected_count >= 3U ? expected_count : 0U))
+		{
+			free(expected);
+			goto done;
+		}
+		if (expected_count < 3U)
+		{
+			free(expected);
+			continue;
+		}
+		matched = calloc(expected_count, 1U);
+		if (!matched)
+		{
+			free(expected);
+			goto done;
+		}
+		for (vertex = 0U; vertex < actual->vertex_count; vertex++)
+		{
+			uint32_t candidate;
+			for (candidate = 0U; candidate < expected_count; candidate++)
+				if (!matched[candidate] && SamePoint(&expected[candidate],
+						configuration->vertices[actual->first_vertex + vertex].value))
+				{
+					matched[candidate] = 1U;
+					break;
+				}
+			if (candidate == expected_count)
+			{
+				free(matched);
+				free(expected);
+				goto done;
+			}
+		}
+		free(matched);
+		free(expected);
+	}
+	valid = all_count >= 4U || has_constraint;
 
 done:
-	free(points);
+	free(all);
 	return valid;
 }
 
@@ -1267,10 +1487,16 @@ static int BuildMesh(semantic_build_t *build,
 			continue;
 
 		for (v = 0; v < all_count; v++)
-			if (fabsf(Dot(all[v].value,
-				constraints->items[i].halfspace.normal) -
-				constraints->items[i].halfspace.distance) <=
-				SEMANTICS_POINT_EPSILON * 4.0f)
+		{
+			double normal[3], distance;
+			int incident = NormalizeSemanticHalfspaceDouble(
+				&constraints->items[i].halfspace, normal, &distance) &&
+				fabs((double)all[v].value[0] * normal[0] +
+					(double)all[v].value[1] * normal[1] +
+					(double)all[v].value[2] * normal[2] - distance) <=
+					PublishedPlaneResidualTolerance(all[v].value, normal);
+
+			if (incident)
 			{
 				if (point_count == UINT32_MAX ||
 					!Grow((void **)&face_points, &point_capacity, point_count + 1U,
@@ -1285,6 +1511,7 @@ static int BuildMesh(semantic_build_t *build,
 				}
 				face_points[point_count++] = all[v];
 			}
+		}
 		if (point_count < 3U)
 		{
 			free(face_points);
@@ -1907,13 +2134,20 @@ static int BuildHookPolygon(const sg_bsp_world_t *world,
 			for (third = second + 1U; third < constraints.count; third++)
 			{
 				float point[3];
+				double target_normal[3], target_distance;
 				uint32_t existing;
+
+				if (!NormalizeSemanticHalfspaceDouble(
+						&constraints.items[target_side].halfspace, target_normal,
+						&target_distance))
+					goto failure;
 				if (!Intersect3(&constraints.items[first],
 					&constraints.items[second], &constraints.items[third], point) ||
 					!PointInside(point, &constraints) ||
-					fabsf(Dot(point, constraints.items[target_side].halfspace.normal) -
-						constraints.items[target_side].halfspace.distance) >
-						SEMANTICS_POINT_EPSILON * 4.0f)
+					fabs((double)point[0] * target_normal[0] +
+						(double)point[1] * target_normal[1] +
+						(double)point[2] * target_normal[2] - target_distance) >
+						PublishedPlaneResidualTolerance(point, target_normal))
 					continue;
 				for (existing = 0; existing < point_count; existing++)
 					if (SamePoint(&points[existing], point))
@@ -2326,7 +2560,9 @@ static int AuditValidateSource(
 
 			*source_out = face_index;
 			if (!Finite3(face->plane.normal) || !isfinite(face->plane.distance) ||
-				Dot(face->plane.normal, face->plane.normal) <= 0.0f ||
+				(face->plane.normal[0] == 0.0f &&
+					face->plane.normal[1] == 0.0f &&
+					face->plane.normal[2] == 0.0f) ||
 				face->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
 				(face->kind == SG_CONFIGURATION_FACE_FACET &&
 					face->vertex_count < 3U) ||
@@ -2409,42 +2645,43 @@ static int AuditValidateSource(
 		{
 			const sg_configuration_face_t *face =
 				&configuration->faces[cell->first_face + local];
+			double face_normal[3], face_distance;
 			uint32_t vertex;
-			float witness_side =
-				cell->interior_witness.value[0] * face->plane.normal[0] +
-				cell->interior_witness.value[1] * face->plane.normal[1] +
-				cell->interior_witness.value[2] * face->plane.normal[2] -
-				face->plane.distance;
-			if (witness_side >= 0.0f)
+
+			if (!NormalizeSemanticPlaneDouble(&face->plane, face_normal,
+					&face_distance) ||
+				(double)cell->interior_witness.value[0] * face_normal[0] +
+				(double)cell->interior_witness.value[1] * face_normal[1] +
+				(double)cell->interior_witness.value[2] * face_normal[2] >=
+					face_distance)
 				return 0;
 			for (vertex = face->first_vertex;
 				vertex < face->first_vertex + face->vertex_count; vertex++)
 			{
 				const float *point = configuration->vertices[vertex].value;
 				uint32_t other, prior;
-				float own_distance = point[0] * face->plane.normal[0] +
-					point[1] * face->plane.normal[1] +
-					point[2] * face->plane.normal[2] - face->plane.distance;
-				if (fabsf(own_distance) > SEMANTICS_POINT_EPSILON * 4.0f)
+				if (fabs((double)point[0] * face_normal[0] +
+						(double)point[1] * face_normal[1] +
+						(double)point[2] * face_normal[2] - face_distance) >
+					PublishedPlaneResidualTolerance(point, face_normal))
 					return 0;
 				for (other = 0; other < cell->face_count; other++)
 				{
 					const sg_configuration_face_t *halfspace =
 						&configuration->faces[cell->first_face + other];
-					float side = point[0] * halfspace->plane.normal[0] +
-						point[1] * halfspace->plane.normal[1] +
-						point[2] * halfspace->plane.normal[2] -
-						halfspace->plane.distance;
-					if (side > SEMANTICS_POINT_EPSILON)
+					double normal[3], distance;
+
+					if (!NormalizeSemanticPlaneDouble(&halfspace->plane, normal,
+							&distance) ||
+						(double)point[0] * normal[0] +
+						(double)point[1] * normal[1] +
+						(double)point[2] * normal[2] - distance >
+							PublishedPlaneResidualTolerance(point, normal))
 						return 0;
 				}
 				for (prior = face->first_vertex; prior < vertex; prior++)
-					if (fabsf(configuration->vertices[prior].value[0] - point[0]) <=
-							SEMANTICS_POINT_EPSILON &&
-						fabsf(configuration->vertices[prior].value[1] - point[1]) <=
-							SEMANTICS_POINT_EPSILON &&
-						fabsf(configuration->vertices[prior].value[2] - point[2]) <=
-							SEMANTICS_POINT_EPSILON)
+					if (PublishedPointsSame(
+							configuration->vertices[prior].value, point))
 						return 0;
 			}
 		}
@@ -2479,7 +2716,7 @@ static int AuditAddDecision(semantic_audit_t *audit,
 	uint32_t count = audit->support_decision_count;
 	uint32_t index;
 
-	if (Dot(normal, normal) <= FLT_EPSILON)
+	if (normal[0] == 0.0f && normal[1] == 0.0f && normal[2] == 0.0f)
 		return 1;
 	for (index = 0; index < count; index++)
 		if (items[index].normal[0] == normal[0] &&
@@ -2774,10 +3011,16 @@ static int AuditPointInside(const float point[3],
 	uint32_t constraint;
 
 	for (constraint = 0; constraint < constraints->count; constraint++)
-		if (Dot(point, constraints->items[constraint].halfspace.normal) >
-			constraints->items[constraint].halfspace.distance +
-			SEMANTICS_POINT_EPSILON)
+	{
+		double normal[3], distance;
+
+		if (!NormalizeSemanticHalfspaceDouble(
+				&constraints->items[constraint].halfspace, normal, &distance) ||
+			(double)point[0] * normal[0] + (double)point[1] * normal[1] +
+			(double)point[2] * normal[2] - distance >
+				PublishedPlaneResidualTolerance(point, normal))
 			return 0;
+	}
 	return 1;
 }
 
@@ -2786,22 +3029,24 @@ static int AuditIntersection(
 	const sg_configuration_lattice_halfspace_t *b,
 	const sg_configuration_lattice_halfspace_t *c, float point[3])
 {
-	double n0[3], n1[3], n2[3], cross12[3], cross20[3], cross01[3];
-	double determinant;
+	double n0[3], n1[3], n2[3], d0, d1, d2;
+	double cross12[3], cross20[3], cross01[3];
+	double determinant, determinant_scale;
 	uint32_t axis;
 
-	for (axis = 0; axis < 3; axis++)
-	{
-		n0[axis] = a->normal[axis];
-		n1[axis] = b->normal[axis];
-		n2[axis] = c->normal[axis];
-	}
+	if (!NormalizeSemanticHalfspaceDouble(a, n0, &d0) ||
+		!NormalizeSemanticHalfspaceDouble(b, n1, &d1) ||
+		!NormalizeSemanticHalfspaceDouble(c, n2, &d2))
+		return 0;
 	cross12[0] = n1[1] * n2[2] - n1[2] * n2[1];
 	cross12[1] = n1[2] * n2[0] - n1[0] * n2[2];
 	cross12[2] = n1[0] * n2[1] - n1[1] * n2[0];
 	determinant = n0[0] * cross12[0] + n0[1] * cross12[1] +
 		n0[2] * cross12[2];
-	if (!isfinite(determinant) || fabs(determinant) <= DBL_EPSILON)
+	determinant_scale = fabs(n0[0] * cross12[0]) +
+		fabs(n0[1] * cross12[1]) + fabs(n0[2] * cross12[2]);
+	if (!isfinite(determinant) || fabs(determinant) <=
+		DBL_EPSILON * fmax(1.0, determinant_scale))
 		return 0;
 	cross20[0] = n2[1] * n0[2] - n2[2] * n0[1];
 	cross20[1] = n2[2] * n0[0] - n2[0] * n0[2];
@@ -2810,9 +3055,8 @@ static int AuditIntersection(
 	cross01[1] = n0[2] * n1[0] - n0[0] * n1[2];
 	cross01[2] = n0[0] * n1[1] - n0[1] * n1[0];
 	for (axis = 0; axis < 3; axis++)
-		point[axis] = (float)(((double)a->distance * cross12[axis] +
-			(double)b->distance * cross20[axis] +
-			(double)c->distance * cross01[axis]) / determinant);
+		point[axis] = (float)((d0 * cross12[axis] + d1 * cross20[axis] +
+			d2 * cross01[axis]) / determinant);
 	return Finite3(point);
 }
 
@@ -2852,22 +3096,20 @@ static int AuditSourceCellMesh(
 				{
 					const sg_configuration_face_t *halfspace =
 						&configuration->faces[cell->first_face + plane];
-					float side = point[0] * halfspace->plane.normal[0] +
-						point[1] * halfspace->plane.normal[1] +
-						point[2] * halfspace->plane.normal[2] -
-						halfspace->plane.distance;
-					if (side > SEMANTICS_POINT_EPSILON)
+					double normal[3], distance;
+
+					if (!NormalizeSemanticPlaneDouble(&halfspace->plane, normal,
+							&distance) ||
+						(double)point[0] * normal[0] +
+						(double)point[1] * normal[1] +
+						(double)point[2] * normal[2] - distance >
+							PublishedPlaneResidualTolerance(point, normal))
 						break;
 				}
 				if (plane != cell->face_count)
 					continue;
 				for (seen = 0; seen < count; seen++)
-					if (fabsf(vertices[seen].value[0] - point[0]) <=
-							SEMANTICS_POINT_EPSILON &&
-						fabsf(vertices[seen].value[1] - point[1]) <=
-							SEMANTICS_POINT_EPSILON &&
-						fabsf(vertices[seen].value[2] - point[2]) <=
-							SEMANTICS_POINT_EPSILON)
+					if (PublishedPointsSame(vertices[seen].value, point))
 						break;
 				if (seen != count)
 					continue;
@@ -2892,11 +3134,13 @@ static int AuditSourceCellMesh(
 		uint32_t expected = 0, vertex;
 		for (vertex = 0; vertex < count; vertex++)
 		{
-			float side = vertices[vertex].value[0] * face->plane.normal[0] +
-				vertices[vertex].value[1] * face->plane.normal[1] +
-				vertices[vertex].value[2] * face->plane.normal[2] -
-				face->plane.distance;
-			if (fabsf(side) <= SEMANTICS_POINT_EPSILON * 4.0f)
+			double normal[3], distance;
+
+			if (NormalizeSemanticPlaneDouble(&face->plane, normal, &distance) &&
+				fabs((double)vertices[vertex].value[0] * normal[0] +
+					(double)vertices[vertex].value[1] * normal[1] +
+					(double)vertices[vertex].value[2] * normal[2] - distance) <=
+					PublishedPlaneResidualTolerance(vertices[vertex].value, normal))
 			{
 				uint32_t actual;
 				expected++;
@@ -2904,12 +3148,9 @@ static int AuditSourceCellMesh(
 					continue;
 				for (actual = face->first_vertex;
 					actual < face->first_vertex + face->vertex_count; actual++)
-					if (fabsf(configuration->vertices[actual].value[0] -
-							vertices[vertex].value[0]) <= SEMANTICS_POINT_EPSILON &&
-						fabsf(configuration->vertices[actual].value[1] -
-							vertices[vertex].value[1]) <= SEMANTICS_POINT_EPSILON &&
-						fabsf(configuration->vertices[actual].value[2] -
-							vertices[vertex].value[2]) <= SEMANTICS_POINT_EPSILON)
+					if (PublishedPointsSame(
+							configuration->vertices[actual].value,
+							vertices[vertex].value))
 						break;
 				if (actual == face->first_vertex + face->vertex_count)
 					goto done;
@@ -3035,11 +3276,17 @@ static int AuditMesh(semantic_audit_t *audit,
 		if (canonical != constraint)
 			continue;
 		for (vertex = 0; vertex < vertex_count; vertex++)
-			if (fabsf(Dot(vertices[vertex].value,
-				constraints->items[constraint].halfspace.normal) -
-				constraints->items[constraint].halfspace.distance) <=
-				SEMANTICS_POINT_EPSILON * 4.0f)
+		{
+			double normal[3], distance;
+
+			if (NormalizeSemanticHalfspaceDouble(
+					&constraints->items[constraint].halfspace, normal, &distance) &&
+				fabs((double)vertices[vertex].value[0] * normal[0] +
+					(double)vertices[vertex].value[1] * normal[1] +
+					(double)vertices[vertex].value[2] * normal[2] - distance) <=
+					PublishedPlaneResidualTolerance(vertices[vertex].value, normal))
 				on_plane++;
+		}
 		active[constraint] = on_plane >= 3U ? 1U : 2U;
 		has_constraint_only |= active[constraint] == 2U;
 		active_count++;
@@ -3116,10 +3363,17 @@ static int AuditMesh(semantic_audit_t *audit,
 		if (actual->first_vertex != expected_first_vertex)
 			goto done;
 		for (vertex = 0; vertex < vertex_count; vertex++)
-			if (fabsf(Dot(vertices[vertex].value,
-				expected->halfspace.normal) - expected->halfspace.distance) <=
-				SEMANTICS_POINT_EPSILON * 4.0f)
+		{
+			double normal[3], distance;
+
+			if (NormalizeSemanticHalfspaceDouble(&expected->halfspace, normal,
+					&distance) &&
+				fabs((double)vertices[vertex].value[0] * normal[0] +
+					(double)vertices[vertex].value[1] * normal[1] +
+					(double)vertices[vertex].value[2] * normal[2] - distance) <=
+					PublishedPlaneResidualTolerance(vertices[vertex].value, normal))
 				expected_vertex_count++;
+		}
 		if ((actual->kind == SG_CONFIGURATION_SEMANTIC_FACE_FACET &&
 			(actual->vertex_count < 3U ||
 			actual->vertex_count != expected_vertex_count)) ||
@@ -3131,10 +3385,16 @@ static int AuditMesh(semantic_audit_t *audit,
 		for (vertex = actual->first_vertex;
 			vertex < actual->first_vertex + actual->vertex_count; vertex++)
 		{
+			double normal[3], distance;
 			uint32_t prior;
 			if (!Finite3(semantics->vertices[vertex].value) ||
-				fabsf(Dot(semantics->vertices[vertex].value, actual->normal) -
-					actual->distance) > SEMANTICS_POINT_EPSILON * 4.0f ||
+				!NormalizeSemanticHalfspaceDouble(&expected->halfspace, normal,
+					&distance) ||
+				fabs((double)semantics->vertices[vertex].value[0] * normal[0] +
+					(double)semantics->vertices[vertex].value[1] * normal[1] +
+					(double)semantics->vertices[vertex].value[2] * normal[2] -
+					distance) > PublishedPlaneResidualTolerance(
+						semantics->vertices[vertex].value, normal) ||
 				!AuditPointInside(semantics->vertices[vertex].value, constraints))
 				goto done;
 			for (prior = actual->first_vertex; prior < vertex; prior++)
@@ -3143,9 +3403,15 @@ static int AuditMesh(semantic_audit_t *audit,
 					goto done;
 		}
 		for (vertex = 0; vertex < vertex_count; vertex++)
-			if (fabsf(Dot(vertices[vertex].value,
-				expected->halfspace.normal) - expected->halfspace.distance) <=
-				SEMANTICS_POINT_EPSILON * 4.0f)
+		{
+			double normal[3], distance;
+
+			if (NormalizeSemanticHalfspaceDouble(&expected->halfspace, normal,
+					&distance) &&
+				fabs((double)vertices[vertex].value[0] * normal[0] +
+					(double)vertices[vertex].value[1] * normal[1] +
+					(double)vertices[vertex].value[2] * normal[2] - distance) <=
+					PublishedPlaneResidualTolerance(vertices[vertex].value, normal))
 			{
 				uint32_t actual_vertex;
 				for (actual_vertex = actual->first_vertex;
@@ -3157,6 +3423,7 @@ static int AuditMesh(semantic_audit_t *audit,
 				if (actual_vertex == actual->first_vertex + actual->vertex_count)
 					goto done;
 			}
+		}
 	}
 	while (next_constraint < constraints->count && !active[next_constraint])
 		next_constraint++;
@@ -3670,15 +3937,21 @@ static int AuditHookVertices(const sg_bsp_world_t *world,
 			for (c = b + 1U; c < constraints.count; c++)
 			{
 				float point[3];
+				double target_normal[3], target_distance;
 				uint32_t prior;
+
+				if (!NormalizeSemanticHalfspaceDouble(
+						&constraints.items[target].halfspace, target_normal,
+						&target_distance))
+					goto failure;
 				if (!AuditIntersection(&constraints.items[a].halfspace,
 					&constraints.items[b].halfspace,
 					&constraints.items[c].halfspace, point) ||
 					!AuditPointInside(point, &constraints) ||
-					fabsf(Dot(point,
-						constraints.items[target].halfspace.normal) -
-						constraints.items[target].halfspace.distance) >
-						SEMANTICS_POINT_EPSILON * 4.0f)
+					fabs((double)point[0] * target_normal[0] +
+						(double)point[1] * target_normal[1] +
+						(double)point[2] * target_normal[2] - target_distance) >
+						PublishedPlaneResidualTolerance(point, target_normal))
 					continue;
 				for (prior = 0; prior < count; prior++)
 					if (SamePoint(&vertices[prior], point))

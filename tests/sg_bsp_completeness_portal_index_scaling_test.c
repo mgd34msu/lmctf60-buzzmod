@@ -266,6 +266,59 @@ static void TestNearTieCompatibility(void)
 	SG_BspProofFreeFaceRefs(refs, ref_count);
 }
 
+static void TestNarrowHighCoordinateFacet(void)
+{
+	sg_configuration_cell_t cell;
+	sg_configuration_face_t faces[2];
+	sg_configuration_space_t space;
+	sg_bsp_proof_context_t proof;
+	sg_bsp_proof_face_ref_t *refs = NULL;
+	uint32_t ref_count = 0U;
+	uint32_t index;
+	int found = 0;
+
+	memset(&cell, 0, sizeof(cell));
+	memset(faces, 0, sizeof(faces));
+	memset(&space, 0, sizeof(space));
+	memset(&proof, 0, sizeof(proof));
+	cell.face_count = 2U;
+	faces[0].plane.normal[2] = 1.0f;
+	faces[1].plane.normal[0] = 5e-7f;
+	faces[1].plane.normal[2] = 1.0f;
+	faces[1].plane.distance = 0.001f;
+	space.cells = &cell;
+	space.cell_count = 1U;
+	space.faces = faces;
+	space.face_count = 2U;
+	proof.space = &space;
+	CHECK(SG_BspProofBuildFaceRefs(&proof, &refs, &ref_count));
+	CHECK(ref_count == 2U);
+	for (index = 0U; index < ref_count; index++)
+		if (refs[index].face == 0U)
+		{
+			CHECK(refs[index].vertex_count == 4U);
+			CHECK(fabsf(refs[index].bounds_maxs[0] - 2000.0f) < 0.001f);
+			found = 1;
+		}
+	CHECK(found);
+	SG_BspProofFreeFaceRefs(refs, ref_count);
+}
+
+static void TestPortalPlaneIndexScaling(void)
+{
+	static const uint32_t counts[] = { 64U, 256U, 1024U, 4096U };
+	uint32_t index;
+
+	for (index = 0U; index < sizeof(counts) / sizeof(counts[0]); index++)
+	{
+		uint64_t candidates = 0U;
+
+		CHECK(SG_BspProofTestPortalPlaneIndexScaling(counts[index],
+			&candidates));
+		CHECK(candidates == 1U);
+	}
+}
+
 int main(void)
 {
 	TestFanScaling();
@@ -273,6 +326,9 @@ int main(void)
 	TestNearTieCompatibility();
 	TestReviewerNearTieMatrix();
 	TestMaximumScaleMatrix();
+	TestNarrowHighCoordinateFacet();
+	CHECK(SG_BspProofTestRepeatedExpectedPortal());
+	TestPortalPlaneIndexScaling();
 	if (failures)
 	{
 		fprintf(stderr, "%d portal index scaling checks failed\n", failures);

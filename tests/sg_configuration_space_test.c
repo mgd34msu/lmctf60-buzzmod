@@ -230,6 +230,37 @@ static uint32_t CountPortalStance(const sg_configuration_space_t *space,
 	return count;
 }
 
+static int ReplaceBoundaryWithInteriorTriangle(sg_configuration_space_t *space,
+	uint32_t cell_index, const sg_configuration_plane_t *boundary)
+{
+	const sg_configuration_cell_t *cell = &space->cells[cell_index];
+	uint32_t face_offset;
+
+	for (face_offset = 0U; face_offset < cell->face_count; face_offset++)
+	{
+		sg_configuration_face_t *face = &space->faces[
+			cell->first_face + face_offset];
+		uint32_t vertex;
+
+		if (face->kind != SG_CONFIGURATION_FACE_FACET ||
+			face->plane.source_kind != boundary->source_kind ||
+			face->plane.source_index != boundary->source_index ||
+			face->plane.source_variant != boundary->source_variant)
+			continue;
+		for (vertex = 0U; vertex < face->vertex_count; vertex++)
+		{
+			float *point = space->vertices[
+				face->first_vertex + vertex].value;
+
+			memcpy(point, cell->interior_witness.value,
+				sizeof(cell->interior_witness.value));
+			point[vertex % 3U] += 0.01f;
+		}
+		return 1;
+	}
+	return 0;
+}
+
 static void TestFullDomainCorridorAndWater(void)
 {
 	fixture_t fixture = Fixture(NULL, 0, SG_HOST_CONTENTS_WATER, 0);
@@ -264,14 +295,129 @@ static void TestFullDomainCorridorAndWater(void)
 		CHECK(SG_HostCollisionInit(&authority, &fixture.world, &identity,
 			&host_error));
 		portal_count = space->portal_count;
+		{
+			sg_configuration_portal_t saved = space->portals[0];
+			sg_rune_vec3_t *saved_vertices = malloc(
+				(size_t)saved.vertex_count * sizeof(*saved_vertices));
+			uint32_t vertex, axis, drop = 0U;
+			float center[3] = { 0.0f, 0.0f, 0.0f };
+			float normal_length;
+
+			CHECK(saved_vertices != NULL);
+			if (saved_vertices)
+			{
+				memcpy(saved_vertices, &space->vertices[saved.first_vertex],
+					(size_t)saved.vertex_count * sizeof(*saved_vertices));
+				space->portals[0].clearance = 0.0f;
+				CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+				CHECK(audit.code == SG_CONFIGURATION_AUDIT_INVENTED_PORTAL);
+				space->portals[0] = saved;
+				space->portals[0].clearance = NAN;
+				CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+				CHECK(audit.code == SG_CONFIGURATION_AUDIT_INVENTED_PORTAL);
+				space->portals[0] = saved;
+				space->portals[0].stance = saved.stance ==
+					SG_RUNE_STANCE_STANDING ? SG_RUNE_STANCE_CROUCHING :
+					SG_RUNE_STANCE_STANDING;
+				CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+				CHECK(audit.code == SG_CONFIGURATION_AUDIT_INVENTED_PORTAL);
+				space->portals[0] = saved;
+				for (axis = 1U; axis < 3U; axis++)
+					if (fabsf(saved.plane.normal[axis]) >
+						fabsf(saved.plane.normal[drop]))
+						drop = axis;
+				for (vertex = 0U; vertex < saved.vertex_count; vertex++)
+					for (axis = 0U; axis < 3U; axis++)
+						center[axis] += saved_vertices[vertex].value[axis] /
+							(float)saved.vertex_count;
+				for (vertex = 0U; vertex < 3U; vertex++)
+				{
+					float *point = space->vertices[
+						saved.first_vertex + vertex].value;
+					uint32_t u = (drop + 1U) % 3U;
+					uint32_t v = (drop + 2U) % 3U;
+
+					memcpy(point, center, sizeof(center));
+					if (vertex == 1U)
+						point[u] += 0.01f;
+					if (vertex == 2U)
+						point[v] += 0.01f;
+					point[drop] = (saved.plane.distance -
+						saved.plane.normal[u] * point[u] -
+						saved.plane.normal[v] * point[v]) /
+						saved.plane.normal[drop];
+				}
+				normal_length = sqrtf(saved.plane.normal[0] *
+					saved.plane.normal[0] + saved.plane.normal[1] *
+					saved.plane.normal[1] + saved.plane.normal[2] *
+					saved.plane.normal[2]);
+				space->portals[0].vertex_count = 3U;
+				space->portals[0].clearance = sqrtf(0.00005f *
+					normal_length / fabsf(saved.plane.normal[drop]));
+				CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+				CHECK(audit.code ==
+					SG_CONFIGURATION_AUDIT_HOST_PORTAL_DISAGREEMENT);
+				space->portals[0] = saved;
+				memcpy(&space->vertices[saved.first_vertex], saved_vertices,
+					(size_t)saved.vertex_count * sizeof(*saved_vertices));
+				{
+					sg_configuration_portal_t *grown = realloc(space->portals,
+						(size_t)(portal_count + 1U) * sizeof(*grown));
+
+					CHECK(grown != NULL);
+					if (grown)
+					{
+						space->portals = grown;
+						space->portals[portal_count] = saved;
+						space->portal_count = portal_count + 1U;
+						CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+						CHECK(audit.code ==
+							SG_CONFIGURATION_AUDIT_INVENTED_PORTAL);
+						space->portal_count = portal_count;
+					}
+				}
+			}
+			free(saved_vertices);
+		}
+		{
+			const sg_configuration_portal_t boundary = space->portals[0];
+			sg_rune_vec3_t *saved_vertices = malloc(
+				(size_t)space->vertex_count * sizeof(*saved_vertices));
+			float saved_bound =
+				space->cells[boundary.from_cell].bounds.mins.value[0];
+
+			CHECK(saved_vertices != NULL);
+			if (saved_vertices)
+			{
+				memcpy(saved_vertices, space->vertices,
+					(size_t)space->vertex_count * sizeof(*saved_vertices));
+				CHECK(ReplaceBoundaryWithInteriorTriangle(space,
+					boundary.from_cell, &boundary.plane));
+				CHECK(ReplaceBoundaryWithInteriorTriangle(space,
+					boundary.to_cell, &boundary.plane));
+				CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+				CHECK(audit.code == SG_CONFIGURATION_AUDIT_INVALID_CELL);
+				memcpy(space->vertices, saved_vertices,
+					(size_t)space->vertex_count * sizeof(*saved_vertices));
+				space->cells[boundary.from_cell].bounds.mins.value[0] += 0.125f;
+				CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+				CHECK(audit.code == SG_CONFIGURATION_AUDIT_INVALID_CELL);
+				space->cells[boundary.from_cell].bounds.mins.value[0] = saved_bound;
+			}
+			free(saved_vertices);
+		}
 		space->portal_count--;
 		CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
 		CHECK(audit.code == SG_CONFIGURATION_AUDIT_OMITTED_PORTAL);
 		space->portal_count = portal_count;
-		space->portals[0].from_cell = space->portals[0].to_cell;
-		CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
-		CHECK(audit.code == SG_CONFIGURATION_AUDIT_OMITTED_PORTAL ||
-			audit.code == SG_CONFIGURATION_AUDIT_INVENTED_PORTAL);
+		{
+			uint32_t saved_from = space->portals[0].from_cell;
+
+			space->portals[0].from_cell = space->portals[0].to_cell;
+			CHECK(!SG_ConfigurationAudit(&authority, space, &audit));
+			CHECK(audit.code == SG_CONFIGURATION_AUDIT_OMITTED_PORTAL);
+			space->portals[0].from_cell = saved_from;
+		}
 	}
 	SG_ConfigurationDestroy(space);
 	DestroyFixture(&fixture);
@@ -915,7 +1061,9 @@ static void TestConstraintOnlyPortal(void)
 
 int main(void)
 {
+	CHECK(SG_ConfigurationAuditTestTangentPortalGeometry());
 	CHECK(SG_ConfigurationTestConstraintFacetWinding());
+	CHECK(SG_ConfigurationTestCompleteFinalIncidence());
 	CHECK(SG_ConfigurationTestFinalRepresentationBounds());
 	TestExactLatticeBoundaries();
 	TestHostFloatBoundaryLocalization();

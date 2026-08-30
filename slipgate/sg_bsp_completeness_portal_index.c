@@ -5,9 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FACE_KEY_EPSILON 0.000001
-#define FACE_PLANE_BUCKET_SIZE 0.00001
-
 typedef struct point2_s
 {
 	double value[2];
@@ -48,9 +45,9 @@ static int ClipHalfspace(point2_t **polygon, uint32_t *count,
 	uint32_t next_count = 0U;
 	uint32_t index;
 
-	if (fabs(coefficient_u) + fabs(coefficient_v) <= FACE_KEY_EPSILON)
+	if (coefficient_u == 0.0 && coefficient_v == 0.0)
 	{
-		if (distance >= -FACE_KEY_EPSILON)
+		if (distance >= 0.0)
 			return 1;
 		free(*polygon);
 		*polygon = NULL;
@@ -176,7 +173,7 @@ invalid:
 	return 0;
 }
 
-static int PlaneKey(const sg_configuration_plane_t *plane,
+int SG_BspProofPlaneKey(const sg_configuration_plane_t *plane,
 	uint32_t *dominant_out, int64_t normal_buckets[3],
 	int64_t *bucket_out, uint8_t *orientation)
 {
@@ -191,7 +188,7 @@ static int PlaneKey(const sg_configuration_plane_t *plane,
 	for (axis = 0; axis < 3U; axis++)
 	{
 		double normal_bucket = floor(canonical.normal[axis] /
-			FACE_PLANE_BUCKET_SIZE);
+			SG_BSP_PROOF_PLANE_BUCKET_SIZE);
 
 		if (!isfinite(canonical.normal[axis]) ||
 			normal_bucket < (double)INT64_MIN ||
@@ -199,7 +196,7 @@ static int PlaneKey(const sg_configuration_plane_t *plane,
 			return 0;
 		normal_buckets[axis] = (int64_t)normal_bucket;
 	}
-	bucket = floor(canonical.distance / FACE_PLANE_BUCKET_SIZE);
+	bucket = floor(canonical.distance / SG_BSP_PROOF_PLANE_BUCKET_SIZE);
 	if (!isfinite(canonical.distance) || bucket < (double)INT64_MIN ||
 		bucket > (double)INT64_MAX)
 		return 0;
@@ -299,7 +296,7 @@ int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 			ref->cell = cell;
 			ref->face = face;
 			ref->stance = (uint32_t)proof->space->cells[cell].stance;
-			if (!PlaneKey(&boundary->plane, &ref->dominant,
+			if (!SG_BspProofPlaneKey(&boundary->plane, &ref->dominant,
 					ref->normal_buckets, &ref->plane_bucket,
 					&ref->orientation))
 			{
@@ -392,6 +389,14 @@ static int ComparePortalRef(const void *left_pointer,
 		return left->high_cell < right->high_cell ? -1 : 1;
 	if (left->stance != right->stance)
 		return left->stance < right->stance ? -1 : 1;
+	if (left->normal_buckets[0] != right->normal_buckets[0])
+		return left->normal_buckets[0] < right->normal_buckets[0] ? -1 : 1;
+	if (left->normal_buckets[1] != right->normal_buckets[1])
+		return left->normal_buckets[1] < right->normal_buckets[1] ? -1 : 1;
+	if (left->normal_buckets[2] != right->normal_buckets[2])
+		return left->normal_buckets[2] < right->normal_buckets[2] ? -1 : 1;
+	if (left->plane_bucket != right->plane_bucket)
+		return left->plane_bucket < right->plane_bucket ? -1 : 1;
 	return left->portal == right->portal ? 0 :
 		(left->portal < right->portal ? -1 : 1);
 }
@@ -416,6 +421,18 @@ int SG_BspProofBuildPortalRefs(sg_bsp_proof_context_t *proof,
 		refs[portal].high_cell = record->from_cell < record->to_cell ?
 			record->to_cell : record->from_cell;
 		refs[portal].stance = (uint32_t)record->stance;
+		{
+			uint32_t dominant;
+			uint8_t orientation;
+
+			if (!SG_BspProofPlaneKey(&record->plane, &dominant,
+					refs[portal].normal_buckets,
+					&refs[portal].plane_bucket, &orientation))
+			{
+				free(refs);
+				return 0;
+			}
+		}
 		refs[portal].portal = portal;
 	}
 	qsort(refs, proof->space->portal_count, sizeof(*refs), ComparePortalRef);
@@ -423,8 +440,32 @@ int SG_BspProofBuildPortalRefs(sg_bsp_proof_context_t *proof,
 	return 1;
 }
 
-uint32_t SG_BspProofPortalLowerBound(const sg_bsp_proof_portal_ref_t *refs,
-	uint32_t count, uint32_t low_cell, uint32_t high_cell, uint32_t stance)
+static int ComparePortalGroup(const sg_bsp_proof_portal_ref_t *ref,
+	uint32_t low_cell, uint32_t high_cell, uint32_t stance,
+	int64_t normal_bucket_0, int64_t normal_bucket_1,
+	int64_t normal_bucket_2, int64_t plane_bucket)
+{
+	if (ref->low_cell != low_cell)
+		return ref->low_cell < low_cell ? -1 : 1;
+	if (ref->high_cell != high_cell)
+		return ref->high_cell < high_cell ? -1 : 1;
+	if (ref->stance != stance)
+		return ref->stance < stance ? -1 : 1;
+	if (ref->normal_buckets[0] != normal_bucket_0)
+		return ref->normal_buckets[0] < normal_bucket_0 ? -1 : 1;
+	if (ref->normal_buckets[1] != normal_bucket_1)
+		return ref->normal_buckets[1] < normal_bucket_1 ? -1 : 1;
+	if (ref->normal_buckets[2] != normal_bucket_2)
+		return ref->normal_buckets[2] < normal_bucket_2 ? -1 : 1;
+	if (ref->plane_bucket != plane_bucket)
+		return ref->plane_bucket < plane_bucket ? -1 : 1;
+	return 0;
+}
+
+uint32_t SG_BspProofPortalGroupBound(const sg_bsp_proof_portal_ref_t *refs,
+	uint32_t count, uint32_t low_cell, uint32_t high_cell, uint32_t stance,
+	int64_t normal_bucket_0, int64_t normal_bucket_1,
+	int64_t normal_bucket_2, int64_t plane_bucket, int upper)
 {
 	uint32_t first = 0U;
 	uint32_t length = count;
@@ -434,12 +475,10 @@ uint32_t SG_BspProofPortalLowerBound(const sg_bsp_proof_portal_ref_t *refs,
 		uint32_t half = length / 2U;
 		uint32_t middle = first + half;
 		const sg_bsp_proof_portal_ref_t *ref = &refs[middle];
-		int before = ref->low_cell < low_cell ||
-			(ref->low_cell == low_cell && ref->high_cell < high_cell) ||
-			(ref->low_cell == low_cell && ref->high_cell == high_cell &&
-			 ref->stance < stance);
+		int comparison = ComparePortalGroup(ref, low_cell, high_cell, stance,
+			normal_bucket_0, normal_bucket_1, normal_bucket_2, plane_bucket);
 
-		if (before)
+		if (comparison < 0 || (upper && comparison == 0))
 		{
 			first = middle + 1U;
 			length -= half + 1U;

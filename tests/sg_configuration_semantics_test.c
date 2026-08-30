@@ -1113,7 +1113,7 @@ static void TestConfigurationBuilderComposition(void)
 	SG_ConfigurationDestroy(configuration);
 }
 
-static void TestConfigurationBuilderCanonicalNearCorner(void)
+static void TestConfigurationBuilderCanonicalCorner(float diagonal_distance)
 {
 	fixture_t fixture = Fixture();
 	sg_configuration_space_t *configuration = NULL;
@@ -1127,7 +1127,7 @@ static void TestConfigurationBuilderCanonicalNearCorner(void)
 
 	SetPlane(&fixture.planes[0], 1.0f, 0.0f, 0.0f, 1.0f);
 	SetPlane(&fixture.planes[1], 0.0f, 1.0f, 0.0f, 1.0f);
-	SetPlane(&fixture.planes[2], 1.0f, 1.0f, 0.0f, 1.99998f);
+	SetPlane(&fixture.planes[2], 1.0f, 1.0f, 0.0f, diagonal_distance);
 	fixture.nodes[0].plane = 0;
 	fixture.nodes[0].children[0] = -1;
 	fixture.nodes[0].children[1] = 1;
@@ -1168,7 +1168,8 @@ static void TestConfigurationBuilderCanonicalNearCorner(void)
 				&configuration->faces[face];
 			uint32_t a, b;
 
-			for (a = 0; a < candidate->vertex_count; a++)
+			for (a = 0; diagonal_distance < 1.99999f &&
+				a < candidate->vertex_count; a++)
 				for (b = a + 1U; b < candidate->vertex_count; b++)
 				{
 					const float *left = configuration->vertices[
@@ -1189,6 +1190,256 @@ static void TestConfigurationBuilderCanonicalNearCorner(void)
 			}
 		}
 	CHECK(saw_diagonal);
+	SG_ConfigurationSemanticsDefaultLimits(&limits);
+	CHECK(SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
+		&limits, &semantics, &semantics_error));
+	SG_ConfigurationSemanticsDestroy(semantics);
+	SG_ConfigurationDestroy(configuration);
+}
+
+static void TestConfigurationBuilderSkinnyAngleFacets(void)
+{
+	fixture_t fixture = Fixture();
+	sg_configuration_space_t *configuration = NULL;
+	sg_configuration_semantics_t *semantics = NULL;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_limits_t limits;
+	uint32_t cell;
+	int saw_pair = 0;
+
+	SetPlane(&fixture.planes[0], 1.0f, 0.0f, 0.0f, 1.0f);
+	SetPlane(&fixture.planes[1], 1.0f, 0.0000005f, 0.0f, 1.0f);
+	SetPlane(&fixture.planes[2], 0.0f, 0.0f, 1.0f, 0.0f);
+	fixture.nodes[0].plane = 0U;
+	fixture.nodes[0].children[0] = -1;
+	fixture.nodes[0].children[1] = 1;
+	fixture.nodes[1].plane = 1U;
+	fixture.nodes[1].children[0] = 2;
+	fixture.nodes[1].children[1] = -4;
+	fixture.nodes[2].plane = 2U;
+	fixture.nodes[2].children[0] = -2;
+	fixture.nodes[2].children[1] = -3;
+	fixture.world.plane_count = 3U;
+	fixture.world.node_count = 3U;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = 0U;
+	fixture.world.brush_side_count = 0U;
+	fixture.world.leaf_brush_count = 0U;
+	fixture.models[0].headnode = 0;
+	for (cell = 0U; cell < 4U; cell++)
+	{
+		fixture.leaves[cell].contents = 0;
+		fixture.leaves[cell].cluster = (int32_t)cell;
+		fixture.leaves[cell].area = cell + 1U;
+		fixture.leaves[cell].first_leaf_brush = 0U;
+		fixture.leaves[cell].leaf_brush_count = 0U;
+	}
+	BindFixture(&fixture);
+	CHECK(SG_ConfigurationBuild(&fixture.authority, NULL, &configuration,
+		&configuration_error));
+	if (!configuration)
+		return;
+	CHECK(SG_ConfigurationAudit(&fixture.authority, configuration,
+		&configuration_audit));
+	for (cell = 0U; cell < configuration->cell_count; cell++)
+	{
+		const sg_configuration_cell_t *record = &configuration->cells[cell];
+		const sg_configuration_face_t *first = NULL, *second = NULL;
+		uint32_t local;
+
+		for (local = 0U; local < record->face_count; local++)
+		{
+			const sg_configuration_face_t *face = &configuration->faces[
+				record->first_face + local];
+
+			if (face->plane.source_kind != SG_CONFIGURATION_PLANE_BSP)
+				continue;
+			if (face->plane.source_index == 0U)
+				first = face;
+			if (face->plane.source_index == 1U)
+				second = face;
+		}
+		if (first && second)
+		{
+			CHECK(first->kind == SG_CONFIGURATION_FACE_FACET);
+			CHECK(second->kind == SG_CONFIGURATION_FACE_FACET);
+			CHECK(first->vertex_count >= 3U);
+			CHECK(second->vertex_count >= 3U);
+			saw_pair = 1;
+		}
+	}
+	CHECK(saw_pair);
+	SG_ConfigurationSemanticsDefaultLimits(&limits);
+	CHECK(SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
+		&limits, &semantics, &semantics_error));
+	SG_ConfigurationSemanticsDestroy(semantics);
+	SG_ConfigurationDestroy(configuration);
+}
+
+static void TestConfigurationBuilderPlaneScaleInvariance(void)
+{
+	static const float scales[] = { 1.0f, 1024.0f, 1.0e-30f };
+	sg_configuration_space_t *baseline = NULL;
+	sg_configuration_semantics_t *baseline_semantics = NULL;
+	uint32_t scale_index;
+
+	for (scale_index = 0U; scale_index <
+			sizeof(scales) / sizeof(scales[0]); scale_index++)
+	{
+		fixture_t fixture = Fixture();
+		sg_configuration_space_t *configuration = NULL;
+		sg_configuration_semantics_t *semantics = NULL;
+		sg_configuration_error_t configuration_error;
+		sg_configuration_audit_result_t configuration_audit;
+		sg_configuration_semantics_error_t semantics_error;
+		sg_configuration_semantics_audit_result_t semantics_audit;
+		sg_configuration_semantics_limits_t limits;
+		uint32_t cell, face;
+
+		SetPlane(&fixture.planes[0], 0.6f * scales[scale_index],
+			-0.8f * scales[scale_index], 0.0f, 0.0f);
+		SetPlane(&fixture.planes[1], 0.0f, 1.0f, 0.0f, 0.0f);
+		SetPlane(&fixture.planes[2], 0.0f, 0.0f, 1.0f, 0.0f);
+		fixture.nodes[0].plane = 0U;
+		fixture.nodes[0].children[0] = -1;
+		fixture.nodes[0].children[1] = 1;
+		fixture.nodes[1].plane = 1U;
+		fixture.nodes[1].children[0] = -2;
+		fixture.nodes[1].children[1] = 2;
+		fixture.nodes[2].plane = 2U;
+		fixture.nodes[2].children[0] = -3;
+		fixture.nodes[2].children[1] = -4;
+		fixture.world.plane_count = 3U;
+		fixture.world.node_count = 3U;
+		fixture.world.model_count = 1U;
+		fixture.world.brush_count = 0U;
+		fixture.world.brush_side_count = 0U;
+		fixture.world.leaf_brush_count = 0U;
+		fixture.models[0].headnode = 0;
+		for (cell = 0U; cell < 4U; cell++)
+		{
+			fixture.leaves[cell].contents = 0;
+			fixture.leaves[cell].cluster = (int32_t)cell;
+			fixture.leaves[cell].area = cell + 1U;
+			fixture.leaves[cell].first_leaf_brush = 0U;
+			fixture.leaves[cell].leaf_brush_count = 0U;
+		}
+		BindFixture(&fixture);
+		CHECK(SG_ConfigurationBuild(&fixture.authority, NULL, &configuration,
+			&configuration_error));
+		if (!configuration)
+			continue;
+		CHECK(SG_ConfigurationAudit(&fixture.authority, configuration,
+			&configuration_audit));
+		SG_ConfigurationSemanticsDefaultLimits(&limits);
+		CHECK(SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
+			&limits, &semantics, &semantics_error));
+		if (semantics)
+			CHECK(SG_ConfigurationSemanticsAudit(&fixture.authority, configuration,
+				semantics, &semantics_audit));
+		if (!baseline)
+		{
+			baseline = configuration;
+			baseline_semantics = semantics;
+			continue;
+		}
+		CHECK(configuration->cell_count == baseline->cell_count);
+		CHECK(configuration->face_count == baseline->face_count);
+		CHECK(configuration->vertex_count == baseline->vertex_count);
+		CHECK(configuration->portal_count == baseline->portal_count);
+		if (configuration->vertex_count == baseline->vertex_count)
+			CHECK(memcmp(configuration->vertices, baseline->vertices,
+				(size_t)baseline->vertex_count * sizeof(*baseline->vertices)) == 0);
+		if (configuration->face_count == baseline->face_count)
+			for (face = 0U; face < baseline->face_count; face++)
+			{
+				CHECK(configuration->faces[face].kind == baseline->faces[face].kind);
+				CHECK(configuration->faces[face].first_vertex ==
+					baseline->faces[face].first_vertex);
+				CHECK(configuration->faces[face].vertex_count ==
+					baseline->faces[face].vertex_count);
+			}
+		if (semantics && baseline_semantics)
+		{
+			CHECK(semantics->region_count == baseline_semantics->region_count);
+			CHECK(semantics->face_count == baseline_semantics->face_count);
+			CHECK(semantics->vertex_count == baseline_semantics->vertex_count);
+			CHECK(semantics->boundary_count == baseline_semantics->boundary_count);
+			if (semantics->vertex_count == baseline_semantics->vertex_count)
+				CHECK(memcmp(semantics->vertices, baseline_semantics->vertices,
+					(size_t)semantics->vertex_count *
+						sizeof(*semantics->vertices)) == 0);
+			if (semantics->face_count == baseline_semantics->face_count)
+				for (face = 0U; face < semantics->face_count; face++)
+				{
+					CHECK(semantics->faces[face].kind ==
+						baseline_semantics->faces[face].kind);
+					CHECK(semantics->faces[face].first_vertex ==
+						baseline_semantics->faces[face].first_vertex);
+					CHECK(semantics->faces[face].vertex_count ==
+						baseline_semantics->faces[face].vertex_count);
+				}
+		}
+		SG_ConfigurationSemanticsDestroy(semantics);
+		SG_ConfigurationDestroy(configuration);
+	}
+	SG_ConfigurationSemanticsDestroy(baseline_semantics);
+	SG_ConfigurationDestroy(baseline);
+}
+
+static void TestConfigurationBuilderHighCoordinateNarrowBevel(void)
+{
+	fixture_t fixture = Fixture();
+	sg_configuration_space_t *configuration = NULL;
+	sg_configuration_semantics_t *semantics = NULL;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_limits_t limits;
+	uint32_t cell, face;
+	int saw_bevel = 0;
+
+	SetPlane(&fixture.planes[0], 1.0f, 1.0f, 1.0f,
+		3.0f * SG_CONFIGURATION_PMOVE_ORIGIN_MAX - 0.002f);
+	fixture.nodes[0].plane = 0U;
+	fixture.nodes[0].children[0] = -1;
+	fixture.nodes[0].children[1] = -2;
+	fixture.world.plane_count = 1U;
+	fixture.world.node_count = 1U;
+	fixture.world.leaf_count = 2U;
+	fixture.world.model_count = 1U;
+	fixture.world.brush_count = 0U;
+	fixture.world.brush_side_count = 0U;
+	fixture.world.leaf_brush_count = 0U;
+	fixture.models[0].headnode = 0;
+	for (cell = 0U; cell < 2U; cell++)
+	{
+		fixture.leaves[cell].contents = 0;
+		fixture.leaves[cell].cluster = (int32_t)cell;
+		fixture.leaves[cell].area = cell + 1U;
+		fixture.leaves[cell].first_leaf_brush = 0U;
+		fixture.leaves[cell].leaf_brush_count = 0U;
+	}
+	BindFixture(&fixture);
+	CHECK(SG_ConfigurationBuild(&fixture.authority, NULL, &configuration,
+		&configuration_error));
+	if (!configuration)
+		return;
+	CHECK(SG_ConfigurationAudit(&fixture.authority, configuration,
+		&configuration_audit));
+	for (cell = 0U; cell < configuration->cell_count; cell++)
+		for (face = configuration->cells[cell].first_face;
+			face < configuration->cells[cell].first_face +
+				configuration->cells[cell].face_count; face++)
+			if (configuration->faces[face].plane.source_kind ==
+					SG_CONFIGURATION_PLANE_BSP &&
+				configuration->faces[face].plane.source_index == 0U &&
+				configuration->faces[face].kind == SG_CONFIGURATION_FACE_FACET &&
+				configuration->faces[face].vertex_count >= 3U)
+				saw_bevel = 1;
+	CHECK(saw_bevel);
 	SG_ConfigurationSemanticsDefaultLimits(&limits);
 	CHECK(SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
 		&limits, &semantics, &semantics_error));
@@ -1271,7 +1522,11 @@ int main(void)
 	TestNonAxialHookSurfaceSelfAudit();
 	TestTransactionalOverflowAndMutationAudit();
 	TestMalformedSourceFailsClosed();
-	TestConfigurationBuilderCanonicalNearCorner();
+	TestConfigurationBuilderCanonicalCorner(1.99998f);
+	TestConfigurationBuilderCanonicalCorner(2.0f - 0.000005f);
+	TestConfigurationBuilderSkinnyAngleFacets();
+	TestConfigurationBuilderPlaneScaleInvariance();
+	TestConfigurationBuilderHighCoordinateNarrowBevel();
 	TestAllFacetHistoryBoundsSemantics();
 	TestConfigurationBuilderComposition();
 	if (failures)

@@ -47,7 +47,7 @@ static const sg_host_collision_scene_t empty_scene;
 
 #define SG_WEAPON_FIXTURE_EXTRA_MODELS UINT32_C(64)
 #define SG_WEAPON_FIXTURE_CELL_SPLITS UINT32_C(64)
-#define SG_WEAPON_FIXTURE_PARTITION_BRUSHES UINT32_C(8)
+#define SG_WEAPON_FIXTURE_PARTITIONS UINT32_C(8)
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -783,60 +783,54 @@ static fixture_t CellScalingFixture(uint32_t split_count)
 	return fixture;
 }
 
-static fixture_t PartitionScalingFixture(uint32_t brush_count)
+static fixture_t PartitionScalingFixture(uint32_t partition_count)
 {
 	fixture_t fixture = Fixture(0, 0, 0, 1, 0, 0.0f);
-	uint32_t brush;
+	uint32_t tree_node;
 
-	CHECK(brush_count > 0U &&
-		brush_count <= SG_WEAPON_FIXTURE_PARTITION_BRUSHES);
-	if (brush_count == 0U)
-		brush_count = 1U;
-	if (brush_count > SG_WEAPON_FIXTURE_PARTITION_BRUSHES)
-		brush_count = SG_WEAPON_FIXTURE_PARTITION_BRUSHES;
+	CHECK(partition_count == SG_WEAPON_FIXTURE_PARTITIONS);
+	if (partition_count != SG_WEAPON_FIXTURE_PARTITIONS)
+		partition_count = SG_WEAPON_FIXTURE_PARTITIONS;
 	memset(fixture.planes, 0, sizeof(fixture.planes));
+	memset(fixture.nodes, 0, sizeof(fixture.nodes));
 	memset(fixture.leaves, 0, sizeof(fixture.leaves));
 	memset(fixture.leaf_brushes, 0, sizeof(fixture.leaf_brushes));
 	memset(fixture.brushes, 0, sizeof(fixture.brushes));
 	memset(fixture.sides, 0, sizeof(fixture.sides));
-	SetPlane(&fixture.planes[0], 1.0f, 0.0f, 0.0f, -4000.0f);
+	SetPlane(&fixture.planes[0], 0.0f, 0.0f, 1.0f, 0.0f);
+	SetPlane(&fixture.planes[1], 0.0f, 0.0f, 1.0f, 1.0f);
+	SetPlane(&fixture.planes[2], 1.0f, 0.0f, 0.0f, 0.0f);
+	SetPlane(&fixture.planes[3], 0.0f, 1.0f, 0.0f, 0.0f);
+	SetPlane(&fixture.planes[4], 0.6f, -0.8f, 0.0f, 0.0f);
+	SetPlane(&fixture.planes[5], 0.6f, 0.8f, 0.0f, 0.0f);
 	fixture.nodes[0].plane = 0U;
-	fixture.nodes[0].children[0] = -2;
+	fixture.nodes[0].children[0] = 1;
 	fixture.nodes[0].children[1] = -1;
-	fixture.leaves[0].contents = SG_HOST_CONTENTS_SOLID;
-	fixture.leaves[0].cluster = -1;
-	fixture.leaves[0].area = 1U;
-	fixture.leaves[1].cluster = 0;
-	fixture.leaves[1].area = 1U;
-	fixture.leaves[1].first_leaf_brush = 0U;
-	fixture.leaves[1].leaf_brush_count = brush_count;
-	for (brush = 0U; brush < brush_count; brush++)
+	fixture.nodes[1].plane = 1U;
+	fixture.nodes[1].children[0] = 2;
+	fixture.nodes[1].children[1] = -2;
+	for (tree_node = 0U; tree_node < partition_count - 1U; tree_node++)
 	{
-		uint32_t plane = 1U + brush * 6U;
-		uint32_t first_side = brush * 6U;
-		float center = -112.0f + 32.0f * (float)brush;
-		float top = -64.0f + 2.0f * (float)brush;
-		uint32_t side;
+		uint32_t child;
 
-		SetPlane(&fixture.planes[plane + 0U], 1.0f, 0.0f, 0.0f,
-			center + 24.0f);
-		SetPlane(&fixture.planes[plane + 1U], -1.0f, 0.0f, 0.0f,
-			-center + 24.0f);
-		SetPlane(&fixture.planes[plane + 2U], 0.0f, 1.0f, 0.0f,
-			center + 24.0f);
-		SetPlane(&fixture.planes[plane + 3U], 0.0f, -1.0f, 0.0f,
-			-center + 24.0f);
-		SetPlane(&fixture.planes[plane + 4U], 0.0f, 0.0f, 1.0f, top);
-		SetPlane(&fixture.planes[plane + 5U], 0.0f, 0.0f, -1.0f, 96.0f);
-		fixture.leaf_brushes[brush] = brush;
-		fixture.brushes[brush].first_side = first_side;
-		fixture.brushes[brush].side_count = 6U;
-		fixture.brushes[brush].contents = SG_HOST_CONTENTS_SOLID;
-		for (side = 0U; side < 6U; side++)
+		fixture.nodes[2U + tree_node].plane = tree_node == 0U ? 2U :
+			(tree_node < 3U ? 3U :
+				(tree_node == 4U || tree_node == 5U ? 5U : 4U));
+		for (child = 0U; child < 2U; child++)
 		{
-			fixture.sides[first_side + side].plane = plane + side;
-			fixture.sides[first_side + side].texinfo = 0U;
+			uint32_t heap_child = tree_node * 2U + 1U + child;
+
+			fixture.nodes[2U + tree_node].children[child] =
+				heap_child < partition_count - 1U ?
+				(int32_t)(2U + heap_child) :
+				-1 - (int32_t)(2U + heap_child -
+					(partition_count - 1U));
 		}
+	}
+	for (tree_node = 0U; tree_node < partition_count + 2U; tree_node++)
+	{
+		fixture.leaves[tree_node].cluster = 0;
+		fixture.leaves[tree_node].area = 1U;
 	}
 	fixture.models[0].headnode = 0;
 	Set3(fixture.models[0].mins.value, -4096.0f, -4096.0f, -4096.0f);
@@ -847,14 +841,14 @@ static fixture_t PartitionScalingFixture(uint32_t brush_count)
 	fixture.visibility_bytes[12] = 1U;
 	fixture.visibility_offsets[0][0] = 12U;
 	fixture.visibility_offsets[0][1] = 12U;
-	fixture.world.plane_count = 1U + brush_count * 6U;
-	fixture.world.node_count = 1U;
-	fixture.world.leaf_count = 2U;
-	fixture.world.leaf_brush_count = brush_count;
+	fixture.world.plane_count = 6U;
+	fixture.world.node_count = partition_count + 1U;
+	fixture.world.leaf_count = partition_count + 2U;
+	fixture.world.leaf_brush_count = 0U;
 	fixture.world.model_count = 1U;
-	fixture.world.brush_count = brush_count;
-	fixture.world.brush_side_count = brush_count * 6U;
-	fixture.world.texinfo_count = 1U;
+	fixture.world.brush_count = 0U;
+	fixture.world.brush_side_count = 0U;
+	fixture.world.texinfo_count = 0U;
 	fixture.world.visibility.cluster_count = 1U;
 	fixture.world.visibility.byte_count = 13U;
 	fixture.world.area_count = 2U;

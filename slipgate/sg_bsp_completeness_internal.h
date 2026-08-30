@@ -4,6 +4,7 @@
 #include "sg_bsp_completeness_proof.h"
 
 #define SG_BSP_PROOF_PLANE_EPSILON 0.000001
+#define SG_BSP_PROOF_PLANE_BUCKET_SIZE 0.00001
 
 typedef struct sg_bsp_proof_halfspace_s
 {
@@ -75,6 +76,8 @@ typedef struct sg_bsp_proof_portal_ref_s
 	uint32_t low_cell;
 	uint32_t high_cell;
 	uint32_t stance;
+	int64_t normal_buckets[3];
+	int64_t plane_bucket;
 	uint32_t portal;
 } sg_bsp_proof_portal_ref_t;
 
@@ -131,12 +134,36 @@ int SG_BspProofRegionsIntersect(sg_bsp_proof_context_t *proof,
 int SG_BspProofAuditCoverage(sg_bsp_proof_context_t *proof);
 int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof);
 int SG_BspProofTestZeroPolygonPortalKinds(void);
+#ifdef SG_BSP_COMPLETENESS_TESTING
+int SG_BspProofTestRepeatedExpectedPortal(void);
+int SG_BspProofTestPortalPlaneIndexScaling(uint32_t count,
+	uint64_t *candidates_out);
+int SG_BspProofTestNarrowHighCoordinatePortal(
+	const sg_host_collision_authority_t *authority, float expected_low,
+	float expected_high, float portal_low, float portal_high,
+	sg_bsp_completeness_result_t *result_out);
+int SG_BspProofTestNarrowHighCoordinateBowtie(
+	const sg_host_collision_authority_t *authority, float expected_low,
+	float expected_high, sg_bsp_completeness_result_t *result_out);
+int SG_BspProofTestNormalDisplacedHighCoordinatePortal(
+	const sg_host_collision_authority_t *authority, float normal_displacement,
+	sg_bsp_completeness_result_t *result_out);
+int SG_BspProofTestConstraintFallbackInventedPortal(
+	const sg_host_collision_authority_t *authority,
+	sg_bsp_completeness_result_t *result_out);
+int SG_BspProofTestPortalVertexLimit(void);
+#endif
+int SG_BspProofPlaneKey(const sg_configuration_plane_t *plane,
+	uint32_t *dominant_out, int64_t normal_buckets[3],
+	int64_t *bucket_out, uint8_t *orientation);
 int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 	sg_bsp_proof_face_ref_t **refs_out, uint32_t *count_out);
 void SG_BspProofFreeFaceRefs(sg_bsp_proof_face_ref_t *refs, uint32_t count);
 int SG_BspProofBuildPortalRefs(sg_bsp_proof_context_t *proof,
 	sg_bsp_proof_portal_ref_t **refs_out);
-uint32_t SG_BspProofPortalLowerBound(const sg_bsp_proof_portal_ref_t *refs,
-	uint32_t count, uint32_t low_cell, uint32_t high_cell, uint32_t stance);
+uint32_t SG_BspProofPortalGroupBound(const sg_bsp_proof_portal_ref_t *refs,
+	uint32_t count, uint32_t low_cell, uint32_t high_cell, uint32_t stance,
+	int64_t normal_bucket_0, int64_t normal_bucket_1,
+	int64_t normal_bucket_2, int64_t plane_bucket, int upper);
 
 #endif

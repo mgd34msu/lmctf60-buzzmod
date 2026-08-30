@@ -8,6 +8,7 @@ trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 -Wformat=2 -Wcast-qual -Wcast-align'
+testing='-DSG_BSP_COMPLETENESS_TESTING'
 sources='tests/sg_bsp_completeness_proof_test.c
 slipgate/sg_bsp_completeness_proof.c
 slipgate/sg_bsp_completeness_core.c
@@ -61,10 +62,10 @@ isl_libs=$(pkg-config --libs isl)
 cd "$repo_dir"
 for cc in gcc clang
 do
-	$cc $strict $isl_cflags -I. $sources -lm $isl_libs \
+	$cc $strict $testing $isl_cflags -I. $sources -lm $isl_libs \
 		-o "$tmp_dir/bsp-completeness-$cc"
 	"$tmp_dir/bsp-completeness-$cc"
-	$cc $strict $isl_cflags -I. $scaling_sources -lm $isl_libs \
+	$cc $strict $testing $isl_cflags -I. $scaling_sources -lm $isl_libs \
 		-o "$tmp_dir/bsp-portal-scaling-$cc"
 	"$tmp_dir/bsp-portal-scaling-$cc"
 	$cc $strict $isl_cflags -I. $guard_sources -lm $isl_libs \
@@ -74,13 +75,13 @@ do
 	(ulimit -s 64; "$tmp_dir/bsp-deep-$cc")
 done
 
-clang $strict $isl_cflags -fno-omit-frame-pointer \
+clang $strict $testing $isl_cflags -fno-omit-frame-pointer \
 	-fsanitize=address,undefined -I. $sources -lm $isl_libs \
 	-o "$tmp_dir/bsp-completeness-sanitize"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/bsp-completeness-sanitize"
-clang $strict $isl_cflags -fno-omit-frame-pointer \
+clang $strict $testing $isl_cflags -fno-omit-frame-pointer \
 	-fsanitize=address,undefined -I. $scaling_sources -lm $isl_libs \
 	-o "$tmp_dir/bsp-portal-scaling-sanitize"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
@@ -100,6 +101,13 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 
 for source in $owned
 do
-	clang $strict $isl_cflags -I. --analyze "$source" \
+	source_flags=
+	if [ "$source" = tests/sg_bsp_completeness_proof_test.c ] ||
+		[ "$source" = tests/sg_bsp_completeness_portal_index_scaling_test.c ] ||
+		[ "$source" = slipgate/sg_bsp_completeness_portal.c ]
+	then
+		source_flags=$testing
+	fi
+	clang $strict $source_flags $isl_cflags -I. --analyze "$source" \
 		-o "$tmp_dir/$(basename "$source").plist"
 done
