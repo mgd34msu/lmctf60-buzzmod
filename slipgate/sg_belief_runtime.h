@@ -75,13 +75,16 @@ typedef enum sg_belief_runtime_frame_result_e
 	SG_BELIEF_RUNTIME_FRAME_OVERFLOW
 } sg_belief_runtime_frame_result_t;
 
-/* Registration is a lifecycle boundary.  A non-NULL replacement is validated
- * completely before it can retire tracks or the current provider.  Every
- * accepted registration receives a monotonic, non-wrapping owner identity,
- * including an equal-valued or policy-only replacement.  Clearing retires
- * every track before any borrowed snapshot or locator can go stale. */
+/* Registration is a transient lifecycle boundary.  A non-NULL replacement is
+ * validated completely before it retires tracks or the current provider, while
+ * exact-life retirement tombstones remain in force for the same identity
+ * universe.  Every accepted registration receives a monotonic, non-wrapping
+ * owner identity, including an equal-valued or policy-only replacement.
+ * Clearing or an explicit reset establishes a new life-identity universe. */
 int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider);
 int SG_BeliefRuntimeProviderAvailable(void);
+/* Explicitly clear the current life-identity universe, including retired-life
+ * tombstones. */
 void SG_BeliefRuntimeReset(void);
 
 /* The registered snapshot is borrowed and immutable.  It is exposed only so

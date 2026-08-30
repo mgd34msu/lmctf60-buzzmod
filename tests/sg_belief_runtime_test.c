@@ -383,10 +383,7 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
 	view = SG_BeliefRuntimeViewForClient(1U, 3U);
 	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
-	/* Spawn generation dominates timestamps from a retired life: this really
-	 * is a new occupant, so build its candidate and swap only after reduction
-	 * succeeds. */
-	SightObservation(&observation, 3U, 100U, 32U);
+	SightObservation(&observation, 3U, 250U, 32U);
 	observation.authentication.authenticated_at_ms = 300U;
 	observation.authentication.valid_until_ms = 400U;
 	SG_BeliefTestHorizonScopeFailNext(
@@ -732,6 +729,73 @@ static void TestRuntimeFrameWatermarkRejectsDelayedEvidence(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static void TestRuntimeFrameWatermarkRejectsTargetLifeRollover(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	sg_belief_life_identity_t target31;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	target31 = Life(3U, 31U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && view->updated_at_ms == 500U);
+	SightObservation(&observation, 2U, 200U, 31U);
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &target30));
+	CHECK(view && view->updated_at_ms == 500U);
+	SightObservation(&observation, 3U, 600U, 31U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	view = SG_BeliefRuntimeView(1U, &target31);
+	CHECK(view && view->updated_at_ms == 600U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeFrameTimestampRegressionResetsTracks(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	sg_belief_life_identity_t retired50;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	retired50 = Life(5U, 50U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 500U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) != NULL);
+	SG_BeliefRuntimeRetireLife(&retired50);
+	CHECK(SG_BeliefRuntimeFrame(1U, 400U) ==
+		SG_BELIEF_RUNTIME_FRAME_REJECTED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	SightObservation(&observation, 2U, 600U, 50U);
+	observation.target_life = retired50;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
 static void TestRuntimeFrameIsAtomic(void)
 {
 	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
@@ -917,6 +981,31 @@ static void TestRuntimeProviderReplacementIsTransactional(void)
 	CHECK(!SG_BeliefRuntimeProviderSet(&invalid));
 	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
+static void TestRuntimeProviderReplacementPreservesLifeFences(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	SG_BeliefRuntimeRetireLife(&target30);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
@@ -1173,11 +1262,14 @@ int main(void)
 	TestRuntimeIssuerRolloverRejectsEvidenceSequenceRollback();
 	TestRuntimeFrameWatermarkRejectsIssuerRollover();
 	TestRuntimeFrameWatermarkRejectsDelayedEvidence();
+	TestRuntimeFrameWatermarkRejectsTargetLifeRollover();
+	TestRuntimeFrameTimestampRegressionResetsTracks();
 	TestRuntimeFrameIsAtomic();
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();
 	TestRuntimeDelayedEvidenceConverges();
 	TestRuntimeOwner();
+	TestRuntimeProviderReplacementPreservesLifeFences();
 	TestRuntimeProviderReplacementIsTransactional();
 	if (failures != 0)
 	{

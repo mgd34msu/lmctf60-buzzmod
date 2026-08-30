@@ -162,7 +162,7 @@ int SG_BeliefRuntimeProviderSet(const sg_belief_runtime_provider_t *provider)
 		return 0;
 	candidate = *provider;
 	next_epoch = belief_runtime_provider_epoch + 1U;
-	SG_BeliefRuntimeReset();
+	BeliefRuntimeTransientReset();
 	belief_runtime_provider = candidate;
 	belief_runtime_provider_epoch = next_epoch;
 	return 1;
@@ -459,6 +459,15 @@ static int BeliefRuntimeTrackOrderingIdentityMatches(
 		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life);
 }
 
+static int BeliefRuntimeTrackOrderingClientMatches(
+	const belief_runtime_track_t *track, uint8_t audience_team,
+	const sg_belief_life_identity_t *target_life)
+{
+	return track && track->active == 1U && SG_BeliefStateValid(&track->state) &&
+		track->state.audience_team == audience_team &&
+		track->state.target_life.client_id == target_life->client_id;
+}
+
 static uint64_t BeliefRuntimeTrackTimeWatermark(
 	const belief_runtime_track_t *track)
 {
@@ -472,7 +481,7 @@ static uint64_t BeliefRuntimeTrackTimeWatermark(
 	return watermark;
 }
 
-static int BeliefRuntimeEvidenceFollowsTrack(
+static int BeliefRuntimeEvidenceTimesFollowTrack(
 	const belief_runtime_track_t *track, const sg_belief_evidence_t *evidence)
 {
 	uint64_t watermark;
@@ -482,10 +491,15 @@ static int BeliefRuntimeEvidenceFollowsTrack(
 	watermark = BeliefRuntimeTrackTimeWatermark(track);
 	return evidence->provenance.authenticated_at_ms >= watermark &&
 		evidence->observed_at_ms >= watermark &&
-		evidence->provenance.evidence_sequence >
-			track->state.last_evidence_sequence &&
 		evidence->valid_until_ms >=
 			evidence->provenance.authenticated_at_ms;
+}
+
+static int BeliefRuntimeEvidenceSequenceFollowsTrack(
+	const belief_runtime_track_t *track, const sg_belief_evidence_t *evidence)
+{
+	return track && evidence && evidence->provenance.evidence_sequence >
+		track->state.last_evidence_sequence;
 }
 
 static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
@@ -961,8 +975,13 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	ordering_identity_replacement = !BeliefRuntimeTrackOrderingIdentityMatches(
 		track, adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life);
-	if (!ordering_identity_replacement &&
-		!BeliefRuntimeEvidenceFollowsTrack(track, &adaptation.evidence))
+	if (BeliefRuntimeTrackOrderingClientMatches(track,
+		adaptation.evidence.provenance.audience_team,
+		&adaptation.evidence.target_life) &&
+		(!BeliefRuntimeEvidenceTimesFollowTrack(track, &adaptation.evidence) ||
+		(!ordering_identity_replacement &&
+		 !BeliefRuntimeEvidenceSequenceFollowsTrack(track,
+			&adaptation.evidence))))
 	{
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
@@ -1079,12 +1098,13 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 
 			if (!track->active)
 				continue;
-			if (!SG_BeliefStateValid(&track->state) ||
-				track->state.updated_at_ms > at_ms)
+			if (!SG_BeliefStateValid(&track->state))
 			{
 				result = SG_BELIEF_RUNTIME_FRAME_REJECTED;
 				goto failure;
 			}
+			if (track->state.updated_at_ms > at_ms)
+				goto timestamp_regression;
 			if (!BeliefRuntimeLifeFenceCurrent(&track->state.target_life) ||
 				!BeliefRuntimeTrackIssuersCurrent(track))
 				continue;
@@ -1102,6 +1122,13 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 	belief_runtime_frame_sequence = frame_sequence;
 	belief_runtime_frame_time = at_ms;
 	return SG_BELIEF_RUNTIME_FRAME_APPLIED;
+
+timestamp_regression:
+	for (team = 0U; team < 2U; team++)
+		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
+			BeliefRuntimeFrameCandidateClear(&candidates[team][client]);
+	BeliefRuntimeTransientReset();
+	return SG_BELIEF_RUNTIME_FRAME_REJECTED;
 
 failure:
 	for (team = 0U; team < 2U; team++)
