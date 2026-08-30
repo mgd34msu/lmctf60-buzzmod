@@ -132,6 +132,11 @@ int SG_GroundCapabilityFactBitsEqual(
 	const sg_ground_capability_t *left,
 	const sg_ground_capability_t *right);
 
+#ifdef SG_GROUND_CAPABILITY_TESTING
+int SG_GroundCapabilityPublicationTestCandidateStorageBytes(size_t count,
+	size_t *bytes_out);
+#endif
+
 int SG_GroundCapabilityPublicationOwnerCreate(
 	sg_ground_capability_publication_owner_t **owner_out);
 void SG_GroundCapabilityPublicationOwnerDestroy(

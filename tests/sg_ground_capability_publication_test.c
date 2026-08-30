@@ -534,6 +534,21 @@ static void TestExactFactBits(void)
 	CHECK(!SG_GroundCapabilityFactBitsEqual(NULL, &right));
 }
 
+static void TestCandidateStorageSizing(void)
+{
+	size_t bytes = SIZE_MAX;
+	size_t overflowing = SIZE_MAX / sizeof(sg_ground_capability_t) + 1U;
+
+	CHECK(!SG_GroundCapabilityPublicationTestCandidateStorageBytes(
+		overflowing, &bytes));
+	CHECK(bytes == 0U);
+	CHECK(SG_GroundCapabilityPublicationTestCandidateStorageBytes(0U, &bytes));
+	CHECK(bytes == 0U);
+	CHECK(SG_GroundCapabilityPublicationTestCandidateStorageBytes(3U, &bytes));
+	CHECK(bytes == 3U * sizeof(sg_ground_capability_t));
+	CHECK(!SG_GroundCapabilityPublicationTestCandidateStorageBytes(1U, NULL));
+}
+
 static void TestAuditRejections(void)
 {
 	publication_fixture_t fixture;
@@ -557,6 +572,34 @@ static void TestAuditRejections(void)
 		goto done;
 	CHECK(SG_GroundCapabilityAudit(&fixture.source, candidate, &audit));
 	CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_OK);
+	{
+		sg_ground_capability_set_t hostile = *candidate;
+		sg_ground_capability_t *short_storage =
+			calloc(1U, sizeof(*short_storage));
+
+		CHECK(short_storage != NULL);
+		if (short_storage)
+		{
+			*short_storage = candidate->capabilities[0];
+			hostile.capabilities = short_storage;
+			hostile.capability_count = UINT32_MAX;
+			CHECK(!SG_GroundCapabilityAudit(&fixture.source, &hostile, &audit));
+			CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_INVENTED_FACT);
+			CHECK(audit.candidate_facts == UINT32_MAX);
+			hostile.capability_count = candidate->capability_count + 1U;
+			CHECK(!SG_GroundCapabilityAudit(&fixture.source, &hostile, &audit));
+			CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_INVENTED_FACT);
+			CHECK(audit.invented_facts == 1U);
+			free(short_storage);
+		}
+	}
+	{
+		sg_ground_capability_set_t exact = *candidate;
+
+		CHECK(SG_GroundCapabilityAudit(&fixture.source, &exact, &audit));
+		CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_OK);
+		CHECK(audit.matched_facts == candidate->capability_count);
+	}
 	CHECK(SG_GroundCapabilityPublicationOwnerCreate(&ground_owner));
 	CHECK(SG_GroundCapabilityPublicationIssue(ground_owner, &fixture.source,
 		candidate, &publication, &audit));
@@ -589,12 +632,12 @@ static void TestAuditRejections(void)
 		mutant->capability_count++;
 	}
 	SG_GroundCapabilityDestroy(mutant);
-	mutant = CloneCandidate(candidate, 1U);
+	mutant = CloneCandidate(candidate, 0U);
 	CHECK(mutant != NULL);
 	if (mutant)
 	{
-		mutant->capabilities[candidate->capability_count] =
-			candidate->capabilities[candidate->capability_count - 1U];
+		mutant->capabilities[candidate->capability_count - 1U] =
+			candidate->capabilities[candidate->capability_count - 2U];
 		CHECK(!SG_GroundCapabilityAudit(&fixture.source, mutant, &audit));
 		CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_DUPLICATE_FACT);
 	}
@@ -651,6 +694,8 @@ static void TestAuditRejections(void)
 		mutant->identity = candidate->identity;
 		CHECK(!SG_GroundCapabilityAudit(&fixture.source, mutant, &audit));
 		CHECK(audit.code == SG_GROUND_CAPABILITY_AUDIT_OMITTED_FACT);
+		CHECK(audit.omitted_facts == candidate->capability_count);
+		CHECK(audit.candidate_facts == 0U);
 	}
 	SG_GroundCapabilityDestroy(mutant);
 	mutant = CloneCandidate(candidate, 0U);
@@ -838,6 +883,7 @@ int main(void)
 		return 1;
 	failures = 0;
 	TestExactFactBits();
+	TestCandidateStorageSizing();
 	TestInvalidArguments();
 	TestAuditRejections();
 	TestOwnerPublication(100.0f, &gravity_100_fingerprint);

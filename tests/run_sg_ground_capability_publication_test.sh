@@ -8,7 +8,8 @@ trap 'rm -r "$tmp_dir"; if test "$revision_header_created" = 1; then rm -f "$rep
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
--Wformat=2 -Wcast-qual -Wcast-align -DSG_HOST_LAW_TESTING'
+-Wformat=2 -Wcast-qual -Wcast-align -DSG_HOST_LAW_TESTING
+-DSG_GROUND_CAPABILITY_TESTING'
 sources='tests/sg_ground_capability_publication_test.c
 tests/sg_ground_capability_publication_phase_fixture.c
 slipgate/sg_ground_capability_publication.c

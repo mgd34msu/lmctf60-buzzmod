@@ -114,6 +114,25 @@ static int AllocationFits(size_t count, size_t element_size)
 	return element_size != 0U && count <= SIZE_MAX / element_size;
 }
 
+static int CandidateStorageBytes(size_t count, size_t *bytes_out)
+{
+	if (!bytes_out)
+		return 0;
+	*bytes_out = 0U;
+	if (!AllocationFits(count, sizeof(sg_ground_capability_t)))
+		return 0;
+	*bytes_out = count * sizeof(sg_ground_capability_t);
+	return 1;
+}
+
+#ifdef SG_GROUND_CAPABILITY_TESTING
+int SG_GroundCapabilityPublicationTestCandidateStorageBytes(size_t count,
+	size_t *bytes_out)
+{
+	return CandidateStorageBytes(count, bytes_out);
+}
+#endif
+
 static uint32_t FloatBits(float value)
 {
 	uint32_t bits;
@@ -1747,13 +1766,13 @@ static int CompletenessEqual(const sg_ground_capability_set_t *left,
 		left->pmove_frames == right->pmove_frames;
 }
 
-static uint64_t CandidateFingerprint(const sg_ground_capability_set_t *set)
+static uint64_t CandidateFingerprint(const sg_ground_capability_set_t *set,
+	const sg_ground_capability_t *facts, size_t fact_bytes)
 {
 	uint64_t hash = UINT64_C(1469598103934665603);
 
 	hash = HashBytes(hash, set, sizeof(*set));
-	return HashBytes(hash, set->capabilities,
-		(size_t)set->capability_count * sizeof(*set->capabilities));
+	return HashBytes(hash, facts, fact_bytes);
 }
 
 static void PopulateExpectedResult(
@@ -1782,13 +1801,15 @@ static int AuditCandidate(
 	const sg_ground_capability_set_t *candidate,
 	sg_ground_capability_audit_result_t *result)
 {
+	const sg_ground_capability_t *candidate_facts;
 	uint64_t fingerprint;
+	size_t candidate_bytes;
+	uint32_t candidate_count;
 	uint32_t expected_index = 0U;
 	uint32_t candidate_index = 0U;
 	uint32_t index;
 
-	if (!candidate ||
-		(candidate->capability_count != 0U && !candidate->capabilities))
+	if (!candidate)
 		return 0;
 	if (!IdentityEqual(&candidate->identity,
 			&source->configuration->identity))
@@ -1797,22 +1818,48 @@ static int AuditCandidate(
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return 0;
 	}
-	result->candidate_facts = candidate->capability_count;
-	fingerprint = CandidateFingerprint(candidate);
-	for (index = 0U; index < candidate->capability_count; index++)
+	candidate_count = candidate->capability_count;
+	result->candidate_facts = candidate_count;
+	if (candidate_count < expected->capability_count)
+	{
+		result->omitted_facts = expected->capability_count - candidate_count;
+		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_OMITTED_FACT,
+			candidate_count);
+		return 0;
+	}
+	if (candidate_count > expected->capability_count)
+	{
+		result->invented_facts = candidate_count - expected->capability_count;
+		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_INVENTED_FACT,
+			expected->capability_count);
+		return 0;
+	}
+	candidate_facts = candidate->capabilities;
+	if ((candidate_count != 0U && !candidate_facts) ||
+		!CandidateStorageBytes(candidate_count, &candidate_bytes))
+	{
+		SetResult(result, candidate_count != 0U && !candidate_facts ?
+			SG_GROUND_CAPABILITY_AUDIT_INVALID_FACT :
+			SG_GROUND_CAPABILITY_AUDIT_OVERFLOW,
+			SG_GROUND_CAPABILITY_INDEX_NONE);
+		return 0;
+	}
+	fingerprint = CandidateFingerprint(candidate, candidate_facts,
+		candidate_bytes);
+	for (index = 0U; index < candidate_count; index++)
 	{
 		int order;
 
-		if (!CandidateFactValid(source, &candidate->capabilities[index]))
+		if (!CandidateFactValid(source, &candidate_facts[index]))
 		{
 			SetResult(result, SG_GROUND_CAPABILITY_AUDIT_INVALID_FACT, index);
 			return 0;
 		}
-		result->candidate_by_kind[candidate->capabilities[index].kind]++;
+		result->candidate_by_kind[candidate_facts[index].kind]++;
 		if (index == 0U)
 			continue;
-		order = CapabilityOrderCompare(&candidate->capabilities[index - 1U],
-			&candidate->capabilities[index]);
+		order = CapabilityOrderCompare(&candidate_facts[index - 1U],
+			&candidate_facts[index]);
 		if (order == 0)
 		{
 			result->duplicate_facts++;
@@ -1827,11 +1874,11 @@ static int AuditCandidate(
 		}
 	}
 	while (expected_index < expected->capability_count &&
-		candidate_index < candidate->capability_count)
+		candidate_index < candidate_count)
 	{
 		int order = CapabilityOrderCompare(
 			&expected->capabilities[expected_index],
-			&candidate->capabilities[candidate_index]);
+			&candidate_facts[candidate_index]);
 
 		if (order < 0)
 		{
@@ -1847,7 +1894,7 @@ static int AuditCandidate(
 		{
 			if (!SG_GroundCapabilityFactBitsEqual(
 					&expected->capabilities[expected_index],
-					&candidate->capabilities[candidate_index]))
+					&candidate_facts[candidate_index]))
 			{
 				SetResult(result,
 					SG_GROUND_CAPABILITY_AUDIT_FACT_DISAGREEMENT,
@@ -1860,7 +1907,7 @@ static int AuditCandidate(
 		}
 	}
 	result->omitted_facts += expected->capability_count - expected_index;
-	result->invented_facts += candidate->capability_count - candidate_index;
+	result->invented_facts += candidate_count - candidate_index;
 	if (result->omitted_facts != 0U)
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_OMITTED_FACT,
@@ -1880,7 +1927,8 @@ static int AuditCandidate(
 			SG_GROUND_CAPABILITY_INDEX_NONE);
 		return 0;
 	}
-	if (fingerprint != CandidateFingerprint(candidate))
+	if (fingerprint != CandidateFingerprint(candidate, candidate_facts,
+			candidate_bytes))
 	{
 		SetResult(result, SG_GROUND_CAPABILITY_AUDIT_SOURCE_MUTATED,
 			SG_GROUND_CAPABILITY_INDEX_NONE);
@@ -1912,8 +1960,7 @@ static int AuditOwned(
 	result.completeness = SG_GROUND_CAPABILITY_COMPLETENESS_UNRESOLVED;
 	result.record = SG_GROUND_CAPABILITY_INDEX_NONE;
 	if (!result_out || !source_out || !expected_out || *expected_out ||
-		!input || !candidate ||
-		(candidate->capability_count != 0U && !candidate->capabilities))
+		!input || !candidate)
 		goto done;
 	if (!Reconstruct(input, &source, &expected, &result))
 		goto done;
