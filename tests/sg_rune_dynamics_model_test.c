@@ -129,20 +129,21 @@ typedef struct dynamics_fixture_s
 	sg_rune_domain_boundary_facet_t domain_boundary_facets[14];
 	sg_field_refinement_vertex_ref_t domain_boundary_vertices[98];
 	uint32_t exact_words[1];
-	sg_field_outcome_image_t outcome_images[4];
-	sg_field_outcome_cover_piece_t outcome_cover_pieces[5];
+	sg_field_outcome_image_t outcome_images[8];
+	sg_field_outcome_cover_piece_t outcome_cover_pieces[10];
 	sg_field_guard_requirement_t guard_requirements[3];
 	sg_field_guard_effect_t guard_effects[1];
 	sg_field_outcome_t outcomes[4];
 	sg_field_choice_t choices[4];
 	sg_field_local_progress_kernel_t local_progress_kernels[1];
-	sg_field_refinement_node_t refinement_nodes[2];
-	sg_field_refinement_vertex_t refinement_vertices[16];
-	sg_field_refinement_vertex_ref_t node_vertices[16];
-	sg_field_refinement_face_t refinement_faces[16];
-	sg_field_refinement_vertex_ref_t face_vertices[112];
-	sg_field_refinement_face_incidence_t face_incidences[16];
-	sg_field_refinement_face_ref_t node_faces[16];
+	sg_field_refinement_node_t refinement_nodes[4];
+	sg_field_refinement_vertex_t refinement_vertices[17];
+	sg_field_refinement_vertex_ref_t node_vertices[32];
+	sg_field_refinement_face_t refinement_faces[30];
+	sg_field_refinement_vertex_ref_t face_vertices[210];
+	sg_field_refinement_face_incidence_t face_incidences[32];
+	sg_field_refinement_face_ref_t node_faces[32];
+	uint32_t refinement_children[2];
 	uint32_t refinement_roots[2];
 	sg_field_refinement_node_ref_t local_progress_sources[1];
 	sg_field_choice_ref_t local_progress_choices[4];
@@ -1299,6 +1300,387 @@ static int TestLocalFaceOrientation(const uint32_t node_vertices[8],
 			sorted_position++;
 	return SG_FieldRefinementCellOrientation(cell) *
 		((sorted_position & 1U) != 0U ? -1 : 1);
+}
+
+static void ConfigureRefinedFirstAtom(dynamics_fixture_t *fixture,
+	int cover_parent)
+{
+	static const uint32_t node_vertex_indices[4][8] = {
+		{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U },
+		{ 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U },
+		{ 0U, 2U, 3U, 4U, 5U, 6U, 7U, 9U },
+		{ 1U, 2U, 3U, 4U, 5U, 6U, 7U, 9U }
+	};
+	static const uint8_t depths[4] = { 0U, 0U, 1U, 1U };
+	refinement_face_builder_t builders[30] = { 0 };
+	uint32_t face_for_local[4][8] = { { 0 } };
+	size_t face_count = 0U;
+	size_t incidence_count = 0U;
+	uint32_t node;
+
+	BuildFixture(fixture);
+	fixture->choices[0].cost = (sg_rune_cost_bounds_t){ 1U, 10U };
+	fixture->choices[1].cost = (sg_rune_cost_bounds_t){ 5000U, 5000U };
+	fixture->refinement_vertices[9] = fixture->refinement_vertices[0];
+	fixture->refinement_vertices[9].id.value = Stable(
+		SG_RUNE_ORDER_FIELD_REFINEMENT_VERTEX, 10U);
+	fixture->refinement_vertices[9].position.value[0] = 0.5f;
+	fixture->refinement_vertices[9].proof.value = Stable(
+		SG_RUNE_ORDER_DYNAMICS_PROOF, 109U);
+	memset(fixture->refinement_faces, 0, sizeof(fixture->refinement_faces));
+	memset(fixture->face_vertices, 0, sizeof(fixture->face_vertices));
+	memset(fixture->face_incidences, 0, sizeof(fixture->face_incidences));
+	memset(fixture->node_faces, 0, sizeof(fixture->node_faces));
+	for (node = 0U; node < 4U; node++)
+	{
+		const sg_field_refinement_vertex_t *cell[8];
+		uint32_t local;
+		if (node >= 2U)
+		{
+			fixture->refinement_nodes[node] = fixture->refinement_nodes[0];
+			fixture->refinement_nodes[node].id.value = Stable(
+				SG_RUNE_ORDER_FIELD_REFINEMENT_NODE, node + 1U);
+			fixture->refinement_nodes[node].parent = 0U;
+			fixture->refinement_nodes[node].children =
+				(sg_field_refinement_node_span_t){ 2U, 0U };
+			fixture->refinement_nodes[node].geometry_proof.value = Stable(
+				SG_RUNE_ORDER_DYNAMICS_PROOF, 40U + node);
+			fixture->refinement_nodes[node].interpolation_proof.value = Stable(
+				SG_RUNE_ORDER_DYNAMICS_PROOF, 50U + node);
+		}
+		fixture->refinement_nodes[node].vertices =
+			(sg_field_refinement_vertex_ref_span_t){ node * 8U, 8U };
+		fixture->refinement_nodes[node].faces =
+			(sg_field_refinement_face_ref_span_t){ node * 8U, 8U };
+		for (local = 0U; local < 8U; local++)
+		{
+			fixture->node_vertices[node * 8U + local] =
+				fixture->refinement_vertices[
+					node_vertex_indices[node][local]].id;
+			cell[local] = &fixture->refinement_vertices[
+				node_vertex_indices[node][local]];
+		}
+		fixture->refinement_nodes[node].orientation =
+			(int8_t)SG_FieldRefinementCellOrientation(cell);
+		TestRefinementBounds(cell,
+			&fixture->refinement_nodes[node].state_bounds);
+	}
+	fixture->refinement_nodes[0].children =
+		(sg_field_refinement_node_span_t){ 0U, 2U };
+	fixture->refinement_nodes[1].children =
+		(sg_field_refinement_node_span_t){ 2U, 0U };
+	fixture->refinement_children[0] = 2U;
+	fixture->refinement_children[1] = 3U;
+
+	for (node = 0U; node < 4U; node++)
+	{
+		uint32_t local_face;
+		for (local_face = 0U; local_face < 8U; local_face++)
+		{
+			uint32_t key[7];
+			uint32_t local;
+			uint32_t key_index = 0U;
+			size_t face;
+			for (local = 0U; local < 8U; local++)
+				if (local != local_face)
+					key[key_index++] = node_vertex_indices[node][local];
+			for (face = 0U; face < face_count; face++)
+				if (builders[face].depth == depths[node] &&
+				    TestFaceKeySame(builders[face].vertices, key))
+					break;
+			if (face == face_count)
+			{
+				memcpy(builders[face].vertices, key, sizeof(key));
+				builders[face].depth = depths[node];
+				face_count++;
+			}
+			CHECK(builders[face].incidence_count < 2U);
+			builders[face].nodes[builders[face].incidence_count] = node;
+			builders[face].local_faces[builders[face].incidence_count] =
+				(uint8_t)local_face;
+			builders[face].incidence_count++;
+			face_for_local[node][local_face] = (uint32_t)face;
+		}
+	}
+	CHECK(face_count == 30U);
+	for (size_t face = 0U; face < face_count; face++)
+	{
+		uint32_t item;
+		fixture->refinement_faces[face].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_FACE, (uint32_t)face + 1U);
+		fixture->refinement_faces[face].vertices =
+			(sg_field_refinement_vertex_ref_span_t){
+				(uint32_t)(face * 7U), 7U };
+		fixture->refinement_faces[face].incidences =
+			(sg_field_refinement_incidence_span_t){
+				(uint32_t)incidence_count,
+				builders[face].incidence_count };
+		fixture->refinement_faces[face].parent_face.value =
+			SG_RUNE_STABLE_ID_NONE;
+		fixture->refinement_faces[face].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)face + 130U);
+		for (item = 0U; item < 7U; item++)
+			fixture->face_vertices[face * 7U + item] =
+				fixture->refinement_vertices[
+					builders[face].vertices[item]].id;
+		for (item = 0U; item < builders[face].incidence_count; item++)
+		{
+			uint32_t incidence_node = builders[face].nodes[item];
+			uint8_t local_face = builders[face].local_faces[item];
+			fixture->face_incidences[incidence_count].node =
+				fixture->refinement_nodes[incidence_node].id;
+			fixture->face_incidences[incidence_count].local_face = local_face;
+			fixture->face_incidences[incidence_count].orientation =
+				(int8_t)TestLocalFaceOrientation(
+					node_vertex_indices[incidence_node], local_face,
+					fixture->refinement_vertices);
+			fixture->node_faces[incidence_node * 8U + local_face] =
+				fixture->refinement_faces[face].id;
+			incidence_count++;
+		}
+	}
+	CHECK(incidence_count == 32U);
+	for (size_t face = 0U; face < face_count; face++)
+		if (builders[face].depth == 1U &&
+		    builders[face].incidence_count == 1U)
+		{
+			uint32_t child_node = builders[face].nodes[0];
+			uint32_t parent_local;
+			for (parent_local = 0U; parent_local < 8U; parent_local++)
+			{
+				uint32_t parent_face = face_for_local[0][parent_local];
+				if (TestFaceInsideFace(builders[face].vertices,
+					builders[parent_face].vertices,
+					fixture->refinement_vertices))
+				{
+					fixture->refinement_faces[face].parent_face =
+						fixture->refinement_faces[parent_face].id;
+					break;
+				}
+			}
+			CHECK(child_node >= 2U && parent_local < 8U);
+		}
+	{
+		size_t boundary = 0U;
+		for (size_t face = 0U; face < 15U; face++)
+			if (builders[face].incidence_count == 1U)
+			{
+				uint32_t item;
+				fixture->domain_boundary_facets[boundary].vertices =
+					(sg_field_refinement_vertex_ref_span_t){
+						(uint32_t)(boundary * 7U), 7U };
+				fixture->domain_boundary_facets[boundary].orientation =
+					fixture->face_incidences[
+						fixture->refinement_faces[face].incidences.first]
+						.orientation;
+				for (item = 0U; item < 7U; item++)
+					fixture->domain_boundary_vertices[boundary * 7U + item] =
+						fixture->face_vertices[face * 7U + item];
+				boundary++;
+			}
+		CHECK(boundary == 14U);
+	}
+	fixture->dynamics.refinement_tree.node_count = 4U;
+	fixture->dynamics.refinement_tree.vertex_count = 10U;
+	fixture->dynamics.refinement_tree.node_vertex_count = 32U;
+	fixture->dynamics.refinement_tree.face_count = 30U;
+	fixture->dynamics.refinement_tree.face_vertex_count = 210U;
+	fixture->dynamics.refinement_tree.face_incidence_count = 32U;
+	fixture->dynamics.refinement_tree.node_face_count = 32U;
+	fixture->dynamics.refinement_tree.children = fixture->refinement_children;
+	fixture->dynamics.refinement_tree.child_count = 2U;
+	{
+		sg_field_outcome_image_t old_images[3];
+		sg_field_outcome_cover_piece_t old_pieces[3];
+		size_t outcome;
+		size_t image = 0U;
+		memcpy(old_images, fixture->outcome_images, sizeof(old_images));
+		memcpy(old_pieces, fixture->outcome_cover_pieces,
+			sizeof(old_pieces));
+		memset(fixture->outcome_images, 0,
+			sizeof(fixture->outcome_images));
+		memset(fixture->outcome_cover_pieces, 0,
+			sizeof(fixture->outcome_cover_pieces));
+		for (outcome = 0U; outcome < 3U; outcome++)
+		{
+			size_t source_count = 2U;
+			size_t source;
+			fixture->outcomes[outcome].source_images =
+				(sg_field_outcome_image_span_t){ (uint32_t)image,
+					(uint32_t)source_count };
+			fixture->outcomes[outcome].destination_cover =
+				(sg_field_outcome_cover_piece_span_t){ (uint32_t)image,
+					(uint32_t)source_count };
+			for (source = 0U; source < source_count; source++, image++)
+			{
+				size_t leaf = 2U + source;
+				fixture->outcome_images[image] = old_images[outcome];
+				fixture->outcome_images[image].id.value = Stable(
+					SG_RUNE_ORDER_FIELD_OUTCOME_IMAGE,
+					(uint32_t)image + 1U);
+				fixture->outcome_images[image].source_leaf =
+					fixture->refinement_nodes[leaf].id;
+				fixture->outcome_images[image].destination_cover =
+					(sg_field_outcome_cover_piece_span_t){
+						(uint32_t)image, 1U };
+				fixture->outcome_images[image].proof.value = Stable(
+					SG_RUNE_ORDER_FIELD_OUTCOME_IMAGE_PROOF,
+					(uint32_t)image + 1U);
+				fixture->outcome_cover_pieces[image] = old_pieces[outcome];
+				fixture->outcome_cover_pieces[image].source_image =
+					fixture->outcome_images[image].id;
+				fixture->outcome_cover_pieces[image].source_refinement_node =
+					fixture->refinement_nodes[leaf].id;
+				fixture->outcome_cover_pieces[image].proof.value = Stable(
+					SG_RUNE_ORDER_FIELD_OUTCOME_COVER_PROOF,
+					(uint32_t)image + 1U);
+			}
+		}
+		fixture->dynamics.outcome_image_count = image;
+		fixture->dynamics.outcome_cover_piece_count = image;
+	}
+	fixture->local_progress_sources[0] = fixture->refinement_nodes[
+		cover_parent ? 0U : 2U].id;
+}
+
+static void ConfigureReorderedTwoCellGeometry(dynamics_fixture_t *fixture)
+{
+	static const uint32_t node_vertex_indices[2][8] = {
+		{ 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U },
+		{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U }
+	};
+	refinement_face_builder_t builders[15] = { 0 };
+	sg_rune_vec3_t old_position[16];
+	sg_rune_vec3_t old_velocity[16];
+	float old_elapsed[16];
+	size_t face_count = 0U;
+	size_t incidence_count = 0U;
+	uint32_t node;
+
+	BuildFixture(fixture);
+	for (node = 0U; node < 16U; node++)
+	{
+		old_position[node] = fixture->vertices[node].position;
+		old_velocity[node] = fixture->vertices[node].velocity;
+		old_elapsed[node] = fixture->vertices[node].elapsed_ms;
+	}
+	for (node = 0U; node < 8U; node++)
+	{
+		fixture->vertices[node].position = old_position[node + 8U];
+		fixture->vertices[node].velocity = old_velocity[node + 8U];
+		fixture->vertices[node].elapsed_ms = old_elapsed[node + 8U];
+		fixture->vertices[node + 8U].position = old_position[node];
+		fixture->vertices[node + 8U].velocity = old_velocity[node];
+		fixture->vertices[node + 8U].elapsed_ms = old_elapsed[node];
+	}
+	memset(fixture->refinement_faces, 0, sizeof(fixture->refinement_faces));
+	memset(fixture->face_vertices, 0, sizeof(fixture->face_vertices));
+	memset(fixture->face_incidences, 0, sizeof(fixture->face_incidences));
+	memset(fixture->node_faces, 0, sizeof(fixture->node_faces));
+	for (node = 0U; node < 2U; node++)
+	{
+		const sg_field_refinement_vertex_t *cell[8];
+		uint32_t local;
+		for (local = 0U; local < 8U; local++)
+		{
+			fixture->node_vertices[node * 8U + local] =
+				fixture->refinement_vertices[
+					node_vertex_indices[node][local]].id;
+			cell[local] = &fixture->refinement_vertices[
+				node_vertex_indices[node][local]];
+		}
+		fixture->refinement_nodes[node].orientation =
+			(int8_t)SG_FieldRefinementCellOrientation(cell);
+		TestRefinementBounds(cell,
+			&fixture->refinement_nodes[node].state_bounds);
+		fixture->reach_atoms[node].state_bounds =
+			fixture->refinement_nodes[node].state_bounds;
+	}
+	for (node = 0U; node < 2U; node++)
+	{
+		uint32_t local_face;
+		for (local_face = 0U; local_face < 8U; local_face++)
+		{
+			uint32_t key[7];
+			uint32_t local;
+			uint32_t key_index = 0U;
+			size_t face;
+			for (local = 0U; local < 8U; local++)
+				if (local != local_face)
+					key[key_index++] = node_vertex_indices[node][local];
+			for (face = 0U; face < face_count; face++)
+				if (TestFaceKeySame(builders[face].vertices, key))
+					break;
+			if (face == face_count)
+			{
+				memcpy(builders[face].vertices, key, sizeof(key));
+				face_count++;
+			}
+			CHECK(builders[face].incidence_count < 2U);
+			builders[face].nodes[builders[face].incidence_count] = node;
+			builders[face].local_faces[builders[face].incidence_count] =
+				(uint8_t)local_face;
+			builders[face].incidence_count++;
+		}
+	}
+	CHECK(face_count == 15U);
+	for (size_t face = 0U; face < face_count; face++)
+	{
+		uint32_t item;
+		fixture->refinement_faces[face].id.value = Stable(
+			SG_RUNE_ORDER_FIELD_REFINEMENT_FACE, (uint32_t)face + 1U);
+		fixture->refinement_faces[face].vertices =
+			(sg_field_refinement_vertex_ref_span_t){
+				(uint32_t)(face * 7U), 7U };
+		fixture->refinement_faces[face].incidences =
+			(sg_field_refinement_incidence_span_t){
+				(uint32_t)incidence_count,
+				builders[face].incidence_count };
+		fixture->refinement_faces[face].parent_face.value =
+			SG_RUNE_STABLE_ID_NONE;
+		fixture->refinement_faces[face].proof.value = Stable(
+			SG_RUNE_ORDER_DYNAMICS_PROOF, (uint32_t)face + 130U);
+		for (item = 0U; item < 7U; item++)
+			fixture->face_vertices[face * 7U + item] =
+				fixture->refinement_vertices[
+					builders[face].vertices[item]].id;
+		for (item = 0U; item < builders[face].incidence_count; item++)
+		{
+			uint32_t incidence_node = builders[face].nodes[item];
+			uint8_t local_face = builders[face].local_faces[item];
+			fixture->face_incidences[incidence_count].node =
+				fixture->refinement_nodes[incidence_node].id;
+			fixture->face_incidences[incidence_count].local_face = local_face;
+			fixture->face_incidences[incidence_count].orientation =
+				(int8_t)TestLocalFaceOrientation(
+					node_vertex_indices[incidence_node], local_face,
+					fixture->refinement_vertices);
+			fixture->node_faces[incidence_node * 8U + local_face] =
+				fixture->refinement_faces[face].id;
+			incidence_count++;
+		}
+	}
+	CHECK(incidence_count == 16U);
+	{
+		size_t boundary = 0U;
+		for (size_t face = 0U; face < face_count; face++)
+			if (builders[face].incidence_count == 1U)
+			{
+				uint32_t item;
+				fixture->domain_boundary_facets[boundary].vertices =
+					(sg_field_refinement_vertex_ref_span_t){
+						(uint32_t)(boundary * 7U), 7U };
+				fixture->domain_boundary_facets[boundary].orientation =
+					fixture->face_incidences[
+						fixture->refinement_faces[face].incidences.first]
+						.orientation;
+				for (item = 0U; item < 7U; item++)
+					fixture->domain_boundary_vertices[boundary * 7U + item] =
+						fixture->face_vertices[face * 7U + item];
+				boundary++;
+			}
+		CHECK(boundary == 14U);
+	}
 }
 
 static void TestRepeatedRefinementFaceLineage(void)
@@ -2842,6 +3224,8 @@ static void TestFieldServicePluralChoicesAndTerminal(void)
 	environment.event_slabs = slabs;
 	environment.event_slab_count = 2U;
 	state = ServiceState(&fixture, 100U);
+	CHECK(FixtureRefinementTreeValid(&fixture));
+	CHECK(SG_RuneDynamicsGeometryValid(&fixture.dynamics));
 	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
 	CHECK(ServicePublication(&fixture, 702U, &source, &publication) ==
 		SG_FIELD_STATUS_OK);
@@ -3171,6 +3555,71 @@ static void TestFieldServiceRefreshAtomicEquality(void)
 	SG_FieldServiceDestroy(incremental);
 }
 
+static void TestFieldServiceRefreshAuthenticatesWholeHandle(void)
+{
+	dynamics_fixture_t fixture;
+	sg_field_model_source_t *source = NULL;
+	sg_field_model_publication_t *publication = NULL;
+	sg_field_service_t *service = NULL;
+	sg_destination_terminal_t old_terminal;
+	sg_destination_terminal_t new_terminal;
+	sg_field_guard_state_t guards[2] = { 0 };
+	sg_field_environment_t environment;
+	sg_localized_field_state_t state;
+	sg_field_handle_t live = { 0 };
+	sg_field_handle_t forged;
+	sg_field_handle_t refreshed = { 0 };
+	sg_field_handle_t canary = { 9U, 9U, 9U, 9U, 9U, 9U };
+	sg_field_option_t option = { 0 };
+	sg_field_guidance_t guidance = { 0 };
+
+	BuildFixture(&fixture);
+	old_terminal = ServiceStaticTerminal(&fixture, 5U);
+	new_terminal = ServiceStaticTerminal(&fixture, 6U);
+	environment = ServiceEnvironment(&fixture, guards, 1U);
+	state = ServiceState(&fixture, 100U);
+	CHECK(ServicePublication(&fixture, 711U, &source, &publication) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceCreate(publication, &service) == SG_FIELD_STATUS_OK);
+	SG_FieldModelSourceDestroyOwnerPrivate(&source);
+	SG_FieldModelPublicationDestroy(publication);
+	CHECK(SG_FieldServiceResolve(service, &old_terminal, &environment, 100U,
+		&live) == SG_FIELD_STATUS_OK);
+
+#define CHECK_REFRESH_FORGERY(field, value, expected) do { \
+	forged = live; \
+	forged.field = (value); \
+	canary = (sg_field_handle_t){ 9U, 9U, 9U, 9U, 9U, 9U }; \
+	CHECK(SG_FieldServiceRefresh(service, &forged, &new_terminal, \
+		&environment, 110U, &canary) == (expected)); \
+	CHECK(canary.field_generation == 9U); \
+	CHECK(SG_FieldServiceTestLeaseCount(service) == 1U); \
+	CHECK(SG_FieldServiceTestCacheCount(service) == 1U); \
+	CHECK(SG_FieldServiceQuery(service, &live, &state, &environment, \
+		&option, 1U, &guidance) == SG_FIELD_STATUS_OK); \
+} while (0)
+	/* The generation rollback used to resolve the live lease by
+	 * field_generation alone and consume it as the authentic handle. */
+	CHECK_REFRESH_FORGERY(terminal_generation, 2U, SG_FIELD_STATUS_STALE);
+	CHECK_REFRESH_FORGERY(service_identity, live.service_identity + 1U,
+		SG_FIELD_STATUS_IDENTITY_MISMATCH);
+	CHECK_REFRESH_FORGERY(service_generation, live.service_generation + 1U,
+		SG_FIELD_STATUS_STALE);
+	CHECK_REFRESH_FORGERY(rune_identity, live.rune_identity + 1U,
+		SG_FIELD_STATUS_IDENTITY_MISMATCH);
+	CHECK_REFRESH_FORGERY(topology_revision, live.topology_revision + 1U,
+		SG_FIELD_STATUS_IDENTITY_MISMATCH);
+	CHECK_REFRESH_FORGERY(field_generation, live.field_generation + 1U,
+		SG_FIELD_STATUS_STALE);
+#undef CHECK_REFRESH_FORGERY
+	CHECK(SG_FieldServiceRefresh(service, &live, &new_terminal, &environment,
+		110U, &refreshed) == SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceRefresh(service, &live, &new_terminal, &environment,
+		110U, &canary) == SG_FIELD_STATUS_STALE);
+	CHECK(SG_FieldServiceRelease(service, &refreshed) == SG_FIELD_STATUS_OK);
+	SG_FieldServiceDestroy(service);
+}
+
 static void TestFieldServicePublicationRejectsIncompleteAndInvalid(void)
 {
 	dynamics_fixture_t fixture;
@@ -3276,8 +3725,8 @@ static void TestFieldServiceExactSimplexAndLeafMembership(void)
 	sg_field_reach_atom_id_t atom = { 0 };
 	sg_field_refinement_node_id_t leaf = { 0 };
 	sg_rune_state_simplex_id_t simplex = { 0 };
-	sg_field_reach_atom_id_t manifest_atom = { 0 };
-	sg_field_refinement_node_id_t manifest_leaf = { 0 };
+	sg_field_reach_atom_id_t geometry_atom = { 0 };
+	sg_field_refinement_node_id_t geometry_leaf = { 0 };
 	size_t dimension;
 
 	BuildFixture(&fixture);
@@ -3302,13 +3751,11 @@ static void TestFieldServiceExactSimplexAndLeafMembership(void)
 	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[1].id.value));
 	CHECK(SG_RuneDynamicsLocatePointExact(&fixture.dynamics, &state.chart,
 		&state.position, &state.velocity, state.elapsed_ms, &simplex,
-		&manifest_atom, &manifest_leaf));
+		&geometry_atom, &geometry_leaf));
 	CHECK(StableSame(&simplex.value, &fixture.simplex_owners[1].simplex.value));
-	CHECK(StableSame(&atom.value, &manifest_atom.value));
-	CHECK(StableSame(&leaf.value, &manifest_leaf.value));
+	CHECK(StableSame(&atom.value, &geometry_atom.value));
+	CHECK(StableSame(&leaf.value, &geometry_leaf.value));
 
-	/* This exact shared-face point belongs to both closed simplexes. The
-	 * authenticated simplex-owner and refinement catalogs own the tie. */
 	state.position.value[0] = 0.25f;
 	state.position.value[1] = 0.125f;
 	state.position.value[2] = 0.125f;
@@ -3317,17 +3764,216 @@ static void TestFieldServiceExactSimplexAndLeafMembership(void)
 	state.velocity.value[2] = 0.125f;
 	state.elapsed_ms = 0.125f;
 	CHECK(SG_FieldServiceTestLocateState(service, &state, &atom, &leaf));
-	CHECK(StableSame(&atom.value, &fixture.reach_atoms[0].id.value));
-	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[0].id.value));
+	CHECK(StableSame(&atom.value, &fixture.reach_atoms[1].id.value));
+	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[1].id.value));
 	CHECK(SG_RuneDynamicsLocatePointExact(&fixture.dynamics, &state.chart,
 		&state.position, &state.velocity, state.elapsed_ms, &simplex,
-		&manifest_atom, &manifest_leaf));
-	CHECK(StableSame(&simplex.value, &fixture.simplex_owners[0].simplex.value));
-	CHECK(StableSame(&atom.value, &manifest_atom.value));
-	CHECK(StableSame(&leaf.value, &manifest_leaf.value));
+		&geometry_atom, &geometry_leaf));
+	CHECK(StableSame(&simplex.value, &fixture.simplex_owners[1].simplex.value));
+	CHECK(StableSame(&atom.value, &geometry_atom.value));
+	CHECK(StableSame(&leaf.value, &geometry_leaf.value));
 	CHECK(SG_FieldServiceTestLocateState(service, &state, &atom, &leaf));
-	CHECK(StableSame(&atom.value, &fixture.reach_atoms[0].id.value));
+	CHECK(StableSame(&atom.value, &fixture.reach_atoms[1].id.value));
+	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[1].id.value));
+	SG_FieldServiceDestroy(service);
+}
+
+static void TestFieldServiceRefinementKernelCoverage(void)
+{
+	dynamics_fixture_t fixture;
+	sg_field_model_source_t *source = NULL;
+	sg_field_model_publication_t *publication = NULL;
+	sg_field_service_t *service = NULL;
+	sg_destination_terminal_t terminal;
+	sg_field_guard_state_t guards[2] = { 0 };
+	sg_field_environment_t environment;
+	sg_localized_field_state_t state;
+	sg_field_handle_t handle = { 0 };
+	sg_field_reach_atom_id_t atom = { 0 };
+	sg_field_refinement_node_id_t leaf = { 0 };
+	sg_rune_cost_bounds_t stored = { 0 };
+	sg_field_option_t option = { 0 };
+	sg_field_guidance_t guidance = { 0 };
+	sg_field_option_t option_canary;
+	sg_field_guidance_t guidance_canary;
+
+	ConfigureRefinedFirstAtom(&fixture, 1);
+	terminal = ServiceStaticTerminal(&fixture, 1U);
+	environment = ServiceEnvironment(&fixture, guards, 1U);
+	state = ServiceState(&fixture, 100U);
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	CHECK(ServicePublication(&fixture, 712U, &source, &publication) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceCreate(publication, &service) == SG_FIELD_STATUS_OK);
+	SG_FieldModelSourceDestroyOwnerPrivate(&source);
+	SG_FieldModelPublicationDestroy(publication);
+	CHECK(SG_FieldServiceResolve(service, &terminal, &environment, 100U,
+		&handle) == SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceTestLocateState(service, &state, &atom, &leaf));
+	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[2].id.value));
+	CHECK(SG_FieldServiceTestStoredCost(service, &handle, &state, &stored) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceQuery(service, &handle, &state, &environment,
+		&option, 1U, &guidance) == SG_FIELD_STATUS_OK);
+	CHECK(guidance.value.descent.option_count == 1U);
+	CHECK(guidance.value.descent.arrival_cost.lower_us == stored.lower_us);
+	CHECK(guidance.value.descent.arrival_cost.upper_us == stored.upper_us);
+	CHECK(option.kind == SG_FIELD_OPTION_CONTROL);
+	CHECK(option.value.control.endpoint_cost.lower_us == 1000U);
+	CHECK(option.value.control.endpoint_cost.upper_us == 1000U);
+	CHECK(option.value.control.minimum_descent_us ==
+		guidance.value.descent.arrival_cost.lower_us -
+		option.value.control.endpoint_cost.upper_us);
+	CHECK(SG_FieldServiceRelease(service, &handle) == SG_FIELD_STATUS_OK);
+	SG_FieldServiceDestroy(service);
+
+	source = NULL;
+	publication = NULL;
+	service = NULL;
+	ConfigureRefinedFirstAtom(&fixture, 0);
+	terminal = ServiceStaticTerminal(&fixture, 1U);
+	environment = ServiceEnvironment(&fixture, guards, 1U);
+	state = ServiceState(&fixture, 100U);
+	state.position.value[0] = 0.375f;
+	CHECK(FixtureRefinementTreeValid(&fixture));
+	CHECK(SG_RuneDynamicsGeometryValid(&fixture.dynamics));
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	CHECK(ServicePublication(&fixture, 713U, &source, &publication) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceCreate(publication, &service) == SG_FIELD_STATUS_OK);
+	SG_FieldModelSourceDestroyOwnerPrivate(&source);
+	SG_FieldModelPublicationDestroy(publication);
+	CHECK(SG_FieldServiceResolve(service, &terminal, &environment, 100U,
+		&handle) == SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceTestLocateState(service, &state, &atom, &leaf));
+	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[2].id.value));
+	CHECK(SG_FieldServiceTestStoredCost(service, &handle, &state, &stored) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceQuery(service, &handle, &state, &environment,
+		&option, 1U, &guidance) == SG_FIELD_STATUS_OK);
+	CHECK(guidance.value.descent.arrival_cost.lower_us > stored.lower_us);
+	CHECK(guidance.value.descent.arrival_cost.upper_us > stored.upper_us);
+	CHECK(guidance.value.descent.arrival_cost.lower_us - stored.lower_us ==
+		guidance.value.descent.arrival_cost.upper_us - stored.upper_us);
+	CHECK(guidance.value.descent.spatial_subgradient.x.min_value == 1.0f);
+	CHECK(guidance.value.descent.spatial_subgradient.x.max_value == 1.0f);
+	CHECK(guidance.value.descent.option_count == 1U);
+	CHECK(option.kind == SG_FIELD_OPTION_CONTROL);
+	CHECK(option.value.control.minimum_descent_us == 1U);
+	CHECK(option.value.control.endpoint_cost.lower_us == 1000U);
+	CHECK(option.value.control.endpoint_cost.upper_us == 1000U);
+
+	state.position.value[0] = 0.75f;
+	CHECK(SG_FieldServiceTestLocateState(service, &state, &atom, &leaf));
+	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[3].id.value));
+	CHECK(SG_FieldServiceTestStoredCost(service, &handle, &state, &stored) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceQuery(service, &handle, &state, &environment,
+		&option, 1U, &guidance) == SG_FIELD_STATUS_OK);
+	CHECK(guidance.value.descent.arrival_cost.lower_us == stored.lower_us);
+	CHECK(guidance.value.descent.arrival_cost.upper_us == stored.upper_us);
+	CHECK(guidance.value.descent.spatial_subgradient.x.min_value == 0.0f);
+	CHECK(guidance.value.descent.spatial_subgradient.x.max_value == 0.0f);
+	CHECK(guidance.value.descent.option_count == 1U);
+	CHECK(option.kind == SG_FIELD_OPTION_CONTROL);
+	CHECK(option.value.control.minimum_descent_us == 1U);
+	CHECK(option.value.control.endpoint_cost.lower_us == 1000U);
+	CHECK(option.value.control.endpoint_cost.upper_us == 1000U);
+	CHECK(SG_FieldServiceRelease(service, &handle) == SG_FIELD_STATUS_OK);
+	SG_FieldServiceDestroy(service);
+
+	source = NULL;
+	publication = NULL;
+	service = NULL;
+	ConfigureRefinedFirstAtom(&fixture, 0);
+	fixture.choices[0].cost.lower_us = 0U;
+	fixture.guard_requirements[1].required = SG_FIELD_GUARD_TRUE;
+	terminal = ServiceStaticTerminal(&fixture, 1U);
+	environment = ServiceEnvironment(&fixture, guards, 1U);
+	state = ServiceState(&fixture, 100U);
+	state.position.value[0] = 0.75f;
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	CHECK(ServicePublication(&fixture, 715U, &source, &publication) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceCreate(publication, &service) == SG_FIELD_STATUS_OK);
+	SG_FieldModelSourceDestroyOwnerPrivate(&source);
+	SG_FieldModelPublicationDestroy(publication);
+	CHECK(SG_FieldServiceResolve(service, &terminal, &environment, 100U,
+		&handle) == SG_FIELD_STATUS_OK);
+	memset(&option_canary, 0x5a, sizeof(option_canary));
+	memset(&guidance_canary, 0x6b, sizeof(guidance_canary));
+	option = option_canary;
+	guidance = guidance_canary;
+	CHECK(SG_FieldServiceQuery(service, &handle, &state, &environment,
+		&option, 1U, &guidance) == SG_FIELD_STATUS_MODEL_INCOMPLETE);
+	CHECK(memcmp(&option, &option_canary, sizeof(option)) == 0);
+	CHECK(memcmp(&guidance, &guidance_canary, sizeof(guidance)) == 0);
+	CHECK(SG_FieldServiceRelease(service, &handle) == SG_FIELD_STATUS_OK);
+	SG_FieldServiceDestroy(service);
+}
+
+static void TestGeometryBoundaryOwnerIgnoresCatalogIdentity(void)
+{
+	dynamics_fixture_t fixture;
+	sg_field_model_source_t *source = NULL;
+	sg_field_model_publication_t *publication = NULL;
+	sg_field_service_t *service = NULL;
+	sg_localized_field_state_t state;
+	sg_rune_state_simplex_id_t simplex = { 0 };
+	sg_field_reach_atom_id_t shared_atom = { 0 };
+	sg_field_reach_atom_id_t interior_atom = { 0 };
+	sg_field_refinement_node_id_t leaf = { 0 };
+	sg_field_reach_atom_id_t service_atom = { 0 };
+	sg_field_refinement_node_id_t service_leaf = { 0 };
+	size_t dimension;
+
+	ConfigureReorderedTwoCellGeometry(&fixture);
+	state = ServiceState(&fixture, 100U);
+	state.position.value[0] = 0.25f;
+	state.position.value[1] = 0.125f;
+	state.position.value[2] = 0.125f;
+	state.velocity.value[0] = 0.125f;
+	state.velocity.value[1] = 0.125f;
+	state.velocity.value[2] = 0.125f;
+	state.elapsed_ms = 0.125f;
+	CHECK(SG_RuneDynamicsModelValid(&fixture.dynamics, &fixture.snapshot));
+	CHECK(SG_RuneDynamicsLocatePointExact(&fixture.dynamics, &state.chart,
+		&state.position, &state.velocity, state.elapsed_ms, &simplex,
+		&shared_atom, &leaf));
+	CHECK(StableSame(&shared_atom.value, &fixture.reach_atoms[0].id.value));
 	CHECK(StableSame(&leaf.value, &fixture.refinement_nodes[0].id.value));
+	for (dimension = 0U; dimension < SG_RUNE_STATE_DIMENSION_COUNT;
+	     dimension++)
+	{
+		if (dimension < 3U)
+			state.position.value[dimension] = 0.9f;
+		else if (dimension < 6U)
+			state.velocity.value[dimension - 3U] = 0.9f;
+		else
+			state.elapsed_ms = 0.9f;
+	}
+	CHECK(SG_RuneDynamicsLocatePointExact(&fixture.dynamics, &state.chart,
+		&state.position, &state.velocity, state.elapsed_ms, &simplex,
+		&interior_atom, &leaf));
+	CHECK(StableSame(&shared_atom.value, &interior_atom.value));
+
+	CHECK(ServicePublication(&fixture, 714U, &source, &publication) ==
+		SG_FIELD_STATUS_OK);
+	CHECK(SG_FieldServiceCreate(publication, &service) == SG_FIELD_STATUS_OK);
+	SG_FieldModelSourceDestroyOwnerPrivate(&source);
+	SG_FieldModelPublicationDestroy(publication);
+	state.position.value[0] = 0.25f;
+	state.position.value[1] = 0.125f;
+	state.position.value[2] = 0.125f;
+	state.velocity.value[0] = 0.125f;
+	state.velocity.value[1] = 0.125f;
+	state.velocity.value[2] = 0.125f;
+	state.elapsed_ms = 0.125f;
+	CHECK(SG_FieldServiceTestLocateState(service, &state, &service_atom,
+		&service_leaf));
+	CHECK(StableSame(&service_atom.value, &shared_atom.value));
+	CHECK(StableSame(&service_leaf.value,
+		&fixture.refinement_nodes[0].id.value));
 	SG_FieldServiceDestroy(service);
 }
 
@@ -3383,10 +4029,13 @@ int main(void)
 	TestFieldServiceBellmanCostAndSlabChoice();
 	TestFieldServiceGuardsAndHostileIdentity();
 	TestFieldServiceRefreshAtomicEquality();
+	TestFieldServiceRefreshAuthenticatesWholeHandle();
 	TestFieldServicePublicationRejectsIncompleteAndInvalid();
 	TestFieldServiceRejectsTimeCostOverflowWithoutMutation();
 	TestFieldServiceBellmanSameRankAndPositiveCycle();
 	TestFieldServiceExactSimplexAndLeafMembership();
+	TestFieldServiceRefinementKernelCoverage();
+	TestGeometryBoundaryOwnerIgnoresCatalogIdentity();
 	/* This test deliberately exhausts the process identity namespace. */
 	TestFieldServiceIdentityExhaustionIsPermanent();
 	if (failures != 0)

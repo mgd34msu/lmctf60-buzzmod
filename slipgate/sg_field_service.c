@@ -1739,8 +1739,69 @@ static int RuleIntervalCost(const sg_rune_dynamics_model_t *model,
 		cost_out->upper_us < SG_RUNE_FIELD_COST_INFINITE;
 }
 
-static int RuleHasKernelRepresentation(const sg_field_solution_t *solution,
-	const sg_field_bellman_rule_t *rule)
+static const sg_field_refinement_node_t *FindRefinementNodeById(
+	const sg_rune_dynamics_model_t *model,
+	const sg_field_refinement_node_ref_t *reference)
+{
+	size_t index;
+
+	for (index = 0U; index < model->refinement_tree.node_count; index++)
+		if (StableSame(&model->refinement_tree.nodes[index].id.value,
+			&reference->value))
+			return &model->refinement_tree.nodes[index];
+	return NULL;
+}
+
+static int KernelCoversLeaf(const sg_rune_dynamics_model_t *model,
+	const sg_field_local_progress_kernel_t *kernel,
+	const sg_field_refinement_node_t *leaf)
+{
+	size_t index;
+
+	for (index = kernel->covered_sources.first;
+	     index < (size_t)kernel->covered_sources.first +
+		kernel->covered_sources.count; index++)
+	{
+		const sg_field_refinement_node_t *covered = FindRefinementNodeById(
+			model, &model->local_progress_sources[index]);
+		const sg_field_refinement_node_t *cursor = leaf;
+		if (!covered)
+			return 0;
+		for (;;)
+		{
+			if (StableSame(&covered->id.value, &cursor->id.value))
+				return 1;
+			if (cursor->parent == UINT32_MAX ||
+			    cursor->parent >= model->refinement_tree.node_count)
+				break;
+			cursor = &model->refinement_tree.nodes[cursor->parent];
+		}
+	}
+	return 0;
+}
+
+static int KernelCoversSourceAtom(const sg_rune_dynamics_model_t *model,
+	const sg_field_local_progress_kernel_t *kernel)
+{
+	size_t node;
+	int found_leaf = 0;
+
+	for (node = 0U; node < model->refinement_tree.node_count; node++)
+	{
+		const sg_field_refinement_node_t *leaf =
+			&model->refinement_tree.nodes[node];
+		if (leaf->children.count != 0U ||
+		    !StableSame(&leaf->atom.value, &kernel->source_atom.value))
+			continue;
+		found_leaf = 1;
+		if (!KernelCoversLeaf(model, kernel, leaf))
+			return 0;
+	}
+	return found_leaf;
+}
+
+static int RuleHasKernelRepresentation(const sg_rune_dynamics_model_t *model,
+	const sg_field_solution_t *solution, const sg_field_bellman_rule_t *rule)
 {
 	size_t index;
 
@@ -1749,7 +1810,9 @@ static int RuleHasKernelRepresentation(const sg_field_solution_t *solution,
 	for (index = 0U; index < solution->rule_count; index++)
 		if (solution->rules[index].source_node == rule->source_node &&
 		    solution->rules[index].choice_index == rule->choice_index &&
-		    solution->rules[index].kernel_index != FIELD_NO_KERNEL)
+		    solution->rules[index].kernel_index != FIELD_NO_KERNEL &&
+		    KernelCoversSourceAtom(model, &model->local_progress_kernels[
+			solution->rules[index].kernel_index]))
 			return 1;
 	return 0;
 }
@@ -1789,7 +1852,11 @@ static sg_field_status_t BuildBellmanCosts(
 				sg_rune_cost_bounds_t candidate;
 				sg_rune_cost_bounds_t endpoint;
 				if (solution->rules[rule_index].source_node != node ||
-				    RuleHasKernelRepresentation(solution,
+				    (solution->rules[rule_index].kernel_index != FIELD_NO_KERNEL &&
+				     !KernelCoversSourceAtom(model,
+					&model->local_progress_kernels[solution->rules[
+						rule_index].kernel_index])) ||
+				    RuleHasKernelRepresentation(model, solution,
 					&solution->rules[rule_index]) ||
 				    !RuleIntervalCost(model, solution,
 					&solution->rules[rule_index], &candidate, &endpoint))
@@ -2485,7 +2552,8 @@ sg_field_status_t SG_FieldServiceRefresh(sg_field_service_t *service,
 	if (status != SG_FIELD_STATUS_OK)
 		return status;
 	previous_lease = FindLease(service, previous, &previous_link);
-	if (!previous_lease || !previous_link)
+	if (!previous_lease || !previous_link ||
+	    memcmp(&previous_lease->handle, previous, sizeof(*previous)) != 0)
 		return SG_FIELD_STATUS_STALE;
 	if (!TerminalSameSemanticTarget(&previous_lease->entry->terminal.value,
 		terminal))
@@ -2676,21 +2744,6 @@ static int StateInsideCapture(const sg_localized_field_state_t *state,
 	}
 	return state->elapsed_ms >= capture->local_elapsed_ms.min_value &&
 		state->elapsed_ms <= capture->local_elapsed_ms.max_value;
-}
-
-static int KernelCoversLeaf(const sg_rune_dynamics_model_t *model,
-	const sg_field_local_progress_kernel_t *kernel,
-	const sg_field_refinement_node_t *leaf)
-{
-	size_t index;
-
-	for (index = kernel->covered_sources.first;
-	     index < (size_t)kernel->covered_sources.first +
-		kernel->covered_sources.count; index++)
-		if (StableSame(&model->local_progress_sources[index].value,
-			&leaf->id.value))
-			return 1;
-	return 0;
 }
 
 static int ChoiceReferencedByKernel(const sg_rune_dynamics_model_t *model,
@@ -2952,8 +3005,29 @@ static int ContinuousArrivalCost(const sg_rune_dynamics_model_t *model,
 		if (offset < minimum_offset)
 			minimum_offset = offset;
 	}
-	if (minimum_offset == UINT64_MAX ||
-	    !SafeAddU64(entry->solution.costs[node].lower_us, minimum_offset,
+	if (minimum_offset == UINT64_MAX)
+	{
+		size_t rule_index;
+		int ordinary_rule = 0;
+		for (rule_index = 0U; rule_index < entry->solution.rule_count;
+		     rule_index++)
+		{
+			sg_rune_cost_bounds_t endpoint;
+			uint64_t minimum;
+			if (entry->solution.rules[rule_index].kernel_index ==
+				FIELD_NO_KERNEL && QueryRuleEligible(model, entry, leaf,
+					region, node, state->sampled_at_ms, rule_index,
+					&endpoint, &minimum))
+			{
+				ordinary_rule = 1;
+				break;
+			}
+		}
+		if (!ordinary_rule)
+			return 0;
+		minimum_offset = 0U;
+	}
+	if (!SafeAddU64(entry->solution.costs[node].lower_us, minimum_offset,
 		&cost_out->lower_us) ||
 	    !SafeAddU64(entry->solution.costs[node].upper_us, minimum_offset,
 		&cost_out->upper_us) ||
