@@ -29,6 +29,7 @@ static sg_localization_observation_t captured_observation;
 static sg_localization_environment_t captured_environment;
 static sg_localization_request_t captured_request;
 static int captured_previous;
+static int subject_state_calls;
 
 rune_t *SG_Rune(void)
 {
@@ -62,6 +63,33 @@ sg_host_law_result_t SG_HostLawProductionSubject(
 	memset(subject_out, 0, sizeof(*subject_out));
 	subject_out->client_id = client_id;
 	subject_out->spawn_generation = spawn_generation;
+	return result;
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectState(
+	const sg_host_law_runtime_authority_t *host_authority,
+	const sg_localization_subject_t *subject,
+	sg_host_pmove_state_observation_t *observation_out)
+{
+	sg_host_law_result_t result;
+
+	(void)host_authority;
+	memset(&result, 0, sizeof(result));
+	result.status = SG_HOST_LAW_OK;
+	result.element = SG_HOST_LAW_ELEMENT_NONE;
+	if (!subject || subject->spawn_generation != spawn_generation ||
+		!observation_out)
+	{
+		result.status = SG_HOST_LAW_INVALID_ARGUMENT;
+		return result;
+	}
+	memset(observation_out, 0, sizeof(*observation_out));
+	observation_out->state = client.ps.pmove;
+	memcpy(observation_out->origin, entity.s.origin,
+		sizeof(observation_out->origin));
+	memcpy(observation_out->velocity, entity.velocity,
+		sizeof(observation_out->velocity));
+	subject_state_calls++;
 	return result;
 }
 
@@ -150,13 +178,15 @@ static int TestLifeAndMotion(void)
 
 	level.framenum = 0;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	CHECK(sg_bots[0].localization_event ==
+	CHECK(subject_state_calls == 1);
+	CHECK(captured_observation.kind ==
 		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
+	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
+	CHECK(captured_observation.position[0] == entity.s.origin[0]);
 	request = PmoveRequest(NULL);
 	result = PmoveResult(0U, 10.0f);
 	SG_BotLocalizationObservePmove(&entity, &request, &result);
-	CHECK(captured_observation.kind ==
-		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
+	CHECK(captured_observation.kind == SG_LOCALIZATION_OBSERVATION_PRESENT);
 	CHECK(!captured_previous && captured_request.maximum_recovery_distance == 0.0f);
 	CHECK(captured_request.maximum_temporary_absence_ms == 0U);
 	CHECK(captured_observation.position[0] == result.origin[0]);
@@ -204,9 +234,9 @@ static int TestInvalidationAndSlotReuse(void)
 	spawn_generation++;
 	level.framenum++;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
+	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) != NULL);
 	CHECK(sg_bots[0].localization_subject.spawn_generation == spawn_generation);
-	CHECK(sg_bots[0].localization_event ==
+	CHECK(captured_observation.kind ==
 		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
 	request = PmoveRequest(NULL);
 	result = PmoveResult(0U, 20.0f);
@@ -216,16 +246,31 @@ static int TestInvalidationAndSlotReuse(void)
 	state_current = 0;
 	level.framenum++;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
+	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) != NULL);
+	CHECK(!captured_previous);
 	state_current = 1;
 
 	request.command.msec = 25U;
 	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
 	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
 
+	request = PmoveRequest(NULL);
+	result = PmoveResult(0U, 24.0f);
+	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
+	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
 	bot_entity->deadflag = DEAD_DEAD;
-	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	CHECK(sg_bots[0].localization_subject.spawn_generation == 0U);
+	{
+		int calls_before_death = subject_state_calls;
+
+		SG_BotLocalizationFrameBegin(&sg_bots[0]);
+		CHECK(subject_state_calls == calls_before_death);
+		CHECK(sg_bots[0].localization_subject.spawn_generation ==
+			spawn_generation);
+		CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
+	}
+	/* Think_Dead consumes the terminal cell once, then ends the life. */
+	SG_BotLocalizationReset(&sg_bots[0]);
+	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
 	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
 	bot_entity->deadflag = DEAD_NO;
 

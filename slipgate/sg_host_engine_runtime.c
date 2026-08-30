@@ -282,6 +282,43 @@ int SG_HostEngineRuntimeOwnerSubjectCurrent(
 		RuntimeSubjectCurrent(runtime, &subject);
 }
 
+int SG_HostEngineRuntimeOwnerSubjectState(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity,
+	sg_host_pmove_state_observation_t *observation_out)
+{
+	sg_host_engine_subject_t subject;
+	uint32_t axis;
+
+	if (observation_out)
+		memset(observation_out, 0, sizeof(*observation_out));
+	if (!observation_out ||
+		!RuntimeExactBotSubject(runtime, identity, &subject))
+		return 0;
+	observation_out->state = subject.client->ps.pmove;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		observation_out->origin[axis] =
+			observation_out->state.origin[axis] * 0.125f;
+		observation_out->velocity[axis] =
+			observation_out->state.velocity[axis] * 0.125f;
+		if (!SameFloat(observation_out->origin[axis],
+				subject.entity->s.origin[axis]) ||
+			!SameFloat(observation_out->velocity[axis],
+				subject.entity->velocity[axis]))
+		{
+			memset(observation_out, 0, sizeof(*observation_out));
+			return 0;
+		}
+	}
+	if (!RuntimeSubjectCurrent(runtime, &subject))
+	{
+		memset(observation_out, 0, sizeof(*observation_out));
+		return 0;
+	}
+	return 1;
+}
+
 sg_host_engine_runtime_status_t SG_HostEngineRuntimeBegin(
 	const char *mapname, sg_host_engine_runtime_t **runtime_out)
 {

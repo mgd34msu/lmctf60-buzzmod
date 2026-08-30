@@ -7,6 +7,7 @@ ARACH = (ROOT / "slipgate/sg_arach.c").read_text()
 CLIENT = (ROOT / "slipgate/sg_client.c").read_text()
 PMOVE = (ROOT / "p_client.c").read_text()
 MAIN = (ROOT / "g_main.c").read_text()
+LOCALIZATION = (ROOT / "slipgate/sg_bot_localization.c").read_text()
 
 
 def section(source: str, start: str, end: str) -> str:
@@ -55,8 +56,27 @@ def test_lifecycle_resets_and_neutral_recovery() -> None:
     assert "Cmd_Kill_f" not in recovery
 
 
+def test_bootstrap_and_death_cell_ordering() -> None:
+    frame_begin = section(
+        LOCALIZATION,
+        "void SG_BotLocalizationFrameBegin",
+        "\nstatic uint64_t FrameSequence",
+    )
+    assert "SG_HostLawProductionSubject(" in frame_begin
+    assert "if (bot->ent->deadflag != DEAD_NO)" in frame_begin
+    assert "Bootstrap(bot);" in frame_begin
+    assert frame_begin.index("if (bot->ent->deadflag != DEAD_NO)") < frame_begin.index(
+        "Bootstrap(bot);"
+    )
+
+    death = section(ARACH, "static qboolean Think_Dead", "\nstatic void Think_RespawnEdge")
+    assert death.index("Danger_Learn(") < death.index("SG_BotLocalizationReset(bot);")
+    assert death.index("Tilt_Note(") < death.index("SG_BotLocalizationReset(bot);")
+
+
 if __name__ == "__main__":
     test_one_typed_current_position_owner()
     test_bot_only_pmove_observation()
     test_lifecycle_resets_and_neutral_recovery()
+    test_bootstrap_and_death_cell_ordering()
     print("bot localization integration checks passed")

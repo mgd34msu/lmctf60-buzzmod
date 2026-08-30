@@ -51,6 +51,10 @@ sg_host_law_result_t SG_HostLawPublicationOwnerSubject(
 sg_host_law_result_t SG_HostLawPublicationOwnerSubjectCurrent(
 	const sg_host_law_publication_t *publication,
 	const sg_host_engine_subject_identity_t *subject);
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectState(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject,
+	sg_host_pmove_state_observation_t *observation_out);
 sg_host_law_result_t SG_HostLawPublicationOwnerReplayFrame(
 	const sg_host_law_publication_t *publication,
 	const sg_host_engine_subject_identity_t *subject,

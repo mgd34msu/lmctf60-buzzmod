@@ -877,6 +877,7 @@ static void TestEngineRuntimeOwnerBinding(void)
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error;
 	sg_host_engine_subject_identity_t subject;
+	sg_host_pmove_state_observation_t state_observation;
 	sg_host_pmove_substep_t replay_substeps[4];
 	sg_host_pmove_trace_t replay_traces[8];
 	sg_host_pmove_replay_workspace_t replay_workspace;
@@ -911,6 +912,21 @@ static void TestEngineRuntimeOwnerBinding(void)
 	CHECK(subject.client_id == 1U && subject.reserved == 0U &&
 		subject.spawn_generation == UINT64_C(0x1001));
 	CHECK(SG_HostEngineRuntimeOwnerSubjectCurrent(runtime, &subject));
+	runtime_clients[1].ps.pmove.origin[0] = 80;
+	runtime_clients[1].ps.pmove.velocity[1] = -24;
+	runtime_edicts[1].s.origin[0] = 10.0f;
+	runtime_edicts[1].velocity[1] = -3.0f;
+	CHECK(SG_HostEngineRuntimeOwnerSubjectState(runtime, &subject,
+		&state_observation));
+	CHECK(state_observation.state.origin[0] == 80 &&
+		state_observation.origin[0] == 10.0f &&
+		state_observation.velocity[1] == -3.0f);
+	runtime_edicts[1].s.origin[0] = 10.125f;
+	CHECK(!SG_HostEngineRuntimeOwnerSubjectState(runtime, &subject,
+		&state_observation));
+	CHECK(state_observation.state.origin[0] == 0 &&
+		state_observation.origin[0] == 0.0f);
+	runtime_edicts[1].s.origin[0] = 10.0f;
 	CHECK(SG_HostEngineRuntimeTrace(runtime, 1U, start, mins, maxs, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace));
 	CHECK(runtime_last_passent == &runtime_edicts[1]);
@@ -1403,6 +1419,7 @@ static void TestOwnerFailClosedAndDrift(void)
 	sg_host_collision_trace_t trace;
 	sg_host_collision_pose_t pose;
 	sg_host_law_subject_t subject;
+	sg_host_pmove_state_observation_t state_observation;
 	sg_host_law_runtime_authority_t authority;
 	sg_host_law_runtime_authority_t replacement_authority;
 	sg_host_pmove_substep_t replay_substeps[4];
@@ -1492,6 +1509,11 @@ static void TestOwnerFailClosedAndDrift(void)
 		subject.spawn_generation == UINT64_C(0x1001));
 	CHECK(SG_HostLawProductionSubjectCurrent(&authority, &subject).status ==
 		SG_HOST_LAW_OK);
+	result = SG_HostLawProductionSubjectState(&authority, &subject,
+		&state_observation);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		state_observation.state.origin[0] == 0 &&
+		state_observation.origin[0] == 0.0f);
 	CHECK(SG_HostLawProductionSubjectClassifyPose(&authority, &subject, start,
 		SG_RUNE_STANCE_STANDING, &pose).status == SG_HOST_LAW_OK);
 	CHECK(pose.valid && !pose.supported);

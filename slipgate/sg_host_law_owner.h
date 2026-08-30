@@ -62,6 +62,10 @@ sg_host_law_result_t SG_HostLawProductionSubject(
 sg_host_law_result_t SG_HostLawProductionSubjectCurrent(
 	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject);
+sg_host_law_result_t SG_HostLawProductionSubjectState(
+	const sg_host_law_runtime_authority_t *authority,
+	const sg_host_law_subject_t *subject,
+	sg_host_pmove_state_observation_t *observation_out);
 sg_host_law_result_t SG_HostLawProductionReplayFrame(
 	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject,

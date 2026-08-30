@@ -2,6 +2,7 @@
 #include "sg_local.h"
 #include "sg_bot.h"
 #include "sg_bot_localization.h"
+#include "sg_host_engine_pmove.h"
 #include "sg_route_dither.h"
 
 #include <limits.h>
@@ -11,11 +12,45 @@
 #define SG_BOT_LOCALIZATION_REPLAY_TRACES 4096U
 #define SG_BOT_LOCALIZATION_NUMERIC_DRIFT 0.5f
 
+/* These arrays cover the exact selected-engine frame/substep contract and its
+ * audited trace-callback bound.  They are deliberately compile-time products:
+ * a host ABI change cannot silently shrink the live localization workspace. */
+_Static_assert(SG_BOT_LOCALIZATION_REPLAY_SUBSTEPS >=
+	SG_HOST_ENGINE_FRAME_MS / SG_HOST_ENGINE_PMOVE_SUBSTEP_MS,
+	"bot localization replay substeps cover one engine frame");
+_Static_assert(SG_BOT_LOCALIZATION_REPLAY_TRACES >=
+	SG_HOST_ENGINE_PMOVE_REPLAY_TRACE_LIMIT,
+	"bot localization replay traces cover one engine frame");
+
 static const sg_cell_phase_runtime_t *sg_bot_localization_runtime;
 static sg_host_pmove_substep_t
 	sg_bot_localization_substeps[SG_BOT_LOCALIZATION_REPLAY_SUBSTEPS];
 static sg_host_pmove_trace_t
 	sg_bot_localization_traces[SG_BOT_LOCALIZATION_REPLAY_TRACES];
+
+static void InvalidateState(sg_bot_t *bot);
+static void Localize(sg_bot_t *bot,
+	sg_localization_observation_kind_t kind,
+	const sg_host_pmove_request_t *pmove_request,
+	const sg_host_pmove_result_t *pmove_result,
+	const sg_host_pmove_state_observation_t *live_state);
+
+static void Bootstrap(sg_bot_t *bot)
+{
+	sg_host_pmove_state_observation_t observation;
+	sg_host_law_result_t result;
+
+	memset(&observation, 0, sizeof(observation));
+	result = SG_HostLawProductionSubjectState(
+		&sg_bot_localization_runtime->host_authority,
+		&bot->localization_subject, &observation);
+	if (result.status != SG_HOST_LAW_OK)
+	{
+		InvalidateState(bot);
+		return;
+	}
+	Localize(bot, bot->localization_event, NULL, NULL, &observation);
+}
 
 static int SubjectEqual(const sg_localization_subject_t *left,
 	const sg_localization_subject_t *right)
@@ -75,11 +110,12 @@ void SG_BotLocalizationFrameBegin(sg_bot_t *bot)
 {
 	sg_localization_subject_t subject;
 	sg_host_law_result_t host_result;
+	int same_subject;
 
 	if (!bot)
 		return;
 	if (!bot->active || !bot->ent || !bot->ent->inuse ||
-		!bot->ent->client || bot->ent->deadflag != DEAD_NO ||
+		!bot->ent->client ||
 		!sg_bot_localization_runtime ||
 		!SG_CellPhaseRuntimeCurrent(sg_bot_localization_runtime))
 	{
@@ -95,12 +131,14 @@ void SG_BotLocalizationFrameBegin(sg_bot_t *bot)
 		SG_BotLocalizationReset(bot);
 		return;
 	}
-	if (!SubjectEqual(&bot->localization_subject, &subject))
+	same_subject = SubjectEqual(&bot->localization_subject, &subject);
+	if (!same_subject)
 	{
 		SG_BotLocalizationReset(bot);
+		if (bot->ent->deadflag != DEAD_NO)
+			return;
 		bot->localization_subject = subject;
 		bot->localization_event = SG_LOCALIZATION_OBSERVATION_NEW_SPAWN;
-		return;
 	}
 	if (bot->localized_state.rune_identity != 0U &&
 		!SG_CellPhaseLocalizedStateCurrent(sg_bot_localization_runtime,
@@ -109,6 +147,12 @@ void SG_BotLocalizationFrameBegin(sg_bot_t *bot)
 		InvalidateState(bot);
 		bot->localization_event = SG_LOCALIZATION_OBSERVATION_PRESENT;
 	}
+	/* The terminal state remains current through Think_Dead's one death event.
+	 * That consumer resets the life immediately after learning from the cell. */
+	if (bot->ent->deadflag != DEAD_NO)
+		return;
+	if (!SG_BotLocalizationCurrent(bot))
+		Bootstrap(bot);
 }
 
 static uint64_t FrameSequence(void)
@@ -174,7 +218,8 @@ static void RecordTransition(sg_bot_t *bot,
 static void Localize(sg_bot_t *bot,
 	sg_localization_observation_kind_t kind,
 	const sg_host_pmove_request_t *pmove_request,
-	const sg_host_pmove_result_t *pmove_result)
+	const sg_host_pmove_result_t *pmove_result,
+	const sg_host_pmove_state_observation_t *live_state)
 {
 	sg_localization_observation_t observation;
 	sg_localization_environment_t environment;
@@ -211,6 +256,10 @@ static void Localize(sg_bot_t *bot,
 		observation.stance =
 			(pmove_result->state.pm_flags & PMF_DUCKED) ?
 			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+	else if (live_state)
+		observation.stance =
+			(live_state->state.pm_flags & PMF_DUCKED) ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
 	else
 		observation.stance = previous_ptr ? previous_ptr->stance :
 			SG_RUNE_STANCE_STANDING;
@@ -228,6 +277,14 @@ static void Localize(sg_bot_t *bot,
 		memcpy(observation.velocity, pmove_result->velocity,
 			sizeof(observation.velocity));
 		observation.host_state = pmove_result->state;
+	}
+	else if (live_state)
+	{
+		memcpy(observation.position, live_state->origin,
+			sizeof(observation.position));
+		memcpy(observation.velocity, live_state->velocity,
+			sizeof(observation.velocity));
+		observation.host_state = live_state->state;
 	}
 
 	memset(&environment, 0, sizeof(environment));
@@ -284,6 +341,11 @@ void SG_BotLocalizationObservePmove(edict_t *entity,
 
 	if (!bot || !request || !result)
 		return;
+	if (entity->deadflag != DEAD_NO)
+	{
+		SG_BotLocalizationReset(bot);
+		return;
+	}
 	if (!sg_bot_localization_runtime ||
 		!SG_CellPhaseRuntimeCurrent(sg_bot_localization_runtime))
 	{
@@ -301,7 +363,7 @@ void SG_BotLocalizationObservePmove(edict_t *entity,
 	if ((result->state.pm_flags & PMF_TIME_TELEPORT) != 0 &&
 		(bot->localized_state.host_state.pm_flags & PMF_TIME_TELEPORT) == 0)
 		kind = SG_LOCALIZATION_OBSERVATION_TELEPORTED;
-	Localize(bot, kind, request, result);
+	Localize(bot, kind, request, result, NULL);
 }
 
 void SG_BotLocalizationFrameEnd(sg_bot_t *bot)
@@ -315,5 +377,5 @@ void SG_BotLocalizationFrameEnd(sg_bot_t *bot)
 	if (!current || current->frame_sequence == frame_sequence)
 		return;
 	Localize(bot, SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT,
-		NULL, NULL);
+		NULL, NULL, NULL);
 }

@@ -10,6 +10,10 @@
 #define SG_HOST_ENGINE_PMOVE_FRACTION_BITS UINT32_C(3)
 #define SG_HOST_ENGINE_PMOVE_SUBSTEP_MS UINT32_C(25)
 #define SG_HOST_ENGINE_FRAME_MS UINT32_C(100)
+/* Audited upper bound for trace callbacks made by one selected-engine Pmove
+ * frame.  Replay fails with SG_HOST_PMOVE_ERROR_CAPACITY if a replacement
+ * engine violates the captured ABI bound. */
+#define SG_HOST_ENGINE_PMOVE_REPLAY_TRACE_LIMIT UINT32_C(4096)
 #define SG_HOST_ENGINE_GRAVITY_MIN UINT32_C(1)
 #define SG_HOST_ENGINE_GRAVITY_MAX UINT32_C(32767)
 #define SG_HOST_ENGINE_PHYSICS_FLAGS UINT32_C(0)
