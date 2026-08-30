@@ -21,7 +21,7 @@ typedef struct fixture_s
 {
 	sg_bsp_world_t world;
 	sg_bsp_plane_t planes[19];
-	sg_bsp_node_t nodes[2];
+	sg_bsp_node_t nodes[3];
 	sg_bsp_leaf_t leaves[4];
 	uint32_t leaf_brushes[7];
 	sg_bsp_model_t models[2];
@@ -1042,6 +1042,89 @@ static void TestConfigurationBuilderComposition(void)
 	SG_ConfigurationDestroy(configuration);
 }
 
+static void TestConfigurationBuilderCanonicalNearCorner(void)
+{
+	fixture_t fixture = Fixture();
+	sg_configuration_space_t *configuration = NULL;
+	sg_configuration_semantics_t *semantics = NULL;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_limits_t limits;
+	uint32_t cell, face;
+	int saw_diagonal = 0;
+
+	SetPlane(&fixture.planes[0], 1.0f, 0.0f, 0.0f, 1.0f);
+	SetPlane(&fixture.planes[1], 0.0f, 1.0f, 0.0f, 1.0f);
+	SetPlane(&fixture.planes[2], 1.0f, 1.0f, 0.0f, 1.99998f);
+	fixture.nodes[0].plane = 0;
+	fixture.nodes[0].children[0] = -1;
+	fixture.nodes[0].children[1] = 1;
+	fixture.nodes[1].plane = 1;
+	fixture.nodes[1].children[0] = -2;
+	fixture.nodes[1].children[1] = 2;
+	fixture.nodes[2].plane = 2;
+	fixture.nodes[2].children[0] = -3;
+	fixture.nodes[2].children[1] = -4;
+	fixture.world.plane_count = 3;
+	fixture.world.node_count = 3;
+	fixture.world.model_count = 1;
+	fixture.world.brush_count = 0;
+	fixture.world.brush_side_count = 0;
+	fixture.world.leaf_brush_count = 0;
+	fixture.models[0].headnode = 0;
+	for (cell = 0; cell < fixture.world.leaf_count; cell++)
+	{
+		fixture.leaves[cell].contents = 0;
+		fixture.leaves[cell].cluster = (int32_t)cell;
+		fixture.leaves[cell].area = cell + 1U;
+		fixture.leaves[cell].first_leaf_brush = 0;
+		fixture.leaves[cell].leaf_brush_count = 0;
+	}
+	BindFixture(&fixture);
+	CHECK(SG_ConfigurationBuild(&fixture.authority, NULL, &configuration,
+		&configuration_error));
+	if (!configuration)
+		return;
+	CHECK(SG_ConfigurationAudit(&fixture.authority, configuration,
+		&configuration_audit));
+	for (cell = 0; cell < configuration->cell_count; cell++)
+		for (face = configuration->cells[cell].first_face;
+			face < configuration->cells[cell].first_face +
+				configuration->cells[cell].face_count; face++)
+		{
+			const sg_configuration_face_t *candidate =
+				&configuration->faces[face];
+			uint32_t a, b;
+
+			for (a = 0; a < candidate->vertex_count; a++)
+				for (b = a + 1U; b < candidate->vertex_count; b++)
+				{
+					const float *left = configuration->vertices[
+						candidate->first_vertex + a].value;
+					const float *right = configuration->vertices[
+						candidate->first_vertex + b].value;
+					float dx = left[0] - right[0];
+					float dy = left[1] - right[1];
+					float dz = left[2] - right[2];
+
+					CHECK(dx * dx + dy * dy + dz * dz >= 0.0000000001f);
+				}
+			if (candidate->plane.source_kind == SG_CONFIGURATION_PLANE_BSP &&
+				candidate->plane.source_index == 2U)
+			{
+				saw_diagonal = 1;
+				CHECK(candidate->vertex_count == 4U);
+			}
+		}
+	CHECK(saw_diagonal);
+	SG_ConfigurationSemanticsDefaultLimits(&limits);
+	CHECK(SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
+		&limits, &semantics, &semantics_error));
+	SG_ConfigurationSemanticsDestroy(semantics);
+	SG_ConfigurationDestroy(configuration);
+}
+
 int main(void)
 {
 	TestVolumetricWaterAndAudit();
@@ -1052,6 +1135,7 @@ int main(void)
 	TestNonAxialHookSurfaceSelfAudit();
 	TestTransactionalOverflowAndMutationAudit();
 	TestMalformedSourceFailsClosed();
+	TestConfigurationBuilderCanonicalNearCorner();
 	TestConfigurationBuilderComposition();
 	if (failures)
 	{
