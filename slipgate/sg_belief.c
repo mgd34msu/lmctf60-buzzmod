@@ -51,9 +51,32 @@ struct sg_belief_horizon_authority_s
 	struct sg_belief_horizon_authority_s *next_issued;
 };
 
+/* Scopes are level-owned private leases.  Unlike public issued handles, a
+ * scope's source and authority addresses never escape its owner, so their
+ * payloads may be replaced without weakening public stale-handle ABA rules. */
+struct sg_belief_horizon_scope_s
+{
+	sg_belief_horizon_source_t source;
+	sg_belief_horizon_authority_t authority;
+	/* The authority owns the direct state-to-frame kernel.  Delayed evidence
+	 * needs one more exact observed-to-frame kernel; frame_kernels is only a
+	 * borrowed, sorted vector over those two owned kernel payloads. */
+	sg_belief_horizon_kernel_t *evidence_kernels;
+	size_t evidence_kernel_count;
+	sg_belief_horizon_kernel_t *frame_kernels;
+	size_t frame_kernel_count;
+	struct sg_belief_horizon_scope_s *next_scope;
+};
+
 static sg_belief_horizon_source_t *belief_issued_sources;
 static sg_belief_horizon_authority_t *belief_issued_authorities;
+static sg_belief_horizon_scope_t *belief_horizon_scopes;
 static uint64_t belief_next_issuance_identity = 1U;
+
+#if defined(SG_BELIEF_TESTING)
+static sg_belief_horizon_accept_result_t belief_scope_fail_next;
+static size_t belief_scope_allocation_count;
+#endif
 
 /* Retired handle records remain as tombstones. Their addresses cannot reenter
  * the allocator, and issuance identities never derive from belief state. */
@@ -950,6 +973,29 @@ static sg_belief_horizon_authority_t *BeliefHorizonAuthorityRecord(
 		if (cursor == authority)
 			return cursor;
 	return NULL;
+}
+
+static sg_belief_horizon_scope_t *BeliefHorizonScopeRecord(
+	const sg_belief_horizon_scope_t *scope)
+{
+	sg_belief_horizon_scope_t *cursor;
+
+	for (cursor = belief_horizon_scopes; cursor; cursor = cursor->next_scope)
+		if (cursor == scope)
+			return cursor;
+	return NULL;
+}
+
+static int BeliefHorizonAuthorityScoped(
+	const sg_belief_horizon_authority_t *authority)
+{
+	sg_belief_horizon_scope_t *scope;
+
+	for (scope = belief_horizon_scopes; scope; scope = scope->next_scope)
+		if (&scope->authority == authority)
+			return scope->authority.active == 1U &&
+				scope->authority.issuance_identity == 0U;
+	return 0;
 }
 
 static int BeliefHorizonSourceIssued(
@@ -2258,6 +2304,7 @@ static int BeliefHorizonRegistriesDisjointFromAll(
 {
 	const sg_belief_horizon_source_t *source;
 	const sg_belief_horizon_authority_t *authority;
+	const sg_belief_horizon_scope_t *scope;
 	belief_byte_range_t read;
 
 	for (source = belief_issued_sources; source;
@@ -2271,9 +2318,27 @@ static int BeliefHorizonRegistriesDisjointFromAll(
 	     authority = authority->next_issued)
 		if (!BeliefByteRange(authority, 1U, sizeof(*authority), &read) ||
 		    !BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
-		    !BeliefHorizonPayloadDisjointFromAll(authority->kernels,
+			!BeliefHorizonPayloadDisjointFromAll(authority->kernels,
 			authority->kernel_count, writable, writable_count))
 			return 0;
+	for (scope = belief_horizon_scopes; scope; scope = scope->next_scope)
+	{
+		source = &scope->source;
+		authority = &scope->authority;
+		if (!BeliefByteRange(source, 1U, sizeof(*source), &read) ||
+			!BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
+			!BeliefHorizonPayloadDisjointFromAll(source->kernels,
+				source->kernel_count, writable, writable_count) ||
+			!BeliefByteRange(authority, 1U, sizeof(*authority), &read) ||
+			!BeliefRangeDisjointFromAll(&read, writable, writable_count) ||
+			!BeliefHorizonPayloadDisjointFromAll(authority->kernels,
+				authority->kernel_count, writable, writable_count) ||
+			!BeliefHorizonPayloadDisjointFromAll(scope->evidence_kernels,
+				scope->evidence_kernel_count, writable, writable_count) ||
+			!BeliefHorizonPayloadDisjointFromAll(scope->frame_kernels,
+				scope->frame_kernel_count, writable, writable_count))
+			return 0;
+	}
 	return 1;
 }
 
@@ -3518,7 +3583,8 @@ static int BeliefHorizonAuthorityValid(
 {
 	sg_rune_v2_content_id_t identity;
 
-	if (!BeliefHorizonAuthorityIssued(authority) ||
+	if ((!BeliefHorizonAuthorityIssued(authority) &&
+	     !BeliefHorizonAuthorityScoped(authority)) ||
 	    !BeliefHorizonProvenanceMatches(&authority->provenance, snapshot,
 		state, to_time_ms) ||
 	    !BeliefHorizonChainValid(snapshot, authority->kernels,
@@ -3866,6 +3932,282 @@ void SG_BeliefHorizonAuthorityDestroy(
 	memset(&record->chain_identity, 0, sizeof(record->chain_identity));
 }
 
+static void BeliefHorizonScopePayloadClear(
+	sg_belief_horizon_scope_t *scope)
+{
+	if (!scope)
+		return;
+	BeliefHorizonKernelsDestroy(scope->source.kernels,
+		scope->source.kernel_count);
+	BeliefHorizonKernelsDestroy(scope->authority.kernels,
+		scope->authority.kernel_count);
+	BeliefHorizonKernelsDestroy(scope->evidence_kernels,
+		scope->evidence_kernel_count);
+	free(scope->frame_kernels);
+	memset(&scope->source, 0, sizeof(scope->source));
+	memset(&scope->authority, 0, sizeof(scope->authority));
+	scope->evidence_kernels = NULL;
+	scope->evidence_kernel_count = 0U;
+	scope->frame_kernels = NULL;
+	scope->frame_kernel_count = 0U;
+}
+
+static sg_belief_horizon_accept_result_t BeliefHorizonScopeSourceBuild(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state, uint64_t to_time_ms,
+	sg_belief_horizon_source_t *source)
+{
+	belief_work_counters_t counters;
+	int overflowed = 0;
+	int invalid = 0;
+
+	if (!snapshot || !state || !source ||
+		!BeliefStateBoundToSnapshot(snapshot, state) ||
+		to_time_ms <= state->updated_at_ms)
+		return SG_BELIEF_HORIZON_REJECTED_INVALID;
+	memset(source, 0, sizeof(*source));
+	source->kernels = BeliefHorizonFixedPointCreate(snapshot,
+		state->updated_at_ms, to_time_ms, &overflowed, &invalid);
+	if (!source->kernels)
+		return overflowed ? SG_BELIEF_HORIZON_OVERFLOW :
+			invalid ? SG_BELIEF_HORIZON_REJECTED_INVALID :
+			SG_BELIEF_HORIZON_ALLOCATION_FAILED;
+	source->provenance.issuer_identity = BELIEF_HORIZON_ISSUER_ID;
+	source->provenance.source_identity = snapshot->identity;
+	source->provenance.source_generation = state->generation;
+	source->provenance.fixed_point_identity = snapshot->topology_revision;
+	source->provenance.rune_identity = snapshot->identity;
+	source->provenance.topology_revision = snapshot->topology_revision;
+	source->provenance.state_generation = state->generation;
+	source->provenance.state_revision = state->revision;
+	source->provenance.state_time_ms = state->updated_at_ms;
+	source->provenance.state_frame_sequence = state->last_frame_sequence;
+	source->provenance.to_time_ms = to_time_ms;
+	source->provenance.audience_team = state->audience_team;
+	source->provenance.target_team = state->target_team;
+	source->provenance.target_life = state->target_life;
+	source->kernel_count = 1U;
+	memset(&counters, 0, sizeof(counters));
+	if (!BeliefHorizonChainValid(snapshot, source->kernels,
+		source->kernel_count, state->updated_at_ms, to_time_ms, &counters) ||
+		!BeliefHorizonChainIdentity(&source->provenance, source->kernels,
+			source->kernel_count, &source->chain_identity))
+	{
+		BeliefHorizonKernelsDestroy(source->kernels, source->kernel_count);
+		memset(source, 0, sizeof(*source));
+		return counters.overflowed ? SG_BELIEF_HORIZON_OVERFLOW :
+			SG_BELIEF_HORIZON_REJECTED_INVALID;
+	}
+	source->active = 1U;
+	return SG_BELIEF_HORIZON_ACCEPTED;
+}
+
+static sg_belief_horizon_accept_result_t BeliefHorizonScopeAuthorityBuild(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state,
+	const sg_belief_horizon_source_t *source,
+	sg_belief_horizon_authority_t *authority)
+{
+	belief_work_counters_t counters;
+
+	if (!snapshot || !state || !source || !authority ||
+		source->active != 1U || source->issuance_identity != 0U ||
+		!BeliefHorizonProvenanceMatches(&source->provenance, snapshot, state,
+			source->provenance.to_time_ms))
+		return SG_BELIEF_HORIZON_REJECTED_INVALID;
+	memset(&counters, 0, sizeof(counters));
+	if (!BeliefHorizonChainValid(snapshot, source->kernels,
+		source->kernel_count, state->updated_at_ms,
+		source->provenance.to_time_ms, &counters))
+		return counters.overflowed ? SG_BELIEF_HORIZON_OVERFLOW :
+			SG_BELIEF_HORIZON_REJECTED_INVALID;
+	memset(authority, 0, sizeof(*authority));
+	authority->kernels = BeliefHorizonKernelsClone(source->kernels,
+		source->kernel_count);
+	if (!authority->kernels)
+		return SG_BELIEF_HORIZON_ALLOCATION_FAILED;
+	authority->provenance = source->provenance;
+	authority->kernel_count = source->kernel_count;
+	if (!BeliefHorizonChainIdentity(&authority->provenance,
+		authority->kernels, authority->kernel_count,
+		&authority->chain_identity))
+	{
+		BeliefHorizonKernelsDestroy(authority->kernels,
+			authority->kernel_count);
+		memset(authority, 0, sizeof(*authority));
+		return SG_BELIEF_HORIZON_ALLOCATION_FAILED;
+	}
+	authority->active = 1U;
+	return SG_BELIEF_HORIZON_ACCEPTED;
+}
+
+static sg_belief_horizon_accept_result_t BeliefHorizonScopeEvidenceBuild(
+	const sg_rune_runtime_snapshot_t *snapshot, uint64_t observed_at_ms,
+	uint64_t to_time_ms, sg_belief_horizon_kernel_t **kernels_out,
+	size_t *kernel_count_out)
+{
+	belief_work_counters_t counters;
+	sg_belief_horizon_kernel_t *kernels;
+	int overflowed = 0;
+	int invalid = 0;
+
+	if (!snapshot || !kernels_out || !kernel_count_out ||
+		observed_at_ms >= to_time_ms)
+		return SG_BELIEF_HORIZON_REJECTED_INVALID;
+	*kernels_out = NULL;
+	*kernel_count_out = 0U;
+	kernels = BeliefHorizonFixedPointCreate(snapshot, observed_at_ms,
+		to_time_ms, &overflowed, &invalid);
+	if (!kernels)
+		return overflowed ? SG_BELIEF_HORIZON_OVERFLOW :
+			invalid ? SG_BELIEF_HORIZON_REJECTED_INVALID :
+			SG_BELIEF_HORIZON_ALLOCATION_FAILED;
+	memset(&counters, 0, sizeof(counters));
+	if (!BeliefHorizonChainValid(snapshot, kernels, 1U, observed_at_ms,
+		to_time_ms, &counters))
+	{
+		BeliefHorizonKernelsDestroy(kernels, 1U);
+		return counters.overflowed ? SG_BELIEF_HORIZON_OVERFLOW :
+			SG_BELIEF_HORIZON_REJECTED_INVALID;
+	}
+	*kernels_out = kernels;
+	*kernel_count_out = 1U;
+	return SG_BELIEF_HORIZON_ACCEPTED;
+}
+
+sg_belief_horizon_scope_t *SG_BeliefHorizonScopeCreate(void)
+{
+	sg_belief_horizon_scope_t *scope = calloc(1U, sizeof(*scope));
+
+	if (!scope)
+		return NULL;
+	scope->next_scope = belief_horizon_scopes;
+	belief_horizon_scopes = scope;
+#if defined(SG_BELIEF_TESTING)
+	belief_scope_allocation_count++;
+#endif
+	return scope;
+}
+
+void SG_BeliefHorizonScopeDestroy(sg_belief_horizon_scope_t *scope)
+{
+	sg_belief_horizon_scope_t **cursor;
+
+	if (!scope)
+		return;
+	for (cursor = &belief_horizon_scopes; *cursor;
+		cursor = &(*cursor)->next_scope)
+		if (*cursor == scope)
+		{
+			*cursor = scope->next_scope;
+			BeliefHorizonScopePayloadClear(scope);
+			free(scope);
+			return;
+		}
+}
+
+sg_belief_horizon_accept_result_t SG_BeliefHorizonScopePrepare(
+	sg_belief_horizon_scope_t *scope,
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state, uint64_t to_time_ms,
+	uint64_t evidence_observed_at_ms)
+{
+	sg_belief_horizon_source_t source;
+	sg_belief_horizon_authority_t authority;
+	sg_belief_horizon_kernel_t *evidence_kernels = NULL;
+	sg_belief_horizon_kernel_t *frame_kernels = NULL;
+	size_t evidence_kernel_count = 0U;
+	size_t frame_kernel_count = 0U;
+	sg_belief_horizon_accept_result_t result;
+
+	if (!BeliefHorizonScopeRecord(scope))
+		return SG_BELIEF_HORIZON_REJECTED_INVALID;
+	if (!state || (evidence_observed_at_ms != 0U &&
+		(evidence_observed_at_ms < state->updated_at_ms ||
+		 evidence_observed_at_ms > to_time_ms)))
+		return SG_BELIEF_HORIZON_REJECTED_INVALID;
+#if defined(SG_BELIEF_TESTING)
+	if (belief_scope_fail_next != SG_BELIEF_HORIZON_ACCEPTED)
+	{
+		result = belief_scope_fail_next;
+		belief_scope_fail_next = SG_BELIEF_HORIZON_ACCEPTED;
+		return result;
+	}
+#endif
+	memset(&source, 0, sizeof(source));
+	memset(&authority, 0, sizeof(authority));
+	result = BeliefHorizonScopeSourceBuild(snapshot, state, to_time_ms,
+		&source);
+	if (result != SG_BELIEF_HORIZON_ACCEPTED)
+		return result;
+	result = BeliefHorizonScopeAuthorityBuild(snapshot, state, &source,
+		&authority);
+	if (result != SG_BELIEF_HORIZON_ACCEPTED)
+		goto failure;
+	/* The reducer needs both exact intervals: the direct projection advances
+	 * the accepted track, while the supplemental kernel advances evidence from
+	 * its authenticated observation time.  Both come from the same immutable
+	 * snapshot and are checked before replacing the current scope. */
+	if (evidence_observed_at_ms > state->updated_at_ms &&
+		evidence_observed_at_ms < to_time_ms)
+	{
+		result = BeliefHorizonScopeEvidenceBuild(snapshot,
+			evidence_observed_at_ms, to_time_ms, &evidence_kernels,
+			&evidence_kernel_count);
+		if (result != SG_BELIEF_HORIZON_ACCEPTED)
+			goto failure;
+		frame_kernel_count = 2U;
+		frame_kernels = calloc(frame_kernel_count, sizeof(*frame_kernels));
+		if (!frame_kernels)
+		{
+			result = SG_BELIEF_HORIZON_ALLOCATION_FAILED;
+			goto failure;
+		}
+		frame_kernels[0] = authority.kernels[0];
+		frame_kernels[1] = evidence_kernels[0];
+	}
+	BeliefHorizonScopePayloadClear(scope);
+	scope->source = source;
+	scope->authority = authority;
+	scope->evidence_kernels = evidence_kernels;
+	scope->evidence_kernel_count = evidence_kernel_count;
+	scope->frame_kernels = frame_kernels;
+	scope->frame_kernel_count = frame_kernel_count;
+	return SG_BELIEF_HORIZON_ACCEPTED;
+
+failure:
+	free(frame_kernels);
+	BeliefHorizonKernelsDestroy(evidence_kernels, evidence_kernel_count);
+	BeliefHorizonKernelsDestroy(authority.kernels, authority.kernel_count);
+	BeliefHorizonKernelsDestroy(source.kernels, source.kernel_count);
+	return result;
+}
+
+const sg_belief_horizon_authority_t *SG_BeliefHorizonScopeAuthority(
+	const sg_belief_horizon_scope_t *scope)
+{
+	sg_belief_horizon_scope_t *record = BeliefHorizonScopeRecord(scope);
+
+	return record && record->authority.active == 1U ?
+		&record->authority : NULL;
+}
+
+const sg_belief_horizon_kernel_t *SG_BeliefHorizonScopeKernels(
+	const sg_belief_horizon_scope_t *scope, size_t *kernel_count_out)
+{
+	sg_belief_horizon_scope_t *record = BeliefHorizonScopeRecord(scope);
+
+	if (!record || record->authority.active != 1U || !kernel_count_out)
+		return NULL;
+	if (record->frame_kernel_count != 0U)
+	{
+		*kernel_count_out = record->frame_kernel_count;
+		return record->frame_kernels;
+	}
+	*kernel_count_out = record->authority.kernel_count;
+	return record->authority.kernels;
+}
+
 #if defined(SG_BELIEF_TESTING)
 void SG_BeliefTestHorizonAuthorityCorrupt(
 	sg_belief_horizon_authority_t *authority)
@@ -3955,6 +4297,29 @@ int SG_BeliefTestHorizonAuthorityRetired(
 
 	return record && record->active == 0U && record->kernels == NULL &&
 		record->kernel_count == 0U;
+}
+
+void SG_BeliefTestHorizonScopeFailNext(
+	sg_belief_horizon_accept_result_t result)
+{
+	if (result == SG_BELIEF_HORIZON_ALLOCATION_FAILED ||
+		result == SG_BELIEF_HORIZON_OVERFLOW)
+		belief_scope_fail_next = result;
+}
+
+size_t SG_BeliefTestHorizonScopeLiveCount(void)
+{
+	const sg_belief_horizon_scope_t *scope;
+	size_t count = 0U;
+
+	for (scope = belief_horizon_scopes; scope; scope = scope->next_scope)
+		count++;
+	return count;
+}
+
+size_t SG_BeliefTestHorizonScopeAllocationCount(void)
+{
+	return belief_scope_allocation_count;
 }
 #endif
 

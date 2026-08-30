@@ -15,8 +15,10 @@ typedef struct belief_runtime_track_s
 	sg_belief_particle_t *prediction_particles;
 	size_t capacity;
 	uint64_t localization_generation;
+	sg_belief_horizon_scope_t *horizon_scope;
 	sg_belief_life_identity_t *issuers;
 	size_t issuer_count;
+	size_t issuer_capacity;
 	sg_belief_runtime_view_t view;
 } belief_runtime_track_t;
 
@@ -25,6 +27,13 @@ static belief_runtime_track_t belief_runtime_tracks[2][SG_BELIEF_MAX_CLIENTS];
 static uint64_t belief_runtime_reduction_sequence;
 static uint64_t belief_runtime_frame_sequence;
 static uint64_t belief_runtime_frame_time;
+
+typedef struct belief_runtime_provider_capture_s
+{
+	sg_belief_runtime_provider_t provider;
+	uint64_t rune_identity;
+	uint64_t topology_revision;
+} belief_runtime_provider_capture_t;
 
 static int BeliefRuntimeProviderValid(const sg_belief_runtime_provider_t *provider)
 {
@@ -51,6 +60,32 @@ static int BeliefRuntimeCurrent(void)
 	return BeliefRuntimeProviderValid(&belief_runtime_provider);
 }
 
+static int BeliefRuntimeProviderCapture(
+	belief_runtime_provider_capture_t *capture)
+{
+	if (!capture || !BeliefRuntimeCurrent())
+		return 0;
+	capture->provider = belief_runtime_provider;
+	capture->rune_identity = capture->provider.snapshot->identity;
+	capture->topology_revision =
+		capture->provider.snapshot->topology_revision;
+	return 1;
+}
+
+static int BeliefRuntimeProviderCaptureCurrent(
+	const belief_runtime_provider_capture_t *capture)
+{
+	return capture && BeliefRuntimeCurrent() &&
+		belief_runtime_provider.snapshot == capture->provider.snapshot &&
+		belief_runtime_provider.localization_generation ==
+			capture->provider.localization_generation &&
+		belief_runtime_provider.locate == capture->provider.locate &&
+		belief_runtime_provider.context == capture->provider.context &&
+		belief_runtime_provider.snapshot->identity == capture->rune_identity &&
+		belief_runtime_provider.snapshot->topology_revision ==
+			capture->topology_revision;
+}
+
 static void BeliefRuntimeClearTrack(belief_runtime_track_t *track)
 {
 	if (!track)
@@ -60,6 +95,7 @@ static void BeliefRuntimeClearTrack(belief_runtime_track_t *track)
 	free(track->scratch_second);
 	free(track->prediction_particles);
 	free(track->issuers);
+	SG_BeliefHorizonScopeDestroy(track->horizon_scope);
 	memset(track, 0, sizeof(*track));
 }
 
@@ -107,9 +143,10 @@ static int BeliefRuntimeFinite3(const float value[3])
 int SG_BeliefRuntimeHypothesis(const sg_belief_runtime_pose_t *pose,
 	sg_perception_hypothesis_t *out)
 {
+	belief_runtime_provider_capture_t capture;
 	sg_phase_coordinate_t phase;
 
-	if (!pose || !out || !BeliefRuntimeCurrent() ||
+	if (!pose || !out || !BeliefRuntimeProviderCapture(&capture) ||
 		pose->movement_state < SG_BELIEF_MOTION_UNKNOWN ||
 		pose->movement_state >= SG_BELIEF_MOTION_COUNT ||
 		pose->reserved[0] != 0U || pose->reserved[1] != 0U ||
@@ -119,9 +156,10 @@ int SG_BeliefRuntimeHypothesis(const sg_belief_runtime_pose_t *pose,
 		!BeliefRuntimeFinite3(pose->orientation))
 		return 0;
 	memset(&phase, 0, sizeof(phase));
-	if (!belief_runtime_provider.locate(belief_runtime_provider.context,
-		belief_runtime_provider.snapshot, pose->position, &phase) ||
-		!SG_PhaseCoordinateValid(belief_runtime_provider.snapshot, &phase))
+	if (!capture.provider.locate(capture.provider.context,
+		capture.provider.snapshot, pose->position, &phase) ||
+		!BeliefRuntimeProviderCaptureCurrent(&capture) ||
+		!SG_PhaseCoordinateValid(capture.provider.snapshot, &phase))
 		return 0;
 	memset(out, 0, sizeof(*out));
 	out->phase = phase;
@@ -169,7 +207,9 @@ static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
 	sg_belief_particle_t *scratch_first;
 	sg_belief_particle_t *scratch_second;
 	sg_belief_particle_t *prediction_particles;
+	size_t view_particle_count;
 	size_t bytes;
+	int view_uses_prediction;
 
 	if (!track || required_capacity == 0U ||
 		required_capacity > SIZE_MAX / sizeof(*particles))
@@ -178,6 +218,11 @@ static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
 		track->scratch_first && track->scratch_second &&
 		track->prediction_particles)
 		return 1;
+	view_uses_prediction = track->active &&
+		track->view.particles == track->prediction_particles &&
+		track->view.particle_count <= track->capacity;
+	view_particle_count = view_uses_prediction ?
+		track->view.particle_count : 0U;
 	bytes = required_capacity * sizeof(*particles);
 	particles = malloc(bytes);
 	scratch_first = malloc(bytes);
@@ -195,6 +240,9 @@ static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
 	if (track->active && track->state.particle_count != 0U)
 		memcpy(particles, track->state.particles,
 			track->state.particle_count * sizeof(*particles));
+	if (view_particle_count != 0U)
+		memcpy(prediction_particles, track->prediction_particles,
+			view_particle_count * sizeof(*prediction_particles));
 	free(track->particles);
 	free(track->scratch_first);
 	free(track->scratch_second);
@@ -204,6 +252,8 @@ static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
 	track->scratch_second = scratch_second;
 	track->prediction_particles = prediction_particles;
 	track->capacity = required_capacity;
+	if (view_uses_prediction)
+		track->view.particles = prediction_particles;
 	if (track->active)
 	{
 		track->state.particles = track->particles;
@@ -212,19 +262,21 @@ static int BeliefRuntimeGrowTrack(belief_runtime_track_t *track,
 	return 1;
 }
 
-static int BeliefRuntimeEnsureTrack(belief_runtime_track_t *track,
+static int BeliefRuntimeBuildTrack(belief_runtime_track_t *track,
 	const sg_belief_evidence_t *evidence, size_t required_capacity)
 {
 	sg_belief_state_config_t config;
 
 	if (!track || !evidence || !BeliefRuntimeCurrent())
 		return 0;
-	if (BeliefRuntimeTrackMatches(track, evidence->provenance.audience_team,
-		&evidence->target_life) && track->state.target_team == evidence->target_team)
-		return 1;
-	BeliefRuntimeClearTrack(track);
 	if (!BeliefRuntimeGrowTrack(track, required_capacity))
 		return 0;
+	track->horizon_scope = SG_BeliefHorizonScopeCreate();
+	if (!track->horizon_scope)
+	{
+		BeliefRuntimeClearTrack(track);
+		return 0;
+	}
 	memset(&config, 0, sizeof(config));
 	config.audience_team = evidence->provenance.audience_team;
 	config.target_team = evidence->target_team;
@@ -243,29 +295,61 @@ static int BeliefRuntimeEnsureTrack(belief_runtime_track_t *track,
 	return 1;
 }
 
-static int BeliefRuntimeRecordIssuer(belief_runtime_track_t *track,
-	const sg_belief_life_identity_t *issuer)
+static int BeliefRuntimePrepareIssuer(const belief_runtime_track_t *track,
+	const sg_belief_life_identity_t *issuer, int *append_out,
+	sg_belief_life_identity_t **prepared_issuers_out,
+	size_t *prepared_capacity_out)
 {
 	sg_belief_life_identity_t *issuers;
 	size_t index;
 	size_t bytes;
 
-	if (!track || !SG_BeliefLifeIdentityValid(issuer))
+	if (!track || !append_out || !prepared_issuers_out ||
+		!prepared_capacity_out || !SG_BeliefLifeIdentityValid(issuer))
 		return 0;
+	*append_out = 0;
+	*prepared_issuers_out = NULL;
+	*prepared_capacity_out = 0U;
 	for (index = 0U; index < track->issuer_count; index++)
 		if (SG_BeliefLifeIdentityEqual(&track->issuers[index], issuer))
 			return 1;
 	if (track->issuer_count == SIZE_MAX ||
 		track->issuer_count + 1U > SIZE_MAX / sizeof(*issuers))
 		return 0;
+	if (track->issuer_capacity >= track->issuer_count + 1U)
+	{
+		*append_out = 1;
+		return 1;
+	}
 	bytes = (track->issuer_count + 1U) * sizeof(*issuers);
-	issuers = realloc(track->issuers, bytes);
+	issuers = malloc(bytes);
 	if (!issuers)
 		return 0;
-	issuers[track->issuer_count] = *issuer;
-	track->issuers = issuers;
-	track->issuer_count++;
+	if (track->issuer_count != 0U)
+		memcpy(issuers, track->issuers,
+			track->issuer_count * sizeof(*issuers));
+	*prepared_issuers_out = issuers;
+	*prepared_capacity_out = track->issuer_count + 1U;
+	*append_out = 1;
 	return 1;
+}
+
+static void BeliefRuntimeCommitIssuer(belief_runtime_track_t *track,
+	const sg_belief_life_identity_t *issuer, int append,
+	sg_belief_life_identity_t *prepared_issuers, size_t prepared_capacity)
+{
+	if (!track || !issuer || !append)
+		return;
+	if (prepared_issuers)
+	{
+		free(track->issuers);
+		track->issuers = prepared_issuers;
+		track->issuer_capacity = prepared_capacity;
+	}
+	if (track->issuer_count >= track->issuer_capacity)
+		return;
+	track->issuers[track->issuer_count] = *issuer;
+	track->issuer_count++;
 }
 
 static int BeliefRuntimeIssuerRecorded(const belief_runtime_track_t *track,
@@ -281,12 +365,11 @@ static int BeliefRuntimeIssuerRecorded(const belief_runtime_track_t *track,
 	return 0;
 }
 
-static int BeliefRuntimeNextReductionSequence(uint64_t *sequence_out)
+static int BeliefRuntimeTentativeReductionSequence(uint64_t *sequence_out)
 {
 	if (!sequence_out || belief_runtime_reduction_sequence == UINT64_MAX)
 		return 0;
-	belief_runtime_reduction_sequence++;
-	*sequence_out = belief_runtime_reduction_sequence;
+	*sequence_out = belief_runtime_reduction_sequence + 1U;
 	return 1;
 }
 
@@ -318,39 +401,54 @@ static sg_belief_reduce_result_t BeliefRuntimeReduce(
 	}
 }
 
-static sg_belief_runtime_frame_result_t BeliefRuntimeRefreshView(
-	belief_runtime_track_t *track,
-	uint64_t at_time_ms)
+static sg_belief_runtime_frame_result_t BeliefRuntimeHorizonPrepare(
+	belief_runtime_track_t *track, uint64_t at_time_ms,
+	uint64_t evidence_observed_at_ms,
+	const sg_belief_horizon_authority_t **authority_out,
+	const sg_belief_horizon_kernel_t **kernels_out, size_t *kernel_count_out)
 {
-	sg_belief_horizon_source_t *source = NULL;
-	sg_belief_horizon_authority_t *authority = NULL;
-	const sg_belief_horizon_kernel_t *kernels = NULL;
-	sg_rune_v2_content_id_t content_identity;
+	sg_belief_horizon_accept_result_t result;
+
+	if (!track || !authority_out || !kernels_out || !kernel_count_out ||
+		!track->active || !SG_BeliefStateValid(&track->state) ||
+		!track->horizon_scope || !BeliefRuntimeCurrent() ||
+		at_time_ms < track->state.updated_at_ms)
+		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
+	*authority_out = NULL;
+	*kernels_out = NULL;
+	*kernel_count_out = 0U;
+	if (at_time_ms == track->state.updated_at_ms)
+		return SG_BELIEF_RUNTIME_FRAME_APPLIED;
+	result = SG_BeliefHorizonScopePrepare(track->horizon_scope,
+		belief_runtime_provider.snapshot, &track->state, at_time_ms,
+		evidence_observed_at_ms);
+	if (result != SG_BELIEF_HORIZON_ACCEPTED)
+		return result == SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
+			SG_BELIEF_RUNTIME_FRAME_CAPACITY :
+			result == SG_BELIEF_HORIZON_OVERFLOW ?
+				SG_BELIEF_RUNTIME_FRAME_OVERFLOW :
+				SG_BELIEF_RUNTIME_FRAME_REJECTED;
+	*authority_out = SG_BeliefHorizonScopeAuthority(track->horizon_scope);
+	*kernels_out = SG_BeliefHorizonScopeKernels(track->horizon_scope,
+		kernel_count_out);
+	return *authority_out && *kernels_out && *kernel_count_out != 0U ?
+		SG_BELIEF_RUNTIME_FRAME_APPLIED : SG_BELIEF_RUNTIME_FRAME_REJECTED;
+}
+
+static sg_belief_runtime_frame_result_t BeliefRuntimePredict(
+	belief_runtime_track_t *track, uint64_t at_time_ms,
+	const sg_belief_horizon_authority_t *authority,
+	sg_belief_runtime_view_t *view_out)
+{
 	sg_belief_prediction_request_t request;
 	sg_belief_prediction_t prediction;
 	sg_belief_predict_result_t result;
 	sg_belief_runtime_view_t view;
-	size_t kernel_count;
+	size_t required_capacity;
 
 	if (!track || !track->active || !SG_BeliefStateValid(&track->state) ||
-		!BeliefRuntimeCurrent() || at_time_ms < track->state.updated_at_ms)
+		!BeliefRuntimeCurrent())
 		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
-	if (at_time_ms > track->state.updated_at_ms)
-	{
-		if (SG_BeliefHorizonSourceIssue(belief_runtime_provider.snapshot,
-			&track->state, at_time_ms, &source) != SG_BELIEF_HORIZON_ACCEPTED ||
-			!SG_BeliefHorizonSourceView(belief_runtime_provider.snapshot,
-				&track->state, source, &kernels, &kernel_count,
-				&content_identity) ||
-			SG_BeliefHorizonAuthorityAccept(belief_runtime_provider.snapshot,
-				&track->state, source, kernels, kernel_count, &authority) !=
-				SG_BELIEF_HORIZON_ACCEPTED)
-		{
-			SG_BeliefHorizonAuthorityDestroy(authority);
-			SG_BeliefHorizonSourceDestroy(source);
-			return SG_BELIEF_RUNTIME_FRAME_REJECTED;
-		}
-	}
 	for (;;)
 	{
 		memset(&request, 0, sizeof(request));
@@ -362,29 +460,27 @@ static sg_belief_runtime_frame_result_t BeliefRuntimeRefreshView(
 		request.particles = track->prediction_particles;
 		request.particle_capacity = track->capacity;
 		memset(&prediction, 0, sizeof(prediction));
-		result = SG_BeliefPredict(belief_runtime_provider.snapshot, &track->state,
-			&request, &prediction);
+		result = SG_BeliefPredict(belief_runtime_provider.snapshot,
+			&track->state, &request, &prediction);
 		if (result != SG_BELIEF_PREDICT_CAPACITY)
 			break;
-		kernel_count = prediction.required_scratch_capacity;
-		if (prediction.required_particle_capacity > kernel_count)
-			kernel_count = prediction.required_particle_capacity;
-		if (kernel_count <= track->capacity ||
-			!BeliefRuntimeGrowTrack(track, kernel_count))
-		{
-			SG_BeliefHorizonAuthorityDestroy(authority);
-			SG_BeliefHorizonSourceDestroy(source);
+		required_capacity = prediction.required_scratch_capacity;
+		if (prediction.required_particle_capacity > required_capacity)
+			required_capacity = prediction.required_particle_capacity;
+		if (required_capacity <= track->capacity ||
+			!BeliefRuntimeGrowTrack(track, required_capacity))
 			return SG_BELIEF_RUNTIME_FRAME_CAPACITY;
-		}
 	}
-	SG_BeliefHorizonAuthorityDestroy(authority);
-	SG_BeliefHorizonSourceDestroy(source);
-	if (result != SG_BELIEF_PREDICT_APPLIED || prediction.particle_count == 0U)
-	{
-		memset(&track->view, 0, sizeof(track->view));
+	if (result != SG_BELIEF_PREDICT_APPLIED)
 		return result == SG_BELIEF_PREDICT_OVERFLOW ?
 			SG_BELIEF_RUNTIME_FRAME_OVERFLOW :
 			SG_BELIEF_RUNTIME_FRAME_REJECTED;
+	if (!view_out)
+		return SG_BELIEF_RUNTIME_FRAME_APPLIED;
+	if (prediction.particle_count == 0U)
+	{
+		memset(view_out, 0, sizeof(*view_out));
+		return SG_BELIEF_RUNTIME_FRAME_APPLIED;
 	}
 	memset(&view, 0, sizeof(view));
 	view.audience_team = track->state.audience_team;
@@ -398,8 +494,23 @@ static sg_belief_runtime_frame_result_t BeliefRuntimeRefreshView(
 	view.confidence = prediction.confidence;
 	view.particles = track->prediction_particles;
 	view.particle_count = prediction.particle_count;
-	track->view = view;
+	*view_out = view;
 	return SG_BELIEF_RUNTIME_FRAME_APPLIED;
+}
+
+static sg_belief_runtime_frame_result_t BeliefRuntimeRefreshView(
+	belief_runtime_track_t *track)
+{
+	sg_belief_runtime_view_t view;
+	sg_belief_runtime_frame_result_t result;
+
+	if (!track || track->state.updated_at_ms == 0U)
+		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
+	result = BeliefRuntimePredict(track, track->state.updated_at_ms, NULL,
+		&view);
+	if (result == SG_BELIEF_RUNTIME_FRAME_APPLIED)
+		track->view = view;
+	return result;
 }
 
 sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
@@ -409,8 +520,18 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	sg_perception_adaptation_t adaptation;
 	sg_belief_frame_t frame;
 	sg_belief_reduction_t reduction;
+	belief_runtime_track_t candidate;
 	belief_runtime_track_t *track;
+	belief_runtime_track_t *working;
+	const sg_belief_horizon_authority_t *authority;
+	const sg_belief_horizon_kernel_t *kernels;
+	sg_belief_runtime_frame_result_t horizon_result;
+	size_t kernel_count;
 	uint64_t sequence;
+	sg_belief_life_identity_t *prepared_issuers = NULL;
+	size_t prepared_issuer_capacity = 0U;
+	int replacement;
+	int append_issuer;
 	sg_belief_reduce_result_t result;
 
 	if (!BeliefRuntimeCurrent())
@@ -452,45 +573,99 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
 	}
-	if (!BeliefRuntimeEnsureTrack(track, &adaptation.evidence,
+	replacement = !BeliefRuntimeTrackMatches(track,
+		adaptation.evidence.provenance.audience_team,
+		&adaptation.evidence.target_life) ||
+		track->state.target_team != adaptation.evidence.target_team;
+	memset(&candidate, 0, sizeof(candidate));
+	working = replacement ? &candidate : track;
+	if (replacement && !BeliefRuntimeBuildTrack(working, &adaptation.evidence,
 		adaptation.required_support_capacity))
 	{
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_CAPACITY;
 	}
-	if (!BeliefRuntimeRecordIssuer(track,
-		&adaptation.evidence.provenance.issuer_life))
+	if (!replacement &&
+		(adaptation.evidence.provenance.authenticated_at_ms <
+			working->state.updated_at_ms ||
+		 adaptation.evidence.observed_at_ms < working->state.updated_at_ms ||
+		 adaptation.evidence.provenance.evidence_sequence <=
+			working->state.last_evidence_sequence ||
+		 adaptation.evidence.valid_until_ms <
+			adaptation.evidence.provenance.authenticated_at_ms))
 	{
+		free(supports);
+		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
+	}
+	if (!BeliefRuntimePrepareIssuer(working,
+		&adaptation.evidence.provenance.issuer_life, &append_issuer,
+		&prepared_issuers, &prepared_issuer_capacity))
+	{
+		if (replacement)
+			BeliefRuntimeClearTrack(&candidate);
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_CAPACITY;
 	}
-	if (!BeliefRuntimeNextReductionSequence(&sequence))
+	if (!BeliefRuntimeTentativeReductionSequence(&sequence))
 	{
+		if (replacement)
+			BeliefRuntimeClearTrack(&candidate);
+		free(prepared_issuers);
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_OVERFLOW;
 	}
 	memset(&frame, 0, sizeof(frame));
 	frame.sequence = sequence;
-	frame.expected_revision = track->state.revision;
-	frame.expected_generation = track->state.generation;
+	frame.expected_revision = working->state.revision;
+	frame.expected_generation = working->state.generation;
 	frame.at_ms = adaptation.evidence.provenance.authenticated_at_ms;
 	frame.evidence = &adaptation.evidence;
 	frame.evidence_count = 1U;
+	authority = NULL;
+	kernels = NULL;
+	kernel_count = 0U;
+	horizon_result = BeliefRuntimeHorizonPrepare(working, frame.at_ms,
+		adaptation.evidence.observed_at_ms, &authority, &kernels,
+		&kernel_count);
+	if (horizon_result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
+	{
+		if (replacement)
+			BeliefRuntimeClearTrack(&candidate);
+		free(prepared_issuers);
+		free(supports);
+		return horizon_result == SG_BELIEF_RUNTIME_FRAME_CAPACITY ?
+			SG_BELIEF_RUNTIME_OBSERVE_CAPACITY :
+			horizon_result == SG_BELIEF_RUNTIME_FRAME_OVERFLOW ?
+				SG_BELIEF_RUNTIME_OBSERVE_OVERFLOW :
+				SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
+	}
+	(void)authority;
+	frame.kernels = kernels;
+	frame.kernel_count = kernel_count;
 	memset(&reduction, 0, sizeof(reduction));
-	result = BeliefRuntimeReduce(track, &frame, &reduction);
+	result = BeliefRuntimeReduce(working, &frame, &reduction);
 	free(supports);
 	if (result != SG_BELIEF_REDUCE_APPLIED)
 	{
-		if (result != SG_BELIEF_REDUCE_CAPACITY &&
-			result != SG_BELIEF_REDUCE_OVERFLOW)
-			BeliefRuntimeClearTrack(track);
+		if (replacement)
+			BeliefRuntimeClearTrack(&candidate);
+		free(prepared_issuers);
 		return result == SG_BELIEF_REDUCE_CAPACITY ?
 			SG_BELIEF_RUNTIME_OBSERVE_CAPACITY :
 			result == SG_BELIEF_REDUCE_OVERFLOW ?
 				SG_BELIEF_RUNTIME_OBSERVE_OVERFLOW :
 				SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
 	}
-	(void)BeliefRuntimeRefreshView(track, track->state.updated_at_ms);
+	BeliefRuntimeCommitIssuer(working,
+		&adaptation.evidence.provenance.issuer_life, append_issuer,
+		prepared_issuers, prepared_issuer_capacity);
+	if (replacement)
+	{
+		BeliefRuntimeClearTrack(track);
+		*track = candidate;
+	}
+	belief_runtime_reduction_sequence = sequence;
+	(void)BeliefRuntimeRefreshView(track);
 	return SG_BELIEF_RUNTIME_OBSERVE_APPLIED;
 }
 
@@ -509,56 +684,48 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 		SG_BeliefRuntimeReset();
 		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
 	}
-	belief_runtime_frame_sequence = frame_sequence;
-	belief_runtime_frame_time = at_ms;
 	for (team = 0U; team < 2U; team++)
 		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
 		{
 			belief_runtime_track_t *track = &belief_runtime_tracks[team][client];
-			sg_belief_frame_t frame;
-			sg_belief_reduction_t reduction;
-			sg_belief_runtime_frame_result_t refresh;
-			sg_belief_reduce_result_t reduced;
-			uint64_t sequence;
+			const sg_belief_horizon_authority_t *authority;
+			const sg_belief_horizon_kernel_t *kernels;
+			sg_belief_runtime_frame_result_t result;
+			sg_belief_runtime_view_t view;
+			size_t kernel_count;
 
 			if (!track->active)
 				continue;
 			if (!SG_BeliefStateValid(&track->state) ||
 				track->state.updated_at_ms > at_ms)
 			{
-				BeliefRuntimeClearTrack(track);
+				if (!SG_BeliefStateValid(&track->state))
+					BeliefRuntimeClearTrack(track);
+				else
+					return SG_BELIEF_RUNTIME_FRAME_REJECTED;
 				continue;
 			}
-			if (track->state.updated_at_ms == at_ms)
-				continue;
-			refresh = BeliefRuntimeRefreshView(track, at_ms);
-			if (refresh == SG_BELIEF_RUNTIME_FRAME_CAPACITY ||
-				refresh == SG_BELIEF_RUNTIME_FRAME_OVERFLOW)
-				return refresh;
-			if (refresh != SG_BELIEF_RUNTIME_FRAME_APPLIED)
-			{
-				BeliefRuntimeClearTrack(track);
-				continue;
-			}
-			if (!BeliefRuntimeNextReductionSequence(&sequence))
-				return SG_BELIEF_RUNTIME_FRAME_OVERFLOW;
-			memset(&frame, 0, sizeof(frame));
-			frame.sequence = sequence;
-			frame.expected_revision = track->state.revision;
-			frame.expected_generation = track->state.generation;
-			frame.at_ms = at_ms;
-			memset(&reduction, 0, sizeof(reduction));
-			reduced = BeliefRuntimeReduce(track, &frame, &reduction);
-			if (reduced == SG_BELIEF_REDUCE_CAPACITY)
-				return SG_BELIEF_RUNTIME_FRAME_CAPACITY;
-			if (reduced == SG_BELIEF_REDUCE_OVERFLOW)
-				return SG_BELIEF_RUNTIME_FRAME_OVERFLOW;
-			if (reduced != SG_BELIEF_REDUCE_APPLIED)
-			{
-				BeliefRuntimeClearTrack(track);
-				continue;
-			}
+			authority = NULL;
+			kernels = NULL;
+			kernel_count = 0U;
+			result = BeliefRuntimeHorizonPrepare(track, at_ms, 0U,
+				&authority, &kernels, &kernel_count);
+			if (result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
+				return result;
+			result = BeliefRuntimePredict(track, at_ms, authority, &view);
+			if (result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
+				return result;
+			if (at_ms > track->state.updated_at_ms &&
+				(kernels == NULL || kernel_count == 0U))
+				return SG_BELIEF_RUNTIME_FRAME_REJECTED;
+			/* A frame publishes an authenticated horizon projection but does not
+			 * commit an empty reducer frame.  Later evidence therefore always
+			 * reduces from the same prior observation time, independent of how
+			 * many intermediate render/think frames sampled the belief. */
+			track->view = view;
 		}
+	belief_runtime_frame_sequence = frame_sequence;
+	belief_runtime_frame_time = at_ms;
 	return SG_BELIEF_RUNTIME_FRAME_APPLIED;
 }
 
@@ -636,7 +803,8 @@ const sg_belief_runtime_view_t *SG_BeliefRuntimeViewForClient(
 		!BeliefRuntimeTeamIndex(audience_team, &team_index))
 		return NULL;
 	track = &belief_runtime_tracks[team_index][client_id];
-	if (!track->active || !SG_BeliefStateValid(&track->state) ||
+	if (!BeliefRuntimeTrackMatches(track, audience_team,
+		&track->state.target_life) ||
 		track->view.target_life.spawn_generation == 0U)
 		return NULL;
 	return &track->view;
