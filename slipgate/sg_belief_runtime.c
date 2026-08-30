@@ -29,6 +29,12 @@ typedef struct belief_runtime_life_fence_s
 	uint8_t reserved[7];
 } belief_runtime_life_fence_t;
 
+typedef struct belief_runtime_life_publication_s
+{
+	sg_belief_life_identity_t lives[2];
+	size_t count;
+} belief_runtime_life_publication_t;
+
 typedef struct belief_runtime_frame_candidate_s
 {
 	belief_runtime_track_t track;
@@ -232,14 +238,12 @@ static belief_runtime_track_t *BeliefRuntimeTrack(uint8_t audience_team,
 }
 
 static int BeliefRuntimeLifeFenceAdmits(
-	const sg_belief_evidence_t *evidence)
+	const sg_belief_life_identity_t *life)
 {
 	const belief_runtime_life_fence_t *fence;
-	const sg_belief_life_identity_t *life;
 
-	if (!evidence || !SG_BeliefLifeIdentityValid(&evidence->target_life))
+	if (!SG_BeliefLifeIdentityValid(life))
 		return 0;
-	life = &evidence->target_life;
 	fence = &belief_runtime_life_fences[life->client_id];
 	if (fence->spawn_generation == 0U)
 		return 1;
@@ -255,15 +259,57 @@ static int BeliefRuntimeLifeFenceAdmits(
 	return 1;
 }
 
+static int BeliefRuntimeLifePublicationPrepare(
+	const sg_belief_evidence_t *evidence,
+	belief_runtime_life_publication_t *publication)
+{
+	const sg_belief_life_identity_t *issuer;
+
+	if (!evidence || !publication ||
+		!SG_BeliefLifeIdentityValid(&evidence->target_life) ||
+		!SG_BeliefLifeIdentityValid(
+			&evidence->provenance.issuer_life))
+		return 0;
+	publication->lives[0] = evidence->target_life;
+	publication->count = 1U;
+	issuer = &evidence->provenance.issuer_life;
+	/* One client slot cannot name two exact lives in one observation.  Equal
+	 * target/issuer identities share a single fence publication. */
+	if (issuer->client_id == publication->lives[0].client_id)
+	{
+		if (!SG_BeliefLifeIdentityEqual(issuer, &publication->lives[0]))
+			return 0;
+	}
+	else
+	{
+		publication->lives[publication->count] = *issuer;
+		publication->count++;
+	}
+	return 1;
+}
+
+static int BeliefRuntimeLifePublicationAdmits(
+	const belief_runtime_life_publication_t *publication)
+{
+	size_t index;
+
+	if (!publication || publication->count == 0U ||
+		publication->count > sizeof(publication->lives) /
+			sizeof(publication->lives[0]))
+		return 0;
+	for (index = 0U; index < publication->count; index++)
+		if (!BeliefRuntimeLifeFenceAdmits(&publication->lives[index]))
+			return 0;
+	return 1;
+}
+
 static void BeliefRuntimeLifeFenceCommit(
-	const sg_belief_evidence_t *evidence)
+	const sg_belief_life_identity_t *life)
 {
 	belief_runtime_life_fence_t *fence;
-	const sg_belief_life_identity_t *life;
 
-	if (!evidence || !SG_BeliefLifeIdentityValid(&evidence->target_life))
+	if (!SG_BeliefLifeIdentityValid(life))
 		return;
-	life = &evidence->target_life;
 	fence = &belief_runtime_life_fences[life->client_id];
 	if (life->spawn_generation > fence->spawn_generation)
 	{
@@ -326,6 +372,20 @@ static void BeliefRuntimeClearSupersededTargetTracks(
 					life->spawn_generation)
 				BeliefRuntimeClearTrack(track);
 		}
+}
+
+static void BeliefRuntimeLifePublicationCommit(
+	const belief_runtime_life_publication_t *publication)
+{
+	size_t index;
+
+	/* Both roles have already been authenticated and all fallible candidate
+	 * work has completed.  Publish every generation before clearing stale
+	 * target tracks, so one observation cannot expose a partial life order. */
+	for (index = 0U; index < publication->count; index++)
+		BeliefRuntimeLifeFenceCommit(&publication->lives[index]);
+	for (index = 0U; index < publication->count; index++)
+		BeliefRuntimeClearSupersededTargetTracks(&publication->lives[index]);
 }
 
 static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
@@ -751,6 +811,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	sg_perception_adaptation_t adaptation;
 	sg_belief_frame_t frame;
 	sg_belief_reduction_t reduction;
+	belief_runtime_life_publication_t life_publication;
 	belief_runtime_track_t candidate;
 	belief_runtime_track_t *track;
 	belief_runtime_track_t *working;
@@ -797,9 +858,16 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
 	}
+	if (!BeliefRuntimeLifePublicationPrepare(&adaptation.evidence,
+		&life_publication) ||
+		!BeliefRuntimeLifePublicationAdmits(&life_publication))
+	{
+		free(supports);
+		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
+	}
 	track = BeliefRuntimeTrack(adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life);
-	if (!track || !BeliefRuntimeLifeFenceAdmits(&adaptation.evidence))
+	if (!track)
 	{
 		free(supports);
 		return SG_BELIEF_RUNTIME_OBSERVE_REJECTED;
@@ -895,12 +963,7 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		BeliefRuntimeClearTrack(track);
 		*track = candidate;
 	}
-	BeliefRuntimeLifeFenceCommit(&adaptation.evidence);
-	/* Candidate reduction and replacement have succeeded.  Publishing a newer
-	 * life now retires every older audience track for that client in one
-	 * non-failing lifecycle commit. */
-	BeliefRuntimeClearSupersededTargetTracks(
-		&adaptation.evidence.target_life);
+	BeliefRuntimeLifePublicationCommit(&life_publication);
 	belief_runtime_reduction_sequence = sequence;
 	(void)BeliefRuntimeRefreshView(track);
 	return SG_BELIEF_RUNTIME_OBSERVE_APPLIED;

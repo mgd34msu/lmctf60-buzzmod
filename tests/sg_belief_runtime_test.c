@@ -427,6 +427,101 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static void TestRuntimeIssuerLifeFences(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t issuer40;
+	sg_belief_life_identity_t issuer41;
+	sg_belief_life_identity_t target30;
+	const sg_belief_runtime_view_t *view;
+
+	issuer40 = Life(4U, 40U);
+	issuer41 = Life(4U, 41U);
+	target30 = Life(3U, 30U);
+	/* Target and issuer can name the same exact life once.  A different
+	 * generation in that same slot is rejected before it can build a track. */
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 40U);
+	observation.target_life = issuer40;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &issuer40);
+	CHECK(view && view->updated_at_ms == 100U);
+	SightObservation(&observation, 2U, 200U, 40U);
+	observation.target_life = issuer40;
+	observation.authentication.issuer_life = issuer41;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	view = SG_BeliefRuntimeView(1U, &issuer40);
+	CHECK(view && view->updated_at_ms == 100U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+
+	/* A life known only as an issuer still establishes a client retirement
+	 * boundary, so a later target claim cannot revive that exact life. */
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) != NULL);
+	SG_BeliefRuntimeRetireClient(4U);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	SightObservation(&observation, 2U, 200U, 40U);
+	observation.target_life = issuer40;
+	observation.authentication.issuer_life = Life(5U, 50U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeView(1U, &issuer40) == NULL);
+	SightObservation(&observation, 3U, 250U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+
+	/* A newer issuer life is not published until its observation succeeds.
+	 * Once published, it invalidates an older target track for that issuer's
+	 * client, and both stale and retired issuers are rejected thereafter. */
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 40U);
+	observation.target_life = issuer40;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &issuer40) != NULL);
+	SightObservation(&observation, 2U, 110U, 30U);
+	observation.authentication.issuer_life = issuer41;
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	SG_BeliefTestHorizonScopeFailNext(
+		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
+	CHECK(SG_BeliefRuntimeView(1U, &issuer40) != NULL);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &issuer40) == NULL);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 300U);
+	SightObservation(&observation, 3U, 350U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 300U);
+	SG_BeliefRuntimeRetireLife(&issuer41);
+	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
+	SightObservation(&observation, 4U, 400U, 30U);
+	observation.authentication.issuer_life = issuer41;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
 static void TestRuntimeFrameIsAtomic(void)
 {
 	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
@@ -834,6 +929,7 @@ static void TestRuntimeOwner(void)
 	observation.data.sight.line_of_sight_proved = 1U;
 	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
 		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
+	observation.authentication.issuer_life = Life(6U, 60U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
 	observation = Observation(SG_PERCEPTION_SOURCE_SIGHT, 9U, 1100U, 31U);
@@ -841,6 +937,7 @@ static void TestRuntimeOwner(void)
 	observation.data.sight.line_of_sight_proved = 1U;
 	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
 		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
+	observation.authentication.issuer_life = Life(6U, 60U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
 	fixture.snapshot.topology_revision = 8U;
@@ -859,6 +956,7 @@ int main(void)
 	TestRuntimeHorizonScopeLifecycle();
 	TestRuntimeReplacementIsAtomic();
 	TestRuntimeLifeFencePreventsResurrection();
+	TestRuntimeIssuerLifeFences();
 	TestRuntimeFrameIsAtomic();
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();
