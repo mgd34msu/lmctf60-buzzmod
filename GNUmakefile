@@ -1207,6 +1207,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_relay_wall_objective.o slipgate/sg_relay_wall_objective_game.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 slipgate/sg_belief.o slipgate/sg_destination.o \
+		 slipgate/sg_cell_phase_localization.o \
 		 slipgate/sg_rune_dynamics_model.o slipgate/sg_rune_dynamics_geometry.o \
 		 slipgate/sg_rune_field_contract.o \
 		 slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
@@ -1560,6 +1561,14 @@ slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
 		game.h q_shared.h
+slipgate/sg_cell_phase_localization.o: \
+		slipgate/sg_cell_phase_localization.c \
+		slipgate/sg_cell_phase_localization.h \
+		slipgate/sg_configuration_semantics.h \
+		slipgate/sg_configuration_space.h slipgate/sg_destination.h \
+		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
+		slipgate/sg_rune_model.h game.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 

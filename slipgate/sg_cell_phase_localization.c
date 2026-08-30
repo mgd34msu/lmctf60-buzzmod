@@ -162,6 +162,56 @@ static int FindRuntimePhase(const sg_rune_model_t *model,
 	return 0;
 }
 
+static int PhaseOwnedByCell(const sg_rune_model_t *model, uint32_t phase,
+	uint32_t cell)
+{
+	const sg_rune_cell_t *record;
+
+	if (!model || phase >= model->phase_count || cell >= model->cell_count)
+		return 0;
+	record = &model->cells[cell];
+	return record->phases.first <= phase &&
+		phase - record->phases.first < record->phases.count;
+}
+
+static int PhaseCell(const sg_rune_model_t *model, uint32_t phase,
+	uint32_t *cell_out)
+{
+	uint32_t owner = UINT32_MAX;
+	uint32_t cell;
+
+	if (!model || !cell_out || phase >= model->phase_count)
+		return 0;
+	for (cell = 0U; cell < model->cell_count; cell++)
+	{
+		if (!PhaseOwnedByCell(model, phase, cell))
+			continue;
+		if (owner != UINT32_MAX)
+			return 0;
+		owner = cell;
+	}
+	if (owner == UINT32_MAX)
+		return 0;
+	*cell_out = owner;
+	return 1;
+}
+
+static int PhaseCoordinateValidForModel(const sg_rune_model_t *model,
+	const sg_phase_coordinate_t *coordinate)
+{
+	return model && coordinate && coordinate->phase_id < model->phase_count &&
+		PhaseOwnedByCell(model, coordinate->phase_id, coordinate->cell_id);
+}
+
+static sg_phase_coordinate_t PhaseCoordinate(uint32_t phase, uint32_t cell)
+{
+	sg_phase_coordinate_t coordinate;
+
+	coordinate.phase_id = phase;
+	coordinate.cell_id = cell;
+	return coordinate;
+}
+
 static int ConfigurationShapeValid(
 	const sg_configuration_space_t *configuration)
 {
@@ -244,10 +294,15 @@ static int RuntimeShapeValid(const sg_rune_runtime_snapshot_t *snapshot)
 			record->phases.count >
 				model->phase_count - record->phases.first)
 			return 0;
-		for (phase = record->phases.first;
-			phase < record->phases.first + record->phases.count; phase++)
-			if (snapshot->phases[phase].cell_id != cell)
-				return 0;
+	}
+	for (phase = 0U; phase < model->phase_count; phase++)
+	{
+		uint32_t owner;
+
+		if (!PhaseCell(model, phase, &owner) ||
+			snapshot->phases[phase].phase_id != phase ||
+			snapshot->phases[phase].cell_id != owner)
+			return 0;
 	}
 	for (cell = 0U; cell < model->mechanism_count; cell++)
 	{
@@ -266,6 +321,67 @@ static int RuntimeShapeValid(const sg_rune_runtime_snapshot_t *snapshot)
 			return 0;
 	}
 	return 1;
+}
+
+static int PhaseViewPrepare(const sg_rune_runtime_snapshot_t *snapshot,
+	sg_localization_phase_view_t *view_out)
+{
+	const sg_rune_model_t *model;
+
+	if (!view_out || !RuntimeShapeValid(snapshot))
+		return 0;
+	model = snapshot->model;
+	if (model->flags != (SG_RUNE_MODEL_IMMUTABLE |
+			SG_RUNE_MODEL_EXACT_BOUND | SG_RUNE_MODEL_NO_RUNTIME_ACTORS) ||
+		model->completeness.state != SG_RUNE_COMPLETENESS_COMPLETE ||
+		model->completeness.reason != SG_RUNE_FAILURE_NONE ||
+		model->completeness.failure_record != UINT32_MAX ||
+		(model->phase_transition_count != 0U && !model->phase_transitions))
+		return 0;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->model = model;
+	view_out->phases = model->phases;
+	view_out->transitions = model->phase_transitions;
+	view_out->identity = model->identity;
+	view_out->rune_identity = snapshot->identity;
+	view_out->topology_revision = snapshot->topology_revision;
+	view_out->cell_count = snapshot->cell_count;
+	view_out->phase_count = snapshot->phase_count;
+	view_out->transition_count = model->phase_transition_count;
+	view_out->region_count = snapshot->region_count;
+	view_out->flags = model->flags;
+	view_out->completeness = model->completeness;
+	return 1;
+}
+
+static int PhaseViewCurrent(const sg_localization_phase_view_t *view)
+{
+	const sg_rune_model_t *model;
+
+	if (!view || !view->model)
+		return 0;
+	model = view->model;
+	return view->model == model && view->phases == model->phases &&
+		view->transitions == model->phase_transitions &&
+		IdentityEqual(&view->identity, &model->identity) &&
+		view->rune_identity != 0U && view->topology_revision != 0U &&
+		view->cell_count == model->cell_count &&
+		view->phase_count == model->phase_count &&
+		view->transition_count == model->phase_transition_count &&
+		view->region_count != 0U &&
+		view->flags == model->flags &&
+		view->completeness.state == model->completeness.state &&
+		view->completeness.reason == model->completeness.reason &&
+		view->completeness.expected_cells ==
+			model->completeness.expected_cells &&
+		view->completeness.expected_portals ==
+			model->completeness.expected_portals &&
+		view->completeness.covered_cells ==
+			model->completeness.covered_cells &&
+		view->completeness.covered_portals ==
+			model->completeness.covered_portals &&
+		view->completeness.failure_record ==
+			model->completeness.failure_record;
 }
 
 static int BindRegions(const sg_configuration_space_t *configuration,
@@ -308,7 +424,9 @@ static int BindRegions(const sg_configuration_space_t *configuration,
 	for (region = 0U; region < semantics->region_count; region++)
 	{
 		uint32_t runtime_cell;
+		uint32_t runtime_phase;
 		const sg_localization_region_binding_t *binding = &bindings[region];
+		const sg_rune_cell_t *runtime_record;
 
 		locator->prepare_binding_checks++;
 		if (binding->semantic_region_id != semantics->regions[region].id ||
@@ -316,8 +434,19 @@ static int BindRegions(const sg_configuration_space_t *configuration,
 				&runtime_cell, &locator->prepare_runtime_cell_comparisons))
 			return 0;
 		if (binding->reserved != 0U ||
+			binding->runtime_region != region ||
 			binding->runtime_region >= snapshot->region_count)
 			return 0;
+		runtime_record = &snapshot->model->cells[runtime_cell];
+		for (runtime_phase = runtime_record->phases.first;
+			runtime_phase < runtime_record->phases.first +
+				runtime_record->phases.count; runtime_phase++)
+		{
+			locator->prepare_binding_checks++;
+			if (!PhaseOwnedByCell(snapshot->model, runtime_phase,
+				runtime_cell))
+				return 0;
+		}
 		workspace->region_runtime_cells[region] = runtime_cell;
 		workspace->region_runtime_regions[region] = binding->runtime_region;
 	}
@@ -577,7 +706,6 @@ static int PhaseTransitionSemanticsValid(
 }
 
 static int TransitionRecordValid(const sg_rune_model_t *model,
-	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_rune_phase_transition_t *transition,
 	const sg_rune_order_key_t *previous, uint32_t *source_out,
 	uint32_t *destination_out, uint64_t *comparisons)
@@ -617,18 +745,17 @@ static int TransitionRecordValid(const sg_rune_model_t *model,
 			comparisons) ||
 		!FindRuntimePhase(model, &transition->destination_phase,
 			destination_out, comparisons) || *source_out == *destination_out ||
-		snapshot->phases[*source_out].cell_id != cell ||
-		snapshot->phases[*destination_out].cell_id != destination_cell ||
+		!PhaseOwnedByCell(model, *source_out, cell) ||
+		!PhaseOwnedByCell(model, *destination_out, destination_cell) ||
 		!PhaseTransitionSemanticsValid(transition,
 			&model->phases[*source_out], &model->phases[*destination_out]))
 		return 0;
 	return 1;
 }
 
-static int BindPhaseTransitions(const sg_rune_runtime_snapshot_t *snapshot,
+static int BindPhaseTransitions(const sg_rune_model_t *model,
 	sg_localization_workspace_t *workspace, sg_cell_phase_locator_t *locator)
 {
-	const sg_rune_model_t *model = snapshot->model;
 	const sg_rune_order_key_t *previous = NULL;
 	uint32_t transition_index;
 	uint32_t phase;
@@ -654,7 +781,7 @@ static int BindPhaseTransitions(const sg_rune_runtime_snapshot_t *snapshot,
 		uint32_t destination;
 
 		locator->prepare_phase_transition_steps++;
-		if (!TransitionRecordValid(model, snapshot, transition, previous,
+		if (!TransitionRecordValid(model, transition, previous,
 			&source, &destination,
 			&locator->prepare_transition_lookup_comparisons))
 			return 0;
@@ -684,11 +811,10 @@ static int BindPhaseTransitions(const sg_rune_runtime_snapshot_t *snapshot,
 	return 1;
 }
 
-static int KernelEndpointBinding(const sg_rune_runtime_snapshot_t *snapshot,
+static int KernelEndpointBinding(const sg_rune_model_t *model,
 	const sg_rune_capability_kernel_t *kernel, uint32_t *source_phase_out,
 	int *cross_cell_out, uint64_t *comparisons)
 {
-	const sg_rune_model_t *model = snapshot->model;
 	uint32_t source_cell;
 	uint32_t destination_cell;
 	uint32_t destination_phase;
@@ -701,17 +827,16 @@ static int KernelEndpointBinding(const sg_rune_runtime_snapshot_t *snapshot,
 			comparisons) ||
 		!FindRuntimePhase(model, &kernel->destination_phase,
 			&destination_phase, comparisons) ||
-		snapshot->phases[*source_phase_out].cell_id != source_cell ||
-		snapshot->phases[destination_phase].cell_id != destination_cell)
+		!PhaseOwnedByCell(model, *source_phase_out, source_cell) ||
+		!PhaseOwnedByCell(model, destination_phase, destination_cell))
 		return 0;
 	*cross_cell_out = source_cell != destination_cell;
 	return 1;
 }
 
-static int BindPhaseKernels(const sg_rune_runtime_snapshot_t *snapshot,
+static int BindPhaseKernels(const sg_rune_model_t *model,
 	sg_localization_workspace_t *workspace, sg_cell_phase_locator_t *locator)
 {
-	const sg_rune_model_t *model = snapshot->model;
 	uint32_t kernel_index;
 	uint32_t phase;
 
@@ -732,7 +857,7 @@ static int BindPhaseKernels(const sg_rune_runtime_snapshot_t *snapshot,
 		int cross_cell;
 
 		locator->prepare_kernel_steps++;
-		if (!KernelEndpointBinding(snapshot, &model->kernels[kernel_index],
+		if (!KernelEndpointBinding(model, &model->kernels[kernel_index],
 			&source_phase, &cross_cell,
 			&locator->prepare_kernel_lookup_comparisons))
 			return 0;
@@ -751,7 +876,7 @@ static int BindPhaseKernels(const sg_rune_runtime_snapshot_t *snapshot,
 		uint32_t source_phase;
 		int cross_cell;
 
-		if (!KernelEndpointBinding(snapshot, &model->kernels[kernel_index],
+		if (!KernelEndpointBinding(model, &model->kernels[kernel_index],
 			&source_phase, &cross_cell,
 			&locator->prepare_kernel_lookup_comparisons))
 			return 0;
@@ -773,13 +898,15 @@ int SG_CellPhaseLocatorPrepare(
 	sg_cell_phase_locator_t *locator_out,
 	sg_localization_status_t *status_out)
 {
+	sg_localization_phase_view_t phase_view;
+
 	if (locator_out)
 		memset(locator_out, 0, sizeof(*locator_out));
 	SetStatus(status_out, SG_LOCALIZATION_INVALID_ARGUMENT);
 	if (!locator_out || !authority || !authority->world ||
 		!ConfigurationShapeValid(configuration) ||
 		!SemanticsShapeValid(configuration, semantics) ||
-		!RuntimeShapeValid(snapshot))
+		!PhaseViewPrepare(snapshot, &phase_view))
 		return 0;
 	if (!IdentityEqual(&authority->identity, &configuration->identity) ||
 		!IdentityEqual(&authority->identity, &semantics->identity) ||
@@ -822,8 +949,8 @@ int SG_CellPhaseLocatorPrepare(
 		binding_count, workspace, locator_out) ||
 		!BindConfigurationPortals(configuration, workspace, locator_out) ||
 		!BindStanceOverlaps(configuration, workspace) ||
-		!BindPhaseTransitions(snapshot, workspace, locator_out) ||
-		!BindPhaseKernels(snapshot, workspace, locator_out))
+		!BindPhaseTransitions(snapshot->model, workspace, locator_out) ||
+		!BindPhaseKernels(snapshot->model, workspace, locator_out))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_INVALID_BINDING);
 		return 0;
@@ -831,7 +958,7 @@ int SG_CellPhaseLocatorPrepare(
 	locator_out->authority = authority;
 	locator_out->configuration = configuration;
 	locator_out->semantics = semantics;
-	locator_out->snapshot = snapshot;
+	locator_out->phase_view = phase_view;
 	locator_out->cell_region_offsets = workspace->cell_region_offsets;
 	locator_out->region_indices = workspace->region_indices;
 	locator_out->region_runtime_cells = workspace->region_runtime_cells;
@@ -865,7 +992,7 @@ int SG_CellPhaseLocatorPrepare(
 static int LocatorCurrent(const sg_cell_phase_locator_t *locator)
 {
 	return locator && locator->authority && locator->configuration &&
-		locator->semantics && locator->snapshot && locator->snapshot->model &&
+		locator->semantics && locator->phase_view.model &&
 		locator->cell_region_offsets && locator->region_indices &&
 		locator->region_runtime_cells && locator->region_runtime_regions &&
 		locator->cell_portal_offsets && locator->phase_transition_offsets &&
@@ -878,38 +1005,78 @@ static int LocatorCurrent(const sg_cell_phase_locator_t *locator)
 			locator->phase_transition_indices) &&
 		(locator->runtime_kernel_count == 0U ||
 			locator->phase_kernel_indices) &&
-		locator->rune_identity == locator->snapshot->identity &&
-		locator->topology_revision == locator->snapshot->topology_revision &&
+		locator->rune_identity == locator->phase_view.rune_identity &&
+		locator->topology_revision == locator->phase_view.topology_revision &&
 		locator->configuration_cell_count ==
 			locator->configuration->cell_count &&
 		locator->semantic_region_count == locator->semantics->region_count &&
-		locator->runtime_cell_count == locator->snapshot->cell_count &&
-		locator->runtime_phase_count == locator->snapshot->phase_count &&
+		locator->runtime_cell_count == locator->phase_view.cell_count &&
+		locator->runtime_phase_count == locator->phase_view.phase_count &&
 		locator->configuration_portal_count ==
 			locator->configuration->portal_count &&
 		locator->configuration_stance_overlap_count ==
 			locator->configuration->stance_overlap_count &&
 		locator->runtime_phase_transition_count ==
-			locator->snapshot->model->phase_transition_count &&
+			locator->phase_view.transition_count &&
 		locator->runtime_kernel_count ==
-			locator->snapshot->model->kernel_count;
+			locator->phase_view.model->kernel_count &&
+		PhaseViewCurrent(&locator->phase_view);
+}
+
+static int HostLawMatchesLocator(const sg_host_law_view_t *view,
+	const sg_cell_phase_locator_t *locator)
+{
+	const sg_rune_model_identity_t *identity;
+
+	if (!view || !LocatorCurrent(locator))
+		return 0;
+	identity = &locator->authority->identity;
+	return view->version == SG_HOST_LAW_PUBLICATION_VERSION &&
+		memcmp(&view->bsp_identity, &locator->authority->content_identity,
+			sizeof(view->bsp_identity)) == 0 &&
+		memcmp(&view->static_identity.bsp_identity,
+			&locator->authority->content_identity,
+			sizeof(view->static_identity.bsp_identity)) == 0 &&
+		view->bsp_bytes == locator->authority->world->source_size &&
+		view->static_identity.bsp_bytes ==
+			locator->authority->world->source_size &&
+		view->static_identity.physics_abi_id == identity->physics_abi_id &&
+		view->pmove_abi.identity == identity->physics_abi_id &&
+		HullEqual(&view->static_identity.standing_hull,
+			&identity->standing_hull) &&
+		HullEqual(&view->static_identity.crouching_hull,
+			&identity->crouching_hull) &&
+		PhysicsEqual(&view->static_identity.physics, &identity->physics) &&
+		view->maxvelocity == identity->physics.max_velocity;
 }
 
 int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
-	sg_host_pmove_function_t host_pmove,
 	sg_cell_phase_runtime_t *runtime_out,
 	sg_localization_status_t *status_out)
 {
+	sg_host_law_result_t host_result;
+	sg_host_law_runtime_authority_t host_authority;
+
 	if (runtime_out)
 		memset(runtime_out, 0, sizeof(*runtime_out));
 	SetStatus(status_out, SG_LOCALIZATION_INVALID_ARGUMENT);
-	if (!runtime_out || !host_pmove || !LocatorCurrent(locator))
+	if (!runtime_out || !LocatorCurrent(locator))
 		return 0;
+	host_result = SG_HostLawProductionAcquire(&host_authority);
+	if (host_result.status != SG_HOST_LAW_OK)
+	{
+		SetStatus(status_out, SG_LOCALIZATION_RESET_REQUIRED);
+		return 0;
+	}
+	if (!HostLawMatchesLocator(&host_authority.view, locator))
+	{
+		SetStatus(status_out, SG_LOCALIZATION_IDENTITY_MISMATCH);
+		return 0;
+	}
 	runtime_out->locator = locator;
-	runtime_out->host_pmove = host_pmove;
+	runtime_out->host_authority = host_authority;
 	runtime_out->rune_identity = locator->rune_identity;
 	runtime_out->topology_revision = locator->topology_revision;
-	runtime_out->physics_abi_id = locator->authority->identity.physics_abi_id;
 	runtime_out->prepared = 1U;
 	/* The accepted mover/entity/host-law publications are not all available.
 	 * A caller-provided scene or timeline must never turn this on. */
@@ -920,14 +1087,20 @@ int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
 
 static int RuntimeCurrent(const sg_cell_phase_runtime_t *runtime)
 {
-	return runtime && runtime->prepared == 1U &&
-		ZeroBytes(runtime->reserved, sizeof(runtime->reserved)) &&
-		runtime->host_pmove && LocatorCurrent(runtime->locator) &&
-		runtime->rune_identity == runtime->locator->rune_identity &&
-		runtime->topology_revision == runtime->locator->topology_revision &&
-		runtime->physics_abi_id ==
-			runtime->locator->authority->identity.physics_abi_id &&
-		runtime->mover_authority_ready == 0U;
+	sg_host_law_result_t host_result;
+
+	if (!runtime || runtime->prepared != 1U ||
+		!ZeroBytes(runtime->reserved, sizeof(runtime->reserved)) ||
+		!LocatorCurrent(runtime->locator) ||
+		runtime->rune_identity != runtime->locator->rune_identity ||
+		runtime->topology_revision != runtime->locator->topology_revision ||
+		runtime->mover_authority_ready != 0U ||
+		!HostLawMatchesLocator(&runtime->host_authority.view,
+			runtime->locator))
+		return 0;
+	host_result = SG_HostLawProductionAuthorityCurrent(
+		&runtime->host_authority);
+	return host_result.status == SG_HOST_LAW_OK;
 }
 
 static int HostStateMatchesObservation(
@@ -982,11 +1155,14 @@ static int HostStateMatchesStoredState(
 }
 
 static int ObservationValid(const sg_cell_phase_locator_t *locator,
+	const sg_host_law_runtime_authority_t *host_authority,
 	const sg_localization_request_t *request,
 	const sg_localization_observation_t *observation,
 	const sg_localization_environment_t *environment,
 	sg_localization_status_t *status_out)
 {
+	sg_host_law_result_t host_result;
+
 	if (!SubjectValid(&request->expected_subject) ||
 		!SubjectValid(&observation->subject) || observation->frame_sequence == 0U ||
 		observation->kind < SG_LOCALIZATION_OBSERVATION_PRESENT ||
@@ -1003,6 +1179,13 @@ static int ObservationValid(const sg_cell_phase_locator_t *locator,
 	if (observation->authenticated != 1U || environment->authenticated != 1U ||
 		observation->authenticated_at_ms != observation->observed_at_ms ||
 		environment->authenticated_at_ms != environment->sampled_at_ms)
+	{
+		SetStatus(status_out, SG_LOCALIZATION_UNAUTHENTICATED);
+		return 0;
+	}
+	host_result = SG_HostLawProductionSubjectCurrent(host_authority,
+		&request->expected_subject);
+	if (host_result.status != SG_HOST_LAW_OK)
 	{
 		SetStatus(status_out, SG_LOCALIZATION_UNAUTHENTICATED);
 		return 0;
@@ -1206,7 +1389,7 @@ static int ResolveAbsenceTimePhase(const sg_cell_phase_locator_t *locator,
 	const sg_localized_player_state_t *state, uint64_t elapsed_ms,
 	uint32_t *phase_out, uint32_t *candidates_examined_out)
 {
-	const sg_rune_model_t *model = locator->snapshot->model;
+	const sg_rune_model_t *model = locator->phase_view.model;
 	uint32_t current = state->field_pose.phase.phase_id;
 	uint64_t cursor = state->phase_elapsed_ms;
 	uint64_t comparisons = 0U;
@@ -1276,16 +1459,19 @@ static int ResolveAbsenceTimePhase(const sg_cell_phase_locator_t *locator,
 	return 0;
 }
 
-static int ClearRecoveryTransition(const sg_cell_phase_locator_t *locator,
-	const sg_localization_environment_t *environment,
+static int ClearRecoveryTransition(
+	const sg_host_law_runtime_authority_t *host_authority,
 	const sg_localized_player_state_t *previous,
 	const sg_localization_observation_t *observation)
 {
 	sg_host_collision_transition_t transition;
+	sg_host_law_result_t host_result;
 
-	return SG_HostCollisionTransition(locator->authority, environment->scene,
-			previous->field_pose.position, observation->position,
-			observation->stance, &transition) && transition.clear;
+	host_result = SG_HostLawProductionSubjectTransition(host_authority,
+		&observation->subject,
+		previous->field_pose.position, observation->position,
+		observation->stance, &transition);
+	return host_result.status == SG_HOST_LAW_OK && transition.clear;
 }
 
 static int PointInsideOverlap(const sg_configuration_space_t *configuration,
@@ -1483,7 +1669,7 @@ static int RepresentedPhaseTransition(const sg_cell_phase_locator_t *locator,
 	const sg_localization_observation_t *observation,
 	uint32_t *candidates_examined)
 {
-	const sg_rune_model_t *model = locator->snapshot->model;
+	const sg_rune_model_t *model = locator->phase_view.model;
 	uint32_t source_phase = previous->field_pose.phase.phase_id;
 	uint32_t first = locator->phase_transition_offsets[source_phase];
 	uint32_t last = locator->phase_transition_offsets[source_phase + 1U];
@@ -1562,7 +1748,7 @@ static int RepresentedPortalPhaseTransition(
 	const sg_localized_player_state_t *previous, uint32_t destination_cell,
 	uint32_t destination_phase, uint32_t *candidates_examined)
 {
-	const sg_rune_model_t *model = locator->snapshot->model;
+	const sg_rune_model_t *model = locator->phase_view.model;
 	uint32_t source_cell = previous->field_pose.phase.cell_id;
 	uint32_t source_phase = previous->field_pose.phase.phase_id;
 	uint32_t first;
@@ -1611,7 +1797,7 @@ static int RepresentedRuntimeCellTransition(
 	const sg_localization_observation_t *observation,
 	uint32_t *candidates_examined)
 {
-	const sg_rune_model_t *model = locator->snapshot->model;
+	const sg_rune_model_t *model = locator->phase_view.model;
 	uint32_t source_phase = previous->field_pose.phase.phase_id;
 	uint32_t first = locator->phase_kernel_offsets[source_phase];
 	uint32_t last = locator->phase_kernel_offsets[source_phase + 1U];
@@ -1730,9 +1916,10 @@ static int StoredStateMatchesPhase(const sg_cell_phase_locator_t *locator,
 	uint32_t axis;
 
 	if (!SG_DestinationPoseValid(&state->field_pose) ||
-		!SG_PhaseCoordinateValid(locator->snapshot, &state->field_pose.phase))
+		!PhaseCoordinateValidForModel(locator->phase_view.model,
+			&state->field_pose.phase))
 		return 0;
-	phase = &locator->snapshot->model->phases[
+	phase = &locator->phase_view.model->phases[
 		state->field_pose.phase.phase_id];
 	if (phase->stance != state->stance || phase->motion != state->motion ||
 		phase->support != state->support || phase->medium != state->medium ||
@@ -1832,7 +2019,7 @@ static sg_localization_status_t PreviousStateStatus(
 		return SG_LOCALIZATION_STALE;
 	if (previous->configuration_cell >= locator->configuration_cell_count ||
 		previous->semantic_region >= locator->semantic_region_count ||
-		previous->runtime_region >= locator->snapshot->region_count)
+		previous->runtime_region >= locator->phase_view.region_count)
 		return SG_LOCALIZATION_RECOVERY_REJECTED;
 	memset(&pose, 0, sizeof(pose));
 	pose.water_level = previous->water_level;
@@ -1952,7 +2139,7 @@ static int FindPhase(const sg_cell_phase_locator_t *locator,
 	const sg_rune_mechanism_ref_t *mover, const float phase_velocity[3],
 	uint64_t elapsed_ms, uint32_t *phase_out)
 {
-	const sg_rune_model_t *model = locator->snapshot->model;
+	const sg_rune_model_t *model = locator->phase_view.model;
 	const sg_rune_cell_t *cell = &model->cells[runtime_cell];
 	uint32_t best = UINT32_MAX;
 	uint32_t local;
@@ -1975,7 +2162,7 @@ static int FindPhase(const sg_cell_phase_locator_t *locator,
 			!IntervalContains(&phase->velocity.z, phase_velocity[2]) ||
 			!IntervalContains(&phase->elapsed_ms, (double)elapsed_ms) ||
 			elapsed_ms > phase->time_horizon_ms ||
-			locator->snapshot->phases[index].cell_id != runtime_cell)
+			!PhaseOwnedByCell(model, index, runtime_cell))
 			continue;
 		if (best == UINT32_MAX || PhaseNarrower(phase, &model->phases[best]))
 			best = index;
@@ -1987,6 +2174,7 @@ static int FindPhase(const sg_cell_phase_locator_t *locator,
 }
 
 static int LocalizeOne(const sg_cell_phase_locator_t *locator,
+	const sg_host_law_runtime_authority_t *host_authority,
 	const sg_localization_request_t *request,
 	const sg_localization_observation_t *observation,
 	const sg_localization_environment_t *environment,
@@ -2017,6 +2205,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	int continuity;
 	int exact_configuration;
 	sg_localization_status_t previous_status;
+	sg_host_law_result_t host_result;
 
 	if (state_out)
 		memset(state_out, 0, sizeof(*state_out));
@@ -2024,7 +2213,8 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	if (!state_out || !request || !observation || !environment ||
 		!LocatorCurrent(locator))
 		return 0;
-	if (!ObservationValid(locator, request, observation, environment,
+	if (!ObservationValid(locator, host_authority, request, observation,
+			environment,
 			status_out))
 		return 0;
 	if (!RequestRecoveryValid(request, observation))
@@ -2042,6 +2232,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		const sg_rune_phase_basis_t *phase_basis;
 		uint64_t elapsed;
 		uint32_t candidates_examined;
+		uint32_t phase_cell;
 
 		previous_status = PreviousStateStatus(locator, observation,
 			request->previous, 0);
@@ -2076,13 +2267,14 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		elapsed = observation->observed_at_ms -
 			request->previous->phase_started_at_ms;
 		if (!ResolveAbsenceTimePhase(locator, request->previous, elapsed,
-				&phase, &candidates_examined))
+				&phase, &candidates_examined) ||
+			!PhaseCell(locator->phase_view.model, phase, &phase_cell))
 		{
 			SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 			return 0;
 		}
-		phase_basis = &locator->snapshot->model->phases[phase];
-		state_out->field_pose.phase = locator->snapshot->phases[phase];
+		phase_basis = &locator->phase_view.model->phases[phase];
+		state_out->field_pose.phase = PhaseCoordinate(phase, phase_cell);
 		state_out->field_pose.sample_time_ms = observation->observed_at_ms;
 		state_out->phase_elapsed_ms = elapsed;
 		state_out->time_quantum_index = elapsed /
@@ -2101,10 +2293,12 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		SetStatus(status_out, previous_status);
 		return 0;
 	}
-	if (!SG_HostCollisionClassifyPose(locator->authority, environment->scene,
-			observation->position, observation->stance, &host_pose))
+	host_result = SG_HostLawProductionSubjectClassifyPose(host_authority,
+		&observation->subject, observation->position, observation->stance,
+		&host_pose);
+	if (host_result.status != SG_HOST_LAW_OK)
 	{
-		SetStatus(status_out, SG_LOCALIZATION_AMBIGUOUS_INPUT);
+		SetStatus(status_out, SG_LOCALIZATION_UNAUTHENTICATED);
 		return 0;
 	}
 	if (!host_pose.valid)
@@ -2113,7 +2307,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		return 0;
 	}
 	if (continuity && !trace_transition_proven &&
-		!ClearRecoveryTransition(locator, environment, request->previous,
+		!ClearRecoveryTransition(host_authority, request->previous,
 			observation))
 	{
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
@@ -2287,7 +2481,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 		SetStatus(status_out, SG_LOCALIZATION_RECOVERY_REJECTED);
 		return 0;
 	}
-	state_out->field_pose.phase = locator->snapshot->phases[phase];
+	state_out->field_pose.phase = PhaseCoordinate(phase, runtime_cell);
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		state_out->field_pose.position[axis] = observation->position[axis];
@@ -2306,7 +2500,7 @@ static int LocalizeOne(const sg_cell_phase_locator_t *locator,
 	state_out->phase_started_at_ms = phase_started_at_ms;
 	state_out->phase_elapsed_ms = elapsed_ms;
 	state_out->time_quantum_index = elapsed_ms /
-		locator->snapshot->model->phases[phase].time_quantum_ms;
+		locator->phase_view.model->phases[phase].time_quantum_ms;
 	state_out->configuration_cell = configuration_cell;
 	state_out->semantic_region = semantic_region;
 	state_out->runtime_region = state_out->field_pose.region_id;
@@ -2441,7 +2635,8 @@ static int ReplayUnduckProbeValid(
 }
 
 static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
-	const sg_host_collision_scene_t *scene,
+	const sg_host_law_runtime_authority_t *host_authority,
+	const sg_localization_subject_t *subject,
 	const sg_localized_player_state_t *previous,
 	const sg_host_pmove_replay_t *replay,
 	const sg_host_pmove_substep_t *substep, uint32_t expected_step,
@@ -2456,6 +2651,7 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 	size_t first_trace;
 	size_t trace_index;
 	uint32_t axis;
+	sg_host_law_result_t host_result;
 
 	if (substep->step != expected_step ||
 		substep->elapsed_ms != (expected_step + 1U) * substep_ms ||
@@ -2490,12 +2686,16 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 		SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
 	before_grounded =
 		(substep->before_state.pm_flags & PMF_ON_GROUND) != 0;
-	if (!SG_HostCollisionClassifyPose(authority, scene,
-			substep->before_origin, before_stance, &before_pose) ||
-		!before_pose.valid || before_grounded != before_pose.supported)
+	host_result = SG_HostLawProductionSubjectClassifyPose(host_authority,
+		subject,
+		substep->before_origin, before_stance, &before_pose);
+	if (host_result.status != SG_HOST_LAW_OK || !before_pose.valid ||
+		before_grounded != before_pose.supported)
 		return 0;
-	if (!SG_HostCollisionClassifyPose(authority, scene, substep->origin,
-			substep->stance, &pose) || !pose.valid ||
+	host_result = SG_HostLawProductionSubjectClassifyPose(host_authority,
+		subject,
+		substep->origin, substep->stance, &pose);
+	if (host_result.status != SG_HOST_LAW_OK || !pose.valid ||
 		substep->grounded != pose.supported ||
 		substep->water_level != pose.water_level ||
 		substep->water_type != (int)pose.water_type ||
@@ -2530,13 +2730,15 @@ static int ReplayMotionValid(const sg_host_collision_authority_t *authority,
 			!ReplayTraceStance(authority, record, &trace_stance) ||
 			(trace_stance != state_stance &&
 				(trace_stance != SG_RUNE_STANCE_STANDING ||
-				!ReplayUnduckProbeValid(replay, substep, record,
-					trace_index, first_trace, before_grounded))) ||
-			(trace_stance == state_stance && trace_stance != substep->stance) ||
-			!SG_HostCollisionTrace(authority, scene, record->start,
-				record->mins, record->maxs, record->end,
-				SG_HOST_MASK_PLAYER_SOLID, &authenticated) ||
-			authenticated.allsolid != record->result.allsolid ||
+					!ReplayUnduckProbeValid(replay, substep, record,
+						trace_index, first_trace, before_grounded))) ||
+				(trace_stance == state_stance && trace_stance != substep->stance))
+				return 0;
+		host_result = SG_HostLawProductionSubjectTrace(host_authority, subject,
+			record->start, record->mins, record->maxs, record->end,
+			SG_HOST_MASK_PLAYER_SOLID, &authenticated);
+		if (host_result.status != SG_HOST_LAW_OK ||
+				authenticated.allsolid != record->result.allsolid ||
 			authenticated.startsolid != record->result.startsolid ||
 			authenticated.fraction != record->result.fraction ||
 			memcmp(authenticated.end, record->result.end,
@@ -2604,7 +2806,8 @@ static int ReplayEnvelopeValid(const sg_host_collision_authority_t *authority,
 		replay->result.collision_trace_count <= replay->result.trace_count &&
 		replay->result.gravity == physics->gravity &&
 		replay->result.physics_abi_id == authority->identity.physics_abi_id &&
-		replay->bsp_content_id == authority->identity.bsp_content_id &&
+		memcmp(&replay->bsp_identity, &authority->content_identity,
+			sizeof(replay->bsp_identity)) == 0 &&
 		replay->physics_abi_id == authority->identity.physics_abi_id &&
 		replay->frame_ms == physics->frame_ms &&
 		replay->substep_ms == physics->substep_ms;
@@ -2643,21 +2846,31 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	uint64_t next_trace_ordinal = 1U;
 	uint64_t collision_trace_count = 0U;
 	size_t index;
+	sg_host_law_result_t host_result;
 
-	if (!RuntimeCurrent(runtime))
+	if (!runtime)
 	{
 		if (state_out)
 			memset(state_out, 0, sizeof(*state_out));
 		SetStatus(status_out, SG_LOCALIZATION_INVALID_ARGUMENT);
 		return 0;
 	}
+	if (!RuntimeCurrent(runtime))
+	{
+		if (state_out)
+			memset(state_out, 0, sizeof(*state_out));
+		SetStatus(status_out, SG_LOCALIZATION_RESET_REQUIRED);
+		return 0;
+	}
 	locator = runtime->locator;
 	if (!request || !observation || !environment ||
 		observation->kind != SG_LOCALIZATION_OBSERVATION_PRESENT ||
 		request->previous == NULL)
-		return LocalizeOne(locator, request, observation, environment,
+		return LocalizeOne(locator, &runtime->host_authority, request,
+			observation, environment,
 			state_out, status_out, 0, 0);
-	if (!ObservationValid(locator, request, observation, environment,
+	if (!ObservationValid(locator, &runtime->host_authority, request,
+			observation, environment,
 			status_out))
 	{
 		if (state_out)
@@ -2666,7 +2879,6 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	}
 	if (!state_out || !environment->pmove_request ||
 		!environment->replay_substeps || !environment->replay_traces ||
-		(environment->scene && environment->scene->instance_count != 0U) ||
 		locator->authority->identity.physics.frame_ms > UCHAR_MAX ||
 		environment->pmove_request->command.msec !=
 			(byte)locator->authority->identity.physics.frame_ms ||
@@ -2689,9 +2901,11 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	replay_workspace.substep_capacity = environment->replay_substep_capacity;
 	replay_workspace.traces = environment->replay_traces;
 	replay_workspace.trace_capacity = environment->replay_trace_capacity;
-	if (!SG_HostPmoveReplayFrame(locator->authority, environment->scene,
-			runtime->host_pmove, environment->pmove_request,
-			&replay_workspace, &replay, &replay_error))
+	host_result = SG_HostLawProductionReplayFrame(&runtime->host_authority,
+		&request->expected_subject,
+		environment->pmove_request, &replay_workspace, &replay,
+		&replay_error);
+	if (host_result.status != SG_HOST_LAW_OK)
 	{
 		memset(state_out, 0, sizeof(*state_out));
 		SetStatus(status_out, replay_error == SG_HOST_PMOVE_ERROR_CAPACITY ?
@@ -2714,7 +2928,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		sg_localization_request_t step_request = *request;
 		sg_localized_player_state_t *output = (index & 1U) ? &second : &first;
 
-		if (!ReplayMotionValid(locator->authority, environment->scene,
+		if (!ReplayMotionValid(locator->authority, &runtime->host_authority,
+				&request->expected_subject,
 				previous, &replay, substep,
 				(uint32_t)index, replay.substep_ms, next_trace_ordinal,
 				&next_trace_ordinal) ||
@@ -2742,7 +2957,8 @@ int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 		step_environment.replay_trace_capacity = 0U;
 		step_request.previous = previous;
 		step_request.now_ms = step.observed_at_ms;
-		if (!LocalizeOne(locator, &step_request, &step, &step_environment,
+		if (!LocalizeOne(locator, &runtime->host_authority, &step_request,
+				&step, &step_environment,
 				output, status_out, index != 0U, 1))
 		{
 			memset(state_out, 0, sizeof(*state_out));

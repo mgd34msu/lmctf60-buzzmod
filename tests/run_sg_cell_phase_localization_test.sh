@@ -5,10 +5,31 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
-strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
-sources='tests/sg_cell_phase_localization_test.c slipgate/sg_cell_phase_localization.c slipgate/sg_host_collision.c slipgate/sg_host_pmove.c slipgate/sg_rune_model.c'
+strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion'
+strict="$strict -Wsign-conversion -Wshadow -Wstrict-prototypes"
+strict="$strict -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align"
+sources='tests/sg_cell_phase_localization_test.c'
+sources="$sources slipgate/sg_cell_phase_localization.c"
+sources="$sources slipgate/sg_host_collision.c slipgate/sg_host_pmove.c"
+sources="$sources slipgate/sg_rune_model.c"
 
 cd "$repo_dir"
+
+raw_owner_symbols='sg_host_pmove_function_t|SG_HostPmoveReplayFrame'
+raw_owner_symbols="$raw_owner_symbols|SG_HostCollision(Trace|PointContents"
+raw_owner_symbols="$raw_owner_symbols|ClassifyPose|Transition)"
+if grep -Eq "$raw_owner_symbols" \
+		slipgate/sg_cell_phase_localization.c \
+		slipgate/sg_cell_phase_localization.h; then
+	echo 'raw caller-selected physics/collision authority in localization' >&2
+	exit 1
+fi
+if grep -Eq 'sg_phase_catalog|SG_PhaseCatalog' \
+		slipgate/sg_cell_phase_localization.c \
+		slipgate/sg_cell_phase_localization.h; then
+	echo 'offline phase construction leaked into runtime localization' >&2
+	exit 1
+fi
 for cc in gcc clang
 do
 	$cc $strict -I. $sources -lm -o "$tmp_dir/localization-$cc"
@@ -45,6 +66,11 @@ build_real_localization()
 for cc in gcc clang
 do
 	build_real_localization "$cc" "$cc" ''
+	if nm -u "$tmp_dir/localization-$cc.o" | grep -Eq \
+			'SG_PhaseCatalog|SG_HostPmoveReplayFrame|SG_HostCollision'; then
+		echo 'forbidden offline or raw-authority symbol in localization object' >&2
+		exit 1
+	fi
 	"$tmp_dir/real-$cc"
 done
 

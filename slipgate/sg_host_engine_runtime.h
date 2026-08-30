@@ -31,6 +31,17 @@ typedef struct sg_host_static_identity_s
  * runtime and cannot install or replace a callback. */
 typedef struct sg_host_engine_runtime_s sg_host_engine_runtime_t;
 
+/* A live player life is the client slot together with the host-minted ctfid.
+ * The engine owner derives this pair from the current edict.  Consumers may
+ * retain the value, but every operation checks it again before and after the
+ * captured engine callback. */
+typedef struct sg_host_engine_subject_identity_s
+{
+	uint32_t client_id;
+	uint32_t reserved;
+	uint64_t spawn_generation;
+} sg_host_engine_subject_identity_t;
+
 typedef enum sg_host_engine_runtime_status_e
 {
 	SG_HOST_ENGINE_RUNTIME_OK = 0,
