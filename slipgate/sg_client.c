@@ -58,6 +58,8 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	if (bot)
 		(void)SG_HookDiagnosticsFinish(&bot->hook_diagnostics,
 		    "slot-retirement", "lifecycle");
+	if (bot)
+		SG_StrategyCallerDestroy(&bot->strategy);
 	if (bot && bot->active && bot->ent)
 		SG_CancelBotDelayedUses(bot->ent);
 	if (slot >= 0 && slot < SG_MAXBOTS && instance_token != 0ULL)
