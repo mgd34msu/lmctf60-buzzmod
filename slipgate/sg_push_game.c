@@ -320,8 +320,7 @@ int SG_PushGameStageAuthenticatedProbe(int link_index)
 	entity->client->ps.pmove.pm_time = 0;
 	entity->client->old_pmove = entity->client->ps.pmove;
 	SG_PushLiveReset(&bot->push);
-	bot->seed = SG_Rune()->links[link_index].from;
-	VectorCopy(entity->s.origin, bot->last_origin);
+	SG_BotLocalizationInvalidate(bot);
 	bot->commit_link = link_index;
 	bot->sticky_link = link_index;
 	bot->commit_until = level.time + 10.0f;

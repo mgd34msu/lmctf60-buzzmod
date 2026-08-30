@@ -199,7 +199,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 		Lead_Abort(bot, "switched off");
 		return NULL;
 	}
-	if (!SG_Rune() || bot->seed < 0 || !e->client)
+	if (!SG_Rune() || SG_BotLocalizationCell(bot) < 0 || !e->client)
 		return NULL;
 
 	team = e->client->ctf.teamnum;
@@ -370,7 +370,7 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 		b->claimed_by = cl;
 		SG_TimerArm(&b->claimed_until, SG_LEAD_LEASE);
 
-		if (!Lead_Flood(lead_field, bot->lead_seed, bot->seed))
+		if (!Lead_Flood(lead_field, bot->lead_seed, SG_BotLocalizationCell(bot)))
 		{
 			Lead_Abort(bot, "no route");
 			return NULL;
@@ -433,9 +433,9 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 		 * Prove each candidate before choosing: an isolated or wrong-component
 		 * pad must not suppress a later clock the bot can actually contest. */
 		candidate_seed = Rune_NearestSeed(SG_Rune(), b->org);
-		if (!Lead_Flood(lead_field, candidate_seed, bot->seed))
+		if (!Lead_Flood(lead_field, candidate_seed, SG_BotLocalizationCell(bot)))
 			continue;
-		candidate_travel = (float)lead_field[bot->seed] / 1000.0f;
+		candidate_travel = (float)lead_field[SG_BotLocalizationCell(bot)] / 1000.0f;
 		if (SG_TimerPending(b->believed_respawn_time - candidate_travel - lead))
 			continue;
 
@@ -453,12 +453,12 @@ const int *Lead_Field(sg_bot_t *bot, sg_role_t role, qboolean carrying,
 	b = &sg_caco_items[ti][best];
 	/* The candidate loop reuses the scratch flood. Rebuild the winner so the
 	 * returned route and the committed entity are the same exact pad. */
-	if (!Lead_Flood(lead_field, padseed, bot->seed))
+	if (!Lead_Flood(lead_field, padseed, SG_BotLocalizationCell(bot)))
 		return NULL;
 
 	/* The honest travel time was already the admission gate; retain it for the
 	 * commitment receipt and diagnostic. */
-	travel = (float)lead_field[bot->seed] / 1000.0f;
+	travel = (float)lead_field[SG_BotLocalizationCell(bot)] / 1000.0f;
 
 	Lead_RetireSupersededRun(bot);
 	bot->lead_ent = b->ent;

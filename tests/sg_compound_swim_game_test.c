@@ -5,6 +5,7 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "tests/support/sg_bot_localization_fixture.h"
 #include "slipgate/sg_compound_publication.h"
 #include "slipgate/sg_compound_swim_game.h"
 #include "slipgate/sg_compound_world.h"
@@ -376,7 +377,7 @@ static int TestAuthenticatedProbeStagesPublishedSource(void)
 	CHECK(clients[0].oldvelocity[2] == -5.0f);
 	CHECK(entities[1].waterlevel == 3);
 	CHECK(entities[1].watertype == CONTENTS_WATER);
-	CHECK(sg_bots[0].seed == 0);
+	CHECK(SG_BotLocalizationCell(&sg_bots[0]) < 0);
 	CHECK(sg_bots[0].commit_link == 0);
 	CHECK(sg_bots[0].sticky_link == 0);
 	CHECK(sg_bots[0].compound_swim.guard_owned);

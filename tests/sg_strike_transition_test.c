@@ -2,6 +2,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "tests/support/sg_bot_localization_fixture.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_declared_door_guard.h"
 #include "slipgate/sg_defense_supply.h"
@@ -232,7 +233,7 @@ static sg_bot_t Bot(void)
 	int index;
 
 	memset(&bot, 0, sizeof(bot));
-	bot.seed = 0;
+	SG_TestBotLocalizationCellSet(&bot, 0);
 	bot.commit_link = -1;
 	bot.strike_weapon_link = -1;
 	bot.sticky_link = -1;

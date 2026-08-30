@@ -3,6 +3,7 @@
 #define SG_STRATEGY_RUNTIME_BRIDGE_H
 
 #include "sg_strategy_caller.h"
+#include "sg_cell_phase_localization.h"
 
 typedef struct sg_strategy_runtime_execution_s
 {
@@ -14,6 +15,7 @@ typedef struct sg_strategy_runtime_execution_s
 typedef struct sg_strategy_runtime_plan_request_s
 {
 	uint64_t commitment_id;
+	const sg_localized_player_state_t *localized_player;
 	sg_strategy_caller_authority_t authority;
 	sg_strategy_plan_spec_t spec;
 	uint16_t execution_count;
@@ -29,6 +31,7 @@ typedef struct sg_strategy_runtime_plan_request_s
 typedef struct sg_strategy_runtime_target_request_s
 {
 	uint64_t commitment_id;
+	const sg_localized_player_state_t *localized_player;
 	sg_strategy_caller_authority_t authority;
 	sg_strategy_goal_id_t goal_id;
 	sg_strategy_target_id_t target_id;

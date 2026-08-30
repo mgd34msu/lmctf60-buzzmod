@@ -1114,10 +1114,15 @@ static void TestAcceptedOwnerLifecycle(void)
 	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
 		0.0f, 0.0f, 24.0f);
 	CHECK(Localize(&fixture, &observation, &environment, &state, &status));
+	CHECK(SG_CellPhaseRuntimeCurrent(&fixture.runtime));
+	CHECK(SG_CellPhaseLocalizedStateCurrent(&fixture.runtime, &subject,
+		&state));
 
 	/* A respawn retires the old life immediately. The accepted owner may mint
 	 * the replacement life without rebuilding an unchanged level publication. */
 	TestOwnerSetSubject(7U, 4U);
+	CHECK(!SG_CellPhaseLocalizedStateCurrent(&fixture.runtime, &subject,
+		&state));
 	CHECK(!Localize(&fixture, &observation, &environment, &state, &status));
 	CHECK(status == SG_LOCALIZATION_UNAUTHENTICATED);
 	observation.kind = SG_LOCALIZATION_OBSERVATION_NEW_SPAWN;
@@ -1127,6 +1132,8 @@ static void TestAcceptedOwnerLifecycle(void)
 	CHECK(LocalizeRequest(&fixture, &request, &observation, &environment,
 		&state, &status));
 	CHECK(state.subject.spawn_generation == 4U);
+	CHECK(SG_CellPhaseLocalizedStateCurrent(&fixture.runtime,
+		&request.expected_subject, &state));
 
 	/* Reset invalidates the retained localization runtime. Reissuing the exact
 	 * same law values still receives a distinct owner epoch, so the old runtime
@@ -1135,6 +1142,7 @@ static void TestAcceptedOwnerLifecycle(void)
 	old_view = test_host_owner.view;
 	old_epoch = stale_runtime.host_authority.epoch;
 	test_host_owner.installed = 0;
+	CHECK(!SG_CellPhaseRuntimeCurrent(&fixture.runtime));
 	CHECK(!LocalizeRequest(&fixture, &request, &observation, &environment,
 		&state, &status));
 	CHECK(status == SG_LOCALIZATION_RESET_REQUIRED);

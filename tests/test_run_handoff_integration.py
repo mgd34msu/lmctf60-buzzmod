@@ -26,7 +26,7 @@ def main() -> None:
     assert commit.count("SG_RunCompletionHandoff(") == 1
     early = commit[resolve:latch]
     assert "completion == SG_RUN_ARRIVED" in early
-    assert "bot->seed != incoming->to" in early
+    assert "SG_BotLocalizationCell(bot) != incoming->to" in early
     assert "return -1;" in early
 
     compound_boundary = commit.index("SG_CompoundDropLiveBoundary(")
@@ -42,22 +42,23 @@ def main() -> None:
     cancel = transaction.index("SG_StagedTraversalCancel(bot, RL_RUN);")
     pmove = transaction.index("ClientThink(")
     validate = transaction.index("Run_HandoffBodyValid(")
-    publish = transaction.index("bot->seed = completed->to;")
-    assert cancel < pmove < validate < publish
+    invalidate = transaction.index("SG_BotLocalizationInvalidate(bot);", validate)
+    assert cancel < pmove < validate < invalidate
     assert transaction.count("ClientThink(") == 1
     assert "for (step = 0; step < 4; step++)" in transaction
     assert "coast.msec = 25;" in transaction
-    assert "bot->seed = -1;" in transaction
+    assert transaction.count("SG_BotLocalizationInvalidate(bot);") == 2
+    assert "outcome=invalidated" in transaction
 
     # The handoff ends the current think. The next frame still traverses the
-    # ordinary TrackSeed -> PickLink -> CommitLink pipeline; no mechanism is
-    # directly armed by the transaction itself.
+    # ordinary authenticated-localization -> PickLink -> CommitLink pipeline;
+    # no mechanism is directly armed by the transaction itself.
     arach = (ROOT / "slipgate/sg_arach.c").read_text(encoding="utf-8")
     bot_think = section(arach, "void SG_BotThink(", "\n\n\nvoid SG_RunFrame(")
-    track = bot_think.index("Think_TrackSeed(")
+    localize = bot_think.index("SG_BotLocalizationFrameBegin(bot);")
     pick = bot_think.index("Think_PickLink(")
     commit_call = bot_think.index("Think_CommitLink(")
-    assert track < pick < commit_call
+    assert localize < pick < commit_call
     assert "if (think_over)\n\t\treturn;" in bot_think[commit_call:]
 
     print("test_run_handoff_integration: ok")

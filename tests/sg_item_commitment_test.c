@@ -2,6 +2,7 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot.h"
+#include "tests/support/sg_bot_localization_fixture.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_defense_supply.h"
 #include "slipgate/sg_hooks.h"
@@ -241,7 +242,7 @@ static sg_bot_t *ResetLead(int state, float seen_watermark)
 	bot = &sg_bots[0];
 	bot->active = true;
 	bot->ent = &entities[1];
-	bot->seed = 0;
+	SG_TestBotLocalizationCellSet(bot, 0);
 	bot->commit_link = -1;
 	bot->tac_seed = 7;
 	bot->lead_ent = 3;
@@ -332,7 +333,7 @@ static sg_bot_t *PrepareNewErrand(int action)
 	bot = &sg_bots[0];
 	bot->active = true;
 	bot->ent = &entities[1];
-	bot->seed = 0;
+	SG_TestBotLocalizationCellSet(bot, 0);
 	bot->tac_seed = 7;
 	bot->tac_time = 4.0f;
 	bot->lead_slot = -1;
@@ -356,7 +357,7 @@ static void TestNewErrandRetiresSupersededRun(void)
 
 	bot = PrepareNewErrand(RL_RUN);
 	field = Lead_Field(bot, SG_ROLE_ATTACK, false, -1);
-	CHECK(field != NULL && field[bot->seed] == 500);
+	CHECK(field != NULL && field[SG_BotLocalizationCell(bot)] == 500);
 	CHECK(bot->lead_ent == 3);
 	CHECK(transition_cancel_calls == 1 && transition_cancel_bot == bot &&
 	    transition_cancel_action == RL_RUN);
@@ -626,7 +627,7 @@ static void TestUnreachableEarlyPadDoesNotSuppressReachablePad(void)
 	bot = &sg_bots[0];
 	bot->active = true;
 	bot->ent = &entities[1];
-	bot->seed = 0;
+	SG_TestBotLocalizationCellSet(bot, 0);
 	bot->commit_link = -1;
 	bot->tac_seed = -1;
 	bot->lead_slot = -1;

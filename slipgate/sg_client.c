@@ -31,6 +31,7 @@
 #include "slipgate/sg_persona_assignment.h"
 #include "slipgate/sg_escape_random.h"
 #include "slipgate/sg_role_policy.h"
+#include "slipgate/sg_bot_localization.h"
 
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
@@ -72,11 +73,12 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	SG_NadeTargetClear(bot);
 	/* This is the only production reset point for the immutable instance. */
 	SG_BotPOVInstanceReset(bot);
+	SG_BotLocalizationReset(bot);
 	memset(bot, 0, sizeof(*bot));
 	(void)SG_StrategyCallerInit(&bot->strategy);
+	SG_BotLocalizationReset(bot);
 	SG_CompoundHookGameReset(bot);
 	bot->compound_drop_live.drop_link = -1;
-	bot->seed = -1;
 	bot->hook_link = -1;
 	bot->air_hook_launch_active = false;
 	bot->air_hook_launch_link = -1;
@@ -549,7 +551,6 @@ qboolean SG_AddBotTeam(int teamnum)
 	 * otherwise level.time can make zero-initialized clocks immediately ancient
 	 * and a spawn near world origin look wedged on its first live frame. */
 	VectorCopy(ent->s.origin, sg_bots[slot].stuck_origin);
-	VectorCopy(ent->s.origin, sg_bots[slot].last_origin);
 	VectorCopy(ent->s.origin, sg_bots[slot].watch_org);
 	VectorCopy(ent->s.origin, sg_bots[slot].stag_org);
 	VectorCopy(ent->s.origin, sg_bots[slot].wedge_org);
@@ -647,7 +648,7 @@ void SG_ListBots(void)
 		           e->client->resp.score,
 		           (float)SG_CombatSkill(e) / 100.0f,
 		           (role >= 0 && role < SG_ROLES) ? sg_role_names[role] : "-",
-		           sg_bots[i].seed);
+		           SG_BotLocalizationCell(&sg_bots[i]));
 		n++;
 	}
 	if (!n)

@@ -662,10 +662,9 @@ static int AuthenticatedProbeFixture(void)
 	CHECK(client.oldvelocity[2] == -5.0f);
 	CHECK(bot.ent->groundentity == g_edicts &&
 	      bot.ent->watertype == CONTENTS_WATER && bot.ent->waterlevel == 2);
-	CHECK(bot.seed == 1 && bot.commit_link == 3 && bot.sticky_link == 3);
+	CHECK(SG_BotLocalizationCell(&bot) < 0 && bot.commit_link == 3 &&
+	      bot.sticky_link == 3);
 	CHECK(bot.commit_until == 17.0f && bot.latch_until == 17.0f);
-	CHECK(memcmp(bot.last_origin, binding.source_seed.origin,
-	             sizeof(vec3_t)) == 0);
 	CHECK(memcmp(bot.stuck_origin, binding.source_seed.origin,
 	             sizeof(vec3_t)) == 0);
 	CHECK(memcmp(bot.watch_org, binding.source_seed.origin,
@@ -676,8 +675,6 @@ static int AuthenticatedProbeFixture(void)
 	             sizeof(vec3_t)) == 0);
 	CHECK(bot.watch_since == level.time && bot.stag_since == level.time &&
 	      bot.wedge_since == level.time);
-	CHECK(!bot.seedless_active && bot.seedless_since == 0.0f &&
-	      bot.seedless_turn_until == 0.0f);
 	CHECK(bot.compound_hook_live.guard_owned &&
 	      bot.compound_hook_live.local_owned);
 	CHECK(strstr(event_log, "dhook probe-staged bot=0 link=3 ") != NULL);

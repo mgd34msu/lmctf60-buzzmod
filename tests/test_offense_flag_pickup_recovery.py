@@ -560,8 +560,8 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
         self.assertIn("role == SG_ROLE_CARRY", terminal)
         self.assertIn("SG_OwnHomeFlagDirectTouchAuthority(e, team, NULL)", terminal)
         self.assertIn("if (attack_touch || capture_touch)", terminal)
-        self.assertNotIn("goal_field[bot->seed]", terminal)
-        self.assertNotIn("bot->seed", terminal)
+        self.assertNotIn("goal_field[SG_BotLocalizationCell(bot)]", terminal)
+        self.assertNotIn("SG_BotLocalizationCell(bot)", terminal)
         self.assertNotIn("role == SG_ROLE_ATTACK || role == SG_ROLE_CARRY", terminal)
 
         clean_grab = between(
@@ -796,7 +796,7 @@ class OffenseFlagPickupRecoveryTest(unittest.TestCase):
             "\n\treturn hold;",
         )
         self.assertIn(
-            "goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000",
+            "goal_field[SG_BotLocalizationCell(bot)] > 2000 && goal_field[SG_BotLocalizationCell(bot)] < 5000",
             approach,
         )
         direct = flight.index("!SG_AttackFlagDirectTouchAuthority(e, team, NULL)")

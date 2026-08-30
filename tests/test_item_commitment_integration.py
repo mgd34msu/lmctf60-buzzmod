@@ -116,7 +116,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         source = self.text("slipgate/sg_descend.c")
         self.assertIn(
             "if (bot->lead_ent > 0 && bot->lead_state == SG_LEAD_WAITING &&\n"
-            "\t    goal_field[bot->seed] < SG_LEAD_STANDOFF)",
+            "\t    goal_field[SG_BotLocalizationCell(bot)] < SG_LEAD_STANDOFF)",
             source,
         )
 
@@ -339,7 +339,7 @@ class ItemCommitmentIntegrationTest(unittest.TestCase):
         self.assertRegex(bot, r"\bint\s+mega_target_ent;")
         self.assertIn("tc->mega_target_ent = -1;", goal)
         self.assertIn(
-            "Mega_Detour(tc, bot->seed, goal_field, &tc->mega_target_ent)",
+            "Mega_Detour(tc, SG_BotLocalizationCell(bot), goal_field, &tc->mega_target_ent)",
             goal,
         )
         terminal = move[move.index("SG_WeaponPickupTarget(") :]

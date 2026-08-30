@@ -475,7 +475,7 @@ class StrikeIntegrationTest(unittest.TestCase):
         failure_watch = descend[descend.index(
             "!SG_RouteFailureWatchSuppressed(role,"):]
         self.assertIn("tc->scoop_mission", failure_watch[:700])
-        axis_start = descend.index("if (enemy_pressure && bot->seed >= 0 &&")
+        axis_start = descend.index("if (enemy_pressure && SG_BotLocalizationCell(bot) >= 0 &&")
         axis_end = descend.index("else if (role == SG_ROLE_CARRY)", axis_start)
         axis = descend[axis_start:axis_end]
         self.assertIn("SG_StrikeEnemyPressureSnapshot(mb6)", axis)

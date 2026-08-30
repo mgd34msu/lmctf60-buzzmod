@@ -22,6 +22,7 @@
 #include "sg_strike.h"
 #include "sg_field_key.h"
 #include "sg_strategy_caller.h"
+#include "sg_bot_localization.h"
 
 #define SG_MAXBOTS      16
 #define SG_DOOR_APPROACH_MAX_MASTERS 16
@@ -122,6 +123,12 @@ typedef struct sg_bot_s
 	/* Policies publish proposals; only this reducer binds the destination
 	 * consumed by tactical waypoint and movement selection. */
 	sg_strategy_caller_t strategy;
+	/* One owner-issued engine subject and one current typed localization for
+	 * this exact bot life.  localization_event is the next explicit lifecycle
+	 * observation, never a second position-validity flag. */
+	sg_localization_subject_t localization_subject;
+	sg_localized_player_state_t localized_state;
+	sg_localization_observation_kind_t localization_event;
 	/* Shared mover ownership survives death/respawn and is retired before the
 	 * containing process-storage slot is erased. */
 	sg_compound_guard_bot_t compound_guard;
@@ -132,17 +139,10 @@ typedef struct sg_bot_s
 	sg_compound_hook_live_state_t compound_hook_live;
 	sg_compound_hook_game_state_t compound_hook_game;
 	sg_compound_hook_game_events_t compound_hook_events;
-	int			seed;           /* seed we believe we are at/near */
 	float		stuck_time;     /* accumulated time without progress */
-	vec3_t		stuck_origin;   /* dedicated short-range progress sample;
-	                             * last_origin belongs to seed localization */
+	vec3_t		stuck_origin;   /* dedicated short-range progress sample */
 	float		next_report;
 	float		next_cmdlog;
-	vec3_t		last_origin;
-	qboolean	seedless_active; /* bounded recovery after topology is lost */
-	float		seedless_since;
-	float		seedless_turn_until;
-	float		seedless_yaw;
 
 	/* hook execution, two-phase: aim this frame (ClientThink turns the cmd
 	 * angles into v_angle), fire immediately after, since Weapon_Hook_Fire

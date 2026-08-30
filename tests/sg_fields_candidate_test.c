@@ -14,6 +14,7 @@
 #include "slipgate/sg_carrier_cover.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_bot.h"
+#include "tests/support/sg_bot_localization_fixture.h"
 #include "slipgate/sg_goal.h"
 
 int Fields_DefensiveRoot(const rune_t *r, const unsigned char *plane);
@@ -499,7 +500,7 @@ static void CheckExactArmorFieldDoesNotCrossMapRestart(void)
 	rune.next_link = next_link;
 	Link(&links[0], 0, 1, RL_RUN, 100);
 	bot->ent = &test_edicts[0];
-	bot->seed = 0;
+	SG_TestBotLocalizationCellSet(bot, 0);
 	test_current_rune = &rune;
 	sg_fields.action_topology_epoch = 1U;
 	SG_CollectibleArmorTargetLevelReset();

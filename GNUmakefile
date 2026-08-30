@@ -1208,6 +1208,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o \
 		 slipgate/sg_belief.o slipgate/sg_destination.o \
 		 slipgate/sg_cell_phase_localization.o \
+		 slipgate/sg_bot_localization.o \
 		 slipgate/sg_rune_dynamics_model.o slipgate/sg_rune_dynamics_geometry.o \
 		 slipgate/sg_rune_field_contract.o \
 		 slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
@@ -1362,6 +1363,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+	bot-localization-test \
 	ground-capability-test ground-capability-publication-test \
 	water-capability-publication-test water-capability-real-bsp-test \
 	external-force-publication-test \
@@ -1570,6 +1572,11 @@ slipgate/sg_cell_phase_localization.o: \
 		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
 		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
 		slipgate/sg_rune_model.h game.h q_shared.h
+slipgate/sg_bot_localization.o: slipgate/sg_bot_localization.c \
+		slipgate/sg_bot_localization.h slipgate/sg_bot.h \
+		slipgate/sg_cell_phase_localization.h \
+		slipgate/sg_host_law_owner.h slipgate/sg_host_pmove.h \
+		g_local.h game.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 
@@ -4200,6 +4207,12 @@ human-hook-ownership-test: tests/sg_human_hook_ownership_test.c \
 		tests/sg_human_hook_ownership_test.c slipgate/sg_client_ownership.c
 	./sg_human_hook_ownership_test.gnu
 	python3 -B tests/test_human_hook_ownership_integration.py
+
+bot-localization-test: tests/run_sg_bot_localization_test.sh \
+		tests/sg_bot_localization_test.c \
+		tests/test_bot_localization_integration.py \
+		slipgate/sg_bot_localization.c slipgate/sg_bot_localization.h
+	sh tests/run_sg_bot_localization_test.sh
 replay-test: $(REPLAY_TEST_BIN)
 	./$(REPLAY_TEST_BIN)
 chain-hook-replay-test: $(CHAIN_HOOK_REPLAY_TEST_BIN) \
