@@ -9,6 +9,7 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 -Wformat=2 -Wcast-qual -Wcast-align -DSG_PHASE_CATALOG_TESTING'
 sources='tests/sg_external_force_publication_test.c
+slipgate/sg_external_force_builder.c
 slipgate/sg_external_force_publication.c
 slipgate/sg_bsp_entity_semantics_publication.c
 slipgate/sg_bsp_entity_semantics_audit_expected.c
@@ -26,6 +27,7 @@ slipgate/sg_configuration_lattice.c
 slipgate/sg_configuration_space.c
 slipgate/sg_configuration_audit.c
 slipgate/sg_host_collision.c
+slipgate/sg_host_pmove.c
 slipgate/sg_bsp_world.c
 slipgate/sg_rune_model.c
 slipgate/sg_bsp_completeness_proof.c
@@ -43,19 +45,32 @@ isl_libs=$(pkg-config --libs isl)
 cd "$repo_dir"
 for cc in gcc clang
 do
-	$cc $strict $isl_cflags -I. $sources -lm $isl_libs \
+	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-Wno-strict-prototypes -DDEDICATED_ONLY -I. \
+		-c tests/support/yq2_pmove.c -o "$tmp_dir/yq2-$cc.o"
+	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror -I. \
+		-c q_shared.c -o "$tmp_dir/shared-$cc.o"
+	$cc $strict $isl_cflags -DDEDICATED_ONLY -I. $sources \
+		"$tmp_dir/yq2-$cc.o" "$tmp_dir/shared-$cc.o" -lm $isl_libs \
 		-o "$tmp_dir/external-force-$cc"
 	"$tmp_dir/external-force-$cc"
 done
 
 sanitize='-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined'
-clang $strict $sanitize $isl_cflags -I. $sources -lm $isl_libs \
+clang -std=c11 -Wall -Wextra -Wpedantic -Werror -Wno-strict-prototypes \
+	$sanitize -DDEDICATED_ONLY -I. -c tests/support/yq2_pmove.c \
+	-o "$tmp_dir/yq2-sanitize.o"
+clang -std=c11 -Wall -Wextra -Wpedantic -Werror $sanitize -I. \
+	-c q_shared.c -o "$tmp_dir/shared-sanitize.o"
+clang $strict $sanitize $isl_cflags -DDEDICATED_ONLY -I. $sources \
+	"$tmp_dir/yq2-sanitize.o" "$tmp_dir/shared-sanitize.o" -lm $isl_libs \
 	-o "$tmp_dir/external-force-sanitize"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/external-force-sanitize"
 
-for source in slipgate/sg_external_force_publication.c \
+for source in slipgate/sg_external_force_builder.c \
+	slipgate/sg_external_force_publication.c \
 	tests/sg_external_force_publication_test.c
 do
 	clang --analyze $strict $isl_cflags -I. "$source" \

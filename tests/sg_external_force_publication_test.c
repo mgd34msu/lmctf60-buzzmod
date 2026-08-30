@@ -4,12 +4,34 @@ int SG_MechanismFixtureMain(void);
 #undef main
 
 #include "slipgate/sg_external_force_publication.h"
+#include "slipgate/sg_external_force_builder.h"
+#include "slipgate/sg_host_law_construction_offline.h"
+#include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_phase_catalog_owner.h"
+
+void Pmove(pmove_t *pmove);
+void Com_DPrintf(const char *format, ...);
+void Com_Printf(char *format, ...);
+
+void Com_DPrintf(const char *format, ...)
+{
+	(void)format;
+}
+
+void Com_Printf(char *format, ...)
+{
+	(void)format;
+}
 
 static int external_failures;
 static sg_host_law_view_t external_host_view;
 static const sg_host_law_publication_t *external_host_token =
 	(const sg_host_law_publication_t *)(uintptr_t)UINT32_C(1);
+static const sg_host_law_construction_t *external_construction_token =
+	(const sg_host_law_construction_t *)(uintptr_t)UINT32_C(2);
+static mechanism_fixture_t *external_active_fixture;
+static uint32_t external_construction_issues;
+static uint32_t external_construction_destroys;
 
 typedef struct external_publication_layout_s
 {
@@ -45,11 +67,6 @@ static sg_external_force_completeness_t ExternalKindCompleteness(
 {
 	uint32_t index;
 	int found = 0;
-
-	if (kind == (uint32_t)SG_EXTERNAL_FORCE_WATER_CURRENT ||
-		kind == (uint32_t)SG_EXTERNAL_FORCE_CONVEYOR_CURRENT ||
-		kind == (uint32_t)SG_EXTERNAL_FORCE_GRAVITY)
-		return SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED;
 
 	for (index = 0U; index < count; index++)
 		if ((uint32_t)facts[index].kind == kind)
@@ -156,19 +173,151 @@ sg_host_law_result_t SG_HostLawPublicationRevalidateProduction(
 	return result;
 }
 
+static sg_host_law_result_t ExternalConstructionResult(int ok)
+{
+	sg_host_law_result_t result;
+
+	memset(&result, 0, sizeof(result));
+	result.status = ok ? SG_HOST_LAW_OK : SG_HOST_LAW_CORRUPT_PUBLICATION;
+	return result;
+}
+
+sg_host_law_result_t SG_HostLawProductionConstructionIssue(
+	const sg_host_collision_authority_t *authority,
+	sg_host_law_construction_t **construction_out)
+{
+	if (!external_active_fixture ||
+		authority != &external_active_fixture->authority || !construction_out ||
+		*construction_out)
+		return ExternalConstructionResult(0);
+	*construction_out = (sg_host_law_construction_t *)(uintptr_t)UINT32_C(2);
+	external_construction_issues++;
+	return ExternalConstructionResult(1);
+}
+
+void SG_HostLawConstructionDestroy(sg_host_law_construction_t *construction)
+{
+	if (construction ==
+		(sg_host_law_construction_t *)(uintptr_t)UINT32_C(2))
+		external_construction_destroys++;
+}
+
+sg_host_law_result_t SG_HostLawConstructionRead(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_construction_view_t *view_out)
+{
+	const sg_bsp_world_t *world_value;
+
+	if (construction != external_construction_token || !view_out ||
+		!external_active_fixture)
+		return ExternalConstructionResult(0);
+	world_value = external_active_fixture->authority.world;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->version = SG_HOST_LAW_PUBLICATION_VERSION;
+	view_out->current = 1U;
+	view_out->level_generation = 1U;
+	view_out->host_static_identity = external_host_view.static_identity;
+	view_out->geometry.bsp_identity = world_value->content_identity;
+	view_out->geometry.bsp_bytes = world_value->source_size;
+	view_out->geometry.engine_checksum = world_value->engine_checksum;
+	view_out->geometry.node_count = world_value->node_count;
+	view_out->geometry.model_count = world_value->model_count;
+	view_out->geometry.brush_count = world_value->brush_count;
+	view_out->geometry.brush_side_count = world_value->brush_side_count;
+	view_out->laws = external_host_view;
+	return ExternalConstructionResult(1);
+}
+
+sg_host_law_result_t SG_HostLawConstructionClassifyPose(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	return ExternalConstructionResult(construction ==
+		external_construction_token && external_active_fixture &&
+		SG_HostCollisionClassifyPose(&external_active_fixture->authority, scene,
+			origin, stance, pose_out));
+}
+
+sg_host_law_result_t SG_HostLawConstructionPointContents(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float point[3],
+	sg_host_collision_contents_t *contents_out)
+{
+	if (construction != external_construction_token ||
+		!external_active_fixture || !contents_out)
+		return ExternalConstructionResult(0);
+	*contents_out = SG_HostCollisionPointContents(
+		&external_active_fixture->authority, scene, point);
+	return ExternalConstructionResult(1);
+}
+
+sg_host_law_result_t SG_HostLawConstructionPmove(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+{
+	return ExternalConstructionResult(construction ==
+		external_construction_token && external_active_fixture &&
+		SG_HostPmoveEvaluateFrame(&external_active_fixture->authority, scene,
+			Pmove, request, result_out, error_out));
+}
+
+sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_configuration_audit_result_t *audit_out)
+{
+	return ExternalConstructionResult(construction ==
+		external_construction_token && external_active_fixture &&
+		SG_ConfigurationAudit(&external_active_fixture->authority,
+			configuration, audit_out));
+}
+
+sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	sg_configuration_semantics_audit_result_t *audit_out)
+{
+	return ExternalConstructionResult(construction ==
+		external_construction_token && external_active_fixture &&
+		SG_ConfigurationSemanticsAudit(&external_active_fixture->authority,
+			configuration, semantics, audit_out));
+}
+
+sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_bsp_completeness_result_t *proof_out)
+{
+	return ExternalConstructionResult(construction ==
+		external_construction_token && external_active_fixture &&
+		SG_BspCompletenessProve(&external_active_fixture->authority,
+			configuration, proof_out));
+}
+
 static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 {
 	enum { EXTERNAL_DEEP_CONVEYOR_NODES = 4096 };
-	static sg_bsp_model_t expanded_models[5];
+	static sg_bsp_plane_t expanded_planes[8];
+	static sg_bsp_model_t expanded_models[6];
 	static sg_bsp_node_t
-		expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 1];
-	static sg_bsp_leaf_t expanded_leaves[5];
+		expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 9];
+	static sg_bsp_leaf_t expanded_leaves[9];
+	static uint32_t expanded_leaf_brushes[2];
+	static sg_bsp_brush_t expanded_brushes[2];
+	static sg_bsp_brush_side_t expanded_brush_sides[12];
 	static const char text[] =
 		"{ \"classname\" \"worldspawn\" }\n"
 		"{ \"classname\" \"trigger_gravity\" \"model\" \"*1\" "
 		"\"gravity\" \"2\" }\n"
 		"{ \"classname\" \"func_conveyor\" \"model\" \"*2\" "
 		"\"origin\" \"0 32 0\" \"angles\" \"0 90 0\" "
+		"\"spawnflags\" \"1\" }\n"
+		"{ \"classname\" \"func_conveyor\" \"model\" \"*5\" "
+		"\"origin\" \"128 128 0\" \"angles\" \"0 90 0\" "
 		"\"spawnflags\" \"1\" }\n"
 		"{ \"classname\" \"trigger_monsterjump\" \"model\" \"*3\" "
 		"\"speed\" \"200\" \"height\" \"200\" }\n"
@@ -178,10 +327,26 @@ static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 
 	memset(expanded_models, 0, sizeof(expanded_models));
 	memcpy(expanded_models, fixture->models, sizeof(fixture->models));
+	memset(expanded_planes, 0, sizeof(expanded_planes));
+	memcpy(expanded_planes, fixture->planes, sizeof(fixture->planes));
+	SetPlane(&expanded_planes[7], 0.0f, 0.0f, 1.0f, 80.0f);
 	memset(expanded_nodes, 0, sizeof(expanded_nodes));
 	memcpy(expanded_nodes, fixture->world.nodes,
 		fixture->world.node_count * sizeof(*expanded_nodes));
 	memcpy(expanded_leaves, fixture->leaves, sizeof(fixture->leaves));
+	memset(expanded_leaf_brushes, 0, sizeof(expanded_leaf_brushes));
+	expanded_leaf_brushes[0] = fixture->leaf_brush;
+	expanded_leaf_brushes[1] = 1U;
+	memset(expanded_brushes, 0, sizeof(expanded_brushes));
+	expanded_brushes[0] = fixture->brush;
+	expanded_brushes[1] = fixture->brush;
+	expanded_brushes[1].first_side = 6U;
+	expanded_brushes[1].contents = SG_HOST_CONTENTS_SOLID |
+		SG_HOST_CONTENTS_CURRENT_90;
+	memcpy(expanded_brush_sides, fixture->brush_sides,
+		sizeof(fixture->brush_sides));
+	memcpy(&expanded_brush_sides[6], fixture->brush_sides,
+		sizeof(fixture->brush_sides));
 	expanded_models[2] = fixture->models[0];
 	expanded_models[2].headnode = 1;
 	Set3(expanded_models[2].mins.value, -128.0f, -128.0f, -128.0f);
@@ -203,12 +368,51 @@ static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 	}
 	expanded_models[3] = fixture->models[1];
 	expanded_models[4] = fixture->models[1];
+	expanded_models[5] = fixture->models[1];
+	expanded_models[5].headnode = EXTERNAL_DEEP_CONVEYOR_NODES + 1;
+	memset(&expanded_leaves[5], 0, sizeof(expanded_leaves[5]));
+	expanded_leaves[5].contents = SG_HOST_CONTENTS_SOLID |
+		SG_HOST_CONTENTS_CURRENT_90;
+	expanded_leaves[5].cluster = -1;
+	expanded_leaves[5].first_leaf_brush = 1U;
+	expanded_leaves[5].leaf_brush_count = 1U;
+	memset(&expanded_leaves[6], 0, sizeof(expanded_leaves[6]));
+	expanded_leaves[6].cluster = -1;
+	for (index = 0U; index < 6U; index++)
+	{
+		uint32_t node_index = EXTERNAL_DEEP_CONVEYOR_NODES + 1U + index;
+
+		expanded_nodes[node_index].plane = index + 1U;
+		expanded_nodes[node_index].children[0] = -7;
+		expanded_nodes[node_index].children[1] = index == 5U ? -6 :
+			(int32_t)(node_index + 1U);
+	}
+	memset(&expanded_leaves[7], 0, sizeof(expanded_leaves[7]));
+	memset(&expanded_leaves[8], 0, sizeof(expanded_leaves[8]));
+	expanded_leaves[7].cluster = 0;
+	expanded_leaves[8].cluster = 1;
+	expanded_nodes[0].children[0] = EXTERNAL_DEEP_CONVEYOR_NODES + 7;
+	expanded_nodes[0].children[1] = EXTERNAL_DEEP_CONVEYOR_NODES + 8;
+	expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 7].plane = 7U;
+	expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 7].children[0] = -8;
+	expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 7].children[1] = -1;
+	expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 8].plane = 7U;
+	expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 8].children[0] = -9;
+	expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 8].children[1] = -2;
+	fixture->world.planes = expanded_planes;
+	fixture->world.plane_count = 8U;
 	fixture->world.models = expanded_models;
-	fixture->world.model_count = 5U;
+	fixture->world.model_count = 6U;
 	fixture->world.nodes = expanded_nodes;
-	fixture->world.node_count = EXTERNAL_DEEP_CONVEYOR_NODES + 1U;
+	fixture->world.node_count = EXTERNAL_DEEP_CONVEYOR_NODES + 9U;
 	fixture->world.leaves = expanded_leaves;
-	fixture->world.leaf_count = 5U;
+	fixture->world.leaf_count = 9U;
+	fixture->world.leaf_brushes = expanded_leaf_brushes;
+	fixture->world.leaf_brush_count = 2U;
+	fixture->world.brushes = expanded_brushes;
+	fixture->world.brush_count = 2U;
+	fixture->world.brush_sides = expanded_brush_sides;
+	fixture->world.brush_side_count = 12U;
 	fixture->world.entities = (uint8_t *)(uintptr_t)text;
 	fixture->world.entity_byte_count = (uint32_t)sizeof(text);
 
@@ -358,8 +562,10 @@ static int ExternalSourceInit(mechanism_fixture_t *fixture,
 	if (!*entity_out)
 		return 0;
 	ExternalHostView(fixture);
+	external_active_fixture = fixture;
 	source_out->collision_authority = &fixture->authority;
 	source_out->engine_authority = external_host_token;
+	source_out->construction = external_construction_token;
 	source_out->entity_semantics = *entity_out;
 	source_out->configuration = fixture->configuration;
 	source_out->configuration_semantics = fixture->configuration_semantics;
@@ -388,7 +594,15 @@ static void TestAllAcceptedMechanismForces(void)
 	uint32_t movers = 0U;
 	uint32_t gravity = 0U;
 	uint32_t conveyors = 0U;
+	uint32_t conveyor_neutral = 0U;
+	uint32_t conveyor_combined = 0U;
+	uint32_t conveyor_cap = 0U;
 	uint32_t currents = 0U;
+	uint32_t shallow_currents = 0U;
+	uint32_t deep_currents = 0U;
+	uint32_t combined_currents = 0U;
+	uint32_t capped_currents = 0U;
+	uint32_t accelerated_currents = 0U;
 
 	CHECK_EXTERNAL(ExternalSourceInit(&fixture, &capabilities, &phase_owner,
 		&phases, &entities, &source, 1));
@@ -417,16 +631,26 @@ static void TestAllAcceptedMechanismForces(void)
 		CHECK_EXTERNAL(support.fraction == 1.0f);
 		CHECK_EXTERNAL((support.contents & SG_HOST_CONTENTS_CURRENT_0) == 0U);
 	}
-	if (!SG_ExternalForcePublicationIssue(&source, &publication, &audit))
-		fprintf(stderr, "external issue rejected: %s record=%u\n",
-			SG_ExternalForceAuditCodeString(audit.code), audit.record);
+	{
+		const sg_host_law_construction_t *saved = source.construction;
+
+		external_construction_issues = 0U;
+		external_construction_destroys = 0U;
+		source.construction = NULL;
+		if (!SG_ExternalForceProductionBuild(&source, &publication, &audit))
+			fprintf(stderr, "external issue rejected: %s record=%u\n",
+				SG_ExternalForceAuditCodeString(audit.code), audit.record);
+		source.construction = saved;
+	}
 	CHECK_EXTERNAL(publication != NULL);
 	CHECK_EXTERNAL(audit.code == SG_EXTERNAL_FORCE_AUDIT_OK);
+	CHECK_EXTERNAL(external_construction_issues == 1U);
+	CHECK_EXTERNAL(external_construction_destroys == 1U);
 	if (!publication)
 		return;
 	CHECK_EXTERNAL(SG_ExternalForcePublicationRead(publication, &view));
 	CHECK_EXTERNAL(view.completeness ==
-		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
+		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
 	for (index = 0U; index < view.fact_count; index++)
 	{
 		sg_external_force_fact_t fact_storage;
@@ -437,6 +661,7 @@ static void TestAllAcceptedMechanismForces(void)
 		CHECK_EXTERNAL(SG_RuneModelStableIdValid(&fact->source_cell.value));
 		CHECK_EXTERNAL(SG_RuneModelStableIdValid(
 			&fact->destination_cell.value));
+		CHECK_EXTERNAL(SG_RuneModelStableIdValid(&fact->source_phase.value));
 		CHECK_EXTERNAL(fact->physics_abi_id ==
 			fixture.authority.identity.physics_abi_id);
 		if (fact->kind == SG_EXTERNAL_FORCE_TRIGGER_PUSH)
@@ -458,31 +683,98 @@ static void TestAllAcceptedMechanismForces(void)
 		{
 			gravity++;
 			CHECK_EXTERNAL(fact->source_entity_ordinal == UINT32_MAX);
-			CHECK_EXTERNAL(fact->gravity == 0.0f);
-			CHECK_EXTERNAL(fact->acceleration.value[2] == 0.0f);
-			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) == 0U);
+			CHECK_EXTERNAL(fact->gravity == 800.0f);
+			CHECK_EXTERNAL(fact->duration_ms == 100U);
+			CHECK_EXTERNAL(fact->observation ==
+				SG_EXTERNAL_FORCE_OBSERVATION_NEUTRAL);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) != 0U);
 			CHECK_EXTERNAL((fact->flags &
-				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U);
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) == 0U);
+			if (fact->output_grounded)
+				CHECK_EXTERNAL(fact->velocity.value[2] >= 0.0f);
 		}
 		if (fact->kind == SG_EXTERNAL_FORCE_CONVEYOR_CURRENT)
+		{
 			conveyors++;
+			CHECK_EXTERNAL(fact->source_model_index == 5U);
+			CHECK_EXTERNAL(fact->source_brush_index == 1U);
+			CHECK_EXTERNAL(fact->source_brush_side_index == 4U);
+			CHECK_EXTERNAL((fact->source_contents &
+				SG_HOST_CONTENTS_CURRENT_90) != 0U);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) != 0U);
+			CHECK_EXTERNAL((fact->flags &
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) == 0U);
+			CHECK_EXTERNAL(fact->source_witness.value[2] >
+				fact->support_witness.value[2]);
+			CHECK_EXTERNAL(fact->input_grounded == 1U);
+			CHECK_EXTERNAL(fact->input_support_model_index == 5U);
+			CHECK_EXTERNAL(fact->input_support_instance_id != 0U);
+			if (fact->observation == SG_EXTERNAL_FORCE_OBSERVATION_NEUTRAL)
+				conveyor_neutral++;
+			else if (fact->observation ==
+				SG_EXTERNAL_FORCE_OBSERVATION_COMMAND_COMBINED)
+				conveyor_combined++;
+			else if (fact->observation ==
+				SG_EXTERNAL_FORCE_OBSERVATION_VELOCITY_CAP)
+				conveyor_cap++;
+		}
 		if (fact->kind == SG_EXTERNAL_FORCE_WATER_CURRENT)
 		{
 			currents++;
-			CHECK_EXTERNAL(fact->velocity.value[0] == 0.0f);
-			CHECK_EXTERNAL(fact->velocity.value[2] == 0.0f);
-			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) == 0U);
+			CHECK_EXTERNAL((fact->source_contents &
+				(SG_HOST_CONTENTS_CURRENT_0 |
+				 SG_HOST_CONTENTS_CURRENT_UP)) != 0U);
+			CHECK_EXTERNAL(fact->observation >=
+				SG_EXTERNAL_FORCE_OBSERVATION_NEUTRAL &&
+				fact->observation <=
+				SG_EXTERNAL_FORCE_OBSERVATION_VELOCITY_CAP);
+			CHECK_EXTERNAL((fact->flags & SG_EXTERNAL_FORCE_HOST_PROVEN) != 0U);
 			CHECK_EXTERNAL((fact->flags &
-				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) != 0U);
+				SG_EXTERNAL_FORCE_LAW_UNRESOLVED) == 0U);
+			if (fact->input_water_level == 1U)
+				shallow_currents++;
+			if (fact->input_water_level == 3U)
+				deep_currents++;
+			if (fact->observation ==
+				SG_EXTERNAL_FORCE_OBSERVATION_COMMAND_COMBINED)
+			{
+				combined_currents++;
+				CHECK_EXTERNAL(fact->input_command.forwardmove == SHRT_MAX);
+				CHECK_EXTERNAL(fact->input_command.sidemove == SHRT_MAX);
+			}
+			if (fact->observation ==
+				SG_EXTERNAL_FORCE_OBSERVATION_VELOCITY_CAP)
+			{
+				capped_currents++;
+				CHECK_EXTERNAL(fabsf(fact->velocity.value[0]) <=
+					fixture.authority.identity.physics.max_velocity);
+				CHECK_EXTERNAL(fabsf(fact->velocity.value[1]) <=
+					fixture.authority.identity.physics.max_velocity);
+				CHECK_EXTERNAL(fabsf(fact->velocity.value[2]) <=
+					fixture.authority.identity.physics.max_velocity);
+			}
+			if (fact->acceleration.value[0] != 0.0f ||
+				fact->acceleration.value[1] != 0.0f ||
+				fact->acceleration.value[2] != 0.0f)
+				accelerated_currents++;
 		}
 	}
 	CHECK_EXTERNAL(pushes > 0U);
 	CHECK_EXTERNAL(movers >= 2U);
 	CHECK_EXTERNAL(gravity > 0U);
-	/* Point contents inside the conveyor's solid BSP half reports a current,
-	 * but that is not a valid supported player-origin force observation. */
-	CHECK_EXTERNAL(conveyors == 0U);
+	/* Model 2 proves an inside-solid current leaf is not a support obligation;
+	 * model 5 proves rotated, bounded support is published at valid origins. */
+	CHECK_EXTERNAL(conveyors > 0U);
+	CHECK_EXTERNAL(conveyor_neutral == conveyor_combined);
+	CHECK_EXTERNAL(conveyor_neutral == conveyor_cap);
+	CHECK_EXTERNAL(conveyors == conveyor_neutral + conveyor_combined +
+		conveyor_cap);
 	CHECK_EXTERNAL(currents > 0U);
+	CHECK_EXTERNAL(shallow_currents > 0U);
+	CHECK_EXTERNAL(deep_currents > 0U);
+	CHECK_EXTERNAL(combined_currents > 0U);
+	CHECK_EXTERNAL(capped_currents > 0U);
+	CHECK_EXTERNAL(accelerated_currents > 0U);
 	CHECK_EXTERNAL(view.fact_count_by_kind[SG_EXTERNAL_FORCE_TRIGGER_PUSH] ==
 		pushes);
 	CHECK_EXTERNAL(view.fact_count_by_kind[
@@ -495,12 +787,12 @@ static void TestAllAcceptedMechanismForces(void)
 		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
 	CHECK_EXTERNAL(view.completeness_by_kind[
 		SG_EXTERNAL_FORCE_WATER_CURRENT] ==
-		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
+		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
 	CHECK_EXTERNAL(view.completeness_by_kind[
 		SG_EXTERNAL_FORCE_CONVEYOR_CURRENT] ==
-		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
+		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
 	CHECK_EXTERNAL(view.completeness_by_kind[SG_EXTERNAL_FORCE_GRAVITY] ==
-		SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED);
+		SG_EXTERNAL_FORCE_COMPLETENESS_COMPLETE);
 
 	/* Reissuing from the same accepted authorities is byte-deterministic. */
 	CHECK_EXTERNAL(SG_ExternalForcePublicationIssue(&source,
@@ -693,6 +985,9 @@ static void TestRejectsIdentityDriftAndRuntimeActors(void)
 			CHECK_EXTERNAL(fact.kind >=
 				SG_EXTERNAL_FORCE_TRIGGER_PUSH &&
 				fact.kind < SG_EXTERNAL_FORCE_KIND_COUNT);
+			CHECK_EXTERNAL(fact.source_entity_ordinal != 1U);
+			CHECK_EXTERNAL(fact.source_entity_ordinal != 4U);
+			CHECK_EXTERNAL(fact.source_entity_ordinal != 5U);
 		}
 	}
 	SG_ExternalForcePublicationDestroy(publication);

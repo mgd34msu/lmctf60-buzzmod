@@ -4005,6 +4005,8 @@ phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 external-force-publication-test: \
 		tests/run_sg_external_force_publication_test.sh \
 		tests/sg_external_force_publication_test.c \
+		slipgate/sg_external_force_builder.c \
+		slipgate/sg_external_force_builder.h \
 		slipgate/sg_external_force_publication.c \
 		slipgate/sg_external_force_publication.h
 	$(E) [TEST] external force publication

@@ -21,6 +21,13 @@ typedef enum sg_external_force_kind_e
 	SG_EXTERNAL_FORCE_KIND_COUNT
 } sg_external_force_kind_t;
 
+typedef enum sg_external_force_observation_e
+{
+	SG_EXTERNAL_FORCE_OBSERVATION_NEUTRAL = 0,
+	SG_EXTERNAL_FORCE_OBSERVATION_COMMAND_COMBINED,
+	SG_EXTERNAL_FORCE_OBSERVATION_VELOCITY_CAP
+} sg_external_force_observation_t;
+
 typedef uint32_t sg_external_force_flags_t;
 enum
 {
@@ -50,8 +57,13 @@ typedef struct sg_external_force_fact_s
 	uint64_t destination_region_id;
 	uint32_t source_model_index;
 	uint32_t source_leaf_index;
+	uint32_t source_brush_index;
+	uint32_t source_brush_side_index;
 	sg_host_collision_contents_t source_contents;
 	sg_rune_vec3_t source_witness;
+	sg_rune_vec3_t support_witness;
+	sg_rune_vec3_t support_normal;
+	float support_distance;
 	sg_rune_vec3_t source_model_origin;
 	sg_rune_vec3_t source_model_angles;
 	sg_rune_portal_ref_t portal;
@@ -68,6 +80,18 @@ typedef struct sg_external_force_fact_s
 	uint32_t reset_ms;
 	uint64_t physics_abi_id;
 	sg_external_force_flags_t flags;
+	sg_external_force_observation_t observation;
+	pmove_state_t input_state;
+	usercmd_t input_command;
+	uint32_t input_grounded;
+	uint32_t input_water_level;
+	uint32_t input_support_model_index;
+	uint64_t input_support_instance_id;
+	pmove_state_t output_state;
+	uint32_t output_grounded;
+	uint32_t output_water_level;
+	uint32_t output_support_model_index;
+	uint64_t output_support_instance_id;
 } sg_external_force_fact_t;
 
 typedef enum sg_external_force_completeness_e
@@ -81,6 +105,7 @@ typedef struct sg_external_force_source_s
 {
 	const sg_host_collision_authority_t *collision_authority;
 	const sg_host_law_publication_t *engine_authority;
+	const sg_host_law_construction_t *construction;
 	const sg_bsp_entity_semantics_publication_t *entity_semantics;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *configuration_semantics;
