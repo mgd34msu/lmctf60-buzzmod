@@ -4071,7 +4071,7 @@ bsp-entity-semantics-publication-test: \
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
-		ground-capability-publication-test \
+		ground-capability-publication-test external-force-publication-test \
 		weapon-effect-profile-test phase-catalog-publication-test \
 		hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
