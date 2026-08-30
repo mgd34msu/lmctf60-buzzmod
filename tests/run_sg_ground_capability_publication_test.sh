@@ -6,7 +6,8 @@ tmp_dir=$(mktemp -d)
 revision_header_created=0
 trap 'rm -r "$tmp_dir"; if test "$revision_header_created" = 1; then rm -f "$repo_dir/GitRevisionInfo.h"; fi' EXIT HUP INT TERM
 
-strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
+strict='-std=c11 -DSG_BSP_COMPLETENESS_TESTING
+-Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 -Wformat=2 -Wcast-qual -Wcast-align -DSG_HOST_LAW_TESTING
 -DSG_GROUND_CAPABILITY_TESTING -ffunction-sections -fdata-sections'
