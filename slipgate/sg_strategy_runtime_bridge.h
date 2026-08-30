@@ -65,10 +65,13 @@ typedef int (*sg_strategy_runtime_target_authority_fn)(void *context,
 	const sg_strategy_runtime_target_view_t *view,
 	sg_strategy_caller_target_binding_t *binding_out);
 
-/* Authority acceptance leases the exact nominated view.  Normal rollback,
+/* A locator only lends a borrowed view: the bridge never releases it unless
+ * the authority from that same provider registration accepts that exact view.
+ * Authority acceptance leases the exact nominated view.  Normal rollback,
  * replacement, explicit release, and pre-owner teardown return that lease
- * through the matching callback.  Post-owner-loss recovery abandons it without
- * invoking a callback whose context is already invalid. */
+ * through the matching callback, including an accepted view whose emitted
+ * binding is rejected.  Post-owner-loss recovery abandons it without invoking
+ * a callback whose context is already invalid. */
 typedef void (*sg_strategy_runtime_target_release_fn)(void *context,
 	const void *accepted_view);
 

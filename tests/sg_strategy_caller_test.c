@@ -356,13 +356,27 @@ typedef struct runtime_target_record_s
 typedef struct runtime_fixture_s
 {
 	runtime_target_record_t records[SG_STRATEGY_CALLER_MAX_BINDINGS];
+	struct runtime_fixture_s *replacement;
 	uint16_t count;
+	uint16_t change_locator_call;
+	uint16_t change_authority_call;
 	int forced_view_index;
+	uint32_t locator_calls;
+	uint32_t authority_calls;
 	uint32_t acquired;
 	uint32_t released;
 	uint32_t releases[SG_STRATEGY_CALLER_MAX_BINDINGS];
 	uint8_t clear_provider_on_release;
 } runtime_fixture_t;
+
+static int RuntimeProvider(void *context,
+	const sg_strategy_runtime_target_request_t *request,
+	sg_strategy_runtime_target_view_t *view_out);
+static int RuntimeAuthority(void *context,
+	const sg_strategy_runtime_target_request_t *request,
+	const sg_strategy_runtime_target_view_t *view,
+	sg_strategy_caller_target_binding_t *binding_out);
+static void RuntimeRelease(void *context, const void *accepted_view);
 
 static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
 	const sg_destination_ref_t *right)
@@ -425,29 +439,47 @@ static void InitRuntimeFixture(runtime_fixture_t *runtime,
 	}
 }
 
+static void RuntimeProviderChange(runtime_fixture_t *runtime)
+{
+	if (!runtime)
+		return;
+	if (!runtime->replacement)
+	{
+		SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+		return;
+	}
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, runtime->replacement,
+		RuntimeAuthority, runtime->replacement, RuntimeRelease,
+		runtime->replacement);
+}
+
 static int RuntimeProvider(void *context,
 	const sg_strategy_runtime_target_request_t *request,
 	sg_strategy_runtime_target_view_t *view_out)
 {
 	runtime_fixture_t *runtime = context;
 	uint16_t index;
+	int found = 0;
 
 	if (!runtime || !request || !view_out)
 		return 0;
+	runtime->locator_calls++;
 	if (runtime->forced_view_index >= 0 &&
 	    runtime->forced_view_index < runtime->count)
 	{
 		view_out->opaque = &runtime->records[runtime->forced_view_index];
-		return 1;
+		found = 1;
 	}
-	for (index = 0U; index < runtime->count; index++)
+	for (index = 0U; !found && index < runtime->count; index++)
 		if (runtime->records[index].binding.goal_id == request->goal_id &&
 		    runtime->records[index].binding.target_id == request->target_id)
 		{
 			view_out->opaque = &runtime->records[index];
-			return 1;
+			found = 1;
 		}
-	return 0;
+	if (found && runtime->change_locator_call == runtime->locator_calls)
+		RuntimeProviderChange(runtime);
+	return found;
 }
 
 static int RuntimeAuthority(void *context,
@@ -460,6 +492,7 @@ static int RuntimeAuthority(void *context,
 
 	if (!runtime || !request || !view || !view->opaque || !binding_out)
 		return 0;
+	runtime->authority_calls++;
 	for (index = 0U; index < runtime->count; index++)
 	{
 		const runtime_target_record_t *record = &runtime->records[index];
@@ -487,6 +520,8 @@ static int RuntimeAuthority(void *context,
 			return 0;
 		runtime->acquired++;
 		*binding_out = record->binding;
+		if (runtime->change_authority_call == runtime->authority_calls)
+			RuntimeProviderChange(runtime);
 		return 1;
 	}
 	return 0;
@@ -1118,6 +1153,197 @@ static void TestPartialRollbackUsesDetachedReleaseOwner(void)
 	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
 }
 
+static void TestProviderUnregisterInLocatorLeavesBorrowedViewUnreleased(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_caller_plan_t unchanged;
+	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t runtime;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 52U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	InitRuntimeFixture(&runtime, &source);
+	memset(&resolved, 0, sizeof(resolved));
+	unchanged = resolved;
+	runtime.change_locator_call = 1U;
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
+	CHECK(runtime.locator_calls == 1U);
+	CHECK(runtime.authority_calls == 0U);
+	CHECK(runtime.acquired == 0U);
+	CHECK(runtime.released == 0U);
+	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
+}
+
+static void TestProviderReplacementInSecondLocatorRollsBackOldLease(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_caller_plan_t unchanged;
+	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t old_runtime;
+	runtime_fixture_t new_runtime;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 53U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	InitRuntimeFixture(&old_runtime, &source);
+	InitRuntimeFixture(&new_runtime, &source);
+	memset(&resolved, 0, sizeof(resolved));
+	unchanged = resolved;
+	old_runtime.replacement = &new_runtime;
+	old_runtime.change_locator_call = 2U;
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &old_runtime,
+		RuntimeAuthority, &old_runtime, RuntimeRelease, &old_runtime);
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
+	CHECK(old_runtime.locator_calls == 2U);
+	CHECK(old_runtime.authority_calls == 1U);
+	CHECK(old_runtime.acquired == 1U);
+	CHECK(old_runtime.released == 1U);
+	CHECK(old_runtime.releases[0] == 1U);
+	CHECK(new_runtime.locator_calls == 0U);
+	CHECK(new_runtime.authority_calls == 0U);
+	CHECK(new_runtime.released == 0U);
+	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+}
+
+static void TestProviderUnregisterInAuthorityReleasesAcceptedView(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_caller_plan_t unchanged;
+	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t runtime;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 54U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	InitRuntimeFixture(&runtime, &source);
+	memset(&resolved, 0, sizeof(resolved));
+	unchanged = resolved;
+	runtime.change_authority_call = 1U;
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
+		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
+	CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
+	CHECK(runtime.locator_calls == 1U);
+	CHECK(runtime.authority_calls == 1U);
+	CHECK(runtime.acquired == 1U);
+	CHECK(runtime.released == 1U);
+	CHECK(runtime.releases[0] == 1U);
+	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
+}
+
+static void TestProviderReplacementInSecondAuthorityUsesOldReleaseOwner(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t resolved;
+	sg_strategy_caller_plan_t unchanged;
+	sg_strategy_runtime_plan_request_t request;
+	runtime_fixture_t old_runtime;
+	runtime_fixture_t new_runtime;
+	int resolved_ok;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 55U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	InitRuntimeFixture(&old_runtime, &source);
+	InitRuntimeFixture(&new_runtime, &source);
+	memset(&resolved, 0, sizeof(resolved));
+	unchanged = resolved;
+	old_runtime.replacement = &new_runtime;
+	old_runtime.change_authority_call = 2U;
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &old_runtime,
+		RuntimeAuthority, &old_runtime, RuntimeRelease, &old_runtime);
+	resolved_ok = SG_StrategyRuntimePlanResolve(&request, &resolved);
+	CHECK(!resolved_ok);
+	if (!resolved_ok)
+		CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
+	else
+		SG_StrategyCallerPlanDiscard(&resolved);
+	CHECK(old_runtime.locator_calls == 2U);
+	CHECK(old_runtime.authority_calls == 2U);
+	CHECK(old_runtime.acquired == 2U);
+	CHECK(old_runtime.released == 2U);
+	CHECK(old_runtime.releases[0] == 1U);
+	CHECK(old_runtime.releases[1] == 1U);
+	CHECK(new_runtime.locator_calls == 0U);
+	CHECK(new_runtime.authority_calls == 0U);
+	CHECK(new_runtime.released == 0U);
+	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+}
+
+static void TestProviderReplacementLeavesCallerOutputAndInputUnchanged(void)
+{
+	caller_fixture_t fixture;
+	sg_strategy_caller_plan_t source;
+	sg_strategy_caller_plan_t submitted;
+	sg_strategy_caller_plan_t rejected;
+	sg_strategy_caller_plan_t unchanged_rejected;
+	sg_strategy_runtime_plan_request_t request;
+	sg_strategy_runtime_plan_request_t unchanged_request;
+	sg_strategy_caller_t caller;
+	sg_strategy_caller_t unchanged_caller;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_output_t unchanged_output;
+	runtime_fixture_t old_runtime;
+	runtime_fixture_t new_runtime;
+
+	InitFixture(&fixture);
+	source = Plan(&fixture, 56U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
+		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	request = RuntimeRequest(&source);
+	unchanged_request = request;
+	InitRuntimeFixture(&old_runtime, &source);
+	InitRuntimeFixture(&new_runtime, &source);
+	memset(&submitted, 0, sizeof(submitted));
+	memset(&rejected, 0, sizeof(rejected));
+	unchanged_rejected = rejected;
+	old_runtime.replacement = &new_runtime;
+	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &old_runtime,
+		RuntimeAuthority, &old_runtime, RuntimeRelease, &old_runtime);
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &submitted));
+	CHECK(SG_StrategyCallerSubmit(&caller, &submitted, 1U, 100U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	unchanged_caller = caller;
+	unchanged_output = output;
+	old_runtime.change_locator_call = (uint16_t)(old_runtime.locator_calls + 1U);
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &rejected));
+	CHECK(memcmp(&rejected, &unchanged_rejected, sizeof(rejected)) == 0);
+	CHECK(memcmp(&request, &unchanged_request, sizeof(request)) == 0);
+	CHECK(memcmp(&caller, &unchanged_caller, sizeof(caller)) == 0);
+	CHECK(memcmp(&output, &unchanged_output, sizeof(output)) == 0);
+	CHECK(old_runtime.acquired == 4U);
+	CHECK(old_runtime.released == 0U);
+	CHECK(new_runtime.locator_calls == 0U);
+	CHECK(new_runtime.authority_calls == 0U);
+	CHECK(new_runtime.released == 0U);
+	SG_StrategyCallerDestroy(&caller);
+	CHECK(old_runtime.released == 4U);
+	CHECK(old_runtime.releases[0] == 1U);
+	CHECK(old_runtime.releases[1] == 1U);
+	CHECK(old_runtime.releases[2] == 1U);
+	CHECK(old_runtime.releases[3] == 1U);
+	CHECK(new_runtime.released == 0U);
+	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+}
+
 static void TestRuntimeProviderRequiresReleaseOwner(void)
 {
 	caller_fixture_t fixture;
@@ -1150,6 +1376,11 @@ int main(void)
 	TestReplacementRetirementSurvivesReentrantDestroy();
 	TestLowerAuthorityRetirementSurvivesMutationAndDestroy();
 	TestPartialRollbackUsesDetachedReleaseOwner();
+	TestProviderUnregisterInLocatorLeavesBorrowedViewUnreleased();
+	TestProviderReplacementInSecondLocatorRollsBackOldLease();
+	TestProviderUnregisterInAuthorityReleasesAcceptedView();
+	TestProviderReplacementInSecondAuthorityUsesOldReleaseOwner();
+	TestProviderReplacementLeavesCallerOutputAndInputUnchanged();
 	TestRuntimeProviderRequiresReleaseOwner();
 	if (failures)
 	{

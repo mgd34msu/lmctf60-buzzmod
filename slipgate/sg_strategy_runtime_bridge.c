@@ -1,13 +1,71 @@
 #include "sg_strategy_runtime_bridge.h"
 
+#include <stdint.h>
 #include <string.h>
 
-static sg_strategy_runtime_target_locator_fn sg_strategy_runtime_locator;
-static void *sg_strategy_runtime_locator_context;
-static sg_strategy_runtime_target_authority_fn sg_strategy_runtime_authority;
-static void *sg_strategy_runtime_authority_context;
-static sg_strategy_runtime_target_release_fn sg_strategy_runtime_release_view;
-static void *sg_strategy_runtime_release_context;
+/* Registration is one capability.  A resolver snapshots the entire object
+ * before it calls untrusted code, then compares its non-wrapping identity
+ * after every callback.  Replacing just one callback/context pair must never
+ * make an old borrowed view cross into the new authority or release owner. */
+typedef struct sg_strategy_runtime_provider_registration_s
+{
+	sg_strategy_runtime_target_locator_fn locator;
+	void *locator_context;
+	sg_strategy_runtime_target_authority_fn authority;
+	void *authority_context;
+	sg_strategy_runtime_target_release_fn release_view;
+	void *release_context;
+	uint64_t identity;
+} sg_strategy_runtime_provider_registration_t;
+
+static sg_strategy_runtime_provider_registration_t sg_strategy_runtime_provider;
+static uint64_t sg_strategy_runtime_provider_next_identity = 1U;
+
+static int RuntimeProviderRegistrationAvailable(
+	const sg_strategy_runtime_provider_registration_t *registration)
+{
+	return registration && registration->identity != 0U &&
+		registration->locator != NULL && registration->authority != NULL &&
+		registration->release_view != NULL;
+}
+
+static int RuntimeProviderRegistrationCurrent(
+	const sg_strategy_runtime_provider_registration_t *registration)
+{
+	return registration && registration->identity != 0U &&
+		registration->identity == sg_strategy_runtime_provider.identity;
+}
+
+static void RuntimeProviderRegistrationReplace(
+	sg_strategy_runtime_target_locator_fn locator, void *locator_context,
+	sg_strategy_runtime_target_authority_fn authority, void *authority_context,
+	sg_strategy_runtime_target_release_fn release_view, void *release_context)
+{
+	sg_strategy_runtime_provider_registration_t registration;
+
+	/* Do not wrap an identity and accidentally authenticate an ancient
+	 * resolver snapshot.  Once the finite identity space is spent, every
+	 * provider operation remains unavailable until process restart. */
+	if (sg_strategy_runtime_provider_next_identity == UINT64_MAX)
+	{
+		memset(&sg_strategy_runtime_provider, 0,
+			sizeof(sg_strategy_runtime_provider));
+		return;
+	}
+	memset(&registration, 0, sizeof(registration));
+	registration.identity = sg_strategy_runtime_provider_next_identity;
+	sg_strategy_runtime_provider_next_identity++;
+	if (locator && authority && release_view)
+	{
+		registration.locator = locator;
+		registration.locator_context = locator_context;
+		registration.authority = authority;
+		registration.authority_context = authority_context;
+		registration.release_view = release_view;
+		registration.release_context = release_context;
+	}
+	sg_strategy_runtime_provider = registration;
+}
 
 static int RuntimeAuthorityValid(
 	const sg_strategy_caller_authority_t *authority)
@@ -226,29 +284,13 @@ void SG_StrategyRuntimeTargetProviderSet(
 	sg_strategy_runtime_target_release_fn release_view,
 	void *release_context)
 {
-	if (!locator || !authority || !release_view)
-	{
-		sg_strategy_runtime_locator = NULL;
-		sg_strategy_runtime_locator_context = NULL;
-		sg_strategy_runtime_authority = NULL;
-		sg_strategy_runtime_authority_context = NULL;
-		sg_strategy_runtime_release_view = NULL;
-		sg_strategy_runtime_release_context = NULL;
-		return;
-	}
-	sg_strategy_runtime_locator = locator;
-	sg_strategy_runtime_locator_context = locator_context;
-	sg_strategy_runtime_authority = authority;
-	sg_strategy_runtime_authority_context = authority_context;
-	sg_strategy_runtime_release_view = release_view;
-	sg_strategy_runtime_release_context = release_context;
+	RuntimeProviderRegistrationReplace(locator, locator_context, authority,
+		authority_context, release_view, release_context);
 }
 
 int SG_StrategyRuntimeTargetProviderAvailable(void)
 {
-	return sg_strategy_runtime_locator != NULL &&
-		sg_strategy_runtime_authority != NULL &&
-		sg_strategy_runtime_release_view != NULL;
+	return RuntimeProviderRegistrationAvailable(&sg_strategy_runtime_provider);
 }
 
 int SG_StrategyRuntimePlanResolve(
@@ -257,13 +299,15 @@ int SG_StrategyRuntimePlanResolve(
 {
 	sg_strategy_caller_plan_t candidate;
 	sg_strategy_plan_t compiled;
+	sg_strategy_runtime_provider_registration_t registration;
 	uint16_t goal_index;
 	uint16_t binding_index = 0U;
 
 	if (!plan_out || plan_out->binding_count != 0U || plan_out->release_view ||
 	    plan_out->release_context)
 		return 0;
-	if (!request || !SG_StrategyRuntimeTargetProviderAvailable() ||
+	registration = sg_strategy_runtime_provider;
+	if (!request || !RuntimeProviderRegistrationAvailable(&registration) ||
 	    !RuntimeRequestCompile(request, &compiled))
 		return 0;
 	memset(&candidate, 0, sizeof(candidate));
@@ -271,8 +315,8 @@ int SG_StrategyRuntimePlanResolve(
 	candidate.authority = request->authority;
 	candidate.spec = request->spec;
 	candidate.binding_count = request->execution_count;
-	candidate.release_view = sg_strategy_runtime_release_view;
-	candidate.release_context = sg_strategy_runtime_release_context;
+	candidate.release_view = registration.release_view;
+	candidate.release_context = registration.release_context;
 	for (goal_index = 0U; goal_index < compiled.goal_count; goal_index++)
 	{
 		const sg_strategy_goal_t *goal = &compiled.goals[goal_index];
@@ -285,6 +329,7 @@ int SG_StrategyRuntimePlanResolve(
 			sg_strategy_runtime_target_request_t target;
 			sg_strategy_runtime_target_view_t view;
 			sg_strategy_caller_target_binding_t binding;
+			int located;
 			int authority_accepted;
 
 			if (binding_index >= candidate.binding_count ||
@@ -301,13 +346,24 @@ int SG_StrategyRuntimePlanResolve(
 			target.role = execution->role;
 			memset(&view, 0, sizeof(view));
 			memset(&binding, 0, sizeof(binding));
-			if (!sg_strategy_runtime_locator(
-				sg_strategy_runtime_locator_context, &target, &view) ||
+			located = registration.locator(registration.locator_context, &target,
+				&view);
+			/* A locator only lends a view.  It transfers no lease until this
+			 * exact registration's authority accepts that same opaque object. */
+			if (!RuntimeProviderRegistrationCurrent(&registration) || !located ||
 			    !view.opaque)
 				goto reject;
-			authority_accepted = sg_strategy_runtime_authority(
-				sg_strategy_runtime_authority_context, &target, &view,
-				&binding);
+			authority_accepted = registration.authority(
+				registration.authority_context, &target, &view, &binding);
+			/* An accepted view belongs to this snapshot's release owner even if
+			 * authority changes the live registration before returning. */
+			if (!RuntimeProviderRegistrationCurrent(&registration))
+			{
+				if (authority_accepted)
+					registration.release_view(registration.release_context,
+						view.opaque);
+				goto reject;
+			}
 			if (!authority_accepted)
 				goto reject;
 			if (!RuntimeBindingAccepted(&target, &view, &binding))
@@ -324,7 +380,8 @@ int SG_StrategyRuntimePlanResolve(
 			binding_index++;
 		}
 	}
-	if (binding_index != candidate.binding_count)
+	if (binding_index != candidate.binding_count ||
+	    !RuntimeProviderRegistrationCurrent(&registration))
 		goto reject;
 	*plan_out = candidate;
 	return 1;
