@@ -52,6 +52,25 @@ static void SetPlane(sg_bsp_plane_t *plane, float x, float y, float z,
 	plane->type = x == 1.0f ? 0 : (y == 1.0f ? 1 : (z == 1.0f ? 2 : 3));
 }
 
+static float FaceProjectedArea(const sg_configuration_space_t *space,
+	const sg_configuration_face_t *face, uint32_t axis)
+{
+	uint32_t u = (axis + 1U) % 3U;
+	uint32_t v = (axis + 2U) % 3U;
+	uint32_t point;
+	float area = 0.0f;
+
+	for (point = 0; point < face->vertex_count; point++)
+	{
+		const float *a = space->vertices[face->first_vertex + point].value;
+		const float *b = space->vertices[face->first_vertex +
+			(point + 1U) % face->vertex_count].value;
+
+		area += a[u] * b[v] - a[v] * b[u];
+	}
+	return area;
+}
+
 static fixture_t Fixture(const test_box_t *boxes, uint32_t box_count,
 	int32_t front_contents, int32_t back_contents)
 {
@@ -445,7 +464,7 @@ static void TestExactLatticeBoundaries(void)
 	sg_configuration_lattice_stats_t stats = { 0 };
 	const float objective[3] = { 1.0f, -0.0f, 0.0f };
 	int32_t point[3] = { 0, 0, 0 };
-	uint64_t calls;
+	uint64_t calls, constraints;
 
 	CHECK(SG_ConfigurationLatticeFind(&halfspace, 1, objective, point,
 		&stats) == 1);
@@ -482,12 +501,88 @@ static void TestExactLatticeBoundaries(void)
 			{ { -1.0f, 0.0f, 0.0f }, 1.0f, 0 }
 		};
 		uint8_t clearance[2] = { 1U, 1U };
+		int32_t minimum = 0, maximum = 0;
 		int positive_margin = 0;
 
+		CHECK(SG_ConfigurationLatticeCoordinateBounds(interval, 2U, 0U,
+			&minimum, &maximum, &stats) == 1);
+		CHECK(minimum == -8 && maximum == 8);
+		interval[0].open = 1;
+		interval[1].open = 1;
+		CHECK(SG_ConfigurationLatticeCoordinateBounds(interval, 2U, 0U,
+			&minimum, &maximum, &stats) == 1);
+		CHECK(minimum == -7 && maximum == 7);
+		interval[0].normal[0] = 4096.0f;
+		interval[0].distance = 4096.0f;
+		interval[1].normal[0] = -8192.0f;
+		interval[1].distance = 8192.0f;
+		CHECK(SG_ConfigurationLatticeCoordinateBounds(interval, 2U, 0U,
+			&minimum, &maximum, &stats) == 1);
+		CHECK(minimum == -7 && maximum == 7);
+		CHECK(SG_ConfigurationLatticeCoordinateBounds(interval, 2U, 3U,
+			&minimum, &maximum, &stats) == -1);
+		interval[0].normal[0] = 1.0f;
+		interval[0].distance = -2.0f;
+		interval[0].open = 0;
+		interval[1].normal[0] = -1.0f;
+		interval[1].distance = 1.0f;
+		interval[1].open = 0;
+		CHECK(SG_ConfigurationLatticeCoordinateBounds(interval, 2U, 0U,
+			&minimum, &maximum, &stats) == 0);
+
+		interval[0].distance = 1.0f;
+		interval[1].distance = 1.0f;
 		CHECK(SG_ConfigurationLatticeFindMaxClearance(interval, clearance, 2,
 			NULL, point, &positive_margin, &stats) == 1);
 		CHECK(positive_margin);
 		CHECK(point[0] == 0);
+	}
+	{
+		const sg_configuration_lattice_halfspace_t box[6] = {
+			{ { 1.0f, 0.0f, 0.0f }, 1.0f, 0 },
+			{ { -1.0f, 0.0f, 0.0f }, 1.0f, 0 },
+			{ { 0.0f, 1.0f, 0.0f }, 1.0f, 0 },
+			{ { 0.0f, -1.0f, 0.0f }, 1.0f, 0 },
+			{ { 0.0f, 0.0f, 1.0f }, 1.0f, 0 },
+			{ { 0.0f, 0.0f, -1.0f }, 1.0f, 0 }
+		};
+		const float oblique[3] = {
+			0.628799975f, -0.584699988f, -0.658399999f
+		};
+		const float tied_objective[3] = { 1.0f, 0.0f, 0.0f };
+		const uint8_t x_clearance[6] = { 1U, 1U, 0U, 0U, 0U, 0U };
+		const int32_t comparator[3] = { 7, -8, -8 };
+		float optimum_dot, comparator_dot;
+		int positive_margin = 0;
+
+		calls = stats.solve_calls;
+		constraints = stats.constraints;
+		CHECK(SG_ConfigurationLatticeFind(box, 6U, oblique, point,
+			&stats) == 1);
+		CHECK(point[0] == 8 && point[1] == -8 && point[2] == -8);
+		optimum_dot = oblique[0] * (float)point[0] +
+			oblique[1] * (float)point[1] + oblique[2] * (float)point[2];
+		comparator_dot = oblique[0] * (float)comparator[0] +
+			oblique[1] * (float)comparator[1] +
+			oblique[2] * (float)comparator[2];
+		CHECK(optimum_dot >= comparator_dot);
+		CHECK(stats.solve_calls == calls + 2U);
+		CHECK(stats.constraints == constraints + 25U);
+		calls = stats.solve_calls;
+		constraints = stats.constraints;
+		CHECK(SG_ConfigurationLatticeFindMaxClearance(box, x_clearance, 6U,
+			oblique, point, &positive_margin, &stats) == 1);
+		CHECK(positive_margin);
+		CHECK(point[0] == 0 && point[1] == -8 && point[2] == -8);
+		CHECK(stats.solve_calls == calls + 3U);
+		CHECK(stats.constraints == constraints + 39U);
+		CHECK(SG_ConfigurationLatticeFind(box, 6U, tied_objective, point,
+			&stats) == 1);
+		CHECK(point[0] == 8 && point[1] == 8 && point[2] == 8);
+		CHECK(SG_ConfigurationLatticeFindMaxClearance(box, x_clearance, 6U,
+			tied_objective, point, &positive_margin, &stats) == 1);
+		CHECK(positive_margin);
+		CHECK(point[0] == 0 && point[1] == 8 && point[2] == 8);
 	}
 }
 
@@ -626,6 +721,11 @@ static void TestHostFloatBoundaryLocalization(void)
 		0.07827655225992203f
 	};
 	const float host_outside_distance = 219.85679626464844f;
+	const float selector_solid_normal[3] = {
+		0.7102766633033752f, 0.8635693788528442f,
+		-0.45951032638549805f
+	};
+	const float selector_solid_distance = -1820.601806640625f;
 
 	/* The first point is rationally outside but binary32 Dot rounds onto the
 	 * solid boundary. The second is rationally inside but host Dot rounds out. */
@@ -639,6 +739,80 @@ static void TestHostFloatBoundaryLocalization(void)
 		host_outside_distance));
 	CHECK(!PinnedPointHasPositiveMargin(host_outside_q, host_outside_normal,
 		host_outside_distance));
+	{
+		sg_configuration_lattice_halfspace_t constraints[7] = {
+			{ { 1.0f, 0.0f, 0.0f }, 21841.0f * 0.125f, 0 },
+			{ { -1.0f, 0.0f, 0.0f }, -21839.0f * 0.125f, 0 },
+			{ { 0.0f, 1.0f, 0.0f }, -31435.0f * 0.125f, 0 },
+			{ { 0.0f, -1.0f, 0.0f }, 31437.0f * 0.125f, 0 },
+			{ { 0.0f, 0.0f, 1.0f }, 6376.0f * 0.125f, 0 },
+			{ { 0.0f, 0.0f, -1.0f }, -6374.0f * 0.125f, 0 },
+			{ { -0.7102766633033752f, -0.8635693788528442f,
+				0.45951032638549805f }, 1820.601806640625f, 1 }
+		};
+		const uint8_t clearance[7] = { 1U, 1U, 1U, 1U, 1U, 1U, 0U };
+		const float objective[3] = {
+			-0.7102766633033752f, -0.8635693788528442f,
+			0.45951032638549805f
+		};
+		const int32_t expected_extreme[3] = { 21839, -31436, 6375 };
+		const int32_t expected_clearance[3] = { 21840, -31436, 6375 };
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int32_t extreme[3], safe[3];
+		int positive_margin = 0;
+
+		CHECK(SG_ConfigurationLatticeFind(constraints, 7U, objective, extreme,
+			&stats) == 1);
+		CHECK(memcmp(extreme, expected_extreme, sizeof(extreme)) == 0);
+		CHECK(HostPointInOnePlaneBrush(extreme, selector_solid_normal,
+			selector_solid_distance));
+		CHECK(SG_ConfigurationLatticeFindMaxClearance(constraints, clearance,
+			7U, NULL, safe, &positive_margin, &stats) == 1);
+		CHECK(positive_margin);
+		CHECK(memcmp(safe, expected_clearance, sizeof(safe)) == 0);
+		CHECK(!HostPointInOnePlaneBrush(safe, selector_solid_normal,
+			selector_solid_distance));
+		{
+			test_box_t placeholder = {
+				{ -1.0f, -1.0f, -1.0f }, { 1.0f, 1.0f, 1.0f },
+				SG_HOST_CONTENTS_SOLID
+			};
+			fixture_t fixture = Fixture(&placeholder, 1,
+				SG_HOST_CONTENTS_SOLID, SG_HOST_CONTENTS_SOLID);
+			sg_rune_model_identity_t identity = Identity();
+			sg_host_collision_authority_t authority;
+			sg_host_collision_error_t host_error;
+			sg_host_collision_transition_t transition;
+			float selected[3], other_endpoint[3];
+			uint32_t axis;
+
+			SetPlane(&fixture.planes[1], selector_solid_normal[0],
+				selector_solid_normal[1], selector_solid_normal[2],
+				selector_solid_distance);
+			fixture.brushes[0].side_count = 1U;
+			for (axis = 0U; axis < 3U; axis++)
+			{
+				identity.standing_hull.mins.value[axis] = -FLT_TRUE_MIN;
+				identity.standing_hull.maxs.value[axis] = FLT_TRUE_MIN;
+				identity.crouching_hull.mins.value[axis] = -FLT_TRUE_MIN;
+				identity.crouching_hull.maxs.value[axis] = FLT_TRUE_MIN;
+				other_endpoint[axis] = (float)safe[axis] * 0.125f;
+			}
+			other_endpoint[0] += 0.125f;
+			CHECK(SG_HostCollisionInit(&authority, &fixture.world, &identity,
+				&host_error));
+			CHECK(SG_ConfigurationTestHostValidatedCandidate(&authority,
+				SG_RUNE_STANCE_STANDING, extreme, safe, selected) == 1);
+			for (axis = 0U; axis < 3U; axis++)
+				CHECK(selected[axis] == (float)safe[axis] * 0.125f);
+			CHECK(SG_HostCollisionTransition(&authority, NULL, selected,
+				other_endpoint, SG_RUNE_STANCE_STANDING, &transition));
+			CHECK(transition.clear);
+			CHECK(SG_ConfigurationTestHostValidatedCandidate(&authority,
+				SG_RUNE_STANCE_STANDING, extreme, extreme, selected) == -1);
+			DestroyFixture(&fixture);
+		}
+	}
 	{
 		test_box_t placeholder = {
 			{ -1.0f, -1.0f, -1.0f }, { 1.0f, 1.0f, 1.0f },
@@ -673,12 +847,50 @@ static void TestHostFloatBoundaryLocalization(void)
 		CHECK(SG_ConfigurationBuild(&authority, NULL, &space, &build_error));
 		if (space)
 		{
+			uint32_t constraint_count = 0U;
+			int saw_constraint_extent = 0;
+
 			CHECK(SG_ConfigurationAudit(&authority, space, &audit));
 			for (cell = 0; cell < space->cell_count; cell++)
+			{
+				uint32_t face;
+				int cell_has_constraint = 0;
+
 				saw_rounding_point |= space->cells[cell].interior_witness.value[0] ==
 					origin[0] && space->cells[cell].interior_witness.value[1] ==
 					origin[1] &&
 					space->cells[cell].interior_witness.value[2] == origin[2];
+				for (face = 0; face < space->cells[cell].face_count; face++)
+				{
+					const sg_configuration_face_t *value = &space->faces[
+						space->cells[cell].first_face + face];
+
+					if (value->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+					{
+						constraint_count++;
+						cell_has_constraint = 1;
+						continue;
+					}
+					{
+						uint32_t dominant = 0U;
+
+						if (fabsf(value->plane.normal[1]) >
+							fabsf(value->plane.normal[dominant]))
+							dominant = 1U;
+						if (fabsf(value->plane.normal[2]) >
+							fabsf(value->plane.normal[dominant]))
+							dominant = 2U;
+						CHECK((FaceProjectedArea(space, value, dominant) < 0.0f) ==
+							(value->plane.normal[dominant] < 0.0f));
+					}
+				}
+				for (axis = 0; cell_has_constraint && axis < 3U; axis++)
+					saw_constraint_extent |=
+						space->cells[cell].bounds.maxs.value[axis] -
+						space->cells[cell].bounds.mins.value[axis] >= 0.125f;
+			}
+			CHECK(constraint_count > 0U);
+			CHECK(saw_constraint_extent);
 			CHECK(!saw_rounding_point);
 			for (portal = 0; portal < space->portal_count; portal++)
 				CHECK(space->portals[portal].plane.source_kind !=
@@ -689,10 +901,24 @@ static void TestHostFloatBoundaryLocalization(void)
 	}
 }
 
+static void TestConstraintOnlyPortal(void)
+{
+	fixture_t fixture = Fixture(NULL, 0U, 0, 0);
+	sg_rune_model_identity_t identity = Identity();
+	sg_host_collision_authority_t authority;
+	sg_host_collision_error_t error;
+
+	CHECK(SG_HostCollisionInit(&authority, &fixture.world, &identity, &error));
+	CHECK(SG_ConfigurationTestConstraintPortal(&authority));
+	DestroyFixture(&fixture);
+}
+
 int main(void)
 {
+	CHECK(SG_ConfigurationTestConstraintFacetWinding());
 	TestExactLatticeBoundaries();
 	TestHostFloatBoundaryLocalization();
+	TestConstraintOnlyPortal();
 	TestZeroVolumeDuplicatePlaneLeaf();
 	TestFullDomainCorridorAndWater();
 	TestDisconnectedWallAndFailureAudit();

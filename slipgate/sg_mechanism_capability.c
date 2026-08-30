@@ -505,11 +505,7 @@ static int PointInRegion(const sg_configuration_semantics_t *semantics,
 	{
 		const sg_configuration_semantic_face_t *plane =
 			&semantics->faces[face];
-		double dot = (double)point->value[0] * plane->normal[0] +
-			(double)point->value[1] * plane->normal[1] +
-			(double)point->value[2] * plane->normal[2];
-
-		if (dot > (double)plane->distance)
+		if (!SG_ConfigurationSemanticFaceContainsPoint(plane, point->value))
 			return 0;
 	}
 	return 1;
@@ -846,7 +842,17 @@ static int SourceShapeValid(sg_mechanism_build_t *build)
 		if (!isfinite(face->normal[0]) || !isfinite(face->normal[1]) ||
 			!isfinite(face->normal[2]) || !isfinite(face->distance) ||
 			(face->normal[0] == 0.0f && face->normal[1] == 0.0f &&
-			 face->normal[2] == 0.0f))
+			 face->normal[2] == 0.0f) ||
+			face->kind > SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY ||
+			face->open > 1U ||
+			(face->kind == SG_CONFIGURATION_SEMANTIC_FACE_FACET &&
+				face->vertex_count < 3U) ||
+			(face->kind == SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY &&
+				face->vertex_count != 0U) ||
+			face->first_vertex >
+				source->configuration_semantics->vertex_count ||
+			face->vertex_count > source->configuration_semantics->vertex_count -
+				face->first_vertex)
 		{
 			SetError(build, SG_MECHANISM_CAPABILITY_ERROR_INVALID_SOURCE,
 				index);

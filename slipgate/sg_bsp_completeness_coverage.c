@@ -214,8 +214,12 @@ int SG_BspProofCellRegion(const sg_configuration_space_t *space,
 			(face->plane.normal[0] == 0.0f &&
 			 face->plane.normal[1] == 0.0f &&
 			 face->plane.normal[2] == 0.0f) ||
+			face->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
+			(face->kind == SG_CONFIGURATION_FACE_FACET &&
+				face->vertex_count < 3U) ||
+			(face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY &&
+				face->vertex_count != 0U) ||
 			face->first_vertex > space->vertex_count ||
-			face->vertex_count < 3U ||
 			face->vertex_count > space->vertex_count - face->first_vertex)
 		{
 			SG_BspProofFreeRegion(region_out);

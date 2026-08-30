@@ -188,11 +188,7 @@ static int PointInsideRegion(const sg_configuration_semantics_t *semantics,
 	{
 		const sg_configuration_semantic_face_t *face =
 			&semantics->faces[region->first_face + local];
-		double distance = (double)point[0] * face->normal[0] +
-			(double)point[1] * face->normal[1] +
-			(double)point[2] * face->normal[2];
-
-		if (!isfinite(distance) || distance > (double)face->distance)
+		if (!SG_ConfigurationSemanticFaceContainsPoint(face, point))
 			return 0;
 	}
 	return 1;
@@ -422,7 +418,18 @@ static int SourcesValid(const sg_host_law_construction_t *construction,
 	}
 	for (face = 0U; face < semantics->face_count; face++)
 		if (!Finite3(semantics->faces[face].normal) ||
-			!isfinite(semantics->faces[face].distance))
+			!isfinite(semantics->faces[face].distance) ||
+			semantics->faces[face].kind >
+				SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY ||
+			semantics->faces[face].open > 1U ||
+			(semantics->faces[face].kind ==
+				SG_CONFIGURATION_SEMANTIC_FACE_FACET &&
+				semantics->faces[face].vertex_count < 3U) ||
+			(semantics->faces[face].kind ==
+				SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY &&
+				semantics->faces[face].vertex_count != 0U) ||
+			!SpanValid(semantics->faces[face].first_vertex,
+				semantics->faces[face].vertex_count, semantics->vertex_count))
 			return 0;
 	for (region = 0U; region < semantics->region_count; region++)
 	{
@@ -1650,6 +1657,7 @@ static int PortalRegionWitness(const sg_ground_build_t *build,
 			record->distance, !PlanesCoplanar(record->normal, record->distance,
 				portal->plane.normal, portal->plane.distance)))
 			goto invalid;
+		halfspaces[count - 1U].open = record->open != 0U;
 	}
 	for (axis = 0U; axis < 3U; axis++)
 	{

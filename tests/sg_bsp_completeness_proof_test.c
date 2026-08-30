@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "../slipgate/sg_bsp_completeness_proof.h"
+#include "../slipgate/sg_bsp_completeness_internal.h"
 
 static int failures;
 
@@ -832,6 +833,7 @@ static void TestSameLeafIntervalScaling(void)
 
 int main(void)
 {
+	CHECK(SG_BspProofTestZeroPolygonPortalKinds());
 	TestEmptyWaterVoidAndAdversarialRecords();
 	TestHostLeafGatingAndExactBrushBoundary();
 	TestEquivalentPlanePortalIndex();

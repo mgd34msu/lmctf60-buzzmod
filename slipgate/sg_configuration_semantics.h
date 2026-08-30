@@ -48,6 +48,12 @@ typedef enum sg_configuration_semantic_plane_source_e
 	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_CLIP
 } sg_configuration_semantic_plane_source_t;
 
+typedef enum sg_configuration_semantic_face_kind_e
+{
+	SG_CONFIGURATION_SEMANTIC_FACE_FACET = 0,
+	SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY
+} sg_configuration_semantic_face_kind_t;
+
 typedef struct sg_configuration_semantic_face_s
 {
 	float normal[3];
@@ -59,8 +65,20 @@ typedef struct sg_configuration_semantic_face_s
 	uint32_t source_variant;
 	uint8_t sample_index;
 	uint8_t reversed;
-	uint8_t reserved[2];
+	uint8_t open;
+	sg_configuration_semantic_face_kind_t kind;
 } sg_configuration_semantic_face_t;
+
+static inline int SG_ConfigurationSemanticFaceContainsPoint(
+	const sg_configuration_semantic_face_t *face, const float point[3])
+{
+	double distance = (double)point[0] * face->normal[0] +
+		(double)point[1] * face->normal[1] +
+		(double)point[2] * face->normal[2];
+
+	return face->open ? distance < (double)face->distance :
+		distance <= (double)face->distance;
+}
 
 typedef uint32_t sg_configuration_semantic_region_flags_t;
 enum
@@ -207,5 +225,9 @@ const char *SG_ConfigurationSemanticsErrorString(
 	sg_configuration_semantics_error_code_t code);
 const char *SG_ConfigurationSemanticsAuditCodeString(
 	sg_configuration_semantics_audit_code_t code);
+
+#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
+int SG_ConfigurationSemanticsTestMixedConstraintMesh(void);
+#endif
 
 #endif

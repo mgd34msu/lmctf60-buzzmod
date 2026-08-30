@@ -8,6 +8,8 @@
 
 #include <isl/constraint.h>
 #include <isl/ctx.h>
+#include <isl/aff.h>
+#include <isl/ilp.h>
 #include <isl/local_space.h>
 #include <isl/options.h>
 #include <isl/point.h>
@@ -177,15 +179,14 @@ static isl_basic_set *AddBounds(isl_basic_set *set, uint32_t offset)
 	return set;
 }
 
-static isl_basic_set *AddObjective(isl_basic_set *set,
-	const float objective[3], uint32_t objective_position, uint32_t point_offset,
-	uint32_t *maximum_shift)
+static isl_aff *ObjectiveAff(isl_basic_set *set,
+	const float objective[3], uint32_t point_offset, uint32_t *maximum_shift)
 {
 	float_integer_t values[3];
 	int minimum_exponent = INT_MAX;
 	isl_ctx *context = isl_basic_set_get_ctx(set);
 	isl_local_space *local;
-	isl_constraint *equality;
+	isl_aff *aff;
 	uint32_t axis;
 
 	for (axis = 0; axis < 3; axis++)
@@ -195,15 +196,51 @@ static isl_basic_set *AddObjective(isl_basic_set *set,
 			minimum_exponent = values[axis].exponent;
 	}
 	if (minimum_exponent == INT_MAX)
-		return isl_basic_set_free(set);
+		return NULL;
 	local = isl_local_space_from_space(isl_basic_set_get_space(set));
-	equality = isl_constraint_alloc_equality(local);
-	equality = isl_constraint_set_coefficient_si(equality, isl_dim_set,
-		(int)objective_position, -1);
-	for (axis = 0; axis < 3 && equality; axis++)
-		equality = isl_constraint_set_coefficient_val(equality, isl_dim_set,
+	aff = isl_aff_zero_on_domain(local);
+	for (axis = 0; axis < 3U && aff; axis++)
+		aff = isl_aff_set_coefficient_val(aff, isl_dim_in,
 			(int)(axis + point_offset), ScaledInteger(context, values[axis],
 				minimum_exponent, maximum_shift));
+	return aff;
+}
+
+static isl_basic_set *ConstrainObjectiveMaximum(isl_basic_set *set,
+	const float objective[3], uint32_t point_offset, isl_val *maximum,
+	uint32_t *maximum_shift)
+{
+	isl_aff *objective_aff = ObjectiveAff(set, objective, point_offset,
+		maximum_shift);
+	isl_local_space *local;
+	isl_aff *constant;
+	isl_basic_set *optimum;
+
+	if (!objective_aff)
+		return isl_basic_set_free(set);
+	local = isl_local_space_from_space(isl_basic_set_get_space(set));
+	constant = isl_aff_val_on_domain(local, isl_val_copy(maximum));
+	if (!constant)
+	{
+		isl_aff_free(objective_aff);
+		return isl_basic_set_free(set);
+	}
+	optimum = isl_aff_eq_basic_set(objective_aff, constant);
+	return optimum ? isl_basic_set_intersect(set, optimum) :
+		isl_basic_set_free(set);
+}
+
+static isl_basic_set *ConstrainCoordinateValue(isl_basic_set *set,
+	uint32_t position, isl_val *value)
+{
+	isl_local_space *local =
+		isl_local_space_from_space(isl_basic_set_get_space(set));
+	isl_constraint *equality = isl_constraint_alloc_equality(local);
+
+	equality = isl_constraint_set_coefficient_si(equality, isl_dim_set,
+		(int)position, 1);
+	equality = isl_constraint_set_constant_val(equality,
+		isl_val_neg(isl_val_copy(value)));
 	return equality ? isl_basic_set_add_constraint(set, equality) :
 		isl_basic_set_free(set);
 }
@@ -216,18 +253,19 @@ int SG_ConfigurationLatticeFind(
 	isl_ctx *context;
 	isl_space *space;
 	isl_basic_set *set;
+	isl_aff *objective_aff = NULL;
+	isl_val *maximum = NULL;
 	isl_set *optimized = NULL;
 	isl_point *point;
-	uint32_t dimensions = objective ? 4U : 3U;
-	uint32_t offset = objective ? 1U : 0U;
 	uint32_t index;
 	int result = -1;
 
 	if (!ArgumentsValid(halfspaces, halfspace_count, objective, point_out, stats))
 		return -1;
-	stats->solve_calls++;
-	stats->constraints += (uint64_t)halfspace_count + 6U +
-		(objective ? 1U : 0U);
+	stats->solve_calls += objective ? 2U : 1U;
+	stats->constraints += objective ?
+		2U * (uint64_t)halfspace_count + 13U :
+		(uint64_t)halfspace_count + 6U;
 	context = isl_ctx_alloc();
 	if (!context)
 		return -1;
@@ -236,15 +274,26 @@ int SG_ConfigurationLatticeFind(
 		isl_ctx_free(context);
 		return -1;
 	}
-	space = isl_space_set_alloc(context, 0, dimensions);
+	space = isl_space_set_alloc(context, 0, 3U);
 	set = isl_basic_set_universe(space);
-	set = AddBounds(set, offset);
+	set = AddBounds(set, 0U);
 	for (index = 0; index < halfspace_count && set; index++)
-		set = AddHalfspace(set, &halfspaces[index], offset, -1,
+		set = AddHalfspace(set, &halfspaces[index], 0U, -1,
 			&stats->maximum_binary_shift);
 	if (set && objective)
-		set = AddObjective(set, objective, 0U, offset,
+		objective_aff = ObjectiveAff(set, objective, 0U,
 			&stats->maximum_binary_shift);
+	if (set && objective_aff)
+		maximum = isl_basic_set_max_val(set, objective_aff);
+	if (set && objective && maximum &&
+		isl_val_is_int(maximum) == isl_bool_true)
+		set = ConstrainObjectiveMaximum(set, objective, 0U, maximum,
+			&stats->maximum_binary_shift);
+	else if (set && objective && maximum &&
+		isl_val_is_nan(maximum) != isl_bool_true)
+	{
+		set = isl_basic_set_free(set);
+	}
 	if (set && objective)
 	{
 		optimized = isl_basic_set_lexmax(set);
@@ -268,7 +317,7 @@ int SG_ConfigurationLatticeFind(
 		for (index = 0; index < 3U; index++)
 		{
 			isl_val *coordinate = isl_point_get_coordinate_val(point,
-				isl_dim_set, (int)(offset + index));
+				isl_dim_set, (int)index);
 			long value;
 
 			if (!coordinate || isl_val_is_int(coordinate) != isl_bool_true)
@@ -290,7 +339,79 @@ int SG_ConfigurationLatticeFind(
 	else if (point && isl_point_is_void(point) == isl_bool_true)
 		result = 0;
 	isl_point_free(point);
+	isl_aff_free(objective_aff);
+	isl_val_free(maximum);
 	isl_set_free(optimized);
+	isl_basic_set_free(set);
+	if (isl_ctx_last_error(context) != isl_error_none)
+		result = -1;
+	isl_ctx_free(context);
+	return result;
+}
+
+int SG_ConfigurationLatticeCoordinateBounds(
+	const sg_configuration_lattice_halfspace_t *halfspaces,
+	uint32_t halfspace_count, uint32_t axis, int32_t *minimum_out,
+	int32_t *maximum_out, sg_configuration_lattice_stats_t *stats)
+{
+	isl_ctx *context;
+	isl_space *space;
+	isl_basic_set *set;
+	isl_val *minimum = NULL;
+	isl_val *maximum = NULL;
+	uint32_t index;
+	int result = -1;
+
+	if ((!halfspaces && halfspace_count) || axis >= 3U || !minimum_out ||
+		!maximum_out || !stats)
+		return -1;
+	for (index = 0; index < halfspace_count; index++)
+		if (!FiniteNonzeroVector(halfspaces[index].normal) ||
+			!isfinite(halfspaces[index].distance) ||
+			(halfspaces[index].open != 0 && halfspaces[index].open != 1))
+			return -1;
+	stats->solve_calls += 2U;
+	stats->constraints += 2U * ((uint64_t)halfspace_count + 6U);
+	context = isl_ctx_alloc();
+	if (!context)
+		return -1;
+	if (isl_options_set_on_error(context, ISL_ON_ERROR_CONTINUE) < 0)
+	{
+		isl_ctx_free(context);
+		return -1;
+	}
+	space = isl_space_set_alloc(context, 0, 3U);
+	set = isl_basic_set_universe(space);
+	set = AddBounds(set, 0U);
+	for (index = 0; index < halfspace_count && set; index++)
+		set = AddHalfspace(set, &halfspaces[index], 0U, -1,
+			&stats->maximum_binary_shift);
+	if (set)
+		maximum = isl_basic_set_dim_max_val(isl_basic_set_copy(set), (int)axis);
+	if (set)
+		minimum = isl_set_dim_min_val(isl_set_from_basic_set(set), (int)axis);
+	set = NULL;
+	if (minimum && maximum &&
+		isl_val_is_nan(minimum) == isl_bool_true &&
+		isl_val_is_nan(maximum) == isl_bool_true)
+		result = 0;
+	else if (minimum && maximum &&
+		isl_val_is_int(minimum) == isl_bool_true &&
+		isl_val_is_int(maximum) == isl_bool_true)
+	{
+		long minimum_value = isl_val_get_num_si(minimum);
+		long maximum_value = isl_val_get_num_si(maximum);
+
+		if (minimum_value >= INT32_MIN && minimum_value <= INT32_MAX &&
+			maximum_value >= INT32_MIN && maximum_value <= INT32_MAX)
+		{
+			*minimum_out = (int32_t)minimum_value;
+			*maximum_out = (int32_t)maximum_value;
+			result = 1;
+		}
+	}
+	isl_val_free(minimum);
+	isl_val_free(maximum);
 	isl_basic_set_free(set);
 	if (isl_ctx_last_error(context) != isl_error_none)
 		result = -1;
@@ -307,10 +428,12 @@ int SG_ConfigurationLatticeFindMaxClearance(
 	isl_ctx *context;
 	isl_space *space;
 	isl_basic_set *basic;
-	isl_set *optimized;
+	isl_aff *objective_aff = NULL;
+	isl_val *margin_maximum = NULL;
+	isl_val *objective_maximum = NULL;
+	isl_set *optimized = NULL;
 	isl_point *point;
-	uint32_t dimensions = objective ? 5U : 4U;
-	uint32_t point_offset = objective ? 2U : 1U;
+	uint32_t point_offset = 1U;
 	uint32_t index;
 	int has_clearance = 0;
 	int result = -1;
@@ -326,9 +449,10 @@ int SG_ConfigurationLatticeFindMaxClearance(
 	}
 	if (!has_clearance)
 		return -1;
-	stats->solve_calls++;
-	stats->constraints += (uint64_t)halfspace_count + 6U +
-		(objective ? 1U : 0U);
+	stats->solve_calls += objective ? 3U : 1U;
+	stats->constraints += objective ?
+		3U * (uint64_t)halfspace_count + 21U :
+		(uint64_t)halfspace_count + 6U;
 	context = isl_ctx_alloc();
 	if (!context)
 		return -1;
@@ -337,18 +461,43 @@ int SG_ConfigurationLatticeFindMaxClearance(
 		isl_ctx_free(context);
 		return -1;
 	}
-	space = isl_space_set_alloc(context, 0, dimensions);
+	space = isl_space_set_alloc(context, 0, 4U);
 	basic = isl_basic_set_universe(space);
 	basic = AddBounds(basic, point_offset);
 	for (index = 0; index < halfspace_count && basic; index++)
 		basic = AddHalfspace(basic, &halfspaces[index], point_offset,
 			clearance_constraints[index] ? 0 : -1,
 			&stats->maximum_binary_shift);
+	if (basic && !objective)
+	{
+		optimized = isl_basic_set_lexmax(basic);
+		basic = NULL;
+	}
+	if (basic)
+		margin_maximum = isl_basic_set_dim_max_val(isl_basic_set_copy(basic), 0);
+	if (basic && margin_maximum &&
+		isl_val_is_int(margin_maximum) == isl_bool_true)
+		basic = ConstrainCoordinateValue(basic, 0U, margin_maximum);
+	else if (basic && margin_maximum &&
+		isl_val_is_nan(margin_maximum) != isl_bool_true)
+		basic = isl_basic_set_free(basic);
 	if (basic && objective)
-		basic = AddObjective(basic, objective, 1U, point_offset,
+		objective_aff = ObjectiveAff(basic, objective, point_offset,
 			&stats->maximum_binary_shift);
-	optimized = basic ? isl_basic_set_lexmax(basic) : NULL;
-	basic = NULL;
+	if (basic && objective_aff)
+		objective_maximum = isl_basic_set_max_val(basic, objective_aff);
+	if (basic && objective && objective_maximum &&
+		isl_val_is_int(objective_maximum) == isl_bool_true)
+		basic = ConstrainObjectiveMaximum(basic, objective, point_offset,
+			objective_maximum, &stats->maximum_binary_shift);
+	else if (basic && objective && objective_maximum &&
+		isl_val_is_nan(objective_maximum) != isl_bool_true)
+		basic = isl_basic_set_free(basic);
+	if (basic)
+	{
+		optimized = isl_basic_set_lexmax(basic);
+		basic = NULL;
+	}
 	point = optimized ? isl_set_sample_point(optimized) : NULL;
 	optimized = NULL;
 	if (point && isl_point_is_void(point) == isl_bool_false)
@@ -386,6 +535,9 @@ int SG_ConfigurationLatticeFindMaxClearance(
 	else if (point && isl_point_is_void(point) == isl_bool_true)
 		result = 0;
 	isl_point_free(point);
+	isl_aff_free(objective_aff);
+	isl_val_free(margin_maximum);
+	isl_val_free(objective_maximum);
 	isl_set_free(optimized);
 	isl_basic_set_free(basic);
 	if (isl_ctx_last_error(context) != isl_error_none)

@@ -17,6 +17,32 @@ typedef struct portal_point2_s
 	double value[2];
 } portal_point2_t;
 
+static int ZeroPolygonUsesAuthoritativeFallback(
+	const sg_configuration_face_t *left,
+	const sg_configuration_face_t *right)
+{
+	return left->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
+		right->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+}
+
+int SG_BspProofTestZeroPolygonPortalKinds(void)
+{
+	sg_configuration_face_t left, right;
+
+	memset(&left, 0, sizeof(left));
+	memset(&right, 0, sizeof(right));
+	left.kind = SG_CONFIGURATION_FACE_FACET;
+	right.kind = SG_CONFIGURATION_FACE_FACET;
+	if (ZeroPolygonUsesAuthoritativeFallback(&left, &right))
+		return 0;
+	left.kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	if (!ZeroPolygonUsesAuthoritativeFallback(&left, &right))
+		return 0;
+	left.kind = SG_CONFIGURATION_FACE_FACET;
+	right.kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	return ZeroPolygonUsesAuthoritativeFallback(&left, &right);
+}
+
 static uint32_t DominantAxis(const float normal[3])
 {
 	uint32_t axis = 0U;
@@ -283,22 +309,24 @@ failure:
 }
 
 static int PortalSideWitness(sg_bsp_proof_context_t *proof,
-	uint32_t cell_index, const sg_configuration_face_t *boundary,
-	const portal_point2_t *polygon, uint32_t polygon_count,
-	const float center[3], float witness[3])
+	uint32_t cell_index, uint32_t other_cell_index,
+	const sg_configuration_face_t *boundary, float witness[3])
 {
 	const sg_configuration_cell_t *cell = &proof->space->cells[cell_index];
+	const sg_configuration_cell_t *other =
+		&proof->space->cells[other_cell_index];
 	sg_configuration_lattice_halfspace_t *halfspaces;
+	const sg_configuration_plane_t **planes;
 	uint8_t *clearance;
 	sg_configuration_lattice_stats_t stats = { 0 };
-	int32_t point[3];
-	uint32_t drop = DominantAxis(boundary->plane.normal);
-	uint32_t constraint_count = cell->face_count;
-	uint32_t offset, edge, axis;
+	int32_t point[3], clearance_point[3];
+	uint32_t constraint_count;
+	uint32_t offset, axis;
 	double boundary_normal[3], boundary_distance;
 	float objective[3];
 	int positive_margin = 0;
 	int solved;
+	int classified;
 	sg_host_collision_pose_t pose;
 
 	if (!SG_BspProofOrientedPlane(&boundary->plane, boundary_normal,
@@ -306,102 +334,130 @@ static int PortalSideWitness(sg_bsp_proof_context_t *proof,
 		return -1;
 	for (axis = 0; axis < 3U; axis++)
 		objective[axis] = (float)boundary_normal[axis];
-	halfspaces = calloc((size_t)cell->face_count + polygon_count,
+	if (cell->face_count > UINT32_MAX - other->face_count)
+		return -1;
+	halfspaces = calloc((size_t)cell->face_count + other->face_count,
 		sizeof(*halfspaces));
-	clearance = calloc((size_t)cell->face_count + polygon_count,
+	planes = calloc((size_t)cell->face_count + other->face_count,
+		sizeof(*planes));
+	clearance = calloc((size_t)cell->face_count + other->face_count,
 		sizeof(*clearance));
-	if (!halfspaces || !clearance)
+	if (!halfspaces || !planes || !clearance)
 	{
 		free(halfspaces);
+		free(planes);
 		free(clearance);
 		return -1;
 	}
+	constraint_count = 0U;
 	for (offset = 0; offset < cell->face_count; offset++)
 	{
 		const sg_configuration_plane_t *plane =
 			&proof->space->faces[cell->first_face + offset].plane;
 		double normal[3], distance;
+		uint32_t existing;
 
 		if (!SG_BspProofOrientedPlane(plane, normal, &distance))
 		{
 			free(halfspaces);
+			free(planes);
 			free(clearance);
 			return -1;
 		}
-		for (axis = 0; axis < 3U; axis++)
-			halfspaces[offset].normal[axis] = (float)normal[axis];
-		halfspaces[offset].distance = (float)distance;
-		halfspaces[offset].open =
-			(plane->source_kind == SG_CONFIGURATION_PLANE_BSP &&
-			 plane->reversed == 0U) ||
-			(plane->source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
-			 plane->reversed != 0U);
-		clearance[offset] =
-			(uint8_t)!SG_BspProofPlanesCoplanar(plane, &boundary->plane);
-	}
-	for (edge = 0; edge < polygon_count; edge++)
-	{
-		const double *a = polygon[edge].value;
-		const double *b = polygon[(edge + 1U) % polygon_count].value;
-		double a3[3] = { 0.0, 0.0, 0.0 };
-		double b3[3] = { 0.0, 0.0, 0.0 };
-		double direction[3], side_normal[3], side_distance, side_scale;
-		sg_configuration_lattice_halfspace_t *side =
-			&halfspaces[constraint_count];
-		uint32_t u = (drop + 1U) % 3U;
-		uint32_t v = (drop + 2U) % 3U;
-
-		a3[u] = a[0]; a3[v] = a[1];
-		b3[u] = b[0]; b3[v] = b[1];
-		a3[drop] = (boundary_distance - boundary_normal[u] * a3[u] -
-			boundary_normal[v] * a3[v]) / boundary_normal[drop];
-		b3[drop] = (boundary_distance - boundary_normal[u] * b3[u] -
-			boundary_normal[v] * b3[v]) / boundary_normal[drop];
-		for (axis = 0; axis < 3U; axis++)
-			direction[axis] = b3[axis] - a3[axis];
-		side_normal[0] = direction[1] * boundary_normal[2] -
-			direction[2] * boundary_normal[1];
-		side_normal[1] = direction[2] * boundary_normal[0] -
-			direction[0] * boundary_normal[2];
-		side_normal[2] = direction[0] * boundary_normal[1] -
-			direction[1] * boundary_normal[0];
-		side_scale = fmax(fabs(side_normal[0]),
-			fmax(fabs(side_normal[1]), fabs(side_normal[2])));
-		if (side_scale == 0.0)
+		for (existing = 0U; existing < constraint_count; existing++)
+			if (SG_BspProofPlanesCoplanar(planes[existing], plane) &&
+				!SG_BspProofPlanesOppose(planes[existing], plane))
+			{
+				if ((plane->source_kind == SG_CONFIGURATION_PLANE_BSP &&
+						plane->reversed == 0U) ||
+					(plane->source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
+						plane->reversed != 0U))
+					halfspaces[existing].open = 1U;
+				if (SG_BspProofPlanesCoplanar(plane, &boundary->plane))
+					clearance[existing] = 0U;
+				break;
+			}
+		if (existing < constraint_count)
 			continue;
 		for (axis = 0; axis < 3U; axis++)
-			side_normal[axis] /= side_scale;
-		side_distance = side_normal[0] * a3[0] + side_normal[1] * a3[1] +
-			side_normal[2] * a3[2];
-		if (side_normal[0] * (double)center[0] +
-			side_normal[1] * (double)center[1] +
-			side_normal[2] * (double)center[2] > side_distance)
+			halfspaces[constraint_count].normal[axis] = (float)normal[axis];
+		halfspaces[constraint_count].distance = (float)distance;
+		halfspaces[constraint_count].open = 1;
+		planes[constraint_count] = plane;
+		clearance[constraint_count++] =
+			(uint8_t)!SG_BspProofPlanesCoplanar(plane, &boundary->plane);
+	}
+	for (offset = 0; offset < other->face_count; offset++)
+	{
+		const sg_configuration_plane_t *plane = &proof->space->faces[
+			other->first_face + offset].plane;
+		sg_configuration_lattice_halfspace_t *side =
+			&halfspaces[constraint_count];
+		double normal[3], distance;
+		uint32_t existing;
+
+		if (SG_BspProofPlanesCoplanar(plane, &boundary->plane))
+			continue;
+		if (!SG_BspProofOrientedPlane(plane, normal, &distance))
 		{
-			for (axis = 0; axis < 3U; axis++)
-				side_normal[axis] = -side_normal[axis];
-			side_distance = -side_distance;
+			free(halfspaces);
+			free(planes);
+			free(clearance);
+			return -1;
 		}
+		for (existing = 0U; existing < constraint_count; existing++)
+			if (SG_BspProofPlanesCoplanar(planes[existing], plane) &&
+				!SG_BspProofPlanesOppose(planes[existing], plane))
+			{
+				if ((plane->source_kind == SG_CONFIGURATION_PLANE_BSP &&
+						plane->reversed == 0U) ||
+					(plane->source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
+						plane->reversed != 0U))
+					halfspaces[existing].open = 1U;
+				break;
+			}
+		if (existing < constraint_count)
+			continue;
 		for (axis = 0; axis < 3U; axis++)
-			side->normal[axis] = (float)side_normal[axis];
-		side->distance = (float)side_distance;
+			side->normal[axis] = (float)normal[axis];
+		side->distance = (float)distance;
+		side->open = 1;
+		planes[constraint_count] = plane;
 		clearance[constraint_count++] = 1U;
 	}
 	solved = SG_ConfigurationLatticeFindMaxClearance(halfspaces, clearance,
-		constraint_count, objective, point, &positive_margin,
-		&stats);
+		constraint_count, NULL, point, &positive_margin, &stats);
+	if (solved > 0 && positive_margin)
+	{
+		memcpy(clearance_point, point, sizeof(clearance_point));
+		solved = SG_ConfigurationLatticeFind(halfspaces, constraint_count,
+			objective, point, &stats);
+	}
 	free(halfspaces);
+	free(planes);
 	free(clearance);
 	proof->result.lattice_solve_calls += stats.solve_calls;
 	proof->result.lattice_constraints += stats.constraints;
 	if (stats.maximum_binary_shift >
 		proof->result.lattice_maximum_binary_shift)
 		proof->result.lattice_maximum_binary_shift = stats.maximum_binary_shift;
-	if (solved <= 0 || !positive_margin)
+	if (solved <= 0)
 		return solved;
+	if (!positive_margin)
+		return 0;
 	for (axis = 0; axis < 3U; axis++)
 		witness[axis] = (float)point[axis] * 0.125f;
-	return SG_HostCollisionClassifyPose(proof->authority, NULL, witness,
-		cell->stance, &pose) && pose.valid ? 1 : -1;
+	classified = SG_HostCollisionClassifyPose(proof->authority, NULL, witness,
+		cell->stance, &pose);
+	if (!classified)
+		return -1;
+	if (pose.valid)
+		return 1;
+	for (axis = 0; axis < 3U; axis++)
+		witness[axis] = (float)clearance_point[axis] * 0.125f;
+	classified = SG_HostCollisionClassifyPose(proof->authority, NULL, witness,
+		cell->stance, &pose);
+	return classified && pose.valid ? 1 : -1;
 }
 
 static int PortalMatches(sg_bsp_proof_context_t *proof, uint32_t portal_index,
@@ -552,12 +608,10 @@ static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 			right_ref->vertices, right_ref->vertex_count, &left->plane,
 			&polygon, &polygon_count, center, &area))
 		return 0;
-	if (!polygon_count)
+	if (!polygon_count && !ZeroPolygonUsesAuthoritativeFallback(left, right))
 		return 1;
-	from_result = PortalSideWitness(proof, left_cell, left, polygon,
-		polygon_count, center, from);
-	to_result = PortalSideWitness(proof, right_cell, right, polygon,
-		polygon_count, center, to);
+	from_result = PortalSideWitness(proof, left_cell, right_cell, left, from);
+	to_result = PortalSideWitness(proof, right_cell, left_cell, right, to);
 	if (from_result < 0 || to_result < 0)
 	{
 		free(polygon);
@@ -571,8 +625,32 @@ static int AuditFacePair(sg_bsp_proof_context_t *proof, uint8_t *seen,
 		return 1;
 	}
 	proof->result.expected_portals++;
-	found = FindPortal(proof, seen, portals, left_cell, right_cell, left,
-		polygon, polygon_count, area);
+	if (polygon_count)
+		found = FindPortal(proof, seen, portals, left_cell, right_cell, left,
+			polygon, polygon_count, area);
+	else
+	{
+		uint32_t portal;
+
+		found = 0;
+		for (portal = 0; portal < proof->space->portal_count; portal++)
+		{
+			const sg_configuration_portal_t *candidate =
+				&proof->space->portals[portal];
+			int endpoints = (candidate->from_cell == left_cell &&
+				candidate->to_cell == right_cell) ||
+				(candidate->from_cell == right_cell &&
+				 candidate->to_cell == left_cell);
+
+			if (!seen[portal] && endpoints &&
+				SG_BspProofPlanesCoplanar(&candidate->plane, &left->plane))
+			{
+				seen[portal] = 1U;
+				found = 1;
+				break;
+			}
+		}
+	}
 	free(polygon);
 	if (found < 0)
 		return 0;

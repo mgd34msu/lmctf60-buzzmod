@@ -1,6 +1,7 @@
 #include "sg_configuration_space.h"
 #include "sg_configuration_lattice.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #define CONFIG_EPSILON 0.0001f
 #define CONFIG_POINT_EPSILON 0.000001f
 #define CONFIG_AREA_EPSILON 0.000001f
+#define CONFIG_CANONICAL_POINT_EPSILON 0.00001f
 
 typedef struct config_mesh_face_s
 {
@@ -21,6 +23,10 @@ typedef struct config_poly_s
 {
 	config_mesh_face_t *faces;
 	uint32_t face_count;
+	uint8_t exact_split;
+	uint8_t exact_bounds_valid;
+	float exact_mins[3];
+	float exact_maxs[3];
 } config_poly_t;
 
 typedef struct config_brush_bounds_s
@@ -64,6 +70,13 @@ typedef struct config_cell_ref_s
 	float sweep_min;
 	float sweep_max;
 } config_cell_ref_t;
+
+static int CanonicalizeClip(config_build_t *build,
+	const config_poly_t *source, const sg_configuration_plane_t *clip,
+	int keep_back, const config_poly_t *legacy, config_poly_t *result);
+static int PlaneIsOpen(const sg_configuration_plane_t *plane);
+static void AddLatticeStats(config_build_t *build,
+	const sg_configuration_lattice_stats_t *stats);
 
 static int GrowArray(void **array, uint32_t *capacity, uint32_t required,
 	uint32_t limit, size_t element_size)
@@ -151,6 +164,8 @@ static int CopyFace(const config_mesh_face_t *source,
 {
 	memset(destination, 0, sizeof(*destination));
 	destination->plane = source->plane;
+	if (!source->vertex_count)
+		return 1;
 	destination->vertices = malloc((size_t)source->vertex_count *
 		sizeof(*destination->vertices));
 	if (!destination->vertices)
@@ -166,6 +181,10 @@ static int CopyPoly(const config_poly_t *source, config_poly_t *destination)
 	uint32_t face;
 
 	memset(destination, 0, sizeof(*destination));
+	destination->exact_split = source->exact_split;
+	destination->exact_bounds_valid = source->exact_bounds_valid;
+	CopyVector(destination->exact_mins, source->exact_mins);
+	CopyVector(destination->exact_maxs, source->exact_maxs);
 	destination->faces = calloc(source->face_count,
 		sizeof(*destination->faces));
 	if (!destination->faces)
@@ -347,6 +366,7 @@ static int ClipPoly(const config_poly_t *source,
 	uint32_t face;
 
 	memset(result, 0, sizeof(*result));
+	result->exact_split = source->exact_split;
 	result->faces = calloc(source->face_count + 1U, sizeof(*result->faces));
 	if (!result->faces)
 		return 0;
@@ -378,17 +398,84 @@ failure:
 	return 0;
 }
 
+static int PolySideHasQ8(config_build_t *build, const config_poly_t *source,
+	const sg_configuration_plane_t *plane, int keep_back)
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	sg_configuration_lattice_stats_t stats = { 0 };
+	sg_configuration_plane_t side = *plane;
+	int32_t point[3];
+	uint32_t face, axis;
+	int result;
+
+	if (source->face_count == UINT32_MAX)
+		return -1;
+#if SIZE_MAX == UINT32_MAX
+	if ((size_t)(source->face_count + 1U) > SIZE_MAX / sizeof(*halfspaces))
+		return -1;
+#endif
+	halfspaces = calloc((size_t)(source->face_count + 1U),
+		sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	if (!keep_back)
+	{
+		for (axis = 0; axis < 3U; axis++)
+			side.normal[axis] = -side.normal[axis];
+		side.distance = -side.distance;
+		side.reversed ^= 1U;
+	}
+	for (face = 0; face < source->face_count; face++)
+	{
+		CopyVector(halfspaces[face].normal, source->faces[face].plane.normal);
+		halfspaces[face].distance = source->faces[face].plane.distance;
+		halfspaces[face].open = PlaneIsOpen(&source->faces[face].plane);
+	}
+	CopyVector(halfspaces[source->face_count].normal, side.normal);
+	halfspaces[source->face_count].distance = side.distance;
+	halfspaces[source->face_count].open = PlaneIsOpen(&side);
+	result = SG_ConfigurationLatticeFind(halfspaces, source->face_count + 1U,
+		NULL, point, &stats);
+	free(halfspaces);
+	AddLatticeStats(build, &stats);
+	return result;
+}
+
 /* Returns -1 on allocation failure, 0 when unsplit, and 1 when split. */
-static int SplitPoly(const config_poly_t *source,
+static int SplitPoly(config_build_t *build, const config_poly_t *source,
 	const sg_configuration_plane_t *plane, config_poly_t *front,
 	config_poly_t *back)
 {
+	config_poly_t canonical;
 	float minimum = INFINITY;
 	float maximum = -INFINITY;
 	uint32_t face, vertex;
+	int status;
 
 	memset(front, 0, sizeof(*front));
 	memset(back, 0, sizeof(*back));
+	if (source->exact_split)
+	{
+		config_poly_t empty = { 0 };
+		int has_front = PolySideHasQ8(build, source, plane, 0);
+		int has_back = PolySideHasQ8(build, source, plane, 1);
+
+		if (has_front < 0 || has_back < 0)
+			return -1;
+		if (!has_front && !has_back)
+			return 0;
+		if (!has_front)
+			return CopyPoly(source, back) ? 0 : -1;
+		if (!has_back)
+			return CopyPoly(source, front) ? 0 : -1;
+		status = CanonicalizeClip(build, source, plane, 0, &empty, front);
+		if (status <= 0)
+			goto failure;
+		status = CanonicalizeClip(build, source, plane, 1, &empty, back);
+		if (status <= 0)
+			goto failure;
+		return 1;
+	}
 	for (face = 0; face < source->face_count; face++)
 		for (vertex = 0; vertex < source->faces[face].vertex_count; vertex++)
 		{
@@ -411,7 +498,28 @@ static int SplitPoly(const config_poly_t *source,
 		FreePoly(back);
 		return -1;
 	}
+	status = CanonicalizeClip(build, source, plane, 0, front, &canonical);
+	if (status <= 0)
+		goto failure;
+	if (status == 1)
+	{
+		FreePoly(front);
+		*front = canonical;
+	}
+	status = CanonicalizeClip(build, source, plane, 1, back, &canonical);
+	if (status <= 0)
+		goto failure;
+	if (status == 1)
+	{
+		FreePoly(back);
+		*back = canonical;
+	}
 	return 1;
+
+failure:
+	FreePoly(front);
+	FreePoly(back);
+	return -1;
 }
 
 static int BoxPoly(const sg_rune_bounds_t *bounds, config_poly_t *poly)
@@ -479,67 +587,6 @@ static void PolyBounds(const config_poly_t *poly, float mins[3], float maxs[3])
 				if (value > maxs[axis])
 					maxs[axis] = value;
 			}
-}
-
-static float Determinant3(const float a[3], const float b[3],
-	const float c[3])
-{
-	return a[0] * (b[1] * c[2] - b[2] * c[1]) -
-		a[1] * (b[0] * c[2] - b[2] * c[0]) +
-		a[2] * (b[0] * c[1] - b[1] * c[0]);
-}
-
-static int PolyHasVolume(const config_poly_t *poly)
-{
-	float points[4][3];
-	uint32_t point_count = 0;
-	uint32_t face, vertex;
-
-	for (face = 0; face < poly->face_count; face++)
-		for (vertex = 0; vertex < poly->faces[face].vertex_count; vertex++)
-		{
-			const float *point = poly->faces[face].vertices[vertex].value;
-			if (!point_count)
-			{
-				CopyVector(points[point_count++], point);
-				continue;
-			}
-			if (point_count == 1U)
-			{
-				float delta[3];
-				uint32_t axis;
-
-				for (axis = 0; axis < 3; axis++)
-					delta[axis] = point[axis] - points[0][axis];
-				if (Dot(delta, delta) > CONFIG_AREA_EPSILON)
-					CopyVector(points[point_count++], point);
-				continue;
-			}
-			{
-				float a[3], b[3], cross[3];
-				uint32_t axis;
-
-				for (axis = 0; axis < 3; axis++)
-				{
-					a[axis] = points[1][axis] - points[0][axis];
-					b[axis] = point[axis] - points[0][axis];
-				}
-				if (point_count == 2U)
-				{
-					cross[0] = a[1] * b[2] - a[2] * b[1];
-					cross[1] = a[2] * b[0] - a[0] * b[2];
-					cross[2] = a[0] * b[1] - a[1] * b[0];
-					if (Dot(cross, cross) > CONFIG_AREA_EPSILON)
-						CopyVector(points[point_count++], point);
-					continue;
-				}
-				for (axis = 0; axis < 3; axis++)
-					cross[axis] = points[2][axis] - points[0][axis];
-				if (fabsf(Determinant3(a, cross, b)) > CONFIG_AREA_EPSILON)
-					return 1;
-			}
-		}
-	return 0;
 }
 
 static int BoundsOverlap(const float left_mins[3], const float left_maxs[3],
@@ -617,6 +664,497 @@ static int PlaneIsOpen(const sg_configuration_plane_t *plane)
 		plane->reversed != 0U;
 }
 
+static void AddLatticeStats(config_build_t *build,
+	const sg_configuration_lattice_stats_t *stats)
+{
+	build->space->lattice_solve_calls += stats->solve_calls;
+	build->space->lattice_constraints += stats->constraints;
+	if (stats->maximum_binary_shift >
+		build->space->lattice_maximum_binary_shift)
+		build->space->lattice_maximum_binary_shift =
+			stats->maximum_binary_shift;
+}
+
+static int CanonicalSamePoint(const sg_rune_vec3_t *point,
+	const float value[3])
+{
+	return fabsf(point->value[0] - value[0]) <=
+			CONFIG_CANONICAL_POINT_EPSILON &&
+		fabsf(point->value[1] - value[1]) <=
+			CONFIG_CANONICAL_POINT_EPSILON &&
+		fabsf(point->value[2] - value[2]) <=
+			CONFIG_CANONICAL_POINT_EPSILON;
+}
+
+static int CanonicalIntersect3(const sg_configuration_plane_t *a,
+	const sg_configuration_plane_t *b, const sg_configuration_plane_t *c,
+	float point[3])
+{
+	double n0[3], n1[3], n2[3];
+	double cross12[3], cross20[3], cross01[3], determinant;
+	uint32_t axis;
+
+	for (axis = 0; axis < 3U; axis++)
+	{
+		n0[axis] = a->normal[axis];
+		n1[axis] = b->normal[axis];
+		n2[axis] = c->normal[axis];
+	}
+	cross12[0] = n1[1] * n2[2] - n1[2] * n2[1];
+	cross12[1] = n1[2] * n2[0] - n1[0] * n2[2];
+	cross12[2] = n1[0] * n2[1] - n1[1] * n2[0];
+	determinant = n0[0] * cross12[0] + n0[1] * cross12[1] +
+		n0[2] * cross12[2];
+	if (!isfinite(determinant) || fabs(determinant) <= DBL_EPSILON)
+		return 0;
+	cross20[0] = n2[1] * n0[2] - n2[2] * n0[1];
+	cross20[1] = n2[2] * n0[0] - n2[0] * n0[2];
+	cross20[2] = n2[0] * n0[1] - n2[1] * n0[0];
+	cross01[0] = n0[1] * n1[2] - n0[2] * n1[1];
+	cross01[1] = n0[2] * n1[0] - n0[0] * n1[2];
+	cross01[2] = n0[0] * n1[1] - n0[1] * n1[0];
+	for (axis = 0; axis < 3U; axis++)
+	{
+		double value = ((double)a->distance * cross12[axis] +
+			(double)b->distance * cross20[axis] +
+			(double)c->distance * cross01[axis]) / determinant;
+
+		point[axis] = (float)value;
+		if (!isfinite(point[axis]))
+			return 0;
+	}
+	return 1;
+}
+
+static int CanonicalPointInside(const config_poly_t *poly,
+	const uint8_t *active, const float point[3])
+{
+	uint32_t face;
+
+	for (face = 0; face < poly->face_count; face++)
+		if (active[face] &&
+			Dot(point, poly->faces[face].plane.normal) -
+				poly->faces[face].plane.distance >
+				CONFIG_CANONICAL_POINT_EPSILON)
+			return 0;
+	return 1;
+}
+
+static int CanonicalAppendPoint(sg_rune_vec3_t **points, uint32_t *count,
+	uint32_t *capacity, const float point[3])
+{
+	uint32_t existing;
+
+	for (existing = 0; existing < *count; existing++)
+		if (CanonicalSamePoint(&(*points)[existing], point))
+			return 1;
+	if (*count == UINT32_MAX ||
+		!GrowArray((void **)points, capacity, *count + 1U, UINT32_MAX,
+			sizeof(**points)))
+		return 0;
+	CopyVector((*points)[*count].value, point);
+	(*count)++;
+	return 1;
+}
+
+static int CanonicalClipPoints(const config_poly_t *source,
+	const config_poly_t *constraints, const uint8_t *active,
+	sg_rune_vec3_t **points_out, uint32_t *point_count_out)
+{
+	sg_rune_vec3_t *points = NULL;
+	uint32_t point_count = 0, point_capacity = 0;
+	uint32_t source_face, source_vertex, first, second;
+	uint32_t clip = constraints->face_count - 1U;
+
+	for (source_face = 0; source_face < source->face_count; source_face++)
+		for (source_vertex = 0;
+			source_vertex < source->faces[source_face].vertex_count;
+			source_vertex++)
+		{
+			const float *seed =
+				source->faces[source_face].vertices[source_vertex].value;
+
+			if (CanonicalPointInside(constraints, active, seed) &&
+				!CanonicalAppendPoint(&points, &point_count, &point_capacity,
+					seed))
+			{
+				free(points);
+				return 0;
+			}
+		}
+	for (first = 0; first < source->face_count; first++)
+		for (second = first + 1U; second < source->face_count; second++)
+		{
+			float point[3];
+
+			if (!CanonicalIntersect3(&constraints->faces[clip].plane,
+				&constraints->faces[first].plane,
+				&constraints->faces[second].plane, point) ||
+				!CanonicalPointInside(constraints, active, point))
+				continue;
+			if (!CanonicalAppendPoint(&points, &point_count, &point_capacity,
+				point))
+			{
+				free(points);
+				return 0;
+			}
+		}
+	*points_out = points;
+	*point_count_out = point_count;
+	return 1;
+}
+
+static int CanonicalAllPoints(const config_poly_t *poly,
+	const uint8_t *active, sg_rune_vec3_t **points_out,
+	uint32_t *point_count_out)
+{
+	sg_rune_vec3_t *points = NULL;
+	uint32_t point_count = 0, point_capacity = 0;
+	uint32_t first, second, third;
+
+	for (first = 0; first < poly->face_count; first++)
+		if (active[first])
+			for (second = first + 1U; second < poly->face_count; second++)
+				if (active[second])
+					for (third = second + 1U; third < poly->face_count;
+						third++)
+						if (active[third])
+						{
+							float point[3];
+
+							if (!CanonicalIntersect3(&poly->faces[first].plane,
+								&poly->faces[second].plane,
+								&poly->faces[third].plane, point) ||
+								!CanonicalPointInside(poly, active, point))
+								continue;
+							if (!CanonicalAppendPoint(&points, &point_count,
+								&point_capacity, point))
+							{
+								free(points);
+								return 0;
+							}
+						}
+	*points_out = points;
+	*point_count_out = point_count;
+	return 1;
+}
+
+static uint32_t CanonicalFacePointCount(const config_mesh_face_t *face,
+	const sg_rune_vec3_t *points, uint32_t point_count)
+{
+	uint32_t point, count = 0;
+
+	for (point = 0; point < point_count; point++)
+		if (fabsf(Dot(points[point].value, face->plane.normal) -
+			face->plane.distance) <= CONFIG_CANONICAL_POINT_EPSILON * 4.0f)
+			count++;
+	return count;
+}
+
+static int CanonicalFaceRedundantQ8(config_build_t *build,
+	const config_poly_t *poly, const uint8_t *active, uint32_t candidate)
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	sg_configuration_lattice_stats_t stats = { 0 };
+	int32_t point[3];
+	uint32_t face, count = 0;
+	int result;
+
+	halfspaces = malloc((size_t)poly->face_count * sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (face = 0; face < poly->face_count; face++)
+		if (active[face] && face != candidate)
+		{
+			CopyVector(halfspaces[count].normal,
+				poly->faces[face].plane.normal);
+			halfspaces[count].distance = poly->faces[face].plane.distance;
+			halfspaces[count].open = PlaneIsOpen(&poly->faces[face].plane);
+			count++;
+		}
+	for (face = 0; face < 3U; face++)
+		halfspaces[count].normal[face] =
+			-poly->faces[candidate].plane.normal[face];
+	halfspaces[count].distance = -poly->faces[candidate].plane.distance;
+	halfspaces[count].open = !PlaneIsOpen(&poly->faces[candidate].plane);
+	count++;
+	result = SG_ConfigurationLatticeFind(halfspaces, count, NULL, point, &stats);
+	free(halfspaces);
+	AddLatticeStats(build, &stats);
+	return result;
+}
+
+static int CanonicalPointLess(const sg_rune_vec3_t *left,
+	const sg_rune_vec3_t *right)
+{
+	uint32_t axis;
+
+	for (axis = 0; axis < 3U; axis++)
+	{
+		if (left->value[axis] < right->value[axis])
+			return 1;
+		if (left->value[axis] > right->value[axis])
+			return 0;
+	}
+	return 0;
+}
+
+static float CanonicalProjectedArea(const config_mesh_face_t *face,
+	uint32_t axis)
+{
+	uint32_t u = (axis + 1U) % 3U;
+	uint32_t v = (axis + 2U) % 3U;
+	uint32_t point;
+	float area = 0.0f;
+
+	for (point = 0; point < face->vertex_count; point++)
+	{
+		const float *a = face->vertices[point].value;
+		const float *b =
+			face->vertices[(point + 1U) % face->vertex_count].value;
+
+		area += a[u] * b[v] - a[v] * b[u];
+	}
+	return area;
+}
+
+static void CanonicalOrderFace(config_mesh_face_t *face,
+	const config_mesh_face_t *source)
+{
+	float center[3] = { 0.0f, 0.0f, 0.0f };
+	uint32_t axis = DominantAxis(face->plane.normal);
+	uint32_t point, component, first = 0;
+	int reverse;
+
+	for (point = 0; point < face->vertex_count; point++)
+		for (component = 0; component < 3U; component++)
+			center[component] += face->vertices[point].value[component];
+	for (component = 0; component < 3U; component++)
+		center[component] /= (float)face->vertex_count;
+	for (point = 1; point < face->vertex_count; point++)
+	{
+		sg_rune_vec3_t value = face->vertices[point];
+		float angle = CapAngle(&value, axis, center);
+		uint32_t insert = point;
+
+		while (insert > 0U)
+		{
+			float prior = CapAngle(&face->vertices[insert - 1U], axis, center);
+
+			if (prior < angle || (prior == angle &&
+				!CanonicalPointLess(&value, &face->vertices[insert - 1U])))
+				break;
+			face->vertices[insert] = face->vertices[insert - 1U];
+			insert--;
+		}
+		face->vertices[insert] = value;
+	}
+	reverse = source->vertex_count >= 3U ?
+		CanonicalProjectedArea(source, axis) < 0.0f :
+		face->plane.normal[axis] < 0.0f;
+	if (reverse)
+		for (point = 0; point < face->vertex_count / 2U; point++)
+		{
+			sg_rune_vec3_t value = face->vertices[point];
+			uint32_t opposite = face->vertex_count - point - 1U;
+
+			face->vertices[point] = face->vertices[opposite];
+			face->vertices[opposite] = value;
+		}
+	for (point = 1; point < face->vertex_count; point++)
+		if (CanonicalPointLess(&face->vertices[point], &face->vertices[first]))
+			first = point;
+	while (first--)
+	{
+		sg_rune_vec3_t value = face->vertices[0];
+
+		memmove(&face->vertices[0], &face->vertices[1],
+			(size_t)(face->vertex_count - 1U) * sizeof(*face->vertices));
+		face->vertices[face->vertex_count - 1U] = value;
+	}
+}
+
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationTestConstraintFacetWinding(void)
+{
+	config_mesh_face_t source;
+	config_mesh_face_t facet;
+	sg_rune_vec3_t vertices[4] = {
+		{ { -1.0f, -1.0f, 0.0f } },
+		{ { 1.0f, 1.0f, 0.0f } },
+		{ { -1.0f, 1.0f, 0.0f } },
+		{ { 1.0f, -1.0f, 0.0f } }
+	};
+
+	memset(&source, 0, sizeof(source));
+	memset(&facet, 0, sizeof(facet));
+	source.plane.normal[2] = -1.0f;
+	facet.plane = source.plane;
+	facet.vertices = vertices;
+	facet.vertex_count = 4U;
+	CanonicalOrderFace(&facet, &source);
+	return CanonicalProjectedArea(&facet, 2U) < 0.0f;
+}
+#endif
+
+/* Reconstructs a changed split from old vertices and new-plane intersections. */
+static int CanonicalizeClip(config_build_t *build,
+	const config_poly_t *source, const sg_configuration_plane_t *clip,
+	int keep_back, const config_poly_t *legacy, config_poly_t *result)
+{
+	config_poly_t constraints;
+	uint8_t *active, *constraint_only;
+	sg_rune_vec3_t *points = NULL;
+	uint32_t point_count = 0, active_count;
+	uint32_t face;
+	int changed;
+
+	memset(result, 0, sizeof(*result));
+	result->exact_split = source->exact_split;
+	memset(&constraints, 0, sizeof(constraints));
+	if (source->face_count == UINT32_MAX)
+		return 0;
+	constraints.face_count = source->face_count + 1U;
+	constraints.faces = calloc(constraints.face_count,
+		sizeof(*constraints.faces));
+	if (!constraints.faces)
+		return 0;
+	for (face = 0; face < source->face_count; face++)
+		constraints.faces[face].plane = source->faces[face].plane;
+	constraints.faces[source->face_count].plane = *clip;
+	if (!keep_back)
+	{
+		for (face = 0; face < 3U; face++)
+			constraints.faces[source->face_count].plane.normal[face] =
+				-constraints.faces[source->face_count].plane.normal[face];
+		constraints.faces[source->face_count].plane.distance = -clip->distance;
+		constraints.faces[source->face_count].plane.reversed ^= 1U;
+	}
+	active_count = constraints.face_count;
+	active = malloc(constraints.face_count);
+	constraint_only = calloc(constraints.face_count, 1U);
+	if (!active || !constraint_only)
+	{
+		free(active);
+		free(constraint_only);
+		FreePoly(&constraints);
+		return 0;
+	}
+	memset(active, 1, constraints.face_count);
+	if (!CanonicalClipPoints(source, &constraints, active, &points,
+		&point_count))
+	{
+		free(active);
+		free(constraint_only);
+		FreePoly(&constraints);
+		return 0;
+	}
+	do
+	{
+		changed = 0;
+		for (face = 0; face < constraints.face_count; face++)
+			if (active[face] && !constraint_only[face] &&
+				CanonicalFacePointCount(&constraints.faces[face],
+					points, point_count) < 3U)
+			{
+				if (constraints.faces[face].plane.source_kind ==
+					SG_CONFIGURATION_PLANE_DOMAIN)
+				{
+					constraint_only[face] = 1U;
+					result->exact_split = 1U;
+					continue;
+				}
+				int witness = CanonicalFaceRedundantQ8(build, &constraints,
+					active, face);
+
+				if (witness < 0)
+				{
+					free(points);
+					free(active);
+					free(constraint_only);
+					FreePoly(&constraints);
+					return 0;
+				}
+				if (witness > 0)
+				{
+					constraint_only[face] = 1U;
+					result->exact_split = 1U;
+					continue;
+				}
+				active[face] = 0;
+				result->exact_split = 1U;
+				active_count--;
+				changed = 1;
+				free(points);
+				points = NULL;
+				point_count = 0;
+				if (!CanonicalAllPoints(&constraints, active, &points,
+					&point_count))
+				{
+					free(active);
+					free(constraint_only);
+					FreePoly(&constraints);
+					return 0;
+				}
+				memset(constraint_only, 0, constraints.face_count);
+				break;
+			}
+	} while (changed);
+	result->faces = calloc(active_count, sizeof(*result->faces));
+	if (!result->faces)
+	{
+		free(points);
+		free(active);
+		free(constraint_only);
+		FreePoly(&constraints);
+		return 0;
+	}
+	for (face = 0; face < constraints.face_count; face++)
+		if (active[face])
+		{
+			config_mesh_face_t *destination =
+				&result->faces[result->face_count];
+			const config_mesh_face_t *orientation = face < source->face_count ?
+				&source->faces[face] :
+				(legacy->face_count ? &legacy->faces[legacy->face_count - 1U] :
+					&constraints.faces[face]);
+			uint32_t point, count = CanonicalFacePointCount(
+				&constraints.faces[face], points, point_count);
+
+			destination->plane = constraints.faces[face].plane;
+			if (constraint_only[face])
+			{
+				result->face_count++;
+				continue;
+			}
+			destination->vertices = malloc((size_t)count *
+				sizeof(*destination->vertices));
+			if (!destination->vertices)
+			{
+				FreePoly(result);
+				free(points);
+				free(active);
+				free(constraint_only);
+				FreePoly(&constraints);
+				return 0;
+			}
+			for (point = 0; point < point_count; point++)
+				if (fabsf(Dot(points[point].value,
+					constraints.faces[face].plane.normal) -
+					constraints.faces[face].plane.distance) <=
+					CONFIG_CANONICAL_POINT_EPSILON * 4.0f)
+					destination->vertices[destination->vertex_count++] =
+						points[point];
+			CanonicalOrderFace(destination, orientation);
+			result->face_count++;
+		}
+	free(points);
+	free(active);
+	free(constraint_only);
+	FreePoly(&constraints);
+	return 1;
+}
+
 static int FindProtocolWitness(config_build_t *build, const config_poly_t *poly,
 	sg_rune_stance_t stance, float witness[3])
 {
@@ -647,10 +1185,7 @@ static int FindProtocolWitness(config_build_t *build, const config_poly_t *poly,
 		poly->face_count, NULL, point, &positive_margin, &stats);
 	free(halfspaces);
 	free(clearance);
-	build->space->lattice_solve_calls += stats.solve_calls;
-	build->space->lattice_constraints += stats.constraints;
-	if (stats.maximum_binary_shift > build->space->lattice_maximum_binary_shift)
-		build->space->lattice_maximum_binary_shift = stats.maximum_binary_shift;
+	AddLatticeStats(build, &stats);
 	if (result <= 0)
 		return result;
 	if (!positive_margin)
@@ -660,6 +1195,74 @@ static int FindProtocolWitness(config_build_t *build, const config_poly_t *poly,
 	if (!SG_HostCollisionClassifyPose(build->authority, NULL, witness, stance,
 			&pose) || !pose.valid)
 		return -1;
+	return 1;
+}
+
+static int PolyExactBounds(config_build_t *build, config_poly_t *poly,
+	float mins[3], float maxs[3])
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	uint32_t face, axis;
+
+	if (poly->exact_bounds_valid)
+	{
+		CopyVector(mins, poly->exact_mins);
+		CopyVector(maxs, poly->exact_maxs);
+		return 1;
+	}
+	if (!poly->face_count)
+		return 0;
+	#if SIZE_MAX == UINT32_MAX
+	if ((size_t)poly->face_count > SIZE_MAX / sizeof(*halfspaces))
+		return -1;
+	#endif
+	halfspaces = malloc((size_t)poly->face_count * sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (face = 0; face < poly->face_count; face++)
+	{
+		CopyVector(halfspaces[face].normal, poly->faces[face].plane.normal);
+		halfspaces[face].distance = poly->faces[face].plane.distance;
+		halfspaces[face].open = PlaneIsOpen(&poly->faces[face].plane);
+	}
+	for (axis = 0; axis < 3U; axis++)
+	{
+		int32_t minimum, maximum;
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int result;
+
+		result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
+			poly->face_count, axis, &minimum, &maximum, &stats);
+		AddLatticeStats(build, &stats);
+		if (result <= 0)
+		{
+			free(halfspaces);
+			return result;
+		}
+		poly->exact_mins[axis] = (float)minimum * 0.125f;
+		poly->exact_maxs[axis] = (float)maximum * 0.125f;
+	}
+	free(halfspaces);
+	poly->exact_bounds_valid = 1U;
+	CopyVector(mins, poly->exact_mins);
+	CopyVector(maxs, poly->exact_maxs);
+	return 1;
+}
+
+static int AuthoritativePolyBounds(config_build_t *build, config_poly_t *poly,
+	float mins[3], float maxs[3])
+{
+	uint32_t axis;
+
+	if (!poly->face_count)
+		return 0;
+	if (poly->exact_split)
+		return PolyExactBounds(build, poly, mins, maxs);
+	PolyBounds(poly, mins, maxs);
+	for (axis = 0; axis < 3U; axis++)
+		if (!isfinite(mins[axis]) || !isfinite(maxs[axis]) ||
+			mins[axis] > maxs[axis])
+			return 0;
 	return 1;
 }
 
@@ -696,7 +1299,7 @@ static int AppendCertificate(config_build_t *build,
 	return 1;
 }
 
-static int AppendCell(config_build_t *build, const config_poly_t *poly,
+static int AppendCell(config_build_t *build, config_poly_t *poly,
 	sg_rune_stance_t stance, uint32_t leaf_index,
 	const float protocol_witness[3], uint32_t *cell_out)
 {
@@ -756,6 +1359,9 @@ static int AppendCell(config_build_t *build, const config_poly_t *poly,
 		destination->plane = source->plane;
 		destination->first_vertex = build->space->vertex_count;
 		destination->vertex_count = source->vertex_count;
+		destination->kind = source->vertex_count ?
+			SG_CONFIGURATION_FACE_FACET :
+			SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
 		{
 			sg_rune_vec3_t *points;
 
@@ -768,8 +1374,9 @@ static int AppendCell(config_build_t *build, const config_poly_t *poly,
 				return 0;
 			}
 			points = build->space->vertices;
-			memcpy(&points[build->space->vertex_count], source->vertices,
-				(size_t)source->vertex_count * sizeof(*points));
+			if (source->vertex_count)
+				memcpy(&points[build->space->vertex_count], source->vertices,
+					(size_t)source->vertex_count * sizeof(*points));
 		}
 		build->space->vertex_count += source->vertex_count;
 		build->space->face_count++;
@@ -779,7 +1386,12 @@ static int AppendCell(config_build_t *build, const config_poly_t *poly,
 	}
 	CopyVector(witness, protocol_witness);
 	CopyVector(cell->interior_witness.value, protocol_witness);
-	PolyBounds(poly, cell->bounds.mins.value, cell->bounds.maxs.value);
+	if (AuthoritativePolyBounds(build, poly, cell->bounds.mins.value,
+			cell->bounds.maxs.value) <= 0)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_HOST_DISAGREEMENT, leaf_index);
+		return 0;
+	}
 	if (!SG_HostCollisionClassifyPose(build->authority, NULL, witness, stance,
 			&pose) || !pose.valid)
 	{
@@ -824,8 +1436,15 @@ static int CarveBrushes(config_build_t *build, config_poly_t *poly,
 	const sg_bsp_world_t *world = build->authority->world;
 	float poly_mins[3], poly_maxs[3];
 	uint32_t brush;
+	int bounds = AuthoritativePolyBounds(build, poly, poly_mins, poly_maxs);
 
-	PolyBounds(poly, poly_mins, poly_maxs);
+	if (bounds < 0)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_HOST_DISAGREEMENT, leaf);
+		return 0;
+	}
+	if (!bounds)
+		return EmptyTerminal(build, stance, leaf, node_out);
 	for (brush = first_brush; brush < world->brush_count; brush++)
 		if (build->world_brushes[brush] && BlockingBrush(&world->brushes[brush]) &&
 			build->brush_bounds[stance][brush].usable &&
@@ -834,8 +1453,6 @@ static int CarveBrushes(config_build_t *build, config_poly_t *poly,
 				build->brush_bounds[stance][brush].maxs))
 			return CarveBrushSide(build, poly, stance, leaf, brush, 0,
 				brush + 1U, node_out);
-	if (!PolyHasVolume(poly))
-		return EmptyTerminal(build, stance, leaf, node_out);
 	{
 		uint32_t cell;
 		float witness[3];
@@ -877,7 +1494,7 @@ static int CarveBrushSide(config_build_t *build, config_poly_t *poly,
 		return 1;
 	}
 	plane = BrushPlane(build, brush_index, side_offset, stance);
-	split = SplitPoly(poly, &plane, &front, &back);
+	split = SplitPoly(build, poly, &plane, &front, &back);
 	if (split < 0)
 	{
 		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, brush_index);
@@ -935,7 +1552,7 @@ static int BuildBsp(config_build_t *build, config_poly_t *poly,
 		return CarveBrushes(build, poly, stance, leaf, 0, node_out);
 	}
 	plane = BspPlane(world, world->nodes[(uint32_t)child].plane);
-	split = SplitPoly(poly, &plane, &front, &back);
+	split = SplitPoly(build, poly, &plane, &front, &back);
 	if (split < 0)
 	{
 		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, (uint32_t)child);
@@ -1041,8 +1658,15 @@ static int ComputeBrushBounds(config_build_t *build, uint32_t brush_index,
 		config_brush_bounds_t *bounds =
 			&build->brush_bounds[stance][brush_index];
 
-		PolyBounds(&clipped, bounds->mins, bounds->maxs);
-		bounds->usable = 1;
+		int bounded = AuthoritativePolyBounds(build, &clipped, bounds->mins,
+			bounds->maxs);
+
+		if (bounded < 0)
+		{
+			FreePoly(&clipped);
+			return 0;
+		}
+		bounds->usable = bounded != 0;
 	}
 	FreePoly(&clipped);
 	return 1;
@@ -1118,6 +1742,19 @@ static void CanonicalPlane(const sg_configuration_plane_t *plane,
 	*distance = (flip ? -plane->distance : plane->distance) / scale;
 	if (*distance == 0.0f)
 		*distance = 0.0f;
+}
+
+static int EquivalentPlaneGeometry(const sg_configuration_plane_t *a,
+	const sg_configuration_plane_t *b)
+{
+	float normal_a[3], normal_b[3], distance_a, distance_b;
+
+	CanonicalPlane(a, normal_a, &distance_a);
+	CanonicalPlane(b, normal_b, &distance_b);
+	return fabsf(normal_a[0] - normal_b[0]) <= CONFIG_POINT_EPSILON &&
+		fabsf(normal_a[1] - normal_b[1]) <= CONFIG_POINT_EPSILON &&
+		fabsf(normal_a[2] - normal_b[2]) <= CONFIG_POINT_EPSILON &&
+		fabsf(distance_a - distance_b) <= CONFIG_POINT_EPSILON;
 }
 
 static int SortFaceRefs(const sg_configuration_space_t *space,
@@ -1288,73 +1925,120 @@ static int SameFaceGroup(const sg_configuration_space_t *space,
 			CONFIG_POINT_EPSILON;
 }
 
+static int HostValidatedCandidate(
+	const sg_host_collision_authority_t *authority, sg_rune_stance_t stance,
+	const int32_t primary[3], const int32_t fallback[3], float witness[3])
+{
+	sg_host_collision_pose_t pose;
+	uint32_t axis;
+	int classified;
+
+	for (axis = 0U; axis < 3U; axis++)
+		witness[axis] = (float)primary[axis] * 0.125f;
+	classified = SG_HostCollisionClassifyPose(authority, NULL, witness, stance,
+		&pose);
+	if (!classified)
+		return -1;
+	if (pose.valid)
+		return 1;
+	for (axis = 0U; axis < 3U; axis++)
+		witness[axis] = (float)fallback[axis] * 0.125f;
+	classified = SG_HostCollisionClassifyPose(authority, NULL, witness, stance,
+		&pose);
+	return classified && pose.valid ? 1 : -1;
+}
+
 static int FindPortalSideWitness(config_build_t *build, uint32_t cell_index,
-	const sg_configuration_face_t *boundary, const sg_rune_vec3_t *polygon,
-	uint32_t polygon_count, const float center[3], float witness[3])
+	uint32_t other_cell_index, const sg_configuration_face_t *boundary,
+	float witness[3])
 {
 	const sg_configuration_cell_t *cell = &build->space->cells[cell_index];
+	const sg_configuration_cell_t *other =
+		&build->space->cells[other_cell_index];
 	sg_configuration_lattice_halfspace_t *halfspaces;
+	const sg_configuration_plane_t **planes;
 	uint8_t *clearance;
 	sg_configuration_lattice_stats_t stats = { 0 };
-	int32_t point[3];
-	sg_host_collision_pose_t pose;
-	uint32_t offset, edge, axis, constraint_count;
+	int32_t point[3], clearance_point[3];
+	uint32_t offset, constraint_count;
 	int result, positive_margin;
 
-	halfspaces = calloc((size_t)cell->face_count + polygon_count,
+	if (cell->face_count > UINT32_MAX - other->face_count)
+		return -1;
+	halfspaces = calloc((size_t)cell->face_count + other->face_count,
 		sizeof(*halfspaces));
-	clearance = calloc((size_t)cell->face_count + polygon_count,
+	planes = calloc((size_t)cell->face_count + other->face_count,
+		sizeof(*planes));
+	clearance = calloc((size_t)cell->face_count + other->face_count,
 		sizeof(*clearance));
-	if (!halfspaces || !clearance)
+	if (!halfspaces || !planes || !clearance)
 	{
 		free(halfspaces);
+		free(planes);
 		free(clearance);
 		return -1;
 	}
+	constraint_count = 0U;
 	for (offset = 0; offset < cell->face_count; offset++)
 	{
 		const sg_configuration_plane_t *plane =
 			&build->space->faces[cell->first_face + offset].plane;
+		uint32_t existing;
 
-		CopyVector(halfspaces[offset].normal, plane->normal);
-		halfspaces[offset].distance = plane->distance;
-		halfspaces[offset].open = PlaneIsOpen(plane);
-		clearance[offset] = plane != &boundary->plane;
-	}
-	constraint_count = cell->face_count;
-	for (edge = 0; edge < polygon_count; edge++)
-	{
-		const float *a = polygon[edge].value;
-		const float *b = polygon[(edge + 1U) % polygon_count].value;
-		float direction[3];
-		sg_configuration_lattice_halfspace_t *side =
-			&halfspaces[constraint_count];
-
-		for (axis = 0; axis < 3; axis++)
-			direction[axis] = b[axis] - a[axis];
-		side->normal[0] = direction[1] * boundary->plane.normal[2] -
-			direction[2] * boundary->plane.normal[1];
-		side->normal[1] = direction[2] * boundary->plane.normal[0] -
-			direction[0] * boundary->plane.normal[2];
-		side->normal[2] = direction[0] * boundary->plane.normal[1] -
-			direction[1] * boundary->plane.normal[0];
-		if (side->normal[0] == 0.0f && side->normal[1] == 0.0f &&
-			side->normal[2] == 0.0f)
+		for (existing = 0U; existing < constraint_count; existing++)
+			if (EquivalentPlaneGeometry(planes[existing], plane) &&
+				Dot(planes[existing]->normal, plane->normal) > 0.0f)
+			{
+				if (PlaneIsOpen(plane))
+					halfspaces[existing].open = 1U;
+				if (EquivalentPlaneGeometry(plane, &boundary->plane))
+					clearance[existing] = 0U;
+				break;
+			}
+		if (existing < constraint_count)
 			continue;
-		side->distance = Dot(side->normal, a);
-		if (Dot(side->normal, center) > side->distance)
-		{
-			for (axis = 0; axis < 3; axis++)
-				side->normal[axis] = -side->normal[axis];
-			side->distance = -side->distance;
-		}
-		constraint_count++;
-		clearance[constraint_count - 1U] = 1U;
+		planes[constraint_count] = plane;
+		CopyVector(halfspaces[constraint_count].normal, plane->normal);
+		halfspaces[constraint_count].distance = plane->distance;
+		halfspaces[constraint_count].open = 1;
+		clearance[constraint_count++] =
+			(uint8_t)!EquivalentPlaneGeometry(plane, &boundary->plane);
+	}
+	for (offset = 0; offset < other->face_count; offset++)
+	{
+		const sg_configuration_plane_t *plane =
+			&build->space->faces[other->first_face + offset].plane;
+		int interface = EquivalentPlaneGeometry(plane, &boundary->plane);
+		uint32_t existing;
+
+		if (interface)
+			continue;
+		for (existing = 0U; existing < constraint_count; existing++)
+			if (EquivalentPlaneGeometry(planes[existing], plane) &&
+				Dot(planes[existing]->normal, plane->normal) > 0.0f)
+			{
+				if (PlaneIsOpen(plane))
+					halfspaces[existing].open = 1U;
+				break;
+			}
+		if (existing < constraint_count)
+			continue;
+		planes[constraint_count] = plane;
+		CopyVector(halfspaces[constraint_count].normal, plane->normal);
+		halfspaces[constraint_count].distance = plane->distance;
+		halfspaces[constraint_count].open = 1;
+		clearance[constraint_count++] = 1U;
 	}
 	result = SG_ConfigurationLatticeFindMaxClearance(halfspaces, clearance,
-		constraint_count, boundary->plane.normal, point, &positive_margin,
-		&stats);
+		constraint_count, NULL, point, &positive_margin, &stats);
+	if (result > 0 && positive_margin)
+	{
+		memcpy(clearance_point, point, sizeof(clearance_point));
+		result = SG_ConfigurationLatticeFind(halfspaces, constraint_count,
+			boundary->plane.normal, point, &stats);
+	}
 	free(halfspaces);
+	free(planes);
 	free(clearance);
 	build->space->lattice_solve_calls += stats.solve_calls;
 	build->space->lattice_constraints += stats.constraints;
@@ -1364,11 +2048,160 @@ static int FindPortalSideWitness(config_build_t *build, uint32_t cell_index,
 		return result;
 	if (!positive_margin)
 		return 0;
-	for (axis = 0; axis < 3; axis++)
-		witness[axis] = (float)point[axis] * 0.125f;
-	if (!SG_HostCollisionClassifyPose(build->authority, NULL, witness,
-			cell->stance, &pose) || !pose.valid)
+	return HostValidatedCandidate(build->authority, cell->stance, point,
+		clearance_point, witness);
+}
+
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationTestHostValidatedCandidate(
+	const sg_host_collision_authority_t *authority, sg_rune_stance_t stance,
+	const int32_t primary[3], const int32_t fallback[3], float witness[3])
+{
+	return HostValidatedCandidate(authority, stance, primary, fallback, witness);
+}
+#endif
+
+static int PointInsideCells(const sg_configuration_space_t *space,
+	const sg_configuration_cell_t *first, const sg_configuration_cell_t *second,
+	const float point[3]);
+
+static int TangentBoundaryPolygon(const sg_configuration_space_t *space,
+	const sg_configuration_cell_t *first, const sg_configuration_cell_t *second,
+	const sg_configuration_face_t *boundary, const float first_witness[3],
+	const float second_witness[3], sg_rune_vec3_t **vertices_out,
+	uint32_t *vertex_count_out, float *area_out)
+{
+	const sg_configuration_cell_t *cells[2] = { first, second };
+	config_mesh_face_t ordered, orientation;
+	sg_rune_vec3_t *vertices;
+	double normal_squared = (double)Dot(boundary->plane.normal,
+		boundary->plane.normal);
+	double first_side, second_side, denominator, fraction;
+	float center[3], tangent[3], bitangent[3];
+	float minimum_slack = INFINITY, radius, scale;
+	double area2 = 0.0;
+	uint32_t cell, face, axis, seed_axis = 0U;
+
+	if (!(normal_squared > 0.0) || !isfinite(normal_squared))
+		return 0;
+	first_side = (double)Dot(first_witness, boundary->plane.normal) -
+		boundary->plane.distance;
+	second_side = (double)Dot(second_witness, boundary->plane.normal) -
+		boundary->plane.distance;
+	denominator = first_side - second_side;
+	if (first_side * second_side > 0.0 || denominator == 0.0 ||
+		!isfinite(denominator))
+		return 0;
+	fraction = first_side / denominator;
+	for (axis = 0; axis < 3U; axis++)
+		center[axis] = (float)((double)first_witness[axis] + fraction *
+			((double)second_witness[axis] - first_witness[axis]));
+	{
+		double residual = ((double)Dot(center, boundary->plane.normal) -
+			boundary->plane.distance) / normal_squared;
+
+		for (axis = 0; axis < 3U; axis++)
+			center[axis] = (float)((double)center[axis] - residual *
+				boundary->plane.normal[axis]);
+	}
+	for (axis = 1U; axis < 3U; axis++)
+		if (fabsf(boundary->plane.normal[axis]) <
+			fabsf(boundary->plane.normal[seed_axis]))
+			seed_axis = axis;
+	memset(tangent, 0, sizeof(tangent));
+	tangent[seed_axis] = 1.0f;
+	{
+		float projection = Dot(tangent, boundary->plane.normal) /
+			(float)normal_squared;
+		double length_squared;
+
+		for (axis = 0; axis < 3U; axis++)
+			tangent[axis] -= projection * boundary->plane.normal[axis];
+		length_squared = (double)Dot(tangent, tangent);
+		if (!(length_squared > 0.0))
+			return 0;
+		scale = (float)(1.0 / sqrt(length_squared));
+		for (axis = 0; axis < 3U; axis++)
+			tangent[axis] *= scale;
+	}
+	bitangent[0] = boundary->plane.normal[1] * tangent[2] -
+		boundary->plane.normal[2] * tangent[1];
+	bitangent[1] = boundary->plane.normal[2] * tangent[0] -
+		boundary->plane.normal[0] * tangent[2];
+	bitangent[2] = boundary->plane.normal[0] * tangent[1] -
+		boundary->plane.normal[1] * tangent[0];
+	scale = (float)(1.0 / sqrt((double)Dot(bitangent, bitangent)));
+	for (axis = 0; axis < 3U; axis++)
+		bitangent[axis] *= scale;
+	for (cell = 0; cell < 2U; cell++)
+		for (face = 0; face < cells[cell]->face_count; face++)
+		{
+			const sg_configuration_plane_t *plane = &space->faces[
+				cells[cell]->first_face + face].plane;
+			double length, slack;
+
+			if (EquivalentPlaneGeometry(plane, &boundary->plane))
+				continue;
+			length = sqrt((double)Dot(plane->normal, plane->normal));
+			if (!(length > 0.0))
+				return 0;
+			slack = ((double)plane->distance - Dot(center, plane->normal)) /
+				length;
+			if (!(slack > 0.0))
+				return 0;
+			if (slack < minimum_slack)
+				minimum_slack = (float)slack;
+		}
+	if (!isfinite(minimum_slack) ||
+		!(minimum_slack > CONFIG_CANONICAL_POINT_EPSILON * 8.0f))
+		return 0;
+	radius = minimum_slack * 0.125f;
+	vertices = malloc(4U * sizeof(*vertices));
+	if (!vertices)
 		return -1;
+	for (face = 0; face < 4U; face++)
+		for (axis = 0; axis < 3U; axis++)
+			vertices[face].value[axis] = center[axis] + radius *
+				((face == 0U || face == 3U) ? tangent[axis] : -tangent[axis]) +
+				radius * ((face < 2U) ? bitangent[axis] : -bitangent[axis]);
+	for (face = 0; face < 4U; face++)
+		if (!PointInsideCells(space, first, second, vertices[face].value))
+		{
+			free(vertices);
+			return 0;
+		}
+	memset(&ordered, 0, sizeof(ordered));
+	memset(&orientation, 0, sizeof(orientation));
+	ordered.plane = boundary->plane;
+	ordered.vertices = vertices;
+	ordered.vertex_count = 4U;
+	orientation.plane = boundary->plane;
+	CanonicalOrderFace(&ordered, &orientation);
+	axis = DominantAxis(boundary->plane.normal);
+	{
+		uint32_t u = (axis + 1U) % 3U;
+		uint32_t v = (axis + 2U) % 3U;
+
+		for (face = 0U; face < 4U; face++)
+		{
+			const float *point = vertices[face].value;
+			const float *next = vertices[(face + 1U) % 4U].value;
+
+			area2 += ((double)point[u] - center[u]) *
+				((double)next[v] - center[v]) -
+				((double)next[u] - center[u]) *
+				((double)point[v] - center[v]);
+		}
+	}
+	*area_out = (float)(fabs(area2) /
+		fabs((double)boundary->plane.normal[axis]));
+	if (!(*area_out > CONFIG_AREA_EPSILON))
+	{
+		free(vertices);
+		return 0;
+	}
+	*vertices_out = vertices;
+	*vertex_count_out = 4U;
 	return 1;
 }
 
@@ -1380,10 +2213,8 @@ static int AppendPortal(config_build_t *build, uint32_t from, uint32_t to,
 	sg_configuration_portal_t *grown;
 	sg_configuration_portal_t *portal;
 	uint32_t index = build->space->portal_count;
-	float center[3] = { 0.0f, 0.0f, 0.0f };
 	float from_witness[3], to_witness[3];
 	sg_host_collision_transition_t transition;
-	uint32_t vertex, axis;
 	uint32_t face_index = (uint32_t)(face - build->space->faces);
 	const sg_configuration_face_t *from_face =
 		build->space->cells[from].first_face <= face_index &&
@@ -1392,16 +2223,22 @@ static int AppendPortal(config_build_t *build, uint32_t from, uint32_t to,
 	const sg_configuration_face_t *to_face = from_face == face ?
 		other_face : face;
 	int from_result, to_result;
+	uint32_t existing;
+	sg_rune_vec3_t *fallback = NULL;
 
-	for (vertex = 0; vertex < vertex_count; vertex++)
-		for (axis = 0; axis < 3; axis++)
-			center[axis] += vertices[vertex].value[axis];
-	for (axis = 0; axis < 3; axis++)
-		center[axis] /= (float)vertex_count;
-	from_result = FindPortalSideWitness(build, from, from_face, vertices,
-		vertex_count, center, from_witness);
-	to_result = FindPortalSideWitness(build, to, to_face, vertices,
-		vertex_count, center, to_witness);
+	for (existing = 0; existing < build->space->portal_count; existing++)
+	{
+		const sg_configuration_portal_t *value =
+			&build->space->portals[existing];
+
+		if (value->from_cell == from && value->to_cell == to &&
+			EquivalentPlaneGeometry(&value->plane, &face->plane))
+			return 1;
+	}
+
+	from_result = FindPortalSideWitness(build, from, to, from_face,
+		from_witness);
+	to_result = FindPortalSideWitness(build, to, from, to_face, to_witness);
 	if (from_result < 0 || to_result < 0)
 	{
 		SetError(build, SG_CONFIGURATION_ERROR_HOST_DISAGREEMENT, index);
@@ -1412,17 +2249,34 @@ static int AppendPortal(config_build_t *build, uint32_t from, uint32_t to,
 			to_witness, build->space->cells[from].stance, &transition) ||
 		!transition.clear)
 		return 1;
+	if (vertex_count < 3U || !(area > CONFIG_AREA_EPSILON))
+	{
+		int materialized = TangentBoundaryPolygon(build->space,
+			&build->space->cells[from], &build->space->cells[to], from_face,
+			from_witness, to_witness, &fallback, &vertex_count, &area);
+
+		if (materialized < 0)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, index);
+			return 0;
+		}
+		if (!materialized)
+			return 1;
+		vertices = fallback;
+	}
 
 	if (index >= build->limits.max_portals || index == UINT32_MAX ||
 		vertex_count > build->limits.max_vertices - build->space->vertex_count)
 	{
 		SetError(build, SG_CONFIGURATION_ERROR_OVERFLOW, index);
+		free(fallback);
 		return 0;
 	}
 	if (!GrowArray((void **)&build->space->portals, &build->portal_capacity,
 			index + 1U, build->limits.max_portals, sizeof(*grown)))
 	{
 		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, index);
+		free(fallback);
 		return 0;
 	}
 	grown = build->space->portals;
@@ -1450,6 +2304,7 @@ static int AppendPortal(config_build_t *build, uint32_t from, uint32_t to,
 				build->limits.max_vertices, sizeof(*points)))
 		{
 			SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, index);
+			free(fallback);
 			return 0;
 		}
 		points = build->space->vertices;
@@ -1458,7 +2313,112 @@ static int AppendPortal(config_build_t *build, uint32_t from, uint32_t to,
 	}
 	build->space->vertex_count += vertex_count;
 	build->space->portal_count++;
+	free(fallback);
 	return 1;
+}
+
+static int PointInsideCells(const sg_configuration_space_t *space,
+	const sg_configuration_cell_t *first, const sg_configuration_cell_t *second,
+	const float point[3])
+{
+	const sg_configuration_cell_t *cells[2] = { first, second };
+	uint32_t cell, face;
+
+	for (cell = 0; cell < 2U; cell++)
+		for (face = 0; face < cells[cell]->face_count; face++)
+		{
+			const sg_configuration_plane_t *plane = &space->faces[
+				cells[cell]->first_face + face].plane;
+			double length = sqrt((double)Dot(plane->normal, plane->normal));
+
+			if (!(length > 0.0) ||
+				((double)Dot(point, plane->normal) - plane->distance) / length >
+					CONFIG_CANONICAL_POINT_EPSILON)
+				return 0;
+		}
+	return 1;
+}
+
+static int IntersectAuthoritativeBoundary(config_build_t *build,
+	uint32_t first_cell, uint32_t second_cell,
+	const sg_configuration_face_t *boundary, sg_rune_vec3_t **vertices_out,
+	uint32_t *vertex_count_out, float *area_out)
+{
+	const sg_configuration_cell_t *first = &build->space->cells[first_cell];
+	const sg_configuration_cell_t *second = &build->space->cells[second_cell];
+	const sg_configuration_cell_t *cells[2] = { first, second };
+	const sg_configuration_plane_t **planes = NULL;
+	sg_rune_vec3_t *points = NULL;
+	uint32_t plane_count, point_count = 0, point_capacity = 0;
+	uint32_t cell, face, a, b, axis;
+	config_mesh_face_t ordered, orientation;
+	float scale;
+
+	*vertices_out = NULL;
+	*vertex_count_out = 0U;
+	*area_out = 0.0f;
+	if (first->face_count > UINT32_MAX - second->face_count)
+		return 0;
+	plane_count = first->face_count + second->face_count;
+	#if SIZE_MAX == UINT32_MAX
+	if ((size_t)plane_count > SIZE_MAX / sizeof(*planes))
+		return 0;
+	#endif
+	planes = malloc((size_t)plane_count * sizeof(*planes));
+	if (!planes)
+		goto failure;
+	plane_count = 0U;
+	for (cell = 0; cell < 2U; cell++)
+		for (face = 0; face < cells[cell]->face_count; face++)
+			planes[plane_count++] = &build->space->faces[
+				cells[cell]->first_face + face].plane;
+	for (a = 0; a < plane_count; a++)
+		for (b = a + 1U; b < plane_count; b++)
+		{
+			float point[3];
+
+			if (!CanonicalIntersect3(&boundary->plane, planes[a], planes[b],
+					point) || !PointInsideCells(build->space, first, second, point))
+				continue;
+			if (!CanonicalAppendPoint(&points, &point_count, &point_capacity,
+					point))
+				goto failure;
+		}
+	if (point_count < 3U)
+		goto empty;
+	memset(&ordered, 0, sizeof(ordered));
+	memset(&orientation, 0, sizeof(orientation));
+	ordered.plane = boundary->plane;
+	ordered.vertices = points;
+	ordered.vertex_count = point_count;
+	orientation.plane = boundary->plane;
+	if (boundary->kind == SG_CONFIGURATION_FACE_FACET)
+	{
+		orientation.vertices = &build->space->vertices[boundary->first_vertex];
+		orientation.vertex_count = boundary->vertex_count;
+	}
+	CanonicalOrderFace(&ordered, &orientation);
+	axis = DominantAxis(boundary->plane.normal);
+	scale = fabsf(boundary->plane.normal[axis]);
+	if (!(scale > CONFIG_EPSILON))
+		goto empty;
+	*area_out = fabsf(PolygonArea2(points, point_count, axis)) / scale;
+	if (!(*area_out > CONFIG_AREA_EPSILON))
+		goto empty;
+	free(planes);
+	*vertices_out = points;
+	*vertex_count_out = point_count;
+	return 1;
+
+empty:
+	free(points);
+	free(planes);
+	return 1;
+
+failure:
+	free(points);
+	free(planes);
+	return 0;
 }
 
 static int BuildPortals(config_build_t *build)
@@ -1478,10 +2438,11 @@ static int BuildPortals(config_build_t *build)
 			const sg_configuration_face_t *record;
 			uint32_t vertex, axis, drop, sweep_axis;
 
+			record = &build->space->faces[
+				build->space->cells[cell].first_face + offset];
 			references[face].face =
 				build->space->cells[cell].first_face + offset;
 			references[face].cell = cell;
-			record = &build->space->faces[references[face].face];
 			CanonicalPlane(&record->plane, references[face].canonical_normal,
 				&references[face].canonical_distance);
 			for (axis = 0; axis < 3; axis++)
@@ -1489,17 +2450,25 @@ static int BuildPortals(config_build_t *build)
 				references[face].mins[axis] = INFINITY;
 				references[face].maxs[axis] = -INFINITY;
 			}
-			for (vertex = 0; vertex < record->vertex_count; vertex++)
-				for (axis = 0; axis < 3; axis++)
-				{
-					float value = build->space->vertices[
-						record->first_vertex + vertex].value[axis];
+			if (record->kind == SG_CONFIGURATION_FACE_FACET)
+				for (vertex = 0; vertex < record->vertex_count; vertex++)
+					for (axis = 0; axis < 3; axis++)
+					{
+						float value = build->space->vertices[
+							record->first_vertex + vertex].value[axis];
 
-					if (value < references[face].mins[axis])
-						references[face].mins[axis] = value;
-					if (value > references[face].maxs[axis])
-						references[face].maxs[axis] = value;
-				}
+						if (value < references[face].mins[axis])
+							references[face].mins[axis] = value;
+						if (value > references[face].maxs[axis])
+							references[face].maxs[axis] = value;
+					}
+			else
+			{
+				CopyVector(references[face].mins,
+					build->space->cells[cell].bounds.mins.value);
+				CopyVector(references[face].maxs,
+					build->space->cells[cell].bounds.maxs.value);
+			}
 			drop = DominantAxis(record->plane.normal);
 			sweep_axis = (drop + 1U) % 3U;
 			references[face].sweep_min = references[face].mins[sweep_axis];
@@ -1507,18 +2476,17 @@ static int BuildPortals(config_build_t *build)
 			face++;
 		}
 	}
-	if (face != build->space->face_count ||
-		!SortFaceRefs(build->space, references, face))
+	if (!SortFaceRefs(build->space, references, face))
 	{
 		free(references);
 		return 0;
 	}
-	for (group_start = 0; group_start < build->space->face_count; )
+	for (group_start = 0; group_start < face; )
 	{
 		uint32_t group_end = group_start + 1U;
 		uint32_t left, right;
 
-		while (group_end < build->space->face_count &&
+		while (group_end < face &&
 			SameFaceGroup(build->space, &references[group_start],
 				&references[group_end]))
 			group_end++;
@@ -1541,13 +2509,19 @@ static int BuildPortals(config_build_t *build)
 					!BoundsOverlap(a->mins, a->maxs, b->mins, b->maxs) ||
 					Dot(face_a->plane.normal, face_b->plane.normal) >= 0.0f)
 					continue;
-				if (!IntersectFaces(build->space, face_a, face_b,
-						&intersection, &intersection_count, &area))
+				if (!(face_a->kind == SG_CONFIGURATION_FACE_FACET &&
+						face_b->kind == SG_CONFIGURATION_FACE_FACET ?
+					IntersectFaces(build->space, face_a, face_b,
+						&intersection, &intersection_count, &area) :
+					IntersectAuthoritativeBoundary(build, a->cell, b->cell,
+						face_a, &intersection, &intersection_count, &area)))
 				{
 					free(references);
 					return 0;
 				}
-				if (intersection_count)
+				if (intersection_count ||
+					face_a->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
+					face_b->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
 				{
 					uint32_t from = a->cell < b->cell ? a->cell : b->cell;
 					uint32_t to = a->cell < b->cell ? b->cell : a->cell;
@@ -1568,6 +2542,76 @@ static int BuildPortals(config_build_t *build)
 	return 1;
 }
 
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationTestConstraintPortal(
+	const sg_host_collision_authority_t *authority)
+{
+	config_build_t build;
+	sg_configuration_space_t space;
+	sg_configuration_cell_t cells[2];
+	sg_configuration_face_t faces[12];
+	uint32_t cell, axis;
+	int valid = 0;
+
+	memset(&build, 0, sizeof(build));
+	memset(&space, 0, sizeof(space));
+	memset(cells, 0, sizeof(cells));
+	memset(faces, 0, sizeof(faces));
+	build.authority = authority;
+	build.space = &space;
+	build.limits.max_portals = 8U;
+	build.limits.max_vertices = 64U;
+	space.identity = authority->identity;
+	space.cells = cells;
+	space.cell_count = 2U;
+	space.faces = faces;
+	space.face_count = 12U;
+	for (cell = 0; cell < 2U; cell++)
+	{
+		cells[cell].first_face = cell * 6U;
+		cells[cell].face_count = 6U;
+		cells[cell].stance = SG_RUNE_STANCE_STANDING;
+		for (axis = 0; axis < 3U; axis++)
+		{
+			float minimum = axis == 0U ? (cell ? 0.0f : -1.0f) : -1.0f;
+			float maximum = axis == 0U ? (cell ? 1.0f : 0.0f) : 1.0f;
+			sg_configuration_face_t *upper = &faces[cell * 6U + axis * 2U];
+			sg_configuration_face_t *lower = upper + 1U;
+
+			upper->plane.normal[axis] = 1.0f;
+			upper->plane.distance = maximum;
+			upper->plane.source_kind = SG_CONFIGURATION_PLANE_DOMAIN;
+			upper->plane.source_index = axis;
+			upper->plane.source_variant = axis * 2U;
+			upper->kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+			lower->plane.normal[axis] = -1.0f;
+			lower->plane.distance = -minimum;
+			lower->plane.source_kind = SG_CONFIGURATION_PLANE_DOMAIN;
+			lower->plane.source_index = axis;
+			lower->plane.source_variant = axis * 2U + 1U;
+			lower->plane.reversed = 1U;
+			lower->kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+			cells[cell].bounds.mins.value[axis] = minimum;
+			cells[cell].bounds.maxs.value[axis] = maximum;
+		}
+	}
+	if (!BuildPortals(&build) || space.portal_count != 1U ||
+		space.portals[0].from_cell != 0U || space.portals[0].to_cell != 1U ||
+		space.portals[0].vertex_count < 3U ||
+		!(space.portals[0].clearance > 0.0f))
+		goto done;
+	for (axis = 0; axis < space.portals[0].vertex_count; axis++)
+		if (space.vertices[space.portals[0].first_vertex + axis].value[0] != 0.0f)
+			goto done;
+	valid = 1;
+
+done:
+	free(space.portals);
+	free(space.vertices);
+	return valid;
+}
+#endif
+
 static int PolyFromCell(const sg_configuration_space_t *space,
 	uint32_t cell_index, config_poly_t *poly)
 {
@@ -1586,6 +2630,12 @@ static int PolyFromCell(const sg_configuration_space_t *space,
 
 		destination->plane = source->plane;
 		destination->vertex_count = source->vertex_count;
+		if (!source->vertex_count)
+		{
+			poly->exact_split = 1U;
+			poly->face_count++;
+			continue;
+		}
 		destination->vertices = malloc((size_t)source->vertex_count *
 			sizeof(*destination->vertices));
 		if (!destination->vertices)
@@ -1602,8 +2652,34 @@ static int PolyFromCell(const sg_configuration_space_t *space,
 	return 1;
 }
 
+static int ConstraintPolyFromCells(const sg_configuration_space_t *space,
+	uint32_t first_cell, uint32_t second_cell, config_poly_t *poly)
+{
+	const sg_configuration_cell_t *cells[2] = {
+		&space->cells[first_cell], &space->cells[second_cell]
+	};
+	uint32_t cell, offset;
+
+	memset(poly, 0, sizeof(*poly));
+	poly->exact_split = 1U;
+	if (cells[0]->face_count > UINT32_MAX - cells[1]->face_count)
+		return 0;
+	poly->faces = calloc(cells[0]->face_count + cells[1]->face_count,
+		sizeof(*poly->faces));
+	if (!poly->faces)
+		return 0;
+	for (cell = 0; cell < 2U; cell++)
+		for (offset = 0; offset < cells[cell]->face_count; offset++)
+		{
+			poly->faces[poly->face_count].plane = space->faces[
+				cells[cell]->first_face + offset].plane;
+			poly->face_count++;
+		}
+	return 1;
+}
+
 static int AppendOverlap(config_build_t *build, uint32_t standing,
-	uint32_t crouching, const config_poly_t *poly, const float witness[3])
+	uint32_t crouching, config_poly_t *poly, const float witness[3])
 {
 	sg_configuration_stance_overlap_t *grown;
 	sg_configuration_stance_overlap_t *overlap;
@@ -1628,7 +2704,12 @@ static int AppendOverlap(config_build_t *build, uint32_t standing,
 	overlap->standing_cell = standing;
 	overlap->crouching_cell = crouching;
 	overlap->first_face = build->space->face_count;
-	PolyBounds(poly, overlap->bounds.mins.value, overlap->bounds.maxs.value);
+	if (AuthoritativePolyBounds(build, poly,
+			overlap->bounds.mins.value, overlap->bounds.maxs.value) <= 0)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_HOST_DISAGREEMENT, index);
+		return 0;
+	}
 	for (face = 0; face < poly->face_count; face++)
 	{
 		const config_mesh_face_t *source = &poly->faces[face];
@@ -1655,6 +2736,9 @@ static int AppendOverlap(config_build_t *build, uint32_t standing,
 		destination->plane = source->plane;
 		destination->first_vertex = build->space->vertex_count;
 		destination->vertex_count = source->vertex_count;
+		destination->kind = source->vertex_count ?
+			SG_CONFIGURATION_FACE_FACET :
+			SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
 		if (!GrowArray((void **)&build->space->vertices,
 				&build->vertex_capacity,
 				build->space->vertex_count + source->vertex_count,
@@ -1664,8 +2748,9 @@ static int AppendOverlap(config_build_t *build, uint32_t standing,
 			return 0;
 		}
 		points = build->space->vertices;
-		memcpy(&points[build->space->vertex_count], source->vertices,
-			(size_t)source->vertex_count * sizeof(*points));
+		if (source->vertex_count)
+			memcpy(&points[build->space->vertex_count], source->vertices,
+				(size_t)source->vertex_count * sizeof(*points));
 		build->space->vertex_count += source->vertex_count;
 		build->space->face_count++;
 		overlap->face_count++;
@@ -1808,24 +2893,59 @@ static int BuildStanceOverlaps(config_build_t *build)
 			{
 				const sg_configuration_plane_t *plane =
 					&build->space->faces[crouching_cell->first_face + face].plane;
+				config_poly_t canonical;
+				int status;
 
 				if (!ClipPoly(&overlap, plane, 1, &clipped))
 				{
 					FreePoly(&overlap);
 					goto failure;
 				}
+				status = CanonicalizeClip(build, &overlap, plane, 1,
+					&clipped, &canonical);
 				FreePoly(&overlap);
-				overlap = clipped;
+				if (status <= 0)
+				{
+					FreePoly(&clipped);
+					goto failure;
+				}
+				if (status == 1)
+				{
+					FreePoly(&clipped);
+					overlap = canonical;
+				}
+				else
+					overlap = clipped;
 			}
-			if (overlap.face_count && PolyHasVolume(&overlap))
 			{
 				float witness[3];
+				sg_host_collision_pose_t crouching_pose;
+				int representable = overlap.face_count ?
+					FindProtocolWitness(build, &overlap,
+						SG_RUNE_STANCE_STANDING, witness) : 0;
 
-				int representable = FindProtocolWitness(build, &overlap,
-					SG_RUNE_STANCE_STANDING, witness);
-
+				if (representable < 0)
+				{
+					FreePoly(&overlap);
+					goto failure;
+				}
+				if (!representable)
+				{
+					FreePoly(&overlap);
+					if (!ConstraintPolyFromCells(build->space, standing,
+						crouching, &overlap))
+						goto failure;
+					representable = FindProtocolWitness(build, &overlap,
+						SG_RUNE_STANCE_STANDING, witness);
+				}
+				if (representable &&
+					(!SG_HostCollisionClassifyPose(build->authority, NULL,
+						witness, SG_RUNE_STANCE_CROUCHING, &crouching_pose) ||
+						!crouching_pose.valid))
+					representable = 0;
 				if (representable < 0 || (representable &&
-					!AppendOverlap(build, standing, crouching, &overlap, witness)))
+					!AppendOverlap(build, standing, crouching, &overlap,
+						witness)))
 				{
 					FreePoly(&overlap);
 					goto failure;

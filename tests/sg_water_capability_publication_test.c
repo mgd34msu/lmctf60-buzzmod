@@ -972,6 +972,8 @@ static void ConfigureVerticalDrop(water_fixture_t *fixture)
 		fixture->faces[face].source_kind =
 			SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_CLIP;
 		fixture->faces[face].source_index = face;
+		fixture->faces[face].kind =
+			SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY;
 	}
 	Set3(fixture->faces[0].normal, 1.0f, 0.0f, 0.0f);
 	fixture->faces[0].distance = 64.0f;

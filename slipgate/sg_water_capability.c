@@ -277,7 +277,16 @@ static int RegionValid(const sg_water_build_t *build, uint32_t region_index)
 
 		if (!Finite3(record->normal) || !isfinite(record->distance) ||
 			(record->normal[0] == 0.0f && record->normal[1] == 0.0f &&
-			 record->normal[2] == 0.0f))
+			 record->normal[2] == 0.0f) ||
+			record->kind > SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY ||
+			record->open > 1U ||
+			(record->kind == SG_CONFIGURATION_SEMANTIC_FACE_FACET &&
+				record->vertex_count < 3U) ||
+			(record->kind == SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY &&
+				record->vertex_count != 0U) ||
+			record->first_vertex > build->semantics->vertex_count ||
+			record->vertex_count > build->semantics->vertex_count -
+				record->first_vertex)
 			return 0;
 	}
 	return 1;
@@ -1114,6 +1123,7 @@ static int SharedBoundaryWitness(sg_water_build_t *build,
 
 			Copy3(halfspaces[constraint].normal, record->normal);
 			halfspaces[constraint].distance = record->distance;
+			halfspaces[constraint].open = record->open != 0U;
 			clearance[constraint] = (uint8_t)(face != shared_faces[side]);
 			constraint++;
 		}
@@ -1209,8 +1219,7 @@ static int RegionSideWitness(sg_water_build_t *build, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&build->semantics->faces[region->first_face + local];
 
-		if (PlaneSignedDistance(witness, record->normal, record->distance) >
-				0.0 ||
+		if (!SG_ConfigurationSemanticFaceContainsPoint(record, witness) ||
 			(local + region->first_face == boundary_face &&
 			 PlaneSignedDistance(witness, record->normal,
 				record->distance) >= 0.0))
@@ -1240,7 +1249,7 @@ static int RegionSideWitness(sg_water_build_t *build, uint32_t region_index,
 
 		Copy3(halfspaces[local].normal, record->normal);
 		halfspaces[local].distance = record->distance;
-		halfspaces[local].open = face == boundary_face;
+		halfspaces[local].open = record->open != 0U || face == boundary_face;
 	}
 	for (local = 0U; local < 3U; local++)
 	{
@@ -1278,8 +1287,7 @@ static int RegionSideWitness(sg_water_build_t *build, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&build->semantics->faces[region->first_face + local];
 
-		if (PlaneSignedDistance(witness, record->normal,
-			record->distance) > 0.0)
+		if (!SG_ConfigurationSemanticFaceContainsPoint(record, witness))
 			return 0;
 	}
 	return 1;
@@ -1298,8 +1306,7 @@ static int PointInRegion(const sg_water_build_t *build, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&build->semantics->faces[face];
 
-		if (PlaneSignedDistance(point, record->normal, record->distance) >
-			SG_WATER_PLANE_DISTANCE_EPSILON)
+		if (!SG_ConfigurationSemanticFaceContainsPoint(record, point))
 			return 0;
 	}
 	return 1;

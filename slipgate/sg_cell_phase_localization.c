@@ -1337,10 +1337,7 @@ static int PointInsideRegion(
 	{
 		const sg_configuration_semantic_face_t *face =
 			&semantics->faces[region->first_face + local];
-		float distance = point[0] * face->normal[0] +
-			point[1] * face->normal[1] + point[2] * face->normal[2];
-
-		if (distance > face->distance)
+		if (!SG_ConfigurationSemanticFaceContainsPoint(face, point))
 			return 0;
 	}
 	return 1;

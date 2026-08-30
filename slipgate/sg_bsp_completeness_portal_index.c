@@ -296,12 +296,6 @@ int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 			if (!CellFacePolygon(proof, cell, boundary, &ref->vertices,
 					&ref->vertex_count))
 				goto failure;
-			if (ref->vertex_count < 3U)
-			{
-				free(ref->vertices);
-				memset(ref, 0, sizeof(*ref));
-				continue;
-			}
 			ref->cell = cell;
 			ref->face = face;
 			ref->stance = (uint32_t)proof->space->cells[cell].stance;
@@ -312,31 +306,49 @@ int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 				SG_BspProofFail(proof, SG_BSP_COMPLETENESS_INVALID_CELL, cell);
 				goto failure;
 			}
-			ref->sweep_min = ref->sweep_max = ref->vertices[0].value[u];
-			ref->other_min = ref->other_max = ref->vertices[0].value[v];
-			memcpy(ref->bounds_mins, ref->vertices[0].value,
-				sizeof(ref->bounds_mins));
-			memcpy(ref->bounds_maxs, ref->vertices[0].value,
-				sizeof(ref->bounds_maxs));
-			for (vertex = 1U; vertex < ref->vertex_count; vertex++)
+			if (ref->vertex_count >= 3U)
 			{
-				uint32_t axis;
-
-				ref->sweep_min = fminf(ref->sweep_min,
-					ref->vertices[vertex].value[u]);
-				ref->sweep_max = fmaxf(ref->sweep_max,
-					ref->vertices[vertex].value[u]);
-				ref->other_min = fminf(ref->other_min,
-					ref->vertices[vertex].value[v]);
-				ref->other_max = fmaxf(ref->other_max,
-					ref->vertices[vertex].value[v]);
-				for (axis = 0; axis < 3U; axis++)
+				ref->sweep_min = ref->sweep_max = ref->vertices[0].value[u];
+				ref->other_min = ref->other_max = ref->vertices[0].value[v];
+				memcpy(ref->bounds_mins, ref->vertices[0].value,
+					sizeof(ref->bounds_mins));
+				memcpy(ref->bounds_maxs, ref->vertices[0].value,
+					sizeof(ref->bounds_maxs));
+				for (vertex = 1U; vertex < ref->vertex_count; vertex++)
 				{
-					ref->bounds_mins[axis] = fminf(ref->bounds_mins[axis],
-						ref->vertices[vertex].value[axis]);
-					ref->bounds_maxs[axis] = fmaxf(ref->bounds_maxs[axis],
-						ref->vertices[vertex].value[axis]);
+					uint32_t component;
+
+					ref->sweep_min = fminf(ref->sweep_min,
+						ref->vertices[vertex].value[u]);
+					ref->sweep_max = fmaxf(ref->sweep_max,
+						ref->vertices[vertex].value[u]);
+					ref->other_min = fminf(ref->other_min,
+						ref->vertices[vertex].value[v]);
+					ref->other_max = fmaxf(ref->other_max,
+						ref->vertices[vertex].value[v]);
+					for (component = 0; component < 3U; component++)
+					{
+						ref->bounds_mins[component] = fminf(
+							ref->bounds_mins[component],
+							ref->vertices[vertex].value[component]);
+						ref->bounds_maxs[component] = fmaxf(
+							ref->bounds_maxs[component],
+							ref->vertices[vertex].value[component]);
+					}
 				}
+			}
+			else
+			{
+				memcpy(ref->bounds_mins,
+					proof->space->cells[cell].bounds.mins.value,
+					sizeof(ref->bounds_mins));
+				memcpy(ref->bounds_maxs,
+					proof->space->cells[cell].bounds.maxs.value,
+					sizeof(ref->bounds_maxs));
+				ref->sweep_min = ref->bounds_mins[u];
+				ref->sweep_max = ref->bounds_maxs[u];
+				ref->other_min = ref->bounds_mins[v];
+				ref->other_max = ref->bounds_maxs[v];
 			}
 			count++;
 		}

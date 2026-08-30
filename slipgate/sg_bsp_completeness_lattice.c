@@ -78,31 +78,21 @@ int SG_BspProofRegionBounds(sg_bsp_proof_context_t *proof,
 		return -1;
 	for (axis = 0; axis < 3U; axis++)
 	{
-		float maximum_objective[3] = { 0.0f, 0.0f, 0.0f };
-		float minimum_objective[3] = { 0.0f, 0.0f, 0.0f };
-		sg_configuration_lattice_stats_t maximum_stats = { 0 };
-		sg_configuration_lattice_stats_t minimum_stats = { 0 };
-		int32_t maximum[3], minimum[3];
-		int maximum_solved, minimum_solved;
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int solved;
 
-		maximum_objective[axis] = 1.0f;
-		minimum_objective[axis] = -1.0f;
-		maximum_solved = SG_ConfigurationLatticeFind(constraints,
-			region->halfspace_count, maximum_objective, maximum, &maximum_stats);
-		minimum_solved = SG_ConfigurationLatticeFind(constraints,
-			region->halfspace_count, minimum_objective, minimum, &minimum_stats);
-		MergeStats(proof, &maximum_stats);
-		MergeStats(proof, &minimum_stats);
-		if (maximum_solved <= 0 || minimum_solved <= 0)
+		solved = SG_ConfigurationLatticeCoordinateBounds(constraints,
+			region->halfspace_count, axis, &region->lattice_mins[axis],
+			&region->lattice_maxs[axis], &stats);
+		MergeStats(proof, &stats);
+		if (solved <= 0)
 		{
 			free(constraints);
-			if (maximum_solved < 0 || minimum_solved < 0)
+			if (solved < 0)
 				SG_BspProofFail(proof,
 					SG_BSP_COMPLETENESS_HOST_DISAGREEMENT, 0);
-			return maximum_solved < 0 || minimum_solved < 0 ? -1 : 0;
+			return solved;
 		}
-		region->lattice_maxs[axis] = maximum[axis];
-		region->lattice_mins[axis] = minimum[axis];
 	}
 	free(constraints);
 	region->has_lattice_bounds = 1U;

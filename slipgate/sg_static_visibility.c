@@ -1025,8 +1025,7 @@ static int PointInRegion(const sg_configuration_semantics_t *semantics,
 	{
 		const sg_configuration_semantic_face_t *plane =
 			&semantics->faces[region->first_face + face];
-		if (Dot3(point, plane->normal) - plane->distance >
-			VISIBILITY_GEOMETRY_EPSILON)
+		if (!SG_ConfigurationSemanticFaceContainsPoint(plane, point))
 			return 0;
 	}
 	return 1;

@@ -130,6 +130,7 @@ int SG_BspProofRegionsIntersect(sg_bsp_proof_context_t *proof,
 	const sg_bsp_proof_region_t *right);
 int SG_BspProofAuditCoverage(sg_bsp_proof_context_t *proof);
 int SG_BspProofAuditPortals(sg_bsp_proof_context_t *proof);
+int SG_BspProofTestZeroPolygonPortalKinds(void);
 int SG_BspProofBuildFaceRefs(sg_bsp_proof_context_t *proof,
 	sg_bsp_proof_face_ref_t **refs_out, uint32_t *count_out);
 void SG_BspProofFreeFaceRefs(sg_bsp_proof_face_ref_t *refs, uint32_t count);

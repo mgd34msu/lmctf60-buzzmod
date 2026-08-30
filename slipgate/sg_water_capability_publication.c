@@ -1013,8 +1013,8 @@ static int PointInRegion(const audit_t *audit, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&audit->source->semantics->faces[face];
 
-		if (PlaneDistance(point, record->normal, record->distance) >
-			PLANE_EPSILON)
+		if (!isfinite(PlaneDistance(point, record->normal, record->distance)) ||
+			!SG_ConfigurationSemanticFaceContainsPoint(record, point))
 			return 0;
 	}
 	return 1;
@@ -1539,6 +1539,7 @@ static int SharedBoundaryWitness(audit_t *audit, uint32_t first_region,
 
 			Copy3(halfspaces[constraint].normal, record->normal);
 			halfspaces[constraint].distance = record->distance;
+			halfspaces[constraint].open = record->open != 0U;
 			clearance[constraint] = (uint8_t)(face != shared_faces[side]);
 			constraint++;
 		}
@@ -1625,7 +1626,7 @@ static int RegionSideWitness(audit_t *audit, uint32_t region_index,
 		const sg_configuration_semantic_face_t *record =
 			&audit->source->semantics->faces[face];
 
-		if (PlaneDistance(witness, record->normal, record->distance) > 0.0 ||
+		if (!SG_ConfigurationSemanticFaceContainsPoint(record, witness) ||
 			(face == boundary_face && PlaneDistance(witness, record->normal,
 				record->distance) >= 0.0)) direct = 0;
 	}
@@ -1652,7 +1653,7 @@ static int RegionSideWitness(audit_t *audit, uint32_t region_index,
 
 		Copy3(halfspaces[local].normal, record->normal);
 		halfspaces[local].distance = record->distance;
-		halfspaces[local].open = face == boundary_face;
+		halfspaces[local].open = record->open != 0U || face == boundary_face;
 	}
 	for (local = 0U; local < 3U; local++)
 	{

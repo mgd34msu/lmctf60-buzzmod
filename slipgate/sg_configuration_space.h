@@ -69,11 +69,18 @@ typedef struct sg_configuration_plane_s
 	uint32_t reversed;
 } sg_configuration_plane_t;
 
+typedef enum sg_configuration_face_kind_e
+{
+	SG_CONFIGURATION_FACE_FACET = 0,
+	SG_CONFIGURATION_FACE_CONSTRAINT_ONLY
+} sg_configuration_face_kind_t;
+
 typedef struct sg_configuration_face_s
 {
 	sg_configuration_plane_t plane;
 	uint32_t first_vertex;
 	uint32_t vertex_count;
+	sg_configuration_face_kind_t kind;
 } sg_configuration_face_t;
 
 typedef uint32_t sg_configuration_pose_flags_t;
@@ -182,5 +189,14 @@ int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out);
 void SG_ConfigurationDestroy(sg_configuration_space_t *space);
 const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code);
+
+#if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationTestConstraintFacetWinding(void);
+int SG_ConfigurationTestConstraintPortal(
+	const sg_host_collision_authority_t *authority);
+int SG_ConfigurationTestHostValidatedCandidate(
+	const sg_host_collision_authority_t *authority, sg_rune_stance_t stance,
+	const int32_t primary[3], const int32_t fallback[3], float witness[3]);
+#endif
 
 #endif

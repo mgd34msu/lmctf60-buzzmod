@@ -671,6 +671,25 @@ static void TestTransactionalOverflowAndMutationAudit(void)
 	CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT);
 	semantics->faces[semantics->regions[0].first_face].distance = saved_distance;
 	face = semantics->regions[0].first_face;
+	semantics->faces[face].open ^= 1U;
+	CHECK(!SG_ConfigurationSemanticsAudit(&fixture.authority,
+		&fixture.configuration, semantics, &audit));
+	CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT);
+	semantics->faces[face].open ^= 1U;
+	{
+		sg_configuration_semantic_face_kind_t saved_kind =
+			semantics->faces[face].kind;
+
+		semantics->faces[face].kind = saved_kind ==
+			SG_CONFIGURATION_SEMANTIC_FACE_FACET ?
+			SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY :
+			SG_CONFIGURATION_SEMANTIC_FACE_FACET;
+		CHECK(!SG_ConfigurationSemanticsAudit(&fixture.authority,
+			&fixture.configuration, semantics, &audit));
+		CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT);
+		semantics->faces[face].kind = saved_kind;
+	}
+	face = semantics->regions[0].first_face;
 	while (face < semantics->regions[0].first_face +
 		semantics->regions[0].face_count &&
 		semantics->faces[face].vertex_count != 4U)
@@ -985,6 +1004,27 @@ static void TestMalformedSourceFailsClosed(void)
 	CHECK(error.code == SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE);
 	fixture = Fixture();
 	BindFixture(&fixture);
+	fixture.faces[0].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	CHECK(!SG_ConfigurationSemanticsBuild(&fixture.authority,
+		&fixture.configuration, &limits, &output, &error));
+	CHECK(output == NULL);
+	CHECK(error.code == SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE);
+	fixture = Fixture();
+	BindFixture(&fixture);
+	fixture.faces[0].vertex_count = 0;
+	CHECK(!SG_ConfigurationSemanticsBuild(&fixture.authority,
+		&fixture.configuration, &limits, &output, &error));
+	CHECK(output == NULL);
+	CHECK(error.code == SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE);
+	fixture = Fixture();
+	BindFixture(&fixture);
+	fixture.faces[0].kind = (sg_configuration_face_kind_t)2;
+	CHECK(!SG_ConfigurationSemanticsBuild(&fixture.authority,
+		&fixture.configuration, &limits, &output, &error));
+	CHECK(output == NULL);
+	CHECK(error.code == SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE);
+	fixture = Fixture();
+	BindFixture(&fixture);
 	{
 		sg_rune_vec3_t vertex = fixture.vertices[0];
 		fixture.vertices[0] = fixture.vertices[4];
@@ -1006,7 +1046,8 @@ static void TestConfigurationBuilderComposition(void)
 	sg_configuration_semantics_error_t semantics_error;
 	sg_configuration_semantics_audit_result_t semantics_audit;
 	sg_configuration_semantics_limits_t limits;
-	uint32_t leaf;
+	uint32_t leaf, constraint_cell = SG_CONFIGURATION_INDEX_NONE;
+	float saved_bound = 0.0f;
 
 	fixture.models[0].headnode = 1;
 	fixture.world.model_count = 1;
@@ -1023,11 +1064,18 @@ static void TestConfigurationBuilderComposition(void)
 		&configuration_error));
 	if (!configuration)
 		return;
-	if (!SG_ConfigurationAudit(&fixture.authority, configuration,
-		&configuration_audit))
-		fprintf(stderr, "configuration composition audit failed: %s record=%u\n",
-			SG_ConfigurationAuditCodeString(configuration_audit.code),
-			configuration_audit.record);
+	for (leaf = 0; leaf < configuration->cell_count; leaf++)
+	{
+		uint32_t face;
+
+		for (face = 0; face < configuration->cells[leaf].face_count; face++)
+			if (configuration->faces[configuration->cells[leaf].first_face + face].kind ==
+				SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+				constraint_cell = leaf;
+	}
+	CHECK(constraint_cell != SG_CONFIGURATION_INDEX_NONE);
+	CHECK(SG_ConfigurationAudit(&fixture.authority, configuration,
+		&configuration_audit));
 	CHECK(configuration_audit.code == SG_CONFIGURATION_AUDIT_OK);
 	SG_ConfigurationSemanticsDefaultLimits(&limits);
 	CHECK(SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
@@ -1037,8 +1085,31 @@ static void TestConfigurationBuilderComposition(void)
 		CHECK(SG_ConfigurationSemanticsAudit(&fixture.authority, configuration,
 			semantics, &semantics_audit));
 		CHECK(semantics->region_count >= configuration->cell_count);
+		if (constraint_cell != SG_CONFIGURATION_INDEX_NONE)
+		{
+			saved_bound = configuration->cells[constraint_cell].bounds.maxs.value[0];
+			configuration->cells[constraint_cell].bounds.maxs.value[0] =
+				saved_bound + 0.125f;
+			CHECK(!SG_ConfigurationSemanticsAudit(&fixture.authority, configuration,
+				semantics, &semantics_audit));
+			CHECK(semantics_audit.code ==
+				SG_CONFIGURATION_SEMANTICS_AUDIT_SOURCE_MISMATCH);
+			configuration->cells[constraint_cell].bounds.maxs.value[0] = saved_bound;
+		}
 	}
 	SG_ConfigurationSemanticsDestroy(semantics);
+	semantics = NULL;
+	if (constraint_cell != SG_CONFIGURATION_INDEX_NONE)
+	{
+		configuration->cells[constraint_cell].bounds.maxs.value[0] =
+			saved_bound + 0.125f;
+		CHECK(!SG_ConfigurationSemanticsBuild(&fixture.authority, configuration,
+			&limits, &semantics, &semantics_error));
+		CHECK(semantics == NULL);
+		CHECK(semantics_error.code ==
+			SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE);
+		configuration->cells[constraint_cell].bounds.maxs.value[0] = saved_bound;
+	}
 	SG_ConfigurationDestroy(configuration);
 }
 
@@ -1127,6 +1198,7 @@ static void TestConfigurationBuilderCanonicalNearCorner(void)
 
 int main(void)
 {
+	CHECK(SG_ConfigurationSemanticsTestMixedConstraintMesh());
 	TestVolumetricWaterAndAudit();
 	TestThinBrushSupportFractionPartition();
 	TestSurfaceAuthorityAndNoPickupObstruction();

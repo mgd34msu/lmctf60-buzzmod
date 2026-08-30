@@ -800,6 +800,7 @@ static int IssueSupportWitness(const sg_external_force_build_t *build,
 
 		memcpy(spaces[count].normal, face->normal, sizeof(face->normal));
 		spaces[count].distance = face->distance;
+		spaces[count].open = face->open != 0U;
 		count++;
 	}
 	memset(&transform, 0, sizeof(transform));
@@ -1597,6 +1598,7 @@ static int AuditFindStandingOrigin(const sg_external_force_build_t *build,
 		memcpy(constraints[constraint_count].normal, source->normal,
 			sizeof(source->normal));
 		constraints[constraint_count].distance = source->distance;
+		constraints[constraint_count].open = source->open != 0U;
 		constraint_count++;
 	}
 	memset(&statistics, 0, sizeof(statistics));

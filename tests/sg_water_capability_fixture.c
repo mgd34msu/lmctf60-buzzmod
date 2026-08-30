@@ -92,6 +92,7 @@ static void SetSemanticFace(sg_configuration_semantic_face_t *face,
 	face->source_kind = source_kind;
 	face->source_index = source_index;
 	face->reversed = reversed;
+	face->kind = SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY;
 }
 
 static void SetRegionBox(water_fixture_t *fixture, uint32_t region_index,

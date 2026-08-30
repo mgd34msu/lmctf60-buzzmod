@@ -186,6 +186,65 @@ static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
 	uint32_t *leaf_out);
 static int ValidateCellMesh(const sg_configuration_space_t *configuration,
 	uint32_t cell_index);
+static int AuditSourceCellMesh(
+	const sg_configuration_space_t *configuration, uint32_t cell_index);
+
+static int CellQ8Bounds(const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, float mins[3], float maxs[3])
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	uint32_t local, axis;
+
+	if (!cell->face_count)
+		return 0;
+	#if SIZE_MAX == UINT32_MAX
+	if ((size_t)cell->face_count > SIZE_MAX / sizeof(*halfspaces))
+		return -1;
+	#endif
+	halfspaces = malloc((size_t)cell->face_count * sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (local = 0; local < cell->face_count; local++)
+	{
+		const sg_configuration_plane_t *plane = &configuration->faces[
+			cell->first_face + local].plane;
+
+		Copy3(halfspaces[local].normal, plane->normal);
+		halfspaces[local].distance = plane->distance;
+		halfspaces[local].open = plane->source_kind ==
+			SG_CONFIGURATION_PLANE_EXPANDED_BRUSH && plane->reversed != 0U;
+	}
+	for (axis = 0; axis < 3U; axis++)
+	{
+		int32_t minimum, maximum;
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int result;
+
+		result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
+			cell->face_count, axis, &minimum, &maximum, &stats);
+		if (result <= 0)
+		{
+			free(halfspaces);
+			return result;
+		}
+		mins[axis] = (float)minimum * 0.125f;
+		maxs[axis] = (float)maximum * 0.125f;
+	}
+	free(halfspaces);
+	return 1;
+}
+
+static int CellUsesQ8Bounds(const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell)
+{
+	uint32_t local;
+
+	for (local = 0; local < cell->face_count; local++)
+		if (configuration->faces[cell->first_face + local].kind ==
+			SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+			return 1;
+	return 0;
+}
 
 static int ValidateSource(const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
@@ -215,7 +274,7 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 	{
 		const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
 		const sg_bsp_leaf_t *leaf;
-		uint32_t local;
+		uint32_t local, facet_vertex_count = 0;
 		float vertex_mins[3] = { INFINITY, INFINITY, INFINITY };
 		float vertex_maxs[3] = { -INFINITY, -INFINITY, -INFINITY };
 
@@ -251,7 +310,11 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 			if (!Finite3(face->plane.normal) ||
 				!isfinite(face->plane.distance) ||
 				Dot(face->plane.normal, face->plane.normal) <= 0.0f ||
-				face->vertex_count < 3U ||
+				face->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
+				(face->kind == SG_CONFIGURATION_FACE_FACET &&
+					face->vertex_count < 3U) ||
+				(face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY &&
+					face->vertex_count != 0U) ||
 				face->first_vertex > configuration->vertex_count ||
 				face->vertex_count > configuration->vertex_count -
 					face->first_vertex ||
@@ -338,7 +401,8 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 						if (value > vertex_maxs[axis])
 							vertex_maxs[axis] = value;
 					}
-				}
+			facet_vertex_count += face->vertex_count;
+		}
 		}
 		for (local = 0; local < cell->face_count; local++)
 		{
@@ -374,6 +438,21 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 						return 0;
 			}
 		}
+		if (CellUsesQ8Bounds(configuration, cell))
+		{
+			if (CellQ8Bounds(configuration, cell, vertex_mins,
+					vertex_maxs) != 1)
+			{
+				error->source_index = cell_index;
+				return 0;
+			}
+		}
+		else if (!facet_vertex_count)
+			for (local = 0; local < 3U; local++)
+			{
+				vertex_mins[local] = cell->interior_witness.value[local];
+				vertex_maxs[local] = cell->interior_witness.value[local];
+			}
 		for (local = 0; local < 3U; local++)
 			if (fabsf(cell->bounds.mins.value[local] - vertex_mins[local]) >
 					SEMANTICS_POINT_EPSILON ||
@@ -382,7 +461,7 @@ static int ValidateSource(const sg_host_collision_authority_t *authority,
 			{
 				error->source_index = cell_index;
 				return 0;
-			}
+		}
 		if (!ValidateCellMesh(configuration, cell_index))
 			return 0;
 	}
@@ -442,6 +521,45 @@ static int BuildSolveInterior(semantic_build_t *build,
 	return result;
 }
 
+static int BuildConstraintBounds(semantic_build_t *build,
+	const semantic_constraints_t *constraints, float mins[3], float maxs[3])
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	uint32_t index, axis;
+
+	if (!constraints->count)
+		return 0;
+	halfspaces = malloc((size_t)constraints->count * sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (index = 0; index < constraints->count; index++)
+		halfspaces[index] = constraints->items[index].halfspace;
+	for (axis = 0; axis < 3U; axis++)
+	{
+		int32_t minimum, maximum;
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int result;
+
+		result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
+			constraints->count, axis, &minimum, &maximum, &stats);
+		build->output->lattice_solve_calls += stats.solve_calls;
+		build->output->lattice_constraints += stats.constraints;
+		if (stats.maximum_binary_shift >
+			build->output->lattice_maximum_binary_shift)
+			build->output->lattice_maximum_binary_shift =
+				stats.maximum_binary_shift;
+		if (result <= 0)
+		{
+			free(halfspaces);
+			return result;
+		}
+		mins[axis] = (float)minimum * 0.125f;
+		maxs[axis] = (float)maximum * 0.125f;
+	}
+	free(halfspaces);
+	return 1;
+}
+
 static int AddCellConstraints(const sg_configuration_space_t *configuration,
 	uint32_t cell_index, semantic_constraints_t *constraints)
 {
@@ -457,6 +575,8 @@ static int AddCellConstraints(const sg_configuration_space_t *configuration,
 		memset(&constraint, 0, sizeof(constraint));
 		Copy3(constraint.halfspace.normal, face->plane.normal);
 		constraint.halfspace.distance = face->plane.distance;
+		constraint.halfspace.open = face->plane.source_kind ==
+			SG_CONFIGURATION_PLANE_EXPANDED_BRUSH && face->plane.reversed != 0U;
 		constraint.source_kind = SG_CONFIGURATION_SEMANTIC_PLANE_CELL;
 		constraint.source_index = face_index;
 		constraint.reversed = (uint8_t)(face->plane.reversed != 0U);
@@ -591,8 +711,18 @@ static int BuildSupportDecisions(semantic_build_t *build,
 			cell_index);
 		return 0;
 	}
-	if (!MarkModelBrushes(world, 0, brush_marks))
-		goto invalid_source;
+	{
+		int marked = MarkModelBrushes(world, 0, brush_marks);
+
+		if (marked < 0)
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
+				cell_index);
+			goto failure;
+		}
+		if (!marked)
+			goto invalid_source;
+	}
 	for (brush = 0; brush < world->brush_count; brush++)
 	{
 		const sg_bsp_brush_t *record = &world->brushes[brush];
@@ -880,13 +1010,67 @@ static int SameHalfspace(const sg_configuration_lattice_halfspace_t *left,
 		left->distance == right->distance;
 }
 
+static int CanonicalFacesMatch(const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, const sg_rune_vec3_t *points,
+	uint32_t point_count)
+{
+	uint32_t local;
+
+	for (local = 0; local < cell->face_count; local++)
+	{
+		const sg_configuration_face_t *face =
+			&configuration->faces[cell->first_face + local];
+		uint32_t expected = 0, point;
+		for (point = 0; point < point_count; point++)
+			if (fabsf(Dot(points[point].value, face->plane.normal) -
+				face->plane.distance) <= SEMANTICS_POINT_EPSILON * 4.0f)
+			{
+				uint32_t actual;
+				expected++;
+				if (face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+					continue;
+				for (actual = face->first_vertex;
+					actual < face->first_vertex + face->vertex_count; actual++)
+					if (SamePoint(&configuration->vertices[actual],
+						points[point].value))
+						break;
+				if (actual == face->first_vertex + face->vertex_count)
+					return 0;
+			}
+		if ((face->kind == SG_CONFIGURATION_FACE_FACET &&
+			expected != face->vertex_count) ||
+			(face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY && expected >= 3U))
+			return 0;
+	}
+	return 1;
+}
+
+static int CanonicalCellMeshValid(
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, const sg_rune_vec3_t *points,
+	uint32_t point_count)
+{
+	uint32_t local;
+
+	if (point_count < 4U)
+	{
+		for (local = 0; local < cell->face_count; local++)
+			if (configuration->faces[cell->first_face + local].kind ==
+				SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+				break;
+		if (local == cell->face_count)
+			return 0;
+	}
+	return CanonicalFacesMatch(configuration, cell, points, point_count);
+}
+
 static int ValidateCellMesh(const sg_configuration_space_t *configuration,
 	uint32_t cell_index)
 {
 	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
 	sg_rune_vec3_t *points = NULL;
 	uint32_t point_count = 0, point_capacity = 0;
-	uint32_t first, second, third, local;
+	uint32_t first, second, third;
 	int valid = 0;
 
 	for (first = 0; first < cell->face_count; first++)
@@ -933,36 +1117,67 @@ static int ValidateCellMesh(const sg_configuration_space_t *configuration,
 					goto done;
 				Copy3(points[point_count++].value, point);
 			}
-	if (point_count < 4U)
-		goto done;
-	for (local = 0; local < cell->face_count; local++)
-	{
-		const sg_configuration_face_t *face =
-			&configuration->faces[cell->first_face + local];
-		uint32_t expected = 0, point;
-		for (point = 0; point < point_count; point++)
-			if (fabsf(Dot(points[point].value, face->plane.normal) -
-				face->plane.distance) <= SEMANTICS_POINT_EPSILON * 4.0f)
-			{
-				uint32_t actual;
-				expected++;
-				for (actual = face->first_vertex;
-					actual < face->first_vertex + face->vertex_count; actual++)
-					if (SamePoint(&configuration->vertices[actual],
-						points[point].value))
-						break;
-				if (actual == face->first_vertex + face->vertex_count)
-					goto done;
-			}
-		if (expected != face->vertex_count)
-			goto done;
-	}
-	valid = 1;
+	valid = CanonicalCellMeshValid(configuration, cell, points, point_count);
 
 done:
 	free(points);
 	return valid;
 }
+
+#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
+int SG_ConfigurationSemanticsTestMixedConstraintMesh(void)
+{
+	sg_configuration_space_t space;
+	sg_configuration_cell_t cell;
+	sg_configuration_face_t faces[4];
+	sg_rune_vec3_t vertices[3];
+	int valid;
+
+	memset(&space, 0, sizeof(space));
+	memset(&cell, 0, sizeof(cell));
+	memset(faces, 0, sizeof(faces));
+	memset(vertices, 0, sizeof(vertices));
+	cell.face_count = 4U;
+	space.cells = &cell;
+	space.cell_count = 1U;
+	space.faces = faces;
+	space.face_count = 4U;
+	space.vertices = vertices;
+	space.vertex_count = 3U;
+	faces[0].plane.normal[2] = 1.0f;
+	faces[0].kind = SG_CONFIGURATION_FACE_FACET;
+	faces[0].vertex_count = 3U;
+	faces[1].plane.normal[0] = -1.0f;
+	faces[1].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	faces[2].plane.normal[1] = -1.0f;
+	faces[2].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	faces[3].plane.normal[0] = 1.0f;
+	faces[3].plane.normal[1] = 1.0f;
+	faces[3].plane.distance = 1.0f;
+	faces[3].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	vertices[1].value[1] = 1.0f;
+	vertices[2].value[0] = 1.0f;
+	valid = ValidateCellMesh(&space, 0U) && AuditSourceCellMesh(&space, 0U);
+	faces[1].kind = SG_CONFIGURATION_FACE_FACET;
+	valid = valid && !ValidateCellMesh(&space, 0U) &&
+		!AuditSourceCellMesh(&space, 0U);
+	faces[1].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	faces[0].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
+	faces[0].vertex_count = 0U;
+	valid = valid && !ValidateCellMesh(&space, 0U) &&
+		!AuditSourceCellMesh(&space, 0U);
+	faces[0].kind = SG_CONFIGURATION_FACE_FACET;
+	faces[0].vertex_count = 3U;
+	faces[1] = faces[0];
+	faces[2] = faces[0];
+	faces[3] = faces[0];
+	valid = valid && CanonicalFacesMatch(&space, &cell, vertices, 3U) &&
+		!CanonicalCellMeshValid(&space, &cell, vertices, 3U);
+	valid = valid && !ValidateCellMesh(&space, 0U) &&
+		!AuditSourceCellMesh(&space, 0U);
+	return valid;
+}
+#endif
 
 static uint32_t DominantAxis(const float normal[3])
 {
@@ -992,6 +1207,7 @@ static int BuildMesh(semantic_build_t *build,
 	sg_rune_vec3_t *face_points = NULL;
 	float bounds_min[3] = { INFINITY, INFINITY, INFINITY };
 	float bounds_max[3] = { -INFINITY, -INFINITY, -INFINITY };
+	int has_constraint_only = 0;
 
 	for (i = 0; i < constraints->count; i++)
 		for (j = i + 1U; j < constraints->count; j++)
@@ -1026,28 +1242,28 @@ static int BuildMesh(semantic_build_t *build,
 					if (point[axis] > bounds_max[axis]) bounds_max[axis] = point[axis];
 				}
 			}
-	if (all_count < 4U)
-	{
-		free(all);
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY,
-			region->cell);
-		return 0;
-	}
-	Copy3(region->bounds.mins.value, bounds_min);
-	Copy3(region->bounds.maxs.value, bounds_max);
 	region->first_face = build->output->face_count;
 	for (i = 0; i < constraints->count; i++)
 	{
-		uint32_t point_count = 0, point_capacity = 0, v, axis;
+		uint32_t point_count = 0, point_capacity = 0, published_count, v, axis;
 		float center[3] = { 0, 0, 0 };
 		sg_configuration_semantic_face_t *face;
+		uint32_t canonical = UINT32_MAX;
 		uint32_t prior;
 
-		for (prior = 0; prior < i; prior++)
+		for (prior = 0; prior < constraints->count; prior++)
 			if (SameHalfspace(&constraints->items[prior].halfspace,
 				&constraints->items[i].halfspace))
-				break;
-		if (prior != i)
+			{
+				if (canonical == UINT32_MAX)
+					canonical = prior;
+				if (constraints->items[prior].halfspace.open)
+				{
+					canonical = prior;
+					break;
+				}
+			}
+		if (canonical != i)
 			continue;
 
 		for (v = 0; v < all_count; v++)
@@ -1073,28 +1289,36 @@ static int BuildMesh(semantic_build_t *build,
 		{
 			free(face_points);
 			face_points = NULL;
-			continue;
+			point_capacity = 0;
+			has_constraint_only = 1;
 		}
-		for (v = 0; v < point_count; v++)
-			for (axis = 0; axis < 3; axis++) center[axis] += face_points[v].value[axis];
-		for (axis = 0; axis < 3; axis++) center[axis] /= (float)point_count;
-		axis = DominantAxis(constraints->items[i].halfspace.normal);
-		for (v = 1; v < point_count; v++)
+		else
 		{
-			sg_rune_vec3_t value = face_points[v];
-			float angle = FaceAngle(&value, axis, center);
-			uint32_t insert = v;
-			while (insert && FaceAngle(&face_points[insert - 1U], axis, center) > angle)
+			for (v = 0; v < point_count; v++)
+				for (axis = 0; axis < 3; axis++)
+					center[axis] += face_points[v].value[axis];
+			for (axis = 0; axis < 3; axis++)
+				center[axis] /= (float)point_count;
+			axis = DominantAxis(constraints->items[i].halfspace.normal);
+			for (v = 1; v < point_count; v++)
 			{
-				face_points[insert] = face_points[insert - 1U];
-				insert--;
+				sg_rune_vec3_t value = face_points[v];
+				float angle = FaceAngle(&value, axis, center);
+				uint32_t insert = v;
+				while (insert && FaceAngle(&face_points[insert - 1U], axis,
+					center) > angle)
+				{
+					face_points[insert] = face_points[insert - 1U];
+					insert--;
+				}
+				face_points[insert] = value;
 			}
-			face_points[insert] = value;
 		}
+		published_count = point_count >= 3U ? point_count : 0U;
 		if (build->output->face_count >= build->limits.max_faces ||
-			point_count > build->limits.max_vertices -
+			published_count > build->limits.max_vertices -
 				build->output->vertex_count ||
-			point_count > UINT32_MAX - build->output->vertex_count)
+			published_count > UINT32_MAX - build->output->vertex_count)
 		{
 			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW,
 				region->cell);
@@ -1105,7 +1329,7 @@ static int BuildMesh(semantic_build_t *build,
 			build->output->face_count + 1U, build->limits.max_faces,
 			sizeof(*build->output->faces)) ||
 			!Grow((void **)&build->output->vertices, &build->vertex_capacity,
-			build->output->vertex_count + point_count,
+			build->output->vertex_count + published_count,
 			build->limits.max_vertices, sizeof(*build->output->vertices)))
 		{
 			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
@@ -1117,19 +1341,51 @@ static int BuildMesh(semantic_build_t *build,
 		Copy3(face->normal, constraints->items[i].halfspace.normal);
 		face->distance = constraints->items[i].halfspace.distance;
 		face->first_vertex = build->output->vertex_count;
-		face->vertex_count = point_count;
+		face->vertex_count = published_count;
+		face->kind = published_count ?
+			SG_CONFIGURATION_SEMANTIC_FACE_FACET :
+			SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY;
 		face->source_kind = constraints->items[i].source_kind;
 		face->source_index = constraints->items[i].source_index;
 		face->source_variant = constraints->items[i].source_variant;
 		face->sample_index = constraints->items[i].sample_index;
 		face->reversed = constraints->items[i].reversed;
-		memcpy(&build->output->vertices[build->output->vertex_count], face_points,
-			(size_t)point_count * sizeof(*face_points));
-		build->output->vertex_count += point_count;
+		face->open = (uint8_t)(constraints->items[i].halfspace.open != 0);
+		if (published_count)
+		{
+			memcpy(&build->output->vertices[build->output->vertex_count],
+				face_points, (size_t)published_count * sizeof(*face_points));
+			build->output->vertex_count += published_count;
+		}
 		free(face_points);
 		face_points = NULL;
 	}
 	region->face_count = build->output->face_count - region->first_face;
+	if (has_constraint_only)
+	{
+		int bounds = BuildConstraintBounds(build, constraints,
+			region->bounds.mins.value, region->bounds.maxs.value);
+
+		if (bounds <= 0)
+		{
+			SetError(build, bounds < 0 ?
+				SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY :
+				SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY,
+				region->cell);
+			goto mesh_failure;
+		}
+	}
+	else
+	{
+		if (all_count < 4U)
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY,
+				region->cell);
+			goto mesh_failure;
+		}
+		Copy3(region->bounds.mins.value, bounds_min);
+		Copy3(region->bounds.maxs.value, bounds_max);
+	}
 	free(all);
 	return region->face_count >= 4U;
 
@@ -1473,6 +1729,8 @@ static int BuildBoundaries(semantic_build_t *build)
 				&build->configuration->faces[face_index];
 			sg_configuration_boundary_t boundary;
 
+			if (face->kind != SG_CONFIGURATION_FACE_FACET)
+				continue;
 			memset(&boundary, 0, sizeof(boundary));
 			boundary.id = ((uint64_t)cell_index << 32) | local;
 			boundary.cell = cell_index;
@@ -1561,7 +1819,7 @@ static int MarkModelBrushes(const sg_bsp_world_t *world, uint32_t model_index,
 	node_marks = calloc(world->node_count ? world->node_count : 1U, 1);
 	if (!node_marks || !Grow((void **)&stack, &stack_capacity, 1U,
 		UINT32_MAX, sizeof(*stack)))
-		goto done;
+		goto out_of_memory;
 	stack[stack_count++] = world->models[model_index].headnode;
 	while (stack_count)
 	{
@@ -1593,14 +1851,19 @@ static int MarkModelBrushes(const sg_bsp_world_t *world, uint32_t model_index,
 		if (node_marks[child])
 			continue;
 		node_marks[child] = 1;
-		if (stack_count > UINT32_MAX - 2U ||
-			!Grow((void **)&stack, &stack_capacity, stack_count + 2U,
-				UINT32_MAX, sizeof(*stack)))
+		if (stack_count > UINT32_MAX - 2U)
 			goto done;
+		if (!Grow((void **)&stack, &stack_capacity, stack_count + 2U,
+				UINT32_MAX, sizeof(*stack)))
+			goto out_of_memory;
 		stack[stack_count++] = world->nodes[child].children[1];
 		stack[stack_count++] = world->nodes[child].children[0];
 	}
 	result = 1;
+	goto done;
+
+out_of_memory:
+	result = -1;
 
 done:
 	free(node_marks);
@@ -1818,12 +2081,23 @@ static int BuildHookSurfaces(semantic_build_t *build)
 	{
 		uint32_t brush;
 		memset(brush_marks, 0, world->brush_count);
-		if (!MarkModelBrushes(world, model, brush_marks))
 		{
-			free(brush_marks);
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-				model);
-			return 0;
+			int marked = MarkModelBrushes(world, model, brush_marks);
+
+			if (marked < 0)
+			{
+				free(brush_marks);
+				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
+					model);
+				return 0;
+			}
+			if (!marked)
+			{
+				free(brush_marks);
+				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+					model);
+				return 0;
+			}
 		}
 		for (brush = 0; brush < world->brush_count; brush++)
 		{
@@ -2022,7 +2296,7 @@ static int AuditValidateSource(
 		const sg_bsp_leaf_t *leaf;
 		float mins[3] = { INFINITY, INFINITY, INFINITY };
 		float maxs[3] = { -INFINITY, -INFINITY, -INFINITY };
-		uint32_t local, witness_leaf;
+		uint32_t local, witness_leaf, facet_vertex_count = 0;
 
 		*source_out = cell_index;
 		if (cell->stance >= SG_RUNE_STANCE_COUNT || cell->face_count < 4U ||
@@ -2053,7 +2327,11 @@ static int AuditValidateSource(
 			*source_out = face_index;
 			if (!Finite3(face->plane.normal) || !isfinite(face->plane.distance) ||
 				Dot(face->plane.normal, face->plane.normal) <= 0.0f ||
-				face->vertex_count < 3U ||
+				face->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
+				(face->kind == SG_CONFIGURATION_FACE_FACET &&
+					face->vertex_count < 3U) ||
+				(face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY &&
+					face->vertex_count != 0U) ||
 				face->first_vertex > configuration->vertex_count ||
 				face->vertex_count > configuration->vertex_count -
 					face->first_vertex ||
@@ -2124,7 +2402,8 @@ static int AuditValidateSource(
 					if (value < mins[axis]) mins[axis] = value;
 					if (value > maxs[axis]) maxs[axis] = value;
 				}
-			}
+			facet_vertex_count += face->vertex_count;
+		}
 		}
 		for (local = 0; local < cell->face_count; local++)
 		{
@@ -2169,6 +2448,17 @@ static int AuditValidateSource(
 						return 0;
 			}
 		}
+		if (CellUsesQ8Bounds(configuration, cell))
+		{
+			if (CellQ8Bounds(configuration, cell, mins, maxs) != 1)
+				return 0;
+		}
+		else if (!facet_vertex_count)
+			for (local = 0; local < 3U; local++)
+			{
+				mins[local] = cell->interior_witness.value[local];
+				maxs[local] = cell->interior_witness.value[local];
+			}
 		for (local = 0; local < 3U; local++)
 			if (fabsf(cell->bounds.mins.value[local] - mins[local]) >
 					SEMANTICS_POINT_EPSILON ||
@@ -2533,6 +2823,7 @@ static int AuditSourceCellMesh(
 	sg_rune_vec3_t *vertices = NULL;
 	uint32_t count = 0, capacity = 0;
 	uint32_t i, j, k, face_index;
+	int has_constraint = 0;
 	int answer = 0;
 
 	for (i = 0; i < cell->face_count; i++)
@@ -2585,7 +2876,14 @@ static int AuditSourceCellMesh(
 					goto done;
 				Copy3(vertices[count++].value, point);
 			}
-	if (count < 4U)
+	for (face_index = 0; face_index < cell->face_count; face_index++)
+		if (configuration->faces[cell->first_face + face_index].kind ==
+			SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+		{
+			has_constraint = 1;
+			break;
+		}
+	if (count < 4U && !has_constraint)
 		goto done;
 	for (face_index = 0; face_index < cell->face_count; face_index++)
 	{
@@ -2602,6 +2900,8 @@ static int AuditSourceCellMesh(
 			{
 				uint32_t actual;
 				expected++;
+				if (face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
+					continue;
 				for (actual = face->first_vertex;
 					actual < face->first_vertex + face->vertex_count; actual++)
 					if (fabsf(configuration->vertices[actual].value[0] -
@@ -2615,7 +2915,9 @@ static int AuditSourceCellMesh(
 					goto done;
 			}
 		}
-		if (expected != face->vertex_count)
+		if ((face->kind == SG_CONFIGURATION_FACE_FACET &&
+			expected != face->vertex_count) ||
+			(face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY && expected >= 3U))
 			goto done;
 	}
 	answer = 1;
@@ -2625,7 +2927,48 @@ done:
 	return answer;
 }
 
-static int AuditMesh(const sg_configuration_semantics_t *semantics,
+static int AuditConstraintBounds(semantic_audit_t *audit,
+	const semantic_audit_constraints_t *constraints, float mins[3],
+	float maxs[3])
+{
+	sg_configuration_lattice_halfspace_t *halfspaces;
+	uint32_t index, axis;
+
+	if (!constraints->count)
+		return 0;
+	halfspaces = malloc((size_t)constraints->count * sizeof(*halfspaces));
+	if (!halfspaces)
+		return -1;
+	for (index = 0; index < constraints->count; index++)
+		halfspaces[index] = constraints->items[index].halfspace;
+	for (axis = 0; axis < 3U; axis++)
+	{
+		int32_t minimum, maximum;
+		sg_configuration_lattice_stats_t stats = { 0 };
+		int result;
+
+		result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
+			constraints->count, axis, &minimum, &maximum, &stats);
+		audit->result->lattice_solve_calls += stats.solve_calls;
+		audit->result->lattice_constraints += stats.constraints;
+		if (stats.maximum_binary_shift >
+			audit->result->lattice_maximum_binary_shift)
+			audit->result->lattice_maximum_binary_shift =
+				stats.maximum_binary_shift;
+		if (result <= 0)
+		{
+			free(halfspaces);
+			return result;
+		}
+		mins[axis] = (float)minimum * 0.125f;
+		maxs[axis] = (float)maximum * 0.125f;
+	}
+	free(halfspaces);
+	return 1;
+}
+
+static int AuditMesh(semantic_audit_t *audit,
+	const sg_configuration_semantics_t *semantics,
 	const sg_configuration_semantic_region_t *region,
 	const semantic_audit_constraints_t *constraints)
 {
@@ -2636,6 +2979,7 @@ static int AuditMesh(const sg_configuration_semantics_t *semantics,
 	uint32_t next_constraint = 0;
 	float bounds_min[3] = { INFINITY, INFINITY, INFINITY };
 	float bounds_max[3] = { -INFINITY, -INFINITY, -INFINITY };
+	int has_constraint_only = 0;
 	int valid = 0;
 
 	for (a = 0; a < constraints->count; a++)
@@ -2671,35 +3015,24 @@ static int AuditMesh(const sg_configuration_semantics_t *semantics,
 	active = calloc(constraints->count, 1);
 	if (!active)
 		goto done;
-	if (vertex_count < 4U)
-		goto done;
-	if (!Finite3(region->bounds.mins.value) ||
-		!Finite3(region->bounds.maxs.value))
-		goto done;
-	for (a = 0; a < vertex_count; a++)
-		for (b = 0; b < 3U; b++)
-		{
-			float value = vertices[a].value[b];
-			if (value < bounds_min[b])
-				bounds_min[b] = value;
-			if (value > bounds_max[b])
-				bounds_max[b] = value;
-		}
-	for (a = 0; a < 3U; a++)
-		if (fabsf(region->bounds.mins.value[a] - bounds_min[a]) >
-				SEMANTICS_POINT_EPSILON ||
-			fabsf(region->bounds.maxs.value[a] - bounds_max[a]) >
-				SEMANTICS_POINT_EPSILON)
-			goto done;
 	for (constraint = 0; constraint < constraints->count; constraint++)
 	{
 		uint32_t on_plane = 0, vertex;
+		uint32_t canonical = UINT32_MAX;
 		uint32_t prior;
-		for (prior = 0; prior < constraint; prior++)
+		for (prior = 0; prior < constraints->count; prior++)
 			if (SameHalfspace(&constraints->items[prior].halfspace,
 				&constraints->items[constraint].halfspace))
-				break;
-		if (prior != constraint)
+			{
+				if (canonical == UINT32_MAX)
+					canonical = prior;
+				if (constraints->items[prior].halfspace.open)
+				{
+					canonical = prior;
+					break;
+				}
+			}
+		if (canonical != constraint)
 			continue;
 		for (vertex = 0; vertex < vertex_count; vertex++)
 			if (fabsf(Dot(vertices[vertex].value,
@@ -2707,12 +3040,38 @@ static int AuditMesh(const sg_configuration_semantics_t *semantics,
 				constraints->items[constraint].halfspace.distance) <=
 				SEMANTICS_POINT_EPSILON * 4.0f)
 				on_plane++;
-		if (on_plane >= 3U)
-		{
-			active[constraint] = 1;
-			active_count++;
-		}
+		active[constraint] = on_plane >= 3U ? 1U : 2U;
+		has_constraint_only |= active[constraint] == 2U;
+		active_count++;
 	}
+	if (!Finite3(region->bounds.mins.value) ||
+		!Finite3(region->bounds.maxs.value))
+		goto done;
+	if (has_constraint_only)
+	{
+		if (AuditConstraintBounds(audit, constraints, bounds_min, bounds_max) != 1)
+			goto done;
+	}
+	else
+	{
+		if (vertex_count < 4U)
+			goto done;
+		for (a = 0; a < vertex_count; a++)
+			for (b = 0; b < 3U; b++)
+			{
+				float value = vertices[a].value[b];
+				if (value < bounds_min[b])
+					bounds_min[b] = value;
+				if (value > bounds_max[b])
+					bounds_max[b] = value;
+			}
+	}
+	for (a = 0; a < 3U; a++)
+		if (fabsf(region->bounds.mins.value[a] - bounds_min[a]) >
+				SEMANTICS_POINT_EPSILON ||
+			fabsf(region->bounds.maxs.value[a] - bounds_max[a]) >
+				SEMANTICS_POINT_EPSILON)
+			goto done;
 	if (region->face_count != active_count ||
 		region->first_face > semantics->face_count ||
 		region->face_count > semantics->face_count - region->first_face)
@@ -2727,7 +3086,7 @@ static int AuditMesh(const sg_configuration_semantics_t *semantics,
 		uint32_t expected_first_vertex;
 		uint32_t vertex;
 
-		if (actual->vertex_count < 3U ||
+		if (actual->kind > SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY ||
 			actual->first_vertex > semantics->vertex_count ||
 			actual->vertex_count > semantics->vertex_count - actual->first_vertex)
 			goto done;
@@ -2746,7 +3105,10 @@ static int AuditMesh(const sg_configuration_semantics_t *semantics,
 			actual->source_variant != expected->source_variant ||
 			actual->sample_index != expected->sample_index ||
 			actual->reversed != expected->reversed ||
-			actual->reserved[0] != 0U || actual->reserved[1] != 0U)
+			actual->open != expected->halfspace.open ||
+			actual->kind != (active[next_constraint - 1U] == 1U ?
+				SG_CONFIGURATION_SEMANTIC_FACE_FACET :
+				SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY))
 			goto done;
 		expected_first_vertex = face ?
 			semantics->faces[face - 1U].first_vertex +
@@ -2758,8 +3120,14 @@ static int AuditMesh(const sg_configuration_semantics_t *semantics,
 				expected->halfspace.normal) - expected->halfspace.distance) <=
 				SEMANTICS_POINT_EPSILON * 4.0f)
 				expected_vertex_count++;
-		if (actual->vertex_count != expected_vertex_count)
+		if ((actual->kind == SG_CONFIGURATION_SEMANTIC_FACE_FACET &&
+			(actual->vertex_count < 3U ||
+			actual->vertex_count != expected_vertex_count)) ||
+			(actual->kind == SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY &&
+				(actual->vertex_count != 0U || expected_vertex_count >= 3U)))
 			goto done;
+		if (actual->kind == SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY)
+			continue;
 		for (vertex = actual->first_vertex;
 			vertex < actual->first_vertex + actual->vertex_count; vertex++)
 		{
@@ -2857,7 +3225,7 @@ static int AuditTerminal(semantic_audit_t *audit,
 		audit->result->record = match;
 		return 0;
 	}
-	if (!AuditMesh(audit->semantics, &audit->semantics->regions[match],
+	if (!AuditMesh(audit, audit->semantics, &audit->semantics->regions[match],
 		constraints))
 	{
 		audit->result->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
@@ -3091,6 +3459,8 @@ static int AuditBoundaries(const sg_host_collision_authority_t *authority,
 			float expected_surface_distance = 0.0f;
 			uint32_t record, match_record = 0, matches = 0;
 
+			if (face->kind != SG_CONFIGURATION_FACE_FACET)
+				continue;
 			if (face->plane.source_kind == SG_CONFIGURATION_PLANE_DOMAIN)
 				flags = SG_CONFIGURATION_BOUNDARY_VOID;
 			else if (face->plane.source_kind ==
@@ -3552,6 +3922,9 @@ int SG_ConfigurationSemanticsAudit(
 				free(constraints.items);
 				goto audit_solver_failure;
 			}
+			constraints.items[constraints.count - 1U].halfspace.open =
+				face->plane.source_kind == SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
+				face->plane.reversed != 0U;
 		}
 		if (!AuditTree(&audit, 0, authority->world->models[0].headnode,
 			&constraints))

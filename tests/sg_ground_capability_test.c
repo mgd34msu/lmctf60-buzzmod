@@ -591,8 +591,12 @@ static void TestRamp(void)
 	fixture.semantics.face_count = 2U;
 	SetVector(fixture.semantic_faces[0].normal, -1.0f, 0.0f, 1.0f);
 	fixture.semantic_faces[0].distance = 40.25f;
+	fixture.semantic_faces[0].kind =
+		SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY;
 	SetVector(fixture.semantic_faces[1].normal, 1.0f, 0.0f, -1.0f);
 	fixture.semantic_faces[1].distance = -39.75f;
+	fixture.semantic_faces[1].kind =
+		SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY;
 	fixture.regions[0].first_face = 0U;
 	fixture.regions[0].face_count = 2U;
 	fixture.regions[2].first_face = 0U;
