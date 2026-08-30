@@ -1398,6 +1398,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-publication-test \
+	external-force-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
 	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
@@ -3992,6 +3993,14 @@ phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 		slipgate/sg_rune_model.h slipgate/sg_rune_model.c
 	$(E) [TEST] phase catalog publication
 	$(Q)sh tests/run_sg_phase_catalog_test.sh
+
+external-force-publication-test: \
+		tests/run_sg_external_force_publication_test.sh \
+		tests/sg_external_force_publication_test.c \
+		slipgate/sg_external_force_publication.c \
+		slipgate/sg_external_force_publication.h
+	$(E) [TEST] external force publication
+	$(Q)sh tests/run_sg_external_force_publication_test.sh
 
 rune-v2-exact-snapshot-test: tests/run_sg_rune_v2_exact_snapshot_test.sh \
 		tests/sg_rune_v2_content_identity_test.c \
