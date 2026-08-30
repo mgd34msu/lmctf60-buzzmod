@@ -5,7 +5,8 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
-strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
+strict='-std=c11 -DSG_BSP_COMPLETENESS_TESTING
+-Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 -Wformat=2 -Wcast-qual -Wcast-align'
 sources='tests/sg_ground_capability_test.c
