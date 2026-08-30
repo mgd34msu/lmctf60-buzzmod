@@ -656,26 +656,30 @@ static int IssueCollectModelBrushes(const sg_bsp_world_t *world,
 {
 	int32_t *stack;
 	uint8_t *visited_nodes;
-	uint8_t *visited_brushes;
+	uint32_t *ref_index_by_brush;
 	uint32_t stack_count = 0U;
+	uint32_t brush_index;
 
 	memset(refs, 0, sizeof(*refs));
 	if (model_index >= world->model_count || world->node_count == UINT32_MAX)
 		return 0;
 	stack = calloc((size_t)world->node_count + 1U, sizeof(*stack));
 	visited_nodes = calloc(world->node_count ? world->node_count : 1U, 1U);
-	visited_brushes = calloc(world->brush_count ? world->brush_count : 1U, 1U);
+	ref_index_by_brush = calloc(world->brush_count ? world->brush_count : 1U,
+		sizeof(*ref_index_by_brush));
 	refs->values = calloc(world->brush_count ? world->brush_count : 1U,
 		sizeof(*refs->values));
-	if (!stack || !visited_nodes || !visited_brushes || !refs->values)
+	if (!stack || !visited_nodes || !ref_index_by_brush || !refs->values)
 	{
 		free(stack);
 		free(visited_nodes);
-		free(visited_brushes);
+		free(ref_index_by_brush);
 		free(refs->values);
 		memset(refs, 0, sizeof(*refs));
 		return 0;
 	}
+	for (brush_index = 0U; brush_index < world->brush_count; brush_index++)
+		ref_index_by_brush[brush_index] = UINT32_MAX;
 	stack[stack_count++] = world->models[model_index].headnode;
 	while (stack_count != 0U)
 	{
@@ -716,25 +720,28 @@ static int IssueCollectModelBrushes(const sg_bsp_world_t *world,
 
 				if (brush >= world->brush_count)
 					goto invalid;
-				if (!visited_brushes[brush])
+				if (ref_index_by_brush[brush] == UINT32_MAX)
 				{
-					visited_brushes[brush] = 1U;
+					ref_index_by_brush[brush] = refs->count;
 					refs->values[refs->count].brush = brush;
 					refs->values[refs->count].leaf = leaf;
 					refs->count++;
 				}
+				else if (leaf < refs->values[
+					ref_index_by_brush[brush]].leaf)
+					refs->values[ref_index_by_brush[brush]].leaf = leaf;
 			}
 		}
 	}
 	free(stack);
 	free(visited_nodes);
-	free(visited_brushes);
+	free(ref_index_by_brush);
 	return 1;
 
 invalid:
 	free(stack);
 	free(visited_nodes);
-	free(visited_brushes);
+	free(ref_index_by_brush);
 	free(refs->values);
 	memset(refs, 0, sizeof(*refs));
 	return 0;
@@ -1421,8 +1428,8 @@ static void AuditTransformPlane(const sg_bsp_plane_t *plane,
 		output_normal[2] * entity->origin.value[2];
 }
 
-/* Audit starts from each candidate brush and independently proves that some
- * leaf reachable from the model headnode names it. */
+/* Audit starts from each candidate brush and independently finds the minimum
+ * reachable leaf that names it. */
 static int AuditBrushReachable(const sg_bsp_world_t *world,
 	uint32_t model_index, uint32_t sought_brush, uint32_t *leaf_out)
 {
@@ -1442,6 +1449,7 @@ static int AuditBrushReachable(const sg_bsp_world_t *world,
 		free(seen);
 		return -1;
 	}
+	*leaf_out = UINT32_MAX;
 	pending[pending_count++] = world->models[model_index].headnode;
 	while (pending_count != 0U)
 	{
@@ -1491,9 +1499,9 @@ static int AuditBrushReachable(const sg_bsp_world_t *world,
 				if (world->leaf_brushes[record->first_leaf_brush + offset] ==
 					sought_brush)
 				{
-					*leaf_out = leaf;
+					if (leaf < *leaf_out)
+						*leaf_out = leaf;
 					result = 1;
-					pending_count = 0U;
 					break;
 				}
 		}

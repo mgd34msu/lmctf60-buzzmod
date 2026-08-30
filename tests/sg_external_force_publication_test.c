@@ -306,7 +306,7 @@ static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 	static sg_bsp_node_t
 		expanded_nodes[EXTERNAL_DEEP_CONVEYOR_NODES + 9];
 	static sg_bsp_leaf_t expanded_leaves[9];
-	static uint32_t expanded_leaf_brushes[2];
+	static uint32_t expanded_leaf_brushes[3];
 	static sg_bsp_brush_t expanded_brushes[2];
 	static sg_bsp_brush_side_t expanded_brush_sides[12];
 	static const char text[] =
@@ -337,6 +337,7 @@ static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 	memset(expanded_leaf_brushes, 0, sizeof(expanded_leaf_brushes));
 	expanded_leaf_brushes[0] = fixture->leaf_brush;
 	expanded_leaf_brushes[1] = 1U;
+	expanded_leaf_brushes[2] = 1U;
 	memset(expanded_brushes, 0, sizeof(expanded_brushes));
 	expanded_brushes[0] = fixture->brush;
 	expanded_brushes[1] = fixture->brush;
@@ -378,6 +379,8 @@ static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 	expanded_leaves[5].leaf_brush_count = 1U;
 	memset(&expanded_leaves[6], 0, sizeof(expanded_leaves[6]));
 	expanded_leaves[6].cluster = -1;
+	expanded_leaves[6].first_leaf_brush = 2U;
+	expanded_leaves[6].leaf_brush_count = 1U;
 	for (index = 0U; index < 6U; index++)
 	{
 		uint32_t node_index = EXTERNAL_DEEP_CONVEYOR_NODES + 1U + index;
@@ -408,7 +411,7 @@ static void ExternalInstallEntityWorld(mechanism_fixture_t *fixture)
 	fixture->world.leaves = expanded_leaves;
 	fixture->world.leaf_count = 9U;
 	fixture->world.leaf_brushes = expanded_leaf_brushes;
-	fixture->world.leaf_brush_count = 2U;
+	fixture->world.leaf_brush_count = 3U;
 	fixture->world.brushes = expanded_brushes;
 	fixture->world.brush_count = 2U;
 	fixture->world.brush_sides = expanded_brush_sides;
@@ -697,6 +700,7 @@ static void TestAllAcceptedMechanismForces(void)
 		{
 			conveyors++;
 			CHECK_EXTERNAL(fact->source_model_index == 5U);
+			CHECK_EXTERNAL(fact->source_leaf_index == 5U);
 			CHECK_EXTERNAL(fact->source_brush_index == 1U);
 			CHECK_EXTERNAL(fact->source_brush_side_index == 4U);
 			CHECK_EXTERNAL((fact->source_contents &
