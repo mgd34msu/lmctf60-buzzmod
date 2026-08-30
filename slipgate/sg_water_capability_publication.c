@@ -9,6 +9,7 @@
 
 #include "sg_authority_entropy.h"
 #include "sg_configuration_lattice.h"
+#include "sg_host_law_construction_offline.h"
 
 #define PUBLICATION_STATE UINT32_C(0x57435031)
 #define PLANE_EPSILON 0.0001
@@ -58,8 +59,9 @@ typedef struct normalized_binding_s
  * falling back to a caller's callback, authority, phase array, or identity. */
 typedef struct normalized_source_s
 {
-	const sg_host_law_publication_t *host_laws;
-	const sg_host_collision_authority_t *authority;
+	const sg_host_law_construction_t *construction;
+	const sg_rune_model_identity_t *identity;
+	sg_host_law_construction_view_t construction_view;
 	sg_host_law_view_t host_law_view;
 	uint64_t host_law_identity;
 	const sg_configuration_space_t *configuration;
@@ -205,6 +207,17 @@ static int IdentityEqual(const sg_rune_model_identity_t *left,
 		HullEqual(&left->standing_hull, &right->standing_hull) &&
 		HullEqual(&left->crouching_hull, &right->crouching_hull) &&
 		PhysicsEqual(&left->physics, &right->physics);
+}
+
+static int IdentityMatchesHostStatic(
+	const sg_rune_model_identity_t *identity,
+	const sg_host_static_identity_t *host)
+{
+	return identity && host &&
+		identity->physics_abi_id == host->physics_abi_id &&
+		HullEqual(&identity->standing_hull, &host->standing_hull) &&
+		HullEqual(&identity->crouching_hull, &host->crouching_hull) &&
+		PhysicsEqual(&identity->physics, &host->physics);
 }
 
 static int HullValid(const sg_rune_hull_profile_t *hull)
@@ -416,16 +429,17 @@ static int RegionMatchesHost(const audit_t *audit, uint32_t region_index)
 		&audit->source->configuration->cells[region->cell];
 	const sg_rune_hull_profile_t *hull =
 		cell->stance == SG_RUNE_STANCE_CROUCHING ?
-		&audit->source->authority->identity.crouching_hull :
-		&audit->source->authority->identity.standing_hull;
+		&audit->source->identity->crouching_hull :
+		&audit->source->identity->standing_hull;
 	sg_host_collision_pose_t pose;
 	int supported = (region->flags &
 		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U;
 
-	return SG_HostCollisionClassifyPose(audit->source->authority, NULL,
-		region->interior_witness.value, cell->stance, &pose) && pose.valid &&
+	return SG_HostLawConstructionClassifyPose(audit->source->construction, NULL,
+		region->interior_witness.value, cell->stance, &pose).status ==
+			SG_HOST_LAW_OK && pose.valid &&
 		pose.stance == cell->stance && HullEqual(&pose.hull, hull) &&
-		pose.gravity == audit->source->authority->identity.physics.gravity &&
+		pose.gravity == audit->source->identity->physics.gravity &&
 		pose.physics_abi_id == audit->source->host_law_identity &&
 		(pose.supported != 0) == supported &&
 		pose.water_level == region->water_level &&
@@ -463,7 +477,7 @@ static int PhaseMatchesRegion(const audit_t *audit,
 		SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
 	if (!SG_RuneModelPhaseValid(phase) ||
 		phase->order.source_set_identity !=
-			audit->source->authority->identity.source_set_identity ||
+			audit->source->identity->source_set_identity ||
 		phase->stance != cell->stance || phase->medium != RegionMedium(region) ||
 		phase->void_relation != void_relation)
 		return 0;
@@ -479,7 +493,7 @@ static int PhaseMatchesRegion(const audit_t *audit,
 		phase->reference_frame == SG_RUNE_FRAME_WORLD &&
 		!SG_RuneModelStableIdValid(&phase->mover.value) &&
 		phase->order.source_set_identity ==
-			audit->source->authority->identity.source_set_identity &&
+			audit->source->identity->source_set_identity &&
 		phase->stance == cell->stance && phase->motion == motion &&
 		phase->support == support && phase->medium == RegionMedium(region) &&
 		phase->void_relation == void_relation;
@@ -594,20 +608,23 @@ static int PreflightSource(audit_t *audit)
 {
 	const normalized_source_t *source = audit->source;
 	const sg_configuration_space_t *configuration = source->configuration;
-	int bsp_proved;
-	int configuration_audited;
-	int semantics_audited;
+	sg_host_law_result_t bsp_result;
+	sg_host_law_result_t configuration_result;
+	sg_host_law_result_t semantics_result;
 
 	/* Run every independent prerequisite before deciding whether to issue.  The
 	 * individual results are then snapshotted with the publication, so a later
 	 * reader can tell which exact proof was accepted. */
-	bsp_proved = SG_BspCompletenessProve(source->authority, configuration,
+	bsp_result = SG_HostLawConstructionCompletenessProve(
+		source->construction, configuration,
 		&audit->result.bsp_completeness);
-	configuration_audited = SG_ConfigurationAudit(source->authority,
+	configuration_result = SG_HostLawConstructionConfigurationAudit(
+		source->construction,
 		configuration, &audit->result.configuration_audit);
-	semantics_audited = SG_ConfigurationSemanticsAudit(source->authority,
-		configuration, source->semantics, &audit->result.semantics_audit);
-	if (!bsp_proved ||
+	semantics_result = SG_HostLawConstructionSemanticsAudit(
+		source->construction, configuration, source->semantics,
+		&audit->result.semantics_audit);
+	if (bsp_result.status != SG_HOST_LAW_OK ||
 		audit->result.bsp_completeness.code != SG_BSP_COMPLETENESS_OK ||
 		audit->result.bsp_completeness.expected_cells !=
 			configuration->cell_count ||
@@ -630,7 +647,7 @@ static int PreflightSource(audit_t *audit)
 			audit->result.bsp_completeness.record, 0U);
 		return 0;
 	}
-	if (!configuration_audited ||
+	if (configuration_result.status != SG_HOST_LAW_OK ||
 		audit->result.configuration_audit.code != SG_CONFIGURATION_AUDIT_OK ||
 		audit->result.configuration_audit.proved_cells !=
 			configuration->cell_count ||
@@ -644,7 +661,7 @@ static int PreflightSource(audit_t *audit)
 			audit->result.configuration_audit.record, 0U);
 		return 0;
 	}
-	if (!semantics_audited ||
+	if (semantics_result.status != SG_HOST_LAW_OK ||
 		audit->result.semantics_audit.code !=
 			SG_CONFIGURATION_SEMANTICS_AUDIT_OK)
 	{
@@ -666,17 +683,14 @@ static int SourceValid(audit_t *audit,
 	sg_host_law_result_t host_result;
 	uint32_t region;
 
-	if (!input || !candidate || !input->host_laws || !input->configuration ||
+	if (!input || !candidate || !input->construction || !input->configuration ||
 		!input->semantics || !input->phase_catalog_owner ||
 		!input->phase_catalog)
 		return 0;
-	host_result = SG_HostLawPublicationRevalidateProduction(input->host_laws);
+	host_result = SG_HostLawConstructionCurrent(input->construction);
 	if (host_result.status != SG_HOST_LAW_OK ||
-		SG_HostLawPublicationRead(input->host_laws, &source->host_law_view).
-			status != SG_HOST_LAW_OK ||
-		SG_HostLawPublicationCollisionAuthority(input->host_laws,
-			&source->authority).status != SG_HOST_LAW_OK || !source->authority ||
-		!source->authority->world)
+		SG_HostLawConstructionRead(input->construction,
+			&source->construction_view).status != SG_HOST_LAW_OK)
 	{
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_HOST_LAW, 0U, 0U);
 		return 0;
@@ -687,20 +701,24 @@ static int SourceValid(audit_t *audit,
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_PHASE_CATALOG, 0U, 0U);
 		return 0;
 	}
-	source->host_laws = input->host_laws;
-	source->host_law_identity = source->host_law_view.identity.physics_abi_id;
+	source->construction = input->construction;
+	source->host_law_view = source->construction_view.laws;
 	source->configuration = input->configuration;
 	source->semantics = input->semantics;
 	configuration = source->configuration;
 	semantics = source->semantics;
-	if (!IdentityValid(&source->host_law_view.identity) ||
+	source->identity = &configuration->identity;
+	source->host_law_identity =
+		source->construction_view.host_static_identity.physics_abi_id;
+	if (!IdentityValid(source->identity) ||
 		source->host_law_identity == 0U ||
-		!IdentityEqual(&source->authority->identity,
-			&source->host_law_view.identity) ||
-		!IdentityEqual(&source->authority->identity, &configuration->identity) ||
-		!IdentityEqual(&source->authority->identity, &semantics->identity) ||
-		!IdentityEqual(&source->authority->identity, &candidate->identity) ||
-		!IdentityEqual(&source->authority->identity, &catalog->identity))
+		source->construction_view.version != SG_HOST_LAW_PUBLICATION_VERSION ||
+		source->construction_view.current != 1U ||
+		!IdentityMatchesHostStatic(source->identity,
+			&source->construction_view.host_static_identity) ||
+		!IdentityEqual(source->identity, &semantics->identity) ||
+		!IdentityEqual(source->identity, &candidate->identity) ||
+		!IdentityEqual(source->identity, &catalog->identity))
 	{
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_SOURCE_IDENTITY, 0U, 0U);
 		return 0;
@@ -754,7 +772,7 @@ static int SourceValid(audit_t *audit,
 	}
 	for (region = 0U; region < configuration->vertex_count; region++)
 		if (!Finite3(configuration->vertices[region].value)) return 0;
-	if (SG_HostLawPublicationRevalidateProduction(input->host_laws).status !=
+	if (SG_HostLawConstructionCurrent(input->construction).status !=
 		SG_HOST_LAW_OK)
 	{
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_HOST_LAW, 0U, 0U);
@@ -1045,8 +1063,8 @@ static int ResultMatchesDestination(const audit_t *audit,
 	stance = result->state.pm_flags & PMF_DUCKED ?
 		SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
 	hull = stance == SG_RUNE_STANCE_CROUCHING ?
-		&audit->source->authority->identity.crouching_hull :
-		&audit->source->authority->identity.standing_hull;
+		&audit->source->identity->crouching_hull :
+		&audit->source->identity->standing_hull;
 	for (axis = 0U; axis < 3U; axis++)
 		if (result->mins[axis] != hull->mins.value[axis] ||
 			result->maxs[axis] != hull->maxs.value[axis])
@@ -1150,16 +1168,16 @@ static int Probe(audit_t *audit, uint32_t source_region,
 		return 0;
 	}
 	request.state.gravity =
-		(short)audit->source->authority->identity.physics.gravity;
+		(short)audit->source->identity->physics.gravity;
 	request.previous_state = request.state;
 	CommandForDirection(direction, &request.command);
 	Copy3(fact->command_vector.value, direction);
-	if (SG_HostLawPublicationPmove(audit->source->host_laws, NULL, &request,
+	if (SG_HostLawConstructionPmove(audit->source->construction, NULL, &request,
 		&result, &error).status != SG_HOST_LAW_OK ||
 		result.physics_abi_id != audit->source->host_law_identity ||
-		result.gravity != audit->source->authority->identity.physics.gravity ||
+		result.gravity != audit->source->identity->physics.gravity ||
 		result.elapsed_ms !=
-			audit->source->authority->identity.physics.frame_ms ||
+			audit->source->identity->physics.frame_ms ||
 		result.state.pm_type != PM_NORMAL || !Finite3(result.origin) ||
 		!Finite3(result.velocity) || !Finite3(result.mins) ||
 		!Finite3(result.maxs) || result.water_level < 0 ||
@@ -1209,21 +1227,21 @@ static int Probe(audit_t *audit, uint32_t source_region,
 	fact->parameters.duration_ms.max_value = (float)result.elapsed_ms;
 	fact->parameters.speed.min_value = 0.0f;
 	fact->parameters.speed.max_value =
-		audit->source->authority->identity.physics.max_velocity;
+		audit->source->identity->physics.max_velocity;
 	fact->parameters.acceleration.min_value = 0.0f;
 	switch (audit->source->phases[fact->source_phase].motion)
 	{
 	case SG_RUNE_MOTION_SUPPORTED:
 		fact->parameters.acceleration.max_value =
-			audit->source->authority->identity.physics.ground_acceleration;
+			audit->source->identity->physics.ground_acceleration;
 		break;
 	case SG_RUNE_MOTION_AIRBORNE:
 		fact->parameters.acceleration.max_value =
-			audit->source->authority->identity.physics.air_acceleration;
+			audit->source->identity->physics.air_acceleration;
 		break;
 	case SG_RUNE_MOTION_SWIMMING:
 		fact->parameters.acceleration.max_value =
-			audit->source->authority->identity.physics.water_acceleration;
+			audit->source->identity->physics.water_acceleration;
 		break;
 	case SG_RUNE_MOTION_COUNT:
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_INVALID_PHASE,
@@ -1232,12 +1250,12 @@ static int Probe(audit_t *audit, uint32_t source_region,
 	}
 	fact->parameters.vertical_acceleration = fact->parameters.acceleration;
 	fact->parameters.gravity =
-		audit->source->authority->identity.physics.gravity;
+		audit->source->identity->physics.gravity;
 	fact->parameters.drag = fact->source_medium == SG_RUNE_MEDIUM_DRY ?
-		0.0f : audit->source->authority->identity.physics.water_drag;
+		0.0f : audit->source->identity->physics.water_drag;
 	fact->parameters.physics_abi_id = audit->source->host_law_identity;
 	fact->parameters.fixed_latency_ms =
-		audit->source->authority->identity.physics.frame_ms;
+		audit->source->identity->physics.frame_ms;
 	if (fact->source_medium != fact->destination_medium ||
 		fact->source_water_level != fact->destination_water_level)
 		fact->flags |= SG_WATER_CAPABILITY_STRADDLES_FRAME_LAW;
@@ -1317,9 +1335,10 @@ static int EnumerateLocalFacts(audit_t *audit)
 		if (record->water_level == 0U)
 			continue;
 		audit->result.wet_region_count++;
-		if (!SG_HostCollisionClassifyPose(audit->source->authority, NULL,
+		if (SG_HostLawConstructionClassifyPose(audit->source->construction, NULL,
 			record->interior_witness.value,
-			audit->source->configuration->cells[record->cell].stance, &pose) ||
+			audit->source->configuration->cells[record->cell].stance,
+			&pose).status != SG_HOST_LAW_OK ||
 			!pose.valid)
 		{
 			Fail(audit, SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT,
@@ -1691,10 +1710,10 @@ static int BoundaryDirection(audit_t *audit, uint32_t source_region,
 	uint32_t axis;
 	uint32_t binding;
 
-	if (!SG_HostCollisionTransition(audit->source->authority, NULL,
+	if (SG_HostLawConstructionTransition(audit->source->construction, NULL,
 		source_witness, destination_witness,
 		audit->source->configuration->cells[source->cell].stance,
-		&transition))
+		&transition).status != SG_HOST_LAW_OK)
 	{
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT,
 			source_region, 0U);
@@ -2701,11 +2720,12 @@ static int CopyPublishedFact(audit_t *audit,
 			fact->order, 0U);
 		return 0;
 	}
-	if (!SG_HostCollisionClassifyPose(source->authority, NULL,
-		fact->source_witness.value, source_cell->stance, &source_pose) ||
-		!SG_HostCollisionClassifyPose(source->authority, NULL,
-		fact->destination_witness.value, destination_cell->stance,
-		&destination_pose))
+	if (SG_HostLawConstructionClassifyPose(source->construction, NULL,
+			fact->source_witness.value, source_cell->stance,
+			&source_pose).status != SG_HOST_LAW_OK ||
+		SG_HostLawConstructionClassifyPose(source->construction, NULL,
+			fact->destination_witness.value, destination_cell->stance,
+			&destination_pose).status != SG_HOST_LAW_OK)
 	{
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT,
 			fact->order, 0U);
@@ -2714,8 +2734,9 @@ static int CopyPublishedFact(audit_t *audit,
 	for (axis = 0U; axis < 3U; axis++)
 		result_origin[axis] = fact->source_witness.value[axis] +
 			fact->observed_displacement.value[axis];
-	if (!SG_HostCollisionClassifyPose(source->authority, NULL, result_origin,
-		(source->phases[fact->destination_phase].stance), &result_pose) ||
+	if (SG_HostLawConstructionClassifyPose(source->construction, NULL,
+		result_origin, source->phases[fact->destination_phase].stance,
+		&result_pose).status != SG_HOST_LAW_OK ||
 		!source_pose.valid || !destination_pose.valid || !result_pose.valid)
 	{
 		Fail(audit, SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT,
@@ -2974,7 +2995,7 @@ static sg_water_capability_publication_t *CreatePublication(audit_t *audit)
 	publication->info.state = audit->fact_count != 0U ?
 		SG_WATER_CAPABILITY_PUBLICATION_COMPLETE :
 		SG_WATER_CAPABILITY_PUBLICATION_PROVEN_EMPTY;
-	publication->info.identity = source->authority->identity;
+	publication->info.identity = *source->identity;
 	publication->info.collision_law_id = source->host_law_view.collision_law_id;
 	publication->info.pmove_law_id = source->host_law_view.pmove_law_id;
 	publication->info.gravity_law_id = source->host_law_view.gravity_law_id;
@@ -3103,8 +3124,8 @@ int SG_WaterCapabilityPublicationIssue(
 		!EnumerateSameCellBoundaries(&audit) ||
 		!EnumeratePortalBoundaries(&audit) || !FinalizeExpected(&audit) ||
 		!CompareCandidate(&audit, candidate)) goto done;
-	if (SG_HostLawPublicationRevalidateProduction(
-		audit.source->host_laws).status != SG_HOST_LAW_OK)
+	if (SG_HostLawConstructionCurrent(
+		audit.source->construction).status != SG_HOST_LAW_OK)
 	{
 		Fail(&audit, SG_WATER_CAPABILITY_AUDIT_HOST_LAW, 0U, 0U);
 		goto done;

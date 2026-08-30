@@ -41,12 +41,55 @@ static cvar_t ctf_flags_cvar;
 static uint32_t bsp_calls;
 static uint32_t configuration_calls;
 static uint32_t semantics_calls;
+static uint32_t construction_pose_calls;
+static uint32_t construction_transition_calls;
+static uint32_t construction_pmove_calls;
 static int reject_bsp;
 static int reject_configuration;
 static int reject_semantics;
 static sg_phase_mover_support_provider_payload_t phase_provider;
 
 static void Set3(float value[3], float x, float y, float z);
+static void ProductionPmove(pmove_t *pmove);
+
+typedef struct test_construction_s
+{
+	const water_fixture_t *fixture;
+	void (*pmove)(pmove_t *pmove);
+} test_construction_t;
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionCurrent(
+	const sg_host_law_construction_t *construction);
+sg_host_law_result_t __wrap_SG_HostLawConstructionRead(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_construction_view_t *view_out);
+sg_host_law_result_t __wrap_SG_HostLawConstructionClassifyPose(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out);
+sg_host_law_result_t __wrap_SG_HostLawConstructionTransition(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out);
+sg_host_law_result_t __wrap_SG_HostLawConstructionPmove(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+sg_host_law_result_t __wrap_SG_HostLawConstructionCompletenessProve(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_bsp_completeness_result_t *proof_out);
+sg_host_law_result_t __wrap_SG_HostLawConstructionConfigurationAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_configuration_audit_result_t *audit_out);
+sg_host_law_result_t __wrap_SG_HostLawConstructionSemanticsAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	sg_configuration_semantics_audit_result_t *audit_out);
 
 int SG_AuthorityTokenMint(uintptr_t *token_out)
 {
@@ -257,11 +300,174 @@ int SG_ConfigurationSemanticsAudit(
 		!reject_semantics;
 }
 
+static sg_host_law_result_t TestConstructionResult(
+	sg_host_law_status_t status)
+{
+	sg_host_law_result_t result;
+
+	memset(&result, 0, sizeof(result));
+	result.status = status;
+	result.field = status == SG_HOST_LAW_OK ? SG_HOST_LAW_FIELD_NONE :
+		SG_HOST_LAW_FIELD_COLLISION_LAW;
+	result.element = SG_HOST_LAW_ELEMENT_NONE;
+	return result;
+}
+
+static const test_construction_t *TestConstruction(
+	const sg_host_law_construction_t *construction)
+{
+	return (const test_construction_t *)(const void *)construction;
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionCurrent(
+	const sg_host_law_construction_t *construction)
+{
+	const test_construction_t *test = TestConstruction(construction);
+
+	return TestConstructionResult(test && test->fixture && test->pmove &&
+		test->pmove == gi.Pmove ? SG_HOST_LAW_OK :
+		SG_HOST_LAW_PRODUCTION_DRIFT);
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionRead(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_construction_view_t *view_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+	const sg_rune_model_identity_t *identity;
+	sg_host_law_result_t result =
+		__wrap_SG_HostLawConstructionCurrent(construction);
+
+	if (!view_out)
+		return TestConstructionResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	memset(view_out, 0, sizeof(*view_out));
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	identity = &test->fixture->authority.identity;
+	view_out->version = SG_HOST_LAW_PUBLICATION_VERSION;
+	view_out->current = 1U;
+	view_out->level_generation = 1U;
+	view_out->host_static_identity.bsp_identity =
+		test->fixture->authority.content_identity;
+	view_out->host_static_identity.bsp_bytes = 1U;
+	view_out->host_static_identity.engine_checksum = 1U;
+	view_out->host_static_identity.entity_crc32 = 1U;
+	view_out->host_static_identity.host_physics_epoch = 1U;
+	view_out->host_static_identity.physics_abi_id = identity->physics_abi_id;
+	view_out->host_static_identity.standing_hull = identity->standing_hull;
+	view_out->host_static_identity.crouching_hull = identity->crouching_hull;
+	view_out->host_static_identity.physics = identity->physics;
+	view_out->geometry.bsp_identity =
+		view_out->host_static_identity.bsp_identity;
+	view_out->geometry.bsp_bytes = 1U;
+	view_out->laws.version = SG_HOST_LAW_PUBLICATION_VERSION;
+	view_out->laws.collision_law_id = UINT64_C(0x5741544552434f4c);
+	view_out->laws.pmove_law_id = UINT64_C(0x5741544552504d56);
+	view_out->laws.gravity_law_id = UINT64_C(0x5741544552475241);
+	view_out->laws.hook_law_id = UINT64_C(0x5741544552484f4f);
+	view_out->laws.mechanism_law_id = UINT64_C(0x57415445524d4543);
+	view_out->laws.static_identity = view_out->host_static_identity;
+	return result;
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionClassifyPose(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+	sg_host_law_result_t result =
+		__wrap_SG_HostLawConstructionCurrent(construction);
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	construction_pose_calls++;
+	return TestConstructionResult(SG_HostCollisionClassifyPose(
+		&test->fixture->authority, scene, origin, stance, pose_out) ?
+		SG_HOST_LAW_OK : SG_HOST_LAW_EVALUATION_FAILED);
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionTransition(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+	sg_host_law_result_t result =
+		__wrap_SG_HostLawConstructionCurrent(construction);
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	construction_transition_calls++;
+	return TestConstructionResult(SG_HostCollisionTransition(
+		&test->fixture->authority, scene, start, end, stance, transition_out) ?
+		SG_HOST_LAW_OK : SG_HOST_LAW_EVALUATION_FAILED);
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionPmove(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+	sg_host_law_result_t result =
+		__wrap_SG_HostLawConstructionCurrent(construction);
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	construction_pmove_calls++;
+	return TestConstructionResult(SG_HostPmoveEvaluateFrame(
+		&test->fixture->authority, scene, test->pmove, request, result_out,
+		error_out) ? SG_HOST_LAW_OK : SG_HOST_LAW_EVALUATION_FAILED);
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionCompletenessProve(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_bsp_completeness_result_t *proof_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+
+	return TestConstructionResult(test && SG_BspCompletenessProve(
+		&test->fixture->authority, configuration, proof_out) ?
+		SG_HOST_LAW_OK : SG_HOST_LAW_EVALUATION_FAILED);
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionConfigurationAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_configuration_audit_result_t *audit_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+
+	return TestConstructionResult(test && SG_ConfigurationAudit(
+		&test->fixture->authority, configuration, audit_out) ?
+		SG_HOST_LAW_OK : SG_HOST_LAW_EVALUATION_FAILED);
+}
+
+sg_host_law_result_t __wrap_SG_HostLawConstructionSemanticsAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	sg_configuration_semantics_audit_result_t *audit_out)
+{
+	const test_construction_t *test = TestConstruction(construction);
+
+	return TestConstructionResult(test && SG_ConfigurationSemanticsAudit(
+		&test->fixture->authority, configuration, semantics, audit_out) ?
+		SG_HOST_LAW_OK : SG_HOST_LAW_EVALUATION_FAILED);
+}
+
 static void ResetPreflight(void)
 {
 	bsp_calls = 0U;
 	configuration_calls = 0U;
 	semantics_calls = 0U;
+	construction_pose_calls = 0U;
+	construction_transition_calls = 0U;
+	construction_pmove_calls = 0U;
 	reject_bsp = 0;
 	reject_configuration = 0;
 	reject_semantics = 0;
@@ -430,7 +636,8 @@ static void InitFullModel(const water_fixture_t *water,
 
 typedef struct input_bundle_s
 {
-	sg_host_law_publication_t *host_laws;
+	test_construction_t construction_storage;
+	const sg_host_law_construction_t *construction;
 	sg_phase_catalog_publication_owner_t *phase_owner;
 	sg_phase_catalog_publication_t *phase_catalog;
 	sg_water_capability_publication_owner_t *water_owner;
@@ -548,19 +755,13 @@ static int PrepareBundleWithProvider(water_fixture_t *fixture,
 	input_bundle_t *bundle,
 	const sg_phase_mover_support_provider_payload_t *provider)
 {
-	sg_host_law_result_t host_result;
-
 	memset(bundle, 0, sizeof(*bundle));
 	BindFixtureToProductionPmoveLaw(fixture);
 	InitFullModel(fixture, &bundle->model);
-	host_result = SG_HostLawPublicationOwnerIssue(&fixture->authority,
-		&bundle->host_laws);
-	if (host_result.status != SG_HOST_LAW_OK)
-	{
-		fprintf(stderr, "host issue failed: status=%d field=%d element=%u\n",
-			(int)host_result.status, (int)host_result.field, host_result.element);
-		return 0;
-	}
+	bundle->construction_storage.fixture = fixture;
+	bundle->construction_storage.pmove = gi.Pmove;
+	bundle->construction = (const sg_host_law_construction_t *)(const void *)
+		&bundle->construction_storage;
 	if (!SG_PhaseCatalogPublicationOwnerCreate(&bundle->phase_owner) ||
 		!SG_WaterCapabilityPublicationOwnerCreate(&bundle->water_owner) ||
 		!BuildPhaseCatalog(fixture, bundle->phase_owner,
@@ -568,8 +769,7 @@ static int PrepareBundleWithProvider(water_fixture_t *fixture,
 	{
 		SG_WaterCapabilityPublicationOwnerDestroy(bundle->water_owner);
 		SG_PhaseCatalogPublicationOwnerDestroy(bundle->phase_owner);
-		SG_HostLawPublicationOwnerDestroy(bundle->host_laws);
-		bundle->host_laws = NULL;
+		bundle->construction = NULL;
 		bundle->phase_owner = NULL;
 		bundle->water_owner = NULL;
 		return 0;
@@ -588,7 +788,6 @@ static void DestroyBundle(input_bundle_t *bundle)
 		bundle->phase_catalog);
 	SG_WaterCapabilityPublicationOwnerDestroy(bundle->water_owner);
 	SG_PhaseCatalogPublicationOwnerDestroy(bundle->phase_owner);
-	SG_HostLawPublicationOwnerDestroy(bundle->host_laws);
 	memset(bundle, 0, sizeof(*bundle));
 }
 
@@ -597,10 +796,9 @@ static void DestroyBundleSources(input_bundle_t *bundle)
 	SG_PhaseCatalogPublicationDestroy(bundle->phase_owner,
 		bundle->phase_catalog);
 	SG_PhaseCatalogPublicationOwnerDestroy(bundle->phase_owner);
-	SG_HostLawPublicationOwnerDestroy(bundle->host_laws);
 	bundle->phase_catalog = NULL;
 	bundle->phase_owner = NULL;
-	bundle->host_laws = NULL;
+	bundle->construction = NULL;
 }
 
 static sg_water_capability_issue_source_t IssueSource(
@@ -609,7 +807,7 @@ static sg_water_capability_issue_source_t IssueSource(
 	sg_water_capability_issue_source_t source;
 
 	memset(&source, 0, sizeof(source));
-	source.host_laws = bundle->host_laws;
+	source.construction = bundle->construction;
 	source.configuration = &fixture->configuration;
 	source.semantics = &fixture->semantics;
 	source.phase_catalog_owner = bundle->phase_owner;
@@ -885,7 +1083,7 @@ static void TestAcceptedPublicationAndSourceDestruction(void)
 done:
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
 	SG_WaterCapabilityDestroy(candidate);
-	if (bundle.host_laws || bundle.phase_catalog || bundle.water_owner)
+	if (bundle.construction || bundle.phase_catalog || bundle.water_owner)
 		DestroyBundle(&bundle);
 }
 
@@ -928,6 +1126,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 
 	publication = NULL;
 	candidate = NULL;
+	ResetPreflight();
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
@@ -982,6 +1181,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 		else CHECK(0);
 	}
 	else CHECK(0);
+	CHECK(construction_transition_calls != 0U);
 	SG_WaterCapabilityDestroy(candidate);
 	candidate = NULL;
 	DestroyBundleSources(&bundle);
@@ -995,7 +1195,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 	else CHECK(0);
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
 	SG_WaterCapabilityDestroy(candidate);
-	if (bundle.host_laws || bundle.phase_catalog || bundle.water_owner)
+	if (bundle.construction || bundle.phase_catalog || bundle.water_owner)
 		DestroyBundle(&bundle);
 }
 
@@ -1007,9 +1207,10 @@ static void TestGroundAndCurrentLaws(void)
 	sg_water_capability_publication_t *publication = NULL;
 	sg_water_capability_publication_fact_t fact;
 	sg_water_capability_audit_result_t audit;
-	float saved_floor;
+	float saved_witness_z;
 
 	memset(&bundle, 0, sizeof(bundle));
+	ResetPreflight();
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 1, 0));
 	ConfigureSolidFloor(&fixture, -24.125f);
 	fixture.brush.contents = SG_HOST_CONTENTS_SOLID |
@@ -1049,14 +1250,16 @@ static void TestGroundAndCurrentLaws(void)
 			SG_HOST_CONTENTS_SOLID));
 	}
 	else CHECK(0);
+	CHECK(construction_pose_calls != 0U);
+	CHECK(construction_pmove_calls != 0U);
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
 	publication = NULL;
 
-	saved_floor = fixture.planes[5].distance;
-	fixture.planes[5].distance = -64.0f;
+	saved_witness_z = fixture.regions[0].interior_witness.value[2];
+	fixture.regions[0].interior_witness.value[2] = 32.0f;
 	CHECK(!Issue(&fixture, &bundle, candidate, &publication, &audit));
 	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
-	fixture.planes[5].distance = saved_floor;
+	fixture.regions[0].interior_witness.value[2] = saved_witness_z;
 	SG_WaterCapabilityDestroy(candidate);
 	DestroyBundle(&bundle);
 	sg_host.pmove = ProductionPmove;
@@ -1309,7 +1512,7 @@ static void TestSweepLineDenseBoundaries(void)
 done:
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
 	SG_WaterCapabilityDestroy(candidate);
-	if (bundle.host_laws || bundle.phase_catalog)
+	if (bundle.construction || bundle.phase_catalog)
 		DestroyBundle(&bundle);
 	free(faces);
 	free(regions);
@@ -1329,11 +1532,11 @@ static void TestAdversarialRejectionAndMetricAuthentication(void)
 	sg_water_capability_publication_t *publication = NULL;
 	sg_water_capability_audit_result_t audit;
 	sg_water_capability_issue_source_t source;
-	float saved_plane_distance;
+	float saved_witness;
 	uint64_t saved_u64;
 	uint32_t saved_u32;
 	uint32_t saved_fact_count;
-	int32_t saved_contents;
+	sg_host_collision_contents_t saved_contents;
 
 	memset(&bundle, 0, sizeof(bundle));
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER |
@@ -1368,12 +1571,12 @@ static void TestAdversarialRejectionAndMetricAuthentication(void)
 	sg_host.pmove = ProductionPmove;
 	gi.Pmove = ProductionPmove;
 
-	saved_plane_distance = fixture.planes[0].distance;
-	fixture.planes[0].distance = 40.0f;
+	saved_witness = fixture.regions[1].interior_witness.value[0];
+	fixture.regions[1].interior_witness.value[0] = -32.0f;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
 		&publication, &audit));
 	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
-	fixture.planes[0].distance = saved_plane_distance;
+	fixture.regions[1].interior_witness.value[0] = saved_witness;
 
 	fixture.regions[1].id += UINT64_C(10000);
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
@@ -1430,18 +1633,18 @@ static void TestAdversarialRejectionAndMetricAuthentication(void)
 	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
 	candidate->lattice_maximum_binary_shift = saved_u32;
 
-	saved_contents = fixture.leaves[0].contents;
-	fixture.leaves[0].contents = SG_HOST_CONTENTS_WATER;
+	saved_contents = fixture.regions[0].water_type;
+	fixture.regions[0].water_type = SG_HOST_CONTENTS_WATER;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
 		&publication, &audit));
 	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
-	fixture.leaves[0].contents = saved_contents;
+	fixture.regions[0].water_type = saved_contents;
 done:
 	sg_host.pmove = ProductionPmove;
 	gi.Pmove = ProductionPmove;
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
 	SG_WaterCapabilityDestroy(candidate);
-	if (bundle.host_laws || bundle.phase_catalog)
+	if (bundle.construction || bundle.phase_catalog)
 		DestroyBundle(&bundle);
 }
 

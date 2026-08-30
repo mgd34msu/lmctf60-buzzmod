@@ -73,9 +73,10 @@ typedef struct sg_water_capability_audit_result_s
 
 typedef struct sg_water_capability_issue_source_s
 {
-	/* The publication, not the caller, owns the accepted Pmove and collision
-	 * authority.  No callback or identity is accepted here. */
-	const sg_host_law_publication_t *host_laws;
+	/* The opaque construction owns the accepted BSP parse, collision, and
+	 * arbitrary offline Pmove. No authority, callback, or BSP storage crosses
+	 * this boundary. */
+	const sg_host_law_construction_t *construction;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	/* Only an immutable, complete phase-catalog publication can bind phases. */

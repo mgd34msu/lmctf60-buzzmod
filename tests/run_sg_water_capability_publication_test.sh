@@ -29,18 +29,26 @@ slipgate/sg_bsp_world.c
 slipgate/sg_rune_model.c'
 isl_cflags=$(pkg-config --cflags isl)
 isl_libs=$(pkg-config --libs isl)
+wraps='-Wl,--wrap=SG_HostLawConstructionCurrent'
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionRead"
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionClassifyPose"
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionTransition"
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionPmove"
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionCompletenessProve"
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionConfigurationAudit"
+wraps="$wraps -Wl,--wrap=SG_HostLawConstructionSemanticsAudit"
 
 cd "$repo_dir"
 for cc in gcc clang
 do
-	$cc $strict $isl_cflags -I. $sources -Wl,--gc-sections -lm $isl_libs \
+	$cc $strict $isl_cflags -I. $sources $wraps -Wl,--gc-sections -lm $isl_libs \
 		-o "$tmp_dir/water-capability-publication-$cc"
 	"$tmp_dir/water-capability-publication-$cc"
 done
 
 clang $strict $isl_cflags -fno-omit-frame-pointer \
 	-fsanitize=address,undefined -I. $sources -lm $isl_libs \
-	-Wl,--gc-sections -o "$tmp_dir/water-capability-publication-sanitize"
+	$wraps -Wl,--gc-sections -o "$tmp_dir/water-capability-publication-sanitize"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/water-capability-publication-sanitize"
