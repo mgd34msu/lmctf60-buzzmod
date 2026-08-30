@@ -89,6 +89,7 @@ typedef struct sg_water_capability_publication_binding_s
 	uint64_t semantic_region_id;
 	sg_rune_cell_ref_t cell;
 	sg_rune_phase_ref_t phase;
+	sg_phase_mechanism_state_mask_t mechanism_state_mask;
 } sg_water_capability_publication_binding_t;
 
 typedef struct sg_water_capability_publication_fact_s
@@ -228,5 +229,10 @@ void SG_WaterCapabilityPublicationDestroy(
 	sg_water_capability_publication_t *publication);
 const char *SG_WaterCapabilityAuditCodeString(
 	sg_water_capability_audit_code_t code);
+
+#ifdef SG_WATER_CAPABILITY_PUBLICATION_TESTING
+int SG_WaterCapabilityPublicationTestCounterAdd(uint32_t *value,
+	uint32_t amount, sg_water_capability_audit_result_t *audit_out);
+#endif
 
 #endif

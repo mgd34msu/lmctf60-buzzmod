@@ -9,6 +9,7 @@ strict='-DDEDICATED_ONLY -std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion'
 strict="$strict -Wsign-conversion -Wshadow -Wstrict-prototypes"
 strict="$strict -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align"
 strict="$strict -DSG_HOST_LAW_TESTING"
+strict="$strict -DSG_WATER_CAPABILITY_PUBLICATION_TESTING"
 strict="$strict -ffunction-sections -fdata-sections"
 sources='tests/sg_water_capability_publication_test.c
 tests/sg_water_capability_fixture.c

@@ -46,6 +46,13 @@ struct sg_water_capability_publication_owner_s
 	uintptr_t next_token;
 };
 
+typedef struct normalized_binding_s
+{
+	uint64_t semantic_region_id;
+	uint32_t phase;
+	sg_phase_mechanism_state_mask_t mechanism_state_mask;
+} normalized_binding_t;
+
 /* This internal view is filled only from accepted publications.  Keeping it
  * separate from the public issue input prevents the audit from accidentally
  * falling back to a caller's callback, authority, phase array, or identity. */
@@ -62,7 +69,7 @@ typedef struct normalized_source_s
 	const sg_rune_phase_transition_t *transitions;
 	const sg_phase_catalog_transition_evidence_t *transition_evidence;
 	uint32_t transition_count;
-	sg_water_phase_binding_t *bindings;
+	normalized_binding_t *bindings;
 	uint32_t binding_count;
 } normalized_source_t;
 
@@ -275,6 +282,70 @@ static void Fail(audit_t *audit, sg_water_capability_audit_code_t code,
 	audit->result.candidate_record = candidate_record;
 }
 
+static int CheckedAddU32(uint32_t *value, uint32_t amount)
+{
+	if (!value || amount > UINT32_MAX - *value)
+		return 0;
+	*value += amount;
+	return 1;
+}
+
+static int CheckedMulU32(uint32_t left, uint32_t right, uint32_t *value_out)
+{
+	if (!value_out || (left != 0U && right > UINT32_MAX / left))
+		return 0;
+	*value_out = left * right;
+	return 1;
+}
+
+static int CounterAdd(audit_t *audit, uint32_t *counter, uint32_t amount,
+	uint32_t source_record)
+{
+	if (CheckedAddU32(counter, amount))
+		return 1;
+	Fail(audit, SG_WATER_CAPABILITY_AUDIT_OVERFLOW, source_record, 0U);
+	return 0;
+}
+
+#ifdef SG_WATER_CAPABILITY_PUBLICATION_TESTING
+int SG_WaterCapabilityPublicationTestCounterAdd(uint32_t *value,
+	uint32_t amount, sg_water_capability_audit_result_t *audit_out)
+{
+	audit_t audit;
+	int success;
+
+	if (!audit_out)
+		return 0;
+	memset(&audit, 0, sizeof(audit));
+	audit.result.code = SG_WATER_CAPABILITY_AUDIT_OK;
+	success = CounterAdd(&audit, value, amount, UINT32_MAX);
+	*audit_out = audit.result;
+	return success;
+}
+#endif
+
+static uint32_t MechanismStateCount(
+	sg_phase_mechanism_state_mask_t state_mask)
+{
+	uint32_t count = 0U;
+
+	while (state_mask != 0U)
+	{
+		count += state_mask & 1U;
+		state_mask >>= 1U;
+	}
+	return count;
+}
+
+static uint32_t BindingMultiplicity(const audit_t *audit, uint32_t binding)
+{
+	const normalized_binding_t *record = &audit->source->bindings[binding];
+
+	return audit->source->phases[record->phase].reference_frame ==
+		SG_RUNE_FRAME_MOVER_RELATIVE ?
+		MechanismStateCount(record->mechanism_state_mask) : 1U;
+}
+
 static sg_rune_medium_t RegionMedium(
 	const sg_configuration_semantic_region_t *region)
 {
@@ -363,7 +434,8 @@ static int RegionMatchesHost(const audit_t *audit, uint32_t region_index)
 
 static int PhaseMatchesRegion(const audit_t *audit,
 	const sg_rune_phase_basis_t *phase,
-	const sg_configuration_semantic_region_t *region)
+	const sg_configuration_semantic_region_t *region,
+	sg_phase_mechanism_state_mask_t mechanism_state_mask)
 {
 	const sg_configuration_cell_t *cell =
 		&audit->source->configuration->cells[region->cell];
@@ -389,13 +461,28 @@ static int PhaseMatchesRegion(const audit_t *audit,
 	void_relation = region->flags &
 		SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT ?
 		SG_RUNE_VOID_ADJACENT : SG_RUNE_VOID_CLEAR;
-	return SG_RuneModelPhaseValid(phase) &&
+	if (!SG_RuneModelPhaseValid(phase) ||
+		phase->order.source_set_identity !=
+			audit->source->authority->identity.source_set_identity ||
+		phase->stance != cell->stance || phase->medium != RegionMedium(region) ||
+		phase->void_relation != void_relation)
+		return 0;
+	if (phase->reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE)
+		return phase->motion == SG_RUNE_MOTION_SUPPORTED &&
+			phase->support == SG_RUNE_SUPPORT_MOVER &&
+			SG_RuneModelStableIdValid(&phase->mover.value) &&
+			mechanism_state_mask != 0U &&
+			(mechanism_state_mask &
+				~(sg_phase_mechanism_state_mask_t)
+					SG_PHASE_MECHANISM_STATE_KNOWN) == 0U;
+	return mechanism_state_mask == 0U &&
+		phase->reference_frame == SG_RUNE_FRAME_WORLD &&
+		!SG_RuneModelStableIdValid(&phase->mover.value) &&
 		phase->order.source_set_identity ==
 			audit->source->authority->identity.source_set_identity &&
 		phase->stance == cell->stance && phase->motion == motion &&
 		phase->support == support && phase->medium == RegionMedium(region) &&
-		phase->void_relation == void_relation &&
-		phase->reference_frame == SG_RUNE_FRAME_WORLD;
+		phase->void_relation == void_relation;
 }
 
 static int PhaseIndexForReference(const sg_rune_phase_basis_t *phases,
@@ -488,6 +575,8 @@ static int NormalizePhaseCatalog(audit_t *audit,
 		source->bindings[binding].semantic_region_id =
 			record->semantic_region_id;
 		source->bindings[binding].phase = phase;
+		source->bindings[binding].mechanism_state_mask =
+			record->mechanism_state_mask;
 		phase_bound[phase] = 1U;
 	}
 	for (binding = 0U; binding < catalog->phase_count; binding++)
@@ -712,12 +801,13 @@ static int PrepareIndexes(audit_t *audit)
 			source->bindings[binding].semantic_region_id ==
 				source->semantics->regions[region].id)
 		{
-			const sg_water_phase_binding_t *record =
+			const normalized_binding_t *record =
 				&source->bindings[binding];
 
-			if (record->reserved != 0U || record->phase >= source->phase_count ||
+			if (record->phase >= source->phase_count ||
 				!PhaseMatchesRegion(audit, &source->phases[record->phase],
-					&source->semantics->regions[region]))
+					&source->semantics->regions[region],
+					record->mechanism_state_mask))
 			{
 				Fail(audit, SG_WATER_CAPABILITY_AUDIT_INVALID_PHASE,
 					binding, 0U);
@@ -1191,13 +1281,15 @@ static int LocalObligation(audit_t *audit, uint32_t region,
 	sg_host_pmove_result_t result;
 	uint32_t destination_phase;
 
-	audit->result.obligation_count++;
+	if (!CounterAdd(audit, &audit->result.obligation_count, 1U, region))
+		return 0;
 	if (!Probe(audit, region, fact->source_witness.value, direction, fact,
 		&result))
 		return 0;
 	if (!PointInRegion(audit, region, result.origin))
 	{
-		audit->result.proved_empty_count++;
+		if (!CounterAdd(audit, &audit->result.proved_empty_count, 1U, region))
+			return 0;
 		return 1;
 	}
 	if (!ResolveDestination(audit, region, &result, &destination_phase))
@@ -1244,6 +1336,36 @@ static int EnumerateLocalFacts(audit_t *audit)
 			uint32_t phase = audit->source->bindings[binding].phase;
 			uint32_t direction;
 			sg_water_capability_fact_t fact;
+			uint32_t mover_obligations = 0U;
+
+			if (audit->source->phases[phase].reference_frame ==
+				SG_RUNE_FRAME_MOVER_RELATIVE)
+			{
+				uint32_t state_obligations;
+
+				if (record->water_level >= 2U)
+					mover_obligations = 8U;
+				if (currents != 0U && !CheckedAddU32(&mover_obligations, 1U))
+				{
+					Fail(audit, SG_WATER_CAPABILITY_AUDIT_OVERFLOW, region, 0U);
+					return 0;
+				}
+				if (!CheckedMulU32(mover_obligations,
+						BindingMultiplicity(audit, binding), &state_obligations))
+				{
+					Fail(audit, SG_WATER_CAPABILITY_AUDIT_OVERFLOW, region, 0U);
+					return 0;
+				}
+				/* No accepted dynamic collision scene is present at this boundary.
+				 * Account for every accepted mechanism state as explicitly empty
+				 * instead of replaying a world-relative Pmove. */
+				if (!CounterAdd(audit, &audit->result.obligation_count,
+						state_obligations, region) ||
+					!CounterAdd(audit, &audit->result.proved_empty_count,
+						state_obligations, region))
+					return 0;
+				continue;
+			}
 
 			if (record->water_level >= 2U)
 			{
@@ -1583,12 +1705,22 @@ static int BoundaryDirection(audit_t *audit, uint32_t source_region,
 	length = sqrtf(Dot3(direction, direction));
 	if (!transition.clear || !isfinite(length) || length <= 0.0f)
 	{
+		uint32_t count = 0U;
+
 		for (binding = audit->binding_offsets[source_region];
 			binding < audit->binding_offsets[source_region + 1U]; binding++)
-		{
-			audit->result.obligation_count++;
-			audit->result.proved_empty_count++;
-		}
+			if (!CheckedAddU32(&count, BindingMultiplicity(audit, binding)))
+			{
+				Fail(audit, SG_WATER_CAPABILITY_AUDIT_OVERFLOW,
+					source_region, 0U);
+				return 0;
+			}
+
+		if (!CounterAdd(audit, &audit->result.obligation_count, count,
+				source_region) ||
+			!CounterAdd(audit, &audit->result.proved_empty_count, count,
+				source_region))
+			return 0;
 		return 1;
 	}
 	for (axis = 0U; axis < 3U; axis++) direction[axis] /= length;
@@ -1623,12 +1755,26 @@ static int BoundaryDirection(audit_t *audit, uint32_t source_region,
 			fact.flags |= SG_WATER_CAPABILITY_CHANGES_MEDIUM;
 		if (portal != SG_WATER_CAPABILITY_INDEX_NONE)
 			fact.flags |= SG_WATER_CAPABILITY_CROSSES_PORTAL;
-		audit->result.obligation_count++;
+		if (!CounterAdd(audit, &audit->result.obligation_count,
+				BindingMultiplicity(audit, binding),
+				source_region))
+			return 0;
+		if (audit->source->phases[fact.source_phase].reference_frame ==
+			SG_RUNE_FRAME_MOVER_RELATIVE)
+		{
+			if (!CounterAdd(audit, &audit->result.proved_empty_count,
+					BindingMultiplicity(audit, binding),
+					source_region))
+				return 0;
+			continue;
+		}
 		if (!Probe(audit, source_region, source_witness, direction, &fact,
 			&result)) return 0;
 		if (!PointInRegion(audit, destination_region, result.origin))
 		{
-			audit->result.proved_empty_count++;
+			if (!CounterAdd(audit, &audit->result.proved_empty_count, 1U,
+					source_region))
+				return 0;
 			continue;
 		}
 		if (!ResolveDestination(audit, destination_region, &result,
@@ -2810,6 +2956,8 @@ static sg_water_capability_publication_t *CreatePublication(audit_t *audit)
 			source->semantics->regions[region].cell].id;
 		publication->bindings[binding].phase = source->phases[
 			source->bindings[binding].phase].id;
+		publication->bindings[binding].mechanism_state_mask =
+			source->bindings[binding].mechanism_state_mask;
 	}
 	for (fact = 0U; fact < audit->fact_count; fact++)
 		if (!CopyPublishedFact(audit, &audit->facts[fact],

@@ -44,7 +44,7 @@ static uint32_t semantics_calls;
 static int reject_bsp;
 static int reject_configuration;
 static int reject_semantics;
-static sg_phase_mover_support_provider_payload_t empty_phase_provider;
+static sg_phase_mover_support_provider_payload_t phase_provider;
 
 static void Set3(float value[3], float x, float y, float z);
 
@@ -160,8 +160,9 @@ int SG_PhaseMoverSupportProviderHeaderValid(
 	const sg_phase_mover_support_provider_t *provider)
 {
 	return owner != NULL && provider != NULL &&
-		empty_phase_provider.completion == SG_PHASE_CATALOG_PROVEN_EMPTY &&
-		empty_phase_provider.verifier_identity != 0U;
+		phase_provider.completion >= SG_PHASE_CATALOG_COMPLETE &&
+		phase_provider.completion < SG_PHASE_CATALOG_COMPLETION_COUNT &&
+		phase_provider.verifier_identity != 0U;
 }
 
 sg_phase_mover_support_provider_payload_t *
@@ -169,7 +170,7 @@ SG_PhaseMoverSupportProviderPayload(
 	const sg_phase_mover_support_provider_owner_t *owner,
 	const sg_phase_mover_support_provider_t *provider)
 {
-	return owner != NULL && provider != NULL ? &empty_phase_provider : NULL;
+	return owner != NULL && provider != NULL ? &phase_provider : NULL;
 }
 
 int CTF_HookPullVelocity(const vec3_t start, const vec3_t bite,
@@ -438,7 +439,8 @@ typedef struct input_bundle_s
 
 static int BuildPhaseCatalog(const water_fixture_t *fixture,
 	sg_phase_catalog_publication_owner_t *owner,
-	sg_phase_catalog_publication_t **publication_out)
+	sg_phase_catalog_publication_t **publication_out,
+	const sg_phase_mover_support_provider_payload_t *provider)
 {
 	sg_phase_catalog_source_t source;
 	sg_phase_catalog_t *catalog = NULL;
@@ -451,10 +453,15 @@ static int BuildPhaseCatalog(const water_fixture_t *fixture,
 	source.authority = &fixture->authority;
 	source.configuration = &fixture->configuration;
 	source.semantics = &fixture->semantics;
-	memset(&empty_phase_provider, 0, sizeof(empty_phase_provider));
-	empty_phase_provider.identity = fixture->semantics.identity;
-	empty_phase_provider.completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
-	empty_phase_provider.verifier_identity = UINT64_C(0x5741544552504853);
+	if (provider)
+		phase_provider = *provider;
+	else
+	{
+		memset(&phase_provider, 0, sizeof(phase_provider));
+		phase_provider.completion = SG_PHASE_CATALOG_PROVEN_EMPTY;
+		phase_provider.verifier_identity = UINT64_C(0x5741544552504853);
+	}
+	phase_provider.identity = fixture->semantics.identity;
 	source.mover_support_owner =
 		(const sg_phase_mover_support_provider_owner_t *)(const void *)fixture;
 	source.mover_support_provider =
@@ -490,6 +497,7 @@ static int BuildCandidate(const water_fixture_t *fixture,
 	sg_water_phase_binding_t *bindings = NULL;
 	sg_water_capability_error_t error;
 	uint32_t binding;
+	uint32_t world_binding_count = 0U;
 	int success = 0;
 
 	if (!candidate_out || *candidate_out ||
@@ -501,16 +509,23 @@ static int BuildCandidate(const water_fixture_t *fixture,
 		return 0;
 	for (binding = 0U; binding < view->binding_count; binding++)
 	{
-		bindings[binding].semantic_region_id =
-			view->bindings[binding].semantic_region_id;
-		if (!PhaseIndex(view, view->bindings[binding].phase,
-			&bindings[binding].phase))
+		uint32_t phase;
+
+		if (!PhaseIndex(view, view->bindings[binding].phase, &phase))
 			goto done;
+		/* The legacy candidate builder owns only world-relative replay.  The
+		 * publication independently accounts for accepted mover-relative phases. */
+		if (view->phases[phase].reference_frame != SG_RUNE_FRAME_WORLD)
+			continue;
+		bindings[world_binding_count].semantic_region_id =
+			view->bindings[binding].semantic_region_id;
+		bindings[world_binding_count].phase = phase;
+		world_binding_count++;
 	}
 	success = sg_host.pmove && SG_WaterCapabilityBuild(&fixture->authority,
 		sg_host.pmove,
 		&fixture->configuration, &fixture->semantics, view->phases,
-		view->phase_count, bindings, view->binding_count, candidate_out, &error);
+		view->phase_count, bindings, world_binding_count, candidate_out, &error);
 done:
 	free(bindings);
 	return success;
@@ -529,7 +544,9 @@ static void BindFixtureToProductionPmoveLaw(water_fixture_t *fixture)
 		SG_RUNE_PROOF_PMOVE_SUBSTEP_MS;
 }
 
-static int PrepareBundle(water_fixture_t *fixture, input_bundle_t *bundle)
+static int PrepareBundleWithProvider(water_fixture_t *fixture,
+	input_bundle_t *bundle,
+	const sg_phase_mover_support_provider_payload_t *provider)
 {
 	sg_host_law_result_t host_result;
 
@@ -547,7 +564,7 @@ static int PrepareBundle(water_fixture_t *fixture, input_bundle_t *bundle)
 	if (!SG_PhaseCatalogPublicationOwnerCreate(&bundle->phase_owner) ||
 		!SG_WaterCapabilityPublicationOwnerCreate(&bundle->water_owner) ||
 		!BuildPhaseCatalog(fixture, bundle->phase_owner,
-			&bundle->phase_catalog))
+			&bundle->phase_catalog, provider))
 	{
 		SG_WaterCapabilityPublicationOwnerDestroy(bundle->water_owner);
 		SG_PhaseCatalogPublicationOwnerDestroy(bundle->phase_owner);
@@ -558,6 +575,11 @@ static int PrepareBundle(water_fixture_t *fixture, input_bundle_t *bundle)
 		return 0;
 	}
 	return 1;
+}
+
+static int PrepareBundle(water_fixture_t *fixture, input_bundle_t *bundle)
+{
+	return PrepareBundleWithProvider(fixture, bundle, NULL);
 }
 
 static void DestroyBundle(input_bundle_t *bundle)
@@ -631,6 +653,32 @@ static int FindFact(const sg_water_capability_publication_owner_t *owner,
 	return 0;
 }
 
+static int FindTransitionByReference(
+	const sg_water_capability_publication_owner_t *owner,
+	const sg_water_capability_publication_t *publication,
+	sg_rune_phase_transition_ref_t reference,
+	sg_rune_phase_transition_t *transition_out,
+	sg_phase_catalog_transition_evidence_t *evidence_out)
+{
+	sg_water_capability_publication_info_t info;
+	uint32_t index;
+
+	if (!SG_WaterCapabilityPublicationInfo(owner, publication, &info))
+		return 0;
+	for (index = 0U; index < info.transition_count; index++)
+	{
+		if (!SG_WaterCapabilityPublicationTransition(owner, publication, index,
+			transition_out) ||
+			!SG_WaterCapabilityPublicationTransitionEvidence(owner, publication,
+				index, evidence_out))
+			return 0;
+		if (SG_RuneModelStableIdEqual(&transition_out->id.value,
+			&reference.value))
+			return 1;
+	}
+	return 0;
+}
+
 static void MakeRegionWet(water_fixture_t *fixture, uint32_t index,
 	uint32_t contents)
 {
@@ -660,6 +708,47 @@ static void MakeRegionDry(water_fixture_t *fixture, uint32_t index,
 	region->water_type = contents;
 	region->water_level = 0U;
 	region->flags = flags;
+}
+
+static sg_rune_mechanism_ref_t TestMechanism(const water_fixture_t *fixture,
+	uint32_t index)
+{
+	sg_rune_order_key_t order;
+	sg_rune_mechanism_ref_t mechanism;
+
+	memset(&order, 0, sizeof(order));
+	order.source_set_identity = fixture->authority.identity.source_set_identity;
+	order.domain = SG_RUNE_ORDER_MECHANISM;
+	order.source_index = index;
+	mechanism.value = SG_RuneModelStableIdFromOrderKey(&order);
+	return mechanism;
+}
+
+static void ConfigureMoverProvider(const water_fixture_t *fixture,
+	uint32_t region, sg_phase_mover_support_t *support,
+	sg_mechanism_capability_fact_t *fact,
+	sg_phase_mover_support_provider_payload_t *provider)
+{
+	memset(support, 0, sizeof(*support));
+	memset(fact, 0, sizeof(*fact));
+	memset(provider, 0, sizeof(*provider));
+	support->semantic_region_id = fixture->regions[region].id;
+	support->mechanism = TestMechanism(fixture, 0U);
+	support->mechanism_state_mask = SG_PHASE_MECHANISM_STATE_ACTIVE |
+		SG_PHASE_MECHANISM_STATE_DWELLING;
+	fact->mechanism_id = support->mechanism;
+	fact->source_region = region;
+	fact->destination_region = region;
+	fact->kind = SG_MECHANISM_CAPABILITY_DWELL;
+	fact->source_state = SG_MECHANISM_STATE_ACTIVE;
+	fact->destination_state = SG_MECHANISM_STATE_DWELLING;
+	fact->dwell_ms = 10U;
+	provider->completion = SG_PHASE_CATALOG_COMPLETE;
+	provider->verifier_identity = UINT64_C(0x57415445524d4f56);
+	provider->supports = support;
+	provider->support_count = 1U;
+	provider->facts = fact;
+	provider->fact_count = 1U;
 }
 
 static void ConfigureVerticalDrop(water_fixture_t *fixture)
@@ -809,6 +898,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 	sg_water_capability_publication_fact_t fact;
 	sg_water_capability_publication_fact_t saved;
 	sg_water_capability_audit_result_t audit;
+	int saved_valid = 0;
 
 	memset(&bundle, 0, sizeof(bundle));
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 0));
@@ -839,12 +929,10 @@ static void TestDropEntryExitAndPortalReferences(void)
 	publication = NULL;
 	candidate = NULL;
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
-	fixture.leaves[1].contents = SG_HOST_CONTENTS_WATER;
-	MakeRegionWet(&fixture, 0U, SG_HOST_CONTENTS_WATER);
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
 	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
-	if (FindFact(bundle.water_owner, publication, SG_WATER_CAPABILITY_VOLUME_CROSSING,
+	if (FindFact(bundle.water_owner, publication, SG_WATER_CAPABILITY_ENTRY,
 		fixture.regions[0].id, fixture.regions[1].id, &fact))
 	{
 		sg_water_capability_publication_info_t info;
@@ -858,23 +946,51 @@ static void TestDropEntryExitAndPortalReferences(void)
 		CHECK(SG_WaterCapabilityPublicationInfo(bundle.water_owner, publication,
 			&info));
 		CHECK(info.transition_count != 0U);
-		CHECK(SG_WaterCapabilityPublicationTransition(bundle.water_owner,
-			publication, 0U, &transition));
-		CHECK(SG_WaterCapabilityPublicationTransitionEvidence(bundle.water_owner,
-			publication, 0U, &evidence));
-		CHECK(SG_RuneModelStableIdValid(&transition.id.value));
-		CHECK(evidence.origin == SG_PHASE_CATALOG_TRANSITION_PORTAL);
+		if (FindTransitionByReference(bundle.water_owner, publication,
+			fact.phase_transition, &transition, &evidence))
+		{
+			CHECK(SG_RuneModelStableIdValid(&transition.id.value));
+			CHECK(evidence.origin == SG_PHASE_CATALOG_TRANSITION_PORTAL);
+			CHECK(evidence.source_region_id == fixture.regions[0].id);
+			CHECK(evidence.destination_region_id == fixture.regions[1].id);
+			CHECK(SG_RuneModelStableIdEqual(&transition.source_phase.value,
+				&fact.source_phase.value));
+			CHECK(SG_RuneModelStableIdEqual(&transition.destination_phase.value,
+				&fact.destination_phase.value));
+		}
+		else CHECK(0);
 		saved = fact;
-		SG_WaterCapabilityDestroy(candidate);
-		candidate = NULL;
-		DestroyBundleSources(&bundle);
-		memset(&fixture, 0, sizeof(fixture));
-		CHECK(SG_WaterCapabilityPublicationFact(bundle.water_owner, publication, saved.order,
-			&fact));
-		CHECK(SG_RuneModelStableIdEqual(&fact.portal.value,
-			&saved.portal.value));
-		CHECK(fact.source_semantic_region_id ==
-			saved.source_semantic_region_id);
+		saved_valid = 1;
+	}
+	else CHECK(0);
+	if (FindFact(bundle.water_owner, publication, SG_WATER_CAPABILITY_EXIT,
+		fixture.regions[1].id, fixture.regions[0].id, &fact))
+	{
+		sg_rune_phase_transition_t transition;
+		sg_phase_catalog_transition_evidence_t evidence;
+
+		if (FindTransitionByReference(bundle.water_owner, publication,
+			fact.phase_transition, &transition, &evidence))
+		{
+			CHECK(evidence.source_region_id == fixture.regions[1].id);
+			CHECK(evidence.destination_region_id == fixture.regions[0].id);
+			CHECK(SG_RuneModelStableIdEqual(&transition.source_phase.value,
+				&fact.source_phase.value));
+			CHECK(SG_RuneModelStableIdEqual(&transition.destination_phase.value,
+				&fact.destination_phase.value));
+		}
+		else CHECK(0);
+	}
+	else CHECK(0);
+	SG_WaterCapabilityDestroy(candidate);
+	candidate = NULL;
+	DestroyBundleSources(&bundle);
+	memset(&fixture, 0, sizeof(fixture));
+	if (saved_valid && SG_WaterCapabilityPublicationFact(bundle.water_owner,
+		publication, saved.order, &fact))
+	{
+		CHECK(SG_RuneModelStableIdEqual(&fact.portal.value, &saved.portal.value));
+		CHECK(fact.source_semantic_region_id == saved.source_semantic_region_id);
 	}
 	else CHECK(0);
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
@@ -1015,6 +1131,129 @@ static void TestProvenEmptyDryDomain(void)
 	SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
 	SG_WaterCapabilityDestroy(candidate);
 	DestroyBundle(&bundle);
+}
+
+static void TestMoverRelativeCatalogs(void)
+{
+	uint32_t mover_region;
+
+	for (mover_region = 0U; mover_region < 2U; mover_region++)
+	{
+		water_fixture_t fixture;
+		input_bundle_t bundle;
+		sg_phase_mover_support_t support;
+		sg_mechanism_capability_fact_t mechanism_fact;
+		sg_phase_mover_support_provider_payload_t provider;
+		sg_water_capability_set_t *candidate = NULL;
+		sg_water_capability_publication_t *publication = NULL;
+		sg_water_capability_publication_info_t info;
+		sg_water_capability_audit_result_t audit;
+		uint32_t binding_index;
+		uint32_t mover_binding_count = 0U;
+		sg_phase_mechanism_state_mask_t mover_state_mask = 0U;
+		int combined_state_binding = 0;
+
+		memset(&bundle, 0, sizeof(bundle));
+		CHECK(WaterFixtureInit(&fixture, mover_region == 0U ? 0U :
+			SG_HOST_CONTENTS_WATER, 800.0f,
+			0, 0));
+		ConfigureMoverProvider(&fixture, mover_region, &support,
+			&mechanism_fact, &provider);
+		if (!PrepareBundleWithProvider(&fixture, &bundle, &provider))
+		{
+			CHECK(0);
+			continue;
+		}
+		if (!BuildCandidate(&fixture, bundle.phase_owner,
+			bundle.phase_catalog, &candidate))
+		{
+			CHECK(0);
+			DestroyBundle(&bundle);
+			continue;
+		}
+		CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
+		CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OK);
+		if (!SG_WaterCapabilityPublicationInfo(bundle.water_owner, publication,
+			&info))
+		{
+			CHECK(0);
+			SG_WaterCapabilityDestroy(candidate);
+			DestroyBundle(&bundle);
+			continue;
+		}
+		CHECK(info.binding_count >= 4U);
+		for (binding_index = 0U; binding_index < info.binding_count;
+			binding_index++)
+		{
+			sg_water_capability_publication_binding_t binding;
+			sg_rune_phase_basis_t phase;
+			uint32_t phase_index;
+
+			CHECK(SG_WaterCapabilityPublicationBinding(bundle.water_owner,
+				publication, binding_index, &binding));
+			for (phase_index = 0U; phase_index < info.phase_count; phase_index++)
+			{
+				CHECK(SG_WaterCapabilityPublicationPhase(bundle.water_owner,
+					publication, phase_index, &phase));
+				if (SG_RuneModelStableIdEqual(&phase.id.value,
+					&binding.phase.value))
+					break;
+			}
+			if (phase_index < info.phase_count &&
+				phase.reference_frame == SG_RUNE_FRAME_MOVER_RELATIVE &&
+				binding.semantic_region_id == fixture.regions[mover_region].id)
+			{
+				CHECK(binding.mechanism_state_mask != 0U);
+				mover_state_mask |= binding.mechanism_state_mask;
+				if (binding.mechanism_state_mask ==
+					(SG_PHASE_MECHANISM_STATE_ACTIVE |
+					 SG_PHASE_MECHANISM_STATE_DWELLING))
+					combined_state_binding = 1;
+				mover_binding_count++;
+			}
+		}
+		CHECK(mover_binding_count == 2U);
+		CHECK(mover_state_mask == (SG_PHASE_MECHANISM_STATE_ACTIVE |
+			SG_PHASE_MECHANISM_STATE_DWELLING));
+		CHECK(combined_state_binding);
+		if (mover_region == 0U)
+		{
+			CHECK(info.state == SG_WATER_CAPABILITY_PUBLICATION_PROVEN_EMPTY);
+			CHECK(info.wet_region_count == 0U);
+			CHECK(info.obligation_count == 0U);
+			CHECK(info.proved_empty_count == 0U);
+		}
+		else
+		{
+			CHECK(info.state == SG_WATER_CAPABILITY_PUBLICATION_COMPLETE);
+			CHECK(info.wet_region_count == 1U);
+			CHECK(info.proved_empty_count >= 27U);
+		}
+		SG_WaterCapabilityPublicationDestroy(bundle.water_owner, publication);
+		SG_WaterCapabilityDestroy(candidate);
+		DestroyBundle(&bundle);
+	}
+}
+
+static void TestCheckedWaterCounters(void)
+{
+	uint32_t value = UINT32_MAX;
+	sg_water_capability_audit_result_t audit;
+
+	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &audit));
+	CHECK(value == UINT32_MAX);
+	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
+	value = UINT32_MAX - 1U;
+	CHECK(SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &audit));
+	CHECK(value == UINT32_MAX);
+	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OK);
+	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &audit));
+	CHECK(value == UINT32_MAX);
+	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
+	value = UINT32_MAX - 7U;
+	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 8U, &audit));
+	CHECK(value == UINT32_MAX - 7U);
+	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
 }
 
 static void TestSweepLineDenseBoundaries(void)
@@ -1231,6 +1470,8 @@ int main(void)
 	TestGroundAndCurrentLaws();
 	TestHazardMedia();
 	TestProvenEmptyDryDomain();
+	TestMoverRelativeCatalogs();
+	TestCheckedWaterCounters();
 	TestSweepLineDenseBoundaries();
 	TestAdversarialRejectionAndMetricAuthentication();
 	if (failures)
