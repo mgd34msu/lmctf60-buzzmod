@@ -127,6 +127,19 @@ typedef struct sg_host_law_result_s
 	uint64_t observed_bits;
 } sg_host_law_result_t;
 
+typedef struct sg_host_law_construction_view_s
+{
+	uint32_t version;
+	uint32_t current;
+	uint64_t level_generation;
+	/* Borrowed immutable view of the handle-owned loader parse.  It remains
+	 * allocated until the handle is destroyed, but is authoritative only while
+	 * Current/Read succeeds for the active level generation. */
+	const sg_host_collision_authority_t *collision;
+	sg_rune_model_identity_t collision_identity;
+	sg_host_law_view_t laws;
+} sg_host_law_construction_view_t;
+
 sg_host_law_result_t SG_HostLawPublicationRead(
 	const sg_host_law_publication_t *publication,
 	sg_host_law_view_t *view_out);
@@ -154,25 +167,28 @@ sg_host_law_result_t SG_HostLawPublicationPmove(
 	const sg_host_collision_scene_t *scene,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
-/* Execute the owner-captured engine Pmove ABI over an independently parsed,
- * immutable BSP collision authority.  The publication authenticates the BSP
- * digest, hulls, physics ABI, and every movement-law field before evaluation.
- * This is the offline construction path; it never borrows a live edict. */
-sg_host_law_result_t SG_HostLawPublicationConstructionPmove(
-	const sg_host_law_publication_t *publication,
-	const sg_host_collision_authority_t *authority,
-	const sg_host_collision_scene_t *scene,
-	const sg_host_pmove_request_t *request,
-	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
-sg_host_law_result_t SG_HostLawConstructionIssue(
-	const sg_host_law_publication_t *publication,
-	const sg_host_collision_authority_t *authority,
-	sg_host_law_construction_t **construction_out);
+/* An issued construction handle owns its loader-parsed BSP and sealed law
+ * state.  Consumers never pair it with a raw publication or authority. */
+sg_host_law_result_t SG_HostLawConstructionCurrent(
+	const sg_host_law_construction_t *construction);
+sg_host_law_result_t SG_HostLawConstructionRead(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_construction_view_t *view_out);
 sg_host_law_result_t SG_HostLawConstructionPmove(
 	const sg_host_law_construction_t *construction,
 	const sg_host_collision_scene_t *scene,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+/* SG_HostPmoveReplayFrame owns the fixed frame/substep loop.  This wrapper
+ * copy-outs its complete authenticated substep and trace chronology without
+ * exposing the captured Pmove callback.  A capacity error is retryable with a
+ * larger caller-owned workspace. */
+sg_host_law_result_t SG_HostLawConstructionReplayFrame(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out);
 void SG_HostLawConstructionDestroy(sg_host_law_construction_t *construction);
 sg_host_law_result_t SG_HostLawPublicationHookPullVelocity(
 	const sg_host_law_publication_t *publication, const vec3_t start,

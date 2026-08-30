@@ -17,6 +17,10 @@ sg_host_law_result_t SG_HostLawPublicationOwnerIssueEnginePair(
 	sg_host_engine_runtime_t *runtime,
 	sg_host_law_publication_t **construction_out,
 	sg_host_law_publication_t **production_out);
+sg_host_law_result_t SG_HostLawPublicationOwnerConstructionIssue(
+	const sg_host_law_publication_t *publication,
+	const sg_host_collision_authority_t *authority,
+	sg_host_law_construction_t **construction_out);
 void SG_HostLawPublicationOwnerDestroy(
 	sg_host_law_publication_t *publication);
 sg_host_law_result_t SG_HostLawPublicationOwnerPmove(

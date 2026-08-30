@@ -33,6 +33,13 @@ sg_host_law_result_t SG_HostLawProductionRevalidate(void);
 const sg_host_law_publication_t *SG_HostLawProductionPublication(void);
 const sg_host_law_publication_t *SG_HostLawProductionStaticPublication(void);
 
+/* Issue an offline handle only from the owner's current construction
+ * publication.  The returned handle owns its BSP parse and is revoked by the
+ * next level transition or reset. */
+sg_host_law_result_t SG_HostLawProductionConstructionIssue(
+	const sg_host_collision_authority_t *authority,
+	sg_host_law_construction_t **construction_out);
+
 /* Legacy controller-backed construction view.  Engine-static publications do
  * not manufacture a reparsed collision authority and return unavailable. */
 sg_host_law_result_t SG_HostLawProductionCollisionAuthority(
