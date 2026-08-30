@@ -10,6 +10,10 @@
 
 #define SG_HOST_COLLISION_MODEL_WORLD UINT32_C(0)
 #define SG_HOST_COLLISION_TEXINFO_NONE UINT32_MAX
+#define SG_HOST_GROUND_PROBE 0.25f
+#define SG_HOST_GROUND_NORMAL_Z 0.7f
+#define SG_HOST_STANDING_VIEW_HEIGHT 22.0f
+#define SG_HOST_CROUCHING_VIEW_HEIGHT (-2.0f)
 
 typedef uint32_t sg_host_collision_contents_t;
 enum

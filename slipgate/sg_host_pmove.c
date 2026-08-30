@@ -378,6 +378,7 @@ static int EvaluateFrame(
 		replay_out->substep_count = steps;
 		replay_out->traces = workspace->traces;
 		replay_out->trace_count = (size_t)scope.trace_count;
+		replay_out->bsp_identity = authority->content_identity;
 		replay_out->bsp_content_id = authority->identity.bsp_content_id;
 		replay_out->physics_abi_id = authority->identity.physics_abi_id;
 		replay_out->frame_ms = authority->identity.physics.frame_ms;

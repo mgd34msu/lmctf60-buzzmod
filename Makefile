@@ -1309,6 +1309,7 @@ OBJS := \
 	sg_goal.o \
 	slipgate/sg_belief.o \
 	slipgate/sg_destination.o \
+	slipgate/sg_cell_phase_localization.o \
 	slipgate/sg_rune_dynamics_model.o \
 	slipgate/sg_rune_dynamics_geometry.o \
 	slipgate/sg_rune_field_contract.o \
@@ -1612,6 +1613,14 @@ slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
 		game.h q_shared.h
+slipgate/sg_cell_phase_localization.o: \
+		slipgate/sg_cell_phase_localization.c \
+		slipgate/sg_cell_phase_localization.h \
+		slipgate/sg_configuration_semantics.h \
+		slipgate/sg_configuration_space.h slipgate/sg_destination.h \
+		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
+		slipgate/sg_rune_model.h game.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 -include $(OBJS:.o=.d)

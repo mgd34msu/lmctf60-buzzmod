@@ -5,11 +5,6 @@
 #include <string.h>
 
 #define SG_HOST_TRACE_EPSILON (1.0f / 32.0f)
-#define SG_HOST_GROUND_PROBE 0.25f
-#define SG_HOST_GROUND_NORMAL_Z 0.7f
-#define SG_HOST_STANDING_VIEW_HEIGHT 22.0f
-#define SG_HOST_CROUCHING_VIEW_HEIGHT (-2.0f)
-
 typedef struct sg_host_trace_context_s
 {
 	const sg_bsp_world_t *world;
