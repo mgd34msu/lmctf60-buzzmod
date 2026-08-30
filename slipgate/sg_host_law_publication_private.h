@@ -3,7 +3,17 @@
 #ifndef SG_HOST_LAW_PUBLICATION_PRIVATE_H
 #define SG_HOST_LAW_PUBLICATION_PRIVATE_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "sg_host_law_publication.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+#define SG_HOST_LAW_PRIVATE_VISIBILITY \
+	__attribute__((visibility("hidden")))
+#else
+#define SG_HOST_LAW_PRIVATE_VISIBILITY
+#endif
 
 #ifdef SG_HOST_LAW_TESTING
 sg_host_law_result_t SG_HostLawPublicationOwnerIssue(
@@ -21,6 +31,14 @@ sg_host_law_result_t SG_HostLawPublicationOwnerConstructionIssue(
 	const sg_host_law_publication_t *publication,
 	const sg_host_collision_authority_t *authority,
 	sg_host_law_construction_t **construction_out);
+/* Offline extensions receive only a currentness-checked byte copy and sealed
+ * metadata.  No construction-owned pointer crosses the translation-unit
+ * boundary.  A NULL byte buffer queries the required size. */
+SG_HOST_LAW_PRIVATE_VISIBILITY sg_host_law_result_t
+SG_HostLawConstructionOwnerCopyBsp(
+	const sg_host_law_construction_t *construction, uint8_t *bytes_out,
+	size_t capacity, size_t *size_out,
+	sg_host_static_identity_t *identity_out);
 void SG_HostLawPublicationOwnerDestroy(
 	sg_host_law_publication_t *publication);
 sg_host_law_result_t SG_HostLawPublicationOwnerPmove(
@@ -42,5 +60,7 @@ sg_host_law_result_t SG_HostLawPublicationOwnerHookTouch(
 sg_host_law_result_t SG_HostLawPublicationOwnerHookPullVelocity(
 	const sg_host_law_publication_t *publication, uint32_t subject_index,
 	uint32_t hook_index, vec3_t velocity, int *rope_length_out);
+
+#undef SG_HOST_LAW_PRIVATE_VISIBILITY
 
 #endif /* SG_HOST_LAW_PUBLICATION_PRIVATE_H */

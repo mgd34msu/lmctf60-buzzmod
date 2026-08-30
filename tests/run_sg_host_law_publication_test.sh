@@ -16,10 +16,10 @@ cd "$repo_dir"
 
 for cc in gcc clang
 do
-	$cc $strict $isl_cflags -I. -c \
+	$cc $strict -I. -c \
 		tests/sg_host_law_construction_no_borrow_compile_test.c \
 		-o "$tmp_dir/construction-view-$cc.o"
-	if $cc $strict $isl_cflags -I. \
+	if $cc $strict -I. \
 		-DSG_HOST_LAW_ATTEMPT_CONSTRUCTION_MUTATION -c \
 		tests/sg_host_law_construction_no_borrow_compile_test.c \
 		-o "$tmp_dir/construction-mutation-$cc.o" \
@@ -46,6 +46,7 @@ compile_host_law()
 	for pair in \
 		'tests/sg_host_law_publication_test.c test' \
 		'slipgate/sg_host_law_publication.c publication' \
+		'slipgate/sg_host_law_construction_offline.c construction-offline' \
 		'slipgate/sg_host_law_owner.c owner' \
 		'slipgate/sg_host_engine_pmove.c engine-pmove' \
 		'slipgate/sg_host_engine_runtime.c engine-runtime' \
@@ -75,6 +76,14 @@ compile_host_law()
 			-o "$tmp_dir/$2-$suffix.o"
 		objects="$objects $tmp_dir/$2-$suffix.o"
 	done
+	if nm -u "$tmp_dir/publication-$suffix.o" | grep -E \
+		'SG_(ConfigurationAudit|ConfigurationSemanticsAudit|BspCompletenessProve)|isl_|__gmp' \
+		>"$tmp_dir/runtime-offline-symbols-$suffix.txt"
+	then
+		cat "$tmp_dir/runtime-offline-symbols-$suffix.txt" >&2
+		echo "runtime publication object depends on offline construction code" >&2
+		exit 1
+	fi
 	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-Wno-strict-prototypes $extra -I. -DDEDICATED_ONLY \
 		-c tests/support/yq2_pmove.c -o "$tmp_dir/yq2-pmove-$suffix.o"
@@ -101,6 +110,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 
 for source in \
 	slipgate/sg_host_law_publication.c \
+	slipgate/sg_host_law_construction_offline.c \
 	slipgate/sg_host_law_owner.c \
 	slipgate/sg_host_engine_pmove.c \
 	slipgate/sg_host_engine_runtime.c \

@@ -12,6 +12,7 @@
 #define q_exported
 #endif
 #include "../slipgate/sg_host_law_publication.h"
+#include "../slipgate/sg_host_law_construction_offline.h"
 #include "../slipgate/sg_host_law_publication_private.h"
 #include "../slipgate/sg_host_engine_parity.h"
 #include "../slipgate/sg_rune.h"

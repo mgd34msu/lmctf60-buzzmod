@@ -11,9 +11,6 @@
 #undef world
 #endif
 #include "sg_host_collision.h"
-#include "sg_bsp_completeness_proof.h"
-#include "sg_configuration_audit.h"
-#include "sg_configuration_semantics.h"
 #include "sg_host_engine_pmove.h"
 #include "sg_host_engine_runtime.h"
 #include "sg_host_hook_law.h"
@@ -216,23 +213,6 @@ sg_host_law_result_t SG_HostLawConstructionTransition(
 	const sg_host_collision_scene_t *scene, const float start[3],
 	const float end[3], sg_rune_stance_t stance,
 	sg_host_collision_transition_t *transition_out);
-/* These checks run against the same owned parse.  Complete-model identity
- * fields on downstream artifacts remain owned and authenticated downstream;
- * this boundary checks only their host-static terms before invoking the
- * accepted independent auditors. */
-sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	sg_configuration_audit_result_t *audit_out);
-sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *audit_out);
-sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	sg_bsp_completeness_result_t *proof_out);
 sg_host_law_result_t SG_HostLawConstructionPmove(
 	const sg_host_law_construction_t *construction,
 	const sg_host_collision_scene_t *scene,

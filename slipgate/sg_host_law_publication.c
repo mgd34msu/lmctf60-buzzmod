@@ -1605,6 +1605,37 @@ sg_host_law_result_t SG_HostLawConstructionRead(
 	return Ok();
 }
 
+sg_host_law_result_t SG_HostLawConstructionOwnerCopyBsp(
+	const sg_host_law_construction_t *construction, uint8_t *bytes_out,
+	size_t capacity, size_t *size_out,
+	sg_host_static_identity_t *identity_out)
+{
+	sg_host_law_result_t result;
+	size_t required;
+
+	if (!size_out || (bytes_out == NULL && capacity != 0U))
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_BSP_CONTENT, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	*size_out = 0U;
+	if (identity_out)
+		memset(identity_out, 0, sizeof(*identity_out));
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	required = construction->world->source_size;
+	*size_out = required;
+	if (!bytes_out)
+		return Ok();
+	if (capacity < required)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_BSP_CONTENT, SG_HOST_LAW_ELEMENT_NONE,
+			(uint64_t)required, (uint64_t)capacity);
+	memcpy(bytes_out, construction->world->source_bytes, required);
+	if (identity_out)
+		*identity_out = construction->static_identity;
+	return Ok();
+}
+
 static int ConstructionTransformValid(
 	const sg_host_collision_transform_t *transform)
 {
@@ -1723,118 +1754,6 @@ sg_host_law_result_t SG_HostLawConstructionTransition(
 			end, stance, transition_out))
 		return Result(SG_HOST_LAW_EVALUATION_FAILED,
 			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	return Ok();
-}
-
-static int ConstructionDownstreamAuthority(
-	const sg_host_law_construction_t *construction,
-	const sg_rune_model_identity_t *downstream_identity,
-	sg_host_collision_authority_t *authority_out)
-{
-	if (!downstream_identity || !authority_out ||
-		downstream_identity->physics_abi_id !=
-			construction->static_identity.physics_abi_id ||
-		memcmp(&downstream_identity->standing_hull,
-			&construction->static_identity.standing_hull,
-			sizeof(downstream_identity->standing_hull)) != 0 ||
-		memcmp(&downstream_identity->crouching_hull,
-			&construction->static_identity.crouching_hull,
-			sizeof(downstream_identity->crouching_hull)) != 0 ||
-		memcmp(&downstream_identity->physics,
-			&construction->static_identity.physics,
-			sizeof(downstream_identity->physics)) != 0)
-		return 0;
-	memset(authority_out, 0, sizeof(*authority_out));
-	authority_out->world = construction->world;
-	authority_out->content_identity = construction->authority.content_identity;
-	authority_out->identity = *downstream_identity;
-	return 1;
-}
-
-sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	sg_configuration_audit_result_t *audit_out)
-{
-	sg_host_collision_authority_t authority;
-	sg_host_law_result_t result;
-
-	if (!configuration || !audit_out)
-		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	memset(audit_out, 0, sizeof(*audit_out));
-	result = ConstructionRevalidate(construction);
-	if (result.status != SG_HOST_LAW_OK)
-		return result;
-	if (!ConstructionDownstreamAuthority(construction,
-			&configuration->identity, &authority))
-		return Result(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_PHYSICS_ABI, SG_HOST_LAW_ELEMENT_NONE,
-			construction->static_identity.physics_abi_id,
-			configuration->identity.physics_abi_id);
-	if (!SG_ConfigurationAudit(&authority, configuration, audit_out))
-		return Result(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, audit_out->record,
-			SG_CONFIGURATION_AUDIT_OK, (uint64_t)audit_out->code);
-	return Ok();
-}
-
-sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *audit_out)
-{
-	sg_host_collision_authority_t authority;
-	sg_host_law_result_t result;
-
-	if (!configuration || !semantics || !audit_out)
-		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	memset(audit_out, 0, sizeof(*audit_out));
-	result = ConstructionRevalidate(construction);
-	if (result.status != SG_HOST_LAW_OK)
-		return result;
-	if (!ConstructionDownstreamAuthority(construction,
-			&configuration->identity, &authority))
-		return Result(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_PHYSICS_ABI, SG_HOST_LAW_ELEMENT_NONE,
-			construction->static_identity.physics_abi_id,
-			configuration->identity.physics_abi_id);
-	if (!SG_ConfigurationSemanticsAudit(&authority, configuration, semantics,
-			audit_out))
-		return Result(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, audit_out->record,
-			SG_CONFIGURATION_SEMANTICS_AUDIT_OK,
-			(uint64_t)audit_out->code);
-	return Ok();
-}
-
-sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	sg_bsp_completeness_result_t *proof_out)
-{
-	sg_host_collision_authority_t authority;
-	sg_host_law_result_t result;
-
-	if (!configuration || !proof_out)
-		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	memset(proof_out, 0, sizeof(*proof_out));
-	result = ConstructionRevalidate(construction);
-	if (result.status != SG_HOST_LAW_OK)
-		return result;
-	if (!ConstructionDownstreamAuthority(construction,
-			&configuration->identity, &authority))
-		return Result(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_PHYSICS_ABI, SG_HOST_LAW_ELEMENT_NONE,
-			construction->static_identity.physics_abi_id,
-			configuration->identity.physics_abi_id);
-	if (!SG_BspCompletenessProve(&authority, configuration, proof_out))
-		return Result(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, proof_out->record,
-			SG_BSP_COMPLETENESS_OK, (uint64_t)proof_out->code);
 	return Ok();
 }
 
