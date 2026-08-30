@@ -101,9 +101,10 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	const sg_perception_observation_t *observation);
 
 /* Age every current track and refresh its predictor-backed view atomically.
- * A sequence or timestamp regression retires all tracks and fails closed.
- * Capacity is never truncated: any non-applied result leaves every track and
- * the global frame bookkeeping unchanged. */
+ * A sequence or timestamp regression retires transient tracks and fails
+ * closed without clearing permanent retired-life tombstones.
+ * Capacity is never truncated: a staging capacity or overflow result leaves
+ * every track and the global frame bookkeeping unchanged. */
 sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 	uint64_t frame_sequence, uint64_t at_ms);
 

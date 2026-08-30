@@ -385,25 +385,43 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 	 * is a new occupant, so build its candidate and swap only after reduction
 	 * succeeds. */
 	SightObservation(&observation, 3U, 100U, 32U);
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	SG_BeliefTestHorizonScopeFailNext(
+		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
+	view = SG_BeliefRuntimeViewForClient(2U, 3U);
+	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	view = SG_BeliefRuntimeViewForClient(1U, 3U);
 	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life32));
+	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
+	CHECK(SG_BeliefRuntimeFrame(1U, 350U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
 	SG_BeliefRuntimeRetireLife(&life32);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 4U, 500U, 32U);
+	CHECK(SG_BeliefRuntimeFrame(2U, 600U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(2U, 500U) ==
+		SG_BELIEF_RUNTIME_FRAME_REJECTED);
+	SightObservation(&observation, 4U, 700U, 32U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 5U, 600U, 33U);
+	SightObservation(&observation, 5U, 800U, 33U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	SG_BeliefRuntimeRetireClient(3U);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
 	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
-	SightObservation(&observation, 6U, 700U, 33U);
+	SightObservation(&observation, 6U, 900U, 33U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 7U, 800U, 34U);
+	SightObservation(&observation, 7U, 1000U, 34U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));

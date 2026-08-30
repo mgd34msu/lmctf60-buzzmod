@@ -119,7 +119,7 @@ static void BeliefRuntimeClearTrack(belief_runtime_track_t *track)
 	memset(track, 0, sizeof(*track));
 }
 
-void SG_BeliefRuntimeReset(void)
+static void BeliefRuntimeTransientReset(void)
 {
 	size_t team;
 	size_t client;
@@ -130,6 +130,11 @@ void SG_BeliefRuntimeReset(void)
 	belief_runtime_reduction_sequence = 0U;
 	belief_runtime_frame_sequence = 0U;
 	belief_runtime_frame_time = 0U;
+}
+
+void SG_BeliefRuntimeReset(void)
+{
+	BeliefRuntimeTransientReset();
 	memset(belief_runtime_life_fences, 0,
 		sizeof(belief_runtime_life_fences));
 }
@@ -289,6 +294,40 @@ static void BeliefRuntimeClientFenceRetire(uint32_t client_id)
 		belief_runtime_life_fences[client_id].retired = 1U;
 }
 
+static int BeliefRuntimeLifeFenceCurrent(
+	const sg_belief_life_identity_t *life)
+{
+	const belief_runtime_life_fence_t *fence;
+
+	if (!SG_BeliefLifeIdentityValid(life))
+		return 0;
+	fence = &belief_runtime_life_fences[life->client_id];
+	return fence->spawn_generation == life->spawn_generation &&
+		fence->retired == 0U;
+}
+
+static void BeliefRuntimeClearSupersededTargetTracks(
+	const sg_belief_life_identity_t *life)
+{
+	size_t team;
+	size_t client;
+
+	if (!SG_BeliefLifeIdentityValid(life))
+		return;
+	for (team = 0U; team < 2U; team++)
+		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
+		{
+			belief_runtime_track_t *track =
+				&belief_runtime_tracks[team][client];
+
+			if (track->active == 1U &&
+				track->state.target_life.client_id == life->client_id &&
+				track->state.target_life.spawn_generation <
+					life->spawn_generation)
+				BeliefRuntimeClearTrack(track);
+		}
+}
+
 static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
 	uint8_t audience_team, const sg_belief_life_identity_t *target_life)
 {
@@ -296,6 +335,7 @@ static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
 		SG_BeliefStateValid(&track->state) &&
 		track->state.audience_team == audience_team &&
 		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life) &&
+		BeliefRuntimeLifeFenceCurrent(target_life) &&
 		track->localization_generation ==
 			belief_runtime_provider.localization_generation &&
 		track->state.rune_identity == belief_runtime_provider.snapshot->identity &&
@@ -856,6 +896,11 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 		*track = candidate;
 	}
 	BeliefRuntimeLifeFenceCommit(&adaptation.evidence);
+	/* Candidate reduction and replacement have succeeded.  Publishing a newer
+	 * life now retires every older audience track for that client in one
+	 * non-failing lifecycle commit. */
+	BeliefRuntimeClearSupersededTargetTracks(
+		&adaptation.evidence.target_life);
 	belief_runtime_reduction_sequence = sequence;
 	(void)BeliefRuntimeRefreshView(track);
 	return SG_BELIEF_RUNTIME_OBSERVE_APPLIED;
@@ -875,7 +920,7 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 		(frame_sequence < belief_runtime_frame_sequence) ||
 		(at_ms < belief_runtime_frame_time))
 	{
-		SG_BeliefRuntimeReset();
+		BeliefRuntimeTransientReset();
 		return SG_BELIEF_RUNTIME_FRAME_REJECTED;
 	}
 	memset(candidates, 0, sizeof(candidates));
@@ -892,6 +937,8 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 				result = SG_BELIEF_RUNTIME_FRAME_REJECTED;
 				goto failure;
 			}
+			if (!BeliefRuntimeLifeFenceCurrent(&track->state.target_life))
+				continue;
 			result = BeliefRuntimeFrameCandidatePrepare(track, at_ms,
 				&candidates[team][client]);
 			if (result != SG_BELIEF_RUNTIME_FRAME_APPLIED)
@@ -899,7 +946,7 @@ sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 		}
 	for (team = 0U; team < 2U; team++)
 		for (client = 0U; client < SG_BELIEF_MAX_CLIENTS; client++)
-			if (belief_runtime_tracks[team][client].active)
+			if (candidates[team][client].track.active)
 				BeliefRuntimeFrameCandidateCommit(
 					&belief_runtime_tracks[team][client],
 					&candidates[team][client]);
