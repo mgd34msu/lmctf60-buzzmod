@@ -51,6 +51,16 @@ static sg_rune_model_identity_t Identity(float gravity)
 	return identity;
 }
 
+static sg_rune_stable_id_t StableId(const water_fixture_t *fixture,
+	uint32_t domain, uint32_t index)
+{
+	const sg_rune_order_key_t order = {
+		fixture->authority.identity.source_set_identity, domain, index, index, 0U
+	};
+
+	return SG_RuneModelStableIdFromOrderKey(&order);
+}
+
 static sg_rune_medium_t MediumFromContents(uint32_t contents)
 {
 	if (contents & SG_HOST_CONTENTS_WATER) return SG_RUNE_MEDIUM_WATER;
@@ -94,7 +104,7 @@ static void SetRegionBox(water_fixture_t *fixture, uint32_t region_index,
 	uint32_t first = region_index * 6U;
 
 	memset(region, 0, sizeof(*region));
-	region->id = UINT64_C(100) + region_index;
+	region->id = ((uint64_t)cell << 32) | (uint64_t)region_index;
 	region->cell = cell;
 	region->first_face = first;
 	region->face_count = 6U;
@@ -272,12 +282,19 @@ int WaterFixtureInit(water_fixture_t *fixture, uint32_t wet_contents,
 		return 0;
 	memset(fixture, 0, sizeof(*fixture));
 	InitWorld(fixture, wet_contents, blocked);
+	fixture->world.content_identity.bytes[0] = UINT8_C(0x57);
+	fixture->world.content_identity.bytes[1] = UINT8_C(0x41);
 	if (!SG_HostCollisionInit(&fixture->authority, &fixture->world,
 		&identity, &host_error))
 		return 0;
 	fixture->configuration.identity = identity;
 	fixture->configuration.cells = fixture->cells;
 	fixture->configuration.cell_count = portal ? 2U : 1U;
+	fixture->cells[0].id.value = StableId(fixture, SG_RUNE_ORDER_CELL, 0U);
+	fixture->cells[0].order.source_set_identity =
+		fixture->authority.identity.source_set_identity;
+	fixture->cells[0].order.domain = SG_RUNE_ORDER_CELL;
+	fixture->cells[0].order.source_index = 0U;
 	fixture->cells[0].stance = SG_RUNE_STANCE_STANDING;
 	fixture->cells[0].bsp_cluster = SG_RUNE_BSP_CLUSTER_REF_NONE;
 	Set3(fixture->cells[0].bounds.mins.value, -64.0f, -64.0f, -64.0f);
@@ -285,6 +302,12 @@ int WaterFixtureInit(water_fixture_t *fixture, uint32_t wet_contents,
 		64.0f, 64.0f);
 	if (portal)
 	{
+		fixture->cells[1].id.value = StableId(fixture, SG_RUNE_ORDER_CELL, 1U);
+		fixture->cells[1].order.source_set_identity =
+			fixture->authority.identity.source_set_identity;
+		fixture->cells[1].order.domain = SG_RUNE_ORDER_CELL;
+		fixture->cells[1].order.source_index = 1U;
+		fixture->cells[1].order.local_ordinal = 1U;
 		fixture->cells[1].stance = SG_RUNE_STANCE_STANDING;
 		fixture->cells[1].bsp_cluster = SG_RUNE_BSP_CLUSTER_REF_NONE;
 		Set3(fixture->cells[1].bounds.mins.value, 0.0f, -64.0f, -64.0f);
@@ -295,6 +318,11 @@ int WaterFixtureInit(water_fixture_t *fixture, uint32_t wet_contents,
 		fixture->configuration.vertex_count = 4U;
 		fixture->portal.from_cell = 0U;
 		fixture->portal.to_cell = 1U;
+		fixture->portal.id.value = StableId(fixture, SG_RUNE_ORDER_PORTAL, 0U);
+		fixture->portal.order.source_set_identity =
+			fixture->authority.identity.source_set_identity;
+		fixture->portal.order.domain = SG_RUNE_ORDER_PORTAL;
+		fixture->portal.order.source_index = 0U;
 		fixture->portal.stance = SG_RUNE_STANCE_STANDING;
 		Set3(fixture->portal.plane.normal, 1.0f, 0.0f, 0.0f);
 		fixture->portal.plane.distance = 0.0f;
