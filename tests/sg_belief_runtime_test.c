@@ -579,6 +579,49 @@ static void TestRuntimeIssuerGenerationInvalidatesTracks(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static void TestRuntimeIssuerGenerationReplacesSameTargetTrack(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target30;
+	const sg_belief_runtime_view_t *view;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target30 = Life(3U, 30U);
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 100U);
+
+	/* A failed issuer rollover preserves the old target track and its fence. */
+	SightObservation(&observation, 2U, 200U, 30U);
+	observation.authentication.issuer_life = Life(4U, 41U);
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	SG_BeliefTestHorizonScopeFailNext(
+		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 100U);
+
+	/* The successful retry replaces, rather than contaminates, the old track.
+	 * It must expose a fresh issuer-4/41 belief and let Frame advance it. */
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 300U);
+	CHECK(SG_BeliefRuntimeFrame(1U, 350U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	view = SG_BeliefRuntimeView(1U, &target30);
+	CHECK(view && view->updated_at_ms == 350U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
 static void TestRuntimeFrameIsAtomic(void)
 {
 	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
@@ -1015,6 +1058,7 @@ int main(void)
 	TestRuntimeLifeFencePreventsResurrection();
 	TestRuntimeIssuerLifeFences();
 	TestRuntimeIssuerGenerationInvalidatesTracks();
+	TestRuntimeIssuerGenerationReplacesSameTargetTrack();
 	TestRuntimeFrameIsAtomic();
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();

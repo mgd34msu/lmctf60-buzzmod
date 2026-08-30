@@ -375,6 +375,23 @@ static int BeliefRuntimeTrackRecordsSupersededLife(
 	return 0;
 }
 
+static int BeliefRuntimeTrackSupersededByPublication(
+	const belief_runtime_track_t *track,
+	const belief_runtime_life_publication_t *publication)
+{
+	size_t index;
+
+	if (!track || !publication || publication->count == 0U ||
+		publication->count > sizeof(publication->lives) /
+			sizeof(publication->lives[0]))
+		return 0;
+	for (index = 0U; index < publication->count; index++)
+		if (BeliefRuntimeTrackRecordsSupersededLife(track,
+			&publication->lives[index]))
+			return 1;
+	return 0;
+}
+
 static void BeliefRuntimeClearSupersededLifeTracks(
 	const sg_belief_life_identity_t *life)
 {
@@ -912,7 +929,8 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
 	replacement = !BeliefRuntimeTrackMatches(track,
 		adaptation.evidence.provenance.audience_team,
 		&adaptation.evidence.target_life) ||
-		track->state.target_team != adaptation.evidence.target_team;
+		track->state.target_team != adaptation.evidence.target_team ||
+		BeliefRuntimeTrackSupersededByPublication(track, &life_publication);
 	memset(&candidate, 0, sizeof(candidate));
 	working = replacement ? &candidate : track;
 	if (replacement && !BeliefRuntimeBuildTrack(working, &adaptation.evidence,
