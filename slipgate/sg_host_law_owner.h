@@ -21,7 +21,6 @@ typedef struct sg_host_law_runtime_authority_s
 	uint32_t reserved;
 	uint64_t epoch;
 	uint64_t epoch_complement;
-	const sg_host_law_publication_t *publication;
 	sg_host_law_view_t view;
 } sg_host_law_runtime_authority_t;
 

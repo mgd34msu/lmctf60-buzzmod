@@ -166,8 +166,7 @@ static int RuntimeAuthorityShapeValid(
 	return authority &&
 		authority->version == SG_HOST_LAW_RUNTIME_AUTHORITY_VERSION &&
 		authority->reserved == 0U && authority->epoch != 0U &&
-		authority->epoch_complement == ~authority->epoch &&
-		authority->publication != NULL;
+		authority->epoch_complement == ~authority->epoch;
 }
 
 static sg_host_law_result_t RuntimeAuthorityState(
@@ -186,8 +185,7 @@ static sg_host_law_result_t RuntimeAuthorityState(
 	result = SG_HostLawProductionRevalidate();
 	if (result.status != SG_HOST_LAW_OK)
 		return result;
-	if (authority->publication != sg_host_law_owner.production ||
-		authority->epoch != sg_host_law_owner.epoch)
+	if (authority->epoch != sg_host_law_owner.epoch)
 		return Result(SG_HOST_LAW_PRODUCTION_DRIFT,
 			SG_HOST_LAW_FIELD_VERSION, sg_host_law_owner.epoch,
 			authority->epoch);
@@ -215,7 +213,6 @@ sg_host_law_result_t SG_HostLawProductionAcquire(
 	authority_out->version = SG_HOST_LAW_RUNTIME_AUTHORITY_VERSION;
 	authority_out->epoch = sg_host_law_owner.epoch;
 	authority_out->epoch_complement = ~sg_host_law_owner.epoch;
-	authority_out->publication = sg_host_law_owner.production;
 	result = SG_HostLawPublicationRead(sg_host_law_owner.production,
 		&authority_out->view);
 	if (result.status != SG_HOST_LAW_OK)

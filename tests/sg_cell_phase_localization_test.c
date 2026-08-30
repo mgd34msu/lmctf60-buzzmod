@@ -187,11 +187,6 @@ static int TestOwnerSubjectCurrent(const sg_host_law_subject_t *subject)
 			subject->spawn_generation != 0U;
 }
 
-static const sg_host_law_publication_t *TestOwnerPublication(void)
-{
-	return (const sg_host_law_publication_t *)(const void *)&test_host_owner;
-}
-
 static int TestOwnerAuthorityCurrent(
 	const sg_host_law_runtime_authority_t *authority)
 {
@@ -200,7 +195,6 @@ static int TestOwnerAuthorityCurrent(
 		authority->reserved == 0U &&
 		authority->epoch == test_host_owner.generation &&
 		authority->epoch_complement == ~authority->epoch &&
-		authority->publication == TestOwnerPublication() &&
 		memcmp(&authority->view, &test_host_owner.view,
 			sizeof(authority->view)) == 0;
 }
@@ -227,7 +221,6 @@ sg_host_law_result_t SG_HostLawProductionAcquire(
 	authority_out->version = SG_HOST_LAW_RUNTIME_AUTHORITY_VERSION;
 	authority_out->epoch = test_host_owner.generation;
 	authority_out->epoch_complement = ~test_host_owner.generation;
-	authority_out->publication = TestOwnerPublication();
 	authority_out->view = test_host_owner.view;
 	return TestHostResult(SG_HOST_LAW_OK);
 }
