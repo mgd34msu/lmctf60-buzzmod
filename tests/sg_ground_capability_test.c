@@ -12,6 +12,7 @@ int proof_fixture_main(void);
 #include <string.h>
 
 #include "../slipgate/sg_ground_capability.h"
+#include "../slipgate/sg_host_pmove.h"
 #ifndef SG_GROUND_CAPABILITY_PUBLICATION_TEST
 #include "sg_ground_construction_fixture.h"
 #endif
@@ -313,8 +314,17 @@ static int TestGroundCapabilityBuild(
 		SG_TestGroundConstructionCreate(authority, pmove);
 	int built;
 
+	if (error_out)
+		memset(error_out, 0, sizeof(*error_out));
 	if (!construction)
+	{
+		if (error_out)
+		{
+			error_out->code = SG_GROUND_CAPABILITY_ERROR_INVALID_ARGUMENT;
+			error_out->source_index = SG_GROUND_CAPABILITY_INDEX_NONE;
+		}
 		return 0;
+	}
 	built = SG_GroundCapabilityBuild(construction, configuration, semantics,
 		phases, phase_count, bindings, binding_count, set_out, error_out);
 	SG_TestGroundConstructionDestroy(construction);
