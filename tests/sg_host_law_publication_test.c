@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../g_local.h"
@@ -11,6 +12,7 @@
 #define q_exported
 #endif
 #include "../slipgate/sg_host_law_publication.h"
+#include "../slipgate/sg_host_law_construction_offline.h"
 #include "../slipgate/sg_host_law_publication_private.h"
 #include "../slipgate/sg_host_engine_parity.h"
 #include "../slipgate/sg_rune.h"
@@ -49,6 +51,17 @@ static uint8_t test_runtime_source[] = {
 	0x74U, 0x2dU, 0x77U, 0x6fU, 0x72U, 0x6cU, 0x64U, 0x00U
 };
 static int failures;
+
+#define CONSTRUCTION_BSP_HEADER_BYTES (8U + SG_BSP_LUMP_COUNT * 8U)
+#define CONSTRUCTION_BSP_CAPACITY UINT32_C(2048)
+
+typedef struct construction_bsp_fixture_s
+{
+	uint8_t bytes[CONSTRUCTION_BSP_CAPACITY];
+	uint32_t size;
+	uint32_t offsets[SG_BSP_LUMP_COUNT];
+	uint32_t lengths[SG_BSP_LUMP_COUNT];
+} construction_bsp_fixture_t;
 
 rune_t *SG_Rune(void);
 
@@ -252,6 +265,209 @@ void CTF_HookMuzzle(const vec3_t origin, float viewheight, int hand,
 	} \
 } while (0)
 
+static void ConstructionWriteU16(uint8_t *bytes, uint16_t value)
+{
+	bytes[0] = (uint8_t)value;
+	bytes[1] = (uint8_t)(value >> 8);
+}
+
+static void ConstructionWriteI16(uint8_t *bytes, int16_t value)
+{
+	ConstructionWriteU16(bytes, (uint16_t)value);
+}
+
+static void ConstructionWriteU32(uint8_t *bytes, uint32_t value)
+{
+	bytes[0] = (uint8_t)value;
+	bytes[1] = (uint8_t)(value >> 8);
+	bytes[2] = (uint8_t)(value >> 16);
+	bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void ConstructionWriteI32(uint8_t *bytes, int32_t value)
+{
+	ConstructionWriteU32(bytes, (uint32_t)value);
+}
+
+static void ConstructionWriteFloat(uint8_t *bytes, float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	ConstructionWriteU32(bytes, bits);
+}
+
+static uint8_t *ConstructionAddLump(construction_bsp_fixture_t *fixture,
+	sg_bsp_lump_t lump, uint32_t length)
+{
+	uint8_t *record;
+
+	CHECK(fixture->size <= CONSTRUCTION_BSP_CAPACITY - length);
+	record = fixture->bytes + fixture->size;
+	fixture->offsets[lump] = fixture->size;
+	fixture->lengths[lump] = length;
+	fixture->size += length;
+	memset(record, 0, length);
+	return record;
+}
+
+static void ConstructionFinishHeader(construction_bsp_fixture_t *fixture)
+{
+	uint32_t lump;
+
+	memcpy(fixture->bytes, "IBSP", 4U);
+	ConstructionWriteU32(fixture->bytes + 4U, SG_BSP_VERSION);
+	for (lump = 0U; lump < SG_BSP_LUMP_COUNT; lump++)
+	{
+		ConstructionWriteU32(fixture->bytes + 8U + lump * 8U,
+			fixture->offsets[lump]);
+		ConstructionWriteU32(fixture->bytes + 12U + lump * 8U,
+			fixture->lengths[lump]);
+	}
+}
+
+static construction_bsp_fixture_t ConstructionValidBsp(void)
+{
+	construction_bsp_fixture_t fixture;
+	uint8_t *record;
+	uint32_t lump;
+
+	memset(&fixture, 0, sizeof(fixture));
+	fixture.size = CONSTRUCTION_BSP_HEADER_BYTES;
+	for (lump = 0U; lump < SG_BSP_LUMP_COUNT; lump++)
+		fixture.offsets[lump] = CONSTRUCTION_BSP_HEADER_BYTES;
+
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_ENTITIES, 4U);
+	memcpy(record, "{}\n", 4U);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_PLANES, 20U);
+	ConstructionWriteFloat(record + 8U, 1.0f);
+	ConstructionWriteI32(record + 16U, 2);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_VERTICES, 36U);
+	ConstructionWriteFloat(record + 0U, -16.0f);
+	ConstructionWriteFloat(record + 4U, -16.0f);
+	ConstructionWriteFloat(record + 12U, 16.0f);
+	ConstructionWriteFloat(record + 16U, -16.0f);
+	ConstructionWriteFloat(record + 24U, 0.0f);
+	ConstructionWriteFloat(record + 28U, 16.0f);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_VISIBILITY, 13U);
+	ConstructionWriteU32(record + 0U, 1U);
+	ConstructionWriteU32(record + 4U, 12U);
+	ConstructionWriteU32(record + 8U, 12U);
+	record[12] = 1U;
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_NODES, 28U);
+	ConstructionWriteU32(record + 0U, 0U);
+	ConstructionWriteI32(record + 4U, -1);
+	ConstructionWriteI32(record + 8U, -2);
+	ConstructionWriteI16(record + 12U, -16);
+	ConstructionWriteI16(record + 14U, -16);
+	ConstructionWriteI16(record + 16U, -16);
+	ConstructionWriteI16(record + 18U, 16);
+	ConstructionWriteI16(record + 20U, 16);
+	ConstructionWriteI16(record + 22U, 16);
+	ConstructionWriteU16(record + 24U, 0U);
+	ConstructionWriteU16(record + 26U, 1U);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_TEXINFO, 76U);
+	ConstructionWriteFloat(record + 0U, 1.0f);
+	ConstructionWriteFloat(record + 20U, 1.0f);
+	ConstructionWriteI32(record + 32U, 4);
+	ConstructionWriteI32(record + 36U, 7);
+	memcpy(record + 40U, "stone", 5U);
+	ConstructionWriteI32(record + 72U, -1);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_FACES, 20U);
+	ConstructionWriteU16(record + 0U, 0U);
+	ConstructionWriteI16(record + 2U, 0);
+	ConstructionWriteI32(record + 4U, 0);
+	ConstructionWriteI16(record + 8U, 3);
+	ConstructionWriteI16(record + 10U, 0);
+	record[12] = 0U;
+	record[13] = 255U;
+	record[14] = 255U;
+	record[15] = 255U;
+	ConstructionWriteI32(record + 16U, 0);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_LIGHTING, 3U);
+	record[0] = 10U;
+	record[1] = 20U;
+	record[2] = 30U;
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_LEAVES, 56U);
+	ConstructionWriteI32(record + 0U, 1);
+	ConstructionWriteU16(record + 4U, UINT16_MAX);
+	ConstructionWriteI16(record + 6U, 0);
+	ConstructionWriteI16(record + 8U, -16);
+	ConstructionWriteI16(record + 10U, -16);
+	ConstructionWriteI16(record + 12U, -16);
+	ConstructionWriteI16(record + 14U, 16);
+	ConstructionWriteI16(record + 16U, 16);
+	ConstructionWriteI16(record + 18U, 16);
+	ConstructionWriteU16(record + 20U, 0U);
+	ConstructionWriteU16(record + 22U, 1U);
+	ConstructionWriteU16(record + 24U, 0U);
+	ConstructionWriteU16(record + 26U, 1U);
+	ConstructionWriteI32(record + 28U, 0);
+	ConstructionWriteU16(record + 32U, 0U);
+	ConstructionWriteU16(record + 34U, 0U);
+	ConstructionWriteI16(record + 36U, -16);
+	ConstructionWriteI16(record + 38U, -16);
+	ConstructionWriteI16(record + 40U, -16);
+	ConstructionWriteI16(record + 42U, 16);
+	ConstructionWriteI16(record + 44U, 16);
+	ConstructionWriteI16(record + 46U, 16);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_LEAF_FACES, 2U);
+	ConstructionWriteU16(record, 0U);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_LEAF_BRUSHES, 2U);
+	ConstructionWriteU16(record, 0U);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_EDGES, 12U);
+	ConstructionWriteU16(record + 0U, 0U);
+	ConstructionWriteU16(record + 2U, 1U);
+	ConstructionWriteU16(record + 4U, 1U);
+	ConstructionWriteU16(record + 6U, 2U);
+	ConstructionWriteU16(record + 8U, 2U);
+	ConstructionWriteU16(record + 10U, 0U);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_SURFEDGES, 12U);
+	ConstructionWriteI32(record + 0U, 0);
+	ConstructionWriteI32(record + 4U, 1);
+	ConstructionWriteI32(record + 8U, 2);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_MODELS, 96U);
+	ConstructionWriteFloat(record + 0U, -16.0f);
+	ConstructionWriteFloat(record + 4U, -16.0f);
+	ConstructionWriteFloat(record + 8U, -16.0f);
+	ConstructionWriteFloat(record + 12U, 16.0f);
+	ConstructionWriteFloat(record + 16U, 16.0f);
+	ConstructionWriteFloat(record + 20U, 16.0f);
+	ConstructionWriteI32(record + 36U, 0);
+	ConstructionWriteI32(record + 40U, 0);
+	ConstructionWriteI32(record + 44U, 1);
+	ConstructionWriteFloat(record + 48U, -8.0f);
+	ConstructionWriteFloat(record + 52U, -8.0f);
+	ConstructionWriteFloat(record + 56U, -8.0f);
+	ConstructionWriteFloat(record + 60U, 8.0f);
+	ConstructionWriteFloat(record + 64U, 8.0f);
+	ConstructionWriteFloat(record + 68U, 8.0f);
+	ConstructionWriteFloat(record + 72U, 32.0f);
+	ConstructionWriteI32(record + 84U, -1);
+	ConstructionWriteI32(record + 88U, 0);
+	ConstructionWriteI32(record + 92U, 0);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_BRUSHES, 12U);
+	ConstructionWriteI32(record + 0U, 0);
+	ConstructionWriteI32(record + 4U, 1);
+	ConstructionWriteI32(record + 8U, 1);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_BRUSH_SIDES, 4U);
+	ConstructionWriteU16(record + 0U, 0U);
+	ConstructionWriteI16(record + 2U, 0);
+	(void)ConstructionAddLump(&fixture, SG_BSP_LUMP_POP, 256U);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_AREAS, 16U);
+	ConstructionWriteI32(record + 0U, 1);
+	ConstructionWriteI32(record + 4U, 0);
+	ConstructionWriteI32(record + 8U, 1);
+	ConstructionWriteI32(record + 12U, 1);
+	record = ConstructionAddLump(&fixture, SG_BSP_LUMP_AREAPORTALS, 16U);
+	ConstructionWriteI32(record + 0U, 0);
+	ConstructionWriteI32(record + 4U, 1);
+	ConstructionWriteI32(record + 8U, 0);
+	ConstructionWriteI32(record + 12U, 0);
+	ConstructionFinishHeader(&fixture);
+	return fixture;
+}
+
 static void SetVector(float value[3], float x, float y, float z)
 {
 	value[0] = x;
@@ -443,6 +659,68 @@ static sg_host_collision_authority_t Authority(void)
 	CHECK(SG_HostCollisionInit(&authority, &test_world, &identity, &error));
 	CHECK(error == SG_HOST_COLLISION_ERROR_NONE);
 	return authority;
+}
+
+static sg_host_static_identity_t ConstructionStaticIdentity(
+	const sg_bsp_world_t *world_value)
+{
+	sg_host_static_identity_t identity = StaticIdentity();
+
+	CHECK(world_value != NULL);
+	if (world_value)
+	{
+		identity.bsp_identity = world_value->content_identity;
+		identity.bsp_bytes = (uint64_t)world_value->source_size;
+		identity.engine_checksum = world_value->engine_checksum;
+	}
+	return identity;
+}
+
+static sg_host_collision_authority_t ConstructionAuthority(
+	const sg_bsp_world_t *world_value)
+{
+	sg_host_collision_authority_t authority;
+	sg_rune_model_identity_t identity = Identity();
+	sg_host_collision_error_t error = SG_HOST_COLLISION_ERROR_NONE;
+
+	memset(&authority, 0, sizeof(authority));
+	identity.physics_abi_id = SG_HOST_ENGINE_PMOVE_ABI_ID;
+	CHECK(SG_HostCollisionInit(&authority, world_value, &identity, &error));
+	CHECK(error == SG_HOST_COLLISION_ERROR_NONE);
+	return authority;
+}
+
+static sg_bsp_world_t *ConstructionLoadBsp(
+	const construction_bsp_fixture_t *fixture)
+{
+	sg_bsp_error_t error = { SG_BSP_ERROR_NONE, SG_BSP_LUMP_ENTITIES, 0U };
+	sg_bsp_world_t *world_value = NULL;
+
+	CHECK(fixture != NULL);
+	if (fixture)
+		CHECK(SG_BspWorldLoadMemory(fixture->bytes, fixture->size,
+			&world_value, &error));
+	CHECK(error.code == SG_BSP_ERROR_NONE);
+	CHECK(world_value != NULL);
+	return world_value;
+}
+
+static void ConfigureConstructionLevel(const sg_bsp_world_t *world_value,
+	const char *mapname)
+{
+	size_t mapname_length = strlen(mapname);
+
+	CHECK(world_value != NULL);
+	CHECK(mapname_length < sizeof(test_level_identity.mapname));
+	memset(&test_level_identity, 0, sizeof(test_level_identity));
+	test_level_identity.bsp_checksum = world_value->engine_checksum;
+	test_level_identity.entity_crc32 = UINT32_C(0x12345678);
+	test_level_identity.host_physics_id = SG_HOST_PHYSICS_EPOCH;
+	test_level_identity.bsp_bytes = (uint64_t)world_value->source_size;
+	memcpy(test_level_identity.bsp_sha256,
+		world_value->content_identity.bytes,
+		sizeof(test_level_identity.bsp_sha256));
+	memcpy(test_level_identity.mapname, mapname, mapname_length + 1U);
 }
 
 static sg_host_law_publication_t *HookWorldPublication(void)
@@ -1218,22 +1496,64 @@ static void TestOwnerFailClosedAndDrift(void)
 
 static void TestStaticPublicationRevalidation(void)
 {
+	construction_bsp_fixture_t fixture = ConstructionValidBsp();
+	sg_bsp_world_t *caller_world = ConstructionLoadBsp(&fixture);
+	sg_bsp_world_t forged_world;
+	sg_bsp_plane_t forged_planes[1];
 	sg_host_law_publication_t *publication = NULL;
+	sg_host_law_construction_t *construction = NULL;
+	sg_host_law_construction_t *forged_construction = NULL;
 	sg_host_law_result_t result;
 	sg_host_law_view_t view;
-	sg_host_static_identity_t identity = StaticIdentity();
+	sg_host_law_construction_view_t construction_view;
+	sg_host_law_construction_view_t construction_view_copy;
+	sg_host_static_identity_t identity =
+		ConstructionStaticIdentity(caller_world);
+	sg_host_collision_authority_t authority =
+		ConstructionAuthority(caller_world);
+	sg_host_collision_authority_t forged_authority;
+	sg_host_collision_authority_t non_ibsp_authority = Authority();
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error = SG_HOST_PMOVE_ERROR_NONE;
+	sg_host_pmove_substep_t substeps[
+		SG_HOST_ENGINE_FRAME_MS / SG_HOST_ENGINE_PMOVE_SUBSTEP_MS];
+	sg_host_pmove_trace_t traces[256];
+	sg_host_pmove_replay_workspace_t workspace;
+	sg_host_pmove_replay_t replay;
+	sg_host_collision_trace_t collision_trace;
+	sg_host_collision_pose_t pose;
+	sg_host_collision_transition_t transition;
+	sg_host_collision_contents_t contents = 0U;
+	sg_configuration_space_t *configuration = NULL;
+	sg_configuration_limits_t configuration_limits;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_audit_result_t baseline_configuration_audit;
+	sg_configuration_semantics_t *semantics = NULL;
+	sg_configuration_semantics_limits_t semantics_limits;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_audit_result_t semantics_audit;
+	sg_configuration_semantics_audit_result_t baseline_semantics_audit;
+	sg_bsp_completeness_result_t completeness;
+	sg_bsp_completeness_result_t baseline_completeness;
+	sg_bsp_completeness_result_t direct_completeness;
+	const float zero[3] = { 0.0f, 0.0f, 0.0f };
+	const float trace_start[3] = { 0.0f, 0.0f, -8.0f };
+	const float trace_end[3] = { 0.0f, 0.0f, 8.0f };
+	uint64_t replay_bsp_id;
+	uint32_t forged_field;
+
+	non_ibsp_authority.identity.physics_abi_id = SG_HOST_ENGINE_PMOVE_ABI_ID;
 
 	result = SG_HostLawPublicationOwnerIssueStatic(&identity, &publication);
 	CHECK(result.status == SG_HOST_LAW_OK && publication != NULL);
 	result = SG_HostLawPublicationRead(publication, &view);
 	CHECK(result.status == SG_HOST_LAW_OK &&
-		view.bsp_bytes == test_world.source_size &&
+		view.bsp_bytes == caller_world->source_size &&
 		view.identity.bsp_content_id == 0U &&
 		view.static_identity.entity_crc32 == identity.entity_crc32 &&
-		memcmp(view.bsp_identity.bytes, test_world.content_identity.bytes,
+		memcmp(view.bsp_identity.bytes, caller_world->content_identity.bytes,
 			sizeof(view.bsp_identity.bytes)) == 0);
 	result = SG_HostLawPublicationRevalidateProduction(publication);
 	CHECK(result.status == SG_HOST_LAW_OK);
@@ -1242,12 +1562,367 @@ static void TestStaticPublicationRevalidation(void)
 		&pmove_result, &pmove_error);
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE &&
 		pmove_error == SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE);
+
+	/* Source bytes alone do not authenticate separately supplied arrays. */
+	CHECK(caller_world->plane_count == 1U);
+	forged_world = *caller_world;
+	forged_planes[0] = caller_world->planes[0];
+	forged_planes[0].distance += 1.0f;
+	forged_world.planes = forged_planes;
+	forged_authority = ConstructionAuthority(&forged_world);
+	result = SG_HostLawPublicationOwnerConstructionIssue(publication,
+		&forged_authority, &forged_construction);
+	CHECK(result.status == SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW &&
+		result.field == SG_HOST_LAW_FIELD_COLLISION_LAW &&
+		forged_construction == NULL);
+	result = SG_HostLawPublicationOwnerConstructionIssue(publication,
+		&non_ibsp_authority, &forged_construction);
+	CHECK(result.status == SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW &&
+		result.field == SG_HOST_LAW_FIELD_BSP_CONTENT &&
+		forged_construction == NULL);
+
+	result = SG_HostLawPublicationOwnerConstructionIssue(publication, &authority,
+		&construction);
+	CHECK(result.status == SG_HOST_LAW_OK && construction != NULL);
+	memset(&construction_view, 0xa5, sizeof(construction_view));
+	result = SG_HostLawConstructionRead(construction, &construction_view);
+	CHECK(result.status == SG_HOST_LAW_OK && construction_view.current == 1U &&
+		construction_view.level_generation != 0U &&
+		memcmp(&construction_view.host_static_identity, &identity,
+			sizeof(identity)) == 0 &&
+		memcmp(construction_view.geometry.bsp_identity.bytes,
+			caller_world->content_identity.bytes,
+			sizeof(construction_view.geometry.bsp_identity.bytes)) == 0 &&
+		construction_view.geometry.bsp_bytes == caller_world->source_size &&
+		construction_view.geometry.engine_checksum ==
+			caller_world->engine_checksum &&
+		construction_view.geometry.plane_count == caller_world->plane_count &&
+		construction_view.geometry.node_count == caller_world->node_count &&
+		construction_view.geometry.model_count == caller_world->model_count &&
+		construction_view.geometry.brush_count == caller_world->brush_count &&
+		construction_view.geometry.brush_side_count ==
+			caller_world->brush_side_count &&
+		construction_view.laws.collision_law_id == view.collision_law_id &&
+		construction_view.laws.pmove_law_id == view.pmove_law_id &&
+		construction_view.laws.pmove_abi.identity ==
+			SG_HOST_ENGINE_PMOVE_ABI_ID &&
+		construction_view.laws.identity.bsp_content_id == 0U &&
+		construction_view.laws.identity.entity_semantics_id == 0U &&
+		construction_view.laws.identity.source_set_identity == 0U &&
+		construction_view.laws.identity.schema_id == 0U &&
+		construction_view.laws.identity.producer_identity == 0U &&
+		memcmp(&construction_view.laws.static_identity, &identity,
+			sizeof(identity)) == 0);
+	construction_view_copy = construction_view;
+	/* Read returns copies only.  Mutating every nested metadata family cannot
+	 * reach the handle-owned parse or sealed law state. */
+	construction_view.host_static_identity.bsp_identity.bytes[0] ^= UINT8_C(1);
+	construction_view.host_static_identity.physics.gravity += 1.0f;
+	construction_view.geometry.engine_checksum ^= UINT32_C(1);
+	construction_view.geometry.plane_count += 1U;
+	construction_view.laws.collision_law_id ^= UINT64_C(1);
+	memset(&construction_view, 0xa5, sizeof(construction_view));
+	result = SG_HostLawConstructionRead(construction, &construction_view);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		memcmp(&construction_view, &construction_view_copy,
+			sizeof(construction_view)) == 0);
+	memset(&collision_trace, 0, sizeof(collision_trace));
+	result = SG_HostLawConstructionCollisionTrace(construction, NULL,
+		trace_start, zero, zero, trace_end, SG_HOST_CONTENTS_SOLID,
+		&collision_trace);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	result = SG_HostLawConstructionPointContents(construction, NULL,
+		trace_start, &contents);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	memset(&pose, 0, sizeof(pose));
+	result = SG_HostLawConstructionClassifyPose(construction, NULL,
+		trace_start, SG_RUNE_STANCE_STANDING, &pose);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pose.physics_abi_id == SG_HOST_ENGINE_PMOVE_ABI_ID);
+	memset(&transition, 0, sizeof(transition));
+	result = SG_HostLawConstructionTransition(construction, NULL,
+		trace_start, trace_start, SG_RUNE_STANCE_STANDING, &transition);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	SG_ConfigurationDefaultLimits(&configuration_limits);
+	memset(&configuration_error, 0, sizeof(configuration_error));
+	CHECK(SG_ConfigurationBuild(&authority, &configuration_limits,
+		&configuration, &configuration_error));
+	if (configuration)
+	{
+		memset(&configuration_audit, 0, sizeof(configuration_audit));
+		result = SG_HostLawConstructionConfigurationAudit(construction,
+			configuration, &configuration_audit);
+		CHECK(result.status == SG_HOST_LAW_OK &&
+			configuration_audit.code == SG_CONFIGURATION_AUDIT_OK);
+		baseline_configuration_audit = configuration_audit;
+		configuration->identity.physics.gravity += 1.0f;
+		result = SG_HostLawConstructionConfigurationAudit(construction,
+			configuration, &configuration_audit);
+		CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+		configuration->identity.physics.gravity -= 1.0f;
+		memset(&direct_completeness, 0, sizeof(direct_completeness));
+		CHECK(!SG_BspCompletenessProve(&authority, configuration,
+			&direct_completeness));
+		memset(&completeness, 0, sizeof(completeness));
+		result = SG_HostLawConstructionCompletenessProve(construction,
+			configuration, &completeness);
+		CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED &&
+			result.observed_bits == (uint64_t)direct_completeness.code &&
+			memcmp(&completeness, &direct_completeness,
+				sizeof(completeness)) == 0);
+		baseline_completeness = completeness;
+		SG_ConfigurationSemanticsDefaultLimits(&semantics_limits);
+		memset(&semantics_error, 0, sizeof(semantics_error));
+		CHECK(SG_ConfigurationSemanticsBuild(&authority, configuration,
+			&semantics_limits, &semantics, &semantics_error));
+		if (semantics)
+		{
+			memset(&semantics_audit, 0, sizeof(semantics_audit));
+			result = SG_HostLawConstructionSemanticsAudit(construction,
+				configuration, semantics, &semantics_audit);
+			CHECK(result.status == SG_HOST_LAW_OK &&
+				semantics_audit.code ==
+					SG_CONFIGURATION_SEMANTICS_AUDIT_OK);
+			baseline_semantics_audit = semantics_audit;
+			/* Complete-model labels are carried only so a downstream artifact
+			 * can be checked against itself.  They do not alter any host-static
+			 * audit or completeness result. */
+			for (forged_field = 0U; forged_field < 5U; forged_field++)
+			{
+				sg_rune_model_identity_t saved_configuration =
+					configuration->identity;
+				sg_rune_model_identity_t saved_semantics = semantics->identity;
+
+				switch (forged_field)
+				{
+				case 0U:
+					configuration->identity.bsp_content_id ^= UINT64_C(0x10);
+					semantics->identity.bsp_content_id ^= UINT64_C(0x10);
+					break;
+				case 1U:
+					configuration->identity.entity_semantics_id ^= UINT64_C(0x20);
+					semantics->identity.entity_semantics_id ^= UINT64_C(0x20);
+					break;
+				case 2U:
+					configuration->identity.source_set_identity ^= UINT64_C(0x40);
+					semantics->identity.source_set_identity ^= UINT64_C(0x40);
+					break;
+				case 3U:
+					configuration->identity.schema_id ^= UINT64_C(0x80);
+					semantics->identity.schema_id ^= UINT64_C(0x80);
+					break;
+				default:
+					configuration->identity.producer_identity ^= UINT64_C(0x100);
+					semantics->identity.producer_identity ^= UINT64_C(0x100);
+					break;
+				}
+				result = SG_HostLawConstructionConfigurationAudit(construction,
+					configuration, &configuration_audit);
+				CHECK(result.status == SG_HOST_LAW_OK && memcmp(
+					&configuration_audit, &baseline_configuration_audit,
+					sizeof(configuration_audit)) == 0);
+				result = SG_HostLawConstructionSemanticsAudit(construction,
+					configuration, semantics, &semantics_audit);
+				CHECK(result.status == SG_HOST_LAW_OK && memcmp(&semantics_audit,
+					&baseline_semantics_audit, sizeof(semantics_audit)) == 0);
+				result = SG_HostLawConstructionCompletenessProve(construction,
+					configuration, &completeness);
+				CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED && memcmp(
+					&completeness, &baseline_completeness,
+					sizeof(completeness)) == 0);
+				configuration->identity = saved_configuration;
+				semantics->identity = saved_semantics;
+			}
+		}
+	}
+	request.state.pm_type = PM_NORMAL;
+	request.state.origin[2] = -512;
+	request.state.gravity = 800;
+	request.previous_state = request.state;
+	result = SG_HostLawConstructionPmove(construction, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE &&
+		pmove_result.physics_abi_id == SG_HOST_ENGINE_PMOVE_ABI_ID &&
+		pmove_result.gravity == 800.0f);
+	memset(&workspace, 0, sizeof(workspace));
+	workspace.substeps = substeps;
+	workspace.substep_capacity = sizeof(substeps) / sizeof(substeps[0]);
+	workspace.traces = traces;
+	workspace.trace_capacity = sizeof(traces) / sizeof(traces[0]);
+	memset(&replay, 0, sizeof(replay));
+	result = SG_HostLawConstructionReplayFrame(construction, NULL, &request,
+		&workspace, &replay, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE &&
+		replay.substeps == substeps && replay.substep_count ==
+			SG_HOST_ENGINE_FRAME_MS / SG_HOST_ENGINE_PMOVE_SUBSTEP_MS &&
+		replay.traces == traces && replay.trace_count != 0U &&
+		replay.substeps[replay.substep_count - 1U].elapsed_ms ==
+			SG_HOST_ENGINE_FRAME_MS &&
+		replay.physics_abi_id == SG_HOST_ENGINE_PMOVE_ABI_ID);
+	replay_bsp_id = replay.bsp_content_id;
+	CHECK(replay_bsp_id != 0U && replay_bsp_id != UINT64_MAX &&
+		replay_bsp_id != authority.identity.bsp_content_id);
+
+	/* Downstream complete-model labels are not host-law authority.  Every
+	 * formerly unchecked label is ignored, while authenticated static output
+	 * and replay identity remain invariant. */
+	for (forged_field = 0U; forged_field < 5U; forged_field++)
+	{
+		sg_host_collision_authority_t labeled_authority = authority;
+		sg_host_law_construction_t *labeled = NULL;
+		sg_host_law_construction_view_t labeled_view;
+		sg_host_pmove_replay_t labeled_replay;
+
+		switch (forged_field)
+		{
+		case 0U: labeled_authority.identity.bsp_content_id ^= UINT64_C(0x10); break;
+		case 1U: labeled_authority.identity.entity_semantics_id ^= UINT64_C(0x20); break;
+		case 2U: labeled_authority.identity.source_set_identity ^= UINT64_C(0x40); break;
+		case 3U: labeled_authority.identity.schema_id ^= UINT64_C(0x80); break;
+		default: labeled_authority.identity.producer_identity ^= UINT64_C(0x100); break;
+		}
+		result = SG_HostLawPublicationOwnerConstructionIssue(publication,
+			&labeled_authority, &labeled);
+		CHECK(result.status == SG_HOST_LAW_OK && labeled != NULL);
+		memset(&labeled_view, 0, sizeof(labeled_view));
+		result = SG_HostLawConstructionRead(labeled, &labeled_view);
+		CHECK(result.status == SG_HOST_LAW_OK &&
+			memcmp(&labeled_view.host_static_identity,
+				&construction_view_copy.host_static_identity,
+				sizeof(labeled_view.host_static_identity)) == 0 &&
+			memcmp(&labeled_view.geometry, &construction_view_copy.geometry,
+				sizeof(labeled_view.geometry)) == 0);
+		memset(&labeled_replay, 0, sizeof(labeled_replay));
+		result = SG_HostLawConstructionReplayFrame(labeled, NULL, &request,
+			&workspace, &labeled_replay, &pmove_error);
+		CHECK(result.status == SG_HOST_LAW_OK &&
+			labeled_replay.bsp_content_id == replay_bsp_id &&
+			labeled_replay.physics_abi_id == replay.physics_abi_id);
+		SG_HostLawConstructionDestroy(labeled);
+	}
+
+	/* The handle owns the accepted parse, so caller teardown is harmless. */
+	SG_BspWorldDestroy(caller_world);
+	caller_world = NULL;
+	result = SG_HostLawConstructionPmove(construction, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	result = SG_HostLawConstructionCollisionTrace(construction, NULL,
+		trace_start, zero, zero, trace_end, SG_HOST_CONTENTS_SOLID,
+		&collision_trace);
+	CHECK(result.status == SG_HOST_LAW_OK);
+
 	gravity_cvar.value = 801.0f;
+	result = SG_HostLawConstructionPmove(construction, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_GRAVITY);
 	result = SG_HostLawPublicationRevalidateProduction(publication);
 	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
 		result.field == SG_HOST_LAW_FIELD_GRAVITY);
 	gravity_cvar.value = 800.0f;
+
+	/* Owner teardown revokes the shared epoch without freeing handle storage. */
 	SG_HostLawPublicationOwnerDestroy(publication);
+	publication = NULL;
+	result = SG_HostLawConstructionCurrent(construction);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_BSP_CONTENT);
+	memset(&construction_view, 0xa5, sizeof(construction_view));
+	result = SG_HostLawConstructionRead(construction, &construction_view);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		construction_view.current == 0U &&
+		construction_view.geometry.bsp_bytes == 0U &&
+		construction_view.host_static_identity.bsp_bytes == 0U);
+	result = SG_HostLawConstructionReplayFrame(construction, NULL, &request,
+		&workspace, &replay, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+	result = SG_HostLawConstructionCollisionTrace(construction, NULL,
+		trace_start, zero, zero, trace_end, SG_HOST_CONTENTS_SOLID,
+		&collision_trace);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+	result = SG_HostLawConstructionConfigurationAudit(construction,
+		configuration, &configuration_audit);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+	SG_HostLawConstructionDestroy(construction);
+	SG_ConfigurationSemanticsDestroy(semantics);
+	SG_ConfigurationDestroy(configuration);
+	SG_BspWorldDestroy(caller_world);
+}
+
+static void TestProductionConstructionLifetime(void)
+{
+	construction_bsp_fixture_t fixture = ConstructionValidBsp();
+	sg_bsp_world_t *caller_world = ConstructionLoadBsp(&fixture);
+	sg_host_collision_authority_t authority =
+		ConstructionAuthority(caller_world);
+	sg_host_law_construction_t *first = NULL;
+	sg_host_law_construction_t *second = NULL;
+	sg_host_law_construction_view_t first_view;
+	sg_host_law_construction_view_t second_view;
+	sg_host_law_result_t result;
+	sg_host_pmove_request_t request;
+	sg_host_pmove_result_t pmove_result;
+	sg_host_pmove_error_t pmove_error = SG_HOST_PMOVE_ERROR_NONE;
+
+	SG_HostLawProductionReset();
+	result = SG_HostLawProductionConstructionIssue(&authority, &first);
+	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE && first == NULL);
+	gi.trace = RuntimeTrace;
+	gi.pointcontents = RuntimePointContents;
+	gi.Pmove = RuntimePmove;
+	test_identity_snapshot_status = SG_IDENTITY_OK;
+	ConfigureConstructionLevel(caller_world, "construction_a");
+	result = SG_HostLawProductionBeginLevel("construction_a");
+	CHECK(result.status == SG_HOST_LAW_OK);
+	result = SG_HostLawProductionConstructionIssue(&authority, &first);
+	CHECK(result.status == SG_HOST_LAW_OK && first != NULL);
+	memset(&first_view, 0, sizeof(first_view));
+	result = SG_HostLawConstructionRead(first, &first_view);
+	CHECK(result.status == SG_HOST_LAW_OK && first_view.current == 1U &&
+		first_view.geometry.bsp_bytes == caller_world->source_size &&
+		first_view.level_generation != 0U);
+
+	ConfigureConstructionLevel(caller_world, "construction_b");
+	result = SG_HostLawProductionBeginLevel("construction_b");
+	CHECK(result.status == SG_HOST_LAW_OK);
+	result = SG_HostLawConstructionCurrent(first);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_BSP_CONTENT);
+	result = SG_HostLawProductionConstructionIssue(&authority, &second);
+	CHECK(result.status == SG_HOST_LAW_OK && second != NULL);
+	memset(&second_view, 0, sizeof(second_view));
+	result = SG_HostLawConstructionRead(second, &second_view);
+	CHECK(result.status == SG_HOST_LAW_OK && second_view.current == 1U &&
+		second_view.level_generation != first_view.level_generation);
+
+	memset(&request, 0, sizeof(request));
+	request.state.pm_type = PM_NORMAL;
+	request.state.origin[2] = -512;
+	request.state.gravity = 800;
+	request.previous_state = request.state;
+	result = SG_HostLawConstructionPmove(second, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	SG_HostLawProductionReset();
+	result = SG_HostLawConstructionCurrent(second);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_BSP_CONTENT);
+	result = SG_HostLawConstructionPmove(second, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+
+	SG_HostLawConstructionDestroy(second);
+	SG_HostLawConstructionDestroy(first);
+	SG_BspWorldDestroy(caller_world);
+	test_identity_snapshot_status = SG_IDENTITY_UNAVAILABLE;
+	gi.trace = NULL;
+	gi.pointcontents = NULL;
+	gi.Pmove = Pmove;
 }
 
 int main(void)
@@ -1279,6 +1954,7 @@ int main(void)
 	TestHookDamagePolicy();
 	TestMechanismEquations();
 	TestStaticPublicationRevalidation();
+	TestProductionConstructionLifetime();
 	TestOwnerFailClosedAndDrift();
 	SG_HostLawProductionReset();
 	if (failures != 0)

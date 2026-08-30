@@ -42,7 +42,7 @@ all of these conditions:
 
 | Area | Current state |
 |---|---|
-| Architectural state | Integrated on `slipgate`: frozen contracts; complete BSP, collision, hull configuration, semantic, visibility, hook-surface, and completeness foundations; authenticated engine physics/collision authority and offline phase catalog; accepted ground, water, mechanism, and weapon foundations; artifact codec, loader, atomic publication, three independent readers, portable runtime-map preflight, exact BSP entity-semantics publication, authenticated static-affordance catalog, continuous dynamics aggregate, and authenticated continuous destination-field geometry; sparse beliefs with exact life identity and topology-complete horizon prediction; weapon profiles; authenticated read-only durable human-trace collection; hook-visibility publication; the authenticated strategy caller foundation; and complete removal of the obsolete SNAG pipeline. Engine-bound ground, water, hook/air, external-force, and localization publications are now open. The continuous directional field solver, complete-model proof, real `FieldService` registration, tactical selection, perception, combat, and learning hookups remain open. |
+| Architectural state | Integrated on `slipgate`: frozen contracts; complete BSP, collision, hull configuration, semantic, visibility, hook-surface, and completeness foundations; authenticated engine physics/collision authority and offline phase catalog; accepted ground, water, mechanism, and weapon foundations; the reviewed audited ground-publication checkpoint; artifact codec, loader, atomic publication, three independent readers, portable runtime-map preflight, exact BSP entity-semantics publication, authenticated static-affordance catalog, continuous dynamics aggregate, and authenticated continuous destination-field geometry; sparse beliefs with exact life identity and topology-complete horizon prediction; weapon profiles; authenticated read-only durable human-trace collection; the hook-visibility symbolic feasibility foundation; the authenticated strategy caller foundation; and complete removal of the obsolete SNAG pipeline. Arbitrary-BSP hook-visibility expansion is open and gates hook/air construction. Ground construction-adapter integration and the corrected water, external-force, and localization publications are also open. The continuous directional field solver, complete-model proof, real `FieldService` registration, tactical selection, perception, combat, and learning hookups remain open. |
 | Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` files and zero obsolete repair sidecars. Retained demos and human-derived analysis remain evidence inputs only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, accepted passive human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Unaccepted components remain review-required. |
@@ -208,8 +208,9 @@ phase can close:
 
 - [ ] Port and review walk, crouch, ramp, jump, drop, swim, air control, hook,
   mover, push, teleport, door, button, trigger, and dwell behavior.
-- [x] Pass the non-enumerative hook-visibility feasibility gate and publish its
-  complete immutable relation catalog.
+- [x] Pass the non-enumerative hook-visibility feasibility gate.
+- [ ] Expand it into a complete immutable arbitrary-BSP relation catalog with
+  stable semantic-region and phase ownership before hook/air construction.
 - [ ] Build separate bolt, body, pull, release, coast, and relaunch physics.
   Keep human hook code isolated.
 - [ ] Build directional/time-weighted cost kernels from exact map physics.

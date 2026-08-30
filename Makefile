@@ -20,6 +20,7 @@ HOST_TEST_BIN := sg_hooks_test.make
 HOST_TEST_OBJS := .sg_hooks_test.make.o .sg_hooks_under_test.make.o
 HOST_TEST_DEPS := $(HOST_TEST_OBJS:.o=.d)
 HOST_LAW_PUBLICATION_TEST := tests/run_sg_host_law_publication_test.sh
+HOST_LAW_RUNTIME_LINK_CHECK := tests/verify_sg_host_law_runtime_link.sh
 ACTION_TEST_BIN := sg_action_test.make
 ACTION_TEST_OBJS := .sg_action_test.make.o .sg_action_under_test.make.o
 ACTION_TEST_DEPS := $(ACTION_TEST_OBJS:.o=.d)
@@ -1353,6 +1354,10 @@ all: $(TARGET)
 
 default: all
 
+host-law-runtime-link-check: $(TARGET) $(HOST_LAW_RUNTIME_LINK_CHECK)
+	$(E) [TEST] host law runtime link
+	$(Q)sh $(HOST_LAW_RUNTIME_LINK_CHECK) $(TARGET)
+
 POVLOCK_TEST_BIN := povlock_test.make
 POVLOCK_TEST_OBJS := .povlock_test.make.o .povlock_under_test.make.o \
 	.povlock_endframe_under_test.make.o
@@ -1373,7 +1378,8 @@ RUNE_PAIR_PREFLIGHT_DEPS := tools/rune_pair_preflight.py tools/runeio.py \
 POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
-.PHONY: all default host-test action-test compound-test mover-lease-test \
+.PHONY: all default host-test host-law-runtime-link-check action-test \
+	compound-test mover-lease-test \
 	water-forest-test \
 	povlock-test pov-session-production-test pov-supervisor-test \
 	button-live-test mechanism-timeline-test relay-wall-transaction-test \
@@ -3943,6 +3949,8 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 		tests/sg_host_law_publication_test.c \
 		slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_construction_offline.c \
+		slipgate/sg_host_law_construction_offline.h \
 		slipgate/sg_host_law_publication_private.h \
 		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
 		slipgate/sg_host_law_owner_internal.h \

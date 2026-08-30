@@ -205,6 +205,18 @@ const sg_host_law_publication_t *SG_HostLawProductionStaticPublication(void)
 	return sg_host_law_owner.construction;
 }
 
+sg_host_law_result_t SG_HostLawProductionConstructionIssue(
+	const sg_host_collision_authority_t *authority,
+	sg_host_law_construction_t **construction_out)
+{
+	sg_host_law_result_t result = SG_HostLawProductionRevalidate();
+
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	return SG_HostLawPublicationOwnerConstructionIssue(
+		sg_host_law_owner.construction, authority, construction_out);
+}
+
 sg_host_law_result_t SG_HostLawProductionCollisionAuthority(
 	const sg_host_collision_authority_t **authority_out)
 {
