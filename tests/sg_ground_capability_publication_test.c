@@ -1,4 +1,5 @@
 #define SG_GROUND_CAPABILITY_TEST_NO_MAIN
+#define SG_GROUND_CAPABILITY_PUBLICATION_TEST
 #include "sg_ground_capability_test.c"
 
 #include "../slipgate/sg_ground_capability_publication.h"
@@ -34,7 +35,8 @@ typedef struct publication_fixture_s
 	sg_host_collision_authority_t authority;
 	sg_configuration_space_t *configuration;
 	sg_configuration_semantics_t *semantics;
-	sg_host_law_publication_t *engine_authority;
+	sg_host_law_publication_t *construction_publication;
+	sg_host_law_construction_t *construction;
 	sg_phase_catalog_publication_owner_t *phase_owner;
 	sg_phase_catalog_publication_t *phase_catalog;
 	sg_ground_capability_publication_source_t source;
@@ -212,14 +214,205 @@ static sg_rune_model_identity_t PublicationIdentity(float gravity)
 	return identity;
 }
 
+#define PUBLICATION_BSP_HEADER_BYTES (8U + SG_BSP_LUMP_COUNT * 8U)
+#define PUBLICATION_BSP_CAPACITY 4096U
+
+static void PublicationWriteU16(uint8_t *bytes, uint16_t value)
+{
+	bytes[0] = (uint8_t)(value & UINT16_C(0xff));
+	bytes[1] = (uint8_t)(value >> 8U);
+}
+
+static void PublicationWriteU32(uint8_t *bytes, uint32_t value)
+{
+	bytes[0] = (uint8_t)(value & UINT32_C(0xff));
+	bytes[1] = (uint8_t)((value >> 8U) & UINT32_C(0xff));
+	bytes[2] = (uint8_t)((value >> 16U) & UINT32_C(0xff));
+	bytes[3] = (uint8_t)(value >> 24U);
+}
+
+static void PublicationWriteFloat(uint8_t *bytes, float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	PublicationWriteU32(bytes, bits);
+}
+
+static uint8_t *PublicationLump(uint8_t *bytes, size_t capacity,
+	uint32_t offsets[SG_BSP_LUMP_COUNT],
+	uint32_t lengths[SG_BSP_LUMP_COUNT], uint32_t *cursor,
+	sg_bsp_lump_t lump, uint32_t length)
+{
+	uint8_t *record;
+
+	if ((size_t)*cursor > capacity || length > capacity - (size_t)*cursor)
+		return NULL;
+	offsets[lump] = *cursor;
+	lengths[lump] = length;
+	record = bytes + *cursor;
+	*cursor += length;
+	memset(record, 0, length);
+	return record;
+}
+
+static int PublicationSerializeWorld(const fixture_t *fixture, uint8_t *bytes,
+	size_t capacity, size_t *size_out)
+{
+	uint32_t offsets[SG_BSP_LUMP_COUNT];
+	uint32_t lengths[SG_BSP_LUMP_COUNT] = { 0U };
+	uint32_t cursor = PUBLICATION_BSP_HEADER_BYTES;
+	uint8_t *record;
+	uint32_t lump;
+	uint32_t index;
+	uint32_t axis;
+
+	if (!fixture || !bytes || !size_out || capacity < cursor)
+		return 0;
+	memset(bytes, 0, capacity);
+	for (lump = 0U; lump < SG_BSP_LUMP_COUNT; lump++)
+		offsets[lump] = cursor;
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_ENTITIES, 4U);
+	if (!record)
+		return 0;
+	memcpy(record, "{}\n", 4U);
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_PLANES, fixture->world.plane_count * 20U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.plane_count; index++)
+	{
+		uint8_t *plane = record + (size_t)index * 20U;
+
+		for (axis = 0U; axis < 3U; axis++)
+			PublicationWriteFloat(plane + axis * 4U,
+				fixture->world.planes[index].normal.value[axis]);
+		PublicationWriteFloat(plane + 12U,
+			fixture->world.planes[index].distance);
+		PublicationWriteU32(plane + 16U,
+			(uint32_t)fixture->world.planes[index].type);
+	}
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_NODES, fixture->world.node_count * 28U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.node_count; index++)
+	{
+		const sg_bsp_node_t *node = &fixture->world.nodes[index];
+		uint8_t *disk = record + (size_t)index * 28U;
+
+		PublicationWriteU32(disk, node->plane);
+		PublicationWriteU32(disk + 4U, (uint32_t)node->children[0]);
+		PublicationWriteU32(disk + 8U, (uint32_t)node->children[1]);
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			PublicationWriteU16(disk + 12U + axis * 2U,
+				(uint16_t)node->bounds.mins[axis]);
+			PublicationWriteU16(disk + 18U + axis * 2U,
+				(uint16_t)node->bounds.maxs[axis]);
+		}
+		PublicationWriteU16(disk + 24U, (uint16_t)node->first_face);
+		PublicationWriteU16(disk + 26U, (uint16_t)node->face_count);
+	}
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_LEAVES, fixture->world.leaf_count * 28U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.leaf_count; index++)
+	{
+		const sg_bsp_leaf_t *leaf = &fixture->world.leaves[index];
+		uint8_t *disk = record + (size_t)index * 28U;
+
+		PublicationWriteU32(disk, (uint32_t)leaf->contents);
+		PublicationWriteU16(disk + 4U, (uint16_t)leaf->cluster);
+		PublicationWriteU16(disk + 6U, (uint16_t)leaf->area);
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			PublicationWriteU16(disk + 8U + axis * 2U,
+				(uint16_t)leaf->bounds.mins[axis]);
+			PublicationWriteU16(disk + 14U + axis * 2U,
+				(uint16_t)leaf->bounds.maxs[axis]);
+		}
+		PublicationWriteU16(disk + 20U, (uint16_t)leaf->first_leaf_face);
+		PublicationWriteU16(disk + 22U, (uint16_t)leaf->leaf_face_count);
+		PublicationWriteU16(disk + 24U, (uint16_t)leaf->first_leaf_brush);
+		PublicationWriteU16(disk + 26U, (uint16_t)leaf->leaf_brush_count);
+	}
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_LEAF_BRUSHES, fixture->world.leaf_brush_count * 2U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.leaf_brush_count; index++)
+		PublicationWriteU16(record + index * 2U,
+			(uint16_t)fixture->world.leaf_brushes[index]);
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_MODELS, fixture->world.model_count * 48U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.model_count; index++)
+	{
+		const sg_bsp_model_t *model = &fixture->world.models[index];
+		uint8_t *disk = record + (size_t)index * 48U;
+
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			PublicationWriteFloat(disk + axis * 4U,
+				model->mins.value[axis] + 1.0f);
+			PublicationWriteFloat(disk + 12U + axis * 4U,
+				model->maxs.value[axis] - 1.0f);
+			PublicationWriteFloat(disk + 24U + axis * 4U,
+				model->origin.value[axis]);
+		}
+		PublicationWriteU32(disk + 36U, (uint32_t)model->headnode);
+		PublicationWriteU32(disk + 40U, model->first_face);
+		PublicationWriteU32(disk + 44U, model->face_count);
+	}
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_BRUSHES, fixture->world.brush_count * 12U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.brush_count; index++)
+	{
+		const sg_bsp_brush_t *brush = &fixture->world.brushes[index];
+		uint8_t *disk = record + (size_t)index * 12U;
+
+		PublicationWriteU32(disk, brush->first_side);
+		PublicationWriteU32(disk + 4U, brush->side_count);
+		PublicationWriteU32(disk + 8U, (uint32_t)brush->contents);
+	}
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_BRUSH_SIDES, fixture->world.brush_side_count * 4U);
+	if (!record)
+		return 0;
+	for (index = 0U; index < fixture->world.brush_side_count; index++)
+	{
+		PublicationWriteU16(record + index * 4U,
+			(uint16_t)fixture->world.brush_sides[index].plane);
+		PublicationWriteU16(record + index * 4U + 2U,
+			fixture->world.brush_sides[index].texinfo < 0 ? UINT16_MAX :
+			(uint16_t)fixture->world.brush_sides[index].texinfo);
+	}
+	record = PublicationLump(bytes, capacity, offsets, lengths, &cursor,
+		SG_BSP_LUMP_AREAS, 3U * 8U);
+	if (!record)
+		return 0;
+	memcpy(bytes, "IBSP", 4U);
+	PublicationWriteU32(bytes + 4U, SG_BSP_VERSION);
+	for (lump = 0U; lump < SG_BSP_LUMP_COUNT; lump++)
+	{
+		PublicationWriteU32(bytes + 8U + lump * 8U, offsets[lump]);
+		PublicationWriteU32(bytes + 12U + lump * 8U, lengths[lump]);
+	}
+	*size_out = cursor;
+	return 1;
+}
+
 static fixture_t PublicationWorld(void)
 {
-	static unsigned char source_bytes[] = {
-		0x67U, 0x72U, 0x6fU, 0x75U, 0x6eU, 0x64U, 0x2dU, 0x70U,
-		0x75U, 0x62U, 0x6cU, 0x69U, 0x63U, 0x61U, 0x74U, 0x69U,
-		0x6fU, 0x6eU
-	};
+	static unsigned char source_bytes[PUBLICATION_BSP_CAPACITY];
 	fixture_t fixture;
+	size_t source_size = 0U;
 	uint32_t side;
 
 	memset(&fixture, 0, sizeof(fixture));
@@ -241,26 +434,29 @@ static fixture_t PublicationWorld(void)
 	SetPlane(&fixture.planes[1], 1.0f, 0.0f, 0.0f, 0.0f);
 	fixture.nodes[0].plane = 0U;
 	fixture.nodes[0].children[0] = 1;
-	fixture.nodes[0].children[1] = -3;
+	fixture.nodes[0].children[1] = -1;
 	fixture.nodes[1].plane = 1U;
-	fixture.nodes[1].children[0] = -1;
-	fixture.nodes[1].children[1] = -2;
-	fixture.leaves[0].cluster = 0;
+	fixture.nodes[1].children[0] = -2;
+	fixture.nodes[1].children[1] = -3;
+	fixture.leaves[0].contents = SG_HOST_CONTENTS_SOLID;
+	fixture.leaves[0].cluster = -1;
 	fixture.leaves[0].area = 1U;
-	fixture.leaves[1].cluster = 1;
-	fixture.leaves[1].area = 2U;
-	fixture.leaves[2].contents = SG_HOST_CONTENTS_SOLID;
-	fixture.leaves[2].cluster = -1;
-	fixture.leaves[2].area = 1U;
-	fixture.leaves[2].first_leaf_brush = 0U;
-	fixture.leaves[2].leaf_brush_count = 1U;
+	fixture.leaves[0].first_leaf_brush = 0U;
+	fixture.leaves[0].leaf_brush_count = 1U;
+	fixture.leaves[1].cluster = 0;
+	fixture.leaves[1].area = 1U;
+	fixture.leaves[2].cluster = 0;
+	fixture.leaves[2].area = 2U;
 	fixture.leaf_brushes[0] = 0U;
 	SetPlane(&fixture.planes[2], 1.0f, 0.0f, 0.0f, 4095.0f);
 	SetPlane(&fixture.planes[3], -1.0f, 0.0f, 0.0f, 4096.0f);
+	fixture.planes[3].type = 6;
 	SetPlane(&fixture.planes[4], 0.0f, 1.0f, 0.0f, 4095.0f);
 	SetPlane(&fixture.planes[5], 0.0f, -1.0f, 0.0f, 4096.0f);
+	fixture.planes[5].type = 6;
 	SetPlane(&fixture.planes[6], 0.0f, 0.0f, 1.0f, -24.125f);
 	SetPlane(&fixture.planes[7], 0.0f, 0.0f, -1.0f, 4096.0f);
+	fixture.planes[7].type = 6;
 	fixture.brushes[0].first_side = 0U;
 	fixture.brushes[0].side_count = 6U;
 	fixture.brushes[0].contents = SG_HOST_CONTENTS_SOLID;
@@ -287,11 +483,18 @@ static fixture_t PublicationWorld(void)
 	fixture.world.brush_count = 1U;
 	fixture.world.brush_sides = fixture.brush_sides;
 	fixture.world.brush_side_count = 6U;
+	if (!PublicationSerializeWorld(&fixture, source_bytes,
+			sizeof(source_bytes), &source_size))
+	{
+		DestroyFixture(&fixture);
+		memset(&fixture, 0, sizeof(fixture));
+		return fixture;
+	}
 	fixture.world.source_bytes = source_bytes;
-	fixture.world.source_size = sizeof(source_bytes);
-	if (!SG_BspWorldContentIdentity(source_bytes, sizeof(source_bytes),
+	fixture.world.source_size = source_size;
+	if (!SG_BspWorldContentIdentity(source_bytes, source_size,
 			&fixture.world.content_identity) ||
-		!SG_BspWorldEngineChecksum(source_bytes, sizeof(source_bytes),
+		!SG_BspWorldEngineChecksum(source_bytes, source_size,
 			&fixture.world.engine_checksum))
 	{
 		DestroyFixture(&fixture);
@@ -329,7 +532,8 @@ static void InstallEngine(float gravity)
 static void PublicationFixtureDestroy(publication_fixture_t *fixture)
 {
 	SG_PhaseCatalogPublicationOwnerDestroy(fixture->phase_owner);
-	SG_HostLawPublicationOwnerDestroy(fixture->engine_authority);
+	SG_HostLawConstructionDestroy(fixture->construction);
+	SG_HostLawPublicationOwnerDestroy(fixture->construction_publication);
 	SG_ConfigurationSemanticsDestroy(fixture->semantics);
 	SG_ConfigurationDestroy(fixture->configuration);
 	DestroyFixture(&fixture->world);
@@ -344,6 +548,7 @@ static int PublicationFixtureInit(publication_fixture_t *fixture,
 	sg_configuration_error_t configuration_error;
 	sg_configuration_semantics_error_t semantics_error;
 	sg_configuration_semantics_limits_t limits;
+	sg_host_static_identity_t static_identity;
 	sg_host_law_result_t host_result;
 
 	memset(fixture, 0, sizeof(*fixture));
@@ -359,14 +564,28 @@ static int PublicationFixtureInit(publication_fixture_t *fixture,
 			fixture->configuration, &limits, &fixture->semantics,
 			&semantics_error))
 		goto fail;
-	host_result = SG_HostLawPublicationOwnerIssue(&fixture->authority,
-		&fixture->engine_authority);
+	memset(&static_identity, 0, sizeof(static_identity));
+	static_identity.bsp_identity = fixture->world.world.content_identity;
+	static_identity.bsp_bytes = (uint64_t)fixture->world.world.source_size;
+	static_identity.engine_checksum = fixture->world.world.engine_checksum;
+	static_identity.entity_crc32 = UINT32_C(0x12345678);
+	static_identity.host_physics_epoch = SG_HOST_PHYSICS_EPOCH;
+	static_identity.physics_abi_id = identity.physics_abi_id;
+	static_identity.standing_hull = identity.standing_hull;
+	static_identity.crouching_hull = identity.crouching_hull;
+	static_identity.physics = identity.physics;
+	host_result = SG_HostLawPublicationOwnerIssueStatic(&static_identity,
+		&fixture->construction_publication);
+	if (host_result.status == SG_HOST_LAW_OK)
+		host_result = SG_HostLawPublicationOwnerConstructionIssue(
+			fixture->construction_publication, &fixture->authority,
+			&fixture->construction);
 	if (host_result.status != SG_HOST_LAW_OK ||
 		!SG_TestGroundPhasePublicationBuild(&fixture->authority,
 			fixture->configuration, fixture->semantics, &fixture->phase_owner,
 			&fixture->phase_catalog))
 		goto fail;
-	fixture->source.engine_authority = fixture->engine_authority;
+	fixture->source.construction = fixture->construction;
 	fixture->source.configuration = fixture->configuration;
 	fixture->source.semantics = fixture->semantics;
 	fixture->source.phase_catalog_owner = fixture->phase_owner;
@@ -720,7 +939,7 @@ static void TestAuditRejections(void)
 	gi.Pmove = EmptyPmove;
 	CHECK(!SG_GroundCapabilityAudit(&fixture.source, candidate, &audit));
 	CHECK(audit.code ==
-		SG_GROUND_CAPABILITY_AUDIT_ENGINE_AUTHORITY_REJECTED);
+		SG_GROUND_CAPABILITY_AUDIT_CONSTRUCTION_REJECTED);
 	gi.Pmove = saved_pmove;
 
 	CHECK(SG_PhaseCatalogPublicationOwnerCreate(&cross_phase_owner));
@@ -829,8 +1048,10 @@ static void TestOwnerPublication(float gravity,
 	SG_PhaseCatalogPublicationOwnerDestroy(fixture.phase_owner);
 	fixture.phase_owner = NULL;
 	fixture.phase_catalog = NULL;
-	SG_HostLawPublicationOwnerDestroy(fixture.engine_authority);
-	fixture.engine_authority = NULL;
+	SG_HostLawConstructionDestroy(fixture.construction);
+	fixture.construction = NULL;
+	SG_HostLawPublicationOwnerDestroy(fixture.construction_publication);
+	fixture.construction_publication = NULL;
 	SG_ConfigurationSemanticsDestroy(fixture.semantics);
 	fixture.semantics = NULL;
 	SG_ConfigurationDestroy(fixture.configuration);
@@ -879,9 +1100,6 @@ int main(void)
 	uint64_t gravity_100_fingerprint = 0U;
 	uint64_t gravity_800_fingerprint = 0U;
 
-	if (RunGroundCapabilityTests() != 0)
-		return 1;
-	failures = 0;
 	TestExactFactBits();
 	TestCandidateStorageSizing();
 	TestInvalidArguments();

@@ -15,6 +15,7 @@ tests/sg_ground_capability_publication_phase_fixture.c
 slipgate/sg_ground_capability_publication.c
 slipgate/sg_ground_capability.c
 slipgate/sg_host_law_publication.c
+slipgate/sg_host_law_construction_offline.c
 slipgate/sg_host_pmove.c
 slipgate/sg_host_engine_pmove.c
 slipgate/sg_host_hook_law.c
