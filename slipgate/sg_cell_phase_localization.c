@@ -1103,6 +1103,11 @@ static int RuntimeCurrent(const sg_cell_phase_runtime_t *runtime)
 	return host_result.status == SG_HOST_LAW_OK;
 }
 
+int SG_CellPhaseRuntimeCurrent(const sg_cell_phase_runtime_t *runtime)
+{
+	return RuntimeCurrent(runtime);
+}
+
 static int HostStateMatchesObservation(
 	const sg_host_collision_authority_t *authority,
 	const sg_localization_observation_t *observation)
@@ -2060,6 +2065,41 @@ static sg_localization_status_t PreviousStateStatus(
 		StoredStateMatchesPhase(locator, previous) &&
 		StoredStateFactsValid(locator, previous) ? SG_LOCALIZATION_OK :
 			SG_LOCALIZATION_RECOVERY_REJECTED;
+}
+
+int SG_CellPhaseLocalizedStateCurrent(
+	const sg_cell_phase_runtime_t *runtime,
+	const sg_localization_subject_t *subject,
+	const sg_localized_player_state_t *state)
+{
+	const sg_cell_phase_locator_t *locator;
+	sg_host_law_result_t host_result;
+
+	if (!state || !RuntimeCurrent(runtime) ||
+		!SubjectEqual(subject, &state->subject))
+		return 0;
+	locator = runtime->locator;
+	if (state->rune_identity != locator->rune_identity ||
+		state->topology_revision != locator->topology_revision ||
+		state->frame_sequence == 0U ||
+		state->configuration_cell >= locator->configuration_cell_count ||
+		state->semantic_region >= locator->semantic_region_count ||
+		state->runtime_region >= locator->phase_view.region_count ||
+		locator->semantics->regions[state->semantic_region].cell !=
+			state->configuration_cell ||
+		locator->region_runtime_regions[state->semantic_region] !=
+			state->runtime_region ||
+		locator->region_runtime_cells[state->semantic_region] !=
+			state->field_pose.phase.cell_id ||
+		state->field_pose.region_id != state->runtime_region ||
+		!ZeroBytes(state->reserved, sizeof(state->reserved)) ||
+		state->reserved2 != 0U ||
+		!StoredStateMatchesPhase(locator, state) ||
+		!StoredStateFactsValid(locator, state))
+		return 0;
+	host_result = SG_HostLawProductionSubjectCurrent(
+		&runtime->host_authority, subject);
+	return host_result.status == SG_HOST_LAW_OK;
 }
 
 static int FindSemanticRegion(const sg_cell_phase_locator_t *locator,

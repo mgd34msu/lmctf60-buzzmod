@@ -313,11 +313,25 @@ static void PlanPrimaryRecover(sg_strategy_caller_plan_t *plan)
 static sg_strategy_runtime_plan_request_t RuntimeRequest(
 	const sg_strategy_caller_plan_t *plan)
 {
+	static sg_localized_player_state_t localized_player;
 	sg_strategy_runtime_plan_request_t request;
 	uint16_t index;
 
 	memset(&request, 0, sizeof(request));
 	request.commitment_id = plan->commitment_id;
+	memset(&localized_player, 0, sizeof(localized_player));
+	localized_player.subject.client_id = 1U;
+	localized_player.subject.spawn_generation = 1U;
+	localized_player.rune_identity = plan->bindings[0].snapshot->identity;
+	localized_player.topology_revision =
+		plan->bindings[0].snapshot->topology_revision;
+	localized_player.frame_sequence = 1U;
+	localized_player.field_pose.phase =
+		plan->bindings[0].snapshot->phases[0];
+	localized_player.field_pose.region_id = 0U;
+	localized_player.field_pose.sample_time_ms =
+		plan->bindings[0].localized->sampled_at_ms;
+	request.localized_player = &localized_player;
 	request.authority = plan->authority;
 	request.spec = plan->spec;
 	request.execution_count = plan->binding_count;

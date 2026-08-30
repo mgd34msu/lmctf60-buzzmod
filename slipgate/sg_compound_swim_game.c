@@ -590,8 +590,7 @@ int SG_CompoundSwimGameStageAuthenticatedProbe(int link_index)
 	entity->waterlevel = binding->source.waterlevel;
 	entity->watertype = binding->source.watertype;
 	memset(&bot->compound_swim, 0, sizeof(bot->compound_swim));
-	bot->seed = binding->link.from;
-	VectorCopy(entity->s.origin, bot->last_origin);
+	SG_BotLocalizationInvalidate(bot);
 	bot->commit_link = link_index;
 	bot->sticky_link = link_index;
 	bot->commit_until = level.time + 5.0f;

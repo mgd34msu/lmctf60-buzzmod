@@ -119,7 +119,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
 
     def test_near_goal_hook_skip_requires_a_descending_run(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
-        start = source.index("descends = goal_field[bot->seed]")
+        start = source.index("descends = goal_field[SG_BotLocalizationCell(bot)]")
         end = source.index("/* life ticker", start)
         proof = source[start:end]
         call = source[source.index("SG_HookNearGoalSkipAllowed("):
@@ -135,7 +135,7 @@ class DefenseShiftIntegrationTest(unittest.TestCase):
     def test_post_facing_uses_an_incoming_scoring_route(self) -> None:
         source = (ROOT / "slipgate/sg_descend.c").read_text()
 
-        self.assertIn("SG_DefenseFacingSeed(SG_Rune(), bot->seed", source)
+        self.assertIn("SG_DefenseFacingSeed(SG_Rune(), SG_BotLocalizationCell(bot)", source)
         self.assertNotIn("int facev = 0x7fffffff", source)
 
     def test_defense_terminal_preserves_selected_field(self) -> None:

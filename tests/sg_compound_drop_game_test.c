@@ -486,7 +486,8 @@ static int TestAuthenticatedProbeStagesPublishedSource(void)
 	             sizeof(binding.source.old_pms)) == 0);
 	CHECK(clients[0].oldvelocity[2] == -5.0f);
 	CHECK(entities[1].groundentity == g_edicts);
-	CHECK(sg_bots[0].seed == 0 && sg_bots[0].commit_link == 0 &&
+	CHECK(SG_BotLocalizationCell(&sg_bots[0]) < 0 &&
+	      sg_bots[0].commit_link == 0 &&
 	      sg_bots[0].sticky_link == 0);
 	CHECK(memcmp(sg_bots[0].stuck_origin, binding.source_seed.origin,
 	             sizeof(vec3_t)) == 0);
@@ -499,9 +500,6 @@ static int TestAuthenticatedProbeStagesPublishedSource(void)
 	CHECK(sg_bots[0].watch_since == level.time);
 	CHECK(sg_bots[0].stag_since == level.time);
 	CHECK(sg_bots[0].wedge_since == level.time);
-	CHECK(!sg_bots[0].seedless_active &&
-	      sg_bots[0].seedless_since == 0.0f &&
-	      sg_bots[0].seedless_turn_until == 0.0f);
 	CHECK(sg_bots[0].compound_drop_live.guard_owned);
 	CHECK(strstr(event_log, "ddrop probe-staged bot=0 link=0 ") != NULL);
 	return 1;

@@ -1917,6 +1917,28 @@ sg_host_law_result_t SG_HostLawPublicationOwnerSubjectCurrent(
 	return Ok();
 }
 
+sg_host_law_result_t SG_HostLawPublicationOwnerSubjectState(
+	const sg_host_law_publication_t *publication,
+	const sg_host_engine_subject_identity_t *subject,
+	sg_host_pmove_state_observation_t *observation_out)
+{
+	sg_host_law_result_t result;
+
+	if (observation_out)
+		memset(observation_out, 0, sizeof(*observation_out));
+	if (!subject || !observation_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = OwnerRuntimePublication(publication, SG_HOST_LAW_FIELD_PMOVE_LAW);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostEngineRuntimeOwnerSubjectState(publication->runtime, subject,
+			observation_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
 sg_host_law_result_t SG_HostLawPublicationOwnerReplayFrame(
 	const sg_host_law_publication_t *publication,
 	const sg_host_engine_subject_identity_t *subject,

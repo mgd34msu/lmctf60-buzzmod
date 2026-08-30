@@ -97,8 +97,8 @@ static qboolean ThinkMissionHold(const sg_bot_t *bot, const sg_think_t *tc,
 	role = tc->escort_mission ? SG_ROLE_ESCORT : tc->role;
 	if (tc->strike_active && !tc->escort_mission)
 		role = SG_ROLE_ATTACK;
-	goal_cost = bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds
-	    ? goal_field[bot->seed] : SG_FIELD_INF;
+	goal_cost = SG_BotLocalizationCell(bot) >= 0 && SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds
+	    ? goal_field[SG_BotLocalizationCell(bot)] : SG_FIELD_INF;
 	if (!tc->strike_active && tc->escort_mission)
 		ordered_escort = SG_ChatEscortTarget(tc->e);
 	if (ordered_escort)
@@ -329,8 +329,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	sg_defense_supply_neighbor_t supply_neighbors[64];
 	unsigned supply_neighbor_count = 0;
 	/* Home is public. Astray approach uses only the team's bounded belief seed. */
-	if (enemy_touch_mission && bot->seed >= 0 &&
-	    bot->seed < SG_Rune()->hdr.num_seeds)
+	if (enemy_touch_mission && SG_BotLocalizationCell(bot) >= 0 &&
+	    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds)
 	{
 		edict_t *flag = SG_EnemyFlag(team);
 		sg_belief_flag_t *belief = &sg_caco_team_belief.flag[SG_TeamIdx(team)]
@@ -357,8 +357,8 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 	/* Count non-worsening neighbors and prove a descending RUN exists. */
-	if (bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds)
-		for (li = SG_Rune()->first_link[bot->seed]; li >= 0;
+	if (SG_BotLocalizationCell(bot) >= 0 && SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds)
+		for (li = SG_Rune()->first_link[SG_BotLocalizationCell(bot)]; li >= 0;
 		     li = SG_Rune()->next_link[li])
 		{
 			const rune_link_t *neighbor = &SG_Rune()->links[li];
@@ -366,23 +366,23 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			qboolean duplicate = false, descends, shelved;
 
 			if (neighbor->to < 0 || neighbor->to >= SG_Rune()->hdr.num_seeds ||
-			    neighbor->to == bot->seed)
+			    neighbor->to == SG_BotLocalizationCell(bot))
 				continue;
-			descends = goal_field[bot->seed] < SG_FIELD_INF &&
+			descends = goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
 			    SG_RouteCandidateGoalMs(goal_field[neighbor->to],
 			        Fields_LinkTraversalCostMs(neighbor), SG_FIELD_INF) <
-			        goal_field[bot->seed];
+			        goal_field[SG_BotLocalizationCell(bot)];
 			shelved = Carrier_LinkShelved(bot, li);
 			if (SG_HookFootRouteAvailable(neighbor->action == RL_RUN,
 			        descends, shelved))
 				descending_run_available = true;
-			if (route_field[bot->seed] < SG_FIELD_INF &&
+			if (route_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
 			    SG_RouteCandidateGoalMs(route_field[neighbor->to],
 			        Fields_LinkTraversalCostMs(neighbor), SG_FIELD_INF) <=
-			        route_field[bot->seed])
+			        route_field[SG_BotLocalizationCell(bot)])
 			{
 				/* Different actions to one seed are one route choice. */
-				for (prior = SG_Rune()->first_link[bot->seed];
+				for (prior = SG_Rune()->first_link[SG_BotLocalizationCell(bot)];
 				     prior >= 0 && prior != li;
 				     prior = SG_Rune()->next_link[prior])
 					if (SG_Rune()->links[prior].to == neighbor->to)
@@ -458,28 +458,28 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		rail_client = -1;
 	}
 
-	bestval = Surface_At(tc, bot->seed, w, route_field, support, intercept);
+	bestval = Surface_At(tc, SG_BotLocalizationCell(bot), w, route_field, support, intercept);
 	if (duel_route_price)
 	{
-		bestval += Duel_Price(e, SG_Rune()->seeds[bot->seed].origin, duel_org,
+		bestval += Duel_Price(e, SG_Rune()->seeds[SG_BotLocalizationCell(bot)].origin, duel_org,
 		                      duel_want, duel_expo);
 		/* The incumbent pays the same exposure term as each candidate,
 		 * under the same forward-pressure gate. */
 		if (duel_expo > 0.0f)
 			bestval += duel_expo *
-			    (float)SG_Rune()->seeds[bot->seed].area_hint * 1.8f;
+			    (float)SG_Rune()->seeds[SG_BotLocalizationCell(bot)].area_hint * 1.8f;
 	}
 	/* A submerged carrier refuses descending links when a level or ascending
 	 * exit exists. One-way underwater routes remain traversable. */
 	{
 		qboolean sink_ban = false;
 
-		if (role == SG_ROLE_CARRY && bot->seed >= 0 && e->waterlevel > 0)
+		if (role == SG_ROLE_CARRY && SG_BotLocalizationCell(bot) >= 0 && e->waterlevel > 0)
 		{
 			int li2;
-			float z0 = SG_Rune()->seeds[bot->seed].origin[2];
+			float z0 = SG_Rune()->seeds[SG_BotLocalizationCell(bot)].origin[2];
 
-			for (li2 = SG_Rune()->first_link[bot->seed]; li2 >= 0;
+			for (li2 = SG_Rune()->first_link[SG_BotLocalizationCell(bot)]; li2 >= 0;
 			     li2 = SG_Rune()->next_link[li2])
 				if (SG_Rune()->seeds[SG_Rune()->links[li2].to].origin[2] >=
 				    z0 - 16.0f)
@@ -543,7 +543,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->linger_since = 0.0f;
 		bot->linger_hot = linger_hot;
 
-	for (li = SG_Rune()->first_link[bot->seed]; li >= 0; li = SG_Rune()->next_link[li])
+	for (li = SG_Rune()->first_link[SG_BotLocalizationCell(bot)]; li >= 0; li = SG_Rune()->next_link[li])
 	{
 		rune_link_t *l = &SG_Rune()->links[li];
 		int edge_ms = Fields_LinkTraversalCostMs(l);
@@ -570,7 +570,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			    l->action == RL_RUN,
 			    approach_flag_distance, candidate_distance,
 			    SG_Rune()->seeds[l->to].origin[2] - approach_flag_origin[2],
-			    goal_field[bot->seed], candidate_goal_ms);
+			    goal_field[SG_BotLocalizationCell(bot)], candidate_goal_ms);
 		}
 		if (SG_ActionMechanismPlanRequired(l->action))
 		{
@@ -682,19 +682,19 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 
 		if (SG_HookNearGoalSkipAllowed(hook_policy,
 		        role == SG_ROLE_CARRY, descending_run_available,
-		        goal_field[bot->seed], SG_FIELD_INF))
+		        goal_field[SG_BotLocalizationCell(bot)], SG_FIELD_INF))
 			continue;
 		/* Under enemy pressure, prefer covered final approaches when route
 		 * costs are otherwise close. */
-		if (enemy_pressure && goal_field[bot->seed] < 4000 &&
-		    goal_field[bot->seed] < SG_FIELD_INF)
+		if (enemy_pressure && goal_field[SG_BotLocalizationCell(bot)] < 4000 &&
+		    goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 		/* Keep exposure preference below one typical goal-field step. */
 			v += 0.5f * (float)SG_Rune()->seeds[l->to].area_hint;
 
 		/* Penalize nearby senior attackers to spread pressure across routes. */
-		if (enemy_pressure && bot->seed >= 0 &&
-		    goal_field[bot->seed] < SG_FIELD_INF &&
-		    goal_field[bot->seed] > 2500 && goal_field[bot->seed] < 12000)
+		if (enemy_pressure && SG_BotLocalizationCell(bot) >= 0 &&
+		    goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
+		    goal_field[SG_BotLocalizationCell(bot)] > 2500 && goal_field[SG_BotLocalizationCell(bot)] < 12000)
 		{
 			int bi6;
 
@@ -776,7 +776,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 		      (l->action == RL_SWIM ||
 		       (SG_Rune()->seeds[l->to].flags & RSF_WATER)))) &&
 		    SG_Rune()->seeds[l->to].origin[2] <
-		        SG_Rune()->seeds[bot->seed].origin[2] - 16.0f)
+		        SG_Rune()->seeds[SG_BotLocalizationCell(bot)].origin[2] - 16.0f)
 			v += 12000.0f;
 
 		/* Charge movement into a masked sub-stand shelf, including lateral
@@ -787,10 +787,10 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 
 			if (sg_fields.shelf_cliff[shti] &&
 			    sg_fields.shelf_cliff[shti][l->to] > 0 &&
-			    !(bot->seed >= 0 &&
-			      sg_fields.shelf_cliff[shti][bot->seed] > 0 &&
+			    !(SG_BotLocalizationCell(bot) >= 0 &&
+			      sg_fields.shelf_cliff[shti][SG_BotLocalizationCell(bot)] > 0 &&
 			      SG_Rune()->seeds[l->to].origin[2] >
-			          SG_Rune()->seeds[bot->seed].origin[2] + 16.0f))
+			          SG_Rune()->seeds[SG_BotLocalizationCell(bot)].origin[2] + 16.0f))
 				/* 60000, not 12000 (fifth cut): the flood surcharge
 				 * props the whole low corridor to ~12000+ field units,
 				 * so a 12000 step charge on the pit's tiny base was
@@ -827,15 +827,15 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 		if (role == SG_ROLE_CARRY && bot->carry_startcost < 0 &&
-		    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
-			bot->carry_startcost = goal_field[bot->seed];
+		    SG_BotLocalizationCell(bot) >= 0 && goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+			bot->carry_startcost = goal_field[SG_BotLocalizationCell(bot)];
 
 		/* A 2500-cost regression means the carrier left its planned route.
 		 * Retire stale shelves and rebase progress at the current seed. */
-		if (role == SG_ROLE_CARRY && bot->seed >= 0 &&
-		    goal_field[bot->seed] < SG_FIELD_INF)
+		if (role == SG_ROLE_CARRY && SG_BotLocalizationCell(bot) >= 0 &&
+		    goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 		{
-			int cc = goal_field[bot->seed];
+			int cc = goal_field[SG_BotLocalizationCell(bot)];
 
 			if (bot->carry_bestcost < 0 || cc < bot->carry_bestcost)
 				bot->carry_bestcost = cc;
@@ -860,9 +860,9 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 		if (role == SG_ROLE_CARRY &&
-		    !(bot->carry_startcost > 0 && bot->seed >= 0 &&
-		      goal_field[bot->seed] < SG_FIELD_INF &&
-		      goal_field[bot->seed] >
+		    !(bot->carry_startcost > 0 && SG_BotLocalizationCell(bot) >= 0 &&
+		      goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
+		      goal_field[SG_BotLocalizationCell(bot)] >
 		          bot->carry_startcost / 2))
 		{
 			/* Suppress flee dodging until the carrier has made enough route
@@ -1153,7 +1153,7 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 			incumbent_v = v;
 
 		if (SG_AttackDescentFallbackAllowed(enemy_touch_mission,
-		        l->action == RL_RUN, goal_field[bot->seed],
+		        l->action == RL_RUN, goal_field[SG_BotLocalizationCell(bot)],
 		        candidate_goal_ms, SG_FIELD_INF) && v < attack_descent_value)
 		{
 			attack_descent_link = li;
@@ -1170,21 +1170,21 @@ int Think_PickLink(sg_bot_t *bot, sg_think_t *tc)
 	}       /* anti-linger scope */
 	if (attack_descent_link >= 0 &&
 	    (bestlink < 0 || SG_AttackDescentOverrideNeeded(
-	        enemy_touch_mission, goal_field[bot->seed],
+	        enemy_touch_mission, goal_field[SG_BotLocalizationCell(bot)],
 	        best_candidate_goal_ms, SG_FIELD_INF)))
 	{
 		bestlink = attack_descent_link;
 		bestval = attack_descent_value;
 		incumbent_v = 1e30f;
 	}
-	if (supply_route && route_field[bot->seed] < SG_FIELD_INF)
+	if (supply_route && route_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 	{
 		int exact_link = -1;
 
 		if (supply_neighbor_count > 0)
 			exact_link = SG_DefenseSupplyChooseNeighbor(
 			    supply_neighbors, supply_neighbor_count,
-			    route_field[bot->seed]);
+			    route_field[SG_BotLocalizationCell(bot)]);
 
 		if (exact_link >= 0)
 		{
@@ -1320,7 +1320,6 @@ qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 {
 	const rune_link_t *completed;
 	gclient_t *client;
-	int previous_seed;
 	int step;
 	usercmd_t coast;
 
@@ -1332,7 +1331,7 @@ qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 	if (completed->action != RL_RUN || completed->from < 0 ||
 	    completed->from >= rune->hdr.num_seeds || completed->to < 0 ||
 	    completed->to >= rune->hdr.num_seeds ||
-	    bot->commit_link != completed_link || bot->seed == completed->to ||
+	    bot->commit_link != completed_link || SG_BotLocalizationCell(bot) == completed->to ||
 	    !SG_RunHasMechanismSuccessor(rune, completed->to) ||
 	    !tc->e || !(client = tc->e->client))
 		return false;
@@ -1349,27 +1348,21 @@ qboolean SG_RunCompletionHandoff(const rune_t *rune, int completed_link,
 		ClientThink(tc->e, &coast);
 
 	tc->think_over = true;
-	previous_seed = bot->seed;
 	if (!Run_HandoffBodyValid(rune, completed->to, tc->e, client))
 	{
-		bot->seed = -1;
+		SG_BotLocalizationInvalidate(bot);
 		return true;
 	}
-	bot->prev_seed = previous_seed;
-	bot->prev_seed_time = level.time;
-	bot->dither_salt = SG_RouteDitherNext(bot->dither_salt,
-	    previous_seed, completed->to);
-	bot->seed = completed->to;
-	VectorCopy(tc->e->s.origin, bot->last_origin);
-	bot->seedless_active = false;
-	bot->seedless_since = 0.0f;
-	bot->seedless_turn_until = 0.0f;
+	/* The four 25 ms handoff commands are not a caller-issued localization
+	 * frame.  Retire the old state and let the next authenticated 100 ms bot
+	 * Pmove publish the actual post-trigger cell and phase. */
+	SG_BotLocalizationInvalidate(bot);
 	if (sg_cv.debug->value)
 	{
 		sg_host.dprint("RUNHANDOFF %s frame=%d completed=%d from=%d to=%d "
-		               "outcome=published seed=%d q8=(%d %d %d)\n",
+		               "outcome=invalidated q8=(%d %d %d)\n",
 		    client->pers.netname, level.framenum, completed_link,
-		    completed->from, completed->to, bot->seed,
+		    completed->from, completed->to,
 		    (int)client->ps.pmove.origin[0],
 		    (int)client->ps.pmove.origin[1],
 		    (int)client->ps.pmove.origin[2]);
@@ -1392,8 +1385,8 @@ void SG_RunRetireCompletedTransaction(const rune_t *rune,
 	if (completed->action != RL_RUN || completed->to < 0 ||
 	    completed->to >= rune->hdr.num_seeds)
 		return;
-	const int candidate_from = completion == SG_RUN_ARRIVED ? completed->to : bot->seed;
-	if ((completion == SG_RUN_ARRIVED && bot->seed != candidate_from) || *next_link < 0 ||
+	const int candidate_from = completion == SG_RUN_ARRIVED ? completed->to : SG_BotLocalizationCell(bot);
+	if ((completion == SG_RUN_ARRIVED && SG_BotLocalizationCell(bot) != candidate_from) || *next_link < 0 ||
 	    *next_link >= rune->hdr.num_links || *next_link == completed_link ||
 	    rune->links[*next_link].from != candidate_from)
 		*next_link = -1;
@@ -1449,7 +1442,7 @@ static qboolean DefenseShiftRetireInvalid(sg_bot_t *bot, int *bestlink,
 		return false;
 	shift_link = bot->def_shift_link;
 	if (!SG_DefenseShiftRetireIfInvalid(shift_link,
-	        DefenseLocalRunReady(bot, shift_link, bot->seed,
+	        DefenseLocalRunReady(bot, shift_link, SG_BotLocalizationCell(bot),
 	            bot->def_shift_seed), &bot->commit_link))
 		return false;
 	if (bestlink && *bestlink == shift_link)
@@ -1475,7 +1468,7 @@ static int Carrier_RallyCover(sg_bot_t *bot, edict_t *e, const int *goal_field)
 		vec3_t delta;
 		float distance, score;
 
-		if (!SG_CarrierCoverRouteAllowed(SG_Rune(), bot->seed, seed) ||
+		if (!SG_CarrierCoverRouteAllowed(SG_Rune(), SG_BotLocalizationCell(bot), seed) ||
 		    goal_field[seed] < 600 || goal_field[seed] >= 2500 ||
 		    !SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f))
 			continue;
@@ -1531,19 +1524,19 @@ static int Objective_CycleRoute(sg_bot_t *bot, sg_field_key_t goal,
 	int finite_link = -1;
 	int here;
 
-	if (!bot || !goal_field || bot->seed < 0 || !SG_Rune() ||
+	if (!bot || !goal_field || SG_BotLocalizationCell(bot) < 0 || !SG_Rune() ||
 	    !SG_Rune()->links || !SG_Rune()->first_link || !SG_Rune()->next_link)
 		return -1;
-	here = goal_field[bot->seed];
+	here = goal_field[SG_BotLocalizationCell(bot)];
 	if (here >= SG_FIELD_INF)
 		return -1;
-	for (link = SG_Rune()->first_link[bot->seed]; link >= 0;
+	for (link = SG_Rune()->first_link[SG_BotLocalizationCell(bot)]; link >= 0;
 	     link = SG_Rune()->next_link[link])
 	{
 		rune_link_t *candidate = &SG_Rune()->links[link];
 		int cost;
 
-		if (candidate->action != RL_RUN || candidate->from != bot->seed ||
+		if (candidate->action != RL_RUN || candidate->from != SG_BotLocalizationCell(bot) ||
 		    candidate->to < 0 ||
 		    candidate->to >= SG_Rune()->hdr.num_seeds)
 			continue;
@@ -1823,13 +1816,13 @@ static int StrikeWeaponFilterFreshCandidate(const sg_bot_t *bot,
 	    bot->commit_link >= 0 || bestlink < 0)
 		return bestlink;
 	route_field = tc->route_field;
-	if (!rune || !rune->links || bot->seed < 0 ||
-	    bot->seed >= rune->hdr.num_seeds || !route_field ||
+	if (!rune || !rune->links || SG_BotLocalizationCell(bot) < 0 ||
+	    SG_BotLocalizationCell(bot) >= rune->hdr.num_seeds || !route_field ||
 	    bestlink >= rune->hdr.num_links ||
-	    route_field[bot->seed] >= SG_FIELD_INF ||
+	    route_field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF ||
 	    rune->links[bestlink].to < 0 ||
 	    rune->links[bestlink].to >= rune->hdr.num_seeds ||
-	    !SG_RouteCandidateDescends(route_field[bot->seed],
+	    !SG_RouteCandidateDescends(route_field[SG_BotLocalizationCell(bot)],
 	        route_field[rune->links[bestlink].to],
 	        Fields_LinkTraversalCostMs(&rune->links[bestlink]), SG_FIELD_INF))
 		return -1;
@@ -2007,10 +2000,10 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		if (incoming->action == RL_RUN)
 		{
 			sg_run_completion_t completion = SG_RunCommitCompletion(
-			    SG_Rune(), incoming, bot->seed, e->s.origin, goal_field);
+			    SG_Rune(), incoming, SG_BotLocalizationCell(bot), e->s.origin, goal_field);
 			int completed_link = bot->commit_link;
 
-			if (completion == SG_RUN_ARRIVED && bot->seed != incoming->to &&
+			if (completion == SG_RUN_ARRIVED && SG_BotLocalizationCell(bot) != incoming->to &&
 			    SG_RunCompletionHandoff(SG_Rune(), completed_link,
 			        completion, bot, tc, &bestlink))
 				return -1;
@@ -2029,9 +2022,9 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	 */
 	{
 		qboolean defense_hold_eligible =
-		    role == SG_ROLE_DEFEND && bot->def_stand && bot->seed >= 0 &&
-		    bot->seed < SG_Rune()->hdr.num_seeds &&
-		    ((float)goal_field[bot->seed] <
+		    role == SG_ROLE_DEFEND && bot->def_stand && SG_BotLocalizationCell(bot) >= 0 &&
+		    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds &&
+		    ((float)goal_field[SG_BotLocalizationCell(bot)] <
 		         400.0f * SG_PersonaCampScale(e) ||
 		     bot->patrol_seed >= 0);
 		qboolean shift_allowed;
@@ -2039,7 +2032,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		int index;
 
 		defense_post = defense_hold_eligible &&
-		    (float)goal_field[bot->seed] <
+		    (float)goal_field[SG_BotLocalizationCell(bot)] <
 		        400.0f * SG_PersonaCampScale(e);
 		if (defense_hold_eligible)
 		{
@@ -2089,7 +2082,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 			/* Select before commitment so the route transaction owns the patrol. */
 			if (patrol_allowed &&
-			    SG_DefensePatrolFinishLeg(bot->seed, &bot->patrol_seed))
+			    SG_DefensePatrolFinishLeg(SG_BotLocalizationCell(bot), &bot->patrol_seed))
 			{
 				bot->patrol_link = -1;
 				bot->patrol_random =
@@ -2103,7 +2096,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				    bot->patrol_link == bot->commit_link;
 
 				if (owned && DefenseLocalRunReady(bot,
-				        bot->patrol_link, bot->seed, bot->patrol_seed))
+				        bot->patrol_link, SG_BotLocalizationCell(bot), bot->patrol_seed))
 					bestlink = bot->patrol_link;
 				else
 				{
@@ -2123,7 +2116,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				sg_defense_patrol_candidate_t candidates[64];
 				size_t candidate_count = 0;
 
-				for (link_index = SG_Rune()->first_link[bot->seed];
+				for (link_index = SG_Rune()->first_link[SG_BotLocalizationCell(bot)];
 				     link_index >= 0 &&
 				     candidate_count < sizeof(candidates) /
 				         sizeof(candidates[0]);
@@ -2135,7 +2128,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					if (link->action != RL_RUN || link->to < 0 ||
 					    link->to >= SG_Rune()->hdr.num_seeds ||
 					    !DefenseLocalRunReady(bot, link_index,
-					        bot->seed, link->to))
+					        SG_BotLocalizationCell(bot), link->to))
 						continue;
 					candidates[candidate_count].link_index = link_index;
 					candidates[candidate_count].seed_index = link->to;
@@ -2145,7 +2138,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					        SG_FIELD_INF);
 					candidates[candidate_count].is_run = true;
 					VectorSubtract(SG_Rune()->seeds[link->to].origin,
-					    SG_Rune()->seeds[bot->seed].origin, d);
+					    SG_Rune()->seeds[SG_BotLocalizationCell(bot)].origin, d);
 					candidates[candidate_count].distance =
 					    VectorLength(d);
 					candidate_count++;
@@ -2192,11 +2185,11 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		{
 			if (bot->def_shift_seed >= 0)
 			{
-				qboolean finished = bot->seed == bot->def_shift_seed ||
+				qboolean finished = SG_BotLocalizationCell(bot) == bot->def_shift_seed ||
 				    level.time >= bot->def_shift_until;
 				qboolean owned = bot->commit_link == bot->def_shift_link &&
 				    DefenseLocalRunReady(bot, bot->def_shift_link,
-				        bot->seed, bot->def_shift_seed);
+				        SG_BotLocalizationCell(bot), bot->def_shift_seed);
 
 				if (finished || !owned)
 				{
@@ -2226,7 +2219,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				VectorSubtract(
 				    SG_Rune()->seeds[defense_threat_seed].origin,
 				    e->s.origin, threat_delta);
-				for (link_index = SG_Rune()->first_link[bot->seed];
+				for (link_index = SG_Rune()->first_link[SG_BotLocalizationCell(bot)];
 				     link_index >= 0 &&
 				     candidate_count < (int)(sizeof(candidates) /
 				         sizeof(candidates[0]));
@@ -2238,7 +2231,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					if (link->action != RL_RUN || link->to < 0 ||
 					    link->to >= SG_Rune()->hdr.num_seeds ||
 					    !DefenseLocalRunReady(bot, link_index,
-					        bot->seed, link->to))
+					        SG_BotLocalizationCell(bot), link->to))
 						continue;
 					VectorSubtract(SG_Rune()->seeds[link->to].origin,
 					    e->s.origin, delta);
@@ -2262,7 +2255,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				    candidates, (size_t)candidate_count, &chosen_seed);
 				if (link_index >= 0 && chosen_seed >= 0)
 				{
-					bot->def_shift_from = bot->seed;
+					bot->def_shift_from = SG_BotLocalizationCell(bot);
 					bot->def_shift_seed = chosen_seed;
 					bot->def_shift_link = link_index;
 					bot->def_shift_until = level.time + 1.0f;
@@ -2271,7 +2264,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					if (sg_cv.debug->value)
 						sg_host.dprint("DEFSHIFT %s from=%d to=%d "
 						    "link=%d threat=%d\n",
-						    e->client->pers.netname, bot->seed,
+						    e->client->pers.netname, SG_BotLocalizationCell(bot),
 						    chosen_seed, link_index,
 						    defense_threat_seed);
 				}
@@ -2856,20 +2849,20 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				if (cl->action == RL_RUN)
 				{
 					run_completion = SG_RunCommitCompletion(SG_Rune(), cl,
-					    bot->seed, e->s.origin, goal_field);
+					    SG_BotLocalizationCell(bot), e->s.origin, goal_field);
 					if (run_completion != SG_RUN_INCOMPLETE)
 						drop_commit = true;
 				}
 				else
 				{
-					if (bot->seed == cl->to || VectorLength(d) < 48.0f)
+					if (SG_BotLocalizationCell(bot) == cl->to || VectorLength(d) < 48.0f)
 						drop_commit = true;         /* arrived: step complete */
 					/* or overachieved: hook landings scatter up to ~234 units
 					 * from the dest seed -- if the field already prices this spot
 					 * at or below the destination, the step served its purpose
 					 * (holding on would re-fire the hook from its own landing zone;
 					 * match 6 bounced at goal 9979 all game doing exactly that) */
-					if (goal_field[bot->seed] <= goal_field[cl->to])
+					if (goal_field[SG_BotLocalizationCell(bot)] <= goal_field[cl->to])
 						drop_commit = true;
 				}
 			}
@@ -2967,7 +2960,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		}
 		if (drop_commit)
 		{
-			/* Think_TrackSeed deliberately preserves the departure seed while
+			/* Typed localization preserves the departure phase while
 			 * SWIM owns the body. Do not re-arm the same departure link later in
 			 * this function after shared arrival/timeout clears it; the next frame
 			 * must localize the resulting body and descend from there. */
@@ -3061,18 +3054,18 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	if (SG_DefenseSupplyActive(bot) && tc->route_pure &&
 	    (bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND ||
 	     bot->def_supply_phase == SG_DEF_SUPPLY_RETURN) &&
-	    bot->commit_link < 0 && bestlink >= 0 && bot->seed >= 0 &&
-	    bot->seed < SG_Rune()->hdr.num_seeds &&
+	    bot->commit_link < 0 && bestlink >= 0 && SG_BotLocalizationCell(bot) >= 0 &&
+	    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds &&
     route_field &&
     (bestlink >= SG_Rune()->hdr.num_links ||
      !SG_DefenseSupplyActionAllowed(
          (sg_defense_supply_phase_t)bot->def_supply_phase,
          bestlink < SG_Rune()->hdr.num_links &&
          SG_Rune()->links[bestlink].action == RL_RUN) ||
-     route_field[bot->seed] >= SG_FIELD_INF ||
+     route_field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF ||
      SG_Rune()->links[bestlink].to < 0 ||
      SG_Rune()->links[bestlink].to >= SG_Rune()->hdr.num_seeds ||
-     !SG_RouteCandidateDescends(route_field[bot->seed],
+     !SG_RouteCandidateDescends(route_field[SG_BotLocalizationCell(bot)],
          route_field[SG_Rune()->links[bestlink].to],
          Fields_LinkTraversalCostMs(&SG_Rune()->links[bestlink]),
          SG_FIELD_INF)))
@@ -3153,8 +3146,8 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	      (SG_Rune()->links[bestlink].action == RL_DROP &&
 	       !bot->drop_started)) &&
 	    !SG_RouteFailureWatchSuppressed(role,
-	        bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds ?
-	            goal_field[bot->seed] : SG_FIELD_INF,
+	        SG_BotLocalizationCell(bot) >= 0 && SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds ?
+	            goal_field[SG_BotLocalizationCell(bot)] : SG_FIELD_INF,
 	        role == SG_ROLE_ESCORT && SG_ChatEscortTarget(e) &&
 	            SG_EscortTerminal(e, SG_ChatEscortTarget(e)), tc->scoop_mission,
 	        duel, bot->engaged_last) &&
@@ -3180,7 +3173,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			SG_TimerArm(&bot->bl_until[oldest], 45.0f);
 			if (sg_cv.debug->value)
 				sg_host.dprint("SHELVE %s link=%d at seed=%d\n",
-				           e->client->pers.netname, bestlink, bot->seed);
+				           e->client->pers.netname, bestlink, SG_BotLocalizationCell(bot));
 			bot->watch_link = -1;
 		}
 	}
@@ -3197,13 +3190,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 	/* Pressure attackers cover the enemy room instead of following the carrier. */
 	if (tc->rearguard &&
 	    SG_AgeUnder(sg_grab_time[SG_TeamIdx(team)], 8.0f) &&
-	    bot->seed >= 0)
+	    SG_BotLocalizationCell(bot) >= 0)
 	{
 		int *att = (team == CTF_TEAM_RED) ? sg_fields.to_blue_flag
 		                                  : sg_fields.to_red_flag;
 
 		/* Pressure holds only inside the room; escorts retain the wider hold. */
-		if (att && att[bot->seed] < (tc->strike_pressure ? 1500
+		if (att && att[SG_BotLocalizationCell(bot)] < (tc->strike_pressure ? 1500
 		                                                   : 3000))
 		{
 			rally_hold = true;      /* stand and fight: the room is the job */
@@ -3212,7 +3205,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 				sg_host.dprint("PLUG %s role=%d pressure=%d cost=%d\n",
 				           e->client->pers.netname, (int)role,
 				           tc->strike_pressure ? 1 : 0,
-				           att[bot->seed]);
+				           att[SG_BotLocalizationCell(bot)]);
 			if (bot->rally_since <= 0.0f)
 				SG_Mark(&bot->rally_since);
 		}
@@ -3220,7 +3213,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 	if (sg_cv.handoff->value &&
 	    role == SG_ROLE_CARRY && goal_field &&
-	    bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
+	    SG_BotLocalizationCell(bot) >= 0 && goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
 	    SG_TimerReady(bot->handoff_next) &&
 	    (bot->engaged_last || duel))
 	{
@@ -3231,7 +3224,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		if ((float)e->health < hp_thr)
 		{
 			int		mi, best = -1;
-			int		my_cost = goal_field[bot->seed];
+			int		my_cost = goal_field[SG_BotLocalizationCell(bot)];
 			int		best_cost = my_cost;
 			vec3_t	eye;
 
@@ -3409,13 +3402,13 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			bot->rally_cover = -1;
 			rally_hold = false;
 		}
-		else if (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF &&
-		         goal_field[bot->seed] < 2500)
+		else if (SG_BotLocalizationCell(bot) >= 0 && goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
+		         goal_field[SG_BotLocalizationCell(bot)] < 2500)
 		{
 			int cover = bot->rally_cover;
 
 			if (cover < 0 || cover >= SG_Rune()->hdr.num_seeds ||
-			    !SG_CarrierCoverRouteAllowed(SG_Rune(), bot->seed, cover) ||
+			    !SG_CarrierCoverRouteAllowed(SG_Rune(), SG_BotLocalizationCell(bot), cover) ||
 			    goal_field[cover] < 600 || goal_field[cover] >= 2500 ||
 			    !SG_CanSee(e, SG_Rune()->seeds[cover].origin, 22.0f))
 				cover = Carrier_RallyCover(bot, e, goal_field);
@@ -3424,7 +3417,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			if (sg_cv.debug->value && rally_hold &&
 			    SG_TimerReady(bot->next_report - 0.9f))
 				sg_host.dprint("CARRYHOLD %s cost=%d cover=%d\n",
-				           e->client->pers.netname, goal_field[bot->seed], cover);
+				           e->client->pers.netname, goal_field[SG_BotLocalizationCell(bot)], cover);
 		}
 	}
 
@@ -3439,7 +3432,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 
 	if (rail_seed >= 0 && rail_client >= 0 && bestlink >= 0 &&
 	    !rally_hold && !precision && bot->lead_ent == 0 &&
-	    bot->seed >= 0 &&
+	    SG_BotLocalizationCell(bot) >= 0 &&
 	    (bot->railhold_since > 0.0f || SG_TimerReady(bot->railhold_next)))
 	{
 		vec3_t	rthr, rstep, rbody;
@@ -3475,7 +3468,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 					if (sg_cv.debug->value)
 						sg_host.dprint("RAILHOLD %s at seed=%d waits on "
 						           "cl=%d seed=%d patience=%.1f%s\n",
-						           e->client->pers.netname, bot->seed,
+						           e->client->pers.netname, SG_BotLocalizationCell(bot),
 						           rail_client, rail_seed,
 						           bot->railhold_patience,
 						           (role == SG_ROLE_CARRY)
@@ -3605,7 +3598,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 			SG_TimerArm(&bot->rail_until, 4.0f);
 			if (sg_cv.debug->value)
 				sg_host.dprint("RAILTRY %s link=%d seed=%d\n",
-				           e->client->pers.netname, bestlink, bot->seed);
+				           e->client->pers.netname, bestlink, SG_BotLocalizationCell(bot));
 			SG_TimerArm(&bot->stag_next, 2.0f);
 			VectorCopy(e->s.origin, bot->stag_org);
 			SG_Mark(&bot->stag_since);
@@ -3630,7 +3623,7 @@ int Think_CommitLink(sg_bot_t *bot, sg_think_t *tc)
 		    SG_EscapeRandomDuration(bot->escape_random));
 		if (sg_cv.debug->value)
 			sg_host.dprint("STAGSHELVE %s link=%d at seed=%d\n",
-			           e->client->pers.netname, bestlink, bot->seed);
+			           e->client->pers.netname, bestlink, SG_BotLocalizationCell(bot));
 	}
 stag_done:
 	bot->nav_drove = false;         /* the movement code below re-arms it */
@@ -3641,8 +3634,8 @@ stag_done:
 	/* Detect loops wider than the route watch from recent objective visits
 	 * and the best cost reached after each one. */
 	{
-		int gv = (goal_field[bot->seed] < SG_FIELD_INF)
-		             ? goal_field[bot->seed] : 0x7ffffff;
+		int gv = (goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+		             ? goal_field[SG_BotLocalizationCell(bot)] : 0x7ffffff;
 		sg_field_key_t goal = SG_FieldKey(SG_Rune(), goal_field);
 		edict_t *enemy_flag = enemy_pressure ? SG_EnemyFlag(team) : NULL;
 		qboolean enemy_flag_home = enemy_flag && ctf_flagathome(enemy_flag);
@@ -3678,16 +3671,16 @@ stag_done:
 					bot->visit_combat[v] = true;
 			}
 
-		if (bot->seed != bot->orbit_last_seed)
+		if (SG_BotLocalizationCell(bot) != bot->orbit_last_seed)
 		{
-			bot->orbit_last_seed = bot->seed;
+			bot->orbit_last_seed = SG_BotLocalizationCell(bot);
 			/* A carrier's loop always loses objective progress. Pressure
 			 * attackers may now use the same repair only when the same field
 			 * remained live, the enemy flag stayed home, and no duel/combat
 			 * occurred anywhere in the interval. This preserves the campaign-3
 			 * lesson: resistance must never shred a sound route. */
 			for (v = 0; v < SG_VISIT_RING; v++)
-				if (bot->visit_seed[v] == bot->seed &&
+				if (bot->visit_seed[v] == SG_BotLocalizationCell(bot) &&
 				    SG_FieldKeyMatches(bot->visit_key[v], goal) &&
 				    SG_AgeUnder(bot->visit_time[v], 30.0f) &&
 				    SG_AgeOver(bot->visit_time[v], 3.0f) &&
@@ -3728,11 +3721,11 @@ stag_done:
 						bestlink = -1;
 					if (sg_cv.debug->value)
 						sg_host.dprint("CYCLE %s seed=%d link=%d next=%d\n",
-						           e->client->pers.netname, bot->seed,
+						           e->client->pers.netname, SG_BotLocalizationCell(bot),
 						           cycle_link, bestlink);
 					break;
 				}
-			bot->visit_seed[bot->visit_head] = bot->seed;
+			bot->visit_seed[bot->visit_head] = SG_BotLocalizationCell(bot);
 			bot->visit_goal[bot->visit_head] = gv;
 			bot->visit_min[bot->visit_head] = gv;
 			bot->visit_key[bot->visit_head] = goal;
@@ -3752,15 +3745,15 @@ stag_done:
 	 * field, so this fence cannot finish on the weapon pad or a mixed tactic. */
 	if (bot->def_supply_armed &&
 	    bot->def_supply_phase == SG_DEF_SUPPLY_RETURN &&
-	    bot->seed >= 0 && bot->seed < SG_Rune()->hdr.num_seeds &&
-	    goal_field[bot->seed] < 400.0f * SG_PersonaCampScale(e))
+	    SG_BotLocalizationCell(bot) >= 0 && SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds &&
+	    goal_field[SG_BotLocalizationCell(bot)] < 400.0f * SG_PersonaCampScale(e))
 		SG_DefenseSupplyFinish(bot);
 
 	if (bot->lead_ent > 0 && bot->lead_state == SG_LEAD_WAITING &&
-	    goal_field[bot->seed] < SG_LEAD_STANDOFF)
+	    goal_field[SG_BotLocalizationCell(bot)] < SG_LEAD_STANDOFF)
 		hold_post = true;
 	else if (role == SG_ROLE_DEFEND && bot->def_stand &&
-	    ((float)goal_field[bot->seed] < 400.0f * SG_PersonaCampScale(e) ||
+	    ((float)goal_field[SG_BotLocalizationCell(bot)] < 400.0f * SG_PersonaCampScale(e) ||
 	     bot->patrol_seed >= 0))
 	{
 		qboolean quiet = defense_quiet;
@@ -3784,7 +3777,7 @@ stag_done:
 		if (quiet && bot->patrol_link >= 0 &&
 		    bot->patrol_link == bot->commit_link &&
 		    DefenseLocalRunReady(bot, bot->patrol_link,
-		        bot->seed, bot->patrol_seed))
+		        SG_BotLocalizationCell(bot), bot->patrol_seed))
 		{
 			bestlink = bot->patrol_link;
 			hold_post = false;
@@ -3798,7 +3791,7 @@ stag_done:
 	 */
 	if (hold_post)
 	{
-		int face = SG_DefenseFacingSeed(SG_Rune(), bot->seed, goal_field,
+		int face = SG_DefenseFacingSeed(SG_Rune(), SG_BotLocalizationCell(bot), goal_field,
 		    SG_FIELD_INF);
 		if (face >= 0)
 		{
@@ -3882,7 +3875,7 @@ no_hold:;
 	SG_CombatPursuit(e, (qboolean)(tc->combat_pursuit ||
 	                               (!tc->strike_active &&
 	                                role == SG_ROLE_DEFEND &&
-	                                goal_field[bot->seed] < 2500)));
+	                                goal_field[SG_BotLocalizationCell(bot)] < 2500)));
 
 	if (!hold_post)
 		SG_CombatAlertFromBeliefs(e, goal_field);

@@ -8,6 +8,7 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_action.h"
 #include "slipgate/sg_bot.h"
+#include "tests/support/sg_bot_localization_fixture.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_descend.h"
 #include "slipgate/sg_hooks.h"
@@ -133,13 +134,7 @@ static void TestDprint(const char *fmt, ...)
 	{
 		CHECK(callback_bot != NULL);
 		CHECK(callback_ent != NULL);
-		CHECK(callback_bot->seed == expected_published_seed);
-		CHECK(callback_bot->prev_seed == expected_callback_seed);
-		CHECK(VectorCompare(callback_bot->last_origin,
-		          callback_ent->s.origin));
-		CHECK(!callback_bot->seedless_active);
-		CHECK(callback_bot->seedless_since == 0.0f);
-		CHECK(callback_bot->seedless_turn_until == 0.0f);
+		CHECK(SG_BotLocalizationCell(callback_bot) < 0);
 	}
 	dprint_calls++;
 	va_start(args, fmt);
@@ -235,7 +230,7 @@ void ClientThink(edict_t *ent, usercmd_t *cmd)
 	CHECK(memcmp(cmd, &expected, sizeof(expected)) == 0);
 	CHECK(callback_bot != NULL);
 	CHECK(callback_bot->commit_link == -1);
-	CHECK(callback_bot->seed == expected_callback_seed);
+	CHECK(SG_BotLocalizationCell(callback_bot) == expected_callback_seed);
 	CHECK(!callback_bot->declared_started);
 	CHECK(!callback_bot->declared_touched);
 	CHECK(!callback_bot->declared_triggered);
@@ -307,7 +302,7 @@ enum
 
 static void ArmRunTransaction(sg_bot_t *bot, int seed)
 {
-	bot->seed = seed;
+	SG_TestBotLocalizationCellSet(bot, seed);
 	bot->commit_link = bot->sticky_link = bot->rail_link = LINK_RUN_TO_SOURCE;
 	bot->commit_until = bot->latch_until = bot->rail_until = 30.0f;
 	bot->rail_stage = 2;
@@ -475,7 +470,6 @@ static void CheckHighSpeedTeleportHandoff(void)
 	int field[TEST_SEEDS] = { 300, 200, 0, 100 };
 	int next_link = LINK_RUN_TO_SOURCE;
 	sg_run_completion_t completion;
-	unsigned expected_dither;
 	int expected_random;
 	usercmd_t zero;
 	char expected_line[256];
@@ -489,7 +483,7 @@ static void CheckHighSpeedTeleportHandoff(void)
 	level.time = 42.0f;
 	level.framenum = 4242;
 	PreparePmoveBody(&ent, &client, origin, velocity);
-	bot.seed = SEED_DEPARTURE;
+	SG_TestBotLocalizationCellSet(&bot, SEED_DEPARTURE);
 	bot.prev_seed = -1;
 	bot.commit_link = bot.sticky_link = bot.rail_link = LINK_RUN_TO_SOURCE;
 	bot.commit_until = bot.latch_until = bot.rail_until = 30.0f;
@@ -511,15 +505,12 @@ static void CheckHighSpeedTeleportHandoff(void)
 	invalidate_on_call = 0;
 	invalidate_mode = INVALIDATE_NONE;
 	ResetDebugCapture(1.0f);
-	expected_dither = SG_RouteDitherNext(0U, SEED_DEPARTURE,
-	    SEED_TELE_SOURCE);
-	CHECK(expected_dither == 0x0c572cbcu);
 	srand(271828U);
 	expected_random = rand();
 	srand(271828U);
 
 	completion = SG_RunCommitCompletion(&fixture.rune,
-	    &fixture.links[LINK_RUN_TO_SOURCE], bot.seed, ent.s.origin, field);
+	    &fixture.links[LINK_RUN_TO_SOURCE], SG_BotLocalizationCell(&bot), ent.s.origin, field);
 	CHECK(completion == SG_RUN_ARRIVED);
 	CHECK(SG_RunHasMechanismSuccessor(&fixture.rune,
 	          SEED_TELE_SOURCE));
@@ -538,37 +529,23 @@ static void CheckHighSpeedTeleportHandoff(void)
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f);
 	CHECK(bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
 	CHECK(!bot.commit_retirement_pending);
-	CHECK(bot.seed == SEED_TELE_SOURCE);
-	CHECK(bot.prev_seed == SEED_DEPARTURE);
-	CHECK(bot.prev_seed_time == level.time);
-	CHECK(bot.dither_salt == expected_dither);
+	CHECK(SG_BotLocalizationCell(&bot) < 0);
+	CHECK(bot.prev_seed == -1);
+	CHECK(bot.dither_salt == 0U);
 	CHECK(rand() == expected_random);
-	CHECK(VectorCompare(bot.last_origin, ent.s.origin));
-	CHECK(!bot.seedless_active);
-	CHECK(bot.seedless_since == 0.0f);
-	CHECK(bot.seedless_turn_until == 0.0f);
 	CHECK(ent.s.origin[1] > -1543.0f);
 	CHECK(VectorLength(ent.velocity) < VectorLength(velocity));
 	snprintf(expected_line, sizeof(expected_line),
 	    "RUNHANDOFF Arach frame=4242 completed=0 from=0 to=1 "
-	    "outcome=published seed=1 q8=(%d %d %d)\n",
+	    "outcome=invalidated q8=(%d %d %d)\n",
 	    (int)client.ps.pmove.origin[0], (int)client.ps.pmove.origin[1],
 	    (int)client.ps.pmove.origin[2]);
 	CHECK(dprint_calls == 1);
 	CHECK(strcmp(dprint_line, expected_line) == 0);
 	CHECK(strstr(dprint_line, "next=") == NULL);
 	CHECK(strstr(dprint_line, "act=") == NULL);
-	/* Next-frame pricing starts from the exact authenticated source. The
-	 * fixture intentionally also has an ordinary successor, proving the
-	 * boundary did not choose a mechanism arbitrarily; PickLink remains owner,
-	 * while the TELE candidate passes the action/plan admission gate.
-	 * Full live PickLink/binding selection remains an end-to-end proof. */
-	CHECK(fixture.first_link[bot.seed] == LINK_TELEPORT);
-	CHECK(fixture.links[fixture.first_link[bot.seed]].action == RL_TELEPORT);
-	CHECK(SG_RunMechanismPlanCandidateValid(&fixture.rune, bot.seed,
-	          LINK_TELEPORT));
-	CHECK(!SG_RunMechanismPlanCandidateValid(&fixture.rune, bot.seed,
-	          LINK_RUN_FROM_SOURCE));
+	/* The next authenticated 100 ms caller re-localizes before pricing. The
+	 * handoff itself never publishes a guessed source or chooses a mechanism. */
 
 	callback_bot = NULL;
 	callback_ent = NULL;
@@ -590,7 +567,7 @@ static void CheckDebugOffSuccessSilent(void)
 	memset(&bot, 0, sizeof(bot));
 	memset(&think, 0, sizeof(think));
 	PreparePmoveBody(&ent, &client, origin, velocity);
-	bot.seed = SEED_DEPARTURE;
+	SG_TestBotLocalizationCellSet(&bot, SEED_DEPARTURE);
 	bot.commit_link = LINK_RUN_TO_SOURCE;
 	think.e = &ent;
 	think.bestlink = next_link;
@@ -607,7 +584,7 @@ static void CheckDebugOffSuccessSilent(void)
 	ResetDebugCapture(0.0f);
 	CHECK(SG_RunCompletionHandoff(&fixture.rune, LINK_RUN_TO_SOURCE,
 	          SG_RUN_ARRIVED, &bot, &think, &next_link));
-	CHECK(bot.seed == SEED_TELE_SOURCE);
+	CHECK(SG_BotLocalizationCell(&bot) < 0);
 	CHECK(think_calls == 4);
 	CHECK(dprint_calls == 0);
 	CHECK(dprint_line[0] == '\0');
@@ -628,7 +605,7 @@ static void CheckLateBoundaryTouchesTrigger(void)
 	memset(&bot, 0, sizeof(bot));
 	memset(&coast, 0, sizeof(coast));
 	PreparePmoveBody(&ent, &client, origin, velocity);
-	bot.seed = SEED_DEPARTURE;
+	SG_TestBotLocalizationCellSet(&bot, SEED_DEPARTURE);
 	bot.commit_link = -1;
 	callback_bot = &bot;
 	expected_callback_seed = SEED_DEPARTURE;
@@ -663,10 +640,9 @@ static void CheckOnePostCoastInvalidation(int mode)
 	memset(&bot, 0, sizeof(bot));
 	memset(&think, 0, sizeof(think));
 	PreparePmoveBody(&ent, &client, origin, velocity);
-	bot.seed = SEED_DEPARTURE;
+	SG_TestBotLocalizationCellSet(&bot, SEED_DEPARTURE);
 	bot.prev_seed = -1;
 	bot.dither_salt = 0x13579U;
-	VectorSet(bot.last_origin, 7.0f, 8.0f, 9.0f);
 	bot.commit_link = LINK_RUN_TO_SOURCE;
 	think.e = &ent;
 	think.bestlink = next_link;
@@ -690,12 +666,9 @@ static void CheckOnePostCoastInvalidation(int mode)
 		CHECK(!client.pers.connected);
 	else if (mode == INVALIDATE_SUPPORT)
 		CHECK(ent.groundentity == NULL);
-	CHECK(bot.seed == -1);
+	CHECK(SG_BotLocalizationCell(&bot) == -1);
 	CHECK(bot.prev_seed == -1);
 	CHECK(bot.dither_salt == 0x13579U);
-	CHECK(bot.last_origin[0] == 7.0f);
-	CHECK(bot.last_origin[1] == 8.0f);
-	CHECK(bot.last_origin[2] == 9.0f);
 	CHECK(bot.commit_link == -1);
 	CHECK(think.think_over);
 	CHECK(dprint_calls == 0);
@@ -732,13 +705,13 @@ static void CheckOrdinaryCompletionRetiresTransaction(void)
 	    bot.commit_route_goal.field == NULL && !bot.commit_retirement_pending);
 	CHECK(bot.sticky_link == -1 && bot.latch_until == 0.0f &&
 	    bot.rail_link == -1 && bot.rail_stage == 0 && bot.rail_until == 0.0f);
-	CHECK(bot.seed == SEED_TELE_SOURCE);
+	CHECK(SG_BotLocalizationCell(&bot) == SEED_TELE_SOURCE);
 
 	ArmRunTransaction(&bot, SEED_DEPARTURE);
 	next_link = LINK_RUN_TO_SOURCE;
 	SG_RunRetireCompletedTransaction(&fixture.rune,
 	    LINK_RUN_TO_SOURCE, SG_RUN_ARRIVED, &bot, &next_link);
-	CHECK(next_link == -1 && bot.seed == SEED_DEPARTURE);
+	CHECK(next_link == -1 && SG_BotLocalizationCell(&bot) == SEED_DEPARTURE);
 
 	SetLink(&fixture.links[LINK_RUN_FROM_SOURCE], SEED_ORDINARY,
 	    SEED_TELE_DESTINATION, RL_RUN);
@@ -747,7 +720,7 @@ static void CheckOrdinaryCompletionRetiresTransaction(void)
 	SG_RunRetireCompletedTransaction(&fixture.rune,
 	    LINK_RUN_TO_SOURCE, SG_RUN_OVERACHIEVED, &bot, &next_link);
 	CHECK(next_link == LINK_RUN_FROM_SOURCE && bot.commit_link == -1 &&
-	    bot.seed == SEED_ORDINARY);
+	    SG_BotLocalizationCell(&bot) == SEED_ORDINARY);
 
 	fixture.links[LINK_RUN_FROM_SOURCE].from = SEED_DEPARTURE;
 	ArmRunTransaction(&bot, SEED_ORDINARY);
@@ -761,7 +734,7 @@ static void CheckOrdinaryCompletionRetiresTransaction(void)
 	SG_RunRetireCompletedTransaction(&fixture.rune,
 	    LINK_RUN_TO_SOURCE, SG_RUN_OVERACHIEVED, &bot, &next_link);
 	CHECK(next_link == -1 && bot.commit_link == -1 &&
-	    bot.seed == SEED_ORDINARY);
+	    SG_BotLocalizationCell(&bot) == SEED_ORDINARY);
 
 	ArmRunTransaction(&bot, SEED_DEPARTURE);
 	next_link = LINK_RUN_TO_SOURCE;
@@ -791,7 +764,7 @@ static void CheckMalformedMechanismFailClosed(void)
 	memset(&client, 0, sizeof(client));
 	ent.client = &client;
 	think.e = &ent;
-	bot.seed = SEED_DEPARTURE;
+	SG_TestBotLocalizationCellSet(&bot, SEED_DEPARTURE);
 	bot.commit_link = LINK_RUN_TO_SOURCE;
 	ResetDebugCapture(1.0f);
 	fixture.links[LINK_TELEPORT].mechanism_plan = RUNE_NO_MECHANISM_PLAN;

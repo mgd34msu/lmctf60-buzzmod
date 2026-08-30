@@ -5,9 +5,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* g_local.h exports `world` as a macro; it must not rewrite the BSP authority
+ * declarations reached through the public localization types. */
+#ifdef world
+#define SG_CELL_PHASE_RESTORE_WORLD_MACRO
+#undef world
+#endif
 #include "sg_configuration_semantics.h"
 #include "sg_destination.h"
 #include "sg_host_law_owner.h"
+#ifdef SG_CELL_PHASE_RESTORE_WORLD_MACRO
+#define world (&g_edicts[0])
+#undef SG_CELL_PHASE_RESTORE_WORLD_MACRO
+#endif
 
 #define SG_LOCALIZATION_SUPPORT_MODEL_NONE UINT32_MAX
 
@@ -282,6 +292,15 @@ int SG_CellPhaseLocatorPrepare(
 int SG_CellPhaseRuntimePrepare(const sg_cell_phase_locator_t *locator,
 	sg_cell_phase_runtime_t *runtime_out,
 	sg_localization_status_t *status_out);
+
+/* Production callers may retain a runtime and its latest output only while
+ * the complete owner-issued authority chain remains current.  These queries
+ * do not localize, allocate, or refresh stale storage. */
+int SG_CellPhaseRuntimeCurrent(const sg_cell_phase_runtime_t *runtime);
+int SG_CellPhaseLocalizedStateCurrent(
+	const sg_cell_phase_runtime_t *runtime,
+	const sg_localization_subject_t *subject,
+	const sg_localized_player_state_t *state);
 
 int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *runtime,
 	const sg_localization_request_t *request,

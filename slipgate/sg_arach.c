@@ -66,6 +66,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_strike_adapter.h"
 #include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_host_law_owner.h"
+#include "slipgate/sg_bot_localization.h"
 
 #include <errno.h>
 #include <math.h>
@@ -1823,16 +1824,16 @@ static sg_role_t SG_Role(sg_bot_t *bot, qboolean carrying)
 				/* Use only the team-belief carrier flood while it is current.  An
 				 * unknown teammate position falls back to the public capture stand;
 				 * the exact carrier edict origin never enters assignment. */
-				if (sg_bots[k].seed < 0 ||
-				    sg_bots[k].seed >= SG_Rune()->hdr.num_seeds ||
+				if (SG_BotLocalizationCell(&sg_bots[k]) < 0 ||
+				    SG_BotLocalizationCell(&sg_bots[k]) >= SG_Rune()->hdr.num_seeds ||
 				    !home)
 					continue;
 				route_cost = SG_EscortRouteCost(
 				    sg_fields.our_carrier_valid[ti],
 				    sg_fields.our_carrier[ti]
-				        ? sg_fields.our_carrier[ti][sg_bots[k].seed]
+				        ? sg_fields.our_carrier[ti][SG_BotLocalizationCell(&sg_bots[k])]
 				        : SG_FIELD_INF,
-				    home[sg_bots[k].seed]);
+				    home[SG_BotLocalizationCell(&sg_bots[k])]);
 				if (!SG_AutonomousEscortCandidate(live_team[k],
 				        SG_RoleOutsideDefenderQuota(live_team, SG_MAXBOTS,
 				            k, defenders_wanted),
@@ -1962,11 +1963,11 @@ static qboolean RouteLocalNormalize(sg_bot_t *bot, sg_think_t *tc)
 
 	if (!bot || !tc || !SG_Rune() ||
 	    SG_Rune()->artifact.route_contract != RUNE_ROUTE_CONTRACT_LOCAL_ONLY ||
-	    bot->seed < 0 || bot->seed >= SG_Rune()->hdr.num_seeds ||
-	    !tc->goal_field || tc->goal_field[bot->seed] < SG_FIELD_INF)
+	    SG_BotLocalizationCell(bot) < 0 || SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds ||
+	    !tc->goal_field || tc->goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 		return false;
 	local = sg_fields.to_local_objective;
-	if (!local || local[bot->seed] >= SG_FIELD_INF)
+	if (!local || local[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF)
 		return false;
 	tc->goal_field = local;
 	tc->route_field = local;
@@ -1974,7 +1975,7 @@ static qboolean RouteLocalNormalize(sg_bot_t *bot, sg_think_t *tc)
 	tc->scoop_mission = false;
 	tc->rune_handoff_route = false;
 	tc->mega = 0.0f;
-	bot->last_goalcost = local[bot->seed];
+	bot->last_goalcost = local[SG_BotLocalizationCell(bot)];
 	return true;
 }
 
@@ -2210,7 +2211,7 @@ static void StrikePrepareFrame(void)
 			continue;
 		team = ent->client->ctf.teamnum;
 		bot_team_index = SG_TeamIdx(team);
-		seed = sg_bots[i].seed;
+		seed = SG_BotLocalizationCell(&sg_bots[i]);
 		enemy_field = StrikeEnemyField(team);
 		own_field = StrikeOwnField(team);
 		carrier_field = StrikeCarrierField(team);
@@ -2722,9 +2723,9 @@ static int StrategyPlanRequest(sg_bot_t *bot, sg_think_t *tc,
 		const int *armor_field;
 
 		armor_field = SG_CollectibleArmorTargetField(bot, &target_ent);
-		if (armor_field && target_ent > 0 && bot->seed >= 0 &&
-		    bot->seed < SG_Rune()->hdr.num_seeds &&
-		    armor_field[bot->seed] < SG_FIELD_INF)
+		if (armor_field && target_ent > 0 && SG_BotLocalizationCell(bot) >= 0 &&
+		    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds &&
+		    armor_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 		{
 			memset(&preparation_destination, 0,
 				sizeof(preparation_destination));
@@ -3367,6 +3368,7 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 		return StrategyLegacyExecutionFallback(tc);
 	StrategyAdvanceLiveGoal(bot, tc, now_ms);
 	if (!StrategyFramePlanRequest(bot, tc, strike_duty, &request) ||
+	    !(request.localized_player = SG_BotLocalizationCurrent(bot)) ||
 	    !SG_StrategyRuntimePlanResolve(&request, &plan) ||
 	    !SG_StrategyCallerSubmit(&bot->strategy, &plan, 1U, now_ms,
 		StrategyBlockReason(bot, tc), &output) || !output.execution_field)
@@ -3521,10 +3523,6 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 
 	bot->stuck_time = 0.0f;
 	VectorClear(bot->stuck_origin);
-	bot->seedless_active = false;
-	bot->seedless_since = 0.0f;
-	bot->seedless_turn_until = 0.0f;
-	bot->seedless_yaw = 0.0f;
 	VectorClear(bot->stag_org);
 	bot->stag_since = 0.0f;
 	bot->stag_next = 0.0f;
@@ -3619,9 +3617,9 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 		/* Intermission is scoreboard time, not active play.  A corpse that is
 		 * first observed there must not teach persisted danger from time in
 		 * which navigation and combat are frozen. */
-		if (!level.intermissiontime && bot->seed >= 0)
+		if (!level.intermissiontime && SG_BotLocalizationCell(bot) >= 0)
 		{
-			Danger_Learn(e->client->ctf.teamnum, bot->seed);
+			Danger_Learn(e->client->ctf.teamnum, SG_BotLocalizationCell(bot));
 			Tilt_Note(e, bot);  /* the same death, remembered personally */
 		}
 			Bot_ResetLifeActions(bot);
@@ -3629,7 +3627,7 @@ static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 			Caco_ResetClient(e);
 			bot->death_taught = true;
 	}
-	bot->seed = -1;
+	SG_BotLocalizationReset(bot);
 	bot->view_on = false;   /* respawn snaps the view fresh */
 	/* a chain that ended in a death ended; the frame that would have
 	 * closed it never ran, and a stale start would date the next one */
@@ -3695,221 +3693,6 @@ static void Think_RespawnEdge(sg_bot_t *bot, edict_t *e)
 	}
 }
 
-
-
-
-
-
-/* An optional speedhook deliberately leaves the sampled surface, but its
- * phase-1/2 deadline and release live in Think_Emit.  Keep using only the
- * loader-validated departure owner while that bounded action is active; if
- * the seed itself is stale or non-routable, normal seedless recovery must win.
- */
-static qboolean Think_SpeedhookOwnsSeed(const sg_bot_t *bot)
-{
-	return bot && sg_rune && bot->speedhook && bot->hook_phase != 0 &&
-	       bot->seed >= 0 && bot->seed < sg_rune->hdr.num_seeds &&
-	       !(sg_rune->seeds[bot->seed].flags & RSF_TOMBSTONE) &&
-	       sg_rune->linked_seed && sg_rune->linked_seed[bot->seed];
-}
-
-/* Refresh the bot's current RUNE seed and prior-seed memory. */
-static void Think_TrackSeed(sg_bot_t *bot, edict_t *e, int team)
-{
-	vec3_t d;
-	rune_link_t *commit = NULL;
-
-	if (bot->commit_link >= 0 && sg_rune &&
-	    bot->commit_link < sg_rune->hdr.num_links)
-		commit = &sg_rune->links[bot->commit_link];
-	if (Think_SpeedhookOwnsSeed(bot))
-		return;
-	/* A proved swim is a feedback traversal between two specific endpoints.
-	 * Water-volume seed cells overlap vertically and localization can change
-	 * several times along one stroke; treating each sample as a new route step
-	 * lets combat/fields replace the command before its shared arrival predicate
-	 * is reached. Keep the departure identity for the bounded commitment, just
-	 * as an airborne ballistic keeps it through sparse vertical coverage. */
-	if (commit && SG_ActionRuntimeHasTrait(
-	        commit->action, SG_ACTF_SUPPRESS_LOCALIZATION))
-		return;
-	/* Once a ballistic has submitted its first proved command, its departure
-	 * identity belongs to that bounded action until CommitLink judges the first
-	 * supported/water boundary.  Relocalizing on the landing can return -1 for
-	 * a legitimate incoming-only destination and divert the frame through
-	 * Think_Seedless before arrival or DROP recovery is evaluated. */
-	if (commit &&
-	    ((commit->action == RL_JUMP && bot->jump_started) ||
-	     (commit->action == RL_DROP && bot->drop_started)))
-		return;
-
-	/* A jump/drop is a single proved action, not a new route decision at each
-	 * airborne sample. Tall arcs routinely leave every seed's +/-96 z band;
-	 * relocalizing there either returns -1 or snaps to an unrelated floor and
-	 * chains a second action in midair. Keep the departure seed until the body
-	 * lands, then localize the outcome and argue a fresh step. */
-	if (!e->groundentity && e->waterlevel < 2)
-	{
-		if (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT)
-			return;
-		if (commit &&
-		    (commit->action == RL_JUMP || commit->action == RL_DROP))
-			return;
-	}
-
-	/* where am I on the rune? */
-	VectorSubtract(e->s.origin, bot->last_origin, d);
-	if (bot->seed < 0 || VectorLength(d) > 48.0f)
-	{
-		int was = bot->seed;
-
-		bot->seed = Rune_NearestSeed(sg_rune, e->s.origin);
-		VectorCopy(e->s.origin, bot->last_origin);
-		if (was >= 0 && bot->seed != was)
-		{
-			bot->prev_seed = was;
-			SG_Mark(&bot->prev_seed_time);
-			bot->dither_salt = SG_RouteDitherNext(bot->dither_salt,
-			    was, bot->seed);
-
-			/*
-			 * PITTRACE (sg_debug): the moment a bot's seed enters the
-			 * masked sub-stand region, say who, from where, in what role,
-			 * chasing what tactical waypoint. Three flat nulls said the
-			 * pit traffic rides neither the waypoint surface nor the
-			 * descent steps nor the flag flood -- this line names the
-			 * actual carrier of the traffic.
-			 */
-			if (sg_cv.debug->value && team >= 1 && team <= 2 &&
-			    was < sg_rune->hdr.num_seeds && bot->seed >= 0 &&
-			    bot->seed < sg_rune->hdr.num_seeds)
-			{
-				int pti = SG_TeamIdx(team);
-				const char *role =
-				    (bot->last_role >= 0 && bot->last_role < SG_ROLES)
-				    ? sg_role_names[bot->last_role] : "-";
-
-				if (sg_fields.shelf_cliff[pti] &&
-				    sg_fields.shelf_cliff[pti][bot->seed] > 0 &&
-				    !(sg_fields.shelf_cliff[pti][was] > 0))
-					sg_host.dprint("PITTRACE %s role=%s seed %d->%d z=%.0f "
-					           "tac_seed=%d tac_strategy=%llu hook=%d\n",
-					           e->client->pers.netname,
-					           role,
-					           was, bot->seed, e->s.origin[2],
-					           bot->tac_seed,
-					           (unsigned long long)bot->tac_strategy_activation,
-					           bot->hook_phase);
-			}
-		}
-	}
-}
-
-/*
- * Losing the rune is an exceptional body state, not a navigation mode. A
- * blind line to the closest Euclidean seed repeats the through-wall error
- * this path is meant to contain. Probe real player-box clearance around a
- * bias toward the last valid seed, hold that escape briefly, and respawn if
- * topology is not recovered. The timeout makes a sealed pocket finite.
- */
-static void Think_Seedless(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
-                           qboolean carrying)
-{
-	static const float fan_deg[8] = { 0, -45, 45, -90, 90, 180, -135, 135 };
-	float preferred;
-	int k;
-
-	if (!bot->seedless_active)
-	{
-		bot->seedless_active = true;
-		SG_Mark(&bot->seedless_since);
-		bot->seedless_turn_until = 0.0f;
-		preferred = e->client->v_angle[YAW];
-		if (bot->prev_seed >= 0 && bot->prev_seed < sg_rune->hdr.num_seeds)
-		{
-			vec3_t back;
-
-			VectorSubtract(sg_rune->seeds[bot->prev_seed].origin,
-			               e->s.origin, back);
-			if (back[0] * back[0] + back[1] * back[1] > 1.0f)
-				preferred = atan2f(back[1], back[0]) * 180.0f /
-				            (float)M_PI;
-		}
-		bot->seedless_yaw = preferred;
-	}
-
-	if (SG_AgeAtLeast(bot->seedless_since, carrying ? 12.0f : 6.0f))
-	{
-		/* A carrier gets twice the recovery budget and is never killed while
-		 * secretly retaining the flag. But that must not turn into holding the
-		 * match hostage forever in a sealed/off-graph pocket: release the flag
-		 * through the normal CTF path, then respawn both objective and body. */
-		if (carrying)
-		{
-			edict_t *flag = ClientHasFlag(e);
-
-			if (flag && flag->item)
-				ctf_playerdropflag(e, flag->item);
-		}
-		sg_host.dprint("SG: %s could not recover rune topology; %srespawning\n",
-		               e->client->pers.netname,
-		               carrying ? "released flag and " : "");
-		Cmd_Kill_f(e);
-		bot->seedless_active = false;
-		return;
-	}
-
-	if (SG_TimerReady(bot->seedless_turn_until))
-	{
-		float best_score = -1e30f;
-		float best_yaw = bot->seedless_yaw;
-
-		preferred = bot->seedless_yaw;
-		for (k = 0; k < 8; k++)
-		{
-			float yaw = preferred + fan_deg[k];
-			float rad = yaw * (float)M_PI / 180.0f;
-			vec3_t stepdir, end, probe, down;
-			trace_t ahead, floor;
-			float score;
-
-			stepdir[0] = cosf(rad);
-			stepdir[1] = sinf(rad);
-			stepdir[2] = 0.0f;
-			VectorMA(e->s.origin, 128.0f, stepdir, end);
-			ahead = sg_host.trace(e->s.origin, e->mins, e->maxs,
-			                      end, e, MASK_PLAYERSOLID);
-			score = ahead.fraction - 0.025f * (float)k;
-			if (e->groundentity && e->waterlevel < 2 && ahead.fraction > 0.35f)
-			{
-				VectorMA(e->s.origin, 96.0f * ahead.fraction,
-				         stepdir, probe);
-				VectorCopy(probe, down);
-				down[2] -= 72.0f;
-				floor = sg_host.trace(probe, e->mins, e->maxs,
-				                      down, e, MASK_PLAYERSOLID);
-				if (floor.fraction >= 1.0f)
-					score -= 0.5f;
-			}
-			if (score > best_score)
-			{
-				best_score = score;
-				best_yaw = yaw;
-			}
-		}
-		bot->seedless_yaw = best_yaw;
-		SG_TimerArm(&bot->seedless_turn_until, 0.5f);
-	}
-
-	cmd->angles[YAW] = ANGLE2SHORT(bot->seedless_yaw) -
-	                   e->client->ps.pmove.delta_angles[YAW];
-	cmd->angles[PITCH] = -e->client->ps.pmove.delta_angles[PITCH];
-	cmd->angles[ROLL] = -e->client->ps.pmove.delta_angles[ROLL];
-	cmd->forwardmove = 400;
-	if (e->waterlevel >= 2)
-		cmd->upmove = 300;
-	ClientThink(e, cmd);
-}
 
 
 
@@ -4072,7 +3855,7 @@ static qboolean Bot_DeclaredDoorGuardRestore(sg_bot_t *bot)
 	if (result == SG_COMPOUND_GUARD_OK)
 	{
 		Bot_DeclaredDoorGuardClearAction(bot);
-		bot->seed = -1;
+		SG_BotLocalizationInvalidate(bot);
 		return true;
 	}
 	if (result != SG_COMPOUND_GUARD_NOT_CLEAR)
@@ -4168,6 +3951,7 @@ void SG_BotThink(sg_bot_t *bot)
 	sg_think_t	tc;
 
 	memset(&tc, 0, sizeof(tc));
+	SG_BotLocalizationFrameBegin(bot);
 	tc.cmd.msec = 100;
 	VectorClear(duel_org);
 	if (SG_CompoundSwimGameOwns(bot))
@@ -4182,7 +3966,7 @@ void SG_BotThink(sg_bot_t *bot)
 	rune_compatible = SG_RunePhysicsCompatible(sg_rune);
 	declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);
 	if (!rune_compatible && !declared_door_guarded)
-		bot->seed = -1;
+		SG_BotLocalizationInvalidate(bot);
 	{
 		sg_compound_guard_run_t run_state;
 
@@ -4255,7 +4039,7 @@ void SG_BotThink(sg_bot_t *bot)
 		    Bot_DeclaredDoorGuardRetainOrRelease(bot))
 			return;
 		if (declared_door_guarded)
-			bot->seed = -1;
+			SG_BotLocalizationInvalidate(bot);
 		memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
 		SG_PushLiveReset(&bot->push);
 		bot->nade_phase = 0;
@@ -4274,10 +4058,6 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->railhold_next = 0.0f;
 		bot->railhold_patience = 0.0f;
 		bot->railhold_enemy = -1;
-		bot->seedless_active = false;
-		bot->seedless_since = 0.0f;
-		bot->seedless_turn_until = 0.0f;
-		bot->seedless_yaw = 0.0f;
 		VectorCopy(e->s.origin, bot->stag_org);
 		SG_Mark(&bot->stag_since);
 		bot->stag_next = 0.0f;
@@ -4378,7 +4158,7 @@ void SG_BotThink(sg_bot_t *bot)
 		    Bot_DeclaredDoorGuardRetainOrRelease(bot))
 			return;
 		if (declared_door_guarded)
-			bot->seed = -1;
+			SG_BotLocalizationInvalidate(bot);
 		/* This zero-input cleanup frame is outside every serialized action
 		 * witness.  If stale host rope state surfaced after a JUMP/DROP/RJ had
 		 * already started, resuming that action on the next frame would splice an
@@ -4643,9 +4423,9 @@ void SG_BotThink(sg_bot_t *bot)
 	/* Objective published the prior route cost before the strike overlay may
 	 * replace its route.  Publish the same live directed cost for downstream
 	 * approach/terminal policy so a duty switch cannot retain stale pricing. */
-	bot->last_goalcost = (bot->seed >= 0 &&
-	                      goal_field[bot->seed] < SG_FIELD_INF)
-	                     ? goal_field[bot->seed] : -1;
+	bot->last_goalcost = (SG_BotLocalizationCell(bot) >= 0 &&
+	                      goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+	                     ? goal_field[SG_BotLocalizationCell(bot)] : -1;
 
 	/* The legacy approach band owns a 15-second/periodic rally clock.  A
 	 * strike member is governed by the same-frame HOLD/RUSH verdict instead;
@@ -4659,31 +4439,15 @@ void SG_BotThink(sg_bot_t *bot)
 	bot->term_brake = 1.0f;         /* terminal braking re-earned every frame */
 	bot->terminal = false;
 
-	Think_TrackSeed(bot, e, team);
-	if ((bot->seed < 0 || goal_field[bot->seed] >= SG_FIELD_INF) &&
-	    !Think_SpeedhookOwnsSeed(bot) &&
-	    !(bot->seed >= 0 && bot->commit_link >= 0 &&
-	      bot->commit_link < sg_rune->hdr.num_links &&
-	      SG_ActionRuntimeHasTrait(
-	          sg_rune->links[bot->commit_link].action,
-	          SG_ACTF_SUPPRESS_LOCALIZATION)) &&
-	    !(bot->seed >= 0 && !e->groundentity && e->waterlevel < 2 &&
-	      (bot->rocketjump.phase == SG_ROCKETJUMP_FLIGHT ||
-	       (bot->commit_link >= 0 &&
-	        bot->commit_link < sg_rune->hdr.num_links &&
-	         (sg_rune->links[bot->commit_link].action == RL_JUMP ||
-	          sg_rune->links[bot->commit_link].action == RL_DROP)))) &&
-	    !(bot->seed >= 0 && bot->commit_link >= 0 &&
-	      bot->commit_link < sg_rune->hdr.num_links &&
-	      ((sg_rune->links[bot->commit_link].action == RL_JUMP &&
-	        bot->jump_started) ||
-	       (sg_rune->links[bot->commit_link].action == RL_DROP &&
-	        bot->drop_started))))
+	if (SG_BotLocalizationCell(bot) < 0 ||
+	    goal_field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF)
 	{
-		Think_Seedless(bot, e, &tc.cmd, carrying);
+		StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_CONTROLLER);
+		memset(&tc.cmd, 0, sizeof(tc.cmd));
+		tc.cmd.msec = 100;
+		ClientThink(e, &tc.cmd);
 		return;
 	}
-	bot->seedless_active = false;
 
 	/*
 	 * The precision case: no tricks on the final approach.
@@ -4696,7 +4460,7 @@ void SG_BotThink(sg_bot_t *bot)
 	 * the same idea is stated in time: inside a second and a half of the
 	 * objective, run plainly and be able to stop. Speed serves the objective.
 	 */
-	precision = (goal_field[bot->seed] < 1500);
+	precision = (goal_field[SG_BotLocalizationCell(bot)] < 1500);
 
 	/*
 	 * Ask combat whether there is a fight on, ONCE, before the fan is walked.
@@ -4895,6 +4659,7 @@ void SG_RunFrame(void)
 			    ent->client->pers.netname, level.framenum,
 			    ent->deadflag == DEAD_NO && ent->health > 0);
 		SG_BotThink(&sg_bots[i]);
+		SG_BotLocalizationFrameEnd(&sg_bots[i]);
 	}
 }
 
@@ -4907,8 +4672,9 @@ void SG_LevelChange(void)
 
 	/* An authenticated runtime provider may borrow map-owned snapshot, field,
 	 * and localization storage.  Clear it before any level owner tears those
-	 * sources down; bot movement then uses the explicit non-authoritative
-	 * legacy fallback until the next accepted provider registers. */
+	 * sources down; bot movement then fails closed until the next accepted
+	 * provider registers. */
+	(void)SG_BotLocalizationProviderSet(NULL);
 	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL);
 	SG_HostLawProductionReset();
 	/* Map teardown is a terminal owner in its own right. Finish before the

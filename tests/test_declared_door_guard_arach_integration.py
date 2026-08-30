@@ -100,7 +100,7 @@ def test_incompatible_physics_holds_before_clear_or_clientthink() -> None:
     refence = incompatible.index("SG_DeclaredDoorGuardRunState(bot)", clear)
     clientthink = incompatible.index("ClientThink(e, &tc.cmd);", clear)
     assert abort < retain < held_return < clear < refence < clientthink
-    assert incompatible.index("bot->seed = -1;", held_return) < clear
+    assert incompatible.index("SG_BotLocalizationInvalidate(bot);", held_return) < clear
 
 
 def test_stale_rope_obeys_the_same_held_lease_rule() -> None:

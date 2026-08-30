@@ -1310,6 +1310,7 @@ OBJS := \
 	slipgate/sg_belief.o \
 	slipgate/sg_destination.o \
 	slipgate/sg_cell_phase_localization.o \
+	slipgate/sg_bot_localization.o \
 	slipgate/sg_rune_dynamics_model.o \
 	slipgate/sg_rune_dynamics_geometry.o \
 	slipgate/sg_rune_field_contract.o \
@@ -1380,6 +1381,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
 .PHONY: all default host-test host-law-runtime-link-check action-test \
+	bot-localization-test \
 	compound-test mover-lease-test \
 	water-forest-test \
 	povlock-test pov-session-production-test pov-supervisor-test \
@@ -1623,6 +1625,11 @@ slipgate/sg_cell_phase_localization.o: \
 		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
 		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
 		slipgate/sg_rune_model.h game.h q_shared.h
+slipgate/sg_bot_localization.o: slipgate/sg_bot_localization.c \
+		slipgate/sg_bot_localization.h slipgate/sg_bot.h \
+		slipgate/sg_cell_phase_localization.h \
+		slipgate/sg_host_law_owner.h slipgate/sg_host_pmove.h \
+		g_local.h game.h q_shared.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 -include $(OBJS:.o=.d)
@@ -4816,6 +4823,12 @@ human-hook-ownership-test: tests/sg_human_hook_ownership_test.c \
 		tests/sg_human_hook_ownership_test.c slipgate/sg_client_ownership.c
 	$(Q)./sg_human_hook_ownership_test.make
 	$(Q)python3 -B tests/test_human_hook_ownership_integration.py
+
+bot-localization-test: tests/run_sg_bot_localization_test.sh \
+		tests/sg_bot_localization_test.c \
+		tests/test_bot_localization_integration.py \
+		slipgate/sg_bot_localization.c slipgate/sg_bot_localization.h
+	$(Q)sh tests/run_sg_bot_localization_test.sh
 replay-test: $(REPLAY_TEST_BIN)
 	$(E) [TEST] $<
 	$(Q)./$(REPLAY_TEST_BIN)

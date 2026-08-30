@@ -16,6 +16,10 @@ int SG_HostEngineRuntimeOwnerSubject(
 int SG_HostEngineRuntimeOwnerSubjectCurrent(
 	const sg_host_engine_runtime_t *runtime,
 	const sg_host_engine_subject_identity_t *subject);
+int SG_HostEngineRuntimeOwnerSubjectState(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *subject,
+	sg_host_pmove_state_observation_t *observation_out);
 int SG_HostEngineRuntimeOwnerReplayFrame(
 	const sg_host_engine_runtime_t *runtime,
 	const sg_host_engine_subject_identity_t *subject,

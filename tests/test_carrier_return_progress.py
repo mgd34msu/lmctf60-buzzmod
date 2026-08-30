@@ -48,7 +48,7 @@ def test_astray_without_cover_never_zeroes_carrier_movement():
 
 def test_astray_selects_reachable_standoff_then_holds_only_at_cover():
     cover = section(DESCEND, "static int Carrier_RallyCover", "static qboolean Carrier_LinkShelved")
-    assert "SG_CarrierCoverRouteAllowed(SG_Rune(), bot->seed, seed)" in cover
+    assert "SG_CarrierCoverRouteAllowed(SG_Rune(), SG_BotLocalizationCell(bot), seed)" in cover
     assert "goal_field[seed] < 600 || goal_field[seed] >= 2500" in cover
     assert "SG_CanSee(e, SG_Rune()->seeds[seed].origin, 22.0f)" in cover
     assert "if (distance > 1200.0f)" in cover
@@ -62,7 +62,7 @@ def test_astray_selects_reachable_standoff_then_holds_only_at_cover():
 def test_flag_return_clears_carrier_hold_and_resumes_homeward_route():
     hold = section(DESCEND, "if (role == SG_ROLE_CARRY)",
                    "if (bot->railhold_since > level.time")
-    release = section(hold, "if (!ours_astray)", "else if (bot->seed")
+    release = section(hold, "if (!ours_astray)", "else if (SG_BotLocalizationCell(bot)")
     assert "bot->rally_cover = -1;" in release
     assert "rally_hold = false;" in release
 
@@ -109,7 +109,7 @@ def test_one_exit_cycle_stays_mobile_without_erasing_shelf_evidence():
 def test_exact_route_owners_require_complete_edge_progress():
     weapon = section(DESCEND, "static int StrikeWeaponFilterFreshCandidate",
                      "static void StrikeCommitFreshLink")
-    assert "SG_RouteCandidateDescends(route_field[bot->seed]" in weapon
+    assert "SG_RouteCandidateDescends(route_field[SG_BotLocalizationCell(bot)]" in weapon
 
 
 def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
@@ -121,7 +121,7 @@ def test_multiexit_cycle_never_reuses_shelved_edge_as_fallback():
                        recent={1}, shelved={10}, alternate_only=False) == 10
     select = section(DESCEND, "static int Objective_CycleRoute", "static void StrikeWeaponPurposeClear")
     assert "return finite_count == 1 ? finite_link : -1;" in select
-    assert "candidate->from != bot->seed" in select
+    assert "candidate->from != SG_BotLocalizationCell(bot)" in select
     cycle = section(DESCEND, "int cycle_link = bestlink;",
                     "bot->visit_seed[bot->visit_head]")
     assert "A multi-exit fan with no safe alternate" in cycle
@@ -206,7 +206,7 @@ def test_run_lookahead_preserves_complete_route_ordering():
 def test_off_surface_recovery_uses_only_local_trace_checked_field_seeds():
     recovery = section(
         MOVE,
-        "else if (bot->seed >= 0 &&",
+        "else if (SG_BotLocalizationCell(bot) >= 0 &&",
         "if (!have_aim)",
     )
     assert "Rune_NearestFieldSeed(SG_Rune(), e->s.origin," in recovery

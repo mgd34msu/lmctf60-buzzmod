@@ -419,8 +419,7 @@ int SG_RocketJumpGameStageAuthenticatedProbe(int link_index)
 	entity->client->oldbuttons = 0;
 	entity->client->latched_buttons = 0;
 	memset(&bot->rocketjump, 0, sizeof(bot->rocketjump));
-	bot->seed = SG_Rune()->links[link_index].from;
-	VectorCopy(entity->s.origin, bot->last_origin);
+	SG_BotLocalizationInvalidate(bot);
 	bot->commit_link = link_index;
 	bot->sticky_link = link_index;
 	bot->commit_until = level.time + 5.0f;

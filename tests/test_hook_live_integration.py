@@ -295,9 +295,9 @@ assert "Fields_LinkTraversalCostMs(l5)" in run_room
 # different coordinator mission and must not shelf or ban a route-serving ride.
 landing_value = body("A ride that did not SERVE the field failed",
                      "bot->hook_link = -1;")
-assert "route_field[bot->seed]" in landing_value
+assert "route_field[SG_BotLocalizationCell(bot)]" in landing_value
 assert "route_field[hl->to]" in landing_value
-assert "goal_field[bot->seed]" not in landing_value
+assert "goal_field[SG_BotLocalizationCell(bot)]" not in landing_value
 assert "goal_field[hl->to]" not in landing_value
 assert 'SG_HookGameDisciplineRetire(e, bot, link_index, 5.0f, false,' in fire
 assert "goto hook_wait;" in fire[fire_retire:fire_proof]

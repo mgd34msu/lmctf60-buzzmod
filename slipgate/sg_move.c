@@ -4464,13 +4464,13 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 */
 				if (bot->hook_link >= 0 &&
 				    bot->hook_link < SG_Rune()->hdr.num_links &&
-				    bot->seed >= 0 &&
-				    route_field[bot->seed] < SG_FIELD_INF)
+				    SG_BotLocalizationCell(bot) >= 0 &&
+				    route_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 				{
 					rune_link_t *hl = &SG_Rune()->links[bot->hook_link];
 
 					if (route_field[hl->to] < SG_FIELD_INF &&
-					    route_field[bot->seed] >
+					    route_field[SG_BotLocalizationCell(bot)] >
 					        route_field[hl->to] + 300)
 					{
 						int b, oldest = 0;
@@ -4852,7 +4852,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (bot->hook_phase == 0 && !bot->engaged_last &&
 				    SG_TimerReady(bot->speedhook_next) &&
 				    e->groundentity && e->waterlevel == 0 &&
-				    goal_field[bot->seed] >
+				    goal_field[SG_BotLocalizationCell(bot)] >
 				        ((sg_cv.freeride->value > 0.0f ||
 				          sg_cv.ropetravel->value > 0.0f)
 				             ? 2000 : 4000))
@@ -4964,7 +4964,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				        destination_water, live_dry, live_water, air_safe))
 				{
 					SG_StagedTraversalCancel(bot, l->action);
-					bot->seed = -1;
+					SG_BotLocalizationInvalidate(bot);
 					ballistic_abort = true;
 					goto hook_stage_done;
 				}
@@ -5265,8 +5265,8 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			view_yaw = ay;
 			view_pitch = ap;
 		}
-		else if (bot->seed >= 0 &&
-		         goal_field[bot->seed] >= SG_FIELD_INF)
+		else if (SG_BotLocalizationCell(bot) >= 0 &&
+		         goal_field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF)
 		{
 			/* Rejoin the nearest finite field seed instead of orbiting the goal. */
 			int best = Rune_NearestFieldSeed(SG_Rune(), e->s.origin,
@@ -5329,7 +5329,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				if (!touch_terminal)
 				{
 					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
-					    goal_field, bot->seed);
+					    goal_field, SG_BotLocalizationCell(bot));
 					if (terminal_seed >= 0)
 					{
 						VectorCopy(SG_Rune()->seeds[terminal_seed].origin,
@@ -5345,7 +5345,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * Falling back unconditionally to the flag stand discards that
 				 * selected mission at the field minimum. */
 				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
-				    bot->seed);
+				    SG_BotLocalizationCell(bot));
 				if (terminal_seed >= 0)
 				{
 					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
@@ -5360,7 +5360,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * its exact teammate above; SCOOP retains its distinct dropped-
 				 * flag belief below. */
 				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
-				    bot->seed);
+				    SG_BotLocalizationCell(bot));
 				if (terminal_seed >= 0)
 				{
 					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
@@ -5380,7 +5380,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				else
 				{
 					terminal_seed = SG_TerminalFieldSeed(SG_Rune(),
-					    goal_field, bot->seed);
+					    goal_field, SG_BotLocalizationCell(bot));
 					if (terminal_seed >= 0)
 					{
 						VectorCopy(SG_Rune()->seeds[terminal_seed].origin,
@@ -5392,7 +5392,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 			else if (!have_aim && !gf && tc->rune_handoff_route)
 			{
 				terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
-				    bot->seed);
+				    SG_BotLocalizationCell(bot));
 				if (terminal_seed >= 0)
 				{
 					VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
@@ -5410,7 +5410,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					 * source; substituting the empty home stand here discarded the
 					 * objective on the final graphless body-length. */
 					terminal_seed = SG_TerminalFieldSeed(SG_Rune(), goal_field,
-					    bot->seed);
+					    SG_BotLocalizationCell(bot));
 					if (terminal_seed >= 0)
 					{
 						VectorCopy(SG_Rune()->seeds[terminal_seed].origin, aim);
@@ -5450,7 +5450,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				 * fallback retains capture behavior only; an attacker without
 				 * that proof must never project through a stand marker. */
 				if (role == SG_ROLE_CARRY && touch_terminal &&
-				    bot->seed >= 0)
+				    SG_BotLocalizationCell(bot) >= 0)
 				{
 					vec3_t fd7;
 					float fl7;
@@ -5665,10 +5665,10 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				vec3_t rd;
 
 				if (SG_TimerReadyStrict(bot->rail_until) ||
-				    bot->seed == rl->to)
+				    SG_BotLocalizationCell(bot) == rl->to)
 				{
 					if (SG_TimerReadyStrict(bot->rail_until) &&
-					    bot->seed != rl->to)
+					    SG_BotLocalizationCell(bot) != rl->to)
 					{
 						int b2, old2 = 0;
 
@@ -5682,7 +5682,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 						if (sg_cv.debug->value)
 							sg_host.dprint("RAILFAIL %s link=%d seed=%d\n",
 							           e->client->pers.netname,
-							           bestlink, bot->seed);
+							           bestlink, SG_BotLocalizationCell(bot));
 					}
 					else if (sg_cv.debug->value)
 						sg_host.dprint("RAILWIN %s link=%d\n",
@@ -5926,7 +5926,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 					 * the base side). The 30s memory reroutes THIS bot; the
 					 * field funnels the rest of the team in behind it unless
 					 * the corridor repricies globally. Same cure as the wall. */
-					SG_TeachFutility(bot->seed);
+					SG_TeachFutility(SG_BotLocalizationCell(bot));
 					if (sg_cv.debug->value)
 						sg_host.dprint("DEADDOOR %s at (%.0f %.0f %.0f)\n",
 							           e->client->pers.netname, e->s.origin[0],
@@ -5963,7 +5963,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		    SG_TimerRemaining(e->air_finished) <
 		        ((role == SG_ROLE_CARRY) ? 8.0f : 4.0f))
 		{
-			int air_from = bot->seed;
+			int air_from = SG_BotLocalizationCell(bot);
 			int an;
 
 			/* A submerged body can still be localized to a dry shore seed. Use
@@ -5976,11 +5976,11 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 				    bot->swim_air_seed < SG_Rune()->hdr.num_seeds &&
 				    (SG_Rune()->seeds[bot->swim_air_seed].flags & RSF_WATER))
 					air_from = bot->swim_air_seed;
-				else if (bot->seed >= 0)
+				else if (SG_BotLocalizationCell(bot) >= 0)
 				{
 					int ali;
 
-					for (ali = SG_Rune()->first_link[bot->seed]; ali >= 0;
+					for (ali = SG_Rune()->first_link[SG_BotLocalizationCell(bot)]; ali >= 0;
 					     ali = SG_Rune()->next_link[ali])
 					{
 						rune_link_t *al = &SG_Rune()->links[ali];
@@ -6121,7 +6121,7 @@ void Think_Move(sg_bot_t *bot, sg_think_t *tc)
 		}
 
 		/*
-		 * Short-range progress has its own sample. last_origin is a 48-unit
+		 * Short-range progress has its own sample. The old current-position
 		 * seed-localization checkpoint; using it here meant a body wedged 5-47
 		 * units past that checkpoint could never satisfy the old <4 test. Sample
 		 * actual route progress instead, after every intentional hold and brake
@@ -7898,10 +7898,10 @@ void Think_Emit(sg_bot_t *bot, sg_think_t *tc)
 			{
 				vec3_t destination;
 				qboolean escape = swim_emergency || swim_hazard;
-				int air_from = bot->seed;
+				int air_from = SG_BotLocalizationCell(bot);
 				int air_seed;
 
-				/* Think_TrackSeed preserves the departure identity while SWIM owns
+				/* Typed localization preserves the departure phase while SWIM owns
 				 * the body. On a dry-to-water edge that preserved seed has no air
 				 * relaxation entry, even though the body is now submerged. The
 				 * proved water endpoint is at most one local stroke away and is the
@@ -9967,14 +9967,14 @@ hook_wait:;
 		    : ((team == CTF_TEAM_RED) ? sg_fields.to_red_flag
 		                              : sg_fields.to_blue_flag);
 
-		if (bot->seed >= 0 && sfld && sfld[bot->seed] < SG_FIELD_INF)
-			sgoal = sfld[bot->seed];
+		if (SG_BotLocalizationCell(bot) >= 0 && sfld && sfld[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+			sgoal = sfld[SG_BotLocalizationCell(bot)];
 		SG_TimerArm(&bot->next_report, 1.0f);
 		sg_host.dprint("SG %s: role=%d seed=%d goal=%d sgoal=%d spd=%.0f org=(%d %d %d) link=%d "
 		           "act=%d hp=%d dh=%d dl=%d st=%.1f gnd=%d eng=%d frm=%d\n",
-		           e->client->pers.netname, role, bot->seed,
-		           (bot->seed >= 0 && goal_field[bot->seed] < SG_FIELD_INF)
-		               ? goal_field[bot->seed] : -1,
+		           e->client->pers.netname, role, SG_BotLocalizationCell(bot),
+		           (SG_BotLocalizationCell(bot) >= 0 && goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+		               ? goal_field[SG_BotLocalizationCell(bot)] : -1,
 		           sgoal,
 		           sp, SG_TelemetryCoordinate(e->s.origin[0]),
 		           SG_TelemetryCoordinate(e->s.origin[1]),

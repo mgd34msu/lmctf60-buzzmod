@@ -47,6 +47,16 @@ typedef struct sg_host_pmove_request_s
 	uint32_t hook_length;
 } sg_host_pmove_request_t;
 
+/* One coherent live state copied by the engine-runtime owner while an exact
+ * bot-life subject is current.  This is an observation, not a movement
+ * request: callers cannot supply or alter it before localization consumes it. */
+typedef struct sg_host_pmove_state_observation_s
+{
+	pmove_state_t state;
+	float origin[3];
+	float velocity[3];
+} sg_host_pmove_state_observation_t;
+
 typedef struct sg_host_pmove_result_s
 {
 	pmove_state_t state;

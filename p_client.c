@@ -6,6 +6,7 @@
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_human_trace.h"
+#include "slipgate/sg_bot_localization.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_combat.h"
 #include "slipgate/sg_compound_guard_game.h"
@@ -3049,6 +3050,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 			pm.numtouch = (int)result.touch_count;
 			for (i = 0; i < pm.numtouch; i++)
 				pm.touchents[i] = &g_edicts[result.touch_instance_ids[i]];
+			SG_BotLocalizationObservePmove(ent, &request, &result);
 		}
 		else
 		{

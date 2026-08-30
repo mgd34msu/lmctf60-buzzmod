@@ -548,8 +548,7 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 	entity->watertype = binding->source.watertype;
 	memset(&bot->compound_drop_live, 0, sizeof(bot->compound_drop_live));
 	bot->compound_drop_live.drop_link = -1;
-	bot->seed = binding->link.from;
-	VectorCopy(entity->s.origin, bot->last_origin);
+	SG_BotLocalizationInvalidate(bot);
 	bot->commit_link = link_index;
 	bot->sticky_link = link_index;
 	bot->commit_until = level.time + 5.0f;
@@ -563,9 +562,6 @@ int SG_CompoundDropGameStageAuthenticatedProbe(int link_index)
 	SG_Mark(&bot->watch_since);
 	SG_Mark(&bot->stag_since);
 	SG_Mark(&bot->wedge_since);
-	bot->seedless_active = false;
-	bot->seedless_since = 0.0f;
-	bot->seedless_turn_until = 0.0f;
 	sg_host.linkentity(entity);
 	if (!SG_CompoundDropGameHost(bot, &host) ||
 	    !SG_CompoundDropGamePose(entity, &pose))

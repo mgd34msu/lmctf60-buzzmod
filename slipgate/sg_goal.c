@@ -135,9 +135,9 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		bot->rally_since = 0.0f;
 		return false;
 	}
-	if (bot->seed >= 0 && SG_Rune() &&
-	    bot->seed < SG_Rune()->hdr.num_seeds)
-		goal_ms = goal_field[bot->seed];
+	if (SG_BotLocalizationCell(bot) >= 0 && SG_Rune() &&
+	    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds)
+		goal_ms = goal_field[SG_BotLocalizationCell(bot)];
 	pressure_approach = SG_StrikePrebreachApproachAllowed(
 	    tc->strike_active, tc->strike_pressure,
 	    role == SG_ROLE_ATTACK, goal_ms);
@@ -158,9 +158,9 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		}
 	}
 
-	if (!tc->strike_active && role == SG_ROLE_ATTACK && bot->seed >= 0 &&
-	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 8000 &&
-	    goal_field[bot->seed] < SG_FIELD_INF &&
+	if (!tc->strike_active && role == SG_ROLE_ATTACK && SG_BotLocalizationCell(bot) >= 0 &&
+	    goal_field[SG_BotLocalizationCell(bot)] > 2000 && goal_field[SG_BotLocalizationCell(bot)] < 8000 &&
+	    goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
 	    SG_TimerPending(sg_push_until[SG_TeamIdx(team)]))
 	{
 		/* the bell rang: no waiting, no rally, run the window */
@@ -168,9 +168,9 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		goto rally_done;
 	}
 
-	if (!tc->strike_active && role == SG_ROLE_ATTACK && bot->seed >= 0 &&
-	    goal_field[bot->seed] > 2000 && goal_field[bot->seed] < 5000 &&
-	    goal_field[bot->seed] < SG_FIELD_INF)
+	if (!tc->strike_active && role == SG_ROLE_ATTACK && SG_BotLocalizationCell(bot) >= 0 &&
+	    goal_field[SG_BotLocalizationCell(bot)] > 2000 && goal_field[SG_BotLocalizationCell(bot)] < 5000 &&
+	    goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 	{
 		int bi, mates_near = 0, mates_coming = 0;
 
@@ -211,7 +211,7 @@ qboolean Think_ApproachBand(sg_bot_t *bot, sg_think_t *tc)
 		{
 			if (bot->rally_since <= 0.0f)
 			{
-				int best_cover = Rally_CoverSeed(SG_Rune(), bot->seed);
+				int best_cover = Rally_CoverSeed(SG_Rune(), SG_BotLocalizationCell(bot));
 
 				/* Rally cover is the current seed or one proved RUN away. */
 				bot->rally_cover = best_cover;
@@ -573,12 +573,12 @@ static qboolean DefenseSupplyWeaponFieldReachable(const sg_bot_t *bot)
 {
 	const int *field;
 
-	if (!bot || !SG_Rune() || bot->seed < 0 ||
-	    bot->seed >= SG_Rune()->hdr.num_seeds)
+	if (!bot || !SG_Rune() || SG_BotLocalizationCell(bot) < 0 ||
+	    SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds)
 		return false;
 	field = sg_fields.item[SG_FC_WEAPON];
-	return field && field[bot->seed] < SG_FIELD_INF &&
-	       field[bot->seed] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
+	return field && field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
+	       field[SG_BotLocalizationCell(bot)] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
 }
 
 /* Defenders and strike attackers are mutually exclusive route owners, so one
@@ -1079,8 +1079,8 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 	int i, best_ent = -1, best_seed = -1, best_cost = SG_FIELD_INF;
 	int bi = DefenseSupplyBotIndex(bot);
 
-	if (!bot || !SG_Rune() || bot->seed < 0 ||
-	    bot->seed >= SG_Rune()->hdr.num_seeds)
+	if (!bot || !SG_Rune() || SG_BotLocalizationCell(bot) < 0 ||
+	    SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds)
 		return false;
 	for (i = 0; i < globals.num_edicts; i++)
 	{
@@ -1094,7 +1094,7 @@ static qboolean DefenseSupplyFindTarget(const sg_bot_t *bot, int *out_ent,
 			continue;
 		Field_Flood(SG_Rune(), sg_weapon_target_field[bi],
 		            &seed, &flood_cost, 1);
-		cost = sg_weapon_target_field[bi][bot->seed];
+		cost = sg_weapon_target_field[bi][SG_BotLocalizationCell(bot)];
 		if (cost < best_cost)
 		{
 			best_cost = cost;
@@ -1130,8 +1130,8 @@ static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
 	int i, bi, best_ent = -1, best_seed = -1;
 	int best_cost = SG_FIELD_INF;
 
-	if (!bot || !bot->ent || !SG_Rune() || bot->seed < 0 ||
-	    bot->seed >= SG_Rune()->hdr.num_seeds)
+	if (!bot || !bot->ent || !SG_Rune() || SG_BotLocalizationCell(bot) < 0 ||
+	    SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds)
 		return false;
 	bi = DefenseSupplyBotIndex(bot);
 	for (i = 1; i < globals.num_edicts; i++)
@@ -1146,7 +1146,7 @@ static qboolean StrikeWeaponFindTarget(sg_bot_t *bot)
 			continue;
 		Field_Flood(SG_Rune(), sg_weapon_target_field[bi], &seed,
 		            &ignored, 1);
-		cost = sg_weapon_target_field[bi][bot->seed];
+		cost = sg_weapon_target_field[bi][SG_BotLocalizationCell(bot)];
 		if (cost < best_cost ||
 		    (cost == best_cost && (best_ent < 0 || i < best_ent)))
 		{
@@ -1173,8 +1173,8 @@ const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms)
 
 	if (route_ms)
 		*route_ms = -1;
-	if (!bot || !SG_Rune() || bot->seed < 0 ||
-	    bot->seed >= SG_Rune()->hdr.num_seeds)
+	if (!bot || !SG_Rune() || SG_BotLocalizationCell(bot) < 0 ||
+	    SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds)
 		return NULL;
 	if (!SG_StrikeWeaponTargetValid(bot))
 	{
@@ -1183,13 +1183,13 @@ const int *SG_StrikeWeaponTargetField(sg_bot_t *bot, int *route_ms)
 			return NULL;
 	}
 	field = WeaponTargetField(bot, bot->strike_weapon_target_seed);
-	if (!field || field[bot->seed] >= SG_FIELD_INF)
+	if (!field || field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF)
 	{
 		SG_StrikeWeaponTargetClear(bot);
 		return NULL;
 	}
 	if (route_ms)
-		*route_ms = field[bot->seed];
+		*route_ms = field[SG_BotLocalizationCell(bot)];
 	return field;
 }
 
@@ -1225,8 +1225,8 @@ static qboolean DefenseSupplyCoreEligible(sg_bot_t *bot, sg_think_t *tc,
 	    (!active && SG_ChatOrderedRole(tc->e) >= 0) ||
 	    (!active && DefenseSupplyOtherOwner(bot, false)))
 		return false;
-	if (!SG_Rune() || bot->seed < 0 ||
-	    bot->seed >= SG_Rune()->hdr.num_seeds)
+	if (!SG_Rune() || SG_BotLocalizationCell(bot) < 0 ||
+	    SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds)
 		return false;
 	if (active && bot->def_supply_instance != bot->instance_token)
 		return false;
@@ -1283,9 +1283,9 @@ static qboolean DefenseSupplyTargetFieldReachable(const sg_bot_t *bot)
 {
 	const int *field = SG_DefenseSupplyTargetField((sg_bot_t *)bot);
 
-	return field && bot && bot->seed >= 0 &&
-	       field[bot->seed] < SG_FIELD_INF &&
-	       field[bot->seed] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
+	return field && bot && SG_BotLocalizationCell(bot) >= 0 &&
+	       field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF &&
+	       field[SG_BotLocalizationCell(bot)] <= SG_DEF_SUPPLY_MAX_ROUTE_MS;
 }
 
 static const int *DefenseSupplyRouteField(sg_bot_t *bot,
@@ -1301,7 +1301,7 @@ static const int *DefenseSupplyRouteField(sg_bot_t *bot,
 	if (!SG_DefenseSupplyRoute(
 		    (sg_defense_supply_phase_t)bot->def_supply_phase,
 		    NULL, target_field, goal_field,
-		    bot->seed, SG_DEF_SUPPLY_MAX_ROUTE_MS,
+		    SG_BotLocalizationCell(bot), SG_DEF_SUPPLY_MAX_ROUTE_MS,
 		    &route))
 		return goal_field;
 	/* Route authority is a fresh flood from the selected valid pad.  The broad
@@ -1654,7 +1654,7 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			if (hs >= 0)
 			{
 				Field_Flood(SG_Rune(), escort_field, &hs, &hc, 1);
-				if (bot->seed >= 0 && escort_field[bot->seed] < SG_FIELD_INF)
+				if (SG_BotLocalizationCell(bot) >= 0 && escort_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 					goal_field = escort_field;
 			}
 		}
@@ -1700,8 +1700,8 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 				if (bot->runeconv_until <= 0.0f)
 					SG_TimerArm(&bot->runeconv_until, 8.0f);
 				if (SG_TimerPending(bot->runeconv_until) &&
-				    bot->seed >= 0 &&
-				    sg_fields.our_carrier[SG_TeamIdx(team)][bot->seed] <
+				    SG_BotLocalizationCell(bot) >= 0 &&
+				    sg_fields.our_carrier[SG_TeamIdx(team)][SG_BotLocalizationCell(bot)] <
 				        SG_FIELD_INF)
 				{
 					goal_field = sg_fields.our_carrier[SG_TeamIdx(team)];
@@ -1732,9 +1732,9 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	}
 	tc->mega = (tc->strike_blocks_optional || !SG_RuneHandoffAllowsOptional(
 	    tc->rune_handoff_route)) ? 0.0f : Mega_Worth(bot, e, role);
-	if (tc->mega > 0.0f && SG_Rune() && bot->seed >= 0 &&
-	    bot->seed < SG_Rune()->hdr.num_seeds)
-		Mega_Detour(tc, bot->seed, goal_field, &tc->mega_target_ent);
+	if (tc->mega > 0.0f && SG_Rune() && SG_BotLocalizationCell(bot) >= 0 &&
+	    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds)
+		Mega_Detour(tc, SG_BotLocalizationCell(bot), goal_field, &tc->mega_target_ent);
 	if (tc->mega > 0.0f && SG_TimerPending(bot->mega_next))
 		tc->mega = 0.0f;
 	if (tc->mega > 0.0f)
@@ -1753,10 +1753,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	if (SG_MegaOn() && sg_cv.debug->value)
 	{
 		/* Report the detour when the offer turns on. */
-		if (tc->mega > 0.0f && !bot->mega_on && bot->seed >= 0)
+		if (tc->mega > 0.0f && !bot->mega_on && SG_BotLocalizationCell(bot) >= 0)
 		{
 			int		pad = -1;
-			float	val = Mega_Detour(tc, bot->seed, goal_field, &pad);
+			float	val = Mega_Detour(tc, SG_BotLocalizationCell(bot), goal_field, &pad);
 			float	det = (val > 0.0f)
 			              ? 1500.0f * (tc->mega / val - 1.0f) : -1.0f;
 
@@ -1774,9 +1774,9 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	bot->mega_on = (tc->mega > 0.0f);
 	bot->mega_hp = e->health;
 
-	bot->last_goalcost = (bot->seed >= 0 &&
-	                      goal_field[bot->seed] < SG_FIELD_INF)
-	                     ? goal_field[bot->seed] : -1;
+	bot->last_goalcost = (SG_BotLocalizationCell(bot) >= 0 &&
+	                      goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+	                     ? goal_field[SG_BotLocalizationCell(bot)] : -1;
 	route_field = goal_field;
 	route_pure = tc->rune_handoff_route;
 	/* Tactical waypoint selection runs after the typed strategy instruction
@@ -1823,9 +1823,9 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 			}
 		}
 	}
-	bot->last_goalcost = (bot->seed >= 0 &&
-	                      goal_field[bot->seed] < SG_FIELD_INF)
-	                     ? goal_field[bot->seed] : -1;
+	bot->last_goalcost = (SG_BotLocalizationCell(bot) >= 0 &&
+	                      goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
+	                     ? goal_field[SG_BotLocalizationCell(bot)] : -1;
 	/* SCOOP is an enemy-flag touch mission without being an attack-pressure
 	 * mission.  Publish that distinction only after every later objective
 	 * override: terminal movement may finish the physical relay pickup, while
@@ -1859,9 +1859,9 @@ void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc)
 	if (tc->route_pure || !SG_RuneHandoffAllowsOptional(
 	        tc->rune_handoff_route) || tc->strike_blocks_optional ||
 	    !sg_cv.tactics->value || tc->role == SG_ROLE_ESCORT ||
-	    tc->role == SG_ROLE_CARRY || bot->seed < 0 ||
-	    goal_field[bot->seed] >= SG_FIELD_INF ||
-	    goal_field[bot->seed] < 400)
+	    tc->role == SG_ROLE_CARRY || SG_BotLocalizationCell(bot) < 0 ||
+	    goal_field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF ||
+	    goal_field[SG_BotLocalizationCell(bot)] < 400)
 		return;
 	bi = (int)(bot - sg_bots);
 	if (bi < 0 || bi >= SG_MAXBOTS)
@@ -1875,7 +1875,7 @@ void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc)
 			.current_strategy_activation = tc->strategy_activation_id,
 			.cached_goal = tac_goal[bi], .current_goal = goal,
 			.committed_at = bot->tac_time, .now = level.time,
-			.route_cost = tac_fields[bi][bot->seed]
+			.route_cost = tac_fields[bi][SG_BotLocalizationCell(bot)]
 		};
 		qboolean need;
 
@@ -1885,7 +1885,7 @@ void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc)
 		{
 			static int g2_field[SG_MAX_SEEDS];
 			int s10, best10 = -1, g2 = -1;
-			int cur = goal_field[bot->seed];
+			int cur = goal_field[SG_BotLocalizationCell(bot)];
 			float bv10 = 1e30f, gv10 = 1e30f;
 
 			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
@@ -1951,7 +1951,7 @@ void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc)
 		}
 		if (bot->tac_seed >= 0 &&
 		    Fields_ActionTopologyCurrent(tac_field_epoch[bi]) &&
-		    tac_fields[bi][bot->seed] < SG_FIELD_INF)
+		    tac_fields[bi][SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
 		{
 			tc->route_field = tac_fields[bi];
 			tc->route_pure = true;

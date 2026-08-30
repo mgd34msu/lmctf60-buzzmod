@@ -107,7 +107,7 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 				break;
 			}
 
-	Tilt_Lane(bot, bot->seed);
+	Tilt_Lane(bot, SG_BotLocalizationCell(bot));
 
 	/*
 	 * REPEAT-DEATH ESCALATION. Twice in the same lane inside a minute is
@@ -122,7 +122,7 @@ void Tilt_Note(edict_t *e, sg_bot_t *bot)
 	    Tilt_InLane(bot, bot->tilt_seed))
 		window *= 2.0f;
 
-	bot->tilt_seed = bot->seed;
+	bot->tilt_seed = SG_BotLocalizationCell(bot);
 	SG_Mark(&bot->tilt_death_time);
 	bot->tilt_window = window;
 	/* the windows themselves are ARMED at respawn, not here: the clock a
