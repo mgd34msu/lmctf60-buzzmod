@@ -218,6 +218,8 @@ static void TestRuntimeOwner(void)
 	provider.policy.diffusion_fraction = 0.5f;
 	provider.policy.spread_growth_per_ms = 0.01f;
 	provider.locate = Locate;
+	CHECK(!SG_BeliefRuntimeProviderSet(&provider));
+	provider.localization_generation = 1U;
 	CHECK(SG_BeliefRuntimeProviderSet(&provider));
 	CHECK(SG_BeliefRuntimeProviderAvailable());
 	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);

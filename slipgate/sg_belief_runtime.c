@@ -14,6 +14,7 @@ typedef struct belief_runtime_track_s
 	sg_belief_particle_t *scratch_second;
 	sg_belief_particle_t *prediction_particles;
 	size_t capacity;
+	uint64_t localization_generation;
 	sg_belief_life_identity_t *issuers;
 	size_t issuer_count;
 	sg_belief_runtime_view_t view;
@@ -28,7 +29,8 @@ static uint64_t belief_runtime_frame_time;
 static int BeliefRuntimeProviderValid(const sg_belief_runtime_provider_t *provider)
 {
 	return provider && SG_RuneRuntimeSnapshotValid(provider->snapshot) &&
-		provider->locate && provider->policy.confidence_decay_ms != 0U &&
+		provider->localization_generation != 0U && provider->locate &&
+		provider->policy.confidence_decay_ms != 0U &&
 		isfinite(provider->policy.diffusion_fraction) &&
 		provider->policy.diffusion_fraction >= 0.0f &&
 		provider->policy.diffusion_fraction <= 1.0f &&
@@ -153,6 +155,8 @@ static int BeliefRuntimeTrackMatches(const belief_runtime_track_t *track,
 		SG_BeliefStateValid(&track->state) &&
 		track->state.audience_team == audience_team &&
 		SG_BeliefLifeIdentityEqual(&track->state.target_life, target_life) &&
+		track->localization_generation ==
+			belief_runtime_provider.localization_generation &&
 		track->state.rune_identity == belief_runtime_provider.snapshot->identity &&
 		track->state.topology_revision ==
 			belief_runtime_provider.snapshot->topology_revision;
@@ -234,6 +238,8 @@ static int BeliefRuntimeEnsureTrack(belief_runtime_track_t *track,
 		return 0;
 	}
 	track->active = 1U;
+	track->localization_generation =
+		belief_runtime_provider.localization_generation;
 	return 1;
 }
 

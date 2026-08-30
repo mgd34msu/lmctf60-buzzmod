@@ -20,6 +20,7 @@ typedef int (*sg_belief_runtime_locate_fn)(void *context,
 typedef struct sg_belief_runtime_provider_s
 {
 	const sg_rune_runtime_snapshot_t *snapshot;
+	uint64_t localization_generation;
 	sg_belief_policy_t policy;
 	sg_belief_runtime_locate_fn locate;
 	void *context;
