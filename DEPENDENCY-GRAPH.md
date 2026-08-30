@@ -41,6 +41,8 @@ BSP and configuration work                 Parallel foundation work
       |
   independent BSP completeness proof
       |
+  owner-issued real-BSP phase publication
+      |
       +----------------+------------------------+----------------+
       |                |                        |                |
       v                v                        v                v
