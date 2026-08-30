@@ -121,13 +121,14 @@ typedef struct sg_localization_phase_view_s
 } sg_localization_phase_view_t;
 
 /* Prepared once after an audited configuration, semantics set, and runtime
- * snapshot have been bound. All referenced storage remains caller-owned. */
+ * snapshot have been bound. The caller snapshot is consumed only during
+ * preparation; runtime phase coordinates come from the retained immutable
+ * model view. */
 typedef struct sg_cell_phase_locator_s
 {
 	const sg_host_collision_authority_t *authority;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
-	const sg_rune_runtime_snapshot_t *snapshot;
 	sg_localization_phase_view_t phase_view;
 	const uint32_t *cell_region_offsets;
 	const uint32_t *region_indices;
@@ -204,7 +205,7 @@ typedef struct sg_localization_environment_s
 typedef struct sg_cell_phase_runtime_s
 {
 	const sg_cell_phase_locator_t *locator;
-	sg_host_law_view_t host_law;
+	sg_host_law_runtime_authority_t host_authority;
 	uint64_t rune_identity;
 	uint64_t topology_revision;
 	uint8_t prepared;

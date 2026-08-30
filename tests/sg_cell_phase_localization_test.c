@@ -166,7 +166,7 @@ static void TestOwnerInstall(const sg_host_collision_authority_t *authority,
 	test_host_owner.view.static_identity.physics = authority->identity.physics;
 	test_host_owner.view.pmove_abi.identity =
 		authority->identity.physics_abi_id;
-	test_host_owner.view.pmove_behavior_fingerprint = generation;
+	test_host_owner.view.pmove_behavior_fingerprint = UINT64_C(0x304);
 	test_host_owner.view.maxvelocity =
 		authority->identity.physics.max_velocity;
 }
@@ -184,7 +184,25 @@ static int TestOwnerSubjectCurrent(const sg_host_law_subject_t *subject)
 		subject->client_id == test_host_owner.subject.client_id &&
 		subject->spawn_generation ==
 			test_host_owner.subject.spawn_generation &&
-		subject->spawn_generation != 0U;
+			subject->spawn_generation != 0U;
+}
+
+static const sg_host_law_publication_t *TestOwnerPublication(void)
+{
+	return (const sg_host_law_publication_t *)(const void *)&test_host_owner;
+}
+
+static int TestOwnerAuthorityCurrent(
+	const sg_host_law_runtime_authority_t *authority)
+{
+	return test_host_owner.installed && authority &&
+		authority->version == SG_HOST_LAW_RUNTIME_AUTHORITY_VERSION &&
+		authority->reserved == 0U &&
+		authority->epoch == test_host_owner.generation &&
+		authority->epoch_complement == ~authority->epoch &&
+		authority->publication == TestOwnerPublication() &&
+		memcmp(&authority->view, &test_host_owner.view,
+			sizeof(authority->view)) == 0;
 }
 
 sg_host_law_result_t SG_HostLawProductionRead(sg_host_law_view_t *view_out)
@@ -198,13 +216,37 @@ sg_host_law_result_t SG_HostLawProductionRead(sg_host_law_view_t *view_out)
 	return TestHostResult(SG_HOST_LAW_OK);
 }
 
-sg_host_law_result_t SG_HostLawProductionSubject(uint32_t subject_index,
+sg_host_law_result_t SG_HostLawProductionAcquire(
+	sg_host_law_runtime_authority_t *authority_out)
+{
+	if (!authority_out)
+		return TestHostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	memset(authority_out, 0, sizeof(*authority_out));
+	if (!test_host_owner.installed)
+		return TestHostResult(SG_HOST_LAW_HOST_UNAVAILABLE);
+	authority_out->version = SG_HOST_LAW_RUNTIME_AUTHORITY_VERSION;
+	authority_out->epoch = test_host_owner.generation;
+	authority_out->epoch_complement = ~test_host_owner.generation;
+	authority_out->publication = TestOwnerPublication();
+	authority_out->view = test_host_owner.view;
+	return TestHostResult(SG_HOST_LAW_OK);
+}
+
+sg_host_law_result_t SG_HostLawProductionAuthorityCurrent(
+	const sg_host_law_runtime_authority_t *authority)
+{
+	return TestHostResult(TestOwnerAuthorityCurrent(authority) ?
+		SG_HOST_LAW_OK : SG_HOST_LAW_PRODUCTION_DRIFT);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubject(
+	const sg_host_law_runtime_authority_t *authority, uint32_t subject_index,
 	sg_host_law_subject_t *subject_out)
 {
 	if (!subject_out)
 		return TestHostResult(SG_HOST_LAW_INVALID_ARGUMENT);
 	memset(subject_out, 0, sizeof(*subject_out));
-	if (!test_host_owner.installed ||
+	if (!TestOwnerAuthorityCurrent(authority) ||
 		subject_index != test_host_owner.subject.client_id)
 		return TestHostResult(SG_HOST_LAW_EVALUATION_FAILED);
 	*subject_out = test_host_owner.subject;
@@ -212,73 +254,90 @@ sg_host_law_result_t SG_HostLawProductionSubject(uint32_t subject_index,
 }
 
 sg_host_law_result_t SG_HostLawProductionSubjectCurrent(
+	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject)
 {
-	return TestHostResult(TestOwnerSubjectCurrent(subject) ? SG_HOST_LAW_OK :
+	return TestHostResult(TestOwnerAuthorityCurrent(authority) &&
+		TestOwnerSubjectCurrent(subject) ? SG_HOST_LAW_OK :
 		SG_HOST_LAW_EVALUATION_FAILED);
 }
 
 sg_host_law_result_t SG_HostLawProductionReplayFrame(
+	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject,
 	const sg_host_pmove_request_t *request,
 	const sg_host_pmove_replay_workspace_t *workspace,
 	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
 {
-	if (!TestOwnerSubjectCurrent(subject) || !test_host_owner.authority ||
+	if (!TestOwnerAuthorityCurrent(authority) ||
+		!TestOwnerSubjectCurrent(subject) || !test_host_owner.authority ||
 		!test_host_owner.pmove ||
 		!SG_HostPmoveReplayFrame(test_host_owner.authority,
 			test_host_owner.scene, test_host_owner.pmove, request, workspace,
-			replay_out, error_out) || !TestOwnerSubjectCurrent(subject))
+			replay_out, error_out) || !TestOwnerAuthorityCurrent(authority) ||
+		!TestOwnerSubjectCurrent(subject))
 		return TestHostResult(SG_HOST_LAW_EVALUATION_FAILED);
 	return TestHostResult(SG_HOST_LAW_OK);
 }
 
 sg_host_law_result_t SG_HostLawProductionSubjectTrace(
+	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject, const float start[3],
 	const float mins[3], const float maxs[3], const float end[3],
 	sg_host_collision_contents_t mask,
 	sg_host_collision_trace_t *trace_out)
 {
-	if (!TestOwnerSubjectCurrent(subject) ||
+	if (!TestOwnerAuthorityCurrent(authority) ||
+		!TestOwnerSubjectCurrent(subject) ||
 		!SG_HostCollisionTrace(test_host_owner.authority,
 			test_host_owner.scene, start, mins, maxs, end, mask, trace_out) ||
+		!TestOwnerAuthorityCurrent(authority) ||
 		!TestOwnerSubjectCurrent(subject))
 		return TestHostResult(SG_HOST_LAW_EVALUATION_FAILED);
 	return TestHostResult(SG_HOST_LAW_OK);
 }
 
 sg_host_law_result_t SG_HostLawProductionSubjectPointContents(
+	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject, const float point[3],
 	sg_host_collision_contents_t *contents_out)
 {
-	if (!contents_out || !TestOwnerSubjectCurrent(subject))
+	if (!contents_out || !TestOwnerAuthorityCurrent(authority) ||
+		!TestOwnerSubjectCurrent(subject))
 		return TestHostResult(SG_HOST_LAW_EVALUATION_FAILED);
 	*contents_out = SG_HostCollisionPointContents(test_host_owner.authority,
 		test_host_owner.scene, point);
-	return TestHostResult(TestOwnerSubjectCurrent(subject) ? SG_HOST_LAW_OK :
+	return TestHostResult(TestOwnerAuthorityCurrent(authority) &&
+		TestOwnerSubjectCurrent(subject) ? SG_HOST_LAW_OK :
 		SG_HOST_LAW_EVALUATION_FAILED);
 }
 
 sg_host_law_result_t SG_HostLawProductionSubjectClassifyPose(
+	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject, const float origin[3],
 	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
 {
-	if (!TestOwnerSubjectCurrent(subject) ||
+	if (!TestOwnerAuthorityCurrent(authority) ||
+		!TestOwnerSubjectCurrent(subject) ||
 		!SG_HostCollisionClassifyPose(test_host_owner.authority,
 			test_host_owner.scene, origin, stance, pose_out) ||
+		!TestOwnerAuthorityCurrent(authority) ||
 		!TestOwnerSubjectCurrent(subject))
 		return TestHostResult(SG_HOST_LAW_EVALUATION_FAILED);
 	return TestHostResult(SG_HOST_LAW_OK);
 }
 
 sg_host_law_result_t SG_HostLawProductionSubjectTransition(
+	const sg_host_law_runtime_authority_t *authority,
 	const sg_host_law_subject_t *subject, const float start[3],
 	const float end[3], sg_rune_stance_t stance,
 	sg_host_collision_transition_t *transition_out)
 {
-	if (!TestOwnerSubjectCurrent(subject) ||
+	if (!TestOwnerAuthorityCurrent(authority) ||
+		!TestOwnerSubjectCurrent(subject) ||
 		!SG_HostCollisionTransition(test_host_owner.authority,
 			test_host_owner.scene, start, end, stance, transition_out) ||
+		!TestOwnerAuthorityCurrent(authority) ||
 		!TestOwnerSubjectCurrent(subject))
 		return TestHostResult(SG_HOST_LAW_EVALUATION_FAILED);
 	return TestHostResult(SG_HOST_LAW_OK);
@@ -1035,24 +1094,30 @@ static void TestAcceptedOwnerLifecycle(void)
 	sg_host_law_subject_t subject;
 	sg_host_law_subject_t forged;
 	sg_host_law_result_t host_result;
-	uint64_t topology_revision;
+	sg_cell_phase_runtime_t stale_runtime;
+	sg_host_law_view_t old_view;
+	uint64_t old_epoch;
 	uint64_t producer_identity;
 
 	InitStandardFixture(&fixture, &empty,
 		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
 		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE, SG_RUNE_MEDIUM_DRY);
 	FinalizeFixture(&fixture);
-	host_result = SG_HostLawProductionSubject(7U, &subject);
+	host_result = SG_HostLawProductionSubject(&fixture.runtime.host_authority,
+		7U, &subject);
 	CHECK(host_result.status == SG_HOST_LAW_OK);
 	CHECK(subject.client_id == 7U && subject.spawn_generation == 3U);
-	host_result = SG_HostLawProductionSubjectCurrent(&subject);
+	host_result = SG_HostLawProductionSubjectCurrent(
+		&fixture.runtime.host_authority, &subject);
 	CHECK(host_result.status == SG_HOST_LAW_OK);
 	forged = subject;
 	forged.client_id++;
-	CHECK(SG_HostLawProductionSubjectCurrent(&forged).status != SG_HOST_LAW_OK);
+	CHECK(SG_HostLawProductionSubjectCurrent(&fixture.runtime.host_authority,
+		&forged).status != SG_HOST_LAW_OK);
 	forged = subject;
 	forged.spawn_generation++;
-	CHECK(SG_HostLawProductionSubjectCurrent(&forged).status != SG_HOST_LAW_OK);
+	CHECK(SG_HostLawProductionSubjectCurrent(&fixture.runtime.host_authority,
+		&forged).status != SG_HOST_LAW_OK);
 	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
 		0.0f, 0.0f, 24.0f);
 	CHECK(Localize(&fixture, &observation, &environment, &state, &status));
@@ -1070,8 +1135,12 @@ static void TestAcceptedOwnerLifecycle(void)
 		&state, &status));
 	CHECK(state.subject.spawn_generation == 4U);
 
-	/* Reset invalidates the retained localization runtime. Reinstalling the
-	 * current accepted owner yields a fresh runtime with no fallback path. */
+	/* Reset invalidates the retained localization runtime. Reissuing the exact
+	 * same law values still receives a distinct owner epoch, so the old runtime
+	 * can never revive. */
+	stale_runtime = fixture.runtime;
+	old_view = test_host_owner.view;
+	old_epoch = stale_runtime.host_authority.epoch;
 	test_host_owner.installed = 0;
 	CHECK(!LocalizeRequest(&fixture, &request, &observation, &environment,
 		&state, &status));
@@ -1081,6 +1150,14 @@ static void TestAcceptedOwnerLifecycle(void)
 	CHECK(status == SG_LOCALIZATION_RESET_REQUIRED);
 	TestOwnerInstall(&fixture.authority, LocalizationPmove);
 	TestOwnerSetSubject(7U, 4U);
+	CHECK(memcmp(&old_view, &test_host_owner.view, sizeof(old_view)) == 0);
+	CHECK(test_host_owner.generation != old_epoch);
+	CHECK(SG_HostLawProductionAuthorityCurrent(
+		&stale_runtime.host_authority).status != SG_HOST_LAW_OK);
+	fixture.runtime = stale_runtime;
+	CHECK(!LocalizeRequest(&fixture, &request, &observation, &environment,
+		&state, &status));
+	CHECK(status == SG_LOCALIZATION_RESET_REQUIRED);
 	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, &fixture.runtime,
 		&status));
 	CHECK(LocalizeRequest(&fixture, &request, &observation, &environment,
@@ -1100,14 +1177,7 @@ static void TestAcceptedOwnerLifecycle(void)
 	CHECK(SG_CellPhaseRuntimePrepare(&fixture.locator, &fixture.runtime,
 		&status));
 
-	/* The locator retains the phase basis frozen into one exact model
-	 * generation. A topology reset or a forged model identity invalidates it. */
-	topology_revision = fixture.snapshot.topology_revision;
-	fixture.snapshot.topology_revision++;
-	CHECK(!LocalizeRequest(&fixture, &request, &observation, &environment,
-		&state, &status));
-	CHECK(status == SG_LOCALIZATION_RESET_REQUIRED);
-	fixture.snapshot.topology_revision = topology_revision;
+	/* Mutating the accepted immutable model is still rejected. */
 	producer_identity = fixture.model.identity.producer_identity;
 	fixture.model.identity.producer_identity ^= UINT64_C(1);
 	CHECK(!SG_CellPhaseLocatorPrepare(&fixture.authority,
@@ -1125,6 +1195,76 @@ static void TestAcceptedOwnerLifecycle(void)
 		&status));
 	CHECK(LocalizeRequest(&fixture, &request, &observation, &environment,
 		&state, &status));
+}
+
+static void CheckPreparedSnapshotMutation(locator_fixture_t *fixture,
+	sg_localization_observation_t *observation,
+	sg_localization_environment_t *environment)
+{
+	sg_localized_player_state_t state;
+	sg_localization_status_t status;
+
+	CHECK(Localize(fixture, observation, environment, &state, &status));
+	CHECK(status == SG_LOCALIZATION_OK);
+	CHECK(state.field_pose.phase.phase_id == 0U);
+	CHECK(state.field_pose.phase.cell_id == 0U);
+	CHECK(state.rune_identity == UINT64_C(0x201));
+	CHECK(state.topology_revision == UINT64_C(0x202));
+}
+
+static void TestPreparedLocatorFreezesSnapshotCoordinates(void)
+{
+	world_fixture_t empty = EmptyWorld();
+	locator_fixture_t fixture;
+	sg_localization_environment_t environment = Environment();
+	sg_localization_observation_t observation;
+	sg_rune_runtime_snapshot_t saved;
+	uint32_t phase;
+
+	InitStandardFixture(&fixture, &empty,
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE, 0U, 0U,
+		SG_RUNE_MOTION_AIRBORNE, SG_RUNE_SUPPORT_NONE, SG_RUNE_MEDIUM_DRY);
+	FinalizeFixture(&fixture);
+	observation = Observation(&fixture, SG_RUNE_STANCE_STANDING,
+		0.0f, 0.0f, 24.0f);
+	saved = fixture.snapshot;
+
+	fixture.snapshot.identity = 0U;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+	fixture.snapshot.topology_revision = 0U;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+	fixture.snapshot.cell_count = 0U;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+	fixture.snapshot.phase_count = 0U;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+	fixture.snapshot.region_count = 0U;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+	fixture.snapshot.model = NULL;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+	fixture.snapshot.phases = NULL;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+	fixture.snapshot = saved;
+
+	for (phase = 0U; phase < saved.phase_count; phase++)
+	{
+		sg_phase_coordinate_t coordinate = fixture.coordinates[phase];
+
+		fixture.coordinates[phase].phase_id = UINT32_MAX;
+		CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+		fixture.coordinates[phase] = coordinate;
+		fixture.coordinates[phase].cell_id = UINT32_MAX;
+		CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
+		fixture.coordinates[phase] = coordinate;
+	}
+	fixture.coordinates[0].phase_id = 1U;
+	fixture.coordinates[0].cell_id = 1U;
+	CheckPreparedSnapshotMutation(&fixture, &observation, &environment);
 }
 
 static void TestStandingCrouchingLowCeilingAndHalfWall(void)
@@ -3208,6 +3348,7 @@ static void TestMoverCarryFailsClosedWithoutProductionAuthority(void)
 int main(void)
 {
 	TestAcceptedOwnerLifecycle();
+	TestPreparedLocatorFreezesSnapshotCoordinates();
 	TestStandingCrouchingLowCeilingAndHalfWall();
 	TestSupportWaterAirAndTime();
 	TestBoundaryAndOverlapDeterminism();

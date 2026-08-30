@@ -1125,6 +1125,8 @@ static void TestOwnerFailClosedAndDrift(void)
 	sg_host_collision_trace_t trace;
 	sg_host_collision_pose_t pose;
 	sg_host_law_subject_t subject;
+	sg_host_law_runtime_authority_t authority;
+	sg_host_law_runtime_authority_t replacement_authority;
 	sg_host_pmove_substep_t replay_substeps[4];
 	sg_host_pmove_trace_t replay_traces[8];
 	sg_host_pmove_replay_workspace_t replay_workspace;
@@ -1166,9 +1168,24 @@ static void TestOwnerFailClosedAndDrift(void)
 		view.static_identity.entity_crc32 == UINT32_C(0x12345678) &&
 		view.static_identity.host_physics_epoch == SG_HOST_PHYSICS_EPOCH &&
 		view.static_identity.bsp_bytes == test_world.source_size &&
-		memcmp(view.static_identity.bsp_identity.bytes,
-			test_world.content_identity.bytes,
-			sizeof(view.static_identity.bsp_identity.bytes)) == 0);
+			memcmp(view.static_identity.bsp_identity.bytes,
+				test_world.content_identity.bytes,
+				sizeof(view.static_identity.bsp_identity.bytes)) == 0);
+	result = SG_HostLawProductionAcquire(&authority);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	SG_HostLawProductionReset();
+	CHECK(SG_HostLawProductionAuthorityCurrent(&authority).status ==
+		SG_HOST_LAW_HOST_UNAVAILABLE);
+	result = SG_HostLawProductionBeginLevel("packed_map");
+	CHECK(result.status == SG_HOST_LAW_OK);
+	result = SG_HostLawProductionAcquire(&replacement_authority);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		replacement_authority.epoch != authority.epoch &&
+		memcmp(&replacement_authority.view, &authority.view,
+			sizeof(authority.view)) == 0 &&
+		SG_HostLawProductionAuthorityCurrent(&authority).status ==
+			SG_HOST_LAW_PRODUCTION_DRIFT);
+	authority = replacement_authority;
 	result = SG_HostLawProductionCollisionAuthority(&borrowed);
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE && borrowed == NULL);
 	memset(&pmove_request, 0, sizeof(pmove_request));
@@ -1192,12 +1209,12 @@ static void TestOwnerFailClosedAndDrift(void)
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		memcmp(view.bsp_identity.bytes, test_world.content_identity.bytes,
 			sizeof(view.bsp_identity.bytes)) == 0);
-	result = SG_HostLawProductionSubject(1U, &subject);
+	result = SG_HostLawProductionSubject(&authority, 1U, &subject);
 	CHECK(result.status == SG_HOST_LAW_OK && subject.client_id == 1U &&
 		subject.spawn_generation == UINT64_C(0x1001));
-	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+	CHECK(SG_HostLawProductionSubjectCurrent(&authority, &subject).status ==
 		SG_HOST_LAW_OK);
-	CHECK(SG_HostLawProductionSubjectClassifyPose(&subject, start,
+	CHECK(SG_HostLawProductionSubjectClassifyPose(&authority, &subject, start,
 		SG_RUNE_STANCE_STANDING, &pose).status == SG_HOST_LAW_OK);
 	CHECK(pose.valid && !pose.supported);
 	memset(&replay_workspace, 0, sizeof(replay_workspace));
@@ -1206,19 +1223,21 @@ static void TestOwnerFailClosedAndDrift(void)
 	replay_workspace.traces = replay_traces;
 	replay_workspace.trace_capacity = 8U;
 	pmove_request.command.msec = (byte)SG_HOST_ENGINE_FRAME_MS;
-	result = SG_HostLawProductionReplayFrame(&subject, &pmove_request,
+	result = SG_HostLawProductionReplayFrame(&authority, &subject,
+		&pmove_request,
 		&replay_workspace, &replay, &pmove_error);
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		pmove_error == SG_HOST_PMOVE_ERROR_NONE && replay.substep_count == 4U &&
 		replay.trace_count == 4U);
 	runtime_clients[1].ctf.ctfid++;
-	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+	CHECK(SG_HostLawProductionSubjectCurrent(&authority, &subject).status ==
 		SG_HOST_LAW_EVALUATION_FAILED);
-	result = SG_HostLawProductionSubjectTrace(&subject, start, NULL, NULL, end,
+	result = SG_HostLawProductionSubjectTrace(&authority, &subject, start,
+		NULL, NULL, end,
 		SG_HOST_MASK_PLAYER_SOLID, &trace);
 	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
 	runtime_clients[1].ctf.ctfid = subject.spawn_generation;
-	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+	CHECK(SG_HostLawProductionSubjectCurrent(&authority, &subject).status ==
 		SG_HOST_LAW_OK);
 	pmove_request.command.msec = 25U;
 
@@ -1279,16 +1298,18 @@ static void TestOwnerFailClosedAndDrift(void)
 	SG_HostLawProductionReset();
 	CHECK(SG_HostLawProductionPublication() == NULL &&
 		SG_HostLawProductionStaticPublication() == NULL);
-	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
+	CHECK(SG_HostLawProductionSubjectCurrent(&authority, &subject).status ==
 		SG_HOST_LAW_HOST_UNAVAILABLE);
 	runtime_clients[1].ctf.ctfid++;
 	result = SG_HostLawProductionBeginLevel("packed_map");
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		SG_HostLawProductionPublication() != NULL &&
 		SG_HostLawProductionStaticPublication() != NULL);
-	CHECK(SG_HostLawProductionSubjectCurrent(&subject).status ==
-		SG_HOST_LAW_EVALUATION_FAILED);
-	result = SG_HostLawProductionSubject(1U, &subject);
+	CHECK(SG_HostLawProductionSubjectCurrent(&authority, &subject).status ==
+		SG_HOST_LAW_PRODUCTION_DRIFT);
+	result = SG_HostLawProductionAcquire(&authority);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	result = SG_HostLawProductionSubject(&authority, 1U, &subject);
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		subject.spawn_generation == runtime_clients[1].ctf.ctfid);
 	SG_HostLawProductionReset();
