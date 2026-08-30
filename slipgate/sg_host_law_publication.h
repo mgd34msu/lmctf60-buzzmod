@@ -11,6 +11,9 @@
 #undef world
 #endif
 #include "sg_host_collision.h"
+#include "sg_bsp_completeness_proof.h"
+#include "sg_configuration_audit.h"
+#include "sg_configuration_semantics.h"
 #include "sg_host_engine_pmove.h"
 #include "sg_host_engine_runtime.h"
 #include "sg_host_hook_law.h"
@@ -127,16 +130,35 @@ typedef struct sg_host_law_result_s
 	uint64_t observed_bits;
 } sg_host_law_result_t;
 
+/* Pointer-free facts copied from the handle-owned loader parse.  These are
+ * descriptive metadata only; collision and BSP storage never cross the
+ * construction boundary. */
+typedef struct sg_host_law_construction_geometry_s
+{
+	sg_bsp_content_identity_t bsp_identity;
+	uint64_t bsp_bytes;
+	uint32_t engine_checksum;
+	uint32_t entity_bytes;
+	uint32_t plane_count;
+	uint32_t node_count;
+	uint32_t texinfo_count;
+	uint32_t leaf_count;
+	uint32_t leaf_brush_count;
+	uint32_t model_count;
+	uint32_t brush_count;
+	uint32_t brush_side_count;
+} sg_host_law_construction_geometry_t;
+
 typedef struct sg_host_law_construction_view_s
 {
 	uint32_t version;
 	uint32_t current;
 	uint64_t level_generation;
-	/* Borrowed immutable view of the handle-owned loader parse.  It remains
-	 * allocated until the handle is destroyed, but is authoritative only while
-	 * Current/Read succeeds for the active level generation. */
-	const sg_host_collision_authority_t *collision;
-	sg_rune_model_identity_t collision_identity;
+	/* This is the complete identity authenticated by the live host at this
+	 * layer: BSP SHA/size/checksum and engine physics.  Downstream entity,
+	 * schema, source-set, and producer identities are deliberately absent. */
+	sg_host_static_identity_t host_static_identity;
+	sg_host_law_construction_geometry_t geometry;
 	sg_host_law_view_t laws;
 } sg_host_law_construction_view_t;
 
@@ -174,6 +196,43 @@ sg_host_law_result_t SG_HostLawConstructionCurrent(
 sg_host_law_result_t SG_HostLawConstructionRead(
 	const sg_host_law_construction_t *construction,
 	sg_host_law_construction_view_t *view_out);
+/* Collision operations remain construction-bound so neither an authority nor
+ * its owned BSP arrays can be substituted or mutated by a consumer. */
+sg_host_law_result_t SG_HostLawConstructionCollisionTrace(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float mins[3], const float maxs[3], const float end[3],
+	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out);
+sg_host_law_result_t SG_HostLawConstructionPointContents(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float point[3],
+	sg_host_collision_contents_t *contents_out);
+sg_host_law_result_t SG_HostLawConstructionClassifyPose(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out);
+sg_host_law_result_t SG_HostLawConstructionTransition(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out);
+/* These checks run against the same owned parse.  Complete-model identity
+ * fields on downstream artifacts remain owned and authenticated downstream;
+ * this boundary checks only their host-static terms before invoking the
+ * accepted independent auditors. */
+sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_configuration_audit_result_t *audit_out);
+sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	sg_configuration_semantics_audit_result_t *audit_out);
+sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_bsp_completeness_result_t *proof_out);
 sg_host_law_result_t SG_HostLawConstructionPmove(
 	const sg_host_law_construction_t *construction,
 	const sg_host_collision_scene_t *scene,

@@ -9,14 +9,39 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion'
 strict="$strict -Wsign-conversion -Wshadow -Wstrict-prototypes"
 strict="$strict -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align"
 strict="$strict -DSG_HOST_LAW_TESTING"
+isl_cflags=$(pkg-config --cflags isl)
+isl_libs=$(pkg-config --libs isl)
 
 cd "$repo_dir"
+
+for cc in gcc clang
+do
+	$cc $strict $isl_cflags -I. -c \
+		tests/sg_host_law_construction_no_borrow_compile_test.c \
+		-o "$tmp_dir/construction-view-$cc.o"
+	if $cc $strict $isl_cflags -I. \
+		-DSG_HOST_LAW_ATTEMPT_CONSTRUCTION_MUTATION -c \
+		tests/sg_host_law_construction_no_borrow_compile_test.c \
+		-o "$tmp_dir/construction-mutation-$cc.o" \
+		2>"$tmp_dir/construction-mutation-$cc.err"
+	then
+		echo "construction view unexpectedly exposed mutable collision storage" >&2
+		exit 1
+	fi
+	if ! grep -q 'member.*collision' \
+		"$tmp_dir/construction-mutation-$cc.err"
+	then
+		cat "$tmp_dir/construction-mutation-$cc.err" >&2
+		exit 1
+	fi
+done
 
 compile_host_law()
 {
 	cc=$1
 	suffix=$2
 	extra=$3
+	objects=''
 
 	for pair in \
 		'tests/sg_host_law_publication_test.c test' \
@@ -31,10 +56,24 @@ compile_host_law()
 		'slipgate/sg_host_pmove.c host-pmove' \
 		'slipgate/sg_host_collision.c collision' \
 		'slipgate/sg_bsp_world.c bsp-world' \
+		'slipgate/sg_configuration_semantics.c configuration-semantics' \
+		'slipgate/sg_configuration_lattice.c configuration-lattice' \
+		'slipgate/sg_configuration_space.c configuration-space' \
+		'slipgate/sg_configuration_audit.c configuration-audit' \
+		'slipgate/sg_bsp_completeness_proof.c completeness-proof' \
+		'slipgate/sg_bsp_completeness_core.c completeness-core' \
+		'slipgate/sg_bsp_completeness_region.c completeness-region' \
+		'slipgate/sg_bsp_completeness_traversal.c completeness-traversal' \
+		'slipgate/sg_bsp_completeness_lattice.c completeness-lattice' \
+		'slipgate/sg_bsp_completeness_coverage.c completeness-coverage' \
+		'slipgate/sg_bsp_completeness_state.c completeness-state' \
+		'slipgate/sg_bsp_completeness_portal.c completeness-portal' \
+		'slipgate/sg_bsp_completeness_portal_index.c completeness-portal-index' \
 		'slipgate/sg_rune_model.c rune-model'; do
 		set -- $pair
-		$cc $strict $extra -I. -DDEDICATED_ONLY -c "$1" \
+		$cc $strict $isl_cflags $extra -I. -DDEDICATED_ONLY -c "$1" \
 			-o "$tmp_dir/$2-$suffix.o"
+		objects="$objects $tmp_dir/$2-$suffix.o"
 	done
 	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-Wno-strict-prototypes $extra -I. -DDEDICATED_ONLY \
@@ -42,22 +81,9 @@ compile_host_law()
 	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-Wno-strict-prototypes $extra -I. -c q_shared.c \
 		-o "$tmp_dir/q-shared-$suffix.o"
-	$cc $extra \
-		"$tmp_dir/test-$suffix.o" \
-		"$tmp_dir/publication-$suffix.o" \
-		"$tmp_dir/owner-$suffix.o" \
-		"$tmp_dir/engine-pmove-$suffix.o" \
-		"$tmp_dir/engine-runtime-$suffix.o" \
-		"$tmp_dir/client-ownership-$suffix.o" \
-		"$tmp_dir/engine-parity-$suffix.o" \
-		"$tmp_dir/hook-law-$suffix.o" \
-		"$tmp_dir/mechanism-law-$suffix.o" \
-		"$tmp_dir/host-pmove-$suffix.o" \
-		"$tmp_dir/collision-$suffix.o" \
-		"$tmp_dir/bsp-world-$suffix.o" \
-		"$tmp_dir/rune-model-$suffix.o" \
+	$cc $extra $objects \
 		"$tmp_dir/yq2-pmove-$suffix.o" \
-		"$tmp_dir/q-shared-$suffix.o" -lm \
+		"$tmp_dir/q-shared-$suffix.o" -lm $isl_libs \
 		-o "$tmp_dir/host-law-$suffix"
 }
 

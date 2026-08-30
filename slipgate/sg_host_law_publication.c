@@ -79,6 +79,9 @@ struct sg_host_law_construction_s
 	sg_host_law_view_t laws;
 };
 
+#define SG_HOST_LAW_FNV_OFFSET UINT64_C(1469598103934665603)
+#define SG_HOST_LAW_FNV_PRIME UINT64_C(1099511628211)
+
 static int CurrentnessValid(const sg_host_law_currentness_t *currentness)
 {
 	return currentness &&
@@ -203,6 +206,11 @@ static int IdentityValid(const sg_rune_model_identity_t *identity)
 		identity->bsp_content_id == UINT64_MAX || !identity->entity_semantics_id ||
 		identity->entity_semantics_id == UINT64_MAX || !identity->physics_abi_id ||
 		identity->physics_abi_id == UINT64_MAX ||
+		identity->source_set_identity == 0U ||
+		identity->source_set_identity == UINT64_MAX ||
+		identity->schema_id == 0U || identity->schema_id == UINT64_MAX ||
+		identity->producer_identity == 0U ||
+		identity->producer_identity == UINT64_MAX ||
 		!FiniteHull(&identity->standing_hull) ||
 		!FiniteHull(&identity->crouching_hull))
 		return 0;
@@ -1363,6 +1371,47 @@ static sg_host_law_result_t ConstructionLoadWorld(
 	return Ok();
 }
 
+static uint64_t ConstructionHostBspId(
+	const sg_bsp_content_identity_t *identity)
+{
+	uint64_t digest = SG_HOST_LAW_FNV_OFFSET;
+	uint32_t index;
+
+	for (index = 0U; index < SG_BSP_CONTENT_ID_BYTES; index++)
+		digest = (digest ^ (uint64_t)identity->bytes[index]) *
+			SG_HOST_LAW_FNV_PRIME;
+	if (digest == 0U || digest == UINT64_MAX)
+		digest = UINT64_C(1);
+	return digest;
+}
+
+/* The collision library needs hull/physics fields on its private authority,
+ * but an engine-static host publication does not own the downstream complete
+ * model identity.  Populate only values authenticated by the host and leave
+ * every downstream identity namespace absent. */
+static void ConstructionPrivateIdentity(
+	const sg_host_static_identity_t *source,
+	sg_rune_model_identity_t *identity_out)
+{
+	memset(identity_out, 0, sizeof(*identity_out));
+	identity_out->bsp_content_id = ConstructionHostBspId(
+		&source->bsp_identity);
+	identity_out->physics_abi_id = source->physics_abi_id;
+	identity_out->standing_hull = source->standing_hull;
+	identity_out->crouching_hull = source->crouching_hull;
+	identity_out->physics = source->physics;
+}
+
+static int ConstructionPrivateIdentityMatches(
+	const sg_host_static_identity_t *source,
+	const sg_rune_model_identity_t *identity)
+{
+	sg_rune_model_identity_t expected;
+
+	ConstructionPrivateIdentity(source, &expected);
+	return memcmp(&expected, identity, sizeof(expected)) == 0;
+}
+
 static sg_host_law_result_t ConstructionAuthorityMatch(
 	const sg_host_static_identity_t *expected,
 	const sg_host_collision_authority_t *authority)
@@ -1393,6 +1442,8 @@ static int ConstructionShapeValid(
 		construction->authority.world == construction->world &&
 		CurrentnessValid(construction->currentness) &&
 		StaticIdentityValid(&construction->static_identity) &&
+		ConstructionPrivateIdentityMatches(&construction->static_identity,
+			&construction->authority.identity) &&
 		ViewShapeValid(&construction->laws) &&
 		construction->pmove_binding.entry &&
 		construction->pmove_binding.owner &&
@@ -1444,6 +1495,7 @@ sg_host_law_result_t SG_HostLawPublicationOwnerConstructionIssue(
 {
 	sg_host_law_construction_t *construction = NULL;
 	sg_host_collision_error_t collision_error;
+	sg_rune_model_identity_t private_identity;
 	sg_host_law_result_t result;
 
 	if (!construction_out || *construction_out)
@@ -1465,8 +1517,10 @@ sg_host_law_result_t SG_HostLawPublicationOwnerConstructionIssue(
 	if (result.status != SG_HOST_LAW_OK)
 		goto failure;
 	memset(&collision_error, 0, sizeof(collision_error));
+	ConstructionPrivateIdentity(&publication->static_identity,
+		&private_identity);
 	if (!SG_HostCollisionInit(&construction->authority, construction->world,
-			&authority->identity, &collision_error))
+			&private_identity, &collision_error))
 	{
 		result = Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE,
@@ -1532,9 +1586,255 @@ sg_host_law_result_t SG_HostLawConstructionRead(
 	view_out->version = SG_HOST_LAW_PUBLICATION_VERSION;
 	view_out->current = 1U;
 	view_out->level_generation = construction->currentness->generation;
-	view_out->collision = &construction->authority;
-	view_out->collision_identity = construction->authority.identity;
+	view_out->host_static_identity = construction->static_identity;
+	view_out->geometry.bsp_identity = construction->world->content_identity;
+	view_out->geometry.bsp_bytes = (uint64_t)construction->world->source_size;
+	view_out->geometry.engine_checksum = construction->world->engine_checksum;
+	view_out->geometry.entity_bytes = construction->world->entity_byte_count;
+	view_out->geometry.plane_count = construction->world->plane_count;
+	view_out->geometry.node_count = construction->world->node_count;
+	view_out->geometry.texinfo_count = construction->world->texinfo_count;
+	view_out->geometry.leaf_count = construction->world->leaf_count;
+	view_out->geometry.leaf_brush_count =
+		construction->world->leaf_brush_count;
+	view_out->geometry.model_count = construction->world->model_count;
+	view_out->geometry.brush_count = construction->world->brush_count;
+	view_out->geometry.brush_side_count =
+		construction->world->brush_side_count;
 	view_out->laws = construction->laws;
+	return Ok();
+}
+
+static int ConstructionTransformValid(
+	const sg_host_collision_transform_t *transform)
+{
+	return transform && FiniteVector(transform->origin) &&
+		FiniteVector(transform->angles);
+}
+
+static int ConstructionSceneValid(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene)
+{
+	size_t first;
+	size_t second;
+
+	if (!scene)
+		return 1;
+	if (scene->instance_count != 0U && !scene->instances)
+		return 0;
+	for (first = 0U; first < scene->instance_count; first++)
+	{
+		const sg_host_collision_instance_t *instance =
+			&scene->instances[first];
+
+		if (instance->instance_id == 0U || instance->model_index == 0U ||
+			instance->model_index >= construction->world->model_count ||
+			!ConstructionTransformValid(&instance->transform))
+			return 0;
+		for (second = first + 1U; second < scene->instance_count; second++)
+			if (scene->instances[second].instance_id == instance->instance_id)
+				return 0;
+	}
+	return 1;
+}
+
+sg_host_law_result_t SG_HostLawConstructionCollisionTrace(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float mins[3], const float maxs[3], const float end[3],
+	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out)
+{
+	sg_host_law_result_t result;
+
+	if (!start || !mins || !maxs || !end || !trace_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!ConstructionSceneValid(construction, scene) ||
+		!SG_HostCollisionTrace(&construction->authority, scene, start, mins,
+			maxs, end, mask, trace_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawConstructionPointContents(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float point[3],
+	sg_host_collision_contents_t *contents_out)
+{
+	sg_host_law_result_t result;
+
+	if (!point || !contents_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	*contents_out = 0U;
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!FiniteVector(point) || !ConstructionSceneValid(construction, scene))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	*contents_out = SG_HostCollisionPointContents(&construction->authority,
+		scene, point);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawConstructionClassifyPose(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	sg_host_law_result_t result;
+
+	if (!origin || !pose_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!ConstructionSceneValid(construction, scene) ||
+		!SG_HostCollisionClassifyPose(&construction->authority, scene, origin,
+			stance, pose_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawConstructionTransition(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out)
+{
+	sg_host_law_result_t result;
+
+	if (!start || !end || !transition_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!ConstructionSceneValid(construction, scene) ||
+		!SG_HostCollisionTransition(&construction->authority, scene, start,
+			end, stance, transition_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	return Ok();
+}
+
+static int ConstructionDownstreamAuthority(
+	const sg_host_law_construction_t *construction,
+	const sg_rune_model_identity_t *downstream_identity,
+	sg_host_collision_authority_t *authority_out)
+{
+	if (!downstream_identity || !authority_out ||
+		downstream_identity->physics_abi_id !=
+			construction->static_identity.physics_abi_id ||
+		memcmp(&downstream_identity->standing_hull,
+			&construction->static_identity.standing_hull,
+			sizeof(downstream_identity->standing_hull)) != 0 ||
+		memcmp(&downstream_identity->crouching_hull,
+			&construction->static_identity.crouching_hull,
+			sizeof(downstream_identity->crouching_hull)) != 0 ||
+		memcmp(&downstream_identity->physics,
+			&construction->static_identity.physics,
+			sizeof(downstream_identity->physics)) != 0)
+		return 0;
+	memset(authority_out, 0, sizeof(*authority_out));
+	authority_out->world = construction->world;
+	authority_out->content_identity = construction->authority.content_identity;
+	authority_out->identity = *downstream_identity;
+	return 1;
+}
+
+sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_configuration_audit_result_t *audit_out)
+{
+	sg_host_collision_authority_t authority;
+	sg_host_law_result_t result;
+
+	if (!configuration || !audit_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	memset(audit_out, 0, sizeof(*audit_out));
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!ConstructionDownstreamAuthority(construction,
+			&configuration->identity, &authority))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PHYSICS_ABI, SG_HOST_LAW_ELEMENT_NONE,
+			construction->static_identity.physics_abi_id,
+			configuration->identity.physics_abi_id);
+	if (!SG_ConfigurationAudit(&authority, configuration, audit_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, audit_out->record,
+			SG_CONFIGURATION_AUDIT_OK, (uint64_t)audit_out->code);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
+	sg_configuration_semantics_audit_result_t *audit_out)
+{
+	sg_host_collision_authority_t authority;
+	sg_host_law_result_t result;
+
+	if (!configuration || !semantics || !audit_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	memset(audit_out, 0, sizeof(*audit_out));
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!ConstructionDownstreamAuthority(construction,
+			&configuration->identity, &authority))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PHYSICS_ABI, SG_HOST_LAW_ELEMENT_NONE,
+			construction->static_identity.physics_abi_id,
+			configuration->identity.physics_abi_id);
+	if (!SG_ConfigurationSemanticsAudit(&authority, configuration, semantics,
+			audit_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, audit_out->record,
+			SG_CONFIGURATION_SEMANTICS_AUDIT_OK,
+			(uint64_t)audit_out->code);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
+	const sg_host_law_construction_t *construction,
+	const sg_configuration_space_t *configuration,
+	sg_bsp_completeness_result_t *proof_out)
+{
+	sg_host_collision_authority_t authority;
+	sg_host_law_result_t result;
+
+	if (!configuration || !proof_out)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	memset(proof_out, 0, sizeof(*proof_out));
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!ConstructionDownstreamAuthority(construction,
+			&configuration->identity, &authority))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PHYSICS_ABI, SG_HOST_LAW_ELEMENT_NONE,
+			construction->static_identity.physics_abi_id,
+			configuration->identity.physics_abi_id);
+	if (!SG_BspCompletenessProve(&authority, configuration, proof_out))
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, proof_out->record,
+			SG_BSP_COMPLETENESS_OK, (uint64_t)proof_out->code);
 	return Ok();
 }
 

@@ -1505,6 +1505,7 @@ static void TestStaticPublicationRevalidation(void)
 	sg_host_law_result_t result;
 	sg_host_law_view_t view;
 	sg_host_law_construction_view_t construction_view;
+	sg_host_law_construction_view_t construction_view_copy;
 	sg_host_static_identity_t identity =
 		ConstructionStaticIdentity(caller_world);
 	sg_host_collision_authority_t authority =
@@ -1519,6 +1520,28 @@ static void TestStaticPublicationRevalidation(void)
 	sg_host_pmove_trace_t traces[256];
 	sg_host_pmove_replay_workspace_t workspace;
 	sg_host_pmove_replay_t replay;
+	sg_host_collision_trace_t collision_trace;
+	sg_host_collision_pose_t pose;
+	sg_host_collision_transition_t transition;
+	sg_host_collision_contents_t contents = 0U;
+	sg_configuration_space_t *configuration = NULL;
+	sg_configuration_limits_t configuration_limits;
+	sg_configuration_error_t configuration_error;
+	sg_configuration_audit_result_t configuration_audit;
+	sg_configuration_audit_result_t baseline_configuration_audit;
+	sg_configuration_semantics_t *semantics = NULL;
+	sg_configuration_semantics_limits_t semantics_limits;
+	sg_configuration_semantics_error_t semantics_error;
+	sg_configuration_semantics_audit_result_t semantics_audit;
+	sg_configuration_semantics_audit_result_t baseline_semantics_audit;
+	sg_bsp_completeness_result_t completeness;
+	sg_bsp_completeness_result_t baseline_completeness;
+	sg_bsp_completeness_result_t direct_completeness;
+	const float zero[3] = { 0.0f, 0.0f, 0.0f };
+	const float trace_start[3] = { 0.0f, 0.0f, -8.0f };
+	const float trace_end[3] = { 0.0f, 0.0f, 8.0f };
+	uint64_t replay_bsp_id;
+	uint32_t forged_field;
 
 	non_ibsp_authority.identity.physics_abi_id = SG_HOST_ENGINE_PMOVE_ABI_ID;
 
@@ -1564,23 +1587,153 @@ static void TestStaticPublicationRevalidation(void)
 	result = SG_HostLawConstructionRead(construction, &construction_view);
 	CHECK(result.status == SG_HOST_LAW_OK && construction_view.current == 1U &&
 		construction_view.level_generation != 0U &&
-		construction_view.collision != NULL &&
-		construction_view.collision != &authority &&
-		construction_view.collision->world != caller_world &&
-		construction_view.collision->world->source_bytes !=
-			caller_world->source_bytes &&
-		construction_view.collision->world->source_size ==
-			caller_world->source_size &&
-		memcmp(construction_view.collision->world->source_bytes,
-			caller_world->source_bytes, caller_world->source_size) == 0 &&
+		memcmp(&construction_view.host_static_identity, &identity,
+			sizeof(identity)) == 0 &&
+		memcmp(construction_view.geometry.bsp_identity.bytes,
+			caller_world->content_identity.bytes,
+			sizeof(construction_view.geometry.bsp_identity.bytes)) == 0 &&
+		construction_view.geometry.bsp_bytes == caller_world->source_size &&
+		construction_view.geometry.engine_checksum ==
+			caller_world->engine_checksum &&
+		construction_view.geometry.plane_count == caller_world->plane_count &&
+		construction_view.geometry.node_count == caller_world->node_count &&
+		construction_view.geometry.model_count == caller_world->model_count &&
+		construction_view.geometry.brush_count == caller_world->brush_count &&
+		construction_view.geometry.brush_side_count ==
+			caller_world->brush_side_count &&
 		construction_view.laws.collision_law_id == view.collision_law_id &&
 		construction_view.laws.pmove_law_id == view.pmove_law_id &&
 		construction_view.laws.pmove_abi.identity ==
 			SG_HOST_ENGINE_PMOVE_ABI_ID &&
-		construction_view.collision_identity.physics_abi_id ==
-			SG_HOST_ENGINE_PMOVE_ABI_ID &&
+		construction_view.laws.identity.bsp_content_id == 0U &&
+		construction_view.laws.identity.entity_semantics_id == 0U &&
+		construction_view.laws.identity.source_set_identity == 0U &&
+		construction_view.laws.identity.schema_id == 0U &&
+		construction_view.laws.identity.producer_identity == 0U &&
 		memcmp(&construction_view.laws.static_identity, &identity,
 			sizeof(identity)) == 0);
+	construction_view_copy = construction_view;
+	/* Read returns copies only.  Mutating every nested metadata family cannot
+	 * reach the handle-owned parse or sealed law state. */
+	construction_view.host_static_identity.bsp_identity.bytes[0] ^= UINT8_C(1);
+	construction_view.host_static_identity.physics.gravity += 1.0f;
+	construction_view.geometry.engine_checksum ^= UINT32_C(1);
+	construction_view.geometry.plane_count += 1U;
+	construction_view.laws.collision_law_id ^= UINT64_C(1);
+	memset(&construction_view, 0xa5, sizeof(construction_view));
+	result = SG_HostLawConstructionRead(construction, &construction_view);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		memcmp(&construction_view, &construction_view_copy,
+			sizeof(construction_view)) == 0);
+	memset(&collision_trace, 0, sizeof(collision_trace));
+	result = SG_HostLawConstructionCollisionTrace(construction, NULL,
+		trace_start, zero, zero, trace_end, SG_HOST_CONTENTS_SOLID,
+		&collision_trace);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	result = SG_HostLawConstructionPointContents(construction, NULL,
+		trace_start, &contents);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	memset(&pose, 0, sizeof(pose));
+	result = SG_HostLawConstructionClassifyPose(construction, NULL,
+		trace_start, SG_RUNE_STANCE_STANDING, &pose);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pose.physics_abi_id == SG_HOST_ENGINE_PMOVE_ABI_ID);
+	memset(&transition, 0, sizeof(transition));
+	result = SG_HostLawConstructionTransition(construction, NULL,
+		trace_start, trace_start, SG_RUNE_STANCE_STANDING, &transition);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	SG_ConfigurationDefaultLimits(&configuration_limits);
+	memset(&configuration_error, 0, sizeof(configuration_error));
+	CHECK(SG_ConfigurationBuild(&authority, &configuration_limits,
+		&configuration, &configuration_error));
+	if (configuration)
+	{
+		memset(&configuration_audit, 0, sizeof(configuration_audit));
+		result = SG_HostLawConstructionConfigurationAudit(construction,
+			configuration, &configuration_audit);
+		CHECK(result.status == SG_HOST_LAW_OK &&
+			configuration_audit.code == SG_CONFIGURATION_AUDIT_OK);
+		baseline_configuration_audit = configuration_audit;
+		configuration->identity.physics.gravity += 1.0f;
+		result = SG_HostLawConstructionConfigurationAudit(construction,
+			configuration, &configuration_audit);
+		CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+		configuration->identity.physics.gravity -= 1.0f;
+		memset(&direct_completeness, 0, sizeof(direct_completeness));
+		CHECK(!SG_BspCompletenessProve(&authority, configuration,
+			&direct_completeness));
+		memset(&completeness, 0, sizeof(completeness));
+		result = SG_HostLawConstructionCompletenessProve(construction,
+			configuration, &completeness);
+		CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED &&
+			result.observed_bits == (uint64_t)direct_completeness.code &&
+			memcmp(&completeness, &direct_completeness,
+				sizeof(completeness)) == 0);
+		baseline_completeness = completeness;
+		SG_ConfigurationSemanticsDefaultLimits(&semantics_limits);
+		memset(&semantics_error, 0, sizeof(semantics_error));
+		CHECK(SG_ConfigurationSemanticsBuild(&authority, configuration,
+			&semantics_limits, &semantics, &semantics_error));
+		if (semantics)
+		{
+			memset(&semantics_audit, 0, sizeof(semantics_audit));
+			result = SG_HostLawConstructionSemanticsAudit(construction,
+				configuration, semantics, &semantics_audit);
+			CHECK(result.status == SG_HOST_LAW_OK &&
+				semantics_audit.code ==
+					SG_CONFIGURATION_SEMANTICS_AUDIT_OK);
+			baseline_semantics_audit = semantics_audit;
+			/* Complete-model labels are carried only so a downstream artifact
+			 * can be checked against itself.  They do not alter any host-static
+			 * audit or completeness result. */
+			for (forged_field = 0U; forged_field < 5U; forged_field++)
+			{
+				sg_rune_model_identity_t saved_configuration =
+					configuration->identity;
+				sg_rune_model_identity_t saved_semantics = semantics->identity;
+
+				switch (forged_field)
+				{
+				case 0U:
+					configuration->identity.bsp_content_id ^= UINT64_C(0x10);
+					semantics->identity.bsp_content_id ^= UINT64_C(0x10);
+					break;
+				case 1U:
+					configuration->identity.entity_semantics_id ^= UINT64_C(0x20);
+					semantics->identity.entity_semantics_id ^= UINT64_C(0x20);
+					break;
+				case 2U:
+					configuration->identity.source_set_identity ^= UINT64_C(0x40);
+					semantics->identity.source_set_identity ^= UINT64_C(0x40);
+					break;
+				case 3U:
+					configuration->identity.schema_id ^= UINT64_C(0x80);
+					semantics->identity.schema_id ^= UINT64_C(0x80);
+					break;
+				default:
+					configuration->identity.producer_identity ^= UINT64_C(0x100);
+					semantics->identity.producer_identity ^= UINT64_C(0x100);
+					break;
+				}
+				result = SG_HostLawConstructionConfigurationAudit(construction,
+					configuration, &configuration_audit);
+				CHECK(result.status == SG_HOST_LAW_OK && memcmp(
+					&configuration_audit, &baseline_configuration_audit,
+					sizeof(configuration_audit)) == 0);
+				result = SG_HostLawConstructionSemanticsAudit(construction,
+					configuration, semantics, &semantics_audit);
+				CHECK(result.status == SG_HOST_LAW_OK && memcmp(&semantics_audit,
+					&baseline_semantics_audit, sizeof(semantics_audit)) == 0);
+				result = SG_HostLawConstructionCompletenessProve(construction,
+					configuration, &completeness);
+				CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED && memcmp(
+					&completeness, &baseline_completeness,
+					sizeof(completeness)) == 0);
+				configuration->identity = saved_configuration;
+				semantics->identity = saved_semantics;
+			}
+		}
+	}
 	request.state.pm_type = PM_NORMAL;
 	request.state.origin[2] = -512;
 	request.state.gravity = 800;
@@ -1607,6 +1760,47 @@ static void TestStaticPublicationRevalidation(void)
 		replay.substeps[replay.substep_count - 1U].elapsed_ms ==
 			SG_HOST_ENGINE_FRAME_MS &&
 		replay.physics_abi_id == SG_HOST_ENGINE_PMOVE_ABI_ID);
+	replay_bsp_id = replay.bsp_content_id;
+	CHECK(replay_bsp_id != 0U && replay_bsp_id != UINT64_MAX &&
+		replay_bsp_id != authority.identity.bsp_content_id);
+
+	/* Downstream complete-model labels are not host-law authority.  Every
+	 * formerly unchecked label is ignored, while authenticated static output
+	 * and replay identity remain invariant. */
+	for (forged_field = 0U; forged_field < 5U; forged_field++)
+	{
+		sg_host_collision_authority_t labeled_authority = authority;
+		sg_host_law_construction_t *labeled = NULL;
+		sg_host_law_construction_view_t labeled_view;
+		sg_host_pmove_replay_t labeled_replay;
+
+		switch (forged_field)
+		{
+		case 0U: labeled_authority.identity.bsp_content_id ^= UINT64_C(0x10); break;
+		case 1U: labeled_authority.identity.entity_semantics_id ^= UINT64_C(0x20); break;
+		case 2U: labeled_authority.identity.source_set_identity ^= UINT64_C(0x40); break;
+		case 3U: labeled_authority.identity.schema_id ^= UINT64_C(0x80); break;
+		default: labeled_authority.identity.producer_identity ^= UINT64_C(0x100); break;
+		}
+		result = SG_HostLawPublicationOwnerConstructionIssue(publication,
+			&labeled_authority, &labeled);
+		CHECK(result.status == SG_HOST_LAW_OK && labeled != NULL);
+		memset(&labeled_view, 0, sizeof(labeled_view));
+		result = SG_HostLawConstructionRead(labeled, &labeled_view);
+		CHECK(result.status == SG_HOST_LAW_OK &&
+			memcmp(&labeled_view.host_static_identity,
+				&construction_view_copy.host_static_identity,
+				sizeof(labeled_view.host_static_identity)) == 0 &&
+			memcmp(&labeled_view.geometry, &construction_view_copy.geometry,
+				sizeof(labeled_view.geometry)) == 0);
+		memset(&labeled_replay, 0, sizeof(labeled_replay));
+		result = SG_HostLawConstructionReplayFrame(labeled, NULL, &request,
+			&workspace, &labeled_replay, &pmove_error);
+		CHECK(result.status == SG_HOST_LAW_OK &&
+			labeled_replay.bsp_content_id == replay_bsp_id &&
+			labeled_replay.physics_abi_id == replay.physics_abi_id);
+		SG_HostLawConstructionDestroy(labeled);
+	}
 
 	/* The handle owns the accepted parse, so caller teardown is harmless. */
 	SG_BspWorldDestroy(caller_world);
@@ -1615,6 +1809,10 @@ static void TestStaticPublicationRevalidation(void)
 		&pmove_result, &pmove_error);
 	CHECK(result.status == SG_HOST_LAW_OK &&
 		pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	result = SG_HostLawConstructionCollisionTrace(construction, NULL,
+		trace_start, zero, zero, trace_end, SG_HOST_CONTENTS_SOLID,
+		&collision_trace);
+	CHECK(result.status == SG_HOST_LAW_OK);
 
 	gravity_cvar.value = 801.0f;
 	result = SG_HostLawConstructionPmove(construction, NULL, &request,
@@ -1636,11 +1834,21 @@ static void TestStaticPublicationRevalidation(void)
 	result = SG_HostLawConstructionRead(construction, &construction_view);
 	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
 		construction_view.current == 0U &&
-		construction_view.collision == NULL);
+		construction_view.geometry.bsp_bytes == 0U &&
+		construction_view.host_static_identity.bsp_bytes == 0U);
 	result = SG_HostLawConstructionReplayFrame(construction, NULL, &request,
 		&workspace, &replay, &pmove_error);
 	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+	result = SG_HostLawConstructionCollisionTrace(construction, NULL,
+		trace_start, zero, zero, trace_end, SG_HOST_CONTENTS_SOLID,
+		&collision_trace);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+	result = SG_HostLawConstructionConfigurationAudit(construction,
+		configuration, &configuration_audit);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
 	SG_HostLawConstructionDestroy(construction);
+	SG_ConfigurationSemanticsDestroy(semantics);
+	SG_ConfigurationDestroy(configuration);
 	SG_BspWorldDestroy(caller_world);
 }
 
@@ -1674,7 +1882,8 @@ static void TestProductionConstructionLifetime(void)
 	memset(&first_view, 0, sizeof(first_view));
 	result = SG_HostLawConstructionRead(first, &first_view);
 	CHECK(result.status == SG_HOST_LAW_OK && first_view.current == 1U &&
-		first_view.collision != NULL && first_view.level_generation != 0U);
+		first_view.geometry.bsp_bytes == caller_world->source_size &&
+		first_view.level_generation != 0U);
 
 	ConfigureConstructionLevel(caller_world, "construction_b");
 	result = SG_HostLawProductionBeginLevel("construction_b");
