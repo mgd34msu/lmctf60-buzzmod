@@ -1308,6 +1308,8 @@ OBJS := \
 	sg_descend.o slipgate/sg_traversal_transition.o \
 	sg_goal.o \
 	slipgate/sg_belief.o \
+	slipgate/sg_perception_evidence.o \
+	slipgate/sg_belief_runtime.o \
 	slipgate/sg_destination.o \
 	slipgate/sg_cell_phase_localization.o \
 	slipgate/sg_bot_localization.o \
@@ -1405,7 +1407,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-generator-config-test \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
-	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+	rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
+	rune-v2-configuration-space-test \
 	ground-capability-test ground-capability-publication-test \
 	water-capability-publication-test water-capability-real-bsp-test \
 	external-force-publication-test \
@@ -4097,7 +4100,8 @@ bsp-entity-semantics-publication-test: \
 
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
-		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
+		rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
+		rune-v2-configuration-space-test \
 		ground-capability-publication-test \
 		water-capability-publication-test external-force-publication-test \
 		weapon-effect-profile-test phase-catalog-publication-test \
@@ -4263,6 +4267,15 @@ rune-v2-perception-evidence-test: \
 		slipgate/sg_rune_v2_content_identity.h
 	$(E) [TEST] RUNE v2 perception evidence
 	$(Q)sh tests/run_sg_perception_evidence_test.sh
+
+rune-v2-belief-runtime-test: tests/run_sg_belief_runtime_test.sh \
+		tests/sg_belief_runtime_test.c slipgate/sg_belief_runtime.c \
+		slipgate/sg_belief_runtime.h slipgate/sg_perception_evidence.c \
+		slipgate/sg_perception_evidence.h slipgate/sg_belief.c \
+		slipgate/sg_belief_contract.h slipgate/sg_rune_v2_content_identity.c \
+		slipgate/sg_rune_v2_content_identity.h
+	$(E) [TEST] RUNE v2 runtime belief owner
+	$(Q)sh tests/run_sg_belief_runtime_test.sh
 
 rune-v2-configuration-space-test: tests/run_sg_configuration_space_test.sh \
 		tests/sg_configuration_space_test.c \
