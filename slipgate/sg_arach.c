@@ -4694,9 +4694,11 @@ void SG_LevelChange(void)
 	for (i = 0; i < SG_MAXBOTS; i++)
 		(void)SG_HookDiagnosticsFinish(&sg_bots[i].hook_diagnostics,
 		    "map-transition", "level-change");
-	/* Retire every leased strategy view while its field/localization owner is
-	 * still alive.  Bot-slot reset invokes the copied owner release callback. */
-	SG_RemoveBots();
+	/* Retire only the field-view leases while every field/localization owner is
+	 * still alive.  The later full slot reset remains behind the compound-guard
+	 * level fence and sees an already empty, idempotent strategy caller. */
+	for (i = 0; i < SG_MAXBOTS; i++)
+		SG_StrategyCallerDestroy(&sg_bots[i].strategy);
 	(void)SG_BotLocalizationProviderSet(NULL);
 	SG_HostLawProductionReset();
 	SG_ButtonExecutionLevelReset();
@@ -4705,6 +4707,10 @@ void SG_LevelChange(void)
 	/* The fallback transition path must be as fail-closed as SpawnEntities. */
 	SG_DangerPersistenceReset();
 	SG_LevelIdentityReset();
+	/* SpawnEntities calls this before TAG_LEVEL/edict teardown. Remove fake
+	 * clients through the real disconnect path while their objective state is
+	 * still valid; otherwise the next map inherits invisible client slots. */
+	SG_RemoveBots();
 	/* Exact armor prerequisite fields live in persistent bot scratch arrays.
 	 * Their topology epoch is level-local, so retire every entry after the last
 	 * bot callback and before TAG_LEVEL teardown can recycle the old rune. */

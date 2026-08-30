@@ -236,12 +236,17 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
         level_clear = level.index(
             "SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL)"
         )
+        level_retire = level.index(
+            "SG_StrategyCallerDestroy(&sg_bots[i].strategy)", level_clear
+        )
+        level_guard = level.index("SG_CompoundGuardGameLevelReset()", level_retire)
         level_roster = level.index("SG_RemoveBots();", level_clear)
         level_localization = level.index(
-            "SG_BotLocalizationProviderSet(NULL)", level_roster
+            "SG_BotLocalizationProviderSet(NULL)", level_retire
         )
-        self.assertLess(level_clear, level_roster)
-        self.assertLess(level_roster, level_localization)
+        self.assertLess(level_clear, level_retire)
+        self.assertLess(level_retire, level_localization)
+        self.assertLess(level_guard, level_roster)
 
         shutdown_start = shutdown_source.index("void ShutdownGame (void)")
         shutdown = shutdown_source[shutdown_start:]
