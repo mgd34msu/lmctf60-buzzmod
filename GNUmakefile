@@ -1361,7 +1361,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
-	ground-capability-publication-test \
+	ground-capability-test ground-capability-publication-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
 	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
@@ -3673,12 +3673,21 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 	$(CC) $$strict -Wcast-align -I. -c \
 		slipgate/sg_rune_field_contract.c -o "$$tmp/field-contract.o"
 
-ground-capability-publication-test: \
+ground-capability-test: tests/run_sg_ground_capability_test.sh \
+		tests/sg_ground_capability_test.c \
+		tests/sg_ground_construction_fixture.c \
+		tests/sg_ground_construction_fixture.h \
+		slipgate/sg_ground_capability.c slipgate/sg_ground_capability.h
+	sh tests/run_sg_ground_capability_test.sh
+
+ground-capability-publication-test: ground-capability-test \
 		tests/run_sg_ground_capability_publication_test.sh \
 		tests/sg_ground_capability_publication_test.c \
 		tests/sg_ground_capability_test.c \
 		slipgate/sg_ground_capability_publication.c \
 		slipgate/sg_ground_capability_publication.h \
+		slipgate/sg_host_law_construction_offline.c \
+		slipgate/sg_host_law_construction_offline.h \
 		slipgate/sg_ground_capability.c slipgate/sg_ground_capability.h
 	sh tests/run_sg_ground_capability_publication_test.sh
 
