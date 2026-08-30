@@ -25,8 +25,6 @@ typedef struct belief_runtime_track_s
 typedef struct belief_runtime_life_fence_s
 {
 	uint64_t spawn_generation;
-	uint64_t observed_at_ms;
-	uint64_t authenticated_at_ms;
 	uint8_t retired;
 	uint8_t reserved[7];
 } belief_runtime_life_fence_t;
@@ -242,16 +240,14 @@ static int BeliefRuntimeLifeFenceAdmits(
 		return 1;
 	if (life->spawn_generation < fence->spawn_generation)
 		return 0;
-	/* A fresh authenticated life is ordered by its non-reusable generation,
-	 * not by receipt timing from its retired predecessor.  Timestamps order
-	 * evidence only within that exact life. */
+	/* This fence publishes only global life identity.  Evidence timing and
+	 * sequence are ordered by the audience-owned active track, so one team's
+	 * observation cannot suppress another team's independent first track. */
 	if (life->spawn_generation > fence->spawn_generation)
 		return 1;
 	if (life->spawn_generation == fence->spawn_generation && fence->retired)
 		return 0;
-	return evidence->observed_at_ms >= fence->observed_at_ms &&
-		evidence->provenance.authenticated_at_ms >=
-			fence->authenticated_at_ms;
+	return 1;
 }
 
 static void BeliefRuntimeLifeFenceCommit(
@@ -267,20 +263,7 @@ static void BeliefRuntimeLifeFenceCommit(
 	if (life->spawn_generation > fence->spawn_generation)
 	{
 		fence->spawn_generation = life->spawn_generation;
-		fence->observed_at_ms = evidence->observed_at_ms;
-		fence->authenticated_at_ms =
-			evidence->provenance.authenticated_at_ms;
 		fence->retired = 0U;
-		return;
-	}
-	if (life->spawn_generation == fence->spawn_generation)
-	{
-		if (evidence->observed_at_ms > fence->observed_at_ms)
-			fence->observed_at_ms = evidence->observed_at_ms;
-		if (evidence->provenance.authenticated_at_ms >
-			fence->authenticated_at_ms)
-			fence->authenticated_at_ms =
-				evidence->provenance.authenticated_at_ms;
 	}
 }
 
@@ -295,11 +278,7 @@ static void BeliefRuntimeLifeFenceRetire(
 	if (life->spawn_generation < fence->spawn_generation)
 		return;
 	if (life->spawn_generation > fence->spawn_generation)
-	{
 		fence->spawn_generation = life->spawn_generation;
-		fence->observed_at_ms = 0U;
-		fence->authenticated_at_ms = 0U;
-	}
 	fence->retired = 1U;
 }
 

@@ -361,6 +361,19 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 	SightObservation(&observation, 1U, 200U, 31U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	/* Each audience owns its observation ordering.  This lower observed time
+	 * is the first Team 2 track for the same authenticated life, not stale
+	 * Team 1 evidence. */
+	SightObservation(&observation, 2U, 100U, 31U);
+	observation.authentication.issuer_team = 2U;
+	observation.authentication.audience_team = 2U;
+	observation.authentication.authenticated_at_ms = 300U;
+	observation.authentication.valid_until_ms = 400U;
+	observation.target_team = 1U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(2U, 3U);
+	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
 	SightObservation(&observation, 2U, 150U, 30U);
 	observation.authentication.authenticated_at_ms = 300U;
 	observation.authentication.valid_until_ms = 400U;
@@ -386,6 +399,7 @@ static void TestRuntimeLifeFencePreventsResurrection(void)
 		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
 	SG_BeliefRuntimeRetireClient(3U);
 	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
+	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
 	SightObservation(&observation, 6U, 700U, 33U);
 	CHECK(SG_BeliefRuntimeObserve(&observation) ==
 		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
