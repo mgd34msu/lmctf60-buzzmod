@@ -24,6 +24,7 @@
 #define SG_HOST_LAW_ELEMENT_NONE UINT32_MAX
 
 typedef struct sg_host_law_publication_s sg_host_law_publication_t;
+typedef struct sg_host_law_construction_s sg_host_law_construction_t;
 
 /* Both engine-backed publications carry these exact upstream inputs for the
  * downstream model seal.  They do not claim a complete-model or RUNE
@@ -153,6 +154,26 @@ sg_host_law_result_t SG_HostLawPublicationPmove(
 	const sg_host_collision_scene_t *scene,
 	const sg_host_pmove_request_t *request,
 	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+/* Execute the owner-captured engine Pmove ABI over an independently parsed,
+ * immutable BSP collision authority.  The publication authenticates the BSP
+ * digest, hulls, physics ABI, and every movement-law field before evaluation.
+ * This is the offline construction path; it never borrows a live edict. */
+sg_host_law_result_t SG_HostLawPublicationConstructionPmove(
+	const sg_host_law_publication_t *publication,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+sg_host_law_result_t SG_HostLawConstructionIssue(
+	const sg_host_law_publication_t *publication,
+	const sg_host_collision_authority_t *authority,
+	sg_host_law_construction_t **construction_out);
+sg_host_law_result_t SG_HostLawConstructionPmove(
+	const sg_host_law_construction_t *construction,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out, sg_host_pmove_error_t *error_out);
+void SG_HostLawConstructionDestroy(sg_host_law_construction_t *construction);
 sg_host_law_result_t SG_HostLawPublicationHookPullVelocity(
 	const sg_host_law_publication_t *publication, const vec3_t start,
 	const vec3_t bite, vec3_t velocity, int *rope_length_out);

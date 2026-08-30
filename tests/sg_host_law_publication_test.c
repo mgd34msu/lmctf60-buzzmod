@@ -1219,12 +1219,17 @@ static void TestOwnerFailClosedAndDrift(void)
 static void TestStaticPublicationRevalidation(void)
 {
 	sg_host_law_publication_t *publication = NULL;
+	sg_host_law_construction_t *construction = NULL;
+	sg_host_law_construction_t *forged_construction = NULL;
 	sg_host_law_result_t result;
 	sg_host_law_view_t view;
 	sg_host_static_identity_t identity = StaticIdentity();
+	sg_host_collision_authority_t authority = Authority();
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error = SG_HOST_PMOVE_ERROR_NONE;
+
+	authority.identity.physics_abi_id = SG_HOST_ENGINE_PMOVE_ABI_ID;
 
 	result = SG_HostLawPublicationOwnerIssueStatic(&identity, &publication);
 	CHECK(result.status == SG_HOST_LAW_OK && publication != NULL);
@@ -1242,11 +1247,33 @@ static void TestStaticPublicationRevalidation(void)
 		&pmove_result, &pmove_error);
 	CHECK(result.status == SG_HOST_LAW_HOST_UNAVAILABLE &&
 		pmove_error == SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE);
+	result = SG_HostLawConstructionIssue(publication, &authority,
+		&construction);
+	CHECK(result.status == SG_HOST_LAW_OK && construction != NULL);
+	request.state.pm_type = PM_NORMAL;
+	request.state.gravity = 800;
+	request.previous_state = request.state;
+	result = SG_HostLawConstructionPmove(construction, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE &&
+		pmove_result.physics_abi_id == SG_HOST_ENGINE_PMOVE_ABI_ID &&
+		pmove_result.gravity == 800.0f);
+	authority.content_identity.bytes[0] ^= UINT8_C(1);
+	result = SG_HostLawConstructionIssue(publication, &authority,
+		&forged_construction);
+	CHECK(result.status == SG_HOST_LAW_INVALID_ARGUMENT);
+	authority.content_identity.bytes[0] ^= UINT8_C(1);
 	gravity_cvar.value = 801.0f;
+	result = SG_HostLawConstructionPmove(construction, NULL, &request,
+		&pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		result.field == SG_HOST_LAW_FIELD_GRAVITY);
 	result = SG_HostLawPublicationRevalidateProduction(publication);
 	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
 		result.field == SG_HOST_LAW_FIELD_GRAVITY);
 	gravity_cvar.value = 800.0f;
+	SG_HostLawConstructionDestroy(construction);
 	SG_HostLawPublicationOwnerDestroy(publication);
 }
 
