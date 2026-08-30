@@ -829,7 +829,7 @@ static int ExactSameOrientationOrBoundary(
 		value->negative == orientation->negative;
 }
 
-static int RefinementPointInCellExact(
+int SG_FieldRefinementPointInCellExact(
 	const sg_field_refinement_vertex_t *const vertices[8],
 	const sg_field_refinement_vertex_t *point)
 {
@@ -1241,7 +1241,7 @@ int SG_FieldRefinementBoxInsideCell(
 			if ((corner & (UINT32_C(1) << dimension)) != 0U)
 				StoreRefinementCoordinate(&point, varying[dimension],
 					GeometryFlowInterval(box, varying[dimension])->max_value);
-		if (!RefinementPointInCellExact(vertices, &point))
+		if (!SG_FieldRefinementPointInCellExact(vertices, &point))
 			return 0;
 	}
 	return 1;
@@ -1947,6 +1947,150 @@ static int GeometryLoadNodeCell(const sg_field_refinement_tree_t *tree,
 	return !cell->volume.overflow && cell->volume.count != 0U;
 }
 
+static int GeometryCellCoordinateOrder(const sg_geometry_cell_t *left,
+	const sg_geometry_cell_t *right)
+{
+	uint32_t vertex;
+
+	for (vertex = 0U; vertex <= SG_RUNE_STATE_DIMENSION_COUNT; vertex++)
+	{
+		int order = RefinementCoordinateCompare(left->vertices[vertex],
+			right->vertices[vertex]);
+		if (order != 0)
+			return order;
+	}
+	return 0;
+}
+
+static int GeometryLoadSimplexCell(const sg_rune_dynamics_model_t *model,
+	const sg_rune_state_simplex_t *simplex, sg_geometry_cell_t *cell,
+	sg_field_refinement_vertex_t converted[8])
+{
+	size_t vertex;
+
+	if (simplex->vertices.count != 8U ||
+	    (size_t)simplex->vertices.first > model->state_vertex_count ||
+	    model->state_vertex_count - (size_t)simplex->vertices.first < 8U)
+		return 0;
+	for (vertex = 0U; vertex < 8U; vertex++)
+	{
+		GeometryStatePoint(&model->state_vertices[
+			(size_t)simplex->vertices.first + vertex], &converted[vertex]);
+		cell->vertices[vertex] = &converted[vertex];
+	}
+	SortRefinementVertices(cell->vertices, 8U);
+	return 1;
+}
+
+int SG_RuneDynamicsLocatePointExact(const sg_rune_dynamics_model_t *model,
+	const sg_rune_state_chart_ref_t *chart, const sg_rune_vec3_t *position,
+	const sg_rune_vec3_t *velocity, float elapsed_ms,
+	sg_rune_state_simplex_id_t *simplex_out,
+	sg_field_reach_atom_id_t *atom_out,
+	sg_field_refinement_node_id_t *leaf_out)
+{
+	sg_field_refinement_vertex_t point;
+	size_t chart_index;
+	size_t simplex_offset;
+	size_t selected_simplex = SIZE_MAX;
+	size_t selected_atom = SIZE_MAX;
+	size_t selected_node = SIZE_MAX;
+	size_t node_index;
+	sg_geometry_cell_t selected_leaf_cell;
+	sg_geometry_cell_t selected_simplex_cell;
+	sg_field_refinement_vertex_t selected_simplex_vertices[8];
+
+	if (!model || !chart || !position || !velocity || !simplex_out ||
+	    !atom_out || !leaf_out)
+		return 0;
+	chart_index = GeometryChartIndex(model, chart);
+	if (chart_index == SIZE_MAX)
+		return 0;
+	memset(&point, 0, sizeof(point));
+	point.position = *position;
+	point.velocity = *velocity;
+	point.elapsed_ms = elapsed_ms;
+	/* Active refinement geometry owns closed-cell ties by its exact sorted
+	 * coordinate key. Stable IDs and catalog positions are deliberately absent
+	 * from this rule, so renaming or reordering authenticated records cannot
+	 * move a shared boundary. */
+	for (node_index = 0U; node_index < model->refinement_tree.node_count;
+	     node_index++)
+	{
+		const sg_field_refinement_node_t *node =
+			&model->refinement_tree.nodes[node_index];
+		size_t atom_index;
+		size_t domain_index;
+		size_t node_chart_index;
+		sg_geometry_cell_t cell;
+		if (node->children.count != 0U)
+			continue;
+		atom_index = GeometryAtomIndex(model, &node->atom);
+		if (atom_index == SIZE_MAX)
+			return 0;
+		domain_index = GeometryDomainIndex(model,
+			&model->reach_atoms[atom_index].domain);
+		if (domain_index == SIZE_MAX)
+			return 0;
+		node_chart_index = GeometryChartIndex(model,
+			&model->state_domains[domain_index].chart);
+		if (node_chart_index != chart_index ||
+		    !GeometryLoadNodeCell(&model->refinement_tree, node, &cell) ||
+		    !SG_FieldRefinementPointInCellExact(cell.vertices, &point))
+			continue;
+		if (selected_node == SIZE_MAX ||
+		    GeometryCellCoordinateOrder(&cell, &selected_leaf_cell) > 0)
+		{
+			selected_node = node_index;
+			selected_atom = atom_index;
+			selected_leaf_cell = cell;
+		}
+	}
+	if (selected_node == SIZE_MAX)
+		return 0;
+
+	for (simplex_offset = 0U;
+	     simplex_offset < model->state_charts[chart_index].simplices.count;
+	     simplex_offset++)
+	{
+		size_t simplex_index =
+			(size_t)model->state_charts[chart_index].simplices.first +
+			simplex_offset;
+		const sg_rune_state_simplex_t *simplex =
+			&model->state_simplices[simplex_index];
+		const sg_rune_state_simplex_owner_t *owner =
+			&model->simplex_owners[simplex_index];
+		sg_field_refinement_vertex_t converted[8];
+		sg_geometry_cell_t cell;
+		if (!GeometryStableIdSame(&simplex->id.value,
+			&owner->simplex.value))
+			return 0;
+		if (!GeometryStableIdSame(&owner->atom.value,
+			&model->reach_atoms[selected_atom].id.value) ||
+		    !GeometryLoadSimplexCell(model, simplex, &cell, converted) ||
+		    !SG_FieldRefinementPointInCellExact(cell.vertices, &point))
+			continue;
+		if (selected_simplex == SIZE_MAX ||
+		    GeometryCellCoordinateOrder(&cell, &selected_simplex_cell) > 0)
+		{
+			size_t vertex;
+			selected_simplex = simplex_index;
+			for (vertex = 0U; vertex < 8U; vertex++)
+			{
+				selected_simplex_vertices[vertex] = *cell.vertices[vertex];
+				selected_simplex_cell.vertices[vertex] =
+					&selected_simplex_vertices[vertex];
+			}
+		}
+	}
+	if (selected_simplex == SIZE_MAX)
+		return 0;
+	*simplex_out = model->state_simplices[selected_simplex].id;
+	*atom_out = model->reach_atoms[selected_atom].id;
+	*leaf_out = model->refinement_tree.nodes[selected_node].id;
+	return 1;
+}
+
 static int GeometryBuildFacets(const sg_geometry_cell_t *cells,
 	size_t cell_count, sg_geometry_facet_t *facets)
 {
@@ -2076,7 +2220,7 @@ static int GeometryParentCovered(const sg_rune_dynamics_model_t *model,
 		if (!GeometryLoadNodeCell(tree, record, &child[child_index]))
 			return 0;
 		for (vertex = 0U; vertex < 8U; vertex++)
-			if (!RefinementPointInCellExact(parent_cell.vertices,
+			if (!SG_FieldRefinementPointInCellExact(parent_cell.vertices,
 				child[child_index].vertices[vertex]))
 				return 0;
 	}

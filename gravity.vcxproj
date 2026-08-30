@@ -418,6 +418,7 @@
     <ClCompile Include="slipgate\sg_rune_dynamics_geometry.c" />
     <ClCompile Include="slipgate\sg_rune_field_contract.c" />
     <ClCompile Include="slipgate\sg_field_attractor.c" />
+    <ClCompile Include="slipgate\sg_field_service.c" />
     <ClCompile Include="slipgate\sg_rune_model.c" />
     <ClCompile Include="slipgate\sg_localization.c" />
     <ClCompile Include="slipgate\sg_pickup_target.c" />
@@ -550,6 +551,7 @@
     <ClInclude Include="slipgate\sg_rune_dynamics_model.h" />
     <ClInclude Include="slipgate\sg_rune_dynamics_model_internal.h" />
     <ClInclude Include="slipgate\sg_field_attractor.h" />
+    <ClInclude Include="slipgate\sg_field_service_owner_private.h" />
     <ClInclude Include="slipgate\sg_rune_model.h" />
     <ClInclude Include="slipgate\sg_rune.h" />
     <ClInclude Include="slipgate\sg_rune_contract.h" />
