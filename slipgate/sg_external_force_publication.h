@@ -28,8 +28,8 @@ enum
 	SG_EXTERNAL_FORCE_CONDITIONAL = UINT32_C(1) << 1,
 	SG_EXTERNAL_FORCE_MOVER_RELATIVE = UINT32_C(1) << 2,
 	SG_EXTERNAL_FORCE_HOST_PROVEN = UINT32_C(1) << 3,
-	/* The spatial obligation is complete, but its state-dependent Pmove
-	 * observation has not yet been authenticated. */
+	/* The family or fact still awaits an authenticated state-dependent Pmove
+	 * observation; no exact local-force claim is made. */
 	SG_EXTERNAL_FORCE_LAW_UNRESOLVED = UINT32_C(1) << 4
 };
 

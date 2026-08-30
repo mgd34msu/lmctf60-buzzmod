@@ -1,13 +1,11 @@
 #include "sg_external_force_publication.h"
 
-#include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "sg_bsp_completeness_proof.h"
 #include "sg_configuration_audit.h"
-#include "sg_configuration_lattice.h"
 
 #define SG_EXTERNAL_FORCE_MAGIC UINT64_C(0x455854464f524345)
 #define SG_EXTERNAL_FORCE_CURRENT_MASK \
@@ -519,218 +517,10 @@ static int IssueAppendMechanismFacts(sg_external_force_build_t *build)
 	return 1;
 }
 
-typedef struct sg_external_force_partition_s
-{
-	uint32_t leaf;
-	sg_host_collision_contents_t contents;
-	sg_rune_vec3_t witness;
-} sg_external_force_partition_t;
-
-typedef struct sg_external_force_partition_list_s
-{
-	sg_external_force_partition_t *values;
-	uint32_t count;
-	uint32_t capacity;
-} sg_external_force_partition_list_t;
-
-static void AngleAxis(const float angles[3], float axis[3][3])
-{
-	const float radians = 0.01745329251994329577f;
-	float sy = sinf(angles[1] * radians);
-	float cy = cosf(angles[1] * radians);
-	float sp = sinf(angles[0] * radians);
-	float cp = cosf(angles[0] * radians);
-	float sr = sinf(angles[2] * radians);
-	float cr = cosf(angles[2] * radians);
-
-	axis[0][0] = cp * cy;
-	axis[0][1] = cp * sy;
-	axis[0][2] = -sp;
-	axis[1][0] = sr * sp * cy - cr * sy;
-	axis[1][1] = sr * sp * sy + cr * cy;
-	axis[1][2] = sr * cp;
-	axis[2][0] = cr * sp * cy + sr * sy;
-	axis[2][1] = cr * sp * sy - sr * cy;
-	axis[2][2] = cr * cp;
-}
-
-static void WorldHalfspace(const float local_normal[3], float local_distance,
-	const sg_host_collision_transform_t *transform,
-	sg_configuration_lattice_halfspace_t *halfspace)
-{
-	float axis[3][3];
-	uint32_t row;
-	uint32_t column;
-
-	AngleAxis(transform->angles, axis);
-	for (column = 0U; column < 3U; column++)
-	{
-		halfspace->normal[column] = 0.0f;
-		for (row = 0U; row < 3U; row++)
-			halfspace->normal[column] +=
-				local_normal[row] * axis[row][column];
-	}
-	halfspace->distance = local_distance;
-	for (column = 0U; column < 3U; column++)
-		halfspace->distance += halfspace->normal[column] *
-			transform->origin[column];
-	halfspace->open = 0;
-}
-
-static int AppendPartition(sg_external_force_partition_list_t *partitions,
-	uint32_t leaf, sg_host_collision_contents_t contents,
-	const int32_t point[3])
-{
-	sg_external_force_partition_t *replacement;
-	uint32_t capacity;
-	uint32_t axis;
-
-	if (partitions->count == partitions->capacity)
-	{
-		capacity = partitions->capacity ? partitions->capacity * 2U : 4U;
-		if (capacity < partitions->capacity)
-			return 0;
-		replacement = realloc(partitions->values,
-			(size_t)capacity * sizeof(*replacement));
-		if (!replacement)
-			return 0;
-		partitions->values = replacement;
-		partitions->capacity = capacity;
-	}
-	partitions->values[partitions->count].leaf = leaf;
-	partitions->values[partitions->count].contents = contents;
-	for (axis = 0U; axis < 3U; axis++)
-		partitions->values[partitions->count].witness.value[axis] =
-			(float)point[axis] * 0.125f;
-	partitions->count++;
-	return 1;
-}
-
-static int TraverseCurrentPartitions(const sg_bsp_world_t *world,
-	int32_t child, const sg_host_collision_transform_t *transform,
-	sg_configuration_lattice_halfspace_t *halfspaces, uint32_t count,
-	uint32_t capacity, sg_external_force_partition_list_t *partitions)
-{
-	if (child < 0)
-	{
-		uint32_t leaf = (uint32_t)(-1 - child);
-		int32_t point[3];
-		sg_configuration_lattice_stats_t stats;
-		int feasible;
-
-		if (leaf >= world->leaf_count ||
-			(world->leaves[leaf].contents & SG_EXTERNAL_FORCE_CURRENT_MASK) == 0)
-			return leaf < world->leaf_count;
-		memset(&stats, 0, sizeof(stats));
-		feasible = SG_ConfigurationLatticeFind(halfspaces, count, NULL,
-			point, &stats);
-		if (feasible < 0)
-			return 0;
-		return feasible == 0 || AppendPartition(partitions, leaf,
-			world->leaves[leaf].contents & SG_EXTERNAL_FORCE_CURRENT_MASK,
-			point);
-	}
-	if ((uint32_t)child >= world->node_count || count >= capacity)
-		return 0;
-	{
-		const sg_bsp_node_t *node = &world->nodes[(uint32_t)child];
-		const sg_bsp_plane_t *plane;
-		sg_configuration_lattice_halfspace_t world_plane;
-		uint32_t axis;
-
-		if (node->plane >= world->plane_count)
-			return 0;
-		plane = &world->planes[node->plane];
-		WorldHalfspace(plane->normal.value, plane->distance, transform,
-			&world_plane);
-		halfspaces[count] = world_plane;
-		for (axis = 0U; axis < 3U; axis++)
-			halfspaces[count].normal[axis] = -world_plane.normal[axis];
-		halfspaces[count].distance = -world_plane.distance;
-		halfspaces[count].open = 0;
-		if (!TraverseCurrentPartitions(world, node->children[0], transform,
-			halfspaces, count + 1U, capacity, partitions))
-			return 0;
-		halfspaces[count] = world_plane;
-		halfspaces[count].open = 1;
-		return TraverseCurrentPartitions(world, node->children[1], transform,
-			halfspaces, count + 1U, capacity, partitions);
-	}
-}
-
-static int FindCurrentPartitions(const sg_external_force_build_t *build,
-	const sg_bsp_entity_semantic_t *entity, uint32_t region_index,
-	sg_external_force_partition_list_t *partitions)
-{
-	const sg_bsp_world_t *world = build->source->collision_authority->world;
-	const sg_configuration_semantics_t *semantics =
-		build->source->configuration_semantics;
-	const sg_configuration_semantic_region_t *region =
-		&semantics->regions[region_index];
-	const sg_bsp_model_t *model;
-	sg_configuration_lattice_halfspace_t *halfspaces;
-	sg_host_collision_transform_t transform;
-	uint32_t capacity;
-	uint32_t count = 0U;
-	uint32_t axis;
-	int result;
-
-	if (entity->bsp_model >= world->model_count ||
-		region->first_face > semantics->face_count ||
-		region->face_count > semantics->face_count - region->first_face ||
-		region->face_count > UINT32_MAX - 6U ||
-		world->node_count > UINT32_MAX - region->face_count - 6U)
-		return 0;
-	capacity = region->face_count + 6U + world->node_count;
-	halfspaces = calloc(capacity ? capacity : 1U, sizeof(*halfspaces));
-	if (!halfspaces)
-		return 0;
-	for (axis = 0U; axis < region->face_count; axis++)
-	{
-		const sg_configuration_semantic_face_t *face =
-			&semantics->faces[region->first_face + axis];
-
-		memcpy(halfspaces[count].normal, face->normal,
-			sizeof(halfspaces[count].normal));
-		halfspaces[count].distance = face->distance;
-		halfspaces[count].open = 0;
-		count++;
-	}
-	memset(&transform, 0, sizeof(transform));
-	memcpy(transform.origin, entity->origin.value, sizeof(transform.origin));
-	memcpy(transform.angles, entity->angles.value, sizeof(transform.angles));
-	model = &world->models[entity->bsp_model];
-	for (axis = 0U; axis < 3U; axis++)
-	{
-		float normal[3] = { 0.0f, 0.0f, 0.0f };
-
-		normal[axis] = 1.0f;
-		WorldHalfspace(normal, model->maxs.value[axis], &transform,
-			&halfspaces[count++]);
-		normal[axis] = -1.0f;
-		WorldHalfspace(normal, -model->mins.value[axis], &transform,
-			&halfspaces[count++]);
-	}
-	result = TraverseCurrentPartitions(world, model->headnode, &transform,
-		halfspaces, count, capacity, partitions);
-	free(halfspaces);
-	if (result)
-		for (axis = 0U; axis < partitions->count; axis++)
-			if ((SG_HostCollisionPointContentsModel(
-					build->source->collision_authority, entity->bsp_model,
-					&transform, partitions->values[axis].witness.value) &
-					SG_EXTERNAL_FORCE_CURRENT_MASK) !=
-				partitions->values[axis].contents)
-				return 0;
-	return result;
-}
-
-static int AppendLocalFact(sg_external_force_build_t *build,
-	sg_external_force_kind_t kind, uint32_t entity_ordinal,
-	const sg_bsp_entity_semantic_t *entity, uint32_t region_index,
+static int IssueAppendLocalFact(sg_external_force_build_t *build,
+	sg_external_force_kind_t kind, uint32_t region_index,
 	const sg_phase_catalog_binding_t *binding,
-	sg_host_collision_contents_t currents, uint32_t model_index,
-	uint32_t leaf_index, const sg_rune_vec3_t *witness)
+	sg_host_collision_contents_t currents, uint32_t leaf_index)
 {
 	const sg_configuration_semantic_region_t *region =
 		&build->source->configuration_semantics->regions[region_index];
@@ -740,24 +530,17 @@ static int AppendLocalFact(sg_external_force_build_t *build,
 
 	memset(&fact, 0, sizeof(fact));
 	fact.kind = kind;
-	fact.source_entity_ordinal = entity_ordinal;
+	fact.source_entity_ordinal = UINT32_MAX;
 	fact.mechanism_entity_index = UINT32_MAX;
 	fact.mechanism = SG_RUNE_MECHANISM_REF_NONE;
 	fact.source_cell = cell->id;
 	fact.destination_cell = cell->id;
 	fact.source_region_id = region->id;
 	fact.destination_region_id = region->id;
-	fact.source_model_index = model_index;
+	fact.source_model_index = 0U;
 	fact.source_leaf_index = leaf_index;
 	fact.source_contents = currents;
-	fact.source_witness = witness ? *witness : region->interior_witness;
-	if (entity)
-	{
-		memcpy(fact.source_model_origin.value, entity->origin.value,
-			sizeof(fact.source_model_origin.value));
-		memcpy(fact.source_model_angles.value, entity->angles.value,
-			sizeof(fact.source_model_angles.value));
-	}
+	fact.source_witness = region->interior_witness;
 	fact.portal = SG_RUNE_PORTAL_REF_NONE;
 	fact.source_phase = binding->phase;
 	fact.destination_phase = binding->phase;
@@ -767,9 +550,6 @@ static int AppendLocalFact(sg_external_force_build_t *build,
 	 * establishes this obligation, but no value is published until the
 	 * authenticated offline construction adapter supplies that observation. */
 	fact.flags = SG_EXTERNAL_FORCE_LAW_UNRESOLVED;
-	if (kind == SG_EXTERNAL_FORCE_CONVEYOR_CURRENT && entity &&
-		(entity->flags & SG_BSP_ENTITY_USE_ACTIVATED) != 0U)
-		fact.flags |= SG_EXTERNAL_FORCE_CONDITIONAL;
 	return AppendFact(build, &fact);
 }
 
@@ -800,86 +580,20 @@ static int IssueAppendRegionForces(sg_external_force_build_t *build)
 			if (binding->semantic_region_id != region->id ||
 				binding->configuration_cell != region->cell)
 				continue;
-			if (!AppendLocalFact(build, SG_EXTERNAL_FORCE_GRAVITY,
-					UINT32_MAX, NULL, region_index, binding, 0U, 0U,
-					UINT32_MAX, NULL) ||
+			if (!IssueAppendLocalFact(build, SG_EXTERNAL_FORCE_GRAVITY,
+					region_index, binding, 0U, UINT32_MAX) ||
 				(currents != 0U && region->water_level != 0U &&
-				 !AppendLocalFact(build, SG_EXTERNAL_FORCE_WATER_CURRENT,
-					UINT32_MAX, NULL, region_index, binding, currents, 0U,
-					region->sample_leaves[0], NULL)))
+				 !IssueAppendLocalFact(build, SG_EXTERNAL_FORCE_WATER_CURRENT,
+					region_index, binding, currents, region->sample_leaves[0])))
 				return 0;
-		}
-	}
-	return 1;
-}
-
-static int IssueAppendEntityLocalForces(sg_external_force_build_t *build)
-{
-	const sg_configuration_semantics_t *semantics =
-		build->source->configuration_semantics;
-	uint32_t entity_index;
-
-	for (entity_index = 0U; entity_index < build->entities.entity_count;
-		entity_index++)
-	{
-		const sg_bsp_entity_semantic_t *entity =
-			&build->entities.entities[entity_index];
-		uint32_t region_index;
-
-		/* trigger_gravity mutates generic actor gravity, but this game's player
-		 * Pmove authority admits only map gravity and the hook zero-gravity law.
-		 * Actor state is outside this static publication. */
-		if (entity->physics_kind != SG_BSP_ENTITY_PHYSICS_CONVEYOR)
-			continue;
-		for (region_index = 0U; region_index < semantics->region_count;
-			region_index++)
-		{
-			const sg_configuration_semantic_region_t *region =
-				&semantics->regions[region_index];
-			uint32_t binding_index;
-			sg_external_force_partition_list_t partitions;
-			uint32_t partition_index;
-
-			memset(&partitions, 0, sizeof(partitions));
-			if (!FindCurrentPartitions(build, entity, region_index, &partitions))
-			{
-				free(partitions.values);
-				build->error = SG_EXTERNAL_FORCE_AUDIT_INVALID_FACT;
-				build->record = entity_index;
-				return 0;
-			}
-			for (binding_index = 0U;
-				binding_index < build->phases->binding_count; binding_index++)
-			{
-				const sg_phase_catalog_binding_t *binding =
-					&build->phases->bindings[binding_index];
-
-				if (binding->semantic_region_id != region->id ||
-					binding->configuration_cell != region->cell)
-					continue;
-				for (partition_index = 0U;
-					partition_index < partitions.count; partition_index++)
-					if (!AppendLocalFact(build,
-						SG_EXTERNAL_FORCE_CONVEYOR_CURRENT,
-						entity->source_entity_ordinal, entity, region_index,
-						binding, partitions.values[partition_index].contents,
-						entity->bsp_model,
-						partitions.values[partition_index].leaf,
-						&partitions.values[partition_index].witness))
-					{
-						free(partitions.values);
-						return 0;
-					}
-			}
-			free(partitions.values);
 		}
 	}
 	return 1;
 }
 
 /* Audit reconstruction intentionally walks accepted authorities in the
- * opposite direction from issuance: mechanisms locate phase evidence,
- * bindings locate regions, and regions locate conveyor entities. */
+ * opposite direction from issuance: mechanisms locate phase evidence and
+ * phase bindings locate regions. */
 static int AuditAppendMechanismFacts(sg_external_force_build_t *build)
 {
 	const sg_configuration_space_t *configuration =
@@ -999,6 +713,38 @@ static int AuditAppendMechanismFacts(sg_external_force_build_t *build)
 	return 1;
 }
 
+static int AuditAppendLocalFact(sg_external_force_build_t *build,
+	sg_external_force_kind_t kind,
+	const sg_configuration_semantic_region_t *region,
+	const sg_phase_catalog_binding_t *binding,
+	sg_host_collision_contents_t contents, uint32_t leaf)
+{
+	const sg_configuration_cell_t *cell =
+		&build->source->configuration->cells[binding->configuration_cell];
+	sg_external_force_fact_t expected;
+
+	memset(&expected, 0, sizeof(expected));
+	expected.kind = kind;
+	expected.source_entity_ordinal = UINT32_MAX;
+	expected.mechanism_entity_index = UINT32_MAX;
+	expected.mechanism = SG_RUNE_MECHANISM_REF_NONE;
+	expected.source_cell = cell->id;
+	expected.destination_cell = cell->id;
+	expected.source_region_id = binding->semantic_region_id;
+	expected.destination_region_id = binding->semantic_region_id;
+	expected.source_model_index = 0U;
+	expected.source_leaf_index = leaf;
+	expected.source_contents = contents;
+	expected.source_witness = region->interior_witness;
+	expected.portal = SG_RUNE_PORTAL_REF_NONE;
+	expected.source_phase = binding->phase;
+	expected.destination_phase = binding->phase;
+	expected.duration_ms = build->phases->identity.physics.frame_ms;
+	expected.physics_abi_id = build->phases->identity.physics_abi_id;
+	expected.flags = SG_EXTERNAL_FORCE_LAW_UNRESOLVED;
+	return AppendFact(build, &expected);
+}
+
 static int AuditAppendRegionForces(sg_external_force_build_t *build)
 {
 	const sg_configuration_semantics_t *semantics =
@@ -1025,13 +771,11 @@ static int AuditAppendRegionForces(sg_external_force_build_t *build)
 				continue;
 			found = 1;
 			currents = region->water_type & SG_EXTERNAL_FORCE_CURRENT_MASK;
-			if (!AppendLocalFact(build, SG_EXTERNAL_FORCE_GRAVITY,
-					UINT32_MAX, NULL, region_index, binding, 0U, 0U,
-					UINT32_MAX, NULL) ||
+			if (!AuditAppendLocalFact(build, SG_EXTERNAL_FORCE_GRAVITY,
+					region, binding, 0U, UINT32_MAX) ||
 				(currents != 0U && region->water_level != 0U &&
-				 !AppendLocalFact(build, SG_EXTERNAL_FORCE_WATER_CURRENT,
-					UINT32_MAX, NULL, region_index, binding, currents, 0U,
-					region->sample_leaves[0], NULL)))
+				 !AuditAppendLocalFact(build, SG_EXTERNAL_FORCE_WATER_CURRENT,
+					region, binding, currents, region->sample_leaves[0])))
 				return 0;
 			break;
 		}
@@ -1040,65 +784,6 @@ static int AuditAppendRegionForces(sg_external_force_build_t *build)
 			build->error = SG_EXTERNAL_FORCE_AUDIT_INVALID_FACT;
 			build->record = binding_index;
 			return 0;
-		}
-	}
-	return 1;
-}
-
-static int AuditAppendEntityLocalForces(sg_external_force_build_t *build)
-{
-	const sg_configuration_semantics_t *semantics =
-		build->source->configuration_semantics;
-	uint32_t region_index;
-
-	for (region_index = 0U; region_index < semantics->region_count;
-		region_index++)
-	{
-		const sg_configuration_semantic_region_t *region =
-			&semantics->regions[region_index];
-		uint32_t entity_index;
-
-		for (entity_index = 0U; entity_index < build->entities.entity_count;
-			entity_index++)
-		{
-			const sg_bsp_entity_semantic_t *entity =
-				&build->entities.entities[entity_index];
-			sg_external_force_partition_list_t partitions;
-			uint32_t binding_index;
-
-			if (entity->physics_kind != SG_BSP_ENTITY_PHYSICS_CONVEYOR)
-				continue;
-			memset(&partitions, 0, sizeof(partitions));
-			if (!FindCurrentPartitions(build, entity, region_index, &partitions))
-			{
-				free(partitions.values);
-				return 0;
-			}
-			for (binding_index = 0U;
-				binding_index < build->phases->binding_count; binding_index++)
-			{
-				const sg_phase_catalog_binding_t *binding =
-					&build->phases->bindings[binding_index];
-				uint32_t partition_index;
-
-				if (binding->semantic_region_id != region->id ||
-					binding->configuration_cell != region->cell)
-					continue;
-				for (partition_index = 0U;
-					partition_index < partitions.count; partition_index++)
-					if (!AppendLocalFact(build,
-						SG_EXTERNAL_FORCE_CONVEYOR_CURRENT,
-						entity->source_entity_ordinal, entity, region_index,
-						binding, partitions.values[partition_index].contents,
-						entity->bsp_model,
-						partitions.values[partition_index].leaf,
-						&partitions.values[partition_index].witness))
-					{
-						free(partitions.values);
-						return 0;
-					}
-			}
-			free(partitions.values);
 		}
 	}
 	return 1;
@@ -1114,8 +799,7 @@ static int AuditReconstructFacts(const sg_external_force_source_t *source,
 	build->error = SG_EXTERNAL_FORCE_AUDIT_OK;
 	build->record = UINT32_MAX;
 	if (!ReadSources(build) || !AuditAppendMechanismFacts(build) ||
-		!AuditAppendRegionForces(build) ||
-		!AuditAppendEntityLocalForces(build))
+		!AuditAppendRegionForces(build))
 		return 0;
 	qsort(build->facts, build->fact_count, sizeof(*build->facts), FactCompare);
 	for (index = 1U; index < build->fact_count; index++)
@@ -1138,8 +822,7 @@ static int IssueBuildFacts(const sg_external_force_source_t *source,
 	build->error = SG_EXTERNAL_FORCE_AUDIT_OK;
 	build->record = UINT32_MAX;
 	if (!ReadSources(build) || !IssueAppendMechanismFacts(build) ||
-		!IssueAppendRegionForces(build) ||
-		!IssueAppendEntityLocalForces(build))
+		!IssueAppendRegionForces(build))
 		return 0;
 	qsort(build->facts, build->fact_count, sizeof(*build->facts), FactCompare);
 	for (index = 1U; index < build->fact_count; index++)
@@ -1164,6 +847,11 @@ static sg_external_force_completeness_t FactsCompleteness(
 {
 	uint32_t index;
 	int found = 0;
+
+	if (kind == SG_EXTERNAL_FORCE_WATER_CURRENT ||
+		kind == SG_EXTERNAL_FORCE_CONVEYOR_CURRENT ||
+		kind == SG_EXTERNAL_FORCE_GRAVITY)
+		return SG_EXTERNAL_FORCE_COMPLETENESS_UNRESOLVED;
 
 	for (index = 0U; index < fact_count; index++)
 		if (facts[index].kind == kind)
