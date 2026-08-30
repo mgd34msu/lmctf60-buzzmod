@@ -735,8 +735,8 @@ static int HashEnsure(sg_phase_catalog_expected_t *expected,
 	return 1;
 }
 
-static int PhaseFind(const sg_phase_catalog_expected_t *expected,
-	uint32_t cell, const sg_rune_phase_basis_t *candidate,
+static int PhaseFindForRegion(const sg_phase_catalog_expected_t *expected,
+	uint32_t cell, uint32_t region, const sg_rune_phase_basis_t *candidate,
 	uint32_t *phase_out)
 {
 	uint64_t value;
@@ -752,6 +752,7 @@ static int PhaseFind(const sg_phase_catalog_expected_t *expected,
 		uint32_t phase = expected->phase_hash[slot];
 
 		if (phase < expected->phase_count &&
+			expected->phase_region_by_phase[phase] == region &&
 			expected->phases[phase].order.source_index == cell &&
 			PhaseEquivalent(&expected->phases[phase], candidate))
 		{
@@ -950,20 +951,22 @@ static int ExpectedReservePairs(sg_phase_catalog_expected_t *expected,
 
 static int AppendPhase(const sg_phase_catalog_source_t *source,
 	sg_phase_catalog_expected_t *expected, const sg_rune_phase_basis_t *candidate,
-	uint32_t cell, uint32_t *cell_ordinals, uint32_t *phase_out,
+	uint32_t region, uint32_t cell, uint32_t *cell_ordinals, uint32_t *phase_out,
 	sg_phase_catalog_error_t *error_out)
 {
 	uint32_t phase;
 	sg_rune_phase_basis_t record;
 
-	if (PhaseFind(expected, cell, candidate, &phase))
+	if (PhaseFindForRegion(expected, cell, region, candidate, &phase))
 	{
 		if (phase_out)
 			*phase_out = phase;
 		return 1;
 	}
-	if (!source || !source->configuration || !cell_ordinals ||
-		cell >= source->configuration->cell_count)
+	if (!source || !source->configuration || !source->semantics ||
+		!cell_ordinals || region >= source->semantics->region_count ||
+		cell >= source->configuration->cell_count ||
+		source->semantics->regions[region].cell != cell)
 	{
 		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, cell);
 		return 0;
@@ -991,6 +994,7 @@ static int AppendPhase(const sg_phase_catalog_source_t *source,
 	}
 	phase = expected->phase_count++;
 	expected->phases[phase] = record;
+	expected->phase_region_by_phase[phase] = region;
 	if (!HashEnsure(expected, phase) ||
 		!HashInsert(&record, phase, expected->phase_hash,
 			expected->phase_hash_capacity, 0) ||
@@ -1371,49 +1375,83 @@ static int AppendPortalTransition(const sg_phase_catalog_source_t *source,
 		!PhaseCellRange(expected, destination_cell, &destination_first,
 			&destination_last))
 		return 0;
-	(void)destination_first;
-	(void)destination_last;
-	/* The phase hash indexes an exact phase fingerprint independently of its
-	 * cell.  A portal therefore needs one lookup per source phase, not a
-	 * source-by-destination pair scan. */
+	/* A portal owns geometric adjacency, not phase equivalence.  Enumerate each
+	 * region-owned phase pair and admit world-relative changes in medium,
+	 * support, or motion.  Mover-relative pairs require the same accepted mover
+	 * and at least one common accepted mechanism state. */
 	for (source_phase = source_first; source_phase < source_last; source_phase++)
 	{
 		uint32_t destination_phase;
-		sg_rune_phase_transition_t transition;
-		sg_phase_catalog_transition_evidence_t evidence;
 
-		if (expected->phases[source_phase].stance != portal->stance ||
-			!PhaseFind(expected, destination_cell, &expected->phases[source_phase],
-				&destination_phase) ||
-			expected->phases[destination_phase].stance != portal->stance)
-			continue;
-		memset(&transition, 0, sizeof(transition));
-		memset(&evidence, 0, sizeof(evidence));
-		transition.cell = source->configuration->cells[source_cell].id;
-		transition.destination_cell =
-			source->configuration->cells[destination_cell].id;
-		transition.source_phase = expected->phases[source_phase].id;
-		transition.destination_phase = expected->phases[destination_phase].id;
-		transition.kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
-		transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
-		/* Configuration supplies geometric adjacency, not movement travel time.
-		 * Keep this as an exact zero-duration boundary relation; movement timing
-		 * is owned by the accepted movement capability publication. */
-		transition.duration_ms = (sg_rune_interval_t){ 0.0f, 0.0f };
-		evidence.origin = SG_PHASE_CATALOG_TRANSITION_PORTAL;
-		evidence.source_record = portal_index;
-		evidence.destination_record = reverse ? portal->from_cell :
-			portal->to_cell;
-		evidence.source_cell = source_cell;
-		evidence.destination_cell = destination_cell;
-		evidence.source_region_id = source->semantics->regions[
-			expected->phase_region_by_phase[source_phase]].id;
-		evidence.destination_region_id = source->semantics->regions[
-			expected->phase_region_by_phase[destination_phase]].id;
-		evidence.portal = portal->id;
-		evidence.portal_duration_ms = 0U;
-		if (!AppendPair(expected, &transition, &evidence, error_out))
-			return 0;
+		for (destination_phase = destination_first;
+			destination_phase < destination_last; destination_phase++)
+		{
+			const sg_rune_phase_basis_t *source_basis =
+				&expected->phases[source_phase];
+			const sg_rune_phase_basis_t *destination_basis =
+				&expected->phases[destination_phase];
+			sg_phase_mechanism_state_mask_t source_states = 0U;
+			sg_phase_mechanism_state_mask_t destination_states = 0U;
+			sg_rune_phase_transition_t transition;
+			sg_phase_catalog_transition_evidence_t evidence;
+			uint32_t binding;
+			int legal;
+
+			if (source_basis->stance != portal->stance ||
+				destination_basis->stance != portal->stance)
+				continue;
+			legal = source_basis->reference_frame == SG_RUNE_FRAME_WORLD &&
+				destination_basis->reference_frame == SG_RUNE_FRAME_WORLD;
+			if (!legal && source_basis->reference_frame ==
+					SG_RUNE_FRAME_MOVER_RELATIVE &&
+				destination_basis->reference_frame ==
+					SG_RUNE_FRAME_MOVER_RELATIVE &&
+				StableIdEqual(&source_basis->mover.value,
+					&destination_basis->mover.value))
+			{
+				for (binding = 0U; binding < expected->binding_count; binding++)
+				{
+					const sg_phase_catalog_binding_t *record =
+						&expected->bindings[binding];
+
+					if (StableIdEqual(&record->phase.value,
+						&source_basis->id.value))
+						source_states |= record->mechanism_state_mask;
+					if (StableIdEqual(&record->phase.value,
+						&destination_basis->id.value))
+						destination_states |= record->mechanism_state_mask;
+				}
+				legal = (source_states & destination_states) != 0U;
+			}
+			if (!legal)
+				continue;
+			memset(&transition, 0, sizeof(transition));
+			memset(&evidence, 0, sizeof(evidence));
+			transition.cell = source->configuration->cells[source_cell].id;
+			transition.destination_cell =
+				source->configuration->cells[destination_cell].id;
+			transition.source_phase = source_basis->id;
+			transition.destination_phase = destination_basis->id;
+			transition.kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
+			transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+			transition.duration_ms = (sg_rune_interval_t){ 0.0f, 0.0f };
+			evidence.origin = SG_PHASE_CATALOG_TRANSITION_PORTAL;
+			evidence.source_record = portal_index;
+			evidence.destination_record = reverse ? portal->from_cell :
+				portal->to_cell;
+			evidence.source_cell = source_cell;
+			evidence.destination_cell = destination_cell;
+			evidence.source_region_id = source->semantics->regions[
+				expected->phase_region_by_phase[source_phase]].id;
+			evidence.destination_region_id = source->semantics->regions[
+				expected->phase_region_by_phase[destination_phase]].id;
+			evidence.portal = portal->id;
+			evidence.source_state_mask = source_states;
+			evidence.destination_state_mask = destination_states;
+			evidence.portal_duration_ms = 0U;
+			if (!AppendPair(expected, &transition, &evidence, error_out))
+				return 0;
+		}
 	}
 	return 1;
 }
@@ -1481,10 +1519,30 @@ static uint32_t TimingSpan(const sg_mechanism_capability_fact_t *fact)
 	return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
 }
 
+static void FillMechanismDestinationPhase(
+	const sg_phase_catalog_source_t *source,
+	const sg_mechanism_capability_fact_t *fact,
+	sg_rune_phase_basis_t *phase_out)
+{
+	uint32_t elapsed;
+	uint32_t frame = source->authority->identity.physics.frame_ms;
+
+	FillPhase(source, &source->semantics->regions[fact->destination_region], 1,
+		&fact->mechanism_id, 1U, phase_out);
+	elapsed = TimingSpan(fact);
+	if (elapsed > frame)
+		elapsed = frame;
+	if (elapsed == 0U)
+		elapsed = source->authority->identity.physics.substep_ms;
+	phase_out->order.variant = 3U;
+	phase_out->elapsed_ms.min_value = (float)elapsed;
+	phase_out->elapsed_ms.max_value = (float)frame;
+}
+
 static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
 	const sg_phase_mover_support_provider_payload_t *provider,
 	sg_phase_catalog_expected_t *expected, uint32_t fact_index,
-	uint32_t *cell_ordinals, sg_phase_catalog_error_t *error_out)
+	sg_phase_catalog_error_t *error_out)
 {
 	const sg_mechanism_capability_fact_t *fact =
 		&provider->facts[fact_index];
@@ -1499,40 +1557,22 @@ static int AppendMechanismTransition(const sg_phase_catalog_source_t *source,
 	uint32_t destination_phase;
 	uint32_t source_cell = source_region->cell;
 	uint32_t destination_cell = destination_region->cell;
-	uint32_t frame = source->authority->identity.physics.frame_ms;
-	uint32_t elapsed;
 	sg_rune_phase_transition_t transition;
 	sg_phase_catalog_transition_evidence_t evidence;
 
 	FillPhase(source, source_region, 1, &mechanism, 1U, &source_candidate);
 	FillPhase(source, destination_region, 1, &mechanism, 1U,
 		&destination_candidate);
-	if (!PhaseFind(expected, source_cell, &source_candidate, &source_phase) ||
-		!PhaseFind(expected, destination_cell, &destination_candidate,
+	if (!PhaseFindForRegion(expected, source_cell, fact->source_region,
+		&source_candidate, &source_phase) ||
+		!PhaseFindForRegion(expected, destination_cell, fact->destination_region,
+			&destination_candidate,
 			&destination_phase))
 		return 0;
-	/* A mechanism transition is a timed state change even when its source and
-	 * destination regions have the same static basis.  Issue a distinct,
-	 * evidence-derived elapsed phase on the destination side in all cases so
-	 * the RUNE TIME/MOVER_DWELL contract never receives equal elapsed ranges. */
-	elapsed = TimingSpan(fact);
-	if (elapsed > frame)
-		elapsed = frame;
-	if (elapsed == 0U)
-		elapsed = source->authority->identity.physics.substep_ms;
-	destination_candidate.order.variant = 3U;
-	destination_candidate.elapsed_ms.min_value = (float)elapsed;
-	destination_candidate.elapsed_ms.max_value = (float)frame;
-	if (!AppendPhase(source, expected, &destination_candidate, destination_cell,
-		cell_ordinals, &destination_phase, error_out))
+	FillMechanismDestinationPhase(source, fact, &destination_candidate);
+	if (!PhaseFindForRegion(expected, destination_cell,
+		fact->destination_region, &destination_candidate, &destination_phase))
 		return 0;
-	if (expected->phase_region_by_phase[source_phase] ==
-		SG_PHASE_CATALOG_INDEX_NONE)
-		expected->phase_region_by_phase[source_phase] = fact->source_region;
-	if (expected->phase_region_by_phase[destination_phase] ==
-		SG_PHASE_CATALOG_INDEX_NONE)
-		expected->phase_region_by_phase[destination_phase] =
-			fact->destination_region;
 	if (!AppendBinding(expected, destination_region, destination_cell,
 		destination_phase, (sg_phase_mechanism_state_mask_t)
 			StateBit(fact->destination_state), error_out))
@@ -1750,14 +1790,11 @@ static int BuildExpectedValidated(const sg_phase_catalog_source_t *source,
 		uint32_t phase;
 
 		FillPhase(source, record, 0, NULL, 0U, &candidate);
-		if (!AppendPhase(source, expected, &candidate, record->cell,
+		if (!AppendPhase(source, expected, &candidate, region, record->cell,
 			cell_ordinals, &phase, error_out) ||
 			!AppendBinding(expected, record, record->cell, phase, 0U,
 				error_out))
 			goto failure;
-		if (expected->phase_region_by_phase[phase] ==
-			SG_PHASE_CATALOG_INDEX_NONE)
-			expected->phase_region_by_phase[phase] = region;
 		while (support_cursor < provider->support_count &&
 			provider->supports[support_cursor].
 				semantic_region_id < record->id)
@@ -1771,16 +1808,24 @@ static int BuildExpectedValidated(const sg_phase_catalog_source_t *source,
 			sg_rune_mechanism_ref_t mechanism = support->mechanism;
 
 			FillPhase(source, record, 1, &mechanism, 1U, &candidate);
-			if (!AppendPhase(source, expected, &candidate, record->cell,
+			if (!AppendPhase(source, expected, &candidate, region, record->cell,
 				cell_ordinals, &phase, error_out) ||
 				!AppendBinding(expected, record, record->cell, phase,
 					support->mechanism_state_mask, error_out))
 				goto failure;
-			if (expected->phase_region_by_phase[phase] ==
-				SG_PHASE_CATALOG_INDEX_NONE)
-				expected->phase_region_by_phase[phase] = region;
 			support_cursor++;
 		}
+		/* Keep every phase for one configuration cell contiguous while the
+		 * geometric relation builders use cell ranges. */
+		for (cell = 0U; cell < provider->fact_count; cell++)
+			if (provider->facts[cell].destination_region == region)
+			{
+				FillMechanismDestinationPhase(source, &provider->facts[cell],
+					&candidate);
+				if (!AppendPhase(source, expected, &candidate, region,
+					record->cell, cell_ordinals, &phase, error_out))
+					goto failure;
+			}
 	}
 	if (support_cursor != provider->support_count)
 	{
@@ -1788,6 +1833,16 @@ static int BuildExpectedValidated(const sg_phase_catalog_source_t *source,
 			support_cursor);
 		goto failure;
 	}
+	/* Mechanism facts can add elapsed mover-relative phases.  Materialize those
+	 * phases before deriving geometric relations so portal enumeration covers
+	 * the complete accepted phase set. */
+	for (region = 0U; region < provider->fact_count; region++)
+		if (!AppendMechanismTransition(source, provider, expected, region,
+			error_out))
+		{
+			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, region);
+			goto failure;
+		}
 	for (cell = 0U; cell < source->configuration->cell_count; cell++)
 	{
 		uint32_t first;
@@ -1806,10 +1861,13 @@ static int BuildExpectedValidated(const sg_phase_catalog_source_t *source,
 			candidate = expected->phases[airborne_phase];
 			candidate.motion = SG_RUNE_MOTION_SUPPORTED;
 			candidate.support = SG_RUNE_SUPPORT_SUPPORTED;
-			if (PhaseFind(expected, cell, &candidate, &supported_phase) &&
-				!AppendSupportTransition(source, expected, cell,
-					airborne_phase, supported_phase, error_out))
-				goto failure;
+			for (supported_phase = first; supported_phase < last;
+				supported_phase++)
+				if (PhaseEquivalent(&expected->phases[supported_phase],
+						&candidate) &&
+					!AppendSupportTransition(source, expected, cell,
+						airborne_phase, supported_phase, error_out))
+					goto failure;
 		}
 	}
 	for (region = 0U; region < source->configuration->stance_overlap_count;
@@ -1832,14 +1890,6 @@ static int BuildExpectedValidated(const sg_phase_catalog_source_t *source,
 			goto failure;
 		}
 	}
-	for (region = 0U; region < provider->fact_count;
-		region++)
-		if (!AppendMechanismTransition(source, provider, expected, region,
-			cell_ordinals, error_out))
-		{
-			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, region);
-			goto failure;
-		}
 	if (!FinalizeTransitions(expected, &source->authority->identity, error_out))
 		goto failure;
 	qsort(expected->phases, expected->phase_count, sizeof(*expected->phases),

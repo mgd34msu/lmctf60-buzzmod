@@ -12,6 +12,10 @@
 #define SG_WATER_COMMAND_MAGNITUDE INT16_C(400)
 #define SG_WATER_PLANE_DISTANCE_EPSILON 0.0001
 #define SG_WATER_BOUNDS_EPSILON 0.0001f
+#define SG_WATER_HOST_CURRENT_MASK \
+	(SG_HOST_CONTENTS_CURRENT_0 | SG_HOST_CONTENTS_CURRENT_90 | \
+	 SG_HOST_CONTENTS_CURRENT_180 | SG_HOST_CONTENTS_CURRENT_270 | \
+	 SG_HOST_CONTENTS_CURRENT_UP | SG_HOST_CONTENTS_CURRENT_DOWN)
 
 typedef struct sg_water_build_s
 {
@@ -897,13 +901,23 @@ static int AppendLocalFacts(sg_water_build_t *build, uint32_t region_index)
 {
 	const sg_configuration_semantic_region_t *region =
 		&build->semantics->regions[region_index];
-	sg_rune_contents_mask_t currents =
-		SG_HostCollisionRuneContents(region->water_type) &
-		SG_RUNE_CONTENTS_CURRENT_MASK;
+	sg_host_collision_pose_t pose;
+	sg_rune_contents_mask_t currents;
 	uint32_t binding;
 
 	if (region->water_level == 0U)
 		return 1;
+	if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+		region->interior_witness.value,
+		build->configuration->cells[region->cell].stance, &pose) || !pose.valid)
+	{
+		SetError(build, SG_WATER_CAPABILITY_ERROR_INVALID_SOURCE,
+			region_index);
+		return 0;
+	}
+	currents = SG_HostCollisionRuneContents(
+		(pose.water_type | pose.support.contents) &
+		SG_WATER_HOST_CURRENT_MASK) & SG_RUNE_CONTENTS_CURRENT_MASK;
 	build->output->wet_region_count++;
 	for (binding = build->binding_offsets[region_index];
 		binding < build->binding_offsets[region_index + 1U]; binding++)

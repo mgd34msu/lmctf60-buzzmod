@@ -296,7 +296,9 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	sg_phase_catalog_view_t view_storage;
 	const sg_phase_catalog_view_t *view = &view_storage;
 	sg_phase_catalog_error_t error;
-	uint32_t at_limit = SG_RUNE_MODEL_MAX_CELL_PHASES - 2U;
+	/* The two semantic regions in cell zero each own one world phase and one
+	 * mover-relative phase before the distinct elapsed variants are appended. */
+	uint32_t at_limit = SG_RUNE_MODEL_MAX_CELL_PHASES - 4U;
 	uint32_t over_limit = at_limit + 1U;
 
 	InitFixture(&model_fixture);

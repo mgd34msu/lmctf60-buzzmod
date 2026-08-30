@@ -9,7 +9,7 @@ trap 'rm -r "$tmp_dir"; if test "$revision_header_created" = 1; then rm -f "$rep
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion
 -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 -Wformat=2 -Wcast-qual -Wcast-align -DSG_HOST_LAW_TESTING
--DSG_GROUND_CAPABILITY_TESTING'
+-DSG_GROUND_CAPABILITY_TESTING -ffunction-sections -fdata-sections'
 sources='tests/sg_ground_capability_publication_test.c
 tests/sg_ground_capability_publication_phase_fixture.c
 slipgate/sg_ground_capability_publication.c
@@ -75,7 +75,7 @@ build_test()
 		-c tests/support/yq2_pmove.c -o "$tmp_dir/yq2-$suffix.o"
 	$cc -std=c11 -Wall -Wextra -Wpedantic -Werror $extra -I. \
 		-c q_shared.c -o "$tmp_dir/shared-$suffix.o"
-	$cc $extra $objects "$tmp_dir/yq2-$suffix.o" \
+	$cc $extra -Wl,--gc-sections $objects "$tmp_dir/yq2-$suffix.o" \
 		"$tmp_dir/shared-$suffix.o" -lm $isl_libs \
 		-o "$tmp_dir/ground-publication-$suffix"
 }

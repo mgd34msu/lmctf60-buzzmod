@@ -243,6 +243,8 @@ static int OraclePhaseBasisCompare(const void *left_value,
 		return left->phase.time_quantum_ms < right->phase.time_quantum_ms ? -1 : 1;
 	if (left->phase.time_horizon_ms != right->phase.time_horizon_ms)
 		return left->phase.time_horizon_ms < right->phase.time_horizon_ms ? -1 : 1;
+	if (left->region != right->region)
+		return left->region < right->region ? -1 : 1;
 	return left->sequence == right->sequence ? 0 :
 		(left->sequence < right->sequence ? -1 : 1);
 }
@@ -552,7 +554,11 @@ static int OracleCellRange(const sg_audit_oracle_t *oracle, uint32_t cell,
 	uint32_t *first_out, uint32_t *last_out)
 {
 	uint32_t first = 0U;
-	uint32_t last = oracle->phase_count;
+	uint32_t last;
+
+	if (!oracle || !first_out || !last_out || !oracle->phases)
+		return 0;
+	last = oracle->phase_count;
 
 	while (first < last)
 	{
@@ -578,17 +584,20 @@ static int OracleCellRange(const sg_audit_oracle_t *oracle, uint32_t cell,
 	return *first_out != *last_out;
 }
 
-static int OracleFindPhase(const sg_audit_oracle_t *oracle, uint32_t cell,
-	const sg_rune_phase_basis_t *candidate, uint32_t *phase_out)
+static int OracleFindPhaseForRegion(const sg_audit_oracle_t *oracle,
+	uint32_t cell, uint32_t region, const sg_rune_phase_basis_t *candidate,
+	uint32_t *phase_out)
 {
 	uint32_t first;
 	uint32_t last;
 	uint32_t index;
 
-	if (!OracleCellRange(oracle, cell, &first, &last))
+	if (!oracle || !oracle->phases || !candidate ||
+		!OracleCellRange(oracle, cell, &first, &last))
 		return 0;
 	for (index = first; index < last; index++)
-		if (OraclePhaseEquivalent(&oracle->phases[index].phase, candidate))
+		if (oracle->phases[index].region == region &&
+			OraclePhaseEquivalent(&oracle->phases[index].phase, candidate))
 		{
 			if (phase_out)
 				*phase_out = index;
@@ -666,40 +675,43 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 				goto failure;
 			support_cursor++;
 		}
+		for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count;
+			fact++)
+		{
+			const sg_mechanism_capability_fact_t *record =
+				&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact];
+			uint32_t elapsed;
+			uint32_t frame = source->authority->identity.physics.frame_ms;
+
+			if (record->source_region >= source->semantics->region_count ||
+				record->destination_region >= source->semantics->region_count)
+			{
+				OracleSetError(error_out,
+					SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, fact);
+				goto failure;
+			}
+			if (record->destination_region != region)
+				continue;
+			OracleFillPhase(source, &source->semantics->regions[region], 1,
+				&record->mechanism_id, 1U, &phase);
+			elapsed = OracleTimingSpan(record);
+			if (elapsed > frame)
+				elapsed = frame;
+			if (elapsed == 0U)
+				elapsed = source->authority->identity.physics.substep_ms;
+			phase.order.variant = 3U;
+			phase.elapsed_ms.min_value = (float)elapsed;
+			phase.elapsed_ms.max_value = (float)frame;
+			if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
+				region, error_out))
+				goto failure;
+		}
 	}
 	if (support_cursor != SG_PHASE_SOURCE_PROVIDER(source)->support_count)
 	{
 		OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
 			support_cursor);
 		goto failure;
-	}
-	for (fact = 0U; fact < SG_PHASE_SOURCE_PROVIDER(source)->fact_count; fact++)
-	{
-		const sg_mechanism_capability_fact_t *record =
-			&SG_PHASE_SOURCE_PROVIDER(source)->facts[fact];
-		sg_rune_phase_basis_t phase;
-		uint32_t elapsed;
-		uint32_t frame = source->authority->identity.physics.frame_ms;
-
-		if (record->source_region >= source->semantics->region_count ||
-			record->destination_region >= source->semantics->region_count)
-		{
-			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE, fact);
-			goto failure;
-		}
-		OracleFillPhase(source, &source->semantics->regions[
-			record->destination_region], 1, &record->mechanism_id, 1U, &phase);
-		elapsed = OracleTimingSpan(record);
-		if (elapsed > frame)
-			elapsed = frame;
-		if (elapsed == 0U)
-			elapsed = source->authority->identity.physics.substep_ms;
-		phase.order.variant = 3U;
-		phase.elapsed_ms.min_value = (float)elapsed;
-		phase.elapsed_ms.max_value = (float)frame;
-		if (!OracleAppendRawPhase(&raw, &raw_count, &raw_capacity, &phase,
-			record->destination_region, error_out))
-			goto failure;
 	}
 	if (raw_count > UINT32_MAX)
 	{
@@ -714,7 +726,7 @@ static int OracleBuildPhases(const sg_phase_catalog_source_t *source,
 		qsort(raw, raw_count, sizeof(*raw), OraclePhaseBasisCompare);
 		for (index = 0U; index < raw_count; index++)
 		{
-			if (unique == 0U ||
+			if (unique == 0U || raw[index].region != raw[unique - 1U].region ||
 				raw[index].phase.order.source_index !=
 					raw[unique - 1U].phase.order.source_index ||
 				!OraclePhaseEquivalent(&raw[index].phase,
@@ -878,7 +890,8 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 		uint32_t phase_index;
 
 		OracleFillPhase(source, record, 0, NULL, 0U, &phase);
-		if (!OracleFindPhase(oracle, record->cell, &phase, &phase_index) ||
+		if (!OracleFindPhaseForRegion(oracle, record->cell, region, &phase,
+			&phase_index) ||
 			!OracleAppendBinding(oracle, &capacity, record->id, record->cell,
 				phase_index, 0U, error_out))
 		{
@@ -898,7 +911,8 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 				&SG_PHASE_SOURCE_PROVIDER(source)->supports[support_cursor];
 
 			OracleFillPhase(source, record, 1, &support->mechanism, 1U, &phase);
-			if (!OracleFindPhase(oracle, record->cell, &phase, &phase_index) ||
+			if (!OracleFindPhaseForRegion(oracle, record->cell, region, &phase,
+				&phase_index) ||
 				!OracleAppendBinding(oracle, &capacity, record->id, record->cell,
 					phase_index, support->mechanism_state_mask, error_out))
 			{
@@ -935,7 +949,8 @@ static int OracleBuildBindings(const sg_phase_catalog_source_t *source,
 		phase.order.variant = 3U;
 		phase.elapsed_ms.min_value = (float)elapsed;
 		phase.elapsed_ms.max_value = (float)frame;
-		if (!OracleFindPhase(oracle, destination->cell, &phase, &phase_index) ||
+		if (!OracleFindPhaseForRegion(oracle, destination->cell,
+			record->destination_region, &phase, &phase_index) ||
 			!OracleAppendBinding(oracle, &capacity, destination->id,
 				destination->cell, phase_index,
 				(sg_phase_mechanism_state_mask_t)
@@ -1163,6 +1178,16 @@ static int OracleBuildStanceTransitions(const sg_phase_catalog_source_t *source,
 {
 	uint32_t overlap_index;
 
+	if (!oracle->phases)
+	{
+		if (oracle->phase_count != 0U)
+		{
+			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY, 0U);
+			return 0;
+		}
+		return 1;
+	}
+
 	for (overlap_index = 0U;
 		overlap_index < source->configuration->stance_overlap_count;
 		overlap_index++)
@@ -1273,59 +1298,94 @@ static int OracleBuildPortalTransitions(const sg_phase_catalog_source_t *source,
 				portal->from_cell;
 			uint32_t source_first;
 			uint32_t source_last;
+			uint32_t destination_first;
+			uint32_t destination_last;
 			uint32_t phase;
 
-			if (!OracleCellRange(oracle, source_cell, &source_first, &source_last))
+			if (!OracleCellRange(oracle, source_cell, &source_first, &source_last) ||
+				!OracleCellRange(oracle, destination_cell, &destination_first,
+					&destination_last))
 				continue;
 			for (phase = source_first; phase < source_last; phase++)
 			{
 				uint32_t destination_phase;
-				sg_rune_phase_transition_t transition;
-				sg_phase_catalog_transition_evidence_t evidence;
-				uint32_t source_region;
-				uint32_t destination_region;
 
-				if (oracle->phases[phase].phase.stance != portal->stance ||
-					!OracleFindPhase(oracle, destination_cell,
-						&oracle->phases[phase].phase, &destination_phase) ||
-					oracle->phases[destination_phase].phase.stance != portal->stance)
-					continue;
-				source_region = oracle->phases[phase].region;
-				destination_region = oracle->phases[destination_phase].region;
-				if (source_region >= source->semantics->region_count ||
-					destination_region >= source->semantics->region_count)
+				for (destination_phase = destination_first;
+					destination_phase < destination_last; destination_phase++)
 				{
-					OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
-						phase);
-					return 0;
+					const sg_rune_phase_basis_t *source_basis =
+						&oracle->phases[phase].phase;
+					const sg_rune_phase_basis_t *destination_basis =
+						&oracle->phases[destination_phase].phase;
+					sg_phase_mechanism_state_mask_t source_states = 0U;
+					sg_phase_mechanism_state_mask_t destination_states = 0U;
+					sg_rune_phase_transition_t transition;
+					sg_phase_catalog_transition_evidence_t evidence;
+					uint32_t source_region = oracle->phases[phase].region;
+					uint32_t destination_region =
+						oracle->phases[destination_phase].region;
+					uint32_t binding;
+					int legal;
+
+					if (source_basis->stance != portal->stance ||
+						destination_basis->stance != portal->stance ||
+						source_region >= source->semantics->region_count ||
+						destination_region >= source->semantics->region_count)
+						continue;
+					legal = source_basis->reference_frame == SG_RUNE_FRAME_WORLD &&
+						destination_basis->reference_frame == SG_RUNE_FRAME_WORLD;
+					if (!legal && source_basis->reference_frame ==
+							SG_RUNE_FRAME_MOVER_RELATIVE &&
+						destination_basis->reference_frame ==
+							SG_RUNE_FRAME_MOVER_RELATIVE &&
+						SG_RuneModelStableIdEqual(&source_basis->mover.value,
+							&destination_basis->mover.value))
+					{
+						for (binding = 0U; binding < oracle->binding_count;
+							binding++)
+						{
+							const sg_phase_catalog_binding_t *record =
+								&oracle->bindings[binding];
+
+							if (SG_RuneModelStableIdEqual(&record->phase.value,
+								&source_basis->id.value))
+								source_states |= record->mechanism_state_mask;
+							if (SG_RuneModelStableIdEqual(&record->phase.value,
+								&destination_basis->id.value))
+								destination_states |= record->mechanism_state_mask;
+						}
+						legal = (source_states & destination_states) != 0U;
+					}
+					if (!legal)
+						continue;
+					memset(&transition, 0, sizeof(transition));
+					memset(&evidence, 0, sizeof(evidence));
+					transition.cell = source->configuration->cells[source_cell].id;
+					transition.destination_cell =
+						source->configuration->cells[destination_cell].id;
+					transition.source_phase = source_basis->id;
+					transition.destination_phase = destination_basis->id;
+					transition.kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
+					transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
+					transition.duration_ms =
+						(sg_rune_interval_t){ 0.0f, 0.0f };
+					evidence.origin = SG_PHASE_CATALOG_TRANSITION_PORTAL;
+					evidence.source_record = portal_index;
+					evidence.destination_record = destination_cell;
+					evidence.source_cell = source_cell;
+					evidence.destination_cell = destination_cell;
+					evidence.source_region_id = source->semantics->regions[
+						source_region].id;
+					evidence.destination_region_id = source->semantics->regions[
+						destination_region].id;
+					evidence.portal = portal->id;
+					evidence.source_state_mask = source_states;
+					evidence.destination_state_mask = destination_states;
+					evidence.portal_duration_ms = 0U;
+					if (!OracleAppendTransition(oracle, capacity_out, &transition,
+						&evidence, error_out))
+						return 0;
 				}
-				memset(&transition, 0, sizeof(transition));
-				memset(&evidence, 0, sizeof(evidence));
-				transition.cell = source->configuration->cells[source_cell].id;
-				transition.destination_cell =
-					source->configuration->cells[destination_cell].id;
-				transition.source_phase = oracle->phases[phase].phase.id;
-				transition.destination_phase =
-					oracle->phases[destination_phase].phase.id;
-				transition.kind = SG_RUNE_PHASE_TRANSITION_PORTAL;
-				transition.flags = SG_RUNE_PHASE_TRANSITION_CROSS_CELL;
-				transition.duration_ms = (sg_rune_interval_t){ 0.0f, 0.0f };
-				evidence.origin = SG_PHASE_CATALOG_TRANSITION_PORTAL;
-				evidence.source_record = portal_index;
-				evidence.destination_record = destination_cell;
-				evidence.source_cell = source_cell;
-				evidence.destination_cell = destination_cell;
-				evidence.source_region_id = source->semantics->regions[
-					source_region].id;
-				evidence.destination_region_id = source->semantics->regions[
-					destination_region].id;
-				evidence.portal = portal->id;
-				/* A portal is a geometric boundary relation.  It intentionally
-				 * carries no movement timing. */
-				evidence.portal_duration_ms = 0U;
-				if (!OracleAppendTransition(oracle, capacity_out, &transition,
-					&evidence, error_out))
-					return 0;
 			}
 		}
 	}
@@ -1355,32 +1415,47 @@ static int OracleBuildSupportTransitions(const sg_phase_catalog_source_t *source
 		candidate = oracle->phases[phase].phase;
 		candidate.motion = SG_RUNE_MOTION_SUPPORTED;
 		candidate.support = SG_RUNE_SUPPORT_SUPPORTED;
-		if (!OracleFindPhase(oracle, cell, &candidate, &supported_phase))
-			continue;
-		destination_region = oracle->phases[supported_phase].region;
-		if (phase == supported_phase || source_region >= source->semantics->region_count ||
-			destination_region >= source->semantics->region_count)
-			continue;
-		memset(&transition, 0, sizeof(transition));
-		memset(&evidence, 0, sizeof(evidence));
-		transition.cell = source->configuration->cells[cell].id;
-		transition.destination_cell = source->configuration->cells[cell].id;
-		transition.source_phase = oracle->phases[phase].phase.id;
-		transition.destination_phase = oracle->phases[supported_phase].phase.id;
-		transition.kind = SG_RUNE_PHASE_TRANSITION_SUPPORT;
-		transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
-			(float)frame };
-		evidence.origin = SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE;
-		evidence.source_record = source_region;
-		evidence.destination_record = destination_region;
-		evidence.source_cell = cell;
-		evidence.destination_cell = cell;
-		evidence.source_region_id = source->semantics->regions[source_region].id;
-		evidence.destination_region_id =
-			source->semantics->regions[destination_region].id;
-		if (!OracleAppendTransition(oracle, capacity_out, &transition, &evidence,
-			error_out))
-			return 0;
+		{
+			uint32_t first;
+			uint32_t last;
+
+			if (!OracleCellRange(oracle, cell, &first, &last))
+				continue;
+			for (supported_phase = first; supported_phase < last;
+				supported_phase++)
+			{
+				if (!OraclePhaseEquivalent(
+					&oracle->phases[supported_phase].phase, &candidate))
+					continue;
+				destination_region = oracle->phases[supported_phase].region;
+				if (phase == supported_phase ||
+					source_region >= source->semantics->region_count ||
+					destination_region >= source->semantics->region_count)
+					continue;
+				memset(&transition, 0, sizeof(transition));
+				memset(&evidence, 0, sizeof(evidence));
+				transition.cell = source->configuration->cells[cell].id;
+				transition.destination_cell = source->configuration->cells[cell].id;
+				transition.source_phase = oracle->phases[phase].phase.id;
+				transition.destination_phase =
+					oracle->phases[supported_phase].phase.id;
+				transition.kind = SG_RUNE_PHASE_TRANSITION_SUPPORT;
+				transition.duration_ms = (sg_rune_interval_t){ (float)quantum,
+					(float)frame };
+				evidence.origin = SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE;
+				evidence.source_record = source_region;
+				evidence.destination_record = destination_region;
+				evidence.source_cell = cell;
+				evidence.destination_cell = cell;
+				evidence.source_region_id =
+					source->semantics->regions[source_region].id;
+				evidence.destination_region_id =
+					source->semantics->regions[destination_region].id;
+				if (!OracleAppendTransition(oracle, capacity_out, &transition,
+					&evidence, error_out))
+					return 0;
+			}
+		}
 	}
 	return 1;
 }
@@ -1432,8 +1507,10 @@ static int OracleBuildMechanismTransitions(
 			&source_candidate);
 		OracleFillPhase(source, destination_region, 1, &fact->mechanism_id, 1U,
 			&destination_candidate);
-		if (!OracleFindPhase(oracle, source_cell, &source_candidate, &source_phase) ||
-			!OracleFindPhase(oracle, destination_cell, &destination_candidate,
+		if (!OracleFindPhaseForRegion(oracle, source_cell, fact->source_region,
+			&source_candidate, &source_phase) ||
+			!OracleFindPhaseForRegion(oracle, destination_cell,
+				fact->destination_region, &destination_candidate,
 				&destination_phase))
 		{
 			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
@@ -1448,7 +1525,8 @@ static int OracleBuildMechanismTransitions(
 		destination_candidate.order.variant = 3U;
 		destination_candidate.elapsed_ms.min_value = (float)elapsed;
 		destination_candidate.elapsed_ms.max_value = (float)frame;
-		if (!OracleFindPhase(oracle, destination_cell, &destination_candidate,
+		if (!OracleFindPhaseForRegion(oracle, destination_cell,
+			fact->destination_region, &destination_candidate,
 			&destination_phase))
 		{
 			OracleSetError(error_out, SG_PHASE_CATALOG_ERROR_INVALID_SOURCE,
@@ -1708,18 +1786,31 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 	case SG_PHASE_CATALOG_TRANSITION_PORTAL:
 	{
 		const sg_configuration_portal_t *portal;
+		const sg_rune_phase_basis_t *source_basis =
+			&expected->phases[source_phase];
+		const sg_rune_phase_basis_t *destination_basis =
+			&expected->phases[destination_phase];
+		int world_pair;
+		int mover_pair;
 
 		if (transition->kind != SG_RUNE_PHASE_TRANSITION_PORTAL ||
 			(transition->flags & SG_RUNE_PHASE_TRANSITION_CROSS_CELL) == 0U ||
 			evidence->source_record >= configuration->portal_count ||
 			evidence->destination_record != evidence->destination_cell ||
-			evidence->source_state_mask != 0U || evidence->destination_state_mask != 0U ||
 			evidence->provider_verifier_identity != 0U ||
 			evidence->portal_duration_ms != 0U ||
 			transition->duration_ms.min_value != 0.0f ||
 			transition->duration_ms.max_value != 0.0f)
 			return 0;
 		portal = &configuration->portals[evidence->source_record];
+		world_pair = source_basis->reference_frame == SG_RUNE_FRAME_WORLD &&
+			destination_basis->reference_frame == SG_RUNE_FRAME_WORLD;
+		mover_pair = source_basis->reference_frame ==
+				SG_RUNE_FRAME_MOVER_RELATIVE &&
+			destination_basis->reference_frame ==
+				SG_RUNE_FRAME_MOVER_RELATIVE &&
+			SG_RuneModelStableIdEqual(&source_basis->mover.value,
+				&destination_basis->mover.value);
 		return SG_RuneModelStableIdEqual(&evidence->portal.value, &portal->id.value) &&
 			((evidence->source_cell == portal->from_cell &&
 				evidence->destination_cell == portal->to_cell) ||
@@ -1730,12 +1821,23 @@ static int TransitionValid(const sg_phase_catalog_source_t *source,
 			RegionIndexById(semantics, evidence->destination_region_id) >= 0 &&
 			semantics->regions[RegionIndexById(semantics,
 				evidence->source_region_id)].cell == evidence->source_cell &&
-				semantics->regions[RegionIndexById(semantics,
-					evidence->destination_region_id)].cell == evidence->destination_cell &&
-			expected->phases[source_phase].stance ==
-				expected->phases[destination_phase].stance &&
-			PhaseExceptStanceEqual(&expected->phases[source_phase],
-				&expected->phases[destination_phase]);
+			semantics->regions[RegionIndexById(semantics,
+				evidence->destination_region_id)].cell == evidence->destination_cell &&
+			source_basis->stance == portal->stance &&
+			destination_basis->stance == portal->stance &&
+			(world_pair || mover_pair) &&
+			(world_pair ? (evidence->source_state_mask == 0U &&
+				evidence->destination_state_mask == 0U) :
+				(mover_pair && evidence->source_state_mask != 0U &&
+				evidence->destination_state_mask != 0U &&
+				(evidence->source_state_mask &
+					evidence->destination_state_mask) != 0U &&
+				BindingExists(expected, evidence->source_region_id,
+					evidence->source_cell, &transition->source_phase,
+					evidence->source_state_mask) &&
+				BindingExists(expected, evidence->destination_region_id,
+					evidence->destination_cell, &transition->destination_phase,
+					evidence->destination_state_mask)));
 	}
 	case SG_PHASE_CATALOG_TRANSITION_SUPPORT_CHANGE:
 		return transition->kind == SG_RUNE_PHASE_TRANSITION_SUPPORT &&

@@ -1405,6 +1405,7 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 	ground-capability-test ground-capability-publication-test \
+	water-capability-publication-test water-capability-real-bsp-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
 	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
@@ -4080,6 +4081,7 @@ rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-configuration-space-test \
 		ground-capability-publication-test \
+		water-capability-publication-test \
 		weapon-effect-profile-test phase-catalog-publication-test \
 		hook-visibility-catalog-test \
 		static-affordance-catalog-publication-test \
@@ -4251,6 +4253,34 @@ rune-v2-configuration-space-test: tests/run_sg_configuration_space_test.sh \
 		slipgate/sg_configuration_audit.c
 	$(E) [TEST] RUNE v2 positive-volume configuration space
 	$(Q)sh tests/run_sg_configuration_space_test.sh
+
+water-capability-publication-test: \
+		tests/run_sg_water_capability_publication_test.sh \
+		tests/sg_water_capability_publication_test.c \
+		tests/sg_water_capability_fixture.c \
+		tests/sg_water_capability_fixture.h \
+		slipgate/sg_water_capability_publication.c \
+		slipgate/sg_water_capability_publication.h \
+		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_construction_offline.h \
+		slipgate/sg_water_capability.c slipgate/sg_water_capability.h
+	$(E) [TEST] water capability publication
+	$(Q)sh tests/run_sg_water_capability_publication_test.sh
+
+water-capability-real-bsp-test: tests/run_sg_water_real_bsp_test.sh \
+		tests/sg_water_real_bsp_test.c \
+		slipgate/sg_host_law_publication.c \
+		slipgate/sg_host_law_publication.h \
+		slipgate/sg_host_law_publication_private.h \
+		slipgate/sg_host_hook_law.c slipgate/sg_host_hook_law.h \
+		slipgate/sg_host_mechanism_law.c \
+		slipgate/sg_host_mechanism_law.h \
+		slipgate/sg_host_pmove.c slipgate/sg_host_pmove.h \
+		slipgate/sg_host_collision.c slipgate/sg_host_collision.h \
+		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
+	$(Q)test -n "$(WATER_BSP)" || { \
+		echo "WATER_BSP must name a real water BSP" >&2; exit 2; }
+	$(Q)sh tests/run_sg_water_real_bsp_test.sh "$(WATER_BSP)"
 
 deslop-test: $(DESLOP_AUDIT) $(DESLOP_AUDIT_TEST) \
 		$(SOURCE_SIZE_BUDGET)

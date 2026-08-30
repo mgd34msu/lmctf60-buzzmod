@@ -284,20 +284,20 @@ static void TestMultiRegionPhaseOrdering(void)
 			SG_RuneModelStableIdEqual(&catalog->phases[1].mover.value,
 				&supports[0].mechanism.value));
 		CHECK_PHASE(catalog->phases[2].order.local_ordinal == 2U &&
-			!SG_RuneModelStableIdValid(&catalog->phases[2].mover.value));
+			SG_RuneModelStableIdEqual(&catalog->phases[2].mover.value,
+				&supports[0].mechanism.value));
 		CHECK_PHASE(catalog->phases[3].order.local_ordinal == 3U &&
-			SG_RuneModelStableIdEqual(&catalog->phases[3].mover.value,
-				&supports[1].mechanism.value));
+			!SG_RuneModelStableIdValid(&catalog->phases[3].mover.value));
 		CHECK_PHASE(catalog->phases[4].order.local_ordinal == 4U &&
 			SG_RuneModelStableIdEqual(&catalog->phases[4].mover.value,
-				&supports[0].mechanism.value));
+				&supports[1].mechanism.value));
 		for (index = 0U; index < catalog->binding_count; index++)
 			if (catalog->bindings[index].semantic_region_id ==
 					fixture.regions[0].id &&
 				catalog->bindings[index].configuration_cell == 0U &&
 				SG_RuneModelStableIdEqual(
 					&catalog->bindings[index].phase.value,
-					&catalog->phases[4].id.value) &&
+					&catalog->phases[2].id.value) &&
 				(catalog->bindings[index].mechanism_state_mask &
 					SG_PHASE_MECHANISM_STATE_DWELLING) != 0U)
 				destination_binding_found = 1;
@@ -581,6 +581,10 @@ static void TestStanceAndPortalTransitions(void)
 		return;
 	}
 	fixture.cells[1].stance = SG_RUNE_STANCE_STANDING;
+	fixture.regions[1].flags = SG_CONFIGURATION_SEMANTIC_REGION_WATER |
+		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE;
+	fixture.regions[1].water_level = 3U;
+	fixture.regions[1].water_type = SG_HOST_CONTENTS_WATER;
 	memset(&portal, 0, sizeof(portal));
 	portal.order.source_set_identity = fixture.authority.identity.source_set_identity;
 	portal.order.domain = SG_RUNE_ORDER_PORTAL;
@@ -605,6 +609,65 @@ static void TestStanceAndPortalTransitions(void)
 				SG_PHASE_CATALOG_TRANSITION_PORTAL)
 				portal_transitions++;
 		CHECK_PHASE(portal_transitions == 2U);
+		SG_PhaseCatalogDestroy(catalog);
+	}
+	FixtureDestroy(&fixture);
+}
+
+static void TestRegionSpecificPortalTransitions(void)
+{
+	phase_fixture_t fixture;
+	sg_configuration_portal_t portal;
+	sg_phase_catalog_t *catalog = NULL;
+	sg_phase_catalog_error_t error = { 0 };
+	uint32_t index;
+	uint32_t portal_transitions = 0U;
+	uint32_t destination_one = 0U;
+	uint32_t destination_two = 0U;
+
+	if (!FixtureInit(&fixture, 2U, 3U, 0))
+	{
+		CHECK_PHASE(0);
+		return;
+	}
+	fixture.cells[1].stance = SG_RUNE_STANCE_STANDING;
+	fixture.regions[2].flags = fixture.regions[1].flags;
+	memset(&portal, 0, sizeof(portal));
+	portal.order.source_set_identity =
+		fixture.authority.identity.source_set_identity;
+	portal.order.domain = SG_RUNE_ORDER_PORTAL;
+	portal.order.source_index = 0U;
+	portal.order.local_ordinal = 1U;
+	portal.id.value = SG_RuneModelStableIdFromOrderKey(&portal.order);
+	portal.from_cell = 0U;
+	portal.to_cell = 1U;
+	portal.stance = SG_RUNE_STANCE_STANDING;
+	portal.plane.normal[0] = 1.0f;
+	portal.clearance = 1.0f;
+	fixture.configuration.portals = &portal;
+	fixture.configuration.portal_count = 1U;
+	CHECK_PHASE(DeriveCatalogNonAuthoritative(&fixture.derivation, &catalog,
+		&error));
+	CHECK_PHASE(catalog != NULL);
+	if (catalog)
+	{
+		CHECK_PHASE(catalog->phase_count == 3U);
+		for (index = 0U; index < catalog->transition_count; index++)
+		{
+			const sg_phase_catalog_transition_evidence_t *evidence =
+				&catalog->transition_evidence[index];
+
+			if (evidence->origin != SG_PHASE_CATALOG_TRANSITION_PORTAL)
+				continue;
+			portal_transitions++;
+			if (evidence->destination_region_id == fixture.regions[1].id)
+				destination_one++;
+			if (evidence->destination_region_id == fixture.regions[2].id)
+				destination_two++;
+		}
+		CHECK_PHASE(portal_transitions == 4U);
+		CHECK_PHASE(destination_one == 1U);
+		CHECK_PHASE(destination_two == 1U);
 		SG_PhaseCatalogDestroy(catalog);
 	}
 	FixtureDestroy(&fixture);
@@ -759,6 +822,7 @@ int main(void)
 	(void)TestRejectNonCanonicalRegionIds;
 	(void)TestSupportTransitionEvidence;
 	(void)TestStanceAndPortalTransitions;
+	(void)TestRegionSpecificPortalTransitions;
 	(void)TestCallerCannotIssueMechanismProvider;
 	(void)TestGlobalSourceBounds;
 #else
@@ -767,6 +831,7 @@ int main(void)
 	TestRejectNonCanonicalRegionIds();
 	TestSupportTransitionEvidence();
 	TestStanceAndPortalTransitions();
+	TestRegionSpecificPortalTransitions();
 	TestCallerCannotIssueMechanismProvider();
 	TestGlobalSourceBounds();
 #endif
