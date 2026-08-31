@@ -21,7 +21,7 @@ publication out of scope.
 
 | Area | Current state |
 |---|---|
-| Architectural state | The production `sv rune` path still emits the legacy seed/link/action graph. The uncalled exhaustive dynamics/proof stack is rejected. Replacing both with the compact BSP-derived movement and weapon field is the source critical path; downstream artifacts wait. |
+| Architectural state | The compact static model, analytic contract/evaluator, exact cell/stance localizer, and identity-bound wire codec are focused-test green. Production `sv rune` still emits the legacy seed/link/action graph; the BSP-derived builder, runtime cutover, and legacy deletion remain the critical path. |
 | Generation | Stopped: no corpus controller, generator, acceptor, or finalizer runs; the repository has zero `.rune` files and zero obsolete repair sidecars. Retained demos and human-derived analysis are evidence only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
 | Existing strengths | Map/physics identity, host collision and Pmove, mechanisms, entities, weapon laws, human capture, atomic publication, readers, corpus control, installation, and fleet tooling require review. |
