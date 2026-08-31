@@ -164,6 +164,20 @@ class StrategyCallerIntegrationTest(unittest.TestCase):
             expiry.index("chat_bot[i].order_from = -1"),
         )
 
+    def test_human_order_release_never_reconstructs_stale_authority(self):
+        arach = self.text("slipgate/sg_arach.c")
+        chat = self.text("slipgate/sg_chat.c")
+        start = chat.index("static void Chat_EndStrategyOrder")
+        end = chat.index("static void Chat_Order", start)
+        order_end = chat[start:end]
+
+        self.assertNotIn("StrategyReleaseMissingHumanOrder", arach)
+        self.assertNotIn("SG_StrategyCallerRelease(", arach)
+        self.assertIn("authority.principal_id = (uint32_t)order_from + 1U;",
+                      order_end)
+        self.assertIn("SG_StrategyCallerRelease(&strategy_bot->strategy",
+                      order_end)
+
     def test_production_request_has_canonical_ordered_prerequisites(self):
         source = self.text("slipgate/sg_arach.c")
         start = source.index("static int StrategyPlanRequest")

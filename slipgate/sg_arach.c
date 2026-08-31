@@ -3203,21 +3203,6 @@ static int StrategyFramePlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	return StrategyPlanRequest(bot, tc, strike_duty, request);
 }
 
-static void StrategyReleaseMissingHumanOrder(sg_bot_t *bot,
-	const sg_think_t *tc, uint64_t at_ms)
-{
-	sg_strategy_caller_authority_t authority;
-	sg_strategy_caller_output_t output;
-
-	if (!bot || !tc || !bot->strategy.has_plan ||
-	    bot->strategy.plan.authority.rank != SG_STRATEGY_AUTHORITY_HUMAN ||
-	    SG_ChatOrderedRole(tc->e) >= 0)
-		return;
-	authority = bot->strategy.plan.authority;
-	(void)SG_StrategyCallerRelease(&bot->strategy, &authority, 1U, at_ms,
-		&output);
-}
-
 static qboolean StrategyLegacyExecutionFallback(sg_think_t *tc)
 {
 	if (!tc || !tc->goal_field)
@@ -3364,7 +3349,6 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 		return false;
 	now_ms = StrategyNowMs();
 	memset(&plan, 0, sizeof(plan));
-	StrategyReleaseMissingHumanOrder(bot, tc, now_ms);
 	legacy_field = tc->goal_field;
 	if (!SG_StrategyRuntimeTargetProviderAvailable())
 		return StrategyLegacyExecutionFallback(tc);
