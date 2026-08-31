@@ -3106,6 +3106,50 @@ static float BeliefSpatialOverlap(const sg_belief_particle_t *region,
 	return 1.0f - sqrtf(distance_squared) / radius;
 }
 
+/* A compact negative-sight envelope marks one geometric cell, not one
+ * phase.  Keep the ordinary phase-aware sphere overlap above unchanged for
+ * every other negative observation.  The source phase check prevents a
+ * horizon move into a different cell from turning the marker into a global
+ * exclusion. */
+static int BeliefRegionCoversCell(
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_particle_t *region,
+	const sg_phase_coordinate_t *source_phase,
+	const sg_belief_particle_t *particle)
+{
+	const sg_rune_cell_t *cell;
+	double radius_squared = 0.0;
+	double required_radius;
+	uint8_t axis;
+
+	if (!snapshot || !snapshot->model || !region || !source_phase ||
+		!particle || region->phase.cell_id != source_phase->cell_id ||
+		particle->phase.cell_id != source_phase->cell_id ||
+		source_phase->cell_id >= snapshot->model->cell_count ||
+		!SG_BeliefFloatValid(region->spread_radius) ||
+		region->spread_radius <= 0.0f)
+		return 0;
+	cell = &snapshot->model->cells[source_phase->cell_id];
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		double minimum = (double)cell->bounds.mins.value[axis];
+		double maximum = (double)cell->bounds.maxs.value[axis];
+		double extent;
+
+		if (!isfinite(minimum) || !isfinite(maximum) || minimum >= maximum)
+			return 0;
+		extent = (maximum - minimum) * 0.5;
+		if (!isfinite(extent) ||
+			!isfinite(radius_squared + extent * extent))
+			return 0;
+		radius_squared += extent * extent;
+	}
+	required_radius = sqrt(radius_squared) /
+		sqrt((double)SG_BELIEF_WEIGHT_EPSILON);
+	return isfinite(required_radius) &&
+		(double)region->spread_radius >= required_radius;
+}
+
 static void BeliefParticleFromSupport(sg_belief_particle_t *particle,
 	const sg_belief_evidence_t *evidence,
 	const sg_belief_evidence_support_t *support, float weight)
@@ -3158,7 +3202,9 @@ static float BeliefNegativeOverlap(
 		if (!BeliefIntegrateParticle(snapshot, &region, delay_ms,
 		    frame->at_ms, candidate->policy.spread_growth_per_ms))
 			return -1.0f;
-		overlap = BeliefSpatialOverlap(&region, particle);
+		overlap = BeliefRegionCoversCell(snapshot, &region,
+			&support->phase, particle) ? 1.0f :
+			BeliefSpatialOverlap(&region, particle);
 		if (overlap < 0.0f)
 			return -1.0f;
 		total = overlap * (kernel ?
@@ -3177,7 +3223,9 @@ static float BeliefNegativeOverlap(
 				    &source, delay_ms, frame->at_ms,
 				    candidate->policy.spread_growth_per_ms, &moved))
 					return -1.0f;
-				moved_overlap = BeliefSpatialOverlap(&moved, particle);
+				moved_overlap = BeliefRegionCoversCell(snapshot, &moved,
+					&support->phase, particle) ? 1.0f :
+					BeliefSpatialOverlap(&moved, particle);
 				if (moved_overlap < 0.0f)
 					return -1.0f;
 				total += candidate->policy.diffusion_fraction *
