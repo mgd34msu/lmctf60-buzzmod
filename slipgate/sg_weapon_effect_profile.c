@@ -11,6 +11,15 @@
 #define EFFECT_SPREAD SG_WEAPON_EFFECT_SPREAD
 #define EFFECT_BOUNCE SG_WEAPON_EFFECT_BOUNCE
 #define EFFECT_MULTI SG_WEAPON_EFFECT_MULTI_PROJECTILE
+#define HAND_GRENADE_FIRST_RELEASE_FUSE_MS \
+	(SG_HOST_HAND_GRENADE_HELD_FUSE_MS - SG_HOST_SERVER_FRAME_MS)
+#define HAND_GRENADE_FIRST_RELEASE_SPEED \
+	((float)(int)((float)SG_HOST_HAND_GRENADE_MIN_SPEED + \
+		(((float)SG_HOST_HAND_GRENADE_COOK_MS - \
+		  (float)HAND_GRENADE_FIRST_RELEASE_FUSE_MS) * \
+		 (((float)SG_HOST_HAND_GRENADE_MAX_SPEED - \
+		   (float)SG_HOST_HAND_GRENADE_MIN_SPEED) / \
+		  (float)SG_HOST_HAND_GRENADE_COOK_MS))))
 #define AMMO_LAW(ready, live, debit_value, debit_max, infinite_debit) \
 	.ammo = { \
 		.ready_minimum = (ready), \
@@ -196,7 +205,7 @@ static const sg_weapon_profile_t weapon_profiles[] = {
 		.splash_radius_max = SG_RUNE_PROOF_ROCKETJUMP_DAMAGE_RADIUS,
 		.direct_damage = SG_HOST_ROCKET_DAMAGE_BASE,
 		.direct_damage_max = SG_HOST_ROCKET_DAMAGE_BASE +
-			SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN - 1,
+			SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN,
 		.splash_damage = SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE,
 		.splash_damage_max = SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE,
 		.self_damage_scale = SG_HOST_RADIUS_SELF_SCALE,
@@ -348,7 +357,7 @@ static const sg_weapon_profile_t weapon_profiles[] = {
 		.id = SG_WEAPON_PROFILE_HAND_GRENADE,
 		.family = SG_WEAPON_FAMILY_GRENADE_BOUNCE,
 		.effects = EFFECT_PROJECTILE | EFFECT_SPLASH | EFFECT_BOUNCE,
-		.projectile_speed = SG_HOST_HAND_GRENADE_MIN_SPEED,
+		.projectile_speed = HAND_GRENADE_FIRST_RELEASE_SPEED,
 		.projectile_speed_max = SG_HOST_HAND_GRENADE_MAX_SPEED,
 		.launch_vertical_speed = SG_HOST_GRENADE_VERTICAL_SPEED,
 		.launch_jitter = SG_HOST_GRENADE_JITTER,
@@ -365,7 +374,7 @@ static const sg_weapon_profile_t weapon_profiles[] = {
 		.teammate_risk_scale = 1.0f,
 		ORDINARY_SPLASH,
 		.cook_ms = SG_HOST_HAND_GRENADE_COOK_MS,
-		.fuse_ms = SG_HOST_HAND_GRENADE_HELD_FUSE_MS,
+		.fuse_ms = HAND_GRENADE_FIRST_RELEASE_FUSE_MS,
 		.cadence_ms = 1600U,
 		.cadence_kind = SG_WEAPON_CADENCE_COOKED_RELEASE,
 		.projectile_count_min = 1U,

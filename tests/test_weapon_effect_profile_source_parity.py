@@ -119,6 +119,7 @@ class WeaponEffectProfileSourceParityTest(unittest.TestCase):
         self.player = source("p_weapon.c")
         self.weapon = source("g_weapon.c")
         self.combat = source("g_combat.c")
+        self.local = source("g_local.h")
         self.plasma = source("plasma.c")
         self.catalog = source("slipgate/sg_weapon_effect_profile.c")
 
@@ -197,16 +198,35 @@ class WeaponEffectProfileSourceParityTest(unittest.TestCase):
         grenade = profile_entry(self.catalog, "SG_WEAPON_PROFILE_HAND_GRENADE")
         hook = profile_entry(self.catalog, "SG_WEAPON_PROFILE_HOOK")
         for constant in ("SG_HOST_HAND_GRENADE_DAMAGE",
-                         "SG_HOST_HAND_GRENADE_MIN_SPEED",
                          "SG_HOST_HAND_GRENADE_MAX_SPEED",
                          "SG_HOST_HAND_GRENADE_COOK_MS"):
             self.assertIn(constant, self.player)
             self.assertIn(constant, grenade)
+        self.assertIn("SG_HOST_HAND_GRENADE_MIN_SPEED", self.catalog)
         self.assertTrue(hook_parity(self.player, self.catalog))
         damaged = self.player.replace(
             "#define GRAPPLE_PULL_SPEED             SG_HOST_HOOK_PULL_SPEED",
             "#define GRAPPLE_PULL_SPEED             799", 1)
         self.assertFalse(hook_parity(damaged, self.catalog))
+
+    def test_random_and_release_endpoints_are_not_clipped(self) -> None:
+        rocket = profile_entry(self.catalog, "SG_WEAPON_PROFILE_ROCKET_LAUNCHER")
+        grenade = profile_entry(self.catalog, "SG_WEAPON_PROFILE_HAND_GRENADE")
+        rocket_fire = function_body(self.player, "Weapon_RocketLauncher_Fire")
+        grenade_fire = function_body(self.player, "weapon_grenade_fire")
+        grenade_state = function_body(self.player, "Weapon_Grenade")
+
+        self.assertIn("(rand () & 0x7fff) / ((float)0x7fff)", self.local)
+        self.assertIn("(int)(random() * SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN)",
+                      rocket_fire)
+        self.assertIn("SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN", rocket)
+        self.assertNotIn("SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN - 1", rocket)
+        self.assertIn("level.time + GRENADE_TIMER + 0.2", grenade_state)
+        self.assertIn("ent->client->ps.gunframe == 12", grenade_state)
+        self.assertIn("HAND_GRENADE_FIRST_RELEASE_SPEED", grenade)
+        self.assertIn("HAND_GRENADE_FIRST_RELEASE_FUSE_MS", grenade)
+        self.assertIn("speed = GRENADE_MINSPEED + (GRENADE_TIMER - timer)",
+                      grenade_fire)
 
     def test_catalog_has_no_tactical_area_denial_fact(self) -> None:
         self.assertNotIn("SG_WEAPON_EFFECT_AREA_DENIAL", self.catalog)

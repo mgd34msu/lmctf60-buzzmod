@@ -44,7 +44,7 @@ static void TestCatalog(void)
 	CHECK(Profile(SG_WEAPON_PROFILE_ROCKET_LAUNCHER)->projectile_speed ==
 		650.0f);
 	CHECK(Profile(SG_WEAPON_PROFILE_ROCKET_LAUNCHER)->direct_damage_max ==
-		119.0f);
+		120.0f);
 	CHECK(Profile(SG_WEAPON_PROFILE_ROCKET_LAUNCHER)->
 		projectile_retire_distance == 8000.0f);
 	CHECK(Profile(SG_WEAPON_PROFILE_GRENADE_LAUNCHER)->fuse_ms == 2500U);
@@ -142,7 +142,7 @@ static void TestRuntimeLawResolution(void)
 		resolved.physics_abi_id == law.physics_abi_id);
 	CHECK(resolved.projectile_speed == 650.0f &&
 		resolved.direct_damage == 100.0f &&
-		resolved.direct_damage_max == 119.0f &&
+		resolved.direct_damage_max == 120.0f &&
 		resolved.splash_damage == 120.0f &&
 		resolved.splash_radius == 120.0f);
 
@@ -174,7 +174,7 @@ static void TestRuntimeLawResolution(void)
 	CHECK(SG_WeaponProfileResolve(SG_WEAPON_PROFILE_ROCKET_LAUNCHER,
 		&law, &resolved));
 	CHECK(resolved.direct_damage == 400.0f &&
-		resolved.direct_damage_max == 476.0f);
+		resolved.direct_damage_max == 480.0f);
 	if (SG_WEAPON_BALANCE_COMPILED != 0U)
 	{
 		CHECK(resolved.splash_damage == 300.0f &&

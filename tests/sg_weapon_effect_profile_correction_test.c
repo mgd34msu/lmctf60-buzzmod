@@ -1,4 +1,5 @@
 #include "slipgate/sg_weapon_effect_profile.h"
+#include "slipgate/sg_weapon_host_constants.h"
 
 #include <stdio.h>
 
@@ -29,6 +30,21 @@ static sg_weapon_profile_t Resolve(sg_weapon_profile_id_t id,
 
 	CHECK(SG_WeaponProfileResolve(id, &law, &profile));
 	return profile;
+}
+
+static int HostRocketDamageAtRandomEndpoint(float unit_random)
+{
+	return SG_HOST_ROCKET_DAMAGE_BASE + (int)(unit_random *
+		SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN);
+}
+
+static int HostHandGrenadeSpeedAtTimer(float timer_seconds)
+{
+	return (int)((float)SG_HOST_HAND_GRENADE_MIN_SPEED +
+		((float)SG_HOST_HAND_GRENADE_COOK_MS * 0.001f - timer_seconds) *
+		(((float)SG_HOST_HAND_GRENADE_MAX_SPEED -
+		  (float)SG_HOST_HAND_GRENADE_MIN_SPEED) /
+		 ((float)SG_HOST_HAND_GRENADE_COOK_MS * 0.001f)));
 }
 
 static void TestRailAuxiliaryTraces(void)
@@ -87,10 +103,10 @@ static void TestMissingFamiliesAndRuntimeInputs(void)
 	sg_weapon_profile_t rail_non_dm = Resolve(SG_WEAPON_PROFILE_RAILGUN,
 		0U, 0U, 0U, 0U);
 
-	CHECK(grenade.projectile_speed == 400.0f);
+	CHECK(grenade.projectile_speed == 386.0f);
 	CHECK(grenade.projectile_speed_max == 800.0f);
 	CHECK(grenade.cook_ms == 3000U);
-	CHECK(grenade.fuse_ms == 3200U);
+	CHECK(grenade.fuse_ms == 3100U);
 	CHECK(hook.family == SG_WEAPON_FAMILY_SPECIAL);
 	CHECK(hook.projectile_speed == 800.0f);
 	CHECK(hook.hook_pull_speed == 800U);
@@ -107,6 +123,39 @@ static void TestMissingFamiliesAndRuntimeInputs(void)
 	CHECK(plasma.direct_damage == 39.0f);
 	CHECK(plasma.direct_damage_max == 156.0f);
 	CHECK((SG_WEAPON_EFFECT_MASK & (UINT32_C(1) << 6)) == 0U);
+}
+
+static void TestHostEquationBoundaries(void)
+{
+	const float first_release_timer =
+		((float)(SG_HOST_HAND_GRENADE_HELD_FUSE_MS -
+			 SG_HOST_SERVER_FRAME_MS)) * 0.001f;
+	sg_weapon_profile_t rocket = Resolve(SG_WEAPON_PROFILE_ROCKET_LAUNCHER,
+		0U, 0U, 1U, 0U);
+	sg_weapon_profile_t quad_rocket = Resolve(
+		SG_WEAPON_PROFILE_ROCKET_LAUNCHER, 0U, 1U, 1U, 0U);
+	sg_weapon_profile_t grenade = Resolve(SG_WEAPON_PROFILE_HAND_GRENADE,
+		0U, 0U, 1U, 0U);
+
+	CHECK(HostRocketDamageAtRandomEndpoint(0.0f) == 100);
+	CHECK(HostRocketDamageAtRandomEndpoint(1.0f) == 120);
+	CHECK(rocket.direct_damage ==
+		(float)HostRocketDamageAtRandomEndpoint(0.0f));
+	CHECK(rocket.direct_damage_max ==
+		(float)HostRocketDamageAtRandomEndpoint(1.0f));
+	CHECK(quad_rocket.direct_damage ==
+		(float)(HostRocketDamageAtRandomEndpoint(0.0f) *
+		SG_HOST_DAMAGE_QUAD_SCALE));
+	CHECK(quad_rocket.direct_damage_max ==
+		(float)(HostRocketDamageAtRandomEndpoint(1.0f) *
+		SG_HOST_DAMAGE_QUAD_SCALE));
+	CHECK(HostHandGrenadeSpeedAtTimer(first_release_timer) == 386);
+	CHECK(HostHandGrenadeSpeedAtTimer(0.0f) == 800);
+	CHECK(grenade.projectile_speed ==
+		(float)HostHandGrenadeSpeedAtTimer(first_release_timer));
+	CHECK(grenade.projectile_speed_max ==
+		(float)HostHandGrenadeSpeedAtTimer(0.0f));
+	CHECK(grenade.fuse_ms == (uint32_t)(first_release_timer * 1000.0f));
 }
 
 static void TestTimingAndIds(void)
@@ -160,6 +209,7 @@ int main(void)
 	TestRailAuxiliaryTraces();
 	TestSplashLaws();
 	TestMissingFamiliesAndRuntimeInputs();
+	TestHostEquationBoundaries();
 	TestTimingAndIds();
 	if (failures != 0)
 		return 1;
