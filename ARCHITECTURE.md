@@ -138,10 +138,10 @@ copying its bytes. Construction derives these target sections:
    controller identity, dwell/travel timing, entry region, and exit region for
    doors, buttons, lifts, trains, pushes, teleporters, and related stateful
    systems.
-6. **Shared spatial affordances.** Visibility/occlusion partitions, hookable
-   surfaces, surface normals, cover/exposure boundaries, projectile corridors,
-   blast reach, and bounce surfaces. Movement and weapon profiles query this
-   shared geometry instead of duplicating it.
+6. **Weapon response fields.** Visibility/occlusion regions and compact kernels
+   for hitscan, rail, spread and cones, straight bolts, rockets and splash,
+   grenades and bounce or fuse, BFG, and special laws over the shared cells and
+   surfaces. Weapon families do not duplicate the BSP.
 
 The position basis is three-dimensional. Directional speed, support state,
 stance, water/air state, and time form the local phase basis used by capability
@@ -155,18 +155,18 @@ Construction follows one authority order:
 ```text
 complete BSP and entity parse
   -> standing/crouching player-origin configuration space
-  -> cells, geometric portals, contents, and landmarks
-  -> independent BSP/host completeness reconciliation
-  -> movement capability and mechanism kernels to a fixed point
-  -> visibility and weapon-affordance regions
+  -> exact cells and split-carried geometric portals
+  -> contents, landmarks, mechanisms, visibility, and occlusion regions
+  -> analytic movement and weapon fields over the shared cells
+  -> canonical compact indexes
   -> deterministic wire serialization
 ```
 
 Configuration-space construction expands solid brushes by the player hull, or
-equivalently erodes free space. It partitions at real geometric and visibility
-discontinuities. Interpolation is valid only inside a proven partition. Exact
-host box traces and Pmove remain independent proof oracles at boundaries and
-representative interiors.
+equivalently erodes free space. It preserves adjacency while partitioning at
+real geometry, mechanism, movement-law, visibility, occlusion, and
+weapon-response discontinuities. Exact host box traces, Pmove, rays, and weapon
+laws support the two-map development checker, not production acceptance.
 
 Hook construction separates two questions:
 
@@ -206,27 +206,27 @@ create permanent minima or replace strategic authority implicitly.
 Players are never RUNE records. Earned visual, sound, damage, pickup, and team
 observations update sparse per-player runtime beliefs over position, velocity,
 movement state, confidence, and future time. Combat combines those beliefs with
-shared static weapon affordances and weapon profiles. An exact live trace is
-the irreversible boundary for a shot or hook.
+the RUNE's weapon response fields and bound weapon profiles. An exact trace runs
+immediately before firing a shot or hook.
 
 ### Wire, publication, and acceptance
 
 The target codec remains versioned, fixed little-endian, allocation-bounded,
 checksum-protected, and exactly bound to BSP, entity semantics, physics ABI,
 configuration schema, and map physics. It replaces seed/link/action and
-objective-route fields with cells, portals, capability kernels, affordances,
-landmarks, and mechanism references.
+objective-route fields with cells, portals, movement fields, weapon-response
+regions and kernels, landmarks, and mechanism references.
 
 Loading still decodes into an unpublished candidate. The candidate becomes
-visible only after structural, identity, mechanism, and semantic validation.
-Same-directory staged writes, revalidation, sync, and rename preserve atomic
-publication. Failed loading or publication does not replace the current
-artifact or expose mixed sidecar state.
+visible only after linear identity, format, count, span, reference, order,
+finite-value, checksum, and load checks. Same-directory staged writes,
+revalidation, sync, and rename preserve atomic publication. Failure does not
+replace the current artifact or expose mixed sidecar state.
 
-The frozen GNU C reader, Make C reader, Python reader, linter, semantic checker,
-and separate fresh-process cold load must independently agree. Artifact validity
-means faithful configuration-space coverage. Flag reachability is a gameplay
-query over the artifact, not the definition of whether the artifact is valid.
+The frozen GNU C reader, Make C reader, Python reader, linter, and separate
+fresh-process bot load must independently agree on those linear rules. Deep BSP
+and host comparison is development-only for one ordinary RUNE and `tomb05`.
+Flag reachability is a gameplay query, not artifact validity.
 `tools/rune-corpus-maps.txt` remains the 175-map conversion authority;
 `tools/topmaps.txt` remains an ordinary schedule.
 
