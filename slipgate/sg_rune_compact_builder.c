@@ -1,4 +1,5 @@
 #include "sg_rune_compact_builder.h"
+#include "sg_rune_compact_builder_owner.h"
 
 #include "sg_configuration_audit.h"
 #include "sg_host_law_publication_private.h"
@@ -10,8 +11,8 @@
 #include <string.h>
 
 #define SG_RUNE_COMPACT_BUILDER_STATE UINT64_C(0x434255494c444552)
-#define SG_RUNE_COMPACT_BUILDER_SCHEMA_ID UINT64_C(0x434f4d5041435401)
-#define SG_RUNE_COMPACT_BUILDER_CONSTRUCTION_ID UINT64_C(0x4253504649454c01)
+#define SG_RUNE_COMPACT_BUILDER_SCHEMA_ID UINT64_C(0x434f4d5041435402)
+#define SG_RUNE_COMPACT_BUILDER_CONSTRUCTION_ID UINT64_C(0x4253504649454c02)
 #define SG_RUNE_COMPACT_BUILDER_PRODUCER_ID UINT64_C(0x53474255494c4401)
 #define SG_RUNE_COMPACT_BUILDER_HASH_OFFSET UINT64_C(14695981039346656037)
 #define SG_RUNE_COMPACT_BUILDER_HASH_PRIME UINT64_C(1099511628211)
@@ -1233,6 +1234,22 @@ int SG_RuneCompactBuilderRead(const sg_rune_compact_builder_t *builder,
 	view_out->weapon_profiles = builder->weapon_profiles;
 	view_out->resolved_weapon_profiles = builder->resolved_weapon_profiles;
 	view_out->weapon_profile_count = builder->weapon_profile_count;
+	return 1;
+}
+
+int SG_RuneCompactBuilderOwnerRead(
+	const sg_rune_compact_builder_t *builder,
+	sg_rune_compact_builder_owner_view_t *view_out)
+{
+	if (!BuilderValid(builder) || !view_out)
+		return 0;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->world = builder->world;
+	view_out->collision = &builder->collision;
+	view_out->configuration = builder->configuration;
+	view_out->semantics = builder->semantics;
+	view_out->entity_semantics = builder->entity_semantics;
+	view_out->visibility = builder->visibility;
 	return 1;
 }
 
