@@ -6,8 +6,11 @@
 
 typedef struct sg_rune_compact_builder_owner_view_s
 {
+	sg_rune_compact_identity_t identity;
 	const sg_bsp_world_t *world;
 	const sg_host_collision_authority_t *collision;
+	const sg_host_law_view_t *host_law;
+	const sg_rune_source_weapon_law_t *weapon_law;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	const sg_bsp_entity_semantics_t *entity_semantics;

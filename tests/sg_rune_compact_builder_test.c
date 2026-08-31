@@ -7,6 +7,7 @@
 #endif
 
 #include "slipgate/sg_rune_compact_builder.h"
+#include "slipgate/sg_rune_compact_builder_owner.h"
 #include "slipgate/sg_configuration_audit.h"
 #include "slipgate/sg_host_law_publication_private.h"
 #include "slipgate/sg_rune_source_authority.h"
@@ -1072,6 +1073,7 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	sg_rune_compact_builder_t *builder = NULL;
 	sg_rune_compact_builder_error_t error;
 	sg_rune_compact_builder_view_t view;
+	sg_rune_compact_builder_owner_view_t owner_view;
 
 	SetHost();
 	SetSourceAuthority();
@@ -1107,6 +1109,21 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	CHECK(view.identity.source_counts.entity_count == 1U);
 	CHECK(view.identity.entity_crc32 ==
 		host_view.host_static_identity.entity_crc32);
+	memset(&owner_view, 0, sizeof(owner_view));
+	CHECK(SG_RuneCompactBuilderOwnerRead(builder, &owner_view));
+	CHECK(memcmp(&owner_view.identity, &view.identity,
+		sizeof(owner_view.identity)) == 0);
+	CHECK(owner_view.host_law != NULL);
+	CHECK(memcmp(owner_view.host_law, &host_view.laws,
+		sizeof(*owner_view.host_law)) == 0);
+	CHECK(owner_view.weapon_law != NULL);
+#if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
+	CHECK(owner_view.weapon_law->deathmatch_active == 1U);
+	CHECK(owner_view.weapon_law->fast_switch_enabled == 0U);
+#else
+	CHECK(memcmp(owner_view.weapon_law, &source_snapshot.weapon_law,
+		sizeof(*owner_view.weapon_law)) == 0);
+#endif
 #if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
 	{
 		uint32_t bsp_entity_crc = 0U;

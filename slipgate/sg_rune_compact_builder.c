@@ -23,6 +23,7 @@ struct sg_rune_compact_builder_s
 	uint64_t state_inverse;
 	const struct sg_rune_compact_builder_s *self;
 	sg_rune_compact_identity_t identity;
+	sg_host_law_view_t host_law;
 	sg_bsp_world_t *world;
 	sg_host_collision_authority_t collision;
 	sg_configuration_space_t *configuration;
@@ -1192,6 +1193,7 @@ static int Build(
 			SG_RUNE_SOURCE_OK, (uint64_t)source_status);
 		goto done;
 	}
+	builder->host_law = final_host.laws;
 	builder->state = SG_RUNE_COMPACT_BUILDER_STATE;
 	builder->state_inverse = ~SG_RUNE_COMPACT_BUILDER_STATE;
 	builder->self = builder;
@@ -1244,8 +1246,11 @@ int SG_RuneCompactBuilderOwnerRead(
 	if (!BuilderValid(builder) || !view_out)
 		return 0;
 	memset(view_out, 0, sizeof(*view_out));
+	view_out->identity = builder->identity;
 	view_out->world = builder->world;
 	view_out->collision = &builder->collision;
+	view_out->host_law = &builder->host_law;
+	view_out->weapon_law = &builder->source_snapshot.weapon_law;
 	view_out->configuration = builder->configuration;
 	view_out->semantics = builder->semantics;
 	view_out->entity_semantics = builder->entity_semantics;
