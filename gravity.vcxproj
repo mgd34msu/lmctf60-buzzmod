@@ -358,6 +358,7 @@
     <ClCompile Include="slipgate\sg_strike.c" />
     <ClCompile Include="slipgate\sg_strike_adapter.c" />
     <ClCompile Include="slipgate\sg_identity.c" />
+    <ClCompile Include="slipgate\sg_rune_source_authority.c" />
     <ClCompile Include="slipgate\sg_human_speed.c" />
     <ClCompile Include="slipgate\sg_human_trace.c" />
     <ClCompile Include="slipgate\sg_door_approach.c" />
@@ -544,6 +545,8 @@
     <ClInclude Include="slipgate\sg_traversal_transition.h" />
     <ClInclude Include="slipgate\sg_strike_adapter.h" />
     <ClInclude Include="slipgate\sg_identity.h" />
+    <ClInclude Include="slipgate\sg_rune_source_authority.h" />
+    <ClInclude Include="slipgate\sg_rune_source_authority_owner.h" />
     <ClInclude Include="slipgate\sg_human_speed.h" />
     <ClInclude Include="slipgate\sg_human_trace.h" />
     <ClInclude Include="slipgate\sg_door_approach.h" />

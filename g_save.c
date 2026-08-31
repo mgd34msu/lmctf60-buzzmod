@@ -10,6 +10,7 @@
 #include "bat.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_identity.h"
+#include "slipgate/sg_rune_source_authority_owner.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_compound_guard_game.h"
 
@@ -150,6 +151,7 @@ void InitGame(void)
 {
 	/* the SLIPGATE cvar registry, before anything reads sg_cv */
 	SG_CvarsInit();
+	SG_RuneSourceAuthorityReset();
 	SG_LevelIdentityReset();
 
 #ifdef	_WIN32

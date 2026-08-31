@@ -603,7 +603,39 @@ int SG_BspEntitySemanticsAudit(
 			result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_ARGUMENT;
 		return 0;
 	}
-	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, candidate,
+	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, NULL, candidate,
+		&expected, result_out))
+		return 0;
+	success = CompareCandidate(authority->world, binding, candidate, expected,
+		result_out);
+	SG_BspEntitySemanticsDestroy(expected);
+	return success;
+}
+
+int SG_BspEntitySemanticsAuditEffective(
+	const sg_host_collision_authority_t *authority,
+	const sg_bsp_entity_semantics_binding_t *binding,
+	const sg_bsp_entity_semantics_source_t *source,
+	const sg_bsp_entity_semantics_t *candidate,
+	sg_bsp_entity_semantics_audit_result_t *result_out)
+{
+	sg_bsp_entity_semantics_t *expected = NULL;
+	int success;
+
+	if (result_out)
+	{
+		memset(result_out, 0, sizeof(*result_out));
+		result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_OK;
+		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_NONE;
+		result_out->record = UINT32_MAX;
+	}
+	if (!result_out || !authority || !binding || !source || !candidate)
+	{
+		if (result_out)
+			result_out->code = SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_ARGUMENT;
+		return 0;
+	}
+	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, source, candidate,
 		&expected, result_out))
 		return 0;
 	success = CompareCandidate(authority->world, binding, candidate, expected,
@@ -680,7 +712,7 @@ int SG_BspEntitySemanticsPublicationIssue(
 		}
 		return 0;
 	}
-	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, candidate,
+	if (!SG_BspEntitySemanticsAuditOwned(authority, binding, NULL, candidate,
 		&expected, result_out) ||
 		!CompareCandidate(authority->world, binding, candidate, expected,
 			result_out))

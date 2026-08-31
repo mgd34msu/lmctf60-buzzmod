@@ -11,6 +11,7 @@
 #include "bat.h"
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_host_law_owner.h"
+#include "slipgate/sg_rune_source_authority_owner.h"
 #include "slipgate/sg_bot_localization.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
@@ -148,6 +149,7 @@ void ShutdownGame (void)
 
 	SG_RosterStorageReset();
 	(void)SG_BotLocalizationProviderSet(NULL);
+	SG_RuneSourceAuthorityReset();
 	SG_HostLawProductionReset();
 	SG_LevelIdentityReset();
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened

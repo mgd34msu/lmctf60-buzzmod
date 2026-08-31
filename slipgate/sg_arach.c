@@ -29,6 +29,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_install.h"
 #include "slipgate/sg_rune_file.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
+#include "slipgate/sg_rune_source_authority_owner.h"
 #include "slipgate/sg_rune_binding.h"
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_compound_publication.h"
@@ -4700,6 +4701,7 @@ void SG_LevelChange(void)
 	for (i = 0; i < SG_MAXBOTS; i++)
 		SG_StrategyCallerDestroy(&sg_bots[i].strategy);
 	(void)SG_BotLocalizationProviderSet(NULL);
+	SG_RuneSourceAuthorityReset();
 	SG_HostLawProductionReset();
 	SG_ButtonExecutionLevelReset();
 	SG_TimedVaultEgressScopeEnd();

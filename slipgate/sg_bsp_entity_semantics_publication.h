@@ -1,6 +1,7 @@
 #ifndef SG_BSP_ENTITY_SEMANTICS_PUBLICATION_H
 #define SG_BSP_ENTITY_SEMANTICS_PUBLICATION_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "sg_bsp_entity_semantics.h"
@@ -20,12 +21,25 @@ typedef struct sg_bsp_entity_semantics_binding_s
 	sg_rune_v2_content_id_t schema_identity;
 } sg_bsp_entity_semantics_binding_t;
 
+/* The selected entity text and survivor records are borrowed for the audit
+ * call.  Production callers must populate this view from the same owned
+ * source-authority copy used to build the candidate.  The text extent
+ * includes its terminating NUL; survivor records are strictly increasing by
+ * source ordinal and omit inhibited declarations. */
+typedef struct sg_bsp_entity_semantics_source_s
+{
+	const char *selected_entity_text;
+	size_t selected_entity_text_bytes;
+	const sg_rune_source_entity_record_t *survivors;
+	size_t survivor_count;
+} sg_bsp_entity_semantics_source_t;
+
 /* Construction barrier for the production graph owner: load the BSP through
  * SG_BspWorldLoadMemory/File, initialize sg_host_collision_authority_t with
  * SG_HostCollisionInit on that exact world, and bind source_identity to the
  * resulting world digest.  Build the candidate with
- * SG_BspEntitySemanticsBuild using the same source_set_identity, then call
- * SG_BspEntitySemanticsAudit or SG_BspEntitySemanticsPublicationIssue before
+ * SG_BspEntitySemanticsBuild or SG_BspEntitySemanticsBuildEffective using the
+ * same source_set_identity, then call the matching audit API before
  * registering it with a downstream graph.  Builder-issued array and string
  * storage is required; caller-supplied arrays are not an authority.  Until a
  * downstream graph owner supplies this caller, production registration stays
@@ -99,6 +113,15 @@ typedef struct sg_bsp_entity_semantics_view_s
 
 int SG_BspEntitySemanticsAudit(const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
+	const sg_bsp_entity_semantics_t *candidate,
+	sg_bsp_entity_semantics_audit_result_t *result_out);
+
+/* Audits a candidate against an independent reconstruction from the exact
+ * selected entity text and survivor overlay supplied by the source owner. */
+int SG_BspEntitySemanticsAuditEffective(
+	const sg_host_collision_authority_t *authority,
+	const sg_bsp_entity_semantics_binding_t *binding,
+	const sg_bsp_entity_semantics_source_t *source,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_audit_result_t *result_out);
 

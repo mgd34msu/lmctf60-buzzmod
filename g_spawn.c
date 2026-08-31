@@ -3,6 +3,7 @@
 #include "g_entfile_path.h"
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_host_law_owner.h"
+#include "slipgate/sg_rune_source_authority_owner.h"
 #include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
@@ -961,8 +962,10 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	int			i;
 	sg_identity_status_t identity_status;
 	sg_level_identity_t identity = { 0 };
+	sg_rune_source_status_t source_status;
 
 	/* No transition failure may leave the outgoing map's authority visible. */
+	SG_RuneSourceAuthorityReset();
 	SG_LevelIdentityReset();
 	SaveClientData ();
 
@@ -1000,9 +1003,10 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 
 	// LM_JORM
-	//  Write Entities out to a file
+	// Select the final entity text before capturing generation authority.
 	entities = ReadEntFile(mapname, entities);
 	SG_LevelIdentityCaptureEntities(mapname, entities);
+	source_status = SG_RuneSourceAuthorityBegin(mapname, entities);
 	
 	total_ents = 0; //surt
 	// END LM_JORM
@@ -1059,6 +1063,9 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 			ent->spawnflags &= ~(SPAWNFLAG_NOT_EASY|SPAWNFLAG_NOT_MEDIUM|SPAWNFLAG_NOT_HARD|SPAWNFLAG_NOT_COOP|SPAWNFLAG_NOT_DEATHMATCH);
 		}
 
+		if (source_status == SG_RUNE_SOURCE_OK)
+			source_status = SG_RuneSourceAuthorityRecord(
+				(uint32_t)(total_ents - 1), (int32_t)ent->spawnflags);
 		ED_CallSpawn (ent);
 	}	
 	
@@ -1102,8 +1109,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	sl_GameStart( &gi, level );	//	StdLog - Mark Davies
 
-	/* Publication is the last operation: every earlier gi.error leaves the
-	 * pending identity unavailable to generator, loader, and runtime readers. */
+	/* Begin the final publication sequence only after entity spawning succeeds. */
 	identity_status = SG_LevelIdentityCommit(mapname);
 	if (identity_status == SG_IDENTITY_OK)
 		identity_status = SG_LevelIdentitySnapshot(mapname, &identity);
@@ -1123,11 +1129,25 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 			SG_HostLawProductionBeginLevel(mapname);
 
 		if (host_law_result.status != SG_HOST_LAW_OK)
+		{
 			gi.dprintf("slipgate: engine movement provider unavailable for %s: %s (%s)\n",
 				mapname ? mapname : "<null>",
 				SG_HostLawStatusString(host_law_result.status),
 				SG_HostLawFieldString(host_law_result.field));
+			SG_RuneSourceAuthorityReset();
+		}
+		else
+		{
+			if (source_status == SG_RUNE_SOURCE_OK)
+				source_status = SG_RuneSourceAuthorityPublish(mapname);
+			if (source_status != SG_RUNE_SOURCE_OK)
+				gi.dprintf("slipgate: rune source authority unavailable for %s: %s\n",
+					mapname ? mapname : "<null>",
+					SG_RuneSourceAuthorityReason(source_status));
+		}
 	}
+	else
+		SG_RuneSourceAuthorityReset();
 }
 
 

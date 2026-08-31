@@ -84,9 +84,25 @@ static void CountExpected(const sg_bsp_entity_semantics_t *expected,
 		: SG_BSP_ENTITY_SEMANTICS_COMPLETE;
 }
 
+static int BuildExpected(const sg_bsp_world_t *world,
+	uint64_t source_set_identity,
+	const sg_bsp_entity_semantics_source_t *source,
+	sg_bsp_entity_semantics_t **expected_out,
+	sg_bsp_entity_semantics_error_t *error_out)
+{
+	if (source)
+		return SG_BspEntitySemanticsBuildEffective(world,
+			source->selected_entity_text, source->selected_entity_text_bytes,
+			source->survivors, source->survivor_count, source_set_identity,
+			expected_out, error_out);
+	return SG_BspEntitySemanticsBuild(world, source_set_identity,
+		expected_out, error_out);
+}
+
 int SG_BspEntitySemanticsAuditOwned(
 	const sg_host_collision_authority_t *authority,
 	const sg_bsp_entity_semantics_binding_t *binding,
+	const sg_bsp_entity_semantics_source_t *source,
 	const sg_bsp_entity_semantics_t *candidate,
 	sg_bsp_entity_semantics_t **owned_out,
 	sg_bsp_entity_semantics_audit_result_t *result_out)
@@ -140,7 +156,7 @@ int SG_BspEntitySemanticsAuditOwned(
 		result_out->domain = SG_BSP_ENTITY_SEMANTICS_FACT_IDENTITY;
 		return 0;
 	}
-	if (!SG_BspEntitySemanticsBuild(world, binding->source_set_identity,
+	if (!BuildExpected(world, binding->source_set_identity, source,
 		&expected, &error))
 	{
 		result_out->code = error.code ==

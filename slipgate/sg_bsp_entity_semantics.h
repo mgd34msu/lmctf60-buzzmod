@@ -7,6 +7,7 @@
 #include "sg_bsp_world.h"
 #include "sg_rune_mechanism_catalog.h"
 #include "sg_rune_model.h"
+#include "sg_rune_source_authority.h"
 
 #define SG_BSP_ENTITY_STRING_NONE UINT32_MAX
 #define SG_BSP_ENTITY_MODEL_NONE UINT32_MAX
@@ -22,7 +23,10 @@ typedef enum sg_bsp_entity_semantics_error_code_e
 	SG_BSP_ENTITY_SEMANTICS_ERROR_DUPLICATE_MODEL,
 	SG_BSP_ENTITY_SEMANTICS_ERROR_AMBIGUOUS_IDENTITY,
 	SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
-	SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY
+	SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_ORDER,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_RANGE,
+	SG_BSP_ENTITY_SEMANTICS_ERROR_MISSING_WORLD_RECORD
 } sg_bsp_entity_semantics_error_code_t;
 
 typedef struct sg_bsp_entity_semantics_error_s
@@ -159,6 +163,14 @@ typedef struct sg_bsp_entity_semantics_s
 } sg_bsp_entity_semantics_t;
 
 int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
+	uint64_t source_set_identity, sg_bsp_entity_semantics_t **semantics_out,
+	sg_bsp_entity_semantics_error_t *error_out);
+/* selected_entity_text_bytes includes the terminating NUL.  The survivor
+ * records are borrowed for the call, strictly increasing by source ordinal,
+ * and describe every declaration that survived host spawning. */
+int SG_BspEntitySemanticsBuildEffective(const sg_bsp_world_t *world,
+	const char *selected_entity_text, size_t selected_entity_text_bytes,
+	const sg_rune_source_entity_record_t *survivors, size_t survivor_count,
 	uint64_t source_set_identity, sg_bsp_entity_semantics_t **semantics_out,
 	sg_bsp_entity_semantics_error_t *error_out);
 void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics);

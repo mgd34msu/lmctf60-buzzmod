@@ -443,25 +443,33 @@ static void ParsedEntitiesDestroy(parsed_entities_t *entities)
 	memset(entities, 0, sizeof(*entities));
 }
 
-static int ParseEntities(const sg_bsp_world_t *world,
-	parsed_entities_t *entities, sg_bsp_entity_semantics_error_t *error)
+static int ParseEntities(const void *entity_text, size_t entity_byte_count,
+	int exact_extent, parsed_entities_t *entities,
+	sg_bsp_entity_semantics_error_t *error)
 {
+	const unsigned char *source = entity_text;
 	parser_t parser;
 	size_t logical_length;
 	int growth;
 
 	memset(entities, 0, sizeof(*entities));
 	logical_length = 0U;
-	while (logical_length < world->entity_byte_count &&
-		world->entities[logical_length])
+	while (logical_length < entity_byte_count && source[logical_length])
 		logical_length++;
-	if (logical_length < world->entity_byte_count)
+	if (exact_extent && (logical_length + 1U != entity_byte_count))
+	{
+		SetError(error, SG_BSP_ENTITY_SEMANTICS_ERROR_MALFORMED_TEXT,
+			UINT32_MAX, logical_length <= UINT32_MAX
+				? (uint32_t)logical_length : UINT32_MAX);
+		return 0;
+	}
+	if (!exact_extent && logical_length < entity_byte_count)
 	{
 		size_t tail;
 
 		for (tail = logical_length + 1U;
-			tail < world->entity_byte_count; tail++)
-			if (world->entities[tail])
+			tail < entity_byte_count; tail++)
+			if (source[tail])
 			{
 				SetError(error, SG_BSP_ENTITY_SEMANTICS_ERROR_MALFORMED_TEXT,
 					UINT32_MAX, (uint32_t)tail);
@@ -481,7 +489,7 @@ static int ParseEntities(const sg_bsp_world_t *world,
 			UINT32_MAX, UINT32_MAX);
 		return 0;
 	}
-	memcpy(entities->text, world->entities, logical_length);
+	memcpy(entities->text, source, logical_length);
 	entities->text[logical_length] = '\0';
 	parser.text = entities->text;
 	parser.length = logical_length;
@@ -1128,7 +1136,8 @@ static int ValidLightRamp(const parsed_entity_t *entity)
 }
 
 static int BuildWorldDeclaration(const parsed_entities_t *parsed,
-	uint64_t source_set_identity, sg_bsp_world_entity_semantics_t *world,
+	const uint8_t *included_entities, uint64_t source_set_identity,
+	sg_bsp_world_entity_semantics_t *world,
 	sg_bsp_entity_semantics_error_t *error)
 {
 	size_t index;
@@ -1142,7 +1151,8 @@ static int BuildWorldDeclaration(const parsed_entities_t *parsed,
 	{
 		const char *classname = EntityValue(&parsed->values[index], "classname");
 
-		if (!classname || strcmp(classname, "worldspawn"))
+		if (!included_entities[index] || !classname ||
+			strcmp(classname, "worldspawn"))
 			continue;
 		if (found != UINT32_MAX)
 		{
@@ -1179,7 +1189,8 @@ static int BuildWorldDeclaration(const parsed_entities_t *parsed,
 
 static int BuildRecord(const sg_bsp_world_t *world,
 	const parsed_entity_t *entity, uint32_t source_ordinal,
-	uint64_t source_set_identity, uint8_t *used_models,
+	uint64_t source_set_identity, int spawnflags_overridden,
+	int32_t overlay_spawnflags, uint8_t *used_models,
 	work_record_t *record, sg_bsp_entity_semantics_error_t *error)
 {
 	const char *classname = EntityValue(entity, "classname");
@@ -1323,9 +1334,12 @@ static int BuildRecord(const sg_bsp_world_t *world,
 			}
 		}
 	}
+	if (spawnflags_overridden)
+		record->semantic.spawnflags = (uint32_t)overlay_spawnflags;
 	if (!FillAngles(entity, &record->semantic, source_ordinal, error) ||
-		!ParseSpawnflags(EntityValue(entity, "spawnflags"),
-		&record->semantic.spawnflags) ||
+		(!spawnflags_overridden &&
+		 !ParseSpawnflags(EntityValue(entity, "spawnflags"),
+			&record->semantic.spawnflags)) ||
 		!FillOptionalFloat(entity, "delay", 1000.0f,
 			&record->semantic.delay_ms, source_ordinal, error) ||
 		!FillOptionalFloat(entity, "wait", 1000.0f,
@@ -2024,8 +2038,11 @@ static void ApplyResolvedActivation(work_records_t *records,
 	}
 }
 
-int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
-	uint64_t source_set_identity, sg_bsp_entity_semantics_t **semantics_out,
+static int BuildFromText(const sg_bsp_world_t *world,
+	const void *entity_text, size_t entity_text_bytes, int exact_text_extent,
+	const sg_rune_source_entity_record_t *survivors, size_t survivor_count,
+	int apply_survivor_overlay, uint64_t source_set_identity,
+	sg_bsp_entity_semantics_t **semantics_out,
 	sg_bsp_entity_semantics_error_t *error_out)
 {
 	parsed_entities_t parsed;
@@ -2033,25 +2050,111 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 	work_edges_t edges = { 0 };
 	sg_bsp_entity_semantics_t *result = NULL;
 	uint8_t *used_models = NULL;
+	uint8_t *included_entities = NULL;
 	uint32_t *entity_to_record = NULL;
 	uint32_t entity_capacity = 0U;
 	uint32_t edge_capacity = 0U;
+	sg_bsp_world_entity_semantics_t world_semantic;
+	size_t survivor_index = 0U;
 	size_t index;
 	size_t allocation_bytes;
 	int success = 0;
 
 	SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_NONE,
 		UINT32_MAX, UINT32_MAX);
-	if (!world || !world->entities || !world->entity_byte_count ||
-		!world->models || !world->model_count || !semantics_out ||
+	if (!world || !entity_text || !entity_text_bytes || !world->models ||
+		!world->model_count || !semantics_out ||
 		source_set_identity == 0 || source_set_identity == UINT64_MAX)
 	{
 		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_ARGUMENT,
 			UINT32_MAX, UINT32_MAX);
 		return 0;
 	}
+	if (entity_text_bytes > UINT32_MAX || survivor_count > UINT32_MAX)
+	{
+		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
+			UINT32_MAX, UINT32_MAX);
+		return 0;
+	}
+	if (apply_survivor_overlay)
+	{
+		if (survivor_count && !survivors)
+		{
+			SetError(error_out,
+				SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_ARGUMENT,
+				UINT32_MAX, UINT32_MAX);
+			return 0;
+		}
+		if (!survivor_count || survivors[0].source_ordinal != 0U)
+		{
+			SetError(error_out,
+				SG_BSP_ENTITY_SEMANTICS_ERROR_MISSING_WORLD_RECORD,
+				UINT32_MAX, 0U);
+			return 0;
+		}
+		for (index = 1U; index < survivor_count; index++)
+			if (survivors[index].source_ordinal <=
+				survivors[index - 1U].source_ordinal)
+			{
+				SetError(error_out,
+					SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_ORDER,
+					survivors[index].source_ordinal, (uint32_t)index);
+				return 0;
+			}
+	}
 	memset(&parsed, 0, sizeof(parsed));
-	if (!ParseEntities(world, &parsed, error_out))
+	if (!ParseEntities(entity_text, entity_text_bytes, exact_text_extent,
+		&parsed, error_out))
+		goto done;
+	if (!SizeMultiply(parsed.count, sizeof(*included_entities),
+		&allocation_bytes))
+	{
+		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_SIZE_OVERFLOW,
+			UINT32_MAX, UINT32_MAX);
+		goto done;
+	}
+	included_entities = calloc(1U, allocation_bytes);
+	if (parsed.count && !included_entities)
+	{
+		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY,
+			UINT32_MAX, UINT32_MAX);
+		goto done;
+	}
+	if (apply_survivor_overlay)
+	{
+		for (index = 0U; index < survivor_count; index++)
+		{
+			uint32_t source_ordinal = survivors[index].source_ordinal;
+
+			if ((size_t)source_ordinal >= parsed.count)
+			{
+				SetError(error_out,
+					SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_RANGE,
+					source_ordinal, (uint32_t)index);
+				goto done;
+			}
+			included_entities[source_ordinal] = 1U;
+		}
+	}
+	else
+	{
+		if (parsed.count)
+			memset(included_entities, 1, parsed.count);
+	}
+	if (apply_survivor_overlay)
+	{
+		const char *world_classname =
+			EntityValue(&parsed.values[0], "classname");
+
+		if (!world_classname || strcmp(world_classname, "worldspawn"))
+		{
+			SetError(error_out,
+				SG_BSP_ENTITY_SEMANTICS_ERROR_MISSING_WORLD_RECORD, 0U, 0U);
+			goto done;
+		}
+	}
+	if (!BuildWorldDeclaration(&parsed, included_entities,
+		source_set_identity, &world_semantic, error_out))
 		goto done;
 	used_models = calloc(world->model_count, sizeof(*used_models));
 	if (!used_models)
@@ -2064,9 +2167,29 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 	{
 		work_record_t record;
 		int added;
+		int32_t effective_spawnflags = 0;
+		int spawnflags_overridden = 0;
 
+		if (!included_entities[index])
+			continue;
+		if (apply_survivor_overlay)
+		{
+			if (survivor_index >= survivor_count ||
+				survivors[survivor_index].source_ordinal != index)
+			{
+				SetError(error_out,
+					SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_RANGE,
+					(uint32_t)index, UINT32_MAX);
+				goto done;
+			}
+			effective_spawnflags =
+				survivors[survivor_index].effective_spawnflags;
+			survivor_index++;
+			spawnflags_overridden = 1;
+		}
 		if (!BuildRecord(world, &parsed.values[index], (uint32_t)index,
-			source_set_identity, used_models, &record, error_out))
+			source_set_identity, spawnflags_overridden,
+			effective_spawnflags, used_models, &record, error_out))
 			goto done;
 		if (!record.classname)
 			continue;
@@ -2152,9 +2275,7 @@ int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
 		goto done;
 	}
 	result->source_set_identity = source_set_identity;
-	if (!BuildWorldDeclaration(&parsed, source_set_identity, &result->world,
-		error_out))
-		goto done;
+	result->world = world_semantic;
 	result->entity_count = (uint32_t)records.count;
 	result->edge_count = (uint32_t)edges.count;
 	if (entity_capacity)
@@ -2258,9 +2379,35 @@ done:
 	free(edges.values);
 	free(records.values);
 	free(entity_to_record);
+	free(included_entities);
 	free(used_models);
 	ParsedEntitiesDestroy(&parsed);
 	return success;
+}
+
+int SG_BspEntitySemanticsBuild(const sg_bsp_world_t *world,
+	uint64_t source_set_identity, sg_bsp_entity_semantics_t **semantics_out,
+	sg_bsp_entity_semantics_error_t *error_out)
+{
+	if (!world)
+	{
+		SetError(error_out, SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_ARGUMENT,
+			UINT32_MAX, UINT32_MAX);
+		return 0;
+	}
+	return BuildFromText(world, world->entities, world->entity_byte_count, 0,
+		NULL, 0U, 0, source_set_identity, semantics_out, error_out);
+}
+
+int SG_BspEntitySemanticsBuildEffective(const sg_bsp_world_t *world,
+	const char *selected_entity_text, size_t selected_entity_text_bytes,
+	const sg_rune_source_entity_record_t *survivors, size_t survivor_count,
+	uint64_t source_set_identity, sg_bsp_entity_semantics_t **semantics_out,
+	sg_bsp_entity_semantics_error_t *error_out)
+{
+	return BuildFromText(world, selected_entity_text,
+		selected_entity_text_bytes, 1, survivors, survivor_count, 1,
+		source_set_identity, semantics_out, error_out);
 }
 
 void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics)
@@ -2322,6 +2469,12 @@ const char *SG_BspEntitySemanticsErrorString(
 		return "entity semantics size overflow";
 	case SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY:
 		return "entity semantics allocation failed";
+	case SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_ORDER:
+		return "invalid survivor record order";
+	case SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_RECORD_RANGE:
+		return "survivor record ordinal out of range";
+	case SG_BSP_ENTITY_SEMANTICS_ERROR_MISSING_WORLD_RECORD:
+		return "worldspawn survivor record missing";
 	}
 	return "unknown entity semantics error";
 }

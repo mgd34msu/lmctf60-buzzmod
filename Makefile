@@ -1192,6 +1192,7 @@ OBJS := \
 	sg_action.o \
 	sg_crc32.o \
 	sg_identity.o \
+	slipgate/sg_rune_source_authority.o \
 	slipgate/sg_rune_codec.o \
 	slipgate/sg_rune_artifact_loader.o \
 	slipgate/sg_rune_artifact_writer.o \
@@ -1407,8 +1408,11 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
+	rune-compact-test rune-source-authority-test \
 	rune-compact-model-test rune-compact-analytic-test rune-compact-static-test \
 	rune-compact-eval-test rune-compact-localize-test rune-compact-wire-test \
+	rune-compact-builder-test \
+	rune-compact-spatial-index-test rune-compact-reader-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
 	rune-v2-configuration-space-test \
@@ -3725,6 +3729,7 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 
 host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		rune-v2-contract-test \
+		rune-source-authority-test \
 		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
 		train-station-candidate-test train-station-candidate-game-test \
 		train-station-board-path-test \
@@ -4142,6 +4147,40 @@ rune-compact-wire-test: tests/run_sg_rune_compact_wire_test.sh \
 		slipgate/sg_rune_compact_static.h
 	$(E) [TEST] compact RUNE wire
 	$(Q)sh tests/run_sg_rune_compact_wire_test.sh
+
+rune-compact-builder-test: tests/run_sg_rune_compact_builder_test.sh \
+		tests/sg_rune_compact_builder_test.c \
+		slipgate/sg_rune_compact_builder.c slipgate/sg_rune_compact_builder.h
+	$(E) [TEST] compact RUNE builder
+	$(Q)sh tests/run_sg_rune_compact_builder_test.sh
+
+rune-compact-spatial-index-test: tests/run_sg_rune_compact_spatial_index_test.sh \
+		tests/sg_rune_compact_spatial_index_test.c \
+		slipgate/sg_rune_compact_spatial_index.c \
+		slipgate/sg_rune_compact_spatial_index.h \
+		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
+	$(E) [TEST] compact RUNE spatial index
+	$(Q)sh tests/run_sg_rune_compact_spatial_index_test.sh
+
+rune-compact-reader-test: tests/run_runecompactread_test.sh \
+		tools/runecompactread.c tools/runecompactread.h
+	$(E) [TEST] compact RUNE standalone C reader
+	$(Q)sh tests/run_runecompactread_test.sh
+
+rune-source-authority-test: tests/run_sg_rune_source_authority_test.sh \
+		tests/sg_rune_source_authority_test.c \
+		tests/test_sg_rune_source_authority_integration.py \
+		slipgate/sg_rune_source_authority.c \
+		slipgate/sg_rune_source_authority.h \
+		slipgate/sg_rune_source_authority_owner.h
+	$(E) [TEST] compact RUNE source authority
+	$(Q)sh tests/run_sg_rune_source_authority_test.sh
+
+rune-compact-test: rune-source-authority-test rune-compact-model-test \
+		rune-compact-analytic-test rune-compact-static-test \
+		rune-compact-eval-test rune-compact-localize-test \
+		rune-compact-wire-test rune-compact-builder-test \
+		rune-compact-spatial-index-test rune-compact-reader-test
 
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \

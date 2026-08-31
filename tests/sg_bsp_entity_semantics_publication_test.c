@@ -114,6 +114,93 @@ static sg_bsp_entity_semantics_t *Build(fixture_t *fixture)
 	return semantics;
 }
 
+static sg_bsp_entity_semantics_t *BuildEffective(fixture_t *fixture,
+	const sg_bsp_entity_semantics_source_t *source)
+{
+	sg_bsp_entity_semantics_t *semantics = NULL;
+	sg_bsp_entity_semantics_error_t error;
+
+	CHECK(source != NULL);
+	if (!source)
+		return NULL;
+	CHECK(SG_BspEntitySemanticsBuildEffective(&fixture->world,
+		source->selected_entity_text, source->selected_entity_text_bytes,
+		source->survivors, source->survivor_count,
+		binding.source_set_identity, &semantics, &error));
+	return semantics;
+}
+
+static void TestEffectiveAuditUsesSelectedAuthority(void)
+{
+	static const char embedded[] =
+		"{ \"classname\" \"worldspawn\" \"gravity\" \"800\" }\n"
+		"{ \"classname\" \"func_wall\" \"model\" \"*1\" "
+			"\"spawnflags\" \"1\" }\n"
+		"{ \"classname\" \"func_wall\" \"model\" \"*2\" }\n";
+	static const char selected[] =
+		"{ \"classname\" \"worldspawn\" \"gravity\" \"100\" }\n"
+		"{ \"classname\" \"item_quad\" \"origin\" \"1 2 3\" }\n"
+		"{ \"classname\" \"func_wall\" \"model\" \"*2\" }\n"
+		"{ \"classname\" \"func_wall\" \"model\" \"*3\" "
+			"\"spawnflags\" \"0\" }\n";
+	static const sg_rune_source_entity_record_t survivors[] = {
+		{ 0U, 0 }, { 2U, 0 }, { 3U, 0 }
+	};
+	fixture_t fixture;
+	sg_bsp_entity_semantics_source_t source;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantics_audit_result_t audit;
+	const sg_bsp_entity_semantic_t *without_spawnflags;
+	const sg_bsp_entity_semantic_t *explicit_zero;
+
+	InitFixture(&fixture, embedded);
+	memset(&source, 0, sizeof(source));
+	source.selected_entity_text = selected;
+	source.selected_entity_text_bytes = sizeof(selected);
+	source.survivors = survivors;
+	source.survivor_count = sizeof(survivors) / sizeof(survivors[0]);
+	candidate = BuildEffective(&fixture, &source);
+	CHECK(candidate != NULL);
+	CHECK(candidate && candidate->world.gravity == 100.0f);
+	CHECK(candidate && candidate->entity_count == 2U);
+	without_spawnflags = candidate && candidate->entity_count == 2U
+		? &candidate->entities[0] : NULL;
+	explicit_zero = candidate && candidate->entity_count == 2U
+		? &candidate->entities[1] : NULL;
+	CHECK(without_spawnflags &&
+		without_spawnflags->source_entity_ordinal == 2U);
+	CHECK(without_spawnflags &&
+		!(without_spawnflags->flags & SG_BSP_ENTITY_SPAWNFLAGS_DEFINED));
+	CHECK(explicit_zero && explicit_zero->source_entity_ordinal == 3U);
+	CHECK(explicit_zero &&
+		(explicit_zero->flags & SG_BSP_ENTITY_SPAWNFLAGS_DEFINED));
+	CHECK(SG_BspEntitySemanticsAuditEffective(&fixture.authority, &binding,
+		&source, candidate, &audit));
+	CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_OK);
+	CHECK(audit.expected_entities == 2U);
+	CHECK(audit.expected_landmarks == 0U);
+	CHECK(audit.expected_mechanisms == 2U);
+	CHECK(audit.expected_edges == 0U);
+	if (candidate && explicit_zero)
+	{
+		sg_bsp_entity_semantics_t *mutable_candidate = candidate;
+
+		mutable_candidate->entities[1].flags &=
+			~(sg_bsp_entity_semantic_flags_t)
+				SG_BSP_ENTITY_SPAWNFLAGS_DEFINED;
+		CHECK(!SG_BspEntitySemanticsAuditEffective(&fixture.authority,
+			&binding, &source, mutable_candidate, &audit));
+		CHECK(audit.code ==
+			SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+		mutable_candidate->entities[1].flags |=
+			SG_BSP_ENTITY_SPAWNFLAGS_DEFINED;
+		CHECK(SG_BspEntitySemanticsAuditEffective(&fixture.authority,
+			&binding, &source, mutable_candidate, &audit));
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&fixture);
+}
+
 static void TestCompleteAuditAndOwnedPublication(void)
 {
 	static const char text[] =
@@ -660,6 +747,7 @@ static void TestIdentityAndTransactionalOutput(void)
 int main(void)
 {
 	InitBinding();
+	TestEffectiveAuditUsesSelectedAuthority();
 	TestCompleteAuditAndOwnedPublication();
 	TestProvenEmpty();
 	TestHostileStringExtent();
