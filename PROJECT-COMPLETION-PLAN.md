@@ -1,79 +1,58 @@
 # LMCTF BuzzMod project completion plan
 
-This document is the authority for remaining work. It records the target system,
-the disposition of current code, the proof required at each boundary, and the
-release sequence. Git history and retained human playthroughs hold detailed
-evidence; this file does not hold transcripts or experiment logs.
+This file governs remaining work: the target system, current-code disposition,
+boundary proofs, and release sequence. Git history and retained human
+playthroughs hold detailed evidence; keep transcripts and experiment logs out of
+this file.
 
 ## Completion definition
 
-The project is complete only when one unchanged local source commit satisfies
-all of these conditions:
+The project is complete only when one unchanged local source commit meets
+every catalog requirement and proof, review-standard step, ordered execution
+checkbox, invalidation rule, and completion checkbox below. No later result
+waives an earlier gate.
 
-1. The RUNE is a BSP-bound, player-hull configuration and capability field. It
-   represents every valid standing, crouching, grounded, swimming, and airborne
-   position and every physically possible connection, without objective-only
-   pruning or map-specific repairs.
-2. Runtime navigation can derive a cost gradient to any valid destination.
-   Strategy selects and queues goals; tactics chooses how to execute the next
-   part of the gradient with the legal movement and combat capabilities
-   available at that moment.
-3. Runtime beliefs represent uncertain players and events over RUNE state and
-   time. Dynamic players, teammates, enemies, and match state are not serialized
-   into the RUNE.
-4. Movement, mechanism, perception, combat, learning, artifact, validation, and
-   release code have each passed a fresh contract and caller review. Existing
-   code is not exempt because it is reusable.
-5. The final source passes both local host-gate dialects and the real-BSP proof
-   matrix. Local `slipgate` and `main` point to the same commit. Remote pushes
-   and remote CI remain out of scope by owner direction.
-6. One immutable snapshot binds that commit, its tools and runtimes, and the 175
-   manifest-selected BSPs. It contains no RUNE from the superseded generator.
-7. The frozen generator creates all 175 RUNEs with 12 isolated workers and no
-   generation or review timeout. Every result passes the independent readers,
-   semantic validation, exact-bound sidecar checks, and fresh-process cold load.
-8. The authenticated production bundle is installed and rollback-tested.
-   Ordinary matches prove navigation, objectives, mechanisms, perception,
-   combat, roles, learning boundaries, and clean lifecycle behavior.
-9. The unchanged frozen commit is tagged locally as `v1.0.0`; release assets
-   copied to a clean directory pass version, content, and integrity checks.
+The source, immutable snapshot, 175 fresh RUNEs, authenticated installed bundle,
+ordinary-match evidence, and clean-directory release must all derive from that
+commit. Local `slipgate` and `main` must point to it, and it must be tagged
+locally as `v1.0.0`. Owner direction keeps remote pushes, remote CI, and remote
+publication out of scope.
 
 ## Current status
 
 | Area | Current state |
 |---|---|
-| Architectural state | Integrated on `slipgate`: frozen contracts; complete BSP, collision, hull configuration, semantic, visibility, hook-surface, and completeness foundations; authenticated engine physics/collision authority with a reviewed production-safe offline construction adapter; offline phase catalog; accepted ground, water, mechanism, and weapon foundations; the reviewed ground publication now consumes the opaque construction adapter; localization now freezes model-owned phase coordinates and uses reset-safe owner epochs; artifact codec, loader, atomic publication, three independent readers, portable runtime-map preflight, exact BSP entity-semantics publication, authenticated static-affordance catalog, continuous dynamics aggregate, and authenticated continuous destination-field geometry; sparse beliefs with exact life identity and topology-complete horizon prediction; weapon profiles; authenticated read-only durable human-trace collection; the hook-visibility symbolic feasibility foundation; the authenticated strategy caller foundation; and complete removal of the obsolete SNAG pipeline. The real-BSP production phase caller and arbitrary-BSP hook-visibility expansion are open and gate hook/air construction. Ground and localization still await that real phase caller; corrected water and external-force publications are also open. The continuous directional field solver, complete-model proof, real `FieldService` registration, tactical selection, perception, combat, and learning hookups remain open. |
-| Generation | Stopped. No corpus controller, generator, acceptor, or finalizer is running. The repository currently contains zero `.rune` files and zero obsolete repair sidecars. Retained demos and human-derived analysis remain evidence inputs only. |
+| Architectural state | Integrated on `slipgate`: core contracts; BSP, collision, configuration, semantics, visibility, hook-surface, and completeness foundations; engine physics and collision authority; phase, movement, mechanism, weapon, localization, artifact, entity, affordance, dynamics, `FieldService`, belief, human-trace, hook-visibility, and strategy foundations; and removal of SNAG. The real-BSP phase caller is the source critical path. It gates complete movement publication, arbitrary-BSP hook visibility, and the complete-model proof. Production registration and callers remain open for `FieldService`, tactics, belief and perception, combat, and learning. |
+| Generation | Stopped: no corpus controller, generator, acceptor, or finalizer runs; the repository has zero `.rune` files and zero obsolete repair sidecars. Retained demos and human-derived analysis are evidence only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
-| Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, accepted passive human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist. Unaccepted components remain review-required. |
-| Invalidated work | Objective-core pruning, `complete`/`local_only` as wire validity, route-only acceptance, action-labelled route ownership, production Dijkstra repair, fixed-grid/face-anchor coverage, and old RUNE/corpus evidence are superseded. |
-| Freeze and release | Not started. No artifact generated by the present source is eligible for the final corpus. |
+| Existing strengths | Exact map/build/physics identity, host traces and Pmove oracles, mechanism inventory and transactions, item fields, sensory hooks, weapon physics, accepted passive human trace capture, atomic publication, independent readers, corpus control, bundle installation, and fleet tooling exist; unaccepted components require review. |
+| Invalidated work | Objective-core pruning, `complete`/`local_only` wire validity, route-only acceptance, action-labelled route ownership, production Dijkstra repair, fixed-grid/face-anchor coverage, and old RUNE/corpus evidence are superseded. |
+| Freeze and release | Not started; no present-source artifact is eligible for the final corpus. |
 
 ## Non-negotiable design and operating rules
 
-- The BSP and its entities are ground truth. Construction must be generalized
-  per BSP; no map name, flag pair, recorded route, or corpus exception may
-  create geometry or connectivity.
+- The BSP and its entities are ground truth. Generalize construction per BSP;
+  no map name, flag pair, recorded route, or corpus exception may create geometry
+  or connectivity.
 - The RUNE describes configuration space, connectivity, capability, and cost.
   It does not prescribe a sequence of named movement actions.
 - Any point where the standing or crouching player hull fits must be represented.
   Every legal connection must be represented. Physically disconnected valid
   regions remain represented and disconnected.
-- Map physics are authoritative: gravity, air acceleration, maximum velocity,
-  frame cadence, water behavior, and host movement law come from the bound map
-  and runtime. No generation path may silently substitute gravity 800.
-- Search batching may control memory and scheduling, but a batch boundary may
-  not end work. Capacity overflow fails loudly; it may not silently downgrade
-  completeness. Production generation and review have no elapsed-time limit.
-- The ordinary human hook remains base-LMCTF behavior. Bot planning, bot hook
-  execution, proof, and telemetry must not change human fire, attach, pull,
-  release, refire, collision, or fling semantics.
-- Preserve human playthroughs. Treat them as last-resort evidence and learning
-  input, never as authority to invent a connection absent from the BSP and
-  physics.
-- Commit coherent, reversible units locally. Do not push. Do not freeze while
-  source, tests, documentation, or wire contracts are still changing.
-- `tools/rune-corpus-maps.txt` is the sole 175-map authority.
+- Bound-map and runtime physics are authoritative: gravity, air acceleration,
+  maximum velocity, frame cadence, water behavior, and host movement law. No
+  generation path may substitute gravity 800.
+- Batching may control memory and scheduling but may not end work. Capacity
+  overflow fails loudly and may not downgrade completeness. Production
+  generation and review have no elapsed-time limit.
+- The ordinary human hook remains base-LMCTF behavior. Bot planning, execution,
+  proof, and telemetry must not alter human fire, attach, pull, release, refire,
+  collision, or fling semantics.
+- Preserve human playthroughs as last-resort evidence and learning input, never
+  as authority to invent a connection absent from BSP and physics.
+- Commit coherent, reversible units locally. Do not push or freeze while source,
+  tests, documentation, or wire contracts change.
+- `tools/rune-corpus-maps.txt` is the sole 175-map authority;
   `tools/topmaps.txt` is only an ordinary map schedule. Of 180 durable BSPs,
   unsuffixed `lmctf05`, `smap31`, `xmap07`, `xmap11`, and `xmap14` are excluded
   because their suffixed variants are canonical.
@@ -82,12 +61,12 @@ all of these conditions:
 
 Disposition terms are strict:
 
-- **Review/keep:** candidate behavior is useful, but it is retained only after
-  its contract, implementation, callers, failure behavior, and real integration
-  proof pass under the new model.
-- **Reshape:** retain part of the implementation behind a different data model
-  or ownership boundary.
-- **Replace:** remove the implementation from production after its callers move.
+- **Review/keep:** retain useful candidate behavior only after its contract,
+  implementation, callers, failure behavior, and real integration proof pass
+  under the new model.
+- **Reshape:** retain implementation only behind a different data model or
+  ownership boundary.
+- **Replace:** remove it from production after callers move.
 - **Delete:** remove obsolete code, tests, format fields, and documentation.
 
 ### BSP, configuration space, and movement
@@ -105,7 +84,7 @@ Disposition terms are strict:
 | MOV-2 | Use actual map gravity and movement cvars throughout construction, cost, proof, loading, and runtime. | Identity captures these values, but legacy compatibility and fallback paths remain. **Review/reshape.** | Gravity 100 and 800 maps produce different, correctly bound costs and airborne envelopes; identity mismatch fails load. |
 | MOV-3 | Model airborne control, jump-off/coast trajectories, drops into void-accessible space, and relaunch from any legal airborne pose. | Air-hook frontier samples action states and previously stopped at objective closure. **Replace orchestration; review/keep exact physics kernels.** | `tomb05` reaches both flag entries from BSP and physics alone, using gravity 100, without Dijkstra or human input. |
 | MOV-4 | Model water as a 3D traversable volume, not a compound floor edge. | Water forests and swim replay exist around graph links. **Reshape after review.** | Submerged vertical, horizontal, entry, exit, breath, current, and dry-to-water transitions agree with host physics. |
-| MOV-5 | Separate hook-bolt visibility from player-body motion. A hook may fire from any valid 3D pose to any visible hookable surface, excluding sky; the body then follows pull, release, coast, air-control, and collision physics. | `sg_hook_oracle.c`, replay, compound hook, and live hook code provide partial kernels. **Reshape after review.** | Static, airborne, chained, fling, ceiling, wall, underside, low-gravity, occluded, pickup-obstructed, and sky cases match base LMCTF. |
+| MOV-5 | Separate hook-bolt visibility from player-body motion. A hook may fire from any valid 3D pose to any visible hookable surface, excluding sky; the body follows pull, release, coast, air-control, and collision physics. | `sg_hook_oracle.c`, replay, compound hook, and live hook code provide partial kernels. **Review/reshape.** | Static, airborne, chained, fling, ceiling, wall, underside, low-gravity, occluded, pickup-obstructed, and sky cases match base LMCTF. |
 | MOV-6 | Avoid per-point brute-force rays. Partition configuration space and surface visibility into proven regions; interpolate only inside a region whose occluder boundaries are known. | Canonical airborne state deduplication is narrower than this requirement. **Replace/extend.** | Results match an exact-ray reference sample while time and memory scale with cells and visibility boundaries, not every possible pose. |
 | MOV-7 | Movement costs are directional and time-aware: acceleration, velocity, gravity, air control, hook bolt flight, pull, release, coast, swimming, falling, and mover dwell/travel all contribute. | Per-link `cost_ms` is action-specific. **Replace** with capability/cost kernels over cell state. | Analytic costs and exact Pmove timing agree within a declared tolerance on each movement family and both gravity regimes. |
 | MOV-8 | Rocket-jump code remains available where supported, but LMCTF RUNE connectivity generation does not search rocket or grenade jumps when the hook already supplies traversal. | Rocket-jump generation/runtime code exists. **Review/reshape** mode admission; no grenade-jump generator is added. | LMCTF generation logs show no rocket/grenade-jump search; non-LMCTF support and existing runtime behavior remain intact. |
@@ -163,19 +142,19 @@ Disposition terms are strict:
 
 ## Review standard for candidate reusable code
 
-Every **review/keep** or **reshape** item must complete the following before its
-phase can close:
+Every **review/keep** or **reshape** item must complete these steps before its
+phase closes:
 
-1. State its target contract and identify its authority, inputs, outputs,
-   mutable state, and failure behavior.
-2. Read the implementation and every production caller. Search for old seed,
-   link, action, objective-root, route-only, fixed-gravity, and Dijkstra
-   assumptions, including generated tables and tests.
+1. State its target contract, authority, inputs, outputs, mutable state, and
+   failure behavior.
+2. Read the implementation and every production caller. Search code, generated
+   tables, and tests for old seed, link, action, objective-root, route-only,
+   fixed-gravity, and Dijkstra assumptions.
 3. Compare its behavior with the host engine or wire specification. Do not use
    its existing tests as the sole oracle.
-4. Remove one-caller compatibility layers and obsolete state instead of
-   adapting the new model around them.
-5. Add focused tests for the contract and at least one real integration proof.
+4. Remove one-caller compatibility layers and obsolete state; do not adapt the
+   new model around them.
+5. Add focused contract tests and at least one real integration proof.
 6. Review the final diff for player-visible LMCTF regressions, hidden limits,
    map-specific branches, shared mutable state, and silent downgrade paths.
 7. Record the result in the catalog as kept, reshaped, replaced, or deleted.
