@@ -6,10 +6,24 @@ release graphs. A Sol High agent produced a competing graph and reconciled all
 four results against the source and the 51 requirements in
 `PROJECT-COMPLETION-PLAN.md`.
 
-The graph has no arbitrary agent-count limit. Assign each ready node to a Sol
-High implementation agent when that agent has isolated writable ownership.
-Root reviews each integrated gate against the diff and its verification
-evidence.
+The graph has no arbitrary agent-count limit. Assign each ready node to an
+appropriate model and effort when it has isolated writable ownership. State the
+assignment explicitly. Root and a Sol High reviewer check each integrated gate
+against the diff and runtime evidence.
+
+## Current implementation correction
+
+The production `sv rune` command still calls the legacy point-seed,
+action-labelled link, objective-pruning, and legacy stream path. The newer
+configuration, phase, dynamics, field, and proof modules have no complete
+production generator caller. Their exhaustive state products are not an
+intermediate version of the target RUNE. They are a rejected second navigation
+representation.
+
+The replacement connects `sv rune` directly to one compact BSP-derived field
+builder. It deletes legacy seed/link/action ownership and the unused exhaustive
+phase, dynamics, refinement, and proof-provider paths after their useful host,
+geometry, weapon-law, publication, and runtime-service pieces migrate.
 
 ## Core construction graph
 
@@ -22,64 +36,58 @@ Contract freeze
   +-- capability and cost interfaces
   +-- runtime navigation interfaces
   +-- artifact and acceptance format
-  +-- proof and release contracts
+  +-- linear load and release contracts
         |
         +------------------------------------------+
         |                                          |
         v                                          v
-BSP and configuration work                 Parallel foundation work
-  BSP parser                                 wire codec and readers
-      |                                      strategy queue
-  host collision and Pmove                   belief representation
-      |                                      weapon profiles
-  hull-valid configuration space             human trace review
+BSP and field construction                 Parallel runtime work
+  complete BSP and entities                  strategy queue
+      |                                      runtime beliefs
+  host collision and Pmove                   human trace review
+      |                                      live combat policy
+  global hull-expanded cell complex
       |
-  3D cells and portals
+  exact half-open faces and split-carried portals
       |
-  contents, landmarks, mechanisms,
-  visibility, and hookable surfaces
+  semantic, mechanism, visibility, and occlusion regions
       |
-  independent BSP completeness proof
-      |
-  owner-issued real-BSP phase publication
-      |
-      +----------------+------------------------+----------------+
-      |                |                        |                |
-      v                v                        v                v
- ground movement     water movement      hook visibility      mechanisms
- walk/crouch/ramp    full 3D volume      relation refinement  doors/lifts/etc.
- jump/drop                               and coverage audit
-                                                 |
-                                                 v
-                                           hook and air
-                                           bolt and body
-                                           pull/release
-      |                |                        |                |
-      +----------------+------------------------+----------------+
-                               |
-                               v
-                    directional time-cost kernels
-                               |
-                    destination-independent fixed point
-                               |
-                               v
-                    complete static RUNE model
+      +-----------------------------+
+      |                             |
+      v                             v
+  analytic movement fields      analytic weapon fields
+  ground/water/air/hook/        hitscan/rail/spread/cone/
+  movers/external forces        bolt/rocket/grenade/BFG
+      |                             |
+      +-----------------------------+
+                    |
+        canonical order and compact indexes
+                    |
+        linear artifact checks and serialization
+                    |
+                    v
+          complete static RUNE model
 ```
 
-The independent BSP completeness proof is a hard barrier before movement
-capability generation. It must prove that all valid cells and portals exist and
-that the generator invented no connection.
+The generator preserves topology while it partitions the BSP-derived space.
+There is no production completeness reconstruction or proof-provider barrier.
+Deep BSP and host comparison runs during development on one ordinary RUNE and
+one hard RUNE. Production generation performs only linear identity, format,
+count, span, reference, order, finite-value, checksum, and bot-load checks.
 
-Hook/air construction also depends on a complete hook-visibility relation
-catalog. The base static-visibility API proves exact point rays and coarse
-PVS/area exclusions; it does not prove continuous player-origin to surface
-coverage. The refinement must partition that coupled domain at occluder
-boundaries and carry an independently auditable no-omission/no-invention
-certificate. BSP events may guide predicate discovery, but symbolic execution
-of the exact muzzle-clearance and first-hit law remains the proof authority.
-The feasibility gate in `docs/hook-visibility-relation.md` must pass before the
-implementation expands. Finite point sampling and unrestricted action-tuple
-fallback are not substitutes.
+Cells are shared by movement and weapons. Movement and
+weapon families attach compact analytic fields to the same cells and surfaces.
+Weapon fields cover hitscan visibility, rail penetration and lanes, automatic
+and spread exposure, shotgun cone occupancy, straight bolt travel, rocket
+impact and splash, grenade arc, bounce and fuse, and BFG or special behavior.
+Runtime players, beliefs, ammo, health, destinations, and tactics remain outside
+the RUNE.
+
+Hook and weapon construction share sparse visibility and occlusion regions.
+Partition at first-hit and silhouette discontinuities. Store analytic relations
+inside each unchanged region. Do not symbolically enumerate every origin,
+control, ray, or trajectory. The live hook and live weapon boundaries retain
+their exact traces without changing human hook or firing behavior.
 
 ## Runtime graph
 
@@ -156,7 +164,7 @@ wire contract
     +-- independent GNU C reader
     +-- independent Make C reader
     +-- independent Python reader
-    +-- lint and semantic completeness
+    +-- linear identity, structure, checksum, and finite-value checks
     +-- sidecar migration
     +-- obsolete repair-sidecar deletion
     |
@@ -167,10 +175,10 @@ independently readable new-model artifact
 This branch can use synthetic structures before the generator exists. It joins
 the static generator at artifact integration.
 
-## Sol High implementation ownership
+## Parallel implementation ownership
 
-Any ready node can receive its own Sol High implementation agent. The shared
-files require designated integrators.
+Any ready node can receive its own appropriately assigned implementation agent.
+Shared files require designated integrators.
 
 | Integrator | Exclusive ownership |
 |---|---|
@@ -184,9 +192,9 @@ files require designated integrators.
 | Build | `GNUmakefile`, `Makefile`, generated source lists, and final test aggregation |
 | Documentation | `PROJECT-COMPLETION-PLAN.md`, `ARCHITECTURE.md`, tool documentation, and catalog status |
 
-Sol High agents implement isolated modules and tests. They hand completed
-branches to the relevant integrator. Root reviews each integrated gate against
-the actual diff and runtime evidence.
+Agents implement isolated modules and tests, then hand completed branches to the
+relevant integrator. Root and a Sol High agent review each integrated gate
+against the actual diff and runtime evidence.
 
 ## Integration and release graph
 
@@ -210,9 +218,9 @@ objective validity, route-only handling,
 production Dijkstra repair, and obsolete tests
         |
         v
-real-BSP and real-engine proof
+deep development check of one ordinary and one hard RUNE
         |
-determinism, batching, memory, and scaling proof
+development timing, memory, and determinism check
         |
 both final host-build dialects
         |
@@ -228,11 +236,11 @@ strict all-ordinary completion barrier
 Wave B: hard regression maps with 12 isolated workers
         |
         v
-per-map independent validation and cold load
+per-map linear checks and bot cold load
         |
 immutable 175-map corpus
         |
-independent corpus verification
+manifest, identity, and count agreement
         |
 authenticated bundle
         |
@@ -243,8 +251,9 @@ ordinary match evidence
 local tag, supported builds, and clean release verification
 ```
 
-Per-map validation starts when each map finishes. Corpus finalization waits for
-all 175 accepted results.
+Each map receives only the linear artifact checks and bot cold load when it
+finishes. Deep geometry comparison does not run against the 175-map corpus.
+Corpus finalization waits for all 175 generated and loadable results.
 
 ## Corrected dependencies
 
@@ -255,7 +264,8 @@ The Sol High review rejected these dependencies from the initial analyses:
 - Artifact work does not wait for beliefs, combat, or learning.
 - Tactical controller implementation does not wait for the final deterministic
   builder. Only real-artifact integration waits.
-- Proof tooling does not wait for final documentation.
+- The two-map development checker does not enter production generation or
+  artifact acceptance.
 - Fleet is not a separate mandatory release phase unless it is the selected
   ordinary-match test system.
 - The completion plan does not require a post-fleet repair phase.
@@ -263,21 +273,23 @@ The Sol High review rejected these dependencies from the initial analyses:
 - BSP-3 is full 3D configuration space. BSP-4 is hull-valid adjacency. BSP-7
   owns contents and static semantics.
 
-## Decisions that block the first implementation wave
+## Frozen interfaces for the first implementation wave
 
-The contract wave must settle these decisions:
+The implementation wave is bound by these decisions:
 
-- Cell geometry, portal representation, and standing or crouching overlap.
-- Phase representation for velocity, support, water, air, movers, and time.
-- Quantization, stable identifiers, deterministic ordering, and overflow
-  behavior.
-- Formal configuration-space completeness and its independent checker.
-- Capability-kernel and runtime-controller interfaces.
-- Directional cost representation and the field-solver contract.
-- Strategy authority and tactical suspend, resume, completion, and failure
-  events.
-- Sparse belief representation and authenticated observations.
-- Wire sections, checksums, hostile-count limits, and reader agreement.
+- Shared exact cells, half-open portals, and stance-validity ownership.
+- Compact analytic fibers for velocity, support, water, air, hook, movers, and
+  time.
+- Canonical quantization, stable identifiers, deterministic order, and loud
+  overflow failure.
+- A two-map deep development checker that never enters production acceptance.
+- Analytic movement and weapon kernels consumed by the runtime field service.
+- Continuous directional costs, runtime destination gradients, and incremental
+  moving-target updates.
+- Typed strategy authority and tactical suspend, resume, completion, and
+  failure events.
+- Sparse runtime beliefs from authenticated observations only.
+- Versioned wire sections, checksums, hostile-count limits, and reader agreement.
 - The obsolete seed/link repair sidecar is deleted; any future learned-cost
   sidecar requires its own stable-cell or capability-kernel contract.
 - The authoritative hard-regression map set and its strict wave barrier.

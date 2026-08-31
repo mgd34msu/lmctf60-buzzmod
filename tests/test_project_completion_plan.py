@@ -59,11 +59,16 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "full three-dimensional configuration space",
             "Every legal connection must be represented",
             "Physically disconnected valid regions remain represented",
-            "does not prescribe a sequence of named movement actions",
+            "does not prescribe routes or named movement scripts",
+            "higher-dimensional RUNE",
+            "Weapon fields are first-class RUNE content",
+            "Do not enumerate every pose, ray, trajectory, or phase combination",
             "destination at any valid point",
             "without regenerating the RUNE",
             "continuous/anisotropic field method",
             "update arbitrary, dropped, displaced, or moving destinations incrementally",
+            "single compact BSP-derived field builder",
+            "No proof catalog, provider, search tree",
         ):
             self.assertIn(required, self.flat)
 
@@ -93,7 +98,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "Keep all players and match state out of the static RUNE",
             "Sound creates diffuse or multimodal beliefs",
             "negative visual evidence",
-            "weapon profiles/kernels for hitscan",
+            "distinct RUNE response kernels for hitscan",
             "rockets and splash",
             "grenades and bounce/fuse",
             "predicted target probability and future weapon effect",
@@ -114,7 +119,7 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "Every **review/keep** or **reshape** item",
             "implementation and every production caller",
             "Do not use its existing tests as the sole oracle",
-            "real integration proof",
+            "real integration check",
         ):
             self.assertIn(required, self.flat)
 
@@ -136,6 +141,10 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "Do not push",
             "Do not publish remotely",
             "tagged locally as `v1.0.0`",
+            "one ordinary RUNE and one hard RUNE only",
+            "Production generation performs linear identity",
+            "successful bot-load checks",
+            "Do not rebuild map geometry or run per-map proof catalogs",
         ):
             self.assertIn(required, self.flat)
 
@@ -147,14 +156,14 @@ class ProjectCompletionPlanTest(unittest.TestCase):
             "### 4. Replace runtime navigation ownership",
             "### 5. Integrate beliefs, weapons, and learning",
             "### 6. Replace artifacts and audit all retained subsystems",
-            "### 7. Prove real BSPs, performance, and determinism",
+            "### 7. Test two RUNEs, performance, and determinism",
             "### 8. Freeze and generate all 175 RUNEs",
             "### 9. Install, observe, and release",
         ]
         offsets = [self.text.index(heading) for heading in headings]
         self.assertEqual(offsets, sorted(offsets))
         self.assertLess(
-            self.text.index("### 7. Prove real BSPs"),
+            self.text.index("### 7. Test two RUNEs"),
             self.text.index("### 8. Freeze and generate all 175 RUNEs"),
         )
         for required in (
