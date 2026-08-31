@@ -140,6 +140,18 @@ static int RuntimeFieldHandleEqual(const sg_field_handle_t *left,
 		left->field_generation == right->field_generation;
 }
 
+static int RuntimeLocalizedPlayerValid(
+	const sg_compact_localized_state_t *player)
+{
+	return player && player->valid == 1U &&
+		player->subject.reserved == 0U &&
+		player->subject.client_id != UINT32_MAX &&
+		player->subject.spawn_generation != 0U &&
+		player->rune_identity != 0U && player->topology_revision != 0U &&
+		player->frame_sequence != 0U && player->localized_at_ms != 0U &&
+		player->location.cell.value != SG_RUNE_COMPACT_INDEX_NONE;
+}
+
 /* The authority, not the locator, establishes this relation.  In particular,
  * `accepted_view` is an owner-issued opaque capability for the returned raw
  * execution pointer and canonical field objects.  Requiring it to be the
@@ -150,7 +162,8 @@ static int RuntimeBindingAccepted(
 	const sg_strategy_runtime_target_view_t *view,
 	const sg_strategy_caller_target_binding_t *binding)
 {
-	if (!target || !target->localized_player || !view || !view->opaque ||
+	if (!target || !RuntimeLocalizedPlayerValid(target->localized_player) ||
+		!view || !view->opaque ||
 	    !binding ||
 	    binding->commitment_id != target->commitment_id ||
 	    !RuntimeAuthorityEqual(&binding->authority, &target->authority) ||
@@ -179,10 +192,8 @@ static int RuntimeBindingAccepted(
 	    binding->localized->topology_revision !=
 		binding->snapshot->topology_revision ||
 	    target->localized_player->rune_identity != binding->snapshot->identity ||
-	    target->localized_player->topology_revision !=
+		target->localized_player->topology_revision !=
 		binding->snapshot->topology_revision ||
-	    !SG_PhaseCoordinateValid(binding->snapshot,
-		&target->localized_player->field_pose.phase) ||
 	    binding->guidance->pose_revision != binding->localized->pose_revision ||
 	    binding->guidance->sampled_at_ms != binding->localized->sampled_at_ms ||
 	    !SG_DestinationHandleValid(&binding->resolved_destination) ||
@@ -230,14 +241,7 @@ static int RuntimeRequestCompile(const sg_strategy_runtime_plan_request_t *reque
 	uint16_t goal_index;
 
 	if (!request || !compiled || request->commitment_id == 0U ||
-	    !request->localized_player ||
-	    request->localized_player->subject.reserved != 0U ||
-	    request->localized_player->subject.client_id == UINT32_MAX ||
-	    request->localized_player->subject.spawn_generation == 0U ||
-	    request->localized_player->rune_identity == 0U ||
-	    request->localized_player->topology_revision == 0U ||
-	    request->localized_player->frame_sequence == 0U ||
-	    !SG_DestinationPoseValid(&request->localized_player->field_pose) ||
+	    !RuntimeLocalizedPlayerValid(request->localized_player) ||
 	    !RuntimeAuthorityValid(&request->authority) ||
 	    request->spec.plan_id != 0U || request->spec.goal_count == 0U ||
 	    request->spec.goal_count > SG_STRATEGY_MAX_GOALS ||

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "slipgate/sg_compact_localization.h"
 #include "slipgate/sg_strategy_caller.h"
 #include "slipgate/sg_strategy_runtime_bridge.h"
 
@@ -313,7 +314,7 @@ static void PlanPrimaryRecover(sg_strategy_caller_plan_t *plan)
 static sg_strategy_runtime_plan_request_t RuntimeRequest(
 	const sg_strategy_caller_plan_t *plan)
 {
-	static sg_localized_player_state_t localized_player;
+	static sg_compact_localized_state_t localized_player;
 	sg_strategy_runtime_plan_request_t request;
 	uint16_t index;
 
@@ -326,11 +327,37 @@ static sg_strategy_runtime_plan_request_t RuntimeRequest(
 	localized_player.topology_revision =
 		plan->bindings[0].snapshot->topology_revision;
 	localized_player.frame_sequence = 1U;
-	localized_player.field_pose.phase =
-		plan->bindings[0].snapshot->phases[0];
-	localized_player.field_pose.region_id = 0U;
-	localized_player.field_pose.sample_time_ms =
+	localized_player.localized_at_ms =
 		plan->bindings[0].localized->sampled_at_ms;
+	localized_player.location.cell.value = 0U;
+	localized_player.location.valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	localized_player.stance = SG_RUNE_STANCE_STANDING;
+	localized_player.motion = SG_RUNE_MOTION_SUPPORTED;
+	localized_player.support = SG_RUNE_SUPPORT_SUPPORTED;
+	localized_player.medium = SG_RUNE_MEDIUM_DRY;
+	localized_player.void_relation = SG_RUNE_VOID_CLEAR;
+	localized_player.reference_frame = SG_RUNE_FRAME_WORLD;
+	localized_player.support_model_index = SG_HOST_COLLISION_MODEL_WORLD;
+	localized_player.support_instance_id = 0U;
+	localized_player.water_level = 0U;
+	localized_player.water_type = 0U;
+	localized_player.position[0] = 0.0f;
+	localized_player.position[1] = 0.0f;
+	localized_player.position[2] = 0.0f;
+	localized_player.velocity[0] = 0.0f;
+	localized_player.velocity[1] = 0.0f;
+	localized_player.velocity[2] = 0.0f;
+	localized_player.host_state.pm_type = PM_NORMAL;
+	localized_player.host_state.pm_flags = PMF_ON_GROUND;
+	localized_player.host_state.origin[0] = 0;
+	localized_player.host_state.origin[1] = 0;
+	localized_player.host_state.origin[2] = 0;
+	localized_player.host_state.velocity[0] = 0;
+	localized_player.host_state.velocity[1] = 0;
+	localized_player.host_state.velocity[2] = 0;
+	localized_player.host_state.gravity = 800;
+	localized_player.recovery = SG_LOCALIZATION_RECOVERY_NONE;
+	localized_player.valid = 1U;
 	request.localized_player = &localized_player;
 	request.authority = plan->authority;
 	request.spec = plan->spec;

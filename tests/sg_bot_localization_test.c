@@ -1,6 +1,7 @@
 #include "../g_local.h"
 #include "../slipgate/sg_local.h"
 #include "../slipgate/sg_bot.h"
+#include "../slipgate/sg_compact_localization.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,129 +17,189 @@
 level_locals_t level;
 sg_bot_t sg_bots[SG_MAXBOTS];
 
-static rune_t rune;
-static sg_host_collision_authority_t authority;
-static sg_cell_phase_locator_t locator;
-static sg_cell_phase_runtime_t runtime;
+static sg_compact_localization_binding_t binding;
 static edict_t entity;
 static gclient_t client;
-static uint64_t spawn_generation = 1U;
-static int runtime_current = 1;
-static int state_current = 1;
-static sg_localization_observation_t captured_observation;
-static sg_localization_environment_t captured_environment;
-static sg_localization_request_t captured_request;
-static int captured_previous;
+static uint64_t spawn_generation;
+static int binding_current;
+static int state_current;
+static int subject_current;
 static int subject_state_calls;
+static int observe_calls;
+static int observed_cell;
+static sg_localization_status_t observe_status;
+static sg_compact_localization_sample_t captured_sample;
+static int captured_pmove_result_present;
+static const sg_host_pmove_result_t *captured_pmove_result;
+static int captured_state_observation_present;
+static sg_host_pmove_state_observation_t captured_state_observation;
+static int captured_previous_present;
+static sg_compact_localized_state_t captured_previous;
 
-rune_t *SG_Rune(void)
-{
-	return &rune;
-}
-
-int SG_CellPhaseRuntimeCurrent(const sg_cell_phase_runtime_t *candidate)
-{
-	return runtime_current && candidate == &runtime;
-}
-
-int SG_CellPhaseLocalizedStateCurrent(const sg_cell_phase_runtime_t *candidate,
-	const sg_localization_subject_t *subject,
-	const sg_localized_player_state_t *state)
-{
-	return state_current && SG_CellPhaseRuntimeCurrent(candidate) && subject &&
-		state && state->subject.client_id == subject->client_id &&
-		state->subject.spawn_generation == subject->spawn_generation;
-}
-
-sg_host_law_result_t SG_HostLawProductionSubject(
-	const sg_host_law_runtime_authority_t *host_authority, uint32_t client_id,
-	sg_localization_subject_t *subject_out)
+static sg_host_law_result_t HostResult(sg_host_law_status_t status)
 {
 	sg_host_law_result_t result;
 
-	(void)host_authority;
 	memset(&result, 0, sizeof(result));
-	result.status = SG_HOST_LAW_OK;
-	result.element = SG_HOST_LAW_ELEMENT_NONE;
-	memset(subject_out, 0, sizeof(*subject_out));
-	subject_out->client_id = client_id;
-	subject_out->spawn_generation = spawn_generation;
+	result.status = status;
 	return result;
+}
+
+/* These are deliberately narrow boundary stubs.  The bot lifecycle test
+ * owns neither the compact model nor the host publication it borrows. */
+int SG_CompactLocalizationBindingCurrent(
+	const sg_compact_localization_binding_t *candidate)
+{
+	return binding_current && candidate && candidate->bound == 1U;
+}
+
+void SG_CompactLocalizationUnbind(sg_compact_localization_binding_t *candidate)
+{
+	if (candidate)
+		memset(candidate, 0, sizeof(*candidate));
+}
+
+int SG_CompactLocalizationStateCurrent(
+	const sg_compact_localization_binding_t *candidate,
+	const sg_localization_subject_t *subject,
+	const sg_compact_localized_state_t *state)
+{
+	return state_current && SG_CompactLocalizationBindingCurrent(candidate) &&
+		subject_current && subject && state && state->valid == 1U &&
+		state->subject.client_id == subject->client_id &&
+		state->subject.spawn_generation == subject->spawn_generation;
+}
+
+sg_localization_status_t SG_CompactLocalizationObserve(
+	const sg_compact_localization_binding_t *candidate,
+	const sg_compact_localization_sample_t *sample,
+	const sg_compact_localized_state_t *previous,
+	sg_compact_localized_state_t *state_out)
+{
+	const pmove_state_t *host_state = NULL;
+	const float *position = NULL;
+	const float *velocity = NULL;
+
+	if (!candidate || candidate->bound != 1U || !sample || !state_out)
+		return SG_LOCALIZATION_INVALID_ARGUMENT;
+	observe_calls++;
+	captured_sample = *sample;
+	captured_pmove_result_present = sample->pmove_result != NULL;
+	captured_pmove_result = sample->pmove_result;
+	captured_state_observation_present = sample->state_observation != NULL;
+	if (sample->state_observation)
+		captured_state_observation = *sample->state_observation;
+	else
+		memset(&captured_state_observation, 0,
+			sizeof(captured_state_observation));
+	captured_previous_present = previous != NULL;
+	if (previous)
+		captured_previous = *previous;
+	else
+		memset(&captured_previous, 0, sizeof(captured_previous));
+	captured_sample.pmove_result = NULL;
+	captured_sample.state_observation = NULL;
+	if (observe_status != SG_LOCALIZATION_OK)
+		return observe_status;
+	if (previous)
+		*state_out = *previous;
+	else
+		memset(state_out, 0, sizeof(*state_out));
+	state_out->subject = sample->subject;
+	state_out->rune_identity = candidate->rune_identity;
+	state_out->topology_revision = candidate->topology_revision;
+	state_out->frame_sequence = sample->frame_sequence;
+	state_out->localized_at_ms = sample->observed_at_ms;
+	state_out->location.cell.value = (uint32_t)observed_cell;
+	state_out->location.valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	state_out->stance = SG_RUNE_STANCE_STANDING;
+	state_out->motion = SG_RUNE_MOTION_SUPPORTED;
+	state_out->support = SG_RUNE_SUPPORT_SUPPORTED;
+	state_out->medium = SG_RUNE_MEDIUM_DRY;
+	state_out->void_relation = SG_RUNE_VOID_CLEAR;
+	state_out->reference_frame = SG_RUNE_FRAME_WORLD;
+	state_out->support_model_index = SG_HOST_COLLISION_MODEL_WORLD;
+	state_out->support_instance_id = 0U;
+	state_out->water_level = 0U;
+	state_out->water_type = 0;
+	state_out->recovery = sample->kind == SG_LOCALIZATION_OBSERVATION_PRESENT &&
+		previous ? SG_LOCALIZATION_RECOVERY_EXACT_CONTINUITY :
+		SG_LOCALIZATION_RECOVERY_NONE;
+	if (sample->pmove_result)
+	{
+		host_state = &sample->pmove_result->state;
+		position = sample->pmove_result->origin;
+		velocity = sample->pmove_result->velocity;
+		state_out->stance =
+			(sample->pmove_result->state.pm_flags & PMF_DUCKED) != 0 ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+	}
+	else if (sample->state_observation)
+	{
+		host_state = &sample->state_observation->state;
+		position = sample->state_observation->origin;
+		velocity = sample->state_observation->velocity;
+		state_out->stance =
+			(sample->state_observation->state.pm_flags & PMF_DUCKED) != 0 ?
+			SG_RUNE_STANCE_CROUCHING : SG_RUNE_STANCE_STANDING;
+	}
+	if (host_state)
+		state_out->host_state = *host_state;
+	if (position)
+		memcpy(state_out->position, position, sizeof(state_out->position));
+	if (velocity)
+		memcpy(state_out->velocity, velocity, sizeof(state_out->velocity));
+	state_out->valid = 1U;
+	return SG_LOCALIZATION_OK;
+}
+
+/* Host subject reads are the only non-compact calls the bot lifecycle owns.
+ * Their bodies model the owner issuing an exact subject and spawn snapshot. */
+sg_host_law_result_t SG_HostLawProductionSubject(
+	const sg_host_law_runtime_authority_t *host_authority,
+	uint32_t subject_index, sg_host_law_subject_t *subject_out)
+{
+	(void)host_authority;
+	if (!subject_current || !subject_out)
+		return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	memset(subject_out, 0, sizeof(*subject_out));
+	subject_out->client_id = subject_index;
+	subject_out->spawn_generation = spawn_generation;
+	return HostResult(SG_HOST_LAW_OK);
+}
+
+sg_host_law_result_t SG_HostLawProductionSubjectCurrent(
+	const sg_host_law_runtime_authority_t *host_authority,
+	const sg_host_law_subject_t *subject)
+{
+	(void)host_authority;
+	if (!subject_current || !subject ||
+		subject->spawn_generation != spawn_generation)
+		return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	return HostResult(SG_HOST_LAW_OK);
 }
 
 sg_host_law_result_t SG_HostLawProductionSubjectState(
 	const sg_host_law_runtime_authority_t *host_authority,
-	const sg_localization_subject_t *subject,
+	const sg_host_law_subject_t *subject,
 	sg_host_pmove_state_observation_t *observation_out)
 {
-	sg_host_law_result_t result;
-
 	(void)host_authority;
-	memset(&result, 0, sizeof(result));
-	result.status = SG_HOST_LAW_OK;
-	result.element = SG_HOST_LAW_ELEMENT_NONE;
-	if (!subject || subject->spawn_generation != spawn_generation ||
-		!observation_out)
-	{
-		result.status = SG_HOST_LAW_INVALID_ARGUMENT;
-		return result;
-	}
+	if (!subject_current || !subject ||
+		subject->spawn_generation != spawn_generation || !observation_out)
+		return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
 	memset(observation_out, 0, sizeof(*observation_out));
 	observation_out->state = client.ps.pmove;
-	for (int axis = 0; axis < 3; axis++)
-	{
-		observation_out->origin[axis] =
-			observation_out->state.origin[axis] * 0.125f;
-		observation_out->velocity[axis] =
-			observation_out->state.velocity[axis] * 0.125f;
-	}
+	memcpy(observation_out->origin, entity.s.origin,
+		sizeof(observation_out->origin));
+	memcpy(observation_out->velocity, entity.velocity,
+		sizeof(observation_out->velocity));
 	subject_state_calls++;
-	return result;
-}
-
-int SG_CellPhaseLocalize(const sg_cell_phase_runtime_t *candidate,
-	const sg_localization_request_t *request,
-	const sg_localization_observation_t *observation,
-	const sg_localization_environment_t *environment,
-	sg_localized_player_state_t *state_out,
-	sg_localization_status_t *status_out)
-{
-	CHECK(candidate == &runtime);
-	captured_observation = *observation;
-	captured_environment = *environment;
-	captured_request = *request;
-	captured_previous = request->previous != NULL;
-	if (request->previous)
-		*state_out = *request->previous;
-	else
-		memset(state_out, 0, sizeof(*state_out));
-	state_out->subject = observation->subject;
-	state_out->rune_identity = observation->rune_identity;
-	state_out->topology_revision = observation->topology_revision;
-	state_out->frame_sequence = observation->frame_sequence;
-	state_out->localized_at_ms = observation->observed_at_ms;
-	state_out->field_pose.phase.phase_id = 5U;
-	state_out->field_pose.phase.cell_id = 3U;
-	state_out->field_pose.region_id = 2U;
-	state_out->field_pose.sample_time_ms = observation->observed_at_ms;
-	if (observation->kind !=
-		SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT)
-	{
-		memcpy(state_out->field_pose.position, observation->position,
-			sizeof(state_out->field_pose.position));
-		memcpy(state_out->field_pose.velocity, observation->velocity,
-			sizeof(state_out->field_pose.velocity));
-		state_out->host_state = observation->host_state;
-	}
-	state_out->host_state_valid = 1U;
-	state_out->stance = observation->stance;
-	if (status_out)
-		*status_out = SG_LOCALIZATION_OK;
-	return 1;
+	return HostResult(SG_HOST_LAW_OK);
 }
 
 static sg_host_pmove_request_t PmoveRequest(
-	const sg_localized_player_state_t *previous)
+	const sg_compact_localized_state_t *previous)
 {
 	sg_host_pmove_request_t request;
 
@@ -157,157 +218,187 @@ static sg_host_pmove_result_t PmoveResult(unsigned flags, float x)
 	sg_host_pmove_result_t result;
 
 	memset(&result, 0, sizeof(result));
+	result.state.pm_type = PM_NORMAL;
 	result.state.pm_flags = (byte)flags;
+	result.state.origin[0] = (int16_t)(x * 8.0f);
+	result.state.gravity = 800;
 	result.origin[0] = x;
 	result.velocity[1] = x + 1.0f;
+	result.grounded = 1;
+	result.support_model_index = SG_HOST_COLLISION_MODEL_WORLD;
+	result.evaluated_steps = 4U;
+	result.elapsed_ms = 100U;
+	result.gravity = 800.0f;
 	return result;
 }
 
-static int TestLifeAndMotion(void)
+static void ResetFixture(void)
 {
-	sg_host_pmove_request_t request;
-	sg_host_pmove_result_t result;
-	const sg_localized_player_state_t *current;
-
+	(void)SG_BotLocalizationProviderSet(NULL);
+	memset(&level, 0, sizeof(level));
+	memset(sg_bots, 0, sizeof(sg_bots));
+	memset(&binding, 0, sizeof(binding));
 	memset(&entity, 0, sizeof(entity));
 	memset(&client, 0, sizeof(client));
+	memset(&captured_sample, 0, sizeof(captured_sample));
+	memset(&captured_state_observation, 0,
+		sizeof(captured_state_observation));
+	memset(&captured_previous, 0, sizeof(captured_previous));
+	captured_pmove_result_present = 0;
+	captured_pmove_result = NULL;
+	captured_state_observation_present = 0;
+	captured_previous_present = 0;
+	spawn_generation = 1U;
+	binding_current = 1;
+	state_current = 1;
+	subject_current = 1;
+	subject_state_calls = 0;
+	observe_calls = 0;
+	observed_cell = 3;
+	observe_status = SG_LOCALIZATION_OK;
+	binding.bound = 1U;
+	binding.rune_identity = 11U;
+	binding.topology_revision = 13U;
+	binding.identity.physics.frame_ms = 100U;
 	entity.inuse = true;
 	entity.client = &client;
 	entity.deadflag = DEAD_NO;
 	entity.s.number = 7;
-	client.ps.pmove.origin[2] = 192;
-	entity.s.origin[2] = 25.0f;
+	client.ps.pmove.pm_type = PM_NORMAL;
+	client.ps.pmove.origin[0] = 80;
+	client.ps.pmove.gravity = 800;
+	entity.s.origin[0] = 10.0f;
+	entity.velocity[1] = 2.0f;
 	sg_bots[0].active = true;
 	sg_bots[0].ent = &entity;
-	CHECK(SG_BotLocalizationProviderSet(&runtime));
+}
 
+static int TestCompactLifecycle(void)
+{
+	sg_host_pmove_request_t request;
+	sg_host_pmove_result_t result;
+	const sg_compact_localized_state_t *current;
+	const sg_compact_localized_state_t *before;
+	int calls_before;
+
+	ResetFixture();
+	/* Provider installation owns the reset of every bot slot. */
+	sg_bots[1].localization_subject.client_id = 99U;
+	sg_bots[1].localized_state.valid = 1U;
+	CHECK(SG_BotLocalizationProviderSet(&binding));
+	CHECK(sg_bots[1].localization_subject.client_id == 0U);
+	CHECK(sg_bots[1].localized_state.valid == 0U);
+	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
+
+	/* The first sample is owner state, never a fabricated Pmove result. */
 	level.framenum = 0;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
 	CHECK(subject_state_calls == 1);
-	CHECK(captured_observation.kind ==
-		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
-	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
-	CHECK(captured_observation.position[2] == 24.0f);
-	CHECK(captured_observation.position[2] + 1.0f == entity.s.origin[2]);
-	request = PmoveRequest(NULL);
-	result = PmoveResult(0U, 10.0f);
-	SG_BotLocalizationObservePmove(&entity, &request, &result);
-	CHECK(captured_observation.kind == SG_LOCALIZATION_OBSERVATION_PRESENT);
-	CHECK(!captured_previous && captured_request.maximum_recovery_distance == 0.0f);
-	CHECK(captured_request.maximum_temporary_absence_ms == 0U);
-	CHECK(captured_observation.position[0] == result.origin[0]);
-	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
-
+	CHECK(observe_calls == 1);
+	CHECK(captured_sample.kind == SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
+	CHECK(!captured_previous_present);
+	CHECK(!captured_pmove_result_present);
+	CHECK(captured_state_observation_present);
+	CHECK(captured_state_observation.state.pm_type == PM_NORMAL);
+	CHECK(captured_state_observation.origin[0] == entity.s.origin[0]);
+	CHECK(captured_sample.maximum_recovery_distance == 0.0f);
+	CHECK(captured_sample.maximum_temporary_absence_ms == 0U);
+	CHECK(captured_sample.life_reset.authorized == 1U);
+	CHECK(captured_sample.life_reset.previous_subject.client_id == 0U);
+	CHECK(captured_sample.life_reset.previous_subject.spawn_generation == 0U);
 	current = SG_BotLocalizationCurrent(&sg_bots[0]);
 	CHECK(current != NULL);
+	CHECK(current->valid == 1U);
+	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == observed_cell);
+	CHECK(current->recovery == SG_LOCALIZATION_RECOVERY_NONE);
+	CHECK(current->position[0] == entity.s.origin[0]);
+
+	/* A normal frame carries the exact Pmove result and prior compact state. */
+	before = current;
 	level.framenum = 1;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	request = PmoveRequest(current);
+	CHECK(subject_state_calls == 1);
+	request = PmoveRequest(before);
 	result = PmoveResult(PMF_DUCKED, 11.0f);
 	SG_BotLocalizationObservePmove(&entity, &request, &result);
-	CHECK(captured_observation.kind == SG_LOCALIZATION_OBSERVATION_PRESENT);
-	CHECK(captured_observation.stance == SG_RUNE_STANCE_CROUCHING);
-	CHECK(captured_previous && captured_environment.pmove_request == &request);
-	CHECK(captured_request.maximum_recovery_distance == 0.5f);
-	CHECK(captured_request.maximum_temporary_absence_ms == 0U);
-
+	CHECK(observe_calls == 2);
+	CHECK(captured_sample.kind == SG_LOCALIZATION_OBSERVATION_PRESENT);
+	CHECK(captured_previous_present);
+	CHECK(captured_previous.location.cell.value == before->location.cell.value);
+	CHECK(captured_pmove_result_present);
+	CHECK(captured_pmove_result == &result);
+	CHECK(!captured_state_observation_present);
+	CHECK(captured_sample.maximum_recovery_distance ==
+		SG_COMPACT_LOCALIZATION_MAX_RECOVERY_DISTANCE);
+	CHECK(captured_sample.maximum_temporary_absence_ms == 0U);
+	CHECK(captured_sample.life_reset.authorized == 0U);
 	current = SG_BotLocalizationCurrent(&sg_bots[0]);
-	CHECK(current != NULL);
+	CHECK(current != NULL && current->stance == SG_RUNE_STANCE_CROUCHING);
+	CHECK(current->recovery == SG_LOCALIZATION_RECOVERY_EXACT_CONTINUITY);
+
+	/* Teleport still consumes Pmove; it must not turn same-cell identity into
+	 * numeric/exact recovery. */
+	before = current;
 	level.framenum = 2;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	request = PmoveRequest(current);
+	request = PmoveRequest(before);
 	result = PmoveResult(PMF_TIME_TELEPORT, 64.0f);
 	SG_BotLocalizationObservePmove(&entity, &request, &result);
-	CHECK(captured_observation.kind == SG_LOCALIZATION_OBSERVATION_TELEPORTED);
-	CHECK(!captured_previous && captured_request.maximum_recovery_distance == 0.0f);
+	CHECK(observe_calls == 3);
+	CHECK(captured_sample.kind == SG_LOCALIZATION_OBSERVATION_TELEPORTED);
+	CHECK(captured_previous_present);
+	CHECK(captured_previous.location.cell.value == before->location.cell.value);
+	CHECK(captured_pmove_result_present);
+	CHECK(captured_pmove_result == &result);
+	CHECK(!captured_state_observation_present);
+	CHECK(captured_sample.maximum_recovery_distance == 0.0f);
+	current = SG_BotLocalizationCurrent(&sg_bots[0]);
+	CHECK(current != NULL);
+	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == observed_cell);
+	CHECK(current->recovery == SG_LOCALIZATION_RECOVERY_NONE);
 
+	/* Compact localization has no temporary-absence lifecycle. */
+	calls_before = observe_calls;
 	level.framenum = 3;
-	SG_BotLocalizationFrameBegin(&sg_bots[0]);
 	SG_BotLocalizationFrameEnd(&sg_bots[0]);
-	CHECK(captured_observation.kind ==
-		SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT);
-	CHECK(captured_previous &&
-		captured_request.maximum_temporary_absence_ms == 100U);
-	return 1;
-}
+	CHECK(observe_calls == calls_before);
+	CHECK(captured_sample.kind == SG_LOCALIZATION_OBSERVATION_TELEPORTED);
+	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
 
-static int TestInvalidationAndSlotReuse(void)
-{
-	edict_t *bot_entity = sg_bots[0].ent;
-	sg_host_pmove_request_t request;
-	sg_host_pmove_result_t result;
+	/* A revoked binding fails closed and resets retained bot state. */
+	binding_current = 0;
+	SG_BotLocalizationFrameBegin(&sg_bots[0]);
+	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
+	sg_bots[0].localized_state.valid = 1U;
+	CHECK(!SG_BotLocalizationProviderSet(&binding));
+	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
 
-	spawn_generation++;
-	client.ps.pmove.origin[2] = 320;
-	entity.s.origin[2] = 41.0f;
-	level.framenum++;
+	/* Reinstall a current provider for the msec and teardown checks. */
+	binding_current = 1;
+	CHECK(SG_BotLocalizationProviderSet(&binding));
+	level.framenum = 4;
 	SG_BotLocalizationFrameBegin(&sg_bots[0]);
 	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) != NULL);
-	CHECK(sg_bots[0].localization_subject.spawn_generation == spawn_generation);
-	CHECK(captured_observation.kind ==
-		SG_LOCALIZATION_OBSERVATION_NEW_SPAWN);
-	CHECK(captured_observation.position[2] == 40.0f);
-	CHECK(captured_observation.position[2] + 1.0f == entity.s.origin[2]);
-	request = PmoveRequest(NULL);
-	result = PmoveResult(0U, 20.0f);
-	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
-	CHECK(!captured_previous);
-
-	state_current = 0;
-	level.framenum++;
-	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) != NULL);
-	CHECK(!captured_previous);
-	state_current = 1;
-
+	calls_before = observe_calls;
+	request = PmoveRequest(SG_BotLocalizationCurrent(&sg_bots[0]));
 	request.command.msec = 25U;
-	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
+	result = PmoveResult(0U, 20.0f);
+	SG_BotLocalizationObservePmove(&entity, &request, &result);
+	CHECK(observe_calls == calls_before);
 	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
 
-	request = PmoveRequest(NULL);
-	result = PmoveResult(0U, 24.0f);
-	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
-	CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
-	bot_entity->deadflag = DEAD_DEAD;
-	{
-		int calls_before_death = subject_state_calls;
-
-		SG_BotLocalizationFrameBegin(&sg_bots[0]);
-		CHECK(subject_state_calls == calls_before_death);
-		CHECK(sg_bots[0].localization_subject.spawn_generation ==
-			spawn_generation);
-		CHECK(SG_BotLocalizationCell(&sg_bots[0]) == 3);
-	}
-	/* Think_Dead consumes the terminal cell once, then ends the life. */
-	SG_BotLocalizationReset(&sg_bots[0]);
-	SG_BotLocalizationObservePmove(bot_entity, &request, &result);
-	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
-	bot_entity->deadflag = DEAD_NO;
-
-	runtime_current = 0;
-	SG_BotLocalizationFrameBegin(&sg_bots[0]);
-	CHECK(sg_bots[0].localization_subject.spawn_generation == 0U);
-	runtime_current = 1;
+	/* Uninstall clears both the borrowed provider and canonical state. */
 	CHECK(SG_BotLocalizationProviderSet(NULL));
+	CHECK(sg_bots[0].localization_subject.spawn_generation == 0U);
+	CHECK(sg_bots[0].localized_state.valid == 0U);
 	CHECK(SG_BotLocalizationCurrent(&sg_bots[0]) == NULL);
 	return 1;
 }
 
 int main(void)
 {
-	memset(&rune, 0, sizeof(rune));
-	rune.hdr.num_seeds = 8;
-	memset(&authority, 0, sizeof(authority));
-	authority.identity.physics.frame_ms = 100U;
-	memset(&locator, 0, sizeof(locator));
-	locator.authority = &authority;
-	locator.runtime_cell_count = 8U;
-	memset(&runtime, 0, sizeof(runtime));
-	runtime.locator = &locator;
-	runtime.rune_identity = 11U;
-	runtime.topology_revision = 13U;
-	if (!TestLifeAndMotion() || !TestInvalidationAndSlotReuse())
+	if (!TestCompactLifecycle())
 		return 1;
-	puts("bot localization lifecycle tests passed");
+	puts("bot compact localization lifecycle tests passed");
 	return 0;
 }

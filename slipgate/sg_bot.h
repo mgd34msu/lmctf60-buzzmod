@@ -127,7 +127,7 @@ typedef struct sg_bot_s
 	 * this exact bot life.  localization_event is the next explicit lifecycle
 	 * observation, never a second position-validity flag. */
 	sg_localization_subject_t localization_subject;
-	sg_localized_player_state_t localized_state;
+	sg_compact_localized_state_t localized_state;
 	sg_localization_observation_kind_t localization_event;
 	/* Shared mover ownership survives death/respawn and is retired before the
 	 * containing process-storage slot is erased. */

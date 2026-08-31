@@ -17,7 +17,8 @@ def section(source: str, start: str, end: str) -> str:
 
 def test_one_typed_current_position_owner() -> None:
     assert "sg_localization_subject_t localization_subject;" in BOT
-    assert "sg_localized_player_state_t localized_state;" in BOT
+    assert "sg_compact_localized_state_t localized_state;" in BOT
+    assert "sg_localized_player_state_t localized_state;" not in BOT
     assert "\tint\t\t\tseed;" not in BOT
     assert "last_origin" not in BOT
     assert "seedless_active" not in BOT
@@ -60,14 +61,18 @@ def test_bootstrap_and_death_cell_ordering() -> None:
     frame_begin = section(
         LOCALIZATION,
         "void SG_BotLocalizationFrameBegin",
-        "\nstatic uint64_t FrameSequence",
+        "\nstatic void Localize",
     )
     assert "SG_HostLawProductionSubject(" in frame_begin
     assert "if (bot->ent->deadflag != DEAD_NO)" in frame_begin
-    assert "Bootstrap(bot);" in frame_begin
+    assert "Bootstrap(bot, binding);" in frame_begin
     assert frame_begin.index("if (bot->ent->deadflag != DEAD_NO)") < frame_begin.index(
-        "Bootstrap(bot);"
+        "Bootstrap(bot, binding);"
     )
+
+    assert "SG_CellPhaseLocalize" not in LOCALIZATION
+    assert "SG_LOCALIZATION_OBSERVATION_TEMPORARILY_ABSENT" not in LOCALIZATION
+    assert "SG_CompactLocalizationObserve" in LOCALIZATION
 
     death = section(ARACH, "static qboolean Think_Dead", "\nstatic void Think_RespawnEdge")
     assert death.index("Danger_Learn(") < death.index("SG_BotLocalizationReset(bot);")
