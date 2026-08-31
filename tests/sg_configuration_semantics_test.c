@@ -277,6 +277,41 @@ static int Build(fixture_t *fixture,
 	return 1;
 }
 
+static void CheckAuditOutOfMemory(
+	const sg_host_collision_authority_t *authority,
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics)
+{
+	sg_configuration_semantics_audit_result_t audit;
+	uint64_t allocation_count, allocation;
+
+	SG_ConfigurationSemanticsTestAuditAllocationFailAt(0U);
+	memset(&audit, 0xa5, sizeof(audit));
+	CHECK(SG_ConfigurationSemanticsAudit(authority, configuration, semantics,
+		&audit));
+	CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_OK);
+	allocation_count = SG_ConfigurationSemanticsTestAuditAllocationCount();
+	CHECK(allocation_count > 0U);
+	for (allocation = 1U; allocation <= allocation_count; allocation++)
+	{
+		SG_ConfigurationSemanticsTestAuditAllocationFailAt(allocation);
+		memset(&audit, 0xa5, sizeof(audit));
+		CHECK(!SG_ConfigurationSemanticsAudit(authority, configuration, semantics,
+			&audit));
+		CHECK(SG_ConfigurationSemanticsTestAuditAllocationCount() >= allocation);
+		CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY);
+		CHECK(audit.record == 0U);
+		CHECK(audit.lattice_solve_calls == 0U);
+		CHECK(audit.lattice_constraints == 0U);
+		CHECK(audit.lattice_maximum_binary_shift == 0U);
+	}
+	SG_ConfigurationSemanticsTestAuditAllocationFailAt(0U);
+	memset(&audit, 0xa5, sizeof(audit));
+	CHECK(SG_ConfigurationSemanticsAudit(authority, configuration, semantics,
+		&audit));
+	CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_OK);
+}
+
 static int StrictlyInsideRegion(const sg_configuration_semantics_t *semantics,
 	const sg_configuration_semantic_region_t *region, const float point[3])
 {
@@ -441,6 +476,43 @@ static void TestVolumetricWaterAndAudit(void)
 		(unsigned long long)semantics->lattice_constraints,
 		(unsigned long long)audit.lattice_solve_calls,
 		(unsigned long long)audit.lattice_constraints);
+	SG_ConfigurationSemanticsDestroy(semantics);
+}
+
+static void TestAuditOutOfMemory(void)
+{
+	fixture_t fixture = Fixture();
+	sg_configuration_semantics_t *semantics = NULL;
+	sg_configuration_semantics_audit_result_t audit;
+	float saved_bound;
+	uint64_t saved_region_id;
+	float saved_normal;
+
+	BindFixture(&fixture);
+	CHECK(Build(&fixture, &semantics));
+	if (semantics)
+	{
+		CheckAuditOutOfMemory(&fixture.authority, &fixture.configuration,
+			semantics);
+		saved_bound = fixture.cell.bounds.maxs.value[0];
+		fixture.cell.bounds.maxs.value[0] = saved_bound + 0.125f;
+		CHECK(!SG_ConfigurationSemanticsAudit(&fixture.authority,
+			&fixture.configuration, semantics, &audit));
+		CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_SOURCE_MISMATCH);
+		fixture.cell.bounds.maxs.value[0] = saved_bound;
+		saved_region_id = semantics->regions[0].id;
+		semantics->regions[0].id++;
+		CHECK(!SG_ConfigurationSemanticsAudit(&fixture.authority,
+			&fixture.configuration, semantics, &audit));
+		CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT);
+		semantics->regions[0].id = saved_region_id;
+		saved_normal = fixture.planes[0].normal.value[2];
+		fixture.planes[0].normal.value[2] = NAN;
+		CHECK(!SG_ConfigurationSemanticsAudit(&fixture.authority,
+			&fixture.configuration, semantics, &audit));
+		CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER);
+		fixture.planes[0].normal.value[2] = saved_normal;
+	}
 	SG_ConfigurationSemanticsDestroy(semantics);
 }
 
@@ -1084,6 +1156,7 @@ static void TestConfigurationBuilderComposition(void)
 	{
 		CHECK(SG_ConfigurationSemanticsAudit(&fixture.authority, configuration,
 			semantics, &semantics_audit));
+		CheckAuditOutOfMemory(&fixture.authority, configuration, semantics);
 		CHECK(semantics->region_count >= configuration->cell_count);
 		if (constraint_cell != SG_CONFIGURATION_INDEX_NONE)
 		{
@@ -1515,6 +1588,7 @@ int main(void)
 	CHECK(SG_ConfigurationSemanticsTestMixedConstraintMesh());
 	#endif
 	TestVolumetricWaterAndAudit();
+	TestAuditOutOfMemory();
 	TestThinBrushSupportFractionPartition();
 	TestSurfaceAuthorityAndNoPickupObstruction();
 	TestActualDomainContactMarksVoidAdjacency();

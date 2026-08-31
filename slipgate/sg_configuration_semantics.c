@@ -57,6 +57,122 @@ typedef struct semantic_build_s
 	sg_configuration_semantics_error_t error;
 } semantic_build_t;
 
+typedef struct semantic_audit_allocations_s
+{
+	int out_of_memory;
+} semantic_audit_allocations_t;
+
+#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
+static uint64_t audit_allocation_count;
+static uint64_t audit_allocation_failure;
+
+void SG_ConfigurationSemanticsTestAuditAllocationFailAt(uint64_t allocation)
+{
+	audit_allocation_count = 0U;
+	audit_allocation_failure = allocation;
+}
+
+uint64_t SG_ConfigurationSemanticsTestAuditAllocationCount(void)
+{
+	return audit_allocation_count;
+}
+#endif
+
+static int AuditAllocationAttempt(semantic_audit_allocations_t *allocations)
+{
+	if (!allocations)
+		return 0;
+#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
+	audit_allocation_count++;
+	if (audit_allocation_failure == audit_allocation_count)
+	{
+		allocations->out_of_memory = 1;
+		return 1;
+	}
+#endif
+	return 0;
+}
+
+static void *AuditMalloc(semantic_audit_allocations_t *allocations,
+	size_t size)
+{
+	void *memory;
+
+	if (AuditAllocationAttempt(allocations))
+		return NULL;
+	memory = malloc(size);
+	if (!memory && allocations)
+		allocations->out_of_memory = 1;
+	return memory;
+}
+
+static void *AuditCalloc(semantic_audit_allocations_t *allocations,
+	size_t count, size_t size)
+{
+	void *memory;
+
+	if (AuditAllocationAttempt(allocations))
+		return NULL;
+	memory = calloc(count, size);
+	if (!memory && allocations)
+		allocations->out_of_memory = 1;
+	return memory;
+}
+
+static void *AuditRealloc(semantic_audit_allocations_t *allocations,
+	void *memory, size_t size)
+{
+	void *grown;
+
+	if (AuditAllocationAttempt(allocations))
+		return NULL;
+	grown = realloc(memory, size);
+	if (!grown && allocations)
+		allocations->out_of_memory = 1;
+	return grown;
+}
+
+static int AuditFinish(const semantic_audit_allocations_t *allocations,
+	sg_configuration_semantics_audit_result_t *result, int success)
+{
+	if (!allocations->out_of_memory)
+		return success;
+	memset(result, 0, sizeof(*result));
+	result->code = SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY;
+	return 0;
+}
+
+static int AuditGrow(semantic_audit_allocations_t *allocations,
+	void **array, uint32_t *capacity, uint32_t required, uint32_t limit,
+	size_t size)
+{
+	uint32_t next;
+	void *grown;
+
+	if (required <= *capacity)
+		return 1;
+	if (required > limit || (size_t)required > SIZE_MAX / size)
+		return 0;
+	next = *capacity ? *capacity : 64U;
+	if (next > limit)
+		next = limit;
+	while (next < required)
+	{
+		if (next > limit / 2U)
+		{
+			next = limit;
+			break;
+		}
+		next *= 2U;
+	}
+	grown = AuditRealloc(allocations, *array, (size_t)next * size);
+	if (!grown)
+		return 0;
+	*array = grown;
+	*capacity = next;
+	return 1;
+}
+
 static float Dot(const float a[3], const float b[3])
 {
 	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -238,16 +354,20 @@ static float HullMinimum(const sg_rune_hull_profile_t *hull,
 static int MarkModelBrushes(const sg_bsp_world_t *world, uint32_t model_index,
 	uint8_t *brush_marks);
 static int AuditReachableBrushes(const sg_bsp_world_t *world,
-	uint32_t model, uint8_t *brush_marks);
+	uint32_t model, uint8_t *brush_marks,
+	semantic_audit_allocations_t *allocations);
 static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
 	uint32_t *leaf_out);
 static int ValidateCellMesh(const sg_configuration_space_t *configuration,
 	uint32_t cell_index);
 static int AuditSourceCellMesh(
-	const sg_configuration_space_t *configuration, uint32_t cell_index);
+	const sg_configuration_space_t *configuration, uint32_t cell_index,
+	semantic_audit_allocations_t *allocations);
 
-static int CellQ8Bounds(const sg_configuration_space_t *configuration,
-	const sg_configuration_cell_t *cell, float mins[3], float maxs[3])
+static int CellQ8BoundsWithAllocations(
+	const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, float mins[3], float maxs[3],
+	semantic_audit_allocations_t *allocations)
 {
 	sg_configuration_lattice_halfspace_t *halfspaces;
 	uint32_t local, axis;
@@ -258,7 +378,9 @@ static int CellQ8Bounds(const sg_configuration_space_t *configuration,
 	if ((size_t)cell->face_count > SIZE_MAX / sizeof(*halfspaces))
 		return -1;
 	#endif
-	halfspaces = malloc((size_t)cell->face_count * sizeof(*halfspaces));
+	halfspaces = allocations ? AuditMalloc(allocations,
+		(size_t)cell->face_count * sizeof(*halfspaces)) :
+		malloc((size_t)cell->face_count * sizeof(*halfspaces));
 	if (!halfspaces)
 		return -1;
 	for (local = 0; local < cell->face_count; local++)
@@ -289,6 +411,20 @@ static int CellQ8Bounds(const sg_configuration_space_t *configuration,
 	}
 	free(halfspaces);
 	return 1;
+}
+
+static int CellQ8Bounds(const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, float mins[3], float maxs[3])
+{
+	return CellQ8BoundsWithAllocations(configuration, cell, mins, maxs, NULL);
+}
+
+static int AuditCellQ8Bounds(const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, float mins[3], float maxs[3],
+	semantic_audit_allocations_t *allocations)
+{
+	return CellQ8BoundsWithAllocations(configuration, cell, mins, maxs,
+		allocations);
 }
 
 static int CellUsesQ8Bounds(const sg_configuration_space_t *configuration,
@@ -1377,15 +1513,16 @@ int SG_ConfigurationSemanticsTestMixedConstraintMesh(void)
 	faces[3].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
 	vertices[1].value[1] = 1.0f;
 	vertices[2].value[0] = 1.0f;
-	valid = ValidateCellMesh(&space, 0U) && AuditSourceCellMesh(&space, 0U);
+	valid = ValidateCellMesh(&space, 0U) &&
+		AuditSourceCellMesh(&space, 0U, NULL);
 	faces[1].kind = SG_CONFIGURATION_FACE_FACET;
 	valid = valid && !ValidateCellMesh(&space, 0U) &&
-		!AuditSourceCellMesh(&space, 0U);
+		!AuditSourceCellMesh(&space, 0U, NULL);
 	faces[1].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
 	faces[0].kind = SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
 	faces[0].vertex_count = 0U;
 	valid = valid && !ValidateCellMesh(&space, 0U) &&
-		!AuditSourceCellMesh(&space, 0U);
+		!AuditSourceCellMesh(&space, 0U, NULL);
 	faces[0].kind = SG_CONFIGURATION_FACE_FACET;
 	faces[0].vertex_count = 3U;
 	faces[1] = faces[0];
@@ -1394,7 +1531,7 @@ int SG_ConfigurationSemanticsTestMixedConstraintMesh(void)
 	valid = valid && CanonicalFacesMatch(&space, &cell, vertices, 3U) &&
 		!CanonicalCellMeshValid(&space, &cell, vertices, 3U);
 	valid = valid && !ValidateCellMesh(&space, 0U) &&
-		!AuditSourceCellMesh(&space, 0U);
+		!AuditSourceCellMesh(&space, 0U, NULL);
 	return valid;
 }
 #endif
@@ -2460,6 +2597,7 @@ typedef struct semantic_audit_constraints_s
 	semantic_audit_constraint_t *items;
 	uint32_t count;
 	uint32_t capacity;
+	semantic_audit_allocations_t *allocations;
 } semantic_audit_constraints_t;
 
 typedef struct semantic_audit_s
@@ -2468,6 +2606,7 @@ typedef struct semantic_audit_s
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	sg_configuration_semantics_audit_result_t *result;
+	semantic_audit_allocations_t *allocations;
 	uint8_t *seen_regions;
 	uint32_t cell;
 	float offsets[3];
@@ -2476,10 +2615,12 @@ typedef struct semantic_audit_s
 	uint32_t support_decision_count;
 	uint32_t support_decision_capacity;
 	uint32_t expected_region;
+	int solver_failure;
 } semantic_audit_t;
 
 static int AuditSourceCellMesh(
-	const sg_configuration_space_t *configuration, uint32_t cell_index);
+	const sg_configuration_space_t *configuration, uint32_t cell_index,
+	semantic_audit_allocations_t *allocations);
 
 static int AuditLeafAtPoint(const sg_bsp_world_t *world,
 	const float point[3], uint32_t *leaf_out)
@@ -2508,7 +2649,8 @@ static int AuditLeafAtPoint(const sg_bsp_world_t *world,
 
 static int AuditValidateSource(
 	const sg_host_collision_authority_t *authority,
-	const sg_configuration_space_t *configuration, uint32_t *source_out)
+	const sg_configuration_space_t *configuration, uint32_t *source_out,
+	semantic_audit_allocations_t *allocations)
 {
 	const sg_bsp_world_t *world = authority->world;
 	uint32_t cell_index;
@@ -2687,8 +2829,10 @@ static int AuditValidateSource(
 		}
 		if (CellUsesQ8Bounds(configuration, cell))
 		{
-			if (CellQ8Bounds(configuration, cell, mins, maxs) != 1)
-				return 0;
+			int bounds = AuditCellQ8Bounds(configuration, cell, mins, maxs,
+				allocations);
+			if (bounds != 1)
+				return allocations->out_of_memory ? -1 : (bounds < 0 ? -2 : 0);
 		}
 		else if (!facet_vertex_count)
 			for (local = 0; local < 3U; local++)
@@ -2702,8 +2846,8 @@ static int AuditValidateSource(
 				fabsf(cell->bounds.maxs.value[local] - maxs[local]) >
 					SEMANTICS_POINT_EPSILON)
 				return 0;
-		if (!AuditSourceCellMesh(configuration, cell_index))
-			return 0;
+		if (!AuditSourceCellMesh(configuration, cell_index, allocations))
+			return allocations->out_of_memory ? -1 : 0;
 	}
 	return 1;
 }
@@ -2724,7 +2868,8 @@ static int AuditAddDecision(semantic_audit_t *audit,
 			items[index].normal[2] == normal[2] &&
 			items[index].distance == distance)
 			return 1;
-	if (!Grow((void **)&audit->support_decisions,
+	if (!AuditGrow(audit->allocations,
+		(void **)&audit->support_decisions,
 		&audit->support_decision_capacity, count + 1U, UINT32_MAX,
 		sizeof(*items)))
 		return 0;
@@ -2758,8 +2903,10 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 	audit->support_decisions = NULL;
 	audit->support_decision_count = 0;
 	audit->support_decision_capacity = 0;
-	brush_marks = calloc(world->brush_count ? world->brush_count : 1U, 1);
-	if (!brush_marks || !AuditReachableBrushes(world, 0, brush_marks))
+	brush_marks = AuditCalloc(audit->allocations,
+		world->brush_count ? world->brush_count : 1U, 1);
+	if (!brush_marks || !AuditReachableBrushes(world, 0, brush_marks,
+		audit->allocations))
 		goto failure;
 	for (brush = 0; brush < world->brush_count; brush++)
 	{
@@ -2825,7 +2972,8 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 							SEMANTICS_GROUND_PROBE,
 						SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_END,
 						side_index, brush) || leave_count == UINT32_MAX ||
-					!Grow((void **)&leaves, &leave_capacity, leave_count + 1U,
+					!AuditGrow(audit->allocations, (void **)&leaves,
+						&leave_capacity, leave_count + 1U,
 						UINT32_MAX, sizeof(*leaves)))
 					goto failure;
 				memset(&leaves[leave_count], 0, sizeof(*leaves));
@@ -2847,7 +2995,8 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 					expanded + SEMANTICS_TRACE_EPSILON,
 					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_ENTER_ZERO,
 					side_index, brush) ||
-				!Grow((void **)&entries, &entry_capacity, entry_count + 1U,
+				!AuditGrow(audit->allocations, (void **)&entries,
+					&entry_capacity, entry_count + 1U,
 					UINT32_MAX, sizeof(*entries)))
 				goto failure;
 			memset(&entries[entry_count], 0, sizeof(*entries));
@@ -2922,7 +3071,8 @@ static int AuditAppendSource(semantic_audit_constraints_t *constraints,
 		next = constraints->capacity ? constraints->capacity * 2U : 32U;
 		if (next < constraints->capacity)
 			return 0;
-		grown = realloc(constraints->items, (size_t)next * sizeof(*grown));
+		grown = AuditRealloc(constraints->allocations, constraints->items,
+			(size_t)next * sizeof(*grown));
 		if (!grown)
 			return 0;
 		constraints->items = grown;
@@ -2951,9 +3101,10 @@ static int AuditCopy(const semantic_audit_constraints_t *source,
 	semantic_audit_constraints_t *destination)
 {
 	memset(destination, 0, sizeof(*destination));
+	destination->allocations = source->allocations;
 	if (!source->count)
 		return 1;
-	destination->items = malloc((size_t)source->count *
+	destination->items = AuditMalloc(source->allocations, (size_t)source->count *
 		sizeof(*destination->items));
 	if (!destination->items)
 		return 0;
@@ -2974,8 +3125,9 @@ static int AuditInterior(semantic_audit_t *audit,
 	int positive = 0;
 	int answer;
 
-	clearance = malloc(constraints->count);
-	halfspaces = malloc((size_t)constraints->count * sizeof(*halfspaces));
+	clearance = AuditMalloc(audit->allocations, constraints->count);
+	halfspaces = AuditMalloc(audit->allocations,
+		(size_t)constraints->count * sizeof(*halfspaces));
 	if (!clearance || !halfspaces)
 	{
 		free(clearance);
@@ -3061,7 +3213,8 @@ static int AuditIntersection(
 }
 
 static int AuditSourceCellMesh(
-	const sg_configuration_space_t *configuration, uint32_t cell_index)
+	const sg_configuration_space_t *configuration, uint32_t cell_index,
+	semantic_audit_allocations_t *allocations)
 {
 	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
 	sg_rune_vec3_t *vertices = NULL;
@@ -3113,8 +3266,9 @@ static int AuditSourceCellMesh(
 						break;
 				if (seen != count)
 					continue;
-				if (count == UINT32_MAX || !Grow((void **)&vertices, &capacity,
-					count + 1U, UINT32_MAX, sizeof(*vertices)))
+				if (count == UINT32_MAX || !AuditGrow(allocations,
+					(void **)&vertices, &capacity, count + 1U, UINT32_MAX,
+					sizeof(*vertices)))
 					goto done;
 				Copy3(vertices[count++].value, point);
 			}
@@ -3177,7 +3331,8 @@ static int AuditConstraintBounds(semantic_audit_t *audit,
 
 	if (!constraints->count)
 		return 0;
-	halfspaces = malloc((size_t)constraints->count * sizeof(*halfspaces));
+	halfspaces = AuditMalloc(audit->allocations,
+		(size_t)constraints->count * sizeof(*halfspaces));
 	if (!halfspaces)
 		return -1;
 	for (index = 0; index < constraints->count; index++)
@@ -3198,6 +3353,8 @@ static int AuditConstraintBounds(semantic_audit_t *audit,
 				stats.maximum_binary_shift;
 		if (result <= 0)
 		{
+			if (result < 0)
+				audit->solver_failure = 1;
 			free(halfspaces);
 			return result;
 		}
@@ -3245,7 +3402,8 @@ static int AuditMesh(semantic_audit_t *audit,
 					sg_rune_vec3_t *grown;
 					if (next < vertex_capacity)
 						goto done;
-					grown = realloc(vertices, (size_t)next * sizeof(*grown));
+					grown = AuditRealloc(audit->allocations, vertices,
+						(size_t)next * sizeof(*grown));
 					if (!grown)
 						goto done;
 					vertices = grown;
@@ -3253,7 +3411,7 @@ static int AuditMesh(semantic_audit_t *audit,
 				}
 				Copy3(vertices[vertex_count++].value, point);
 			}
-	active = calloc(constraints->count, 1);
+	active = AuditCalloc(audit->allocations, constraints->count, 1);
 	if (!active)
 		goto done;
 	for (constraint = 0; constraint < constraints->count; constraint++)
@@ -3495,7 +3653,9 @@ static int AuditTerminal(semantic_audit_t *audit,
 	if (!AuditMesh(audit, audit->semantics, &audit->semantics->regions[match],
 		constraints))
 	{
-		audit->result->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
+		audit->result->code = audit->solver_failure ?
+			SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER :
+			SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
 		audit->result->record = match;
 		return 0;
 	}
@@ -3695,13 +3855,15 @@ static int AuditOffsets(const sg_host_collision_authority_t *authority,
 static int AuditBoundaries(const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *result)
+	sg_configuration_semantics_audit_result_t *result,
+	semantic_audit_allocations_t *allocations)
 {
 	const sg_bsp_world_t *world = authority->world;
 	uint8_t *seen;
 	uint32_t cell, expected_record = 0;
 
-	seen = calloc(semantics->boundary_count ? semantics->boundary_count : 1U, 1);
+	seen = AuditCalloc(allocations,
+		semantics->boundary_count ? semantics->boundary_count : 1U, 1);
 	if (!seen)
 	{
 		result->code = SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER;
@@ -3848,14 +4010,16 @@ boundary_source_failure:
 }
 
 static int AuditReachableBrushes(const sg_bsp_world_t *world,
-	uint32_t model, uint8_t *brush_marks)
+	uint32_t model, uint8_t *brush_marks,
+	semantic_audit_allocations_t *allocations)
 {
 	int32_t *pending = NULL;
 	uint32_t pending_count = 0, pending_capacity = 0;
-	uint8_t *visited = calloc(world->node_count ? world->node_count : 1U, 1);
+	uint8_t *visited = AuditCalloc(allocations,
+		world->node_count ? world->node_count : 1U, 1);
 	int result = 0;
 
-	if (!visited || !Grow((void **)&pending, &pending_capacity, 1U,
+	if (!visited || !AuditGrow(allocations, (void **)&pending, &pending_capacity, 1U,
 		UINT32_MAX, sizeof(*pending)))
 		goto done;
 	pending[pending_count++] = world->models[model].headnode;
@@ -3893,7 +4057,8 @@ static int AuditReachableBrushes(const sg_bsp_world_t *world,
 		if (visited[child])
 			continue;
 		visited[child] = 1;
-		if (!Grow((void **)&pending, &pending_capacity, pending_count + 2U,
+		if (!AuditGrow(allocations, (void **)&pending, &pending_capacity,
+			pending_count + 2U,
 			UINT32_MAX, sizeof(*pending)))
 			goto done;
 		pending[pending_count++] = world->nodes[child].children[0];
@@ -3909,7 +4074,8 @@ done:
 
 static int AuditHookVertices(const sg_bsp_world_t *world,
 	const sg_bsp_brush_t *brush, uint32_t target,
-	sg_rune_vec3_t **vertices_out, uint32_t *count_out)
+	sg_rune_vec3_t **vertices_out, uint32_t *count_out,
+	semantic_audit_allocations_t *allocations)
 {
 	semantic_audit_constraints_t constraints = { 0 };
 	sg_rune_vec3_t *vertices = NULL;
@@ -3918,6 +4084,7 @@ static int AuditHookVertices(const sg_bsp_world_t *world,
 
 	*vertices_out = NULL;
 	*count_out = 0;
+	constraints.allocations = allocations;
 	for (side = 0; side < brush->side_count; side++)
 	{
 		uint32_t side_index = brush->first_side + side;
@@ -3958,7 +4125,8 @@ static int AuditHookVertices(const sg_bsp_world_t *world,
 						break;
 				if (prior != count)
 					continue;
-				if (!Grow((void **)&vertices, &capacity, count + 1U,
+				if (!AuditGrow(allocations, (void **)&vertices, &capacity,
+					count + 1U,
 					UINT32_MAX, sizeof(*vertices)))
 					goto failure;
 				Copy3(vertices[count++].value, point);
@@ -3976,10 +4144,12 @@ failure:
 
 static int AuditHookSurfaces(const sg_host_collision_authority_t *authority,
 	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *result)
+	sg_configuration_semantics_audit_result_t *result,
+	semantic_audit_allocations_t *allocations)
 {
 	const sg_bsp_world_t *world = authority->world;
-	uint8_t *marks = calloc(world->brush_count ? world->brush_count : 1U, 1);
+	uint8_t *marks = AuditCalloc(allocations,
+		world->brush_count ? world->brush_count : 1U, 1);
 	uint32_t expected = 0, expected_vertex = 0, model;
 
 	if (!marks)
@@ -3988,7 +4158,7 @@ static int AuditHookSurfaces(const sg_host_collision_authority_t *authority,
 	{
 		uint32_t brush;
 		memset(marks, 0, world->brush_count);
-		if (!AuditReachableBrushes(world, model, marks))
+		if (!AuditReachableBrushes(world, model, marks, allocations))
 			goto solver_failure;
 		for (brush = 0; brush < world->brush_count; brush++)
 		{
@@ -4014,7 +4184,7 @@ static int AuditHookSurfaces(const sg_host_collision_authority_t *authority,
 				const sg_configuration_hook_surface_t *actual;
 
 				if (!AuditHookVertices(world, brush_record, side, &vertices,
-					&vertex_count))
+					&vertex_count, allocations))
 					goto solver_failure;
 				if (!vertex_count)
 				{
@@ -4136,10 +4306,15 @@ int SG_ConfigurationSemanticsAudit(
 	sg_configuration_semantics_audit_result_t *result_out)
 {
 	semantic_audit_t audit;
+	semantic_audit_allocations_t allocations = { 0 };
 	uint32_t region, cell, source = 0;
+	int validation;
 
 	if (result_out)
 		memset(result_out, 0, sizeof(*result_out));
+#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
+	audit_allocation_count = 0U;
+#endif
 	if (!authority || !authority->world || !configuration || !semantics ||
 		!result_out || (semantics->region_count && !semantics->regions) ||
 		(semantics->face_count && !semantics->faces) ||
@@ -4153,10 +4328,21 @@ int SG_ConfigurationSemanticsAudit(
 		return 0;
 	}
 	if (!IdentityEqual(&authority->identity, &semantics->identity) ||
-		!IdentityEqual(&configuration->identity, &semantics->identity) ||
-		!AuditValidateSource(authority, configuration, &source))
+		!IdentityEqual(&configuration->identity, &semantics->identity))
 	{
 		result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_SOURCE_MISMATCH;
+		result_out->record = source;
+		return 0;
+	}
+	validation = AuditValidateSource(authority, configuration, &source,
+		&allocations);
+	if (validation <= 0)
+	{
+		if (allocations.out_of_memory)
+			return AuditFinish(&allocations, result_out, 0);
+		result_out->code = validation < 0 ?
+			SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER :
+			SG_CONFIGURATION_SEMANTICS_AUDIT_SOURCE_MISMATCH;
 		result_out->record = source;
 		return 0;
 	}
@@ -4165,13 +4351,14 @@ int SG_ConfigurationSemanticsAudit(
 	audit.configuration = configuration;
 	audit.semantics = semantics;
 	audit.result = result_out;
-	audit.seen_regions = calloc(semantics->region_count ?
+	audit.allocations = &allocations;
+	audit.seen_regions = AuditCalloc(&allocations, semantics->region_count ?
 		semantics->region_count : 1U, 1);
 	if (!audit.seen_regions)
 	{
 		free(audit.support_decisions);
 		result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER;
-		return 0;
+		return AuditFinish(&allocations, result_out, 0);
 	}
 	for (cell = 0; cell < configuration->cell_count; cell++)
 	{
@@ -4179,6 +4366,7 @@ int SG_ConfigurationSemanticsAudit(
 		const sg_configuration_cell_t *owner = &configuration->cells[cell];
 		uint32_t local;
 
+		constraints.allocations = &allocations;
 		audit.cell = cell;
 		if (!AuditBuildSupportDecisions(&audit, owner->stance, cell) ||
 			!AuditOffsets(authority, owner->stance, audit.offsets))
@@ -4205,7 +4393,7 @@ int SG_ConfigurationSemanticsAudit(
 			free(constraints.items);
 			free(audit.seen_regions);
 			free(audit.support_decisions);
-			return 0;
+			return AuditFinish(&allocations, result_out, 0);
 		}
 		free(constraints.items);
 	}
@@ -4216,7 +4404,7 @@ int SG_ConfigurationSemanticsAudit(
 			free(audit.support_decisions);
 			result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_REGION;
 			result_out->record = region;
-			return 0;
+			return AuditFinish(&allocations, result_out, 0);
 		}
 	if (audit.expected_region != semantics->region_count)
 	{
@@ -4224,7 +4412,7 @@ int SG_ConfigurationSemanticsAudit(
 		free(audit.support_decisions);
 		result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_REGION;
 		result_out->record = audit.expected_region;
-		return 0;
+		return AuditFinish(&allocations, result_out, 0);
 	}
 	if ((semantics->region_count ?
 		semantics->regions[semantics->region_count - 1U].first_face +
@@ -4243,7 +4431,7 @@ int SG_ConfigurationSemanticsAudit(
 		free(audit.support_decisions);
 		result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
 		result_out->record = semantics->region_count;
-		return 0;
+		return AuditFinish(&allocations, result_out, 0);
 	}
 	free(audit.seen_regions);
 	free(audit.support_decisions);
@@ -4261,7 +4449,7 @@ int SG_ConfigurationSemanticsAudit(
 		{
 			result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
 			result_out->record = region;
-			return 0;
+			return AuditFinish(&allocations, result_out, 0);
 		}
 		owner = &configuration->cells[record->cell];
 		if (record->first_face > semantics->face_count ||
@@ -4269,7 +4457,7 @@ int SG_ConfigurationSemanticsAudit(
 		{
 			result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
 			result_out->record = region;
-			return 0;
+			return AuditFinish(&allocations, result_out, 0);
 		}
 		if (record->water_type & SG_HOST_CONTENTS_WATER)
 			expected_flags |= SG_CONFIGURATION_SEMANTIC_REGION_WATER;
@@ -4284,7 +4472,7 @@ int SG_ConfigurationSemanticsAudit(
 		{
 			result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
 			result_out->record = region;
-			return 0;
+			return AuditFinish(&allocations, result_out, 0);
 		}
 		expected_flags |= pose.supported ?
 			SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED :
@@ -4323,28 +4511,29 @@ int SG_ConfigurationSemanticsAudit(
 		{
 			result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT;
 			result_out->record = region;
-			return 0;
+			return AuditFinish(&allocations, result_out, 0);
 		}
 	}
-	if (!AuditBoundaries(authority, configuration, semantics, result_out))
-		return 0;
-	if (!AuditHookSurfaces(authority, semantics, result_out))
-		return 0;
+	if (!AuditBoundaries(authority, configuration, semantics, result_out,
+		&allocations))
+		return AuditFinish(&allocations, result_out, 0);
+	if (!AuditHookSurfaces(authority, semantics, result_out, &allocations))
+		return AuditFinish(&allocations, result_out, 0);
 	result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_OK;
-	return 1;
+	return AuditFinish(&allocations, result_out, 1);
 
 audit_source_failure:
 	free(audit.seen_regions);
 	free(audit.support_decisions);
 	result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_SOURCE_MISMATCH;
 	result_out->record = cell;
-	return 0;
+	return AuditFinish(&allocations, result_out, 0);
 audit_solver_failure:
 	free(audit.seen_regions);
 	free(audit.support_decisions);
 	result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER;
 	result_out->record = cell;
-	return 0;
+	return AuditFinish(&allocations, result_out, 0);
 }
 
 void SG_ConfigurationSemanticsDestroy(sg_configuration_semantics_t *semantics)
@@ -4395,6 +4584,7 @@ const char *SG_ConfigurationSemanticsAuditCodeString(
 	case SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_HOOK_SURFACE: return "invented hook surface";
 	case SG_CONFIGURATION_SEMANTICS_AUDIT_HOOK_SURFACE_DISAGREEMENT: return "hook surface disagreement";
 	case SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER: return "solver failure";
+	case SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY: return "out of memory";
 	default: return "unknown";
 	}
 }

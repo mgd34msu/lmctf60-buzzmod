@@ -194,7 +194,8 @@ typedef enum sg_configuration_semantics_audit_code_e
 	SG_CONFIGURATION_SEMANTICS_AUDIT_OMITTED_HOOK_SURFACE,
 	SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_HOOK_SURFACE,
 	SG_CONFIGURATION_SEMANTICS_AUDIT_HOOK_SURFACE_DISAGREEMENT,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER
+	SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER,
+	SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY
 } sg_configuration_semantics_audit_code_t;
 
 typedef struct sg_configuration_semantics_audit_result_s
@@ -228,6 +229,8 @@ const char *SG_ConfigurationSemanticsAuditCodeString(
 
 #if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
 int SG_ConfigurationSemanticsTestMixedConstraintMesh(void);
+void SG_ConfigurationSemanticsTestAuditAllocationFailAt(uint64_t allocation);
+uint64_t SG_ConfigurationSemanticsTestAuditAllocationCount(void);
 #endif
 
 #endif
