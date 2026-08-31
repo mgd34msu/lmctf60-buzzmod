@@ -6,7 +6,7 @@
 
 #include "sg_rune_compact_static.h"
 
-#define SG_RUNE_COMPACT_WIRE_VERSION UINT16_C(1)
+#define SG_RUNE_COMPACT_WIRE_VERSION UINT16_C(2)
 
 typedef enum sg_rune_compact_wire_section_e
 {

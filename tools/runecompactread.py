@@ -19,8 +19,13 @@ import sys
 
 
 MAGIC = b"SGRCW001"
-WIRE_VERSION = MODEL_VERSION = ANALYTIC_VERSION = 1
+WIRE_VERSION = MODEL_VERSION = 2
+ANALYTIC_VERSION = 1
 MODEL_SCHEMA_TAG = 0x4D434E52
+FACET_POLYGON = 0
+FACET_CONSTRAINT_ONLY = 1
+FACET_KIND_COUNT = 2
+INDEX_NONE = 0xFFFFFFFF
 ALIGNMENT = 8
 HEADER_FIXED_BYTES = 48
 DESCRIPTOR_BYTES = 24
@@ -30,7 +35,7 @@ CHECKSUM_OFFSET = 24
 SECTION_SPECS = (
     ("identity", 252, 1),
     ("cells", 80, 1_048_576),
-    ("facets", 56, 4_194_304),
+    ("facets", 60, 4_194_304),
     ("incidences", 20, 8_388_608),
     ("cell_incidences", 4, 8_388_608),
     ("vertices", 12, 16_777_216),
@@ -297,6 +302,16 @@ def _validate_records(data: memoryview, sections: tuple[Section, ...]) -> None:
             _reject("invalid-span")
         if not _ref(_u32(data, p + 52), counts[6], True):
             _reject("invalid-reference")
+        kind = _u32(data, p + 56)
+        vertex_count = _u32(data, p + 40)
+        incidence_count = _u32(data, p + 48)
+        portal = _u32(data, p + 52)
+        if kind >= FACET_KIND_COUNT:
+            _reject("invalid-format")
+        if (kind == FACET_POLYGON and vertex_count < 3) or (
+                kind == FACET_CONSTRAINT_ONLY and
+                (vertex_count != 0 or incidence_count != 1 or portal != INDEX_NONE)):
+            _reject("invalid-format")
     for p in records(3):
         if not (_ref(_u32(data, p), counts[1]) and _ref(_u32(data, p + 4), counts[2])):
             _reject("invalid-reference")

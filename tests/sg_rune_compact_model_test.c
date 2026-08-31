@@ -17,9 +17,9 @@ static int failures;
 typedef struct compact_fixture_s
 {
 	sg_rune_compact_cell_t cells[2];
-	sg_rune_compact_facet_t facets[1];
-	sg_rune_compact_incidence_t incidences[2];
-	sg_rune_compact_incidence_index_t cell_incidences[2];
+	sg_rune_compact_facet_t facets[3];
+	sg_rune_compact_incidence_t incidences[4];
+	sg_rune_compact_incidence_index_t cell_incidences[4];
 	sg_rune_q8_vec3_t vertices[5];
 	sg_rune_compact_portal_t portals[1];
 	sg_rune_movement_field_attachment_t movement_fields[2];
@@ -113,6 +113,7 @@ static void InitFixture(compact_fixture_t *fixture)
 		(sg_rune_compact_vertex_span_t){ 0U, 4U };
 	fixture->facets[0].incidences =
 		(sg_rune_compact_incidence_span_t){ 0U, 2U };
+	fixture->facets[0].kind = SG_RUNE_COMPACT_FACET_POLYGON;
 
 	fixture->incidences[0].cell.value = 0U;
 	fixture->incidences[0].facet.value = 0U;
@@ -335,11 +336,66 @@ static void InitFixture(compact_fixture_t *fixture)
 	model->static_data = &fixture->static_data;
 }
 
+static void RebuildCellIncidences(compact_fixture_t *fixture)
+{
+	uint32_t cell;
+	uint32_t cursor = 0U;
+
+	for (cell = 0U; cell < fixture->model.cell_count; cell++) {
+		uint32_t incidence;
+		uint32_t ordinal = 0U;
+
+		fixture->cells[cell].incidences.first = cursor;
+		for (incidence = 0U; incidence < fixture->model.incidence_count;
+			incidence++) {
+			if (fixture->incidences[incidence].cell.value != cell)
+				continue;
+			fixture->cell_incidences[cursor++].value = incidence;
+			fixture->incidences[incidence].cell_ordinal = ordinal++;
+		}
+		fixture->cells[cell].incidences.count = ordinal;
+		fixture->weapon_regions[cell].boundary_incidences.first =
+			fixture->cells[cell].incidences.first;
+	}
+	fixture->model.cell_incidence_count = cursor;
+}
+
+static void AddConstraintFacet(compact_fixture_t *fixture, uint32_t cell)
+{
+	const uint32_t facet_index = fixture->model.facet_count;
+	const uint32_t incidence_index = fixture->model.incidence_count;
+	sg_rune_compact_facet_t *facet = &fixture->facets[facet_index];
+	sg_rune_compact_incidence_t *incidence =
+		&fixture->incidences[incidence_index];
+
+	*facet = fixture->facets[0];
+	facet->vertices = (sg_rune_compact_vertex_span_t){
+		fixture->model.vertex_count, 0U
+	};
+	facet->incidences = (sg_rune_compact_incidence_span_t){
+		incidence_index, 1U
+	};
+	facet->portal.value = SG_RUNE_COMPACT_INDEX_NONE;
+	facet->kind = SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY;
+
+	*incidence = fixture->incidences[cell];
+	incidence->cell.value = cell;
+	incidence->facet.value = facet_index;
+
+	fixture->model.facet_count++;
+	fixture->model.incidence_count++;
+	RebuildCellIncidences(fixture);
+}
+
 static void CheckValid(const sg_rune_compact_model_t *model)
 {
 	sg_rune_compact_error_t error;
+	const int valid = SG_RuneCompactModelValidate(model, &error);
 
-	CHECK(SG_RuneCompactModelValidate(model, &error));
+	if (!valid)
+		fprintf(stderr, "unexpected model error: code=%d domain=%d record=%u\n",
+			(int)error.code, (int)error.domain, error.record);
+	CHECK(valid);
 	CHECK(error.code == SG_RUNE_COMPACT_ERROR_NONE);
 }
 
@@ -499,6 +555,77 @@ static void TestFacetPolygonGeometry(void)
 	fixture.model.vertex_count = 5U;
 	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
 	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY);
+}
+
+static void TestConstraintOnlyFacets(void)
+{
+	compact_fixture_t fixture;
+	sg_rune_compact_error_t error;
+
+	InitFixture(&fixture);
+	AddConstraintFacet(&fixture, 0U);
+	CheckValid(&fixture.model);
+
+	InitFixture(&fixture);
+	fixture.facets[0].kind = SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY;
+	fixture.facets[0].vertices.count = 0U;
+	fixture.facets[0].incidences.count = 1U;
+	fixture.facets[0].portal.value = SG_RUNE_COMPACT_INDEX_NONE;
+	fixture.facets[1] = fixture.facets[0];
+	fixture.facets[1].incidences.first = 1U;
+	fixture.incidences[1].facet.value = 1U;
+	fixture.model.facet_count = 2U;
+	fixture.model.vertex_count = 0U;
+	fixture.model.portal_count = 0U;
+	fixture.movement_fields[0].boundary_portal.value =
+		SG_RUNE_COMPACT_INDEX_NONE;
+	RebuildCellIncidences(&fixture);
+	CheckValid(&fixture.model);
+
+	InitFixture(&fixture);
+	fixture.facets[0].kind = SG_RUNE_COMPACT_FACET_KIND_COUNT;
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY);
+
+	InitFixture(&fixture);
+	AddConstraintFacet(&fixture, 0U);
+	fixture.facets[1].vertices.count = 1U;
+	fixture.model.vertex_count++;
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY);
+
+	InitFixture(&fixture);
+	AddConstraintFacet(&fixture, 0U);
+	fixture.facets[1].incidences.count = 2U;
+	fixture.incidences[3] = fixture.incidences[1];
+	fixture.incidences[3].facet.value = 1U;
+	fixture.model.incidence_count++;
+	RebuildCellIncidences(&fixture);
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_TOPOLOGY);
+
+	InitFixture(&fixture);
+	AddConstraintFacet(&fixture, 0U);
+	fixture.facets[1].portal.value = 0U;
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_TOPOLOGY);
+}
+
+static void TestConstraintOnlyCanonicalOrder(void)
+{
+	compact_fixture_t fixture;
+	sg_rune_compact_error_t error;
+
+	InitFixture(&fixture);
+	AddConstraintFacet(&fixture, 0U);
+	AddConstraintFacet(&fixture, 1U);
+	CheckValid(&fixture.model);
+
+	InitFixture(&fixture);
+	AddConstraintFacet(&fixture, 1U);
+	AddConstraintFacet(&fixture, 0U);
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER);
 }
 
 static void TestSharedCellsAndAttachments(void)
@@ -757,6 +884,8 @@ int main(void)
 	TestRequiredCoverage();
 	TestExpectedIdentityBinding();
 	TestFacetPolygonGeometry();
+	TestConstraintOnlyFacets();
+	TestConstraintOnlyCanonicalOrder();
 	if (failures != 0) {
 		fprintf(stderr, "%d compact RUNE model checks failed\n", failures);
 		return 1;

@@ -481,6 +481,26 @@ static int SourceCompare(const sg_rune_compact_source_t *left,
 	return 0;
 }
 
+static int FacetCompare(const sg_rune_compact_model_t *model,
+	const sg_rune_compact_facet_t *left,
+	const sg_rune_compact_facet_t *right)
+{
+	int comparison = SourceCompare(&left->source, &right->source);
+
+	if (comparison == 0)
+		comparison = PlaneCompare(&left->plane, &right->plane);
+	if (comparison == 0)
+		comparison = CompareU32(left->vertices.first, right->vertices.first);
+	if (comparison == 0)
+		comparison = CompareU32((uint32_t)left->kind, (uint32_t)right->kind);
+	if (comparison == 0 &&
+		left->kind == SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY)
+		comparison = CompareU32(
+			model->incidences[left->incidences.first].cell.value,
+			model->incidences[right->incidences.first].cell.value);
+	return comparison;
+}
+
 static int PortalTouchesCell(const sg_rune_compact_model_t *model,
 	uint32_t portal_index, uint32_t cell_index)
 {
@@ -508,7 +528,7 @@ static int ValidateCounts(const sg_rune_compact_model_t *model,
 	}
 	if (model->cell_count == 0U || model->facet_count == 0U ||
 		model->incidence_count == 0U || model->cell_incidence_count == 0U ||
-		model->vertex_count == 0U || model->movement_field_count == 0U ||
+		model->movement_field_count == 0U ||
 		model->weapon_region_count == 0U || model->weapon_profile_count == 0U ||
 		model->weapon_kernel_count == 0U ||
 		model->cell_count > SG_RUNE_COMPACT_MAX_CELLS ||
@@ -691,7 +711,6 @@ static int ValidateFacetsAndIncidences(const sg_rune_compact_model_t *model,
 
 	for (facet_index = 0U; facet_index < model->facet_count; facet_index++) {
 		const sg_rune_compact_facet_t *facet = &model->facets[facet_index];
-		facet_polygon_result_t polygon_result;
 		uint32_t incidence_index;
 
 		if (!SourceValid(&facet->source, facet_index,
@@ -700,23 +719,8 @@ static int ValidateFacetsAndIncidences(const sg_rune_compact_model_t *model,
 				SG_RUNE_COMPACT_RECORD_FACET, facet_index);
 			return 0;
 		}
-		if (facet_index != 0U) {
-			const sg_rune_compact_facet_t *previous =
-				&model->facets[facet_index - 1U];
-			int comparison = SourceCompare(&previous->source, &facet->source);
-
-			if (comparison == 0)
-				comparison = PlaneCompare(&previous->plane, &facet->plane);
-			if (comparison == 0)
-				comparison = CompareU32(previous->vertices.first,
-					facet->vertices.first);
-			if (comparison >= 0) {
-				SetError(error, SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER,
-					SG_RUNE_COMPACT_RECORD_FACET, facet_index);
-				return 0;
-			}
-		}
-		if (!PlaneValid(&facet->plane) || facet->vertices.count < 3U ||
+		if (facet->kind < 0 || facet->kind >= SG_RUNE_COMPACT_FACET_KIND_COUNT ||
+			!PlaneValid(&facet->plane) ||
 			facet->vertices.first != vertex_cursor ||
 			!SpanWithin(facet->vertices.first, facet->vertices.count,
 				model->vertex_count)) {
@@ -724,17 +728,33 @@ static int ValidateFacetsAndIncidences(const sg_rune_compact_model_t *model,
 				SG_RUNE_COMPACT_RECORD_FACET, facet_index);
 			return 0;
 		}
-		polygon_result = ValidateFacetPolygon(model, facet);
-		if (polygon_result != FACET_POLYGON_VALID) {
-			SetError(error,
-				polygon_result == FACET_POLYGON_NONCANONICAL ?
-					SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER :
-					SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY,
+		if (facet->kind == SG_RUNE_COMPACT_FACET_POLYGON) {
+			facet_polygon_result_t polygon_result;
+
+			if (facet->vertices.count < 3U) {
+				SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY,
+					SG_RUNE_COMPACT_RECORD_FACET, facet_index);
+				return 0;
+			}
+			polygon_result = ValidateFacetPolygon(model, facet);
+			if (polygon_result != FACET_POLYGON_VALID) {
+				SetError(error,
+					polygon_result == FACET_POLYGON_NONCANONICAL ?
+						SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER :
+						SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY,
+					SG_RUNE_COMPACT_RECORD_FACET, facet_index);
+				return 0;
+			}
+		} else if (facet->vertices.count != 0U) {
+			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_GEOMETRY,
 				SG_RUNE_COMPACT_RECORD_FACET, facet_index);
 			return 0;
 		}
 		if (facet->incidences.first != incidence_cursor ||
-			(facet->incidences.count != 1U && facet->incidences.count != 2U) ||
+			(facet->kind == SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY ?
+				facet->incidences.count != 1U :
+				(facet->incidences.count != 1U &&
+				 facet->incidences.count != 2U)) ||
 			!SpanWithin(facet->incidences.first, facet->incidences.count,
 				model->incidence_count)) {
 			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_TOPOLOGY,
@@ -776,7 +796,8 @@ static int ValidateFacetsAndIncidences(const sg_rune_compact_model_t *model,
 				}
 			}
 		}
-		if (facet->incidences.count == 1U) {
+		if (facet->kind == SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY ||
+			facet->incidences.count == 1U) {
 			if (facet->portal.value != SG_RUNE_COMPACT_INDEX_NONE) {
 				SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_TOPOLOGY,
 					SG_RUNE_COMPACT_RECORD_FACET, facet_index);
@@ -797,6 +818,12 @@ static int ValidateFacetsAndIncidences(const sg_rune_compact_model_t *model,
 					SG_RUNE_COMPACT_RECORD_FACET, facet_index);
 				return 0;
 			}
+		}
+		if (facet_index != 0U && FacetCompare(model,
+				&model->facets[facet_index - 1U], facet) >= 0) {
+			SetError(error, SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER,
+				SG_RUNE_COMPACT_RECORD_FACET, facet_index);
+			return 0;
 		}
 		vertex_cursor += facet->vertices.count;
 		incidence_cursor += facet->incidences.count;

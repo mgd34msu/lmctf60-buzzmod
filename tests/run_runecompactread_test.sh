@@ -17,48 +17,59 @@ out = Path(sys.argv[1])
 count = 28
 header = 720
 descriptor = 24
-sizes = (252, 80, 56, 20, 4, 12, 44, 24, 20, 8, 20, 4, 20, 4,
+sizes = (252, 80, 60, 20, 4, 12, 44, 24, 20, 8, 20, 4, 20, 4,
          4, 12, 4, 12, 4, 12, 16, 16, 100, 16, 60, 4, 8, 15)
 magic = b"SGRCW001"
 production_fixture_b85 = b"""\
-Q%6!mS1>R!0RYef8~^|S;0pi%00000v>*~T000000RR91Qcgon0RR910000000000`~Uy|0RR9100000&;kGe000000RR91Pyhe`
-0ssI200000&;tMf000000ssI2H~;_u0RR9100000a0CDV000000{{R36aWAK0ssI200000s0082000001ONa41ONa40ssI200000
-&;$Sg000001poj53;+NC1ONa400000*aQFo000001^@s6EC2ui0RR91000002n7HD000002LJ#77ytkO0ssI200000I0XOz00000
-2mk;86aWAK0ssI200000XaxWO000002><{92mk;83;+NC00000kOcq$000003IG5A6aWAK8UO$Q00000@C5(>000003jhEB1ONa4
-asU7T00000_y+(0000003;+NC6aWAK2LJ#700000zzF~V000004FCWD1ONa40000000000PznG5000004gdfE1ONa42LJ#700000
-PznG5000004*&oF3;+NC0000000000a0&nb000005C8xG1ONa40000000000a0&nb000005dZ)H3;+NC0000000000a0&nb00000
-5&!@I1ONa40000000000a0&nb000006951J3;+NC0000000000a0&nb000006aWAK5C8xG0000000000a0&nb000006#xJL5C8xG
-0000000000a0&nb00000761SMWB>pF0ssI200000a0&nb000007XSbN5C8xG0RR9100000I12y(000007ytkOJOBUy0ssI200000
-NDBY}0000082|tP1ONa40ssI200000zzYBX000008UO$Q2mk;80RR9100000$O`}f000008vp<R4*&oF0RR9100000&<g+n00000
-S^xk50000000000000000000000000000000000000aO4000000RaF20s#O30s;U4000000|Nj600000F)#oC00000GB5xD00000
-GcW)E00000G%x@F000001Oos7000001p@#8000001_J;9000001Oxy800000Qbj{mL{Cys0RR910{{R31ONa41poj50RR910RR91
-AOHXWfdBvhfdBvhK>z>$fB*mhfB*mh00961fdBvhfdBvhK>z>$fB*mhfB*mhfB*mh0078B001CC004kL004kM004SK005Rm0000#
-002lt2mk;80RR9100000000000RR910ssI20{{R300000000000000000000KmY&$KmY&$KmY&$000000RR91000000RR9100000
-0RR9100000000000{{R3000000ssI20ssI20{{R300000KmY&$0000000000fB*mhKmY&$KmY&$0RR910RR910RR910RR910RR91
-0RR9100000000000{{R30RR91000000RR911ONa400000004kL00000000000000%000001ONa4000000ssI2000000000000000
-00000000000RR910RR9100000000000RR9100000000000RR91KmY&$0000000000KmY&$KmY&$00000KmY&$KmY&$KmY&$KmY&$
-00000KmY&$0{{R30000000000000000000000000000000RR91AOHXW000000{{R30000000000000000{{R30{{R3000000{{R3
-0RR91|NsC00{{R30{{R30{{R30{{R300000000000RR91000004FCWD0RR910RR910RR914FCWD4FCWD0RR910RR910ssI20ssI2
-0{{R31ONa41ONa42mk;81poj55C8xG1^@s6U;qFB2LJ#7KmY&$2mk;8fB*mh2><{9009613IG5A00IC23jhEB00aO43;+NC00;m8
-0000000000000001^@s61ONa4000000RR910RR913IG5A1ONa4000000ssI20ssI24gdfE1ONa4000000{{R30{{R35&!@I1ONa4
-000001ONa41ONa4761SM1ONa4000001poj51poj58UO$Q1ONa4000001poj51^@s69smFU1ONa4000001^@s61^@s6A^-pY1ONa4
-000002LJ#72LJ#7CIA2c1poj5000002mk;82mk;8D*ylh1poj5000002><{92><{9FaQ7m1ONa4000003IG5A3IG5AGynhq1ONa4
-000003jhEB3jhEBH~;_u1ONa40RR910000000000JOBUy1ONa40RR910RR910RR91KmY&$1ONa40RR910ssI20ssI2L;wH)1ONa4
-0RR910{{R30{{R3NB{r;1ONa40RR911ONa41ONa4OaK4?1ONa40RR911poj51poj5Pyhe`1ONa40RR911poj51^@s6Q~&?~1ONa4
-0RR911^@s61^@s6SO5S31ONa40RR912LJ#72LJ#7TmS$71poj50RR912mk;82mk;8VE_OC1poj50RR912><{92><{9W&i*H1ONa4
-0RR913IG5A3IG5AY5)KL1ONa40RR913jhEB3jhEBZU6uP1ONa4000000RR911poj5000000RR911poj50RR910ssI20{{R31ONa4
-0RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa4
-0RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa41^@s60RR910ssI2
-0{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI2
-0{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI2
-0{{R31ONa40RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa40RR910ssI20{{R31ONa4
-0RR910ssI20{{R31ONa4000000000000000000000000000000000000RR910RR910000000000000000ssI23jhEB0000000000
-000000{{R33;+NC0000000000000001ONa45C8xG0000000000000001poj55&!@I0000000000000001^@s66951J0000000000
-004kL0000$002Nh004kM005vs006*1007`X000002LJ#72LJ#7000000RR91000005C8xG5C8xG00000AOHXWAOHXWFaQ7m00000
-0RR9100000`Tzg`=mP)%00000&<6kj000001ONa4000000ssI2000000RR91000003jhEB3jhEB0000000000000005C8xG5C8xG
-00000AOHXWAOHXWFaQ7m0RR910000000000000000000000000000000RR910ssI2000000ssI20000000000000003jhEB2LJ#7
-000001ONa43jhEB000000RR910RR917ytkO7ytkO2mk;85C8xG5C8xG00000AOHXWAOHXW5C8xG2LJ#7000006951J0RR910RR91
-|NsC0U;qFB7ytkO2mk;8SO5S35C8xG00000XaE2JAOHXW5C8xG0RR910RR91000000RR91000000RRI400000000000000000000
+Q%6!mS1>R!0szng8~^|S=nDV<00000oy2^3000000ssI2Qcgon0RR910000000000`~Uy|0RR9100000
+&;kGe000000RR91Pyhe`0ssI200000&;tMf000000ssI2JOBUy0RR9100000a0CDV000000{{R36aWAK
+0ssI200000umk`A000001ONa41ONa40ssI200000*aQFo000001poj53;+NC1ONa400000-
+~<2w000001^@s6EC2ui0RR91000005Cs4L000002LJ#77ytkO0ssI200000Km`B*000002mk;86aWAK0
+ssI200000a0LJW000002><{92mk;83;+NC00000m<0d;000003IG5A6aWAK8UO$Q00000_yqs}000003
+jhEB1ONa4asU7T0000000;m8000003;+NC6aWAK2LJ#700000$O!-
+d000004FCWD1ONa40000000000SPB3D000004gdfE1ONa42LJ#700000SPB3D000004*&oF3;+NC0000
+000000cnSaj000005C8xG1ONa40000000000cnSaj000005dZ)H3;+NC0000000000cnSaj000005&!@
+I1ONa40000000000cnSaj000006951J3;+NC0000000000cnSaj000006aWAK5C8xG0000000000cnSa
+j000006#xJL5C8xG0000000000cnSaj00000761SMWB>pF0ssI200000cnSaj000007XSbN5C8xG0RR9
+100000Knnl>000007ytkOJOBUy0ssI200000PzwM60000082|tP1ONa40ssI200000$O`}f000008UO$
+Q2mk;80RR9100000&<g+n000008vp<R4*&oF0RR9100000*b4vv00000S^xk50000000000000000000
+000000000000000000aO4000000RaF20s#O30s;U4000000|Nj600000F)#oC00000GB5xD00000GcW)
+E00000G%x@F000001Oos7000001p@#8000001_J;9000001Oxy800000Qbj{mL{Cys0RR910{{R31ONa
+41poj50RR910RR91AOHXWfdBvhfdBvhK>z>$fB*mhfB*mh00961fdBvhfdBvhK>z>$fB*mhfB*mhfB*m
+h0078B001CC004kL004kM004SK005Rm0000#002lt2mk;80RR9100000000000RR910ssI20{{R30000
+0000000000000000KmY&$KmY&$KmY&$000000RR91000000RR91000000RR9100000000000{{R30000
+00ssI20ssI20{{R300000KmY&$0000000000fB*mhKmY&$KmY&$0RR910RR910RR910RR910RR910RR9
+100000000000{{R30RR91000000RR911ONa400000004kL00000000000000%000001ONa4000000ssI
+2000000000000000000000000000000000000RR910RR9100000000000RR9100000000000RR91KmY&
+$0000000000KmY&$KmY&$00000KmY&$KmY&$KmY&$KmY&$00000KmY&$0{{R30000000000000000000
+000000000000RR91AOHXW000000{{R30000000000000000{{R30{{R3000000{{R30RR91|NsC00{{R
+30{{R30{{R30{{R300000000000RR91000004FCWD0RR910RR910RR914FCWD4FCWD0RR910RR910ssI
+20ssI20{{R31ONa41ONa42mk;81poj55C8xG1^@s6U;qFB2LJ#7KmY&$2mk;8fB*mh2><{9009613IG5
+A00IC23jhEB00aO43;+NC00;m80000000000000001^@s61ONa4000000RR910RR913IG5A1ONa40000
+00ssI20ssI24gdfE1ONa4000000{{R30{{R35&!@I1ONa4000001ONa41ONa4761SM1ONa4000001poj
+51poj58UO$Q1ONa4000001poj51^@s69smFU1ONa4000001^@s61^@s6A^-
+pY1ONa4000002LJ#72LJ#7CIA2c1poj5000002mk;82mk;8D*ylh1poj5000002><{92><{9FaQ7m1ON
+a4000003IG5A3IG5AGynhq1ONa4000003jhEB3jhEBH~;_u1ONa40RR910000000000JOBUy1ONa40RR
+910RR910RR91KmY&$1ONa40RR910ssI20ssI2L;wH)1ONa40RR910{{R30{{R3NB{r;1ONa40RR911ON
+a41ONa4OaK4?1ONa40RR911poj51poj5Pyhe`1ONa40RR911poj51^@s6Q~&?~1ONa40RR911^@s61^@
+s6SO5S31ONa40RR912LJ#72LJ#7TmS$71poj50RR912mk;82mk;8VE_OC1poj50RR912><{92><{9W&i
+*H1ONa40RR913IG5A3IG5AY5)KL1ONa40RR913jhEB3jhEBZU6uP1ONa4000000RR911poj5000000RR
+911poj50RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{
+R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{
+R31ONa40RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa40RR
+910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR
+910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR
+910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ON
+a41^@s60RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40000000000000
+00000000000000000000000RR910RR910000000000000000ssI23jhEB0000000000000000{{R33;+
+NC0000000000000001ONa45C8xG0000000000000001poj55&!@I0000000000000001^@s66951J000
+0000000004kL0000$002Nh004kM005vs006*1007`X000002LJ#72LJ#7000000RR91000005C8xG5C8
+xG00000AOHXWAOHXWFaQ7m000000RR9100000`Tzg`=mP)%00000&<6kj000001ONa4000000ssI2000
+000RR91000003jhEB3jhEB0000000000000005C8xG5C8xG00000AOHXWAOHXWFaQ7m0RR9100000000
+00000000000000000000000RR910ssI2000000ssI20000000000000003jhEB2LJ#7000001ONa43jh
+EB000000RR910RR917ytkO7ytkO2mk;85C8xG5C8xG00000AOHXWAOHXW5C8xG2LJ#7000006951J0RR
+910RR91|NsC0U;qFB7ytkO2mk;8SO5S35C8xG00000XaE2JAOHXW5C8xG0RR910RR91000000RR91000
+000RRI400000000000000000000
 """
 
 def align(value):
@@ -86,9 +97,9 @@ def build(counts):
         cursor += record_bytes * records
     image = bytearray(align(cursor))
     image[:8] = magic
-    struct.pack_into("<HHI", image, 8, 1, header, count)
+    struct.pack_into("<HHI", image, 8, 2, header, count)
     p64(image, 16, len(image))
-    struct.pack_into("<H", image, 32, 1)
+    struct.pack_into("<H", image, 32, 2)
     p32(image, 36, 0x4d434e52)
     struct.pack_into("<H", image, 40, 1)
     for section, (record_bytes, records, offset) in enumerate(
@@ -116,8 +127,10 @@ def emit(name, image):
     (out / name).write_bytes(image)
 
 production = base64.b85decode(b"".join(production_fixture_b85.split()))
-if (len(production) != 3040
-        or struct.unpack_from("<I", production, 24)[0] != 0x361220b4):
+if (len(production) != 3048
+        or struct.unpack_from("<H", production, 8)[0] != 2
+        or struct.unpack_from("<H", production, 32)[0] != 2
+        or struct.unpack_from("<I", production, 24)[0] != 0x797cc49d):
     raise SystemExit("invalid embedded production fixture")
 emit("production.rune", production)
 
@@ -161,12 +174,30 @@ emit("bad.identity", bad_identity)
 source_counts = [0] * count
 source_counts[0] = 1
 source_counts[2] = 1
+source_counts[5] = 3
 source, source_offsets = build(source_counts)
 facet = source_offsets[2]
 p32(source, facet + 20, 0x3f800000)
+p32(source, facet + 40, 3)
 p32(source, facet + 52, 0xffffffff)
+p32(source, facet + 56, 0)
 checksum(source)
 emit("source.rune", source)
+
+constraint_counts = [0] * count
+constraint_counts[0] = 1
+constraint_counts[1] = 1
+constraint_counts[2] = 1
+constraint_counts[3] = 1
+constraint_counts[5] = 1
+constraint_counts[6] = 1
+constraint, constraint_offsets = build(constraint_counts)
+constraint_facet = constraint_offsets[2]
+p32(constraint, constraint_facet + 48, 1)
+p32(constraint, constraint_facet + 52, 0xffffffff)
+p32(constraint, constraint_facet + 56, 1)
+checksum(constraint)
+emit("constraint.rune", constraint)
 
 analytic_counts = [0] * count
 analytic_counts[0] = 1
@@ -258,6 +289,16 @@ mutation("bad-cell-enum.rune", weapon,
          lambda data: data.__setitem__(cell + 76, 4))
 mutation("bad-source-union.rune", source,
          lambda data: data.__setitem__(facet + 12, 1))
+mutation("bad-facet-kind.rune", source,
+         lambda data: p32(data, facet + 56, 2))
+mutation("bad-facet-polygon-vertices.rune", source,
+         lambda data: p32(data, facet + 40, 2))
+mutation("bad-facet-constraint-vertices.rune", constraint,
+         lambda data: p32(data, constraint_facet + 40, 1))
+mutation("bad-facet-constraint-incidences.rune", constraint,
+         lambda data: p32(data, constraint_facet + 48, 0))
+mutation("bad-facet-constraint-portal.rune", constraint,
+         lambda data: p32(data, constraint_facet + 52, 0))
 mutation("bad-analytic-target.rune", analytic,
          lambda data: p32(data, analytic_offsets[12] + 8, 1))
 mutation("bad-input-dimension.rune", dimension,
@@ -282,11 +323,14 @@ reject() {
 exercise() {
     reader=$1
     "$reader" "$tmp_dir/production.rune" > "$tmp_dir/production.json"
+    grep -q '"model_version":2' "$tmp_dir/production.json"
+    grep -q '"wire_version":2' "$tmp_dir/production.json"
     grep -q '"analytic_function_refs":114' "$tmp_dir/production.json"
     grep -q '"movement_fields":2' "$tmp_dir/production.json"
     grep -q '"weapon_kernels":26' "$tmp_dir/production.json"
     "$reader" "$tmp_dir/minimal.rune" > /dev/null
     "$reader" "$tmp_dir/source.rune" > /dev/null
+    "$reader" "$tmp_dir/constraint.rune" > /dev/null
     "$reader" "$tmp_dir/analytic.rune" > /dev/null
     "$reader" "$tmp_dir/dimension.rune" > /dev/null
     "$reader" "$tmp_dir/ballistic.rune" > /dev/null
@@ -308,6 +352,9 @@ exercise() {
         bad-profile-mask.rune bad-kernel-family.rune \
         bad-profile-family-link.rune bad-kernel-span.rune \
         bad-kernel-profile.rune bad-cell-enum.rune bad-source-union.rune \
+        bad-facet-kind.rune bad-facet-polygon-vertices.rune \
+        bad-facet-constraint-vertices.rune bad-facet-constraint-incidences.rune \
+        bad-facet-constraint-portal.rune \
         bad-analytic-target.rune bad-input-dimension.rune \
         bad-analytic-output.rune; do
         reject "$reader" "$image"

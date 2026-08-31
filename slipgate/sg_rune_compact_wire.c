@@ -47,7 +47,7 @@ static const uint8_t sg_wire_magic[8] = {
 static const sg_wire_spec_t sg_wire_specs[SG_RUNE_COMPACT_WIRE_SECTION_COUNT] = {
 	{ UINT32_C(252), UINT32_C(1) },
 	{ UINT32_C(80), SG_RUNE_COMPACT_MAX_CELLS },
-	{ UINT32_C(56), SG_RUNE_COMPACT_MAX_FACETS },
+	{ UINT32_C(60), SG_RUNE_COMPACT_MAX_FACETS },
 	{ UINT32_C(20), SG_RUNE_COMPACT_MAX_INCIDENCES },
 	{ UINT32_C(4), SG_RUNE_COMPACT_MAX_INCIDENCES },
 	{ UINT32_C(12), SG_RUNE_COMPACT_MAX_VERTICES },
@@ -637,6 +637,7 @@ static void sg_wire_encode_arrays(const sg_wire_source_t *source,
 		sg_wire_put_u32(p + 44, facets[i].incidences.first);
 		sg_wire_put_u32(p + 48, facets[i].incidences.count);
 		sg_wire_put_u32(p + 52, facets[i].portal.value);
+		sg_wire_put_u32(p + 56, (uint32_t)facets[i].kind);
 	}
 	for (i = 0; i < source->counts[SG_RUNE_COMPACT_WIRE_SECTION_INCIDENCES]; ++i)
 	{
@@ -947,6 +948,27 @@ static int sg_wire_validate_records(const uint8_t *image,
 			SG_COUNT(SG_RUNE_COMPACT_WIRE_SECTION_PORTALS), 1))
 			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_REFERENCE,
 				SG_RUNE_COMPACT_WIRE_SECTION_FACETS, i);
+		if (sg_wire_u32(p + 56) >=
+			(uint32_t)SG_RUNE_COMPACT_FACET_KIND_COUNT)
+			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT,
+				SG_RUNE_COMPACT_WIRE_SECTION_FACETS, i);
+		switch ((sg_rune_compact_facet_kind_t)sg_wire_u32(p + 56))
+		{
+		case SG_RUNE_COMPACT_FACET_POLYGON:
+			if (sg_wire_u32(p + 40) < UINT32_C(3))
+				SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT,
+					SG_RUNE_COMPACT_WIRE_SECTION_FACETS, i);
+			break;
+		case SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY:
+			if (sg_wire_u32(p + 40) != 0 ||
+				sg_wire_u32(p + 48) != 1 ||
+				sg_wire_u32(p + 52) != SG_RUNE_COMPACT_INDEX_NONE)
+				SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT,
+					SG_RUNE_COMPACT_WIRE_SECTION_FACETS, i);
+			break;
+		default:
+			break;
+		}
 	}
 	for (i = 0; i < SG_COUNT(SG_RUNE_COMPACT_WIRE_SECTION_INCIDENCES); ++i)
 	{
@@ -1572,6 +1594,7 @@ static void sg_wire_decode_arrays(const uint8_t *image,
 		facets[i].incidences.first = sg_wire_u32(p + 44);
 		facets[i].incidences.count = sg_wire_u32(p + 48);
 		facets[i].portal.value = sg_wire_u32(p + 52);
+		facets[i].kind = (sg_rune_compact_facet_kind_t)sg_wire_u32(p + 56);
 	}
 	for (i = 0; i < model->incidence_count; ++i)
 	{

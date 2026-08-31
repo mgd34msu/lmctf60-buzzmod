@@ -34,6 +34,9 @@
 	 (uint64_t)RUNE_COMPACT_READ_DESCRIPTOR_BYTES)
 
 #define RC_NONE UINT32_MAX
+#define RC_FACET_POLYGON UINT32_C(0)
+#define RC_FACET_CONSTRAINT_ONLY UINT32_C(1)
+#define RC_FACET_KIND_COUNT UINT32_C(2)
 #define RC_WEAPON_RESPONSE_FAMILY_COUNT UINT32_C(12)
 #define RC_WEAPON_RESPONSE_FAMILIES_ALL \
 	((UINT32_C(1) << RC_WEAPON_RESPONSE_FAMILY_COUNT) - UINT32_C(1))
@@ -72,7 +75,7 @@ static const unsigned char rc_magic[8] = {
 static const rc_spec_t rc_specs[RUNE_COMPACT_READ_SECTION_COUNT] = {
 	{ 252U, 1U, "identity" },
 	{ 80U, 1048576U, "cells" },
-	{ 56U, 4194304U, "facets" },
+	{ 60U, 4194304U, "facets" },
 	{ 20U, 8388608U, "incidences" },
 	{ 4U, 8388608U, "cell_incidences" },
 	{ 12U, 16777216U, "vertices" },
@@ -406,6 +409,10 @@ static int rc_validate_facets(const rc_context_t *context,
 	{
 		const unsigned char *record = rc_record(context,
 			RUNE_COMPACT_READ_SECTION_FACETS, index);
+		uint32_t kind;
+		uint32_t vertex_count;
+		uint32_t incidence_count;
+		uint32_t portal;
 
 		if (!rc_source(record, section->count))
 			return rc_fail(error, RUNE_COMPACT_READ_ERROR_INVALID_REFERENCE,
@@ -419,6 +426,16 @@ static int rc_validate_facets(const rc_context_t *context,
 		if (!rc_ref(rc_u32(record + 52U), context->sections[
 				RUNE_COMPACT_READ_SECTION_PORTALS].count, 1))
 			return rc_fail(error, RUNE_COMPACT_READ_ERROR_INVALID_REFERENCE,
+				RUNE_COMPACT_READ_SECTION_FACETS, index);
+		kind = rc_u32(record + 56U);
+		vertex_count = rc_u32(record + 40U);
+		incidence_count = rc_u32(record + 48U);
+		portal = rc_u32(record + 52U);
+		if ((kind == RC_FACET_POLYGON && vertex_count < 3U) ||
+			(kind == RC_FACET_CONSTRAINT_ONLY &&
+				(vertex_count != 0U || incidence_count != 1U ||
+				portal != RC_NONE)) || kind >= RC_FACET_KIND_COUNT)
+			return rc_fail(error, RUNE_COMPACT_READ_ERROR_INVALID_FORMAT,
 				RUNE_COMPACT_READ_SECTION_FACETS, index);
 	}
 	return 1;

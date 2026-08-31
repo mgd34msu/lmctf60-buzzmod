@@ -23,9 +23,9 @@ typedef struct test_fixture_s
 	sg_rune_compact_analytic_t analytic;
 	sg_rune_compact_static_t static_data;
 	sg_rune_compact_cell_t cells[2];
-	sg_rune_compact_facet_t facets[1];
-	sg_rune_compact_incidence_t incidences[2];
-	sg_rune_compact_incidence_index_t cell_incidences[2];
+	sg_rune_compact_facet_t facets[2];
+	sg_rune_compact_incidence_t incidences[3];
+	sg_rune_compact_incidence_index_t cell_incidences[3];
 	sg_rune_q8_vec3_t vertices[4];
 	sg_rune_compact_portal_t portals[1];
 	sg_rune_movement_field_attachment_t movement_fields[2];
@@ -149,6 +149,7 @@ static void init_fixture(test_fixture_t *fixture)
 	fixture->cells[1].bounds.mins.value[0] = 64;
 	fixture->cells[1].bounds.maxs.value[0] = 128;
 	fixture->cells[1].incidences.first = 1;
+	fixture->cells[1].incidences.count = 2;
 	fixture->cells[1].movement_fields.first = 1;
 	fixture->cells[1].weapon_regions.first = 1;
 
@@ -159,6 +160,7 @@ static void init_fixture(test_fixture_t *fixture)
 		(sg_rune_compact_vertex_span_t){ 0, 4 };
 	fixture->facets[0].incidences =
 		(sg_rune_compact_incidence_span_t){ 0, 2 };
+	fixture->facets[0].kind = SG_RUNE_COMPACT_FACET_POLYGON;
 	fixture->incidences[0].cell.value = 0;
 	fixture->incidences[0].facet.value = 0;
 	fixture->incidences[0].side = SG_RUNE_FACET_NEGATIVE_SIDE;
@@ -167,8 +169,23 @@ static void init_fixture(test_fixture_t *fixture)
 	fixture->incidences[1].cell.value = 1;
 	fixture->incidences[1].side = SG_RUNE_FACET_POSITIVE_SIDE;
 	fixture->incidences[1].boundary = SG_RUNE_BOUNDARY_OPEN;
+	fixture->facets[1].source = bsp_plane_source(4);
+	fixture->facets[1].plane.normal_bits[0] = float_bits(1.0f);
+	fixture->facets[1].plane.distance_bits = float_bits(8.0f);
+	fixture->facets[1].vertices =
+		(sg_rune_compact_vertex_span_t){ 4, 0 };
+	fixture->facets[1].incidences =
+		(sg_rune_compact_incidence_span_t){ 2, 1 };
+	fixture->facets[1].portal.value = SG_RUNE_COMPACT_INDEX_NONE;
+	fixture->facets[1].kind = SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY;
+	fixture->incidences[2].cell.value = 1;
+	fixture->incidences[2].facet.value = 1;
+	fixture->incidences[2].cell_ordinal = 1;
+	fixture->incidences[2].side = SG_RUNE_FACET_NEGATIVE_SIDE;
+	fixture->incidences[2].boundary = SG_RUNE_BOUNDARY_CLOSED;
 	fixture->cell_incidences[0].value = 0;
 	fixture->cell_incidences[1].value = 1;
+	fixture->cell_incidences[2].value = 2;
 
 	fixture->portals[0].source = split_source(0, 0);
 	fixture->portals[0].facet.value = 0;
@@ -203,6 +220,7 @@ static void init_fixture(test_fixture_t *fixture)
 	fixture->weapon_regions[1] = fixture->weapon_regions[0];
 	fixture->weapon_regions[1].cell.value = 1;
 	fixture->weapon_regions[1].boundary_incidences.first = 1;
+	fixture->weapon_regions[1].boundary_incidences.count = 2;
 	fixture->weapon_regions[1].kernels.first = 13;
 	for (profile = 0; profile < 12; ++profile)
 	{
@@ -390,11 +408,11 @@ static void init_fixture(test_fixture_t *fixture)
 	model->cells = fixture->cells;
 	model->cell_count = 2;
 	model->facets = fixture->facets;
-	model->facet_count = 1;
+	model->facet_count = 2;
 	model->incidences = fixture->incidences;
-	model->incidence_count = 2;
+	model->incidence_count = 3;
 	model->cell_incidences = fixture->cell_incidences;
-	model->cell_incidence_count = 2;
+	model->cell_incidence_count = 3;
 	model->vertices = fixture->vertices;
 	model->vertex_count = 4;
 	model->portals = fixture->portals;
@@ -455,8 +473,14 @@ static int test_round_trip(void)
 	size_t written;
 	sg_rune_compact_error_t model_error;
 	init_fixture(&fixture);
-	CHECK(SG_RuneCompactModelValidateBound(&fixture.model,
-		&fixture.model.identity, &model_error));
+	if (!SG_RuneCompactModelValidateBound(&fixture.model,
+		&fixture.model.identity, &model_error))
+	{
+		fprintf(stderr, "fixture model error: code=%d domain=%d record=%u\n",
+			(int)model_error.code, (int)model_error.domain,
+			model_error.record);
+		return 0;
+	}
 	CHECK(SG_RuneCompactWireMeasure(&fixture.model, &size, &error));
 	CHECK(size > 696);
 	first = malloc(size);
@@ -470,6 +494,7 @@ static int test_round_trip(void)
 	CHECK(memcmp(&info.identity, &fixture.model.identity,
 		sizeof(info.identity)) == 0);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_CELLS] == 2);
+	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_FACETS] == 2);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES] == 12);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS] == 26);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS] == 114);
@@ -483,6 +508,10 @@ static int test_round_trip(void)
 	CHECK(model->identity.producer_identity ==
 		fixture.model.identity.producer_identity);
 	CHECK(model->facets[0].source.value.bsp_plane.plane == 4);
+	CHECK(model->facets[0].kind == SG_RUNE_COMPACT_FACET_POLYGON);
+	CHECK(model->facets[1].kind == SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY);
+	CHECK(model->facets[1].vertices.count == 0);
+	CHECK(model->facets[1].portal.value == SG_RUNE_COMPACT_INDEX_NONE);
 	CHECK(model->movement_fields[0].valid_stances == SG_RUNE_STANCE_VALID_ALL);
 	CHECK(model->weapon_profiles[11].source_profile == 12);
 	CHECK(model->weapon_kernels[25].profile == 11);
@@ -567,7 +596,7 @@ static int test_hostile_images(void)
 		SG_RUNE_COMPACT_WIRE_ERROR_CHECKSUM_MISMATCH));
 
 	memcpy(copy, image, size);
-	copy[8] = 2;
+	copy[8] = 1;
 	refresh_checksum(copy, size);
 	CHECK(expect_error(copy, size,
 		SG_RUNE_COMPACT_WIRE_ERROR_UNSUPPORTED_VERSION));
@@ -599,6 +628,44 @@ static int test_hostile_images(void)
 	refresh_checksum(copy, size);
 	CHECK(expect_error(copy, size,
 		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_SECTION));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy, SG_RUNE_COMPACT_WIRE_SECTION_FACETS);
+	put_u32(copy + offset + 56, SG_RUNE_COMPACT_FACET_KIND_COUNT);
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy, SG_RUNE_COMPACT_WIRE_SECTION_FACETS);
+	put_u32(copy + offset + 40, 2);
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy, SG_RUNE_COMPACT_WIRE_SECTION_FACETS);
+	put_u32(copy + offset + 56, SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY);
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy, SG_RUNE_COMPACT_WIRE_SECTION_FACETS);
+	put_u32(copy + offset + 56, SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY);
+	put_u32(copy + offset + 40, 0);
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy, SG_RUNE_COMPACT_WIRE_SECTION_FACETS);
+	put_u32(copy + offset + 56, SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY);
+	put_u32(copy + offset + 40, 0);
+	put_u32(copy + offset + 48, 1);
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT));
 
 	memcpy(copy, image, size);
 	offset = section_offset(copy, SG_RUNE_COMPACT_WIRE_SECTION_CELLS);
@@ -698,10 +765,9 @@ static int test_api_errors(void)
 
 int main(void)
 {
-	CHECK(test_round_trip());
-	CHECK(test_hostile_images());
-	CHECK(test_semantic_and_identity_rejection());
-	CHECK(test_api_errors());
+	if (!test_round_trip() || !test_hostile_images() ||
+		!test_semantic_and_identity_rejection() || !test_api_errors())
+		return 1;
 	puts("sg_rune_compact_wire_test: ok");
 	return 0;
 }

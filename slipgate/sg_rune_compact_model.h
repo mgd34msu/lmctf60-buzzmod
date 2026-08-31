@@ -6,7 +6,7 @@
 
 #include "sg_rune_compact_analytic.h"
 
-#define SG_RUNE_COMPACT_MODEL_VERSION UINT16_C(1)
+#define SG_RUNE_COMPACT_MODEL_VERSION UINT16_C(2)
 #define SG_RUNE_COMPACT_MODEL_SCHEMA_TAG UINT32_C(0x4d434e52)
 #define SG_RUNE_COMPACT_INDEX_NONE UINT32_MAX
 
@@ -253,6 +253,13 @@ typedef struct sg_rune_compact_cell_s
 	uint8_t reserved[3];
 } sg_rune_compact_cell_t;
 
+typedef enum sg_rune_compact_facet_kind_e
+{
+	SG_RUNE_COMPACT_FACET_POLYGON = 0,
+	SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY,
+	SG_RUNE_COMPACT_FACET_KIND_COUNT
+} sg_rune_compact_facet_kind_t;
+
 typedef struct sg_rune_compact_facet_s
 {
 	sg_rune_compact_source_t source;
@@ -260,6 +267,7 @@ typedef struct sg_rune_compact_facet_s
 	sg_rune_compact_vertex_span_t vertices;
 	sg_rune_compact_incidence_span_t incidences;
 	sg_rune_compact_portal_index_t portal;
+	sg_rune_compact_facet_kind_t kind;
 } sg_rune_compact_facet_t;
 
 typedef struct sg_rune_compact_incidence_s

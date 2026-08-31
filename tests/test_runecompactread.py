@@ -30,10 +30,14 @@ import runecompactread as reader  # noqa: E402
 
 
 EXPECTED_MAGIC = b"SGRCW001"
-EXPECTED_WIRE_VERSION = 1
-EXPECTED_MODEL_VERSION = 1
+EXPECTED_WIRE_VERSION = 2
+EXPECTED_MODEL_VERSION = 2
 EXPECTED_ANALYTIC_VERSION = 1
 EXPECTED_MODEL_SCHEMA_TAG = 0x4D434E52
+EXPECTED_FACET_POLYGON = 0
+EXPECTED_FACET_CONSTRAINT_ONLY = 1
+EXPECTED_FACET_KIND_COUNT = 2
+EXPECTED_INDEX_NONE = 0xFFFFFFFF
 EXPECTED_ALIGNMENT = 8
 EXPECTED_HEADER_FIXED_BYTES = 48
 EXPECTED_DESCRIPTOR_BYTES = 24
@@ -43,7 +47,7 @@ EXPECTED_IDENTITY_BYTES = 252
 EXPECTED_SECTION_SPECS = (
     ("identity", 252, 1),
     ("cells", 80, 1_048_576),
-    ("facets", 56, 4_194_304),
+    ("facets", 60, 4_194_304),
     ("incidences", 20, 8_388_608),
     ("cell_incidences", 4, 8_388_608),
     ("vertices", 12, 16_777_216),
@@ -70,11 +74,11 @@ EXPECTED_SECTION_SPECS = (
     ("facet_annotations", 8, 4_194_304),
     ("portal_mechanisms", 15, 4_194_304),
 )
-EXPECTED_MAX_CANONICAL_IMAGE_BYTES = 2_302_675_920
-EXPECTED_C_FIXTURE_BYTES = 3_040
-EXPECTED_C_FIXTURE_CHECKSUM = 0x361220B4
+EXPECTED_MAX_CANONICAL_IMAGE_BYTES = 2_319_453_136
+EXPECTED_C_FIXTURE_BYTES = 3_048
+EXPECTED_C_FIXTURE_CHECKSUM = 0x797CC49D
 EXPECTED_C_FIXTURE_SHA256 = (
-    "1c3cbaaa7ced7c9772713581cd41a842e5fea6142c51d3fc76322ffa2e7d2acd"
+    "81731561750f4d97dae234a3f452a1e7482f3f4b857d1577f06b5190d78ef49f"
 )
 EXPECTED_C_FIXTURE_COUNTS = {
     "identity": 1,
@@ -113,15 +117,14 @@ EXPECTED_C_FIXTURE_IDENTITY = base64.b85decode(
     b"002lt2mk;80RR91"
 )
 C_CODEC_CANONICAL_FIXTURE = zlib.decompress(base64.b85decode(
-    b"c-qxfJ#Q015Z%2Ge;Z63LNEwf6f~i5AVMx8aluBo;KMQ?qKG0$D2gZ$qNMUqprWSa2k--2Qo5u}NlA$ilG*jWabAWyOo4<L>1l4?"
-    b"&Ft*X&dxr(GwMC*bT+M-1{aMnM^!VIkL{HkUR#IJ{oXxmj^zh<FVi5^emrytgb!2g$6d026{Xt$UM2ev;3Hr$5BS)jhJRi@<D=kk"
-    b"mF6$SsV+LK(>z`9B^CD&d>Q|0;NOC;z`h0kEBGqb@*4cNVybJf$Iwj5sjk!7y$ma<J_Ww0_|vqOdEUS`)I7qU$+2I_v2W(suOf!#"
-    b"&*t!J4$mo{!k>e^oJ$vV<<DfB><8e_t8<@#Z{b{Io=@N}AV-Tj1ixpN2$Er)W8i^+A?kIrlj>{G*P*wdBiO~z1?UL#j&AoJ_aBUg"
-    b"7BwEBb}i6$7|&)ikHl*~#s$ja$LX$bInNz8y6KP@^QLdiI|t*&gFfd+?qY!WS`vaGKdlY<2Wq~AY{oR7%>mEHagOWK?`t7DbWDqS"
-    b"&|)+8%->1Ip7s8j3x88Ga&9KWE+kI&=Z<d{(!VfcopqI?y5czJ(i2Olr3U)mKKe$2e`EA9KS2e_t0I{-X?`RH%Cp3+sN4tCqj<mE"
-    b"S7d!_#Kk~MaX#iH;tIfJ;)=i(_{h>dHi#<&9rCRJTf|j?E;z20ZQ?A|PNdGEPn_gnK%C^@E^(5Bq2m009}y=x*d<PK@Ra(8<lq@`"
-    b"l7j>Cl^nbvPIB;4oq4Rjt*X0!Judtq_rHz**1pV=zGW2`pbm5ot7SZs4aLQ{_qvBPPcZXd?ygXhq;J)Ghl#^c!grf{VS{3|fsV5I"
-    b"?(hYTbXq*|lrP>0tL{5XUJSb=e?iVWRHc1H6i;%#4wQ0YH^{$9e*W#)C*NK2JtSY7`F8*Miv0xh!C<N"
+    b"c-qxgJ&RL86rJ~#m*ge-H0v6pNU*TcBCA_iEcn($+`^9#6@yr;AR-pBSgBa#SBQ<^Pw*#LSZtYc%Psv0B0`+WJ2!jw`W{gb#DT-joOkbhoVjx+"
+    b"cW;dP4|=^d-%R~8#+a{(nYRyL-oAF$w;0{--}1~s`(Yvdsh?ZdAHsjm2f20q4f5X!bL&2@kpCy}At3x7_{gGxZ?5g*N5$eIjh{xjjV;<VP6ocJ"
+    b"=G_5b!?y<b_u%XB?|}aXKEYaEiYV3GG~geD-mT@fNo#j)T+i(h@Uh~L(pp@51wK{d2!E`^|9FXitHgf=b7=lV3BPLbg!B~tB>d%EGUQbo`5^v7"
+    b"@Tb(d?}G0@+C{#BKMjq9-vj^9ENKwKvw^+?CJd0TYrWiFg1rp84jaNRf~~-Y7<Y8Ne}8aiH1v?;A#&FPx)zh!Z03+T>-xArMf@aJ<C=}!w7shq"
+    b"nK5q$#=NsIw!bxCedI3sm|wSyU?@&oL-D>EFC(7`jpvns$K!bp^3v^V(KhLr7Wq)tyn?;+@2p_&S_kHWC3AI^HoUh$?b9CPETC^e!8)5ttES>u"
+    b"d#R08<W!3Kw~hLd;oAiD%neY7hzUe(P_2?yA-!eZx;g`&Y8CI7>x-;!mADA#D9+7!mbeOVj<^^&j~H3H!v*4MK#yYUz&ddWa0MLa$_8;B<xZ&1"
+    b"VL+T{utl6`aFaOEV5m5^-+RP~24mtxgGW?HM1#k~i3U$8Ry24{oM`Yuoq42wdn)h#b-(hP-2c}9Tl@Nx8Yy==DX3wMg6A?-T!eeCYe?%5Gq36P"
+    b"3T0XTW_`5yY_Xs5-R4@D(p+7jr+mJ<|EMUW)A-PnzIZD<b>F#_&EYN4&o6n8652;d^NHqdpjt9_O7Sg<b8p8s#f~ZV8O3^qZ}_jT*iV2!VY>"
 ))
 
 
@@ -179,6 +182,23 @@ def _fixture(**counts: int) -> bytearray:
     return image
 
 
+def _facet_fixture(kind: int, vertex_count: int, incidence_count: int,
+                   portal: int) -> bytearray:
+    image = _fixture(
+        cells=1 if incidence_count else 0,
+        facets=1,
+        incidences=incidence_count,
+        portals=1 if portal != EXPECTED_INDEX_NONE else 0,
+        vertices=vertex_count,
+    )
+    facet = _section_offset(image, 2)
+    struct.pack_into("<IIIII", image, facet + 36, 0, vertex_count,
+                     0, incidence_count, portal)
+    struct.pack_into("<I", image, facet + 56, kind)
+    _checksum(image)
+    return image
+
+
 class RuneCompactReaderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.image = _fixture(cells=2, vertices=3, analytic_constants=4)
@@ -198,6 +218,11 @@ class RuneCompactReaderTests(unittest.TestCase):
         self.assertEqual(EXPECTED_MODEL_VERSION, reader.MODEL_VERSION)
         self.assertEqual(EXPECTED_ANALYTIC_VERSION, reader.ANALYTIC_VERSION)
         self.assertEqual(EXPECTED_MODEL_SCHEMA_TAG, reader.MODEL_SCHEMA_TAG)
+        self.assertEqual(EXPECTED_FACET_POLYGON, reader.FACET_POLYGON)
+        self.assertEqual(EXPECTED_FACET_CONSTRAINT_ONLY,
+                         reader.FACET_CONSTRAINT_ONLY)
+        self.assertEqual(EXPECTED_FACET_KIND_COUNT, reader.FACET_KIND_COUNT)
+        self.assertEqual(EXPECTED_INDEX_NONE, reader.INDEX_NONE)
         self.assertEqual(EXPECTED_ALIGNMENT, reader.ALIGNMENT)
         self.assertEqual(EXPECTED_HEADER_FIXED_BYTES, reader.HEADER_FIXED_BYTES)
         self.assertEqual(EXPECTED_DESCRIPTOR_BYTES, reader.DESCRIPTOR_BYTES)
@@ -209,7 +234,7 @@ class RuneCompactReaderTests(unittest.TestCase):
                          reader.MAX_CANONICAL_IMAGE_BYTES)
 
     def test_fixed_schema_oracle_detects_facet_width_and_cap_drift(self) -> None:
-        for record_bytes, limit in ((55, 4_194_304), (56, 4_194_303)):
+        for record_bytes, limit in ((59, 4_194_304), (60, 4_194_303)):
             specs = list(EXPECTED_SECTION_SPECS)
             specs[2] = ("facets", record_bytes, limit)
             with self.subTest(record_bytes=record_bytes, limit=limit):
@@ -250,6 +275,35 @@ class RuneCompactReaderTests(unittest.TestCase):
         self.assertEqual((10, 11, 12), result.identity.crouching_hull.maxs)
         self.assertEqual(19, result.identity.physics.substep_ms)
         self.assertEqual(original, bytes(self.image))
+
+    def test_accepts_polygon_facet_kind(self) -> None:
+        image = _facet_fixture(EXPECTED_FACET_POLYGON, 3, 0,
+                               EXPECTED_INDEX_NONE)
+        result = reader.inspect(image)
+        self.assertEqual(60, result.sections[2].record_bytes)
+        self.assertEqual(1, result.counts["facets"])
+
+    def test_accepts_constraint_only_facet_kind(self) -> None:
+        image = _facet_fixture(EXPECTED_FACET_CONSTRAINT_ONLY, 0, 1,
+                               EXPECTED_INDEX_NONE)
+        result = reader.inspect(image)
+        self.assertEqual(1, result.counts["facets"])
+
+    def test_rejects_unknown_or_malformed_facet_kind(self) -> None:
+        cases = (
+            (EXPECTED_FACET_KIND_COUNT, 3, 0, EXPECTED_INDEX_NONE),
+            (EXPECTED_FACET_POLYGON, 2, 0, EXPECTED_INDEX_NONE),
+            (EXPECTED_FACET_CONSTRAINT_ONLY, 1, 1, EXPECTED_INDEX_NONE),
+            (EXPECTED_FACET_CONSTRAINT_ONLY, 0, 0, EXPECTED_INDEX_NONE),
+            (EXPECTED_FACET_CONSTRAINT_ONLY, 0, 1, 0),
+        )
+        for kind, vertex_count, incidence_count, portal in cases:
+            with self.subTest(kind=kind, vertex_count=vertex_count,
+                              incidence_count=incidence_count,
+                              portal=portal):
+                self.assert_rejected(
+                    _facet_fixture(kind, vertex_count, incidence_count,
+                                   portal), "invalid-format")
 
     def test_accepts_fixed_canonical_c_codec_fixture(self) -> None:
         self.assertEqual(EXPECTED_C_FIXTURE_BYTES,
@@ -485,11 +539,11 @@ class RuneCompactReaderTests(unittest.TestCase):
         self.assert_rejected(bad_record_reserved, "nonzero-reserved")
 
     def test_rejects_all_unknown_version_fields(self) -> None:
-        for offset, encoded in ((8, "<H"), (32, "<H"), (36, "<I"),
-                                (40, "<H")):
+        for offset, encoded, value in ((8, "<H", 1), (32, "<H", 1),
+                                       (36, "<I", 0), (40, "<H", 2)):
             with self.subTest(offset=offset):
                 image = bytearray(self.image)
-                struct.pack_into(encoded, image, offset, 2)
+                struct.pack_into(encoded, image, offset, value)
                 _checksum(image)
                 self.assert_rejected(image, "unsupported-version")
 
@@ -517,9 +571,10 @@ class RuneCompactReaderTests(unittest.TestCase):
         self.assert_rejected(image, "invalid-format")
 
     def test_rejects_bad_source_union_padding_and_reference(self) -> None:
-        image = _fixture(facets=1)
+        image = _facet_fixture(EXPECTED_FACET_POLYGON, 3, 0,
+                               EXPECTED_INDEX_NONE)
         facet = _section_offset(image, 2)
-        struct.pack_into("<I", image, facet + 52, 0xFFFFFFFF)
+        struct.pack_into("<I", image, facet + 52, EXPECTED_INDEX_NONE)
         _checksum(image)
         reader.inspect(image)
 
@@ -527,10 +582,11 @@ class RuneCompactReaderTests(unittest.TestCase):
         _checksum(image)
         self.assert_rejected(image, "invalid-reference")
 
-        image = _fixture(facets=1)
+        image = _facet_fixture(EXPECTED_FACET_POLYGON, 3, 0,
+                               EXPECTED_INDEX_NONE)
         facet = _section_offset(image, 2)
         struct.pack_into("<III", image, facet, 3, 1, 0)
-        struct.pack_into("<I", image, facet + 52, 0xFFFFFFFF)
+        struct.pack_into("<I", image, facet + 52, EXPECTED_INDEX_NONE)
         _checksum(image)
         self.assert_rejected(image, "invalid-reference")
 
