@@ -75,6 +75,15 @@ typedef enum sg_belief_runtime_frame_result_e
 	SG_BELIEF_RUNTIME_FRAME_OVERFLOW
 } sg_belief_runtime_frame_result_t;
 
+typedef enum sg_belief_runtime_predict_result_e
+{
+	SG_BELIEF_RUNTIME_PREDICT_APPLIED = 0,
+	SG_BELIEF_RUNTIME_PREDICT_UNAVAILABLE,
+	SG_BELIEF_RUNTIME_PREDICT_REJECTED,
+	SG_BELIEF_RUNTIME_PREDICT_CAPACITY,
+	SG_BELIEF_RUNTIME_PREDICT_OVERFLOW
+} sg_belief_runtime_predict_result_t;
+
 /* Registration is a transient lifecycle boundary.  A non-NULL replacement is
  * validated completely before it retires tracks or the current provider, while
  * exact-life retirement tombstones, audience/client time watermarks, and
@@ -114,6 +123,22 @@ sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
  * every track and the global frame bookkeeping unchanged. */
 sg_belief_runtime_frame_result_t SG_BeliefRuntimeFrame(
 	uint64_t frame_sequence, uint64_t at_ms);
+
+/* Predict one current target life at an exact future time without changing
+ * the committed state, frame watermark, view, or scope.  The horizon is
+ * issued only from the immutable provider snapshot and the target's accepted
+ * sparse state; no actor or teammate state is consulted.  Scratch and
+ * destination particle storage are caller-owned and follow the underlying
+ * SG_BeliefPredict contract.  The requested time must not precede the
+ * target's committed state or audience/client watermark.  The existing
+ * accepted prediction type reports capacities and provenance, and particles
+ * are normalized on APPLIED (an empty state reports zero particles). */
+sg_belief_runtime_predict_result_t SG_BeliefRuntimePredict(
+	uint8_t audience_team, const sg_belief_life_identity_t *target_life,
+	uint64_t at_ms, sg_belief_particle_t *scratch_first,
+	sg_belief_particle_t *scratch_second, size_t scratch_capacity,
+	sg_belief_particle_t *particles, size_t particle_capacity,
+	sg_belief_prediction_t *out);
 
 /* Retire data named by an exact player life.  Any track fused from that issuer
  * is removed, so recycled slots cannot inherit its authority. */

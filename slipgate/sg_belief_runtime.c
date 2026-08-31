@@ -1201,6 +1201,90 @@ failure:
 	return result;
 }
 
+static sg_belief_runtime_predict_result_t BeliefRuntimePredictResult(
+	sg_belief_predict_result_t result)
+{
+	switch (result)
+	{
+	case SG_BELIEF_PREDICT_APPLIED:
+		return SG_BELIEF_RUNTIME_PREDICT_APPLIED;
+	case SG_BELIEF_PREDICT_CAPACITY:
+		return SG_BELIEF_RUNTIME_PREDICT_CAPACITY;
+	case SG_BELIEF_PREDICT_OVERFLOW:
+		return SG_BELIEF_RUNTIME_PREDICT_OVERFLOW;
+	case SG_BELIEF_PREDICT_REJECTED_INVALID:
+		break;
+	}
+	return SG_BELIEF_RUNTIME_PREDICT_REJECTED;
+}
+
+sg_belief_runtime_predict_result_t SG_BeliefRuntimePredict(
+	uint8_t audience_team, const sg_belief_life_identity_t *target_life,
+	uint64_t at_ms, sg_belief_particle_t *scratch_first,
+	sg_belief_particle_t *scratch_second, size_t scratch_capacity,
+	sg_belief_particle_t *particles, size_t particle_capacity,
+	sg_belief_prediction_t *out)
+{
+	belief_runtime_track_t *track;
+	sg_belief_horizon_scope_prepared_t *prepared = NULL;
+	const sg_belief_horizon_authority_t *authority = NULL;
+	sg_belief_prediction_request_t request;
+	sg_belief_horizon_accept_result_t horizon_result;
+	sg_belief_predict_result_t predict_result;
+	size_t team_index;
+	uint64_t minimum_time;
+
+	if (!BeliefRuntimeCurrent())
+		return SG_BELIEF_RUNTIME_PREDICT_UNAVAILABLE;
+	if (!out || !BeliefRuntimeTeamIndex(audience_team, &team_index) ||
+		!SG_BeliefLifeIdentityValid(target_life))
+		return SG_BELIEF_RUNTIME_PREDICT_REJECTED;
+	track = BeliefRuntimeTrack(audience_team, target_life);
+	if (!BeliefRuntimeTrackMatches(track, audience_team, target_life))
+		return SG_BELIEF_RUNTIME_PREDICT_UNAVAILABLE;
+	minimum_time = track->state.updated_at_ms;
+	if (belief_runtime_audience_client_watermarks[team_index]
+		[target_life->client_id] > minimum_time)
+		minimum_time = belief_runtime_audience_client_watermarks[team_index]
+			[target_life->client_id];
+	if (track->view.updated_at_ms > minimum_time)
+		minimum_time = track->view.updated_at_ms;
+	if (at_ms < minimum_time)
+		return SG_BELIEF_RUNTIME_PREDICT_REJECTED;
+	if (at_ms > track->state.updated_at_ms)
+	{
+		if (!track->horizon_scope)
+			return SG_BELIEF_RUNTIME_PREDICT_REJECTED;
+		horizon_result = SG_BeliefHorizonScopePrepareCandidate(
+			track->horizon_scope, belief_runtime_provider.snapshot,
+			&track->state, at_ms, 0U, &prepared);
+		if (horizon_result != SG_BELIEF_HORIZON_ACCEPTED)
+			return horizon_result == SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
+				SG_BELIEF_RUNTIME_PREDICT_CAPACITY :
+				horizon_result == SG_BELIEF_HORIZON_OVERFLOW ?
+					SG_BELIEF_RUNTIME_PREDICT_OVERFLOW :
+					SG_BELIEF_RUNTIME_PREDICT_REJECTED;
+		authority = SG_BeliefHorizonScopePreparedAuthority(prepared);
+		if (!authority)
+		{
+			SG_BeliefHorizonScopePreparedDestroy(prepared);
+			return SG_BELIEF_RUNTIME_PREDICT_REJECTED;
+		}
+	}
+	memset(&request, 0, sizeof(request));
+	request.at_time_ms = at_ms;
+	request.horizon = authority;
+	request.scratch_first = scratch_first;
+	request.scratch_second = scratch_second;
+	request.scratch_capacity = scratch_capacity;
+	request.particles = particles;
+	request.particle_capacity = particle_capacity;
+	predict_result = SG_BeliefPredict(belief_runtime_provider.snapshot,
+		&track->state, &request, out);
+	SG_BeliefHorizonScopePreparedDestroy(prepared);
+	return BeliefRuntimePredictResult(predict_result);
+}
+
 void SG_BeliefRuntimeRetireLife(const sg_belief_life_identity_t *life)
 {
 	size_t team;

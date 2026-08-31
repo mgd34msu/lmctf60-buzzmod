@@ -1507,6 +1507,180 @@ static void TestRuntimeDelayedEvidenceConverges(void)
 	CHECK(SG_BeliefRuntimeProviderSet(NULL));
 }
 
+static int RuntimeParticlesEqual(const sg_belief_particle_t *left,
+	const sg_belief_particle_t *right)
+{
+	size_t axis;
+
+	if (!left || !right || left->phase.phase_id != right->phase.phase_id ||
+		left->phase.cell_id != right->phase.cell_id ||
+		left->movement_state != right->movement_state ||
+		left->weapon_state != right->weapon_state ||
+		left->reserved != right->reserved ||
+		left->source_mask != right->source_mask ||
+		left->reserved2 != right->reserved2 ||
+		left->future_time_ms != right->future_time_ms ||
+		left->latest_evidence_id != right->latest_evidence_id ||
+		left->latest_evidence_at_ms != right->latest_evidence_at_ms ||
+		left->spread_radius != right->spread_radius ||
+		left->weight != right->weight)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		if (left->position[axis] != right->position[axis] ||
+			left->velocity[axis] != right->velocity[axis] ||
+			left->acceleration[axis] != right->acceleration[axis] ||
+			left->orientation[axis] != right->orientation[axis])
+			return 0;
+	return 1;
+}
+
+static void TestRuntimeFuturePredictionQuery(void)
+{
+	runtime_fixture_t fixture;
+	sg_belief_runtime_provider_t provider;
+	sg_perception_observation_t observation;
+	sg_belief_life_identity_t target;
+	sg_belief_particle_t scratch_first[128];
+	sg_belief_particle_t scratch_second[128];
+	sg_belief_particle_t predicted_first[128];
+	sg_belief_particle_t predicted_second[128];
+	sg_belief_particle_t predicted_small[128];
+	sg_belief_particle_t predicted_small_before[128];
+	sg_belief_particle_t before[128];
+	sg_belief_prediction_t probe;
+	sg_belief_prediction_t first;
+	sg_belief_prediction_t second;
+	sg_belief_prediction_t small;
+	sg_belief_prediction_t rejected;
+	sg_belief_prediction_t rejected_before;
+	const sg_belief_runtime_view_t *view;
+	size_t index;
+	size_t required_particles;
+	size_t small_capacity;
+	float weight_sum;
+	int diffused;
+
+	FixtureInit(&fixture);
+	provider = Provider(&fixture, 1U, 0.5f);
+	target = Life(3U, 30U);
+	memset(before, 0, sizeof(before));
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	SightObservation(&observation, 1U, 100U, 30U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && view->particle_count <= sizeof(before) / sizeof(before[0]));
+	if (view && view->particle_count <= sizeof(before) / sizeof(before[0]))
+		memcpy(before, view->particles,
+			view->particle_count * sizeof(*before));
+
+	/* Probe the accepted prediction contract before supplying destination
+	 * storage.  The runtime must not silently truncate a sparse frontier. */
+	memset(&probe, 0, sizeof(probe));
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		NULL, 0U, &probe) == SG_BELIEF_RUNTIME_PREDICT_CAPACITY);
+	required_particles = probe.required_particle_capacity;
+	CHECK(required_particles > 0U);
+	CHECK(probe.particle_count == 0U);
+	CHECK(probe.at_time_ms == 200U);
+	CHECK(probe.target_life.spawn_generation == 30U);
+	CHECK(required_particles <= sizeof(predicted_first) /
+		sizeof(predicted_first[0]));
+
+	/* A short destination reports capacity and leaves its existing contents
+	 * untouched, while scratch remains disposable as documented. */
+	memset(predicted_small, 0xa5, sizeof(predicted_small));
+	memcpy(predicted_small_before, predicted_small,
+		sizeof(predicted_small_before));
+	small_capacity = required_particles > 1U ? required_particles - 1U : 0U;
+	memset(&small, 0, sizeof(small));
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		small_capacity != 0U ? predicted_small : NULL, small_capacity,
+		&small) == SG_BELIEF_RUNTIME_PREDICT_CAPACITY);
+	CHECK(small.required_particle_capacity == required_particles);
+	CHECK(memcmp(predicted_small, predicted_small_before,
+		sizeof(predicted_small)) == 0);
+
+	memset(&first, 0, sizeof(first));
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
+		&first) == SG_BELIEF_RUNTIME_PREDICT_APPLIED);
+	CHECK(first.particle_count == required_particles);
+	CHECK(first.particle_count > 1U);
+	CHECK(first.total_weight > 0.9999f && first.total_weight < 1.0001f);
+	weight_sum = 0.0f;
+	diffused = 0;
+	for (index = 0U; index < first.particle_count; index++)
+	{
+		weight_sum += predicted_first[index].weight;
+		CHECK(predicted_first[index].future_time_ms == 200U);
+		if (predicted_first[index].phase.phase_id != 0U)
+			diffused = 1;
+	}
+	CHECK(weight_sum > 0.9999f && weight_sum < 1.0001f);
+	CHECK(diffused);
+	CHECK(first.source.horizon_chain_identity.bytes[0] != 0U ||
+		first.source.horizon_chain_identity.bytes[1] != 0U);
+
+	/* Repeating the same query yields the same normalized sparse modes.  The
+	 * issuance metadata may advance, but it cannot affect the distribution. */
+	memset(&second, 0, sizeof(second));
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		predicted_second,
+		sizeof(predicted_second) / sizeof(predicted_second[0]), &second) ==
+		SG_BELIEF_RUNTIME_PREDICT_APPLIED);
+	CHECK(second.particle_count == first.particle_count);
+	CHECK(second.confidence == first.confidence);
+	CHECK(memcmp(&second.source.horizon_chain_identity,
+		&first.source.horizon_chain_identity,
+		sizeof(first.source.horizon_chain_identity)) == 0);
+	for (index = 0U; index < first.particle_count; index++)
+		CHECK(RuntimeParticlesEqual(&predicted_first[index],
+			&predicted_second[index]));
+
+	/* Querying never publishes its temporary horizon or prediction buffers. */
+	view = SG_BeliefRuntimeViewForClient(1U, 3U);
+	CHECK(view && view->updated_at_ms == 100U);
+	if (view && view->particle_count <= sizeof(before) / sizeof(before[0]))
+	{
+		CHECK(view->particle_count == 1U);
+		for (index = 0U; index < view->particle_count; index++)
+			CHECK(RuntimeParticlesEqual(&view->particles[index], &before[index]));
+	}
+
+	memset(&rejected, 0xa5, sizeof(rejected));
+	rejected.at_time_ms = UINT64_MAX;
+	rejected_before = rejected;
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 99U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
+		&rejected) == SG_BELIEF_RUNTIME_PREDICT_REJECTED);
+	CHECK(memcmp(&rejected, &rejected_before, sizeof(rejected)) == 0);
+
+	CHECK(SG_BeliefRuntimeFrame(1U, 300U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 299U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
+		&rejected) == SG_BELIEF_RUNTIME_PREDICT_REJECTED);
+	fixture.snapshot.topology_revision = 8U;
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 350U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
+		&rejected) == SG_BELIEF_RUNTIME_PREDICT_UNAVAILABLE);
+	fixture.snapshot.topology_revision = 7U;
+	CHECK(SG_BeliefRuntimePredict(1U, &target, 350U, scratch_first,
+		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
+		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
+		&first) == SG_BELIEF_RUNTIME_PREDICT_APPLIED);
+	CHECK(first.at_time_ms == 350U);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+}
+
 static void TestRuntimeOwner(void)
 {
 	runtime_fixture_t fixture;
@@ -1707,6 +1881,7 @@ int main(void)
 	TestRuntimeRejectedObservationPreservesTrack();
 	TestRuntimeLocatorProviderChangeRejected();
 	TestRuntimeDelayedEvidenceConverges();
+	TestRuntimeFuturePredictionQuery();
 	TestRuntimeOwner();
 	TestRuntimeProviderReplacementPreservesLifeFences();
 	TestRuntimeProviderReplacementIsTransactional();
