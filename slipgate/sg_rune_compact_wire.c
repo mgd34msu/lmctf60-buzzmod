@@ -55,7 +55,7 @@ static const sg_wire_spec_t sg_wire_specs[SG_RUNE_COMPACT_WIRE_SECTION_COUNT] = 
 	{ UINT32_C(24), SG_RUNE_COMPACT_MAX_MOVEMENT_FIELDS },
 	{ UINT32_C(20), SG_RUNE_COMPACT_MAX_WEAPON_REGIONS },
 	{ UINT32_C(8), SG_RUNE_COMPACT_MAX_WEAPON_PROFILES },
-	{ UINT32_C(16), SG_RUNE_COMPACT_MAX_WEAPON_KERNELS },
+	{ UINT32_C(20), SG_RUNE_COMPACT_MAX_WEAPON_KERNELS },
 	{ UINT32_C(4), SG_RUNE_COMPACT_MAX_ANALYTIC_FUNCTION_REFS },
 	{ UINT32_C(20), SG_RUNE_ANALYTIC_MAX_FUNCTIONS },
 	{ UINT32_C(4), SG_RUNE_ANALYTIC_MAX_INPUT_DIMENSIONS },
@@ -687,15 +687,16 @@ static void sg_wire_encode_arrays(const sg_wire_source_t *source,
 	{
 		p = SG_WIRE_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES, i);
 		sg_wire_put_u32(p, weapon_profiles[i].source_profile);
-		sg_wire_put_u32(p + 4, (uint32_t)weapon_profiles[i].family);
+		sg_wire_put_u32(p + 4, weapon_profiles[i].response_families);
 	}
 	for (i = 0; i < source->counts[SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS]; ++i)
 	{
 		p = SG_WIRE_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS, i);
 		sg_wire_put_u32(p, weapon_kernels[i].region.value);
 		sg_wire_put_u32(p + 4, weapon_kernels[i].profile);
-		sg_wire_put_u32(p + 8, weapon_kernels[i].functions.first);
-		sg_wire_put_u32(p + 12, weapon_kernels[i].functions.count);
+		sg_wire_put_u32(p + 8, (uint32_t)weapon_kernels[i].family);
+		sg_wire_put_u32(p + 12, weapon_kernels[i].functions.first);
+		sg_wire_put_u32(p + 16, weapon_kernels[i].functions.count);
 	}
 	for (i = 0; i < source->counts[SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS]; ++i)
 		sg_wire_put_u32(SG_WIRE_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS, i), analytic_refs[i].value);
@@ -897,6 +898,7 @@ static int sg_wire_validate_records(const uint8_t *image,
 	const sg_wire_desc_t *descs, sg_rune_compact_wire_error_t *error)
 {
 	const uint8_t *p;
+	const uint8_t *profile_record;
 	uint32_t i;
 	uint32_t form;
 	uint32_t definition_limit;
@@ -1028,7 +1030,9 @@ static int sg_wire_validate_records(const uint8_t *image,
 	for (i = 0; i < SG_COUNT(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES); ++i)
 	{
 		p = SG_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES, i);
-		if (sg_wire_u32(p + 4) >= (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT)
+		if (sg_wire_u32(p) == 0U || sg_wire_u32(p + 4) == 0U ||
+			(sg_wire_u32(p + 4) &
+				~SG_RUNE_WEAPON_RESPONSE_FAMILIES_ALL) != 0U)
 			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT,
 				SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES, i);
 	}
@@ -1043,7 +1047,18 @@ static int sg_wire_validate_records(const uint8_t *image,
 			SG_COUNT(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES), 0))
 			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_REFERENCE,
 				SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS, i);
-		if (!sg_wire_span(sg_wire_u32(p + 8), sg_wire_u32(p + 12),
+		if (sg_wire_u32(p + 8) >=
+			(uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT)
+			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT,
+				SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS, i);
+		profile_record = SG_RECORD(
+			SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES,
+			sg_wire_u32(p + 4));
+		if ((sg_wire_u32(profile_record + 4) &
+			SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(sg_wire_u32(p + 8))) == 0U)
+			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_REFERENCE,
+				SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS, i);
+		if (!sg_wire_span(sg_wire_u32(p + 12), sg_wire_u32(p + 16),
 			SG_COUNT(SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS)))
 			SG_FAIL(SG_RUNE_COMPACT_WIRE_ERROR_INVALID_SPAN,
 				SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS, i);
@@ -1605,15 +1620,17 @@ static void sg_wire_decode_arrays(const uint8_t *image,
 	{
 		p = SG_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES, i);
 		weapon_profiles[i].source_profile = sg_wire_u32(p);
-		weapon_profiles[i].family = (sg_rune_weapon_response_family_t)sg_wire_u32(p + 4);
+		weapon_profiles[i].response_families = sg_wire_u32(p + 4);
 	}
 	for (i = 0; i < model->weapon_kernel_count; ++i)
 	{
 		p = SG_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS, i);
 		weapon_kernels[i].region.value = sg_wire_u32(p);
 		weapon_kernels[i].profile = sg_wire_u32(p + 4);
-		weapon_kernels[i].functions.first = sg_wire_u32(p + 8);
-		weapon_kernels[i].functions.count = sg_wire_u32(p + 12);
+		weapon_kernels[i].family =
+			(sg_rune_weapon_response_family_t)sg_wire_u32(p + 8);
+		weapon_kernels[i].functions.first = sg_wire_u32(p + 12);
+		weapon_kernels[i].functions.count = sg_wire_u32(p + 16);
 	}
 	for (i = 0; i < model->analytic_function_ref_count; ++i)
 		analytic_refs[i].value = sg_wire_u32(SG_RECORD(SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS, i));

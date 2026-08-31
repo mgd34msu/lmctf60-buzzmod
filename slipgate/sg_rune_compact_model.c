@@ -1051,6 +1051,9 @@ static int WeaponKernelCompare(const sg_rune_weapon_response_kernel_t *left,
 	if (comparison == 0)
 		comparison = CompareU32(left->profile, right->profile);
 	if (comparison == 0)
+		comparison = CompareU32((uint32_t)left->family,
+			(uint32_t)right->family);
+	if (comparison == 0)
 		comparison = CompareU32(left->functions.first, right->functions.first);
 	if (comparison == 0)
 		comparison = CompareU32(left->functions.count, right->functions.count);
@@ -1060,7 +1063,7 @@ static int WeaponKernelCompare(const sg_rune_weapon_response_kernel_t *left,
 static int ValidateWeaponProfiles(const sg_rune_compact_model_t *model,
 	sg_rune_compact_error_t *error)
 {
-	uint32_t family_mask = 0U;
+	sg_rune_weapon_response_family_mask_t family_mask = 0U;
 	uint32_t profile_index;
 
 	for (profile_index = 0U; profile_index < model->weapon_profile_count;
@@ -1069,8 +1072,9 @@ static int ValidateWeaponProfiles(const sg_rune_compact_model_t *model,
 			&model->weapon_profiles[profile_index];
 
 		if (profile->source_profile == 0U ||
-			profile->family < 0 ||
-			profile->family >= SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT) {
+			profile->response_families == 0U ||
+			(profile->response_families &
+				~SG_RUNE_WEAPON_RESPONSE_FAMILIES_ALL) != 0U) {
 			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
 				SG_RUNE_COMPACT_RECORD_WEAPON_PROFILE, profile_index);
 			return 0;
@@ -1082,15 +1086,36 @@ static int ValidateWeaponProfiles(const sg_rune_compact_model_t *model,
 				SG_RUNE_COMPACT_RECORD_WEAPON_PROFILE, profile_index);
 			return 0;
 		}
-		family_mask |= UINT32_C(1) << (uint32_t)profile->family;
+		family_mask |= profile->response_families;
 	}
-	if (family_mask !=
-		((UINT32_C(1) << SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT) - UINT32_C(1))) {
+	if (family_mask != SG_RUNE_WEAPON_RESPONSE_FAMILIES_ALL) {
 		SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
 			SG_RUNE_COMPACT_RECORD_MODEL, 0U);
 		return 0;
 	}
 	return 1;
+}
+
+_Static_assert((uint64_t)SG_RUNE_COMPACT_MAX_WEAPON_PROFILES *
+	(uint64_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT <= UINT32_MAX,
+	"weapon kernels per region must fit uint32_t");
+
+static uint32_t WeaponKernelsPerRegion(const sg_rune_compact_model_t *model)
+{
+	uint32_t count = 0U;
+	uint32_t profile_index;
+
+	for (profile_index = 0U; profile_index < model->weapon_profile_count;
+		profile_index++) {
+		sg_rune_weapon_response_family_mask_t families =
+			model->weapon_profiles[profile_index].response_families;
+
+		while (families != 0U) {
+			count += families & UINT32_C(1);
+			families >>= 1U;
+		}
+	}
+	return count;
 }
 
 static int WeaponOutputValid(sg_rune_analytic_output_meaning_t output)
@@ -1111,8 +1136,8 @@ static int ValidateWeaponFields(const sg_rune_compact_model_t *model,
 	uint32_t *function_cursor, sg_rune_compact_error_t *error)
 {
 	uint32_t region_index;
-	uint32_t kernel_index;
 	uint32_t kernel_cursor = 0U;
+	const uint32_t kernels_per_region = WeaponKernelsPerRegion(model);
 
 	for (region_index = 0U; region_index < model->weapon_region_count;
 		region_index++) {
@@ -1127,7 +1152,7 @@ static int ValidateWeaponFields(const sg_rune_compact_model_t *model,
 			return 0;
 		}
 		if (region->cell.value >= model->cell_count ||
-			region->kernels.count != model->weapon_profile_count) {
+			region->kernels.count != kernels_per_region) {
 			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
 				SG_RUNE_COMPACT_RECORD_WEAPON_REGION, region_index);
 			return 0;
@@ -1154,87 +1179,116 @@ static int ValidateWeaponFields(const sg_rune_compact_model_t *model,
 			SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
 		return 0;
 	}
+	kernel_cursor = 0U;
 
-	for (kernel_index = 0U; kernel_index < model->weapon_kernel_count;
-		kernel_index++) {
-		const sg_rune_weapon_response_kernel_t *kernel =
-			&model->weapon_kernels[kernel_index];
-		const sg_rune_weapon_profile_t *profile;
-		uint32_t output_offset;
-		int has_damage = 0;
-		int has_hit_probability = 0;
-		int has_time = 0;
-		int has_visibility = 0;
-		int has_fuse = 0;
+	for (region_index = 0U; region_index < model->weapon_region_count;
+		region_index++) {
+		uint32_t profile_index;
 
-		if (kernel_index != 0U && WeaponKernelCompare(
-				&model->weapon_kernels[kernel_index - 1U], kernel) >= 0) {
-			SetError(error, SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER,
-				SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_index);
-			return 0;
-		}
-		if (kernel->region.value >= model->weapon_region_count ||
-			kernel_index <
-				model->weapon_regions[kernel->region.value].kernels.first ||
-			kernel_index >=
-				model->weapon_regions[kernel->region.value].kernels.first +
-				model->weapon_regions[kernel->region.value].kernels.count) {
-			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
-				SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_index);
-			return 0;
-		}
-		if (kernel->profile >= model->weapon_profile_count ||
-			kernel->profile !=
-				kernel_index -
-				model->weapon_regions[kernel->region.value].kernels.first ||
-			kernel->functions.first != *function_cursor ||
-			kernel->functions.count == 0U ||
-			!SpanWithin(kernel->functions.first, kernel->functions.count,
-				model->analytic_function_ref_count)) {
-			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
-				SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_index);
-			return 0;
-		}
-		profile = &model->weapon_profiles[kernel->profile];
-		for (output_offset = 0U; output_offset < kernel->functions.count;
-			output_offset++) {
-			const uint32_t reference = kernel->functions.first + output_offset;
-			const uint32_t function =
-				model->analytic_function_refs[reference].value;
-			sg_rune_analytic_output_meaning_t output;
+		for (profile_index = 0U; profile_index < model->weapon_profile_count;
+			profile_index++) {
+			const sg_rune_weapon_profile_t *profile =
+				&model->weapon_profiles[profile_index];
+			uint32_t family;
 
-			if (function >= model->analytic->function_count) {
-				SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
-					SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_index);
-				return 0;
+			for (family = 0U;
+				family < (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT;
+				family++) {
+				const uint32_t family_bit =
+					SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(family);
+				const sg_rune_weapon_response_kernel_t *kernel;
+				uint32_t output_offset;
+				int has_damage = 0;
+				int has_hit_probability = 0;
+				int has_time = 0;
+				int has_visibility = 0;
+				int has_fuse = 0;
+
+				if ((profile->response_families & family_bit) == 0U)
+					continue;
+				if (kernel_cursor >= model->weapon_kernel_count) {
+					SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
+						SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
+					return 0;
+				}
+				kernel = &model->weapon_kernels[kernel_cursor];
+				if (kernel_cursor != 0U && WeaponKernelCompare(
+						&model->weapon_kernels[kernel_cursor - 1U], kernel) >= 0) {
+					SetError(error, SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER,
+						SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
+					return 0;
+				}
+				if (kernel->region.value != region_index ||
+					kernel->profile != profile_index ||
+					(uint32_t)kernel->family != family) {
+					SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
+						SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
+					return 0;
+				}
+				if (kernel->functions.first != *function_cursor ||
+					kernel->functions.count == 0U ||
+					!SpanWithin(kernel->functions.first, kernel->functions.count,
+						model->analytic_function_ref_count)) {
+					SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
+						SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
+					return 0;
+				}
+				for (output_offset = 0U;
+					output_offset < kernel->functions.count; output_offset++) {
+					const uint32_t reference =
+						kernel->functions.first + output_offset;
+					const uint32_t function =
+						model->analytic_function_refs[reference].value;
+					sg_rune_analytic_output_meaning_t output;
+
+					if (function >= model->analytic->function_count) {
+						SetError(error,
+							SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
+							SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL,
+							kernel_cursor);
+						return 0;
+					}
+					output = model->analytic->functions[function].output;
+					if (!WeaponOutputValid(output) ||
+						(output_offset != 0U &&
+						 model->analytic->functions[
+							model->analytic_function_refs[
+								reference - 1U].value].output >= output)) {
+						SetError(error,
+							SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
+							SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL,
+							kernel_cursor);
+						return 0;
+					}
+					has_time |= output ==
+						SG_RUNE_ANALYTIC_OUTPUT_TRAVEL_TIME_SECONDS;
+					has_damage |= output == SG_RUNE_ANALYTIC_OUTPUT_DAMAGE;
+					has_hit_probability |= output ==
+						SG_RUNE_ANALYTIC_OUTPUT_HIT_PROBABILITY;
+					has_visibility |= output ==
+						SG_RUNE_ANALYTIC_OUTPUT_VISIBILITY_FRACTION;
+					has_fuse |= output ==
+						SG_RUNE_ANALYTIC_OUTPUT_FUSE_REMAINING_SECONDS;
+				}
+				if (!has_time || !has_damage || !has_hit_probability ||
+					!has_visibility ||
+					((family == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
+					  family == SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE) &&
+					 !has_fuse)) {
+					SetError(error,
+						SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
+						SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
+					return 0;
+				}
+				*function_cursor += kernel->functions.count;
+				kernel_cursor++;
 			}
-			output = model->analytic->functions[function].output;
-			if (!WeaponOutputValid(output) ||
-				(output_offset != 0U &&
-				 model->analytic->functions[model->analytic_function_refs[
-					reference - 1U].value].output >= output)) {
-				SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
-					SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_index);
-				return 0;
-			}
-			has_time |= output == SG_RUNE_ANALYTIC_OUTPUT_TRAVEL_TIME_SECONDS;
-			has_damage |= output == SG_RUNE_ANALYTIC_OUTPUT_DAMAGE;
-			has_hit_probability |=
-				output == SG_RUNE_ANALYTIC_OUTPUT_HIT_PROBABILITY;
-			has_visibility |=
-				output == SG_RUNE_ANALYTIC_OUTPUT_VISIBILITY_FRACTION;
-			has_fuse |=
-				output == SG_RUNE_ANALYTIC_OUTPUT_FUSE_REMAINING_SECONDS;
 		}
-		if (!has_time || !has_damage || !has_hit_probability || !has_visibility ||
-			((profile->family == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
-			  profile->family ==
-				SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE) && !has_fuse)) {
-			SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_ANALYTIC_FIELD,
-				SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_index);
-			return 0;
-		}
-		*function_cursor += kernel->functions.count;
+	}
+	if (kernel_cursor != model->weapon_kernel_count) {
+		SetError(error, SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
+			SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, kernel_cursor);
+		return 0;
 	}
 	return 1;
 }

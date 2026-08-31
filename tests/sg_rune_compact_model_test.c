@@ -25,8 +25,8 @@ typedef struct compact_fixture_s
 	sg_rune_movement_field_attachment_t movement_fields[2];
 	sg_rune_weapon_response_region_t weapon_regions[2];
 	sg_rune_weapon_profile_t weapon_profiles[12];
-	sg_rune_weapon_response_kernel_t weapon_kernels[24];
-	sg_rune_analytic_function_index_t analytic_function_refs[106];
+	sg_rune_weapon_response_kernel_t weapon_kernels[26];
+	sg_rune_analytic_function_index_t analytic_function_refs[114];
 	sg_rune_analytic_function_t analytic_functions[8];
 	sg_rune_analytic_constant_t analytic_constants[8];
 	sg_rune_compact_analytic_t analytic;
@@ -156,44 +156,62 @@ static void InitFixture(compact_fixture_t *fixture)
 	fixture->weapon_regions[0].boundary_incidences =
 		(sg_rune_compact_cell_incidence_span_t){ 0U, 1U };
 	fixture->weapon_regions[0].kernels =
-		(sg_rune_weapon_response_kernel_span_t){ 0U, 12U };
+		(sg_rune_weapon_response_kernel_span_t){ 0U, 13U };
 	fixture->weapon_regions[1] = fixture->weapon_regions[0];
 	fixture->weapon_regions[1].cell.value = 1U;
 	fixture->weapon_regions[1].boundary_incidences =
 		(sg_rune_compact_cell_incidence_span_t){ 1U, 1U };
 	fixture->weapon_regions[1].kernels =
-		(sg_rune_weapon_response_kernel_span_t){ 12U, 12U };
+		(sg_rune_weapon_response_kernel_span_t){ 13U, 13U };
 	{
 		uint32_t reference_cursor = 6U;
+		uint32_t kernel_cursor = 0U;
 		uint32_t region;
 		uint32_t profile;
 
 		for (profile = 0U; profile < 12U; profile++) {
 			fixture->weapon_profiles[profile].source_profile = profile + 1U;
-			fixture->weapon_profiles[profile].family =
-				(sg_rune_weapon_response_family_t)profile;
+			fixture->weapon_profiles[profile].response_families =
+				SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(profile);
 		}
+		fixture->weapon_profiles[SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT].
+			response_families |= SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+				SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH);
 
 		for (region = 0U; region < 2U; region++) {
 			uint32_t profile_index;
 
 			for (profile_index = 0U; profile_index < 12U; profile_index++) {
-				const uint32_t kernel = region * 12U + profile_index;
-				const int grenade =
-					profile_index == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
-					profile_index ==
-						SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE;
+				uint32_t family;
 
-				fixture->weapon_kernels[kernel].region.value = region;
-				fixture->weapon_kernels[kernel].profile = profile_index;
-				fixture->weapon_kernels[kernel].functions.first = reference_cursor;
-				fixture->weapon_kernels[kernel].functions.count = grenade ? 5U : 4U;
-				fixture->analytic_function_refs[reference_cursor++].value = 1U;
-				fixture->analytic_function_refs[reference_cursor++].value = 2U;
-				fixture->analytic_function_refs[reference_cursor++].value = 3U;
-				fixture->analytic_function_refs[reference_cursor++].value = 4U;
-				if (grenade)
-					fixture->analytic_function_refs[reference_cursor++].value = 6U;
+				for (family = 0U;
+					family < (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT;
+					family++) {
+					const int grenade =
+						family == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
+						family == SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE;
+					const uint32_t bit =
+						SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(family);
+
+					if ((fixture->weapon_profiles[profile_index].response_families &
+						bit) == 0U)
+						continue;
+					fixture->weapon_kernels[kernel_cursor].region.value = region;
+					fixture->weapon_kernels[kernel_cursor].profile = profile_index;
+					fixture->weapon_kernels[kernel_cursor].family =
+						(sg_rune_weapon_response_family_t)family;
+					fixture->weapon_kernels[kernel_cursor].functions.first =
+						reference_cursor;
+					fixture->weapon_kernels[kernel_cursor].functions.count =
+						grenade ? 5U : 4U;
+					fixture->analytic_function_refs[reference_cursor++].value = 1U;
+					fixture->analytic_function_refs[reference_cursor++].value = 2U;
+					fixture->analytic_function_refs[reference_cursor++].value = 3U;
+					fixture->analytic_function_refs[reference_cursor++].value = 4U;
+					if (grenade)
+						fixture->analytic_function_refs[reference_cursor++].value = 6U;
+					kernel_cursor++;
+				}
 			}
 		}
 	}
@@ -310,9 +328,9 @@ static void InitFixture(compact_fixture_t *fixture)
 	model->weapon_profiles = fixture->weapon_profiles;
 	model->weapon_profile_count = 12U;
 	model->weapon_kernels = fixture->weapon_kernels;
-	model->weapon_kernel_count = 24U;
+	model->weapon_kernel_count = 26U;
 	model->analytic_function_refs = fixture->analytic_function_refs;
-	model->analytic_function_ref_count = 106U;
+	model->analytic_function_ref_count = 114U;
 	model->analytic = &fixture->analytic;
 	model->static_data = &fixture->static_data;
 }
@@ -486,14 +504,95 @@ static void TestFacetPolygonGeometry(void)
 static void TestSharedCellsAndAttachments(void)
 {
 	compact_fixture_t fixture;
+	uint32_t cursor = 0U;
+	uint32_t region;
 
 	InitFixture(&fixture);
 	CheckValid(&fixture.model);
+	CHECK(fixture.weapon_profiles[SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT].
+		response_families ==
+		(SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT) |
+		 SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH)));
+	for (region = 0U; region < fixture.model.weapon_region_count; region++) {
+		uint32_t profile;
+
+		for (profile = 0U; profile < fixture.model.weapon_profile_count;
+			profile++) {
+			uint32_t family;
+
+			for (family = 0U;
+				family < (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT;
+				family++) {
+				const uint32_t bit =
+					SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(family);
+
+				if ((fixture.weapon_profiles[profile].response_families &
+					bit) == 0U)
+					continue;
+				CHECK(cursor < fixture.model.weapon_kernel_count);
+				CHECK(fixture.weapon_kernels[cursor].region.value == region);
+				CHECK(fixture.weapon_kernels[cursor].profile == profile);
+				CHECK((uint32_t)fixture.weapon_kernels[cursor].family == family);
+				cursor++;
+			}
+		}
+	}
+	CHECK(cursor == fixture.model.weapon_kernel_count);
+	CHECK(fixture.model.weapon_kernel_count == 26U);
+	CHECK(fixture.model.analytic_function_ref_count == 114U);
+
 	CHECK(fixture.cells[0].movement_fields.count == 1U);
 	CHECK(fixture.cells[0].weapon_regions.count == 1U);
 	CHECK(fixture.weapon_regions[0].cell.value ==
 		fixture.movement_fields[0].cell.value);
 	CHECK(SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT == 12);
+}
+
+static void TestWeaponSchemaRejections(void)
+{
+	compact_fixture_t fixture;
+	sg_rune_compact_error_t error;
+
+	InitFixture(&fixture);
+	fixture.weapon_profiles[0].response_families |=
+		SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT);
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE);
+	CHECK(error.domain == SG_RUNE_COMPACT_RECORD_WEAPON_PROFILE);
+	CHECK(error.record == 0U);
+
+	InitFixture(&fixture);
+	fixture.weapon_kernels[6].profile =
+		SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH;
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE);
+	CHECK(error.domain == SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL);
+	CHECK(error.record == 6U);
+
+	InitFixture(&fixture);
+	fixture.weapon_profiles[SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH].
+		response_families = SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT);
+	CHECK((fixture.weapon_profiles[fixture.weapon_kernels[7].profile].
+		response_families & SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			fixture.weapon_kernels[7].family)) == 0U);
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE);
+	CHECK(error.domain == SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL);
+	CHECK(error.record == 7U);
+
+	InitFixture(&fixture);
+	fixture.weapon_kernels[7].profile =
+		SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT;
+	fixture.weapon_kernels[7].family =
+		SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT;
+	CHECK(!SG_RuneCompactModelValidate(&fixture.model, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER);
+	CHECK(error.domain == SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL);
+	CHECK(error.record == 7U);
 }
 
 static void TestHalfOpenPortal(void)
@@ -649,6 +748,7 @@ static void TestRequiredCoverage(void)
 int main(void)
 {
 	TestSharedCellsAndAttachments();
+	TestWeaponSchemaRejections();
 	TestHalfOpenPortal();
 	TestStanceOwnership();
 	TestCanonicalReservedAndPortalOwnership();

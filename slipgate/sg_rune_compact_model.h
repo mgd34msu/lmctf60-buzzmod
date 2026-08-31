@@ -332,6 +332,17 @@ typedef enum sg_rune_weapon_response_family_e
 	SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT
 } sg_rune_weapon_response_family_t;
 
+_Static_assert(SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT > 0 &&
+	SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT <= 32,
+	"weapon response family mask requires one to 32 families");
+
+typedef uint32_t sg_rune_weapon_response_family_mask_t;
+
+#define SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(family) \
+	(UINT32_C(1) << (uint32_t)(family))
+#define SG_RUNE_WEAPON_RESPONSE_FAMILIES_ALL \
+	(UINT32_MAX >> (32U - (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT))
+
 typedef struct sg_rune_weapon_response_region_s
 {
 	sg_rune_compact_cell_index_t cell;
@@ -343,13 +354,14 @@ typedef struct sg_rune_weapon_response_region_s
 typedef struct sg_rune_weapon_profile_s
 {
 	uint32_t source_profile;
-	sg_rune_weapon_response_family_t family;
+	sg_rune_weapon_response_family_mask_t response_families;
 } sg_rune_weapon_profile_t;
 
 typedef struct sg_rune_weapon_response_kernel_s
 {
 	sg_rune_weapon_response_region_index_t region;
 	uint32_t profile;
+	sg_rune_weapon_response_family_t family;
 	sg_rune_analytic_function_span_t functions;
 } sg_rune_weapon_response_kernel_t;
 

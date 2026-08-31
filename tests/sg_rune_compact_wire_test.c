@@ -31,8 +31,8 @@ typedef struct test_fixture_s
 	sg_rune_movement_field_attachment_t movement_fields[2];
 	sg_rune_weapon_response_region_t weapon_regions[2];
 	sg_rune_weapon_profile_t weapon_profiles[12];
-	sg_rune_weapon_response_kernel_t weapon_kernels[24];
-	sg_rune_analytic_function_index_t analytic_refs[106];
+	sg_rune_weapon_response_kernel_t weapon_kernels[26];
+	sg_rune_analytic_function_index_t analytic_refs[114];
 	sg_rune_analytic_function_t functions[7];
 	sg_rune_analytic_constant_t constants[7];
 	sg_rune_compact_mechanism_t mechanisms[2];
@@ -125,6 +125,7 @@ static void init_fixture(test_fixture_t *fixture)
 	uint32_t profile;
 	uint32_t region;
 	uint32_t reference_cursor = 6;
+	uint32_t kernel_cursor = 0;
 	uint32_t i;
 	memset(fixture, 0, sizeof(*fixture));
 
@@ -198,35 +199,53 @@ static void init_fixture(test_fixture_t *fixture)
 	fixture->weapon_regions[0].boundary_incidences =
 		(sg_rune_compact_cell_incidence_span_t){ 0, 1 };
 	fixture->weapon_regions[0].kernels =
-		(sg_rune_weapon_response_kernel_span_t){ 0, 12 };
+		(sg_rune_weapon_response_kernel_span_t){ 0, 13 };
 	fixture->weapon_regions[1] = fixture->weapon_regions[0];
 	fixture->weapon_regions[1].cell.value = 1;
 	fixture->weapon_regions[1].boundary_incidences.first = 1;
-	fixture->weapon_regions[1].kernels.first = 12;
+	fixture->weapon_regions[1].kernels.first = 13;
 	for (profile = 0; profile < 12; ++profile)
 	{
 		fixture->weapon_profiles[profile].source_profile = profile + 1;
-		fixture->weapon_profiles[profile].family =
-			(sg_rune_weapon_response_family_t)profile;
+		fixture->weapon_profiles[profile].response_families =
+			SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(profile);
 	}
+	fixture->weapon_profiles[SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT].
+		response_families |= SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH);
 	for (region = 0; region < 2; ++region)
 	{
 		for (profile = 0; profile < 12; ++profile)
 		{
-			uint32_t kernel = region * 12 + profile;
-			int grenade =
-				profile == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
-				profile == SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE;
-			fixture->weapon_kernels[kernel].region.value = region;
-			fixture->weapon_kernels[kernel].profile = profile;
-			fixture->weapon_kernels[kernel].functions.first = reference_cursor;
-			fixture->weapon_kernels[kernel].functions.count = grenade ? 5 : 4;
-			fixture->analytic_refs[reference_cursor++].value = 1;
-			fixture->analytic_refs[reference_cursor++].value = 2;
-			fixture->analytic_refs[reference_cursor++].value = 3;
-			fixture->analytic_refs[reference_cursor++].value = 4;
-			if (grenade)
-				fixture->analytic_refs[reference_cursor++].value = 6;
+			uint32_t family;
+
+			for (family = 0;
+				family < (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT;
+				++family)
+			{
+				uint32_t bit = SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(family);
+				int grenade =
+					family == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
+					family == SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE;
+
+				if ((fixture->weapon_profiles[profile].response_families & bit) == 0)
+					continue;
+				fixture->weapon_kernels[kernel_cursor].region.value = region;
+				fixture->weapon_kernels[kernel_cursor].profile = profile;
+				fixture->weapon_kernels[kernel_cursor].family =
+					(sg_rune_weapon_response_family_t)family;
+				fixture->weapon_kernels[kernel_cursor].functions.first =
+					reference_cursor;
+				fixture->weapon_kernels[kernel_cursor].functions.count =
+					grenade ? 5 : 4;
+				fixture->analytic_refs[reference_cursor++].value = 1;
+				fixture->analytic_refs[reference_cursor++].value = 2;
+				fixture->analytic_refs[reference_cursor++].value = 3;
+				fixture->analytic_refs[reference_cursor++].value = 4;
+				if (grenade)
+					fixture->analytic_refs[reference_cursor++].value = 6;
+				kernel_cursor++;
+			}
 		}
 	}
 	for (i = 0; i < 7; ++i)
@@ -387,7 +406,7 @@ static void init_fixture(test_fixture_t *fixture)
 	model->weapon_profiles = fixture->weapon_profiles;
 	model->weapon_profile_count = 12;
 	model->weapon_kernels = fixture->weapon_kernels;
-	model->weapon_kernel_count = 24;
+	model->weapon_kernel_count = 26;
 	model->analytic_function_refs = fixture->analytic_refs;
 	model->analytic_function_ref_count = reference_cursor;
 	model->analytic = &fixture->analytic;
@@ -400,6 +419,26 @@ static int expect_error(const unsigned char *image, size_t size,
 	sg_rune_compact_wire_error_t error;
 	CHECK(!SG_RuneCompactWireInspect(image, size, NULL, &error));
 	CHECK(error.code == expected);
+	return 1;
+}
+
+static int expect_decode_model_error(const unsigned char *image, size_t size,
+	const sg_rune_compact_identity_t *identity,
+	sg_rune_compact_error_code_t expected_code,
+	sg_rune_compact_record_domain_t expected_domain,
+	uint32_t expected_record)
+{
+	sg_rune_compact_wire_error_t error;
+	sg_rune_compact_wire_decoded_t *decoded = NULL;
+
+	CHECK(SG_RuneCompactWireInspect(image, size, NULL, &error));
+	CHECK(!SG_RuneCompactWireDecode(image, size, identity, &decoded,
+		&error));
+	CHECK(decoded == NULL);
+	CHECK(error.code == SG_RUNE_COMPACT_WIRE_ERROR_INVALID_MODEL);
+	CHECK(error.model_error.code == expected_code);
+	CHECK(error.model_error.domain == expected_domain);
+	CHECK(error.model_error.record == expected_record);
 	return 1;
 }
 
@@ -432,8 +471,8 @@ static int test_round_trip(void)
 		sizeof(info.identity)) == 0);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_CELLS] == 2);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES] == 12);
-	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS] == 24);
-	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS] == 106);
+	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS] == 26);
+	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_ANALYTIC_FUNCTION_REFS] == 114);
 	CHECK(info.counts[SG_RUNE_COMPACT_WIRE_SECTION_MECHANISMS] == 2);
 	CHECK(SG_RuneCompactWireDecode(first, size, &fixture.model.identity,
 		&decoded, &error));
@@ -446,7 +485,7 @@ static int test_round_trip(void)
 	CHECK(model->facets[0].source.value.bsp_plane.plane == 4);
 	CHECK(model->movement_fields[0].valid_stances == SG_RUNE_STANCE_VALID_ALL);
 	CHECK(model->weapon_profiles[11].source_profile == 12);
-	CHECK(model->weapon_kernels[23].profile == 11);
+	CHECK(model->weapon_kernels[25].profile == 11);
 	CHECK(model->static_data->mechanisms[0].reset_ms == 2000);
 	CHECK(SG_RuneCompactModelValidateBound(model, &fixture.model.identity,
 		&model_error));
@@ -534,6 +573,17 @@ static int test_hostile_images(void)
 		SG_RUNE_COMPACT_WIRE_ERROR_UNSUPPORTED_VERSION));
 
 	memcpy(copy, image, size);
+	offset = section_offset(copy,
+		SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES);
+	put_u32(copy + offset + 4,
+		SG_RUNE_WEAPON_RESPONSE_FAMILIES_ALL |
+		SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT));
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT));
+
+	memcpy(copy, image, size);
 	put_u32(copy + TEST_HEADER_FIXED +
 		SG_RUNE_COMPACT_WIRE_SECTION_CELLS * TEST_DESCRIPTOR_SIZE + 8,
 		SG_RUNE_COMPACT_MAX_CELLS + 1);
@@ -578,6 +628,37 @@ static int test_hostile_images(void)
 	refresh_checksum(copy, size);
 	CHECK(expect_error(copy, size,
 		SG_RUNE_COMPACT_WIRE_ERROR_NONZERO_RESERVED));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy,
+		SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_REGIONS);
+	put_u32(copy + offset + 16, 12);
+	refresh_checksum(copy, size);
+	CHECK(expect_decode_model_error(copy, size, &fixture.model.identity,
+		SG_RUNE_COMPACT_ERROR_INVALID_REFERENCE,
+		SG_RUNE_COMPACT_RECORD_WEAPON_REGION, 0));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy,
+		SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_PROFILES);
+	put_u32(copy + offset + 6 * 8 + 4,
+		SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
+			SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT));
+	refresh_checksum(copy, size);
+	CHECK(expect_error(copy, size,
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_REFERENCE));
+
+	memcpy(copy, image, size);
+	offset = section_offset(copy,
+		SG_RUNE_COMPACT_WIRE_SECTION_WEAPON_KERNELS);
+	put_u32(copy + offset + 7 * 20 + 4,
+		SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT);
+	put_u32(copy + offset + 7 * 20 + 8,
+		SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT);
+	refresh_checksum(copy, size);
+	CHECK(expect_decode_model_error(copy, size, &fixture.model.identity,
+		SG_RUNE_COMPACT_ERROR_NONCANONICAL_ORDER,
+		SG_RUNE_COMPACT_RECORD_WEAPON_KERNEL, 7));
 
 	free(copy);
 	free(image);
