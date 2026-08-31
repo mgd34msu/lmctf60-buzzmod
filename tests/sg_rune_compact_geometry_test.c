@@ -29,6 +29,9 @@ typedef struct fixture_s
 	uint32_t live_allocations;
 } fixture_t;
 
+static const fixture_t *public_builder_fixture;
+static const sg_rune_compact_builder_t *public_builder_handle;
+
 static void SetPoint(sg_rune_vec3_t *point, float x, float y, float z)
 {
 	point->value[0] = x;
@@ -621,16 +624,49 @@ static int TestOverflowSentinel(void)
 	return 1;
 }
 
-/* The public wrapper is linked but not exercised by owner-focused tests. */
+static int TestPublicWrapper(void)
+{
+	fixture_t fixture;
+	sg_rune_compact_geometry_t *geometry = NULL;
+	sg_rune_compact_geometry_view_t view;
+	sg_rune_compact_geometry_error_t error;
+	int materialized;
+
+	InitFixture(&fixture);
+	AddCell(&fixture, SG_RUNE_STANCE_STANDING, 0, 0, 0, 4, 4, 4);
+	public_builder_fixture = &fixture;
+	public_builder_handle = (const sg_rune_compact_builder_t *)(const void *)&fixture;
+	materialized = SG_RuneCompactGeometryMaterialize(public_builder_handle, NULL,
+		&geometry, &error);
+	public_builder_fixture = NULL;
+	public_builder_handle = NULL;
+	CHECK(materialized);
+	CHECK(SG_RuneCompactGeometryRead(geometry, &view));
+	CHECK(view.cell_count == 1U);
+	SG_RuneCompactGeometryDestroy(geometry);
+	return 1;
+}
+
 int SG_RuneCompactBuilderRead(const sg_rune_compact_builder_t *builder,
 	sg_rune_compact_builder_view_t *view_out)
 {
-	(void)builder; (void)view_out; return 0;
+	if (builder != public_builder_handle || public_builder_fixture == NULL ||
+		view_out == NULL)
+		return 0;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->identity = public_builder_fixture->identity;
+	return 1;
 }
 int SG_RuneCompactBuilderOwnerRead(const sg_rune_compact_builder_t *builder,
 	sg_rune_compact_builder_owner_view_t *view_out)
 {
-	(void)builder; (void)view_out; return 0;
+	if (builder != public_builder_handle || public_builder_fixture == NULL ||
+		view_out == NULL)
+		return 0;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->world = &public_builder_fixture->world;
+	view_out->configuration = &public_builder_fixture->configuration;
+	return 1;
 }
 
 int main(void)
@@ -638,7 +674,8 @@ int main(void)
 	if (!TestThreeAtomOverlap() || !TestTwoDisjointOverlaps() ||
 		!TestPortalSplitAndDeterminism() || !TestOomSentinel() ||
 		!TestTwoDisjointPortals() || !TestUncoveredPortalFails() ||
-		!TestQ8RoundingModes() || !TestOverflowSentinel())
+		!TestQ8RoundingModes() || !TestOverflowSentinel() ||
+		!TestPublicWrapper())
 		return 1;
 	puts("sg_rune_compact_geometry_test: PASS");
 	return 0;

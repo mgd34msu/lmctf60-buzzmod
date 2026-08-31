@@ -68,8 +68,8 @@ typedef struct sg_rune_compact_geometry_cell_span_s
 
 /* Every pointer in this view is borrowed from geometry and remains valid until
  * SG_RuneCompactGeometryDestroy.  The view intentionally contains only the
- * geometry portions of the eventual compact model; analytic, movement, and
- * static sections are owned by later construction stages. */
+ * geometry portions of the eventual compact model; later construction stages
+ * own every non-geometry section. */
 typedef struct sg_rune_compact_geometry_view_s
 {
 	sg_rune_compact_identity_t identity;

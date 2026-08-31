@@ -200,8 +200,6 @@ static void Release(const geometry_context_t *context, void *allocation)
 		context->allocator.release(context->allocator.context, allocation);
 }
 
-/* Forward declarations kept together because region construction precedes
- * final compact-array conversion in this file. */
 static int BoundsToQ8(const sg_rune_bounds_t *bounds,
 	sg_rune_q8_bounds_t *compact_bounds);
 static int CellOrderLess(const sg_configuration_space_t *configuration,
@@ -222,6 +220,10 @@ static int ConvertPartitionPolygon(const geometry_context_t *context,
 static int AllocateArray(const geometry_context_t *context, uint32_t count,
 	size_t element_size, void **pointer_out,
 	sg_rune_compact_geometry_record_domain_t domain);
+static int SubtractPiece(const geometry_context_t *context,
+	geometry_piece_vector_t *pieces,
+	const sg_rune_compact_partition_polygon_t *portal,
+	sg_rune_compact_geometry_error_t *error, uint32_t portal_index);
 
 static int SizeForCount(uint32_t count, size_t element_size, size_t *size_out)
 {
@@ -1942,26 +1944,13 @@ static void SetPartitionError(const geometry_context_t *context,
 	const sg_rune_compact_partition_error_t *partition_error,
 	sg_rune_compact_geometry_record_domain_t domain, uint32_t record)
 {
-	sg_rune_compact_geometry_error_code_t code;
+	sg_rune_compact_geometry_error_code_t code =
+		SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_GEOMETRY;
 
-	(void)PartitionErrorMap(partition_error, &code);
+	if (!PartitionErrorMap(partition_error, &code))
+		code = SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_GEOMETRY;
 	SetError(context->error, code, domain, record);
 }
-
-static int SubtractPiece(const geometry_context_t *context,
-	geometry_piece_vector_t *pieces,
-	const sg_rune_compact_partition_polygon_t *portal,
-	sg_rune_compact_geometry_error_t *error, uint32_t portal_index);
-static int PartitionPolygonOwnedCopy(const geometry_context_t *context,
-	const sg_rune_compact_partition_polygon_t *source,
-	sg_rune_compact_partition_polygon_t *destination);
-static int RegionContainsConfigurationCell(const geometry_region_work_t *region,
-	uint32_t configuration_cell);
-static int PolygonEntryFromPartition(const geometry_context_t *context,
-	const sg_configuration_space_t *configuration,
-	const sg_bsp_world_t *world, uint32_t owner_config,
-	const sg_rune_compact_partition_polygon_t *polygon,
-	uint32_t region_index, uint32_t serial, geometry_entry_t *entry);
 
 static int BuildRegionEntries(const geometry_context_t *context,
 	const sg_configuration_space_t *configuration, const sg_bsp_world_t *world,

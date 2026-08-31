@@ -22,6 +22,10 @@ typedef struct geometry_fixture_s
 	sg_bsp_brush_side_t brush_side;
 } geometry_fixture_t;
 
+static const geometry_fixture_t *public_builder_source;
+static const sg_rune_compact_identity_t *public_builder_identity;
+static const sg_rune_compact_builder_t *public_builder_handle;
+
 static void GeometryPoint(sg_rune_vec3_t *point, float x, float y, float z)
 {
 	point->value[0] = x;
@@ -137,12 +141,23 @@ static void InitGeometryFixture(geometry_fixture_t *fixture)
 int SG_RuneCompactBuilderRead(const sg_rune_compact_builder_t *builder,
 	sg_rune_compact_builder_view_t *view_out)
 {
-	(void)builder; (void)view_out; return 0;
+	if (builder != public_builder_handle || public_builder_identity == NULL ||
+		view_out == NULL)
+		return 0;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->identity = *public_builder_identity;
+	return 1;
 }
 int SG_RuneCompactBuilderOwnerRead(const sg_rune_compact_builder_t *builder,
 	sg_rune_compact_builder_owner_view_t *view_out)
 {
-	(void)builder; (void)view_out; return 0;
+	if (builder != public_builder_handle || public_builder_source == NULL ||
+		view_out == NULL)
+		return 0;
+	memset(view_out, 0, sizeof(*view_out));
+	view_out->world = &public_builder_source->world;
+	view_out->configuration = &public_builder_source->configuration;
+	return 1;
 }
 
 int main(void)
@@ -159,9 +174,15 @@ int main(void)
 
 	InitFixture(&complete);
 	InitGeometryFixture(&source);
-	CHECK(SG_RuneCompactGeometryOwnerMaterialize(&source.configuration,
-		&source.world, &complete.model.identity, NULL, &geometry,
-		&geometry_error));
+	public_builder_source = &source;
+	public_builder_identity = &complete.model.identity;
+	public_builder_handle =
+		(const sg_rune_compact_builder_t *)(const void *)&source;
+	CHECK(SG_RuneCompactGeometryMaterialize(public_builder_handle, NULL,
+		&geometry, &geometry_error));
+	public_builder_source = NULL;
+	public_builder_identity = NULL;
+	public_builder_handle = NULL;
 	CHECK(SG_RuneCompactGeometryRead(geometry, &view));
 	CHECK(view.cell_count == 2U);
 	for (cell = 0U; cell < 2U; cell++)
