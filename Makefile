@@ -1407,6 +1407,8 @@ POV_SUPERVISOR_ALL_ARTIFACTS := tools/pov-supervisor pov_supervisor_unit.gnu \
 	rune-naming-test rune-artifact-test rune-corpus-controller-test \
 	rune-generator-config-test \
 	rune-v2-contract-test rune-v2-exact-snapshot-test \
+	rune-compact-model-test rune-compact-analytic-test rune-compact-static-test \
+	rune-compact-eval-test rune-compact-localize-test rune-compact-wire-test \
 	rune-v2-independent-reader-test rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
 	rune-v2-configuration-space-test \
@@ -4098,6 +4100,48 @@ bsp-entity-semantics-publication-test: \
 		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
 	$(E) [TEST] BSP entity semantics publication
 	$(Q)sh tests/run_sg_bsp_entity_semantics_publication_test.sh
+
+rune-compact-model-test: tests/run_sg_rune_compact_model_test.sh \
+		tests/sg_rune_compact_model_test.c \
+		slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_model.h \
+		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_analytic.h \
+		slipgate/sg_rune_compact_static.c slipgate/sg_rune_compact_static.h
+	$(E) [TEST] compact RUNE model
+	$(Q)sh tests/run_sg_rune_compact_model_test.sh
+
+rune-compact-analytic-test: tests/run_sg_rune_compact_analytic_test.sh \
+		tests/sg_rune_compact_analytic_test.c \
+		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_analytic.h
+	$(E) [TEST] compact RUNE analytic contract
+	$(Q)sh tests/run_sg_rune_compact_analytic_test.sh
+
+rune-compact-static-test: tests/run_sg_rune_compact_static_test.sh \
+		tests/sg_rune_compact_static_test.c \
+		slipgate/sg_rune_compact_static.c slipgate/sg_rune_compact_static.h \
+		slipgate/sg_rune_compact_model.h
+	$(E) [TEST] compact RUNE static records
+	$(Q)sh tests/run_sg_rune_compact_static_test.sh
+
+rune-compact-eval-test: tests/run_sg_rune_compact_eval_test.sh \
+		tests/sg_rune_compact_eval_test.c \
+		slipgate/sg_rune_compact_eval.c slipgate/sg_rune_compact_eval.h \
+		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_analytic.h
+	$(E) [TEST] compact RUNE eval
+	$(Q)sh tests/run_sg_rune_compact_eval_test.sh
+
+rune-compact-localize-test: tests/run_sg_rune_compact_localize_test.sh \
+		tests/sg_rune_compact_localize_test.c \
+		slipgate/sg_rune_compact_localize.c slipgate/sg_rune_compact_localize.h \
+		slipgate/sg_rune_compact_model.h
+	$(E) [TEST] compact RUNE localize
+	$(Q)sh tests/run_sg_rune_compact_localize_test.sh
+
+rune-compact-wire-test: tests/run_sg_rune_compact_wire_test.sh \
+		tests/sg_rune_compact_wire_test.c \
+		slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_wire.h \
+		slipgate/sg_rune_compact_static.h
+	$(E) [TEST] compact RUNE wire
+	$(Q)sh tests/run_sg_rune_compact_wire_test.sh
 
 rune-v2-contract-test: rune-v2-exact-snapshot-test \
 		rune-v2-independent-reader-test rune-v2-belief-test \
