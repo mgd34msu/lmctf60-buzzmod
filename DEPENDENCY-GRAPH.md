@@ -72,8 +72,12 @@ BSP and field construction                 Parallel runtime work
 The generator preserves topology while it partitions the BSP-derived space.
 There is no production completeness reconstruction or proof-provider barrier.
 Deep BSP and host comparison runs during development on one ordinary RUNE and
-one hard RUNE. Production generation performs only linear identity, format,
-count, span, reference, order, finite-value, checksum, and bot-load checks.
+one hard RUNE. It establishes the generator design; it is not repeated for the
+other 173 maps. Production generation performs only fast linear identity,
+format, count, span, reference, order, finite-value, checksum, and bot-load
+checks. Once a generated artifact passes those checks, that map is complete.
+Nothing downstream depends on a corpus-wide proof, path enumeration, geometry
+reconstruction, phase-space search, or hours-long per-map verification pass.
 
 Cells are shared by movement and weapons. Movement and
 weapon families attach compact analytic fields to the same cells and surfaces.
@@ -253,7 +257,8 @@ local tag, supported builds, and clean release verification
 
 Each map receives only the linear artifact checks and bot cold load when it
 finishes. Deep geometry comparison does not run against the 175-map corpus.
-Corpus finalization waits for all 175 generated and loadable results.
+Corpus finalization waits for all 175 generated and loadable results; it does
+not wait for proof records or an additional semantic-verification wave.
 
 ## Corrected dependencies
 
@@ -280,8 +285,8 @@ The implementation wave is bound by these decisions:
 - Shared exact cells, half-open portals, and stance-validity ownership.
 - Compact analytic fibers for velocity, support, water, air, hook, movers, and
   time.
-- Canonical quantization, stable identifiers, deterministic order, and loud
-  overflow failure.
+- Canonical quantization, stable provenance-derived identity, dense canonical
+  indices, deterministic order, and loud overflow failure.
 - A two-map deep development checker that never enters production acceptance.
 - Analytic movement and weapon kernels consumed by the runtime field service.
 - Continuous directional costs, runtime destination gradients, and incremental

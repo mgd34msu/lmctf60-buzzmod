@@ -58,8 +58,7 @@ publication out of scope.
   beliefs, current ammo and health, tactics, and human traces are not RUNE
   content.
 - The generator is correct by construction. Deep BSP and host comparison tests one ordinary RUNE and one hard RUNE only.
-  Production generation performs linear identity, format, count, span, reference, order, finite-value, checksum, and successful bot-load checks.
-  It never rebuilds geometry or phase space. No proof catalog, provider, search tree, or proof record is production RUNE content.
+- Production generation performs linear identity, format, count, span, reference, order, finite-value, checksum, and successful bot-load checks. Passing finishes the map. No proof catalog, provider, search tree, hours-long verification, or geometry reconstruction is a release dependency.
 - Batching may control memory and scheduling but may not end work. Capacity
   overflow fails loudly and may not downgrade completeness. Production
   generation and review have no elapsed-time limit.
@@ -292,8 +291,7 @@ phase closes:
   when a map finishes or five minutes pass, including construction stage,
   coverage, capability counts, weapon-field counts, time, memory, and load state.
 - [ ] Run the fast linear checks, both C readers, Python reader, exact-bound
-  sidecar checks, and fresh-process bot load for every map. Do not rebuild map
-  geometry or run per-map proof catalogs.
+  sidecar checks, and fresh-process bot load for every map. Do not rebuild map geometry or run per-map proof catalogs.
 - [ ] Finalize one immutable content-addressed 175-map corpus after all 175
   artifacts pass the fast checks and load successfully.
 
