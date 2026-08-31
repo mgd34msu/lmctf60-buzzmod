@@ -282,6 +282,9 @@ typedef enum sg_belief_predict_result_e
 
 typedef struct sg_belief_horizon_source_s sg_belief_horizon_source_t;
 typedef struct sg_belief_horizon_authority_s sg_belief_horizon_authority_t;
+typedef struct sg_belief_horizon_scope_s sg_belief_horizon_scope_t;
+typedef struct sg_belief_horizon_scope_prepared_s
+	sg_belief_horizon_scope_prepared_t;
 
 typedef enum sg_belief_horizon_accept_result_e
 {
@@ -841,6 +844,44 @@ sg_belief_horizon_accept_result_t SG_BeliefHorizonAuthorityAccept(
  * handle identity. */
 void SG_BeliefHorizonAuthorityDestroy(
 	sg_belief_horizon_authority_t *authority);
+
+/* A scope owns one reusable, private source/authority pair for a level-local
+ * caller.  It never exposes an issued source handle, so retiring one exact
+ * interval cannot leave an unbounded public tombstone chain behind.  The
+ * returned authority remains borrowed from scope until the next successful
+ * prepare, scope destruction, or provider teardown.  Pass zero for
+ * evidence_observed_at_ms when no delayed evidence is being reduced; a
+ * nonzero delayed observation receives an additional exact authenticated
+ * observed-to-frame kernel alongside the direct state-to-frame authority. */
+sg_belief_horizon_scope_t *SG_BeliefHorizonScopeCreate(void);
+void SG_BeliefHorizonScopeDestroy(sg_belief_horizon_scope_t *scope);
+sg_belief_horizon_accept_result_t SG_BeliefHorizonScopePrepare(
+	sg_belief_horizon_scope_t *scope,
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state, uint64_t to_time_ms,
+	uint64_t evidence_observed_at_ms);
+const sg_belief_horizon_authority_t *SG_BeliefHorizonScopeAuthority(
+	const sg_belief_horizon_scope_t *scope);
+const sg_belief_horizon_kernel_t *SG_BeliefHorizonScopeKernels(
+	const sg_belief_horizon_scope_t *scope, size_t *kernel_count_out);
+/* Build a borrowed authenticated horizon without changing scope.  The caller
+ * either commits this exact prepared value or destroys it; that lets a
+ * multi-track owner prepare every view before publishing any of them. */
+sg_belief_horizon_accept_result_t SG_BeliefHorizonScopePrepareCandidate(
+	sg_belief_horizon_scope_t *scope,
+	const sg_rune_runtime_snapshot_t *snapshot,
+	const sg_belief_state_t *state, uint64_t to_time_ms,
+	uint64_t evidence_observed_at_ms,
+	sg_belief_horizon_scope_prepared_t **prepared_out);
+void SG_BeliefHorizonScopePreparedDestroy(
+	sg_belief_horizon_scope_prepared_t *prepared);
+const sg_belief_horizon_authority_t *SG_BeliefHorizonScopePreparedAuthority(
+	const sg_belief_horizon_scope_prepared_t *prepared);
+const sg_belief_horizon_kernel_t *SG_BeliefHorizonScopePreparedKernels(
+	const sg_belief_horizon_scope_prepared_t *prepared,
+	size_t *kernel_count_out);
+void SG_BeliefHorizonScopePreparedCommit(sg_belief_horizon_scope_t *scope,
+	sg_belief_horizon_scope_prepared_t *prepared);
 sg_belief_predict_result_t SG_BeliefPredict(
 	const sg_rune_runtime_snapshot_t *snapshot,
 	const sg_belief_state_t *state,
@@ -868,6 +909,12 @@ int SG_BeliefTestHorizonSourceRetired(
 	const sg_belief_horizon_source_t *source);
 int SG_BeliefTestHorizonAuthorityRetired(
 	const sg_belief_horizon_authority_t *authority);
+void SG_BeliefTestHorizonScopeFailNext(
+	sg_belief_horizon_accept_result_t result);
+void SG_BeliefTestHorizonScopeFailAfter(size_t successful_prepares,
+	sg_belief_horizon_accept_result_t result);
+size_t SG_BeliefTestHorizonScopeLiveCount(void);
+size_t SG_BeliefTestHorizonScopeAllocationCount(void);
 #endif
 
 #endif /* SG_BELIEF_CONTRACT_H */

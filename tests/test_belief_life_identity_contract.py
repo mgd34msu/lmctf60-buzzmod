@@ -18,6 +18,8 @@ def main() -> None:
     commands = (ROOT / "g_cmds.c").read_text()
     menu = (ROOT / "g_menu.c").read_text()
     combat = (ROOT / "slipgate/sg_combat.c").read_text()
+    belief_runtime = (ROOT / "slipgate/sg_belief_runtime.c").read_text()
+    belief_runtime_header = (ROOT / "slipgate/sg_belief_runtime.h").read_text()
 
     assert re.search(r"\buint64_t\s+ctfid\s*;", local)
     assert re.search(
@@ -67,6 +69,9 @@ def main() -> None:
     )
     assert not re.search(r"\bunsigned\s+long\b", random_identity)
     assert "Combat_RandomIdentity(client_index, client_life)" in client_random_seam
+    assert "SG_BeliefRuntimeRetireClient" not in belief_runtime
+    assert "SG_BeliefRuntimeRetireClient" not in belief_runtime_header
+    assert "BeliefRuntimeClientFenceRetire" not in belief_runtime
     for path in ROOT.glob("*.c"):
         assert not re.search(r"unsigned long\s+\w*ctfid", path.read_text())
     for path in (ROOT / "slipgate").glob("*.c"):
