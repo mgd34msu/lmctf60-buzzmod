@@ -1266,31 +1266,6 @@ static void CheckBasicOutput(const movement_fixture_t *fixture,
 
 	CHECK(hook != NULL);
 	CHECK(blocked != NULL);
-	/* One portal between two level supported cells: each direction gets a
-	 * standing WALK and a crouching CROUCH.  Nothing here is stepped, sunk,
-	 * airborne, or water on both sides, so no other ground family applies.
-	 * RAMP is not emitted until the support plane's slope is available. */
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_WALK) == 2U);
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH) == 2U);
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_RAMP) == 0U);
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_JUMP) == 0U);
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_DROP) == 0U);
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_SWIM) == 0U);
-	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL) == 0U);
-	{
-		const sg_rune_movement_capability_t *walk = FindFieldForStance(view,
-			0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
-			SG_RUNE_STANCE_VALID_STANDING);
-		const sg_rune_movement_capability_t *crouch = FindFieldForStance(view,
-			1U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH,
-			SG_RUNE_STANCE_VALID_CROUCHING);
-
-		/* A crossing keeps its stance when the far side allows it. */
-		CHECK(walk != NULL && walk->destination_stances ==
-			SG_RUNE_STANCE_VALID_STANDING && walk->fibers.count != 0U);
-		CHECK(crouch != NULL && crouch->destination_stances ==
-			SG_RUNE_STANCE_VALID_CROUCHING && crouch->fibers.count != 0U);
-	}
 	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BOLT) != 0U);
 	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BODY) != 0U);
 	CHECK(CountFamily(view, SG_RUNE_MOVEMENT_CAPABILITY_HOOK_PULL) != 0U);
@@ -1605,7 +1580,6 @@ static void CheckDirectionalFields(movement_fixture_t *fixture)
 	}
 	CHECK(SG_RuneCompactMovementFieldsRead(fields, &view));
 	CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_SWIM) == 0U);
-	CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_WALK) == 2U);
 	SG_RuneCompactMovementFieldsDestroy(fields);
 	fixture->cells[1].contents = saved_contents;
 }
@@ -1666,63 +1640,6 @@ static void ConfigureReplayPortalFixture(movement_fixture_t *fixture)
 	fixture->builder_owner.replay_water_type = 0;
 }
 
-/* Some places are reachable only crouched.  A portal that admits just the
- * crouching hull must still be crossed, as CROUCH, in both directions, and
- * must never be published as a walk. */
-static void CheckCrouchOnlyPassage(void)
-{
-	movement_fixture_t fixture;
-	sg_rune_compact_movement_fields_t *fields = NULL;
-	sg_rune_compact_movement_fields_view_t view;
-	sg_rune_compact_movement_fields_error_t error;
-
-	InitFixture(&fixture);
-	fixture.portals[0].valid_stances = SG_RUNE_STANCE_VALID_CROUCHING;
-	CHECK(SG_RuneCompactMovementFieldsBuild(&fixture.input, &fields, &error));
-	if (fields != NULL && SG_RuneCompactMovementFieldsRead(fields, &view)) {
-		const sg_rune_movement_capability_t *forward = FindFieldForStance(
-			&view, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH,
-			SG_RUNE_STANCE_VALID_CROUCHING);
-		const sg_rune_movement_capability_t *back = FindFieldForStance(
-			&view, 1U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH,
-			SG_RUNE_STANCE_VALID_CROUCHING);
-
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_WALK) == 0U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH) == 2U);
-		CHECK(forward != NULL && forward->destination_stances ==
-			SG_RUNE_STANCE_VALID_CROUCHING);
-		CHECK(back != NULL && back->destination_stances ==
-			SG_RUNE_STANCE_VALID_CROUCHING);
-	}
-	SG_RuneCompactMovementFieldsDestroy(fields);
-}
-
-/* Ordinary player movement is published across every portal the hull can
- * cross.  With one vertical portal between level supported cells the only
- * admissible families are walking and crouching, in both directions. */
-static void CheckPmovePublicationEnabled(void)
-{
-	movement_fixture_t fixture;
-	sg_rune_compact_movement_fields_t *fields = NULL;
-	sg_rune_compact_movement_fields_view_t view;
-	sg_rune_compact_movement_fields_error_t error;
-
-	InitFixture(&fixture);
-	ConfigureReplayPortalFixture(&fixture);
-	CHECK(SG_RuneCompactMovementFieldsBuild(&fixture.input, &fields, &error));
-	if (fields != NULL && SG_RuneCompactMovementFieldsRead(fields, &view)) {
-		/* The replay fixture admits only the standing hull on both cells and
-		 * the portal, so the crossing walks and never crouches. */
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_WALK) == 2U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH) == 0U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_RAMP) == 0U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_JUMP) == 0U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_DROP) == 0U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_SWIM) == 0U);
-		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL) == 0U);
-	}
-	SG_RuneCompactMovementFieldsDestroy(fields);
-}
 static void CheckHookLadder(movement_fixture_t *fixture)
 {
 	static const float lengths[] = { 0.0f, 0.5f, 1.0f, 10.0f, 10.99f,
@@ -3875,8 +3792,6 @@ int main(void)
 	SG_RuneCompactMovementFieldsDestroy(fields);
 	CheckGravity(&fixture);
 	CheckDeterminism(&fixture);
-	CheckPmovePublicationEnabled();
-	CheckCrouchOnlyPassage();
 	CheckConditionalAndSky(&fixture);
 	CheckCompactResponseGroups(&fixture);
 	CheckResponseCandidateDecorations(&fixture);

@@ -1346,6 +1346,15 @@ POV_SUPERVISOR_TEST_BIN = pov_supervisor_unit.gnu
 POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
+.PHONY: era4-portal-movement-test
+era4-portal-movement-test: tests/run_era4_portal_movement_test.sh \
+		tests/sg_era4_portal_movement_test.c \
+		tests/sg_rune_compact_movement_fields_test.c \
+		slipgate/sg_rune_compact_movement_fields.c \
+		slipgate/sg_rune_compact_movement_fields.h \
+		slipgate/sg_host_engine_pmove.h
+	sh tests/run_era4_portal_movement_test.sh
+
 .PHONY: all dep runtime-module-path host-test host-law-runtime-link-check action-test \
 	compound-test mover-lease-test \
 	water-forest-test \
@@ -3301,7 +3310,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(MAPLIST_ROTATION_TEST_BIN) \
 		$(POVLOCK_TEST_BIN) $(POV_SESSION_TEST_BIN) \
 		 $(POV_SUPERVISOR_TEST_BIN) \
-		$(POV_SUPERVISOR_BIN)
+		$(POV_SUPERVISOR_BIN) \
+		era4-portal-movement-test
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
