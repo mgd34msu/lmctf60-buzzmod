@@ -503,8 +503,10 @@ static inline int SG_BeliefPositionInsidePhaseCell(
 		    position[axis] < cell->bounds.mins.value[axis] ||
 		    position[axis] > cell->bounds.maxs.value[axis])
 			return 0;
+	/* Four planes are needed to bound a volume; the span checks below hold
+	 * the rest inside the model's plane array, so no fixed per-cell ceiling
+	 * may reject a cell the BSP produced. */
 	if (!model->planes || cell->boundary_planes.count < 4U ||
-	    cell->boundary_planes.count > SG_RUNE_MODEL_MAX_CELL_PLANES ||
 	    cell->boundary_planes.first > model->plane_count ||
 	    cell->boundary_planes.count >
 		model->plane_count - cell->boundary_planes.first)

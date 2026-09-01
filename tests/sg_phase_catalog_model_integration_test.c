@@ -8,6 +8,10 @@ int SG_RuneModelContractFixtureMain(void);
 
 #include "../slipgate/sg_phase_catalog_internal.h"
 
+/* Fixture sizing only. The model no longer caps phases per cell; a cell
+ * carries as many as its BSP partition produces. */
+#define TEST_HEAVY_CELL_PHASES 32U
+
 typedef struct catalog_model_source_fixture_s
 {
 	sg_host_collision_authority_t authority;
@@ -239,9 +243,9 @@ static void ConfigureHeavyModel(model_fixture_t *model_fixture,
 	model_fixture->model.phase_transitions = view->transitions;
 	model_fixture->model.phase_transition_count = view->transition_count;
 	model_fixture->cells[0].phases = (sg_rune_phase_span_t){ 0U,
-		SG_RUNE_MODEL_MAX_CELL_PHASES };
+		TEST_HEAVY_CELL_PHASES };
 	model_fixture->cells[1].phases = (sg_rune_phase_span_t){
-		SG_RUNE_MODEL_MAX_CELL_PHASES, 1U };
+		TEST_HEAVY_CELL_PHASES, 1U };
 	model_fixture->cells[0].surfaces = (sg_rune_surface_span_t){ 0U, 0U };
 	model_fixture->cells[0].affordances =
 		(sg_rune_affordance_span_t){ 0U, 0U };
@@ -288,7 +292,7 @@ static void ConfigureHeavyModel(model_fixture_t *model_fixture,
 	SetEvidence(&model_fixture->model, &model_fixture->evidence);
 }
 
-static void TestMechanismHeavyCellPhaseLimit(void)
+static void TestMechanismHeavyCellPhaseCount(void)
 {
 	model_fixture_t model_fixture;
 	mechanism_heavy_source_fixture_t source_fixture;
@@ -298,7 +302,7 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	sg_phase_catalog_error_t error;
 	/* The two semantic regions in cell zero each own one world phase and one
 	 * mover-relative phase before the distinct elapsed variants are appended. */
-	uint32_t at_limit = SG_RUNE_MODEL_MAX_CELL_PHASES - 4U;
+	uint32_t at_limit = TEST_HEAVY_CELL_PHASES - 4U;
 	uint32_t over_limit = at_limit + 1U;
 
 	InitFixture(&model_fixture);
@@ -320,7 +324,7 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	{
 		ViewExpected(&expected, &model_fixture.model.identity, &view_storage);
 		CHECK(view != NULL && view->phase_count ==
-			SG_RUNE_MODEL_MAX_CELL_PHASES + 1U);
+			TEST_HEAVY_CELL_PHASES + 1U);
 		CHECK(view != NULL && view->transition_count == at_limit);
 		if (view)
 		{
@@ -332,14 +336,18 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 	SG_PhaseCatalogExpectedDestroy(&expected);
 	DestroyHeavySource(&source_fixture);
 
+	/* A cell carries as many phases as its regions and mechanism timings
+	 * produce.  One more elapsed variant than the case above is therefore an
+	 * ordinary result, not an overflow: no fixed per-cell ceiling exists. */
 	InitHeavySource(&source_fixture, &model_fixture.model.identity, over_limit);
 	CHECK(source_fixture.facts != NULL);
 	if (source_fixture.facts)
 	{
 		memset(&expected, 0, sizeof(expected));
-		CHECK(!SG_PhaseCatalogDeriveExpectedNonAuthoritative(
+		CHECK(SG_PhaseCatalogDeriveExpectedNonAuthoritative(
 			&source_fixture.derivation, &expected, &error));
-		CHECK(error.code == SG_PHASE_CATALOG_ERROR_OVERFLOW);
+		CHECK(error.code == SG_PHASE_CATALOG_ERROR_NONE);
+		CHECK(expected.phase_count == TEST_HEAVY_CELL_PHASES + 2U);
 		SG_PhaseCatalogExpectedDestroy(&expected);
 	}
 	DestroyHeavySource(&source_fixture);
@@ -348,7 +356,7 @@ static void TestMechanismHeavyCellPhaseLimit(void)
 int main(void)
 {
 	TestDerivedPortalTransitionsValidate();
-	TestMechanismHeavyCellPhaseLimit();
+	TestMechanismHeavyCellPhaseCount();
 	if (failures != 0)
 		return 1;
 	puts("sg_phase_catalog_model_integration_test: ok");

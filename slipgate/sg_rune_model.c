@@ -862,15 +862,13 @@ static sg_rune_failure_reason_t ValidateRecords(const sg_rune_model_t *model)
 			return SG_RUNE_FAILURE_INVALID_REFERENCE;
 		if (!BoundsValid(&record->bounds))
 			return SG_RUNE_FAILURE_INVALID_SEMANTICS;
+		/* A cell needs four planes to bound a volume and one phase to be
+		 * occupiable.  Every other per-cell count is bounded by the SpanWithin
+		 * checks below, which hold each span inside its global array.  Cell
+		 * complexity follows from the BSP, so no fixed per-cell ceiling may
+		 * reject geometry the host accepts. */
 		if (record->boundary_planes.count < 4 ||
-			record->boundary_planes.count > SG_RUNE_MODEL_MAX_CELL_PLANES ||
-			record->phases.count == 0 ||
-			record->phases.count > SG_RUNE_MODEL_MAX_CELL_PHASES ||
-			record->surfaces.count > SG_RUNE_MODEL_MAX_CELL_SURFACES ||
-			record->affordances.count > SG_RUNE_MODEL_MAX_CELL_AFFORDANCES ||
-			record->kernels.count > SG_RUNE_MODEL_MAX_CELL_KERNELS ||
-			record->landmarks.count > SG_RUNE_MODEL_MAX_CELL_LANDMARKS ||
-			record->mechanisms.count > SG_RUNE_MODEL_MAX_CELL_MECHANISMS)
+			record->phases.count == 0)
 			return SG_RUNE_FAILURE_LIMIT_EXCEEDED;
 		if (!SpanWithin(record->boundary_planes.first,
 			record->boundary_planes.count, model->plane_count) ||
@@ -920,10 +918,7 @@ static sg_rune_failure_reason_t ValidateRecords(const sg_rune_model_t *model)
 				&record->to_cell.value) || !FindPlane(model, record->boundary_plane, NULL))
 			return SG_RUNE_FAILURE_INVALID_REFERENCE;
 		if (record->boundary_vertices.count < 3 ||
-			record->boundary_vertices.count >
-				SG_RUNE_MODEL_MAX_PORTAL_VERTICES_PER_PORTAL ||
-			record->phases.count == 0 ||
-			record->phases.count > SG_RUNE_MODEL_MAX_PORTAL_PHASES)
+			record->phases.count == 0)
 			return SG_RUNE_FAILURE_LIMIT_EXCEEDED;
 		if (!SpanWithin(record->boundary_vertices.first,
 			record->boundary_vertices.count, model->portal_vertex_count) ||
@@ -978,9 +973,7 @@ static sg_rune_failure_reason_t ValidateRecords(const sg_rune_model_t *model)
 			return reason;
 		if (!FindCell(model, record->owner_cell, NULL) ||
 			record->surfaces.count == 0 ||
-			record->surfaces.count > SG_RUNE_MODEL_MAX_AFFORDANCE_SURFACES ||
 			record->phases.count == 0 ||
-			record->phases.count > SG_RUNE_MODEL_MAX_AFFORDANCE_PHASES ||
 			!SpanWithin(record->surfaces.first, record->surfaces.count,
 				model->surface_count) ||
 			!SpanWithin(record->phases.first, record->phases.count,
@@ -1046,8 +1039,6 @@ static sg_rune_failure_reason_t ValidateRecords(const sg_rune_model_t *model)
 			!IntervalValid(&record->dwell_ms, 1) ||
 			!IntervalValid(&record->travel_ms, 1))
 			return SG_RUNE_FAILURE_INVALID_SEMANTICS;
-		if (record->topology.count > SG_RUNE_MODEL_MAX_MECHANISM_TOPOLOGY)
-			return SG_RUNE_FAILURE_LIMIT_EXCEEDED;
 		if (!SpanWithin(record->topology.first, record->topology.count,
 			model->mechanism_count) ||
 			(!StableIdNone(&record->activation_landmark.value) &&

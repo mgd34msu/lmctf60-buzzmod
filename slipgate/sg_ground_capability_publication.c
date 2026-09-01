@@ -55,6 +55,7 @@ typedef struct sg_ground_reconstruction_source_s
 	uint32_t *source_to_cell;
 	uint32_t *portal_to_source;
 	uint32_t *region_to_source;
+	uint32_t *source_to_region;
 } sg_ground_reconstruction_source_t;
 
 typedef struct sg_ground_normalized_source_s
@@ -265,6 +266,8 @@ static int GroundBindingCompare(const void *left_value,
 
 	if (left->cell != right->cell)
 		return left->cell < right->cell ? -1 : 1;
+	if (left->region != right->region)
+		return left->region < right->region ? -1 : 1;
 	if (left->phase != right->phase)
 		return left->phase < right->phase ? -1 : 1;
 	return 0;
@@ -536,6 +539,7 @@ static void ReconstructionSourceDestroy(
 	free(source->source_to_cell);
 	free(source->portal_to_source);
 	free(source->region_to_source);
+	free(source->source_to_region);
 	memset(source, 0, sizeof(*source));
 }
 
@@ -667,9 +671,13 @@ static int ReconstructionSourceBuild(
 	reconstruction->region_to_source = malloc(
 		(size_t)semantics->region_count *
 		sizeof(*reconstruction->region_to_source));
+	reconstruction->source_to_region = malloc(
+		(size_t)semantics->region_count *
+		sizeof(*reconstruction->source_to_region));
 	if (!cell_order || !reconstruction->cell_to_source ||
 		!reconstruction->source_to_cell || !region_order ||
-		!reconstruction->region_to_source)
+		!reconstruction->region_to_source ||
+		!reconstruction->source_to_region)
 		goto out_of_memory;
 	if (configuration->portal_count != 0U)
 	{
@@ -770,15 +778,21 @@ static int ReconstructionSourceBuild(
 		 * requires global monotonicity in addition to cell grouping. */
 		region->id = index;
 		reconstruction->region_to_source[index] = original;
+		reconstruction->source_to_region[original] = index;
 	}
 	for (index = 0U; index < semantics->boundary_count; index++)
 		reconstruction->semantics.boundaries[index].cell =
 			reconstruction->source_to_cell[
 				semantics->boundaries[index].cell];
 	for (index = 0U; index < source->ground_binding_count; index++)
+	{
 		reconstruction->bindings[index].cell =
 			reconstruction->source_to_cell[
 				reconstruction->bindings[index].cell];
+		reconstruction->bindings[index].region =
+			reconstruction->source_to_region[
+				reconstruction->bindings[index].region];
+	}
 	qsort(reconstruction->bindings, source->ground_binding_count,
 		sizeof(*reconstruction->bindings), GroundBindingCompare);
 	ok = 1;
@@ -1453,6 +1467,7 @@ static int NormalizePhaseCatalog(
 		}
 		source->ground_bindings[index].cell = phase_cells[index];
 		source->ground_bindings[index].phase = index;
+		source->ground_bindings[index].region = phase_regions[index];
 	}
 	for (index = 0U; index < source->semantics->region_count; index++)
 		if (!region_seen[index])

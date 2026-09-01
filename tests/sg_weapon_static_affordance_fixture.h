@@ -9,6 +9,9 @@
 
 #include "../slipgate/sg_static_visibility.h"
 
+/* Capacity of this fixture's own phase storage, not a model limit. */
+#define TEST_FIXTURE_CELL_PHASE_CAPACITY 32U
+
 #ifdef SG_STATIC_VISIBILITY_WRAP_ALLOC
 void *__real_malloc(size_t size);
 void *__real_calloc(size_t count, size_t size);
@@ -348,7 +351,7 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 				}
 			if (represented)
 				continue;
-			if (cell->phases.count >= SG_RUNE_MODEL_MAX_CELL_PHASES)
+			if (cell->phases.count >= TEST_FIXTURE_CELL_PHASE_CAPACITY)
 			{
 				fprintf(stderr, "fixture cell phase overflow %u\n", index);
 				return 0;

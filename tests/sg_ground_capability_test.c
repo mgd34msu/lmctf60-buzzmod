@@ -262,8 +262,10 @@ static void GroundFixtureInit(ground_fixture_t *fixture,
 			stance, SG_RUNE_MOTION_AIRBORNE);
 		fixture->bindings[phase].cell = cell;
 		fixture->bindings[phase].phase = phase;
+		fixture->bindings[phase].region = phase;
 		fixture->bindings[phase + 1U].cell = cell;
 		fixture->bindings[phase + 1U].phase = phase + 1U;
+		fixture->bindings[phase + 1U].region = phase + 1U;
 	}
 }
 
@@ -662,7 +664,7 @@ static void TestStanceOverlap(void)
 	sg_ground_capability_error_t error;
 	sg_configuration_stance_overlap_t duplicate_overlaps[2];
 	sg_ground_phase_binding_t supported_bindings[2] = {
-		{ 0U, 0U }, { 1U, 2U }
+		{ 0U, 0U, 0U }, { 1U, 2U, 2U }
 	};
 	uint32_t region;
 	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
@@ -714,7 +716,7 @@ static void TestPortalPlaneScalingAndSubsetBindings(void)
 	sg_ground_capability_set_t *scaled = NULL;
 	sg_ground_capability_set_t *subset = NULL;
 	sg_ground_capability_error_t error;
-	sg_ground_phase_binding_t subset_bindings[2] = { { 0U, 0U }, { 1U, 2U } };
+	sg_ground_phase_binding_t subset_bindings[2] = { { 0U, 0U, 0U }, { 1U, 2U, 2U } };
 	GroundFixtureInit(&fixture, &floor, 1U, 800.0f,
 		SG_RUNE_STANCE_STANDING, 0.0f, 0.0f);
 	GroundFixtureRebind(&fixture);
@@ -1046,7 +1048,7 @@ static void TestAirborneStanceDoesNotRequireSupport(void)
 	uint32_t phase;
 	uint32_t index;
 	sg_ground_phase_binding_t unique_bindings[2] = {
-		{ 0U, 0U }, { 1U, 2U }
+		{ 0U, 0U, 0U }, { 1U, 2U, 2U }
 	};
 
 	GroundFixtureInit(&fixture, NULL, 0U, 100.0f,
@@ -1106,15 +1108,15 @@ static void TestDestinationLocalizationIsUniqueAndGrounded(void)
 	sg_ground_capability_error_t error;
 	sg_rune_phase_basis_t phases[5];
 	sg_ground_phase_binding_t bindings[5] = {
-		{ 0U, 0U }, { 0U, 1U }, { 1U, 2U }, { 1U, 3U }, { 1U, 4U }
+		{ 0U, 0U, 0U }, { 0U, 1U, 1U }, { 1U, 2U, 2U }, { 1U, 3U, 3U }, { 1U, 4U, 4U }
 	};
 	sg_configuration_semantic_region_t regions[5];
 	sg_configuration_cell_t cells[3];
 	sg_configuration_semantic_region_t cell_regions[6];
 	sg_rune_phase_basis_t cell_phases[6];
 	sg_ground_phase_binding_t cell_bindings[6] = {
-		{ 0U, 0U }, { 0U, 1U }, { 1U, 2U }, { 1U, 3U },
-		{ 2U, 4U }, { 2U, 5U }
+		{ 0U, 0U, 0U }, { 0U, 1U, 1U }, { 1U, 2U, 2U }, { 1U, 3U, 3U },
+		{ 2U, 4U, 4U }, { 2U, 5U, 5U }
 	};
 	uint32_t index;
 
@@ -1256,8 +1258,8 @@ static void TestSourceCellLocalizationIsUnique(void)
 	sg_rune_phase_basis_t phases[6];
 	sg_rune_phase_basis_t saved_phases[6];
 	sg_ground_phase_binding_t bindings[6] = {
-		{ 0U, 0U }, { 0U, 1U }, { 1U, 2U }, { 1U, 3U },
-		{ 2U, 4U }, { 2U, 5U }
+		{ 0U, 0U, 0U }, { 0U, 1U, 1U }, { 1U, 2U, 2U }, { 1U, 3U, 3U },
+		{ 2U, 4U, 4U }, { 2U, 5U, 5U }
 	};
 	sg_ground_phase_binding_t saved_bindings[6];
 	sg_ground_capability_set_t *set = NULL;
@@ -1333,7 +1335,7 @@ static void TestSourcePhaseLocalizationIsUnique(void)
 	sg_rune_phase_basis_t phases[5];
 	sg_rune_phase_basis_t saved_phases[5];
 	sg_ground_phase_binding_t bindings[5] = {
-		{ 0U, 0U }, { 0U, 1U }, { 0U, 4U }, { 1U, 2U }, { 1U, 3U }
+		{ 0U, 0U, 0U }, { 0U, 1U, 1U }, { 0U, 4U, 4U }, { 1U, 2U, 2U }, { 1U, 3U, 3U }
 	};
 	sg_ground_phase_binding_t saved_bindings[5];
 	sg_ground_capability_set_t *set = NULL;
@@ -1617,8 +1619,10 @@ static localization_scale_t RunLocalizationScale(uint32_t cell_count)
 		phases[airborne] = GroundPhase(&identity, airborne,
 			SG_RUNE_STANCE_STANDING, SG_RUNE_MOTION_AIRBORNE);
 		bindings[supported].cell = cell;
+		bindings[supported].region = supported;
 		bindings[supported].phase = supported;
 		bindings[airborne].cell = cell;
+		bindings[airborne].region = airborne;
 		bindings[airborne].phase = airborne;
 	}
 	CHECK(TestGroundCapabilityBuild(&authority, &configuration, &semantics,
@@ -1663,14 +1667,17 @@ static localization_scale_t RunManyRegionScale(uint32_t slice_count)
 	sg_configuration_semantic_region_t *regions = calloc(
 		(size_t)slice_count * 2U, sizeof(*regions));
 	sg_rune_phase_basis_t phases[2];
-	sg_ground_phase_binding_t bindings[2] = { { 0U, 0U }, { 0U, 1U } };
+	/* One binding per region: the two phases are shared by every slice, and
+	 * each region names the phase that applies inside it. */
+	sg_ground_phase_binding_t *bindings = calloc(
+		(size_t)slice_count * 2U, sizeof(*bindings));
 	sg_ground_capability_set_t *set = NULL;
 	sg_ground_capability_error_t error;
 	localization_scale_t measured = { 0U, 0U, 0U, 0U, 0U };
 	uint32_t slice;
 
-	CHECK(regions != NULL);
-	if (!regions)
+	CHECK(regions != NULL && bindings != NULL);
+	if (!regions || !bindings)
 		goto done;
 	identity.physics.frame_ms = identity.physics.substep_ms;
 	CHECK(SG_HostCollisionInit(&authority, &world.world, &identity,
@@ -1714,13 +1721,19 @@ static localization_scale_t RunManyRegionScale(uint32_t slice_count)
 		SetRune3(&regions[airborne].bounds.maxs, maximum_x, 64.0f, 64.0f);
 		SetRune3(&regions[airborne].interior_witness, center_x, 0.0f, 24.0f);
 		regions[airborne].flags = SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE;
+		bindings[supported].cell = 0U;
+		bindings[supported].phase = 0U;
+		bindings[supported].region = supported;
+		bindings[airborne].cell = 0U;
+		bindings[airborne].phase = 1U;
+		bindings[airborne].region = airborne;
 	}
 	phases[0] = GroundPhase(&identity, 0U, SG_RUNE_STANCE_STANDING,
 		SG_RUNE_MOTION_SUPPORTED);
 	phases[1] = GroundPhase(&identity, 1U, SG_RUNE_STANCE_STANDING,
 		SG_RUNE_MOTION_AIRBORNE);
 	CHECK(TestGroundCapabilityBuild(&authority, &configuration, &semantics,
-		phases, 2U, bindings, 2U, Pmove, &set, &error));
+		phases, 2U, bindings, (size_t)slice_count * 2U, Pmove, &set, &error));
 	if (set)
 	{
 		measured.prepare_comparisons = set->localization_prepare_comparisons;
@@ -1735,6 +1748,7 @@ static localization_scale_t RunManyRegionScale(uint32_t slice_count)
 
 done:
 	SG_GroundCapabilityDestroy(set);
+	free(bindings);
 	free(regions);
 	DestroyFixture(&world);
 	return measured;

@@ -28,10 +28,15 @@ typedef struct sg_ground_capability_error_s
 	uint32_t source_index;
 } sg_ground_capability_error_t;
 
+/* A binding names the semantic region a phase applies to.  Without it a pose
+ * lookup can only match basis attributes, so two regions of one cell that
+ * share a basis are indistinguishable and every pose in that cell becomes
+ * ambiguous.  Several regions may share a phase; each gets its own binding. */
 typedef struct sg_ground_phase_binding_s
 {
 	uint32_t cell;
 	uint32_t phase;
+	uint32_t region;
 } sg_ground_phase_binding_t;
 
 typedef enum sg_ground_capability_kind_e

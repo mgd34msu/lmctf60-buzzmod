@@ -459,7 +459,6 @@ static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
 	uint32_t cell;
 	uint32_t region = 0U;
 	size_t binding = 0U;
-	uint8_t *phase_seen;
 
 	if (phase_count == 0U || phase_count > UINT32_MAX ||
 		binding_count > UINT32_MAX)
@@ -472,11 +471,10 @@ static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
 		sizeof(*build->cell_region_offsets));
 	if (!build->cell_phase_offsets || !build->cell_region_offsets)
 		return -1;
-	phase_seen = calloc(phase_count, sizeof(*phase_seen));
-	if (!phase_seen)
-		return -1;
+
 	for (cell = 0U; cell < build->configuration->cell_count; cell++)
 	{
+		uint32_t previous_region = 0U;
 		uint32_t previous_phase = 0U;
 		int have_previous = 0;
 
@@ -488,22 +486,25 @@ static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
 				&build->bindings[binding];
 			const sg_rune_phase_basis_t *phase;
 
-			if (record->phase >= phase_count || phase_seen[record->phase] ||
-				(have_previous && record->phase <= previous_phase))
-			{
-				free(phase_seen);
+			/* Neither the region nor the phase is unique on its own: a
+			 * region carries one phase per distinct basis, and equal bases
+			 * recur across regions.  The pair is unique, so requiring a
+			 * strictly increasing (region, phase) order both fixes a
+			 * deterministic layout and rejects duplicates. */
+			if (record->phase >= phase_count ||
+				record->region >= build->semantics->region_count ||
+				build->semantics->regions[record->region].cell != cell ||
+				(have_previous && (record->region < previous_region ||
+					(record->region == previous_region &&
+					 record->phase <= previous_phase))))
 				return 0;
-			}
 			phase = &build->phases[record->phase];
 			if (!SG_RuneModelPhaseValid(phase) ||
 				phase->order.source_set_identity !=
 					build->identity->source_set_identity ||
 				phase->stance != build->configuration->cells[cell].stance)
-			{
-				free(phase_seen);
 				return 0;
-			}
-			phase_seen[record->phase] = 1U;
+			previous_region = record->region;
 			previous_phase = record->phase;
 			have_previous = 1;
 			binding++;
@@ -513,12 +514,8 @@ static int BuildOffsets(sg_ground_build_t *build, size_t phase_count,
 			build->semantics->regions[region].cell == cell)
 			region++;
 		if (build->cell_region_offsets[cell] == region)
-		{
-			free(phase_seen);
 			return 0;
-		}
 	}
-	free(phase_seen);
 	build->cell_phase_offsets[build->configuration->cell_count] =
 		(uint32_t)binding_count;
 	build->cell_region_offsets[build->configuration->cell_count] = region;
@@ -1480,14 +1477,33 @@ static int FindUniquePhaseAtPose(const sg_ground_build_t *build,
 	uint32_t cell, uint32_t region, const sg_host_collision_pose_t *pose,
 	const float velocity[3], uint32_t *phase_out)
 {
-	uint32_t binding;
-	uint32_t matches = 0U;
+	uint32_t low = build->cell_phase_offsets[cell];
+	uint32_t high = build->cell_phase_offsets[cell + 1U];
+	uint32_t phase;
+	uint32_t index;
+	uint32_t matches;
 
-	for (binding = build->cell_phase_offsets[cell];
-		binding < build->cell_phase_offsets[cell + 1U]; binding++)
+	/* Bindings are sorted by region within a cell and a region owns exactly
+	 * one, so the region is found by bisection and the result cannot be
+	 * ambiguous.  A linear scan here would cost one comparison per binding in
+	 * the cell, which grows quadratically as a cell gains regions. */
+	while (low < high)
 	{
-		uint32_t phase = build->bindings[binding].phase;
+		uint32_t middle = low + ((high - low) / 2U);
 
+		if (build->bindings[middle].region < region)
+			low = middle + 1U;
+		else
+			high = middle;
+	}
+	/* Scan only this region's bindings.  A region carries one phase per
+	 * distinct basis, so the pose and velocity select at most one; matching
+	 * more than one means the source offered two phases for one state. */
+	matches = 0U;
+	for (index = low; index < build->cell_phase_offsets[cell + 1U] &&
+		build->bindings[index].region == region; index++)
+	{
+		phase = build->bindings[index].phase;
 		if (!PhaseMatchesRegionPose(&build->phases[phase],
 				&build->semantics->regions[region], pose) ||
 			!PhaseContainsVelocity(&build->phases[phase], velocity))
@@ -2083,6 +2099,9 @@ static int BuildPortalDirection(sg_ground_build_t *build, uint32_t portal_index,
 			int emitted;
 			int localization;
 
+			/* Bindings are region scoped; see BuildStanceDirection. */
+			if (build->bindings[source_binding].region != source_region)
+				continue;
 			if (!PhaseMatchesRegionPose(&build->phases[source_phase],
 					&build->semantics->regions[source_region], &source_pose))
 				continue;
@@ -2254,6 +2273,9 @@ static int BuildTakeoffsAndLandings(sg_ground_build_t *build)
 				sg_ground_capability_kind_t kind;
 				int localization;
 
+				/* Bindings are region scoped; see BuildStanceDirection. */
+				if (build->bindings[source_binding].region != source_region)
+					continue;
 				if (!PhaseMatchesRegionPose(phase, source, &source_pose))
 					continue;
 				if (!PhaseVelocitySample(phase, !source_pose.supported,
@@ -2332,6 +2354,11 @@ static int BuildStanceDirection(sg_ground_build_t *build,
 		int ducked;
 		int localization;
 
+		/* Bindings are region scoped.  Skipping the other regions of this
+		 * cell keeps the phase emitted here the same one pose localization
+		 * resolves for this region. */
+		if (build->bindings[source_binding].region != source_region)
+			continue;
 		if (!PhaseMatchesRegionPose(&build->phases[source_phase],
 				&build->semantics->regions[source_region], source_pose))
 			continue;
